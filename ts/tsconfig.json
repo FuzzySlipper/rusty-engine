@@ -1,6 +1,6 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/game-runtime" }
+    { "path": "./packages/project-content" }
   ]
 }

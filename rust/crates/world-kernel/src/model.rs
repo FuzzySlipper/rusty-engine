@@ -196,16 +196,6 @@ impl WorldKernel {
         })
     }
 
-    pub fn view_batch(
-        &self,
-        entities: impl IntoIterator<Item = EntityId>,
-    ) -> Result<Vec<EntityView>, ViewError> {
-        entities
-            .into_iter()
-            .map(|entity| self.view(entity))
-            .collect()
-    }
-
     pub fn projection(&self) -> Vec<ProjectionNode> {
         self.renderables
             .iter()

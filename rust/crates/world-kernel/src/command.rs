@@ -24,21 +24,14 @@ impl WorldCommand {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WorldCommandBatch {
-    pub expected_revision: Option<u64>,
     pub commands: Vec<WorldCommand>,
 }
 
 impl WorldCommandBatch {
     pub fn new(commands: impl IntoIterator<Item = WorldCommand>) -> Self {
         Self {
-            expected_revision: None,
             commands: commands.into_iter().collect(),
         }
-    }
-
-    pub fn expecting(mut self, revision: u64) -> Self {
-        self.expected_revision = Some(revision);
-        self
     }
 }
 
@@ -73,7 +66,6 @@ pub struct BatchReceipt {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorldCommandError {
-    StaleRevision { expected: u64, actual: u64 },
     UnknownEntity { entity: EntityId },
     EntityDisabled { entity: EntityId },
     MissingTransform { entity: EntityId },
@@ -131,19 +123,6 @@ pub(crate) fn apply_batch(
     batch: WorldCommandBatch,
 ) -> Result<BatchReceipt, BatchRejection> {
     let revision_before = world.revision;
-    if let Some(expected) = batch.expected_revision {
-        if expected != revision_before {
-            return Err(BatchRejection {
-                revision: revision_before,
-                command_index: None,
-                reason: WorldCommandError::StaleRevision {
-                    expected,
-                    actual: revision_before,
-                },
-            });
-        }
-    }
-
     let mut projected = BTreeMap::<EntityId, ProjectedEntity>::new();
 
     for (command_index, command) in batch.commands.iter().enumerate() {

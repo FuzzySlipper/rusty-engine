@@ -17,19 +17,16 @@ fn door_world() -> WorldKernel {
 fn atomic_batch_applies_related_capability_changes_once() {
     let mut world = door_world();
     let receipt = world
-        .apply_batch(
-            WorldCommandBatch::new([
-                WorldCommand::SetTranslation {
-                    entity: EntityId::new(10),
-                    translation: Vec3::new(0.0, 3.0, 0.0),
-                },
-                WorldCommand::SetCollisionEnabled {
-                    entity: EntityId::new(10),
-                    enabled: false,
-                },
-            ])
-            .expecting(0),
-        )
+        .apply_batch(WorldCommandBatch::new([
+            WorldCommand::SetTranslation {
+                entity: EntityId::new(10),
+                translation: Vec3::new(0.0, 3.0, 0.0),
+            },
+            WorldCommand::SetCollisionEnabled {
+                entity: EntityId::new(10),
+                enabled: false,
+            },
+        ]))
         .expect("batch should be valid regardless of command order");
 
     assert_eq!(receipt.revision_before, 0);
@@ -68,35 +65,6 @@ fn rejected_batch_leaves_every_capability_unchanged() {
     let view = world.view(EntityId::new(10)).expect("door view");
     assert_eq!(view.transform.expect("transform").translation, Vec3::ZERO);
     assert!(view.collision.expect("collision").enabled);
-}
-
-#[test]
-fn stale_revision_rejects_before_mutation() {
-    let mut world = door_world();
-    let rejection = world
-        .apply_batch(
-            WorldCommandBatch::new([WorldCommand::SetCollisionEnabled {
-                entity: EntityId::new(10),
-                enabled: false,
-            }])
-            .expecting(7),
-        )
-        .expect_err("revision must match");
-    assert_eq!(
-        rejection.reason,
-        WorldCommandError::StaleRevision {
-            expected: 7,
-            actual: 0
-        }
-    );
-    assert!(
-        world
-            .view(EntityId::new(10))
-            .expect("door")
-            .collision
-            .expect("collision")
-            .enabled
-    );
 }
 
 #[test]

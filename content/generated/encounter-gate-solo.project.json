@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "entities": [
+    {
+      "id": 1,
+      "name": "player"
+    },
+    {
+      "id": 2,
+      "name": "loading-bay-encounter",
+      "encounter": {
+        "members": [
+          4
+        ],
+        "exit": 3
+      }
+    },
+    {
+      "id": 3,
+      "name": "loading-bay-exit",
+      "translation": [
+        0,
+        0,
+        8
+      ],
+      "collision": {
+        "enabled": true,
+        "staticCollider": true
+      },
+      "renderable": {
+        "asset": "mesh/security-door",
+        "visible": true
+      },
+      "door": {
+        "openTranslation": [
+          0,
+          3,
+          8
+        ],
+        "autoCloseAfterTicks": null
+      }
+    },
+    {
+      "id": 4,
+      "name": "sentry-alpha",
+      "translation": [
+        0,
+        0,
+        4
+      ],
+      "collision": {
+        "enabled": true,
+        "staticCollider": false
+      },
+      "renderable": {
+        "asset": "mesh/security-sentry",
+        "visible": true
+      },
+      "enemy": true
+    }
+  ]
+}

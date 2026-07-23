@@ -1,128 +1,159 @@
 # Experiment results
 
-Status: headless door comparison complete on 2026-07-23; broader successor hypothesis still open.
+Status: Rust-owned headless gameplay direction selected on 2026-07-23; product and Asha feature
+transplant proofs remain open.
 
-This milestone executes the same security-door behavior through two game-code centers over one
-host-neutral Rust world kernel:
+## Current decision
 
-- named, directly called Rust services with a closed typed event queue;
-- trusted executable TypeScript receiving one bounded invocation wave and returning one decision
-  batch.
+The first comparison overemphasized which language should execute gameplay. The more important
+question is whether ordinary gameplay has a direct, legible structural path in any language.
 
-Both variants open a static collidable door, schedule a stable close operation, close at tick 3,
-produce committed facts and render projection, support a latched data variation, and survive a
-save/reopen point. Neither path uses Gameplay Fabric, replay frames, declared-read contracts,
-owner-proof resolution, dynamic event subscription, component ticking, or whole-world cloning.
+Active `main` now uses this split:
+
+```text
+TypeScript content composition
+        -> strict stored project definitions
+        -> one Rust admission step
+        -> concrete entity/component state
+        -> direct Rust services and typed committed events
+        -> derived projection
+        -> eventual TypeScript renderer/UI
+```
+
+Rust owns live session state, substantial gameplay logic, service composition, scheduling, and
+persistence. TypeScript may use normal functions, loops, helpers, and type checking to generate
+content, but it does not own runtime behavior instances, opaque gameplay state, callbacks, or a
+second scheduler.
+
+## What the language-host comparison established
+
+The initial milestone implemented the same timed security door through direct Rust services and a
+trusted executable TypeScript runtime over N-API. Its observed TypeScript scenario used five
+gameplay bridge calls, 981 bytes into Rust, and 3,023 bytes out of Rust.
+
+More importantly, enabling the short TypeScript behavior required:
+
+| Removed runtime surface | Physical source footprint |
+|---|---:|
+| Generic Rust project-code host | 1,171 lines |
+| N-API transport | 188 lines |
+| Shared TypeScript boundary/runtime | 291 lines |
+| TypeScript door behavior | 138 lines |
+
+That route introduced opaque project state, invocation ownership, duplicated wire DTOs,
+serialization, stable-message translation, bridge accounting, and another persistence lifecycle.
+The first live test found casing drift inside a tagged Rust enum. These are structural obligations,
+not shortcomings in TypeScript syntax.
+
+The comparison was therefore useful negative evidence: moving logic across a language boundary
+would relocate the same class of contract and lifecycle burden that the successor is meant to
+remove. The complete implementation and its tests remain recoverable at Git tag
+`external-ts-runtime-spike` (`9ed75581999291aa622713814d10832e597999d3`). Active `main` deletes
+those runtime-host crates and packages.
+
+## Active walking slices
+
+### Security door
+
+```text
+Interact
+  -> InteractionService
+  -> SwitchActivated
+  -> DoorService::open
+  -> atomic transform/collision change
+  -> DoorOpened
+  -> optional stable CloseDoor schedule
+```
+
+The configured latched variation changes only `auto_close_after`. Save/reopen preserves a pending
+close without persisting the diagnostic event journal.
+
+### Encounter-gated exit
+
+TypeScript composes explicit actor, encounter, exit, and enemy definitions. Rust admits those into
+concrete `EnemyComponent`, `EncounterComponent`, `DoorComponent`, and relationship data before the
+session starts.
+
+```text
+DefeatEnemy
+  -> CombatService
+  -> atomic collision/visibility change
+  -> EnemyDefeated
+  -> EncounterService
+  -> EncounterCleared
+  -> DoorService::open(exit)
+  -> DoorOpened
+```
+
+There is no encounter polling, ambient subscription, dynamic topic, runtime script callback, or
+generic rule resolution. `GameRuntime::drain_events` contains the finite route. After the first of
+two enemies is defeated, the encounter remains active and the exit remains closed. The second
+defeat produces exactly `EnemyDefeated`, `EncounterCleared`, and `DoorOpened` in order.
+
+The one-enemy variation is a second generated project definition using the same TypeScript builder.
+It changes no Rust runtime, service, event, persistence, or projection code and clears after the
+first committed defeat fact.
+
+Partial encounter progress survives save/reopen. Snapshots store concrete enemy and encounter
+state, relationships, doors, and schedules; they do not store event history or replay frames.
 
 ## Reproducible evidence
 
-From a checkout with the Asha donor beside this repository:
+From a checkout with the public Asha donor beside this repository:
 
 ```bash
 pnpm install
 pnpm run verify
 cargo run -q -p game-host --bin headless-door
-pnpm run measure:door
+cargo run -q -p game-host --bin headless-encounter
 ```
 
-`pnpm run verify` currently proves:
+The current verification gate proves:
 
-- Rust formatting;
-- 15 Rust integration tests across the kernel, Rust host, and project-code host;
-- a loadable N-API addon;
-- strict TypeScript compilation;
-- 3 live Node-to-Rust behavior tests.
+- Rust formatting and strict TypeScript compilation;
+- generated project content is byte-for-byte current with its TypeScript composition;
+- 2 TypeScript content-composition tests;
+- 14 Rust integration tests across the world kernel, security door, content admission, encounter
+  routing, atomic rejection, projection, and save/reopen;
+- strict rejection of unknown stored-content and snapshot fields.
 
-The tests include atomic rejection with no partial state, static-collider movement invariants,
-stale revisions, strict snapshot decoding, stable scheduled messages, retry after a rejected
-project decision, refusal to snapshot while TypeScript owns an outstanding invocation, wire-case
-compatibility, and both door variations.
+## Active source footprint
 
-The Rust runner ends at tick 3 and world revision 2 with the door closed. The measured TypeScript
-runner reports the same end state and, for that one open/wait/close scenario:
+These are physical line counts (`wc -l`), not complexity scores:
 
-| Measurement | Observed value |
-|---|---:|
-| Gameplay bridge calls | 5 |
-| Bytes into Rust | 981 |
-| Bytes out of Rust | 3,023 |
-| World command batches applied | 2 |
-| World revisions committed | 2 |
-| Engine facts | 4 |
-| Project facts | 2 |
-
-The five calls are one interaction invocation, one open decision, two explicit time advances, and
-one close decision. Reads and commands within an invocation are batched; there is no call per
-component access or per command. Creation, close, and reading the metrics are intentionally outside
-that gameplay count.
-
-Warm local test cycles on this machine were 0.07 seconds for `cargo test -q -p game-host` and 0.75
-seconds for `pnpm run test:ts`. These are orientation measurements from an already-built checkout,
-not portable benchmarks.
-
-## Source footprint and change surfaces
-
-These are physical line counts (`wc -l`), not complexity scores. They make the initial infrastructure
-cost visible instead of crediting it to a hypothetical future.
-
-| Ownership surface | Production source footprint | Notes |
+| Ownership surface | Production source footprint | Purpose |
 |---|---:|---|
-| Common world kernel | 4 Rust files / 764 lines | Entities/capabilities, bounded views, atomic commands, snapshots, projection. Shared by both hosts. |
-| Direct Rust game host | 6 Rust files / 960 lines | Door/switch data, services, explicit event routing, scheduler, snapshot, runner. |
-| External project-code host | 4 Rust files / 1,171 lines | Generic bindings, bounded invocations, state/message ownership, validation/application, snapshot. |
-| N-API transport | 1 Rust file / 188 lines | Handle registry and JSON batch transport with byte/call counters. |
-| Shared TypeScript boundary/runtime | 3 TypeScript files / 291 lines | Handwritten DTOs, addon loader, and ergonomic runtime wrapper. |
-| TypeScript security-door behavior | 1 TypeScript file / 138 lines | Ordinary branching, state decoder, commands, facts, and schedule requests. |
+| Reusable Rust world kernel | 4 files / 732 lines | Entity/capability storage, atomic world mutation, snapshot, projection. |
+| Rust game host and runners | 9 files / 1,684 lines | Concrete components, services, routing, content admission, scheduling, snapshots, two runners. |
+| TypeScript content composition | 4 files / 126 lines | Typed definitions, encounter builder, reproducibility check, exports. |
+| Generated project content | 2 files / 143 lines | Two-enemy proof and one-enemy variation. |
 
-The initial TypeScript route therefore costs materially more infrastructure than the direct Rust
-route for one door. That is evidence against selecting it merely because ordinary TypeScript is
-pleasant to write. Its promising result is different: once the host exists, the latched variation
-is one project-state value and focused expectations, with no Rust kernel, bridge, persistence, or
-projection case added.
+The Rust snapshot code is currently the largest single structural cost. It is explicit and easy to
+trace, but future slices should test whether small typed codec helpers can reduce repetition without
+introducing reflection, registries, or generic replay machinery.
 
-| Slice/variation | Project code/content | Rust kernel | Bridge | Persistence | Projection | Why |
-|---|---|---|---|---|---|---|
-| Rust timed door | Rust door/switch model and named services | Shared unchanged | None | Typed Rust snapshot | Shared extraction | Familiar baseline and shortest direct call path. |
-| Rust latched door | `auto_close_after_ticks = None` plus test | Unchanged | None | Unchanged | Unchanged | Configuration-only variation. |
-| TypeScript timed door | One explicit `securityDoorController` behavior | Shared unchanged | Generic invocation/decision host required | Opaque versioned state plus stable message | Shared extraction | Tests whether project rules can stay outside Engine schemas. |
-| TypeScript latched door | `autoCloseTicks = null` plus test | Unchanged | Unchanged | Unchanged | Unchanged | Project configuration-only variation. |
+## Findings
 
-## Architectural findings
+- The direct Rust service path solves the original discoverability problem without a language
+  escape hatch.
+- Typed events carry real cross-domain weight while remaining a short closed route.
+- TypeScript still provides useful code-as-content ergonomics without participating in the live
+  authority loop.
+- The only retained command batch has a concrete consumer: a static door must change collision and
+  translation atomically, while a defeated enemy changes collision and visibility atomically.
+- Batched world reads and expected-revision machinery had no remaining in-process consumer and were
+  deleted with the external host.
+- The pivot removes substantially more runtime-host plumbing than the encounter slice adds.
 
-The smaller center has found its feet far enough to justify the next falsification slice:
+## Remaining falsification work
 
-- An entity is legible through its definition, concrete data, relationship, and one named owner.
-- The Rust path from interaction to visible state fits in ordinary service/event code and does not
-  serialize or replay local work.
-- The TypeScript path keeps game-specific branching and state semantics out of Rust. Rust validates
-  reusable world invariants once, atomically, without reconstructing the project's intent.
-- Stable time messages and opaque project state survive restart without persisting callbacks or an
-  event history.
-- Projection is derived after commit; neither host mutates presentation state.
-- The static-collider invariant is stronger than a naive command-at-a-time API: translation and
-  collision participation must be judged over the final atomic batch.
+This is not yet evidence for replacing Asha wholesale. The next proofs should focus on structural
+reuse rather than language choice:
 
-The implementation also exposed costs that should not be smoothed over:
-
-- The first live TypeScript test found a snake_case/camelCase mismatch inside tagged Rust enum
-  fields. A focused Rust wire test now covers it, but the 185-line handwritten TypeScript DTO file
-  is an obvious drift surface.
-- JSON currently copies every invocation and decision. The measured door payload is acceptable for
-  a discrete event, but says nothing about real-time or multi-entity pressure.
-- The external project-code host is already larger than the direct Rust game host. It must earn that
-  cost with a complex project-only change, not another door-shaped example.
-- Only three stable Asha foundation crates are referenced. No substantial Asha feature service or
-  browser shell has yet demonstrated transplantability.
-
-## Provisional decision
-
-Keep the common kernel and both hosts for the next comparison; do not choose a permanent dual-host
-architecture. The direct Rust service route is the simpler default on current evidence. Executable
-TypeScript remains credible specifically for project rules whose change amplification would
-otherwise spread into Rust Engine contracts.
-
-The next decisive experiment is the encounter-gated exit from Slice 3. It must reuse the existing
-generic event/state/relationship boundary and world capabilities while changing only project
-TypeScript/content and focused tests. If it requires a new central Rust event enum, bridge method,
-or door/encounter-specific host case, the claimed project-code advantage has failed. After that,
-one genuinely new reusable capability should test whether Rust-side extension stays narrow.
+1. Transplant one substantial Asha spatial/collision or related feature below this runtime without
+   importing Gameplay Fabric or the old runtime facade.
+2. Add one genuinely new reusable engine capability and confirm its change remains localized.
+3. Connect a retained TypeScript/Three/DOM shell through projection and resolved input.
+4. Characterize one named real-time multi-entity workload without component-local ticking.
+5. Revisit snapshot repetition only after another durable component family establishes the common
+   shape.

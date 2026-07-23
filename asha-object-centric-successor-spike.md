@@ -1,13 +1,13 @@
 # Asha Object-Centric Successor Spine
 
-Status: exploratory architecture; headless phases 0-2 implemented, broader falsification in progress
+Status: exploratory architecture; Rust-owned gameplay direction selected and headless encounter slice implemented
 Working location: `/home/dev/rusty-engine`
 Asha donor snapshot inspected: `a431974330589761c9e35fc4f8a55996a1b5ee48`
 Decision scope: a possible successor for Asha's runtime/application spine, not a decision to replace the whole engine
 
 ## Decision in one sentence
 
-Test a small sibling runtime centered on a host-neutral Rust entity/capability kernel, an object-centric session model, explicit services/systems, typed post-commit events, and thin projection adapters; compare direct Rust services with trusted executable TypeScript as the game-code host, preserve useful Asha features by transplanting bounded lower-level crates, and do not carry forward `GameplayRuntimeHost`, Gameplay Fabric, universal reaction/replay contracts, or the full `RuntimeSession` facade as the new center.
+Test a small sibling runtime centered on an object-centric Rust session, explicit gameplay services/systems, typed post-commit events, strict TypeScript-authored content, and thin projection adapters; preserve useful Asha features by transplanting bounded lower-level crates, and do not carry forward `GameplayRuntimeHost`, Gameplay Fabric, universal reaction/replay contracts, a second script authority, or the full `RuntimeSession` facade as the new center.
 
 ## Executive position
 
@@ -16,7 +16,7 @@ Asha is too large for a coherent clean-room successor, but its most difficult pr
 1. Build a deliberately small, separately launchable authority runtime in this repository.
 2. Give it a conventional, object-centric center that is familiar from PixelPhantasm and RuleWeaver.
 3. Transplant only Asha code that can sit below that center without importing the old center with it.
-4. Prove the result with one mechanic in both candidate game-code hosts, a data-only variation, a project-code variation, and one genuinely new reusable engine capability.
+4. Prove the result with direct Rust mechanics, content-only variations, one meaningful cross-domain event consequence, and one genuinely new reusable engine capability.
 5. Make a migration decision only after the spike demonstrates lower change amplification in practice.
 
 This is bolder than another corrective wave inside Asha, but much smaller than rewriting Asha. The unit of succession is the runtime spine. Foundation types, asset work, spatial services, content, renderer work, and tooling remain potential donors.
@@ -24,6 +24,32 @@ This is bolder than another corrective wave inside Asha, but much smaller than r
 The intended center is not Unity's runtime model and not a strict ECS. It is the architecture that the older projects were already reaching for beneath Unity:
 
 > an authority core of entities and data components, behavior owned by explicit services/systems, typed events for consequential facts, data-driven definitions, and a thin host/render shell.
+
+## Decision update: Rust runtime, TypeScript authoring
+
+The initial door comparison tested both direct Rust services and trusted executable TypeScript
+runtime behavior. It resolved the language-host fork rather than just changing its weighting.
+
+The TypeScript door logic was concise, but its second authority lifecycle required a generic Rust
+project-code host, a native bridge, duplicated wire DTOs, opaque project state, invocation ownership,
+and separate persistence/scheduling translation. The first live test also exposed wire-case drift.
+Those are the same structural classes of problem this successor is intended to avoid.
+
+The active decision is therefore:
+
+- Rust owns live authoritative entities, components, substantial gameplay logic, services, typed
+  events, scheduling, and snapshots.
+- TypeScript acts as code-as-content and tooling before session admission, and later as the
+  projection/UI host. It may use normal programming constructs to compose definitions but does not
+  own runtime behavior instances or gameplay state.
+- Domain-specific data is interpreted by ordinary named Rust services. It must not accumulate into a
+  universal authored behavior language.
+- Language/process contracts remain at real borders: stored content, resolved input, projection, and
+  diagnostics—not around each gameplay decision.
+
+The discarded runtime-host implementation remains available at Git tag
+`external-ts-runtime-spike`. The historical comparison below is retained because it explains the
+decision and its failure conditions; it is no longer an open production direction.
 
 ## What “object-centric” means here
 
@@ -33,7 +59,7 @@ For any gameplay entity, a developer or agent should be able to answer these que
 
 - What is this entity? Inspect its `EntityDefinition`, identity, and components.
 - What data gives it this behavior? Inspect its typed configuration/state components.
-- Who is allowed to change that data? Follow the component's feature module to its named service or explicit project behavior binding.
+- Who is allowed to change that data? Follow the component's feature module to its named Rust service.
 - What caused the last change? Inspect a typed committed event and, when needed, its diagnostic trace.
 - What happens each frame? Read one short, centrally composed phase list.
 - How does it reach the screen? Follow one derived projection path from committed state.
@@ -109,7 +135,7 @@ The problem is that these principles became coupled to a high-cost universal rou
 
 The successor hypothesis is that the valuable principles survive with a much more ordinary execution center.
 
-## Pre-implementation fork: who owns game-specific decisions?
+## Pre-implementation fork: who owns game-specific decisions? (resolved)
 
 The independent Den proposal `asha/external-object-owned-gameplay-runtime-spike` agrees with most of this document's structural diagnosis but challenges one assumption: that ordinary game-specific behavior should normally be implemented by Rust services.
 
@@ -117,7 +143,8 @@ It proposes a different authority split:
 
 > trusted executable TypeScript owns Game Project decisions and behavior-local state; a smaller Rust world kernel owns reusable engine invariants and atomically applies typed capability commands.
 
-This is not a terminology disagreement. It is the largest unresolved design choice before implementation begins.
+This was not a terminology disagreement. It was the largest unresolved design choice before
+implementation and is now resolved in favor of Rust-owned live gameplay.
 
 Object-centric and object-owned are also not synonyms:
 
@@ -126,7 +153,7 @@ Object-centric and object-owned are also not synonyms:
 
 The first property is a requirement of this spike. The second is a hypothesis to compare. PixelPhantasm was object-centric while putting most behavior in external systems; its history therefore does not by itself justify attached per-entity scripts.
 
-### The two credible game-code hosts
+### The two game-code hosts that were compared
 
 | Question | Rust service-owned gameplay | Trusted executable TypeScript gameplay |
 |---|---|---|
@@ -138,7 +165,10 @@ The first property is a requirement of this spike. The second is a hypothesis to
 | Main strength | Familiar direct call stacks, typed state, straightforward debugging, no cross-language game loop | Ordinary branching/composition without growing a Rust-authored behavior language or changing Engine schemas for each rule |
 | Main risk | Every new game meaning requires a Rust compile and can drift back upstream into Engine | Split-language debugging, persistence/tooling complexity, bridge cost, opaque state, and a slide toward MonoBehaviour-like lifecycle scattering |
 
-The external proposal's strongest criticism should be accepted regardless of which host wins: if data-only authoring requires Rust to acquire event filtering, branching, local state, queries, cancellation, error handling, and continuations as public schema, the engine is building a second programming language. This successor must not repeat that path.
+The external proposal's strongest criticism remains valid despite the archived host result: if
+data-only authoring requires Rust to acquire event filtering, branching, local state, queries,
+cancellation, error handling, and continuations as public schema, the engine is building a second
+programming language. This successor must not repeat that path.
 
 Its other useful additions are:
 
@@ -149,19 +179,22 @@ Its other useful additions are:
 - preserve versioned project state and stable scheduled messages without serializing callbacks;
 - keep the experimental repository outside Asha's workspace and governance pressure.
 
-### Common kernel that does not predetermine the winner
+### Initial common kernel that did not predetermine the winner
 
-The initial kernel should be usable by either host and should contain only shared world mechanics:
+The initial kernel was usable by either host and contained only shared world mechanics:
 
 - entity identity/lifecycle and concrete reusable capabilities;
-- bounded read-only entity/capability views;
+- read-only entity/capability views;
 - one typed atomic command applier for reusable engine mutations;
 - accepted engine facts and central projection reconciliation;
 - stable time plus one durable scheduler;
 - snapshot mechanics and resource bounds;
-- a narrow batched host boundary.
+- initially, a narrow batched host boundary for the comparison.
 
-A Rust service may call this applier in process without serialization. A TypeScript host may receive one bounded event/view batch and return one command/state/schedule batch. Neither path gets mutable renderer objects, browser globals, a hidden service locator, or a clone of the complete world.
+A Rust service calls the applier in process without serialization. The archived TypeScript host
+received one bounded event/view batch and returned one command/state/schedule batch. Removing that
+host also removed batched world reads and optimistic external revision checks that had no remaining
+Rust consumer.
 
 The common kernel must not contain door, quest, encounter, or behavior-language semantics merely to make the comparison possible. It also must not require all Rust domain state to be reduced to generic capability commands. The narrow shared boundary is for genuinely reusable engine-owned state.
 
@@ -179,9 +212,9 @@ typed event batch + bounded Entity views + due messages
 
 This is a runtime host boundary, not an authored AST, interpreter, or universal behavior graph.
 
-### Guardrails on the TypeScript hypothesis
+### Guardrails used for the archived TypeScript hypothesis
 
-If executable TypeScript is tested:
+The executable TypeScript comparison used these guardrails:
 
 - organize behavior as explicit project services/controllers where possible; attaching one behavior instance to every object is not mandatory;
 - an entity-to-behavior binding must be visible in its definition or relationships, never discovered through magic methods;
@@ -195,6 +228,10 @@ If executable TypeScript is tested:
 - a dual Rust/TypeScript host is not a presumed permanent architecture. It requires distinct named consumers or one host must be retired after the experiment.
 
 The decision should be made from the walking comparison below, not from analogy to Unity or from an abstract preference for either language.
+
+That comparison has now been run. The direct Rust route remains active; the executable TypeScript
+route is archived. TypeScript's retained project role is admission-time content composition, which
+does not need the runtime-host guardrails above.
 
 ## Proposed runtime spine
 
@@ -227,11 +264,14 @@ typed input ---> named game-code owner ---> SessionState   |
 
 Diagnostics and recording observe this path. They do not define the path.
 
-In the Rust-service baseline, “named game-code owner” is an in-process Rust service. In the executable-project comparison, the same position may be a trusted TypeScript project service/behavior behind one batched host boundary; all actual reusable world mutation still terminates at the Rust kernel.
+The “named game-code owner” is an in-process Rust service. TypeScript-authored project definitions
+select configuration and relationships admitted into concrete session state; they do not insert a
+second live behavior owner behind this position.
 
 ### `GameRuntime`: private composition and lifecycle root
 
-`GameRuntime` owns the active `SessionState`, service instances, optional game-code host, scheduler, event queue, ports, and lifecycle. It is the one place where the frame sequence and cross-service orchestration are visible.
+`GameRuntime` owns the active `SessionState`, service instances, scheduler, event queue, ports, and
+lifecycle. It is the one place where the frame sequence and cross-service orchestration are visible.
 
 It is not passed wholesale into domain code. A service receives only the state and collaborators needed by that operation. Replaceable session/scenario collaborators are rebuilt together at a visible lifecycle boundary, never installed piecemeal through long-lived setters.
 
@@ -242,7 +282,6 @@ It is not passed wholesale into domain code. A service receives only the state a
 - entity identity and lifecycle;
 - concrete typed component tables keyed by `EntityId`;
 - explicit session aggregates that do not naturally belong to one entity;
-- optional bounded/versioned project-state records when the executable project-code host is under test;
 - authoritative time/random state when required;
 - enough state to produce a supported snapshot.
 
@@ -291,7 +330,8 @@ A component must not:
 
 A service owns a coherent family of operations and invariants. Typical examples are `InteractionService`, `DoorService`, `CombatService`, `InventoryService`, `SaveLoadService`, and `SchedulerService`.
 
-The familiar baseline is a Rust service. The comparison may place game-specific decision logic in an explicitly composed trusted TypeScript project service/behavior, but that host must preserve the same visible responsibility boundary and may mutate reusable engine state only through the batched Rust command applier.
+The gameplay owner is a Rust service. TypeScript content may configure that service's data and
+relationships, but runtime decision logic and mutable state remain in the Rust session.
 
 The ordinary operation is direct and typed:
 
@@ -329,7 +369,9 @@ Events are immutable typed facts about committed state. They may cause significa
 
 The Rust-service baseline should use an explicit dispatcher over closed/nested Rust event enums, not dynamic subscription or string topics. Domain modules may own nested event enums, while the application composition root exposes the finite routing between them. This makes “what handles `EnemyDefeated`?” a code search with a small answer.
 
-The executable project-code host must preserve the same property without forcing each project event into a central Rust enum. Project-owned events are typed by the bundled project package and routed through explicit project composition; only engine-owned facts and the small versioned host batch need kernel-level representation. Crossing the host boundary must not erase event identity into free-form `SendMessage` strings.
+Stored TypeScript-authored content does not define a generic runtime event language. Consequential
+runtime facts are explicit Rust domain events routed by the application composition root. Content
+may select entity relationships or domain-specific configuration consumed by those services.
 
 The distinctions are:
 
@@ -354,7 +396,9 @@ Priorities, phases, cancellation, and traces must be local to that resolution do
 
 ### Scheduling
 
-There is one `SchedulerService`. For Rust-owned behavior it stores typed future intents such as `CloseDoor { entity }`. For a trusted project-code host it may instead address a stable behavior/service instance with a versioned typed message and bounded payload. It never stores callbacks, script closures, browser timers, unbounded data, or replay frames. Due work re-enters the same explicitly composed behavior path as immediate work.
+There is one `SchedulerService`. It stores typed future intents such as `CloseDoor { entity }`. It
+never stores callbacks, script closures, browser timers, unbounded data, or replay frames. Due work
+re-enters the same explicitly composed service path as immediate work.
 
 The supported snapshot records pending scheduled intents when product behavior requires them.
 
@@ -368,7 +412,10 @@ Generated contracts remain appropriate at the real Rust/TypeScript or process bo
 
 ### Persistence, replay, and observability
 
-The baseline persistence contract is an explicit snapshot at a documented quiescent point. Concrete Rust feature modules contribute explicit typed snapshot data/codecs. If the trusted project-code host is selected, the snapshot also contains behavior/service type and version, stable instance identity, bounded structurally validated state, pending stable messages, and an explicit migration or incompatible-version result. Rust need not interpret project-state semantics, but there must never be a second mirrored copy. Restore rebuilds derived indexes and host projections. No reflection discovery is used.
+The baseline persistence contract is an explicit snapshot at a documented quiescent point. Concrete
+Rust feature modules contribute explicit typed snapshot data/codecs. Restore rebuilds derived indexes
+and host projections. No reflection discovery, callback persistence, opaque project state, or second
+semantic mirror is used.
 
 Replay remains available as an assurance product, not the application spine:
 
@@ -394,7 +441,9 @@ crates/
 
 This is a starting dependency shape, not a naming mandate. A feature deserves its own crate when it has an independently useful ownership boundary, substantial implementation, or a real downstream consumer—not merely to serve as an agent assignment cell.
 
-The executable-TypeScript comparison may add one narrow game-code host/bridge crate and one project runtime package. It must not reproduce Asha's protocol-package topology. The headless Rust kernel and Rust-service baseline must remain runnable without Node or a browser.
+The executable-TypeScript comparison briefly added a game-code host, N-API bridge, and project
+runtime package. Those surfaces were removed after the comparison. A future renderer/input bridge
+must be justified by the actual shell consumer and must not recreate a gameplay host.
 
 ## Asha preservation and bypass map
 
@@ -412,7 +461,7 @@ No candidate is reused merely because it already exists. Each donor must pass a 
 | TS `renderer-three`, `renderer-host`, `ui-dom`, browser/electron host work | Preserve aggressively | The old-project retrospective and RuleWeaver both validate keeping the browser/Three/DOM shell rather than replacing it with a native UI stack. |
 | assets, examples, fixtures, diagnostics, importers | Preserve or port as feature value | These are product investment, not evidence that the old runtime route must remain. |
 | `gameplay-runtime-host`, `gameplay-module-sdk`, `rule-gameplay-fabric`, `svc-gameplay-fabric` | Do not use as the successor center | Their composition, read-plan, proposal/fact, reaction, proof, and routing obligations are the structure under test. Depending on them would make the spike a facade over Asha rather than a successor. |
-| AuthoredBehavior DTO/IR/compiler/interpreter | Exclude from the experiment | Both candidate hosts use ordinary code for game-specific control flow; the spike must not grow a universal behavior language to mediate them. |
+| AuthoredBehavior DTO/IR/compiler/interpreter | Exclude from the experiment | Rust services use ordinary code for game-specific control flow; TypeScript authoring must not grow a universal behavior language to mediate it. |
 | full `runtime-bridge-api` / `RuntimeSession` surface | Replace with a walking-slice facade | Carry over only border operations a real consumer exercises. Avoid mirroring every existing method for compatibility. |
 | `protocol-replay`, mandatory state hashes, reaction frames, decision receipts | Optional donor for an earned assurance profile | They must not be on the baseline gameplay path. |
 
@@ -422,11 +471,13 @@ The transplant rule is strict:
 
 Every copied or materially adapted donor should be recorded in a small provenance ledger with its source repository/path, exact commit, copied symbols or scope, reason for copying instead of referencing, and meaningful successor changes. This makes selective transplantation auditable without importing Asha's broader governance machinery.
 
-Asha can remain an implementation reference and behavior oracle. The two runtimes can be launched separately against equivalent fixtures. They must not share live mutable authority or delegate operations to one another.
+Asha can remain an implementation reference and behavior oracle. Asha and the successor can be
+launched separately against equivalent fixtures. They must not share live mutable authority or
+delegate operations to one another.
 
 ## Walking falsification spike
 
-### Phase 0: common kernel, no game-code verdict
+### Phase 0: common kernel (complete)
 
 Build only enough host-neutral machinery to support a fair comparison:
 
@@ -439,7 +490,7 @@ Build only enough host-neutral machinery to support a fair comparison:
 
 Do not put door, encounter, branching, or behavior-IR semantics into the kernel. Do not build the TypeScript bridge until a headless Rust caller proves the kernel boundary.
 
-### Slice 1: Rust service-owned security door
+### Slice 1: Rust service-owned security door (complete)
 
 Implement the familiar baseline through explicit Rust services.
 
@@ -475,7 +526,7 @@ Interact { actor, switch }
 
 No module manifest, proposal codec, declared-read plan, owner registry digest, reaction frame, decision receipt, runtime-facade method per door action, or certified replay proof is required.
 
-### Slice 2: executable TypeScript comparison
+### Slice 2: executable TypeScript comparison (complete and archived)
 
 Reimplement the same externally visible door behavior through the smallest trusted Game Project host:
 
@@ -495,15 +546,26 @@ The comparison must record changed files and lines by ownership surface:
 | Slice/variation | Project code/content | Rust kernel | Bridge | Persistence | Projection | Why |
 |---|---:|---:|---:|---:|---:|---|
 
-### Slice 3: reuse and genuine extension
+The result was negative for an active second runtime authority. The implementation is preserved at
+`external-ts-runtime-spike`; `docs/experiment-results.md` records its measured bridge and source
+cost. Active `main` removes the host, bridge, and runtime TypeScript package.
+
+### Slice 3: content variation, cross-domain consequence, and extension
 
 Run three distinct change-amplification tests:
 
-1. **Rust data-only variation:** one door remains latched while another closes after a configured delay or requires multiple activators. This should change definitions/configuration and tests only.
-2. **Trusted project-code variation:** implement an encounter-gated exit using an existing typed enemy-defeat fact and existing engine capabilities. If the necessary world primitives exist, it should change Game Project TypeScript/content and focused tests without a Rust kernel, central protocol, or bridge case.
-3. **New engine capability:** add one genuinely reusable world meaning that neither host already has. It should require one narrow Rust capability owner/command path and bindings, not an authored-language or runtime-host campaign.
+1. **Data-only door variation (complete):** one door remains latched while another closes after a
+   configured delay. This changes configuration and focused tests only.
+2. **Rust encounter with TypeScript-authored content variation (complete):** committed
+   `EnemyDefeated` facts drive `EncounterService`, which emits `EncounterCleared` and opens the
+   authored related exit through `DoorService`. Changing the encounter from two enemies to one
+   changes only TypeScript-authored definitions and expectations.
+3. **New engine capability (pending):** add one genuinely reusable world meaning that the current
+   runtime does not already have. It should require one narrow Rust capability owner/command path,
+   not an authored-language or runtime-host campaign.
 
-This separates three questions that the previous version combined: whether data composition is cheap, whether ordinary game-specific programming is cheap, and whether extending reusable engine mechanics is cheap.
+This separates whether data composition is cheap, whether ordinary Rust game-specific programming
+stays direct, and whether extending reusable engine mechanics is localized.
 
 ### Slice 4: real-time and multi-entity pressure
 
@@ -511,27 +573,30 @@ Two door-shaped examples are insufficient. Add one bounded behavior such as a mo
 
 - multiple related entities;
 - spatial/capability queries;
-- project- or service-local state;
+- service-owned state;
 - branching, cancellation, or target changes;
 - batched commands;
 - spawn/despawn;
 - a named bounded real-time phase.
 
-Measure bridge calls per tick, batch size, allocations, state copying, scaling with entity/behavior count, projection cost, and TypeScript edit-to-run time. Per-object tick callbacks are not the implementation model even if the TypeScript host participates in a named real-time phase.
+Measure phase cost, allocations, state copying, scaling with entity count, projection cost, and Rust
+edit-to-run time. Per-object tick callbacks are not the implementation model; real-time work belongs
+to one named bounded Rust system phase.
 
 ### Product proof
 
-The spike is incomplete until a player can exercise the comparison through the retained browser/Three/DOM shell. Proof should cover:
+The spike is incomplete until a player can exercise the runtime through the retained
+browser/Three/DOM shell. Proof should cover:
 
-- project content loading into concrete definitions/components and explicit behavior bindings where used;
+- project content loading into concrete definitions/components and relationships;
 - normal resolved input;
 - Rust-owned engine invariant enforcement and atomic mutation;
 - collision and spatial consequences;
 - visible projection;
-- restart and one supported save/restore point, including project state/messages if present;
-- diagnostics that identify the entity, responsible Rust or project service/behavior, command result, and committed events;
+- restart and one supported save/restore point;
+- diagnostics that identify the entity, responsible Rust service, command result, and committed events;
 - the Rust data-only variation;
-- the project-code encounter variation;
+- the content-authored encounter variation;
 - the localized new-capability variation;
 - the real-time characterization.
 
@@ -539,24 +604,27 @@ The spike is incomplete until a player can exercise the comparison through the r
 
 The architecture earns further migration only if all of these hold:
 
-1. An entity's behavior can be understood from its definition/components/relationships and one or two explicitly named Rust or project behavior owners.
+1. An entity's behavior can be understood from its definition/components/relationships and one or two explicitly named Rust service owners.
 2. Every mutable state family has one obvious owner and lifecycle.
 3. The full input-to-visible-result path is traceable without consulting a contract taxonomy or ownership registry.
 4. Components contain no scattered update logic or ambient subscriptions.
 5. The frame/system order is visible in one composition file.
 6. Typed events cause meaningful cross-domain consequences without string topics, mutable event objects, or hidden listener discovery.
 7. The Rust door variation is data-only.
-8. The trusted project-code encounter variation requires no Rust kernel, central protocol, or bridge case when its engine capabilities already exist.
+8. The encounter member-count variation changes only authored content and expectations after the Rust domain service exists.
 9. A genuinely new reusable engine capability is localized to one narrow Rust owner/command path and bindings.
-10. The Rust and TypeScript host comparison records change amplification, explainability, persistence cost, bridge cost, and edit-to-run time rather than choosing by aesthetics.
-11. TypeScript behavior state, if used, is bounded/versioned, survives restart/save/reopen, and has no semantic mirror in Rust.
-12. The real-time path is batched and characterized under a named workload rather than inferred from a tiny scene.
+10. The archived Rust and TypeScript host comparison records change amplification, persistence cost, bridge cost, and the reason the second runtime authority was retired.
+11. TypeScript-authored content is strict, reproducible, and admitted once into concrete Rust state without runtime callbacks or an opaque semantic mirror.
+12. The real-time path is a named bounded Rust phase characterized under a named workload rather than inferred from a tiny scene.
 13. At least one substantial Asha feature service and the existing TS renderer shell are reused or transplanted, proving this is not a toy rewrite.
 14. Ordinary gameplay, restart, and save/load work with certified replay disabled.
 15. The successor has no dependency on Asha's high-level runtime/fabric crates.
 16. The implementation deletes or avoids more structural code than it introduces for the walking features.
 
-Useful measurements include changed-file surfaces for each variation, dependency counts of the runtime crate, bridge crossings and bytes per invocation/tick, allocations/state copying, number of runtime envelope types, edit-to-run time, and the shortest source path from an entity component or behavior binding to its responsible owner.
+Useful measurements include changed-file surfaces for each variation, dependency counts of the
+runtime crate, allocations/state copying, number of runtime envelope types, edit-to-run time, and the
+shortest source path from an entity component to its responsible service. Historical bridge
+crossings and bytes remain useful evidence for why the external runtime host was retired.
 
 ## Stop conditions
 
@@ -568,11 +636,9 @@ Stop or narrow the effort if:
 - a new reusable engine capability still crosses many unrelated Rust crates;
 - the explicit dispatcher grows into a generic ambient bus before two domains demonstrate the need;
 - service boundaries recreate proposal/receipt/proof objects around ordinary in-process calls;
-- executable TypeScript requires one bridge call per read/verb, repeated JSON round-trips, or repeated whole-world cloning;
-- the same game-specific state is independently authoritative in Rust and TypeScript;
+- a second executable gameplay host reappears without a new concrete consumer and an explicit decision reopening the archived comparison;
+- the same game-specific state becomes independently authoritative in Rust and TypeScript;
 - object-bound behaviors acquire implicit lifecycle discovery, ambient subscription, or scattered per-object ticking;
-- every project event or state field requires a new central Rust enum, protocol, or bridge case;
-- the Rust and TypeScript hosts begin duplicating the same production role without separate named consumers and a retirement decision;
 - save/load requires event-sourcing every mutation;
 - browser product proof is deferred behind engine-only fixtures;
 - maintaining compatibility with the old runtime starts dictating the new internal model.
@@ -621,13 +687,16 @@ Put import/comparison adapters in an explicit `compat` area with deletion criter
 
 Every assurance artifact must name its consumer and the failure class it prevents. If it is diagnostic-only, it must remain removable without changing gameplay semantics.
 
-### Executable TypeScript recreates MonoBehaviour at another border
+### A second script runtime recreates MonoBehaviour at another border
 
-Do not equate ordinary TypeScript with one stateful callback object per entity. Prefer explicit project services/controllers and event batches. Entity attachment is used only when instance identity and lifecycle are actually valuable; named real-time phases replace implicit updates.
+Do not reintroduce stateful script callbacks per entity. TypeScript composes stored definitions;
+named Rust services own live behavior, and named Rust real-time phases replace implicit updates.
 
-### Engine authority and Game Project authority blur together
+### Authored content and runtime authority blur together
 
-Document which invariants Rust validates and which trusted decisions belong to project code. Rust rejects invalid world mutation; it does not reconstruct project intent merely to approve it. Project code never bypasses the kernel to mutate reusable capabilities. A stricter sandbox or certified host is a separate profile.
+Document which values are authored configuration and which mutable facts belong to Rust services.
+Content admission materializes one concrete session model; TypeScript does not retain handles that
+can mutate it afterward.
 
 ## Explicit non-goals
 
@@ -637,53 +706,50 @@ Document which invariants Rust validates and which trusted decisions belong to p
 - Build a universal gameplay IR or JSON behavior graph.
 - Preserve Asha's public runtime surface one method at a time.
 - Migrate every Asha crate or feature before product proof.
-- Give TypeScript direct mutable access to Rust world state, renderer objects, browser-global authority, or unbounded callbacks.
-- Assume executable TypeScript is the required or exclusive gameplay host before the comparison.
+- Give TypeScript runtime ownership of Rust world state, gameplay behavior instances, scheduling, or callbacks.
+- Reopen the executable TypeScript gameplay host merely to avoid fixing Rust-side structural problems.
 - Conflate stored definitions, runtime state, and projections.
 - Remove typed public borders, strict external decoding, explicit time/randomness, or atomic rejection where product semantics require them.
 - Guarantee certified replay for all games and all builds.
 - Decide terminology by architectural law rather than readability.
 
-## Initial decisions and deliberately deferred decisions
+## Current decisions and deliberately deferred decisions
 
-The spike begins with these defaults:
+The spike now uses these defaults:
 
 - use `Entity`, `EntityDefinition`, `Component`, `SessionState`, `Service`, `System`, and `Event`;
 - concrete typed component tables composed at compile time;
 - read-oriented entity views;
-- direct typed Rust service methods for the familiar baseline;
-- one typed atomic mutation boundary for reusable engine capabilities, callable in process or through a batched external host;
+- direct typed Rust service methods for live gameplay;
+- one typed in-process atomic mutation boundary for reusable engine capabilities with demonstrated multi-capability invariants;
 - immutable post-commit events and an explicit bounded dispatcher;
 - central named frame phases;
 - explicit snapshot persistence;
-- TypeScript/Three/DOM as the shell, with trusted executable TypeScript game code treated as a bounded comparison rather than a settled layer;
+- TypeScript as admission-time code-as-content and the eventual Three/DOM presentation shell, not a second gameplay authority;
 - Asha leaf code copied/transplanted, not invoked through an old-runtime compatibility layer.
 
-Only evidence from the walking slice should decide:
+Further walking-slice evidence should decide:
 
 - whether some capabilities merit their own engine-level term;
 - whether component-table repetition warrants generation;
 - whether a dynamic typed event bus is actually needed;
 - whether definition inheritance is worth retaining;
-- whether ordinary trusted gameplay should live in Rust services, executable TypeScript project code, or two hosts with genuinely different named consumers;
-- whether entity-attached behavior instances add useful locality beyond project services/controllers;
-- whether project-owned state can remain inspectable, versioned, and cheap enough to justify the split-language host;
+- how much TypeScript authoring convenience is useful before strict admitted content becomes a domain-specific behavior language;
 - which replay assurance profile has a real consumer;
 - which Asha crates are clean enough to transplant versus cheaper to reimplement;
 - whether `rusty-engine` should become the durable successor or remain a disposable spike.
 
 ## Recommended next action
 
-The common kernel, Rust security-door baseline, and batched executable-TypeScript comparison now
-run headlessly. Their evidence is recorded in `docs/experiment-results.md`; it is deliberately not a
-game-code-host verdict. The next implementation is Slice 3's encounter-gated exit. It must change
-only project TypeScript/content and focused tests while reusing the current generic event,
-relationship, state, scheduling, command, persistence, and projection surfaces. A need for a new
-central Rust encounter case is a falsification result, not an invitation to expand the host.
+The security door and encounter-gated exit now run through direct Rust services. TypeScript authors
+strict encounter content, and the one-enemy variation changes no Rust runtime surface. The archived
+runtime-host comparison and active results are recorded in `docs/experiment-results.md`.
 
-After that, add one genuinely reusable engine capability through one narrow Rust owner/command path,
-then run the named real-time workload before browser/Studio investment. If those proofs pass, the
-next architectural decision is not “rewrite Asha.” It is:
+Next, transplant one substantial Asha spatial/collision feature below this runtime and add one
+genuinely reusable engine capability through a narrow Rust owner/command path. These should happen
+before adding generic component machinery or revisiting the language split. Then connect the
+retained browser shell and run one named real-time workload. If those proofs pass, the next
+architectural decision is not “rewrite Asha.” It is:
 
 > Which complete vertical feature family can move next while the old and new runtimes remain separately launchable and never share authority?
 

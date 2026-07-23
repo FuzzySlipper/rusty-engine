@@ -4,10 +4,10 @@
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "scripts": {
-    "build:native": "bash scripts/build-native.sh",
-    "measure:door": "pnpm --filter @rusty-engine/game-runtime measure:door",
+    "check:content": "pnpm --filter @rusty-engine/project-content check",
+    "generate:content": "pnpm --filter @rusty-engine/project-content generate",
+    "test:ts": "pnpm --filter @rusty-engine/project-content test",
     "typecheck": "tsc --build ts/tsconfig.json",
-    "test:ts": "pnpm --filter @rusty-engine/game-runtime test",
     "verify": "bash scripts/verify.sh"
   },
   "devDependencies": {

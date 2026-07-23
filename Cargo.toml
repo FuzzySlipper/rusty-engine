@@ -1,9 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "rust/crates/game-bridge-napi",
     "rust/crates/game-host",
-    "rust/crates/project-code-host",
     "rust/crates/world-kernel",
 ]
 
@@ -17,8 +15,6 @@ core-math = { path = "../asha-engine/engine-rs/crates/foundation/core-math" }
 core-time = { path = "../asha-engine/engine-rs/crates/foundation/core-time" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-napi = { version = "2", default-features = false, features = ["napi8"] }
-napi-derive = "2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

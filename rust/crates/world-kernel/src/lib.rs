@@ -1,8 +1,7 @@
-//! Host-neutral entity/capability kernel for the Rusty Engine experiment.
+//! Reusable entity/capability kernel for the Rusty Engine experiment.
 //!
 //! This crate owns reusable world invariants and one atomic mutation boundary.
-//! It contains no door, encounter, TypeScript-host, render-host, or Asha runtime
-//! topology.
+//! It contains no door, encounter, render-host, or Asha runtime topology.
 
 #![forbid(unsafe_code)]
 

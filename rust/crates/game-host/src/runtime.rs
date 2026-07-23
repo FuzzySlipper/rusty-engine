@@ -2,23 +2,28 @@ use std::collections::VecDeque;
 
 use core_ids::EntityId;
 use core_time::{Tick, TickDelta};
-use world_kernel::{WorldCommand, WorldCommandBatch};
 
+use crate::content::{decode_project_content, ProjectContentError};
 use crate::model::{
-    readout, security_door_definitions, DoorState, GameEvent, GameSession, JournalEntry,
-    RuntimeReadout, RuntimeReceipt, SecurityDoorIds,
+    readout, security_door_definitions, GameEvent, GameSession, JournalEntry, RuntimeReadout,
+    RuntimeReceipt, SecurityDoorIds,
 };
 use crate::scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
+use crate::services::{
+    CombatService, DoorService, DoorTransition, EncounterService, InteractionService,
+};
 
 pub const MAX_EVENT_WAVE: usize = 256;
 pub const MAX_TICK_ADVANCE: u64 = 100_000;
 
 #[derive(Debug)]
 pub enum RuntimeError {
+    Content(ProjectContentError),
     Definition(crate::model::GameEntityDefinitionError),
     UnknownActor { actor: EntityId },
     NotInteractable { entity: EntityId },
     UnknownDoor { door: EntityId },
+    UnknownEnemy { enemy: EntityId },
     WorldBatch(world_kernel::BatchRejection),
     EventWaveLimit { limit: usize },
     TickAdvanceLimit { requested: u64, limit: u64 },
@@ -61,6 +66,11 @@ impl GameRuntime {
         Ok((ids, Self::new(session)))
     }
 
+    pub fn from_project_content(input: &str) -> Result<Self, RuntimeError> {
+        let session = decode_project_content(input).map_err(RuntimeError::Content)?;
+        Ok(Self::new(session))
+    }
+
     pub fn tick(&self) -> Tick {
         self.tick
     }
@@ -80,6 +90,18 @@ impl GameRuntime {
     ) -> Result<RuntimeReceipt, RuntimeError> {
         let event = InteractionService::interact(&mut self.session, actor, target)?;
         self.events.push_back(event);
+        let events = self.drain_events()?;
+        Ok(self.receipt(events))
+    }
+
+    pub fn defeat_enemy(
+        &mut self,
+        actor: EntityId,
+        enemy: EntityId,
+    ) -> Result<RuntimeReceipt, RuntimeError> {
+        if let Some(event) = CombatService::defeat_enemy(&mut self.session, actor, enemy)? {
+            self.events.push_back(event);
+        }
         let events = self.drain_events()?;
         Ok(self.receipt(events))
     }
@@ -126,28 +148,46 @@ impl GameRuntime {
                 tick: self.tick,
                 event: event.clone(),
             });
-            if let GameEvent::SwitchActivated { switch, .. } = &event {
-                let targets = self
-                    .session
-                    .controls
-                    .get(switch)
-                    .cloned()
-                    .unwrap_or_default();
-                for door in targets {
-                    if let Some(transition) = DoorService::open(&mut self.session, door)? {
-                        if let Some(delay) = transition.auto_close_after {
-                            self.scheduler.schedule(ScheduledIntent {
-                                due: self.tick.advance(delay),
-                                kind: ScheduledIntentKind::CloseDoor { door },
-                            });
+            match &event {
+                GameEvent::SwitchActivated { switch, .. } => {
+                    let targets = self
+                        .session
+                        .controls
+                        .get(switch)
+                        .cloned()
+                        .unwrap_or_default();
+                    for door in targets {
+                        if let Some(transition) = DoorService::open(&mut self.session, door)? {
+                            self.queue_door_transition(door, transition);
                         }
-                        self.events.push_back(transition.event);
                     }
                 }
+                GameEvent::EnemyDefeated { enemy, .. } => {
+                    self.events.extend(EncounterService::observe_enemy_defeat(
+                        &mut self.session,
+                        *enemy,
+                    ));
+                }
+                GameEvent::EncounterCleared { exit, .. } => {
+                    if let Some(transition) = DoorService::open(&mut self.session, *exit)? {
+                        self.queue_door_transition(*exit, transition);
+                    }
+                }
+                GameEvent::DoorOpened { .. } | GameEvent::DoorClosed { .. } => {}
             }
             processed.push(event);
         }
         Ok(processed)
+    }
+
+    fn queue_door_transition(&mut self, door: EntityId, transition: DoorTransition) {
+        if let Some(delay) = transition.auto_close_after {
+            self.scheduler.schedule(ScheduledIntent {
+                due: self.tick.advance(delay),
+                kind: ScheduledIntentKind::CloseDoor { door },
+            });
+        }
+        self.events.push_back(transition.event);
     }
 
     fn receipt(&self, events: Vec<GameEvent>) -> RuntimeReceipt {
@@ -156,104 +196,5 @@ impl GameRuntime {
             events,
             projection: self.session.world.projection(),
         }
-    }
-}
-
-struct InteractionService;
-
-impl InteractionService {
-    fn interact(
-        session: &mut GameSession,
-        actor: EntityId,
-        target: EntityId,
-    ) -> Result<GameEvent, RuntimeError> {
-        if !session.world.contains(actor) {
-            return Err(RuntimeError::UnknownActor { actor });
-        }
-        let Some(switch) = session.switches.get_mut(&target) else {
-            return Err(RuntimeError::NotInteractable { entity: target });
-        };
-        switch.activation_count = switch.activation_count.saturating_add(1);
-        Ok(GameEvent::SwitchActivated {
-            switch: target,
-            actor,
-        })
-    }
-}
-
-struct DoorTransition {
-    event: GameEvent,
-    auto_close_after: Option<TickDelta>,
-}
-
-struct DoorService;
-
-impl DoorService {
-    fn open(
-        session: &mut GameSession,
-        door: EntityId,
-    ) -> Result<Option<DoorTransition>, RuntimeError> {
-        let Some(component) = session.doors.get(&door).copied() else {
-            return Err(RuntimeError::UnknownDoor { door });
-        };
-        if component.state == DoorState::Open {
-            return Ok(None);
-        }
-        let receipt = session
-            .world
-            .apply_batch(WorldCommandBatch::new([
-                WorldCommand::SetTranslation {
-                    entity: door,
-                    translation: component.config.open_translation,
-                },
-                WorldCommand::SetCollisionEnabled {
-                    entity: door,
-                    enabled: false,
-                },
-            ]))
-            .map_err(RuntimeError::WorldBatch)?;
-        session
-            .doors
-            .get_mut(&door)
-            .expect("door validated above")
-            .state = DoorState::Open;
-        Ok(Some(DoorTransition {
-            event: GameEvent::DoorOpened {
-                door,
-                world_facts: receipt.facts,
-            },
-            auto_close_after: component.config.auto_close_after,
-        }))
-    }
-
-    fn close(session: &mut GameSession, door: EntityId) -> Result<Option<GameEvent>, RuntimeError> {
-        let Some(component) = session.doors.get(&door).copied() else {
-            return Err(RuntimeError::UnknownDoor { door });
-        };
-        if component.state == DoorState::Closed {
-            return Ok(None);
-        }
-        let receipt = session
-            .world
-            .apply_batch(WorldCommandBatch::new([
-                WorldCommand::SetCollisionEnabled {
-                    entity: door,
-                    enabled: true,
-                },
-                WorldCommand::SetTranslation {
-                    entity: door,
-                    translation: component.config.closed_translation,
-                },
-            ]))
-            .map_err(RuntimeError::WorldBatch)?;
-        session
-            .doors
-            .get_mut(&door)
-            .expect("door validated above")
-            .state = DoorState::Closed;
-        Ok(Some(GameEvent::DoorClosed {
-            door,
-            world_facts: receipt.facts,
-        }))
     }
 }

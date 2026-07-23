@@ -45,12 +45,43 @@ pub struct SwitchComponent {
     pub activation_count: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnemyState {
+    Alive,
+    Defeated,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnemyComponent {
+    pub state: EnemyState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncounterConfig {
+    pub members: Vec<EntityId>,
+    pub exit: EntityId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncounterState {
+    Active,
+    Cleared,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncounterComponent {
+    pub config: EncounterConfig,
+    pub state: EncounterState,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct GameEntityDefinition {
     pub world: EntityDefinition,
     pub door: Option<DoorConfig>,
     pub switch: bool,
     pub controls_targets: Vec<EntityId>,
+    pub enemy: bool,
+    pub encounter: Option<EncounterConfig>,
 }
 
 impl GameEntityDefinition {
@@ -60,6 +91,8 @@ impl GameEntityDefinition {
             door: None,
             switch: false,
             controls_targets: Vec::new(),
+            enemy: false,
+            encounter: None,
         }
     }
 
@@ -77,18 +110,86 @@ impl GameEntityDefinition {
         self.controls_targets = targets.into_iter().collect();
         self
     }
+
+    pub fn as_enemy(mut self) -> Self {
+        self.enemy = true;
+        self
+    }
+
+    pub fn as_encounter(
+        mut self,
+        members: impl IntoIterator<Item = EntityId>,
+        exit: EntityId,
+    ) -> Self {
+        self.encounter = Some(EncounterConfig {
+            members: members.into_iter().collect(),
+            exit,
+        });
+        self
+    }
 }
 
 #[derive(Debug)]
 pub enum GameEntityDefinitionError {
     World(world_kernel::EntityDefinitionError),
-    DuplicateControlTarget { switch: EntityId, target: EntityId },
-    ControlsWithoutSwitch { entity: EntityId },
-    UnknownControlTarget { switch: EntityId, target: EntityId },
-    ControlTargetIsNotDoor { switch: EntityId, target: EntityId },
-    DoorMissingTransform { entity: EntityId },
-    DoorMissingCollision { entity: EntityId },
-    DoorMissingRenderable { entity: EntityId },
+    DuplicateControlTarget {
+        switch: EntityId,
+        target: EntityId,
+    },
+    ControlsWithoutSwitch {
+        entity: EntityId,
+    },
+    UnknownControlTarget {
+        switch: EntityId,
+        target: EntityId,
+    },
+    ControlTargetIsNotDoor {
+        switch: EntityId,
+        target: EntityId,
+    },
+    DoorMissingTransform {
+        entity: EntityId,
+    },
+    DoorMissingCollision {
+        entity: EntityId,
+    },
+    DoorMissingRenderable {
+        entity: EntityId,
+    },
+    EnemyMissingCollision {
+        entity: EntityId,
+    },
+    EnemyMissingRenderable {
+        entity: EntityId,
+    },
+    EmptyEncounter {
+        encounter: EntityId,
+    },
+    DuplicateEncounterMember {
+        encounter: EntityId,
+        member: EntityId,
+    },
+    UnknownEncounterMember {
+        encounter: EntityId,
+        member: EntityId,
+    },
+    EncounterMemberIsNotEnemy {
+        encounter: EntityId,
+        member: EntityId,
+    },
+    UnknownEncounterExit {
+        encounter: EntityId,
+        exit: EntityId,
+    },
+    EncounterExitIsNotDoor {
+        encounter: EntityId,
+        exit: EntityId,
+    },
+    EnemyInMultipleEncounters {
+        enemy: EntityId,
+        first: EntityId,
+        second: EntityId,
+    },
 }
 
 impl std::fmt::Display for GameEntityDefinitionError {
@@ -105,6 +206,8 @@ pub struct GameSession {
     pub(crate) doors: BTreeMap<EntityId, DoorComponent>,
     pub(crate) switches: BTreeMap<EntityId, SwitchComponent>,
     pub(crate) controls: BTreeMap<EntityId, Vec<EntityId>>,
+    pub(crate) enemies: BTreeMap<EntityId, EnemyComponent>,
+    pub(crate) encounters: BTreeMap<EntityId, EncounterComponent>,
 }
 
 impl GameSession {
@@ -122,6 +225,8 @@ impl GameSession {
         let mut doors = BTreeMap::new();
         let mut switches = BTreeMap::new();
         let mut controls = BTreeMap::new();
+        let mut enemies = BTreeMap::new();
+        let mut encounters = BTreeMap::new();
 
         for definition in &definitions {
             let entity = definition.world.id;
@@ -162,6 +267,42 @@ impl GameSession {
                 }
                 controls.insert(entity, definition.controls_targets.clone());
             }
+            if definition.enemy {
+                let view = world.view(entity).expect("definition created entity");
+                if view.collision.is_none() {
+                    return Err(GameEntityDefinitionError::EnemyMissingCollision { entity });
+                }
+                if view.renderable.is_none() {
+                    return Err(GameEntityDefinitionError::EnemyMissingRenderable { entity });
+                }
+                enemies.insert(
+                    entity,
+                    EnemyComponent {
+                        state: EnemyState::Alive,
+                    },
+                );
+            }
+            if let Some(config) = &definition.encounter {
+                if config.members.is_empty() {
+                    return Err(GameEntityDefinitionError::EmptyEncounter { encounter: entity });
+                }
+                let mut unique = BTreeSet::new();
+                for member in &config.members {
+                    if !unique.insert(*member) {
+                        return Err(GameEntityDefinitionError::DuplicateEncounterMember {
+                            encounter: entity,
+                            member: *member,
+                        });
+                    }
+                }
+                encounters.insert(
+                    entity,
+                    EncounterComponent {
+                        config: config.clone(),
+                        state: EncounterState::Active,
+                    },
+                );
+            }
         }
 
         for (switch, targets) in &controls {
@@ -181,11 +322,50 @@ impl GameSession {
             }
         }
 
+        let mut encounter_by_enemy = BTreeMap::new();
+        for (encounter, component) in &encounters {
+            if !world.contains(component.config.exit) {
+                return Err(GameEntityDefinitionError::UnknownEncounterExit {
+                    encounter: *encounter,
+                    exit: component.config.exit,
+                });
+            }
+            if !doors.contains_key(&component.config.exit) {
+                return Err(GameEntityDefinitionError::EncounterExitIsNotDoor {
+                    encounter: *encounter,
+                    exit: component.config.exit,
+                });
+            }
+            for member in &component.config.members {
+                if !world.contains(*member) {
+                    return Err(GameEntityDefinitionError::UnknownEncounterMember {
+                        encounter: *encounter,
+                        member: *member,
+                    });
+                }
+                if !enemies.contains_key(member) {
+                    return Err(GameEntityDefinitionError::EncounterMemberIsNotEnemy {
+                        encounter: *encounter,
+                        member: *member,
+                    });
+                }
+                if let Some(first) = encounter_by_enemy.insert(*member, *encounter) {
+                    return Err(GameEntityDefinitionError::EnemyInMultipleEncounters {
+                        enemy: *member,
+                        first,
+                        second: *encounter,
+                    });
+                }
+            }
+        }
+
         Ok(Self {
             world,
             doors,
             switches,
             controls,
+            enemies,
+            encounters,
         })
     }
 
@@ -215,6 +395,25 @@ impl GameSession {
             controls_targets: self.controls.get(&entity).cloned().unwrap_or_default(),
         })
     }
+
+    pub fn enemy(&self, entity: EntityId) -> Option<EnemyView> {
+        let component = self.enemies.get(&entity)?;
+        Some(EnemyView {
+            entity,
+            state: component.state,
+            world: self.world.view(entity).ok()?,
+        })
+    }
+
+    pub fn encounter(&self, entity: EntityId) -> Option<EncounterView> {
+        let component = self.encounters.get(&entity)?;
+        Some(EncounterView {
+            entity,
+            members: component.config.members.clone(),
+            exit: component.config.exit,
+            state: component.state,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -233,6 +432,21 @@ pub struct SwitchView {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct EnemyView {
+    pub entity: EntityId,
+    pub state: EnemyState,
+    pub world: EntityView,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncounterView {
+    pub entity: EntityId,
+    pub members: Vec<EntityId>,
+    pub exit: EntityId,
+    pub state: EncounterState,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum GameEvent {
     SwitchActivated {
         switch: EntityId,
@@ -245,6 +459,15 @@ pub enum GameEvent {
     DoorClosed {
         door: EntityId,
         world_facts: Vec<WorldFact>,
+    },
+    EnemyDefeated {
+        enemy: EntityId,
+        actor: EntityId,
+        world_facts: Vec<WorldFact>,
+    },
+    EncounterCleared {
+        encounter: EntityId,
+        exit: EntityId,
     },
 }
 
