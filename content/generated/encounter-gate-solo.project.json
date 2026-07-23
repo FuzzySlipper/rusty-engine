@@ -47,7 +47,7 @@
       "weapon": {
         "damage": 60,
         "maxDistance": 20,
-        "cooldownTicks": 0,
+        "cooldownTicks": 2,
         "ammoCapacity": 8,
         "muzzleOffset": [
           0,

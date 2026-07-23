@@ -62,6 +62,8 @@ try {
     'data-status="pass"',
     'data-held-input="pass"',
     'data-gate-passage="pass"',
+    'data-queue-recovery="pass"',
+    'data-cooldown="pass"',
     "PASS · Rust facts reached retained WebGL projection",
     "EnemyDefeated",
     "EncounterCleared",
@@ -74,6 +76,7 @@ try {
     "CombatHit",
     "DamageApplied",
     "CombatEnemyDefeated",
+    "CombatRejected",
     "SEED 4",
   ];
   const missing = required.filter((marker) => !result.stdout.includes(marker));

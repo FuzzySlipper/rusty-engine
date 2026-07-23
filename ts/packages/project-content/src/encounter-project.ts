@@ -20,6 +20,7 @@ export interface EncounterProjectOptions {
   readonly generationSeed?: number;
   readonly enemyHealth?: number;
   readonly weaponDamage?: number;
+  readonly weaponCooldownTicks?: number;
 }
 
 const GENERATED_ROOM = {
@@ -100,7 +101,7 @@ export function encounterGateProject(
         weapon: {
           damage: options.weaponDamage ?? 60,
           maxDistance: 20,
-          cooldownTicks: 0,
+          cooldownTicks: options.weaponCooldownTicks ?? 2,
           ammoCapacity: 8,
           muzzleOffset: [0, 0, 0],
         },

@@ -1,6 +1,7 @@
 import { mountAshaRendererBrowserSurface } from "@asha/renderer-three/backend";
 
 import "./style.css";
+import { SerializedActionQueue } from "./action-queue.js";
 import { HeldMovementInput } from "./held-movement.js";
 import {
   RuntimeProjectionAdapter,
@@ -33,7 +34,9 @@ const smokeResult = requiredElement("smoke-result", HTMLElement);
 const projection = new RuntimeProjectionAdapter();
 const eventHistory: string[] = [];
 const smokeMode = new URLSearchParams(location.search).has("smoke");
-let actionQueue: Promise<void> = Promise.resolve();
+let actionRejectionCount = 0;
+let lastActionRejection: string | null = null;
+const actionQueue = new SerializedActionQueue(recordActionRejection);
 
 let current = await requestState("/api/state");
 const heldMovement = new HeldMovementInput({
@@ -128,14 +131,14 @@ if (smokeMode) {
   window.dispatchEvent(new KeyboardEvent("keydown", { code: heldCode }));
   await delay(current.player.moveStepSeconds * 8_000);
   window.dispatchEvent(new KeyboardEvent("keyup", { code: heldCode }));
-  await actionQueue;
+  await actionQueue.settled();
   const playerMoved = current.player.position.some(
     (value, axis) => Math.abs(value - initialPlayerPosition[axis]!) > 0.01,
   );
   const playerBlocked = current.playerMotionState === "blocked";
   const releasedPlayerPosition = current.player.position;
   await delay(current.player.moveStepSeconds * 2_000);
-  await actionQueue;
+  await actionQueue.settled();
   const playerStopped = current.player.position.every(
     (value, axis) => Math.abs(value - releasedPlayerPosition[axis]!) < 0.000_001,
   );
@@ -143,7 +146,7 @@ if (smokeMode) {
     ? "pass"
     : "fail";
   window.dispatchEvent(new MouseEvent("mousemove", { movementX: 20, movementY: 0 }));
-  await actionQueue;
+  await actionQueue.settled();
   const playerLooked = current.player.yawDegrees !== initialPlayerYaw;
   const initialEnemyPosition = current.enemies.find((enemy) => enemy.id === 4)?.position;
   await perform("/api/navigation-step");
@@ -155,11 +158,21 @@ if (smokeMode) {
   await aimAtEnemy(4);
   await firePrimary();
   const movingTargetDamaged = current.enemies.find((enemy) => enemy.id === 4)?.currentHealth === 40;
+  const rejectionsBeforeCooldown = actionRejectionCount;
+  await firePrimary();
+  const cooldownRejected =
+    actionRejectionCount === rejectionsBeforeCooldown + 1 &&
+    current.enemies.find((enemy) => enemy.id === 4)?.currentHealth === 40;
+  const yawBeforeRecovery = current.player.yawDegrees;
+  await enqueuePlayerAction({ kind: "look", yawDelta: 0.25, pitchDelta: 0 });
+  const lookRecoveredAfterRejection = current.player.yawDegrees !== yawBeforeRecovery;
   await perform("/api/navigation-phase");
   await aimAtEnemy(4);
   await firePrimary();
   await aimAtEnemy(5);
   await firePrimary();
+  await enqueuePlayerAction({ kind: "look", yawDelta: 0.25, pitchDelta: 0 });
+  await aimAtEnemy(5);
   await firePrimary();
   const combatHit = current.combatState === "hit";
   const openGateTraversed = await walkPlayerPath([
@@ -174,6 +187,11 @@ if (smokeMode) {
     );
   }
   document.body.dataset.gatePassage = openGateTraversed ? "pass" : "fail";
+  const queueRecovered = cooldownRejected && lookRecoveredAfterRejection && openGateTraversed;
+  document.body.dataset.queueRecovery = queueRecovered ? "pass" : "fail";
+  const cooldownRecovered =
+    cooldownRejected && current.enemies.find((enemy) => enemy.id === 4)?.currentHealth === 0;
+  document.body.dataset.cooldown = cooldownRecovered ? "pass" : "fail";
   await perform("/api/motion-phase");
   surface.renderOnce();
   const door = current.projection.find((node) => node.id === 3);
@@ -190,6 +208,8 @@ if (smokeMode) {
     playerLooked &&
     movingTargetAdvanced &&
     movingTargetDamaged &&
+    queueRecovered &&
+    cooldownRecovered &&
     current.projection.find((node) => node.id === 4)?.translation?.[0] === 7.5 &&
     (current.projection.find((node) => node.id === 10)?.translation?.[0] ?? -4) > 2 &&
     current.generatedEnvironment?.seed === 4 &&
@@ -212,6 +232,8 @@ async function perform(path: string): Promise<void> {
   current = await requestState(path, "POST");
   if (path === "/api/reset") {
     eventHistory.length = 0;
+    actionRejectionCount = 0;
+    lastActionRejection = null;
   }
   eventHistory.push(...current.lastEvents);
   const frame = projection.apply(current);
@@ -237,8 +259,11 @@ function renderReadout(state: RuntimeBrowserState): void {
   navigationState.dataset.state = state.navigationState;
   playerMotionState.textContent = state.playerMotionState.toUpperCase();
   playerMotionState.dataset.state = state.playerMotionState;
-  combatState.textContent = state.combatState.toUpperCase();
-  combatState.dataset.state = state.combatState;
+  combatState.textContent = lastActionRejection === null
+    ? state.combatState.toUpperCase()
+    : "REJECTED";
+  combatState.dataset.state = lastActionRejection === null ? state.combatState : "rejected";
+  combatState.title = lastActionRejection ?? "";
   playerPose.textContent = `${state.player.position.map((value) => value.toFixed(1)).join(", ")} · YAW ${state.player.yawDegrees.toFixed(0)}°`;
   weaponState.textContent = `${String(state.weapon.damage)} DMG · ${String(state.weapon.ammoRemaining)}/${String(state.weapon.ammoCapacity)} AMMO`;
   environmentState.textContent = state.generatedEnvironment === null
@@ -270,12 +295,11 @@ function renderReadout(state: RuntimeBrowserState): void {
 }
 
 function enqueuePlayerAction(action: ResolvedPlayerAction): Promise<void> {
-  actionQueue = actionQueue.then(() => performPlayerAction(action));
-  return actionQueue;
+  return actionQueue.enqueue(() => performPlayerAction(action));
 }
 
-function enqueueAttackAction(action: ResolvedAttackAction): void {
-  actionQueue = actionQueue.then(() => performAttackAction(action));
+function enqueueAttackAction(action: ResolvedAttackAction): Promise<void> {
+  return actionQueue.enqueue(() => performAttackAction(action));
 }
 
 function enqueueResolvedAction(action: ResolvedInputAction): void {
@@ -288,6 +312,7 @@ function enqueueResolvedAction(action: ResolvedInputAction): void {
 
 async function performPlayerAction(action: ResolvedPlayerAction): Promise<void> {
   current = await requestState("/api/player-action", "POST", action);
+  lastActionRejection = null;
   eventHistory.push(...current.lastEvents);
   const frame = projection.apply(current);
   if (frame.ops.length > 0) {
@@ -301,6 +326,7 @@ async function performPlayerAction(action: ResolvedPlayerAction): Promise<void> 
 
 async function performAttackAction(action: ResolvedAttackAction): Promise<void> {
   current = await requestState("/api/attack", "POST", action);
+  lastActionRejection = null;
   eventHistory.push(...current.lastEvents);
   const frame = projection.apply(current);
   if (frame.ops.length > 0) {
@@ -329,7 +355,7 @@ async function aimAtEnemy(enemyId: number): Promise<void> {
     if (Math.abs(yawDifference) < 0.01 && Math.abs(pitchDifference) < 0.01) {
       return;
     }
-    await performPlayerAction({
+    await enqueuePlayerAction({
       kind: "look",
       yawDelta: clampUnit(yawDifference / current.player.lookDegreesPerUnit),
       pitchDelta: clampUnit(pitchDifference / current.player.lookDegreesPerUnit),
@@ -343,7 +369,7 @@ async function firePrimary(): Promise<void> {
   if (action === null) {
     throw new Error("authored primary-fire binding did not resolve Mouse0");
   }
-  await performAttackAction(action);
+  await enqueueAttackAction(action);
 }
 
 async function walkPlayerPath(
@@ -376,7 +402,7 @@ async function walkPlayerTo(
       throw new Error("authored move-forward binding did not resolve to movement");
     }
     const before = current.player.position;
-    await performPlayerAction(action);
+    await enqueuePlayerAction(action);
     if (current.player.position.every(
       (value, axis) => Math.abs(value - before[axis]!) < 0.000_001,
     )) {
@@ -393,7 +419,7 @@ async function turnPlayerToward(offsetX: number, offsetZ: number): Promise<void>
     if (Math.abs(yawDifference) < 0.01) {
       return;
     }
-    await performPlayerAction({
+    await enqueuePlayerAction({
       kind: "look",
       yawDelta: clampUnit(yawDifference / current.player.lookDegreesPerUnit),
       pitchDelta: 0,
@@ -462,9 +488,20 @@ async function requestState(
       : { body: JSON.stringify(body), headers: { "Content-Type": "application/json" } }),
   });
   if (!response.ok) {
-    throw new Error(`${method} ${path} failed with ${String(response.status)}`);
+    const detail = await response.json().catch(() => null) as { readonly error?: unknown } | null;
+    const reason = typeof detail?.error === "string" ? `: ${detail.error}` : "";
+    throw new Error(`${method} ${path} failed with ${String(response.status)}${reason}`);
   }
   return (await response.json()) as RuntimeBrowserState;
+}
+
+function recordActionRejection(error: unknown): void {
+  actionRejectionCount += 1;
+  lastActionRejection = error instanceof Error ? error.message : String(error);
+  eventHistory.push(
+    lastActionRejection.includes("CombatRejected") ? "CombatRejected" : "ActionRejected",
+  );
+  renderReadout(current);
 }
 
 function clampUnit(value: number): number {

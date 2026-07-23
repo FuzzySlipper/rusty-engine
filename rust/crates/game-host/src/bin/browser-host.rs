@@ -23,6 +23,7 @@ const SECOND_ENEMY: u64 = 5;
 const MOTION_PROBE: EntityId = EntityId::new(10);
 const PRODUCT_MOTION_PHASES: usize = 120;
 const PRODUCT_MOTION_DELTA_SECONDS: f32 = 1.0 / 60.0;
+const PRODUCT_ACTION_TICKS: u64 = 1;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -278,14 +279,19 @@ fn route(
                 Err(error) => return error_json(400, &format!("invalid attack action: {error}")),
             };
             let mut runtime = runtime.lock().expect("runtime lock");
+            let mut facts = match advance_product_action(&mut runtime) {
+                Ok(events) => events,
+                Err(error) => return error_json(409, &format!("{error}")),
+            };
             match runtime.attack(ACTOR, action) {
                 Ok(receipt) => {
-                    let mut facts: Vec<String> = receipt
-                        .facts
-                        .iter()
-                        .map(combat_fact_name)
-                        .map(str::to_owned)
-                        .collect();
+                    facts.extend(
+                        receipt
+                            .facts
+                            .iter()
+                            .map(combat_fact_name)
+                            .map(str::to_owned),
+                    );
                     facts.extend(receipt.events.iter().map(event_name).map(str::to_owned));
                     json_response(200, browser_state(&runtime, facts))
                 }
@@ -384,14 +390,19 @@ fn route(
                 Err(error) => return error_json(400, &format!("invalid resolved action: {error}")),
             };
             let mut runtime = runtime.lock().expect("runtime lock");
+            let mut facts = match advance_product_action(&mut runtime) {
+                Ok(events) => events,
+                Err(error) => return error_json(409, &format!("{error}")),
+            };
             match runtime.apply_player_action(ACTOR, action) {
                 Ok(receipt) => {
-                    let facts = receipt
-                        .facts
-                        .iter()
-                        .map(player_fact_name)
-                        .map(str::to_owned)
-                        .collect();
+                    facts.extend(
+                        receipt
+                            .facts
+                            .iter()
+                            .map(player_fact_name)
+                            .map(str::to_owned),
+                    );
                     json_response(200, browser_state(&runtime, facts))
                 }
                 Err(error) => error_json(409, &format!("{error}")),
@@ -400,6 +411,18 @@ fn route(
         ("GET", _) | ("HEAD", _) => serve_static(method, path, dist),
         _ => error_json(405, "method not allowed"),
     }
+}
+
+fn advance_product_action(
+    runtime: &mut GameRuntime,
+) -> Result<Vec<String>, game_host::RuntimeError> {
+    let receipt = runtime.advance_by(PRODUCT_ACTION_TICKS)?;
+    Ok(receipt
+        .events
+        .iter()
+        .map(event_name)
+        .map(str::to_owned)
+        .collect())
 }
 
 fn browser_state(runtime: &GameRuntime, last_events: Vec<String>) -> BrowserState {
@@ -710,4 +733,58 @@ fn write_response(
         body.len()
     )?;
     stream.write_all(&body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serialized_browser_actions_advance_cooldown_and_become_eligible_again() {
+        let runtime = Arc::new(Mutex::new(
+            GameRuntime::from_project_content(PROJECT).expect("admit browser project"),
+        ));
+        let attack = serde_json::to_vec(&ResolvedAttackAction::Attack).unwrap();
+        let look = serde_json::to_vec(&ResolvedPlayerAction::Look {
+            yaw_delta: 0.25,
+            pitch_delta: 0.0,
+        })
+        .unwrap();
+
+        assert_eq!(
+            route("POST", "/api/attack", &attack, &runtime, Path::new(".")).0,
+            200
+        );
+        assert_eq!(
+            route("POST", "/api/attack", &attack, &runtime, Path::new(".")).0,
+            409
+        );
+        assert_eq!(
+            route(
+                "POST",
+                "/api/player-action",
+                &look,
+                &runtime,
+                Path::new(".")
+            )
+            .0,
+            200
+        );
+        assert_eq!(
+            route("POST", "/api/attack", &attack, &runtime, Path::new(".")).0,
+            200
+        );
+
+        let runtime = runtime.lock().expect("runtime lock");
+        assert_eq!(runtime.tick().raw(), 4);
+        assert_eq!(
+            runtime
+                .session()
+                .weapon(ACTOR)
+                .unwrap()
+                .state
+                .ammo_remaining,
+            6
+        );
+    }
 }

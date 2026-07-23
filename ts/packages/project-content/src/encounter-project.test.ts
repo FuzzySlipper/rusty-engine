@@ -83,6 +83,7 @@ test("health and weapon configuration stay on their responsible entities", () =>
   const project = encounterGateProject(["guard"], {
     enemyHealth: 140,
     weaponDamage: 35,
+    weaponCooldownTicks: 3,
   });
   const player = project.entities.find((entity) => entity.id === ENCOUNTER_IDS.actor);
   const enemy = project.entities.find((entity) => entity.id === ENCOUNTER_IDS.firstEnemy);
@@ -94,7 +95,7 @@ test("health and weapon configuration stay on their responsible entities", () =>
   assert.deepEqual(player?.weapon, {
     damage: 35,
     maxDistance: 20,
-    cooldownTicks: 0,
+    cooldownTicks: 3,
     ammoCapacity: 8,
     muzzleOffset: [0, 0, 0],
   });
