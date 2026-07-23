@@ -1,7 +1,7 @@
 use core_ids::EntityId;
 use core_math::Vec3;
 use core_time::TickDelta;
-use engine_spatial::VoxelCollisionScene;
+use engine_spatial::{GeneratedRoomConfig, VoxelCollisionScene};
 use entity_state::{EntityDefinition, MAX_ABS_TRANSLATION};
 use serde::Deserialize;
 
@@ -10,7 +10,7 @@ use crate::model::{
     PlayerControllerConfig, PlayerInputBindings,
 };
 
-pub const PROJECT_CONTENT_SCHEMA_VERSION: u32 = 4;
+pub const PROJECT_CONTENT_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug)]
 pub struct AdmittedProject {
@@ -24,6 +24,7 @@ struct ProjectContent {
     schema_version: u32,
     entities: Vec<AuthoredEntityDefinition>,
     voxel_collision: Option<AuthoredVoxelCollision>,
+    generated_voxel_environment: Option<AuthoredGeneratedVoxelEnvironment>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +51,17 @@ struct AuthoredVoxelCollision {
     voxel_size: f64,
     chunk_size: u32,
     solid_voxels: Vec<[i64; 3]>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct AuthoredGeneratedVoxelEnvironment {
+    seed: u64,
+    voxel_size: f64,
+    chunk_size: u32,
+    width: u32,
+    height: u32,
+    length: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,6 +143,7 @@ pub enum ProjectContentError {
     InvalidAutoCloseTicks { entity: EntityId },
     KinematicMissingCollisionScene { entity: EntityId },
     NavigationMissingCollisionScene { entity: EntityId },
+    AmbiguousVoxelEnvironment,
     CollisionScene(engine_spatial::CollisionSceneError),
     Definition(GameEntityDefinitionError),
 }
@@ -159,17 +172,29 @@ pub fn decode_project_content(input: &str) -> Result<AdmittedProject, ProjectCon
         .collect::<Result<Vec<_>, _>>()?;
     let session =
         GameSession::from_definitions(definitions).map_err(ProjectContentError::Definition)?;
-    let collision_scene = content
-        .voxel_collision
-        .map(|authored| {
+    let collision_scene = match (content.voxel_collision, content.generated_voxel_environment) {
+        (Some(_), Some(_)) => return Err(ProjectContentError::AmbiguousVoxelEnvironment),
+        (Some(authored), None) => Some(
             VoxelCollisionScene::from_solid_voxels(
                 authored.voxel_size,
                 authored.chunk_size,
                 authored.solid_voxels,
             )
-            .map_err(ProjectContentError::CollisionScene)
-        })
-        .transpose()?;
+            .map_err(ProjectContentError::CollisionScene)?,
+        ),
+        (None, Some(authored)) => Some(
+            VoxelCollisionScene::from_generated_room(GeneratedRoomConfig {
+                seed: authored.seed,
+                voxel_size: authored.voxel_size,
+                chunk_size: authored.chunk_size,
+                width: authored.width,
+                height: authored.height,
+                length: authored.length,
+            })
+            .map_err(ProjectContentError::CollisionScene)?,
+        ),
+        (None, None) => None,
+    };
     if let Some(entity) = session
         .entities()
         .kinematic_bodies()

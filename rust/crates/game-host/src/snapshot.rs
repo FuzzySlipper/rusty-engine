@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use core_ids::EntityId;
 use core_math::Vec3;
 use core_time::{Tick, TickDelta};
-use engine_spatial::VoxelCollisionScene;
+use engine_spatial::{GeneratedRoomConfig, VoxelCollisionScene, GENERATED_ROOM_VERSION};
 use entity_state::{EntityState, EntityStateSnapshot};
 use serde::{Deserialize, Serialize};
 
@@ -17,7 +17,7 @@ use crate::model::{
 use crate::runtime::GameRuntime;
 use crate::scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
 
-pub const GAME_SNAPSHOT_SCHEMA_VERSION: u32 = 6;
+pub const GAME_SNAPSHOT_SCHEMA_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -42,6 +42,18 @@ pub struct VoxelCollisionSnapshot {
     pub voxel_size: f64,
     pub chunk_size: u32,
     pub solid_voxels: Vec<[i64; 3]>,
+    pub generated_room: Option<GeneratedRoomSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct GeneratedRoomSnapshot {
+    pub generator_version: u32,
+    pub seed: u64,
+    pub width: u32,
+    pub height: u32,
+    pub length: u32,
+    pub output_hash: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -168,6 +180,9 @@ pub enum GameSnapshotError {
     UnsupportedSchema { actual: u32 },
     EntityState(entity_state::EntityStateSnapshotError),
     CollisionScene(engine_spatial::CollisionSceneError),
+    AmbiguousVoxelSnapshot,
+    UnsupportedGeneratedRoomVersion { actual: u32 },
+    GeneratedRoomHashMismatch { expected: u64, actual: u64 },
     DuplicateDoor { entity: u64 },
     DuplicateSwitch { entity: u64 },
     DuplicateEnemy { entity: u64 },
@@ -216,7 +231,21 @@ impl GameRuntime {
                 .map(|scene| VoxelCollisionSnapshot {
                     voxel_size: scene.voxel_size(),
                     chunk_size: scene.chunk_size(),
-                    solid_voxels: scene.solid_voxels().to_vec(),
+                    solid_voxels: if scene.generated_room().is_some() {
+                        Vec::new()
+                    } else {
+                        scene.solid_voxels().to_vec()
+                    },
+                    generated_room: scene.generated_room().map(|(config, record)| {
+                        GeneratedRoomSnapshot {
+                            generator_version: record.generator_version,
+                            seed: config.seed,
+                            width: config.width,
+                            height: config.height,
+                            length: config.length,
+                            output_hash: record.output_hash,
+                        }
+                    }),
                 }),
             doors: self
                 .session
@@ -344,13 +373,44 @@ impl GameRuntime {
         }
         let collision_scene = snapshot
             .voxel_collision
-            .map(|scene| {
-                VoxelCollisionScene::from_solid_voxels(
+            .map(|scene| match scene.generated_room {
+                Some(generated) => {
+                    if !scene.solid_voxels.is_empty() {
+                        return Err(GameSnapshotError::AmbiguousVoxelSnapshot);
+                    }
+                    if generated.generator_version != GENERATED_ROOM_VERSION {
+                        return Err(GameSnapshotError::UnsupportedGeneratedRoomVersion {
+                            actual: generated.generator_version,
+                        });
+                    }
+                    let rebuilt = VoxelCollisionScene::from_generated_room(GeneratedRoomConfig {
+                        seed: generated.seed,
+                        voxel_size: scene.voxel_size,
+                        chunk_size: scene.chunk_size,
+                        width: generated.width,
+                        height: generated.height,
+                        length: generated.length,
+                    })
+                    .map_err(GameSnapshotError::CollisionScene)?;
+                    let actual = rebuilt
+                        .generated_room()
+                        .expect("generated room constructor records provenance")
+                        .1
+                        .output_hash;
+                    if actual != generated.output_hash {
+                        return Err(GameSnapshotError::GeneratedRoomHashMismatch {
+                            expected: generated.output_hash,
+                            actual,
+                        });
+                    }
+                    Ok(rebuilt)
+                }
+                None => VoxelCollisionScene::from_solid_voxels(
                     scene.voxel_size,
                     scene.chunk_size,
                     scene.solid_voxels,
                 )
-                .map_err(GameSnapshotError::CollisionScene)
+                .map_err(GameSnapshotError::CollisionScene),
             })
             .transpose()?;
         let entities = EntityState::from_snapshot(snapshot.entities)

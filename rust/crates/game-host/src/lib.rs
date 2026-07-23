@@ -33,7 +33,7 @@ pub use runtime::{GameRuntime, RuntimeError, MAX_EVENT_WAVE, MAX_TICK_ADVANCE};
 pub use scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
 pub use snapshot::{
     decode_game_snapshot, encode_game_snapshot, EncounterSnapshot, EnemySnapshot, GameSnapshot,
-    GameSnapshotError, NavigationSnapshot, PlayerControllerSnapshot, PlayerInputBindingsSnapshot,
-    SnapshotEncounterState, SnapshotEnemyState, SnapshotNavigationState, VoxelCollisionSnapshot,
-    GAME_SNAPSHOT_SCHEMA_VERSION,
+    GameSnapshotError, GeneratedRoomSnapshot, NavigationSnapshot, PlayerControllerSnapshot,
+    PlayerInputBindingsSnapshot, SnapshotEncounterState, SnapshotEnemyState,
+    SnapshotNavigationState, VoxelCollisionSnapshot, GAME_SNAPSHOT_SCHEMA_VERSION,
 };

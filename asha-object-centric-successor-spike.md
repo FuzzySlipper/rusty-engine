@@ -608,12 +608,15 @@ browser/Three/DOM shell. Proof should cover:
 - the localized new-capability variation;
 - the real-time characterization.
 
-The retained loading-bay shell exercises both vertical paths. DOM controls resolve to narrow Rust
-service operations; enemy facts clear and visibly open the exit; a separate bounded spatial action
-moves a projected probe until the authored voxel blocks it. Rust snapshots rebuild the collision
-projection and continue the workload identically. The gate builds the production bundle, launches
-the Rust HTTP host, drives these actions in Chromium with real WebGL/Three code, and requires an
-explicit pass marker plus the typed event/fact names.
+The retained loading-bay shell now exercises the baseline plus M1/M2A/M2B. DOM controls resolve to
+narrow Rust service operations; player movement collides with a generated room shell; a sentry
+routes around the generated pillar; enemy facts clear and visibly open the exit; and a separate
+bounded spatial action stops a projected probe at the same voxel authority. The generated room is
+uploaded through the donor mesh path, while the follow camera is rebuilt from accepted player pose.
+Rust snapshots deterministically regenerate collision/navigation/mesh projections and continue
+identically. The gate builds the production bundle, launches the Rust HTTP host, drives these
+actions in Chromium with real WebGL/Three code, and requires an explicit pass marker plus the typed
+event/fact names.
 
 ## Success criteria
 

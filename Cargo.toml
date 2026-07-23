@@ -18,6 +18,8 @@ core-time = { path = "../asha-engine/engine-rs/crates/foundation/core-time" }
 core-voxel = { path = "../asha-engine/engine-rs/crates/state/core-voxel" }
 svc-collision = { path = "../asha-engine/engine-rs/crates/services/svc-collision" }
 svc-pathfinding = { path = "../asha-engine/engine-rs/crates/services/svc-pathfinding" }
+svc-rng = { path = "../asha-engine/engine-rs/crates/services/svc-rng" }
+svc-mesh = { path = "../asha-engine/engine-rs/crates/services/svc-mesh" }
 svc-spatial = { path = "../asha-engine/engine-rs/crates/services/svc-spatial" }
 svc-volume = { path = "../asha-engine/engine-rs/crates/services/svc-volume" }
 serde = { version = "1", features = ["derive"] }

@@ -37,10 +37,10 @@ fn semantic_move_actions_use_the_collision_aware_kinematic_path() {
 
     let after = player_position(&runtime);
     assert!(moved, "the player should advance before reaching the wall");
-    assert!(blocked, "the authored voxel wall should stop the player");
+    assert!(blocked, "the generated room shell should stop the player");
     assert!((after.x - before.x).abs() < 0.000_01);
-    assert!(after.z > before.z);
-    assert!(after.z < 3.0);
+    assert!(after.z < before.z);
+    assert!(after.z > 1.0);
     assert_eq!(
         runtime
             .session()
@@ -71,7 +71,7 @@ fn semantic_look_action_updates_durable_controller_state_without_moving_the_enti
         .unwrap();
 
     let after = runtime.session().player_controller(PLAYER).unwrap().state;
-    assert_eq!(after.yaw_degrees, -174.0);
+    assert_eq!(after.yaw_degrees, 6.0);
     assert_eq!(after.pitch_degrees, -13.0);
     assert_eq!(player_position(&runtime), before_position);
     assert!(receipt.motion.is_none());

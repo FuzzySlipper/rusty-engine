@@ -31,6 +31,8 @@ function state(projection: RuntimeBrowserState["projection"]): RuntimeBrowserSta
         mouseLook: "pointer",
       },
     },
+    voxelMeshes: [],
+    generatedEnvironment: null,
     enemies: [],
     lastEvents: [],
   };
@@ -47,8 +49,8 @@ test("whole Rust readouts become create update and destroy diffs", () => {
   };
 
   const created = adapter.apply(state([original]));
-  assert.deepEqual(created.ops.map((op) => op.op), ["create", "create"]);
-  assert.equal(created.ops[1]?.op === "create" ? created.ops[1].handle : null, entityHandle(3));
+  assert.deepEqual(created.ops.map((op) => op.op), ["create"]);
+  assert.equal(created.ops[0]?.op === "create" ? created.ops[0].handle : null, entityHandle(3));
 
   const updated = adapter.apply(
     state([{ ...original, translation: [0, 3, 8] as const }]),
@@ -58,6 +60,33 @@ test("whole Rust readouts become create update and destroy diffs", () => {
   const destroyed = adapter.apply(state([]));
   assert.deepEqual(destroyed.ops.map((op) => op.op), ["destroy"]);
   assert.equal(adapter.trackedEntityCount, 0);
+});
+
+test("generated chunk mesh is retained by content hash and uses the donor mesh payload path", () => {
+  const adapter = new RuntimeProjectionAdapter();
+  const mesh = {
+    chunk: [0, 0, 0] as const,
+    contentHash: "abc",
+    translation: [0, 0, 0] as const,
+    positions: [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0],
+    normals: [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
+    indices: [0, 1, 2, 0, 2, 3],
+    groups: [{ materialSlot: 3, start: 0, count: 6 }],
+    boundsMin: [0, 0, 0] as const,
+    boundsMax: [1, 1, 0] as const,
+  };
+  const initial = { ...state([]), voxelMeshes: [mesh] };
+
+  assert.deepEqual(adapter.apply(initial).ops.map((op) => op.op), [
+    "create",
+    "replaceMeshPayload",
+  ]);
+  assert.deepEqual(adapter.apply(initial).ops, []);
+  assert.deepEqual(
+    adapter.apply({ ...initial, voxelMeshes: [{ ...mesh, contentHash: "def" }] }).ops.map((op) => op.op),
+    ["replaceMeshPayload"],
+  );
+  assert.equal(adapter.trackedMeshCount, 1);
 });
 
 test("camera pose is rebuilt as a presentation offset from accepted player state", () => {

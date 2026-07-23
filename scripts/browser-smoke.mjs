@@ -66,12 +66,16 @@ try {
     "DoorOpened",
     "KinematicBlocked",
     "NavigationArrived",
+    "PlayerMoved",
+    "PlayerBlocked",
+    "PlayerLookChanged",
+    "SEED 4",
   ];
   const missing = required.filter((marker) => !result.stdout.includes(marker));
   if (missing.length > 0) {
     throw new Error(`browser smoke missing ${missing.join(", ")}\n${result.stdout.slice(-6_000)}`);
   }
-  console.log("browser smoke passed: Rust services -> typed facts -> Asha retained Three/WebGL shell");
+  console.log("browser smoke passed: generated voxel mesh + Rust facts -> Asha retained Three/WebGL shell");
 } finally {
   host.kill("SIGTERM");
   await Promise.race([onceExit(host), delay(1_000)]);

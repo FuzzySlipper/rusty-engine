@@ -1,6 +1,8 @@
 use core_ids::EntityId;
 use core_math::Vec3;
-use engine_spatial::{KinematicMotionSystem, MotionAxis, MotionFact, VoxelCollisionScene};
+use engine_spatial::{
+    GeneratedRoomConfig, KinematicMotionSystem, MotionAxis, MotionFact, VoxelCollisionScene,
+};
 use entity_state::{EntityDefinition, EntityState};
 
 #[test]
@@ -80,4 +82,85 @@ fn scene_admission_bounds_dense_chunk_allocation() {
         VoxelCollisionScene::from_solid_voxels(1.0, 65, []),
         Err(engine_spatial::CollisionSceneError::InvalidChunkSize)
     ));
+}
+
+#[test]
+fn generated_room_is_deterministic_and_seed_changes_canonical_voxels_and_mesh() {
+    let config = room_config(4);
+    let first = VoxelCollisionScene::from_generated_room(config).unwrap();
+    let repeated = VoxelCollisionScene::from_generated_room(config).unwrap();
+    let variation = VoxelCollisionScene::from_generated_room(room_config(9)).unwrap();
+
+    assert_eq!(first.generated_room(), repeated.generated_room());
+    assert_eq!(first.material_voxels(), repeated.material_voxels());
+    assert_eq!(first.mesh_chunks(), repeated.mesh_chunks());
+    assert_ne!(
+        first.generated_room().unwrap().1.pillar_voxel,
+        variation.generated_room().unwrap().1.pillar_voxel,
+    );
+    assert_ne!(first.material_voxels(), variation.material_voxels());
+    assert_ne!(
+        first.mesh_chunks()[0].content_hash,
+        variation.mesh_chunks()[0].content_hash,
+    );
+}
+
+#[test]
+fn generated_pillar_drives_collision_navigation_and_visible_mesh_from_one_world() {
+    let scene = VoxelCollisionScene::from_generated_room(room_config(4)).unwrap();
+    let record = scene.generated_room().unwrap().1;
+    let [x, y, z] = record.pillar_voxel;
+
+    assert!(scene
+        .material_voxels()
+        .iter()
+        .any(|voxel| voxel.address == record.pillar_voxel && voxel.material_slot == 3));
+    assert!(scene.contains_point([x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5]));
+    let navigation = scene
+        .navigation_step(
+            Vec3::new(1.5, 1.5, 6.5),
+            Vec3::new(7.5, 1.5, 6.5),
+            Vec3::ZERO,
+            0.1,
+            512,
+        )
+        .unwrap();
+    assert!(
+        navigation.path_len > 7,
+        "route must detour around the pillar"
+    );
+    let mesh = &scene.mesh_chunks()[0];
+    assert!(mesh.vertices > 0);
+    assert!(mesh.quads > 0);
+    assert!(mesh.faces_culled > 0);
+    assert!(mesh.groups.iter().any(|group| group.material_slot == 3));
+}
+
+#[test]
+fn bounded_room_fixture_stays_one_chunk_with_reviewable_mesh_counts() {
+    let scene = VoxelCollisionScene::from_generated_room(GeneratedRoomConfig {
+        seed: 41,
+        voxel_size: 1.0,
+        chunk_size: 32,
+        width: 15,
+        height: 6,
+        length: 20,
+    })
+    .unwrap();
+    let mesh = &scene.mesh_chunks()[0];
+
+    assert_eq!(scene.resident_chunk_count(), 1);
+    assert!(scene.solid_voxel_count() < 2_000);
+    assert!(mesh.vertices < 20_000);
+}
+
+fn room_config(seed: u64) -> GeneratedRoomConfig {
+    GeneratedRoomConfig {
+        seed,
+        voxel_size: 1.0,
+        chunk_size: 16,
+        width: 7,
+        height: 4,
+        length: 10,
+    }
 }

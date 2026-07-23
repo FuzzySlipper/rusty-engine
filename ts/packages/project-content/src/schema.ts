@@ -59,6 +59,15 @@ export interface VoxelCollisionDefinition {
   readonly solidVoxels: readonly VoxelAddress[];
 }
 
+export interface GeneratedVoxelEnvironmentDefinition {
+  readonly seed: number;
+  readonly voxelSize: number;
+  readonly chunkSize: number;
+  readonly width: number;
+  readonly height: number;
+  readonly length: number;
+}
+
 export interface EntityDefinition {
   readonly id: number;
   readonly name: string;
@@ -75,7 +84,8 @@ export interface EntityDefinition {
 }
 
 export interface ProjectContent {
-  readonly schemaVersion: 4;
+  readonly schemaVersion: 5;
   readonly entities: readonly EntityDefinition[];
   readonly voxelCollision?: VoxelCollisionDefinition;
+  readonly generatedVoxelEnvironment?: GeneratedVoxelEnvironmentDefinition;
 }

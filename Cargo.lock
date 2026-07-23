@@ -98,7 +98,9 @@ dependencies = [
  "core-voxel",
  "entity-state",
  "svc-collision",
+ "svc-mesh",
  "svc-pathfinding",
+ "svc-rng",
  "svc-spatial",
  "svc-volume",
 ]
@@ -430,6 +432,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "svc-mesh"
+version = "0.1.0"
+dependencies = [
+ "core-space",
+ "core-voxel",
+ "svc-spatial",
+ "svc-volume",
+]
+
+[[package]]
 name = "svc-pathfinding"
 version = "0.1.0"
 dependencies = [
@@ -437,6 +449,10 @@ dependencies = [
  "core-space",
  "svc-spatial",
 ]
+
+[[package]]
+name = "svc-rng"
+version = "0.1.0"
 
 [[package]]
 name = "svc-spatial"

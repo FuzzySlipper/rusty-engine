@@ -3,6 +3,7 @@ import {
   renderHandle,
   type Geometry,
   type Material,
+  type MeshPayloadDescriptor,
   type RenderDiff,
   type RenderFrameDiff,
   type RenderHandle,
@@ -46,6 +47,32 @@ export interface DerivedCameraPose {
   readonly pitchDegrees: number;
 }
 
+export interface RuntimeVoxelMeshGroup {
+  readonly materialSlot: number;
+  readonly start: number;
+  readonly count: number;
+}
+
+export interface RuntimeVoxelMeshChunk {
+  readonly chunk: readonly [number, number, number];
+  readonly contentHash: string;
+  readonly translation: readonly [number, number, number];
+  readonly positions: readonly number[];
+  readonly normals: readonly number[];
+  readonly indices: readonly number[];
+  readonly groups: readonly RuntimeVoxelMeshGroup[];
+  readonly boundsMin: readonly [number, number, number];
+  readonly boundsMax: readonly [number, number, number];
+}
+
+export interface RuntimeGeneratedEnvironment {
+  readonly seed: number;
+  readonly outputHash: string;
+  readonly solidVoxels: number;
+  readonly meshVertices: number;
+  readonly meshQuads: number;
+}
+
 export interface RuntimeBrowserState {
   readonly tick: number;
   readonly entityRevision: number;
@@ -56,6 +83,8 @@ export interface RuntimeBrowserState {
   readonly navigationState: "following" | "arrived" | "blocked" | "unreachable";
   readonly playerMotionState: "idle" | "moved" | "blocked";
   readonly player: RuntimePlayerState;
+  readonly voxelMeshes: readonly RuntimeVoxelMeshChunk[];
+  readonly generatedEnvironment: RuntimeGeneratedEnvironment | null;
   readonly enemies: readonly RuntimeEnemyState[];
   readonly lastEvents: readonly string[];
 }
@@ -80,31 +109,52 @@ export function derivePlayerCameraPose(
   };
 }
 
-const FLOOR_HANDLE = renderHandle(900_000);
 const ENTITY_HANDLE_OFFSET = 100_000;
+const FIRST_VOXEL_MESH_HANDLE = 800_000;
 
 /** Stateful adapter from whole Rust projection readouts to retained renderer diffs. */
 export class RuntimeProjectionAdapter {
   readonly #known = new Map<number, RuntimeProjectionNode>();
-  #floorCreated = false;
+  readonly #meshHashes = new Map<string, string>();
+  readonly #meshHandles = new Map<string, RenderHandle>();
+  #nextMeshHandle = FIRST_VOXEL_MESH_HANDLE;
 
   apply(state: RuntimeBrowserState): RenderFrameDiff {
     const ops: RenderDiff[] = [];
-    if (!this.#floorCreated) {
-      ops.push({
-        op: "create",
-        handle: FLOOR_HANDLE,
-        parent: null,
-        node: primitiveNode(
-          "loading-bay-floor",
-          null,
-          "cube",
-          [0, -0.15, 5],
-          [14, 0.3, 18],
-          { color: [0.11, 0.16, 0.17, 1], wireframe: false },
-        ),
-      });
-      this.#floorCreated = true;
+    const incomingMeshes = new Set<string>();
+    for (const mesh of state.voxelMeshes) {
+      const key = mesh.chunk.join(",");
+      incomingMeshes.add(key);
+      let handle = this.#meshHandles.get(key);
+      if (handle === undefined) {
+        handle = renderHandle(this.#nextMeshHandle);
+        this.#nextMeshHandle += 1;
+        this.#meshHandles.set(key, handle);
+        ops.push({
+          op: "create",
+          handle,
+          parent: null,
+          node: primitiveNode(
+            `generated-room-chunk-${mesh.chunk.join("-")}`,
+            null,
+            "cube",
+            mesh.translation,
+            [1, 1, 1],
+            { color: [0.68, 0.78, 0.75, 1], wireframe: false },
+          ),
+        });
+      }
+      if (this.#meshHashes.get(key) !== mesh.contentHash) {
+        ops.push({ op: "replaceMeshPayload", handle, payload: meshPayload(mesh) });
+        this.#meshHashes.set(key, mesh.contentHash);
+      }
+    }
+    for (const [key, handle] of this.#meshHandles) {
+      if (!incomingMeshes.has(key)) {
+        ops.push({ op: "destroy", handle });
+        this.#meshHandles.delete(key);
+        this.#meshHashes.delete(key);
+      }
     }
 
     const incoming = new Set<number>();
@@ -144,6 +194,33 @@ export class RuntimeProjectionAdapter {
   get trackedEntityCount(): number {
     return this.#known.size;
   }
+
+  get trackedMeshCount(): number {
+    return this.#meshHandles.size;
+  }
+}
+
+function meshPayload(mesh: RuntimeVoxelMeshChunk): MeshPayloadDescriptor {
+  return {
+    layout: {
+      vertexCount: mesh.positions.length / 3,
+      indexCount: mesh.indices.length,
+      indexWidth: "u32",
+      attributes: [
+        { name: "position", components: 3, kind: "f32" },
+        { name: "normal", components: 3, kind: "f32" },
+      ],
+    },
+    groups: mesh.groups,
+    bounds: { min: mesh.boundsMin, max: mesh.boundsMax },
+    source: {
+      kind: "inline",
+      positions: mesh.positions,
+      normals: mesh.normals,
+      indices: mesh.indices,
+    },
+    provenance: "voxelChunk",
+  };
 }
 
 export function entityHandle(id: number): RenderHandle {

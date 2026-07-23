@@ -9,14 +9,14 @@ The active hypothesis is deliberately conventional:
   committed events.
 - TypeScript is code-as-content and tooling: it composes project definitions with normal language
   features, then emits strict data admitted by Rust before a session begins.
-- Presentation eventually returns to the existing TypeScript/Three/DOM shell through derived
+- Presentation returns to the existing TypeScript/Three/DOM shell through derived
   projection; it does not own gameplay truth.
 
 The architecture charter is [asha-object-centric-successor-spike.md](./asha-object-centric-successor-spike.md).
 
 ## Implemented walking spike
 
-The runtime now proves four connected paths:
+The runtime now proves seven connected paths:
 
 1. A switch-controlled security door with an optional configured close delay.
 2. An encounter-gated exit where committed enemy-defeat facts clear an authored encounter and open
@@ -25,20 +25,27 @@ The runtime now proves four connected paths:
    voxel authority and Parry collision projection.
 4. A retained browser/Three/DOM product shell where resolved actions enter Rust and typed facts plus
    projection deltas return to Asha's real Three renderer.
+5. Autonomous enemy navigation derived from the same canonical voxel authority as collision.
+6. Authored keyboard/pointer bindings, a Rust-owned collision-aware player controller, and a
+   presentation-only follow camera rebuilt from accepted pose.
+7. Seeded material-voxel generation whose canonical `VoxelWorld` feeds collision, navigation, and
+   an unchanged Asha visible-face mesher before retained Three upload.
 
-Components remain data. `InteractionService`, `CombatService`, `EncounterService`, and
-`DoorService` own behavior; `GameRuntime` contains the short explicit event route. Entity capability
-changes are applied atomically only where collision/render invariants require it. Snapshots preserve
-durable state and scheduled intents without replaying an event history.
+Components remain data. Named services/systems own interaction, combat, encounters, doors, player
+control, navigation, and kinematic motion; `GameRuntime` contains the short explicit event route.
+Entity capability changes are applied atomically only where collision/render invariants require it.
+Snapshots preserve durable state and scheduled intents without replaying an event history.
 
 The project definitions under `content/generated/` are reproducibly composed by
 `ts/packages/project-content`. Changing the encounter from two enemies to one changes only authored
 content and expectations, not Rust gameplay code. The same code-as-content package builds a named
 256-body voxel-wall workload without adding a TypeScript runtime authority.
 
-The loading-bay browser lets a player defeat both enemies and run a bounded spatial phase. Its
-Chromium smoke proves the resulting `EnemyDefeated -> EncounterCleared -> DoorOpened` chain and a
-visible kinematic probe stopped by authored voxel collision.
+The loading-bay browser resolves authored player controls, routes a moving sentry, uploads the
+generated room mesh, defeats both enemies, and runs a bounded spatial phase. Its Chromium smoke
+proves player and probe collision against generated voxels, navigation around the generated pillar,
+the `EnemyDefeated -> EncounterCleared -> DoorOpened` chain, derived camera movement, and retained
+Three/WebGL mesh projection.
 
 ## Donor checkout
 

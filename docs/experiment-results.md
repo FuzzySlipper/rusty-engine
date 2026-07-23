@@ -1,7 +1,7 @@
 # Experiment results
 
-Status: walking falsification slices and the first two scheduled migration families completed on
-2026-07-23; generated voxel environment/mesh migration is next in Den.
+Status: walking falsification slices and the first three scheduled migration families implemented
+on 2026-07-23 and registered for review in Den.
 
 ## Current decision
 
@@ -125,9 +125,9 @@ call. A blocked axis is stopped and its velocity component is zeroed while anoth
 move. Motion and collision-scene definitions are snapshot-visible; restore rebuilds the derived
 Parry projection and reaches the same final state as an uninterrupted run.
 
-This is deliberately not a physics engine. It currently resolves kinematic bodies only against
-static authored voxels, uses conservative axis separation, and has no dynamic-body collision,
-contact manifold, acceleration, or gravity.
+This is deliberately not a physics engine. It currently resolves kinematic bodies against canonical
+static voxels (authored or generated), uses conservative axis separation, and has no dynamic-body
+response, contact manifold, acceleration, or gravity.
 
 ### Named real-time workload
 
@@ -175,7 +175,7 @@ agent in a newly entered voxel before turning toward the next cell; this prevent
 from cutting across the corner of an adjacent solid, while continuous collision remains the
 fail-closed authority for the actual body volume.
 
-The loading-bay sentry visibly routes around an authored voxel obstacle and reaches its configured
+The loading-bay sentry visibly routes around a generated voxel pillar and reaches its configured
 goal before the encounter proceeds. Save/reopen during the route rebuilds the navigation projection
 from the same stored voxel authority and reaches the same final component/entity state. Focused
 coverage also proves a solid goal becomes `Unreachable`, a body-width/projection mismatch becomes
@@ -211,7 +211,7 @@ pose directly.
 Each move action sets one bounded velocity, runs the existing collision-aware selected-body path,
 and clears velocity before returning. This makes the action visible and responsive without leaving
 component-local update polling behind. Look actions update accepted yaw/pitch directly and clamp
-pitch. The loading-bay player advances toward a visible voxel obstacle and receives a typed blocked
+pitch. The loading-bay player advances toward the generated room shell and receives a typed blocked
 outcome; pointer movement changes accepted look state.
 
 Player translation, controller configuration, bindings, yaw, and pitch survive snapshot/reopen.
@@ -225,6 +225,52 @@ durable configuration value. The initial vertical slice necessarily added one co
 shape, one snapshot record, the named service, and the browser border/readout; it did not add a
 protocol crate, input context registry, replay codec, or lifecycle route.
 
+### Generated voxel environment and mesh projection
+
+The third migration family references Asha's dependency-free `svc-rng` and low-level `svc-mesh`
+unchanged. The `svc-levelgen` crate was inspected but not linked because its small useful generation
+loop is coupled to `core-events`, replay/hash records, collision summaries, runtime coordinate
+frames, and render-chunk metadata.
+
+Rusty Engine adapts only the bounded room-generation algorithm:
+
+```text
+authored seed + room dimensions
+  -> successor GeneratedRoomConfig admission
+  -> scoped deterministic RNG
+  -> one ordered material-voxel result
+  -> canonical VoxelWorld
+       +-> CollisionProjection
+       +-> NavProjection
+       +-> svc-mesh visible-face payload
+  -> retained Three replaceMeshPayload operation
+```
+
+The default seed-4 room contains 372 solid material voxels. Its one derived mesh contains 3,032
+vertices and 758 visible quads in three material groups, with output hash
+`495234639d264892`. The seed chooses an interior pillar and a wall accent; the seed-4 pillar is
+voxel `[4, 1, 6]`. The player collides with the generated front shell, while the sentry's direct
+route crosses the generated pillar and the navigation projection routes around it. The primitive
+floor and hand-authored visual obstacle proxies were removed—the uploaded voxel mesh is the visible
+environment.
+
+Snapshots store generator version, seed, dimensions, and expected output hash rather than hundreds
+of generated voxels or mesh arrays. Reopen regenerates the material voxels, rejects a hash mismatch,
+then rebuilds collision, navigation, and mesh. Focused coverage compares every material voxel and
+mesh field across reopen before advancing the reopened and uninterrupted navigator to the same
+result.
+
+A seed variation changes only the project-content option/data. Rust entity definitions and runtime
+behavior remain byte-identical while the canonical voxels, pillar, chunk hash, and visible mesh
+change. A generator behavior change is localized to `engine-spatial` and its focused tests; the
+unchanged RNG, mesher, collision, navigation, game service, and browser upload paths need no change
+unless the stored configuration shape itself changes.
+
+The default inline mesh JSON is about 96 KB and is currently included in every action response even
+though the browser retains it by content hash. This is bounded and not a per-frame authority bridge,
+but it is accepted temporary transport waste. The generator is also intentionally immutable and
+single-chunk in this slice; neighbor-sensitive live remeshing belongs to M7A invalidation work.
+
 ### Browser/Three/DOM product proof
 
 The loading-bay browser shell links Asha's actual `@asha/renderer-three` and generated render
@@ -232,7 +278,7 @@ contracts. A small successor adapter turns whole Rust projection readouts into r
 `create`/`update`/`destroy` diffs. Three owns canvas objects and resource lifecycle; it never owns
 gameplay state.
 
-Four visible action paths run in the same product scene:
+Five visible action paths run in the same product scene:
 
 ```text
 DOM defeat controls -> CombatService -> EnemyDefeated -> EncounterCleared -> DoorOpened
@@ -249,6 +295,9 @@ DOM navigation control -> EnemyNavigationSystem -> Asha voxel-derived path query
 DOM keyboard/pointer -> authored binding resolver -> ResolvedPlayerAction
                      -> PlayerControllerService -> collision-aware accepted pose
                      -> retained player projection + derived follow camera
+
+generated seed/dimensions -> canonical material voxels -> svc-mesh payload
+                          -> retained Three chunk mesh shared with collision/navigation authority
 ```
 
 The Asha renderer package has an optional encoded-frame convenience import from its old runtime
@@ -260,7 +309,7 @@ The automated product gate builds the bundle, starts the Rust host on an ephemer
 real headless Chromium with SwiftShader WebGL, dispatches keyboard/pointer input and presses
 reset/navigation/defeat/spatial actions. It requires moved-then-blocked player collision, changed
 look state, the arrived sentry, open-door transform, defeated entities, blocked probe,
-retained-renderer snapshot, and typed fact names in the final DOM.
+generated seed/mesh readout, retained-renderer snapshot, and typed fact names in the final DOM.
 
 ## Reproducible evidence
 
@@ -278,10 +327,10 @@ The current verification gate proves:
 
 - Rust formatting, Clippy, and strict TypeScript compilation;
 - generated project content is byte-for-byte current with its TypeScript composition;
-- 9 TypeScript content-composition tests and two retained-diff/camera adapter tests;
-- 34 Rust integration tests across entity state, donor collision/navigation queries, security door,
+- 10 TypeScript content-composition tests and three retained-diff/mesh/camera adapter tests;
+- 41 Rust integration tests across entity state, donor collision/navigation/mesh queries, security door,
   content admission, encounter routing, kinematic/navigation motion, atomic rejection, projection,
-  player control, and save/reopen;
+  player control, generated-environment admission, and save/reopen;
 - strict rejection of unknown stored-content and snapshot fields;
 - a real Chromium/Three/WebGL product smoke, including a forbidden-old-runtime bundle audit.
 
@@ -292,15 +341,16 @@ These are physical line counts (`wc -l`), not complexity scores:
 | Ownership surface | Production source footprint | Purpose |
 |---|---:|---|
 | Reusable Rust entity state | 4 files / 888 lines | Entity/capability storage, atomic entity mutation, snapshot, projection. |
-| Successor spatial adapter/system | 1 file / 369 lines | Canonical donor scene construction, bounded query facade, central kinematic phase. |
-| Rust game host and runners | 11 files / 2,323 lines | Concrete components/services, routing, admission, scheduling, snapshots, headless/product/workload hosts. |
-| TypeScript content composition | 5 files / 206 lines | Typed definitions, encounter and motion builders, reproducibility check. |
-| TypeScript browser product shell | 6 files / 479 lines | Rust-readout adapter, DOM controls/readout, Asha renderer mount, bridge exclusion shim, styling. |
-| Generated project content | 3 files / 7,932 lines | Two encounter variations and pretty-printed 256-body workload data. |
+| Successor spatial adapter/system | 1 file / 878 lines | Canonical donor scene construction, generated-room algorithm, collision/navigation/mesh derivation, bounded query facade, central kinematic phase. |
+| Rust game host and runners | 11 files / 3,744 lines | Concrete components/services, routing, admission, scheduling, snapshots, headless/product/workload hosts. |
+| TypeScript content composition | 5 files / 287 lines | Typed definitions, encounter/generation and motion builders, reproducibility check. |
+| TypeScript browser product shell | 6 files / 752 lines | Rust-readout/mesh adapter, input and DOM readout, derived camera, Asha renderer mount, bridge exclusion shim, styling. |
+| Generated project content | 3 files / 8,020 lines | Two encounter/generation variations and pretty-printed 256-body workload data. |
 
-The Rust snapshot code is currently the largest single structural cost. It is explicit and easy to
-trace, but future slices should test whether small typed codec helpers can reduce repetition without
-introducing reflection, registries, or generic replay machinery.
+The Rust object/component model is currently the largest single file, followed by generation and
+snapshot code. They are explicit and easy to trace, but a later slice should test whether small
+typed validation/codec helpers can reduce repetition without introducing reflection, registries, or
+generic replay machinery.
 
 ## Findings
 
@@ -317,24 +367,26 @@ introducing reflection, registries, or generic replay machinery.
 - A substantial Asha service family can sit below the new object-centric center unchanged.
 - The existing renderer can sit above it through typed projection without restoring the old runtime
   facade to the browser bundle.
+- One canonical donor `VoxelWorld` can feed collision, navigation, and a real retained mesh without
+  per-consumer approximations or importing the donor event/control plane.
 - The new capability's behavior has one owner; its expected amplification is model/command/snapshot
   binding plus admission and restore, not a cross-language protocol campaign.
 
 ## Decision boundary and remaining limits
 
-The planned falsification work passes, but it is still not evidence for replacing Asha wholesale.
-The next question is which complete vertical feature family can move while both runtimes remain
-separately launchable and never share live authority.
+The planned falsification work and first three migration families pass, but this remains a successor
+spike rather than evidence that every Asha feature should move. The next decision is whether to
+accept this repository as the durable successor and continue with the now-unblocked combat family.
 
 Before calling this durable infrastructure:
 
-1. Choose one cohesive next family—likely navigation plus moving enemy behavior, inventory/equipment,
-   or authored scene/asset loading—and repeat the full content/service/persistence/product test.
+1. Review M1/M2A/M2B as one architectural chunk, then either schedule M3 combat over the real player
+   and moving enemy or record why the successor experiment should stop.
 2. Decide whether sibling donor references become pinned Git dependencies, vendored crates, or a
    shared foundation repository before Asha resumes development.
 3. Add safe allocation telemetry and a longer mixed workload; the current matrix measures isolated
    CPU time and copy/fact proxies only.
-4. Revisit snapshot repetition only after the next durable component family establishes a second
-   common shape.
+4. Revisit snapshot repetition only if M3 establishes enough repeated component shape to justify a
+   small typed codec helper.
 5. If the renderer remains a donor, extract a clean typed-frame subpath upstream so the local
    fail-closed alias is unnecessary.

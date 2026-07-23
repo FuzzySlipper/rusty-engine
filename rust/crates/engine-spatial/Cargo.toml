@@ -13,6 +13,8 @@ core-space.workspace = true
 core-voxel.workspace = true
 svc-collision.workspace = true
 svc-pathfinding.workspace = true
+svc-rng.workspace = true
+svc-mesh.workspace = true
 svc-spatial.workspace = true
 svc-volume.workspace = true
 entity-state = { path = "../entity-state" }

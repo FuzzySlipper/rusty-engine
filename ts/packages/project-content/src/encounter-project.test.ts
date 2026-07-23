@@ -21,7 +21,7 @@ test("enemy count is a content-only variation", () => {
   );
 });
 
-test("loading bay composes a visible kinematic probe over authored voxel collision", () => {
+test("loading bay composes a kinematic probe over one generated voxel environment", () => {
   const project = encounterGateProject(["only-enemy"]);
   const probe = project.entities.find((entity) => entity.id === ENCOUNTER_IDS.motionProbe);
 
@@ -29,11 +29,15 @@ test("loading bay composes a visible kinematic probe over authored voxel collisi
     halfExtents: [0.25, 0.25, 0.25],
     velocity: [5, 0, 0],
   });
-  assert.deepEqual(project.voxelCollision?.solidVoxels, [
-    [3, 0, 4],
-    [3, 0, 6],
-    [0, 0, 3],
-  ]);
+  assert.deepEqual(project.generatedVoxelEnvironment, {
+    seed: 4,
+    voxelSize: 1,
+    chunkSize: 16,
+    width: 7,
+    height: 4,
+    length: 10,
+  });
+  assert.equal(project.voxelCollision, undefined);
 });
 
 test("player controller and physical bindings are explicit content", () => {
@@ -44,7 +48,7 @@ test("player controller and physical bindings are explicit content", () => {
     moveSpeedUnitsPerSecond: 4,
     moveStepSeconds: 0.1,
     lookDegreesPerUnit: 12,
-    initialYawDegrees: 180,
+    initialYawDegrees: 0,
     initialPitchDegrees: -10,
     bindings: {
       moveForward: "KeyW",
@@ -78,11 +82,20 @@ test("autonomous navigation is explicit data on the responsible enemy", () => {
   const navigator = project.entities.find((entity) => entity.id === ENCOUNTER_IDS.firstEnemy);
 
   assert.deepEqual(navigator?.navigation, {
-    goal: [6.5, 0.5, 4.5],
+    goal: [7.5, 1.5, 6.5],
     speedUnitsPerSecond: 4,
     maxVisited: 512,
   });
   assert.deepEqual(navigator?.kinematic?.velocity, [0, 0, 0]);
+});
+
+test("generation seed is a content-only environment variation", () => {
+  const first = encounterGateProject(["guard"], { generationSeed: 4 });
+  const second = encounterGateProject(["guard"], { generationSeed: 9 });
+
+  assert.equal(first.generatedVoxelEnvironment?.seed, 4);
+  assert.equal(second.generatedVoxelEnvironment?.seed, 9);
+  assert.deepEqual(first.entities, second.entities);
 });
 
 test("navigation target and speed are content-only variations", () => {

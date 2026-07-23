@@ -63,6 +63,38 @@ struct BrowserPlayerState {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct BrowserVoxelMeshGroup {
+    material_slot: u16,
+    start: u32,
+    count: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserVoxelMeshChunk {
+    chunk: [i64; 3],
+    content_hash: String,
+    translation: [f32; 3],
+    positions: Vec<f32>,
+    normals: Vec<f32>,
+    indices: Vec<u32>,
+    groups: Vec<BrowserVoxelMeshGroup>,
+    bounds_min: [f32; 3],
+    bounds_max: [f32; 3],
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserGeneratedEnvironment {
+    seed: u64,
+    output_hash: String,
+    solid_voxels: usize,
+    mesh_vertices: u32,
+    mesh_quads: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct BrowserState {
     tick: u64,
     entity_revision: u64,
@@ -73,6 +105,8 @@ struct BrowserState {
     navigation_state: &'static str,
     player_motion_state: &'static str,
     player: BrowserPlayerState,
+    voxel_meshes: Vec<BrowserVoxelMeshChunk>,
+    generated_environment: Option<BrowserGeneratedEnvironment>,
     enemies: Vec<BrowserEnemyState>,
     last_events: Vec<String>,
 }
@@ -400,6 +434,43 @@ fn browser_state(runtime: &GameRuntime, last_events: Vec<String>) -> BrowserStat
     } else {
         "idle"
     };
+    let scene = runtime
+        .collision_scene()
+        .expect("browser project collision scene");
+    let voxel_meshes = scene
+        .mesh_chunks()
+        .iter()
+        .map(|mesh| BrowserVoxelMeshChunk {
+            chunk: mesh.chunk,
+            content_hash: format!("{:016x}", mesh.content_hash),
+            translation: mesh.translation,
+            positions: mesh.positions.clone(),
+            normals: mesh.normals.clone(),
+            indices: mesh.indices.clone(),
+            groups: mesh
+                .groups
+                .iter()
+                .map(|group| BrowserVoxelMeshGroup {
+                    material_slot: group.material_slot,
+                    start: group.start,
+                    count: group.count,
+                })
+                .collect(),
+            bounds_min: mesh.bounds_min,
+            bounds_max: mesh.bounds_max,
+        })
+        .collect();
+    let generated_environment = scene.generated_room().map(|(config, record)| {
+        let mesh_vertices = scene.mesh_chunks().iter().map(|mesh| mesh.vertices).sum();
+        let mesh_quads = scene.mesh_chunks().iter().map(|mesh| mesh.quads).sum();
+        BrowserGeneratedEnvironment {
+            seed: config.seed,
+            output_hash: format!("{:016x}", record.output_hash),
+            solid_voxels: record.solid_voxel_count,
+            mesh_vertices,
+            mesh_quads,
+        }
+    });
     BrowserState {
         tick: readout.tick.raw(),
         entity_revision: readout.entity_revision,
@@ -444,6 +515,8 @@ fn browser_state(runtime: &GameRuntime, last_events: Vec<String>) -> BrowserStat
         },
         player_motion_state,
         player: player_state,
+        voxel_meshes,
+        generated_environment,
         enemies,
         last_events,
     }

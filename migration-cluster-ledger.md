@@ -123,7 +123,8 @@ These are already in use and remain conditional on their dependency closures sta
 successor spine:
 
 - Rust foundations: `core-ids`, `core-math`, `core-time`, `core-space`, `core-voxel`.
-- Rust services: `svc-volume`, `svc-spatial`, `svc-collision`.
+- Rust services: `svc-volume`, `svc-spatial`, `svc-collision`, `svc-pathfinding`, `svc-rng`, and
+  `svc-mesh`.
 - Presentation packages: `@asha/contracts`, `@asha/render-projection`,
   `@asha/renderer-three`.
 
@@ -131,15 +132,15 @@ If Rusty Engine becomes independently durable, sibling path dependencies must be
 Git dependencies, vendored sources with provenance, or a genuinely shared foundation repository
 before Asha resumes development.
 
-### Candidate donors by upcoming consumer
+### Donor decisions by consumer
 
 | Candidate | Current dependency signal | Initial treatment | Earliest consumer |
 |---|---|---|---|
-| `svc-pathfinding` | Production dependencies stop at `core-math`, `core-space`, and `svc-spatial` | Reference unchanged if its API fits; otherwise wrap narrowly | M1 navigation |
-| `protocol-input`, `rule-input`, `protocol-view` | Carry useful vocabulary mixed with Asha lifecycle assumptions | Behavioral evidence and selective type extraction | M2A player control/camera |
-| `svc-rng` | Low-level deterministic generation service | Inspect for unchanged reference | M2B generation |
-| `svc-levelgen` | Useful generation logic, but emits through `core-events` | Adapt or wrap so voxel changes enter the successor's authority path | M2B generation, M7A editing |
-| `svc-mesh` | Depends on `core-space`, `core-voxel`, `svc-volume`, and `svc-spatial` | Reference unchanged behind a derived mesh projection | M2B generation |
+| `svc-pathfinding` | Production dependencies stop at `core-math`, `core-space`, and `svc-spatial` | Referenced unchanged behind `engine-spatial` | M1 navigation |
+| `protocol-input`, `rule-input`, `protocol-view` | Carry useful vocabulary mixed with Asha lifecycle assumptions | Behavioral/type evidence only; no dependency | M2A player control/camera |
+| `svc-rng` | Dependency-free deterministic scoped stream | Referenced unchanged | M2B generation |
+| `svc-levelgen` | Useful generation logic, but emits through `core-events` | Small algorithm adapted; crate and control plane excluded | M2B generation, M7A editing |
+| `svc-mesh` | Depends on `core-space`, `core-voxel`, `svc-volume`, and `svc-spatial` | Referenced unchanged behind a derived mesh projection | M2B generation |
 | `svc-physics` | Small isolated service; collision-aware mode is intentionally incomplete/fail-closed | Behavioral evidence until a concrete dynamic-physics need exists | Unscheduled |
 | `svc-combat` | Compact ray/collision logic, but owns its own combat state and replay hash | Adapt or extract algorithms into successor components/services | M3 combat |
 | `render-animation`, `render-audio`, `render-billboard`, `render-particle` | Presentation-oriented but coupled to Asha render contracts to varying degrees | Inspect one output family at a time; adapt above typed accepted facts | M4 feedback |
@@ -199,7 +200,7 @@ player intent so combat proves a real interaction rather than another test-only 
 | M0 | Complete | Object-centric entity state, direct services, encounters/doors, scheduling, voxel collision, kinematic system, save/reopen, retained renderer | — | Bounded foundations, spatial/collision, renderer | Existing full `pnpm run verify` gate |
 | M1 | In review (#6103) | Navigation projection, authored navigation intent, autonomous enemy route following, replanning, blocked/unreachable outcomes | M0 | `svc-pathfinding` referenced unchanged; `rule-lifecycle/fps_movement.rs` used as evidence only | Visible sentry routes around authored collision; reopen is identical; typed arrival/blocked/unreachable facts and a 32-agent bounded phase are verified |
 | M2A | In review (#6104) | Resolved input, player controller, look/move intent, authoritative pose, derived camera | M0 | `protocol-input`, `rule-input`, and `protocol-view` used as evidence only; lifecycle/session routing excluded | Keyboard/pointer input visibly moves then blocks one player; bindings are content; pose/controller reopen identically; camera is rebuilt presentation state |
-| M2B | Queued | Seeded environment generation, canonical voxel admission, collision/nav rebuild, derived mesh presentation | M0 | Inspect `svc-rng`; adapt `svc-levelgen`; reference/wrap `svc-mesh` | One seed/content variation changes the visible level without runtime code; collision, navigation, and mesh agree after reopen |
+| M2B | In review (#6105) | Seeded environment generation, canonical voxel admission, collision/nav rebuild, derived mesh presentation | M0 | `svc-rng` and `svc-mesh` referenced unchanged; `svc-levelgen` algorithm adapted without `core-events` | Seed variation changes canonical/visible geometry without runtime code; generated shell/pillar drive collision/navigation; mesh and hash-verified regeneration agree after reopen |
 | M3 | Queued | Weapon configuration, attack intent, ray/target resolution, health, damage/defeat, encounter consequence | M1, M2A | Extract from `svc-combat`; old FPS lifecycle is behavioral evidence | Player aims and attacks a moving enemy; health and defeat persist; defeat clears the existing encounter/door path |
 | M4 | Queued | Animation/audio/particle/billboard feedback derived from accepted movement, attack, damage, defeat, and door facts | M1-M3 facts | Inspect render donors one family at a time | Feedback is visible/audible, can be rebuilt or safely dropped, and never changes gameplay outcome |
 | M5 | Deferred until schemas settle | Stored scene, asset identities/catalog, entity definitions, project admission, diagnostics | At least M1, M2A, and M3 | Foundation concepts may transfer; broad content/bundle services are evidence | A non-generated stored project loads multiple settled component families with precise validation errors and no runtime facade |

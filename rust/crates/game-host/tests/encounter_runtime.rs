@@ -103,7 +103,7 @@ fn committed_enemy_facts_clear_the_encounter_and_open_the_exit() {
     assert_eq!(exit.state, DoorState::Open);
     assert_eq!(
         exit.entity_view.transform.expect("transform").translation,
-        Vec3::new(0.0, 3.0, 8.0)
+        Vec3::new(4.5, 4.0, 11.0)
     );
     assert_eq!(runtime.readout().journal.len(), 4);
 }
@@ -165,8 +165,8 @@ fn save_reopen_preserves_partial_encounter_progress() {
 #[test]
 fn project_content_rejects_unknown_contract_fields() {
     let invalid = ENCOUNTER_PROJECT.replacen(
-        "\"schemaVersion\": 4",
-        "\"schemaVersion\": 4, \"runtimeBehavior\": \"not-content\"",
+        "\"schemaVersion\": 5",
+        "\"schemaVersion\": 5, \"runtimeBehavior\": \"not-content\"",
         1,
     );
     assert!(matches!(
@@ -180,7 +180,7 @@ fn project_content_rejects_unknown_contract_fields() {
 #[test]
 fn project_content_rejects_kinematics_without_a_collision_scene() {
     let invalid = r#"{
-      "schemaVersion": 4,
+      "schemaVersion": 5,
       "entities": [{
         "id": 1,
         "name": "unbounded-runner",

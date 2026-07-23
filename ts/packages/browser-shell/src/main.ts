@@ -21,6 +21,7 @@ const motionState = requiredElement("motion-state", HTMLElement);
 const navigationState = requiredElement("navigation-state", HTMLElement);
 const playerMotionState = requiredElement("player-motion-state", HTMLElement);
 const playerPose = requiredElement("player-pose", HTMLElement);
+const environmentState = requiredElement("environment-state", HTMLElement);
 const eventList = requiredElement("event-list", HTMLOListElement);
 const rendererStatus = requiredElement("renderer-status", HTMLElement);
 const smokeResult = requiredElement("smoke-result", HTMLElement);
@@ -41,7 +42,7 @@ const surface = mountAshaRendererBrowserSurface(canvas, {
   pixelRatio: Math.min(globalThis.devicePixelRatio ?? 1, 2),
 });
 renderReadout(current);
-rendererStatus.textContent = `${surface.kind} · ${String(projection.trackedEntityCount)} retained entities`;
+updateRendererStatus();
 
 for (const button of document.querySelectorAll<HTMLButtonElement>("[data-enemy-id]")) {
   button.addEventListener("click", () => {
@@ -60,9 +61,6 @@ requiredElement("run-navigation", HTMLButtonElement).addEventListener("click", (
 });
 
 window.addEventListener("keydown", (event) => {
-  if (event.repeat) {
-    return;
-  }
   const action = resolveKeyboardAction(event.code, current.player.bindings);
   if (action === null) {
     return;
@@ -97,7 +95,9 @@ if (smokeMode) {
     );
   }
   await actionQueue;
-  const playerMoved = current.player.position[2] > initialPlayerPosition[2];
+  const playerMoved = current.player.position.some(
+    (value, axis) => Math.abs(value - initialPlayerPosition[axis]!) > 0.01,
+  );
   const playerBlocked = current.playerMotionState === "blocked";
   window.dispatchEvent(new MouseEvent("mousemove", { movementX: 20, movementY: 0 }));
   await actionQueue;
@@ -111,16 +111,19 @@ if (smokeMode) {
   const passed =
     current.encounterState === "cleared" &&
     current.doorState === "open" &&
-    door?.translation?.[1] === 3 &&
+    door?.translation?.[1] === 4 &&
     current.enemies.every((enemy) => enemy.state === "defeated") &&
     current.motionState === "blocked" &&
     current.navigationState === "arrived" &&
     playerMoved &&
     playerBlocked &&
     playerLooked &&
-    current.projection.find((node) => node.id === 4)?.translation?.[0] === 6.5 &&
+    current.projection.find((node) => node.id === 4)?.translation?.[0] === 7.5 &&
     (current.projection.find((node) => node.id === 10)?.translation?.[0] ?? -4) > 2 &&
-    surface.snapshot().includes("loading-bay-exit");
+    current.generatedEnvironment?.seed === 4 &&
+    current.voxelMeshes.length === 1 &&
+    surface.snapshot().includes("loading-bay-exit") &&
+    surface.snapshot().includes("generated-room-chunk");
   smokeResult.dataset.status = passed ? "pass" : "fail";
   smokeResult.textContent = passed
     ? "PASS · Rust facts reached retained WebGL projection"
@@ -141,7 +144,7 @@ async function perform(path: string): Promise<void> {
   surface.setCameraPose(derivePlayerCameraPose(current.player));
   surface.renderOnce();
   renderReadout(current);
-  rendererStatus.textContent = `${surface.kind} · ${String(projection.trackedEntityCount)} retained entities`;
+  updateRendererStatus();
 }
 
 function renderReadout(state: RuntimeBrowserState): void {
@@ -157,6 +160,9 @@ function renderReadout(state: RuntimeBrowserState): void {
   playerMotionState.textContent = state.playerMotionState.toUpperCase();
   playerMotionState.dataset.state = state.playerMotionState;
   playerPose.textContent = `${state.player.position.map((value) => value.toFixed(1)).join(", ")} · YAW ${state.player.yawDegrees.toFixed(0)}°`;
+  environmentState.textContent = state.generatedEnvironment === null
+    ? "STATIC"
+    : `SEED ${String(state.generatedEnvironment.seed)} · ${String(state.generatedEnvironment.meshQuads)} QUADS · ${state.generatedEnvironment.outputHash.slice(0, 8)}`;
   enemyList.replaceChildren(
     ...state.enemies.map((enemy) => {
       const row = document.createElement("div");
@@ -196,7 +202,11 @@ async function performPlayerAction(action: ResolvedPlayerAction): Promise<void> 
   surface.setCameraPose(derivePlayerCameraPose(current.player));
   surface.renderOnce();
   renderReadout(current);
-  rendererStatus.textContent = `${surface.kind} · ${String(projection.trackedEntityCount)} retained entities`;
+  updateRendererStatus();
+}
+
+function updateRendererStatus(): void {
+  rendererStatus.textContent = `${surface.kind} · ${String(projection.trackedEntityCount)} entities · ${String(projection.trackedMeshCount)} voxel meshes`;
 }
 
 export function resolveKeyboardAction(

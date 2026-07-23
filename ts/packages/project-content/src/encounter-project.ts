@@ -11,15 +11,13 @@ export const ENCOUNTER_IDS = {
   exit: 3,
   firstEnemy: 4,
   motionProbe: 10,
-  collisionWall: 11,
-  navigationWall: 12,
-  playerWall: 13,
 } as const;
 
 export interface EncounterProjectOptions {
   readonly navigationGoal?: Vec3;
   readonly navigationSpeedUnitsPerSecond?: number;
   readonly playerBindings?: PlayerInputBindingsDefinition;
+  readonly generationSeed?: number;
 }
 
 export function encounterGateProject(
@@ -37,7 +35,7 @@ export function encounterGateProject(
   const enemies: EntityDefinition[] = normalizedNames.map((name, index) => ({
     id: ENCOUNTER_IDS.firstEnemy + index,
     name,
-    translation: index === 0 ? [0.5, 0.5, 4.5] : [2.5, 0.5, 2.5],
+    translation: index === 0 ? [1.5, 1.5, 6.5] : [6.5, 1.5, 2.5],
     collision: { enabled: true, staticCollider: false },
     renderable: { asset: "mesh/security-sentry", visible: true },
     enemy: true,
@@ -45,7 +43,7 @@ export function encounterGateProject(
       ? {
           kinematic: { halfExtents: [0.25, 0.25, 0.25], velocity: [0, 0, 0] },
           navigation: {
-            goal: options.navigationGoal ?? [6.5, 0.5, 4.5],
+            goal: options.navigationGoal ?? [7.5, 1.5, 6.5],
             speedUnitsPerSecond: options.navigationSpeedUnitsPerSecond ?? 4,
             maxVisited: 512,
           },
@@ -55,12 +53,12 @@ export function encounterGateProject(
   const members = enemies.map((enemy) => enemy.id);
 
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     entities: [
       {
         id: ENCOUNTER_IDS.actor,
         name: "player",
-        translation: [0.5, 0.5, 0.5],
+        translation: [1.5, 1.5, 2.5],
         collision: { enabled: true, staticCollider: false },
         renderable: { asset: "primitive/player-marker", visible: true },
         kinematic: { halfExtents: [0.25, 0.25, 0.25], velocity: [0, 0, 0] },
@@ -68,7 +66,7 @@ export function encounterGateProject(
           moveSpeedUnitsPerSecond: 4,
           moveStepSeconds: 0.1,
           lookDegreesPerUnit: 12,
-          initialYawDegrees: 180,
+          initialYawDegrees: 0,
           initialPitchDegrees: -10,
           bindings: options.playerBindings ?? {
             moveForward: "KeyW",
@@ -87,46 +85,27 @@ export function encounterGateProject(
       {
         id: ENCOUNTER_IDS.exit,
         name: "loading-bay-exit",
-        translation: [0, 0, 8],
+        translation: [4.5, 1, 11],
         collision: { enabled: true, staticCollider: true },
         renderable: { asset: "mesh/security-door", visible: true },
-        door: { openTranslation: [0, 3, 8], autoCloseAfterTicks: null },
+        door: { openTranslation: [4.5, 4, 11], autoCloseAfterTicks: null },
       },
       ...enemies,
       {
         id: ENCOUNTER_IDS.motionProbe,
         name: "spatial-probe",
-        translation: [-4, 0.5, 6.5],
+        translation: [1.5, 1.5, 8.5],
         renderable: { asset: "primitive/spatial-probe", visible: true },
         kinematic: { halfExtents: [0.25, 0.25, 0.25], velocity: [5, 0, 0] },
       },
-      {
-        id: ENCOUNTER_IDS.collisionWall,
-        name: "voxel-obstacle",
-        translation: [3.5, 0.5, 6.5],
-        renderable: { asset: "primitive/voxel-wall", visible: true },
-      },
-      {
-        id: ENCOUNTER_IDS.navigationWall,
-        name: "navigation-obstacle",
-        translation: [3.5, 0.5, 4.5],
-        renderable: { asset: "primitive/voxel-wall", visible: true },
-      },
-      {
-        id: ENCOUNTER_IDS.playerWall,
-        name: "player-collision-obstacle",
-        translation: [0.5, 0.5, 3.5],
-        renderable: { asset: "primitive/voxel-wall", visible: true },
-      },
     ],
-    voxelCollision: {
+    generatedVoxelEnvironment: {
+      seed: options.generationSeed ?? 4,
       voxelSize: 1,
-      chunkSize: 8,
-      solidVoxels: [
-        [3, 0, 4],
-        [3, 0, 6],
-        [0, 0, 3],
-      ],
+      chunkSize: 16,
+      width: 7,
+      height: 4,
+      length: 10,
     },
   };
 }
