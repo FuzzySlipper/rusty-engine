@@ -205,12 +205,12 @@ player intent so combat proves a real interaction rather than another test-only 
 | ID | Status | Capability closure | Depends on | Asha use | Completion signal |
 |---|---|---|---|---|---|
 | M0 | Complete | Object-centric entity state, direct services, encounters/doors, scheduling, voxel collision, kinematic system, save/reopen, retained renderer | — | Bounded foundations, spatial/collision, renderer | Existing full `pnpm run verify` gate |
-| M1 | In review (#6103) | Navigation projection, authored navigation intent, autonomous enemy route following, replanning, blocked/unreachable outcomes | M0 | `svc-pathfinding` referenced unchanged; `rule-lifecycle/fps_movement.rs` used as evidence only | Visible sentry routes around authored collision; reopen is identical; typed arrival/blocked/unreachable facts and a 32-agent bounded phase are verified |
-| M2A | In review (#6104) | Resolved input, player controller, look/move intent, authoritative pose, derived camera | M0 | `protocol-input`, `rule-input`, and `protocol-view` used as evidence only; lifecycle/session routing excluded | One physical keydown drives bounded typed movement until keyup, visibly moves then blocks and stops one player; bindings are content; pose/controller reopen identically; camera is rebuilt presentation state |
-| M2B | In review (#6105) | Seeded environment generation, canonical voxel admission, collision/nav rebuild, derived mesh presentation | M0 | `svc-rng` and `svc-mesh` referenced unchanged; `svc-levelgen` algorithm adapted without `core-events` | Seed variation changes canonical/visible geometry without runtime code; the generated shell/pillar/aperture drive collision/navigation; the closed entity gate blocks and the opened gate permits real controller traversal; mesh and hash-verified regeneration agree after reopen |
-| M3 | In review (#6106) | Weapon configuration, attack intent, ray/target resolution, health, damage/defeat, encounter consequence | M1, M2A | Slab-ray/nearest-hit algorithm adapted from `svc-combat`; old FPS lifecycle used as behavioral and negative structural evidence | Player damages a moving enemy through authored primary fire, later defeats the encounter, health/weapon eligibility reopen identically, and typed defeat clears the existing door path |
-| M4 | Queued | Animation/audio/particle/billboard feedback derived from accepted movement, attack, damage, defeat, and door facts | M1-M3 facts | Inspect render donors one family at a time | Feedback is visible/audible, can be rebuilt or safely dropped, and never changes gameplay outcome |
-| M5 | Deferred until schemas settle | Stored scene, asset identities/catalog, entity definitions, project admission, diagnostics | At least M1, M2A, and M3 | Foundation concepts may transfer; broad content/bundle services are evidence | A non-generated stored project loads multiple settled component families with precise validation errors and no runtime facade |
+| M1 | Complete (#6103) | Navigation projection, authored navigation intent, autonomous enemy route following, replanning, blocked/unreachable outcomes | M0 | `svc-pathfinding` referenced unchanged; `rule-lifecycle/fps_movement.rs` used as evidence only | Visible sentry routes around authored collision; reopen is identical; typed arrival/blocked/unreachable facts and a 32-agent bounded phase are verified |
+| M2A | Complete (#6104) | Resolved input, player controller, look/move intent, authoritative pose, derived camera | M0 | `protocol-input`, `rule-input`, and `protocol-view` used as evidence only; lifecycle/session routing excluded | One physical keydown drives bounded typed movement until keyup, visibly moves then blocks and stops one player; bindings are content; pose/controller reopen identically; camera is rebuilt presentation state |
+| M2B | Complete (#6105) | Seeded environment generation, canonical voxel admission, collision/nav rebuild, derived mesh presentation | M0 | `svc-rng` and `svc-mesh` referenced unchanged; `svc-levelgen` algorithm adapted without `core-events` | Seed variation changes canonical/visible geometry without runtime code; the generated shell/pillar/aperture drive collision/navigation; the closed entity gate blocks and the opened gate permits real controller traversal; mesh and hash-verified regeneration agree after reopen |
+| M3 | Complete (#6106) | Weapon configuration, attack intent, ray/target resolution, health, damage/defeat, encounter consequence | M1, M2A | Slab-ray/nearest-hit algorithm adapted from `svc-combat`; old FPS lifecycle used as behavioral and negative structural evidence | Player damages a moving enemy through authored primary fire, later defeats the encounter, health/weapon eligibility reopen identically, and typed defeat clears the existing door path |
+| M4 | Complete (#6111-#6114) | Animation/audio/particle/billboard feedback derived from accepted movement, attack, damage, defeat, and door facts | M1-M3 facts | Presentation render families inspected as evidence only; no donor presentation crate/protocol imported | Typed response-local feedback is visible/audible, posture rebuilds from current state, dropped/restarted cues do not replay, and presentation failure never changes gameplay |
+| M5 | Ready to schedule | Stored scene, asset identities/catalog, entity definitions, project admission, diagnostics | At least M1, M2A, and M3 | Foundation concepts may transfer; broad content/bundle services are evidence | A non-generated stored project loads multiple settled component families with precise validation errors and no runtime facade |
 | M6 | Deferred | Durable project save/load and versioning, distinct from a live runtime snapshot | M5 | Selective serialization evidence only | Project content round-trips/version-migrates independently of session state; snapshots remain concrete runtime persistence |
 | M7A | Deferred | Live voxel edit commands, authoritative voxel mutation, collision/navigation/mesh invalidation | M1, M2B | Adapt `rule-voxel-edit` behavior and narrow voxel services | One edit becomes visible and changes collision/navigation in the same accepted transaction; reopen preserves it |
 | M7B | Deferred | Voxel asset import/conversion into the admitted project form | M7A, M5 | Adapt conversion and asset services/tools | A real external asset converts reproducibly, validates, loads, and behaves like authored voxels |
@@ -300,9 +300,48 @@ helper; the browser has no direct-defeat route or target-selecting attack payloa
 
 ### M4: presentation feedback
 
-Schedule feedback after the facts it presents are stable. Animation, audio, particles, and
-billboards should consume accepted state/facts through explicit projection adapters. A missed or
-restarted presentation effect must not alter gameplay or require replay certification.
+M4 implements feedback only after the facts it presents are stable:
+
+```text
+current accepted entity state ----------------> rebuildable animation posture
+accepted movement/combat/door facts and events -> response-local semantic cue union
+                                                   -> TypeScript feedback adapter
+                                                        +-> CSS posture/pulses
+                                                        +-> capped expiring particles
+                                                        +-> anchored billboards
+                                                        +-> fail-soft Web Audio one-shots
+```
+
+The host maps typed payloads directly; debug `lastEvents` strings are not a dispatch surface. The
+semantic union is successor-owned and closed over the five outcomes this product currently shows.
+It lives under the browser host rather than `GameRuntime`, `GameSession`, journals, or snapshots.
+GET/reset responses therefore rebuild player/enemy/door posture and contain no transient cues.
+Movement produced by a multi-step phase collapses to one response cue per entity, duplicate defeat
+and door cues are bounded, the DOM caps active effects at 24, and all transients expire.
+
+The real Chromium gate displays movement/block/attack/damage/defeat/door animation pulses, six
+particle kinds, damage/status billboards, and schedules oscillator/gain Web Audio one-shots. It then
+deliberately drops a movement response, fetches current state, proves gameplay fingerprints agree
+while cues are absent, clears the presentation sink as a restart, and rebuilds only current
+defeated/open posture. A focused fake-sink test forces an audio exception and proves later visual
+operations still execute.
+
+Implementation commits are `bb16dbd5aa65878e9dadf36912d3478a06898f51` (typed projection),
+`2146e94020787d798f37a2f0fd17e4c8259bc71a` (browser realization), and
+`3ea43745208af284caa11680b221bb9c1131bd4a` (drop/restart/product proof). Verification is the full
+`pnpm run verify` gate plus `git diff --check` and the production-bundle exclusion scan.
+
+M4 change amplification is bounded:
+
+| Change | Required ownership surfaces |
+|---|---|
+| Content-only damage/movement variation | Existing project-content options and regenerated strict JSON only; accepted fact payloads automatically change billboard values/anchors without presentation or Rust projection changes. |
+| Presentation behavior variation for an existing cue | `presentation-feedback.ts`, CSS, and its focused fake-sink expectations; no gameplay service, content schema, snapshot, or Rust authority change. |
+| New consequential feedback outcome | The producing typed Rust fact/event, the small browser-host semantic union mapping, the TypeScript adapter, and focused/product assertions; no generic protocol, registry, replay envelope, or second authority. |
+
+The inspected Asha render families contributed only one-way/disposable/bounded projection evidence.
+Their animation controller authority, catalog/hash closure, retained handle registries, broad
+presentation/render protocols, origin/correlation metadata, and scene/runtime bridge remain absent.
 
 ### M5-M6: project admission and persistence
 

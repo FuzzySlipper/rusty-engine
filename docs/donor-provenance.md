@@ -80,6 +80,16 @@ therefore preserves movement, attack, damage, defeat, and door payloads as a sma
 the browser response. Animation posture is rebuilt from current entity state; cues are never added
 to `GameRuntime`, `GameSession`, the journal, or a snapshot.
 
+The successor implementation is pinned by
+`bb16dbd5aa65878e9dadf36912d3478a06898f51` (typed Rust response projection),
+`2146e94020787d798f37a2f0fd17e4c8259bc71a` (DOM/Web Audio realization), and
+`3ea43745208af284caa11680b221bb9c1131bd4a` (drop/restart/Chromium proof). The product gate realizes
+all four feedback families, schedules an oscillator/gain envelope, discards one cue-bearing response,
+and proves a fresh readout has identical gameplay with no replayed cue before rebuilding posture.
+Existing fact payload changes flow through without changing the presentation border; changing an
+existing effect stays in the TypeScript adapter/CSS/tests. A genuinely new outcome changes its typed
+producer plus the small closed mapping, not a donor protocol or generic signal route.
+
 Sibling references are intentional while Asha development is stopped for this decision. If this
 lab becomes a durable independent successor, the references should be pinned as Git dependencies,
 vendored with this ledger, or moved into a shared foundation repository before Asha resumes.

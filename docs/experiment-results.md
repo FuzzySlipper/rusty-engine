@@ -1,7 +1,7 @@
 # Experiment results
 
-Status: walking falsification slices and the first four scheduled migration families implemented
-on 2026-07-23 and registered for review in Den.
+Status: walking falsification slices and the first five scheduled migration families implemented
+on 2026-07-23 and tracked in Den.
 
 ## Current decision
 
@@ -329,8 +329,55 @@ M3 change amplification is explicit:
 | Change | Required ownership surfaces |
 |---|---|
 | Content-only health/damage variation | `encounter-project.ts`, its composition test, and regenerated strict JSON; no Rust service, snapshot, or browser algorithm change. |
-| Ray/target behavior variation with the settled component shape | `game-host::services` plus `combat_runtime` focused tests; no content schema, persistence codec, renderer donor, or language bridge. |
+| Ray/target behavior variation with the settled component shape | `game-host::combat` plus `combat_runtime` focused tests; no content schema, persistence codec, renderer donor, or language bridge. |
 | Initial complete M3 vertical slice | Existing coarse `game-host` model/admission/service/runtime/snapshot/browser-host files, project-content schema/builder, browser input/readout, generated fixtures, focused tests, and documentation. No new crate/package/protocol or cross-language runtime owner. |
+
+### Presentation feedback above accepted facts
+
+The fifth migration family adds no gameplay component, service, runtime phase, or persistence
+record. It projects already accepted outcomes at the existing product border:
+
+```text
+current player/enemy/door state -> rebuildable animation posture
+
+Moved / Blocked / AttackFired / DamageApplied / EnemyDefeated / DoorOpened
+  -> browser-host response-local semantic cues with typed payloads
+  -> PresentationFeedbackAdapter
+       +-> entity posture and short CSS animation pulses
+       +-> capped, expiring anchored particles
+       +-> bounded damage/status billboards
+       +-> lazy, fail-soft Web Audio oscillator one-shots
+```
+
+The Rust host maps the original typed receipts/events. It does not dispatch from `lastEvents`
+strings, retain presentation handles, or add cues to `GameRuntime`, `GameSession`, journals, or
+snapshots. A normal GET or reset therefore carries current posture and an empty cue list.
+Multi-step movement collapses to one cue per entity, duplicate defeat/door cues are bounded, and
+the DOM sink caps active transient effects at 24 before normal expiry.
+
+Asha `render-animation`, `render-audio`, `render-billboard`, `render-particle`,
+`protocol-presentation`, `protocol-render`, and `render-bridge` were inspected at pinned commit
+`a431974330589761c9e35fc4f8a55996a1b5ee48`. Their files are unchanged at the inspected current
+checkout `6462a6de20d48ea1a3b7456826804bd9507860a5`. Rusty Engine retains only the evidence that
+presentation is one-way, disposable, bounded, anchored, and fail-soft. It imports none of those
+crates or their animation authority, catalog/hash closure, retained handle registries, broad
+protocol operations, origin/correlation metadata, or scene/runtime bridge.
+
+The Chromium proof sees movement/block/attack/damage/defeat/door animation pulses, particles, and
+billboards and schedules real Web Audio oscillator/gain envelopes. It then intentionally discards
+a response containing a movement cue. A fresh GET has the same accepted tick/revision/entity state
+but no cue. Clearing the sink as a simulated presentation restart removes every transient and
+rebuilds only current defeated/open posture. Rust tests independently compare snapshots across
+delivered and discarded response paths, while a fake TypeScript sink throws during audio and
+proves later visual operations continue.
+
+M4 change amplification is explicit:
+
+| Change | Required ownership surfaces |
+|---|---|
+| Content-only health/damage/movement variation | Existing TypeScript project option/test and regenerated JSON only; fact payloads automatically alter billboard value/anchor without presentation mapping changes. |
+| Presentation behavior variation for an existing outcome | `presentation-feedback.ts`, CSS, and focused fake-sink expectations only; no gameplay service, snapshot, content schema, or Rust projection change. |
+| New consequential feedback outcome | Its typed Rust fact/event, the browser-host semantic mapping, TypeScript adapter, and focused/product assertions; still no generic bus, presentation protocol, or replay envelope. |
 
 ### Browser/Three/DOM product proof
 
@@ -339,7 +386,7 @@ contracts. A small successor adapter turns whole Rust projection readouts into r
 `create`/`update`/`destroy` diffs. Three owns canvas objects and resource lifecycle; it never owns
 gameplay state.
 
-Six visible action/data paths run in the same product scene:
+Seven visible action/data paths run in the same product scene:
 
 ```text
 DOM pointer/fire control -> authored binding -> ResolvedAttackAction -> CombatService
@@ -363,12 +410,17 @@ opened encounter door -> disabled entity collider + canonical generated aperture
 
 generated seed/dimensions -> canonical material voxels -> svc-mesh payload
                           -> retained Three chunk mesh shared with collision/navigation authority
+
+typed accepted state/facts -> response-local presentation projection
+                           -> animation/audio/particle/billboard feedback
+                           -> safely expired, dropped, or rebuilt without gameplay writes
 ```
 
 The Asha renderer package has an optional encoded-frame convenience import from its old runtime
 bridge. Rusty Engine never uses that path: Vite aliases it to a fail-closed local shim, and the smoke
-rejects `RuntimeSession`, native bridge, Gameplay Fabric, or `GameplayRuntimeHost` markers in the
-production bundle. The typed `applyFrame` path remains the unchanged donor implementation.
+rejects `RuntimeSession`, native bridge, Gameplay Fabric, `GameplayRuntimeHost`, or old Asha
+presentation-operation markers in the production bundle. The typed `applyFrame` path remains the
+unchanged donor implementation.
 
 The automated product gate builds the bundle, starts the Rust host on an ephemeral port, launches
 real headless Chromium with SwiftShader WebGL, dispatches keyboard/pointer input, resolves the
@@ -377,6 +429,9 @@ one-keydown/one-keyup moved-then-blocked-and-stopped player collision, changed l
 moved-and-damaged live sentry, the arrived sentry, combat hit/damage/defeat facts, open-door
 transform, controller traversal through that exit, defeated entities, blocked probe, generated
 seed/mesh readout, and retained-renderer evidence in the final DOM.
+The same gate now requires all four presentation families, a real Web Audio schedule, an empty-cue
+reset, a deliberately dropped response followed by an identical gameplay readout, and posture-only
+rebuild after a simulated presentation restart.
 
 ## Reproducible evidence
 
@@ -394,8 +449,8 @@ The current verification gate proves:
 
 - Rust formatting, Clippy, and strict TypeScript compilation;
 - generated project content is byte-for-byte current with its TypeScript composition;
-- 11 TypeScript content-composition tests and six browser input-lifecycle/retained-projection tests;
-- 52 Rust integration tests across entity state, donor collision/navigation/mesh queries, security door,
+- 11 TypeScript content-composition tests and nine browser input/projection/presentation tests;
+- 57 Rust tests across entity state, donor collision/navigation/mesh queries, security door,
   content admission, encounter routing, kinematic/navigation motion, atomic rejection, projection,
   player control, combat/health/weapon behavior, generated-environment admission, and save/reopen;
 - strict rejection of unknown stored-content and snapshot fields;
@@ -409,9 +464,9 @@ These are physical line counts (`wc -l`), not complexity scores:
 |---|---:|---|
 | Reusable Rust entity state | 4 files / 888 lines | Entity/capability storage, atomic entity mutation, snapshot, projection. |
 | Successor spatial adapter/system | 1 file / 898 lines | Canonical donor scene construction, generated-room/aperture algorithm, collision/navigation/mesh derivation, bounded query facade, central kinematic phase. |
-| Rust game host and runners | 11 files / 4,541 lines | Concrete components/services, combat/query ownership, routing, admission, scheduling, snapshots, headless/product/workload hosts. |
-| TypeScript content composition | 5 files / 335 lines | Typed definitions, encounter/generation/combat and motion builders, reproducibility check. |
-| TypeScript browser product shell | 6 files / 1,102 lines | Browser-owned held-input lifecycle, Rust-readout/mesh adapter, input/attack resolution and DOM readout, derived camera, Asha renderer mount, bridge exclusion shim, styling. |
+| Rust game host and runners | 19 files / 5,184 lines | Concrete feature-owned components/services, routing, admission, scheduling, snapshots, presentation projection, headless/product/workload hosts. |
+| TypeScript content composition | 5 files / 336 lines | Typed definitions, encounter/generation/combat and motion builders, reproducibility check. |
+| TypeScript browser product shell | 8 files / 1,726 lines | Browser-owned input lifecycle, Rust-readout/mesh and feedback adapters, DOM/Web Audio realization, derived camera, Asha renderer mount, bridge exclusion shim, styling. |
 | Generated project content | 3 files / 8,092 lines | Two encounter/generation/combat variations and pretty-printed 256-body workload data. |
 
 The Rust object/component model is currently the largest single file, followed by generation and
@@ -438,19 +493,22 @@ generic replay machinery.
   per-consumer approximations or importing the donor event/control plane.
 - Asha's compact combat query algorithm can be harvested without importing its independent state,
   fire-control copy, replay hashes, FPS session, or event-adaptation route.
+- Rich presentation can remain disposable above typed facts: dropped delivery, host failure, and
+  restart do not require gameplay rollback, event replay, or a second authority.
 - The new capability's behavior has one owner; its expected amplification is model/command/snapshot
   binding plus admission and restore, not a cross-language protocol campaign.
 
 ## Decision boundary and remaining limits
 
-The planned falsification work and first four migration families pass. That is strong evidence for
+The planned falsification work and first five migration families pass. That is strong evidence for
 continuing Rusty Engine as the durable successor, but it is not evidence that every Asha feature
 should move or that all current leaf-donor arrangements are durable infrastructure.
 
 Before calling this durable infrastructure:
 
-1. Review M3, then schedule M4 feedback strictly above its movement/attack/damage/defeat facts so
-   presentation never becomes another gameplay authority.
+1. Schedule M5 stored scene/assets/project admission now that five heterogeneous runtime and
+   presentation families have settled the concrete schema consumers; keep project content distinct
+   from runtime snapshots.
 2. Decide whether sibling donor references become pinned Git dependencies, vendored crates, or a
    shared foundation repository before Asha resumes development.
 3. Add safe allocation telemetry and a longer mixed workload; the current matrix measures isolated

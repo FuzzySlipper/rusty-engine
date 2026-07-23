@@ -16,7 +16,7 @@ The architecture charter is [asha-object-centric-successor-spike.md](./asha-obje
 
 ## Implemented walking spike
 
-The runtime now proves eight connected paths:
+The runtime now proves nine connected paths:
 
 1. A switch-controlled security door with an optional configured close delay.
 2. An encounter-gated exit where committed enemy-defeat facts clear an authored encounter and open
@@ -32,6 +32,8 @@ The runtime now proves eight connected paths:
    an unchanged Asha visible-face mesher before retained Three upload.
 8. Authored primary-fire and weapon/health components resolved by a Rust `CombatService` against
    live enemy transforms and canonical voxel occlusion, with typed damage/defeat consequences.
+9. Rebuildable animation posture and disposable animation/audio/particle/billboard feedback
+   projected from accepted movement, combat, defeat, and door outcomes without gameplay writes.
 
 Components remain data. Named services/systems own interaction, combat, encounters, doors, player
 control, navigation, and kinematic motion; `GameRuntime` contains the short explicit event route.
@@ -49,7 +51,9 @@ runs a bounded spatial phase. Its Chromium smoke proves held player input and pr
 generated voxels, navigation around the generated pillar, traversal through the canonical exit
 aperture after its entity door opens, typed attack/damage facts, the
 `EnemyDefeated -> EncounterCleared -> DoorOpened` chain, derived camera movement, and retained
-Three/WebGL mesh projection.
+Three/WebGL mesh projection. The same product gate requires visible typed feedback and a real Web
+Audio schedule, deliberately drops one transient-cue response, then proves a fresh readout preserves
+gameplay while replaying no cue and rebuilding only current presentation posture.
 
 ## Donor checkout
 

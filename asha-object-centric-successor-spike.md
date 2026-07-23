@@ -747,6 +747,7 @@ The spike now uses these defaults:
 - central named frame phases;
 - explicit snapshot persistence;
 - TypeScript as admission-time code-as-content and the eventual Three/DOM presentation shell, not a second gameplay authority;
+- rebuildable presentation posture plus response-local typed feedback cues; audio/particles/billboards are disposable and never snapshot or replay truth;
 - Asha leaf code referenced/transplanted, not invoked through an old-runtime compatibility layer.
 
 Further walking-slice evidence should decide:
@@ -758,19 +759,24 @@ Further walking-slice evidence should decide:
 - how much TypeScript authoring convenience is useful before strict admitted content becomes a domain-specific behavior language;
 - which replay assurance profile has a real consumer;
 - which Asha crates are clean enough to transplant versus cheaper to reimplement;
-- whether `rusty-engine` should become the durable successor or remain a disposable spike.
+- how the durable Rusty Engine successor should replace its temporary sibling-checkout dependencies before Asha development resumes.
 
 ## Recommended next action
 
-The planned falsification slices and the first four migration families now pass: direct gameplay
+The planned falsification slices and the first five migration families now pass: direct gameplay
 services, content-only variation, cross-domain typed consequences, localized engine capabilities,
 substantial spatial/collision/query reuse, real-time multi-entity pressure, combat, persistence, and
-the retained browser product path. This supports treating Rusty Engine as the durable successor,
-without implying that Asha should be ported wholesale.
+the retained browser product path. M4 additionally proves that typed movement/combat/door outcomes
+can drive visible animation, particles, and billboards plus real Web Audio without adding
+presentation state to gameplay authority. A discarded response is not replayed; a presentation
+restart rebuilds only current posture; a failed audio sink cannot change accepted state. This
+supports treating Rusty Engine as the durable successor, without implying that Asha should be
+ported wholesale.
 
-The next scheduled closure is M4: derive animation/audio/particle/billboard feedback from already
-accepted movement, attack, damage, defeat, and door facts without giving presentation any gameplay
-authority.
+The next ready closure is M5: admit a real stored scene/project with asset identities, several
+settled entity component families, and precise diagnostics. It should harvest only concrete
+foundation concepts and must keep authored project persistence distinct from live-session
+snapshots or any replay history.
 
 ## Source basis
 
