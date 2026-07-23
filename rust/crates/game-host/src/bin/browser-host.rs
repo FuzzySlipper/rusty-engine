@@ -874,4 +874,45 @@ mod tests {
             before
         );
     }
+
+    #[test]
+    fn dropped_response_feedback_is_not_replayed_and_does_not_change_outcome() {
+        let first = Arc::new(Mutex::new(
+            GameRuntime::from_project_content(PROJECT).expect("admit first browser project"),
+        ));
+        let second = Arc::new(Mutex::new(
+            GameRuntime::from_project_content(PROJECT).expect("admit second browser project"),
+        ));
+        let movement = serde_json::to_vec(&ResolvedPlayerAction::Move {
+            forward: 1.0,
+            right: 0.0,
+        })
+        .expect("movement JSON");
+
+        let delivered = response_json(route(
+            "POST",
+            "/api/player-action",
+            &movement,
+            &first,
+            Path::new("."),
+        ));
+        let dropped = route(
+            "POST",
+            "/api/player-action",
+            &movement,
+            &second,
+            Path::new("."),
+        );
+        assert_eq!(dropped.0, 200);
+        assert_eq!(delivered["presentation"]["cues"][0]["kind"], "movement");
+
+        let refreshed = response_json(route("GET", "/api/state", &[], &second, Path::new(".")));
+        assert_eq!(refreshed["presentation"]["cues"], serde_json::json!([]));
+        assert_eq!(
+            game_host::encode_game_snapshot(&first.lock().expect("first runtime"))
+                .expect("first snapshot"),
+            game_host::encode_game_snapshot(&second.lock().expect("second runtime"))
+                .expect("second snapshot")
+        );
+    }
 }

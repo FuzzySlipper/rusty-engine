@@ -142,6 +142,11 @@ window.addEventListener("mousemove", (event) => {
 
 if (smokeMode) {
   await perform("/api/reset");
+  const resetFeedbackRebuilt =
+    current.presentation.cues.length === 0 &&
+    feedbackLayer.dataset.activeEffects === "0" &&
+    includesEvery(feedbackLayer.dataset.animationStates, ["1:idle", "3:closed", "4:moving"]);
+  document.body.dataset.feedbackReset = resetFeedbackRebuilt ? "pass" : "fail";
   const initialPlayerPosition = current.player.position;
   const initialPlayerYaw = current.player.yawDegrees;
   const heldCode = current.player.bindings.moveForward;
@@ -212,7 +217,7 @@ if (smokeMode) {
   await perform("/api/motion-phase");
   surface.renderOnce();
   const door = current.projection.find((node) => node.id === 3);
-  const passed =
+  const gameplayPassed =
     current.encounterState === "cleared" &&
     current.doorState === "open" &&
     door?.translation?.[1] === 4 &&
@@ -238,9 +243,73 @@ if (smokeMode) {
     current.voxelMeshes.length === 1 &&
     surface.snapshot().includes("loading-bay-exit") &&
     surface.snapshot().includes("generated-room-chunk");
+  const feedbackFamiliesPassed =
+    includesEvery(feedbackLayer.dataset.animationPulses, [
+      "movement",
+      "blocked",
+      "attack",
+      "damage",
+      "defeat",
+      "open",
+    ]) &&
+    includesEvery(feedbackLayer.dataset.particleKinds, [
+      "movement",
+      "blocked",
+      "muzzle",
+      "impact",
+      "defeat",
+      "door",
+    ]) &&
+    includesEvery(feedbackLayer.dataset.billboardValues, ["BLOCKED", "-60", "DEFEATED", "EXIT OPEN"]) &&
+    Number(feedbackLayer.dataset.activeEffects ?? "0") <= 24;
+  document.body.dataset.feedbackFamilies = feedbackFamiliesPassed ? "pass" : "fail";
+  document.body.dataset.feedbackEvidence = [
+    feedbackLayer.dataset.animationPulses ?? "",
+    feedbackLayer.dataset.particleKinds ?? "",
+    feedbackLayer.dataset.billboardValues ?? "",
+  ].join("|");
+  const audioFeedbackPassed =
+    Number(feedbackAudioStatus.dataset.attempted ?? "0") > 0 &&
+    Number(feedbackAudioStatus.dataset.scheduled ?? "0") > 0;
+  document.body.dataset.audioFeedback = audioFeedbackPassed ? "pass" : "fail";
+
+  const droppedResponse = await requestState("/api/player-action", "POST", {
+    kind: "move",
+    forward: -1,
+    right: 0,
+  });
+  const droppedHadTransientCue = droppedResponse.presentation.cues.some(
+    (cue) => cue.kind === "movement" || cue.kind === "movementBlocked",
+  );
+  const refreshed = await requestState("/api/state");
+  const droppedDeliverySafe =
+    droppedHadTransientCue &&
+    refreshed.presentation.cues.length === 0 &&
+    authoritativeBrowserFingerprint(refreshed) === authoritativeBrowserFingerprint(droppedResponse);
+  current = refreshed;
+  const refreshFrame = projection.apply(current);
+  if (refreshFrame.ops.length > 0) {
+    surface.applyFrame(refreshFrame);
+  }
+  surface.setCameraPose(derivePlayerCameraPose(current.player));
+  renderReadout(current);
+  applyPresentationFeedback(true);
+  surface.renderOnce();
+  const restartRebuilt =
+    feedbackLayer.dataset.activeEffects === "0" &&
+    feedbackLayer.dataset.lastCueCount === "0" &&
+    includesEvery(feedbackLayer.dataset.animationStates, ["3:open", "4:defeated", "5:defeated"]);
+  const feedbackDropPassed = droppedDeliverySafe && restartRebuilt;
+  document.body.dataset.feedbackDrop = feedbackDropPassed ? "pass" : "fail";
+  const passed =
+    gameplayPassed &&
+    resetFeedbackRebuilt &&
+    feedbackFamiliesPassed &&
+    audioFeedbackPassed &&
+    feedbackDropPassed;
   smokeResult.dataset.status = passed ? "pass" : "fail";
   smokeResult.textContent = passed
-    ? "PASS · Rust facts reached retained WebGL projection"
+    ? "PASS · Rust facts reached retained WebGL and disposable feedback"
     : "FAIL · Product proof did not converge";
   document.body.dataset.smokeStatus = passed ? "pass" : "fail";
 }
@@ -540,6 +609,24 @@ function clampUnit(value: number): number {
 
 function normalizeDegrees(value: number): number {
   return ((value + 180) % 360 + 360) % 360 - 180;
+}
+
+function includesEvery(value: string | undefined, expected: readonly string[]): boolean {
+  const values = new Set((value ?? "").split(",").filter(Boolean));
+  return expected.every((candidate) => values.has(candidate));
+}
+
+function authoritativeBrowserFingerprint(state: RuntimeBrowserState): string {
+  return JSON.stringify({
+    tick: state.tick,
+    entityRevision: state.entityRevision,
+    projection: state.projection,
+    doorState: state.doorState,
+    encounterState: state.encounterState,
+    player: state.player,
+    weapon: state.weapon,
+    enemies: state.enemies,
+  });
 }
 
 function delay(milliseconds: number): Promise<void> {

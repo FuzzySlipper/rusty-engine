@@ -176,6 +176,7 @@ export class BrowserPresentationFeedbackSink implements PresentationFeedbackSink
   readonly #active: HTMLElement[] = [];
   readonly #timeouts = new Set<ReturnType<typeof globalThis.setTimeout>>();
   #audioContext: AudioContext | null = null;
+  #soundAttempts = 0;
   #scheduledSounds = 0;
   #droppedSounds = 0;
 
@@ -273,6 +274,8 @@ export class BrowserPresentationFeedbackSink implements PresentationFeedbackSink
   }
 
   playSound(kind: FeedbackSoundKind): boolean {
+    this.#soundAttempts += 1;
+    this.#audioStatus.dataset.attempted = String(this.#soundAttempts);
     const context = this.#audioContext;
     if (context === null || context.state !== "running") {
       this.#droppedSounds += 1;

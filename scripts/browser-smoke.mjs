@@ -20,6 +20,10 @@ const forbiddenRuntimeSurface = [
   "GameplayFabric",
   "NativeRuntimeBridge",
   "RuntimeSession",
+  "AnimationProjectionOp",
+  "AudioProjectionOp",
+  "BillboardProjectionOp",
+  "ParticleProjectionOp",
 ];
 const bundledRuntimeSurface = forbiddenRuntimeSurface.filter((name) => browserBundle.includes(name));
 if (bundledRuntimeSurface.length > 0) {
@@ -50,6 +54,7 @@ try {
     "--use-gl=angle",
     "--use-angle=swiftshader",
     "--enable-unsafe-swiftshader",
+    "--autoplay-policy=no-user-gesture-required",
     "--virtual-time-budget=10000",
     "--dump-dom",
     `http://${address}/?smoke=1`,
@@ -64,7 +69,11 @@ try {
     'data-gate-passage="pass"',
     'data-queue-recovery="pass"',
     'data-cooldown="pass"',
-    "PASS · Rust facts reached retained WebGL projection",
+    'data-feedback-reset="pass"',
+    'data-feedback-families="pass"',
+    'data-audio-feedback="pass"',
+    'data-feedback-drop="pass"',
+    "PASS · Rust facts reached retained WebGL and disposable feedback",
     "EnemyDefeated",
     "EncounterCleared",
     "DoorOpened",
@@ -83,7 +92,7 @@ try {
   if (missing.length > 0) {
     throw new Error(`browser smoke missing ${missing.join(", ")}\n${result.stdout.slice(-6_000)}`);
   }
-  console.log("browser smoke passed: aimed Rust combat + traversable generated gate -> retained Three/WebGL shell");
+  console.log("browser smoke passed: accepted gameplay -> retained Three/WebGL + disposable feedback shell");
 } finally {
   host.kill("SIGTERM");
   await Promise.race([onceExit(host), delay(1_000)]);
