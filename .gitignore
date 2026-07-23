@@ -1,0 +1,8 @@
+/target/
+/node_modules/
+/ts/**/dist/
+/ts/**/native/
+*.node
+*.log
+*.tsbuildinfo
+.DS_Store

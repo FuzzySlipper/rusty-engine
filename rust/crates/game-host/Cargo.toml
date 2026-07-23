@@ -1,0 +1,15 @@
+[package]
+name = "game-host"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+core-ids.workspace = true
+core-math.workspace = true
+core-time.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+world-kernel = { path = "../world-kernel" }

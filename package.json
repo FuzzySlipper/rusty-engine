@@ -1,0 +1,17 @@
+{
+  "name": "rusty-engine-lab",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.7.0",
+  "scripts": {
+    "build:native": "bash scripts/build-native.sh",
+    "measure:door": "pnpm --filter @rusty-engine/game-runtime measure:door",
+    "typecheck": "tsc --build ts/tsconfig.json",
+    "test:ts": "pnpm --filter @rusty-engine/game-runtime test",
+    "verify": "bash scripts/verify.sh"
+  },
+  "devDependencies": {
+    "@types/node": "25.9.2",
+    "typescript": "5.9.3"
+  }
+}
