@@ -1,7 +1,7 @@
 # Experiment results
 
-Status: walking falsification slices and the first scheduled migration family completed on
-2026-07-23; two additional migration families are queued in Den.
+Status: walking falsification slices and the first two scheduled migration families completed on
+2026-07-23; generated voxel environment/mesh migration is next in Den.
 
 ## Current decision
 
@@ -186,6 +186,45 @@ The target and speed are content-only variations in the TypeScript builder. A be
 localized to the navigation service/spatial adapter plus their focused tests; no protocol, bridge,
 replay, or renderer contract changes are required.
 
+### Player input, controller, and derived camera
+
+The second migration family keeps the device boundary small without making TypeScript a live
+gameplay host:
+
+```text
+authored player controller + DOM control bindings
+  -> TypeScript keyboard/pointer resolution
+  -> ResolvedPlayerAction { Move | Look }
+  -> PlayerControllerService
+  -> selected-body KinematicMotionSystem for movement
+  -> durable entity translation + yaw/pitch controller state
+  -> Moved / Blocked / LookChanged facts
+  -> presentation-only follow-camera offset
+```
+
+The controller is ordinary data on the player entity. Admission requires transform, collision,
+kinematic, and renderable capabilities and validates movement limits, look limits, and unique
+keyboard controls. Rust never receives `KeyboardEvent`, key codes, mouse buttons, pointer-lock
+state, or a device polling frame. TypeScript never receives mutable controller objects or writes a
+pose directly.
+
+Each move action sets one bounded velocity, runs the existing collision-aware selected-body path,
+and clears velocity before returning. This makes the action visible and responsive without leaving
+component-local update polling behind. Look actions update accepted yaw/pitch directly and clamp
+pitch. The loading-bay player advances toward a visible voxel obstacle and receives a typed blocked
+outcome; pointer movement changes accepted look state.
+
+Player translation, controller configuration, bindings, yaw, and pitch survive snapshot/reopen.
+The snapshot contains no camera data. The browser rebuilds the follow camera from accepted player
+pose and a shell-owned height/distance offset on initial load and after every action.
+
+Changing WASD to arrow-key bindings touches only project content/options and its composition test;
+the Rust action and controller behavior are unchanged. A controller-algorithm change is localized
+to `PlayerControllerService` and its focused runtime tests unless it introduces a genuinely new
+durable configuration value. The initial vertical slice necessarily added one component/admission
+shape, one snapshot record, the named service, and the browser border/readout; it did not add a
+protocol crate, input context registry, replay codec, or lifecycle route.
+
 ### Browser/Three/DOM product proof
 
 The loading-bay browser shell links Asha's actual `@asha/renderer-three` and generated render
@@ -193,7 +232,7 @@ contracts. A small successor adapter turns whole Rust projection readouts into r
 `create`/`update`/`destroy` diffs. Three owns canvas objects and resource lifecycle; it never owns
 gameplay state.
 
-Three visible action paths run in the same product scene:
+Four visible action paths run in the same product scene:
 
 ```text
 DOM defeat controls -> CombatService -> EnemyDefeated -> EncounterCleared -> DoorOpened
@@ -206,6 +245,10 @@ DOM spatial control -> one bounded KinematicMotionSystem phase sequence
 DOM navigation control -> EnemyNavigationSystem -> Asha voxel-derived path query
                        -> selected collision-aware movement -> NavigationArrived
                        -> retained Three sentry visibly routes around the obstacle
+
+DOM keyboard/pointer -> authored binding resolver -> ResolvedPlayerAction
+                     -> PlayerControllerService -> collision-aware accepted pose
+                     -> retained player projection + derived follow camera
 ```
 
 The Asha renderer package has an optional encoded-frame convenience import from its old runtime
@@ -214,8 +257,9 @@ rejects `RuntimeSession`, native bridge, Gameplay Fabric, or `GameplayRuntimeHos
 production bundle. The typed `applyFrame` path remains the unchanged donor implementation.
 
 The automated product gate builds the bundle, starts the Rust host on an ephemeral port, launches
-real headless Chromium with SwiftShader WebGL, presses reset/navigation/defeat/spatial actions, and
-requires the arrived sentry, open-door transform, defeated entities, blocked probe,
+real headless Chromium with SwiftShader WebGL, dispatches keyboard/pointer input and presses
+reset/navigation/defeat/spatial actions. It requires moved-then-blocked player collision, changed
+look state, the arrived sentry, open-door transform, defeated entities, blocked probe,
 retained-renderer snapshot, and typed fact names in the final DOM.
 
 ## Reproducible evidence
@@ -234,10 +278,10 @@ The current verification gate proves:
 
 - Rust formatting, Clippy, and strict TypeScript compilation;
 - generated project content is byte-for-byte current with its TypeScript composition;
-- 7 TypeScript content-composition tests and one retained-diff adapter test;
-- 29 Rust integration tests across entity state, donor collision/navigation queries, security door,
+- 9 TypeScript content-composition tests and two retained-diff/camera adapter tests;
+- 34 Rust integration tests across entity state, donor collision/navigation queries, security door,
   content admission, encounter routing, kinematic/navigation motion, atomic rejection, projection,
-  and save/reopen;
+  player control, and save/reopen;
 - strict rejection of unknown stored-content and snapshot fields;
 - a real Chromium/Three/WebGL product smoke, including a forbidden-old-runtime bundle audit.
 

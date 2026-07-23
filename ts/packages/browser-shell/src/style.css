@@ -47,6 +47,7 @@ h1 { margin: 0; font-size: clamp(27px, 4vw, 44px); font-weight: 500; letter-spac
 .motion-readout { display: flex; justify-content: space-between; margin-top: 12px; padding-top: 10px; border-top: 1px solid #213735; color: #829a95; font-size: 11px; }
 .motion-readout strong { color: #58d1a2; font-family: "SFMono-Regular", Consolas, monospace; }
 .motion-readout strong[data-state="blocked"] { color: #e9a458; }
+.pose-readout { margin-top: 8px; color: #66847e; font-family: "SFMono-Regular", Consolas, monospace; font-size: 9px; }
 .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
 button { cursor: pointer; border: 1px solid #4f766f; background: #17302d; color: #daf1ea; padding: 10px 14px; transition: background .15s, border-color .15s; }
 button:hover { background: #244a44; border-color: #69aa9c; }

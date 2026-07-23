@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { RuntimeProjectionAdapter, entityHandle, type RuntimeBrowserState } from "./projection.ts";
+import {
+  RuntimeProjectionAdapter,
+  derivePlayerCameraPose,
+  entityHandle,
+  type RuntimeBrowserState,
+} from "./projection.ts";
 
 function state(projection: RuntimeBrowserState["projection"]): RuntimeBrowserState {
   return {
@@ -12,6 +17,20 @@ function state(projection: RuntimeBrowserState["projection"]): RuntimeBrowserSta
     encounterState: "active",
     motionState: "moving",
     navigationState: "following",
+    playerMotionState: "idle",
+    player: {
+      id: 1,
+      position: [0.5, 0.5, 0.5],
+      yawDegrees: 180,
+      pitchDegrees: -10,
+      bindings: {
+        moveForward: "KeyW",
+        moveBackward: "KeyS",
+        moveLeft: "KeyA",
+        moveRight: "KeyD",
+        mouseLook: "pointer",
+      },
+    },
     enemies: [],
     lastEvents: [],
   };
@@ -39,4 +58,16 @@ test("whole Rust readouts become create update and destroy diffs", () => {
   const destroyed = adapter.apply(state([]));
   assert.deepEqual(destroyed.ops.map((op) => op.op), ["destroy"]);
   assert.equal(adapter.trackedEntityCount, 0);
+});
+
+test("camera pose is rebuilt as a presentation offset from accepted player state", () => {
+  const player = state([]).player;
+  const camera = derivePlayerCameraPose(player);
+
+  assert.ok(Math.abs(camera.position[0] - 0.5) < 0.000_001);
+  assert.equal(camera.position[1], 3.2);
+  assert.equal(camera.position[2], -5.5);
+  assert.equal(camera.yawDegrees, 180);
+  assert.equal(camera.pitchDegrees, -10);
+  assert.equal("camera" in player, false);
 });

@@ -36,6 +36,23 @@ export interface NavigationDefinition {
   readonly maxVisited: number;
 }
 
+export interface PlayerInputBindingsDefinition {
+  readonly moveForward: string;
+  readonly moveBackward: string;
+  readonly moveLeft: string;
+  readonly moveRight: string;
+  readonly mouseLook: string;
+}
+
+export interface PlayerControllerDefinition {
+  readonly moveSpeedUnitsPerSecond: number;
+  readonly moveStepSeconds: number;
+  readonly lookDegreesPerUnit: number;
+  readonly initialYawDegrees: number;
+  readonly initialPitchDegrees: number;
+  readonly bindings: PlayerInputBindingsDefinition;
+}
+
 export interface VoxelCollisionDefinition {
   readonly voxelSize: number;
   readonly chunkSize: number;
@@ -54,10 +71,11 @@ export interface EntityDefinition {
   readonly encounter?: EncounterDefinition;
   readonly kinematic?: KinematicDefinition;
   readonly navigation?: NavigationDefinition;
+  readonly playerController?: PlayerControllerDefinition;
 }
 
 export interface ProjectContent {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly entities: readonly EntityDefinition[];
   readonly voxelCollision?: VoxelCollisionDefinition;
 }

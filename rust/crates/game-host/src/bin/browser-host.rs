@@ -8,7 +8,7 @@ use std::time::Duration;
 use core_ids::EntityId;
 use game_host::{
     DoorState, EncounterState, EnemyState, GameEvent, GameRuntime, MotionFact, NavigationFact,
-    NavigationState,
+    NavigationState, PlayerControlFact, ResolvedPlayerAction,
 };
 use serde::Serialize;
 
@@ -43,6 +43,26 @@ struct BrowserEnemyState {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct BrowserPlayerBindings {
+    move_forward: String,
+    move_backward: String,
+    move_left: String,
+    move_right: String,
+    mouse_look: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserPlayerState {
+    id: u64,
+    position: [f32; 3],
+    yaw_degrees: f32,
+    pitch_degrees: f32,
+    bindings: BrowserPlayerBindings,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct BrowserState {
     tick: u64,
     entity_revision: u64,
@@ -51,6 +71,8 @@ struct BrowserState {
     encounter_state: &'static str,
     motion_state: &'static str,
     navigation_state: &'static str,
+    player_motion_state: &'static str,
+    player: BrowserPlayerState,
     enemies: Vec<BrowserEnemyState>,
     last_events: Vec<String>,
 }
@@ -105,7 +127,7 @@ fn arguments() -> (String, PathBuf) {
 
 fn handle_connection(mut stream: TcpStream, runtime: &Arc<Mutex<GameRuntime>>, dist: &Path) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
-    let request = match read_request_head(&mut stream) {
+    let request = match read_request(&mut stream) {
         Ok(request) => request,
         Err(message) => {
             let _ = write_response(
@@ -117,42 +139,73 @@ fn handle_connection(mut stream: TcpStream, runtime: &Arc<Mutex<GameRuntime>>, d
             return;
         }
     };
-    let mut parts = request
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .split_whitespace();
-    let method = parts.next().unwrap_or_default();
-    let raw_path = parts.next().unwrap_or_default();
-    let path = raw_path.split('?').next().unwrap_or(raw_path);
-    let response = route(method, path, runtime, dist);
+    let path = request.path.split('?').next().unwrap_or(&request.path);
+    let response = route(&request.method, path, &request.body, runtime, dist);
     let _ = write_response(&mut stream, response.0, response.1, response.2);
 }
 
-fn read_request_head(stream: &mut TcpStream) -> Result<String, String> {
+struct HttpRequest {
+    method: String,
+    path: String,
+    body: Vec<u8>,
+}
+
+fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
     let mut request = Vec::new();
     let mut buffer = [0u8; 2_048];
-    loop {
+    let header_end = loop {
         let read = stream
             .read(&mut buffer)
             .map_err(|error| error.to_string())?;
         if read == 0 {
-            break;
+            return Err("request ended before its headers".to_owned());
         }
         request.extend_from_slice(&buffer[..read]);
-        if request.windows(4).any(|window| window == b"\r\n\r\n") {
-            break;
+        if let Some(index) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+            break index + 4;
         }
         if request.len() > 16_384 {
             return Err("request headers are too large".to_owned());
         }
+    };
+    let head = String::from_utf8(request[..header_end].to_vec())
+        .map_err(|_| "request headers are not UTF-8".to_owned())?;
+    let content_length = head
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>())
+        })
+        .transpose()
+        .map_err(|_| "content-length must be an integer".to_owned())?
+        .unwrap_or(0);
+    if content_length > 16_384 {
+        return Err("request body is too large".to_owned());
     }
-    String::from_utf8(request).map_err(|_| "request headers are not UTF-8".to_owned())
+    while request.len() < header_end + content_length {
+        let read = stream
+            .read(&mut buffer)
+            .map_err(|error| error.to_string())?;
+        if read == 0 {
+            return Err("request ended before its declared body".to_owned());
+        }
+        request.extend_from_slice(&buffer[..read]);
+    }
+    let mut parts = head.lines().next().unwrap_or_default().split_whitespace();
+    let method = parts.next().ok_or("request method is missing")?.to_owned();
+    let path = parts.next().ok_or("request path is missing")?.to_owned();
+    Ok(HttpRequest {
+        method,
+        path,
+        body: request[header_end..header_end + content_length].to_vec(),
+    })
 }
 
 fn route(
     method: &str,
     path: &str,
+    body: &[u8],
     runtime: &Arc<Mutex<GameRuntime>>,
     dist: &Path,
 ) -> (u16, &'static str, Vec<u8>) {
@@ -263,6 +316,25 @@ fn route(
             }
             json_response(200, browser_state(&runtime, facts))
         }
+        ("POST", "/api/player-action") => {
+            let action: ResolvedPlayerAction = match serde_json::from_slice(body) {
+                Ok(action) => action,
+                Err(error) => return error_json(400, &format!("invalid resolved action: {error}")),
+            };
+            let mut runtime = runtime.lock().expect("runtime lock");
+            match runtime.apply_player_action(ACTOR, action) {
+                Ok(receipt) => {
+                    let facts = receipt
+                        .facts
+                        .iter()
+                        .map(player_fact_name)
+                        .map(str::to_owned)
+                        .collect();
+                    json_response(200, browser_state(&runtime, facts))
+                }
+                Err(error) => error_json(409, &format!("{error}")),
+            }
+        }
         ("GET", _) | ("HEAD", _) => serve_static(method, path, dist),
         _ => error_json(405, "method not allowed"),
     }
@@ -298,6 +370,36 @@ fn browser_state(runtime: &GameRuntime, last_events: Vec<String>) -> BrowserStat
             }
         })
         .collect();
+    let player = runtime
+        .session()
+        .player_controller(ACTOR)
+        .expect("browser player controller");
+    let bindings = &player.config.bindings;
+    let player_state = BrowserPlayerState {
+        id: ACTOR.raw(),
+        position: player
+            .entity_view
+            .transform
+            .expect("browser player transform")
+            .translation
+            .to_array(),
+        yaw_degrees: player.state.yaw_degrees,
+        pitch_degrees: player.state.pitch_degrees,
+        bindings: BrowserPlayerBindings {
+            move_forward: bindings.move_forward.clone(),
+            move_backward: bindings.move_backward.clone(),
+            move_left: bindings.move_left.clone(),
+            move_right: bindings.move_right.clone(),
+            mouse_look: bindings.mouse_look.clone(),
+        },
+    };
+    let player_motion_state = if last_events.iter().any(|event| event == "PlayerBlocked") {
+        "blocked"
+    } else if last_events.iter().any(|event| event == "PlayerMoved") {
+        "moved"
+    } else {
+        "idle"
+    };
     BrowserState {
         tick: readout.tick.raw(),
         entity_revision: readout.entity_revision,
@@ -340,8 +442,18 @@ fn browser_state(runtime: &GameRuntime, last_events: Vec<String>) -> BrowserStat
             NavigationState::Blocked => "blocked",
             NavigationState::Unreachable => "unreachable",
         },
+        player_motion_state,
+        player: player_state,
         enemies,
         last_events,
+    }
+}
+
+fn player_fact_name(fact: &PlayerControlFact) -> &'static str {
+    match fact {
+        PlayerControlFact::Moved { .. } => "PlayerMoved",
+        PlayerControlFact::Blocked { .. } => "PlayerBlocked",
+        PlayerControlFact::LookChanged { .. } => "PlayerLookChanged",
     }
 }
 

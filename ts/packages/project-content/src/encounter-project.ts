@@ -1,4 +1,9 @@
-import type { EntityDefinition, ProjectContent, Vec3 } from "./schema.js";
+import type {
+  EntityDefinition,
+  PlayerInputBindingsDefinition,
+  ProjectContent,
+  Vec3,
+} from "./schema.js";
 
 export const ENCOUNTER_IDS = {
   actor: 1,
@@ -8,11 +13,13 @@ export const ENCOUNTER_IDS = {
   motionProbe: 10,
   collisionWall: 11,
   navigationWall: 12,
+  playerWall: 13,
 } as const;
 
 export interface EncounterProjectOptions {
   readonly navigationGoal?: Vec3;
   readonly navigationSpeedUnitsPerSecond?: number;
+  readonly playerBindings?: PlayerInputBindingsDefinition;
 }
 
 export function encounterGateProject(
@@ -48,9 +55,30 @@ export function encounterGateProject(
   const members = enemies.map((enemy) => enemy.id);
 
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     entities: [
-      { id: ENCOUNTER_IDS.actor, name: "player" },
+      {
+        id: ENCOUNTER_IDS.actor,
+        name: "player",
+        translation: [0.5, 0.5, 0.5],
+        collision: { enabled: true, staticCollider: false },
+        renderable: { asset: "primitive/player-marker", visible: true },
+        kinematic: { halfExtents: [0.25, 0.25, 0.25], velocity: [0, 0, 0] },
+        playerController: {
+          moveSpeedUnitsPerSecond: 4,
+          moveStepSeconds: 0.1,
+          lookDegreesPerUnit: 12,
+          initialYawDegrees: 180,
+          initialPitchDegrees: -10,
+          bindings: options.playerBindings ?? {
+            moveForward: "KeyW",
+            moveBackward: "KeyS",
+            moveLeft: "KeyA",
+            moveRight: "KeyD",
+            mouseLook: "pointer",
+          },
+        },
+      },
       {
         id: ENCOUNTER_IDS.encounter,
         name: "loading-bay-encounter",
@@ -84,6 +112,12 @@ export function encounterGateProject(
         translation: [3.5, 0.5, 4.5],
         renderable: { asset: "primitive/voxel-wall", visible: true },
       },
+      {
+        id: ENCOUNTER_IDS.playerWall,
+        name: "player-collision-obstacle",
+        translation: [0.5, 0.5, 3.5],
+        renderable: { asset: "primitive/voxel-wall", visible: true },
+      },
     ],
     voxelCollision: {
       voxelSize: 1,
@@ -91,6 +125,7 @@ export function encounterGateProject(
       solidVoxels: [
         [3, 0, 4],
         [3, 0, 6],
+        [0, 0, 3],
       ],
     },
   };

@@ -36,6 +36,8 @@
           <div id="enemy-list" class="enemy-list"></div>
           <div class="motion-readout"><span>Spatial probe</span><strong id="motion-state">MOVING</strong></div>
           <div class="motion-readout"><span>Enemy navigation</span><strong id="navigation-state">FOLLOWING</strong></div>
+          <div class="motion-readout"><span>Player controller</span><strong id="player-motion-state">IDLE</strong></div>
+          <div class="pose-readout" id="player-pose">0.5, 0.5, 0.5 · YAW 180°</div>
         </article>
 
         <article class="control-panel">
@@ -47,7 +49,7 @@
             <button type="button" id="run-navigation">Run Navigation</button>
             <button type="button" id="reset" class="quiet">Reset</button>
           </div>
-          <p class="control-note">Actions enter named Rust services. The shell receives projection and typed facts only.</p>
+          <p class="control-note">WASD resolves authored bindings into typed Rust movement actions. Click the viewport and move the mouse to look. Camera follow remains derived presentation state.</p>
         </article>
 
         <article class="event-panel">

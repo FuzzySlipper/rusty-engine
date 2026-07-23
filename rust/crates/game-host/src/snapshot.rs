@@ -10,13 +10,14 @@ use serde::{Deserialize, Serialize};
 use crate::model::{
     DoorComponent, DoorConfig, DoorState, EncounterComponent, EncounterConfig, EncounterState,
     EnemyComponent, EnemyState, GameSession, NavigationComponent, NavigationConfig,
-    NavigationState, SwitchComponent, MAX_NAVIGATION_QUERY_BUDGET,
+    NavigationState, PlayerControllerComponent, PlayerControllerConfig, PlayerControllerState,
+    PlayerInputBindings, SwitchComponent, MAX_NAVIGATION_QUERY_BUDGET,
     MAX_NAVIGATION_SPEED_UNITS_PER_SECOND,
 };
 use crate::runtime::GameRuntime;
 use crate::scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
 
-pub const GAME_SNAPSHOT_SCHEMA_VERSION: u32 = 5;
+pub const GAME_SNAPSHOT_SCHEMA_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -31,6 +32,7 @@ pub struct GameSnapshot {
     pub enemies: Vec<EnemySnapshot>,
     pub encounters: Vec<EncounterSnapshot>,
     pub navigations: Vec<NavigationSnapshot>,
+    pub player_controllers: Vec<PlayerControllerSnapshot>,
     pub scheduled: Vec<ScheduledSnapshot>,
 }
 
@@ -122,6 +124,30 @@ pub enum SnapshotNavigationState {
     Unreachable,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PlayerControllerSnapshot {
+    pub entity: u64,
+    pub move_speed_units_per_second: f32,
+    pub move_step_seconds: f32,
+    pub look_degrees_per_unit: f32,
+    pub initial_yaw_degrees: f32,
+    pub initial_pitch_degrees: f32,
+    pub yaw_degrees: f32,
+    pub pitch_degrees: f32,
+    pub bindings: PlayerInputBindingsSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PlayerInputBindingsSnapshot {
+    pub move_forward: String,
+    pub move_backward: String,
+    pub move_left: String,
+    pub move_right: String,
+    pub mouse_look: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ScheduledSnapshot {
@@ -147,19 +173,24 @@ pub enum GameSnapshotError {
     DuplicateEnemy { entity: u64 },
     DuplicateEncounter { entity: u64 },
     DuplicateNavigation { entity: u64 },
+    DuplicatePlayerController { entity: u64 },
     UnknownDoorEntity { entity: u64 },
     UnknownSwitchEntity { entity: u64 },
     UnknownEnemyEntity { entity: u64 },
     UnknownEncounterEntity { entity: u64 },
     UnknownNavigationEntity { entity: u64 },
+    UnknownPlayerControllerEntity { entity: u64 },
     UnknownControlTarget { switch: u64, target: u64 },
     UnknownEncounterMember { encounter: u64, member: u64 },
     UnknownEncounterExit { encounter: u64, exit: u64 },
     MissingDoorCapability { entity: u64 },
     MissingEnemyCapability { entity: u64 },
     MissingNavigationCapability { entity: u64 },
+    MissingPlayerControllerCapability { entity: u64 },
     NavigationMissingCollisionScene { entity: u64 },
+    PlayerControllerMissingCollisionScene { entity: u64 },
     InvalidNavigationConfig { entity: u64 },
+    InvalidPlayerControllerConfig { entity: u64 },
     DuplicateEncounterMember { encounter: u64, member: u64 },
     EnemyInMultipleEncounters { enemy: u64, first: u64, second: u64 },
     DuplicateSchedule { door: u64 },
@@ -266,6 +297,28 @@ impl GameRuntime {
                     goal: component.config.goal.to_array(),
                     speed_units_per_second: component.config.speed_units_per_second,
                     max_visited: component.config.max_visited,
+                })
+                .collect(),
+            player_controllers: self
+                .session
+                .player_controllers
+                .iter()
+                .map(|(entity, component)| PlayerControllerSnapshot {
+                    entity: entity.raw(),
+                    move_speed_units_per_second: component.config.move_speed_units_per_second,
+                    move_step_seconds: component.config.move_step_seconds,
+                    look_degrees_per_unit: component.config.look_degrees_per_unit,
+                    initial_yaw_degrees: component.config.initial_yaw_degrees,
+                    initial_pitch_degrees: component.config.initial_pitch_degrees,
+                    yaw_degrees: component.state.yaw_degrees,
+                    pitch_degrees: component.state.pitch_degrees,
+                    bindings: PlayerInputBindingsSnapshot {
+                        move_forward: component.config.bindings.move_forward.clone(),
+                        move_backward: component.config.bindings.move_backward.clone(),
+                        move_left: component.config.bindings.move_left.clone(),
+                        move_right: component.config.bindings.move_right.clone(),
+                        mouse_look: component.config.bindings.mouse_look.clone(),
+                    },
                 })
                 .collect(),
             scheduled: self
@@ -468,6 +521,69 @@ impl GameRuntime {
             );
         }
 
+        let mut player_controllers = BTreeMap::new();
+        let mut player_controller_ids = BTreeSet::new();
+        for controller in snapshot.player_controllers {
+            if !player_controller_ids.insert(controller.entity) {
+                return Err(GameSnapshotError::DuplicatePlayerController {
+                    entity: controller.entity,
+                });
+            }
+            let entity = EntityId::new(controller.entity);
+            let view = entities.view(entity).map_err(|_| {
+                GameSnapshotError::UnknownPlayerControllerEntity {
+                    entity: controller.entity,
+                }
+            })?;
+            if view.transform.is_none()
+                || view.collision.is_none()
+                || view.kinematic.is_none()
+                || view.renderable.is_none()
+            {
+                return Err(GameSnapshotError::MissingPlayerControllerCapability {
+                    entity: controller.entity,
+                });
+            }
+            if collision_scene.is_none() {
+                return Err(GameSnapshotError::PlayerControllerMissingCollisionScene {
+                    entity: controller.entity,
+                });
+            }
+            let config = PlayerControllerConfig {
+                move_speed_units_per_second: controller.move_speed_units_per_second,
+                move_step_seconds: controller.move_step_seconds,
+                look_degrees_per_unit: controller.look_degrees_per_unit,
+                initial_yaw_degrees: controller.initial_yaw_degrees,
+                initial_pitch_degrees: controller.initial_pitch_degrees,
+                bindings: PlayerInputBindings::new(
+                    controller.bindings.move_forward,
+                    controller.bindings.move_backward,
+                    controller.bindings.move_left,
+                    controller.bindings.move_right,
+                    controller.bindings.mouse_look,
+                ),
+            };
+            if !config.is_valid()
+                || !controller.yaw_degrees.is_finite()
+                || !controller.pitch_degrees.is_finite()
+                || !(-89.0..=89.0).contains(&controller.pitch_degrees)
+            {
+                return Err(GameSnapshotError::InvalidPlayerControllerConfig {
+                    entity: controller.entity,
+                });
+            }
+            player_controllers.insert(
+                entity,
+                PlayerControllerComponent {
+                    config,
+                    state: PlayerControllerState {
+                        yaw_degrees: controller.yaw_degrees,
+                        pitch_degrees: controller.pitch_degrees,
+                    },
+                },
+            );
+        }
+
         let mut encounters = BTreeMap::new();
         let mut encounter_ids = BTreeSet::new();
         let mut encounter_by_enemy = BTreeMap::new();
@@ -558,6 +674,7 @@ impl GameRuntime {
                 enemies,
                 encounters,
                 navigators,
+                player_controllers,
             },
             tick: Tick::new(snapshot.tick),
             scheduler,

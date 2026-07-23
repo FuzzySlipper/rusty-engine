@@ -74,7 +74,7 @@ fn save_reopen_preserves_pending_close_without_event_history() {
         .expect("interaction");
     runtime.advance_by(2).expect("advance");
     let encoded = encode_game_snapshot(&runtime).expect("save");
-    assert!(encoded.contains("\"schemaVersion\": 5"));
+    assert!(encoded.contains("\"schemaVersion\": 6"));
     assert!(encoded.contains("\"entities\""));
     assert!(!encoded.contains("\"world\""));
 

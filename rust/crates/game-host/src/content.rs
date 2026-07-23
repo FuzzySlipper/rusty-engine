@@ -7,9 +7,10 @@ use serde::Deserialize;
 
 use crate::model::{
     DoorConfig, GameEntityDefinition, GameEntityDefinitionError, GameSession, NavigationConfig,
+    PlayerControllerConfig, PlayerInputBindings,
 };
 
-pub const PROJECT_CONTENT_SCHEMA_VERSION: u32 = 3;
+pub const PROJECT_CONTENT_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug)]
 pub struct AdmittedProject {
@@ -40,6 +41,7 @@ struct AuthoredEntityDefinition {
     encounter: Option<AuthoredEncounter>,
     kinematic: Option<AuthoredKinematic>,
     navigation: Option<AuthoredNavigation>,
+    player_controller: Option<AuthoredPlayerController>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,6 +99,27 @@ struct AuthoredNavigation {
     goal: [f32; 3],
     speed_units_per_second: f32,
     max_visited: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct AuthoredPlayerController {
+    move_speed_units_per_second: f32,
+    move_step_seconds: f32,
+    look_degrees_per_unit: f32,
+    initial_yaw_degrees: f32,
+    initial_pitch_degrees: f32,
+    bindings: AuthoredPlayerInputBindings,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct AuthoredPlayerInputBindings {
+    move_forward: String,
+    move_backward: String,
+    move_left: String,
+    move_right: String,
+    mouse_look: String,
 }
 
 #[derive(Debug)]
@@ -233,6 +256,22 @@ fn authored_definition(
             goal: array_vec3(navigation.goal),
             speed_units_per_second: navigation.speed_units_per_second,
             max_visited: navigation.max_visited,
+        });
+    }
+    if let Some(controller) = authored.player_controller {
+        definition = definition.with_player_controller(PlayerControllerConfig {
+            move_speed_units_per_second: controller.move_speed_units_per_second,
+            move_step_seconds: controller.move_step_seconds,
+            look_degrees_per_unit: controller.look_degrees_per_unit,
+            initial_yaw_degrees: controller.initial_yaw_degrees,
+            initial_pitch_degrees: controller.initial_pitch_degrees,
+            bindings: PlayerInputBindings::new(
+                controller.bindings.move_forward,
+                controller.bindings.move_backward,
+                controller.bindings.move_left,
+                controller.bindings.move_right,
+                controller.bindings.mouse_look,
+            ),
         });
     }
     Ok(definition)

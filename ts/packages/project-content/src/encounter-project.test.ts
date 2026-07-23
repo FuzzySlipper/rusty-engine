@@ -32,7 +32,45 @@ test("loading bay composes a visible kinematic probe over authored voxel collisi
   assert.deepEqual(project.voxelCollision?.solidVoxels, [
     [3, 0, 4],
     [3, 0, 6],
+    [0, 0, 3],
   ]);
+});
+
+test("player controller and physical bindings are explicit content", () => {
+  const project = encounterGateProject(["guard"]);
+  const player = project.entities.find((entity) => entity.id === ENCOUNTER_IDS.actor);
+
+  assert.deepEqual(player?.playerController, {
+    moveSpeedUnitsPerSecond: 4,
+    moveStepSeconds: 0.1,
+    lookDegreesPerUnit: 12,
+    initialYawDegrees: 180,
+    initialPitchDegrees: -10,
+    bindings: {
+      moveForward: "KeyW",
+      moveBackward: "KeyS",
+      moveLeft: "KeyA",
+      moveRight: "KeyD",
+      mouseLook: "pointer",
+    },
+  });
+  assert.deepEqual(player?.kinematic?.velocity, [0, 0, 0]);
+});
+
+test("keyboard bindings vary as content without changing controller behavior", () => {
+  const bindings = {
+    moveForward: "ArrowUp",
+    moveBackward: "ArrowDown",
+    moveLeft: "ArrowLeft",
+    moveRight: "ArrowRight",
+    mouseLook: "pointer",
+  } as const;
+  const project = encounterGateProject(["guard"], { playerBindings: bindings });
+  const player = project.entities.find((entity) => entity.id === ENCOUNTER_IDS.actor);
+
+  assert.deepEqual(player?.playerController?.bindings, bindings);
+  assert.equal(player?.playerController?.moveSpeedUnitsPerSecond, 4);
+  assert.equal(player?.playerController?.lookDegreesPerUnit, 12);
 });
 
 test("autonomous navigation is explicit data on the responsible enemy", () => {

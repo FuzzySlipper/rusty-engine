@@ -3,8 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use core_ids::EntityId;
 use core_math::Vec3;
 use core_time::{Tick, TickDelta};
-use engine_spatial::MotionPhaseReceipt;
+use engine_spatial::{MotionPhaseReceipt, MAX_MOTION_DELTA_SECONDS};
 use entity_state::{EntityDefinition, EntityFact, EntityState, EntityView, ProjectionNode};
+use serde::{Deserialize, Serialize};
 
 use crate::scheduler::Scheduler;
 
@@ -55,6 +56,137 @@ pub enum EnemyState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EnemyComponent {
     pub state: EnemyState,
+}
+
+pub const MAX_PLAYER_SPEED_UNITS_PER_SECOND: f32 = 1_000.0;
+pub const MAX_PLAYER_LOOK_DEGREES_PER_UNIT: f32 = 180.0;
+pub const MAX_INPUT_CONTROL_LENGTH: usize = 64;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerInputBindings {
+    pub move_forward: String,
+    pub move_backward: String,
+    pub move_left: String,
+    pub move_right: String,
+    pub mouse_look: String,
+}
+
+impl PlayerInputBindings {
+    pub fn new(
+        move_forward: impl Into<String>,
+        move_backward: impl Into<String>,
+        move_left: impl Into<String>,
+        move_right: impl Into<String>,
+        mouse_look: impl Into<String>,
+    ) -> Self {
+        Self {
+            move_forward: move_forward.into(),
+            move_backward: move_backward.into(),
+            move_left: move_left.into(),
+            move_right: move_right.into(),
+            mouse_look: mouse_look.into(),
+        }
+    }
+
+    pub(crate) fn is_valid(&self) -> bool {
+        let controls = [
+            self.move_forward.as_str(),
+            self.move_backward.as_str(),
+            self.move_left.as_str(),
+            self.move_right.as_str(),
+            self.mouse_look.as_str(),
+        ];
+        if controls
+            .iter()
+            .any(|control| control.is_empty() || control.len() > MAX_INPUT_CONTROL_LENGTH)
+        {
+            return false;
+        }
+        let keyboard_controls = &controls[..4];
+        keyboard_controls
+            .iter()
+            .enumerate()
+            .all(|(index, control)| !keyboard_controls[..index].contains(control))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlayerControllerConfig {
+    pub move_speed_units_per_second: f32,
+    pub move_step_seconds: f32,
+    pub look_degrees_per_unit: f32,
+    pub initial_yaw_degrees: f32,
+    pub initial_pitch_degrees: f32,
+    pub bindings: PlayerInputBindings,
+}
+
+impl PlayerControllerConfig {
+    pub(crate) fn is_valid(&self) -> bool {
+        self.move_speed_units_per_second.is_finite()
+            && self.move_speed_units_per_second > 0.0
+            && self.move_speed_units_per_second <= MAX_PLAYER_SPEED_UNITS_PER_SECOND
+            && self.move_step_seconds.is_finite()
+            && self.move_step_seconds > 0.0
+            && self.move_step_seconds <= MAX_MOTION_DELTA_SECONDS
+            && self.look_degrees_per_unit.is_finite()
+            && self.look_degrees_per_unit > 0.0
+            && self.look_degrees_per_unit <= MAX_PLAYER_LOOK_DEGREES_PER_UNIT
+            && self.initial_yaw_degrees.is_finite()
+            && self.initial_pitch_degrees.is_finite()
+            && (-89.0..=89.0).contains(&self.initial_pitch_degrees)
+            && self.bindings.is_valid()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlayerControllerState {
+    pub yaw_degrees: f32,
+    pub pitch_degrees: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlayerControllerComponent {
+    pub config: PlayerControllerConfig,
+    pub state: PlayerControllerState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum ResolvedPlayerAction {
+    Move { forward: f32, right: f32 },
+    Look { yaw_delta: f32, pitch_delta: f32 },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlayerControlFact {
+    Moved {
+        entity: EntityId,
+        before: Vec3,
+        after: Vec3,
+    },
+    Blocked {
+        entity: EntityId,
+        attempted_velocity: Vec3,
+    },
+    LookChanged {
+        entity: EntityId,
+        before_yaw_degrees: f32,
+        after_yaw_degrees: f32,
+        before_pitch_degrees: f32,
+        after_pitch_degrees: f32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlayerControlReceipt {
+    pub action: ResolvedPlayerAction,
+    pub facts: Vec<PlayerControlFact>,
+    pub motion: Option<MotionPhaseReceipt>,
 }
 
 pub const MAX_NAVIGATION_SPEED_UNITS_PER_SECOND: f32 = 1_000.0;
@@ -150,6 +282,7 @@ pub struct GameEntityDefinition {
     pub enemy: bool,
     pub encounter: Option<EncounterConfig>,
     pub navigation: Option<NavigationConfig>,
+    pub player_controller: Option<PlayerControllerConfig>,
 }
 
 impl GameEntityDefinition {
@@ -162,6 +295,7 @@ impl GameEntityDefinition {
             enemy: false,
             encounter: None,
             navigation: None,
+            player_controller: None,
         }
     }
 
@@ -199,6 +333,11 @@ impl GameEntityDefinition {
 
     pub fn with_navigation(mut self, config: NavigationConfig) -> Self {
         self.navigation = Some(config);
+        self
+    }
+
+    pub fn with_player_controller(mut self, config: PlayerControllerConfig) -> Self {
+        self.player_controller = Some(config);
         self
     }
 }
@@ -257,6 +396,21 @@ pub enum GameEntityDefinitionError {
     InvalidNavigationQueryBudget {
         entity: EntityId,
     },
+    PlayerControllerMissingTransform {
+        entity: EntityId,
+    },
+    PlayerControllerMissingCollision {
+        entity: EntityId,
+    },
+    PlayerControllerMissingKinematic {
+        entity: EntityId,
+    },
+    PlayerControllerMissingRenderable {
+        entity: EntityId,
+    },
+    InvalidPlayerControllerConfig {
+        entity: EntityId,
+    },
     EmptyEncounter {
         encounter: EntityId,
     },
@@ -304,6 +458,7 @@ pub struct GameSession {
     pub(crate) enemies: BTreeMap<EntityId, EnemyComponent>,
     pub(crate) encounters: BTreeMap<EntityId, EncounterComponent>,
     pub(crate) navigators: BTreeMap<EntityId, NavigationComponent>,
+    pub(crate) player_controllers: BTreeMap<EntityId, PlayerControllerComponent>,
 }
 
 impl GameSession {
@@ -324,6 +479,7 @@ impl GameSession {
         let mut enemies = BTreeMap::new();
         let mut encounters = BTreeMap::new();
         let mut navigators = BTreeMap::new();
+        let mut player_controllers = BTreeMap::new();
 
         for definition in &definitions {
             let entity = definition.entity.id;
@@ -414,6 +570,44 @@ impl GameSession {
                     },
                 );
             }
+            if let Some(config) = &definition.player_controller {
+                let view = entities.view(entity).expect("definition created entity");
+                if view.transform.is_none() {
+                    return Err(
+                        GameEntityDefinitionError::PlayerControllerMissingTransform { entity },
+                    );
+                }
+                if view.collision.is_none() {
+                    return Err(
+                        GameEntityDefinitionError::PlayerControllerMissingCollision { entity },
+                    );
+                }
+                if view.kinematic.is_none() {
+                    return Err(
+                        GameEntityDefinitionError::PlayerControllerMissingKinematic { entity },
+                    );
+                }
+                if view.renderable.is_none() {
+                    return Err(
+                        GameEntityDefinitionError::PlayerControllerMissingRenderable { entity },
+                    );
+                }
+                if !config.is_valid() {
+                    return Err(GameEntityDefinitionError::InvalidPlayerControllerConfig {
+                        entity,
+                    });
+                }
+                player_controllers.insert(
+                    entity,
+                    PlayerControllerComponent {
+                        config: config.clone(),
+                        state: PlayerControllerState {
+                            yaw_degrees: config.initial_yaw_degrees,
+                            pitch_degrees: config.initial_pitch_degrees,
+                        },
+                    },
+                );
+            }
             if let Some(config) = &definition.encounter {
                 if config.members.is_empty() {
                     return Err(GameEntityDefinitionError::EmptyEncounter { encounter: entity });
@@ -499,6 +693,7 @@ impl GameSession {
             enemies,
             encounters,
             navigators,
+            player_controllers,
         })
     }
 
@@ -557,6 +752,16 @@ impl GameSession {
             entity_view: self.entities.view(entity).ok()?,
         })
     }
+
+    pub fn player_controller(&self, entity: EntityId) -> Option<PlayerControllerView> {
+        let component = self.player_controllers.get(&entity)?;
+        Some(PlayerControllerView {
+            entity,
+            config: component.config.clone(),
+            state: component.state,
+            entity_view: self.entities.view(entity).ok()?,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -594,6 +799,14 @@ pub struct NavigationView {
     pub entity: EntityId,
     pub config: NavigationConfig,
     pub state: NavigationState,
+    pub entity_view: EntityView,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlayerControllerView {
+    pub entity: EntityId,
+    pub config: PlayerControllerConfig,
+    pub state: PlayerControllerState,
     pub entity_view: EntityView,
 }
 

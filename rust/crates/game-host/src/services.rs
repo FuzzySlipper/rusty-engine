@@ -11,7 +11,8 @@ use entity_state::{EntityCommand, EntityCommandBatch};
 
 use crate::model::{
     DoorState, EncounterState, EnemyState, GameEvent, GameSession, NavigationFact,
-    NavigationFailure, NavigationPhaseReceipt, NavigationState,
+    NavigationFailure, NavigationPhaseReceipt, NavigationState, PlayerControlFact,
+    PlayerControlReceipt, ResolvedPlayerAction,
 };
 use crate::runtime::RuntimeError;
 
@@ -172,6 +173,146 @@ impl CombatService {
             entity_facts: receipt.facts,
         }))
     }
+}
+
+pub(crate) struct PlayerControllerService;
+
+impl PlayerControllerService {
+    pub(crate) fn apply(
+        session: &mut GameSession,
+        scene: &VoxelCollisionScene,
+        player: EntityId,
+        action: ResolvedPlayerAction,
+    ) -> Result<PlayerControlReceipt, RuntimeError> {
+        if !player_action_is_valid(action) {
+            return Err(RuntimeError::InvalidPlayerAction { action });
+        }
+        let Some(component) = session.player_controllers.get(&player).cloned() else {
+            return Err(RuntimeError::UnknownPlayerController { player });
+        };
+        match action {
+            ResolvedPlayerAction::Look {
+                yaw_delta,
+                pitch_delta,
+            } => {
+                let before = component.state;
+                let controller = session
+                    .player_controllers
+                    .get_mut(&player)
+                    .expect("player controller validated above");
+                controller.state.yaw_degrees = normalize_yaw(
+                    before.yaw_degrees + yaw_delta * component.config.look_degrees_per_unit,
+                );
+                controller.state.pitch_degrees = (before.pitch_degrees
+                    + pitch_delta * component.config.look_degrees_per_unit)
+                    .clamp(-89.0, 89.0);
+                Ok(PlayerControlReceipt {
+                    action,
+                    facts: vec![PlayerControlFact::LookChanged {
+                        entity: player,
+                        before_yaw_degrees: before.yaw_degrees,
+                        after_yaw_degrees: controller.state.yaw_degrees,
+                        before_pitch_degrees: before.pitch_degrees,
+                        after_pitch_degrees: controller.state.pitch_degrees,
+                    }],
+                    motion: None,
+                })
+            }
+            ResolvedPlayerAction::Move { forward, right } => {
+                let input_length = (forward * forward + right * right).sqrt();
+                if input_length == 0.0 {
+                    return Ok(PlayerControlReceipt {
+                        action,
+                        facts: Vec::new(),
+                        motion: None,
+                    });
+                }
+                let scale = 1.0 / input_length.max(1.0);
+                let yaw = component.state.yaw_degrees.to_radians();
+                let forward_basis = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
+                let right_basis = Vec3::new(yaw.cos(), 0.0, -yaw.sin());
+                let velocity = (forward_basis * (forward * scale) + right_basis * (right * scale))
+                    * component.config.move_speed_units_per_second;
+                session
+                    .entities
+                    .apply_batch(EntityCommandBatch::new([
+                        EntityCommand::SetKinematicVelocity {
+                            entity: player,
+                            velocity,
+                        },
+                    ]))
+                    .map_err(RuntimeError::EntityBatch)?;
+                let selected = BTreeSet::from([player]);
+                let motion_result = KinematicMotionSystem::run_selected(
+                    &mut session.entities,
+                    scene,
+                    component.config.move_step_seconds,
+                    &selected,
+                );
+                session
+                    .entities
+                    .apply_batch(EntityCommandBatch::new([
+                        EntityCommand::SetKinematicVelocity {
+                            entity: player,
+                            velocity: Vec3::ZERO,
+                        },
+                    ]))
+                    .map_err(RuntimeError::EntityBatch)?;
+                let motion = motion_result.map_err(RuntimeError::Motion)?;
+                let facts = motion
+                    .facts
+                    .iter()
+                    .filter_map(|fact| match fact {
+                        MotionFact::Moved {
+                            entity,
+                            before,
+                            after,
+                        } if *entity == player => Some(PlayerControlFact::Moved {
+                            entity: *entity,
+                            before: *before,
+                            after: *after,
+                        }),
+                        MotionFact::Blocked { entity, .. } if *entity == player => {
+                            Some(PlayerControlFact::Blocked {
+                                entity: *entity,
+                                attempted_velocity: velocity,
+                            })
+                        }
+                        MotionFact::Moved { .. } | MotionFact::Blocked { .. } => None,
+                    })
+                    .collect();
+                Ok(PlayerControlReceipt {
+                    action,
+                    facts,
+                    motion: Some(motion),
+                })
+            }
+        }
+    }
+}
+
+fn player_action_is_valid(action: ResolvedPlayerAction) -> bool {
+    match action {
+        ResolvedPlayerAction::Move { forward, right } => {
+            forward.is_finite()
+                && right.is_finite()
+                && (-1.0..=1.0).contains(&forward)
+                && (-1.0..=1.0).contains(&right)
+        }
+        ResolvedPlayerAction::Look {
+            yaw_delta,
+            pitch_delta,
+        } => {
+            yaw_delta.is_finite()
+                && pitch_delta.is_finite()
+                && (-1.0..=1.0).contains(&yaw_delta)
+                && (-1.0..=1.0).contains(&pitch_delta)
+        }
+    }
+}
+
+fn normalize_yaw(yaw_degrees: f32) -> f32 {
+    (yaw_degrees + 180.0).rem_euclid(360.0) - 180.0
 }
 
 pub(crate) struct EnemyNavigationSystem;

@@ -11,12 +11,13 @@ use engine_spatial::{
 use crate::content::{decode_project_content, AdmittedProject, ProjectContentError};
 use crate::model::{
     readout, security_door_definitions, GameEvent, GameSession, JournalEntry,
-    NavigationPhaseReceipt, RuntimeReadout, RuntimeReceipt, SecurityDoorIds,
+    NavigationPhaseReceipt, PlayerControlReceipt, ResolvedPlayerAction, RuntimeReadout,
+    RuntimeReceipt, SecurityDoorIds,
 };
 use crate::scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
 use crate::services::{
     CombatService, DoorService, DoorTransition, EncounterService, EnemyNavigationSystem,
-    InteractionService,
+    InteractionService, PlayerControllerService,
 };
 
 pub const MAX_EVENT_WAVE: usize = 256;
@@ -37,6 +38,12 @@ pub enum RuntimeError {
     },
     UnknownEnemy {
         enemy: EntityId,
+    },
+    UnknownPlayerController {
+        player: EntityId,
+    },
+    InvalidPlayerAction {
+        action: ResolvedPlayerAction,
     },
     EntityBatch(entity_state::BatchRejection),
     EventWaveLimit {
@@ -149,6 +156,21 @@ impl GameRuntime {
             .as_ref()
             .ok_or(RuntimeError::MissingCollisionScene)?;
         EnemyNavigationSystem::run(&mut self.session, scene, delta_seconds)
+    }
+
+    /// Apply one semantic player action. Browser device details have already
+    /// been resolved at the host border; Rust owns controller interpretation,
+    /// collision, accepted pose, and typed outcome facts.
+    pub fn apply_player_action(
+        &mut self,
+        player: EntityId,
+        action: ResolvedPlayerAction,
+    ) -> Result<PlayerControlReceipt, RuntimeError> {
+        let scene = self
+            .collision_scene
+            .as_ref()
+            .ok_or(RuntimeError::MissingCollisionScene)?;
+        PlayerControllerService::apply(&mut self.session, scene, player, action)
     }
 
     pub fn interact(

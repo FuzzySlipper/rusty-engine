@@ -16,6 +16,8 @@ Pinned source commit: `a431974330589761c9e35fc4f8a55996a1b5ee48`
 | `svc-spatial` | `engine-rs/crates/services/svc-spatial` | Sibling path dependency, unchanged | Canonical voxel partition and deterministic resident-chunk lifecycle. |
 | `svc-collision` | `engine-rs/crates/services/svc-collision` | Sibling path dependency, unchanged | Substantial Parry-backed derived collision projection with point, ray, AABB, and continuous axis-sweep queries. Its dependency closure contains no Gameplay Fabric or runtime facade. |
 | `svc-pathfinding` | `engine-rs/crates/services/svc-pathfinding` | Sibling path dependency, unchanged | Deterministic read-only navigation projection and bounded path queries over `svc-spatial::VoxelWorld`. Its production closure is only `core-math`, `core-space`, and `svc-spatial`; Rusty Engine owns navigation intent, movement, facts, and persistence. |
+| Player input/controller evidence | `engine-rs/crates/protocol/protocol-input` and `engine-rs/crates/rules/rule-input` | Inspected only; no dependency or copied implementation | The useful boundary is authored physical controls resolving to semantic actions. Catalog hashing, context stacks, replay records, session configuration, and lifecycle routing are intentionally absent. |
+| Camera/view evidence | `engine-rs/crates/protocol/protocol-view` | Inspected only; no dependency or copied implementation | Pose vocabulary and bounded look input informed names. Camera handles, bridge operations, controller modes, transition state, and persisted camera authority are intentionally absent; the browser derives one follow camera from accepted player pose. |
 | `@asha/contracts` | `ts/packages/contracts` | Sibling `link:` dependency, unchanged | Existing typed render-diff vocabulary and branded render/entity identities at the real presentation border. |
 | `@asha/renderer-three` | `ts/packages/renderer-three` | Sibling `link:` dependency, unchanged | Existing retained Three/WebGL browser surface, resource lifecycle, projection metadata, and render-diff application. |
 | `@asha/render-projection` | `ts/packages/render-projection` | Renderer transitive sibling dependency, unchanged | Renderer-neutral retained projection helpers used by the donor browser surface. |
@@ -25,6 +27,12 @@ system over the unchanged Rust donors. The browser shell supplies typed diffs di
 alias replaces `renderer-three`'s unused encoded-frame convenience import with a local fail-closed
 shim. The verification gate rejects old `RuntimeSession`, native bridge, Gameplay Fabric, or
 `GameplayRuntimeHost` markers in the built browser bundle.
+
+M2A deliberately does not reference Asha's input or view crates. TypeScript resolves DOM device
+events against admitted binding data and submits only `ResolvedPlayerAction`; Rust owns controller
+interpretation and collision-resolved pose. The renderer's existing `setCameraPose` method receives
+a presentation-only offset derived from that pose. No input catalog, camera state, or per-frame
+authority bridge entered the successor.
 
 Sibling references are intentional while Asha development is stopped for this decision. If this
 lab becomes a durable independent successor, the references should be pinned as Git dependencies,

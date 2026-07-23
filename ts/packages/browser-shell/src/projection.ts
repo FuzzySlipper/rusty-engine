@@ -24,6 +24,28 @@ export interface RuntimeEnemyState {
   readonly state: "alive" | "defeated";
 }
 
+export interface RuntimePlayerBindings {
+  readonly moveForward: string;
+  readonly moveBackward: string;
+  readonly moveLeft: string;
+  readonly moveRight: string;
+  readonly mouseLook: string;
+}
+
+export interface RuntimePlayerState {
+  readonly id: number;
+  readonly position: readonly [number, number, number];
+  readonly yawDegrees: number;
+  readonly pitchDegrees: number;
+  readonly bindings: RuntimePlayerBindings;
+}
+
+export interface DerivedCameraPose {
+  readonly position: readonly [number, number, number];
+  readonly yawDegrees: number;
+  readonly pitchDegrees: number;
+}
+
 export interface RuntimeBrowserState {
   readonly tick: number;
   readonly entityRevision: number;
@@ -32,8 +54,30 @@ export interface RuntimeBrowserState {
   readonly encounterState: "active" | "cleared";
   readonly motionState: "moving" | "blocked";
   readonly navigationState: "following" | "arrived" | "blocked" | "unreachable";
+  readonly playerMotionState: "idle" | "moved" | "blocked";
+  readonly player: RuntimePlayerState;
   readonly enemies: readonly RuntimeEnemyState[];
   readonly lastEvents: readonly string[];
+}
+
+/** Presentation-only follow camera rebuilt from the accepted Rust player pose. */
+export function derivePlayerCameraPose(
+  player: RuntimePlayerState,
+  height = 2.7,
+  followDistance = 6,
+): DerivedCameraPose {
+  const yawRadians = (player.yawDegrees * Math.PI) / 180;
+  const forwardX = -Math.sin(yawRadians);
+  const forwardZ = -Math.cos(yawRadians);
+  return {
+    position: [
+      player.position[0] - forwardX * followDistance,
+      player.position[1] + height,
+      player.position[2] - forwardZ * followDistance,
+    ],
+    yawDegrees: player.yawDegrees,
+    pitchDegrees: player.pitchDegrees,
+  };
 }
 
 const FLOOR_HANDLE = renderHandle(900_000);
@@ -113,13 +157,16 @@ function projectedNode(node: RuntimeProjectionNode): RenderNode {
   const door = node.asset.includes("door");
   const probe = node.asset.includes("spatial-probe");
   const wall = node.asset.includes("voxel-wall");
+  const player = node.asset.includes("player-marker");
   const scale: readonly [number, number, number] = door
     ? [2.4, 3.4, 0.55]
     : probe
       ? [0.5, 0.5, 0.5]
       : wall
         ? [1, 1, 1]
-        : [1.1, 1.8, 1.1];
+        : player
+          ? [0.7, 1.4, 0.7]
+          : [1.1, 1.8, 1.1];
   const authored = node.translation ?? [0, 0, 0];
   const translation: readonly [number, number, number] = [
     authored[0],
@@ -132,11 +179,13 @@ function projectedNode(node: RuntimeProjectionNode): RenderNode {
       ? { color: [0.26, 0.85, 0.68, 1], wireframe: false }
       : wall
         ? { color: [0.22, 0.38, 0.43, 1], wireframe: false }
-        : { color: [0.82, 0.18, 0.14, 1], wireframe: false };
+        : player
+          ? { color: [0.24, 0.74, 0.91, 1], wireframe: false }
+          : { color: [0.82, 0.18, 0.14, 1], wireframe: false };
   return primitiveNode(
     node.name,
     node.id,
-    probe ? "sphere" : "cube",
+    probe || player ? "sphere" : "cube",
     translation,
     scale,
     color,
