@@ -5,6 +5,21 @@ The lab references or selectively adapts Asha code only when that code sits belo
 Inspected donor repository: `git@github.com:FuzzySlipper/asha-engine.git`
 Pinned source commit: `a431974330589761c9e35fc4f8a55996a1b5ee48`
 
+## Crate portability inventory
+
+Before selecting Asha code for a future migration milestone, consult the sibling donor's
+[Asha Engine crate portability report](../../asha-engine/docs/asha-crate-portability-report.md)
+at `/home/dev/asha-engine/docs/asha-crate-portability-report.md`. It audits all 97 Rust crates at
+the pinned source commit, including dependency hotspots, portability classifications, extraction
+order, structural-spine exclusions, and successor guardrails.
+
+The full report remains beside the Asha sources so its crate links and dependency evidence stay in
+their original context. It is a planning index, not blanket permission to port a classified crate.
+Every milestone must still inspect the candidate's actual dependency closure and semantics, choose
+reference/adapt/evidence/exclude treatment for its concrete consumer, and record the accepted use in
+this ledger. If the donor revision changes, revalidate the relevant report rows rather than assuming
+the old classification still holds.
+
 | Local dependency/use | Asha source path | Treatment | Reason |
 |---|---|---|---|
 | `core-ids` | `engine-rs/crates/foundation/core-ids` | Sibling path dependency, unchanged | Mature typed identity newtypes; no high-level dependencies. |

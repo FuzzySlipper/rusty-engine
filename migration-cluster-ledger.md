@@ -20,6 +20,13 @@ No Den project decision is made by this document. If a Rusty Engine project is c
 initial tasks should be generated from the then-current rows in this ledger rather than copied from
 the Asha backlog.
 
+Future milestone planning must also consult the full Asha crate inventory linked from
+`docs/donor-provenance.md`. Use that report to shortlist donors and identify dangerous dependency
+closures, then put only the selected crate or algorithm, intended treatment, rejected structural
+dependencies, and concrete successor consumer into the milestone task. The report's `Feature later`
+classification does not itself create backlog work, and `Reference unchanged` does not waive a
+current dependency and semantic audit.
+
 ## Inheritance policy: absence by default
 
 Asha is a donor and a body of evidence. It is not the default owner of Rusty Engine's shape.

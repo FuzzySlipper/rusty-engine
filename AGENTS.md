@@ -11,6 +11,7 @@ Rust source organization follows the lightweight house rules in [docs/rust-style
 - Rust `entity-state` owns reusable entity invariants and atomic capability mutation. Do not turn its command batch into a universal route for ordinary service-owned state.
 - Do not add a universal gameplay AST, behavior graph, Gameplay Fabric compatibility, Studio layer, replay certification, or broad governance framework during the spike.
 - Keep scheduling explicit and durable. Never persist callbacks or JavaScript closures.
+- Before defining a migration milestone or selecting an Asha crate, consult the portability report linked from `docs/donor-provenance.md`; treat it as donor-triage evidence, then re-audit the concrete dependency closure and consumer.
 - Prefer sibling references to stable Asha donor crates during the experiment. Record every donor in `docs/donor-provenance.md`.
 - Keep crates/packages coarse and independently meaningful.
 - Success is measured by behavior locality, explainability, atomicity, persistence, edit-to-run time, change amplification, and real product behavior.
