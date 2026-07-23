@@ -165,14 +165,34 @@ fn save_reopen_preserves_partial_encounter_progress() {
 #[test]
 fn project_content_rejects_unknown_contract_fields() {
     let invalid = ENCOUNTER_PROJECT.replacen(
-        "\"schemaVersion\": 1",
-        "\"schemaVersion\": 1, \"runtimeBehavior\": \"not-content\"",
+        "\"schemaVersion\": 2",
+        "\"schemaVersion\": 2, \"runtimeBehavior\": \"not-content\"",
         1,
     );
     assert!(matches!(
         GameRuntime::from_project_content(&invalid),
         Err(game_host::RuntimeError::Content(
             ProjectContentError::Decode(_)
+        ))
+    ));
+}
+
+#[test]
+fn project_content_rejects_kinematics_without_a_collision_scene() {
+    let invalid = r#"{
+      "schemaVersion": 2,
+      "entities": [{
+        "id": 1,
+        "name": "unbounded-runner",
+        "translation": [0, 0, 0],
+        "kinematic": { "halfExtents": [0.5, 0.5, 0.5], "velocity": [1, 0, 0] }
+      }]
+    }"#;
+
+    assert!(matches!(
+        GameRuntime::from_project_content(invalid),
+        Err(game_host::RuntimeError::Content(
+            ProjectContentError::KinematicMissingCollisionScene { entity: ACTOR }
         ))
     ));
 }

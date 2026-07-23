@@ -4,10 +4,13 @@
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "scripts": {
+    "build:shell": "pnpm --filter @rusty-engine/browser-shell build",
     "check:content": "pnpm --filter @rusty-engine/project-content check",
     "generate:content": "pnpm --filter @rusty-engine/project-content generate",
+    "test:shell": "pnpm --filter @rusty-engine/browser-shell test",
+    "test:browser": "node scripts/browser-smoke.mjs",
     "test:ts": "pnpm --filter @rusty-engine/project-content test",
-    "typecheck": "tsc --build ts/tsconfig.json",
+    "typecheck": "tsc --build ts/tsconfig.json && pnpm --filter @rusty-engine/browser-shell typecheck",
     "verify": "bash scripts/verify.sh"
   },
   "devDependencies": {

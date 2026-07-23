@@ -13,7 +13,10 @@ mod scheduler;
 mod services;
 mod snapshot;
 
-pub use content::{decode_project_content, ProjectContentError, PROJECT_CONTENT_SCHEMA_VERSION};
+pub use content::{
+    decode_project_content, AdmittedProject, ProjectContentError, PROJECT_CONTENT_SCHEMA_VERSION,
+};
+pub use engine_spatial::{MotionAxis, MotionFact, MotionPhaseReceipt};
 pub use model::{
     security_door_definitions, DoorComponent, DoorConfig, DoorState, DoorView, EncounterComponent,
     EncounterConfig, EncounterState, EncounterView, EnemyComponent, EnemyState, EnemyView,
@@ -24,5 +27,6 @@ pub use runtime::{GameRuntime, RuntimeError, MAX_EVENT_WAVE, MAX_TICK_ADVANCE};
 pub use scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
 pub use snapshot::{
     decode_game_snapshot, encode_game_snapshot, EncounterSnapshot, EnemySnapshot, GameSnapshot,
-    GameSnapshotError, SnapshotEncounterState, SnapshotEnemyState, GAME_SNAPSHOT_SCHEMA_VERSION,
+    GameSnapshotError, SnapshotEncounterState, SnapshotEnemyState, VoxelCollisionSnapshot,
+    GAME_SNAPSHOT_SCHEMA_VERSION,
 };

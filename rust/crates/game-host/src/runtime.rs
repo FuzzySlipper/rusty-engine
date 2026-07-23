@@ -3,7 +3,11 @@ use std::collections::VecDeque;
 use core_ids::EntityId;
 use core_time::{Tick, TickDelta};
 
-use crate::content::{decode_project_content, ProjectContentError};
+use engine_spatial::{
+    KinematicMotionSystem, MotionPhaseError, MotionPhaseReceipt, VoxelCollisionScene,
+};
+
+use crate::content::{decode_project_content, AdmittedProject, ProjectContentError};
 use crate::model::{
     readout, security_door_definitions, GameEvent, GameSession, JournalEntry, RuntimeReadout,
     RuntimeReceipt, SecurityDoorIds,
@@ -27,6 +31,8 @@ pub enum RuntimeError {
     WorldBatch(world_kernel::BatchRejection),
     EventWaveLimit { limit: usize },
     TickAdvanceLimit { requested: u64, limit: u64 },
+    MissingCollisionScene,
+    Motion(MotionPhaseError),
 }
 
 impl std::fmt::Display for RuntimeError {
@@ -44,6 +50,7 @@ pub struct GameRuntime {
     pub(crate) scheduler: Scheduler,
     pub(crate) events: VecDeque<GameEvent>,
     pub(crate) journal: Vec<JournalEntry>,
+    pub(crate) collision_scene: Option<VoxelCollisionScene>,
 }
 
 impl GameRuntime {
@@ -54,6 +61,7 @@ impl GameRuntime {
             scheduler: Scheduler::default(),
             events: VecDeque::new(),
             journal: Vec::new(),
+            collision_scene: None,
         }
     }
 
@@ -67,8 +75,13 @@ impl GameRuntime {
     }
 
     pub fn from_project_content(input: &str) -> Result<Self, RuntimeError> {
-        let session = decode_project_content(input).map_err(RuntimeError::Content)?;
-        Ok(Self::new(session))
+        let AdmittedProject {
+            session,
+            collision_scene,
+        } = decode_project_content(input).map_err(RuntimeError::Content)?;
+        let mut runtime = Self::new(session);
+        runtime.collision_scene = collision_scene;
+        Ok(runtime)
     }
 
     pub fn tick(&self) -> Tick {
@@ -81,6 +94,25 @@ impl GameRuntime {
 
     pub fn readout(&self) -> RuntimeReadout {
         readout(self.tick, &self.session, &self.scheduler, &self.journal)
+    }
+
+    pub fn collision_scene(&self) -> Option<&VoxelCollisionScene> {
+        self.collision_scene.as_ref()
+    }
+
+    /// Run the one centrally scheduled kinematic phase over every configured
+    /// body. Motion is not routed through the gameplay event journal: the spatial
+    /// system returns its own typed facts and commits one atomic world batch.
+    pub fn run_motion_phase(
+        &mut self,
+        delta_seconds: f32,
+    ) -> Result<MotionPhaseReceipt, RuntimeError> {
+        let scene = self
+            .collision_scene
+            .as_ref()
+            .ok_or(RuntimeError::MissingCollisionScene)?;
+        KinematicMotionSystem::run(&mut self.session.world, scene, delta_seconds)
+            .map_err(RuntimeError::Motion)
     }
 
     pub fn interact(

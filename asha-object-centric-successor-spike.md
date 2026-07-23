@@ -1,6 +1,6 @@
 # Asha Object-Centric Successor Spine
 
-Status: exploratory architecture; Rust-owned gameplay direction selected and headless encounter slice implemented
+Status: walking falsification spike complete; migration boundary decision ready
 Working location: `/home/dev/rusty-engine`
 Asha donor snapshot inspected: `a431974330589761c9e35fc4f8a55996a1b5ee48`
 Decision scope: a possible successor for Asha's runtime/application spine, not a decision to replace the whole engine
@@ -451,7 +451,7 @@ No candidate is reused merely because it already exists. Each donor must pass a 
 
 | Asha area at the inspected snapshot | Successor posture | Reason/caution |
 |---|---|---|
-| `core-ids`, `core-math`, `core-time`, `core-error`, `core-collections`, `core-space`, `core-assets` | Strong transplant candidates | Low-level value types with little reason to reinvent them. Copy with tests; do not retain a path dependency back to Asha. |
+| `core-ids`, `core-math`, `core-time`, `core-error`, `core-collections`, `core-space`, `core-assets` | Strong reference/transplant candidates | Low-level value types with little reason to reinvent them. Sibling references are acceptable while the spike and Asha are intentionally paused; choose a durable shared/pinned home before either repository resumes independent change. |
 | `core-entity` | Selectively transplant and reshape | It already has entity identity, lifecycle, typed capability tables, relations, and useful values. Its hard-coded tables, movement ownership, save/replay hashing, and tombstone policy must be chosen afresh rather than inherited automatically. |
 | `core-scene`, project bootstrap, `EntityDefinition` authoring | Adapt behind a new loader | Preserve stored/runtime separation and reference validation. Materialize directly into the new `SessionState`, not through the old runtime host. |
 | `svc-spatial`, `svc-collision`, `svc-physics`, `svc-pathfinding`, mesh/voxel/asset services | Feature donors behind successor interfaces | These represent expensive feature work. Reuse only if they compile below the successor runtime and do not pull in owner/fabric/replay assumptions. |
@@ -560,14 +560,16 @@ Run three distinct change-amplification tests:
    `EnemyDefeated` facts drive `EncounterService`, which emits `EncounterCleared` and opens the
    authored related exit through `DoorService`. Changing the encounter from two enemies to one
    changes only TypeScript-authored definitions and expectations.
-3. **New engine capability (pending):** add one genuinely reusable world meaning that the current
-   runtime does not already have. It should require one narrow Rust capability owner/command path,
-   not an authored-language or runtime-host campaign.
+3. **New engine capability (complete):** `KinematicCapability` adds bounds and velocity through the
+   world kernel's existing definition, command, fact, view, and snapshot boundary.
+   `KinematicMotionSystem` is its one behavioral owner. Game-host changes are limited to content
+   admission, one explicit phase method, and durable collision-scene restore; no authored language,
+   component callback, or second runtime host was introduced.
 
 This separates whether data composition is cheap, whether ordinary Rust game-specific programming
 stays direct, and whether extending reusable engine mechanics is localized.
 
-### Slice 4: real-time and multi-entity pressure
+### Slice 4: real-time and multi-entity pressure (complete)
 
 Two door-shaped examples are insufficient. Add one bounded behavior such as a moving/attacking enemy, projectile interaction, or small encounter controller that exercises several of:
 
@@ -583,7 +585,13 @@ Measure phase cost, allocations, state copying, scaling with entity count, proje
 edit-to-run time. Per-object tick callbacks are not the implementation model; real-time work belongs
 to one named bounded Rust system phase.
 
-### Product proof
+The named `authored-voxel-wall-kinematic-lanes` workload runs 32/64/128/256 independently authored
+lanes for 180 phases at a simulated 60 Hz. One `KinematicMotionSystem::run` call scans bodies in
+stable entity order, uses the donor's continuous axis sweep, and commits one world batch per phase.
+The release matrix, projection passes, fact counts, snapshot sizes, and measurement limits are
+recorded in `docs/experiment-results.md`.
+
+### Product proof (complete)
 
 The spike is incomplete until a player can exercise the runtime through the retained
 browser/Three/DOM shell. Proof should cover:
@@ -599,6 +607,13 @@ browser/Three/DOM shell. Proof should cover:
 - the content-authored encounter variation;
 - the localized new-capability variation;
 - the real-time characterization.
+
+The retained loading-bay shell exercises both vertical paths. DOM controls resolve to narrow Rust
+service operations; enemy facts clear and visibly open the exit; a separate bounded spatial action
+moves a projected probe until the authored voxel blocks it. Rust snapshots rebuild the collision
+projection and continue the workload identically. The gate builds the production bundle, launches
+the Rust HTTP host, drives these actions in Chromium with real WebGL/Three code, and requires an
+explicit pass marker plus the typed event/fact names.
 
 ## Success criteria
 
@@ -726,7 +741,7 @@ The spike now uses these defaults:
 - central named frame phases;
 - explicit snapshot persistence;
 - TypeScript as admission-time code-as-content and the eventual Three/DOM presentation shell, not a second gameplay authority;
-- Asha leaf code copied/transplanted, not invoked through an old-runtime compatibility layer.
+- Asha leaf code referenced/transplanted, not invoked through an old-runtime compatibility layer.
 
 Further walking-slice evidence should decide:
 
@@ -741,15 +756,10 @@ Further walking-slice evidence should decide:
 
 ## Recommended next action
 
-The security door and encounter-gated exit now run through direct Rust services. TypeScript authors
-strict encounter content, and the one-enemy variation changes no Rust runtime surface. The archived
-runtime-host comparison and active results are recorded in `docs/experiment-results.md`.
-
-Next, transplant one substantial Asha spatial/collision feature below this runtime and add one
-genuinely reusable engine capability through a narrow Rust owner/command path. These should happen
-before adding generic component machinery or revisiting the language split. Then connect the
-retained browser shell and run one named real-time workload. If those proofs pass, the next
-architectural decision is not “rewrite Asha.” It is:
+The planned falsification slices now pass: direct gameplay services, content-only variation,
+cross-domain typed consequences, a localized new capability, substantial spatial/collision reuse,
+real-time multi-entity pressure, persistence, and the retained browser product path. This does not
+yet justify replacing Asha wholesale. It does justify moving the decision up one level:
 
 > Which complete vertical feature family can move next while the old and new runtimes remain separately launchable and never share authority?
 

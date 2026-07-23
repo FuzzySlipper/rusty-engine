@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use core_ids::EntityId;
 use core_math::Vec3;
 use core_time::{Tick, TickDelta};
+use engine_spatial::VoxelCollisionScene;
 use serde::{Deserialize, Serialize};
 use world_kernel::{WorldKernel, WorldSnapshot};
 
@@ -13,7 +14,7 @@ use crate::model::{
 use crate::runtime::GameRuntime;
 use crate::scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
 
-pub const GAME_SNAPSHOT_SCHEMA_VERSION: u32 = 2;
+pub const GAME_SNAPSHOT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -21,12 +22,21 @@ pub struct GameSnapshot {
     pub schema_version: u32,
     pub tick: u64,
     pub world: WorldSnapshot,
+    pub voxel_collision: Option<VoxelCollisionSnapshot>,
     pub doors: Vec<DoorSnapshot>,
     pub switches: Vec<SwitchSnapshot>,
     pub controls: Vec<ControlsSnapshot>,
     pub enemies: Vec<EnemySnapshot>,
     pub encounters: Vec<EncounterSnapshot>,
     pub scheduled: Vec<ScheduledSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct VoxelCollisionSnapshot {
+    pub voxel_size: f64,
+    pub chunk_size: u32,
+    pub solid_voxels: Vec<[i64; 3]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -109,6 +119,7 @@ pub enum GameSnapshotError {
     Decode(serde_json::Error),
     UnsupportedSchema { actual: u32 },
     World(world_kernel::WorldSnapshotError),
+    CollisionScene(engine_spatial::CollisionSceneError),
     DuplicateDoor { entity: u64 },
     DuplicateSwitch { entity: u64 },
     DuplicateEnemy { entity: u64 },
@@ -141,6 +152,14 @@ impl GameRuntime {
             schema_version: GAME_SNAPSHOT_SCHEMA_VERSION,
             tick: self.tick.raw(),
             world: self.session.world.snapshot(),
+            voxel_collision: self
+                .collision_scene
+                .as_ref()
+                .map(|scene| VoxelCollisionSnapshot {
+                    voxel_size: scene.voxel_size(),
+                    chunk_size: scene.chunk_size(),
+                    solid_voxels: scene.solid_voxels().to_vec(),
+                }),
             doors: self
                 .session
                 .doors
@@ -226,6 +245,17 @@ impl GameRuntime {
                 actual: snapshot.schema_version,
             });
         }
+        let collision_scene = snapshot
+            .voxel_collision
+            .map(|scene| {
+                VoxelCollisionScene::from_solid_voxels(
+                    scene.voxel_size,
+                    scene.chunk_size,
+                    scene.solid_voxels,
+                )
+                .map_err(GameSnapshotError::CollisionScene)
+            })
+            .transpose()?;
         let world = WorldKernel::from_snapshot(snapshot.world).map_err(GameSnapshotError::World)?;
         let mut doors = BTreeMap::new();
         let mut door_ids = BTreeSet::new();
@@ -428,6 +458,7 @@ impl GameRuntime {
             scheduler,
             events: VecDeque::new(),
             journal: Vec::new(),
+            collision_scene,
         })
     }
 }

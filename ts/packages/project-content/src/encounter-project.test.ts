@@ -20,3 +20,14 @@ test("enemy count is a content-only variation", () => {
     [ENCOUNTER_IDS.firstEnemy],
   );
 });
+
+test("loading bay composes a visible kinematic probe over authored voxel collision", () => {
+  const project = encounterGateProject(["only-enemy"]);
+  const probe = project.entities.find((entity) => entity.id === ENCOUNTER_IDS.motionProbe);
+
+  assert.deepEqual(probe?.kinematic, {
+    halfExtents: [0.25, 0.25, 0.25],
+    velocity: [5, 0, 0],
+  });
+  assert.deepEqual(project.voxelCollision?.solidVoxels, [[3, 0, 6]]);
+});

@@ -6,6 +6,7 @@ use core_math::Vec3;
 use crate::command::{BatchReceipt, BatchRejection, WorldCommandBatch};
 
 pub const MAX_ABS_TRANSLATION: f32 = 1_000_000.0;
+pub const MAX_ABS_VELOCITY: f32 = 10_000.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntityLifecycle {
@@ -37,6 +38,20 @@ pub struct RenderableCapability {
     pub asset: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KinematicCapability {
+    pub half_extents: Vec3,
+    pub velocity: Vec3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KinematicBodyView {
+    pub entity: EntityId,
+    pub translation: Vec3,
+    pub half_extents: Vec3,
+    pub velocity: Vec3,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct EntityDefinition {
     pub id: EntityId,
@@ -44,6 +59,7 @@ pub struct EntityDefinition {
     pub transform: Option<TransformCapability>,
     pub collision: Option<CollisionCapability>,
     pub renderable: Option<RenderableCapability>,
+    pub kinematic: Option<KinematicCapability>,
 }
 
 impl EntityDefinition {
@@ -54,6 +70,7 @@ impl EntityDefinition {
             transform: None,
             collision: None,
             renderable: None,
+            kinematic: None,
         }
     }
 
@@ -77,6 +94,14 @@ impl EntityDefinition {
         });
         self
     }
+
+    pub fn with_kinematic(mut self, half_extents: Vec3, velocity: Vec3) -> Self {
+        self.kinematic = Some(KinematicCapability {
+            half_extents,
+            velocity,
+        });
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +110,9 @@ pub enum EntityDefinitionError {
     EmptyName { entity: EntityId },
     InvalidTranslation { entity: EntityId },
     EmptyAsset { entity: EntityId },
+    KinematicMissingTransform { entity: EntityId },
+    InvalidKinematicHalfExtents { entity: EntityId },
+    InvalidKinematicVelocity { entity: EntityId },
 }
 
 impl std::fmt::Display for EntityDefinitionError {
@@ -103,6 +131,7 @@ pub struct EntityView {
     pub transform: Option<TransformCapability>,
     pub collision: Option<CollisionCapability>,
     pub renderable: Option<RenderableCapability>,
+    pub kinematic: Option<KinematicCapability>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,6 +163,7 @@ pub struct WorldKernel {
     pub(crate) transforms: BTreeMap<EntityId, TransformCapability>,
     pub(crate) collisions: BTreeMap<EntityId, CollisionCapability>,
     pub(crate) renderables: BTreeMap<EntityId, RenderableCapability>,
+    pub(crate) kinematics: BTreeMap<EntityId, KinematicCapability>,
 }
 
 impl WorldKernel {
@@ -172,6 +202,9 @@ impl WorldKernel {
             if let Some(renderable) = definition.renderable {
                 world.renderables.insert(id, renderable);
             }
+            if let Some(kinematic) = definition.kinematic {
+                world.kinematics.insert(id, kinematic);
+            }
         }
         Ok(world)
     }
@@ -193,6 +226,22 @@ impl WorldKernel {
             transform: self.transforms.get(&entity).copied(),
             collision: self.collisions.get(&entity).copied(),
             renderable: self.renderables.get(&entity).cloned(),
+            kinematic: self.kinematics.get(&entity).copied(),
+        })
+    }
+
+    pub fn kinematic_bodies(&self) -> impl Iterator<Item = KinematicBodyView> + '_ {
+        self.kinematics.iter().filter_map(|(entity, kinematic)| {
+            if self.entities.get(entity)?.lifecycle != EntityLifecycle::Active {
+                return None;
+            }
+            let translation = self.transforms.get(entity)?.translation;
+            Some(KinematicBodyView {
+                entity: *entity,
+                translation,
+                half_extents: kinematic.half_extents,
+                velocity: kinematic.velocity,
+            })
         })
     }
 
@@ -252,5 +301,35 @@ fn validate_definition(definition: &EntityDefinition) -> Result<(), EntityDefini
             entity: definition.id,
         });
     }
+    if let Some(kinematic) = definition.kinematic {
+        if definition.transform.is_none() {
+            return Err(EntityDefinitionError::KinematicMissingTransform {
+                entity: definition.id,
+            });
+        }
+        if !half_extents_are_valid(kinematic.half_extents) {
+            return Err(EntityDefinitionError::InvalidKinematicHalfExtents {
+                entity: definition.id,
+            });
+        }
+        if !velocity_is_valid(kinematic.velocity) {
+            return Err(EntityDefinitionError::InvalidKinematicVelocity {
+                entity: definition.id,
+            });
+        }
+    }
     Ok(())
+}
+
+pub(crate) fn velocity_is_valid(value: Vec3) -> bool {
+    value.x.is_finite()
+        && value.y.is_finite()
+        && value.z.is_finite()
+        && value.x.abs() <= MAX_ABS_VELOCITY
+        && value.y.abs() <= MAX_ABS_VELOCITY
+        && value.z.abs() <= MAX_ABS_VELOCITY
+}
+
+fn half_extents_are_valid(value: Vec3) -> bool {
+    translation_is_valid(value) && value.x > 0.0 && value.y > 0.0 && value.z > 0.0
 }

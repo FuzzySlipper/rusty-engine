@@ -1,7 +1,7 @@
 # Experiment results
 
-Status: Rust-owned headless gameplay direction selected on 2026-07-23; product and Asha feature
-transplant proofs remain open.
+Status: planned walking falsification slices completed on 2026-07-23; ready to choose the next
+vertical migration family.
 
 ## Current decision
 
@@ -17,7 +17,7 @@ TypeScript content composition
         -> concrete entity/component state
         -> direct Rust services and typed committed events
         -> derived projection
-        -> eventual TypeScript renderer/UI
+        -> retained Asha Three renderer plus successor DOM shell
 ```
 
 Rust owns live session state, substantial gameplay logic, service composition, scheduling, and
@@ -97,6 +97,92 @@ first committed defeat fact.
 Partial encounter progress survives save/reopen. Snapshots store concrete enemy and encounter
 state, relationships, doors, and schedules; they do not store event history or replay frames.
 
+### Asha spatial/collision transplant and new capability
+
+`engine-spatial` references Asha's `core-space`, `core-voxel`, `svc-volume`, `svc-spatial`, and
+`svc-collision` crates unchanged at the pinned donor commit. The dependency closure ends in
+foundation/state/Parry code; it does not import Gameplay Fabric, `GameplayRuntimeHost`, replay
+certification, or the runtime facade.
+
+The successor adapter builds canonical `VoxelWorld` chunks and keeps Asha's
+`CollisionProjection` explicitly derived. Its public scene exposes point, ray, AABB, and continuous
+axis-swept AABB queries without leaking Parry mutation.
+
+The genuinely new meaning is local and conventional:
+
+```text
+EntityDefinition.kinematic { half_extents, velocity }
+  -> concrete KinematicCapability table
+  -> GameRuntime::run_motion_phase
+  -> KinematicMotionSystem::run (all bodies once, stable order)
+  -> Asha axis-swept voxel query on X / Y / Z
+  -> typed Moved / Blocked facts
+  -> one atomic world command batch
+```
+
+There is no component-local update method, ECS query scheduler, subscription, or per-body bridge
+call. A blocked axis is stopped and its velocity component is zeroed while another axis may still
+move. Motion and collision-scene definitions are snapshot-visible; restore rebuilds the derived
+Parry projection and reaches the same final state as an uninterrupted run.
+
+This is deliberately not a physics engine. It currently resolves kinematic bodies only against
+static authored voxels, uses conservative axis separation, and has no dynamic-body collision,
+contact manifold, acceleration, or gravity.
+
+### Named real-time workload
+
+TypeScript composes `authored-voxel-wall-kinematic-lanes`: one independently positioned runner and
+one wall voxel per lane. Rust admits the strict data once, then runs 180 bounded phases at a
+simulated 60 Hz. The matrix truncates the checked-in 256-body definition deterministically for the
+smaller cases; it does not change runtime code.
+
+One warm release run on the development host produced:
+
+| Bodies | Admission µs | Simulation µs / 180 phases | ns per body-phase | Projection µs / 180 passes | Facts committed | Snapshot bytes |
+|---:|---:|---:|---:|---:|---:|---:|
+| 32 | 66 | 523 | 90.9 | 307 | 3,322 | 18,818 |
+| 64 | 71 | 1,026 | 89.1 | 1,097 | 6,557 | 37,333 |
+| 128 | 145 | 2,256 | 97.9 | 1,392 | 13,100 | 74,415 |
+| 256 | 270 | 4,406 | 95.6 | 2,670 | 26,155 | 148,728 |
+
+At 256 bodies the loop completed about 40,850 phases/second and all 256 bodies stopped without
+tunneling. These are characterization numbers, not a stable benchmark or frame-budget guarantee;
+the run has no renderer, input, AI, or operating-system workload mixed into it.
+
+Allocation counts are not instrumented yet. State-copy pressure is bounded visibly instead: there
+is no process serialization, the system snapshots 256 small `KinematicBodyView` values per phase,
+and the receipt counts command/fact values (26,155 committed world facts in the largest run). A
+future vertical feature should add safe allocator telemetry before interpreting these timings as a
+general engine capacity result.
+
+### Browser/Three/DOM product proof
+
+The loading-bay browser shell links Asha's actual `@asha/renderer-three` and generated render
+contracts. A small successor adapter turns whole Rust projection readouts into retained
+`create`/`update`/`destroy` diffs. Three owns canvas objects and resource lifecycle; it never owns
+gameplay state.
+
+Two visible action paths run in the same product scene:
+
+```text
+DOM defeat controls -> CombatService -> EnemyDefeated -> EncounterCleared -> DoorOpened
+                  -> projection update -> retained Three door moves and enemies disappear
+
+DOM spatial control -> one bounded KinematicMotionSystem phase sequence
+                    -> Asha voxel sweep -> KinematicBlocked
+                    -> projection update -> retained Three probe stops at the visible obstacle
+```
+
+The Asha renderer package has an optional encoded-frame convenience import from its old runtime
+bridge. Rusty Engine never uses that path: Vite aliases it to a fail-closed local shim, and the smoke
+rejects `RuntimeSession`, native bridge, Gameplay Fabric, or `GameplayRuntimeHost` markers in the
+production bundle. The typed `applyFrame` path remains the unchanged donor implementation.
+
+The automated product gate builds the bundle, starts the Rust host on an ephemeral port, launches
+real headless Chromium with SwiftShader WebGL, presses reset/defeat/spatial actions, and requires the
+open-door transform, defeated entities, blocked probe, retained-renderer snapshot, and typed fact
+names in the final DOM.
+
 ## Reproducible evidence
 
 From a checkout with the public Asha donor beside this repository:
@@ -106,16 +192,19 @@ pnpm install
 pnpm run verify
 cargo run -q -p game-host --bin headless-door
 cargo run -q -p game-host --bin headless-encounter
+cargo run --release -q -p game-host --bin motion-workload -- --matrix
 ```
 
 The current verification gate proves:
 
-- Rust formatting and strict TypeScript compilation;
+- Rust formatting, Clippy, and strict TypeScript compilation;
 - generated project content is byte-for-byte current with its TypeScript composition;
-- 2 TypeScript content-composition tests;
-- 14 Rust integration tests across the world kernel, security door, content admission, encounter
-  routing, atomic rejection, projection, and save/reopen;
-- strict rejection of unknown stored-content and snapshot fields.
+- 5 TypeScript content-composition tests and one retained-diff adapter test;
+- 23 Rust integration tests across the world kernel, donor collision queries, security door,
+  content admission, encounter routing, kinematic motion, atomic rejection, projection, and
+  save/reopen;
+- strict rejection of unknown stored-content and snapshot fields;
+- a real Chromium/Three/WebGL product smoke, including a forbidden-old-runtime bundle audit.
 
 ## Active source footprint
 
@@ -123,10 +212,12 @@ These are physical line counts (`wc -l`), not complexity scores:
 
 | Ownership surface | Production source footprint | Purpose |
 |---|---:|---|
-| Reusable Rust world kernel | 4 files / 732 lines | Entity/capability storage, atomic world mutation, snapshot, projection. |
-| Rust game host and runners | 9 files / 1,684 lines | Concrete components, services, routing, content admission, scheduling, snapshots, two runners. |
-| TypeScript content composition | 4 files / 126 lines | Typed definitions, encounter builder, reproducibility check, exports. |
-| Generated project content | 2 files / 143 lines | Two-enemy proof and one-enemy variation. |
+| Reusable Rust world kernel | 4 files / 881 lines | Entity/capability storage, atomic world mutation, snapshot, projection. |
+| Successor spatial adapter/system | 1 file / 369 lines | Canonical donor scene construction, bounded query facade, central kinematic phase. |
+| Rust game host and runners | 11 files / 2,323 lines | Concrete components/services, routing, admission, scheduling, snapshots, headless/product/workload hosts. |
+| TypeScript content composition | 5 files / 206 lines | Typed definitions, encounter and motion builders, reproducibility check. |
+| TypeScript browser product shell | 6 files / 479 lines | Rust-readout adapter, DOM controls/readout, Asha renderer mount, bridge exclusion shim, styling. |
+| Generated project content | 3 files / 7,932 lines | Two encounter variations and pretty-printed 256-body workload data. |
 
 The Rust snapshot code is currently the largest single structural cost. It is explicit and easy to
 trace, but future slices should test whether small typed codec helpers can reduce repetition without
@@ -139,21 +230,32 @@ introducing reflection, registries, or generic replay machinery.
 - Typed events carry real cross-domain weight while remaining a short closed route.
 - TypeScript still provides useful code-as-content ergonomics without participating in the live
   authority loop.
-- The only retained command batch has a concrete consumer: a static door must change collision and
-  translation atomically, while a defeated enemy changes collision and visibility atomically.
+- The retained command batch has concrete consumers: door transform/collision, enemy
+  collision/visibility, and a whole kinematic phase's translations/blocked velocities commit once.
 - Batched world reads and expected-revision machinery had no remaining in-process consumer and were
   deleted with the external host.
 - The pivot removes substantially more runtime-host plumbing than the encounter slice adds.
+- A substantial Asha service family can sit below the new object-centric center unchanged.
+- The existing renderer can sit above it through typed projection without restoring the old runtime
+  facade to the browser bundle.
+- The new capability's behavior has one owner; its expected amplification is model/command/snapshot
+  binding plus admission and restore, not a cross-language protocol campaign.
 
-## Remaining falsification work
+## Decision boundary and remaining limits
 
-This is not yet evidence for replacing Asha wholesale. The next proofs should focus on structural
-reuse rather than language choice:
+The planned falsification work passes, but it is still not evidence for replacing Asha wholesale.
+The next question is which complete vertical feature family can move while both runtimes remain
+separately launchable and never share live authority.
 
-1. Transplant one substantial Asha spatial/collision or related feature below this runtime without
-   importing Gameplay Fabric or the old runtime facade.
-2. Add one genuinely new reusable engine capability and confirm its change remains localized.
-3. Connect a retained TypeScript/Three/DOM shell through projection and resolved input.
-4. Characterize one named real-time multi-entity workload without component-local ticking.
-5. Revisit snapshot repetition only after another durable component family establishes the common
-   shape.
+Before calling this durable infrastructure:
+
+1. Choose one cohesive next family—likely navigation plus moving enemy behavior, inventory/equipment,
+   or authored scene/asset loading—and repeat the full content/service/persistence/product test.
+2. Decide whether sibling donor references become pinned Git dependencies, vendored crates, or a
+   shared foundation repository before Asha resumes development.
+3. Add safe allocation telemetry and a longer mixed workload; the current matrix measures isolated
+   CPU time and copy/fact proxies only.
+4. Revisit snapshot repetition only after the next durable component family establishes a second
+   common shape.
+5. If the renderer remains a donor, extract a clean typed-frame subpath upstream so the local
+   fail-closed alias is unnecessary.

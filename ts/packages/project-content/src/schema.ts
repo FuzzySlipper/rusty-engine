@@ -1,4 +1,5 @@
 export type Vec3 = readonly [number, number, number];
+export type VoxelAddress = readonly [number, number, number];
 
 export interface CollisionDefinition {
   readonly enabled: boolean;
@@ -24,6 +25,17 @@ export interface EncounterDefinition {
   readonly exit: number;
 }
 
+export interface KinematicDefinition {
+  readonly halfExtents: Vec3;
+  readonly velocity: Vec3;
+}
+
+export interface VoxelCollisionDefinition {
+  readonly voxelSize: number;
+  readonly chunkSize: number;
+  readonly solidVoxels: readonly VoxelAddress[];
+}
+
 export interface EntityDefinition {
   readonly id: number;
   readonly name: string;
@@ -34,9 +46,11 @@ export interface EntityDefinition {
   readonly switch?: SwitchDefinition;
   readonly enemy?: true;
   readonly encounter?: EncounterDefinition;
+  readonly kinematic?: KinematicDefinition;
 }
 
 export interface ProjectContent {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly entities: readonly EntityDefinition[];
+  readonly voxelCollision?: VoxelCollisionDefinition;
 }

@@ -5,11 +5,11 @@ use core_math::Vec3;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    CollisionCapability, EntityDefinition, EntityLifecycle, RenderableCapability,
-    TransformCapability, WorldKernel,
+    CollisionCapability, EntityDefinition, EntityLifecycle, KinematicCapability,
+    RenderableCapability, TransformCapability, WorldKernel,
 };
 
-pub const WORLD_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+pub const WORLD_SNAPSHOT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -28,6 +28,7 @@ pub struct EntitySnapshot {
     pub translation: Option<[f32; 3]>,
     pub collision: Option<CollisionSnapshot>,
     pub renderable: Option<RenderableSnapshot>,
+    pub kinematic: Option<KinematicSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,6 +50,13 @@ pub struct CollisionSnapshot {
 pub struct RenderableSnapshot {
     pub visible: bool,
     pub asset: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct KinematicSnapshot {
+    pub half_extents: [f32; 3],
+    pub velocity: [f32; 3],
 }
 
 #[derive(Debug)]
@@ -98,6 +106,10 @@ impl WorldKernel {
                             visible: value.visible,
                             asset: value.asset.clone(),
                         }),
+                    kinematic: self.kinematics.get(entity).map(|value| KinematicSnapshot {
+                        half_extents: value.half_extents.to_array(),
+                        velocity: value.velocity.to_array(),
+                    }),
                 })
                 .collect(),
         }
@@ -129,6 +141,14 @@ impl WorldKernel {
             definition.renderable = entity.renderable.map(|value| RenderableCapability {
                 visible: value.visible,
                 asset: value.asset,
+            });
+            definition.kinematic = entity.kinematic.map(|value| KinematicCapability {
+                half_extents: Vec3::new(
+                    value.half_extents[0],
+                    value.half_extents[1],
+                    value.half_extents[2],
+                ),
+                velocity: Vec3::new(value.velocity[0], value.velocity[1], value.velocity[2]),
             });
             lifecycles.push((id, entity.lifecycle));
             definitions.push(definition);

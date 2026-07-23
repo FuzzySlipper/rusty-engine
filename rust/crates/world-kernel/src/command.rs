@@ -3,13 +3,14 @@ use std::collections::BTreeMap;
 use core_ids::EntityId;
 use core_math::Vec3;
 
-use crate::model::{translation_is_valid, EntityLifecycle, WorldKernel};
+use crate::model::{translation_is_valid, velocity_is_valid, EntityLifecycle, WorldKernel};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum WorldCommand {
     SetTranslation { entity: EntityId, translation: Vec3 },
     SetCollisionEnabled { entity: EntityId, enabled: bool },
     SetVisible { entity: EntityId, visible: bool },
+    SetKinematicVelocity { entity: EntityId, velocity: Vec3 },
 }
 
 impl WorldCommand {
@@ -17,7 +18,8 @@ impl WorldCommand {
         match self {
             Self::SetTranslation { entity, .. }
             | Self::SetCollisionEnabled { entity, .. }
-            | Self::SetVisible { entity, .. } => *entity,
+            | Self::SetVisible { entity, .. }
+            | Self::SetKinematicVelocity { entity, .. } => *entity,
         }
     }
 }
@@ -55,6 +57,12 @@ pub enum WorldFact {
         after: bool,
         revision: u64,
     },
+    KinematicVelocityChanged {
+        entity: EntityId,
+        before: Vec3,
+        after: Vec3,
+        revision: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,7 +79,9 @@ pub enum WorldCommandError {
     MissingTransform { entity: EntityId },
     MissingCollision { entity: EntityId },
     MissingRenderable { entity: EntityId },
+    MissingKinematic { entity: EntityId },
     InvalidTranslation { entity: EntityId },
+    InvalidKinematicVelocity { entity: EntityId },
     StaticColliderMovement { entity: EntityId },
 }
 
@@ -99,6 +109,8 @@ struct ProjectedEntity {
     static_collider: bool,
     original_visible: Option<bool>,
     next_visible: Option<bool>,
+    original_velocity: Option<Vec3>,
+    next_velocity: Option<Vec3>,
 }
 
 impl ProjectedEntity {
@@ -106,6 +118,7 @@ impl ProjectedEntity {
         let transform = world.transforms.get(&entity).map(|value| value.translation);
         let collision = world.collisions.get(&entity);
         let visible = world.renderables.get(&entity).map(|value| value.visible);
+        let velocity = world.kinematics.get(&entity).map(|value| value.velocity);
         Self {
             original_translation: transform,
             next_translation: transform,
@@ -114,6 +127,8 @@ impl ProjectedEntity {
             static_collider: collision.is_some_and(|value| value.static_collider),
             original_visible: visible,
             next_visible: visible,
+            original_velocity: velocity,
+            next_velocity: velocity,
         }
     }
 }
@@ -183,6 +198,23 @@ pub(crate) fn apply_batch(
                 }
                 state.next_visible = Some(*visible);
             }
+            WorldCommand::SetKinematicVelocity { velocity, .. } => {
+                if state.next_velocity.is_none() {
+                    return Err(reject(
+                        world,
+                        Some(command_index),
+                        WorldCommandError::MissingKinematic { entity },
+                    ));
+                }
+                if !velocity_is_valid(*velocity) {
+                    return Err(reject(
+                        world,
+                        Some(command_index),
+                        WorldCommandError::InvalidKinematicVelocity { entity },
+                    ));
+                }
+                state.next_velocity = Some(*velocity);
+            }
         }
     }
 
@@ -204,6 +236,7 @@ pub(crate) fn apply_batch(
         state.original_translation != state.next_translation
             || state.original_collision_enabled != state.next_collision_enabled
             || state.original_visible != state.next_visible
+            || state.original_velocity != state.next_velocity
     });
     let revision_after = if changed {
         revision_before.saturating_add(1)
@@ -262,6 +295,23 @@ pub(crate) fn apply_batch(
                 .expect("validated renderable presence")
                 .visible = after;
             facts.push(WorldFact::VisibilityChanged {
+                entity,
+                before,
+                after,
+                revision: revision_after,
+            });
+        }
+        if state.original_velocity != state.next_velocity {
+            let before = state
+                .original_velocity
+                .expect("validated kinematic presence");
+            let after = state.next_velocity.expect("validated kinematic presence");
+            world
+                .kinematics
+                .get_mut(&entity)
+                .expect("validated kinematic presence")
+                .velocity = after;
+            facts.push(WorldFact::KinematicVelocityChanged {
                 entity,
                 before,
                 after,

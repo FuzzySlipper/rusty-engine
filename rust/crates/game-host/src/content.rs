@@ -1,18 +1,26 @@
 use core_ids::EntityId;
 use core_math::Vec3;
 use core_time::TickDelta;
+use engine_spatial::VoxelCollisionScene;
 use serde::Deserialize;
 use world_kernel::{EntityDefinition, MAX_ABS_TRANSLATION};
 
 use crate::model::{DoorConfig, GameEntityDefinition, GameEntityDefinitionError, GameSession};
 
-pub const PROJECT_CONTENT_SCHEMA_VERSION: u32 = 1;
+pub const PROJECT_CONTENT_SCHEMA_VERSION: u32 = 2;
+
+#[derive(Debug)]
+pub struct AdmittedProject {
+    pub session: GameSession,
+    pub collision_scene: Option<VoxelCollisionScene>,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ProjectContent {
     schema_version: u32,
     entities: Vec<AuthoredEntityDefinition>,
+    voxel_collision: Option<AuthoredVoxelCollision>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -28,6 +36,15 @@ struct AuthoredEntityDefinition {
     #[serde(default)]
     enemy: bool,
     encounter: Option<AuthoredEncounter>,
+    kinematic: Option<AuthoredKinematic>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct AuthoredVoxelCollision {
+    voxel_size: f64,
+    chunk_size: u32,
+    solid_voxels: Vec<[i64; 3]>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +81,13 @@ struct AuthoredEncounter {
     exit: u64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct AuthoredKinematic {
+    half_extents: [f32; 3],
+    velocity: [f32; 3],
+}
+
 #[derive(Debug)]
 pub enum ProjectContentError {
     Decode(serde_json::Error),
@@ -71,6 +95,8 @@ pub enum ProjectContentError {
     DoorMissingInitialTranslation { entity: EntityId },
     InvalidDoorOpenTranslation { entity: EntityId },
     InvalidAutoCloseTicks { entity: EntityId },
+    KinematicMissingCollisionScene { entity: EntityId },
+    CollisionScene(engine_spatial::CollisionSceneError),
     Definition(GameEntityDefinitionError),
 }
 
@@ -82,7 +108,7 @@ impl std::fmt::Display for ProjectContentError {
 
 impl std::error::Error for ProjectContentError {}
 
-pub fn decode_project_content(input: &str) -> Result<GameSession, ProjectContentError> {
+pub fn decode_project_content(input: &str) -> Result<AdmittedProject, ProjectContentError> {
     let content: ProjectContent =
         serde_json::from_str(input).map_err(ProjectContentError::Decode)?;
     if content.schema_version != PROJECT_CONTENT_SCHEMA_VERSION {
@@ -96,7 +122,32 @@ pub fn decode_project_content(input: &str) -> Result<GameSession, ProjectContent
         .into_iter()
         .map(authored_definition)
         .collect::<Result<Vec<_>, _>>()?;
-    GameSession::from_definitions(definitions).map_err(ProjectContentError::Definition)
+    let session =
+        GameSession::from_definitions(definitions).map_err(ProjectContentError::Definition)?;
+    let collision_scene = content
+        .voxel_collision
+        .map(|authored| {
+            VoxelCollisionScene::from_solid_voxels(
+                authored.voxel_size,
+                authored.chunk_size,
+                authored.solid_voxels,
+            )
+            .map_err(ProjectContentError::CollisionScene)
+        })
+        .transpose()?;
+    if let Some(entity) = session
+        .world()
+        .kinematic_bodies()
+        .next()
+        .map(|body| body.entity)
+        .filter(|_| collision_scene.is_none())
+    {
+        return Err(ProjectContentError::KinematicMissingCollisionScene { entity });
+    }
+    Ok(AdmittedProject {
+        session,
+        collision_scene,
+    })
 }
 
 fn authored_definition(
@@ -113,6 +164,12 @@ fn authored_definition(
     }
     if let Some(renderable) = authored.renderable {
         world = world.with_renderable(renderable.asset, renderable.visible);
+    }
+    if let Some(kinematic) = authored.kinematic {
+        world = world.with_kinematic(
+            array_vec3(kinematic.half_extents),
+            array_vec3(kinematic.velocity),
+        );
     }
 
     let mut definition = GameEntityDefinition::new(world);

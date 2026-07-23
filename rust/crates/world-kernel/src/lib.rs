@@ -14,10 +14,10 @@ pub use command::{
 };
 pub use model::{
     CollisionCapability, EntityCore, EntityDefinition, EntityDefinitionError, EntityLifecycle,
-    EntityView, ProjectionNode, RenderableCapability, TransformCapability, ViewError, WorldKernel,
-    MAX_ABS_TRANSLATION,
+    EntityView, KinematicBodyView, KinematicCapability, ProjectionNode, RenderableCapability,
+    TransformCapability, ViewError, WorldKernel, MAX_ABS_TRANSLATION, MAX_ABS_VELOCITY,
 };
 pub use snapshot::{
-    decode_snapshot, encode_snapshot, EntitySnapshot, WorldSnapshot, WorldSnapshotError,
-    WORLD_SNAPSHOT_SCHEMA_VERSION,
+    decode_snapshot, encode_snapshot, EntitySnapshot, KinematicSnapshot, WorldSnapshot,
+    WorldSnapshotError, WORLD_SNAPSHOT_SCHEMA_VERSION,
 };

@@ -14,7 +14,7 @@
   "scripts": {
     "check": "tsc --build && node dist/generate.js --check",
     "generate": "tsc --build && node dist/generate.js --write",
-    "test": "tsc --build && node --test dist/encounter-project.test.js",
+    "test": "tsc --build && node --test dist/*.test.js",
     "typecheck": "tsc --build"
   }
 }
