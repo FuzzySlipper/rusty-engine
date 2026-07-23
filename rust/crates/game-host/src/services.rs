@@ -1,6 +1,6 @@
 use core_ids::EntityId;
 use core_time::TickDelta;
-use world_kernel::{WorldCommand, WorldCommandBatch};
+use entity_state::{EntityCommand, EntityCommandBatch};
 
 use crate::model::{DoorState, EncounterState, EnemyState, GameEvent, GameSession};
 use crate::runtime::RuntimeError;
@@ -13,7 +13,7 @@ impl InteractionService {
         actor: EntityId,
         target: EntityId,
     ) -> Result<GameEvent, RuntimeError> {
-        if !session.world.contains(actor) {
+        if !session.entities.contains(actor) {
             return Err(RuntimeError::UnknownActor { actor });
         }
         let Some(switch) = session.switches.get_mut(&target) else {
@@ -46,18 +46,18 @@ impl DoorService {
             return Ok(None);
         }
         let receipt = session
-            .world
-            .apply_batch(WorldCommandBatch::new([
-                WorldCommand::SetTranslation {
+            .entities
+            .apply_batch(EntityCommandBatch::new([
+                EntityCommand::SetTranslation {
                     entity: door,
                     translation: component.config.open_translation,
                 },
-                WorldCommand::SetCollisionEnabled {
+                EntityCommand::SetCollisionEnabled {
                     entity: door,
                     enabled: false,
                 },
             ]))
-            .map_err(RuntimeError::WorldBatch)?;
+            .map_err(RuntimeError::EntityBatch)?;
         session
             .doors
             .get_mut(&door)
@@ -66,7 +66,7 @@ impl DoorService {
         Ok(Some(DoorTransition {
             event: GameEvent::DoorOpened {
                 door,
-                world_facts: receipt.facts,
+                entity_facts: receipt.facts,
             },
             auto_close_after: component.config.auto_close_after,
         }))
@@ -83,18 +83,18 @@ impl DoorService {
             return Ok(None);
         }
         let receipt = session
-            .world
-            .apply_batch(WorldCommandBatch::new([
-                WorldCommand::SetCollisionEnabled {
+            .entities
+            .apply_batch(EntityCommandBatch::new([
+                EntityCommand::SetCollisionEnabled {
                     entity: door,
                     enabled: true,
                 },
-                WorldCommand::SetTranslation {
+                EntityCommand::SetTranslation {
                     entity: door,
                     translation: component.config.closed_translation,
                 },
             ]))
-            .map_err(RuntimeError::WorldBatch)?;
+            .map_err(RuntimeError::EntityBatch)?;
         session
             .doors
             .get_mut(&door)
@@ -102,7 +102,7 @@ impl DoorService {
             .state = DoorState::Closed;
         Ok(Some(GameEvent::DoorClosed {
             door,
-            world_facts: receipt.facts,
+            entity_facts: receipt.facts,
         }))
     }
 }
@@ -115,7 +115,7 @@ impl CombatService {
         actor: EntityId,
         enemy: EntityId,
     ) -> Result<Option<GameEvent>, RuntimeError> {
-        if !session.world.contains(actor) {
+        if !session.entities.contains(actor) {
             return Err(RuntimeError::UnknownActor { actor });
         }
         let Some(component) = session.enemies.get(&enemy).copied() else {
@@ -126,18 +126,18 @@ impl CombatService {
         }
 
         let receipt = session
-            .world
-            .apply_batch(WorldCommandBatch::new([
-                WorldCommand::SetCollisionEnabled {
+            .entities
+            .apply_batch(EntityCommandBatch::new([
+                EntityCommand::SetCollisionEnabled {
                     entity: enemy,
                     enabled: false,
                 },
-                WorldCommand::SetVisible {
+                EntityCommand::SetVisible {
                     entity: enemy,
                     visible: false,
                 },
             ]))
-            .map_err(RuntimeError::WorldBatch)?;
+            .map_err(RuntimeError::EntityBatch)?;
         session
             .enemies
             .get_mut(&enemy)
@@ -146,7 +146,7 @@ impl CombatService {
         Ok(Some(GameEvent::EnemyDefeated {
             enemy,
             actor,
-            world_facts: receipt.facts,
+            entity_facts: receipt.facts,
         }))
     }
 }

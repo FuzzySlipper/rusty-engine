@@ -14,4 +14,4 @@ core-voxel.workspace = true
 svc-collision.workspace = true
 svc-spatial.workspace = true
 svc-volume.workspace = true
-world-kernel = { path = "../world-kernel" }
+entity-state = { path = "../entity-state" }

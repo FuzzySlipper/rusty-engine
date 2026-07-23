@@ -14,7 +14,7 @@ fn authored_motion_workload_runs_as_one_central_phase_per_frame() {
     assert_eq!(scene.solid_voxel_count(), BODY_COUNT);
     assert_eq!(scene.resident_chunk_count(), 32);
     assert_eq!(
-        runtime.session().world().kinematic_bodies().count(),
+        runtime.session().entities().kinematic_bodies().count(),
         BODY_COUNT
     );
 
@@ -35,7 +35,7 @@ fn authored_motion_workload_runs_as_one_central_phase_per_frame() {
         blocked, BODY_COUNT,
         "every runner should meet its wall lane"
     );
-    assert!(runtime.session().world().revision() <= PHASES as u64);
+    assert!(runtime.session().entities().revision() <= PHASES as u64);
     for raw in FIRST_BODY..FIRST_BODY + BODY_COUNT as u64 {
         let view = runtime
             .session()
@@ -70,12 +70,12 @@ fn snapshot_rebuilds_collision_projection_and_continues_identically() {
     }
 
     assert_eq!(
-        restored.session().world().revision(),
-        uninterrupted.session().world().revision()
+        restored.session().entities().revision(),
+        uninterrupted.session().entities().revision()
     );
     assert_eq!(
-        restored.session().world().projection(),
-        uninterrupted.session().world().projection()
+        restored.session().entities().projection(),
+        uninterrupted.session().entities().projection()
     );
     assert_eq!(
         restored

@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use core_ids::EntityId;
 use core_math::Vec3;
 use core_time::{Tick, TickDelta};
-use world_kernel::{EntityDefinition, EntityView, ProjectionNode, WorldFact, WorldKernel};
+use entity_state::{EntityDefinition, EntityFact, EntityState, EntityView, ProjectionNode};
 
 use crate::scheduler::Scheduler;
 
@@ -76,7 +76,7 @@ pub struct EncounterComponent {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GameEntityDefinition {
-    pub world: EntityDefinition,
+    pub entity: EntityDefinition,
     pub door: Option<DoorConfig>,
     pub switch: bool,
     pub controls_targets: Vec<EntityId>,
@@ -85,9 +85,9 @@ pub struct GameEntityDefinition {
 }
 
 impl GameEntityDefinition {
-    pub fn new(world: EntityDefinition) -> Self {
+    pub fn new(entity: EntityDefinition) -> Self {
         Self {
-            world,
+            entity,
             door: None,
             switch: false,
             controls_targets: Vec::new(),
@@ -131,7 +131,7 @@ impl GameEntityDefinition {
 
 #[derive(Debug)]
 pub enum GameEntityDefinitionError {
-    World(world_kernel::EntityDefinitionError),
+    EntityState(entity_state::EntityDefinitionError),
     DuplicateControlTarget {
         switch: EntityId,
         target: EntityId,
@@ -202,7 +202,7 @@ impl std::error::Error for GameEntityDefinitionError {}
 
 #[derive(Debug)]
 pub struct GameSession {
-    pub(crate) world: WorldKernel,
+    pub(crate) entities: EntityState,
     pub(crate) doors: BTreeMap<EntityId, DoorComponent>,
     pub(crate) switches: BTreeMap<EntityId, SwitchComponent>,
     pub(crate) controls: BTreeMap<EntityId, Vec<EntityId>>,
@@ -215,12 +215,12 @@ impl GameSession {
         definitions: impl IntoIterator<Item = GameEntityDefinition>,
     ) -> Result<Self, GameEntityDefinitionError> {
         let definitions: Vec<GameEntityDefinition> = definitions.into_iter().collect();
-        let world = WorldKernel::from_definitions(
+        let entities = EntityState::from_definitions(
             definitions
                 .iter()
-                .map(|definition| definition.world.clone()),
+                .map(|definition| definition.entity.clone()),
         )
-        .map_err(GameEntityDefinitionError::World)?;
+        .map_err(GameEntityDefinitionError::EntityState)?;
 
         let mut doors = BTreeMap::new();
         let mut switches = BTreeMap::new();
@@ -229,9 +229,9 @@ impl GameSession {
         let mut encounters = BTreeMap::new();
 
         for definition in &definitions {
-            let entity = definition.world.id;
+            let entity = definition.entity.id;
             if let Some(config) = definition.door {
-                let view = world.view(entity).expect("definition created entity");
+                let view = entities.view(entity).expect("definition created entity");
                 if view.transform.is_none() {
                     return Err(GameEntityDefinitionError::DoorMissingTransform { entity });
                 }
@@ -268,7 +268,7 @@ impl GameSession {
                 controls.insert(entity, definition.controls_targets.clone());
             }
             if definition.enemy {
-                let view = world.view(entity).expect("definition created entity");
+                let view = entities.view(entity).expect("definition created entity");
                 if view.collision.is_none() {
                     return Err(GameEntityDefinitionError::EnemyMissingCollision { entity });
                 }
@@ -307,7 +307,7 @@ impl GameSession {
 
         for (switch, targets) in &controls {
             for target in targets {
-                if !world.contains(*target) {
+                if !entities.contains(*target) {
                     return Err(GameEntityDefinitionError::UnknownControlTarget {
                         switch: *switch,
                         target: *target,
@@ -324,7 +324,7 @@ impl GameSession {
 
         let mut encounter_by_enemy = BTreeMap::new();
         for (encounter, component) in &encounters {
-            if !world.contains(component.config.exit) {
+            if !entities.contains(component.config.exit) {
                 return Err(GameEntityDefinitionError::UnknownEncounterExit {
                     encounter: *encounter,
                     exit: component.config.exit,
@@ -337,7 +337,7 @@ impl GameSession {
                 });
             }
             for member in &component.config.members {
-                if !world.contains(*member) {
+                if !entities.contains(*member) {
                     return Err(GameEntityDefinitionError::UnknownEncounterMember {
                         encounter: *encounter,
                         member: *member,
@@ -360,7 +360,7 @@ impl GameSession {
         }
 
         Ok(Self {
-            world,
+            entities,
             doors,
             switches,
             controls,
@@ -369,12 +369,12 @@ impl GameSession {
         })
     }
 
-    pub fn world(&self) -> &WorldKernel {
-        &self.world
+    pub fn entities(&self) -> &EntityState {
+        &self.entities
     }
 
-    pub fn entity(&self, entity: EntityId) -> Result<EntityView, world_kernel::ViewError> {
-        self.world.view(entity)
+    pub fn entity(&self, entity: EntityId) -> Result<EntityView, entity_state::ViewError> {
+        self.entities.view(entity)
     }
 
     pub fn door(&self, entity: EntityId) -> Option<DoorView> {
@@ -383,7 +383,7 @@ impl GameSession {
             entity,
             config: component.config,
             state: component.state,
-            world: self.world.view(entity).ok()?,
+            entity_view: self.entities.view(entity).ok()?,
         })
     }
 
@@ -401,7 +401,7 @@ impl GameSession {
         Some(EnemyView {
             entity,
             state: component.state,
-            world: self.world.view(entity).ok()?,
+            entity_view: self.entities.view(entity).ok()?,
         })
     }
 
@@ -421,7 +421,7 @@ pub struct DoorView {
     pub entity: EntityId,
     pub config: DoorConfig,
     pub state: DoorState,
-    pub world: EntityView,
+    pub entity_view: EntityView,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -435,7 +435,7 @@ pub struct SwitchView {
 pub struct EnemyView {
     pub entity: EntityId,
     pub state: EnemyState,
-    pub world: EntityView,
+    pub entity_view: EntityView,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -454,16 +454,16 @@ pub enum GameEvent {
     },
     DoorOpened {
         door: EntityId,
-        world_facts: Vec<WorldFact>,
+        entity_facts: Vec<EntityFact>,
     },
     DoorClosed {
         door: EntityId,
-        world_facts: Vec<WorldFact>,
+        entity_facts: Vec<EntityFact>,
     },
     EnemyDefeated {
         enemy: EntityId,
         actor: EntityId,
-        world_facts: Vec<WorldFact>,
+        entity_facts: Vec<EntityFact>,
     },
     EncounterCleared {
         encounter: EntityId,
@@ -487,7 +487,7 @@ pub struct RuntimeReceipt {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeReadout {
     pub tick: Tick,
-    pub world_revision: u64,
+    pub entity_revision: u64,
     pub projection: Vec<ProjectionNode>,
     pub pending_schedules: usize,
     pub journal: Vec<JournalEntry>,
@@ -541,8 +541,8 @@ pub(crate) fn readout(
 ) -> RuntimeReadout {
     RuntimeReadout {
         tick,
-        world_revision: session.world.revision(),
-        projection: session.world.projection(),
+        entity_revision: session.entities.revision(),
+        projection: session.entities.projection(),
         pending_schedules: scheduler.len(),
         journal: journal.to_vec(),
     }

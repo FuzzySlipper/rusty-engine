@@ -28,7 +28,7 @@ pub enum RuntimeError {
     NotInteractable { entity: EntityId },
     UnknownDoor { door: EntityId },
     UnknownEnemy { enemy: EntityId },
-    WorldBatch(world_kernel::BatchRejection),
+    EntityBatch(entity_state::BatchRejection),
     EventWaveLimit { limit: usize },
     TickAdvanceLimit { requested: u64, limit: u64 },
     MissingCollisionScene,
@@ -102,7 +102,7 @@ impl GameRuntime {
 
     /// Run the one centrally scheduled kinematic phase over every configured
     /// body. Motion is not routed through the gameplay event journal: the spatial
-    /// system returns its own typed facts and commits one atomic world batch.
+    /// system returns its own typed facts and commits one atomic entity batch.
     pub fn run_motion_phase(
         &mut self,
         delta_seconds: f32,
@@ -111,7 +111,7 @@ impl GameRuntime {
             .collision_scene
             .as_ref()
             .ok_or(RuntimeError::MissingCollisionScene)?;
-        KinematicMotionSystem::run(&mut self.session.world, scene, delta_seconds)
+        KinematicMotionSystem::run(&mut self.session.entities, scene, delta_seconds)
             .map_err(RuntimeError::Motion)
     }
 
@@ -226,7 +226,7 @@ impl GameRuntime {
         RuntimeReceipt {
             tick: self.tick,
             events,
-            projection: self.session.world.projection(),
+            projection: self.session.entities.projection(),
         }
     }
 }

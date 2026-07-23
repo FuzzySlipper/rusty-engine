@@ -139,9 +139,9 @@ The successor hypothesis is that the valuable principles survive with a much mor
 
 The independent Den proposal `asha/external-object-owned-gameplay-runtime-spike` agrees with most of this document's structural diagnosis but challenges one assumption: that ordinary game-specific behavior should normally be implemented by Rust services.
 
-It proposes a different authority split:
-
-> trusted executable TypeScript owns Game Project decisions and behavior-local state; a smaller Rust world kernel owns reusable engine invariants and atomically applies typed capability commands.
+It proposes a different authority split: trusted executable TypeScript owns Game Project decisions
+and behavior-local state, while a smaller Rust entity-state layer owns reusable engine invariants
+and atomically applies typed capability commands.
 
 This was not a terminology disagreement. It was the largest unresolved design choice before
 implementation and is now resolved in favor of Rust-owned live gameplay.
@@ -158,9 +158,9 @@ The first property is a requirement of this spike. The second is a hypothesis to
 | Question | Rust service-owned gameplay | Trusted executable TypeScript gameplay |
 |---|---|---|
 | Game-specific decisions | Named Rust services and domain systems | Project services/behaviors using ordinary TypeScript control flow |
-| Reusable engine invariants | Rust services/kernel | Rust world/capability kernel |
+| Reusable engine invariants | Rust services/entity state | Rust entity/capability state |
 | Game-specific state | Typed Rust components/session aggregates | Bounded versioned project-state records, stored by Rust but interpreted by project code |
-| World mutation | Direct in-process service API; reusable engine capabilities may use a typed applier | Read-only invocation views produce one atomic typed command batch |
+| Entity-state mutation | Direct in-process service API; reusable engine capabilities may use a typed applier | Read-only invocation views produce one atomic typed command batch |
 | Object locality | Entity definition/components lead to the owning service | Entity definition/components/relationships lead to an explicitly bound behavior or project service |
 | Main strength | Familiar direct call stacks, typed state, straightforward debugging, no cross-language game loop | Ordinary branching/composition without growing a Rust-authored behavior language or changing Engine schemas for each rule |
 | Main risk | Every new game meaning requires a Rust compile and can drift back upstream into Engine | Split-language debugging, persistence/tooling complexity, bridge cost, opaque state, and a slide toward MonoBehaviour-like lifecycle scattering |
@@ -181,7 +181,7 @@ Its other useful additions are:
 
 ### Initial common kernel that did not predetermine the winner
 
-The initial kernel was usable by either host and contained only shared world mechanics:
+The initial entity-state layer was usable by either host and contained only shared entity mechanics:
 
 - entity identity/lifecycle and concrete reusable capabilities;
 - read-only entity/capability views;
@@ -193,7 +193,7 @@ The initial kernel was usable by either host and contained only shared world mec
 
 A Rust service calls the applier in process without serialization. The archived TypeScript host
 received one bounded event/view batch and returned one command/state/schedule batch. Removing that
-host also removed batched world reads and optimistic external revision checks that had no remaining
+host also removed batched entity-state reads and optimistic external revision checks that had no remaining
 Rust consumer.
 
 The common kernel must not contain door, quest, encounter, or behavior-language semantics merely to make the comparison possible. It also must not require all Rust domain state to be reduced to generic capability commands. The narrow shared boundary is for genuinely reusable engine-owned state.
@@ -561,7 +561,7 @@ Run three distinct change-amplification tests:
    authored related exit through `DoorService`. Changing the encounter from two enemies to one
    changes only TypeScript-authored definitions and expectations.
 3. **New engine capability (complete):** `KinematicCapability` adds bounds and velocity through the
-   world kernel's existing definition, command, fact, view, and snapshot boundary.
+   `entity-state` crate's existing definition, command, fact, view, and snapshot boundary.
    `KinematicMotionSystem` is its one behavioral owner. Game-host changes are limited to content
    admission, one explicit phase method, and durable collision-scene restore; no authored language,
    component callback, or second runtime host was introduced.
@@ -587,7 +587,7 @@ to one named bounded Rust system phase.
 
 The named `authored-voxel-wall-kinematic-lanes` workload runs 32/64/128/256 independently authored
 lanes for 180 phases at a simulated 60 Hz. One `KinematicMotionSystem::run` call scans bodies in
-stable entity order, uses the donor's continuous axis sweep, and commits one world batch per phase.
+stable entity order, uses the donor's continuous axis sweep, and commits one entity batch per phase.
 The release matrix, projection passes, fact counts, snapshot sizes, and measurement limits are
 recorded in `docs/experiment-results.md`.
 
@@ -721,7 +721,7 @@ can mutate it afterward.
 - Build a universal gameplay IR or JSON behavior graph.
 - Preserve Asha's public runtime surface one method at a time.
 - Migrate every Asha crate or feature before product proof.
-- Give TypeScript runtime ownership of Rust world state, gameplay behavior instances, scheduling, or callbacks.
+- Give TypeScript runtime ownership of Rust entity state, gameplay behavior instances, scheduling, or callbacks.
 - Reopen the executable TypeScript gameplay host merely to avoid fixing Rust-side structural problems.
 - Conflate stored definitions, runtime state, and projections.
 - Remove typed public borders, strict external decoding, explicit time/randomness, or atomic rejection where product semantics require them.

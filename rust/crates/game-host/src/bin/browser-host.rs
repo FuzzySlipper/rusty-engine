@@ -42,7 +42,7 @@ struct BrowserEnemyState {
 #[serde(rename_all = "camelCase")]
 struct BrowserState {
     tick: u64,
-    world_revision: u64,
+    entity_revision: u64,
     projection: Vec<BrowserProjectionNode>,
     door_state: &'static str,
     encounter_state: &'static str,
@@ -243,7 +243,7 @@ fn browser_state(runtime: &GameRuntime, last_events: Vec<String>) -> BrowserStat
                 .expect("browser enemy");
             BrowserEnemyState {
                 id: raw,
-                name: view.world.name,
+                name: view.entity_view.name,
                 state: match view.state {
                     EnemyState::Alive => "alive",
                     EnemyState::Defeated => "defeated",
@@ -253,7 +253,7 @@ fn browser_state(runtime: &GameRuntime, last_events: Vec<String>) -> BrowserStat
         .collect();
     BrowserState {
         tick: readout.tick.raw(),
-        world_revision: readout.world_revision,
+        entity_revision: readout.entity_revision,
         projection,
         door_state: match runtime.session().door(EXIT).expect("exit door").state {
             DoorState::Closed => "closed",

@@ -1,4 +1,4 @@
-//! Explicit Rust service-owned game runtime over [`world_kernel`].
+//! Explicit Rust service-owned game runtime over [`entity_state`].
 //!
 //! Game components remain mostly data; named services own live behavior;
 //! TypeScript-authored content is admitted before the session starts; and the

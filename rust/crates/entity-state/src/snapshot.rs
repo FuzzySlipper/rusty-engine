@@ -5,15 +5,15 @@ use core_math::Vec3;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    CollisionCapability, EntityDefinition, EntityLifecycle, KinematicCapability,
-    RenderableCapability, TransformCapability, WorldKernel,
+    CollisionCapability, EntityDefinition, EntityLifecycle, EntityState, KinematicCapability,
+    RenderableCapability, TransformCapability,
 };
 
-pub const WORLD_SNAPSHOT_SCHEMA_VERSION: u32 = 2;
+pub const ENTITY_STATE_SNAPSHOT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct WorldSnapshot {
+pub struct EntityStateSnapshot {
     pub schema_version: u32,
     pub revision: u64,
     pub entities: Vec<EntitySnapshot>,
@@ -60,7 +60,7 @@ pub struct KinematicSnapshot {
 }
 
 #[derive(Debug)]
-pub enum WorldSnapshotError {
+pub enum EntityStateSnapshotError {
     Encode(serde_json::Error),
     Decode(serde_json::Error),
     UnsupportedSchema { actual: u32 },
@@ -68,18 +68,18 @@ pub enum WorldSnapshotError {
     InvalidDefinition(crate::model::EntityDefinitionError),
 }
 
-impl std::fmt::Display for WorldSnapshotError {
+impl std::fmt::Display for EntityStateSnapshotError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "{self:?}")
     }
 }
 
-impl std::error::Error for WorldSnapshotError {}
+impl std::error::Error for EntityStateSnapshotError {}
 
-impl WorldKernel {
-    pub fn snapshot(&self) -> WorldSnapshot {
-        WorldSnapshot {
-            schema_version: WORLD_SNAPSHOT_SCHEMA_VERSION,
+impl EntityState {
+    pub fn snapshot(&self) -> EntityStateSnapshot {
+        EntityStateSnapshot {
+            schema_version: ENTITY_STATE_SNAPSHOT_SCHEMA_VERSION,
             revision: self.revision,
             entities: self
                 .entities
@@ -115,9 +115,9 @@ impl WorldKernel {
         }
     }
 
-    pub fn from_snapshot(snapshot: WorldSnapshot) -> Result<Self, WorldSnapshotError> {
-        if snapshot.schema_version != WORLD_SNAPSHOT_SCHEMA_VERSION {
-            return Err(WorldSnapshotError::UnsupportedSchema {
+    pub fn from_snapshot(snapshot: EntityStateSnapshot) -> Result<Self, EntityStateSnapshotError> {
+        if snapshot.schema_version != ENTITY_STATE_SNAPSHOT_SCHEMA_VERSION {
+            return Err(EntityStateSnapshotError::UnsupportedSchema {
                 actual: snapshot.schema_version,
             });
         }
@@ -127,7 +127,7 @@ impl WorldKernel {
 
         for entity in snapshot.entities {
             if !ids.insert(entity.id) {
-                return Err(WorldSnapshotError::DuplicateEntity { entity: entity.id });
+                return Err(EntityStateSnapshotError::DuplicateEntity { entity: entity.id });
             }
             let id = EntityId::new(entity.id);
             let mut definition = EntityDefinition::new(id, entity.name);
@@ -154,11 +154,11 @@ impl WorldKernel {
             definitions.push(definition);
         }
 
-        let mut world = WorldKernel::from_definitions(definitions)
-            .map_err(WorldSnapshotError::InvalidDefinition)?;
-        world.revision = snapshot.revision;
+        let mut state = EntityState::from_definitions(definitions)
+            .map_err(EntityStateSnapshotError::InvalidDefinition)?;
+        state.revision = snapshot.revision;
         for (entity, lifecycle) in lifecycles {
-            world
+            state
                 .entities
                 .get_mut(&entity)
                 .expect("snapshot definition created entity")
@@ -167,16 +167,16 @@ impl WorldKernel {
                 SnapshotLifecycle::Disabled => EntityLifecycle::Disabled,
             };
         }
-        Ok(world)
+        Ok(state)
     }
 }
 
-pub fn encode_snapshot(world: &WorldKernel) -> Result<String, WorldSnapshotError> {
-    serde_json::to_string_pretty(&world.snapshot()).map_err(WorldSnapshotError::Encode)
+pub fn encode_snapshot(state: &EntityState) -> Result<String, EntityStateSnapshotError> {
+    serde_json::to_string_pretty(&state.snapshot()).map_err(EntityStateSnapshotError::Encode)
 }
 
-pub fn decode_snapshot(input: &str) -> Result<WorldKernel, WorldSnapshotError> {
-    let snapshot: WorldSnapshot =
-        serde_json::from_str(input).map_err(WorldSnapshotError::Decode)?;
-    WorldKernel::from_snapshot(snapshot)
+pub fn decode_snapshot(input: &str) -> Result<EntityState, EntityStateSnapshotError> {
+    let snapshot: EntityStateSnapshot =
+        serde_json::from_str(input).map_err(EntityStateSnapshotError::Decode)?;
+    EntityState::from_snapshot(snapshot)
 }

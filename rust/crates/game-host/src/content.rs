@@ -2,8 +2,8 @@ use core_ids::EntityId;
 use core_math::Vec3;
 use core_time::TickDelta;
 use engine_spatial::VoxelCollisionScene;
+use entity_state::{EntityDefinition, MAX_ABS_TRANSLATION};
 use serde::Deserialize;
-use world_kernel::{EntityDefinition, MAX_ABS_TRANSLATION};
 
 use crate::model::{DoorConfig, GameEntityDefinition, GameEntityDefinitionError, GameSession};
 
@@ -136,7 +136,7 @@ pub fn decode_project_content(input: &str) -> Result<AdmittedProject, ProjectCon
         })
         .transpose()?;
     if let Some(entity) = session
-        .world()
+        .entities()
         .kinematic_bodies()
         .next()
         .map(|body| body.entity)
@@ -155,24 +155,25 @@ fn authored_definition(
 ) -> Result<GameEntityDefinition, ProjectContentError> {
     let entity = EntityId::new(authored.id);
     let initial_translation = authored.translation.map(array_vec3);
-    let mut world = EntityDefinition::new(entity, authored.name);
+    let mut entity_definition = EntityDefinition::new(entity, authored.name);
     if let Some(translation) = initial_translation {
-        world = world.with_transform(translation);
+        entity_definition = entity_definition.with_transform(translation);
     }
     if let Some(collision) = authored.collision {
-        world = world.with_collision(collision.enabled, collision.static_collider);
+        entity_definition =
+            entity_definition.with_collision(collision.enabled, collision.static_collider);
     }
     if let Some(renderable) = authored.renderable {
-        world = world.with_renderable(renderable.asset, renderable.visible);
+        entity_definition = entity_definition.with_renderable(renderable.asset, renderable.visible);
     }
     if let Some(kinematic) = authored.kinematic {
-        world = world.with_kinematic(
+        entity_definition = entity_definition.with_kinematic(
             array_vec3(kinematic.half_extents),
             array_vec3(kinematic.velocity),
         );
     }
 
-    let mut definition = GameEntityDefinition::new(world);
+    let mut definition = GameEntityDefinition::new(entity_definition);
     if let Some(door) = authored.door {
         let Some(closed_translation) = initial_translation else {
             return Err(ProjectContentError::DoorMissingInitialTranslation { entity });

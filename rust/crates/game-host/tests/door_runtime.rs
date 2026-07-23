@@ -1,11 +1,11 @@
 use core_ids::EntityId;
 use core_math::Vec3;
 use core_time::{Tick, TickDelta};
+use entity_state::EntityDefinition;
 use game_host::{
     decode_game_snapshot, encode_game_snapshot, security_door_definitions, DoorState,
     GameEntityDefinition, GameEntityDefinitionError, GameEvent, GameRuntime,
 };
-use world_kernel::EntityDefinition;
 
 #[test]
 fn switch_opens_and_scheduled_intent_closes_door() {
@@ -24,10 +24,10 @@ fn switch_opens_and_scheduled_intent_closes_door() {
     let open = runtime.session().door(ids.door).expect("door");
     assert_eq!(open.state, DoorState::Open);
     assert_eq!(
-        open.world.transform.expect("transform").translation,
+        open.entity_view.transform.expect("transform").translation,
         Vec3::new(0.0, 3.0, 0.0)
     );
-    assert!(!open.world.collision.expect("collision").enabled);
+    assert!(!open.entity_view.collision.expect("collision").enabled);
     assert_eq!(runtime.readout().pending_schedules, 1);
 
     let before_due = runtime.advance_by(2).expect("advance");
@@ -44,10 +44,10 @@ fn switch_opens_and_scheduled_intent_closes_door() {
     let door = runtime.session().door(ids.door).expect("door");
     assert_eq!(door.state, DoorState::Closed);
     assert_eq!(
-        door.world.transform.expect("transform").translation,
+        door.entity_view.transform.expect("transform").translation,
         Vec3::ZERO
     );
-    assert!(door.world.collision.expect("collision").enabled);
+    assert!(door.entity_view.collision.expect("collision").enabled);
     assert_eq!(runtime.readout().pending_schedules, 0);
 }
 
@@ -74,6 +74,9 @@ fn save_reopen_preserves_pending_close_without_event_history() {
         .expect("interaction");
     runtime.advance_by(2).expect("advance");
     let encoded = encode_game_snapshot(&runtime).expect("save");
+    assert!(encoded.contains("\"schemaVersion\": 4"));
+    assert!(encoded.contains("\"entities\""));
+    assert!(!encoded.contains("\"world\""));
 
     let mut restored = decode_game_snapshot(&encoded).expect("restore");
     assert_eq!(restored.tick(), Tick::new(2));
@@ -101,7 +104,7 @@ fn invalid_control_relationship_fails_before_runtime() {
     )));
     let switch = definitions
         .iter_mut()
-        .find(|definition| definition.world.id == ids.switch)
+        .find(|definition| definition.entity.id == ids.switch)
         .expect("switch definition");
     switch.controls_targets = vec![EntityId::new(99)];
 
@@ -115,9 +118,9 @@ fn invalid_control_relationship_fails_before_runtime() {
 #[test]
 fn rejected_interaction_does_not_mutate_runtime() {
     let (ids, mut runtime) = GameRuntime::security_door(None).expect("fixture");
-    let revision = runtime.session().world().revision();
+    let revision = runtime.session().entities().revision();
     assert!(runtime.interact(ids.actor, EntityId::new(404)).is_err());
-    assert_eq!(runtime.session().world().revision(), revision);
+    assert_eq!(runtime.session().entities().revision(), revision);
     assert_eq!(
         runtime.session().door(ids.door).expect("door").state,
         DoorState::Closed

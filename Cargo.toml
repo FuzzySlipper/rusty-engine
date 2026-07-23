@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "rust/crates/engine-spatial",
     "rust/crates/game-host",
-    "rust/crates/world-kernel",
+    "rust/crates/entity-state",
 ]
 
 [workspace.package]

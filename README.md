@@ -27,7 +27,7 @@ The runtime now proves four connected paths:
    projection deltas return to Asha's real Three renderer.
 
 Components remain data. `InteractionService`, `CombatService`, `EncounterService`, and
-`DoorService` own behavior; `GameRuntime` contains the short explicit event route. World capability
+`DoorService` own behavior; `GameRuntime` contains the short explicit event route. Entity capability
 changes are applied atomically only where collision/render invariants require it. Snapshots preserve
 durable state and scheduled intents without replaying an event history.
 

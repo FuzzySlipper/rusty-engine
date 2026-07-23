@@ -3,17 +3,17 @@ use std::collections::BTreeMap;
 use core_ids::EntityId;
 use core_math::Vec3;
 
-use crate::model::{translation_is_valid, velocity_is_valid, EntityLifecycle, WorldKernel};
+use crate::model::{translation_is_valid, velocity_is_valid, EntityLifecycle, EntityState};
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum WorldCommand {
+pub enum EntityCommand {
     SetTranslation { entity: EntityId, translation: Vec3 },
     SetCollisionEnabled { entity: EntityId, enabled: bool },
     SetVisible { entity: EntityId, visible: bool },
     SetKinematicVelocity { entity: EntityId, velocity: Vec3 },
 }
 
-impl WorldCommand {
+impl EntityCommand {
     fn entity(&self) -> EntityId {
         match self {
             Self::SetTranslation { entity, .. }
@@ -25,12 +25,12 @@ impl WorldCommand {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct WorldCommandBatch {
-    pub commands: Vec<WorldCommand>,
+pub struct EntityCommandBatch {
+    pub commands: Vec<EntityCommand>,
 }
 
-impl WorldCommandBatch {
-    pub fn new(commands: impl IntoIterator<Item = WorldCommand>) -> Self {
+impl EntityCommandBatch {
+    pub fn new(commands: impl IntoIterator<Item = EntityCommand>) -> Self {
         Self {
             commands: commands.into_iter().collect(),
         }
@@ -38,7 +38,7 @@ impl WorldCommandBatch {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum WorldFact {
+pub enum EntityFact {
     TranslationChanged {
         entity: EntityId,
         before: Vec3,
@@ -69,11 +69,11 @@ pub enum WorldFact {
 pub struct BatchReceipt {
     pub revision_before: u64,
     pub revision_after: u64,
-    pub facts: Vec<WorldFact>,
+    pub facts: Vec<EntityFact>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WorldCommandError {
+pub enum EntityCommandError {
     UnknownEntity { entity: EntityId },
     EntityDisabled { entity: EntityId },
     MissingTransform { entity: EntityId },
@@ -89,12 +89,16 @@ pub enum WorldCommandError {
 pub struct BatchRejection {
     pub revision: u64,
     pub command_index: Option<usize>,
-    pub reason: WorldCommandError,
+    pub reason: EntityCommandError,
 }
 
 impl std::fmt::Display for BatchRejection {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "world command batch rejected: {:?}", self.reason)
+        write!(
+            formatter,
+            "entity command batch rejected: {:?}",
+            self.reason
+        )
     }
 }
 
@@ -114,11 +118,14 @@ struct ProjectedEntity {
 }
 
 impl ProjectedEntity {
-    fn from_world(world: &WorldKernel, entity: EntityId) -> Self {
-        let transform = world.transforms.get(&entity).map(|value| value.translation);
-        let collision = world.collisions.get(&entity);
-        let visible = world.renderables.get(&entity).map(|value| value.visible);
-        let velocity = world.kinematics.get(&entity).map(|value| value.velocity);
+    fn from_state(entities: &EntityState, entity: EntityId) -> Self {
+        let transform = entities
+            .transforms
+            .get(&entity)
+            .map(|value| value.translation);
+        let collision = entities.collisions.get(&entity);
+        let visible = entities.renderables.get(&entity).map(|value| value.visible);
+        let velocity = entities.kinematics.get(&entity).map(|value| value.velocity);
         Self {
             original_translation: transform,
             next_translation: transform,
@@ -134,83 +141,83 @@ impl ProjectedEntity {
 }
 
 pub(crate) fn apply_batch(
-    world: &mut WorldKernel,
-    batch: WorldCommandBatch,
+    entities: &mut EntityState,
+    batch: EntityCommandBatch,
 ) -> Result<BatchReceipt, BatchRejection> {
-    let revision_before = world.revision;
+    let revision_before = entities.revision;
     let mut projected = BTreeMap::<EntityId, ProjectedEntity>::new();
 
     for (command_index, command) in batch.commands.iter().enumerate() {
         let entity = command.entity();
-        let Some(core) = world.entities.get(&entity) else {
+        let Some(core) = entities.entities.get(&entity) else {
             return Err(reject(
-                world,
+                entities,
                 Some(command_index),
-                WorldCommandError::UnknownEntity { entity },
+                EntityCommandError::UnknownEntity { entity },
             ));
         };
         if core.lifecycle != EntityLifecycle::Active {
             return Err(reject(
-                world,
+                entities,
                 Some(command_index),
-                WorldCommandError::EntityDisabled { entity },
+                EntityCommandError::EntityDisabled { entity },
             ));
         }
         let state = projected
             .entry(entity)
-            .or_insert_with(|| ProjectedEntity::from_world(world, entity));
+            .or_insert_with(|| ProjectedEntity::from_state(entities, entity));
 
         match command {
-            WorldCommand::SetTranslation { translation, .. } => {
+            EntityCommand::SetTranslation { translation, .. } => {
                 if state.next_translation.is_none() {
                     return Err(reject(
-                        world,
+                        entities,
                         Some(command_index),
-                        WorldCommandError::MissingTransform { entity },
+                        EntityCommandError::MissingTransform { entity },
                     ));
                 }
                 if !translation_is_valid(*translation) {
                     return Err(reject(
-                        world,
+                        entities,
                         Some(command_index),
-                        WorldCommandError::InvalidTranslation { entity },
+                        EntityCommandError::InvalidTranslation { entity },
                     ));
                 }
                 state.next_translation = Some(*translation);
             }
-            WorldCommand::SetCollisionEnabled { enabled, .. } => {
+            EntityCommand::SetCollisionEnabled { enabled, .. } => {
                 if state.next_collision_enabled.is_none() {
                     return Err(reject(
-                        world,
+                        entities,
                         Some(command_index),
-                        WorldCommandError::MissingCollision { entity },
+                        EntityCommandError::MissingCollision { entity },
                     ));
                 }
                 state.next_collision_enabled = Some(*enabled);
             }
-            WorldCommand::SetVisible { visible, .. } => {
+            EntityCommand::SetVisible { visible, .. } => {
                 if state.next_visible.is_none() {
                     return Err(reject(
-                        world,
+                        entities,
                         Some(command_index),
-                        WorldCommandError::MissingRenderable { entity },
+                        EntityCommandError::MissingRenderable { entity },
                     ));
                 }
                 state.next_visible = Some(*visible);
             }
-            WorldCommand::SetKinematicVelocity { velocity, .. } => {
+            EntityCommand::SetKinematicVelocity { velocity, .. } => {
                 if state.next_velocity.is_none() {
                     return Err(reject(
-                        world,
+                        entities,
                         Some(command_index),
-                        WorldCommandError::MissingKinematic { entity },
+                        EntityCommandError::MissingKinematic { entity },
                     ));
                 }
                 if !velocity_is_valid(*velocity) {
                     return Err(reject(
-                        world,
+                        entities,
                         Some(command_index),
-                        WorldCommandError::InvalidKinematicVelocity { entity },
+                        EntityCommandError::InvalidKinematicVelocity { entity },
                     ));
                 }
                 state.next_velocity = Some(*velocity);
@@ -225,9 +232,9 @@ pub(crate) fn apply_batch(
             && state.next_collision_enabled == Some(true)
         {
             return Err(reject(
-                world,
+                entities,
                 None,
-                WorldCommandError::StaticColliderMovement { entity: *entity },
+                EntityCommandError::StaticColliderMovement { entity: *entity },
             ));
         }
     }
@@ -253,12 +260,12 @@ pub(crate) fn apply_batch(
             let after = state
                 .next_translation
                 .expect("validated transform presence");
-            world
+            entities
                 .transforms
                 .get_mut(&entity)
                 .expect("validated transform presence")
                 .translation = after;
-            facts.push(WorldFact::TranslationChanged {
+            facts.push(EntityFact::TranslationChanged {
                 entity,
                 before,
                 after,
@@ -272,12 +279,12 @@ pub(crate) fn apply_batch(
             let after = state
                 .next_collision_enabled
                 .expect("validated collision presence");
-            world
+            entities
                 .collisions
                 .get_mut(&entity)
                 .expect("validated collision presence")
                 .enabled = after;
-            facts.push(WorldFact::CollisionChanged {
+            facts.push(EntityFact::CollisionChanged {
                 entity,
                 before,
                 after,
@@ -289,12 +296,12 @@ pub(crate) fn apply_batch(
                 .original_visible
                 .expect("validated renderable presence");
             let after = state.next_visible.expect("validated renderable presence");
-            world
+            entities
                 .renderables
                 .get_mut(&entity)
                 .expect("validated renderable presence")
                 .visible = after;
-            facts.push(WorldFact::VisibilityChanged {
+            facts.push(EntityFact::VisibilityChanged {
                 entity,
                 before,
                 after,
@@ -306,12 +313,12 @@ pub(crate) fn apply_batch(
                 .original_velocity
                 .expect("validated kinematic presence");
             let after = state.next_velocity.expect("validated kinematic presence");
-            world
+            entities
                 .kinematics
                 .get_mut(&entity)
                 .expect("validated kinematic presence")
                 .velocity = after;
-            facts.push(WorldFact::KinematicVelocityChanged {
+            facts.push(EntityFact::KinematicVelocityChanged {
                 entity,
                 before,
                 after,
@@ -320,7 +327,7 @@ pub(crate) fn apply_batch(
         }
     }
 
-    world.revision = revision_after;
+    entities.revision = revision_after;
     Ok(BatchReceipt {
         revision_before,
         revision_after,
@@ -329,12 +336,12 @@ pub(crate) fn apply_batch(
 }
 
 fn reject(
-    world: &WorldKernel,
+    entities: &EntityState,
     command_index: Option<usize>,
-    reason: WorldCommandError,
+    reason: EntityCommandError,
 ) -> BatchRejection {
     BatchRejection {
-        revision: world.revision,
+        revision: entities.revision,
         command_index,
         reason,
     }

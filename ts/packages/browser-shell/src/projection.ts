@@ -26,7 +26,7 @@ export interface RuntimeEnemyState {
 
 export interface RuntimeBrowserState {
   readonly tick: number;
-  readonly worldRevision: number;
+  readonly entityRevision: number;
   readonly projection: readonly RuntimeProjectionNode[];
   readonly doorState: "closed" | "open";
   readonly encounterState: "active" | "cleared";

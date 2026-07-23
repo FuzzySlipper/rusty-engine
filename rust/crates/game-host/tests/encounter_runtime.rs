@@ -66,8 +66,8 @@ fn committed_enemy_facts_clear_the_encounter_and_open_the_exit() {
     );
     let defeated = runtime.session().enemy(FIRST_ENEMY).expect("enemy");
     assert_eq!(defeated.state, EnemyState::Defeated);
-    assert!(!defeated.world.collision.expect("collision").enabled);
-    assert!(!defeated.world.renderable.expect("renderable").visible);
+    assert!(!defeated.entity_view.collision.expect("collision").enabled);
+    assert!(!defeated.entity_view.renderable.expect("renderable").visible);
 
     let second = runtime
         .defeat_enemy(ACTOR, SECOND_ENEMY)
@@ -102,7 +102,7 @@ fn committed_enemy_facts_clear_the_encounter_and_open_the_exit() {
     let exit = runtime.session().door(EXIT).expect("exit");
     assert_eq!(exit.state, DoorState::Open);
     assert_eq!(
-        exit.world.transform.expect("transform").translation,
+        exit.entity_view.transform.expect("transform").translation,
         Vec3::new(0.0, 3.0, 8.0)
     );
     assert_eq!(runtime.readout().journal.len(), 4);

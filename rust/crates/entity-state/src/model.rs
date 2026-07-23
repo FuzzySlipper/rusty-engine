@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use core_ids::EntityId;
 use core_math::Vec3;
 
-use crate::command::{BatchReceipt, BatchRejection, WorldCommandBatch};
+use crate::command::{BatchReceipt, BatchRejection, EntityCommandBatch};
 
 pub const MAX_ABS_TRANSLATION: f32 = 1_000_000.0;
 pub const MAX_ABS_VELOCITY: f32 = 10_000.0;
@@ -157,7 +157,7 @@ pub struct ProjectionNode {
 }
 
 #[derive(Debug, Default)]
-pub struct WorldKernel {
+pub struct EntityState {
     pub(crate) revision: u64,
     pub(crate) entities: BTreeMap<EntityId, EntityCore>,
     pub(crate) transforms: BTreeMap<EntityId, TransformCapability>,
@@ -166,7 +166,7 @@ pub struct WorldKernel {
     pub(crate) kinematics: BTreeMap<EntityId, KinematicCapability>,
 }
 
-impl WorldKernel {
+impl EntityState {
     pub fn from_definitions(
         definitions: impl IntoIterator<Item = EntityDefinition>,
     ) -> Result<Self, EntityDefinitionError> {
@@ -182,10 +182,10 @@ impl WorldKernel {
             validate_definition(definition)?;
         }
 
-        let mut world = Self::default();
+        let mut state = Self::default();
         for definition in definitions {
             let id = definition.id;
-            world.entities.insert(
+            state.entities.insert(
                 id,
                 EntityCore {
                     id,
@@ -194,19 +194,19 @@ impl WorldKernel {
                 },
             );
             if let Some(transform) = definition.transform {
-                world.transforms.insert(id, transform);
+                state.transforms.insert(id, transform);
             }
             if let Some(collision) = definition.collision {
-                world.collisions.insert(id, collision);
+                state.collisions.insert(id, collision);
             }
             if let Some(renderable) = definition.renderable {
-                world.renderables.insert(id, renderable);
+                state.renderables.insert(id, renderable);
             }
             if let Some(kinematic) = definition.kinematic {
-                world.kinematics.insert(id, kinematic);
+                state.kinematics.insert(id, kinematic);
             }
         }
-        Ok(world)
+        Ok(state)
     }
 
     pub fn revision(&self) -> u64 {
@@ -263,7 +263,7 @@ impl WorldKernel {
 
     pub fn apply_batch(
         &mut self,
-        batch: WorldCommandBatch,
+        batch: EntityCommandBatch,
     ) -> Result<BatchReceipt, BatchRejection> {
         crate::command::apply_batch(self, batch)
     }

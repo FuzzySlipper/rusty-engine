@@ -16,7 +16,7 @@ fn main() {
         "first_events={} clearing_events={} final_revision={}",
         first.events.len(),
         second.events.len(),
-        runtime.session().world().revision()
+        runtime.session().entities().revision()
     );
     println!(
         "{}",

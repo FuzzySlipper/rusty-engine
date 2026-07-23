@@ -6,7 +6,7 @@ import { RuntimeProjectionAdapter, entityHandle, type RuntimeBrowserState } from
 function state(projection: RuntimeBrowserState["projection"]): RuntimeBrowserState {
   return {
     tick: 0,
-    worldRevision: 0,
+    entityRevision: 0,
     projection,
     doorState: "closed",
     encounterState: "active",

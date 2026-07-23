@@ -13,4 +13,4 @@ core-time.workspace = true
 engine-spatial = { path = "../engine-spatial" }
 serde.workspace = true
 serde_json.workspace = true
-world-kernel = { path = "../world-kernel" }
+entity-state = { path = "../entity-state" }

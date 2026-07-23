@@ -10,7 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         opened.events.len(),
         closed.events.len(),
         runtime.tick().raw(),
-        runtime.session().world().revision()
+        runtime.session().entities().revision()
     );
     println!("{}", encode_game_snapshot(&runtime)?);
     Ok(())

@@ -4,8 +4,8 @@ use core_ids::EntityId;
 use core_math::Vec3;
 use core_time::{Tick, TickDelta};
 use engine_spatial::VoxelCollisionScene;
+use entity_state::{EntityState, EntityStateSnapshot};
 use serde::{Deserialize, Serialize};
-use world_kernel::{WorldKernel, WorldSnapshot};
 
 use crate::model::{
     DoorComponent, DoorConfig, DoorState, EncounterComponent, EncounterConfig, EncounterState,
@@ -14,14 +14,14 @@ use crate::model::{
 use crate::runtime::GameRuntime;
 use crate::scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
 
-pub const GAME_SNAPSHOT_SCHEMA_VERSION: u32 = 3;
+pub const GAME_SNAPSHOT_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct GameSnapshot {
     pub schema_version: u32,
     pub tick: u64,
-    pub world: WorldSnapshot,
+    pub entities: EntityStateSnapshot,
     pub voxel_collision: Option<VoxelCollisionSnapshot>,
     pub doors: Vec<DoorSnapshot>,
     pub switches: Vec<SwitchSnapshot>,
@@ -118,7 +118,7 @@ pub enum GameSnapshotError {
     Encode(serde_json::Error),
     Decode(serde_json::Error),
     UnsupportedSchema { actual: u32 },
-    World(world_kernel::WorldSnapshotError),
+    EntityState(entity_state::EntityStateSnapshotError),
     CollisionScene(engine_spatial::CollisionSceneError),
     DuplicateDoor { entity: u64 },
     DuplicateSwitch { entity: u64 },
@@ -151,7 +151,7 @@ impl GameRuntime {
         GameSnapshot {
             schema_version: GAME_SNAPSHOT_SCHEMA_VERSION,
             tick: self.tick.raw(),
-            world: self.session.world.snapshot(),
+            entities: self.session.entities.snapshot(),
             voxel_collision: self
                 .collision_scene
                 .as_ref()
@@ -256,7 +256,8 @@ impl GameRuntime {
                 .map_err(GameSnapshotError::CollisionScene)
             })
             .transpose()?;
-        let world = WorldKernel::from_snapshot(snapshot.world).map_err(GameSnapshotError::World)?;
+        let entities = EntityState::from_snapshot(snapshot.entities)
+            .map_err(GameSnapshotError::EntityState)?;
         let mut doors = BTreeMap::new();
         let mut door_ids = BTreeSet::new();
         for door in snapshot.doors {
@@ -266,7 +267,7 @@ impl GameRuntime {
                 });
             }
             let entity = EntityId::new(door.entity);
-            let view = world
+            let view = entities
                 .view(entity)
                 .map_err(|_| GameSnapshotError::UnknownDoorEntity {
                     entity: door.entity,
@@ -301,7 +302,7 @@ impl GameRuntime {
                 });
             }
             let entity = EntityId::new(switch.entity);
-            if !world.contains(entity) {
+            if !entities.contains(entity) {
                 return Err(GameSnapshotError::UnknownSwitchEntity {
                     entity: switch.entity,
                 });
@@ -343,11 +344,12 @@ impl GameRuntime {
                 });
             }
             let entity = EntityId::new(enemy.entity);
-            let view = world
-                .view(entity)
-                .map_err(|_| GameSnapshotError::UnknownEnemyEntity {
-                    entity: enemy.entity,
-                })?;
+            let view =
+                entities
+                    .view(entity)
+                    .map_err(|_| GameSnapshotError::UnknownEnemyEntity {
+                        entity: enemy.entity,
+                    })?;
             if view.collision.is_none() || view.renderable.is_none() {
                 return Err(GameSnapshotError::MissingEnemyCapability {
                     entity: enemy.entity,
@@ -373,7 +375,7 @@ impl GameRuntime {
                     entity: encounter.entity,
                 });
             }
-            if !world.contains(EntityId::new(encounter.entity)) {
+            if !entities.contains(EntityId::new(encounter.entity)) {
                 return Err(GameSnapshotError::UnknownEncounterEntity {
                     entity: encounter.entity,
                 });
@@ -447,7 +449,7 @@ impl GameRuntime {
 
         Ok(Self {
             session: GameSession {
-                world,
+                entities,
                 doors,
                 switches,
                 controls,

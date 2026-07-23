@@ -56,12 +56,12 @@ fn run_workload(bodies: usize, phases: usize) -> Value {
     let admission_started = Instant::now();
     let mut runtime = GameRuntime::from_project_content(&project).expect("admit motion workload");
     let admission_micros = admission_started.elapsed().as_micros();
-    let admitted_bodies = runtime.session().world().kinematic_bodies().count();
+    let admitted_bodies = runtime.session().entities().kinematic_bodies().count();
 
     let simulation_started = Instant::now();
     let mut moved_body_phases = 0usize;
     let mut blocked_axes = 0usize;
-    let mut committed_world_facts = 0usize;
+    let mut committed_entity_facts = 0usize;
     for _ in 0..phases {
         let receipt = runtime
             .run_motion_phase(DELTA_SECONDS)
@@ -72,7 +72,7 @@ fn run_workload(bodies: usize, phases: usize) -> Value {
             .iter()
             .filter(|fact| matches!(fact, MotionFact::Blocked { .. }))
             .count();
-        committed_world_facts += receipt.world_facts.len();
+        committed_entity_facts += receipt.entity_facts.len();
     }
     let simulation_elapsed = simulation_started.elapsed();
     let simulation_micros = simulation_elapsed.as_micros();
@@ -83,7 +83,7 @@ fn run_workload(bodies: usize, phases: usize) -> Value {
     };
     let still_moving = runtime
         .session()
-        .world()
+        .entities()
         .kinematic_bodies()
         .filter(|body| body.velocity.x != 0.0 || body.velocity.y != 0.0 || body.velocity.z != 0.0)
         .count();
@@ -110,12 +110,12 @@ fn run_workload(bodies: usize, phases: usize) -> Value {
             / (admitted_bodies * phases) as f64,
         "movedBodyPhases": moved_body_phases,
         "blockedAxes": blocked_axes,
-        "committedWorldFacts": committed_world_facts,
+        "committedEntityFacts": committed_entity_facts,
         "projectionPassMicros": projection_micros,
         "projectedNodeReads": projected_nodes,
         "snapshotBytes": snapshot_bytes,
         "stillMoving": still_moving,
-        "worldRevision": runtime.session().world().revision(),
+        "entityRevision": runtime.session().entities().revision(),
         "projectionNodes": runtime.readout().projection.len(),
         "solidVoxels": runtime
             .collision_scene()

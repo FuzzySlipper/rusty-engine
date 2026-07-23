@@ -117,7 +117,7 @@ EntityDefinition.kinematic { half_extents, velocity }
   -> KinematicMotionSystem::run (all bodies once, stable order)
   -> Asha axis-swept voxel query on X / Y / Z
   -> typed Moved / Blocked facts
-  -> one atomic world command batch
+  -> one atomic entity command batch
 ```
 
 There is no component-local update method, ECS query scheduler, subscription, or per-body bridge
@@ -151,7 +151,7 @@ the run has no renderer, input, AI, or operating-system workload mixed into it.
 
 Allocation counts are not instrumented yet. State-copy pressure is bounded visibly instead: there
 is no process serialization, the system snapshots 256 small `KinematicBodyView` values per phase,
-and the receipt counts command/fact values (26,155 committed world facts in the largest run). A
+and the receipt counts command/fact values (26,155 committed entity facts in the largest run). A
 future vertical feature should add safe allocator telemetry before interpreting these timings as a
 general engine capacity result.
 
@@ -200,7 +200,7 @@ The current verification gate proves:
 - Rust formatting, Clippy, and strict TypeScript compilation;
 - generated project content is byte-for-byte current with its TypeScript composition;
 - 5 TypeScript content-composition tests and one retained-diff adapter test;
-- 23 Rust integration tests across the world kernel, donor collision queries, security door,
+- 23 Rust integration tests across entity state, donor collision queries, security door,
   content admission, encounter routing, kinematic motion, atomic rejection, projection, and
   save/reopen;
 - strict rejection of unknown stored-content and snapshot fields;
@@ -212,7 +212,7 @@ These are physical line counts (`wc -l`), not complexity scores:
 
 | Ownership surface | Production source footprint | Purpose |
 |---|---:|---|
-| Reusable Rust world kernel | 4 files / 881 lines | Entity/capability storage, atomic world mutation, snapshot, projection. |
+| Reusable Rust entity state | 4 files / 888 lines | Entity/capability storage, atomic entity mutation, snapshot, projection. |
 | Successor spatial adapter/system | 1 file / 369 lines | Canonical donor scene construction, bounded query facade, central kinematic phase. |
 | Rust game host and runners | 11 files / 2,323 lines | Concrete components/services, routing, admission, scheduling, snapshots, headless/product/workload hosts. |
 | TypeScript content composition | 5 files / 206 lines | Typed definitions, encounter and motion builders, reproducibility check. |
@@ -232,7 +232,7 @@ introducing reflection, registries, or generic replay machinery.
   authority loop.
 - The retained command batch has concrete consumers: door transform/collision, enemy
   collision/visibility, and a whole kinematic phase's translations/blocked velocities commit once.
-- Batched world reads and expected-revision machinery had no remaining in-process consumer and were
+- Batched entity-state reads and expected-revision machinery had no remaining in-process consumer and were
   deleted with the external host.
 - The pivot removes substantially more runtime-host plumbing than the encounter slice adds.
 - A substantial Asha service family can sit below the new object-centric center unchanged.

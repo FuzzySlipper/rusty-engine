@@ -96,10 +96,20 @@ dependencies = [
  "core-math",
  "core-space",
  "core-voxel",
+ "entity-state",
  "svc-collision",
  "svc-spatial",
  "svc-volume",
- "world-kernel",
+]
+
+[[package]]
+name = "entity-state"
+version = "0.1.0"
+dependencies = [
+ "core-ids",
+ "core-math",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -122,9 +132,9 @@ dependencies = [
  "core-math",
  "core-time",
  "engine-spatial",
+ "entity-state",
  "serde",
  "serde_json",
- "world-kernel",
 ]
 
 [[package]]
@@ -491,16 +501,6 @@ checksum = "dfdfe6a32973f2d1b268b8895845a8a96cac2f0191e72c27cc929036060dbf89"
 dependencies = [
  "bytemuck",
  "safe_arch",
-]
-
-[[package]]
-name = "world-kernel"
-version = "0.1.0"
-dependencies = [
- "core-ids",
- "core-math",
- "serde",
- "serde_json",
 ]
 
 [[package]]

@@ -82,7 +82,7 @@ async function perform(path: string): Promise<void> {
 function renderReadout(state: RuntimeBrowserState): void {
   encounterState.textContent = state.encounterState.toUpperCase();
   encounterState.dataset.state = state.encounterState;
-  revision.textContent = `REV ${String(state.worldRevision)}`;
+  revision.textContent = `REV ${String(state.entityRevision)}`;
   doorCaption.textContent = state.doorState === "open" ? "OPEN" : "LOCKED";
   doorCaption.dataset.state = state.doorState;
   motionState.textContent = state.motionState.toUpperCase();

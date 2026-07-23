@@ -1,4 +1,4 @@
-//! Conventional spatial services over the object-centric world kernel.
+//! Conventional spatial services over object-centric entity state.
 //!
 //! The voxel authority and Parry collision projection are transplanted from
 //! Asha unchanged. This crate adapts their typed query vocabulary to a small,
@@ -14,13 +14,13 @@ use core_ids::EntityId;
 use core_math::Vec3;
 use core_space::{ChunkDims, GridId, VoxelCoord, VoxelGridSpec, WorldPos, WorldVec};
 use core_voxel::VoxelValue;
+use entity_state::{BatchRejection, EntityCommand, EntityCommandBatch, EntityFact, EntityState};
 use svc_collision::{CollisionProjection, Ray};
 use svc_spatial::VoxelWorld;
 use svc_volume::{VolumeError, VoxelChunk};
-use world_kernel::{BatchRejection, WorldCommand, WorldCommandBatch, WorldFact, WorldKernel};
 
 /// Upper bound for one scheduled motion phase. The caller controls cadence, but
-/// a single accidental multi-second step cannot become an unbounded world edit.
+/// a single accidental multi-second step cannot become an unbounded entity-state edit.
 pub const MAX_MOTION_DELTA_SECONDS: f32 = 1.0;
 pub const MAX_CHUNK_SIZE: u32 = 64;
 pub const MAX_SOLID_VOXELS: usize = 1_000_000;
@@ -30,7 +30,7 @@ pub const MAX_SOLID_VOXELS: usize = 1_000_000;
 /// Keeping both layers together preserves the donor's important invariant: the
 /// Parry representation accelerates queries but never becomes canonical state.
 pub struct VoxelCollisionScene {
-    world: VoxelWorld,
+    voxel_world: VoxelWorld,
     projection: CollisionProjection,
     voxel_size: f64,
     chunk_size: u32,
@@ -46,7 +46,7 @@ impl std::fmt::Debug for VoxelCollisionScene {
             .field("solid_voxel_count", &self.solid_voxels.len())
             .field(
                 "resident_chunk_count",
-                &self.world.resident_chunks().count(),
+                &self.voxel_world.resident_chunks().count(),
             )
             .field("projection_version", &self.projection.version())
             .finish()
@@ -121,13 +121,13 @@ impl VoxelCollisionScene {
                 })?;
         }
 
-        let mut world = VoxelWorld::new(grid);
+        let mut voxel_world = VoxelWorld::new(grid);
         for (coord, chunk) in chunks {
-            world.insert(coord, chunk);
+            voxel_world.insert(coord, chunk);
         }
-        let projection = CollisionProjection::build(&world);
+        let projection = CollisionProjection::build(&voxel_world);
         Ok(Self {
-            world,
+            voxel_world,
             projection,
             voxel_size,
             chunk_size,
@@ -152,7 +152,7 @@ impl VoxelCollisionScene {
     }
 
     pub fn resident_chunk_count(&self) -> usize {
-        self.world.resident_chunks().count()
+        self.voxel_world.resident_chunks().count()
     }
 
     pub fn projection_version(&self) -> u64 {
@@ -242,13 +242,13 @@ pub struct MotionPhaseReceipt {
     pub revision_before: u64,
     pub revision_after: u64,
     pub facts: Vec<MotionFact>,
-    pub world_facts: Vec<WorldFact>,
+    pub entity_facts: Vec<EntityFact>,
 }
 
 #[derive(Debug)]
 pub enum MotionPhaseError {
     InvalidDeltaSeconds { actual: f32 },
-    WorldBatch(BatchRejection),
+    EntityBatch(BatchRejection),
 }
 
 impl std::fmt::Display for MotionPhaseError {
@@ -263,12 +263,12 @@ impl std::error::Error for MotionPhaseError {}
 ///
 /// Static voxel collision is checked independently on X, Y, then Z. A blocked
 /// axis stops and zeroes that velocity component while other axes can still
-/// move. All resulting object changes commit as one atomic world batch.
+/// move. All resulting object changes commit as one atomic entity batch.
 pub struct KinematicMotionSystem;
 
 impl KinematicMotionSystem {
     pub fn run(
-        world: &mut WorldKernel,
+        entities: &mut EntityState,
         scene: &VoxelCollisionScene,
         delta_seconds: f32,
     ) -> Result<MotionPhaseReceipt, MotionPhaseError> {
@@ -279,8 +279,8 @@ impl KinematicMotionSystem {
             });
         }
 
-        let bodies: Vec<_> = world.kinematic_bodies().collect();
-        let revision_before = world.revision();
+        let bodies: Vec<_> = entities.kinematic_bodies().collect();
+        let revision_before = entities.revision();
         let mut commands = Vec::new();
         let mut facts = Vec::new();
         let mut moved_bodies = 0usize;
@@ -329,7 +329,7 @@ impl KinematicMotionSystem {
             let after_velocity = Vec3::new(velocity[0], velocity[1], velocity[2]);
             if after != before {
                 moved_bodies += 1;
-                commands.push(WorldCommand::SetTranslation {
+                commands.push(EntityCommand::SetTranslation {
                     entity: body.entity,
                     translation: after,
                 });
@@ -340,19 +340,19 @@ impl KinematicMotionSystem {
                 });
             }
             if after_velocity != before_velocity {
-                commands.push(WorldCommand::SetKinematicVelocity {
+                commands.push(EntityCommand::SetKinematicVelocity {
                     entity: body.entity,
                     velocity: after_velocity,
                 });
             }
         }
 
-        let (revision_after, world_facts) = if commands.is_empty() {
+        let (revision_after, entity_facts) = if commands.is_empty() {
             (revision_before, Vec::new())
         } else {
-            let receipt = world
-                .apply_batch(WorldCommandBatch::new(commands))
-                .map_err(MotionPhaseError::WorldBatch)?;
+            let receipt = entities
+                .apply_batch(EntityCommandBatch::new(commands))
+                .map_err(MotionPhaseError::EntityBatch)?;
             (receipt.revision_after, receipt.facts)
         };
 
@@ -363,7 +363,7 @@ impl KinematicMotionSystem {
             revision_before,
             revision_after,
             facts,
-            world_facts,
+            entity_facts,
         })
     }
 }
