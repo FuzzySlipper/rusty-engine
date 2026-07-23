@@ -21,12 +21,15 @@ Pinned source commit: `a431974330589761c9e35fc4f8a55996a1b5ee48`
 | Generated-room algorithm evidence | `engine-rs/crates/services/svc-levelgen` | Algorithm adapted; crate not referenced | Its shell loop and validation informed the successor room generator, but `core-events`, replay/hash records, runtime-frame metadata, collision AABBs, and render-chunk summaries were not imported. Rusty Engine emits one canonical voxel result and lets named consumers derive from it. |
 | Player input/controller evidence | `engine-rs/crates/protocol/protocol-input` and `engine-rs/crates/rules/rule-input` | Inspected only; no dependency or copied implementation | The useful boundary is authored physical controls resolving to semantic actions. Catalog hashing, context stacks, replay records, session configuration, and lifecycle routing are intentionally absent. |
 | Camera/view evidence | `engine-rs/crates/protocol/protocol-view` | Inspected only; no dependency or copied implementation | Pose vocabulary and bounded look input informed names. Camera handles, bridge operations, controller modes, transition state, and persisted camera authority are intentionally absent; the browser derives one follow camera from accepted player pose. |
+| Combat ray/target algorithm | `engine-rs/crates/services/svc-combat` | Small slab-ray/nearest-target algorithm adapted; crate not referenced | Deterministic AABB intersection and nearest-hit ordering are useful below the successor service. The donor `CombatState`, copied fire-control command state, health/replay hashes, readout/golden machinery, and independent health table were rejected because Rusty Engine entities and `CombatService` already own those meanings. |
+| FPS combat/lifecycle evidence | `engine-rs/crates/rules/rule-lifecycle/src/lib.rs` (`apply_primary_fire_for_roles_with_entities`) and `fps_loaded.rs` | Inspected only; no dependency or copied implementation | Confirmed the old player-fire behavior and collision ordering, while providing negative evidence for role maps, runtime-session wrappers, entity-authoring policy routes, gameplay-event adapters, state rollback copies, and per-action replay records. |
 | `@asha/contracts` | `ts/packages/contracts` | Sibling `link:` dependency, unchanged | Existing typed render-diff vocabulary and branded render/entity identities at the real presentation border. |
 | `@asha/renderer-three` | `ts/packages/renderer-three` | Sibling `link:` dependency, unchanged | Existing retained Three/WebGL browser surface, resource lifecycle, projection metadata, and render-diff application. |
 | `@asha/render-projection` | `ts/packages/render-projection` | Renderer transitive sibling dependency, unchanged | Renderer-neutral retained projection helpers used by the donor browser surface. |
 
-No Asha source has been copied into the repository. `engine-spatial` is a successor-owned adapter and
-system over the unchanged Rust donors. The browser shell supplies typed diffs directly; its Vite
+No Asha crate has been copied wholesale into the repository. `engine-spatial` is a successor-owned
+adapter and system over unchanged Rust donors, and M3 adapts only the small ray/AABB query algorithm
+named above. The browser shell supplies typed diffs directly; its Vite
 alias replaces `renderer-three`'s unused encoded-frame convenience import with a local fail-closed
 shim. The verification gate rejects old `RuntimeSession`, native bridge, Gameplay Fabric, or
 `GameplayRuntimeHost` markers in the built browser bundle.
@@ -42,6 +45,13 @@ that otherwise-useful generator owns `core-events` output and several replay/pro
 that would recreate parallel authority. The adapted successor loop is deliberately smaller: seed
 and dimensions produce material voxels, then the already-owned `VoxelWorld` is the sole input to
 collision, navigation, and mesh derivation.
+
+M3 deliberately does not reference `svc-combat`. Its useful ray/AABB intersection and stable
+nearest-target ordering now sit inside the successor-owned `CombatService`, which reads live entity
+transforms, `HealthComponent`, `WeaponComponent`, and the canonical voxel collision scene directly.
+Health, ammo, cooldown eligibility, damage, and defeat have no donor-owned mirror or hash. A lethal
+hit emits the existing typed `EnemyDefeated` consequence into the explicit encounter/door drain;
+no FPS runtime session, role registry, proposal policy, or replay record entered the path.
 
 Sibling references are intentional while Asha development is stopped for this decision. If this
 lab becomes a durable independent successor, the references should be pinned as Git dependencies,

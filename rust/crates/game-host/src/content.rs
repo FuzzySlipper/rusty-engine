@@ -6,11 +6,11 @@ use entity_state::{EntityDefinition, MAX_ABS_TRANSLATION};
 use serde::Deserialize;
 
 use crate::model::{
-    DoorConfig, GameEntityDefinition, GameEntityDefinitionError, GameSession, NavigationConfig,
-    PlayerControllerConfig, PlayerInputBindings,
+    DoorConfig, GameEntityDefinition, GameEntityDefinitionError, GameSession, HealthConfig,
+    NavigationConfig, PlayerControllerConfig, PlayerInputBindings, WeaponConfig,
 };
 
-pub const PROJECT_CONTENT_SCHEMA_VERSION: u32 = 5;
+pub const PROJECT_CONTENT_SCHEMA_VERSION: u32 = 6;
 
 #[derive(Debug)]
 pub struct AdmittedProject {
@@ -39,10 +39,12 @@ struct AuthoredEntityDefinition {
     switch: Option<AuthoredSwitch>,
     #[serde(default)]
     enemy: bool,
+    health: Option<AuthoredHealth>,
     encounter: Option<AuthoredEncounter>,
     kinematic: Option<AuthoredKinematic>,
     navigation: Option<AuthoredNavigation>,
     player_controller: Option<AuthoredPlayerController>,
+    weapon: Option<AuthoredWeapon>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,6 +102,13 @@ struct AuthoredEncounter {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct AuthoredHealth {
+    max: u32,
+    hitbox_half_extents: [f32; 3],
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct AuthoredKinematic {
     half_extents: [f32; 3],
     velocity: [f32; 3],
@@ -126,12 +135,23 @@ struct AuthoredPlayerController {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct AuthoredWeapon {
+    damage: u32,
+    max_distance: f32,
+    cooldown_ticks: u64,
+    ammo_capacity: u32,
+    muzzle_offset: [f32; 3],
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct AuthoredPlayerInputBindings {
     move_forward: String,
     move_backward: String,
     move_left: String,
     move_right: String,
     mouse_look: String,
+    primary_fire: String,
 }
 
 #[derive(Debug)]
@@ -270,6 +290,12 @@ fn authored_definition(
     if authored.enemy {
         definition = definition.as_enemy();
     }
+    if let Some(health) = authored.health {
+        definition = definition.with_health(HealthConfig {
+            max: health.max,
+            hitbox_half_extents: array_vec3(health.hitbox_half_extents),
+        });
+    }
     if let Some(encounter) = authored.encounter {
         definition = definition.as_encounter(
             encounter.members.into_iter().map(EntityId::new),
@@ -296,7 +322,17 @@ fn authored_definition(
                 controller.bindings.move_left,
                 controller.bindings.move_right,
                 controller.bindings.mouse_look,
+                controller.bindings.primary_fire,
             ),
+        });
+    }
+    if let Some(weapon) = authored.weapon {
+        definition = definition.with_weapon(WeaponConfig {
+            damage: weapon.damage,
+            max_distance: weapon.max_distance,
+            cooldown_ticks: weapon.cooldown_ticks,
+            ammo_capacity: weapon.ammo_capacity,
+            muzzle_offset: array_vec3(weapon.muzzle_offset),
         });
     }
     Ok(definition)

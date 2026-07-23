@@ -61,7 +61,7 @@ fn solid_goal_commits_a_typed_unreachable_outcome() {
 #[test]
 fn collision_mismatch_fails_closed_as_blocked() {
     let project = json!({
-        "schemaVersion": 5,
+        "schemaVersion": 6,
         "entities": [{
             "id": 4,
             "name": "wide-sentry",
@@ -93,7 +93,7 @@ fn dynamic_blocker_stops_motion_and_removal_allows_replanning() {
     let blocker = EntityId::new(5);
     let actor = EntityId::new(1);
     let project = json!({
-        "schemaVersion": 5,
+        "schemaVersion": 6,
         "entities": [
             { "id": 1, "name": "player" },
             {
@@ -185,7 +185,7 @@ fn one_bounded_phase_advances_many_agents_without_scattered_updates() {
         })
         .collect();
     let project = json!({
-        "schemaVersion": 5,
+        "schemaVersion": 6,
         "entities": entities,
         "voxelCollision": { "voxelSize": 1, "chunkSize": 8, "solidVoxels": [[7, 7, 7]] }
     });

@@ -16,7 +16,7 @@ The architecture charter is [asha-object-centric-successor-spike.md](./asha-obje
 
 ## Implemented walking spike
 
-The runtime now proves seven connected paths:
+The runtime now proves eight connected paths:
 
 1. A switch-controlled security door with an optional configured close delay.
 2. An encounter-gated exit where committed enemy-defeat facts clear an authored encounter and open
@@ -30,6 +30,8 @@ The runtime now proves seven connected paths:
    presentation-only follow camera rebuilt from accepted pose.
 7. Seeded material-voxel generation whose canonical `VoxelWorld` feeds collision, navigation, and
    an unchanged Asha visible-face mesher before retained Three upload.
+8. Authored primary-fire and weapon/health components resolved by a Rust `CombatService` against
+   live enemy transforms and canonical voxel occlusion, with typed damage/defeat consequences.
 
 Components remain data. Named services/systems own interaction, combat, encounters, doors, player
 control, navigation, and kinematic motion; `GameRuntime` contains the short explicit event route.
@@ -41,10 +43,11 @@ The project definitions under `content/generated/` are reproducibly composed by
 content and expectations, not Rust gameplay code. The same code-as-content package builds a named
 256-body voxel-wall workload without adding a TypeScript runtime authority.
 
-The loading-bay browser resolves authored player controls, routes a moving sentry, uploads the
-generated room mesh, defeats both enemies, and runs a bounded spatial phase. Its Chromium smoke
-proves player and probe collision against generated voxels, navigation around the generated pillar,
-the `EnemyDefeated -> EncounterCleared -> DoorOpened` chain, derived camera movement, and retained
+The loading-bay browser resolves authored player controls, damages a sentry while it is moving,
+finishes its route, defeats both enemies through aimed attacks, uploads the generated room mesh, and
+runs a bounded spatial phase. Its Chromium smoke proves player and probe collision against generated
+voxels, navigation around the generated pillar, typed attack/damage facts, the
+`EnemyDefeated -> EncounterCleared -> DoorOpened` chain, derived camera movement, and retained
 Three/WebGL mesh projection.
 
 ## Donor checkout

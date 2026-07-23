@@ -165,8 +165,8 @@ fn save_reopen_preserves_partial_encounter_progress() {
 #[test]
 fn project_content_rejects_unknown_contract_fields() {
     let invalid = ENCOUNTER_PROJECT.replacen(
-        "\"schemaVersion\": 5",
-        "\"schemaVersion\": 5, \"runtimeBehavior\": \"not-content\"",
+        "\"schemaVersion\": 6",
+        "\"schemaVersion\": 6, \"runtimeBehavior\": \"not-content\"",
         1,
     );
     assert!(matches!(
@@ -180,7 +180,7 @@ fn project_content_rejects_unknown_contract_fields() {
 #[test]
 fn project_content_rejects_kinematics_without_a_collision_scene() {
     let invalid = r#"{
-      "schemaVersion": 5,
+        "schemaVersion": 6,
       "entities": [{
         "id": 1,
         "name": "unbounded-runner",

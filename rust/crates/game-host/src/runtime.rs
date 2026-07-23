@@ -10,9 +10,9 @@ use engine_spatial::{
 
 use crate::content::{decode_project_content, AdmittedProject, ProjectContentError};
 use crate::model::{
-    readout, security_door_definitions, GameEvent, GameSession, JournalEntry,
-    NavigationPhaseReceipt, PlayerControlReceipt, ResolvedPlayerAction, RuntimeReadout,
-    RuntimeReceipt, SecurityDoorIds,
+    readout, security_door_definitions, CombatReceipt, CombatRejectionReason, GameEvent,
+    GameSession, JournalEntry, NavigationPhaseReceipt, PlayerControlReceipt, ResolvedAttackAction,
+    ResolvedPlayerAction, RuntimeReadout, RuntimeReceipt, SecurityDoorIds,
 };
 use crate::scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
 use crate::services::{
@@ -38,6 +38,13 @@ pub enum RuntimeError {
     },
     UnknownEnemy {
         enemy: EntityId,
+    },
+    UnknownWeapon {
+        entity: EntityId,
+    },
+    CombatRejected {
+        entity: EntityId,
+        reason: CombatRejectionReason,
     },
     UnknownPlayerController {
         player: EntityId,
@@ -194,6 +201,30 @@ impl GameRuntime {
         }
         let events = self.drain_events()?;
         Ok(self.receipt(events))
+    }
+
+    /// Resolve one authored attack intent against authoritative player pose,
+    /// live target components, and the canonical voxel collision projection.
+    pub fn attack(
+        &mut self,
+        attacker: EntityId,
+        action: ResolvedAttackAction,
+    ) -> Result<CombatReceipt, RuntimeError> {
+        let scene = self
+            .collision_scene
+            .as_ref()
+            .ok_or(RuntimeError::MissingCollisionScene)?;
+        let resolution =
+            CombatService::attack(&mut self.session, scene, self.tick, attacker, action)?;
+        if let Some(event) = resolution.event {
+            self.events.push_back(event);
+        }
+        let events = self.drain_events()?;
+        Ok(CombatReceipt {
+            action: resolution.action,
+            facts: resolution.facts,
+            events,
+        })
     }
 
     pub fn advance_by(&mut self, ticks: u64) -> Result<RuntimeReceipt, RuntimeError> {

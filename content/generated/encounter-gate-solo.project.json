@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "entities": [
     {
       "id": 1,
@@ -40,8 +40,20 @@
           "moveBackward": "KeyS",
           "moveLeft": "KeyA",
           "moveRight": "KeyD",
-          "mouseLook": "pointer"
+          "mouseLook": "pointer",
+          "primaryFire": "Mouse0"
         }
+      },
+      "weapon": {
+        "damage": 60,
+        "maxDistance": 20,
+        "cooldownTicks": 0,
+        "ammoCapacity": 8,
+        "muzzleOffset": [
+          0,
+          0,
+          0
+        ]
       }
     },
     {
@@ -96,6 +108,14 @@
         "visible": true
       },
       "enemy": true,
+      "health": {
+        "max": 100,
+        "hitboxHalfExtents": [
+          0.55,
+          0.9,
+          0.55
+        ]
+      },
       "kinematic": {
         "halfExtents": [
           0.25,

@@ -18,6 +18,8 @@ export interface EncounterProjectOptions {
   readonly navigationSpeedUnitsPerSecond?: number;
   readonly playerBindings?: PlayerInputBindingsDefinition;
   readonly generationSeed?: number;
+  readonly enemyHealth?: number;
+  readonly weaponDamage?: number;
 }
 
 export function encounterGateProject(
@@ -39,6 +41,10 @@ export function encounterGateProject(
     collision: { enabled: true, staticCollider: false },
     renderable: { asset: "mesh/security-sentry", visible: true },
     enemy: true,
+    health: {
+      max: options.enemyHealth ?? 100,
+      hitboxHalfExtents: [0.55, 0.9, 0.55],
+    },
     ...(index === 0
       ? {
           kinematic: { halfExtents: [0.25, 0.25, 0.25], velocity: [0, 0, 0] },
@@ -53,7 +59,7 @@ export function encounterGateProject(
   const members = enemies.map((enemy) => enemy.id);
 
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     entities: [
       {
         id: ENCOUNTER_IDS.actor,
@@ -74,7 +80,15 @@ export function encounterGateProject(
             moveLeft: "KeyA",
             moveRight: "KeyD",
             mouseLook: "pointer",
+            primaryFire: "Mouse0",
           },
+        },
+        weapon: {
+          damage: options.weaponDamage ?? 60,
+          maxDistance: 20,
+          cooldownTicks: 0,
+          ammoCapacity: 8,
+          muzzleOffset: [0, 0, 0],
         },
       },
       {

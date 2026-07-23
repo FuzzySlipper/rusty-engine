@@ -201,7 +201,7 @@ player intent so combat proves a real interaction rather than another test-only 
 | M1 | In review (#6103) | Navigation projection, authored navigation intent, autonomous enemy route following, replanning, blocked/unreachable outcomes | M0 | `svc-pathfinding` referenced unchanged; `rule-lifecycle/fps_movement.rs` used as evidence only | Visible sentry routes around authored collision; reopen is identical; typed arrival/blocked/unreachable facts and a 32-agent bounded phase are verified |
 | M2A | In review (#6104) | Resolved input, player controller, look/move intent, authoritative pose, derived camera | M0 | `protocol-input`, `rule-input`, and `protocol-view` used as evidence only; lifecycle/session routing excluded | Keyboard/pointer input visibly moves then blocks one player; bindings are content; pose/controller reopen identically; camera is rebuilt presentation state |
 | M2B | In review (#6105) | Seeded environment generation, canonical voxel admission, collision/nav rebuild, derived mesh presentation | M0 | `svc-rng` and `svc-mesh` referenced unchanged; `svc-levelgen` algorithm adapted without `core-events` | Seed variation changes canonical/visible geometry without runtime code; generated shell/pillar drive collision/navigation; mesh and hash-verified regeneration agree after reopen |
-| M3 | Queued | Weapon configuration, attack intent, ray/target resolution, health, damage/defeat, encounter consequence | M1, M2A | Extract from `svc-combat`; old FPS lifecycle is behavioral evidence | Player aims and attacks a moving enemy; health and defeat persist; defeat clears the existing encounter/door path |
+| M3 | In review (#6106) | Weapon configuration, attack intent, ray/target resolution, health, damage/defeat, encounter consequence | M1, M2A | Slab-ray/nearest-hit algorithm adapted from `svc-combat`; old FPS lifecycle used as behavioral and negative structural evidence | Player damages a moving enemy through authored primary fire, later defeats the encounter, health/weapon eligibility reopen identically, and typed defeat clears the existing door path |
 | M4 | Queued | Animation/audio/particle/billboard feedback derived from accepted movement, attack, damage, defeat, and door facts | M1-M3 facts | Inspect render donors one family at a time | Feedback is visible/audible, can be rebuilt or safely dropped, and never changes gameplay outcome |
 | M5 | Deferred until schemas settle | Stored scene, asset identities/catalog, entity definitions, project admission, diagnostics | At least M1, M2A, and M3 | Foundation concepts may transfer; broad content/bundle services are evidence | A non-generated stored project loads multiple settled component families with precise validation errors and no runtime facade |
 | M6 | Deferred | Durable project save/load and versioning, distinct from a live runtime snapshot | M5 | Selective serialization evidence only | Project content round-trips/version-migrates independently of session state; snapshots remain concrete runtime persistence |
@@ -210,7 +210,7 @@ player intent so combat proves a real interaction rather than another test-only 
 | M7C | Unscheduled | Voxel annotations and edit history | A named authoring/diagnostic consumer | Evidence from annotation/history protocols and services | Schedule only when undo, provenance, collaboration, or another concrete consumer exists |
 | M8 | Unscheduled | Studio/editor workflows over established runtime and project APIs | M5-M7 plus repeated manual-authoring pain | Asha Studio is product evidence, not a shell to transplant | Tools manipulate the same admitted data and typed commands used without Studio; no editor-only authority path |
 
-## M1: next executable cluster
+## M1: completed cluster definition
 
 Navigation plus autonomous enemy locomotion is the strongest next slice because it combines a clean
 donor, the existing collision/voxel authority, durable entity configuration, central real-time work,
@@ -284,6 +284,12 @@ The existing `DefeatEnemy` test action is a proven cross-domain consequence, not
 model. Replace it in the product path with player attack intent, weapon configuration, collision/ray
 resolution, health mutation, and the same typed defeat fact. Keep health as a successor component;
 do not import `svc-combat`'s independent state store or replay hash as a second authority.
+
+M3 implements that boundary with `WeaponComponent` on the player, `HealthComponent` on damageable
+enemies, and one direct `CombatService`. Rust derives the attack origin/direction from accepted
+controller state, resolves live enemy hitboxes and canonical voxel occlusion, then emits typed
+attack/miss/hit/damage/defeat facts. The old direct-defeat method remains only as a focused fixture
+helper; the browser has no direct-defeat route or target-selecting attack payload.
 
 ### M4: presentation feedback
 

@@ -9,15 +9,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{
     DoorComponent, DoorConfig, DoorState, EncounterComponent, EncounterConfig, EncounterState,
-    EnemyComponent, EnemyState, GameSession, NavigationComponent, NavigationConfig,
-    NavigationState, PlayerControllerComponent, PlayerControllerConfig, PlayerControllerState,
-    PlayerInputBindings, SwitchComponent, MAX_NAVIGATION_QUERY_BUDGET,
-    MAX_NAVIGATION_SPEED_UNITS_PER_SECOND,
+    EnemyComponent, EnemyState, GameSession, HealthComponent, HealthConfig, NavigationComponent,
+    NavigationConfig, NavigationState, PlayerControllerComponent, PlayerControllerConfig,
+    PlayerControllerState, PlayerInputBindings, SwitchComponent, WeaponComponent, WeaponConfig,
+    WeaponState, MAX_NAVIGATION_QUERY_BUDGET, MAX_NAVIGATION_SPEED_UNITS_PER_SECOND,
 };
 use crate::runtime::GameRuntime;
 use crate::scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
 
-pub const GAME_SNAPSHOT_SCHEMA_VERSION: u32 = 7;
+pub const GAME_SNAPSHOT_SCHEMA_VERSION: u32 = 8;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -30,9 +30,11 @@ pub struct GameSnapshot {
     pub switches: Vec<SwitchSnapshot>,
     pub controls: Vec<ControlsSnapshot>,
     pub enemies: Vec<EnemySnapshot>,
+    pub health: Vec<HealthSnapshot>,
     pub encounters: Vec<EncounterSnapshot>,
     pub navigations: Vec<NavigationSnapshot>,
     pub player_controllers: Vec<PlayerControllerSnapshot>,
+    pub weapons: Vec<WeaponSnapshot>,
     pub scheduled: Vec<ScheduledSnapshot>,
 }
 
@@ -101,6 +103,15 @@ pub enum SnapshotEnemyState {
     Defeated,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct HealthSnapshot {
+    pub entity: u64,
+    pub current: u32,
+    pub max: u32,
+    pub hitbox_half_extents: [f32; 3],
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EncounterSnapshot {
@@ -158,6 +169,20 @@ pub struct PlayerInputBindingsSnapshot {
     pub move_left: String,
     pub move_right: String,
     pub mouse_look: String,
+    pub primary_fire: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WeaponSnapshot {
+    pub entity: u64,
+    pub damage: u32,
+    pub max_distance: f32,
+    pub cooldown_ticks: u64,
+    pub ammo_capacity: u32,
+    pub muzzle_offset: [f32; 3],
+    pub ammo_remaining: u32,
+    pub ready_at_tick: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,26 +211,35 @@ pub enum GameSnapshotError {
     DuplicateDoor { entity: u64 },
     DuplicateSwitch { entity: u64 },
     DuplicateEnemy { entity: u64 },
+    DuplicateHealth { entity: u64 },
     DuplicateEncounter { entity: u64 },
     DuplicateNavigation { entity: u64 },
     DuplicatePlayerController { entity: u64 },
+    DuplicateWeapon { entity: u64 },
     UnknownDoorEntity { entity: u64 },
     UnknownSwitchEntity { entity: u64 },
     UnknownEnemyEntity { entity: u64 },
+    UnknownHealthEntity { entity: u64 },
     UnknownEncounterEntity { entity: u64 },
     UnknownNavigationEntity { entity: u64 },
     UnknownPlayerControllerEntity { entity: u64 },
+    UnknownWeaponEntity { entity: u64 },
     UnknownControlTarget { switch: u64, target: u64 },
     UnknownEncounterMember { encounter: u64, member: u64 },
     UnknownEncounterExit { encounter: u64, exit: u64 },
     MissingDoorCapability { entity: u64 },
     MissingEnemyCapability { entity: u64 },
+    MissingHealthCapability { entity: u64 },
     MissingNavigationCapability { entity: u64 },
     MissingPlayerControllerCapability { entity: u64 },
+    MissingWeaponCapability { entity: u64 },
     NavigationMissingCollisionScene { entity: u64 },
     PlayerControllerMissingCollisionScene { entity: u64 },
     InvalidNavigationConfig { entity: u64 },
     InvalidPlayerControllerConfig { entity: u64 },
+    InvalidHealthConfig { entity: u64 },
+    InvalidWeaponConfig { entity: u64 },
+    EnemyHealthStateMismatch { entity: u64 },
     DuplicateEncounterMember { encounter: u64, member: u64 },
     EnemyInMultipleEncounters { enemy: u64, first: u64, second: u64 },
     DuplicateSchedule { door: u64 },
@@ -292,6 +326,17 @@ impl GameRuntime {
                     },
                 })
                 .collect(),
+            health: self
+                .session
+                .health
+                .iter()
+                .map(|(entity, component)| HealthSnapshot {
+                    entity: entity.raw(),
+                    current: component.current,
+                    max: component.config.max,
+                    hitbox_half_extents: component.config.hitbox_half_extents.to_array(),
+                })
+                .collect(),
             encounters: self
                 .session
                 .encounters
@@ -347,7 +392,23 @@ impl GameRuntime {
                         move_left: component.config.bindings.move_left.clone(),
                         move_right: component.config.bindings.move_right.clone(),
                         mouse_look: component.config.bindings.mouse_look.clone(),
+                        primary_fire: component.config.bindings.primary_fire.clone(),
                     },
+                })
+                .collect(),
+            weapons: self
+                .session
+                .weapons
+                .iter()
+                .map(|(entity, component)| WeaponSnapshot {
+                    entity: entity.raw(),
+                    damage: component.config.damage,
+                    max_distance: component.config.max_distance,
+                    cooldown_ticks: component.config.cooldown_ticks,
+                    ammo_capacity: component.config.ammo_capacity,
+                    muzzle_offset: component.config.muzzle_offset.to_array(),
+                    ammo_remaining: component.state.ammo_remaining,
+                    ready_at_tick: component.state.ready_at_tick.raw(),
                 })
                 .collect(),
             scheduled: self
@@ -523,6 +584,58 @@ impl GameRuntime {
             );
         }
 
+        let mut health = BTreeMap::new();
+        let mut health_ids = BTreeSet::new();
+        for health_snapshot in snapshot.health {
+            if !health_ids.insert(health_snapshot.entity) {
+                return Err(GameSnapshotError::DuplicateHealth {
+                    entity: health_snapshot.entity,
+                });
+            }
+            let entity = EntityId::new(health_snapshot.entity);
+            let view =
+                entities
+                    .view(entity)
+                    .map_err(|_| GameSnapshotError::UnknownHealthEntity {
+                        entity: health_snapshot.entity,
+                    })?;
+            if view.transform.is_none() || view.collision.is_none() {
+                return Err(GameSnapshotError::MissingHealthCapability {
+                    entity: health_snapshot.entity,
+                });
+            }
+            let config = HealthConfig {
+                max: health_snapshot.max,
+                hitbox_half_extents: array_vec3(health_snapshot.hitbox_half_extents),
+            };
+            if !config.is_valid() || health_snapshot.current > config.max {
+                return Err(GameSnapshotError::InvalidHealthConfig {
+                    entity: health_snapshot.entity,
+                });
+            }
+            health.insert(
+                entity,
+                HealthComponent {
+                    config,
+                    current: health_snapshot.current,
+                },
+            );
+        }
+        for (entity, enemy) in &enemies {
+            let Some(health) = health.get(entity) else {
+                continue;
+            };
+            let consistent = match enemy.state {
+                EnemyState::Alive => health.current > 0,
+                EnemyState::Defeated => health.current == 0,
+            };
+            if !consistent {
+                return Err(GameSnapshotError::EnemyHealthStateMismatch {
+                    entity: entity.raw(),
+                });
+            }
+        }
+
         let mut navigators = BTreeMap::new();
         let mut navigation_ids = BTreeSet::new();
         for navigation in snapshot.navigations {
@@ -621,6 +734,7 @@ impl GameRuntime {
                     controller.bindings.move_left,
                     controller.bindings.move_right,
                     controller.bindings.mouse_look,
+                    controller.bindings.primary_fire,
                 ),
             };
             if !config.is_valid()
@@ -639,6 +753,49 @@ impl GameRuntime {
                     state: PlayerControllerState {
                         yaw_degrees: controller.yaw_degrees,
                         pitch_degrees: controller.pitch_degrees,
+                    },
+                },
+            );
+        }
+
+        let mut weapons = BTreeMap::new();
+        let mut weapon_ids = BTreeSet::new();
+        for weapon_snapshot in snapshot.weapons {
+            if !weapon_ids.insert(weapon_snapshot.entity) {
+                return Err(GameSnapshotError::DuplicateWeapon {
+                    entity: weapon_snapshot.entity,
+                });
+            }
+            let entity = EntityId::new(weapon_snapshot.entity);
+            if !entities.contains(entity) {
+                return Err(GameSnapshotError::UnknownWeaponEntity {
+                    entity: weapon_snapshot.entity,
+                });
+            }
+            if !player_controllers.contains_key(&entity) {
+                return Err(GameSnapshotError::MissingWeaponCapability {
+                    entity: weapon_snapshot.entity,
+                });
+            }
+            let config = WeaponConfig {
+                damage: weapon_snapshot.damage,
+                max_distance: weapon_snapshot.max_distance,
+                cooldown_ticks: weapon_snapshot.cooldown_ticks,
+                ammo_capacity: weapon_snapshot.ammo_capacity,
+                muzzle_offset: array_vec3(weapon_snapshot.muzzle_offset),
+            };
+            if !config.is_valid() || weapon_snapshot.ammo_remaining > config.ammo_capacity {
+                return Err(GameSnapshotError::InvalidWeaponConfig {
+                    entity: weapon_snapshot.entity,
+                });
+            }
+            weapons.insert(
+                entity,
+                WeaponComponent {
+                    config,
+                    state: WeaponState {
+                        ammo_remaining: weapon_snapshot.ammo_remaining,
+                        ready_at_tick: Tick::new(weapon_snapshot.ready_at_tick),
                     },
                 },
             );
@@ -732,9 +889,11 @@ impl GameRuntime {
                 switches,
                 controls,
                 enemies,
+                health,
                 encounters,
                 navigators,
                 player_controllers,
+                weapons,
             },
             tick: Tick::new(snapshot.tick),
             scheduler,

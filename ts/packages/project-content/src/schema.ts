@@ -25,6 +25,11 @@ export interface EncounterDefinition {
   readonly exit: number;
 }
 
+export interface HealthDefinition {
+  readonly max: number;
+  readonly hitboxHalfExtents: Vec3;
+}
+
 export interface KinematicDefinition {
   readonly halfExtents: Vec3;
   readonly velocity: Vec3;
@@ -42,6 +47,7 @@ export interface PlayerInputBindingsDefinition {
   readonly moveLeft: string;
   readonly moveRight: string;
   readonly mouseLook: string;
+  readonly primaryFire: string;
 }
 
 export interface PlayerControllerDefinition {
@@ -51,6 +57,14 @@ export interface PlayerControllerDefinition {
   readonly initialYawDegrees: number;
   readonly initialPitchDegrees: number;
   readonly bindings: PlayerInputBindingsDefinition;
+}
+
+export interface WeaponDefinition {
+  readonly damage: number;
+  readonly maxDistance: number;
+  readonly cooldownTicks: number;
+  readonly ammoCapacity: number;
+  readonly muzzleOffset: Vec3;
 }
 
 export interface VoxelCollisionDefinition {
@@ -77,14 +91,16 @@ export interface EntityDefinition {
   readonly door?: DoorDefinition;
   readonly switch?: SwitchDefinition;
   readonly enemy?: true;
+  readonly health?: HealthDefinition;
   readonly encounter?: EncounterDefinition;
   readonly kinematic?: KinematicDefinition;
   readonly navigation?: NavigationDefinition;
   readonly playerController?: PlayerControllerDefinition;
+  readonly weapon?: WeaponDefinition;
 }
 
 export interface ProjectContent {
-  readonly schemaVersion: 5;
+  readonly schemaVersion: 6;
   readonly entities: readonly EntityDefinition[];
   readonly voxelCollision?: VoxelCollisionDefinition;
   readonly generatedVoxelEnvironment?: GeneratedVoxelEnvironmentDefinition;

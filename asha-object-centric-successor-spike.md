@@ -608,15 +608,16 @@ browser/Three/DOM shell. Proof should cover:
 - the localized new-capability variation;
 - the real-time characterization.
 
-The retained loading-bay shell now exercises the baseline plus M1/M2A/M2B. DOM controls resolve to
-narrow Rust service operations; player movement collides with a generated room shell; a sentry
-routes around the generated pillar; enemy facts clear and visibly open the exit; and a separate
-bounded spatial action stops a projected probe at the same voxel authority. The generated room is
-uploaded through the donor mesh path, while the follow camera is rebuilt from accepted player pose.
-Rust snapshots deterministically regenerate collision/navigation/mesh projections and continue
-identically. The gate builds the production bundle, launches the Rust HTTP host, drives these
-actions in Chromium with real WebGL/Three code, and requires an explicit pass marker plus the typed
-event/fact names.
+The retained loading-bay shell now exercises the baseline plus M1/M2A/M2B/M3. DOM controls resolve
+to narrow Rust service operations; player movement collides with a generated room shell; a sentry
+routes around the generated pillar; primary fire damages that sentry while it is moving and later
+defeats the encounter; and a separate bounded spatial action stops a projected probe at the same
+voxel authority. The generated room is uploaded through the donor mesh path, while the follow
+camera is rebuilt from accepted player pose. Rust snapshots deterministically regenerate
+collision/navigation/mesh projections and preserve health/weapon eligibility without replay.
+The gate builds the production bundle, launches the Rust HTTP host, drives these actions in Chromium
+with real WebGL/Three code, and requires an explicit pass marker plus typed movement, combat,
+encounter, and door fact names.
 
 ## Success criteria
 
@@ -759,12 +760,15 @@ Further walking-slice evidence should decide:
 
 ## Recommended next action
 
-The planned falsification slices now pass: direct gameplay services, content-only variation,
-cross-domain typed consequences, a localized new capability, substantial spatial/collision reuse,
-real-time multi-entity pressure, persistence, and the retained browser product path. This does not
-yet justify replacing Asha wholesale. It does justify moving the decision up one level:
+The planned falsification slices and the first four migration families now pass: direct gameplay
+services, content-only variation, cross-domain typed consequences, localized engine capabilities,
+substantial spatial/collision/query reuse, real-time multi-entity pressure, combat, persistence, and
+the retained browser product path. This supports treating Rusty Engine as the durable successor,
+without implying that Asha should be ported wholesale.
 
-> Which complete vertical feature family can move next while the old and new runtimes remain separately launchable and never share authority?
+The next scheduled closure is M4: derive animation/audio/particle/billboard feedback from already
+accepted movement, attack, damage, defeat, and door facts without giving presentation any gameplay
+authority.
 
 ## Source basis
 

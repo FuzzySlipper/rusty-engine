@@ -11,6 +11,8 @@ import {
 type ResolvedPlayerAction =
   | { readonly kind: "move"; readonly forward: number; readonly right: number }
   | { readonly kind: "look"; readonly yawDelta: number; readonly pitchDelta: number };
+type ResolvedAttackAction = { readonly kind: "attack" };
+type ResolvedInputAction = ResolvedPlayerAction | ResolvedAttackAction;
 
 const canvas = requiredElement("viewport", HTMLCanvasElement);
 const encounterState = requiredElement("encounter-state", HTMLElement);
@@ -20,7 +22,9 @@ const enemyList = requiredElement("enemy-list", HTMLElement);
 const motionState = requiredElement("motion-state", HTMLElement);
 const navigationState = requiredElement("navigation-state", HTMLElement);
 const playerMotionState = requiredElement("player-motion-state", HTMLElement);
+const combatState = requiredElement("combat-state", HTMLElement);
 const playerPose = requiredElement("player-pose", HTMLElement);
+const weaponState = requiredElement("weapon-state", HTMLElement);
 const environmentState = requiredElement("environment-state", HTMLElement);
 const eventList = requiredElement("event-list", HTMLOListElement);
 const rendererStatus = requiredElement("renderer-status", HTMLElement);
@@ -44,12 +48,9 @@ const surface = mountAshaRendererBrowserSurface(canvas, {
 renderReadout(current);
 updateRendererStatus();
 
-for (const button of document.querySelectorAll<HTMLButtonElement>("[data-enemy-id]")) {
-  button.addEventListener("click", () => {
-    const enemy = Number(button.dataset.enemyId);
-    void perform(`/api/defeat/${String(enemy)}`);
-  });
-}
+requiredElement("primary-fire", HTMLButtonElement).addEventListener("click", () => {
+  enqueueAttackAction({ kind: "attack" });
+});
 requiredElement("reset", HTMLButtonElement).addEventListener("click", () => {
   void perform("/api/reset");
 });
@@ -66,10 +67,20 @@ window.addEventListener("keydown", (event) => {
     return;
   }
   event.preventDefault();
-  enqueuePlayerAction(action);
+  enqueueResolvedAction(action);
 });
 canvas.addEventListener("click", () => {
   void canvas.requestPointerLock();
+});
+canvas.addEventListener("mousedown", (event) => {
+  if (document.pointerLockElement !== canvas) {
+    return;
+  }
+  const action = resolvePointerButtonAction(event.button, current.player.bindings);
+  if (action !== null) {
+    event.preventDefault();
+    enqueueAttackAction(action);
+  }
 });
 window.addEventListener("mousemove", (event) => {
   if (!smokeMode && document.pointerLockElement !== canvas) {
@@ -102,9 +113,23 @@ if (smokeMode) {
   window.dispatchEvent(new MouseEvent("mousemove", { movementX: 20, movementY: 0 }));
   await actionQueue;
   const playerLooked = current.player.yawDegrees !== initialPlayerYaw;
+  const initialEnemyPosition = current.enemies.find((enemy) => enemy.id === 4)?.position;
+  await perform("/api/navigation-step");
+  const movingEnemyPosition = current.enemies.find((enemy) => enemy.id === 4)?.position;
+  const movingTargetAdvanced = initialEnemyPosition !== undefined && movingEnemyPosition !== undefined
+    && movingEnemyPosition.some(
+      (value, axis) => Math.abs(value - initialEnemyPosition[axis]!) > 0.001,
+    );
+  await aimAtEnemy(4);
+  await firePrimary();
+  const movingTargetDamaged = current.enemies.find((enemy) => enemy.id === 4)?.currentHealth === 40;
   await perform("/api/navigation-phase");
-  await perform("/api/defeat/4");
-  await perform("/api/defeat/5");
+  await aimAtEnemy(4);
+  await firePrimary();
+  await aimAtEnemy(5);
+  await firePrimary();
+  await firePrimary();
+  const combatHit = current.combatState === "hit";
   await perform("/api/motion-phase");
   surface.renderOnce();
   const door = current.projection.find((node) => node.id === 3);
@@ -118,9 +143,15 @@ if (smokeMode) {
     playerMoved &&
     playerBlocked &&
     playerLooked &&
+    movingTargetAdvanced &&
+    movingTargetDamaged &&
     current.projection.find((node) => node.id === 4)?.translation?.[0] === 7.5 &&
     (current.projection.find((node) => node.id === 10)?.translation?.[0] ?? -4) > 2 &&
     current.generatedEnvironment?.seed === 4 &&
+    combatHit &&
+    current.enemies.every((enemy) => enemy.currentHealth === 0) &&
+    eventHistory.includes("CombatHit") &&
+    eventHistory.includes("DamageApplied") &&
     current.voxelMeshes.length === 1 &&
     surface.snapshot().includes("loading-bay-exit") &&
     surface.snapshot().includes("generated-room-chunk");
@@ -148,6 +179,7 @@ async function perform(path: string): Promise<void> {
 }
 
 function renderReadout(state: RuntimeBrowserState): void {
+  eventList.dataset.history = eventHistory.join(",");
   encounterState.textContent = state.encounterState.toUpperCase();
   encounterState.dataset.state = state.encounterState;
   revision.textContent = `REV ${String(state.entityRevision)}`;
@@ -159,7 +191,10 @@ function renderReadout(state: RuntimeBrowserState): void {
   navigationState.dataset.state = state.navigationState;
   playerMotionState.textContent = state.playerMotionState.toUpperCase();
   playerMotionState.dataset.state = state.playerMotionState;
+  combatState.textContent = state.combatState.toUpperCase();
+  combatState.dataset.state = state.combatState;
   playerPose.textContent = `${state.player.position.map((value) => value.toFixed(1)).join(", ")} · YAW ${state.player.yawDegrees.toFixed(0)}°`;
+  weaponState.textContent = `${String(state.weapon.damage)} DMG · ${String(state.weapon.ammoRemaining)}/${String(state.weapon.ammoCapacity)} AMMO`;
   environmentState.textContent = state.generatedEnvironment === null
     ? "STATIC"
     : `SEED ${String(state.generatedEnvironment.seed)} · ${String(state.generatedEnvironment.meshQuads)} QUADS · ${state.generatedEnvironment.outputHash.slice(0, 8)}`;
@@ -171,7 +206,7 @@ function renderReadout(state: RuntimeBrowserState): void {
       const name = document.createElement("span");
       name.textContent = enemy.name;
       const status = document.createElement("strong");
-      status.textContent = enemy.state.toUpperCase();
+      status.textContent = `${enemy.state.toUpperCase()} · ${String(enemy.currentHealth)}/${String(enemy.maxHealth)} HP`;
       row.append(name, status);
       return row;
     }),
@@ -179,7 +214,7 @@ function renderReadout(state: RuntimeBrowserState): void {
   eventList.replaceChildren(
     ...(eventHistory.length === 0
       ? ["Awaiting action"]
-      : eventHistory
+      : eventHistory.slice(-20)
     ).map((event) => {
         const item = document.createElement("li");
         item.textContent = event;
@@ -190,6 +225,18 @@ function renderReadout(state: RuntimeBrowserState): void {
 
 function enqueuePlayerAction(action: ResolvedPlayerAction): void {
   actionQueue = actionQueue.then(() => performPlayerAction(action));
+}
+
+function enqueueAttackAction(action: ResolvedAttackAction): void {
+  actionQueue = actionQueue.then(() => performAttackAction(action));
+}
+
+function enqueueResolvedAction(action: ResolvedInputAction): void {
+  if (action.kind === "attack") {
+    enqueueAttackAction(action);
+  } else {
+    enqueuePlayerAction(action);
+  }
 }
 
 async function performPlayerAction(action: ResolvedPlayerAction): Promise<void> {
@@ -205,6 +252,53 @@ async function performPlayerAction(action: ResolvedPlayerAction): Promise<void> 
   updateRendererStatus();
 }
 
+async function performAttackAction(action: ResolvedAttackAction): Promise<void> {
+  current = await requestState("/api/attack", "POST", action);
+  eventHistory.push(...current.lastEvents);
+  const frame = projection.apply(current);
+  if (frame.ops.length > 0) {
+    surface.applyFrame(frame);
+  }
+  surface.setCameraPose(derivePlayerCameraPose(current.player));
+  surface.renderOnce();
+  renderReadout(current);
+  updateRendererStatus();
+}
+
+async function aimAtEnemy(enemyId: number): Promise<void> {
+  const enemy = current.enemies.find((candidate) => candidate.id === enemyId);
+  if (enemy === undefined) {
+    throw new Error(`enemy ${String(enemyId)} is absent`);
+  }
+  const offset = enemy.position.map(
+    (value, axis) => value - current.player.position[axis]!,
+  ) as [number, number, number];
+  const horizontal = Math.hypot(offset[0], offset[2]);
+  const desiredYaw = normalizeDegrees((Math.atan2(-offset[0], -offset[2]) * 180) / Math.PI);
+  const desiredPitch = (Math.atan2(offset[1], horizontal) * 180) / Math.PI;
+  for (let step = 0; step < 40; step += 1) {
+    const yawDifference = normalizeDegrees(desiredYaw - current.player.yawDegrees);
+    const pitchDifference = desiredPitch - current.player.pitchDegrees;
+    if (Math.abs(yawDifference) < 0.01 && Math.abs(pitchDifference) < 0.01) {
+      return;
+    }
+    await performPlayerAction({
+      kind: "look",
+      yawDelta: clampUnit(yawDifference / current.player.lookDegreesPerUnit),
+      pitchDelta: clampUnit(pitchDifference / current.player.lookDegreesPerUnit),
+    });
+  }
+  throw new Error(`could not aim at enemy ${String(enemyId)}`);
+}
+
+async function firePrimary(): Promise<void> {
+  const action = resolvePointerButtonAction(0, current.player.bindings);
+  if (action === null) {
+    throw new Error("authored primary-fire binding did not resolve Mouse0");
+  }
+  await performAttackAction(action);
+}
+
 function updateRendererStatus(): void {
   rendererStatus.textContent = `${surface.kind} · ${String(projection.trackedEntityCount)} entities · ${String(projection.trackedMeshCount)} voxel meshes`;
 }
@@ -212,7 +306,7 @@ function updateRendererStatus(): void {
 export function resolveKeyboardAction(
   code: string,
   bindings: RuntimePlayerBindings,
-): ResolvedPlayerAction | null {
+): ResolvedInputAction | null {
   if (code === bindings.moveForward) {
     return { kind: "move", forward: 1, right: 0 };
   }
@@ -225,7 +319,17 @@ export function resolveKeyboardAction(
   if (code === bindings.moveRight) {
     return { kind: "move", forward: 0, right: 1 };
   }
+  if (code === bindings.primaryFire) {
+    return { kind: "attack" };
+  }
   return null;
+}
+
+export function resolvePointerButtonAction(
+  button: number,
+  bindings: RuntimePlayerBindings,
+): ResolvedAttackAction | null {
+  return bindings.primaryFire === `Mouse${String(button)}` ? { kind: "attack" } : null;
 }
 
 export function resolvePointerAction(
@@ -238,15 +342,15 @@ export function resolvePointerAction(
   }
   return {
     kind: "look",
-    yawDelta: Math.max(-1, Math.min(1, movementX / 20)),
-    pitchDelta: Math.max(-1, Math.min(1, movementY / 20)),
+    yawDelta: clampUnit(movementX / 20),
+    pitchDelta: clampUnit(movementY / 20),
   };
 }
 
 async function requestState(
   path: string,
   method = "GET",
-  body?: ResolvedPlayerAction,
+  body?: ResolvedInputAction,
 ): Promise<RuntimeBrowserState> {
   const response = await fetch(path, {
     method,
@@ -258,6 +362,14 @@ async function requestState(
     throw new Error(`${method} ${path} failed with ${String(response.status)}`);
   }
   return (await response.json()) as RuntimeBrowserState;
+}
+
+function clampUnit(value: number): number {
+  return Math.max(-1, Math.min(1, value));
+}
+
+function normalizeDegrees(value: number): number {
+  return ((value + 180) % 360 + 360) % 360 - 180;
 }
 
 function requiredElement<T extends Element>(id: string, constructor: { new (): T }): T {

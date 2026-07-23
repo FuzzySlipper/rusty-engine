@@ -58,6 +58,125 @@ pub struct EnemyComponent {
     pub state: EnemyState,
 }
 
+pub const MAX_HEALTH: u32 = 1_000_000;
+pub const MAX_WEAPON_DAMAGE: u32 = 1_000_000;
+pub const MAX_WEAPON_AMMO: u32 = 1_000_000;
+pub const MAX_WEAPON_RANGE: f32 = 100_000.0;
+pub const MAX_WEAPON_COOLDOWN_TICKS: u64 = 100_000;
+pub const MAX_COMBAT_HITBOX_HALF_EXTENT: f32 = 100_000.0;
+pub const MAX_WEAPON_MUZZLE_OFFSET: f32 = 100_000.0;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HealthConfig {
+    pub max: u32,
+    pub hitbox_half_extents: Vec3,
+}
+
+impl HealthConfig {
+    pub(crate) fn is_valid(self) -> bool {
+        (1..=MAX_HEALTH).contains(&self.max)
+            && vec3_is_finite(self.hitbox_half_extents)
+            && self.hitbox_half_extents.x > 0.0
+            && self.hitbox_half_extents.y > 0.0
+            && self.hitbox_half_extents.z > 0.0
+            && self.hitbox_half_extents.x <= MAX_COMBAT_HITBOX_HALF_EXTENT
+            && self.hitbox_half_extents.y <= MAX_COMBAT_HITBOX_HALF_EXTENT
+            && self.hitbox_half_extents.z <= MAX_COMBAT_HITBOX_HALF_EXTENT
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HealthComponent {
+    pub config: HealthConfig,
+    pub current: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WeaponConfig {
+    pub damage: u32,
+    pub max_distance: f32,
+    pub cooldown_ticks: u64,
+    pub ammo_capacity: u32,
+    pub muzzle_offset: Vec3,
+}
+
+impl WeaponConfig {
+    pub(crate) fn is_valid(self) -> bool {
+        (1..=MAX_WEAPON_DAMAGE).contains(&self.damage)
+            && self.max_distance.is_finite()
+            && self.max_distance > 0.0
+            && self.max_distance <= MAX_WEAPON_RANGE
+            && self.cooldown_ticks <= MAX_WEAPON_COOLDOWN_TICKS
+            && (1..=MAX_WEAPON_AMMO).contains(&self.ammo_capacity)
+            && vec3_is_finite(self.muzzle_offset)
+            && self.muzzle_offset.x.abs() <= MAX_WEAPON_MUZZLE_OFFSET
+            && self.muzzle_offset.y.abs() <= MAX_WEAPON_MUZZLE_OFFSET
+            && self.muzzle_offset.z.abs() <= MAX_WEAPON_MUZZLE_OFFSET
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WeaponState {
+    pub ammo_remaining: u32,
+    pub ready_at_tick: Tick,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WeaponComponent {
+    pub config: WeaponConfig,
+    pub state: WeaponState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ResolvedAttackAction {
+    Attack,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CombatRejectionReason {
+    Cooldown,
+    NoAmmo,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CombatMissReason {
+    NoTarget,
+    WorldBlocked,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CombatFact {
+    AttackFired {
+        attacker: EntityId,
+        origin: Vec3,
+        direction: Vec3,
+        ammo_before: u32,
+        ammo_after: u32,
+        ready_at_tick: Tick,
+    },
+    AttackHit {
+        attacker: EntityId,
+        target: EntityId,
+        distance: f32,
+    },
+    AttackMissed {
+        attacker: EntityId,
+        reason: CombatMissReason,
+    },
+    DamageApplied {
+        attacker: EntityId,
+        target: EntityId,
+        amount: u32,
+        before: u32,
+        after: u32,
+    },
+    EnemyDefeated {
+        attacker: EntityId,
+        enemy: EntityId,
+    },
+}
+
 pub const MAX_PLAYER_SPEED_UNITS_PER_SECOND: f32 = 1_000.0;
 pub const MAX_PLAYER_LOOK_DEGREES_PER_UNIT: f32 = 180.0;
 pub const MAX_INPUT_CONTROL_LENGTH: usize = 64;
@@ -69,6 +188,7 @@ pub struct PlayerInputBindings {
     pub move_left: String,
     pub move_right: String,
     pub mouse_look: String,
+    pub primary_fire: String,
 }
 
 impl PlayerInputBindings {
@@ -78,6 +198,7 @@ impl PlayerInputBindings {
         move_left: impl Into<String>,
         move_right: impl Into<String>,
         mouse_look: impl Into<String>,
+        primary_fire: impl Into<String>,
     ) -> Self {
         Self {
             move_forward: move_forward.into(),
@@ -85,6 +206,7 @@ impl PlayerInputBindings {
             move_left: move_left.into(),
             move_right: move_right.into(),
             mouse_look: mouse_look.into(),
+            primary_fire: primary_fire.into(),
         }
     }
 
@@ -95,6 +217,7 @@ impl PlayerInputBindings {
             self.move_left.as_str(),
             self.move_right.as_str(),
             self.mouse_look.as_str(),
+            self.primary_fire.as_str(),
         ];
         if controls
             .iter()
@@ -102,11 +225,10 @@ impl PlayerInputBindings {
         {
             return false;
         }
-        let keyboard_controls = &controls[..4];
-        keyboard_controls
+        controls
             .iter()
             .enumerate()
-            .all(|(index, control)| !keyboard_controls[..index].contains(control))
+            .all(|(index, control)| !controls[..index].contains(control))
     }
 }
 
@@ -187,6 +309,13 @@ pub struct PlayerControlReceipt {
     pub action: ResolvedPlayerAction,
     pub facts: Vec<PlayerControlFact>,
     pub motion: Option<MotionPhaseReceipt>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CombatReceipt {
+    pub action: ResolvedAttackAction,
+    pub facts: Vec<CombatFact>,
+    pub events: Vec<GameEvent>,
 }
 
 pub const MAX_NAVIGATION_SPEED_UNITS_PER_SECOND: f32 = 1_000.0;
@@ -280,9 +409,11 @@ pub struct GameEntityDefinition {
     pub switch: bool,
     pub controls_targets: Vec<EntityId>,
     pub enemy: bool,
+    pub health: Option<HealthConfig>,
     pub encounter: Option<EncounterConfig>,
     pub navigation: Option<NavigationConfig>,
     pub player_controller: Option<PlayerControllerConfig>,
+    pub weapon: Option<WeaponConfig>,
 }
 
 impl GameEntityDefinition {
@@ -293,9 +424,11 @@ impl GameEntityDefinition {
             switch: false,
             controls_targets: Vec::new(),
             enemy: false,
+            health: None,
             encounter: None,
             navigation: None,
             player_controller: None,
+            weapon: None,
         }
     }
 
@@ -319,6 +452,11 @@ impl GameEntityDefinition {
         self
     }
 
+    pub fn with_health(mut self, config: HealthConfig) -> Self {
+        self.health = Some(config);
+        self
+    }
+
     pub fn as_encounter(
         mut self,
         members: impl IntoIterator<Item = EntityId>,
@@ -338,6 +476,11 @@ impl GameEntityDefinition {
 
     pub fn with_player_controller(mut self, config: PlayerControllerConfig) -> Self {
         self.player_controller = Some(config);
+        self
+    }
+
+    pub fn with_weapon(mut self, config: WeaponConfig) -> Self {
+        self.weapon = Some(config);
         self
     }
 }
@@ -375,6 +518,15 @@ pub enum GameEntityDefinitionError {
     EnemyMissingRenderable {
         entity: EntityId,
     },
+    HealthMissingTransform {
+        entity: EntityId,
+    },
+    HealthMissingCollision {
+        entity: EntityId,
+    },
+    InvalidHealthConfig {
+        entity: EntityId,
+    },
     NavigationWithoutEnemy {
         entity: EntityId,
     },
@@ -409,6 +561,12 @@ pub enum GameEntityDefinitionError {
         entity: EntityId,
     },
     InvalidPlayerControllerConfig {
+        entity: EntityId,
+    },
+    WeaponWithoutPlayerController {
+        entity: EntityId,
+    },
+    InvalidWeaponConfig {
         entity: EntityId,
     },
     EmptyEncounter {
@@ -456,9 +614,11 @@ pub struct GameSession {
     pub(crate) switches: BTreeMap<EntityId, SwitchComponent>,
     pub(crate) controls: BTreeMap<EntityId, Vec<EntityId>>,
     pub(crate) enemies: BTreeMap<EntityId, EnemyComponent>,
+    pub(crate) health: BTreeMap<EntityId, HealthComponent>,
     pub(crate) encounters: BTreeMap<EntityId, EncounterComponent>,
     pub(crate) navigators: BTreeMap<EntityId, NavigationComponent>,
     pub(crate) player_controllers: BTreeMap<EntityId, PlayerControllerComponent>,
+    pub(crate) weapons: BTreeMap<EntityId, WeaponComponent>,
 }
 
 impl GameSession {
@@ -477,9 +637,11 @@ impl GameSession {
         let mut switches = BTreeMap::new();
         let mut controls = BTreeMap::new();
         let mut enemies = BTreeMap::new();
+        let mut health = BTreeMap::new();
         let mut encounters = BTreeMap::new();
         let mut navigators = BTreeMap::new();
         let mut player_controllers = BTreeMap::new();
+        let mut weapons = BTreeMap::new();
 
         for definition in &definitions {
             let entity = definition.entity.id;
@@ -532,6 +694,25 @@ impl GameSession {
                     entity,
                     EnemyComponent {
                         state: EnemyState::Alive,
+                    },
+                );
+            }
+            if let Some(config) = definition.health {
+                let view = entities.view(entity).expect("definition created entity");
+                if view.transform.is_none() {
+                    return Err(GameEntityDefinitionError::HealthMissingTransform { entity });
+                }
+                if view.collision.is_none() {
+                    return Err(GameEntityDefinitionError::HealthMissingCollision { entity });
+                }
+                if !config.is_valid() {
+                    return Err(GameEntityDefinitionError::InvalidHealthConfig { entity });
+                }
+                health.insert(
+                    entity,
+                    HealthComponent {
+                        config,
+                        current: config.max,
                     },
                 );
             }
@@ -604,6 +785,26 @@ impl GameSession {
                         state: PlayerControllerState {
                             yaw_degrees: config.initial_yaw_degrees,
                             pitch_degrees: config.initial_pitch_degrees,
+                        },
+                    },
+                );
+            }
+            if let Some(config) = definition.weapon {
+                if definition.player_controller.is_none() {
+                    return Err(GameEntityDefinitionError::WeaponWithoutPlayerController {
+                        entity,
+                    });
+                }
+                if !config.is_valid() {
+                    return Err(GameEntityDefinitionError::InvalidWeaponConfig { entity });
+                }
+                weapons.insert(
+                    entity,
+                    WeaponComponent {
+                        config,
+                        state: WeaponState {
+                            ammo_remaining: config.ammo_capacity,
+                            ready_at_tick: Tick::ZERO,
                         },
                     },
                 );
@@ -691,9 +892,11 @@ impl GameSession {
             switches,
             controls,
             enemies,
+            health,
             encounters,
             navigators,
             player_controllers,
+            weapons,
         })
     }
 
@@ -733,6 +936,15 @@ impl GameSession {
         })
     }
 
+    pub fn health(&self, entity: EntityId) -> Option<HealthView> {
+        let component = self.health.get(&entity)?;
+        Some(HealthView {
+            entity,
+            config: component.config,
+            current: component.current,
+        })
+    }
+
     pub fn encounter(&self, entity: EntityId) -> Option<EncounterView> {
         let component = self.encounters.get(&entity)?;
         Some(EncounterView {
@@ -762,6 +974,15 @@ impl GameSession {
             entity_view: self.entities.view(entity).ok()?,
         })
     }
+
+    pub fn weapon(&self, entity: EntityId) -> Option<WeaponView> {
+        let component = self.weapons.get(&entity)?;
+        Some(WeaponView {
+            entity,
+            config: component.config,
+            state: component.state,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -786,6 +1007,13 @@ pub struct EnemyView {
     pub entity_view: EntityView,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HealthView {
+    pub entity: EntityId,
+    pub config: HealthConfig,
+    pub current: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncounterView {
     pub entity: EntityId,
@@ -808,6 +1036,13 @@ pub struct PlayerControllerView {
     pub config: PlayerControllerConfig,
     pub state: PlayerControllerState,
     pub entity_view: EntityView,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WeaponView {
+    pub entity: EntityId,
+    pub config: WeaponConfig,
+    pub state: WeaponState,
 }
 
 #[derive(Debug, Clone, PartialEq)]

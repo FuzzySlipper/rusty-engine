@@ -56,6 +56,7 @@ test("player controller and physical bindings are explicit content", () => {
       moveLeft: "KeyA",
       moveRight: "KeyD",
       mouseLook: "pointer",
+      primaryFire: "Mouse0",
     },
   });
   assert.deepEqual(player?.kinematic?.velocity, [0, 0, 0]);
@@ -68,6 +69,7 @@ test("keyboard bindings vary as content without changing controller behavior", (
     moveLeft: "ArrowLeft",
     moveRight: "ArrowRight",
     mouseLook: "pointer",
+    primaryFire: "Space",
   } as const;
   const project = encounterGateProject(["guard"], { playerBindings: bindings });
   const player = project.entities.find((entity) => entity.id === ENCOUNTER_IDS.actor);
@@ -75,6 +77,27 @@ test("keyboard bindings vary as content without changing controller behavior", (
   assert.deepEqual(player?.playerController?.bindings, bindings);
   assert.equal(player?.playerController?.moveSpeedUnitsPerSecond, 4);
   assert.equal(player?.playerController?.lookDegreesPerUnit, 12);
+});
+
+test("health and weapon configuration stay on their responsible entities", () => {
+  const project = encounterGateProject(["guard"], {
+    enemyHealth: 140,
+    weaponDamage: 35,
+  });
+  const player = project.entities.find((entity) => entity.id === ENCOUNTER_IDS.actor);
+  const enemy = project.entities.find((entity) => entity.id === ENCOUNTER_IDS.firstEnemy);
+
+  assert.deepEqual(enemy?.health, {
+    max: 140,
+    hitboxHalfExtents: [0.55, 0.9, 0.55],
+  });
+  assert.deepEqual(player?.weapon, {
+    damage: 35,
+    maxDistance: 20,
+    cooldownTicks: 0,
+    ammoCapacity: 8,
+    muzzleOffset: [0, 0, 0],
+  });
 });
 
 test("autonomous navigation is explicit data on the responsible enemy", () => {

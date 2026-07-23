@@ -37,20 +37,21 @@
           <div class="motion-readout"><span>Spatial probe</span><strong id="motion-state">MOVING</strong></div>
           <div class="motion-readout"><span>Enemy navigation</span><strong id="navigation-state">FOLLOWING</strong></div>
           <div class="motion-readout"><span>Player controller</span><strong id="player-motion-state">IDLE</strong></div>
+          <div class="motion-readout"><span>Combat resolution</span><strong id="combat-state">READY</strong></div>
           <div class="pose-readout" id="player-pose">1.5, 1.5, 2.5 · YAW 0°</div>
+          <div class="pose-readout" id="weapon-state">60 DMG · 8/8 AMMO</div>
           <div class="pose-readout" id="environment-state">SEED 4 · GENERATED MESH</div>
         </article>
 
         <article class="control-panel">
           <p class="section-label">Resolved actions</p>
           <div class="button-row">
-            <button type="button" data-enemy-id="4">Defeat Alpha</button>
-            <button type="button" data-enemy-id="5">Defeat Beta</button>
+            <button type="button" id="primary-fire">Fire Primary</button>
             <button type="button" id="run-motion">Run Spatial Phase</button>
             <button type="button" id="run-navigation">Run Navigation</button>
             <button type="button" id="reset" class="quiet">Reset</button>
           </div>
-          <p class="control-note">WASD resolves authored bindings into typed Rust movement actions. Click the viewport and move the mouse to look. Camera follow remains derived presentation state.</p>
+          <p class="control-note">WASD and pointer input resolve authored bindings into typed Rust move, look, and attack actions. With pointer lock active, primary click fires along the accepted player aim. Camera follow remains derived presentation state.</p>
         </article>
 
         <article class="event-panel">

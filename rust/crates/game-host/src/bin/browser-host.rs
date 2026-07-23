@@ -7,8 +7,9 @@ use std::time::Duration;
 
 use core_ids::EntityId;
 use game_host::{
-    DoorState, EncounterState, EnemyState, GameEvent, GameRuntime, MotionFact, NavigationFact,
-    NavigationState, PlayerControlFact, ResolvedPlayerAction,
+    CombatFact, CombatMissReason, DoorState, EncounterState, EnemyState, GameEvent, GameRuntime,
+    MotionFact, NavigationFact, NavigationState, PlayerControlFact, ResolvedAttackAction,
+    ResolvedPlayerAction,
 };
 use serde::Serialize;
 
@@ -39,6 +40,9 @@ struct BrowserEnemyState {
     id: u64,
     name: String,
     state: &'static str,
+    position: [f32; 3],
+    current_health: u32,
+    max_health: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -49,6 +53,7 @@ struct BrowserPlayerBindings {
     move_left: String,
     move_right: String,
     mouse_look: String,
+    primary_fire: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -58,7 +63,17 @@ struct BrowserPlayerState {
     position: [f32; 3],
     yaw_degrees: f32,
     pitch_degrees: f32,
+    look_degrees_per_unit: f32,
     bindings: BrowserPlayerBindings,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserWeaponState {
+    damage: u32,
+    ammo_remaining: u32,
+    ammo_capacity: u32,
+    ready_at_tick: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -104,7 +119,9 @@ struct BrowserState {
     motion_state: &'static str,
     navigation_state: &'static str,
     player_motion_state: &'static str,
+    combat_state: &'static str,
     player: BrowserPlayerState,
+    weapon: BrowserWeaponState,
     voxel_meshes: Vec<BrowserVoxelMeshChunk>,
     generated_environment: Option<BrowserGeneratedEnvironment>,
     enemies: Vec<BrowserEnemyState>,
@@ -254,28 +271,23 @@ fn route(
             *runtime = GameRuntime::from_project_content(PROJECT).expect("reset browser project");
             json_response(200, browser_state(&runtime, Vec::new()))
         }
-        ("POST", path) if path.starts_with("/api/defeat/") => {
-            let raw = path.trim_start_matches("/api/defeat/");
-            let Ok(enemy) = raw.parse::<u64>() else {
-                return error_json(400, "enemy id must be an integer");
+        ("POST", "/api/attack") => {
+            let action: ResolvedAttackAction = match serde_json::from_slice(body) {
+                Ok(action) => action,
+                Err(error) => return error_json(400, &format!("invalid attack action: {error}")),
             };
-            if enemy != FIRST_ENEMY && enemy != SECOND_ENEMY {
-                return error_json(404, "enemy is not part of this encounter");
-            }
             let mut runtime = runtime.lock().expect("runtime lock");
-            match runtime.defeat_enemy(ACTOR, EntityId::new(enemy)) {
-                Ok(receipt) => json_response(
-                    200,
-                    browser_state(
-                        &runtime,
-                        receipt
-                            .events
-                            .iter()
-                            .map(event_name)
-                            .map(str::to_owned)
-                            .collect(),
-                    ),
-                ),
+            match runtime.attack(ACTOR, action) {
+                Ok(receipt) => {
+                    let mut facts: Vec<String> = receipt
+                        .facts
+                        .iter()
+                        .map(combat_fact_name)
+                        .map(str::to_owned)
+                        .collect();
+                    facts.extend(receipt.events.iter().map(event_name).map(str::to_owned));
+                    json_response(200, browser_state(&runtime, facts))
+                }
                 Err(error) => error_json(409, &format!("{error}")),
             }
         }
@@ -306,6 +318,21 @@ fn route(
                 facts.push("KinematicBlocked".to_owned());
             }
             json_response(200, browser_state(&runtime, facts))
+        }
+        ("POST", "/api/navigation-step") => {
+            let mut runtime = runtime.lock().expect("runtime lock");
+            match runtime.run_navigation_phase(PRODUCT_MOTION_DELTA_SECONDS) {
+                Ok(receipt) => {
+                    let facts = receipt
+                        .facts
+                        .iter()
+                        .map(navigation_fact_name)
+                        .map(str::to_owned)
+                        .collect();
+                    json_response(200, browser_state(&runtime, facts))
+                }
+                Err(error) => error_json(409, &format!("{error}")),
+            }
         }
         ("POST", "/api/navigation-phase") => {
             let mut runtime = runtime.lock().expect("runtime lock");
@@ -401,6 +428,23 @@ fn browser_state(runtime: &GameRuntime, last_events: Vec<String>) -> BrowserStat
                     EnemyState::Alive => "alive",
                     EnemyState::Defeated => "defeated",
                 },
+                position: view
+                    .entity_view
+                    .transform
+                    .expect("browser enemy transform")
+                    .translation
+                    .to_array(),
+                current_health: runtime
+                    .session()
+                    .health(EntityId::new(raw))
+                    .expect("browser enemy health")
+                    .current,
+                max_health: runtime
+                    .session()
+                    .health(EntityId::new(raw))
+                    .expect("browser enemy health")
+                    .config
+                    .max,
             }
         })
         .collect();
@@ -419,13 +463,25 @@ fn browser_state(runtime: &GameRuntime, last_events: Vec<String>) -> BrowserStat
             .to_array(),
         yaw_degrees: player.state.yaw_degrees,
         pitch_degrees: player.state.pitch_degrees,
+        look_degrees_per_unit: player.config.look_degrees_per_unit,
         bindings: BrowserPlayerBindings {
             move_forward: bindings.move_forward.clone(),
             move_backward: bindings.move_backward.clone(),
             move_left: bindings.move_left.clone(),
             move_right: bindings.move_right.clone(),
             mouse_look: bindings.mouse_look.clone(),
+            primary_fire: bindings.primary_fire.clone(),
         },
+    };
+    let weapon = runtime
+        .session()
+        .weapon(ACTOR)
+        .expect("browser player weapon");
+    let weapon_state = BrowserWeaponState {
+        damage: weapon.config.damage,
+        ammo_remaining: weapon.state.ammo_remaining,
+        ammo_capacity: weapon.config.ammo_capacity,
+        ready_at_tick: weapon.state.ready_at_tick.raw(),
     };
     let player_motion_state = if last_events.iter().any(|event| event == "PlayerBlocked") {
         "blocked"
@@ -433,6 +489,16 @@ fn browser_state(runtime: &GameRuntime, last_events: Vec<String>) -> BrowserStat
         "moved"
     } else {
         "idle"
+    };
+    let combat_state = if last_events.iter().any(|event| event == "CombatHit") {
+        "hit"
+    } else if last_events
+        .iter()
+        .any(|event| event.starts_with("CombatMissed"))
+    {
+        "missed"
+    } else {
+        "ready"
     };
     let scene = runtime
         .collision_scene()
@@ -514,11 +580,39 @@ fn browser_state(runtime: &GameRuntime, last_events: Vec<String>) -> BrowserStat
             NavigationState::Unreachable => "unreachable",
         },
         player_motion_state,
+        combat_state,
         player: player_state,
+        weapon: weapon_state,
         voxel_meshes,
         generated_environment,
         enemies,
         last_events,
+    }
+}
+
+fn combat_fact_name(fact: &CombatFact) -> &'static str {
+    match fact {
+        CombatFact::AttackFired { .. } => "CombatFired",
+        CombatFact::AttackHit { .. } => "CombatHit",
+        CombatFact::AttackMissed {
+            reason: CombatMissReason::NoTarget,
+            ..
+        } => "CombatMissedNoTarget",
+        CombatFact::AttackMissed {
+            reason: CombatMissReason::WorldBlocked,
+            ..
+        } => "CombatMissedWorldBlocked",
+        CombatFact::DamageApplied { .. } => "DamageApplied",
+        CombatFact::EnemyDefeated { .. } => "CombatEnemyDefeated",
+    }
+}
+
+fn navigation_fact_name(fact: &NavigationFact) -> &'static str {
+    match fact {
+        NavigationFact::Advanced { .. } => "NavigationAdvanced",
+        NavigationFact::Arrived { .. } => "NavigationArrived",
+        NavigationFact::Blocked { .. } => "NavigationBlocked",
+        NavigationFact::Unreachable { .. } => "NavigationUnreachable",
     }
 }
 

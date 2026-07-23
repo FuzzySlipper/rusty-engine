@@ -23,6 +23,9 @@ export interface RuntimeEnemyState {
   readonly id: number;
   readonly name: string;
   readonly state: "alive" | "defeated";
+  readonly position: readonly [number, number, number];
+  readonly currentHealth: number;
+  readonly maxHealth: number;
 }
 
 export interface RuntimePlayerBindings {
@@ -31,6 +34,7 @@ export interface RuntimePlayerBindings {
   readonly moveLeft: string;
   readonly moveRight: string;
   readonly mouseLook: string;
+  readonly primaryFire: string;
 }
 
 export interface RuntimePlayerState {
@@ -38,7 +42,15 @@ export interface RuntimePlayerState {
   readonly position: readonly [number, number, number];
   readonly yawDegrees: number;
   readonly pitchDegrees: number;
+  readonly lookDegreesPerUnit: number;
   readonly bindings: RuntimePlayerBindings;
+}
+
+export interface RuntimeWeaponState {
+  readonly damage: number;
+  readonly ammoRemaining: number;
+  readonly ammoCapacity: number;
+  readonly readyAtTick: number;
 }
 
 export interface DerivedCameraPose {
@@ -82,7 +94,9 @@ export interface RuntimeBrowserState {
   readonly motionState: "moving" | "blocked";
   readonly navigationState: "following" | "arrived" | "blocked" | "unreachable";
   readonly playerMotionState: "idle" | "moved" | "blocked";
+  readonly combatState: "ready" | "hit" | "missed";
   readonly player: RuntimePlayerState;
+  readonly weapon: RuntimeWeaponState;
   readonly voxelMeshes: readonly RuntimeVoxelMeshChunk[];
   readonly generatedEnvironment: RuntimeGeneratedEnvironment | null;
   readonly enemies: readonly RuntimeEnemyState[];
@@ -92,8 +106,8 @@ export interface RuntimeBrowserState {
 /** Presentation-only follow camera rebuilt from the accepted Rust player pose. */
 export function derivePlayerCameraPose(
   player: RuntimePlayerState,
-  height = 2.7,
-  followDistance = 6,
+  height = 1.2,
+  followDistance = 1,
 ): DerivedCameraPose {
   const yawRadians = (player.yawDegrees * Math.PI) / 180;
   const forwardX = -Math.sin(yawRadians);
@@ -266,7 +280,7 @@ function projectedNode(node: RuntimeProjectionNode): RenderNode {
     translation,
     scale,
     color,
-    node.visible,
+    node.visible && !player,
   );
 }
 

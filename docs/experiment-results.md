@@ -1,6 +1,6 @@
 # Experiment results
 
-Status: walking falsification slices and the first three scheduled migration families implemented
+Status: walking falsification slices and the first four scheduled migration families implemented
 on 2026-07-23 and registered for review in Den.
 
 ## Current decision
@@ -96,6 +96,10 @@ first committed defeat fact.
 
 Partial encounter progress survives save/reopen. Snapshots store concrete enemy and encounter
 state, relationships, doors, and schedules; they do not store event history or replay frames.
+
+The original direct `defeat_enemy` operation remains as a focused fixture/helper for the walking
+encounter and navigation-blocker tests. M3 removes it from the browser product path: normal player
+defeat now requires an accepted aimed attack, health mutation, and lethal combat fact.
 
 ### Asha spatial/collision transplant and new capability
 
@@ -271,6 +275,57 @@ though the browser retains it by content hash. This is bounded and not a per-fra
 but it is accepted temporary transport waste. The generator is also intentionally immutable and
 single-chunk in this slice; neighbor-sensitive live remeshing belongs to M7A invalidation work.
 
+### Weapon combat, health, and encounter consequence
+
+The fourth migration family replaces the browser's direct-defeat controls with a real interaction
+over the player controller and navigated enemies:
+
+```text
+authored primary-fire binding + WeaponComponent
+  -> ResolvedAttackAction::Attack
+  -> CombatService reads accepted player transform/yaw/pitch
+  -> stable live-enemy target AABB query + canonical voxel raycast
+  -> AttackFired / AttackHit or AttackMissed / DamageApplied facts
+  -> HealthComponent mutation
+  -> lethal EnemyDefeated fact and existing GameEvent
+  -> EncounterCleared -> DoorOpened
+```
+
+Weapon damage/range/ammo/cooldown/muzzle offset live on the player entity. Maximum health, current
+health, and an authored axis-aligned hitbox live on each damageable enemy. The TypeScript browser
+never supplies a target entity or mutable ray origin: it resolves the admitted physical binding to
+one attack intent, while Rust derives aim from accepted controller state and resolves current enemy
+transforms. A moving sentry therefore changes the target query naturally without a combat-owned
+position mirror.
+
+The small slab-ray/nearest-hit algorithm is adapted from Asha `svc-combat`; the crate is not linked.
+Its independent `CombatState`, copied fire-control command, health/replay hashes, readout golden,
+and FPS runtime-session/role/event-adapter layers are absent. Static world occlusion comes from the
+same canonical voxel projection already used by movement and navigation. On a lethal hit, the
+existing atomic collision/visibility/velocity change runs before health/enemy state commits, then
+the finite runtime drain applies encounter and door consequences exactly once.
+
+Health, remaining ammo, and `ready_at_tick` survive snapshot schema 8. An intermediate snapshot
+after nonlethal damage reopens with the same cooldown rejection, then both uninterrupted and
+reopened sessions advance to identical damage/defeat facts and the same open exit. Nine focused
+tests cover hit, no-target miss, voxel occlusion, cooldown and ammo eligibility, malformed
+admission, repeated lethal idempotence, a live moving target, and save/reopen.
+
+The real browser proof moves the first sentry, aims through accepted look actions, applies one
+nonlethal hit while it is moving, lets navigation finish, and then defeats both enemies with the
+authored 60-damage weapon. Enemy HP/ammo and recent typed facts remain visible in the DOM. Changing
+enemy health or weapon damage is a project-content option/data change; changing target resolution
+is localized to `CombatService` and its focused tests unless a new durable configuration value is
+introduced.
+
+M3 change amplification is explicit:
+
+| Change | Required ownership surfaces |
+|---|---|
+| Content-only health/damage variation | `encounter-project.ts`, its composition test, and regenerated strict JSON; no Rust service, snapshot, or browser algorithm change. |
+| Ray/target behavior variation with the settled component shape | `game-host::services` plus `combat_runtime` focused tests; no content schema, persistence codec, renderer donor, or language bridge. |
+| Initial complete M3 vertical slice | Existing coarse `game-host` model/admission/service/runtime/snapshot/browser-host files, project-content schema/builder, browser input/readout, generated fixtures, focused tests, and documentation. No new crate/package/protocol or cross-language runtime owner. |
+
 ### Browser/Three/DOM product proof
 
 The loading-bay browser shell links Asha's actual `@asha/renderer-three` and generated render
@@ -281,8 +336,9 @@ gameplay state.
 Five visible action paths run in the same product scene:
 
 ```text
-DOM defeat controls -> CombatService -> EnemyDefeated -> EncounterCleared -> DoorOpened
-                  -> projection update -> retained Three door moves and enemies disappear
+DOM pointer/fire control -> authored binding -> ResolvedAttackAction -> CombatService
+                         -> damage/defeat -> EncounterCleared -> DoorOpened
+                         -> projection update -> retained Three door moves and enemies disappear
 
 DOM spatial control -> one bounded KinematicMotionSystem phase sequence
                     -> Asha voxel sweep -> KinematicBlocked
@@ -306,10 +362,11 @@ rejects `RuntimeSession`, native bridge, Gameplay Fabric, or `GameplayRuntimeHos
 production bundle. The typed `applyFrame` path remains the unchanged donor implementation.
 
 The automated product gate builds the bundle, starts the Rust host on an ephemeral port, launches
-real headless Chromium with SwiftShader WebGL, dispatches keyboard/pointer input and presses
-reset/navigation/defeat/spatial actions. It requires moved-then-blocked player collision, changed
-look state, the arrived sentry, open-door transform, defeated entities, blocked probe,
-generated seed/mesh readout, retained-renderer snapshot, and typed fact names in the final DOM.
+real headless Chromium with SwiftShader WebGL, dispatches keyboard/pointer input, resolves the
+authored primary-fire binding, and exercises reset/navigation/combat/spatial actions. It requires
+moved-then-blocked player collision, changed look state, a moved-and-damaged live sentry, the
+arrived sentry, combat hit/damage/defeat facts, open-door transform, defeated entities, blocked
+probe, generated seed/mesh readout, and retained-renderer evidence in the final DOM.
 
 ## Reproducible evidence
 
@@ -327,10 +384,10 @@ The current verification gate proves:
 
 - Rust formatting, Clippy, and strict TypeScript compilation;
 - generated project content is byte-for-byte current with its TypeScript composition;
-- 10 TypeScript content-composition tests and three retained-diff/mesh/camera adapter tests;
-- 41 Rust integration tests across entity state, donor collision/navigation/mesh queries, security door,
+- 11 TypeScript content-composition tests and three retained-diff/mesh/camera adapter tests;
+- 50 Rust integration tests across entity state, donor collision/navigation/mesh queries, security door,
   content admission, encounter routing, kinematic/navigation motion, atomic rejection, projection,
-  player control, generated-environment admission, and save/reopen;
+  player control, combat/health/weapon behavior, generated-environment admission, and save/reopen;
 - strict rejection of unknown stored-content and snapshot fields;
 - a real Chromium/Three/WebGL product smoke, including a forbidden-old-runtime bundle audit.
 
@@ -342,10 +399,10 @@ These are physical line counts (`wc -l`), not complexity scores:
 |---|---:|---|
 | Reusable Rust entity state | 4 files / 888 lines | Entity/capability storage, atomic entity mutation, snapshot, projection. |
 | Successor spatial adapter/system | 1 file / 878 lines | Canonical donor scene construction, generated-room algorithm, collision/navigation/mesh derivation, bounded query facade, central kinematic phase. |
-| Rust game host and runners | 11 files / 3,744 lines | Concrete components/services, routing, admission, scheduling, snapshots, headless/product/workload hosts. |
-| TypeScript content composition | 5 files / 287 lines | Typed definitions, encounter/generation and motion builders, reproducibility check. |
-| TypeScript browser product shell | 6 files / 752 lines | Rust-readout/mesh adapter, input and DOM readout, derived camera, Asha renderer mount, bridge exclusion shim, styling. |
-| Generated project content | 3 files / 8,020 lines | Two encounter/generation variations and pretty-printed 256-body workload data. |
+| Rust game host and runners | 11 files / 4,539 lines | Concrete components/services, combat/query ownership, routing, admission, scheduling, snapshots, headless/product/workload hosts. |
+| TypeScript content composition | 5 files / 317 lines | Typed definitions, encounter/generation/combat and motion builders, reproducibility check. |
+| TypeScript browser product shell | 6 files / 878 lines | Rust-readout/mesh adapter, input/attack resolution and DOM readout, derived camera, Asha renderer mount, bridge exclusion shim, styling. |
+| Generated project content | 3 files / 8,068 lines | Two encounter/generation/combat variations and pretty-printed 256-body workload data. |
 
 The Rust object/component model is currently the largest single file, followed by generation and
 snapshot code. They are explicit and easy to trace, but a later slice should test whether small
@@ -369,24 +426,26 @@ generic replay machinery.
   facade to the browser bundle.
 - One canonical donor `VoxelWorld` can feed collision, navigation, and a real retained mesh without
   per-consumer approximations or importing the donor event/control plane.
+- Asha's compact combat query algorithm can be harvested without importing its independent state,
+  fire-control copy, replay hashes, FPS session, or event-adaptation route.
 - The new capability's behavior has one owner; its expected amplification is model/command/snapshot
   binding plus admission and restore, not a cross-language protocol campaign.
 
 ## Decision boundary and remaining limits
 
-The planned falsification work and first three migration families pass, but this remains a successor
-spike rather than evidence that every Asha feature should move. The next decision is whether to
-accept this repository as the durable successor and continue with the now-unblocked combat family.
+The planned falsification work and first four migration families pass. That is strong evidence for
+continuing Rusty Engine as the durable successor, but it is not evidence that every Asha feature
+should move or that all current leaf-donor arrangements are durable infrastructure.
 
 Before calling this durable infrastructure:
 
-1. Review M1/M2A/M2B as one architectural chunk, then either schedule M3 combat over the real player
-   and moving enemy or record why the successor experiment should stop.
+1. Review M3, then schedule M4 feedback strictly above its movement/attack/damage/defeat facts so
+   presentation never becomes another gameplay authority.
 2. Decide whether sibling donor references become pinned Git dependencies, vendored crates, or a
    shared foundation repository before Asha resumes development.
 3. Add safe allocation telemetry and a longer mixed workload; the current matrix measures isolated
    CPU time and copy/fact proxies only.
-4. Revisit snapshot repetition only if M3 establishes enough repeated component shape to justify a
-   small typed codec helper.
+4. Snapshot repetition has grown with M3 but remains direct and type-specific; revisit a small
+   typed codec helper only if another settled component family repeats the same validation shape.
 5. If the renderer remains a donor, extract a clean typed-frame subpath upstream so the local
    fail-closed alias is unnecessary.

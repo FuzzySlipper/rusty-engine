@@ -18,18 +18,27 @@ function state(projection: RuntimeBrowserState["projection"]): RuntimeBrowserSta
     motionState: "moving",
     navigationState: "following",
     playerMotionState: "idle",
+    combatState: "ready",
     player: {
       id: 1,
       position: [0.5, 0.5, 0.5],
       yawDegrees: 180,
       pitchDegrees: -10,
+      lookDegreesPerUnit: 12,
       bindings: {
         moveForward: "KeyW",
         moveBackward: "KeyS",
         moveLeft: "KeyA",
         moveRight: "KeyD",
         mouseLook: "pointer",
+        primaryFire: "Mouse0",
       },
+    },
+    weapon: {
+      damage: 100,
+      ammoRemaining: 8,
+      ammoCapacity: 8,
+      readyAtTick: 0,
     },
     voxelMeshes: [],
     generatedEnvironment: null,
@@ -94,9 +103,19 @@ test("camera pose is rebuilt as a presentation offset from accepted player state
   const camera = derivePlayerCameraPose(player);
 
   assert.ok(Math.abs(camera.position[0] - 0.5) < 0.000_001);
-  assert.equal(camera.position[1], 3.2);
-  assert.equal(camera.position[2], -5.5);
+  assert.equal(camera.position[1], 1.7);
+  assert.equal(camera.position[2], -0.5);
   assert.equal(camera.yawDegrees, 180);
   assert.equal(camera.pitchDegrees, -10);
   assert.equal("camera" in player, false);
+
+  const localPlayer = {
+    id: 1,
+    name: "player",
+    asset: "primitive/player-marker",
+    translation: [0.5, 0.5, 0.5] as const,
+    visible: true,
+  };
+  const created = new RuntimeProjectionAdapter().apply(state([localPlayer])).ops[0];
+  assert.equal(created?.op === "create" ? created.node.visible : true, false);
 });
