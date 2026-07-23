@@ -6,7 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use core_ids::EntityId;
-use game_host::{DoorState, EncounterState, EnemyState, GameEvent, GameRuntime, MotionFact};
+use game_host::{
+    DoorState, EncounterState, EnemyState, GameEvent, GameRuntime, MotionFact, NavigationFact,
+    NavigationState,
+};
 use serde::Serialize;
 
 const PROJECT: &str = include_str!("../../../../../content/generated/encounter-gate.project.json");
@@ -47,6 +50,7 @@ struct BrowserState {
     door_state: &'static str,
     encounter_state: &'static str,
     motion_state: &'static str,
+    navigation_state: &'static str,
     enemies: Vec<BrowserEnemyState>,
     last_events: Vec<String>,
 }
@@ -216,6 +220,49 @@ fn route(
             }
             json_response(200, browser_state(&runtime, facts))
         }
+        ("POST", "/api/navigation-phase") => {
+            let mut runtime = runtime.lock().expect("runtime lock");
+            let mut advanced = false;
+            let mut arrived = false;
+            let mut blocked = false;
+            let mut unreachable = false;
+            for _ in 0..240 {
+                match runtime.run_navigation_phase(PRODUCT_MOTION_DELTA_SECONDS) {
+                    Ok(receipt) => {
+                        for fact in receipt.facts {
+                            match fact {
+                                NavigationFact::Advanced { .. } => advanced = true,
+                                NavigationFact::Arrived { .. } => arrived = true,
+                                NavigationFact::Blocked { .. } => blocked = true,
+                                NavigationFact::Unreachable { .. } => unreachable = true,
+                            }
+                        }
+                        if runtime
+                            .session()
+                            .navigation(EntityId::new(FIRST_ENEMY))
+                            .is_some_and(|view| view.state != NavigationState::Following)
+                        {
+                            break;
+                        }
+                    }
+                    Err(error) => return error_json(409, &format!("{error}")),
+                }
+            }
+            let mut facts = Vec::new();
+            if advanced {
+                facts.push("NavigationAdvanced".to_owned());
+            }
+            if arrived {
+                facts.push("NavigationArrived".to_owned());
+            }
+            if blocked {
+                facts.push("NavigationBlocked".to_owned());
+            }
+            if unreachable {
+                facts.push("NavigationUnreachable".to_owned());
+            }
+            json_response(200, browser_state(&runtime, facts))
+        }
         ("GET", _) | ("HEAD", _) => serve_static(method, path, dist),
         _ => error_json(405, "method not allowed"),
     }
@@ -281,6 +328,17 @@ fn browser_state(runtime: &GameRuntime, last_events: Vec<String>) -> BrowserStat
             "blocked"
         } else {
             "moving"
+        },
+        navigation_state: match runtime
+            .session()
+            .navigation(EntityId::new(FIRST_ENEMY))
+            .expect("browser navigator")
+            .state
+        {
+            NavigationState::Following => "following",
+            NavigationState::Arrived => "arrived",
+            NavigationState::Blocked => "blocked",
+            NavigationState::Unreachable => "unreachable",
         },
         enemies,
         last_events,

@@ -21,12 +21,15 @@ pub use model::{
     security_door_definitions, DoorComponent, DoorConfig, DoorState, DoorView, EncounterComponent,
     EncounterConfig, EncounterState, EncounterView, EnemyComponent, EnemyState, EnemyView,
     GameEntityDefinition, GameEntityDefinitionError, GameEvent, GameSession, JournalEntry,
-    RuntimeReadout, RuntimeReceipt, SecurityDoorIds, SwitchComponent, SwitchView,
+    NavigationComponent, NavigationConfig, NavigationFact, NavigationFailure,
+    NavigationPhaseReceipt, NavigationState, NavigationView, RuntimeReadout, RuntimeReceipt,
+    SecurityDoorIds, SwitchComponent, SwitchView, MAX_NAVIGATION_QUERY_BUDGET,
+    MAX_NAVIGATION_SPEED_UNITS_PER_SECOND,
 };
 pub use runtime::{GameRuntime, RuntimeError, MAX_EVENT_WAVE, MAX_TICK_ADVANCE};
 pub use scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
 pub use snapshot::{
     decode_game_snapshot, encode_game_snapshot, EncounterSnapshot, EnemySnapshot, GameSnapshot,
-    GameSnapshotError, SnapshotEncounterState, SnapshotEnemyState, VoxelCollisionSnapshot,
-    GAME_SNAPSHOT_SCHEMA_VERSION,
+    GameSnapshotError, NavigationSnapshot, SnapshotEncounterState, SnapshotEnemyState,
+    SnapshotNavigationState, VoxelCollisionSnapshot, GAME_SNAPSHOT_SCHEMA_VERSION,
 };

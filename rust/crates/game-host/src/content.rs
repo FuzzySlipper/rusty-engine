@@ -5,9 +5,11 @@ use engine_spatial::VoxelCollisionScene;
 use entity_state::{EntityDefinition, MAX_ABS_TRANSLATION};
 use serde::Deserialize;
 
-use crate::model::{DoorConfig, GameEntityDefinition, GameEntityDefinitionError, GameSession};
+use crate::model::{
+    DoorConfig, GameEntityDefinition, GameEntityDefinitionError, GameSession, NavigationConfig,
+};
 
-pub const PROJECT_CONTENT_SCHEMA_VERSION: u32 = 2;
+pub const PROJECT_CONTENT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug)]
 pub struct AdmittedProject {
@@ -37,6 +39,7 @@ struct AuthoredEntityDefinition {
     enemy: bool,
     encounter: Option<AuthoredEncounter>,
     kinematic: Option<AuthoredKinematic>,
+    navigation: Option<AuthoredNavigation>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,6 +91,14 @@ struct AuthoredKinematic {
     velocity: [f32; 3],
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct AuthoredNavigation {
+    goal: [f32; 3],
+    speed_units_per_second: f32,
+    max_visited: usize,
+}
+
 #[derive(Debug)]
 pub enum ProjectContentError {
     Decode(serde_json::Error),
@@ -96,6 +107,7 @@ pub enum ProjectContentError {
     InvalidDoorOpenTranslation { entity: EntityId },
     InvalidAutoCloseTicks { entity: EntityId },
     KinematicMissingCollisionScene { entity: EntityId },
+    NavigationMissingCollisionScene { entity: EntityId },
     CollisionScene(engine_spatial::CollisionSceneError),
     Definition(GameEntityDefinitionError),
 }
@@ -143,6 +155,15 @@ pub fn decode_project_content(input: &str) -> Result<AdmittedProject, ProjectCon
         .filter(|_| collision_scene.is_none())
     {
         return Err(ProjectContentError::KinematicMissingCollisionScene { entity });
+    }
+    if let Some(entity) = session
+        .navigators
+        .keys()
+        .next()
+        .copied()
+        .filter(|_| collision_scene.is_none())
+    {
+        return Err(ProjectContentError::NavigationMissingCollisionScene { entity });
     }
     Ok(AdmittedProject {
         session,
@@ -206,6 +227,13 @@ fn authored_definition(
             encounter.members.into_iter().map(EntityId::new),
             EntityId::new(encounter.exit),
         );
+    }
+    if let Some(navigation) = authored.navigation {
+        definition = definition.with_navigation(NavigationConfig {
+            goal: array_vec3(navigation.goal),
+            speed_units_per_second: navigation.speed_units_per_second,
+            max_visited: navigation.max_visited,
+        });
     }
     Ok(definition)
 }

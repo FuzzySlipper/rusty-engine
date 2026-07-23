@@ -14,8 +14,15 @@ use core_ids::EntityId;
 use core_math::Vec3;
 use core_space::{ChunkDims, GridId, VoxelCoord, VoxelGridSpec, WorldPos, WorldVec};
 use core_voxel::VoxelValue;
-use entity_state::{BatchRejection, EntityCommand, EntityCommandBatch, EntityFact, EntityState};
+use entity_state::{
+    BatchRejection, EntityCommand, EntityCommandBatch, EntityFact, EntityState, KinematicBodyView,
+};
 use svc_collision::{CollisionProjection, Ray};
+use svc_pathfinding::{
+    build_nav_projection, propose_direct_nav_movement, propose_projected_direct_nav_movement,
+    DirectNavMovementRequest, NavError, NavProjection, NavProjectionConfig,
+    ProjectedDirectNavMovementError, ProjectedDirectNavMovementRequest,
+};
 use svc_spatial::VoxelWorld;
 use svc_volume::{VolumeError, VoxelChunk};
 
@@ -32,6 +39,7 @@ pub const MAX_SOLID_VOXELS: usize = 1_000_000;
 pub struct VoxelCollisionScene {
     voxel_world: VoxelWorld,
     projection: CollisionProjection,
+    navigation: NavProjection,
     voxel_size: f64,
     chunk_size: u32,
     solid_voxels: Vec<[i64; 3]>,
@@ -49,6 +57,8 @@ impl std::fmt::Debug for VoxelCollisionScene {
                 &self.voxel_world.resident_chunks().count(),
             )
             .field("projection_version", &self.projection.version())
+            .field("navigation_cell_count", &self.navigation.walkable_len())
+            .field("navigation_hash", &self.navigation.projection_hash())
             .finish()
     }
 }
@@ -64,6 +74,7 @@ pub enum CollisionSceneError {
         voxel: [i64; 3],
         source: VolumeError,
     },
+    NavigationProjection(NavError),
 }
 
 impl std::fmt::Display for CollisionSceneError {
@@ -79,6 +90,26 @@ pub struct CollisionRayHit {
     pub voxel: [i64; 3],
     pub point: [f64; 3],
     pub distance: f64,
+}
+
+/// One bounded path-following proposal derived from the scene's canonical
+/// voxel authority. Applying it remains the caller's responsibility.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NavigationStep {
+    pub next_waypoint: Vec3,
+    pub reached: bool,
+    pub visited: usize,
+    pub path_len: usize,
+    pub projection_hash: u64,
+    pub path_hash: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NavigationStepError {
+    InvalidRequest { reason: &'static str },
+    StartNotWalkable { start: [i64; 3] },
+    GoalNotWalkable { goal: [i64; 3] },
+    NoPath { start: [i64; 3], goal: [i64; 3] },
 }
 
 impl VoxelCollisionScene {
@@ -126,9 +157,18 @@ impl VoxelCollisionScene {
             voxel_world.insert(coord, chunk);
         }
         let projection = CollisionProjection::build(&voxel_world);
+        let navigation = build_nav_projection(
+            &voxel_world,
+            NavProjectionConfig {
+                agent_height_voxels: 1,
+                require_solid_floor: false,
+            },
+        )
+        .map_err(CollisionSceneError::NavigationProjection)?;
         Ok(Self {
             voxel_world,
             projection,
+            navigation,
             voxel_size,
             chunk_size,
             solid_voxels,
@@ -157,6 +197,103 @@ impl VoxelCollisionScene {
 
     pub fn projection_version(&self) -> u64 {
         self.projection.version()
+    }
+
+    pub fn navigation_cell_count(&self) -> usize {
+        self.navigation.walkable_len()
+    }
+
+    pub fn navigation_hash(&self) -> u64 {
+        self.navigation.projection_hash()
+    }
+
+    pub fn navigation_step(
+        &self,
+        from: Vec3,
+        target: Vec3,
+        current_velocity: Vec3,
+        max_step_units: f32,
+        max_visited: usize,
+    ) -> Result<NavigationStep, NavigationStepError> {
+        let readout = propose_projected_direct_nav_movement(
+            &self.navigation,
+            ProjectedDirectNavMovementRequest {
+                from,
+                target,
+                max_step_units,
+                max_visited,
+            },
+        )
+        .map_err(|error| match error {
+            ProjectedDirectNavMovementError::NonFinitePosition => {
+                NavigationStepError::InvalidRequest {
+                    reason: "nonFinitePosition",
+                }
+            }
+            ProjectedDirectNavMovementError::InvalidStep => NavigationStepError::InvalidRequest {
+                reason: "invalidStep",
+            },
+            ProjectedDirectNavMovementError::InvalidQueryBudget => {
+                NavigationStepError::InvalidRequest {
+                    reason: "invalidQueryBudget",
+                }
+            }
+            ProjectedDirectNavMovementError::StartNotWalkable { start } => {
+                NavigationStepError::StartNotWalkable {
+                    start: start.to_array(),
+                }
+            }
+            ProjectedDirectNavMovementError::GoalNotWalkable { goal } => {
+                NavigationStepError::GoalNotWalkable {
+                    goal: goal.to_array(),
+                }
+            }
+            ProjectedDirectNavMovementError::NoPath { start, goal } => {
+                NavigationStepError::NoPath {
+                    start: start.to_array(),
+                    goal: goal.to_array(),
+                }
+            }
+        })?;
+        // The donor query is deliberately stateless. Once an agent crosses a
+        // voxel boundary it would otherwise immediately turn toward the next
+        // cell and cut the corner of an adjacent solid. Finish centering in the
+        // newly entered cell before advancing; collision remains the fail-closed
+        // authority for the actual body volume.
+        let start_center = self.navigation.grid().voxel_center_world(readout.start);
+        let start_center = Vec3::new(
+            start_center.x as f32,
+            start_center.y as f32,
+            start_center.z as f32,
+        );
+        let to_center = start_center - from;
+        let centered = to_center.length() <= 0.001;
+        let moving_toward_center = to_center.x * current_velocity.x
+            + to_center.y * current_velocity.y
+            + to_center.z * current_velocity.z
+            > 0.0;
+        let (next_waypoint, reached) = if readout.path_len > 1 && !centered && moving_toward_center
+        {
+            let centering = propose_direct_nav_movement(DirectNavMovementRequest {
+                from,
+                target: start_center,
+                max_step_units,
+            })
+            .map_err(|error| NavigationStepError::InvalidRequest {
+                reason: error.label(),
+            })?;
+            (centering.next_waypoint, false)
+        } else {
+            (readout.next_waypoint, readout.reached)
+        };
+        Ok(NavigationStep {
+            next_waypoint,
+            reached,
+            visited: readout.visited,
+            path_len: readout.path_len,
+            projection_hash: readout.projection_hash,
+            path_hash: readout.path_hash,
+        })
     }
 
     pub fn contains_point(&self, point: [f64; 3]) -> bool {
@@ -272,6 +409,45 @@ impl KinematicMotionSystem {
         scene: &VoxelCollisionScene,
         delta_seconds: f32,
     ) -> Result<MotionPhaseReceipt, MotionPhaseError> {
+        Self::run_matching(entities, scene, delta_seconds, |_| true, &[])
+    }
+
+    /// Resolve only a named set of bodies. This lets a responsible gameplay
+    /// system use the same collision invariant without accidentally advancing
+    /// unrelated kinematic objects in the phase.
+    pub fn run_selected(
+        entities: &mut EntityState,
+        scene: &VoxelCollisionScene,
+        delta_seconds: f32,
+        selected: &BTreeSet<EntityId>,
+    ) -> Result<MotionPhaseReceipt, MotionPhaseError> {
+        let dynamic_blockers: Vec<_> = entities
+            .kinematic_bodies()
+            .filter(|body| !selected.contains(&body.entity))
+            .filter(|body| {
+                entities
+                    .view(body.entity)
+                    .ok()
+                    .and_then(|view| view.collision)
+                    .is_some_and(|collision| collision.enabled)
+            })
+            .collect();
+        Self::run_matching(
+            entities,
+            scene,
+            delta_seconds,
+            |entity| selected.contains(&entity),
+            &dynamic_blockers,
+        )
+    }
+
+    fn run_matching(
+        entities: &mut EntityState,
+        scene: &VoxelCollisionScene,
+        delta_seconds: f32,
+        mut include: impl FnMut(EntityId) -> bool,
+        dynamic_blockers: &[KinematicBodyView],
+    ) -> Result<MotionPhaseReceipt, MotionPhaseError> {
         if !delta_seconds.is_finite() || !(0.0..=MAX_MOTION_DELTA_SECONDS).contains(&delta_seconds)
         {
             return Err(MotionPhaseError::InvalidDeltaSeconds {
@@ -279,7 +455,10 @@ impl KinematicMotionSystem {
             });
         }
 
-        let bodies: Vec<_> = entities.kinematic_bodies().collect();
+        let bodies: Vec<_> = entities
+            .kinematic_bodies()
+            .filter(|body| include(body.entity))
+            .collect();
         let revision_before = entities.revision();
         let mut commands = Vec::new();
         let mut facts = Vec::new();
@@ -312,7 +491,15 @@ impl KinematicMotionSystem {
                 let mut translation = [0.0; 3];
                 translation[index] = f64::from(delta);
 
-                if scene.axis_sweep_overlaps(min, max, translation) {
+                if scene.axis_sweep_overlaps(min, max, translation)
+                    || dynamic_axis_sweep_overlaps(
+                        body.entity,
+                        min,
+                        max,
+                        translation,
+                        dynamic_blockers,
+                    )
+                {
                     velocity[index] = 0.0;
                     blocked_axes += 1;
                     facts.push(MotionFact::Blocked {
@@ -366,4 +553,42 @@ impl KinematicMotionSystem {
             entity_facts,
         })
     }
+}
+
+fn dynamic_axis_sweep_overlaps(
+    moving: EntityId,
+    min: [f64; 3],
+    max: [f64; 3],
+    translation: [f64; 3],
+    blockers: &[KinematicBodyView],
+) -> bool {
+    let swept_min = [
+        min[0].min(min[0] + translation[0]),
+        min[1].min(min[1] + translation[1]),
+        min[2].min(min[2] + translation[2]),
+    ];
+    let swept_max = [
+        max[0].max(max[0] + translation[0]),
+        max[1].max(max[1] + translation[1]),
+        max[2].max(max[2] + translation[2]),
+    ];
+    blockers.iter().any(|blocker| {
+        if blocker.entity == moving {
+            return false;
+        }
+        let center = blocker.translation.to_array();
+        let half = blocker.half_extents.to_array();
+        let blocker_min = [
+            f64::from(center[0] - half[0]),
+            f64::from(center[1] - half[1]),
+            f64::from(center[2] - half[2]),
+        ];
+        let blocker_max = [
+            f64::from(center[0] + half[0]),
+            f64::from(center[1] + half[1]),
+            f64::from(center[2] + half[2]),
+        ];
+        (0..3)
+            .all(|axis| swept_min[axis] < blocker_max[axis] && swept_max[axis] > blocker_min[axis])
+    })
 }

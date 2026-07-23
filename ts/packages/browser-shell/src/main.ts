@@ -9,6 +9,7 @@ const revision = requiredElement("revision", HTMLElement);
 const doorCaption = requiredElement("door-caption", HTMLElement);
 const enemyList = requiredElement("enemy-list", HTMLElement);
 const motionState = requiredElement("motion-state", HTMLElement);
+const navigationState = requiredElement("navigation-state", HTMLElement);
 const eventList = requiredElement("event-list", HTMLOListElement);
 const rendererStatus = requiredElement("renderer-status", HTMLElement);
 const smokeResult = requiredElement("smoke-result", HTMLElement);
@@ -41,9 +42,13 @@ requiredElement("reset", HTMLButtonElement).addEventListener("click", () => {
 requiredElement("run-motion", HTMLButtonElement).addEventListener("click", () => {
   void perform("/api/motion-phase");
 });
+requiredElement("run-navigation", HTMLButtonElement).addEventListener("click", () => {
+  void perform("/api/navigation-phase");
+});
 
 if (new URLSearchParams(location.search).has("smoke")) {
   await perform("/api/reset");
+  await perform("/api/navigation-phase");
   await perform("/api/defeat/4");
   await perform("/api/defeat/5");
   await perform("/api/motion-phase");
@@ -55,6 +60,8 @@ if (new URLSearchParams(location.search).has("smoke")) {
     door?.translation?.[1] === 3 &&
     current.enemies.every((enemy) => enemy.state === "defeated") &&
     current.motionState === "blocked" &&
+    current.navigationState === "arrived" &&
+    current.projection.find((node) => node.id === 4)?.translation?.[0] === 6.5 &&
     (current.projection.find((node) => node.id === 10)?.translation?.[0] ?? -4) > 2 &&
     surface.snapshot().includes("loading-bay-exit");
   smokeResult.dataset.status = passed ? "pass" : "fail";
@@ -87,6 +94,8 @@ function renderReadout(state: RuntimeBrowserState): void {
   doorCaption.dataset.state = state.doorState;
   motionState.textContent = state.motionState.toUpperCase();
   motionState.dataset.state = state.motionState;
+  navigationState.textContent = state.navigationState.toUpperCase();
+  navigationState.dataset.state = state.navigationState;
   enemyList.replaceChildren(
     ...state.enemies.map((enemy) => {
       const row = document.createElement("div");

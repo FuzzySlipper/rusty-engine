@@ -35,6 +35,7 @@
           </div>
           <div id="enemy-list" class="enemy-list"></div>
           <div class="motion-readout"><span>Spatial probe</span><strong id="motion-state">MOVING</strong></div>
+          <div class="motion-readout"><span>Enemy navigation</span><strong id="navigation-state">FOLLOWING</strong></div>
         </article>
 
         <article class="control-panel">
@@ -43,6 +44,7 @@
             <button type="button" data-enemy-id="4">Defeat Alpha</button>
             <button type="button" data-enemy-id="5">Defeat Beta</button>
             <button type="button" id="run-motion">Run Spatial Phase</button>
+            <button type="button" id="run-navigation">Run Navigation</button>
             <button type="button" id="reset" class="quiet">Reset</button>
           </div>
           <p class="control-note">Actions enter named Rust services. The shell receives projection and typed facts only.</p>

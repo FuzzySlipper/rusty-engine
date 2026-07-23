@@ -98,6 +98,7 @@ dependencies = [
  "core-voxel",
  "entity-state",
  "svc-collision",
+ "svc-pathfinding",
  "svc-spatial",
  "svc-volume",
 ]
@@ -426,6 +427,15 @@ dependencies = [
  "parry3d-f64",
  "svc-spatial",
  "svc-volume",
+]
+
+[[package]]
+name = "svc-pathfinding"
+version = "0.1.0"
+dependencies = [
+ "core-math",
+ "core-space",
+ "svc-spatial",
 ]
 
 [[package]]

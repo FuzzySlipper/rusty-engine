@@ -30,6 +30,12 @@ export interface KinematicDefinition {
   readonly velocity: Vec3;
 }
 
+export interface NavigationDefinition {
+  readonly goal: Vec3;
+  readonly speedUnitsPerSecond: number;
+  readonly maxVisited: number;
+}
+
 export interface VoxelCollisionDefinition {
   readonly voxelSize: number;
   readonly chunkSize: number;
@@ -47,10 +53,11 @@ export interface EntityDefinition {
   readonly enemy?: true;
   readonly encounter?: EncounterDefinition;
   readonly kinematic?: KinematicDefinition;
+  readonly navigation?: NavigationDefinition;
 }
 
 export interface ProjectContent {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
   readonly entities: readonly EntityDefinition[];
   readonly voxelCollision?: VoxelCollisionDefinition;
 }

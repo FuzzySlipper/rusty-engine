@@ -9,12 +9,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{
     DoorComponent, DoorConfig, DoorState, EncounterComponent, EncounterConfig, EncounterState,
-    EnemyComponent, EnemyState, GameSession, SwitchComponent,
+    EnemyComponent, EnemyState, GameSession, NavigationComponent, NavigationConfig,
+    NavigationState, SwitchComponent, MAX_NAVIGATION_QUERY_BUDGET,
+    MAX_NAVIGATION_SPEED_UNITS_PER_SECOND,
 };
 use crate::runtime::GameRuntime;
 use crate::scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
 
-pub const GAME_SNAPSHOT_SCHEMA_VERSION: u32 = 4;
+pub const GAME_SNAPSHOT_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -28,6 +30,7 @@ pub struct GameSnapshot {
     pub controls: Vec<ControlsSnapshot>,
     pub enemies: Vec<EnemySnapshot>,
     pub encounters: Vec<EncounterSnapshot>,
+    pub navigations: Vec<NavigationSnapshot>,
     pub scheduled: Vec<ScheduledSnapshot>,
 }
 
@@ -100,6 +103,25 @@ pub enum SnapshotEncounterState {
     Cleared,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct NavigationSnapshot {
+    pub entity: u64,
+    pub state: SnapshotNavigationState,
+    pub goal: [f32; 3],
+    pub speed_units_per_second: f32,
+    pub max_visited: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SnapshotNavigationState {
+    Following,
+    Arrived,
+    Blocked,
+    Unreachable,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ScheduledSnapshot {
@@ -124,15 +146,20 @@ pub enum GameSnapshotError {
     DuplicateSwitch { entity: u64 },
     DuplicateEnemy { entity: u64 },
     DuplicateEncounter { entity: u64 },
+    DuplicateNavigation { entity: u64 },
     UnknownDoorEntity { entity: u64 },
     UnknownSwitchEntity { entity: u64 },
     UnknownEnemyEntity { entity: u64 },
     UnknownEncounterEntity { entity: u64 },
+    UnknownNavigationEntity { entity: u64 },
     UnknownControlTarget { switch: u64, target: u64 },
     UnknownEncounterMember { encounter: u64, member: u64 },
     UnknownEncounterExit { encounter: u64, exit: u64 },
     MissingDoorCapability { entity: u64 },
     MissingEnemyCapability { entity: u64 },
+    MissingNavigationCapability { entity: u64 },
+    NavigationMissingCollisionScene { entity: u64 },
+    InvalidNavigationConfig { entity: u64 },
     DuplicateEncounterMember { encounter: u64, member: u64 },
     EnemyInMultipleEncounters { enemy: u64, first: u64, second: u64 },
     DuplicateSchedule { door: u64 },
@@ -222,6 +249,23 @@ impl GameRuntime {
                         .map(|member| member.raw())
                         .collect(),
                     exit: component.config.exit.raw(),
+                })
+                .collect(),
+            navigations: self
+                .session
+                .navigators
+                .iter()
+                .map(|(entity, component)| NavigationSnapshot {
+                    entity: entity.raw(),
+                    state: match component.state {
+                        NavigationState::Following => SnapshotNavigationState::Following,
+                        NavigationState::Arrived => SnapshotNavigationState::Arrived,
+                        NavigationState::Blocked => SnapshotNavigationState::Blocked,
+                        NavigationState::Unreachable => SnapshotNavigationState::Unreachable,
+                    },
+                    goal: component.config.goal.to_array(),
+                    speed_units_per_second: component.config.speed_units_per_second,
+                    max_visited: component.config.max_visited,
                 })
                 .collect(),
             scheduled: self
@@ -366,6 +410,64 @@ impl GameRuntime {
             );
         }
 
+        let mut navigators = BTreeMap::new();
+        let mut navigation_ids = BTreeSet::new();
+        for navigation in snapshot.navigations {
+            if !navigation_ids.insert(navigation.entity) {
+                return Err(GameSnapshotError::DuplicateNavigation {
+                    entity: navigation.entity,
+                });
+            }
+            let entity = EntityId::new(navigation.entity);
+            let view =
+                entities
+                    .view(entity)
+                    .map_err(|_| GameSnapshotError::UnknownNavigationEntity {
+                        entity: navigation.entity,
+                    })?;
+            if !enemies.contains_key(&entity)
+                || view.transform.is_none()
+                || view.collision.is_none()
+                || view.kinematic.is_none()
+            {
+                return Err(GameSnapshotError::MissingNavigationCapability {
+                    entity: navigation.entity,
+                });
+            }
+            if collision_scene.is_none() {
+                return Err(GameSnapshotError::NavigationMissingCollisionScene {
+                    entity: navigation.entity,
+                });
+            }
+            let goal = array_vec3(navigation.goal);
+            if !vec3_is_finite(goal)
+                || !navigation.speed_units_per_second.is_finite()
+                || navigation.speed_units_per_second <= 0.0
+                || navigation.speed_units_per_second > MAX_NAVIGATION_SPEED_UNITS_PER_SECOND
+                || !(1..=MAX_NAVIGATION_QUERY_BUDGET).contains(&navigation.max_visited)
+            {
+                return Err(GameSnapshotError::InvalidNavigationConfig {
+                    entity: navigation.entity,
+                });
+            }
+            navigators.insert(
+                entity,
+                NavigationComponent {
+                    config: NavigationConfig {
+                        goal,
+                        speed_units_per_second: navigation.speed_units_per_second,
+                        max_visited: navigation.max_visited,
+                    },
+                    state: match navigation.state {
+                        SnapshotNavigationState::Following => NavigationState::Following,
+                        SnapshotNavigationState::Arrived => NavigationState::Arrived,
+                        SnapshotNavigationState::Blocked => NavigationState::Blocked,
+                        SnapshotNavigationState::Unreachable => NavigationState::Unreachable,
+                    },
+                },
+            );
+        }
+
         let mut encounters = BTreeMap::new();
         let mut encounter_ids = BTreeSet::new();
         let mut encounter_by_enemy = BTreeMap::new();
@@ -455,6 +557,7 @@ impl GameRuntime {
                 controls,
                 enemies,
                 encounters,
+                navigators,
             },
             tick: Tick::new(snapshot.tick),
             scheduler,
@@ -476,4 +579,8 @@ pub fn decode_game_snapshot(input: &str) -> Result<GameRuntime, GameSnapshotErro
 
 fn array_vec3(value: [f32; 3]) -> Vec3 {
     Vec3::new(value[0], value[1], value[2])
+}
+
+fn vec3_is_finite(value: Vec3) -> bool {
+    value.x.is_finite() && value.y.is_finite() && value.z.is_finite()
 }

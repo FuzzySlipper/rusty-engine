@@ -31,6 +31,7 @@ export interface RuntimeBrowserState {
   readonly doorState: "closed" | "open";
   readonly encounterState: "active" | "cleared";
   readonly motionState: "moving" | "blocked";
+  readonly navigationState: "following" | "arrived" | "blocked" | "unreachable";
   readonly enemies: readonly RuntimeEnemyState[];
   readonly lastEvents: readonly string[];
 }

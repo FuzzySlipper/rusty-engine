@@ -1,7 +1,7 @@
 # Experiment results
 
-Status: planned walking falsification slices completed on 2026-07-23; ready to choose the next
-vertical migration family.
+Status: walking falsification slices and the first scheduled migration family completed on
+2026-07-23; two additional migration families are queued in Den.
 
 ## Current decision
 
@@ -155,6 +155,37 @@ and the receipt counts command/fact values (26,155 committed entity facts in the
 future vertical feature should add safe allocator telemetry before interpreting these timings as a
 general engine capacity result.
 
+### Navigation and autonomous enemy locomotion
+
+The first migration family references Asha's `svc-pathfinding` unchanged. Its production dependency
+closure stops at `core-math`, `core-space`, and `svc-spatial`; navigation policy, durable intent,
+movement, facts, and persistence remain successor-owned.
+
+```text
+authored enemy navigation data
+  -> NavigationComponent { goal, speed, query budget }
+  -> voxel-derived read-only navigation projection
+  -> EnemyNavigationSystem in the explicit phase schedule
+  -> selected-body KinematicMotionSystem collision application
+  -> Advanced / Arrived / Blocked / Unreachable facts
+```
+
+Routes are derived afresh and are not stored in snapshots. The spatial adapter finishes centering an
+agent in a newly entered voxel before turning toward the next cell; this prevents a stateless query
+from cutting across the corner of an adjacent solid, while continuous collision remains the
+fail-closed authority for the actual body volume.
+
+The loading-bay sentry visibly routes around an authored voxel obstacle and reaches its configured
+goal before the encounter proceeds. Save/reopen during the route rebuilds the navigation projection
+from the same stored voxel authority and reaches the same final component/entity state. Focused
+coverage also proves a solid goal becomes `Unreachable`, a body-width/projection mismatch becomes
+`Blocked`, a dynamic kinematic blocker stops the agent and its removal permits fresh replanning, and
+one bounded phase advances 32 configured agents through one named system.
+
+The target and speed are content-only variations in the TypeScript builder. A behavior change is
+localized to the navigation service/spatial adapter plus their focused tests; no protocol, bridge,
+replay, or renderer contract changes are required.
+
 ### Browser/Three/DOM product proof
 
 The loading-bay browser shell links Asha's actual `@asha/renderer-three` and generated render
@@ -162,7 +193,7 @@ contracts. A small successor adapter turns whole Rust projection readouts into r
 `create`/`update`/`destroy` diffs. Three owns canvas objects and resource lifecycle; it never owns
 gameplay state.
 
-Two visible action paths run in the same product scene:
+Three visible action paths run in the same product scene:
 
 ```text
 DOM defeat controls -> CombatService -> EnemyDefeated -> EncounterCleared -> DoorOpened
@@ -171,6 +202,10 @@ DOM defeat controls -> CombatService -> EnemyDefeated -> EncounterCleared -> Doo
 DOM spatial control -> one bounded KinematicMotionSystem phase sequence
                     -> Asha voxel sweep -> KinematicBlocked
                     -> projection update -> retained Three probe stops at the visible obstacle
+
+DOM navigation control -> EnemyNavigationSystem -> Asha voxel-derived path query
+                       -> selected collision-aware movement -> NavigationArrived
+                       -> retained Three sentry visibly routes around the obstacle
 ```
 
 The Asha renderer package has an optional encoded-frame convenience import from its old runtime
@@ -179,9 +214,9 @@ rejects `RuntimeSession`, native bridge, Gameplay Fabric, or `GameplayRuntimeHos
 production bundle. The typed `applyFrame` path remains the unchanged donor implementation.
 
 The automated product gate builds the bundle, starts the Rust host on an ephemeral port, launches
-real headless Chromium with SwiftShader WebGL, presses reset/defeat/spatial actions, and requires the
-open-door transform, defeated entities, blocked probe, retained-renderer snapshot, and typed fact
-names in the final DOM.
+real headless Chromium with SwiftShader WebGL, presses reset/navigation/defeat/spatial actions, and
+requires the arrived sentry, open-door transform, defeated entities, blocked probe,
+retained-renderer snapshot, and typed fact names in the final DOM.
 
 ## Reproducible evidence
 
@@ -199,10 +234,10 @@ The current verification gate proves:
 
 - Rust formatting, Clippy, and strict TypeScript compilation;
 - generated project content is byte-for-byte current with its TypeScript composition;
-- 5 TypeScript content-composition tests and one retained-diff adapter test;
-- 23 Rust integration tests across entity state, donor collision queries, security door,
-  content admission, encounter routing, kinematic motion, atomic rejection, projection, and
-  save/reopen;
+- 7 TypeScript content-composition tests and one retained-diff adapter test;
+- 29 Rust integration tests across entity state, donor collision/navigation queries, security door,
+  content admission, encounter routing, kinematic/navigation motion, atomic rejection, projection,
+  and save/reopen;
 - strict rejection of unknown stored-content and snapshot fields;
 - a real Chromium/Three/WebGL product smoke, including a forbidden-old-runtime bundle audit.
 

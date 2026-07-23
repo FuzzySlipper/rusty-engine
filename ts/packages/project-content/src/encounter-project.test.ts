@@ -29,5 +29,34 @@ test("loading bay composes a visible kinematic probe over authored voxel collisi
     halfExtents: [0.25, 0.25, 0.25],
     velocity: [5, 0, 0],
   });
-  assert.deepEqual(project.voxelCollision?.solidVoxels, [[3, 0, 6]]);
+  assert.deepEqual(project.voxelCollision?.solidVoxels, [
+    [3, 0, 4],
+    [3, 0, 6],
+  ]);
+});
+
+test("autonomous navigation is explicit data on the responsible enemy", () => {
+  const project = encounterGateProject(["pathfinder", "guard"]);
+  const navigator = project.entities.find((entity) => entity.id === ENCOUNTER_IDS.firstEnemy);
+
+  assert.deepEqual(navigator?.navigation, {
+    goal: [6.5, 0.5, 4.5],
+    speedUnitsPerSecond: 4,
+    maxVisited: 512,
+  });
+  assert.deepEqual(navigator?.kinematic?.velocity, [0, 0, 0]);
+});
+
+test("navigation target and speed are content-only variations", () => {
+  const project = encounterGateProject(["pathfinder"], {
+    navigationGoal: [1.5, 0.5, 7.5],
+    navigationSpeedUnitsPerSecond: 2,
+  });
+  const navigator = project.entities.find((entity) => entity.id === ENCOUNTER_IDS.firstEnemy);
+
+  assert.deepEqual(navigator?.navigation, {
+    goal: [1.5, 0.5, 7.5],
+    speedUnitsPerSecond: 2,
+    maxVisited: 512,
+  });
 });

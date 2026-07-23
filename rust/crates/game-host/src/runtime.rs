@@ -4,17 +4,19 @@ use core_ids::EntityId;
 use core_time::{Tick, TickDelta};
 
 use engine_spatial::{
-    KinematicMotionSystem, MotionPhaseError, MotionPhaseReceipt, VoxelCollisionScene,
+    KinematicMotionSystem, MotionPhaseError, MotionPhaseReceipt, NavigationStepError,
+    VoxelCollisionScene,
 };
 
 use crate::content::{decode_project_content, AdmittedProject, ProjectContentError};
 use crate::model::{
-    readout, security_door_definitions, GameEvent, GameSession, JournalEntry, RuntimeReadout,
-    RuntimeReceipt, SecurityDoorIds,
+    readout, security_door_definitions, GameEvent, GameSession, JournalEntry,
+    NavigationPhaseReceipt, RuntimeReadout, RuntimeReceipt, SecurityDoorIds,
 };
 use crate::scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
 use crate::services::{
-    CombatService, DoorService, DoorTransition, EncounterService, InteractionService,
+    CombatService, DoorService, DoorTransition, EncounterService, EnemyNavigationSystem,
+    InteractionService,
 };
 
 pub const MAX_EVENT_WAVE: usize = 256;
@@ -24,15 +26,35 @@ pub const MAX_TICK_ADVANCE: u64 = 100_000;
 pub enum RuntimeError {
     Content(ProjectContentError),
     Definition(crate::model::GameEntityDefinitionError),
-    UnknownActor { actor: EntityId },
-    NotInteractable { entity: EntityId },
-    UnknownDoor { door: EntityId },
-    UnknownEnemy { enemy: EntityId },
+    UnknownActor {
+        actor: EntityId,
+    },
+    NotInteractable {
+        entity: EntityId,
+    },
+    UnknownDoor {
+        door: EntityId,
+    },
+    UnknownEnemy {
+        enemy: EntityId,
+    },
     EntityBatch(entity_state::BatchRejection),
-    EventWaveLimit { limit: usize },
-    TickAdvanceLimit { requested: u64, limit: u64 },
+    EventWaveLimit {
+        limit: usize,
+    },
+    TickAdvanceLimit {
+        requested: u64,
+        limit: u64,
+    },
     MissingCollisionScene,
     Motion(MotionPhaseError),
+    InvalidNavigationDelta {
+        actual: f32,
+    },
+    NavigationStep {
+        entity: EntityId,
+        source: NavigationStepError,
+    },
 }
 
 impl std::fmt::Display for RuntimeError {
@@ -113,6 +135,20 @@ impl GameRuntime {
             .ok_or(RuntimeError::MissingCollisionScene)?;
         KinematicMotionSystem::run(&mut self.session.entities, scene, delta_seconds)
             .map_err(RuntimeError::Motion)
+    }
+
+    /// Run the explicit autonomous-enemy navigation phase. The system derives
+    /// a fresh bounded route from the canonical voxel scene, then applies the
+    /// selected entities through the same collision-aware kinematic invariant.
+    pub fn run_navigation_phase(
+        &mut self,
+        delta_seconds: f32,
+    ) -> Result<NavigationPhaseReceipt, RuntimeError> {
+        let scene = self
+            .collision_scene
+            .as_ref()
+            .ok_or(RuntimeError::MissingCollisionScene)?;
+        EnemyNavigationSystem::run(&mut self.session, scene, delta_seconds)
     }
 
     pub fn interact(

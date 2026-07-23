@@ -1,4 +1,4 @@
-import type { EntityDefinition, ProjectContent } from "./schema.js";
+import type { EntityDefinition, ProjectContent, Vec3 } from "./schema.js";
 
 export const ENCOUNTER_IDS = {
   actor: 1,
@@ -7,9 +7,18 @@ export const ENCOUNTER_IDS = {
   firstEnemy: 4,
   motionProbe: 10,
   collisionWall: 11,
+  navigationWall: 12,
 } as const;
 
-export function encounterGateProject(enemyNames: readonly string[]): ProjectContent {
+export interface EncounterProjectOptions {
+  readonly navigationGoal?: Vec3;
+  readonly navigationSpeedUnitsPerSecond?: number;
+}
+
+export function encounterGateProject(
+  enemyNames: readonly string[],
+  options: EncounterProjectOptions = {},
+): ProjectContent {
   if (enemyNames.length === 0) {
     throw new Error("an encounter gate requires at least one enemy");
   }
@@ -21,15 +30,25 @@ export function encounterGateProject(enemyNames: readonly string[]): ProjectCont
   const enemies: EntityDefinition[] = normalizedNames.map((name, index) => ({
     id: ENCOUNTER_IDS.firstEnemy + index,
     name,
-    translation: [index * 2, 0, 4],
+    translation: index === 0 ? [0.5, 0.5, 4.5] : [2.5, 0.5, 2.5],
     collision: { enabled: true, staticCollider: false },
     renderable: { asset: "mesh/security-sentry", visible: true },
     enemy: true,
+    ...(index === 0
+      ? {
+          kinematic: { halfExtents: [0.25, 0.25, 0.25], velocity: [0, 0, 0] },
+          navigation: {
+            goal: options.navigationGoal ?? [6.5, 0.5, 4.5],
+            speedUnitsPerSecond: options.navigationSpeedUnitsPerSecond ?? 4,
+            maxVisited: 512,
+          },
+        }
+      : {}),
   }));
   const members = enemies.map((enemy) => enemy.id);
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     entities: [
       { id: ENCOUNTER_IDS.actor, name: "player" },
       {
@@ -59,8 +78,21 @@ export function encounterGateProject(enemyNames: readonly string[]): ProjectCont
         translation: [3.5, 0.5, 6.5],
         renderable: { asset: "primitive/voxel-wall", visible: true },
       },
+      {
+        id: ENCOUNTER_IDS.navigationWall,
+        name: "navigation-obstacle",
+        translation: [3.5, 0.5, 4.5],
+        renderable: { asset: "primitive/voxel-wall", visible: true },
+      },
     ],
-    voxelCollision: { voxelSize: 1, chunkSize: 8, solidVoxels: [[3, 0, 6]] },
+    voxelCollision: {
+      voxelSize: 1,
+      chunkSize: 8,
+      solidVoxels: [
+        [3, 0, 4],
+        [3, 0, 6],
+      ],
+    },
   };
 }
 

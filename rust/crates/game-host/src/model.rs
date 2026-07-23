@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use core_ids::EntityId;
 use core_math::Vec3;
 use core_time::{Tick, TickDelta};
+use engine_spatial::MotionPhaseReceipt;
 use entity_state::{EntityDefinition, EntityFact, EntityState, EntityView, ProjectionNode};
 
 use crate::scheduler::Scheduler;
@@ -56,6 +57,72 @@ pub struct EnemyComponent {
     pub state: EnemyState,
 }
 
+pub const MAX_NAVIGATION_SPEED_UNITS_PER_SECOND: f32 = 1_000.0;
+pub const MAX_NAVIGATION_QUERY_BUDGET: usize = 100_000;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NavigationConfig {
+    pub goal: Vec3,
+    pub speed_units_per_second: f32,
+    pub max_visited: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NavigationState {
+    Following,
+    Arrived,
+    Blocked,
+    Unreachable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NavigationComponent {
+    pub config: NavigationConfig,
+    pub state: NavigationState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NavigationFailure {
+    StartNotWalkable,
+    GoalNotWalkable,
+    NoPath,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum NavigationFact {
+    Advanced {
+        entity: EntityId,
+        before: Vec3,
+        after: Vec3,
+        path_hash: u64,
+    },
+    Arrived {
+        entity: EntityId,
+        goal: Vec3,
+    },
+    Blocked {
+        entity: EntityId,
+        goal: Vec3,
+    },
+    Unreachable {
+        entity: EntityId,
+        goal: Vec3,
+        reason: NavigationFailure,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NavigationPhaseReceipt {
+    pub agents_considered: usize,
+    pub advanced_agents: usize,
+    pub arrived_agents: usize,
+    pub blocked_agents: usize,
+    pub unreachable_agents: usize,
+    pub navigation_hash: u64,
+    pub facts: Vec<NavigationFact>,
+    pub motion: MotionPhaseReceipt,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncounterConfig {
     pub members: Vec<EntityId>,
@@ -82,6 +149,7 @@ pub struct GameEntityDefinition {
     pub controls_targets: Vec<EntityId>,
     pub enemy: bool,
     pub encounter: Option<EncounterConfig>,
+    pub navigation: Option<NavigationConfig>,
 }
 
 impl GameEntityDefinition {
@@ -93,6 +161,7 @@ impl GameEntityDefinition {
             controls_targets: Vec::new(),
             enemy: false,
             encounter: None,
+            navigation: None,
         }
     }
 
@@ -125,6 +194,11 @@ impl GameEntityDefinition {
             members: members.into_iter().collect(),
             exit,
         });
+        self
+    }
+
+    pub fn with_navigation(mut self, config: NavigationConfig) -> Self {
+        self.navigation = Some(config);
         self
     }
 }
@@ -160,6 +234,27 @@ pub enum GameEntityDefinitionError {
         entity: EntityId,
     },
     EnemyMissingRenderable {
+        entity: EntityId,
+    },
+    NavigationWithoutEnemy {
+        entity: EntityId,
+    },
+    NavigationMissingTransform {
+        entity: EntityId,
+    },
+    NavigationMissingCollision {
+        entity: EntityId,
+    },
+    NavigationMissingKinematic {
+        entity: EntityId,
+    },
+    InvalidNavigationGoal {
+        entity: EntityId,
+    },
+    InvalidNavigationSpeed {
+        entity: EntityId,
+    },
+    InvalidNavigationQueryBudget {
         entity: EntityId,
     },
     EmptyEncounter {
@@ -208,6 +303,7 @@ pub struct GameSession {
     pub(crate) controls: BTreeMap<EntityId, Vec<EntityId>>,
     pub(crate) enemies: BTreeMap<EntityId, EnemyComponent>,
     pub(crate) encounters: BTreeMap<EntityId, EncounterComponent>,
+    pub(crate) navigators: BTreeMap<EntityId, NavigationComponent>,
 }
 
 impl GameSession {
@@ -227,6 +323,7 @@ impl GameSession {
         let mut controls = BTreeMap::new();
         let mut enemies = BTreeMap::new();
         let mut encounters = BTreeMap::new();
+        let mut navigators = BTreeMap::new();
 
         for definition in &definitions {
             let entity = definition.entity.id;
@@ -279,6 +376,41 @@ impl GameSession {
                     entity,
                     EnemyComponent {
                         state: EnemyState::Alive,
+                    },
+                );
+            }
+            if let Some(config) = definition.navigation {
+                if !definition.enemy {
+                    return Err(GameEntityDefinitionError::NavigationWithoutEnemy { entity });
+                }
+                let view = entities.view(entity).expect("definition created entity");
+                if view.transform.is_none() {
+                    return Err(GameEntityDefinitionError::NavigationMissingTransform { entity });
+                }
+                if view.collision.is_none() {
+                    return Err(GameEntityDefinitionError::NavigationMissingCollision { entity });
+                }
+                if view.kinematic.is_none() {
+                    return Err(GameEntityDefinitionError::NavigationMissingKinematic { entity });
+                }
+                if !vec3_is_finite(config.goal) {
+                    return Err(GameEntityDefinitionError::InvalidNavigationGoal { entity });
+                }
+                if !config.speed_units_per_second.is_finite()
+                    || !(0.0..=MAX_NAVIGATION_SPEED_UNITS_PER_SECOND)
+                        .contains(&config.speed_units_per_second)
+                    || config.speed_units_per_second == 0.0
+                {
+                    return Err(GameEntityDefinitionError::InvalidNavigationSpeed { entity });
+                }
+                if !(1..=MAX_NAVIGATION_QUERY_BUDGET).contains(&config.max_visited) {
+                    return Err(GameEntityDefinitionError::InvalidNavigationQueryBudget { entity });
+                }
+                navigators.insert(
+                    entity,
+                    NavigationComponent {
+                        config,
+                        state: NavigationState::Following,
                     },
                 );
             }
@@ -366,6 +498,7 @@ impl GameSession {
             controls,
             enemies,
             encounters,
+            navigators,
         })
     }
 
@@ -414,6 +547,16 @@ impl GameSession {
             state: component.state,
         })
     }
+
+    pub fn navigation(&self, entity: EntityId) -> Option<NavigationView> {
+        let component = self.navigators.get(&entity)?;
+        Some(NavigationView {
+            entity,
+            config: component.config,
+            state: component.state,
+            entity_view: self.entities.view(entity).ok()?,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -444,6 +587,14 @@ pub struct EncounterView {
     pub members: Vec<EntityId>,
     pub exit: EntityId,
     pub state: EncounterState,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NavigationView {
+    pub entity: EntityId,
+    pub config: NavigationConfig,
+    pub state: NavigationState,
+    pub entity_view: EntityView,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -546,4 +697,8 @@ pub(crate) fn readout(
         pending_schedules: scheduler.len(),
         journal: journal.to_vec(),
     }
+}
+
+fn vec3_is_finite(value: Vec3) -> bool {
+    value.x.is_finite() && value.y.is_finite() && value.z.is_finite()
 }

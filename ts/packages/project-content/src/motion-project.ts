@@ -31,7 +31,7 @@ export function motionLabProject(bodyCount: number): ProjectContent {
   );
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     entities,
     voxelCollision: {
       voxelSize: 1,

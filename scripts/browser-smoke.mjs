@@ -65,6 +65,7 @@ try {
     "EncounterCleared",
     "DoorOpened",
     "KinematicBlocked",
+    "NavigationArrived",
   ];
   const missing = required.filter((marker) => !result.stdout.includes(marker));
   if (missing.length > 0) {

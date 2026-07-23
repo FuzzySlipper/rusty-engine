@@ -11,6 +11,7 @@ function state(projection: RuntimeBrowserState["projection"]): RuntimeBrowserSta
     doorState: "closed",
     encounterState: "active",
     motionState: "moving",
+    navigationState: "following",
     enemies: [],
     lastEvents: [],
   };
