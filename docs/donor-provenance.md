@@ -38,6 +38,7 @@ the old classification still holds.
 | Camera/view evidence | `engine-rs/crates/protocol/protocol-view` | Inspected only; no dependency or copied implementation | Pose vocabulary and bounded look input informed names. Camera handles, bridge operations, controller modes, transition state, and persisted camera authority are intentionally absent; the browser derives one follow camera from accepted player pose. |
 | Combat ray/target algorithm | `engine-rs/crates/services/svc-combat` | Small slab-ray/nearest-target algorithm adapted; crate not referenced | Deterministic AABB intersection and nearest-hit ordering are useful below the successor service. The donor `CombatState`, copied fire-control command state, health/replay hashes, readout/golden machinery, and independent health table were rejected because Rusty Engine entities and `CombatService` already own those meanings. |
 | FPS combat/lifecycle evidence | `engine-rs/crates/rules/rule-lifecycle/src/lib.rs` (`apply_primary_fire_for_roles_with_entities`) and `fps_loaded.rs` | Inspected only; no dependency or copied implementation | Confirmed the old player-fire behavior and collision ordering, while providing negative evidence for role maps, runtime-session wrappers, entity-authoring policy routes, gameplay-event adapters, state rollback copies, and per-action replay records. |
+| Presentation feedback evidence | `engine-rs/crates/render/render-animation`, `render-audio`, `render-billboard`, `render-particle`, `protocol/protocol-presentation`, `protocol/protocol-render`, and `render/render-bridge` | Inspected only; no dependency or copied implementation | Retained the one-way projection rule, disposable effect ownership, bounded transient work, entity/world anchoring, and fail-soft host realization as design evidence. Rejected the donor animation authority, asset catalog/hash closure, broad presentation/render operations, retained handle registries, origin/correlation/replay metadata, scene/level-generation bridge, and runtime-session routing. Rusty Engine instead owns one response-local semantic cue union at the browser-host border. |
 | `@asha/contracts` | `ts/packages/contracts` | Sibling `link:` dependency, unchanged | Existing typed render-diff vocabulary and branded render/entity identities at the real presentation border. |
 | `@asha/renderer-three` | `ts/packages/renderer-three` | Sibling `link:` dependency, unchanged | Existing retained Three/WebGL browser surface, resource lifecycle, projection metadata, and render-diff application. |
 | `@asha/render-projection` | `ts/packages/render-projection` | Renderer transitive sibling dependency, unchanged | Renderer-neutral retained projection helpers used by the donor browser surface. |
@@ -68,6 +69,16 @@ transforms, `HealthComponent`, `WeaponComponent`, and the canonical voxel collis
 Health, ammo, cooldown eligibility, damage, and defeat have no donor-owned mirror or hash. A lethal
 hit emits the existing typed `EnemyDefeated` consequence into the explicit encounter/door drain;
 no FPS runtime session, role registry, proposal policy, or replay record entered the path.
+
+M4 donor inspection used the pinned evidence revision above. The relevant presentation files are
+unchanged in the current Asha checkout at `6462a6de20d48ea1a3b7456826804bd9507860a5`, so the newer
+checkout added no unreviewed semantic drift to this decision. None of the four render crates or
+their protocol dependencies enters Rusty Engine. Their strongest shared lesson is narrower than
+their APIs: presentation reads accepted state/facts in one direction, retained posture can be
+rebuilt, impulses can be discarded, and host failure never changes authority. The successor border
+therefore preserves movement, attack, damage, defeat, and door payloads as a small closed union in
+the browser response. Animation posture is rebuilt from current entity state; cues are never added
+to `GameRuntime`, `GameSession`, the journal, or a snapshot.
 
 Sibling references are intentional while Asha development is stopped for this decision. If this
 lab becomes a durable independent successor, the references should be pinned as Git dependencies,

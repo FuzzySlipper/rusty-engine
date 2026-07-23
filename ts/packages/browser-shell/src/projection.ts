@@ -86,6 +86,40 @@ export interface RuntimeGeneratedEnvironment {
   readonly meshQuads: number;
 }
 
+export interface RuntimeAnimationState {
+  readonly entity: number;
+  readonly posture: "idle" | "moving" | "defeated" | "open" | "closed";
+}
+
+export type RuntimeFeedbackCue =
+  | {
+      readonly kind: "movement";
+      readonly entity: number;
+      readonly from: readonly [number, number, number];
+      readonly to: readonly [number, number, number];
+    }
+  | { readonly kind: "movementBlocked"; readonly entity: number }
+  | {
+      readonly kind: "attack";
+      readonly attacker: number;
+      readonly origin: readonly [number, number, number];
+      readonly direction: readonly [number, number, number];
+    }
+  | {
+      readonly kind: "damage";
+      readonly attacker: number;
+      readonly target: number;
+      readonly amount: number;
+      readonly remaining: number;
+    }
+  | { readonly kind: "defeat"; readonly attacker: number | null; readonly entity: number }
+  | { readonly kind: "doorChanged"; readonly entity: number; readonly state: "open" | "closed" };
+
+export interface RuntimePresentationState {
+  readonly animationStates: readonly RuntimeAnimationState[];
+  readonly cues: readonly RuntimeFeedbackCue[];
+}
+
 export interface RuntimeBrowserState {
   readonly tick: number;
   readonly entityRevision: number;
@@ -101,6 +135,7 @@ export interface RuntimeBrowserState {
   readonly voxelMeshes: readonly RuntimeVoxelMeshChunk[];
   readonly generatedEnvironment: RuntimeGeneratedEnvironment | null;
   readonly enemies: readonly RuntimeEnemyState[];
+  readonly presentation: RuntimePresentationState;
   readonly lastEvents: readonly string[];
 }
 

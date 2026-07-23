@@ -44,6 +44,7 @@ function state(projection: RuntimeBrowserState["projection"]): RuntimeBrowserSta
     voxelMeshes: [],
     generatedEnvironment: null,
     enemies: [],
+    presentation: { animationStates: [], cues: [] },
     lastEvents: [],
   };
 }

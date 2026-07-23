@@ -13,6 +13,11 @@ use game_host::{
 };
 use serde::Serialize;
 
+#[path = "browser_host/presentation.rs"]
+mod presentation;
+
+use presentation::{project_presentation, BrowserFeedbackProjection, BrowserPresentation};
+
 const PROJECT: &str = include_str!("../../../../../content/generated/encounter-gate.project.json");
 const DEFAULT_ADDRESS: &str = "127.0.0.1:37881";
 const ACTOR: EntityId = EntityId::new(1);
@@ -127,6 +132,7 @@ struct BrowserState {
     voxel_meshes: Vec<BrowserVoxelMeshChunk>,
     generated_environment: Option<BrowserGeneratedEnvironment>,
     enemies: Vec<BrowserEnemyState>,
+    presentation: BrowserPresentation,
     last_events: Vec<String>,
 }
 
@@ -266,12 +272,18 @@ fn route(
         ("GET", "/health") => (200, "text/plain; charset=utf-8", b"ok\n".to_vec()),
         ("GET", "/api/state") => {
             let runtime = runtime.lock().expect("runtime lock");
-            json_response(200, browser_state(&runtime, Vec::new()))
+            json_response(
+                200,
+                browser_state(&runtime, Vec::new(), BrowserFeedbackProjection::default()),
+            )
         }
         ("POST", "/api/reset") => {
             let mut runtime = runtime.lock().expect("runtime lock");
             *runtime = GameRuntime::from_project_content(PROJECT).expect("reset browser project");
-            json_response(200, browser_state(&runtime, Vec::new()))
+            json_response(
+                200,
+                browser_state(&runtime, Vec::new(), BrowserFeedbackProjection::default()),
+            )
         }
         ("POST", "/api/attack") => {
             let action: ResolvedAttackAction = match serde_json::from_slice(body) {
@@ -279,12 +291,21 @@ fn route(
                 Err(error) => return error_json(400, &format!("invalid attack action: {error}")),
             };
             let mut runtime = runtime.lock().expect("runtime lock");
-            let mut facts = match advance_product_action(&mut runtime) {
+            let advanced_events = match advance_product_action(&mut runtime) {
                 Ok(events) => events,
                 Err(error) => return error_json(409, &format!("{error}")),
             };
+            let mut feedback = BrowserFeedbackProjection::default();
+            feedback.extend_events(&advanced_events);
+            let mut facts = advanced_events
+                .iter()
+                .map(event_name)
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
             match runtime.attack(ACTOR, action) {
                 Ok(receipt) => {
+                    feedback.extend_combat(&receipt.facts);
+                    feedback.extend_events(&receipt.events);
                     facts.extend(
                         receipt
                             .facts
@@ -293,7 +314,7 @@ fn route(
                             .map(str::to_owned),
                     );
                     facts.extend(receipt.events.iter().map(event_name).map(str::to_owned));
-                    json_response(200, browser_state(&runtime, facts))
+                    json_response(200, browser_state(&runtime, facts, feedback))
                 }
                 Err(error) => error_json(409, &format!("{error}")),
             }
@@ -302,9 +323,11 @@ fn route(
             let mut runtime = runtime.lock().expect("runtime lock");
             let mut moved = false;
             let mut blocked = false;
+            let mut feedback = BrowserFeedbackProjection::default();
             for _ in 0..PRODUCT_MOTION_PHASES {
                 match runtime.run_motion_phase(PRODUCT_MOTION_DELTA_SECONDS) {
                     Ok(receipt) => {
+                        feedback.extend_motion(&receipt.facts);
                         moved |= receipt
                             .facts
                             .iter()
@@ -324,19 +347,21 @@ fn route(
             if blocked {
                 facts.push("KinematicBlocked".to_owned());
             }
-            json_response(200, browser_state(&runtime, facts))
+            json_response(200, browser_state(&runtime, facts, feedback))
         }
         ("POST", "/api/navigation-step") => {
             let mut runtime = runtime.lock().expect("runtime lock");
             match runtime.run_navigation_phase(PRODUCT_MOTION_DELTA_SECONDS) {
                 Ok(receipt) => {
+                    let mut feedback = BrowserFeedbackProjection::default();
+                    feedback.extend_navigation(&receipt.facts);
                     let facts = receipt
                         .facts
                         .iter()
                         .map(navigation_fact_name)
                         .map(str::to_owned)
                         .collect();
-                    json_response(200, browser_state(&runtime, facts))
+                    json_response(200, browser_state(&runtime, facts, feedback))
                 }
                 Err(error) => error_json(409, &format!("{error}")),
             }
@@ -347,10 +372,12 @@ fn route(
             let mut arrived = false;
             let mut blocked = false;
             let mut unreachable = false;
+            let mut feedback = BrowserFeedbackProjection::default();
             for _ in 0..240 {
                 match runtime.run_navigation_phase(PRODUCT_MOTION_DELTA_SECONDS) {
                     Ok(receipt) => {
-                        for fact in receipt.facts {
+                        feedback.extend_navigation(&receipt.facts);
+                        for fact in &receipt.facts {
                             match fact {
                                 NavigationFact::Advanced { .. } => advanced = true,
                                 NavigationFact::Arrived { .. } => arrived = true,
@@ -382,7 +409,7 @@ fn route(
             if unreachable {
                 facts.push("NavigationUnreachable".to_owned());
             }
-            json_response(200, browser_state(&runtime, facts))
+            json_response(200, browser_state(&runtime, facts, feedback))
         }
         ("POST", "/api/player-action") => {
             let action: ResolvedPlayerAction = match serde_json::from_slice(body) {
@@ -390,12 +417,20 @@ fn route(
                 Err(error) => return error_json(400, &format!("invalid resolved action: {error}")),
             };
             let mut runtime = runtime.lock().expect("runtime lock");
-            let mut facts = match advance_product_action(&mut runtime) {
+            let advanced_events = match advance_product_action(&mut runtime) {
                 Ok(events) => events,
                 Err(error) => return error_json(409, &format!("{error}")),
             };
+            let mut feedback = BrowserFeedbackProjection::default();
+            feedback.extend_events(&advanced_events);
+            let mut facts = advanced_events
+                .iter()
+                .map(event_name)
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
             match runtime.apply_player_action(ACTOR, action) {
                 Ok(receipt) => {
+                    feedback.extend_player_control(&receipt.facts);
                     facts.extend(
                         receipt
                             .facts
@@ -403,7 +438,7 @@ fn route(
                             .map(player_fact_name)
                             .map(str::to_owned),
                     );
-                    json_response(200, browser_state(&runtime, facts))
+                    json_response(200, browser_state(&runtime, facts, feedback))
                 }
                 Err(error) => error_json(409, &format!("{error}")),
             }
@@ -415,17 +450,16 @@ fn route(
 
 fn advance_product_action(
     runtime: &mut GameRuntime,
-) -> Result<Vec<String>, game_host::RuntimeError> {
+) -> Result<Vec<GameEvent>, game_host::RuntimeError> {
     let receipt = runtime.advance_by(PRODUCT_ACTION_TICKS)?;
-    Ok(receipt
-        .events
-        .iter()
-        .map(event_name)
-        .map(str::to_owned)
-        .collect())
+    Ok(receipt.events)
 }
 
-fn browser_state(runtime: &GameRuntime, last_events: Vec<String>) -> BrowserState {
+fn browser_state(
+    runtime: &GameRuntime,
+    last_events: Vec<String>,
+    feedback: BrowserFeedbackProjection,
+) -> BrowserState {
     let readout = runtime.readout();
     let projection = readout
         .projection
@@ -611,6 +645,13 @@ fn browser_state(runtime: &GameRuntime, last_events: Vec<String>) -> BrowserStat
         voxel_meshes,
         generated_environment,
         enemies,
+        presentation: project_presentation(
+            runtime,
+            ACTOR,
+            &[EntityId::new(FIRST_ENEMY), EntityId::new(SECOND_ENEMY)],
+            EXIT,
+            feedback,
+        ),
         last_events,
     }
 }
@@ -739,6 +780,11 @@ fn write_response(
 mod tests {
     use super::*;
 
+    fn response_json(response: (u16, &'static str, Vec<u8>)) -> serde_json::Value {
+        assert_eq!(response.0, 200);
+        serde_json::from_slice(&response.2).expect("browser response JSON")
+    }
+
     #[test]
     fn serialized_browser_actions_advance_cooldown_and_become_eligible_again() {
         let runtime = Arc::new(Mutex::new(
@@ -785,6 +831,47 @@ mod tests {
                 .state
                 .ammo_remaining,
             6
+        );
+    }
+
+    #[test]
+    fn state_and_reset_rebuild_posture_without_replaying_transient_cues() {
+        let runtime = Arc::new(Mutex::new(
+            GameRuntime::from_project_content(PROJECT).expect("admit browser project"),
+        ));
+
+        for response in [
+            route("GET", "/api/state", &[], &runtime, Path::new(".")),
+            route("POST", "/api/reset", &[], &runtime, Path::new(".")),
+        ] {
+            let value = response_json(response);
+            assert_eq!(value["presentation"]["cues"], serde_json::json!([]));
+            assert_eq!(
+                value["presentation"]["animationStates"]
+                    .as_array()
+                    .expect("animation states")
+                    .len(),
+                4
+            );
+        }
+    }
+
+    #[test]
+    fn presentation_projection_cannot_change_authoritative_snapshot() {
+        let runtime = GameRuntime::from_project_content(PROJECT).expect("admit browser project");
+        let before = game_host::encode_game_snapshot(&runtime).expect("snapshot before projection");
+        let mut feedback = BrowserFeedbackProjection::default();
+        feedback.extend_events(&[GameEvent::DoorOpened {
+            door: EXIT,
+            entity_facts: Vec::new(),
+        }]);
+
+        let state = browser_state(&runtime, vec!["DoorOpened".to_owned()], feedback);
+
+        assert_eq!(state.last_events, ["DoorOpened"]);
+        assert_eq!(
+            game_host::encode_game_snapshot(&runtime).expect("snapshot after projection"),
+            before
         );
     }
 }
