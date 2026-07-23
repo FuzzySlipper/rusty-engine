@@ -60,6 +60,7 @@ try {
   const required = [
     'data-smoke-status="pass"',
     'data-status="pass"',
+    'data-held-input="pass"',
     "PASS · Rust facts reached retained WebGL projection",
     "EnemyDefeated",
     "EncounterCleared",

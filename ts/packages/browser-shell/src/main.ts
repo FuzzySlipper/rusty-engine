@@ -1,6 +1,7 @@
 import { mountAshaRendererBrowserSurface } from "@asha/renderer-three/backend";
 
 import "./style.css";
+import { HeldMovementInput } from "./held-movement.js";
 import {
   RuntimeProjectionAdapter,
   derivePlayerCameraPose,
@@ -35,6 +36,11 @@ const smokeMode = new URLSearchParams(location.search).has("smoke");
 let actionQueue: Promise<void> = Promise.resolve();
 
 let current = await requestState("/api/state");
+const heldMovement = new HeldMovementInput({
+  bindings: () => current.player.bindings,
+  intervalMilliseconds: () => current.player.moveStepSeconds * 1_000,
+  dispatch: enqueuePlayerAction,
+});
 const surface = mountAshaRendererBrowserSurface(canvas, {
   autoStart: true,
   camera: {
@@ -52,6 +58,7 @@ requiredElement("primary-fire", HTMLButtonElement).addEventListener("click", () 
   enqueueAttackAction({ kind: "attack" });
 });
 requiredElement("reset", HTMLButtonElement).addEventListener("click", () => {
+  heldMovement.clear();
   void perform("/api/reset");
 });
 requiredElement("run-motion", HTMLButtonElement).addEventListener("click", () => {
@@ -67,7 +74,24 @@ window.addEventListener("keydown", (event) => {
     return;
   }
   event.preventDefault();
-  enqueueResolvedAction(action);
+  if (action.kind === "move") {
+    heldMovement.press(event.code);
+  } else if (!event.repeat) {
+    enqueueResolvedAction(action);
+  }
+});
+window.addEventListener("keyup", (event) => {
+  if (heldMovement.release(event.code)) {
+    event.preventDefault();
+  }
+});
+window.addEventListener("blur", () => {
+  heldMovement.clear();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    heldMovement.clear();
+  }
 });
 canvas.addEventListener("click", () => {
   void canvas.requestPointerLock();
@@ -100,16 +124,24 @@ if (smokeMode) {
   await perform("/api/reset");
   const initialPlayerPosition = current.player.position;
   const initialPlayerYaw = current.player.yawDegrees;
-  for (let action = 0; action < 12; action += 1) {
-    window.dispatchEvent(
-      new KeyboardEvent("keydown", { code: current.player.bindings.moveForward }),
-    );
-  }
+  const heldCode = current.player.bindings.moveForward;
+  window.dispatchEvent(new KeyboardEvent("keydown", { code: heldCode }));
+  await delay(current.player.moveStepSeconds * 8_000);
+  window.dispatchEvent(new KeyboardEvent("keyup", { code: heldCode }));
   await actionQueue;
   const playerMoved = current.player.position.some(
     (value, axis) => Math.abs(value - initialPlayerPosition[axis]!) > 0.01,
   );
   const playerBlocked = current.playerMotionState === "blocked";
+  const releasedPlayerPosition = current.player.position;
+  await delay(current.player.moveStepSeconds * 2_000);
+  await actionQueue;
+  const playerStopped = current.player.position.every(
+    (value, axis) => Math.abs(value - releasedPlayerPosition[axis]!) < 0.000_001,
+  );
+  document.body.dataset.heldInput = playerMoved && playerBlocked && playerStopped
+    ? "pass"
+    : "fail";
   window.dispatchEvent(new MouseEvent("mousemove", { movementX: 20, movementY: 0 }));
   await actionQueue;
   const playerLooked = current.player.yawDegrees !== initialPlayerYaw;
@@ -142,6 +174,7 @@ if (smokeMode) {
     current.navigationState === "arrived" &&
     playerMoved &&
     playerBlocked &&
+    playerStopped &&
     playerLooked &&
     movingTargetAdvanced &&
     movingTargetDamaged &&
@@ -223,8 +256,9 @@ function renderReadout(state: RuntimeBrowserState): void {
   );
 }
 
-function enqueuePlayerAction(action: ResolvedPlayerAction): void {
+function enqueuePlayerAction(action: ResolvedPlayerAction): Promise<void> {
   actionQueue = actionQueue.then(() => performPlayerAction(action));
+  return actionQueue;
 }
 
 function enqueueAttackAction(action: ResolvedAttackAction): void {
@@ -370,6 +404,10 @@ function clampUnit(value: number): number {
 
 function normalizeDegrees(value: number): number {
   return ((value + 180) % 360 + 360) % 360 - 180;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, milliseconds));
 }
 
 function requiredElement<T extends Element>(id: string, constructor: { new (): T }): T {

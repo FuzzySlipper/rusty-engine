@@ -24,6 +24,7 @@ function state(projection: RuntimeBrowserState["projection"]): RuntimeBrowserSta
       position: [0.5, 0.5, 0.5],
       yawDegrees: 180,
       pitchDegrees: -10,
+      moveStepSeconds: 0.1,
       lookDegreesPerUnit: 12,
       bindings: {
         moveForward: "KeyW",

@@ -42,6 +42,7 @@ export interface RuntimePlayerState {
   readonly position: readonly [number, number, number];
   readonly yawDegrees: number;
   readonly pitchDegrees: number;
+  readonly moveStepSeconds: number;
   readonly lookDegreesPerUnit: number;
   readonly bindings: RuntimePlayerBindings;
 }

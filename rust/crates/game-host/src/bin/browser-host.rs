@@ -63,6 +63,7 @@ struct BrowserPlayerState {
     position: [f32; 3],
     yaw_degrees: f32,
     pitch_degrees: f32,
+    move_step_seconds: f32,
     look_degrees_per_unit: f32,
     bindings: BrowserPlayerBindings,
 }
@@ -463,6 +464,7 @@ fn browser_state(runtime: &GameRuntime, last_events: Vec<String>) -> BrowserStat
             .to_array(),
         yaw_degrees: player.state.yaw_degrees,
         pitch_degrees: player.state.pitch_degrees,
+        move_step_seconds: player.config.move_step_seconds,
         look_degrees_per_unit: player.config.look_degrees_per_unit,
         bindings: BrowserPlayerBindings {
             move_forward: bindings.move_forward.clone(),

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "test": "node --test src/projection.test.ts",
+    "test": "node --test src/*.test.ts",
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {

@@ -384,7 +384,7 @@ The current verification gate proves:
 
 - Rust formatting, Clippy, and strict TypeScript compilation;
 - generated project content is byte-for-byte current with its TypeScript composition;
-- 11 TypeScript content-composition tests and three retained-diff/mesh/camera adapter tests;
+- 11 TypeScript content-composition tests and six browser input-lifecycle/retained-projection tests;
 - 50 Rust integration tests across entity state, donor collision/navigation/mesh queries, security door,
   content admission, encounter routing, kinematic/navigation motion, atomic rejection, projection,
   player control, combat/health/weapon behavior, generated-environment admission, and save/reopen;
@@ -399,9 +399,9 @@ These are physical line counts (`wc -l`), not complexity scores:
 |---|---:|---|
 | Reusable Rust entity state | 4 files / 888 lines | Entity/capability storage, atomic entity mutation, snapshot, projection. |
 | Successor spatial adapter/system | 1 file / 878 lines | Canonical donor scene construction, generated-room algorithm, collision/navigation/mesh derivation, bounded query facade, central kinematic phase. |
-| Rust game host and runners | 11 files / 4,539 lines | Concrete components/services, combat/query ownership, routing, admission, scheduling, snapshots, headless/product/workload hosts. |
+| Rust game host and runners | 11 files / 4,541 lines | Concrete components/services, combat/query ownership, routing, admission, scheduling, snapshots, headless/product/workload hosts. |
 | TypeScript content composition | 5 files / 317 lines | Typed definitions, encounter/generation/combat and motion builders, reproducibility check. |
-| TypeScript browser product shell | 6 files / 878 lines | Rust-readout/mesh adapter, input/attack resolution and DOM readout, derived camera, Asha renderer mount, bridge exclusion shim, styling. |
+| TypeScript browser product shell | 6 files / 1,033 lines | Browser-owned held-input lifecycle, Rust-readout/mesh adapter, input/attack resolution and DOM readout, derived camera, Asha renderer mount, bridge exclusion shim, styling. |
 | Generated project content | 3 files / 8,068 lines | Two encounter/generation/combat variations and pretty-printed 256-body workload data. |
 
 The Rust object/component model is currently the largest single file, followed by generation and
