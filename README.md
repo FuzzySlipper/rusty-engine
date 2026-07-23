@@ -45,8 +45,9 @@ content and expectations, not Rust gameplay code. The same code-as-content packa
 
 The loading-bay browser resolves authored player controls, damages a sentry while it is moving,
 finishes its route, defeats both enemies through aimed attacks, uploads the generated room mesh, and
-runs a bounded spatial phase. Its Chromium smoke proves player and probe collision against generated
-voxels, navigation around the generated pillar, typed attack/damage facts, the
+runs a bounded spatial phase. Its Chromium smoke proves held player input and probe collision against
+generated voxels, navigation around the generated pillar, traversal through the canonical exit
+aperture after its entity door opens, typed attack/damage facts, the
 `EnemyDefeated -> EncounterCleared -> DoorOpened` chain, derived camera movement, and retained
 Three/WebGL mesh projection.
 

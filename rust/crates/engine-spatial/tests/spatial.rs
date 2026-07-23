@@ -137,6 +137,35 @@ fn generated_pillar_drives_collision_navigation_and_visible_mesh_from_one_world(
 }
 
 #[test]
+fn generated_exit_aperture_is_canonical_collision_navigation_and_mesh_empty_space() {
+    let scene = VoxelCollisionScene::from_generated_room(room_config(4)).unwrap();
+    let record = scene.generated_room().unwrap().1;
+
+    assert_eq!(record.exit_aperture_min, [3, 1, 11]);
+    assert_eq!(record.exit_aperture_max_exclusive, [6, 3, 12]);
+    for x in 3..6 {
+        for y in 1..3 {
+            assert!(!scene.contains_point([x as f64 + 0.5, y as f64 + 0.5, 11.5]));
+            assert!(!scene
+                .material_voxels()
+                .iter()
+                .any(|voxel| voxel.address == [x, y, 11]));
+        }
+    }
+    assert!(scene.contains_point([2.5, 1.5, 11.5]));
+    assert!(scene.contains_point([6.5, 1.5, 11.5]));
+    assert!(scene
+        .navigation_step(
+            Vec3::new(4.5, 1.5, 10.5),
+            Vec3::new(4.5, 1.5, 12.5),
+            Vec3::ZERO,
+            0.4,
+            64,
+        )
+        .is_ok());
+}
+
+#[test]
 fn bounded_room_fixture_stays_one_chunk_with_reviewable_mesh_counts() {
     let scene = VoxelCollisionScene::from_generated_room(GeneratedRoomConfig {
         seed: 41,

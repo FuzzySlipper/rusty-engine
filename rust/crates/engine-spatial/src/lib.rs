@@ -33,8 +33,10 @@ use svc_volume::{VolumeError, VoxelChunk};
 pub const MAX_MOTION_DELTA_SECONDS: f32 = 1.0;
 pub const MAX_CHUNK_SIZE: u32 = 64;
 pub const MAX_SOLID_VOXELS: usize = 1_000_000;
-pub const GENERATED_ROOM_VERSION: u32 = 1;
+pub const GENERATED_ROOM_VERSION: u32 = 2;
 const GENERATED_ROOM_SCOPE: &str = "rusty-engine.generated-room.v1";
+const GENERATED_EXIT_WIDTH: u32 = 3;
+const GENERATED_EXIT_HEIGHT: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GeneratedRoomConfig {
@@ -52,6 +54,8 @@ pub struct GeneratedRoomRecord {
     pub output_hash: u64,
     pub pillar_voxel: [i64; 3],
     pub accent_voxel: [i64; 3],
+    pub exit_aperture_min: [i64; 3],
+    pub exit_aperture_max_exclusive: [i64; 3],
     pub solid_voxel_count: usize,
 }
 
@@ -552,10 +556,20 @@ fn generate_room(
     let accent_z = 1 + rng
         .next_bounded_u32(config.length)
         .expect("validated accent span");
+    let exit_x_start = 1 + (config.width - GENERATED_EXIT_WIDTH) / 2;
+    let exit_x_end = exit_x_start + GENERATED_EXIT_WIDTH;
+    let exit_y_end = 1 + GENERATED_EXIT_HEIGHT;
+    let exit_z = shell[2] - 1;
     let mut voxels = Vec::new();
     for z in 0..shell[2] {
         for y in 0..shell[1] {
             for x in 0..shell[0] {
+                let in_exit_aperture = z == exit_z
+                    && (exit_x_start..exit_x_end).contains(&x)
+                    && (1..exit_y_end).contains(&y);
+                if in_exit_aperture {
+                    continue;
+                }
                 let on_shell = x == 0
                     || x + 1 == shell[0]
                     || y == 0
@@ -588,6 +602,12 @@ fn generate_room(
         output_hash,
         pillar_voxel: [i64::from(pillar_x), 1, i64::from(pillar_z)],
         accent_voxel: [i64::from(accent_x), 1, i64::from(accent_z)],
+        exit_aperture_min: [i64::from(exit_x_start), 1, i64::from(exit_z)],
+        exit_aperture_max_exclusive: [
+            i64::from(exit_x_end),
+            i64::from(exit_y_end),
+            i64::from(exit_z + 1),
+        ],
         solid_voxel_count: voxels.len(),
     };
     Ok((voxels, record))

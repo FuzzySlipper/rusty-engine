@@ -82,6 +82,18 @@
         "asset": "mesh/security-door",
         "visible": true
       },
+      "kinematic": {
+        "halfExtents": [
+          1.2,
+          1.5,
+          0.275
+        ],
+        "velocity": [
+          0,
+          0,
+          0
+        ]
+      },
       "door": {
         "openTranslation": [
           4.5,

@@ -44,7 +44,8 @@ M2B references `svc-rng` and `svc-mesh` unchanged. It does not reference `svc-le
 that otherwise-useful generator owns `core-events` output and several replay/projection summaries
 that would recreate parallel authority. The adapted successor loop is deliberately smaller: seed
 and dimensions produce material voxels, then the already-owned `VoxelWorld` is the sole input to
-collision, navigation, and mesh derivation.
+collision, navigation, and mesh derivation. Its centered exit aperture is successor-owned geometry,
+not a transplanted portal or control abstraction.
 
 M3 deliberately does not reference `svc-combat`. Its useful ray/AABB intersection and stable
 nearest-target ordering now sit inside the successor-owned `CombatService`, which reads live entity

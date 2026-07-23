@@ -55,6 +55,50 @@ fn semantic_move_actions_use_the_collision_aware_kinematic_path() {
 }
 
 #[test]
+fn encounter_gate_blocks_its_canonical_aperture_closed_and_permits_passage_open() {
+    let mut project: Value = serde_json::from_str(PROJECT).unwrap();
+    let player = entity_mut(&mut project, PLAYER.raw());
+    player["translation"] = json!([4.5, 1.5, 10.25]);
+    player["playerController"]["initialYawDegrees"] = json!(180);
+    let mut runtime = GameRuntime::from_project_content(&project.to_string()).unwrap();
+    let before = player_position(&runtime);
+
+    let closed = runtime
+        .apply_player_action(
+            PLAYER,
+            ResolvedPlayerAction::Move {
+                forward: 1.0,
+                right: 0.0,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(player_position(&runtime), before);
+    assert!(closed.facts.iter().any(
+        |fact| matches!(fact, PlayerControlFact::Blocked { entity, .. } if *entity == PLAYER)
+    ));
+
+    runtime.defeat_enemy(PLAYER, EntityId::new(4)).unwrap();
+    runtime.defeat_enemy(PLAYER, EntityId::new(5)).unwrap();
+    for _ in 0..6 {
+        runtime
+            .apply_player_action(
+                PLAYER,
+                ResolvedPlayerAction::Move {
+                    forward: 1.0,
+                    right: 0.0,
+                },
+            )
+            .unwrap();
+    }
+
+    assert!(
+        player_position(&runtime).z > 12.0,
+        "the opened entity gate must expose the canonical generated aperture"
+    );
+}
+
+#[test]
 fn semantic_look_action_updates_durable_controller_state_without_moving_the_entity() {
     let mut runtime = GameRuntime::from_project_content(PROJECT).unwrap();
     let before_position = player_position(&runtime);

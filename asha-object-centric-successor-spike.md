@@ -613,7 +613,9 @@ to narrow Rust service operations; player movement collides with a generated roo
 routes around the generated pillar; primary fire damages that sentry while it is moving and later
 defeats the encounter; and a separate bounded spatial action stops a projected probe at the same
 voxel authority. The generated room is uploaded through the donor mesh path, while the follow
-camera is rebuilt from accepted player pose. Rust snapshots deterministically regenerate
+camera is rebuilt from accepted player pose. One physical keydown now advances until keyup without
+OS-repeat authority, and the player crosses the canonical generated exit aperture only after the
+entity door opens. Rust snapshots deterministically regenerate
 collision/navigation/mesh projections and preserve health/weapon eligibility without replay.
 The gate builds the production bundle, launches the Rust HTTP host, drives these actions in Chromium
 with real WebGL/Three code, and requires an explicit pass marker plus typed movement, combat,

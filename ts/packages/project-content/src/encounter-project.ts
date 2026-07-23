@@ -22,6 +22,20 @@ export interface EncounterProjectOptions {
   readonly weaponDamage?: number;
 }
 
+const GENERATED_ROOM = {
+  voxelSize: 1,
+  chunkSize: 16,
+  width: 7,
+  height: 4,
+  length: 10,
+} as const;
+const GENERATED_EXIT = {
+  centerX: (GENERATED_ROOM.width + 2) / 2,
+  centerY: 1,
+  wallZ: GENERATED_ROOM.length + 1,
+  collisionHalfExtents: [1.2, 1.5, 0.275] as const,
+} as const;
+
 export function encounterGateProject(
   enemyNames: readonly string[],
   options: EncounterProjectOptions = {},
@@ -99,10 +113,18 @@ export function encounterGateProject(
       {
         id: ENCOUNTER_IDS.exit,
         name: "loading-bay-exit",
-        translation: [4.5, 1, 11],
+        translation: [GENERATED_EXIT.centerX, GENERATED_EXIT.centerY, GENERATED_EXIT.wallZ],
         collision: { enabled: true, staticCollider: true },
         renderable: { asset: "mesh/security-door", visible: true },
-        door: { openTranslation: [4.5, 4, 11], autoCloseAfterTicks: null },
+        kinematic: { halfExtents: GENERATED_EXIT.collisionHalfExtents, velocity: [0, 0, 0] },
+        door: {
+          openTranslation: [
+            GENERATED_EXIT.centerX,
+            GENERATED_EXIT.centerY + 3,
+            GENERATED_EXIT.wallZ,
+          ],
+          autoCloseAfterTicks: null,
+        },
       },
       ...enemies,
       {
@@ -115,11 +137,7 @@ export function encounterGateProject(
     ],
     generatedVoxelEnvironment: {
       seed: options.generationSeed ?? 4,
-      voxelSize: 1,
-      chunkSize: 16,
-      width: 7,
-      height: 4,
-      length: 10,
+      ...GENERATED_ROOM,
     },
   };
 }

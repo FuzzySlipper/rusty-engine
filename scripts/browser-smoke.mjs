@@ -61,6 +61,7 @@ try {
     'data-smoke-status="pass"',
     'data-status="pass"',
     'data-held-input="pass"',
+    'data-gate-passage="pass"',
     "PASS · Rust facts reached retained WebGL projection",
     "EnemyDefeated",
     "EncounterCleared",
@@ -79,7 +80,7 @@ try {
   if (missing.length > 0) {
     throw new Error(`browser smoke missing ${missing.join(", ")}\n${result.stdout.slice(-6_000)}`);
   }
-  console.log("browser smoke passed: aimed Rust combat + generated voxel world -> retained Three/WebGL shell");
+  console.log("browser smoke passed: aimed Rust combat + traversable generated gate -> retained Three/WebGL shell");
 } finally {
   host.kill("SIGTERM");
   await Promise.race([onceExit(host), delay(1_000)]);

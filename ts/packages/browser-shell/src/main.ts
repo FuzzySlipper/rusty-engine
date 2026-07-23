@@ -162,6 +162,18 @@ if (smokeMode) {
   await firePrimary();
   await firePrimary();
   const combatHit = current.combatState === "hit";
+  const openGateTraversed = await walkPlayerPath([
+    [1.5, 9.5],
+    [4.5, 9.5],
+    [4.5, 12.5],
+  ]);
+  if (openGateTraversed) {
+    await turnPlayerToward(
+      4.5 - current.player.position[0],
+      10.5 - current.player.position[2],
+    );
+  }
+  document.body.dataset.gatePassage = openGateTraversed ? "pass" : "fail";
   await perform("/api/motion-phase");
   surface.renderOnce();
   const door = current.projection.find((node) => node.id === 3);
@@ -182,6 +194,7 @@ if (smokeMode) {
     (current.projection.find((node) => node.id === 10)?.translation?.[0] ?? -4) > 2 &&
     current.generatedEnvironment?.seed === 4 &&
     combatHit &&
+    openGateTraversed &&
     current.enemies.every((enemy) => enemy.currentHealth === 0) &&
     eventHistory.includes("CombatHit") &&
     eventHistory.includes("DamageApplied") &&
@@ -331,6 +344,62 @@ async function firePrimary(): Promise<void> {
     throw new Error("authored primary-fire binding did not resolve Mouse0");
   }
   await performAttackAction(action);
+}
+
+async function walkPlayerPath(
+  waypoints: readonly (readonly [number, number])[],
+): Promise<boolean> {
+  for (const waypoint of waypoints) {
+    if (!await walkPlayerTo(waypoint)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function walkPlayerTo(
+  target: readonly [number, number],
+  maxSteps = 64,
+): Promise<boolean> {
+  for (let step = 0; step < maxSteps; step += 1) {
+    const offsetX = target[0] - current.player.position[0];
+    const offsetZ = target[1] - current.player.position[2];
+    if (Math.hypot(offsetX, offsetZ) <= 0.25) {
+      return true;
+    }
+    await turnPlayerToward(offsetX, offsetZ);
+    const action = resolveKeyboardAction(
+      current.player.bindings.moveForward,
+      current.player.bindings,
+    );
+    if (action?.kind !== "move") {
+      throw new Error("authored move-forward binding did not resolve to movement");
+    }
+    const before = current.player.position;
+    await performPlayerAction(action);
+    if (current.player.position.every(
+      (value, axis) => Math.abs(value - before[axis]!) < 0.000_001,
+    )) {
+      return false;
+    }
+  }
+  return false;
+}
+
+async function turnPlayerToward(offsetX: number, offsetZ: number): Promise<void> {
+  const desiredYaw = normalizeDegrees((Math.atan2(-offsetX, -offsetZ) * 180) / Math.PI);
+  for (let step = 0; step < 20; step += 1) {
+    const yawDifference = normalizeDegrees(desiredYaw - current.player.yawDegrees);
+    if (Math.abs(yawDifference) < 0.01) {
+      return;
+    }
+    await performPlayerAction({
+      kind: "look",
+      yawDelta: clampUnit(yawDifference / current.player.lookDegreesPerUnit),
+      pitchDelta: 0,
+    });
+  }
+  throw new Error("could not orient player toward gate waypoint");
 }
 
 function updateRendererStatus(): void {

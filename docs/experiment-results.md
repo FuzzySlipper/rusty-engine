@@ -215,8 +215,11 @@ pose directly.
 Each move action sets one bounded velocity, runs the existing collision-aware selected-body path,
 and clears velocity before returning. This makes the action visible and responsive without leaving
 component-local update polling behind. Look actions update accepted yaw/pitch directly and clamp
-pitch. The loading-bay player advances toward the generated room shell and receives a typed blocked
-outcome; pointer movement changes accepted look state.
+pitch. Browser device capture holds only physical key codes: one keydown starts typed movement at
+the admitted `moveStepSeconds` cadence, keyup/blur/hidden state stops it, simultaneous keys combine,
+and an outstanding Rust request is never overlapped. The loading-bay proof uses one keydown over
+time and one keyup, advances until collision, then verifies accepted position remains unchanged
+after release; pointer movement changes accepted look state.
 
 Player translation, controller configuration, bindings, yaw, and pitch survive snapshot/reopen.
 The snapshot contains no camera data. The browser rebuilds the follow camera from accepted player
@@ -250,13 +253,16 @@ authored seed + room dimensions
   -> retained Three replaceMeshPayload operation
 ```
 
-The default seed-4 room contains 372 solid material voxels. Its one derived mesh contains 3,032
-vertices and 758 visible quads in three material groups, with output hash
-`495234639d264892`. The seed chooses an interior pillar and a wall accent; the seed-4 pillar is
-voxel `[4, 1, 6]`. The player collides with the generated front shell, while the sentry's direct
-route crosses the generated pillar and the navigation projection routes around it. The primitive
-floor and hand-authored visual obstacle proxies were removed—the uploaded voxel mesh is the visible
-environment.
+The version-2 seed-4 room contains 366 solid material voxels. Its one derived mesh contains 3,024
+vertices and 756 visible quads in three material groups, with output hash
+`dc4b4a2265d8c686`. The seed chooses an interior pillar and a wall accent; the seed-4 pillar is
+voxel `[4, 1, 6]`. A centered six-voxel aperture at `[3..6, 1..3, 11]` is absent from the canonical
+voxel authority, so collision, navigation, and visible mesh all agree that it is open space. The
+authored loading-bay door carries matching kinematic collider dimensions: closed collision blocks
+the player at the aperture, while the existing atomic open transition disables collision and lets
+the real controller cross it. The sentry's direct route crosses the generated pillar and the
+navigation projection routes around it. The primitive floor and hand-authored visual obstacle
+proxies were removed—the uploaded voxel mesh is the visible environment.
 
 Snapshots store generator version, seed, dimensions, and expected output hash rather than hundreds
 of generated voxels or mesh arrays. Reopen regenerates the material voxels, rejects a hash mismatch,
@@ -333,7 +339,7 @@ contracts. A small successor adapter turns whole Rust projection readouts into r
 `create`/`update`/`destroy` diffs. Three owns canvas objects and resource lifecycle; it never owns
 gameplay state.
 
-Five visible action paths run in the same product scene:
+Six visible action/data paths run in the same product scene:
 
 ```text
 DOM pointer/fire control -> authored binding -> ResolvedAttackAction -> CombatService
@@ -352,6 +358,9 @@ DOM keyboard/pointer -> authored binding resolver -> ResolvedPlayerAction
                      -> PlayerControllerService -> collision-aware accepted pose
                      -> retained player projection + derived follow camera
 
+opened encounter door -> disabled entity collider + canonical generated aperture
+                      -> ordinary player controller traverses the visible exit
+
 generated seed/dimensions -> canonical material voxels -> svc-mesh payload
                           -> retained Three chunk mesh shared with collision/navigation authority
 ```
@@ -364,9 +373,10 @@ production bundle. The typed `applyFrame` path remains the unchanged donor imple
 The automated product gate builds the bundle, starts the Rust host on an ephemeral port, launches
 real headless Chromium with SwiftShader WebGL, dispatches keyboard/pointer input, resolves the
 authored primary-fire binding, and exercises reset/navigation/combat/spatial actions. It requires
-moved-then-blocked player collision, changed look state, a moved-and-damaged live sentry, the
-arrived sentry, combat hit/damage/defeat facts, open-door transform, defeated entities, blocked
-probe, generated seed/mesh readout, and retained-renderer evidence in the final DOM.
+one-keydown/one-keyup moved-then-blocked-and-stopped player collision, changed look state, a
+moved-and-damaged live sentry, the arrived sentry, combat hit/damage/defeat facts, open-door
+transform, controller traversal through that exit, defeated entities, blocked probe, generated
+seed/mesh readout, and retained-renderer evidence in the final DOM.
 
 ## Reproducible evidence
 
@@ -385,7 +395,7 @@ The current verification gate proves:
 - Rust formatting, Clippy, and strict TypeScript compilation;
 - generated project content is byte-for-byte current with its TypeScript composition;
 - 11 TypeScript content-composition tests and six browser input-lifecycle/retained-projection tests;
-- 50 Rust integration tests across entity state, donor collision/navigation/mesh queries, security door,
+- 52 Rust integration tests across entity state, donor collision/navigation/mesh queries, security door,
   content admission, encounter routing, kinematic/navigation motion, atomic rejection, projection,
   player control, combat/health/weapon behavior, generated-environment admission, and save/reopen;
 - strict rejection of unknown stored-content and snapshot fields;
@@ -398,11 +408,11 @@ These are physical line counts (`wc -l`), not complexity scores:
 | Ownership surface | Production source footprint | Purpose |
 |---|---:|---|
 | Reusable Rust entity state | 4 files / 888 lines | Entity/capability storage, atomic entity mutation, snapshot, projection. |
-| Successor spatial adapter/system | 1 file / 878 lines | Canonical donor scene construction, generated-room algorithm, collision/navigation/mesh derivation, bounded query facade, central kinematic phase. |
+| Successor spatial adapter/system | 1 file / 898 lines | Canonical donor scene construction, generated-room/aperture algorithm, collision/navigation/mesh derivation, bounded query facade, central kinematic phase. |
 | Rust game host and runners | 11 files / 4,541 lines | Concrete components/services, combat/query ownership, routing, admission, scheduling, snapshots, headless/product/workload hosts. |
-| TypeScript content composition | 5 files / 317 lines | Typed definitions, encounter/generation/combat and motion builders, reproducibility check. |
-| TypeScript browser product shell | 6 files / 1,033 lines | Browser-owned held-input lifecycle, Rust-readout/mesh adapter, input/attack resolution and DOM readout, derived camera, Asha renderer mount, bridge exclusion shim, styling. |
-| Generated project content | 3 files / 8,068 lines | Two encounter/generation/combat variations and pretty-printed 256-body workload data. |
+| TypeScript content composition | 5 files / 335 lines | Typed definitions, encounter/generation/combat and motion builders, reproducibility check. |
+| TypeScript browser product shell | 6 files / 1,102 lines | Browser-owned held-input lifecycle, Rust-readout/mesh adapter, input/attack resolution and DOM readout, derived camera, Asha renderer mount, bridge exclusion shim, styling. |
+| Generated project content | 3 files / 8,092 lines | Two encounter/generation/combat variations and pretty-printed 256-body workload data. |
 
 The Rust object/component model is currently the largest single file, followed by generation and
 snapshot code. They are explicit and easy to trace, but a later slice should test whether small
