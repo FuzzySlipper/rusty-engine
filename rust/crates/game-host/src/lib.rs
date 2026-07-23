@@ -6,34 +6,51 @@
 
 #![forbid(unsafe_code)]
 
+mod combat;
 mod content;
-mod model;
+mod definition;
+mod door;
+mod encounter;
+mod interaction;
+mod navigation;
+mod player;
 mod runtime;
+mod runtime_records;
 mod scheduler;
-mod services;
+mod session;
 mod snapshot;
 
+pub use combat::{
+    CombatFact, CombatMissReason, CombatReceipt, CombatRejectionReason, EnemyComponent, EnemyState,
+    EnemyView, HealthComponent, HealthConfig, HealthView, ResolvedAttackAction, WeaponComponent,
+    WeaponConfig, WeaponState, WeaponView, MAX_COMBAT_HITBOX_HALF_EXTENT, MAX_HEALTH,
+    MAX_WEAPON_AMMO, MAX_WEAPON_COOLDOWN_TICKS, MAX_WEAPON_DAMAGE, MAX_WEAPON_MUZZLE_OFFSET,
+    MAX_WEAPON_RANGE,
+};
 pub use content::{
     decode_project_content, AdmittedProject, ProjectContentError, PROJECT_CONTENT_SCHEMA_VERSION,
 };
+pub use definition::{GameEntityDefinition, GameEntityDefinitionError};
+pub use door::{
+    security_door_definitions, DoorComponent, DoorConfig, DoorState, DoorView, SecurityDoorIds,
+};
+pub use encounter::{EncounterComponent, EncounterConfig, EncounterState, EncounterView};
 pub use engine_spatial::{MotionAxis, MotionFact, MotionPhaseReceipt};
-pub use model::{
-    security_door_definitions, CombatFact, CombatMissReason, CombatReceipt, CombatRejectionReason,
-    DoorComponent, DoorConfig, DoorState, DoorView, EncounterComponent, EncounterConfig,
-    EncounterState, EncounterView, EnemyComponent, EnemyState, EnemyView, GameEntityDefinition,
-    GameEntityDefinitionError, GameEvent, GameSession, HealthComponent, HealthConfig, HealthView,
-    JournalEntry, NavigationComponent, NavigationConfig, NavigationFact, NavigationFailure,
-    NavigationPhaseReceipt, NavigationState, NavigationView, PlayerControlFact,
-    PlayerControlReceipt, PlayerControllerComponent, PlayerControllerConfig, PlayerControllerState,
-    PlayerControllerView, PlayerInputBindings, ResolvedAttackAction, ResolvedPlayerAction,
-    RuntimeReadout, RuntimeReceipt, SecurityDoorIds, SwitchComponent, SwitchView, WeaponComponent,
-    WeaponConfig, WeaponState, WeaponView, MAX_COMBAT_HITBOX_HALF_EXTENT, MAX_HEALTH,
-    MAX_INPUT_CONTROL_LENGTH, MAX_NAVIGATION_QUERY_BUDGET, MAX_NAVIGATION_SPEED_UNITS_PER_SECOND,
-    MAX_PLAYER_LOOK_DEGREES_PER_UNIT, MAX_PLAYER_SPEED_UNITS_PER_SECOND, MAX_WEAPON_AMMO,
-    MAX_WEAPON_COOLDOWN_TICKS, MAX_WEAPON_DAMAGE, MAX_WEAPON_MUZZLE_OFFSET, MAX_WEAPON_RANGE,
+pub use interaction::{SwitchComponent, SwitchView};
+pub use navigation::{
+    NavigationComponent, NavigationConfig, NavigationFact, NavigationFailure,
+    NavigationPhaseReceipt, NavigationState, NavigationView, MAX_NAVIGATION_QUERY_BUDGET,
+    MAX_NAVIGATION_SPEED_UNITS_PER_SECOND,
+};
+pub use player::{
+    PlayerControlFact, PlayerControlReceipt, PlayerControllerComponent, PlayerControllerConfig,
+    PlayerControllerState, PlayerControllerView, PlayerInputBindings, ResolvedPlayerAction,
+    MAX_INPUT_CONTROL_LENGTH, MAX_PLAYER_LOOK_DEGREES_PER_UNIT, MAX_PLAYER_SPEED_UNITS_PER_SECOND,
 };
 pub use runtime::{GameRuntime, RuntimeError, MAX_EVENT_WAVE, MAX_TICK_ADVANCE};
+pub use runtime_records::{GameEvent, JournalEntry, RuntimeReadout, RuntimeReceipt};
 pub use scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
+pub use session::GameSession;
 pub use snapshot::{
     decode_game_snapshot, encode_game_snapshot, EncounterSnapshot, EnemySnapshot, GameSnapshot,
     GameSnapshotError, GeneratedRoomSnapshot, HealthSnapshot, NavigationSnapshot,

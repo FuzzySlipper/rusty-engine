@@ -5,10 +5,12 @@ use engine_spatial::{GeneratedRoomConfig, VoxelCollisionScene};
 use entity_state::{EntityDefinition, MAX_ABS_TRANSLATION};
 use serde::Deserialize;
 
-use crate::model::{
-    DoorConfig, GameEntityDefinition, GameEntityDefinitionError, GameSession, HealthConfig,
-    NavigationConfig, PlayerControllerConfig, PlayerInputBindings, WeaponConfig,
-};
+use crate::combat::{HealthConfig, WeaponConfig};
+use crate::definition::{GameEntityDefinition, GameEntityDefinitionError};
+use crate::door::DoorConfig;
+use crate::navigation::NavigationConfig;
+use crate::player::{PlayerControllerConfig, PlayerInputBindings};
+use crate::session::GameSession;
 
 pub const PROJECT_CONTENT_SCHEMA_VERSION: u32 = 6;
 

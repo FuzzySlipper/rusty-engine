@@ -8,17 +8,17 @@ use engine_spatial::{
     VoxelCollisionScene,
 };
 
+use crate::combat::{CombatReceipt, CombatRejectionReason, CombatService, ResolvedAttackAction};
 use crate::content::{decode_project_content, AdmittedProject, ProjectContentError};
-use crate::model::{
-    readout, security_door_definitions, CombatReceipt, CombatRejectionReason, GameEvent,
-    GameSession, JournalEntry, NavigationPhaseReceipt, PlayerControlReceipt, ResolvedAttackAction,
-    ResolvedPlayerAction, RuntimeReadout, RuntimeReceipt, SecurityDoorIds,
-};
+use crate::definition::GameEntityDefinitionError;
+use crate::door::{security_door_definitions, DoorService, DoorTransition, SecurityDoorIds};
+use crate::encounter::EncounterService;
+use crate::interaction::InteractionService;
+use crate::navigation::{EnemyNavigationSystem, NavigationPhaseReceipt};
+use crate::player::{PlayerControlReceipt, PlayerControllerService, ResolvedPlayerAction};
+use crate::runtime_records::{readout, GameEvent, JournalEntry, RuntimeReadout, RuntimeReceipt};
 use crate::scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
-use crate::services::{
-    CombatService, DoorService, DoorTransition, EncounterService, EnemyNavigationSystem,
-    InteractionService, PlayerControllerService,
-};
+use crate::session::GameSession;
 
 pub const MAX_EVENT_WAVE: usize = 256;
 pub const MAX_TICK_ADVANCE: u64 = 100_000;
@@ -26,7 +26,7 @@ pub const MAX_TICK_ADVANCE: u64 = 100_000;
 #[derive(Debug)]
 pub enum RuntimeError {
     Content(ProjectContentError),
-    Definition(crate::model::GameEntityDefinitionError),
+    Definition(GameEntityDefinitionError),
     UnknownActor {
         actor: EntityId,
     },

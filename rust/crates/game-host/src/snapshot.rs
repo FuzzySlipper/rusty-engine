@@ -7,15 +7,23 @@ use engine_spatial::{GeneratedRoomConfig, VoxelCollisionScene, GENERATED_ROOM_VE
 use entity_state::{EntityState, EntityStateSnapshot};
 use serde::{Deserialize, Serialize};
 
-use crate::model::{
-    DoorComponent, DoorConfig, DoorState, EncounterComponent, EncounterConfig, EncounterState,
-    EnemyComponent, EnemyState, GameSession, HealthComponent, HealthConfig, NavigationComponent,
-    NavigationConfig, NavigationState, PlayerControllerComponent, PlayerControllerConfig,
-    PlayerControllerState, PlayerInputBindings, SwitchComponent, WeaponComponent, WeaponConfig,
-    WeaponState, MAX_NAVIGATION_QUERY_BUDGET, MAX_NAVIGATION_SPEED_UNITS_PER_SECOND,
+use crate::combat::{
+    EnemyComponent, EnemyState, HealthComponent, HealthConfig, WeaponComponent, WeaponConfig,
+    WeaponState,
+};
+use crate::door::{DoorComponent, DoorConfig, DoorState};
+use crate::encounter::{EncounterComponent, EncounterConfig, EncounterState};
+use crate::interaction::SwitchComponent;
+use crate::navigation::{
+    NavigationComponent, NavigationConfig, NavigationState, MAX_NAVIGATION_QUERY_BUDGET,
+    MAX_NAVIGATION_SPEED_UNITS_PER_SECOND,
+};
+use crate::player::{
+    PlayerControllerComponent, PlayerControllerConfig, PlayerControllerState, PlayerInputBindings,
 };
 use crate::runtime::GameRuntime;
 use crate::scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
+use crate::session::GameSession;
 
 pub const GAME_SNAPSHOT_SCHEMA_VERSION: u32 = 8;
 
