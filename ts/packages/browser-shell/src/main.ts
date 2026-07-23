@@ -4,6 +4,10 @@ import "./style.css";
 import { SerializedActionQueue } from "./action-queue.js";
 import { HeldMovementInput } from "./held-movement.js";
 import {
+  BrowserPresentationFeedbackSink,
+  PresentationFeedbackAdapter,
+} from "./presentation-feedback.js";
+import {
   RuntimeProjectionAdapter,
   derivePlayerCameraPose,
   type RuntimeBrowserState,
@@ -31,7 +35,12 @@ const environmentState = requiredElement("environment-state", HTMLElement);
 const eventList = requiredElement("event-list", HTMLOListElement);
 const rendererStatus = requiredElement("renderer-status", HTMLElement);
 const smokeResult = requiredElement("smoke-result", HTMLElement);
+const feedbackLayer = requiredElement("feedback-layer", HTMLElement);
+const feedbackAudioStatus = requiredElement("feedback-audio-status", HTMLElement);
 const projection = new RuntimeProjectionAdapter();
+const presentationFeedback = new PresentationFeedbackAdapter(
+  new BrowserPresentationFeedbackSink(feedbackLayer, feedbackAudioStatus),
+);
 const eventHistory: string[] = [];
 const smokeMode = new URLSearchParams(location.search).has("smoke");
 let actionRejectionCount = 0;
@@ -55,19 +64,24 @@ const surface = mountAshaRendererBrowserSurface(canvas, {
   pixelRatio: Math.min(globalThis.devicePixelRatio ?? 1, 2),
 });
 renderReadout(current);
+applyPresentationFeedback(true);
 updateRendererStatus();
 
 requiredElement("primary-fire", HTMLButtonElement).addEventListener("click", () => {
+  void presentationFeedback.activateAudio();
   enqueueAttackAction({ kind: "attack" });
 });
 requiredElement("reset", HTMLButtonElement).addEventListener("click", () => {
+  void presentationFeedback.activateAudio();
   heldMovement.clear();
   void perform("/api/reset");
 });
 requiredElement("run-motion", HTMLButtonElement).addEventListener("click", () => {
+  void presentationFeedback.activateAudio();
   void perform("/api/motion-phase");
 });
 requiredElement("run-navigation", HTMLButtonElement).addEventListener("click", () => {
+  void presentationFeedback.activateAudio();
   void perform("/api/navigation-phase");
 });
 
@@ -76,6 +90,7 @@ window.addEventListener("keydown", (event) => {
   if (action === null) {
     return;
   }
+  void presentationFeedback.activateAudio();
   event.preventDefault();
   if (action.kind === "move") {
     heldMovement.press(event.code);
@@ -97,6 +112,7 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 canvas.addEventListener("click", () => {
+  void presentationFeedback.activateAudio();
   void canvas.requestPointerLock();
 });
 canvas.addEventListener("mousedown", (event) => {
@@ -105,6 +121,7 @@ canvas.addEventListener("mousedown", (event) => {
   }
   const action = resolvePointerButtonAction(event.button, current.player.bindings);
   if (action !== null) {
+    void presentationFeedback.activateAudio();
     event.preventDefault();
     enqueueAttackAction(action);
   }
@@ -243,6 +260,7 @@ async function perform(path: string): Promise<void> {
   surface.setCameraPose(derivePlayerCameraPose(current.player));
   surface.renderOnce();
   renderReadout(current);
+  applyPresentationFeedback(path === "/api/reset");
   updateRendererStatus();
 }
 
@@ -273,6 +291,7 @@ function renderReadout(state: RuntimeBrowserState): void {
     ...state.enemies.map((enemy) => {
       const row = document.createElement("div");
       row.className = "enemy-row";
+      row.dataset.entityId = String(enemy.id);
       row.dataset.state = enemy.state;
       const name = document.createElement("span");
       name.textContent = enemy.name;
@@ -292,6 +311,15 @@ function renderReadout(state: RuntimeBrowserState): void {
         return item;
       }),
   );
+}
+
+function applyPresentationFeedback(reset = false): void {
+  doorCaption.dataset.entityId = "3";
+  playerMotionState.dataset.entityId = String(current.player.id);
+  const receipt = presentationFeedback.apply(current, reset);
+  feedbackLayer.dataset.lastCueCount = String(receipt.cueCount);
+  feedbackLayer.dataset.failedOperations = String(receipt.failedOperations);
+  feedbackLayer.dataset.scheduledSounds = String(receipt.scheduledSounds);
 }
 
 function enqueuePlayerAction(action: ResolvedPlayerAction): Promise<void> {
@@ -321,6 +349,7 @@ async function performPlayerAction(action: ResolvedPlayerAction): Promise<void> 
   surface.setCameraPose(derivePlayerCameraPose(current.player));
   surface.renderOnce();
   renderReadout(current);
+  applyPresentationFeedback();
   updateRendererStatus();
 }
 
@@ -335,6 +364,7 @@ async function performAttackAction(action: ResolvedAttackAction): Promise<void> 
   surface.setCameraPose(derivePlayerCameraPose(current.player));
   surface.renderOnce();
   renderReadout(current);
+  applyPresentationFeedback();
   updateRendererStatus();
 }
 
