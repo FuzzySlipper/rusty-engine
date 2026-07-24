@@ -16,7 +16,7 @@ The architecture charter is [asha-object-centric-successor-spike.md](./asha-obje
 
 ## Implemented walking spike
 
-The runtime now proves nine connected paths:
+The runtime now proves twelve connected paths:
 
 1. A switch-controlled security door with an optional configured close delay.
 2. An encounter-gated exit where committed enemy-defeat facts clear an authored encounter and open
@@ -34,6 +34,12 @@ The runtime now proves nine connected paths:
    live enemy transforms and canonical voxel occlusion, with typed damage/defeat consequences.
 9. Rebuildable animation posture and disposable animation/audio/particle/billboard feedback
    projected from accepted movement, combat, defeat, and door outcomes without gameplay writes.
+10. One strict schema-v7 stored project admitted directly by Rust, plus canonical atomic project
+    persistence and one explicit schema-v6 migration kept distinct from runtime snapshots.
+11. Bounded expected-revision voxel edits that atomically rebuild collision, navigation, and mesh,
+    with both live snapshot and explicit authored-project save/reopen meanings.
+12. A real static GLB converted offline to a canonical voxel asset, admitted through the ordinary
+    project path, rendered and collided in Chromium, then edited through the same voxel service.
 
 Components remain data. Named services/systems own interaction, combat, encounters, doors, player
 control, navigation, and kinematic motion; `GameRuntime` contains the short explicit event route.
@@ -54,6 +60,13 @@ aperture after its entity door opens, typed attack/damage facts, the
 Three/WebGL mesh projection. The same product gate requires visible typed feedback and a real Web
 Audio schedule, deliberately drops one transient-cue response, then proves a fresh readout preserves
 gameplay while replaying no cue and rebuilding only current presentation posture.
+
+The same gate also loads `content/projects/converted-wall.project.json`. The external Kenney wall
+asset is converted by an offline Rust tool, embedded as strict data, and expanded by normal project
+admission. Chromium proves the converted wall is visible and blocks the player, clears it through a
+typed live edit, observes coherent navigation/mesh changes, and traverses the result. A separate
+save/reset/fresh-host path proves the accepted result becomes ordinary static authored voxels with
+no runtime edit history or converter in the product.
 
 ## Donor checkout
 
@@ -100,7 +113,12 @@ Then open `http://127.0.0.1:37881`. Run the measured real-time matrix with:
 
 ```bash
 cargo run --release -q -p game-host --bin motion-workload -- --matrix
+cargo run --release -q -p game-host --bin voxel-edit-workload -- 256
+cargo run --release -q -p voxel-convert --bin voxel-conversion-workload -- 256
 ```
+
+The offline asset format, direct conversion command, provenance, and product boundary are in
+[docs/voxel-asset-format.md](./docs/voxel-asset-format.md).
 
 The measured evidence and current limitations are in
 [docs/experiment-results.md](./docs/experiment-results.md).

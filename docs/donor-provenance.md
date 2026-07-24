@@ -165,17 +165,27 @@ proves it contains 48 positions, 36 indices, two triangle groups, and two named 
 The successor-owned boundary is documented in [voxel-asset-format.md](voxel-asset-format.md).
 `voxel-asset` retains only strict schema/grid/bounds/material/provenance values, bounded sparse +X
 runs, canonical SHA-256 bytes, classified source paths, and preflight conversion settings. The GLB
-parser remains in the separate offline M7B.2 tool; `game-host` will depend only on the durable asset
-crate. A content hash protects the artifact itself and never becomes an action precondition, replay
+parser remains in the separate offline tool; `game-host` depends only on the durable asset crate. A
+content hash protects the artifact itself and never becomes an action precondition, replay
 certificate, or runtime revision. Asha's source registry, catalog/lock graph, plan/preview/apply
 sequence, provider interface, evidence URI graph, command registry, bridge, replay, lifecycle,
 texture protocol, Studio surface, and project-bundle machinery remain explicit exclusions.
 
-The M7B.1 format boundary is pinned by `17545406494bc93f12d3668b845a533cee8ceb4d`.
+The M7B.1 format boundary is pinned by `17545406494bc93f12d3668b845a533cee8ceb4d`, with the
+cross-row sparse-run canonicalization correction pinned by
+`a51bf6e61b0c4e52d1bc4613440310d82638d216`.
 The M7B.2 parser/converter, canonical real artifact, atomic CLI, and ordinary M5/M7A admission path
 are pinned by `b3481fadf1586c2cfea167d569af0bd6333af6b5`. `game-host` depends on
 successor-owned `voxel-asset` only; the separate `voxel-convert` authoring crate contains `gltf` and
 filesystem installation. No Asha conversion/import/asset crate was added.
+
+M7B.3 is pinned by `2cdad99c0d012643fe157fa6db51495a31327d98`. Its checked schema-v7 project,
+focused snapshot/authored-save coverage, real Chromium collision/navigation/mesh/edit path, and
+bounded conversion workload all consume successor-owned values. The built browser bundle excludes
+converter/request vocabulary; `cargo tree -p game-host` excludes both `gltf` and `voxel-convert`.
+Explicit authored save expands the accepted result to ordinary static material voxels rather than
+persisting an asset job, edit history, provider identity, or replay record. M7C remains unscheduled
+because no annotation/history consumer emerged.
 
 Sibling references are intentional while Asha development is stopped for this decision. If this
 lab becomes a durable independent successor, the references should be pinned as Git dependencies,

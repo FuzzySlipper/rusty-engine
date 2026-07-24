@@ -1,6 +1,6 @@
 # Stored voxel asset and offline conversion boundary
 
-Status: M7B.1 format boundary and M7B.2 offline converter/admission path implemented.
+Status: M7B complete through offline conversion, product behavior, and persistence proof.
 
 This is the successor's smallest durable border between a real static mesh and admitted voxel
 content. It is deliberately an authoring/build path, not a runtime protocol:
@@ -111,7 +111,7 @@ The checked request at `content/conversion/kenney-wall-a.request.json` produces
 Run the direct authoring tool with:
 
 ```bash
-cargo run -q -p voxel-convert -- \
+cargo run -q -p voxel-convert --bin voxel-convert -- \
   --request content/conversion/kenney-wall-a.request.json \
   --source ../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb \
   --output content/assets/kenney-wall-a.voxel.json
@@ -133,6 +133,42 @@ runtime has no converter-specific loader or validator.
 
 The M7B.2 implementation is pinned by
 `b3481fadf1586c2cfea167d569af0bd6333af6b5`.
+
+## Product, persistence, and workload proof
+
+`content/projects/converted-wall.project.json` is a normal schema-v7 stored product. It declares
+the canonical asset in the catalog, references it from a material environment, and combines its
+four lower/four upper cells with an authored floor. Complete M5 admission expands the artifact
+before constructing the existing M7A scene; the runtime never retains a conversion request or
+invokes `voxel-convert`. A focused comparison builds the equivalent explicit authored cells and
+proves identical material authority, collision, navigation hash, and mesh.
+
+The admitted product starts with 94 solids and a nine-cell probe path. Real Chromium proves the
+converted upper wall reaches the retained Three mesh and blocks the actual player. One ordinary
+expected-revision transaction clears its four upper cells. The coherent result has 90 solids,
+revision 1, a seven-cell probe path, changed authority/navigation/mesh hashes, and a traversable
+route. No converter-specific runtime API or projection exists.
+
+Snapshot schema 9 reopens the live revision and concrete authority exactly. The explicit project
+save path instead materializes 90 ordinary static material voxels, clears the environment's asset
+reference, re-runs complete admission, and installs through the existing M6 store. Reset and a fresh
+host reopen identical authority/navigation/mesh at live revision zero, with no request, receipt,
+event, history, annotation, or replay field.
+
+Run the bounded conversion measurement with:
+
+```bash
+cargo run --release -q -p voxel-convert --bin voxel-conversion-workload -- 256
+```
+
+On the checked source, 256 full parse-and-convert passes were byte-identical and averaged 26.8 us
+(83 us maximum, 37,284 conversions/s). The source/request/output sizes were 3,352/839/1,798 bytes.
+The M7B closeout also reran 256 full M7A projection rebuilds at 525.4 us average and 1,172 us
+maximum, retaining a 90,756-byte mesh payload.
+
+The M7B.3 product/persistence/workload implementation is pinned by
+`2cdad99c0d012643fe157fa6db51495a31327d98`. M7C annotations/history remains unscheduled absent a
+named undo, provenance, collaboration, or diagnostic consumer.
 
 ## Donor audit and exclusions
 

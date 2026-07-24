@@ -1,6 +1,6 @@
 # Experiment results
 
-Status: walking falsification slices and the first seven scheduled migration families implemented
+Status: walking falsification slices and the first eight scheduled migration families implemented
 on 2026-07-23 and tracked in Den.
 
 ## Current decision
@@ -548,6 +548,75 @@ limits, and donor boundary), `eb5ee0b177e3568b5b52f2492d6503123ad94519` (atomic 
 coherent projection rebuild), and `e4db64716ef9d5a9bb07d9d0048b94737cd09850` (snapshot/project
 persistence, product route, Chromium proof, workload, and cohesive browser state extraction).
 
+### Offline voxel asset conversion and ordinary product admission
+
+M7B adds one durable authoring artifact, not another runtime subsystem:
+
+```text
+pinned static GLB + explicit request
+  -> offline voxel-convert Rust CLI
+  -> canonical schema-1 voxel asset
+  -> schema-v7 project asset reference
+  -> complete M5 admission
+  -> existing M7A material authority
+  -> existing collision + navigation + retained mesh consumers
+```
+
+The runtime-safe `voxel-asset` crate owns strict grid, bounds, sparse-run, material-map, provenance,
+content-hash, and preflight values. The separate `voxel-convert` crate owns `gltf`, bounded static
+mesh parsing, surface/solid conversion, and atomic file installation. `game-host` depends on the
+former and not the latter. The browser bundle contains neither conversion/request vocabulary nor an
+Asha project-bundle, provider, plan/preview/apply, or replay facade.
+
+The real 3,352-byte Kenney wall fixture contains 48 positions and 12 triangles across two named
+material groups. With the checked request it produces 8 material voxels in 4 sparse runs, settings
+hash `98cb7d07a99015f5e759a39d89e77bb4f64cbdb0b3b5ed724bba9d35f95902ba`, and content
+hash `8d5c4037cee3279ac66870b285ca794b35e35fa3e3026a51cd4ae506b3f7397e`. Two CLI runs emit
+byte-identical 1,798-byte artifacts. Changing one explicit material mapping produces settings hash
+`08fc08dbcd27c364d05f313531768eca8cd534141794c2c0a1daa0c46abe10f3` and a distinct artifact;
+an invalid source returns `conversion.sourceHashMismatch` while the prior output SHA-256 remains
+unchanged.
+
+The checked `converted-wall.project.json` combines an authored floor with that embedded asset.
+Admission expands the asset to the same coordinate-canonical material cells used by explicit
+authored voxels; focused comparison proves identical authority hash, collision queries, navigation
+hash, and mesh payload. The initial product contains 94 solids and a nine-cell probe path. Real
+Chromium sees the retained Three mesh and cannot move the actual player through the converted wall.
+It then clears the wall's four upper cells through the normal expected-revision M7A endpoint. The
+result has 90 solids, revision 1, a seven-cell probe path, changed authority/navigation/mesh hashes,
+and a traversable player route.
+
+Snapshot schema 9 reopens that revision-1 authority and every derived projection exactly. Explicit
+authored persistence instead materializes 90 static cells, removes `voxelAssets` from the active
+environment, and uses the existing M6 atomic replacement. Reset and a fresh host reopen the same
+hash/navigation/mesh at live revision zero. Neither representation contains conversion jobs,
+requests, edit receipts/history, events, or replay records.
+
+The bounded release workloads measured the actual checked source and ordinary full edit rebuild:
+
+| Measurement | Observed result |
+|---|---:|
+| 256 static GLB conversions | 26.8 us average / 83 us maximum / 37,284 conversions/s |
+| Conversion retained inputs/output | 3,352-byte source / 839-byte request / 1,798-byte artifact |
+| 256 coherent voxel edits | 525.4 us average / 1,172 us maximum / 1,903 rebuilds/s |
+| Edit mesh payload | 90,756 bytes retained and peak |
+
+M7B change amplification is explicit:
+
+| Change | Required ownership surfaces |
+|---|---|
+| Convert another supported static GLB | A request plus source/license paths and generated asset; converter/runtime code stays unchanged. |
+| Change resolution, fit, origin, mode, or material mapping | Request data and regenerated canonical artifact; M5 admission, M7A authority, and browser projection stay unchanged. |
+| Consume the asset in another scene | One catalog entry and `voxelAssets` reference in stored content; no converter invocation or provider registry at runtime. |
+| Add a genuinely new source format or conversion algorithm | The offline importer/converter and focused fixtures; durable asset admission and gameplay consumers remain unchanged. |
+| Add a new durable voxel-asset meaning | `voxel-asset` schema/validation plus M5 admission and migration evidence; no edit-log, replay, plan/preview/apply, or project-bundle control plane. |
+
+Implementation commits are `17545406494bc93f12d3668b845a533cee8ceb4d` (format and request
+boundary), `b3481fadf1586c2cfea167d569af0bd6333af6b5` (offline converter, checked artifact, and normal
+admission), `a51bf6e61b0c4e52d1bc4613440310d82638d216` (canonical sparse-run correction and evidence),
+and `2cdad99c0d012643fe157fa6db51495a31327d98` (stored product, real Chromium/save/reopen proof,
+and bounded conversion workload).
+
 ### Browser/Three/DOM product proof
 
 The loading-bay browser shell links Asha's actual `@asha/renderer-three` and generated render
@@ -614,6 +683,7 @@ cargo run -q -p game-host --bin headless-door
 cargo run -q -p game-host --bin headless-encounter
 cargo run --release -q -p game-host --bin motion-workload -- --matrix
 cargo run --release -q -p game-host --bin voxel-edit-workload -- 256
+cargo run --release -q -p voxel-convert --bin voxel-conversion-workload -- 256
 ```
 
 The current verification gate proves:
@@ -621,9 +691,10 @@ The current verification gate proves:
 - Rust formatting, Clippy, and strict TypeScript compilation;
 - generated project content is byte-for-byte current with its TypeScript composition;
 - 13 TypeScript content-composition tests and ten browser input/projection/presentation tests;
-- 93 Rust tests across entity state, donor collision/navigation/mesh queries, security door,
+- 106 Rust tests across entity state, donor collision/navigation/mesh queries, security door,
   content admission, encounter routing, kinematic/navigation motion, atomic rejection, projection,
-  player control, combat/health/weapon behavior, generated-environment admission, and save/reopen;
+  player control, combat/health/weapon behavior, generated-environment admission, offline voxel
+  conversion/import, live editing, and snapshot/authored save/reopen;
 - strict rejection of unknown stored-content and snapshot fields;
 - a real Chromium/Three/WebGL product smoke, including a forbidden-old-runtime bundle audit.
 
@@ -635,10 +706,12 @@ These are physical line counts (`wc -l`), not complexity scores:
 |---|---:|---|
 | Reusable Rust entity state | 4 files / 888 lines | Entity/capability storage, atomic entity mutation, snapshot, projection. |
 | Successor spatial adapter/system | 2 files / 1,444 lines | Canonical donor scene construction, generated-room/aperture algorithm, collision/navigation/mesh derivation, bounded query facade, central kinematic phase, and one cohesive voxel-edit owner. |
-| Rust game host and runners | 26 files / 7,452 lines | Concrete feature-owned components/services, routing, canonical project codec/migration/store, scheduling, snapshots, presentation projection, headless/product/workload hosts. |
+| Rust game host and runners | 26 files / 7,593 lines | Concrete feature-owned components/services, routing, canonical project codec/migration/store, scheduling, snapshots, presentation projection, headless/product/workload hosts. |
+| Voxel asset and offline conversion | 11 files / 1,995 lines | Strict durable format/request validation, canonical hashing, bounded GLB parsing/conversion, atomic CLI installation, and measured conversion runner. |
 | TypeScript content composition | 5 files / 429 lines | Typed definitions, optional schema-v7 candidate builder, encounter/generation/combat and motion builders, reproducibility check. |
-| TypeScript browser product shell | 8 files / 1,959 lines | Browser-owned input/edit lifecycle, Rust-readout/mesh and feedback adapters, DOM/Web Audio realization, derived camera, Asha renderer mount, bridge exclusion shim, styling. |
-| Authored stored project | 1 file / 112 lines | Hand-authored loading-bay catalog, scene, relationships, components, and voxel source loaded directly by Rust. |
+| TypeScript browser product shell | 8 files / 2,028 lines | Browser-owned input/edit lifecycle, Rust-readout/mesh and feedback adapters, DOM/Web Audio realization, derived camera, Asha renderer mount, bridge exclusion shim, styling. |
+| Authored stored projects | 2 files / 1,152 lines | Hand-authored loading-bay and converted-wall catalogs/scenes, relationships, components, and voxel sources loaded directly by Rust. |
+| Checked conversion request/artifact | 2 files / 117 lines | Reproducible real-source settings and canonical schema-1 voxel output. |
 | Generated legacy/workload content | 3 files / 8,092 lines | Retained schema-v6 migration evidence plus pretty-printed 256-body workload data. |
 
 The Rust object/component model is currently the largest single file, followed by generation and
@@ -672,24 +745,27 @@ generic replay machinery.
   at runtime.
 - Authored persistence and concrete session snapshots can remain separate types, APIs, files, and
   lifecycles while both reuse direct semantic admission and deterministic reopen tests.
+- A real external asset can enter as one offline canonical data artifact, then behave exactly like
+  authored voxels without importing conversion execution, providers, edit history, or replay into
+  the product runtime.
 - The new capability's behavior has one owner; its expected amplification is model/command/snapshot
   binding plus admission and restore, not a cross-language protocol campaign.
 
 ## Decision boundary and remaining limits
 
-The planned falsification work and first seven migration families pass. That is strong evidence for
+The planned falsification work and first eight migration families pass. That is strong evidence for
 continuing Rusty Engine as the durable successor, but it is not evidence that every Asha feature
 should move or that all current leaf-donor arrangements are durable infrastructure.
 
 Before calling this durable infrastructure:
 
-1. Complete M7B's bounded real-asset conversion without importing Asha's edit-log or conversion
-   control plane; M7A now passes with a direct typed transaction and full coherent rebuild.
-2. Decide whether sibling donor references become pinned Git dependencies, vendored crates, or a
+1. Decide whether sibling donor references become pinned Git dependencies, vendored crates, or a
    shared foundation repository before Asha resumes development.
-3. Add safe allocation telemetry and a longer mixed workload; the current matrix measures isolated
+2. Add safe allocation telemetry and a longer mixed workload; the current matrix measures isolated
    CPU time and copy/fact proxies only.
-4. Snapshot repetition has grown with M3 but remains direct and type-specific; revisit a small
+3. Snapshot repetition has grown with M3 but remains direct and type-specific; revisit a small
    typed codec helper only if another settled component family repeats the same validation shape.
-5. If the renderer remains a donor, extract a clean typed-frame subpath upstream so the local
+4. If the renderer remains a donor, extract a clean typed-frame subpath upstream so the local
    fail-closed alias is unnecessary.
+5. Leave M7C annotations/history unscheduled until a named undo, provenance, collaboration, or
+   diagnostic consumer can justify its authority and persistence semantics.

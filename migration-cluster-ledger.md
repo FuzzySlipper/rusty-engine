@@ -1,6 +1,6 @@
 # Asha-to-Rusty Engine Migration Cluster Ledger
 
-Status: active scheduling baseline  
+Status: M0-M7B complete; M7C and M8 deliberately unscheduled
 Ledger date: 2026-07-23  
 Rusty Engine baseline: `65c528975328b2d92384dea91adf1d21c1779bf4`  
 Asha evidence baseline: `a431974330589761c9e35fc4f8a55996a1b5ee48`
@@ -16,9 +16,9 @@ several feature families continue to validate its object-centric spine. A port b
 possible, but it is the exceptional path. It would need to replace Asha's old structural center, not
 place the successor behind another compatibility layer.
 
-No Den project decision is made by this document. If a Rusty Engine project is created later, its
-initial tasks should be generated from the then-current rows in this ledger rather than copied from
-the Asha backlog.
+The Rusty Engine Den project schedules work from the then-current rows in this ledger rather than
+copying the Asha backlog. Den owns transient task/review state; this file owns the durable ordering,
+dispositions, and completion evidence.
 
 Future milestone planning must also consult the full Asha crate inventory linked from
 `docs/donor-provenance.md`. Use that report to shortlist donors and identify dangerous dependency
@@ -213,7 +213,7 @@ player intent so combat proves a real interaction rather than another test-only 
 | M5 | Complete (#6117-#6120) | Stored scene, asset identities/catalog, entity definitions, project admission, diagnostics | At least M1, M2A, and M3 | `core-assets` referenced unchanged; catalog/scene/project/bundle families used only as bounded evidence | The checked-in schema-v7 loading-bay project drives the real browser through one strict Rust admission path with source-locatable diagnostics and no runtime facade |
 | M6 | Complete (#6121-#6124) | Durable project save/load and versioning, distinct from a live runtime snapshot | M5 | Canonical/fixed-point serialization evidence adapted; bundle/lifecycle/snapshot machinery excluded | Admitted project content saves atomically, round-trips byte-stably, and migrates the real schema-v6 predecessor; Chromium starts and resets from the saved file while snapshots independently reopen changed live values |
 | M7A | Complete (#6125-#6128) | Live voxel edit commands, authoritative voxel mutation, collision/navigation/mesh invalidation | M1, M2B, M6 | Transaction/bounds/dirty-neighbour lessons adapted from `rule-voxel-edit` and narrow voxel services; command/event/history/replay composition excluded | Real Chromium removes a visible voxel, observes coherent collision/navigation/mesh changes, walks through the cleared cell, and proves rejection plus snapshot/project reopen; 256 full rebuilds are measured |
-| M7B | Ready (#6129-#6131) | Voxel asset import/conversion into the admitted project form | M7A, M5 | Adapt conversion and asset services/tools | A real external asset converts reproducibly, validates, loads, and behaves like authored voxels |
+| M7B | Complete (#6129-#6131) | Voxel asset import/conversion into the admitted project form | M7A, M5 | Narrow format/import/conversion lessons adapted; donor crates and control plane excluded | The real Kenney wall converts reproducibly, loads through the stored product, matches authored voxels, drives visible collision/navigation/mesh, accepts a live edit, and survives snapshot plus authored save/reopen |
 | M7C | Unscheduled | Voxel annotations and edit history | A named authoring/diagnostic consumer | Evidence from annotation/history protocols and services | Schedule only when undo, provenance, collaboration, or another concrete consumer exists |
 | M8 | Unscheduled | Studio/editor workflows over established runtime and project APIs | M5-M7 plus repeated manual-authoring pain | Asha Studio is product evidence, not a shell to transplant | Tools manipulate the same admitted data and typed commands used without Studio; no editor-only authority path |
 
@@ -416,9 +416,35 @@ resets, and freshly reopens the edited project with identical material authority
 
 Implementation commits are `cddf89f79201a7ae657beffbdd3dd87fb84f818f`,
 `eb5ee0b177e3568b5b52f2492d6503123ad94519`, and
-`e4db64716ef9d5a9bb07d9d0048b94737cd09850`. M7B is now the ready cluster. M7C remains
-intentionally unscheduled: M7A produced no evidence that undo/history, annotations, collaboration,
-or a universal edit protocol is needed.
+`e4db64716ef9d5a9bb07d9d0048b94737cd09850`.
+
+M7B is also complete. A successor-owned schema-1 voxel asset records one bounded sparse material
+volume and source/settings provenance. The separate offline `voxel-convert` crate parses exactly
+one static embedded-BIN GLB mesh, applies explicit bounded conversion settings, validates the
+finished asset, and atomically installs canonical bytes. `game-host` depends only on the durable
+`voxel-asset` crate; neither `gltf` nor conversion execution enters the runtime or browser bundle.
+
+The pinned 3,352-byte Kenney wall fixture produces 8 voxels in 4 sparse runs. Two direct CLI runs are
+byte-identical; a material-map variation changes both settings and artifact hashes, while an invalid
+source leaves the prior good output byte-identical. The checked schema-v7 `converted-wall` project
+admits that artifact through the existing M5 path and expands it into the same M7A material
+authority as explicit authored cells. Focused tests prove identical collision, navigation, and mesh
+results for both forms.
+
+Real Chromium renders the converted wall, proves it blocks the actual player, submits one ordinary
+four-cell M7A transaction, observes coherent mesh/navigation/collision changes, and traverses the
+cleared route. Snapshot schema 9 reopens revision 1 exactly. Explicit authored save removes the
+asset reference from the environment, stores 90 concrete material voxels, and reopens in a fresh
+host at revision zero with identical authority and projections. A release run of 256 conversions
+averaged 26.8 us (maximum 83 us); the closeout edit workload averaged 525.4 us (maximum 1,172 us)
+over 256 coherent full rebuilds.
+
+M7B implementation commits are `17545406494bc93f12d3668b845a533cee8ceb4d` (format boundary),
+`b3481fadf1586c2cfea167d569af0bd6333af6b5` (offline importer/converter and normal admission),
+`a51bf6e61b0c4e52d1bc4613440310d82638d216` (canonical sparse-run correction and evidence), and
+`2cdad99c0d012643fe157fa6db51495a31327d98` (stored product, Chromium/persistence proof, and bounded
+conversion workload). M7C remains intentionally unscheduled: neither M7A nor M7B produced a named
+consumer for undo/history, annotations, collaboration, or a universal edit protocol.
 
 ## Features that do not yet justify a migration cluster
 

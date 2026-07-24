@@ -1,6 +1,6 @@
 # Asha Object-Centric Successor Spine
 
-Status: walking falsification spike and first seven migration families complete; voxel asset conversion ready
+Status: walking falsification spike and first eight migration families complete through M7B
 Working location: `/home/dev/rusty-engine`
 Asha donor snapshot inspected: `a431974330589761c9e35fc4f8a55996a1b5ee48`
 Decision scope: a possible successor for Asha's runtime/application spine, not a decision to replace the whole engine
@@ -748,6 +748,7 @@ The spike now uses these defaults:
 - explicit snapshot persistence;
 - TypeScript as admission-time code-as-content and the eventual Three/DOM presentation shell, not a second gameplay authority;
 - rebuildable presentation posture plus response-local typed feedback cues; audio/particles/billboards are disposable and never snapshot or replay truth;
+- offline asset conversion emits a canonical admitted artifact; conversion tooling and source parsers never enter runtime authority;
 - Asha leaf code referenced/transplanted, not invoked through an old-runtime compatibility layer.
 
 Further walking-slice evidence should decide:
@@ -763,7 +764,7 @@ Further walking-slice evidence should decide:
 
 ## Recommended next action
 
-The planned falsification slices and the first seven migration families now pass: direct gameplay
+The planned falsification slices and the first eight migration families now pass: direct gameplay
 services, content-only variation, cross-domain typed consequences, localized engine capabilities,
 substantial spatial/collision/query reuse, real-time multi-entity pressure, combat, persistence, and
 the retained browser product path. M4 additionally proves that typed movement/combat/door outcomes
@@ -803,8 +804,21 @@ revision, with no edit request, fact, event, history, or replay record. A 256-tr
 workload averages 522.4 us per full rebuild in the current 366-voxel room, so incremental scheduling
 has not yet earned its complexity.
 
-The next ready closure is M7B's bounded real-asset conversion into the same admitted voxel form.
-M7C annotations/history remains deliberately unscheduled until a named consumer appears.
+M7B now passes. The real pinned Kenney GLB converts twice to byte-identical canonical schema-1
+artifacts; an explicit settings variation changes identity and a failed source cannot replace prior
+good output. The checked schema-v7 product embeds that artifact and otherwise uses ordinary M5
+admission and the existing M7A authority. Converted and authored cells have identical collision,
+navigation, and mesh projections. Real Chromium sees the converted wall, collides with it, clears it
+through one typed edit transaction, observes the shorter navigation path and changed retained mesh,
+then walks through the result. Runtime snapshot and explicit authored save/reopen retain the edited
+meaning without persisting a conversion job, provider, edit history, or replay record.
+
+The next architectural work should therefore be chosen from a named product capability or donor-
+independence need, not from the remaining Asha inventory by default. The current concrete
+infrastructure concern is replacing temporary sibling-checkout dependencies with pinned Git,
+vendored, or genuinely shared foundations before Asha development resumes. M7C annotations/history
+remains deliberately unscheduled until undo, provenance, collaboration, or another named consumer
+appears.
 
 ## Source basis
 
