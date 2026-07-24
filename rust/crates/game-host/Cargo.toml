@@ -7,10 +7,12 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
+core-assets.workspace = true
 core-ids.workspace = true
 core-math.workspace = true
 core-time.workspace = true
 engine-spatial = { path = "../engine-spatial" }
 serde.workspace = true
 serde_json.workspace = true
+serde_path_to_error.workspace = true
 entity-state = { path = "../entity-state" }

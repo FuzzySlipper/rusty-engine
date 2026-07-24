@@ -19,6 +19,7 @@ mod runtime_records;
 mod scheduler;
 mod session;
 mod snapshot;
+mod stored_project;
 
 pub use combat::{
     CombatFact, CombatMissReason, CombatReceipt, CombatRejectionReason, EnemyComponent, EnemyState,
@@ -57,4 +58,12 @@ pub use snapshot::{
     PlayerControllerSnapshot, PlayerInputBindingsSnapshot, SnapshotEncounterState,
     SnapshotEnemyState, SnapshotNavigationState, VoxelCollisionSnapshot, WeaponSnapshot,
     GAME_SNAPSHOT_SCHEMA_VERSION,
+};
+pub use stored_project::{
+    decode_stored_project, diagnostic_code, ProjectDiagnostic, StoredAsset, StoredCollision,
+    StoredDoor, StoredEncounter, StoredEntityDefinition, StoredGeneratedVoxelEnvironment,
+    StoredHealth, StoredKinematic, StoredNavigation, StoredPlayerController,
+    StoredPlayerInputBindings, StoredProject, StoredProjectError, StoredRenderable, StoredScene,
+    StoredSolidVoxelEnvironment, StoredSwitch, StoredVoxelEnvironment, StoredWeapon,
+    STORED_PROJECT_SCHEMA_VERSION,
 };

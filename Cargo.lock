@@ -48,6 +48,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
+name = "core-assets"
+version = "0.1.0"
+
+[[package]]
 name = "core-ids"
 version = "0.1.0"
 
@@ -131,6 +135,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 name = "game-host"
 version = "0.1.0"
 dependencies = [
+ "core-assets",
  "core-ids",
  "core-math",
  "core-time",
@@ -138,6 +143,7 @@ dependencies = [
  "entity-state",
  "serde",
  "serde_json",
+ "serde_path_to_error",
 ]
 
 [[package]]
@@ -376,6 +382,17 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
+]
+
+[[package]]
+name = "serde_path_to_error"
+version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10a9ff822e371bb5403e391ecd83e182e0e77ba7f6fe0160b795797109d1b457"
+dependencies = [
+ "itoa",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]

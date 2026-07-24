@@ -11,6 +11,7 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace.dependencies]
+core-assets = { path = "../asha-engine/engine-rs/crates/foundation/core-assets" }
 core-ids = { path = "../asha-engine/engine-rs/crates/foundation/core-ids" }
 core-math = { path = "../asha-engine/engine-rs/crates/foundation/core-math" }
 core-space = { path = "../asha-engine/engine-rs/crates/foundation/core-space" }
@@ -24,6 +25,7 @@ svc-spatial = { path = "../asha-engine/engine-rs/crates/services/svc-spatial" }
 svc-volume = { path = "../asha-engine/engine-rs/crates/services/svc-volume" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_path_to_error = "0.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

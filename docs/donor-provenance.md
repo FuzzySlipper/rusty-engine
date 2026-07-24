@@ -39,6 +39,9 @@ the old classification still holds.
 | Combat ray/target algorithm | `engine-rs/crates/services/svc-combat` | Small slab-ray/nearest-target algorithm adapted; crate not referenced | Deterministic AABB intersection and nearest-hit ordering are useful below the successor service. The donor `CombatState`, copied fire-control command state, health/replay hashes, readout/golden machinery, and independent health table were rejected because Rusty Engine entities and `CombatService` already own those meanings. |
 | FPS combat/lifecycle evidence | `engine-rs/crates/rules/rule-lifecycle/src/lib.rs` (`apply_primary_fire_for_roles_with_entities`) and `fps_loaded.rs` | Inspected only; no dependency or copied implementation | Confirmed the old player-fire behavior and collision ordering, while providing negative evidence for role maps, runtime-session wrappers, entity-authoring policy routes, gameplay-event adapters, state rollback copies, and per-action replay records. |
 | Presentation feedback evidence | `engine-rs/crates/render/render-animation`, `render-audio`, `render-billboard`, `render-particle`, `protocol/protocol-presentation`, `protocol/protocol-render`, and `render/render-bridge` | Inspected only; no dependency or copied implementation | Retained the one-way projection rule, disposable effect ownership, bounded transient work, entity/world anchoring, and fail-soft host realization as design evidence. Rejected the donor animation authority, asset catalog/hash closure, broad presentation/render operations, retained handle registries, origin/correlation/replay metadata, scene/level-generation bridge, and runtime-session routing. Rusty Engine instead owns one response-local semantic cue union at the browser-host border. |
+| `core-assets` | `engine-rs/crates/foundation/core-assets` | Sibling path dependency, unchanged | Its zero-dependency `AssetId`/`AssetKind` vocabulary gives stored projects strict kind-prefixed identity without importing catalog resolution or lifecycle. |
+| Stored project and scene evidence | `engine-rs/crates/state/core-catalog`, `state/core-scene`, `protocol/protocol-assets`, `protocol-diagnostics`, `protocol-entity-authoring`, and `protocol-scene` | Inspected only; successor-owned document and diagnostics | Typed identities, flat authored documents, reference validation, and path-bearing diagnostics informed M5. Catalog DAG/locks/material authority, scene bootstrap/spatial session, proposal commands, protocol codegen, and Asha diagnostic scopes were rejected. |
+| Project content/bundle evidence | `engine-rs/crates/services/svc-project-content`, `svc-serialization`, `protocol/protocol-project-content`, `protocol-project-bundle`, and `rules/rule-project-bundle` | Structural evidence and exclusion | These closures combine provider manifests, extension/input protocols, load/save plans, prefabs, gameplay fabric, lifecycle, annotations, and session bootstrap. M5 instead decodes one static successor document and defers narrow serialization ideas to M6. |
 | `@asha/contracts` | `ts/packages/contracts` | Sibling `link:` dependency, unchanged | Existing typed render-diff vocabulary and branded render/entity identities at the real presentation border. |
 | `@asha/renderer-three` | `ts/packages/renderer-three` | Sibling `link:` dependency, unchanged | Existing retained Three/WebGL browser surface, resource lifecycle, projection metadata, and render-diff application. |
 | `@asha/render-projection` | `ts/packages/render-projection` | Renderer transitive sibling dependency, unchanged | Renderer-neutral retained projection helpers used by the donor browser surface. |
@@ -91,6 +94,18 @@ active concrete pulse, DOM, and audio targets, clear them, and then rebuild curr
 Existing fact payload changes flow through without changing the presentation border; changing an
 existing effect stays in the TypeScript adapter/CSS/tests. A genuinely new outcome changes its typed
 producer plus the small closed mapping, not a donor protocol or generic signal route.
+
+M5A re-audited the asset, catalog, scene, diagnostics, entity-authoring, project-content,
+serialization, and project-bundle candidates at the same pinned revision. All inspected paths are
+unchanged at current Asha head `6462a6de20d48ea1a3b7456826804bd9507860a5`. Only `core-assets`
+enters the dependency graph; it is a `std`-only leaf. `core-catalog` has a small production closure
+(`core-assets`, `core-voxel`) but its DAG, lock, fallback, and material rules remain unearned.
+`core-scene` also carries `core-entity` and Asha bootstrap/spatial-session assumptions, so only its
+document lessons were adapted. `svc-project-content` and the project protocols retain the static
+provider/extension control plane, while `rule-project-bundle` reaches gameplay fabric, lifecycle,
+prefabs, voxel annotations, and project load plans. They remain explicit exclusions. M5's checked-in
+schema-v7 artifact, successor-owned serde shapes, and local structured diagnostic value are not wire
+protocols, provider envelopes, or a second compiler authority.
 
 Sibling references are intentional while Asha development is stopped for this decision. If this
 lab becomes a durable independent successor, the references should be pinned as Git dependencies,
