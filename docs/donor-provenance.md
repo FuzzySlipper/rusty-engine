@@ -49,6 +49,7 @@ report and is the authority for M9B-M9D.
 | Project content/bundle evidence | `engine-rs/crates/services/svc-project-content`, `svc-serialization`, `protocol/protocol-project-content`, `protocol-project-bundle`, and `rules/rule-project-bundle` | Structural evidence and exclusion | These closures combine provider manifests, extension/input protocols, load/save plans, prefabs, gameplay fabric, lifecycle, annotations, and session bootstrap. M5 instead decodes one static successor document and defers narrow serialization ideas to M6. |
 | Canonical project codec and migration evidence | `engine-rs/crates/services/svc-serialization/src/json.rs`, `state/core-scene/src/{document,json,validate}.rs`, `state/core-snapshot/src/lib.rs`, the canonical-dump examples, and `tools/scene-diagnostics/src/roundtrip.rs` | Encoding/test lessons adapted; crates and tools not referenced | M6 retains fixed object-field order, canonical collection ordering, finite deterministic numbers, trailing-LF output, fixed-point/golden-style tests, and fail-closed schema selection. It does not import manifest/artifact hashes, `StateStore`, replay fingerprints, diagnostic protocols, voxel compaction, or scene bootstrap/session state. |
 | Voxel asset/import/conversion evidence | `svc-mesh-import`, `svc-voxel-conversion`, `svc-voxel-asset`, `protocol-voxel-conversion`, `protocol-voxel-asset`, `tools/asset-import`, and `harness/fixtures/voxel-conversion` | Narrow format/parser/algorithm lessons adapted; crates not referenced | M7B retains offline GLB parsing, explicit bounded settings, sparse runs, canonical bytes, source provenance, and atomic artifact installation. It excludes registries, catalog/lock graphs, plan/preview/apply, providers, evidence graphs, replay, bridges, Studio, and project-bundle control planes. |
+| Kenney wall fixture and license | `harness/fixtures/voxel-conversion/{kenney-wall-a.glb,KENNEY-RETRO-URBAN-KIT-LICENSE.txt}` | Copied byte-for-byte to `fixtures/voxel-conversion` | The real conversion/product proof is now repository-local. The 3,352-byte GLB retains SHA-256 `6fceda24c30d2c22694f232f03fe2115fb1a462046fbbf719a90eea10dc9af00`; the adjacent 318-byte CC0 text retains SHA-256 `3679c62e69e67da74fec17327635e67c92991ac82b0bdfcc203d8ecd473c016a`. |
 | `@asha/contracts` | `ts/packages/contracts/src/generated/{ids,render}.ts` | Replaced by bounded `@rusty-engine/render-contracts` | Keeps branded entity/render identities and the four render operations the product emits. Generated protocol barrels, compatibility/codegen claims, bridge handles, assets, editor values, and gameplay/runtime envelopes are excluded. |
 | `@asha/renderer-three` | `ts/packages/renderer-three/src/{three-renderer,browser-surface}.ts` | Narrow successor fork as `@rusty-engine/renderer-three` | Retains typed primitive lifecycle, inline mesh upload/disposal, deterministic inspection, camera placement, and real Three/WebGL mounting. The local API is bounded to the browser shell. |
 | `@asha/render-projection` | `ts/packages/render-projection` | Inspected and excluded | Rusty Engine's `RuntimeProjectionAdapter` already owns whole-state-to-diff projection; no donor projection export reaches the product. |
@@ -218,6 +219,16 @@ generic render projection, encoded frames, and buffer handles had no product cal
 families were excluded instead of copied. Focused package tests and the existing Chromium product
 gate cover the retained behavior.
 
-The remaining operational sibling references after M9C are the Kenney fixture/license paths and
-their CI/bootstrap documentation. M9D owns their removal; historical links in this document remain
-provenance only.
+M9D copied the exact Kenney GLB and CC0 text to `fixtures/voxel-conversion`, moved request, test,
+workload, documentation, and persisted provenance paths to that location, and removed the Asha
+checkout/install/build steps from CI. The source hash, settings hash, voxel cells, material mapping,
+and generated geometry remain unchanged. Because source and license paths are intentionally part of
+canonical provenance, the regenerated artifact content hash changed from
+`8d5c4037cee3279ac66870b285ca794b35e35fa3e3026a51cd4ae506b3f7397e` to
+`086d81f12403192c6d7568289c2b47771741e5620a967e5b5fe5093fd5608ab7`; the checked project embeds
+that exact canonical result.
+
+The operational dependency baseline is now empty: Cargo metadata, pnpm resolution, runtime and test
+asset paths, scripts, executable documentation, and CI require only Rusty Engine. A clean clone with
+no Asha sibling is the final certification boundary. Rusty Engine is canonical for new work; Asha
+and its Den project remain immutable historical evidence and source locators only.

@@ -20,8 +20,8 @@ revision, replay certificate, action precondition, or runtime lifecycle owner.
 
 ## Real source and provenance
 
-The selected source is the pinned Asha donor fixture
-`../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb`:
+The selected source is the repository-local fixture
+`fixtures/voxel-conversion/kenney-wall-a.glb`, copied unchanged from the pinned Asha donor:
 
 - donor commit: `a431974330589761c9e35fc4f8a55996a1b5ee48`;
 - source size: 3,352 bytes;
@@ -31,10 +31,10 @@ The selected source is the pinned Asha donor fixture
 - license: Kenney Retro Urban Kit 2.0, CC0, recorded in the adjacent
   `KENNEY-RETRO-URBAN-KIT-LICENSE.txt`.
 
-The fixture and license are referenced rather than duplicated. CI already checks out the exact
-pinned sibling donor used by every other retained dependency. The fixture, license, and audited
-conversion/import paths are byte-unchanged at current Asha head
-`6462a6de20d48ea1a3b7456826804bd9507860a5`.
+The adjacent license is copied unchanged with the fixture. Their hashes above preserve the donor
+identity while conversion, tests, CI, and product verification use only this repository-local path.
+The fixture, license, and audited conversion/import paths were also byte-unchanged at inspected Asha
+head `6462a6de20d48ea1a3b7456826804bd9507860a5`.
 
 ## Schema 1
 
@@ -109,14 +109,14 @@ The checked request at `content/conversion/kenney-wall-a.request.json` produces
 | Imported geometry | 48 positions / 12 triangles / 2 material groups |
 | Converted authority | 8 voxels / 4 sparse runs / local bounds `[0,0,0]..[1,1,1]` |
 | Settings SHA-256 | `98cb7d07a99015f5e759a39d89e77bb4f64cbdb0b3b5ed724bba9d35f95902ba` |
-| Artifact SHA-256 | `8d5c4037cee3279ac66870b285ca794b35e35fa3e3026a51cd4ae506b3f7397e` |
+| Artifact SHA-256 | `086d81f12403192c6d7568289c2b47771741e5620a967e5b5fe5093fd5608ab7` |
 
 Run the direct authoring tool with:
 
 ```bash
 cargo run -q -p voxel-convert --bin voxel-convert -- \
   --request content/conversion/kenney-wall-a.request.json \
-  --source ../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb \
+  --source fixtures/voxel-conversion/kenney-wall-a.glb \
   --output content/assets/kenney-wall-a.voxel.json
 ```
 

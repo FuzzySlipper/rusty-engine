@@ -1,6 +1,6 @@
 # Asha Object-Centric Successor Spine
 
-Status: walking falsification spike and first eight migration families complete through M7B
+Status: walking falsification spike, first eight migration families, and M9 standalone extraction complete; Rusty Engine is the canonical successor
 Working location: `/home/dev/rusty-engine`
 Asha donor snapshot inspected: `a431974330589761c9e35fc4f8a55996a1b5ee48`
 Decision scope: a possible successor for Asha's runtime/application spine, not a decision to replace the whole engine
@@ -749,7 +749,7 @@ The spike now uses these defaults:
 - TypeScript as admission-time code-as-content and the eventual Three/DOM presentation shell, not a second gameplay authority;
 - rebuildable presentation posture plus response-local typed feedback cues; audio/particles/billboards are disposable and never snapshot or replay truth;
 - offline asset conversion emits a canonical admitted artifact; conversion tooling and source parsers never enter runtime authority;
-- Asha leaf code referenced/transplanted, not invoked through an old-runtime compatibility layer.
+- selected Asha leaf code internalized/transplanted, not invoked through an old-runtime compatibility layer.
 
 Further walking-slice evidence should decide:
 
@@ -760,7 +760,7 @@ Further walking-slice evidence should decide:
 - how much TypeScript authoring convenience is useful before strict admitted content becomes a domain-specific behavior language;
 - which replay assurance profile has a real consumer;
 - which Asha crates are clean enough to transplant versus cheaper to reimplement;
-- how the durable Rusty Engine successor should replace its temporary sibling-checkout dependencies before Asha development resumes.
+- which future donor capabilities have a concrete successor consumer strong enough to justify a new bounded extraction.
 
 ## Recommended next action
 
@@ -813,12 +813,18 @@ through one typed edit transaction, observes the shorter navigation path and cha
 then walks through the result. Runtime snapshot and explicit authored save/reopen retain the edited
 meaning without persisting a conversion job, provider, edit history, or replay record.
 
+M9 now passes. The accepted twelve-crate Rust closure is internal to the Rust workspace; the browser
+uses a four-operation Rusty-owned render contract and narrow local Three/WebGL adapter; the exact
+Kenney fixture and CC0 license are repository-local; and CI checks out only Rusty Engine. A fresh
+isolated clone with no Asha sibling installs dependencies, reproduces the voxel artifact, and passes
+the complete Rust, TypeScript, clippy, bundle-audit, and real Chromium product gate. The operational
+dependency baseline is empty. This closes the repository decision: Rusty Engine is canonical, while
+Asha remains historical evidence and a source locator rather than an operational dependency.
+
 The next architectural work should therefore be chosen from a named product capability or donor-
-independence need, not from the remaining Asha inventory by default. The current concrete
-infrastructure concern is replacing temporary sibling-checkout dependencies with pinned Git,
-vendored, or genuinely shared foundations before Asha development resumes. M7C annotations/history
-remains deliberately unscheduled until undo, provenance, collaboration, or another named consumer
-appears.
+independence need, not from the remaining Asha inventory by default. Repository independence is now
+complete. M7C annotations/history remains deliberately unscheduled until undo, provenance,
+collaboration, or another named consumer appears.
 
 ## Source basis
 

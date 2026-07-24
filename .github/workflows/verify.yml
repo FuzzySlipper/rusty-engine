@@ -14,15 +14,6 @@ jobs:
     steps:
       - name: Check out Rusty Engine
         uses: actions/checkout@v4
-        with:
-          path: rusty-engine
-
-      - name: Check out pinned Asha donors
-        uses: actions/checkout@v4
-        with:
-          repository: FuzzySlipper/asha-engine
-          ref: a431974330589761c9e35fc4f8a55996a1b5ee48
-          path: asha-engine
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -34,30 +25,15 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-          cache-dependency-path: |
-            asha-engine/ts/pnpm-lock.yaml
-            rusty-engine/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install pinned Asha TypeScript dependencies
-        working-directory: asha-engine/ts
-        run: pnpm install --frozen-lockfile
-
-      - name: Build pinned Asha renderer dependency closure
-        working-directory: asha-engine/ts
-        run: |
-          pnpm exec tsc --build packages/contracts/tsconfig.json
-          pnpm exec tsc --build packages/game-workspace/tsconfig.json
-          pnpm exec tsc --build packages/renderer-three/tsconfig.json
-
       - name: Install dependencies
-        working-directory: rusty-engine
         run: pnpm install --frozen-lockfile
 
       - name: Verify
-        working-directory: rusty-engine
         env:
           CHROMIUM_BIN: /usr/bin/google-chrome
         run: pnpm run verify

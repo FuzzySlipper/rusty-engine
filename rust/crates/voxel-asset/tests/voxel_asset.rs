@@ -173,8 +173,7 @@ fn valid_asset() -> VoxelAsset {
         ],
         provenance: VoxelAssetProvenance {
             kind: VoxelAssetProvenanceKind::ConvertedStaticMesh,
-            source_path: "../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb"
-                .to_string(),
+            source_path: "fixtures/voxel-conversion/kenney-wall-a.glb".to_string(),
             source_sha256:
                 "sha256:6fceda24c30d2c22694f232f03fe2115fb1a462046fbbf719a90eea10dc9af00"
                     .to_string(),
@@ -184,8 +183,7 @@ fn valid_asset() -> VoxelAsset {
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                     .to_string(),
             license_path: Some(
-                "../asha-engine/harness/fixtures/voxel-conversion/KENNEY-RETRO-URBAN-KIT-LICENSE.txt"
-                    .to_string(),
+                "fixtures/voxel-conversion/KENNEY-RETRO-URBAN-KIT-LICENSE.txt".to_string(),
             ),
         },
         content_hash: String::new(),
@@ -195,13 +193,11 @@ fn valid_asset() -> VoxelAsset {
 fn valid_request() -> VoxelConversionRequest {
     VoxelConversionRequest {
         asset_id: "voxel-volume/kenney-wall-a".to_string(),
-        source_path: "../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb"
-            .to_string(),
+        source_path: "fixtures/voxel-conversion/kenney-wall-a.glb".to_string(),
         expected_source_sha256:
             "sha256:6fceda24c30d2c22694f232f03fe2115fb1a462046fbbf719a90eea10dc9af00".to_string(),
         license_path: Some(
-            "../asha-engine/harness/fixtures/voxel-conversion/KENNEY-RETRO-URBAN-KIT-LICENSE.txt"
-                .to_string(),
+            "fixtures/voxel-conversion/KENNEY-RETRO-URBAN-KIT-LICENSE.txt".to_string(),
         ),
         settings: VoxelConversionSettings {
             resolution: [8, 8, 2],

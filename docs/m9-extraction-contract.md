@@ -145,7 +145,9 @@ M9D internalizes only these two files from the voxel-conversion fixture family:
 
 The asset is Kenney Retro Urban Kit 2.0 under Creative Commons Zero (CC0). All request, artifact,
 project, test, workload, and command paths move to the repository-local fixture and license. The
-existing source and artifact hashes must remain unchanged after path-only canonical regeneration.
+source hash, conversion settings, and produced voxel meaning remain unchanged. Source/license paths
+are themselves canonical provenance, so the artifact content hash is expected to change when those
+paths become local and must be regenerated and propagated exactly.
 
 No other Asha voxel-conversion fixture, provider regression document, import service, protocol, or
 tool is accepted.
@@ -183,3 +185,15 @@ rows are not part of this extraction contract.
 - **M9D / standalone:** the GLB/license and all operational paths are local, CI checks out one
   repository, the audit baseline is empty, and an isolated fresh clone passes the complete product
   verification without an Asha sibling or host-global links.
+
+## Closeout result
+
+M9B-M9D satisfy this contract. The operational baseline moved `55 -> 31 -> 17 -> 0`. The selected
+GLB and CC0 text retain their pinned byte hashes. Local-path canonical regeneration retains source
+SHA `6fceda24c30d2c22694f232f03fe2115fb1a462046fbbf719a90eea10dc9af00`, settings SHA
+`98cb7d07a99015f5e759a39d89e77bb4f64cbdb0b3b5ed724bba9d35f95902ba`, eight cells, and four
+sparse runs; its new provenance-sensitive content hash is
+`086d81f12403192c6d7568289c2b47771741e5620a967e5b5fe5093fd5608ab7`.
+
+Rusty Engine is the canonical repository. The pinned Asha repository and links in this document are
+permitted immutable provenance, not operational dependencies or authority for future architecture.

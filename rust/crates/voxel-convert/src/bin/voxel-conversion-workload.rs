@@ -5,7 +5,7 @@ use voxel_convert::{convert_glb, decode_conversion_request};
 
 const SOURCE: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb"
+    "/../../../fixtures/voxel-conversion/kenney-wall-a.glb"
 ));
 const REQUEST: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),

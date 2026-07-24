@@ -9,23 +9,5 @@
     "rust/donors/asha/README.md",
     "ts/packages/renderer-three/README.md"
   ],
-  "operationalReferences": [
-    "tracked|.github/workflows/verify.yml|asha-engine/ts/pnpm-lock.yaml",
-    "tracked|.github/workflows/verify.yml|path: asha-engine",
-    "tracked|.github/workflows/verify.yml|repository: FuzzySlipper/asha-engine",
-    "tracked|.github/workflows/verify.yml|working-directory: asha-engine/ts",
-    "tracked|README.md|asha-engine/",
-    "tracked|content/assets/kenney-wall-a.voxel.json|\"licensePath\": \"../asha-engine/harness/fixtures/voxel-conversion/KENNEY-RETRO-URBAN-KIT-LICENSE.txt\"",
-    "tracked|content/assets/kenney-wall-a.voxel.json|\"sourcePath\": \"../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb\",",
-    "tracked|content/conversion/kenney-wall-a.request.json|\"licensePath\": \"../asha-engine/harness/fixtures/voxel-conversion/KENNEY-RETRO-URBAN-KIT-LICENSE.txt\",",
-    "tracked|content/conversion/kenney-wall-a.request.json|\"sourcePath\": \"../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb\",",
-    "tracked|content/projects/converted-wall.project.json|\"licensePath\": \"../asha-engine/harness/fixtures/voxel-conversion/KENNEY-RETRO-URBAN-KIT-LICENSE.txt\"",
-    "tracked|content/projects/converted-wall.project.json|\"sourcePath\": \"../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb\",",
-    "tracked|docs/voxel-asset-format.md|--source ../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb \\",
-    "tracked|docs/voxel-asset-format.md|`../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb`:",
-    "tracked|rust/crates/voxel-asset/tests/voxel_asset.rs|\"../asha-engine/harness/fixtures/voxel-conversion/KENNEY-RETRO-URBAN-KIT-LICENSE.txt\"",
-    "tracked|rust/crates/voxel-asset/tests/voxel_asset.rs|source_path: \"../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb\"",
-    "tracked|rust/crates/voxel-convert/src/bin/voxel-conversion-workload.rs|\"/../../../../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb\"",
-    "tracked|rust/crates/voxel-convert/tests/conversion.rs|\"/../../../../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb\""
-  ]
+  "operationalReferences": []
 }

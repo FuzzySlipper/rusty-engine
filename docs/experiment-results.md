@@ -1,7 +1,7 @@
 # Experiment results
 
-Status: walking falsification slices and the first eight scheduled migration families implemented
-on 2026-07-23 and tracked in Den.
+Status: walking falsification slices, the first eight scheduled migration families, and standalone
+repository extraction implemented through 2026-07-24 and tracked in Den.
 
 ## Current decision
 
@@ -17,7 +17,7 @@ TypeScript content composition
         -> concrete entity/component state
         -> direct Rust services and typed committed events
         -> derived projection
-        -> retained Asha Three renderer plus successor DOM shell
+        -> local bounded Three renderer plus successor DOM shell
 ```
 
 Rust owns live session state, substantial gameplay logic, service composition, scheduling, and
@@ -658,11 +658,11 @@ typed accepted state/facts -> response-local presentation projection
                            -> safely expired, dropped, or rebuilt without gameplay writes
 ```
 
-The Asha renderer package has an optional encoded-frame convenience import from its old runtime
-bridge. Rusty Engine never uses that path: Vite aliases it to a fail-closed local shim, and the smoke
-rejects `RuntimeSession`, native bridge, Gameplay Fabric, `GameplayRuntimeHost`, or old Asha
-presentation-operation markers in the production bundle. The typed `applyFrame` path remains the
-unchanged donor implementation.
+The browser now imports a local four-operation render contract and bounded Three adapter. Encoded
+frames, the old runtime bridge, buffer handles, generic projection, editor/tunnel helpers, picking,
+animation assets, and the Vite shim are absent. The smoke rejects `RuntimeSession`, native bridge,
+Gameplay Fabric, `GameplayRuntimeHost`, or old Asha presentation-operation markers in the production
+bundle while exercising the typed `applyFrame` path through real WebGL.
 
 The automated product gate builds the bundle, starts the Rust host on an ephemeral port, launches
 real headless Chromium with SwiftShader WebGL, dispatches keyboard/pointer input, resolves the
@@ -716,7 +716,9 @@ These are physical line counts (`wc -l`), not complexity scores:
 | Rust game host and runners | 26 files / 7,593 lines | Concrete feature-owned components/services, routing, canonical project codec/migration/store, scheduling, snapshots, presentation projection, headless/product/workload hosts. |
 | Voxel asset and offline conversion | 11 files / 1,995 lines | Strict durable format/request validation, canonical hashing, bounded GLB parsing/conversion, atomic CLI installation, and measured conversion runner. |
 | TypeScript content composition | 5 files / 429 lines | Typed definitions, optional schema-v7 candidate builder, encounter/generation/combat and motion builders, reproducibility check. |
-| TypeScript browser product shell | 8 files / 2,028 lines | Browser-owned input/edit lifecycle, Rust-readout/mesh and feedback adapters, DOM/Web Audio realization, derived camera, Asha renderer mount, bridge exclusion shim, styling. |
+| Internalized low-level Rust donors | 17 files / 6,669 lines | Pinned foundation, voxel, spatial, collision, navigation, RNG, and mesh implementation beneath successor-owned services. |
+| TypeScript browser product shell | 6 files / 1,973 lines | Browser-owned input/edit lifecycle, Rust-readout/mesh and feedback adapters, DOM/Web Audio realization, derived camera, and styling. |
+| TypeScript render contract and Three edge | 4 files / 773 lines | Closed typed diff vocabulary, retained resource lifecycle, inline mesh upload, camera placement, and real WebGL mounting. |
 | Authored stored projects | 2 files / 1,152 lines | Hand-authored loading-bay and converted-wall catalogs/scenes, relationships, components, and voxel sources loaded directly by Rust. |
 | Checked conversion request/artifact | 2 files / 117 lines | Reproducible real-source settings and canonical schema-1 voxel output. |
 | Generated legacy/workload content | 3 files / 8,092 lines | Retained schema-v6 migration evidence plus pretty-printed 256-body workload data. |
@@ -739,8 +741,8 @@ generic replay machinery.
   deleted with the external host.
 - The pivot removes substantially more runtime-host plumbing than the encounter slice adds.
 - A substantial Asha service family can sit below the new object-centric center unchanged.
-- The existing renderer can sit above it through typed projection without restoring the old runtime
-  facade to the browser bundle.
+- A narrow internal renderer can sit above it through typed projection without restoring the old
+  runtime facade or the donor package graph to the browser bundle.
 - One canonical donor `VoxelWorld` can feed collision, navigation, and a real retained mesh without
   per-consumer approximations or importing the donor event/control plane.
 - Asha's compact combat query algorithm can be harvested without importing its independent state,
@@ -760,19 +762,15 @@ generic replay machinery.
 
 ## Decision boundary and remaining limits
 
-The planned falsification work and first eight migration families pass. That is strong evidence for
-continuing Rusty Engine as the durable successor, but it is not evidence that every Asha feature
-should move or that all current leaf-donor arrangements are durable infrastructure.
+The planned falsification work, first eight migration families, and standalone extraction pass.
+Rusty Engine is the durable canonical successor. This is not evidence that every Asha feature should
+move; absence remains the default and any future donor extraction needs a concrete product consumer.
 
-Before calling this durable infrastructure:
+Remaining limits are product/infrastructure work rather than repository-independence blockers:
 
-1. Decide whether sibling donor references become pinned Git dependencies, vendored crates, or a
-   shared foundation repository before Asha resumes development.
-2. Add safe allocation telemetry and a longer mixed workload; the current matrix measures isolated
+1. Add safe allocation telemetry and a longer mixed workload; the current matrix measures isolated
    CPU time and copy/fact proxies only.
-3. Snapshot repetition has grown with M3 but remains direct and type-specific; revisit a small
+2. Snapshot repetition has grown with M3 but remains direct and type-specific; revisit a small
    typed codec helper only if another settled component family repeats the same validation shape.
-4. If the renderer remains a donor, extract a clean typed-frame subpath upstream so the local
-   fail-closed alias is unnecessary.
-5. Leave M7C annotations/history unscheduled until a named undo, provenance, collaboration, or
+3. Leave M7C annotations/history unscheduled until a named undo, provenance, collaboration, or
    diagnostic consumer can justify its authority and persistence semantics.

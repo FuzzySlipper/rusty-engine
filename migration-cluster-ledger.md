@@ -1,8 +1,8 @@
 # Asha-to-Rusty Engine Migration Cluster Ledger
 
-Status: M0-M7B complete; M7C and M8 deliberately unscheduled
-Ledger date: 2026-07-23  
-Rusty Engine baseline: `65c528975328b2d92384dea91adf1d21c1779bf4`  
+Status: M0-M7B and M9 repository extraction complete; M7C and M8 deliberately unscheduled
+Ledger date: 2026-07-24
+Rusty Engine walking-spike baseline: `65c528975328b2d92384dea91adf1d21c1779bf4`
 Asha evidence baseline: `a431974330589761c9e35fc4f8a55996a1b5ee48`
 
 ## Purpose
@@ -11,10 +11,11 @@ This ledger turns the remaining Asha feature surface into a sequence of complete
 closures for Rusty Engine. It is not a crate-copy checklist and it does not presume that every Asha
 feature, abstraction, document, or task should survive.
 
-The working direction is to let Rusty Engine become the durable successor repository if the next
-several feature families continue to validate its object-centric spine. A port back into Asha remains
-possible, but it is the exceptional path. It would need to replace Asha's old structural center, not
-place the successor behind another compatibility layer.
+Rusty Engine is now the durable successor repository. The heterogeneous feature families validated
+its object-centric spine, and M9 removed the sibling-checkout requirement. A port back into Asha is
+not part of the migration schedule; it would require a new explicit owner decision and would still
+need to replace Asha's old structural center rather than place this successor behind a compatibility
+layer.
 
 The Rusty Engine Den project schedules work from the then-current rows in this ledger rather than
 copying the Asha backlog. Den owns transient task/review state; this file owns the durable ordering,
@@ -216,6 +217,7 @@ player intent so combat proves a real interaction rather than another test-only 
 | M7B | Complete (#6129-#6131) | Voxel asset import/conversion into the admitted project form | M7A, M5 | Narrow format/import/conversion lessons adapted; donor crates and control plane excluded | The real Kenney wall converts reproducibly, loads through the stored product, matches authored voxels, drives visible collision/navigation/mesh, accepts a live edit, and survives snapshot plus authored save/reopen |
 | M7C | Unscheduled | Voxel annotations and edit history | A named authoring/diagnostic consumer | Evidence from annotation/history protocols and services | Schedule only when undo, provenance, collaboration, or another concrete consumer exists |
 | M8 | Unscheduled | Studio/editor workflows over established runtime and project APIs | M5-M7 plus repeated manual-authoring pain | Asha Studio is product evidence, not a shell to transplant | Tools manipulate the same admitted data and typed commands used without Studio; no editor-only authority path |
+| M9 | Complete (#6132-#6136) | Standalone successor repository with internal Rust donors, bounded local render packages, licensed fixture, and one-repository CI | M4, M6, M7B | Exact pinned closure only; old runtime spine and unrelated donor inventory excluded | A clean clone with no Asha sibling installs and passes the full Rust/TypeScript/Chromium/conversion gate; the operational dependency audit is empty |
 
 ## M1: completed cluster definition
 
@@ -479,13 +481,12 @@ pinned inventory is evidence from 2026-07-23, not permission to assume a moving 
 
 ## Repository and Den decision rule
 
-For planning purposes, Rusty Engine is now treated as the likely durable successor, not as a patch
-queue expected to flow back into Asha. This gives new work a clean default and makes omitted legacy
-material stay omitted.
+Rusty Engine is the canonical repository for planning and implementation. It is not a patch queue
+expected to flow back into Asha. New work starts from this repository and its Den project, so omitted
+legacy material stays omitted.
 
-The repository decision should be revisited after M1 and at least two other heterogeneous closures
-(normally M2A and M3, with M2B allowed to substitute if it lands first). At that checkpoint, keep
-Rusty Engine as the canonical repository if:
+The checkpoint criteria have been met across navigation, player intent, generation, combat,
+presentation, authored projects, persistence, live voxel editing, and conversion:
 
 - the direct service/component path remains legible across navigation, player intent, and another
   substantial domain;
@@ -493,18 +494,18 @@ Rusty Engine as the canonical repository if:
 - snapshot/project boundaries remain explicit without a universal replay layer;
 - the product shell can grow through derived projection;
 - change amplification stays materially lower than comparable Asha work; and
-- there is a credible plan to remove sibling checkout dependence.
+- sibling checkout dependence has been removed and certified by an isolated clean clone.
 
-Porting back into Asha should be considered only if all of the following are true:
+Reopening a port-back decision would require a new explicit owner choice and all of the following:
 
 - the successor spine can replace, rather than coexist with, the old runtime center;
 - there is an explicit deletion sequence for the superseded facade/fabric/replay paths;
 - Rusty Engine's acceptance suite can run against the transplanted result; and
 - old documents, tasks, and APIs do not regain authority merely because they remain in the repo.
 
-If a new Den project is created, seed only active ledger clusters, their acceptance gates, and
-required donor-independence work. Do not bulk-copy Asha tasks or planning documents. The Asha project
-remains historical evidence and a source locator.
+The Rusty Engine Den project contains only active successor work and acceptance gates. Do not
+bulk-copy Asha tasks or planning documents. The Asha project remains historical evidence and a
+source locator.
 
 ## Maintaining this ledger
 
@@ -514,7 +515,7 @@ Update this file only when one of these changes:
 - a dependency or completion signal changes;
 - donor inspection changes a disposition;
 - a new concrete consumer earns a deferred feature;
-- the canonical-repository decision is made.
+- the canonical-repository decision changes through an explicit owner decision.
 
 For every completed row, record the implementation commit, donor revision, verification command,
 browser-visible acceptance, persistence result, and any architecture exception. Keep transient task

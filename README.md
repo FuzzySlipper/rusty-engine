@@ -1,7 +1,7 @@
 # Rusty Engine
 
-Rusty Engine is an external architecture lab for a smaller, object-centric successor to Asha's
-gameplay runtime spine.
+Rusty Engine is the standalone, object-centric successor to Asha's gameplay runtime spine. The
+walking architecture experiment succeeded; this repository is now the canonical home for new work.
 
 The active hypothesis is deliberately conventional:
 
@@ -21,15 +21,15 @@ The runtime now proves twelve connected paths:
 1. A switch-controlled security door with an optional configured close delay.
 2. An encounter-gated exit where committed enemy-defeat facts clear an authored encounter and open
    its related door.
-3. A reusable `KinematicCapability` and centrally scheduled `KinematicMotionSystem` over Asha's
-   voxel authority and Parry collision projection.
+3. A reusable `KinematicCapability` and centrally scheduled `KinematicMotionSystem` over the
+   internalized voxel authority and Parry collision projection.
 4. A retained browser/Three/DOM product shell where resolved actions enter Rust and typed facts plus
-   projection deltas return to Asha's real Three renderer.
+   projection deltas return to the local retained Three renderer.
 5. Autonomous enemy navigation derived from the same canonical voxel authority as collision.
 6. Authored keyboard/pointer bindings, a Rust-owned collision-aware player controller, and a
    presentation-only follow camera rebuilt from accepted pose.
 7. Seeded material-voxel generation whose canonical `VoxelWorld` feeds collision, navigation, and
-   an unchanged Asha visible-face mesher before retained Three upload.
+   an internalized Asha-derived visible-face mesher before retained Three upload.
 8. Authored primary-fire and weapon/health components resolved by a Rust `CombatService` against
    live enemy transforms and canonical voxel occlusion, with typed damage/defeat consequences.
 9. Rebuildable animation posture and disposable animation/audio/particle/billboard feedback
@@ -68,18 +68,15 @@ typed live edit, observes coherent navigation/mesh changes, and traverses the re
 save/reset/fresh-host path proves the accepted result becomes ordinary static authored voxels with
 no runtime edit history or converter in the product.
 
-## Donor checkout
+## Repository independence and donor provenance
 
-Mature Asha foundation crates are referenced rather than copied. The repository expects this sibling
-layout:
+Rusty Engine installs, builds, tests, and runs without an Asha checkout. The accepted low-level Rust
+closure, narrow TypeScript render edge, real Kenney fixture, and its exact CC0 license live in this
+repository. Asha is historical implementation evidence and a source locator, not an operational
+dependency or planning authority.
 
-```text
-parent/
-  asha-engine/
-  rusty-engine/
-```
-
-The referenced Asha snapshot and paths are recorded in
+The pinned donor snapshot, exact source paths, bounded adaptations, exclusions, and fixture hashes
+are recorded in
 [docs/donor-provenance.md](./docs/donor-provenance.md).
 
 ## Verification
@@ -87,6 +84,7 @@ The referenced Asha snapshot and paths are recorded in
 ```bash
 pnpm install
 pnpm run verify
+pnpm run audit:standalone
 ```
 
 To update generated project content after changing its TypeScript composition:

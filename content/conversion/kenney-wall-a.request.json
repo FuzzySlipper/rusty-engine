@@ -1,8 +1,8 @@
 {
   "assetId": "voxel-volume/kenney-wall-a",
-  "sourcePath": "../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb",
+  "sourcePath": "fixtures/voxel-conversion/kenney-wall-a.glb",
   "expectedSourceSha256": "sha256:6fceda24c30d2c22694f232f03fe2115fb1a462046fbbf719a90eea10dc9af00",
-  "licensePath": "../asha-engine/harness/fixtures/voxel-conversion/KENNEY-RETRO-URBAN-KIT-LICENSE.txt",
+  "licensePath": "fixtures/voxel-conversion/KENNEY-RETRO-URBAN-KIT-LICENSE.txt",
   "settings": {
     "resolution": [4, 3, 2],
     "cellSize": 1.0,
