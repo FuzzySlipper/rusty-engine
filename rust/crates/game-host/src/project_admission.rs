@@ -15,19 +15,46 @@ use crate::definition::{GameEntityDefinition, GameEntityDefinitionError};
 use crate::door::DoorConfig;
 use crate::navigation::NavigationConfig;
 use crate::player::{PlayerControllerConfig, PlayerInputBindings};
+use crate::project_codec::decode_project_document;
 use crate::session::GameSession;
 use crate::stored_project::{
-    decode_stored_project, diagnostic_code, validate_stored_project, StoredEntityDefinition,
-    StoredProject, StoredProjectError, StoredScene, StoredVoxelEnvironment,
+    diagnostic_code, validate_stored_project, StoredEntityDefinition, StoredProject,
+    StoredProjectError, StoredScene, StoredVoxelEnvironment,
 };
 
+/// Static project data that has passed the same complete semantic admission as
+/// runtime construction. The persistence service accepts only this token and
+/// therefore cannot save a merely shape-valid project.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdmittedStoredProject {
+    document: StoredProject,
+}
+
+impl AdmittedStoredProject {
+    pub fn document(&self) -> &StoredProject {
+        &self.document
+    }
+
+    pub fn into_document(self) -> StoredProject {
+        self.document
+    }
+}
+
 pub fn decode_and_admit_stored_project(input: &str) -> Result<AdmittedProject, StoredProjectError> {
-    admit_stored_project(decode_stored_project(input)?)
+    admit_stored_project(decode_project_document(input)?.project)
 }
 
 pub fn admit_stored_project(
     document: StoredProject,
 ) -> Result<AdmittedProject, StoredProjectError> {
+    admit_stored_project_with_document(document).map(|(_, admitted)| admitted)
+}
+
+/// Admit one document once and retain both its static persistence token and the
+/// resulting concrete session. Storage sees only the first value.
+pub fn admit_stored_project_with_document(
+    document: StoredProject,
+) -> Result<(AdmittedStoredProject, AdmittedProject), StoredProjectError> {
     validate_stored_project(&document)?;
     let scene_index = document
         .scenes
@@ -50,10 +77,13 @@ pub fn admit_stored_project(
     let session = GameSession::from_definitions(definitions)
         .map_err(|error| definition_error(error, scene_index, &entity_indexes))?;
 
-    Ok(AdmittedProject {
-        session,
-        collision_scene,
-    })
+    Ok((
+        AdmittedStoredProject { document },
+        AdmittedProject {
+            session,
+            collision_scene,
+        },
+    ))
 }
 
 struct ProjectAssetCatalog {

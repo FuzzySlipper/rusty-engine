@@ -16,6 +16,7 @@ mod navigation;
 mod player;
 mod project_admission;
 mod project_codec;
+mod project_store;
 mod runtime;
 mod runtime_records;
 mod scheduler;
@@ -50,10 +51,16 @@ pub use player::{
     PlayerControllerState, PlayerControllerView, PlayerInputBindings, ResolvedPlayerAction,
     MAX_INPUT_CONTROL_LENGTH, MAX_PLAYER_LOOK_DEGREES_PER_UNIT, MAX_PLAYER_SPEED_UNITS_PER_SECOND,
 };
-pub use project_admission::{admit_stored_project, decode_and_admit_stored_project};
+pub use project_admission::{
+    admit_stored_project, admit_stored_project_with_document, decode_and_admit_stored_project,
+    AdmittedStoredProject,
+};
 pub use project_codec::{
     decode_project_document, encode_project_document, DecodedProjectDocument,
     MIGRATED_V6_PROJECT_ID, MIGRATED_V6_SCENE_ID,
+};
+pub use project_store::{
+    ProjectSaveMode, ProjectStore, ProjectStoreError, DEFAULT_MAX_PROJECT_FILE_BYTES,
 };
 pub use runtime::{GameRuntime, RuntimeError, MAX_EVENT_WAVE, MAX_TICK_ADVANCE};
 pub use runtime_records::{GameEvent, JournalEntry, RuntimeReadout, RuntimeReceipt};
