@@ -6,28 +6,40 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const baselinePath = resolve(repoRoot, "scripts/standalone-dependency-baseline.json");
 const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
-const permittedProvenance = new Set(baseline.permittedProvenanceFiles);
+if (baseline.schemaVersion !== 2) {
+  throw new Error(`unsupported standalone dependency baseline schema ${String(baseline.schemaVersion)}`);
+}
+const permittedProvenance = new Set(baseline.permittedProvenanceReferences);
 const auditControlFiles = new Set([
   "scripts/audit-standalone.mjs",
   "scripts/standalone-dependency-baseline.json",
 ]);
 
+const tracked = trackedReferences();
+const trackedSet = new Set(tracked);
 const operationalReferences = new Set([
-  ...trackedReferences(),
+  ...tracked.filter((entry) => !permittedProvenance.has(entry)),
   ...cargoLocalDependencies(),
   ...pnpmLocalDependencies(),
 ]);
 const actual = [...operationalReferences].sort();
+const actualProvenance = tracked.filter((entry) => permittedProvenance.has(entry)).sort();
 
 if (process.argv.includes("--print")) {
-  console.log(JSON.stringify({ operationalReferences: actual }, null, 2));
+  console.log(JSON.stringify({
+    operationalReferences: actual,
+    permittedProvenanceReferences: actualProvenance,
+  }, null, 2));
   process.exit(0);
 }
 
 const expected = [...baseline.operationalReferences].sort();
 const unexpected = actual.filter((entry) => !expected.includes(entry));
 const missing = expected.filter((entry) => !actual.includes(entry));
-if (unexpected.length > 0 || missing.length > 0) {
+const staleProvenance = [...permittedProvenance]
+  .filter((entry) => !trackedSet.has(entry))
+  .sort();
+if (unexpected.length > 0 || missing.length > 0 || staleProvenance.length > 0) {
   if (unexpected.length > 0) {
     console.error("unexpected operational Asha references:");
     unexpected.forEach((entry) => console.error(`  + ${entry}`));
@@ -36,8 +48,12 @@ if (unexpected.length > 0 || missing.length > 0) {
     console.error("baseline operational Asha references no longer present:");
     missing.forEach((entry) => console.error(`  - ${entry}`));
   }
+  if (staleProvenance.length > 0) {
+    console.error("permitted provenance references no longer present exactly:");
+    staleProvenance.forEach((entry) => console.error(`  - ${entry}`));
+  }
   console.error(
-    "Update the extraction contract and baseline deliberately; historical references belong only in permitted provenance files.",
+    "Update the extraction contract and exact provenance baseline deliberately; no whole file is exempt.",
   );
   process.exit(1);
 }
@@ -58,7 +74,7 @@ function trackedReferences() {
   const references = [];
   for (const file of tracked) {
     const path = resolve(repoRoot, file);
-    if (auditControlFiles.has(file) || permittedProvenance.has(file) || !existsSync(path)) {
+    if (auditControlFiles.has(file) || !existsSync(path)) {
       continue;
     }
     const bytes = readFileSync(path);

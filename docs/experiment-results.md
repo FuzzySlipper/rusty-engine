@@ -1,7 +1,7 @@
 # Experiment results
 
-Status: walking falsification slices, the first eight scheduled migration families, and standalone
-repository extraction implemented through 2026-07-24 and tracked in Den.
+Status: completed architecture experiment, first eight migration families, and standalone
+repository extraction evidence through 2026-07-24.
 
 ## Current decision
 
@@ -51,7 +51,7 @@ remove. The complete implementation and its tests remain recoverable at Git tag
 `external-ts-runtime-spike` (`9ed75581999291aa622713814d10832e597999d3`). Active `main` deletes
 those runtime-host crates and packages.
 
-## Active walking slices
+## Implemented capability slices
 
 ### Security door
 
@@ -97,7 +97,7 @@ first committed defeat fact.
 Partial encounter progress survives save/reopen. Snapshots store concrete enemy and encounter
 state, relationships, doors, and schedules; they do not store event history or replay frames.
 
-The original direct `defeat_enemy` operation remains as a focused fixture/helper for the walking
+The original direct `defeat_enemy` operation remains as a focused fixture/helper for the runtime
 encounter and navigation-blocker tests. M3 removes it from the browser product path: normal player
 defeat now requires an accepted aimed attack, health mutation, and lethal combat fact.
 
@@ -623,10 +623,10 @@ and bounded conversion workload).
 
 ### Browser/Three/DOM product proof
 
-The loading-bay browser shell links Asha's actual `@asha/renderer-three` and generated render
-contracts. A small successor adapter turns whole Rust projection readouts into retained
-`create`/`update`/`destroy` diffs. Three owns canvas objects and resource lifecycle; it never owns
-gameplay state.
+The loading-bay browser shell uses the local `@rusty-engine/renderer-three` package and bounded
+render contracts internalized during M9. A small successor adapter turns whole Rust projection
+readouts into retained `create`/`update`/`destroy` diffs. Three owns canvas objects and resource
+lifecycle; it never owns gameplay state.
 
 Seven visible action/data paths run in the same product scene:
 
@@ -636,10 +636,10 @@ DOM pointer/fire control -> authored binding -> ResolvedAttackAction -> CombatSe
                          -> projection update -> retained Three door moves and enemies disappear
 
 DOM spatial control -> one bounded KinematicMotionSystem phase sequence
-                    -> Asha voxel sweep -> KinematicBlocked
+                    -> canonical voxel sweep -> KinematicBlocked
                     -> projection update -> retained Three probe stops at the visible obstacle
 
-DOM navigation control -> EnemyNavigationSystem -> Asha voxel-derived path query
+DOM navigation control -> EnemyNavigationSystem -> canonical voxel-derived path query
                        -> selected collision-aware movement -> NavigationArrived
                        -> retained Three sentry visibly routes around the obstacle
 
@@ -681,10 +681,10 @@ be byte-for-byte equivalent JSON.
 
 ## Reproducible evidence
 
-From a checkout with the public Asha donor beside this repository:
+From a standalone Rusty Engine checkout:
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 pnpm run verify
 cargo run -q -p game-host --bin headless-door
 cargo run -q -p game-host --bin headless-encounter
@@ -697,8 +697,9 @@ The current verification gate proves:
 
 - Rust formatting, Clippy, and strict TypeScript compilation;
 - generated project content is byte-for-byte current with its TypeScript composition;
-- 13 TypeScript content-composition tests and ten browser input/projection/presentation tests;
-- 106 Rust tests across entity state, donor collision/navigation/mesh queries, security door,
+- the TypeScript content-composition, render-contract, renderer, and browser
+  input/projection/presentation test suites;
+- Rust tests across entity state, donor collision/navigation/mesh queries, security door,
   content admission, encounter routing, kinematic/navigation motion, atomic rejection, projection,
   player control, combat/health/weapon behavior, generated-environment admission, offline voxel
   conversion/import, live editing, and snapshot/authored save/reopen;

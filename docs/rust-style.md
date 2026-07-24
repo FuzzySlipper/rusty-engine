@@ -1,6 +1,6 @@
 # Rust source organization
 
-This is a lightweight house style for the successor experiment. Its purpose is to keep gameplay
+This is a lightweight house style for Rusty Engine. Its purpose is to keep gameplay
 code easy to locate, change, and explain. It is not a formatting standard, a framework, or a reason
 to reproduce Asha's architecture governance.
 
@@ -101,7 +101,7 @@ Gameplay feature code may depend on entity state, spatial capabilities, and othe
 layers. Runtime orchestration may depend on gameplay features. Avoid making a feature depend on a
 browser host, presentation shell, or content generator.
 
-Possible downstream reuse is a locality test, not a design target during this spike. Game-specific
+Possible downstream reuse is a locality test, not a design target for current work. Game-specific
 concepts should have an obvious module and limited dependencies so they can be evaluated or moved
 later. Do not add extraction traits, downstream facades, plugin APIs, registries, or compatibility
 layers before a real downstream use establishes their shape.

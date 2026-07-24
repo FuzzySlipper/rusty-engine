@@ -19,9 +19,9 @@ documentation commands, local scripts, and GitHub Actions. The machine-readable 
 [`scripts/standalone-dependency-baseline.json`](../scripts/standalone-dependency-baseline.json),
 checked by [`scripts/audit-standalone.mjs`](../scripts/audit-standalone.mjs).
 
-At the start of M9 the audit records 55 distinct operational references. Historical references in
-the explicit provenance files named by the baseline are reported separately from operational
-dependencies. The baseline must only shrink as M9 proceeds; the final M9D baseline is empty.
+At the start of M9 the audit records 55 distinct operational references. Historical references are
+permitted only as exact normalized file-and-line records in the baseline; no whole document is
+exempt. The baseline must only shrink as M9 proceeds; the final M9D operational baseline is empty.
 
 ```bash
 pnpm run audit:standalone
@@ -32,7 +32,7 @@ The first command fails when the tracked source scan, Cargo local-package graph,
 local-link graph differs from the reviewed baseline. The second prints the observed operational set
 for review; it does not rewrite the baseline.
 
-## Current operational inventory
+## Pre-extraction operational inventory
 
 | Surface | Current operational dependency | Why it is operational |
 |---|---|---|

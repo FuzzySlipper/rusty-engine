@@ -1,113 +1,120 @@
 # Rusty Engine
 
-Rusty Engine is the standalone, object-centric successor to Asha's gameplay runtime spine. The
-walking architecture experiment succeeded; this repository is now the canonical home for new work.
+Rusty Engine is a standalone, object-centric gameplay runtime. It is the canonical successor to
+Asha's gameplay/runtime spine, built around direct Rust services and systems instead of universal
+contracts, replay-driven execution, strict ECS indirection, or a second script authority.
 
-The active hypothesis is deliberately conventional:
+The repository installs, builds, tests, and runs without an Asha checkout.
 
-- Rust owns live entities, component state, gameplay services, scheduling, persistence, and typed
-  committed events.
-- TypeScript is code-as-content and tooling: it composes project definitions with normal language
-  features, then emits strict data admitted by Rust before a session begins.
-- Presentation returns to the existing TypeScript/Three/DOM shell through derived
-  projection; it does not own gameplay truth.
+## Architecture
 
-The architecture charter is [asha-object-centric-successor-spike.md](./asha-object-centric-successor-spike.md).
+Rust owns live entities, components, gameplay services, scheduling, spatial authority, persistence,
+and typed committed outcomes. Components remain mostly data, while named feature modules make the
+responsible behavior owner easy to locate.
 
-## Implemented walking spike
+TypeScript has two bounded roles:
 
-The runtime now proves twelve connected paths:
+- optional code-as-content composition that emits strict project data admitted by Rust; and
+- browser presentation over accepted readouts and facts through a small typed render-diff border.
 
-1. A switch-controlled security door with an optional configured close delay.
-2. An encounter-gated exit where committed enemy-defeat facts clear an authored encounter and open
-   its related door.
-3. A reusable `KinematicCapability` and centrally scheduled `KinematicMotionSystem` over the
-   internalized voxel authority and Parry collision projection.
-4. A retained browser/Three/DOM product shell where resolved actions enter Rust and typed facts plus
-   projection deltas return to the local retained Three renderer.
-5. Autonomous enemy navigation derived from the same canonical voxel authority as collision.
-6. Authored keyboard/pointer bindings, a Rust-owned collision-aware player controller, and a
-   presentation-only follow camera rebuilt from accepted pose.
-7. Seeded material-voxel generation whose canonical `VoxelWorld` feeds collision, navigation, and
-   an internalized Asha-derived visible-face mesher before retained Three upload.
-8. Authored primary-fire and weapon/health components resolved by a Rust `CombatService` against
-   live enemy transforms and canonical voxel occlusion, with typed damage/defeat consequences.
-9. Rebuildable animation posture and disposable animation/audio/particle/billboard feedback
-   projected from accepted movement, combat, defeat, and door outcomes without gameplay writes.
-10. One strict schema-v7 stored project admitted directly by Rust, plus canonical atomic project
-    persistence and one explicit schema-v6 migration kept distinct from runtime snapshots.
-11. Bounded expected-revision voxel edits that atomically rebuild collision, navigation, and mesh,
-    with both live snapshot and explicit authored-project save/reopen meanings.
-12. A real static GLB converted offline to a canonical voxel asset, admitted through the ordinary
-    project path, rendered and collided in Chromium, then edited through the same voxel service.
+```text
+TypeScript content -> stored project -> Rust admission -> GameRuntime / GameSession
+                                                        |
+resolved input -> named Service or System -> accepted state and typed facts
+                                                        |
+                                                        v
+                              browser adapters -> Three / DOM / Web Audio
+```
 
-Components remain data. Named services/systems own interaction, combat, encounters, doors, player
-control, navigation, and kinematic motion; `GameRuntime` contains the short explicit event route.
-Entity capability changes are applied atomically only where collision/render invariants require it.
-Snapshots preserve durable state and scheduled intents without replaying an event history.
+The implemented architecture, ownership rules, data lifecycles, and extension pattern are in
+[docs/design.md](docs/design.md).
 
-The project definitions under `content/generated/` are reproducibly composed by
-`ts/packages/project-content`. Changing the encounter from two enemies to one changes only authored
-content and expectations, not Rust gameplay code. The same code-as-content package builds a named
-256-body voxel-wall workload without adding a TypeScript runtime authority.
+## Implemented product surface
 
-The loading-bay browser resolves authored player controls, damages a sentry while it is moving,
-finishes its route, defeats both enemies through aimed attacks, uploads the generated room mesh, and
-runs a bounded spatial phase. Its Chromium smoke proves held player input and probe collision against
-generated voxels, navigation around the generated pillar, traversal through the canonical exit
-aperture after its entity door opens, typed attack/damage facts, the
-`EnemyDefeated -> EncounterCleared -> DoorOpened` chain, derived camera movement, and retained
-Three/WebGL mesh projection. The same product gate requires visible typed feedback and a real Web
-Audio schedule, deliberately drops one transient-cue response, then proves a fresh readout preserves
-gameplay while replaying no cue and rebuilding only current presentation posture.
+The current engine proves a connected gameplay and content path rather than isolated framework
+pieces:
 
-The same gate also loads `content/projects/converted-wall.project.json`. The external Kenney wall
-asset is converted by an offline Rust tool, embedded as strict data, and expanded by normal project
-admission. Chromium proves the converted wall is visible and blocks the player, clears it through a
-typed live edit, observes coherent navigation/mesh changes, and traverses the result. A separate
-save/reset/fresh-host path proves the accepted result becomes ordinary static authored voxels with
-no runtime edit history or converter in the product.
+- object-centric entities with transform, collision, rendering, kinematic, and game-specific
+  component families;
+- switches, doors, timed intents, encounters, health, weapons, and consequential defeat routing;
+- collision-aware player control, autonomous navigation, and centrally scheduled kinematic motion;
+- one canonical material-voxel authority feeding collision, navigation, visible-face meshing, live
+  expected-revision edits, snapshots, and authored saves;
+- strict versioned project admission, explicit migration, canonical atomic storage, and runtime
+  snapshots kept separate from authored content;
+- deterministic offline GLB-to-voxel conversion through the ordinary project asset path; and
+- a retained Three/WebGL browser product with derived camera, typed projection, rebuildable posture,
+  and disposable animation, audio, particle, and billboard feedback.
 
-## Repository independence and donor provenance
+The browser proof loads the authored loading bay, drives real player input and combat, routes
+enemies around generated obstacles, clears the encounter and exit, edits voxel geometry, and checks
+restart-safe presentation behavior. A second product path loads the converted Kenney wall, proves
+visible collision and navigation behavior, edits it through the same voxel service, and reopens the
+authored result without the converter.
 
-Rusty Engine installs, builds, tests, and runs without an Asha checkout. The accepted low-level Rust
-closure, narrow TypeScript render edge, real Kenney fixture, and its exact CC0 license live in this
-repository. Asha is historical implementation evidence and a source locator, not an operational
-dependency or planning authority.
+## Repository map
 
-The pinned donor snapshot, exact source paths, bounded adaptations, exclusions, and fixture hashes
-are recorded in
-[docs/donor-provenance.md](./docs/donor-provenance.md).
+| Path | Responsibility |
+|---|---|
+| `rust/crates/entity-state` | Reusable entity capabilities and atomic invariant changes |
+| `rust/crates/engine-spatial` | Canonical voxel scene and derived collision, navigation, mesh, motion, and edits |
+| `rust/crates/game-host` | Game components, services, systems, orchestration, admission, and persistence |
+| `rust/crates/voxel-asset` | Strict canonical voxel asset format |
+| `rust/crates/voxel-convert` | Offline bounded GLB conversion |
+| `rust/donors/asha` | Pinned low-level donor crates below successor-owned boundaries |
+| `ts/packages/project-content` | Optional TypeScript project composition |
+| `ts/packages/render-contracts` | Bounded typed render-diff vocabulary |
+| `ts/packages/renderer-three` | Retained Three/WebGL implementation |
+| `ts/packages/browser-shell` | Browser input and disposable presentation |
+| `content` | Checked projects, generated content, conversion requests, and voxel artifacts |
+| `fixtures` | Repository-local licensed product and test inputs |
 
-## Verification
+## Install and verify
+
+Install the pinned JavaScript dependencies and run the complete repository gate:
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 pnpm run verify
+```
+
+The verification script runs the standalone dependency audit, TypeScript checks and tests, content
+reproducibility, renderer and shell builds, the Rust workspace tests, clippy with warnings denied,
+and the real Chromium product smoke.
+
+Run the independence audit directly with:
+
+```bash
 pnpm run audit:standalone
 ```
 
-To update generated project content after changing its TypeScript composition:
+## Run the product
 
-```bash
-pnpm run generate:content
-```
-
-Run the two headless paths directly with:
-
-```bash
-cargo run -q -p game-host --bin headless-door
-cargo run -q -p game-host --bin headless-encounter
-```
-
-Run the product shell locally with:
+Build the browser shell and start the Rust host:
 
 ```bash
 pnpm run build:shell
 cargo run -q -p game-host --bin browser-host
 ```
 
-Then open `http://127.0.0.1:37881`. Run the measured real-time matrix with:
+Then open `http://127.0.0.1:37881`.
+
+The focused headless examples are:
+
+```bash
+cargo run -q -p game-host --bin headless-door
+cargo run -q -p game-host --bin headless-encounter
+```
+
+## Authoring and workloads
+
+Regenerate checked project content after changing its TypeScript composition:
+
+```bash
+pnpm run generate:content
+```
+
+Run the bounded release workload matrix and voxel measurements with:
 
 ```bash
 cargo run --release -q -p game-host --bin motion-workload -- --matrix
@@ -115,15 +122,32 @@ cargo run --release -q -p game-host --bin voxel-edit-workload -- 256
 cargo run --release -q -p voxel-convert --bin voxel-conversion-workload -- 256
 ```
 
-The offline asset format, direct conversion command, provenance, and product boundary are in
-[docs/voxel-asset-format.md](./docs/voxel-asset-format.md).
+The direct static-asset conversion command and format contract are in
+[docs/voxel-asset-format.md](docs/voxel-asset-format.md).
 
-The measured evidence and current limitations are in
-[docs/experiment-results.md](./docs/experiment-results.md).
+## Documentation
 
-## Archived language-host comparison
+- [Current design](docs/design.md) — authority, execution, persistence, presentation, and extension
+  rules.
+- [Experiment results](docs/experiment-results.md) — implementation evidence, measurements,
+  rejected alternatives, and remaining limits.
+- [Migration cluster ledger](docs/migration-cluster-ledger.md) — completed capability sequence,
+  inheritance policy, and deliberately deferred work.
+- [Donor provenance](docs/donor-provenance.md) — exact source revisions, paths, adaptations,
+  exclusions, and licenses.
+- [M9 extraction contract](docs/m9-extraction-contract.md) — the audited standalone-repository
+  closure.
+- [Rust source organization](docs/rust-style.md) — lightweight feature ownership and module style.
+- [Voxel asset format](docs/voxel-asset-format.md) — durable format and offline conversion boundary.
 
-The initial experiment also implemented equivalent trusted TypeScript runtime behavior through a
-batched N-API host. It usefully demonstrated that changing language did not remove the structural
-costs of a second authority lifecycle. That implementation is preserved at the Git tag
-`external-ts-runtime-spike`; it is intentionally absent from active `main`.
+## Provenance and history
+
+The accepted low-level Rust closure, narrow TypeScript render edge, Kenney fixture, and exact CC0
+license are local to this repository. Asha is historical implementation evidence and a source
+locator, not build, runtime, package, or planning authority.
+
+Rusty Engine began as an architecture falsification spike. An early comparison also implemented
+trusted executable TypeScript gameplay through a batched native host. It demonstrated that changing
+languages did not remove the lifecycle and state-ownership cost of a second runtime authority. That
+implementation is preserved at Git tag `external-ts-runtime-spike`; it is intentionally absent from
+active `main`.

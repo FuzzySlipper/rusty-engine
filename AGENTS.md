@@ -1,6 +1,8 @@
 # Rusty Engine agent guidance
 
-This repository is an external architecture experiment. Current Asha architecture is evidence and a donor source, not a compatibility constraint.
+This repository is the standalone canonical Rusty Engine project. Asha architecture is historical evidence and a donor source, not a compatibility constraint or operational dependency.
+
+The implemented architecture is documented in [docs/design.md](docs/design.md). Keep that document current when changing authority, execution order, persistence, or presentation boundaries.
 
 Rust source organization follows the lightweight house rules in [docs/rust-style.md](docs/rust-style.md). They are navigation and ownership guidance, not a new governance layer.
 
@@ -9,9 +11,9 @@ Rust source organization follows the lightweight house rules in [docs/rust-style
 - Rust owns live authoritative gameplay state and substantial game logic through direct named services.
 - TypeScript is an authoring/tooling language for composing strict project content before session admission, plus the eventual presentation shell. Do not add a second runtime authority or per-gameplay bridge without explicitly reopening the archived experiment.
 - Rust `entity-state` owns reusable entity invariants and atomic capability mutation. Do not turn its command batch into a universal route for ordinary service-owned state.
-- Do not add a universal gameplay AST, behavior graph, Gameplay Fabric compatibility, Studio layer, replay certification, or broad governance framework during the spike.
+- Do not add a universal gameplay AST, behavior graph, Gameplay Fabric compatibility, Studio layer, replay certification, or broad governance framework without a concrete consumer and explicit architecture decision.
 - Keep scheduling explicit and durable. Never persist callbacks or JavaScript closures.
 - Before defining a migration milestone or selecting an Asha crate, consult the portability report linked from `docs/donor-provenance.md`; treat it as donor-triage evidence, then re-audit the concrete dependency closure and consumer.
-- Prefer sibling references to stable Asha donor crates during the experiment. Record every donor in `docs/donor-provenance.md`.
+- Do not add operational sibling-checkout dependencies. Internalize only a bounded, audited donor closure and record every transfer or adaptation in `docs/donor-provenance.md`.
 - Keep crates/packages coarse and independently meaningful.
-- Success is measured by behavior locality, explainability, atomicity, persistence, edit-to-run time, change amplification, and real product behavior.
+- Success is measured by behavior locality, explainability, atomicity, persistence, edit-to-run time, change amplification, standalone operation, and real product behavior.
