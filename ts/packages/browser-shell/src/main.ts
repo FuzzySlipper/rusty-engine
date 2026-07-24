@@ -53,6 +53,7 @@ const presentationFeedback = new PresentationFeedbackAdapter(presentationFeedbac
 const eventHistory: string[] = [];
 const query = new URLSearchParams(location.search);
 const smokeMode = query.has("smoke");
+const reloadSmokeMode = query.has("reload-smoke");
 const convertedSmokeMode = query.has("converted-smoke");
 let actionRejectionCount = 0;
 let lastActionRejection: string | null = null;
@@ -164,7 +165,44 @@ window.addEventListener("mousemove", (event) => {
   }
 });
 
-if (convertedSmokeMode) {
+if (reloadSmokeMode) {
+  surface.renderOnce();
+  const door = current.projection.find((node) => node.id === 3);
+  const reloadPostureRebuilt =
+    current.encounterState === "cleared" &&
+    current.doorState === "open" &&
+    door?.translation?.[1] === 4 &&
+    current.enemies.every((enemy) => enemy.state === "defeated") &&
+    doorCaption.dataset.posture === "open" &&
+    document.querySelector<HTMLElement>('[data-entity-id="4"]')?.dataset.posture === "defeated" &&
+    document.querySelector<HTMLElement>('[data-entity-id="5"]')?.dataset.posture === "defeated" &&
+    includesEvery(feedbackLayer.dataset.animationStates, ["3:open", "4:defeated", "5:defeated"]);
+  const reloadCuesCleared = current.presentation.cues.length === 0 &&
+    feedbackLayer.dataset.lastCueCount === "0";
+  const reloadPulsesCleared = document.querySelector("[data-animation-pulse]") === null;
+  const reloadDomTargets = document.querySelectorAll(
+    ".feedback-particle, .feedback-billboard",
+  ).length;
+  const reloadAudioTargets = Number(feedbackAudioStatus.dataset.activeSounds ?? "-1");
+  const reloadPassed =
+    reloadPostureRebuilt &&
+    reloadCuesCleared &&
+    reloadPulsesCleared &&
+    reloadDomTargets === 0 &&
+    reloadAudioTargets === 0 &&
+    feedbackLayer.dataset.activeEffects === "0";
+  document.body.dataset.reloadPosture = reloadPostureRebuilt ? "pass" : "fail";
+  document.body.dataset.reloadCues = reloadCuesCleared ? "pass" : "fail";
+  document.body.dataset.reloadPulses = reloadPulsesCleared ? "pass" : "fail";
+  document.body.dataset.reloadDomTargets = String(reloadDomTargets);
+  document.body.dataset.reloadAudioTargets = String(reloadAudioTargets);
+  document.body.dataset.feedbackPageReload = reloadPassed ? "pass" : "fail";
+  document.body.dataset.smokeStatus = reloadPassed ? "pass" : "fail";
+  smokeResult.dataset.status = reloadPassed ? "pass" : "fail";
+  smokeResult.textContent = reloadPassed
+    ? "PASS · Page reload rebuilt posture without transient feedback"
+    : "FAIL · Page reload retained or rebuilt transient feedback";
+} else if (convertedSmokeMode) {
   const before = voxelFingerprint(current);
   const convertedAssetLoaded =
     before.revision === 0 &&

@@ -93,6 +93,9 @@ The successor implementation is pinned by
 all four feedback families, schedules an oscillator/gain envelope, discards one cue-bearing response,
 and proves a fresh readout has identical gameplay with no replayed cue. Both reset checks begin with
 active concrete pulse, DOM, and audio targets, clear them, and then rebuild current posture.
+The gate then opens a fresh Chromium page against the same mutated Rust host and proves defeated/open
+posture is rebuilt with no cues, pulse attributes, transient DOM nodes, or active audio targets while
+the complete state response remains unchanged.
 Existing fact payload changes flow through without changing the presentation border; changing an
 existing effect stays in the TypeScript adapter/CSS/tests. A genuinely new outcome changes its typed
 producer plus the small closed mapping, not a donor protocol or generic signal route.

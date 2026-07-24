@@ -75,7 +75,7 @@ try {
   await runMigratedBrowserProduct(migratedProject);
 
   console.log(
-    "browser smoke passed: persisted projects + converted asset + v6 migration -> accepted gameplay -> retained Three/WebGL + disposable feedback shell",
+    "browser smoke passed: persisted projects + converted asset + v6 migration -> accepted gameplay -> retained Three/WebGL + disposable feedback -> fresh-page posture rebuild",
   );
 } finally {
   rmSync(proofDirectory, { recursive: true, force: true });
@@ -155,6 +155,66 @@ async function runFullBrowserProduct(project) {
     if (missing.length > 0) {
       throw new Error(
         `browser smoke missing ${missing.join(", ")}\n${result.stdout.slice(-6_000)}`,
+      );
+    }
+    const beforeReloadResponse = await fetch(`http://${running.address}/api/state`);
+    const beforeReload = await beforeReloadResponse.json();
+    if (
+      !beforeReloadResponse.ok ||
+      beforeReload.encounterState !== "cleared" ||
+      beforeReload.doorState !== "open" ||
+      !beforeReload.enemies?.every((enemy) => enemy.state === "defeated") ||
+      beforeReload.presentation?.cues?.length !== 0
+    ) {
+      throw new Error(
+        `browser reload baseline was not retained defeated/open authority\n${JSON.stringify(beforeReload)}`,
+      );
+    }
+    const reloadResult = await run(chromium, [
+      "--headless=new",
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+      "--enable-unsafe-swiftshader",
+      "--virtual-time-budget=10000",
+      "--dump-dom",
+      `http://${running.address}/?reload-smoke=1`,
+    ]);
+    if (reloadResult.code !== 0) {
+      throw new Error(
+        `Reload Chromium exited ${String(reloadResult.code)}\n${reloadResult.stderr.slice(-4_000)}`,
+      );
+    }
+    const reloadRequired = [
+      'data-smoke-status="pass"',
+      'data-status="pass"',
+      'data-feedback-page-reload="pass"',
+      'data-reload-posture="pass"',
+      'data-reload-cues="pass"',
+      'data-reload-pulses="pass"',
+      'data-reload-dom-targets="0"',
+      'data-reload-audio-targets="0"',
+      'data-posture="open"',
+      'data-posture="defeated"',
+      "PASS · Page reload rebuilt posture without transient feedback",
+    ];
+    const missingReload = reloadRequired.filter(
+      (marker) => !reloadResult.stdout.includes(marker),
+    );
+    if (missingReload.length > 0) {
+      throw new Error(
+        `browser reload smoke missing ${missingReload.join(", ")}\n${reloadResult.stdout.slice(-6_000)}`,
+      );
+    }
+    const afterReloadResponse = await fetch(`http://${running.address}/api/state`);
+    const afterReload = await afterReloadResponse.json();
+    if (
+      !afterReloadResponse.ok ||
+      JSON.stringify(afterReload) !== JSON.stringify(beforeReload)
+    ) {
+      throw new Error(
+        `browser reload changed authoritative state\nbefore=${JSON.stringify(beforeReload)}\nafter=${JSON.stringify(afterReload)}`,
       );
     }
     const startup = running.output();

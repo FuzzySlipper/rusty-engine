@@ -370,9 +370,13 @@ pulse, DOM effect, and audio source are active; it removes those concrete target
 current posture. The proof then intentionally discards a response containing a movement cue. A
 fresh GET has the same accepted tick/revision/entity state but no cue. An in-page sink reset (not a
 page reload) is again invoked while concrete pulse/DOM/audio targets are active; it removes them and
-rebuilds only current defeated/open posture. Rust tests independently compare snapshots across
-delivered and discarded response paths, while focused TypeScript tests cover forced audio failure
-and concrete reset cleanup.
+rebuilds only current defeated/open posture. The same live Rust host is then visited by a second,
+fresh Chromium page. That page performs an ordinary GET, rebuilds the defeated enemies and open door,
+and proves the response has no cues, the DOM has no animation-pulse attributes or transient effect
+nodes, and the audio sink has zero active targets. The outer smoke compares the complete state
+response immediately before and after that page load, proving the browser restart made no
+authoritative change. Rust tests independently compare snapshots across delivered and discarded
+response paths, while focused TypeScript tests cover forced audio failure and concrete reset cleanup.
 
 The concrete reset ownership and strengthened proof landed in review correction
 `59b4f4039fde0b63444d97fec2879b78195af5f1`.
@@ -669,8 +673,11 @@ transform, controller traversal through that exit, defeated entities, blocked pr
 seed/mesh readout, and retained-renderer evidence in the final DOM.
 The same gate now requires all four presentation families, a real Web Audio schedule, reset of
 active concrete pulse/DOM/audio targets, a deliberately dropped response followed by an identical
-gameplay readout, and posture-only rebuild after a second in-page sink reset. This is deliberately
-not described as proof of a full browser page reload.
+gameplay readout, and posture-only rebuild after a second in-page sink reset. It then launches a
+fresh Chromium page against that same, still-running and already-mutated Rust host. The new page must
+rebuild the defeated/open posture from an empty-cue GET with no pulse attributes, no transient DOM
+nodes, and no active audio targets; state responses immediately before and after the page load must
+be byte-for-byte equivalent JSON.
 
 ## Reproducible evidence
 
