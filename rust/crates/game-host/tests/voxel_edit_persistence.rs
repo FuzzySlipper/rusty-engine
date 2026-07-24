@@ -10,7 +10,10 @@ use game_host::{
 };
 
 const PROJECT: &str = include_str!("../../../../content/projects/loading-bay.project.json");
+const CONVERTED_PROJECT: &str =
+    include_str!("../../../../content/projects/converted-wall.project.json");
 const PILLAR: [i64; 3] = [4, 1, 6];
+const CONVERTED_WALL: [[i64; 3]; 4] = [[4, 1, 6], [5, 1, 6], [4, 1, 7], [5, 1, 7]];
 
 #[test]
 fn edited_authority_reopens_from_snapshot_and_explicit_static_project_save() {
@@ -103,6 +106,105 @@ fn edited_authority_reopens_from_snapshot_and_explicit_static_project_save() {
     assert_eq!(project_scene.navigation_hash(), edited_navigation);
     assert_eq!(project_scene.mesh_chunks(), edited_mesh);
     assert!(!project_scene.contains_point([4.5, 1.5, 6.5]));
+}
+
+#[test]
+fn converted_asset_edit_reopens_as_runtime_snapshot_and_static_authored_project() {
+    let decoded = decode_project_document(CONVERTED_PROJECT).unwrap();
+    let (authored, admitted) =
+        admit_stored_project_with_document(decoded.project).expect("admit converted project");
+    let mut runtime = GameRuntime::from_admitted_project(admitted);
+    let before = runtime.collision_scene().unwrap();
+    assert_eq!(before.source_revision(), VoxelSourceRevision::INITIAL);
+    assert_eq!(before.solid_voxel_count(), 94);
+    assert!(CONVERTED_WALL
+        .iter()
+        .all(|address| before.contains_point(address.map(|axis| axis as f64 + 0.5))));
+
+    let edits = CONVERTED_WALL.map(|address| VoxelEdit::Clear { address });
+    let receipt = runtime
+        .apply_voxel_edits(VoxelEditTransaction {
+            expected_revision: VoxelSourceRevision::INITIAL,
+            edits: &edits,
+        })
+        .expect("clear converted wall");
+    assert_eq!(receipt.fact.changed_voxels, 4);
+
+    let edited = runtime.collision_scene().unwrap();
+    assert_eq!(edited.source_revision().raw(), 1);
+    assert_eq!(edited.solid_voxel_count(), 90);
+    assert!(CONVERTED_WALL
+        .iter()
+        .all(|address| !edited.contains_point(address.map(|axis| axis as f64 + 0.5))));
+    let edited_hash = edited.authority_hash();
+    let edited_navigation = edited.navigation_hash();
+    let edited_mesh = edited.mesh_chunks().to_vec();
+    let edited_voxels = edited.material_voxels().to_vec();
+
+    let snapshot = encode_game_snapshot(&runtime).expect("encode converted edit snapshot");
+    let reopened = decode_game_snapshot(&snapshot).expect("reopen converted edit snapshot");
+    let reopened_scene = reopened.collision_scene().unwrap();
+    assert_eq!(reopened_scene.source_revision().raw(), 1);
+    assert_eq!(reopened_scene.authority_hash(), edited_hash);
+    assert_eq!(reopened_scene.material_voxels(), edited_voxels);
+    assert_eq!(reopened_scene.navigation_hash(), edited_navigation);
+    assert_eq!(reopened_scene.mesh_chunks(), edited_mesh);
+    for forbidden in [
+        "voxelEdit",
+        "changedVoxels",
+        "editHistory",
+        "events",
+        "replay",
+    ] {
+        assert!(!snapshot.contains(forbidden), "snapshot leaked {forbidden}");
+    }
+
+    let saved = materialize_stored_project_voxels(&authored, edited)
+        .expect("materialize converted edited authority");
+    let environment = saved.document().scenes[0]
+        .voxel_environment
+        .as_ref()
+        .expect("materialized environment");
+    let StoredVoxelEnvironment::Material(environment) = environment else {
+        panic!("converted edit did not become static material voxels");
+    };
+    assert!(environment.voxel_assets.is_empty());
+    assert_eq!(environment.material_voxels.len(), 90);
+
+    let directory = TestDirectory::new();
+    let project_path = directory.path().join("converted-edited.project.json");
+    let store = ProjectStore::default();
+    store
+        .save(&project_path, &saved, ProjectSaveMode::CreateNew)
+        .expect("save converted edited authored project");
+    let bytes = fs::read_to_string(&project_path).unwrap();
+    for forbidden in [
+        "voxelAssets",
+        "sourceRevision",
+        "authorityHash",
+        "voxelEdit",
+        "changedVoxels",
+        "editHistory",
+        "events",
+        "replay",
+    ] {
+        assert!(!bytes.contains(forbidden), "project leaked {forbidden}");
+    }
+
+    let loaded = store
+        .load(&project_path)
+        .expect("load converted edited project");
+    let (_, admitted) = admit_stored_project_with_document(loaded.project).unwrap();
+    let project_runtime = GameRuntime::from_admitted_project(admitted);
+    let project_scene = project_runtime.collision_scene().unwrap();
+    assert_eq!(
+        project_scene.source_revision(),
+        VoxelSourceRevision::INITIAL
+    );
+    assert_eq!(project_scene.authority_hash(), edited_hash);
+    assert_eq!(project_scene.material_voxels(), edited_voxels);
+    assert_eq!(project_scene.navigation_hash(), edited_navigation);
+    assert_eq!(project_scene.mesh_chunks(), edited_mesh);
 }
 
 struct TestDirectory {

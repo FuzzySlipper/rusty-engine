@@ -51,7 +51,9 @@ const presentationFeedbackSink = new BrowserPresentationFeedbackSink(
 );
 const presentationFeedback = new PresentationFeedbackAdapter(presentationFeedbackSink);
 const eventHistory: string[] = [];
-const smokeMode = new URLSearchParams(location.search).has("smoke");
+const query = new URLSearchParams(location.search);
+const smokeMode = query.has("smoke");
+const convertedSmokeMode = query.has("converted-smoke");
 let actionRejectionCount = 0;
 let lastActionRejection: string | null = null;
 const actionQueue = new SerializedActionQueue(recordActionRejection);
@@ -149,7 +151,7 @@ canvas.addEventListener("mousedown", (event) => {
   }
 });
 window.addEventListener("mousemove", (event) => {
-  if (!smokeMode && document.pointerLockElement !== canvas) {
+  if (!smokeMode && !convertedSmokeMode && document.pointerLockElement !== canvas) {
     return;
   }
   const action = resolvePointerAction(
@@ -162,7 +164,67 @@ window.addEventListener("mousemove", (event) => {
   }
 });
 
-if (smokeMode) {
+if (convertedSmokeMode) {
+  const before = voxelFingerprint(current);
+  const convertedAssetLoaded =
+    before.revision === 0 &&
+    before.solidCount === 94 &&
+    before.probePathLength === 9 &&
+    current.generatedEnvironment === null &&
+    current.voxelMeshes.length === 1;
+  surface.renderOnce();
+  const convertedAssetVisible =
+    convertedAssetLoaded && surface.snapshot().includes("generated-room-chunk");
+  const blockedByConvertedWall = !await walkPlayerPath([
+    [1.5, 5.5],
+    [4.5, 5.5],
+    [4.5, 8.5],
+  ]);
+  await perform("/api/reset");
+
+  await performVoxelEdits([
+    { kind: "clear", address: [4, 1, 6] },
+    { kind: "clear", address: [5, 1, 6] },
+    { kind: "clear", address: [4, 1, 7] },
+    { kind: "clear", address: [5, 1, 7] },
+  ]);
+  const receipt = current.voxelEditReceipt;
+  const convertedEditApplied =
+    receipt?.acceptedRevision === 1 &&
+    receipt.changedVoxels === 4 &&
+    receipt.persistedToProject === false &&
+    current.voxelRevision === 1 &&
+    current.voxelSolidCount === before.solidCount - 4 &&
+    current.voxelAuthorityHash !== before.authorityHash &&
+    meshFingerprint(current) !== before.meshHash &&
+    current.generatedEnvironment === null &&
+    surface.snapshot().includes("generated-room-chunk");
+  const convertedNavigationUpdated =
+    current.voxelNavigationHash !== before.navigationHash &&
+    current.voxelProbePathLength < before.probePathLength;
+  const clearedWallTraversed = await walkPlayerPath([
+    [1.5, 5.5],
+    [4.5, 5.5],
+    [4.5, 8.5],
+  ]);
+  const convertedCollisionPassed = blockedByConvertedWall && clearedWallTraversed;
+  const passed =
+    convertedAssetLoaded &&
+    convertedAssetVisible &&
+    convertedCollisionPassed &&
+    convertedNavigationUpdated &&
+    convertedEditApplied;
+  document.body.dataset.convertedAsset = convertedAssetLoaded ? "pass" : "fail";
+  document.body.dataset.convertedVisible = convertedAssetVisible ? "pass" : "fail";
+  document.body.dataset.convertedCollision = convertedCollisionPassed ? "pass" : "fail";
+  document.body.dataset.convertedNavigation = convertedNavigationUpdated ? "pass" : "fail";
+  document.body.dataset.convertedEdit = convertedEditApplied ? "pass" : "fail";
+  document.body.dataset.smokeStatus = passed ? "pass" : "fail";
+  smokeResult.dataset.status = passed ? "pass" : "fail";
+  smokeResult.textContent = passed
+    ? "PASS · Converted voxel asset reached retained WebGL, collision, navigation, and live edits"
+    : "FAIL · Converted voxel product proof did not converge";
+} else if (smokeMode) {
   const voxelBefore = voxelFingerprint(current);
   let staleRejected = false;
   try {
@@ -431,10 +493,17 @@ async function perform(path: string): Promise<void> {
 }
 
 async function performVoxelEdit(edit: VoxelEditOperation): Promise<void> {
+  await performVoxelEdits([edit], persistVoxelEdit.checked);
+}
+
+async function performVoxelEdits(
+  edits: readonly VoxelEditOperation[],
+  persistToProject = false,
+): Promise<void> {
   current = await requestState("/api/voxel-edit", "POST", {
     expectedRevision: current.voxelRevision,
-    persistToProject: persistVoxelEdit.checked,
-    edits: [edit],
+    persistToProject,
+    edits,
   });
   lastActionRejection = null;
   eventHistory.push(...current.lastEvents);

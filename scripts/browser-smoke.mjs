@@ -25,6 +25,15 @@ const forbiddenRuntimeSurface = [
   "AudioProjectionOp",
   "BillboardProjectionOp",
   "ParticleProjectionOp",
+  "VoxelConversionRequest",
+  "rusty-engine.mesh-to-voxel",
+  "voxel-convert",
+  "planVoxelConversion",
+  "previewVoxelConversion",
+  "applyVoxelConversion",
+  "VoxelReplayRecord",
+  "GenericAssetProvider",
+  "ProjectBundleFacade",
 ];
 const bundledRuntimeSurface = forbiddenRuntimeSurface.filter((name) => browserBundle.includes(name));
 if (bundledRuntimeSurface.length > 0) {
@@ -34,6 +43,7 @@ if (bundledRuntimeSurface.length > 0) {
 const proofDirectory = mkdtempSync(join(tmpdir(), "rusty-engine-browser-smoke-"));
 try {
   const persistedProject = resolve(proofDirectory, "loading-bay.project.json");
+  const convertedProject = resolve(proofDirectory, "converted-wall.project.json");
   const migratedProject = resolve(proofDirectory, "migrated-v6.project.json");
   const currentReceipt = await persistProject(
     resolve(repoRoot, "content/projects/loading-bay.project.json"),
@@ -45,6 +55,16 @@ try {
   await runFullBrowserProduct(persistedProject);
   await runPersistedVoxelEditProduct(persistedProject);
 
+  const convertedReceipt = await persistProject(
+    resolve(repoRoot, "content/projects/converted-wall.project.json"),
+    convertedProject,
+  );
+  if (!convertedReceipt.includes("sourceSchema=7") || !convertedReceipt.includes("currentSchema=7")) {
+    throw new Error(`converted project persistence receipt was incomplete\n${convertedReceipt}`);
+  }
+  await runConvertedBrowserProduct(convertedProject);
+  await runPersistedConvertedVoxelEditProduct(convertedProject);
+
   const migrationReceipt = await persistProject(
     resolve(repoRoot, "content/generated/encounter-gate.project.json"),
     migratedProject,
@@ -55,7 +75,7 @@ try {
   await runMigratedBrowserProduct(migratedProject);
 
   console.log(
-    "browser smoke passed: persisted project + v6 migration -> accepted gameplay -> retained Three/WebGL + disposable feedback shell",
+    "browser smoke passed: persisted projects + converted asset + v6 migration -> accepted gameplay -> retained Three/WebGL + disposable feedback shell",
   );
 } finally {
   rmSync(proofDirectory, { recursive: true, force: true });
@@ -195,6 +215,179 @@ async function runMigratedBrowserProduct(project) {
   } finally {
     await stopHost(running.host);
   }
+}
+
+async function runConvertedBrowserProduct(project) {
+  const running = await launchHost(project);
+  try {
+    await waitForHealth(`http://${running.address}/health`, running.host, running.output);
+    const result = await run(chromium, [
+      "--headless=new",
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+      "--enable-unsafe-swiftshader",
+      "--virtual-time-budget=10000",
+      "--dump-dom",
+      `http://${running.address}/?converted-smoke=1`,
+    ]);
+    if (result.code !== 0) {
+      throw new Error(`converted Chromium exited ${String(result.code)}\n${result.stderr.slice(-4_000)}`);
+    }
+    const required = [
+      'data-smoke-status="pass"',
+      'data-status="pass"',
+      'data-converted-asset="pass"',
+      'data-converted-visible="pass"',
+      'data-converted-collision="pass"',
+      'data-converted-navigation="pass"',
+      'data-converted-edit="pass"',
+      "PASS · Converted voxel asset reached retained WebGL, collision, navigation, and live edits",
+      "MATERIALIZED · 90 VOXELS",
+      'data-engine="three.js',
+    ];
+    const missing = required.filter((marker) => !result.stdout.includes(marker));
+    if (missing.length > 0) {
+      throw new Error(
+        `converted browser smoke missing ${missing.join(", ")}\n${result.stdout.slice(-8_000)}`,
+      );
+    }
+    const startup = running.output();
+    for (const marker of [
+      "project id=converted-wall",
+      "sourceSchema=7",
+      "currentSchema=7",
+      "entryScene=scene/converted-wall",
+      "assets=6",
+      "scenes=1",
+      "entities=7",
+    ]) {
+      if (!startup.includes(marker)) {
+        throw new Error(`converted browser startup missing ${marker}\n${startup}`);
+      }
+    }
+  } finally {
+    await stopHost(running.host);
+  }
+}
+
+async function runPersistedConvertedVoxelEditProduct(project) {
+  const edits = [
+    { kind: "clear", address: [4, 1, 6] },
+    { kind: "clear", address: [5, 1, 6] },
+    { kind: "clear", address: [4, 1, 7] },
+    { kind: "clear", address: [5, 1, 7] },
+  ];
+  const running = await launchHost(project);
+  let persisted;
+  try {
+    await waitForHealth(`http://${running.address}/health`, running.host, running.output);
+    const beforeResponse = await fetch(`http://${running.address}/api/state`);
+    const before = await beforeResponse.json();
+    if (
+      !beforeResponse.ok ||
+      before.voxelRevision !== 0 ||
+      before.voxelSolidCount !== 94 ||
+      before.voxelProbePathLength !== 9 ||
+      before.generatedEnvironment !== null
+    ) {
+      throw new Error(`converted persisted-edit baseline was incomplete\n${JSON.stringify(before)}`);
+    }
+    const editResponse = await fetch(`http://${running.address}/api/voxel-edit`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expectedRevision: before.voxelRevision,
+        persistToProject: true,
+        edits,
+      }),
+    });
+    const edited = await editResponse.json();
+    if (
+      !editResponse.ok ||
+      edited.voxelEditReceipt?.persistedToProject !== true ||
+      edited.voxelEditReceipt?.changedVoxels !== 4 ||
+      edited.voxelRevision !== 1 ||
+      edited.voxelSolidCount !== 90 ||
+      edited.voxelAuthorityHash === before.voxelAuthorityHash ||
+      edited.voxelNavigationHash === before.voxelNavigationHash ||
+      edited.voxelProbePathLength >= before.voxelProbePathLength ||
+      JSON.stringify(edited.voxelMeshes) === JSON.stringify(before.voxelMeshes) ||
+      edited.generatedEnvironment !== null
+    ) {
+      throw new Error(`converted persisted voxel edit was incomplete\n${JSON.stringify(edited)}`);
+    }
+    persisted = voxelStateFingerprint(edited);
+
+    const resetResponse = await fetch(`http://${running.address}/api/reset`, { method: "POST" });
+    const reset = await resetResponse.json();
+    if (
+      !resetResponse.ok ||
+      reset.voxelRevision !== 0 ||
+      reset.voxelEditReceipt !== undefined ||
+      reset.lastEvents?.length !== 0 ||
+      JSON.stringify(voxelStateFingerprint(reset)) !== JSON.stringify(persisted)
+    ) {
+      throw new Error(`converted reset did not reopen static edited authority\n${JSON.stringify(reset)}`);
+    }
+  } finally {
+    await stopHost(running.host);
+  }
+
+  const bytes = readFileSync(project, "utf8");
+  const document = JSON.parse(bytes);
+  const environment = document.scenes?.[0]?.voxelEnvironment;
+  const removed = new Set(edits.map((edit) => JSON.stringify(edit.address)));
+  if (
+    environment?.kind !== "material" ||
+    !Array.isArray(environment.materialVoxels) ||
+    environment.materialVoxels.length !== 90 ||
+    environment.materialVoxels.some((voxel) => removed.has(JSON.stringify(voxel.address))) ||
+    (Array.isArray(environment.voxelAssets) && environment.voxelAssets.length !== 0)
+  ) {
+    throw new Error(`converted saved project did not materialize edited authority\n${bytes}`);
+  }
+  for (const forbidden of [
+    "sourceRevision",
+    "authorityHash",
+    "voxelEdit",
+    "changedVoxels",
+    "editHistory",
+    "events",
+    "replay",
+  ]) {
+    if (bytes.includes(forbidden)) {
+      throw new Error(`converted saved project leaked transient field ${forbidden}`);
+    }
+  }
+
+  const reopened = await launchHost(project);
+  try {
+    await waitForHealth(`http://${reopened.address}/health`, reopened.host, reopened.output);
+    const response = await fetch(`http://${reopened.address}/api/state`);
+    const state = await response.json();
+    if (
+      !response.ok ||
+      state.voxelRevision !== 0 ||
+      JSON.stringify(voxelStateFingerprint(state)) !== JSON.stringify(persisted)
+    ) {
+      throw new Error(`fresh host did not reopen converted edited authority\n${JSON.stringify(state)}`);
+    }
+  } finally {
+    await stopHost(reopened.host);
+  }
+}
+
+function voxelStateFingerprint(state) {
+  return {
+    solidCount: state.voxelSolidCount,
+    authorityHash: state.voxelAuthorityHash,
+    navigationHash: state.voxelNavigationHash,
+    probePathLength: state.voxelProbePathLength,
+    meshes: state.voxelMeshes,
+    generatedEnvironment: state.generatedEnvironment,
+  };
 }
 
 async function runPersistedVoxelEditProduct(project) {
