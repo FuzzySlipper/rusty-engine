@@ -42,6 +42,7 @@ the old classification still holds.
 | `core-assets` | `engine-rs/crates/foundation/core-assets` | Sibling path dependency, unchanged | Its zero-dependency `AssetId`/`AssetKind` vocabulary gives stored projects strict kind-prefixed identity without importing catalog resolution or lifecycle. |
 | Stored project and scene evidence | `engine-rs/crates/state/core-catalog`, `state/core-scene`, `protocol/protocol-assets`, `protocol-diagnostics`, `protocol-entity-authoring`, and `protocol-scene` | Inspected only; successor-owned document and diagnostics | Typed identities, flat authored documents, reference validation, and path-bearing diagnostics informed M5. Catalog DAG/locks/material authority, scene bootstrap/spatial session, proposal commands, protocol codegen, and Asha diagnostic scopes were rejected. |
 | Project content/bundle evidence | `engine-rs/crates/services/svc-project-content`, `svc-serialization`, `protocol/protocol-project-content`, `protocol-project-bundle`, and `rules/rule-project-bundle` | Structural evidence and exclusion | These closures combine provider manifests, extension/input protocols, load/save plans, prefabs, gameplay fabric, lifecycle, annotations, and session bootstrap. M5 instead decodes one static successor document and defers narrow serialization ideas to M6. |
+| Canonical project codec and migration evidence | `engine-rs/crates/services/svc-serialization/src/json.rs`, `state/core-scene/src/{document,json,validate}.rs`, `state/core-snapshot/src/lib.rs`, the canonical-dump examples, and `tools/scene-diagnostics/src/roundtrip.rs` | Encoding/test lessons adapted; crates and tools not referenced | M6 retains fixed object-field order, canonical collection ordering, finite deterministic numbers, trailing-LF output, fixed-point/golden-style tests, and fail-closed schema selection. It does not import manifest/artifact hashes, `StateStore`, replay fingerprints, diagnostic protocols, voxel compaction, or scene bootstrap/session state. |
 | `@asha/contracts` | `ts/packages/contracts` | Sibling `link:` dependency, unchanged | Existing typed render-diff vocabulary and branded render/entity identities at the real presentation border. |
 | `@asha/renderer-three` | `ts/packages/renderer-three` | Sibling `link:` dependency, unchanged | Existing retained Three/WebGL browser surface, resource lifecycle, projection metadata, and render-diff application. |
 | `@asha/render-projection` | `ts/packages/render-projection` | Renderer transitive sibling dependency, unchanged | Renderer-neutral retained projection helpers used by the donor browser surface. |
@@ -113,6 +114,16 @@ The M5 implementation is pinned by
 `6fedb77302628cc00bfbee4576a4bf3029ea2554` (static product host, optional equivalent TypeScript
 candidate, content variation, and project/session persistence proof). No Asha catalog, scene,
 diagnostics, serialization, project-content, or bundle crate entered in those changes.
+
+M6A re-audited `svc-serialization`, `core-scene`, `core-snapshot`, `svc-project-content`,
+`protocol-project-bundle`, and `rule-project-bundle` at pinned commit
+`a431974330589761c9e35fc4f8a55996a1b5ee48`. Those paths are byte-unchanged at current Asha head
+`6462a6de20d48ea1a3b7456826804bd9507860a5`. The successor adapts only deterministic JSON shape,
+canonical ordering, fixed-point proof, and fail-closed version selection. It explicitly rejects the
+donor artifact table, content hashes, save/load plans, prefab registry, compaction journal, replay
+record, provider manifest, workspace lifecycle, bootstrap/session state, and universal runtime hash.
+Rust owns the one concrete schema-6 to schema-7 migration; TypeScript may still materialize a
+candidate, but it neither selects migration semantics nor emits canonical saved bytes.
 
 Sibling references are intentional while Asha development is stopped for this decision. If this
 lab becomes a durable independent successor, the references should be pinned as Git dependencies,

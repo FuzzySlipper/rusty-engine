@@ -13,6 +13,8 @@ pub const STORED_PROJECT_SCHEMA_VERSION: u32 = 7;
 
 pub mod diagnostic_code {
     pub const DECODE: &str = "project.decode";
+    pub const ENCODE: &str = "project.encode";
+    pub const MIGRATION: &str = "project.migration";
     pub const UNSUPPORTED_SCHEMA: &str = "project.unsupportedSchema";
     pub const INVALID_PROJECT_ID: &str = "project.invalidProjectId";
     pub const INVALID_VALUE: &str = "project.invalidValue";
