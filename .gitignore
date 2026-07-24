@@ -1,3 +1,7 @@
 /target/
+/render/node_modules/
+/render/.nx/
+/render/dist/
+/render/coverage/
 *.log
 .DS_Store

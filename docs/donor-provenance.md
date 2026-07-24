@@ -15,6 +15,21 @@ current Engine packages or operational dependencies.
 Inspected donor repository: `git@github.com:FuzzySlipper/asha-engine.git`
 Pinned source commit: `a431974330589761c9e35fc4f8a55996a1b5ee48`
 
+## Complete rendering successor donor
+
+The owner-approved rendering campaign #6156 uses a newer, rendering-specific Asha Engine baseline:
+`6462a6de20d48ea1a3b7456826804bd9507860a5`. It covers the complete Rust render/protocol/
+presentation stack, its animation state-machine dependency, the full retained TypeScript
+projection/Three/host implementation, and all directly consumed fixtures, goldens, manifests, and
+licenses. The exact 134-file inventory and transformation contract are in
+[rendering-successor-contract.md](rendering-successor-contract.md).
+
+This second pin does not reopen Asha as an operational dependency and does not supersede the older
+crate extraction baseline above. It is a bounded source locator for rendering work completed after
+that baseline. Every imported behavior must terminate at successor-owned render values and explicit
+downstream projections; Asha runtime sessions, bridges, replay certification, catalog/project
+authority, compatibility manifests, and global code generation remain excluded structures.
+
 ## Crate portability inventory
 
 The historical donor's

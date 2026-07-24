@@ -1,0 +1,34 @@
+capability	status	donor_surface	successor_owner	evidence
+render-core	planned	protocol-render retained handles hierarchy primitives transforms layers metadata diffs	render-model	#6158
+mesh-payloads	planned	protocol-render mesh payload descriptors and render-bridge mesh conversion	render-model render-projection	#6158
+static-meshes	planned	protocol-render static mesh assets instances slots and collision intent	render-model renderer-three	#6158 #6160
+animated-meshes	planned	protocol-render animated mesh descriptors instances clips and playback	render-model renderer-three renderer-host	#6158 #6160 #6161
+materials	planned	protocol-render material definitions instance feedback and UV strategies	render-model renderer-three	#6158 #6160
+textures-sprites	planned	protocol-render textures sprite atlases sprite lifecycle and picking	render-model render-projection renderer-three	#6158 #6160
+lighting	planned	protocol-render lights shadows scene-light projection and Three realization	render-model render-projection renderer-three	#6158 #6160
+editor-grid	planned	protocol-render editor grid validation and Three grid projection	render-model renderer-three	#6158 #6160
+retained-projection	planned	render-bridge core projector plus TS render-projection	render-projection render/packages/render-projection	#6158 #6160
+entity-projection	planned	render-bridge entity state change detection and stable handle registry	render-projection	#6158
+voxel-projection	planned	render-bridge voxel chunks materials dirty reprojection and mesh payloads	render-projection	#6158
+authored-projection	planned	render-bridge scene preview runtime projection materials sprites and lights	render-projection	#6158
+debug-projection	planned	render-debug primitives labels tags and deterministic overlay frames	render-projection	#6158
+json-contract	planned	render-bridge JSON codec fixtures and Rust to TypeScript contract	render-model render/packages/render-contracts	#6158 #6160
+animation-controller	planned	rule-state-machine and rule-animation-controller graphs parameters blends transitions timing	render-presentation	#6159
+animation-projection	planned	render-animation retained bindings playback state and transition projection	render-presentation	#6159
+audio-projection	planned	render-audio retained and one-shot sources validation diagnostics readout reset	render-presentation	#6159
+billboard-projection	planned	render-billboard anchors text values icons fonts lifecycle diagnostics	render-presentation	#6159
+particle-projection	planned	render-particle bounded emitters bursts curves sprites lifecycle diagnostics	render-presentation	#6159
+telemetry-projection	planned	render-telemetry-overlay retained descriptors snapshots lifecycle diagnostics	render-presentation	#6159
+three-core	planned	renderer-three retained object hierarchy primitives transforms mesh application snapshots disposal	render/packages/renderer-three	#6160
+three-resources	planned	renderer-three shared static animated meshes GLB materials textures sprites lights shadows	render/packages/renderer-three	#6160
+browser-surface	planned	renderer-three WebGL surface camera world projection resize render loop and cleanup	render/packages/renderer-three	#6160
+picking	planned	renderer-three mesh sprite ray picking filters provenance and diagnostics	render/packages/renderer-three	#6160
+editor-viewport	planned	renderer-three grid channels depth overlay passes and editor backend	render/packages/renderer-three render/packages/renderer-host	#6160 #6161
+animation-host	planned	renderer-host animated resource loading mixer sampling transitions and errors	render/packages/renderer-host	#6161
+audio-host	planned	renderer-host WebAudio lifecycle buses decode start failures and cleanup	render/packages/renderer-host	#6161
+billboard-host	planned	renderer-host DOM world projection content localization/icon lifecycle	render/packages/renderer-host	#6161
+particle-host	planned	renderer-host bounded Three particle simulation bursts lifecycle and cleanup	render/packages/renderer-host	#6161
+telemetry-host	planned	renderer-host telemetry DOM snapshots cadence lifecycle and cleanup	render/packages/renderer-host	#6161
+inspection-camera	planned	renderer-host inspection surface editor controls camera transitions persistence bounds readouts	render/packages/renderer-host	#6161
+demo-consumer	planned	rusty-engine-demo private renderer contracts Three backend and browser projection	rusty-engine-demo shared render integration	#6162
+clean-clone-ci	planned	all donor fixtures goldens package boundaries and downstream installation	Engine render demo CI and docs	#6163
