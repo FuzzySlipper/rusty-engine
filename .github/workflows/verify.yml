@@ -47,7 +47,10 @@ jobs:
 
       - name: Build pinned Asha renderer dependency closure
         working-directory: asha-engine/ts
-        run: pnpm exec tsc --build packages/renderer-three/tsconfig.json
+        run: |
+          pnpm exec tsc --build packages/contracts/tsconfig.json
+          pnpm exec tsc --build packages/game-workspace/tsconfig.json
+          pnpm exec tsc --build packages/renderer-three/tsconfig.json
 
       - name: Install dependencies
         working-directory: rusty-engine
