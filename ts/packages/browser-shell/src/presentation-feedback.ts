@@ -169,31 +169,76 @@ const PARTICLE_LIFETIME_MILLISECONDS = 700;
 const BILLBOARD_LIFETIME_MILLISECONDS = 1_100;
 const PULSE_LIFETIME_MILLISECONDS = 420;
 
+export interface BrowserPresentationHost {
+  queryEntity(entity: number): HTMLElement | null;
+  createElement(tagName: "span" | "strong"): HTMLElement;
+  createAudioContext(): AudioContext | null;
+  setTimeout(
+    operation: () => void,
+    delayMilliseconds: number,
+  ): ReturnType<typeof globalThis.setTimeout>;
+  clearTimeout(timeout: ReturnType<typeof globalThis.setTimeout>): void;
+}
+
+const DEFAULT_BROWSER_PRESENTATION_HOST: BrowserPresentationHost = {
+  queryEntity(entity) {
+    return document.querySelector<HTMLElement>(`[data-entity-id="${String(entity)}"]`);
+  },
+  createElement(tagName) {
+    return document.createElement(tagName);
+  },
+  createAudioContext() {
+    const Context = globalThis.AudioContext;
+    return Context === undefined ? null : new Context();
+  },
+  setTimeout(operation, delayMilliseconds) {
+    return globalThis.setTimeout(operation, delayMilliseconds);
+  },
+  clearTimeout(timeout) {
+    globalThis.clearTimeout(timeout);
+  },
+};
+
+interface ActiveSound {
+  readonly oscillator: OscillatorNode;
+  readonly gain: GainNode;
+}
+
 /** DOM/Web Audio realization for the concrete browser shell. */
 export class BrowserPresentationFeedbackSink implements PresentationFeedbackSink {
   readonly #layer: HTMLElement;
   readonly #audioStatus: HTMLElement;
+  readonly #host: BrowserPresentationHost;
   readonly #active: HTMLElement[] = [];
+  readonly #pulseTargets = new Set<HTMLElement>();
+  readonly #activeSounds = new Set<ActiveSound>();
   readonly #timeouts = new Set<ReturnType<typeof globalThis.setTimeout>>();
   #audioContext: AudioContext | null = null;
   #soundAttempts = 0;
   #scheduledSounds = 0;
   #droppedSounds = 0;
 
-  constructor(layer: HTMLElement, audioStatus: HTMLElement) {
+  constructor(
+    layer: HTMLElement,
+    audioStatus: HTMLElement,
+    host: BrowserPresentationHost = DEFAULT_BROWSER_PRESENTATION_HOST,
+  ) {
     this.#layer = layer;
     this.#audioStatus = audioStatus;
+    this.#host = host;
     this.#setAudioStatus("inactive");
+    this.#audioStatus.dataset.activeSounds = "0";
   }
 
   async activateAudio(): Promise<"running" | "blocked" | "unavailable"> {
-    const Context = globalThis.AudioContext;
-    if (Context === undefined) {
-      this.#setAudioStatus("unavailable");
-      return "unavailable";
-    }
     try {
-      this.#audioContext ??= new Context();
+      if (this.#audioContext === null) {
+        this.#audioContext = this.#host.createAudioContext();
+      }
+      if (this.#audioContext === null) {
+        this.#setAudioStatus("unavailable");
+        return "unavailable";
+      }
       if (this.#audioContext.state === "suspended") {
         await this.#audioContext.resume();
       }
@@ -208,13 +253,28 @@ export class BrowserPresentationFeedbackSink implements PresentationFeedbackSink
 
   clearTransient(): void {
     for (const timeout of this.#timeouts) {
-      globalThis.clearTimeout(timeout);
+      this.#host.clearTimeout(timeout);
     }
     this.#timeouts.clear();
+    for (const target of this.#pulseTargets) {
+      delete target.dataset.animationPulse;
+    }
+    this.#pulseTargets.clear();
     for (const element of this.#active) {
       element.remove();
     }
     this.#active.length = 0;
+    for (const sound of this.#activeSounds) {
+      try {
+        sound.oscillator.stop();
+      } catch {
+        // A source that ended between dispatch and reset is already silent.
+      }
+      sound.oscillator.disconnect();
+      sound.gain.disconnect();
+    }
+    this.#activeSounds.clear();
+    this.#audioStatus.dataset.activeSounds = "0";
     for (const key of [
       "animationStates",
       "cueKinds",
@@ -228,7 +288,7 @@ export class BrowserPresentationFeedbackSink implements PresentationFeedbackSink
   }
 
   setAnimationState(state: RuntimeAnimationState): void {
-    const entity = document.querySelector<HTMLElement>(`[data-entity-id="${String(state.entity)}"]`);
+    const entity = this.#host.queryEntity(state.entity);
     if (entity !== null) {
       entity.dataset.posture = state.posture;
     }
@@ -236,12 +296,14 @@ export class BrowserPresentationFeedbackSink implements PresentationFeedbackSink
   }
 
   pulseAnimation(entity: number, name: string): void {
-    const target = document.querySelector<HTMLElement>(`[data-entity-id="${String(entity)}"]`);
+    const target = this.#host.queryEntity(entity);
     if (target !== null) {
       target.dataset.animationPulse = name;
+      this.#pulseTargets.add(target);
       this.#schedule(() => {
         if (target.dataset.animationPulse === name) {
           delete target.dataset.animationPulse;
+          this.#pulseTargets.delete(target);
         }
       }, PULSE_LIFETIME_MILLISECONDS);
     }
@@ -250,7 +312,7 @@ export class BrowserPresentationFeedbackSink implements PresentationFeedbackSink
   }
 
   emitParticle(kind: FeedbackParticleKind, anchor: FeedbackAnchor): void {
-    const element = document.createElement("span");
+    const element = this.#host.createElement("span");
     element.className = `feedback-particle feedback-particle--${kind}`;
     element.dataset.kind = kind;
     this.#position(element, anchor.position);
@@ -263,7 +325,7 @@ export class BrowserPresentationFeedbackSink implements PresentationFeedbackSink
     tone: "neutral" | "warning" | "success",
     anchor: FeedbackAnchor,
   ): void {
-    const element = document.createElement("strong");
+    const element = this.#host.createElement("strong");
     element.className = "feedback-billboard";
     element.dataset.tone = tone;
     element.dataset.entityId = String(anchor.entity);
@@ -293,6 +355,16 @@ export class BrowserPresentationFeedbackSink implements PresentationFeedbackSink
     gain.gain.linearRampToValueAtTime(0, start + profile.duration);
     oscillator.connect(gain);
     gain.connect(context.destination);
+    const activeSound = { oscillator, gain };
+    this.#activeSounds.add(activeSound);
+    this.#audioStatus.dataset.activeSounds = String(this.#activeSounds.size);
+    oscillator.addEventListener("ended", () => {
+      if (this.#activeSounds.delete(activeSound)) {
+        oscillator.disconnect();
+        gain.disconnect();
+        this.#audioStatus.dataset.activeSounds = String(this.#activeSounds.size);
+      }
+    }, { once: true });
     oscillator.start(start);
     oscillator.stop(start + profile.duration);
     this.#scheduledSounds += 1;
@@ -327,7 +399,7 @@ export class BrowserPresentationFeedbackSink implements PresentationFeedbackSink
   }
 
   #schedule(operation: () => void, delay: number): void {
-    const timeout = globalThis.setTimeout(() => {
+    const timeout = this.#host.setTimeout(() => {
       this.#timeouts.delete(timeout);
       operation();
     }, delay);

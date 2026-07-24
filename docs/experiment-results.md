@@ -364,12 +364,14 @@ crates or their animation authority, catalog/hash closure, retained handle regis
 protocol operations, origin/correlation metadata, or scene/runtime bridge.
 
 The Chromium proof sees movement/block/attack/damage/defeat/door animation pulses, particles, and
-billboards and schedules real Web Audio oscillator/gain envelopes. It then intentionally discards
-a response containing a movement cue. A fresh GET has the same accepted tick/revision/entity state
-but no cue. Clearing the sink as a simulated presentation restart removes every transient and
+billboards and schedules real Web Audio oscillator/gain envelopes. Reset is invoked while an entity
+pulse, DOM effect, and audio source are active; it removes those concrete targets before rebuilding
+current posture. The proof then intentionally discards a response containing a movement cue. A
+fresh GET has the same accepted tick/revision/entity state but no cue. An in-page sink reset (not a
+page reload) is again invoked while concrete pulse/DOM/audio targets are active; it removes them and
 rebuilds only current defeated/open posture. Rust tests independently compare snapshots across
-delivered and discarded response paths, while a fake TypeScript sink throws during audio and
-proves later visual operations continue.
+delivered and discarded response paths, while focused TypeScript tests cover forced audio failure
+and concrete reset cleanup.
 
 M4 change amplification is explicit:
 
@@ -429,9 +431,10 @@ one-keydown/one-keyup moved-then-blocked-and-stopped player collision, changed l
 moved-and-damaged live sentry, the arrived sentry, combat hit/damage/defeat facts, open-door
 transform, controller traversal through that exit, defeated entities, blocked probe, generated
 seed/mesh readout, and retained-renderer evidence in the final DOM.
-The same gate now requires all four presentation families, a real Web Audio schedule, an empty-cue
-reset, a deliberately dropped response followed by an identical gameplay readout, and posture-only
-rebuild after a simulated presentation restart.
+The same gate now requires all four presentation families, a real Web Audio schedule, reset of
+active concrete pulse/DOM/audio targets, a deliberately dropped response followed by an identical
+gameplay readout, and posture-only rebuild after a second in-page sink reset. This is deliberately
+not described as proof of a full browser page reload.
 
 ## Reproducible evidence
 

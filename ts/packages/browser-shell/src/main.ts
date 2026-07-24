@@ -38,9 +38,11 @@ const smokeResult = requiredElement("smoke-result", HTMLElement);
 const feedbackLayer = requiredElement("feedback-layer", HTMLElement);
 const feedbackAudioStatus = requiredElement("feedback-audio-status", HTMLElement);
 const projection = new RuntimeProjectionAdapter();
-const presentationFeedback = new PresentationFeedbackAdapter(
-  new BrowserPresentationFeedbackSink(feedbackLayer, feedbackAudioStatus),
+const presentationFeedbackSink = new BrowserPresentationFeedbackSink(
+  feedbackLayer,
+  feedbackAudioStatus,
 );
+const presentationFeedback = new PresentationFeedbackAdapter(presentationFeedbackSink);
 const eventHistory: string[] = [];
 const smokeMode = new URLSearchParams(location.search).has("smoke");
 let actionRejectionCount = 0;
@@ -141,12 +143,22 @@ window.addEventListener("mousemove", (event) => {
 });
 
 if (smokeMode) {
+  await presentationFeedback.activateAudio();
+  await enqueueAttackAction({ kind: "attack" });
+  const resetStartedWithConcreteTransients =
+    playerMotionState.dataset.animationPulse === "attack" &&
+    Number(feedbackLayer.dataset.activeEffects ?? "0") > 0 &&
+    Number(feedbackAudioStatus.dataset.activeSounds ?? "0") > 0;
   await perform("/api/reset");
   const resetFeedbackRebuilt =
+    resetStartedWithConcreteTransients &&
     current.presentation.cues.length === 0 &&
     feedbackLayer.dataset.activeEffects === "0" &&
+    feedbackAudioStatus.dataset.activeSounds === "0" &&
+    document.querySelector("[data-animation-pulse]") === null &&
     includesEvery(feedbackLayer.dataset.animationStates, ["1:idle", "3:closed", "4:moving"]);
   document.body.dataset.feedbackReset = resetFeedbackRebuilt ? "pass" : "fail";
+  document.body.dataset.feedbackConcreteReset = resetFeedbackRebuilt ? "pass" : "fail";
   const initialPlayerPosition = current.player.position;
   const initialPlayerYaw = current.player.yawDegrees;
   const heldCode = current.player.bindings.moveForward;
@@ -293,12 +305,30 @@ if (smokeMode) {
   }
   surface.setCameraPose(derivePlayerCameraPose(current.player));
   renderReadout(current);
+  applyPresentationFeedback();
+  await enqueuePlayerAction({ kind: "move", forward: -1, right: 0 });
+  const restartStartedWithConcreteTransients =
+    playerMotionState.dataset.animationPulse !== undefined &&
+    Number(feedbackLayer.dataset.activeEffects ?? "0") > 0 &&
+    Number(feedbackAudioStatus.dataset.activeSounds ?? "0") > 0;
+  current = await requestState("/api/state");
+  const restartFrame = projection.apply(current);
+  if (restartFrame.ops.length > 0) {
+    surface.applyFrame(restartFrame);
+  }
+  surface.setCameraPose(derivePlayerCameraPose(current.player));
+  renderReadout(current);
   applyPresentationFeedback(true);
   surface.renderOnce();
   const restartRebuilt =
+    restartStartedWithConcreteTransients &&
+    current.presentation.cues.length === 0 &&
     feedbackLayer.dataset.activeEffects === "0" &&
+    feedbackAudioStatus.dataset.activeSounds === "0" &&
+    document.querySelector("[data-animation-pulse]") === null &&
     feedbackLayer.dataset.lastCueCount === "0" &&
     includesEvery(feedbackLayer.dataset.animationStates, ["3:open", "4:defeated", "5:defeated"]);
+  document.body.dataset.feedbackConcreteRestart = restartRebuilt ? "pass" : "fail";
   const feedbackDropPassed = droppedDeliverySafe && restartRebuilt;
   document.body.dataset.feedbackDrop = feedbackDropPassed ? "pass" : "fail";
   const passed =
