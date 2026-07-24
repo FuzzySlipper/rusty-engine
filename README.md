@@ -61,7 +61,8 @@ authored result without the converter.
 | `rust/crates/game-host` | Game components, services, systems, orchestration, admission, and persistence |
 | `rust/crates/voxel-asset` | Strict canonical voxel asset format |
 | `rust/crates/voxel-convert` | Offline bounded GLB conversion |
-| `rust/donors/asha` | Pinned low-level donor crates below successor-owned boundaries |
+| `rust/crates/core-*` | Small shared identity, math, time, space, and voxel value crates |
+| `rust/crates/svc-*` | Low-level volume, spatial, collision, navigation, RNG, and mesh services |
 | `ts/packages/project-content` | Optional TypeScript project composition |
 | `ts/packages/render-contracts` | Bounded typed render-diff vocabulary |
 | `ts/packages/renderer-three` | Retained Three/WebGL implementation |

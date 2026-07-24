@@ -19,8 +19,7 @@
     "tracked|docs/m9-extraction-contract.md|| `@asha/renderer-three` retained renderer/browser family | Narrowly adapt | `@rusty-engine/renderer-three`; rename the public mounted surface, import the local render contract, and retain direct typed `applyFrame` plus real Three/WebGL behavior. |",
     "tracked|docs/m9-extraction-contract.md|| `@asha/runtime-bridge` | Exclude | Remove encoded-frame decoding. Define any still-useful optional mesh-buffer view capability locally in the renderer package; typed direct frames remain the product border. |",
     "tracked|docs/m9-extraction-contract.md|| `@asha/runtime-session` and `game-workspace` | Exclude | They are donor test/package closure, not product behavior. Do not copy their tests, fixtures, declarations, or lifecycle vocabulary. |",
-    "tracked|docs/m9-extraction-contract.md|| pnpm | Direct links to `@asha/contracts` and `@asha/renderer-three` | The installed package graph resolves both links into the sibling checkout. |",
-    "tracked|rust/donors/asha/README.md|`git@github.com:FuzzySlipper/asha-engine.git` at commit"
+    "tracked|docs/m9-extraction-contract.md|| pnpm | Direct links to `@asha/contracts` and `@asha/renderer-three` | The installed package graph resolves both links into the sibling checkout. |"
   ],
   "operationalReferences": []
 }

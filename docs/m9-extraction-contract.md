@@ -51,9 +51,9 @@ No local verification script directly invokes Asha. The operational dependency e
 
 Cargo's normal resolved local-package graph contains exactly these twelve donor packages. Package
 names remain unchanged so existing successor crates do not acquire a compatibility facade merely
-for extraction. Their destination is a cohesive, visibly attributed family under
-`rust/donors/asha/{foundation,state,services}`; successor crates continue to consume them through
-the root workspace dependency table.
+for extraction. M9 initially placed them in a visibly attributed family; after standalone
+extraction was proven, they were normalized to ordinary `rust/crates/<package>` workspace members.
+Successor crates continue to consume them through the root workspace dependency table.
 
 | Package | Pinned source path | Normal local dependencies | Treatment | Required local test input |
 |---|---|---|---|---|
@@ -86,8 +86,8 @@ render summaries. M9B must replace only the affected generated-tunnel test setup
 direct `VoxelWorld` fixture. It may retain the 204-byte path golden; it must not copy
 `svc-levelgen`. This is the one approved source/test adaptation in the Rust family.
 
-The three donor-test fixtures are internalized under `rust/donors/asha/fixtures` with their pinned
-paths and hashes recorded in donor provenance:
+The three donor-test fixtures are internalized under the repository's ordinary `fixtures`
+hierarchy, with their pinned source paths and hashes recorded in donor provenance:
 
 | Fixture | SHA-256 |
 |---|---|

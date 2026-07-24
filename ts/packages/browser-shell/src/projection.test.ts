@@ -78,7 +78,7 @@ test("whole Rust readouts become create update and destroy diffs", () => {
   assert.equal(adapter.trackedEntityCount, 0);
 });
 
-test("generated chunk mesh is retained by content hash and uses the donor mesh payload path", () => {
+test("generated chunk mesh is retained by content hash and uses the typed mesh payload path", () => {
   const adapter = new RuntimeProjectionAdapter();
   const mesh = {
     chunk: [0, 0, 0] as const,

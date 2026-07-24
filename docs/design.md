@@ -167,10 +167,11 @@ rebuild; optimization should preserve this one-authority invariant.
 `KinematicMotionSystem` and `EnemyNavigationSystem` are explicit phases. Player movement and combat
 ray resolution use the same spatial authority through direct service calls.
 
-Low-level foundation, voxel, collision, pathfinding, RNG, and mesh crates internalized under
-`rust/donors/asha` sit below these successor-owned boundaries. Their exact sources and adaptations
-are recorded in [donor-provenance.md](donor-provenance.md). They do not bring Asha's former runtime
-facade, event control plane, replay machinery, or lifecycle into the architecture.
+Low-level foundation, voxel, collision, pathfinding, RNG, and mesh crates are ordinary workspace
+members under `rust/crates`, alongside the higher-level crates that compose them. Their exact
+sources and adaptations are recorded in [donor-provenance.md](donor-provenance.md); origin is not an
+architectural layer. They do not bring Asha's former runtime facade, event control plane, replay
+machinery, or lifecycle into the architecture.
 
 ## Content and admission
 
@@ -278,7 +279,8 @@ voxel-convert --> voxel-asset JSON --> game-host admission
 | `rust/crates/game-host` | Game components, services, systems, orchestration, admission, persistence |
 | `rust/crates/voxel-asset` | Durable voxel asset schema and canonical codec |
 | `rust/crates/voxel-convert` | Offline bounded GLB conversion |
-| `rust/donors/asha` | Pinned low-level donor implementation below successor boundaries |
+| `rust/crates/core-*` | Small shared identity, math, time, space, and voxel value crates |
+| `rust/crates/svc-*` | Low-level volume, spatial, collision, navigation, RNG, and mesh services |
 | `ts/packages/project-content` | Optional TypeScript project composition |
 | `ts/packages/render-contracts` | Small typed render-diff vocabulary |
 | `ts/packages/renderer-three` | Retained Three/WebGL backend |

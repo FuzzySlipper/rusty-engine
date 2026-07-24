@@ -428,8 +428,8 @@ fn nearest_combat_target(
     best
 }
 
-// Adapted from Asha svc-combat at the pinned donor revision. The service-owned
-// health table and replay/hash machinery deliberately remain behind.
+// Keep the query local and stateless: health ownership and combat consequences
+// remain with the surrounding service rather than a parallel query-side model.
 fn ray_aabb_distance(origin: Vec3, direction: Vec3, min: Vec3, max: Vec3) -> Option<f32> {
     let mut t_min = 0.0f32;
     let mut t_max = f32::INFINITY;

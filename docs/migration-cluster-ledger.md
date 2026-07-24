@@ -117,14 +117,19 @@ The completed clusters answered the original architectural questions:
 The migration therefore ended as a successor adoption, not a patch queue intended to flow back into
 Asha.
 
-## Internalized donor boundary
+## Internalized low-level crate boundary
 
-M9 copied only the accepted normal Rust closure into `rust/donors/asha`:
+M9 copied only the accepted normal Rust closure. These are now ordinary workspace members under
+`rust/crates`, with no origin-based directory boundary:
 
 - foundations: `core-assets`, `core-ids`, `core-math`, `core-space`, and `core-time`;
 - voxel state: `core-voxel`; and
 - services: `svc-volume`, `svc-spatial`, `svc-collision`, `svc-pathfinding`, `svc-rng`, and
   `svc-mesh`.
+
+Their pinned source and bounded adaptations remain recorded in
+[donor-provenance.md](donor-provenance.md); provenance is documentation rather than runtime
+topology.
 
 The former TypeScript presentation dependencies were replaced by bounded successor packages:
 

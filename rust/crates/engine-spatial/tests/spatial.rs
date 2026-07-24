@@ -9,7 +9,7 @@ use engine_spatial::{
 use entity_state::{EntityDefinition, EntityState};
 
 #[test]
-fn donor_collision_queries_cover_chunks_negative_space_and_raycast() {
+fn collision_queries_cover_chunks_negative_space_and_raycast() {
     let scene = VoxelCollisionScene::from_solid_voxels(1.0, 4, [[2, 1, 0], [-1, 0, 0], [2, 1, 0]])
         .expect("valid scene");
 

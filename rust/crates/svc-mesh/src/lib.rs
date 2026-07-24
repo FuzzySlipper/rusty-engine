@@ -468,7 +468,7 @@ mod tests {
         // The named golden fixture; regenerate intentionally if the mesher changes.
         let c = chunk_with(&[(l(0, 0, 0), 1), (l(1, 0, 0), 1)]);
         let m = mesh_chunk_standalone(&spec(), ChunkCoord::ORIGIN, &c).unwrap();
-        let golden = include_str!("../../../fixtures/voxel-mesh/two-voxel-line.mesh.txt");
+        let golden = include_str!("../../../../fixtures/voxel-mesh/two-voxel-line.mesh.txt");
         assert_eq!(m.to_fixture_string(), golden);
     }
 }

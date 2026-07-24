@@ -25,6 +25,10 @@ destination, and exclusion decisions are frozen in the
 [M9 extraction contract](m9-extraction-contract.md). That contract is narrower than the portability
 report and is the authority for M9B-M9D.
 
+Every accepted live Rust package is now an ordinary workspace member at
+`rust/crates/<package-name>`. The table records historical source paths and treatment; origin does
+not create a second crate hierarchy.
+
 | Local dependency/use | Asha source path | Treatment | Reason |
 |---|---|---|---|
 | `core-ids` | `engine-rs/crates/foundation/core-ids` | Internalized and narrowed to `EntityId` | The consumed typed entity identity remains; unused abstract/project/session/prefab IDs were excluded with the old structural vocabulary. |
@@ -54,12 +58,12 @@ report and is the authority for M9B-M9D.
 | `@asha/renderer-three` | `ts/packages/renderer-three/src/{three-renderer,browser-surface}.ts` | Narrow successor fork as `@rusty-engine/renderer-three` | Retains typed primitive lifecycle, inline mesh upload/disposal, deterministic inspection, camera placement, and real Three/WebGL mounting. The local API is bounded to the browser shell. |
 | `@asha/render-projection` | `ts/packages/render-projection` | Inspected and excluded | Rusty Engine's `RuntimeProjectionAdapter` already owns whole-state-to-diff projection; no donor projection export reaches the product. |
 
-The accepted Rust donor family now lives under `rust/donors/asha`; `engine-spatial` remains the
-successor-owned adapter and system above it, and M3 adapts only the small ray/AABB query algorithm
-named above. The browser shell supplies typed diffs directly to local packages. There is no encoded
-frame entry point, runtime-bridge shim, or Vite alias. The verification gate rejects old
-`RuntimeSession`, native bridge, Gameplay Fabric, or `GameplayRuntimeHost` markers in the built
-browser bundle.
+The accepted Rust packages now live alongside the rest of the workspace under `rust/crates`;
+`engine-spatial` remains the successor-owned adapter and system above the low-level spatial
+services, and M3 adapts only the small ray/AABB query algorithm named above. The browser shell
+supplies typed diffs directly to local packages. There is no encoded frame entry point,
+runtime-bridge shim, or Vite alias. The verification gate rejects old `RuntimeSession`, native
+bridge, Gameplay Fabric, or `GameplayRuntimeHost` markers in the built browser bundle.
 
 M2A deliberately does not reference Asha's input or view crates. TypeScript resolves DOM device
 events against admitted binding data and submits only `ResolvedPlayerAction`; Rust owns controller
@@ -196,17 +200,19 @@ Explicit authored save expands the accepted result to ordinary static material v
 persisting an asset job, edit history, provider identity, or replay record. M7C remains unscheduled
 because no annotation/history consumer emerged.
 
-M9B internalized the accepted twelve-crate Rust closure under `rust/donors/asha` from pinned commit
-`a431974330589761c9e35fc4f8a55996a1b5ee48`. Foundation, state, and service directory families
-remain recognizable for source comparison, while the root Rusty Engine workspace is the only
-composition authority. `core-ids` retains the donor's consumed `EntityId` behavior but drops its
-unused abstract/project/session/prefab ID families. Other production source is unchanged apart from
-removing one stale bridge-oriented documentation phrase. `core-space` and `svc-mesh` only point
-their existing tests at copied fixture paths. `svc-pathfinding`'s excluded dev-only `svc-levelgen`
-dependency was replaced in tests by the same tiny solid shell built directly as a `VoxelWorld`; its
-path and projection goldens remain identical. Cargo metadata now resolves no local package outside
-Rusty Engine, and all focused donor tests run as ordinary workspace tests. No runtime, protocol,
-lifecycle, replay, bridge, bundle, provider, editor, or level-generation crate was copied.
+M9B internalized the accepted twelve-crate Rust closure from pinned commit
+`a431974330589761c9e35fc4f8a55996a1b5ee48`. Its initial origin-oriented directories made source
+comparison obvious while extraction was still being proven. Once Rusty Engine became the durable
+repository, the packages moved to `rust/crates/<package>` and their test data to `fixtures`; this
+document and Git history now carry provenance instead of directory topology. `core-ids` retains the
+donor's consumed `EntityId` behavior but drops its unused abstract/project/session/prefab ID
+families. Other production source is unchanged apart from removing stale origin-oriented comments.
+`core-space` and `svc-mesh` only point their existing tests at local fixture paths.
+`svc-pathfinding`'s excluded dev-only `svc-levelgen` dependency was replaced in tests by the same
+tiny solid shell built directly as a `VoxelWorld`; its path and projection goldens remain identical.
+Cargo metadata resolves no local package outside Rusty Engine, and all focused low-level tests run
+as ordinary workspace tests. No runtime, protocol, lifecycle, replay, bridge, bundle, provider,
+editor, or level-generation crate was copied.
 
 M9C replaced the linked TypeScript closure with `@rusty-engine/render-contracts` and
 `@rusty-engine/renderer-three`. The contract is a hand-owned closed union of the four operations

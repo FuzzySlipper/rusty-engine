@@ -6,18 +6,18 @@ members = [
     "rust/crates/entity-state",
     "rust/crates/voxel-asset",
     "rust/crates/voxel-convert",
-    "rust/donors/asha/foundation/core-assets",
-    "rust/donors/asha/foundation/core-ids",
-    "rust/donors/asha/foundation/core-math",
-    "rust/donors/asha/foundation/core-space",
-    "rust/donors/asha/foundation/core-time",
-    "rust/donors/asha/services/svc-collision",
-    "rust/donors/asha/services/svc-mesh",
-    "rust/donors/asha/services/svc-pathfinding",
-    "rust/donors/asha/services/svc-rng",
-    "rust/donors/asha/services/svc-spatial",
-    "rust/donors/asha/services/svc-volume",
-    "rust/donors/asha/state/core-voxel",
+    "rust/crates/core-assets",
+    "rust/crates/core-ids",
+    "rust/crates/core-math",
+    "rust/crates/core-space",
+    "rust/crates/core-time",
+    "rust/crates/core-voxel",
+    "rust/crates/svc-collision",
+    "rust/crates/svc-mesh",
+    "rust/crates/svc-pathfinding",
+    "rust/crates/svc-rng",
+    "rust/crates/svc-spatial",
+    "rust/crates/svc-volume",
 ]
 
 [workspace.package]
@@ -25,18 +25,18 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace.dependencies]
-core-assets = { path = "rust/donors/asha/foundation/core-assets" }
-core-ids = { path = "rust/donors/asha/foundation/core-ids" }
-core-math = { path = "rust/donors/asha/foundation/core-math" }
-core-space = { path = "rust/donors/asha/foundation/core-space" }
-core-time = { path = "rust/donors/asha/foundation/core-time" }
-core-voxel = { path = "rust/donors/asha/state/core-voxel" }
-svc-collision = { path = "rust/donors/asha/services/svc-collision" }
-svc-pathfinding = { path = "rust/donors/asha/services/svc-pathfinding" }
-svc-rng = { path = "rust/donors/asha/services/svc-rng" }
-svc-mesh = { path = "rust/donors/asha/services/svc-mesh" }
-svc-spatial = { path = "rust/donors/asha/services/svc-spatial" }
-svc-volume = { path = "rust/donors/asha/services/svc-volume" }
+core-assets = { path = "rust/crates/core-assets" }
+core-ids = { path = "rust/crates/core-ids" }
+core-math = { path = "rust/crates/core-math" }
+core-space = { path = "rust/crates/core-space" }
+core-time = { path = "rust/crates/core-time" }
+core-voxel = { path = "rust/crates/core-voxel" }
+svc-collision = { path = "rust/crates/svc-collision" }
+svc-pathfinding = { path = "rust/crates/svc-pathfinding" }
+svc-rng = { path = "rust/crates/svc-rng" }
+svc-mesh = { path = "rust/crates/svc-mesh" }
+svc-spatial = { path = "rust/crates/svc-spatial" }
+svc-volume = { path = "rust/crates/svc-volume" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_path_to_error = "0.1"

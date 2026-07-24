@@ -1,9 +1,7 @@
 //! Typed entity identity shared by Rusty Engine's object-centric runtime.
 //!
-//! This crate is a narrowed fork of Asha Engine's `core-ids`. The donor's
-//! abstract subject/process/mode/signal IDs and its project/session/prefab IDs
-//! had no consumer in Rusty Engine, so only the established entity identity is
-//! retained. It is `std`-only and has no external dependencies.
+//! This deliberately narrow crate retains only the entity identity used by the
+//! runtime. It is `std`-only and has no external dependencies.
 
 #![forbid(unsafe_code)]
 

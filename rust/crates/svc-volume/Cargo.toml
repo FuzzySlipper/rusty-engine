@@ -7,5 +7,5 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
-core-space = { path = "../../foundation/core-space" }
-core-voxel = { path = "../../state/core-voxel" }
+core-space = { path = "../core-space" }
+core-voxel = { path = "../core-voxel" }

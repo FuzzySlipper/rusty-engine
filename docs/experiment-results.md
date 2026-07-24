@@ -101,16 +101,16 @@ The original direct `defeat_enemy` operation remains as a focused fixture/helper
 encounter and navigation-blocker tests. M3 removes it from the browser product path: normal player
 defeat now requires an accepted aimed attack, health mutation, and lethal combat fact.
 
-### Asha spatial/collision transplant and new capability
+### Spatial/collision foundation and new capability
 
-`engine-spatial` references Asha's `core-space`, `core-voxel`, `svc-volume`, `svc-spatial`, and
-`svc-collision` crates unchanged at the pinned donor commit. The dependency closure ends in
-foundation/state/Parry code; it does not import Gameplay Fabric, `GameplayRuntimeHost`, replay
-certification, or the runtime facade.
+`engine-spatial` composes the local `core-space`, `core-voxel`, `svc-volume`, `svc-spatial`, and
+`svc-collision` crates. Their provenance is pinned to the original source commit, while their
+dependency closure ends in foundation/state/Parry code; it does not import Gameplay Fabric,
+`GameplayRuntimeHost`, replay certification, or the runtime facade.
 
-The successor adapter builds canonical `VoxelWorld` chunks and keeps Asha's
-`CollisionProjection` explicitly derived. Its public scene exposes point, ray, AABB, and continuous
-axis-swept AABB queries without leaking Parry mutation.
+The successor adapter builds canonical `VoxelWorld` chunks and keeps `CollisionProjection`
+explicitly derived. Its public scene exposes point, ray, AABB, and continuous axis-swept AABB
+queries without leaking Parry mutation.
 
 The genuinely new meaning is local and conventional:
 
@@ -161,7 +161,7 @@ general engine capacity result.
 
 ### Navigation and autonomous enemy locomotion
 
-The first migration family references Asha's `svc-pathfinding` unchanged. Its production dependency
+The first migration family composes the local `svc-pathfinding` crate. Its production dependency
 closure stops at `core-math`, `core-space`, and `svc-spatial`; navigation policy, durable intent,
 movement, facts, and persistence remain successor-owned.
 
@@ -234,8 +234,8 @@ protocol crate, input context registry, replay codec, or lifecycle route.
 
 ### Generated voxel environment and mesh projection
 
-The third migration family references Asha's dependency-free `svc-rng` and low-level `svc-mesh`
-unchanged. The `svc-levelgen` crate was inspected but not linked because its small useful generation
+The third migration family composes the dependency-free `svc-rng` and low-level `svc-mesh` crates.
+The historical `svc-levelgen` crate was inspected but not linked because its small useful generation
 loop is coupled to `core-events`, replay/hash records, collision summaries, runtime coordinate
 frames, and render-chunk metadata.
 
@@ -395,8 +395,8 @@ M5 replaces the product's generated flat fixture with the checked-in
 `content/projects/loading-bay.project.json`. Schema 7 names one entry scene and a bounded typed asset
 catalog, then keeps transform/collision/renderable, player/controller/weapon,
 enemy/health/navigation, encounter/door/switch, kinematic, and voxel-environment data on the
-responsible objects. `core-assets` is the only new donor dependency and remains a zero-dependency
-identity leaf.
+responsible objects. `core-assets` is the only new low-level workspace dependency and remains a
+zero-dependency identity leaf.
 
 Admission is one direct Rust call. It parses with serde paths, resolves the entry scene and every
 renderable against the catalog, rejects duplicate identities, constructs the canonical voxel world
@@ -535,8 +535,9 @@ single-chunk loading bay:
 | Final authority | Revision 256; byte-semantic hash restored to baseline |
 
 This earns the deliberately simple full rebuild for the current bounded authoring scene. It is not
-a promise that large worlds need no incremental invalidation; the existing donor dirty-neighbour
-behavior remains the evidence to revisit only when a measured project exceeds this budget.
+a promise that large worlds need no incremental invalidation; the existing dirty-neighbour behavior
+in the low-level spatial crates remains evidence to revisit only when a measured project exceeds
+this budget.
 
 M7A change amplification is explicit:
 
@@ -699,7 +700,7 @@ The current verification gate proves:
 - generated project content is byte-for-byte current with its TypeScript composition;
 - the TypeScript content-composition, render-contract, renderer, and browser
   input/projection/presentation test suites;
-- Rust tests across entity state, donor collision/navigation/mesh queries, security door,
+- Rust tests across entity state, low-level collision/navigation/mesh queries, security door,
   content admission, encounter routing, kinematic/navigation motion, atomic rejection, projection,
   player control, combat/health/weapon behavior, generated-environment admission, offline voxel
   conversion/import, live editing, and snapshot/authored save/reopen;
@@ -713,11 +714,11 @@ These are physical line counts (`wc -l`), not complexity scores:
 | Ownership surface | Production source footprint | Purpose |
 |---|---:|---|
 | Reusable Rust entity state | 4 files / 888 lines | Entity/capability storage, atomic entity mutation, snapshot, projection. |
-| Successor spatial adapter/system | 2 files / 1,444 lines | Canonical donor scene construction, generated-room/aperture algorithm, collision/navigation/mesh derivation, bounded query facade, central kinematic phase, and one cohesive voxel-edit owner. |
+| Successor spatial adapter/system | 2 files / 1,444 lines | Canonical scene construction, generated-room/aperture algorithm, collision/navigation/mesh derivation, bounded query facade, central kinematic phase, and one cohesive voxel-edit owner. |
 | Rust game host and runners | 26 files / 7,593 lines | Concrete feature-owned components/services, routing, canonical project codec/migration/store, scheduling, snapshots, presentation projection, headless/product/workload hosts. |
 | Voxel asset and offline conversion | 11 files / 1,995 lines | Strict durable format/request validation, canonical hashing, bounded GLB parsing/conversion, atomic CLI installation, and measured conversion runner. |
 | TypeScript content composition | 5 files / 429 lines | Typed definitions, optional schema-v7 candidate builder, encounter/generation/combat and motion builders, reproducibility check. |
-| Internalized low-level Rust donors | 17 files / 6,669 lines | Pinned foundation, voxel, spatial, collision, navigation, RNG, and mesh implementation beneath successor-owned services. |
+| Low-level Rust crates | 17 files / 6,669 lines | Foundation, voxel, spatial, collision, navigation, RNG, and mesh implementation beneath successor-owned services. |
 | TypeScript browser product shell | 6 files / 1,973 lines | Browser-owned input/edit lifecycle, Rust-readout/mesh and feedback adapters, DOM/Web Audio realization, derived camera, and styling. |
 | TypeScript render contract and Three edge | 4 files / 773 lines | Closed typed diff vocabulary, retained resource lifecycle, inline mesh upload, camera placement, and real WebGL mounting. |
 | Authored stored projects | 2 files / 1,152 lines | Hand-authored loading-bay and converted-wall catalogs/scenes, relationships, components, and voxel sources loaded directly by Rust. |
@@ -741,12 +742,12 @@ generic replay machinery.
 - Batched entity-state reads and expected-revision machinery had no remaining in-process consumer and were
   deleted with the external host.
 - The pivot removes substantially more runtime-host plumbing than the encounter slice adds.
-- A substantial Asha service family can sit below the new object-centric center unchanged.
+- A substantial imported service family can sit below the new object-centric center unchanged.
 - A narrow internal renderer can sit above it through typed projection without restoring the old
   runtime facade or the donor package graph to the browser bundle.
-- One canonical donor `VoxelWorld` can feed collision, navigation, and a real retained mesh without
-  per-consumer approximations or importing the donor event/control plane.
-- Asha's compact combat query algorithm can be harvested without importing its independent state,
+- One canonical `VoxelWorld` can feed collision, navigation, and a real retained mesh without
+  per-consumer approximations or importing the historical event/control plane.
+- The compact combat query algorithm can be adapted without importing its independent state,
   fire-control copy, replay hashes, FPS session, or event-adaptation route.
 - Rich presentation can remain disposable above typed facts: dropped delivery, host failure, and
   restart do not require gameplay rollback, event replay, or a second authority.

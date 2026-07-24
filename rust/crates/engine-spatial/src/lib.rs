@@ -1,10 +1,10 @@
 //! Conventional spatial services over object-centric entity state.
 //!
-//! The voxel authority and Parry collision projection are transplanted from
-//! Asha unchanged. This crate adapts their typed query vocabulary to a small,
-//! centrally scheduled motion system. Gameplay objects remain ordinary entity
-//! views with data capabilities; collision internals never become the runtime
-//! spine and components do not acquire scattered update hooks.
+//! The voxel authority and Parry collision projection expose a typed query
+//! vocabulary to a small, centrally scheduled motion system. Gameplay objects
+//! remain ordinary entity views with data capabilities; collision internals
+//! never become the runtime spine and components do not acquire scattered
+//! update hooks.
 
 #![forbid(unsafe_code)]
 
@@ -106,7 +106,7 @@ pub enum GeneratedRoomError {
 
 /// Static collision authority plus its query-optimized derived projection.
 ///
-/// Keeping both layers together preserves the donor's important invariant: the
+/// Keeping both layers together preserves the important invariant that the
 /// Parry representation accelerates queries but never becomes canonical state.
 pub struct VoxelCollisionScene {
     voxel_world: VoxelWorld,
@@ -460,7 +460,7 @@ impl VoxelCollisionScene {
                 }
             }
         })?;
-        // The donor query is deliberately stateless. Once an agent crosses a
+        // The navigation query is deliberately stateless. Once an agent crosses a
         // voxel boundary it would otherwise immediately turn toward the next
         // cell and cut the corner of an adjacent solid. Finish centering in the
         // newly entered cell before advancing; collision remains the fail-closed

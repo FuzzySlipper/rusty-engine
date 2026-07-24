@@ -1,7 +1,7 @@
 //! Reusable live entity and capability state for the Rusty Engine experiment.
 //!
 //! This crate owns reusable entity invariants and one atomic mutation boundary.
-//! It contains no door, encounter, render-host, or Asha runtime topology.
+//! It contains no door, encounter, render-host, or legacy runtime topology.
 
 #![forbid(unsafe_code)]
 

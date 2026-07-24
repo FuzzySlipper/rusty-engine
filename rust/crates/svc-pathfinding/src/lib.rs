@@ -1027,7 +1027,7 @@ mod tests {
         .expect("path");
         assert_eq!(
             describe_nav_path(&projection, &readout),
-            include_str!("../../../fixtures/nav/generated-tunnel-path.snapshot.txt")
+            include_str!("../../../../fixtures/nav/generated-tunnel-path.snapshot.txt")
         );
     }
 

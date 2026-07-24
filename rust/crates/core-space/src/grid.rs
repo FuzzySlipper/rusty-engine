@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn committed_public_fixture_matches_authority_grid_math() {
         let fixture: ConformanceFixture = serde_json::from_str(include_str!(
-            "../../../fixtures/spatial-grid/conformance.json"
+            "../../../../fixtures/spatial-grid/conformance.json"
         ))
         .unwrap();
         assert_eq!(fixture.coordinate_system, "rightHandedYUp");
