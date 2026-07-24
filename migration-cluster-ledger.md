@@ -320,16 +320,19 @@ Movement produced by a multi-step phase collapses to one response cue per entity
 and door cues are bounded, the DOM caps active effects at 24, and all transients expire.
 
 The real Chromium gate displays movement/block/attack/damage/defeat/door animation pulses, six
-particle kinds, damage/status billboards, and schedules oscillator/gain Web Audio one-shots. It then
+particle kinds, damage/status billboards, and schedules oscillator/gain Web Audio one-shots. It
+resets while concrete pulse, DOM, and audio targets are active and proves they are cleared. It then
 deliberately drops a movement response, fetches current state, proves gameplay fingerprints agree
-while cues are absent, clears the presentation sink as a restart, and rebuilds only current
-defeated/open posture. A focused fake-sink test forces an audio exception and proves later visual
-operations still execute.
+while cues are absent, and repeats the concrete cleanup during an in-page sink restart before
+rebuilding only current defeated/open posture. Focused TypeScript tests cover both reset cleanup and
+an audio exception that cannot stop later visual operations.
 
 Implementation commits are `bb16dbd5aa65878e9dadf36912d3478a06898f51` (typed projection),
 `2146e94020787d798f37a2f0fd17e4c8259bc71a` (browser realization), and
 `3ea43745208af284caa11680b221bb9c1131bd4a` (drop/restart/product proof). Verification is the full
 `pnpm run verify` gate plus `git diff --check` and the production-bundle exclusion scan.
+Review correction `59b4f4039fde0b63444d97fec2879b78195af5f1` adds concrete pulse/audio ownership and makes both
+reset assertions exercise active effects rather than aggregate bookkeeping alone.
 
 M4 change amplification is bounded:
 

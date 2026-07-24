@@ -373,6 +373,9 @@ rebuilds only current defeated/open posture. Rust tests independently compare sn
 delivered and discarded response paths, while focused TypeScript tests cover forced audio failure
 and concrete reset cleanup.
 
+The concrete reset ownership and strengthened proof landed in review correction
+`59b4f4039fde0b63444d97fec2879b78195af5f1`.
+
 M4 change amplification is explicit:
 
 | Change | Required ownership surfaces |
