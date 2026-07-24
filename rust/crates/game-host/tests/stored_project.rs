@@ -1,4 +1,7 @@
-use game_host::{decode_stored_project, diagnostic_code};
+use core_ids::EntityId;
+use game_host::{
+    decode_stored_project, diagnostic_code, GameRuntime, ProjectDiagnostic, RuntimeError,
+};
 
 const PROJECT: &str = include_str!("../../../../content/projects/loading-bay.project.json");
 
@@ -72,8 +75,96 @@ fn structural_decode_error_retains_the_scene_source_path() {
     assert!(error.diagnostic().path.starts_with("scenes[0]"));
 }
 
+#[test]
+fn stored_project_admits_every_settled_component_family_atomically() {
+    let runtime = GameRuntime::from_stored_project(PROJECT).expect("admitted runtime");
+    let session = runtime.session();
+
+    assert!(session.player_controller(EntityId::new(1)).is_some());
+    assert!(session.weapon(EntityId::new(1)).is_some());
+    assert!(session.encounter(EntityId::new(2)).is_some());
+    assert!(session.door(EntityId::new(3)).is_some());
+    assert!(session.enemy(EntityId::new(4)).is_some());
+    assert!(session.health(EntityId::new(4)).is_some());
+    assert!(session.navigation(EntityId::new(4)).is_some());
+    assert_eq!(
+        session
+            .switch(EntityId::new(6))
+            .expect("switch")
+            .controls_targets,
+        [EntityId::new(3)]
+    );
+    let collision = runtime.collision_scene().expect("spatial projection");
+    assert!(collision.solid_voxel_count() > 0);
+    assert!(!collision.mesh_chunks().is_empty());
+}
+
+#[test]
+fn renderables_require_declared_static_mesh_assets() {
+    let wrong_kind = mutate(|project| {
+        project["assets"][0]["id"] = "audio/control-panel".into();
+        project["scenes"][0]["entities"][4]["renderable"]["asset"] = "audio/control-panel".into();
+    });
+    let wrong_kind = admission_diagnostic(&wrong_kind);
+    assert_eq!(wrong_kind.code, diagnostic_code::WRONG_ASSET_KIND);
+    assert_eq!(wrong_kind.path, "scenes[0].entities[4].renderable.asset");
+
+    let missing = mutate(|project| {
+        project["assets"].as_array_mut().unwrap().remove(2);
+    });
+    let missing = admission_diagnostic(&missing);
+    assert_eq!(missing.code, diagnostic_code::MISSING_ASSET);
+    assert_eq!(missing.path, "scenes[0].entities[2].renderable.asset");
+}
+
+#[test]
+fn duplicate_entity_identity_fails_before_session_construction() {
+    let invalid = mutate(|project| project["scenes"][0]["entities"][1]["id"] = 1.into());
+    let diagnostic = admission_diagnostic(&invalid);
+
+    assert_eq!(diagnostic.code, diagnostic_code::DUPLICATE_ENTITY);
+    assert_eq!(diagnostic.path, "scenes[0].entities[1].id");
+    assert!(diagnostic.message.contains("entities[0].id"));
+}
+
+#[test]
+fn bad_relationship_reports_the_owning_component_path() {
+    let invalid = mutate(|project| {
+        project["scenes"][0]["entities"][4]["switch"]["controls"] = serde_json::json!([999]);
+    });
+    let diagnostic = admission_diagnostic(&invalid);
+
+    assert_eq!(diagnostic.code, diagnostic_code::INVALID_RELATIONSHIP);
+    assert_eq!(diagnostic.path, "scenes[0].entities[4].switch.controls");
+}
+
+#[test]
+fn component_and_spatial_failures_retain_source_paths() {
+    let invalid_component = mutate(|project| {
+        project["scenes"][0]["entities"][0]["playerController"]["moveSpeedUnitsPerSecond"] =
+            0.into();
+    });
+    let component = admission_diagnostic(&invalid_component);
+    assert_eq!(component.code, diagnostic_code::INVALID_COMPONENT);
+    assert_eq!(component.path, "scenes[0].entities[0].playerController");
+
+    let invalid_spatial = mutate(|project| {
+        project["scenes"][0]["voxelEnvironment"]["chunkSize"] = 65.into();
+    });
+    let spatial = admission_diagnostic(&invalid_spatial);
+    assert_eq!(spatial.code, diagnostic_code::INVALID_SPATIAL);
+    assert_eq!(spatial.path, "scenes[0].voxelEnvironment");
+}
+
 fn mutate(change: impl FnOnce(&mut serde_json::Value)) -> String {
     let mut project: serde_json::Value = serde_json::from_str(PROJECT).unwrap();
     change(&mut project);
     serde_json::to_string(&project).unwrap()
+}
+
+fn admission_diagnostic(input: &str) -> ProjectDiagnostic {
+    match GameRuntime::from_stored_project(input).unwrap_err() {
+        RuntimeError::StoredProject(error) => error.diagnostic().clone(),
+        error => panic!("unexpected runtime error: {error:?}"),
+    }
 }

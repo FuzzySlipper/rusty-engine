@@ -21,6 +21,11 @@ pub mod diagnostic_code {
     pub const DUPLICATE_ASSET: &str = "project.duplicateAsset";
     pub const DUPLICATE_SCENE: &str = "project.duplicateScene";
     pub const MISSING_ENTRY_SCENE: &str = "project.missingEntryScene";
+    pub const MISSING_ASSET: &str = "project.missingAsset";
+    pub const DUPLICATE_ENTITY: &str = "project.duplicateEntity";
+    pub const INVALID_COMPONENT: &str = "project.invalidComponent";
+    pub const INVALID_RELATIONSHIP: &str = "project.invalidRelationship";
+    pub const INVALID_SPATIAL: &str = "project.invalidSpatial";
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -211,6 +216,14 @@ impl StoredProjectError {
     pub fn diagnostic(&self) -> &ProjectDiagnostic {
         &self.diagnostic
     }
+
+    pub(crate) fn new(
+        code: &'static str,
+        path: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        failure(code, path, message)
+    }
 }
 
 impl std::fmt::Display for StoredProjectError {
@@ -250,11 +263,11 @@ pub fn decode_stored_project(input: &str) -> Result<StoredProject, StoredProject
             ),
         )
     })?;
-    validate_document(&document)?;
+    validate_stored_project(&document)?;
     Ok(document)
 }
 
-fn validate_document(document: &StoredProject) -> Result<(), StoredProjectError> {
+pub(crate) fn validate_stored_project(document: &StoredProject) -> Result<(), StoredProjectError> {
     if document.schema_version != STORED_PROJECT_SCHEMA_VERSION {
         return Err(failure(
             diagnostic_code::UNSUPPORTED_SCHEMA,

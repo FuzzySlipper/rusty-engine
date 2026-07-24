@@ -16,6 +16,7 @@ use crate::encounter::EncounterService;
 use crate::interaction::InteractionService;
 use crate::navigation::{EnemyNavigationSystem, NavigationPhaseReceipt};
 use crate::player::{PlayerControlReceipt, PlayerControllerService, ResolvedPlayerAction};
+use crate::project_admission::decode_and_admit_stored_project;
 use crate::runtime_records::{readout, GameEvent, JournalEntry, RuntimeReadout, RuntimeReceipt};
 use crate::scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
 use crate::session::GameSession;
@@ -26,6 +27,7 @@ pub const MAX_TICK_ADVANCE: u64 = 100_000;
 #[derive(Debug)]
 pub enum RuntimeError {
     Content(ProjectContentError),
+    StoredProject(crate::StoredProjectError),
     Definition(GameEntityDefinitionError),
     UnknownActor {
         actor: EntityId,
@@ -115,6 +117,16 @@ impl GameRuntime {
             session,
             collision_scene,
         } = decode_project_content(input).map_err(RuntimeError::Content)?;
+        let mut runtime = Self::new(session);
+        runtime.collision_scene = collision_scene;
+        Ok(runtime)
+    }
+
+    pub fn from_stored_project(input: &str) -> Result<Self, RuntimeError> {
+        let AdmittedProject {
+            session,
+            collision_scene,
+        } = decode_and_admit_stored_project(input).map_err(RuntimeError::StoredProject)?;
         let mut runtime = Self::new(session);
         runtime.collision_scene = collision_scene;
         Ok(runtime)

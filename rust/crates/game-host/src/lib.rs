@@ -14,6 +14,7 @@ mod encounter;
 mod interaction;
 mod navigation;
 mod player;
+mod project_admission;
 mod runtime;
 mod runtime_records;
 mod scheduler;
@@ -48,6 +49,7 @@ pub use player::{
     PlayerControllerState, PlayerControllerView, PlayerInputBindings, ResolvedPlayerAction,
     MAX_INPUT_CONTROL_LENGTH, MAX_PLAYER_LOOK_DEGREES_PER_UNIT, MAX_PLAYER_SPEED_UNITS_PER_SECOND,
 };
+pub use project_admission::{admit_stored_project, decode_and_admit_stored_project};
 pub use runtime::{GameRuntime, RuntimeError, MAX_EVENT_WAVE, MAX_TICK_ADVANCE};
 pub use runtime_records::{GameEvent, JournalEntry, RuntimeReadout, RuntimeReceipt};
 pub use scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
