@@ -4,6 +4,7 @@
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "scripts": {
+    "audit:standalone": "node scripts/audit-standalone.mjs",
     "build:shell": "pnpm --filter @rusty-engine/browser-shell build",
     "check:content": "pnpm --filter @rusty-engine/project-content check",
     "generate:content": "pnpm --filter @rusty-engine/project-content generate",

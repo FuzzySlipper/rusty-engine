@@ -20,6 +20,11 @@ reference/adapt/evidence/exclude treatment for its concrete consumer, and record
 this ledger. If the donor revision changes, revalidate the relevant report rows rather than assuming
 the old classification still holds.
 
+For the final repository-independence extraction, the bounded source, test, fixture, license,
+destination, and exclusion decisions are frozen in the
+[M9 extraction contract](m9-extraction-contract.md). That contract is narrower than the portability
+report and is the authority for M9B-M9D.
+
 | Local dependency/use | Asha source path | Treatment | Reason |
 |---|---|---|---|
 | `core-ids` | `engine-rs/crates/foundation/core-ids` | Sibling path dependency, unchanged | Mature typed identity newtypes; no high-level dependencies. |
