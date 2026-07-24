@@ -1,6 +1,6 @@
 # Experiment results
 
-Status: walking falsification slices and the first five scheduled migration families implemented
+Status: walking falsification slices and the first six scheduled migration families implemented
 on 2026-07-23 and tracked in Den.
 
 ## Current decision
@@ -144,12 +144,12 @@ One warm release run on the development host produced:
 
 | Bodies | Admission µs | Simulation µs / 180 phases | ns per body-phase | Projection µs / 180 passes | Facts committed | Snapshot bytes |
 |---:|---:|---:|---:|---:|---:|---:|
-| 32 | 66 | 523 | 90.9 | 307 | 3,322 | 18,818 |
-| 64 | 71 | 1,026 | 89.1 | 1,097 | 6,557 | 37,333 |
-| 128 | 145 | 2,256 | 97.9 | 1,392 | 13,100 | 74,415 |
-| 256 | 270 | 4,406 | 95.6 | 2,670 | 26,155 | 148,728 |
+| 32 | 287 | 680 | 118.1 | 312 | 3,322 | 18,929 |
+| 64 | 514 | 1,598 | 138.7 | 741 | 6,557 | 37,444 |
+| 128 | 1,073 | 2,345 | 101.8 | 1,577 | 13,100 | 74,526 |
+| 256 | 2,297 | 4,750 | 103.1 | 2,690 | 26,155 | 148,839 |
 
-At 256 bodies the loop completed about 40,850 phases/second and all 256 bodies stopped without
+At 256 bodies the loop completed about 37,892 phases/second and all 256 bodies stopped without
 tunneling. These are characterization numbers, not a stable benchmark or frame-budget guarantee;
 the run has no renderer, input, AI, or operating-system workload mixed into it.
 
@@ -419,6 +419,63 @@ M5 change amplification is explicit:
 | Existing component validation change | `stored_project`/`project_admission` plus focused path-diagnostic tests; no runtime service or browser algorithm change. |
 | New settled component family | Its responsible Rust component/service plus its explicit stored definition/admission/snapshot path; no provider registry, universal envelope, or language runtime. |
 
+### Canonical project persistence and migration
+
+M6 makes authored-project durability concrete without merging it with session persistence:
+
+```text
+optional TypeScript candidate or stored schema-v6/v7 file
+  -> bounded Rust decode and explicit version selection
+  -> one schema-v6 to schema-v7 migration when required
+  -> existing complete M5 semantic admission
+  -> AdmittedStoredProject (static data only)
+  -> canonical JSON -> synced same-directory pending file -> atomic install
+
+independent live GameRuntime
+  -> snapshot schema 8 with tick, current health/ammo/cooldown, pose, doors, schedules
+```
+
+The canonical encoder fixes object-field order through concrete structs, sorts catalog/scene/entity
+and set-like relationship/voxel collections, rejects non-finite numbers, normalizes negative zero,
+uses shortest round-trip JSON numbers, and emits LF text with one trailing newline. Decode accepts
+only schema 7 or the one retained schema 6 predecessor. The migration wraps the flat entity list in
+one entry scene, derives a typed mesh catalog, and replaces obsolete `primitive/*` renderable
+identities with `mesh/*`; every other version fails closed at `schemaVersion`.
+
+`ProjectStore` accepts only an `AdmittedStoredProject`, so shape-valid but semantically invalid
+relationships cannot be persisted through its public save API. Its default input bound is 8 MiB.
+Create-new and replace-existing are distinct operations. Complete bytes are written and synced in
+the target directory before an atomic install; a complete canonical pending file can be recovered,
+while partial, noncanonical, legacy, directory, or symlink conflicts are not promoted. Failed
+pending writes leave the known-good target readable.
+
+The product proof is literal. `project-store` saves the current loading bay to a temporary durable
+file, `browser-host --project` admits that file and reloads it on reset, and real Chromium completes
+the established movement/navigation/combat/door/Three/Web Audio path. The gate separately migrates
+`content/generated/encounter-gate.project.json`, starts the same browser host from the canonical
+result, verifies its scene/assets/components/relationships, and accepts a live attack. Neither save,
+migration, startup, nor reset needs the optional TypeScript content builder or a TypeScript gameplay
+host.
+
+Focused separation evidence changes player look, enemy health, remaining ammo, cooldown tick, door
+state, and runtime tick. Saving the retained admitted project token contains none of those current
+values and starts a fresh session at authored defaults. The independent runtime snapshot reopens
+every changed value byte-identically. A schema-99 input reports
+`project.unsupportedSchema` at `schemaVersion` and leaves the prior canonical project unchanged.
+
+M6 change amplification is explicit:
+
+| Change | Required ownership surfaces |
+|---|---|
+| Ordinary content-only project edit | The static project or optional TypeScript candidate/test; canonical codec, store, runtime snapshot, and product host stay unchanged. |
+| Add a representable predecessor meaning | The explicit branch and historical DTO in `project_codec` plus focused migration fixtures; no migration registry, bundle protocol, replay, or runtime lifecycle change. |
+| Change crash/replacement policy | `project_store` and its filesystem tests/CLI only; no gameplay service, component, snapshot, TypeScript authoring, or renderer change. |
+| Add a genuinely new durable authored component | Its stored shape, direct semantic admission, responsible runtime owner, snapshot path if live state exists, and focused/product proof; canonical/store infrastructure remains generic over the concrete project struct. |
+
+Implementation commits are `5072f0c0a5cd03448c3543d6763f3dd9082fa54c`,
+`a3eae545558a8e47c652af9a159c708dd32eb950`, and
+`d17ed7f28d9d386072eb745f6ec1f5d789e89978`.
+
 ### Browser/Three/DOM product proof
 
 The loading-bay browser shell links Asha's actual `@asha/renderer-three` and generated render
@@ -491,7 +548,7 @@ The current verification gate proves:
 - Rust formatting, Clippy, and strict TypeScript compilation;
 - generated project content is byte-for-byte current with its TypeScript composition;
 - 13 TypeScript content-composition tests and ten browser input/projection/presentation tests;
-- 69 Rust tests across entity state, donor collision/navigation/mesh queries, security door,
+- 85 Rust tests across entity state, donor collision/navigation/mesh queries, security door,
   content admission, encounter routing, kinematic/navigation motion, atomic rejection, projection,
   player control, combat/health/weapon behavior, generated-environment admission, and save/reopen;
 - strict rejection of unknown stored-content and snapshot fields;
@@ -505,7 +562,7 @@ These are physical line counts (`wc -l`), not complexity scores:
 |---|---:|---|
 | Reusable Rust entity state | 4 files / 888 lines | Entity/capability storage, atomic entity mutation, snapshot, projection. |
 | Successor spatial adapter/system | 1 file / 898 lines | Canonical donor scene construction, generated-room/aperture algorithm, collision/navigation/mesh derivation, bounded query facade, central kinematic phase. |
-| Rust game host and runners | 21 files / 6,051 lines | Concrete feature-owned components/services, routing, stored/legacy admission, scheduling, snapshots, presentation projection, headless/product/workload hosts. |
+| Rust game host and runners | 24 files / 6,993 lines | Concrete feature-owned components/services, routing, canonical project codec/migration/store, scheduling, snapshots, presentation projection, headless/product/workload hosts. |
 | TypeScript content composition | 5 files / 417 lines | Typed definitions, optional schema-v7 candidate builder, encounter/generation/combat and motion builders, reproducibility check. |
 | TypeScript browser product shell | 8 files / 1,756 lines | Browser-owned input lifecycle, Rust-readout/mesh and feedback adapters, DOM/Web Audio realization, derived camera, Asha renderer mount, bridge exclusion shim, styling. |
 | Authored stored project | 1 file / 112 lines | Hand-authored loading-bay catalog, scene, relationships, components, and voxel source loaded directly by Rust. |
@@ -537,8 +594,11 @@ generic replay machinery.
   fire-control copy, replay hashes, FPS session, or event-adaptation route.
 - Rich presentation can remain disposable above typed facts: dropped delivery, host failure, and
   restart do not require gameplay rollback, event replay, or a second authority.
-- A static multi-family project can be readable, strictly admitted, and product-driving without an
-  Asha bundle lifecycle or requiring its optional TypeScript producer at runtime.
+- A static multi-family project can be readable, strictly admitted, canonically persisted/migrated,
+  and product-driving without an Asha bundle lifecycle or requiring its optional TypeScript producer
+  at runtime.
+- Authored persistence and concrete session snapshots can remain separate types, APIs, files, and
+  lifecycles while both reuse direct semantic admission and deterministic reopen tests.
 - The new capability's behavior has one owner; its expected amplification is model/command/snapshot
   binding plus admission and restore, not a cross-language protocol campaign.
 
@@ -550,8 +610,8 @@ should move or that all current leaf-donor arrangements are durable infrastructu
 
 Before calling this durable infrastructure:
 
-1. Implement M6 canonical project persistence and one explicit schema-v6 migration while keeping
-   authored projects distinct from runtime snapshots.
+1. Complete M7A's authoritative voxel-edit transaction and M7B's bounded real-asset conversion
+   without importing Asha's edit-log/control plane.
 2. Decide whether sibling donor references become pinned Git dependencies, vendored crates, or a
    shared foundation repository before Asha resumes development.
 3. Add safe allocation telemetry and a longer mixed workload; the current matrix measures isolated

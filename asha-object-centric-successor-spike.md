@@ -1,6 +1,6 @@
 # Asha Object-Centric Successor Spine
 
-Status: walking falsification spike complete; migration boundary decision ready
+Status: walking falsification spike and first six migration families complete; voxel editing ready
 Working location: `/home/dev/rusty-engine`
 Asha donor snapshot inspected: `a431974330589761c9e35fc4f8a55996a1b5ee48`
 Decision scope: a possible successor for Asha's runtime/application spine, not a decision to replace the whole engine
@@ -763,7 +763,7 @@ Further walking-slice evidence should decide:
 
 ## Recommended next action
 
-The planned falsification slices and the first five migration families now pass: direct gameplay
+The planned falsification slices and the first six migration families now pass: direct gameplay
 services, content-only variation, cross-domain typed consequences, localized engine capabilities,
 substantial spatial/collision/query reuse, real-time multi-entity pressure, combat, persistence, and
 the retained browser product path. M4 additionally proves that typed movement/combat/door outcomes
@@ -781,8 +781,21 @@ TypeScript, while an optional TypeScript builder deep-equals the same candidate.
 reopen remains a separate concrete-state format with no project catalog, event history, or
 TypeScript state.
 
-The next ready closure is M6: add canonical project encoding, a real schema-v6-to-v7 migration, and
-recoverable durable project writes while preserving that project/session separation.
+M6 now passes. Rust owns canonical schema-v7 encoding and the one explicit schema-v6 migration;
+TypeScript remains an optional candidate producer. Only a document that passed the complete M5
+admission can enter the bounded filesystem store. Synced pending bytes install atomically, an
+interrupted complete write is recoverable, unsupported versions fail at `schemaVersion`, and a
+failed write or future-version input leaves the prior good project intact.
+
+The browser product no longer depends on a compile-time project string. The verification gate saves
+the current loading bay through Rust, starts and resets the host from that file, completes the full
+Chromium path, then migrates the retained schema-v6 fixture and runs it through the same product
+host. A separate live snapshot reopens changed pose, health, ammo/cooldown, door, and tick values;
+the authored project save contains none of them.
+
+The next ready closure is M7A: one typed authoritative voxel-edit transaction that rebuilds
+collision, navigation, and mesh from the same accepted revision, followed by M7B's bounded real
+asset conversion into the admitted voxel form.
 
 ## Source basis
 

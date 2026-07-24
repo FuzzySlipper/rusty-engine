@@ -125,6 +125,14 @@ record, provider manifest, workspace lifecycle, bootstrap/session state, and uni
 Rust owns the one concrete schema-6 to schema-7 migration; TypeScript may still materialize a
 candidate, but it neither selects migration semantics nor emits canonical saved bytes.
 
+The M6 implementation is pinned by
+`5072f0c0a5cd03448c3543d6763f3dd9082fa54c` (canonical codec and explicit predecessor migration),
+`a3eae545558a8e47c652af9a159c708dd32eb950` (admitted-token bounded durable store), and
+`d17ed7f28d9d386072eb745f6ec1f5d789e89978` (filesystem product startup and literal separation
+proof). No Asha serialization, snapshot, scene, project-content, bundle, rule, or diagnostics crate
+was added. The filesystem service remains successor-owned and accepts only static data carrying the
+same semantic-admission token used to construct the runtime.
+
 Sibling references are intentional while Asha development is stopped for this decision. If this
 lab becomes a durable independent successor, the references should be pinned as Git dependencies,
 vendored with this ledger, or moved into a shared foundation repository before Asha resumes.

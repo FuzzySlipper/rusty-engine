@@ -211,9 +211,9 @@ player intent so combat proves a real interaction rather than another test-only 
 | M3 | Complete (#6106) | Weapon configuration, attack intent, ray/target resolution, health, damage/defeat, encounter consequence | M1, M2A | Slab-ray/nearest-hit algorithm adapted from `svc-combat`; old FPS lifecycle used as behavioral and negative structural evidence | Player damages a moving enemy through authored primary fire, later defeats the encounter, health/weapon eligibility reopen identically, and typed defeat clears the existing door path |
 | M4 | Complete (#6111-#6114) | Animation/audio/particle/billboard feedback derived from accepted movement, attack, damage, defeat, and door facts | M1-M3 facts | Presentation render families inspected as evidence only; no donor presentation crate/protocol imported | Typed response-local feedback is visible/audible, posture rebuilds from current state, dropped/restarted cues do not replay, and presentation failure never changes gameplay |
 | M5 | Complete (#6117-#6120) | Stored scene, asset identities/catalog, entity definitions, project admission, diagnostics | At least M1, M2A, and M3 | `core-assets` referenced unchanged; catalog/scene/project/bundle families used only as bounded evidence | The checked-in schema-v7 loading-bay project drives the real browser through one strict Rust admission path with source-locatable diagnostics and no runtime facade |
-| M6 | Ready to implement (#6121-#6124) | Durable project save/load and versioning, distinct from a live runtime snapshot | M5 | Selective serialization evidence only | Project content round-trips/version-migrates independently of session state; snapshots remain concrete runtime persistence |
-| M7A | Deferred | Live voxel edit commands, authoritative voxel mutation, collision/navigation/mesh invalidation | M1, M2B | Adapt `rule-voxel-edit` behavior and narrow voxel services | One edit becomes visible and changes collision/navigation in the same accepted transaction; reopen preserves it |
-| M7B | Deferred | Voxel asset import/conversion into the admitted project form | M7A, M5 | Adapt conversion and asset services/tools | A real external asset converts reproducibly, validates, loads, and behaves like authored voxels |
+| M6 | Complete (#6121-#6124) | Durable project save/load and versioning, distinct from a live runtime snapshot | M5 | Canonical/fixed-point serialization evidence adapted; bundle/lifecycle/snapshot machinery excluded | Admitted project content saves atomically, round-trips byte-stably, and migrates the real schema-v6 predecessor; Chromium starts and resets from the saved file while snapshots independently reopen changed live values |
+| M7A | Ready (#6125-#6128) | Live voxel edit commands, authoritative voxel mutation, collision/navigation/mesh invalidation | M1, M2B, M6 | Adapt `rule-voxel-edit` behavior and narrow voxel services | One edit becomes visible and changes collision/navigation in the same accepted transaction; reopen preserves it |
+| M7B | Planned after M7A (#6129-#6131) | Voxel asset import/conversion into the admitted project form | M7A, M5 | Adapt conversion and asset services/tools | A real external asset converts reproducibly, validates, loads, and behaves like authored voxels |
 | M7C | Unscheduled | Voxel annotations and edit history | A named authoring/diagnostic consumer | Evidence from annotation/history protocols and services | Schedule only when undo, provenance, collaboration, or another concrete consumer exists |
 | M8 | Unscheduled | Studio/editor workflows over established runtime and project APIs | M5-M7 plus repeated manual-authoring pain | Asha Studio is product evidence, not a shell to transplant | Tools manipulate the same admitted data and typed commands used without Studio; no editor-only authority path |
 
@@ -356,8 +356,12 @@ invariants before returning a `GameSession`; no provider, extension, load-plan, 
 introduced. The product host consumes the checked-in artifact directly, while the optional
 TypeScript builder merely materializes an equivalent candidate.
 
-M6 can now add a canonical codec, one explicit migration from the retained flat schema-v6 fixture,
-and recoverable durable writes without changing runtime-snapshot ownership.
+M6 adds a canonical successor codec, one explicit migration from the retained flat schema-v6
+fixture, and recoverable durable writes without changing runtime-snapshot ownership. A project must
+pass the same complete M5 admission before the file store accepts it. The store writes bounded
+canonical bytes to a same-directory pending file, syncs before install, distinguishes create from
+replace, and can recover a complete canonical pending file without promoting partial or old-version
+bytes.
 
 Keep two persistence concepts distinct:
 
@@ -365,6 +369,19 @@ Keep two persistence concepts distinct:
 - **Runtime snapshots** are concrete durable state for reopening one admitted session.
 
 Neither is an event history.
+
+The full product gate now persists the schema-v7 loading bay through the Rust CLI, starts the browser
+host from that saved path, reloads the same path on reset, and completes the existing Chromium
+gameplay proof. It also migrates the real schema-v6 encounter project, starts the same host from the
+canonical migrated artifact, and accepts a live attack. Focused evidence mutates player look,
+health, ammo, cooldown eligibility, door state, and tick; the authored save contains none of those
+live values while snapshot schema 8 reopens them exactly. Future schema 99 fails at
+`schemaVersion` without changing the prior good project.
+
+Implementation commits are `5072f0c0a5cd03448c3543d6763f3dd9082fa54c` (codec and explicit
+migration), `a3eae545558a8e47c652af9a159c708dd32eb950` (admitted-token durable store), and
+`d17ed7f28d9d386072eb745f6ec1f5d789e89978` (filesystem product startup, separation proof, and
+Chromium/migrated-product gate).
 
 ### M7: voxel authoring
 
