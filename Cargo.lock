@@ -172,6 +172,7 @@ dependencies = [
 name = "entity-state"
 version = "0.1.0"
 dependencies = [
+ "core-assets",
  "core-ids",
  "core-math",
  "serde",

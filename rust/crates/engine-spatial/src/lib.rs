@@ -8,7 +8,15 @@
 
 #![forbid(unsafe_code)]
 
+mod entity_motion;
 mod voxel_edit;
+
+pub use entity_motion::{
+    EntityMotionCommand, EntityMotionError, EntityMotionOutcome, EntityMotionReceipt,
+    EntityMotionResolution, EntityMotionService, FirstPersonBasis, FirstPersonMotionCommand,
+    FirstPersonMotionError, FirstPersonMotionInput, FirstPersonMotionReadout,
+    FirstPersonMotionReceipt, FirstPersonMotionService, FirstPersonPose,
+};
 
 pub use voxel_edit::{
     validate_material_voxel, validate_voxel_address, validate_voxel_material_slot,
