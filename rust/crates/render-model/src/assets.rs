@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{MeshProvenance, RenderHandle, RenderMetadata, Transform};
+use crate::{MeshProvenance, RenderHandle, RenderMetadata, Transform, JSON_SAFE_U64_MAX};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -454,6 +454,15 @@ impl SpriteInstanceDescriptor {
         self.metadata.validate().map_err(SpriteError::Metadata)?;
         if self
             .attachment
+            .source_entity
+            .into_iter()
+            .chain(self.attachment.source_scene_node)
+            .any(|value| value > JSON_SAFE_U64_MAX)
+        {
+            return Err(SpriteError::UnsafeSourceIdentity);
+        }
+        if self
+            .attachment
             .attachment_point
             .as_ref()
             .is_some_and(|value| value.trim().is_empty())
@@ -473,6 +482,7 @@ pub enum SpriteError {
     Transform(crate::TransformError),
     Metadata(crate::NodeError),
     EmptyAttachmentPoint,
+    UnsafeSourceIdentity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

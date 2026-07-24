@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "ops": [
+    {
+      "op": "defineMaterial",
+      "material": {
+        "schemaVersion": 2,
+        "id": "voxel-material/1",
+        "color": [0.5, 0.5, 0.55, 1],
+        "texture": null,
+        "roughness": 1,
+        "textureTint": [1, 1, 1, 1],
+        "emissionColor": [0.5, 0.5, 0.55],
+        "emissionIntensity": 0,
+        "uvStrategy": "flat"
+      }
+    },
+    {
+      "op": "defineMaterial",
+      "material": {
+        "schemaVersion": 2,
+        "id": "voxel-material/2",
+        "color": [0.4, 0.25, 0.1, 1],
+        "texture": null,
+        "roughness": 1,
+        "textureTint": [1, 1, 1, 1],
+        "emissionColor": [0.4, 0.25, 0.1],
+        "emissionIntensity": 0,
+        "uvStrategy": "flat"
+      }
+    }
+  ]
+}

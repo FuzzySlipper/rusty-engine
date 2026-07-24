@@ -3,7 +3,8 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    validate_asset_id, RenderAssetError, RenderAssetKind, RenderMetadata, Transform, TransformError,
+    validate_asset_id, RenderAssetError, RenderAssetKind, RenderMetadata, Transform,
+    TransformError, JSON_SAFE_U64_MAX,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,6 +168,10 @@ impl MeshPayloadDescriptor {
                     vertex_count: self.layout.vertex_count,
                 });
             }
+        } else if let MeshPayloadSource::SharedBuffer { buffer, .. } = &self.source {
+            if *buffer > JSON_SAFE_U64_MAX {
+                return Err(MeshDescriptorError::UnsafeSharedBufferId { buffer: *buffer });
+            }
         }
 
         let mut cursor = 0_u32;
@@ -273,6 +278,9 @@ pub enum MeshDescriptorError {
     },
     InvalidBounds,
     NonFiniteAttribute,
+    UnsafeSharedBufferId {
+        buffer: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -697,5 +705,20 @@ mod tests {
                 actual_start: 1,
             })
         );
+    }
+
+    #[test]
+    fn shared_buffer_ids_must_survive_the_javascript_border_exactly() {
+        let mut payload = triangle();
+        payload.source = MeshPayloadSource::SharedBuffer {
+            buffer: JSON_SAFE_U64_MAX + 1,
+            positions_byte_offset: 0,
+            normals_byte_offset: 36,
+            indices_byte_offset: 72,
+        };
+        assert!(matches!(
+            payload.validate(),
+            Err(MeshDescriptorError::UnsafeSharedBufferId { .. })
+        ));
     }
 }

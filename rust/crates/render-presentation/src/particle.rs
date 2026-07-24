@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use render_model::{RenderAssetError, RenderAssetKind};
+use render_model::{RenderAssetError, RenderAssetKind, JSON_SAFE_U64_MAX};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -9,8 +9,6 @@ use crate::{
 };
 
 const MAX_CURVE_KEYS: usize = 8;
-const JSON_SAFE_U64_MAX: u64 = (1_u64 << 53) - 1;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ParticleEmitterHandle(u64);

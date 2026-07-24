@@ -4,10 +4,12 @@ use render_model::{
     NodeError, RenderDiff, RenderFrameDiff, RenderFrameError, RenderHandle, RenderNode,
 };
 
-const LOCAL_HANDLE_MASK: u64 = (1_u64 << 56) - 1;
+const LOCAL_HANDLE_BITS: u32 = 40;
+const LOCAL_HANDLE_MASK: u64 = (1_u64 << LOCAL_HANDLE_BITS) - 1;
 
-/// High-byte namespaces let independent projection owners share one retained
-/// scene without an ambient/global handle allocator.
+/// Compact namespaces let independent projection owners share one retained
+/// scene without an ambient/global allocator while every handle remains exact
+/// in the JSON/JavaScript number border.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenderHandleNamespace(u8);
 
@@ -74,7 +76,7 @@ impl<K: Ord + Clone> StableHandleRegistry<K> {
                 namespace: self.namespace.raw(),
             });
         }
-        let raw = (u64::from(self.namespace.raw()) << 56) | self.next_local;
+        let raw = (u64::from(self.namespace.raw()) << LOCAL_HANDLE_BITS) | self.next_local;
         self.next_local += 1;
         let handle = RenderHandle::new(raw);
         self.handles.insert(key, handle);
@@ -201,7 +203,7 @@ mod tests {
         first.insert(9_u64, RenderNode::new(Geometry::Cube));
         let created = projector.project(first.clone()).unwrap();
         let handle = projector.handle_of(&9).unwrap();
-        assert_eq!(handle.raw(), (1_u64 << 56) | 1);
+        assert_eq!(handle.raw(), (1_u64 << LOCAL_HANDLE_BITS) | 1);
         assert!(matches!(created.ops[0], RenderDiff::Create { .. }));
 
         first.get_mut(&9).unwrap().transform = Transform {

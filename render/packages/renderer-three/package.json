@@ -1,0 +1,32 @@
+{
+  "name": "@rusty-engine/renderer-three",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./backend": {
+      "import": "./dist/backend.js",
+      "types": "./dist/backend.d.ts"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --build",
+    "test": "tsc --build && node --test 'dist/**/*.test.js'"
+  },
+  "dependencies": {
+    "@rusty-engine/render-contracts": "workspace:*",
+    "@rusty-engine/render-projection": "workspace:*",
+    "three": "^0.184.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.184.1"
+  }
+}

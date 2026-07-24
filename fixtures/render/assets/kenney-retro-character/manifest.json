@@ -1,0 +1,11 @@
+{
+  "assetId": "mesh-animation/kenney-retro-character-medium",
+  "sourcePackage": "Kenney Animated Characters Retro 1.1",
+  "sourceLicense": "CC0",
+  "runtimeFormat": "glb",
+  "fixturePath": "fixtures/render/assets/kenney-retro-character/character-medium.glb",
+  "contentHashSha256": "c71255a41c0373f0d2ef52593369d5fd9d2f6220ae548aff8cd6bf5edb403674",
+  "clipIds": ["idle", "run", "jump"],
+  "primaryProofClipId": "run",
+  "externalUris": []
+}

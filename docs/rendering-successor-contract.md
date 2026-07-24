@@ -125,6 +125,30 @@ external consumers use an exact published or exact-commit artifact rather than a
 and Three backend after switching to the shared packages. Studio is the second consumer and must
 not implement another viewport renderer.
 
+## Implemented TypeScript border
+
+The isolated workspace now exposes three layers with one-way dependencies:
+
+- `@rusty-engine/render-contracts` mirrors the complete Rust retained and presentation frames and
+  strictly decodes unknown JSON before it reaches mutable renderer state;
+- `@rusty-engine/render-projection` applies whole retained frames fail-atomically and exposes a
+  backend-neutral scene/resource readout; and
+- `@rusty-engine/renderer-three` owns Three objects, shared-buffer borrows, GLB resources, material
+  realization, texture/atlas retention and UV projection, sprites, lights, picking, browser
+  mounting, and editor viewport primitives.
+
+Every `u64` that crosses the JSON/JavaScript border is constrained to the exact integer range
+`0..=2^53-1`. Rust rejects unsafe handles, resource ids, source identities, seeds, revisions, and
+ticks before encoding; the TypeScript decoder repeats that check for untrusted external payloads.
+Shared mesh bytes arrive through a narrow borrow-copy-release provider and are copied immediately
+into renderer-owned arrays. It is not a general bridge and cannot expose gameplay mutation.
+
+The browser acceptance fixture fetches the repository-local CC0 animated GLB and exercises group
+and primitive nodes, inline static meshes, named animation playback, retained materials and
+texture/atlas descriptions, sprite UVs, lights, world projection, picking, and disposal through a
+real WebGL context. Node tests retain the more exhaustive error, fallback, replacement, channel,
+and resource lifecycle matrix.
+
 ## CI boundaries
 
 - **Engine:** Rust formatting, metadata, unit/integration tests, Clippy, standalone audit, and

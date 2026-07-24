@@ -353,6 +353,35 @@ fn frame_rejects_sequence_gaps_and_unknown_fields() {
 }
 
 #[test]
+fn frame_rejects_presentation_identities_outside_the_json_safe_range() {
+    let unsafe_value = (1_u64 << 53) + 1;
+    let frame = PresentationFrameDiff {
+        schema_version: PRESENTATION_FRAME_SCHEMA_VERSION,
+        ops: vec![PresentationOp::Billboard {
+            meta: PresentationOpMeta::new(0),
+            op: BillboardProjectionOp::Create {
+                handle: BillboardHandle::new(unsafe_value),
+                descriptor: billboard(),
+            },
+        }],
+    };
+    assert_eq!(
+        frame.validate(),
+        Err(PresentationFrameError::UnsafeJsonInteger {
+            sequence: 0,
+            field: "billboard.handle",
+            value: unsafe_value,
+        })
+    );
+    assert!(matches!(
+        frame.encode_json(),
+        Err(PresentationJsonError::InvalidFrame(
+            PresentationFrameError::UnsafeJsonInteger { .. }
+        ))
+    ));
+}
+
+#[test]
 fn checked_in_fixture_is_the_canonical_cross_language_frame() {
     let fixture = include_str!("../../../../fixtures/render/presentation-frame-v1.json");
     let decoded = PresentationFrameDiff::decode_json(fixture).unwrap();

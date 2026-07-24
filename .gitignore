@@ -1,7 +1,11 @@
 /target/
-/render/node_modules/
+/render/**/node_modules/
 /render/.nx/
 /render/dist/
+/render/packages/*/dist/
+/render/**/*.tsbuildinfo
 /render/coverage/
+/render/playwright-report/
+/render/test-results/
 *.log
 .DS_Store

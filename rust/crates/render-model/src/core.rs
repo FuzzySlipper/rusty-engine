@@ -7,6 +7,7 @@ use crate::{
 };
 
 pub const RENDER_FRAME_SCHEMA_VERSION: u32 = 1;
+pub const JSON_SAFE_U64_MAX: u64 = (1_u64 << 53) - 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -20,6 +21,19 @@ impl RenderHandle {
     pub const fn raw(self) -> u64 {
         self.0
     }
+
+    pub const fn validate(self) -> Result<(), RenderHandleError> {
+        if self.0 <= JSON_SAFE_U64_MAX {
+            Ok(())
+        } else {
+            Err(RenderHandleError::OutsideJsonSafeRange(self.0))
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderHandleError {
+    OutsideJsonSafeRange(u64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -150,6 +164,14 @@ pub struct RenderMetadata {
 
 impl RenderMetadata {
     pub fn validate(&self) -> Result<(), NodeError> {
+        if self
+            .source_entity
+            .into_iter()
+            .chain(self.source_scene_node)
+            .any(|value| value > JSON_SAFE_U64_MAX)
+        {
+            return Err(NodeError::UnsafeSourceIdentity);
+        }
         if self.tags.iter().any(|tag| tag.trim().is_empty()) {
             return Err(NodeError::EmptyTag);
         }
@@ -206,6 +228,7 @@ pub enum NodeError {
     EmptyTag,
     TagsNotCanonical,
     EmptyLabel,
+    UnsafeSourceIdentity,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -294,6 +317,8 @@ pub enum RenderDiff {
 
 impl RenderDiff {
     pub fn validate(&self) -> Result<(), RenderOperationError> {
+        self.validate_handles()
+            .map_err(RenderOperationError::Handle)?;
         match self {
             Self::Create { node, .. } => node.validate().map_err(RenderOperationError::Node),
             Self::Update {
@@ -364,6 +389,34 @@ impl RenderDiff {
             }
         }
     }
+
+    fn validate_handles(&self) -> Result<(), RenderHandleError> {
+        match self {
+            Self::Create { handle, parent, .. }
+            | Self::CreateLight { handle, parent, .. }
+            | Self::CreateStaticMeshInstance { handle, parent, .. }
+            | Self::CreateAnimatedMeshInstance { handle, parent, .. }
+            | Self::CreateSprite { handle, parent, .. } => {
+                handle.validate()?;
+                if let Some(parent) = parent {
+                    parent.validate()?;
+                }
+            }
+            Self::Update { handle, .. }
+            | Self::Destroy { handle }
+            | Self::ReplaceMeshPayload { handle, .. }
+            | Self::UpdateLight { handle, .. }
+            | Self::SetMaterialInstanceParameters { handle, .. }
+            | Self::SetAnimatedMeshPlayback { handle, .. }
+            | Self::UpdateSprite { handle, .. } => handle.validate()?,
+            Self::DefineMaterial { .. }
+            | Self::DefineTexture { .. }
+            | Self::DefineSpriteAtlas { .. }
+            | Self::DefineStaticMesh { .. }
+            | Self::DefineAnimatedMesh { .. } => {}
+        }
+        Ok(())
+    }
 }
 
 fn valid_color<const N: usize>(color: [f32; N]) -> bool {
@@ -374,6 +427,7 @@ fn valid_color<const N: usize>(color: [f32; N]) -> bool {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RenderOperationError {
+    Handle(RenderHandleError),
     Node(NodeError),
     Transform(TransformError),
     Mesh(crate::MeshDescriptorError),
@@ -523,6 +577,25 @@ mod tests {
         assert!(matches!(
             invalid.validate(),
             Err(RenderFrameError::Operation { index: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn frame_rejects_handles_that_javascript_cannot_represent_exactly() {
+        let invalid = RenderFrameDiff {
+            schema_version: RENDER_FRAME_SCHEMA_VERSION,
+            ops: vec![RenderDiff::Create {
+                handle: RenderHandle::new(JSON_SAFE_U64_MAX + 1),
+                parent: None,
+                node: RenderNode::new(Geometry::Cube),
+            }],
+        };
+        assert!(matches!(
+            invalid.validate(),
+            Err(RenderFrameError::Operation {
+                index: 0,
+                source: RenderOperationError::Handle(RenderHandleError::OutsideJsonSafeRange(_))
+            })
         ));
     }
 }

@@ -1,0 +1,7 @@
+handle 1  layer scene  kind staticMesh  asset mesh/room-floor  pos 0,-1,0  scale 8,1,8  visible true  materials [0.44,0.48,0.46]  label "room-floor"
+handle 2  layer scene  kind staticMesh  asset mesh/room-wall  pos 0,1,-4  scale 8,4,1  visible true  materials [0.68,0.73,0.76]  label "room-wall-north"
+handle 3  layer scene  kind staticMesh  asset mesh/room-wall  pos 0,1,4  scale 8,4,1  visible true  materials [0.68,0.73,0.76]  label "room-wall-south"
+handle 4  layer scene  kind staticMesh  asset mesh/room-wall  pos -4,1,0  scale 1,4,8  visible true  materials [0.68,0.73,0.76]  label "room-wall-west"
+handle 5  layer scene  kind staticMesh  asset mesh/room-wall  pos 4,1,0  scale 1,4,8  visible true  materials [0.68,0.73,0.76]  label "room-wall-east"
+handle 6  layer scene  kind staticMesh  asset mesh/room-ceiling  pos 0,3,0  scale 8,1,8  visible true  materials [0.86,0.88,0.84]  label "room-ceiling"
+handle 7  layer scene  kind staticMesh  asset mesh/room-marker  pos 0,-0.48,0  scale 0.5,0.04,0.5  visible true  materials [0.92,0.42,0.18]  label "room-origin-marker"

@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "ops": [
+    {
+      "op": "create",
+      "handle": 1,
+      "parent": null,
+      "node": {
+        "geometry": { "kind": "cube" },
+        "material": { "color": [1, 1, 1, 1], "wireframe": false },
+        "transform": {
+          "translation": [1, 0, 0],
+          "rotation": [0, 0, 0, 1],
+          "scale": [1, 1, 1]
+        },
+        "visible": true,
+        "layer": "scene",
+        "metadata": {
+          "sourceEntity": 1,
+          "sourceSceneNode": null,
+          "tags": ["fixture"],
+          "label": "entity 1"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "handle": 1,
+      "transform": null,
+      "material": null,
+      "visible": false,
+      "metadata": null
+    },
+    { "op": "destroy", "handle": 1 }
+  ]
+}

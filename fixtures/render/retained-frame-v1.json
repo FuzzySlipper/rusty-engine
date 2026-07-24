@@ -3,7 +3,7 @@
   "ops": [
     {
       "op": "create",
-      "handle": 72057594037927937,
+      "handle": 1099511627777,
       "parent": null,
       "node": {
         "geometry": { "kind": "cube" },
@@ -28,7 +28,7 @@
     },
     {
       "op": "createLight",
-      "handle": 216172782113783809,
+      "handle": 3298534883329,
       "parent": null,
       "light": {
         "kind": "point",

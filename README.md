@@ -65,8 +65,16 @@ Only a Rust toolchain and ordinary shell utilities are required for the provider
 
 The gate checks formatting, locked Cargo metadata, standalone paths, documentation links, all
 workspace and provider-fixture tests, Clippy with warnings denied, and the converter's byte-for-byte
-reproducibility test. The isolated renderer workspace is installed and checked separately with
-`pnpm --dir render verify` once present. Run the focused Rust checks directly with:
+reproducibility test. Install and verify the isolated renderer workspace separately with:
+
+```bash
+./scripts/verify-render.sh
+```
+
+That gate checks package boundaries, strict Rust-to-TypeScript decoding, retained projection,
+Three resource lifecycle, deterministic snapshots, and the real Chromium/WebGL/GLB path. Ordinary
+Engine verification deliberately does not install Node dependencies. Run the focused Rust checks
+directly with:
 
 ```bash
 ./scripts/audit-standalone.sh

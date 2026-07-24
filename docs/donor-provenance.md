@@ -7,10 +7,11 @@ successor-owned boundary and has a concrete consumer.
 
 The accepted `core-*`, `svc-*`, `entity-state`, `engine-spatial`, `voxel-asset`, and
 `voxel-convert` rows remain live Engine provenance. The former `game-host`, project-content,
-render-contract, Three renderer, browser shell, project artifacts, and product scripts moved to
-[`rusty-engine-demo`](https://github.com/FuzzySlipper/rusty-engine-demo) during M10. References to
-those surfaces below record how the walking product established the boundary; they do not describe
-current Engine packages or operational dependencies.
+browser shell, project artifacts, and product scripts moved to
+[`rusty-engine-demo`](https://github.com/FuzzySlipper/rusty-engine-demo) during M10. M11R supersedes
+the temporary narrow-renderer placement from that extraction: complete successor-owned render
+contracts, projection, Three, and host mechanisms now belong here, while game-specific use remains
+downstream.
 
 Inspected donor repository: `git@github.com:FuzzySlipper/asha-engine.git`
 Pinned source commit: `a431974330589761c9e35fc4f8a55996a1b5ee48`
@@ -78,6 +79,30 @@ frames, project catalogs, renderer objects, and host sampling were deliberately 
 Transition facts now describe only the typed local transition; downstream code decides whether
 that observation has game meaning. No donor crate or sibling checkout is a build dependency.
 
+### M11R TypeScript rendering adaptation
+
+Task #6160 adapts the donor `@asha/render-projection` and `@asha/renderer-three` packages into the
+isolated `render/` workspace. The successor keeps complete retained hierarchy and operation
+handling, static/shared and animated mesh resources, named GLB clips, materials and live instance
+parameters, texture and sprite-atlas retention/UV projection, sprite and light lifecycle, explicit
+shadow degradation, camera projection, typed picking, deterministic inspection, editor grids, isolated
+viewport channels, depth-aware render passes, and browser/WebGL mounting. Checked Rust JSON
+fixtures, the Kenney CC0 animated-character GLB, its adjacent license, and the static-room golden
+are now repository-local evidence.
+
+The package topology is intentionally smaller. `@rusty-engine/render-contracts` strictly decodes
+the successor serde shapes; `@rusty-engine/render-projection` owns a fail-atomic backend-neutral
+retained view; and `@rusty-engine/renderer-three` owns only Three/WebGL resources. Shared mesh bytes
+use a narrow `MeshBufferSource` borrow-copy-release capability. JavaScript-facing Rust identities
+are bounded to the exact `Number` integer range on both sides of the border.
+
+No donor `RuntimeBridge`, `RuntimeSession`, native operation union, global provider, replay record,
+reaction/certification envelope, generated contract tunnel, catalog authority, project bundle, or
+sibling checkout is a runtime or build dependency. Picks and renderer readouts remain disposable
+evidence for downstream code to revalidate; neither can mutate gameplay. A real Chromium test loads
+the retained GLB and exercises every Three feature family through WebGL, while the Node suite owns
+the exhaustive resource and failure matrix.
+
 ## Crate portability inventory
 
 The historical donor's
@@ -119,23 +144,24 @@ not create a second crate hierarchy.
 | Camera/view evidence | `engine-rs/crates/protocol/protocol-view` | Inspected only; no dependency or copied implementation | Pose vocabulary and bounded look input informed names. Camera handles, bridge operations, controller modes, transition state, and persisted camera authority are intentionally absent; the browser derives one follow camera from accepted player pose. |
 | Combat ray/target algorithm | `engine-rs/crates/services/svc-combat` | Small slab-ray/nearest-target algorithm adapted; crate not referenced | Deterministic AABB intersection and nearest-hit ordering are useful below the successor service. The donor `CombatState`, copied fire-control command state, health/replay hashes, readout/golden machinery, and independent health table were rejected because Rusty Engine entities and `CombatService` already own those meanings. |
 | FPS combat/lifecycle evidence | `engine-rs/crates/rules/rule-lifecycle/src/lib.rs` (`apply_primary_fire_for_roles_with_entities`) and `fps_loaded.rs` | Inspected only; no dependency or copied implementation | Confirmed the old player-fire behavior and collision ordering, while providing negative evidence for role maps, runtime-session wrappers, entity-authoring policy routes, gameplay-event adapters, state rollback copies, and per-action replay records. |
-| Presentation feedback evidence | `engine-rs/crates/render/render-animation`, `render-audio`, `render-billboard`, `render-particle`, `protocol/protocol-presentation`, `protocol/protocol-render`, and `render/render-bridge` | Inspected only; no dependency or copied implementation | Retained the one-way projection rule, disposable effect ownership, bounded transient work, entity/world anchoring, and fail-soft host realization as design evidence. Rejected the donor animation authority, asset catalog/hash closure, broad presentation/render operations, retained handle registries, origin/correlation/replay metadata, scene/level-generation bridge, and runtime-session routing. Rusty Engine instead owns one response-local semantic cue union at the browser-host border. |
+| Presentation feedback evidence | `engine-rs/crates/render/render-animation`, `render-audio`, `render-billboard`, `render-particle`, `protocol/protocol-presentation`, `protocol/protocol-render`, and `render/render-bridge` | Consolidated and adapted into `render-model`, `render-projection`, and `render-presentation` | Keeps complete typed retained rendering and bounded animation/audio/billboard/particle/telemetry projection. Rejects donor catalog authority, origin/correlation/replay metadata, scene/level-generation control, and runtime-session routing. |
 | `core-assets` | `engine-rs/crates/foundation/core-assets` | Internalized unchanged at the pinned commit | Its zero-dependency `AssetId`/`AssetKind` vocabulary gives stored projects strict kind-prefixed identity without importing catalog resolution or lifecycle. |
 | Stored project and scene evidence | `engine-rs/crates/state/core-catalog`, `state/core-scene`, `protocol/protocol-assets`, `protocol-diagnostics`, `protocol-entity-authoring`, and `protocol-scene` | Inspected only; successor-owned document and diagnostics | Typed identities, flat authored documents, reference validation, and path-bearing diagnostics informed M5. Catalog DAG/locks/material authority, scene bootstrap/spatial session, proposal commands, protocol codegen, and Asha diagnostic scopes were rejected. |
 | Project content/bundle evidence | `engine-rs/crates/services/svc-project-content`, `svc-serialization`, `protocol/protocol-project-content`, `protocol-project-bundle`, and `rules/rule-project-bundle` | Structural evidence and exclusion | These closures combine provider manifests, extension/input protocols, load/save plans, prefabs, gameplay fabric, lifecycle, annotations, and session bootstrap. M5 instead decodes one static successor document and defers narrow serialization ideas to M6. |
 | Canonical project codec and migration evidence | `engine-rs/crates/services/svc-serialization/src/json.rs`, `state/core-scene/src/{document,json,validate}.rs`, `state/core-snapshot/src/lib.rs`, the canonical-dump examples, and `tools/scene-diagnostics/src/roundtrip.rs` | Encoding/test lessons adapted; crates and tools not referenced | M6 retains fixed object-field order, canonical collection ordering, finite deterministic numbers, trailing-LF output, fixed-point/golden-style tests, and fail-closed schema selection. It does not import manifest/artifact hashes, `StateStore`, replay fingerprints, diagnostic protocols, voxel compaction, or scene bootstrap/session state. |
 | Voxel asset/import/conversion evidence | `svc-mesh-import`, `svc-voxel-conversion`, `svc-voxel-asset`, `protocol-voxel-conversion`, `protocol-voxel-asset`, `tools/asset-import`, and `harness/fixtures/voxel-conversion` | Narrow format/parser/algorithm lessons adapted; crates not referenced | M7B retains offline GLB parsing, explicit bounded settings, sparse runs, canonical bytes, source provenance, and atomic artifact installation. It excludes registries, catalog/lock graphs, plan/preview/apply, providers, evidence graphs, replay, bridges, Studio, and project-bundle control planes. |
 | Kenney wall fixture and license | `harness/fixtures/voxel-conversion/{kenney-wall-a.glb,KENNEY-RETRO-URBAN-KIT-LICENSE.txt}` | Copied byte-for-byte to `fixtures/voxel-conversion` | The real conversion/product proof is now repository-local. The 3,352-byte GLB retains SHA-256 `6fceda24c30d2c22694f232f03fe2115fb1a462046fbbf719a90eea10dc9af00`; the adjacent 318-byte CC0 text retains SHA-256 `3679c62e69e67da74fec17327635e67c92991ac82b0bdfcc203d8ecd473c016a`. |
-| `@asha/contracts` | `ts/packages/contracts/src/generated/{ids,render}.ts` | Replaced by bounded `@rusty-engine/render-contracts` | Keeps branded entity/render identities and the four render operations the product emits. Generated protocol barrels, compatibility/codegen claims, bridge handles, assets, editor values, and gameplay/runtime envelopes are excluded. |
-| `@asha/renderer-three` | `ts/packages/renderer-three/src/{three-renderer,browser-surface}.ts` | Narrow successor fork as `@rusty-engine/renderer-three` | Retains typed primitive lifecycle, inline mesh upload/disposal, deterministic inspection, camera placement, and real Three/WebGL mounting. The local API is bounded to the browser shell. |
-| `@asha/render-projection` | `ts/packages/render-projection` | Inspected and excluded | Rusty Engine's `RuntimeProjectionAdapter` already owns whole-state-to-diff projection; no donor projection export reaches the product. |
+| `@asha/contracts` | `ts/packages/contracts/src/generated/{ids,render,presentation}.ts` | Replaced by complete bounded `@rusty-engine/render-contracts` | Keeps all retained render and presentation operations as successor-owned types plus strict decoders. Generated protocol barrels, compatibility/codegen claims, bridge handles, and gameplay/runtime envelopes are excluded. |
+| `@asha/renderer-three` | `ts/packages/renderer-three` | Completely adapted as `@rusty-engine/renderer-three` | Retains hierarchy, meshes, resources, materials, texture/atlas UV behavior, sprites, lights, animation, inspection, camera, picking, grids, viewport channels/passes, disposal, and real Three/WebGL mounting behind explicit resource providers. |
+| `@asha/render-projection` | `ts/packages/render-projection` | Completely adapted as `@rusty-engine/render-projection` | Retains fail-atomic backend-neutral resource and scene projection. Generated-tunnel decoding and runtime dependencies are replaced by the strict successor contracts package. |
 
 The accepted Rust packages now live alongside the rest of the workspace under `rust/crates`;
 `engine-spatial` remains the successor-owned adapter and system above the low-level spatial
-services, and M3 adapts only the small ray/AABB query algorithm named above. The browser shell
-supplies typed diffs directly to local packages. There is no encoded frame entry point,
-runtime-bridge shim, or Vite alias. The verification gate rejects old `RuntimeSession`, native
-bridge, Gameplay Fabric, or `GameplayRuntimeHost` markers in the built browser bundle.
+services, and M3 adapts only the small ray/AABB query algorithm named above. Downstream code may
+supply typed frames or strict-decoded JSON to the isolated local render packages. The encoded entry
+point recognizes only the versioned successor frame; it is not an arbitrary operation tunnel.
+There is no runtime-bridge shim or Vite alias. The boundary gate rejects old `RuntimeSession`,
+native bridge, Gameplay Fabric, or `GameplayRuntimeHost` markers.
 
 M2A deliberately does not reference Asha's input or view crates. TypeScript resolves DOM device
 events against admitted binding data and submits only `ResolvedPlayerAction`; Rust owns controller
@@ -159,13 +185,14 @@ no FPS runtime session, role registry, proposal policy, or replay record entered
 
 M4 donor inspection used the pinned evidence revision above. The relevant presentation files are
 unchanged in the current Asha checkout at `6462a6de20d48ea1a3b7456826804bd9507860a5`, so the newer
-checkout added no unreviewed semantic drift to this decision. None of the four render crates or
-their protocol dependencies enters Rusty Engine. Their strongest shared lesson is narrower than
-their APIs: presentation reads accepted state/facts in one direction, retained posture can be
-rebuilt, impulses can be discarded, and host failure never changes authority. The successor border
-therefore preserves movement, attack, damage, defeat, and door payloads as a small closed union in
-the browser response. Animation posture is rebuilt from current entity state; cues are never added
-to `GameRuntime`, `GameSession`, the journal, or a snapshot.
+checkout added no unreviewed semantic drift to this decision. At that milestone, none of the four
+render crates or their protocol dependencies entered Rusty Engine. Their strongest shared lesson
+was narrower than their APIs: presentation reads accepted state/facts in one direction, retained
+posture can be rebuilt, impulses can be discarded, and host failure never changes authority. The
+successor border therefore preserves movement, attack, damage, defeat, and door payloads as a small
+closed union in the browser response. Animation posture is rebuilt from current entity state; cues
+are never added to `GameRuntime`, `GameSession`, the journal, or a snapshot. M11R later ported the
+reusable mechanisms without changing that game-authority decision, as documented above.
 
 The successor implementation is pinned by
 `bb16dbd5aa65878e9dadf36912d3478a06898f51` (typed Rust response projection),

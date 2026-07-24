@@ -1,0 +1,53 @@
+name: render
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'render/**'
+      - 'fixtures/render/**'
+      - 'rust/crates/render-model/**'
+      - 'rust/crates/render-projection/**'
+      - 'rust/crates/render-presentation/**'
+      - 'scripts/verify-render.sh'
+      - '.github/workflows/render.yml'
+  pull_request:
+    paths:
+      - 'render/**'
+      - 'fixtures/render/**'
+      - 'rust/crates/render-model/**'
+      - 'rust/crates/render-projection/**'
+      - 'rust/crates/render-presentation/**'
+      - 'scripts/verify-render.sh'
+      - '.github/workflows/render.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-render:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Rusty Engine
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: render/pnpm-lock.yaml
+
+      - name: Install renderer dependencies
+        run: pnpm --dir render install --frozen-lockfile
+
+      - name: Install Chromium dependencies
+        run: pnpm --dir render exec playwright install --with-deps chromium
+
+      - name: Verify isolated renderer workspace
+        run: ./scripts/verify-render.sh
