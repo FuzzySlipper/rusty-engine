@@ -38,13 +38,13 @@ YAML
 
 pnpm --dir "$PROBE_ROOT" install
 
-if rg -n "(^|[[:space:]'\"])(workspace:|link:|file:)|/home/dev/" "$PROBE_ROOT/pnpm-lock.yaml"; then
+if grep -En "(^|[[:space:]'\"])(workspace:|link:|file:)|/home/dev/" "$PROBE_ROOT/pnpm-lock.yaml"; then
   echo "clean renderer consumer resolved a local or workspace dependency" >&2
   exit 1
 fi
 
 for package_name in render-contracts render-projection renderer-host renderer-three; do
-  if ! rg -q "${ENGINE_REVISION}#path:render/packages/${package_name}" "$PROBE_ROOT/pnpm-lock.yaml"; then
+  if ! grep -Fq "${ENGINE_REVISION}#path:render/packages/${package_name}" "$PROBE_ROOT/pnpm-lock.yaml"; then
     echo "clean renderer consumer did not lock ${package_name} to ${ENGINE_REVISION}" >&2
     exit 1
   fi
