@@ -1,6 +1,6 @@
 capability	status	donor_surface	successor_owner	evidence
-render-core	planned	protocol-render retained handles hierarchy primitives transforms layers metadata diffs	render-model	#6158
-mesh-payloads	planned	protocol-render mesh payload descriptors and render-bridge mesh conversion	render-model render-projection	#6158
+render-core	adapted	protocol-render retained handles hierarchy primitives transforms layers metadata diffs	render-model	rust/crates/render-model/tests/full_contract.rs
+mesh-payloads	adapted	protocol-render mesh payload descriptors and render-bridge mesh conversion	render-model render-projection	rust/crates/render-model/src/mesh.rs rust/crates/render-projection/src/voxel.rs
 static-meshes	planned	protocol-render static mesh assets instances slots and collision intent	render-model renderer-three	#6158 #6160
 animated-meshes	planned	protocol-render animated mesh descriptors instances clips and playback	render-model renderer-three renderer-host	#6158 #6160 #6161
 materials	planned	protocol-render material definitions instance feedback and UV strategies	render-model renderer-three	#6158 #6160
@@ -8,10 +8,10 @@ textures-sprites	planned	protocol-render textures sprite atlases sprite lifecycl
 lighting	planned	protocol-render lights shadows scene-light projection and Three realization	render-model render-projection renderer-three	#6158 #6160
 editor-grid	planned	protocol-render editor grid validation and Three grid projection	render-model renderer-three	#6158 #6160
 retained-projection	planned	render-bridge core projector plus TS render-projection	render-projection render/packages/render-projection	#6158 #6160
-entity-projection	planned	render-bridge entity state change detection and stable handle registry	render-projection	#6158
-voxel-projection	planned	render-bridge voxel chunks materials dirty reprojection and mesh payloads	render-projection	#6158
-authored-projection	planned	render-bridge scene preview runtime projection materials sprites and lights	render-projection	#6158
-debug-projection	planned	render-debug primitives labels tags and deterministic overlay frames	render-projection	#6158
+entity-projection	adapted	render-bridge entity state change detection and stable handle registry	render-projection	rust/crates/render-projection/src/entity.rs
+voxel-projection	adapted	render-bridge voxel chunks materials dirty reprojection and mesh payloads	render-projection	rust/crates/render-projection/src/voxel.rs
+authored-projection	adapted	render-bridge scene preview runtime projection materials sprites and lights	render-projection	rust/crates/render-projection/src/authored.rs
+debug-projection	adapted	render-debug primitives labels tags and deterministic overlay frames	render-projection	rust/crates/render-projection/src/debug.rs
 json-contract	planned	render-bridge JSON codec fixtures and Rust to TypeScript contract	render-model render/packages/render-contracts	#6158 #6160
 animation-controller	planned	rule-state-machine and rule-animation-controller graphs parameters blends transitions timing	render-presentation	#6159
 animation-projection	planned	render-animation retained bindings playback state and transition projection	render-presentation	#6159

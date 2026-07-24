@@ -1,0 +1,16 @@
+[package]
+name = "render-projection"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+core-ids.workspace = true
+engine-spatial = { path = "../engine-spatial" }
+entity-state = { path = "../entity-state" }
+render-model.workspace = true
+
+[dev-dependencies]
+core-math.workspace = true

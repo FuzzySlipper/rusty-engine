@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "ops": [
+    {
+      "op": "create",
+      "handle": 72057594037927937,
+      "parent": null,
+      "node": {
+        "geometry": { "kind": "cube" },
+        "material": {
+          "color": [0.25, 0.5, 0.75, 1.0],
+          "wireframe": false
+        },
+        "transform": {
+          "translation": [1.0, 2.0, 3.0],
+          "rotation": [0.0, 0.0, 0.0, 1.0],
+          "scale": [1.0, 1.0, 1.0]
+        },
+        "visible": true,
+        "layer": "scene",
+        "metadata": {
+          "sourceEntity": 42,
+          "sourceSceneNode": null,
+          "tags": ["fixture"],
+          "label": "cross-language cube"
+        }
+      }
+    },
+    {
+      "op": "createLight",
+      "handle": 216172782113783809,
+      "parent": null,
+      "light": {
+        "kind": "point",
+        "color": [1.0, 0.8, 0.6],
+        "intensity": 4.0,
+        "enabled": true,
+        "position": [2.0, 3.0, 4.0],
+        "range": 12.0,
+        "decay": 2.0,
+        "shadowIntent": "requested"
+      }
+    }
+  ]
+}

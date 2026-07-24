@@ -413,6 +413,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "render-model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "render-projection"
+version = "0.1.0"
+dependencies = [
+ "core-ids",
+ "core-math",
+ "engine-spatial",
+ "entity-state",
+ "render-model",
+]
+
+[[package]]
 name = "robust"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

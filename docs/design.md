@@ -2,9 +2,11 @@
 
 Status: current provider architecture
 
-Rusty Engine is a standalone Rust mechanism provider for object-centric games. Game policy,
-orchestration, project schemas, persistence aggregates, input, and presentation belong to concrete
-downstream products. The first reference consumer is
+Rusty Engine is a standalone mechanism provider for object-centric games. Game policy,
+orchestration, project schemas, persistence aggregates, input, and the meaning of presentation
+intents belong to concrete downstream products. Shared renderer-neutral projection and renderer
+host mechanisms live here so the demo and Studio cannot drift into independent renderers. The first
+reference consumer is
 [`rusty-engine-demo`](https://github.com/FuzzySlipper/rusty-engine-demo), extracted after it had
 proved the provider boundary in this repository.
 
@@ -33,20 +35,24 @@ identity and typed capability data remain easy to inspect while behavior is owne
 
 ```text
 downstream game
-  entities / game components / services / scheduling / persistence / presentation
+  entities / game components / services / scheduling / persistence / presentation intent
                      |
                      +--> entity-state
                      +--> engine-spatial -------------------+
                      +--> voxel-asset                       |
+                     +--> render-model --> render-projection|
                                                           v
 foundation: core-assets / core-ids / core-math / core-space / core-time / core-voxel
 services:   svc-volume / svc-spatial / svc-collision / svc-pathfinding / svc-rng / svc-mesh
 
 offline only: GLB + request --> voxel-convert --> canonical voxel-asset JSON --> downstream admission
+
+isolated renderer workspace: retained JSON --> render-projection (TS) --> Three/host surfaces
 ```
 
 No Engine crate knows the downstream game's component families, event vocabulary, stored-project
-schema, browser API, or renderer package.
+schema, or browser API. The Rust render crates know only renderer-neutral values and explicit
+read-only provider views; the isolated renderer workspace knows no gameplay authority.
 
 ## Entity capability boundary
 
@@ -95,6 +101,26 @@ These crates expose mechanism rather than policy. For example, `svc-pathfinding`
 but does not own AI intent; `svc-rng` creates a scoped deterministic stream but does not decide what
 is random; `svc-mesh` emits geometry but owns no renderer.
 
+## Shared rendering boundary
+
+`render-model` owns the complete versioned retained-frame vocabulary: stable handles, hierarchy,
+primitive and mesh geometry, materials, textures, sprites, static and animated assets, lighting,
+editor-grid descriptions, picks, validation, and canonical JSON. It contains no state store,
+catalog, filesystem, renderer object, runtime facade, or replay requirement.
+
+`render-projection` owns deterministic, fail-atomic adapters over explicit read-only inputs. Entity
+projection reads `EntityState`; voxel projection reads `VoxelCollisionScene`; authored projection
+accepts one ordinary appearance/resource aggregate; debug projection accepts typed overlays. Each
+projector computes against cloned retained state, validates the complete frame, and commits stable
+handles only when construction succeeds. Missing resources are classified rather than resolved
+through an ambient registry.
+
+The isolated `render/` workspace realizes the same contract for Three, WebGL, WebAudio, DOM
+overlays, inspection, and editor viewport use. It is installed and verified separately from the
+ordinary Rust provider gate. Renderer picks and host readouts are hints/observations that downstream
+authority must revalidate; animation sampling, audio completion, particles, cameras, and editor
+previews never mutate gameplay.
+
 ## Durable voxel assets and offline conversion
 
 `voxel-asset` owns a strict schema, semantic validation, canonical encoding, content identity, and
@@ -117,7 +143,7 @@ A game built on Engine should own its complete behavioral story:
 3. named services and centrally invoked systems;
 4. explicit scheduling and consequential typed facts/events;
 5. runtime snapshot and project persistence policy; and
-6. input, readout, and presentation borders.
+6. input, readout, and typed presentation intents consumed by the shared renderer border.
 
 The reference demo owns all of those surfaces, including its `ExtractionBeacon` addition. That
 feature extended the downstream schema, service, snapshot, browser readout, and presentation without
@@ -132,7 +158,7 @@ either product's policy. When that evidence exists:
 
 1. compare both real call sites and data lifecycles;
 2. extract only the shared mechanism;
-3. leave game names, orchestration, schemas, and presentation downstream;
+3. leave game names, orchestration, schemas, and presentation meaning downstream;
 4. add focused provider tests independent of either product; and
 5. keep Engine verification free of downstream checkouts.
 
@@ -149,7 +175,8 @@ The current provider deliberately excludes:
 - a service locator, dependency-injection container, or plugin registry;
 - a universal command/event union, behavior graph, or authored gameplay language;
 - replay or certification as a prerequisite for ordinary execution;
-- browser, renderer, TypeScript, Node, Studio, or editor dependencies in ordinary Engine work;
+- Node, browser, Three, WebAudio, DOM, Studio, or editor dependencies in ordinary Rust-provider
+  work (they remain isolated under `render/` with their own gate);
 - Asha's former Gameplay Fabric, runtime facade, provider/bundle lifecycle, and bridge topology; and
 - an operational dependency on `rusty-engine-demo` or any sibling checkout.
 
@@ -159,9 +186,11 @@ second structural center.
 
 ## Verification and evolution
 
-`./scripts/verify.sh` is the ordinary provider gate. It requires no Node installation or demo
+`./scripts/verify.sh` is the ordinary Rust-provider gate. It requires no Node installation or demo
 checkout and covers locked metadata, standalone path auditing, documentation links, formatting,
-workspace/provider fixtures, Clippy, and byte-reproducible conversion.
+workspace/provider fixtures (including renderer-neutral model/projection), Clippy, and
+byte-reproducible conversion. The separately installed `render/` workspace has its own frozen
+TypeScript/browser gate.
 
 Source organization follows [rust-style.md](rust-style.md): one primary behavior owner or cohesive
 type family per file, thin crate roots, and no one-type-per-file rule. File size is a review signal,

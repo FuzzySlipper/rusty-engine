@@ -30,6 +30,30 @@ that baseline. Every imported behavior must terminate at successor-owned render 
 downstream projections; Asha runtime sessions, bridges, replay certification, catalog/project
 authority, compatibility manifests, and global code generation remain excluded structures.
 
+### M11R Rust rendering adaptation
+
+Task #6158 consolidates the donor `protocol-render`, `render-bridge`, and `render-debug` behavior
+into `render-model` and `render-projection`. The successor keeps the complete retained operation
+family, inline/shared mesh descriptions, static and animated mesh descriptors, materials, textures,
+atlases, sprites, ordinary lights and shadow intent, editor-grid values, pick provenance, stable
+handles, entity projection, multi-instance voxel chunk projection, authored/runtime appearance
+projection, debug primitives, classified diagnostics, and readouts.
+
+The dependency topology is intentionally new. `render-model` is serde-only and carries raw source
+identity as provenance rather than importing Asha IDs, protocols, assets, catalog, scene, or state.
+`render-projection` reads the existing successor `EntityState` and `VoxelCollisionScene`, or one
+explicit downstream-supplied appearance/resource aggregate. Its immutable `ResolvedRenderAsset`
+view validates only kind/content identity; it cannot enumerate or mutate a catalog. Projectors stage
+registry/snapshot changes off to the side and advance them only after the entire frame validates.
+The committed `fixtures/render/retained-frame-v1.json` replaces global code generation with a
+versioned cross-language fixture.
+
+No donor crate is a Cargo dependency. `core-state`, `core-scene`, `core-catalog`, `protocol-assets`,
+level generation, runtime sessions/bridges, buffer-bridge ownership, origin/correlation envelopes,
+replay records, certification hashes, provider registries, and generated-tunnel product claims were
+not copied. Shared-buffer IDs in the render model are scoped renderer-resource references, not a
+general runtime bridge.
+
 ## Crate portability inventory
 
 The historical donor's
@@ -248,6 +272,11 @@ catalog/static-mesh definitions, lights as diff operations, picking, editor/tunn
 generic render projection, encoded frames, and buffer handles had no product caller, so those
 families were excluded instead of copied. Focused package tests and the existing Chromium product
 gate cover the retained behavior.
+
+That M9C disposition records the earlier narrow demo extraction and is superseded for rendering by
+the owner-approved complete M11R campaign. Its evidence that the demo then needed only four
+operations no longer authorizes dropping donor behavior: the shared renderer now preserves the full
+capability set for both demo and Studio while retaining the successor boundaries above.
 
 M9D copied the exact Kenney GLB and CC0 text to `fixtures/voxel-conversion`, moved request, test,
 workload, documentation, and persisted provenance paths to that location, and removed the Asha
