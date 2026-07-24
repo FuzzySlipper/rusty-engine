@@ -11,7 +11,9 @@ on:
       - 'rust/crates/render-presentation/**'
       - 'scripts/audit-render-isolation.sh'
       - 'scripts/check-render-completeness.sh'
+      - 'scripts/verify-render-consumer.sh'
       - 'scripts/verify-render.sh'
+      - '.github/workflows/render-consumer.yml'
       - '.github/workflows/render.yml'
   pull_request:
     paths:
@@ -22,7 +24,9 @@ on:
       - 'rust/crates/render-presentation/**'
       - 'scripts/audit-render-isolation.sh'
       - 'scripts/check-render-completeness.sh'
+      - 'scripts/verify-render-consumer.sh'
       - 'scripts/verify-render.sh'
+      - '.github/workflows/render-consumer.yml'
       - '.github/workflows/render.yml'
 
 permissions:

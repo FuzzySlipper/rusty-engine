@@ -6,6 +6,10 @@ on:
     paths:
       - 'package.json'
       - 'pnpm-lock.yaml'
+      - 'render/package.json'
+      - 'render/pnpm-lock.yaml'
+      - 'render/pnpm-workspace.yaml'
+      - 'render/tsconfig*.json'
       - 'render/packages/**'
       - 'scripts/verify-render-consumer.sh'
       - '.github/workflows/render-consumer.yml'
