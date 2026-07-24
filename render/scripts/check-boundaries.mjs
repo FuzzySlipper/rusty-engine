@@ -9,6 +9,11 @@ const packages = new Map([
     '@rusty-engine/render-projection',
     'three',
   ]],
+  ['renderer-host', [
+    '@rusty-engine/render-contracts',
+    '@rusty-engine/render-projection',
+    '@rusty-engine/renderer-three',
+  ]],
 ]);
 
 for (const [name, expected] of packages) {

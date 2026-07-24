@@ -131,6 +131,16 @@ ordinary Rust provider gate. Renderer picks and host readouts are hints/observat
 authority must revalidate; animation sampling, audio completion, particles, cameras, and editor
 previews never mutate gameplay.
 
+`@rusty-engine/renderer-host` is the shared browser and tool-facing entry point. It composes the
+retained Three surface, explicit caller-owned camera controls, animated resources, editor viewport,
+inspection surface, WebAudio, billboard, particle, telemetry, and DOM overlay mechanisms. Its small
+`RendererPresentationHostSet` fans one strictly decoded presentation frame out to named optional
+hosts and reports every unavailable domain; it accepts no scene state, gameplay command, session,
+or persistence object. Animation hosts may be attached after surface creation because they consume
+the surface-owned animation projection, but the surface does not discover services or install
+ambient callbacks. Demo and Studio consumers provide typed frames and resource resolvers instead
+of constructing Three scenes of their own.
+
 ## Durable voxel assets and offline conversion
 
 `voxel-asset` owns a strict schema, semantic validation, canonical encoding, content identity, and

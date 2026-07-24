@@ -127,7 +127,7 @@ not implement another viewport renderer.
 
 ## Implemented TypeScript border
 
-The isolated workspace now exposes three layers with one-way dependencies:
+The isolated workspace now exposes four layers with one-way dependencies:
 
 - `@rusty-engine/render-contracts` mirrors the complete Rust retained and presentation frames and
   strictly decodes unknown JSON before it reaches mutable renderer state;
@@ -135,7 +135,10 @@ The isolated workspace now exposes three layers with one-way dependencies:
   backend-neutral scene/resource readout; and
 - `@rusty-engine/renderer-three` owns Three objects, shared-buffer borrows, GLB resources, material
   realization, texture/atlas retention and UV projection, sprites, lights, picking, browser
-  mounting, and editor viewport primitives.
+  mounting, and editor viewport primitives; and
+- `@rusty-engine/renderer-host` owns the shared game/tool browser surface, explicit presentation
+  host set, animated resource admission, WebAudio, DOM billboards, bounded particles, telemetry,
+  stored/interactive cameras, editor channels, and inspection surfaces.
 
 Every `u64` that crosses the JSON/JavaScript border is constrained to the exact integer range
 `0..=2^53-1`. Rust rejects unsafe handles, resource ids, source identities, seeds, revisions, and
@@ -144,10 +147,11 @@ Shared mesh bytes arrive through a narrow borrow-copy-release provider and are c
 into renderer-owned arrays. It is not a general bridge and cannot expose gameplay mutation.
 
 The browser acceptance fixture fetches the repository-local CC0 animated GLB and exercises group
-and primitive nodes, inline static meshes, named animation playback, retained materials and
-texture/atlas descriptions, sprite UVs, lights, world projection, picking, and disposal through a
-real WebGL context. Node tests retain the more exhaustive error, fallback, replacement, channel,
-and resource lifecycle matrix.
+and primitive nodes, inline static meshes, named controller-driven animation, retained materials
+and texture/atlas descriptions, sprite UVs, lights, world projection, picking, WebAudio decode and
+resume, billboards, particles, telemetry, an inspection grid, and disposal through real DOM and
+WebGL contexts. Node tests retain the more exhaustive error, fallback, replacement, channel,
+resource, camera, and lifecycle matrix.
 
 ## CI boundaries
 

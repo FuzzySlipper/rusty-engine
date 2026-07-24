@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('shared renderer realizes the full retained family in a real WebGL context', async ({ page }) => {
+test('shared host realizes retained, presentation, and inspection families in a real browser', async ({ page }) => {
   const consoleErrors: string[] = [];
   page.on('console', (message) => {
     if (message.type() === 'error') consoleErrors.push(message.text());
@@ -21,7 +21,35 @@ test('shared renderer realizes the full retained family in a real WebGL context'
   expect(proof.lightCount).toBe(1);
   expect(proof.pickHandle).toBe(101);
   expect(proof.projectionInsideViewport).toBe(true);
+  expect(proof.hostSurfaceKind).toBe('rusty_renderer_surface.v1');
+  expect(proof.inspectionSurfaceKind).toBe('rusty_renderer_inspection_surface.v1');
+  expect(proof.inspectionGridLines).toBeGreaterThan(0);
+  expect(proof.audioApplied).toBe(1);
+  expect(proof.billboardText).toBe('Shared renderer host');
+  expect(proof.particleElementCount).toBe(2);
+  expect(proof.telemetryText).toContain('Renderer proof');
+  expect(proof.telemetryText).toContain('drawCallCount: 7 count');
+  expect(proof.presentationDiagnostics).toEqual([]);
   expect(consoleErrors).toEqual([]);
 
+  const cameraBefore = await page.evaluate(() => window.__rustyRenderCameraPose?.());
+  await page.click('#renderer');
+  await page.keyboard.down('KeyW');
+  await page.evaluate(() => window.__rustyRenderTick?.(166));
+  await page.keyboard.up('KeyW');
+  const cameraAfter = await page.evaluate(() => window.__rustyRenderCameraPose?.());
+  expect(cameraBefore).toBeDefined();
+  expect(cameraAfter).toBeDefined();
+  expect(cameraAfter![2]).toBeLessThan(cameraBefore![2]);
+
+  await page.evaluate(() => document.exitPointerLock());
+  await page.click('#enable-audio');
+  await expect.poll(() => page.evaluate(
+    () => window.__rustyRenderProof?.audioResumeDiagnostics ?? null,
+  )).toEqual([]);
+
   await page.evaluate(() => window.__rustyRenderDispose?.());
+  await expect(page.locator('[data-rusty-billboard-handle]')).toHaveCount(0);
+  await expect(page.locator('[data-rusty-particle-id]')).toHaveCount(0);
+  await expect(page.locator('[data-rusty-telemetry-handle]')).toHaveCount(0);
 });

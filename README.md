@@ -72,8 +72,9 @@ reproducibility test. Install and verify the isolated renderer workspace separat
 ```
 
 That gate checks package boundaries, strict Rust-to-TypeScript decoding, retained projection,
-Three resource lifecycle, deterministic snapshots, and the real Chromium/WebGL/GLB path. Ordinary
-Engine verification deliberately does not install Node dependencies. Run the focused Rust checks
+Three resource lifecycle, renderer hosts/editor/inspection, deterministic snapshots, and the real
+Chromium/WebGL/WebAudio/DOM/GLB path. Ordinary Engine verification deliberately does not install
+Node dependencies. Run the focused Rust checks
 directly with:
 
 ```bash

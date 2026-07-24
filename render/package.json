@@ -15,6 +15,7 @@
   "devDependencies": {
     "@playwright/test": "^1.61.1",
     "@rusty-engine/render-contracts": "workspace:*",
+    "@rusty-engine/renderer-host": "workspace:*",
     "@rusty-engine/renderer-three": "workspace:*",
     "@types/node": "^25.0.0",
     "typescript": "^5.9.3",

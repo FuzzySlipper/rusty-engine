@@ -103,6 +103,24 @@ evidence for downstream code to revalidate; neither can mutate gameplay. A real 
 the retained GLB and exercises every Three feature family through WebGL, while the Node suite owns
 the exhaustive resource and failure matrix.
 
+Task #6161 adapts the complete donor `@asha/renderer-host` behavior into
+`@rusty-engine/renderer-host`. It retains explicit animated-GLB loading and hash checks, animation
+controller realization and sampled cues, WebAudio buses and spatial sources, localized/value/icon
+DOM billboards, bounded seeded particles, telemetry collection and overlays, stored and interactive
+camera helpers, isolated editor viewport channels, inspection controls, picking, resize/start/stop,
+and deterministic cleanup. Shared browser DOM sinks realize particle billboards and telemetry so
+consumers do not need private overlay renderers. The meaningful donor Node corpus is adapted to the
+successor frames, and Chromium now exercises the host surface, all five presentation families,
+audio resume, inspection grid, and DOM/WebGL disposal.
+
+The old all-purpose host application function was not transferred. The replacement
+`RendererPresentationHostSet` accepts only a versioned `PresentationFrameDiff`, dispatches to five
+explicit optional host ports in a documented order, and emits visible `unavailableHost`
+diagnostics. Scene application, gameplay state, input sessions/catalogs, source-fact provenance,
+causation/correlation, authority ticks, replay scopes, and implicit URL fetch are absent. Resource
+bytes, vetted realization URLs, and entity positions come from narrow caller-owned resolvers; camera
+collision is an optional direct movement resolver rather than a runtime bridge.
+
 ## Crate portability inventory
 
 The historical donor's
@@ -154,6 +172,7 @@ not create a second crate hierarchy.
 | `@asha/contracts` | `ts/packages/contracts/src/generated/{ids,render,presentation}.ts` | Replaced by complete bounded `@rusty-engine/render-contracts` | Keeps all retained render and presentation operations as successor-owned types plus strict decoders. Generated protocol barrels, compatibility/codegen claims, bridge handles, and gameplay/runtime envelopes are excluded. |
 | `@asha/renderer-three` | `ts/packages/renderer-three` | Completely adapted as `@rusty-engine/renderer-three` | Retains hierarchy, meshes, resources, materials, texture/atlas UV behavior, sprites, lights, animation, inspection, camera, picking, grids, viewport channels/passes, disposal, and real Three/WebGL mounting behind explicit resource providers. |
 | `@asha/render-projection` | `ts/packages/render-projection` | Completely adapted as `@rusty-engine/render-projection` | Retains fail-atomic backend-neutral resource and scene projection. Generated-tunnel decoding and runtime dependencies are replaced by the strict successor contracts package. |
+| `@asha/renderer-host` | `ts/packages/renderer-host` | Completely adapted as `@rusty-engine/renderer-host` | Retains animated resources, WebAudio, billboards, particles, telemetry, cameras, editor/inspection surfaces, browser lifecycle, diagnostics, and cleanup. Replaces the runtime/session facade and provenance envelopes with explicit frames, resolvers, camera state, and a presentation-only host set. |
 
 The accepted Rust packages now live alongside the rest of the workspace under `rust/crates`;
 `engine-spatial` remains the successor-owned adapter and system above the low-level spatial
