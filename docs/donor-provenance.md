@@ -43,6 +43,7 @@ the old classification still holds.
 | Stored project and scene evidence | `engine-rs/crates/state/core-catalog`, `state/core-scene`, `protocol/protocol-assets`, `protocol-diagnostics`, `protocol-entity-authoring`, and `protocol-scene` | Inspected only; successor-owned document and diagnostics | Typed identities, flat authored documents, reference validation, and path-bearing diagnostics informed M5. Catalog DAG/locks/material authority, scene bootstrap/spatial session, proposal commands, protocol codegen, and Asha diagnostic scopes were rejected. |
 | Project content/bundle evidence | `engine-rs/crates/services/svc-project-content`, `svc-serialization`, `protocol/protocol-project-content`, `protocol-project-bundle`, and `rules/rule-project-bundle` | Structural evidence and exclusion | These closures combine provider manifests, extension/input protocols, load/save plans, prefabs, gameplay fabric, lifecycle, annotations, and session bootstrap. M5 instead decodes one static successor document and defers narrow serialization ideas to M6. |
 | Canonical project codec and migration evidence | `engine-rs/crates/services/svc-serialization/src/json.rs`, `state/core-scene/src/{document,json,validate}.rs`, `state/core-snapshot/src/lib.rs`, the canonical-dump examples, and `tools/scene-diagnostics/src/roundtrip.rs` | Encoding/test lessons adapted; crates and tools not referenced | M6 retains fixed object-field order, canonical collection ordering, finite deterministic numbers, trailing-LF output, fixed-point/golden-style tests, and fail-closed schema selection. It does not import manifest/artifact hashes, `StateStore`, replay fingerprints, diagnostic protocols, voxel compaction, or scene bootstrap/session state. |
+| Voxel asset/import/conversion evidence | `svc-mesh-import`, `svc-voxel-conversion`, `svc-voxel-asset`, `protocol-voxel-conversion`, `protocol-voxel-asset`, `tools/asset-import`, and `harness/fixtures/voxel-conversion` | Narrow format/parser/algorithm lessons adapted; crates not referenced | M7B retains offline GLB parsing, explicit bounded settings, sparse runs, canonical bytes, source provenance, and atomic artifact installation. It excludes registries, catalog/lock graphs, plan/preview/apply, providers, evidence graphs, replay, bridges, Studio, and project-bundle control planes. |
 | `@asha/contracts` | `ts/packages/contracts` | Sibling `link:` dependency, unchanged | Existing typed render-diff vocabulary and branded render/entity identities at the real presentation border. |
 | `@asha/renderer-three` | `ts/packages/renderer-three` | Sibling `link:` dependency, unchanged | Existing retained Three/WebGL browser surface, resource lifecycle, projection metadata, and render-diff application. |
 | `@asha/render-projection` | `ts/packages/render-projection` | Renderer transitive sibling dependency, unchanged | Renderer-neutral retained projection helpers used by the donor browser surface. |
@@ -152,6 +153,23 @@ materialization, typed product route, Chromium/persistence proof, and bounded wo
 edit rule, command/event protocol, diagnostics, history, persistence, or scene-composition crate was
 added. Existing unchanged spatial/collision/navigation/mesh donors remain beneath the
 successor-owned scene and service.
+
+M7B re-audited `svc-mesh-import`, `svc-voxel-conversion`, `svc-voxel-asset`,
+`protocol-voxel-conversion`, `protocol-voxel-asset`, `asset-import`, and the real Kenney wall
+fixture at the pinned revision. Every inspected path is byte-unchanged at current Asha head
+`6462a6de20d48ea1a3b7456826804bd9507860a5`. The selected fixture is the 3,352-byte CC0
+`harness/fixtures/voxel-conversion/kenney-wall-a.glb`, SHA-256
+`6fceda24c30d2c22694f232f03fe2115fb1a462046fbbf719a90eea10dc9af00`; Asha's bounded importer
+proves it contains 48 positions, 36 indices, two triangle groups, and two named material slots.
+
+The successor-owned boundary is documented in [voxel-asset-format.md](voxel-asset-format.md).
+`voxel-asset` retains only strict schema/grid/bounds/material/provenance values, bounded sparse +X
+runs, canonical SHA-256 bytes, classified source paths, and preflight conversion settings. The GLB
+parser remains in the separate offline M7B.2 tool; `game-host` will depend only on the durable asset
+crate. A content hash protects the artifact itself and never becomes an action precondition, replay
+certificate, or runtime revision. Asha's source registry, catalog/lock graph, plan/preview/apply
+sequence, provider interface, evidence URI graph, command registry, bridge, replay, lifecycle,
+texture protocol, Studio surface, and project-bundle machinery remain explicit exclusions.
 
 Sibling references are intentional while Asha development is stopped for this decision. If this
 lab becomes a durable independent successor, the references should be pinned as Git dependencies,
