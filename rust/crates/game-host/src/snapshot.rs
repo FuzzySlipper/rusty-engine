@@ -3,7 +3,10 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use core_ids::EntityId;
 use core_math::Vec3;
 use core_time::{Tick, TickDelta};
-use engine_spatial::{GeneratedRoomConfig, VoxelCollisionScene, GENERATED_ROOM_VERSION};
+use engine_spatial::{
+    GeneratedRoomConfig, MaterialVoxel, VoxelCollisionScene, VoxelSourceRevision,
+    GENERATED_ROOM_VERSION,
+};
 use entity_state::{EntityState, EntityStateSnapshot};
 use serde::{Deserialize, Serialize};
 
@@ -25,7 +28,7 @@ use crate::runtime::GameRuntime;
 use crate::scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
 use crate::session::GameSession;
 
-pub const GAME_SNAPSHOT_SCHEMA_VERSION: u32 = 8;
+pub const GAME_SNAPSHOT_SCHEMA_VERSION: u32 = 9;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -51,8 +54,17 @@ pub struct GameSnapshot {
 pub struct VoxelCollisionSnapshot {
     pub voxel_size: f64,
     pub chunk_size: u32,
-    pub solid_voxels: Vec<[i64; 3]>,
+    pub source_revision: u64,
+    pub authority_hash: u64,
+    pub material_voxels: Vec<MaterialVoxelSnapshot>,
     pub generated_room: Option<GeneratedRoomSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct MaterialVoxelSnapshot {
+    pub address: [i64; 3],
+    pub material_slot: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,8 +226,10 @@ pub enum GameSnapshotError {
     EntityState(entity_state::EntityStateSnapshotError),
     CollisionScene(engine_spatial::CollisionSceneError),
     AmbiguousVoxelSnapshot,
+    GeneratedRoomRevisionMismatch { actual: u64 },
     UnsupportedGeneratedRoomVersion { actual: u32 },
     GeneratedRoomHashMismatch { expected: u64, actual: u64 },
+    VoxelAuthorityHashMismatch { expected: u64, actual: u64 },
     DuplicateDoor { entity: u64 },
     DuplicateSwitch { entity: u64 },
     DuplicateEnemy { entity: u64 },
@@ -273,10 +287,19 @@ impl GameRuntime {
                 .map(|scene| VoxelCollisionSnapshot {
                     voxel_size: scene.voxel_size(),
                     chunk_size: scene.chunk_size(),
-                    solid_voxels: if scene.generated_room().is_some() {
+                    source_revision: scene.source_revision().raw(),
+                    authority_hash: scene.authority_hash(),
+                    material_voxels: if scene.generated_room().is_some() {
                         Vec::new()
                     } else {
-                        scene.solid_voxels().to_vec()
+                        scene
+                            .material_voxels()
+                            .iter()
+                            .map(|voxel| MaterialVoxelSnapshot {
+                                address: voxel.address,
+                                material_slot: voxel.material_slot,
+                            })
+                            .collect()
                     },
                     generated_room: scene.generated_room().map(|(config, record)| {
                         GeneratedRoomSnapshot {
@@ -444,8 +467,13 @@ impl GameRuntime {
             .voxel_collision
             .map(|scene| match scene.generated_room {
                 Some(generated) => {
-                    if !scene.solid_voxels.is_empty() {
+                    if !scene.material_voxels.is_empty() {
                         return Err(GameSnapshotError::AmbiguousVoxelSnapshot);
+                    }
+                    if scene.source_revision != VoxelSourceRevision::INITIAL.raw() {
+                        return Err(GameSnapshotError::GeneratedRoomRevisionMismatch {
+                            actual: scene.source_revision,
+                        });
                     }
                     if generated.generator_version != GENERATED_ROOM_VERSION {
                         return Err(GameSnapshotError::UnsupportedGeneratedRoomVersion {
@@ -472,14 +500,36 @@ impl GameRuntime {
                             actual,
                         });
                     }
+                    if rebuilt.authority_hash() != scene.authority_hash {
+                        return Err(GameSnapshotError::VoxelAuthorityHashMismatch {
+                            expected: scene.authority_hash,
+                            actual: rebuilt.authority_hash(),
+                        });
+                    }
                     Ok(rebuilt)
                 }
-                None => VoxelCollisionScene::from_solid_voxels(
-                    scene.voxel_size,
-                    scene.chunk_size,
-                    scene.solid_voxels,
-                )
-                .map_err(GameSnapshotError::CollisionScene),
+                None => {
+                    let rebuilt = VoxelCollisionScene::from_material_voxels_at_revision(
+                        scene.voxel_size,
+                        scene.chunk_size,
+                        scene
+                            .material_voxels
+                            .into_iter()
+                            .map(|voxel| MaterialVoxel {
+                                address: voxel.address,
+                                material_slot: voxel.material_slot,
+                            }),
+                        VoxelSourceRevision::new(scene.source_revision),
+                    )
+                    .map_err(GameSnapshotError::CollisionScene)?;
+                    if rebuilt.authority_hash() != scene.authority_hash {
+                        return Err(GameSnapshotError::VoxelAuthorityHashMismatch {
+                            expected: scene.authority_hash,
+                            actual: rebuilt.authority_hash(),
+                        });
+                    }
+                    Ok(rebuilt)
+                }
             })
             .transpose()?;
         let entities = EntityState::from_snapshot(snapshot.entities)

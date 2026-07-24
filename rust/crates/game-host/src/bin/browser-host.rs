@@ -8,16 +8,20 @@ use std::time::Duration;
 
 use core_ids::EntityId;
 use game_host::{
-    admit_stored_project_with_document, CombatFact, CombatMissReason, DoorState, EncounterState,
-    EnemyState, GameEvent, GameRuntime, MotionFact, NavigationFact, NavigationState,
-    PlayerControlFact, ProjectStore, ResolvedAttackAction, ResolvedPlayerAction,
+    admit_stored_project_with_document, materialize_stored_project_voxels, AdmittedStoredProject,
+    CombatFact, CombatMissReason, GameEvent, GameRuntime, MotionFact, NavigationFact,
+    NavigationState, PlayerControlFact, ProjectSaveMode, ProjectStore, ResolvedAttackAction,
+    ResolvedPlayerAction, VoxelEdit, VoxelEditTransaction, VoxelSourceRevision,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[path = "browser_host/presentation.rs"]
 mod presentation;
+#[path = "browser_host/state.rs"]
+mod state;
 
-use presentation::{project_presentation, BrowserFeedbackProjection, BrowserPresentation};
+use presentation::BrowserFeedbackProjection;
+use state::{browser_state, BrowserState};
 
 const DEFAULT_ADDRESS: &str = "127.0.0.1:37881";
 const ACTOR: EntityId = EntityId::new(1);
@@ -44,6 +48,7 @@ struct BrowserProjectSummary {
 #[derive(Debug)]
 struct BrowserRuntime {
     runtime: GameRuntime,
+    authored: AdmittedStoredProject,
     project_path: PathBuf,
     project: BrowserProjectSummary,
 }
@@ -70,10 +75,11 @@ impl BrowserRuntime {
                 .map(|scene| scene.entities.len())
                 .sum(),
         };
-        let (_, admitted) = admit_stored_project_with_document(decoded.project)
+        let (authored, admitted) = admit_stored_project_with_document(decoded.project)
             .map_err(|error| format!("project admission failed: {error}"))?;
         Ok(Self {
             runtime: GameRuntime::from_admitted_project(admitted),
+            authored,
             project_path,
             project,
         })
@@ -94,110 +100,60 @@ impl DerefMut for BrowserRuntime {
     }
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BrowserProjectionNode {
-    id: u64,
-    name: String,
-    asset: String,
-    translation: Option<[f32; 3]>,
-    visible: bool,
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct BrowserVoxelEditRequest {
+    expected_revision: u64,
+    #[serde(default)]
+    persist_to_project: bool,
+    edits: Vec<BrowserVoxelEdit>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum BrowserVoxelEdit {
+    Set {
+        address: [i64; 3],
+        material_slot: u16,
+    },
+    Clear {
+        address: [i64; 3],
+    },
+}
+
+impl BrowserVoxelEdit {
+    const fn into_edit(self) -> VoxelEdit {
+        match self {
+            Self::Set {
+                address,
+                material_slot,
+            } => VoxelEdit::Set {
+                address,
+                material_slot,
+            },
+            Self::Clear { address } => VoxelEdit::Clear { address },
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct BrowserEnemyState {
-    id: u64,
-    name: String,
-    state: &'static str,
-    position: [f32; 3],
-    current_health: u32,
-    max_health: u32,
+struct BrowserVoxelEditReceipt {
+    revision_before: u64,
+    accepted_revision: u64,
+    changed_voxels: usize,
+    changed_min: [i64; 3],
+    changed_max_inclusive: [i64; 3],
+    authority_hash: String,
+    persisted_to_project: bool,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct BrowserPlayerBindings {
-    move_forward: String,
-    move_backward: String,
-    move_left: String,
-    move_right: String,
-    mouse_look: String,
-    primary_fire: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BrowserPlayerState {
-    id: u64,
-    position: [f32; 3],
-    yaw_degrees: f32,
-    pitch_degrees: f32,
-    move_step_seconds: f32,
-    look_degrees_per_unit: f32,
-    bindings: BrowserPlayerBindings,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BrowserWeaponState {
-    damage: u32,
-    ammo_remaining: u32,
-    ammo_capacity: u32,
-    ready_at_tick: u64,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BrowserVoxelMeshGroup {
-    material_slot: u16,
-    start: u32,
-    count: u32,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BrowserVoxelMeshChunk {
-    chunk: [i64; 3],
-    content_hash: String,
-    translation: [f32; 3],
-    positions: Vec<f32>,
-    normals: Vec<f32>,
-    indices: Vec<u32>,
-    groups: Vec<BrowserVoxelMeshGroup>,
-    bounds_min: [f32; 3],
-    bounds_max: [f32; 3],
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BrowserGeneratedEnvironment {
-    seed: u64,
-    output_hash: String,
-    solid_voxels: usize,
-    mesh_vertices: u32,
-    mesh_quads: u32,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BrowserState {
-    tick: u64,
-    entity_revision: u64,
-    projection: Vec<BrowserProjectionNode>,
-    door_state: &'static str,
-    encounter_state: &'static str,
-    motion_state: &'static str,
-    navigation_state: &'static str,
-    player_motion_state: &'static str,
-    combat_state: &'static str,
-    player: BrowserPlayerState,
-    weapon: BrowserWeaponState,
-    voxel_meshes: Vec<BrowserVoxelMeshChunk>,
-    generated_environment: Option<BrowserGeneratedEnvironment>,
-    enemies: Vec<BrowserEnemyState>,
-    presentation: BrowserPresentation,
-    last_events: Vec<String>,
+struct BrowserVoxelEditResponse {
+    #[serde(flatten)]
+    state: BrowserState,
+    voxel_edit_receipt: BrowserVoxelEditReceipt,
 }
 
 fn main() {
@@ -527,6 +483,75 @@ fn route(
                 Err(error) => error_json(409, &format!("{error}")),
             }
         }
+        ("POST", "/api/voxel-edit") => {
+            let request: BrowserVoxelEditRequest = match serde_json::from_slice(body) {
+                Ok(request) => request,
+                Err(error) => return error_json(400, &format!("invalid voxel edit: {error}")),
+            };
+            let edits: Vec<_> = request
+                .edits
+                .iter()
+                .copied()
+                .map(BrowserVoxelEdit::into_edit)
+                .collect();
+            let mut runtime = runtime.lock().expect("runtime lock");
+            let before = runtime.runtime.snapshot();
+            let receipt = match runtime.runtime.apply_voxel_edits(VoxelEditTransaction {
+                expected_revision: VoxelSourceRevision::new(request.expected_revision),
+                edits: &edits,
+            }) {
+                Ok(receipt) => receipt,
+                Err(error) => return error_json(409, &format!("{error}")),
+            };
+            if request.persist_to_project {
+                let candidate = match materialize_stored_project_voxels(
+                    &runtime.authored,
+                    runtime
+                        .runtime
+                        .collision_scene()
+                        .expect("edited browser collision scene"),
+                ) {
+                    Ok(candidate) => candidate,
+                    Err(error) => {
+                        runtime.runtime = GameRuntime::from_snapshot(before)
+                            .expect("pre-edit browser snapshot remains valid");
+                        return error_json(
+                            409,
+                            &format!("project materialization failed: {error}"),
+                        );
+                    }
+                };
+                if let Err(error) = ProjectStore::default().save(
+                    &runtime.project_path,
+                    &candidate,
+                    ProjectSaveMode::ReplaceExisting,
+                ) {
+                    runtime.runtime = GameRuntime::from_snapshot(before)
+                        .expect("pre-edit browser snapshot remains valid");
+                    return error_json(500, &format!("project save failed: {error}"));
+                }
+                runtime.authored = candidate;
+            }
+            json_response(
+                200,
+                BrowserVoxelEditResponse {
+                    state: browser_state(
+                        &runtime,
+                        vec!["VoxelEdited".to_owned()],
+                        BrowserFeedbackProjection::default(),
+                    ),
+                    voxel_edit_receipt: BrowserVoxelEditReceipt {
+                        revision_before: receipt.revision_before.raw(),
+                        accepted_revision: receipt.accepted_revision.raw(),
+                        changed_voxels: receipt.fact.changed_voxels,
+                        changed_min: receipt.fact.changed_min,
+                        changed_max_inclusive: receipt.fact.changed_max_inclusive,
+                        authority_hash: format!("{:016x}", receipt.authority_hash),
+                        persisted_to_project: request.persist_to_project,
+                    },
+                },
+            )
+        }
         ("GET", _) | ("HEAD", _) => serve_static(method, path, dist),
         _ => error_json(405, "method not allowed"),
     }
@@ -537,207 +562,6 @@ fn advance_product_action(
 ) -> Result<Vec<GameEvent>, game_host::RuntimeError> {
     let receipt = runtime.advance_by(PRODUCT_ACTION_TICKS)?;
     Ok(receipt.events)
-}
-
-fn browser_state(
-    runtime: &GameRuntime,
-    last_events: Vec<String>,
-    feedback: BrowserFeedbackProjection,
-) -> BrowserState {
-    let readout = runtime.readout();
-    let projection = readout
-        .projection
-        .into_iter()
-        .map(|node| BrowserProjectionNode {
-            id: node.entity.raw(),
-            name: node.name,
-            asset: node.asset,
-            translation: node.translation.map(|value| value.to_array()),
-            visible: node.visible,
-        })
-        .collect();
-    let enemies = [FIRST_ENEMY, SECOND_ENEMY]
-        .into_iter()
-        .map(|raw| {
-            let view = runtime
-                .session()
-                .enemy(EntityId::new(raw))
-                .expect("browser enemy");
-            BrowserEnemyState {
-                id: raw,
-                name: view.entity_view.name,
-                state: match view.state {
-                    EnemyState::Alive => "alive",
-                    EnemyState::Defeated => "defeated",
-                },
-                position: view
-                    .entity_view
-                    .transform
-                    .expect("browser enemy transform")
-                    .translation
-                    .to_array(),
-                current_health: runtime
-                    .session()
-                    .health(EntityId::new(raw))
-                    .expect("browser enemy health")
-                    .current,
-                max_health: runtime
-                    .session()
-                    .health(EntityId::new(raw))
-                    .expect("browser enemy health")
-                    .config
-                    .max,
-            }
-        })
-        .collect();
-    let player = runtime
-        .session()
-        .player_controller(ACTOR)
-        .expect("browser player controller");
-    let bindings = &player.config.bindings;
-    let player_state = BrowserPlayerState {
-        id: ACTOR.raw(),
-        position: player
-            .entity_view
-            .transform
-            .expect("browser player transform")
-            .translation
-            .to_array(),
-        yaw_degrees: player.state.yaw_degrees,
-        pitch_degrees: player.state.pitch_degrees,
-        move_step_seconds: player.config.move_step_seconds,
-        look_degrees_per_unit: player.config.look_degrees_per_unit,
-        bindings: BrowserPlayerBindings {
-            move_forward: bindings.move_forward.clone(),
-            move_backward: bindings.move_backward.clone(),
-            move_left: bindings.move_left.clone(),
-            move_right: bindings.move_right.clone(),
-            mouse_look: bindings.mouse_look.clone(),
-            primary_fire: bindings.primary_fire.clone(),
-        },
-    };
-    let weapon = runtime
-        .session()
-        .weapon(ACTOR)
-        .expect("browser player weapon");
-    let weapon_state = BrowserWeaponState {
-        damage: weapon.config.damage,
-        ammo_remaining: weapon.state.ammo_remaining,
-        ammo_capacity: weapon.config.ammo_capacity,
-        ready_at_tick: weapon.state.ready_at_tick.raw(),
-    };
-    let player_motion_state = if last_events.iter().any(|event| event == "PlayerBlocked") {
-        "blocked"
-    } else if last_events.iter().any(|event| event == "PlayerMoved") {
-        "moved"
-    } else {
-        "idle"
-    };
-    let combat_state = if last_events.iter().any(|event| event == "CombatHit") {
-        "hit"
-    } else if last_events
-        .iter()
-        .any(|event| event.starts_with("CombatMissed"))
-    {
-        "missed"
-    } else {
-        "ready"
-    };
-    let scene = runtime
-        .collision_scene()
-        .expect("browser project collision scene");
-    let voxel_meshes = scene
-        .mesh_chunks()
-        .iter()
-        .map(|mesh| BrowserVoxelMeshChunk {
-            chunk: mesh.chunk,
-            content_hash: format!("{:016x}", mesh.content_hash),
-            translation: mesh.translation,
-            positions: mesh.positions.clone(),
-            normals: mesh.normals.clone(),
-            indices: mesh.indices.clone(),
-            groups: mesh
-                .groups
-                .iter()
-                .map(|group| BrowserVoxelMeshGroup {
-                    material_slot: group.material_slot,
-                    start: group.start,
-                    count: group.count,
-                })
-                .collect(),
-            bounds_min: mesh.bounds_min,
-            bounds_max: mesh.bounds_max,
-        })
-        .collect();
-    let generated_environment = scene.generated_room().map(|(config, record)| {
-        let mesh_vertices = scene.mesh_chunks().iter().map(|mesh| mesh.vertices).sum();
-        let mesh_quads = scene.mesh_chunks().iter().map(|mesh| mesh.quads).sum();
-        BrowserGeneratedEnvironment {
-            seed: config.seed,
-            output_hash: format!("{:016x}", record.output_hash),
-            solid_voxels: record.solid_voxel_count,
-            mesh_vertices,
-            mesh_quads,
-        }
-    });
-    BrowserState {
-        tick: readout.tick.raw(),
-        entity_revision: readout.entity_revision,
-        projection,
-        door_state: match runtime.session().door(EXIT).expect("exit door").state {
-            DoorState::Closed => "closed",
-            DoorState::Open => "open",
-        },
-        encounter_state: match runtime
-            .session()
-            .encounter(ENCOUNTER)
-            .expect("browser encounter")
-            .state
-        {
-            EncounterState::Active => "active",
-            EncounterState::Cleared => "cleared",
-        },
-        motion_state: if runtime
-            .session()
-            .entity(MOTION_PROBE)
-            .expect("motion probe")
-            .kinematic
-            .expect("motion capability")
-            .velocity
-            .x
-            == 0.0
-        {
-            "blocked"
-        } else {
-            "moving"
-        },
-        navigation_state: match runtime
-            .session()
-            .navigation(EntityId::new(FIRST_ENEMY))
-            .expect("browser navigator")
-            .state
-        {
-            NavigationState::Following => "following",
-            NavigationState::Arrived => "arrived",
-            NavigationState::Blocked => "blocked",
-            NavigationState::Unreachable => "unreachable",
-        },
-        player_motion_state,
-        combat_state,
-        player: player_state,
-        weapon: weapon_state,
-        voxel_meshes,
-        generated_environment,
-        enemies,
-        presentation: project_presentation(
-            runtime,
-            ACTOR,
-            &[EntityId::new(FIRST_ENEMY), EntityId::new(SECOND_ENEMY)],
-            EXIT,
-            feedback,
-        ),
-        last_events,
-    }
 }
 
 fn combat_fact_name(fact: &CombatFact) -> &'static str {
@@ -922,6 +746,70 @@ mod tests {
                 .ammo_remaining,
             6
         );
+    }
+
+    #[test]
+    fn voxel_edit_route_reports_only_after_coherent_rebuild_and_rejects_atomically() {
+        let runtime = shared_browser_runtime();
+        let before = response_json(route("GET", "/api/state", &[], &runtime, Path::new(".")));
+        let stale = serde_json::to_vec(&serde_json::json!({
+            "expectedRevision": 1,
+            "persistToProject": false,
+            "edits": [{ "kind": "clear", "address": [4, 1, 6] }]
+        }))
+        .unwrap();
+        assert_eq!(
+            route("POST", "/api/voxel-edit", &stale, &runtime, Path::new(".")).0,
+            409
+        );
+        let after_rejection =
+            response_json(route("GET", "/api/state", &[], &runtime, Path::new(".")));
+        for field in [
+            "voxelRevision",
+            "voxelAuthorityHash",
+            "voxelSolidCount",
+            "voxelNavigationHash",
+            "voxelProbePathLength",
+            "voxelMeshes",
+        ] {
+            assert_eq!(after_rejection[field], before[field], "changed {field}");
+        }
+
+        let clear = serde_json::to_vec(&serde_json::json!({
+            "expectedRevision": 0,
+            "persistToProject": false,
+            "edits": [{ "kind": "clear", "address": [4, 1, 6] }]
+        }))
+        .unwrap();
+        let edited = response_json(route(
+            "POST",
+            "/api/voxel-edit",
+            &clear,
+            &runtime,
+            Path::new("."),
+        ));
+        assert_eq!(edited["voxelRevision"], 1);
+        assert_eq!(edited["voxelEditReceipt"]["acceptedRevision"], 1);
+        assert_eq!(edited["voxelEditReceipt"]["changedVoxels"], 1);
+        assert_eq!(edited["voxelEditReceipt"]["persistedToProject"], false);
+        assert_eq!(edited["generatedEnvironment"], serde_json::Value::Null);
+        assert_eq!(
+            edited["voxelSolidCount"].as_u64(),
+            before["voxelSolidCount"].as_u64().map(|count| count - 1)
+        );
+        assert_ne!(edited["voxelAuthorityHash"], before["voxelAuthorityHash"]);
+        assert_ne!(edited["voxelNavigationHash"], before["voxelNavigationHash"]);
+        assert!(
+            edited["voxelProbePathLength"].as_u64().unwrap()
+                < before["voxelProbePathLength"].as_u64().unwrap()
+        );
+        assert_ne!(edited["voxelMeshes"], before["voxelMeshes"]);
+
+        let reset = response_json(route("POST", "/api/reset", &[], &runtime, Path::new(".")));
+        assert_eq!(reset["voxelRevision"], before["voxelRevision"]);
+        assert_eq!(reset["voxelAuthorityHash"], before["voxelAuthorityHash"]);
+        assert_eq!(reset["voxelNavigationHash"], before["voxelNavigationHash"]);
+        assert_eq!(reset["voxelMeshes"], before["voxelMeshes"]);
     }
 
     #[test]

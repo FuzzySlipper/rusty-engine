@@ -55,7 +55,8 @@ fn snapshot_reopen_regenerates_voxels_and_all_derived_consumers_identically() {
     let encoded = encode_game_snapshot(&uninterrupted).unwrap();
     let encoded_value: Value = serde_json::from_str(&encoded).unwrap();
 
-    assert_eq!(encoded_value["voxelCollision"]["solidVoxels"], json!([]));
+    assert_eq!(encoded_value["voxelCollision"]["materialVoxels"], json!([]));
+    assert_eq!(encoded_value["voxelCollision"]["sourceRevision"], json!(0));
     assert_eq!(
         encoded_value["voxelCollision"]["generatedRoom"]["seed"],
         json!(4),

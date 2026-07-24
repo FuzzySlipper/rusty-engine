@@ -82,6 +82,17 @@ export interface GeneratedVoxelEnvironmentDefinition {
   readonly length: number;
 }
 
+export interface MaterialVoxelDefinition {
+  readonly address: VoxelAddress;
+  readonly materialSlot: number;
+}
+
+export interface MaterialVoxelEnvironmentDefinition {
+  readonly voxelSize: number;
+  readonly chunkSize: number;
+  readonly materialVoxels: readonly MaterialVoxelDefinition[];
+}
+
 export interface EntityDefinition {
   readonly id: number;
   readonly name: string;
@@ -112,6 +123,7 @@ export interface StoredAssetDefinition {
 
 export type StoredVoxelEnvironmentDefinition =
   | ({ readonly kind: "solid" } & VoxelCollisionDefinition)
+  | ({ readonly kind: "material" } & MaterialVoxelEnvironmentDefinition)
   | ({ readonly kind: "generatedRoom" } & GeneratedVoxelEnvironmentDefinition);
 
 export interface StoredSceneDefinition {

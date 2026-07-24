@@ -275,6 +275,11 @@ function feedbackState(): RuntimeBrowserState {
   return {
     tick: 5,
     entityRevision: 8,
+    voxelRevision: 0,
+    voxelAuthorityHash: "0000000000000000",
+    voxelSolidCount: 0,
+    voxelNavigationHash: "0000000000000000",
+    voxelProbePathLength: 0,
     projection: [
       { id: 3, name: "exit", asset: "mesh/security-door", translation: [4.5, 4, 10.5], visible: true },
     ],

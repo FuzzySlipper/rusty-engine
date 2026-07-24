@@ -39,6 +39,10 @@ pub use door::{
     security_door_definitions, DoorComponent, DoorConfig, DoorState, DoorView, SecurityDoorIds,
 };
 pub use encounter::{EncounterComponent, EncounterConfig, EncounterState, EncounterView};
+pub use engine_spatial::{
+    MaterialVoxel, VoxelEdit, VoxelEditApplyError, VoxelEditFact, VoxelEditReceipt,
+    VoxelEditRejection, VoxelEditTransaction, VoxelProjectionRevisions, VoxelSourceRevision,
+};
 pub use engine_spatial::{MotionAxis, MotionFact, MotionPhaseReceipt};
 pub use interaction::{SwitchComponent, SwitchView};
 pub use navigation::{
@@ -53,7 +57,7 @@ pub use player::{
 };
 pub use project_admission::{
     admit_stored_project, admit_stored_project_with_document, decode_and_admit_stored_project,
-    AdmittedStoredProject,
+    materialize_stored_project_voxels, AdmittedStoredProject,
 };
 pub use project_codec::{
     decode_project_document, encode_project_document, DecodedProjectDocument,
@@ -68,16 +72,16 @@ pub use scheduler::{ScheduledIntent, ScheduledIntentKind, Scheduler};
 pub use session::GameSession;
 pub use snapshot::{
     decode_game_snapshot, encode_game_snapshot, EncounterSnapshot, EnemySnapshot, GameSnapshot,
-    GameSnapshotError, GeneratedRoomSnapshot, HealthSnapshot, NavigationSnapshot,
-    PlayerControllerSnapshot, PlayerInputBindingsSnapshot, SnapshotEncounterState,
-    SnapshotEnemyState, SnapshotNavigationState, VoxelCollisionSnapshot, WeaponSnapshot,
-    GAME_SNAPSHOT_SCHEMA_VERSION,
+    GameSnapshotError, GeneratedRoomSnapshot, HealthSnapshot, MaterialVoxelSnapshot,
+    NavigationSnapshot, PlayerControllerSnapshot, PlayerInputBindingsSnapshot,
+    SnapshotEncounterState, SnapshotEnemyState, SnapshotNavigationState, VoxelCollisionSnapshot,
+    WeaponSnapshot, GAME_SNAPSHOT_SCHEMA_VERSION,
 };
 pub use stored_project::{
     decode_stored_project, diagnostic_code, ProjectDiagnostic, StoredAsset, StoredCollision,
     StoredDoor, StoredEncounter, StoredEntityDefinition, StoredGeneratedVoxelEnvironment,
-    StoredHealth, StoredKinematic, StoredNavigation, StoredPlayerController,
-    StoredPlayerInputBindings, StoredProject, StoredProjectError, StoredRenderable, StoredScene,
-    StoredSolidVoxelEnvironment, StoredSwitch, StoredVoxelEnvironment, StoredWeapon,
-    STORED_PROJECT_SCHEMA_VERSION,
+    StoredHealth, StoredKinematic, StoredMaterialVoxel, StoredMaterialVoxelEnvironment,
+    StoredNavigation, StoredPlayerController, StoredPlayerInputBindings, StoredProject,
+    StoredProjectError, StoredRenderable, StoredScene, StoredSolidVoxelEnvironment, StoredSwitch,
+    StoredVoxelEnvironment, StoredWeapon, STORED_PROJECT_SCHEMA_VERSION,
 };

@@ -6,7 +6,7 @@ use core_assets::{AssetId, AssetKind};
 use core_ids::EntityId;
 use core_math::Vec3;
 use core_time::TickDelta;
-use engine_spatial::{GeneratedRoomConfig, VoxelCollisionScene};
+use engine_spatial::{GeneratedRoomConfig, MaterialVoxel, VoxelCollisionScene};
 use entity_state::{EntityDefinition, MAX_ABS_TRANSLATION};
 
 use crate::combat::{HealthConfig, WeaponConfig};
@@ -18,8 +18,9 @@ use crate::player::{PlayerControllerConfig, PlayerInputBindings};
 use crate::project_codec::decode_project_document;
 use crate::session::GameSession;
 use crate::stored_project::{
-    diagnostic_code, validate_stored_project, StoredEntityDefinition, StoredProject,
-    StoredProjectError, StoredScene, StoredVoxelEnvironment,
+    diagnostic_code, validate_stored_project, StoredEntityDefinition, StoredMaterialVoxel,
+    StoredMaterialVoxelEnvironment, StoredProject, StoredProjectError, StoredScene,
+    StoredVoxelEnvironment,
 };
 
 /// Static project data that has passed the same complete semantic admission as
@@ -84,6 +85,36 @@ pub fn admit_stored_project_with_document(
             collision_scene,
         },
     ))
+}
+
+/// Materialize the runtime's accepted voxel authority into one explicit static
+/// project candidate, then run the complete M5 admission again. Live source
+/// revision, receipts, and edit history are deliberately not authored fields.
+pub fn materialize_stored_project_voxels(
+    source: &AdmittedStoredProject,
+    scene: &VoxelCollisionScene,
+) -> Result<AdmittedStoredProject, StoredProjectError> {
+    let mut document = source.document.clone();
+    let scene_index = document
+        .scenes
+        .iter()
+        .position(|candidate| candidate.id == document.entry_scene)
+        .expect("admitted project retains its entry scene");
+    document.scenes[scene_index].voxel_environment = Some(StoredVoxelEnvironment::Material(
+        StoredMaterialVoxelEnvironment {
+            voxel_size: scene.voxel_size(),
+            chunk_size: scene.chunk_size(),
+            material_voxels: scene
+                .material_voxels()
+                .iter()
+                .map(|voxel| StoredMaterialVoxel {
+                    address: voxel.address,
+                    material_slot: voxel.material_slot,
+                })
+                .collect(),
+        },
+    ));
+    admit_stored_project_with_document(document).map(|(stored, _)| stored)
 }
 
 struct ProjectAssetCatalog {
@@ -197,6 +228,17 @@ fn build_collision_scene(
             environment.voxel_size,
             environment.chunk_size,
             environment.solid_voxels.iter().copied(),
+        ),
+        StoredVoxelEnvironment::Material(environment) => VoxelCollisionScene::from_material_voxels(
+            environment.voxel_size,
+            environment.chunk_size,
+            environment
+                .material_voxels
+                .iter()
+                .map(|voxel| MaterialVoxel {
+                    address: voxel.address,
+                    material_slot: voxel.material_slot,
+                }),
         ),
         StoredVoxelEnvironment::GeneratedRoom(environment) => {
             VoxelCollisionScene::from_generated_room(GeneratedRoomConfig {

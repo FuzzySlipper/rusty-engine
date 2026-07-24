@@ -71,6 +71,8 @@ button { cursor: pointer; border: 1px solid #4f766f; background: #17302d; color:
 button:hover { background: #244a44; border-color: #69aa9c; }
 button.quiet { margin-left: auto; background: transparent; color: #8da39e; }
 .control-note { max-width: 560px; margin: 14px 0 0; color: #718782; font-size: 12px; line-height: 1.5; }
+.persist-control { display: inline-flex; align-items: center; gap: 8px; margin-top: 13px; color: #8aa39d; font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+.persist-control input { accent-color: #55cfa0; }
 .event-list { margin: 0; padding-left: 20px; color: #b8c9c4; font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; line-height: 1.7; }
 .event-list li::marker { color: #4d9e89; }
 footer { display: flex; justify-content: space-between; padding: 12px 2px; color: #536b67; font-size: 9px; }

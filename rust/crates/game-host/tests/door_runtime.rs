@@ -5,6 +5,7 @@ use entity_state::EntityDefinition;
 use game_host::{
     decode_game_snapshot, encode_game_snapshot, security_door_definitions, DoorState,
     GameEntityDefinition, GameEntityDefinitionError, GameEvent, GameRuntime,
+    GAME_SNAPSHOT_SCHEMA_VERSION,
 };
 
 #[test]
@@ -74,7 +75,9 @@ fn save_reopen_preserves_pending_close_without_event_history() {
         .expect("interaction");
     runtime.advance_by(2).expect("advance");
     let encoded = encode_game_snapshot(&runtime).expect("save");
-    assert!(encoded.contains("\"schemaVersion\": 8"));
+    assert!(encoded.contains(&format!(
+        "\"schemaVersion\": {GAME_SNAPSHOT_SCHEMA_VERSION}"
+    )));
     assert!(encoded.contains("\"entities\""));
     assert!(!encoded.contains("\"world\""));
 

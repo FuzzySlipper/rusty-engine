@@ -12,6 +12,11 @@ function state(projection: RuntimeBrowserState["projection"]): RuntimeBrowserSta
   return {
     tick: 0,
     entityRevision: 0,
+    voxelRevision: 0,
+    voxelAuthorityHash: "0000000000000000",
+    voxelSolidCount: 0,
+    voxelNavigationHash: "0000000000000000",
+    voxelProbePathLength: 0,
     projection,
     doorState: "closed",
     encounterState: "active",

@@ -5,7 +5,8 @@ use core_time::{Tick, TickDelta};
 
 use engine_spatial::{
     KinematicMotionSystem, MotionPhaseError, MotionPhaseReceipt, NavigationStepError,
-    VoxelCollisionScene,
+    VoxelCollisionScene, VoxelEditApplyError, VoxelEditReceipt, VoxelEditService,
+    VoxelEditTransaction,
 };
 
 use crate::combat::{CombatReceipt, CombatRejectionReason, CombatService, ResolvedAttackAction};
@@ -71,6 +72,7 @@ pub enum RuntimeError {
         entity: EntityId,
         source: NavigationStepError,
     },
+    VoxelEdit(VoxelEditApplyError),
 }
 
 impl std::fmt::Display for RuntimeError {
@@ -148,6 +150,17 @@ impl GameRuntime {
 
     pub fn collision_scene(&self) -> Option<&VoxelCollisionScene> {
         self.collision_scene.as_ref()
+    }
+
+    pub fn apply_voxel_edits(
+        &mut self,
+        transaction: VoxelEditTransaction<'_>,
+    ) -> Result<VoxelEditReceipt, RuntimeError> {
+        let scene = self
+            .collision_scene
+            .as_mut()
+            .ok_or(RuntimeError::MissingCollisionScene)?;
+        VoxelEditService::apply(scene, transaction).map_err(RuntimeError::VoxelEdit)
     }
 
     /// Run the one centrally scheduled kinematic phase over every configured

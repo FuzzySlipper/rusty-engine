@@ -43,6 +43,7 @@ try {
     throw new Error(`current project persistence receipt was incomplete\n${currentReceipt}`);
   }
   await runFullBrowserProduct(persistedProject);
+  await runPersistedVoxelEditProduct(persistedProject);
 
   const migrationReceipt = await persistProject(
     resolve(repoRoot, "content/generated/encounter-gate.project.json"),
@@ -112,6 +113,9 @@ async function runFullBrowserProduct(project) {
       'data-audio-feedback="pass"',
       'data-feedback-drop="pass"',
       'data-feedback-concrete-restart="pass"',
+      'data-voxel-edit="pass"',
+      'data-voxel-rejection="pass"',
+      'data-voxel-collision="pass"',
       "PASS · Rust facts reached retained WebGL and disposable feedback",
       "EnemyDefeated",
       "EncounterCleared",
@@ -190,6 +194,104 @@ async function runMigratedBrowserProduct(project) {
     }
   } finally {
     await stopHost(running.host);
+  }
+}
+
+async function runPersistedVoxelEditProduct(project) {
+  const running = await launchHost(project);
+  let persistedHash;
+  let persistedNavigationHash;
+  let persistedPathLength;
+  try {
+    await waitForHealth(`http://${running.address}/health`, running.host, running.output);
+    const beforeResponse = await fetch(`http://${running.address}/api/state`);
+    const before = await beforeResponse.json();
+    const editResponse = await fetch(`http://${running.address}/api/voxel-edit`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expectedRevision: before.voxelRevision,
+        persistToProject: true,
+        edits: [{ kind: "clear", address: [4, 1, 6] }],
+      }),
+    });
+    const edited = await editResponse.json();
+    if (
+      !editResponse.ok ||
+      edited.voxelEditReceipt?.persistedToProject !== true ||
+      edited.voxelEditReceipt?.changedVoxels !== 1 ||
+      edited.voxelRevision !== 1 ||
+      edited.voxelSolidCount !== before.voxelSolidCount - 1 ||
+      edited.voxelAuthorityHash === before.voxelAuthorityHash ||
+      edited.voxelNavigationHash === before.voxelNavigationHash ||
+      edited.voxelProbePathLength >= before.voxelProbePathLength ||
+      edited.generatedEnvironment !== null
+    ) {
+      throw new Error(`persisted voxel edit response was incomplete\n${JSON.stringify(edited)}`);
+    }
+    persistedHash = edited.voxelAuthorityHash;
+    persistedNavigationHash = edited.voxelNavigationHash;
+    persistedPathLength = edited.voxelProbePathLength;
+
+    const resetResponse = await fetch(`http://${running.address}/api/reset`, { method: "POST" });
+    const reset = await resetResponse.json();
+    if (
+      !resetResponse.ok ||
+      reset.voxelRevision !== 0 ||
+      reset.voxelAuthorityHash !== persistedHash ||
+      reset.voxelNavigationHash !== persistedNavigationHash ||
+      reset.voxelProbePathLength !== persistedPathLength ||
+      reset.generatedEnvironment !== null ||
+      reset.voxelEditReceipt !== undefined ||
+      reset.lastEvents?.length !== 0
+    ) {
+      throw new Error(`persisted voxel reset did not reopen static authority\n${JSON.stringify(reset)}`);
+    }
+  } finally {
+    await stopHost(running.host);
+  }
+
+  const bytes = readFileSync(project, "utf8");
+  const document = JSON.parse(bytes);
+  const environment = document.scenes?.[0]?.voxelEnvironment;
+  if (
+    environment?.kind !== "material" ||
+    !Array.isArray(environment.materialVoxels) ||
+    environment.materialVoxels.some((voxel) =>
+      JSON.stringify(voxel.address) === JSON.stringify([4, 1, 6]))
+  ) {
+    throw new Error(`saved project did not materialize the accepted edit\n${bytes}`);
+  }
+  for (const forbidden of [
+    "sourceRevision",
+    "authorityHash",
+    "voxelEdit",
+    "changedVoxels",
+    "editHistory",
+    "events",
+  ]) {
+    if (bytes.includes(forbidden)) {
+      throw new Error(`saved project leaked transient field ${forbidden}`);
+    }
+  }
+
+  const reopened = await launchHost(project);
+  try {
+    await waitForHealth(`http://${reopened.address}/health`, reopened.host, reopened.output);
+    const response = await fetch(`http://${reopened.address}/api/state`);
+    const state = await response.json();
+    if (
+      !response.ok ||
+      state.voxelRevision !== 0 ||
+      state.voxelAuthorityHash !== persistedHash ||
+      state.voxelNavigationHash !== persistedNavigationHash ||
+      state.voxelProbePathLength !== persistedPathLength ||
+      state.generatedEnvironment !== null
+    ) {
+      throw new Error(`fresh host did not reopen persisted voxel authority\n${JSON.stringify(state)}`);
+    }
+  } finally {
+    await stopHost(reopened.host);
   }
 }
 

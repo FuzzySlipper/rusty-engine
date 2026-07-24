@@ -198,6 +198,10 @@ fn canonicalize(mut document: StoredProject) -> Result<StoredProject, StoredProj
             environment.solid_voxels.sort_unstable();
             environment.solid_voxels.dedup();
         }
+        if let Some(StoredVoxelEnvironment::Material(environment)) = &mut scene.voxel_environment {
+            environment.material_voxels.sort_unstable();
+            environment.material_voxels.dedup();
+        }
         for entity in &mut scene.entities {
             if let Some(component) = &mut entity.switch {
                 component.controls.sort_unstable();
@@ -217,6 +221,10 @@ fn normalize_numbers(document: &mut StoredProject) -> Result<(), StoredProjectEr
         if let Some(environment) = &mut scene.voxel_environment {
             match environment {
                 StoredVoxelEnvironment::Solid(environment) => normalize_f64(
+                    &mut environment.voxel_size,
+                    format!("scenes[{scene_index}].voxelEnvironment.voxelSize"),
+                )?,
+                StoredVoxelEnvironment::Material(environment) => normalize_f64(
                     &mut environment.voxel_size,
                     format!("scenes[{scene_index}].voxelEnvironment.voxelSize"),
                 )?,

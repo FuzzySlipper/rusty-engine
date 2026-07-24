@@ -19,6 +19,11 @@ type ResolvedPlayerAction =
   | { readonly kind: "look"; readonly yawDelta: number; readonly pitchDelta: number };
 type ResolvedAttackAction = { readonly kind: "attack" };
 type ResolvedInputAction = ResolvedPlayerAction | ResolvedAttackAction;
+type VoxelEditOperation =
+  | { readonly kind: "set"; readonly address: readonly [number, number, number]; readonly materialSlot: number }
+  | { readonly kind: "clear"; readonly address: readonly [number, number, number] };
+
+const PRODUCT_EDIT_VOXEL = [4, 1, 6] as const;
 
 const canvas = requiredElement("viewport", HTMLCanvasElement);
 const encounterState = requiredElement("encounter-state", HTMLElement);
@@ -32,6 +37,8 @@ const combatState = requiredElement("combat-state", HTMLElement);
 const playerPose = requiredElement("player-pose", HTMLElement);
 const weaponState = requiredElement("weapon-state", HTMLElement);
 const environmentState = requiredElement("environment-state", HTMLElement);
+const voxelState = requiredElement("voxel-state", HTMLElement);
+const persistVoxelEdit = requiredElement("persist-voxel-edit", HTMLInputElement);
 const eventList = requiredElement("event-list", HTMLOListElement);
 const rendererStatus = requiredElement("renderer-status", HTMLElement);
 const smokeResult = requiredElement("smoke-result", HTMLElement);
@@ -85,6 +92,19 @@ requiredElement("run-motion", HTMLButtonElement).addEventListener("click", () =>
 requiredElement("run-navigation", HTMLButtonElement).addEventListener("click", () => {
   void presentationFeedback.activateAudio();
   void perform("/api/navigation-phase");
+});
+requiredElement("remove-voxel", HTMLButtonElement).addEventListener("click", () => {
+  void actionQueue.enqueue(() => performVoxelEdit({
+    kind: "clear",
+    address: PRODUCT_EDIT_VOXEL,
+  }));
+});
+requiredElement("place-voxel", HTMLButtonElement).addEventListener("click", () => {
+  void actionQueue.enqueue(() => performVoxelEdit({
+    kind: "set",
+    address: PRODUCT_EDIT_VOXEL,
+    materialSlot: 3,
+  }));
 });
 
 window.addEventListener("keydown", (event) => {
@@ -143,6 +163,51 @@ window.addEventListener("mousemove", (event) => {
 });
 
 if (smokeMode) {
+  const voxelBefore = voxelFingerprint(current);
+  let staleRejected = false;
+  try {
+    await requestState("/api/voxel-edit", "POST", {
+      expectedRevision: current.voxelRevision + 1,
+      persistToProject: false,
+      edits: [{ kind: "clear", address: PRODUCT_EDIT_VOXEL }],
+    });
+  } catch {
+    staleRejected = true;
+  }
+  const afterRejectedEdit = await requestState("/api/state");
+  const rejectedUnchanged = staleRejected &&
+    JSON.stringify(voxelFingerprint(afterRejectedEdit)) === JSON.stringify(voxelBefore);
+  current = afterRejectedEdit;
+  await performVoxelEdit({ kind: "clear", address: PRODUCT_EDIT_VOXEL });
+  const clearReceipt = current.voxelEditReceipt;
+  const editBecameVisibleAndNavigable =
+    clearReceipt?.acceptedRevision === 1 &&
+    clearReceipt.changedVoxels === 1 &&
+    current.voxelRevision === 1 &&
+    current.voxelSolidCount === voxelBefore.solidCount - 1 &&
+    current.voxelAuthorityHash !== voxelBefore.authorityHash &&
+    current.voxelNavigationHash !== voxelBefore.navigationHash &&
+    current.voxelProbePathLength < voxelBefore.probePathLength &&
+    meshFingerprint(current) !== voxelBefore.meshHash &&
+    current.generatedEnvironment === null &&
+    surface.snapshot().includes("generated-room-chunk");
+  const clearedPassage = await walkPlayerPath([
+    [1.5, 5.5],
+    [4.5, 5.5],
+    [4.5, 7.5],
+  ]);
+  await perform("/api/reset");
+  const blockedByRestoredVoxel = !await walkPlayerPath([
+    [1.5, 5.5],
+    [4.5, 5.5],
+    [4.5, 7.5],
+  ]);
+  await perform("/api/reset");
+  const voxelEditPassed = editBecameVisibleAndNavigable && clearedPassage && blockedByRestoredVoxel;
+  document.body.dataset.voxelEdit = voxelEditPassed ? "pass" : "fail";
+  document.body.dataset.voxelRejection = rejectedUnchanged ? "pass" : "fail";
+  document.body.dataset.voxelCollision = clearedPassage && blockedByRestoredVoxel ? "pass" : "fail";
+
   await presentationFeedback.activateAudio();
   await enqueueAttackAction({ kind: "attack" });
   const resetStartedWithConcreteTransients =
@@ -333,6 +398,8 @@ if (smokeMode) {
   document.body.dataset.feedbackDrop = feedbackDropPassed ? "pass" : "fail";
   const passed =
     gameplayPassed &&
+    voxelEditPassed &&
+    rejectedUnchanged &&
     resetFeedbackRebuilt &&
     feedbackFamiliesPassed &&
     audioFeedbackPassed &&
@@ -363,6 +430,25 @@ async function perform(path: string): Promise<void> {
   updateRendererStatus();
 }
 
+async function performVoxelEdit(edit: VoxelEditOperation): Promise<void> {
+  current = await requestState("/api/voxel-edit", "POST", {
+    expectedRevision: current.voxelRevision,
+    persistToProject: persistVoxelEdit.checked,
+    edits: [edit],
+  });
+  lastActionRejection = null;
+  eventHistory.push(...current.lastEvents);
+  const frame = projection.apply(current);
+  if (frame.ops.length > 0) {
+    surface.applyFrame(frame);
+  }
+  surface.setCameraPose(derivePlayerCameraPose(current.player));
+  surface.renderOnce();
+  renderReadout(current);
+  applyPresentationFeedback();
+  updateRendererStatus();
+}
+
 function renderReadout(state: RuntimeBrowserState): void {
   eventList.dataset.history = eventHistory.join(",");
   encounterState.textContent = state.encounterState.toUpperCase();
@@ -384,8 +470,9 @@ function renderReadout(state: RuntimeBrowserState): void {
   playerPose.textContent = `${state.player.position.map((value) => value.toFixed(1)).join(", ")} · YAW ${state.player.yawDegrees.toFixed(0)}°`;
   weaponState.textContent = `${String(state.weapon.damage)} DMG · ${String(state.weapon.ammoRemaining)}/${String(state.weapon.ammoCapacity)} AMMO`;
   environmentState.textContent = state.generatedEnvironment === null
-    ? "STATIC"
+    ? `MATERIALIZED · ${String(state.voxelSolidCount)} VOXELS`
     : `SEED ${String(state.generatedEnvironment.seed)} · ${String(state.generatedEnvironment.meshQuads)} QUADS · ${state.generatedEnvironment.outputHash.slice(0, 8)}`;
+  voxelState.textContent = `VOXEL REV ${String(state.voxelRevision)} · NAV ${state.voxelNavigationHash.slice(0, 8)} · PATH ${String(state.voxelProbePathLength)}`;
   enemyList.replaceChildren(
     ...state.enemies.map((enemy) => {
       const row = document.createElement("div");
@@ -608,7 +695,7 @@ export function resolvePointerAction(
 async function requestState(
   path: string,
   method = "GET",
-  body?: ResolvedInputAction,
+  body?: unknown,
 ): Promise<RuntimeBrowserState> {
   const response = await fetch(path, {
     method,
@@ -657,6 +744,28 @@ function authoritativeBrowserFingerprint(state: RuntimeBrowserState): string {
     weapon: state.weapon,
     enemies: state.enemies,
   });
+}
+
+function meshFingerprint(state: RuntimeBrowserState): string {
+  return state.voxelMeshes.map((mesh) => `${mesh.chunk.join(",")}:${mesh.contentHash}`).join("|");
+}
+
+function voxelFingerprint(state: RuntimeBrowserState): {
+  readonly revision: number;
+  readonly authorityHash: string;
+  readonly navigationHash: string;
+  readonly probePathLength: number;
+  readonly solidCount: number;
+  readonly meshHash: string;
+} {
+  return {
+    revision: state.voxelRevision,
+    authorityHash: state.voxelAuthorityHash,
+    navigationHash: state.voxelNavigationHash,
+    probePathLength: state.voxelProbePathLength,
+    solidCount: state.voxelSolidCount,
+    meshHash: meshFingerprint(state),
+  };
 }
 
 function delay(milliseconds: number): Promise<void> {

@@ -61,6 +61,7 @@ pub struct StoredScene {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum StoredVoxelEnvironment {
     Solid(StoredSolidVoxelEnvironment),
+    Material(StoredMaterialVoxelEnvironment),
     GeneratedRoom(StoredGeneratedVoxelEnvironment),
 }
 
@@ -70,6 +71,21 @@ pub struct StoredSolidVoxelEnvironment {
     pub voxel_size: f64,
     pub chunk_size: u32,
     pub solid_voxels: Vec<[i64; 3]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StoredMaterialVoxelEnvironment {
+    pub voxel_size: f64,
+    pub chunk_size: u32,
+    pub material_voxels: Vec<StoredMaterialVoxel>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StoredMaterialVoxel {
+    pub address: [i64; 3],
+    pub material_slot: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

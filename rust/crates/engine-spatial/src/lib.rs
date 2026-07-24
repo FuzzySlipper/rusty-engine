@@ -227,6 +227,18 @@ impl VoxelCollisionScene {
         Self::build(voxel_size, chunk_size, voxels, None)
     }
 
+    /// Rebuild concrete persisted authority at its accepted live revision.
+    /// Authored projects normally start at revision zero; runtime snapshots use
+    /// this constructor to retain their optimistic-concurrency boundary.
+    pub fn from_material_voxels_at_revision(
+        voxel_size: f64,
+        chunk_size: u32,
+        voxels: impl IntoIterator<Item = MaterialVoxel>,
+        source_revision: VoxelSourceRevision,
+    ) -> Result<Self, CollisionSceneError> {
+        Self::build_at_revision(voxel_size, chunk_size, voxels, None, source_revision)
+    }
+
     pub fn from_generated_room(config: GeneratedRoomConfig) -> Result<Self, CollisionSceneError> {
         let (voxels, record) = generate_room(config).map_err(CollisionSceneError::Generation)?;
         Self::build(

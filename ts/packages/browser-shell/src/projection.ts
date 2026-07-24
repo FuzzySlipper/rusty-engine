@@ -123,6 +123,11 @@ export interface RuntimePresentationState {
 export interface RuntimeBrowserState {
   readonly tick: number;
   readonly entityRevision: number;
+  readonly voxelRevision: number;
+  readonly voxelAuthorityHash: string;
+  readonly voxelSolidCount: number;
+  readonly voxelNavigationHash: string;
+  readonly voxelProbePathLength: number;
   readonly projection: readonly RuntimeProjectionNode[];
   readonly doorState: "closed" | "open";
   readonly encounterState: "active" | "cleared";
@@ -137,6 +142,17 @@ export interface RuntimeBrowserState {
   readonly enemies: readonly RuntimeEnemyState[];
   readonly presentation: RuntimePresentationState;
   readonly lastEvents: readonly string[];
+  readonly voxelEditReceipt?: RuntimeVoxelEditReceipt;
+}
+
+export interface RuntimeVoxelEditReceipt {
+  readonly revisionBefore: number;
+  readonly acceptedRevision: number;
+  readonly changedVoxels: number;
+  readonly changedMin: readonly [number, number, number];
+  readonly changedMaxInclusive: readonly [number, number, number];
+  readonly authorityHash: string;
+  readonly persistedToProject: boolean;
 }
 
 /** Presentation-only follow camera rebuilt from the accepted Rust player pose. */
