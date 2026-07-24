@@ -8,6 +8,14 @@
 
 #![forbid(unsafe_code)]
 
+mod voxel_edit;
+
+pub use voxel_edit::{
+    ValidatedVoxelEditTransaction, VoxelEdit, VoxelEditFact, VoxelEditReceipt, VoxelEditRejection,
+    VoxelEditService, VoxelEditTransaction, VoxelProjectionRevisions, VoxelSourceRevision,
+    MAX_VOXEL_COORDINATE_ABS, MAX_VOXEL_EDITS_PER_TRANSACTION, MAX_VOXEL_MATERIAL_SLOT,
+};
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use core_ids::EntityId;

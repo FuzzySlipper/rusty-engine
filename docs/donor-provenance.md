@@ -133,6 +133,17 @@ proof). No Asha serialization, snapshot, scene, project-content, bundle, rule, o
 was added. The filesystem service remains successor-owned and accepts only static data carrying the
 same semantic-admission token used to construct the runtime.
 
+M7A re-audited `rule-voxel-edit`, `svc-spatial`, `svc-collision`, `svc-pathfinding`, `svc-mesh`,
+and `voxel-diagnostics` at the pinned revision. Those paths are byte-unchanged at current Asha head
+`6462a6de20d48ea1a3b7456826804bd9507860a5`. The successor retains complete-batch validation,
+bounded amplification, deterministic coordinate order, authoritative pick revalidation as a later
+product-border option, and the spatial service's dirty-neighbour lesson. It deliberately does not
+import Asha's global voxel command/event union, preview/apply protocol, replay divergence records,
+generation command, edit history, persistence callbacks, scene composition, or diagnostics tool.
+`VoxelEditService` instead owns only the live product's typed set/clear transaction, stale-source
+revision check, and atomic collision/navigation/mesh coherence rule. Runtime snapshot and explicit
+project save will persist concrete accepted material voxels, not events or history.
+
 Sibling references are intentional while Asha development is stopped for this decision. If this
 lab becomes a durable independent successor, the references should be pinned as Git dependencies,
 vendored with this ledger, or moved into a shared foundation repository before Asha resumes.
