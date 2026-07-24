@@ -204,6 +204,11 @@ export interface RendererSurface {
   readonly projectionSnapshot: () => RenderProjectionSnapshot;
   readonly renderOnce: (timeMs?: number) => void;
   readonly resetCamera: () => void;
+  /** Synchronize a caller-owned camera, such as an authoritative game player view. */
+  readonly setCameraPose: (
+    pose: RendererSurfaceCameraPose,
+    basis?: RendererSurfaceCameraBasis,
+  ) => void;
   /** Attach after mount when an animation host needs this surface's projection port. */
   readonly setPresentationHosts: (hosts: RendererPresentationHostSet | null) => void;
   readonly snapshot: () => string;
@@ -362,6 +367,10 @@ function mountPreparedRendererSurface(
       lastRenderTimeMs = null;
       renderOnce(0);
     },
+    setCameraPose: (pose, basis) => {
+      controls.setCameraPose(pose, basis);
+      backendSurface.setCameraPose(pose, basis);
+    },
     setPresentationHosts: (hosts) => {
       presentationHosts = hosts;
     },
@@ -435,6 +444,10 @@ interface RendererSurfaceFirstPersonControls {
   readonly movementState: () => RendererSurfaceMovementState;
   readonly pointerLocked: () => boolean;
   readonly resetCamera: () => void;
+  readonly setCameraPose: (
+    pose: RendererSurfaceCameraPose,
+    basis?: RendererSurfaceCameraBasis,
+  ) => void;
   readonly update: (deltaSeconds: number) => void;
 }
 
@@ -523,6 +536,18 @@ function createRendererSurfaceFirstPersonControls(
     movementState = emptyMovementState(resolveMovement);
   };
 
+  const setCameraPose = (
+    pose: RendererSurfaceCameraPose,
+    nextBasis?: RendererSurfaceCameraBasis,
+  ): void => {
+    validateCameraPose(pose);
+    if (nextBasis !== undefined) validateCameraBasis(nextBasis);
+    position = [...pose.position];
+    pitchRadians = degreesToRadians(pose.pitchDegrees);
+    yawRadians = degreesToRadians(pose.yawDegrees);
+    basis = nextBasis;
+  };
+
   const update = (deltaSeconds: number): void => {
     if (!enabled) return;
     const safeDeltaSeconds = Math.max(0, finite(deltaSeconds, 'deltaSeconds'));
@@ -594,6 +619,7 @@ function createRendererSurfaceFirstPersonControls(
     movementState: () => movementState,
     pointerLocked,
     resetCamera,
+    setCameraPose,
     update,
     dispose: () => {
       clearInput();
@@ -653,6 +679,12 @@ function validateCameraPose(pose: RendererSurfaceCameraPose): void {
   finiteVector(pose.position, 'resolved camera position');
   finite(pose.pitchDegrees, 'resolved camera pitch');
   finite(pose.yawDegrees, 'resolved camera yaw');
+}
+
+function validateCameraBasis(basis: RendererSurfaceCameraBasis): void {
+  finiteVector(basis.forward, 'camera basis forward');
+  finiteVector(basis.right, 'camera basis right');
+  finiteVector(basis.up, 'camera basis up');
 }
 
 function finiteVector(

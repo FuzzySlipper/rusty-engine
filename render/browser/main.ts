@@ -51,6 +51,7 @@ declare global {
     __rustyRenderProof?: BrowserProof;
     __rustyRenderCameraPose?: () => readonly [number, number, number];
     __rustyRenderStartAudio?: () => Promise<void>;
+    __rustyRenderSetCameraPose?: (position: readonly [number, number, number]) => void;
     __rustyRenderTick?: (timeMs: number) => void;
   }
 }
@@ -190,6 +191,10 @@ async function main(): Promise<void> {
   };
   window.__rustyRenderProof = proof;
   window.__rustyRenderCameraPose = () => surface.cameraPose().position;
+  window.__rustyRenderSetCameraPose = (position) => {
+    surface.setCameraPose({ position, pitchDegrees: 0, yawDegrees: 0 });
+    surface.renderOnce(100);
+  };
   window.__rustyRenderTick = (timeMs) => surface.renderOnce(timeMs);
   window.__rustyRenderStartAudio = async () => {
     proof.audioResumeDiagnostics = (await audio.resume()).map((diagnostic) => diagnostic.code);

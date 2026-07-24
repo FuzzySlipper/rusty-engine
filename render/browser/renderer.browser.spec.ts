@@ -32,6 +32,8 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.presentationDiagnostics).toEqual([]);
   expect(consoleErrors).toEqual([]);
 
+  await page.evaluate(() => window.__rustyRenderSetCameraPose?.([1, 2, 3]));
+  await expect.poll(() => page.evaluate(() => window.__rustyRenderCameraPose?.())).toEqual([1, 2, 3]);
   const cameraBefore = await page.evaluate(() => window.__rustyRenderCameraPose?.());
   await page.click('#renderer');
   await page.keyboard.down('KeyW');
