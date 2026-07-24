@@ -1,13 +1,14 @@
 # Asha-to-Rusty Engine migration cluster ledger
 
-Status: M0-M7B accepted; M9 standalone implementation is under review; M10 and M11 are planned in
-Den; M7C remains deliberately unscheduled
+Status: M0-M7B and M9 accepted; M10 product extraction is implemented under review; M11 is planned
+in Den; M7C remains deliberately unscheduled
 
 Evidence baselines:
 
 - original Rusty Engine walking-spike commit: `65c528975328b2d92384dea91adf1d21c1779bf4`;
 - pinned Asha donor commit: `a431974330589761c9e35fc4f8a55996a1b5ee48`; and
-- standalone Rusty Engine implementation head: `6fde873921ed4308a7e3949b2da8fc28810e0ff9`.
+- reviewed standalone Rusty Engine head: `a2e55f9660e46751d4c78bcdd23b9a321b0dc961`; and
+- published M10 demo extension head: `643e9c02e386cbefa0b6450fefde24162f100823`.
 
 ## Purpose
 
@@ -93,7 +94,8 @@ Every future cluster must preserve these properties:
 | M6 | Project persistence and migration | #6121-#6124 | Canonical atomic project storage and explicit schema migration remain separate from schema-v9 live runtime snapshots. |
 | M7A | Live voxel edits | #6125-#6128 | One expected-revision `VoxelEditService` transaction coherently replaces authoritative voxels plus collision, navigation, and mesh projections; snapshot and authored-save meanings are distinct. |
 | M7B | Offline voxel asset conversion | #6129-#6131 | A bounded Rust converter produces a canonical durable voxel asset that enters through ordinary project admission and then behaves like authored voxels. |
-| M9 | Standalone repository | #6132-#6136 | The selected Rust donors, narrow local render edge, licensed fixture, verification, and CI are repository-local; the operational Asha dependency audit is empty. Implementation is complete at the head above and awaits independent review closeout. |
+| M9 | Standalone repository | #6132-#6136 | The selected Rust donors, narrow local render edge, licensed fixture, verification, and CI became repository-local; the operational Asha dependency audit closed empty at the reviewed head above. |
+| M10 | External reference consumer | #6137, #6141-#6145 | The walking product moved to public `rusty-engine-demo`, depends one-way on an exact Engine revision, added downstream-only `ExtractionBeacon` semantics, and proved a second TypeScript-authored composition without another Rust change. Engine retains only provider crates and converter evidence. |
 
 Detailed measurements, implementation commits, browser behavior, and limitations are retained in
 [experiment-results.md](experiment-results.md). Exact donor sources and adaptations are in
@@ -111,8 +113,10 @@ The completed clusters answered the original architectural questions:
 - Presentation can be rich, disposable, and restartable above accepted state and facts.
 - Stored projects and runtime snapshots can evolve independently without replay certification.
 - Useful low-level donor code fits below the new spine after a bounded closure audit.
-- A narrow local Three renderer fits above the spine without restoring Asha's browser package graph.
-- The repository builds and proves its real product behavior without an Asha checkout.
+- A narrow local Three renderer fit above the spine without restoring Asha's browser package graph,
+  then moved with its owning product.
+- The external demo builds and proves real product behavior from an exact public Engine revision,
+  while Engine verifies independently as a provider.
 
 The migration therefore ended as a successor adoption, not a patch queue intended to flow back into
 Asha.
@@ -131,10 +135,10 @@ Their pinned source and bounded adaptations remain recorded in
 [donor-provenance.md](donor-provenance.md); provenance is documentation rather than runtime
 topology.
 
-The former TypeScript presentation dependencies were replaced by bounded successor packages:
-
-- `@rusty-engine/render-contracts` owns only the render operations the product emits; and
-- `@rusty-engine/renderer-three` owns the retained Three/WebGL implementation used by the browser.
+M9 first replaced the former TypeScript presentation dependencies with bounded successor packages.
+M10 then moved those packages with their only real consumer. Engine now contains no TypeScript,
+Node, browser, or renderer package; their donor treatment remains historical evidence in
+[donor-provenance.md](donor-provenance.md).
 
 The Kenney GLB and exact CC0 license are local under `fixtures/voxel-conversion`. CI checks out only
 Rusty Engine. The operational dependency audit moved from 55 references before extraction to zero.
@@ -142,15 +146,16 @@ Rusty Engine. The operational dependency audit moved from 55 references before e
 The exact M9 contract and closeout evidence are in
 [m9-extraction-contract.md](m9-extraction-contract.md).
 
-## Planned successor work
+## External consumer and planned tooling
 
 ### M10: external demo consumer
 
-Den task #6137 will move the loading-bay walking product into `rusty-engine-demo` after M9 closes.
-The demo will depend one-way on an exact Rusty Engine revision, own game-specific composition and
-browser acceptance, and prove that downstream Rust and TypeScript meanings can grow without adding
-generic Engine vocabulary prematurely. Reusable mechanisms stay here only after that real consumer
-earns their boundary.
+Den task #6137 moved the loading-bay walking product into public
+[`rusty-engine-demo`](https://github.com/FuzzySlipper/rusty-engine-demo). The demo depends one-way on
+an exact Rusty Engine revision and owns game-specific composition, persistence, browser acceptance,
+and presentation. Its `ExtractionBeacon` extended downstream Rust and TypeScript meanings without
+changing Engine, and `relay-annex.project.json` then reused those meanings as a content-only change.
+Reusable mechanisms stay here only after multiple real consumers earn a smaller boundary.
 
 ### M11: isolated first-party Studio
 
@@ -160,8 +165,8 @@ workspace in this repository. Studio may author artifacts and propose typed oper
 retains validation, persistence, mutation, and execution authority. Its Angular/Nx dependency and
 verification domain remain outside ordinary Engine installation and CI.
 
-These entries record owner-approved direction and dependency order, not completed implementation;
-Den remains authoritative for their current status and acceptance criteria.
+The M11 entry records owner-approved direction and dependency order, not completed implementation;
+Den remains authoritative for current status and acceptance criteria.
 
 ## Deliberately unscheduled and absent clusters
 

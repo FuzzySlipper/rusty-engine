@@ -1,7 +1,7 @@
 //! Bounded offline conversion from one static GLB mesh to a durable voxel asset.
 //!
-//! This crate is an authoring/build tool. It has no dependency on `game-host`
-//! and is never invoked while admitting or running a project.
+//! This crate is an authoring/build tool. It has no dependency on a downstream
+//! game runtime and is never invoked while admitting or running a project.
 
 #![forbid(unsafe_code)]
 

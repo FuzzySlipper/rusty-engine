@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "rust/crates/engine-spatial",
-    "rust/crates/game-host",
     "rust/crates/entity-state",
     "rust/crates/voxel-asset",
     "rust/crates/voxel-convert",

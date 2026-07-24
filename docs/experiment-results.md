@@ -1,14 +1,21 @@
 # Experiment results
 
-Status: completed architecture experiment, first eight migration families, and standalone
-repository extraction evidence through 2026-07-24.
+Status: historical architecture and walking-product evidence through the M10 extraction on
+2026-07-24.
 
-## Current decision
+The game host, project schemas, authored loading-bay content, TypeScript composition, renderer, and
+browser acceptance described below now live in
+[`rusty-engine-demo`](https://github.com/FuzzySlipper/rusty-engine-demo). They were removed from
+Engine after proving the reusable provider boundary. Paths, package names, and product commands in
+this document describe the pre-extraction Engine snapshot and are not current repository
+instructions; use the demo README to run the product and the Engine README to verify provider code.
+
+## Decision established by the extracted product
 
 The first comparison overemphasized which language should execute gameplay. The more important
 question is whether ordinary gameplay has a direct, legible structural path in any language.
 
-Active `main` now uses this split:
+The walking product established, and the external demo now uses, this split:
 
 ```text
 TypeScript content composition
@@ -48,8 +55,8 @@ not shortcomings in TypeScript syntax.
 The comparison was therefore useful negative evidence: moving logic across a language boundary
 would relocate the same class of contract and lifecycle burden that the successor is meant to
 remove. The complete implementation and its tests remain recoverable at Git tag
-`external-ts-runtime-spike` (`9ed75581999291aa622713814d10832e597999d3`). Active `main` deletes
-those runtime-host crates and packages.
+`external-ts-runtime-spike` (`9ed75581999291aa622713814d10832e597999d3`). The accepted product
+line deleted those runtime-host crates and packages before its later extraction to the demo.
 
 ## Implemented capability slices
 
@@ -680,9 +687,10 @@ rebuild the defeated/open posture from an empty-cue GET with no pulse attributes
 nodes, and no active audio targets; state responses immediately before and after the page load must
 be byte-for-byte equivalent JSON.
 
-## Reproducible evidence
+## Historical reproducible evidence
 
-From a standalone Rusty Engine checkout:
+At the final pre-M10 walking-product snapshot, the following commands produced the recorded
+evidence. They now belong to the demo's history and are intentionally not current Engine commands:
 
 ```bash
 pnpm install --frozen-lockfile
@@ -694,7 +702,7 @@ cargo run --release -q -p game-host --bin voxel-edit-workload -- 256
 cargo run --release -q -p voxel-convert --bin voxel-conversion-workload -- 256
 ```
 
-The current verification gate proves:
+That product verification gate proved:
 
 - Rust formatting, Clippy, and strict TypeScript compilation;
 - generated project content is byte-for-byte current with its TypeScript composition;
@@ -707,7 +715,7 @@ The current verification gate proves:
 - strict rejection of unknown stored-content and snapshot fields;
 - a real Chromium/Three/WebGL product smoke, including a forbidden-old-runtime bundle audit.
 
-## Active source footprint
+## Historical extracted-product source footprint
 
 These are physical line counts (`wc -l`), not complexity scores:
 
@@ -725,8 +733,8 @@ These are physical line counts (`wc -l`), not complexity scores:
 | Checked conversion request/artifact | 2 files / 117 lines | Reproducible real-source settings and canonical schema-1 voxel output. |
 | Generated legacy/workload content | 3 files / 8,092 lines | Retained schema-v6 migration evidence plus pretty-printed 256-body workload data. |
 
-The Rust object/component model is currently the largest single file, followed by generation and
-snapshot code. They are explicit and easy to trace, but a later slice should test whether small
+At that snapshot, the Rust object/component model was the largest single file, followed by
+generation and snapshot code. They were explicit and easy to trace, but a later slice could test whether small
 typed validation/codec helpers can reduce repetition without introducing reflection, registries, or
 generic replay machinery.
 

@@ -3,6 +3,15 @@
 Rusty Engine internalizes or selectively adapts Asha code only when that code sits below a
 successor-owned boundary and has a concrete consumer.
 
+## Current repository disposition
+
+The accepted `core-*`, `svc-*`, `entity-state`, `engine-spatial`, `voxel-asset`, and
+`voxel-convert` rows remain live Engine provenance. The former `game-host`, project-content,
+render-contract, Three renderer, browser shell, project artifacts, and product scripts moved to
+[`rusty-engine-demo`](https://github.com/FuzzySlipper/rusty-engine-demo) during M10. References to
+those surfaces below record how the walking product established the boundary; they do not describe
+current Engine packages or operational dependencies.
+
 Inspected donor repository: `git@github.com:FuzzySlipper/asha-engine.git`
 Pinned source commit: `a431974330589761c9e35fc4f8a55996a1b5ee48`
 
@@ -234,7 +243,8 @@ canonical provenance, the regenerated artifact content hash changed from
 `086d81f12403192c6d7568289c2b47771741e5620a967e5b5fe5093fd5608ab7`; the checked project embeds
 that exact canonical result.
 
-The operational dependency baseline is now empty: Cargo metadata, pnpm resolution, runtime and test
-asset paths, scripts, executable documentation, and CI require only Rusty Engine. A clean clone with
-no Asha sibling is the final certification boundary. Rusty Engine is canonical for new work; Asha
-and its Den project remain immutable historical evidence and source locators only.
+The operational dependency baseline is empty. After M10, Cargo metadata, provider fixture paths,
+shell scripts, executable documentation, and CI require only Rusty Engine; ordinary Engine work has
+no pnpm or Node graph at all. A clean clone with no Asha or demo sibling is the certification
+boundary. Rusty Engine is canonical for provider work; Asha and its Den project remain immutable
+historical evidence and source locators only.

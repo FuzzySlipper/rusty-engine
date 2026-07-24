@@ -1,6 +1,7 @@
 # Stored voxel asset and offline conversion boundary
 
-Status: M7B complete through offline conversion, product behavior, and persistence proof.
+Status: current provider format and offline conversion boundary; downstream product proof is
+historical evidence.
 
 This is the successor's smallest durable border between a real static mesh and admitted voxel
 content. It is deliberately an authoring/build path, not a runtime protocol:
@@ -9,12 +10,11 @@ content. It is deliberately an authoring/build path, not a runtime protocol:
 GLB bytes + explicit conversion request
   -> offline Rust converter
   -> canonical schema-1 voxel-volume JSON
-  -> ordinary schema-7 project asset/environment reference
-  -> existing M5 admission
-  -> existing M7A material-voxel authority
+  -> downstream asset/project admission
+  -> downstream material-voxel authority
 ```
 
-The runtime never reads GLB, invokes conversion, discovers a provider, or executes TypeScript. A
+Runtime consumers never read GLB, invoke conversion, or discover a provider. A
 content hash detects artifact drift and makes reproducibility inspectable; it is not a gameplay
 revision, replay certificate, action precondition, or runtime lifecycle owner.
 
@@ -84,7 +84,7 @@ artifact.
 
 ## Implemented conversion
 
-`voxel-convert` is a separate workspace crate with no `game-host` dependency. Its GLB importer
+`voxel-convert` is a separate workspace crate with no downstream-runtime dependency. Its GLB importer
 accepts exactly one static mesh backed by an embedded BIN chunk. The mesh must be instantiated once
 by the only root node of the only default scene, with an identity node transform and no children,
 camera, skin, or instance weights. Transforms must be baked into source positions before conversion;
@@ -128,18 +128,21 @@ Stale identity, malformed source, unsupported topology, material-map drift, exce
 invalid artifact content, and I/O failure return nonzero with a classified path; conversion failure
 cannot replace a prior good target.
 
-Schema-7 projects may embed the resulting document on a `voxel-volume/...` catalog entry and list
-that identity in a material environment's `voxelAssets`. This optional extension leaves existing
-schema-7 files valid. M5 admission validates the embedded artifact, requires grid compatibility,
-expands its sparse runs, and calls the existing `VoxelCollisionScene::from_material_voxels` path.
-An admitted-readback test proves converted and explicitly authored cells produce identical material
-authority, collision, navigation hash, and mesh, then applies the ordinary M7A edit service. The
-runtime has no converter-specific loader or validator.
+The artifact is consumer-neutral. The extracted reference demo embeds it on a
+`voxel-volume/...` catalog entry, validates grid compatibility during its own admission, expands the
+sparse runs, and feeds `VoxelCollisionScene::from_material_voxels`. Engine's provider tests prove
+the artifact itself remains strict and byte-reproducible; the consumer owns its schema and admission
+policy.
 
 The M7B.2 implementation is pinned by
 `b3481fadf1586c2cfea167d569af0bd6333af6b5`.
 
-## Product, persistence, and workload proof
+## Historical product, persistence, and workload proof
+
+The proof below was established before the walking product moved to
+[`rusty-engine-demo`](https://github.com/FuzzySlipper/rusty-engine-demo). Its game schema, browser
+gate, and persistence code are no longer Engine commands or files; they remain useful evidence that
+the provider artifact works through an ordinary downstream path.
 
 `content/projects/converted-wall.project.json` is a normal schema-v7 stored product. It declares
 the canonical asset in the catalog, references it from a material environment, and combines its

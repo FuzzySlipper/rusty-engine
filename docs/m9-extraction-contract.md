@@ -1,5 +1,9 @@
 # M9 extraction contract
 
+Status: historical M9 closure. M10 subsequently moved the game host and TypeScript/browser product
+to [`rusty-engine-demo`](https://github.com/FuzzySlipper/rusty-engine-demo); the accepted Rust
+provider crates and conversion fixtures below remain in Engine.
+
 This document freezes the only Asha Engine implementation closure that may enter Rusty Engine
 during M9. It is an extraction contract, not permission to copy adjacent packages or recreate the
 donor workspace. Rusty Engine remains the composition root and owns every gameplay, session,
@@ -15,15 +19,18 @@ content, persistence, and browser boundary.
 
 The audit covered tracked manifests and lockfiles, full Cargo metadata, pnpm's resolved local-link
 readout, TypeScript source imports and package exports, fixture paths in code and data, executable
-documentation commands, local scripts, and GitHub Actions. The machine-readable snapshot is
-[`scripts/standalone-dependency-baseline.json`](../scripts/standalone-dependency-baseline.json),
-checked by [`scripts/audit-standalone.mjs`](../scripts/audit-standalone.mjs).
+documentation commands, local scripts, and GitHub Actions. During M9, the machine-readable snapshot
+was `scripts/standalone-dependency-baseline.json`, checked by `scripts/audit-standalone.mjs`. Those
+Node-era controls left with the product dependency graph; the current provider-only gate is
+[`scripts/audit-standalone.sh`](../scripts/audit-standalone.sh).
 
 At the start of M9 the audit records 55 distinct operational references. Historical references are
 permitted only as exact normalized file-and-line records in the baseline; no whole document is
 exempt. The baseline must only shrink as M9 proceeds; the final M9D operational baseline is empty.
 
-```bash
+Historical M9 commands:
+
+```text
 pnpm run audit:standalone
 pnpm run audit:standalone -- --print
 ```
@@ -197,3 +204,5 @@ sparse runs; its new provenance-sensitive content hash is
 
 Rusty Engine is the canonical repository. The pinned Asha repository and links in this document are
 permitted immutable provenance, not operational dependencies or authority for future architecture.
+After M10, ordinary Engine verification is Rust-and-shell-only and the external demo owns all
+product acceptance.

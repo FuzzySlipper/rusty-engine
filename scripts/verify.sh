@@ -5,17 +5,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 cargo fmt --all --check
-pnpm run audit:standalone
-if rg -n 'GameplayRuntimeHost|GameplayFabric|NativeRuntimeBridge|RuntimeSession|ReactionFrame|DecisionReceipt|ReplayRecord|ProposalEnvelope' rust ts/packages/browser-shell/src ts/packages/project-content/src ts/packages/render-contracts/src ts/packages/renderer-three/src; then
+./scripts/audit-standalone.sh
+./scripts/check-doc-links.sh
+if rg -n 'GameplayRuntimeHost|GameplayFabric|NativeRuntimeBridge|RuntimeSession|ReactionFrame|DecisionReceipt|ReplayRecord|ProposalEnvelope' rust; then
   echo "forbidden old runtime spine surfaced in active source" >&2
   exit 1
 fi
-pnpm run typecheck
-pnpm run check:content
-pnpm run test:ts
-pnpm run test:render
-pnpm run test:shell
-pnpm run build:shell
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-pnpm run test:browser
+cargo metadata --format-version 1 --locked --no-deps > /dev/null
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
