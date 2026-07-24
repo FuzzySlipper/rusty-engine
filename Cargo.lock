@@ -77,6 +77,10 @@ version = "0.1.0"
 [[package]]
 name = "core-space"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "core-time"
@@ -584,7 +588,9 @@ version = "0.1.0"
 dependencies = [
  "core-math",
  "core-space",
+ "core-voxel",
  "svc-spatial",
+ "svc-volume",
 ]
 
 [[package]]

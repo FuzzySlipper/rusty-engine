@@ -1,0 +1,38 @@
+{
+  "coordinateSystem": "rightHandedYUp",
+  "cases": [
+    {
+      "name": "unit grid across negative Z",
+      "spec": { "origin": [0.0, 0.0, 0.0], "spacing": [1.0, 1.0, 1.0] },
+      "world": [1.2, 0.1, -0.1],
+      "cell": [1, 0, -1],
+      "cellMin": [1.0, 0.0, -1.0],
+      "cellCenter": [1.5, 0.5, -0.5],
+      "cellMax": [2.0, 1.0, 0.0],
+      "boundarySnap": [1.0, 0.0, 0.0],
+      "centerSnap": [1.5, 0.5, -0.5]
+    },
+    {
+      "name": "shifted anisotropic grid across all negative cells",
+      "spec": { "origin": [0.25, 1.0, -0.5], "spacing": [0.5, 2.0, 0.25] },
+      "world": [-0.01, -0.01, -0.64],
+      "cell": [-1, -1, -1],
+      "cellMin": [-0.25, -1.0, -0.75],
+      "cellCenter": [0.0, 0.0, -0.625],
+      "cellMax": [0.25, 1.0, -0.5],
+      "boundarySnap": [-0.25, -1.0, -0.75],
+      "centerSnap": [0.0, 0.0, -0.625]
+    },
+    {
+      "name": "non-unit grid boundary and center anchors differ",
+      "spec": { "origin": [-2.0, 0.0, 4.0], "spacing": [2.0, 0.5, 4.0] },
+      "world": [1.1, 1.26, 9.9],
+      "cell": [1, 2, 1],
+      "cellMin": [0.0, 1.0, 8.0],
+      "cellCenter": [1.0, 1.25, 10.0],
+      "cellMax": [2.0, 1.5, 12.0],
+      "boundarySnap": [2.0, 1.5, 8.0],
+      "centerSnap": [1.0, 1.25, 10.0]
+    }
+  ]
+}

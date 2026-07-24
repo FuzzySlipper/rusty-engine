@@ -58,7 +58,7 @@ the root workspace dependency table.
 | Package | Pinned source path | Normal local dependencies | Treatment | Required local test input |
 |---|---|---|---|---|
 | `core-assets` | `engine-rs/crates/foundation/core-assets` | none | Internalize unchanged | none |
-| `core-ids` | `engine-rs/crates/foundation/core-ids` | none | Internalize unchanged | none |
+| `core-ids` | `engine-rs/crates/foundation/core-ids` | none | Narrow to the consumed `EntityId`; exclude unused abstract/project/session/prefab IDs | none |
 | `core-math` | `engine-rs/crates/foundation/core-math` | none | Internalize unchanged | none |
 | `core-space` | `engine-rs/crates/foundation/core-space` | none | Internalize unchanged | `harness/fixtures/spatial-grid/conformance.json` |
 | `core-time` | `engine-rs/crates/foundation/core-time` | none | Internalize unchanged | none |
@@ -74,6 +74,11 @@ The direct list is not treated as closure proof. The normal metadata graph confi
 thirteenth local package. `svc-collision` additionally uses registry package `parry3d-f64 0.28.0`
 (Apache-2.0). `core-space` donor tests use `serde` and `serde_json` (MIT OR Apache-2.0), which are
 already normal Rusty Engine workspace dependencies.
+
+`core-ids` is the only production value adaptation. Rusty Engine consumes only `EntityId`; the
+donor's unused subject/process/mode/signal and project/session/prefab identity families would retain
+old structural vocabulary without behavior. M9B keeps the exact established `EntityId` value,
+formatting, ordering, and hash behavior and removes the unconsumed types.
 
 `svc-pathfinding` has a donor-only dev dependency on `svc-levelgen`. That crate is outside the
 accepted closure because it brings `core-events`, generation frames, replay/hash evidence, and
@@ -170,4 +175,3 @@ rows are not part of this extraction contract.
 - **M9D / standalone:** the GLB/license and all operational paths are local, CI checks out one
   repository, the audit baseline is empty, and an isolated fresh clone passes the complete product
   verification without an Asha sibling or host-global links.
-

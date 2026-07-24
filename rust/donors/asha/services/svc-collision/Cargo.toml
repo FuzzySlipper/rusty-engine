@@ -1,0 +1,15 @@
+[package]
+name    = "svc-collision"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+core-space  = { path = "../../foundation/core-space" }
+core-voxel  = { path = "../../state/core-voxel" }
+svc-volume  = { path = "../svc-volume" }
+svc-spatial = { path = "../svc-spatial" }
+# The ONLY parry consumer in the workspace (f64 to match core-space WorldScalar).
+parry3d-f64 = "0.28"

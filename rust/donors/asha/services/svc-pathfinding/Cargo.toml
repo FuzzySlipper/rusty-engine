@@ -1,0 +1,16 @@
+[package]
+name    = "svc-pathfinding"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+core-math   = { path = "../../foundation/core-math" }
+core-space  = { path = "../../foundation/core-space" }
+svc-spatial = { path = "../svc-spatial" }
+
+[dev-dependencies]
+core-voxel  = { path = "../../state/core-voxel" }
+svc-volume = { path = "../svc-volume" }
