@@ -1,0 +1,50 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Rusty Engine
+        uses: actions/checkout@v4
+        with:
+          path: rusty-engine
+
+      - name: Check out pinned Asha donors
+        uses: actions/checkout@v4
+        with:
+          repository: FuzzySlipper/asha-engine
+          ref: a431974330589761c9e35fc4f8a55996a1b5ee48
+          path: asha-engine
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: rusty-engine/pnpm-lock.yaml
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        working-directory: rusty-engine
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify
+        working-directory: rusty-engine
+        env:
+          CHROMIUM_BIN: /usr/bin/google-chrome
+        run: pnpm run verify
