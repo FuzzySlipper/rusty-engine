@@ -35,6 +35,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "authored-scene"
+version = "0.1.0"
+dependencies = [
+ "core-assets",
+ "core-ids",
+ "core-math",
+ "entity-state",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
