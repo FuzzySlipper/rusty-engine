@@ -2,6 +2,7 @@ import type {
   EntityDefinition,
   PlayerInputBindingsDefinition,
   ProjectContent,
+  StoredProjectContent,
   Vec3,
 } from "./schema.js";
 
@@ -147,3 +148,59 @@ export const generatedEncounterProjects = {
   "encounter-gate.project.json": encounterGateProject(["sentry-alpha", "sentry-beta"]),
   "encounter-gate-solo.project.json": encounterGateProject(["sentry-alpha"]),
 } as const;
+
+/** Optional authoring frontend for the same candidate admitted canonically by Rust. */
+export function loadingBayStoredProject(
+  options: EncounterProjectOptions = {},
+): StoredProjectContent {
+  const legacy = encounterGateProject(["sentry-alpha", "sentry-beta"], options);
+  const entities = legacy.entities.map((entity) => {
+    const renderable = entity.renderable;
+    if (renderable === undefined || !renderable.asset.startsWith("primitive/")) {
+      return entity;
+    }
+    return {
+      ...entity,
+      renderable: {
+        asset: `mesh/${renderable.asset.slice("primitive/".length)}`,
+        visible: renderable.visible,
+      },
+    };
+  });
+  const probe = entities.at(-1);
+  if (probe?.id !== ENCOUNTER_IDS.motionProbe || legacy.generatedVoxelEnvironment === undefined) {
+    throw new Error("loading-bay source composition is incomplete");
+  }
+
+  return {
+    schemaVersion: 7,
+    projectId: "loading-bay",
+    name: "Loading Bay",
+    entryScene: "scene/loading-bay",
+    assets: [
+      { id: "mesh/control-panel" },
+      { id: "mesh/player-marker" },
+      { id: "mesh/security-door" },
+      { id: "mesh/security-sentry" },
+      { id: "mesh/spatial-probe" },
+    ],
+    scenes: [
+      {
+        id: "scene/loading-bay",
+        name: "Loading Bay",
+        voxelEnvironment: { kind: "generatedRoom", ...legacy.generatedVoxelEnvironment },
+        entities: [
+          ...entities.slice(0, -1),
+          {
+            id: 6,
+            name: "door-control",
+            translation: [2.5, 1.5, 10.5],
+            renderable: { asset: "mesh/control-panel", visible: true },
+            switch: { controls: [ENCOUNTER_IDS.exit] },
+          },
+          probe,
+        ],
+      },
+    ],
+  };
+}

@@ -18,7 +18,7 @@ mod presentation;
 
 use presentation::{project_presentation, BrowserFeedbackProjection, BrowserPresentation};
 
-const PROJECT: &str = include_str!("../../../../../content/generated/encounter-gate.project.json");
+const PROJECT: &str = include_str!("../../../../../content/projects/loading-bay.project.json");
 const DEFAULT_ADDRESS: &str = "127.0.0.1:37881";
 const ACTOR: EntityId = EntityId::new(1);
 const ENCOUNTER: EntityId = EntityId::new(2);
@@ -150,7 +150,7 @@ fn main() {
     );
 
     let runtime = Arc::new(Mutex::new(
-        GameRuntime::from_project_content(PROJECT).expect("admit browser project"),
+        GameRuntime::from_stored_project(PROJECT).expect("admit stored browser project"),
     ));
     let listener = TcpListener::bind(&address)
         .unwrap_or_else(|error| panic!("cannot bind browser host at {address}: {error}"));
@@ -279,7 +279,8 @@ fn route(
         }
         ("POST", "/api/reset") => {
             let mut runtime = runtime.lock().expect("runtime lock");
-            *runtime = GameRuntime::from_project_content(PROJECT).expect("reset browser project");
+            *runtime =
+                GameRuntime::from_stored_project(PROJECT).expect("reset stored browser project");
             json_response(
                 200,
                 browser_state(&runtime, Vec::new(), BrowserFeedbackProjection::default()),
@@ -788,7 +789,7 @@ mod tests {
     #[test]
     fn serialized_browser_actions_advance_cooldown_and_become_eligible_again() {
         let runtime = Arc::new(Mutex::new(
-            GameRuntime::from_project_content(PROJECT).expect("admit browser project"),
+            GameRuntime::from_stored_project(PROJECT).expect("admit stored browser project"),
         ));
         let attack = serde_json::to_vec(&ResolvedAttackAction::Attack).unwrap();
         let look = serde_json::to_vec(&ResolvedPlayerAction::Look {
@@ -837,7 +838,7 @@ mod tests {
     #[test]
     fn state_and_reset_rebuild_posture_without_replaying_transient_cues() {
         let runtime = Arc::new(Mutex::new(
-            GameRuntime::from_project_content(PROJECT).expect("admit browser project"),
+            GameRuntime::from_stored_project(PROJECT).expect("admit stored browser project"),
         ));
 
         for response in [
@@ -858,7 +859,8 @@ mod tests {
 
     #[test]
     fn presentation_projection_cannot_change_authoritative_snapshot() {
-        let runtime = GameRuntime::from_project_content(PROJECT).expect("admit browser project");
+        let runtime =
+            GameRuntime::from_stored_project(PROJECT).expect("admit stored browser project");
         let before = game_host::encode_game_snapshot(&runtime).expect("snapshot before projection");
         let mut feedback = BrowserFeedbackProjection::default();
         feedback.extend_events(&[GameEvent::DoorOpened {
@@ -878,10 +880,10 @@ mod tests {
     #[test]
     fn dropped_response_feedback_is_not_replayed_and_does_not_change_outcome() {
         let first = Arc::new(Mutex::new(
-            GameRuntime::from_project_content(PROJECT).expect("admit first browser project"),
+            GameRuntime::from_stored_project(PROJECT).expect("admit first stored browser project"),
         ));
         let second = Arc::new(Mutex::new(
-            GameRuntime::from_project_content(PROJECT).expect("admit second browser project"),
+            GameRuntime::from_stored_project(PROJECT).expect("admit second stored browser project"),
         ));
         let movement = serde_json::to_vec(&ResolvedPlayerAction::Move {
             forward: 1.0,

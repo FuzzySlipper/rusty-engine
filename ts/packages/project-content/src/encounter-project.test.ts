@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { ENCOUNTER_IDS, encounterGateProject } from "./encounter-project.js";
+import {
+  ENCOUNTER_IDS,
+  encounterGateProject,
+  loadingBayStoredProject,
+} from "./encounter-project.js";
 
 test("encounter membership and exit relationships are explicit authored content", () => {
   const project = encounterGateProject(["alpha", "beta"]);
@@ -134,4 +139,25 @@ test("navigation target and speed are content-only variations", () => {
     speedUnitsPerSecond: 2,
     maxVisited: 512,
   });
+});
+
+test("optional TypeScript authoring materializes the checked-in stored-project candidate", () => {
+  const artifact = JSON.parse(
+    readFileSync(
+      new URL("../../../../content/projects/loading-bay.project.json", import.meta.url),
+      "utf8",
+    ),
+  );
+
+  assert.deepEqual(loadingBayStoredProject(), artifact);
+});
+
+test("stored-project seed remains a candidate-only variation", () => {
+  const first = loadingBayStoredProject({ generationSeed: 4 });
+  const second = loadingBayStoredProject({ generationSeed: 9 });
+
+  assert.equal(first.scenes[0]?.voxelEnvironment?.kind, "generatedRoom");
+  assert.equal(second.scenes[0]?.voxelEnvironment?.kind, "generatedRoom");
+  assert.notDeepEqual(first.scenes[0]?.voxelEnvironment, second.scenes[0]?.voxelEnvironment);
+  assert.deepEqual(first.scenes[0]?.entities, second.scenes[0]?.entities);
 });

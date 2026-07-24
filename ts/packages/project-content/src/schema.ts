@@ -105,3 +105,27 @@ export interface ProjectContent {
   readonly voxelCollision?: VoxelCollisionDefinition;
   readonly generatedVoxelEnvironment?: GeneratedVoxelEnvironmentDefinition;
 }
+
+export interface StoredAssetDefinition {
+  readonly id: string;
+}
+
+export type StoredVoxelEnvironmentDefinition =
+  | ({ readonly kind: "solid" } & VoxelCollisionDefinition)
+  | ({ readonly kind: "generatedRoom" } & GeneratedVoxelEnvironmentDefinition);
+
+export interface StoredSceneDefinition {
+  readonly id: string;
+  readonly name: string;
+  readonly voxelEnvironment?: StoredVoxelEnvironmentDefinition;
+  readonly entities: readonly EntityDefinition[];
+}
+
+export interface StoredProjectContent {
+  readonly schemaVersion: 7;
+  readonly projectId: string;
+  readonly name: string;
+  readonly entryScene: string;
+  readonly assets: readonly StoredAssetDefinition[];
+  readonly scenes: readonly StoredSceneDefinition[];
+}

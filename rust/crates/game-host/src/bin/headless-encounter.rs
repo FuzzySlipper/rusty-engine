@@ -1,10 +1,11 @@
 use core_ids::EntityId;
 use game_host::{encode_game_snapshot, GameRuntime};
 
-const PROJECT: &str = include_str!("../../../../../content/generated/encounter-gate.project.json");
+const PROJECT: &str = include_str!("../../../../../content/projects/loading-bay.project.json");
 
 fn main() {
-    let mut runtime = GameRuntime::from_project_content(PROJECT).expect("admit encounter project");
+    let mut runtime =
+        GameRuntime::from_stored_project(PROJECT).expect("admit stored encounter project");
     let first = runtime
         .defeat_enemy(EntityId::new(1), EntityId::new(4))
         .expect("defeat first enemy");

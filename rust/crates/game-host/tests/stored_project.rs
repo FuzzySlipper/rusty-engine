@@ -1,6 +1,7 @@
 use core_ids::EntityId;
 use game_host::{
-    decode_stored_project, diagnostic_code, GameRuntime, ProjectDiagnostic, RuntimeError,
+    decode_game_snapshot, decode_stored_project, diagnostic_code, encode_game_snapshot,
+    GameRuntime, ProjectDiagnostic, ResolvedPlayerAction, RuntimeError,
 };
 
 const PROJECT: &str = include_str!("../../../../content/projects/loading-bay.project.json");
@@ -103,11 +104,11 @@ fn stored_project_admits_every_settled_component_family_atomically() {
 fn renderables_require_declared_static_mesh_assets() {
     let wrong_kind = mutate(|project| {
         project["assets"][0]["id"] = "audio/control-panel".into();
-        project["scenes"][0]["entities"][4]["renderable"]["asset"] = "audio/control-panel".into();
+        project["scenes"][0]["entities"][5]["renderable"]["asset"] = "audio/control-panel".into();
     });
     let wrong_kind = admission_diagnostic(&wrong_kind);
     assert_eq!(wrong_kind.code, diagnostic_code::WRONG_ASSET_KIND);
-    assert_eq!(wrong_kind.path, "scenes[0].entities[4].renderable.asset");
+    assert_eq!(wrong_kind.path, "scenes[0].entities[5].renderable.asset");
 
     let missing = mutate(|project| {
         project["assets"].as_array_mut().unwrap().remove(2);
@@ -130,12 +131,12 @@ fn duplicate_entity_identity_fails_before_session_construction() {
 #[test]
 fn bad_relationship_reports_the_owning_component_path() {
     let invalid = mutate(|project| {
-        project["scenes"][0]["entities"][4]["switch"]["controls"] = serde_json::json!([999]);
+        project["scenes"][0]["entities"][5]["switch"]["controls"] = serde_json::json!([999]);
     });
     let diagnostic = admission_diagnostic(&invalid);
 
     assert_eq!(diagnostic.code, diagnostic_code::INVALID_RELATIONSHIP);
-    assert_eq!(diagnostic.path, "scenes[0].entities[4].switch.controls");
+    assert_eq!(diagnostic.path, "scenes[0].entities[5].switch.controls");
 }
 
 #[test]
@@ -154,6 +155,54 @@ fn component_and_spatial_failures_retain_source_paths() {
     let spatial = admission_diagnostic(&invalid_spatial);
     assert_eq!(spatial.code, diagnostic_code::INVALID_SPATIAL);
     assert_eq!(spatial.path, "scenes[0].voxelEnvironment");
+}
+
+#[test]
+fn seed_only_project_edit_changes_canonical_spatial_behavior() {
+    let variation = mutate(|project| {
+        project["scenes"][0]["voxelEnvironment"]["seed"] = 9.into();
+    });
+    let first = GameRuntime::from_stored_project(PROJECT).unwrap();
+    let second = GameRuntime::from_stored_project(&variation).unwrap();
+
+    let first = first.collision_scene().unwrap();
+    let second = second.collision_scene().unwrap();
+    assert_ne!(
+        first.generated_room().unwrap().1.output_hash,
+        second.generated_room().unwrap().1.output_hash
+    );
+    assert_ne!(first.material_voxels(), second.material_voxels());
+}
+
+#[test]
+fn runtime_snapshot_reopens_without_becoming_authored_project_content() {
+    let mut runtime = GameRuntime::from_stored_project(PROJECT).unwrap();
+    runtime
+        .apply_player_action(
+            EntityId::new(1),
+            ResolvedPlayerAction::Look {
+                yaw_delta: 0.5,
+                pitch_delta: -0.5,
+            },
+        )
+        .unwrap();
+
+    let snapshot = encode_game_snapshot(&runtime).unwrap();
+    let reopened = decode_game_snapshot(&snapshot).unwrap();
+    assert_eq!(encode_game_snapshot(&reopened).unwrap(), snapshot);
+
+    let project: serde_json::Value = serde_json::from_str(PROJECT).unwrap();
+    let snapshot_value: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
+    assert!(project.get("entryScene").is_some());
+    assert!(project.get("assets").is_some());
+    assert!(project.get("scenes").is_some());
+    assert!(project.get("tick").is_none());
+    assert!(snapshot_value.get("tick").is_some());
+    assert!(snapshot_value.get("entryScene").is_none());
+    assert!(snapshot_value.get("assets").is_none());
+    assert!(snapshot_value.get("scenes").is_none());
+    assert!(!snapshot.contains("\"events\""));
+    assert!(!snapshot.contains("TypeScript"));
 }
 
 fn mutate(change: impl FnOnce(&mut serde_json::Value)) -> String {
