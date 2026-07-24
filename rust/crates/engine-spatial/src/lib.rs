@@ -11,10 +11,11 @@
 mod voxel_edit;
 
 pub use voxel_edit::{
-    ValidatedVoxelEditTransaction, VoxelEdit, VoxelEditApplyError, VoxelEditFact, VoxelEditReceipt,
-    VoxelEditRejection, VoxelEditService, VoxelEditTransaction, VoxelProjectionRevisions,
-    VoxelSourceRevision, MAX_VOXEL_COORDINATE_ABS, MAX_VOXEL_EDITS_PER_TRANSACTION,
-    MAX_VOXEL_MATERIAL_SLOT,
+    validate_material_voxel, validate_voxel_address, validate_voxel_material_slot,
+    ValidatedVoxelEditTransaction, VoxelAuthorityValidationError, VoxelEdit, VoxelEditApplyError,
+    VoxelEditFact, VoxelEditReceipt, VoxelEditRejection, VoxelEditService, VoxelEditTransaction,
+    VoxelProjectionRevisions, VoxelSourceRevision, MAX_VOXEL_COORDINATE_ABS,
+    MAX_VOXEL_EDITS_PER_TRANSACTION, MAX_VOXEL_MATERIAL_SLOT,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -160,6 +161,7 @@ pub enum CollisionSceneError {
         first: u16,
         second: u16,
     },
+    InvalidMaterialVoxel(VoxelAuthorityValidationError),
     Generation(GeneratedRoomError),
     Mesh(MeshError),
     NavigationProjection(NavError),
@@ -279,6 +281,7 @@ impl VoxelCollisionScene {
             .ok_or(CollisionSceneError::InvalidVoxelSize)?;
         let mut unique_voxels = BTreeMap::new();
         for voxel in voxels {
+            validate_material_voxel(voxel).map_err(CollisionSceneError::InvalidMaterialVoxel)?;
             if let Some(first) = unique_voxels.insert(voxel.address, voxel.material_slot) {
                 if first != voxel.material_slot {
                     return Err(CollisionSceneError::ConflictingVoxelMaterial {

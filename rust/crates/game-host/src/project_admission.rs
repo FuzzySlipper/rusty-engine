@@ -6,7 +6,10 @@ use core_assets::{AssetId, AssetKind};
 use core_ids::EntityId;
 use core_math::Vec3;
 use core_time::TickDelta;
-use engine_spatial::{GeneratedRoomConfig, MaterialVoxel, VoxelCollisionScene};
+use engine_spatial::{
+    validate_material_voxel, GeneratedRoomConfig, MaterialVoxel, VoxelAuthorityValidationError,
+    VoxelCollisionScene,
+};
 use entity_state::{EntityDefinition, MAX_ABS_TRANSLATION};
 
 use crate::combat::{HealthConfig, WeaponConfig};
@@ -57,18 +60,46 @@ pub fn admit_stored_project_with_document(
     document: StoredProject,
 ) -> Result<(AdmittedStoredProject, AdmittedProject), StoredProjectError> {
     validate_stored_project(&document)?;
-    let scene_index = document
+    let entry_scene_index = document
         .scenes
         .iter()
         .position(|scene| scene.id == document.entry_scene)
         .expect("validated entry scene");
-    let scene = &document.scenes[scene_index];
     let catalog = ProjectAssetCatalog::new(&document);
+
+    let mut entry_scene = None;
+    for (scene_index, scene) in document.scenes.iter().enumerate() {
+        let admitted = admit_scene(scene, scene_index, &catalog)?;
+        if scene_index == entry_scene_index {
+            entry_scene = Some(admitted);
+        }
+    }
+    let entry_scene = entry_scene.expect("validated entry scene was admitted");
+
+    Ok((
+        AdmittedStoredProject { document },
+        AdmittedProject {
+            session: entry_scene.session,
+            collision_scene: entry_scene.collision_scene,
+        },
+    ))
+}
+
+struct AdmittedScene {
+    session: GameSession,
+    collision_scene: Option<VoxelCollisionScene>,
+}
+
+fn admit_scene(
+    scene: &StoredScene,
+    scene_index: usize,
+    catalog: &ProjectAssetCatalog<'_>,
+) -> Result<AdmittedScene, StoredProjectError> {
     catalog.validate_scene(scene, scene_index)?;
 
     let entity_indexes = index_entities(scene, scene_index)?;
     require_spatial_source(scene, scene_index)?;
-    let collision_scene = build_collision_scene(scene, scene_index, &catalog)?;
+    let collision_scene = build_collision_scene(scene, scene_index, catalog)?;
     let definitions = scene
         .entities
         .iter()
@@ -78,13 +109,10 @@ pub fn admit_stored_project_with_document(
     let session = GameSession::from_definitions(definitions)
         .map_err(|error| definition_error(error, scene_index, &entity_indexes))?;
 
-    Ok((
-        AdmittedStoredProject { document },
-        AdmittedProject {
-            session,
-            collision_scene,
-        },
-    ))
+    Ok(AdmittedScene {
+        session,
+        collision_scene,
+    })
 }
 
 /// Materialize the runtime's accepted voxel authority into one explicit static
@@ -298,14 +326,42 @@ fn expand_material_voxels(
     scene_index: usize,
     catalog: &ProjectAssetCatalog<'_>,
 ) -> Result<Vec<MaterialVoxel>, StoredProjectError> {
-    let mut voxels = environment
-        .material_voxels
-        .iter()
-        .map(|voxel| MaterialVoxel {
+    let mut voxels = Vec::with_capacity(environment.material_voxels.len());
+    for (voxel_index, voxel) in environment.material_voxels.iter().enumerate() {
+        let voxel = MaterialVoxel {
             address: voxel.address,
             material_slot: voxel.material_slot,
-        })
-        .collect::<Vec<_>>();
+        };
+        if let Err(error) = validate_material_voxel(voxel) {
+            let (path, message) = match error {
+                VoxelAuthorityValidationError::CoordinateOutOfBounds {
+                    axis, limit, ..
+                } => (
+                    format!(
+                        "scenes[{scene_index}].voxelEnvironment.materialVoxels[{voxel_index}].address[{axis}]"
+                    ),
+                    format!("voxel coordinate must stay within +/-{limit}"),
+                ),
+                VoxelAuthorityValidationError::InvalidMaterialSlot {
+                    material_slot,
+                    maximum,
+                } => (
+                    format!(
+                        "scenes[{scene_index}].voxelEnvironment.materialVoxels[{voxel_index}].materialSlot"
+                    ),
+                    format!(
+                        "material slot {material_slot} must be between 1 and {maximum}; zero is empty"
+                    ),
+                ),
+            };
+            return Err(StoredProjectError::new(
+                diagnostic_code::INVALID_SPATIAL,
+                path,
+                message,
+            ));
+        }
+        voxels.push(voxel);
+    }
     for (reference_index, asset_id) in environment.voxel_assets.iter().enumerate() {
         let path = format!("scenes[{scene_index}].voxelEnvironment.voxelAssets[{reference_index}]");
         let asset = catalog.voxel_volume(asset_id, &path)?;

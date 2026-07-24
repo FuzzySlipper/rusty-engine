@@ -55,12 +55,15 @@ struct BrowserRuntime {
 
 impl BrowserRuntime {
     fn load(path: &Path) -> Result<Self, String> {
-        let project_path = path
-            .canonicalize()
-            .map_err(|error| format!("project {} is unavailable: {error}", path.display()))?;
         let decoded = ProjectStore::default()
-            .load(&project_path)
-            .map_err(|error| format!("could not load {}: {error}", project_path.display()))?;
+            .load(path)
+            .map_err(|error| format!("could not load {}: {error}", path.display()))?;
+        let project_path = path.canonicalize().map_err(|error| {
+            format!(
+                "loaded project {} could not be resolved: {error}",
+                path.display()
+            )
+        })?;
         let project = BrowserProjectSummary {
             project_id: decoded.project.project_id.clone(),
             source_schema_version: decoded.source_schema_version,
@@ -699,6 +702,32 @@ mod tests {
     fn response_json(response: (u16, &'static str, Vec<u8>)) -> serde_json::Value {
         assert_eq!(response.0, 200);
         serde_json::from_slice(&response.2).expect("browser response JSON")
+    }
+
+    #[test]
+    fn browser_load_recovers_a_complete_pending_project_before_resolving_its_path() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "rusty-engine-browser-recovery-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let target = directory.join("recovered.project.json");
+        let pending = ProjectStore::pending_path(&target).unwrap();
+        let source = fs::read_to_string(default_project_path()).unwrap();
+        let document = game_host::decode_project_document(&source).unwrap().project;
+        let canonical = game_host::encode_project_document(&document).unwrap();
+        fs::write(&pending, &canonical).unwrap();
+
+        let runtime = BrowserRuntime::load(&target).expect("recover browser project");
+
+        assert_eq!(runtime.project_path, target.canonicalize().unwrap());
+        assert_eq!(fs::read_to_string(&target).unwrap(), canonical);
+        assert!(!pending.exists());
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

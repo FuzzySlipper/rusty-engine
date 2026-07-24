@@ -4,9 +4,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use game_host::{
     admit_stored_project_with_document, decode_game_snapshot, decode_project_document,
-    encode_game_snapshot, materialize_stored_project_voxels, GameRuntime, ProjectSaveMode,
-    ProjectStore, StoredVoxelEnvironment, VoxelEdit, VoxelEditTransaction, VoxelSourceRevision,
-    GAME_SNAPSHOT_SCHEMA_VERSION,
+    encode_game_snapshot, encode_project_document, materialize_stored_project_voxels, GameRuntime,
+    ProjectSaveMode, ProjectStore, StoredVoxelEnvironment, VoxelEdit, VoxelEditTransaction,
+    VoxelSourceRevision, GAME_SNAPSHOT_SCHEMA_VERSION,
 };
 
 const PROJECT: &str = include_str!("../../../../content/projects/loading-bay.project.json");
@@ -205,6 +205,84 @@ fn converted_asset_edit_reopens_as_runtime_snapshot_and_static_authored_project(
     assert_eq!(project_scene.material_voxels(), edited_voxels);
     assert_eq!(project_scene.navigation_hash(), edited_navigation);
     assert_eq!(project_scene.mesh_chunks(), edited_mesh);
+}
+
+#[test]
+fn material_voxel_bounds_are_identical_for_admission_save_and_reopen() {
+    let mut boundary = decode_project_document(CONVERTED_PROJECT).unwrap().project;
+    let Some(StoredVoxelEnvironment::Material(environment)) =
+        boundary.scenes[0].voxel_environment.as_mut()
+    else {
+        panic!("converted project must use material voxels");
+    };
+    environment.material_voxels[0].address = [
+        -engine_spatial::MAX_VOXEL_COORDINATE_ABS,
+        engine_spatial::MAX_VOXEL_COORDINATE_ABS,
+        0,
+    ];
+    environment.material_voxels[0].material_slot = engine_spatial::MAX_VOXEL_MATERIAL_SLOT;
+    let (boundary, _) =
+        admit_stored_project_with_document(boundary).expect("inclusive bounds admit");
+
+    let directory = TestDirectory::new();
+    let project_path = directory.path().join("boundary.project.json");
+    let store = ProjectStore::default();
+    store
+        .save(&project_path, &boundary, ProjectSaveMode::CreateNew)
+        .expect("save bounded project");
+    let loaded = store.load(&project_path).expect("load bounded project");
+    admit_stored_project_with_document(loaded.project).expect("readmit bounded project");
+
+    for (address, material_slot, expected_field) in [
+        (
+            [engine_spatial::MAX_VOXEL_COORDINATE_ABS + 1, 0, 0],
+            1,
+            "address[0]",
+        ),
+        ([0, 0, 0], 0, "materialSlot"),
+        (
+            [0, 0, 0],
+            engine_spatial::MAX_VOXEL_MATERIAL_SLOT + 1,
+            "materialSlot",
+        ),
+    ] {
+        let mut invalid = decode_project_document(CONVERTED_PROJECT).unwrap().project;
+        let Some(StoredVoxelEnvironment::Material(environment)) =
+            invalid.scenes[0].voxel_environment.as_mut()
+        else {
+            unreachable!();
+        };
+        environment.material_voxels[0].address = address;
+        environment.material_voxels[0].material_slot = material_slot;
+
+        let canonical = encode_project_document(&invalid).unwrap();
+        let invalid_path = directory.path().join(format!(
+            "invalid-{}-{}.project.json",
+            address[0], material_slot
+        ));
+        fs::write(&invalid_path, canonical).unwrap();
+        let loaded = store
+            .load(&invalid_path)
+            .expect("shape-valid project loads");
+        let Some(StoredVoxelEnvironment::Material(environment)) =
+            loaded.project.scenes[0].voxel_environment.as_ref()
+        else {
+            unreachable!();
+        };
+        let voxel_index = environment
+            .material_voxels
+            .iter()
+            .position(|voxel| voxel.address == address && voxel.material_slot == material_slot)
+            .expect("invalid voxel retained in canonical document");
+        let expected_path =
+            format!("scenes[0].voxelEnvironment.materialVoxels[{voxel_index}].{expected_field}");
+        let error = admit_stored_project_with_document(loaded.project).unwrap_err();
+        assert_eq!(
+            error.diagnostic().code,
+            game_host::diagnostic_code::INVALID_SPATIAL
+        );
+        assert_eq!(error.diagnostic().path, expected_path);
+    }
 }
 
 struct TestDirectory {

@@ -23,6 +23,59 @@ pub const MAX_VOXEL_COORDINATE_ABS: i64 = 1_000_000;
 /// Slot zero is empty and the bounded positive range is authored material data.
 pub const MAX_VOXEL_MATERIAL_SLOT: u16 = 4_095;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoxelAuthorityValidationError {
+    CoordinateOutOfBounds {
+        address: [i64; 3],
+        axis: usize,
+        limit: i64,
+    },
+    InvalidMaterialSlot {
+        material_slot: u16,
+        maximum: u16,
+    },
+}
+
+impl std::fmt::Display for VoxelAuthorityValidationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+
+impl std::error::Error for VoxelAuthorityValidationError {}
+
+/// Apply the same practical world bound to authored, imported, restored, and
+/// live-edited voxel authority.
+pub fn validate_voxel_address(address: [i64; 3]) -> Result<(), VoxelAuthorityValidationError> {
+    for (axis, coordinate) in address.into_iter().enumerate() {
+        if coordinate.unsigned_abs() > MAX_VOXEL_COORDINATE_ABS as u64 {
+            return Err(VoxelAuthorityValidationError::CoordinateOutOfBounds {
+                address,
+                axis,
+                limit: MAX_VOXEL_COORDINATE_ABS,
+            });
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_voxel_material_slot(
+    material_slot: u16,
+) -> Result<(), VoxelAuthorityValidationError> {
+    if !(1..=MAX_VOXEL_MATERIAL_SLOT).contains(&material_slot) {
+        return Err(VoxelAuthorityValidationError::InvalidMaterialSlot {
+            material_slot,
+            maximum: MAX_VOXEL_MATERIAL_SLOT,
+        });
+    }
+    Ok(())
+}
+
+pub fn validate_material_voxel(voxel: MaterialVoxel) -> Result<(), VoxelAuthorityValidationError> {
+    validate_voxel_address(voxel.address)?;
+    validate_voxel_material_slot(voxel.material_slot)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VoxelSourceRevision(u64);
 
@@ -238,22 +291,25 @@ impl VoxelEditService {
         let mut by_address = BTreeMap::new();
         for (edit_index, edit) in transaction.edits.iter().copied().enumerate() {
             let address = edit.address();
-            for (axis, coordinate) in address.into_iter().enumerate() {
-                if coordinate.unsigned_abs() > MAX_VOXEL_COORDINATE_ABS as u64 {
-                    return Err(VoxelEditRejection::CoordinateOutOfBounds {
-                        edit_index,
-                        address,
-                        axis,
-                        limit: MAX_VOXEL_COORDINATE_ABS,
-                    });
-                }
+            if let Err(VoxelAuthorityValidationError::CoordinateOutOfBounds {
+                axis, limit, ..
+            }) = validate_voxel_address(address)
+            {
+                return Err(VoxelEditRejection::CoordinateOutOfBounds {
+                    edit_index,
+                    address,
+                    axis,
+                    limit,
+                });
             }
             if let VoxelEdit::Set { material_slot, .. } = edit {
-                if !(1..=MAX_VOXEL_MATERIAL_SLOT).contains(&material_slot) {
+                if let Err(VoxelAuthorityValidationError::InvalidMaterialSlot { maximum, .. }) =
+                    validate_voxel_material_slot(material_slot)
+                {
                     return Err(VoxelEditRejection::InvalidMaterialSlot {
                         edit_index,
                         material_slot,
-                        maximum: MAX_VOXEL_MATERIAL_SLOT,
+                        maximum,
                     });
                 }
             }

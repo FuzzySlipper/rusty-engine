@@ -85,10 +85,13 @@ artifact.
 ## Implemented conversion
 
 `voxel-convert` is a separate workspace crate with no `game-host` dependency. Its GLB importer
-accepts exactly one static mesh backed by an embedded BIN chunk, rejects animation, skinning, morph
-targets, non-triangle modes, implicit indices, invalid indices, non-finite/degenerate geometry, and
-the M7B.1 resource ceilings, then exposes only positions, indexed triangles, and stable material
-slots to the converter.
+accepts exactly one static mesh backed by an embedded BIN chunk. The mesh must be instantiated once
+by the only root node of the only default scene, with an identity node transform and no children,
+camera, skin, or instance weights. Transforms must be baked into source positions before conversion;
+additional instances and non-identity transforms fail closed instead of being silently discarded.
+The importer also rejects animation, skinning, morph targets, non-triangle modes, implicit indices,
+invalid indices, non-finite/degenerate geometry, and the M7B.1 resource ceilings, then exposes only
+positions, indexed triangles, and stable material slots to the converter.
 
 Surface mode maps the source bounds through the explicit fit/origin settings and samples each
 triangle at no more than half-cell spacing in target-grid coordinates. A ten-million-sample work
@@ -117,8 +120,10 @@ cargo run -q -p voxel-convert --bin voxel-convert -- \
   --output content/assets/kenney-wall-a.voxel.json
 ```
 
-The tool completes parsing, conversion, validation, and canonical encoding before touching the
-target. It writes and syncs a same-directory pending file, then atomically renames it into place.
+The CLI reads at most 1 MiB plus one byte for its request and 8 MiB plus one byte for its source, so
+the filesystem entrypoint enforces the same bounds before retaining complete inputs. The tool then
+completes parsing, conversion, validation, and canonical encoding before touching the target. It
+writes and syncs a same-directory pending file, then atomically renames it into place.
 Stale identity, malformed source, unsupported topology, material-map drift, excess work/output,
 invalid artifact content, and I/O failure return nonzero with a classified path; conversion failure
 cannot replace a prior good target.

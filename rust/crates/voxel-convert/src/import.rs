@@ -71,6 +71,7 @@ pub fn import_static_glb(source: &[u8]) -> Result<ImportedStaticMesh, Conversion
             "conversion accepts exactly one static mesh",
         ));
     }
+    validate_single_identity_mesh_instance(&parsed.document, mesh.index())?;
 
     let material_count = parsed.document.materials().count() as u32;
     let mut positions = Vec::new();
@@ -202,6 +203,94 @@ pub fn import_static_glb(source: &[u8]) -> Result<ImportedStaticMesh, Conversion
             )
             .collect(),
     })
+}
+
+/// The first converter deliberately accepts one unambiguous mesh-local authoring
+/// shape. Scene traversal and transform composition can be added as a separate
+/// feature, but silently discarding either would corrupt authored geometry.
+fn validate_single_identity_mesh_instance(
+    document: &gltf::Document,
+    mesh_index: usize,
+) -> Result<(), ConversionError> {
+    let mut scenes = document.scenes();
+    let scene = scenes.next().ok_or_else(|| {
+        ConversionError::one(
+            "conversion.unsupportedFeature",
+            "source.scenes",
+            "conversion requires exactly one default scene",
+        )
+    })?;
+    if scenes.next().is_some() {
+        return Err(ConversionError::one(
+            "conversion.unsupportedFeature",
+            "source.scenes",
+            "conversion accepts exactly one scene",
+        ));
+    }
+    if document.default_scene().map(|candidate| candidate.index()) != Some(scene.index()) {
+        return Err(ConversionError::one(
+            "conversion.unsupportedFeature",
+            "source.scene",
+            "the single scene must be selected as the default scene",
+        ));
+    }
+
+    let mut nodes = document.nodes();
+    let node = nodes.next().ok_or_else(|| {
+        ConversionError::one(
+            "conversion.unsupportedFeature",
+            "source.nodes",
+            "the default scene must contain one mesh node",
+        )
+    })?;
+    if nodes.next().is_some() {
+        return Err(ConversionError::one(
+            "conversion.unsupportedFeature",
+            "source.nodes",
+            "conversion accepts one mesh instance and no additional scene nodes",
+        ));
+    }
+    let mut roots = scene.nodes();
+    if roots.next().map(|root| root.index()) != Some(node.index()) || roots.next().is_some() {
+        return Err(ConversionError::one(
+            "conversion.unsupportedFeature",
+            format!("source.scenes[{}].nodes", scene.index()),
+            "the single mesh node must be the default scene's only root",
+        ));
+    }
+    if node.mesh().map(|mesh| mesh.index()) != Some(mesh_index) {
+        return Err(ConversionError::one(
+            "conversion.unsupportedFeature",
+            format!("source.nodes[{}].mesh", node.index()),
+            "the default scene node must instantiate the single mesh exactly once",
+        ));
+    }
+    if node.children().next().is_some()
+        || node.camera().is_some()
+        || node.skin().is_some()
+        || node.weights().is_some()
+    {
+        return Err(ConversionError::one(
+            "conversion.unsupportedFeature",
+            format!("source.nodes[{}]", node.index()),
+            "mesh node children, cameras, skins, and instance weights are unsupported",
+        ));
+    }
+
+    const IDENTITY: [[f32; 4]; 4] = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+    if node.transform().matrix() != IDENTITY {
+        return Err(ConversionError::one(
+            "conversion.unsupportedFeature",
+            format!("source.nodes[{}].transform", node.index()),
+            "node transforms are unsupported; bake the transform into mesh positions before conversion",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_triangles(

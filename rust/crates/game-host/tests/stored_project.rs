@@ -119,6 +119,21 @@ fn renderables_require_declared_static_mesh_assets() {
 }
 
 #[test]
+fn non_entry_scenes_receive_the_same_semantic_admission() {
+    let invalid = mutate(|project| {
+        let mut second_scene = project["scenes"][0].clone();
+        second_scene["id"] = "scene/storage-wing".into();
+        second_scene["name"] = "Storage Wing".into();
+        second_scene["entities"][0]["renderable"]["asset"] = "mesh/not-declared".into();
+        project["scenes"].as_array_mut().unwrap().push(second_scene);
+    });
+    let diagnostic = admission_diagnostic(&invalid);
+
+    assert_eq!(diagnostic.code, diagnostic_code::MISSING_ASSET);
+    assert_eq!(diagnostic.path, "scenes[1].entities[0].renderable.asset");
+}
+
+#[test]
 fn duplicate_entity_identity_fails_before_session_construction() {
     let invalid = mutate(|project| project["scenes"][0]["entities"][1]["id"] = 1.into());
     let diagnostic = admission_diagnostic(&invalid);

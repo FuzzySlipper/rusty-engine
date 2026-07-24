@@ -124,6 +124,30 @@ fn loaded_project_uses_the_existing_semantic_admission_diagnostics() {
 }
 
 #[test]
+fn invalid_non_entry_scene_cannot_mint_the_project_save_token() {
+    let directory = TestDirectory::new();
+    let target = directory.path().join("must-not-exist.project.json");
+    let mut invalid = decode_project_document(CURRENT_PROJECT).unwrap().project;
+    let mut second_scene = invalid.scenes[0].clone();
+    second_scene.id = "scene/storage-wing".to_string();
+    second_scene.name = "Storage Wing".to_string();
+    second_scene.entities[5].switch.as_mut().unwrap().controls = vec![999];
+    invalid.scenes.push(second_scene);
+
+    let error = admit_stored_project_with_document(invalid).unwrap_err();
+
+    assert_eq!(
+        error.diagnostic().code,
+        game_host::diagnostic_code::INVALID_RELATIONSHIP
+    );
+    assert_eq!(
+        error.diagnostic().path,
+        "scenes[1].entities[5].switch.controls"
+    );
+    assert!(!target.exists(), "invalid project acquired save authority");
+}
+
+#[test]
 fn bounded_and_corrupt_inputs_fail_before_admission() {
     let directory = TestDirectory::new();
     let target = directory.path().join("project.json");

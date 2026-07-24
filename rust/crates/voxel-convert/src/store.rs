@@ -6,15 +6,15 @@ use voxel_asset::VoxelConversionRequest;
 
 use crate::{convert_glb, ConversionError, ConversionReceipt};
 
-const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+pub const MAX_CONVERSION_REQUEST_BYTES: usize = 1024 * 1024;
 
 pub fn decode_conversion_request(input: &str) -> Result<VoxelConversionRequest, ConversionError> {
-    if input.len() > MAX_REQUEST_BYTES {
+    if input.len() > MAX_CONVERSION_REQUEST_BYTES {
         return Err(ConversionError::one(
             "conversion.resourceLimit",
             "$",
             format!(
-                "request has {} bytes; limit is {MAX_REQUEST_BYTES}",
+                "request has {} bytes; limit is {MAX_CONVERSION_REQUEST_BYTES}",
                 input.len()
             ),
         ));

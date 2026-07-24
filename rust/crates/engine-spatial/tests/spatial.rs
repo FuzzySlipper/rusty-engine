@@ -1,9 +1,10 @@
 use core_ids::EntityId;
 use core_math::Vec3;
 use engine_spatial::{
-    GeneratedRoomConfig, KinematicMotionSystem, MaterialVoxel, MotionAxis, MotionFact,
-    VoxelCollisionScene, VoxelEdit, VoxelEditApplyError, VoxelEditRejection, VoxelEditService,
-    VoxelEditTransaction, VoxelSourceRevision,
+    CollisionSceneError, GeneratedRoomConfig, KinematicMotionSystem, MaterialVoxel, MotionAxis,
+    MotionFact, VoxelAuthorityValidationError, VoxelCollisionScene, VoxelEdit, VoxelEditApplyError,
+    VoxelEditRejection, VoxelEditService, VoxelEditTransaction, VoxelSourceRevision,
+    MAX_VOXEL_COORDINATE_ABS, MAX_VOXEL_MATERIAL_SLOT,
 };
 use entity_state::{EntityDefinition, EntityState};
 
@@ -22,6 +23,43 @@ fn donor_collision_queries_cover_chunks_negative_space_and_raycast() {
         .expect("wall should be hit");
     assert_eq!(hit.voxel, [2, 1, 0]);
     assert_eq!(hit.distance, 1.5);
+}
+
+#[test]
+fn every_material_authority_constructor_enforces_edit_vocabulary_bounds() {
+    let coordinate = VoxelCollisionScene::from_material_voxels(
+        1.0,
+        4,
+        [MaterialVoxel {
+            address: [MAX_VOXEL_COORDINATE_ABS + 1, 0, 0],
+            material_slot: 1,
+        }],
+    )
+    .unwrap_err();
+    assert!(matches!(
+        coordinate,
+        CollisionSceneError::InvalidMaterialVoxel(
+            VoxelAuthorityValidationError::CoordinateOutOfBounds { axis: 0, .. }
+        )
+    ));
+
+    for material_slot in [0, MAX_VOXEL_MATERIAL_SLOT + 1] {
+        let slot = VoxelCollisionScene::from_material_voxels(
+            1.0,
+            4,
+            [MaterialVoxel {
+                address: [0, 0, 0],
+                material_slot,
+            }],
+        )
+        .unwrap_err();
+        assert!(matches!(
+            slot,
+            CollisionSceneError::InvalidMaterialVoxel(
+                VoxelAuthorityValidationError::InvalidMaterialSlot { .. }
+            )
+        ));
+    }
 }
 
 #[test]
