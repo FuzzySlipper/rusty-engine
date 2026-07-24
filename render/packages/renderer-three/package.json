@@ -18,15 +18,20 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc --build",
+    "prepare": "pnpm run build",
     "typecheck": "tsc --build",
     "test": "tsc --build && node --test 'dist/**/*.test.js'"
   },
   "dependencies": {
-    "@rusty-engine/render-contracts": "workspace:*",
-    "@rusty-engine/render-projection": "workspace:*",
     "three": "^0.184.0"
   },
+  "peerDependencies": {
+    "@rusty-engine/render-contracts": "0.1.0",
+    "@rusty-engine/render-projection": "0.1.0"
+  },
   "devDependencies": {
+    "@rusty-engine/render-contracts": "workspace:*",
+    "@rusty-engine/render-projection": "workspace:*",
     "@types/three": "^0.184.1"
   }
 }

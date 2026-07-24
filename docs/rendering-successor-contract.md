@@ -120,6 +120,11 @@ The Rust crates are ordinary provider mechanisms and run in `./scripts/verify.sh
 workspace owns Node, pnpm, Three, browser, and host dependencies behind `verify:render`. Ordinary
 Engine verification never installs that workspace. Studio uses the repository-local packages;
 external consumers use an exact published or exact-commit artifact rather than a sibling link.
+For an exact-commit pnpm consumer, each package is addressed as a Git subdirectory, for example
+`github:FuzzySlipper/rusty-engine#<40-character-sha>&path:render/packages/renderer-host`. A consumer
+pins all four packages to the same SHA. The packages build their checked distributable during Git
+preparation, and internal renderer layers are peers so a consumer gets one coherent contract and
+projection family rather than hidden workspace-only copies.
 
 `rusty-engine-demo` is the first migration consumer. It must delete its private render contracts
 and Three backend after switching to the shared packages. Studio is the second consumer and must

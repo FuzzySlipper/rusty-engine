@@ -33,13 +33,13 @@ importers:
   packages/render-contracts: {}
 
   packages/render-projection:
-    dependencies:
+    devDependencies:
       '@rusty-engine/render-contracts':
         specifier: workspace:*
         version: link:../render-contracts
 
   packages/renderer-host:
-    dependencies:
+    devDependencies:
       '@rusty-engine/render-contracts':
         specifier: workspace:*
         version: link:../render-contracts
@@ -52,16 +52,16 @@ importers:
 
   packages/renderer-three:
     dependencies:
+      three:
+        specifier: ^0.184.0
+        version: 0.184.0
+    devDependencies:
       '@rusty-engine/render-contracts':
         specifier: workspace:*
         version: link:../render-contracts
       '@rusty-engine/render-projection':
         specifier: workspace:*
         version: link:../render-projection
-      three:
-        specifier: ^0.184.0
-        version: 0.184.0
-    devDependencies:
       '@types/three':
         specifier: ^0.184.1
         version: 0.184.1

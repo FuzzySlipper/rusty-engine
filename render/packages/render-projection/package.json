@@ -14,10 +14,14 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc --build",
+    "prepare": "pnpm run build",
     "typecheck": "tsc --build",
     "test": "tsc --build && node --test 'dist/**/*.test.js'"
   },
-  "dependencies": {
+  "peerDependencies": {
+    "@rusty-engine/render-contracts": "0.1.0"
+  },
+  "devDependencies": {
     "@rusty-engine/render-contracts": "workspace:*"
   }
 }
