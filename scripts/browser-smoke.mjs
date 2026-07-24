@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
-import { dirname, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -30,72 +31,199 @@ if (bundledRuntimeSurface.length > 0) {
   throw new Error(`browser bundle imported old runtime surface: ${bundledRuntimeSurface.join(", ")}`);
 }
 
-const port = await reservePort();
-const address = `127.0.0.1:${String(port)}`;
-const host = spawn(
-  "cargo",
-  ["run", "-q", "-p", "game-host", "--bin", "browser-host", "--", "--addr", address],
-  { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
-);
-let hostOutput = "";
-host.stdout.on("data", (chunk) => {
-  hostOutput += String(chunk);
-});
-host.stderr.on("data", (chunk) => {
-  hostOutput += String(chunk);
-});
-
+const proofDirectory = mkdtempSync(join(tmpdir(), "rusty-engine-browser-smoke-"));
 try {
-  await waitForHealth(`http://${address}/health`, host);
-  const result = await run(chromium, [
-    "--headless=new",
-    "--no-sandbox",
-    "--disable-dev-shm-usage",
-    "--use-gl=angle",
-    "--use-angle=swiftshader",
-    "--enable-unsafe-swiftshader",
-    "--autoplay-policy=no-user-gesture-required",
-    "--virtual-time-budget=10000",
-    "--dump-dom",
-    `http://${address}/?smoke=1`,
+  const persistedProject = resolve(proofDirectory, "loading-bay.project.json");
+  const migratedProject = resolve(proofDirectory, "migrated-v6.project.json");
+  const currentReceipt = await persistProject(
+    resolve(repoRoot, "content/projects/loading-bay.project.json"),
+    persistedProject,
+  );
+  if (!currentReceipt.includes("sourceSchema=7") || !currentReceipt.includes("currentSchema=7")) {
+    throw new Error(`current project persistence receipt was incomplete\n${currentReceipt}`);
+  }
+  await runFullBrowserProduct(persistedProject);
+
+  const migrationReceipt = await persistProject(
+    resolve(repoRoot, "content/generated/encounter-gate.project.json"),
+    migratedProject,
+  );
+  if (!migrationReceipt.includes("sourceSchema=6") || !migrationReceipt.includes("currentSchema=7")) {
+    throw new Error(`migration receipt was incomplete\n${migrationReceipt}`);
+  }
+  await runMigratedBrowserProduct(migratedProject);
+
+  console.log(
+    "browser smoke passed: persisted project + v6 migration -> accepted gameplay -> retained Three/WebGL + disposable feedback shell",
+  );
+} finally {
+  rmSync(proofDirectory, { recursive: true, force: true });
+}
+
+async function persistProject(input, output) {
+  const result = await run("cargo", [
+    "run",
+    "-q",
+    "-p",
+    "game-host",
+    "--bin",
+    "project-store",
+    "--",
+    "--input",
+    input,
+    "--output",
+    output,
   ]);
   if (result.code !== 0) {
-    throw new Error(`Chromium exited ${String(result.code)}\n${result.stderr.slice(-4_000)}`);
+    throw new Error(`project-store exited ${String(result.code)}\n${result.stderr}`);
   }
-  const required = [
-    'data-smoke-status="pass"',
-    'data-status="pass"',
-    'data-held-input="pass"',
-    'data-gate-passage="pass"',
-    'data-queue-recovery="pass"',
-    'data-cooldown="pass"',
-    'data-feedback-reset="pass"',
-    'data-feedback-concrete-reset="pass"',
-    'data-feedback-families="pass"',
-    'data-audio-feedback="pass"',
-    'data-feedback-drop="pass"',
-    'data-feedback-concrete-restart="pass"',
-    "PASS · Rust facts reached retained WebGL and disposable feedback",
-    "EnemyDefeated",
-    "EncounterCleared",
-    "DoorOpened",
-    "KinematicBlocked",
-    "NavigationArrived",
-    "PlayerMoved",
-    "PlayerBlocked",
-    "PlayerLookChanged",
-    "CombatHit",
-    "DamageApplied",
-    "CombatEnemyDefeated",
-    "CombatRejected",
-    "SEED 4",
-  ];
-  const missing = required.filter((marker) => !result.stdout.includes(marker));
-  if (missing.length > 0) {
-    throw new Error(`browser smoke missing ${missing.join(", ")}\n${result.stdout.slice(-6_000)}`);
+  return result.stdout;
+}
+
+async function runFullBrowserProduct(project) {
+  const running = await launchHost(project);
+  try {
+    await waitForHealth(`http://${running.address}/health`, running.host, running.output);
+    const result = await run(chromium, [
+      "--headless=new",
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--use-gl=angle",
+      "--use-angle=swiftshader",
+      "--enable-unsafe-swiftshader",
+      "--autoplay-policy=no-user-gesture-required",
+      "--virtual-time-budget=10000",
+      "--dump-dom",
+      `http://${running.address}/?smoke=1`,
+    ]);
+    if (result.code !== 0) {
+      throw new Error(`Chromium exited ${String(result.code)}\n${result.stderr.slice(-4_000)}`);
+    }
+    const required = [
+      'data-smoke-status="pass"',
+      'data-status="pass"',
+      'data-held-input="pass"',
+      'data-gate-passage="pass"',
+      'data-queue-recovery="pass"',
+      'data-cooldown="pass"',
+      'data-feedback-reset="pass"',
+      'data-feedback-concrete-reset="pass"',
+      'data-feedback-families="pass"',
+      'data-audio-feedback="pass"',
+      'data-feedback-drop="pass"',
+      'data-feedback-concrete-restart="pass"',
+      "PASS · Rust facts reached retained WebGL and disposable feedback",
+      "EnemyDefeated",
+      "EncounterCleared",
+      "DoorOpened",
+      "KinematicBlocked",
+      "NavigationArrived",
+      "PlayerMoved",
+      "PlayerBlocked",
+      "PlayerLookChanged",
+      "CombatHit",
+      "DamageApplied",
+      "CombatEnemyDefeated",
+      "CombatRejected",
+      "SEED 4",
+    ];
+    const missing = required.filter((marker) => !result.stdout.includes(marker));
+    if (missing.length > 0) {
+      throw new Error(
+        `browser smoke missing ${missing.join(", ")}\n${result.stdout.slice(-6_000)}`,
+      );
+    }
+    const startup = running.output();
+    for (const marker of [
+      "project id=loading-bay",
+      "sourceSchema=7",
+      "currentSchema=7",
+      "entryScene=scene/loading-bay",
+      "assets=5",
+      "scenes=1",
+      "entities=7",
+    ]) {
+      if (!startup.includes(marker)) {
+        throw new Error(`browser host startup missing ${marker}\n${startup}`);
+      }
+    }
+  } finally {
+    await stopHost(running.host);
   }
-  console.log("browser smoke passed: accepted gameplay -> retained Three/WebGL + disposable feedback shell");
-} finally {
+}
+
+async function runMigratedBrowserProduct(project) {
+  const running = await launchHost(project);
+  try {
+    await waitForHealth(`http://${running.address}/health`, running.host, running.output);
+    const stateResponse = await fetch(`http://${running.address}/api/state`);
+    const state = await stateResponse.json();
+    if (
+      !stateResponse.ok ||
+      state.generatedEnvironment?.seed !== 4 ||
+      state.enemies?.length !== 2 ||
+      state.weapon?.ammoRemaining !== 8 ||
+      !state.projection?.some((node) => node.id === 3)
+    ) {
+      throw new Error(`migrated browser state was incomplete\n${JSON.stringify(state)}`);
+    }
+    const attackResponse = await fetch(`http://${running.address}/api/attack`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "attack" }),
+    });
+    const attacked = await attackResponse.json();
+    if (!attackResponse.ok || attacked.tick !== 1 || attacked.weapon?.ammoRemaining !== 7) {
+      throw new Error(`migrated browser action failed\n${JSON.stringify(attacked)}`);
+    }
+    const startup = running.output();
+    for (const marker of [
+      "project id=migrated-v6-project",
+      "currentSchema=7",
+      "assets=4",
+      "scenes=1",
+      "entities=6",
+    ]) {
+      if (!startup.includes(marker)) {
+        throw new Error(`migrated browser startup missing ${marker}\n${startup}`);
+      }
+    }
+  } finally {
+    await stopHost(running.host);
+  }
+}
+
+async function launchHost(project) {
+  const port = await reservePort();
+  const address = `127.0.0.1:${String(port)}`;
+  const host = spawn(
+    "cargo",
+    [
+      "run",
+      "-q",
+      "-p",
+      "game-host",
+      "--bin",
+      "browser-host",
+      "--",
+      "--addr",
+      address,
+      "--project",
+      project,
+    ],
+    { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  let output = "";
+  host.stdout.on("data", (chunk) => {
+    output += String(chunk);
+  });
+  host.stderr.on("data", (chunk) => {
+    output += String(chunk);
+  });
+  return { host, address, output: () => output };
+}
+
+async function stopHost(host) {
   host.kill("SIGTERM");
   await Promise.race([onceExit(host), delay(1_000)]);
   if (host.exitCode === null) {
@@ -121,11 +249,11 @@ async function reservePort() {
   return port;
 }
 
-async function waitForHealth(url, process) {
+async function waitForHealth(url, process, output) {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     if (process.exitCode !== null) {
-      throw new Error(`browser host exited early (${String(process.exitCode)})\n${hostOutput}`);
+      throw new Error(`browser host exited early (${String(process.exitCode)})\n${output()}`);
     }
     try {
       const response = await fetch(url);
@@ -137,7 +265,7 @@ async function waitForHealth(url, process) {
     }
     await delay(100);
   }
-  throw new Error(`browser host did not become healthy\n${hostOutput}`);
+  throw new Error(`browser host did not become healthy\n${output()}`);
 }
 
 function run(command, args) {

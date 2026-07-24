@@ -113,23 +113,25 @@ impl GameRuntime {
     }
 
     pub fn from_project_content(input: &str) -> Result<Self, RuntimeError> {
-        let AdmittedProject {
-            session,
-            collision_scene,
-        } = decode_project_content(input).map_err(RuntimeError::Content)?;
-        let mut runtime = Self::new(session);
-        runtime.collision_scene = collision_scene;
-        Ok(runtime)
+        Ok(Self::from_admitted_project(
+            decode_project_content(input).map_err(RuntimeError::Content)?,
+        ))
     }
 
     pub fn from_stored_project(input: &str) -> Result<Self, RuntimeError> {
+        Ok(Self::from_admitted_project(
+            decode_and_admit_stored_project(input).map_err(RuntimeError::StoredProject)?,
+        ))
+    }
+
+    pub fn from_admitted_project(admitted: AdmittedProject) -> Self {
         let AdmittedProject {
             session,
             collision_scene,
-        } = decode_and_admit_stored_project(input).map_err(RuntimeError::StoredProject)?;
+        } = admitted;
         let mut runtime = Self::new(session);
         runtime.collision_scene = collision_scene;
-        Ok(runtime)
+        runtime
     }
 
     pub fn tick(&self) -> Tick {

@@ -1,15 +1,16 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::ops::{Deref, DerefMut};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use core_ids::EntityId;
 use game_host::{
-    CombatFact, CombatMissReason, DoorState, EncounterState, EnemyState, GameEvent, GameRuntime,
-    MotionFact, NavigationFact, NavigationState, PlayerControlFact, ResolvedAttackAction,
-    ResolvedPlayerAction,
+    admit_stored_project_with_document, CombatFact, CombatMissReason, DoorState, EncounterState,
+    EnemyState, GameEvent, GameRuntime, MotionFact, NavigationFact, NavigationState,
+    PlayerControlFact, ProjectStore, ResolvedAttackAction, ResolvedPlayerAction,
 };
 use serde::Serialize;
 
@@ -18,7 +19,6 @@ mod presentation;
 
 use presentation::{project_presentation, BrowserFeedbackProjection, BrowserPresentation};
 
-const PROJECT: &str = include_str!("../../../../../content/projects/loading-bay.project.json");
 const DEFAULT_ADDRESS: &str = "127.0.0.1:37881";
 const ACTOR: EntityId = EntityId::new(1);
 const ENCOUNTER: EntityId = EntityId::new(2);
@@ -29,6 +29,70 @@ const MOTION_PROBE: EntityId = EntityId::new(10);
 const PRODUCT_MOTION_PHASES: usize = 120;
 const PRODUCT_MOTION_DELTA_SECONDS: f32 = 1.0 / 60.0;
 const PRODUCT_ACTION_TICKS: u64 = 1;
+
+#[derive(Debug)]
+struct BrowserProjectSummary {
+    project_id: String,
+    source_schema_version: u32,
+    current_schema_version: u32,
+    entry_scene: String,
+    asset_count: usize,
+    scene_count: usize,
+    entity_count: usize,
+}
+
+#[derive(Debug)]
+struct BrowserRuntime {
+    runtime: GameRuntime,
+    project_path: PathBuf,
+    project: BrowserProjectSummary,
+}
+
+impl BrowserRuntime {
+    fn load(path: &Path) -> Result<Self, String> {
+        let project_path = path
+            .canonicalize()
+            .map_err(|error| format!("project {} is unavailable: {error}", path.display()))?;
+        let decoded = ProjectStore::default()
+            .load(&project_path)
+            .map_err(|error| format!("could not load {}: {error}", project_path.display()))?;
+        let project = BrowserProjectSummary {
+            project_id: decoded.project.project_id.clone(),
+            source_schema_version: decoded.source_schema_version,
+            current_schema_version: decoded.project.schema_version,
+            entry_scene: decoded.project.entry_scene.clone(),
+            asset_count: decoded.project.assets.len(),
+            scene_count: decoded.project.scenes.len(),
+            entity_count: decoded
+                .project
+                .scenes
+                .iter()
+                .map(|scene| scene.entities.len())
+                .sum(),
+        };
+        let (_, admitted) = admit_stored_project_with_document(decoded.project)
+            .map_err(|error| format!("project admission failed: {error}"))?;
+        Ok(Self {
+            runtime: GameRuntime::from_admitted_project(admitted),
+            project_path,
+            project,
+        })
+    }
+}
+
+impl Deref for BrowserRuntime {
+    type Target = GameRuntime;
+
+    fn deref(&self) -> &Self::Target {
+        &self.runtime
+    }
+}
+
+impl DerefMut for BrowserRuntime {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.runtime
+    }
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -137,7 +201,7 @@ struct BrowserState {
 }
 
 fn main() {
-    let (address, dist) = arguments();
+    let (address, dist, project_path) = arguments();
     let dist = dist.canonicalize().unwrap_or_else(|error| {
         panic!(
             "browser shell dist {} is unavailable: {error}",
@@ -149,9 +213,20 @@ fn main() {
         "browser shell is not built"
     );
 
-    let runtime = Arc::new(Mutex::new(
-        GameRuntime::from_stored_project(PROJECT).expect("admit stored browser project"),
-    ));
+    let runtime = BrowserRuntime::load(&project_path)
+        .unwrap_or_else(|error| panic!("could not start browser project: {error}"));
+    println!(
+        "browser-host project id={} sourceSchema={} currentSchema={} entryScene={} assets={} scenes={} entities={} path={}",
+        runtime.project.project_id,
+        runtime.project.source_schema_version,
+        runtime.project.current_schema_version,
+        runtime.project.entry_scene,
+        runtime.project.asset_count,
+        runtime.project.scene_count,
+        runtime.project.entity_count,
+        runtime.project_path.display()
+    );
+    let runtime = Arc::new(Mutex::new(runtime));
     let listener = TcpListener::bind(&address)
         .unwrap_or_else(|error| panic!("cannot bind browser host at {address}: {error}"));
     println!("browser-host listening at http://{address}");
@@ -168,23 +243,31 @@ fn main() {
     }
 }
 
-fn arguments() -> (String, PathBuf) {
+fn arguments() -> (String, PathBuf, PathBuf) {
     let default_dist =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../ts/packages/browser-shell/dist");
     let mut address = DEFAULT_ADDRESS.to_owned();
     let mut dist = default_dist;
+    let mut project = default_project_path();
     let mut args = std::env::args().skip(1);
     while let Some(argument) = args.next() {
         match argument.as_str() {
             "--addr" => address = args.next().expect("--addr needs a value"),
             "--dist" => dist = PathBuf::from(args.next().expect("--dist needs a value")),
+            "--project" => {
+                project = PathBuf::from(args.next().expect("--project needs a value"));
+            }
             _ => panic!("unknown browser-host argument {argument}"),
         }
     }
-    (address, dist)
+    (address, dist, project)
 }
 
-fn handle_connection(mut stream: TcpStream, runtime: &Arc<Mutex<GameRuntime>>, dist: &Path) {
+fn default_project_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../content/projects/loading-bay.project.json")
+}
+
+fn handle_connection(mut stream: TcpStream, runtime: &Arc<Mutex<BrowserRuntime>>, dist: &Path) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
     let request = match read_request(&mut stream) {
         Ok(request) => request,
@@ -265,7 +348,7 @@ fn route(
     method: &str,
     path: &str,
     body: &[u8],
-    runtime: &Arc<Mutex<GameRuntime>>,
+    runtime: &Arc<Mutex<BrowserRuntime>>,
     dist: &Path,
 ) -> (u16, &'static str, Vec<u8>) {
     match (method, path) {
@@ -279,8 +362,8 @@ fn route(
         }
         ("POST", "/api/reset") => {
             let mut runtime = runtime.lock().expect("runtime lock");
-            *runtime =
-                GameRuntime::from_stored_project(PROJECT).expect("reset stored browser project");
+            let project_path = runtime.project_path.clone();
+            *runtime = BrowserRuntime::load(&project_path).expect("reset stored browser project");
             json_response(
                 200,
                 browser_state(&runtime, Vec::new(), BrowserFeedbackProjection::default()),
@@ -781,6 +864,14 @@ fn write_response(
 mod tests {
     use super::*;
 
+    fn stored_browser_runtime() -> BrowserRuntime {
+        BrowserRuntime::load(&default_project_path()).expect("admit stored browser project")
+    }
+
+    fn shared_browser_runtime() -> Arc<Mutex<BrowserRuntime>> {
+        Arc::new(Mutex::new(stored_browser_runtime()))
+    }
+
     fn response_json(response: (u16, &'static str, Vec<u8>)) -> serde_json::Value {
         assert_eq!(response.0, 200);
         serde_json::from_slice(&response.2).expect("browser response JSON")
@@ -788,9 +879,7 @@ mod tests {
 
     #[test]
     fn serialized_browser_actions_advance_cooldown_and_become_eligible_again() {
-        let runtime = Arc::new(Mutex::new(
-            GameRuntime::from_stored_project(PROJECT).expect("admit stored browser project"),
-        ));
+        let runtime = shared_browser_runtime();
         let attack = serde_json::to_vec(&ResolvedAttackAction::Attack).unwrap();
         let look = serde_json::to_vec(&ResolvedPlayerAction::Look {
             yaw_delta: 0.25,
@@ -837,9 +926,7 @@ mod tests {
 
     #[test]
     fn state_and_reset_rebuild_posture_without_replaying_transient_cues() {
-        let runtime = Arc::new(Mutex::new(
-            GameRuntime::from_stored_project(PROJECT).expect("admit stored browser project"),
-        ));
+        let runtime = shared_browser_runtime();
 
         for response in [
             route("GET", "/api/state", &[], &runtime, Path::new(".")),
@@ -859,32 +946,28 @@ mod tests {
 
     #[test]
     fn presentation_projection_cannot_change_authoritative_snapshot() {
-        let runtime =
-            GameRuntime::from_stored_project(PROJECT).expect("admit stored browser project");
-        let before = game_host::encode_game_snapshot(&runtime).expect("snapshot before projection");
+        let stored = stored_browser_runtime();
+        let runtime = &stored.runtime;
+        let before = game_host::encode_game_snapshot(runtime).expect("snapshot before projection");
         let mut feedback = BrowserFeedbackProjection::default();
         feedback.extend_events(&[GameEvent::DoorOpened {
             door: EXIT,
             entity_facts: Vec::new(),
         }]);
 
-        let state = browser_state(&runtime, vec!["DoorOpened".to_owned()], feedback);
+        let state = browser_state(runtime, vec!["DoorOpened".to_owned()], feedback);
 
         assert_eq!(state.last_events, ["DoorOpened"]);
         assert_eq!(
-            game_host::encode_game_snapshot(&runtime).expect("snapshot after projection"),
+            game_host::encode_game_snapshot(runtime).expect("snapshot after projection"),
             before
         );
     }
 
     #[test]
     fn dropped_response_feedback_is_not_replayed_and_does_not_change_outcome() {
-        let first = Arc::new(Mutex::new(
-            GameRuntime::from_stored_project(PROJECT).expect("admit first stored browser project"),
-        ));
-        let second = Arc::new(Mutex::new(
-            GameRuntime::from_stored_project(PROJECT).expect("admit second stored browser project"),
-        ));
+        let first = shared_browser_runtime();
+        let second = shared_browser_runtime();
         let movement = serde_json::to_vec(&ResolvedPlayerAction::Move {
             forward: 1.0,
             right: 0.0,
