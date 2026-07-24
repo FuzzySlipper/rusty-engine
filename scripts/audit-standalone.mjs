@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -57,10 +57,11 @@ function trackedReferences() {
   ).split("\0").filter(Boolean);
   const references = [];
   for (const file of tracked) {
-    if (auditControlFiles.has(file) || permittedProvenance.has(file)) {
+    const path = resolve(repoRoot, file);
+    if (auditControlFiles.has(file) || permittedProvenance.has(file) || !existsSync(path)) {
       continue;
     }
-    const bytes = readFileSync(resolve(repoRoot, file));
+    const bytes = readFileSync(path);
     if (bytes.includes(0)) {
       continue;
     }

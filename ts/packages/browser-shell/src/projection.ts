@@ -9,7 +9,7 @@ import {
   type RenderHandle,
   type RenderNode,
   type Transform,
-} from "@asha/contracts";
+} from "@rusty-engine/render-contracts";
 
 export interface RuntimeProjectionNode {
   readonly id: number;

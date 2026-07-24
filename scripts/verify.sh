@@ -6,13 +6,14 @@ cd "$REPO_ROOT"
 
 cargo fmt --all --check
 pnpm run audit:standalone
-if rg -n 'GameplayRuntimeHost|GameplayFabric|NativeRuntimeBridge|RuntimeSession|ReactionFrame|DecisionReceipt|ReplayRecord|ProposalEnvelope' rust ts/packages/browser-shell/src ts/packages/project-content/src; then
+if rg -n 'GameplayRuntimeHost|GameplayFabric|NativeRuntimeBridge|RuntimeSession|ReactionFrame|DecisionReceipt|ReplayRecord|ProposalEnvelope' rust ts/packages/browser-shell/src ts/packages/project-content/src ts/packages/render-contracts/src ts/packages/renderer-three/src; then
   echo "forbidden old runtime spine surfaced in active source" >&2
   exit 1
 fi
 pnpm run typecheck
 pnpm run check:content
 pnpm run test:ts
+pnpm run test:render
 pnpm run test:shell
 pnpm run build:shell
 cargo test --workspace

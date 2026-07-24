@@ -108,8 +108,9 @@ The current package names overstate what the product consumes. Browser shell imp
 | `@asha/render-projection` | No browser-shell export is consumed directly. |
 
 The linked renderer's broad barrel also exposes tunnel, editor, static-room, animation, picking, and
-encoded-frame conveniences. Only the retained Three renderer, browser surface, animation helper,
-lighting, and mesh-presentation source family is required by the mounted product path.
+encoded-frame conveniences. The mounted product path requires only the retained primitive/inline
+mesh renderer and browser-surface behavior; lighting remains a small browser-owned scene rig rather
+than a render-diff family.
 
 M9C therefore performs a narrow successor fork rather than copying the donor package graph:
 
@@ -121,6 +122,13 @@ M9C therefore performs a narrow successor fork rather than copying the donor pac
 | `@asha/runtime-bridge` | Exclude | Remove encoded-frame decoding. Define any still-useful optional mesh-buffer view capability locally in the renderer package; typed direct frames remain the product border. |
 | `@asha/runtime-session` and `game-workspace` | Exclude | They are donor test/package closure, not product behavior. Do not copy their tests, fixtures, declarations, or lifecycle vocabulary. |
 | Renderer editor/static-room/tunnel helper modules and donor-wide goldens | Provenance-only | They are not imported by the product. Retain focused self-contained renderer tests and the real Rusty Engine Chromium proof instead of their project/runtime fixtures. |
+
+Implementation tracing in M9C further confirmed that the donor animation, sprite, picking,
+catalog/static-mesh, light-operation, and handle-buffer facilities have no Rusty Engine caller. The
+successor fork therefore retains the algorithms behind the four operations actually emitted by
+`RuntimeProjectionAdapter` (`create`, `update`, `destroy`, and inline `replaceMeshPayload`) rather
+than preserving unused public surface area. This is a narrowing of the approved renderer family,
+not an expansion of the donor closure.
 
 The fork keeps `three 0.184.0` and `@types/three 0.184.1` as ordinary registry dependencies; both
 declare MIT licensing. It does not vendor their implementation. The Vite runtime-bridge alias and

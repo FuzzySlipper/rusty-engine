@@ -1,4 +1,4 @@
-import { mountAshaRendererBrowserSurface } from "@asha/renderer-three/backend";
+import { mountRendererBrowserSurface } from "@rusty-engine/renderer-three/backend";
 
 import "./style.css";
 import { SerializedActionQueue } from "./action-queue.js";
@@ -65,7 +65,7 @@ const heldMovement = new HeldMovementInput({
   intervalMilliseconds: () => current.player.moveStepSeconds * 1_000,
   dispatch: enqueuePlayerAction,
 });
-const surface = mountAshaRendererBrowserSurface(canvas, {
+const surface = mountRendererBrowserSurface(canvas, {
   autoStart: true,
   camera: {
     initialPose: derivePlayerCameraPose(current.player),

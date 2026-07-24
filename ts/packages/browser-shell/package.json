@@ -9,8 +9,8 @@
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@asha/contracts": "link:../../../../asha-engine/ts/packages/contracts",
-    "@asha/renderer-three": "link:../../../../asha-engine/ts/packages/renderer-three"
+    "@rusty-engine/render-contracts": "workspace:*",
+    "@rusty-engine/renderer-three": "workspace:*"
   },
   "devDependencies": {
     "vite": "8.1.5"

@@ -49,16 +49,16 @@ report and is the authority for M9B-M9D.
 | Project content/bundle evidence | `engine-rs/crates/services/svc-project-content`, `svc-serialization`, `protocol/protocol-project-content`, `protocol-project-bundle`, and `rules/rule-project-bundle` | Structural evidence and exclusion | These closures combine provider manifests, extension/input protocols, load/save plans, prefabs, gameplay fabric, lifecycle, annotations, and session bootstrap. M5 instead decodes one static successor document and defers narrow serialization ideas to M6. |
 | Canonical project codec and migration evidence | `engine-rs/crates/services/svc-serialization/src/json.rs`, `state/core-scene/src/{document,json,validate}.rs`, `state/core-snapshot/src/lib.rs`, the canonical-dump examples, and `tools/scene-diagnostics/src/roundtrip.rs` | Encoding/test lessons adapted; crates and tools not referenced | M6 retains fixed object-field order, canonical collection ordering, finite deterministic numbers, trailing-LF output, fixed-point/golden-style tests, and fail-closed schema selection. It does not import manifest/artifact hashes, `StateStore`, replay fingerprints, diagnostic protocols, voxel compaction, or scene bootstrap/session state. |
 | Voxel asset/import/conversion evidence | `svc-mesh-import`, `svc-voxel-conversion`, `svc-voxel-asset`, `protocol-voxel-conversion`, `protocol-voxel-asset`, `tools/asset-import`, and `harness/fixtures/voxel-conversion` | Narrow format/parser/algorithm lessons adapted; crates not referenced | M7B retains offline GLB parsing, explicit bounded settings, sparse runs, canonical bytes, source provenance, and atomic artifact installation. It excludes registries, catalog/lock graphs, plan/preview/apply, providers, evidence graphs, replay, bridges, Studio, and project-bundle control planes. |
-| `@asha/contracts` | `ts/packages/contracts` | Sibling `link:` dependency, unchanged | Existing typed render-diff vocabulary and branded render/entity identities at the real presentation border. |
-| `@asha/renderer-three` | `ts/packages/renderer-three` | Sibling `link:` dependency, unchanged | Existing retained Three/WebGL browser surface, resource lifecycle, projection metadata, and render-diff application. |
-| `@asha/render-projection` | `ts/packages/render-projection` | Renderer transitive sibling dependency, unchanged | Renderer-neutral retained projection helpers used by the donor browser surface. |
+| `@asha/contracts` | `ts/packages/contracts/src/generated/{ids,render}.ts` | Replaced by bounded `@rusty-engine/render-contracts` | Keeps branded entity/render identities and the four render operations the product emits. Generated protocol barrels, compatibility/codegen claims, bridge handles, assets, editor values, and gameplay/runtime envelopes are excluded. |
+| `@asha/renderer-three` | `ts/packages/renderer-three/src/{three-renderer,browser-surface}.ts` | Narrow successor fork as `@rusty-engine/renderer-three` | Retains typed primitive lifecycle, inline mesh upload/disposal, deterministic inspection, camera placement, and real Three/WebGL mounting. The local API is bounded to the browser shell. |
+| `@asha/render-projection` | `ts/packages/render-projection` | Inspected and excluded | Rusty Engine's `RuntimeProjectionAdapter` already owns whole-state-to-diff projection; no donor projection export reaches the product. |
 
-No Asha crate has been copied wholesale into the repository. `engine-spatial` is a successor-owned
-adapter and system over unchanged Rust donors, and M3 adapts only the small ray/AABB query algorithm
-named above. The browser shell supplies typed diffs directly; its Vite
-alias replaces `renderer-three`'s unused encoded-frame convenience import with a local fail-closed
-shim. The verification gate rejects old `RuntimeSession`, native bridge, Gameplay Fabric, or
-`GameplayRuntimeHost` markers in the built browser bundle.
+The accepted Rust donor family now lives under `rust/donors/asha`; `engine-spatial` remains the
+successor-owned adapter and system above it, and M3 adapts only the small ray/AABB query algorithm
+named above. The browser shell supplies typed diffs directly to local packages. There is no encoded
+frame entry point, runtime-bridge shim, or Vite alias. The verification gate rejects old
+`RuntimeSession`, native bridge, Gameplay Fabric, or `GameplayRuntimeHost` markers in the built
+browser bundle.
 
 M2A deliberately does not reference Asha's input or view crates. TypeScript resolves DOM device
 events against admitted binding data and submits only `ResolvedPlayerAction`; Rust owns controller
@@ -207,6 +207,17 @@ path and projection goldens remain identical. Cargo metadata now resolves no loc
 Rusty Engine, and all focused donor tests run as ordinary workspace tests. No runtime, protocol,
 lifecycle, replay, bridge, bundle, provider, editor, or level-generation crate was copied.
 
-The remaining operational sibling references after M9B are the TypeScript presentation links,
-Kenney fixture/license paths, and their CI/bootstrap documentation. M9C and M9D own their removal;
-historical links in this document remain provenance only.
+M9C replaced the linked TypeScript closure with `@rusty-engine/render-contracts` and
+`@rusty-engine/renderer-three`. The contract is a hand-owned closed union of the four operations
+emitted by `RuntimeProjectionAdapter`; it does not claim to be generated. The renderer substantially
+narrows the pinned donor's retained-scene and browser-surface algorithms to primitive lifecycle,
+partial visual updates, validated inline mesh replacement, deterministic snapshots, resource
+disposal, camera placement, and real WebGL. Consumer tracing confirmed that animation, sprites,
+catalog/static-mesh definitions, lights as diff operations, picking, editor/tunnel conveniences,
+generic render projection, encoded frames, and buffer handles had no product caller, so those
+families were excluded instead of copied. Focused package tests and the existing Chromium product
+gate cover the retained behavior.
+
+The remaining operational sibling references after M9C are the Kenney fixture/license paths and
+their CI/bootstrap documentation. M9D owns their removal; historical links in this document remain
+provenance only.

@@ -6,11 +6,10 @@
     "docs/experiment-results.md",
     "docs/m9-extraction-contract.md",
     "migration-cluster-ledger.md",
-    "rust/donors/asha/README.md"
+    "rust/donors/asha/README.md",
+    "ts/packages/renderer-three/README.md"
   ],
   "operationalReferences": [
-    "pnpm-local|@asha/contracts|asha-engine/ts/packages/contracts",
-    "pnpm-local|@asha/renderer-three|asha-engine/ts/packages/renderer-three",
     "tracked|.github/workflows/verify.yml|asha-engine/ts/pnpm-lock.yaml",
     "tracked|.github/workflows/verify.yml|path: asha-engine",
     "tracked|.github/workflows/verify.yml|repository: FuzzySlipper/asha-engine",
@@ -24,21 +23,9 @@
     "tracked|content/projects/converted-wall.project.json|\"sourcePath\": \"../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb\",",
     "tracked|docs/voxel-asset-format.md|--source ../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb \\",
     "tracked|docs/voxel-asset-format.md|`../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb`:",
-    "tracked|pnpm-lock.yaml|'@asha/contracts':",
-    "tracked|pnpm-lock.yaml|'@asha/renderer-three':",
-    "tracked|pnpm-lock.yaml|specifier: link:../../../../asha-engine/ts/packages/contracts",
-    "tracked|pnpm-lock.yaml|specifier: link:../../../../asha-engine/ts/packages/renderer-three",
-    "tracked|pnpm-lock.yaml|version: link:../../../../asha-engine/ts/packages/contracts",
-    "tracked|pnpm-lock.yaml|version: link:../../../../asha-engine/ts/packages/renderer-three",
     "tracked|rust/crates/voxel-asset/tests/voxel_asset.rs|\"../asha-engine/harness/fixtures/voxel-conversion/KENNEY-RETRO-URBAN-KIT-LICENSE.txt\"",
     "tracked|rust/crates/voxel-asset/tests/voxel_asset.rs|source_path: \"../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb\"",
     "tracked|rust/crates/voxel-convert/src/bin/voxel-conversion-workload.rs|\"/../../../../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb\"",
-    "tracked|rust/crates/voxel-convert/tests/conversion.rs|\"/../../../../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb\"",
-    "tracked|ts/packages/browser-shell/package.json|\"@asha/contracts\": \"link:../../../../asha-engine/ts/packages/contracts\",",
-    "tracked|ts/packages/browser-shell/package.json|\"@asha/renderer-three\": \"link:../../../../asha-engine/ts/packages/renderer-three\"",
-    "tracked|ts/packages/browser-shell/src/main.ts|import { mountAshaRendererBrowserSurface } from \"@asha/renderer-three/backend\";",
-    "tracked|ts/packages/browser-shell/src/projection.ts|} from \"@asha/contracts\";",
-    "tracked|ts/packages/browser-shell/src/renderer-runtime-shim.ts|import type { RenderFrameDiff } from \"@asha/contracts\";",
-    "tracked|ts/packages/browser-shell/vite.config.ts|\"@asha/runtime-bridge\": fileURLToPath("
+    "tracked|rust/crates/voxel-convert/tests/conversion.rs|\"/../../../../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb\""
   ]
 }
