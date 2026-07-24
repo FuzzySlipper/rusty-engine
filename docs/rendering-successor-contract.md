@@ -126,6 +126,11 @@ pins all four packages to the same SHA. The packages build their checked distrib
 preparation, and internal renderer layers are peers so a consumer gets one coherent contract and
 projection family rather than hidden workspace-only copies.
 
+The dependency-free root `package.json` and `pnpm-lock.yaml` are package-manager selection metadata
+for that Git preparation path. They do not include the render workspace in ordinary Engine work,
+install browser dependencies, or change the Rust-first root verification gate. All actual Node
+dependencies, scripts, source, and lock state remain under `render/`.
+
 `rusty-engine-demo` is the first migration consumer. It must delete its private render contracts
 and Three backend after switching to the shared packages. Studio is the second consumer and must
 not implement another viewport renderer.
