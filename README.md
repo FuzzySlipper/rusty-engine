@@ -74,8 +74,13 @@ reproducibility test. Install and verify the isolated renderer workspace separat
 That gate checks package boundaries, strict Rust-to-TypeScript decoding, retained projection,
 Three resource lifecycle, renderer hosts/editor/inspection, deterministic snapshots, and the real
 Chromium/WebGL/WebAudio/DOM/GLB path. Ordinary Engine verification deliberately does not install
-Node dependencies. Run the focused Rust checks
-directly with:
+Node dependencies. Exact public Git-package consumption has its own clean temporary-consumer proof:
+
+```bash
+./scripts/verify-render-consumer.sh <40-character-public-sha>
+```
+
+Run the focused Rust checks directly with:
 
 ```bash
 ./scripts/audit-standalone.sh
@@ -102,6 +107,8 @@ The format, limits, provenance, and failure behavior are documented in
 - [Current design](docs/design.md) — provider ownership, dependency direction, and promotion rules.
 - [Rendering successor contract](docs/rendering-successor-contract.md) — complete rendering scope,
   ownership, adaptation, and closeout rule.
+- [Shared rendering operations](docs/rendering-operations.md) — verification, exact-revision
+  consumption, CI topology, resource rules, and known limitations.
 - [Rust source organization](docs/rust-style.md) — lightweight module and behavior-owner style.
 - [Voxel asset format](docs/voxel-asset-format.md) — current durable format and converter boundary.
 - [Migration cluster ledger](docs/migration-cluster-ledger.md) — durable successor and extraction decisions.

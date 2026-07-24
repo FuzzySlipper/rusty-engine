@@ -1,6 +1,6 @@
 # Rendering successor contract
 
-Status: approved implementation contract for Den tasks #6156-#6163
+Status: implemented and in closeout review under Den tasks #6156-#6163
 
 Rusty Engine will preserve the complete proven Asha rendering feature set behind a new
 successor-owned border. This is not a promise to retain Asha package names or dependency topology.
@@ -21,6 +21,11 @@ The frozen inventory in [`../render/donor-inventory.txt`](../render/donor-invent
 SHA-256 is `99b33ece319e614695bd60c26f723aa0f5bdd48c83488dbd6d6dc4151b67b001`.
 Only committed files at the pinned tree are donors. Caches, build outputs, evidence dumps, and local
 untracked files are not migration input.
+
+[`../render/donor-disposition.tsv`](../render/donor-disposition.tsv) gives every one of those 134
+paths exactly one final `adapted` or `equivalent` disposition, capability owner, local successor
+evidence, and representation note. The strict completeness gate proves the inventory and
+disposition path sets are identical and every named capability/evidence path exists.
 
 ## Ownership
 
@@ -68,9 +73,8 @@ The machine-readable lifecycle is in
    inspection, deterministic snapshots, and failure behavior; and
 10. cross-language fixtures and real-browser acceptance.
 
-Every family must end in `ported`, `adapted`, or `equivalent` with concrete successor tests before
-#6163 can close. `planned` is allowed while the campaign is in progress. `excluded` and `unmapped`
-are forbidden dispositions.
+Every family is now `adapted` or `equivalent` with concrete successor evidence. `planned`,
+`excluded`, and `unmapped` are forbidden by the strict closeout gate.
 
 ## Required adaptation
 
@@ -131,9 +135,11 @@ for that Git preparation path. They do not include the render workspace in ordin
 install browser dependencies, or change the Rust-first root verification gate. All actual Node
 dependencies, scripts, source, and lock state remain under `render/`.
 
-`rusty-engine-demo` is the first migration consumer. It must delete its private render contracts
-and Three backend after switching to the shared packages. Studio is the second consumer and must
-not implement another viewport renderer.
+`rusty-engine-demo` is the first migration consumer. At commit
+`42f428b0ee3f47de94d4372f512978f587d729f7` it deleted its private render contracts and Three
+backend after switching to all four packages from exact Engine revision
+`8cb49db6cfe9471faa23ab0661656a2366a83d8c`. Studio is the second consumer and must not implement
+another viewport renderer.
 
 ## Implemented TypeScript border
 
@@ -171,6 +177,8 @@ resource, camera, and lifecycle matrix.
   Chromium/WebGL coverage. Triggered by `render/**` and named Rust render contract/fixture paths.
 - **Demo consumer:** exact-revision install plus full demo browser acceptance when shared render
   surfaces or demo integration change.
+- **Public package consumer:** post-push clean temporary install of all four Git subdirectories at
+  the exact public Engine SHA, followed by coherent retained-frame execution.
 - **Studio:** remains separate and begins only after the rendering clean-clone closeout.
 
 ## Completion rule
@@ -178,4 +186,5 @@ resource, camera, and lifecycle matrix.
 Textual similarity is not the metric. The donor inventory, capability matrix, adapted tests,
 cross-language fixtures, demo migration, and browser evidence together prove preservation. Any
 representation change must name the replacement behavior. Nothing may be deferred merely because
-no current demo screen exercises it.
+no current demo screen exercises it. Operational commands and intentional limitations are in
+[rendering-operations.md](rendering-operations.md).

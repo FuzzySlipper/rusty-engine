@@ -6,8 +6,9 @@ cd "$REPO_ROOT"
 
 cargo fmt --all --check
 ./scripts/audit-standalone.sh
+./scripts/audit-render-isolation.sh
 ./scripts/check-doc-links.sh
-./scripts/check-render-completeness.sh
+./scripts/check-render-completeness.sh --strict
 if rg -n 'GameplayRuntimeHost|GameplayFabric|NativeRuntimeBridge|RuntimeSession|ReactionFrame|DecisionReceipt|ReplayRecord|ProposalEnvelope' rust; then
   echo "forbidden old runtime spine surfaced in active source" >&2
   exit 1

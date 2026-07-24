@@ -1,0 +1,35 @@
+name: render-consumer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'render/packages/**'
+      - 'scripts/verify-render-consumer.sh'
+      - '.github/workflows/render-consumer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-render-consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Rusty Engine
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Verify exact public Git package consumption
+        run: ./scripts/verify-render-consumer.sh "$GITHUB_SHA"

@@ -3,10 +3,14 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+"$REPO_ROOT/scripts/audit-render-isolation.sh"
+"$REPO_ROOT/scripts/check-render-completeness.sh" --strict
+
 pnpm --dir "$REPO_ROOT/render" install --frozen-lockfile
 
 if [[ -z "${PLAYWRIGHT_CHROMIUM_EXECUTABLE:-}" ]] && command -v chromium >/dev/null 2>&1; then
-  export PLAYWRIGHT_CHROMIUM_EXECUTABLE="$(command -v chromium)"
+  PLAYWRIGHT_CHROMIUM_EXECUTABLE="$(command -v chromium)"
+  export PLAYWRIGHT_CHROMIUM_EXECUTABLE
 fi
 
 pnpm --dir "$REPO_ROOT/render" run verify

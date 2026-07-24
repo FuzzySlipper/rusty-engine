@@ -1,14 +1,16 @@
 # Asha-to-Rusty Engine migration cluster ledger
 
-Status: M0-M7B and M9 accepted; M10 product extraction is implemented under review; M11 is planned
-in Den; M7C remains deliberately unscheduled
+Status: M0-M7B and M9 accepted; M10 product extraction and M11R shared rendering are implemented
+under review; Studio #6138 is next; M7C remains deliberately unscheduled
 
 Evidence baselines:
 
 - original Rusty Engine walking-spike commit: `65c528975328b2d92384dea91adf1d21c1779bf4`;
 - pinned Asha donor commit: `a431974330589761c9e35fc4f8a55996a1b5ee48`; and
 - reviewed standalone Rusty Engine head: `a2e55f9660e46751d4c78bcdd23b9a321b0dc961`; and
-- published M10 demo extension head: `643e9c02e386cbefa0b6450fefde24162f100823`.
+- published M10 demo extension head: `643e9c02e386cbefa0b6450fefde24162f100823`;
+- first complete public renderer package baseline: `8cb49db6cfe9471faa23ab0661656a2366a83d8c`; and
+- demo shared-renderer migration head: `42f428b0ee3f47de94d4372f512978f587d729f7`.
 
 ## Purpose
 
@@ -95,7 +97,8 @@ Every future cluster must preserve these properties:
 | M7A | Live voxel edits | #6125-#6128 | One expected-revision `VoxelEditService` transaction coherently replaces authoritative voxels plus collision, navigation, and mesh projections; snapshot and authored-save meanings are distinct. |
 | M7B | Offline voxel asset conversion | #6129-#6131 | A bounded Rust converter produces a canonical durable voxel asset that enters through ordinary project admission and then behaves like authored voxels. |
 | M9 | Standalone repository | #6132-#6136 | The selected Rust donors, narrow local render edge, licensed fixture, verification, and CI became repository-local; the operational Asha dependency audit closed empty at the reviewed head above. |
-| M10 | External reference consumer | #6137, #6141-#6145 | The walking product moved to public `rusty-engine-demo`, depends one-way on an exact Engine revision, added downstream-only `ExtractionBeacon` semantics, and proved a second TypeScript-authored composition without another Rust change. Engine retains only provider crates and converter evidence. |
+| M10 | External reference consumer | #6137, #6141-#6145 | The walking product moved to public `rusty-engine-demo`, depends one-way on an exact Engine revision, added downstream-only `ExtractionBeacon` semantics, and proved a second TypeScript-authored composition without another Rust change. At extraction time Engine retained only provider crates and converter evidence. |
+| M11R | Complete shared rendering | #6156-#6163 | The complete pinned Asha render investment was adapted into renderer-neutral Rust crates plus an isolated four-package TypeScript/Three/host workspace. Every one of 134 donor files has a final disposition; the demo deleted its private renderer and consumes the public exact-revision packages. |
 
 Detailed measurements, implementation commits, browser behavior, and limitations are retained in
 [experiment-results.md](experiment-results.md). Exact donor sources and adaptations are in
@@ -113,8 +116,9 @@ The completed clusters answered the original architectural questions:
 - Presentation can be rich, disposable, and restartable above accepted state and facts.
 - Stored projects and runtime snapshots can evolve independently without replay certification.
 - Useful low-level donor code fits below the new spine after a bounded closure audit.
-- A narrow local Three renderer fit above the spine without restoring Asha's browser package graph,
-  then moved with its owning product.
+- A narrow local Three renderer first fit above the spine, then exposed the risk of leaving reusable
+  rendering with one product. The complete successor renderer now lives behind an isolated Engine
+  workspace without restoring Asha's browser/runtime package graph.
 - The external demo builds and proves real product behavior from an exact public Engine revision,
   while Engine verifies independently as a provider.
 
@@ -136,9 +140,11 @@ Their pinned source and bounded adaptations remain recorded in
 topology.
 
 M9 first replaced the former TypeScript presentation dependencies with bounded successor packages.
-M10 then moved those packages with their only real consumer. Engine now contains no TypeScript,
-Node, browser, or renderer package; their donor treatment remains historical evidence in
-[donor-provenance.md](donor-provenance.md).
+M10 then moved those narrow packages with their only real consumer. M11R deliberately brought the
+complete reusable renderer back as an isolated `render/` workspace after the demo and planned
+Studio established two concrete consumers. Ordinary Engine work still has no Node install or
+browser dependency; TypeScript/Three/host work has its own lockfile and gates. Exact donor treatment
+is recorded in [donor-provenance.md](donor-provenance.md).
 
 The Kenney GLB and exact CC0 license are local under `fixtures/voxel-conversion`. CI checks out only
 Rusty Engine. The operational dependency audit moved from 55 references before extraction to zero.
@@ -146,21 +152,36 @@ Rusty Engine. The operational dependency audit moved from 55 references before e
 The exact M9 contract and closeout evidence are in
 [m9-extraction-contract.md](m9-extraction-contract.md).
 
-## External consumer and planned tooling
+## External consumers and tooling
 
 ### M10: external demo consumer
 
 Den task #6137 moved the loading-bay walking product into public
 [`rusty-engine-demo`](https://github.com/FuzzySlipper/rusty-engine-demo). The demo depends one-way on
 an exact Rusty Engine revision and owns game-specific composition, persistence, browser acceptance,
-and presentation. Its `ExtractionBeacon` extended downstream Rust and TypeScript meanings without
-changing Engine, and `relay-annex.project.json` then reused those meanings as a content-only change.
-Reusable mechanisms stay here only after multiple real consumers earn a smaller boundary.
+and presentation meaning. It now maps those meanings into the shared retained/presentation
+contracts and owns no private renderer. Its `ExtractionBeacon` extended downstream Rust and
+TypeScript meanings without adding Engine gameplay vocabulary, and `relay-annex.project.json` then
+reused those meanings as a content-only change.
+
+### M11R: complete shared renderer
+
+Den campaign #6156-#6163 uses the rendering-specific donor pin
+`6462a6de20d48ea1a3b7456826804bd9507860a5`. It preserves every implemented render family in
+`render-model`, `render-projection`, `render-presentation`, and the isolated `render/` workspace,
+while replacing sessions, bridges, replay/certification, catalogs/bundles, registries, generated
+tunnels, and arbitrary fetch with explicit successor values and resource resolvers.
+
+The complete capability matrix is [`../render/completeness.tsv`](../render/completeness.tsv); the
+literal 134-file accounting is
+[`../render/donor-disposition.tsv`](../render/donor-disposition.tsv). Engine Rust, the isolated
+renderer, public package preparation, and the external demo each have separate proportionate gates.
+See [rendering-operations.md](rendering-operations.md) for commands and known limitations.
 
 ### M11: isolated first-party Studio
 
-Den task #6138 supersedes the old unscheduled M8 placeholder. After M10 establishes the external
-project boundary, it will port the valuable Asha Studio workflows into an isolated `studio/`
+Den task #6138 supersedes the old unscheduled M8 placeholder. After M11R closes the shared renderer
+boundary, it will port the valuable Asha Studio workflows into an isolated `studio/`
 workspace in this repository. Studio may author artifacts and propose typed operations, while Rust
 retains validation, persistence, mutation, and execution authority. Its Angular/Nx dependency and
 verification domain remain outside ordinary Engine installation and CI.

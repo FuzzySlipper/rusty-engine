@@ -9,6 +9,8 @@ on:
       - 'rust/crates/render-model/**'
       - 'rust/crates/render-projection/**'
       - 'rust/crates/render-presentation/**'
+      - 'scripts/audit-render-isolation.sh'
+      - 'scripts/check-render-completeness.sh'
       - 'scripts/verify-render.sh'
       - '.github/workflows/render.yml'
   pull_request:
@@ -18,6 +20,8 @@ on:
       - 'rust/crates/render-model/**'
       - 'rust/crates/render-projection/**'
       - 'rust/crates/render-presentation/**'
+      - 'scripts/audit-render-isolation.sh'
+      - 'scripts/check-render-completeness.sh'
       - 'scripts/verify-render.sh'
       - '.github/workflows/render.yml'
 

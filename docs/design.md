@@ -141,6 +141,11 @@ the surface-owned animation projection, but the surface does not discover servic
 ambient callbacks. Demo and Studio consumers provide typed frames and resource resolvers instead
 of constructing Three scenes of their own.
 
+External consumers pin all four render packages to one exact public Engine commit. Their package
+preparation and peer graph are independently checked in a clean temporary consumer, so the shared
+boundary is not a workspace-only convention. Operational commands, CI ownership, and explicit
+limitations are recorded in [rendering-operations.md](rendering-operations.md).
+
 ## Durable voxel assets and offline conversion
 
 `voxel-asset` owns a strict schema, semantic validation, canonical encoding, content identity, and
@@ -210,7 +215,9 @@ second structural center.
 checkout and covers locked metadata, standalone path auditing, documentation links, formatting,
 workspace/provider fixtures (including renderer-neutral model/projection), Clippy, and
 byte-reproducible conversion. The separately installed `render/` workspace has its own frozen
-TypeScript/browser gate.
+TypeScript/browser gate. A third post-push gate installs the four render packages from the exact
+public Engine commit into a clean temporary consumer; the external demo retains its own complete
+product gate against an exact Engine revision.
 
 Source organization follows [rust-style.md](rust-style.md): one primary behavior owner or cohesive
 type family per file, thin crate roots, and no one-type-per-file rule. File size is a review signal,

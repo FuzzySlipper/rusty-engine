@@ -121,6 +121,30 @@ causation/correlation, authority ticks, replay scopes, and implicit URL fetch ar
 bytes, vetted realization URLs, and entity positions come from narrow caller-owned resolvers; camera
 collision is an optional direct movement resolver rather than a runtime bridge.
 
+### M11R completeness and external-consumer closeout
+
+Task #6163 closes the difference between a capability-level audit and literal source accounting.
+[`../render/donor-disposition.tsv`](../render/donor-disposition.tsv) has exactly one row for every
+path in the frozen 134-file inventory. Each row names a final `adapted` or `equivalent` treatment,
+one capability from the successor matrix, concrete local evidence, and the representation change.
+The strict checker compares both sorted path sets, rejects duplicate/missing donors and non-final
+statuses, and verifies every named successor evidence path.
+
+The first external consumer is pinned independently: `rusty-engine-demo` commit
+`42f428b0ee3f47de94d4372f512978f587d729f7` installs all four packages from exact public Engine
+revision `8cb49db6cfe9471faa23ab0661656a2366a83d8c`, deletes its copied contracts/backend, and passes
+its complete Rust/TypeScript/Chromium product gate. Engine also owns a temporary clean-consumer
+script and post-push workflow that install a requested public SHA outside this checkout, reject
+workspace/link/file resolution, and execute one frame through all four package layers. These proofs
+make Asha and sibling checkouts unnecessary for source, build, package preparation, or runtime use.
+
+The exact fixture/license bytes, complete behavior matrix, one-row-per-file disposition, Rust-only
+provider gate, isolated browser gate, public-package gate, and downstream product gate jointly
+replace the donor's compatibility manifests and evidence catalogs. They prove behavior and
+isolation without restoring generated protocols, replay certification, or a universal host facade.
+Operational commands and intentional limitations are in
+[rendering-operations.md](rendering-operations.md).
+
 ## Crate portability inventory
 
 The historical donor's
