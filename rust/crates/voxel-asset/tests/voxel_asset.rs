@@ -12,11 +12,25 @@ use voxel_asset::{
 fn schema_one_sparse_asset_is_canonical_and_byte_stable() {
     let mut source = valid_asset();
     source.representation.sparse_runs.reverse();
+    source.representation.sparse_runs.extend([
+        VoxelSparseRun {
+            start: [1, 1, 0],
+            length: 2,
+            material_slot: 3,
+        },
+        VoxelSparseRun {
+            start: [0, 1, 0],
+            length: 1,
+            material_slot: 3,
+        },
+    ]);
+    source.bounds.max[1] = 1;
     source.material_map.reverse();
     let asset = with_computed_content_hash(source).expect("canonical asset");
 
-    assert_eq!(asset.representation.sparse_runs.len(), 1);
+    assert_eq!(asset.representation.sparse_runs.len(), 2);
     assert_eq!(asset.representation.sparse_runs[0].length, 3);
+    assert_eq!(asset.representation.sparse_runs[1].length, 3);
     assert!(asset.content_hash.starts_with("sha256:"));
 
     let first = encode_voxel_asset(&asset).expect("encoded asset");

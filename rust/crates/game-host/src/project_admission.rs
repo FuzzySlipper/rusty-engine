@@ -18,9 +18,9 @@ use crate::player::{PlayerControllerConfig, PlayerInputBindings};
 use crate::project_codec::decode_project_document;
 use crate::session::GameSession;
 use crate::stored_project::{
-    diagnostic_code, validate_stored_project, StoredEntityDefinition, StoredMaterialVoxel,
-    StoredMaterialVoxelEnvironment, StoredProject, StoredProjectError, StoredScene,
-    StoredVoxelEnvironment,
+    diagnostic_code, validate_stored_project, StoredAsset, StoredEntityDefinition,
+    StoredMaterialVoxel, StoredMaterialVoxelEnvironment, StoredProject, StoredProjectError,
+    StoredScene, StoredVoxelEnvironment,
 };
 
 /// Static project data that has passed the same complete semantic admission as
@@ -68,7 +68,7 @@ pub fn admit_stored_project_with_document(
 
     let entity_indexes = index_entities(scene, scene_index)?;
     require_spatial_source(scene, scene_index)?;
-    let collision_scene = build_collision_scene(scene, scene_index)?;
+    let collision_scene = build_collision_scene(scene, scene_index, &catalog)?;
     let definitions = scene
         .entities
         .iter()
@@ -112,26 +112,24 @@ pub fn materialize_stored_project_voxels(
                     material_slot: voxel.material_slot,
                 })
                 .collect(),
+            voxel_assets: Vec::new(),
         },
     ));
     admit_stored_project_with_document(document).map(|(stored, _)| stored)
 }
 
-struct ProjectAssetCatalog {
-    kinds: BTreeMap<String, AssetKind>,
+struct ProjectAssetCatalog<'a> {
+    assets: BTreeMap<String, &'a StoredAsset>,
 }
 
-impl ProjectAssetCatalog {
-    fn new(document: &StoredProject) -> Self {
-        let kinds = document
+impl<'a> ProjectAssetCatalog<'a> {
+    fn new(document: &'a StoredProject) -> Self {
+        let assets = document
             .assets
             .iter()
-            .map(|asset| {
-                let id = AssetId::parse(&asset.id).expect("validated asset identity");
-                (asset.id.clone(), id.kind())
-            })
+            .map(|asset| (asset.id.clone(), asset))
             .collect();
-        Self { kinds }
+        Self { assets }
     }
 
     fn validate_scene(
@@ -154,14 +152,17 @@ impl ProjectAssetCatalog {
                     format!("renderable requires `mesh` identity, found `{}`", id.kind()),
                 ));
             }
-            let Some(kind) = self.kinds.get(id.as_str()) else {
+            let Some(asset) = self.assets.get(id.as_str()) else {
                 return Err(StoredProjectError::new(
                     diagnostic_code::MISSING_ASSET,
                     path,
                     format!("asset `{id}` is not declared in `assets`"),
                 ));
             };
-            if *kind != AssetKind::StaticMesh {
+            let kind = AssetId::parse(&asset.id)
+                .expect("validated catalog identity")
+                .kind();
+            if kind != AssetKind::StaticMesh {
                 return Err(StoredProjectError::new(
                     diagnostic_code::WRONG_ASSET_KIND,
                     path,
@@ -170,6 +171,40 @@ impl ProjectAssetCatalog {
             }
         }
         Ok(())
+    }
+
+    fn voxel_volume(
+        &self,
+        asset_id: &str,
+        path: &str,
+    ) -> Result<&'a voxel_asset::VoxelAsset, StoredProjectError> {
+        let id = AssetId::parse(asset_id).map_err(|error| {
+            StoredProjectError::new(diagnostic_code::INVALID_ASSET_ID, path, error.to_string())
+        })?;
+        if id.kind() != AssetKind::VoxelVolume {
+            return Err(StoredProjectError::new(
+                diagnostic_code::WRONG_ASSET_KIND,
+                path,
+                format!(
+                    "voxel environment requires `voxel-volume`, found `{}`",
+                    id.kind()
+                ),
+            ));
+        }
+        let Some(asset) = self.assets.get(id.as_str()) else {
+            return Err(StoredProjectError::new(
+                diagnostic_code::MISSING_ASSET,
+                path,
+                format!("asset `{id}` is not declared in `assets`"),
+            ));
+        };
+        asset.voxel_volume.as_ref().ok_or_else(|| {
+            StoredProjectError::new(
+                diagnostic_code::INVALID_VOXEL_ASSET,
+                path,
+                format!("catalog entry `{id}` has no embedded voxelVolume artifact"),
+            )
+        })
     }
 }
 
@@ -219,6 +254,7 @@ fn require_spatial_source(
 fn build_collision_scene(
     scene: &StoredScene,
     scene_index: usize,
+    catalog: &ProjectAssetCatalog<'_>,
 ) -> Result<Option<VoxelCollisionScene>, StoredProjectError> {
     let Some(environment) = &scene.voxel_environment else {
         return Ok(None);
@@ -229,17 +265,14 @@ fn build_collision_scene(
             environment.chunk_size,
             environment.solid_voxels.iter().copied(),
         ),
-        StoredVoxelEnvironment::Material(environment) => VoxelCollisionScene::from_material_voxels(
-            environment.voxel_size,
-            environment.chunk_size,
-            environment
-                .material_voxels
-                .iter()
-                .map(|voxel| MaterialVoxel {
-                    address: voxel.address,
-                    material_slot: voxel.material_slot,
-                }),
-        ),
+        StoredVoxelEnvironment::Material(environment) => {
+            let voxels = expand_material_voxels(environment, scene_index, catalog)?;
+            VoxelCollisionScene::from_material_voxels(
+                environment.voxel_size,
+                environment.chunk_size,
+                voxels,
+            )
+        }
         StoredVoxelEnvironment::GeneratedRoom(environment) => {
             VoxelCollisionScene::from_generated_room(GeneratedRoomConfig {
                 seed: environment.seed,
@@ -258,6 +291,60 @@ fn build_collision_scene(
             error.to_string(),
         )
     })
+}
+
+fn expand_material_voxels(
+    environment: &StoredMaterialVoxelEnvironment,
+    scene_index: usize,
+    catalog: &ProjectAssetCatalog<'_>,
+) -> Result<Vec<MaterialVoxel>, StoredProjectError> {
+    let mut voxels = environment
+        .material_voxels
+        .iter()
+        .map(|voxel| MaterialVoxel {
+            address: voxel.address,
+            material_slot: voxel.material_slot,
+        })
+        .collect::<Vec<_>>();
+    for (reference_index, asset_id) in environment.voxel_assets.iter().enumerate() {
+        let path = format!("scenes[{scene_index}].voxelEnvironment.voxelAssets[{reference_index}]");
+        let asset = catalog.voxel_volume(asset_id, &path)?;
+        if asset.grid.cell_size.to_bits() != environment.voxel_size.to_bits()
+            || asset.grid.chunk_size != environment.chunk_size
+        {
+            return Err(StoredProjectError::new(
+                diagnostic_code::INVALID_VOXEL_ASSET,
+                path,
+                format!(
+                    "asset grid cellSize/chunkSize ({}/{}) must match environment ({}/{})",
+                    asset.grid.cell_size,
+                    asset.grid.chunk_size,
+                    environment.voxel_size,
+                    environment.chunk_size
+                ),
+            ));
+        }
+        for run in &asset.representation.sparse_runs {
+            for offset in 0..run.length {
+                voxels.push(MaterialVoxel {
+                    address: [
+                        asset.grid.origin[0]
+                            .checked_add(run.start[0])
+                            .and_then(|value| value.checked_add(i64::from(offset)))
+                            .expect("validated voxel asset x address"),
+                        asset.grid.origin[1]
+                            .checked_add(run.start[1])
+                            .expect("validated voxel asset y address"),
+                        asset.grid.origin[2]
+                            .checked_add(run.start[2])
+                            .expect("validated voxel asset z address"),
+                    ],
+                    material_slot: run.material_slot,
+                });
+            }
+        }
+    }
+    Ok(voxels)
 }
 
 fn authored_definition(

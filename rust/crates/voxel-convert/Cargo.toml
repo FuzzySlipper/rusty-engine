@@ -1,5 +1,5 @@
 [package]
-name = "game-host"
+name = "voxel-convert"
 version.workspace = true
 edition.workspace = true
 
@@ -7,13 +7,9 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
-core-assets.workspace = true
-core-ids.workspace = true
-core-math.workspace = true
-core-time.workspace = true
-engine-spatial = { path = "../engine-spatial" }
+gltf.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error.workspace = true
-entity-state = { path = "../entity-state" }
+sha2.workspace = true
 voxel-asset = { path = "../voxel-asset" }

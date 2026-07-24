@@ -111,6 +111,13 @@ pub fn encode_voxel_asset(asset: &VoxelAsset) -> Result<String, VoxelAssetError>
     Ok(encoded)
 }
 
+pub fn canonicalize_voxel_asset(asset: &VoxelAsset) -> Result<VoxelAsset, VoxelAssetError> {
+    validate_voxel_asset(asset)?;
+    let mut canonical = asset.clone();
+    canonicalize(&mut canonical);
+    Ok(canonical)
+}
+
 /// Populate the semantic content hash after validating every other field.
 pub fn with_computed_content_hash(mut asset: VoxelAsset) -> Result<VoxelAsset, VoxelAssetError> {
     asset.content_hash.clear();
@@ -442,10 +449,15 @@ fn canonicalize(asset: &mut VoxelAsset) {
                 &right.source_material_name,
             ))
     });
-    asset
-        .representation
-        .sparse_runs
-        .sort_by_key(|run| (run.start, run.material_slot, run.length));
+    asset.representation.sparse_runs.sort_by_key(|run| {
+        (
+            run.start[1],
+            run.start[2],
+            run.start[0],
+            run.material_slot,
+            run.length,
+        )
+    });
 
     let mut merged: Vec<VoxelSparseRun> =
         Vec::with_capacity(asset.representation.sparse_runs.len());
@@ -462,6 +474,7 @@ fn canonicalize(asset: &mut VoxelAsset) {
         }
         merged.push(run);
     }
+    merged.sort_by_key(|run| (run.start, run.material_slot, run.length));
     asset.representation.sparse_runs = merged;
 }
 

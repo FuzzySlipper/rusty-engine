@@ -6,6 +6,7 @@
 use std::collections::BTreeSet;
 
 use serde::Deserialize;
+use voxel_asset::canonicalize_voxel_asset;
 
 use crate::content::PROJECT_CONTENT_SCHEMA_VERSION;
 use crate::stored_project::{
@@ -167,7 +168,13 @@ fn migrate_v6(mut legacy: LegacyProjectV6) -> Result<StoredProject, StoredProjec
         project_id: MIGRATED_V6_PROJECT_ID.to_string(),
         name: "Migrated Schema 6 Project".to_string(),
         entry_scene: MIGRATED_V6_SCENE_ID.to_string(),
-        assets: asset_ids.into_iter().map(|id| StoredAsset { id }).collect(),
+        assets: asset_ids
+            .into_iter()
+            .map(|id| StoredAsset {
+                id,
+                voxel_volume: None,
+            })
+            .collect(),
         scenes: vec![StoredScene {
             id: MIGRATED_V6_SCENE_ID.to_string(),
             name: "Migrated Schema 6 Entry".to_string(),
@@ -186,6 +193,21 @@ fn migrate_v6_asset_id(asset: &str) -> String {
 fn canonicalize(mut document: StoredProject) -> Result<StoredProject, StoredProjectError> {
     validate_stored_project(&document)?;
     normalize_numbers(&mut document)?;
+    for (asset_index, asset) in document.assets.iter_mut().enumerate() {
+        if let Some(voxel_volume) = &mut asset.voxel_volume {
+            *voxel_volume = canonicalize_voxel_asset(voxel_volume).map_err(|error| {
+                let diagnostic = error
+                    .diagnostics()
+                    .first()
+                    .expect("voxel asset error has diagnostic");
+                StoredProjectError::new(
+                    diagnostic_code::ENCODE,
+                    format!("assets[{asset_index}].voxelVolume.{}", diagnostic.path),
+                    format!("{}: {}", diagnostic.code, diagnostic.message),
+                )
+            })?;
+        }
+    }
     document
         .assets
         .sort_by(|left, right| left.id.cmp(&right.id));
@@ -201,6 +223,8 @@ fn canonicalize(mut document: StoredProject) -> Result<StoredProject, StoredProj
         if let Some(StoredVoxelEnvironment::Material(environment)) = &mut scene.voxel_environment {
             environment.material_voxels.sort_unstable();
             environment.material_voxels.dedup();
+            environment.voxel_assets.sort();
+            environment.voxel_assets.dedup();
         }
         for entity in &mut scene.entities {
             if let Some(component) = &mut entity.switch {

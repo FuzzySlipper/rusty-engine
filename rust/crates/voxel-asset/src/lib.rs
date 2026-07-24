@@ -16,9 +16,9 @@ pub use asset::{
     VoxelSparseRun, VOXEL_ASSET_SCHEMA_VERSION,
 };
 pub use codec::{
-    decode_voxel_asset, encode_voxel_asset, validate_voxel_asset, with_computed_content_hash,
-    VoxelAssetDiagnostic, VoxelAssetError, MAX_ARTIFACT_BYTES, MAX_MATERIAL_MAPPINGS,
-    MAX_REPRESENTED_VOXELS, MAX_STRING_BYTES,
+    canonicalize_voxel_asset, decode_voxel_asset, encode_voxel_asset, validate_voxel_asset,
+    with_computed_content_hash, VoxelAssetDiagnostic, VoxelAssetError, MAX_ARTIFACT_BYTES,
+    MAX_MATERIAL_MAPPINGS, MAX_REPRESENTED_VOXELS, MAX_STRING_BYTES,
 };
 pub use conversion::{
     conversion_settings_sha256, validate_conversion_request, VoxelConversionFitPolicy,

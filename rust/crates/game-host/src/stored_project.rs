@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use core_assets::{AssetId, AssetKind};
 use serde::{Deserialize, Serialize};
+use voxel_asset::VoxelAsset;
 
 pub const STORED_PROJECT_SCHEMA_VERSION: u32 = 7;
 
@@ -28,6 +29,7 @@ pub mod diagnostic_code {
     pub const INVALID_COMPONENT: &str = "project.invalidComponent";
     pub const INVALID_RELATIONSHIP: &str = "project.invalidRelationship";
     pub const INVALID_SPATIAL: &str = "project.invalidSpatial";
+    pub const INVALID_VOXEL_ASSET: &str = "project.invalidVoxelAsset";
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -41,10 +43,12 @@ pub struct StoredProject {
     pub scenes: Vec<StoredScene>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StoredAsset {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voxel_volume: Option<VoxelAsset>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -79,6 +83,8 @@ pub struct StoredMaterialVoxelEnvironment {
     pub voxel_size: f64,
     pub chunk_size: u32,
     pub material_voxels: Vec<StoredMaterialVoxel>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub voxel_assets: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -331,6 +337,30 @@ pub(crate) fn validate_stored_project(document: &StoredProject) -> Result<(), St
                 path,
                 format!("asset `{id}` was already declared at assets[{first}].id"),
             ));
+        }
+        if let Some(voxel_volume) = &asset.voxel_volume {
+            expect_kind(&id, AssetKind::VoxelVolume, &path)?;
+            if voxel_volume.asset_id != asset.id {
+                return Err(failure(
+                    diagnostic_code::INVALID_VOXEL_ASSET,
+                    format!("assets[{index}].voxelVolume.assetId"),
+                    format!(
+                        "embedded voxel asset identity {:?} does not match catalog identity {:?}",
+                        voxel_volume.asset_id, asset.id
+                    ),
+                ));
+            }
+            if let Err(error) = voxel_asset::validate_voxel_asset(voxel_volume) {
+                let diagnostic = error
+                    .diagnostics()
+                    .first()
+                    .expect("voxel asset error has a diagnostic");
+                return Err(failure(
+                    diagnostic_code::INVALID_VOXEL_ASSET,
+                    format!("assets[{index}].voxelVolume.{}", diagnostic.path),
+                    format!("{}: {}", diagnostic.code, diagnostic.message),
+                ));
+            }
         }
     }
 
