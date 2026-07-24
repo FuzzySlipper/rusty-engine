@@ -1,13 +1,13 @@
 # Asha-to-Rusty Engine migration cluster ledger
 
-Status: M0-M7B accepted; M9 standalone implementation is under review; M7C and M8 remain
-deliberately unscheduled
+Status: M0-M7B accepted; M9 standalone implementation is under review; M10 and M11 are planned in
+Den; M7C remains deliberately unscheduled
 
 Evidence baselines:
 
 - original Rusty Engine walking-spike commit: `65c528975328b2d92384dea91adf1d21c1779bf4`;
 - pinned Asha donor commit: `a431974330589761c9e35fc4f8a55996a1b5ee48`; and
-- standalone Rusty Engine implementation head: `38155bcc36d3bbf4062647e60d10bb191afe826f`.
+- standalone Rusty Engine implementation head: `6fde873921ed4308a7e3949b2da8fc28810e0ff9`.
 
 ## Purpose
 
@@ -142,20 +142,34 @@ Rusty Engine. The operational dependency audit moved from 55 references before e
 The exact M9 contract and closeout evidence are in
 [m9-extraction-contract.md](m9-extraction-contract.md).
 
-## Deliberately unscheduled clusters
+## Planned successor work
+
+### M10: external demo consumer
+
+Den task #6137 will move the loading-bay walking product into `rusty-engine-demo` after M9 closes.
+The demo will depend one-way on an exact Rusty Engine revision, own game-specific composition and
+browser acceptance, and prove that downstream Rust and TypeScript meanings can grow without adding
+generic Engine vocabulary prematurely. Reusable mechanisms stay here only after that real consumer
+earns their boundary.
+
+### M11: isolated first-party Studio
+
+Den task #6138 supersedes the old unscheduled M8 placeholder. After M10 establishes the external
+project boundary, it will port the valuable Asha Studio workflows into an isolated `studio/`
+workspace in this repository. Studio may author artifacts and propose typed operations, while Rust
+retains validation, persistence, mutation, and execution authority. Its Angular/Nx dependency and
+verification domain remain outside ordinary Engine installation and CI.
+
+These entries record owner-approved direction and dependency order, not completed implementation;
+Den remains authoritative for their current status and acceptance criteria.
+
+## Deliberately unscheduled and absent clusters
 
 ### M7C: voxel annotations and edit history
 
 Live edits and offline conversion did not produce a concrete consumer for undo, collaborative
 history, author annotations, or a universal edit protocol. Schedule this only when a named tool,
 provenance, collaboration, or diagnostic workflow establishes ownership and persistence semantics.
-
-### M8: Studio and editor workflows
-
-The current runtime and stored-project borders can support tools, but an editor shell has not earned
-its scope. Schedule a tool slice only after repeated manual-authoring pain identifies a narrow
-workflow. Tools must use the same project admission and typed runtime operations available without
-the editor; they do not receive a second authority path.
 
 ### Other absent families
 
