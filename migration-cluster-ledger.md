@@ -210,8 +210,8 @@ player intent so combat proves a real interaction rather than another test-only 
 | M2B | Complete (#6105) | Seeded environment generation, canonical voxel admission, collision/nav rebuild, derived mesh presentation | M0 | `svc-rng` and `svc-mesh` referenced unchanged; `svc-levelgen` algorithm adapted without `core-events` | Seed variation changes canonical/visible geometry without runtime code; the generated shell/pillar/aperture drive collision/navigation; the closed entity gate blocks and the opened gate permits real controller traversal; mesh and hash-verified regeneration agree after reopen |
 | M3 | Complete (#6106) | Weapon configuration, attack intent, ray/target resolution, health, damage/defeat, encounter consequence | M1, M2A | Slab-ray/nearest-hit algorithm adapted from `svc-combat`; old FPS lifecycle used as behavioral and negative structural evidence | Player damages a moving enemy through authored primary fire, later defeats the encounter, health/weapon eligibility reopen identically, and typed defeat clears the existing door path |
 | M4 | Complete (#6111-#6114) | Animation/audio/particle/billboard feedback derived from accepted movement, attack, damage, defeat, and door facts | M1-M3 facts | Presentation render families inspected as evidence only; no donor presentation crate/protocol imported | Typed response-local feedback is visible/audible, posture rebuilds from current state, dropped/restarted cues do not replay, and presentation failure never changes gameplay |
-| M5 | Ready to schedule | Stored scene, asset identities/catalog, entity definitions, project admission, diagnostics | At least M1, M2A, and M3 | Foundation concepts may transfer; broad content/bundle services are evidence | A non-generated stored project loads multiple settled component families with precise validation errors and no runtime facade |
-| M6 | Deferred | Durable project save/load and versioning, distinct from a live runtime snapshot | M5 | Selective serialization evidence only | Project content round-trips/version-migrates independently of session state; snapshots remain concrete runtime persistence |
+| M5 | Complete (#6117-#6120) | Stored scene, asset identities/catalog, entity definitions, project admission, diagnostics | At least M1, M2A, and M3 | `core-assets` referenced unchanged; catalog/scene/project/bundle families used only as bounded evidence | The checked-in schema-v7 loading-bay project drives the real browser through one strict Rust admission path with source-locatable diagnostics and no runtime facade |
+| M6 | Ready to implement (#6121-#6124) | Durable project save/load and versioning, distinct from a live runtime snapshot | M5 | Selective serialization evidence only | Project content round-trips/version-migrates independently of session state; snapshots remain concrete runtime persistence |
 | M7A | Deferred | Live voxel edit commands, authoritative voxel mutation, collision/navigation/mesh invalidation | M1, M2B | Adapt `rule-voxel-edit` behavior and narrow voxel services | One edit becomes visible and changes collision/navigation in the same accepted transaction; reopen preserves it |
 | M7B | Deferred | Voxel asset import/conversion into the admitted project form | M7A, M5 | Adapt conversion and asset services/tools | A real external asset converts reproducibly, validates, loads, and behaves like authored voxels |
 | M7C | Unscheduled | Voxel annotations and edit history | A named authoring/diagnostic consumer | Evidence from annotation/history protocols and services | Schedule only when undo, provenance, collaboration, or another concrete consumer exists |
@@ -348,9 +348,16 @@ presentation/render protocols, origin/correlation metadata, and scene/runtime br
 
 ### M5-M6: project admission and persistence
 
-Wait until several real component families reveal the common schema. Building a universal scene or
-bundle layer earlier would let Asha's old abstractions define the successor before its needs are
-known.
+M5 waited until the settled player, navigation, generation, combat, encounter, door, and
+presentation consumers revealed the concrete schema. It now admits one static schema-v7 project
+with a typed asset catalog, entry scene, scene-local entity definitions, and a generated voxel
+source. Rust resolves every renderable identity and validates component/relationship/spatial
+invariants before returning a `GameSession`; no provider, extension, load-plan, or bundle owner was
+introduced. The product host consumes the checked-in artifact directly, while the optional
+TypeScript builder merely materializes an equivalent candidate.
+
+M6 can now add a canonical codec, one explicit migration from the retained flat schema-v6 fixture,
+and recoverable durable writes without changing runtime-snapshot ownership.
 
 Keep two persistence concepts distinct:
 

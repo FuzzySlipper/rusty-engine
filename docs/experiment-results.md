@@ -384,6 +384,41 @@ M4 change amplification is explicit:
 | Presentation behavior variation for an existing outcome | `presentation-feedback.ts`, CSS, and focused fake-sink expectations only; no gameplay service, snapshot, content schema, or Rust projection change. |
 | New consequential feedback outcome | Its typed Rust fact/event, the browser-host semantic mapping, TypeScript adapter, and focused/product assertions; still no generic bus, presentation protocol, or replay envelope. |
 
+### Stored project admission
+
+M5 replaces the product's generated flat fixture with the checked-in
+`content/projects/loading-bay.project.json`. Schema 7 names one entry scene and a bounded typed asset
+catalog, then keeps transform/collision/renderable, player/controller/weapon,
+enemy/health/navigation, encounter/door/switch, kinematic, and voxel-environment data on the
+responsible objects. `core-assets` is the only new donor dependency and remains a zero-dependency
+identity leaf.
+
+Admission is one direct Rust call. It parses with serde paths, resolves the entry scene and every
+renderable against the catalog, rejects duplicate identities, constructs the canonical voxel world
+and its collision/navigation/mesh projections, and validates cross-object relationships before a
+live session is returned. Representative failures retain paths such as
+`scenes[0].entities[5].switch.controls`; there is no diagnostic bus, provider registry, extension
+envelope, project load plan, or runtime facade.
+
+The optional `loadingBayStoredProject()` TypeScript builder deep-equals the static artifact but is
+not needed to load it. A seed-only candidate edit changes canonical material voxels and generated
+output hash without Rust or presentation changes. After admission, a changed player controller
+state round-trips through snapshot schema 8 identically; that snapshot has tick/components and no
+project identity/catalog/scenes, while the authored project has those declarations and no live tick,
+event history, or TypeScript state.
+
+The real Chromium gate still completes player movement/blocking, camera look, autonomous
+navigation, combat damage/defeat, encounter clearing, door traversal, canonical generated mesh,
+retained Three projection, and disposable feedback after the host switches to the static artifact.
+
+M5 change amplification is explicit:
+
+| Change | Required ownership surfaces |
+|---|---|
+| Content-only seed/component variation | Static project or optional TypeScript builder/test only; Rust admission and presentation stay unchanged. |
+| Existing component validation change | `stored_project`/`project_admission` plus focused path-diagnostic tests; no runtime service or browser algorithm change. |
+| New settled component family | Its responsible Rust component/service plus its explicit stored definition/admission/snapshot path; no provider registry, universal envelope, or language runtime. |
+
 ### Browser/Three/DOM product proof
 
 The loading-bay browser shell links Asha's actual `@asha/renderer-three` and generated render
@@ -455,8 +490,8 @@ The current verification gate proves:
 
 - Rust formatting, Clippy, and strict TypeScript compilation;
 - generated project content is byte-for-byte current with its TypeScript composition;
-- 11 TypeScript content-composition tests and nine browser input/projection/presentation tests;
-- 57 Rust tests across entity state, donor collision/navigation/mesh queries, security door,
+- 13 TypeScript content-composition tests and ten browser input/projection/presentation tests;
+- 69 Rust tests across entity state, donor collision/navigation/mesh queries, security door,
   content admission, encounter routing, kinematic/navigation motion, atomic rejection, projection,
   player control, combat/health/weapon behavior, generated-environment admission, and save/reopen;
 - strict rejection of unknown stored-content and snapshot fields;
@@ -470,10 +505,11 @@ These are physical line counts (`wc -l`), not complexity scores:
 |---|---:|---|
 | Reusable Rust entity state | 4 files / 888 lines | Entity/capability storage, atomic entity mutation, snapshot, projection. |
 | Successor spatial adapter/system | 1 file / 898 lines | Canonical donor scene construction, generated-room/aperture algorithm, collision/navigation/mesh derivation, bounded query facade, central kinematic phase. |
-| Rust game host and runners | 19 files / 5,184 lines | Concrete feature-owned components/services, routing, admission, scheduling, snapshots, presentation projection, headless/product/workload hosts. |
-| TypeScript content composition | 5 files / 336 lines | Typed definitions, encounter/generation/combat and motion builders, reproducibility check. |
-| TypeScript browser product shell | 8 files / 1,726 lines | Browser-owned input lifecycle, Rust-readout/mesh and feedback adapters, DOM/Web Audio realization, derived camera, Asha renderer mount, bridge exclusion shim, styling. |
-| Generated project content | 3 files / 8,092 lines | Two encounter/generation/combat variations and pretty-printed 256-body workload data. |
+| Rust game host and runners | 21 files / 6,051 lines | Concrete feature-owned components/services, routing, stored/legacy admission, scheduling, snapshots, presentation projection, headless/product/workload hosts. |
+| TypeScript content composition | 5 files / 417 lines | Typed definitions, optional schema-v7 candidate builder, encounter/generation/combat and motion builders, reproducibility check. |
+| TypeScript browser product shell | 8 files / 1,756 lines | Browser-owned input lifecycle, Rust-readout/mesh and feedback adapters, DOM/Web Audio realization, derived camera, Asha renderer mount, bridge exclusion shim, styling. |
+| Authored stored project | 1 file / 112 lines | Hand-authored loading-bay catalog, scene, relationships, components, and voxel source loaded directly by Rust. |
+| Generated legacy/workload content | 3 files / 8,092 lines | Retained schema-v6 migration evidence plus pretty-printed 256-body workload data. |
 
 The Rust object/component model is currently the largest single file, followed by generation and
 snapshot code. They are explicit and easy to trace, but a later slice should test whether small
@@ -501,6 +537,8 @@ generic replay machinery.
   fire-control copy, replay hashes, FPS session, or event-adaptation route.
 - Rich presentation can remain disposable above typed facts: dropped delivery, host failure, and
   restart do not require gameplay rollback, event replay, or a second authority.
+- A static multi-family project can be readable, strictly admitted, and product-driving without an
+  Asha bundle lifecycle or requiring its optional TypeScript producer at runtime.
 - The new capability's behavior has one owner; its expected amplification is model/command/snapshot
   binding plus admission and restore, not a cross-language protocol campaign.
 
@@ -512,9 +550,8 @@ should move or that all current leaf-donor arrangements are durable infrastructu
 
 Before calling this durable infrastructure:
 
-1. Schedule M5 stored scene/assets/project admission now that five heterogeneous runtime and
-   presentation families have settled the concrete schema consumers; keep project content distinct
-   from runtime snapshots.
+1. Implement M6 canonical project persistence and one explicit schema-v6 migration while keeping
+   authored projects distinct from runtime snapshots.
 2. Decide whether sibling donor references become pinned Git dependencies, vendored crates, or a
    shared foundation repository before Asha resumes development.
 3. Add safe allocation telemetry and a longer mixed workload; the current matrix measures isolated

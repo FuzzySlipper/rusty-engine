@@ -773,10 +773,16 @@ restart rebuilds only current posture; a failed audio sink cannot change accepte
 supports treating Rusty Engine as the durable successor, without implying that Asha should be
 ported wholesale.
 
-The next ready closure is M5: admit a real stored scene/project with asset identities, several
-settled entity component families, and precise diagnostics. It should harvest only concrete
-foundation concepts and must keep authored project persistence distinct from live-session
-snapshots or any replay history.
+M5 now passes. A hand-authored schema-v7 loading-bay project declares a typed asset catalog, entry
+scene, voxel source, relationships, and all settled component families. One direct Rust path
+resolves and validates it before constructing concrete session/spatial state; path-bearing failures
+remain local diagnostics rather than a bus. The real Chromium product loads this artifact without
+TypeScript, while an optional TypeScript builder deep-equals the same candidate. Runtime snapshot
+reopen remains a separate concrete-state format with no project catalog, event history, or
+TypeScript state.
+
+The next ready closure is M6: add canonical project encoding, a real schema-v6-to-v7 migration, and
+recoverable durable project writes while preserving that project/session separation.
 
 ## Source basis
 

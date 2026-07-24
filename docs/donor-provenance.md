@@ -107,6 +107,13 @@ prefabs, voxel annotations, and project load plans. They remain explicit exclusi
 schema-v7 artifact, successor-owned serde shapes, and local structured diagnostic value are not wire
 protocols, provider envelopes, or a second compiler authority.
 
+The M5 implementation is pinned by
+`cfa3aea016a14113c2b1969b209d40d66eb46bf0` (document/types/diagnostics and donor boundary),
+`d29a1b01681f60e3fbec40bfd53262ef33e80231` (all-or-nothing Rust admission), and
+`6fedb77302628cc00bfbee4576a4bf3029ea2554` (static product host, optional equivalent TypeScript
+candidate, content variation, and project/session persistence proof). No Asha catalog, scene,
+diagnostics, serialization, project-content, or bundle crate entered in those changes.
+
 Sibling references are intentional while Asha development is stopped for this decision. If this
 lab becomes a durable independent successor, the references should be pinned as Git dependencies,
 vendored with this ledger, or moved into a shared foundation repository before Asha resumes.
