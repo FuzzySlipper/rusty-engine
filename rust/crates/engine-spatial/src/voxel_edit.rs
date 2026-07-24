@@ -14,6 +14,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::{CollisionSceneError, MaterialVoxel, VoxelCollisionScene};
+
 /// One UI or tool transaction cannot silently expand into unbounded work.
 pub const MAX_VOXEL_EDITS_PER_TRANSACTION: usize = 4_096;
 /// Keeps chunk addressing and projection work in a reviewable world-space span.
@@ -118,6 +120,7 @@ pub enum VoxelEditRejection {
         duplicate_index: usize,
         address: [i64; 3],
     },
+    NoChanges,
 }
 
 impl std::fmt::Display for VoxelEditRejection {
@@ -127,6 +130,23 @@ impl std::fmt::Display for VoxelEditRejection {
 }
 
 impl std::error::Error for VoxelEditRejection {}
+
+#[derive(Debug)]
+pub enum VoxelEditApplyError {
+    Rejected(VoxelEditRejection),
+    ProjectionBuild(CollisionSceneError),
+}
+
+impl std::fmt::Display for VoxelEditApplyError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rejected(rejection) => rejection.fmt(formatter),
+            Self::ProjectionBuild(error) => write!(formatter, "projection rebuild failed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for VoxelEditApplyError {}
 
 /// Evidence that every derived consumer was built from one accepted authority.
 /// The only constructor fills every projection from the same revision, so this
@@ -171,6 +191,8 @@ impl VoxelProjectionRevisions {
 pub struct VoxelEditFact {
     pub revision: VoxelSourceRevision,
     pub changed_voxels: usize,
+    pub changed_min: [i64; 3],
+    pub changed_max_inclusive: [i64; 3],
 }
 
 /// Compact success evidence; concrete voxel authority remains on the scene.
@@ -249,6 +271,92 @@ impl VoxelEditService {
             revision_after,
             canonical_edits: by_address.into_values().map(|(_, edit)| edit).collect(),
         })
+    }
+
+    /// Validate, derive, rebuild, then swap one complete coherent scene. The
+    /// input scene remains byte-for-byte observable through its public values if
+    /// validation or any projection build fails.
+    pub fn apply(
+        scene: &mut VoxelCollisionScene,
+        transaction: VoxelEditTransaction<'_>,
+    ) -> Result<VoxelEditReceipt, VoxelEditApplyError> {
+        let accepted = Self::validate_transaction(scene.source_revision, transaction)
+            .map_err(VoxelEditApplyError::Rejected)?;
+        let mut materials: BTreeMap<[i64; 3], u16> = scene
+            .material_voxels
+            .iter()
+            .map(|voxel| (voxel.address, voxel.material_slot))
+            .collect();
+        let mut changed = Vec::new();
+        for edit in accepted.canonical_edits.iter().copied() {
+            match edit {
+                VoxelEdit::Set {
+                    address,
+                    material_slot,
+                } => {
+                    if materials.get(&address).copied() != Some(material_slot) {
+                        materials.insert(address, material_slot);
+                        changed.push(address);
+                    }
+                }
+                VoxelEdit::Clear { address } => {
+                    if materials.remove(&address).is_some() {
+                        changed.push(address);
+                    }
+                }
+            }
+        }
+        if changed.is_empty() {
+            return Err(VoxelEditApplyError::Rejected(VoxelEditRejection::NoChanges));
+        }
+
+        let material_voxels = materials
+            .into_iter()
+            .map(|(address, material_slot)| MaterialVoxel {
+                address,
+                material_slot,
+            });
+        let rebuilt = VoxelCollisionScene::build_at_revision(
+            scene.voxel_size,
+            scene.chunk_size,
+            material_voxels,
+            None,
+            accepted.revision_after,
+        )
+        .map_err(VoxelEditApplyError::ProjectionBuild)?;
+        let changed_min = [0, 1, 2].map(|axis| {
+            changed
+                .iter()
+                .map(|address| address[axis])
+                .min()
+                .expect("at least one changed voxel")
+        });
+        let changed_max_inclusive = [0, 1, 2].map(|axis| {
+            changed
+                .iter()
+                .map(|address| address[axis])
+                .max()
+                .expect("at least one changed voxel")
+        });
+        let fact = VoxelEditFact {
+            revision: accepted.revision_after,
+            changed_voxels: changed.len(),
+            changed_min,
+            changed_max_inclusive,
+        };
+        let receipt = VoxelEditReceipt {
+            revision_before: accepted.revision_before,
+            accepted_revision: accepted.revision_after,
+            solid_voxel_count: rebuilt.solid_voxel_count(),
+            authority_hash: rebuilt.authority_hash(),
+            projections: rebuilt.projection_revisions(),
+            fact,
+        };
+        debug_assert!(receipt
+            .projections
+            .is_coherent_with(receipt.accepted_revision));
+        *scene = rebuilt;
+        Ok(receipt)
     }
 }
 

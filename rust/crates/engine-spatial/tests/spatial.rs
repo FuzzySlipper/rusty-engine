@@ -1,7 +1,9 @@
 use core_ids::EntityId;
 use core_math::Vec3;
 use engine_spatial::{
-    GeneratedRoomConfig, KinematicMotionSystem, MotionAxis, MotionFact, VoxelCollisionScene,
+    GeneratedRoomConfig, KinematicMotionSystem, MaterialVoxel, MotionAxis, MotionFact,
+    VoxelCollisionScene, VoxelEdit, VoxelEditApplyError, VoxelEditRejection, VoxelEditService,
+    VoxelEditTransaction, VoxelSourceRevision,
 };
 use entity_state::{EntityDefinition, EntityState};
 
@@ -181,6 +183,200 @@ fn bounded_room_fixture_stays_one_chunk_with_reviewable_mesh_counts() {
     assert_eq!(scene.resident_chunk_count(), 1);
     assert!(scene.solid_voxel_count() < 2_000);
     assert!(mesh.vertices < 20_000);
+}
+
+#[test]
+fn edit_rebuilds_collision_navigation_and_mesh_then_removal_is_reversible() {
+    let mut scene = VoxelCollisionScene::from_generated_room(room_config(4)).unwrap();
+    let pillar = scene.generated_room().unwrap().1.pillar_voxel;
+    let baseline_voxels = scene.material_voxels().to_vec();
+    let baseline_mesh = scene.mesh_chunks().to_vec();
+    let baseline_hash = scene.authority_hash();
+    let baseline_navigation_hash = scene.navigation_hash();
+    let route_before = route_across_pillar(&scene);
+    assert_eq!(
+        scene
+            .raycast([1.5, 1.5, 6.5], [1.0, 0.0, 0.0], 16.0)
+            .unwrap()
+            .voxel,
+        pillar
+    );
+
+    let clear = [VoxelEdit::Clear { address: pillar }];
+    let cleared = VoxelEditService::apply(
+        &mut scene,
+        VoxelEditTransaction {
+            expected_revision: VoxelSourceRevision::INITIAL,
+            edits: &clear,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(cleared.revision_before.raw(), 0);
+    assert_eq!(cleared.accepted_revision.raw(), 1);
+    assert_eq!(cleared.fact.changed_voxels, 1);
+    assert_eq!(cleared.fact.changed_min, pillar);
+    assert_eq!(cleared.fact.changed_max_inclusive, pillar);
+    assert!(cleared
+        .projections
+        .is_coherent_with(cleared.accepted_revision));
+    assert_eq!(scene.source_revision(), cleared.accepted_revision);
+    assert_eq!(scene.projection_revisions(), cleared.projections);
+    assert!(scene.generated_room().is_none());
+    assert!(!scene.contains_point(voxel_center(pillar)));
+    assert!(!scene.aabb_overlaps_solid(
+        [pillar[0] as f64 + 0.1, 1.1, pillar[2] as f64 + 0.1],
+        [pillar[0] as f64 + 0.9, 1.9, pillar[2] as f64 + 0.9],
+    ));
+    assert_ne!(
+        scene
+            .raycast([1.5, 1.5, 6.5], [1.0, 0.0, 0.0], 16.0)
+            .unwrap()
+            .voxel,
+        pillar
+    );
+    assert!(route_across_pillar(&scene).path_len < route_before.path_len);
+    assert_ne!(scene.navigation_hash(), baseline_navigation_hash);
+    assert_ne!(scene.mesh_chunks(), baseline_mesh);
+
+    let restore = [VoxelEdit::Set {
+        address: pillar,
+        material_slot: 3,
+    }];
+    let restored = VoxelEditService::apply(
+        &mut scene,
+        VoxelEditTransaction {
+            expected_revision: cleared.accepted_revision,
+            edits: &restore,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(restored.accepted_revision.raw(), 2);
+    assert_eq!(scene.material_voxels(), baseline_voxels);
+    assert_eq!(scene.authority_hash(), baseline_hash);
+    assert_eq!(scene.navigation_hash(), baseline_navigation_hash);
+    assert_eq!(scene.mesh_chunks(), baseline_mesh);
+    assert!(scene.contains_point(voxel_center(pillar)));
+    assert_eq!(route_across_pillar(&scene).path_len, route_before.path_len);
+}
+
+#[test]
+fn rejected_edit_leaves_authority_and_every_projection_unchanged() {
+    let mut scene = VoxelCollisionScene::from_generated_room(room_config(4)).unwrap();
+    let before_voxels = scene.material_voxels().to_vec();
+    let before_mesh = scene.mesh_chunks().to_vec();
+    let before_hash = scene.authority_hash();
+    let before_navigation = scene.navigation_hash();
+    let before_revision = scene.source_revision();
+    let duplicate = [
+        VoxelEdit::Clear { address: [1, 1, 1] },
+        VoxelEdit::Set {
+            address: [1, 1, 1],
+            material_slot: 2,
+        },
+    ];
+
+    assert!(matches!(
+        VoxelEditService::apply(
+            &mut scene,
+            VoxelEditTransaction {
+                expected_revision: before_revision,
+                edits: &duplicate,
+            }
+        ),
+        Err(VoxelEditApplyError::Rejected(
+            VoxelEditRejection::DuplicateAddress { .. }
+        ))
+    ));
+    assert_eq!(scene.material_voxels(), before_voxels);
+    assert_eq!(scene.mesh_chunks(), before_mesh);
+    assert_eq!(scene.authority_hash(), before_hash);
+    assert_eq!(scene.navigation_hash(), before_navigation);
+    assert_eq!(scene.source_revision(), before_revision);
+
+    assert!(matches!(
+        VoxelEditService::apply(
+            &mut scene,
+            VoxelEditTransaction {
+                expected_revision: VoxelSourceRevision::new(9),
+                edits: &[VoxelEdit::Clear { address: [1, 1, 1] }],
+            }
+        ),
+        Err(VoxelEditApplyError::Rejected(
+            VoxelEditRejection::StaleRevision { .. }
+        ))
+    ));
+    assert_eq!(scene.material_voxels(), before_voxels);
+    assert_eq!(scene.mesh_chunks(), before_mesh);
+    assert_eq!(scene.authority_hash(), before_hash);
+    assert_eq!(scene.navigation_hash(), before_navigation);
+    assert_eq!(scene.source_revision(), before_revision);
+}
+
+#[test]
+fn accepted_edit_order_does_not_change_authority_receipt_or_projections() {
+    let initial = [MaterialVoxel {
+        address: [0, 0, 0],
+        material_slot: 1,
+    }];
+    let mut left = VoxelCollisionScene::from_material_voxels(1.0, 8, initial).unwrap();
+    let mut right = VoxelCollisionScene::from_material_voxels(1.0, 8, initial).unwrap();
+    let forward = [
+        VoxelEdit::Set {
+            address: [2, 1, 0],
+            material_slot: 3,
+        },
+        VoxelEdit::Clear { address: [0, 0, 0] },
+        VoxelEdit::Set {
+            address: [-2, 1, 0],
+            material_slot: 2,
+        },
+    ];
+    let reverse = [forward[2], forward[1], forward[0]];
+
+    let left_receipt = VoxelEditService::apply(
+        &mut left,
+        VoxelEditTransaction {
+            expected_revision: VoxelSourceRevision::INITIAL,
+            edits: &forward,
+        },
+    )
+    .unwrap();
+    let right_receipt = VoxelEditService::apply(
+        &mut right,
+        VoxelEditTransaction {
+            expected_revision: VoxelSourceRevision::INITIAL,
+            edits: &reverse,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(left_receipt, right_receipt);
+    assert_eq!(left.material_voxels(), right.material_voxels());
+    assert_eq!(left.authority_hash(), right.authority_hash());
+    assert_eq!(left.navigation_hash(), right.navigation_hash());
+    assert_eq!(left.mesh_chunks(), right.mesh_chunks());
+}
+
+fn route_across_pillar(scene: &VoxelCollisionScene) -> engine_spatial::NavigationStep {
+    scene
+        .navigation_step(
+            Vec3::new(1.5, 1.5, 6.5),
+            Vec3::new(7.5, 1.5, 6.5),
+            Vec3::ZERO,
+            0.1,
+            512,
+        )
+        .unwrap()
+}
+
+fn voxel_center(address: [i64; 3]) -> [f64; 3] {
+    [
+        address[0] as f64 + 0.5,
+        address[1] as f64 + 0.5,
+        address[2] as f64 + 0.5,
+    ]
 }
 
 fn room_config(seed: u64) -> GeneratedRoomConfig {

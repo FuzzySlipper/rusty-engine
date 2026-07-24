@@ -11,9 +11,10 @@
 mod voxel_edit;
 
 pub use voxel_edit::{
-    ValidatedVoxelEditTransaction, VoxelEdit, VoxelEditFact, VoxelEditReceipt, VoxelEditRejection,
-    VoxelEditService, VoxelEditTransaction, VoxelProjectionRevisions, VoxelSourceRevision,
-    MAX_VOXEL_COORDINATE_ABS, MAX_VOXEL_EDITS_PER_TRANSACTION, MAX_VOXEL_MATERIAL_SLOT,
+    ValidatedVoxelEditTransaction, VoxelEdit, VoxelEditApplyError, VoxelEditFact, VoxelEditReceipt,
+    VoxelEditRejection, VoxelEditService, VoxelEditTransaction, VoxelProjectionRevisions,
+    VoxelSourceRevision, MAX_VOXEL_COORDINATE_ABS, MAX_VOXEL_EDITS_PER_TRANSACTION,
+    MAX_VOXEL_MATERIAL_SLOT,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -116,6 +117,9 @@ pub struct VoxelCollisionScene {
     material_voxels: Vec<MaterialVoxel>,
     mesh_chunks: Vec<VoxelMeshChunk>,
     generated_room: Option<(GeneratedRoomConfig, GeneratedRoomRecord)>,
+    source_revision: VoxelSourceRevision,
+    projection_revisions: VoxelProjectionRevisions,
+    authority_hash: u64,
 }
 
 impl std::fmt::Debug for VoxelCollisionScene {
@@ -127,6 +131,8 @@ impl std::fmt::Debug for VoxelCollisionScene {
             .field("solid_voxel_count", &self.solid_voxels.len())
             .field("mesh_chunk_count", &self.mesh_chunks.len())
             .field("generated_room", &self.generated_room)
+            .field("source_revision", &self.source_revision)
+            .field("authority_hash", &self.authority_hash)
             .field(
                 "resident_chunk_count",
                 &self.voxel_world.resident_chunks().count(),
@@ -237,6 +243,22 @@ impl VoxelCollisionScene {
         voxels: impl IntoIterator<Item = MaterialVoxel>,
         generated_room: Option<(GeneratedRoomConfig, GeneratedRoomRecord)>,
     ) -> Result<Self, CollisionSceneError> {
+        Self::build_at_revision(
+            voxel_size,
+            chunk_size,
+            voxels,
+            generated_room,
+            VoxelSourceRevision::INITIAL,
+        )
+    }
+
+    fn build_at_revision(
+        voxel_size: f64,
+        chunk_size: u32,
+        voxels: impl IntoIterator<Item = MaterialVoxel>,
+        generated_room: Option<(GeneratedRoomConfig, GeneratedRoomRecord)>,
+        source_revision: VoxelSourceRevision,
+    ) -> Result<Self, CollisionSceneError> {
         if !(1..=MAX_CHUNK_SIZE).contains(&chunk_size) {
             return Err(CollisionSceneError::InvalidChunkSize);
         }
@@ -267,6 +289,7 @@ impl VoxelCollisionScene {
                 material_slot,
             })
             .collect();
+        let authority_hash = hash_material_voxels(&material_voxels);
         let solid_voxels: Vec<_> = material_voxels.iter().map(|voxel| voxel.address).collect();
         let mut chunks = BTreeMap::new();
 
@@ -312,6 +335,9 @@ impl VoxelCollisionScene {
             material_voxels,
             mesh_chunks,
             generated_room,
+            source_revision,
+            projection_revisions: VoxelProjectionRevisions::coherent(source_revision),
+            authority_hash,
         })
     }
 
@@ -341,6 +367,18 @@ impl VoxelCollisionScene {
 
     pub fn generated_room(&self) -> Option<(GeneratedRoomConfig, GeneratedRoomRecord)> {
         self.generated_room
+    }
+
+    pub const fn source_revision(&self) -> VoxelSourceRevision {
+        self.source_revision
+    }
+
+    pub const fn projection_revisions(&self) -> VoxelProjectionRevisions {
+        self.projection_revisions
+    }
+
+    pub const fn authority_hash(&self) -> u64 {
+        self.authority_hash
     }
 
     pub fn resident_chunk_count(&self) -> usize {
@@ -634,6 +672,18 @@ fn hash_generated_room(config: GeneratedRoomConfig, voxels: &[MaterialVoxel]) ->
     ] {
         feed_hash(&mut hash, &value.to_le_bytes());
     }
+    for voxel in voxels {
+        for coordinate in voxel.address {
+            feed_hash(&mut hash, &coordinate.to_le_bytes());
+        }
+        feed_hash(&mut hash, &voxel.material_slot.to_le_bytes());
+    }
+    hash
+}
+
+fn hash_material_voxels(voxels: &[MaterialVoxel]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    feed_hash(&mut hash, &(voxels.len() as u64).to_le_bytes());
     for voxel in voxels {
         for coordinate in voxel.address {
             feed_hash(&mut hash, &coordinate.to_le_bytes());
