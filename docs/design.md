@@ -40,7 +40,8 @@ downstream game
                      +--> entity-state
                      +--> engine-spatial -------------------+
                      +--> voxel-asset                       |
-                     +--> render-model --> render-projection|
+                     +--> render-model --> render-projection----+
+                                      \-> render-presentation---|
                                                           v
 foundation: core-assets / core-ids / core-math / core-space / core-time / core-voxel
 services:   svc-volume / svc-spatial / svc-collision / svc-pathfinding / svc-rng / svc-mesh
@@ -114,6 +115,15 @@ accepts one ordinary appearance/resource aggregate; debug projection accepts typ
 projector computes against cloned retained state, validates the complete frame, and commits stable
 handles only when construction succeeds. Missing resources are classified rather than resolved
 through an ambient registry.
+
+`render-presentation` owns the other renderer-neutral family: typed audio sources and impulses,
+world/entity billboards, bounded particle emitters and bursts, telemetry overlay requests, and
+animation graph/controller/playback projection. Its controller is an explicitly invoked mechanism,
+not an update loop or gameplay behavior graph. Fixed-point parameters, stable priority ordering,
+transition timing, and blend resolution remain deterministic; persistence journals, certification
+hashes, and provenance envelopes do not exist. Every projector can validate a complete domain
+batch, while `PresentationProjectorSet` provides one fail-atomic mixed-domain frame boundary.
+Resource checks use only immutable kind/content identity supplied by the caller.
 
 The isolated `render/` workspace realizes the same contract for Three, WebGL, WebAudio, DOM
 overlays, inspection, and editor viewport use. It is installed and verified separately from the

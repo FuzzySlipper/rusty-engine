@@ -1,0 +1,12 @@
+[package]
+name = "render-presentation"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+render-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true

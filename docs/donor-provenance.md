@@ -54,6 +54,30 @@ replay records, certification hashes, provider registries, and generated-tunnel 
 not copied. Shared-buffer IDs in the render model are scoped renderer-resource references, not a
 general runtime bridge.
 
+### M11R Rust presentation adaptation
+
+Task #6159 consolidates the donor `protocol-presentation`, `rule-animation-controller`, the small
+state-transition semantics it used from `rule-state-machine`, and `render-animation`,
+`render-audio`, `render-billboard`, `render-particle`, and `render-telemetry-overlay` into the
+successor-owned `render-presentation` crate. The complete useful behavior remains: strict graph and
+clip validation, typed fixed-point parameters, priority-ordered conditions, triggers, transition
+timing, linear blend resolution, explicit controller attach/detach/reset, retained animation
+bindings, retained and one-shot audio, localized/value/icon billboards, bounded seeded particle
+emitters and bursts, telemetry overlay descriptors, classified diagnostics, readouts, and reset.
+Domain batches and mixed-domain frames stage state and commit only after every operation succeeds.
+
+The new dependency shape is `render-model` plus serde/JSON. Asset validation receives an immutable
+lookup exposing only resolved id, kind, content hash, and version; render targets are another
+read-only membership view. The animation service is called directly by downstream code and owns no
+ambient update loop. The checked `fixtures/render/presentation-frame-v1.json` is the portable
+cross-language frame for the isolated renderer workspace.
+
+Input journals, stored controller snapshots, catalog/graph/state hashes, generic state-machine
+authority ids, mandatory source-fact envelopes, causation/correlation matching, global runtime
+frames, project catalogs, renderer objects, and host sampling were deliberately not transferred.
+Transition facts now describe only the typed local transition; downstream code decides whether
+that observation has game meaning. No donor crate or sibling checkout is a build dependency.
+
 ## Crate portability inventory
 
 The historical donor's

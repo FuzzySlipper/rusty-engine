@@ -1,0 +1,211 @@
+{
+  "schemaVersion": 1,
+  "ops": [
+    {
+      "domain": "audio",
+      "meta": {
+        "sequence": 0
+      },
+      "op": {
+        "op": "emit",
+        "signalId": "fixture:pulse",
+        "descriptor": {
+          "clip": {
+            "asset": "audio/pulse",
+            "contentHash": "aa"
+          },
+          "bus": "sfx",
+          "volume": 0.8,
+          "pitch": 1.0,
+          "looping": false,
+          "spatialBlend": 0.0,
+          "attenuation": 10.0,
+          "pan": 0.0,
+          "emitter": {
+            "kind": "global2d"
+          }
+        }
+      }
+    },
+    {
+      "domain": "billboard",
+      "meta": {
+        "sequence": 1
+      },
+      "op": {
+        "op": "create",
+        "handle": 1,
+        "descriptor": {
+          "anchor": {
+            "kind": "world",
+            "position": [
+              1.0,
+              2.0,
+              3.0
+            ]
+          },
+          "content": {
+            "kind": "text",
+            "localizationKey": "fixture.label",
+            "fallbackText": "Fixture",
+            "arguments": [
+              {
+                "name": "value",
+                "value": "42"
+              }
+            ]
+          },
+          "font": {
+            "kind": "system",
+            "family": "sans-serif"
+          },
+          "heightPixels": 24.0,
+          "color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "background": [
+            0.0,
+            0.0,
+            0.0,
+            0.5
+          ],
+          "maxDistance": 50.0,
+          "layer": "depthTested",
+          "visible": true
+        }
+      }
+    },
+    {
+      "domain": "particle",
+      "meta": {
+        "sequence": 2
+      },
+      "op": {
+        "op": "emit",
+        "signalId": "fixture:sparks",
+        "descriptor": {
+          "anchor": {
+            "kind": "world",
+            "position": [
+              0.0,
+              1.0,
+              0.0
+            ]
+          },
+          "sprite": {
+            "asset": "sprite-sheet/sparks",
+            "contentHash": "dd",
+            "frameCount": 4
+          },
+          "ratePerSecond": 8.0,
+          "burstCount": 4,
+          "lifetimeSeconds": [
+            0.2,
+            0.6
+          ],
+          "velocityMin": [
+            -1.0,
+            1.0,
+            -1.0
+          ],
+          "velocityMax": [
+            1.0,
+            2.0,
+            1.0
+          ],
+          "acceleration": [
+            0.0,
+            -4.0,
+            0.0
+          ],
+          "sizeCurve": [
+            {
+              "age": 0.0,
+              "value": 0.25
+            },
+            {
+              "age": 1.0,
+              "value": 0.0
+            }
+          ],
+          "colorCurve": [
+            {
+              "age": 0.0,
+              "color": [
+                1.0,
+                0.8,
+                0.2,
+                1.0
+              ]
+            },
+            {
+              "age": 1.0,
+              "color": [
+                1.0,
+                0.2,
+                0.0,
+                0.0
+              ]
+            }
+          ],
+          "flipbookFramesPerSecond": 12.0,
+          "seed": 7,
+          "maxParticles": 32,
+          "visible": true
+        }
+      }
+    },
+    {
+      "domain": "telemetryOverlay",
+      "meta": {
+        "sequence": 3
+      },
+      "op": {
+        "op": "create",
+        "handle": 1,
+        "descriptor": {
+          "title": "Frame telemetry",
+          "corner": "topRight",
+          "refreshIntervalMs": 250,
+          "maxFrameTimeSamples": 60,
+          "visible": true
+        }
+      }
+    },
+    {
+      "domain": "animation",
+      "meta": {
+        "sequence": 4
+      },
+      "op": {
+        "op": "create",
+        "handle": 1,
+        "descriptor": {
+          "target": 42,
+          "asset": "animated-mesh/hero",
+          "contentHash": "ff",
+          "tickDurationMillis": 16,
+          "controller": {
+            "entity": 42,
+            "graphId": "hero.locomotion",
+            "graphVersion": 2,
+            "stateId": "idle",
+            "revision": 0,
+            "controllerTick": 0,
+            "motion": {
+              "clipA": "idle",
+              "clipB": null,
+              "blendWeightMilli": 0,
+              "speedMilli": 1000
+            },
+            "transition": null,
+            "transitionFact": null
+          }
+        }
+      }
+    }
+  ]
+}

@@ -17,7 +17,8 @@ downstream game policy and orchestration
              +--> entity-state
              +--> engine-spatial --> core-* / svc-*
              +--> voxel-asset
-             +--> render-model --> render-projection --> retained JSON
+             +--> render-model --> render-projection ----+--> retained JSON
+                              \-> render-presentation ----+
 
 offline authoring input --> voxel-convert --> canonical voxel-asset JSON
 
@@ -29,8 +30,10 @@ typed entity capabilities and an atomic mutation boundary. `engine-spatial` comp
 voxel authority with derived collision, navigation, mesh, motion, and edit operations. The smaller
 `core-*` and `svc-*` crates remain independently useful implementation layers. `voxel-asset` and
 `voxel-convert` define a strict durable artifact and a bounded offline producer. `render-model` and
-`render-projection` provide the complete renderer-neutral border and fail-atomic adapters; the
-separately gated `render/` workspace is shared by downstream demo and Studio consumers.
+`render-projection` provide the complete retained-scene border and fail-atomic adapters.
+`render-presentation` provides bounded animation, audio, billboard, particle, and telemetry
+mechanisms with no gameplay or renderer authority. The separately gated `render/` workspace is
+shared by downstream demo and Studio consumers.
 
 The implemented ownership and promotion rules are in [docs/design.md](docs/design.md).
 
@@ -44,6 +47,7 @@ The implemented ownership and promotion rules are in [docs/design.md](docs/desig
 | `rust/crates/voxel-convert` | Bounded offline GLB conversion and atomic artifact installation |
 | `rust/crates/render-model` | Complete versioned retained-frame vocabulary and validation |
 | `rust/crates/render-projection` | Entity, authored, voxel, lighting/material, and debug projection |
+| `rust/crates/render-presentation` | Animation controllers and disposable audio, billboard, particle, telemetry projection |
 | `render` | Isolated TypeScript retained projection, Three backend, and renderer hosts |
 | `rust/crates/core-*` | Small identity, math, time, space, voxel, and asset-reference foundations |
 | `rust/crates/svc-*` | Focused volume, spatial, collision, pathfinding, RNG, and mesh mechanisms |

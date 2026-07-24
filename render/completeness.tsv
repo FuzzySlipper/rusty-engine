@@ -13,12 +13,12 @@ voxel-projection	adapted	render-bridge voxel chunks materials dirty reprojection
 authored-projection	adapted	render-bridge scene preview runtime projection materials sprites and lights	render-projection	rust/crates/render-projection/src/authored.rs
 debug-projection	adapted	render-debug primitives labels tags and deterministic overlay frames	render-projection	rust/crates/render-projection/src/debug.rs
 json-contract	planned	render-bridge JSON codec fixtures and Rust to TypeScript contract	render-model render/packages/render-contracts	#6158 #6160
-animation-controller	planned	rule-state-machine and rule-animation-controller graphs parameters blends transitions timing	render-presentation	#6159
-animation-projection	planned	render-animation retained bindings playback state and transition projection	render-presentation	#6159
-audio-projection	planned	render-audio retained and one-shot sources validation diagnostics readout reset	render-presentation	#6159
-billboard-projection	planned	render-billboard anchors text values icons fonts lifecycle diagnostics	render-presentation	#6159
-particle-projection	planned	render-particle bounded emitters bursts curves sprites lifecycle diagnostics	render-presentation	#6159
-telemetry-projection	planned	render-telemetry-overlay retained descriptors snapshots lifecycle diagnostics	render-presentation	#6159
+animation-controller	adapted	rule-state-machine and rule-animation-controller graphs parameters blends transitions timing	render-presentation	rust/crates/render-presentation/src/animation/model.rs rust/crates/render-presentation/src/animation/controller.rs rust/crates/render-presentation/tests/animation.rs
+animation-projection	adapted	render-animation retained bindings playback state and transition projection	render-presentation	rust/crates/render-presentation/src/animation/projection.rs rust/crates/render-presentation/tests/animation.rs
+audio-projection	adapted	render-audio retained and one-shot sources validation diagnostics readout reset	render-presentation	rust/crates/render-presentation/src/audio.rs rust/crates/render-presentation/tests/domain_projectors.rs
+billboard-projection	adapted	render-billboard anchors text values icons fonts lifecycle diagnostics	render-presentation	rust/crates/render-presentation/src/billboard.rs rust/crates/render-presentation/tests/domain_projectors.rs
+particle-projection	adapted	render-particle bounded emitters bursts curves sprites lifecycle diagnostics	render-presentation	rust/crates/render-presentation/src/particle.rs rust/crates/render-presentation/tests/domain_projectors.rs
+telemetry-projection	adapted	render-telemetry-overlay retained descriptors snapshots lifecycle diagnostics	render-presentation	rust/crates/render-presentation/src/telemetry.rs rust/crates/render-presentation/tests/domain_projectors.rs
 three-core	planned	renderer-three retained object hierarchy primitives transforms mesh application snapshots disposal	render/packages/renderer-three	#6160
 three-resources	planned	renderer-three shared static animated meshes GLB materials textures sprites lights shadows	render/packages/renderer-three	#6160
 browser-surface	planned	renderer-three WebGL surface camera world projection resize render loop and cleanup	render/packages/renderer-three	#6160

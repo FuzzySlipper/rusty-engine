@@ -421,6 +421,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "render-presentation"
+version = "0.1.0"
+dependencies = [
+ "render-model",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "render-projection"
 version = "0.1.0"
 dependencies = [
