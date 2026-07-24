@@ -1,6 +1,6 @@
 # Asha Object-Centric Successor Spine
 
-Status: walking falsification spike and first six migration families complete; voxel editing ready
+Status: walking falsification spike and first seven migration families complete; voxel asset conversion ready
 Working location: `/home/dev/rusty-engine`
 Asha donor snapshot inspected: `a431974330589761c9e35fc4f8a55996a1b5ee48`
 Decision scope: a possible successor for Asha's runtime/application spine, not a decision to replace the whole engine
@@ -763,7 +763,7 @@ Further walking-slice evidence should decide:
 
 ## Recommended next action
 
-The planned falsification slices and the first six migration families now pass: direct gameplay
+The planned falsification slices and the first seven migration families now pass: direct gameplay
 services, content-only variation, cross-domain typed consequences, localized engine capabilities,
 substantial spatial/collision/query reuse, real-time multi-entity pressure, combat, persistence, and
 the retained browser product path. M4 additionally proves that typed movement/combat/door outcomes
@@ -793,9 +793,18 @@ Chromium path, then migrates the retained schema-v6 fixture and runs it through 
 host. A separate live snapshot reopens changed pose, health, ammo/cooldown, door, and tick values;
 the authored project save contains none of them.
 
-The next ready closure is M7A: one typed authoritative voxel-edit transaction that rebuilds
-collision, navigation, and mesh from the same accepted revision, followed by M7B's bounded real
-asset conversion into the admitted voxel form.
+M7A now passes. One successor-owned `VoxelEditService` validates a bounded expected-revision set/
+clear transaction, rebuilds collision, navigation, and mesh away from live authority, and swaps only
+the coherent next-revision scene. Real Chromium observes the changed mesh and navigation path and
+moves the actual player through the cleared voxel; reset restores blocking, while a stale request
+changes nothing. Snapshot schema 9 retains concrete edited authority and its live revision. Explicit
+project save instead re-admits a static schema-v7 material-voxel environment at a fresh live
+revision, with no edit request, fact, event, history, or replay record. A 256-transaction release
+workload averages 522.4 us per full rebuild in the current 366-voxel room, so incremental scheduling
+has not yet earned its complexity.
+
+The next ready closure is M7B's bounded real-asset conversion into the same admitted voxel form.
+M7C annotations/history remains deliberately unscheduled until a named consumer appears.
 
 ## Source basis
 

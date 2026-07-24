@@ -142,7 +142,16 @@ import Asha's global voxel command/event union, preview/apply protocol, replay d
 generation command, edit history, persistence callbacks, scene composition, or diagnostics tool.
 `VoxelEditService` instead owns only the live product's typed set/clear transaction, stale-source
 revision check, and atomic collision/navigation/mesh coherence rule. Runtime snapshot and explicit
-project save will persist concrete accepted material voxels, not events or history.
+project save persist concrete accepted material voxels, not events or history.
+
+The M7A implementation is pinned by
+`cddf89f79201a7ae657beffbdd3dd87fb84f818f` (successor transaction/revision/limit vocabulary),
+`eb5ee0b177e3568b5b52f2492d6503123ad94519` (atomic material authority and full coherent
+projection rebuild), and `e4db64716ef9d5a9bb07d9d0048b94737cd09850` (snapshot/project
+materialization, typed product route, Chromium/persistence proof, and bounded workload). No Asha
+edit rule, command/event protocol, diagnostics, history, persistence, or scene-composition crate was
+added. Existing unchanged spatial/collision/navigation/mesh donors remain beneath the
+successor-owned scene and service.
 
 Sibling references are intentional while Asha development is stopped for this decision. If this
 lab becomes a durable independent successor, the references should be pinned as Git dependencies,

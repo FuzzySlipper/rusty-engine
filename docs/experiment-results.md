@@ -1,6 +1,6 @@
 # Experiment results
 
-Status: walking falsification slices and the first six scheduled migration families implemented
+Status: walking falsification slices and the first seven scheduled migration families implemented
 on 2026-07-23 and tracked in Den.
 
 ## Current decision
@@ -279,7 +279,8 @@ unless the stored configuration shape itself changes.
 The default inline mesh JSON is about 96 KB and is currently included in every action response even
 though the browser retains it by content hash. This is bounded and not a per-frame authority bridge,
 but it is accepted temporary transport waste. The generator is also intentionally immutable and
-single-chunk in this slice; neighbor-sensitive live remeshing belongs to M7A invalidation work.
+single-chunk in this slice. M7A later measured a bounded full-scene rebuild and retained
+neighbor-sensitive dirtying as evidence for a future incremental path only if larger worlds need it.
 
 ### Weapon combat, health, and encounter consequence
 
@@ -311,7 +312,7 @@ same canonical voxel projection already used by movement and navigation. On a le
 existing atomic collision/visibility/velocity change runs before health/enemy state commits, then
 the finite runtime drain applies encounter and door consequences exactly once.
 
-Health, remaining ammo, and `ready_at_tick` survive snapshot schema 8. An intermediate snapshot
+Health, remaining ammo, and `ready_at_tick` survive the current snapshot schema 9. An intermediate snapshot
 after nonlethal damage reopens with the same cooldown rejection, then both uninterrupted and
 reopened sessions advance to identical damage/defeat facts and the same open exit. Nine focused
 tests cover hit, no-target miss, voxel occlusion, cooldown and ammo eligibility, malformed
@@ -403,7 +404,7 @@ envelope, project load plan, or runtime facade.
 The optional `loadingBayStoredProject()` TypeScript builder deep-equals the static artifact but is
 not needed to load it. A seed-only candidate edit changes canonical material voxels and generated
 output hash without Rust or presentation changes. After admission, a changed player controller
-state round-trips through snapshot schema 8 identically; that snapshot has tick/components and no
+state round-trips through the current snapshot schema 9 identically; that snapshot has tick/components and no
 project identity/catalog/scenes, while the authored project has those declarations and no live tick,
 event history, or TypeScript state.
 
@@ -432,7 +433,8 @@ optional TypeScript candidate or stored schema-v6/v7 file
   -> canonical JSON -> synced same-directory pending file -> atomic install
 
 independent live GameRuntime
-  -> snapshot schema 8 with tick, current health/ammo/cooldown, pose, doors, schedules
+  -> snapshot schema 9 with tick, current health/ammo/cooldown, pose, doors, schedules,
+     and concrete edited voxel authority/revision
 ```
 
 The canonical encoder fixes object-field order through concrete structs, sorts catalog/scene/entity
@@ -475,6 +477,76 @@ M6 change amplification is explicit:
 Implementation commits are `5072f0c0a5cd03448c3543d6763f3dd9082fa54c`,
 `a3eae545558a8e47c652af9a159c708dd32eb950`, and
 `d17ed7f28d9d386072eb745f6ec1f5d789e89978`.
+
+### Live voxel editing and coherent rebuild
+
+M7A adds one named `VoxelEditService`, not a new runtime spine. Its request contains an expected
+source revision and at most 4,096 typed set/clear operations. Coordinates are limited to
+`[-1_000_000, 1_000_000]`, material slots to `1..=4_095`, and duplicate addresses are rejected
+rather than assigned order-dependent last-write meaning. Validation canonicalizes accepted edits by
+coordinate without touching the scene.
+
+Apply builds a new concrete material-voxel map and then fully derives `VoxelWorld`, Parry collision,
+navigation, and retained mesh away from the live scene. Only after every derivation succeeds does
+one scene swap expose the next source revision. The receipt reports the before/after revision,
+changed count/bounds, authority hash, and a projection-revision value whose only constructor assigns
+the same accepted revision to collision, navigation, and mesh. Invalid bounds/material/revision/
+duplicates, no-op input, or a failed rebuild leave every observable authority/projection value
+unchanged. The first edit to a generated room intentionally materializes it and removes stale
+generator provenance.
+
+Persistence remains two explicit meanings:
+
+```text
+live edited scene
+  -> snapshot schema 9: concrete material voxels + source revision + authority hash
+  -> reopen at the same optimistic-concurrency revision with matching projections
+
+selected authored save
+  -> schema-v7 material voxel environment -> complete M5 re-admission -> M6 atomic replace
+  -> reopen as static content at live revision zero with identical voxels/hash/projections
+```
+
+Neither format stores edit requests, receipts, facts, event history, undo data, or generator fiction.
+The project representation deliberately omits the live revision: it records what the project now
+contains, while a newly admitted session starts its own revision lifecycle.
+
+The browser adds only a typed `/api/voxel-edit` border and two product buttons. TypeScript submits UI
+intent plus the last observed revision; Rust validates, mutates, rebuilds, and optionally performs
+the explicit project save. Real Chromium clears the loading-bay pillar voxel, observes changed mesh
+and navigation hashes plus a shorter path, walks the actual player body through the cleared cell,
+then resets and proves the restored voxel blocks the same path. A stale request changes no state.
+The gate separately persists that edit into a temporary project, resets and launches a fresh host,
+and proves both reopen paths retain the same concrete result without transient fields.
+
+The bounded release workload toggled one voxel through 256 full rebuilds of the 366-voxel,
+single-chunk loading bay:
+
+| Measurement | Observed result |
+|---|---:|
+| Average full transaction | 522.4 us |
+| Maximum transaction | 1,273 us |
+| Throughput | 1,914 rebuilds/s |
+| Retained/peak mesh payload | 90,756 bytes |
+| Final authority | Revision 256; byte-semantic hash restored to baseline |
+
+This earns the deliberately simple full rebuild for the current bounded authoring scene. It is not
+a promise that large worlds need no incremental invalidation; the existing donor dirty-neighbour
+behavior remains the evidence to revisit only when a measured project exceeds this budget.
+
+M7A change amplification is explicit:
+
+| Change | Required ownership surfaces |
+|---|---|
+| Set/clear another voxel or batch | Typed browser request or Rust caller data only; validation, rebuild, persistence, and projection code stay unchanged. |
+| Change edit limits/duplicate policy | `engine-spatial::voxel_edit` and focused contract tests; no project codec, gameplay service, renderer, or event route. |
+| Persist a selected accepted edit | Materialize through `project_admission` and the existing `ProjectStore`; runtime facts/history and TypeScript authority remain absent. |
+| Add a genuinely new edit operation | The narrow edit enum/validator/apply logic plus focused browser proof if exposed; no global command/event union, replay envelope, provider registry, or history protocol. |
+
+Implementation commits are `cddf89f79201a7ae657beffbdd3dd87fb84f818f` (transaction vocabulary,
+limits, and donor boundary), `eb5ee0b177e3568b5b52f2492d6503123ad94519` (atomic authority and
+coherent projection rebuild), and `e4db64716ef9d5a9bb07d9d0048b94737cd09850` (snapshot/project
+persistence, product route, Chromium proof, workload, and cohesive browser state extraction).
 
 ### Browser/Three/DOM product proof
 
@@ -541,6 +613,7 @@ pnpm run verify
 cargo run -q -p game-host --bin headless-door
 cargo run -q -p game-host --bin headless-encounter
 cargo run --release -q -p game-host --bin motion-workload -- --matrix
+cargo run --release -q -p game-host --bin voxel-edit-workload -- 256
 ```
 
 The current verification gate proves:
@@ -548,7 +621,7 @@ The current verification gate proves:
 - Rust formatting, Clippy, and strict TypeScript compilation;
 - generated project content is byte-for-byte current with its TypeScript composition;
 - 13 TypeScript content-composition tests and ten browser input/projection/presentation tests;
-- 85 Rust tests across entity state, donor collision/navigation/mesh queries, security door,
+- 93 Rust tests across entity state, donor collision/navigation/mesh queries, security door,
   content admission, encounter routing, kinematic/navigation motion, atomic rejection, projection,
   player control, combat/health/weapon behavior, generated-environment admission, and save/reopen;
 - strict rejection of unknown stored-content and snapshot fields;
@@ -561,10 +634,10 @@ These are physical line counts (`wc -l`), not complexity scores:
 | Ownership surface | Production source footprint | Purpose |
 |---|---:|---|
 | Reusable Rust entity state | 4 files / 888 lines | Entity/capability storage, atomic entity mutation, snapshot, projection. |
-| Successor spatial adapter/system | 1 file / 898 lines | Canonical donor scene construction, generated-room/aperture algorithm, collision/navigation/mesh derivation, bounded query facade, central kinematic phase. |
-| Rust game host and runners | 24 files / 6,993 lines | Concrete feature-owned components/services, routing, canonical project codec/migration/store, scheduling, snapshots, presentation projection, headless/product/workload hosts. |
-| TypeScript content composition | 5 files / 417 lines | Typed definitions, optional schema-v7 candidate builder, encounter/generation/combat and motion builders, reproducibility check. |
-| TypeScript browser product shell | 8 files / 1,756 lines | Browser-owned input lifecycle, Rust-readout/mesh and feedback adapters, DOM/Web Audio realization, derived camera, Asha renderer mount, bridge exclusion shim, styling. |
+| Successor spatial adapter/system | 2 files / 1,444 lines | Canonical donor scene construction, generated-room/aperture algorithm, collision/navigation/mesh derivation, bounded query facade, central kinematic phase, and one cohesive voxel-edit owner. |
+| Rust game host and runners | 26 files / 7,452 lines | Concrete feature-owned components/services, routing, canonical project codec/migration/store, scheduling, snapshots, presentation projection, headless/product/workload hosts. |
+| TypeScript content composition | 5 files / 429 lines | Typed definitions, optional schema-v7 candidate builder, encounter/generation/combat and motion builders, reproducibility check. |
+| TypeScript browser product shell | 8 files / 1,959 lines | Browser-owned input/edit lifecycle, Rust-readout/mesh and feedback adapters, DOM/Web Audio realization, derived camera, Asha renderer mount, bridge exclusion shim, styling. |
 | Authored stored project | 1 file / 112 lines | Hand-authored loading-bay catalog, scene, relationships, components, and voxel source loaded directly by Rust. |
 | Generated legacy/workload content | 3 files / 8,092 lines | Retained schema-v6 migration evidence plus pretty-printed 256-body workload data. |
 
@@ -604,14 +677,14 @@ generic replay machinery.
 
 ## Decision boundary and remaining limits
 
-The planned falsification work and first five migration families pass. That is strong evidence for
+The planned falsification work and first seven migration families pass. That is strong evidence for
 continuing Rusty Engine as the durable successor, but it is not evidence that every Asha feature
 should move or that all current leaf-donor arrangements are durable infrastructure.
 
 Before calling this durable infrastructure:
 
-1. Complete M7A's authoritative voxel-edit transaction and M7B's bounded real-asset conversion
-   without importing Asha's edit-log/control plane.
+1. Complete M7B's bounded real-asset conversion without importing Asha's edit-log or conversion
+   control plane; M7A now passes with a direct typed transaction and full coherent rebuild.
 2. Decide whether sibling donor references become pinned Git dependencies, vendored crates, or a
    shared foundation repository before Asha resumes development.
 3. Add safe allocation telemetry and a longer mixed workload; the current matrix measures isolated

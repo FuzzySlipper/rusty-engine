@@ -212,8 +212,8 @@ player intent so combat proves a real interaction rather than another test-only 
 | M4 | Complete (#6111-#6114) | Animation/audio/particle/billboard feedback derived from accepted movement, attack, damage, defeat, and door facts | M1-M3 facts | Presentation render families inspected as evidence only; no donor presentation crate/protocol imported | Typed response-local feedback is visible/audible, posture rebuilds from current state, dropped/restarted cues do not replay, and presentation failure never changes gameplay |
 | M5 | Complete (#6117-#6120) | Stored scene, asset identities/catalog, entity definitions, project admission, diagnostics | At least M1, M2A, and M3 | `core-assets` referenced unchanged; catalog/scene/project/bundle families used only as bounded evidence | The checked-in schema-v7 loading-bay project drives the real browser through one strict Rust admission path with source-locatable diagnostics and no runtime facade |
 | M6 | Complete (#6121-#6124) | Durable project save/load and versioning, distinct from a live runtime snapshot | M5 | Canonical/fixed-point serialization evidence adapted; bundle/lifecycle/snapshot machinery excluded | Admitted project content saves atomically, round-trips byte-stably, and migrates the real schema-v6 predecessor; Chromium starts and resets from the saved file while snapshots independently reopen changed live values |
-| M7A | Ready (#6125-#6128) | Live voxel edit commands, authoritative voxel mutation, collision/navigation/mesh invalidation | M1, M2B, M6 | Adapt `rule-voxel-edit` behavior and narrow voxel services | One edit becomes visible and changes collision/navigation in the same accepted transaction; reopen preserves it |
-| M7B | Planned after M7A (#6129-#6131) | Voxel asset import/conversion into the admitted project form | M7A, M5 | Adapt conversion and asset services/tools | A real external asset converts reproducibly, validates, loads, and behaves like authored voxels |
+| M7A | Complete (#6125-#6128) | Live voxel edit commands, authoritative voxel mutation, collision/navigation/mesh invalidation | M1, M2B, M6 | Transaction/bounds/dirty-neighbour lessons adapted from `rule-voxel-edit` and narrow voxel services; command/event/history/replay composition excluded | Real Chromium removes a visible voxel, observes coherent collision/navigation/mesh changes, walks through the cleared cell, and proves rejection plus snapshot/project reopen; 256 full rebuilds are measured |
+| M7B | Ready (#6129-#6131) | Voxel asset import/conversion into the admitted project form | M7A, M5 | Adapt conversion and asset services/tools | A real external asset converts reproducibly, validates, loads, and behaves like authored voxels |
 | M7C | Unscheduled | Voxel annotations and edit history | A named authoring/diagnostic consumer | Evidence from annotation/history protocols and services | Schedule only when undo, provenance, collaboration, or another concrete consumer exists |
 | M8 | Unscheduled | Studio/editor workflows over established runtime and project APIs | M5-M7 plus repeated manual-authoring pain | Asha Studio is product evidence, not a shell to transplant | Tools manipulate the same admitted data and typed commands used without Studio; no editor-only authority path |
 
@@ -375,7 +375,7 @@ host from that saved path, reloads the same path on reset, and completes the exi
 gameplay proof. It also migrates the real schema-v6 encounter project, starts the same host from the
 canonical migrated artifact, and accepts a live attack. Focused evidence mutates player look,
 health, ammo, cooldown eligibility, door state, and tick; the authored save contains none of those
-live values while snapshot schema 8 reopens them exactly. Future schema 99 fails at
+live values while the current snapshot schema 9 reopens them exactly. Future schema 99 fails at
 `schemaVersion` without changing the prior good project.
 
 Implementation commits are `5072f0c0a5cd03448c3543d6763f3dd9082fa54c` (codec and explicit
@@ -393,6 +393,32 @@ Voxel work is three clusters, not one subsystem migration:
 
 This ordering preserves substantial Asha feature work without inheriting every protocol created by
 its former process boundaries.
+
+M7A is now complete. `VoxelEditService` owns a bounded expected-revision transaction containing only
+typed set/clear operations. It validates the whole batch, rejects duplicate coordinates, applies a
+coordinate-canonical material map, builds collision/navigation/mesh at one next revision, and swaps
+only the finished scene. Full rebuild is intentional for the current bounded world; a release run of
+256 one-voxel toggles averaged 522.4 us (maximum 1,273 us), sustained 1,914 rebuilds/s, and retained
+a 90,756-byte mesh payload. The fixed limits are 4,096 edits per transaction, one million solid
+voxels, absolute coordinate one million, and material slot 4,095.
+
+Snapshot schema 9 stores concrete edited material voxels, authority hash, and the live source
+revision. An explicit authored save instead materializes a schema-v7 `material` voxel environment,
+re-runs complete semantic admission, and uses the existing atomic project store; a newly admitted
+project begins at live revision zero. Requests, facts, receipts, events, history, annotations, and
+generator provenance do not enter either persisted representation.
+
+The product path is equally direct: two DOM buttons submit a typed `/api/voxel-edit` request, Rust
+owns the transaction and optional project replacement, and the existing retained mesh adapter
+consumes only the rebuilt output. Chromium proves mesh visibility, changed navigation route, actual
+player passage, restored blocking on reset, and stale-revision atomicity. A second host path saves,
+resets, and freshly reopens the edited project with identical material authority.
+
+Implementation commits are `cddf89f79201a7ae657beffbdd3dd87fb84f818f`,
+`eb5ee0b177e3568b5b52f2492d6503123ad94519`, and
+`e4db64716ef9d5a9bb07d9d0048b94737cd09850`. M7B is now the ready cluster. M7C remains
+intentionally unscheduled: M7A produced no evidence that undo/history, annotations, collaboration,
+or a universal edit protocol is needed.
 
 ## Features that do not yet justify a migration cluster
 
