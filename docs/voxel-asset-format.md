@@ -1,6 +1,6 @@
 # Stored voxel asset and offline conversion boundary
 
-Status: M7B.1 format boundary implemented; conversion algorithm follows in M7B.2.
+Status: M7B.1 format boundary and M7B.2 offline converter/admission path implemented.
 
 This is the successor's smallest durable border between a real static mesh and admitted voxel
 content. It is deliberately an authoring/build path, not a runtime protocol:
@@ -81,6 +81,58 @@ Preflight rejects empty or greater-than-8-MiB sources, resolution axes outside `
 `1..=1,000,000`, duplicate source slots, and invalid material slots. The parser adds limits of
 250,000 positions and 750,000 indices in M7B.2. Conversion must never partially replace a known-good
 artifact.
+
+## Implemented conversion
+
+`voxel-convert` is a separate workspace crate with no `game-host` dependency. Its GLB importer
+accepts exactly one static mesh backed by an embedded BIN chunk, rejects animation, skinning, morph
+targets, non-triangle modes, implicit indices, invalid indices, non-finite/degenerate geometry, and
+the M7B.1 resource ceilings, then exposes only positions, indexed triangles, and stable material
+slots to the converter.
+
+Surface mode maps the source bounds through the explicit fit/origin settings and samples each
+triangle at no more than half-cell spacing in target-grid coordinates. A ten-million-sample work
+limit bounds amplification. Coordinates are rounded/clamped into the requested resolution;
+coordinate collisions choose the lowest source material slot deterministically. Solid mode first
+requires a closed, consistently wound indexed manifold, retains sampled boundary materials, and
+fills its mapped bounds. The selected Kenney wall uses surface mode because its GLB deliberately
+duplicates vertices between render faces rather than presenting a welded solid manifold.
+
+The checked request at `content/conversion/kenney-wall-a.request.json` produces
+`content/assets/kenney-wall-a.voxel.json`:
+
+| Result | Value |
+|---|---:|
+| Imported geometry | 48 positions / 12 triangles / 2 material groups |
+| Converted authority | 8 voxels / 4 sparse runs / local bounds `[0,0,0]..[1,1,1]` |
+| Settings SHA-256 | `98cb7d07a99015f5e759a39d89e77bb4f64cbdb0b3b5ed724bba9d35f95902ba` |
+| Artifact SHA-256 | `8d5c4037cee3279ac66870b285ca794b35e35fa3e3026a51cd4ae506b3f7397e` |
+
+Run the direct authoring tool with:
+
+```bash
+cargo run -q -p voxel-convert -- \
+  --request content/conversion/kenney-wall-a.request.json \
+  --source ../asha-engine/harness/fixtures/voxel-conversion/kenney-wall-a.glb \
+  --output content/assets/kenney-wall-a.voxel.json
+```
+
+The tool completes parsing, conversion, validation, and canonical encoding before touching the
+target. It writes and syncs a same-directory pending file, then atomically renames it into place.
+Stale identity, malformed source, unsupported topology, material-map drift, excess work/output,
+invalid artifact content, and I/O failure return nonzero with a classified path; conversion failure
+cannot replace a prior good target.
+
+Schema-7 projects may embed the resulting document on a `voxel-volume/...` catalog entry and list
+that identity in a material environment's `voxelAssets`. This optional extension leaves existing
+schema-7 files valid. M5 admission validates the embedded artifact, requires grid compatibility,
+expands its sparse runs, and calls the existing `VoxelCollisionScene::from_material_voxels` path.
+An admitted-readback test proves converted and explicitly authored cells produce identical material
+authority, collision, navigation hash, and mesh, then applies the ordinary M7A edit service. The
+runtime has no converter-specific loader or validator.
+
+The M7B.2 implementation is pinned by
+`b3481fadf1586c2cfea167d569af0bd6333af6b5`.
 
 ## Donor audit and exclusions
 

@@ -171,6 +171,12 @@ certificate, or runtime revision. Asha's source registry, catalog/lock graph, pl
 sequence, provider interface, evidence URI graph, command registry, bridge, replay, lifecycle,
 texture protocol, Studio surface, and project-bundle machinery remain explicit exclusions.
 
+The M7B.1 format boundary is pinned by `17545406494bc93f12d3668b845a533cee8ceb4d`.
+The M7B.2 parser/converter, canonical real artifact, atomic CLI, and ordinary M5/M7A admission path
+are pinned by `b3481fadf1586c2cfea167d569af0bd6333af6b5`. `game-host` depends on
+successor-owned `voxel-asset` only; the separate `voxel-convert` authoring crate contains `gltf` and
+filesystem installation. No Asha conversion/import/asset crate was added.
+
 Sibling references are intentional while Asha development is stopped for this decision. If this
 lab becomes a durable independent successor, the references should be pinned as Git dependencies,
 vendored with this ledger, or moved into a shared foundation repository before Asha resumes.
