@@ -1,0 +1,14 @@
+[package]
+name = "asset-catalog"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+core-assets.workspace = true
+core-voxel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true

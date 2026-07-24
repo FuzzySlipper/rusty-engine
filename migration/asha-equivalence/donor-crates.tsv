@@ -1,0 +1,33 @@
+donor_crate	donor_path	scope	note
+core-catalog	engine-rs/crates/state/core-catalog	definite	Asset catalog authority and validation.
+core-entity	engine-rs/crates/state/core-entity	definite	Entity state, lifecycle, capabilities, relations, and persistence.
+core-scene	engine-rs/crates/state/core-scene	definite	Authored scene documents and admission; runtime-session topology is excluded.
+svc-entity-authoring	engine-rs/crates/services/svc-entity-authoring	definite	Typed entity definition and mutation behavior; ECRP owner routing is excluded.
+svc-environment-authoring	engine-rs/crates/services/svc-environment-authoring	definite	Bounded environment materialization without project-bundle ownership.
+svc-serialization	engine-rs/crates/services/svc-serialization	definite	Reusable codecs, prefabs, admission, and atomic persistence without ProjectBundle control-plane ownership.
+protocol-voxel-asset	engine-rs/crates/protocol/protocol-voxel-asset	definite	Voxel asset authored shapes are consolidated into successor owners.
+protocol-voxel-annotation	engine-rs/crates/protocol/protocol-voxel-annotation	definite	Voxel annotation authored shapes are consolidated into successor owners.
+protocol-voxel-conversion	engine-rs/crates/protocol/protocol-voxel-conversion	definite	Voxel conversion authored shapes are consolidated into successor owners.
+protocol-voxel-edit-history	engine-rs/crates/protocol/protocol-voxel-edit-history	definite	Bounded edit-history shapes are consolidated into successor owners.
+svc-voxel-annotation	engine-rs/crates/services/svc-voxel-annotation	definite	Annotation validation, codecs, queries, and edits.
+svc-voxel-asset	engine-rs/crates/services/svc-voxel-asset	definite	Canonical voxel asset validation, hashing, and codecs.
+svc-voxel-conversion	engine-rs/crates/services/svc-voxel-conversion	definite	Conversion planning, preview, apply, and bounded authority.
+rule-voxel-edit	engine-rs/crates/rules/rule-voxel-edit	definite	Voxel edits, picking, transactions, persistence, and bounded history; replay certification is excluded.
+svc-levelgen	engine-rs/crates/services/svc-levelgen	definite	Deterministic bounded generation.
+svc-mesh-import	engine-rs/crates/services/svc-mesh-import	definite	Bounded GLB/static mesh import.
+svc-physics	engine-rs/crates/services/svc-physics	definite	Deterministic kinematic integration.
+rule-trigger-volume	engine-rs/crates/rules/rule-trigger-volume	definite	Trigger definition and overlap reconciliation.
+rule-animation-controller	engine-rs/crates/rules/rule-animation-controller	definite	Already consolidated into render-presentation by M11R.
+asset-import	engine-rs/crates/tools/asset-import	definite	Deterministic offline import and sidecar/reimport behavior.
+protocol-assets	engine-rs/crates/protocol/protocol-assets	conditional	Narrow authored shapes are consolidated into asset-catalog.
+protocol-entity-authoring	engine-rs/crates/protocol/protocol-entity-authoring	conditional	Narrow authored shapes are consolidated with entity state and authoring.
+protocol-ids	engine-rs/crates/protocol/protocol-ids	conditional	Stable public identity representation without a protocol umbrella.
+protocol-presentation	engine-rs/crates/protocol/protocol-presentation	conditional	Already consolidated by M11R.
+protocol-render	engine-rs/crates/protocol/protocol-render	conditional	Already consolidated by M11R.
+protocol-scene	engine-rs/crates/protocol/protocol-scene	conditional	Narrow authored scene shapes are consolidated with scene ownership.
+rule-state-machine	engine-rs/crates/rules/rule-state-machine	conditional	Generic non-render transition behavior is evaluated in M11S-G.
+protocol-diagnostics	engine-rs/crates/protocol/protocol-diagnostics	supporting	Keep local structured diagnostics; discard Asha-wide scopes and proof traces.
+scene-diagnostics	engine-rs/crates/tools/scene-diagnostics	supporting	Keep owner-local diagnostics and round trips; discard project-bundle/session proof topology.
+voxel-diagnostics	engine-rs/crates/tools/voxel-diagnostics	supporting	Keep read-only voxel inspection and rejection context.
+state-inspector	engine-rs/crates/tools/state-inspector	supporting	Rewrite read-only inspection around entity-state.
+rule-relationship	engine-rs/crates/rules/rule-relationship	supporting	Relationship behavior folds into entity-state and typed authoring.

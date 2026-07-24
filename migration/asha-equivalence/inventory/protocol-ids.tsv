@@ -1,0 +1,9 @@
+item_id	kind	donor_crate	path	line	symbol
+file:engine-rs/crates/protocol/protocol-ids/Cargo.toml	file	protocol-ids	engine-rs/crates/protocol/protocol-ids/Cargo.toml	0	-
+file:engine-rs/crates/protocol/protocol-ids/src/lib.rs	file	protocol-ids	engine-rs/crates/protocol/protocol-ids/src/lib.rs	0	-
+api:engine-rs/crates/protocol/protocol-ids/src/lib.rs:34:IdRepr	api	protocol-ids	engine-rs/crates/protocol/protocol-ids/src/lib.rs	34	enum:IdRepr
+api:engine-rs/crates/protocol/protocol-ids/src/lib.rs:45:BorderId	api	protocol-ids	engine-rs/crates/protocol/protocol-ids/src/lib.rs	45	struct:BorderId
+api:engine-rs/crates/protocol/protocol-ids/src/lib.rs:56:BORDER_IDS	api	protocol-ids	engine-rs/crates/protocol/protocol-ids/src/lib.rs	56	const:BORDER_IDS
+test:engine-rs/crates/protocol/protocol-ids/src/lib.rs:border_id_table_is_unique_and_ordered_as_written	test	protocol-ids	engine-rs/crates/protocol/protocol-ids/src/lib.rs	96	border_id_table_is_unique_and_ordered_as_written
+test:engine-rs/crates/protocol/protocol-ids/src/lib.rs:brand_names_match_core_ids_types	test	protocol-ids	engine-rs/crates/protocol/protocol-ids/src/lib.rs	119	brand_names_match_core_ids_types
+test:engine-rs/crates/protocol/protocol-ids/src/lib.rs:every_border_id_is_u64_today	test	protocol-ids	engine-rs/crates/protocol/protocol-ids/src/lib.rs	147	every_border_id_is_u64_today

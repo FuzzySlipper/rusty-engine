@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "rust/crates/asset-catalog",
     "rust/crates/render-model",
     "rust/crates/render-presentation",
     "rust/crates/render-projection",
@@ -27,6 +28,7 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace.dependencies]
+asset-catalog = { path = "rust/crates/asset-catalog" }
 render-model = { path = "rust/crates/render-model" }
 render-presentation = { path = "rust/crates/render-presentation" }
 render-projection = { path = "rust/crates/render-projection" }
