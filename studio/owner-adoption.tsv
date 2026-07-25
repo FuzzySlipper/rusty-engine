@@ -1,7 +1,7 @@
 owner	classification	workflows	boundary	studio_state	proof_slice
 asset-catalog	direct	asset browser; dependencies; locks; material bindings; eligible targets	typed catalog readout and candidate operation	filter; selection; expanded rows; draft fields	M11B/M11D/M11E
 asset-import	direct	source import; sidecars; reimport status; source metadata	typed import request and receipt	file choice; progress; selected profile	M11B/M11E
-authored-scene	direct	scene open; hierarchy; nodes; lights; transforms; scene admission	canonical scene bytes; readout; typed scene operation	selection; expansion; drag preview; dirty prompt	M11B/M11D
+authored-scene	direct	scene open; hierarchy; nodes; lights; transforms; scene admission	canonical scene bytes; readout; typed scene operation	selection and translation preview implemented; creation reparent delete rotation and scale remain visibly disabled until named operations exist	M11B/M11D
 content-store	direct	manifest closure; prefab resolution; atomic project publication; stale protection	load/save plan; source batch; write set	pending save; conflict choice; navigation	M11B/M11D/M11E
 core-assets	indirect	asset identities and kinds inside owner DTOs	owner-defined serialized identifiers	labels and icons only	M11B
 core-ids	indirect	stable entity identities inside scene entity and render readouts	owner-defined serialized identifiers	selection keys only	M11B/M11D
@@ -11,7 +11,7 @@ core-time	downstream-only	project runtime timing and tick readouts where a proje
 core-voxel	indirect	compact voxel values inside spatial and asset owners	owner-defined serialized values	brush material and preview cells	M11E
 engine-inspector	direct	catalog scene entity voxel import persistence and rejection diagnostics	typed deterministic reports and local diagnostic codes	focused row; filters; message formatting	M11B/M11D/M11E
 engine-spatial	direct	voxel edits; authoritative picks; history; collision-backed authoring; mechanics readout	typed preview commit pick and history operations	brush stroke; hover; cancellation; history selection	M11E
-entity-state	direct	definitions; capabilities; relationships; transforms; appearance; lifecycle readout	typed entity readout and named service operation	selected entity; inspector drafts; preview	M11B/M11D
+entity-state	direct	definitions; capabilities; relationships; transforms; appearance; lifecycle readout	typed entity readout and named service operation	selected entity and inspector preview implemented; capability and appearance editing remains read-only until typed operations exist	M11B/M11D
 environment-authoring	direct	preset and seed authoring; generated voxel scene and markers	typed materialization request and candidate receipts	preset; seed; target selection; status	M11E
 render-model	indirect	retained renderer-neutral scene resources and operations	shared render frames produced by Rust owners	no canonical copy	M11D/M11E
 render-presentation	direct	animation audio billboard particle telemetry preview and diagnostics	versioned presentation frame and local controller operations	preview controls and presentation readouts	M11D/M11E
@@ -28,6 +28,6 @@ voxel-asset	direct	canonical voxel files palettes provenance hashes validation a
 voxel-convert	direct	GLB import plan preview apply install material sampling and model windows	typed bounded conversion operations and receipts	source choice; settings draft; preview selection	M11E
 @rusty-engine/render-contracts	direct	strict scene and presentation frame decoding	versioned public package	decoded readout only	M11C/M11D
 @rusty-engine/render-projection	direct	fail-atomic retained projection and deterministic inspection	public renderer-neutral package	channel and inspection view	M11D/M11E
-@rusty-engine/renderer-three	direct	Three/WebGL realization lights materials grids resources and picking	public backend package through renderer host	no Three objects outside viewport	M11D/M11E
-@rusty-engine/renderer-host	direct	viewport lifecycle camera input WebAudio overlays inspection and cleanup	public host and editor viewport APIs	canvas focus and host-only presentation state	M11C/M11D/M11E
+@rusty-engine/renderer-three	direct	Three/WebGL realization lights materials grids resources and picking	public backend package through renderer host	operational with no Three objects outside the viewport library	M11D/M11E
+@rusty-engine/renderer-host	direct	viewport lifecycle camera input WebAudio overlays inspection and cleanup	public host and editor viewport APIs	operational canvas focus camera grid lifecycle and picking; richer presentation controls continue in M11E	M11C/M11D/M11E
 external-project-adapter	direct	project layout game-specific schemas compatibility live readouts and named domain operations	closed versioned project-owned Rust protocol	connection; project status; domain panel view models	M11B/M11C/M11F

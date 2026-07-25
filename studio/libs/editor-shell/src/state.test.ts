@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  STUDIO_ADAPTER_PROTOCOL_VERSION,
   StudioAdapterClient,
   type StudioAdapterRequest,
   type StudioAdapterTransport,
@@ -25,17 +26,19 @@ test('workspace opens only through the adapter and keeps authority, projection, 
   assert.equal(store.snapshot().liveProjection?.frame.ops.length, 1);
   assert.equal(store.snapshot().preview, null);
   assert.equal(store.snapshot().selection.entityId, null);
+  assert.equal(store.snapshot().selection.sceneNodeId, null);
   assert.deepEqual(store.snapshot().liveProjection?.entities.map((entity) => entity.entityId), [1, 2]);
   assert.equal(store.snapshot().liveProjection?.entities[0]?.label, 'player');
   assert.equal(store.snapshot().liveProjection?.entities[1]?.projected, false);
 
   store.setHierarchyFilter('player');
-  assert.deepEqual(store.visibleEntities().map((entity) => entity.entityId), [1]);
-  store.selectEntity(1, 'hierarchy');
+  assert.deepEqual(store.visibleHierarchyNodes().map((node) => node.nodeId), [10]);
+  store.selectHierarchyNode(10);
   store.beginTranslationPreview(1);
   store.setPreviewTranslationAxis(0, 4.5);
 
   assert.equal(store.snapshot().selection.source, 'inspector');
+  assert.equal(store.snapshot().selection.sceneNodeId, 10);
   assert.deepEqual(store.snapshot().preview?.translation, [4.5, 2, 3]);
   assert.equal(store.snapshot().authoringDocument?.identity.projectHash, 'hash-before');
   assert.deepEqual(transport.requests.map((request) => request.type), ['describe', 'openProject']);
@@ -58,7 +61,7 @@ test('rejected mutation preserves the accepted document and disposable preview',
   const transport = new FixtureTransport();
   const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
   await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
-  store.selectEntity(1, 'hierarchy');
+  store.selectHierarchyNode(10);
   store.beginTranslationPreview(1);
   store.setPreviewTranslationAxis(2, 99);
   transport.rejectMutation = true;
@@ -95,7 +98,11 @@ test('HTTP transport bounds both directions and leaves semantic decoding to the 
     text: async () => '',
   }));
   await assert.rejects(
-    oversized.exchange({ type: 'describe', protocolVersion: 1, requestId: 'x' }),
+    oversized.exchange({
+      type: 'describe',
+      protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+      requestId: 'x',
+    }),
     /response exceeds/,
   );
 });
@@ -114,14 +121,14 @@ class FixtureTransport implements StudioAdapterTransport {
       if (this.rejectMutation) {
         return Promise.resolve({
           type: 'rejected',
-          protocolVersion: 1,
+          protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
           requestId: request.requestId,
           error: { code: 'project.staleHash', message: 'project changed outside Studio' },
         });
       }
       return Promise.resolve({
         type: 'entityTranslationApplied',
-        protocolVersion: 1,
+        protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
         requestId: request.requestId,
         receipt: {
           entityId: request.entityId,
@@ -140,7 +147,7 @@ class FixtureTransport implements StudioAdapterTransport {
     }
     return Promise.resolve({
       type: 'projectClosed',
-      protocolVersion: 1,
+      protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
       requestId: request.requestId,
     });
   }
@@ -149,12 +156,12 @@ class FixtureTransport implements StudioAdapterTransport {
 function described(requestId: string): unknown {
   return {
     type: 'described',
-    protocolVersion: 1,
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
     requestId,
     adapter: {
       adapterId: 'rusty-engine-demo.loading-bay',
-      adapterVersion: 1,
-      protocolVersion: 1,
+      adapterVersion: 2,
+      protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
       projectKind: 'loadingBayProject',
       projectSchemaVersion: 8,
       operations: ['describe', 'openProject', 'readProject', 'setEntityTranslation', 'closeProject'],
@@ -163,7 +170,12 @@ function described(requestId: string): unknown {
 }
 
 function projectResponse(type: 'projectOpened' | 'projectRead', requestId: string, changed: boolean): unknown {
-  return { type, protocolVersion: 1, requestId, project: projectReadout(changed) };
+  return {
+    type,
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+    requestId,
+    project: projectReadout(changed),
+  };
 }
 
 function projectReadout(changed: boolean): unknown {
@@ -226,6 +238,16 @@ function projectReadout(changed: boolean): unknown {
         diagnostics: { diagnostics: [] },
       },
     },
+    sceneHierarchy: {
+      sceneId: 1,
+      revision: changed ? 12 : 11,
+      name: 'Loading Bay',
+      rootNodeIds: [10, 20],
+      nodes: [
+        hierarchyNode(10, 0, 'staticMesh', 'player', 1, 'mesh/player', translation),
+        hierarchyNode(20, 1, 'emptyGroup', 'encounter', 2, null, [0, 0, 0]),
+      ],
+    },
     loadingBay: {
       sceneName: 'Loading Bay',
       entityCount: 2,
@@ -241,30 +263,51 @@ function projectReadout(changed: boolean): unknown {
     },
     projection: {
       schemaVersion: 1,
-      ops: changed
-        ? [{
-            op: 'update',
-            handle: 101,
-            transform: transform(translation),
-            material: null,
-            visible: null,
-            metadata: null,
-          }]
-        : [{
-            op: 'create',
-            handle: 101,
-            parent: null,
-            node: {
-              geometry: { kind: 'cube' },
-              material: { color: [0.2, 0.4, 0.6, 1], wireframe: false },
-              transform: transform(translation),
-              visible: true,
-              layer: 'scene',
-              metadata: { sourceEntity: 1, sourceSceneNode: null, tags: [], label: 'player' },
-            },
-          }],
+      ops: [{
+        op: 'create',
+        handle: 101,
+        parent: null,
+        node: {
+          geometry: { kind: 'cube' },
+          material: { color: [0.2, 0.4, 0.6, 1], wireframe: false },
+          transform: transform(translation),
+          visible: true,
+          layer: 'scene',
+          metadata: { sourceEntity: 1, sourceSceneNode: 10, tags: [], label: 'player' },
+        },
+      }],
     },
-    projectionReadout: { sourceRevision: changed ? 12 : 11, retainedEntities: 1, diagnostics: [] },
+    projectionReadout: {
+      frameKind: 'complete',
+      sourceRevision: changed ? 12 : 11,
+      retainedEntities: 1,
+      diagnostics: [],
+    },
+  };
+}
+
+function hierarchyNode(
+  nodeId: number,
+  displayOrder: number,
+  nodeKind: 'staticMesh' | 'emptyGroup',
+  label: string,
+  entityId: number,
+  asset: string | null,
+  translation: readonly number[],
+): unknown {
+  return {
+    nodeId,
+    parentNodeId: null,
+    childOrder: displayOrder,
+    displayOrder,
+    depth: 0,
+    nodeKind,
+    label,
+    tags: [],
+    asset,
+    entityId,
+    localTransform: transform(translation),
+    worldTransform: transform(translation),
   };
 }
 

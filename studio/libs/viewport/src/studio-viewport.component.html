@@ -1,0 +1,35 @@
+<div
+  class="viewport"
+  [attr.data-renderer-status]="status()"
+  [attr.data-retained-ops]="retainedOpCount()"
+  [attr.data-selected-entity]="selectedEntityId()"
+>
+  <canvas
+    #canvas
+    tabindex="0"
+    aria-label="Shared Rusty renderer viewport"
+    (pointerdown)="pointerDown($event)"
+    (pointermove)="pointerMove($event)"
+    (pointerup)="pointerUp()"
+    (pointercancel)="pointerUp()"
+    (click)="pick($event)"
+  ></canvas>
+
+  @if (status() === 'mounting') {
+    <div class="viewport-message">Mounting shared renderer…</div>
+  }
+  @if (status() === 'error') {
+    <div class="viewport-message is-error">Shared renderer unavailable</div>
+  }
+  @if (previewTranslation(); as translation) {
+    <div class="preview-readout" data-preview-active="true">
+      <strong>Transform preview #{{ previewEntityId() }}</strong>
+      <span>{{ translation.join(', ') }}</span>
+      <small>Disposable until explicit Rust commit</small>
+    </div>
+  }
+  <div class="renderer-readout">
+    <span>{{ retainedOpCount() }} retained ops</span>
+    <span>camera {{ cameraRevision() }}</span>
+  </div>
+</div>

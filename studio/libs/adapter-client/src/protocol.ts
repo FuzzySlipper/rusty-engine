@@ -1,9 +1,10 @@
 import {
   decodeRenderFrameDiff,
   type RenderFrameDiff,
+  type Transform,
 } from '@rusty-engine/render-contracts';
 
-export const STUDIO_ADAPTER_PROTOCOL_VERSION = 1 as const;
+export const STUDIO_ADAPTER_PROTOCOL_VERSION = 2 as const;
 export const MAX_STUDIO_ADAPTER_REQUEST_BYTES = 64 * 1024;
 export const MAX_STUDIO_ADAPTER_RESPONSE_BYTES = 32 * 1024 * 1024;
 
@@ -16,13 +17,13 @@ export type StudioAdapterRequest =
 
 export interface DescribeRequest {
   readonly type: 'describe';
-  readonly protocolVersion: 1;
+  readonly protocolVersion: typeof STUDIO_ADAPTER_PROTOCOL_VERSION;
   readonly requestId: string;
 }
 
 export interface OpenProjectRequest {
   readonly type: 'openProject';
-  readonly protocolVersion: 1;
+  readonly protocolVersion: typeof STUDIO_ADAPTER_PROTOCOL_VERSION;
   readonly requestId: string;
   readonly root: string;
   readonly projectFile: string;
@@ -30,13 +31,13 @@ export interface OpenProjectRequest {
 
 export interface ReadProjectRequest {
   readonly type: 'readProject';
-  readonly protocolVersion: 1;
+  readonly protocolVersion: typeof STUDIO_ADAPTER_PROTOCOL_VERSION;
   readonly requestId: string;
 }
 
 export interface SetEntityTranslationRequest {
   readonly type: 'setEntityTranslation';
-  readonly protocolVersion: 1;
+  readonly protocolVersion: typeof STUDIO_ADAPTER_PROTOCOL_VERSION;
   readonly requestId: string;
   readonly expectedProjectHash: string;
   readonly expectedSceneRevision: number;
@@ -46,7 +47,7 @@ export interface SetEntityTranslationRequest {
 
 export interface CloseProjectRequest {
   readonly type: 'closeProject';
-  readonly protocolVersion: 1;
+  readonly protocolVersion: typeof STUDIO_ADAPTER_PROTOCOL_VERSION;
   readonly requestId: string;
 }
 
@@ -85,20 +86,20 @@ export interface ProjectClosedResponse extends ResponseHeader {
 
 export interface RejectedResponse {
   readonly type: 'rejected';
-  readonly protocolVersion: 1;
+  readonly protocolVersion: typeof STUDIO_ADAPTER_PROTOCOL_VERSION;
   readonly requestId?: string;
   readonly error: AdapterRejection;
 }
 
 interface ResponseHeader {
-  readonly protocolVersion: 1;
+  readonly protocolVersion: typeof STUDIO_ADAPTER_PROTOCOL_VERSION;
   readonly requestId: string;
 }
 
 export interface AdapterDescription {
   readonly adapterId: string;
   readonly adapterVersion: number;
-  readonly protocolVersion: 1;
+  readonly protocolVersion: typeof STUDIO_ADAPTER_PROTOCOL_VERSION;
   readonly projectKind: string;
   readonly projectSchemaVersion: number;
   readonly operations: readonly [
@@ -114,6 +115,7 @@ export interface StudioProjectReadout {
   readonly identity: StudioProjectIdentity;
   readonly canonical: CanonicalOwnerContent;
   readonly inspections: OwnerInspections;
+  readonly sceneHierarchy: SceneHierarchyReadout;
   readonly voxel?: Readonly<Record<string, unknown>>;
   readonly loadingBay: LoadingBayDomainReadout;
   readonly projection: RenderFrameDiff;
@@ -144,6 +146,29 @@ export interface OwnerInspections {
   readonly scene: SceneInspection;
   readonly entityState: EntityStateInspection;
   readonly persistence: PersistenceInspection;
+}
+
+export interface SceneHierarchyReadout {
+  readonly sceneId: number;
+  readonly revision: number;
+  readonly name: string | null;
+  readonly rootNodeIds: readonly number[];
+  readonly nodes: readonly SceneHierarchyNodeReadout[];
+}
+
+export interface SceneHierarchyNodeReadout {
+  readonly nodeId: number;
+  readonly parentNodeId: number | null;
+  readonly childOrder: number;
+  readonly displayOrder: number;
+  readonly depth: number;
+  readonly nodeKind: 'emptyGroup' | 'staticMesh' | 'sprite' | 'voxelVolume' | 'light' | 'marker' | 'entityInstance' | 'bootstrap';
+  readonly label: string;
+  readonly tags: readonly string[];
+  readonly asset: string | null;
+  readonly entityId: number | null;
+  readonly localTransform: Transform;
+  readonly worldTransform: Transform;
 }
 
 export interface NamedCount {
@@ -239,6 +264,7 @@ export interface LoadingBayDomainReadout {
 }
 
 export interface ProjectionReadout {
+  readonly frameKind: 'complete';
   readonly sourceRevision: number;
   readonly retainedEntities: number;
   readonly diagnostics: readonly ProjectionDiagnosticReadout[];
@@ -362,7 +388,7 @@ function adapterDescription(input: unknown, path: string): void {
     'closeProject',
   ];
   if (operations.length !== expected.length || operations.some((entry, index) => entry !== expected[index])) {
-    fail(`${path}.operations`, 'must name the protocol 1 operation set in order');
+    fail(`${path}.operations`, 'must name the protocol 2 operation set in order');
   }
 }
 
@@ -370,12 +396,21 @@ function projectReadout(input: unknown, path: string): void {
   const value = record(
     input,
     path,
-    ['identity', 'canonical', 'inspections', 'loadingBay', 'projection', 'projectionReadout'],
+    [
+      'identity',
+      'canonical',
+      'inspections',
+      'sceneHierarchy',
+      'loadingBay',
+      'projection',
+      'projectionReadout',
+    ],
     ['voxel'],
   );
   projectIdentity(value['identity'], `${path}.identity`);
   canonicalOwnerContent(value['canonical'], `${path}.canonical`);
   ownerInspections(value['inspections'], `${path}.inspections`);
+  sceneHierarchy(value['sceneHierarchy'], `${path}.sceneHierarchy`);
   optional(value['voxel'], `${path}.voxel`, looseRecord);
   loadingBayReadout(value['loadingBay'], `${path}.loadingBay`);
   try {
@@ -387,6 +422,65 @@ function projectReadout(input: unknown, path: string): void {
     );
   }
   projectionReadout(value['projectionReadout'], `${path}.projectionReadout`);
+}
+
+function sceneHierarchy(input: unknown, path: string): void {
+  const value = record(input, path, ['sceneId', 'revision', 'name', 'rootNodeIds', 'nodes']);
+  integer(value['sceneId'], `${path}.sceneId`);
+  integer(value['revision'], `${path}.revision`);
+  nullable(value['name'], `${path}.name`, text);
+  list(value['rootNodeIds'], `${path}.rootNodeIds`).forEach((entry, index) => {
+    integer(entry, `${path}.rootNodeIds[${String(index)}]`);
+  });
+  list(value['nodes'], `${path}.nodes`).forEach((entry, index) => {
+    hierarchyNode(entry, `${path}.nodes[${String(index)}]`);
+  });
+}
+
+function hierarchyNode(input: unknown, path: string): void {
+  const value = record(input, path, [
+    'nodeId',
+    'parentNodeId',
+    'childOrder',
+    'displayOrder',
+    'depth',
+    'nodeKind',
+    'label',
+    'tags',
+    'asset',
+    'entityId',
+    'localTransform',
+    'worldTransform',
+  ]);
+  for (const field of ['nodeId', 'childOrder', 'displayOrder', 'depth']) {
+    integer(value[field], `${path}.${field}`);
+  }
+  nullable(value['parentNodeId'], `${path}.parentNodeId`, integer);
+  choice(value['nodeKind'], `${path}.nodeKind`, [
+    'emptyGroup',
+    'staticMesh',
+    'sprite',
+    'voxelVolume',
+    'light',
+    'marker',
+    'entityInstance',
+    'bootstrap',
+  ]);
+  text(value['label'], `${path}.label`);
+  list(value['tags'], `${path}.tags`).forEach((entry, index) => {
+    text(entry, `${path}.tags[${String(index)}]`);
+  });
+  nullable(value['asset'], `${path}.asset`, text);
+  nullable(value['entityId'], `${path}.entityId`, integer);
+  transform(value['localTransform'], `${path}.localTransform`);
+  transform(value['worldTransform'], `${path}.worldTransform`);
+}
+
+function transform(input: unknown, path: string): void {
+  const value = record(input, path, ['translation', 'rotation', 'scale']);
+  vector3(value['translation'], `${path}.translation`);
+  vector4(value['rotation'], `${path}.rotation`);
+  vector3(value['scale'], `${path}.scale`);
 }
 
 function projectIdentity(input: unknown, path: string): void {
@@ -592,7 +686,13 @@ function loadingBayReadout(input: unknown, path: string): void {
 }
 
 function projectionReadout(input: unknown, path: string): void {
-  const value = record(input, path, ['sourceRevision', 'retainedEntities', 'diagnostics']);
+  const value = record(input, path, [
+    'frameKind',
+    'sourceRevision',
+    'retainedEntities',
+    'diagnostics',
+  ]);
+  choice(value['frameKind'], `${path}.frameKind`, ['complete']);
   integer(value['sourceRevision'], `${path}.sourceRevision`);
   integer(value['retainedEntities'], `${path}.retainedEntities`);
   list(value['diagnostics'], `${path}.diagnostics`).forEach((entry, index) => {
@@ -638,6 +738,17 @@ function vector3(input: unknown, path: string): readonly [number, number, number
     finiteNumber(value[0], `${path}[0]`),
     finiteNumber(value[1], `${path}[1]`),
     finiteNumber(value[2], `${path}[2]`),
+  ];
+}
+
+function vector4(input: unknown, path: string): readonly [number, number, number, number] {
+  const value = list(input, path);
+  if (value.length !== 4) fail(path, 'must have exactly 4 entries');
+  return [
+    finiteNumber(value[0], `${path}[0]`),
+    finiteNumber(value[1], `${path}[1]`),
+    finiteNumber(value[2], `${path}[2]`),
+    finiteNumber(value[3], `${path}[3]`),
   ];
 }
 

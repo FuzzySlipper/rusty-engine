@@ -7,22 +7,38 @@ on:
       - 'studio/demo-consumer-source.json'
       - 'studio/libs/adapter-client/**'
       - 'studio/libs/editor-shell/**'
+      - 'studio/libs/viewport/**'
       - 'studio/apps/studio-app/**'
+      - 'studio/package.json'
+      - 'studio/pnpm-lock.yaml'
+      - 'studio/pnpm-workspace.yaml'
+      - 'studio/playwright.config.ts'
       - 'studio/scripts/studio-host.ts'
       - 'studio/test/integration/**'
+      - 'studio/test/browser/**'
+      - 'render/packages/renderer-host/**'
       - 'docs/studio-adapter-protocol.md'
       - 'scripts/verify-studio-demo-integration.sh'
+      - 'scripts/verify-studio-browser-integration.sh'
       - '.github/workflows/studio-demo-integration.yml'
   pull_request:
     paths:
       - 'studio/demo-consumer-source.json'
       - 'studio/libs/adapter-client/**'
       - 'studio/libs/editor-shell/**'
+      - 'studio/libs/viewport/**'
       - 'studio/apps/studio-app/**'
+      - 'studio/package.json'
+      - 'studio/pnpm-lock.yaml'
+      - 'studio/pnpm-workspace.yaml'
+      - 'studio/playwright.config.ts'
       - 'studio/scripts/studio-host.ts'
       - 'studio/test/integration/**'
+      - 'studio/test/browser/**'
+      - 'render/packages/renderer-host/**'
       - 'docs/studio-adapter-protocol.md'
       - 'scripts/verify-studio-demo-integration.sh'
+      - 'scripts/verify-studio-browser-integration.sh'
       - '.github/workflows/studio-demo-integration.yml'
   workflow_dispatch:
 
@@ -31,7 +47,7 @@ permissions:
 
 env:
   RUSTY_ENGINE_DEMO_REPOSITORY: FuzzySlipper/rusty-engine-demo
-  RUSTY_ENGINE_DEMO_REVISION: dba0234e861a871edf3507f0eb053f3c3799effc
+  RUSTY_ENGINE_DEMO_REVISION: a125133f71d6fe82c7ffd8896e3d7e82fd1c3635
 
 jobs:
   verify-studio-demo-integration:
@@ -64,6 +80,9 @@ jobs:
 
       - name: Install isolated Studio dependencies
         run: pnpm --dir studio install --frozen-lockfile
+
+      - name: Install Chromium for the explicit browser integration gate
+        run: pnpm --dir studio exec playwright install --with-deps chromium
 
       - name: Verify exact downstream adapter integration
         run: ./scripts/verify-studio-demo-integration.sh "$GITHUB_WORKSPACE/rusty-engine-demo"

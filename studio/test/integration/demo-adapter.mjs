@@ -108,10 +108,16 @@ async function main() {
     assert.equal(opened.authoringDocument.inspections.catalog.entryCount, 6);
     assert.equal(opened.authoringDocument.inspections.scene.nodeCount, 8);
     assert.equal(opened.authoringDocument.inspections.entityState.entityCount, 8);
+    assert.equal(opened.authoringDocument.sceneHierarchy.nodes.length, 8);
+    assert.deepEqual(
+      opened.authoringDocument.sceneHierarchy.nodes.map((node) => node.entityId),
+      [1, 2, 3, 4, 5, 6, 7, 10],
+    );
     assert.equal(opened.authoringDocument.domain.voxelEnvironment, 'generatedRoom');
     assert.equal(opened.authoringDocument.domain.enemyCount, 2);
     assert.equal(opened.authoringDocument.voxel.solidVoxelCount, 366);
-    assert.equal(opened.liveProjection.frame.ops.length, 7);
+    assert.equal(opened.liveProjection.frame.ops.length, 19);
+    assert.equal(opened.liveProjection.readout.frameKind, 'complete');
     assert.equal(opened.liveProjection.readout.diagnostics.length, 0);
     assert.equal(opened.liveProjection.entities.length, 8);
 
@@ -125,7 +131,8 @@ async function main() {
       reread.authoringDocument.identity.sceneRevision,
       opened.authoringDocument.identity.sceneRevision,
     );
-    assert.equal(reread.liveProjection.frame.ops.length, 0);
+    assert.equal(reread.liveProjection.frame.ops.length, 19);
+    assert.equal(reread.liveProjection.generation, opened.liveProjection.generation + 1);
 
     await store.closeProject();
     assert.equal(store.snapshot().authoringDocument, null);

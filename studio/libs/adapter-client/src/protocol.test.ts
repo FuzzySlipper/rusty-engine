@@ -5,6 +5,7 @@ import {
   StudioAdapterClient,
   StudioAdapterDecodeError,
   StudioAdapterOperationRejected,
+  STUDIO_ADAPTER_PROTOCOL_VERSION,
   decodeStudioAdapterResponse,
   type StudioAdapterRequest,
   type StudioAdapterTransport,
@@ -33,7 +34,7 @@ test('rejects unknown response families, extra fields, and malformed renderer fr
     () =>
       decodeStudioAdapterResponse({
         type: 'projectClosed',
-        protocolVersion: 1,
+        protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
         requestId: 'close-1',
         ambientState: true,
       }),
@@ -45,6 +46,20 @@ test('rejects unknown response families, extra fields, and malformed renderer fr
   assert.throws(
     () => decodeStudioAdapterResponse(response),
     /projection.*schemaVersion.*must equal 1/,
+  );
+
+  const malformedHierarchy = projectOpened('request-3');
+  malformedHierarchy.project.sceneHierarchy.rootNodeIds = [1.5];
+  assert.throws(
+    () => decodeStudioAdapterResponse(malformedHierarchy),
+    /sceneHierarchy\.rootNodeIds\[0\].*integer/,
+  );
+
+  const incrementalFrame = projectOpened('request-4');
+  incrementalFrame.project.projectionReadout.frameKind = 'incremental';
+  assert.throws(
+    () => decodeStudioAdapterResponse(incrementalFrame),
+    /frameKind.*complete/,
   );
 });
 
@@ -73,7 +88,7 @@ test('named client methods emit only closed operations and correlate responses',
 test('typed rejection becomes an operation error without interpreting Rust semantics', async () => {
   const transport = new RecordingTransport((request) => ({
     type: 'rejected',
-    protocolVersion: 1,
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
     requestId: request.requestId,
     error: {
       code: 'project.staleHash',
@@ -108,7 +123,7 @@ class RecordingTransport implements StudioAdapterTransport {
 function projectOpened(requestId: string): ProjectOpenedFixture {
   return {
     type: 'projectOpened',
-    protocolVersion: 1,
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
     requestId,
     project: {
       identity: {
@@ -168,6 +183,13 @@ function projectOpened(requestId: string): ProjectOpenedFixture {
           diagnostics: { diagnostics: [] },
         },
       },
+      sceneHierarchy: {
+        sceneId: 1,
+        revision: 1,
+        name: 'Loading Bay',
+        rootNodeIds: [],
+        nodes: [],
+      },
       loadingBay: {
         sceneName: 'Loading Bay',
         entityCount: 8,
@@ -186,6 +208,7 @@ function projectOpened(requestId: string): ProjectOpenedFixture {
         ops: [],
       },
       projectionReadout: {
+        frameKind: 'complete',
         sourceRevision: 0,
         retainedEntities: 0,
         diagnostics: [],
@@ -211,9 +234,17 @@ interface ProjectOpenedFixture {
     };
     canonical: Record<string, string>;
     inspections: Record<string, Record<string, unknown>>;
+    sceneHierarchy: {
+      sceneId: number;
+      revision: number;
+      name: string | null;
+      rootNodeIds: number[];
+      nodes: unknown[];
+    };
     loadingBay: Record<string, string | number>;
     projection: { schemaVersion: number; ops: unknown[] };
     projectionReadout: {
+      frameKind: string;
       sourceRevision: number;
       retainedEntities: number;
       diagnostics: unknown[];

@@ -1,4 +1,10 @@
-<main class="studio-layout" data-visual-id="studio-shell">
+<main
+  class="studio-layout"
+  data-visual-id="studio-shell"
+  [attr.data-selected-entity]="state().selection.entityId"
+  [attr.data-selection-source]="state().selection.source"
+  [attr.data-project-hash]="state().authoringDocument?.identity?.projectHash"
+>
   <header class="titlebar">
     <div class="brand" aria-label="Rusty Engine Studio">
       <span class="brand-mark">R</span>
@@ -31,7 +37,7 @@
         <button type="button" [disabled]="state().authoringDocument === null" (click)="closeProject()">Close Project</button>
         <hr />
         <button type="button" disabled title="Project creation requires a project-owned adapter operation">New Project…</button>
-        <button type="button" disabled title="Save As is not part of adapter protocol version 1">Save Project As…</button>
+        <button type="button" disabled title="Save As requires a dedicated typed project adapter operation">Save Project As…</button>
       </section>
     }
     @if (state().activeMenu === 'edit') {
@@ -58,9 +64,9 @@
     }
     @if (state().activeMenu === 'tools') {
       <section class="menu-popover tools-menu" aria-label="Tools menu">
-        <button type="button" disabled title="Shared renderer viewport and picking land in M11D">Viewport Picking</button>
+        <button type="button" disabled title="Picking is active directly on the shared renderer canvas">Viewport Picking · active</button>
         <button type="button" disabled title="Voxel asset, annotation, history, and conversion owners land in M11E">Voxel Authoring</button>
-        <button type="button" disabled title="GLB conversion is not exposed by adapter protocol version 1">Convert Mesh to Voxel…</button>
+        <button type="button" disabled title="GLB conversion arrives through the typed voxel conversion owner in M11E">Convert Mesh to Voxel…</button>
       </section>
     }
   </header>
@@ -94,7 +100,7 @@
       <header class="panel-heading">
         <div>
           <strong>Hierarchy</strong>
-          <small>Owner entity IDs + projection labels</small>
+          <small>authored-scene canonical order</small>
         </div>
         <button type="button" disabled title="Entity creation requires a typed project adapter operation">＋</button>
       </header>
@@ -113,25 +119,30 @@
             <span>Connect to a project-owned adapter to inspect owner state.</span>
           </div>
         } @else {
-          @for (entity of store.visibleEntities(); track entity.entityId) {
+          @for (node of store.visibleHierarchyNodes(); track node.nodeId) {
             <button
               type="button"
               role="treeitem"
               class="entity-row"
-              [class.is-selected]="state().selection.entityId === entity.entityId"
-              (click)="store.selectEntity(entity.entityId, 'hierarchy')"
+              [attr.aria-level]="node.depth + 1"
+              [attr.data-scene-node]="node.nodeId"
+              [attr.data-entity-id]="node.entityId"
+              [class.is-selected]="state().selection.sceneNodeId === node.nodeId"
+              [style.padding-left.px]="6 + node.depth * 14"
+              (click)="store.selectHierarchyNode(node.nodeId)"
             >
-              <span class="entity-icon">{{ entity.projected ? '◇' : '○' }}</span>
-              <span class="entity-label">{{ entity.label }}</span>
-              <small>#{{ entity.entityId }}</small>
+              <span class="entity-icon">{{ nodeIcon(node.nodeKind) }}</span>
+              <span class="entity-label">{{ node.label }}</span>
+              <small>{{ node.entityId === null ? 'node ' + node.nodeId : '#' + node.entityId }}</small>
             </button>
           } @empty {
-            <div class="empty-state">No owner entities match this filter.</div>
+            <div class="empty-state">No authored scene nodes match this filter.</div>
           }
         }
       </div>
       <footer class="panel-footer">
-        {{ state().authoringDocument?.inspections?.entityState?.entityCount ?? 0 }} owner entities
+        {{ state().authoringDocument?.inspections?.scene?.nodeCount ?? 0 }} scene nodes ·
+        {{ state().authoringDocument?.inspections?.entityState?.entityCount ?? 0 }} entities
       </footer>
     </aside>
 
@@ -139,49 +150,39 @@
       <header class="viewport-toolbar">
         <div class="tool-group" aria-label="Transform tools">
           <button type="button" class="is-active" title="Select">↖</button>
-          <button type="button" [disabled]="store.selectedEntity()?.transform === null" (click)="beginSelectedPreview()" title="Move">✥</button>
-          <button type="button" disabled title="Rotation preview and commit land with the typed M11D operation">⟳</button>
-          <button type="button" disabled title="Scale preview and commit land with the typed M11D operation">↗</button>
+          <button type="button" [disabled]="!canPreviewTranslation()" (click)="beginSelectedPreview()" title="Preview translation">✥</button>
+          <button type="button" disabled title="Rotation requires a typed Rust adapter operation; Studio will not mutate it locally">⟳</button>
+          <button type="button" disabled title="Scale requires a typed Rust adapter operation; Studio will not mutate it locally">↗</button>
         </div>
         <div class="tool-group">
           <button type="button" [class.is-active]="state().settings.gridVisible" (click)="store.updateSettings({ gridVisible: !state().settings.gridVisible })">Grid</button>
           <button type="button" [class.is-active]="state().settings.snappingEnabled" (click)="store.updateSettings({ snappingEnabled: !state().settings.snappingEnabled })">Snap {{ state().settings.translationSnap }}</button>
         </div>
-        <span class="viewport-mode">Renderer projection readout</span>
+        <span class="viewport-mode">Shared renderer · orbit / WASD / wheel</span>
       </header>
 
-      <div class="viewport-surface" [class.show-grid]="state().settings.gridVisible" data-visual-id="studio-viewport-readout">
+      <div class="viewport-surface" data-visual-id="studio-viewport-readout">
         @if (state().liveProjection; as projection) {
-          <div class="projection-stage">
-            @for (entity of projection.entities; track entity.entityId) {
-              @if (entity.projected) {
-                <button
-                  type="button"
-                  class="projection-chip"
-                  [class.is-selected]="state().selection.entityId === entity.entityId"
-                  (click)="store.selectEntity(entity.entityId, 'projection')"
-                >
-                  <strong>{{ entity.label }}</strong>
-                  <small>{{ entity.asset }}</small>
-                </button>
-              }
-            }
-          </div>
-          <div class="viewport-readout">
-            <span>{{ projection.readout.retainedEntities }} retained entities</span>
-            <span>{{ projection.frame.ops.length }} current ops</span>
-            <span>revision {{ projection.readout.sourceRevision }}</span>
+          <rusty-studio-viewport
+            [frame]="projection.frame"
+            [frameGeneration]="projection.generation"
+            [gridVisible]="state().settings.gridVisible"
+            [selectedEntityId]="state().selection.entityId"
+            [previewEntityId]="state().preview?.entityId ?? null"
+            [previewTranslation]="state().preview?.translation ?? null"
+            (entityPicked)="store.selectEntity($event, 'renderer')"
+            (rendererError)="store.reportUiError($event)"
+          />
+          <div class="viewport-source-readout">
+            <span>{{ projection.readout.retainedEntities }} entities</span>
+            <span>{{ projection.readout.frameKind }} frame</span>
+            <span>owner revision {{ projection.readout.sourceRevision }}</span>
           </div>
         } @else {
           <div class="viewport-empty">
             <span class="viewport-empty-mark">R</span>
             <strong>No live projection</strong>
-            <span>The shared Three renderer attaches to this surface in M11D.</span>
-          </div>
-        }
-        @if (state().preview; as preview) {
-          <div class="preview-badge">
-            Preview #{{ preview.entityId }} · {{ preview.translation.join(', ') }}
+            <span>Open an external project to supply the complete Rust projection.</span>
           </div>
         }
       </div>
@@ -197,7 +198,7 @@
             @if (ownerDiagnosticCount() === 0) {
               <span class="good-state">No owner diagnostics.</span>
             } @else {
-              @for (diagnostic of state().authoringDocument?.inspections?.scene?.diagnostics?.diagnostics ?? []; track diagnostic.code) {
+              @for (diagnostic of ownerDiagnostics(); track diagnostic.domain + ':' + diagnostic.code + ':' + $index) {
                 <span>[{{ diagnostic.severity }}] {{ diagnostic.code }} — {{ diagnostic.message }}</span>
               }
             }
@@ -229,38 +230,46 @@
           <small>Typed owner operation</small>
         </div>
       </header>
-      @if (store.selectedEntity(); as entity) {
+      @if (store.selectedHierarchyNode(); as node) {
         <section class="inspector-content">
           <div class="entity-title">
-            <span class="entity-icon large">{{ entity.projected ? '◇' : '○' }}</span>
+            <span class="entity-icon large">{{ nodeIcon(node.nodeKind) }}</span>
             <div>
-              <strong>{{ entity.label }}</strong>
-              <small>Entity #{{ entity.entityId }}</small>
+              <strong>{{ node.label }}</strong>
+              <small>{{ node.entityId === null ? 'Scene node ' + node.nodeId : 'Entity #' + node.entityId }}</small>
             </div>
           </div>
           <dl class="identity-grid">
-            <dt>Projection</dt><dd>{{ entity.projected ? 'retained' : 'not rendered' }}</dd>
-            <dt>Asset</dt><dd>{{ entity.asset ?? 'none' }}</dd>
-            <dt>Handle</dt><dd>{{ entity.renderHandle ?? 'none' }}</dd>
+            <dt>Node kind</dt><dd>{{ node.nodeKind }}</dd>
+            <dt>Projection</dt><dd>{{ store.selectedEntity()?.projected ? 'retained' : 'not rendered' }}</dd>
+            <dt>Asset</dt><dd>{{ node.asset ?? 'none' }}</dd>
+            <dt>Parent</dt><dd>{{ node.parentNodeId ?? 'root' }}</dd>
           </dl>
           <section class="inspector-section">
             <header><strong>Transform</strong><span>authored-scene</span></header>
-            @if (entity.transform) {
-              <div class="vector-editor">
-                @for (axis of ['X', 'Y', 'Z']; track axis; let index = $index) {
-                  <label>
-                    <span>{{ axis }}</span>
-                    <input type="number" step="0.1" [value]="translation($any(index))" (input)="updateTranslation($any(index), $any($event.target).value)" />
-                  </label>
-                }
-              </div>
-              <div class="inspector-actions">
-                <button type="button" [disabled]="state().preview === null" (click)="store.cancelPreview()">Cancel</button>
-                <button type="button" class="primary" [disabled]="state().preview === null || state().operation !== 'idle'" (click)="commitPreview()">Commit</button>
-              </div>
-              <small class="owner-note">Preview is disposable UI state. Commit is hash- and revision-guarded by Rust.</small>
+            <div class="vector-editor">
+              @for (axis of ['X', 'Y', 'Z']; track axis; let index = $index) {
+                <label>
+                  <span>{{ axis }}</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    [attr.aria-label]="'Translation ' + axis"
+                    [disabled]="node.entityId === null"
+                    [value]="translation($any(index))"
+                    (input)="updateTranslation($any(index), $any($event.target).value)"
+                  />
+                </label>
+              }
+            </div>
+            <div class="inspector-actions">
+              <button type="button" [disabled]="state().preview === null" (click)="store.cancelPreview()">Cancel</button>
+              <button type="button" class="primary" data-action="commit-transform" [disabled]="state().preview === null || state().operation !== 'idle'" (click)="commitPreview()">Commit</button>
+            </div>
+            @if (node.entityId === null) {
+              <small class="owner-note">This authored node has no entity identity, so the current typed entity operation is unavailable.</small>
             } @else {
-              <div class="empty-state">This owner entity has no projected transform.</div>
+              <small class="owner-note">Local preview is disposable UI state. Commit is hash- and revision-guarded by Rust, then canonically reread.</small>
             }
           </section>
           <section class="inspector-section muted-section">

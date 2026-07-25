@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const templateUrl = new URL('../libs/editor-shell/src/studio-shell.component.html', import.meta.url);
 const stateUrl = new URL('../libs/editor-shell/src/state.ts', import.meta.url);
+const viewportUrl = new URL('../libs/viewport/src/studio-viewport.component.ts', import.meta.url);
 
 test('shell exposes the preserved editor surfaces and honest deferred operations', async () => {
   const template = await readFile(templateUrl, 'utf8');
@@ -18,8 +19,19 @@ test('shell exposes the preserved editor surfaces and honest deferred operations
   ]) {
     assert.match(template, new RegExp(`data-visual-id="${visualId}"`));
   }
-  assert.match(template, /disabled title="Shared renderer viewport and picking land in M11D"/);
+  assert.match(template, /<rusty-studio-viewport/);
+  assert.match(template, /Picking is active directly on the shared renderer canvas/);
   assert.match(template, /disabled title="Voxel asset, annotation, history, and conversion owners land in M11E"/);
+});
+
+test('viewport composes the shared renderer host without private Three ownership', async () => {
+  const viewport = await readFile(viewportUrl, 'utf8');
+  assert.match(viewport, /mountRendererInspectionSurface/);
+  assert.match(viewport, /surface\.replaceFrame\(frame\)/);
+  assert.match(viewport, /surface\.pick\(/);
+  assert.match(viewport, /surface\.setGrid\(/);
+  assert.match(viewport, /surface\.dispose\(\)/);
+  assert.doesNotMatch(viewport, /from ['"]three/);
 });
 
 test('shell state keeps canonical content, projection, selection, and preview as distinct models', async () => {

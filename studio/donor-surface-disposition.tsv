@@ -26,7 +26,7 @@ workspace-generators	libs/studio-workspace-generators/	exclude	-	Package generat
 nx-config	nx.json	adapt	studio/nx.json	Retain an isolated Nx domain with successor names and modules.
 package-manifest	package.json	adapt	studio/package.json	Retain Angular/Nx tooling while replacing all sibling Asha links.
 dependency-lock	pnpm-lock.yaml	adapt	studio/pnpm-lock.yaml	Generate a standalone successor lock containing no sibling or Asha packages.
-workspace-config	pnpm-workspace.yaml	adapt	studio/pnpm-workspace.yaml	Retain a nested workspace isolated from the root and renderer workspaces.
+workspace-config	pnpm-workspace.yaml	adapt	studio/pnpm-workspace.yaml	Retain a nested workspace isolated from the root while explicitly including the four same-repository shared renderer packages needed by clean Studio installs.
 boundary-checker	scripts/check-boundaries.mjs	adapt	studio/scripts/check-boundaries.mjs	Retain executable dependency checks with successor ownership rules.
 demo-environment-proof	scripts/check-demo-environment-authoring.mjs	historical-only	studio/test/integration	Preserve the visible environment workflow but replace fixed Asha Demo HTTP proof plumbing.
 doc-command-checker	scripts/check-doc-script-references.mjs	adapt	studio/scripts/check-doc-script-references.mjs	Retain runnable documentation command validation once operational docs land.

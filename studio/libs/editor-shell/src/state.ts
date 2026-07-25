@@ -5,6 +5,8 @@ import type {
   LoadingBayDomainReadout,
   OwnerInspections,
   ProjectionReadout,
+  SceneHierarchyNodeReadout,
+  SceneHierarchyReadout,
   StudioProjectIdentity,
   StudioProjectReadout,
 } from '@rusty-engine/studio-adapter-client';
@@ -30,6 +32,7 @@ export interface AuthoringDocumentView {
   readonly identity: StudioProjectIdentity;
   readonly canonical: CanonicalOwnerContent;
   readonly inspections: OwnerInspections;
+  readonly sceneHierarchy: SceneHierarchyReadout;
   readonly domain: LoadingBayDomainReadout;
   readonly voxel: Readonly<Record<string, unknown>> | null;
 }
@@ -47,6 +50,7 @@ export interface LiveProjectionView {
   readonly frame: RenderFrameDiff;
   readonly readout: ProjectionReadout;
   readonly entities: readonly ProjectedEntityView[];
+  readonly generation: number;
 }
 
 export interface TransformPreviewState {
@@ -56,8 +60,9 @@ export interface TransformPreviewState {
 }
 
 export interface EditorSelectionState {
+  readonly sceneNodeId: number | null;
   readonly entityId: number | null;
-  readonly source: 'hierarchy' | 'projection' | 'inspector' | null;
+  readonly source: 'hierarchy' | 'renderer' | 'inspector' | null;
 }
 
 export interface StudioViewSettings {
@@ -95,7 +100,7 @@ function initialSnapshot(): StudioWorkspaceSnapshot {
     authoringDocument: null,
     liveProjection: null,
     preview: null,
-    selection: { entityId: null, source: null },
+    selection: { sceneNodeId: null, entityId: null, source: null },
     operation: 'idle',
     hierarchyFilter: '',
     activeMenu: null,
@@ -169,11 +174,18 @@ export class StudioWorkspaceStore {
     this.#patch({ operation: 'closing', lastError: null });
     try {
       await this.#client.closeProject();
+      const connection = this.#snapshot().connection;
       this.#patch({
+        connection: connection.kind === 'connected'
+          ? {
+              ...connection,
+              message: `${connection.adapter.adapterId} is ready. No project is open.`,
+            }
+          : connection,
         authoringDocument: null,
         liveProjection: null,
         preview: null,
-        selection: { entityId: null, source: null },
+        selection: { sceneNodeId: null, entityId: null, source: null },
         operation: 'idle',
       });
     } catch (error) {
@@ -182,20 +194,46 @@ export class StudioWorkspaceStore {
   }
 
   selectEntity(entityId: number | null, source: EditorSelectionState['source']): void {
+    const sceneNodeId = entityId === null
+      ? null
+      : (this.#snapshot().authoringDocument?.sceneHierarchy.nodes.find(
+          (node) => node.entityId === entityId,
+        )?.nodeId ?? null);
     this.#patch({
-      selection: { entityId, source: entityId === null ? null : source },
+      selection: {
+        sceneNodeId,
+        entityId,
+        source: entityId === null ? null : source,
+      },
       preview: this.#snapshot().preview?.entityId === entityId ? this.#snapshot().preview : null,
     });
   }
 
+  selectHierarchyNode(sceneNodeId: number): void {
+    const node = this.#snapshot().authoringDocument?.sceneHierarchy.nodes.find(
+      (candidate) => candidate.nodeId === sceneNodeId,
+    );
+    if (node === undefined) return;
+    this.#patch({
+      selection: {
+        sceneNodeId: node.nodeId,
+        entityId: node.entityId,
+        source: 'hierarchy',
+      },
+      preview: node.entityId !== null && this.#snapshot().preview?.entityId === node.entityId
+        ? this.#snapshot().preview
+        : null,
+    });
+  }
+
   beginTranslationPreview(entityId: number): void {
-    const entity = this.#snapshot().liveProjection?.entities.find(
+    const node = this.#snapshot().authoringDocument?.sceneHierarchy.nodes.find(
       (candidate) => candidate.entityId === entityId,
     );
-    const translation = entity?.transform?.translation;
-    if (translation === undefined) return;
+    if (node === undefined) return;
+    const translation = node.localTransform.translation;
     this.#patch({
-      selection: { entityId, source: 'inspector' },
+      selection: { sceneNodeId: node.nodeId, entityId, source: 'inspector' },
       preview: { entityId, original: translation, translation },
       lastError: null,
     });
@@ -237,16 +275,24 @@ export class StudioWorkspaceStore {
     this.#patch({ hierarchyFilter: value });
   }
 
-  visibleEntities(): readonly ProjectedEntityView[] {
+  visibleHierarchyNodes(): readonly SceneHierarchyNodeReadout[] {
     const state = this.#snapshot();
     const query = state.hierarchyFilter.trim().toLocaleLowerCase();
-    const entities = state.liveProjection?.entities ?? [];
-    if (query.length === 0) return entities;
-    return entities.filter((entity) =>
-      `${entity.label} ${String(entity.entityId)} ${entity.asset ?? ''}`
+    const nodes = [...(state.authoringDocument?.sceneHierarchy.nodes ?? [])]
+      .sort((left, right) => left.displayOrder - right.displayOrder);
+    if (query.length === 0) return nodes;
+    return nodes.filter((node) =>
+      `${node.label} ${String(node.nodeId)} ${String(node.entityId ?? '')} ${node.nodeKind} ${node.asset ?? ''} ${node.tags.join(' ')}`
         .toLocaleLowerCase()
         .includes(query),
     );
+  }
+
+  selectedHierarchyNode(): SceneHierarchyNodeReadout | null {
+    const state = this.#snapshot();
+    return state.authoringDocument?.sceneHierarchy.nodes.find(
+      (node) => node.nodeId === state.selection.sceneNodeId,
+    ) ?? null;
   }
 
   selectedEntity(): ProjectedEntityView | null {
@@ -280,20 +326,27 @@ export class StudioWorkspaceStore {
     this.#patch({ lastError: message });
   }
 
-  #acceptProject(project: StudioProjectReadout, resetProjection: boolean): void {
-    const previousEntities = resetProjection
-      ? []
-      : (this.#snapshot().liveProjection?.entities ?? []);
+  #acceptProject(project: StudioProjectReadout, resetSelection: boolean): void {
+    const current = this.#snapshot();
     const entities = summarizeProjectionForUi(
       project.projection,
       project.inspections.entityState.entityIds,
-      previousEntities,
+      [],
     );
+    const selection = acceptedSelection(project, current.selection, resetSelection);
+    const connection = current.connection.kind === 'connected'
+      ? {
+          ...current.connection,
+          message: `${current.connection.adapter.adapterId} · ${project.identity.name} is open.`,
+        }
+      : current.connection;
     this.#patch({
+      connection,
       authoringDocument: {
         identity: project.identity,
         canonical: project.canonical,
         inspections: project.inspections,
+        sceneHierarchy: project.sceneHierarchy,
         domain: project.loadingBay,
         voxel: project.voxel ?? null,
       },
@@ -301,7 +354,10 @@ export class StudioWorkspaceStore {
         frame: project.projection,
         readout: project.projectionReadout,
         entities,
+        generation: (current.liveProjection?.generation ?? 0) + 1,
       },
+      selection,
+      preview: null,
       operation: 'idle',
       lastError: null,
     });
@@ -317,6 +373,21 @@ export class StudioWorkspaceStore {
   #patch(update: Partial<StudioWorkspaceSnapshot>): void {
     this.#snapshot.update((current) => ({ ...current, ...update }));
   }
+}
+
+function acceptedSelection(
+  project: StudioProjectReadout,
+  previous: EditorSelectionState,
+  reset: boolean,
+): EditorSelectionState {
+  if (reset) return { sceneNodeId: null, entityId: null, source: null };
+  const node = project.sceneHierarchy.nodes.find((candidate) =>
+    previous.entityId === null
+      ? candidate.nodeId === previous.sceneNodeId
+      : candidate.entityId === previous.entityId,
+  );
+  if (node === undefined) return { sceneNodeId: null, entityId: null, source: null };
+  return { sceneNodeId: node.nodeId, entityId: node.entityId, source: previous.source };
 }
 
 /**

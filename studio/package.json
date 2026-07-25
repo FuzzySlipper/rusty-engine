@@ -9,14 +9,16 @@
     "start": "NX_DAEMON=false nx serve studio-app --host 127.0.0.1",
     "dev": "pnpm run start",
     "host": "tsx scripts/studio-host.ts",
-    "build": "pnpm --filter @rusty-engine/studio-adapter-client run build && pnpm --filter @rusty-engine/studio-editor-shell run build && NX_DAEMON=false nx build studio-app",
+    "build:renderer": "tsc --build ../render/packages/renderer-host/tsconfig.json",
+    "build": "pnpm run build:renderer && pnpm --filter @rusty-engine/studio-adapter-client run build && pnpm --filter @rusty-engine/studio-viewport run build && pnpm --filter @rusty-engine/studio-editor-shell run build && NX_DAEMON=false nx build studio-app",
     "lint": "NX_DAEMON=false nx run-many -t lint --all && eslint scripts test",
-    "typecheck": "pnpm --filter @rusty-engine/studio-adapter-client run typecheck && pnpm --filter @rusty-engine/studio-editor-shell run typecheck && NX_DAEMON=false nx run studio-app:typecheck && tsc --noEmit -p tsconfig.host.json",
-    "test": "pnpm --filter @rusty-engine/studio-adapter-client run test && pnpm --filter @rusty-engine/studio-editor-shell run test && NX_DAEMON=false nx run studio-app:test",
+    "typecheck": "pnpm run build:renderer && pnpm --filter @rusty-engine/studio-adapter-client run typecheck && pnpm --filter @rusty-engine/studio-viewport run typecheck && pnpm --filter @rusty-engine/studio-editor-shell run typecheck && NX_DAEMON=false nx run studio-app:typecheck && tsc --noEmit -p tsconfig.host.json",
+    "test": "pnpm --filter @rusty-engine/studio-adapter-client run test && pnpm --filter @rusty-engine/studio-viewport run test && pnpm --filter @rusty-engine/studio-editor-shell run test && NX_DAEMON=false nx run studio-app:test",
     "check": "pnpm run lint && pnpm run typecheck && pnpm run test",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check:migration": "node scripts/check-migration-plan.mjs",
     "test:migration": "bash scripts/test-migration-checker.sh",
+    "test:browser-integration": "playwright test --config playwright.config.ts",
     "verify:adapter-client": "pnpm --filter @rusty-engine/studio-adapter-client run typecheck && pnpm --filter @rusty-engine/studio-adapter-client run test",
     "verify": "pnpm run check:boundaries && pnpm run check:migration && pnpm run test:migration && pnpm run check && pnpm run build"
   },
@@ -30,6 +32,7 @@
     "tslib": "^2.3.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@angular/build": "~21.2.0",
     "@angular/compiler-cli": "~21.2.0",
     "@eslint/js": "^9.8.0",

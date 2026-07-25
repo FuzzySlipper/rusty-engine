@@ -6,10 +6,10 @@ renderer.
 
 M11A contains the source inventory, dispositions, owner-adoption map, dependency boundary, and
 workspace gate. M11B supplies the structural TypeScript client for the real project-owned Loading
-Bay Rust adapter. M11C supplies a launchable Angular/Nx editor shell whose authoring document,
-live projection, selection, and disposable transform preview stay distinct. Scene hierarchy, the
-shared Three renderer, and picking follow in M11D; complete voxel/material/annotation/history and
-conversion workflows follow in M11E.
+Bay Rust adapter. M11C supplies the Angular/Nx editor shell. M11D makes canonical authored-scene
+hierarchy, typed transform settlement, shared renderer lifecycle/grid/picking, and real Chromium
+save/reopen evidence operational. Complete voxel/material/annotation/history and conversion
+workflows follow in M11E.
 
 See [the Studio migration contract](../docs/studio-migration-contract.md).
 The closed adapter protocol and its explicit integration gate are documented in
@@ -47,12 +47,12 @@ checkout, interpret project content, or acquire gameplay authority. To open on l
 one `root` and one project-relative `project` query parameter; the same controls remain visible in
 the shell.
 
-The explicit real-consumer proof is separate:
+The explicit real-consumer proof is separate and mutates only a temporary copy of the demo content:
 
 ```bash
 ./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo
 ```
 
-CI checks out the exact public demo revision declared in
+It includes a visible Chromium run through the shared renderer. CI checks out the exact public demo revision declared in
 [`demo-consumer-source.json`](demo-consumer-source.json). Local integration remains explicit so the
 ordinary Engine and isolated Studio gates never acquire a sibling-checkout dependency.

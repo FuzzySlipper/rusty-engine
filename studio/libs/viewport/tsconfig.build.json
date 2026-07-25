@@ -8,10 +8,6 @@
     "noEmit": false,
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": true,
-    "paths": {
-      "@rusty-engine/studio-adapter-client": ["../adapter-client/dist/index.d.ts"],
-      "@rusty-engine/studio-viewport": ["../viewport/dist/index.d.ts"]
-    }
+    "sourceMap": true
   }
 }

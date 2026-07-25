@@ -11,7 +11,6 @@ import type {
   RenderHandle,
   RenderLayer,
 } from '@rusty-engine/render-contracts';
-import { renderHandle } from '@rusty-engine/render-contracts';
 import { RenderProjection, type RenderProjectionSnapshot } from '@rusty-engine/render-projection';
 import { mountRendererEditorBackend } from '@rusty-engine/renderer-three/backend';
 import {
@@ -267,12 +266,6 @@ interface BackendPickReceipt {
 }
 
 const CHANNELS: readonly RendererEditorViewportChannel[] = ['runtime', 'authored', 'overlay'];
-const CHANNEL_HANDLE_OFFSETS: Readonly<Record<RendererEditorViewportChannel, number>> = {
-  runtime: 1_000_000_000_000,
-  authored: 2_000_000_000_000,
-  overlay: 3_000_000_000_000,
-};
-const MAX_LOGICAL_HANDLE = 999_999_999_999;
 const MAX_PICK_FILTER_VALUES = 128;
 const MAX_VIEWPORT_DIMENSION = 16_384;
 const MAX_DIAGNOSTICS = 64;
@@ -550,10 +543,10 @@ function createChannelHandle(
       return rejectedChannelReceipt(state, diagnostics, validation.diagnostic);
     }
     try {
-      backend.replaceChannel(channel, namespaceFrame(channel, {
+      backend.replaceChannel(channel, {
         schemaVersion: 1,
         ops: nextHistory,
-      }));
+      });
     } catch (error) {
       return rejectedChannelReceipt(state, diagnostics, backendDiagnostic(channel, error));
     }
@@ -656,13 +649,13 @@ function validateDiffHandles(
   if ('parent' in op && op.parent !== null) {
     values.push(op.parent);
   }
-  if (values.every((value) => Number.isSafeInteger(value) && value >= 0 && value <= MAX_LOGICAL_HANDLE)) {
+  if (values.every((value) => Number.isSafeInteger(value) && value >= 0)) {
     return null;
   }
   return {
     channel,
     code: 'invalid_handle',
-    message: `render handles must be canonical integers from 0 through ${MAX_LOGICAL_HANDLE}`,
+    message: `render handles must be canonical integers from 0 through ${Number.MAX_SAFE_INTEGER}`,
     recoverable: true,
   };
 }
@@ -680,42 +673,6 @@ function createdLayer(op: RenderDiff): RenderLayer | null {
   return null;
 }
 
-function namespaceFrame(
-  channel: RendererEditorViewportChannel,
-  frame: RenderFrameDiff,
-): RenderFrameDiff {
-  return { schemaVersion: 1, ops: frame.ops.map((op) => namespaceDiff(channel, op)) };
-}
-
-function namespaceDiff(channel: RendererEditorViewportChannel, op: RenderDiff): RenderDiff {
-  const handle = (value: RenderHandle): RenderHandle =>
-    renderHandle(CHANNEL_HANDLE_OFFSETS[channel] + value);
-  const parent = (value: RenderHandle | null): RenderHandle | null => value === null ? null : handle(value);
-  switch (op.op) {
-    case 'create':
-      return { ...op, handle: handle(op.handle), parent: parent(op.parent) };
-    case 'createStaticMeshInstance':
-    case 'createAnimatedMeshInstance':
-    case 'createSprite':
-    case 'createLight':
-      return { ...op, handle: handle(op.handle), parent: parent(op.parent) };
-    case 'update':
-    case 'destroy':
-    case 'replaceMeshPayload':
-    case 'setMaterialInstanceParameters':
-    case 'setAnimatedMeshPlayback':
-    case 'updateSprite':
-    case 'updateLight':
-      return { ...op, handle: handle(op.handle) };
-    case 'defineMaterial':
-    case 'defineTexture':
-    case 'defineSpriteAtlas':
-    case 'defineStaticMesh':
-    case 'defineAnimatedMesh':
-      return op;
-  }
-}
-
 function pickViewport(
   status: RendererEditorViewportStatus,
   size: RendererEditorViewportSize,
@@ -730,11 +687,7 @@ function pickViewport(
     return { diagnostics: [issue], hint: null, kind: 'rusty_renderer_editor_viewport_pick.v1' };
   }
   const channels = request.filter?.channels ?? CHANNELS;
-  const backendHandles = request.filter?.handles === undefined
-    ? undefined
-    : channels.flatMap((channel) => request.filter?.handles?.map((handle) =>
-        renderHandle(CHANNEL_HANDLE_OFFSETS[channel] + handle),
-      ) ?? []);
+  const backendHandles = request.filter?.handles;
   const normalizedX = (request.point[0] / size.width) * 2 - 1;
   const normalizedY = -((request.point[1] / size.height) * 2 - 1);
   const point: readonly [number, number] = [
@@ -765,20 +718,22 @@ function pickViewport(
     if (receipt.hit === null) {
       return { diagnostics: [], hint: null, kind: 'rusty_renderer_editor_viewport_pick.v1' };
     }
-    const offset = CHANNEL_HANDLE_OFFSETS[receipt.hit.channel];
-    const logicalHandle = receipt.hit.handle - offset;
-    const state = states.get(receipt.hit.channel);
-    const logicalRenderHandle = renderHandle(logicalHandle);
-    const retained = state?.projection.snapshot().nodes.some((node) => node.handle === logicalRenderHandle) ?? false;
-    if (state === undefined || state.disposed || !retained || !Number.isSafeInteger(logicalHandle)
-      || logicalHandle < 0 || logicalHandle > MAX_LOGICAL_HANDLE) {
-      const diagnostic = backendDiagnostic(receipt.hit.channel, 'backend returned an unrecognized namespaced handle');
+    const hit = receipt.hit;
+    const state = states.get(hit.channel);
+    const retained = state?.projection.snapshot().nodes.some(
+      (node) => node.handle === hit.handle,
+    ) ?? false;
+    if (state === undefined || state.disposed || !retained) {
+      const diagnostic = backendDiagnostic(
+        hit.channel,
+        'backend returned an unrecognized handle for its channel',
+      );
       rememberDiagnostic(diagnostics, diagnostic);
       return { diagnostics: [diagnostic], hint: null, kind: 'rusty_renderer_editor_viewport_pick.v1' };
     }
     return {
       diagnostics: [],
-      hint: { ...receipt.hit, handle: logicalRenderHandle },
+      hint: hit,
       kind: 'rusty_renderer_editor_viewport_pick.v1',
     };
   } catch (error) {
@@ -809,7 +764,7 @@ function validatePickRequest(
     && (!Number.isFinite(request.maxDistance) || request.maxDistance <= 0);
   const invalidChannel = request.filter?.channels?.some((channel) => !CHANNELS.includes(channel)) ?? false;
   const invalidHandle = request.filter?.handles?.some((handle) =>
-    !Number.isSafeInteger(handle) || handle < 0 || handle > MAX_LOGICAL_HANDLE,
+    !Number.isSafeInteger(handle) || handle < 0,
   ) ?? false;
   if (invalidPoint || invalidDistance || invalidChannel || invalidHandle
     || counts.some((count) => count > MAX_PICK_FILTER_VALUES)) {

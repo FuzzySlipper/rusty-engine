@@ -1,6 +1,6 @@
 # Studio external-project adapter protocol
 
-Status: M11B implemented spine
+Status: M11D scene workflow implemented
 
 Rusty Engine Studio talks to one project-owned Rust adapter at a time through a bounded JSON-lines
 process. The adapter is a downstream composition root: it understands that project's layout,
@@ -13,14 +13,14 @@ against a real external checkout without turning that checkout into an ordinary 
 
 ## Closed protocol
 
-Every request carries `protocolVersion: 1` and a caller-selected `requestId`. Version 1 contains
+Every request carries `protocolVersion: 2` and a caller-selected `requestId`. Version 2 contains
 only these tagged request families:
 
 | Request | Purpose | Canonical authority |
 | --- | --- | --- |
 | `describe` | Identify adapter, project kind, schema, and the closed operation set. | Project adapter |
 | `openProject` | Open an explicit absolute root and safe relative project file; return canonical readouts and initial projection. | Project adapter plus Engine owners |
-| `readProject` | Reread the open source and produce current readouts and retained projection. | Project adapter plus Engine owners |
+| `readProject` | Reread the open source and produce current readouts and one complete replaceable projection. | Project adapter plus Engine owners |
 | `setEntityTranslation` | Apply one typed authored transform with expected project hash and scene revision. | `authored-scene`, downstream admission, `content-store` |
 | `closeProject` | Release open-project and retained-projection state. | Project adapter host lifecycle |
 
@@ -33,9 +33,10 @@ The TypeScript owner is [`../studio/libs/adapter-client`](../studio/libs/adapter
 strict structural decoding, request correlation, and named client methods. It deliberately does not
 parse the canonical owner JSON strings or reproduce project, scene, entity, voxel, persistence, or
 game semantics. Shared render frames are decoded by `@rusty-engine/render-contracts`.
-The client links that same-repository package explicitly and builds it from production TypeScript
-sources before local typechecking or emission; it does not depend on a package-manager snapshot or
-an ignored `dist` directory left by renderer work.
+The isolated Studio workspace includes the same-repository renderer packages explicitly. Its
+`viewport` library mounts `renderer-host`, which composes render-projection and renderer-three;
+Studio does not import Three, retain a private scene graph, translate materials/resources, own a
+raycaster, or duplicate renderer disposal.
 
 ## Loading Bay owner composition
 
@@ -51,8 +52,10 @@ Opening `content/projects/loading-bay.project.json` exercises the shipped Engine
 
 The adapter returns the canonical project, catalog, scene, entity-state, and content-manifest codec
 results alongside inspection DTOs, Loading Bay's explicitly named domain summary, voxel inspection,
-and the shared render frame. This is not a second content representation: the derived values are
-readouts rebuilt from admitted Rust state on every read.
+an authored-scene hierarchy readout, and the shared render frame. Hierarchy order, node identity,
+parentage, kind, and local/world transforms are produced in Rust. Every response carries a complete
+frame, including resource definitions, so Studio can atomically replace the shared renderer channel.
+These are readouts rebuilt from admitted Rust state on every read, not a second content model.
 
 ## Safety and atomicity
 
@@ -80,7 +83,9 @@ Rejected, invalid, stale, and malformed operations leave the original project by
   semantic rejection, optimistic replacement, atomicity, and canonical reread.
 - `./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo` is the explicit
   cross-repository proof. It builds the project-owned adapter, opens the real Loading Bay source,
-  validates voxel and owner readouts, and proves a retained no-op reread.
+  validates voxel and owner readouts, and then runs a real Chromium workflow against a temporary
+  project copy. The browser proof covers canonical hierarchy selection, shared-renderer picking,
+  translation preview/commit, refresh/reopen persistence, and invalid-operation non-mutation.
 - `.github/workflows/studio-demo-integration.yml` checks out the public demo at the exact revision
   declared by `studio/demo-consumer-source.json` and runs that proof as an explicit integration
   gate. The pin makes downstream drift a conscious update instead of an ambient sibling checkout.

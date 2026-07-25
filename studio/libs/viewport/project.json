@@ -1,0 +1,13 @@
+{
+  "name": "studio-viewport",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "libs/viewport/src",
+  "targets": {
+    "lint": { "executor": "@nx/eslint:lint" },
+    "build": { "command": "pnpm --filter @rusty-engine/studio-viewport run build" },
+    "typecheck": { "command": "pnpm --filter @rusty-engine/studio-viewport run typecheck" },
+    "test": { "command": "pnpm --filter @rusty-engine/studio-viewport run test" }
+  },
+  "tags": ["scope:studio", "type:boundary"]
+}

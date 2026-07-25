@@ -184,26 +184,9 @@ small { color: var(--studio-muted); }
   overflow: hidden;
   background: radial-gradient(circle at 50% 45%, #1b2830 0, #10181d 52%, #0a0f12 100%);
 }
-.viewport-surface.show-grid::before {
-  position: absolute;
-  inset: 0;
-  content: '';
-  opacity: .28;
-  background-image:
-    linear-gradient(#6c8e8a45 1px, transparent 1px),
-    linear-gradient(90deg, #6c8e8a45 1px, transparent 1px);
-  background-size: 32px 32px;
-  transform: perspective(440px) rotateX(62deg) scale(1.5) translateY(22%);
-  transform-origin: center bottom;
-}
-.projection-stage { position: absolute; inset: 30px 34px 42px; display: flex; align-content: center; align-items: center; justify-content: center; flex-wrap: wrap; gap: 14px; }
-.projection-chip { position: relative; min-width: 105px; max-width: 150px; display: grid; gap: 3px; border-color: #547078; background: #1c2d33dd; box-shadow: 0 8px 20px #0006; }
-.projection-chip.is-selected { border-color: var(--studio-selected); color: #ffe3bd; background: #5a3e25; transform: translateY(-3px); }
-.projection-chip small { overflow: hidden; text-overflow: ellipsis; }
-.viewport-readout { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 12px; padding: 5px 8px; border: 1px solid var(--studio-border-soft); background: #101619dd; color: var(--studio-muted); font-size: 11px; }
+.viewport-source-readout { position: absolute; top: 8px; right: 8px; display: flex; gap: 12px; padding: 5px 8px; border: 1px solid var(--studio-border-soft); background: #101619dd; color: var(--studio-muted); font-size: 11px; pointer-events: none; }
 .viewport-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 7px; color: var(--studio-muted); }
 .viewport-empty-mark { display: grid; width: 55px; height: 55px; place-items: center; border: 1px solid var(--studio-border); color: var(--studio-accent); font-size: 22px; }
-.preview-badge { position: absolute; left: 8px; bottom: 8px; padding: 5px 8px; border: 1px solid var(--studio-warning); color: #ffe4aa; background: #3f321cdd; }
 
 .bottom-panel { min-height: 0; border-top: 1px solid var(--studio-border); background: var(--studio-panel); }
 .bottom-panel nav { display: flex; height: 32px; border-bottom: 1px solid var(--studio-border-soft); background: var(--studio-chrome); }

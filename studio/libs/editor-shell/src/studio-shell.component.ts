@@ -1,12 +1,14 @@
 import { ChangeDetectionStrategy, Component, HostBinding, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import type { OwnerDiagnostic } from '@rusty-engine/studio-adapter-client';
+import { StudioViewportComponent } from '@rusty-engine/studio-viewport';
 
 import { STUDIO_WORKSPACE } from './tokens.js';
 
 @Component({
   selector: 'rusty-studio-shell',
   standalone: true,
-  imports: [FormsModule],
+  imports: [FormsModule, StudioViewportComponent],
   templateUrl: './studio-shell.component.html',
   styleUrl: './studio-shell.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -36,15 +38,22 @@ export class StudioShellComponent {
   }
 
   beginSelectedPreview(): void {
-    const selected = this.store.selectedEntity();
-    if (selected !== null) this.store.beginTranslationPreview(selected.entityId);
+    const entityId = this.store.selectedHierarchyNode()?.entityId;
+    if (entityId !== null && entityId !== undefined) {
+      this.store.beginTranslationPreview(entityId);
+    }
+  }
+
+  canPreviewTranslation(): boolean {
+    const entityId = this.store.selectedHierarchyNode()?.entityId;
+    return entityId !== null && entityId !== undefined;
   }
 
   updateTranslation(axis: 0 | 1 | 2, raw: string): void {
-    const selected = this.store.selectedEntity();
-    if (selected === null) return;
-    if (this.state().preview?.entityId !== selected.entityId) {
-      this.store.beginTranslationPreview(selected.entityId);
+    const entityId = this.store.selectedHierarchyNode()?.entityId;
+    if (entityId === null || entityId === undefined) return;
+    if (this.state().preview?.entityId !== entityId) {
+      this.store.beginTranslationPreview(entityId);
     }
     this.store.setPreviewTranslationAxis(axis, Number(raw));
   }
@@ -52,7 +61,17 @@ export class StudioShellComponent {
   translation(axis: 0 | 1 | 2): number | null {
     const preview = this.state().preview;
     if (preview !== null) return preview.translation[axis];
-    return this.store.selectedEntity()?.transform?.translation[axis] ?? null;
+    return this.store.selectedHierarchyNode()?.localTransform.translation[axis] ?? null;
+  }
+
+  nodeIcon(kind: string): string {
+    switch (kind) {
+      case 'emptyGroup': return '▾';
+      case 'light': return '☀';
+      case 'voxelVolume': return '▦';
+      case 'marker': return '⌖';
+      default: return '◇';
+    }
   }
 
   commitPreview(): void {
@@ -60,11 +79,17 @@ export class StudioShellComponent {
   }
 
   ownerDiagnosticCount(): number {
+    return this.ownerDiagnostics().length;
+  }
+
+  ownerDiagnostics(): readonly OwnerDiagnostic[] {
     const inspections = this.state().authoringDocument?.inspections;
-    if (inspections === undefined) return 0;
-    return inspections.catalog.diagnostics.diagnostics.length
-      + inspections.scene.diagnostics.diagnostics.length
-      + inspections.entityState.diagnostics.diagnostics.length
-      + inspections.persistence.diagnostics.diagnostics.length;
+    if (inspections === undefined) return [];
+    return [
+      ...inspections.catalog.diagnostics.diagnostics,
+      ...inspections.scene.diagnostics.diagnostics,
+      ...inspections.entityState.diagnostics.diagnostics,
+      ...inspections.persistence.diagnostics.diagnostics,
+    ];
   }
 }

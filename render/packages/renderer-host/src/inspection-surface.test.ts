@@ -773,7 +773,7 @@ function primitiveCreate(handle: number): Extract<RenderDiff, { readonly op: 'cr
 function invalidLogicalHandleFrame(): RenderFrameDiff {
   return {
     schemaVersion: 1,
-    ops: [{ ...primitiveCreate(8), handle: Number.MAX_SAFE_INTEGER as never }],
+    ops: [{ ...primitiveCreate(8), handle: (Number.MAX_SAFE_INTEGER + 1) as never }],
   };
 }
 

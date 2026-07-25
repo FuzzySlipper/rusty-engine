@@ -31,11 +31,20 @@ void test('editor viewport isolates equal handles across deterministic runtime a
     firstCreatedHandle(backend.frame('authored')),
     firstCreatedHandle(backend.frame('overlay')),
   ];
-  assert.equal(new Set(backendHandles).size, 3);
+  assert.deepEqual(backendHandles, [7, 7, 7]);
   assert.deepEqual(
     viewport.readout().channels.map((channel) => channel.projection.nodes[0]?.handle),
     [7, 7, 7],
   );
+
+  const rustNamespacedHandle = renderHandle((2 ** 40) + 1);
+  assert.equal(
+    viewport.channels.authored.replace(
+      primitiveFrame(rustNamespacedHandle, 'rust-projection', 'scene'),
+    ).applied,
+    true,
+  );
+  assert.equal(firstCreatedHandle(backend.frame('authored')), rustNamespacedHandle);
   assert.deepEqual(
     RUSTY_RENDERER_EDITOR_VIEWPORT_CHANNEL_POLICIES.map(({ channel, order, depthPolicy }) => ({
       channel,
@@ -64,7 +73,7 @@ void test('editor viewport isolates equal handles across deterministic runtime a
   assert.equal(rejected.applied, false);
   assert.equal(rejected.diagnostics[0]?.code, 'invalid_frame');
   assert.deepEqual(viewport.channels.authored.snapshot(), beforeFailedReplace);
-  assert.equal(firstCreatedHandle(backend.frame('authored')), backendHandles[1]);
+  assert.equal(firstCreatedHandle(backend.frame('authored')), rustNamespacedHandle);
 
   const malformed = viewport.channels.authored.replace(
     { ops: null } as unknown as RenderFrameDiff,
