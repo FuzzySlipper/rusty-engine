@@ -102,6 +102,50 @@ fn write_candidates_enforce_exact_transition_and_two_sided_cas() {
 }
 
 #[test]
+fn durable_moves_and_deletes_require_the_exact_artifact_hash_guard() {
+    let prior = manifest("old.bin", b"old");
+    let moved = manifest("moved.bin", b"old");
+    let move_error = ContentWriteCandidate::build(
+        1,
+        &prior,
+        ContentWriteSetDraft {
+            next_manifest: moved,
+            writes: vec![],
+            moves: vec![ContentMove {
+                from: "old.bin".to_owned(),
+                to: "moved.bin".to_owned(),
+                expected_content_hash: None,
+            }],
+            deletes: vec![],
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        move_error,
+        ContentWriteSetError::HashMismatch("old.bin".to_owned())
+    );
+
+    let delete_error = ContentWriteCandidate::build(
+        1,
+        &prior,
+        ContentWriteSetDraft {
+            next_manifest: ContentManifest::new(vec![]),
+            writes: vec![],
+            moves: vec![],
+            deletes: vec![ContentDelete {
+                path: "old.bin".to_owned(),
+                expected_content_hash: None,
+            }],
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        delete_error,
+        ContentWriteSetError::HashMismatch("old.bin".to_owned())
+    );
+}
+
+#[test]
 fn load_plan_orders_owner_admission_before_resources() {
     let manifest = ContentManifest::new(vec![
         ContentArtifact::durable("z.resource", ArtifactRole::ImportedAsset, b"resource"),
@@ -329,4 +373,20 @@ fn instance_overrides_fail_closed_before_resolved_composition_changes() {
         duplicate,
         PrefabResolutionError::DuplicateOverride { .. }
     ));
+
+    let unknown = resolve_prefab(
+        &registry,
+        PrefabId::new(1),
+        &[PrefabOverride {
+            target_role: "visual".to_owned(),
+            value: PrefabOverrideValue::Material {
+                asset: "material/not-in-catalog".to_owned(),
+            },
+        }],
+    )
+    .unwrap_err();
+    assert_eq!(
+        unknown,
+        PrefabResolutionError::UnknownOverrideAsset("material/not-in-catalog".to_owned())
+    );
 }

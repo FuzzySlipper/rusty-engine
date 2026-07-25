@@ -1,7 +1,7 @@
 use core_ids::{EntityId, ProcessId, TagId};
 use core_math::Vec3;
 use entity_state::{
-    ActivatableCapabilityKind, CapabilityActivation, CapabilityActivationState,
+    encode_snapshot, ActivatableCapabilityKind, CapabilityActivation, CapabilityActivationState,
     CollisionCapability, ControllerCapability, EntityAuthoringError, EntityAuthoringService,
     EntityCapability, EntityCapabilityKind, EntityDefinition, EntityLifecycle, EntityState,
     KinematicCapability, TransformCapability,
@@ -80,6 +80,45 @@ fn lifecycle_labels_and_tombstones_have_one_clear_owner() {
         service.enable(&mut state, 4, id),
         Err(EntityAuthoringError::InvalidLifecycleTransition { .. })
     ));
+}
+
+#[test]
+fn repeated_lifecycle_and_activation_transitions_are_rejected_without_mutation() {
+    let service = EntityAuthoringService;
+    let id = EntityId::new(11);
+    let mut state = EntityState::from_definitions([EntityDefinition::new(id, "actor")
+        .with_transform(Vec3::ZERO)
+        .with_collision(true, false)
+        .with_controller(ControllerCapability::Process(ProcessId::new(5)))])
+    .expect("fixture");
+
+    let before = encode_snapshot(&state).unwrap();
+    assert!(matches!(
+        service.enable(&mut state, 0, id),
+        Err(EntityAuthoringError::InvalidLifecycleTransition {
+            from: EntityLifecycle::Active,
+            to: EntityLifecycle::Active,
+            ..
+        })
+    ));
+    assert_eq!(encode_snapshot(&state).unwrap(), before);
+
+    assert!(matches!(
+        service.set_capability_activation(
+            &mut state,
+            0,
+            id,
+            ActivatableCapabilityKind::Controller,
+            CapabilityActivation::Active,
+        ),
+        Err(EntityAuthoringError::Activation(
+            entity_state::CapabilityActivationError::AlreadyInState {
+                state: CapabilityActivationState::Active,
+                ..
+            }
+        ))
+    ));
+    assert_eq!(encode_snapshot(&state).unwrap(), before);
 }
 
 #[test]

@@ -13,6 +13,9 @@ pub struct PublicationReceipt {
     /// A successful swap can still leave the recoverable old directory behind
     /// if host cleanup fails. Publication is not falsely reported as failed.
     pub retained_backup: Option<PathBuf>,
+    /// The previous sidecar can remain as a harmless recoverable backup if
+    /// cleanup fails after both authoritative publications succeed.
+    pub retained_sidecar_backup: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -21,6 +24,7 @@ pub enum PublicationError {
     InvalidPlan,
     UnsafeOutputDirectory,
     ExistingOutputIsNotDirectory(PathBuf),
+    SidecarTargetIsNotFile(PathBuf),
     UnsafeRelativePath(String),
     DuplicatePath(String),
     ParentMissing(PathBuf),
@@ -28,6 +32,11 @@ pub enum PublicationError {
     VerificationFailed(String),
     RollbackFailed {
         publish_error: std::io::Error,
+        rollback_error: std::io::Error,
+        backup: PathBuf,
+    },
+    SidecarRollbackFailed {
+        publication_error: String,
         rollback_error: std::io::Error,
         backup: PathBuf,
     },
@@ -125,7 +134,102 @@ pub fn publish_directory_atomically(
         written_files: paths.into_iter().map(str::to_owned).collect(),
         replaced_previous,
         retained_backup,
+        retained_sidecar_backup: None,
     })
+}
+
+/// Publishes a provenance sidecar and its generated output as one recoverable
+/// transaction. The sidecar is staged before output changes begin. If output
+/// publication then fails, the previous sidecar is restored before returning.
+pub fn publish_directory_with_sidecar_atomically(
+    plan: &ImportPlan,
+    output_directory: &Path,
+    sidecar_path: &Path,
+    sidecar_bytes: &[u8],
+) -> Result<PublicationReceipt, PublicationError> {
+    if sidecar_path.exists() && !sidecar_path.is_file() {
+        return Err(PublicationError::SidecarTargetIsNotFile(
+            sidecar_path.to_owned(),
+        ));
+    }
+    let parent = sidecar_path
+        .parent()
+        .filter(|parent| parent.is_dir())
+        .ok_or_else(|| PublicationError::ParentMissing(sidecar_path.to_owned()))?;
+    let name = sidecar_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty() && *name != "." && *name != "..")
+        .ok_or(PublicationError::UnsafeOutputDirectory)?;
+    let (staging, backup) = reserve_file_paths(parent, name)?;
+    if let Err(error) = fs::write(&staging, sidecar_bytes) {
+        let _ = fs::remove_file(&staging);
+        return Err(PublicationError::Io(error));
+    }
+
+    let replaced_sidecar = sidecar_path.exists();
+    if replaced_sidecar {
+        if let Err(error) = fs::rename(sidecar_path, &backup) {
+            let _ = fs::remove_file(&staging);
+            return Err(PublicationError::Io(error));
+        }
+    }
+    if let Err(publish_error) = fs::rename(&staging, sidecar_path) {
+        if replaced_sidecar {
+            if let Err(rollback_error) = fs::rename(&backup, sidecar_path) {
+                return Err(PublicationError::RollbackFailed {
+                    publish_error,
+                    rollback_error,
+                    backup,
+                });
+            }
+        }
+        let _ = fs::remove_file(&staging);
+        return Err(PublicationError::Io(publish_error));
+    }
+
+    let mut receipt = match publish_directory_atomically(plan, output_directory) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            if let Err(rollback_error) = restore_sidecar(sidecar_path, &backup, replaced_sidecar) {
+                return Err(PublicationError::SidecarRollbackFailed {
+                    publication_error: error.to_string(),
+                    rollback_error,
+                    backup,
+                });
+            }
+            return Err(error);
+        }
+    };
+    receipt.retained_sidecar_backup = if replaced_sidecar && fs::remove_file(&backup).is_err() {
+        Some(backup)
+    } else {
+        None
+    };
+    Ok(receipt)
+}
+
+fn reserve_file_paths(parent: &Path, name: &str) -> Result<(PathBuf, PathBuf), PublicationError> {
+    for attempt in 0..1000_u32 {
+        let suffix = format!("{}-{attempt}", std::process::id());
+        let staging = parent.join(format!(".{name}.rusty-stage-{suffix}"));
+        let backup = parent.join(format!(".{name}.rusty-backup-{suffix}"));
+        if !staging.exists() && !backup.exists() {
+            return Ok((staging, backup));
+        }
+    }
+    Err(PublicationError::Io(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not reserve sidecar staging paths",
+    )))
+}
+
+fn restore_sidecar(path: &Path, backup: &Path, had_prior: bool) -> std::io::Result<()> {
+    fs::remove_file(path)?;
+    if had_prior {
+        fs::rename(backup, path)?;
+    }
+    Ok(())
 }
 
 fn reserve_paths(parent: &Path, name: &str) -> Result<(PathBuf, PathBuf), PublicationError> {

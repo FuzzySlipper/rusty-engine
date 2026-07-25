@@ -23,7 +23,10 @@ pub use manifest::{
     plan_reimport, ArtifactFingerprint, ImportManifest, ImportManifestCodecError, ReimportPlan,
 };
 pub use plan::{plan_import, ImportMode, ImportPlan};
-pub use publish::{publish_directory_atomically, PublicationError, PublicationReceipt};
+pub use publish::{
+    publish_directory_atomically, publish_directory_with_sidecar_atomically, PublicationError,
+    PublicationReceipt,
+};
 pub use sidecar::{
     decode_sidecar, detect_duplicate_guids, encode_sidecar, init_metadata, reconcile, sidecar_path,
     AssetGuid, ImportSettings, ProjectOverride, SidecarCodecError, SidecarMetadata,

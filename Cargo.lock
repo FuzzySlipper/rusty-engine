@@ -530,6 +530,8 @@ dependencies = [
  "engine-spatial",
  "entity-state",
  "render-model",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

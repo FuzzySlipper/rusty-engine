@@ -11,6 +11,8 @@ core-ids.workspace = true
 engine-spatial = { path = "../engine-spatial" }
 entity-state = { path = "../entity-state" }
 render-model.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
 core-math.workspace = true
+serde_json.workspace = true

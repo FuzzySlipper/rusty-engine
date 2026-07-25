@@ -374,10 +374,19 @@ pub fn validate_scene(document: &FlatSceneDocument) -> SceneValidationReport {
                     actual: asset.kind(),
                 });
             }
-            if !dependency_ids.contains(asset.id().as_str()) {
+            if !document
+                .dependencies
+                .iter()
+                .any(|dependency| dependency == asset)
+            {
                 errors.push(SceneValidationError::MissingAssetDependency {
                     node: node.id,
-                    asset: asset.id().as_str().to_string(),
+                    asset: format!(
+                        "{} {:?} {}",
+                        asset.id().as_str(),
+                        asset.version(),
+                        asset.hash().map_or("unhashed", |hash| hash.as_str())
+                    ),
                 });
             }
         }

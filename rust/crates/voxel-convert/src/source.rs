@@ -272,16 +272,25 @@ fn mesh_metadata(mesh: &ImportedStaticMesh) -> Result<MeshSourceMetadata, Conver
             "mesh has no positions",
         )
     })?;
-    let mut groups = Vec::new();
-    let mut group_start = 0usize;
-    while group_start < mesh.triangles.len() {
-        let material_slot = mesh.triangles[group_start].source_material_slot;
-        let mut group_end = group_start + 1;
-        while group_end < mesh.triangles.len()
-            && mesh.triangles[group_end].source_material_slot == material_slot
+    let mut groups = Vec::with_capacity(mesh.primitive_groups.len());
+    let mut expected_start = 0usize;
+    for primitive in &mesh.primitive_groups {
+        let group_start = primitive.triangle_start as usize;
+        let group_end = group_start.saturating_add(primitive.triangle_count as usize);
+        if primitive.triangle_count == 0
+            || group_start != expected_start
+            || group_end > mesh.triangles.len()
+            || mesh.triangles[group_start..group_end]
+                .iter()
+                .any(|triangle| triangle.source_material_slot != primitive.source_material_slot)
         {
-            group_end += 1;
+            return Err(ConversionError::one(
+                "conversion.invalidGeometry",
+                "source.groups",
+                "primitive groups must be non-empty, ordered, exhaustive, and material-consistent",
+            ));
         }
+        let material_slot = primitive.source_material_slot;
         let group_positions = mesh.triangles[group_start..group_end]
             .iter()
             .flat_map(|triangle| triangle.indices)
@@ -293,7 +302,7 @@ fn mesh_metadata(mesh: &ImportedStaticMesh) -> Result<MeshSourceMetadata, Conver
             .find(|material| material.source_material_slot == material_slot)
             .and_then(|material| material.source_material_name.clone());
         groups.push(MeshSourceGroup {
-            group_id: format!("group/{}", groups.len()),
+            group_id: format!("group/{}", primitive.source_primitive_index),
             label,
             source_material_slot: material_slot,
             index_start: u32::try_from(group_start.saturating_mul(3)).map_err(|_| {
@@ -314,7 +323,14 @@ fn mesh_metadata(mesh: &ImportedStaticMesh) -> Result<MeshSourceMetadata, Conver
             )?,
             bounds: bounds_for_positions(&group_positions).expect("group contains triangles"),
         });
-        group_start = group_end;
+        expected_start = group_end;
+    }
+    if expected_start != mesh.triangles.len() {
+        return Err(ConversionError::one(
+            "conversion.invalidGeometry",
+            "source.groups",
+            "primitive groups do not cover every imported triangle",
+        ));
     }
     Ok(MeshSourceMetadata {
         source_bounds,

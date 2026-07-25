@@ -5,6 +5,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INVENTORY="$REPO_ROOT/render/donor-inventory.txt"
 MATRIX="$REPO_ROOT/render/completeness.tsv"
 DISPOSITION="$REPO_ROOT/render/donor-disposition.tsv"
+ASHA_ITEM_MAP="$REPO_ROOT/migration/asha-equivalence/item-map.tsv"
+ASHA_INVENTORY_DIR="$REPO_ROOT/migration/asha-equivalence/inventory"
 EXPECTED_COUNT=134
 EXPECTED_HASH="99b33ece319e614695bd60c26f723aa0f5bdd48c83488dbd6d6dc4151b67b001"
 
@@ -58,7 +60,9 @@ awk -F '\t' '
 
 inventory_paths="$(mktemp -t rusty-render-inventory.XXXXXX)"
 disposition_paths="$(mktemp -t rusty-render-disposition.XXXXXX)"
-trap 'rm -f "$inventory_paths" "$disposition_paths"' EXIT
+render_items="$(mktemp -t rusty-render-items.XXXXXX)"
+mapped_render_items="$(mktemp -t rusty-render-item-map.XXXXXX)"
+trap 'rm -f "$inventory_paths" "$disposition_paths" "$render_items" "$mapped_render_items"' EXIT
 sort "$INVENTORY" > "$inventory_paths"
 tail -n +2 "$DISPOSITION" | cut -f1 | sort > "$disposition_paths"
 if ! cmp -s "$inventory_paths" "$disposition_paths"; then
@@ -96,4 +100,21 @@ if [[ "${1:-}" == "--strict" ]] && awk -F '\t' 'NR > 1 && $2 == "planned" { foun
   exit 1
 fi
 
+awk -F '\t' 'FNR > 1 { print $1 }' \
+  "$ASHA_INVENTORY_DIR/protocol-presentation.tsv" \
+  "$ASHA_INVENTORY_DIR/protocol-render.tsv" \
+  "$ASHA_INVENTORY_DIR/rule-animation-controller.tsv" | sort > "$render_items"
+awk -F '\t' 'NR > 1 && ($3 == "protocol-presentation" || $3 == "protocol-render" || $3 == "rule-animation-controller") { print $1 }' \
+  "$ASHA_ITEM_MAP" | sort > "$mapped_render_items"
+if ! cmp -s "$render_items" "$mapped_render_items"; then
+  echo "render behavior item disposition is incomplete" >&2
+  diff -u "$render_items" "$mapped_render_items" >&2 || true
+  exit 1
+fi
+if ! awk -F '\t' '$1 ~ /ModelMaterialPreview(Request|Snapshot)$/ && $6 ~ /model_preview.rs/ && $7 ~ /model_material_preview.rs/ { found++ } END { exit found != 2 }' "$ASHA_ITEM_MAP"; then
+  echo "render behavior map lacks explicit model/material preview evidence" >&2
+  exit 1
+fi
+
 echo "render completeness manifest passed"
+echo "render behavior-level disposition passed"

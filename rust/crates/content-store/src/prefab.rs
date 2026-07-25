@@ -301,7 +301,10 @@ impl PrefabValidationReport {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ValidatedPrefabRegistry(PrefabRegistry);
+pub struct ValidatedPrefabRegistry {
+    registry: PrefabRegistry,
+    validation_context: PrefabRegistryValidationContext,
+}
 
 impl ValidatedPrefabRegistry {
     pub fn new(
@@ -310,18 +313,25 @@ impl ValidatedPrefabRegistry {
     ) -> Result<Self, PrefabValidationReport> {
         let report = validate_prefab_registry(&registry, context);
         if report.is_valid() {
-            Ok(Self(registry.canonical()))
+            Ok(Self {
+                registry: registry.canonical(),
+                validation_context: context.clone(),
+            })
         } else {
             Err(report)
         }
     }
 
     pub fn as_registry(&self) -> &PrefabRegistry {
-        &self.0
+        &self.registry
+    }
+
+    pub fn validation_context(&self) -> &PrefabRegistryValidationContext {
+        &self.validation_context
     }
 
     pub fn into_registry(self) -> PrefabRegistry {
-        self.0
+        self.registry
     }
 }
 

@@ -2,12 +2,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
+    validate_voxel_address, validate_voxel_material_slot,
     voxel_history::{material_voxels, VoxelEditHistoryParts},
     CollisionSceneError, MaterialVoxel, VoxelCollisionScene, VoxelEditHistory,
     VoxelEditHistoryEntry, VoxelEditHistoryError, VoxelEditHistoryLimits, VoxelSourceRevision,
 };
 
-pub const VOXEL_EDIT_HISTORY_SCHEMA_VERSION: u32 = 1;
+pub const VOXEL_EDIT_HISTORY_SCHEMA_VERSION: u32 = 2;
 pub const MAX_VOXEL_EDIT_HISTORY_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -21,6 +22,7 @@ struct VoxelEditHistoryDocument {
     entries: Vec<VoxelEditHistoryEntry>,
     cursor_index: usize,
     next_transaction_id: u64,
+    source_revision: u64,
     content_hash: String,
 }
 
@@ -137,6 +139,7 @@ pub fn decode_voxel_edit_history(
             entries: document.entries,
             cursor_index: document.cursor_index,
             next_transaction_id: document.next_transaction_id,
+            source_revision: VoxelSourceRevision::new(document.source_revision),
         },
         limits,
     );
@@ -148,7 +151,7 @@ pub fn decode_voxel_edit_history(
         history.base_voxel_size,
         history.base_chunk_size,
         material_voxels(&materials),
-        VoxelSourceRevision::new(history.cursor_index as u64),
+        history.source_revision,
     )
     .map_err(VoxelEditHistoryCodecError::Scene)?;
     Ok(VoxelEditHistoryRestore { history, scene })
@@ -221,7 +224,14 @@ fn validate_document_shape(
         }
         for (delta_index, delta) in entry.deltas.iter().enumerate() {
             let ordered = delta_index == 0 || entry.deltas[delta_index - 1].address < delta.address;
-            if !ordered || delta.before_material == delta.after_material {
+            let valid_authority = validate_voxel_address(delta.address).is_ok()
+                && delta
+                    .before_material
+                    .is_none_or(|material| validate_voxel_material_slot(material).is_ok())
+                && delta
+                    .after_material
+                    .is_none_or(|material| validate_voxel_material_slot(material).is_ok());
+            if !ordered || delta.before_material == delta.after_material || !valid_authority {
                 return Err(VoxelEditHistoryCodecError::InvalidDelta {
                     entry_index,
                     delta_index,
@@ -252,6 +262,7 @@ fn document_for(history: &VoxelEditHistory) -> VoxelEditHistoryDocument {
         entries: history.entries.clone(),
         cursor_index: history.cursor_index,
         next_transaction_id: history.next_transaction_id,
+        source_revision: history.source_revision.raw(),
         content_hash: String::new(),
     }
 }
@@ -266,6 +277,7 @@ fn document_hash(document: &VoxelEditHistoryDocument) -> String {
         entries: document.entries.clone(),
         cursor_index: document.cursor_index,
         next_transaction_id: document.next_transaction_id,
+        source_revision: document.source_revision,
         content_hash: String::new(),
     };
     canonical
@@ -289,5 +301,44 @@ fn json_path(path: &str) -> String {
         "$".to_string()
     } else {
         path.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::VoxelEdit;
+
+    #[test]
+    fn decode_rejects_invalid_material_in_unapplied_redo_tail() {
+        let mut scene = VoxelCollisionScene::from_material_voxels(
+            1.0,
+            8,
+            [MaterialVoxel {
+                address: [0, 0, 0],
+                material_slot: 1,
+            }],
+        )
+        .unwrap();
+        let mut history = VoxelEditHistory::new(&scene);
+        history
+            .apply(
+                &mut scene,
+                &[VoxelEdit::Set {
+                    address: [1, 0, 0],
+                    material_slot: 2,
+                }],
+            )
+            .unwrap();
+        history.undo_one(&mut scene).unwrap();
+
+        let mut document = document_for(&history);
+        document.entries[0].deltas[0].after_material = Some(0);
+        document.content_hash = document_hash(&document);
+        let encoded = serde_json::to_string(&document).unwrap();
+        assert!(matches!(
+            decode_voxel_edit_history(&encoded, VoxelEditHistoryLimits::default()),
+            Err(VoxelEditHistoryCodecError::InvalidDelta { .. })
+        ));
     }
 }

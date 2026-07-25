@@ -11,6 +11,7 @@ use crate::ConversionError;
 pub struct ImportedStaticMesh {
     pub positions: Vec<[f64; 3]>,
     pub triangles: Vec<ImportedTriangle>,
+    pub primitive_groups: Vec<ImportedPrimitiveGroup>,
     pub materials: Vec<ImportedMaterial>,
 }
 
@@ -18,6 +19,14 @@ pub struct ImportedStaticMesh {
 pub struct ImportedTriangle {
     pub indices: [u32; 3],
     pub source_material_slot: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImportedPrimitiveGroup {
+    pub source_primitive_index: u32,
+    pub source_material_slot: u32,
+    pub triangle_start: u32,
+    pub triangle_count: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +97,7 @@ pub fn import_static_glb(source: &[u8]) -> Result<ImportedStaticMesh, Conversion
     let material_count = parsed.document.materials().count() as u32;
     let mut positions = Vec::new();
     let mut triangles = Vec::new();
+    let mut primitive_groups = Vec::new();
     let mut materials = BTreeMap::<u32, Option<String>>::new();
     for primitive in mesh.primitives() {
         if primitive.mode() != Mode::Triangles || primitive.morph_targets().next().is_some() {
@@ -184,6 +194,13 @@ pub fn import_static_glb(source: &[u8]) -> Result<ImportedStaticMesh, Conversion
         materials.entry(material_slot).or_insert(material_name);
 
         positions.extend(primitive_positions);
+        let triangle_start = u32::try_from(triangles.len()).map_err(|_| {
+            ConversionError::one(
+                "conversion.resourceLimit",
+                "source.groups",
+                "primitive triangle start exceeds u32",
+            )
+        })?;
         triangles.extend(indices.chunks_exact(3).map(|triangle| ImportedTriangle {
             indices: [
                 triangle[0] + vertex_offset,
@@ -192,6 +209,18 @@ pub fn import_static_glb(source: &[u8]) -> Result<ImportedStaticMesh, Conversion
             ],
             source_material_slot: material_slot,
         }));
+        primitive_groups.push(ImportedPrimitiveGroup {
+            source_primitive_index: primitive.index() as u32,
+            source_material_slot: material_slot,
+            triangle_start,
+            triangle_count: u32::try_from(indices.len() / 3).map_err(|_| {
+                ConversionError::one(
+                    "conversion.resourceLimit",
+                    "source.groups",
+                    "primitive triangle count exceeds u32",
+                )
+            })?,
+        });
     }
     if positions.is_empty() || triangles.is_empty() || materials.is_empty() {
         return Err(ConversionError::one(
@@ -205,6 +234,7 @@ pub fn import_static_glb(source: &[u8]) -> Result<ImportedStaticMesh, Conversion
     Ok(ImportedStaticMesh {
         positions,
         triangles,
+        primitive_groups,
         materials: materials
             .into_iter()
             .map(

@@ -118,6 +118,10 @@ pub enum RelationshipError {
     ProjectionOnly {
         kind: RelationshipKind,
     },
+    NoSuchRelation {
+        entity: EntityId,
+        kind: RelationshipKind,
+    },
 }
 
 impl std::fmt::Display for RelationshipError {
@@ -275,6 +279,11 @@ fn validate_command(
         RelationshipCommand::ClearTransformParent { child, .. } => {
             ensure_alive(state, child)?;
             ensure_transform(state, child)?;
+            ensure_relation_present(
+                state.transform_parents.contains_key(&child),
+                child,
+                RelationshipKind::TransformParent,
+            )?;
         }
         RelationshipCommand::SetContainment { child, container } => {
             ensure_pair(state, child, container)?;
@@ -285,12 +294,26 @@ fn validate_command(
                 .collect();
             ensure_acyclic(&links, RelationshipKind::Containment, child, container)?;
         }
-        RelationshipCommand::ClearContainment { child } => ensure_alive(state, child)?,
+        RelationshipCommand::ClearContainment { child } => {
+            ensure_alive(state, child)?;
+            ensure_relation_present(
+                state.containment.contains_key(&child),
+                child,
+                RelationshipKind::Containment,
+            )?;
+        }
         RelationshipCommand::SetSourceAncestry { entity, source } => {
             ensure_alive(state, entity)?;
             ensure_known(state, source)?;
         }
-        RelationshipCommand::ClearSourceAncestry { entity } => ensure_alive(state, entity)?,
+        RelationshipCommand::ClearSourceAncestry { entity } => {
+            ensure_alive(state, entity)?;
+            ensure_relation_present(
+                state.derived_from.contains_key(&entity),
+                entity,
+                RelationshipKind::SourceAncestry,
+            )?;
+        }
         RelationshipCommand::SetRenderGroup { .. } => {
             return Err(RelationshipError::ProjectionOnly {
                 kind: RelationshipKind::RenderGrouping,
@@ -403,6 +426,16 @@ fn ensure_transform(state: &EntityState, entity: EntityId) -> Result<(), Relatio
     } else {
         Err(RelationshipError::MissingTransform { entity })
     }
+}
+
+fn ensure_relation_present(
+    present: bool,
+    entity: EntityId,
+    kind: RelationshipKind,
+) -> Result<(), RelationshipError> {
+    present
+        .then_some(())
+        .ok_or(RelationshipError::NoSuchRelation { entity, kind })
 }
 
 fn ensure_acyclic(

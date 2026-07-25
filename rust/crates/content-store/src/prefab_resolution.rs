@@ -4,7 +4,8 @@ use core_assets::{AssetId, AssetKind};
 use core_ids::{PrefabId, PrefabPartId};
 
 use crate::{
-    PrefabOverride, PrefabOverrideValue, PrefabPartSource, PrefabTransform, ValidatedPrefabRegistry,
+    PrefabOverride, PrefabOverrideValue, PrefabPartSource, PrefabRegistryValidationContext,
+    PrefabTransform, ValidatedPrefabRegistry,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -36,6 +37,8 @@ pub enum PrefabResolutionError {
     RemovedRole(String),
     WrongOverrideKind(String),
     InvalidOverrideValue(String),
+    UnknownOverrideAsset(String),
+    UnknownOverrideEntityDefinition(String),
     DuplicateOverride { role: String, field: &'static str },
 }
 
@@ -128,7 +131,7 @@ pub fn resolve_prefab(
         let part = parts
             .get_mut(&part_id)
             .ok_or_else(|| PrefabResolutionError::RemovedRole(item.target_role.clone()))?;
-        apply_override(part, item)?;
+        apply_override(part, item, registry.validation_context())?;
     }
     Ok(ResolvedPrefab {
         requested: prefab,
@@ -141,6 +144,7 @@ pub fn resolve_prefab(
 fn apply_override(
     part: &mut ResolvedPrefabPart,
     item: &PrefabOverride,
+    context: &PrefabRegistryValidationContext,
 ) -> Result<(), PrefabResolutionError> {
     match &item.value {
         PrefabOverrideValue::Transform { transform } => {
@@ -152,8 +156,15 @@ fn apply_override(
             part.transform = *transform;
         }
         PrefabOverrideValue::EntityDefinition { stable_id } => match &mut part.source {
-            PrefabPartSource::EntityDefinition { stable_id: value } if !stable_id.is_empty() => {
+            PrefabPartSource::EntityDefinition { stable_id: value }
+                if context.entity_definition_ids.contains(stable_id) =>
+            {
                 *value = stable_id.clone()
+            }
+            PrefabPartSource::EntityDefinition { .. } if !stable_id.is_empty() => {
+                return Err(PrefabResolutionError::UnknownOverrideEntityDefinition(
+                    stable_id.clone(),
+                ));
             }
             PrefabPartSource::EntityDefinition { .. } => {
                 return Err(PrefabResolutionError::InvalidOverrideValue(
@@ -168,20 +179,37 @@ fn apply_override(
         },
         PrefabOverrideValue::Asset { asset } => match &mut part.source {
             PrefabPartSource::Scene { asset: value }
-                if AssetId::parse(asset).is_ok_and(|id| id.kind() == AssetKind::Scene) =>
+                if AssetId::parse(asset).is_ok_and(|id| id.kind() == AssetKind::Scene)
+                    && context.asset_ids.contains(asset) =>
             {
                 *value = asset.clone()
             }
             PrefabPartSource::VoxelObject { asset: value }
-                if AssetId::parse(asset).is_ok_and(|id| id.kind() == AssetKind::VoxelObject) =>
+                if AssetId::parse(asset).is_ok_and(|id| id.kind() == AssetKind::VoxelObject)
+                    && context.asset_ids.contains(asset) =>
             {
                 *value = asset.clone()
             }
-            PrefabPartSource::Scene { .. } | PrefabPartSource::VoxelObject { .. } => {
-                return Err(PrefabResolutionError::InvalidOverrideValue(
-                    item.target_role.clone(),
-                ));
-            }
+            PrefabPartSource::Scene { .. } => match AssetId::parse(asset) {
+                Ok(id) if id.kind() == AssetKind::Scene => {
+                    return Err(PrefabResolutionError::UnknownOverrideAsset(asset.clone()));
+                }
+                _ => {
+                    return Err(PrefabResolutionError::InvalidOverrideValue(
+                        item.target_role.clone(),
+                    ));
+                }
+            },
+            PrefabPartSource::VoxelObject { .. } => match AssetId::parse(asset) {
+                Ok(id) if id.kind() == AssetKind::VoxelObject => {
+                    return Err(PrefabResolutionError::UnknownOverrideAsset(asset.clone()));
+                }
+                _ => {
+                    return Err(PrefabResolutionError::InvalidOverrideValue(
+                        item.target_role.clone(),
+                    ));
+                }
+            },
             PrefabPartSource::EntityDefinition { .. } => {
                 return Err(PrefabResolutionError::WrongOverrideKind(
                     item.target_role.clone(),
@@ -195,6 +223,9 @@ fn apply_override(
                 return Err(PrefabResolutionError::WrongOverrideKind(
                     item.target_role.clone(),
                 ));
+            }
+            if !context.asset_ids.contains(asset) {
+                return Err(PrefabResolutionError::UnknownOverrideAsset(asset.clone()));
             }
             part.material = Some(asset.clone());
         }

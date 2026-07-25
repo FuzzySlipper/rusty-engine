@@ -1,11 +1,15 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use asset_import::{
     decode_import_manifest, decode_sidecar, encode_sidecar, init_metadata, plan_import,
-    publish_directory_atomically, reconcile, sidecar_path, ImportContext, ImportMode,
-    ImportSettings, SourceUri, IMPORTER_VERSION,
+    publish_directory_atomically, publish_directory_with_sidecar_atomically, reconcile,
+    sidecar_path, ImportContext, ImportMode, ImportSettings, SourceUri, IMPORTER_VERSION,
+    MAX_SOURCE_BYTES,
 };
+
+const MAX_AUXILIARY_BYTES: usize = 4 * 1024 * 1024;
 
 fn main() {
     if let Err(error) = run(std::env::args().skip(1).collect()) {
@@ -40,11 +44,14 @@ fn import_command(
     source_path: &Path,
     output: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let source_text = fs::read_to_string(source_path)?;
+    let source_text = read_bounded_text(source_path, MAX_SOURCE_BYTES)?;
     let source_uri = source_uri(source_path);
     let metadata_path = PathBuf::from(sidecar_path(&source_path.to_string_lossy()));
     let sidecar = if metadata_path.is_file() {
-        Some(decode_sidecar(&fs::read_to_string(&metadata_path)?)?)
+        Some(decode_sidecar(&read_bounded_text(
+            &metadata_path,
+            MAX_AUXILIARY_BYTES,
+        )?)?)
     } else {
         None
     };
@@ -73,7 +80,9 @@ fn import_command(
         .files
         .iter()
         .find(|file| file.relative_path.ends_with(".import.json"))
-        .and_then(|file| fs::read_to_string(output.join(&file.relative_path)).ok())
+        .and_then(|file| {
+            read_bounded_text(&output.join(&file.relative_path), MAX_AUXILIARY_BYTES).ok()
+        })
         .and_then(|text| decode_import_manifest(&text).ok());
     let plan = plan_import(
         &source_uri,
@@ -88,29 +97,39 @@ fn import_command(
         return Err("source admission failed".into());
     }
     if mode == ImportMode::Write {
-        let receipt = publish_directory_atomically(&plan, output)?;
+        let encoded_sidecar = plan
+            .sidecar_update
+            .as_ref()
+            .filter(|_| metadata_path.is_file())
+            .map(encode_sidecar)
+            .transpose()?;
+        let receipt = match encoded_sidecar.as_deref() {
+            Some(encoded) => publish_directory_with_sidecar_atomically(
+                &plan,
+                output,
+                &metadata_path,
+                encoded.as_bytes(),
+            )?,
+            None => publish_directory_atomically(&plan, output)?,
+        };
         println!(
             "published: {} ({} files, replacedPrevious={})",
             receipt.output_directory.display(),
             receipt.written_files.len(),
             receipt.replaced_previous
         );
-        if let (Some(update), true) = (plan.sidecar_update.as_ref(), metadata_path.is_file()) {
-            match encode_sidecar(update)
-                .map_err(|error| error.to_string())
-                .and_then(|encoded| {
-                    write_file_atomically(&metadata_path, encoded.as_bytes())
-                        .map_err(|error| error.to_string())
-                }) {
-                Ok(()) => println!("sidecar: updated {}", metadata_path.display()),
-                Err(error) => eprintln!(
-                    "sidecar warning: output publication succeeded but metadata update failed: {error}"
-                ),
-            }
+        if encoded_sidecar.is_some() {
+            println!("sidecar: updated {}", metadata_path.display());
         }
         if let Some(path) = receipt.retained_backup {
             eprintln!(
                 "cleanup warning: previous output remains recoverable at {}",
+                path.display()
+            );
+        }
+        if let Some(path) = receipt.retained_sidecar_backup {
+            eprintln!(
+                "cleanup warning: previous sidecar remains recoverable at {}",
                 path.display()
             );
         }
@@ -123,7 +142,7 @@ fn init_sidecar(
     explicit: Option<&Path>,
     salt: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let bytes = fs::read(source_path)?;
+    let bytes = read_bounded(source_path, MAX_SOURCE_BYTES)?;
     let path = explicit
         .map(Path::to_owned)
         .unwrap_or_else(|| PathBuf::from(sidecar_path(&source_path.to_string_lossy())));
@@ -164,11 +183,11 @@ fn validate_sidecar(
         println!("status missingSidecar");
         return Ok(());
     }
-    let metadata = decode_sidecar(&fs::read_to_string(path)?)?;
+    let metadata = decode_sidecar(&read_bounded_text(&path, MAX_AUXILIARY_BYTES)?)?;
     let status = reconcile(
         Some(&metadata),
         &source_uri(source_path),
-        &fs::read(source_path)?,
+        &read_bounded(source_path, MAX_SOURCE_BYTES)?,
     );
     println!("status {} guid={}", status.label(), metadata.guid.as_str());
     Ok(())
@@ -194,6 +213,32 @@ fn write_file_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         return Err(error);
     }
     Ok(())
+}
+
+fn read_bounded(path: &Path, limit: usize) -> std::io::Result<Vec<u8>> {
+    let file = fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(limit.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "{} exceeds the {limit}-byte admission limit",
+                path.display()
+            ),
+        ));
+    }
+    Ok(bytes)
+}
+
+fn read_bounded_text(path: &Path, limit: usize) -> std::io::Result<String> {
+    String::from_utf8(read_bounded(path, limit)?).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{} is not UTF-8: {error}", path.display()),
+        )
+    })
 }
 
 fn usage() -> &'static str {

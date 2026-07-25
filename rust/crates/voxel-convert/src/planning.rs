@@ -3,7 +3,9 @@ use std::path::Path;
 use core_assets::{AssetId, AssetKind};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use voxel_asset::{VoxelAssetBounds, VoxelConversionRequest, VoxelConversionSettings};
+use voxel_asset::{
+    validate_voxel_asset, VoxelAssetBounds, VoxelConversionRequest, VoxelConversionSettings,
+};
 
 use crate::{
     convert::{convert_imported_mesh, replace_settings_identity},
@@ -40,10 +42,14 @@ pub struct VoxelConversionPlan {
     pub plan_id: String,
     pub source: MeshSourceRef,
     pub target_asset_id: String,
+    pub source_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license_path: Option<String>,
     pub settings: ConversionPlanSettings,
     pub planner: String,
     pub expected_source_sha256: String,
     pub settings_sha256: String,
+    pub expected_output_content_hash: String,
     pub plan_hash: String,
     pub estimated_output_voxels: usize,
     pub estimated_bounds: VoxelAssetBounds,
@@ -145,16 +151,21 @@ pub fn plan_conversion(
         "voxel-conversion-plan",
         &request.source,
         &request.target_asset_id,
+        &source.receipt.source_path,
+        &request.license_path,
         &settings_sha256,
     ));
     let mut plan = VoxelConversionPlan {
         plan_id,
         source: request.source.clone(),
         target_asset_id: request.target_asset_id.clone(),
+        source_path: source.receipt.source_path.clone(),
+        license_path: request.license_path.clone(),
         settings: request.settings.clone(),
         planner: CONVERSION_PLANNER_ID.to_string(),
         expected_source_sha256: source.receipt.source.source_sha256.clone(),
         settings_sha256,
+        expected_output_content_hash: output.asset.content_hash.clone(),
         plan_hash: String::new(),
         estimated_output_voxels: output.output_voxels,
         estimated_bounds: output.bounds,
@@ -168,10 +179,13 @@ pub fn conversion_plan_hash(plan: &VoxelConversionPlan) -> String {
         &plan.plan_id,
         &plan.source,
         &plan.target_asset_id,
+        &plan.source_path,
+        &plan.license_path,
         &plan.settings,
         &plan.planner,
         &plan.expected_source_sha256,
         &plan.settings_sha256,
+        &plan.expected_output_content_hash,
         plan.estimated_output_voxels,
         plan.estimated_bounds,
     ))
@@ -204,7 +218,7 @@ pub fn preview_conversion(
     Ok(VoxelConversionPreview {
         plan_id: prepared.plan.plan_id.clone(),
         plan_hash: prepared.plan.plan_hash.clone(),
-        output_hash: prepared.output.asset.voxel_data_hash.clone(),
+        output_hash: prepared.output.asset.content_hash.clone(),
         output_voxel_count: prepared.output.output_voxels,
         output_bounds: prepared.output.bounds,
         sample_voxels,
@@ -217,7 +231,14 @@ pub fn apply_conversion(
     prepared: &PreparedVoxelConversion,
 ) -> Result<AppliedVoxelConversion, ConversionError> {
     validate_prepared_identity(&request.plan_id, &request.expected_plan_hash, prepared)?;
-    let output_hash = prepared.output.asset.voxel_data_hash.clone();
+    validate_voxel_asset(&prepared.output.asset).map_err(|error| {
+        ConversionError::one(
+            "conversion.invalidPreparedOutput",
+            "preparedOutput",
+            format!("prepared voxel asset failed semantic validation: {error}"),
+        )
+    })?;
+    let output_hash = prepared.output.asset.content_hash.clone();
     if request
         .expected_output_hash
         .as_ref()
@@ -367,6 +388,7 @@ fn validate_prepared_identity(
     if plan_id != prepared.plan.plan_id
         || expected_plan_hash != prepared.plan.plan_hash
         || conversion_plan_hash(&prepared.plan) != prepared.plan.plan_hash
+        || prepared.output.asset.content_hash != prepared.plan.expected_output_content_hash
     {
         return Err(ConversionError::one(
             "conversion.stalePlan",

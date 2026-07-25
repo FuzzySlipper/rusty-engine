@@ -195,6 +195,54 @@ fn directory_publication_is_whole_and_failed_verification_preserves_prior() {
 }
 
 #[test]
+fn sidecar_and_output_publication_roll_back_as_one_transaction() {
+    let root = temp_directory("sidecar-transaction");
+    let output = root.join("imported");
+    fs::create_dir(&output).unwrap();
+    fs::write(output.join("prior.txt"), b"prior-output").unwrap();
+    let sidecar = root.join("source.meta");
+    fs::write(&sidecar, b"prior-sidecar").unwrap();
+
+    let dry_run = plan_import(
+        &uri(),
+        VALID,
+        &ImportContext::default(),
+        ImportMode::DryRun,
+        None,
+        None,
+    );
+    assert!(matches!(
+        publish_directory_with_sidecar_atomically(&dry_run, &output, &sidecar, b"next-sidecar"),
+        Err(PublicationError::DryRun)
+    ));
+    assert_eq!(fs::read(output.join("prior.txt")).unwrap(), b"prior-output");
+    assert_eq!(fs::read(&sidecar).unwrap(), b"prior-sidecar");
+
+    let write_plan = plan_import(
+        &uri(),
+        VALID,
+        &ImportContext::default(),
+        ImportMode::Write,
+        None,
+        None,
+    );
+    let invalid_sidecar = root.join("sidecar-directory");
+    fs::create_dir(&invalid_sidecar).unwrap();
+    assert!(matches!(
+        publish_directory_with_sidecar_atomically(
+            &write_plan,
+            &output,
+            &invalid_sidecar,
+            b"next-sidecar"
+        ),
+        Err(PublicationError::SidecarTargetIsNotFile(_))
+    ));
+    assert_eq!(fs::read(output.join("prior.txt")).unwrap(), b"prior-output");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn dry_run_cannot_be_published() {
     let root = temp_directory("dry-run");
     let output = root.join("imported");
@@ -261,6 +309,27 @@ fn cli_initializes_validates_plans_and_publishes_offline() {
     );
     assert!(output.join("fixture-triangle.import.json").is_file());
     assert!(output.join("fixture-triangle.static-mesh.json").is_file());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_rejects_oversized_sources_before_publishing() {
+    let root = temp_directory("oversized-source");
+    let source = root.join("oversized.mesh.json");
+    let output = root.join("imported");
+    let file = fs::File::create(&source).unwrap();
+    file.set_len((MAX_SOURCE_BYTES + 1) as u64).unwrap();
+
+    let result = Command::new(env!("CARGO_BIN_EXE_rusty-asset-import"))
+        .arg("write")
+        .arg(&source)
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("admission limit"));
+    assert!(!output.exists());
 
     fs::remove_dir_all(root).unwrap();
 }

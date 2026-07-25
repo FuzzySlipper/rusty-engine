@@ -1,8 +1,8 @@
 use core_ids::EntityId;
 use core_math::Vec3;
 use entity_state::{
-    EntityAuthoringService, EntityDefinition, EntityState, RelationshipCommand, RelationshipError,
-    RelationshipKind, TransformParentMode,
+    encode_snapshot, EntityAuthoringService, EntityDefinition, EntityState, RelationshipCommand,
+    RelationshipError, RelationshipKind, TransformParentMode,
 };
 
 fn fixture() -> EntityState {
@@ -52,6 +52,42 @@ fn relationship_preview_is_read_only_and_apply_is_revision_guarded() {
         ),
         Err(RelationshipError::StaleRevision { .. })
     ));
+}
+
+#[test]
+fn clearing_absent_relations_is_classified_and_does_not_mutate() {
+    let mut state = fixture();
+    let before = encode_snapshot(&state).unwrap();
+    for (command, kind) in [
+        (
+            RelationshipCommand::ClearTransformParent {
+                child: EntityId::new(2),
+                keep_world: true,
+            },
+            RelationshipKind::TransformParent,
+        ),
+        (
+            RelationshipCommand::ClearContainment {
+                child: EntityId::new(2),
+            },
+            RelationshipKind::Containment,
+        ),
+        (
+            RelationshipCommand::ClearSourceAncestry {
+                entity: EntityId::new(2),
+            },
+            RelationshipKind::SourceAncestry,
+        ),
+    ] {
+        assert_eq!(
+            state.apply_relationship(0, command),
+            Err(RelationshipError::NoSuchRelation {
+                entity: EntityId::new(2),
+                kind,
+            })
+        );
+        assert_eq!(encode_snapshot(&state).unwrap(), before);
+    }
 }
 
 #[test]

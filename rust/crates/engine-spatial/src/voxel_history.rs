@@ -123,6 +123,10 @@ pub enum VoxelEditHistoryError {
         expected: u64,
         actual: u64,
     },
+    StaleRevision {
+        expected: VoxelSourceRevision,
+        actual: VoxelSourceRevision,
+    },
     InvalidCursor {
         requested: usize,
         entry_count: usize,
@@ -171,6 +175,7 @@ pub struct VoxelEditHistory {
     pub(crate) entries: Vec<VoxelEditHistoryEntry>,
     pub(crate) cursor_index: usize,
     pub(crate) next_transaction_id: u64,
+    pub(crate) source_revision: VoxelSourceRevision,
     pub(crate) limits: VoxelEditHistoryLimits,
 }
 
@@ -183,6 +188,7 @@ pub(crate) struct VoxelEditHistoryParts {
     pub entries: Vec<VoxelEditHistoryEntry>,
     pub cursor_index: usize,
     pub next_transaction_id: u64,
+    pub source_revision: VoxelSourceRevision,
 }
 
 impl VoxelEditHistory {
@@ -199,6 +205,7 @@ impl VoxelEditHistory {
             entries: Vec::new(),
             cursor_index: 0,
             next_transaction_id: 1,
+            source_revision: scene.source_revision(),
             limits,
         }
     }
@@ -280,6 +287,7 @@ impl VoxelEditHistory {
         self.entries.push(entry.clone());
         self.cursor_index += 1;
         self.next_transaction_id = next_transaction_id;
+        self.source_revision = scene.source_revision();
         Ok(VoxelEditHistoryAppendReceipt {
             entry,
             edit,
@@ -364,6 +372,7 @@ impl VoxelEditHistory {
         }
         *scene = prepared.candidate;
         self.cursor_index = prepared.target_cursor;
+        self.source_revision = scene.source_revision();
         prepared.receipt.applied = true;
         prepared.receipt.cursor_after = self.cursor();
         Ok(prepared.receipt)
@@ -428,6 +437,7 @@ impl VoxelEditHistory {
             entries: parts.entries,
             cursor_index: parts.cursor_index,
             next_transaction_id: parts.next_transaction_id,
+            source_revision: parts.source_revision,
             limits,
         }
     }
@@ -470,6 +480,12 @@ impl VoxelEditHistory {
             return Err(VoxelEditHistoryError::StaleAuthority {
                 expected,
                 actual: scene.authority_hash(),
+            });
+        }
+        if scene.source_revision() != self.source_revision {
+            return Err(VoxelEditHistoryError::StaleRevision {
+                expected: self.source_revision,
+                actual: scene.source_revision(),
             });
         }
         Ok(())

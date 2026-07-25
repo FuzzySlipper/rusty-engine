@@ -7,6 +7,7 @@ crate_table="$ledger_dir/donor-crates.tsv"
 inventory_dir="$ledger_dir/inventory"
 disposition="$ledger_dir/disposition.tsv"
 source_map="$ledger_dir/source-map.tsv"
+item_map="${ASHA_EQUIVALENCE_ITEM_MAP:-$ledger_dir/item-map.tsv}"
 meta="$ledger_dir/inventory.meta"
 final=0
 [[ ${1:-} == --final ]] && final=1
@@ -31,6 +32,7 @@ fail() {
 [[ $(head -n 1 "$crate_table") == $'donor_crate\tdonor_path\tscope\tnote' ]] || fail "bad donor-crates header"
 [[ $(head -n 1 "$disposition") == $'donor_crate\tstatus\towner_task\tsuccessor_location\tevidence\trationale' ]] || fail "bad disposition header"
 [[ $(head -n 1 "$source_map") == $'donor_crate\tdonor_path\tstatus\tsuccessor_location\tevidence\trationale' ]] || fail "bad source-map header"
+[[ $(head -n 1 "$item_map") == $'item_id\tkind\tdonor_crate\tdonor_path\tstatus\tsuccessor_location\tevidence\trationale' ]] || fail "bad item-map header"
 
 mapfile -t inventories < <(find "$inventory_dir" -maxdepth 1 -type f -name '*.tsv' -print | sort)
 [[ ${#inventories[@]} -eq ${#required[@]} ]] || fail "expected ${#required[@]} inventory shards, found ${#inventories[@]}"
@@ -54,6 +56,8 @@ duplicates=$(awk -F '\t' 'FNR > 1 { print $1 }' "${inventories[@]}" | sort | uni
 [[ -z $duplicates ]] || fail "duplicate inventory item ids: $duplicates"
 duplicate_maps=$(tail -n +2 "$source_map" | cut -f2 | sort | uniq -d)
 [[ -z $duplicate_maps ]] || fail "duplicate source-map paths: $duplicate_maps"
+duplicate_item_maps=$(tail -n +2 "$item_map" | cut -f1 | sort | uniq -d)
+[[ -z $duplicate_item_maps ]] || fail "duplicate item-map ids: $duplicate_item_maps"
 
 awk -F '\t' '
   NR == FNR && NR > 1 { crates[$1] = 1; next }
@@ -92,6 +96,35 @@ awk -F '\t' '
     exit bad
   }
 ' "$disposition" "$source_map" "${inventories[@]}" || fail "invalid exact source map"
+
+awk -F '\t' '
+  ARGIND == 1 && FNR > 1 { closed[$1] = ($2 != "pending"); next }
+  ARGIND == 2 && FNR > 1 {
+    if (NF != 8) { printf "item-map row %d has %d fields\n", FNR, NF > "/dev/stderr"; bad = 1 }
+    if ($5 != "adapted" && $5 != "equivalent" && $5 != "obsolete") {
+      printf "item-map row %d has bad status %s\n", FNR, $5 > "/dev/stderr"; bad = 1
+    }
+    if ($6 == "" || $6 == "-" || $7 == "" || $7 == "-" || $8 == "" || $8 == "-") {
+      printf "item-map row %d lacks successor evidence or rationale\n", FNR > "/dev/stderr"; bad = 1
+    }
+    mapped[$1] = $2 FS $3 FS $4
+    next
+  }
+  FNR == 1 { next }
+  {
+    inventory[$1] = $2 FS $3 FS $4
+    if (closed[$3] && !($1 in mapped)) {
+      printf "closed crate %s lacks exact item map for %s\n", $3, $1 > "/dev/stderr"; bad = 1
+    }
+  }
+  END {
+    for (item in mapped) {
+      if (!(item in inventory)) { printf "item-map id is not inventoried: %s\n", item > "/dev/stderr"; bad = 1 }
+      else if (inventory[item] != mapped[item]) { printf "item-map metadata mismatch for %s\n", item > "/dev/stderr"; bad = 1 }
+    }
+    exit bad
+  }
+' "$disposition" "$item_map" "${inventories[@]}" || fail "invalid exact item map"
 
 pending=$(awk -F '\t' -v final="$final" '
   NR == 1 { next }

@@ -413,10 +413,10 @@ impl EntityAuthoringService {
             });
         }
         if before == lifecycle {
-            return Ok(EntityAuthoringReceipt {
-                revision_before: state.revision,
-                revision_after: state.revision,
-                facts: Vec::new(),
+            return Err(EntityAuthoringError::InvalidLifecycleTransition {
+                entity,
+                from: before,
+                to: lifecycle,
             });
         }
         core.lifecycle = lifecycle;

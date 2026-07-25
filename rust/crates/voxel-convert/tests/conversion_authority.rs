@@ -76,6 +76,34 @@ fn imported_source_has_hash_pinned_groups_materials_and_strict_shape() {
 }
 
 #[test]
+fn adjacent_primitives_keep_distinct_groups_when_they_share_a_material() {
+    let mut request = import_request();
+    request.source_bytes = glb_with_shared_primitive_material();
+    request.expected_source_sha256 = None;
+    let imported = import_mesh_source(&request).expect("shared-material primitives import");
+
+    assert_eq!(imported.receipt.metadata.groups.len(), 2);
+    assert_eq!(
+        imported.receipt.metadata.groups[0].source_material_slot,
+        imported.receipt.metadata.groups[1].source_material_slot
+    );
+    assert_ne!(
+        imported.receipt.metadata.groups[0].group_id,
+        imported.receipt.metadata.groups[1].group_id
+    );
+    assert_eq!(
+        imported
+            .receipt
+            .metadata
+            .groups
+            .iter()
+            .map(|group| group.index_count)
+            .sum::<u32>(),
+        imported.receipt.metadata.triangle_count * 3
+    );
+}
+
+#[test]
 fn plan_preview_apply_are_hash_guarded_bounded_and_transform_aware() {
     let imported = imported_source();
     let baseline_request = plan_request(&imported);
@@ -112,6 +140,20 @@ fn plan_preview_apply_are_hash_guarded_bounded_and_transform_aware() {
     .unwrap();
     assert_eq!(applied.output_hash, preview.output_hash);
     assert_eq!(applied.conversion.asset, baseline.candidate().asset);
+
+    let mut provenance_request = baseline_request.clone();
+    provenance_request.license_path = Some("licenses/replacement.txt".to_owned());
+    let changed_provenance = plan_conversion(&provenance_request, &imported).unwrap();
+    assert_ne!(changed_provenance.plan.plan_id, baseline.plan.plan_id);
+    assert_ne!(changed_provenance.plan.plan_hash, baseline.plan.plan_hash);
+    assert_ne!(
+        changed_provenance.candidate().asset.content_hash,
+        baseline.candidate().asset.content_hash
+    );
+    assert_eq!(
+        changed_provenance.candidate().asset.voxel_data_hash,
+        baseline.candidate().asset.voxel_data_hash
+    );
 
     let mut transformed_request = baseline_request;
     transformed_request.settings.conversion.origin_policy =
@@ -218,7 +260,7 @@ fn solid_topology_limits_and_rejected_install_leave_no_partial_output() {
     let valid_apply = ConversionApplyRequest {
         plan_id: prepared.plan.plan_id.clone(),
         expected_plan_hash: prepared.plan.plan_hash.clone(),
-        expected_output_hash: Some(prepared.candidate().asset.voxel_data_hash.clone()),
+        expected_output_hash: Some(prepared.candidate().asset.content_hash.clone()),
     };
     let applied = apply_conversion_and_install(&valid_apply, &prepared, &output).unwrap();
     assert_eq!(
@@ -357,6 +399,35 @@ fn texture_binding(
         wrap_policy: TextureWrapPolicy::ClampToEdge,
         material_mode: TextureMaterialMode::SamplePaletteIndex,
     }
+}
+
+fn glb_with_shared_primitive_material() -> Vec<u8> {
+    const JSON_CHUNK_TYPE: u32 = 0x4e4f_534a;
+    assert_eq!(&SOURCE[..4], b"glTF");
+    let json_len = u32::from_le_bytes(SOURCE[12..16].try_into().unwrap()) as usize;
+    assert_eq!(
+        u32::from_le_bytes(SOURCE[16..20].try_into().unwrap()),
+        JSON_CHUNK_TYPE
+    );
+    let json_end = 20 + json_len;
+    let mut document: serde_json::Value = serde_json::from_slice(&SOURCE[20..json_end]).unwrap();
+    let first_material = document["meshes"][0]["primitives"][0]["material"].clone();
+    document["meshes"][0]["primitives"][1]["material"] = first_material;
+
+    let mut json = serde_json::to_vec(&document).unwrap();
+    while !json.len().is_multiple_of(4) {
+        json.push(b' ');
+    }
+    let total_len = 20 + json.len() + SOURCE.len() - json_end;
+    let mut glb = Vec::with_capacity(total_len);
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2_u32.to_le_bytes());
+    glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+    glb.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    glb.extend_from_slice(&JSON_CHUNK_TYPE.to_le_bytes());
+    glb.extend_from_slice(&json);
+    glb.extend_from_slice(&SOURCE[json_end..]);
+    glb
 }
 
 fn hash(digit: char) -> String {

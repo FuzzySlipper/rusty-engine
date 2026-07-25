@@ -9,6 +9,7 @@ cargo fmt --all --check
 ./scripts/audit-render-isolation.sh
 ./scripts/check-doc-links.sh
 ./scripts/check-asha-equivalence.sh --final
+./scripts/test-asha-equivalence-checker.sh
 ./scripts/check-render-completeness.sh --strict
 if rg -n 'GameplayRuntimeHost|GameplayFabric|NativeRuntimeBridge|RuntimeSession|ReactionFrame|DecisionReceipt|ReplayRecord|ProposalEnvelope' rust; then
   echo "forbidden old runtime spine surfaced in active source" >&2

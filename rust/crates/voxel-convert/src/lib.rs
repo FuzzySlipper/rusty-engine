@@ -16,7 +16,10 @@ mod store;
 
 pub use convert::{convert_glb, ConversionReceipt, CONVERTER_ID, MAX_SURFACE_SAMPLE_WORK};
 pub use diagnostic::{ConversionDiagnostic, ConversionError};
-pub use import::{import_static_glb, ImportedMaterial, ImportedStaticMesh, ImportedTriangle};
+pub use import::{
+    import_static_glb, ImportedMaterial, ImportedPrimitiveGroup, ImportedStaticMesh,
+    ImportedTriangle,
+};
 pub use material::{
     ConversionMaterialPolicy, TextureChannelLayout, TextureColorSpace, TextureMaterialBinding,
     TextureMaterialMode, TextureSampleAsset, TextureSamplingPolicy, TextureSourceRef,

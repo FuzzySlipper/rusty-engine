@@ -314,9 +314,7 @@ fn validate_operations(
         let new = next_by_path
             .get(movement.to.as_str())
             .ok_or_else(|| ContentWriteSetError::MissingNextArtifact(movement.to.clone()))?;
-        if movement.expected_content_hash.is_some()
-            && movement.expected_content_hash != old.content_hash
-        {
+        if movement.expected_content_hash != old.content_hash {
             return Err(ContentWriteSetError::HashMismatch(movement.from.clone()));
         }
         if !same_metadata_and_content(old, new) {
@@ -333,9 +331,7 @@ fn validate_operations(
         let old = prior_by_path
             .get(deletion.path.as_str())
             .ok_or_else(|| ContentWriteSetError::MissingPriorArtifact(deletion.path.clone()))?;
-        if deletion.expected_content_hash.is_some()
-            && deletion.expected_content_hash != old.content_hash
-        {
+        if deletion.expected_content_hash != old.content_hash {
             return Err(ContentWriteSetError::HashMismatch(deletion.path.clone()));
         }
     }

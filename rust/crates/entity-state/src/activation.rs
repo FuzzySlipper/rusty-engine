@@ -55,6 +55,11 @@ pub enum CapabilityActivationError {
         entity: EntityId,
         capability: ActivatableCapabilityKind,
     },
+    AlreadyInState {
+        entity: EntityId,
+        capability: ActivatableCapabilityKind,
+        state: CapabilityActivationState,
+    },
 }
 
 impl std::fmt::Display for CapabilityActivationError {
@@ -143,27 +148,32 @@ pub fn set_capability_activation(
         CapabilityActivation::Inactive => CapabilityActivationState::Inactive,
         CapabilityActivation::Active => CapabilityActivationState::Active,
     };
-    let revision_before = state.revision;
-    if before != after {
-        match capability {
-            ActivatableCapabilityKind::Collision => {
-                state
-                    .collisions
-                    .get_mut(&entity)
-                    .expect("presence checked")
-                    .enabled = activation == CapabilityActivation::Active;
-            }
-            ActivatableCapabilityKind::Controller => match activation {
-                CapabilityActivation::Inactive => {
-                    state.inactive_controllers.insert(entity);
-                }
-                CapabilityActivation::Active => {
-                    state.inactive_controllers.remove(&entity);
-                }
-            },
-        }
-        state.revision = state.revision.saturating_add(1);
+    if before == after {
+        return Err(CapabilityActivationError::AlreadyInState {
+            entity,
+            capability,
+            state: before,
+        });
     }
+    let revision_before = state.revision;
+    match capability {
+        ActivatableCapabilityKind::Collision => {
+            state
+                .collisions
+                .get_mut(&entity)
+                .expect("presence checked")
+                .enabled = activation == CapabilityActivation::Active;
+        }
+        ActivatableCapabilityKind::Controller => match activation {
+            CapabilityActivation::Inactive => {
+                state.inactive_controllers.insert(entity);
+            }
+            CapabilityActivation::Active => {
+                state.inactive_controllers.remove(&entity);
+            }
+        },
+    }
+    state.revision = state.revision.saturating_add(1);
     Ok(CapabilityActivationReceipt {
         revision_before,
         revision_after: state.revision,

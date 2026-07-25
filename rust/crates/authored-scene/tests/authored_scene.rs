@@ -496,6 +496,26 @@ fn asset_version_and_hash_pins_are_checked_before_admission() {
         .any(|error| matches!(error, SceneReferenceError::AssetHashMismatch { .. })));
 }
 
+#[test]
+fn node_asset_pins_must_match_the_declared_dependency_exactly() {
+    let mut document = simple_document();
+    let mismatched = AssetReference::new(
+        AssetId::parse("mesh/room").unwrap(),
+        AssetVersionReq::Exact(99),
+        Some(AssetHash::parse("bb22").unwrap()),
+    );
+    document.nodes[1].kind = SceneNodeKind::StaticMesh(mismatched);
+
+    let before = document.clone();
+    let error = SceneAdmissionPlan::prepare(&document, &complete_context()).unwrap_err();
+    assert!(matches!(error, SceneAdmissionError::InvalidScene(_)));
+    assert!(validate_scene(&document)
+        .errors
+        .iter()
+        .any(|error| matches!(error, SceneValidationError::MissingAssetDependency { .. })));
+    assert_eq!(document, before);
+}
+
 fn simple_document() -> FlatSceneDocument {
     let mesh = mesh_reference();
     FlatSceneDocument {

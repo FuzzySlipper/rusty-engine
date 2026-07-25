@@ -162,6 +162,7 @@ fn history_codec_preserves_redo_tail_and_rejects_corruption() {
         decode_voxel_edit_history(&encoded, VoxelEditHistoryLimits::default()).unwrap();
     assert_eq!(restored.history.cursor().index, 1);
     assert_eq!(restored.history.cursor().redo_depth, 1);
+    assert_eq!(restored.scene.source_revision(), scene.source_revision());
     restored.history.redo_one(&mut restored.scene).unwrap();
     assert!(has_voxel(&restored.scene, [4, 0, 0]));
 
@@ -176,6 +177,27 @@ fn history_codec_preserves_redo_tail_and_rejects_corruption() {
         error,
         VoxelEditHistoryCodecError::InvalidContentHash
     ));
+}
+
+#[test]
+fn history_codec_rejects_invalid_redo_authority_and_preserves_live_revision() {
+    let mut scene = scene();
+    let mut history = VoxelEditHistory::new(&scene);
+    history
+        .apply(
+            &mut scene,
+            &[VoxelEdit::Set {
+                address: [3, 0, 0],
+                material_slot: 2,
+            }],
+        )
+        .unwrap();
+    history.undo_one(&mut scene).unwrap();
+    assert_eq!(scene.source_revision().raw(), 2);
+
+    let encoded = encode_voxel_edit_history(&history).unwrap();
+    let restored = decode_voxel_edit_history(&encoded, VoxelEditHistoryLimits::default()).unwrap();
+    assert_eq!(restored.scene.source_revision(), scene.source_revision());
 }
 
 #[test]
