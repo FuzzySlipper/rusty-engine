@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use gltf::{buffer::Source as BufferSource, mesh::Mode};
-use voxel_asset::{MAX_CONVERSION_SOURCE_INDICES, MAX_CONVERSION_SOURCE_VERTICES};
+use voxel_asset::{
+    MAX_CONVERSION_SOURCE_BYTES, MAX_CONVERSION_SOURCE_INDICES, MAX_CONVERSION_SOURCE_VERTICES,
+};
 
 use crate::ConversionError;
 
@@ -25,6 +27,16 @@ pub struct ImportedMaterial {
 }
 
 pub fn import_static_glb(source: &[u8]) -> Result<ImportedStaticMesh, ConversionError> {
+    if source.is_empty() || source.len() as u64 > MAX_CONVERSION_SOURCE_BYTES {
+        return Err(ConversionError::one(
+            "conversion.resourceLimit",
+            "source",
+            format!(
+                "source byte count {} is outside 1..={MAX_CONVERSION_SOURCE_BYTES}",
+                source.len()
+            ),
+        ));
+    }
     let parsed = gltf::Gltf::from_slice(source).map_err(|error| {
         ConversionError::one(
             "conversion.invalidSource",

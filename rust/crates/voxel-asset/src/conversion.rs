@@ -6,9 +6,9 @@ use sha2::{Digest, Sha256};
 
 use crate::codec::{valid_sha256, MAX_MATERIAL_MAPPINGS, MAX_REPRESENTED_VOXELS, MAX_STRING_BYTES};
 
-pub const MAX_CONVERSION_SOURCE_BYTES: u64 = 8 * 1024 * 1024;
-pub const MAX_CONVERSION_SOURCE_VERTICES: usize = 250_000;
-pub const MAX_CONVERSION_SOURCE_INDICES: usize = 750_000;
+pub const MAX_CONVERSION_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_CONVERSION_SOURCE_VERTICES: usize = 2_000_000;
+pub const MAX_CONVERSION_SOURCE_INDICES: usize = 6_000_000;
 pub const MAX_CONVERSION_RESOLUTION_AXIS: u32 = 256;
 pub const MAX_CONVERSION_CELLS: u64 = 16_777_216;
 
@@ -42,12 +42,14 @@ pub struct VoxelConversionSettings {
 #[serde(rename_all = "camelCase")]
 pub enum VoxelConversionFitPolicy {
     Contain,
+    Cover,
     Stretch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum VoxelConversionOriginPolicy {
+    SourceOrigin,
     TargetMin,
     Centered,
 }

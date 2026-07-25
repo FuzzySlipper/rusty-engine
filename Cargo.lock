@@ -772,6 +772,7 @@ dependencies = [
 name = "voxel-convert"
 version = "0.1.0"
 dependencies = [
+ "core-assets",
  "gltf",
  "serde",
  "serde_json",

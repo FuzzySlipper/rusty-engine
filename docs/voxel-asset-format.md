@@ -72,14 +72,14 @@ unmapped materials, bad provenance, excessive resources, and hash drift all fail
 ## Deterministic conversion input
 
 One `VoxelConversionRequest` fixes the source path and expected SHA-256 before parsing. Its settings
-fix resolution, cell size, chunk size, engine origin, fit policy (`contain` or `stretch`), origin
-policy (`targetMin` or `centered`), mode (`surface` or `solid`), the complete material map, and a
-maximum output count. Material-map order does not affect the settings hash.
+fix resolution, cell size, chunk size, engine origin, fit policy (`contain`, `cover`, or `stretch`),
+origin policy (`sourceOrigin`, `targetMin`, or `centered`), mode (`surface` or `solid`), the complete
+material map, and a maximum output count. Material-map order does not affect the settings hash.
 
-Preflight rejects empty or greater-than-8-MiB sources, resolution axes outside `1..=256`, grids over
+Preflight rejects empty or greater-than-64-MiB sources, resolution axes outside `1..=256`, grids over
 16,777,216 candidate cells, mapped coordinates outside the engine bound, output budgets outside
 `1..=1,000,000`, duplicate source slots, and invalid material slots. The parser adds limits of
-250,000 positions and 750,000 indices in M7B.2. Conversion must never partially replace a known-good
+2,000,000 positions and 6,000,000 indices. Conversion must never partially replace a known-good
 artifact.
 
 ## Implemented conversion
@@ -87,8 +87,9 @@ artifact.
 `voxel-convert` is a separate workspace crate with no downstream-runtime dependency. Its GLB importer
 accepts exactly one static mesh backed by an embedded BIN chunk. The mesh must be instantiated once
 by the only root node of the only default scene, with an identity node transform and no children,
-camera, skin, or instance weights. Transforms must be baked into source positions before conversion;
-additional instances and non-identity transforms fail closed instead of being silently discarded.
+camera, skin, or instance weights. GLB scene transforms are rejected instead of being silently
+discarded; the explicit conversion-plan transform is the supported, hash-pinned way to position
+source geometry.
 The importer also rejects animation, skinning, morph targets, non-triangle modes, implicit indices,
 invalid indices, non-finite/degenerate geometry, and the M7B.1 resource ceilings, then exposes only
 positions, indexed triangles, and stable material slots to the converter.
@@ -100,6 +101,13 @@ coordinate collisions choose the lowest source material slot deterministically. 
 requires a closed, consistently wound indexed manifold, retains sampled boundary materials, and
 fills its mapped bounds. The selected Kenney wall uses surface mode because its GLB deliberately
 duplicates vertices between render faces rather than presenting a welded solid manifold.
+
+The higher-level conversion owner imports a hash-pinned source with deterministic bounds, groups,
+and material-slot metadata, then separates `plan`, bounded `preview`, and guarded `apply`. Plans add
+an affine transform, default material fallback, and optional nearest-texel palette sampling while
+retaining the stored conversion settings above. Preview and apply reject stale plan/output hashes;
+apply installs only a complete canonical candidate. Bounded model-info and voxel-window queries make
+the resulting asset inspectable without a runtime facade or replay session.
 
 The checked request at `content/conversion/kenney-wall-a.request.json` produces
 `content/assets/kenney-wall-a.voxel.json`:
@@ -120,7 +128,7 @@ cargo run -q -p voxel-convert --bin voxel-convert -- \
   --output content/assets/kenney-wall-a.voxel.json
 ```
 
-The CLI reads at most 1 MiB plus one byte for its request and 8 MiB plus one byte for its source, so
+The CLI reads at most 1 MiB plus one byte for its request and 64 MiB plus one byte for its source, so
 the filesystem entrypoint enforces the same bounds before retaining complete inputs. The tool then
 completes parsing, conversion, validation, and canonical encoding before touching the target. It
 writes and syncs a same-directory pending file, then atomically renames it into place.

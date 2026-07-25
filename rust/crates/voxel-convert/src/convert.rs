@@ -35,8 +35,18 @@ pub fn convert_glb(
     request: &VoxelConversionRequest,
     source: &[u8],
 ) -> Result<ConversionReceipt, ConversionError> {
-    validate_conversion_request(request, source.len() as u64)?;
     let source_sha256 = sha256(source);
+    let mesh = crate::import_static_glb(source)?;
+    convert_imported_mesh(request, &mesh, source_sha256, source.len() as u64)
+}
+
+pub(crate) fn convert_imported_mesh(
+    request: &VoxelConversionRequest,
+    mesh: &ImportedStaticMesh,
+    source_sha256: String,
+    source_byte_count: u64,
+) -> Result<ConversionReceipt, ConversionError> {
+    validate_conversion_request(request, source_byte_count)?;
     if source_sha256 != request.expected_source_sha256 {
         return Err(ConversionError::one(
             "conversion.sourceHashMismatch",
@@ -48,9 +58,8 @@ pub fn convert_glb(
         ));
     }
 
-    let mesh = crate::import_static_glb(source)?;
-    validate_material_map(request, &mesh)?;
-    let cells = convert_cells(request, &mesh)?;
+    validate_material_map(request, mesh)?;
+    let cells = convert_cells(request, mesh)?;
     let bounds = bounds_for_cells(&cells).expect("conversion rejects empty output");
     let sparse_runs = sparse_runs(&cells);
     let settings_sha256 = conversion_settings_sha256(&request.settings);
@@ -74,7 +83,7 @@ pub fn convert_glb(
             kind: VoxelAssetProvenanceKind::ConvertedStaticMesh,
             source_path: request.source_path.clone(),
             source_sha256: source_sha256.clone(),
-            source_byte_count: source.len() as u64,
+            source_byte_count,
             converter: CONVERTER_ID.to_string(),
             settings_sha256: settings_sha256.clone(),
             license_path: request.license_path.clone(),
@@ -104,6 +113,18 @@ pub fn convert_glb(
         settings_sha256,
         content_hash,
     })
+}
+
+pub(crate) fn replace_settings_identity(
+    mut receipt: ConversionReceipt,
+    settings_sha256: String,
+) -> Result<ConversionReceipt, ConversionError> {
+    receipt.asset.provenance.settings_sha256 = settings_sha256.clone();
+    receipt.asset = with_computed_content_hash(receipt.asset).map_err(asset_error)?;
+    receipt.canonical_json = encode_voxel_asset(&receipt.asset).map_err(asset_error)?;
+    receipt.settings_sha256 = settings_sha256;
+    receipt.content_hash = receipt.asset.content_hash.clone();
+    Ok(receipt)
 }
 
 fn validate_material_map(
@@ -351,6 +372,7 @@ struct CoordinateMapper {
     cell_size: f64,
     scale: [f64; 3],
     offset_cells: [f64; 3],
+    origin_policy: VoxelConversionOriginPolicy,
 }
 
 impl CoordinateMapper {
@@ -374,13 +396,23 @@ impl CoordinateMapper {
             VoxelConversionFitPolicy::Stretch => {
                 std::array::from_fn(|axis| ratios[axis].unwrap_or(1.0))
             }
-            VoxelConversionFitPolicy::Contain => {
-                let uniform = ratios.into_iter().flatten().reduce(f64::min).unwrap_or(1.0);
+            VoxelConversionFitPolicy::Contain | VoxelConversionFitPolicy::Cover => {
+                let uniform = match settings.fit_policy {
+                    VoxelConversionFitPolicy::Contain => {
+                        ratios.into_iter().flatten().reduce(f64::min).unwrap_or(1.0)
+                    }
+                    VoxelConversionFitPolicy::Cover => {
+                        ratios.into_iter().flatten().reduce(f64::max).unwrap_or(1.0)
+                    }
+                    VoxelConversionFitPolicy::Stretch => unreachable!(),
+                };
                 [uniform; 3]
             }
         };
         let offset_cells = match settings.origin_policy {
-            VoxelConversionOriginPolicy::TargetMin => [0.0; 3],
+            VoxelConversionOriginPolicy::SourceOrigin | VoxelConversionOriginPolicy::TargetMin => {
+                [0.0; 3]
+            }
             VoxelConversionOriginPolicy::Centered => std::array::from_fn(|axis| {
                 ((target_span[axis] - source_span[axis] * scale[axis]) / 2.0).max(0.0)
                     / settings.cell_size
@@ -392,13 +424,18 @@ impl CoordinateMapper {
             cell_size: settings.cell_size,
             scale,
             offset_cells,
+            origin_policy: settings.origin_policy,
         }
     }
 
     fn map_continuous(&self, position: [f64; 3]) -> [f64; 3] {
         std::array::from_fn(|axis| {
-            ((position[axis] - self.source_min[axis]) * self.scale[axis] / self.cell_size)
-                + self.offset_cells[axis]
+            let anchored = if self.origin_policy == VoxelConversionOriginPolicy::SourceOrigin {
+                position[axis]
+            } else {
+                position[axis] - self.source_min[axis]
+            };
+            (anchored * self.scale[axis] / self.cell_size) + self.offset_cells[axis]
         })
     }
 

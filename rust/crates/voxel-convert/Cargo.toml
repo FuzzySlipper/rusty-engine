@@ -7,6 +7,7 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
+core-assets.workspace = true
 gltf.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -48,11 +48,14 @@ pub fn convert_and_install(
     output: &Path,
 ) -> Result<ConversionReceipt, ConversionError> {
     let receipt = convert_glb(request, source)?;
-    install(&receipt.canonical_json, output)?;
+    install_canonical_asset(&receipt.canonical_json, output)?;
     Ok(receipt)
 }
 
-fn install(contents: &str, output: &Path) -> Result<(), ConversionError> {
+pub(crate) fn install_canonical_asset(
+    contents: &str,
+    output: &Path,
+) -> Result<(), ConversionError> {
     let pending = pending_path(output)?;
     let result = (|| {
         let mut file = OpenOptions::new()
