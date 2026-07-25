@@ -11,6 +11,18 @@
     "fitPolicy": "contain",
     "originPolicy": "targetMin",
     "mode": "surface",
+    "materialPalette": [
+      {
+        "materialSlot": 7,
+        "materialAssetId": "material/wall-lines",
+        "displayName": "Wall lines"
+      },
+      {
+        "materialSlot": 8,
+        "materialAssetId": "material/concrete",
+        "displayName": "Concrete"
+      }
+    ],
     "materialMap": [
       {
         "sourceMaterialSlot": 0,

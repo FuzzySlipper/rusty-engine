@@ -9,11 +9,13 @@
 mod asset;
 mod codec;
 mod conversion;
+mod palette;
 
 pub use asset::{
-    VoxelAsset, VoxelAssetBounds, VoxelAssetGrid, VoxelAssetMaterialMapping, VoxelAssetProvenance,
-    VoxelAssetProvenanceKind, VoxelCoordinateSystem, VoxelRepresentation, VoxelRepresentationKind,
-    VoxelSparseRun, VOXEL_ASSET_SCHEMA_VERSION,
+    VoxelAsset, VoxelAssetBounds, VoxelAssetGrid, VoxelAssetMaterialBinding,
+    VoxelAssetMaterialMapping, VoxelAssetProvenance, VoxelAssetProvenanceKind,
+    VoxelCoordinateSystem, VoxelRepresentation, VoxelRepresentationKind, VoxelSparseRun,
+    VOXEL_ASSET_SCHEMA_VERSION,
 };
 pub use codec::{
     canonicalize_voxel_asset, decode_voxel_asset, encode_voxel_asset, validate_voxel_asset,
@@ -26,4 +28,8 @@ pub use conversion::{
     VoxelConversionOriginPolicy, VoxelConversionRequest, VoxelConversionSettings,
     MAX_CONVERSION_CELLS, MAX_CONVERSION_RESOLUTION_AXIS, MAX_CONVERSION_SOURCE_BYTES,
     MAX_CONVERSION_SOURCE_INDICES, MAX_CONVERSION_SOURCE_VERTICES,
+};
+pub use palette::{
+    replace_voxel_palette, VoxelPaletteUpdateError, VoxelPaletteUpdateReceipt,
+    VoxelPaletteUpdateRequest,
 };

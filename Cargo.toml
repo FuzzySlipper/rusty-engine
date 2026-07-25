@@ -11,6 +11,7 @@ members = [
     "rust/crates/engine-spatial",
     "rust/crates/entity-state",
     "rust/crates/voxel-asset",
+    "rust/crates/voxel-annotation",
     "rust/crates/voxel-convert",
     "rust/crates/core-assets",
     "rust/crates/core-ids",
@@ -39,6 +40,7 @@ render-model = { path = "rust/crates/render-model" }
 render-presentation = { path = "rust/crates/render-presentation" }
 render-projection = { path = "rust/crates/render-projection" }
 entity-state = { path = "rust/crates/entity-state" }
+voxel-annotation = { path = "rust/crates/voxel-annotation" }
 core-assets = { path = "rust/crates/core-assets" }
 core-ids = { path = "rust/crates/core-ids" }
 core-math = { path = "rust/crates/core-math" }

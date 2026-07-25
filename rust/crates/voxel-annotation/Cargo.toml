@@ -1,5 +1,5 @@
 [package]
-name = "content-store"
+name = "voxel-annotation"
 version.workspace = true
 edition.workspace = true
 
@@ -7,14 +7,9 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
-asset-catalog.workspace = true
-authored-scene.workspace = true
 core-assets.workspace = true
-core-ids.workspace = true
-entity-state.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error.workspace = true
 sha2.workspace = true
-voxel-annotation.workspace = true
 voxel-asset = { path = "../voxel-asset" }

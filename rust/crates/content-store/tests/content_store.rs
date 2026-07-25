@@ -105,6 +105,12 @@ fn write_candidates_enforce_exact_transition_and_two_sided_cas() {
 fn load_plan_orders_owner_admission_before_resources() {
     let manifest = ContentManifest::new(vec![
         ContentArtifact::durable("z.resource", ArtifactRole::ImportedAsset, b"resource"),
+        ContentArtifact::durable("volume.voxel.json", ArtifactRole::VoxelAsset, b"voxel"),
+        ContentArtifact::durable(
+            "semantic.annotation.json",
+            ArtifactRole::VoxelAnnotation,
+            b"annotation",
+        ),
         ContentArtifact::durable("scene.json", ArtifactRole::SceneDocument, b"scene"),
         ContentArtifact::durable("prefabs.json", ArtifactRole::PrefabRegistry, b"prefabs"),
         ContentArtifact::durable("catalog.json", ArtifactRole::AssetCatalog, b"catalog"),
@@ -112,9 +118,11 @@ fn load_plan_orders_owner_admission_before_resources() {
     let plan = ContentLoadPlan::build(&manifest).unwrap();
     assert!(plan.verify_order());
     assert_eq!(plan.steps[0].stage, ContentLoadStage::AssetAuthority);
-    assert_eq!(plan.steps[1].stage, ContentLoadStage::Prefabs);
-    assert_eq!(plan.steps[2].stage, ContentLoadStage::Scenes);
-    assert_eq!(plan.steps[3].stage, ContentLoadStage::Resources);
+    assert_eq!(plan.steps[1].stage, ContentLoadStage::AssetData);
+    assert_eq!(plan.steps[2].stage, ContentLoadStage::AssetData);
+    assert_eq!(plan.steps[3].stage, ContentLoadStage::Annotations);
+    assert_eq!(plan.steps[4].stage, ContentLoadStage::Prefabs);
+    assert_eq!(plan.steps[5].stage, ContentLoadStage::Scenes);
 }
 
 #[test]

@@ -33,6 +33,7 @@ pub struct VoxelConversionSettings {
     pub fit_policy: VoxelConversionFitPolicy,
     pub origin_policy: VoxelConversionOriginPolicy,
     pub mode: VoxelConversionMode,
+    pub material_palette: Vec<crate::VoxelAssetMaterialBinding>,
     pub material_map: Vec<crate::VoxelAssetMaterialMapping>,
     pub max_output_voxels: u32,
 }
@@ -141,6 +142,18 @@ pub fn validate_conversion_request(
 
 pub fn conversion_settings_sha256(settings: &VoxelConversionSettings) -> String {
     let mut canonical = settings.clone();
+    canonical.material_palette.sort_by(|left, right| {
+        (
+            left.material_slot,
+            &left.material_asset_id,
+            &left.display_name,
+        )
+            .cmp(&(
+                right.material_slot,
+                &right.material_asset_id,
+                &right.display_name,
+            ))
+    });
     canonical.material_map.sort_by(|left, right| {
         (
             left.source_material_slot,
@@ -231,6 +244,47 @@ fn validate_settings(
             format!("materialMap must contain 1..={MAX_MATERIAL_MAPPINGS} entries"),
         ));
     }
+    if settings.material_palette.is_empty()
+        || settings.material_palette.len() > MAX_MATERIAL_MAPPINGS
+    {
+        diagnostics.push(input_diagnostic(
+            "conversion.invalidMaterialPalette",
+            "settings.materialPalette",
+            format!("materialPalette must contain 1..={MAX_MATERIAL_MAPPINGS} entries"),
+        ));
+    }
+    let mut palette_slots = BTreeSet::new();
+    for (index, binding) in settings.material_palette.iter().enumerate() {
+        if !(1..=4_095).contains(&binding.material_slot)
+            || !palette_slots.insert(binding.material_slot)
+        {
+            diagnostics.push(input_diagnostic(
+                "conversion.invalidMaterialPalette",
+                format!("settings.materialPalette[{index}].materialSlot"),
+                "material slots must be unique and in 1..=4095",
+            ));
+        }
+        match AssetId::parse(&binding.material_asset_id) {
+            Ok(id) if id.kind() == AssetKind::Material => {}
+            Ok(id) => diagnostics.push(input_diagnostic(
+                "conversion.invalidMaterialPalette",
+                format!("settings.materialPalette[{index}].materialAssetId"),
+                format!("expected material identity, found {}", id.kind()),
+            )),
+            Err(error) => diagnostics.push(input_diagnostic(
+                "conversion.invalidMaterialPalette",
+                format!("settings.materialPalette[{index}].materialAssetId"),
+                error.to_string(),
+            )),
+        }
+        if let Some(name) = &binding.display_name {
+            validate_string(
+                name,
+                format!("settings.materialPalette[{index}].displayName"),
+                diagnostics,
+            );
+        }
+    }
     let mut source_slots = BTreeSet::new();
     for (index, mapping) in settings.material_map.iter().enumerate() {
         if !source_slots.insert(mapping.source_material_slot) {
@@ -245,6 +299,12 @@ fn validate_settings(
                 "conversion.invalidMaterialMap",
                 format!("settings.materialMap[{index}].voxelMaterialSlot"),
                 "voxel material slots must be in 1..=4095",
+            ));
+        } else if !palette_slots.contains(&mapping.voxel_material_slot) {
+            diagnostics.push(input_diagnostic(
+                "conversion.invalidMaterialPalette",
+                format!("settings.materialMap[{index}].voxelMaterialSlot"),
+                "mapped voxel material has no materialPalette binding",
             ));
         }
         if let Some(name) = &mapping.source_material_name {

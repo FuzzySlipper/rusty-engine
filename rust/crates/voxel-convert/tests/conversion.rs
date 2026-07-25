@@ -85,6 +85,7 @@ fn settings_variation_changes_canonical_artifact_and_stale_identity_fails() {
 
     let mut varied = request.clone();
     varied.settings.material_map[0].voxel_material_slot = 9;
+    varied.settings.material_palette[0].material_slot = 9;
     let varied = convert_glb(&varied, SOURCE).unwrap();
     assert_ne!(varied.content_hash, baseline.content_hash);
     assert_ne!(varied.canonical_json, baseline.canonical_json);

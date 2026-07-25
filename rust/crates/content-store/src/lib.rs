@@ -28,7 +28,7 @@ pub use manifest::{
 };
 pub use owner_codec::{
     asset_catalog_body, asset_lock_body, durable_entity_state_body, prefab_registry_body,
-    scene_document_body, OwnerCodecError,
+    scene_document_body, voxel_annotation_body, voxel_asset_body, OwnerCodecError,
 };
 pub use plan::{ContentLoadPlan, ContentLoadStage, ContentLoadStep, ContentSavePlan};
 pub use prefab::{

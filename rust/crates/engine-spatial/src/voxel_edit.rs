@@ -15,6 +15,7 @@
 use std::collections::BTreeMap;
 
 use crate::{CollisionSceneError, MaterialVoxel, VoxelCollisionScene};
+use serde::{Deserialize, Serialize};
 
 /// One UI or tool transaction cannot silently expand into unbounded work.
 pub const MAX_VOXEL_EDITS_PER_TRANSACTION: usize = 4_096;
@@ -90,13 +91,18 @@ impl VoxelSourceRevision {
         self.0
     }
 
-    fn next(self) -> Option<Self> {
+    pub fn checked_next(self) -> Option<Self> {
         self.0.checked_add(1).map(Self)
     }
 }
 
 /// The deliberately small operation family required by the first product proof.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum VoxelEdit {
     Set {
         address: [i64; 3],
@@ -188,6 +194,47 @@ impl std::error::Error for VoxelEditRejection {}
 pub enum VoxelEditApplyError {
     Rejected(VoxelEditRejection),
     ProjectionBuild(CollisionSceneError),
+    PreparedStateChanged {
+        expected_revision: VoxelSourceRevision,
+        actual_revision: VoxelSourceRevision,
+        expected_hash: u64,
+        actual_hash: u64,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct VoxelEditDelta {
+    pub address: [i64; 3],
+    pub before_material: Option<u16>,
+    pub after_material: Option<u16>,
+}
+
+/// Fully rebuilt candidate authority. Callers may inspect the exact projected
+/// result before explicitly committing it; no projection or authority mutates
+/// during preparation.
+#[derive(Debug)]
+pub struct PreparedVoxelEdit {
+    expected_revision: VoxelSourceRevision,
+    expected_hash: u64,
+    candidate: VoxelCollisionScene,
+    receipt: VoxelEditReceipt,
+    deltas: Vec<VoxelEditDelta>,
+    canonical_edits: Vec<VoxelEdit>,
+}
+
+impl PreparedVoxelEdit {
+    pub const fn receipt(&self) -> VoxelEditReceipt {
+        self.receipt
+    }
+
+    pub fn deltas(&self) -> &[VoxelEditDelta] {
+        &self.deltas
+    }
+
+    pub fn canonical_edits(&self) -> &[VoxelEdit] {
+        &self.canonical_edits
+    }
 }
 
 impl std::fmt::Display for VoxelEditApplyError {
@@ -195,6 +242,9 @@ impl std::fmt::Display for VoxelEditApplyError {
         match self {
             Self::Rejected(rejection) => rejection.fmt(formatter),
             Self::ProjectionBuild(error) => write!(formatter, "projection rebuild failed: {error}"),
+            Self::PreparedStateChanged { .. } => {
+                write!(formatter, "voxel authority changed after preview")
+            }
         }
     }
 }
@@ -276,7 +326,7 @@ impl VoxelEditService {
             });
         }
         let revision_after = current_revision
-            .next()
+            .checked_next()
             .ok_or(VoxelEditRejection::RevisionExhausted)?;
         if transaction.edits.is_empty() {
             return Err(VoxelEditRejection::EmptyTransaction);
@@ -329,13 +379,12 @@ impl VoxelEditService {
         })
     }
 
-    /// Validate, derive, rebuild, then swap one complete coherent scene. The
-    /// input scene remains byte-for-byte observable through its public values if
-    /// validation or any projection build fails.
-    pub fn apply(
-        scene: &mut VoxelCollisionScene,
+    /// Validate, derive, and rebuild one complete coherent scene without
+    /// mutating the source authority.
+    pub fn preview(
+        scene: &VoxelCollisionScene,
         transaction: VoxelEditTransaction<'_>,
-    ) -> Result<VoxelEditReceipt, VoxelEditApplyError> {
+    ) -> Result<PreparedVoxelEdit, VoxelEditApplyError> {
         let accepted = Self::validate_transaction(scene.source_revision, transaction)
             .map_err(VoxelEditApplyError::Rejected)?;
         let mut materials: BTreeMap<[i64; 3], u16> = scene
@@ -343,26 +392,35 @@ impl VoxelEditService {
             .iter()
             .map(|voxel| (voxel.address, voxel.material_slot))
             .collect();
-        let mut changed = Vec::new();
+        let mut deltas = Vec::new();
         for edit in accepted.canonical_edits.iter().copied() {
             match edit {
                 VoxelEdit::Set {
                     address,
                     material_slot,
                 } => {
-                    if materials.get(&address).copied() != Some(material_slot) {
+                    let before_material = materials.get(&address).copied();
+                    if before_material != Some(material_slot) {
                         materials.insert(address, material_slot);
-                        changed.push(address);
+                        deltas.push(VoxelEditDelta {
+                            address,
+                            before_material,
+                            after_material: Some(material_slot),
+                        });
                     }
                 }
                 VoxelEdit::Clear { address } => {
-                    if materials.remove(&address).is_some() {
-                        changed.push(address);
+                    if let Some(before_material) = materials.remove(&address) {
+                        deltas.push(VoxelEditDelta {
+                            address,
+                            before_material: Some(before_material),
+                            after_material: None,
+                        });
                     }
                 }
             }
         }
-        if changed.is_empty() {
+        if deltas.is_empty() {
             return Err(VoxelEditApplyError::Rejected(VoxelEditRejection::NoChanges));
         }
 
@@ -381,22 +439,22 @@ impl VoxelEditService {
         )
         .map_err(VoxelEditApplyError::ProjectionBuild)?;
         let changed_min = [0, 1, 2].map(|axis| {
-            changed
+            deltas
                 .iter()
-                .map(|address| address[axis])
+                .map(|delta| delta.address[axis])
                 .min()
                 .expect("at least one changed voxel")
         });
         let changed_max_inclusive = [0, 1, 2].map(|axis| {
-            changed
+            deltas
                 .iter()
-                .map(|address| address[axis])
+                .map(|delta| delta.address[axis])
                 .max()
                 .expect("at least one changed voxel")
         });
         let fact = VoxelEditFact {
             revision: accepted.revision_after,
-            changed_voxels: changed.len(),
+            changed_voxels: deltas.len(),
             changed_min,
             changed_max_inclusive,
         };
@@ -411,8 +469,45 @@ impl VoxelEditService {
         debug_assert!(receipt
             .projections
             .is_coherent_with(receipt.accepted_revision));
-        *scene = rebuilt;
+        Ok(PreparedVoxelEdit {
+            expected_revision: scene.source_revision,
+            expected_hash: scene.authority_hash,
+            candidate: rebuilt,
+            receipt,
+            deltas,
+            canonical_edits: accepted.canonical_edits,
+        })
+    }
+
+    /// Commit a previously prepared complete authority only if its source scene
+    /// is still exactly the one that was previewed.
+    pub fn commit(
+        scene: &mut VoxelCollisionScene,
+        prepared: PreparedVoxelEdit,
+    ) -> Result<VoxelEditReceipt, VoxelEditApplyError> {
+        if scene.source_revision != prepared.expected_revision
+            || scene.authority_hash != prepared.expected_hash
+        {
+            return Err(VoxelEditApplyError::PreparedStateChanged {
+                expected_revision: prepared.expected_revision,
+                actual_revision: scene.source_revision,
+                expected_hash: prepared.expected_hash,
+                actual_hash: scene.authority_hash,
+            });
+        }
+        let receipt = prepared.receipt;
+        *scene = prepared.candidate;
         Ok(receipt)
+    }
+
+    /// Validate, derive, rebuild, then swap one complete coherent scene. The
+    /// input scene remains unchanged if validation or any projection build fails.
+    pub fn apply(
+        scene: &mut VoxelCollisionScene,
+        transaction: VoxelEditTransaction<'_>,
+    ) -> Result<VoxelEditReceipt, VoxelEditApplyError> {
+        let prepared = Self::preview(scene, transaction)?;
+        Self::commit(scene, prepared)
     }
 }
 

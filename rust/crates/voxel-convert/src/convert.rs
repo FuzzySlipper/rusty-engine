@@ -68,6 +68,7 @@ pub fn convert_glb(
             kind: VoxelRepresentationKind::SparseRuns,
             sparse_runs,
         },
+        material_palette: request.settings.material_palette.clone(),
         material_map: request.settings.material_map.clone(),
         provenance: VoxelAssetProvenance {
             kind: VoxelAssetProvenanceKind::ConvertedStaticMesh,
@@ -78,6 +79,7 @@ pub fn convert_glb(
             settings_sha256: settings_sha256.clone(),
             license_path: request.license_path.clone(),
         },
+        voxel_data_hash: String::new(),
         content_hash: String::new(),
     })
     .map_err(asset_error)?;

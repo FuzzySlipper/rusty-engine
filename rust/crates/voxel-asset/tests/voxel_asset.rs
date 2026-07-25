@@ -1,11 +1,12 @@
 use voxel_asset::{
-    conversion_settings_sha256, decode_voxel_asset, encode_voxel_asset,
+    conversion_settings_sha256, decode_voxel_asset, encode_voxel_asset, replace_voxel_palette,
     validate_conversion_request, validate_voxel_asset, with_computed_content_hash, VoxelAsset,
-    VoxelAssetBounds, VoxelAssetGrid, VoxelAssetMaterialMapping, VoxelAssetProvenance,
-    VoxelAssetProvenanceKind, VoxelConversionFitPolicy, VoxelConversionMode,
+    VoxelAssetBounds, VoxelAssetGrid, VoxelAssetMaterialBinding, VoxelAssetMaterialMapping,
+    VoxelAssetProvenance, VoxelAssetProvenanceKind, VoxelConversionFitPolicy, VoxelConversionMode,
     VoxelConversionOriginPolicy, VoxelConversionRequest, VoxelConversionSettings,
-    VoxelCoordinateSystem, VoxelRepresentation, VoxelRepresentationKind, VoxelSparseRun,
-    MAX_CONVERSION_SOURCE_BYTES, VOXEL_ASSET_SCHEMA_VERSION,
+    VoxelCoordinateSystem, VoxelPaletteUpdateError, VoxelPaletteUpdateRequest, VoxelRepresentation,
+    VoxelRepresentationKind, VoxelSparseRun, MAX_CONVERSION_SOURCE_BYTES,
+    VOXEL_ASSET_SCHEMA_VERSION,
 };
 
 #[test]
@@ -32,6 +33,7 @@ fn schema_one_sparse_asset_is_canonical_and_byte_stable() {
     assert_eq!(asset.representation.sparse_runs[0].length, 3);
     assert_eq!(asset.representation.sparse_runs[1].length, 3);
     assert!(asset.content_hash.starts_with("sha256:"));
+    assert!(asset.voxel_data_hash.starts_with("sha256:"));
 
     let first = encode_voxel_asset(&asset).expect("encoded asset");
     let decoded = decode_voxel_asset(&first).expect("decoded asset");
@@ -40,6 +42,57 @@ fn schema_one_sparse_asset_is_canonical_and_byte_stable() {
     assert!(first.ends_with('\n'));
     assert!(first.contains("\"rightHandedYUp\""));
     assert!(first.contains("\"sparseRuns\""));
+}
+
+#[test]
+fn palette_replacement_is_fail_atomic_and_preserves_voxel_identity() {
+    let mut asset = with_computed_content_hash(valid_asset()).unwrap();
+    let original = asset.clone();
+    let receipt = replace_voxel_palette(
+        &mut asset,
+        VoxelPaletteUpdateRequest {
+            expected_content_hash: original.content_hash.clone(),
+            expected_voxel_data_hash: original.voxel_data_hash.clone(),
+            replacement: vec![VoxelAssetMaterialBinding {
+                material_slot: 3,
+                material_asset_id: "material/polished-concrete".to_string(),
+                display_name: Some("Polished concrete".to_string()),
+            }],
+        },
+    )
+    .unwrap();
+    assert_ne!(receipt.content_hash_before, receipt.content_hash_after);
+    assert_eq!(asset.voxel_data_hash, original.voxel_data_hash);
+
+    let accepted = asset.clone();
+    let stale = replace_voxel_palette(
+        &mut asset,
+        VoxelPaletteUpdateRequest {
+            expected_content_hash: original.content_hash,
+            expected_voxel_data_hash: original.voxel_data_hash,
+            replacement: vec![],
+        },
+    );
+    assert!(matches!(
+        stale,
+        Err(VoxelPaletteUpdateError::StaleContentHash { .. })
+    ));
+    assert_eq!(asset, accepted);
+
+    let invalid = replace_voxel_palette(
+        &mut asset,
+        VoxelPaletteUpdateRequest {
+            expected_content_hash: accepted.content_hash.clone(),
+            expected_voxel_data_hash: accepted.voxel_data_hash.clone(),
+            replacement: vec![VoxelAssetMaterialBinding {
+                material_slot: 3,
+                material_asset_id: "static-mesh/not-a-material".to_string(),
+                display_name: None,
+            }],
+        },
+    );
+    assert!(matches!(invalid, Err(VoxelPaletteUpdateError::Invalid(_))));
+    assert_eq!(asset, accepted);
 }
 
 #[test]
@@ -159,6 +212,11 @@ fn valid_asset() -> VoxelAsset {
                 },
             ],
         },
+        material_palette: vec![VoxelAssetMaterialBinding {
+            material_slot: 3,
+            material_asset_id: "material/concrete".to_string(),
+            display_name: Some("Concrete".to_string()),
+        }],
         material_map: vec![
             VoxelAssetMaterialMapping {
                 source_material_slot: 1,
@@ -186,6 +244,7 @@ fn valid_asset() -> VoxelAsset {
                 "fixtures/voxel-conversion/KENNEY-RETRO-URBAN-KIT-LICENSE.txt".to_string(),
             ),
         },
+        voxel_data_hash: String::new(),
         content_hash: String::new(),
     }
 }
@@ -207,6 +266,18 @@ fn valid_request() -> VoxelConversionRequest {
             fit_policy: VoxelConversionFitPolicy::Contain,
             origin_policy: VoxelConversionOriginPolicy::TargetMin,
             mode: VoxelConversionMode::Solid,
+            material_palette: vec![
+                VoxelAssetMaterialBinding {
+                    material_slot: 3,
+                    material_asset_id: "material/wall-lines".to_string(),
+                    display_name: Some("Wall lines".to_string()),
+                },
+                VoxelAssetMaterialBinding {
+                    material_slot: 4,
+                    material_asset_id: "material/concrete".to_string(),
+                    display_name: Some("Concrete".to_string()),
+                },
+            ],
             material_map: vec![
                 VoxelAssetMaterialMapping {
                     source_material_slot: 0,

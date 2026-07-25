@@ -11,8 +11,15 @@ pub struct VoxelAsset {
     pub grid: VoxelAssetGrid,
     pub bounds: VoxelAssetBounds,
     pub representation: VoxelRepresentation,
+    /// Semantic runtime palette. Conversion mappings explain where a slot came
+    /// from; these bindings say which catalog material that slot means.
+    pub material_palette: Vec<VoxelAssetMaterialBinding>,
     pub material_map: Vec<VoxelAssetMaterialMapping>,
     pub provenance: VoxelAssetProvenance,
+    /// Hash of canonical sparse occupancy only. Palette and provenance changes
+    /// deliberately leave this identity unchanged.
+    pub voxel_data_hash: String,
+    /// Hash of the complete canonical semantic asset.
     pub content_hash: String,
 }
 
@@ -70,6 +77,16 @@ pub struct VoxelAssetMaterialMapping {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_material_name: Option<String>,
     pub voxel_material_slot: u16,
+}
+
+/// One durable voxel-slot binding to a successor material asset.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct VoxelAssetMaterialBinding {
+    pub material_slot: u16,
+    pub material_asset_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

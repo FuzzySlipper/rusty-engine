@@ -6,6 +6,8 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ContentLoadStage {
     AssetAuthority,
+    AssetData,
+    Annotations,
     Prefabs,
     Scenes,
     EntityState,
@@ -51,6 +53,8 @@ impl ContentLoadPlan {
 fn stage_for(role: &ArtifactRole) -> ContentLoadStage {
     match role {
         ArtifactRole::AssetCatalog | ArtifactRole::AssetLock => ContentLoadStage::AssetAuthority,
+        ArtifactRole::VoxelAsset | ArtifactRole::ImportedAsset => ContentLoadStage::AssetData,
+        ArtifactRole::VoxelAnnotation => ContentLoadStage::Annotations,
         ArtifactRole::PrefabRegistry => ContentLoadStage::Prefabs,
         ArtifactRole::SceneDocument => ContentLoadStage::Scenes,
         ArtifactRole::EntityStateSnapshot => ContentLoadStage::EntityState,

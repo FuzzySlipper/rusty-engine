@@ -10,6 +10,9 @@
 
 mod entity_motion;
 mod voxel_edit;
+mod voxel_history;
+mod voxel_history_codec;
+mod voxel_picking;
 
 pub use entity_motion::{
     EntityMotionCommand, EntityMotionError, EntityMotionOutcome, EntityMotionReceipt,
@@ -20,17 +23,32 @@ pub use entity_motion::{
 
 pub use voxel_edit::{
     validate_material_voxel, validate_voxel_address, validate_voxel_material_slot,
-    ValidatedVoxelEditTransaction, VoxelAuthorityValidationError, VoxelEdit, VoxelEditApplyError,
-    VoxelEditFact, VoxelEditReceipt, VoxelEditRejection, VoxelEditService, VoxelEditTransaction,
-    VoxelProjectionRevisions, VoxelSourceRevision, MAX_VOXEL_COORDINATE_ABS,
-    MAX_VOXEL_EDITS_PER_TRANSACTION, MAX_VOXEL_MATERIAL_SLOT,
+    PreparedVoxelEdit, ValidatedVoxelEditTransaction, VoxelAuthorityValidationError, VoxelEdit,
+    VoxelEditApplyError, VoxelEditDelta, VoxelEditFact, VoxelEditReceipt, VoxelEditRejection,
+    VoxelEditService, VoxelEditTransaction, VoxelProjectionRevisions, VoxelSourceRevision,
+    MAX_VOXEL_COORDINATE_ABS, MAX_VOXEL_EDITS_PER_TRANSACTION, MAX_VOXEL_MATERIAL_SLOT,
+};
+pub use voxel_history::{
+    PreparedVoxelHistoryRevert, VoxelEditHistory, VoxelEditHistoryAppendReceipt,
+    VoxelEditHistoryBounds, VoxelEditHistoryCursor, VoxelEditHistoryDiffOptions,
+    VoxelEditHistoryDiffSummary, VoxelEditHistoryEntry, VoxelEditHistoryError,
+    VoxelEditHistoryLimits, VoxelEditHistoryMaterialDelta, VoxelEditHistoryRevertReceipt,
+};
+pub use voxel_history_codec::{
+    decode_voxel_edit_history, encode_voxel_edit_history, VoxelEditHistoryCodecError,
+    VoxelEditHistoryRestore, MAX_VOXEL_EDIT_HISTORY_BYTES, VOXEL_EDIT_HISTORY_SCHEMA_VERSION,
+};
+pub use voxel_picking::{
+    InstanceVoxelPickAnchor, VoxelPickAnchor, VoxelPickError, VoxelPickHint, VoxelPickService,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use core_ids::EntityId;
 use core_math::Vec3;
-use core_space::{ChunkCoord, ChunkDims, GridId, VoxelCoord, VoxelGridSpec, WorldPos, WorldVec};
+use core_space::{
+    ChunkCoord, ChunkDims, Face, GridId, VoxelCoord, VoxelGridSpec, WorldPos, WorldVec,
+};
 use core_voxel::{VoxelMaterialId, VoxelValue};
 use entity_state::{
     BatchRejection, EntityCommand, EntityCommandBatch, EntityFact, EntityState, KinematicBodyView,
@@ -77,7 +95,10 @@ pub struct GeneratedRoomRecord {
     pub solid_voxel_count: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct MaterialVoxel {
     pub address: [i64; 3],
     pub material_slot: u16,
@@ -186,6 +207,7 @@ impl std::error::Error for CollisionSceneError {}
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CollisionRayHit {
     pub voxel: [i64; 3],
+    pub face: Face,
     pub point: [f64; 3],
     pub distance: f64,
 }
@@ -530,6 +552,7 @@ impl VoxelCollisionScene {
             )
             .map(|hit| CollisionRayHit {
                 voxel: hit.voxel.to_array(),
+                face: hit.face,
                 point: hit.point.to_array(),
                 distance: hit.distance,
             })

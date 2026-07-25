@@ -4,8 +4,8 @@ use core_assets::{AssetId, AssetKind};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    VoxelAsset, VoxelAssetBounds, VoxelAssetMaterialMapping, VoxelRepresentationKind,
-    VoxelSparseRun, VOXEL_ASSET_SCHEMA_VERSION,
+    VoxelAsset, VoxelAssetBounds, VoxelAssetMaterialBinding, VoxelAssetMaterialMapping,
+    VoxelRepresentationKind, VoxelSparseRun, VOXEL_ASSET_SCHEMA_VERSION,
 };
 
 pub const MAX_ARTIFACT_BYTES: usize = 16 * 1024 * 1024;
@@ -120,12 +120,14 @@ pub fn canonicalize_voxel_asset(asset: &VoxelAsset) -> Result<VoxelAsset, VoxelA
 
 /// Populate the semantic content hash after validating every other field.
 pub fn with_computed_content_hash(mut asset: VoxelAsset) -> Result<VoxelAsset, VoxelAssetError> {
+    asset.voxel_data_hash.clear();
     asset.content_hash.clear();
     let diagnostics = semantic_diagnostics(&asset);
     if !diagnostics.is_empty() {
         return Err(VoxelAssetError { diagnostics });
     }
     canonicalize(&mut asset);
+    asset.voxel_data_hash = computed_voxel_data_hash(&asset);
     asset.content_hash = computed_content_hash(&asset);
     validate_voxel_asset(&asset)?;
     Ok(asset)
@@ -133,6 +135,19 @@ pub fn with_computed_content_hash(mut asset: VoxelAsset) -> Result<VoxelAsset, V
 
 pub fn validate_voxel_asset(asset: &VoxelAsset) -> Result<(), VoxelAssetError> {
     let mut diagnostics = semantic_diagnostics(asset);
+    if !valid_sha256(&asset.voxel_data_hash) {
+        diagnostics.push(diagnostic(
+            "voxelAsset.voxelDataHashMismatch",
+            "voxelDataHash",
+            "voxelDataHash must be `sha256:` followed by 64 lowercase hexadecimal digits",
+        ));
+    } else if asset.voxel_data_hash != computed_voxel_data_hash(asset) {
+        diagnostics.push(diagnostic(
+            "voxelAsset.voxelDataHashMismatch",
+            "voxelDataHash",
+            "voxelDataHash does not match canonical sparse occupancy",
+        ));
+    }
     if !valid_sha256(&asset.content_hash) {
         diagnostics.push(diagnostic(
             "voxelAsset.contentHashMismatch",
@@ -180,9 +195,61 @@ fn semantic_diagnostics(asset: &VoxelAsset) -> Vec<VoxelAssetDiagnostic> {
     }
     validate_grid(asset, &mut diagnostics);
     let output_materials = validate_material_map(&asset.material_map, &mut diagnostics);
+    let palette_materials = validate_material_palette(&asset.material_palette, &mut diagnostics);
+    for slot in output_materials.difference(&palette_materials) {
+        diagnostics.push(diagnostic(
+            "voxelAsset.unknownMaterial",
+            "materialMap",
+            format!("voxel material {slot} has no materialPalette binding"),
+        ));
+    }
     validate_provenance(asset, &mut diagnostics);
-    validate_sparse_runs(asset, &output_materials, &mut diagnostics);
+    validate_sparse_runs(asset, &palette_materials, &mut diagnostics);
     diagnostics
+}
+
+fn validate_material_palette(
+    bindings: &[VoxelAssetMaterialBinding],
+    diagnostics: &mut Vec<VoxelAssetDiagnostic>,
+) -> BTreeSet<u16> {
+    if bindings.is_empty() || bindings.len() > MAX_MATERIAL_MAPPINGS {
+        diagnostics.push(diagnostic(
+            "voxelAsset.resourceLimit",
+            "materialPalette",
+            format!("materialPalette must contain 1..={MAX_MATERIAL_MAPPINGS} entries"),
+        ));
+    }
+    let mut slots = BTreeSet::new();
+    for (index, binding) in bindings.iter().enumerate() {
+        if !(1..=4_095).contains(&binding.material_slot) || !slots.insert(binding.material_slot) {
+            diagnostics.push(diagnostic(
+                "voxelAsset.duplicateMaterialBinding",
+                format!("materialPalette[{index}].materialSlot"),
+                "material slots must be unique and in 1..=4095",
+            ));
+        }
+        match AssetId::parse(&binding.material_asset_id) {
+            Ok(id) if id.kind() == AssetKind::Material => {}
+            Ok(id) => diagnostics.push(diagnostic(
+                "voxelAsset.invalidMaterialReference",
+                format!("materialPalette[{index}].materialAssetId"),
+                format!("expected material identity, found {}", id.kind()),
+            )),
+            Err(error) => diagnostics.push(diagnostic(
+                "voxelAsset.invalidMaterialReference",
+                format!("materialPalette[{index}].materialAssetId"),
+                error.to_string(),
+            )),
+        }
+        if let Some(name) = &binding.display_name {
+            validate_string(
+                name,
+                format!("materialPalette[{index}].displayName"),
+                diagnostics,
+            );
+        }
+    }
+    slots
 }
 
 fn validate_grid(asset: &VoxelAsset, diagnostics: &mut Vec<VoxelAssetDiagnostic>) {
@@ -430,13 +497,40 @@ fn validate_sparse_runs(
 
 fn computed_content_hash(asset: &VoxelAsset) -> String {
     let mut canonical = asset.clone();
+    canonical.voxel_data_hash.clear();
     canonical.content_hash.clear();
     canonicalize(&mut canonical);
     let bytes = serde_json::to_vec(&canonical).expect("voxel asset serializes");
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
+fn computed_voxel_data_hash(asset: &VoxelAsset) -> String {
+    let mut runs = asset.representation.sparse_runs.clone();
+    runs.sort_by_key(|run| (run.start, run.material_slot, run.length));
+    let mut bytes = Vec::with_capacity(runs.len().saturating_mul(30));
+    for run in runs {
+        for coordinate in run.start {
+            bytes.extend_from_slice(&coordinate.to_le_bytes());
+        }
+        bytes.extend_from_slice(&run.length.to_le_bytes());
+        bytes.extend_from_slice(&run.material_slot.to_le_bytes());
+    }
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
 fn canonicalize(asset: &mut VoxelAsset) {
+    asset.material_palette.sort_by(|left, right| {
+        (
+            left.material_slot,
+            &left.material_asset_id,
+            &left.display_name,
+        )
+            .cmp(&(
+                right.material_slot,
+                &right.material_asset_id,
+                &right.display_name,
+            ))
+    });
     asset.material_map.sort_by(|left, right| {
         (
             left.source_material_slot,
