@@ -33,8 +33,9 @@ The TypeScript owner is [`../studio/libs/adapter-client`](../studio/libs/adapter
 strict structural decoding, request correlation, and named client methods. It deliberately does not
 parse the canonical owner JSON strings or reproduce project, scene, entity, voxel, persistence, or
 game semantics. Shared render frames are decoded by `@rusty-engine/render-contracts`.
-The client builds that same-repository package from its production TypeScript sources before local
-typechecking or emission; it does not depend on an ignored `dist` directory left by renderer work.
+The client links that same-repository package explicitly and builds it from production TypeScript
+sources before local typechecking or emission; it does not depend on a package-manager snapshot or
+an ignored `dist` directory left by renderer work.
 
 ## Loading Bay owner composition
 

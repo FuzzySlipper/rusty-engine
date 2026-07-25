@@ -20,7 +20,7 @@
     "test": "pnpm run build && node --test 'dist/**/*.test.js'"
   },
   "dependencies": {
-    "@rusty-engine/render-contracts": "file:../../../render/packages/render-contracts"
+    "@rusty-engine/render-contracts": "link:../../../render/packages/render-contracts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0"
