@@ -207,6 +207,7 @@ pub fn apply_transition_to_instance(
     instance: MachineInstance,
     request: TransitionRequest,
 ) -> Result<TransitionApplied, StateMachineError> {
+    spec.validate()?;
     if spec.machine != request.machine || instance.machine != request.machine {
         return Err(StateMachineError::MachineMissing {
             machine: request.machine,

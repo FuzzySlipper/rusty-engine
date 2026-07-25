@@ -90,6 +90,10 @@ impl ImportManifest {
     }
 }
 
+pub fn validate_import_manifest(manifest: &ImportManifest) -> Result<(), ImportManifestCodecError> {
+    manifest.validate()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportManifestCodecError {
     pub path: String,
@@ -158,7 +162,7 @@ pub fn build_manifest(
 pub fn encode_import_manifest(
     manifest: &ImportManifest,
 ) -> Result<String, ImportManifestCodecError> {
-    manifest.validate()?;
+    validate_import_manifest(manifest)?;
     let canonical = manifest.canonical();
     let stored = StoredImportManifest {
         schema_version: canonical.schema_version,
@@ -206,7 +210,7 @@ pub fn decode_import_manifest(input: &str) -> Result<ImportManifest, ImportManif
         guid,
         artifacts: stored.artifacts,
     };
-    manifest.validate()?;
+    validate_import_manifest(&manifest)?;
     Ok(manifest.canonical())
 }
 

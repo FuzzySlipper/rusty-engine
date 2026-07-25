@@ -1,8 +1,8 @@
 use std::fmt::Write;
 
 use asset_import::{
-    decode_import_manifest, import_with_context, parse_source, ImportContext, ImportDiagnostic,
-    ImportManifest, ImportSeverity, SourceCollision,
+    decode_import_manifest, import_with_context, parse_source, validate_import_manifest,
+    ImportContext, ImportDiagnostic, ImportManifest, ImportSeverity, SourceCollision,
 };
 use serde::Serialize;
 
@@ -90,6 +90,24 @@ pub fn inspect_import_manifest(manifest: &ImportManifest) -> ImportManifestInspe
         .map(|artifact| artifact.relative_path.clone())
         .collect::<Vec<_>>();
     artifact_paths.sort();
+    let diagnostics =
+        validate_import_manifest(manifest)
+            .err()
+            .map_or_else(DiagnosticSet::new, |error| {
+                DiagnosticSet::one(
+                    Diagnostic::new(
+                        DiagnosticDomain::Import,
+                        DiagnosticSeverity::Fatal,
+                        "importManifest.invalid",
+                        DiagnosticLocation::path(error.path),
+                        error.message,
+                    )
+                    .with_remedy(
+                        RemedyAction::RestoreArtifact,
+                        "fix or regenerate the import manifest",
+                    ),
+                )
+            });
     ImportManifestInspection {
         schema_version: manifest.schema_version,
         source_uri: manifest.source_uri.clone(),
@@ -103,7 +121,7 @@ pub fn inspect_import_manifest(manifest: &ImportManifest) -> ImportManifestInspe
             total.saturating_add(artifact.byte_len)
         }),
         artifact_paths,
-        diagnostics: DiagnosticSet::new(),
+        diagnostics,
     }
 }
 
@@ -220,5 +238,28 @@ mod tests {
         assert_eq!(report.produced_asset_count, 0);
         assert_eq!(report.diagnostics.diagnostics[0].code, "malformedSource");
         assert!(report.diagnostics.has_errors());
+    }
+
+    #[test]
+    fn typed_manifest_inspection_reuses_owner_validation() {
+        let invalid = ImportManifest {
+            schema_version: 99,
+            source_uri: String::new(),
+            source_hash: "not-a-hash".to_string(),
+            source_schema_version: 0,
+            importer_version: 0,
+            mesh_asset_id: "not-an-asset".to_string(),
+            guid: None,
+            artifacts: Vec::new(),
+        };
+
+        let report = inspect_import_manifest(&invalid);
+
+        assert_eq!(report.diagnostics.diagnostics.len(), 1);
+        assert_eq!(
+            report.diagnostics.diagnostics[0].code,
+            "importManifest.invalid"
+        );
+        assert!(report.diagnostics.blocks_load());
     }
 }

@@ -103,6 +103,9 @@ pub enum EnvironmentMaterializationError {
     InvalidSceneAfter {
         diagnostics: Vec<String>,
     },
+    ConflictingAssetDependency {
+        asset_id: String,
+    },
     InvalidTarget {
         path: &'static str,
         message: String,
@@ -125,6 +128,7 @@ impl EnvironmentMaterializationError {
             Self::SceneRevisionOverflow => "scene-revision-overflow",
             Self::InvalidSceneBefore { .. } => "invalid-scene-before-materialization",
             Self::InvalidSceneAfter { .. } => "invalid-scene-after-materialization",
+            Self::ConflictingAssetDependency { .. } => "conflicting-asset-dependency",
             Self::InvalidTarget { .. } => "invalid-environment-target",
             Self::RecipeMismatch => "environment-recipe-mismatch",
             Self::Generation(_) => "environment-generation-rejected",
@@ -417,10 +421,6 @@ fn build_scene(
     let asset_reference = AssetReference::new(asset_id, AssetVersionReq::Any, None);
     let mut scene = current.clone();
     scene.nodes.retain(|node| !target_ids.contains(&node.id));
-    scene
-        .dependencies
-        .retain(|dependency| dependency.id().as_str() != asset.asset_id);
-    scene.dependencies.push(asset_reference.clone());
     for node in &mut scene.nodes {
         if let SceneNodeKind::Bootstrap(bindings) = &mut node.kind {
             if bindings.generator.as_ref().is_some_and(|generator| {
@@ -455,6 +455,7 @@ fn build_scene(
             .nodes
             .push(marker_node(request.target.voxel_node_id, target, marker));
     }
+    reconcile_dependencies(&mut scene)?;
     scene.schema_version = CURRENT_SCENE_SCHEMA_VERSION;
     scene.metadata.authoring_format_version = CURRENT_SCENE_SCHEMA_VERSION;
     scene.revision = scene
@@ -473,6 +474,24 @@ fn build_scene(
         });
     }
     Ok(scene)
+}
+
+fn reconcile_dependencies(
+    scene: &mut FlatSceneDocument,
+) -> Result<(), EnvironmentMaterializationError> {
+    let mut references = BTreeMap::<String, AssetReference>::new();
+    for reference in scene.nodes.iter().filter_map(|node| node.kind.asset()) {
+        let asset_id = reference.id().as_str().to_string();
+        if references
+            .get(&asset_id)
+            .is_some_and(|existing| existing != reference)
+        {
+            return Err(EnvironmentMaterializationError::ConflictingAssetDependency { asset_id });
+        }
+        references.insert(asset_id, reference.clone());
+    }
+    scene.dependencies = references.into_values().collect();
+    Ok(())
 }
 
 fn marker_node(

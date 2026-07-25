@@ -2,6 +2,7 @@ use authored_scene::{
     FlatSceneDocument, NodeMetadata, SceneBootstrapBindings, SceneGeneratorBinding, SceneMetadata,
     SceneNodeKind, SceneNodeRecord, SceneTransform, CURRENT_SCENE_SCHEMA_VERSION,
 };
+use core_assets::{AssetHash, AssetId, AssetReference, AssetVersionReq};
 use core_ids::{SceneId, SceneNodeId};
 use core_math::Vec3;
 use environment_authoring::{
@@ -63,6 +64,15 @@ fn invalid_generator_configuration_is_classified_before_allocation() {
         generate_tunnel(config),
         Err(TunnelGenerationError::DuplicateMaterial { .. })
     ));
+
+    for voxel_size in [f64::MAX, f64::from(f32::MAX), f64::MIN_POSITIVE] {
+        let mut config = TunnelGeneratorConfig::tiny_enclosed(1);
+        config.voxel_size = voxel_size;
+        assert!(matches!(
+            generate_tunnel(config),
+            Err(TunnelGenerationError::InvalidVoxelSize { .. })
+        ));
+    }
 }
 
 #[test]
@@ -150,6 +160,60 @@ fn stale_bounded_and_invalid_palette_requests_leave_source_unchanged() {
         Err(EnvironmentMaterializationError::InvalidVoxelAsset(_))
     ));
     assert_eq!(scene, original);
+}
+
+#[test]
+fn materialization_rebuilds_dependencies_from_the_resulting_nodes() {
+    let mut scene = base_scene(false);
+    let old_reference = AssetReference::new(
+        AssetId::parse("voxel-volume/old-tunnel").unwrap(),
+        AssetVersionReq::Any,
+        None,
+    );
+    scene.dependencies.push(old_reference.clone());
+    scene.nodes.push(SceneNodeRecord {
+        id: SceneNodeId::new(10),
+        parent: None,
+        child_order: 2,
+        transform: SceneTransform::IDENTITY,
+        kind: SceneNodeKind::VoxelVolume(old_reference),
+        metadata: NodeMetadata::default(),
+    });
+
+    let output = materialize_environment(&scene, &request(42, None)).unwrap();
+
+    assert_eq!(output.scene.dependencies.len(), 1);
+    assert_eq!(
+        output.scene.dependencies[0].id().as_str(),
+        "voxel-volume/generated-tunnel"
+    );
+}
+
+#[test]
+fn materialization_rejects_conflicting_constraints_for_a_shared_asset_id() {
+    let mut scene = base_scene(false);
+    let pinned = AssetReference::new(
+        AssetId::parse("voxel-volume/generated-tunnel").unwrap(),
+        AssetVersionReq::Exact(2),
+        Some(AssetHash::parse("aa11").unwrap()),
+    );
+    scene.dependencies.push(pinned.clone());
+    scene.nodes.push(SceneNodeRecord {
+        id: SceneNodeId::new(20),
+        parent: None,
+        child_order: 2,
+        transform: SceneTransform::IDENTITY,
+        kind: SceneNodeKind::VoxelVolume(pinned),
+        metadata: NodeMetadata::default(),
+    });
+
+    let error = materialize_environment(&scene, &request(42, None)).unwrap_err();
+
+    assert!(matches!(
+        error,
+        EnvironmentMaterializationError::ConflictingAssetDependency { asset_id }
+            if asset_id == "voxel-volume/generated-tunnel"
+    ));
 }
 
 fn base_scene(with_parent: bool) -> FlatSceneDocument {

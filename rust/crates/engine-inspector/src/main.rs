@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::ExitCode;
 
 use asset_import::ImportContext;
@@ -7,6 +7,11 @@ use engine_inspector::{
     inspect_entity_state_json, inspect_import_manifest_json, inspect_import_source,
     inspect_scene_json, inspect_voxel_asset_json, DiagnosticSet, EntityCategory,
 };
+
+const MAX_CATALOG_BYTES: usize = 16 * 1024 * 1024;
+const MAX_SCENE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_ENTITY_STATE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_IMPORT_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
 
 const USAGE: &str = "\
 rusty-inspect — read-only Rusty Engine content and state inspection
@@ -70,11 +75,11 @@ fn command_catalog<O: Write, E: Write>(args: &[String], out: &mut O, err: &mut E
         [catalog, lock] => (catalog.as_str(), Some(lock.as_str())),
         _ => return usage_error(err, "`catalog` requires <catalog.json> [asset-lock.json]"),
     };
-    let Some(catalog) = read_text(catalog_path, err) else {
+    let Some(catalog) = read_text(catalog_path, MAX_CATALOG_BYTES, err) else {
         return 2;
     };
     let lock = match lock_path {
-        Some(path) => match read_text(path, err) {
+        Some(path) => match read_text(path, MAX_CATALOG_BYTES, err) {
             Some(text) => Some(text),
             None => return 2,
         },
@@ -92,11 +97,11 @@ fn command_scene<O: Write, E: Write>(args: &[String], out: &mut O, err: &mut E) 
         [scene, catalog] => (scene.as_str(), Some(catalog.as_str())),
         _ => return usage_error(err, "`scene` requires <scene.json> [catalog.json]"),
     };
-    let Some(scene) = read_text(scene_path, err) else {
+    let Some(scene) = read_text(scene_path, MAX_SCENE_BYTES, err) else {
         return 2;
     };
     let catalog = match catalog_path {
-        Some(path) => match read_text(path, err) {
+        Some(path) => match read_text(path, MAX_CATALOG_BYTES, err) {
             Some(text) => Some(text),
             None => return 2,
         },
@@ -117,7 +122,7 @@ fn command_entity_state<O: Write, E: Write>(args: &[String], out: &mut O, err: &
             let [path] = &args[1..] else {
                 return usage_error(err, "`entity-state summary` requires <entity-state.json>");
             };
-            let Some(input) = read_text(path, err) else {
+            let Some(input) = read_text(path, MAX_ENTITY_STATE_BYTES, err) else {
                 return 2;
             };
             match inspect_entity_state_json(&input) {
@@ -135,7 +140,7 @@ fn command_entity_state<O: Write, E: Write>(args: &[String], out: &mut O, err: &
             let Ok(id) = id.parse::<u64>() else {
                 return usage_error(err, "entity id must be an unsigned integer");
             };
-            let Some(input) = read_text(path, err) else {
+            let Some(input) = read_text(path, MAX_ENTITY_STATE_BYTES, err) else {
                 return 2;
             };
             if let Err(diagnostics) = inspect_entity_state_json(&input) {
@@ -164,7 +169,7 @@ fn command_entity_state<O: Write, E: Write>(args: &[String], out: &mut O, err: &
             let Some(category) = EntityCategory::from_label(category) else {
                 return usage_error(err, "unsupported entity category");
             };
-            let Some(input) = read_text(path, err) else {
+            let Some(input) = read_text(path, MAX_ENTITY_STATE_BYTES, err) else {
                 return 2;
             };
             if let Err(diagnostics) = inspect_entity_state_json(&input) {
@@ -186,7 +191,7 @@ fn command_entity_state<O: Write, E: Write>(args: &[String], out: &mut O, err: &
 }
 
 fn command_voxel<O: Write, E: Write>(args: &[String], out: &mut O, err: &mut E) -> u8 {
-    let Some((path, input)) = one_input(args, "voxel", err) else {
+    let Some((path, input)) = one_input(args, "voxel", voxel_asset::MAX_ARTIFACT_BYTES, err) else {
         return if args.len() == 1 { 2 } else { 3 };
     };
     match inspect_voxel_asset_json(&input) {
@@ -199,7 +204,12 @@ fn command_voxel<O: Write, E: Write>(args: &[String], out: &mut O, err: &mut E) 
 }
 
 fn command_content<O: Write, E: Write>(args: &[String], out: &mut O, err: &mut E) -> u8 {
-    let Some((_, input)) = one_input(args, "content", err) else {
+    let Some((_, input)) = one_input(
+        args,
+        "content",
+        content_store::CONTENT_MANIFEST_MAX_BYTES,
+        err,
+    ) else {
         return if args.len() == 1 { 2 } else { 3 };
     };
     match inspect_content_manifest_json(&input) {
@@ -209,7 +219,8 @@ fn command_content<O: Write, E: Write>(args: &[String], out: &mut O, err: &mut E
 }
 
 fn command_import_source<O: Write, E: Write>(args: &[String], out: &mut O, err: &mut E) -> u8 {
-    let Some((path, input)) = one_input(args, "import-source", err) else {
+    let Some((path, input)) = one_input(args, "import-source", asset_import::MAX_SOURCE_BYTES, err)
+    else {
         return if args.len() == 1 { 2 } else { 3 };
     };
     let report = inspect_import_source(&input, path, &ImportContext::default());
@@ -217,7 +228,8 @@ fn command_import_source<O: Write, E: Write>(args: &[String], out: &mut O, err: 
 }
 
 fn command_import_manifest<O: Write, E: Write>(args: &[String], out: &mut O, err: &mut E) -> u8 {
-    let Some((_, input)) = one_input(args, "import-manifest", err) else {
+    let Some((_, input)) = one_input(args, "import-manifest", MAX_IMPORT_MANIFEST_BYTES, err)
+    else {
         return if args.len() == 1 { 2 } else { 3 };
     };
     match inspect_import_manifest_json(&input) {
@@ -229,20 +241,50 @@ fn command_import_manifest<O: Write, E: Write>(args: &[String], out: &mut O, err
 fn one_input<'a, E: Write>(
     args: &'a [String],
     command: &str,
+    max_bytes: usize,
     err: &mut E,
 ) -> Option<(&'a str, String)> {
     let [path] = args else {
         let _ = writeln!(err, "error: `{command}` requires one artifact path");
         return None;
     };
-    read_text(path, err).map(|input| (path.as_str(), input))
+    read_text(path, max_bytes, err).map(|input| (path.as_str(), input))
 }
 
-fn read_text<E: Write>(path: &str, err: &mut E) -> Option<String> {
-    match std::fs::read_to_string(path) {
-        Ok(input) => Some(input),
+fn read_text<E: Write>(path: &str, max_bytes: usize, err: &mut E) -> Option<String> {
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
         Err(error) => {
             let _ = writeln!(err, "error: cannot read {path}: {error}");
+            return None;
+        }
+    };
+    if file
+        .metadata()
+        .is_ok_and(|metadata| metadata.len() > max_bytes as u64)
+    {
+        let _ = writeln!(
+            err,
+            "error: {path} exceeds the {max_bytes}-byte inspection read limit"
+        );
+        return None;
+    }
+    let mut bytes = Vec::new();
+    if let Err(error) = file.take(max_bytes as u64 + 1).read_to_end(&mut bytes) {
+        let _ = writeln!(err, "error: cannot read {path}: {error}");
+        return None;
+    }
+    if bytes.len() > max_bytes {
+        let _ = writeln!(
+            err,
+            "error: {path} exceeds the {max_bytes}-byte inspection read limit"
+        );
+        return None;
+    }
+    match String::from_utf8(bytes) {
+        Ok(input) => Some(input),
+        Err(error) => {
+            let _ = writeln!(err, "error: {path} is not valid UTF-8: {error}");
             None
         }
     }
@@ -352,6 +394,26 @@ mod tests {
         assert_eq!(code, 2);
         assert!(out.is_empty());
         assert!(err.contains("[fatal] persistence contentManifest.decode"));
+        std::fs::remove_file(path.as_ref()).ok();
+    }
+
+    #[test]
+    fn cli_rejects_oversized_artifacts_before_owner_decode() {
+        let path = std::env::temp_dir().join(format!(
+            "rusty-inspect-oversized-{}-{}.json",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(content_store::CONTENT_MANIFEST_MAX_BYTES as u64 + 1)
+            .unwrap();
+        let path = path.to_string_lossy();
+
+        let (code, out, err) = run_text(&["content", &path]);
+
+        assert_eq!(code, 2);
+        assert!(out.is_empty());
+        assert!(err.contains("inspection read limit"));
         std::fs::remove_file(path.as_ref()).ok();
     }
 }

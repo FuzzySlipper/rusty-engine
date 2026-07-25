@@ -134,6 +134,31 @@ fn detached_transition_uses_the_same_checks_without_a_second_store() {
 }
 
 #[test]
+fn detached_transition_rejects_an_invalid_machine_spec() {
+    let invalid = StateMachineSpec::new(machine(), [moving()]).allow(idle(), moving());
+    let instance = MachineInstance {
+        entity: entity(),
+        machine: machine(),
+        current: idle(),
+        revision: 4,
+    };
+
+    let error = apply_transition_to_instance(
+        &invalid,
+        instance,
+        TransitionRequest::new(entity(), machine(), idle(), moving()),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        StateMachineError::InvalidState { state, .. } if state == idle()
+    ));
+    assert_eq!(instance.current, idle());
+    assert_eq!(instance.revision, 4);
+}
+
+#[test]
 fn definitions_are_validated_and_iterate_deterministically() {
     let ordered = StateMachineSpec::new(machine(), [stopped(), idle(), moving()])
         .allow(moving(), stopped())

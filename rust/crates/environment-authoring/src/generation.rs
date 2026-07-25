@@ -330,7 +330,12 @@ fn hash_voxels(voxels: &[GeneratedVoxel]) -> String {
 }
 
 fn validate_config(config: TunnelGeneratorConfig) -> Result<(), TunnelGenerationError> {
-    if !config.voxel_size.is_finite() || config.voxel_size <= 0.0 {
+    let public_voxel_size = config.voxel_size as f32;
+    if !config.voxel_size.is_finite()
+        || config.voxel_size <= 0.0
+        || !public_voxel_size.is_finite()
+        || public_voxel_size <= 0.0
+    {
         return Err(TunnelGenerationError::InvalidVoxelSize {
             value: config.voxel_size,
         });
@@ -348,6 +353,12 @@ fn validate_config(config: TunnelGeneratorConfig) -> Result<(), TunnelGeneration
         });
     }
     let shell = config.shell_dimensions();
+    let largest_public_extent = shell.into_iter().max().unwrap_or(0) as f32 * public_voxel_size;
+    if !largest_public_extent.is_finite() {
+        return Err(TunnelGenerationError::InvalidVoxelSize {
+            value: config.voxel_size,
+        });
+    }
     if shell.iter().any(|dimension| *dimension > config.chunk_size) {
         return Err(TunnelGenerationError::ExceedsChunk {
             shell,

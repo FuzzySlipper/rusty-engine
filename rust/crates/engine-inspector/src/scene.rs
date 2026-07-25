@@ -50,7 +50,7 @@ pub fn inspect_scene(
         diagnostics.push(
             Diagnostic::new(
                 DiagnosticDomain::Scene,
-                DiagnosticSeverity::Error,
+                DiagnosticSeverity::Fatal,
                 source.code,
                 location,
                 source.message,
@@ -167,7 +167,7 @@ fn catalog_reference_diagnostics(
                 return Some(
                     Diagnostic::new(
                         DiagnosticDomain::Scene,
-                        DiagnosticSeverity::Error,
+                        DiagnosticSeverity::Fatal,
                         "scene.assetMissing",
                         location,
                         "scene dependency is absent from the asset catalog",
@@ -182,7 +182,7 @@ fn catalog_reference_diagnostics(
                 return Some(
                     Diagnostic::new(
                         DiagnosticDomain::Scene,
-                        DiagnosticSeverity::Error,
+                        DiagnosticSeverity::Fatal,
                         "scene.assetVersionMismatch",
                         location,
                         format!(
@@ -201,7 +201,7 @@ fn catalog_reference_diagnostics(
                 return Some(
                     Diagnostic::new(
                         DiagnosticDomain::Scene,
-                        DiagnosticSeverity::Error,
+                        DiagnosticSeverity::Fatal,
                         "scene.assetHashMismatch",
                         location,
                         "catalog content hash does not match the scene pin",
@@ -275,8 +275,8 @@ fn remedy_for(error: &SceneValidationError) -> RemedyAction {
 mod tests {
     use asset_catalog::AssetCatalog;
     use authored_scene::{
-        FlatSceneDocument, NodeMetadata, SceneMetadata, SceneNodeKind, SceneNodeRecord,
-        SceneTransform, CURRENT_SCENE_SCHEMA_VERSION,
+        decode_scene, encode_scene, FlatSceneDocument, NodeMetadata, SceneMetadata, SceneNodeKind,
+        SceneNodeRecord, SceneTransform, CURRENT_SCENE_SCHEMA_VERSION,
     };
     use core_assets::{AssetId, AssetReference, AssetVersionReq};
     use core_ids::{SceneId, SceneNodeId};
@@ -323,5 +323,42 @@ mod tests {
             .iter()
             .any(|diagnostic| diagnostic.code == "scene.assetMissing"));
         assert!(report.to_text().contains("sceneNode=7"));
+        assert!(report.diagnostics.blocks_load());
+    }
+
+    #[test]
+    fn runtime_rejected_scene_validation_is_reported_as_load_blocking() {
+        let mut document = FlatSceneDocument::new(SceneId::new(10));
+        document.nodes = vec![
+            SceneNodeRecord {
+                id: SceneNodeId::new(7),
+                parent: None,
+                child_order: 0,
+                transform: SceneTransform::IDENTITY,
+                kind: SceneNodeKind::EmptyGroup,
+                metadata: NodeMetadata::default(),
+            },
+            SceneNodeRecord {
+                id: SceneNodeId::new(8),
+                parent: None,
+                child_order: 1,
+                transform: SceneTransform::IDENTITY,
+                kind: SceneNodeKind::EmptyGroup,
+                metadata: NodeMetadata::default(),
+            },
+        ];
+        let valid_json = encode_scene(&document).unwrap();
+        let invalid_json = valid_json.replacen("\"id\": 8", "\"id\": 7", 1);
+
+        assert!(decode_scene(&invalid_json).is_err());
+        let report = inspect_scene_json(&invalid_json, None).unwrap();
+
+        assert!(report.diagnostics.has_errors());
+        assert!(report.diagnostics.blocks_load());
+        assert!(report
+            .diagnostics
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "duplicate-node-id"));
     }
 }
