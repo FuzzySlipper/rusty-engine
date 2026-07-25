@@ -12,6 +12,9 @@ import {
   type StudioAdapterResponse,
   type VoxelConversionDiscardedResponse,
   type VoxelConversionPreparedResponse,
+  type VoxelAssetFileExportedResponse,
+  type VoxelHistoryRevertDiscardedResponse,
+  type VoxelHistoryRevertPreparedResponse,
   type VoxelPickValidatedResponse,
   type VoxelReadResponse,
 } from './protocol.js';
@@ -154,6 +157,36 @@ export class StudioAdapterClient {
     return this.#mutation('applyVoxelBrush', input);
   }
 
+  applyVoxelPrimitive(
+    input: RequestInput<'applyVoxelPrimitive'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('applyVoxelPrimitive', input);
+  }
+
+  initializeVoxelTemplate(
+    input: RequestInput<'initializeVoxelTemplate'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('initializeVoxelTemplate', input);
+  }
+
+  importVoxelAssetFile(
+    input: RequestInput<'importVoxelAssetFile'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('importVoxelAssetFile', input);
+  }
+
+  exportVoxelAssetFile(
+    input: RequestInput<'exportVoxelAssetFile'>,
+  ): Promise<VoxelAssetFileExportedResponse> {
+    return this.#exchange(this.#request('exportVoxelAssetFile', input), 'voxelAssetFileExported');
+  }
+
+  materializeEnvironment(
+    input: RequestInput<'materializeEnvironment'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('materializeEnvironment', input);
+  }
+
   undoVoxelEdit(input: RequestInput<'undoVoxelEdit'>): Promise<ProjectMutationAppliedResponse> {
     return this.#mutation('undoVoxelEdit', input);
   }
@@ -166,6 +199,34 @@ export class StudioAdapterClient {
     input: RequestInput<'revertVoxelHistory'>,
   ): Promise<ProjectMutationAppliedResponse> {
     return this.#mutation('revertVoxelHistory', input);
+  }
+
+  queryVoxelHistory(input: RequestInput<'queryVoxelHistory'>): Promise<VoxelReadResponse> {
+    return this.#exchange(this.#request('queryVoxelHistory', input), 'voxelRead');
+  }
+
+  prepareVoxelHistoryRevert(
+    input: RequestInput<'prepareVoxelHistoryRevert'>,
+  ): Promise<VoxelHistoryRevertPreparedResponse> {
+    return this.#exchange(
+      this.#request('prepareVoxelHistoryRevert', input),
+      'voxelHistoryRevertPrepared',
+    );
+  }
+
+  applyVoxelHistoryRevert(
+    input: RequestInput<'applyVoxelHistoryRevert'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('applyVoxelHistoryRevert', input);
+  }
+
+  discardVoxelHistoryRevert(
+    input: RequestInput<'discardVoxelHistoryRevert'>,
+  ): Promise<VoxelHistoryRevertDiscardedResponse> {
+    return this.#exchange(
+      this.#request('discardVoxelHistoryRevert', input),
+      'voxelHistoryRevertDiscarded',
+    );
   }
 
   createVoxelAnnotationLayer(
@@ -287,9 +348,14 @@ type MutationRequestType =
   | 'removeVoxelInstance'
   | 'replaceVoxelPalette'
   | 'applyVoxelBrush'
+  | 'applyVoxelPrimitive'
+  | 'initializeVoxelTemplate'
+  | 'importVoxelAssetFile'
+  | 'materializeEnvironment'
   | 'undoVoxelEdit'
   | 'redoVoxelEdit'
   | 'revertVoxelHistory'
+  | 'applyVoxelHistoryRevert'
   | 'createVoxelAnnotationLayer'
   | 'editVoxelAnnotation'
   | 'applyVoxelConversion';

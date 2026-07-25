@@ -161,7 +161,7 @@ function described(requestId: string): unknown {
     requestId,
     adapter: {
       adapterId: 'rusty-engine-demo.loading-bay',
-      adapterVersion: 3,
+      adapterVersion: 4,
       protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
       projectKind: 'loadingBayProject',
       projectSchemaVersion: 9,

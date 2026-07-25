@@ -16,6 +16,22 @@ downstream.
 Inspected donor repository: `git@github.com:FuzzySlipper/asha-engine.git`
 Pinned source commit: `a431974330589761c9e35fc4f8a55996a1b5ee48`
 
+## M11 Studio donor
+
+Task #6138 adapts the tracked Asha Studio tree at
+`709e1be780796ca1b802df764f0ec064bd271bc4` into the isolated first-party `studio/` workspace.
+[`studio/donor-inventory.tsv`](../studio/donor-inventory.tsv) freezes all 147 tracked donor paths,
+and [`studio/donor-surface-disposition.tsv`](../studio/donor-surface-disposition.tsv) records the
+preserve, adapt, consolidate, historical-only, or exclude decision for every substantial surface.
+The complete parity baseline, exact tree/hash metadata, license status, untracked exclusions, and
+remaining explicit deferrals live in
+[`studio-migration-contract.md`](studio-migration-contract.md).
+
+The successor retains product workflows through a closed project-owned Rust adapter and the shared
+renderer; it does not copy Asha RuntimeSession, bridge/provider topology, universal commands,
+generated-contract ceremony, proof dumps, or sibling-checkout assumptions. The untracked donor
+`assets/` directory and `untitled.scene.json` were never inputs.
+
 ## Complete rendering successor donor
 
 The owner-approved rendering campaign #6156 uses a newer, rendering-specific Asha Engine baseline:

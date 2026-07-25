@@ -1,6 +1,6 @@
 # Rusty Engine Studio
 
-This is the isolated first-party Studio workspace. It will reach full useful feature parity with
+This is the isolated first-party Studio workspace. It targets full useful feature parity with
 the pinned Asha Studio donor while consuming Rusty Engine's canonical Rust owners and shared
 renderer.
 
@@ -10,8 +10,11 @@ Bay Rust adapter. M11C supplies the Angular/Nx editor shell. M11D makes canonica
 hierarchy, typed transform settlement, and shared-renderer lifecycle/grid/picking operational.
 M11E adds project-embedded voxel assets and transformed instances, material/palette authoring,
 Rust-revalidated voxel picking, atomic brush edits, durable history, typed annotations, bounded
-model queries, and private-plan GLB conversion through the same renderer. M11F owns the final donor
-parity reconciliation recorded in the migration contract and owner-adoption map.
+model queries, and private-plan GLB conversion through the same renderer. Protocol 4 completes the
+M11F voxel reconciliation with trusted host asset/GLB files, deterministic templates and
+environments, every primitive and annotation edit/query family, bounded history diff previews, and
+full affine/default/texture conversion policy. Remaining non-voxel limitations stay visible and
+recorded in the migration contract and owner-adoption map rather than becoming silent omissions.
 
 See [the Studio migration contract](../docs/studio-migration-contract.md).
 The closed adapter protocol and its explicit integration gate are documented in
@@ -56,8 +59,10 @@ and conversion fixtures:
 ./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo
 ```
 
-It starts fresh adapter processes to prove durable voxel/history/annotation/conversion state, then
-runs visible Chromium workflows for Loading Bay and Converted Wall through the shared renderer. CI
+It starts fresh adapter processes to prove durable voxel/history/annotation/conversion/environment
+state and trusted host files, then
+runs visible Chromium workflows for Loading Bay and Converted Wall through the shared renderer,
+including renderer-observable brush/conversion previews and canonical restoration. CI
 checks out the exact public demo revision declared in
 [`demo-consumer-source.json`](demo-consumer-source.json). Local integration remains explicit so the
 ordinary Engine and isolated Studio gates never acquire a sibling-checkout dependency.

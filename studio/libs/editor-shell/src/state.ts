@@ -14,6 +14,7 @@ import type {
   VoxelConversionPreview,
   VoxelPickReadout,
   VoxelReadout,
+  VoxelHistoryRevertPreview,
   ProjectMutationReceipt,
   VoxelAuthoringReadout,
 } from '@rusty-engine/studio-adapter-client';
@@ -92,6 +93,7 @@ export interface VoxelWorkspaceState {
     readonly plan: VoxelConversionPlan;
     readonly preview: VoxelConversionPreview;
   } | null;
+  readonly historyPreview: VoxelHistoryRevertPreview | null;
   readonly lastReceipt: ProjectMutationReceipt | null;
   readonly message: string;
 }
@@ -131,6 +133,7 @@ function initialSnapshot(): StudioWorkspaceSnapshot {
       validatedPick: null,
       lastReadout: null,
       conversion: null,
+      historyPreview: null,
       lastReceipt: null,
       message: 'Select a rendered voxel instance to begin authoring.',
     },
@@ -221,6 +224,7 @@ export class StudioWorkspaceStore {
           validatedPick: null,
           lastReadout: null,
           conversion: null,
+          historyPreview: null,
           lastReceipt: null,
           message: 'Select a rendered voxel instance to begin authoring.',
         },
@@ -429,6 +433,68 @@ export class StudioWorkspaceStore {
             materialSlot: action.materialSlot,
           }));
           return;
+        case 'applyPrimitive':
+          this.#acceptVoxelMutation(await this.#client.applyVoxelPrimitive({
+            expectedProjectHash,
+            assetId: action.assetId,
+            expectedAssetContentHash: action.expectedAssetContentHash,
+            request: action.request,
+          }));
+          return;
+        case 'initializeTemplate':
+          this.#acceptVoxelMutation(await this.#client.initializeVoxelTemplate({
+            expectedProjectHash,
+            assetId: action.assetId,
+            cellSize: action.cellSize,
+            chunkSize: action.chunkSize,
+            materialPalette: action.materialPalette,
+            request: action.request,
+          }));
+          return;
+        case 'importAssetFile':
+          this.#acceptVoxelMutation(await this.#client.importVoxelAssetFile({
+            expectedProjectHash,
+            sourcePath: action.sourcePath,
+            targetAssetId: action.targetAssetId,
+          }));
+          return;
+        case 'exportAssetFile': {
+          const response = await this.#client.exportVoxelAssetFile({
+            expectedProjectHash,
+            assetId: action.assetId,
+            expectedAssetContentHash: action.expectedAssetContentHash,
+            targetPath: action.targetPath,
+            ...(action.expectedTargetSha256 === undefined
+              ? {}
+              : { expectedTargetSha256: action.expectedTargetSha256 }),
+          });
+          this.#patch({
+            operation: 'idle',
+            voxelWorkspace: {
+              ...this.#snapshot().voxelWorkspace,
+              message: `Exported ${response.assetId} to ${response.targetPath} (${response.sha256}).`,
+            },
+          });
+          return;
+        }
+        case 'materializeEnvironment':
+          this.#acceptVoxelMutation(await this.#client.materializeEnvironment({
+            expectedProjectHash,
+            expectedSceneRevision: document.identity.sceneRevision,
+            sceneId: action.sceneId,
+            preset: action.preset,
+            seed: action.seed,
+            voxelAssetId: action.voxelAssetId,
+            voxelInstanceId: action.voxelInstanceId,
+            voxelTranslation: action.voxelTranslation,
+            playerEntityId: action.playerEntityId,
+            exitEntityId: action.exitEntityId,
+            wallMaterial: action.wallMaterial,
+            floorMaterial: action.floorMaterial,
+            accentMaterial: action.accentMaterial,
+            materialPalette: action.materialPalette,
+          }));
+          return;
         case 'undo':
         case 'redo': {
           const input = {
@@ -449,6 +515,52 @@ export class StudioWorkspaceStore {
             expectedAssetContentHash: action.expectedAssetContentHash,
             targetCursor: action.targetCursor,
           }));
+          return;
+        case 'queryHistory': {
+          const response = await this.#client.queryVoxelHistory({
+            expectedProjectHash,
+            assetId: action.assetId,
+            expectedAssetContentHash: action.expectedAssetContentHash,
+            maxEntries: action.maxEntries,
+            maxDeltasPerEntry: action.maxDeltasPerEntry,
+          });
+          this.#acceptVoxelReadout(response.readout, 'Bounded voxel history query completed.');
+          return;
+        }
+        case 'prepareHistoryRevert': {
+          const response = await this.#client.prepareVoxelHistoryRevert({
+            expectedProjectHash,
+            assetId: action.assetId,
+            expectedAssetContentHash: action.expectedAssetContentHash,
+            targetCursor: action.targetCursor,
+            maxSamples: action.maxSamples,
+          });
+          this.#patch({
+            operation: 'idle',
+            voxelWorkspace: {
+              ...this.#snapshot().voxelWorkspace,
+              historyPreview: response.preview,
+              message: `Prepared history move to cursor ${String(response.preview.cursorAfter)}.`,
+            },
+          });
+          return;
+        }
+        case 'applyHistoryRevert':
+          this.#acceptVoxelMutation(await this.#client.applyVoxelHistoryRevert({
+            expectedProjectHash,
+            previewId: action.previewId,
+          }));
+          return;
+        case 'discardHistoryRevert':
+          await this.#client.discardVoxelHistoryRevert({ previewId: action.previewId });
+          this.#patch({
+            operation: 'idle',
+            voxelWorkspace: {
+              ...this.#snapshot().voxelWorkspace,
+              historyPreview: null,
+              message: 'Prepared history move discarded.',
+            },
+          });
           return;
         case 'createAnnotation':
           this.#acceptVoxelMutation(await this.#client.createVoxelAnnotationLayer({
@@ -499,9 +611,10 @@ export class StudioWorkspaceStore {
           const response = await this.#client.prepareVoxelConversion({
             expectedProjectHash,
             sourceAssetId: action.sourceAssetId,
-            sourcePath: action.sourcePath,
+            source: action.source,
             targetAssetId: action.targetAssetId,
-            ...(action.licensePath === undefined ? {} : { licensePath: action.licensePath }),
+            ...(action.license === undefined ? {} : { license: action.license }),
+            ...(action.meshPrimitive === undefined ? {} : { meshPrimitive: action.meshPrimitive }),
             settings: action.settings,
             maxPreviewSamples: action.maxPreviewSamples,
           });
@@ -605,6 +718,7 @@ export class StudioWorkspaceStore {
         ...this.#snapshot().voxelWorkspace,
         validatedPick: null,
         lastReceipt: response.receipt,
+        historyPreview: null,
         conversion: clearConversion ? null : this.#snapshot().voxelWorkspace.conversion,
         message: mutationMessage(response.receipt),
       },
@@ -701,6 +815,10 @@ function mutationMessage(receipt: ProjectMutationReceipt): string {
     case 'voxelInstanceRemoved': return `Instance ${receipt.instanceId} removed.`;
     case 'voxelPaletteReplaced': return `Palette for ${receipt.assetId} replaced.`;
     case 'voxelBrushApplied': return `Brush changed ${String(receipt.changedVoxels)} voxels.`;
+    case 'voxelPrimitiveApplied': return `${receipt.primitiveKind} changed ${String(receipt.changedVoxels)} voxels.`;
+    case 'voxelTemplateInitialized': return `${receipt.templateKind} initialized ${receipt.assetId}.`;
+    case 'voxelAssetFileImported': return `Imported ${receipt.sourcePath} as ${receipt.targetAssetId}.`;
+    case 'environmentMaterialized': return `${receipt.preset} environment materialized in ${receipt.sceneId}.`;
     case 'voxelHistoryMoved': return `History moved to cursor ${String(receipt.cursorAfter)}.`;
     case 'voxelAnnotationCreated': return `Annotation layer ${receipt.layerId} created.`;
     case 'voxelAnnotationEdited': return `Annotation layer ${receipt.layerId} updated.`;

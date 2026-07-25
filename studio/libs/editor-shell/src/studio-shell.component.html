@@ -42,6 +42,7 @@
         <hr />
         <button type="button" disabled title="Project creation requires a project-owned adapter operation">New Project…</button>
         <button type="button" disabled title="Save As requires a dedicated typed project adapter operation">Save Project As…</button>
+        <button type="button" disabled title="General asset import and reimport require named project-adapter operations; voxel and GLB files are available in Voxel Authoring">Import Project Asset…</button>
       </section>
     }
     @if (state().activeMenu === 'edit') {
@@ -174,6 +175,7 @@
             [selectedEntityId]="state().selection.entityId"
             [previewEntityId]="state().preview?.entityId ?? null"
             [previewTranslation]="state().preview?.translation ?? null"
+            [voxelPreview]="voxelPreview()"
             (entityPicked)="store.selectEntity($event, 'renderer')"
             (voxelPicked)="validateVoxelPick($event)"
             (rendererError)="store.reportUiError($event)"
@@ -247,8 +249,10 @@
           [validatedPick]="state().voxelWorkspace.validatedPick"
           [lastReadout]="state().voxelWorkspace.lastReadout"
           [conversion]="state().voxelWorkspace.conversion"
+          [historyPreview]="state().voxelWorkspace.historyPreview"
           [busy]="state().operation !== 'idle'"
           (action)="runVoxelAction($event)"
+          (previewChange)="setBrushPreview($event)"
         />
       } @else {
         @if (store.selectedHierarchyNode(); as node) {

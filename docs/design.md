@@ -168,19 +168,24 @@ project schema, trusted root, compatibility, and publication policy while compos
 `voxel-annotation`, `voxel-convert`, `content-store`, `engine-inspector`, and render-projection
 mechanisms.
 
-Protocol 3 executes one named request at a time. Reads rebuild canonical owner views. Mutations carry
+Protocol 4 executes one named request at a time. Reads rebuild canonical owner views. Mutations carry
 the accepted project hash plus narrower asset/revision/layer/plan guards, stage a complete candidate,
 rerun downstream admission and renderer projection, atomically publish the project file, and return
 a canonical reread. Voxel history and annotation documents are durable project data; conversion
-plans remain private process state and only a matching plan/output identity can be applied. Rejected
-or stale operations publish no bytes.
+plans and prepared history reverts remain private process state, are limited to one retained
+candidate of each kind, and only matching identities can be applied. Trusted host voxel/GLB/license
+paths are explicit, bounded, symlink-checked selections;
+replacement is compare-and-swap guarded. Primitive/template generation, annotation semantics,
+conversion material policy, and deterministic environment generation remain in their Rust owners.
+Rejected or stale operations publish no bytes.
 
 Angular owns forms, selection, transient brush state, and cancellation only. It structurally decodes
 the closed protocol but does not recompute hashes, validate voxel semantics, replay history, cast an
 authoritative ray, or forge conversion output. Renderer picks are untrusted hints transformed into
 an authored-cell claim and re-cast by Rust. Entity selection and transform preview are disposable
-derived frames applied through the shared renderer projection; cancellation reinstalls the accepted
-canonical frame and commit still settles through the Rust adapter.
+derived frames applied through the shared renderer projection. Voxel brush and bounded conversion
+samples use the same disposable debug-layer frame path. Cancellation or discard reinstalls the
+accepted canonical frame, and commit still settles through the Rust adapter.
 
 Studio's Node/HTTP host only serves the isolated application and forwards bounded JSON to the
 explicit adapter binary. It does not interpret project content or make HTTP/browser behavior an

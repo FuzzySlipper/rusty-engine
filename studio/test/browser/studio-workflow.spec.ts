@@ -96,10 +96,20 @@ test('voxel Studio owns the complete shared-renderer authoring workflow and reje
   await pickVisibleVoxel(page, shell);
   await expect(editor.locator('[data-visual-id="voxel-pick-readout"]')).toBeVisible();
 
-  await editor.getByLabel('Mode').selectOption('erase');
+  await editor.getByLabel('Brush mode').selectOption('erase');
   const hashBeforeBrush = await projectHash(shell);
+  const rendererBeforeBrushPreview = await rendererHash(viewport);
   await editor.getByRole('button', { name: 'Preview', exact: true }).click();
   await expect(editor.locator('[data-visual-id="voxel-brush-preview"]')).toBeVisible();
+  await expect(viewport).toHaveAttribute('data-voxel-preview-kind', 'brush');
+  await expect(viewport).toHaveAttribute('data-preview-applied', 'true');
+  await expect.poll(() => rendererHash(viewport)).not.toBe(rendererBeforeBrushPreview);
+  await editor.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(viewport).not.toHaveAttribute('data-voxel-preview-kind', 'brush');
+  await expect(viewport).toHaveAttribute('data-preview-applied', 'false');
+  await expect.poll(() => rendererHash(viewport)).toBe(rendererBeforeBrushPreview);
+  await editor.getByRole('button', { name: 'Preview', exact: true }).click();
+  await expect(viewport).toHaveAttribute('data-voxel-preview-kind', 'brush');
   await editor.locator('[data-action="apply-voxel-brush"]').click();
   await expect(shell).toHaveAttribute('data-voxel-receipt', 'voxelBrushApplied');
   await expect.poll(() => projectHash(shell)).not.toBe(hashBeforeBrush);
@@ -124,9 +134,20 @@ test('voxel Studio owns the complete shared-renderer authoring workflow and reje
 
   await editor.getByRole('button', { name: 'convert', exact: true }).click();
   const hashBeforePlan = await projectHash(shell);
+  const rendererBeforePlan = await rendererHash(viewport);
   await editor.locator('[data-action="prepare-voxel-conversion"]').click();
   await expect(editor.locator('[data-visual-id="voxel-conversion-preview"]')).toBeVisible();
   await expect(shell).toHaveAttribute('data-project-hash', hashBeforePlan);
+  await expect(viewport).toHaveAttribute('data-voxel-preview-kind', 'conversion');
+  await expect(viewport).toHaveAttribute('data-preview-applied', 'true');
+  await expect.poll(() => rendererHash(viewport)).not.toBe(rendererBeforePlan);
+  await editor.getByRole('button', { name: 'Discard', exact: true }).click();
+  await expect(editor.locator('[data-visual-id="voxel-conversion-preview"]')).toHaveCount(0);
+  await expect(viewport).not.toHaveAttribute('data-voxel-preview-kind', 'conversion');
+  await expect(viewport).toHaveAttribute('data-preview-applied', 'false');
+  await expect.poll(() => rendererHash(viewport)).toBe(rendererBeforePlan);
+  await editor.locator('[data-action="prepare-voxel-conversion"]').click();
+  await expect(viewport).toHaveAttribute('data-voxel-preview-kind', 'conversion');
   await editor.locator('[data-action="apply-voxel-conversion"]').click();
   await expect(shell).toHaveAttribute('data-voxel-receipt', 'voxelConversionApplied');
   await expect(shell).toHaveAttribute('data-voxel-assets', '2');

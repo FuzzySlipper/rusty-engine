@@ -46,6 +46,7 @@ test('selection and preview are disposable shared-renderer frame presentations',
   const selected = presentStudioSelection(canonical, 42, null, null);
   assert.equal(selected.selectedHandle, 7);
   assert.equal(selected.previewApplied, false);
+  assert.equal(selected.voxelPreviewKind, null);
   assert.equal(selected.frame.ops.at(-1)?.op, 'update');
 
   const preview = presentStudioSelection(canonical, 42, 42, [5, 6, 7]);
@@ -63,4 +64,42 @@ test('selection and preview are disposable shared-renderer frame presentations',
   const cancelled = presentStudioSelection(canonical, 42, null, null);
   assert.deepEqual(cancelled.frame, selected.frame);
   assert.deepEqual(canonical.ops[0], canonical.ops[0]);
+
+  const brush = presentStudioSelection(canonical, 42, null, null, {
+    kind: 'brush',
+    worldPoint: [1.5, 2.5, 3.5],
+    cellSize: 0.5,
+    radius: 1,
+    mode: 'erase',
+  });
+  assert.equal(brush.previewApplied, true);
+  assert.equal(brush.voxelPreviewKind, 'brush');
+  const brushCreate = brush.frame.ops.at(-1);
+  assert.equal(brushCreate?.op, 'create');
+  if (brushCreate?.op === 'create') {
+    assert.equal(brushCreate.node.layer, 'debug');
+    assert.deepEqual(brushCreate.node.transform.translation, [1.5, 2.5, 3.5]);
+    assert.deepEqual(brushCreate.node.transform.scale, [1.5, 1.5, 1.5]);
+  }
+  assert.deepEqual(
+    presentStudioSelection(canonical, 42, null, null).frame,
+    selected.frame,
+  );
+
+  const conversion = presentStudioSelection(canonical, null, null, null, {
+    kind: 'conversion',
+    cellSize: 2,
+    samples: [
+      { coordinate: [0, 0, 0], materialSlot: 7 },
+      { coordinate: [2, 1, -1], materialSlot: 8 },
+    ],
+  });
+  assert.equal(conversion.previewApplied, true);
+  assert.equal(conversion.voxelPreviewKind, 'conversion');
+  assert.equal(conversion.frame.ops.length, canonical.ops.length + 2);
+  const firstSample = conversion.frame.ops[canonical.ops.length];
+  assert.equal(firstSample?.op, 'create');
+  if (firstSample?.op === 'create') {
+    assert.deepEqual(firstSample.node.transform.translation, [1, 1, 1]);
+  }
 });

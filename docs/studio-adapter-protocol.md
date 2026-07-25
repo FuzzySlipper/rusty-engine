@@ -1,6 +1,6 @@
 # Studio external-project adapter protocol
 
-Status: M11E scene and voxel authoring implemented
+Status: protocol 4 / M11F voxel parity implemented; exact-SHA acceptance pending
 
 Rusty Engine Studio talks to one project-owned Rust adapter at a time through a bounded JSON-lines
 process. The adapter is a downstream composition root: it understands that project's layout,
@@ -13,7 +13,7 @@ against a real external checkout without turning that checkout into an ordinary 
 
 ## Closed protocol
 
-Every request carries `protocolVersion: 3` and a caller-selected `requestId`. Version 3 contains
+Every request carries `protocolVersion: 4` and a caller-selected `requestId`. Version 4 contains
 only these tagged request families:
 
 | Request | Purpose | Canonical authority |
@@ -27,15 +27,20 @@ only these tagged request families:
 | `attachVoxelInstance`, `setVoxelInstanceTransform`, `removeVoxelInstance` | Manage transformed scene instances without giving Studio scene authority. | downstream scene schema plus `authored-scene`/projection admission |
 | `validateVoxelPick` | Re-cast an untrusted shared-renderer ray against the named transformed instance and compare the claimed cell/face. | `engine-spatial` picking and collision authority |
 | `applyVoxelBrush` | Expand one bounded cube brush into a validated atomic edit transaction. | `engine-spatial` edit/history plus `voxel-asset` |
+| `applyVoxelPrimitive`, `initializeVoxelTemplate` | Generate bounded block/box/shell/edge/line edits or one deterministic house asset without moving semantic generation into TypeScript. | `engine-spatial` primitive/template services plus `voxel-asset` |
+| `importVoxelAssetFile`, `exportVoxelAssetFile` | Open or publish a canonical voxel asset through explicit trusted host paths and exact replacement identity. | `voxel-asset`, downstream host-file adapter |
+| `materializeEnvironment` | Materialize one deterministic preset/seed into a managed asset, scene instance, and named project markers. | `environment-authoring`, downstream scene admission |
 | `undoVoxelEdit`, `redoVoxelEdit`, `revertVoxelHistory` | Move durable committed history under project and asset hash guards. | `engine-spatial` history codec/service |
+| `queryVoxelHistory`, `prepareVoxelHistoryRevert`, `applyVoxelHistoryRevert`, `discardVoxelHistoryRevert` | Return bounded entries/diffs/samples and retain a private non-mutating revert candidate until explicit apply or discard. | `engine-spatial` history codec/service |
 | `createVoxelAnnotationLayer`, `editVoxelAnnotation` | Create or transactionally edit typed semantic regions. | `voxel-annotation` plus target voxel identity |
 | `queryVoxelAnnotation`, `exportVoxelAnnotation`, `queryVoxelModel` | Return bounded owner readouts without sending canonical meaning to TypeScript. | `voxel-annotation`, `voxel-convert` query owners |
-| `prepareVoxelConversion`, `applyVoxelConversion`, `discardVoxelConversion` | Prepare a private bounded GLB plan/preview, atomically install its exact output, or discard it. | `voxel-convert`, `voxel-asset`, project adapter |
+| `prepareVoxelConversion`, `applyVoxelConversion`, `discardVoxelConversion` | Prepare a private bounded project/host GLB plan with primitive, affine, default-material, and typed texture policy; atomically install its exact output or discard it. | `voxel-convert`, `voxel-asset`, project adapter |
 | `closeProject` | Release open-project and retained-projection state. | Project adapter host lifecycle |
 
 Responses are likewise a closed tagged union: `described`, `projectOpened`, `projectRead`,
 `entityTranslationApplied`, `projectMutationApplied`, `voxelPickValidated`, `voxelRead`,
-`voxelConversionPrepared`, `voxelConversionDiscarded`, `projectClosed`, or `rejected`. There is no
+`voxelConversionPrepared`, `voxelConversionDiscarded`, `voxelHistoryRevertPrepared`,
+`voxelHistoryRevertDiscarded`, `voxelAssetFileExported`, `projectClosed`, or `rejected`. There is no
 generic method string, command registry, arbitrary payload, provider lookup, RuntimeSession, or
 cross-capability gameplay envelope.
 
@@ -76,9 +81,10 @@ revalidates the ray, transformed instance, local cell, and face before an edit c
 ## Safety and atomicity
 
 The process bounds request and response bytes. The selected root must be absolute and the project
-path must be safe and relative. The downstream adapter rejects symlinks throughout the writable
-path, path escapes, non-files, oversized sources, malformed protocol input, and unsupported
-versions.
+path must be safe and relative. Explicit host selections must be absolute and lexically normalized.
+The downstream adapter rejects symlinks throughout existing path chains, path escapes, non-files,
+oversized sources, malformed protocol input, and unsupported versions. Host replacement requires
+the exact prior SHA-256 and uses a synced same-directory candidate with a final target recheck.
 
 Every durable mutation is staged before publication:
 
@@ -91,10 +97,12 @@ Every durable mutation is staged before publication:
 7. reread canonical bytes and confirm publication.
 
 Rejected, invalid, stale, and malformed operations leave the original project bytes unchanged.
-Prepared conversion plans are private adapter-process values containing the exact source and settings
-identity. Visible plan fields are informative; apply succeeds only for the retained plan ID, plan
-hash, output hash, and current project hash. Voxel history is encoded beside the embedded asset and
-is reconstructed by a fresh process before undo, redo, or revert.
+Prepared conversion plans and history reverts are private adapter-process values containing exact
+source/settings/project/asset identity. Visible fields are informative; apply succeeds only for the
+retained candidate and current optimistic guards. The adapter retains at most one prepared
+conversion and one prepared history move; a successful replacement prepare evicts the older
+candidate, whose identity then rejects without mutation. Voxel history is encoded beside the
+embedded asset and reconstructed by a fresh process before query, undo, redo, or revert.
 
 ## Gates
 
@@ -103,11 +111,13 @@ is reconstructed by a fresh process before undo, redo, or revert.
   semantic rejection, optimistic replacement, atomicity, and canonical reread.
 - `./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo` is the explicit
   cross-repository proof. It builds the project-owned adapter, opens Loading Bay, then mutates a
-  temporary Converted Wall copy through brush/history/annotation/model-query/conversion operations.
+  temporary Converted Wall copy through brush/primitive/history-preview/template/host-file/
+  annotation/model-query/conversion/environment operations.
   It closes and starts a fresh adapter process to verify reconstruction and byte-preserving stale
   rejection. Real Chromium workflows then cover canonical hierarchy selection, observable
   shared-renderer selection/transform preview/cancel, settlement/reopen, transformed voxel picking,
-  brush undo/redo, annotations, private-plan conversion, reload persistence, and stale non-mutation.
+  shared-renderer brush/conversion preview restoration, brush undo/redo, annotations, private-plan
+  conversion, reload persistence, and stale non-mutation.
 - `.github/workflows/studio-demo-integration.yml` checks out the public demo at the exact revision
   declared by `studio/demo-consumer-source.json` and runs that proof as an explicit integration
   gate. The pin makes downstream drift a conscious update instead of an ambient sibling checkout.

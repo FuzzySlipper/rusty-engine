@@ -81,6 +81,55 @@
         </section>
 
         <section class="voxel-section">
+          <header><strong>House template</strong><span>deterministic Rust-owned primitive composition</span></header>
+          <div class="form-grid">
+            <label class="wide"><span>Asset id</span><input [(ngModel)]="templateAssetId" /></label>
+            <label><span>Material</span><input type="number" min="1" [(ngModel)]="templateMaterialSlot" /></label>
+          </div>
+          <span>Origin</span>
+          <div class="axis-row">
+            @for (axis of [0, 1, 2]; track axis) { <input type="number" [(ngModel)]="templateOrigin[axis]" /> }
+          </div>
+          <button type="button" [disabled]="busy()" (click)="initializeTemplate()">Initialize house template</button>
+        </section>
+
+        <section class="voxel-section">
+          <header><strong>Voxel asset files</strong><span>trusted host open, save, and save-as with CAS</span></header>
+          <div class="form-grid">
+            <label class="wide"><span>Import absolute path</span><input [(ngModel)]="importSourcePath" /></label>
+            <label class="wide"><span>Imported asset id</span><input [(ngModel)]="importTargetAssetId" /></label>
+            <label class="wide"><span>Export absolute path</span><input [(ngModel)]="exportTargetPath" /></label>
+            <label class="wide"><span>Expected target SHA-256 (replace only)</span><input [(ngModel)]="exportExpectedSha256" /></label>
+          </div>
+          <div class="button-row wrap">
+            <button type="button" [disabled]="busy()" (click)="importAssetFile()">Open voxel asset file</button>
+            <button type="button" [disabled]="busy() || selectedAsset() === null" (click)="exportAssetFile()">Save selected asset as</button>
+          </div>
+        </section>
+
+        <section class="voxel-section">
+          <header><strong>Environment</strong><span>deterministic preset materialization</span></header>
+          <div class="form-grid">
+            <label><span>Seed</span><input type="number" min="0" [(ngModel)]="environmentSeed" /></label>
+            <label class="wide"><span>Asset id</span><input [(ngModel)]="environmentAssetId" /></label>
+            <label class="wide"><span>Instance id</span><input [(ngModel)]="environmentInstanceId" /></label>
+            <label><span>Player entity</span><input type="number" min="0" [(ngModel)]="environmentPlayerEntityId" /></label>
+            <label><span>Exit entity</span><input type="number" min="0" [(ngModel)]="environmentExitEntityId" /></label>
+            <label><span>Wall slot</span><input type="number" min="1" [(ngModel)]="environmentWallMaterial" /></label>
+            <label><span>Floor slot</span><input type="number" min="1" [(ngModel)]="environmentFloorMaterial" /></label>
+            <label><span>Accent slot</span><input type="number" min="1" [(ngModel)]="environmentAccentMaterial" /></label>
+            <label class="wide"><span>Wall material asset</span><input [(ngModel)]="environmentWallMaterialId" /></label>
+            <label class="wide"><span>Floor material asset</span><input [(ngModel)]="environmentFloorMaterialId" /></label>
+            <label class="wide"><span>Accent material asset</span><input [(ngModel)]="environmentAccentMaterialId" /></label>
+          </div>
+          <span>Voxel translation</span>
+          <div class="axis-row">
+            @for (axis of [0, 1, 2]; track axis) { <input type="number" [(ngModel)]="environmentTranslation[axis]" /> }
+          </div>
+          <button type="button" class="primary" [disabled]="busy()" (click)="materializeEnvironment()">Materialize tiny enclosed environment</button>
+        </section>
+
+        <section class="voxel-section">
           <header><strong>Instances</strong><span>scene placement</span></header>
           <div class="form-row">
             <input aria-label="New voxel instance id" [(ngModel)]="newInstanceId" />
@@ -132,7 +181,7 @@
         <section class="voxel-section">
           <header><strong>Cube brush</strong><span>disposable preview, atomic commit</span></header>
           <div class="form-grid compact">
-            <label><span>Mode</span><select [(ngModel)]="brushMode"><option value="paint">Paint</option><option value="erase">Erase</option></select></label>
+            <label><span>Brush mode</span><select [(ngModel)]="brushMode"><option value="paint">Paint</option><option value="erase">Erase</option></select></label>
             <label><span>Radius</span><input type="number" min="0" [(ngModel)]="brushRadius" /></label>
             <label><span>Material</span><input type="number" min="1" [disabled]="brushMode === 'erase'" [(ngModel)]="brushMaterialSlot" /></label>
           </div>
@@ -147,6 +196,31 @@
             <button type="button" class="primary" data-action="apply-voxel-brush" [disabled]="busy() || !brushPreview()" (click)="applyBrush()">Apply</button>
           </div>
         </section>
+        <section class="voxel-section">
+          <header><strong>Primitives</strong><span>block, filled/shell/edge box, and bounded line</span></header>
+          <div class="form-grid compact">
+            <label><span>Primitive</span><select [(ngModel)]="primitiveKind"><option value="block">Block</option><option value="box">Box</option><option value="line">Line</option></select></label>
+            <label><span>Material mode</span><select [(ngModel)]="primitiveMaterialMode"><option value="set">Set</option><option value="clear">Clear</option></select></label>
+            <label><span>Material</span><input type="number" min="1" [disabled]="primitiveMaterialMode === 'clear'" [(ngModel)]="primitiveMaterialSlot" /></label>
+            @if (primitiveKind === 'box') {
+              <label><span>Fill</span><select [(ngModel)]="primitiveFill"><option value="filled">Filled</option><option value="shell">Shell</option><option value="edges">Edges</option></select></label>
+            }
+            @if (primitiveKind === 'line') {
+              <label><span>Radius</span><input type="number" min="0" max="4" [(ngModel)]="primitiveRadius" /></label>
+            }
+          </div>
+          <span>{{ primitiveKind === 'block' ? 'Address' : 'Start' }}</span>
+          <div class="axis-row">
+            @for (axis of [0, 1, 2]; track axis) { <input type="number" [(ngModel)]="primitiveStart[axis]" /> }
+          </div>
+          @if (primitiveKind !== 'block') {
+            <span>End</span>
+            <div class="axis-row">
+              @for (axis of [0, 1, 2]; track axis) { <input type="number" [(ngModel)]="primitiveEnd[axis]" /> }
+            </div>
+          }
+          <button type="button" class="primary" [disabled]="busy() || selectedAsset() === null" (click)="applyPrimitive()">Apply primitive</button>
+        </section>
         @if (selectedAsset(); as asset) {
           <section class="voxel-section">
             <header><strong>History</strong><span>{{ asset.history.cursor }} / {{ asset.history.entryCount }}</span></header>
@@ -154,8 +228,28 @@
               <button type="button" [disabled]="busy() || asset.history.undoDepth === 0" (click)="history('undo')">Undo</button>
               <button type="button" [disabled]="busy() || asset.history.redoDepth === 0" (click)="history('redo')">Redo</button>
               <input aria-label="History cursor" type="number" min="0" [(ngModel)]="revertCursor" />
-              <button type="button" [disabled]="busy()" (click)="history('revert')">Revert</button>
+              <button type="button" [disabled]="busy()" (click)="history('revert')">Direct revert</button>
             </div>
+            <div class="form-grid compact">
+              <label><span>Max entries</span><input type="number" min="1" [(ngModel)]="historyMaxEntries" /></label>
+              <label><span>Deltas / entry</span><input type="number" min="0" [(ngModel)]="historyMaxDeltas" /></label>
+              <label><span>Preview samples</span><input type="number" min="0" [(ngModel)]="historyMaxSamples" /></label>
+            </div>
+            <div class="button-row wrap">
+              <button type="button" [disabled]="busy()" (click)="queryHistory()">Inspect history</button>
+              <button type="button" [disabled]="busy()" (click)="prepareHistoryRevert()">Preview revert</button>
+            </div>
+            @if (historyPreview(); as preview) {
+              <div class="conversion-preview" data-visual-id="voxel-history-preview">
+                <strong>Cursor {{ preview.cursorBefore }} → {{ preview.cursorAfter }}</strong>
+                <span>{{ preview.changedVoxels }} changed voxels · {{ preview.includedTransactionIds.length }} transactions</span>
+                <div class="button-row">
+                  <button type="button" [disabled]="busy()" (click)="discardHistoryRevert()">Discard</button>
+                  <button type="button" class="primary" [disabled]="busy()" (click)="applyHistoryRevert()">Apply preview</button>
+                </div>
+              </div>
+            }
+            @if (lastReadout()?.kind === 'history') { <pre>{{ lastReadout() | json }}</pre> }
             <small>{{ asset.history.persisted ? 'durable history' : 'new history' }} · {{ asset.history.historyHash }}</small>
           </section>
           <section class="voxel-section">
@@ -184,10 +278,23 @@
             <label class="wide"><span>Label</span><input [(ngModel)]="annotationLabel" /></label>
             <label><span>Kind</span><select [(ngModel)]="annotationKind"><option value="selection">Selection</option><option value="room">Room</option><option value="portal">Portal</option><option value="spawnArea">Spawn</option><option value="cover">Cover</option><option value="hazard">Hazard</option><option value="navigationHint">Navigation</option><option value="custom">Custom</option></select></label>
             <label class="wide"><span>Tags</span><input [(ngModel)]="annotationTags" /></label>
+            <label class="wide"><span>Parent region (blank clears)</span><input [(ngModel)]="annotationParentRegionId" /></label>
+            <label><span>Edit command</span><select [(ngModel)]="annotationCommand"><option value="upsertRegion">Upsert region</option><option value="removeRegion">Remove region</option><option value="addRuns">Add runs</option><option value="removeRuns">Remove runs</option><option value="replaceSelection">Replace selection</option><option value="setParent">Set parent</option><option value="setTags">Set tags</option><option value="setLabel">Set label</option><option value="setKind">Set kind</option><option value="setBounds">Set bounds</option></select></label>
+            <label><span>Run length</span><input type="number" min="1" [(ngModel)]="annotationRunLength" /></label>
+            <label><span>Query mode</span><select [(ngModel)]="annotationQueryMode"><option value="cell">Cell</option><option value="bounds">Bounds</option><option value="region">Region</option><option value="layerSummary">Layer summary</option></select></label>
+            <label><span>Max results</span><input type="number" min="1" [(ngModel)]="annotationMaxResults" /></label>
+          </div>
+          <span>Cell / bounds minimum</span>
+          <div class="axis-row">
+            @for (axis of [0, 1, 2]; track axis) { <input type="number" [(ngModel)]="annotationStart[axis]" /> }
+          </div>
+          <span>Bounds maximum</span>
+          <div class="axis-row">
+            @for (axis of [0, 1, 2]; track axis) { <input type="number" [(ngModel)]="annotationEnd[axis]" /> }
           </div>
           <div class="button-row wrap">
             <button type="button" [disabled]="busy() || selectedAsset() === null" (click)="createAnnotation()">Create from pick</button>
-            <button type="button" [disabled]="busy() || selectedLayer() === null" (click)="editAnnotationLabel()">Update label</button>
+            <button type="button" [disabled]="busy() || selectedLayer() === null" (click)="editAnnotation()">Apply typed edit</button>
             <button type="button" [disabled]="busy() || selectedLayer() === null" (click)="queryAnnotation()">Query</button>
             <button type="button" [disabled]="busy() || selectedLayer() === null" (click)="exportAnnotation()">Export</button>
           </div>
@@ -204,9 +311,12 @@
           <header><strong>Mesh → voxel</strong><span>private Rust plan + preview</span></header>
           <div class="form-grid">
             <label class="wide"><span>Source asset</span><input [(ngModel)]="conversionSourceAsset" /></label>
+            <label><span>Source scope</span><select [(ngModel)]="conversionSourceScope"><option value="project">Project</option><option value="host">Host file</option></select></label>
             <label class="wide"><span>Source path</span><input [(ngModel)]="conversionSourcePath" /></label>
             <label class="wide"><span>Target asset</span><input [(ngModel)]="conversionTargetAsset" /></label>
+            <label><span>License scope</span><select [(ngModel)]="conversionLicenseScope"><option value="project">Project</option><option value="host">Host file</option></select></label>
             <label class="wide"><span>License path</span><input [(ngModel)]="conversionLicensePath" /></label>
+            <label class="wide"><span>Mesh primitive (for example group/0)</span><input [(ngModel)]="conversionMeshPrimitive" /></label>
             <label><span>Resolution X</span><input type="number" [(ngModel)]="conversionResolution[0]" /></label>
             <label><span>Resolution Y</span><input type="number" [(ngModel)]="conversionResolution[1]" /></label>
             <label><span>Resolution Z</span><input type="number" [(ngModel)]="conversionResolution[2]" /></label>
@@ -215,7 +325,16 @@
             <label><span>Fit</span><select [(ngModel)]="conversionFitPolicy"><option value="contain">Contain</option><option value="cover">Cover</option><option value="stretch">Stretch</option></select></label>
             <label><span>Origin</span><select [(ngModel)]="conversionOriginPolicy"><option value="targetMin">Target min</option><option value="sourceOrigin">Source origin</option><option value="centered">Centered</option></select></label>
             <label><span>Mode</span><select [(ngModel)]="conversionMode"><option value="surface">Surface</option><option value="solid">Solid</option></select></label>
+            <label><span>Origin X</span><input type="number" [(ngModel)]="conversionOrigin[0]" /></label>
+            <label><span>Origin Y</span><input type="number" [(ngModel)]="conversionOrigin[1]" /></label>
+            <label><span>Origin Z</span><input type="number" [(ngModel)]="conversionOrigin[2]" /></label>
+            <label><span>Default material</span><input placeholder="optional" [(ngModel)]="conversionDefaultMaterial" /></label>
+            <label><span>Preview samples</span><input type="number" min="1" [(ngModel)]="conversionMaxPreviewSamples" /></label>
+            <label class="wide"><span>4×4 affine transform (16 comma-separated values)</span><textarea rows="3" [(ngModel)]="conversionTransform"></textarea></label>
+            <label class="wide"><span>Texture sample assets (typed JSON array)</span><textarea rows="5" [(ngModel)]="conversionTextureAssets"></textarea></label>
+            <label class="wide"><span>Texture bindings (typed JSON array)</span><textarea rows="5" [(ngModel)]="conversionTextureBindings"></textarea></label>
           </div>
+          @if (formError(); as error) { <p class="voxel-empty">{{ error }}</p> }
           <button type="button" class="primary" data-action="prepare-voxel-conversion" [disabled]="busy()" (click)="prepareConversion()">Prepare conversion</button>
           @if (conversion(); as prepared) {
             <div class="conversion-preview" data-visual-id="voxel-conversion-preview">

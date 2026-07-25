@@ -1,6 +1,6 @@
 # Studio migration contract
 
-Status: M11E voxel authoring operational; M11F parity reconciliation remains
+Status: M11F voxel parity implemented; exact-SHA acceptance and explicit non-voxel deferrals remain
 
 Rusty Engine Studio is a first-party authoring product in this repository. It is not a narrow
 vertical slice and it is not a compatibility shell for Asha. The migration target is full useful
@@ -74,28 +74,40 @@ reconcile every row before the old Studio can be considered retired.
 | Typed actions | Accepted/rejected operation results and a visible action timeline remain; the universal command registry and arbitrary command envelope do not | M11B/M11C |
 | Product acceptance | Real visible controls prove scene, entity, lighting, voxel, material, conversion, save/reopen, and external-demo behavior; proof catalogs and hidden browser mutation hooks do not return | M11D/M11E/M11F |
 
-## M11E implementation and explicit remaining parity
+## M11E foundation and M11F voxel reconciliation
 
-M11E is implemented against protocol 3 and the Converted Wall demo artifact. It includes canonical
+M11E established protocol 3 against the Converted Wall demo artifact. It includes canonical
 voxel inspection/initialization/duplication, catalog material upsert and palette replacement,
 multiple transformed instances, shared-renderer projection and transformed picking, bounded cube
 paint/erase with disposable preview, durable undo/redo/cursor revert, annotation layer creation,
 label edit, query/export, bounded model windows, and private-plan GLB conversion/apply. Rust owns
 hashes, semantic validation, history, plan identity, project admission, and atomic publication.
 
-The following donor workflows remain explicit M11F work rather than silent omissions:
+Protocol 4 implements the previously explicit M11F voxel work:
 
-- voxel asset host-file open/export/save-as, template creation, and project-owned unresolved-file UX;
-- block/fill-box/shell/edge/line primitive edit generation beyond the current bounded cube brush;
-- history entry/diff/sample inspection and a distinct preview-then-apply revert surface;
-- annotation remove/upsert/add-runs/remove-runs/replace-selection/parent/tags/kind/bounds controls and
-  cell/bounds/region query modes (the Rust owner and closed transaction types already support them);
-- trusted host GLB selection/import, primitive-group selection, affine translation/scale controls,
-  explicit default material and texture-sampling policy controls; and
-- deterministic environment preset/seed materialization and its project target workflow.
+- canonical voxel host-file open/export/save-as with explicit absolute paths, bounded reads,
+  symlink rejection, exact target SHA replacement, and atomic promotion;
+- deterministic house-template creation and bounded block, filled/shell/edge box, and line edits;
+- bounded history entry/diff/sample inspection plus private preview/apply/discard revert candidates;
+- disposable brush and conversion sample presentations through the shared renderer, with canonical
+  frame restoration on cancel/discard and no Studio-owned Three scene;
+- controls for every typed annotation edit family and cell/bounds/region/summary query mode;
+- project or host GLB/license selection, primitive-group selection, complete affine input, explicit
+  default material, and closed texture sample/binding policy; and
+- deterministic preset/seed environment materialization into a managed voxel asset, instance, and
+  named downstream player/exit entities.
 
-These rows are also named in `owner-adoption.tsv`. M11F must implement them or record a concrete
-owner-approved exclusion tied to removed donor topology before declaring Studio parity complete.
+The actual protocol, editor controls, owner tests, fresh-process integration, and exact demo pin are
+the authority for this completion; no donor TypeScript semantic generator was copied.
+
+## Explicit non-voxel limitations
+
+M11F does not quietly convert earlier M11D limitations into claims. Generic project creation/save-as,
+scene node create/delete/reparent, entity rotation/scale/capability/appearance editing, the full
+asset dependency/lock/reimport browser, and persisted host-user camera/input preferences remain
+discoverably disabled or read-only. They require named downstream operations and owner-specific
+readouts rather than a universal editor command. `owner-adoption.tsv` records each classification;
+review must either accept those deferrals or schedule concrete successor work before donor retirement.
 
 ## Cohesive successor modules
 
@@ -188,6 +200,6 @@ must be expressed through the new owners even when its old transport is excluded
 | Engine-Studio product integration | M11B onward | Manual/scheduled/release and selected public-contract changes; opens an explicit external demo checkout and proves real authoring-to-product behavior. |
 
 M11A establishes the isolated workspace and static gates only. M11B adds the real adapter before the
-Angular shell is imported. M11C through M11E migrate the complete recorded workflows. M11F closes
-only after reconciling this contract, the donor inventory, and every owner-adoption row against the
-actual product.
+Angular shell is imported. M11C through M11E establish the retained product workflows. M11F adds the
+remaining voxel workflows and closes only after exact-SHA review reconciles this contract, the donor
+inventory, every owner-adoption row, and the explicit non-voxel deferrals against the actual product.

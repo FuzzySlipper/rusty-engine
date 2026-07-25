@@ -11,9 +11,12 @@ import type {
   VoxelBounds,
   VoxelBrushMode,
   VoxelConversionSettings,
+  StudioFileSelection,
   VoxelMaterialBinding,
   VoxelModelWindowRequest,
   VoxelPickFace,
+  VoxelPrimitiveRequest,
+  VoxelTemplateRequest,
 } from '@rusty-engine/studio-adapter-client';
 
 export interface VoxelViewportPickCandidate {
@@ -23,6 +26,14 @@ export interface VoxelViewportPickCandidate {
   readonly worldPoint: Vector3;
   readonly worldNormal: Vector3;
   readonly maxDistance: number;
+}
+
+export interface VoxelBrushPreviewPresentation {
+  readonly kind: 'brush';
+  readonly worldPoint: Vector3;
+  readonly cellSize: number;
+  readonly radius: number;
+  readonly mode: VoxelBrushMode;
 }
 
 export interface VoxelPickValidationInput {
@@ -44,15 +55,24 @@ export type VoxelEditorAction =
   | { readonly kind: 'removeInstance'; readonly sceneId: string; readonly instanceId: string }
   | { readonly kind: 'replacePalette'; readonly assetId: string; readonly expectedAssetContentHash: string; readonly expectedVoxelDataHash: string; readonly replacement: readonly VoxelMaterialBinding[] }
   | { readonly kind: 'applyBrush'; readonly assetId: string; readonly expectedAssetContentHash: string; readonly center: Vector3i; readonly radius: number; readonly mode: VoxelBrushMode; readonly materialSlot: number | null }
+  | { readonly kind: 'applyPrimitive'; readonly assetId: string; readonly expectedAssetContentHash: string; readonly request: VoxelPrimitiveRequest }
+  | { readonly kind: 'initializeTemplate'; readonly assetId: string; readonly cellSize: number; readonly chunkSize: number; readonly materialPalette: readonly VoxelMaterialBinding[]; readonly request: VoxelTemplateRequest }
+  | { readonly kind: 'importAssetFile'; readonly sourcePath: string; readonly targetAssetId: string }
+  | { readonly kind: 'exportAssetFile'; readonly assetId: string; readonly expectedAssetContentHash: string; readonly targetPath: string; readonly expectedTargetSha256?: string }
+  | { readonly kind: 'materializeEnvironment'; readonly sceneId: string; readonly preset: 'tinyEnclosed'; readonly seed: number; readonly voxelAssetId: string; readonly voxelInstanceId: string; readonly voxelTranslation: Vector3; readonly playerEntityId: number; readonly exitEntityId: number; readonly wallMaterial: number; readonly floorMaterial: number; readonly accentMaterial: number; readonly materialPalette: readonly VoxelMaterialBinding[] }
   | { readonly kind: 'undo'; readonly assetId: string; readonly expectedAssetContentHash: string }
   | { readonly kind: 'redo'; readonly assetId: string; readonly expectedAssetContentHash: string }
   | { readonly kind: 'revert'; readonly assetId: string; readonly expectedAssetContentHash: string; readonly targetCursor: number }
+  | { readonly kind: 'queryHistory'; readonly assetId: string; readonly expectedAssetContentHash: string; readonly maxEntries: number; readonly maxDeltasPerEntry: number }
+  | { readonly kind: 'prepareHistoryRevert'; readonly assetId: string; readonly expectedAssetContentHash: string; readonly targetCursor: number; readonly maxSamples: number }
+  | { readonly kind: 'applyHistoryRevert'; readonly previewId: string }
+  | { readonly kind: 'discardHistoryRevert'; readonly previewId: string }
   | { readonly kind: 'createAnnotation'; readonly assetId: string; readonly draft: VoxelAnnotationLayerDraft }
   | { readonly kind: 'editAnnotation'; readonly assetId: string; readonly layerId: string; readonly transaction: VoxelAnnotationEditTransaction }
   | { readonly kind: 'queryAnnotation'; readonly assetId: string; readonly layerId: string; readonly query: VoxelAnnotationQuery }
   | { readonly kind: 'exportAnnotation'; readonly assetId: string; readonly layerId: string; readonly expectedLayerHash: string }
   | { readonly kind: 'queryModel'; readonly assetId: string; readonly expectedAssetContentHash: string; readonly window?: VoxelModelWindowRequest }
-  | { readonly kind: 'prepareConversion'; readonly sourceAssetId: string; readonly sourcePath: string; readonly targetAssetId: string; readonly licensePath?: string; readonly settings: VoxelConversionSettings; readonly maxPreviewSamples: number }
+  | { readonly kind: 'prepareConversion'; readonly sourceAssetId: string; readonly source: StudioFileSelection; readonly targetAssetId: string; readonly license?: StudioFileSelection; readonly meshPrimitive?: string; readonly settings: VoxelConversionSettings; readonly maxPreviewSamples: number }
   | { readonly kind: 'applyConversion'; readonly planId: string; readonly expectedPlanHash: string; readonly expectedOutputHash: string }
   | { readonly kind: 'discardConversion'; readonly planId: string };
 

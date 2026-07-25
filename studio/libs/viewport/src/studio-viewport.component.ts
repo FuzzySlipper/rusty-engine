@@ -21,6 +21,7 @@ import {
   canvasPoint,
   movedPastPickThreshold,
   presentStudioSelection,
+  type StudioVoxelPreview,
 } from './viewport-model.js';
 
 type ViewportStatus = 'mounting' | 'ready' | 'error' | 'disposed';
@@ -46,6 +47,7 @@ export interface VoxelViewportPickCandidate {
     '[attr.data-pick-revision]': 'pickRevision()',
     '[attr.data-authored-frame-hash]': 'retainedFrameHash()',
     '[attr.data-preview-applied]': 'previewApplied()',
+    '[attr.data-voxel-preview-kind]': 'voxelPreviewKind()',
     '[attr.data-selected-render-handle]': 'selectedRenderHandle()',
   },
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -57,6 +59,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   readonly selectedEntityId = input<number | null>(null);
   readonly previewEntityId = input<number | null>(null);
   readonly previewTranslation = input<readonly [number, number, number] | null>(null);
+  readonly voxelPreview = input<StudioVoxelPreview | null>(null);
 
   readonly entityPicked = output<number | null>();
   readonly voxelPicked = output<VoxelViewportPickCandidate>();
@@ -68,6 +71,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   readonly pickRevision = signal(0);
   readonly retainedFrameHash = signal('');
   readonly previewApplied = signal(false);
+  readonly voxelPreviewKind = signal<StudioVoxelPreview['kind'] | null>(null);
   readonly selectedRenderHandle = signal<number | null>(null);
 
   @ViewChild('canvas', { static: true })
@@ -86,6 +90,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       const selectedEntityId = this.selectedEntityId();
       const previewEntityId = this.previewEntityId();
       const previewTranslation = this.previewTranslation();
+      const voxelPreview = this.voxelPreview();
       if (frame !== null) {
         this.#replaceFrame(
           frame,
@@ -93,6 +98,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
           selectedEntityId,
           previewEntityId,
           previewTranslation,
+          voxelPreview,
         );
       }
     });
@@ -210,6 +216,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
           this.selectedEntityId(),
           this.previewEntityId(),
           this.previewTranslation(),
+          this.voxelPreview(),
         );
       }
       this.#syncReadout();
@@ -224,6 +231,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     selectedEntityId: number | null,
     previewEntityId: number | null,
     previewTranslation: readonly [number, number, number] | null,
+    voxelPreview: StudioVoxelPreview | null,
   ): void {
     const surface = this.#surface;
     const presentationKey = JSON.stringify([
@@ -231,6 +239,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       selectedEntityId,
       previewEntityId,
       previewTranslation,
+      voxelPreview,
     ]);
     if (surface === null || presentationKey === this.#lastPresentationKey) return;
     const presentation = presentStudioSelection(
@@ -238,6 +247,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       selectedEntityId,
       previewEntityId,
       previewTranslation,
+      voxelPreview,
     );
     const receipt = surface.replaceFrame(presentation.frame);
     if (!receipt.applied) {
@@ -246,6 +256,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     }
     this.#lastPresentationKey = presentationKey;
     this.previewApplied.set(presentation.previewApplied);
+    this.voxelPreviewKind.set(presentation.voxelPreviewKind);
     this.selectedRenderHandle.set(presentation.selectedHandle);
     this.#syncReadout();
   }

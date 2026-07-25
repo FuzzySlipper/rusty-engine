@@ -1,12 +1,21 @@
-import { ChangeDetectionStrategy, Component, HostBinding, inject } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  HostBinding,
+  computed,
+  inject,
+  signal,
+} from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import type { OwnerDiagnostic } from '@rusty-engine/studio-adapter-client';
 import {
   StudioViewportComponent,
+  type StudioVoxelPreview,
   type VoxelViewportPickCandidate,
 } from '@rusty-engine/studio-viewport';
 import {
   VoxelEditorComponent,
+  type VoxelBrushPreviewPresentation,
   type VoxelEditorAction,
 } from '@rusty-engine/studio-voxel-editor';
 
@@ -23,6 +32,18 @@ import { STUDIO_WORKSPACE } from './tokens.js';
 export class StudioShellComponent {
   readonly store = inject(STUDIO_WORKSPACE);
   readonly state = this.store.snapshot;
+  readonly brushPreview = signal<VoxelBrushPreviewPresentation | null>(null);
+  readonly voxelPreview = computed<StudioVoxelPreview | null>(() => {
+    const brush = this.brushPreview();
+    if (brush !== null) return brush;
+    const conversion = this.state().voxelWorkspace.conversion;
+    if (conversion === null) return null;
+    return {
+      kind: 'conversion',
+      cellSize: conversion.plan.settings.conversion.cellSize,
+      samples: conversion.preview.sampleVoxels,
+    };
+  });
 
   projectRoot = '';
   projectFile = 'content/projects/converted-wall.project.json';
@@ -55,6 +76,10 @@ export class StudioShellComponent {
 
   runVoxelAction(action: VoxelEditorAction): void {
     void this.store.runVoxelAction(action);
+  }
+
+  setBrushPreview(preview: VoxelBrushPreviewPresentation | null): void {
+    this.brushPreview.set(preview);
   }
 
   beginSelectedPreview(): void {

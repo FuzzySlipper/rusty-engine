@@ -7,6 +7,7 @@ on:
       - 'studio/demo-consumer-source.json'
       - 'studio/libs/adapter-client/**'
       - 'studio/libs/editor-shell/**'
+      - 'studio/libs/voxel-editor/**'
       - 'studio/libs/viewport/**'
       - 'studio/apps/studio-app/**'
       - 'studio/package.json'
@@ -26,6 +27,7 @@ on:
       - 'studio/demo-consumer-source.json'
       - 'studio/libs/adapter-client/**'
       - 'studio/libs/editor-shell/**'
+      - 'studio/libs/voxel-editor/**'
       - 'studio/libs/viewport/**'
       - 'studio/apps/studio-app/**'
       - 'studio/package.json'
@@ -47,7 +49,7 @@ permissions:
 
 env:
   RUSTY_ENGINE_DEMO_REPOSITORY: FuzzySlipper/rusty-engine-demo
-  RUSTY_ENGINE_DEMO_REVISION: 780aa83c0e295393b945dfca2ac1493ceeca4235
+  RUSTY_ENGINE_DEMO_REVISION: 85a2eb2ce1e87f089940b6af6daead668dc80573
 
 jobs:
   verify-studio-demo-integration:

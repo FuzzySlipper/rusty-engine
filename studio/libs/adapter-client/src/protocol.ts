@@ -8,6 +8,7 @@ import {
   validateVoxelAuthoringReadout,
   validateVoxelConversionPlan,
   validateVoxelConversionPreview,
+  validateVoxelHistoryRevertPreview,
   validateVoxelPickReadout,
   validateVoxelReadout,
   type ProjectMutationReceipt,
@@ -29,12 +30,15 @@ import {
   type VoxelModelWindowRequest,
   type VoxelPickFace,
   type VoxelPickReadout,
+  type VoxelPrimitiveRequest,
   type VoxelReadout,
+  type VoxelTemplateRequest,
+  type VoxelHistoryRevertPreview,
 } from './voxel-protocol.js';
 
 export type * from './voxel-protocol.js';
 
-export const STUDIO_ADAPTER_PROTOCOL_VERSION = 3 as const;
+export const STUDIO_ADAPTER_PROTOCOL_VERSION = 4 as const;
 export const MAX_STUDIO_ADAPTER_REQUEST_BYTES = 256 * 1024;
 export const MAX_STUDIO_ADAPTER_RESPONSE_BYTES = 32 * 1024 * 1024;
 
@@ -52,9 +56,18 @@ export type StudioAdapterRequest =
   | ReplaceVoxelPaletteRequest
   | ValidateVoxelPickRequest
   | ApplyVoxelBrushRequest
+  | ApplyVoxelPrimitiveRequest
+  | InitializeVoxelTemplateRequest
+  | ImportVoxelAssetFileRequest
+  | ExportVoxelAssetFileRequest
+  | MaterializeEnvironmentRequest
   | UndoVoxelEditRequest
   | RedoVoxelEditRequest
   | RevertVoxelHistoryRequest
+  | QueryVoxelHistoryRequest
+  | PrepareVoxelHistoryRevertRequest
+  | ApplyVoxelHistoryRevertRequest
+  | DiscardVoxelHistoryRevertRequest
   | CreateVoxelAnnotationLayerRequest
   | EditVoxelAnnotationRequest
   | QueryVoxelAnnotationRequest
@@ -175,6 +188,52 @@ export interface ApplyVoxelBrushRequest extends RequestHeader {
   readonly materialSlot: number | null;
 }
 
+export interface ApplyVoxelPrimitiveRequest extends VoxelHistoryRequest {
+  readonly type: 'applyVoxelPrimitive';
+  readonly request: VoxelPrimitiveRequest;
+}
+
+export interface InitializeVoxelTemplateRequest extends RequestHeader {
+  readonly type: 'initializeVoxelTemplate';
+  readonly expectedProjectHash: string;
+  readonly assetId: string;
+  readonly cellSize: number;
+  readonly chunkSize: number;
+  readonly materialPalette: readonly VoxelMaterialBinding[];
+  readonly request: VoxelTemplateRequest;
+}
+
+export interface ImportVoxelAssetFileRequest extends RequestHeader {
+  readonly type: 'importVoxelAssetFile';
+  readonly expectedProjectHash: string;
+  readonly sourcePath: string;
+  readonly targetAssetId: string;
+}
+
+export interface ExportVoxelAssetFileRequest extends VoxelHistoryRequest {
+  readonly type: 'exportVoxelAssetFile';
+  readonly targetPath: string;
+  readonly expectedTargetSha256?: string;
+}
+
+export interface MaterializeEnvironmentRequest extends RequestHeader {
+  readonly type: 'materializeEnvironment';
+  readonly expectedProjectHash: string;
+  readonly expectedSceneRevision: number;
+  readonly sceneId: string;
+  readonly preset: 'tinyEnclosed';
+  readonly seed: number;
+  readonly voxelAssetId: string;
+  readonly voxelInstanceId: string;
+  readonly voxelTranslation: Vector3;
+  readonly playerEntityId: number;
+  readonly exitEntityId: number;
+  readonly wallMaterial: number;
+  readonly floorMaterial: number;
+  readonly accentMaterial: number;
+  readonly materialPalette: readonly VoxelMaterialBinding[];
+}
+
 interface VoxelHistoryRequest extends RequestHeader {
   readonly expectedProjectHash: string;
   readonly assetId: string;
@@ -192,6 +251,29 @@ export interface RedoVoxelEditRequest extends VoxelHistoryRequest {
 export interface RevertVoxelHistoryRequest extends VoxelHistoryRequest {
   readonly type: 'revertVoxelHistory';
   readonly targetCursor: number;
+}
+
+export interface QueryVoxelHistoryRequest extends VoxelHistoryRequest {
+  readonly type: 'queryVoxelHistory';
+  readonly maxEntries: number;
+  readonly maxDeltasPerEntry: number;
+}
+
+export interface PrepareVoxelHistoryRevertRequest extends VoxelHistoryRequest {
+  readonly type: 'prepareVoxelHistoryRevert';
+  readonly targetCursor: number;
+  readonly maxSamples: number;
+}
+
+export interface ApplyVoxelHistoryRevertRequest extends RequestHeader {
+  readonly type: 'applyVoxelHistoryRevert';
+  readonly expectedProjectHash: string;
+  readonly previewId: string;
+}
+
+export interface DiscardVoxelHistoryRevertRequest extends RequestHeader {
+  readonly type: 'discardVoxelHistoryRevert';
+  readonly previewId: string;
 }
 
 export interface CreateVoxelAnnotationLayerRequest extends RequestHeader {
@@ -237,12 +319,17 @@ export interface PrepareVoxelConversionRequest extends RequestHeader {
   readonly type: 'prepareVoxelConversion';
   readonly expectedProjectHash: string;
   readonly sourceAssetId: string;
-  readonly sourcePath: string;
+  readonly source: StudioFileSelection;
   readonly targetAssetId: string;
-  readonly licensePath?: string;
+  readonly license?: StudioFileSelection;
+  readonly meshPrimitive?: string;
   readonly settings: VoxelConversionSettings;
   readonly maxPreviewSamples: number;
 }
+
+export type StudioFileSelection =
+  | { readonly scope: 'project'; readonly path: string }
+  | { readonly scope: 'host'; readonly path: string };
 
 export interface ApplyVoxelConversionRequest extends RequestHeader {
   readonly type: 'applyVoxelConversion';
@@ -271,6 +358,9 @@ export type StudioAdapterResponse =
   | VoxelReadResponse
   | VoxelConversionPreparedResponse
   | VoxelConversionDiscardedResponse
+  | VoxelHistoryRevertPreparedResponse
+  | VoxelHistoryRevertDiscardedResponse
+  | VoxelAssetFileExportedResponse
   | ProjectClosedResponse
   | RejectedResponse;
 
@@ -322,6 +412,25 @@ export interface VoxelConversionDiscardedResponse extends ResponseHeader {
   readonly planId: string;
 }
 
+export interface VoxelHistoryRevertPreparedResponse extends ResponseHeader {
+  readonly type: 'voxelHistoryRevertPrepared';
+  readonly preview: VoxelHistoryRevertPreview;
+}
+
+export interface VoxelHistoryRevertDiscardedResponse extends ResponseHeader {
+  readonly type: 'voxelHistoryRevertDiscarded';
+  readonly previewId: string;
+}
+
+export interface VoxelAssetFileExportedResponse extends ResponseHeader {
+  readonly type: 'voxelAssetFileExported';
+  readonly assetId: string;
+  readonly targetPath: string;
+  readonly byteCount: number;
+  readonly sha256: string;
+  readonly replacedExisting: boolean;
+}
+
 export interface ProjectClosedResponse extends ResponseHeader {
   readonly type: 'projectClosed';
 }
@@ -352,9 +461,18 @@ export const STUDIO_ADAPTER_OPERATIONS = [
   'replaceVoxelPalette',
   'validateVoxelPick',
   'applyVoxelBrush',
+  'applyVoxelPrimitive',
+  'initializeVoxelTemplate',
+  'importVoxelAssetFile',
+  'exportVoxelAssetFile',
+  'materializeEnvironment',
   'undoVoxelEdit',
   'redoVoxelEdit',
   'revertVoxelHistory',
+  'queryVoxelHistory',
+  'prepareVoxelHistoryRevert',
+  'applyVoxelHistoryRevert',
+  'discardVoxelHistoryRevert',
   'createVoxelAnnotationLayer',
   'editVoxelAnnotation',
   'queryVoxelAnnotation',
@@ -639,6 +757,36 @@ export function decodeStudioAdapterResponse(input: unknown): StudioAdapterRespon
       text(value['planId'], '$.planId');
       return input as VoxelConversionDiscardedResponse;
     }
+    case 'voxelHistoryRevertPrepared': {
+      const value = record(input, '$', [
+        'type', 'protocolVersion', 'requestId', 'preview',
+      ]);
+      responseHeader(value);
+      voxelContract('$.preview', () =>
+        validateVoxelHistoryRevertPreview(value['preview'], '$.preview'));
+      return input as VoxelHistoryRevertPreparedResponse;
+    }
+    case 'voxelHistoryRevertDiscarded': {
+      const value = record(input, '$', [
+        'type', 'protocolVersion', 'requestId', 'previewId',
+      ]);
+      responseHeader(value);
+      text(value['previewId'], '$.previewId');
+      return input as VoxelHistoryRevertDiscardedResponse;
+    }
+    case 'voxelAssetFileExported': {
+      const value = record(input, '$', [
+        'type', 'protocolVersion', 'requestId', 'assetId', 'targetPath',
+        'byteCount', 'sha256', 'replacedExisting',
+      ]);
+      responseHeader(value);
+      text(value['assetId'], '$.assetId');
+      text(value['targetPath'], '$.targetPath');
+      integer(value['byteCount'], '$.byteCount');
+      text(value['sha256'], '$.sha256');
+      truth(value['replacedExisting'], '$.replacedExisting');
+      return input as VoxelAssetFileExportedResponse;
+    }
     case 'projectClosed': {
       const value = record(input, '$', ['type', 'protocolVersion', 'requestId']);
       responseHeader(value);
@@ -699,7 +847,7 @@ function adapterDescription(input: unknown, path: string): void {
   );
   const expected = STUDIO_ADAPTER_OPERATIONS;
   if (operations.length !== expected.length || operations.some((entry, index) => entry !== expected[index])) {
-    fail(`${path}.operations`, 'must name the protocol 3 operation set in order');
+    fail(`${path}.operations`, 'must name the protocol 4 operation set in order');
   }
 }
 
@@ -1108,6 +1256,11 @@ function integer(input: unknown, path: string): number {
   if (typeof input !== 'number' || !Number.isSafeInteger(input) || input < 0) {
     fail(path, 'must be a nonnegative safe integer');
   }
+  return input;
+}
+
+function truth(input: unknown, path: string): boolean {
+  if (typeof input !== 'boolean') fail(path, 'must be a boolean');
   return input;
 }
 

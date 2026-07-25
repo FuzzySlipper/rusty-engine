@@ -11,17 +11,25 @@ import { FormsModule } from '@angular/forms';
 import type {
   MaterialAssetReadout,
   StoredMaterialDefinition,
+  TextureMaterialBinding,
+  TextureSampleAsset,
   VoxelAnnotationKind,
+  VoxelAnnotationEditCommand,
+  VoxelAnnotationQueryMode,
   VoxelAssetAuthoringReadout,
   VoxelAuthoringReadout,
   VoxelConversionPlan,
   VoxelConversionPreview,
+  VoxelHistoryRevertPreview,
   VoxelInstanceReadout,
   VoxelPickReadout,
   VoxelReadout,
 } from '@rusty-engine/studio-adapter-client';
 
-import type { VoxelEditorAction } from './voxel-editor-model.js';
+import type {
+  VoxelBrushPreviewPresentation,
+  VoxelEditorAction,
+} from './voxel-editor-model.js';
 
 type EditorTab = 'assets' | 'edit' | 'annotations' | 'convert';
 
@@ -42,11 +50,14 @@ export class VoxelEditorComponent {
     readonly plan: VoxelConversionPlan;
     readonly preview: VoxelConversionPreview;
   } | null>(null);
+  readonly historyPreview = input<VoxelHistoryRevertPreview | null>(null);
   readonly busy = input(false);
   readonly action = output<VoxelEditorAction>();
+  readonly previewChange = output<VoxelBrushPreviewPresentation | null>();
 
   readonly tab = signal<EditorTab>('assets');
   readonly brushPreview = signal(false);
+  readonly formError = signal<string | null>(null);
 
   selectedAssetId = '';
   selectedInstanceId = '';
@@ -76,17 +87,62 @@ export class VoxelEditorComponent {
   brushRadius = 0;
   brushMaterialSlot = 7;
   revertCursor = 0;
+  historyMaxEntries = 128;
+  historyMaxDeltas = 256;
+  historyMaxSamples = 256;
+
+  primitiveKind: 'block' | 'box' | 'line' = 'block';
+  primitiveStart = [0, 0, 0];
+  primitiveEnd = [0, 0, 0];
+  primitiveFill: 'filled' | 'shell' | 'edges' = 'filled';
+  primitiveRadius = 0;
+  primitiveMaterialMode: 'set' | 'clear' = 'set';
+  primitiveMaterialSlot = 7;
+
+  templateAssetId = 'voxel-volume/house-template';
+  templateOrigin = [0, 0, 0];
+  templateMaterialSlot = 7;
+
+  importSourcePath = '/tmp/rusty-engine-import.voxel.json';
+  importTargetAssetId = 'voxel-volume/imported';
+  exportTargetPath = '/tmp/rusty-engine-export.voxel.json';
+  exportExpectedSha256 = '';
+
+  environmentSeed = 1;
+  environmentAssetId = 'voxel-volume/tiny-enclosed';
+  environmentInstanceId = 'environment/tiny-enclosed';
+  environmentTranslation = [0, 0, 0];
+  environmentPlayerEntityId = 1;
+  environmentExitEntityId = 2;
+  environmentWallMaterial = 7;
+  environmentFloorMaterial = 8;
+  environmentAccentMaterial = 9;
+  environmentWallMaterialId = 'material/wall-lines';
+  environmentFloorMaterialId = 'material/concrete';
+  environmentAccentMaterialId = 'material/wall-lines';
 
   annotationLayerId = 'voxel-annotation/studio-semantics';
   annotationRegionId = 'region/studio-selection';
   annotationLabel = 'Studio selection';
   annotationKind: VoxelAnnotationKind = 'selection';
   annotationTags = 'authored,studio';
+  annotationParentRegionId = '';
+  annotationCommand: 'upsertRegion' | 'removeRegion' | 'addRuns' | 'removeRuns'
+    | 'replaceSelection' | 'setParent' | 'setTags' | 'setLabel' | 'setKind'
+    | 'setBounds' = 'setLabel';
+  annotationQueryMode: 'cell' | 'bounds' | 'region' | 'layerSummary' = 'layerSummary';
+  annotationStart = [0, 0, 0];
+  annotationEnd = [0, 0, 0];
+  annotationRunLength = 1;
+  annotationMaxResults = 256;
 
   conversionSourceAsset = 'mesh/kenney-wall-a';
   conversionSourcePath = 'fixtures/voxel-conversion/kenney-wall-a.glb';
   conversionTargetAsset = 'voxel-volume/converted-studio';
   conversionLicensePath = 'fixtures/voxel-conversion/KENNEY-RETRO-URBAN-KIT-LICENSE.txt';
+  conversionSourceScope: 'project' | 'host' = 'project';
+  conversionLicenseScope: 'project' | 'host' = 'project';
+  conversionMeshPrimitive = '';
   conversionResolution = [4, 3, 2];
   conversionCellSize = 1;
   conversionChunkSize = 16;
@@ -94,6 +150,11 @@ export class VoxelEditorComponent {
   conversionFitPolicy: 'contain' | 'cover' | 'stretch' = 'contain';
   conversionOriginPolicy: 'sourceOrigin' | 'targetMin' | 'centered' = 'targetMin';
   conversionMode: 'surface' | 'solid' = 'surface';
+  conversionTransform = '1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1';
+  conversionDefaultMaterial = '';
+  conversionTextureAssets = '[]';
+  conversionTextureBindings = '[]';
+  conversionMaxPreviewSamples = 256;
 
   constructor() {
     effect(() => {
@@ -105,6 +166,7 @@ export class VoxelEditorComponent {
   }
 
   setTab(tab: EditorTab): void {
+    if (tab !== 'edit') this.cancelBrushPreview();
     this.tab.set(tab);
   }
 
@@ -257,12 +319,92 @@ export class VoxelEditorComponent {
     });
   }
 
+  initializeTemplate(): void {
+    const slot = integer(this.templateMaterialSlot, 1);
+    this.action.emit({
+      kind: 'initializeTemplate',
+      assetId: this.templateAssetId.trim(),
+      cellSize: positive(this.newCellSize, 1),
+      chunkSize: integer(this.newChunkSize, 16),
+      materialPalette: [{
+        materialSlot: slot,
+        materialAssetId: this.newMaterialId,
+        displayName: this.newMaterialId.split('/').at(-1) ?? this.newMaterialId,
+      }],
+      request: {
+        template: 'house',
+        origin: tuple3i(this.templateOrigin),
+        materialSlot: slot,
+      },
+    });
+  }
+
+  importAssetFile(): void {
+    this.action.emit({
+      kind: 'importAssetFile',
+      sourcePath: this.importSourcePath.trim(),
+      targetAssetId: this.importTargetAssetId.trim(),
+    });
+  }
+
+  exportAssetFile(): void {
+    const asset = this.selectedAsset();
+    if (asset === null) return;
+    this.action.emit({
+      kind: 'exportAssetFile',
+      assetId: asset.inspection.assetId,
+      expectedAssetContentHash: asset.inspection.contentHash,
+      targetPath: this.exportTargetPath.trim(),
+      ...(this.exportExpectedSha256.trim() === ''
+        ? {}
+        : { expectedTargetSha256: this.exportExpectedSha256.trim() }),
+    });
+  }
+
+  materializeEnvironment(): void {
+    const slots = [
+      integer(this.environmentWallMaterial, 1),
+      integer(this.environmentFloorMaterial, 1),
+      integer(this.environmentAccentMaterial, 1),
+    ];
+    this.action.emit({
+      kind: 'materializeEnvironment',
+      sceneId: this.entryScene(),
+      preset: 'tinyEnclosed',
+      seed: integer(this.environmentSeed, 1),
+      voxelAssetId: this.environmentAssetId.trim(),
+      voxelInstanceId: this.environmentInstanceId.trim(),
+      voxelTranslation: tuple3(this.environmentTranslation),
+      playerEntityId: integer(this.environmentPlayerEntityId, 1),
+      exitEntityId: integer(this.environmentExitEntityId, 2),
+      wallMaterial: slots[0] ?? 1,
+      floorMaterial: slots[1] ?? 1,
+      accentMaterial: slots[2] ?? 1,
+      materialPalette: [
+        { materialSlot: slots[0] ?? 1, materialAssetId: this.environmentWallMaterialId.trim() },
+        { materialSlot: slots[1] ?? 1, materialAssetId: this.environmentFloorMaterialId.trim() },
+        { materialSlot: slots[2] ?? 1, materialAssetId: this.environmentAccentMaterialId.trim() },
+      ],
+    });
+  }
+
   previewBrush(): void {
-    if (this.validatedPick() !== null) this.brushPreview.set(true);
+    const pick = this.validatedPick();
+    const asset = this.selectedAsset();
+    if (pick === null || asset === null) return;
+    this.brushPreview.set(true);
+    this.previewChange.emit({
+      kind: 'brush',
+      worldPoint: pick.worldPoint,
+      cellSize: asset.inspection.cellSize,
+      radius: Math.max(0, integer(this.brushRadius, 0)),
+      mode: this.brushMode,
+    });
   }
 
   cancelBrushPreview(): void {
     this.brushPreview.set(false);
+    this.previewChange.emit(null);
   }
 
   applyBrush(): void {
@@ -279,6 +421,39 @@ export class VoxelEditorComponent {
       materialSlot: this.brushMode === 'paint' ? integer(this.brushMaterialSlot, 1) : null,
     });
     this.brushPreview.set(false);
+    this.previewChange.emit(null);
+  }
+
+  applyPrimitive(): void {
+    const asset = this.selectedAsset();
+    if (asset === null) return;
+    const start = tuple3i(this.primitiveStart);
+    const primitive = this.primitiveKind === 'block'
+      ? { kind: 'block' as const, address: start }
+      : this.primitiveKind === 'box'
+        ? {
+            kind: 'box' as const,
+            start,
+            end: tuple3i(this.primitiveEnd),
+            fill: this.primitiveFill,
+          }
+        : {
+            kind: 'line' as const,
+            start,
+            end: tuple3i(this.primitiveEnd),
+            radius: integer(this.primitiveRadius, 0),
+          };
+    this.action.emit({
+      kind: 'applyPrimitive',
+      assetId: asset.inspection.assetId,
+      expectedAssetContentHash: asset.inspection.contentHash,
+      request: {
+        primitive,
+        material: this.primitiveMaterialMode === 'clear'
+          ? { kind: 'clear' }
+          : { kind: 'set', materialSlot: integer(this.primitiveMaterialSlot, 1) },
+      },
+    });
   }
 
   history(kind: 'undo' | 'redo' | 'revert'): void {
@@ -293,6 +468,40 @@ export class VoxelEditorComponent {
     } else {
       this.action.emit({ ...common, kind });
     }
+  }
+
+  queryHistory(): void {
+    const asset = this.selectedAsset();
+    if (asset === null) return;
+    this.action.emit({
+      kind: 'queryHistory',
+      assetId: asset.inspection.assetId,
+      expectedAssetContentHash: asset.inspection.contentHash,
+      maxEntries: integer(this.historyMaxEntries, 128),
+      maxDeltasPerEntry: integer(this.historyMaxDeltas, 256),
+    });
+  }
+
+  prepareHistoryRevert(): void {
+    const asset = this.selectedAsset();
+    if (asset === null) return;
+    this.action.emit({
+      kind: 'prepareHistoryRevert',
+      assetId: asset.inspection.assetId,
+      expectedAssetContentHash: asset.inspection.contentHash,
+      targetCursor: integer(this.revertCursor, 0),
+      maxSamples: integer(this.historyMaxSamples, 256),
+    });
+  }
+
+  applyHistoryRevert(): void {
+    const preview = this.historyPreview();
+    if (preview !== null) this.action.emit({ kind: 'applyHistoryRevert', previewId: preview.previewId });
+  }
+
+  discardHistoryRevert(): void {
+    const preview = this.historyPreview();
+    if (preview !== null) this.action.emit({ kind: 'discardHistoryRevert', previewId: preview.previewId });
   }
 
   queryModel(): void {
@@ -340,21 +549,74 @@ export class VoxelEditorComponent {
     });
   }
 
-  editAnnotationLabel(): void {
+  editAnnotation(): void {
     const asset = this.selectedAsset();
     const layer = this.selectedLayer();
     if (asset === null || layer === null) return;
+    const start = tuple3i(this.annotationStart);
+    const bounds = { min: start, max: tuple3i(this.annotationEnd) };
+    const sparseRuns = [{ start, length: Math.max(1, integer(this.annotationRunLength, 1)) }];
+    let command: VoxelAnnotationEditCommand;
+    switch (this.annotationCommand) {
+      case 'upsertRegion':
+        command = {
+          kind: 'upsertRegion',
+          region: {
+            regionId: this.annotationRegionId,
+            label: this.annotationLabel,
+            kind: this.annotationKind,
+            tags: tags(this.annotationTags),
+            ...(this.annotationParentRegionId.trim() === ''
+              ? {}
+              : { parentRegionId: this.annotationParentRegionId.trim() }),
+            bounds,
+            selection: { sparseRuns },
+          },
+        };
+        break;
+      case 'removeRegion':
+        command = { kind: 'removeRegion', regionId: this.annotationRegionId };
+        break;
+      case 'addRuns':
+        command = { kind: 'addRuns', regionId: this.annotationRegionId, sparseRuns };
+        break;
+      case 'removeRuns':
+        command = { kind: 'removeRuns', regionId: this.annotationRegionId, sparseRuns };
+        break;
+      case 'replaceSelection':
+        command = {
+          kind: 'replaceSelection',
+          regionId: this.annotationRegionId,
+          selection: { sparseRuns },
+        };
+        break;
+      case 'setParent':
+        command = {
+          kind: 'setParent',
+          regionId: this.annotationRegionId,
+          parentRegionId: this.annotationParentRegionId.trim() || null,
+        };
+        break;
+      case 'setTags':
+        command = { kind: 'setTags', regionId: this.annotationRegionId, tags: tags(this.annotationTags) };
+        break;
+      case 'setLabel':
+        command = { kind: 'setLabel', regionId: this.annotationRegionId, label: this.annotationLabel };
+        break;
+      case 'setKind':
+        command = { kind: 'setKind', regionId: this.annotationRegionId, annotationKind: this.annotationKind };
+        break;
+      case 'setBounds':
+        command = { kind: 'setBounds', regionId: this.annotationRegionId, bounds };
+        break;
+    }
     this.action.emit({
       kind: 'editAnnotation',
       assetId: asset.inspection.assetId,
       layerId: layer.layerId,
       transaction: {
         expectedLayerHash: layer.canonicalLayerHash,
-        commands: [{
-          kind: 'setLabel',
-          regionId: this.annotationRegionId,
-          label: this.annotationLabel,
-        }],
+        commands: [command],
       },
     });
   }
@@ -363,14 +625,24 @@ export class VoxelEditorComponent {
     const asset = this.selectedAsset();
     const layer = this.selectedLayer();
     if (asset === null || layer === null) return;
+    const mode: VoxelAnnotationQueryMode = this.annotationQueryMode === 'cell'
+      ? { kind: 'cell', coordinate: tuple3i(this.annotationStart) }
+      : this.annotationQueryMode === 'bounds'
+        ? {
+            kind: 'bounds',
+            bounds: { min: tuple3i(this.annotationStart), max: tuple3i(this.annotationEnd) },
+          }
+        : this.annotationQueryMode === 'region'
+          ? { kind: 'region', regionId: this.annotationRegionId }
+          : { kind: 'layerSummary' };
     this.action.emit({
       kind: 'queryAnnotation',
       assetId: asset.inspection.assetId,
       layerId: layer.layerId,
       query: {
         expectedLayerHash: layer.canonicalLayerHash,
-        mode: { kind: 'layerSummary' },
-        maxResults: 256,
+        mode,
+        maxResults: Math.max(1, integer(this.annotationMaxResults, 256)),
       },
     });
   }
@@ -393,14 +665,34 @@ export class VoxelEditorComponent {
       materialAssetId: this.newMaterialId,
       displayName: this.newMaterialId,
     }];
+    let transform: readonly number[];
+    let textureAssets: readonly TextureSampleAsset[];
+    let textureBindings: readonly TextureMaterialBinding[];
+    try {
+      transform = numericList(this.conversionTransform, 16, 'Affine transform');
+      textureAssets = parseTextureAssets(this.conversionTextureAssets);
+      textureBindings = parseTextureBindings(this.conversionTextureBindings);
+      this.formError.set(null);
+    } catch (error) {
+      this.formError.set(error instanceof Error ? error.message : 'Conversion settings are malformed.');
+      return;
+    }
     const action: VoxelEditorAction = {
       kind: 'prepareConversion',
       sourceAssetId: this.conversionSourceAsset,
-      sourcePath: this.conversionSourcePath,
+      source: { scope: this.conversionSourceScope, path: this.conversionSourcePath.trim() },
       targetAssetId: this.conversionTargetAsset,
       ...(this.conversionLicensePath.trim() === ''
         ? {}
-        : { licensePath: this.conversionLicensePath.trim() }),
+        : {
+            license: {
+              scope: this.conversionLicenseScope,
+              path: this.conversionLicensePath.trim(),
+            },
+          }),
+      ...(this.conversionMeshPrimitive.trim() === ''
+        ? {}
+        : { meshPrimitive: this.conversionMeshPrimitive.trim() }),
       settings: {
         conversion: {
           resolution: tuple3i(this.conversionResolution),
@@ -422,15 +714,16 @@ export class VoxelEditorComponent {
               * integer(this.conversionResolution[2], 1),
           ),
         },
-        transform: [
-          1, 0, 0, 0,
-          0, 1, 0, 0,
-          0, 0, 1, 0,
-          0, 0, 0, 1,
-        ],
-        materialPolicy: { textureAssets: [], textureBindings: [] },
+        transform,
+        materialPolicy: {
+          textureAssets,
+          textureBindings,
+          ...(this.conversionDefaultMaterial.trim() === ''
+            ? {}
+            : { defaultVoxelMaterial: integer(Number(this.conversionDefaultMaterial), 1) }),
+        },
       },
-      maxPreviewSamples: 256,
+      maxPreviewSamples: Math.max(1, integer(this.conversionMaxPreviewSamples, 256)),
     };
     this.action.emit(action);
   }
@@ -521,4 +814,117 @@ function positive(value: number | undefined, fallback: number): number {
 
 function tags(value: string): readonly string[] {
   return [...new Set(value.split(',').map((tag) => tag.trim()).filter((tag) => tag !== ''))];
+}
+
+function numericList(value: string, length: number, label: string): readonly number[] {
+  const entries = value.split(',').map((entry) => Number(entry.trim()));
+  if (entries.length !== length || entries.some((entry) => !Number.isFinite(entry))) {
+    throw new TypeError(`${label} must contain exactly ${String(length)} finite comma-separated numbers.`);
+  }
+  return entries;
+}
+
+function parseTextureAssets(value: string): readonly TextureSampleAsset[] {
+  return jsonArray(value, 'Texture assets').map((entry, index) => {
+    const item = closed(entry, `Texture assets[${String(index)}]`, ['texture', 'texelMaterials']);
+    const texels = unknownArray(item['texelMaterials'], 'texelMaterials').map(numberValue);
+    return { texture: textureSource(item['texture']), texelMaterials: texels };
+  });
+}
+
+function parseTextureBindings(value: string): readonly TextureMaterialBinding[] {
+  return jsonArray(value, 'Texture bindings').map((entry, index) => {
+    const label = `Texture bindings[${String(index)}]`;
+    const item = closed(entry, label, [
+      'sourceMaterialSlot', 'texture', 'uvAttribute', 'sampleUv', 'samplingPolicy',
+      'wrapPolicy', 'materialMode',
+    ]);
+    const uv = closed(item['uvAttribute'], `${label}.uvAttribute`, ['attributeName', 'sourceHash']);
+    const sample = unknownArray(item['sampleUv'], `${label}.sampleUv`).map(numberValue);
+    if (sample.length !== 2 || sample[0] === undefined || sample[1] === undefined) {
+      throw new TypeError(`${label}.sampleUv must have two numbers.`);
+    }
+    return {
+      sourceMaterialSlot: numberValue(item['sourceMaterialSlot']),
+      texture: textureSource(item['texture']),
+      uvAttribute: {
+        attributeName: stringValue(uv['attributeName']),
+        sourceHash: stringValue(uv['sourceHash']),
+      },
+      sampleUv: [sample[0], sample[1]],
+      samplingPolicy: literal(item['samplingPolicy'], 'nearest_texel'),
+      wrapPolicy: literal(item['wrapPolicy'], 'clamp_to_edge'),
+      materialMode: literal(item['materialMode'], 'sample_palette_index'),
+    };
+  });
+}
+
+function textureSource(value: unknown): TextureSampleAsset['texture'] {
+  const item = closed(value, 'Texture source', [
+    'textureAssetId', 'assetVersion', 'contentHash', 'width', 'height',
+    'colorSpace', 'channelLayout',
+  ]);
+  const colorSpace = item['colorSpace'];
+  if (colorSpace !== 'linear' && colorSpace !== 'srgb') {
+    throw new TypeError('Texture source colorSpace must be linear or srgb.');
+  }
+  return {
+    textureAssetId: stringValue(item['textureAssetId']),
+    assetVersion: numberValue(item['assetVersion']),
+    contentHash: stringValue(item['contentHash']),
+    width: numberValue(item['width']),
+    height: numberValue(item['height']),
+    colorSpace,
+    channelLayout: literal(item['channelLayout'], 'palette_index_u16'),
+  };
+}
+
+function jsonArray(value: string, label: string): readonly unknown[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    throw new TypeError(`${label} must be valid JSON.`);
+  }
+  return unknownArray(parsed, label);
+}
+
+function unknownArray(value: unknown, label: string): readonly unknown[] {
+  if (!Array.isArray(value)) throw new TypeError(`${label} must be an array.`);
+  return value;
+}
+
+function closed(
+  value: unknown,
+  label: string,
+  fields: readonly string[],
+): Readonly<Record<string, unknown>> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new TypeError(`${label} must be an object.`);
+  }
+  const record = value as Readonly<Record<string, unknown>>;
+  if (fields.some((field) => !Object.hasOwn(record, field))) {
+    throw new TypeError(`${label} is missing a required field.`);
+  }
+  if (Object.keys(record).some((field) => !fields.includes(field))) {
+    throw new TypeError(`${label} contains an unknown field.`);
+  }
+  return record;
+}
+
+function stringValue(value: unknown): string {
+  if (typeof value !== 'string') throw new TypeError('Texture field must be text.');
+  return value;
+}
+
+function numberValue(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new TypeError('Texture field must be a finite number.');
+  }
+  return value;
+}
+
+function literal<Value extends string>(value: unknown, expected: Value): Value {
+  if (value !== expected) throw new TypeError(`Texture field must equal ${expected}.`);
+  return expected;
 }

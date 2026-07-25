@@ -175,13 +175,90 @@ async function verifyVoxelPersistenceAcrossProcesses(binary, demoRoot) {
       assert.equal(edited.history.cursor, 1);
       assert.equal(edited.history.undoDepth, 1);
 
-      const queried = await client.queryVoxelModel({
+      const primitive = await client.applyVoxelPrimitive({
         expectedProjectHash: brushed.project.identity.projectHash,
         assetId: edited.inspection.assetId,
         expectedAssetContentHash: edited.inspection.contentHash,
+        request: {
+          primitive: { kind: 'block', address: [0, 0, 0] },
+          material: { kind: 'set', materialSlot: 7 },
+        },
+      });
+      assert.equal(primitive.receipt.kind, 'voxelPrimitiveApplied');
+      const primitiveAsset = voxelAsset(primitive.project, edited.inspection.assetId);
+      const history = await client.queryVoxelHistory({
+        expectedProjectHash: primitive.project.identity.projectHash,
+        assetId: primitiveAsset.inspection.assetId,
+        expectedAssetContentHash: primitiveAsset.inspection.contentHash,
+        maxEntries: 32,
+        maxDeltasPerEntry: 32,
+      });
+      assert.equal(history.readout.kind, 'history');
+      assert.equal(history.readout.entryCount, 2);
+
+      const historyPreview = await client.prepareVoxelHistoryRevert({
+        expectedProjectHash: primitive.project.identity.projectHash,
+        assetId: primitiveAsset.inspection.assetId,
+        expectedAssetContentHash: primitiveAsset.inspection.contentHash,
+        targetCursor: 1,
+        maxSamples: 32,
+      });
+      assert.equal(historyPreview.preview.cursorAfter, 1);
+      await client.discardVoxelHistoryRevert({ previewId: historyPreview.preview.previewId });
+      const appliedPreview = await client.prepareVoxelHistoryRevert({
+        expectedProjectHash: primitive.project.identity.projectHash,
+        assetId: primitiveAsset.inspection.assetId,
+        expectedAssetContentHash: primitiveAsset.inspection.contentHash,
+        targetCursor: 1,
+        maxSamples: 32,
+      });
+      const historyApplied = await client.applyVoxelHistoryRevert({
+        expectedProjectHash: primitive.project.identity.projectHash,
+        previewId: appliedPreview.preview.previewId,
+      });
+      assert.equal(historyApplied.receipt.kind, 'voxelHistoryMoved');
+      let currentProject = historyApplied.project;
+
+      const templated = await client.initializeVoxelTemplate({
+        expectedProjectHash: currentProject.identity.projectHash,
+        assetId: 'voxel-volume/integration-house',
+        cellSize: 1,
+        chunkSize: 16,
+        materialPalette: [{
+          materialSlot: 7,
+          materialAssetId: 'material/wall-lines',
+          displayName: 'Wall',
+        }],
+        request: { template: 'house', origin: [0, 0, 0], materialSlot: 7 },
+      });
+      assert.equal(templated.receipt.kind, 'voxelTemplateInitialized');
+      currentProject = templated.project;
+
+      const exportPath = join(root, 'integration-export.voxel.json');
+      const currentEditedAsset = voxelAsset(currentProject, initial.inspection.assetId);
+      const exported = await client.exportVoxelAssetFile({
+        expectedProjectHash: currentProject.identity.projectHash,
+        assetId: currentEditedAsset.inspection.assetId,
+        expectedAssetContentHash: currentEditedAsset.inspection.contentHash,
+        targetPath: exportPath,
+      });
+      assert.equal(exported.assetId, initial.inspection.assetId);
+      const imported = await client.importVoxelAssetFile({
+        expectedProjectHash: currentProject.identity.projectHash,
+        sourcePath: exportPath,
+        targetAssetId: 'voxel-volume/integration-import',
+      });
+      assert.equal(imported.receipt.kind, 'voxelAssetFileImported');
+      currentProject = imported.project;
+      const currentAsset = voxelAsset(currentProject, initial.inspection.assetId);
+
+      const queried = await client.queryVoxelModel({
+        expectedProjectHash: currentProject.identity.projectHash,
+        assetId: currentAsset.inspection.assetId,
+        expectedAssetContentHash: currentAsset.inspection.contentHash,
         window: {
-          expectedContentHash: edited.inspection.contentHash,
-          bounds: { min: edited.inspection.boundsMin, max: edited.inspection.boundsMax },
+          expectedContentHash: currentAsset.inspection.contentHash,
+          bounds: { min: currentAsset.inspection.boundsMin, max: currentAsset.inspection.boundsMax },
           includeEmpty: false,
           materialFilter: [],
           maxSamples: 32,
@@ -190,13 +267,13 @@ async function verifyVoxelPersistenceAcrossProcesses(binary, demoRoot) {
       assert.equal(queried.readout.kind, 'model');
 
       const annotated = await client.createVoxelAnnotationLayer({
-        expectedProjectHash: brushed.project.identity.projectHash,
-        assetId: edited.inspection.assetId,
+        expectedProjectHash: currentProject.identity.projectHash,
+        assetId: currentAsset.inspection.assetId,
         draft: {
           layerId: 'voxel-annotation/integration-semantics',
-          targetVoxelAssetId: edited.inspection.assetId,
-          targetVoxelDataHash: edited.inspection.voxelDataHash,
-          targetBounds: { min: edited.inspection.boundsMin, max: edited.inspection.boundsMax },
+          targetVoxelAssetId: currentAsset.inspection.assetId,
+          targetVoxelDataHash: currentAsset.inspection.voxelDataHash,
+          targetBounds: { min: currentAsset.inspection.boundsMin, max: currentAsset.inspection.boundsMax },
           regions: [{
             regionId: 'region/integration-cover',
             label: 'Integration cover',
@@ -211,12 +288,12 @@ async function verifyVoxelPersistenceAcrossProcesses(binary, demoRoot) {
       assert.equal(annotated.receipt.kind, 'voxelAnnotationCreated');
       const annotation = voxelAsset(
         annotated.project,
-        edited.inspection.assetId,
+        currentAsset.inspection.assetId,
       ).annotations[0];
       assert.ok(annotation !== undefined);
       const annotationQuery = await client.queryVoxelAnnotation({
         expectedProjectHash: annotated.project.identity.projectHash,
-        assetId: edited.inspection.assetId,
+        assetId: currentAsset.inspection.assetId,
         layerId: annotation.layerId,
         query: {
           expectedLayerHash: annotation.canonicalLayerHash,
@@ -227,7 +304,7 @@ async function verifyVoxelPersistenceAcrossProcesses(binary, demoRoot) {
       assert.equal(annotationQuery.readout.kind, 'annotationQuery');
       const annotationExport = await client.exportVoxelAnnotation({
         expectedProjectHash: annotated.project.identity.projectHash,
-        assetId: edited.inspection.assetId,
+        assetId: currentAsset.inspection.assetId,
         layerId: annotation.layerId,
         expectedLayerHash: annotation.canonicalLayerHash,
       });
@@ -236,9 +313,13 @@ async function verifyVoxelPersistenceAcrossProcesses(binary, demoRoot) {
       const prepared = await client.prepareVoxelConversion({
         expectedProjectHash: annotated.project.identity.projectHash,
         sourceAssetId: 'mesh/kenney-wall-a',
-        sourcePath: 'fixtures/voxel-conversion/kenney-wall-a.glb',
+        source: { scope: 'project', path: 'fixtures/voxel-conversion/kenney-wall-a.glb' },
         targetAssetId: 'voxel-volume/integration-converted',
-        licensePath: 'fixtures/voxel-conversion/KENNEY-RETRO-URBAN-KIT-LICENSE.txt',
+        license: {
+          scope: 'project',
+          path: 'fixtures/voxel-conversion/KENNEY-RETRO-URBAN-KIT-LICENSE.txt',
+        },
+        meshPrimitive: 'group/0',
         settings: conversionSettings(),
         maxPreviewSamples: 32,
       });
@@ -266,14 +347,35 @@ async function verifyVoxelPersistenceAcrossProcesses(binary, demoRoot) {
         expectedOutputHash: prepared.preview.outputHash,
       });
       assert.equal(applied.receipt.kind, 'voxelConversionApplied');
+      const environment = await client.materializeEnvironment({
+        expectedProjectHash: applied.project.identity.projectHash,
+        expectedSceneRevision: applied.project.identity.sceneRevision,
+        sceneId: 'scene/converted-wall',
+        preset: 'tinyEnclosed',
+        seed: 42,
+        voxelAssetId: 'voxel-volume/integration-environment',
+        voxelInstanceId: 'integration-environment',
+        voxelTranslation: [0, 0, 12],
+        playerEntityId: 1,
+        exitEntityId: 3,
+        wallMaterial: 7,
+        floorMaterial: 8,
+        accentMaterial: 9,
+        materialPalette: [
+          { materialSlot: 7, materialAssetId: 'material/wall-lines', displayName: 'Wall' },
+          { materialSlot: 8, materialAssetId: 'material/concrete', displayName: 'Floor' },
+          { materialSlot: 9, materialAssetId: 'material/wall-lines', displayName: 'Accent' },
+        ],
+      });
+      assert.equal(environment.receipt.kind, 'environmentMaterialized');
       persisted = {
-        projectHash: applied.project.identity.projectHash,
+        projectHash: environment.project.identity.projectHash,
         editedContentHash: voxelAsset(
-          applied.project,
+          environment.project,
           initial.inspection.assetId,
         ).inspection.contentHash,
         convertedContentHash: voxelAsset(
-          applied.project,
+          environment.project,
           'voxel-volume/integration-converted',
         ).inspection.contentHash,
       };
@@ -296,6 +398,9 @@ async function verifyVoxelPersistenceAcrossProcesses(binary, demoRoot) {
         voxelAsset(reopened, 'voxel-volume/integration-converted').inspection.contentHash,
         persisted.convertedContentHash,
       );
+      assert.ok(reopened.voxelAuthoring.instances.some(
+        (entry) => entry.instance.instanceId === 'integration-environment',
+      ));
 
       const bytesBeforeStale = await readFile(
         join(root, 'content/projects/converted-wall.project.json'),
@@ -352,11 +457,9 @@ function conversionSettings() {
       mode: 'surface',
       materialPalette: [
         { materialSlot: 7, materialAssetId: 'material/wall-lines', displayName: 'Wall lines' },
-        { materialSlot: 8, materialAssetId: 'material/concrete', displayName: 'Concrete' },
       ],
       materialMap: [
         { sourceMaterialSlot: 0, sourceMaterialName: 'wall_lines', voxelMaterialSlot: 7 },
-        { sourceMaterialSlot: 1, sourceMaterialName: 'concrete', voxelMaterialSlot: 8 },
       ],
       maxOutputVoxels: 64,
     },

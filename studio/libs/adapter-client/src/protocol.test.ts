@@ -172,6 +172,90 @@ test('voxel response families are closed and named authoring calls preserve guar
   assert.equal(applied.receipt.kind, 'voxelBrushApplied');
 });
 
+test('protocol 4 closes history, file, and texture-policy response families', () => {
+  const history = decodeStudioAdapterResponse({
+    type: 'voxelRead',
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+    requestId: 'history-1',
+    readout: {
+      kind: 'history',
+      assetId: 'voxel-volume/wall',
+      cursor: 1,
+      undoDepth: 1,
+      redoDepth: 0,
+      entryCount: 1,
+      entriesTruncated: false,
+      entries: [{
+        transactionId: 1,
+        parentTransactionId: null,
+        beforeHash: 'before',
+        afterHash: 'after',
+        changedVoxels: 1,
+        deltasTruncated: false,
+        deltas: [{ address: [0, 0, 0], beforeMaterial: 7, afterMaterial: null }],
+      }],
+    },
+  });
+  assert.equal(history.type, 'voxelRead');
+
+  const prepared = decodeStudioAdapterResponse({
+    type: 'voxelHistoryRevertPrepared',
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+    requestId: 'history-2',
+    preview: {
+      previewId: 'history-preview-1',
+      assetId: 'voxel-volume/wall',
+      expectedProjectHash: 'project',
+      expectedAssetContentHash: 'asset',
+      cursorBefore: 1,
+      cursorAfter: 0,
+      undoDepthAfter: 0,
+      redoDepthAfter: 1,
+      revisionBefore: 1,
+      revisionAfter: 2,
+      changedVoxels: 1,
+      bounds: { min: [0, 0, 0], max: [0, 0, 0] },
+      materialDeltas: [{ beforeMaterial: 7, afterMaterial: null, changedVoxels: 1 }],
+      samples: [{ address: [0, 0, 0], beforeMaterial: 7, afterMaterial: null }],
+      samplesTruncated: false,
+      includedTransactionIds: [1],
+    },
+  });
+  assert.equal(prepared.type, 'voxelHistoryRevertPrepared');
+
+  assert.equal(decodeStudioAdapterResponse({
+    type: 'voxelAssetFileExported',
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+    requestId: 'file-1',
+    assetId: 'voxel-volume/wall',
+    targetPath: '/tmp/wall.voxel.json',
+    byteCount: 42,
+    sha256: 'sha256:file',
+    replacedExisting: false,
+  }).type, 'voxelAssetFileExported');
+
+  const conversion = conversionPrepared('conversion-1');
+  const texture = conversion.plan.settings.materialPolicy.textureAssets[0];
+  assert.ok(texture !== undefined);
+  const malformedConversion = {
+    ...conversion,
+    plan: {
+      ...conversion.plan,
+      settings: {
+        ...conversion.plan.settings,
+        materialPolicy: {
+          ...conversion.plan.settings.materialPolicy,
+          textureAssets: [{ ...texture, ambientBrowserTexture: true }],
+        },
+      },
+    },
+  };
+  assert.throws(
+    () => decodeStudioAdapterResponse(malformedConversion),
+    /ambientBrowserTexture.*unknown/,
+  );
+});
+
 class RecordingTransport implements StudioAdapterTransport {
   readonly requests: StudioAdapterRequest[] = [];
   readonly #respond: (request: StudioAdapterRequest) => unknown;
@@ -329,5 +413,72 @@ interface ProjectOpenedFixture {
       retainedVoxelChunks: number;
       diagnostics: unknown[];
     };
+  };
+}
+
+function conversionPrepared(requestId: string) {
+  const texture = {
+    textureAssetId: 'texture/palette',
+    assetVersion: 1,
+    contentHash: 'sha256:texture',
+    width: 1,
+    height: 1,
+    colorSpace: 'linear',
+    channelLayout: 'palette_index_u16',
+  };
+  return {
+    type: 'voxelConversionPrepared',
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+    requestId,
+    plan: {
+      planId: 'plan-1',
+      source: { assetId: 'mesh/wall', assetVersion: 1, sourceSha256: 'sha256:source' },
+      targetAssetId: 'voxel-volume/wall',
+      sourcePath: '/tmp/wall.glb',
+      settings: {
+        conversion: {
+          resolution: [1, 1, 1],
+          cellSize: 1,
+          chunkSize: 16,
+          origin: [0, 0, 0],
+          fitPolicy: 'contain',
+          originPolicy: 'targetMin',
+          mode: 'surface',
+          materialPalette: [],
+          materialMap: [],
+          maxOutputVoxels: 1,
+        },
+        transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+        materialPolicy: {
+          textureAssets: [{ texture, texelMaterials: [7] }],
+          textureBindings: [{
+            sourceMaterialSlot: 0,
+            texture,
+            uvAttribute: { attributeName: 'TEXCOORD_0', sourceHash: 'sha256:uv' },
+            sampleUv: [0.5, 0.5],
+            samplingPolicy: 'nearest_texel',
+            wrapPolicy: 'clamp_to_edge',
+            materialMode: 'sample_palette_index',
+          }],
+          defaultVoxelMaterial: 7,
+        },
+      },
+      planner: 'rusty-engine.mesh-to-voxel.v1',
+      expectedSourceSha256: 'sha256:source',
+      settingsSha256: 'sha256:settings',
+      expectedOutputContentHash: 'sha256:output',
+      planHash: 'sha256:plan',
+      estimatedOutputVoxels: 1,
+      estimatedBounds: { min: [0, 0, 0], max: [0, 0, 0] },
+    },
+    preview: {
+      planId: 'plan-1',
+      planHash: 'sha256:plan',
+      outputHash: 'sha256:output',
+      outputVoxelCount: 1,
+      outputBounds: { min: [0, 0, 0], max: [0, 0, 0] },
+      sampleVoxels: [{ coordinate: [0, 0, 0], materialSlot: 7 }],
+      samplesTruncated: false,
+    },
   };
 }

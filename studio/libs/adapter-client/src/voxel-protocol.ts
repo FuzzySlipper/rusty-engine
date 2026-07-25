@@ -136,6 +136,33 @@ export interface VoxelAuthoringReadout {
 }
 
 export type VoxelBrushMode = 'paint' | 'erase';
+export type VoxelBoxFill = 'filled' | 'shell' | 'edges';
+export type VoxelPrimitive =
+  | { readonly kind: 'block'; readonly address: Vector3i }
+  | {
+    readonly kind: 'box';
+    readonly start: Vector3i;
+    readonly end: Vector3i;
+    readonly fill: VoxelBoxFill;
+  }
+  | {
+    readonly kind: 'line';
+    readonly start: Vector3i;
+    readonly end: Vector3i;
+    readonly radius: number;
+  };
+export type VoxelPrimitiveMaterial =
+  | { readonly kind: 'set'; readonly materialSlot: number }
+  | { readonly kind: 'clear' };
+export interface VoxelPrimitiveRequest {
+  readonly primitive: VoxelPrimitive;
+  readonly material: VoxelPrimitiveMaterial;
+}
+export interface VoxelTemplateRequest {
+  readonly template: 'house';
+  readonly origin: Vector3i;
+  readonly materialSlot: number;
+}
 export type VoxelPickFace =
   | 'negativeX'
   | 'positiveX'
@@ -259,6 +286,56 @@ export interface VoxelModelWindowReadout {
   readonly samplesTruncated: boolean;
 }
 
+export interface VoxelEditDelta {
+  readonly address: Vector3i;
+  readonly beforeMaterial: number | null;
+  readonly afterMaterial: number | null;
+}
+
+export interface VoxelHistoryEntryReadout {
+  readonly transactionId: number;
+  readonly parentTransactionId: number | null;
+  readonly beforeHash: string;
+  readonly afterHash: string;
+  readonly changedVoxels: number;
+  readonly deltasTruncated: boolean;
+  readonly deltas: readonly VoxelEditDelta[];
+}
+
+export interface VoxelHistoryQueryReadout {
+  readonly kind: 'history';
+  readonly assetId: string;
+  readonly cursor: number;
+  readonly undoDepth: number;
+  readonly redoDepth: number;
+  readonly entryCount: number;
+  readonly entriesTruncated: boolean;
+  readonly entries: readonly VoxelHistoryEntryReadout[];
+}
+
+export interface VoxelHistoryRevertPreview {
+  readonly previewId: string;
+  readonly assetId: string;
+  readonly expectedProjectHash: string;
+  readonly expectedAssetContentHash: string;
+  readonly cursorBefore: number;
+  readonly cursorAfter: number;
+  readonly undoDepthAfter: number;
+  readonly redoDepthAfter: number;
+  readonly revisionBefore: number;
+  readonly revisionAfter: number;
+  readonly changedVoxels: number;
+  readonly bounds: VoxelBounds | null;
+  readonly materialDeltas: readonly {
+    readonly beforeMaterial: number | null;
+    readonly afterMaterial: number | null;
+    readonly changedVoxels: number;
+  }[];
+  readonly samples: readonly VoxelEditDelta[];
+  readonly samplesTruncated: boolean;
+  readonly includedTransactionIds: readonly number[];
+}
+
 export type VoxelReadout =
   | {
     readonly kind: 'model';
@@ -280,7 +357,38 @@ export type VoxelReadout =
     readonly canonicalJson: string;
     readonly canonicalLayerHash: string;
     readonly membershipDataHash: string;
-  };
+  }
+  | VoxelHistoryQueryReadout;
+
+export interface TextureSourceRef {
+  readonly textureAssetId: string;
+  readonly assetVersion: number;
+  readonly contentHash: string;
+  readonly width: number;
+  readonly height: number;
+  readonly colorSpace: 'linear' | 'srgb';
+  readonly channelLayout: 'palette_index_u16';
+}
+
+export interface TextureSampleAsset {
+  readonly texture: TextureSourceRef;
+  readonly texelMaterials: readonly number[];
+}
+
+export interface TextureUvAttributeRef {
+  readonly attributeName: string;
+  readonly sourceHash: string;
+}
+
+export interface TextureMaterialBinding {
+  readonly sourceMaterialSlot: number;
+  readonly texture: TextureSourceRef;
+  readonly uvAttribute: TextureUvAttributeRef;
+  readonly sampleUv: readonly [number, number];
+  readonly samplingPolicy: 'nearest_texel';
+  readonly wrapPolicy: 'clamp_to_edge';
+  readonly materialMode: 'sample_palette_index';
+}
 
 export interface VoxelConversionSettings {
   readonly conversion: {
@@ -301,8 +409,8 @@ export interface VoxelConversionSettings {
   };
   readonly transform: readonly number[];
   readonly materialPolicy: {
-    readonly textureAssets: readonly Readonly<Record<string, unknown>>[];
-    readonly textureBindings: readonly Readonly<Record<string, unknown>>[];
+    readonly textureAssets: readonly TextureSampleAsset[];
+    readonly textureBindings: readonly TextureMaterialBinding[];
     readonly defaultVoxelMaterial?: number;
   };
 }
@@ -313,6 +421,7 @@ export interface VoxelConversionPlan {
     readonly assetId: string;
     readonly assetVersion: number;
     readonly sourceSha256: string;
+    readonly meshPrimitive?: string;
   };
   readonly targetAssetId: string;
   readonly sourcePath: string;
@@ -349,6 +458,10 @@ export type ProjectMutationReceipt =
   | { readonly kind: 'voxelInstanceRemoved'; readonly sceneId: string; readonly instanceId: string }
   | { readonly kind: 'voxelPaletteReplaced'; readonly assetId: string; readonly contentHashBefore: string; readonly contentHashAfter: string; readonly voxelDataHash: string; readonly materialCountBefore: number; readonly materialCountAfter: number }
   | { readonly kind: 'voxelBrushApplied'; readonly assetId: string; readonly contentHashBefore: string; readonly contentHashAfter: string; readonly changedVoxels: number; readonly sourceRevision: number; readonly historyCursor: number; readonly undoDepth: number; readonly redoDepth: number }
+  | { readonly kind: 'voxelPrimitiveApplied'; readonly assetId: string; readonly primitiveKind: string; readonly contentHashBefore: string; readonly contentHashAfter: string; readonly changedVoxels: number; readonly sourceRevision: number; readonly historyCursor: number; readonly undoDepth: number; readonly redoDepth: number }
+  | { readonly kind: 'voxelTemplateInitialized'; readonly assetId: string; readonly templateKind: string; readonly contentHash: string; readonly changedVoxels: number; readonly historyCursor: number }
+  | { readonly kind: 'voxelAssetFileImported'; readonly sourcePath: string; readonly sourceSha256: string; readonly sourceByteCount: number; readonly sourceAssetId: string; readonly targetAssetId: string; readonly contentHash: string }
+  | { readonly kind: 'environmentMaterialized'; readonly sceneId: string; readonly preset: string; readonly seed: number; readonly assetId: string; readonly instanceId: string; readonly contentHash: string; readonly voxelCount: number; readonly playerEntityId: number; readonly playerTranslation: Vector3; readonly exitEntityId: number; readonly exitTranslation: Vector3; readonly generatorId: string; readonly generatorVersion: number; readonly settingsSha256: string; readonly voxelDataSha256: string }
   | { readonly kind: 'voxelHistoryMoved'; readonly assetId: string; readonly contentHashBefore: string; readonly contentHashAfter: string; readonly cursorBefore: number; readonly cursorAfter: number; readonly undoDepth: number; readonly redoDepth: number; readonly changedVoxels: number }
   | { readonly kind: 'voxelAnnotationCreated'; readonly assetId: string; readonly layerId: string; readonly layerHash: string }
   | { readonly kind: 'voxelAnnotationEdited'; readonly assetId: string; readonly layerId: string; readonly layerHashBefore: string; readonly layerHashAfter: string; readonly affectedRegionIds: readonly string[] }
@@ -416,6 +529,51 @@ export function validateProjectMutationReceipt(input: unknown, path: string): vo
       ]);
       strings(entry, path, ['assetId', 'contentHashBefore', 'contentHashAfter']);
       numbers(entry, path, ['changedVoxels', 'sourceRevision', 'historyCursor', 'undoDepth', 'redoDepth']);
+      return;
+    }
+    case 'voxelPrimitiveApplied': {
+      const entry = receipt([
+        'assetId', 'primitiveKind', 'contentHashBefore', 'contentHashAfter', 'changedVoxels',
+        'sourceRevision', 'historyCursor', 'undoDepth', 'redoDepth',
+      ]);
+      strings(entry, path, ['assetId', 'primitiveKind', 'contentHashBefore', 'contentHashAfter']);
+      numbers(entry, path, ['changedVoxels', 'sourceRevision', 'historyCursor', 'undoDepth', 'redoDepth']);
+      return;
+    }
+    case 'voxelTemplateInitialized': {
+      const entry = receipt([
+        'assetId', 'templateKind', 'contentHash', 'changedVoxels', 'historyCursor',
+      ]);
+      strings(entry, path, ['assetId', 'templateKind', 'contentHash']);
+      numbers(entry, path, ['changedVoxels', 'historyCursor']);
+      return;
+    }
+    case 'voxelAssetFileImported': {
+      const entry = receipt([
+        'sourcePath', 'sourceSha256', 'sourceByteCount', 'sourceAssetId',
+        'targetAssetId', 'contentHash',
+      ]);
+      strings(entry, path, [
+        'sourcePath', 'sourceSha256', 'sourceAssetId', 'targetAssetId', 'contentHash',
+      ]);
+      number(entry['sourceByteCount'], `${path}.sourceByteCount`);
+      return;
+    }
+    case 'environmentMaterialized': {
+      const entry = receipt([
+        'sceneId', 'preset', 'seed', 'assetId', 'instanceId', 'contentHash', 'voxelCount',
+        'playerEntityId', 'playerTranslation', 'exitEntityId', 'exitTranslation',
+        'generatorId', 'generatorVersion', 'settingsSha256', 'voxelDataSha256',
+      ]);
+      strings(entry, path, [
+        'sceneId', 'preset', 'assetId', 'instanceId', 'contentHash', 'generatorId',
+        'settingsSha256', 'voxelDataSha256',
+      ]);
+      numbers(entry, path, [
+        'seed', 'voxelCount', 'playerEntityId', 'exitEntityId', 'generatorVersion',
+      ]);
+      vector3(entry['playerTranslation'], `${path}.playerTranslation`);
+      vector3(entry['exitTranslation'], `${path}.exitTranslation`);
       return;
     }
     case 'voxelHistoryMoved': {
@@ -499,6 +657,18 @@ export function validateVoxelReadout(input: unknown, path: string): void {
       strings(entry, path, ['layerId', 'canonicalJson', 'canonicalLayerHash', 'membershipDataHash']);
       return;
     }
+    case 'history': {
+      const entry = closedObject(input, path, [
+        'kind', 'assetId', 'cursor', 'undoDepth', 'redoDepth', 'entryCount',
+        'entriesTruncated', 'entries',
+      ]);
+      string(entry['assetId'], `${path}.assetId`);
+      numbers(entry, path, ['cursor', 'undoDepth', 'redoDepth', 'entryCount']);
+      boolean(entry['entriesTruncated'], `${path}.entriesTruncated`);
+      array(entry['entries'], `${path}.entries`).forEach((historyEntry, index) =>
+        validateHistoryEntry(historyEntry, `${path}.entries[${String(index)}]`));
+      return;
+    }
     default:
       throw new TypeError(`${path}.kind is not a closed voxel readout`);
   }
@@ -517,8 +687,11 @@ export function validateVoxelConversionPlan(input: unknown, path: string): void 
   if (value['licensePath'] !== undefined) string(value['licensePath'], `${path}.licensePath`);
   const source = closedObject(value['source'], `${path}.source`, [
     'assetId', 'assetVersion', 'sourceSha256',
-  ]);
+  ], ['meshPrimitive']);
   strings(source, `${path}.source`, ['assetId', 'sourceSha256']);
+  if (source['meshPrimitive'] !== undefined) {
+    string(source['meshPrimitive'], `${path}.source.meshPrimitive`);
+  }
   number(source['assetVersion'], `${path}.source.assetVersion`);
   number(value['estimatedOutputVoxels'], `${path}.estimatedOutputVoxels`);
   validateConversionSettings(value['settings'], `${path}.settings`);
@@ -542,6 +715,37 @@ export function validateVoxelConversionPreview(input: unknown, path: string): vo
     number(item['materialSlot'], `${itemPath}.materialSlot`);
   });
   boolean(value['samplesTruncated'], `${path}.samplesTruncated`);
+}
+
+export function validateVoxelHistoryRevertPreview(input: unknown, path: string): void {
+  const value = closedObject(input, path, [
+    'previewId', 'assetId', 'expectedProjectHash', 'expectedAssetContentHash',
+    'cursorBefore', 'cursorAfter', 'undoDepthAfter', 'redoDepthAfter',
+    'revisionBefore', 'revisionAfter', 'changedVoxels', 'bounds', 'materialDeltas',
+    'samples', 'samplesTruncated', 'includedTransactionIds',
+  ]);
+  strings(value, path, [
+    'previewId', 'assetId', 'expectedProjectHash', 'expectedAssetContentHash',
+  ]);
+  numbers(value, path, [
+    'cursorBefore', 'cursorAfter', 'undoDepthAfter', 'redoDepthAfter',
+    'revisionBefore', 'revisionAfter', 'changedVoxels',
+  ]);
+  if (value['bounds'] !== null) validateBounds(value['bounds'], `${path}.bounds`);
+  array(value['materialDeltas'], `${path}.materialDeltas`).forEach((delta, index) => {
+    const itemPath = `${path}.materialDeltas[${String(index)}]`;
+    const item = closedObject(delta, itemPath, [
+      'beforeMaterial', 'afterMaterial', 'changedVoxels',
+    ]);
+    nullableNumber(item['beforeMaterial'], `${itemPath}.beforeMaterial`);
+    nullableNumber(item['afterMaterial'], `${itemPath}.afterMaterial`);
+    number(item['changedVoxels'], `${itemPath}.changedVoxels`);
+  });
+  array(value['samples'], `${path}.samples`).forEach((delta, index) =>
+    validateVoxelEditDelta(delta, `${path}.samples[${String(index)}]`));
+  boolean(value['samplesTruncated'], `${path}.samplesTruncated`);
+  array(value['includedTransactionIds'], `${path}.includedTransactionIds`).forEach((id, index) =>
+    number(id, `${path}.includedTransactionIds[${String(index)}]`));
 }
 
 function validateVoxelAsset(input: unknown, path: string): void {
@@ -718,6 +922,27 @@ function validateModelWindow(input: unknown, path: string): void {
   boolean(value['samplesTruncated'], `${path}.samplesTruncated`);
 }
 
+function validateHistoryEntry(input: unknown, path: string): void {
+  const value = closedObject(input, path, [
+    'transactionId', 'parentTransactionId', 'beforeHash', 'afterHash',
+    'changedVoxels', 'deltasTruncated', 'deltas',
+  ]);
+  number(value['transactionId'], `${path}.transactionId`);
+  nullableNumber(value['parentTransactionId'], `${path}.parentTransactionId`);
+  strings(value, path, ['beforeHash', 'afterHash']);
+  number(value['changedVoxels'], `${path}.changedVoxels`);
+  boolean(value['deltasTruncated'], `${path}.deltasTruncated`);
+  array(value['deltas'], `${path}.deltas`).forEach((delta, index) =>
+    validateVoxelEditDelta(delta, `${path}.deltas[${String(index)}]`));
+}
+
+function validateVoxelEditDelta(input: unknown, path: string): void {
+  const value = closedObject(input, path, ['address', 'beforeMaterial', 'afterMaterial']);
+  vector3(value['address'], `${path}.address`);
+  nullableNumber(value['beforeMaterial'], `${path}.beforeMaterial`);
+  nullableNumber(value['afterMaterial'], `${path}.afterMaterial`);
+}
+
 function validateConversionSettings(input: unknown, path: string): void {
   const value = closedObject(input, path, ['conversion', 'transform', 'materialPolicy']);
   const conversion = closedObject(value['conversion'], `${path}.conversion`, [
@@ -744,18 +969,57 @@ function validateConversionSettings(input: unknown, path: string): void {
     if (item['sourceMaterialName'] !== undefined) string(item['sourceMaterialName'], `${itemPath}.sourceMaterialName`);
   });
   number(conversion['maxOutputVoxels'], `${path}.conversion.maxOutputVoxels`);
-  array(value['transform'], `${path}.transform`).forEach((entry, index) =>
-    number(entry, `${path}.transform[${String(index)}]`));
+  const transform = array(value['transform'], `${path}.transform`);
+  if (transform.length !== 16) throw new TypeError(`${path}.transform must have 16 entries`);
+  transform.forEach((entry, index) => number(entry, `${path}.transform[${String(index)}]`));
   const policy = closedObject(value['materialPolicy'], `${path}.materialPolicy`, [
     'textureAssets', 'textureBindings',
   ], ['defaultVoxelMaterial']);
-  for (const field of ['textureAssets', 'textureBindings']) {
-    array(policy[field], `${path}.materialPolicy.${field}`).forEach((entry, index) =>
-      object(entry, `${path}.materialPolicy.${field}[${String(index)}]`));
-  }
+  array(policy['textureAssets'], `${path}.materialPolicy.textureAssets`).forEach((entry, index) =>
+    validateTextureSampleAsset(entry, `${path}.materialPolicy.textureAssets[${String(index)}]`));
+  array(policy['textureBindings'], `${path}.materialPolicy.textureBindings`).forEach((entry, index) =>
+    validateTextureMaterialBinding(entry, `${path}.materialPolicy.textureBindings[${String(index)}]`));
   if (policy['defaultVoxelMaterial'] !== undefined) {
     number(policy['defaultVoxelMaterial'], `${path}.materialPolicy.defaultVoxelMaterial`);
   }
+}
+
+function validateTextureSourceRef(input: unknown, path: string): void {
+  const value = closedObject(input, path, [
+    'textureAssetId', 'assetVersion', 'contentHash', 'width', 'height',
+    'colorSpace', 'channelLayout',
+  ]);
+  strings(value, path, ['textureAssetId', 'contentHash']);
+  numbers(value, path, ['assetVersion', 'width', 'height']);
+  enumValue(value['colorSpace'], `${path}.colorSpace`, ['linear', 'srgb']);
+  enumValue(value['channelLayout'], `${path}.channelLayout`, ['palette_index_u16']);
+}
+
+function validateTextureSampleAsset(input: unknown, path: string): void {
+  const value = closedObject(input, path, ['texture', 'texelMaterials']);
+  validateTextureSourceRef(value['texture'], `${path}.texture`);
+  array(value['texelMaterials'], `${path}.texelMaterials`).forEach((material, index) =>
+    number(material, `${path}.texelMaterials[${String(index)}]`));
+}
+
+function validateTextureMaterialBinding(input: unknown, path: string): void {
+  const value = closedObject(input, path, [
+    'sourceMaterialSlot', 'texture', 'uvAttribute', 'sampleUv', 'samplingPolicy',
+    'wrapPolicy', 'materialMode',
+  ]);
+  number(value['sourceMaterialSlot'], `${path}.sourceMaterialSlot`);
+  validateTextureSourceRef(value['texture'], `${path}.texture`);
+  const uv = closedObject(value['uvAttribute'], `${path}.uvAttribute`, [
+    'attributeName', 'sourceHash',
+  ]);
+  strings(uv, `${path}.uvAttribute`, ['attributeName', 'sourceHash']);
+  const sampleUv = array(value['sampleUv'], `${path}.sampleUv`);
+  if (sampleUv.length !== 2) throw new TypeError(`${path}.sampleUv must have 2 entries`);
+  sampleUv.forEach((coordinate, index) =>
+    number(coordinate, `${path}.sampleUv[${String(index)}]`));
+  enumValue(value['samplingPolicy'], `${path}.samplingPolicy`, ['nearest_texel']);
+  enumValue(value['wrapPolicy'], `${path}.wrapPolicy`, ['clamp_to_edge']);
+  enumValue(value['materialMode'], `${path}.materialMode`, ['sample_palette_index']);
 }
 
 function validateBounds(input: unknown, path: string): void {
@@ -803,6 +1067,10 @@ function number(input: unknown, path: string): number {
     throw new TypeError(`${path} must be a finite number`);
   }
   return input;
+}
+
+function nullableNumber(input: unknown, path: string): void {
+  if (input !== null) number(input, path);
 }
 
 function boolean(input: unknown, path: string): boolean {

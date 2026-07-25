@@ -6,6 +6,7 @@ import type {
   RenderMetadata,
   Transform,
 } from '@rusty-engine/render-contracts';
+import { renderHandle } from '@rusty-engine/render-contracts';
 
 export const STUDIO_EDITOR_GRID: EditorGridDescriptor = {
   visible: true,
@@ -47,7 +48,29 @@ export interface StudioPresentationFrame {
   readonly frame: RenderFrameDiff;
   readonly selectedHandle: RenderHandle | null;
   readonly previewApplied: boolean;
+  readonly voxelPreviewKind: StudioVoxelPreview['kind'] | null;
 }
+
+export interface StudioVoxelBrushPreview {
+  readonly kind: 'brush';
+  readonly worldPoint: readonly [number, number, number];
+  readonly cellSize: number;
+  readonly radius: number;
+  readonly mode: 'paint' | 'erase';
+}
+
+export interface StudioVoxelConversionPreview {
+  readonly kind: 'conversion';
+  readonly cellSize: number;
+  readonly samples: readonly {
+    readonly coordinate: readonly [number, number, number];
+    readonly materialSlot: number;
+  }[];
+}
+
+export type StudioVoxelPreview =
+  | StudioVoxelBrushPreview
+  | StudioVoxelConversionPreview;
 
 /**
  * Produces a disposable renderer presentation from the canonical Rust frame.
@@ -58,39 +81,120 @@ export function presentStudioSelection(
   selectedEntityId: number | null,
   previewEntityId: number | null,
   previewTranslation: readonly [number, number, number] | null,
+  voxelPreview: StudioVoxelPreview | null = null,
 ): StudioPresentationFrame {
   const entityId = previewEntityId ?? selectedEntityId;
-  if (entityId === null) return { frame, selectedHandle: null, previewApplied: false };
-  const creation = frame.ops.map(createdPresentation).find(
-    (candidate) => candidate?.metadata.sourceEntity === entityId,
-  );
-  if (creation === undefined || creation === null) {
-    return { frame, selectedHandle: null, previewApplied: false };
-  }
-  const previewApplied = previewEntityId === entityId
+  const creation = entityId === null
+    ? null
+    : frame.ops.map(createdPresentation).find(
+      (candidate) => candidate?.metadata.sourceEntity === entityId,
+    ) ?? null;
+  const transformPreviewApplied = creation !== null
+    && previewEntityId === entityId
     && previewTranslation !== null
     && previewTranslation.every(Number.isFinite);
-  const transform: Transform | null = previewApplied
+  const transform: Transform | null = transformPreviewApplied
     ? { ...creation.transform, translation: previewTranslation }
     : null;
+  const selectionOps: readonly RenderDiff[] = creation === null
+    ? []
+    : [{
+        op: 'update',
+        handle: creation.handle,
+        transform,
+        material: { color: [0.96, 0.64, 0.2, 1], wireframe: true },
+        visible: null,
+        metadata: null,
+      }];
+  const voxelPreviewOps = presentVoxelPreview(frame, voxelPreview);
   return {
     frame: {
       schemaVersion: 1,
       ops: [
         ...frame.ops,
-        {
-          op: 'update',
-          handle: creation.handle,
-          transform,
-          material: { color: [0.96, 0.64, 0.2, 1], wireframe: true },
-          visible: null,
-          metadata: null,
-        },
+        ...selectionOps,
+        ...voxelPreviewOps,
       ],
     },
-    selectedHandle: creation.handle,
-    previewApplied,
+    selectedHandle: creation?.handle ?? null,
+    previewApplied: transformPreviewApplied || voxelPreviewOps.length > 0,
+    voxelPreviewKind: voxelPreviewOps.length === 0 ? null : voxelPreview?.kind ?? null,
   };
+}
+
+const MAX_CONVERSION_PREVIEW_NODES = 512;
+
+function presentVoxelPreview(
+  frame: RenderFrameDiff,
+  preview: StudioVoxelPreview | null,
+): readonly RenderDiff[] {
+  if (preview === null || !Number.isFinite(preview.cellSize) || preview.cellSize <= 0) return [];
+  if (preview.kind === 'brush') {
+    if (!preview.worldPoint.every(Number.isFinite) || !Number.isSafeInteger(preview.radius)) return [];
+    const size = preview.cellSize * (Math.max(0, preview.radius) * 2 + 1);
+    return [previewNode(
+      availablePreviewHandles(frame, 1)[0] as RenderHandle,
+      preview.worldPoint,
+      [size, size, size],
+      preview.mode === 'paint' ? [0.2, 0.9, 0.55, 0.55] : [0.95, 0.24, 0.18, 0.55],
+      ['studio-preview', 'voxel-brush-preview', `brush-mode:${preview.mode}`],
+      'Voxel brush preview',
+    )];
+  }
+  const samples = preview.samples.slice(0, MAX_CONVERSION_PREVIEW_NODES).filter(
+    (sample) => sample.coordinate.every(Number.isFinite),
+  );
+  const handles = availablePreviewHandles(frame, samples.length);
+  const size = preview.cellSize * 0.82;
+  return samples.map((sample, index) => previewNode(
+    handles[index] as RenderHandle,
+    [
+      (sample.coordinate[0] + 0.5) * preview.cellSize,
+      (sample.coordinate[1] + 0.5) * preview.cellSize,
+      (sample.coordinate[2] + 0.5) * preview.cellSize,
+    ],
+    [size, size, size],
+    [0.28, 0.78, 1, 0.62],
+    ['studio-preview', 'voxel-conversion-preview', `material-slot:${String(sample.materialSlot)}`],
+    'Voxel conversion sample',
+  ));
+}
+
+function previewNode(
+  handle: RenderHandle,
+  translation: readonly [number, number, number],
+  scale: readonly [number, number, number],
+  color: readonly [number, number, number, number],
+  tags: readonly string[],
+  label: string,
+): RenderDiff {
+  return {
+    op: 'create',
+    handle,
+    parent: null,
+    node: {
+      geometry: { kind: 'cube' },
+      material: { color, wireframe: true },
+      transform: { translation, rotation: [0, 0, 0, 1], scale },
+      visible: true,
+      layer: 'debug',
+      metadata: { sourceEntity: null, sourceSceneNode: null, tags, label },
+    },
+  };
+}
+
+function availablePreviewHandles(frame: RenderFrameDiff, count: number): readonly RenderHandle[] {
+  const occupied = new Set<number>();
+  for (const operation of frame.ops) {
+    if ('handle' in operation) occupied.add(operation.handle);
+  }
+  const handles: RenderHandle[] = [];
+  let candidate = Number.MAX_SAFE_INTEGER;
+  while (handles.length < count && candidate >= 0) {
+    if (!occupied.has(candidate)) handles.push(renderHandle(candidate));
+    candidate -= 1;
+  }
+  return handles;
 }
 
 interface CreatedPresentation {
