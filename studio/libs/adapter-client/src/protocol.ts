@@ -4,6 +4,8 @@ import {
 } from '@rusty-engine/render-contracts';
 
 export const STUDIO_ADAPTER_PROTOCOL_VERSION = 1 as const;
+export const MAX_STUDIO_ADAPTER_REQUEST_BYTES = 64 * 1024;
+export const MAX_STUDIO_ADAPTER_RESPONSE_BYTES = 32 * 1024 * 1024;
 
 export type StudioAdapterRequest =
   | DescribeRequest
@@ -138,10 +140,88 @@ export interface CanonicalOwnerContent {
 }
 
 export interface OwnerInspections {
-  readonly catalog: Readonly<Record<string, unknown>>;
-  readonly scene: Readonly<Record<string, unknown>>;
-  readonly entityState: Readonly<Record<string, unknown>>;
-  readonly persistence: Readonly<Record<string, unknown>>;
+  readonly catalog: CatalogInspection;
+  readonly scene: SceneInspection;
+  readonly entityState: EntityStateInspection;
+  readonly persistence: PersistenceInspection;
+}
+
+export interface NamedCount {
+  readonly name: string;
+  readonly count: number;
+}
+
+export interface DiagnosticSet {
+  readonly diagnostics: readonly OwnerDiagnostic[];
+}
+
+export interface OwnerDiagnostic {
+  readonly domain: 'assetCatalog' | 'entityState' | 'scene' | 'voxelState' | 'persistence' | 'import';
+  readonly severity: 'info' | 'warning' | 'error' | 'fatal';
+  readonly code: string;
+  readonly location: DiagnosticLocation;
+  readonly message: string;
+  readonly remedy?: {
+    readonly action: 'inspect' | 'provideAsset' | 'fixReference' | 'breakCycle' | 'regenerate' | 'restoreArtifact' | 'refreshCache';
+    readonly detail: string;
+  };
+}
+
+export interface DiagnosticLocation {
+  readonly path?: string;
+  readonly assetId?: string;
+  readonly entityId?: number;
+  readonly sceneNodeId?: number;
+  readonly chunk?: readonly [number, number, number];
+}
+
+export interface CatalogInspection {
+  readonly entryCount: number;
+  readonly dependencyCount: number;
+  readonly kinds: readonly NamedCount[];
+  readonly lock?: {
+    readonly entryCount: number;
+    readonly findingCount: number;
+  };
+  readonly diagnostics: DiagnosticSet;
+}
+
+export interface SceneInspection {
+  readonly sceneId: number;
+  readonly revision: number;
+  readonly schemaVersion: number;
+  readonly name: string | null;
+  readonly nodeCount: number;
+  readonly rootCount: number;
+  readonly dependencyCount: number;
+  readonly nodeKinds: readonly NamedCount[];
+  readonly diagnostics: DiagnosticSet;
+}
+
+export interface EntityStateInspection {
+  readonly schemaVersion: number;
+  readonly revision: number;
+  readonly entityCount: number;
+  readonly lifecycle: readonly NamedCount[];
+  readonly sources: readonly NamedCount[];
+  readonly capabilities: readonly NamedCount[];
+  readonly relationships: readonly NamedCount[];
+  readonly entityIds: readonly number[];
+  readonly diagnostics: DiagnosticSet;
+}
+
+export interface PersistenceInspection {
+  readonly schemaVersion: number;
+  readonly artifactCount: number;
+  readonly requiredArtifactCount: number;
+  readonly declaredByteCount: number;
+  readonly classes: readonly NamedCount[];
+  readonly roles: readonly NamedCount[];
+  readonly loadSteps: readonly {
+    readonly stage: string;
+    readonly path: string;
+  }[];
+  readonly diagnostics: DiagnosticSet;
 }
 
 export interface LoadingBayDomainReadout {
@@ -342,9 +422,155 @@ function canonicalOwnerContent(input: unknown, path: string): void {
 
 function ownerInspections(input: unknown, path: string): void {
   const value = record(input, path, ['catalog', 'scene', 'entityState', 'persistence']);
-  for (const field of ['catalog', 'scene', 'entityState', 'persistence']) {
-    looseRecord(value[field], `${path}.${field}`);
+  catalogInspection(value['catalog'], `${path}.catalog`);
+  sceneInspection(value['scene'], `${path}.scene`);
+  entityStateInspection(value['entityState'], `${path}.entityState`);
+  persistenceInspection(value['persistence'], `${path}.persistence`);
+}
+
+function catalogInspection(input: unknown, path: string): void {
+  const value = record(
+    input,
+    path,
+    ['entryCount', 'dependencyCount', 'kinds', 'diagnostics'],
+    ['lock'],
+  );
+  integer(value['entryCount'], `${path}.entryCount`);
+  integer(value['dependencyCount'], `${path}.dependencyCount`);
+  namedCounts(value['kinds'], `${path}.kinds`);
+  optional(value['lock'], `${path}.lock`, (entry, entryPath) => {
+    const lock = record(entry, entryPath, ['entryCount', 'findingCount']);
+    integer(lock['entryCount'], `${entryPath}.entryCount`);
+    integer(lock['findingCount'], `${entryPath}.findingCount`);
+  });
+  diagnosticSet(value['diagnostics'], `${path}.diagnostics`);
+}
+
+function sceneInspection(input: unknown, path: string): void {
+  const value = record(input, path, [
+    'sceneId',
+    'revision',
+    'schemaVersion',
+    'name',
+    'nodeCount',
+    'rootCount',
+    'dependencyCount',
+    'nodeKinds',
+    'diagnostics',
+  ]);
+  for (const field of ['sceneId', 'revision', 'schemaVersion', 'nodeCount', 'rootCount', 'dependencyCount']) {
+    integer(value[field], `${path}.${field}`);
   }
+  nullable(value['name'], `${path}.name`, text);
+  namedCounts(value['nodeKinds'], `${path}.nodeKinds`);
+  diagnosticSet(value['diagnostics'], `${path}.diagnostics`);
+}
+
+function entityStateInspection(input: unknown, path: string): void {
+  const value = record(input, path, [
+    'schemaVersion',
+    'revision',
+    'entityCount',
+    'lifecycle',
+    'sources',
+    'capabilities',
+    'relationships',
+    'entityIds',
+    'diagnostics',
+  ]);
+  for (const field of ['schemaVersion', 'revision', 'entityCount']) {
+    integer(value[field], `${path}.${field}`);
+  }
+  for (const field of ['lifecycle', 'sources', 'capabilities', 'relationships']) {
+    namedCounts(value[field], `${path}.${field}`);
+  }
+  list(value['entityIds'], `${path}.entityIds`).forEach((entry, index) => {
+    integer(entry, `${path}.entityIds[${String(index)}]`);
+  });
+  diagnosticSet(value['diagnostics'], `${path}.diagnostics`);
+}
+
+function persistenceInspection(input: unknown, path: string): void {
+  const value = record(input, path, [
+    'schemaVersion',
+    'artifactCount',
+    'requiredArtifactCount',
+    'declaredByteCount',
+    'classes',
+    'roles',
+    'loadSteps',
+    'diagnostics',
+  ]);
+  for (const field of ['schemaVersion', 'artifactCount', 'requiredArtifactCount', 'declaredByteCount']) {
+    integer(value[field], `${path}.${field}`);
+  }
+  namedCounts(value['classes'], `${path}.classes`);
+  namedCounts(value['roles'], `${path}.roles`);
+  list(value['loadSteps'], `${path}.loadSteps`).forEach((entry, index) => {
+    const entryPath = `${path}.loadSteps[${String(index)}]`;
+    const step = record(entry, entryPath, ['stage', 'path']);
+    text(step['stage'], `${entryPath}.stage`);
+    text(step['path'], `${entryPath}.path`);
+  });
+  diagnosticSet(value['diagnostics'], `${path}.diagnostics`);
+}
+
+function namedCounts(input: unknown, path: string): void {
+  list(input, path).forEach((entry, index) => {
+    const entryPath = `${path}[${String(index)}]`;
+    const count = record(entry, entryPath, ['name', 'count']);
+    text(count['name'], `${entryPath}.name`);
+    integer(count['count'], `${entryPath}.count`);
+  });
+}
+
+function diagnosticSet(input: unknown, path: string): void {
+  const value = record(input, path, ['diagnostics']);
+  list(value['diagnostics'], `${path}.diagnostics`).forEach((entry, index) => {
+    ownerDiagnostic(entry, `${path}.diagnostics[${String(index)}]`);
+  });
+}
+
+function ownerDiagnostic(input: unknown, path: string): void {
+  const value = record(
+    input,
+    path,
+    ['domain', 'severity', 'code', 'location', 'message'],
+    ['remedy'],
+  );
+  choice(value['domain'], `${path}.domain`, [
+    'assetCatalog', 'entityState', 'scene', 'voxelState', 'persistence', 'import',
+  ]);
+  choice(value['severity'], `${path}.severity`, ['info', 'warning', 'error', 'fatal']);
+  text(value['code'], `${path}.code`);
+  text(value['message'], `${path}.message`);
+  diagnosticLocation(value['location'], `${path}.location`);
+  optional(value['remedy'], `${path}.remedy`, (entry, entryPath) => {
+    const remedy = record(entry, entryPath, ['action', 'detail']);
+    choice(remedy['action'], `${entryPath}.action`, [
+      'inspect', 'provideAsset', 'fixReference', 'breakCycle', 'regenerate',
+      'restoreArtifact', 'refreshCache',
+    ]);
+    text(remedy['detail'], `${entryPath}.detail`);
+  });
+}
+
+function diagnosticLocation(input: unknown, path: string): void {
+  const value = record(
+    input,
+    path,
+    [],
+    ['path', 'assetId', 'entityId', 'sceneNodeId', 'chunk'],
+  );
+  optional(value['path'], `${path}.path`, text);
+  optional(value['assetId'], `${path}.assetId`, text);
+  optional(value['entityId'], `${path}.entityId`, integer);
+  optional(value['sceneNodeId'], `${path}.sceneNodeId`, integer);
+  optional(value['chunk'], `${path}.chunk`, (entry, entryPath) => {
+    const chunk = list(entry, entryPath);
+    if (chunk.length !== 3) fail(entryPath, 'must have exactly 3 entries');
+    chunk.forEach((coordinate, index) => signedInteger(coordinate, `${entryPath}[${String(index)}]`));
+  });
 }
 
 function loadingBayReadout(input: unknown, path: string): void {
@@ -456,6 +682,21 @@ function integer(input: unknown, path: string): number {
   return input;
 }
 
+function signedInteger(input: unknown, path: string): number {
+  if (typeof input !== 'number' || !Number.isSafeInteger(input)) {
+    fail(path, 'must be a safe integer');
+  }
+  return input;
+}
+
+function choice(input: unknown, path: string, choices: readonly string[]): string {
+  const value = text(input, path);
+  if (!choices.includes(value)) {
+    fail(path, `must be one of ${choices.join(', ')}`);
+  }
+  return value;
+}
+
 function finiteNumber(input: unknown, path: string): number {
   if (typeof input !== 'number' || !Number.isFinite(input)) {
     fail(path, 'must be a finite number');
@@ -469,6 +710,14 @@ function optional(
   validate: (input: unknown, path: string) => unknown,
 ): void {
   if (input !== undefined) validate(input, path);
+}
+
+function nullable(
+  input: unknown,
+  path: string,
+  validate: (input: unknown, path: string) => unknown,
+): void {
+  if (input !== null) validate(input, path);
 }
 
 function fail(path: string, message: string): never {

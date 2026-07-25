@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./out-tsc/apps/studio-app",
+    "rootDir": ".",
+    "module": "preserve",
+    "noEmit": false,
+    "types": []
+  },
+  "angularCompilerOptions": {
+    "enableI18nLegacyMessageIdFormat": false,
+    "strictInjectionParameters": true,
+    "strictInputAccessModifiers": true,
+    "strictTemplates": true
+  },
+  "files": ["apps/studio-app/src/main.ts"],
+  "include": [
+    "apps/studio-app/src/**/*.ts",
+    "libs/adapter-client/src/**/*.ts",
+    "libs/editor-shell/src/**/*.ts"
+  ],
+  "exclude": ["**/*.spec.ts", "**/*.test.ts"]
+}

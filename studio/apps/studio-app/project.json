@@ -1,0 +1,72 @@
+{
+  "name": "studio-app",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "prefix": "rusty",
+  "sourceRoot": "apps/studio-app/src",
+  "tags": ["type:app", "scope:studio"],
+  "targets": {
+    "build": {
+      "executor": "@angular/build:application",
+      "outputs": ["{options.outputPath}"],
+      "defaultConfiguration": "production",
+      "options": {
+        "outputPath": "dist/apps/studio-app",
+        "browser": "apps/studio-app/src/main.ts",
+        "tsConfig": "tsconfig.studio-app.json",
+        "assets": [],
+        "styles": [
+          "apps/studio-app/src/theme.css",
+          "apps/studio-app/src/styles.css"
+        ]
+      },
+      "configurations": {
+        "production": {
+          "budgets": [
+            {
+              "type": "initial",
+              "maximumWarning": "1mb",
+              "maximumError": "2mb"
+            },
+            {
+              "type": "anyComponentStyle",
+              "maximumWarning": "32kb",
+              "maximumError": "64kb"
+            }
+          ],
+          "outputHashing": "all"
+        },
+        "development": {
+          "optimization": false,
+          "extractLicenses": false,
+          "sourceMap": true
+        }
+      }
+    },
+    "serve": {
+      "continuous": true,
+      "executor": "@angular/build:dev-server",
+      "defaultConfiguration": "development",
+      "configurations": {
+        "production": { "buildTarget": "studio-app:build:production" },
+        "development": { "buildTarget": "studio-app:build:development" }
+      }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint"
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "options": {
+        "command": "tsc --noEmit -p tsconfig.studio-app.json"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx --test test/studio-startup.test.ts test/shell-contract.test.ts"
+      }
+    }
+  }
+}

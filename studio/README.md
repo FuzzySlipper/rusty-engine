@@ -5,10 +5,11 @@ the pinned Asha Studio donor while consuming Rusty Engine's canonical Rust owner
 renderer.
 
 M11A contains the source inventory, dispositions, owner-adoption map, dependency boundary, and
-workspace gate. M11B adds the structural TypeScript client for the real project-owned Loading Bay
-Rust adapter before Angular product code is imported in M11C. Scene/viewport and complete
-voxel/material/conversion workflows follow in M11D and M11E. Until the shell lands this directory is
-an implemented boundary workspace, not yet a launchable editor.
+workspace gate. M11B supplies the structural TypeScript client for the real project-owned Loading
+Bay Rust adapter. M11C supplies a launchable Angular/Nx editor shell whose authoring document,
+live projection, selection, and disposable transform preview stay distinct. Scene hierarchy, the
+shared Three renderer, and picking follow in M11D; complete voxel/material/annotation/history and
+conversion workflows follow in M11E.
 
 See [the Studio migration contract](../docs/studio-migration-contract.md).
 The closed adapter protocol and its explicit integration gate are documented in
@@ -28,6 +29,23 @@ pnpm run verify:studio
 ```
 
 Ordinary `./scripts/verify.sh` does not install or execute this workspace.
+
+## Launching the editor
+
+Build the isolated application, build a downstream project's adapter, and start the explicit Node
+host with an absolute adapter path:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm run build
+pnpm run host -- --adapter-binary /absolute/path/to/studio-adapter
+```
+
+The host serves the built application and forwards only bounded JSON requests at
+`/api/studio-adapter` to that adapter's closed JSONL protocol. It does not inspect a sibling
+checkout, interpret project content, or acquire gameplay authority. To open on launch, use exactly
+one `root` and one project-relative `project` query parameter; the same controls remain visible in
+the shell.
 
 The explicit real-consumer proof is separate:
 

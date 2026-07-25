@@ -6,6 +6,9 @@ import { isAbsolute, join } from 'node:path';
 import {
   StudioAdapterClient,
 } from '../../libs/adapter-client/dist/index.js';
+import {
+  StudioWorkspaceStore,
+} from '../../libs/editor-shell/dist/state.js';
 
 class JsonLineProcessTransport {
   #child;
@@ -92,38 +95,41 @@ async function main() {
   );
   const transport = new JsonLineProcessTransport(binary);
   const client = new StudioAdapterClient(transport);
+  const store = new StudioWorkspaceStore(client);
 
   try {
-    const described = await client.describe();
-    assert.equal(described.adapter.adapterId, 'rusty-engine-demo.loading-bay');
-
-    const opened = await client.openProject(
+    await store.openProject(
       demoRoot,
       'content/projects/loading-bay.project.json',
     );
-    assert.equal(opened.project.identity.projectId, 'loading-bay');
-    assert.equal(opened.project.inspections.catalog['entryCount'], 6);
-    assert.equal(opened.project.inspections.scene['nodeCount'], 8);
-    assert.equal(opened.project.inspections.entityState['entityCount'], 8);
-    assert.equal(opened.project.loadingBay.voxelEnvironment, 'generatedRoom');
-    assert.equal(opened.project.loadingBay.enemyCount, 2);
-    assert.equal(opened.project.voxel['solidVoxelCount'], 366);
-    assert.equal(opened.project.projection.ops.length, 7);
-    assert.equal(opened.project.projectionReadout.diagnostics.length, 0);
+    const opened = store.snapshot();
+    assert.equal(opened.connection.kind, 'connected');
+    assert.equal(opened.authoringDocument.identity.projectId, 'loading-bay');
+    assert.equal(opened.authoringDocument.inspections.catalog.entryCount, 6);
+    assert.equal(opened.authoringDocument.inspections.scene.nodeCount, 8);
+    assert.equal(opened.authoringDocument.inspections.entityState.entityCount, 8);
+    assert.equal(opened.authoringDocument.domain.voxelEnvironment, 'generatedRoom');
+    assert.equal(opened.authoringDocument.domain.enemyCount, 2);
+    assert.equal(opened.authoringDocument.voxel.solidVoxelCount, 366);
+    assert.equal(opened.liveProjection.frame.ops.length, 7);
+    assert.equal(opened.liveProjection.readout.diagnostics.length, 0);
+    assert.equal(opened.liveProjection.entities.length, 8);
 
-    const reread = await client.readProject();
+    await store.refreshProject();
+    const reread = store.snapshot();
     assert.equal(
-      reread.project.identity.projectHash,
-      opened.project.identity.projectHash,
+      reread.authoringDocument.identity.projectHash,
+      opened.authoringDocument.identity.projectHash,
     );
     assert.equal(
-      reread.project.identity.sceneRevision,
-      opened.project.identity.sceneRevision,
+      reread.authoringDocument.identity.sceneRevision,
+      opened.authoringDocument.identity.sceneRevision,
     );
-    assert.equal(reread.project.projection.ops.length, 0);
+    assert.equal(reread.liveProjection.frame.ops.length, 0);
 
-    await client.closeProject();
-    process.stdout.write('Studio demo adapter integration passed\n');
+    await store.closeProject();
+    assert.equal(store.snapshot().authoringDocument, null);
+    process.stdout.write('Studio editor store + demo adapter integration passed\n');
   } finally {
     await transport.close();
   }

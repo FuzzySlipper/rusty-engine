@@ -1,0 +1,321 @@
+<main class="studio-layout" data-visual-id="studio-shell">
+  <header class="titlebar">
+    <div class="brand" aria-label="Rusty Engine Studio">
+      <span class="brand-mark">R</span>
+      <strong>Rusty Engine Studio</strong>
+    </div>
+    <nav class="menu-strip" aria-label="Studio menus">
+      <button type="button" (click)="store.toggleMenu('file')">File</button>
+      <button type="button" (click)="store.toggleMenu('edit')">Edit</button>
+      <button type="button" (click)="store.toggleMenu('view')">View</button>
+      <button type="button" (click)="store.toggleMenu('tools')">Tools</button>
+    </nav>
+    <div class="document-title">
+      @if (state().authoringDocument; as document) {
+        <span>{{ document.identity.name }}</span>
+        <small>{{ document.identity.relativeProjectFile }}</small>
+      } @else {
+        <span>No project open</span>
+        <small>Choose an external project through its adapter</small>
+      }
+    </div>
+    <div class="adapter-state" [class.is-ready]="state().connection.kind === 'connected'">
+      <span class="status-dot"></span>
+      {{ state().connection.kind }}
+    </div>
+
+    @if (state().activeMenu === 'file') {
+      <section class="menu-popover file-menu" aria-label="File menu">
+        <button type="button" (click)="openProject()">Open Project</button>
+        <button type="button" [disabled]="state().authoringDocument === null" (click)="refreshProject()">Refresh from Owner</button>
+        <button type="button" [disabled]="state().authoringDocument === null" (click)="closeProject()">Close Project</button>
+        <hr />
+        <button type="button" disabled title="Project creation requires a project-owned adapter operation">New Project…</button>
+        <button type="button" disabled title="Save As is not part of adapter protocol version 1">Save Project As…</button>
+      </section>
+    }
+    @if (state().activeMenu === 'edit') {
+      <section class="menu-popover edit-menu" aria-label="Edit menu">
+        <button type="button" [disabled]="state().preview === null" (click)="store.cancelPreview()">Cancel Transform Preview</button>
+        <button type="button" [disabled]="state().preview === null || state().operation !== 'idle'" (click)="commitPreview()">Commit Transform</button>
+        <hr />
+        <button type="button" disabled title="Committed history will be supplied by the responsible Rust owner">Undo committed edit</button>
+        <button type="button" disabled title="Committed history will be supplied by the responsible Rust owner">Redo committed edit</button>
+      </section>
+    }
+    @if (state().activeMenu === 'view') {
+      <section class="menu-popover view-menu" aria-label="View menu">
+        <label>
+          <input type="checkbox" [ngModel]="state().settings.gridVisible" (ngModelChange)="store.updateSettings({ gridVisible: $event })" />
+          Editor grid
+        </label>
+        <label>
+          <input type="checkbox" [ngModel]="state().settings.snappingEnabled" (ngModelChange)="store.updateSettings({ snappingEnabled: $event })" />
+          Translation snapping
+        </label>
+        <button type="button" (click)="store.setSettingsOpen(true)">Studio Settings…</button>
+      </section>
+    }
+    @if (state().activeMenu === 'tools') {
+      <section class="menu-popover tools-menu" aria-label="Tools menu">
+        <button type="button" disabled title="Shared renderer viewport and picking land in M11D">Viewport Picking</button>
+        <button type="button" disabled title="Voxel asset, annotation, history, and conversion owners land in M11E">Voxel Authoring</button>
+        <button type="button" disabled title="GLB conversion is not exposed by adapter protocol version 1">Convert Mesh to Voxel…</button>
+      </section>
+    }
+  </header>
+
+  <section class="project-bar" data-visual-id="studio-project-open-controls">
+    <label class="root-input">
+      <span>External project root</span>
+      <input [(ngModel)]="projectRoot" placeholder="/absolute/path/to/project" autocomplete="off" />
+    </label>
+    <label class="project-file-input">
+      <span>Project file</span>
+      <input [(ngModel)]="projectFile" autocomplete="off" />
+    </label>
+    <button type="button" class="primary" [disabled]="state().operation !== 'idle'" (click)="openProject()">
+      {{ state().connection.kind === 'connected' ? 'Open' : 'Connect & Open' }}
+    </button>
+    <button type="button" [disabled]="state().authoringDocument === null || state().operation !== 'idle'" (click)="refreshProject()">Refresh</button>
+    <span class="project-message">{{ state().connection.message }}</span>
+  </section>
+
+  @if (state().lastError; as error) {
+    <aside class="error-banner" role="alert" data-visual-id="studio-error-state">
+      <strong>Operation rejected</strong>
+      <span>{{ error }}</span>
+      <button type="button" (click)="store.clearError()">Dismiss</button>
+    </aside>
+  }
+
+  <section class="workspace">
+    <aside class="panel hierarchy-panel" data-visual-id="studio-hierarchy-panel">
+      <header class="panel-heading">
+        <div>
+          <strong>Hierarchy</strong>
+          <small>Owner entity IDs + projection labels</small>
+        </div>
+        <button type="button" disabled title="Entity creation requires a typed project adapter operation">＋</button>
+      </header>
+      <div class="filter-row">
+        <input
+          aria-label="Filter hierarchy"
+          placeholder="Filter entities"
+          [ngModel]="state().hierarchyFilter"
+          (ngModelChange)="store.setHierarchyFilter($event)"
+        />
+      </div>
+      <div class="hierarchy-list" role="tree">
+        @if (state().authoringDocument === null) {
+          <div class="empty-state">
+            <strong>Project not open</strong>
+            <span>Connect to a project-owned adapter to inspect owner state.</span>
+          </div>
+        } @else {
+          @for (entity of store.visibleEntities(); track entity.entityId) {
+            <button
+              type="button"
+              role="treeitem"
+              class="entity-row"
+              [class.is-selected]="state().selection.entityId === entity.entityId"
+              (click)="store.selectEntity(entity.entityId, 'hierarchy')"
+            >
+              <span class="entity-icon">{{ entity.projected ? '◇' : '○' }}</span>
+              <span class="entity-label">{{ entity.label }}</span>
+              <small>#{{ entity.entityId }}</small>
+            </button>
+          } @empty {
+            <div class="empty-state">No owner entities match this filter.</div>
+          }
+        }
+      </div>
+      <footer class="panel-footer">
+        {{ state().authoringDocument?.inspections?.entityState?.entityCount ?? 0 }} owner entities
+      </footer>
+    </aside>
+
+    <section class="viewport-column" data-visual-id="studio-viewport-column">
+      <header class="viewport-toolbar">
+        <div class="tool-group" aria-label="Transform tools">
+          <button type="button" class="is-active" title="Select">↖</button>
+          <button type="button" [disabled]="store.selectedEntity()?.transform === null" (click)="beginSelectedPreview()" title="Move">✥</button>
+          <button type="button" disabled title="Rotation preview and commit land with the typed M11D operation">⟳</button>
+          <button type="button" disabled title="Scale preview and commit land with the typed M11D operation">↗</button>
+        </div>
+        <div class="tool-group">
+          <button type="button" [class.is-active]="state().settings.gridVisible" (click)="store.updateSettings({ gridVisible: !state().settings.gridVisible })">Grid</button>
+          <button type="button" [class.is-active]="state().settings.snappingEnabled" (click)="store.updateSettings({ snappingEnabled: !state().settings.snappingEnabled })">Snap {{ state().settings.translationSnap }}</button>
+        </div>
+        <span class="viewport-mode">Renderer projection readout</span>
+      </header>
+
+      <div class="viewport-surface" [class.show-grid]="state().settings.gridVisible" data-visual-id="studio-viewport-readout">
+        @if (state().liveProjection; as projection) {
+          <div class="projection-stage">
+            @for (entity of projection.entities; track entity.entityId) {
+              @if (entity.projected) {
+                <button
+                  type="button"
+                  class="projection-chip"
+                  [class.is-selected]="state().selection.entityId === entity.entityId"
+                  (click)="store.selectEntity(entity.entityId, 'projection')"
+                >
+                  <strong>{{ entity.label }}</strong>
+                  <small>{{ entity.asset }}</small>
+                </button>
+              }
+            }
+          </div>
+          <div class="viewport-readout">
+            <span>{{ projection.readout.retainedEntities }} retained entities</span>
+            <span>{{ projection.frame.ops.length }} current ops</span>
+            <span>revision {{ projection.readout.sourceRevision }}</span>
+          </div>
+        } @else {
+          <div class="viewport-empty">
+            <span class="viewport-empty-mark">R</span>
+            <strong>No live projection</strong>
+            <span>The shared Three renderer attaches to this surface in M11D.</span>
+          </div>
+        }
+        @if (state().preview; as preview) {
+          <div class="preview-badge">
+            Preview #{{ preview.entityId }} · {{ preview.translation.join(', ') }}
+          </div>
+        }
+      </div>
+
+      <section class="bottom-panel" data-visual-id="studio-bottom-panel">
+        <nav>
+          <button type="button" [class.is-active]="state().bottomPanel === 'diagnostics'" (click)="store.setBottomPanel('diagnostics')">Diagnostics <span>{{ ownerDiagnosticCount() }}</span></button>
+          <button type="button" [class.is-active]="state().bottomPanel === 'owners'" (click)="store.setBottomPanel('owners')">Owners</button>
+          <button type="button" [class.is-active]="state().bottomPanel === 'output'" (click)="store.setBottomPanel('output')">Output</button>
+        </nav>
+        <div class="bottom-content">
+          @if (state().bottomPanel === 'diagnostics') {
+            @if (ownerDiagnosticCount() === 0) {
+              <span class="good-state">No owner diagnostics.</span>
+            } @else {
+              @for (diagnostic of state().authoringDocument?.inspections?.scene?.diagnostics?.diagnostics ?? []; track diagnostic.code) {
+                <span>[{{ diagnostic.severity }}] {{ diagnostic.code }} — {{ diagnostic.message }}</span>
+              }
+            }
+          }
+          @if (state().bottomPanel === 'owners') {
+            @if (state().authoringDocument; as document) {
+              <span>asset-catalog · {{ document.inspections.catalog.entryCount }} assets</span>
+              <span>authored-scene · {{ document.inspections.scene.nodeCount }} nodes</span>
+              <span>entity-state · {{ document.inspections.entityState.entityCount }} entities</span>
+              <span>content-store · {{ document.inspections.persistence.artifactCount }} artifacts</span>
+            } @else {
+              <span>Owner readouts appear after a project opens.</span>
+            }
+          }
+          @if (state().bottomPanel === 'output') {
+            <span>{{ state().operation === 'idle' ? 'Ready.' : state().operation + '…' }}</span>
+            @if (state().authoringDocument; as document) {
+              <span>project {{ document.identity.projectHash }}</span>
+            }
+          }
+        </div>
+      </section>
+    </section>
+
+    <aside class="panel inspector-panel" data-visual-id="studio-inspector-panel">
+      <header class="panel-heading">
+        <div>
+          <strong>Inspector</strong>
+          <small>Typed owner operation</small>
+        </div>
+      </header>
+      @if (store.selectedEntity(); as entity) {
+        <section class="inspector-content">
+          <div class="entity-title">
+            <span class="entity-icon large">{{ entity.projected ? '◇' : '○' }}</span>
+            <div>
+              <strong>{{ entity.label }}</strong>
+              <small>Entity #{{ entity.entityId }}</small>
+            </div>
+          </div>
+          <dl class="identity-grid">
+            <dt>Projection</dt><dd>{{ entity.projected ? 'retained' : 'not rendered' }}</dd>
+            <dt>Asset</dt><dd>{{ entity.asset ?? 'none' }}</dd>
+            <dt>Handle</dt><dd>{{ entity.renderHandle ?? 'none' }}</dd>
+          </dl>
+          <section class="inspector-section">
+            <header><strong>Transform</strong><span>authored-scene</span></header>
+            @if (entity.transform) {
+              <div class="vector-editor">
+                @for (axis of ['X', 'Y', 'Z']; track axis; let index = $index) {
+                  <label>
+                    <span>{{ axis }}</span>
+                    <input type="number" step="0.1" [value]="translation($any(index))" (input)="updateTranslation($any(index), $any($event.target).value)" />
+                  </label>
+                }
+              </div>
+              <div class="inspector-actions">
+                <button type="button" [disabled]="state().preview === null" (click)="store.cancelPreview()">Cancel</button>
+                <button type="button" class="primary" [disabled]="state().preview === null || state().operation !== 'idle'" (click)="commitPreview()">Commit</button>
+              </div>
+              <small class="owner-note">Preview is disposable UI state. Commit is hash- and revision-guarded by Rust.</small>
+            } @else {
+              <div class="empty-state">This owner entity has no projected transform.</div>
+            }
+          </section>
+          <section class="inspector-section muted-section">
+            <header><strong>Components</strong><span>read only</span></header>
+            <span>Game-specific components remain owned by the external project adapter.</span>
+          </section>
+        </section>
+      } @else {
+        <div class="empty-state inspector-empty">
+          <strong>No entity selected</strong>
+          <span>Select an owner entity or projection item.</span>
+        </div>
+      }
+    </aside>
+  </section>
+
+  <footer class="statusbar">
+    <span>{{ state().connection.message }}</span>
+    <span class="spacer"></span>
+    @if (state().authoringDocument; as document) {
+      <span>{{ document.domain.voxelEnvironment }}</span>
+      <span>{{ document.identity.currentSchemaVersion === document.identity.sourceSchemaVersion ? 'current schema' : 'migrated schema' }}</span>
+      <span>Y-up</span>
+    } @else {
+      <span>host-neutral editor</span>
+    }
+  </footer>
+
+  @if (state().settingsOpen) {
+    <div class="modal-backdrop" (mousedown)="store.setSettingsOpen(false)" data-visual-id="studio-settings-dialog">
+      <section class="settings-dialog" role="dialog" aria-modal="true" aria-label="Studio settings" (mousedown)="$event.stopPropagation()">
+        <header>
+          <div><strong>Studio Settings</strong><small>Transient host UI preferences</small></div>
+          <button type="button" aria-label="Close settings" (click)="store.setSettingsOpen(false)">×</button>
+        </header>
+        <div class="settings-body">
+          <label>
+            <span>Theme</span>
+            <select [ngModel]="state().settings.theme" (ngModelChange)="store.updateSettings({ theme: $event })">
+              <option value="graphite">Graphite</option>
+              <option value="highContrast">High contrast</option>
+            </select>
+          </label>
+          <label>
+            <span>Translation snap</span>
+            <input type="number" min="0.01" step="0.05" [ngModel]="state().settings.translationSnap" (ngModelChange)="store.updateSettings({ translationSnap: $event })" />
+          </label>
+          <label class="check-setting">
+            <input type="checkbox" [ngModel]="state().settings.gridVisible" (ngModelChange)="store.updateSettings({ gridVisible: $event })" />
+            <span>Show editor grid</span>
+          </label>
+          <p>These values are UI state only. Browser storage is not used; durable host-user settings require an explicit host owner.</p>
+        </div>
+        <footer><button type="button" class="primary" (click)="store.setSettingsOpen(false)">Done</button></footer>
+      </section>
+    </div>
+  }
+</main>

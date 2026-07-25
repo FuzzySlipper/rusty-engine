@@ -1,0 +1,25 @@
+{
+  "name": "@rusty-engine/studio-editor-shell",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "prebuild": "pnpm --filter @rusty-engine/studio-adapter-client run build",
+    "build": "tsc --project tsconfig.build.json",
+    "pretypecheck": "pnpm --filter @rusty-engine/studio-adapter-client run build",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "test": "pnpm run build && node --test 'dist/**/*.test.js'"
+  },
+  "dependencies": {
+    "@angular/common": "~21.2.0",
+    "@angular/core": "~21.2.0",
+    "@angular/forms": "~21.2.0",
+    "@rusty-engine/render-contracts": "link:../../../render/packages/render-contracts",
+    "@rusty-engine/studio-adapter-client": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
+  }
+}

@@ -18,7 +18,7 @@ if [[ ! -f "$DEMO_ROOT/Cargo.toml" || ! -f "$DEMO_ROOT/AGENTS.md" ]]; then
 fi
 
 cd "$REPO_ROOT"
-pnpm --dir studio --filter @rusty-engine/studio-adapter-client run build
+pnpm --dir studio --filter @rusty-engine/studio-editor-shell run build
 cargo build --manifest-path "$DEMO_ROOT/Cargo.toml" --bin studio-adapter
 node studio/test/integration/demo-adapter.mjs \
   --demo-root "$DEMO_ROOT" \

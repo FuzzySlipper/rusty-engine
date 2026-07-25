@@ -1,0 +1,21 @@
+{
+  "name": "studio-editor-shell",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "libs/editor-shell/src",
+  "targets": {
+    "lint": {
+      "executor": "@nx/eslint:lint"
+    },
+    "build": {
+      "command": "pnpm --filter @rusty-engine/studio-editor-shell run build"
+    },
+    "typecheck": {
+      "command": "pnpm --filter @rusty-engine/studio-editor-shell run typecheck"
+    },
+    "test": {
+      "command": "pnpm --filter @rusty-engine/studio-editor-shell run test"
+    }
+  },
+  "tags": ["scope:studio", "type:ui"]
+}

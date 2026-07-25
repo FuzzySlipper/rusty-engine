@@ -6,15 +6,43 @@
   "description": "First-party Rusty Engine authoring Studio workspace.",
   "packageManager": "pnpm@11.7.0",
   "scripts": {
+    "start": "NX_DAEMON=false nx serve studio-app --host 127.0.0.1",
+    "dev": "pnpm run start",
+    "host": "tsx scripts/studio-host.ts",
+    "build": "pnpm --filter @rusty-engine/studio-adapter-client run build && pnpm --filter @rusty-engine/studio-editor-shell run build && NX_DAEMON=false nx build studio-app",
+    "lint": "NX_DAEMON=false nx run-many -t lint --all && eslint scripts test",
+    "typecheck": "pnpm --filter @rusty-engine/studio-adapter-client run typecheck && pnpm --filter @rusty-engine/studio-editor-shell run typecheck && NX_DAEMON=false nx run studio-app:typecheck && tsc --noEmit -p tsconfig.host.json",
+    "test": "pnpm --filter @rusty-engine/studio-adapter-client run test && pnpm --filter @rusty-engine/studio-editor-shell run test && NX_DAEMON=false nx run studio-app:test",
+    "check": "pnpm run lint && pnpm run typecheck && pnpm run test",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check:migration": "node scripts/check-migration-plan.mjs",
     "test:migration": "bash scripts/test-migration-checker.sh",
     "verify:adapter-client": "pnpm --filter @rusty-engine/studio-adapter-client run typecheck && pnpm --filter @rusty-engine/studio-adapter-client run test",
-    "verify": "pnpm run check:boundaries && pnpm run check:migration && pnpm run test:migration && pnpm run verify:adapter-client"
+    "verify": "pnpm run check:boundaries && pnpm run check:migration && pnpm run test:migration && pnpm run check && pnpm run build"
+  },
+  "dependencies": {
+    "@angular/common": "~21.2.0",
+    "@angular/compiler": "~21.2.0",
+    "@angular/core": "~21.2.0",
+    "@angular/forms": "~21.2.0",
+    "@angular/platform-browser": "~21.2.0",
+    "rxjs": "~7.8.0",
+    "tslib": "^2.3.0"
   },
   "devDependencies": {
+    "@angular/build": "~21.2.0",
+    "@angular/compiler-cli": "~21.2.0",
+    "@eslint/js": "^9.8.0",
+    "@nx/angular": "23.0.0",
+    "@nx/eslint": "23.0.0",
+    "@nx/eslint-plugin": "23.0.0",
+    "@nx/js": "23.0.0",
     "@nx/workspace": "23.0.0",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.8.0",
     "nx": "23.0.0",
-    "typescript": "~5.9.2"
+    "tsx": "^4.20.3",
+    "typescript": "~5.9.2",
+    "typescript-eslint": "^8.40.0"
   }
 }

@@ -1,0 +1,10 @@
+{
+  "name": "@rusty-engine/studio-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@rusty-engine/studio-adapter-client": "workspace:*",
+    "@rusty-engine/studio-editor-shell": "workspace:*"
+  }
+}

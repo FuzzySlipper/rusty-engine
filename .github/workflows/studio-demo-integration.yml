@@ -6,6 +6,9 @@ on:
     paths:
       - 'studio/demo-consumer-source.json'
       - 'studio/libs/adapter-client/**'
+      - 'studio/libs/editor-shell/**'
+      - 'studio/apps/studio-app/**'
+      - 'studio/scripts/studio-host.ts'
       - 'studio/test/integration/**'
       - 'docs/studio-adapter-protocol.md'
       - 'scripts/verify-studio-demo-integration.sh'
@@ -14,6 +17,9 @@ on:
     paths:
       - 'studio/demo-consumer-source.json'
       - 'studio/libs/adapter-client/**'
+      - 'studio/libs/editor-shell/**'
+      - 'studio/apps/studio-app/**'
+      - 'studio/scripts/studio-host.ts'
       - 'studio/test/integration/**'
       - 'docs/studio-adapter-protocol.md'
       - 'scripts/verify-studio-demo-integration.sh'
