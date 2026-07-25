@@ -1,6 +1,6 @@
 # Studio external-project adapter protocol
 
-Status: protocol 4 / M11F voxel parity implemented; exact-SHA acceptance pending
+Status: protocol 6 / M11F successor parity implemented; fresh exact-SHA acceptance pending
 
 Rusty Engine Studio talks to one project-owned Rust adapter at a time through a bounded JSON-lines
 process. The adapter is a downstream composition root: it understands that project's layout,
@@ -13,16 +13,22 @@ against a real external checkout without turning that checkout into an ordinary 
 
 ## Closed protocol
 
-Every request carries `protocolVersion: 4` and a caller-selected `requestId`. Version 4 contains
+Every request carries `protocolVersion: 6` and a caller-selected `requestId`. Version 6 contains
 only these tagged request families:
 
 | Request | Purpose | Canonical authority |
 | --- | --- | --- |
 | `describe` | Identify adapter, project kind, schema, and the closed operation set. | Project adapter |
 | `openProject` | Open an explicit absolute root and safe relative project file; return canonical readouts and initial projection. | Project adapter plus Engine owners |
+| `createProject`, `saveProjectAs` | Create a complete admitted project or atomically publish a renamed copy under explicit path and hash guards. | Project adapter, `content-store`, Engine admission owners |
 | `readProject` | Reread the open source and produce current readouts and one complete replaceable projection. | Project adapter plus Engine owners |
-| `setEntityTranslation` | Apply one typed authored transform with expected project hash and scene revision. | `authored-scene`, downstream admission, `content-store` |
+| `createScene`, `renameScene`, `deleteScene`, `setEntryScene` | Manage the finite stored scene set and active entry scene through project-owned policy. | project adapter, `authored-scene`, `content-store` |
+| `createSceneObject`, `deleteSceneObject`, `renameSceneObject`, `reparentSceneObject` | Mutate canonical hierarchy and lifecycle with expected project and scene identity. | `authored-scene`, `entity-state`, downstream admission, `content-store` |
+| `setSceneObjectTransform`, `setEntityTranslation` | Apply a full or legacy translation-only authored transform with expected project hash and scene revision. | `authored-scene`, downstream admission, `content-store` |
+| `setSceneObjectAppearance` | Replace empty, static-mesh, or typed light appearance and rerun resource/projection admission. | `authored-scene`, `asset-catalog`, render projection, downstream admission |
+| `setEntityCollision`, `setEntityKinematic` | Attach, replace, or remove named entity capabilities atomically. | `entity-state`, downstream spatial admission, `content-store` |
 | `upsertMaterial` | Create or replace one stored material definition. | `asset-catalog`, downstream admission, `content-store` |
+| `prepareAssetImport`, `prepareAssetReimport`, `applyAssetImport`, `discardAssetImport` | Read bounded project/host mesh sources into a private deterministic plan, expose diagnostics/dependencies/generated locks, then install the exact candidate atomically or discard it. | `asset-import`, `asset-catalog`, project adapter, `content-store` |
 | `initializeVoxelAsset`, `duplicateVoxelAsset`, `replaceVoxelPalette` | Create or change canonical project-embedded voxel assets under exact asset guards. | `voxel-asset`, `engine-spatial`, project adapter |
 | `attachVoxelInstance`, `setVoxelInstanceTransform`, `removeVoxelInstance` | Manage transformed scene instances without giving Studio scene authority. | downstream scene schema plus `authored-scene`/projection admission |
 | `validateVoxelPick` | Re-cast an untrusted shared-renderer ray against the named transformed instance and compare the claimed cell/face. | `engine-spatial` picking and collision authority |
@@ -40,7 +46,8 @@ only these tagged request families:
 Responses are likewise a closed tagged union: `described`, `projectOpened`, `projectRead`,
 `entityTranslationApplied`, `projectMutationApplied`, `voxelPickValidated`, `voxelRead`,
 `voxelConversionPrepared`, `voxelConversionDiscarded`, `voxelHistoryRevertPrepared`,
-`voxelHistoryRevertDiscarded`, `voxelAssetFileExported`, `projectClosed`, or `rejected`. There is no
+`voxelHistoryRevertDiscarded`, `voxelAssetFileExported`, `assetImportPrepared`,
+`assetImportDiscarded`, `projectClosed`, or `rejected`. There is no
 generic method string, command registry, arbitrary payload, provider lookup, RuntimeSession, or
 cross-capability gameplay envelope.
 
@@ -104,6 +111,19 @@ conversion and one prepared history move; a successful replacement prepare evict
 candidate, whose identity then rejects without mutation. Voxel history is encoded beside the
 embedded asset and reconstructed by a fresh process before query, undo, redo, or revert.
 
+Asset-import plans use the same pattern. The visible plan contains settings, source hash, generated
+artifact readouts, diagnostics, and a classification, but apply accepts only the retained private
+candidate with its exact plan and project hashes. Reimport replaces only the previously generated
+asset IDs, rejects unrelated collisions, reruns complete project admission, and canonically rereads
+the result. Source drift is observational until a named reimport is prepared and applied.
+
+Host-user settings are intentionally not part of this Rust protocol because they are browser/webview
+host preferences, not gameplay or project semantics. The isolated Node host exposes one bounded
+GET/PUT endpoint backed by the shared versioned `studio-user-settings` artifact. Files are keyed by
+canonical project root outside project content, protected by SHA-256 compare-and-swap, symlink and
+size checks, same-directory atomic replacement, and future-version preservation. Renderer-host,
+not the Angular shell, implements the resulting camera movement, boost, pan, orbit, and input cleanup.
+
 ## Gates
 
 - `./scripts/verify-studio.sh` checks and tests the TypeScript boundary without any demo checkout.
@@ -115,7 +135,9 @@ embedded asset and reconstructed by a fresh process before query, undo, redo, or
   annotation/model-query/conversion/environment operations.
   It closes and starts a fresh adapter process to verify reconstruction and byte-preserving stale
   rejection. Real Chromium workflows then cover canonical hierarchy selection, observable
-  shared-renderer selection/transform preview/cancel, settlement/reopen, transformed voxel picking,
+  shared-renderer selection/full-transform preview/cancel, project/scene/entity/light/capability
+  authoring, general asset import/dependency/lock/source-drift/reimport, restart-stable host-user
+  camera/input preferences, transformed voxel picking,
   shared-renderer brush/conversion preview restoration, brush undo/redo, annotations, private-plan
   conversion, reload persistence, and stale non-mutation.
 - `.github/workflows/studio-demo-integration.yml` checks out the public demo at the exact revision

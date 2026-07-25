@@ -24,7 +24,7 @@ Task #6138 adapts the tracked Asha Studio tree at
 and [`studio/donor-surface-disposition.tsv`](../studio/donor-surface-disposition.tsv) records the
 preserve, adapt, consolidate, historical-only, or exclude decision for every substantial surface.
 The complete parity baseline, exact tree/hash metadata, license status, untracked exclusions, and
-remaining explicit deferrals live in
+successor adaptations live in
 [`studio-migration-contract.md`](studio-migration-contract.md).
 
 The successor retains product workflows through a closed project-owned Rust adapter and the shared

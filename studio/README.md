@@ -13,8 +13,10 @@ Rust-revalidated voxel picking, atomic brush edits, durable history, typed annot
 model queries, and private-plan GLB conversion through the same renderer. Protocol 4 completes the
 M11F voxel reconciliation with trusted host asset/GLB files, deterministic templates and
 environments, every primitive and annotation edit/query family, bounded history diff previews, and
-full affine/default/texture conversion policy. Remaining non-voxel limitations stay visible and
-recorded in the migration contract and owner-adoption map rather than becoming silent omissions.
+full affine/default/texture conversion policy. Protocols 5 and 6 complete project/scene/entity/light/
+capability authoring, general asset import/reimport and dependency/lock browsing, and versioned
+host-user camera/input settings. Those operations remain named project or host boundaries rather
+than a universal editor command layer.
 
 See [the Studio migration contract](../docs/studio-migration-contract.md).
 The closed adapter protocol and its explicit integration gate are documented in
@@ -47,7 +49,11 @@ pnpm run host -- --adapter-binary /absolute/path/to/studio-adapter
 ```
 
 The host serves the built application and forwards only bounded JSON requests at
-`/api/studio-adapter` to that adapter's closed JSONL protocol. It does not inspect a sibling
+`/api/studio-adapter` to that adapter's closed JSONL protocol. Its separate
+`/api/studio-user-settings` boundary persists versioned per-canonical-project UI, grid, and camera
+preferences outside project bytes and browser storage. The default location is
+`$XDG_CONFIG_HOME/rusty-engine-studio/projects` (or the platform home config directory); pass an
+absolute `--settings-root` to choose another host-owned location. It does not inspect a sibling
 checkout, interpret project content, or acquire gameplay authority. To open on launch, use exactly
 one `root` and one project-relative `project` query parameter; the same controls remain visible in
 the shell.
@@ -62,7 +68,8 @@ and conversion fixtures:
 It starts fresh adapter processes to prove durable voxel/history/annotation/conversion/environment
 state and trusted host files, then
 runs visible Chromium workflows for Loading Bay and Converted Wall through the shared renderer,
-including renderer-observable brush/conversion previews and canonical restoration. CI
+including project/scene/entity/asset/settings persistence, renderer-observable brush/conversion
+previews, and canonical restoration. CI
 checks out the exact public demo revision declared in
 [`demo-consumer-source.json`](demo-consumer-source.json). Local integration remains explicit so the
 ordinary Engine and isolated Studio gates never acquire a sibling-checkout dependency.

@@ -5,6 +5,7 @@
   "type": "module",
   "dependencies": {
     "@rusty-engine/studio-adapter-client": "workspace:*",
-    "@rusty-engine/studio-editor-shell": "workspace:*"
+    "@rusty-engine/studio-editor-shell": "workspace:*",
+    "@rusty-engine/studio-user-settings": "workspace:*"
   }
 }

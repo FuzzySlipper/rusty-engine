@@ -11,6 +11,7 @@
     "sourceMap": true,
     "paths": {
       "@rusty-engine/studio-adapter-client": ["../adapter-client/dist/index.d.ts"],
+      "@rusty-engine/studio-user-settings": ["../user-settings/dist/index.d.ts"],
       "@rusty-engine/studio-viewport": ["../viewport/dist/index.d.ts"],
       "@rusty-engine/studio-voxel-editor": ["../voxel-editor/dist/index.d.ts"],
       "@rusty-engine/studio-voxel-editor/model": ["../voxel-editor/dist/voxel-editor-model.d.ts"]

@@ -6,7 +6,7 @@ const templateUrl = new URL('../libs/editor-shell/src/studio-shell.component.htm
 const stateUrl = new URL('../libs/editor-shell/src/state.ts', import.meta.url);
 const viewportUrl = new URL('../libs/viewport/src/studio-viewport.component.ts', import.meta.url);
 
-test('shell exposes the preserved editor surfaces and honest deferred operations', async () => {
+test('shell exposes the preserved editor surfaces and named parity operations', async () => {
   const template = await readFile(templateUrl, 'utf8');
   for (const visualId of [
     'studio-shell',
@@ -23,6 +23,9 @@ test('shell exposes the preserved editor surfaces and honest deferred operations
   assert.match(template, /Picking is active directly on the shared renderer canvas/);
   assert.match(template, />Voxel Authoring<\/button>/);
   assert.match(template, /<rusty-voxel-editor/);
+  assert.match(template, /Import Project Asset/);
+  assert.match(template, /studio-user-settings-status/);
+  assert.match(template, /captureKeyboardBinding/);
 });
 
 test('viewport composes the shared renderer host without private Three ownership', async () => {
@@ -32,6 +35,7 @@ test('viewport composes the shared renderer host without private Three ownership
   assert.match(viewport, /surface\.replaceFrame\(presentation\.frame\)/);
   assert.match(viewport, /surface\.pick\(/);
   assert.match(viewport, /surface\.setGrid\(/);
+  assert.match(viewport, /surface\.configureControlPreferences\(/);
   assert.match(viewport, /surface\.dispose\(\)/);
   assert.doesNotMatch(viewport, /from ['"]three/);
 });

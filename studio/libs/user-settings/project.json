@@ -1,0 +1,21 @@
+{
+  "name": "studio-user-settings",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "libs/user-settings/src",
+  "targets": {
+    "lint": {
+      "executor": "@nx/eslint:lint"
+    },
+    "build": {
+      "command": "pnpm --filter @rusty-engine/studio-user-settings run build"
+    },
+    "typecheck": {
+      "command": "pnpm --filter @rusty-engine/studio-user-settings run typecheck"
+    },
+    "test": {
+      "command": "pnpm --filter @rusty-engine/studio-user-settings run test"
+    }
+  },
+  "tags": ["scope:studio", "type:boundary"]
+}

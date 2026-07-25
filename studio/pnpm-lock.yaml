@@ -133,6 +133,9 @@ importers:
       '@rusty-engine/studio-editor-shell':
         specifier: workspace:*
         version: link:../../libs/editor-shell
+      '@rusty-engine/studio-user-settings':
+        specifier: workspace:*
+        version: link:../../libs/user-settings
 
   libs/adapter-client:
     dependencies:
@@ -161,12 +164,21 @@ importers:
       '@rusty-engine/studio-adapter-client':
         specifier: workspace:*
         version: link:../adapter-client
+      '@rusty-engine/studio-user-settings':
+        specifier: workspace:*
+        version: link:../user-settings
       '@rusty-engine/studio-viewport':
         specifier: workspace:*
         version: link:../viewport
       '@rusty-engine/studio-voxel-editor':
         specifier: workspace:*
         version: link:../voxel-editor
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+
+  libs/user-settings:
     devDependencies:
       '@types/node':
         specifier: ^24.0.0

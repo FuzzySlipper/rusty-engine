@@ -38,7 +38,7 @@ import {
 
 export type * from './voxel-protocol.js';
 
-export const STUDIO_ADAPTER_PROTOCOL_VERSION = 5 as const;
+export const STUDIO_ADAPTER_PROTOCOL_VERSION = 6 as const;
 export const MAX_STUDIO_ADAPTER_REQUEST_BYTES = 256 * 1024;
 export const MAX_STUDIO_ADAPTER_RESPONSE_BYTES = 32 * 1024 * 1024;
 
@@ -62,6 +62,10 @@ export type StudioAdapterRequest =
   | SetEntityKinematicRequest
   | SetEntityTranslationRequest
   | UpsertMaterialRequest
+  | PrepareAssetImportRequest
+  | PrepareAssetReimportRequest
+  | ApplyAssetImportRequest
+  | DiscardAssetImportRequest
   | InitializeVoxelAssetRequest
   | DuplicateVoxelAssetRequest
   | AttachVoxelInstanceRequest
@@ -279,6 +283,37 @@ export interface UpsertMaterialRequest extends RequestHeader {
   readonly expectedProjectHash: string;
   readonly assetId: string;
   readonly definition: StoredMaterialDefinition;
+}
+
+export interface PrepareAssetImportRequest extends RequestHeader {
+  readonly type: 'prepareAssetImport';
+  readonly expectedProjectHash: string;
+  readonly source: StudioFileSelection;
+  readonly settings: StudioAssetImportSettings;
+}
+
+export interface PrepareAssetReimportRequest extends RequestHeader {
+  readonly type: 'prepareAssetReimport';
+  readonly expectedProjectHash: string;
+  readonly assetId: string;
+}
+
+export interface ApplyAssetImportRequest extends RequestHeader {
+  readonly type: 'applyAssetImport';
+  readonly expectedProjectHash: string;
+  readonly planId: string;
+  readonly expectedPlanHash: string;
+}
+
+export interface DiscardAssetImportRequest extends RequestHeader {
+  readonly type: 'discardAssetImport';
+  readonly planId: string;
+}
+
+export interface StudioAssetImportSettings {
+  readonly scale: number;
+  readonly generateCollision: boolean;
+  readonly materialNamespace: string | null;
 }
 
 export interface InitializeVoxelAssetRequest extends RequestHeader {
@@ -529,6 +564,8 @@ export type StudioAdapterResponse =
   | VoxelReadResponse
   | VoxelConversionPreparedResponse
   | VoxelConversionDiscardedResponse
+  | AssetImportPreparedResponse
+  | AssetImportDiscardedResponse
   | VoxelHistoryRevertPreparedResponse
   | VoxelHistoryRevertDiscardedResponse
   | VoxelAssetFileExportedResponse
@@ -593,6 +630,16 @@ export interface VoxelConversionDiscardedResponse extends ResponseHeader {
   readonly planId: string;
 }
 
+export interface AssetImportPreparedResponse extends ResponseHeader {
+  readonly type: 'assetImportPrepared';
+  readonly plan: AssetImportPlanReadout;
+}
+
+export interface AssetImportDiscardedResponse extends ResponseHeader {
+  readonly type: 'assetImportDiscarded';
+  readonly planId: string;
+}
+
 export interface VoxelHistoryRevertPreparedResponse extends ResponseHeader {
   readonly type: 'voxelHistoryRevertPrepared';
   readonly preview: VoxelHistoryRevertPreview;
@@ -648,6 +695,10 @@ export const STUDIO_ADAPTER_OPERATIONS = [
   'setEntityKinematic',
   'setEntityTranslation',
   'upsertMaterial',
+  'prepareAssetImport',
+  'prepareAssetReimport',
+  'applyAssetImport',
+  'discardAssetImport',
   'initializeVoxelAsset',
   'duplicateVoxelAsset',
   'attachVoxelInstance',
@@ -693,11 +744,77 @@ export interface StudioProjectReadout {
   readonly canonical: CanonicalOwnerContent;
   readonly inspections: OwnerInspections;
   readonly sceneHierarchy: SceneHierarchyReadout;
+  readonly assetBrowser: AssetBrowserReadout;
   readonly voxel?: Readonly<Record<string, unknown>>;
   readonly voxelAuthoring: VoxelAuthoringReadout;
   readonly loadingBay: LoadingBayDomainReadout;
   readonly projection: RenderFrameDiff;
   readonly projectionReadout: ProjectionReadout;
+}
+
+export interface AssetBrowserReadout {
+  readonly assets: readonly AssetEntryReadout[];
+  readonly lockEntries: readonly AssetLockEntryReadout[];
+}
+
+export interface AssetEntryReadout {
+  readonly assetId: string;
+  readonly kind: string;
+  readonly version: number;
+  readonly hash: string | null;
+  readonly sourcePath: string | null;
+  readonly label: string | null;
+  readonly dependencies: readonly string[];
+  readonly dependents: readonly string[];
+  readonly material: boolean;
+  readonly importedMesh: boolean;
+  readonly import: AssetImportReadout | null;
+}
+
+export interface AssetImportReadout {
+  readonly source: StudioFileSelection;
+  readonly sourceHash: string;
+  readonly sourceByteCount: number;
+  readonly importerVersion: number;
+  readonly generatedAssetIds: readonly string[];
+  readonly status: 'unchanged' | 'contentChanged' | 'movedFile' | 'unavailable' | 'metadataInvalid';
+}
+
+export interface AssetLockEntryReadout {
+  readonly assetId: string;
+  readonly kind: string;
+  readonly version: number;
+  readonly hash: string | null;
+  readonly dependencies: readonly string[];
+}
+
+export interface AssetImportPlanReadout {
+  readonly planId: string;
+  readonly planHash: string;
+  readonly expectedProjectHash: string;
+  readonly source: StudioFileSelection;
+  readonly sourceHash: string;
+  readonly sourceByteCount: number;
+  readonly meshAssetId: string | null;
+  readonly reimportKind: 'noop' | 'visualUpdate' | 'structuralReload' | null;
+  readonly hasErrors: boolean;
+  readonly diagnostics: readonly AssetImportDiagnosticReadout[];
+  readonly generatedArtifacts: readonly AssetImportArtifactReadout[];
+  readonly generatedAssetIds: readonly string[];
+  readonly settings: StudioAssetImportSettings;
+}
+
+export interface AssetImportDiagnosticReadout {
+  readonly severity: 'warning' | 'error';
+  readonly code: string;
+  readonly locus: string;
+  readonly message: string;
+  readonly remedy: string;
+}
+
+export interface AssetImportArtifactReadout {
+  readonly relativePath: string;
+  readonly byteCount: number;
 }
 
 export interface StudioProjectIdentity {
@@ -955,6 +1072,22 @@ export function decodeStudioAdapterResponse(input: unknown): StudioAdapterRespon
       text(value['planId'], '$.planId');
       return input as VoxelConversionDiscardedResponse;
     }
+    case 'assetImportPrepared': {
+      const value = record(input, '$', [
+        'type', 'protocolVersion', 'requestId', 'plan',
+      ]);
+      responseHeader(value);
+      assetImportPlan(value['plan'], '$.plan');
+      return input as AssetImportPreparedResponse;
+    }
+    case 'assetImportDiscarded': {
+      const value = record(input, '$', [
+        'type', 'protocolVersion', 'requestId', 'planId',
+      ]);
+      responseHeader(value);
+      text(value['planId'], '$.planId');
+      return input as AssetImportDiscardedResponse;
+    }
     case 'voxelHistoryRevertPrepared': {
       const value = record(input, '$', [
         'type', 'protocolVersion', 'requestId', 'preview',
@@ -1045,7 +1178,7 @@ function adapterDescription(input: unknown, path: string): void {
   );
   const expected = STUDIO_ADAPTER_OPERATIONS;
   if (operations.length !== expected.length || operations.some((entry, index) => entry !== expected[index])) {
-    fail(`${path}.operations`, 'must name the protocol 5 operation set in order');
+    fail(`${path}.operations`, 'must name the protocol 6 operation set in order');
   }
 }
 
@@ -1058,6 +1191,7 @@ function projectReadout(input: unknown, path: string): void {
       'canonical',
       'inspections',
       'sceneHierarchy',
+      'assetBrowser',
       'voxelAuthoring',
       'loadingBay',
       'projection',
@@ -1069,6 +1203,7 @@ function projectReadout(input: unknown, path: string): void {
   canonicalOwnerContent(value['canonical'], `${path}.canonical`);
   ownerInspections(value['inspections'], `${path}.inspections`);
   sceneHierarchy(value['sceneHierarchy'], `${path}.sceneHierarchy`);
+  assetBrowser(value['assetBrowser'], `${path}.assetBrowser`);
   optional(value['voxel'], `${path}.voxel`, looseRecord);
   voxelContract(`${path}.voxelAuthoring`, () =>
     validateVoxelAuthoringReadout(value['voxelAuthoring'], `${path}.voxelAuthoring`));
@@ -1082,6 +1217,102 @@ function projectReadout(input: unknown, path: string): void {
     );
   }
   projectionReadout(value['projectionReadout'], `${path}.projectionReadout`);
+}
+
+function assetBrowser(input: unknown, path: string): void {
+  const value = record(input, path, ['assets', 'lockEntries']);
+  list(value['assets'], `${path}.assets`).forEach((entry, index) => {
+    const entryPath = `${path}.assets[${String(index)}]`;
+    const asset = record(entry, entryPath, [
+      'assetId', 'kind', 'version', 'hash', 'sourcePath', 'label', 'dependencies',
+      'dependents', 'material', 'importedMesh', 'import',
+    ]);
+    text(asset['assetId'], `${entryPath}.assetId`);
+    text(asset['kind'], `${entryPath}.kind`);
+    integer(asset['version'], `${entryPath}.version`);
+    nullable(asset['hash'], `${entryPath}.hash`, text);
+    nullable(asset['sourcePath'], `${entryPath}.sourcePath`, text);
+    nullable(asset['label'], `${entryPath}.label`, text);
+    stringList(asset['dependencies'], `${entryPath}.dependencies`);
+    stringList(asset['dependents'], `${entryPath}.dependents`);
+    truth(asset['material'], `${entryPath}.material`);
+    truth(asset['importedMesh'], `${entryPath}.importedMesh`);
+    nullable(asset['import'], `${entryPath}.import`, assetImportReadout);
+  });
+  list(value['lockEntries'], `${path}.lockEntries`).forEach((entry, index) => {
+    const entryPath = `${path}.lockEntries[${String(index)}]`;
+    const lock = record(entry, entryPath, [
+      'assetId', 'kind', 'version', 'hash', 'dependencies',
+    ]);
+    text(lock['assetId'], `${entryPath}.assetId`);
+    text(lock['kind'], `${entryPath}.kind`);
+    integer(lock['version'], `${entryPath}.version`);
+    nullable(lock['hash'], `${entryPath}.hash`, text);
+    stringList(lock['dependencies'], `${entryPath}.dependencies`);
+  });
+}
+
+function assetImportReadout(input: unknown, path: string): void {
+  const value = record(input, path, [
+    'source', 'sourceHash', 'sourceByteCount', 'importerVersion', 'generatedAssetIds', 'status',
+  ]);
+  fileSelection(value['source'], `${path}.source`);
+  text(value['sourceHash'], `${path}.sourceHash`);
+  integer(value['sourceByteCount'], `${path}.sourceByteCount`);
+  integer(value['importerVersion'], `${path}.importerVersion`);
+  stringList(value['generatedAssetIds'], `${path}.generatedAssetIds`);
+  choice(value['status'], `${path}.status`, [
+    'unchanged', 'contentChanged', 'movedFile', 'unavailable', 'metadataInvalid',
+  ]);
+}
+
+function assetImportPlan(input: unknown, path: string): void {
+  const value = record(input, path, [
+    'planId', 'planHash', 'expectedProjectHash', 'source', 'sourceHash', 'sourceByteCount',
+    'meshAssetId', 'reimportKind', 'hasErrors', 'diagnostics', 'generatedArtifacts',
+    'generatedAssetIds', 'settings',
+  ]);
+  for (const field of ['planId', 'planHash', 'expectedProjectHash', 'sourceHash']) {
+    text(value[field], `${path}.${field}`);
+  }
+  fileSelection(value['source'], `${path}.source`);
+  integer(value['sourceByteCount'], `${path}.sourceByteCount`);
+  nullable(value['meshAssetId'], `${path}.meshAssetId`, text);
+  nullable(value['reimportKind'], `${path}.reimportKind`, (entry, entryPath) => {
+    choice(entry, entryPath, ['noop', 'visualUpdate', 'structuralReload']);
+  });
+  truth(value['hasErrors'], `${path}.hasErrors`);
+  list(value['diagnostics'], `${path}.diagnostics`).forEach((entry, index) => {
+    const entryPath = `${path}.diagnostics[${String(index)}]`;
+    const diagnostic = record(entry, entryPath, [
+      'severity', 'code', 'locus', 'message', 'remedy',
+    ]);
+    choice(diagnostic['severity'], `${entryPath}.severity`, ['warning', 'error']);
+    for (const field of ['code', 'locus', 'message', 'remedy']) {
+      text(diagnostic[field], `${entryPath}.${field}`);
+    }
+  });
+  list(value['generatedArtifacts'], `${path}.generatedArtifacts`).forEach((entry, index) => {
+    const entryPath = `${path}.generatedArtifacts[${String(index)}]`;
+    const artifact = record(entry, entryPath, ['relativePath', 'byteCount']);
+    text(artifact['relativePath'], `${entryPath}.relativePath`);
+    integer(artifact['byteCount'], `${entryPath}.byteCount`);
+  });
+  stringList(value['generatedAssetIds'], `${path}.generatedAssetIds`);
+  assetImportSettings(value['settings'], `${path}.settings`);
+}
+
+function fileSelection(input: unknown, path: string): void {
+  const value = record(input, path, ['scope', 'path']);
+  choice(value['scope'], `${path}.scope`, ['project', 'host']);
+  text(value['path'], `${path}.path`);
+}
+
+function assetImportSettings(input: unknown, path: string): void {
+  const value = record(input, path, ['scale', 'generateCollision', 'materialNamespace']);
+  finiteNumber(value['scale'], `${path}.scale`);
+  truth(value['generateCollision'], `${path}.generateCollision`);
+  nullable(value['materialNamespace'], `${path}.materialNamespace`, text);
 }
 
 function sceneHierarchy(input: unknown, path: string): void {
@@ -1275,6 +1506,12 @@ function namedCounts(input: unknown, path: string): void {
     const count = record(entry, entryPath, ['name', 'count']);
     text(count['name'], `${entryPath}.name`);
     integer(count['count'], `${entryPath}.count`);
+  });
+}
+
+function stringList(input: unknown, path: string): void {
+  list(input, path).forEach((entry, index) => {
+    text(entry, `${path}[${String(index)}]`);
   });
 }
 

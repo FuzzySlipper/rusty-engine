@@ -75,6 +75,64 @@ void test('inspection surface owns coherent pointer orbit plus focused movement 
   assert.equal(harness.surface.readout().camera.source, 'stored_editor');
 });
 
+void test('inspection controls apply configurable six-axis movement, boost, inversion, and pointer pan', () => {
+  const harness = createInspectionHarness({ autoStart: false });
+  harness.surface.configureControlPreferences({
+    moveSpeed: 10,
+    boostMultiplier: 3,
+    invertLookY: true,
+    invertPanY: true,
+    keyboard: {
+      moveForward: 'KeyI',
+      moveBackward: 'KeyK',
+      moveLeft: 'KeyJ',
+      moveRight: 'KeyL',
+      moveDown: 'KeyU',
+      moveUp: 'KeyO',
+      boost: 'ShiftRight',
+    },
+  });
+  assert.deepEqual(harness.surface.readout().controlPreferences, {
+    moveSpeed: 10,
+    boostMultiplier: 3,
+    invertLookY: true,
+    invertPanY: true,
+    keyboard: {
+      moveForward: 'KeyI',
+      moveBackward: 'KeyK',
+      moveLeft: 'KeyJ',
+      moveRight: 'KeyL',
+      moveDown: 'KeyU',
+      moveUp: 'KeyO',
+      boost: 'ShiftRight',
+    },
+  });
+
+  harness.canvas.focus();
+  const beforeUp = harness.surface.camera();
+  harness.document.emit('keydown', keyboardEvent('KeyO'));
+  harness.document.emit('keydown', keyboardEvent('ShiftRight'));
+  harness.surface.renderOnce(1000);
+  harness.document.emit('keyup', keyboardEvent('KeyO'));
+  harness.document.emit('keyup', keyboardEvent('ShiftRight'));
+  const afterUp = harness.surface.camera();
+  assert.ok(afterUp.pose.position[1] > beforeUp.pose.position[1]);
+  assert.ok(afterUp.pose.position[1] - beforeUp.pose.position[1] > 2.9);
+
+  const beforeOrbit = harness.surface.camera();
+  harness.canvas.emit('pointerdown', pointerEvent({ button: 0, clientX: 50, clientY: 50, pointerId: 8 }));
+  harness.canvas.emit('pointermove', pointerEvent({ buttons: 1, clientX: 50, clientY: 70, pointerId: 8 }));
+  harness.canvas.emit('pointerup', pointerEvent({ button: 0, pointerId: 8 }));
+  assert.ok(harness.surface.camera().pose.pitchDegrees > beforeOrbit.pose.pitchDegrees);
+
+  const beforePan = harness.surface.camera();
+  harness.canvas.emit('pointerdown', pointerEvent({ button: 1, clientX: 50, clientY: 50, pointerId: 9 }));
+  harness.canvas.emit('pointermove', pointerEvent({ buttons: 4, clientX: 80, clientY: 70, pointerId: 9 }));
+  harness.canvas.emit('pointerup', pointerEvent({ button: 1, pointerId: 9 }));
+  assert.notDeepEqual(harness.surface.camera().pose.position, beforePan.pose.position);
+  assert.equal(harness.surface.readout().lastCameraChange, 'pointer_pan');
+});
+
 void test('inspection surface applies replaces and clears the engine procedural grid', () => {
   const initialGrid = editorGridDescriptor();
   const harness = createInspectionHarness({ autoStart: false, initialGrid });

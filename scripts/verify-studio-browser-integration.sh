@@ -14,8 +14,10 @@ if [[ ! -f "$DEMO_ROOT/Cargo.toml" || ! -f "$DEMO_ROOT/AGENTS.md" ]]; then
 fi
 
 STUDIO_TEST_ROOT="$(mktemp -d /tmp/rusty-engine-studio-browser.XXXXXX)"
+STUDIO_SETTINGS_ROOT="$(mktemp -d /tmp/rusty-engine-studio-settings.XXXXXX)"
 cleanup() {
   rm -rf -- "$STUDIO_TEST_ROOT"
+  rm -rf -- "$STUDIO_SETTINGS_ROOT"
 }
 trap cleanup EXIT
 
@@ -28,4 +30,5 @@ cargo build --manifest-path "$DEMO_ROOT/Cargo.toml" --bin studio-adapter
 
 RUSTY_STUDIO_ADAPTER_BINARY="$DEMO_ROOT/target/debug/studio-adapter" \
 RUSTY_STUDIO_PROJECT_ROOT="$STUDIO_TEST_ROOT" \
+RUSTY_STUDIO_SETTINGS_ROOT="$STUDIO_SETTINGS_ROOT" \
 pnpm --dir studio run test:browser-integration

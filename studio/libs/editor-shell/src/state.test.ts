@@ -8,6 +8,11 @@ import {
   type StudioAdapterRequest,
   type StudioAdapterTransport,
 } from '@rusty-engine/studio-adapter-client';
+import {
+  HttpStudioUserSettingsClient,
+  buildDefaultStudioHostUserSettings,
+  serializeStudioHostUserSettings,
+} from '@rusty-engine/studio-user-settings';
 
 import { StudioWorkspaceStore } from './state.js';
 import { HttpStudioAdapterTransport } from './transport.js';
@@ -101,6 +106,38 @@ test('opening a second project clears project-scoped selection and preview even 
   );
 });
 
+test('host-user camera and keyboard settings persist outside project authority and reload by project root', async () => {
+  const settingsHost = new FixtureSettingsHost();
+  const first = new StudioWorkspaceStore(
+    new StudioAdapterClient(new FixtureTransport()),
+    new HttpStudioUserSettingsClient('/api/studio-user-settings', settingsHost.fetch),
+  );
+  await first.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  assert.equal(first.snapshot().userSettings.status, 'defaulted');
+  assert.equal(first.snapshot().settings.cameraMoveSpeed, 6);
+
+  first.updateSettings({
+    cameraMoveSpeed: 14,
+    cameraBoostMultiplier: 5,
+    invertLookY: true,
+    keyboard: { ...first.snapshot().settings.keyboard, moveForward: 'ArrowUp' },
+  });
+  await first.closeProject();
+  assert.match(settingsHost.text ?? '', /"cameraMoveSpeed": 14/);
+  assert.match(settingsHost.text ?? '', /"moveForward": "ArrowUp"/);
+
+  const second = new StudioWorkspaceStore(
+    new StudioAdapterClient(new FixtureTransport()),
+    new HttpStudioUserSettingsClient('/api/studio-user-settings', settingsHost.fetch),
+  );
+  await second.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  assert.equal(second.snapshot().userSettings.status, 'loaded');
+  assert.equal(second.snapshot().settings.cameraMoveSpeed, 14);
+  assert.equal(second.snapshot().settings.cameraBoostMultiplier, 5);
+  assert.equal(second.snapshot().settings.invertLookY, true);
+  assert.equal(second.snapshot().settings.keyboard.moveForward, 'ArrowUp');
+});
+
 test('HTTP transport bounds both directions and leaves semantic decoding to the adapter client', async () => {
   const requests: string[] = [];
   const transport = new HttpStudioAdapterTransport('/api/studio-adapter', async (input, init) => {
@@ -176,6 +213,55 @@ class FixtureTransport implements StudioAdapterTransport {
   }
 }
 
+class FixtureSettingsHost {
+  readonly projectKey = 'rusty-studio-project:fixture';
+  text: string | null = null;
+  sha256: string | null = null;
+
+  readonly fetch = async (_input: string, init?: RequestInit): Promise<{
+    readonly ok: boolean;
+    readonly status: number;
+    readonly json: () => Promise<unknown>;
+  }> => {
+    if (init?.method === 'PUT') {
+      const body = JSON.parse(String(init.body)) as {
+        readonly text: string;
+        readonly expectedHash: string | null;
+      };
+      if (body.expectedHash !== this.sha256) {
+        return response(false, 409, { ok: false, message: 'stale settings' });
+      }
+      this.text = body.text;
+      this.sha256 = `settings-${String(body.text.length)}`;
+      return response(true, 200, {
+        ok: true,
+        path: '/config/rusty-studio/fixture.json',
+        sha256: this.sha256,
+      });
+    }
+    if (this.text === null) {
+      const defaults = buildDefaultStudioHostUserSettings(this.projectKey);
+      assert.equal(serializeStudioHostUserSettings(defaults).includes(this.projectKey), true);
+    }
+    return response(true, 200, {
+      ok: true,
+      canonicalProjectRoot: '/external/loading-bay',
+      projectKey: this.projectKey,
+      path: '/config/rusty-studio/fixture.json',
+      text: this.text,
+      sha256: this.sha256,
+    });
+  };
+}
+
+function response(ok: boolean, status: number, body: unknown): {
+  readonly ok: boolean;
+  readonly status: number;
+  readonly json: () => Promise<unknown>;
+} {
+  return { ok, status, json: () => Promise.resolve(body) };
+}
+
 function described(requestId: string): unknown {
   return {
     type: 'described',
@@ -183,10 +269,10 @@ function described(requestId: string): unknown {
     requestId,
     adapter: {
       adapterId: 'rusty-engine-demo.loading-bay',
-      adapterVersion: 5,
+      adapterVersion: 6,
       protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
       projectKind: 'loadingBayProject',
-      projectSchemaVersion: 10,
+      projectSchemaVersion: 11,
       operations: STUDIO_ADAPTER_OPERATIONS,
     },
   };
@@ -213,8 +299,8 @@ function projectReadout(changed: boolean, projectId = 'loading-bay'): unknown {
       projectId,
       name: 'Loading Bay',
       entryScene: 'scene/loading-bay',
-      sourceSchemaVersion: 10,
-      currentSchemaVersion: 10,
+      sourceSchemaVersion: 11,
+      currentSchemaVersion: 11,
       projectHash: changed ? 'hash-after' : 'hash-before',
       sceneRevision: changed ? 12 : 11,
       relativeProjectFile: 'content/projects/loading-bay.project.json',
@@ -275,6 +361,28 @@ function projectReadout(changed: boolean, projectId = 'loading-bay'): unknown {
         hierarchyNode(10, 0, 'staticMesh', 'player', 1, 'mesh/player', translation),
         hierarchyNode(20, 1, 'emptyGroup', 'encounter', 2, null, [0, 0, 0]),
       ],
+    },
+    assetBrowser: {
+      assets: [{
+        assetId: 'mesh/player',
+        kind: 'mesh',
+        version: 1,
+        hash: null,
+        sourcePath: null,
+        label: 'Player',
+        dependencies: [],
+        dependents: [],
+        material: false,
+        importedMesh: false,
+        import: null,
+      }],
+      lockEntries: [{
+        assetId: 'mesh/player',
+        kind: 'mesh',
+        version: 1,
+        hash: null,
+        dependencies: [],
+      }],
     },
     voxelAuthoring: {
       assets: [],

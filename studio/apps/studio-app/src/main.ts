@@ -1,6 +1,7 @@
 import { provideZonelessChangeDetection } from '@angular/core';
 import { bootstrapApplication } from '@angular/platform-browser';
 import { StudioAdapterClient } from '@rusty-engine/studio-adapter-client';
+import { HttpStudioUserSettingsClient } from '@rusty-engine/studio-user-settings';
 import {
   HttpStudioAdapterTransport,
   STUDIO_WORKSPACE,
@@ -16,6 +17,7 @@ void bootstrapApplication(App, {
       provide: STUDIO_WORKSPACE,
       useFactory: () => new StudioWorkspaceStore(
         new StudioAdapterClient(new HttpStudioAdapterTransport()),
+        new HttpStudioUserSettingsClient(),
       ),
     },
   ],

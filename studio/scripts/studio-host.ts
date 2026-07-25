@@ -14,6 +14,12 @@ import {
   MAX_STUDIO_ADAPTER_REQUEST_BYTES,
   MAX_STUDIO_ADAPTER_RESPONSE_BYTES,
 } from '../libs/adapter-client/src/index.js';
+import {
+  MAX_STUDIO_USER_SETTINGS_BYTES,
+  defaultStudioUserSettingsRoot,
+  readStudioUserSettings,
+  writeStudioUserSettings,
+} from './studio-user-settings-service.js';
 
 const DEFAULT_STATIC_ROOT = fileURLToPath(
   new URL('../dist/apps/studio-app/browser/', import.meta.url),
@@ -25,6 +31,7 @@ interface HostOptions {
   readonly staticRoot: string;
   readonly host: string;
   readonly port: number;
+  readonly settingsRoot: string;
 }
 
 interface PendingExchange {
@@ -140,6 +147,70 @@ async function readBoundedBody(request: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+async function readSettingsBody(request: IncomingMessage): Promise<string> {
+  const declared = Number(request.headers['content-length'] ?? 0);
+  if (Number.isFinite(declared) && declared > MAX_STUDIO_USER_SETTINGS_BYTES * 2) {
+    throw new Error('Studio user-settings request exceeds the protocol byte bound');
+  }
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += buffer.byteLength;
+    if (bytes > MAX_STUDIO_USER_SETTINGS_BYTES * 2) {
+      throw new Error('Studio user-settings request exceeds the protocol byte bound');
+    }
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+async function exchangeUserSettings(
+  request: IncomingMessage,
+  response: ServerResponse,
+  url: URL,
+  settingsRoot: string,
+): Promise<void> {
+  if (request.method === 'GET') {
+    const projectRoots = url.searchParams.getAll('projectRoot');
+    if (projectRoots.length !== 1) {
+      sendError(response, 400, 'Exactly one projectRoot is required');
+      return;
+    }
+    sendJson(response, 200, await readStudioUserSettings({
+      projectRoot: projectRoots[0] as string,
+      settingsRoot,
+    }));
+    return;
+  }
+  if (request.method !== 'PUT') {
+    response.writeHead(405, { allow: 'GET, PUT' });
+    response.end();
+    return;
+  }
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(await readSettingsBody(request)) as unknown;
+  } catch {
+    sendError(response, 400, 'Studio user-settings request is malformed JSON');
+    return;
+  }
+  if (!isRecord(decoded)
+    || typeof decoded['projectRoot'] !== 'string'
+    || typeof decoded['text'] !== 'string'
+    || (decoded['expectedHash'] !== null && typeof decoded['expectedHash'] !== 'string')) {
+    sendError(response, 400, 'Studio user-settings request has an invalid shape');
+    return;
+  }
+  const result = await writeStudioUserSettings({
+    projectRoot: decoded['projectRoot'],
+    text: decoded['text'],
+    expectedHash: decoded['expectedHash'],
+    settingsRoot,
+  });
+  sendJson(response, result.ok ? 200 : result.diagnostic === 'stale_user_settings' ? 409 : 400, result);
+}
+
 async function exchangeWithAdapter(
   request: IncomingMessage,
   response: ServerResponse,
@@ -224,13 +295,21 @@ async function serveStatic(
 }
 
 function sendError(response: ServerResponse, status: number, message: string): void {
-  const body = JSON.stringify({ error: message });
+  sendJson(response, status, { ok: false, message });
+}
+
+function sendJson(response: ServerResponse, status: number, value: unknown): void {
+  const body = JSON.stringify(value);
   response.writeHead(status, {
     'cache-control': 'no-store',
     'content-type': 'application/json; charset=utf-8',
     'content-length': String(Buffer.byteLength(body)),
   });
   response.end(body);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function contentType(file: string): string {
@@ -261,12 +340,14 @@ function options(): HostOptions {
   const staticRoot = argumentValue('--static-root', DEFAULT_STATIC_ROOT);
   const host = argumentValue('--host', '127.0.0.1');
   const port = Number(argumentValue('--port', '4300'));
+  const settingsRoot = argumentValue('--settings-root', defaultStudioUserSettingsRoot());
   if (!isAbsolute(adapterBinary)) throw new Error('--adapter-binary must be absolute');
   if (!isAbsolute(staticRoot)) throw new Error('--static-root must be absolute');
+  if (!isAbsolute(settingsRoot)) throw new Error('--settings-root must be absolute');
   if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
     throw new Error('--port must be an integer from 1 through 65535');
   }
-  return { adapterBinary, staticRoot, host, port };
+  return { adapterBinary, staticRoot, host, port, settingsRoot };
 }
 
 async function main(): Promise<void> {
@@ -294,6 +375,10 @@ async function main(): Promise<void> {
       }
       if (url.pathname === '/api/studio-adapter') {
         await exchangeWithAdapter(request, response, adapter);
+        return;
+      }
+      if (url.pathname === '/api/studio-user-settings') {
+        await exchangeUserSettings(request, response, url, configured.settingsRoot);
         return;
       }
       await serveStatic(request, response, configured.staticRoot, url.pathname);

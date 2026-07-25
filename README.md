@@ -123,7 +123,7 @@ The format, limits, provenance, and failure behavior are documented in
 - [Shared rendering operations](docs/rendering-operations.md) — verification, exact-revision
   consumption, CI topology, resource rules, and known limitations.
 - [Studio migration contract](docs/studio-migration-contract.md) — first-party authoring scope,
-  owner adoption, isolation, and explicit deferrals.
+  owner adoption, isolation, parity accounting, and deliberate topology exclusions.
 - [Studio adapter protocol](docs/studio-adapter-protocol.md) — closed project-owned Rust operations,
   optimistic guards, and cross-repository acceptance.
 - [Rust source organization](docs/rust-style.md) — lightweight module and behavior-owner style.

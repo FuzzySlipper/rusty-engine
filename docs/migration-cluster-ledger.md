@@ -1,7 +1,6 @@
 # Asha-to-Rusty Engine migration cluster ledger
 
-Status: M0-M7B and M9 accepted; M10 product extraction and M11R shared rendering are implemented
-under review; Studio #6138 is next; M7C remains deliberately unscheduled
+Status: M0-M11S implemented; M11 Studio successor parity and closeout acceptance are in progress
 
 Evidence baselines:
 
@@ -180,14 +179,15 @@ See [rendering-operations.md](rendering-operations.md) for commands and known li
 
 ### M11: isolated first-party Studio
 
-Den task #6138 supersedes the old unscheduled M8 placeholder. After M11R closes the shared renderer
-boundary, it will port the valuable Asha Studio workflows into an isolated `studio/`
-workspace in this repository. Studio may author artifacts and propose typed operations, while Rust
-retains validation, persistence, mutation, and execution authority. Its Angular/Nx dependency and
-verification domain remain outside ordinary Engine installation and CI.
+Den task #6138 supersedes the old unscheduled M8 placeholder. The isolated `studio/` workspace now
+uses the shared renderer and the M11S owners through a closed project-owned Rust adapter. It covers
+project/scene/entity/light/capability authoring, catalog and general asset import/reimport, the full
+voxel/annotation/history/conversion/environment family, and versioned host-user camera/input
+settings. Rust retains semantic validation, project persistence, mutation, and execution authority;
+the explicit browser host owns only product UI, bounded adapter forwarding, and host-user
+preferences. Angular/Nx and Playwright remain outside ordinary Engine installation and CI.
 
-The M11 entry records owner-approved direction and dependency order, not completed implementation;
-Den remains authoritative for current status and acceptance criteria.
+Den remains authoritative for exact review state and final M11 acceptance.
 
 ## Deliberately unscheduled and absent clusters
 

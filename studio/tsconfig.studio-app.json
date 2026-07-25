@@ -18,6 +18,7 @@
     "apps/studio-app/src/**/*.ts",
     "libs/adapter-client/src/**/*.ts",
     "libs/editor-shell/src/**/*.ts",
+    "libs/user-settings/src/**/*.ts",
     "libs/viewport/src/**/*.ts"
   ],
   "exclude": ["**/*.spec.ts", "**/*.test.ts"]

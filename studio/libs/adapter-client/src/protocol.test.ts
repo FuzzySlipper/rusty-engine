@@ -193,7 +193,7 @@ test('voxel response families are closed and named authoring calls preserve guar
   assert.equal(applied.receipt.kind, 'voxelBrushApplied');
 });
 
-test('protocol 5 closes history, file, and texture-policy response families', () => {
+test('protocol 6 closes history, file, and texture-policy response families', () => {
   const history = decodeStudioAdapterResponse({
     type: 'voxelRead',
     protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
@@ -291,6 +291,35 @@ class RecordingTransport implements StudioAdapterTransport {
   }
 }
 
+test('asset import plans, browser provenance, and named client calls stay closed', async () => {
+  const prepared = assetImportPrepared('asset-prepare-1');
+  const decoded = decodeStudioAdapterResponse(prepared);
+  assert.equal(decoded.type, 'assetImportPrepared');
+  assert.equal(decoded.plan.meshAssetId, 'mesh/studio-triangle');
+  assert.throws(
+    () => decodeStudioAdapterResponse({
+      ...prepared,
+      plan: { ...prepared.plan, callback: 'run-me' },
+    }),
+    /callback.*unknown/,
+  );
+
+  const transport = new RecordingTransport((request) => {
+    assert.equal(request.type, 'prepareAssetImport');
+    if (request.type !== 'prepareAssetImport') throw new Error('unexpected operation');
+    assert.equal(request.source.scope, 'project');
+    assert.equal(request.settings.materialNamespace, 'studio');
+    return assetImportPrepared(request.requestId);
+  });
+  const client = new StudioAdapterClient(transport);
+  const response = await client.prepareAssetImport({
+    expectedProjectHash: '00'.repeat(32),
+    source: { scope: 'project', path: 'content/assets/studio-triangle.mesh.json' },
+    settings: { scale: 1, generateCollision: false, materialNamespace: 'studio' },
+  });
+  assert.equal(response.plan.hasErrors, false);
+});
+
 function projectOpened(requestId: string): ProjectOpenedFixture {
   return {
     type: 'projectOpened',
@@ -301,8 +330,8 @@ function projectOpened(requestId: string): ProjectOpenedFixture {
         projectId: 'loading-bay',
         name: 'Loading Bay',
         entryScene: 'scene/loading-bay',
-        sourceSchemaVersion: 10,
-        currentSchemaVersion: 10,
+        sourceSchemaVersion: 11,
+        currentSchemaVersion: 11,
         projectHash: '00'.repeat(32),
         sceneRevision: 1,
         relativeProjectFile: 'content/projects/loading-bay.project.json',
@@ -360,6 +389,10 @@ function projectOpened(requestId: string): ProjectOpenedFixture {
         name: 'Loading Bay',
         rootNodeIds: [],
         nodes: [],
+      },
+      assetBrowser: {
+        assets: [],
+        lockEntries: [],
       },
       voxelAuthoring: {
         assets: [],
@@ -420,6 +453,10 @@ interface ProjectOpenedFixture {
       rootNodeIds: number[];
       nodes: unknown[];
     };
+    assetBrowser: {
+      assets: unknown[];
+      lockEntries: unknown[];
+    };
     voxelAuthoring: {
       assets: unknown[];
       instances: unknown[];
@@ -436,6 +473,29 @@ interface ProjectOpenedFixture {
       retainedVoxelChunks: number;
       diagnostics: unknown[];
     };
+  };
+}
+
+function assetImportPrepared(requestId: string) {
+  return {
+    type: 'assetImportPrepared',
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+    requestId,
+    plan: {
+      planId: 'asset-import-plan',
+      planHash: '11'.repeat(32),
+      expectedProjectHash: '00'.repeat(32),
+      source: { scope: 'project', path: 'content/assets/studio-triangle.mesh.json' },
+      sourceHash: '22'.repeat(32),
+      sourceByteCount: 512,
+      meshAssetId: 'mesh/studio-triangle',
+      reimportKind: 'structuralReload',
+      hasErrors: false,
+      diagnostics: [],
+      generatedArtifacts: [{ relativePath: 'studio-triangle.static-mesh.json', byteCount: 256 }],
+      generatedAssetIds: ['material/studio/paint', 'mesh/studio-triangle'],
+      settings: { scale: 1, generateCollision: false, materialNamespace: 'studio' },
+    },
   };
 }
 

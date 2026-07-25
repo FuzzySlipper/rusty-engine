@@ -163,6 +163,112 @@ test('project, scene, entity, light, and capability authoring flow through named
   await expect(page.locator('.entity-row[data-entity-id="42"]')).toContainText('Sun Key');
 });
 
+test('host-user input settings and general asset import reimport persist through real owner and renderer paths', async ({ page }) => {
+  await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(loadingBayProjectFile)}`);
+  const shell = page.locator('[data-visual-id="studio-shell"]');
+  const viewport = page.locator('rusty-studio-viewport');
+  await expect(shell).toHaveAttribute('data-project-hash', /.+/);
+  await expect(viewport).toHaveAttribute('data-renderer-status', 'ready');
+
+  await page.getByRole('button', { name: 'View', exact: true }).click();
+  await page.getByRole('button', { name: 'Studio Settings…', exact: true }).click();
+  const settings = page.locator('[data-visual-id="studio-settings-dialog"]');
+  await settings.getByLabel('Camera move speed').fill('12');
+  await settings.getByLabel('Camera move speed').press('Tab');
+  await settings.getByLabel('Camera boost multiplier').fill('6');
+  await settings.getByLabel('Camera boost multiplier').press('Tab');
+  await settings.getByLabel('Invert orbit look Y').check();
+  await settings.getByLabel('Move forward binding').press('ArrowUp');
+  await expect(shell).toHaveAttribute('data-camera-speed', '12');
+  await expect(shell).toHaveAttribute('data-move-forward', 'ArrowUp');
+  await expect(viewport).toHaveAttribute('data-camera-move-speed', '12');
+  await expect(viewport).toHaveAttribute('data-camera-move-forward', 'ArrowUp');
+  await expect(shell).toHaveAttribute('data-user-settings-status', 'loaded');
+  await settings.getByRole('button', { name: 'Done', exact: true }).click();
+
+  await page.reload();
+  await expect(shell).toHaveAttribute('data-user-settings-status', 'loaded');
+  await expect(shell).toHaveAttribute('data-camera-speed', '12');
+  await expect(shell).toHaveAttribute('data-move-forward', 'ArrowUp');
+  await expect(viewport).toHaveAttribute('data-camera-move-speed', '12');
+  await expect(viewport).toHaveAttribute('data-camera-move-forward', 'ArrowUp');
+
+  const hashBeforePlan = await projectHash(shell);
+  await page.getByRole('button', { name: 'File', exact: true }).click();
+  await page.getByRole('button', { name: 'Import Project Asset…', exact: true }).click();
+  let dialog = page.locator('[data-visual-id="studio-authoring-dialog"]');
+  await dialog.getByLabel('Source mesh JSON').fill('content/assets/studio-triangle.mesh.json');
+  await dialog.getByLabel('Scale', { exact: true }).fill('2');
+  await dialog.getByLabel('Material namespace').fill('studio');
+  await dialog.getByLabel('Generate AABB collision when source is visual-only').check();
+  await dialog.getByRole('button', { name: 'Prepare import', exact: true }).click();
+  const plan = page.locator('[data-visual-id="studio-asset-import-plan"]');
+  await expect(plan).toContainText('structuralReload · mesh/studio-triangle');
+  await expect(plan).toContainText('2 generated assets');
+  await expect(shell).toHaveAttribute('data-project-hash', hashBeforePlan);
+  await plan.getByRole('button', { name: 'Apply atomically', exact: true }).click();
+  await expect(shell).toHaveAttribute('data-project-assets', '8');
+  await expect.poll(() => projectHash(shell)).not.toBe(hashBeforePlan);
+
+  const importedAsset = page.getByRole('option', { name: /mesh\/studio-triangle/ });
+  await importedAsset.click();
+  await expect(importedAsset).toContainText('unchanged');
+  await expect(page.locator('.asset-detail')).toContainText('material/studio/paint');
+  await expect(page.locator('.asset-detail')).toContainText('source project:content/assets/studio-triangle.mesh.json');
+
+  const rendererBeforeInstance = await rendererHash(viewport);
+  await page.getByRole('button', { name: 'Create scene object' }).click();
+  dialog = page.locator('[data-visual-id="studio-authoring-dialog"]');
+  await dialog.getByLabel('Entity ID').fill('70');
+  await dialog.getByLabel('Name', { exact: true }).fill('Imported Triangle');
+  await dialog.getByLabel('Appearance').selectOption('staticMesh');
+  await dialog.getByLabel('Asset ID').fill('mesh/studio-triangle');
+  await dialog.getByRole('button', { name: 'Create object', exact: true }).click();
+  await expect(page.locator('.entity-row[data-entity-id="70"]')).toContainText('Imported Triangle');
+  await expect.poll(() => rendererHash(viewport)).not.toBe(rendererBeforeInstance);
+
+  const sourcePath = join(projectRoot, 'content/assets/studio-triangle.mesh.json');
+  const source = JSON.parse(await readFile(sourcePath, 'utf8')) as {
+    materials: Array<{ color: number[] }>;
+  };
+  const firstMaterial = source.materials[0];
+  if (firstMaterial === undefined) throw new Error('Studio mesh fixture has no material');
+  firstMaterial.color = [0.8, 0.2, 0.1, 1];
+  await writeFile(sourcePath, `${JSON.stringify(source, null, 2)}\n`);
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await importedAsset.click();
+  await expect(importedAsset).toContainText('contentChanged');
+
+  const hashBeforeReimport = await projectHash(shell);
+  const rendererBeforeReimport = await rendererHash(viewport);
+  await page.locator('.asset-detail').getByRole('button', { name: 'Prepare reimport' }).click();
+  await expect(plan).toContainText('visualUpdate · mesh/studio-triangle');
+  await expect(shell).toHaveAttribute('data-project-hash', hashBeforeReimport);
+  await plan.getByRole('button', { name: 'Apply atomically', exact: true }).click();
+  await expect.poll(() => projectHash(shell)).not.toBe(hashBeforeReimport);
+  await expect(importedAsset).toContainText('unchanged');
+  await expect.poll(() => rendererHash(viewport)).not.toBe(rendererBeforeReimport);
+
+  const hashBeforeInvalidPlan = await projectHash(shell);
+  await writeFile(join(projectRoot, 'content/assets/rejected.mesh.json'), '{"schemaVersion":1}\n');
+  await page.getByRole('button', { name: 'File', exact: true }).click();
+  await page.getByRole('button', { name: 'Import Project Asset…', exact: true }).click();
+  dialog = page.locator('[data-visual-id="studio-authoring-dialog"]');
+  await dialog.getByLabel('Source mesh JSON').fill('content/assets/rejected.mesh.json');
+  await dialog.getByRole('button', { name: 'Prepare import', exact: true }).click();
+  await expect(plan.locator('.asset-diagnostic.is-error').first()).toBeVisible();
+  await expect(plan.getByRole('button', { name: 'Apply atomically', exact: true })).toBeDisabled();
+  await expect(shell).toHaveAttribute('data-project-hash', hashBeforeInvalidPlan);
+  await plan.getByRole('button', { name: 'Discard', exact: true }).click();
+
+  const persistedHash = await projectHash(shell);
+  await page.reload();
+  await expect(shell).toHaveAttribute('data-project-hash', persistedHash);
+  await expect(shell).toHaveAttribute('data-project-assets', '8');
+  await expect(shell).toHaveAttribute('data-user-settings-status', 'loaded');
+  await expect(page.locator('.entity-row[data-entity-id="70"]')).toContainText('Imported Triangle');
+});
+
 test('voxel Studio owns the complete shared-renderer authoring workflow and rejects stale writes atomically', async ({ page }) => {
   await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(convertedWallProjectFile)}`);
 

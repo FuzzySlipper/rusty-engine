@@ -10,10 +10,11 @@ import {
   type ElementRef,
   type OnDestroy,
 } from '@angular/core';
-import type { RenderFrameDiff } from '@rusty-engine/render-contracts';
+import type { EditorGridDescriptor, RenderFrameDiff } from '@rusty-engine/render-contracts';
 import {
   mountRendererInspectionSurface,
   type RendererInspectionSurface,
+  type RendererInspectionSurfaceControlPreferences,
 } from '@rusty-engine/renderer-host';
 
 import {
@@ -49,13 +50,30 @@ export interface VoxelViewportPickCandidate {
     '[attr.data-preview-applied]': 'previewApplied()',
     '[attr.data-voxel-preview-kind]': 'voxelPreviewKind()',
     '[attr.data-selected-render-handle]': 'selectedRenderHandle()',
+    '[attr.data-camera-move-speed]': 'controlPreferences().moveSpeed',
+    '[attr.data-camera-move-forward]': 'controlPreferences().keyboard.moveForward',
   },
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   readonly frame = input<RenderFrameDiff | null>(null);
   readonly frameGeneration = input(0);
-  readonly gridVisible = input(true);
+  readonly grid = input<EditorGridDescriptor | null>(STUDIO_EDITOR_GRID);
+  readonly controlPreferences = input<RendererInspectionSurfaceControlPreferences>({
+    moveSpeed: 6,
+    boostMultiplier: 4,
+    invertLookY: false,
+    invertPanY: false,
+    keyboard: {
+      moveForward: 'KeyW',
+      moveBackward: 'KeyS',
+      moveLeft: 'KeyA',
+      moveRight: 'KeyD',
+      moveDown: 'KeyQ',
+      moveUp: 'KeyE',
+      boost: 'ShiftLeft',
+    },
+  });
   readonly selectedEntityId = input<number | null>(null);
   readonly previewEntityId = input<number | null>(null);
   readonly previewTranslation = input<readonly [number, number, number] | null>(null);
@@ -103,8 +121,11 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       }
     });
     effect(() => {
-      const visible = this.gridVisible();
-      this.#setGrid(visible);
+      this.#setGrid(this.grid());
+    });
+    effect(() => {
+      const preferences = this.controlPreferences();
+      this.#configureControls(preferences);
     });
   }
 
@@ -197,9 +218,9 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
             enabled: true,
             initialPosition: [15, 13, 22],
             initialTarget: [4.5, 1.5, 7],
-            moveSpeed: 8,
+            ...this.controlPreferences(),
           },
-          initialGrid: this.gridVisible() ? STUDIO_EDITOR_GRID : null,
+          initialGrid: this.grid(),
         },
       );
       if (this.#destroyed) {
@@ -261,15 +282,26 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     this.#syncReadout();
   }
 
-  #setGrid(visible: boolean): void {
+  #setGrid(descriptor: EditorGridDescriptor | null): void {
     const surface = this.#surface;
     if (surface === null) return;
-    const receipt = surface.setGrid(visible ? STUDIO_EDITOR_GRID : null);
+    const receipt = surface.setGrid(descriptor);
     if (!receipt.applied) {
       this.#fail(receipt.diagnostics.map((entry) => entry.message).join('; '));
       return;
     }
     this.#syncReadout();
+  }
+
+  #configureControls(preferences: RendererInspectionSurfaceControlPreferences): void {
+    const surface = this.#surface;
+    if (surface === null) return;
+    try {
+      surface.configureControlPreferences(preferences);
+      this.#syncReadout();
+    } catch (error) {
+      this.#fail(error instanceof Error ? error.message : 'camera preferences were rejected');
+    }
   }
 
   #syncReadout(): void {

@@ -37,7 +37,7 @@ native-provider-selection	scripts/studio-native-provider.ts	adapt	studio/scripts
 file-server	scripts/studio-project-file-server.ts	adapt	studio/scripts/host-files.ts	Retain bounded trusted-host file operations without browser storage authority.
 file-service	scripts/studio-project-file-service.ts	adapt	studio/scripts/host-files.ts	Retain navigation staging CAS promotion rollback and failure non-mutation.
 project-service	scripts/studio-project-service.ts	adapt	studio/scripts/project-adapter.ts	Retain external project open create discovery and atomic switching with project-owned meaning.
-user-settings-service	scripts/studio-user-settings-service.ts	adapt	studio/scripts/host-settings.ts	Retain per-project host-user settings outside browser storage.
+user-settings-service	scripts/studio-user-settings-service.ts	adapt	studio/libs/user-settings+studio/scripts/studio-user-settings-service.ts	Retain versioned per-project host-user settings outside browser storage with an isolated host owner.
 behavior-tests	test/	adapt	studio/test	Retain concrete defect regressions and rewrite their authority seams against Rusty owners.
 root-tsconfig	tsconfig.json	adapt	studio/tsconfig.base.json	Retain strict shared TypeScript settings inside the nested workspace.
 app-tsconfig	tsconfig.studio-app.json	consolidate	studio/apps/studio/tsconfig.json	Use one application-owned configuration instead of a root alias.

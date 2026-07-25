@@ -1,0 +1,22 @@
+{
+  "name": "@rusty-engine/studio-user-settings",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "test": "pnpm run build && node --test 'dist/**/*.test.js'"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
+  }
+}

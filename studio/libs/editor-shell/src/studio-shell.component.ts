@@ -8,10 +8,13 @@ import {
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import type {
+  AssetEntryReadout,
   OwnerDiagnostic,
   StoredLight,
   StudioSceneAppearance,
 } from '@rusty-engine/studio-adapter-client';
+import type { EditorGridDescriptor } from '@rusty-engine/render-contracts';
+import type { StudioKeyboardBindings } from '@rusty-engine/studio-user-settings';
 import {
   StudioViewportComponent,
   type StudioVoxelPreview,
@@ -48,11 +51,62 @@ export class StudioShellComponent {
       samples: conversion.preview.sampleVoxels,
     };
   });
+  readonly viewportGrid = computed<EditorGridDescriptor | null>(() => {
+    const settings = this.state().settings;
+    if (!settings.gridVisible) return null;
+    return {
+      visible: true,
+      grid: {
+        coordinateSystem: 'rightHandedYUp',
+        origin: [0, 0, 0],
+        spacing: [settings.translationSnap, settings.translationSnap, settings.translationSnap],
+      },
+      plane: 'xz',
+      snapAnchor: 'boundary',
+      style: {
+        minorColor: settings.minorColor,
+        majorColor: settings.majorColor,
+        xAxisColor: settings.xAxisColor,
+        yAxisColor: settings.yAxisColor,
+        zAxisColor: settings.zAxisColor,
+        majorLineEvery: settings.majorLineEvery,
+        opacity: settings.opacity,
+        fadeStart: settings.fadeStart,
+        fadeEnd: settings.fadeEnd,
+      },
+    };
+  });
+  readonly viewportControlPreferences = computed(() => {
+    const settings = this.state().settings;
+    return {
+      moveSpeed: settings.cameraMoveSpeed,
+      boostMultiplier: settings.cameraBoostMultiplier,
+      invertLookY: settings.invertLookY,
+      invertPanY: settings.invertPanY,
+      keyboard: { ...settings.keyboard },
+    };
+  });
+  readonly gridColors = [
+    { key: 'minorColor', label: 'Minor lines' },
+    { key: 'majorColor', label: 'Major lines' },
+    { key: 'xAxisColor', label: 'X axis' },
+    { key: 'yAxisColor', label: 'Y axis' },
+    { key: 'zAxisColor', label: 'Z axis' },
+  ] as const;
+  readonly keyboardBindings = [
+    { key: 'moveForward', label: 'Move forward' },
+    { key: 'moveBackward', label: 'Move backward' },
+    { key: 'moveLeft', label: 'Move left' },
+    { key: 'moveRight', label: 'Move right' },
+    { key: 'moveDown', label: 'Move down' },
+    { key: 'moveUp', label: 'Move up' },
+    { key: 'boost', label: 'Boost' },
+  ] as const;
 
   projectRoot = '';
   projectFile = 'content/projects/converted-wall.project.json';
   inspectorMode: 'entity' | 'voxel' = 'voxel';
-  authoringDialog: 'createProject' | 'saveProjectAs' | 'scene' | 'object' | null = null;
+  authoringDialog: 'createProject' | 'saveProjectAs' | 'scene' | 'object' | 'assetImport' | null = null;
 
   projectDraft = {
     root: '',
@@ -87,6 +141,11 @@ export class StudioShellComponent {
   staticCollider = true;
   kinematicHalfExtents: [number, number, number] = [0.5, 0.5, 0.5];
   kinematicVelocity: [number, number, number] = [0, 0, 0];
+  assetImportScope: 'project' | 'host' = 'project';
+  assetImportPath = 'content/assets/studio-triangle.mesh.json';
+  assetImportScale = 1;
+  assetImportGenerateCollision = false;
+  assetImportMaterialNamespace = '';
 
   @HostBinding('class.theme-high-contrast')
   get highContrast(): boolean {
@@ -216,6 +275,59 @@ export class StudioShellComponent {
 
   closeProject(): void {
     void this.store.closeProject();
+  }
+
+  openAssetImportDialog(): void {
+    this.authoringDialog = 'assetImport';
+    this.store.toggleMenu(null);
+  }
+
+  prepareAssetImport(): void {
+    void this.store.prepareAssetImport(
+      { scope: this.assetImportScope, path: this.assetImportPath },
+      {
+        scale: this.assetImportScale,
+        generateCollision: this.assetImportGenerateCollision,
+        materialNamespace: this.assetImportMaterialNamespace.trim() === ''
+          ? null
+          : this.assetImportMaterialNamespace.trim(),
+      },
+    );
+    this.authoringDialog = null;
+  }
+
+  prepareAssetReimport(assetId: string): void {
+    void this.store.prepareAssetReimport(assetId);
+  }
+
+  applyAssetImport(): void {
+    void this.store.applyAssetImport();
+  }
+
+  discardAssetImport(): void {
+    void this.store.discardAssetImport();
+  }
+
+  selectedAsset(): AssetEntryReadout | null {
+    const assetId = this.state().assetWorkspace.selectedAssetId;
+    return this.state().authoringDocument?.assetBrowser.assets.find(
+      (asset) => asset.assetId === assetId,
+    ) ?? null;
+  }
+
+  gridColorHex(
+    key: 'minorColor' | 'majorColor' | 'xAxisColor' | 'yAxisColor' | 'zAxisColor',
+  ): string {
+    const color = this.state().settings[key];
+    return `#${color.slice(0, 3).map((value) => Math.round(value * 255)
+      .toString(16)
+      .padStart(2, '0')).join('')}`;
+  }
+
+  captureKeyboardBinding(event: KeyboardEvent, key: keyof StudioKeyboardBindings): void {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.code.length > 0) this.store.setKeyboardBinding(key, event.code);
   }
 
   setInspectorMode(mode: 'entity' | 'voxel'): void {

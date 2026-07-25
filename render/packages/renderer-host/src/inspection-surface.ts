@@ -33,6 +33,11 @@ export interface RendererInspectionSurfaceControlsOptions {
   readonly initialTarget?: InspectionVector;
   /** World units travelled per second while a movement key is held. */
   readonly moveSpeed?: number;
+  /** Multiplier applied while the configured boost key is held. */
+  readonly boostMultiplier?: number;
+  readonly invertLookY?: boolean;
+  readonly invertPanY?: boolean;
+  readonly keyboard?: Partial<RendererInspectionSurfaceKeyboardBindings>;
   /** Orbit degrees applied per mouse pixel while the primary button is held. */
   readonly orbitDegreesPerPixel?: number;
   /** Orbit degrees applied per second while a focused arrow key is held. */
@@ -44,6 +49,24 @@ export interface RendererInspectionSurfaceControlsOptions {
   /** Multiplicative camera-distance change for each focused keyboard or wheel step. */
   readonly zoomFactorPerStep?: number;
   readonly projection?: PerspectiveProjection;
+}
+
+export interface RendererInspectionSurfaceKeyboardBindings {
+  readonly moveForward: string;
+  readonly moveBackward: string;
+  readonly moveLeft: string;
+  readonly moveRight: string;
+  readonly moveDown: string;
+  readonly moveUp: string;
+  readonly boost: string;
+}
+
+export interface RendererInspectionSurfaceControlPreferences {
+  readonly moveSpeed: number;
+  readonly boostMultiplier: number;
+  readonly invertLookY: boolean;
+  readonly invertPanY: boolean;
+  readonly keyboard: RendererInspectionSurfaceKeyboardBindings;
 }
 
 export interface RendererInspectionSurfaceOptions {
@@ -68,6 +91,7 @@ export type RendererInspectionCameraChange =
   | 'keyboard_orbit'
   | 'keyboard_zoom'
   | 'pointer_orbit'
+  | 'pointer_pan'
   | 'wheel_zoom';
 
 export interface RendererInspectionSurfaceReadout {
@@ -78,6 +102,7 @@ export interface RendererInspectionSurfaceReadout {
   readonly camera: RendererEditorViewportCamera;
   readonly cameraDistance: number;
   readonly cameraRevision: number;
+  readonly controlPreferences: RendererInspectionSurfaceControlPreferences;
   readonly dragging: boolean;
   readonly grid: EditorGridProjectionReadout | null;
   readonly gridRevision: number;
@@ -103,6 +128,10 @@ export interface RendererInspectionSurface {
   readonly applyRuntimeFrame: (frame: RenderFrameDiff) => RendererEditorViewportChannelReceipt;
   /** Clear retained runtime projection without disturbing authored inspection content. */
   readonly clearRuntimeProjection: () => RendererEditorViewportChannelReceipt;
+  /** Replace host-user input preferences without resetting the disposable camera pose. */
+  readonly configureControlPreferences: (
+    preferences: RendererInspectionSurfaceControlPreferences,
+  ) => void;
   readonly dispose: () => void;
   readonly grid: () => EditorGridProjectionReadout | null;
   readonly pick: (request: RendererEditorViewportPickRequest) => RendererEditorViewportPickReceipt;
@@ -145,6 +174,10 @@ interface InspectionControls {
   readonly cameraDistance: () => number;
   readonly cameraRevision: () => number;
   readonly clearInputState: () => void;
+  readonly configurePreferences: (
+    preferences: RendererInspectionSurfaceControlPreferences,
+  ) => void;
+  readonly controlPreferences: () => RendererInspectionSurfaceControlPreferences;
   readonly dispose: () => void;
   readonly dragging: () => boolean;
   readonly lastCameraChange: () => RendererInspectionCameraChange;
@@ -158,7 +191,15 @@ const DEFAULT_PROJECTION: PerspectiveProjection = {
   near: 0.05,
   far: 1000,
 };
-const MOVEMENT_KEYS = ['KeyA', 'KeyD', 'KeyS', 'KeyW'] as const;
+const DEFAULT_KEYBOARD_BINDINGS: RendererInspectionSurfaceKeyboardBindings = {
+  moveForward: 'KeyW',
+  moveBackward: 'KeyS',
+  moveLeft: 'KeyA',
+  moveRight: 'KeyD',
+  moveDown: 'KeyQ',
+  moveUp: 'KeyE',
+  boost: 'ShiftLeft',
+};
 const ORBIT_KEYS = ['ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowUp'] as const;
 const MAXIMUM_PITCH_DEGREES = 85;
 
@@ -321,6 +362,7 @@ export function createRendererInspectionSurfaceWithViewport(
     applyRuntimeFrame,
     camera: () => controls.camera(),
     clearRuntimeProjection,
+    configureControlPreferences: (preferences) => controls.configurePreferences(preferences),
     grid: () => viewport.grid(),
     pick: (request) => viewport.pick(request),
     readout: () => {
@@ -334,6 +376,7 @@ export function createRendererInspectionSurfaceWithViewport(
         camera: controls.camera(),
         cameraDistance: controls.cameraDistance(),
         cameraRevision: controls.cameraRevision(),
+        controlPreferences: controls.controlPreferences(),
         dragging: controls.dragging(),
         grid: viewportReadout.grid,
         gridRevision,
@@ -376,7 +419,13 @@ function createInspectionControls(
   options: RendererInspectionSurfaceControlsOptions | undefined,
 ): InspectionControls {
   const enabled = options?.enabled !== false;
-  const moveSpeed = requirePositiveFinite(options?.moveSpeed ?? 5, 'inspection moveSpeed');
+  let preferences = validateControlPreferences({
+    moveSpeed: options?.moveSpeed ?? 5,
+    boostMultiplier: options?.boostMultiplier ?? 4,
+    invertLookY: options?.invertLookY ?? false,
+    invertPanY: options?.invertPanY ?? false,
+    keyboard: { ...DEFAULT_KEYBOARD_BINDINGS, ...options?.keyboard },
+  });
   const orbitDegreesPerPixel = requirePositiveFinite(
     options?.orbitDegreesPerPixel ?? 0.24,
     'inspection orbitDegreesPerPixel',
@@ -421,6 +470,7 @@ function createInspectionControls(
   let cameraRevision = 0;
   let lastCameraChange: RendererInspectionCameraChange = 'initial_camera';
   let activePointerId: number | null = null;
+  let activePointerMode: 'orbit' | 'pan' | null = null;
   let lastPointerPosition: readonly [number, number] | null = null;
   const pressedMovementKeys = new Set<string>();
   const pressedOrbitKeys = new Set<string>();
@@ -463,6 +513,7 @@ function createInspectionControls(
   const clearPointerState = (): void => {
     const pointerId = activePointerId;
     activePointerId = null;
+    activePointerMode = null;
     lastPointerPosition = null;
     if (pointerId === null) {
       return;
@@ -485,7 +536,7 @@ function createInspectionControls(
   const onPointerDown = (event: PointerEvent): void => {
     if (
       !enabled
-      || event.button !== 0
+      || (event.button !== 0 && event.button !== 1)
       || event.isPrimary === false
       || !Number.isFinite(event.clientX)
       || !Number.isFinite(event.clientY)
@@ -496,11 +547,13 @@ function createInspectionControls(
     canvas.focus({ preventScroll: true });
     clearPointerState();
     activePointerId = event.pointerId;
+    activePointerMode = event.button === 1 ? 'pan' : 'orbit';
     lastPointerPosition = [event.clientX, event.clientY];
     try {
       canvas.setPointerCapture(event.pointerId);
     } catch {
       activePointerId = null;
+      activePointerMode = null;
       lastPointerPosition = null;
     }
   };
@@ -518,9 +571,23 @@ function createInspectionControls(
       return;
     }
     event.preventDefault();
+    if (activePointerMode === 'pan') {
+      const panScale = Math.max(0.0025, distance * 0.0015);
+      const panY = movementY * (preferences.invertPanY ? -1 : 1);
+      const nextTarget = add(
+        target,
+        add(
+          scale(camera.basis.right, -movementX * panScale),
+          scale(camera.basis.up, panY * panScale),
+        ),
+      );
+      commitCamera(nextTarget, yawRadians, pitchRadians, distance, 'pointer_pan');
+      return;
+    }
+    const lookY = movementY * (preferences.invertLookY ? -1 : 1);
     const nextYawRadians = yawRadians - degreesToRadians(movementX * orbitDegreesPerPixel);
     const nextPitchRadians = clamp(
-      pitchRadians + degreesToRadians(movementY * orbitDegreesPerPixel),
+      pitchRadians + degreesToRadians(lookY * orbitDegreesPerPixel),
       degreesToRadians(-MAXIMUM_PITCH_DEGREES),
       degreesToRadians(MAXIMUM_PITCH_DEGREES),
     );
@@ -539,6 +606,7 @@ function createInspectionControls(
   const onLostPointerCapture = (event: PointerEvent): void => {
     if (activePointerId === event.pointerId) {
       activePointerId = null;
+      activePointerMode = null;
       lastPointerPosition = null;
     }
   };
@@ -556,7 +624,7 @@ function createInspectionControls(
     if (!enabled || ownerDocument.activeElement !== canvas) {
       return;
     }
-    if (isMovementKey(event.code)) {
+    if (isMovementKey(event.code, preferences.keyboard)) {
       event.preventDefault();
       pressedMovementKeys.add(event.code);
       return;
@@ -573,7 +641,7 @@ function createInspectionControls(
     }
   };
   const onKeyUp = (event: KeyboardEvent): void => {
-    if (isMovementKey(event.code) && pressedMovementKeys.delete(event.code)) {
+    if (isMovementKey(event.code, preferences.keyboard) && pressedMovementKeys.delete(event.code)) {
       event.preventDefault();
     } else if (isOrbitKey(event.code) && pressedOrbitKeys.delete(event.code)) {
       event.preventDefault();
@@ -614,6 +682,14 @@ function createInspectionControls(
     cameraDistance: () => distance,
     cameraRevision: () => cameraRevision,
     clearInputState,
+    configurePreferences: (next) => {
+      preferences = validateControlPreferences(next);
+      clearInputState();
+    },
+    controlPreferences: () => ({
+      ...preferences,
+      keyboard: { ...preferences.keyboard },
+    }),
     dragging: () => activePointerId !== null,
     lastCameraChange: () => lastCameraChange,
     pressedMovementKeys: () => [...pressedMovementKeys].sort(),
@@ -622,14 +698,19 @@ function createInspectionControls(
       if (!enabled || deltaSeconds <= 0) {
         return;
       }
-      const forwardAxis = (pressedMovementKeys.has('KeyW') ? 1 : 0)
-        - (pressedMovementKeys.has('KeyS') ? 1 : 0);
-      const rightAxis = (pressedMovementKeys.has('KeyD') ? 1 : 0)
-        - (pressedMovementKeys.has('KeyA') ? 1 : 0);
-      if (forwardAxis !== 0 || rightAxis !== 0) {
-        const movement = horizontalMovement(camera, forwardAxis, rightAxis);
+      const forwardAxis = (pressedMovementKeys.has(preferences.keyboard.moveForward) ? 1 : 0)
+        - (pressedMovementKeys.has(preferences.keyboard.moveBackward) ? 1 : 0);
+      const rightAxis = (pressedMovementKeys.has(preferences.keyboard.moveRight) ? 1 : 0)
+        - (pressedMovementKeys.has(preferences.keyboard.moveLeft) ? 1 : 0);
+      const upAxis = (pressedMovementKeys.has(preferences.keyboard.moveUp) ? 1 : 0)
+        - (pressedMovementKeys.has(preferences.keyboard.moveDown) ? 1 : 0);
+      if (forwardAxis !== 0 || rightAxis !== 0 || upAxis !== 0) {
+        const movement = cameraMovement(camera, forwardAxis, rightAxis, upAxis);
         if (movement !== null) {
-          const step = moveSpeed * deltaSeconds;
+          const boosted = pressedMovementKeys.has(preferences.keyboard.boost);
+          const step = preferences.moveSpeed
+            * (boosted ? preferences.boostMultiplier : 1)
+            * deltaSeconds;
           const nextTarget = add(target, scale(movement, step));
           commitCamera(nextTarget, yawRadians, pitchRadians, distance, 'keyboard_movement');
         }
@@ -682,10 +763,11 @@ function resolveCamera(
   return resolution.camera;
 }
 
-function horizontalMovement(
+function cameraMovement(
   camera: RendererEditorViewportCamera,
   forwardAxis: number,
   rightAxis: number,
+  upAxis: number,
 ): InspectionVector | null {
   const forward = normalizeHorizontal(camera.basis.forward);
   const right = normalizeHorizontal(camera.basis.right);
@@ -694,7 +776,7 @@ function horizontalMovement(
   }
   return normalize([
     forward[0] * forwardAxis + right[0] * rightAxis,
-    0,
+    upAxis,
     forward[2] * forwardAxis + right[2] * rightAxis,
   ]);
 }
@@ -730,8 +812,11 @@ function browserInspectionEnvironment(): RendererInspectionEnvironment {
   };
 }
 
-function isMovementKey(code: string): code is (typeof MOVEMENT_KEYS)[number] {
-  return MOVEMENT_KEYS.some((movementKey) => movementKey === code);
+function isMovementKey(
+  code: string,
+  keyboard: RendererInspectionSurfaceKeyboardBindings,
+): boolean {
+  return Object.values(keyboard).some((movementKey) => movementKey === code);
 }
 
 function isOrbitKey(code: string): code is (typeof ORBIT_KEYS)[number] {
@@ -760,6 +845,43 @@ function requireUnitInterval(value: number, label: string): number {
     throw new TypeError(`${label} must be finite and between zero and one`);
   }
   return value;
+}
+
+function validateControlPreferences(
+  value: RendererInspectionSurfaceControlPreferences,
+): RendererInspectionSurfaceControlPreferences {
+  const boostMultiplier = requirePositiveFinite(
+    value.boostMultiplier,
+    'inspection boostMultiplier',
+  );
+  if (boostMultiplier < 1) {
+    throw new TypeError('inspection boostMultiplier must be at least one');
+  }
+  if (typeof value.invertLookY !== 'boolean' || typeof value.invertPanY !== 'boolean') {
+    throw new TypeError('inspection camera inversion preferences must be boolean');
+  }
+  const requireBinding = (binding: unknown, name: string): string => {
+    if (typeof binding !== 'string' || binding.trim().length === 0 || binding.length > 64) {
+      throw new TypeError(`inspection ${name} keyboard binding must be a bounded non-empty code`);
+    }
+    return binding;
+  };
+  const keyboard: RendererInspectionSurfaceKeyboardBindings = {
+    moveForward: requireBinding(value.keyboard?.moveForward, 'moveForward'),
+    moveBackward: requireBinding(value.keyboard?.moveBackward, 'moveBackward'),
+    moveLeft: requireBinding(value.keyboard?.moveLeft, 'moveLeft'),
+    moveRight: requireBinding(value.keyboard?.moveRight, 'moveRight'),
+    moveDown: requireBinding(value.keyboard?.moveDown, 'moveDown'),
+    moveUp: requireBinding(value.keyboard?.moveUp, 'moveUp'),
+    boost: requireBinding(value.keyboard?.boost, 'boost'),
+  };
+  return {
+    moveSpeed: requirePositiveFinite(value.moveSpeed, 'inspection moveSpeed'),
+    boostMultiplier,
+    invertLookY: value.invertLookY,
+    invertPanY: value.invertPanY,
+    keyboard,
+  };
 }
 
 function allFinite(vectors: readonly InspectionVector[]): boolean {

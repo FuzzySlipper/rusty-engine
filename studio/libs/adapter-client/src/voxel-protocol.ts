@@ -463,6 +463,7 @@ export type ProjectMutationReceipt =
   | { readonly kind: 'entityCollisionSet'; readonly entityId: number; readonly attached: boolean }
   | { readonly kind: 'entityKinematicSet'; readonly entityId: number; readonly attached: boolean }
   | { readonly kind: 'materialUpserted'; readonly assetId: string }
+  | { readonly kind: 'assetImportApplied'; readonly planId: string; readonly planHash: string; readonly assetId: string; readonly sourcePath: string; readonly reimportKind: string; readonly generatedAssetIds: readonly string[] }
   | { readonly kind: 'voxelAssetInitialized'; readonly assetId: string; readonly contentHash: string }
   | { readonly kind: 'voxelAssetDuplicated'; readonly sourceAssetId: string; readonly targetAssetId: string; readonly contentHash: string }
   | { readonly kind: 'voxelInstanceAttached'; readonly sceneId: string; readonly instanceId: string }
@@ -538,6 +539,15 @@ export function validateProjectMutationReceipt(input: unknown, path: string): vo
     case 'materialUpserted':
       string(receipt(['assetId'])['assetId'], `${path}.assetId`);
       return;
+    case 'assetImportApplied': {
+      const entry = receipt([
+        'planId', 'planHash', 'assetId', 'sourcePath', 'reimportKind', 'generatedAssetIds',
+      ]);
+      strings(entry, path, ['planId', 'planHash', 'assetId', 'sourcePath', 'reimportKind']);
+      array(entry['generatedAssetIds'], `${path}.generatedAssetIds`).forEach((item, index) =>
+        string(item, `${path}.generatedAssetIds[${String(index)}]`));
+      return;
+    }
     case 'voxelAssetInitialized': {
       const entry = receipt(['assetId', 'contentHash']);
       strings(entry, path, ['assetId', 'contentHash']);

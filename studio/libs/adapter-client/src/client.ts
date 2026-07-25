@@ -2,6 +2,8 @@ import {
   decodeStudioAdapterResponse,
   STUDIO_ADAPTER_PROTOCOL_VERSION,
   type AdapterRejection,
+  type AssetImportDiscardedResponse,
+  type AssetImportPreparedResponse,
   type DescribedResponse,
   type EntityTranslationAppliedResponse,
   type ProjectMutationAppliedResponse,
@@ -181,6 +183,30 @@ export class StudioAdapterClient {
 
   upsertMaterial(input: RequestInput<'upsertMaterial'>): Promise<ProjectMutationAppliedResponse> {
     return this.#mutation('upsertMaterial', input);
+  }
+
+  prepareAssetImport(
+    input: RequestInput<'prepareAssetImport'>,
+  ): Promise<AssetImportPreparedResponse> {
+    return this.#exchange(this.#request('prepareAssetImport', input), 'assetImportPrepared');
+  }
+
+  prepareAssetReimport(
+    input: RequestInput<'prepareAssetReimport'>,
+  ): Promise<AssetImportPreparedResponse> {
+    return this.#exchange(this.#request('prepareAssetReimport', input), 'assetImportPrepared');
+  }
+
+  applyAssetImport(
+    input: RequestInput<'applyAssetImport'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('applyAssetImport', input);
+  }
+
+  discardAssetImport(
+    input: RequestInput<'discardAssetImport'>,
+  ): Promise<AssetImportDiscardedResponse> {
+    return this.#exchange(this.#request('discardAssetImport', input), 'assetImportDiscarded');
   }
 
   initializeVoxelAsset(
@@ -427,6 +453,7 @@ type MutationRequestType =
   | 'setEntityCollision'
   | 'setEntityKinematic'
   | 'upsertMaterial'
+  | 'applyAssetImport'
   | 'initializeVoxelAsset'
   | 'duplicateVoxelAsset'
   | 'attachVoxelInstance'

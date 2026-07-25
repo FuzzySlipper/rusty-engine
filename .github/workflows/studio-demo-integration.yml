@@ -7,6 +7,7 @@ on:
       - 'studio/demo-consumer-source.json'
       - 'studio/libs/adapter-client/**'
       - 'studio/libs/editor-shell/**'
+      - 'studio/libs/user-settings/**'
       - 'studio/libs/voxel-editor/**'
       - 'studio/libs/viewport/**'
       - 'studio/apps/studio-app/**'
@@ -15,6 +16,7 @@ on:
       - 'studio/pnpm-workspace.yaml'
       - 'studio/playwright.config.ts'
       - 'studio/scripts/studio-host.ts'
+      - 'studio/scripts/studio-user-settings-service.ts'
       - 'studio/test/integration/**'
       - 'studio/test/browser/**'
       - 'render/packages/renderer-host/**'
@@ -27,6 +29,7 @@ on:
       - 'studio/demo-consumer-source.json'
       - 'studio/libs/adapter-client/**'
       - 'studio/libs/editor-shell/**'
+      - 'studio/libs/user-settings/**'
       - 'studio/libs/voxel-editor/**'
       - 'studio/libs/viewport/**'
       - 'studio/apps/studio-app/**'
@@ -35,6 +38,7 @@ on:
       - 'studio/pnpm-workspace.yaml'
       - 'studio/playwright.config.ts'
       - 'studio/scripts/studio-host.ts'
+      - 'studio/scripts/studio-user-settings-service.ts'
       - 'studio/test/integration/**'
       - 'studio/test/browser/**'
       - 'render/packages/renderer-host/**'
@@ -49,7 +53,7 @@ permissions:
 
 env:
   RUSTY_ENGINE_DEMO_REPOSITORY: FuzzySlipper/rusty-engine-demo
-  RUSTY_ENGINE_DEMO_REVISION: 60797a829c311f859e535f4138b31b24d70e82eb
+  RUSTY_ENGINE_DEMO_REVISION: acbf9a5b0e7717545782393c9e12a61b3c70a40a
 
 jobs:
   verify-studio-demo-integration:

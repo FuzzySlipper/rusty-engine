@@ -43,7 +43,9 @@ export {
 export type {
   RendererInspectionCameraChange,
   RendererInspectionSurface,
+  RendererInspectionSurfaceControlPreferences,
   RendererInspectionSurfaceControlsOptions,
+  RendererInspectionSurfaceKeyboardBindings,
   RendererInspectionSurfaceOptions,
   RendererInspectionSurfaceReadout,
   RendererInspectionSurfaceStatus,

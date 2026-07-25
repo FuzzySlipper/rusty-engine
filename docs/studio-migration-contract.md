@@ -1,6 +1,6 @@
 # Studio migration contract
 
-Status: M11F voxel parity implemented; exact-SHA acceptance and explicit non-voxel deferrals remain
+Status: M11F successor parity implemented; fresh exact-SHA closeout acceptance remains
 
 Rusty Engine Studio is a first-party authoring product in this repository. It is not a narrow
 vertical slice and it is not a compatibility shell for Asha. The migration target is full useful
@@ -74,7 +74,7 @@ reconcile every row before the old Studio can be considered retired.
 | Typed actions | Accepted/rejected operation results and a visible action timeline remain; the universal command registry and arbitrary command envelope do not | M11B/M11C |
 | Product acceptance | Real visible controls prove scene, entity, lighting, voxel, material, conversion, save/reopen, and external-demo behavior; proof catalogs and hidden browser mutation hooks do not return | M11D/M11E/M11F |
 
-## M11E foundation and M11F voxel reconciliation
+## M11E foundation and M11F parity reconciliation
 
 M11E established protocol 3 against the Converted Wall demo artifact. It includes canonical
 voxel inspection/initialization/duplication, catalog material upsert and palette replacement,
@@ -100,14 +100,25 @@ Protocol 4 implements the previously explicit M11F voxel work:
 The actual protocol, editor controls, owner tests, fresh-process integration, and exact demo pin are
 the authority for this completion; no donor TypeScript semantic generator was copied.
 
-## Explicit non-voxel limitations
+Protocol 5 and 6 close the non-voxel parity set without adding a generic editor command:
 
-M11F does not quietly convert earlier M11D limitations into claims. Generic project creation/save-as,
-scene node create/delete/reparent, entity rotation/scale/capability/appearance editing, the full
-asset dependency/lock/reimport browser, and persisted host-user camera/input preferences remain
-discoverably disabled or read-only. They require named downstream operations and owner-specific
-readouts rather than a universal editor command. `owner-adoption.tsv` records each classification;
-review must either accept those deferrals or schedule concrete successor work before donor retirement.
+- project create and save-as plus scene create, rename, delete, and entry-scene selection;
+- entity create, rename, reparent, delete, full translation/rotation/scale settlement, static-mesh or
+  typed light appearance, and collision/kinematic capability mutation;
+- a complete catalog browser with dependency, dependent, generated-lock, import provenance, source
+  drift, and private prepare/apply/discard import or reimport candidates;
+- real imported static-mesh payloads and materials consumed by the same Rust projection and shared
+  renderer used by Demo and Studio; and
+- versioned per-canonical-project host-user preferences, outside browser storage and project bytes,
+  for theme, snapping/grid presentation, movement keys, six-axis speed/boost, and look/pan inversion.
+
+The settings host derives identity from the canonical project root, preserves malformed or future
+artifacts instead of overwriting them, rejects symlink targets and stale hashes, and publishes one
+bounded same-directory candidate atomically. The donor's separate committed spatial-settings file
+is consolidated: current successor projects fix right-handed Y-up/meters, while the adjustable grid
+spacing, colors, visibility, and snapping behavior remain per-project host-user presentation. A
+future project-owned spatial convention requires a named Rust adapter operation rather than a
+browser-owned project codec.
 
 ## Cohesive successor modules
 
@@ -119,6 +130,7 @@ reasons diverge:
 studio/
   apps/studio/             Angular product shell and composition
   libs/adapter-client/     one closed protocol decoder/client; structural checks only
+  libs/user-settings/      versioned host-user preference artifact and bounded HTTP client
   libs/application/        project-open lifecycle, owner readouts, selections, dirty/conflict UI
   libs/editor-shell/       menus, regions, dialogs, settings UI, focus, theme
   libs/scene-editor/       hierarchy, inspector view models, transform interaction
@@ -201,5 +213,5 @@ must be expressed through the new owners even when its old transport is excluded
 
 M11A establishes the isolated workspace and static gates only. M11B adds the real adapter before the
 Angular shell is imported. M11C through M11E establish the retained product workflows. M11F adds the
-remaining voxel workflows and closes only after exact-SHA review reconciles this contract, the donor
-inventory, every owner-adoption row, and the explicit non-voxel deferrals against the actual product.
+remaining voxel and non-voxel workflows and closes only after exact-SHA review reconciles this
+contract, the donor inventory, every owner-adoption row, and the actual product evidence.

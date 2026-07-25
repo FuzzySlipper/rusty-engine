@@ -168,13 +168,16 @@ project schema, trusted root, compatibility, and publication policy while compos
 `voxel-annotation`, `voxel-convert`, `content-store`, `engine-inspector`, and render-projection
 mechanisms.
 
-Protocol 4 executes one named request at a time. Reads rebuild canonical owner views. Mutations carry
+Protocol 6 executes one named request at a time. Reads rebuild canonical owner views. Mutations carry
 the accepted project hash plus narrower asset/revision/layer/plan guards, stage a complete candidate,
 rerun downstream admission and renderer projection, atomically publish the project file, and return
 a canonical reread. Voxel history and annotation documents are durable project data; conversion
 plans and prepared history reverts remain private process state, are limited to one retained
-candidate of each kind, and only matching identities can be applied. Trusted host voxel/GLB/license
-paths are explicit, bounded, symlink-checked selections;
+candidate of each kind, and only matching identities can be applied. Project/scene/entity lifecycle,
+full transforms, typed lights and capabilities, and general mesh import/reimport each use named
+operations rather than a universal editor mutation. Asset import candidates retain exact source,
+settings, generated-ID, project, and plan identity and replace only their own prior generated assets.
+Trusted host voxel/mesh/GLB/license paths are explicit, bounded, symlink-checked selections;
 replacement is compare-and-swap guarded. Primitive/template generation, annotation semantics,
 conversion material policy, and deterministic environment generation remain in their Rust owners.
 Rejected or stale operations publish no bytes.
@@ -187,11 +190,14 @@ derived frames applied through the shared renderer projection. Voxel brush and b
 samples use the same disposable debug-layer frame path. Cancellation or discard reinstalls the
 accepted canonical frame, and commit still settles through the Rust adapter.
 
-Studio's Node/HTTP host only serves the isolated application and forwards bounded JSON to the
-explicit adapter binary. It does not interpret project content or make HTTP/browser behavior an
-Engine prerequisite. Ordinary Rust verification remains independent of Studio, Node, the browser,
-and any sibling checkout; the cross-repository demo and Chromium proof is an explicit integration
-gate.
+Studio's Node/HTTP host serves the isolated application, forwards bounded JSON to the explicit
+adapter binary, and owns one separate versioned host-user settings boundary. Preferences are keyed
+by canonical project root, stored outside project bytes and browser storage, guarded by SHA-256
+compare-and-swap and same-directory atomic replacement, and applied to renderer-host camera/input
+configuration without creating gameplay authority. The host does not interpret project content or
+make HTTP/browser behavior an Engine prerequisite. Ordinary Rust verification remains independent
+of Studio, Node, the browser, and any sibling checkout; the cross-repository demo and Chromium proof
+is an explicit integration gate.
 
 ## Downstream ownership
 

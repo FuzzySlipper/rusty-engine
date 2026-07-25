@@ -1,6 +1,7 @@
 import { defineConfig } from '@playwright/test';
 
 const adapterBinary = requiredEnvironment('RUSTY_STUDIO_ADAPTER_BINARY');
+const settingsRoot = requiredEnvironment('RUSTY_STUDIO_SETTINGS_ROOT');
 const port = Number(process.env['RUSTY_STUDIO_PORT'] ?? '4301');
 if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
   throw new Error('RUSTY_STUDIO_PORT must be a valid TCP port');
@@ -23,7 +24,7 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: `pnpm run host -- --adapter-binary ${shellArgument(adapterBinary)} --port ${String(port)}`,
+    command: `pnpm run host -- --adapter-binary ${shellArgument(adapterBinary)} --settings-root ${shellArgument(settingsRoot)} --port ${String(port)}`,
     url: `${baseURL}/health`,
     reuseExistingServer: false,
     timeout: 30_000,

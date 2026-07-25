@@ -1,6 +1,8 @@
 import { signal, type Signal } from '@angular/core';
 import type {
   AdapterDescription,
+  AssetBrowserReadout,
+  AssetImportPlanReadout,
   CanonicalOwnerContent,
   LoadingBayDomainReadout,
   OwnerInspections,
@@ -10,6 +12,8 @@ import type {
   SceneHierarchyReadout,
   StudioProjectIdentity,
   StudioProjectReadout,
+  StudioAssetImportSettings,
+  StudioFileSelection,
   VoxelConversionPlan,
   VoxelConversionPreview,
   VoxelPickReadout,
@@ -38,6 +42,14 @@ import {
   type VoxelEditorAction,
   type VoxelViewportPickCandidate,
 } from '@rusty-engine/studio-voxel-editor/model';
+import {
+  buildDefaultStudioHostUserSettings,
+  validateStudioHostUserSettings,
+  type HttpStudioUserSettingsClient,
+  type StudioHostUserSettingsArtifact,
+  type StudioKeyboardBindings,
+  type StudioUserSettingsSnapshot,
+} from '@rusty-engine/studio-user-settings';
 
 export type StudioConnectionState =
   | { readonly kind: 'disconnected'; readonly message: string }
@@ -50,9 +62,16 @@ export interface AuthoringDocumentView {
   readonly canonical: CanonicalOwnerContent;
   readonly inspections: OwnerInspections;
   readonly sceneHierarchy: SceneHierarchyReadout;
+  readonly assetBrowser: AssetBrowserReadout;
   readonly domain: LoadingBayDomainReadout;
   readonly voxel: Readonly<Record<string, unknown>> | null;
   readonly voxelAuthoring: VoxelAuthoringReadout;
+}
+
+export interface AssetWorkspaceState {
+  readonly selectedAssetId: string | null;
+  readonly plan: AssetImportPlanReadout | null;
+  readonly message: string;
 }
 
 export interface ProjectedEntityView {
@@ -106,6 +125,30 @@ export interface StudioViewSettings {
   readonly snappingEnabled: boolean;
   readonly translationSnap: number;
   readonly theme: 'graphite' | 'highContrast';
+  readonly minorColor: readonly [number, number, number, number];
+  readonly majorColor: readonly [number, number, number, number];
+  readonly xAxisColor: readonly [number, number, number, number];
+  readonly yAxisColor: readonly [number, number, number, number];
+  readonly zAxisColor: readonly [number, number, number, number];
+  readonly majorLineEvery: number;
+  readonly opacity: number;
+  readonly fadeStart: number;
+  readonly fadeEnd: number;
+  readonly cameraMoveSpeed: number;
+  readonly cameraBoostMultiplier: number;
+  readonly invertLookY: boolean;
+  readonly invertPanY: boolean;
+  readonly keyboard: StudioKeyboardBindings;
+}
+
+export interface StudioUserSettingsState {
+  readonly status: 'scratch' | 'loaded' | 'defaulted' | 'unsupported' | 'saving' | 'error';
+  readonly projectRoot: string | null;
+  readonly projectKey: string;
+  readonly path: string | null;
+  readonly sha256: string | null;
+  readonly writesEnabled: boolean;
+  readonly message: string;
 }
 
 export interface VoxelWorkspaceState {
@@ -126,22 +169,20 @@ export interface StudioWorkspaceSnapshot {
   readonly liveProjection: LiveProjectionView | null;
   readonly preview: TransformPreviewState | null;
   readonly selection: EditorSelectionState;
-  readonly operation: 'idle' | 'opening' | 'refreshing' | 'committing' | 'voxel' | 'closing';
+  readonly operation: 'idle' | 'opening' | 'refreshing' | 'committing' | 'asset' | 'voxel' | 'closing';
+  readonly assetWorkspace: AssetWorkspaceState;
   readonly voxelWorkspace: VoxelWorkspaceState;
   readonly hierarchyFilter: string;
   readonly activeMenu: 'file' | 'edit' | 'view' | 'tools' | null;
-  readonly bottomPanel: 'diagnostics' | 'owners' | 'output';
+  readonly bottomPanel: 'assets' | 'diagnostics' | 'owners' | 'output';
   readonly settingsOpen: boolean;
   readonly settings: StudioViewSettings;
+  readonly userSettings: StudioUserSettingsState;
   readonly lastError: string | null;
 }
 
-const INITIAL_SETTINGS: StudioViewSettings = {
-  gridVisible: true,
-  snappingEnabled: true,
-  translationSnap: 0.5,
-  theme: 'graphite',
-};
+const INITIAL_ARTIFACT = buildDefaultStudioHostUserSettings('rusty-studio-project:scratch');
+const INITIAL_SETTINGS = viewSettings(INITIAL_ARTIFACT);
 
 function initialSnapshot(): StudioWorkspaceSnapshot {
   return {
@@ -151,6 +192,11 @@ function initialSnapshot(): StudioWorkspaceSnapshot {
     preview: null,
     selection: { sceneNodeId: null, entityId: null, source: null },
     operation: 'idle',
+    assetWorkspace: {
+      selectedAssetId: null,
+      plan: null,
+      message: 'Import or select a project asset to inspect its owner data.',
+    },
     voxelWorkspace: {
       validatedPick: null,
       lastReadout: null,
@@ -164,17 +210,33 @@ function initialSnapshot(): StudioWorkspaceSnapshot {
     bottomPanel: 'diagnostics',
     settingsOpen: false,
     settings: INITIAL_SETTINGS,
+    userSettings: {
+      status: 'scratch',
+      projectRoot: null,
+      projectKey: INITIAL_ARTIFACT.projectKey,
+      path: null,
+      sha256: null,
+      writesEnabled: false,
+      message: 'Open a project to load host-user settings.',
+    },
     lastError: null,
   };
 }
 
 export class StudioWorkspaceStore {
   readonly #client: StudioAdapterClient;
+  readonly #settingsClient: HttpStudioUserSettingsClient | null;
   readonly #snapshot = signal<StudioWorkspaceSnapshot>(initialSnapshot());
   readonly snapshot: Signal<StudioWorkspaceSnapshot> = this.#snapshot.asReadonly();
+  #settingsWriteChain: Promise<void> = Promise.resolve();
+  #settingsGeneration = 0;
 
-  constructor(client: StudioAdapterClient) {
+  constructor(
+    client: StudioAdapterClient,
+    settingsClient: HttpStudioUserSettingsClient | null = null,
+  ) {
     this.#client = client;
+    this.#settingsClient = settingsClient;
   }
 
   async connect(): Promise<boolean> {
@@ -208,8 +270,11 @@ export class StudioWorkspaceStore {
     if (!(await this.connect())) return;
     this.#patch({ operation: 'opening', lastError: null, activeMenu: null });
     try {
+      await this.#settingsWriteChain;
+      const userSettings = await this.#loadUserSettings(root);
       const response = await this.#client.openProject(root, projectFile);
       this.#acceptProject(response.project, true);
+      this.#acceptUserSettings(userSettings);
     } catch (error) {
       this.#operationFailed(error);
     }
@@ -219,8 +284,11 @@ export class StudioWorkspaceStore {
     if (!(await this.connect())) return;
     this.#patch({ operation: 'opening', lastError: null, activeMenu: null });
     try {
+      await this.#settingsWriteChain;
+      const userSettings = await this.#loadUserSettings(input.root);
       const response = await this.#client.createProject(input);
       this.#acceptProject(response.project, true);
+      this.#acceptUserSettings(userSettings);
     } catch (error) {
       this.#operationFailed(error);
     }
@@ -231,11 +299,14 @@ export class StudioWorkspaceStore {
     if (document === null) return;
     this.#patch({ operation: 'committing', lastError: null, activeMenu: null });
     try {
+      await this.#settingsWriteChain;
+      const userSettings = await this.#loadUserSettings(input.root);
       const response = await this.#client.saveProjectAs({
         ...input,
         expectedProjectHash: document.identity.projectHash,
       });
       this.#acceptProject(response.project, true);
+      this.#acceptUserSettings(userSettings);
     } catch (error) {
       this.#operationFailed(error);
     }
@@ -350,10 +421,122 @@ export class StudioWorkspaceStore {
     }
   }
 
+  selectAsset(assetId: string): void {
+    if (!this.#snapshot().authoringDocument?.assetBrowser.assets.some(
+      (asset) => asset.assetId === assetId,
+    )) return;
+    this.#patch({
+      assetWorkspace: {
+        ...this.#snapshot().assetWorkspace,
+        selectedAssetId: assetId,
+      },
+    });
+  }
+
+  async prepareAssetImport(
+    source: StudioFileSelection,
+    settings: StudioAssetImportSettings,
+  ): Promise<void> {
+    const document = this.#snapshot().authoringDocument;
+    if (document === null || this.#snapshot().operation !== 'idle') return;
+    this.#patch({ operation: 'asset', lastError: null, activeMenu: null });
+    try {
+      const response = await this.#client.prepareAssetImport({
+        expectedProjectHash: document.identity.projectHash,
+        source,
+        settings,
+      });
+      this.#patch({
+        operation: 'idle',
+        bottomPanel: 'assets',
+        assetWorkspace: {
+          ...this.#snapshot().assetWorkspace,
+          plan: response.plan,
+          message: response.plan.hasErrors
+            ? 'Import plan has errors; project bytes remain unchanged.'
+            : `Prepared ${response.plan.reimportKind ?? 'import'} for ${response.plan.meshAssetId ?? source.path}.`,
+        },
+      });
+    } catch (error) {
+      this.#operationFailed(error);
+    }
+  }
+
+  async prepareAssetReimport(assetId: string): Promise<void> {
+    const document = this.#snapshot().authoringDocument;
+    if (document === null || this.#snapshot().operation !== 'idle') return;
+    this.#patch({ operation: 'asset', lastError: null });
+    try {
+      const response = await this.#client.prepareAssetReimport({
+        expectedProjectHash: document.identity.projectHash,
+        assetId,
+      });
+      this.#patch({
+        operation: 'idle',
+        bottomPanel: 'assets',
+        assetWorkspace: {
+          selectedAssetId: assetId,
+          plan: response.plan,
+          message: `Prepared ${response.plan.reimportKind ?? 'reimport'} for ${assetId}.`,
+        },
+      });
+    } catch (error) {
+      this.#operationFailed(error);
+    }
+  }
+
+  async applyAssetImport(): Promise<void> {
+    const current = this.#snapshot();
+    const document = current.authoringDocument;
+    const plan = current.assetWorkspace.plan;
+    if (document === null || plan === null || current.operation !== 'idle') return;
+    this.#patch({ operation: 'asset', lastError: null });
+    try {
+      const response = await this.#client.applyAssetImport({
+        expectedProjectHash: document.identity.projectHash,
+        planId: plan.planId,
+        expectedPlanHash: plan.planHash,
+      });
+      this.#acceptProject(response.project, false);
+      const assetId = response.receipt.kind === 'assetImportApplied'
+        ? response.receipt.assetId
+        : plan.meshAssetId;
+      this.#patch({
+        assetWorkspace: {
+          selectedAssetId: assetId,
+          plan: null,
+          message: mutationMessage(response.receipt),
+        },
+      });
+    } catch (error) {
+      this.#operationFailed(error);
+    }
+  }
+
+  async discardAssetImport(): Promise<void> {
+    const plan = this.#snapshot().assetWorkspace.plan;
+    if (plan === null || this.#snapshot().operation !== 'idle') return;
+    this.#patch({ operation: 'asset', lastError: null });
+    try {
+      await this.#client.discardAssetImport({ planId: plan.planId });
+      this.#patch({
+        operation: 'idle',
+        assetWorkspace: {
+          ...this.#snapshot().assetWorkspace,
+          plan: null,
+          message: 'Prepared asset import discarded.',
+        },
+      });
+    } catch (error) {
+      this.#operationFailed(error);
+    }
+  }
+
   async closeProject(): Promise<void> {
     if (this.#snapshot().connection.kind !== 'connected') return;
     this.#patch({ operation: 'closing', lastError: null });
     try {
+      await this.#settingsWriteChain;
       await this.#client.closeProject();
       const connection = this.#snapshot().connection;
       this.#patch({
@@ -366,6 +549,11 @@ export class StudioWorkspaceStore {
         authoringDocument: null,
         liveProjection: null,
         preview: null,
+        assetWorkspace: {
+          selectedAssetId: null,
+          plan: null,
+          message: 'Import or select a project asset to inspect its owner data.',
+        },
         voxelWorkspace: {
           validatedPick: null,
           lastReadout: null,
@@ -375,6 +563,16 @@ export class StudioWorkspaceStore {
           message: 'Select a rendered voxel instance to begin authoring.',
         },
         selection: { sceneNodeId: null, entityId: null, source: null },
+        settings: INITIAL_SETTINGS,
+        userSettings: {
+          status: 'scratch',
+          projectRoot: null,
+          projectKey: INITIAL_ARTIFACT.projectKey,
+          path: null,
+          sha256: null,
+          writesEnabled: false,
+          message: 'Open a project to load host-user settings.',
+        },
         operation: 'idle',
       });
     } catch (error) {
@@ -869,7 +1067,80 @@ export class StudioWorkspaceStore {
   }
 
   updateSettings(update: Partial<StudioViewSettings>): void {
-    this.#patch({ settings: { ...this.#snapshot().settings, ...update } });
+    const current = this.#snapshot();
+    const next = {
+      ...current.settings,
+      ...update,
+      keyboard: update.keyboard === undefined
+        ? current.settings.keyboard
+        : { ...current.settings.keyboard, ...update.keyboard },
+    };
+    try {
+      validateStudioHostUserSettings(settingsArtifact(current.userSettings.projectKey, next));
+    } catch (error) {
+      this.reportUiError(errorMessage(error));
+      return;
+    }
+    this.#patch({ settings: next });
+    this.#queueUserSettingsWrite();
+  }
+
+  setKeyboardBinding(key: keyof StudioKeyboardBindings, code: string): void {
+    const binding = code.trim();
+    if (binding.length === 0) return;
+    this.updateSettings({
+      keyboard: { ...this.#snapshot().settings.keyboard, [key]: binding },
+    });
+  }
+
+  setGridColor(
+    key: 'minorColor' | 'majorColor' | 'xAxisColor' | 'yAxisColor' | 'zAxisColor',
+    hex: string,
+  ): void {
+    const rgb = parseHexColor(hex);
+    if (rgb === null) return;
+    const current = this.#snapshot().settings[key];
+    this.updateSettings({ [key]: [...rgb, current[3]] });
+  }
+
+  restoreSceneViewDefaults(): void {
+    const current = this.#snapshot();
+    const defaults = viewSettings(buildDefaultStudioHostUserSettings(current.userSettings.projectKey));
+    this.updateSettings({
+      gridVisible: defaults.gridVisible,
+      minorColor: defaults.minorColor,
+      majorColor: defaults.majorColor,
+      xAxisColor: defaults.xAxisColor,
+      yAxisColor: defaults.yAxisColor,
+      zAxisColor: defaults.zAxisColor,
+      majorLineEvery: defaults.majorLineEvery,
+      opacity: defaults.opacity,
+      fadeStart: defaults.fadeStart,
+      fadeEnd: defaults.fadeEnd,
+      cameraMoveSpeed: defaults.cameraMoveSpeed,
+      cameraBoostMultiplier: defaults.cameraBoostMultiplier,
+      invertLookY: defaults.invertLookY,
+      invertPanY: defaults.invertPanY,
+    });
+  }
+
+  async reloadUserSettings(): Promise<void> {
+    const root = this.#snapshot().userSettings.projectRoot;
+    if (root === null || this.#settingsClient === null) return;
+    try {
+      await this.#settingsWriteChain;
+      this.#acceptUserSettings(await this.#settingsClient.load(root));
+    } catch (error) {
+      this.#patch({
+        userSettings: {
+          ...this.#snapshot().userSettings,
+          status: 'error',
+          writesEnabled: false,
+          message: errorMessage(error),
+        },
+        lastError: errorMessage(error),
+      });
+    }
   }
 
   clearError(): void {
@@ -944,6 +1215,7 @@ export class StudioWorkspaceStore {
         canonical: project.canonical,
         inspections: project.inspections,
         sceneHierarchy: project.sceneHierarchy,
+        assetBrowser: project.assetBrowser,
         domain: project.loadingBay,
         voxel: project.voxel ?? null,
         voxelAuthoring: project.voxelAuthoring,
@@ -960,8 +1232,109 @@ export class StudioWorkspaceStore {
         ...current.voxelWorkspace,
         validatedPick: null,
       },
+      assetWorkspace: {
+        selectedAssetId: project.assetBrowser.assets.some(
+          (asset) => asset.assetId === current.assetWorkspace.selectedAssetId,
+        )
+          ? current.assetWorkspace.selectedAssetId
+          : null,
+        plan: current.assetWorkspace.plan?.expectedProjectHash === project.identity.projectHash
+          ? current.assetWorkspace.plan
+          : null,
+        message: current.assetWorkspace.message,
+      },
       operation: 'idle',
       lastError: null,
+    });
+  }
+
+  async #loadUserSettings(projectRoot: string): Promise<StudioUserSettingsSnapshot> {
+    if (this.#settingsClient !== null) return this.#settingsClient.load(projectRoot);
+    const artifact = buildDefaultStudioHostUserSettings('rusty-studio-project:unpersisted');
+    return {
+      canonicalProjectRoot: projectRoot,
+      projectKey: artifact.projectKey,
+      path: '',
+      artifact,
+      sha256: null,
+      writesEnabled: false,
+      message: 'No host-user settings client is configured; preferences are session-only.',
+    };
+  }
+
+  #acceptUserSettings(settings: StudioUserSettingsSnapshot): void {
+    this.#settingsGeneration += 1;
+    this.#patch({
+      settings: viewSettings(settings.artifact),
+      userSettings: {
+        status: settings.writesEnabled
+          ? settings.sha256 === null ? 'defaulted' : 'loaded'
+          : 'unsupported',
+        projectRoot: settings.canonicalProjectRoot,
+        projectKey: settings.projectKey,
+        path: settings.path.length === 0 ? null : settings.path,
+        sha256: settings.sha256,
+        writesEnabled: settings.writesEnabled,
+        message: settings.message,
+      },
+    });
+  }
+
+  #queueUserSettingsWrite(): void {
+    const current = this.#snapshot();
+    const client = this.#settingsClient;
+    const root = current.userSettings.projectRoot;
+    if (client === null || root === null) {
+      this.#patch({
+        userSettings: {
+          ...current.userSettings,
+          message: 'Preferences are session-only until a project is opened through the Studio host.',
+        },
+      });
+      return;
+    }
+    if (!current.userSettings.writesEnabled) {
+      this.reportUiError('Host-user settings writes are disabled until the settings file is reloaded or repaired.');
+      return;
+    }
+    const generation = this.#settingsGeneration;
+    this.#settingsWriteChain = this.#settingsWriteChain.then(async () => {
+      const before = this.#snapshot();
+      if (generation !== this.#settingsGeneration
+        || before.userSettings.projectRoot !== root
+        || !before.userSettings.writesEnabled) return;
+      this.#patch({
+        userSettings: {
+          ...before.userSettings,
+          status: 'saving',
+          message: 'Saving host-user settings…',
+        },
+      });
+      const artifact = settingsArtifact(before.userSettings.projectKey, before.settings);
+      const saved = await client.save(root, artifact, before.userSettings.sha256);
+      if (generation !== this.#settingsGeneration) return;
+      this.#patch({
+        userSettings: {
+          ...this.#snapshot().userSettings,
+          status: 'loaded',
+          path: saved.path,
+          sha256: saved.sha256,
+          writesEnabled: true,
+          message: 'Host-user settings saved for this canonical project root.',
+        },
+      });
+    }).catch((error: unknown) => {
+      if (generation !== this.#settingsGeneration) return;
+      const message = errorMessage(error);
+      this.#patch({
+        userSettings: {
+          ...this.#snapshot().userSettings,
+          status: 'error',
+          writesEnabled: false,
+          message,
+        },
+        lastError: message,
+      });
     });
   }
 
@@ -1007,6 +1380,7 @@ function mutationMessage(receipt: ProjectMutationReceipt): string {
     case 'entityCollisionSet': return `Entity ${String(receipt.entityId)} collision ${receipt.attached ? 'attached' : 'removed'}.`;
     case 'entityKinematicSet': return `Entity ${String(receipt.entityId)} kinematic data ${receipt.attached ? 'attached' : 'removed'}.`;
     case 'materialUpserted': return `Material ${receipt.assetId} stored.`;
+    case 'assetImportApplied': return `${receipt.reimportKind} installed ${receipt.assetId} from ${receipt.sourcePath}.`;
     case 'voxelAssetInitialized': return `Voxel asset ${receipt.assetId} initialized.`;
     case 'voxelAssetDuplicated': return `Duplicated ${receipt.sourceAssetId} to ${receipt.targetAssetId}.`;
     case 'voxelInstanceAttached': return `Instance ${receipt.instanceId} attached.`;
@@ -1147,6 +1521,74 @@ function projectionDescriptor(operation: RenderDiff): {
     default:
       return null;
   }
+}
+
+function viewSettings(artifact: StudioHostUserSettingsArtifact): StudioViewSettings {
+  return {
+    theme: artifact.theme,
+    snappingEnabled: artifact.editor.snappingEnabled,
+    translationSnap: artifact.editor.translationSnap,
+    gridVisible: artifact.sceneView.gridVisible,
+    minorColor: [...artifact.sceneView.minorColor],
+    majorColor: [...artifact.sceneView.majorColor],
+    xAxisColor: [...artifact.sceneView.xAxisColor],
+    yAxisColor: [...artifact.sceneView.yAxisColor],
+    zAxisColor: [...artifact.sceneView.zAxisColor],
+    majorLineEvery: artifact.sceneView.majorLineEvery,
+    opacity: artifact.sceneView.opacity,
+    fadeStart: artifact.sceneView.fadeStart,
+    fadeEnd: artifact.sceneView.fadeEnd,
+    cameraMoveSpeed: artifact.sceneView.cameraMoveSpeed,
+    cameraBoostMultiplier: artifact.sceneView.cameraBoostMultiplier,
+    invertLookY: artifact.sceneView.invertLookY,
+    invertPanY: artifact.sceneView.invertPanY,
+    keyboard: { ...artifact.keyboard },
+  };
+}
+
+function settingsArtifact(
+  projectKey: string,
+  settings: StudioViewSettings,
+): StudioHostUserSettingsArtifact {
+  return {
+    schemaVersion: 1,
+    artifactKind: 'rusty_engine_studio_host_user_settings',
+    settingsVersion: 'rusty-engine-studio-host-user-settings.v1',
+    projectKey,
+    theme: settings.theme,
+    editor: {
+      snappingEnabled: settings.snappingEnabled,
+      translationSnap: settings.translationSnap,
+    },
+    sceneView: {
+      gridVisible: settings.gridVisible,
+      minorColor: [...settings.minorColor],
+      majorColor: [...settings.majorColor],
+      xAxisColor: [...settings.xAxisColor],
+      yAxisColor: [...settings.yAxisColor],
+      zAxisColor: [...settings.zAxisColor],
+      majorLineEvery: settings.majorLineEvery,
+      opacity: settings.opacity,
+      fadeStart: settings.fadeStart,
+      fadeEnd: settings.fadeEnd,
+      cameraMoveSpeed: settings.cameraMoveSpeed,
+      cameraBoostMultiplier: settings.cameraBoostMultiplier,
+      invertLookY: settings.invertLookY,
+      invertPanY: settings.invertPanY,
+    },
+    keyboard: { ...settings.keyboard },
+  };
+}
+
+function parseHexColor(value: string): readonly [number, number, number] | null {
+  const match = /^#([0-9a-f]{6})$/i.exec(value);
+  if (match === null) return null;
+  const encoded = Number.parseInt(match[1] as string, 16);
+  return [
+    ((encoded >> 16) & 0xff) / 255,
+    ((encoded >> 8) & 0xff) / 255,
+    (encoded & 0xff) / 255,
+  ];
 }
 
 function errorMessage(error: unknown): string {

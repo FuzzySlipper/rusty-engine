@@ -7,5 +7,9 @@
     "types": ["node"],
     "noEmit": true
   },
-  "include": ["scripts/studio-host.ts"]
+  "include": [
+    "scripts/studio-host.ts",
+    "scripts/studio-user-settings-service.ts",
+    "libs/user-settings/src/**/*.ts"
+  ]
 }

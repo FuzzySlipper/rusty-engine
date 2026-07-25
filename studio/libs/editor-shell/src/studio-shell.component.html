@@ -8,6 +8,12 @@
   [attr.data-voxel-pick-instance]="state().voxelWorkspace.validatedPick?.instanceId"
   [attr.data-voxel-receipt]="state().voxelWorkspace.lastReceipt?.kind"
   [attr.data-voxel-assets]="state().authoringDocument?.voxelAuthoring?.assets?.length"
+  [attr.data-project-assets]="state().authoringDocument?.assetBrowser?.assets?.length"
+  [attr.data-asset-plan]="state().assetWorkspace.plan?.reimportKind"
+  [attr.data-selected-asset]="state().assetWorkspace.selectedAssetId"
+  [attr.data-user-settings-status]="state().userSettings.status"
+  [attr.data-camera-speed]="state().settings.cameraMoveSpeed"
+  [attr.data-move-forward]="state().settings.keyboard.moveForward"
 >
   <header class="titlebar">
     <div class="brand" aria-label="Rusty Engine Studio">
@@ -42,7 +48,7 @@
         <hr />
         <button type="button" (click)="openProjectDialog('createProject')">New Project…</button>
         <button type="button" [disabled]="state().authoringDocument === null" (click)="openProjectDialog('saveProjectAs')">Save Project As…</button>
-        <button type="button" disabled title="General asset import and reimport require named project-adapter operations; voxel and GLB files are available in Voxel Authoring">Import Project Asset…</button>
+        <button type="button" [disabled]="state().authoringDocument === null || state().operation !== 'idle'" (click)="openAssetImportDialog()">Import Project Asset…</button>
       </section>
     }
     @if (state().activeMenu === 'edit') {
@@ -174,7 +180,8 @@
           <rusty-studio-viewport
             [frame]="projection.frame"
             [frameGeneration]="projection.generation"
-            [gridVisible]="state().settings.gridVisible"
+            [grid]="viewportGrid()"
+            [controlPreferences]="viewportControlPreferences()"
             [selectedEntityId]="state().selection.entityId"
             [previewEntityId]="state().preview?.entityId ?? null"
             [previewTranslation]="state().preview?.translation ?? null"
@@ -201,11 +208,60 @@
 
       <section class="bottom-panel" data-visual-id="studio-bottom-panel">
         <nav>
+          <button type="button" [class.is-active]="state().bottomPanel === 'assets'" (click)="store.setBottomPanel('assets')">Assets <span>{{ state().authoringDocument?.assetBrowser?.assets?.length ?? 0 }}</span></button>
           <button type="button" [class.is-active]="state().bottomPanel === 'diagnostics'" (click)="store.setBottomPanel('diagnostics')">Diagnostics <span>{{ ownerDiagnosticCount() }}</span></button>
           <button type="button" [class.is-active]="state().bottomPanel === 'owners'" (click)="store.setBottomPanel('owners')">Owners</button>
           <button type="button" [class.is-active]="state().bottomPanel === 'output'" (click)="store.setBottomPanel('output')">Output</button>
         </nav>
         <div class="bottom-content">
+          @if (state().bottomPanel === 'assets') {
+            <div class="asset-browser-toolbar">
+              <span>{{ state().assetWorkspace.message }}</span>
+              <button type="button" [disabled]="state().authoringDocument === null || state().operation !== 'idle'" (click)="openAssetImportDialog()">Import…</button>
+            </div>
+            <div class="asset-browser-grid">
+              <div class="asset-list" role="listbox" aria-label="Project assets">
+                @for (asset of state().authoringDocument?.assetBrowser?.assets ?? []; track asset.assetId) {
+                  <button
+                    type="button"
+                    role="option"
+                    [class.is-selected]="state().assetWorkspace.selectedAssetId === asset.assetId"
+                    [attr.aria-selected]="state().assetWorkspace.selectedAssetId === asset.assetId"
+                    (click)="store.selectAsset(asset.assetId)"
+                  >
+                    <strong>{{ asset.assetId }}</strong>
+                    <span>{{ asset.kind }} v{{ asset.version }} · {{ asset.dependencies.length }} deps</span>
+                    @if (asset.import; as imported) {<small>{{ imported.status }} · importer {{ imported.importerVersion }}</small>}
+                  </button>
+                } @empty {<span>No project assets.</span>}
+              </div>
+              <div class="asset-detail">
+                @if (selectedAsset(); as asset) {
+                  <strong>{{ asset.label ?? asset.assetId }}</strong>
+                  <span>hash {{ asset.hash ?? 'unlocked' }}</span>
+                  <span>depends on {{ asset.dependencies.join(', ') || 'nothing' }}</span>
+                  <span>used by {{ asset.dependents.join(', ') || 'nothing' }}</span>
+                  @if (asset.import; as imported) {
+                    <span>source {{ imported.source.scope }}:{{ imported.source.path }}</span>
+                    <button type="button" [disabled]="state().operation !== 'idle'" (click)="prepareAssetReimport(asset.assetId)">Prepare reimport</button>
+                  }
+                } @else {<span>Select an asset to inspect dependencies and provenance.</span>}
+              </div>
+              @if (state().assetWorkspace.plan; as plan) {
+                <div class="asset-plan" data-visual-id="studio-asset-import-plan">
+                  <strong>{{ plan.reimportKind ?? 'import' }} · {{ plan.meshAssetId ?? 'no candidate' }}</strong>
+                  <span>{{ plan.sourceByteCount }} bytes · {{ plan.generatedAssetIds.length }} generated assets · {{ plan.generatedArtifacts.length }} artifacts</span>
+                  @for (diagnostic of plan.diagnostics; track diagnostic.code + ':' + diagnostic.locus + ':' + $index) {
+                    <span class="asset-diagnostic" [class.is-error]="diagnostic.severity === 'error'">{{ diagnostic.severity }} · {{ diagnostic.code }} — {{ diagnostic.message }}</span>
+                  }
+                  <div>
+                    <button type="button" [disabled]="state().operation !== 'idle'" (click)="discardAssetImport()">Discard</button>
+                    <button type="button" class="primary" [disabled]="plan.hasErrors || state().operation !== 'idle'" (click)="applyAssetImport()">Apply atomically</button>
+                  </div>
+                </div>
+              }
+            </div>
+          }
           @if (state().bottomPanel === 'diagnostics') {
             @if (ownerDiagnosticCount() === 0) {
               <span class="good-state">No owner diagnostics.</span>
@@ -420,7 +476,7 @@
     <div class="modal-backdrop" (mousedown)="store.setSettingsOpen(false)" data-visual-id="studio-settings-dialog">
       <section class="settings-dialog" role="dialog" aria-modal="true" aria-label="Studio settings" (mousedown)="$event.stopPropagation()">
         <header>
-          <div><strong>Studio Settings</strong><small>Transient host UI preferences</small></div>
+          <div><strong>Studio Settings</strong><small>Host-user preferences for this canonical project root</small></div>
           <button type="button" aria-label="Close settings" (click)="store.setSettingsOpen(false)">×</button>
         </header>
         <div class="settings-body">
@@ -431,17 +487,81 @@
               <option value="highContrast">High contrast</option>
             </select>
           </label>
-          <label>
-            <span>Translation snap</span>
-            <input type="number" min="0.01" step="0.05" [ngModel]="state().settings.translationSnap" (ngModelChange)="store.updateSettings({ translationSnap: $event })" />
-          </label>
+          <div class="settings-grid">
+            <label>
+              <span>Translation snap / grid spacing</span>
+              <input type="number" min="0.01" step="0.05" [value]="state().settings.translationSnap" (change)="store.updateSettings({ translationSnap: $any($event.target).valueAsNumber })" />
+            </label>
+            <label>
+              <span>Major line every</span>
+              <input type="number" min="1" step="1" [value]="state().settings.majorLineEvery" (change)="store.updateSettings({ majorLineEvery: $any($event.target).valueAsNumber })" />
+            </label>
+            <label>
+              <span>Grid opacity</span>
+              <input type="number" min="0" max="1" step="0.05" [value]="state().settings.opacity" (change)="store.updateSettings({ opacity: $any($event.target).valueAsNumber })" />
+            </label>
+            <label>
+              <span>Grid fade start</span>
+              <input type="number" min="0" step="1" [value]="state().settings.fadeStart" (change)="store.updateSettings({ fadeStart: $any($event.target).valueAsNumber })" />
+            </label>
+            <label>
+              <span>Grid fade end</span>
+              <input type="number" min="0.1" step="1" [value]="state().settings.fadeEnd" (change)="store.updateSettings({ fadeEnd: $any($event.target).valueAsNumber })" />
+            </label>
+          </div>
           <label class="check-setting">
             <input type="checkbox" [ngModel]="state().settings.gridVisible" (ngModelChange)="store.updateSettings({ gridVisible: $event })" />
             <span>Show editor grid</span>
           </label>
-          <p>These values are UI state only. Browser storage is not used; durable host-user settings require an explicit host owner.</p>
+          <label class="check-setting">
+            <input type="checkbox" [ngModel]="state().settings.snappingEnabled" (ngModelChange)="store.updateSettings({ snappingEnabled: $event })" />
+            <span>Enable translation snapping</span>
+          </label>
+          <fieldset>
+            <legend>Grid colors</legend>
+            <div class="settings-grid color-settings">
+              @for (color of gridColors; track color.key) {
+                <label><span>{{ color.label }}</span><input type="color" [value]="gridColorHex(color.key)" (input)="store.setGridColor(color.key, $any($event.target).value)" /></label>
+              }
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Scene camera</legend>
+            <div class="settings-grid">
+              <label><span>Move speed</span><input aria-label="Camera move speed" type="number" min="0.1" step="0.5" [value]="state().settings.cameraMoveSpeed" (change)="store.updateSettings({ cameraMoveSpeed: $any($event.target).valueAsNumber })" /></label>
+              <label><span>Boost multiplier</span><input aria-label="Camera boost multiplier" type="number" min="1" step="0.5" [value]="state().settings.cameraBoostMultiplier" (change)="store.updateSettings({ cameraBoostMultiplier: $any($event.target).valueAsNumber })" /></label>
+            </div>
+            <label class="check-setting"><input type="checkbox" [ngModel]="state().settings.invertLookY" (ngModelChange)="store.updateSettings({ invertLookY: $event })" /><span>Invert orbit look Y</span></label>
+            <label class="check-setting"><input type="checkbox" [ngModel]="state().settings.invertPanY" (ngModelChange)="store.updateSettings({ invertPanY: $event })" /><span>Invert pan Y</span></label>
+          </fieldset>
+          <fieldset>
+            <legend>Scene-view movement</legend>
+            <small>Focus a binding and press a key. Values use layout-stable KeyboardEvent.code names.</small>
+            <div class="settings-grid keyboard-settings">
+              @for (binding of keyboardBindings; track binding.key) {
+                <label>
+                  <span>{{ binding.label }}</span>
+                  <input
+                    type="text"
+                    readonly
+                    [attr.aria-label]="binding.label + ' binding'"
+                    [value]="state().settings.keyboard[binding.key]"
+                    (keydown)="captureKeyboardBinding($event, binding.key)"
+                  />
+                </label>
+              }
+            </div>
+          </fieldset>
+          <p data-visual-id="studio-user-settings-status">{{ state().userSettings.message }}</p>
+          <p>Preferences are versioned and stored by the Studio host outside project content and browser storage.</p>
         </div>
-        <footer><button type="button" class="primary" (click)="store.setSettingsOpen(false)">Done</button></footer>
+        <footer>
+          <button type="button" (click)="store.restoreSceneViewDefaults()">Restore scene defaults</button>
+          @if (!state().userSettings.writesEnabled && state().userSettings.projectRoot !== null) {
+            <button type="button" (click)="store.reloadUserSettings()">Reload settings</button>
+          }
+          <button type="button" class="primary" (click)="store.setSettingsOpen(false)">Done</button>
+        </footer>
       </section>
     </div>
   }
@@ -458,6 +578,7 @@
                 @case ('saveProjectAs') { Save Project As }
                 @case ('scene') { Scene Lifecycle }
                 @case ('object') { Create Scene Object }
+                @case ('assetImport') { Import Project Asset }
               }
             </strong>
             <small>Named project-adapter operations with owner-side validation</small>
@@ -490,6 +611,14 @@
             @if (objectDraft.kind === 'staticMesh') {<label><span>Asset ID</span><input [(ngModel)]="objectDraft.asset" placeholder="mesh/asset-id" /></label>}
             <p>Creation installs hierarchy, full identity transform, appearance, and capability defaults as one atomic owner mutation.</p>
           }
+          @if (authoringDialog === 'assetImport') {
+            <label><span>Source scope</span><select [(ngModel)]="assetImportScope"><option value="project">Project-relative</option><option value="host">Trusted host path</option></select></label>
+            <label><span>Source mesh JSON</span><input [(ngModel)]="assetImportPath" autocomplete="off" /></label>
+            <label><span>Scale</span><input type="number" min="0.0001" step="0.1" [(ngModel)]="assetImportScale" /></label>
+            <label><span>Material namespace</span><input [(ngModel)]="assetImportMaterialNamespace" placeholder="optional scoped-kebab" /></label>
+            <label class="check-setting"><input type="checkbox" [(ngModel)]="assetImportGenerateCollision" /><span>Generate AABB collision when source is visual-only</span></label>
+            <p>Prepare reads and validates the source without changing the project. Review generated assets, diagnostics, dependencies, and reimport classification in the Assets panel before applying.</p>
+          }
         </div>
         <footer class="dialog-actions">
           @if (authoringDialog === 'scene') {
@@ -497,6 +626,9 @@
             <button type="button" (click)="renameScene()">Rename</button>
             <button type="button" (click)="setEntryScene()">Make entry</button>
             <button type="button" class="primary" (click)="createScene()">Create</button>
+          } @else if (authoringDialog === 'assetImport') {
+            <button type="button" (click)="authoringDialog = null">Cancel</button>
+            <button type="button" class="primary" (click)="prepareAssetImport()">Prepare import</button>
           } @else {
             <button type="button" (click)="authoringDialog = null">Cancel</button>
             <button type="button" class="primary" (click)="authoringDialog === 'object' ? createObject() : submitProjectDialog()">{{ authoringDialog === 'object' ? 'Create object' : authoringDialog === 'createProject' ? 'Create project' : 'Save copy' }}</button>

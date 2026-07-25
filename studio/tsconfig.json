@@ -13,6 +13,7 @@
     "paths": {
       "@rusty-engine/studio-adapter-client": ["libs/adapter-client/src/index.ts"],
       "@rusty-engine/studio-editor-shell": ["libs/editor-shell/src/index.ts"],
+      "@rusty-engine/studio-user-settings": ["libs/user-settings/src/index.ts"],
       "@rusty-engine/studio-viewport": ["libs/viewport/src/index.ts"],
       "@rusty-engine/studio-voxel-editor": ["libs/voxel-editor/src/index.ts"],
       "@rusty-engine/studio-voxel-editor/model": ["libs/voxel-editor/src/voxel-editor-model.ts"]
