@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use core_ids::EntityId;
-use entity_state::EntityState;
+use entity_state::{EntityState, EntityTransform};
 use render_model::{
     AnimatedMeshInstanceDescriptor, BillboardMode, RenderAssetError, RenderAssetKind, RenderDiff,
     RenderFrameDiff, RenderFrameError, RenderHandle, RenderMetadata, ResolvedRenderAsset,
@@ -92,7 +92,7 @@ impl EntityRenderProjector {
                 });
                 continue;
             }
-            let translation = node.translation.unwrap_or_default();
+            let transform = node.transform.unwrap_or(EntityTransform::IDENTITY);
             let metadata = RenderMetadata {
                 source_entity: Some(node.entity.raw()),
                 source_scene_node: None,
@@ -105,8 +105,18 @@ impl EntityRenderProjector {
                     asset: asset.id.clone(),
                     kind: asset.kind,
                     transform: Transform {
-                        translation: [translation.x, translation.y, translation.z],
-                        ..Transform::IDENTITY
+                        translation: [
+                            transform.translation.x,
+                            transform.translation.y,
+                            transform.translation.z,
+                        ],
+                        rotation: [
+                            transform.rotation.x,
+                            transform.rotation.y,
+                            transform.rotation.z,
+                            transform.rotation.w,
+                        ],
+                        scale: [transform.scale.x, transform.scale.y, transform.scale.z],
                     },
                     visible: node.visible,
                     metadata,
@@ -274,13 +284,17 @@ pub enum EntityProjectionError {
 mod tests {
     use super::*;
     use core_math::Vec3;
-    use entity_state::EntityDefinition;
+    use entity_state::{EntityDefinition, Quat};
 
     #[test]
     fn projects_entity_state_with_stable_minimal_updates() {
         let id = EntityId::new(12);
         let mut state = EntityState::from_definitions([EntityDefinition::new(id, "door")
-            .with_transform(Vec3::new(1.0, 2.0, 3.0))
+            .with_full_transform(EntityTransform {
+                translation: Vec3::new(1.0, 2.0, 3.0),
+                rotation: Quat::new(0.0, 0.0, 0.707_106_77, 0.707_106_77),
+                scale: Vec3::new(2.0, 3.0, 4.0),
+            })
             .with_renderable("mesh/security-door", true)])
         .unwrap();
         let assets = BTreeMap::from([(
@@ -296,8 +310,11 @@ mod tests {
         let first = projector.project(&state, &assets).unwrap();
         let handle = projector.handle_of(id).unwrap();
         assert!(matches!(
-            first.frame.ops[0],
-            RenderDiff::CreateStaticMeshInstance { handle: actual, .. } if actual == handle
+            &first.frame.ops[0],
+            RenderDiff::CreateStaticMeshInstance { handle: actual, instance, .. }
+                if *actual == handle
+                    && instance.transform.rotation == [0.0, 0.0, 0.707_106_77, 0.707_106_77]
+                    && instance.transform.scale == [2.0, 3.0, 4.0]
         ));
 
         state

@@ -158,7 +158,7 @@ pub struct ProjectionNode {
     pub entity: EntityId,
     pub name: String,
     pub asset: String,
-    pub translation: Option<Vec3>,
+    pub transform: Option<EntityTransform>,
     pub visible: bool,
 }
 
@@ -348,9 +348,7 @@ impl EntityState {
                     entity: *entity,
                     name: core.name.clone(),
                     asset: renderable.asset.clone(),
-                    translation: self
-                        .world_transform(*entity)
-                        .map(|transform| transform.translation),
+                    transform: self.world_transform(*entity),
                     visible: core.lifecycle == EntityLifecycle::Active && renderable.visible,
                 })
             })

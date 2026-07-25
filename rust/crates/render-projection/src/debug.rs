@@ -254,7 +254,10 @@ pub fn entity_debug_labels(state: &EntityState) -> Vec<DebugOverlayDescriptor> {
         .projection()
         .into_iter()
         .map(|node| {
-            let translation = node.translation.unwrap_or_default();
+            let translation = node
+                .transform
+                .map(|transform| transform.translation)
+                .unwrap_or_default();
             DebugOverlayDescriptor::label(
                 DebugOverlayId::new(node.entity.raw()),
                 [translation.x, translation.y + 1.0, translation.z],
