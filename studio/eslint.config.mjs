@@ -22,7 +22,7 @@ export default [
             },
             {
               sourceTag: 'type:ui',
-              onlyDependOnLibsWithTags: ['type:boundary'],
+              onlyDependOnLibsWithTags: ['type:ui', 'type:boundary'],
             },
             {
               sourceTag: 'type:boundary',

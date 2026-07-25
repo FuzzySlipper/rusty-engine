@@ -47,7 +47,7 @@ permissions:
 
 env:
   RUSTY_ENGINE_DEMO_REPOSITORY: FuzzySlipper/rusty-engine-demo
-  RUSTY_ENGINE_DEMO_REVISION: a125133f71d6fe82c7ffd8896e3d7e82fd1c3635
+  RUSTY_ENGINE_DEMO_REVISION: 780aa83c0e295393b945dfca2ac1493ceeca4235
 
 jobs:
   verify-studio-demo-integration:

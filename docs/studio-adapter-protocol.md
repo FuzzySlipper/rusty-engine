@@ -1,6 +1,6 @@
 # Studio external-project adapter protocol
 
-Status: M11D scene workflow implemented
+Status: M11E scene and voxel authoring implemented
 
 Rusty Engine Studio talks to one project-owned Rust adapter at a time through a bounded JSON-lines
 process. The adapter is a downstream composition root: it understands that project's layout,
@@ -13,7 +13,7 @@ against a real external checkout without turning that checkout into an ordinary 
 
 ## Closed protocol
 
-Every request carries `protocolVersion: 2` and a caller-selected `requestId`. Version 2 contains
+Every request carries `protocolVersion: 3` and a caller-selected `requestId`. Version 3 contains
 only these tagged request families:
 
 | Request | Purpose | Canonical authority |
@@ -22,12 +22,22 @@ only these tagged request families:
 | `openProject` | Open an explicit absolute root and safe relative project file; return canonical readouts and initial projection. | Project adapter plus Engine owners |
 | `readProject` | Reread the open source and produce current readouts and one complete replaceable projection. | Project adapter plus Engine owners |
 | `setEntityTranslation` | Apply one typed authored transform with expected project hash and scene revision. | `authored-scene`, downstream admission, `content-store` |
+| `upsertMaterial` | Create or replace one stored material definition. | `asset-catalog`, downstream admission, `content-store` |
+| `initializeVoxelAsset`, `duplicateVoxelAsset`, `replaceVoxelPalette` | Create or change canonical project-embedded voxel assets under exact asset guards. | `voxel-asset`, `engine-spatial`, project adapter |
+| `attachVoxelInstance`, `setVoxelInstanceTransform`, `removeVoxelInstance` | Manage transformed scene instances without giving Studio scene authority. | downstream scene schema plus `authored-scene`/projection admission |
+| `validateVoxelPick` | Re-cast an untrusted shared-renderer ray against the named transformed instance and compare the claimed cell/face. | `engine-spatial` picking and collision authority |
+| `applyVoxelBrush` | Expand one bounded cube brush into a validated atomic edit transaction. | `engine-spatial` edit/history plus `voxel-asset` |
+| `undoVoxelEdit`, `redoVoxelEdit`, `revertVoxelHistory` | Move durable committed history under project and asset hash guards. | `engine-spatial` history codec/service |
+| `createVoxelAnnotationLayer`, `editVoxelAnnotation` | Create or transactionally edit typed semantic regions. | `voxel-annotation` plus target voxel identity |
+| `queryVoxelAnnotation`, `exportVoxelAnnotation`, `queryVoxelModel` | Return bounded owner readouts without sending canonical meaning to TypeScript. | `voxel-annotation`, `voxel-convert` query owners |
+| `prepareVoxelConversion`, `applyVoxelConversion`, `discardVoxelConversion` | Prepare a private bounded GLB plan/preview, atomically install its exact output, or discard it. | `voxel-convert`, `voxel-asset`, project adapter |
 | `closeProject` | Release open-project and retained-projection state. | Project adapter host lifecycle |
 
 Responses are likewise a closed tagged union: `described`, `projectOpened`, `projectRead`,
-`entityTranslationApplied`, `projectClosed`, or `rejected`. There is no generic method string,
-command registry, arbitrary payload, provider lookup, RuntimeSession, or cross-capability gameplay
-envelope.
+`entityTranslationApplied`, `projectMutationApplied`, `voxelPickValidated`, `voxelRead`,
+`voxelConversionPrepared`, `voxelConversionDiscarded`, `projectClosed`, or `rejected`. There is no
+generic method string, command registry, arbitrary payload, provider lookup, RuntimeSession, or
+cross-capability gameplay envelope.
 
 The TypeScript owner is [`../studio/libs/adapter-client`](../studio/libs/adapter-client). It performs
 strict structural decoding, request correlation, and named client methods. It deliberately does not
@@ -57,6 +67,12 @@ parentage, kind, and local/world transforms are produced in Rust. Every response
 frame, including resource definitions, so Studio can atomically replace the shared renderer channel.
 These are readouts rebuilt from admitted Rust state on every read, not a second content model.
 
+The Converted Wall artifact additionally composes canonical `voxel-asset` payloads, catalog material
+definitions, transformed scene instances, `engine-spatial` collision/edit/history state,
+`voxel-annotation` layers, bounded `voxel-convert` model/conversion readouts, and voxel chunk
+projection. The shared frame tags voxel assets and instances for renderer hint routing; Rust still
+revalidates the ray, transformed instance, local cell, and face before an edit can use the result.
+
 ## Safety and atomicity
 
 The process bounds request and response bytes. The selected root must be absolute and the project
@@ -64,10 +80,10 @@ path must be safe and relative. The downstream adapter rejects symlinks througho
 path, path escapes, non-files, oversized sources, malformed protocol input, and unsupported
 versions.
 
-Transform mutation is staged before publication:
+Every durable mutation is staged before publication:
 
 1. compare exact source hash and derived scene revision;
-2. apply `SceneEditService::SetTransform` to a candidate;
+2. invoke the one named scene/material/voxel/annotation/history/conversion owner on a candidate;
 3. rerun complete Loading Bay admission;
 4. build and authorize the `content-store` write candidate;
 5. build canonical readouts and renderer projection;
@@ -75,6 +91,10 @@ Transform mutation is staged before publication:
 7. reread canonical bytes and confirm publication.
 
 Rejected, invalid, stale, and malformed operations leave the original project bytes unchanged.
+Prepared conversion plans are private adapter-process values containing the exact source and settings
+identity. Visible plan fields are informative; apply succeeds only for the retained plan ID, plan
+hash, output hash, and current project hash. Voxel history is encoded beside the embedded asset and
+is reconstructed by a fresh process before undo, redo, or revert.
 
 ## Gates
 
@@ -82,10 +102,12 @@ Rejected, invalid, stale, and malformed operations leave the original project by
 - The demo's Rust gate tests protocol decoding, owner delegation, path safety, bounds, downstream
   semantic rejection, optimistic replacement, atomicity, and canonical reread.
 - `./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo` is the explicit
-  cross-repository proof. It builds the project-owned adapter, opens the real Loading Bay source,
-  validates voxel and owner readouts, and then runs a real Chromium workflow against a temporary
-  project copy. The browser proof covers canonical hierarchy selection, shared-renderer picking,
-  translation preview/commit, refresh/reopen persistence, and invalid-operation non-mutation.
+  cross-repository proof. It builds the project-owned adapter, opens Loading Bay, then mutates a
+  temporary Converted Wall copy through brush/history/annotation/model-query/conversion operations.
+  It closes and starts a fresh adapter process to verify reconstruction and byte-preserving stale
+  rejection. Real Chromium workflows then cover canonical hierarchy selection, observable
+  shared-renderer selection/transform preview/cancel, settlement/reopen, transformed voxel picking,
+  brush undo/redo, annotations, private-plan conversion, reload persistence, and stale non-mutation.
 - `.github/workflows/studio-demo-integration.yml` checks out the public demo at the exact revision
   declared by `studio/demo-consumer-source.json` and runs that proof as an explicit integration
   gate. The pin makes downstream drift a conscious update instead of an ambient sibling checkout.

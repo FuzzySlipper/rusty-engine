@@ -159,6 +159,35 @@ canonical artifact. Runtime consumers depend on `voxel-asset`, not the converter
 The checked request, licensed source, and canonical output remain here because they are provider
 verification fixtures, not demo content. See [voxel-asset-format.md](voxel-asset-format.md).
 
+## Studio authoring boundary
+
+The isolated `studio/` workspace is a first-party product over a closed project-owned Rust adapter;
+it is not an authority layer inside the Engine crates. The external adapter owns the selected
+project schema, trusted root, compatibility, and publication policy while composing reusable
+`asset-catalog`, `authored-scene`, `entity-state`, `engine-spatial`, `voxel-asset`,
+`voxel-annotation`, `voxel-convert`, `content-store`, `engine-inspector`, and render-projection
+mechanisms.
+
+Protocol 3 executes one named request at a time. Reads rebuild canonical owner views. Mutations carry
+the accepted project hash plus narrower asset/revision/layer/plan guards, stage a complete candidate,
+rerun downstream admission and renderer projection, atomically publish the project file, and return
+a canonical reread. Voxel history and annotation documents are durable project data; conversion
+plans remain private process state and only a matching plan/output identity can be applied. Rejected
+or stale operations publish no bytes.
+
+Angular owns forms, selection, transient brush state, and cancellation only. It structurally decodes
+the closed protocol but does not recompute hashes, validate voxel semantics, replay history, cast an
+authoritative ray, or forge conversion output. Renderer picks are untrusted hints transformed into
+an authored-cell claim and re-cast by Rust. Entity selection and transform preview are disposable
+derived frames applied through the shared renderer projection; cancellation reinstalls the accepted
+canonical frame and commit still settles through the Rust adapter.
+
+Studio's Node/HTTP host only serves the isolated application and forwards bounded JSON to the
+explicit adapter binary. It does not interpret project content or make HTTP/browser behavior an
+Engine prerequisite. Ordinary Rust verification remains independent of Studio, Node, the browser,
+and any sibling checkout; the cross-repository demo and Chromium proof is an explicit integration
+gate.
+
 ## Downstream ownership
 
 A game built on Engine should own its complete behavioral story:

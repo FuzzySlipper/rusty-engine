@@ -21,13 +21,15 @@ test('shell exposes the preserved editor surfaces and honest deferred operations
   }
   assert.match(template, /<rusty-studio-viewport/);
   assert.match(template, /Picking is active directly on the shared renderer canvas/);
-  assert.match(template, /disabled title="Voxel asset, annotation, history, and conversion owners land in M11E"/);
+  assert.match(template, />Voxel Authoring<\/button>/);
+  assert.match(template, /<rusty-voxel-editor/);
 });
 
 test('viewport composes the shared renderer host without private Three ownership', async () => {
   const viewport = await readFile(viewportUrl, 'utf8');
   assert.match(viewport, /mountRendererInspectionSurface/);
-  assert.match(viewport, /surface\.replaceFrame\(frame\)/);
+  assert.match(viewport, /presentStudioSelection/);
+  assert.match(viewport, /surface\.replaceFrame\(presentation\.frame\)/);
   assert.match(viewport, /surface\.pick\(/);
   assert.match(viewport, /surface\.setGrid\(/);
   assert.match(viewport, /surface\.dispose\(\)/);

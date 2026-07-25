@@ -20,6 +20,7 @@ cleanup() {
 trap cleanup EXIT
 
 cp -a "$DEMO_ROOT/content" "$STUDIO_TEST_ROOT/content"
+cp -a "$DEMO_ROOT/fixtures" "$STUDIO_TEST_ROOT/fixtures"
 
 cd "$REPO_ROOT"
 pnpm --dir studio run build

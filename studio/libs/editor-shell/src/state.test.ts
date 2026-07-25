@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   STUDIO_ADAPTER_PROTOCOL_VERSION,
+  STUDIO_ADAPTER_OPERATIONS,
   StudioAdapterClient,
   type StudioAdapterRequest,
   type StudioAdapterTransport,
@@ -160,11 +161,11 @@ function described(requestId: string): unknown {
     requestId,
     adapter: {
       adapterId: 'rusty-engine-demo.loading-bay',
-      adapterVersion: 2,
+      adapterVersion: 3,
       protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
       projectKind: 'loadingBayProject',
-      projectSchemaVersion: 8,
-      operations: ['describe', 'openProject', 'readProject', 'setEntityTranslation', 'closeProject'],
+      projectSchemaVersion: 9,
+      operations: STUDIO_ADAPTER_OPERATIONS,
     },
   };
 }
@@ -185,8 +186,8 @@ function projectReadout(changed: boolean): unknown {
       projectId: 'loading-bay',
       name: 'Loading Bay',
       entryScene: 'scene/loading-bay',
-      sourceSchemaVersion: 8,
-      currentSchemaVersion: 8,
+      sourceSchemaVersion: 9,
+      currentSchemaVersion: 9,
       projectHash: changed ? 'hash-after' : 'hash-before',
       sceneRevision: changed ? 12 : 11,
       relativeProjectFile: 'content/projects/loading-bay.project.json',
@@ -248,6 +249,11 @@ function projectReadout(changed: boolean): unknown {
         hierarchyNode(20, 1, 'emptyGroup', 'encounter', 2, null, [0, 0, 0]),
       ],
     },
+    voxelAuthoring: {
+      assets: [],
+      instances: [],
+      materials: [],
+    },
     loadingBay: {
       sceneName: 'Loading Bay',
       entityCount: 2,
@@ -281,6 +287,8 @@ function projectReadout(changed: boolean): unknown {
       frameKind: 'complete',
       sourceRevision: changed ? 12 : 11,
       retainedEntities: 1,
+      retainedVoxelInstances: 0,
+      retainedVoxelChunks: 0,
       diagnostics: [],
     },
   };

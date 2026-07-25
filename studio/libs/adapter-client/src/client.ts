@@ -4,12 +4,22 @@ import {
   type AdapterRejection,
   type DescribedResponse,
   type EntityTranslationAppliedResponse,
+  type ProjectMutationAppliedResponse,
   type ProjectClosedResponse,
   type ProjectOpenedResponse,
   type ProjectReadResponse,
   type StudioAdapterRequest,
   type StudioAdapterResponse,
+  type VoxelConversionDiscardedResponse,
+  type VoxelConversionPreparedResponse,
+  type VoxelPickValidatedResponse,
+  type VoxelReadResponse,
 } from './protocol.js';
+
+type RequestInput<Type extends StudioAdapterRequest['type']> = Omit<
+  Extract<StudioAdapterRequest, { readonly type: Type }>,
+  'type' | 'protocolVersion' | 'requestId'
+>;
 
 export interface StudioAdapterTransport {
   exchange(request: StudioAdapterRequest): Promise<unknown>;
@@ -92,6 +102,124 @@ export class StudioAdapterClient {
     );
   }
 
+  upsertMaterial(input: RequestInput<'upsertMaterial'>): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('upsertMaterial', input);
+  }
+
+  initializeVoxelAsset(
+    input: RequestInput<'initializeVoxelAsset'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('initializeVoxelAsset', input);
+  }
+
+  duplicateVoxelAsset(
+    input: RequestInput<'duplicateVoxelAsset'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('duplicateVoxelAsset', input);
+  }
+
+  attachVoxelInstance(
+    input: RequestInput<'attachVoxelInstance'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('attachVoxelInstance', input);
+  }
+
+  setVoxelInstanceTransform(
+    input: RequestInput<'setVoxelInstanceTransform'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('setVoxelInstanceTransform', input);
+  }
+
+  removeVoxelInstance(
+    input: RequestInput<'removeVoxelInstance'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('removeVoxelInstance', input);
+  }
+
+  replaceVoxelPalette(
+    input: RequestInput<'replaceVoxelPalette'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('replaceVoxelPalette', input);
+  }
+
+  validateVoxelPick(
+    input: RequestInput<'validateVoxelPick'>,
+  ): Promise<VoxelPickValidatedResponse> {
+    return this.#exchange(this.#request('validateVoxelPick', input), 'voxelPickValidated');
+  }
+
+  applyVoxelBrush(
+    input: RequestInput<'applyVoxelBrush'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('applyVoxelBrush', input);
+  }
+
+  undoVoxelEdit(input: RequestInput<'undoVoxelEdit'>): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('undoVoxelEdit', input);
+  }
+
+  redoVoxelEdit(input: RequestInput<'redoVoxelEdit'>): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('redoVoxelEdit', input);
+  }
+
+  revertVoxelHistory(
+    input: RequestInput<'revertVoxelHistory'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('revertVoxelHistory', input);
+  }
+
+  createVoxelAnnotationLayer(
+    input: RequestInput<'createVoxelAnnotationLayer'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('createVoxelAnnotationLayer', input);
+  }
+
+  editVoxelAnnotation(
+    input: RequestInput<'editVoxelAnnotation'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('editVoxelAnnotation', input);
+  }
+
+  queryVoxelAnnotation(
+    input: RequestInput<'queryVoxelAnnotation'>,
+  ): Promise<VoxelReadResponse> {
+    return this.#exchange(this.#request('queryVoxelAnnotation', input), 'voxelRead');
+  }
+
+  exportVoxelAnnotation(
+    input: RequestInput<'exportVoxelAnnotation'>,
+  ): Promise<VoxelReadResponse> {
+    return this.#exchange(this.#request('exportVoxelAnnotation', input), 'voxelRead');
+  }
+
+  queryVoxelModel(input: RequestInput<'queryVoxelModel'>): Promise<VoxelReadResponse> {
+    return this.#exchange(this.#request('queryVoxelModel', input), 'voxelRead');
+  }
+
+  prepareVoxelConversion(
+    input: RequestInput<'prepareVoxelConversion'>,
+  ): Promise<VoxelConversionPreparedResponse> {
+    return this.#exchange(
+      this.#request('prepareVoxelConversion', input),
+      'voxelConversionPrepared',
+    );
+  }
+
+  applyVoxelConversion(
+    input: RequestInput<'applyVoxelConversion'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('applyVoxelConversion', input);
+  }
+
+  discardVoxelConversion(
+    input: RequestInput<'discardVoxelConversion'>,
+  ): Promise<VoxelConversionDiscardedResponse> {
+    return this.#exchange(
+      this.#request('discardVoxelConversion', input),
+      'voxelConversionDiscarded',
+    );
+  }
+
   closeProject(): Promise<ProjectClosedResponse> {
     return this.#exchange(
       {
@@ -101,6 +229,25 @@ export class StudioAdapterClient {
       },
       'projectClosed',
     );
+  }
+
+  #mutation<Type extends MutationRequestType>(
+    type: Type,
+    input: RequestInput<Type>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#exchange(this.#request(type, input), 'projectMutationApplied');
+  }
+
+  #request<Type extends StudioAdapterRequest['type']>(
+    type: Type,
+    input: RequestInput<Type>,
+  ): Extract<StudioAdapterRequest, { readonly type: Type }> {
+    return {
+      ...input,
+      type,
+      protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+      requestId: this.#requestId(type),
+    } as Extract<StudioAdapterRequest, { readonly type: Type }>;
   }
 
   async #exchange<Type extends Exclude<StudioAdapterResponse['type'], 'rejected'>>(
@@ -130,3 +277,19 @@ export class StudioAdapterClient {
     return `studio-${operation}-${String(id)}`;
   }
 }
+
+type MutationRequestType =
+  | 'upsertMaterial'
+  | 'initializeVoxelAsset'
+  | 'duplicateVoxelAsset'
+  | 'attachVoxelInstance'
+  | 'setVoxelInstanceTransform'
+  | 'removeVoxelInstance'
+  | 'replaceVoxelPalette'
+  | 'applyVoxelBrush'
+  | 'undoVoxelEdit'
+  | 'redoVoxelEdit'
+  | 'revertVoxelHistory'
+  | 'createVoxelAnnotationLayer'
+  | 'editVoxelAnnotation'
+  | 'applyVoxelConversion';

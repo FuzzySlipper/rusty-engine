@@ -3,9 +3,39 @@ import {
   type RenderFrameDiff,
   type Transform,
 } from '@rusty-engine/render-contracts';
+import {
+  validateProjectMutationReceipt,
+  validateVoxelAuthoringReadout,
+  validateVoxelConversionPlan,
+  validateVoxelConversionPreview,
+  validateVoxelPickReadout,
+  validateVoxelReadout,
+  type ProjectMutationReceipt,
+  type Quaternion,
+  type StoredMaterialDefinition,
+  type StoredVoxelInstance,
+  type Vector3,
+  type Vector3i,
+  type VoxelAnnotationEditTransaction,
+  type VoxelAnnotationLayerDraft,
+  type VoxelAnnotationQuery,
+  type VoxelAuthoringReadout,
+  type VoxelBounds,
+  type VoxelBrushMode,
+  type VoxelConversionPlan,
+  type VoxelConversionPreview,
+  type VoxelConversionSettings,
+  type VoxelMaterialBinding,
+  type VoxelModelWindowRequest,
+  type VoxelPickFace,
+  type VoxelPickReadout,
+  type VoxelReadout,
+} from './voxel-protocol.js';
 
-export const STUDIO_ADAPTER_PROTOCOL_VERSION = 2 as const;
-export const MAX_STUDIO_ADAPTER_REQUEST_BYTES = 64 * 1024;
+export type * from './voxel-protocol.js';
+
+export const STUDIO_ADAPTER_PROTOCOL_VERSION = 3 as const;
+export const MAX_STUDIO_ADAPTER_REQUEST_BYTES = 256 * 1024;
 export const MAX_STUDIO_ADAPTER_RESPONSE_BYTES = 32 * 1024 * 1024;
 
 export type StudioAdapterRequest =
@@ -13,42 +43,222 @@ export type StudioAdapterRequest =
   | OpenProjectRequest
   | ReadProjectRequest
   | SetEntityTranslationRequest
+  | UpsertMaterialRequest
+  | InitializeVoxelAssetRequest
+  | DuplicateVoxelAssetRequest
+  | AttachVoxelInstanceRequest
+  | SetVoxelInstanceTransformRequest
+  | RemoveVoxelInstanceRequest
+  | ReplaceVoxelPaletteRequest
+  | ValidateVoxelPickRequest
+  | ApplyVoxelBrushRequest
+  | UndoVoxelEditRequest
+  | RedoVoxelEditRequest
+  | RevertVoxelHistoryRequest
+  | CreateVoxelAnnotationLayerRequest
+  | EditVoxelAnnotationRequest
+  | QueryVoxelAnnotationRequest
+  | ExportVoxelAnnotationRequest
+  | QueryVoxelModelRequest
+  | PrepareVoxelConversionRequest
+  | ApplyVoxelConversionRequest
+  | DiscardVoxelConversionRequest
   | CloseProjectRequest;
 
-export interface DescribeRequest {
-  readonly type: 'describe';
+interface RequestHeader {
   readonly protocolVersion: typeof STUDIO_ADAPTER_PROTOCOL_VERSION;
   readonly requestId: string;
 }
 
-export interface OpenProjectRequest {
+export interface DescribeRequest extends RequestHeader {
+  readonly type: 'describe';
+}
+
+export interface OpenProjectRequest extends RequestHeader {
   readonly type: 'openProject';
-  readonly protocolVersion: typeof STUDIO_ADAPTER_PROTOCOL_VERSION;
-  readonly requestId: string;
   readonly root: string;
   readonly projectFile: string;
 }
 
-export interface ReadProjectRequest {
+export interface ReadProjectRequest extends RequestHeader {
   readonly type: 'readProject';
-  readonly protocolVersion: typeof STUDIO_ADAPTER_PROTOCOL_VERSION;
-  readonly requestId: string;
 }
 
-export interface SetEntityTranslationRequest {
+export interface SetEntityTranslationRequest extends RequestHeader {
   readonly type: 'setEntityTranslation';
-  readonly protocolVersion: typeof STUDIO_ADAPTER_PROTOCOL_VERSION;
-  readonly requestId: string;
   readonly expectedProjectHash: string;
   readonly expectedSceneRevision: number;
   readonly entityId: number;
   readonly translation: readonly [number, number, number];
 }
 
-export interface CloseProjectRequest {
+export interface UpsertMaterialRequest extends RequestHeader {
+  readonly type: 'upsertMaterial';
+  readonly expectedProjectHash: string;
+  readonly assetId: string;
+  readonly definition: StoredMaterialDefinition;
+}
+
+export interface InitializeVoxelAssetRequest extends RequestHeader {
+  readonly type: 'initializeVoxelAsset';
+  readonly expectedProjectHash: string;
+  readonly assetId: string;
+  readonly cellSize: number;
+  readonly chunkSize: number;
+  readonly origin: Vector3i;
+  readonly bounds: VoxelBounds;
+  readonly materialPalette: readonly VoxelMaterialBinding[];
+  readonly initialMaterialSlot: number;
+}
+
+export interface DuplicateVoxelAssetRequest extends RequestHeader {
+  readonly type: 'duplicateVoxelAsset';
+  readonly expectedProjectHash: string;
+  readonly sourceAssetId: string;
+  readonly expectedSourceContentHash: string;
+  readonly targetAssetId: string;
+}
+
+export interface AttachVoxelInstanceRequest extends RequestHeader {
+  readonly type: 'attachVoxelInstance';
+  readonly expectedProjectHash: string;
+  readonly sceneId: string;
+  readonly instance: StoredVoxelInstance;
+}
+
+export interface SetVoxelInstanceTransformRequest extends RequestHeader {
+  readonly type: 'setVoxelInstanceTransform';
+  readonly expectedProjectHash: string;
+  readonly sceneId: string;
+  readonly instanceId: string;
+  readonly translation: Vector3;
+  readonly rotation: Quaternion;
+  readonly scale: Vector3;
+}
+
+export interface RemoveVoxelInstanceRequest extends RequestHeader {
+  readonly type: 'removeVoxelInstance';
+  readonly expectedProjectHash: string;
+  readonly sceneId: string;
+  readonly instanceId: string;
+}
+
+export interface ReplaceVoxelPaletteRequest extends RequestHeader {
+  readonly type: 'replaceVoxelPalette';
+  readonly expectedProjectHash: string;
+  readonly assetId: string;
+  readonly expectedAssetContentHash: string;
+  readonly expectedVoxelDataHash: string;
+  readonly replacement: readonly VoxelMaterialBinding[];
+}
+
+export interface ValidateVoxelPickRequest extends RequestHeader {
+  readonly type: 'validateVoxelPick';
+  readonly expectedProjectHash: string;
+  readonly sceneId: string;
+  readonly instanceId: string;
+  readonly origin: Vector3;
+  readonly direction: Vector3;
+  readonly maxDistance: number;
+  readonly claimedVoxel: Vector3i;
+  readonly claimedFace: VoxelPickFace;
+}
+
+export interface ApplyVoxelBrushRequest extends RequestHeader {
+  readonly type: 'applyVoxelBrush';
+  readonly expectedProjectHash: string;
+  readonly assetId: string;
+  readonly expectedAssetContentHash: string;
+  readonly center: Vector3i;
+  readonly radius: number;
+  readonly mode: VoxelBrushMode;
+  readonly materialSlot: number | null;
+}
+
+interface VoxelHistoryRequest extends RequestHeader {
+  readonly expectedProjectHash: string;
+  readonly assetId: string;
+  readonly expectedAssetContentHash: string;
+}
+
+export interface UndoVoxelEditRequest extends VoxelHistoryRequest {
+  readonly type: 'undoVoxelEdit';
+}
+
+export interface RedoVoxelEditRequest extends VoxelHistoryRequest {
+  readonly type: 'redoVoxelEdit';
+}
+
+export interface RevertVoxelHistoryRequest extends VoxelHistoryRequest {
+  readonly type: 'revertVoxelHistory';
+  readonly targetCursor: number;
+}
+
+export interface CreateVoxelAnnotationLayerRequest extends RequestHeader {
+  readonly type: 'createVoxelAnnotationLayer';
+  readonly expectedProjectHash: string;
+  readonly assetId: string;
+  readonly draft: VoxelAnnotationLayerDraft;
+}
+
+export interface EditVoxelAnnotationRequest extends RequestHeader {
+  readonly type: 'editVoxelAnnotation';
+  readonly expectedProjectHash: string;
+  readonly assetId: string;
+  readonly layerId: string;
+  readonly transaction: VoxelAnnotationEditTransaction;
+}
+
+export interface QueryVoxelAnnotationRequest extends RequestHeader {
+  readonly type: 'queryVoxelAnnotation';
+  readonly expectedProjectHash: string;
+  readonly assetId: string;
+  readonly layerId: string;
+  readonly query: VoxelAnnotationQuery;
+}
+
+export interface ExportVoxelAnnotationRequest extends RequestHeader {
+  readonly type: 'exportVoxelAnnotation';
+  readonly expectedProjectHash: string;
+  readonly assetId: string;
+  readonly layerId: string;
+  readonly expectedLayerHash: string;
+}
+
+export interface QueryVoxelModelRequest extends RequestHeader {
+  readonly type: 'queryVoxelModel';
+  readonly expectedProjectHash: string;
+  readonly assetId: string;
+  readonly expectedAssetContentHash: string;
+  readonly window?: VoxelModelWindowRequest;
+}
+
+export interface PrepareVoxelConversionRequest extends RequestHeader {
+  readonly type: 'prepareVoxelConversion';
+  readonly expectedProjectHash: string;
+  readonly sourceAssetId: string;
+  readonly sourcePath: string;
+  readonly targetAssetId: string;
+  readonly licensePath?: string;
+  readonly settings: VoxelConversionSettings;
+  readonly maxPreviewSamples: number;
+}
+
+export interface ApplyVoxelConversionRequest extends RequestHeader {
+  readonly type: 'applyVoxelConversion';
+  readonly expectedProjectHash: string;
+  readonly planId: string;
+  readonly expectedPlanHash: string;
+  readonly expectedOutputHash: string;
+}
+
+export interface DiscardVoxelConversionRequest extends RequestHeader {
+  readonly type: 'discardVoxelConversion';
+  readonly planId: string;
+}
+
+export interface CloseProjectRequest extends RequestHeader {
   readonly type: 'closeProject';
-  readonly protocolVersion: typeof STUDIO_ADAPTER_PROTOCOL_VERSION;
-  readonly requestId: string;
 }
 
 export type StudioAdapterResponse =
@@ -56,6 +266,11 @@ export type StudioAdapterResponse =
   | ProjectOpenedResponse
   | ProjectReadResponse
   | EntityTranslationAppliedResponse
+  | ProjectMutationAppliedResponse
+  | VoxelPickValidatedResponse
+  | VoxelReadResponse
+  | VoxelConversionPreparedResponse
+  | VoxelConversionDiscardedResponse
   | ProjectClosedResponse
   | RejectedResponse;
 
@@ -80,6 +295,33 @@ export interface EntityTranslationAppliedResponse extends ResponseHeader {
   readonly project: StudioProjectReadout;
 }
 
+export interface ProjectMutationAppliedResponse extends ResponseHeader {
+  readonly type: 'projectMutationApplied';
+  readonly receipt: ProjectMutationReceipt;
+  readonly project: StudioProjectReadout;
+}
+
+export interface VoxelPickValidatedResponse extends ResponseHeader {
+  readonly type: 'voxelPickValidated';
+  readonly anchor: VoxelPickReadout;
+}
+
+export interface VoxelReadResponse extends ResponseHeader {
+  readonly type: 'voxelRead';
+  readonly readout: VoxelReadout;
+}
+
+export interface VoxelConversionPreparedResponse extends ResponseHeader {
+  readonly type: 'voxelConversionPrepared';
+  readonly plan: VoxelConversionPlan;
+  readonly preview: VoxelConversionPreview;
+}
+
+export interface VoxelConversionDiscardedResponse extends ResponseHeader {
+  readonly type: 'voxelConversionDiscarded';
+  readonly planId: string;
+}
+
 export interface ProjectClosedResponse extends ResponseHeader {
   readonly type: 'projectClosed';
 }
@@ -96,19 +338,41 @@ interface ResponseHeader {
   readonly requestId: string;
 }
 
+export const STUDIO_ADAPTER_OPERATIONS = [
+  'describe',
+  'openProject',
+  'readProject',
+  'setEntityTranslation',
+  'upsertMaterial',
+  'initializeVoxelAsset',
+  'duplicateVoxelAsset',
+  'attachVoxelInstance',
+  'setVoxelInstanceTransform',
+  'removeVoxelInstance',
+  'replaceVoxelPalette',
+  'validateVoxelPick',
+  'applyVoxelBrush',
+  'undoVoxelEdit',
+  'redoVoxelEdit',
+  'revertVoxelHistory',
+  'createVoxelAnnotationLayer',
+  'editVoxelAnnotation',
+  'queryVoxelAnnotation',
+  'exportVoxelAnnotation',
+  'queryVoxelModel',
+  'prepareVoxelConversion',
+  'applyVoxelConversion',
+  'discardVoxelConversion',
+  'closeProject',
+] as const;
+
 export interface AdapterDescription {
   readonly adapterId: string;
   readonly adapterVersion: number;
   readonly protocolVersion: typeof STUDIO_ADAPTER_PROTOCOL_VERSION;
   readonly projectKind: string;
   readonly projectSchemaVersion: number;
-  readonly operations: readonly [
-    'describe',
-    'openProject',
-    'readProject',
-    'setEntityTranslation',
-    'closeProject',
-  ];
+  readonly operations: typeof STUDIO_ADAPTER_OPERATIONS;
 }
 
 export interface StudioProjectReadout {
@@ -117,6 +381,7 @@ export interface StudioProjectReadout {
   readonly inspections: OwnerInspections;
   readonly sceneHierarchy: SceneHierarchyReadout;
   readonly voxel?: Readonly<Record<string, unknown>>;
+  readonly voxelAuthoring: VoxelAuthoringReadout;
   readonly loadingBay: LoadingBayDomainReadout;
   readonly projection: RenderFrameDiff;
   readonly projectionReadout: ProjectionReadout;
@@ -267,6 +532,8 @@ export interface ProjectionReadout {
   readonly frameKind: 'complete';
   readonly sourceRevision: number;
   readonly retainedEntities: number;
+  readonly retainedVoxelInstances: number;
+  readonly retainedVoxelChunks: number;
   readonly diagnostics: readonly ProjectionDiagnosticReadout[];
 }
 
@@ -330,6 +597,48 @@ export function decodeStudioAdapterResponse(input: unknown): StudioAdapterRespon
       projectReadout(value['project'], '$.project');
       return input as EntityTranslationAppliedResponse;
     }
+    case 'projectMutationApplied': {
+      const value = record(input, '$', [
+        'type',
+        'protocolVersion',
+        'requestId',
+        'receipt',
+        'project',
+      ]);
+      responseHeader(value);
+      voxelContract('$.receipt', () => validateProjectMutationReceipt(value['receipt'], '$.receipt'));
+      projectReadout(value['project'], '$.project');
+      return input as ProjectMutationAppliedResponse;
+    }
+    case 'voxelPickValidated': {
+      const value = record(input, '$', ['type', 'protocolVersion', 'requestId', 'anchor']);
+      responseHeader(value);
+      voxelContract('$.anchor', () => validateVoxelPickReadout(value['anchor'], '$.anchor'));
+      return input as VoxelPickValidatedResponse;
+    }
+    case 'voxelRead': {
+      const value = record(input, '$', ['type', 'protocolVersion', 'requestId', 'readout']);
+      responseHeader(value);
+      voxelContract('$.readout', () => validateVoxelReadout(value['readout'], '$.readout'));
+      return input as VoxelReadResponse;
+    }
+    case 'voxelConversionPrepared': {
+      const value = record(input, '$', [
+        'type', 'protocolVersion', 'requestId', 'plan', 'preview',
+      ]);
+      responseHeader(value);
+      voxelContract('$.plan', () => validateVoxelConversionPlan(value['plan'], '$.plan'));
+      voxelContract('$.preview', () => validateVoxelConversionPreview(value['preview'], '$.preview'));
+      return input as VoxelConversionPreparedResponse;
+    }
+    case 'voxelConversionDiscarded': {
+      const value = record(input, '$', [
+        'type', 'protocolVersion', 'requestId', 'planId',
+      ]);
+      responseHeader(value);
+      text(value['planId'], '$.planId');
+      return input as VoxelConversionDiscardedResponse;
+    }
     case 'projectClosed': {
       const value = record(input, '$', ['type', 'protocolVersion', 'requestId']);
       responseHeader(value);
@@ -357,6 +666,14 @@ function responseHeader(value: Readonly<Record<string, unknown>>): void {
   text(value['requestId'], '$.requestId');
 }
 
+function voxelContract(path: string, validate: () => void): void {
+  try {
+    validate();
+  } catch (error) {
+    fail(path, error instanceof Error ? error.message : 'voxel contract is malformed');
+  }
+}
+
 function protocolVersion(input: unknown, path: string): void {
   if (input !== STUDIO_ADAPTER_PROTOCOL_VERSION) {
     fail(path, `must equal ${String(STUDIO_ADAPTER_PROTOCOL_VERSION)}`);
@@ -380,15 +697,9 @@ function adapterDescription(input: unknown, path: string): void {
   const operations = list(value['operations'], `${path}.operations`).map((entry, index) =>
     text(entry, `${path}.operations[${String(index)}]`),
   );
-  const expected = [
-    'describe',
-    'openProject',
-    'readProject',
-    'setEntityTranslation',
-    'closeProject',
-  ];
+  const expected = STUDIO_ADAPTER_OPERATIONS;
   if (operations.length !== expected.length || operations.some((entry, index) => entry !== expected[index])) {
-    fail(`${path}.operations`, 'must name the protocol 2 operation set in order');
+    fail(`${path}.operations`, 'must name the protocol 3 operation set in order');
   }
 }
 
@@ -401,6 +712,7 @@ function projectReadout(input: unknown, path: string): void {
       'canonical',
       'inspections',
       'sceneHierarchy',
+      'voxelAuthoring',
       'loadingBay',
       'projection',
       'projectionReadout',
@@ -412,6 +724,8 @@ function projectReadout(input: unknown, path: string): void {
   ownerInspections(value['inspections'], `${path}.inspections`);
   sceneHierarchy(value['sceneHierarchy'], `${path}.sceneHierarchy`);
   optional(value['voxel'], `${path}.voxel`, looseRecord);
+  voxelContract(`${path}.voxelAuthoring`, () =>
+    validateVoxelAuthoringReadout(value['voxelAuthoring'], `${path}.voxelAuthoring`));
   loadingBayReadout(value['loadingBay'], `${path}.loadingBay`);
   try {
     decodeRenderFrameDiff(value['projection']);
@@ -690,11 +1004,15 @@ function projectionReadout(input: unknown, path: string): void {
     'frameKind',
     'sourceRevision',
     'retainedEntities',
+    'retainedVoxelInstances',
+    'retainedVoxelChunks',
     'diagnostics',
   ]);
   choice(value['frameKind'], `${path}.frameKind`, ['complete']);
   integer(value['sourceRevision'], `${path}.sourceRevision`);
   integer(value['retainedEntities'], `${path}.retainedEntities`);
+  integer(value['retainedVoxelInstances'], `${path}.retainedVoxelInstances`);
+  integer(value['retainedVoxelChunks'], `${path}.retainedVoxelChunks`);
   list(value['diagnostics'], `${path}.diagnostics`).forEach((entry, index) => {
     const itemPath = `${path}.diagnostics[${String(index)}]`;
     const item = record(entry, itemPath, ['code', 'entityId', 'asset'], ['assetKind']);

@@ -20,9 +20,19 @@ import {
   STUDIO_EDITOR_GRID,
   canvasPoint,
   movedPastPickThreshold,
+  presentStudioSelection,
 } from './viewport-model.js';
 
 type ViewportStatus = 'mounting' | 'ready' | 'error' | 'disposed';
+
+export interface VoxelViewportPickCandidate {
+  readonly instanceId: string;
+  readonly cameraOrigin: readonly [number, number, number];
+  readonly direction: readonly [number, number, number];
+  readonly worldPoint: readonly [number, number, number];
+  readonly worldNormal: readonly [number, number, number];
+  readonly maxDistance: number;
+}
 
 @Component({
   selector: 'rusty-studio-viewport',
@@ -34,6 +44,9 @@ type ViewportStatus = 'mounting' | 'ready' | 'error' | 'disposed';
     '[attr.data-retained-ops]': 'retainedOpCount()',
     '[attr.data-selected-entity]': 'selectedEntityId()',
     '[attr.data-pick-revision]': 'pickRevision()',
+    '[attr.data-authored-frame-hash]': 'retainedFrameHash()',
+    '[attr.data-preview-applied]': 'previewApplied()',
+    '[attr.data-selected-render-handle]': 'selectedRenderHandle()',
   },
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
@@ -46,19 +59,23 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   readonly previewTranslation = input<readonly [number, number, number] | null>(null);
 
   readonly entityPicked = output<number | null>();
+  readonly voxelPicked = output<VoxelViewportPickCandidate>();
   readonly rendererError = output<string>();
 
   readonly status = signal<ViewportStatus>('mounting');
   readonly retainedOpCount = signal(0);
   readonly cameraRevision = signal(0);
   readonly pickRevision = signal(0);
+  readonly retainedFrameHash = signal('');
+  readonly previewApplied = signal(false);
+  readonly selectedRenderHandle = signal<number | null>(null);
 
   @ViewChild('canvas', { static: true })
   private canvasElement!: ElementRef<HTMLCanvasElement>;
 
   #surface: RendererInspectionSurface | null = null;
   #destroyed = false;
-  #lastAppliedFrameGeneration = -1;
+  #lastPresentationKey = '';
   #pointerStart: readonly [number, number] | null = null;
   #pointerDragged = false;
 
@@ -66,7 +83,18 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     effect(() => {
       const generation = this.frameGeneration();
       const frame = this.frame();
-      if (frame !== null) this.#replaceFrame(frame, generation);
+      const selectedEntityId = this.selectedEntityId();
+      const previewEntityId = this.previewEntityId();
+      const previewTranslation = this.previewTranslation();
+      if (frame !== null) {
+        this.#replaceFrame(
+          frame,
+          generation,
+          selectedEntityId,
+          previewEntityId,
+          previewTranslation,
+        );
+      }
     });
     effect(() => {
       const visible = this.gridVisible();
@@ -122,7 +150,34 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       return;
     }
     this.pickRevision.update((revision) => revision + 1);
-    this.entityPicked.emit(receipt.hint?.sourceTrace?.entity ?? null);
+    const hint = receipt.hint;
+    if (hint === null) {
+      this.entityPicked.emit(null);
+      return;
+    }
+    const instanceTag = hint.tags.find((tag) => tag.startsWith('voxel-instance:'));
+    if (instanceTag !== undefined) {
+      const cameraOrigin = surface.camera().pose.position;
+      const direction = normalize([
+        hint.position[0] - cameraOrigin[0],
+        hint.position[1] - cameraOrigin[1],
+        hint.position[2] - cameraOrigin[2],
+      ]);
+      if (direction === null) {
+        this.#report('voxel pick could not derive a finite camera ray');
+        return;
+      }
+      this.voxelPicked.emit({
+        instanceId: instanceTag.slice('voxel-instance:'.length),
+        cameraOrigin,
+        direction,
+        worldPoint: hint.position,
+        worldNormal: hint.normal,
+        maxDistance: Math.max(0.01, hint.distance + 0.01),
+      });
+      return;
+    }
+    this.entityPicked.emit(hint.sourceTrace?.entity ?? null);
   }
 
   async #mount(): Promise<void> {
@@ -148,22 +203,50 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       this.#surface = surface;
       this.status.set('ready');
       const frame = this.frame();
-      if (frame !== null) this.#replaceFrame(frame, this.frameGeneration());
+      if (frame !== null) {
+        this.#replaceFrame(
+          frame,
+          this.frameGeneration(),
+          this.selectedEntityId(),
+          this.previewEntityId(),
+          this.previewTranslation(),
+        );
+      }
       this.#syncReadout();
     } catch (error) {
       this.#fail(error instanceof Error ? error.message : 'shared renderer failed to mount');
     }
   }
 
-  #replaceFrame(frame: RenderFrameDiff, generation: number): void {
+  #replaceFrame(
+    frame: RenderFrameDiff,
+    generation: number,
+    selectedEntityId: number | null,
+    previewEntityId: number | null,
+    previewTranslation: readonly [number, number, number] | null,
+  ): void {
     const surface = this.#surface;
-    if (surface === null || generation === this.#lastAppliedFrameGeneration) return;
-    const receipt = surface.replaceFrame(frame);
+    const presentationKey = JSON.stringify([
+      generation,
+      selectedEntityId,
+      previewEntityId,
+      previewTranslation,
+    ]);
+    if (surface === null || presentationKey === this.#lastPresentationKey) return;
+    const presentation = presentStudioSelection(
+      frame,
+      selectedEntityId,
+      previewEntityId,
+      previewTranslation,
+    );
+    const receipt = surface.replaceFrame(presentation.frame);
     if (!receipt.applied) {
       this.#fail(receipt.diagnostics.map((entry) => entry.message).join('; '));
       return;
     }
-    this.#lastAppliedFrameGeneration = generation;
+    this.#lastPresentationKey = presentationKey;
+    this.previewApplied.set(presentation.previewApplied);
+    this.selectedRenderHandle.set(presentation.selectedHandle);
     this.#syncReadout();
   }
 
@@ -182,6 +265,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     const readout = this.#surface?.readout();
     if (readout === undefined) return;
     this.retainedOpCount.set(readout.retainedOpCount);
+    this.retainedFrameHash.set(readout.retainedFrameHash);
     this.cameraRevision.set(readout.cameraRevision);
   }
 
@@ -193,4 +277,12 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   #report(message: string): void {
     this.rendererError.emit(`Shared renderer: ${message}`);
   }
+}
+
+function normalize(
+  vector: readonly [number, number, number],
+): readonly [number, number, number] | null {
+  const length = Math.hypot(...vector);
+  if (!Number.isFinite(length) || length <= Number.EPSILON) return null;
+  return [vector[0] / length, vector[1] / length, vector[2] / length];
 }

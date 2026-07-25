@@ -5,10 +5,17 @@ import type {
   LoadingBayDomainReadout,
   OwnerInspections,
   ProjectionReadout,
+  ProjectMutationAppliedResponse,
   SceneHierarchyNodeReadout,
   SceneHierarchyReadout,
   StudioProjectIdentity,
   StudioProjectReadout,
+  VoxelConversionPlan,
+  VoxelConversionPreview,
+  VoxelPickReadout,
+  VoxelReadout,
+  ProjectMutationReceipt,
+  VoxelAuthoringReadout,
 } from '@rusty-engine/studio-adapter-client';
 import {
   StudioAdapterOperationRejected,
@@ -21,6 +28,11 @@ import type {
   RenderMetadata,
   Transform,
 } from '@rusty-engine/render-contracts';
+import {
+  deriveVoxelPickValidation,
+  type VoxelEditorAction,
+  type VoxelViewportPickCandidate,
+} from '@rusty-engine/studio-voxel-editor/model';
 
 export type StudioConnectionState =
   | { readonly kind: 'disconnected'; readonly message: string }
@@ -35,6 +47,7 @@ export interface AuthoringDocumentView {
   readonly sceneHierarchy: SceneHierarchyReadout;
   readonly domain: LoadingBayDomainReadout;
   readonly voxel: Readonly<Record<string, unknown>> | null;
+  readonly voxelAuthoring: VoxelAuthoringReadout;
 }
 
 export interface ProjectedEntityView {
@@ -72,13 +85,25 @@ export interface StudioViewSettings {
   readonly theme: 'graphite' | 'highContrast';
 }
 
+export interface VoxelWorkspaceState {
+  readonly validatedPick: VoxelPickReadout | null;
+  readonly lastReadout: VoxelReadout | null;
+  readonly conversion: {
+    readonly plan: VoxelConversionPlan;
+    readonly preview: VoxelConversionPreview;
+  } | null;
+  readonly lastReceipt: ProjectMutationReceipt | null;
+  readonly message: string;
+}
+
 export interface StudioWorkspaceSnapshot {
   readonly connection: StudioConnectionState;
   readonly authoringDocument: AuthoringDocumentView | null;
   readonly liveProjection: LiveProjectionView | null;
   readonly preview: TransformPreviewState | null;
   readonly selection: EditorSelectionState;
-  readonly operation: 'idle' | 'opening' | 'refreshing' | 'committing' | 'closing';
+  readonly operation: 'idle' | 'opening' | 'refreshing' | 'committing' | 'voxel' | 'closing';
+  readonly voxelWorkspace: VoxelWorkspaceState;
   readonly hierarchyFilter: string;
   readonly activeMenu: 'file' | 'edit' | 'view' | 'tools' | null;
   readonly bottomPanel: 'diagnostics' | 'owners' | 'output';
@@ -102,6 +127,13 @@ function initialSnapshot(): StudioWorkspaceSnapshot {
     preview: null,
     selection: { sceneNodeId: null, entityId: null, source: null },
     operation: 'idle',
+    voxelWorkspace: {
+      validatedPick: null,
+      lastReadout: null,
+      conversion: null,
+      lastReceipt: null,
+      message: 'Select a rendered voxel instance to begin authoring.',
+    },
     hierarchyFilter: '',
     activeMenu: null,
     bottomPanel: 'diagnostics',
@@ -185,6 +217,13 @@ export class StudioWorkspaceStore {
         authoringDocument: null,
         liveProjection: null,
         preview: null,
+        voxelWorkspace: {
+          validatedPick: null,
+          lastReadout: null,
+          conversion: null,
+          lastReceipt: null,
+          message: 'Select a rendered voxel instance to begin authoring.',
+        },
         selection: { sceneNodeId: null, entityId: null, source: null },
         operation: 'idle',
       });
@@ -271,6 +310,236 @@ export class StudioWorkspaceStore {
     }
   }
 
+  async validateVoxelViewportPick(candidate: VoxelViewportPickCandidate): Promise<void> {
+    const document = this.#snapshot().authoringDocument;
+    if (document === null || this.#snapshot().operation !== 'idle') return;
+    const instance = document.voxelAuthoring.instances.find(
+      (entry) => entry.instance.instanceId === candidate.instanceId,
+    );
+    if (instance === undefined) {
+      this.reportUiError(`Renderer named unknown voxel instance ${candidate.instanceId}.`);
+      return;
+    }
+    const asset = document.voxelAuthoring.assets.find(
+      (entry) => entry.inspection.assetId === instance.instance.voxelAssetId,
+    );
+    if (asset === undefined) {
+      this.reportUiError(`Voxel instance ${candidate.instanceId} has no authoring asset readout.`);
+      return;
+    }
+    const input = deriveVoxelPickValidation(candidate, instance.sceneId, instance.instance, asset);
+    if (input === null) {
+      this.reportUiError('Renderer voxel hint could not be converted into a finite authored-cell claim.');
+      return;
+    }
+    this.#patch({ operation: 'voxel', lastError: null });
+    try {
+      const response = await this.#client.validateVoxelPick({
+        expectedProjectHash: document.identity.projectHash,
+        ...input,
+      });
+      this.#patch({
+        operation: 'idle',
+        voxelWorkspace: {
+          ...this.#snapshot().voxelWorkspace,
+          validatedPick: response.anchor,
+          message: `Validated ${response.anchor.instanceId} voxel ${response.anchor.hitVoxel.join(', ')}.`,
+        },
+      });
+    } catch (error) {
+      this.#operationFailed(error);
+    }
+  }
+
+  async runVoxelAction(action: VoxelEditorAction): Promise<void> {
+    const document = this.#snapshot().authoringDocument;
+    if (document === null || this.#snapshot().operation !== 'idle') return;
+    const expectedProjectHash = document.identity.projectHash;
+    this.#patch({ operation: 'voxel', lastError: null });
+    try {
+      switch (action.kind) {
+        case 'upsertMaterial':
+          this.#acceptVoxelMutation(await this.#client.upsertMaterial({
+            expectedProjectHash,
+            assetId: action.assetId,
+            definition: action.definition,
+          }));
+          return;
+        case 'initializeAsset':
+          this.#acceptVoxelMutation(await this.#client.initializeVoxelAsset({
+            expectedProjectHash,
+            assetId: action.assetId,
+            cellSize: action.cellSize,
+            chunkSize: action.chunkSize,
+            origin: action.origin,
+            bounds: action.bounds,
+            materialPalette: action.materialPalette,
+            initialMaterialSlot: action.initialMaterialSlot,
+          }));
+          return;
+        case 'duplicateAsset':
+          this.#acceptVoxelMutation(await this.#client.duplicateVoxelAsset({
+            expectedProjectHash,
+            sourceAssetId: action.sourceAssetId,
+            expectedSourceContentHash: action.expectedSourceContentHash,
+            targetAssetId: action.targetAssetId,
+          }));
+          return;
+        case 'attachInstance':
+          this.#acceptVoxelMutation(await this.#client.attachVoxelInstance({
+            expectedProjectHash,
+            sceneId: action.sceneId,
+            instance: action.instance,
+          }));
+          return;
+        case 'setInstanceTransform':
+          this.#acceptVoxelMutation(await this.#client.setVoxelInstanceTransform({
+            expectedProjectHash,
+            sceneId: action.sceneId,
+            instanceId: action.instanceId,
+            translation: action.translation,
+            rotation: action.rotation,
+            scale: action.scale,
+          }));
+          return;
+        case 'removeInstance':
+          this.#acceptVoxelMutation(await this.#client.removeVoxelInstance({
+            expectedProjectHash,
+            sceneId: action.sceneId,
+            instanceId: action.instanceId,
+          }));
+          return;
+        case 'replacePalette':
+          this.#acceptVoxelMutation(await this.#client.replaceVoxelPalette({
+            expectedProjectHash,
+            assetId: action.assetId,
+            expectedAssetContentHash: action.expectedAssetContentHash,
+            expectedVoxelDataHash: action.expectedVoxelDataHash,
+            replacement: action.replacement,
+          }));
+          return;
+        case 'applyBrush':
+          this.#acceptVoxelMutation(await this.#client.applyVoxelBrush({
+            expectedProjectHash,
+            assetId: action.assetId,
+            expectedAssetContentHash: action.expectedAssetContentHash,
+            center: action.center,
+            radius: action.radius,
+            mode: action.mode,
+            materialSlot: action.materialSlot,
+          }));
+          return;
+        case 'undo':
+        case 'redo': {
+          const input = {
+            expectedProjectHash,
+            assetId: action.assetId,
+            expectedAssetContentHash: action.expectedAssetContentHash,
+          };
+          const response = action.kind === 'undo'
+            ? await this.#client.undoVoxelEdit(input)
+            : await this.#client.redoVoxelEdit(input);
+          this.#acceptVoxelMutation(response);
+          return;
+        }
+        case 'revert':
+          this.#acceptVoxelMutation(await this.#client.revertVoxelHistory({
+            expectedProjectHash,
+            assetId: action.assetId,
+            expectedAssetContentHash: action.expectedAssetContentHash,
+            targetCursor: action.targetCursor,
+          }));
+          return;
+        case 'createAnnotation':
+          this.#acceptVoxelMutation(await this.#client.createVoxelAnnotationLayer({
+            expectedProjectHash,
+            assetId: action.assetId,
+            draft: action.draft,
+          }));
+          return;
+        case 'editAnnotation':
+          this.#acceptVoxelMutation(await this.#client.editVoxelAnnotation({
+            expectedProjectHash,
+            assetId: action.assetId,
+            layerId: action.layerId,
+            transaction: action.transaction,
+          }));
+          return;
+        case 'queryAnnotation': {
+          const response = await this.#client.queryVoxelAnnotation({
+            expectedProjectHash,
+            assetId: action.assetId,
+            layerId: action.layerId,
+            query: action.query,
+          });
+          this.#acceptVoxelReadout(response.readout, 'Annotation query completed.');
+          return;
+        }
+        case 'exportAnnotation': {
+          const response = await this.#client.exportVoxelAnnotation({
+            expectedProjectHash,
+            assetId: action.assetId,
+            layerId: action.layerId,
+            expectedLayerHash: action.expectedLayerHash,
+          });
+          this.#acceptVoxelReadout(response.readout, 'Canonical annotation export is ready.');
+          return;
+        }
+        case 'queryModel': {
+          const response = await this.#client.queryVoxelModel({
+            expectedProjectHash,
+            assetId: action.assetId,
+            expectedAssetContentHash: action.expectedAssetContentHash,
+            ...(action.window === undefined ? {} : { window: action.window }),
+          });
+          this.#acceptVoxelReadout(response.readout, 'Bounded voxel model query completed.');
+          return;
+        }
+        case 'prepareConversion': {
+          const response = await this.#client.prepareVoxelConversion({
+            expectedProjectHash,
+            sourceAssetId: action.sourceAssetId,
+            sourcePath: action.sourcePath,
+            targetAssetId: action.targetAssetId,
+            ...(action.licensePath === undefined ? {} : { licensePath: action.licensePath }),
+            settings: action.settings,
+            maxPreviewSamples: action.maxPreviewSamples,
+          });
+          this.#patch({
+            operation: 'idle',
+            voxelWorkspace: {
+              ...this.#snapshot().voxelWorkspace,
+              conversion: { plan: response.plan, preview: response.preview },
+              message: `Prepared ${String(response.preview.outputVoxelCount)}-voxel conversion.`,
+            },
+          });
+          return;
+        }
+        case 'applyConversion':
+          this.#acceptVoxelMutation(await this.#client.applyVoxelConversion({
+            expectedProjectHash,
+            planId: action.planId,
+            expectedPlanHash: action.expectedPlanHash,
+            expectedOutputHash: action.expectedOutputHash,
+          }), true);
+          return;
+        case 'discardConversion':
+          await this.#client.discardVoxelConversion({ planId: action.planId });
+          this.#patch({
+            operation: 'idle',
+            voxelWorkspace: {
+              ...this.#snapshot().voxelWorkspace,
+              conversion: null,
+              message: 'Prepared conversion discarded.',
+            },
+          });
+          return;
+      }
+    } catch (error) {
+      this.#operationFailed(error);
+    }
+  }
+
   setHierarchyFilter(value: string): void {
     this.#patch({ hierarchyFilter: value });
   }
@@ -326,6 +595,33 @@ export class StudioWorkspaceStore {
     this.#patch({ lastError: message });
   }
 
+  #acceptVoxelMutation(
+    response: ProjectMutationAppliedResponse,
+    clearConversion = false,
+  ): void {
+    this.#acceptProject(response.project, false);
+    this.#patch({
+      voxelWorkspace: {
+        ...this.#snapshot().voxelWorkspace,
+        validatedPick: null,
+        lastReceipt: response.receipt,
+        conversion: clearConversion ? null : this.#snapshot().voxelWorkspace.conversion,
+        message: mutationMessage(response.receipt),
+      },
+    });
+  }
+
+  #acceptVoxelReadout(readout: VoxelReadout, message: string): void {
+    this.#patch({
+      operation: 'idle',
+      voxelWorkspace: {
+        ...this.#snapshot().voxelWorkspace,
+        lastReadout: readout,
+        message,
+      },
+    });
+  }
+
   #acceptProject(project: StudioProjectReadout, resetSelection: boolean): void {
     const current = this.#snapshot();
     const entities = summarizeProjectionForUi(
@@ -349,6 +645,7 @@ export class StudioWorkspaceStore {
         sceneHierarchy: project.sceneHierarchy,
         domain: project.loadingBay,
         voxel: project.voxel ?? null,
+        voxelAuthoring: project.voxelAuthoring,
       },
       liveProjection: {
         frame: project.projection,
@@ -358,6 +655,10 @@ export class StudioWorkspaceStore {
       },
       selection,
       preview: null,
+      voxelWorkspace: {
+        ...current.voxelWorkspace,
+        validatedPick: null,
+      },
       operation: 'idle',
       lastError: null,
     });
@@ -388,6 +689,23 @@ function acceptedSelection(
   );
   if (node === undefined) return { sceneNodeId: null, entityId: null, source: null };
   return { sceneNodeId: node.nodeId, entityId: node.entityId, source: previous.source };
+}
+
+function mutationMessage(receipt: ProjectMutationReceipt): string {
+  switch (receipt.kind) {
+    case 'materialUpserted': return `Material ${receipt.assetId} stored.`;
+    case 'voxelAssetInitialized': return `Voxel asset ${receipt.assetId} initialized.`;
+    case 'voxelAssetDuplicated': return `Duplicated ${receipt.sourceAssetId} to ${receipt.targetAssetId}.`;
+    case 'voxelInstanceAttached': return `Instance ${receipt.instanceId} attached.`;
+    case 'voxelInstanceTransformSet': return `Instance ${receipt.instanceId} transform stored.`;
+    case 'voxelInstanceRemoved': return `Instance ${receipt.instanceId} removed.`;
+    case 'voxelPaletteReplaced': return `Palette for ${receipt.assetId} replaced.`;
+    case 'voxelBrushApplied': return `Brush changed ${String(receipt.changedVoxels)} voxels.`;
+    case 'voxelHistoryMoved': return `History moved to cursor ${String(receipt.cursorAfter)}.`;
+    case 'voxelAnnotationCreated': return `Annotation layer ${receipt.layerId} created.`;
+    case 'voxelAnnotationEdited': return `Annotation layer ${receipt.layerId} updated.`;
+    case 'voxelConversionApplied': return `Conversion installed ${receipt.assetId}.`;
+  }
 }
 
 /**

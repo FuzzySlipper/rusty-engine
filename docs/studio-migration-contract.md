@@ -1,6 +1,6 @@
 # Studio migration contract
 
-Status: M11A source and ownership baseline
+Status: M11E voxel authoring operational; M11F parity reconciliation remains
 
 Rusty Engine Studio is a first-party authoring product in this repository. It is not a narrow
 vertical slice and it is not a compatibility shell for Asha. The migration target is full useful
@@ -73,6 +73,29 @@ reconcile every row before the old Studio can be considered retired.
 | Domain panels | Generated-level metadata, encounter tuning, playable-loop inspection, and project-specific actions remain available for the reference demo through its typed adapter; they are not generalized into an Engine behavior AST | M11B/M11C |
 | Typed actions | Accepted/rejected operation results and a visible action timeline remain; the universal command registry and arbitrary command envelope do not | M11B/M11C |
 | Product acceptance | Real visible controls prove scene, entity, lighting, voxel, material, conversion, save/reopen, and external-demo behavior; proof catalogs and hidden browser mutation hooks do not return | M11D/M11E/M11F |
+
+## M11E implementation and explicit remaining parity
+
+M11E is implemented against protocol 3 and the Converted Wall demo artifact. It includes canonical
+voxel inspection/initialization/duplication, catalog material upsert and palette replacement,
+multiple transformed instances, shared-renderer projection and transformed picking, bounded cube
+paint/erase with disposable preview, durable undo/redo/cursor revert, annotation layer creation,
+label edit, query/export, bounded model windows, and private-plan GLB conversion/apply. Rust owns
+hashes, semantic validation, history, plan identity, project admission, and atomic publication.
+
+The following donor workflows remain explicit M11F work rather than silent omissions:
+
+- voxel asset host-file open/export/save-as, template creation, and project-owned unresolved-file UX;
+- block/fill-box/shell/edge/line primitive edit generation beyond the current bounded cube brush;
+- history entry/diff/sample inspection and a distinct preview-then-apply revert surface;
+- annotation remove/upsert/add-runs/remove-runs/replace-selection/parent/tags/kind/bounds controls and
+  cell/bounds/region query modes (the Rust owner and closed transaction types already support them);
+- trusted host GLB selection/import, primitive-group selection, affine translation/scale controls,
+  explicit default material and texture-sampling policy controls; and
+- deterministic environment preset/seed materialization and its project target workflow.
+
+These rows are also named in `owner-adoption.tsv`. M11F must implement them or record a concrete
+owner-approved exclusion tied to removed donor topology before declaring Studio parity complete.
 
 ## Cohesive successor modules
 

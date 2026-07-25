@@ -164,6 +164,9 @@ importers:
       '@rusty-engine/studio-viewport':
         specifier: workspace:*
         version: link:../viewport
+      '@rusty-engine/studio-voxel-editor':
+        specifier: workspace:*
+        version: link:../voxel-editor
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -186,6 +189,25 @@ importers:
       '@rusty-engine/renderer-three':
         specifier: link:../../../render/packages/renderer-three
         version: link:../../../render/packages/renderer-three
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+
+  libs/voxel-editor:
+    dependencies:
+      '@angular/common':
+        specifier: ~21.2.0
+        version: 21.2.18(@angular/core@21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2))(rxjs@7.8.2)
+      '@angular/core':
+        specifier: ~21.2.0
+        version: 21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2)
+      '@angular/forms':
+        specifier: ~21.2.0
+        version: 21.2.18(@angular/common@21.2.18(@angular/core@21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2))(@angular/platform-browser@21.2.18(@angular/common@21.2.18(@angular/core@21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2)))(rxjs@7.8.2)
+      '@rusty-engine/studio-adapter-client':
+        specifier: workspace:*
+        version: link:../adapter-client
     devDependencies:
       '@types/node':
         specifier: ^24.0.0

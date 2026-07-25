@@ -1,14 +1,21 @@
 import { ChangeDetectionStrategy, Component, HostBinding, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import type { OwnerDiagnostic } from '@rusty-engine/studio-adapter-client';
-import { StudioViewportComponent } from '@rusty-engine/studio-viewport';
+import {
+  StudioViewportComponent,
+  type VoxelViewportPickCandidate,
+} from '@rusty-engine/studio-viewport';
+import {
+  VoxelEditorComponent,
+  type VoxelEditorAction,
+} from '@rusty-engine/studio-voxel-editor';
 
 import { STUDIO_WORKSPACE } from './tokens.js';
 
 @Component({
   selector: 'rusty-studio-shell',
   standalone: true,
-  imports: [FormsModule, StudioViewportComponent],
+  imports: [FormsModule, StudioViewportComponent, VoxelEditorComponent],
   templateUrl: './studio-shell.component.html',
   styleUrl: './studio-shell.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -18,7 +25,8 @@ export class StudioShellComponent {
   readonly state = this.store.snapshot;
 
   projectRoot = '';
-  projectFile = 'content/projects/loading-bay.project.json';
+  projectFile = 'content/projects/converted-wall.project.json';
+  inspectorMode: 'entity' | 'voxel' = 'voxel';
 
   @HostBinding('class.theme-high-contrast')
   get highContrast(): boolean {
@@ -35,6 +43,18 @@ export class StudioShellComponent {
 
   closeProject(): void {
     void this.store.closeProject();
+  }
+
+  setInspectorMode(mode: 'entity' | 'voxel'): void {
+    this.inspectorMode = mode;
+  }
+
+  validateVoxelPick(candidate: VoxelViewportPickCandidate): void {
+    void this.store.validateVoxelViewportPick(candidate);
+  }
+
+  runVoxelAction(action: VoxelEditorAction): void {
+    void this.store.runVoxelAction(action);
   }
 
   beginSelectedPreview(): void {

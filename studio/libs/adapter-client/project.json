@@ -4,6 +4,9 @@
   "projectType": "library",
   "sourceRoot": "libs/adapter-client/src",
   "targets": {
+    "lint": {
+      "executor": "@nx/eslint:lint"
+    },
     "build": {
       "command": "pnpm --filter @rusty-engine/studio-adapter-client run build"
     },

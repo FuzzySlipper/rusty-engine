@@ -59,6 +59,9 @@ if (!/^[0-9a-f]{40}$/.test(demoSource.commit)) {
 if (demoSource.projectFile !== 'content/projects/loading-bay.project.json') {
   throw new Error('Studio integration project changed without an explicit product decision');
 }
+if (demoSource.voxelProjectFile !== 'content/projects/converted-wall.project.json') {
+  throw new Error('Studio voxel integration project changed without an explicit product decision');
+}
 if (demoSource.cargoPackage !== 'loading-bay-game' || demoSource.adapterBinary !== 'studio-adapter') {
   throw new Error('Studio integration adapter identity changed without an explicit product decision');
 }

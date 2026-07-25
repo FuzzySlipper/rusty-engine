@@ -142,6 +142,7 @@ small { color: var(--studio-muted); }
 .panel { display: flex; min-height: 0; flex-direction: column; background: var(--studio-panel); }
 .hierarchy-panel { border-right: 1px solid var(--studio-border); }
 .inspector-panel { border-left: 1px solid var(--studio-border); }
+.inspector-panel rusty-voxel-editor { flex: 1; min-height: 0; }
 .panel-heading {
   display: flex;
   min-height: 44px;
@@ -152,6 +153,9 @@ small { color: var(--studio-muted); }
   background: var(--studio-chrome);
 }
 .panel-heading > div { display: grid; }
+.panel-heading > .inspector-mode-tabs { display: flex; grid-auto-flow: column; gap: 3px; }
+.inspector-mode-tabs button { padding: 3px 6px; font-size: 10px; }
+.inspector-mode-tabs button.is-active { border-color: var(--studio-accent); color: var(--studio-accent); }
 .panel-heading small { font-size: 10px; }
 .filter-row { padding: 7px; border-bottom: 1px solid var(--studio-border-soft); }
 .filter-row input { width: 100%; }

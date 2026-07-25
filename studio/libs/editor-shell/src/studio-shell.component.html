@@ -4,6 +4,10 @@
   [attr.data-selected-entity]="state().selection.entityId"
   [attr.data-selection-source]="state().selection.source"
   [attr.data-project-hash]="state().authoringDocument?.identity?.projectHash"
+  [attr.data-studio-operation]="state().operation"
+  [attr.data-voxel-pick-instance]="state().voxelWorkspace.validatedPick?.instanceId"
+  [attr.data-voxel-receipt]="state().voxelWorkspace.lastReceipt?.kind"
+  [attr.data-voxel-assets]="state().authoringDocument?.voxelAuthoring?.assets?.length"
 >
   <header class="titlebar">
     <div class="brand" aria-label="Rusty Engine Studio">
@@ -65,8 +69,8 @@
     @if (state().activeMenu === 'tools') {
       <section class="menu-popover tools-menu" aria-label="Tools menu">
         <button type="button" disabled title="Picking is active directly on the shared renderer canvas">Viewport Picking · active</button>
-        <button type="button" disabled title="Voxel asset, annotation, history, and conversion owners land in M11E">Voxel Authoring</button>
-        <button type="button" disabled title="GLB conversion arrives through the typed voxel conversion owner in M11E">Convert Mesh to Voxel…</button>
+        <button type="button" (click)="setInspectorMode('voxel'); store.toggleMenu(null)">Voxel Authoring</button>
+        <button type="button" (click)="setInspectorMode('voxel'); store.toggleMenu(null)">Convert Mesh to Voxel…</button>
       </section>
     }
   </header>
@@ -171,10 +175,12 @@
             [previewEntityId]="state().preview?.entityId ?? null"
             [previewTranslation]="state().preview?.translation ?? null"
             (entityPicked)="store.selectEntity($event, 'renderer')"
+            (voxelPicked)="validateVoxelPick($event)"
             (rendererError)="store.reportUiError($event)"
           />
           <div class="viewport-source-readout">
             <span>{{ projection.readout.retainedEntities }} entities</span>
+            <span>{{ projection.readout.retainedVoxelInstances }} voxel instances</span>
             <span>{{ projection.readout.frameKind }} frame</span>
             <span>owner revision {{ projection.readout.sourceRevision }}</span>
           </div>
@@ -226,62 +232,78 @@
     <aside class="panel inspector-panel" data-visual-id="studio-inspector-panel">
       <header class="panel-heading">
         <div>
-          <strong>Inspector</strong>
-          <small>Typed owner operation</small>
+          <strong>{{ inspectorMode === 'entity' ? 'Inspector' : 'Voxel Editor' }}</strong>
+          <small>{{ inspectorMode === 'entity' ? 'Typed owner operation' : state().voxelWorkspace.message }}</small>
+        </div>
+        <div class="inspector-mode-tabs">
+          <button type="button" [class.is-active]="inspectorMode === 'entity'" (click)="setInspectorMode('entity')">Entity</button>
+          <button type="button" [class.is-active]="inspectorMode === 'voxel'" (click)="setInspectorMode('voxel')">Voxel</button>
         </div>
       </header>
-      @if (store.selectedHierarchyNode(); as node) {
-        <section class="inspector-content">
-          <div class="entity-title">
-            <span class="entity-icon large">{{ nodeIcon(node.nodeKind) }}</span>
-            <div>
-              <strong>{{ node.label }}</strong>
-              <small>{{ node.entityId === null ? 'Scene node ' + node.nodeId : 'Entity #' + node.entityId }}</small>
-            </div>
-          </div>
-          <dl class="identity-grid">
-            <dt>Node kind</dt><dd>{{ node.nodeKind }}</dd>
-            <dt>Projection</dt><dd>{{ store.selectedEntity()?.projected ? 'retained' : 'not rendered' }}</dd>
-            <dt>Asset</dt><dd>{{ node.asset ?? 'none' }}</dd>
-            <dt>Parent</dt><dd>{{ node.parentNodeId ?? 'root' }}</dd>
-          </dl>
-          <section class="inspector-section">
-            <header><strong>Transform</strong><span>authored-scene</span></header>
-            <div class="vector-editor">
-              @for (axis of ['X', 'Y', 'Z']; track axis; let index = $index) {
-                <label>
-                  <span>{{ axis }}</span>
-                  <input
-                    type="number"
-                    step="0.1"
-                    [attr.aria-label]="'Translation ' + axis"
-                    [disabled]="node.entityId === null"
-                    [value]="translation($any(index))"
-                    (input)="updateTranslation($any(index), $any($event.target).value)"
-                  />
-                </label>
-              }
-            </div>
-            <div class="inspector-actions">
-              <button type="button" [disabled]="state().preview === null" (click)="store.cancelPreview()">Cancel</button>
-              <button type="button" class="primary" data-action="commit-transform" [disabled]="state().preview === null || state().operation !== 'idle'" (click)="commitPreview()">Commit</button>
-            </div>
-            @if (node.entityId === null) {
-              <small class="owner-note">This authored node has no entity identity, so the current typed entity operation is unavailable.</small>
-            } @else {
-              <small class="owner-note">Local preview is disposable UI state. Commit is hash- and revision-guarded by Rust, then canonically reread.</small>
-            }
-          </section>
-          <section class="inspector-section muted-section">
-            <header><strong>Components</strong><span>read only</span></header>
-            <span>Game-specific components remain owned by the external project adapter.</span>
-          </section>
-        </section>
+      @if (inspectorMode === 'voxel') {
+        <rusty-voxel-editor
+          [authoring]="state().authoringDocument?.voxelAuthoring ?? null"
+          [entryScene]="state().authoringDocument?.identity?.entryScene ?? ''"
+          [validatedPick]="state().voxelWorkspace.validatedPick"
+          [lastReadout]="state().voxelWorkspace.lastReadout"
+          [conversion]="state().voxelWorkspace.conversion"
+          [busy]="state().operation !== 'idle'"
+          (action)="runVoxelAction($event)"
+        />
       } @else {
-        <div class="empty-state inspector-empty">
-          <strong>No entity selected</strong>
-          <span>Select an owner entity or projection item.</span>
-        </div>
+        @if (store.selectedHierarchyNode(); as node) {
+          <section class="inspector-content">
+            <div class="entity-title">
+              <span class="entity-icon large">{{ nodeIcon(node.nodeKind) }}</span>
+              <div>
+                <strong>{{ node.label }}</strong>
+                <small>{{ node.entityId === null ? 'Scene node ' + node.nodeId : 'Entity #' + node.entityId }}</small>
+              </div>
+            </div>
+            <dl class="identity-grid">
+              <dt>Node kind</dt><dd>{{ node.nodeKind }}</dd>
+              <dt>Projection</dt><dd>{{ store.selectedEntity()?.projected ? 'retained' : 'not rendered' }}</dd>
+              <dt>Asset</dt><dd>{{ node.asset ?? 'none' }}</dd>
+              <dt>Parent</dt><dd>{{ node.parentNodeId ?? 'root' }}</dd>
+            </dl>
+            <section class="inspector-section">
+              <header><strong>Transform</strong><span>authored-scene</span></header>
+              <div class="vector-editor">
+                @for (axis of ['X', 'Y', 'Z']; track axis; let index = $index) {
+                  <label>
+                    <span>{{ axis }}</span>
+                    <input
+                      type="number"
+                      step="0.1"
+                      [attr.aria-label]="'Translation ' + axis"
+                      [disabled]="node.entityId === null"
+                      [value]="translation($any(index))"
+                      (input)="updateTranslation($any(index), $any($event.target).value)"
+                    />
+                  </label>
+                }
+              </div>
+              <div class="inspector-actions">
+                <button type="button" [disabled]="state().preview === null" (click)="store.cancelPreview()">Cancel</button>
+                <button type="button" class="primary" data-action="commit-transform" [disabled]="state().preview === null || state().operation !== 'idle'" (click)="commitPreview()">Commit</button>
+              </div>
+              @if (node.entityId === null) {
+                <small class="owner-note">This authored node has no entity identity, so the current typed entity operation is unavailable.</small>
+              } @else {
+                <small class="owner-note">Local preview is disposable UI state. Commit is hash- and revision-guarded by Rust, then canonically reread.</small>
+              }
+            </section>
+            <section class="inspector-section muted-section">
+              <header><strong>Components</strong><span>read only</span></header>
+              <span>Game-specific components remain owned by the external project adapter.</span>
+            </section>
+          </section>
+        } @else {
+          <div class="empty-state inspector-empty">
+            <strong>No entity selected</strong>
+            <span>Select an owner entity or projection item.</span>
+          </div>
+        }
       }
     </aside>
   </section>

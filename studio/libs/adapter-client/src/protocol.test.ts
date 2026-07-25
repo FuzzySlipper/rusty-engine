@@ -106,6 +106,72 @@ test('typed rejection becomes an operation error without interpreting Rust seman
   );
 });
 
+test('voxel response families are closed and named authoring calls preserve guards', async () => {
+  const pick = {
+    type: 'voxelPickValidated',
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+    requestId: 'pick-1',
+    anchor: {
+      sceneId: 'scene/converted-wall',
+      instanceId: 'wall-primary',
+      assetId: 'voxel-volume/kenney-wall-a',
+      hitVoxel: [0, 0, 0],
+      hitFace: 'positiveZ',
+      placeVoxel: [0, 0, 1],
+      authorityHitVoxel: [4, 0, 6],
+      authorityPlaceVoxel: [4, 0, 7],
+      instanceLocalPoint: [4.5, 0.5, 7],
+      worldPoint: [4.5, 0.5, 7],
+      worldDistance: 12,
+    },
+  };
+  assert.equal(decodeStudioAdapterResponse(pick).type, 'voxelPickValidated');
+  assert.throws(
+    () => decodeStudioAdapterResponse({
+      ...pick,
+      anchor: { ...pick.anchor, ambientRendererState: true },
+    }),
+    (error: unknown) =>
+      error instanceof StudioAdapterDecodeError
+      && /ambientRendererState.*unknown/.test(error.message),
+  );
+
+  const transport = new RecordingTransport((request) => {
+    assert.equal(request.type, 'applyVoxelBrush');
+    if (request.type !== 'applyVoxelBrush') throw new Error('unexpected operation');
+    assert.equal(request.expectedProjectHash, '11'.repeat(32));
+    assert.equal(request.expectedAssetContentHash, 'sha256:asset-before');
+    return {
+      type: 'projectMutationApplied',
+      protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+      requestId: request.requestId,
+      receipt: {
+        kind: 'voxelBrushApplied',
+        assetId: request.assetId,
+        contentHashBefore: request.expectedAssetContentHash,
+        contentHashAfter: 'sha256:asset-after',
+        changedVoxels: 1,
+        sourceRevision: 2,
+        historyCursor: 1,
+        undoDepth: 1,
+        redoDepth: 0,
+      },
+      project: projectOpened(request.requestId).project,
+    };
+  });
+  const client = new StudioAdapterClient(transport);
+  const applied = await client.applyVoxelBrush({
+    expectedProjectHash: '11'.repeat(32),
+    assetId: 'voxel-volume/kenney-wall-a',
+    expectedAssetContentHash: 'sha256:asset-before',
+    center: [0, 0, 0],
+    radius: 0,
+    mode: 'erase',
+    materialSlot: null,
+  });
+  assert.equal(applied.receipt.kind, 'voxelBrushApplied');
+});
+
 class RecordingTransport implements StudioAdapterTransport {
   readonly requests: StudioAdapterRequest[] = [];
   readonly #respond: (request: StudioAdapterRequest) => unknown;
@@ -130,8 +196,8 @@ function projectOpened(requestId: string): ProjectOpenedFixture {
         projectId: 'loading-bay',
         name: 'Loading Bay',
         entryScene: 'scene/loading-bay',
-        sourceSchemaVersion: 8,
-        currentSchemaVersion: 8,
+        sourceSchemaVersion: 9,
+        currentSchemaVersion: 9,
         projectHash: '00'.repeat(32),
         sceneRevision: 1,
         relativeProjectFile: 'content/projects/loading-bay.project.json',
@@ -190,6 +256,11 @@ function projectOpened(requestId: string): ProjectOpenedFixture {
         rootNodeIds: [],
         nodes: [],
       },
+      voxelAuthoring: {
+        assets: [],
+        instances: [],
+        materials: [],
+      },
       loadingBay: {
         sceneName: 'Loading Bay',
         entityCount: 8,
@@ -211,6 +282,8 @@ function projectOpened(requestId: string): ProjectOpenedFixture {
         frameKind: 'complete',
         sourceRevision: 0,
         retainedEntities: 0,
+        retainedVoxelInstances: 0,
+        retainedVoxelChunks: 0,
         diagnostics: [],
       },
     },
@@ -241,12 +314,19 @@ interface ProjectOpenedFixture {
       rootNodeIds: number[];
       nodes: unknown[];
     };
+    voxelAuthoring: {
+      assets: unknown[];
+      instances: unknown[];
+      materials: unknown[];
+    };
     loadingBay: Record<string, string | number>;
     projection: { schemaVersion: number; ops: unknown[] };
     projectionReadout: {
       frameKind: string;
       sourceRevision: number;
       retainedEntities: number;
+      retainedVoxelInstances: number;
+      retainedVoxelChunks: number;
       diagnostics: unknown[];
     };
   };

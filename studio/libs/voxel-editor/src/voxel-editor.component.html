@@ -1,0 +1,235 @@
+<section class="voxel-editor" data-visual-id="studio-voxel-editor">
+  <header class="voxel-title">
+    <div>
+      <strong>Voxel Authoring</strong>
+      <small>Rust-owned assets · shared renderer</small>
+    </div>
+    <span>{{ assets().length }} assets · {{ instances().length }} instances</span>
+  </header>
+
+  <nav class="voxel-tabs" aria-label="Voxel authoring sections">
+    @for (section of ['assets', 'edit', 'annotations', 'convert']; track section) {
+      <button type="button" [class.is-active]="tab() === section" (click)="setTab($any(section))">
+        {{ section }}
+      </button>
+    }
+  </nav>
+
+  @if (authoring() === null) {
+    <p class="voxel-empty">Open a project to inspect reusable voxel assets.</p>
+  } @else {
+    @if (tab() === 'assets') {
+      <div class="voxel-scroll">
+        <section class="voxel-section">
+          <header><strong>Assets</strong><span>canonical voxel-volume</span></header>
+          <div class="item-list">
+            @for (asset of assets(); track asset.inspection.assetId) {
+              <button
+                type="button"
+                [class.is-selected]="selectedAsset()?.inspection?.assetId === asset.inspection.assetId"
+                (click)="chooseAsset(asset.inspection.assetId)"
+              >
+                <strong>{{ asset.inspection.assetId }}</strong>
+                <span>{{ asset.inspection.representedVoxelCount }} voxels · {{ asset.palette.length }} materials</span>
+              </button>
+            }
+          </div>
+          @if (selectedAsset(); as asset) {
+            <dl class="readout-grid">
+              <dt>Content</dt><dd>{{ asset.inspection.contentHash }}</dd>
+              <dt>Origin</dt><dd>{{ asset.inspection.origin.join(', ') }}</dd>
+              <dt>Bounds</dt><dd>{{ asset.inspection.boundsMin.join(', ') }} → {{ asset.inspection.boundsMax.join(', ') }}</dd>
+              <dt>Provenance</dt><dd>{{ asset.inspection.provenanceKind }} · {{ asset.inspection.provenanceSource }}</dd>
+            </dl>
+            <div class="form-row">
+              <input aria-label="Duplicate voxel asset id" [(ngModel)]="duplicateAssetId" />
+              <button type="button" [disabled]="busy()" (click)="duplicateAsset()">Duplicate</button>
+            </div>
+            <div class="form-grid compact">
+              <label><span>Palette slot</span><input type="number" [(ngModel)]="newMaterialSlot" /></label>
+              <label><span>Material asset</span><input [(ngModel)]="newMaterialId" /></label>
+            </div>
+            <button type="button" [disabled]="busy()" (click)="replacePalette()">Replace palette</button>
+          }
+        </section>
+
+        <section class="voxel-section">
+          <header><strong>Material asset</strong><span>asset-catalog authority + style</span></header>
+          <div class="form-grid">
+            <label class="wide"><span>Asset id</span><input [(ngModel)]="materialId" /></label>
+            <label><span>Color</span><input type="color" [(ngModel)]="materialColor" /></label>
+            <label><span>Roughness</span><input type="number" min="0" step="0.05" [(ngModel)]="materialRoughness" /></label>
+            <label><span>Emissive</span><input type="number" min="0" step="0.05" [(ngModel)]="materialEmissive" /></label>
+          </div>
+          <button type="button" [disabled]="busy()" (click)="upsertMaterial()">Upsert material</button>
+          <div class="chip-row">
+            @for (material of materials(); track material.assetId) { <span>{{ material.assetId }}</span> }
+          </div>
+        </section>
+
+        <section class="voxel-section">
+          <header><strong>New volume</strong><span>bounded filled initialization</span></header>
+          <div class="form-grid">
+            <label class="wide"><span>Asset id</span><input [(ngModel)]="newAssetId" /></label>
+            <label><span>Cell</span><input type="number" min="0.001" [(ngModel)]="newCellSize" /></label>
+            <label><span>Chunk</span><input type="number" min="1" [(ngModel)]="newChunkSize" /></label>
+            <label><span>Size X</span><input type="number" min="1" [(ngModel)]="newSizeX" /></label>
+            <label><span>Size Y</span><input type="number" min="1" [(ngModel)]="newSizeY" /></label>
+            <label><span>Size Z</span><input type="number" min="1" [(ngModel)]="newSizeZ" /></label>
+          </div>
+          <button type="button" [disabled]="busy()" (click)="initializeAsset()">Initialize asset</button>
+        </section>
+
+        <section class="voxel-section">
+          <header><strong>Instances</strong><span>scene placement</span></header>
+          <div class="form-row">
+            <input aria-label="New voxel instance id" [(ngModel)]="newInstanceId" />
+            <button type="button" [disabled]="busy() || selectedAsset() === null" (click)="attachInstance()">Attach</button>
+          </div>
+          <select aria-label="Voxel instance" [ngModel]="selectedInstance()?.instance?.instanceId ?? ''" (ngModelChange)="chooseInstance($event)">
+            @for (entry of instances(); track entry.sceneId + ':' + entry.instance.instanceId) {
+              <option [value]="entry.instance.instanceId">{{ entry.instance.instanceId }} · {{ entry.instance.voxelAssetId }}</option>
+            }
+          </select>
+          @if (selectedInstance(); as selected) {
+            <div class="transform-block">
+              <span>Translation</span>
+              <div class="axis-row">
+                @for (axis of [0, 1, 2]; track axis) { <input type="number" step="0.1" [(ngModel)]="instanceTranslation[axis]" /> }
+              </div>
+              <span>Rotation quaternion</span>
+              <div class="axis-row four">
+                @for (axis of [0, 1, 2, 3]; track axis) { <input type="number" step="0.01" [(ngModel)]="instanceRotation[axis]" /> }
+              </div>
+              <span>Scale</span>
+              <div class="axis-row">
+                @for (axis of [0, 1, 2]; track axis) { <input type="number" step="0.1" [(ngModel)]="instanceScale[axis]" /> }
+              </div>
+              <div class="button-row">
+                <button type="button" [disabled]="busy()" (click)="removeInstance()">Remove</button>
+                <button type="button" class="primary" [disabled]="busy()" (click)="commitInstanceTransform()">Commit transform</button>
+              </div>
+            </div>
+          }
+        </section>
+      </div>
+    }
+
+    @if (tab() === 'edit') {
+      <div class="voxel-scroll">
+        <section class="voxel-section">
+          <header><strong>Authoritative pick</strong><span>renderer hint revalidated by Rust</span></header>
+          @if (validatedPick(); as pick) {
+            <div class="pick-card" data-visual-id="voxel-pick-readout">
+              <strong>{{ pick.instanceId }}</strong>
+              <span>hit {{ pick.hitVoxel.join(', ') }} · {{ pick.hitFace }}</span>
+              <span>place {{ pick.placeVoxel.join(', ') }}</span>
+            </div>
+          } @else {
+            <p>Click a rendered voxel chunk to establish an edit anchor.</p>
+          }
+        </section>
+        <section class="voxel-section">
+          <header><strong>Cube brush</strong><span>disposable preview, atomic commit</span></header>
+          <div class="form-grid compact">
+            <label><span>Mode</span><select [(ngModel)]="brushMode"><option value="paint">Paint</option><option value="erase">Erase</option></select></label>
+            <label><span>Radius</span><input type="number" min="0" [(ngModel)]="brushRadius" /></label>
+            <label><span>Material</span><input type="number" min="1" [disabled]="brushMode === 'erase'" [(ngModel)]="brushMaterialSlot" /></label>
+          </div>
+          @if (brushPreview() && validatedPick(); as pick) {
+            <div class="brush-preview" data-visual-id="voxel-brush-preview">
+              Preview · {{ brushMode }} cube radius {{ brushRadius }} at {{ (brushMode === 'paint' ? pick.placeVoxel : pick.hitVoxel).join(', ') }}
+            </div>
+          }
+          <div class="button-row">
+            <button type="button" [disabled]="validatedPick() === null" (click)="previewBrush()">Preview</button>
+            <button type="button" [disabled]="!brushPreview()" (click)="cancelBrushPreview()">Cancel</button>
+            <button type="button" class="primary" data-action="apply-voxel-brush" [disabled]="busy() || !brushPreview()" (click)="applyBrush()">Apply</button>
+          </div>
+        </section>
+        @if (selectedAsset(); as asset) {
+          <section class="voxel-section">
+            <header><strong>History</strong><span>{{ asset.history.cursor }} / {{ asset.history.entryCount }}</span></header>
+            <div class="button-row">
+              <button type="button" [disabled]="busy() || asset.history.undoDepth === 0" (click)="history('undo')">Undo</button>
+              <button type="button" [disabled]="busy() || asset.history.redoDepth === 0" (click)="history('redo')">Redo</button>
+              <input aria-label="History cursor" type="number" min="0" [(ngModel)]="revertCursor" />
+              <button type="button" [disabled]="busy()" (click)="history('revert')">Revert</button>
+            </div>
+            <small>{{ asset.history.persisted ? 'durable history' : 'new history' }} · {{ asset.history.historyHash }}</small>
+          </section>
+          <section class="voxel-section">
+            <header><strong>Model inspection</strong><span>bounded query</span></header>
+            <button type="button" [disabled]="busy()" (click)="queryModel()">Query asset window</button>
+            @if (lastReadout()?.kind === 'model') {
+              <pre>{{ lastReadout() | json }}</pre>
+            }
+          </section>
+        }
+      </div>
+    }
+
+    @if (tab() === 'annotations') {
+      <div class="voxel-scroll">
+        <section class="voxel-section">
+          <header><strong>Layers</strong><span>typed semantic regions</span></header>
+          <select aria-label="Annotation layer" [(ngModel)]="selectedLayerId">
+            @for (layer of selectedAsset()?.annotations ?? []; track layer.layerId) {
+              <option [value]="layer.layerId">{{ layer.layerId }} · {{ layer.regionCount }} regions</option>
+            }
+          </select>
+          <div class="form-grid">
+            <label class="wide"><span>Layer id</span><input [(ngModel)]="annotationLayerId" /></label>
+            <label class="wide"><span>Region id</span><input [(ngModel)]="annotationRegionId" /></label>
+            <label class="wide"><span>Label</span><input [(ngModel)]="annotationLabel" /></label>
+            <label><span>Kind</span><select [(ngModel)]="annotationKind"><option value="selection">Selection</option><option value="room">Room</option><option value="portal">Portal</option><option value="spawnArea">Spawn</option><option value="cover">Cover</option><option value="hazard">Hazard</option><option value="navigationHint">Navigation</option><option value="custom">Custom</option></select></label>
+            <label class="wide"><span>Tags</span><input [(ngModel)]="annotationTags" /></label>
+          </div>
+          <div class="button-row wrap">
+            <button type="button" [disabled]="busy() || selectedAsset() === null" (click)="createAnnotation()">Create from pick</button>
+            <button type="button" [disabled]="busy() || selectedLayer() === null" (click)="editAnnotationLabel()">Update label</button>
+            <button type="button" [disabled]="busy() || selectedLayer() === null" (click)="queryAnnotation()">Query</button>
+            <button type="button" [disabled]="busy() || selectedLayer() === null" (click)="exportAnnotation()">Export</button>
+          </div>
+          @if (lastReadout()?.kind === 'annotationQuery' || lastReadout()?.kind === 'annotationExport') {
+            <pre data-visual-id="voxel-annotation-readout">{{ lastReadout() | json }}</pre>
+          }
+        </section>
+      </div>
+    }
+
+    @if (tab() === 'convert') {
+      <div class="voxel-scroll">
+        <section class="voxel-section">
+          <header><strong>Mesh → voxel</strong><span>private Rust plan + preview</span></header>
+          <div class="form-grid">
+            <label class="wide"><span>Source asset</span><input [(ngModel)]="conversionSourceAsset" /></label>
+            <label class="wide"><span>Source path</span><input [(ngModel)]="conversionSourcePath" /></label>
+            <label class="wide"><span>Target asset</span><input [(ngModel)]="conversionTargetAsset" /></label>
+            <label class="wide"><span>License path</span><input [(ngModel)]="conversionLicensePath" /></label>
+            <label><span>Resolution X</span><input type="number" [(ngModel)]="conversionResolution[0]" /></label>
+            <label><span>Resolution Y</span><input type="number" [(ngModel)]="conversionResolution[1]" /></label>
+            <label><span>Resolution Z</span><input type="number" [(ngModel)]="conversionResolution[2]" /></label>
+            <label><span>Cell size</span><input type="number" [(ngModel)]="conversionCellSize" /></label>
+            <label><span>Chunk</span><input type="number" [(ngModel)]="conversionChunkSize" /></label>
+            <label><span>Fit</span><select [(ngModel)]="conversionFitPolicy"><option value="contain">Contain</option><option value="cover">Cover</option><option value="stretch">Stretch</option></select></label>
+            <label><span>Origin</span><select [(ngModel)]="conversionOriginPolicy"><option value="targetMin">Target min</option><option value="sourceOrigin">Source origin</option><option value="centered">Centered</option></select></label>
+            <label><span>Mode</span><select [(ngModel)]="conversionMode"><option value="surface">Surface</option><option value="solid">Solid</option></select></label>
+          </div>
+          <button type="button" class="primary" data-action="prepare-voxel-conversion" [disabled]="busy()" (click)="prepareConversion()">Prepare conversion</button>
+          @if (conversion(); as prepared) {
+            <div class="conversion-preview" data-visual-id="voxel-conversion-preview">
+              <strong>{{ prepared.plan.targetAssetId }}</strong>
+              <span>{{ prepared.preview.outputVoxelCount }} voxels · {{ prepared.preview.sampleVoxels.length }} preview samples</span>
+              <span>{{ prepared.plan.planHash }}</span>
+              <div class="button-row">
+                <button type="button" [disabled]="busy()" (click)="discardConversion()">Discard</button>
+                <button type="button" class="primary" data-action="apply-voxel-conversion" [disabled]="busy()" (click)="applyConversion()">Apply conversion</button>
+              </div>
+            </div>
+          }
+        </section>
+      </div>
+    }
+  }
+</section>
