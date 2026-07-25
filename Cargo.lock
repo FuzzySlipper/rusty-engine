@@ -35,6 +35,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "asset-import"
+version = "0.1.0"
+dependencies = [
+ "asset-catalog",
+ "core-assets",
+ "render-model",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "sha2",
+]
+
+[[package]]
 name = "authored-scene"
 version = "0.1.0"
 dependencies = [
@@ -85,6 +98,21 @@ name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+
+[[package]]
+name = "content-store"
+version = "0.1.0"
+dependencies = [
+ "asset-catalog",
+ "authored-scene",
+ "core-assets",
+ "core-ids",
+ "entity-state",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "sha2",
+]
 
 [[package]]
 name = "core-assets"

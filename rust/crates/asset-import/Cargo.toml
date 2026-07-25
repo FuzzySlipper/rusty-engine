@@ -1,0 +1,20 @@
+[package]
+name = "asset-import"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+asset-catalog.workspace = true
+core-assets.workspace = true
+render-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+sha2.workspace = true
+
+[[bin]]
+name = "rusty-asset-import"
+path = "src/bin/rusty_asset_import.rs"

@@ -1,8 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
+    "rust/crates/asset-import",
     "rust/crates/authored-scene",
     "rust/crates/asset-catalog",
+    "rust/crates/content-store",
     "rust/crates/render-model",
     "rust/crates/render-presentation",
     "rust/crates/render-projection",
@@ -29,8 +31,10 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace.dependencies]
+asset-import = { path = "rust/crates/asset-import" }
 authored-scene = { path = "rust/crates/authored-scene" }
 asset-catalog = { path = "rust/crates/asset-catalog" }
+content-store = { path = "rust/crates/content-store" }
 render-model = { path = "rust/crates/render-model" }
 render-presentation = { path = "rust/crates/render-presentation" }
 render-projection = { path = "rust/crates/render-projection" }
