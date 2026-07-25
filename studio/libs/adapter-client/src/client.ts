@@ -316,13 +316,13 @@ export class StudioAdapterClient {
     expectedType: Type,
   ): Promise<Extract<StudioAdapterResponse, { readonly type: Type }>> {
     const response = decodeStudioAdapterResponse(await this.#transport.exchange(request));
-    if (response.type === 'rejected') {
-      throw new StudioAdapterOperationRejected(response.error);
-    }
-    if (response.requestId !== request.requestId) {
+    if (response.requestId !== undefined && response.requestId !== request.requestId) {
       throw new Error(
         `Studio adapter response requestId ${JSON.stringify(response.requestId)} did not match ${JSON.stringify(request.requestId)}`,
       );
+    }
+    if (response.type === 'rejected') {
+      throw new StudioAdapterOperationRejected(response.error);
     }
     if (response.type !== expectedType) {
       throw new Error(

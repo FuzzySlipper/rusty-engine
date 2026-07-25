@@ -29,7 +29,7 @@ if STUDIO_OWNER_ADOPTION="$TASK_TMP/missing-owner.tsv" \
 fi
 grep -q 'current Rust workspace owner lacks Studio classification: voxel-annotation' "$TASK_TMP/output"
 
-sed 's/85a2eb2ce1e87f089940b6af6daead668dc80573/main/' \
+sed 's/6b44ad2ab1a85f77fe99358ea4e39dc20d054c93/main/' \
   "$STUDIO_ROOT/demo-consumer-source.json" > "$TASK_TMP/floating-demo-source.json"
 if STUDIO_DEMO_SOURCE="$TASK_TMP/floating-demo-source.json" \
   node "$STUDIO_ROOT/scripts/check-migration-plan.mjs" > "$TASK_TMP/output" 2>&1; then

@@ -74,6 +74,29 @@ test('rejected mutation preserves the accepted document and disposable preview',
   assert.match(store.snapshot().lastError ?? '', /project\.staleHash/);
 });
 
+test('opening a second project clears project-scoped selection and preview even when entity ids overlap', async () => {
+  const transport = new FixtureTransport();
+  const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
+  await store.openProject('/external/loading-bay-a', 'content/projects/loading-bay.project.json');
+  store.selectHierarchyNode(10);
+  store.beginTranslationPreview(1);
+  store.setPreviewTranslationAxis(0, 99);
+  assert.equal(store.snapshot().selection.entityId, 1);
+  assert.deepEqual(store.snapshot().preview?.translation, [99, 2, 3]);
+
+  transport.openedProjectId = 'loading-bay-b';
+  await store.openProject('/external/loading-bay-b', 'content/projects/loading-bay.project.json');
+
+  assert.equal(store.snapshot().authoringDocument?.identity.projectId, 'loading-bay-b');
+  assert.equal(store.snapshot().selection.entityId, null);
+  assert.equal(store.snapshot().selection.sceneNodeId, null);
+  assert.equal(store.snapshot().preview, null);
+  assert.deepEqual(
+    transport.requests.map((request) => request.type),
+    ['describe', 'openProject', 'openProject'],
+  );
+});
+
 test('HTTP transport bounds both directions and leaves semantic decoding to the adapter client', async () => {
   const requests: string[] = [];
   const transport = new HttpStudioAdapterTransport('/api/studio-adapter', async (input, init) => {
@@ -111,12 +134,15 @@ test('HTTP transport bounds both directions and leaves semantic decoding to the 
 class FixtureTransport implements StudioAdapterTransport {
   readonly requests: StudioAdapterRequest[] = [];
   rejectMutation = false;
+  openedProjectId = 'loading-bay';
 
   exchange(request: StudioAdapterRequest): Promise<unknown> {
     this.requests.push(request);
     if (request.type === 'describe') return Promise.resolve(described(request.requestId));
     if (request.type === 'openProject') {
-      return Promise.resolve(projectResponse('projectOpened', request.requestId, false));
+      return Promise.resolve(
+        projectResponse('projectOpened', request.requestId, false, this.openedProjectId),
+      );
     }
     if (request.type === 'setEntityTranslation') {
       if (this.rejectMutation) {
@@ -170,20 +196,25 @@ function described(requestId: string): unknown {
   };
 }
 
-function projectResponse(type: 'projectOpened' | 'projectRead', requestId: string, changed: boolean): unknown {
+function projectResponse(
+  type: 'projectOpened' | 'projectRead',
+  requestId: string,
+  changed: boolean,
+  projectId = 'loading-bay',
+): unknown {
   return {
     type,
     protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
     requestId,
-    project: projectReadout(changed),
+    project: projectReadout(changed, projectId),
   };
 }
 
-function projectReadout(changed: boolean): unknown {
+function projectReadout(changed: boolean, projectId = 'loading-bay'): unknown {
   const translation = changed ? [4.5, 2, 3] : [1, 2, 3];
   return {
     identity: {
-      projectId: 'loading-bay',
+      projectId,
       name: 'Loading Bay',
       entryScene: 'scene/loading-bay',
       sourceSchemaVersion: 9,

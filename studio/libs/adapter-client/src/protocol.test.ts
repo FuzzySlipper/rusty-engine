@@ -106,6 +106,27 @@ test('typed rejection becomes an operation error without interpreting Rust seman
   );
 });
 
+test('a correlated rejection must belong to the request being completed', async () => {
+  const transport = new RecordingTransport(() => ({
+    type: 'rejected',
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+    requestId: 'another-request',
+    error: {
+      code: 'project.staleHash',
+      message: 'source changed',
+    },
+  }));
+  const client = new StudioAdapterClient(transport);
+
+  await assert.rejects(
+    client.readProject(),
+    (error: unknown) =>
+      error instanceof Error &&
+      !(error instanceof StudioAdapterOperationRejected) &&
+      /requestId .* did not match/.test(error.message),
+  );
+});
+
 test('voxel response families are closed and named authoring calls preserve guards', async () => {
   const pick = {
     type: 'voxelPickValidated',
