@@ -158,6 +158,7 @@ pub struct ProjectionNode {
     pub entity: EntityId,
     pub name: String,
     pub asset: String,
+    pub translation: Option<Vec3>,
     pub transform: Option<EntityTransform>,
     pub visible: bool,
 }
@@ -344,11 +345,13 @@ impl EntityState {
             .iter()
             .filter_map(|(entity, renderable)| {
                 let core = self.entities.get(entity)?;
+                let transform = self.world_transform(*entity);
                 Some(ProjectionNode {
                     entity: *entity,
                     name: core.name.clone(),
                     asset: renderable.asset.clone(),
-                    transform: self.world_transform(*entity),
+                    translation: transform.map(|transform| transform.translation),
+                    transform,
                     visible: core.lifecycle == EntityLifecycle::Active && renderable.visible,
                 })
             })
