@@ -6,9 +6,58 @@ use engine_spatial::{
     VoxelEditHistoryDiffOptions, VoxelEditHistoryError, VoxelEditHistoryLimits, VoxelEditService,
     VoxelEditTransaction, VoxelPickError, VoxelPickHint, VoxelPickService, VoxelPrimitive,
     VoxelPrimitiveEditService, VoxelPrimitiveError, VoxelPrimitiveMaterial, VoxelPrimitiveRequest,
-    MAX_VOXEL_EDITS_PER_TRANSACTION,
+    VoxelTemplate, VoxelTemplateEditService, VoxelTemplateError, VoxelTemplateRequest,
+    MAX_VOXEL_EDITS_PER_TRANSACTION, VOXEL_HOUSE_TEMPLATE_BOUNDS,
 };
 use entity_state::{EntityTransform, Quat};
+
+#[test]
+fn house_template_is_deterministic_bounded_and_preserves_openings() {
+    let edits = VoxelTemplateEditService
+        .generate(VoxelTemplateRequest {
+            template: VoxelTemplate::House,
+            origin: [20, -2, 7],
+            material_slot: 3,
+        })
+        .unwrap();
+    assert_eq!(edits.len(), 329);
+    assert_eq!(VOXEL_HOUSE_TEMPLATE_BOUNDS, [[0, 0, 0], [10, 12, 8]]);
+    assert!(edits.contains(&VoxelEdit::Set {
+        address: [20, -2, 7],
+        material_slot: 3,
+    }));
+    assert!(!edits.contains(&VoxelEdit::Set {
+        address: [25, 0, 7],
+        material_slot: 3,
+    }));
+    assert!(edits.contains(&VoxelEdit::Set {
+        address: [28, 10, 13],
+        material_slot: 3,
+    }));
+    assert!(edits
+        .windows(2)
+        .all(|pair| pair[0].address() < pair[1].address()));
+}
+
+#[test]
+fn house_template_rejects_invalid_material_and_overflow_without_output() {
+    assert!(matches!(
+        VoxelTemplateEditService.generate(VoxelTemplateRequest {
+            template: VoxelTemplate::House,
+            origin: [0, 0, 0],
+            material_slot: 0,
+        }),
+        Err(VoxelTemplateError::InvalidMaterial(_))
+    ));
+    assert!(matches!(
+        VoxelTemplateEditService.generate(VoxelTemplateRequest {
+            template: VoxelTemplate::House,
+            origin: [i64::MAX, 0, 0],
+            material_slot: 1,
+        }),
+        Err(VoxelTemplateError::InvalidOrigin(_)) | Err(VoxelTemplateError::CoordinateOverflow)
+    ));
+}
 
 #[test]
 fn edit_preview_rebuilds_without_mutation_then_commits_exact_candidate() {
