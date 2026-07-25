@@ -146,6 +146,125 @@ impl SceneValidationError {
             Self::DuplicateCatalogBinding { .. } => "duplicate-catalog-binding",
         }
     }
+
+    pub fn diagnostic(&self) -> SceneDiagnostic {
+        let (path, message) = match self {
+            Self::UnsupportedSchemaVersion { found, supported } => (
+                "schemaVersion".to_string(),
+                format!("scene schema {found} is unsupported; latest supported is {supported}"),
+            ),
+            Self::AuthoringVersionAheadOfSchema { authored, schema } => (
+                "metadata.authoringFormatVersion".to_string(),
+                format!("authoring format {authored} is ahead of scene schema {schema}"),
+            ),
+            Self::DuplicateNodeId { id } => (
+                format!("nodes[{}].id", id.raw()),
+                format!("scene node id {} occurs more than once", id.raw()),
+            ),
+            Self::UnknownParent { node, parent } => (
+                format!("nodes[{}].parent", node.raw()),
+                format!("parent node {} is absent", parent.raw()),
+            ),
+            Self::Cycle { path } => (
+                "nodes".to_string(),
+                format!(
+                    "parent cycle: {}",
+                    path.iter()
+                        .map(|node| node.raw().to_string())
+                        .collect::<Vec<_>>()
+                        .join(" -> ")
+                ),
+            ),
+            Self::InvalidTransform { node, reason } => (
+                format!("nodes[{}].transform", node.raw()),
+                format!("transform is invalid: {}", reason.code()),
+            ),
+            Self::BlankLabel { node } => (
+                format!("nodes[{}].metadata.label", node.raw()),
+                "label must not be blank".to_string(),
+            ),
+            Self::BlankTag { node } => (
+                format!("nodes[{}].metadata.tags", node.raw()),
+                "tag must not be blank".to_string(),
+            ),
+            Self::DuplicateTag { node, tag } => (
+                format!("nodes[{}].metadata.tags", node.raw()),
+                format!("tag `{tag}` occurs more than once"),
+            ),
+            Self::DuplicateAssetDependency { asset } => (
+                "dependencies".to_string(),
+                format!("asset dependency `{asset}` occurs more than once"),
+            ),
+            Self::MissingAssetDependency { node, asset } => (
+                format!("nodes[{}].asset", node.raw()),
+                format!("asset `{asset}` is not declared by scene dependencies"),
+            ),
+            Self::AssetKindMismatch {
+                node,
+                expected,
+                actual,
+            } => (
+                format!("nodes[{}].asset", node.raw()),
+                format!(
+                    "asset is {}, expected {}",
+                    actual.prefix(),
+                    expected.prefix()
+                ),
+            ),
+            Self::InvalidVoxelVolumeTransform { node, reason } => (
+                format!("nodes[{}].transform", node.raw()),
+                format!("voxel-volume world transform is invalid: {reason}"),
+            ),
+            Self::InvalidLight { node, reason } => (
+                format!("nodes[{}].light", node.raw()),
+                format!("light is invalid: {}", reason.code()),
+            ),
+            Self::InvalidMarker { node, reason } => (
+                format!("nodes[{}].marker", node.raw()),
+                format!("marker is invalid: {reason}"),
+            ),
+            Self::DuplicateMarkerId { node, marker_id } => (
+                format!("nodes[{}].marker.markerId", node.raw()),
+                format!("marker id `{marker_id}` occurs more than once"),
+            ),
+            Self::InvalidEntityInstance { node, reason } => (
+                format!("nodes[{}].entityInstance", node.raw()),
+                format!("entity instance is invalid: {reason}"),
+            ),
+            Self::DuplicateEntityInstanceId { node, instance_id } => (
+                format!("nodes[{}].entityInstance.instanceId", node.raw()),
+                format!("entity instance id `{instance_id}` occurs more than once"),
+            ),
+            Self::UnknownSpawnMarker { node, marker_id } => (
+                format!("nodes[{}].entityInstance.spawnMarkerId", node.raw()),
+                format!("spawn marker `{marker_id}` is absent"),
+            ),
+            Self::DuplicateBootstrapNode { node } => (
+                format!("nodes[{}]", node.raw()),
+                "only one scene bootstrap node is allowed".to_string(),
+            ),
+            Self::InvalidBootstrap { node, reason } => (
+                format!("nodes[{}].bootstrap", node.raw()),
+                format!("scene bootstrap is invalid: {reason}"),
+            ),
+            Self::DuplicateCatalogBinding { node, binding_id } => (
+                format!("nodes[{}].bootstrap.catalogs", node.raw()),
+                format!("catalog binding `{binding_id}` occurs more than once"),
+            ),
+        };
+        SceneDiagnostic {
+            code: self.code().to_string(),
+            path,
+            message,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SceneDiagnostic {
+    pub code: String,
+    pub path: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -156,6 +275,13 @@ pub struct SceneValidationReport {
 impl SceneValidationReport {
     pub fn is_valid(&self) -> bool {
         self.errors.is_empty()
+    }
+
+    pub fn diagnostics(&self) -> Vec<SceneDiagnostic> {
+        self.errors
+            .iter()
+            .map(SceneValidationError::diagnostic)
+            .collect()
     }
 }
 

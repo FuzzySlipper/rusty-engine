@@ -18,7 +18,7 @@ pub use admission::{
     SceneAdmissionError, SceneAdmissionPlan, SceneAdmissionReceipt, SceneReferenceError,
     SceneResolutionContext, DEFAULT_BASE_ENTITY_ID,
 };
-pub use codec::{decode_scene, encode_scene, SceneCodecError};
+pub use codec::{decode_scene, decode_scene_unvalidated, encode_scene, SceneCodecError};
 pub use edit::{
     SceneEditCommand, SceneEditError, SceneEditReceipt, SceneEditService, SceneObjectRecord,
     SceneObjectSnapshot,
@@ -30,8 +30,8 @@ pub use model::{
     SceneNode, SceneNodeKind, SceneNodeRecord, SceneTree, CURRENT_SCENE_SCHEMA_VERSION,
 };
 pub use validation::{
-    composed_world_transforms, validate_scene, SceneValidationError, SceneValidationReport,
-    TransformInvalid,
+    composed_world_transforms, validate_scene, SceneDiagnostic, SceneValidationError,
+    SceneValidationReport, TransformInvalid,
 };
 
 pub use entity_state::{EntityTransform as SceneTransform, Quat};

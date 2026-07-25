@@ -40,6 +40,16 @@ if [[ -e .gitmodules ]]; then
   failed=1
 fi
 
+while IFS= read -r manifest; do
+  if rg -n 'engine-inspector' "$manifest"; then
+    echo "runtime crate depends on the read-only engine-inspector leaf" >&2
+    failed=1
+  fi
+done < <(
+  find rust/crates -mindepth 2 -maxdepth 2 -name Cargo.toml \
+    ! -path 'rust/crates/engine-inspector/Cargo.toml' -print
+)
+
 if (( failed != 0 )); then
   exit 1
 fi

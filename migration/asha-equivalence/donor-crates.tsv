@@ -27,7 +27,7 @@ protocol-render	engine-rs/crates/protocol/protocol-render	conditional	Already co
 protocol-scene	engine-rs/crates/protocol/protocol-scene	conditional	Narrow authored scene shapes are consolidated with scene ownership.
 rule-state-machine	engine-rs/crates/rules/rule-state-machine	conditional	Generic non-render transition behavior is evaluated in M11S-G.
 protocol-diagnostics	engine-rs/crates/protocol/protocol-diagnostics	supporting	Keep local structured diagnostics; discard Asha-wide scopes and proof traces.
-scene-diagnostics	engine-rs/crates/tools/scene-diagnostics	supporting	Keep owner-local diagnostics and round trips; discard project-bundle/session proof topology.
+scene-diagnostics	engine-rs/crates/tools/scene-diagnostics	supporting	Keep owner-local diagnostics and deterministic readouts; discard ProjectBundle and session round-trip proof topology.
 voxel-diagnostics	engine-rs/crates/tools/voxel-diagnostics	supporting	Keep read-only voxel inspection and rejection context.
 state-inspector	engine-rs/crates/tools/state-inspector	supporting	Rewrite read-only inspection around entity-state.
 rule-relationship	engine-rs/crates/rules/rule-relationship	supporting	Relationship behavior folds into entity-state and typed authoring.

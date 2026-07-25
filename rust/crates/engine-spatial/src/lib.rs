@@ -450,6 +450,15 @@ impl VoxelCollisionScene {
         self.projection.version()
     }
 
+    pub fn collider_chunk_count(&self) -> usize {
+        self.projection.collider_count()
+    }
+
+    pub fn has_collider_chunk(&self, chunk: [i64; 3]) -> bool {
+        self.projection
+            .has_collider(ChunkCoord::new(chunk[0], chunk[1], chunk[2]))
+    }
+
     pub fn navigation_cell_count(&self) -> usize {
         self.navigation.walkable_len()
     }

@@ -210,6 +210,19 @@ pub fn encode_scene(document: &FlatSceneDocument) -> Result<String, SceneCodecEr
 }
 
 pub fn decode_scene(input: &str) -> Result<FlatSceneDocument, SceneCodecError> {
+    let mut document = decode_scene_unvalidated(input)?;
+    let report = validate_scene(&document);
+    if !report.is_valid() {
+        return Err(validation_error(report));
+    }
+    document.canonicalize();
+    Ok(document)
+}
+
+/// Decode the strict stored shape while preserving semantically invalid values
+/// for read-only authoring diagnostics. Runtime admission should use
+/// [`decode_scene`], which validates before returning.
+pub fn decode_scene_unvalidated(input: &str) -> Result<FlatSceneDocument, SceneCodecError> {
     let mut deserializer = serde_json::Deserializer::from_str(input);
     let stored: StoredSceneDocument =
         serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
@@ -222,13 +235,7 @@ pub fn decode_scene(input: &str) -> Result<FlatSceneDocument, SceneCodecError> {
     deserializer
         .end()
         .map_err(|error| SceneCodecError::new("$", error.to_string()))?;
-    let mut document = stored.into_document()?;
-    let report = validate_scene(&document);
-    if !report.is_valid() {
-        return Err(validation_error(report));
-    }
-    document.canonicalize();
-    Ok(document)
+    stored.into_document()
 }
 
 fn validation_error(report: crate::SceneValidationReport) -> SceneCodecError {

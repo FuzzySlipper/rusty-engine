@@ -22,9 +22,9 @@ pub use batch::{
 };
 pub use hash::{ContentHash, ContentHashError};
 pub use manifest::{
-    decode_manifest, encode_manifest, is_safe_relative_path, ArtifactClass, ArtifactRole,
-    ContentArtifact, ContentManifest, ManifestCodecError, ManifestError,
-    CONTENT_MANIFEST_SCHEMA_VERSION,
+    decode_manifest, decode_manifest_unvalidated, encode_manifest, is_safe_relative_path,
+    ArtifactClass, ArtifactRole, ContentArtifact, ContentManifest, ManifestCodecError,
+    ManifestError, CONTENT_MANIFEST_SCHEMA_VERSION,
 };
 pub use owner_codec::{
     asset_catalog_body, asset_lock_body, durable_entity_state_body, prefab_registry_body,

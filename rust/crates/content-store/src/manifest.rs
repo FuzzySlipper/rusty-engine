@@ -302,6 +302,17 @@ pub fn encode_manifest(manifest: &ContentManifest) -> Result<String, ManifestCod
 }
 
 pub fn decode_manifest(input: &str) -> Result<ContentManifest, ManifestCodecError> {
+    let manifest = decode_manifest_unvalidated(input)?;
+    manifest
+        .validate()
+        .map_err(|error| ManifestCodecError::new("$", error.to_string()))?;
+    Ok(manifest.canonical())
+}
+
+/// Decode the strict stored shape while retaining semantic manifest errors for
+/// read-only authoring diagnostics. Content admission must use
+/// [`decode_manifest`], which validates before returning.
+pub fn decode_manifest_unvalidated(input: &str) -> Result<ContentManifest, ManifestCodecError> {
     let mut deserializer = serde_json::Deserializer::from_str(input);
     let stored: StoredManifest =
         serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
@@ -351,14 +362,10 @@ pub fn decode_manifest(input: &str) -> Result<ContentManifest, ManifestCodecErro
             })
         })
         .collect::<Result<_, ManifestCodecError>>()?;
-    let manifest = ContentManifest {
+    Ok(ContentManifest {
         schema_version: stored.schema_version,
         artifacts,
-    };
-    manifest
-        .validate()
-        .map_err(|error| ManifestCodecError::new("$", error.to_string()))?;
-    Ok(manifest.canonical())
+    })
 }
 
 pub fn is_safe_relative_path(path: &str) -> bool {

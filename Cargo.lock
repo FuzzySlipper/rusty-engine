@@ -195,6 +195,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine-inspector"
+version = "0.1.0"
+dependencies = [
+ "asset-catalog",
+ "asset-import",
+ "authored-scene",
+ "content-store",
+ "core-assets",
+ "core-ids",
+ "core-math",
+ "engine-spatial",
+ "entity-state",
+ "serde",
+ "serde_json",
+ "voxel-asset",
+]
+
+[[package]]
 name = "engine-spatial"
 version = "0.1.0"
 dependencies = [
