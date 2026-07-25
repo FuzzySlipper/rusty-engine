@@ -1,5 +1,9 @@
 {
   "name": "rusty-engine-source",
   "private": true,
-  "packageManager": "pnpm@11.7.0"
+  "packageManager": "pnpm@11.7.0",
+  "scripts": {
+    "verify:studio": "./scripts/verify-studio.sh",
+    "verify:all": "./scripts/verify-all.sh"
+  }
 }

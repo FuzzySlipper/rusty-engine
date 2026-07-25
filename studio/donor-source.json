@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "repository": "git@github.com:FuzzySlipper/asha-studio.git",
+  "publicRepository": "https://github.com/FuzzySlipper/asha-studio",
+  "commit": "709e1be780796ca1b802df764f0ec064bd271bc4",
+  "tree": "beb5e34e97ef73c9bda7a8d12e7e28a97175a6cd",
+  "commitTime": "2026-07-22T05:02:28-07:00",
+  "trackedFileCount": 147,
+  "trackedTreeSha256": "5211cde5134894ed7e2a47d9b7d91d34a194f36669d6e58d86d45cd623e6da44",
+  "trackedWorktreeStateAtAudit": "clean-and-equal-to-origin-main",
+  "excludedUntrackedPaths": [
+    "assets/",
+    "untitled.scene.json"
+  ],
+  "license": {
+    "status": "no-declared-repository-license",
+    "trackedLicenseFiles": [],
+    "githubSpdxId": null
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "summary": "Studio consumes Rusty Engine owners and the shared renderer without restoring Asha or creating TypeScript authority.",
+  "forbiddenPackagePrefixes": ["@asha/"],
+  "forbiddenDirectPackages": ["three"],
+  "forbiddenPathFragments": [
+    "/home/dev/asha-engine",
+    "/home/dev/asha-studio",
+    "/home/dev/asha-testing",
+    "../asha-engine",
+    "../asha-studio",
+    "../asha-testing"
+  ],
+  "allowedRendererPackages": [
+    "@rusty-engine/render-contracts",
+    "@rusty-engine/render-projection",
+    "@rusty-engine/renderer-host",
+    "@rusty-engine/renderer-three"
+  ],
+  "sourceRoots": ["apps", "libs"]
+}

@@ -7,6 +7,7 @@ cd "$REPO_ROOT"
 cargo fmt --all --check
 ./scripts/audit-standalone.sh
 ./scripts/audit-render-isolation.sh
+./scripts/audit-studio-isolation.sh
 ./scripts/check-doc-links.sh
 ./scripts/check-asha-equivalence.sh --final
 ./scripts/test-asha-equivalence-checker.sh

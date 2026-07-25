@@ -1,0 +1,83 @@
+name: studio
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'studio/**'
+      - 'docs/studio-migration-contract.md'
+      - 'package.json'
+      - 'Cargo.toml'
+      - 'scripts/audit-studio-isolation.sh'
+      - 'scripts/verify-studio.sh'
+      - 'rust/crates/asset-catalog/**'
+      - 'rust/crates/asset-import/**'
+      - 'rust/crates/authored-scene/**'
+      - 'rust/crates/content-store/**'
+      - 'rust/crates/engine-inspector/**'
+      - 'rust/crates/engine-spatial/**'
+      - 'rust/crates/entity-state/**'
+      - 'rust/crates/environment-authoring/**'
+      - 'rust/crates/render-model/**'
+      - 'rust/crates/render-presentation/**'
+      - 'rust/crates/render-projection/**'
+      - 'rust/crates/voxel-annotation/**'
+      - 'rust/crates/voxel-asset/**'
+      - 'rust/crates/voxel-convert/**'
+      - 'render/**'
+      - 'fixtures/render/**'
+      - '.github/workflows/studio.yml'
+  pull_request:
+    paths:
+      - 'studio/**'
+      - 'docs/studio-migration-contract.md'
+      - 'package.json'
+      - 'Cargo.toml'
+      - 'scripts/audit-studio-isolation.sh'
+      - 'scripts/verify-studio.sh'
+      - 'rust/crates/asset-catalog/**'
+      - 'rust/crates/asset-import/**'
+      - 'rust/crates/authored-scene/**'
+      - 'rust/crates/content-store/**'
+      - 'rust/crates/engine-inspector/**'
+      - 'rust/crates/engine-spatial/**'
+      - 'rust/crates/entity-state/**'
+      - 'rust/crates/environment-authoring/**'
+      - 'rust/crates/render-model/**'
+      - 'rust/crates/render-presentation/**'
+      - 'rust/crates/render-projection/**'
+      - 'rust/crates/voxel-annotation/**'
+      - 'rust/crates/voxel-asset/**'
+      - 'rust/crates/voxel-convert/**'
+      - 'render/**'
+      - 'fixtures/render/**'
+      - '.github/workflows/studio.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-studio:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Rusty Engine
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: studio/pnpm-lock.yaml
+
+      - name: Install isolated Studio dependencies
+        run: pnpm --dir studio install --frozen-lockfile
+
+      - name: Verify Studio
+        run: ./scripts/verify-studio.sh

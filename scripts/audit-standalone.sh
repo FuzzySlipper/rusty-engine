@@ -29,8 +29,8 @@ while IFS= read -r link; do
   esac
 done < <(find . -path ./.git -prune -o -type l -print)
 
-if rg -n -i '(\.\./(asha-engine|rusty-engine-demo)|/home/dev/(asha-engine|rusty-engine-demo)|(?:path|link|file)[[:space:]]*=[[:space:]]*"[^"]*(asha-engine|rusty-engine-demo))' \
-  --glob '!docs/**' --glob '!scripts/audit-standalone.sh' .; then
+if rg -n -i '(\.\./(asha-engine|asha-studio|asha-testing|rusty-engine-demo)|/home/dev/(asha-engine|asha-studio|asha-testing|rusty-engine-demo)|(?:path|link|file)[[:space:]]*=[[:space:]]*"[^"]*(asha-engine|asha-studio|asha-testing|rusty-engine-demo))' \
+  --glob '!docs/**' --glob '!studio/boundary-policy.json' --glob '!scripts/audit-standalone.sh' .; then
   echo "operational sibling-repository reference found" >&2
   failed=1
 fi

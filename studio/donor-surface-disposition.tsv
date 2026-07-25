@@ -1,0 +1,44 @@
+surface_id	path	disposition	target_module	rationale
+local-serve-config	.den-serve.json	exclude	-	Local serving state is not product source and has no successor runtime role.
+ci	.github/	adapt	.github/workflows/studio.yml	Retain an isolated Studio check while removing sibling Asha checkout bootstrapping.
+ignore-policy	.gitignore	adapt	studio/.gitignore	Retain workspace cache and output exclusions under the nested workspace.
+donor-agent-bootstrap	AGENTS.md	historical-only	docs/studio-migration-contract.md	Donor Den and satellite-repository instructions remain provenance rather than current guidance.
+donor-orientation	README.md	historical-only	docs/studio-migration-contract.md	Current operations will be rewritten around Rusty Engine owners and external projects.
+donor-agent-fragment	agents-project.md	historical-only	docs/studio-migration-contract.md	Satellite boundary bootstrap is superseded by this repository's guidance.
+application-shell	apps/studio-app/	adapt	studio/apps/studio	Retain the Angular product shell and visible behavior while replacing Asha integration.
+boundary-policy	boundary-policy.json	adapt	studio/boundary-policy.json	Retain executable dependency boundaries with Rusty Engine public owners.
+donor-documents	docs/	historical-only	docs/studio-migration-contract.md	Use the operational facts as migration evidence and replace stale Asha commands and limitations.
+lint-config	eslint.config.mjs	adapt	studio/eslint.config.mjs	Retain strict Angular and TypeScript linting when product sources land.
+workspace-pointer-fixture	fixtures/	historical-only	studio/test/fixtures	The old game-workspace pointer is evidence; successor fixtures follow the closed adapter protocol.
+root-html	index.html	consolidate	studio/apps/studio/src/index.html	Keep one application-owned HTML entry instead of duplicate root and app entries.
+asha-contract-mirror	libs/asha-contracts/	exclude	studio/libs/adapter-client	Asha contract mirroring is replaced by one closed versioned adapter decoder.
+command-dispatch	libs/studio-command-dispatch/	adapt	studio/libs/adapter-client	Keep typed accepted and rejected operation UX without universal registry or dispatch.
+components	libs/studio-components/	consolidate	studio/libs/editor-shell	Small generic UI primitives stay with the cohesive shell owner.
+domain-models	libs/studio-domain/	adapt	studio/libs/adapter-client+application	Retain useful view models while deleting RuntimeSession and ProjectBundle authority mirrors.
+interactions	libs/studio-interactions/	consolidate	studio/libs/scene-editor	Selection and interaction intents stay beside the workflows that own them.
+panels	libs/studio-panels/	adapt	studio/libs/editor-shell+scene-editor+voxel-editor	Retain hierarchy inspector voxel and workflow panels in cohesive feature owners.
+shell	libs/studio-shell/	adapt	studio/libs/editor-shell	Retain menus regions dialogs preferences focus and status over the real adapter.
+store	libs/studio-store/	adapt	studio/libs/application+scene-editor+voxel-editor	Retain lifecycle conflict and view-state behavior while moving semantics and persistence to Rust.
+theme	libs/studio-theme/	preserve	studio/libs/editor-shell	Theme tokens and styles are product-owned and independent of Asha authority.
+viewport	libs/studio-viewport/	adapt	studio/libs/viewport	Retain camera grid gizmo preview and pick routing over the shared Rusty renderer.
+voxel-conversion-ui	libs/studio-voxel-conversion/	adapt	studio/libs/voxel-editor	Retain conversion authoring UX over voxel-convert rather than a runtime facade.
+workspace-generators	libs/studio-workspace-generators/	exclude	-	Package generators preserve tiny donor package topology that the cohesive successor rejects.
+nx-config	nx.json	adapt	studio/nx.json	Retain an isolated Nx domain with successor names and modules.
+package-manifest	package.json	adapt	studio/package.json	Retain Angular/Nx tooling while replacing all sibling Asha links.
+dependency-lock	pnpm-lock.yaml	adapt	studio/pnpm-lock.yaml	Generate a standalone successor lock containing no sibling or Asha packages.
+workspace-config	pnpm-workspace.yaml	adapt	studio/pnpm-workspace.yaml	Retain a nested workspace isolated from the root and renderer workspaces.
+boundary-checker	scripts/check-boundaries.mjs	adapt	studio/scripts/check-boundaries.mjs	Retain executable dependency checks with successor ownership rules.
+demo-environment-proof	scripts/check-demo-environment-authoring.mjs	historical-only	studio/test/integration	Preserve the visible environment workflow but replace fixed Asha Demo HTTP proof plumbing.
+doc-command-checker	scripts/check-doc-script-references.mjs	adapt	studio/scripts/check-doc-script-references.mjs	Retain runnable documentation command validation once operational docs land.
+live-editor-check	scripts/check-live-editor.mjs	adapt	studio/test/browser	Retain visible control acceptance without hidden mutation globals or proof catalogs.
+lan-launcher	scripts/studio-lan.ts	adapt	studio/scripts/launch-studio.ts	Retain trusted LAN convenience while making host and adapter ownership explicit.
+native-host	scripts/studio-native-host.ts	adapt	studio/scripts/launch-studio.ts	Retain the usable local host but replace Asha browser-host and RuntimeSession installation.
+native-provider-selection	scripts/studio-native-provider.ts	adapt	studio/scripts/project-adapter.ts	Trusted host selects a project adapter; Studio content cannot select native code.
+file-server	scripts/studio-project-file-server.ts	adapt	studio/scripts/host-files.ts	Retain bounded trusted-host file operations without browser storage authority.
+file-service	scripts/studio-project-file-service.ts	adapt	studio/scripts/host-files.ts	Retain navigation staging CAS promotion rollback and failure non-mutation.
+project-service	scripts/studio-project-service.ts	adapt	studio/scripts/project-adapter.ts	Retain external project open create discovery and atomic switching with project-owned meaning.
+user-settings-service	scripts/studio-user-settings-service.ts	adapt	studio/scripts/host-settings.ts	Retain per-project host-user settings outside browser storage.
+behavior-tests	test/	adapt	studio/test	Retain concrete defect regressions and rewrite their authority seams against Rusty owners.
+root-tsconfig	tsconfig.json	adapt	studio/tsconfig.base.json	Retain strict shared TypeScript settings inside the nested workspace.
+app-tsconfig	tsconfig.studio-app.json	consolidate	studio/apps/studio/tsconfig.json	Use one application-owned configuration instead of a root alias.
+vite-config	vite.config.ts	adapt	studio/apps/studio	Retain local browser tooling without making HTTP an Engine requirement.

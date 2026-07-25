@@ -3,7 +3,11 @@ name: verify
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'studio/**'
   pull_request:
+    paths-ignore:
+      - 'studio/**'
 
 permissions:
   contents: read

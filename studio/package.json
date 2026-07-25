@@ -1,0 +1,19 @@
+{
+  "name": "rusty-engine-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "First-party Rusty Engine authoring Studio workspace.",
+  "packageManager": "pnpm@11.7.0",
+  "scripts": {
+    "check:boundaries": "node scripts/check-boundaries.mjs",
+    "check:migration": "node scripts/check-migration-plan.mjs",
+    "test:migration": "bash scripts/test-migration-checker.sh",
+    "verify": "pnpm run check:boundaries && pnpm run check:migration && pnpm run test:migration"
+  },
+  "devDependencies": {
+    "@nx/workspace": "23.0.0",
+    "nx": "23.0.0",
+    "typescript": "~5.9.2"
+  }
+}
