@@ -26,6 +26,7 @@
   "devDependencies": {
     "@rusty-engine/render-contracts": "workspace:*",
     "@rusty-engine/render-projection": "workspace:*",
-    "@rusty-engine/renderer-three": "workspace:*"
+    "@rusty-engine/renderer-three": "workspace:*",
+    "@types/node": "^24.0.0"
   }
 }

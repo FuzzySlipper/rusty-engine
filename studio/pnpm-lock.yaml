@@ -76,13 +76,20 @@ importers:
         specifier: ^8.40.0
         version: 8.65.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
 
-  ../render/packages/render-contracts: {}
+  ../render/packages/render-contracts:
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
 
   ../render/packages/render-projection:
     devDependencies:
       '@rusty-engine/render-contracts':
         specifier: workspace:*
         version: link:../render-contracts
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
 
   ../render/packages/renderer-host:
     devDependencies:
@@ -95,6 +102,9 @@ importers:
       '@rusty-engine/renderer-three':
         specifier: workspace:*
         version: link:../renderer-three
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
 
   ../render/packages/renderer-three:
     dependencies:
@@ -108,6 +118,9 @@ importers:
       '@rusty-engine/render-projection':
         specifier: workspace:*
         version: link:../render-projection
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
       '@types/three':
         specifier: ^0.184.1
         version: 0.184.1

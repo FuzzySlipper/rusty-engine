@@ -30,13 +30,20 @@ importers:
         specifier: ^8.1.5
         version: 8.1.5(@types/node@25.9.5)
 
-  packages/render-contracts: {}
+  packages/render-contracts:
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
 
   packages/render-projection:
     devDependencies:
       '@rusty-engine/render-contracts':
         specifier: workspace:*
         version: link:../render-contracts
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
 
   packages/renderer-host:
     devDependencies:
@@ -49,6 +56,9 @@ importers:
       '@rusty-engine/renderer-three':
         specifier: workspace:*
         version: link:../renderer-three
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
 
   packages/renderer-three:
     dependencies:
@@ -62,6 +72,9 @@ importers:
       '@rusty-engine/render-projection':
         specifier: workspace:*
         version: link:../render-projection
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
       '@types/three':
         specifier: ^0.184.1
         version: 0.184.1
@@ -197,6 +210,9 @@ packages:
 
   '@tybys/wasm-util@0.10.3':
     resolution: {integrity: sha512-F3fo1MYrRJYL3zER0OUOmkutjr1Vp23m7OsSgp7nq4SP6OqX6C/56XFIPAl5bt3zaBRjmW7SGz3u/6LwFpYcOg==}
+
+  '@types/node@24.13.3':
+    resolution: {integrity: sha512-Dh8vAsV36ig5wa9OX4pXvMc9D3Veibfw2wix0CUwYODLD8nkj9UsLjASr49nPg+2eKzxhBV+v7L8pXvT4e639Q==}
 
   '@types/node@25.9.5':
     resolution: {integrity: sha512-OScDchr2fwuUmWdf4kZ9h7PcJiYDVInhJizG/biAq3cAvqwYktuy/TYGGdZNMtNTFUP7rnb0NU4TUdm82kt4Rg==}
@@ -363,6 +379,9 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
+  undici-types@7.18.2:
+    resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
+
   undici-types@7.24.6:
     resolution: {integrity: sha512-WRNW+sJgj5OBN4/0JpHFqtqzhpbnV0GuB+OozA9gCL7a993SmU+1JBZCzLNxYsbMfIeDL+lTsphD5jN5N+n0zg==}
 
@@ -500,6 +519,10 @@ snapshots:
       tslib: 2.8.1
     optional: true
 
+  '@types/node@24.13.3':
+    dependencies:
+      undici-types: 7.18.2
+
   '@types/node@25.9.5':
     dependencies:
       undici-types: 7.24.6
@@ -636,6 +659,8 @@ snapshots:
     optional: true
 
   typescript@5.9.3: {}
+
+  undici-types@7.18.2: {}
 
   undici-types@7.24.6: {}
 

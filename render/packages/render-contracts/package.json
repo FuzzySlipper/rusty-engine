@@ -17,5 +17,8 @@
     "prepare": "pnpm run build",
     "typecheck": "tsc --build",
     "test": "tsc --build && node --test 'dist/**/*.test.js'"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
   }
 }
