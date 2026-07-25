@@ -450,6 +450,18 @@ export interface VoxelConversionPreview {
 }
 
 export type ProjectMutationReceipt =
+  | { readonly kind: 'sceneCreated'; readonly sceneId: string; readonly madeEntry: boolean }
+  | { readonly kind: 'sceneRenamed'; readonly sceneId: string }
+  | { readonly kind: 'sceneDeleted'; readonly sceneId: string }
+  | { readonly kind: 'entrySceneSet'; readonly sceneId: string }
+  | { readonly kind: 'sceneObjectCreated'; readonly entityId: number }
+  | { readonly kind: 'sceneObjectDeleted'; readonly entityId: number; readonly removedObjects: number }
+  | { readonly kind: 'sceneObjectRenamed'; readonly entityId: number }
+  | { readonly kind: 'sceneObjectReparented'; readonly entityId: number }
+  | { readonly kind: 'sceneObjectTransformSet'; readonly entityId: number }
+  | { readonly kind: 'sceneObjectAppearanceSet'; readonly entityId: number }
+  | { readonly kind: 'entityCollisionSet'; readonly entityId: number; readonly attached: boolean }
+  | { readonly kind: 'entityKinematicSet'; readonly entityId: number; readonly attached: boolean }
   | { readonly kind: 'materialUpserted'; readonly assetId: string }
   | { readonly kind: 'voxelAssetInitialized'; readonly assetId: string; readonly contentHash: string }
   | { readonly kind: 'voxelAssetDuplicated'; readonly sourceAssetId: string; readonly targetAssetId: string; readonly contentHash: string }
@@ -493,6 +505,36 @@ export function validateProjectMutationReceipt(input: unknown, path: string): vo
   const receipt = (required: readonly string[]): Readonly<Record<string, unknown>> =>
     closedObject(input, path, ['kind', ...required]);
   switch (kind) {
+    case 'sceneCreated': {
+      const entry = receipt(['sceneId', 'madeEntry']);
+      string(entry['sceneId'], `${path}.sceneId`);
+      boolean(entry['madeEntry'], `${path}.madeEntry`);
+      return;
+    }
+    case 'sceneRenamed':
+    case 'sceneDeleted':
+    case 'entrySceneSet':
+      string(receipt(['sceneId'])['sceneId'], `${path}.sceneId`);
+      return;
+    case 'sceneObjectCreated':
+    case 'sceneObjectRenamed':
+    case 'sceneObjectReparented':
+    case 'sceneObjectTransformSet':
+    case 'sceneObjectAppearanceSet':
+      number(receipt(['entityId'])['entityId'], `${path}.entityId`);
+      return;
+    case 'sceneObjectDeleted': {
+      const entry = receipt(['entityId', 'removedObjects']);
+      numbers(entry, path, ['entityId', 'removedObjects']);
+      return;
+    }
+    case 'entityCollisionSet':
+    case 'entityKinematicSet': {
+      const entry = receipt(['entityId', 'attached']);
+      number(entry['entityId'], `${path}.entityId`);
+      boolean(entry['attached'], `${path}.attached`);
+      return;
+    }
     case 'materialUpserted':
       string(receipt(['assetId'])['assetId'], `${path}.assetId`);
       return;

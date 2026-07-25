@@ -79,6 +79,90 @@ test('real project hierarchy, shared picking, transform settlement, reopen, and 
   await expect(page.locator('[data-preview-active="true"]')).toBeVisible();
 });
 
+test('project, scene, entity, light, and capability authoring flow through named Rust operations', async ({ page }) => {
+  await page.goto('/');
+  const shell = page.locator('[data-visual-id="studio-shell"]');
+
+  await page.getByRole('button', { name: 'File', exact: true }).click();
+  await page.getByRole('button', { name: 'New Project…', exact: true }).click();
+  let dialog = page.locator('[data-visual-id="studio-authoring-dialog"]');
+  await dialog.getByLabel('Project root').fill(projectRoot);
+  await dialog.getByLabel('Project file').fill('content/projects/studio-browser.project.json');
+  await dialog.getByLabel('Project ID').fill('studio-browser');
+  await dialog.getByLabel('Name', { exact: true }).fill('Studio Browser');
+  await dialog.getByLabel('Entry scene ID').fill('scene/studio-main');
+  await dialog.getByLabel('Entry scene name').fill('Studio Main');
+  await dialog.getByRole('button', { name: 'Create project', exact: true }).click();
+  await expect(shell).toHaveAttribute('data-project-hash', /.+/);
+  await expect(page.locator('.entity-row')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Manage scenes' }).click();
+  dialog = page.locator('[data-visual-id="studio-authoring-dialog"]');
+  await dialog.getByLabel('Scene ID').fill('scene/lighting');
+  await dialog.getByLabel('Scene name').fill('Lighting Lab');
+  await dialog.getByLabel('Open as entry scene after creation').check();
+  await dialog.getByRole('button', { name: 'Create', exact: true }).click();
+  await expect(page.locator('.document-title')).toContainText('Studio Browser');
+
+  await page.getByRole('button', { name: 'Create scene object' }).click();
+  dialog = page.locator('[data-visual-id="studio-authoring-dialog"]');
+  await dialog.getByLabel('Entity ID').fill('42');
+  await dialog.getByLabel('Name', { exact: true }).fill('Key Light');
+  await dialog.getByLabel('Appearance').selectOption('light');
+  await dialog.getByRole('button', { name: 'Create object', exact: true }).click();
+  await expect(page.locator('.entity-row[data-entity-id="42"]')).toContainText('Key Light');
+  await expect(page.locator('.viewport-source-readout')).toContainText('1 lights');
+
+  await page.locator('.entity-row[data-entity-id="42"]').click();
+  await page.getByRole('button', { name: 'Entity', exact: true }).click();
+  const inspector = page.locator('.inspector-panel');
+  await inspector.getByLabel('Rotation Z').fill('0.7071068');
+  await inspector.getByLabel('Rotation W').fill('0.7071068');
+  const transformHash = await projectHash(shell);
+  await inspector.locator('[data-action="commit-transform"]').click();
+  await expect.poll(() => projectHash(shell)).not.toBe(transformHash);
+  await expect(inspector.getByLabel('Rotation Z')).toHaveValue('0.7071068');
+
+  const name = inspector.locator('.field-row').filter({ hasText: 'Name' }).locator('input');
+  await name.fill('Sun Key');
+  await inspector.getByRole('button', { name: 'Rename', exact: true }).click();
+  await expect(page.locator('.entity-row[data-entity-id="42"]')).toContainText('Sun Key');
+
+  const collisionHash = await projectHash(shell);
+  await inspector.locator('.inspector-section').filter({ hasText: 'Collision' })
+    .getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect.poll(() => projectHash(shell)).not.toBe(collisionHash);
+  const kinematicHash = await projectHash(shell);
+  await inspector.locator('.inspector-section').filter({ hasText: 'Kinematic' })
+    .getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('project.invalidSpatial');
+  await expect(shell).toHaveAttribute('data-project-hash', kinematicHash);
+  await page.getByRole('alert').getByRole('button', { name: 'Dismiss' }).click();
+
+  await page.getByRole('button', { name: 'Create scene object' }).click();
+  dialog = page.locator('[data-visual-id="studio-authoring-dialog"]');
+  await dialog.getByLabel('Entity ID').fill('43');
+  await dialog.getByLabel('Name', { exact: true }).fill('Scaled Child');
+  await dialog.getByRole('button', { name: 'Create object', exact: true }).click();
+  await page.locator('.entity-row[data-entity-id="43"]').click();
+  await inspector.getByLabel('Scale X').fill('2');
+  const scaleHash = await projectHash(shell);
+  await inspector.locator('[data-action="commit-transform"]').click();
+  await expect.poll(() => projectHash(shell)).not.toBe(scaleHash);
+  await expect(inspector.getByLabel('Scale X')).toHaveValue('2');
+
+  await page.getByRole('button', { name: 'File', exact: true }).click();
+  await page.getByRole('button', { name: 'Save Project As…', exact: true }).click();
+  dialog = page.locator('[data-visual-id="studio-authoring-dialog"]');
+  await dialog.getByLabel('Project file').fill('content/projects/studio-browser-copy.project.json');
+  await dialog.getByLabel('Project ID').fill('studio-browser-copy');
+  await dialog.getByLabel('Name', { exact: true }).fill('Studio Browser Copy');
+  await dialog.getByRole('button', { name: 'Save copy', exact: true }).click();
+  await expect(page.locator('.document-title')).toContainText('Studio Browser Copy');
+  await expect(page.locator('.document-title')).toContainText('studio-browser-copy.project.json');
+  await expect(page.locator('.entity-row[data-entity-id="42"]')).toContainText('Sun Key');
+});
+
 test('voxel Studio owns the complete shared-renderer authoring workflow and rejects stale writes atomically', async ({ page }) => {
   await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(convertedWallProjectFile)}`);
 

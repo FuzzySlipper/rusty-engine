@@ -193,7 +193,7 @@ test('voxel response families are closed and named authoring calls preserve guar
   assert.equal(applied.receipt.kind, 'voxelBrushApplied');
 });
 
-test('protocol 4 closes history, file, and texture-policy response families', () => {
+test('protocol 5 closes history, file, and texture-policy response families', () => {
   const history = decodeStudioAdapterResponse({
     type: 'voxelRead',
     protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
@@ -301,8 +301,8 @@ function projectOpened(requestId: string): ProjectOpenedFixture {
         projectId: 'loading-bay',
         name: 'Loading Bay',
         entryScene: 'scene/loading-bay',
-        sourceSchemaVersion: 9,
-        currentSchemaVersion: 9,
+        sourceSchemaVersion: 10,
+        currentSchemaVersion: 10,
         projectHash: '00'.repeat(32),
         sceneRevision: 1,
         relativeProjectFile: 'content/projects/loading-bay.project.json',
@@ -387,6 +387,7 @@ function projectOpened(requestId: string): ProjectOpenedFixture {
         frameKind: 'complete',
         sourceRevision: 0,
         retainedEntities: 0,
+        retainedLights: 0,
         retainedVoxelInstances: 0,
         retainedVoxelChunks: 0,
         diagnostics: [],
@@ -430,6 +431,7 @@ interface ProjectOpenedFixture {
       frameKind: string;
       sourceRevision: number;
       retainedEntities: number;
+      retainedLights: number;
       retainedVoxelInstances: number;
       retainedVoxelChunks: number;
       diagnostics: unknown[];

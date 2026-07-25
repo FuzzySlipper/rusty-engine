@@ -47,11 +47,15 @@ test('workspace opens only through the adapter and keeps authority, projection, 
   await store.commitPreview();
 
   const mutation = transport.requests[2];
-  assert.equal(mutation?.type, 'setEntityTranslation');
-  if (mutation?.type === 'setEntityTranslation') {
+  assert.equal(mutation?.type, 'setSceneObjectTransform');
+  if (mutation?.type === 'setSceneObjectTransform') {
     assert.equal(mutation.expectedProjectHash, 'hash-before');
     assert.equal(mutation.expectedSceneRevision, 11);
-    assert.deepEqual(mutation.translation, [4.5, 2, 3]);
+    assert.deepEqual(mutation.transform, {
+      translation: [4.5, 2, 3],
+      rotation: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+    });
   }
   assert.equal(store.snapshot().authoringDocument?.identity.projectHash, 'hash-after');
   assert.equal(store.snapshot().preview, null);
@@ -144,7 +148,7 @@ class FixtureTransport implements StudioAdapterTransport {
         projectResponse('projectOpened', request.requestId, false, this.openedProjectId),
       );
     }
-    if (request.type === 'setEntityTranslation') {
+    if (request.type === 'setSceneObjectTransform') {
       if (this.rejectMutation) {
         return Promise.resolve({
           type: 'rejected',
@@ -154,18 +158,10 @@ class FixtureTransport implements StudioAdapterTransport {
         });
       }
       return Promise.resolve({
-        type: 'entityTranslationApplied',
+        type: 'projectMutationApplied',
         protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
         requestId: request.requestId,
-        receipt: {
-          entityId: request.entityId,
-          translation: request.translation,
-          projectHashBefore: 'hash-before',
-          projectHashAfter: 'hash-after',
-          sceneRevisionBefore: 11,
-          sceneRevisionAfter: 12,
-          contentCandidateHash: 'candidate-hash',
-        },
+        receipt: { kind: 'sceneObjectTransformSet', entityId: request.entityId },
         project: projectReadout(true),
       });
     }
@@ -187,10 +183,10 @@ function described(requestId: string): unknown {
     requestId,
     adapter: {
       adapterId: 'rusty-engine-demo.loading-bay',
-      adapterVersion: 4,
+      adapterVersion: 5,
       protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
       projectKind: 'loadingBayProject',
-      projectSchemaVersion: 9,
+      projectSchemaVersion: 10,
       operations: STUDIO_ADAPTER_OPERATIONS,
     },
   };
@@ -217,8 +213,8 @@ function projectReadout(changed: boolean, projectId = 'loading-bay'): unknown {
       projectId,
       name: 'Loading Bay',
       entryScene: 'scene/loading-bay',
-      sourceSchemaVersion: 9,
-      currentSchemaVersion: 9,
+      sourceSchemaVersion: 10,
+      currentSchemaVersion: 10,
       projectHash: changed ? 'hash-after' : 'hash-before',
       sceneRevision: changed ? 12 : 11,
       relativeProjectFile: 'content/projects/loading-bay.project.json',
@@ -318,6 +314,7 @@ function projectReadout(changed: boolean, projectId = 'loading-bay'): unknown {
       frameKind: 'complete',
       sourceRevision: changed ? 12 : 11,
       retainedEntities: 1,
+      retainedLights: 0,
       retainedVoxelInstances: 0,
       retainedVoxelChunks: 0,
       diagnostics: [],

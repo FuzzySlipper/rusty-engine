@@ -16,6 +16,10 @@ import type {
   VoxelReadout,
   VoxelHistoryRevertPreview,
   ProjectMutationReceipt,
+  StoredCollision,
+  StoredKinematic,
+  StudioSceneAppearance,
+  StudioSceneObjectDraft,
   VoxelAuthoringReadout,
 } from '@rusty-engine/studio-adapter-client';
 import {
@@ -69,8 +73,26 @@ export interface LiveProjectionView {
 
 export interface TransformPreviewState {
   readonly entityId: number;
-  readonly original: readonly [number, number, number];
+  readonly original: Transform;
   readonly translation: readonly [number, number, number];
+  readonly rotation: readonly [number, number, number, number];
+  readonly scale: readonly [number, number, number];
+}
+
+export interface CreateProjectInput {
+  readonly root: string;
+  readonly projectFile: string;
+  readonly projectId: string;
+  readonly name: string;
+  readonly entryScene: string;
+  readonly entrySceneName: string;
+}
+
+export interface SaveProjectAsInput {
+  readonly root: string;
+  readonly projectFile: string;
+  readonly projectId: string;
+  readonly name: string;
 }
 
 export interface EditorSelectionState {
@@ -193,6 +215,130 @@ export class StudioWorkspaceStore {
     }
   }
 
+  async createProject(input: CreateProjectInput): Promise<void> {
+    if (!(await this.connect())) return;
+    this.#patch({ operation: 'opening', lastError: null, activeMenu: null });
+    try {
+      const response = await this.#client.createProject(input);
+      this.#acceptProject(response.project, true);
+    } catch (error) {
+      this.#operationFailed(error);
+    }
+  }
+
+  async saveProjectAs(input: SaveProjectAsInput): Promise<void> {
+    const document = this.#snapshot().authoringDocument;
+    if (document === null) return;
+    this.#patch({ operation: 'committing', lastError: null, activeMenu: null });
+    try {
+      const response = await this.#client.saveProjectAs({
+        ...input,
+        expectedProjectHash: document.identity.projectHash,
+      });
+      this.#acceptProject(response.project, true);
+    } catch (error) {
+      this.#operationFailed(error);
+    }
+  }
+
+  async createScene(sceneId: string, name: string, makeEntry: boolean): Promise<void> {
+    await this.#mutateProject((document) => this.#client.createScene({
+      expectedProjectHash: document.identity.projectHash,
+      sceneId,
+      name,
+      makeEntry,
+    }), makeEntry);
+  }
+
+  async renameScene(sceneId: string, name: string): Promise<void> {
+    await this.#mutateProject((document) => this.#client.renameScene({
+      expectedProjectHash: document.identity.projectHash,
+      sceneId,
+      name,
+    }));
+  }
+
+  async deleteScene(sceneId: string): Promise<void> {
+    await this.#mutateProject((document) => this.#client.deleteScene({
+      expectedProjectHash: document.identity.projectHash,
+      sceneId,
+    }), true);
+  }
+
+  async setEntryScene(sceneId: string): Promise<void> {
+    await this.#mutateProject((document) => this.#client.setEntryScene({
+      expectedProjectHash: document.identity.projectHash,
+      sceneId,
+    }), true);
+  }
+
+  async createSceneObject(object: StudioSceneObjectDraft): Promise<void> {
+    await this.#mutateProject((document) => this.#client.createSceneObject({
+      expectedProjectHash: document.identity.projectHash,
+      expectedSceneRevision: document.identity.sceneRevision,
+      object,
+    }));
+  }
+
+  async deleteSceneObject(entityId: number): Promise<void> {
+    await this.#mutateProject((document) => this.#client.deleteSceneObject({
+      expectedProjectHash: document.identity.projectHash,
+      expectedSceneRevision: document.identity.sceneRevision,
+      entityId,
+    }));
+  }
+
+  async renameSceneObject(entityId: number, name: string): Promise<void> {
+    await this.#mutateProject((document) => this.#client.renameSceneObject({
+      expectedProjectHash: document.identity.projectHash,
+      expectedSceneRevision: document.identity.sceneRevision,
+      entityId,
+      name,
+    }));
+  }
+
+  async reparentSceneObject(
+    entityId: number,
+    parentEntityId: number | null,
+    childOrder: number,
+  ): Promise<void> {
+    await this.#mutateProject((document) => this.#client.reparentSceneObject({
+      expectedProjectHash: document.identity.projectHash,
+      expectedSceneRevision: document.identity.sceneRevision,
+      entityId,
+      parentEntityId,
+      childOrder,
+    }));
+  }
+
+  async setSceneObjectAppearance(
+    entityId: number,
+    appearance: StudioSceneAppearance,
+  ): Promise<void> {
+    await this.#mutateProject((document) => this.#client.setSceneObjectAppearance({
+      expectedProjectHash: document.identity.projectHash,
+      expectedSceneRevision: document.identity.sceneRevision,
+      entityId,
+      appearance,
+    }));
+  }
+
+  async setEntityCollision(entityId: number, collision: StoredCollision | null): Promise<void> {
+    await this.#mutateProject((document) => this.#client.setEntityCollision({
+      expectedProjectHash: document.identity.projectHash,
+      entityId,
+      collision,
+    }));
+  }
+
+  async setEntityKinematic(entityId: number, kinematic: StoredKinematic | null): Promise<void> {
+    await this.#mutateProject((document) => this.#client.setEntityKinematic({
+      expectedProjectHash: document.identity.projectHash,
+      entityId,
+      kinematic,
+    }));
+  }
+
   async refreshProject(): Promise<void> {
     if (this.#snapshot().authoringDocument === null) return;
     this.#patch({ operation: 'refreshing', lastError: null });
@@ -277,7 +423,13 @@ export class StudioWorkspaceStore {
     const translation = node.localTransform.translation;
     this.#patch({
       selection: { sceneNodeId: node.nodeId, entityId, source: 'inspector' },
-      preview: { entityId, original: translation, translation },
+      preview: {
+        entityId,
+        original: node.localTransform,
+        translation,
+        rotation: node.localTransform.rotation,
+        scale: node.localTransform.scale,
+      },
       lastError: null,
     });
   }
@@ -288,6 +440,22 @@ export class StudioWorkspaceStore {
     const translation: [number, number, number] = [...preview.translation];
     translation[axis] = value;
     this.#patch({ preview: { ...preview, translation } });
+  }
+
+  setPreviewRotationAxis(axis: 0 | 1 | 2 | 3, value: number): void {
+    const preview = this.#snapshot().preview;
+    if (preview === null) return;
+    const rotation: [number, number, number, number] = [...preview.rotation];
+    rotation[axis] = value;
+    this.#patch({ preview: { ...preview, rotation } });
+  }
+
+  setPreviewScaleAxis(axis: 0 | 1 | 2, value: number): void {
+    const preview = this.#snapshot().preview;
+    if (preview === null) return;
+    const scale: [number, number, number] = [...preview.scale];
+    scale[axis] = value;
+    this.#patch({ preview: { ...preview, scale } });
   }
 
   cancelPreview(): void {
@@ -301,11 +469,15 @@ export class StudioWorkspaceStore {
     if (preview === null || document === null) return;
     this.#patch({ operation: 'committing', lastError: null });
     try {
-      const response = await this.#client.setEntityTranslation({
+      const response = await this.#client.setSceneObjectTransform({
         expectedProjectHash: document.identity.projectHash,
         expectedSceneRevision: document.identity.sceneRevision,
         entityId: preview.entityId,
-        translation: preview.translation,
+        transform: {
+          translation: preview.translation,
+          rotation: preview.rotation,
+          scale: preview.scale,
+        },
       });
       this.#acceptProject(response.project, false);
       this.#patch({ preview: null });
@@ -725,6 +897,21 @@ export class StudioWorkspaceStore {
     });
   }
 
+  async #mutateProject(
+    run: (document: AuthoringDocumentView) => Promise<ProjectMutationAppliedResponse>,
+    resetSelection = false,
+  ): Promise<void> {
+    const document = this.#snapshot().authoringDocument;
+    if (document === null || this.#snapshot().operation !== 'idle') return;
+    this.#patch({ operation: 'committing', lastError: null, activeMenu: null });
+    try {
+      const response = await run(document);
+      this.#acceptProject(response.project, resetSelection);
+    } catch (error) {
+      this.#operationFailed(error);
+    }
+  }
+
   #acceptVoxelReadout(readout: VoxelReadout, message: string): void {
     this.#patch({
       operation: 'idle',
@@ -807,6 +994,18 @@ function acceptedSelection(
 
 function mutationMessage(receipt: ProjectMutationReceipt): string {
   switch (receipt.kind) {
+    case 'sceneCreated': return `Scene ${receipt.sceneId} created${receipt.madeEntry ? ' and opened' : ''}.`;
+    case 'sceneRenamed': return `Scene ${receipt.sceneId} renamed.`;
+    case 'sceneDeleted': return `Scene ${receipt.sceneId} deleted.`;
+    case 'entrySceneSet': return `Scene ${receipt.sceneId} is now the entry scene.`;
+    case 'sceneObjectCreated': return `Entity ${String(receipt.entityId)} created.`;
+    case 'sceneObjectDeleted': return `Entity ${String(receipt.entityId)} and ${String(receipt.removedObjects - 1)} descendants deleted.`;
+    case 'sceneObjectRenamed': return `Entity ${String(receipt.entityId)} renamed.`;
+    case 'sceneObjectReparented': return `Entity ${String(receipt.entityId)} reparented.`;
+    case 'sceneObjectTransformSet': return `Entity ${String(receipt.entityId)} transform stored.`;
+    case 'sceneObjectAppearanceSet': return `Entity ${String(receipt.entityId)} appearance stored.`;
+    case 'entityCollisionSet': return `Entity ${String(receipt.entityId)} collision ${receipt.attached ? 'attached' : 'removed'}.`;
+    case 'entityKinematicSet': return `Entity ${String(receipt.entityId)} kinematic data ${receipt.attached ? 'attached' : 'removed'}.`;
     case 'materialUpserted': return `Material ${receipt.assetId} stored.`;
     case 'voxelAssetInitialized': return `Voxel asset ${receipt.assetId} initialized.`;
     case 'voxelAssetDuplicated': return `Duplicated ${receipt.sourceAssetId} to ${receipt.targetAssetId}.`;

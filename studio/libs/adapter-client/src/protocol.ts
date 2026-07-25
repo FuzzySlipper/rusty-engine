@@ -38,14 +38,28 @@ import {
 
 export type * from './voxel-protocol.js';
 
-export const STUDIO_ADAPTER_PROTOCOL_VERSION = 4 as const;
+export const STUDIO_ADAPTER_PROTOCOL_VERSION = 5 as const;
 export const MAX_STUDIO_ADAPTER_REQUEST_BYTES = 256 * 1024;
 export const MAX_STUDIO_ADAPTER_RESPONSE_BYTES = 32 * 1024 * 1024;
 
 export type StudioAdapterRequest =
   | DescribeRequest
   | OpenProjectRequest
+  | CreateProjectRequest
+  | SaveProjectAsRequest
   | ReadProjectRequest
+  | CreateSceneRequest
+  | RenameSceneRequest
+  | DeleteSceneRequest
+  | SetEntrySceneRequest
+  | CreateSceneObjectRequest
+  | DeleteSceneObjectRequest
+  | RenameSceneObjectRequest
+  | ReparentSceneObjectRequest
+  | SetSceneObjectTransformRequest
+  | SetSceneObjectAppearanceRequest
+  | SetEntityCollisionRequest
+  | SetEntityKinematicRequest
   | SetEntityTranslationRequest
   | UpsertMaterialRequest
   | InitializeVoxelAssetRequest
@@ -93,8 +107,163 @@ export interface OpenProjectRequest extends RequestHeader {
   readonly projectFile: string;
 }
 
+export interface CreateProjectRequest extends RequestHeader {
+  readonly type: 'createProject';
+  readonly root: string;
+  readonly projectFile: string;
+  readonly projectId: string;
+  readonly name: string;
+  readonly entryScene: string;
+  readonly entrySceneName: string;
+}
+
+export interface SaveProjectAsRequest extends RequestHeader {
+  readonly type: 'saveProjectAs';
+  readonly expectedProjectHash: string;
+  readonly root: string;
+  readonly projectFile: string;
+  readonly projectId: string;
+  readonly name: string;
+}
+
 export interface ReadProjectRequest extends RequestHeader {
   readonly type: 'readProject';
+}
+
+export interface CreateSceneRequest extends RequestHeader {
+  readonly type: 'createScene';
+  readonly expectedProjectHash: string;
+  readonly sceneId: string;
+  readonly name: string;
+  readonly makeEntry: boolean;
+}
+
+export interface RenameSceneRequest extends RequestHeader {
+  readonly type: 'renameScene';
+  readonly expectedProjectHash: string;
+  readonly sceneId: string;
+  readonly name: string;
+}
+
+export interface DeleteSceneRequest extends RequestHeader {
+  readonly type: 'deleteScene';
+  readonly expectedProjectHash: string;
+  readonly sceneId: string;
+}
+
+export interface SetEntrySceneRequest extends RequestHeader {
+  readonly type: 'setEntryScene';
+  readonly expectedProjectHash: string;
+  readonly sceneId: string;
+}
+
+export interface CreateSceneObjectRequest extends RequestHeader {
+  readonly type: 'createSceneObject';
+  readonly expectedProjectHash: string;
+  readonly expectedSceneRevision: number;
+  readonly object: StudioSceneObjectDraft;
+}
+
+export interface DeleteSceneObjectRequest extends RequestHeader {
+  readonly type: 'deleteSceneObject';
+  readonly expectedProjectHash: string;
+  readonly expectedSceneRevision: number;
+  readonly entityId: number;
+}
+
+export interface RenameSceneObjectRequest extends RequestHeader {
+  readonly type: 'renameSceneObject';
+  readonly expectedProjectHash: string;
+  readonly expectedSceneRevision: number;
+  readonly entityId: number;
+  readonly name: string;
+}
+
+export interface ReparentSceneObjectRequest extends RequestHeader {
+  readonly type: 'reparentSceneObject';
+  readonly expectedProjectHash: string;
+  readonly expectedSceneRevision: number;
+  readonly entityId: number;
+  readonly parentEntityId: number | null;
+  readonly childOrder: number;
+}
+
+export interface SetSceneObjectTransformRequest extends RequestHeader {
+  readonly type: 'setSceneObjectTransform';
+  readonly expectedProjectHash: string;
+  readonly expectedSceneRevision: number;
+  readonly entityId: number;
+  readonly transform: Transform;
+}
+
+export interface SetSceneObjectAppearanceRequest extends RequestHeader {
+  readonly type: 'setSceneObjectAppearance';
+  readonly expectedProjectHash: string;
+  readonly expectedSceneRevision: number;
+  readonly entityId: number;
+  readonly appearance: StudioSceneAppearance;
+}
+
+export interface SetEntityCollisionRequest extends RequestHeader {
+  readonly type: 'setEntityCollision';
+  readonly expectedProjectHash: string;
+  readonly entityId: number;
+  readonly collision: StoredCollision | null;
+}
+
+export interface SetEntityKinematicRequest extends RequestHeader {
+  readonly type: 'setEntityKinematic';
+  readonly expectedProjectHash: string;
+  readonly entityId: number;
+  readonly kinematic: StoredKinematic | null;
+}
+
+export interface StudioSceneObjectDraft {
+  readonly entityId: number;
+  readonly name: string;
+  readonly parentEntityId: number | null;
+  readonly childOrder: number;
+  readonly transform: Transform;
+  readonly appearance: StudioSceneAppearance;
+  readonly collision: StoredCollision | null;
+  readonly kinematic: StoredKinematic | null;
+}
+
+export type StudioSceneAppearance =
+  | { readonly kind: 'empty' }
+  | { readonly kind: 'staticMesh'; readonly asset: string; readonly visible: boolean }
+  | { readonly kind: 'light'; readonly light: StoredLight };
+
+export type StoredLight =
+  | StoredBaseLight<'ambient'>
+  | StoredBaseLight<'directional'>
+  | (StoredBaseLight<'point'> & {
+      readonly range: number | null;
+      readonly decay: number;
+    })
+  | (StoredBaseLight<'spot'> & {
+      readonly range: number | null;
+      readonly decay: number;
+      readonly outerAngleRadians: number;
+      readonly penumbra: number;
+    });
+
+interface StoredBaseLight<Kind extends string> {
+  readonly kind: Kind;
+  readonly color: readonly [number, number, number];
+  readonly intensity: number;
+  readonly enabled: boolean;
+  readonly shadows: boolean;
+}
+
+export interface StoredCollision {
+  readonly enabled: boolean;
+  readonly staticCollider: boolean;
+}
+
+export interface StoredKinematic {
+  readonly halfExtents: readonly [number, number, number];
+  readonly velocity: readonly [number, number, number];
 }
 
 export interface SetEntityTranslationRequest extends RequestHeader {
@@ -351,6 +520,8 @@ export interface CloseProjectRequest extends RequestHeader {
 export type StudioAdapterResponse =
   | DescribedResponse
   | ProjectOpenedResponse
+  | ProjectCreatedResponse
+  | ProjectSavedAsResponse
   | ProjectReadResponse
   | EntityTranslationAppliedResponse
   | ProjectMutationAppliedResponse
@@ -371,6 +542,16 @@ export interface DescribedResponse extends ResponseHeader {
 
 export interface ProjectOpenedResponse extends ResponseHeader {
   readonly type: 'projectOpened';
+  readonly project: StudioProjectReadout;
+}
+
+export interface ProjectCreatedResponse extends ResponseHeader {
+  readonly type: 'projectCreated';
+  readonly project: StudioProjectReadout;
+}
+
+export interface ProjectSavedAsResponse extends ResponseHeader {
+  readonly type: 'projectSavedAs';
   readonly project: StudioProjectReadout;
 }
 
@@ -450,7 +631,21 @@ interface ResponseHeader {
 export const STUDIO_ADAPTER_OPERATIONS = [
   'describe',
   'openProject',
+  'createProject',
+  'saveProjectAs',
   'readProject',
+  'createScene',
+  'renameScene',
+  'deleteScene',
+  'setEntryScene',
+  'createSceneObject',
+  'deleteSceneObject',
+  'renameSceneObject',
+  'reparentSceneObject',
+  'setSceneObjectTransform',
+  'setSceneObjectAppearance',
+  'setEntityCollision',
+  'setEntityKinematic',
   'setEntityTranslation',
   'upsertMaterial',
   'initializeVoxelAsset',
@@ -650,6 +845,7 @@ export interface ProjectionReadout {
   readonly frameKind: 'complete';
   readonly sourceRevision: number;
   readonly retainedEntities: number;
+  readonly retainedLights: number;
   readonly retainedVoxelInstances: number;
   readonly retainedVoxelChunks: number;
   readonly diagnostics: readonly ProjectionDiagnosticReadout[];
@@ -696,11 +892,13 @@ export function decodeStudioAdapterResponse(input: unknown): StudioAdapterRespon
       return input as DescribedResponse;
     }
     case 'projectOpened':
+    case 'projectCreated':
+    case 'projectSavedAs':
     case 'projectRead': {
       const value = record(input, '$', ['type', 'protocolVersion', 'requestId', 'project']);
       responseHeader(value);
       projectReadout(value['project'], '$.project');
-      return input as ProjectOpenedResponse | ProjectReadResponse;
+      return input as ProjectOpenedResponse | ProjectCreatedResponse | ProjectSavedAsResponse | ProjectReadResponse;
     }
     case 'entityTranslationApplied': {
       const value = record(input, '$', [
@@ -847,7 +1045,7 @@ function adapterDescription(input: unknown, path: string): void {
   );
   const expected = STUDIO_ADAPTER_OPERATIONS;
   if (operations.length !== expected.length || operations.some((entry, index) => entry !== expected[index])) {
-    fail(`${path}.operations`, 'must name the protocol 4 operation set in order');
+    fail(`${path}.operations`, 'must name the protocol 5 operation set in order');
   }
 }
 
@@ -1152,6 +1350,7 @@ function projectionReadout(input: unknown, path: string): void {
     'frameKind',
     'sourceRevision',
     'retainedEntities',
+    'retainedLights',
     'retainedVoxelInstances',
     'retainedVoxelChunks',
     'diagnostics',
@@ -1159,6 +1358,7 @@ function projectionReadout(input: unknown, path: string): void {
   choice(value['frameKind'], `${path}.frameKind`, ['complete']);
   integer(value['sourceRevision'], `${path}.sourceRevision`);
   integer(value['retainedEntities'], `${path}.retainedEntities`);
+  integer(value['retainedLights'], `${path}.retainedLights`);
   integer(value['retainedVoxelInstances'], `${path}.retainedVoxelInstances`);
   integer(value['retainedVoxelChunks'], `${path}.retainedVoxelChunks`);
   list(value['diagnostics'], `${path}.diagnostics`).forEach((entry, index) => {

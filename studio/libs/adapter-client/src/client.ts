@@ -6,8 +6,10 @@ import {
   type EntityTranslationAppliedResponse,
   type ProjectMutationAppliedResponse,
   type ProjectClosedResponse,
+  type ProjectCreatedResponse,
   type ProjectOpenedResponse,
   type ProjectReadResponse,
+  type ProjectSavedAsResponse,
   type StudioAdapterRequest,
   type StudioAdapterResponse,
   type VoxelConversionDiscardedResponse,
@@ -77,6 +79,14 @@ export class StudioAdapterClient {
     );
   }
 
+  createProject(input: RequestInput<'createProject'>): Promise<ProjectCreatedResponse> {
+    return this.#exchange(this.#request('createProject', input), 'projectCreated');
+  }
+
+  saveProjectAs(input: RequestInput<'saveProjectAs'>): Promise<ProjectSavedAsResponse> {
+    return this.#exchange(this.#request('saveProjectAs', input), 'projectSavedAs');
+  }
+
   readProject(): Promise<ProjectReadResponse> {
     return this.#exchange(
       {
@@ -86,6 +96,70 @@ export class StudioAdapterClient {
       },
       'projectRead',
     );
+  }
+
+  createScene(input: RequestInput<'createScene'>): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('createScene', input);
+  }
+
+  renameScene(input: RequestInput<'renameScene'>): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('renameScene', input);
+  }
+
+  deleteScene(input: RequestInput<'deleteScene'>): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('deleteScene', input);
+  }
+
+  setEntryScene(input: RequestInput<'setEntryScene'>): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('setEntryScene', input);
+  }
+
+  createSceneObject(
+    input: RequestInput<'createSceneObject'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('createSceneObject', input);
+  }
+
+  deleteSceneObject(
+    input: RequestInput<'deleteSceneObject'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('deleteSceneObject', input);
+  }
+
+  renameSceneObject(
+    input: RequestInput<'renameSceneObject'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('renameSceneObject', input);
+  }
+
+  reparentSceneObject(
+    input: RequestInput<'reparentSceneObject'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('reparentSceneObject', input);
+  }
+
+  setSceneObjectTransform(
+    input: RequestInput<'setSceneObjectTransform'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('setSceneObjectTransform', input);
+  }
+
+  setSceneObjectAppearance(
+    input: RequestInput<'setSceneObjectAppearance'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('setSceneObjectAppearance', input);
+  }
+
+  setEntityCollision(
+    input: RequestInput<'setEntityCollision'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('setEntityCollision', input);
+  }
+
+  setEntityKinematic(
+    input: RequestInput<'setEntityKinematic'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('setEntityKinematic', input);
   }
 
   setEntityTranslation(
@@ -340,6 +414,18 @@ export class StudioAdapterClient {
 }
 
 type MutationRequestType =
+  | 'createScene'
+  | 'renameScene'
+  | 'deleteScene'
+  | 'setEntryScene'
+  | 'createSceneObject'
+  | 'deleteSceneObject'
+  | 'renameSceneObject'
+  | 'reparentSceneObject'
+  | 'setSceneObjectTransform'
+  | 'setSceneObjectAppearance'
+  | 'setEntityCollision'
+  | 'setEntityKinematic'
   | 'upsertMaterial'
   | 'initializeVoxelAsset'
   | 'duplicateVoxelAsset'
