@@ -22,12 +22,12 @@ for path in "${required[@]}"; do
   fi
 done
 
-if rg -n 'studio/(apps|libs)|rusty-engine-studio' Cargo.toml pnpm-lock.yaml; then
+if grep -En 'studio/(apps|libs)|rusty-engine-studio' Cargo.toml pnpm-lock.yaml; then
   echo "ordinary Engine workspaces must not include Studio" >&2
   exit 1
 fi
 
-if rg -n '(@asha/|\.\./asha-(engine|studio|testing)|/home/dev/asha-(engine|studio|testing))' \
+if grep -En '(@asha/|\.\./asha-(engine|studio|testing)|/home/dev/asha-(engine|studio|testing))' \
   studio/package.json studio/pnpm-lock.yaml studio/pnpm-workspace.yaml studio/nx.json; then
   echo "Studio operational workspace contains an Asha or sibling-checkout dependency" >&2
   exit 1
@@ -40,7 +40,7 @@ if find studio \
   exit 1
 fi
 
-tracked_cache=$(git ls-files studio | rg '(^|/)(node_modules|\.nx|dist|coverage|playwright-report|test-results)(/|$)' || true)
+tracked_cache=$(git ls-files studio | grep -E '(^|/)(node_modules|\.nx|dist|coverage|playwright-report|test-results)(/|$)' || true)
 if [[ -n "$tracked_cache" ]]; then
   echo "Studio workspace tracks cache or generated output:" >&2
   echo "$tracked_cache" >&2

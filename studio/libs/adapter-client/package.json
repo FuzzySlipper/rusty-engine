@@ -12,7 +12,10 @@
     }
   },
   "scripts": {
+    "build:render-contracts": "tsc --project ../../../render/packages/render-contracts/tsconfig.consumer.json",
+    "prebuild": "pnpm run build:render-contracts",
     "build": "tsc --project tsconfig.json",
+    "pretypecheck": "pnpm run build:render-contracts",
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "test": "pnpm run build && node --test 'dist/**/*.test.js'"
   },
