@@ -405,6 +405,7 @@ fn collision_scene_from_asset(asset: &VoxelAsset) -> Result<VoxelCollisionScene,
 
 fn provenance_kind_label(kind: VoxelAssetProvenanceKind) -> &'static str {
     match kind {
+        VoxelAssetProvenanceKind::Authored => "authored",
         VoxelAssetProvenanceKind::ConvertedStaticMesh => "convertedStaticMesh",
         VoxelAssetProvenanceKind::GeneratedEnvironment => "generatedEnvironment",
     }

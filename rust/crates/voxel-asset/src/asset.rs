@@ -105,6 +105,9 @@ pub struct VoxelAssetProvenance {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum VoxelAssetProvenanceKind {
+    /// A bounded authoring volume initialized and edited through a named host
+    /// operation rather than derived from an imported mesh.
+    Authored,
     ConvertedStaticMesh,
     /// Deterministic cells produced by a named, versioned environment generator.
     GeneratedEnvironment,

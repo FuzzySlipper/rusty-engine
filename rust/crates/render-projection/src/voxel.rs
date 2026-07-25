@@ -342,7 +342,11 @@ fn root_node(instance: &VoxelProjectionInstance<'_>) -> RenderNode {
         metadata: RenderMetadata {
             source_entity: None,
             source_scene_node: None,
-            tags: vec!["voxel-instance".to_string()],
+            tags: vec![
+                format!("voxel-asset:{}", instance.asset_id),
+                "voxel-instance".to_string(),
+                format!("voxel-instance:{}", instance.instance_id),
+            ],
             label: Some(instance.instance_id.clone()),
         },
     }
@@ -361,7 +365,10 @@ fn chunk_node(instance_id: &str, chunk: &VoxelMeshChunk) -> RenderNode {
         metadata: RenderMetadata {
             source_entity: None,
             source_scene_node: None,
-            tags: vec!["voxel-chunk".to_string()],
+            tags: vec![
+                "voxel-chunk".to_string(),
+                format!("voxel-instance:{instance_id}"),
+            ],
             label: Some(format!(
                 "{instance_id} [{}, {}, {}]",
                 chunk.chunk[0], chunk.chunk[1], chunk.chunk[2]
@@ -503,6 +510,27 @@ mod tests {
         let materials = BTreeMap::from([(1, material(1))]);
         let mut projector = VoxelRenderProjector::new();
         let first = projector.project(&instances, &materials).unwrap();
+        let root = first
+            .frame
+            .ops
+            .iter()
+            .find_map(|operation| match operation {
+                RenderDiff::Create { node, .. }
+                    if node.metadata.tags.contains(&"voxel-instance".to_string()) =>
+                {
+                    Some(node)
+                }
+                _ => None,
+            })
+            .expect("voxel projection creates an instance root");
+        assert!(root
+            .metadata
+            .tags
+            .contains(&"voxel-instance:room".to_string()));
+        assert!(root
+            .metadata
+            .tags
+            .contains(&"voxel-asset:voxel-object/room".to_string()));
         let handle = projector.chunk_handle("room", [0, 0, 0]).unwrap();
         assert!(first.frame.ops.iter().any(|operation| matches!(
             operation,
