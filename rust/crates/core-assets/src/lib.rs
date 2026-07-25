@@ -64,6 +64,8 @@ pub enum AssetKind {
     Material,
     /// Authored / static (non-voxel) mesh asset.
     StaticMesh,
+    /// Authored skinned mesh with a closed set of named animation clips.
+    AnimatedMesh,
     /// A single non-UI sprite / billboard.
     Sprite,
     /// A sprite sheet / atlas of frames.
@@ -89,6 +91,7 @@ impl AssetKind {
     pub const ALL: &'static [AssetKind] = &[
         AssetKind::Material,
         AssetKind::StaticMesh,
+        AssetKind::AnimatedMesh,
         AssetKind::Sprite,
         AssetKind::SpriteSheet,
         AssetKind::Texture,
@@ -106,6 +109,7 @@ impl AssetKind {
         match self {
             AssetKind::Material => "material",
             AssetKind::StaticMesh => "mesh",
+            AssetKind::AnimatedMesh => "mesh-animation",
             AssetKind::Sprite => "sprite",
             AssetKind::SpriteSheet => "sprite-sheet",
             AssetKind::Texture => "texture",
@@ -577,6 +581,8 @@ pub mod markers {
         Material => Material);
     marker!(/// Marker for static-mesh references.
         StaticMesh => StaticMesh);
+    marker!(/// Marker for animated-mesh references.
+        AnimatedMesh => AnimatedMesh);
     marker!(/// Marker for sprite references.
         Sprite => Sprite);
     marker!(/// Marker for sprite-sheet references.
@@ -616,6 +622,11 @@ mod tests {
                 "mesh/factory-belt-straight",
                 AssetKind::StaticMesh,
                 "factory-belt-straight",
+            ),
+            (
+                "mesh-animation/retro-character",
+                AssetKind::AnimatedMesh,
+                "retro-character",
             ),
             (
                 "sprite/person-hard-hat",

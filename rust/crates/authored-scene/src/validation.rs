@@ -446,6 +446,7 @@ pub fn validate_scene(document: &FlatSceneDocument) -> SceneValidationReport {
             }
             SceneNodeKind::EmptyGroup
             | SceneNodeKind::StaticMesh(_)
+            | SceneNodeKind::AnimatedMesh(_)
             | SceneNodeKind::Sprite(_)
             | SceneNodeKind::VoxelVolume(_) => {}
         }

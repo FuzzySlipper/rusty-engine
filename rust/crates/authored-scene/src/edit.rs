@@ -362,6 +362,7 @@ fn upgrade_schema_for_kind(document: &mut FlatSceneDocument, kind: &SceneNodeKin
         SceneNodeKind::EntityInstance(_) | SceneNodeKind::Bootstrap(_) => 3,
         SceneNodeKind::EmptyGroup
         | SceneNodeKind::StaticMesh(_)
+        | SceneNodeKind::AnimatedMesh(_)
         | SceneNodeKind::Sprite(_)
         | SceneNodeKind::VoxelVolume(_) => 1,
     };

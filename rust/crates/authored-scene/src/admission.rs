@@ -376,6 +376,7 @@ fn resolve_references(
             }
             SceneNodeKind::EmptyGroup
             | SceneNodeKind::StaticMesh(_)
+            | SceneNodeKind::AnimatedMesh(_)
             | SceneNodeKind::Sprite(_)
             | SceneNodeKind::VoxelVolume(_)
             | SceneNodeKind::Light(_)

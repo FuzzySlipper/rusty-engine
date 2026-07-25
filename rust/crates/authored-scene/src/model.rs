@@ -55,6 +55,7 @@ pub struct SceneBootstrapBindings {
 pub enum SceneNodeKind {
     EmptyGroup,
     StaticMesh(AssetReference),
+    AnimatedMesh(AssetReference),
     Sprite(AssetReference),
     VoxelVolume(AssetReference),
     Light(SceneLight),
@@ -67,6 +68,7 @@ impl SceneNodeKind {
     pub const fn expected_asset_kind(&self) -> Option<AssetKind> {
         match self {
             Self::StaticMesh(_) => Some(AssetKind::StaticMesh),
+            Self::AnimatedMesh(_) => Some(AssetKind::AnimatedMesh),
             Self::Sprite(_) => Some(AssetKind::Sprite),
             Self::VoxelVolume(_) => Some(AssetKind::VoxelVolume),
             Self::EmptyGroup
@@ -79,7 +81,10 @@ impl SceneNodeKind {
 
     pub const fn asset(&self) -> Option<&AssetReference> {
         match self {
-            Self::StaticMesh(asset) | Self::Sprite(asset) | Self::VoxelVolume(asset) => Some(asset),
+            Self::StaticMesh(asset)
+            | Self::AnimatedMesh(asset)
+            | Self::Sprite(asset)
+            | Self::VoxelVolume(asset) => Some(asset),
             Self::EmptyGroup
             | Self::Light(_)
             | Self::Marker(_)
@@ -92,6 +97,7 @@ impl SceneNodeKind {
         match self {
             Self::EmptyGroup => "emptyGroup",
             Self::StaticMesh(_) => "staticMesh",
+            Self::AnimatedMesh(_) => "animatedMesh",
             Self::Sprite(_) => "sprite",
             Self::VoxelVolume(_) => "voxelVolume",
             Self::Light(_) => "light",

@@ -80,6 +80,7 @@ struct StoredTransform {
 enum StoredNodeKind {
     EmptyGroup,
     StaticMesh { asset: StoredAssetReference },
+    AnimatedMesh { asset: StoredAssetReference },
     Sprite { asset: StoredAssetReference },
     VoxelVolume { asset: StoredAssetReference },
     Light { light: StoredLight },
@@ -373,6 +374,9 @@ impl From<&SceneNodeKind> for StoredNodeKind {
             SceneNodeKind::StaticMesh(asset) => Self::StaticMesh {
                 asset: asset.into(),
             },
+            SceneNodeKind::AnimatedMesh(asset) => Self::AnimatedMesh {
+                asset: asset.into(),
+            },
             SceneNodeKind::Sprite(asset) => Self::Sprite {
                 asset: asset.into(),
             },
@@ -401,6 +405,9 @@ impl StoredNodeKind {
             Self::EmptyGroup => SceneNodeKind::EmptyGroup,
             Self::StaticMesh { asset } => {
                 SceneNodeKind::StaticMesh(asset.into_reference(&format!("{path}.asset"))?)
+            }
+            Self::AnimatedMesh { asset } => {
+                SceneNodeKind::AnimatedMesh(asset.into_reference(&format!("{path}.asset"))?)
             }
             Self::Sprite { asset } => {
                 SceneNodeKind::Sprite(asset.into_reference(&format!("{path}.asset"))?)
