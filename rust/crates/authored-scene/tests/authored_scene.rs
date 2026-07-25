@@ -277,11 +277,24 @@ fn specialized_edits_validate_kinds_and_reconcile_voxel_dependencies() {
     assert_eq!(document.dependencies, [second_voxel]);
     assert_eq!(document.nodes[0].metadata.tags, ["generated"]);
 
+    SceneEditService
+        .apply(
+            &mut document,
+            2,
+            SceneEditCommand::SetKind {
+                id: SceneNodeId::new(1),
+                kind: SceneNodeKind::EmptyGroup,
+            },
+        )
+        .unwrap();
+    assert!(document.dependencies.is_empty());
+    assert!(matches!(document.nodes[0].kind, SceneNodeKind::EmptyGroup));
+
     let before_wrong_kind = document.clone();
     assert!(matches!(
         SceneEditService.apply(
             &mut document,
-            2,
+            3,
             SceneEditCommand::UpdateLight {
                 id: SceneNodeId::new(1),
                 light: SceneLight::Ambient {

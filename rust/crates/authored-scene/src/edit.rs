@@ -69,6 +69,10 @@ pub enum SceneEditCommand {
         id: SceneNodeId,
         transform: SceneTransform,
     },
+    SetKind {
+        id: SceneNodeId,
+        kind: SceneNodeKind,
+    },
     RetargetVoxelAsset {
         id: SceneNodeId,
         asset: AssetReference,
@@ -237,6 +241,14 @@ impl SceneEditService {
                 find_node_mut(&mut next, *id)
                     .ok_or(SceneEditError::MissingObject { id: *id })?
                     .transform = *transform;
+                Some(*id)
+            }
+            SceneEditCommand::SetKind { id, kind } => {
+                let node = find_node_mut(&mut next, *id)
+                    .ok_or(SceneEditError::MissingObject { id: *id })?;
+                node.kind = kind.clone();
+                upgrade_schema_for_kind(&mut next, kind);
+                reconcile_assets = true;
                 Some(*id)
             }
             SceneEditCommand::RetargetVoxelAsset { id, asset, tags } => {
