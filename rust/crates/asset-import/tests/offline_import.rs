@@ -243,6 +243,33 @@ fn sidecar_and_output_publication_roll_back_as_one_transaction() {
 }
 
 #[test]
+fn sidecar_nested_in_output_is_not_reported_as_successfully_published() {
+    let root = temp_directory("nested-sidecar");
+    let output = root.join("imported");
+    fs::create_dir(&output).unwrap();
+    fs::write(output.join("prior.txt"), b"prior-output").unwrap();
+    let sidecar = output.join("source.meta");
+    fs::write(&sidecar, b"prior-sidecar").unwrap();
+    let plan = plan_import(
+        &uri(),
+        VALID,
+        &ImportContext::default(),
+        ImportMode::Write,
+        None,
+        None,
+    );
+
+    assert!(matches!(
+        publish_directory_with_sidecar_atomically(&plan, &output, &sidecar, b"next-sidecar"),
+        Err(PublicationError::OverlappingTargets { .. })
+    ));
+    assert_eq!(fs::read(output.join("prior.txt")).unwrap(), b"prior-output");
+    assert_eq!(fs::read(&sidecar).unwrap(), b"prior-sidecar");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn dry_run_cannot_be_published() {
     let root = temp_directory("dry-run");
     let output = root.join("imported");

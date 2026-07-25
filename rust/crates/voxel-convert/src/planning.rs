@@ -57,11 +57,27 @@ pub struct VoxelConversionPlan {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedVoxelConversion {
-    pub plan: VoxelConversionPlan,
+    plan: VoxelConversionPlan,
     output: ConversionReceipt,
 }
 
 impl PreparedVoxelConversion {
+    /// Returns the immutable plan snapshot bound to this prepared output.
+    ///
+    /// The plan cannot be replaced or mutated independently of the private
+    /// candidate it authorizes.
+    ///
+    /// ```compile_fail
+    /// use voxel_convert::PreparedVoxelConversion;
+    ///
+    /// fn rewrite_provenance(prepared: &mut PreparedVoxelConversion) {
+    ///     prepared.plan.license_path = Some("licenses/forged.txt".to_owned());
+    /// }
+    /// ```
+    pub fn plan(&self) -> &VoxelConversionPlan {
+        &self.plan
+    }
+
     pub fn candidate(&self) -> &ConversionReceipt {
         &self.output
     }
@@ -147,14 +163,13 @@ pub fn plan_conversion(
         settings_sha256.clone(),
     )?;
 
-    let plan_id = sha256_json(&(
-        "voxel-conversion-plan",
+    let plan_id = conversion_plan_id(
         &request.source,
         &request.target_asset_id,
         &source.receipt.source_path,
         &request.license_path,
         &settings_sha256,
-    ));
+    );
     let mut plan = VoxelConversionPlan {
         plan_id,
         source: request.source.clone(),
@@ -385,10 +400,32 @@ fn validate_prepared_identity(
     expected_plan_hash: &str,
     prepared: &PreparedVoxelConversion,
 ) -> Result<(), ConversionError> {
+    let plan = &prepared.plan;
+    let output = &prepared.output;
+    let provenance = &output.asset.provenance;
     if plan_id != prepared.plan.plan_id
         || expected_plan_hash != prepared.plan.plan_hash
         || conversion_plan_hash(&prepared.plan) != prepared.plan.plan_hash
-        || prepared.output.asset.content_hash != prepared.plan.expected_output_content_hash
+        || conversion_plan_id(
+            &plan.source,
+            &plan.target_asset_id,
+            &plan.source_path,
+            &plan.license_path,
+            &plan.settings_sha256,
+        ) != plan.plan_id
+        || plan_settings_sha256(&plan.settings) != plan.settings_sha256
+        || plan.source.source_sha256 != plan.expected_source_sha256
+        || output.asset.asset_id != plan.target_asset_id
+        || provenance.source_path != plan.source_path
+        || provenance.license_path != plan.license_path
+        || provenance.source_sha256 != plan.expected_source_sha256
+        || provenance.settings_sha256 != plan.settings_sha256
+        || output.source_sha256 != plan.expected_source_sha256
+        || output.settings_sha256 != plan.settings_sha256
+        || output.asset.content_hash != plan.expected_output_content_hash
+        || output.content_hash != plan.expected_output_content_hash
+        || output.output_voxels != plan.estimated_output_voxels
+        || output.bounds != plan.estimated_bounds
     {
         return Err(ConversionError::one(
             "conversion.stalePlan",
@@ -397,6 +434,23 @@ fn validate_prepared_identity(
         ));
     }
     Ok(())
+}
+
+fn conversion_plan_id(
+    source: &MeshSourceRef,
+    target_asset_id: &str,
+    source_path: &str,
+    license_path: &Option<String>,
+    settings_sha256: &str,
+) -> String {
+    sha256_json(&(
+        "voxel-conversion-plan",
+        source,
+        target_asset_id,
+        source_path,
+        license_path,
+        settings_sha256,
+    ))
 }
 
 fn sha256_json(value: &impl Serialize) -> String {

@@ -25,6 +25,10 @@ pub enum PublicationError {
     UnsafeOutputDirectory,
     ExistingOutputIsNotDirectory(PathBuf),
     SidecarTargetIsNotFile(PathBuf),
+    OverlappingTargets {
+        output_directory: PathBuf,
+        sidecar_path: PathBuf,
+    },
     UnsafeRelativePath(String),
     DuplicatePath(String),
     ParentMissing(PathBuf),
@@ -161,6 +165,7 @@ pub fn publish_directory_with_sidecar_atomically(
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty() && *name != "." && *name != "..")
         .ok_or(PublicationError::UnsafeOutputDirectory)?;
+    reject_overlapping_targets(output_directory, sidecar_path)?;
     let (staging, backup) = reserve_file_paths(parent, name)?;
     if let Err(error) = fs::write(&staging, sidecar_bytes) {
         let _ = fs::remove_file(&staging);
@@ -207,6 +212,40 @@ pub fn publish_directory_with_sidecar_atomically(
         None
     };
     Ok(receipt)
+}
+
+fn reject_overlapping_targets(
+    output_directory: &Path,
+    sidecar_path: &Path,
+) -> Result<(), PublicationError> {
+    let output = canonical_target(output_directory)?;
+    let sidecar = canonical_target(sidecar_path)?;
+    if output == sidecar || output.starts_with(&sidecar) || sidecar.starts_with(&output) {
+        return Err(PublicationError::OverlappingTargets {
+            output_directory: output_directory.to_owned(),
+            sidecar_path: sidecar_path.to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn canonical_target(path: &Path) -> Result<PathBuf, PublicationError> {
+    if path.exists() {
+        return Ok(path.canonicalize()?);
+    }
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or(PublicationError::UnsafeOutputDirectory)?;
+    let name = path
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or(PublicationError::UnsafeOutputDirectory)?;
+    if !parent.is_dir() {
+        return Err(PublicationError::ParentMissing(parent.to_owned()));
+    }
+    let parent = parent.canonicalize()?;
+    Ok(parent.join(name))
 }
 
 fn reserve_file_paths(parent: &Path, name: &str) -> Result<(PathBuf, PathBuf), PublicationError> {

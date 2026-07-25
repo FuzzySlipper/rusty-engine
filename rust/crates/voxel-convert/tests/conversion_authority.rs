@@ -6,14 +6,14 @@ use voxel_asset::{
     VoxelConversionOriginPolicy,
 };
 use voxel_convert::{
-    apply_conversion, apply_conversion_and_install, decode_conversion_request,
-    decode_mesh_source_import_request, identity_transform, import_mesh_source, plan_conversion,
-    plan_settings_sha256, preview_conversion, query_model_info, query_model_window,
-    ConversionApplyRequest, ConversionMaterialPolicy, ConversionPlanRequest,
-    ConversionPlanSettings, ConversionPreviewRequest, MeshSourceFormat, MeshSourceImportRequest,
-    TextureChannelLayout, TextureColorSpace, TextureMaterialBinding, TextureMaterialMode,
-    TextureSampleAsset, TextureSamplingPolicy, TextureSourceRef, TextureUvAttributeRef,
-    TextureWrapPolicy, VoxelModelInfoRequest, VoxelModelWindowRequest,
+    apply_conversion, apply_conversion_and_install, conversion_plan_hash,
+    decode_conversion_request, decode_mesh_source_import_request, identity_transform,
+    import_mesh_source, plan_conversion, plan_settings_sha256, preview_conversion,
+    query_model_info, query_model_window, ConversionApplyRequest, ConversionMaterialPolicy,
+    ConversionPlanRequest, ConversionPlanSettings, ConversionPreviewRequest, MeshSourceFormat,
+    MeshSourceImportRequest, TextureChannelLayout, TextureColorSpace, TextureMaterialBinding,
+    TextureMaterialMode, TextureSampleAsset, TextureSamplingPolicy, TextureSourceRef,
+    TextureUvAttributeRef, TextureWrapPolicy, VoxelModelInfoRequest, VoxelModelWindowRequest,
     MAX_CONVERSION_RESOLUTION_AXIS, MAX_MESH_SOURCE_PATH_BYTES,
 };
 
@@ -109,18 +109,18 @@ fn plan_preview_apply_are_hash_guarded_bounded_and_transform_aware() {
     let baseline_request = plan_request(&imported);
     let baseline = plan_conversion(&baseline_request, &imported).unwrap();
     assert_eq!(
-        baseline.plan.settings_sha256,
+        baseline.plan().settings_sha256,
         plan_settings_sha256(&baseline_request.settings)
     );
     assert_eq!(
         baseline.candidate().asset.provenance.settings_sha256,
-        baseline.plan.settings_sha256
+        baseline.plan().settings_sha256
     );
 
     let preview = preview_conversion(
         &ConversionPreviewRequest {
-            plan_id: baseline.plan.plan_id.clone(),
-            expected_plan_hash: baseline.plan.plan_hash.clone(),
+            plan_id: baseline.plan().plan_id.clone(),
+            expected_plan_hash: baseline.plan().plan_hash.clone(),
             max_samples: 2,
         },
         &baseline,
@@ -131,8 +131,8 @@ fn plan_preview_apply_are_hash_guarded_bounded_and_transform_aware() {
 
     let applied = apply_conversion(
         &ConversionApplyRequest {
-            plan_id: baseline.plan.plan_id.clone(),
-            expected_plan_hash: baseline.plan.plan_hash.clone(),
+            plan_id: baseline.plan().plan_id.clone(),
+            expected_plan_hash: baseline.plan().plan_hash.clone(),
             expected_output_hash: Some(preview.output_hash.clone()),
         },
         &baseline,
@@ -144,8 +144,11 @@ fn plan_preview_apply_are_hash_guarded_bounded_and_transform_aware() {
     let mut provenance_request = baseline_request.clone();
     provenance_request.license_path = Some("licenses/replacement.txt".to_owned());
     let changed_provenance = plan_conversion(&provenance_request, &imported).unwrap();
-    assert_ne!(changed_provenance.plan.plan_id, baseline.plan.plan_id);
-    assert_ne!(changed_provenance.plan.plan_hash, baseline.plan.plan_hash);
+    assert_ne!(changed_provenance.plan().plan_id, baseline.plan().plan_id);
+    assert_ne!(
+        changed_provenance.plan().plan_hash,
+        baseline.plan().plan_hash
+    );
     assert_ne!(
         changed_provenance.candidate().asset.content_hash,
         baseline.candidate().asset.content_hash
@@ -160,7 +163,7 @@ fn plan_preview_apply_are_hash_guarded_bounded_and_transform_aware() {
         VoxelConversionOriginPolicy::SourceOrigin;
     transformed_request.settings.transform[12] = 10.0;
     let transformed = plan_conversion(&transformed_request, &imported).unwrap();
-    assert_ne!(transformed.plan.plan_hash, baseline.plan.plan_hash);
+    assert_ne!(transformed.plan().plan_hash, baseline.plan().plan_hash);
     assert_ne!(
         transformed.candidate().asset.voxel_data_hash,
         baseline.candidate().asset.voxel_data_hash
@@ -168,7 +171,7 @@ fn plan_preview_apply_are_hash_guarded_bounded_and_transform_aware() {
 
     let stale = preview_conversion(
         &ConversionPreviewRequest {
-            plan_id: baseline.plan.plan_id.clone(),
+            plan_id: baseline.plan().plan_id.clone(),
             expected_plan_hash: hash('b'),
             max_samples: 2,
         },
@@ -176,6 +179,25 @@ fn plan_preview_apply_are_hash_guarded_bounded_and_transform_aware() {
     )
     .unwrap_err();
     assert_eq!(stale.diagnostics()[0].code, "conversion.stalePlan");
+}
+
+#[test]
+fn prepared_plan_provenance_cannot_be_rewritten_and_rehashed() {
+    let imported = imported_source();
+    let baseline = plan_conversion(&plan_request(&imported), &imported).unwrap();
+    let mut forged_plan = baseline.plan().clone();
+    forged_plan.license_path = Some("licenses/forged.txt".to_owned());
+    forged_plan.plan_hash = conversion_plan_hash(&forged_plan);
+    let forged = apply_conversion(
+        &ConversionApplyRequest {
+            plan_id: forged_plan.plan_id,
+            expected_plan_hash: forged_plan.plan_hash,
+            expected_output_hash: None,
+        },
+        &baseline,
+    )
+    .unwrap_err();
+    assert_eq!(forged.diagnostics()[0].code, "conversion.stalePlan");
 }
 
 #[test]
@@ -249,8 +271,8 @@ fn solid_topology_limits_and_rejected_install_leave_no_partial_output() {
     let output = directory.join("known-good.voxel.json");
     fs::write(&output, "known-good\n").unwrap();
     let stale_apply = ConversionApplyRequest {
-        plan_id: prepared.plan.plan_id.clone(),
-        expected_plan_hash: prepared.plan.plan_hash.clone(),
+        plan_id: prepared.plan().plan_id.clone(),
+        expected_plan_hash: prepared.plan().plan_hash.clone(),
         expected_output_hash: Some(hash('e')),
     };
     assert!(apply_conversion_and_install(&stale_apply, &prepared, &output).is_err());
@@ -258,8 +280,8 @@ fn solid_topology_limits_and_rejected_install_leave_no_partial_output() {
     assert!(!directory.join("known-good.voxel.json.pending").exists());
 
     let valid_apply = ConversionApplyRequest {
-        plan_id: prepared.plan.plan_id.clone(),
-        expected_plan_hash: prepared.plan.plan_hash.clone(),
+        plan_id: prepared.plan().plan_id.clone(),
+        expected_plan_hash: prepared.plan().plan_hash.clone(),
         expected_output_hash: Some(prepared.candidate().asset.content_hash.clone()),
     };
     let applied = apply_conversion_and_install(&valid_apply, &prepared, &output).unwrap();

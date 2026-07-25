@@ -59,6 +59,67 @@ duplicate_maps=$(tail -n +2 "$source_map" | cut -f2 | sort | uniq -d)
 duplicate_item_maps=$(tail -n +2 "$item_map" | cut -f1 | sort | uniq -d)
 [[ -z $duplicate_item_maps ]] || fail "duplicate item-map ids: $duplicate_item_maps"
 
+validate_repo_path() {
+  local item_id=$1
+  local field=$2
+  local relative=$3
+  [[ $relative != /* && $relative != *'..'* ]] || fail "$item_id has unsafe $field path: $relative"
+  relative=${relative#./}
+  [[ -e "$repo_root/$relative" ]] || fail "$item_id $field does not exist: $relative"
+}
+
+validate_cargo_evidence() {
+  local item_id=$1
+  local evidence=$2
+  local expect_package=0
+  local token
+  for token in $evidence; do
+    if [[ $expect_package -eq 1 ]]; then
+      grep -Fq "name = \"$token\"" "$repo_root/Cargo.lock" \
+        || fail "$item_id evidence names unknown Cargo package: $token"
+      expect_package=0
+      continue
+    fi
+    if [[ $token == -p ]]; then
+      expect_package=1
+    elif [[ $token == */* ]]; then
+      validate_repo_path "$item_id" "evidence reference" "$token"
+    fi
+  done
+  [[ $expect_package -eq 0 ]] || fail "$item_id evidence has -p without a package"
+}
+
+while IFS=$'\t' read -r item_id kind _ _ status successor_location evidence rationale; do
+  [[ $item_id != item_id ]] || continue
+  for relative in $successor_location; do
+    validate_repo_path "$item_id" "successor location" "$relative"
+  done
+
+  case $evidence in
+    cargo\ *|RUSTDOCFLAGS=*' cargo '*)
+      [[ $evidence == *'cargo test '* || $evidence == *'cargo doc '* || $evidence == *'cargo run '* ]] \
+        || fail "$item_id has unsupported evidence command: $evidence"
+      validate_cargo_evidence "$item_id" "$evidence"
+      ;;
+    ./*)
+      command_path=${evidence%% *}
+      validate_repo_path "$item_id" "evidence command" "$command_path"
+      ;;
+    *)
+      for relative in $evidence; do
+        validate_repo_path "$item_id" "evidence reference" "$relative"
+      done
+      ;;
+  esac
+
+  if [[ $kind != file ]]; then
+    symbol=${item_id##*:}
+    [[ $rationale == *"$symbol"* ]] || fail "$item_id rationale does not name its exact item"
+    [[ $rationale == *"explicitly ${status}"* ]] \
+      || fail "$item_id rationale does not state an explicit disposition"
+  fi
+done < "$item_map"
+
 awk -F '\t' '
   NR == FNR && NR > 1 { crates[$1] = 1; next }
   FNR == 1 { next }
@@ -125,6 +186,11 @@ awk -F '\t' '
     exit bad
   }
 ' "$disposition" "$item_map" "${inventories[@]}" || fail "invalid exact item map"
+
+generated_item_map=$(mktemp -t rusty-asha-generated-item-map.XXXXXX)
+trap 'rm -f "$generated_item_map"' EXIT
+"$repo_root/scripts/build-asha-equivalence-item-map.sh" "$generated_item_map"
+cmp -s "$generated_item_map" "$item_map" || fail "item-map.tsv is not the canonical explicit-decision build"
 
 pending=$(awk -F '\t' -v final="$final" '
   NR == 1 { next }
