@@ -124,6 +124,10 @@ pub fn import_mesh_source(
     let mesh = match request.format {
         MeshSourceFormat::Glb => import_static_glb(&request.source_bytes)?,
     };
+    let mesh = match request.mesh_primitive.as_deref() {
+        Some(group_id) => select_primitive_group(mesh, group_id)?,
+        None => mesh,
+    };
     let metadata = mesh_metadata(&mesh)?;
     Ok(ImportedMeshSource {
         receipt: MeshSourceImportReceipt {
@@ -139,6 +143,70 @@ pub fn import_mesh_source(
             metadata,
         },
         mesh,
+    })
+}
+
+fn select_primitive_group(
+    mesh: ImportedStaticMesh,
+    group_id: &str,
+) -> Result<ImportedStaticMesh, ConversionError> {
+    let requested_index = group_id
+        .strip_prefix("group/")
+        .and_then(|value| value.parse::<u32>().ok())
+        .ok_or_else(|| {
+            ConversionError::one(
+                "conversion.unknownMeshPrimitive",
+                "meshPrimitive",
+                "meshPrimitive must name one imported group such as group/0",
+            )
+        })?;
+    let group = mesh
+        .primitive_groups
+        .iter()
+        .find(|group| group.source_primitive_index == requested_index)
+        .copied()
+        .ok_or_else(|| {
+            ConversionError::one(
+                "conversion.unknownMeshPrimitive",
+                "meshPrimitive",
+                format!("source mesh has no primitive group `{group_id}`"),
+            )
+        })?;
+    let start = group.triangle_start as usize;
+    let end = start.saturating_add(group.triangle_count as usize);
+    let selected = &mesh.triangles[start..end];
+    let mut remap = std::collections::BTreeMap::<u32, u32>::new();
+    for index in selected.iter().flat_map(|triangle| triangle.indices) {
+        let next = remap.len() as u32;
+        remap.entry(index).or_insert(next);
+    }
+    let mut positions = vec![[0.0; 3]; remap.len()];
+    for (source, target) in &remap {
+        positions[*target as usize] = mesh.positions[*source as usize];
+    }
+    let triangles = selected
+        .iter()
+        .map(|triangle| crate::ImportedTriangle {
+            indices: triangle.indices.map(|index| remap[&index]),
+            source_material_slot: triangle.source_material_slot,
+        })
+        .collect::<Vec<_>>();
+    let triangle_count = triangles.len() as u32;
+    let materials = mesh
+        .materials
+        .into_iter()
+        .filter(|material| material.source_material_slot == group.source_material_slot)
+        .collect::<Vec<_>>();
+    Ok(ImportedStaticMesh {
+        positions,
+        triangles,
+        primitive_groups: vec![crate::ImportedPrimitiveGroup {
+            source_primitive_index: group.source_primitive_index,
+            source_material_slot: group.source_material_slot,
+            triangle_start: 0,
+            triangle_count,
+        }],
+        materials,
     })
 }
 
@@ -379,4 +447,69 @@ fn valid_sha256(value: &str) -> bool {
         && value[7..]
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ImportedMaterial, ImportedPrimitiveGroup, ImportedTriangle};
+
+    #[test]
+    fn primitive_group_selection_compacts_geometry_and_rejects_unknown_groups() {
+        let mesh = ImportedStaticMesh {
+            positions: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [10.0, 0.0, 0.0],
+                [11.0, 0.0, 0.0],
+                [10.0, 1.0, 0.0],
+            ],
+            triangles: vec![
+                ImportedTriangle {
+                    indices: [0, 1, 2],
+                    source_material_slot: 2,
+                },
+                ImportedTriangle {
+                    indices: [3, 4, 5],
+                    source_material_slot: 7,
+                },
+            ],
+            primitive_groups: vec![
+                ImportedPrimitiveGroup {
+                    source_primitive_index: 0,
+                    source_material_slot: 2,
+                    triangle_start: 0,
+                    triangle_count: 1,
+                },
+                ImportedPrimitiveGroup {
+                    source_primitive_index: 1,
+                    source_material_slot: 7,
+                    triangle_start: 1,
+                    triangle_count: 1,
+                },
+            ],
+            materials: vec![
+                ImportedMaterial {
+                    source_material_slot: 2,
+                    source_material_name: Some("left".to_string()),
+                },
+                ImportedMaterial {
+                    source_material_slot: 7,
+                    source_material_name: Some("right".to_string()),
+                },
+            ],
+        };
+        let selected = select_primitive_group(mesh.clone(), "group/1").unwrap();
+        assert_eq!(selected.positions, mesh.positions[3..].to_vec());
+        assert_eq!(selected.triangles[0].indices, [0, 1, 2]);
+        assert_eq!(selected.primitive_groups[0].source_primitive_index, 1);
+        assert_eq!(selected.materials[0].source_material_slot, 7);
+
+        let error = select_primitive_group(mesh, "group/9").unwrap_err();
+        assert_eq!(
+            error.diagnostics()[0].code,
+            "conversion.unknownMeshPrimitive"
+        );
+    }
 }
