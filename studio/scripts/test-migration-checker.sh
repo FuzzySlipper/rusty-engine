@@ -29,4 +29,13 @@ if STUDIO_OWNER_ADOPTION="$TASK_TMP/missing-owner.tsv" \
 fi
 grep -q 'current Rust workspace owner lacks Studio classification: voxel-annotation' "$TASK_TMP/output"
 
+sed 's/dba0234e861a871edf3507f0eb053f3c3799effc/main/' \
+  "$STUDIO_ROOT/demo-consumer-source.json" > "$TASK_TMP/floating-demo-source.json"
+if STUDIO_DEMO_SOURCE="$TASK_TMP/floating-demo-source.json" \
+  node "$STUDIO_ROOT/scripts/check-migration-plan.mjs" > "$TASK_TMP/output" 2>&1; then
+  echo "Studio migration checker accepted a floating demo revision" >&2
+  exit 1
+fi
+grep -q 'demo commit must be an exact Git revision' "$TASK_TMP/output"
+
 echo "Studio migration checker negative probes passed"

@@ -1,0 +1,63 @@
+name: studio-demo-integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'studio/demo-consumer-source.json'
+      - 'studio/libs/adapter-client/**'
+      - 'studio/test/integration/**'
+      - 'docs/studio-adapter-protocol.md'
+      - 'scripts/verify-studio-demo-integration.sh'
+      - '.github/workflows/studio-demo-integration.yml'
+  pull_request:
+    paths:
+      - 'studio/demo-consumer-source.json'
+      - 'studio/libs/adapter-client/**'
+      - 'studio/test/integration/**'
+      - 'docs/studio-adapter-protocol.md'
+      - 'scripts/verify-studio-demo-integration.sh'
+      - '.github/workflows/studio-demo-integration.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUSTY_ENGINE_DEMO_REPOSITORY: FuzzySlipper/rusty-engine-demo
+  RUSTY_ENGINE_DEMO_REVISION: dba0234e861a871edf3507f0eb053f3c3799effc
+
+jobs:
+  verify-studio-demo-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Rusty Engine
+        uses: actions/checkout@v4
+
+      - name: Check out exact Rusty Engine Demo consumer
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.RUSTY_ENGINE_DEMO_REPOSITORY }}
+          ref: ${{ env.RUSTY_ENGINE_DEMO_REVISION }}
+          path: rusty-engine-demo
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: studio/pnpm-lock.yaml
+
+      - name: Install isolated Studio dependencies
+        run: pnpm --dir studio install --frozen-lockfile
+
+      - name: Verify exact downstream adapter integration
+        run: ./scripts/verify-studio-demo-integration.sh "$GITHUB_WORKSPACE/rusty-engine-demo"

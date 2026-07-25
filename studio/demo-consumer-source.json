@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "repository": "FuzzySlipper/rusty-engine-demo",
+  "publicRepository": "https://github.com/FuzzySlipper/rusty-engine-demo",
+  "commit": "dba0234e861a871edf3507f0eb053f3c3799effc",
+  "projectFile": "content/projects/loading-bay.project.json",
+  "cargoPackage": "loading-bay-game",
+  "adapterBinary": "studio-adapter"
+}

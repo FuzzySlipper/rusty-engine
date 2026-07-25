@@ -10,6 +10,7 @@ required=(
   studio/pnpm-workspace.yaml
   studio/nx.json
   studio/donor-source.json
+  studio/demo-consumer-source.json
   studio/donor-inventory.tsv
   studio/donor-surface-disposition.tsv
   studio/owner-adoption.tsv
@@ -33,7 +34,7 @@ if rg -n '(@asha/|\.\./asha-(engine|studio|testing)|/home/dev/asha-(engine|studi
 fi
 
 if find studio \
-  \( -path 'studio/node_modules' -o -path 'studio/.nx' -o -path 'studio/dist' \) -prune -o \
+  \( -type d \( -name node_modules -o -name .nx -o -name dist -o -name coverage \) \) -prune -o \
   -type l -print -quit | grep -q .; then
   echo "Studio workspace contains a symbolic link" >&2
   exit 1

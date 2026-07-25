@@ -45,6 +45,24 @@ if (JSON.stringify(source.excludedUntrackedPaths) !== JSON.stringify(['assets/',
   throw new Error('untracked donor exclusions changed without an explicit audit');
 }
 
+const demoSource = JSON.parse(readText(process.env.STUDIO_DEMO_SOURCE ?? 'demo-consumer-source.json'));
+if (demoSource.schemaVersion !== 1) throw new Error('unsupported demo consumer source schema');
+if (demoSource.repository !== 'FuzzySlipper/rusty-engine-demo') {
+  throw new Error('Studio integration must target the public canonical demo repository');
+}
+if (demoSource.publicRepository !== 'https://github.com/FuzzySlipper/rusty-engine-demo') {
+  throw new Error('Studio integration public repository URL changed without an explicit decision');
+}
+if (!/^[0-9a-f]{40}$/.test(demoSource.commit)) {
+  throw new Error('Studio integration demo commit must be an exact Git revision');
+}
+if (demoSource.projectFile !== 'content/projects/loading-bay.project.json') {
+  throw new Error('Studio integration project changed without an explicit product decision');
+}
+if (demoSource.cargoPackage !== 'loading-bay-game' || demoSource.adapterBinary !== 'studio-adapter') {
+  throw new Error('Studio integration adapter identity changed without an explicit product decision');
+}
+
 const inventory = readTsv(process.env.STUDIO_DONOR_INVENTORY ?? 'donor-inventory.tsv', 'mode\tblob\tpath');
 if (inventory.length !== source.trackedFileCount) {
   throw new Error(`expected ${source.trackedFileCount} donor files, found ${inventory.length}`);
@@ -125,5 +143,13 @@ const contractHash = createHash('sha256')
   .update(readText('../docs/studio-migration-contract.md'))
   .digest('hex');
 if (contractHash.length !== 64) throw new Error('failed to hash Studio migration contract');
+
+const integrationWorkflow = readText('../.github/workflows/studio-demo-integration.yml');
+if (!integrationWorkflow.includes(`RUSTY_ENGINE_DEMO_REPOSITORY: ${demoSource.repository}`)) {
+  throw new Error('Studio integration workflow does not use the declared demo repository');
+}
+if (!integrationWorkflow.includes(`RUSTY_ENGINE_DEMO_REVISION: ${demoSource.commit}`)) {
+  throw new Error('Studio integration workflow does not use the exact declared demo revision');
+}
 
 console.log(`Studio migration plan passed: ${inventory.length} donor files, ${rules.length} surfaces, ${adoption.length} owners`);

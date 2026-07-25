@@ -9,7 +9,8 @@
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check:migration": "node scripts/check-migration-plan.mjs",
     "test:migration": "bash scripts/test-migration-checker.sh",
-    "verify": "pnpm run check:boundaries && pnpm run check:migration && pnpm run test:migration"
+    "verify:adapter-client": "pnpm --filter @rusty-engine/studio-adapter-client run typecheck && pnpm --filter @rusty-engine/studio-adapter-client run test",
+    "verify": "pnpm run check:boundaries && pnpm run check:migration && pnpm run test:migration && pnpm run verify:adapter-client"
   },
   "devDependencies": {
     "@nx/workspace": "23.0.0",
