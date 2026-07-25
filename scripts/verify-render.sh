@@ -5,6 +5,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 "$REPO_ROOT/scripts/audit-render-isolation.sh"
 "$REPO_ROOT/scripts/check-render-completeness.sh" --strict
+"$REPO_ROOT/scripts/test-render-completeness-checker.sh"
 
 pnpm --dir "$REPO_ROOT/render" install --frozen-lockfile
 
