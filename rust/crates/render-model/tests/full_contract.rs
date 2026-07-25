@@ -61,8 +61,7 @@ fn metadata(source: u64, label: &str) -> RenderMetadata {
     }
 }
 
-#[test]
-fn every_retained_operation_survives_the_versioned_json_border() {
+fn every_retained_operation_frame() -> RenderFrameDiff {
     let texture = TextureDescriptor {
         id: "texture/checker".to_string(),
         width: 2,
@@ -138,7 +137,7 @@ fn every_retained_operation_survives_the_versioned_json_border() {
         metadata: metadata(7, "spark"),
     };
 
-    let frame = RenderFrameDiff::try_from_ops(vec![
+    RenderFrameDiff::try_from_ops(vec![
         RenderDiff::DefineTexture {
             texture: texture.clone(),
         },
@@ -192,10 +191,11 @@ fn every_retained_operation_survives_the_versioned_json_border() {
         },
         RenderDiff::UpdateLight {
             handle: RenderHandle::new(2),
-            light: LightDescriptor::Ambient {
+            light: LightDescriptor::Directional {
                 color: [0.2; 3],
                 intensity: 0.4,
                 enabled: true,
+                direction: [1.0, -1.0, 0.0],
                 shadow_intent: LightShadowIntent::Disabled,
             },
         },
@@ -251,8 +251,12 @@ fn every_retained_operation_survives_the_versioned_json_border() {
             handle: RenderHandle::new(5),
         },
     ])
-    .unwrap();
+    .unwrap()
+}
 
+#[test]
+fn every_retained_operation_survives_the_versioned_json_border() {
+    let frame = every_retained_operation_frame();
     let json = frame.encode_json().unwrap();
     let decoded = RenderFrameDiff::decode_json(&json).unwrap();
     assert_eq!(decoded, frame);
@@ -288,13 +292,8 @@ fn committed_cross_language_fixture_is_a_valid_canonical_frame() {
     let input = std::fs::read_to_string(root.join("fixtures/render/retained-frame-v1.json"))
         .expect("read cross-language render fixture");
     let frame = RenderFrameDiff::decode_json(&input).unwrap();
-    assert_eq!(frame.schema_version, RENDER_FRAME_SCHEMA_VERSION);
-    assert!(matches!(frame.ops[0], RenderDiff::Create { .. }));
-    assert!(matches!(frame.ops[1], RenderDiff::CreateLight { .. }));
-    assert_eq!(
-        RenderFrameDiff::decode_json(&frame.encode_json().unwrap()).unwrap(),
-        frame
-    );
+    assert_eq!(frame, every_retained_operation_frame());
+    assert_eq!(input.trim_end(), frame.encode_json().unwrap());
 }
 
 #[test]

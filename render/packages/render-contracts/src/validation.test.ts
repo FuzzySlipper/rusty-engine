@@ -22,19 +22,42 @@ function mutableFixture(name: string): Record<string, unknown> {
 }
 
 void test('strict TypeScript decoders accept the committed Rust render fixtures', () => {
-  assert.equal(decodeRenderFrameDiff(fixture('retained-frame-v1.json')).ops.length, 2);
+  const renderFrame = decodeRenderFrameDiff(fixture('retained-frame-v1.json'));
+  assert.deepEqual(renderFrame.ops.map((operation) => operation.op), [
+    'defineTexture',
+    'defineMaterial',
+    'defineSpriteAtlas',
+    'defineStaticMesh',
+    'defineAnimatedMesh',
+    'create',
+    'update',
+    'replaceMeshPayload',
+    'createLight',
+    'updateLight',
+    'createStaticMeshInstance',
+    'setMaterialInstanceParameters',
+    'createAnimatedMeshInstance',
+    'setAnimatedMeshPlayback',
+    'createSprite',
+    'updateSprite',
+    'destroy',
+  ]);
   assert.equal(decodePresentationFrameDiff(fixture('presentation-frame-v1.json')).ops.length, 5);
 });
 
 void test('render decoding rejects unsafe handles and unknown nested fields', () => {
   const unsafe = mutableFixture('retained-frame-v1.json');
   const unsafeOps = unsafe['ops'] as Array<Record<string, unknown>>;
-  unsafeOps[0]!['handle'] = Number.MAX_SAFE_INTEGER + 1;
+  const unsafeCreate = unsafeOps.find((operation) => operation['op'] === 'create');
+  assert.ok(unsafeCreate);
+  unsafeCreate['handle'] = Number.MAX_SAFE_INTEGER + 1;
   assert.throws(() => decodeRenderFrameDiff(unsafe), ContractDecodeError);
 
   const unknown = mutableFixture('retained-frame-v1.json');
   const unknownOps = unknown['ops'] as Array<Record<string, unknown>>;
-  const node = unknownOps[0]!['node'] as Record<string, unknown>;
+  const unknownCreate = unknownOps.find((operation) => operation['op'] === 'create');
+  assert.ok(unknownCreate);
+  const node = unknownCreate['node'] as Record<string, unknown>;
   const metadata = node['metadata'] as Record<string, unknown>;
   metadata['authority'] = 'must-not-cross-render-border';
   assert.throws(() => decodeRenderFrameDiff(unknown), /authority is unknown/);

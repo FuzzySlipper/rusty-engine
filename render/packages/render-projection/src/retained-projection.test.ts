@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  decodeRenderFrameDiff,
   renderHandle,
   type AnimatedMeshAsset,
   type MeshPayloadDescriptor,
@@ -14,6 +17,8 @@ import {
   RenderProjection,
   RenderProjectionError,
 } from './index.js';
+
+const repoRoot = resolve(import.meta.dirname, '../../../..');
 
 void test('neutral projection retains validated lights and removes them with their parent', () => {
   const projection = new RenderProjection();
@@ -206,6 +211,32 @@ void test('a rejected later operation rolls back the entire frame', () => {
 
   assert.deepEqual(projection.snapshot(), before);
   assert.equal(projection.has(renderHandle(11)), false);
+});
+
+void test('applies every operation in the committed Rust-authored retained fixture', () => {
+  const input = JSON.parse(readFileSync(
+    resolve(repoRoot, 'fixtures/render/retained-frame-v1.json'),
+    'utf8',
+  )) as unknown;
+  const frame = decodeRenderFrameDiff(input);
+  const projection = new RenderProjection();
+
+  const instructions = projection.applyFrame(frame);
+
+  assert.equal(instructions.length, frame.ops.length);
+  assert.deepEqual(
+    projection.snapshot().nodes.map((node) => [node.handle, node.kind]),
+    [
+      [renderHandle(1), 'primitive'],
+      [renderHandle(3), 'staticMesh'],
+      [renderHandle(4), 'animatedMesh'],
+    ],
+  );
+  assert.equal(projection.light(renderHandle(2))?.light.kind, 'directional');
+  assert.equal(projection.has(renderHandle(5)), false);
+  assert.equal(projection.textureDescriptor('texture/checker')?.version, 1);
+  assert.equal(projection.staticMeshRefCount('mesh/triangle'), 1);
+  assert.equal(projection.animatedMeshRefCount('mesh-animation/character'), 1);
 });
 
 void test('keeps stable parent/child ids and removes descendants before parents', () => {

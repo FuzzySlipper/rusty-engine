@@ -234,6 +234,66 @@ void test('duplicate create and stale/unknown handles throw', () => {
   );
 });
 
+void test('a rejected later frame operation leaves handles and retained resources unchanged', () => {
+  const renderer = new ThreeRenderer();
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    {
+      op: 'defineTexture',
+      texture: {
+        id: 'texture/stable', width: 1, height: 1, filter: 'nearest', wrap: 'clamp',
+        contentHash: 'stable', version: 1,
+      },
+    },
+    createDiff(1, cubeNode('stable')),
+  ] });
+  const snapshotBefore = renderer.snapshot();
+  const textureBefore = renderer.textureDescriptor('texture/stable');
+
+  assert.throws(() => renderer.applyFrame({ schemaVersion: 1, ops: [
+    {
+      op: 'defineTexture',
+      texture: {
+        id: 'texture/stable', width: 2, height: 2, filter: 'linear', wrap: 'repeat',
+        contentHash: 'candidate', version: 2,
+      },
+    },
+    createDiff(2, cubeNode('must-not-commit')),
+    {
+      op: 'update', handle: renderHandle(999), transform: null, material: null,
+      visible: false, metadata: null,
+    },
+  ] }), /unknown handle 999/);
+
+  assert.equal(renderer.snapshot(), snapshotBefore);
+  assert.deepEqual(renderer.textureDescriptor('texture/stable'), textureBefore);
+  assert.equal(renderer.handleCount, 1);
+  assert.equal(renderer.has(renderHandle(1)), true);
+  assert.equal(renderer.has(renderHandle(2)), false);
+});
+
+void test('a rejected later backend resource leaves earlier frame operations unapplied', () => {
+  const renderer = new ThreeRenderer();
+  renderer.applyDiff(createDiff(1, cubeNode('stable')));
+  const snapshotBefore = renderer.snapshot();
+
+  assert.throws(() => renderer.applyFrame({ schemaVersion: 1, ops: [
+    {
+      op: 'defineTexture',
+      texture: {
+        id: 'texture/candidate', width: 1, height: 1, filter: 'nearest', wrap: 'clamp',
+        contentHash: null, version: 1,
+      },
+    },
+    createDiff(2, cubeNode('must-not-commit')),
+    { op: 'defineAnimatedMesh', asset: animatedMeshAsset() },
+  ] }), /missing animated mesh resource/);
+
+  assert.equal(renderer.snapshot(), snapshotBefore);
+  assert.equal(renderer.textureDescriptor('texture/candidate'), undefined);
+  assert.equal(renderer.handleCount, 1);
+  assert.equal(renderer.has(renderHandle(2)), false);
+});
+
 void test('debug-layer nodes land in the debug group', () => {
   const r = new ThreeRenderer();
   const node: RenderNode = {
@@ -308,6 +368,35 @@ void test('applies the Rust-compatible render fixture sequence end-to-end', () =
 
 import * as THREE from 'three';
 import type { MeshPayloadDescriptor } from '@rusty-engine/render-contracts';
+
+void test('realizes every operation in the comprehensive Rust-authored retained fixture', () => {
+  const fixture = JSON.parse(readFileSync(
+    resolve(import.meta.dirname, '../../../../fixtures/render/retained-frame-v1.json'),
+    'utf8',
+  )) as unknown;
+  const animatedScene = new THREE.Group();
+  animatedScene.add(new THREE.Mesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshStandardMaterial({ color: 0xffffff }),
+  ));
+  const renderer = new ThreeRenderer({
+    animatedMeshSource: new MapAnimatedMeshAssetSource([{
+      asset: 'mesh-animation/character',
+      contentHash: 'f00d',
+      scene: animatedScene,
+      clips: [new THREE.AnimationClip('idle', 1, [])],
+    }]),
+  });
+
+  renderer.applyEncodedFrame(fixture);
+
+  assert.equal(renderer.handleCount, 4);
+  assert.equal(renderer.has(renderHandle(5)), false);
+  assert.equal(renderer.objectFor(renderHandle(1))?.visible, false);
+  assert.equal(renderer.lightReadout()[0]?.descriptor.kind, 'directional');
+  assert.equal(renderer.instanceCountFor('mesh/triangle'), 1);
+  assert.equal(renderer.animatedMeshPlayback(renderHandle(4))?.currentClip, 'idle');
+});
 
 function meshNode(): RenderNode {
   return {

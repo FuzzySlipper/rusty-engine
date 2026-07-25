@@ -2,44 +2,573 @@
   "schemaVersion": 1,
   "ops": [
     {
-      "op": "create",
-      "handle": 1099511627777,
-      "parent": null,
-      "node": {
-        "geometry": { "kind": "cube" },
-        "material": {
-          "color": [0.25, 0.5, 0.75, 1.0],
-          "wireframe": false
+      "op": "defineTexture",
+      "texture": {
+        "id": "texture/checker",
+        "width": 2,
+        "height": 2,
+        "filter": "nearest",
+        "wrap": "repeat",
+        "contentHash": "cafe",
+        "version": 1
+      }
+    },
+    {
+      "op": "defineMaterial",
+      "material": {
+        "schemaVersion": 2,
+        "id": "material/plain",
+        "color": [
+          0.5,
+          0.6,
+          0.7,
+          1.0
+        ],
+        "texture": "texture/checker",
+        "roughness": 0.8,
+        "textureTint": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "emissionColor": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "emissionIntensity": 0.0,
+        "uvStrategy": "planar"
+      }
+    },
+    {
+      "op": "defineSpriteAtlas",
+      "atlas": {
+        "id": "sprite/sparks",
+        "texture": "texture/checker",
+        "frames": [
+          {
+            "frame": 0,
+            "uvMin": [
+              0.0,
+              0.0
+            ],
+            "uvMax": [
+              1.0,
+              1.0
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "op": "defineStaticMesh",
+      "asset": {
+        "asset": "mesh/triangle",
+        "payload": {
+          "layout": {
+            "vertexCount": 3,
+            "indexCount": 3,
+            "indexWidth": "u32",
+            "attributes": [
+              {
+                "name": "position",
+                "components": 3,
+                "kind": "f32"
+              },
+              {
+                "name": "normal",
+                "components": 3,
+                "kind": "f32"
+              }
+            ]
+          },
+          "groups": [
+            {
+              "materialSlot": 0,
+              "start": 0,
+              "count": 3
+            }
+          ],
+          "bounds": {
+            "min": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "max": [
+              1.0,
+              1.0,
+              0.0
+            ]
+          },
+          "source": {
+            "kind": "inline",
+            "positions": [
+              0.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            "normals": [
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "indices": [
+              0,
+              1,
+              2
+            ]
+          },
+          "provenance": "staticAsset"
         },
-        "transform": {
-          "translation": [1.0, 2.0, 3.0],
-          "rotation": [0.0, 0.0, 0.0, 1.0],
-          "scale": [1.0, 1.0, 1.0]
-        },
-        "visible": true,
-        "layer": "scene",
-        "metadata": {
-          "sourceEntity": 42,
-          "sourceSceneNode": null,
-          "tags": ["fixture"],
-          "label": "cross-language cube"
+        "materialSlots": [
+          {
+            "slot": 0,
+            "material": "material/plain"
+          }
+        ],
+        "collision": {
+          "kind": "aabbFallback"
         }
       }
     },
     {
-      "op": "createLight",
-      "handle": 3298534883329,
+      "op": "defineAnimatedMesh",
+      "asset": {
+        "asset": "mesh-animation/character",
+        "runtimeFormat": "glb",
+        "contentHash": "f00d",
+        "clips": [
+          {
+            "id": "idle",
+            "name": "Idle",
+            "durationSeconds": 1.0
+          }
+        ],
+        "defaultClip": "idle",
+        "materialSlots": [
+          {
+            "slot": 0,
+            "material": "material/plain"
+          }
+        ],
+        "bounds": {
+          "min": [
+            -0.5,
+            0.0,
+            -0.5
+          ],
+          "max": [
+            0.5,
+            2.0,
+            0.5
+          ]
+        }
+      }
+    },
+    {
+      "op": "create",
+      "handle": 1,
       "parent": null,
+      "node": {
+        "geometry": {
+          "kind": "cube"
+        },
+        "material": {
+          "color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "wireframe": false
+        },
+        "transform": {
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "visible": true,
+        "layer": "scene",
+        "metadata": {
+          "sourceEntity": 1,
+          "sourceSceneNode": null,
+          "tags": [
+            "fixture"
+          ],
+          "label": "primitive"
+        }
+      }
+    },
+    {
+      "op": "update",
+      "handle": 1,
+      "transform": {
+        "translation": [
+          1.0,
+          2.0,
+          3.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "material": {
+        "color": [
+          0.2,
+          0.3,
+          0.4,
+          1.0
+        ],
+        "wireframe": true
+      },
+      "visible": false,
+      "metadata": {
+        "sourceEntity": 1,
+        "sourceSceneNode": null,
+        "tags": [
+          "fixture"
+        ],
+        "label": "updated"
+      }
+    },
+    {
+      "op": "replaceMeshPayload",
+      "handle": 1,
+      "payload": {
+        "layout": {
+          "vertexCount": 3,
+          "indexCount": 3,
+          "indexWidth": "u32",
+          "attributes": [
+            {
+              "name": "position",
+              "components": 3,
+              "kind": "f32"
+            },
+            {
+              "name": "normal",
+              "components": 3,
+              "kind": "f32"
+            }
+          ]
+        },
+        "groups": [
+          {
+            "materialSlot": 0,
+            "start": 0,
+            "count": 3
+          }
+        ],
+        "bounds": {
+          "min": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "max": [
+            1.0,
+            1.0,
+            0.0
+          ]
+        },
+        "source": {
+          "kind": "inline",
+          "positions": [
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          "normals": [
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "indices": [
+            0,
+            1,
+            2
+          ]
+        },
+        "provenance": "generated"
+      }
+    },
+    {
+      "op": "createLight",
+      "handle": 2,
+      "parent": 1,
       "light": {
-        "kind": "point",
-        "color": [1.0, 0.8, 0.6],
-        "intensity": 4.0,
+        "kind": "directional",
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "intensity": 2.0,
         "enabled": true,
-        "position": [2.0, 3.0, 4.0],
-        "range": 12.0,
-        "decay": 2.0,
+        "direction": [
+          0.0,
+          -1.0,
+          0.0
+        ],
         "shadowIntent": "requested"
       }
+    },
+    {
+      "op": "updateLight",
+      "handle": 2,
+      "light": {
+        "kind": "directional",
+        "color": [
+          0.2,
+          0.2,
+          0.2
+        ],
+        "intensity": 0.4,
+        "enabled": true,
+        "direction": [
+          1.0,
+          -1.0,
+          0.0
+        ],
+        "shadowIntent": "disabled"
+      }
+    },
+    {
+      "op": "createStaticMeshInstance",
+      "handle": 3,
+      "parent": null,
+      "instance": {
+        "asset": "mesh/triangle",
+        "transform": {
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "visible": true,
+        "materialOverrides": [],
+        "metadata": {
+          "sourceEntity": 3,
+          "sourceSceneNode": null,
+          "tags": [
+            "fixture"
+          ],
+          "label": "static"
+        }
+      }
+    },
+    {
+      "op": "setMaterialInstanceParameters",
+      "handle": 3,
+      "slot": 0,
+      "parameters": {
+        "textureTint": [
+          1.0,
+          0.5,
+          0.5,
+          1.0
+        ],
+        "emissionColor": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "emissionIntensity": 0.5
+      }
+    },
+    {
+      "op": "createAnimatedMeshInstance",
+      "handle": 4,
+      "parent": null,
+      "instance": {
+        "asset": "mesh-animation/character",
+        "transform": {
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "visible": true,
+        "materialOverrides": [],
+        "playback": {
+          "kind": "play",
+          "clip": "idle",
+          "loop": "repeat",
+          "speed": 1.0,
+          "weight": 1.0,
+          "restart": true,
+          "fadeSeconds": 0.2
+        },
+        "metadata": {
+          "sourceEntity": 4,
+          "sourceSceneNode": null,
+          "tags": [
+            "fixture"
+          ],
+          "label": "animated"
+        }
+      }
+    },
+    {
+      "op": "setAnimatedMeshPlayback",
+      "handle": 4,
+      "playback": {
+        "kind": "play",
+        "clip": "idle",
+        "loop": "repeat",
+        "speed": 1.0,
+        "weight": 1.0,
+        "restart": true,
+        "fadeSeconds": 0.2
+      }
+    },
+    {
+      "op": "createSprite",
+      "handle": 5,
+      "parent": 1,
+      "sprite": {
+        "asset": "sprite/sparks",
+        "frame": 0,
+        "pivot": [
+          0.5,
+          0.5
+        ],
+        "size": [
+          1.0,
+          1.0
+        ],
+        "sizeMode": "world",
+        "billboard": "spherical",
+        "tint": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "renderOrder": 3,
+        "depth": "default",
+        "shading": "unlit",
+        "visible": true,
+        "transform": {
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "attachment": {
+          "sourceEntity": 7,
+          "sourceSceneNode": null,
+          "attachmentPoint": "head"
+        },
+        "metadata": {
+          "sourceEntity": 7,
+          "sourceSceneNode": null,
+          "tags": [
+            "fixture"
+          ],
+          "label": "spark"
+        }
+      }
+    },
+    {
+      "op": "updateSprite",
+      "handle": 5,
+      "frame": 0,
+      "tint": [
+        0.5,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "renderOrder": 4,
+      "visible": true
+    },
+    {
+      "op": "destroy",
+      "handle": 5
     }
   ]
 }

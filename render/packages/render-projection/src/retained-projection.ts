@@ -190,13 +190,18 @@ export class RenderProjection {
    * state from earlier operations in the same frame.
    */
   applyFrame(frame: RenderFrameDiff): readonly RenderProjectionInstruction[] {
-    const staged = this.#clone();
-    const instructions: RenderProjectionInstruction[] = [];
-    for (const diff of frame.ops) {
-      instructions.push(...staged.applyDiff(diff));
-    }
+    const { staged, instructions } = this.#stageFrame(frame);
     this.#replaceWith(staged);
     return instructions;
+  }
+
+  /**
+   * Validate and project a complete frame against a private clone without
+   * committing it. Backends use this as the first phase of a composed
+   * transaction so a bad later operation cannot partially mutate rendering.
+   */
+  validateFrame(frame: RenderFrameDiff): readonly RenderProjectionInstruction[] {
+    return this.#stageFrame(frame).instructions;
   }
 
   /** Apply one diff. Throws `RenderProjectionError` on stale handles or malformed payloads. */
@@ -440,8 +445,10 @@ export class RenderProjection {
     diff: Extract<RenderDiff, { op: 'replaceMeshPayload' }>,
   ): RenderProjectionInstruction {
     const record = this.#require(diff.handle, 'replaceMeshPayload');
-    if (record.kind === 'sprite') {
-      throw new RenderProjectionError(`replaceMeshPayload: handle ${diff.handle} is a sprite`);
+    if (record.kind !== 'primitive' || record.node.geometry.kind === 'group') {
+      throw new RenderProjectionError(
+        `replaceMeshPayload: handle ${diff.handle} is not a primitive mesh`,
+      );
     }
     validateMeshPayload(diff.payload, 'replaceMeshPayload.payload');
     record.meshPayload = clone(diff.payload);
@@ -527,6 +534,14 @@ export class RenderProjection {
     }
     const parent = this.#parentHandle(diff.parent, 'createStaticMeshInstance.parent');
     const instance = clone(diff.instance);
+    const boundSlots = new Set(asset.asset.materialSlots.map((binding) => binding.slot));
+    for (const override of instance.materialOverrides) {
+      if (!boundSlots.has(override.slot)) {
+        throw new RenderProjectionError(
+          `createStaticMeshInstance: override for unbound slot ${override.slot} on ${instance.asset}`,
+        );
+      }
+    }
     const record: MutableStaticMeshNode = {
       handle: diff.handle,
       parent,
@@ -747,6 +762,18 @@ export class RenderProjection {
     replaceMap(this.#spriteAtlases, projection.#spriteAtlases);
     replaceMap(this.#staticMeshes, projection.#staticMeshes);
     replaceMap(this.#animatedMeshes, projection.#animatedMeshes);
+  }
+
+  #stageFrame(frame: RenderFrameDiff): {
+    readonly staged: RenderProjection;
+    readonly instructions: readonly RenderProjectionInstruction[];
+  } {
+    const staged = this.#clone();
+    const instructions: RenderProjectionInstruction[] = [];
+    for (const diff of frame.ops) {
+      instructions.push(...staged.applyDiff(diff));
+    }
+    return { staged, instructions };
   }
 }
 

@@ -314,6 +314,10 @@ function mountPreparedRendererSurface(
   };
   const applyFrame = (nextFrame: RenderFrameDiff): RendererAnimatedMeshFrameReceipt => {
     try {
+      // Phase one is renderer-neutral and non-committing. ThreeRenderer performs
+      // its own complete backend/resource preflight, so neither store advances
+      // until both agree that the whole frame is applicable.
+      projection.validateFrame(nextFrame);
       backendSurface.applyFrame(nextFrame);
       projection.applyFrame(nextFrame);
       return { applied: true, diagnostics: [] };

@@ -151,12 +151,28 @@ impl SceneAppearanceProjector {
     ) -> Result<SceneProjectionResult, SceneProjectionError> {
         let validated = validate_scene(scene, mode)?;
         let mut registry = self.registry.clone();
-        let mut operations = resource_diffs(&self.last_resources, &validated.resources);
+        let mut operations = Vec::new();
+
+        let changed_static_meshes = changed_resource_ids(
+            &self.last_resources.static_meshes,
+            &validated.resources.static_meshes,
+        );
+        let changed_animated_meshes = changed_resource_ids(
+            &self.last_resources.animated_meshes,
+            &validated.resources.animated_meshes,
+        );
 
         let mut recreate_nodes = BTreeSet::new();
         for (id, previous) in &self.last_nodes {
             if let Some(next) = validated.nodes.get(id) {
-                if requires_recreate(previous, next) {
+                let resource_changed = match &next.appearance {
+                    Appearance::StaticMesh { asset, .. } => changed_static_meshes.contains(asset),
+                    Appearance::AnimatedMesh { asset, .. } => {
+                        changed_animated_meshes.contains(asset)
+                    }
+                    _ => false,
+                };
+                if requires_recreate(previous, next) || resource_changed {
                     recreate_nodes.insert(*id);
                 }
             }
@@ -180,6 +196,19 @@ impl SceneAppearanceProjector {
             }
         }
 
+        // Lights must be removed before their parent nodes. Both retained consumers
+        // recursively remove children with a parent; emitting the explicit light
+        // destroy afterwards would therefore address a stale handle.
+        for id in self
+            .last_lights
+            .keys()
+            .copied()
+            .filter(|id| !validated.lights.contains_key(id) || recreate_lights.contains(id))
+        {
+            if let Some(handle) = registry.remove(&AuthoredRenderKey::Light(id)) {
+                operations.push(RenderDiff::Destroy { handle });
+            }
+        }
         let mut node_destroys: Vec<u64> = self
             .last_nodes
             .keys()
@@ -192,16 +221,10 @@ impl SceneAppearanceProjector {
                 operations.push(RenderDiff::Destroy { handle });
             }
         }
-        for id in self
-            .last_lights
-            .keys()
-            .copied()
-            .filter(|id| !validated.lights.contains_key(id) || recreate_lights.contains(id))
-        {
-            if let Some(handle) = registry.remove(&AuthoredRenderKey::Light(id)) {
-                operations.push(RenderDiff::Destroy { handle });
-            }
-        }
+
+        // Asset definitions that changed under a stable id cannot replace a live
+        // mesh. Emit all dependent destroys first, then redefine, then recreate.
+        operations.extend(resource_diffs(&self.last_resources, &validated.resources));
 
         // Reserve every handle before creating children, while operation order
         // still follows topological depth.
@@ -671,6 +694,16 @@ fn resource_diffs(previous: &ResourceSnapshot, next: &ResourceSnapshot) -> Vec<R
     operations
 }
 
+fn changed_resource_ids<T: PartialEq>(
+    previous: &BTreeMap<String, T>,
+    next: &BTreeMap<String, T>,
+) -> BTreeSet<String> {
+    next.iter()
+        .filter(|(id, value)| previous.get(*id).is_some_and(|previous| previous != *value))
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
 fn requires_recreate(previous: &ProjectedNode, next: &ProjectedNode) -> bool {
     if previous.parent != next.parent {
         return true;
@@ -1036,9 +1069,10 @@ pub enum SceneProjectionError {
 mod tests {
     use super::*;
     use render_model::{
-        LightShadowIntent, MaterialUvStrategy, MeshAttribute, MeshAttributeKind, MeshAttributeName,
-        MeshBoundsDescriptor, MeshBufferLayout, MeshCollisionPolicy, MeshGroupDescriptor,
-        MeshIndexWidth, MeshPayloadDescriptor, MeshPayloadSource, MeshProvenance,
+        AnimatedMeshRuntimeFormat, AnimationClipDescriptor, LightShadowIntent, MaterialUvStrategy,
+        MeshAttribute, MeshAttributeKind, MeshAttributeName, MeshBoundsDescriptor,
+        MeshBufferLayout, MeshCollisionPolicy, MeshGroupDescriptor, MeshIndexWidth,
+        MeshPayloadDescriptor, MeshPayloadSource, MeshProvenance,
     };
 
     fn material() -> RenderMaterialDescriptor {
@@ -1097,6 +1131,28 @@ mod tests {
                 material: "material/plain".to_string(),
             }],
             collision: MeshCollisionPolicy::VisualOnly,
+        }
+    }
+
+    fn animated_mesh() -> AnimatedMeshAsset {
+        AnimatedMeshAsset {
+            asset: "mesh-animation/character".to_string(),
+            runtime_format: AnimatedMeshRuntimeFormat::Glb,
+            content_hash: Some("first".to_string()),
+            clips: vec![AnimationClipDescriptor {
+                id: "idle".to_string(),
+                name: Some("Idle".to_string()),
+                duration_seconds: Some(1.0),
+            }],
+            default_clip: Some("idle".to_string()),
+            material_slots: vec![MeshMaterialSlot {
+                slot: 0,
+                material: "material/plain".to_string(),
+            }],
+            bounds: MeshBoundsDescriptor {
+                min: [-0.5, 0.0, -0.5],
+                max: [0.5, 2.0, 0.5],
+            },
         }
     }
 
@@ -1171,6 +1227,144 @@ mod tests {
             .unwrap()
             .frame
             .is_empty());
+    }
+
+    #[test]
+    fn static_mesh_edits_destroy_dependents_before_redefinition_and_recreation() {
+        let mut scene = AppearanceScene {
+            resources: AppearanceResources {
+                materials: vec![material()],
+                static_meshes: vec![mesh()],
+                ..AppearanceResources::default()
+            },
+            nodes: vec![
+                AppearanceNode {
+                    id: 1,
+                    parent: None,
+                    transform: Transform::IDENTITY,
+                    visible: true,
+                    metadata: RenderMetadata::default(),
+                    availability: ProjectionAvailability::Both,
+                    appearance: Appearance::StaticMesh {
+                        asset: "mesh/triangle".to_string(),
+                        material_overrides: Vec::new(),
+                    },
+                },
+                AppearanceNode {
+                    id: 2,
+                    parent: Some(1),
+                    transform: Transform::IDENTITY,
+                    visible: true,
+                    metadata: RenderMetadata::default(),
+                    availability: ProjectionAvailability::Both,
+                    appearance: Appearance::Primitive {
+                        geometry: Geometry::Cube,
+                        material: Material::DEFAULT,
+                    },
+                },
+                AppearanceNode {
+                    id: 4,
+                    parent: None,
+                    transform: Transform::IDENTITY,
+                    visible: true,
+                    metadata: RenderMetadata::default(),
+                    availability: ProjectionAvailability::Both,
+                    appearance: Appearance::StaticMesh {
+                        asset: "mesh/triangle".to_string(),
+                        material_overrides: Vec::new(),
+                    },
+                },
+            ],
+            lights: vec![AppearanceLight {
+                id: 3,
+                parent: Some(1),
+                availability: ProjectionAvailability::Both,
+                light: LightDescriptor::Ambient {
+                    color: [1.0; 3],
+                    intensity: 1.0,
+                    enabled: true,
+                    shadow_intent: LightShadowIntent::Disabled,
+                },
+            }],
+        };
+        let mut projector = SceneAppearanceProjector::new();
+        projector
+            .project(&scene, ProjectionMode::AuthoredPreview)
+            .unwrap();
+
+        scene.resources.static_meshes[0].payload.bounds.max[0] = 2.0;
+        let edited = projector
+            .project(&scene, ProjectionMode::AuthoredPreview)
+            .unwrap();
+        let redefine = edited
+            .frame
+            .ops
+            .iter()
+            .position(|operation| matches!(operation, RenderDiff::DefineStaticMesh { .. }))
+            .unwrap();
+
+        assert_eq!(
+            edited.frame.ops[..redefine]
+                .iter()
+                .filter(|operation| matches!(operation, RenderDiff::Destroy { .. }))
+                .count(),
+            4
+        );
+        assert!(edited.frame.ops[..redefine]
+            .iter()
+            .all(|operation| matches!(operation, RenderDiff::Destroy { .. })));
+        assert!(edited.frame.ops[redefine + 1..]
+            .iter()
+            .all(|operation| matches!(
+                operation,
+                RenderDiff::CreateStaticMeshInstance { .. }
+                    | RenderDiff::Create { .. }
+                    | RenderDiff::CreateLight { .. }
+            )));
+    }
+
+    #[test]
+    fn animated_mesh_edits_destroy_instances_before_redefinition_and_recreation() {
+        let mut scene = AppearanceScene {
+            resources: AppearanceResources {
+                materials: vec![material()],
+                animated_meshes: vec![animated_mesh()],
+                ..AppearanceResources::default()
+            },
+            nodes: vec![AppearanceNode {
+                id: 1,
+                parent: None,
+                transform: Transform::IDENTITY,
+                visible: true,
+                metadata: RenderMetadata::default(),
+                availability: ProjectionAvailability::Both,
+                appearance: Appearance::AnimatedMesh {
+                    asset: "mesh-animation/character".to_string(),
+                    material_overrides: Vec::new(),
+                    playback: None,
+                },
+            }],
+            ..AppearanceScene::default()
+        };
+        let mut projector = SceneAppearanceProjector::new();
+        projector
+            .project(&scene, ProjectionMode::AuthoredPreview)
+            .unwrap();
+
+        scene.resources.animated_meshes[0].content_hash = Some("second".to_string());
+        let edited = projector
+            .project(&scene, ProjectionMode::AuthoredPreview)
+            .unwrap();
+
+        assert!(matches!(edited.frame.ops[0], RenderDiff::Destroy { .. }));
+        assert!(matches!(
+            edited.frame.ops[1],
+            RenderDiff::DefineAnimatedMesh { .. }
+        ));
+        assert!(matches!(
+            edited.frame.ops[2],
+            RenderDiff::CreateAnimatedMeshInstance { .. }
+        ));
     }
 
     #[test]

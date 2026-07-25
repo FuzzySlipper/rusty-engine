@@ -2,6 +2,10 @@
 
 import * as THREE from 'three';
 import { decodeRenderFrameDiff } from '@rusty-engine/render-contracts';
+import {
+  RenderProjection,
+  RenderProjectionError,
+} from '@rusty-engine/render-projection';
 import type {
   Geometry,
   LightDescriptor,
@@ -180,8 +184,10 @@ export class ThreeRenderer {
    * shared-buffer sources fail closed (the inline fixture path still works for goldens).
    */
   readonly #meshBufferSource: MeshBufferSource | undefined;
+  readonly #animatedMeshSource: AnimatedMeshAssetSource | undefined;
   readonly #animatedMeshes: AnimatedMeshRegistry;
   readonly #shadowsEnabled: boolean;
+  readonly #projection = new RenderProjection();
 
   constructor(options: {
     meshBufferSource?: MeshBufferSource;
@@ -189,7 +195,8 @@ export class ThreeRenderer {
     shadowsEnabled?: boolean;
   } = {}) {
     this.#meshBufferSource = options.meshBufferSource;
-    this.#animatedMeshes = new AnimatedMeshRegistry(options.animatedMeshSource);
+    this.#animatedMeshSource = options.animatedMeshSource;
+    this.#animatedMeshes = new AnimatedMeshRegistry(this.#animatedMeshSource);
     this.#shadowsEnabled = options.shadowsEnabled ?? false;
     this.#sceneGroup.name = 'scene';
     this.#debugGroup.name = 'debug';
@@ -205,19 +212,43 @@ export class ThreeRenderer {
     }
   }
 
-  /** Apply a whole frame of diffs in order. */
+  /**
+   * Apply a whole frame of diffs in order.
+   *
+   * The complete retained transition and every fallible mesh/animated resource
+   * are preflighted before the first Three object is mutated. A rejected later
+   * operation therefore leaves handles, resources, and scene objects unchanged.
+   */
   applyFrame(frame: RenderFrameDiff): void {
-    const recursivelyDestroyed = new Set<RenderHandle>();
-    for (const op of frame.ops) {
-      if (op.op === 'destroy') {
-        if (!this.#handles.has(op.handle) && recursivelyDestroyed.has(op.handle)) {
-          continue;
-        }
-        this.#destroy(op, recursivelyDestroyed);
-      } else {
-        this.applyDiff(op);
+    try {
+      this.#projection.validateFrame(frame);
+    } catch (cause) {
+      if (cause instanceof RenderProjectionError) {
+        throw new RenderApplyError(cause.message);
       }
+      throw cause;
     }
+    const preparedGeometry = this.#prepareFrame(frame);
+    const recursivelyDestroyed = new Set<RenderHandle>();
+    try {
+      for (let index = 0; index < frame.ops.length; index += 1) {
+        const op = frame.ops[index]!;
+        if (op.op === 'destroy') {
+          if (!this.#handles.has(op.handle) && recursivelyDestroyed.has(op.handle)) {
+            continue;
+          }
+          this.#destroy(op, recursivelyDestroyed);
+        } else {
+          this.#applyDiff(op, preparedGeometry.get(index));
+          preparedGeometry.delete(index);
+        }
+      }
+    } catch (cause) {
+      disposePreparedGeometry(preparedGeometry);
+      throw cause;
+    }
+    disposePreparedGeometry(preparedGeometry);
+    this.#projection.applyFrame(frame);
   }
 
   /** Strictly decode a versioned contract payload and apply it. */
@@ -227,6 +258,10 @@ export class ThreeRenderer {
 
   /** Apply a single diff. Throws `RenderApplyError` on a bad handle. */
   applyDiff(diff: RenderDiff): void {
+    this.applyFrame({ schemaVersion: 1, ops: [diff] });
+  }
+
+  #applyDiff(diff: RenderDiff, preparedGeometry?: THREE.BufferGeometry): void {
     switch (diff.op) {
       case 'create':
         this.#create(diff);
@@ -238,7 +273,7 @@ export class ThreeRenderer {
         this.#destroy(diff);
         break;
       case 'replaceMeshPayload':
-        this.#replaceMeshPayload(diff);
+        this.#replaceMeshPayload(diff, preparedGeometry);
         break;
       case 'createLight':
         this.#createLight(diff);
@@ -259,7 +294,7 @@ export class ThreeRenderer {
         this.#atlases.set(diff.atlas.id, diff.atlas);
         break;
       case 'defineStaticMesh':
-        this.#defineStaticMesh(diff.asset);
+        this.#defineStaticMesh(diff.asset, preparedGeometry);
         break;
       case 'defineAnimatedMesh':
         this.#defineAnimatedMesh(diff);
@@ -279,6 +314,72 @@ export class ThreeRenderer {
       case 'updateSprite':
         this.#updateSprite(diff);
         break;
+    }
+  }
+
+  #prepareFrame(frame: RenderFrameDiff): Map<number, THREE.BufferGeometry> {
+    const prepared = new Map<number, THREE.BufferGeometry>();
+    const selectedAnimatedClips = new Map<RenderHandle, string | null>();
+    try {
+      for (let index = 0; index < frame.ops.length; index += 1) {
+        const operation = frame.ops[index]!;
+        if (operation.op === 'defineStaticMesh') {
+          prepared.set(index, buildMeshGeometry(
+            operation.asset.payload,
+            this.#meshBufferSource,
+            'defineStaticMesh',
+          ));
+        } else if (operation.op === 'replaceMeshPayload') {
+          prepared.set(index, buildMeshGeometry(
+            operation.payload,
+            this.#meshBufferSource,
+            'replaceMeshPayload',
+          ));
+        } else if (operation.op === 'defineAnimatedMesh') {
+          // Definition performs all source/hash/clip checks without creating a
+          // live instance, so it is safe to run before the retained mutation.
+          new AnimatedMeshRegistry(this.#animatedMeshSource).define(operation.asset);
+        } else if (
+          operation.op === 'createAnimatedMeshInstance'
+          && operation.instance.materialOverrides.length > 0
+        ) {
+          throw new RenderApplyError(
+            `createAnimatedMeshInstance: material overrides are not implemented for animated mesh ${operation.instance.asset}`,
+          );
+        } else if (operation.op === 'createAnimatedMeshInstance') {
+          const playback = operation.instance.playback;
+          if (playback?.kind === 'pause' || playback?.kind === 'resume') {
+            throw new RenderApplyError(
+              `createAnimatedMeshInstance.${playback.kind}: no current clip on ${operation.instance.asset}`,
+            );
+          }
+          selectedAnimatedClips.set(
+            operation.handle,
+            playback?.kind === 'play' ? playback.clip : null,
+          );
+        } else if (operation.op === 'setAnimatedMeshPlayback') {
+          const currentClip = selectedAnimatedClips.has(operation.handle)
+            ? selectedAnimatedClips.get(operation.handle) ?? null
+            : this.#animatedMeshes.playback(operation.handle)?.currentClip ?? null;
+          if (
+            (operation.playback.kind === 'pause' || operation.playback.kind === 'resume')
+            && currentClip === null
+          ) {
+            throw new RenderApplyError(
+              `setAnimatedMeshPlayback.${operation.playback.kind}: no current clip`,
+            );
+          }
+          if (operation.playback.kind === 'play') {
+            selectedAnimatedClips.set(operation.handle, operation.playback.clip);
+          } else if (operation.playback.kind === 'stop') {
+            selectedAnimatedClips.set(operation.handle, null);
+          }
+        }
+      }
+      return prepared;
+    } catch (cause) {
+      disposePreparedGeometry(prepared);
+      throw animatedMeshError(cause);
     }
   }
 
@@ -537,7 +638,7 @@ export class ThreeRenderer {
    * Idempotent per asset id: a redefine while instances exist is rejected (it
    * would orphan shared geometry); a redefine of an unused asset replaces it.
    */
-  #defineStaticMesh(asset: StaticMeshAsset): void {
+  #defineStaticMesh(asset: StaticMeshAsset, preparedGeometry?: THREE.BufferGeometry): void {
     const existing = this.#staticMeshes.get(asset.asset);
     if (existing) {
       if (existing.refCount > 0) {
@@ -552,7 +653,7 @@ export class ThreeRenderer {
     // static mesh asset borrows the provider buffer, copies its bytes out, and
     // releases the borrow. A missing provider / unknown / stale / too-small buffer
     // fails closed below — never silently producing empty geometry.
-    const geometry = buildMeshGeometry(
+    const geometry = preparedGeometry ?? buildMeshGeometry(
       asset.payload,
       this.#meshBufferSource,
       'defineStaticMesh',
@@ -994,13 +1095,17 @@ export class ThreeRenderer {
    * array views only — no per-frame transcoding) and maps material slots to flat
    * materials. The old geometry + materials are disposed.
    */
-  #replaceMeshPayload(diff: Extract<RenderDiff, { op: 'replaceMeshPayload' }>): void {
+  #replaceMeshPayload(
+    diff: Extract<RenderDiff, { op: 'replaceMeshPayload' }>,
+    preparedGeometry?: THREE.BufferGeometry,
+  ): void {
     const entry = this.#require(diff.handle, 'replaceMeshPayload');
     const object = entry.object;
     if (!(object instanceof THREE.Mesh)) {
       throw new RenderApplyError(`replaceMeshPayload: handle ${diff.handle} is not a mesh`);
     }
-    const geometry = buildMeshGeometry(diff.payload, this.#meshBufferSource, 'replaceMeshPayload');
+    const geometry = preparedGeometry
+      ?? buildMeshGeometry(diff.payload, this.#meshBufferSource, 'replaceMeshPayload');
     const viewMaterial = entry.viewMaterial ?? MaterialFallback;
     const materials = diff.payload.groups.map((group) =>
       this.#uploadedMeshMaterial(group.materialSlot, viewMaterial));
@@ -1637,4 +1742,10 @@ function animatedMeshError(cause: unknown): RenderApplyError {
     return new RenderApplyError(cause.message);
   }
   throw cause;
+}
+
+function disposePreparedGeometry(prepared: ReadonlyMap<number, THREE.BufferGeometry>): void {
+  for (const geometry of prepared.values()) {
+    geometry.dispose();
+  }
 }
