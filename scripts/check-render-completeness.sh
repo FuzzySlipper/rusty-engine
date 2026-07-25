@@ -7,6 +7,7 @@ MATRIX="$REPO_ROOT/render/completeness.tsv"
 DISPOSITION="$REPO_ROOT/render/donor-disposition.tsv"
 BEHAVIOR_INVENTORY="$REPO_ROOT/render/behavior-inventory.tsv"
 BEHAVIOR_DISPOSITION="${RENDER_BEHAVIOR_DISPOSITION:-$REPO_ROOT/render/behavior-disposition.tsv}"
+BEHAVIOR_ARCHITECTURE_AUDIT="$REPO_ROOT/render/behavior-architecture-audit.tsv"
 EXPECTED_COUNT=134
 EXPECTED_HASH="99b33ece319e614695bd60c26f723aa0f5bdd48c83488dbd6d6dc4151b67b001"
 EXPECTED_BEHAVIOR_COUNT=1076
@@ -225,6 +226,87 @@ awk -F '\t' '
     exit failed
   }
 ' "$MATRIX" "$BEHAVIOR_INVENTORY" "$BEHAVIOR_DISPOSITION"
+
+expected_architecture_audit_header=$'item_id\tclassification\tsummary'
+if [[ "$(head -n 1 "$BEHAVIOR_ARCHITECTURE_AUDIT")" != "$expected_architecture_audit_header" ]]; then
+  echo "render behavior architecture audit header is invalid" >&2
+  exit 1
+fi
+
+awk -F '\t' '
+  ARGIND == 1 && FNR == 1 { next }
+  ARGIND == 1 {
+    disposition_status[$1] = $4
+    disposition_evidence[$1] = $6
+    disposition_rationale[$1] = $7
+    next
+  }
+  ARGIND == 2 && FNR == 1 { next }
+  ARGIND == 2 {
+    if (NF != 3) {
+      printf "render behavior architecture audit row %d has %d fields; expected 3\n", FNR, NF > "/dev/stderr"
+      failed = 1
+    }
+    if ($1 == "" || $2 == "" || $3 == "") {
+      printf "render behavior architecture audit row %d has an empty required field\n", FNR > "/dev/stderr"
+      failed = 1
+    }
+    if ($1 in audited) {
+      printf "duplicate render behavior architecture audit item %s\n", $1 > "/dev/stderr"
+      failed = 1
+    }
+    audited[$1] = 1
+    removed = index($2, "removed-") == 1
+    mixed = index($2, "mixed-") == 1
+    if (!removed && !mixed) {
+      printf "render behavior architecture item %s has unsupported classification %s\n", $1, $2 > "/dev/stderr"
+      failed = 1
+    }
+    if (!($1 in disposition_status)) {
+      printf "render behavior architecture audit names unknown item %s\n", $1 > "/dev/stderr"
+      failed = 1
+      next
+    }
+    expected_status = removed ? "obsolete" : "adapted"
+    if (disposition_status[$1] != expected_status) {
+      printf "render behavior architecture item %s requires status %s, found %s\n", $1, expected_status, disposition_status[$1] > "/dev/stderr"
+      failed = 1
+    }
+    if (removed && index($3, "Removed concept:") != 1) {
+      printf "removed render behavior item %s lacks a precise removed-concept summary\n", $1 > "/dev/stderr"
+      failed = 1
+    }
+    if (mixed && (index($3, "Retained behavior:") != 1 || index($3, "Removed concept:") == 0)) {
+      printf "mixed render behavior item %s must name retained behavior and removed concept\n", $1 > "/dev/stderr"
+      failed = 1
+    }
+    if (removed && disposition_evidence[$1] != "docs/rendering-successor-contract.md") {
+      printf "obsolete render behavior item %s must cite only the architecture decision\n", $1 > "/dev/stderr"
+      failed = 1
+    }
+    if (mixed && index(" " disposition_evidence[$1] " ", " docs/rendering-successor-contract.md ") == 0) {
+      printf "mixed render behavior item %s lacks architecture-decision evidence\n", $1 > "/dev/stderr"
+      failed = 1
+    }
+    if (index(disposition_rationale[$1], $3) == 0) {
+      printf "render behavior architecture item %s has a status/rationale mismatch\n", $1 > "/dev/stderr"
+      failed = 1
+    }
+  }
+  END {
+    for (item in disposition_status) {
+      if (disposition_status[item] == "obsolete" && !(item in audited)) {
+        printf "obsolete render behavior item lacks architecture audit: %s\n", item > "/dev/stderr"
+        failed = 1
+      }
+      if (index(disposition_rationale[item], "Removed concept:") != 0 && !(item in audited)) {
+        printf "mixed or removed render behavior item lacks architecture audit: %s\n", item > "/dev/stderr"
+        failed = 1
+      }
+    }
+    exit failed
+  }
+' "$BEHAVIOR_DISPOSITION" "$BEHAVIOR_ARCHITECTURE_AUDIT"
 
 tail -n +2 "$BEHAVIOR_INVENTORY" | cut -f1 | sort > "$behavior_items"
 tail -n +2 "$BEHAVIOR_DISPOSITION" | cut -f1 | sort > "$mapped_behavior_items"

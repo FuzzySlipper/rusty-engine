@@ -135,7 +135,7 @@ fn validated_catalog() -> ValidatedAnimationCatalog {
 }
 
 #[test]
-fn catalog_rejects_ambiguous_graphs_and_asset_identity_drift() {
+fn catalog_rejects_invalid_graphs_speeds_and_asset_identity_drift() {
     let mut ambiguous = catalog();
     ambiguous.graphs[0].transitions[1].priority = 0;
     let error = validate_animation_catalog(ambiguous, &assets()).unwrap_err();
@@ -154,6 +154,83 @@ fn catalog_rejects_ambiguous_graphs_and_asset_identity_drift() {
         .diagnostics
         .iter()
         .any(|item| item.code == AnimationCatalogDiagnosticCode::ContentHashMismatch));
+
+    let mut invalid_graph = catalog();
+    invalid_graph.graphs[0].states[0].motion = AnimationMotionDefinition::Clip {
+        clip_id: "missing".into(),
+        speed_milli: 1_000,
+    };
+    invalid_graph.graphs[0]
+        .states
+        .push(AnimationStateDefinition {
+            state_id: "orphan".into(),
+            motion: AnimationMotionDefinition::Clip {
+                clip_id: "idle".into(),
+                speed_milli: 1_000,
+            },
+        });
+    invalid_graph.graphs[0]
+        .transitions
+        .push(AnimationTransitionDefinition {
+            transition_id: "idle.invalid".into(),
+            from_state_id: "idle".into(),
+            to_state_id: "move".into(),
+            priority: 1,
+            duration_ticks: 1,
+            conditions: vec![AnimationCondition::FloatGreaterThan {
+                parameter_id: "grounded".into(),
+                threshold_milli: 0,
+            }],
+        });
+    let error = validate_animation_catalog(invalid_graph, &assets()).unwrap_err();
+    for expected in [
+        AnimationCatalogDiagnosticCode::MissingClip,
+        AnimationCatalogDiagnosticCode::UnreachableState,
+        AnimationCatalogDiagnosticCode::AmbiguousTransition,
+        AnimationCatalogDiagnosticCode::ParameterTypeMismatch,
+    ] {
+        assert!(
+            error.diagnostics.iter().any(|item| item.code == expected),
+            "missing diagnostic {expected:?}"
+        );
+    }
+
+    for motion in [
+        AnimationMotionDefinition::Clip {
+            clip_id: "idle".into(),
+            speed_milli: 0,
+        },
+        AnimationMotionDefinition::LinearBlend {
+            parameter_id: "speed".into(),
+            low_clip_id: "walk".into(),
+            high_clip_id: "run".into(),
+            minimum_milli: 0,
+            maximum_milli: 1_000,
+            speed_milli: -1,
+        },
+    ] {
+        let mut invalid_speed = catalog();
+        invalid_speed.graphs[0].states[0].motion = motion;
+        let error = validate_animation_catalog(invalid_speed, &assets()).unwrap_err();
+        assert!(error
+            .diagnostics
+            .iter()
+            .any(|item| item.code == AnimationCatalogDiagnosticCode::InvalidPlaybackSpeed));
+    }
+}
+
+#[test]
+fn identical_explicit_inputs_produce_identical_state_without_replay_bookkeeping() {
+    let mut left = AnimationControllerService::new(validated_catalog());
+    let mut right = AnimationControllerService::new(validated_catalog());
+    for controller in [&mut left, &mut right] {
+        controller.attach(7, "hero.locomotion").unwrap();
+        controller.set_float(7, "speed", 500).unwrap();
+        controller.tick(7, 1).unwrap();
+        controller.tick(7, 2).unwrap();
+        controller.tick(7, 3).unwrap();
+    }
+    assert_eq!(left.state(7).unwrap(), right.state(7).unwrap());
 }
 
 #[test]
@@ -167,10 +244,13 @@ fn controller_resolves_blends_and_transition_timing_deterministically() {
     let transition = started.transition.as_ref().unwrap();
     assert_eq!(transition.transition_id, "idle.move");
     assert_eq!(transition.target_motion.blend_weight_milli, 500);
-    assert_eq!(
-        started.transition_fact.unwrap().moment,
-        AnimationTransitionFactMoment::Started
-    );
+    let started_fact = started.transition_fact.as_ref().unwrap();
+    assert_eq!(started_fact.controller_tick, 1);
+    assert_eq!(started_fact.transition_id, "idle.move");
+    assert_eq!(started_fact.from_state_id, "idle");
+    assert_eq!(started_fact.to_state_id, "move");
+    assert_eq!(started_fact.moment, AnimationTransitionFactMoment::Started);
+    assert_eq!(started_fact.duration_ticks, 2);
 
     let advancing = controller.tick(1, 2).unwrap().state.unwrap();
     assert_eq!(advancing.transition.unwrap().elapsed_ticks, 1);
@@ -179,10 +259,16 @@ fn controller_resolves_blends_and_transition_timing_deterministically() {
     assert_eq!(completed.motion.clip_a, "walk");
     assert_eq!(completed.motion.clip_b.as_deref(), Some("run"));
     assert_eq!(completed.motion.blend_weight_milli, 500);
+    let completed_fact = completed.transition_fact.as_ref().unwrap();
+    assert_eq!(completed_fact.controller_tick, 3);
+    assert_eq!(completed_fact.transition_id, "idle.move");
+    assert_eq!(completed_fact.from_state_id, "idle");
+    assert_eq!(completed_fact.to_state_id, "move");
     assert_eq!(
-        completed.transition_fact.unwrap().moment,
+        completed_fact.moment,
         AnimationTransitionFactMoment::Completed
     );
+    assert_eq!(completed_fact.duration_ticks, 2);
 
     let error = controller.tick(1, 5).unwrap_err();
     assert_eq!(
