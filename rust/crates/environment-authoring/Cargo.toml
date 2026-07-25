@@ -1,0 +1,16 @@
+[package]
+name = "environment-authoring"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+authored-scene.workspace = true
+core-assets.workspace = true
+core-ids.workspace = true
+core-math.workspace = true
+svc-rng.workspace = true
+voxel-asset.workspace = true
+sha2.workspace = true

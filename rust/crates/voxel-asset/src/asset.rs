@@ -106,4 +106,6 @@ pub struct VoxelAssetProvenance {
 #[serde(rename_all = "camelCase")]
 pub enum VoxelAssetProvenanceKind {
     ConvertedStaticMesh,
+    /// Deterministic cells produced by a named, versioned environment generator.
+    GeneratedEnvironment,
 }

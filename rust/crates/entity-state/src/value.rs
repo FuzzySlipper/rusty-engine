@@ -82,6 +82,18 @@ impl EntityTransform {
         }
     }
 
+    /// Transform one local-space point through scale, rotation, and translation.
+    /// Spatial services use this to derive world-space bounds without reaching
+    /// into entity-state's storage internals.
+    pub fn transform_point(self, local: Vec3) -> Vec3 {
+        let scaled = Vec3::new(
+            local.x * self.scale.x,
+            local.y * self.scale.y,
+            local.z * self.scale.z,
+        );
+        self.translation + self.rotation.rotate(scaled)
+    }
+
     pub(crate) fn relative_to(self, world: Self) -> Self {
         let inverse_rotation = self.rotation.inverse();
         let offset = inverse_rotation.rotate(world.translation - self.translation);

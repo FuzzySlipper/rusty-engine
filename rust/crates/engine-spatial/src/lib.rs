@@ -9,6 +9,10 @@
 #![forbid(unsafe_code)]
 
 mod entity_motion;
+mod physics;
+mod trigger;
+mod trigger_codec;
+mod trigger_geometry;
 mod voxel_edit;
 mod voxel_history;
 mod voxel_history_codec;
@@ -20,6 +24,18 @@ pub use entity_motion::{
     FirstPersonMotionError, FirstPersonMotionInput, FirstPersonMotionReadout,
     FirstPersonMotionReceipt, FirstPersonMotionService, FirstPersonPose,
 };
+pub use physics::{
+    integrate_kinematic, integrate_kinematic_with_query, CollisionMode, CollisionResolution,
+    IntegrationResult, KinematicBody, KinematicCollisionQuery, KinematicShape, PhysicsError,
+    PhysicsStep, PhysicsWorld,
+};
+pub use trigger::{
+    KinematicTriggerDefinition, TriggerOverlapFact, TriggerOverlapFactKind, TriggerOverlapPair,
+    TriggerOverlapReadout, TriggerReconcileCause, TriggerReconcileReceipt, TriggerVolumeDiagnostic,
+    TriggerVolumeDiagnosticCode, TriggerVolumeError, TriggerVolumeSystem,
+    MAX_ACTIVE_TRIGGER_OVERLAPS, MAX_TRIGGER_DEFINITIONS, TRIGGER_VOLUME_SNAPSHOT_SCHEMA_VERSION,
+};
+pub use trigger_codec::{decode_trigger_snapshot, encode_trigger_snapshot, TriggerVolumeSnapshot};
 
 pub use voxel_edit::{
     validate_material_voxel, validate_voxel_address, validate_voxel_material_slot,

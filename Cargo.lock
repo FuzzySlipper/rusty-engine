@@ -201,8 +201,10 @@ dependencies = [
  "core-ids",
  "core-math",
  "core-space",
+ "core-time",
  "core-voxel",
  "entity-state",
+ "environment-authoring",
  "serde",
  "serde_json",
  "serde_path_to_error",
@@ -224,6 +226,19 @@ dependencies = [
  "core-math",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "environment-authoring"
+version = "0.1.0"
+dependencies = [
+ "authored-scene",
+ "core-assets",
+ "core-ids",
+ "core-math",
+ "sha2",
+ "svc-rng",
+ "voxel-asset",
 ]
 
 [[package]]
@@ -631,6 +646,14 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "state-machine"
+version = "0.1.0"
+dependencies = [
+ "core-ids",
+ "entity-state",
+]
 
 [[package]]
 name = "svc-collision"
