@@ -17,6 +17,7 @@ mod voxel_edit;
 mod voxel_history;
 mod voxel_history_codec;
 mod voxel_picking;
+mod voxel_primitive;
 
 pub use entity_motion::{
     EntityMotionCommand, EntityMotionError, EntityMotionOutcome, EntityMotionReceipt,
@@ -56,6 +57,10 @@ pub use voxel_history_codec::{
 };
 pub use voxel_picking::{
     InstanceVoxelPickAnchor, VoxelPickAnchor, VoxelPickError, VoxelPickHint, VoxelPickService,
+};
+pub use voxel_primitive::{
+    VoxelBoxFill, VoxelPrimitive, VoxelPrimitiveEditService, VoxelPrimitiveError,
+    VoxelPrimitiveMaterial, VoxelPrimitiveRequest, MAX_VOXEL_LINE_RADIUS,
 };
 
 use std::collections::{BTreeMap, BTreeSet};

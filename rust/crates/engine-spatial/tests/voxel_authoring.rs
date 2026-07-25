@@ -1,10 +1,12 @@
 use core_math::Vec3;
 use core_space::Face;
 use engine_spatial::{
-    decode_voxel_edit_history, encode_voxel_edit_history, MaterialVoxel, VoxelCollisionScene,
-    VoxelEdit, VoxelEditHistory, VoxelEditHistoryCodecError, VoxelEditHistoryDiffOptions,
-    VoxelEditHistoryError, VoxelEditHistoryLimits, VoxelEditService, VoxelEditTransaction,
-    VoxelPickError, VoxelPickHint, VoxelPickService,
+    decode_voxel_edit_history, encode_voxel_edit_history, MaterialVoxel, VoxelBoxFill,
+    VoxelCollisionScene, VoxelEdit, VoxelEditHistory, VoxelEditHistoryCodecError,
+    VoxelEditHistoryDiffOptions, VoxelEditHistoryError, VoxelEditHistoryLimits, VoxelEditService,
+    VoxelEditTransaction, VoxelPickError, VoxelPickHint, VoxelPickService, VoxelPrimitive,
+    VoxelPrimitiveEditService, VoxelPrimitiveError, VoxelPrimitiveMaterial, VoxelPrimitiveRequest,
+    MAX_VOXEL_EDITS_PER_TRANSACTION,
 };
 use entity_state::{EntityTransform, Quat};
 
@@ -254,6 +256,124 @@ fn history_quota_and_stale_hash_rejections_do_not_mutate_state() {
     ));
     assert_eq!(scene.authority_hash(), drifted);
     assert_eq!(history.cursor().index, 1);
+}
+
+#[test]
+fn primitive_boxes_preserve_filled_shell_and_edge_semantics() {
+    let generate = |fill| {
+        VoxelPrimitiveEditService
+            .generate(VoxelPrimitiveRequest {
+                primitive: VoxelPrimitive::Box {
+                    start: [2, 2, 2],
+                    end: [0, 0, 0],
+                    fill,
+                },
+                material: VoxelPrimitiveMaterial::Set { material_slot: 7 },
+            })
+            .unwrap()
+    };
+    let filled = generate(VoxelBoxFill::Filled);
+    let shell = generate(VoxelBoxFill::Shell);
+    let edges = generate(VoxelBoxFill::Edges);
+    assert_eq!(filled.len(), 27);
+    assert_eq!(shell.len(), 26);
+    assert_eq!(edges.len(), 20);
+    assert!(filled.contains(&VoxelEdit::Set {
+        address: [1, 1, 1],
+        material_slot: 7,
+    }));
+    assert!(!shell.contains(&VoxelEdit::Set {
+        address: [1, 1, 1],
+        material_slot: 7,
+    }));
+    assert!(shell.contains(&VoxelEdit::Set {
+        address: [1, 1, 0],
+        material_slot: 7,
+    }));
+    assert!(!edges.contains(&VoxelEdit::Set {
+        address: [1, 1, 0],
+        material_slot: 7,
+    }));
+}
+
+#[test]
+fn primitive_lines_round_half_away_from_zero_and_deduplicate_radius() {
+    let positive = VoxelPrimitiveEditService
+        .generate(VoxelPrimitiveRequest {
+            primitive: VoxelPrimitive::Line {
+                start: [0, 0, 0],
+                end: [2, 1, 0],
+                radius: 0,
+            },
+            material: VoxelPrimitiveMaterial::Clear,
+        })
+        .unwrap();
+    assert_eq!(
+        positive,
+        vec![
+            VoxelEdit::Clear { address: [0, 0, 0] },
+            VoxelEdit::Clear { address: [1, 1, 0] },
+            VoxelEdit::Clear { address: [2, 1, 0] },
+        ]
+    );
+    let negative = VoxelPrimitiveEditService
+        .generate(VoxelPrimitiveRequest {
+            primitive: VoxelPrimitive::Line {
+                start: [0, 0, 0],
+                end: [-2, -1, 0],
+                radius: 0,
+            },
+            material: VoxelPrimitiveMaterial::Clear,
+        })
+        .unwrap();
+    assert!(negative.contains(&VoxelEdit::Clear {
+        address: [-1, -1, 0],
+    }));
+
+    let thick = VoxelPrimitiveEditService
+        .generate(VoxelPrimitiveRequest {
+            primitive: VoxelPrimitive::Line {
+                start: [0, 0, 0],
+                end: [1, 0, 0],
+                radius: 1,
+            },
+            material: VoxelPrimitiveMaterial::Set { material_slot: 2 },
+        })
+        .unwrap();
+    assert_eq!(thick.len(), 36);
+}
+
+#[test]
+fn primitive_generation_rejects_invalid_or_unbounded_requests_before_authority() {
+    assert!(matches!(
+        VoxelPrimitiveEditService.generate(VoxelPrimitiveRequest {
+            primitive: VoxelPrimitive::Line {
+                start: [0, 0, 0],
+                end: [1, 1, 1],
+                radius: 5,
+            },
+            material: VoxelPrimitiveMaterial::Set { material_slot: 1 },
+        }),
+        Err(VoxelPrimitiveError::RadiusTooLarge { .. })
+    ));
+    assert!(matches!(
+        VoxelPrimitiveEditService.generate(VoxelPrimitiveRequest {
+            primitive: VoxelPrimitive::Box {
+                start: [0, 0, 0],
+                end: [MAX_VOXEL_EDITS_PER_TRANSACTION as i64, 0, 0],
+                fill: VoxelBoxFill::Filled,
+            },
+            material: VoxelPrimitiveMaterial::Clear,
+        }),
+        Err(VoxelPrimitiveError::TooManyEdits { .. })
+    ));
+    assert!(matches!(
+        VoxelPrimitiveEditService.generate(VoxelPrimitiveRequest {
+            primitive: VoxelPrimitive::Block { address: [0, 0, 0] },
+            material: VoxelPrimitiveMaterial::Set { material_slot: 0 },
+        }),
+        Err(VoxelPrimitiveError::InvalidMaterial(_))
+    ));
 }
 
 fn scene() -> VoxelCollisionScene {
