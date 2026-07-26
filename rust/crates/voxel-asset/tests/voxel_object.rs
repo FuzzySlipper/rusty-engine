@@ -4,7 +4,7 @@ use voxel_asset::{
     VoxelAssetMaterialMapping, VoxelCoordinateSystem, VoxelFrame, VoxelObjectAnimationFrame,
     VoxelObjectAsset, VoxelObjectClip, VoxelObjectGrid, VoxelObjectProvenance,
     VoxelObjectProvenanceKind, VoxelRepresentation, VoxelRepresentationKind, VoxelSparseRun,
-    MAX_VOXEL_OBJECT_TOTAL_VOXELS, VOXEL_OBJECT_SCHEMA_VERSION,
+    MAX_STRING_BYTES, MAX_VOXEL_OBJECT_TOTAL_VOXELS, VOXEL_OBJECT_SCHEMA_VERSION,
 };
 
 #[test]
@@ -147,6 +147,57 @@ fn strict_object_decode_and_standalone_frame_validation_reject_drift() {
     assert!(resolve_voxel_frame(&changed, [1, 2]).is_err());
     assert!(object.resolve_clip_frame("missing", 0).is_err());
     assert!(object.resolve_clip_frame("walk", 99).is_err());
+}
+
+#[test]
+fn object_and_material_identities_enforce_the_string_byte_limit() {
+    let mut at_limit = object();
+    at_limit.asset_id = identity_with_byte_len("voxel-object/", MAX_STRING_BYTES);
+    at_limit.material_palette[0].material_asset_id =
+        identity_with_byte_len("material/", MAX_STRING_BYTES);
+    let at_limit = with_computed_voxel_object_hashes(at_limit).unwrap();
+    let encoded = encode_voxel_object(&at_limit).unwrap();
+    let decoded = decode_voxel_object(&encoded).unwrap();
+    assert_eq!(decoded.asset_id.len(), MAX_STRING_BYTES);
+    assert!(decoded
+        .material_palette
+        .iter()
+        .any(|binding| binding.material_asset_id.len() == MAX_STRING_BYTES));
+
+    let mut over_limit = object();
+    over_limit.asset_id = identity_with_byte_len("voxel-object/", MAX_STRING_BYTES + 1);
+    over_limit.material_palette[0].material_asset_id =
+        identity_with_byte_len("material/", MAX_STRING_BYTES + 1);
+    let construction_error = with_computed_voxel_object_hashes(over_limit).unwrap_err();
+    assert_identity_limit_diagnostics(&construction_error);
+
+    let mut value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    value["assetId"] = serde_json::json!(identity_with_byte_len(
+        "voxel-object/",
+        MAX_STRING_BYTES + 1
+    ));
+    value["materialPalette"][0]["materialAssetId"] =
+        serde_json::json!(identity_with_byte_len("material/", MAX_STRING_BYTES + 1));
+    let decode_error = decode_voxel_object(&serde_json::to_string(&value).unwrap()).unwrap_err();
+    assert_identity_limit_diagnostics(&decode_error);
+}
+
+fn assert_identity_limit_diagnostics(error: &voxel_asset::VoxelObjectError) {
+    assert!(error.diagnostics().iter().any(|item| {
+        item.code == "voxelObject.invalidAssetId"
+            && item.path == "assetId"
+            && item.message.contains(&MAX_STRING_BYTES.to_string())
+    }));
+    assert!(error.diagnostics().iter().any(|item| {
+        item.code == "voxelObject.invalidMaterialReference"
+            && item.path == "materialPalette[0].materialAssetId"
+            && item.message.contains(&MAX_STRING_BYTES.to_string())
+    }));
+}
+
+fn identity_with_byte_len(prefix: &str, byte_len: usize) -> String {
+    assert!(prefix.len() < byte_len);
+    format!("{prefix}{}", "a".repeat(byte_len - prefix.len()))
 }
 
 fn object() -> VoxelObjectAsset {

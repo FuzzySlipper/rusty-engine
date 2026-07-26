@@ -189,19 +189,13 @@ fn semantic_diagnostics(object: &VoxelObjectAsset) -> Vec<VoxelObjectDiagnostic>
             ),
         ));
     }
-    match AssetId::parse(&object.asset_id) {
-        Ok(id) if id.kind() == AssetKind::VoxelObject => {}
-        Ok(id) => diagnostics.push(diagnostic(
-            "voxelObject.invalidAssetId",
-            "assetId",
-            format!("expected voxel-object identity, found {}", id.kind()),
-        )),
-        Err(error) => diagnostics.push(diagnostic(
-            "voxelObject.invalidAssetId",
-            "assetId",
-            error.to_string(),
-        )),
-    }
+    validate_asset_identity(
+        &object.asset_id,
+        AssetKind::VoxelObject,
+        "voxelObject.invalidAssetId",
+        "assetId",
+        &mut diagnostics,
+    );
     validate_grid(object, &mut diagnostics);
     let material_slots = validate_materials(
         &object.material_palette,
@@ -379,19 +373,13 @@ fn validate_materials(
                 "material slots must be unique and in 1..=4095",
             ));
         }
-        match AssetId::parse(&binding.material_asset_id) {
-            Ok(id) if id.kind() == AssetKind::Material => {}
-            Ok(id) => diagnostics.push(diagnostic(
-                "voxelObject.invalidMaterialReference",
-                format!("materialPalette[{index}].materialAssetId"),
-                format!("expected material identity, found {}", id.kind()),
-            )),
-            Err(error) => diagnostics.push(diagnostic(
-                "voxelObject.invalidMaterialReference",
-                format!("materialPalette[{index}].materialAssetId"),
-                error.to_string(),
-            )),
-        }
+        validate_asset_identity(
+            &binding.material_asset_id,
+            AssetKind::Material,
+            "voxelObject.invalidMaterialReference",
+            format!("materialPalette[{index}].materialAssetId"),
+            diagnostics,
+        );
         if let Some(name) = &binding.display_name {
             validate_string(
                 name,
@@ -593,6 +581,37 @@ fn valid_clip_id(value: &str) -> bool {
                     .bytes()
                     .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
         })
+}
+
+fn validate_asset_identity(
+    value: &str,
+    expected_kind: AssetKind,
+    code: &'static str,
+    path: impl Into<String>,
+    diagnostics: &mut Vec<VoxelObjectDiagnostic>,
+) {
+    let path = path.into();
+    if value.len() > crate::MAX_STRING_BYTES {
+        diagnostics.push(diagnostic(
+            code,
+            path,
+            format!(
+                "identity has {} UTF-8 bytes; limit is {}",
+                value.len(),
+                crate::MAX_STRING_BYTES
+            ),
+        ));
+        return;
+    }
+    match AssetId::parse(value) {
+        Ok(id) if id.kind() == expected_kind => {}
+        Ok(id) => diagnostics.push(diagnostic(
+            code,
+            path,
+            format!("expected {expected_kind} identity, found {}", id.kind()),
+        )),
+        Err(error) => diagnostics.push(diagnostic(code, path, error.to_string())),
+    }
 }
 
 fn validate_string(
