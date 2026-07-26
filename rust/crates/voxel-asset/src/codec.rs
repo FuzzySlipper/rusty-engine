@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     VoxelAsset, VoxelAssetBounds, VoxelAssetMaterialBinding, VoxelAssetMaterialMapping,
-    VoxelRepresentationKind, VoxelSparseRun, VOXEL_ASSET_SCHEMA_VERSION,
+    VoxelRepresentationKind, VOXEL_ASSET_SCHEMA_VERSION,
 };
 
 pub const MAX_ARTIFACT_BYTES: usize = 16 * 1024 * 1024;
@@ -505,17 +505,7 @@ fn computed_content_hash(asset: &VoxelAsset) -> String {
 }
 
 fn computed_voxel_data_hash(asset: &VoxelAsset) -> String {
-    let mut runs = asset.representation.sparse_runs.clone();
-    runs.sort_by_key(|run| (run.start, run.material_slot, run.length));
-    let mut bytes = Vec::with_capacity(runs.len().saturating_mul(30));
-    for run in runs {
-        for coordinate in run.start {
-            bytes.extend_from_slice(&coordinate.to_le_bytes());
-        }
-        bytes.extend_from_slice(&run.length.to_le_bytes());
-        bytes.extend_from_slice(&run.material_slot.to_le_bytes());
-    }
-    format!("sha256:{:x}", Sha256::digest(bytes))
+    crate::frame::computed_voxel_data_hash(&crate::VoxelFrame::from(asset))
 }
 
 fn canonicalize(asset: &mut VoxelAsset) {
@@ -543,33 +533,7 @@ fn canonicalize(asset: &mut VoxelAsset) {
                 &right.source_material_name,
             ))
     });
-    asset.representation.sparse_runs.sort_by_key(|run| {
-        (
-            run.start[1],
-            run.start[2],
-            run.start[0],
-            run.material_slot,
-            run.length,
-        )
-    });
-
-    let mut merged: Vec<VoxelSparseRun> =
-        Vec::with_capacity(asset.representation.sparse_runs.len());
-    for run in asset.representation.sparse_runs.iter().copied() {
-        if let Some(previous) = merged.last_mut() {
-            let adjacent = previous.start[1] == run.start[1]
-                && previous.start[2] == run.start[2]
-                && previous.material_slot == run.material_slot
-                && previous.start[0].checked_add(i64::from(previous.length)) == Some(run.start[0]);
-            if adjacent {
-                previous.length = previous.length.saturating_add(run.length);
-                continue;
-            }
-        }
-        merged.push(run);
-    }
-    merged.sort_by_key(|run| (run.start, run.material_slot, run.length));
-    asset.representation.sparse_runs = merged;
+    crate::frame::canonicalize_sparse_runs(&mut asset.representation.sparse_runs);
 }
 
 fn validate_string(

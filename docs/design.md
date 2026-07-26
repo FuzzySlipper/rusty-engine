@@ -152,6 +152,15 @@ limitations are recorded in [rendering-operations.md](rendering-operations.md).
 bounded conversion-input values. It performs no filesystem access, mesh parsing, runtime mutation,
 or project admission.
 
+Voxel volumes and voxel objects are separate durable meanings. A `voxel-volume/...` asset is grid
+content that a product may admit into authoritative environment state. A `voxel-object/...` asset is
+a reusable local-space model with one default frame and optional named full-frame clips; its pivot
+and animated frames are presentation data unless a caller explicitly selects a stable collision
+frame or proxy. Shared `VoxelFrame` resolution keeps both formats canonical without making visible
+frame swaps into world edits, collision/navigation rebuilds, or an Engine scheduler. The current
+M12 design and ordered implementation slices are in
+[voxel-model-conversion.md](voxel-model-conversion.md).
+
 `voxel-convert` is an offline authoring/build tool. It accepts one explicit request and bounded GLB
 source, completes conversion and validation before touching its target, then atomically installs the
 canonical artifact. Runtime consumers depend on `voxel-asset`, not the converter or GLB parser.

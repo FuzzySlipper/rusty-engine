@@ -53,7 +53,9 @@ impl ContentLoadPlan {
 fn stage_for(role: &ArtifactRole) -> ContentLoadStage {
     match role {
         ArtifactRole::AssetCatalog | ArtifactRole::AssetLock => ContentLoadStage::AssetAuthority,
-        ArtifactRole::VoxelAsset | ArtifactRole::ImportedAsset => ContentLoadStage::AssetData,
+        ArtifactRole::VoxelAsset | ArtifactRole::VoxelObject | ArtifactRole::ImportedAsset => {
+            ContentLoadStage::AssetData
+        }
         ArtifactRole::VoxelAnnotation => ContentLoadStage::Annotations,
         ArtifactRole::PrefabRegistry => ContentLoadStage::Prefabs,
         ArtifactRole::SceneDocument => ContentLoadStage::Scenes,

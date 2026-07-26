@@ -2,7 +2,7 @@ use asset_catalog::{encode_catalog, encode_lock, AssetCatalog, AssetLock};
 use authored_scene::{encode_scene, FlatSceneDocument};
 use entity_state::{encode_durable_snapshot, EntityState};
 use voxel_annotation::{encode_annotation_layer, VoxelAnnotationLayer};
-use voxel_asset::{encode_voxel_asset, VoxelAsset};
+use voxel_asset::{encode_voxel_asset, encode_voxel_object, VoxelAsset, VoxelObjectAsset};
 
 use crate::{encode_prefab_registry, ContentBody, ValidatedPrefabRegistry};
 
@@ -81,6 +81,15 @@ pub fn voxel_asset_body(
     encode_voxel_asset(asset)
         .map(|encoded| ContentBody::new(path, encoded.into_bytes()))
         .map_err(|error| OwnerCodecError::new("voxel-asset", error))
+}
+
+pub fn voxel_object_body(
+    path: impl Into<String>,
+    object: &VoxelObjectAsset,
+) -> Result<ContentBody, OwnerCodecError> {
+    encode_voxel_object(object)
+        .map(|encoded| ContentBody::new(path, encoded.into_bytes()))
+        .map_err(|error| OwnerCodecError::new("voxel-object", error))
 }
 
 pub fn voxel_annotation_body(

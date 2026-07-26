@@ -3,7 +3,10 @@ use std::fmt::Write;
 
 use engine_spatial::{MaterialVoxel, VoxelCollisionScene, VoxelEditRejection};
 use serde::Serialize;
-use voxel_asset::{decode_voxel_asset, validate_voxel_asset, VoxelAsset, VoxelAssetProvenanceKind};
+use voxel_asset::{
+    decode_voxel_asset, resolve_voxel_asset, validate_voxel_asset, VoxelAsset,
+    VoxelAssetProvenanceKind,
+};
 
 use crate::{
     Diagnostic, DiagnosticDomain, DiagnosticLocation, DiagnosticSet, DiagnosticSeverity,
@@ -376,29 +379,13 @@ impl VoxelStateInspection {
 }
 
 fn collision_scene_from_asset(asset: &VoxelAsset) -> Result<VoxelCollisionScene, String> {
-    let mut voxels = Vec::new();
-    for run in &asset.representation.sparse_runs {
-        for offset in 0..run.length {
-            let local_x = run.start[0]
-                .checked_add(i64::from(offset))
-                .ok_or_else(|| "sparse run coordinate overflowed".to_string())?;
-            let address = [
-                asset.grid.origin[0]
-                    .checked_add(local_x)
-                    .ok_or_else(|| "mapped x address overflowed".to_string())?,
-                asset.grid.origin[1]
-                    .checked_add(run.start[1])
-                    .ok_or_else(|| "mapped y address overflowed".to_string())?,
-                asset.grid.origin[2]
-                    .checked_add(run.start[2])
-                    .ok_or_else(|| "mapped z address overflowed".to_string())?,
-            ];
-            voxels.push(MaterialVoxel {
-                address,
-                material_slot: run.material_slot,
-            });
-        }
-    }
+    let voxels = resolve_voxel_asset(asset)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|cell| MaterialVoxel {
+            address: cell.coordinate,
+            material_slot: cell.material_slot,
+        });
     VoxelCollisionScene::from_material_voxels(asset.grid.cell_size, asset.grid.chunk_size, voxels)
         .map_err(|error| error.to_string())
 }

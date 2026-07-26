@@ -418,3 +418,17 @@ shell scripts, executable documentation, and CI require only Rusty Engine; ordin
 no pnpm or Node graph at all. A clean clone with no Asha or demo sibling is the certification
 boundary. Rusty Engine is canonical for provider work; Asha and its Den project remain immutable
 historical evidence and source locators only.
+
+## M12 voxel-model evidence
+
+The M12 campaign begins from the successor-owned static voxel asset/conversion and shared-renderer
+work recorded above. It also consults `/home/dev/voxelforge` as behavioral evidence for frame-swap
+clips, optional per-frame duration, serialized frame changes, skeletal pose sampling, and editor
+workflow needs. No VoxelForge source is copied by #6235: its base-plus-override storage is a
+candidate optimization lesson, while Rusty Engine voxel-object schema 1 deliberately stores complete
+canonical frames until the animated corpus supplies size and load measurements. VoxelForge's C#
+object graph, Assimp dependency, MCP/bridge services, editor session, and renderer are excluded.
+
+The current contract and task ordering are documented in
+[voxel-model-conversion.md](voxel-model-conversion.md). Future source/algorithm transfers, fixtures,
+licenses, replacements, and exclusions discovered by #6236-#6242 must be appended here as they land.

@@ -14,6 +14,11 @@ GLB bytes + explicit conversion request
   -> downstream material-voxel authority
 ```
 
+This document describes authoritative `voxel-volume/...` assets. Reusable local-space models and
+animated frame-swap clips use the separate voxel-object meaning documented in
+[voxel-model-conversion.md](voxel-model-conversion.md); visible object frames do not implicitly
+become environment edits or collision/navigation authority.
+
 Runtime consumers never read GLB, invoke conversion, or discover a provider. A
 content hash detects artifact drift and makes reproducibility inspectable; it is not a gameplay
 revision, replay certificate, action precondition, or runtime lifecycle owner.

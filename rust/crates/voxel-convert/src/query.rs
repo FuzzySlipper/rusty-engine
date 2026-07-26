@@ -184,16 +184,17 @@ pub fn query_model_window(
 }
 
 pub(crate) fn occupied_voxels(asset: &VoxelAsset) -> BTreeMap<[i64; 3], u16> {
-    let mut occupied = BTreeMap::new();
-    for run in &asset.representation.sparse_runs {
-        for offset in 0..run.length {
-            occupied.insert(
-                [run.start[0] + i64::from(offset), run.start[1], run.start[2]],
-                run.material_slot,
-            );
-        }
-    }
-    occupied
+    voxel_asset::resolve_voxel_frame(
+        &voxel_asset::VoxelFrame::from(asset),
+        asset
+            .material_palette
+            .iter()
+            .map(|binding| binding.material_slot),
+    )
+    .expect("converter only queries validated voxel assets")
+    .into_iter()
+    .map(|cell| (cell.coordinate, cell.material_slot))
+    .collect()
 }
 
 fn validate_snapshot(asset: &VoxelAsset, expected: &str) -> Result<(), ConversionError> {
