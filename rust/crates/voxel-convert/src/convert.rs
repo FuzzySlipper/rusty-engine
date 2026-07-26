@@ -1,20 +1,22 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use voxel_asset::{
     conversion_settings_sha256, encode_voxel_asset, validate_conversion_request,
     with_computed_content_hash, VoxelAsset, VoxelAssetBounds, VoxelAssetGrid, VoxelAssetProvenance,
-    VoxelAssetProvenanceKind, VoxelConversionFitPolicy, VoxelConversionMode,
-    VoxelConversionOriginPolicy, VoxelConversionRequest, VoxelConversionSettings,
-    VoxelCoordinateSystem, VoxelRepresentation, VoxelRepresentationKind, VoxelSparseRun,
-    VOXEL_ASSET_SCHEMA_VERSION,
+    VoxelAssetProvenanceKind, VoxelConversionRequest, VoxelCoordinateSystem, VoxelRepresentation,
+    VoxelRepresentationKind, VoxelSparseRun, VOXEL_ASSET_SCHEMA_VERSION,
 };
 
-use crate::{ConversionError, ImportedStaticMesh};
+use crate::{
+    material::MaterialSamplingContext,
+    voxelize::{voxelize, MaterialEvidence, MAX_GEOMETRIC_VOXELIZATION_WORK},
+    ConversionError, ImportedStaticMesh,
+};
 
-pub const CONVERTER_ID: &str = "rusty-engine.mesh-to-voxel.v1";
-pub const MAX_SURFACE_SAMPLE_WORK: u64 = 10_000_000;
+pub const CONVERTER_ID: &str = "rusty-engine.mesh-to-voxel.v2";
+pub const MAX_SURFACE_SAMPLE_WORK: u64 = MAX_GEOMETRIC_VOXELIZATION_WORK;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,6 +28,7 @@ pub struct ConversionReceipt {
     pub content_hash: String,
     pub source_vertices: usize,
     pub source_triangles: usize,
+    pub voxelization_work: u64,
     pub output_voxels: usize,
     pub sparse_runs: usize,
     pub bounds: VoxelAssetBounds,
@@ -46,6 +49,22 @@ pub(crate) fn convert_imported_mesh(
     source_sha256: String,
     source_byte_count: u64,
 ) -> Result<ConversionReceipt, ConversionError> {
+    convert_imported_mesh_with_material_sampling(
+        request,
+        mesh,
+        source_sha256,
+        source_byte_count,
+        None,
+    )
+}
+
+pub(crate) fn convert_imported_mesh_with_material_sampling(
+    request: &VoxelConversionRequest,
+    mesh: &ImportedStaticMesh,
+    source_sha256: String,
+    source_byte_count: u64,
+    material_sampling: Option<&MaterialSamplingContext<'_>>,
+) -> Result<ConversionReceipt, ConversionError> {
     validate_conversion_request(request, source_byte_count)?;
     if source_sha256 != request.expected_source_sha256 {
         return Err(ConversionError::one(
@@ -59,7 +78,7 @@ pub(crate) fn convert_imported_mesh(
     }
 
     validate_material_map(request, mesh)?;
-    let cells = convert_cells(request, mesh)?;
+    let (cells, voxelization_work) = convert_cells(request, mesh, material_sampling)?;
     let bounds = bounds_for_cells(&cells).expect("conversion rejects empty output");
     let sparse_runs = sparse_runs(&cells);
     let settings_sha256 = conversion_settings_sha256(&request.settings);
@@ -104,6 +123,7 @@ pub(crate) fn convert_imported_mesh(
     Ok(ConversionReceipt {
         source_vertices: mesh.positions.len(),
         source_triangles: mesh.triangles.len(),
+        voxelization_work,
         output_voxels,
         sparse_runs: asset.representation.sparse_runs.len(),
         bounds,
@@ -185,154 +205,49 @@ fn validate_material_map(
 fn convert_cells(
     request: &VoxelConversionRequest,
     mesh: &ImportedStaticMesh,
-) -> Result<BTreeMap<[i64; 3], u16>, ConversionError> {
-    let mapper = CoordinateMapper::new(&request.settings, &mesh.positions);
+    material_sampling: Option<&MaterialSamplingContext<'_>>,
+) -> Result<(BTreeMap<[i64; 3], u16>, u64), ConversionError> {
     let material_map = request
         .settings
         .material_map
         .iter()
         .map(|mapping| (mapping.source_material_slot, mapping.voxel_material_slot))
         .collect::<BTreeMap<_, _>>();
-    let mut source_cells = sampled_surface_cells(request, mesh, &mapper, &material_map)?;
-    if request.settings.mode == VoxelConversionMode::Solid {
-        validate_closed_topology(mesh)?;
-        fill_solid_bounds(request, mesh, &mapper, &material_map, &mut source_cells)?;
-    }
-    if source_cells.is_empty() {
-        return Err(ConversionError::one(
-            "conversion.invalidGeometry",
-            "source",
-            "conversion produced no voxels",
-        ));
-    }
-    Ok(source_cells
+    let voxelization = voxelize(request, mesh)?;
+    let cells = voxelization
+        .cells
         .into_iter()
-        .map(|(coordinate, (_, material))| (coordinate, material))
-        .collect())
+        .map(|(coordinate, evidence)| {
+            let fallback = resolve_static_material(evidence, &material_map)?;
+            Ok((
+                coordinate,
+                match material_sampling {
+                    Some(sampling) => sampling.resolve(mesh, evidence, fallback)?,
+                    None => fallback,
+                },
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, ConversionError>>()?;
+    Ok((cells, voxelization.work))
 }
 
-fn sampled_surface_cells(
-    request: &VoxelConversionRequest,
-    mesh: &ImportedStaticMesh,
-    mapper: &CoordinateMapper,
+fn resolve_static_material(
+    evidence: MaterialEvidence,
     material_map: &BTreeMap<u32, u16>,
-) -> Result<BTreeMap<[i64; 3], (u32, u16)>, ConversionError> {
-    let mut cells = BTreeMap::<[i64; 3], (u32, u16)>::new();
-    let mut work = 0u64;
-    for triangle in &mesh.triangles {
-        let points = triangle
-            .indices
-            .map(|index| mapper.map_continuous(mesh.positions[index as usize]));
-        let max_edge = distance(points[0], points[1])
-            .max(distance(points[1], points[2]))
-            .max(distance(points[2], points[0]));
-        let steps = (max_edge * 2.0).ceil().max(1.0) as u32;
-        let triangle_work = u64::from(steps + 1)
-            .checked_mul(u64::from(steps + 2))
-            .and_then(|value| value.checked_div(2))
-            .ok_or_else(|| work_limit_error(work))?;
-        work = work
-            .checked_add(triangle_work)
-            .ok_or_else(|| work_limit_error(work))?;
-        if work > MAX_SURFACE_SAMPLE_WORK {
-            return Err(work_limit_error(work));
-        }
-        let material = material_map[&triangle.source_material_slot];
-        for a in 0..=steps {
-            for b in 0..=(steps - a) {
-                let u = f64::from(a) / f64::from(steps);
-                let v = f64::from(b) / f64::from(steps);
-                let w = 1.0 - u - v;
-                let point = [
-                    points[0][0] * u + points[1][0] * v + points[2][0] * w,
-                    points[0][1] * u + points[1][1] * v + points[2][1] * w,
-                    points[0][2] * u + points[1][2] * v + points[2][2] * w,
-                ];
-                let coordinate = mapper.round_clamped(point);
-                let candidate = (triangle.source_material_slot, material);
-                match cells.get_mut(&coordinate) {
-                    Some(current) if candidate.0 < current.0 => *current = candidate,
-                    Some(_) => {}
-                    None => {
-                        cells.insert(coordinate, candidate);
-                    }
-                }
-            }
-        }
-        if cells.len() > request.settings.max_output_voxels as usize {
-            return Err(output_limit_error(cells.len(), request));
-        }
-    }
-    Ok(cells)
-}
-
-fn fill_solid_bounds(
-    request: &VoxelConversionRequest,
-    mesh: &ImportedStaticMesh,
-    mapper: &CoordinateMapper,
-    material_map: &BTreeMap<u32, u16>,
-    cells: &mut BTreeMap<[i64; 3], (u32, u16)>,
-) -> Result<(), ConversionError> {
-    let mapped = mesh
-        .positions
-        .iter()
-        .map(|position| mapper.map(*position))
-        .collect::<Vec<_>>();
-    let bounds = bounds_for_coordinates(&mapped).expect("mesh has positions");
-    let dimensions = (0..3)
-        .map(|axis| (bounds.max[axis] - bounds.min[axis] + 1) as u64)
-        .collect::<Vec<_>>();
-    let volume = dimensions
-        .into_iter()
-        .try_fold(1u64, |total, dimension| total.checked_mul(dimension))
-        .ok_or_else(|| output_limit_error(usize::MAX, request))?;
-    if volume > u64::from(request.settings.max_output_voxels) {
-        return Err(output_limit_error(volume as usize, request));
-    }
-    let default_source_slot = mesh
-        .materials
-        .first()
-        .expect("mesh has materials")
-        .source_material_slot;
-    let default_material = material_map[&default_source_slot];
-    for z in bounds.min[2]..=bounds.max[2] {
-        for y in bounds.min[1]..=bounds.max[1] {
-            for x in bounds.min[0]..=bounds.max[0] {
-                cells
-                    .entry([x, y, z])
-                    .or_insert((default_source_slot, default_material));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_closed_topology(mesh: &ImportedStaticMesh) -> Result<(), ConversionError> {
-    let mut faces = BTreeSet::<[u32; 3]>::new();
-    let mut edges = BTreeMap::<(u32, u32), Vec<(u32, u32)>>::new();
-    for triangle in &mesh.triangles {
-        let [a, b, c] = triangle.indices;
-        let mut face = [a, b, c];
-        face.sort_unstable();
-        if !faces.insert(face) {
-            return Err(topology_error(
-                "solid conversion requires unique triangle faces",
-            ));
-        }
-        for (from, to) in [(a, b), (b, c), (c, a)] {
-            let edge = if from <= to { (from, to) } else { (to, from) };
-            edges.entry(edge).or_default().push((from, to));
-        }
-    }
-    if edges.is_empty()
-        || edges.values().any(|uses| uses.len() != 2)
-        || edges.values().any(|uses| uses[0] == uses[1])
-    {
-        return Err(topology_error(
-            "solid conversion requires a closed, consistently wound indexed manifold",
-        ));
-    }
-    Ok(())
+) -> Result<u16, ConversionError> {
+    material_map
+        .get(&evidence.source_material_slot)
+        .copied()
+        .ok_or_else(|| {
+            ConversionError::one(
+                "conversion.materialMapMismatch",
+                "settings.materialMap",
+                format!(
+                    "surface evidence references unmapped source material slot {}",
+                    evidence.source_material_slot
+                ),
+            )
+        })
 }
 
 fn sparse_runs(cells: &BTreeMap<[i64; 3], u16>) -> Vec<VoxelSparseRun> {
@@ -366,92 +281,6 @@ fn sparse_runs(cells: &BTreeMap<[i64; 3], u16>) -> Vec<VoxelSparseRun> {
     runs
 }
 
-struct CoordinateMapper {
-    source_min: [f64; 3],
-    resolution: [u32; 3],
-    cell_size: f64,
-    scale: [f64; 3],
-    offset_cells: [f64; 3],
-    origin_policy: VoxelConversionOriginPolicy,
-}
-
-impl CoordinateMapper {
-    fn new(settings: &VoxelConversionSettings, positions: &[[f64; 3]]) -> Self {
-        let mut source_min = [f64::INFINITY; 3];
-        let mut source_max = [f64::NEG_INFINITY; 3];
-        for position in positions {
-            for axis in 0..3 {
-                source_min[axis] = source_min[axis].min(position[axis]);
-                source_max[axis] = source_max[axis].max(position[axis]);
-            }
-        }
-        let source_span: [f64; 3] = std::array::from_fn(|axis| source_max[axis] - source_min[axis]);
-        let target_span: [f64; 3] = std::array::from_fn(|axis| {
-            f64::from(settings.resolution[axis].saturating_sub(1)) * settings.cell_size
-        });
-        let ratios: [Option<f64>; 3] = std::array::from_fn(|axis| {
-            (source_span[axis] > f64::EPSILON).then(|| target_span[axis] / source_span[axis])
-        });
-        let scale = match settings.fit_policy {
-            VoxelConversionFitPolicy::Stretch => {
-                std::array::from_fn(|axis| ratios[axis].unwrap_or(1.0))
-            }
-            VoxelConversionFitPolicy::Contain | VoxelConversionFitPolicy::Cover => {
-                let uniform = match settings.fit_policy {
-                    VoxelConversionFitPolicy::Contain => {
-                        ratios.into_iter().flatten().reduce(f64::min).unwrap_or(1.0)
-                    }
-                    VoxelConversionFitPolicy::Cover => {
-                        ratios.into_iter().flatten().reduce(f64::max).unwrap_or(1.0)
-                    }
-                    VoxelConversionFitPolicy::Stretch => unreachable!(),
-                };
-                [uniform; 3]
-            }
-        };
-        let offset_cells = match settings.origin_policy {
-            VoxelConversionOriginPolicy::SourceOrigin | VoxelConversionOriginPolicy::TargetMin => {
-                [0.0; 3]
-            }
-            VoxelConversionOriginPolicy::Centered => std::array::from_fn(|axis| {
-                ((target_span[axis] - source_span[axis] * scale[axis]) / 2.0).max(0.0)
-                    / settings.cell_size
-            }),
-        };
-        Self {
-            source_min,
-            resolution: settings.resolution,
-            cell_size: settings.cell_size,
-            scale,
-            offset_cells,
-            origin_policy: settings.origin_policy,
-        }
-    }
-
-    fn map_continuous(&self, position: [f64; 3]) -> [f64; 3] {
-        std::array::from_fn(|axis| {
-            let anchored = if self.origin_policy == VoxelConversionOriginPolicy::SourceOrigin {
-                position[axis]
-            } else {
-                position[axis] - self.source_min[axis]
-            };
-            (anchored * self.scale[axis] / self.cell_size) + self.offset_cells[axis]
-        })
-    }
-
-    fn round_clamped(&self, continuous: [f64; 3]) -> [i64; 3] {
-        std::array::from_fn(|axis| {
-            continuous[axis]
-                .round()
-                .clamp(0.0, f64::from(self.resolution[axis].saturating_sub(1))) as i64
-        })
-    }
-
-    fn map(&self, position: [f64; 3]) -> [i64; 3] {
-        self.round_clamped(self.map_continuous(position))
-    }
-}
-
 fn bounds_for_cells(cells: &BTreeMap<[i64; 3], u16>) -> Option<VoxelAssetBounds> {
     bounds_for_coordinates(&cells.keys().copied().collect::<Vec<_>>())
 }
@@ -469,40 +298,8 @@ fn bounds_for_coordinates(coordinates: &[[i64; 3]]) -> Option<VoxelAssetBounds> 
     Some(VoxelAssetBounds { min, max })
 }
 
-fn distance(left: [f64; 3], right: [f64; 3]) -> f64 {
-    ((left[0] - right[0]).powi(2) + (left[1] - right[1]).powi(2) + (left[2] - right[2]).powi(2))
-        .sqrt()
-}
-
 fn sha256(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
-}
-
-fn output_limit_error(count: usize, request: &VoxelConversionRequest) -> ConversionError {
-    ConversionError::one(
-        "conversion.outputLimit",
-        "settings.maxOutputVoxels",
-        format!(
-            "conversion would produce {count} voxels; requested limit is {}",
-            request.settings.max_output_voxels
-        ),
-    )
-}
-
-fn work_limit_error(work: u64) -> ConversionError {
-    ConversionError::one(
-        "conversion.resourceLimit",
-        "source.triangles",
-        format!("surface sampling work {work} exceeds limit {MAX_SURFACE_SAMPLE_WORK}"),
-    )
-}
-
-fn topology_error(message: &'static str) -> ConversionError {
-    ConversionError::one(
-        "conversion.unsupportedTopology",
-        "source.triangles",
-        message,
-    )
 }
 
 fn asset_error(error: voxel_asset::VoxelAssetError) -> ConversionError {

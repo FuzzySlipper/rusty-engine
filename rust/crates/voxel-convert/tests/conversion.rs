@@ -96,7 +96,12 @@ fn real_conversion_is_byte_reproducible_and_matches_checked_artifact() {
     assert_eq!(first.canonical_json, ARTIFACT);
     assert_eq!(first.source_vertices, 48);
     assert_eq!(first.source_triangles, 12);
+    assert_eq!(first.voxelization_work, 48);
     assert_eq!(first.output_voxels, 8);
+    assert_eq!(
+        first.asset.provenance.converter,
+        "rusty-engine.mesh-to-voxel.v2"
+    );
     assert_eq!(first.sparse_runs, 4);
     assert_eq!(decode_voxel_asset(ARTIFACT).unwrap(), first.asset);
 }

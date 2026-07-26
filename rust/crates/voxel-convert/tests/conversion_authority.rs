@@ -9,12 +9,13 @@ use voxel_convert::{
     apply_conversion, apply_conversion_and_install, conversion_plan_hash,
     decode_conversion_request, decode_mesh_source_import_request, identity_transform,
     import_mesh_source, plan_conversion, plan_settings_sha256, preview_conversion,
-    query_model_info, query_model_window, ConversionApplyRequest, ConversionMaterialPolicy,
-    ConversionPlanRequest, ConversionPlanSettings, ConversionPreviewRequest, MeshSourceFormat,
-    MeshSourceImportRequest, TextureChannelLayout, TextureColorSpace, TextureMaterialBinding,
-    TextureMaterialMode, TextureSampleAsset, TextureSamplingPolicy, TextureSourceRef,
-    TextureUvAttributeRef, TextureWrapPolicy, VoxelModelInfoRequest, VoxelModelWindowRequest,
-    MAX_CONVERSION_RESOLUTION_AXIS, MAX_MESH_SOURCE_PATH_BYTES,
+    query_model_info, query_model_window, texture_coordinate_source_hash, ConversionApplyRequest,
+    ConversionMaterialPolicy, ConversionPlanRequest, ConversionPlanSettings,
+    ConversionPreviewRequest, MeshSourceFormat, MeshSourceImportRequest, TextureChannelLayout,
+    TextureColorSpace, TextureMaterialBinding, TextureMaterialMode, TextureSampleAsset,
+    TextureSamplingPolicy, TextureSourceRef, TextureUvAttributeRef, TextureWrapPolicy,
+    VoxelModelInfoRequest, VoxelModelWindowRequest, MAX_CONVERSION_RESOLUTION_AXIS,
+    MAX_MESH_SOURCE_PATH_BYTES,
 };
 
 const SOURCE: &[u8] = include_bytes!(concat!(
@@ -225,9 +226,12 @@ fn cover_fit_fallback_and_texture_palette_are_authority_owned() {
         texture: texture.clone(),
         texel_materials: vec![7, 8],
     }];
+    let uv_hash = imported.receipt.metadata.texture_coordinates[0]
+        .source_hash
+        .clone();
     texture_request.settings.material_policy.texture_bindings = vec![
-        texture_binding(0, texture.clone(), [0.0, 0.0]),
-        texture_binding(1, texture.clone(), [1.0, 0.0]),
+        texture_binding(0, texture.clone(), uv_hash.clone(), [0.0, 0.0]),
+        texture_binding(1, texture.clone(), uv_hash, [1.0, 0.0]),
     ];
     let textured = plan_conversion(&texture_request, &imported).unwrap();
     let resolved = textured
@@ -247,6 +251,69 @@ fn cover_fit_fallback_and_texture_palette_are_authority_owned() {
         error.diagnostics()[0].code,
         "conversion.textureHashMismatch"
     );
+}
+
+#[test]
+fn texture_palette_uses_hash_pinned_barycentric_uv_per_voxel() {
+    let mut source_request = import_request();
+    source_request.mesh_primitive = Some("group/0".to_owned());
+    let mut imported = import_mesh_source(&source_request).unwrap();
+    for (index, coordinate) in imported.mesh.texture_coordinates[0]
+        .coordinates
+        .iter_mut()
+        .enumerate()
+    {
+        *coordinate = Some([f64::from((index % 4 >= 2) as u8), 0.0]);
+    }
+    imported.receipt.metadata.texture_coordinates[0].source_hash =
+        texture_coordinate_source_hash(&imported.mesh, 0).unwrap();
+    let mut request = plan_request(&imported);
+    request.settings.conversion.material_map.clear();
+    request.settings.conversion.resolution = [8, 8, 8];
+    request.settings.conversion.max_output_voxels = 512;
+    let texture = texture_source(hash('e'));
+    request.settings.material_policy.texture_assets = vec![TextureSampleAsset {
+        texture: texture.clone(),
+        texel_materials: vec![7, 8],
+    }];
+    let uv_hash = imported.receipt.metadata.texture_coordinates[0]
+        .source_hash
+        .clone();
+    request.settings.material_policy.texture_bindings =
+        vec![texture_binding(0, texture, uv_hash, [0.0, 0.0])];
+
+    let prepared = plan_conversion(&request, &imported).unwrap();
+    let asset = &prepared.candidate().asset;
+    let info = query_model_info(
+        asset,
+        &VoxelModelInfoRequest {
+            expected_content_hash: asset.content_hash.clone(),
+            include_material_counts: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        info.material_counts
+            .iter()
+            .map(|count| count.material_slot)
+            .collect::<Vec<_>>(),
+        vec![7, 8]
+    );
+
+    let mut different_fallback = request.clone();
+    different_fallback.settings.material_policy.texture_bindings[0].sample_uv = [1.0, 0.0];
+    let fallback_changed = plan_conversion(&different_fallback, &imported).unwrap();
+    assert_eq!(
+        fallback_changed.candidate().asset.voxel_data_hash,
+        prepared.candidate().asset.voxel_data_hash
+    );
+
+    let mut stale_uv = request;
+    stale_uv.settings.material_policy.texture_bindings[0]
+        .uv_attribute
+        .source_hash = hash('f');
+    let error = plan_conversion(&stale_uv, &imported).unwrap_err();
+    assert_eq!(error.diagnostics()[0].code, "conversion.uvHashMismatch");
 }
 
 #[test]
@@ -407,6 +474,7 @@ fn texture_source(content_hash: String) -> TextureSourceRef {
 fn texture_binding(
     source_material_slot: u32,
     texture: TextureSourceRef,
+    source_hash: String,
     sample_uv: [f64; 2],
 ) -> TextureMaterialBinding {
     TextureMaterialBinding {
@@ -414,7 +482,7 @@ fn texture_binding(
         texture,
         uv_attribute: TextureUvAttributeRef {
             attribute_name: "TEXCOORD_0".to_string(),
-            source_hash: hash('1'),
+            source_hash,
         },
         sample_uv,
         sampling_policy: TextureSamplingPolicy::NearestTexel,

@@ -8,8 +8,11 @@ use voxel_asset::{
 };
 
 use crate::{
-    convert::{convert_imported_mesh, replace_settings_identity},
-    material::{canonicalize_material_policy, resolve_material_map, ConversionMaterialPolicy},
+    convert::{convert_imported_mesh_with_material_sampling, replace_settings_identity},
+    material::{
+        canonicalize_material_policy, material_sampling_context, resolve_material_map,
+        ConversionMaterialPolicy,
+    },
     query::occupied_voxels,
     store::install_canonical_asset,
     ConversionError, ConversionReceipt, ImportedMeshSource, ImportedStaticMesh, MeshSourceRef,
@@ -144,6 +147,7 @@ pub fn plan_conversion(
 
     let mut effective_settings = request.settings.conversion.clone();
     effective_settings.material_map = resolve_material_map(request, source)?;
+    let material_sampling = material_sampling_context(request, source)?;
     let transformed_mesh = transform_mesh(&source.mesh, request.settings.transform)?;
     let conversion_request = VoxelConversionRequest {
         asset_id: request.target_asset_id.clone(),
@@ -154,11 +158,12 @@ pub fn plan_conversion(
     };
     let settings_sha256 = plan_settings_sha256(&request.settings);
     let output = replace_settings_identity(
-        convert_imported_mesh(
+        convert_imported_mesh_with_material_sampling(
             &conversion_request,
             &transformed_mesh,
             source.receipt.source.source_sha256.clone(),
             source.receipt.source_byte_count,
+            Some(&material_sampling),
         )?,
         settings_sha256.clone(),
     )?;

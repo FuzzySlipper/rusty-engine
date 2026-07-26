@@ -105,13 +105,19 @@ expanded geometry, and ambiguous/missing selections. External image URIs are not
 as geometry dependencies. The cohesive imported scene retains mesh-local primitives and node
 transforms so the later animation owner can deform the same family without a second parser.
 
-Surface mode maps the source bounds through the explicit fit/origin settings and samples each
-triangle at no more than half-cell spacing in target-grid coordinates. A ten-million-sample work
-limit bounds amplification. Coordinates are rounded/clamped into the requested resolution;
-coordinate collisions choose the lowest source material slot deterministically. Solid mode first
-requires a closed, consistently wound indexed manifold, retains sampled boundary materials, and
-fills its mapped bounds. The selected Kenney wall uses surface mode because its GLB deliberately
-duplicates vertices between render faces rather than presenting a welded solid manifold.
+Surface mode maps the source through the explicit fit/origin settings and conservatively tests
+bounded triangle candidate cells with a triangle/box separating-axis test. It retains closest-point
+barycentric, triangle, and material evidence until deterministic conflict resolution and per-cell
+palette sampling. Imported UV attributes have selected-geometry SHA-256 identities; texture-bound
+cells interpolate the requested `TEXCOORD_n` and sample the bounded palette texture independently.
+
+Solid mode first requires a closed, consistently wound indexed manifold, retains conservative
+boundary evidence, and uses bounded perturbed X-ray parity to classify actual interior cell centers.
+Interior cells inherit the nearest positive-X exit material evidence, so multiple closed shells
+leave cavities empty. The shared ten-million-operation geometric work meter charges conservative
+candidate tests, ray/triangle tests, and interior classification; receipts expose the exact count.
+The selected Kenney wall remains surface-only because its render mesh duplicates vertices between
+faces instead of presenting a welded solid manifold.
 
 The higher-level conversion owner imports a hash-pinned source with deterministic bounds, groups,
 and material-slot metadata, then separates `plan`, bounded `preview`, and guarded `apply`. Plans add
@@ -127,8 +133,11 @@ The checked request at `content/conversion/kenney-wall-a.request.json` produces
 |---|---:|
 | Imported geometry | 48 positions / 12 triangles / 2 material groups |
 | Converted authority | 8 voxels / 4 sparse runs / local bounds `[0,0,0]..[1,1,1]` |
-| Settings SHA-256 | `98cb7d07a99015f5e759a39d89e77bb4f64cbdb0b3b5ed724bba9d35f95902ba` |
-| Artifact SHA-256 | `086d81f12403192c6d7568289c2b47771741e5620a967e5b5fe5093fd5608ab7` |
+| Geometric work | 48 candidate/intersection operations |
+| Converter | `rusty-engine.mesh-to-voxel.v2` |
+| Settings SHA-256 | `550002c71046096dcb2ce72653a73fb3755a41c070a36f5afee195313d86c297` |
+| Content hash | `1afe2e2d29272f2ac35ae577cc038f1e7fed75b03459bd07c441547abb1eb058` |
+| Artifact file SHA-256 | `9dd9a24b4c6728450173f0ea4ff7279310f0611042919d16d552482fc649d6d0` |
 
 Run the direct authoring tool with:
 
@@ -188,10 +197,12 @@ Run the bounded conversion measurement with:
 cargo run --release -q -p voxel-convert --bin voxel-conversion-workload -- 256
 ```
 
-On the checked source, 256 full parse-and-convert passes were byte-identical and averaged 26.8 us
-(83 us maximum, 37,284 conversions/s). The source/request/output sizes were 3,352/839/1,798 bytes.
-The M7B closeout also reran 256 full M7A projection rebuilds at 525.4 us average and 1,172 us
-maximum, retaining a 90,756-byte mesh payload.
+On the checked source after geometric voxelization, 256 full parse-and-convert passes were
+byte-identical and averaged 54.7 us (272 us maximum, 18,276 conversions/s) on the current provider
+host. Each conversion charged 48 geometric operations and retained the same eight-cell output. The
+source/request/output sizes were 3,352/1,080/2,109 bytes. The historical M7B closeout also measured
+256 full M7A projection rebuilds at 525.4 us average and 1,172 us maximum, retaining a 90,756-byte
+mesh payload; that projection number was not rerun by M12C.
 
 The M7B.3 product/persistence/workload implementation is pinned by
 `2cdad99c0d012643fe157fa6db51495a31327d98`. M7C annotations/history remains unscheduled absent a

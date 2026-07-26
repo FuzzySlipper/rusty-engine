@@ -13,17 +13,18 @@ mod planning;
 mod query;
 mod source;
 mod store;
+mod voxelize;
 
 pub use convert::{convert_glb, ConversionReceipt, CONVERTER_ID, MAX_SURFACE_SAMPLE_WORK};
 pub use diagnostic::{ConversionDiagnostic, ConversionError};
 pub use import::{
-    flatten_static_scene, import_static_glb, import_static_glb_scene, ImportedMaterial,
-    ImportedModelMesh, ImportedModelNode, ImportedModelPrimitive, ImportedModelScene,
-    ImportedPrimitiveGroup, ImportedStaticMesh, ImportedStaticTextureCoordinates,
-    ImportedTextureCoordinates, ImportedTriangle, MAX_IMPORTED_NAME_BYTES,
-    MAX_IMPORTED_SCENE_DEPTH, MAX_IMPORTED_SCENE_EDGES, MAX_IMPORTED_SCENE_MESHES,
-    MAX_IMPORTED_SCENE_MESH_INSTANCES, MAX_IMPORTED_SCENE_NODES, MAX_IMPORTED_SCENE_PRIMITIVES,
-    MAX_IMPORTED_TEXCOORD_SETS,
+    flatten_static_scene, import_static_glb, import_static_glb_scene,
+    texture_coordinate_source_hash, ImportedMaterial, ImportedModelMesh, ImportedModelNode,
+    ImportedModelPrimitive, ImportedModelScene, ImportedPrimitiveGroup, ImportedStaticMesh,
+    ImportedStaticTextureCoordinates, ImportedTextureCoordinates, ImportedTriangle,
+    MAX_IMPORTED_NAME_BYTES, MAX_IMPORTED_SCENE_DEPTH, MAX_IMPORTED_SCENE_EDGES,
+    MAX_IMPORTED_SCENE_MESHES, MAX_IMPORTED_SCENE_MESH_INSTANCES, MAX_IMPORTED_SCENE_NODES,
+    MAX_IMPORTED_SCENE_PRIMITIVES, MAX_IMPORTED_TEXCOORD_SETS,
 };
 pub use material::{
     ConversionMaterialPolicy, TextureChannelLayout, TextureColorSpace, TextureMaterialBinding,
@@ -46,11 +47,12 @@ pub use source::{
     decode_mesh_source_import_request, import_mesh_source, source_sha256, ImportedMeshSource,
     MeshSourceBounds, MeshSourceFormat, MeshSourceGroup, MeshSourceImportReceipt,
     MeshSourceImportRequest, MeshSourceMaterialSlot, MeshSourceMetadata, MeshSourceNode,
-    MeshSourceRef, MAX_MESH_IMPORT_REQUEST_BYTES, MAX_MESH_PRIMITIVE_BYTES,
-    MAX_MESH_SOURCE_ASSET_ID_BYTES, MAX_MESH_SOURCE_PATH_BYTES,
+    MeshSourceRef, MeshSourceTextureCoordinates, MAX_MESH_IMPORT_REQUEST_BYTES,
+    MAX_MESH_PRIMITIVE_BYTES, MAX_MESH_SOURCE_ASSET_ID_BYTES, MAX_MESH_SOURCE_PATH_BYTES,
 };
 pub use store::{convert_and_install, decode_conversion_request, MAX_CONVERSION_REQUEST_BYTES};
 pub use voxel_asset::{
     MAX_CONVERSION_CELLS, MAX_CONVERSION_RESOLUTION_AXIS, MAX_CONVERSION_SOURCE_BYTES,
     MAX_CONVERSION_SOURCE_INDICES, MAX_CONVERSION_SOURCE_VERTICES,
 };
+pub use voxelize::MAX_GEOMETRIC_VOXELIZATION_WORK;

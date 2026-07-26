@@ -33,13 +33,14 @@ fn run() -> Result<(), String> {
     let receipt = convert_and_install(&request, &source, &arguments.output)
         .map_err(|error| error.to_string())?;
     println!(
-        "asset={} sourceSha256={} settingsSha256={} contentHash={} vertices={} triangles={} voxels={} runs={} output={}",
+        "asset={} sourceSha256={} settingsSha256={} contentHash={} vertices={} triangles={} work={} voxels={} runs={} output={}",
         receipt.asset.asset_id,
         receipt.source_sha256,
         receipt.settings_sha256,
         receipt.content_hash,
         receipt.source_vertices,
         receipt.source_triangles,
+        receipt.voxelization_work,
         receipt.output_voxels,
         receipt.sparse_runs,
         arguments.output.display()

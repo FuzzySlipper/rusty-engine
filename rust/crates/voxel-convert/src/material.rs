@@ -4,7 +4,10 @@ use core_assets::{AssetId, AssetKind};
 use serde::{Deserialize, Serialize};
 use voxel_asset::VoxelAssetMaterialMapping;
 
-use crate::{ConversionError, ConversionPlanRequest, ImportedMeshSource};
+use crate::{
+    voxelize::MaterialEvidence, ConversionError, ConversionPlanRequest, ImportedMeshSource,
+    ImportedStaticMesh, MeshSourceTextureCoordinates,
+};
 
 pub const MAX_CONVERSION_TEXTURE_TEXELS: usize = 4_194_304;
 
@@ -143,6 +146,7 @@ pub(crate) fn resolve_material_map(
                 )
             })?;
         validate_texture_binding(binding)?;
+        validate_uv_attribute(source, binding)?;
         let texture = request
             .settings
             .material_policy
@@ -170,7 +174,7 @@ pub(crate) fn resolve_material_map(
                     "texture binding does not match an authority-visible texture snapshot",
                 )
             })?;
-        let material_slot = sample_texture(texture, binding);
+        let material_slot = sample_texture_at(texture, binding.sample_uv);
         resolved.insert(
             binding.source_material_slot,
             VoxelAssetMaterialMapping {
@@ -192,6 +196,100 @@ pub(crate) fn resolve_material_map(
         }
     }
     Ok(resolved.into_values().collect())
+}
+
+pub(crate) struct MaterialSamplingContext<'a> {
+    bindings: BTreeMap<u32, ResolvedTextureBinding<'a>>,
+}
+
+struct ResolvedTextureBinding<'a> {
+    texture: &'a TextureSampleAsset,
+    source_set_index: u32,
+}
+
+impl<'a> MaterialSamplingContext<'a> {
+    pub(crate) fn resolve(
+        &self,
+        mesh: &ImportedStaticMesh,
+        evidence: MaterialEvidence,
+        fallback: u16,
+    ) -> Result<u16, ConversionError> {
+        let Some(binding) = self.bindings.get(&evidence.source_material_slot) else {
+            return Ok(fallback);
+        };
+        let triangle = mesh.triangles.get(evidence.triangle_index).ok_or_else(|| {
+            ConversionError::one(
+                "conversion.invalidGeometry",
+                "source.triangles",
+                "voxel material evidence references a missing source triangle",
+            )
+        })?;
+        if triangle.source_material_slot != evidence.source_material_slot {
+            return Err(ConversionError::one(
+                "conversion.invalidGeometry",
+                format!("source.triangles[{}]", evidence.triangle_index),
+                "voxel material evidence drifted from the source triangle material",
+            ));
+        }
+        let coordinates = mesh
+            .texture_coordinates
+            .iter()
+            .find(|candidate| candidate.source_set_index == binding.source_set_index)
+            .ok_or_else(|| missing_uv(evidence.source_material_slot))?;
+        let mut uv = [0.0; 2];
+        for (vertex, weight) in triangle.indices.iter().zip(evidence.barycentric) {
+            let coordinate = coordinates
+                .coordinates
+                .get(*vertex as usize)
+                .copied()
+                .flatten()
+                .ok_or_else(|| missing_uv(evidence.source_material_slot))?;
+            uv[0] += coordinate[0] * weight;
+            uv[1] += coordinate[1] * weight;
+        }
+        if uv.iter().any(|component| !component.is_finite()) {
+            return Err(ConversionError::one(
+                "conversion.invalidGeometry",
+                format!(
+                    "source.triangles[{}].textureCoordinates",
+                    evidence.triangle_index
+                ),
+                "interpolated texture coordinates must remain finite",
+            ));
+        }
+        Ok(sample_texture_at(binding.texture, uv))
+    }
+}
+
+pub(crate) fn material_sampling_context<'a>(
+    request: &'a ConversionPlanRequest,
+    source: &'a ImportedMeshSource,
+) -> Result<MaterialSamplingContext<'a>, ConversionError> {
+    let mut bindings = BTreeMap::new();
+    for binding in &request.settings.material_policy.texture_bindings {
+        let uv_attribute = validate_uv_attribute(source, binding)?;
+        let texture = request
+            .settings
+            .material_policy
+            .texture_assets
+            .iter()
+            .find(|asset| asset.texture == binding.texture)
+            .ok_or_else(|| {
+                ConversionError::one(
+                    "conversion.missingTextureSource",
+                    "settings.materialPolicy.textureBindings",
+                    "texture binding does not match an authority-visible texture snapshot",
+                )
+            })?;
+        bindings.insert(
+            binding.source_material_slot,
+            ResolvedTextureBinding {
+                texture,
+                source_set_index: uv_attribute.source_set_index,
+            },
+        );
+    }
+    Ok(MaterialSamplingContext { bindings })
 }
 
 fn validate_texture_assets(request: &ConversionPlanRequest) -> Result<(), ConversionError> {
@@ -288,9 +386,64 @@ fn validate_texture_binding(binding: &TextureMaterialBinding) -> Result<(), Conv
     Ok(())
 }
 
-fn sample_texture(asset: &TextureSampleAsset, binding: &TextureMaterialBinding) -> u16 {
-    let x = nearest_texel_axis(binding.sample_uv[0], asset.texture.width);
-    let y = nearest_texel_axis(binding.sample_uv[1], asset.texture.height);
+fn validate_uv_attribute<'a>(
+    source: &'a ImportedMeshSource,
+    binding: &TextureMaterialBinding,
+) -> Result<&'a MeshSourceTextureCoordinates, ConversionError> {
+    let attribute = source
+        .receipt
+        .metadata
+        .texture_coordinates
+        .iter()
+        .find(|attribute| attribute.attribute_name == binding.uv_attribute.attribute_name)
+        .ok_or_else(|| missing_uv(binding.source_material_slot))?;
+    if attribute.source_hash != binding.uv_attribute.source_hash {
+        return Err(ConversionError::one(
+            "conversion.uvHashMismatch",
+            "settings.materialPolicy.textureBindings.uvAttribute.sourceHash",
+            format!(
+                "UV attribute {} expected {}, imported {}",
+                attribute.attribute_name, binding.uv_attribute.source_hash, attribute.source_hash
+            ),
+        ));
+    }
+    let coordinates = source
+        .mesh
+        .texture_coordinates
+        .iter()
+        .find(|candidate| candidate.source_set_index == attribute.source_set_index)
+        .ok_or_else(|| missing_uv(binding.source_material_slot))?;
+    for triangle in source
+        .mesh
+        .triangles
+        .iter()
+        .filter(|triangle| triangle.source_material_slot == binding.source_material_slot)
+    {
+        if triangle.indices.iter().any(|index| {
+            coordinates
+                .coordinates
+                .get(*index as usize)
+                .is_none_or(Option::is_none)
+        }) {
+            return Err(missing_uv(binding.source_material_slot));
+        }
+    }
+    Ok(attribute)
+}
+
+fn missing_uv(source_material_slot: u32) -> ConversionError {
+    ConversionError::one(
+        "conversion.missingUvAttribute",
+        "settings.materialPolicy.textureBindings.uvAttribute",
+        format!(
+            "source material slot {source_material_slot} does not have the complete requested UV attribute"
+        ),
+    )
+}
+
+fn sample_texture_at(asset: &TextureSampleAsset, uv: [f64; 2]) -> u16 {
+    let x = nearest_texel_axis(uv[0], asset.texture.width);
+    let y = nearest_texel_axis(uv[1], asset.texture.height);
     asset.texel_materials[y * asset.texture.width as usize + x]
 }
 

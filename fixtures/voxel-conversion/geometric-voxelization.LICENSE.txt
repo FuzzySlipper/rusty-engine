@@ -1,0 +1,4 @@
+The geometric-voxelization fixture geometry and golden metadata were authored
+for Rusty Engine and are made available under CC0 1.0 Universal.
+
+https://creativecommons.org/publicdomain/zero/1.0/

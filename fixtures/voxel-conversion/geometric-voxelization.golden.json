@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "surface": {
+    "mesh": "slanted-thin-sheet",
+    "resolution": [9, 9, 9],
+    "voxelCount": 66,
+    "work": 260,
+    "coordinateEvidenceSha256": "sha256:d41332da5b10a111ea3752e04bd613d17897f07906f80542eedadf2819188dae"
+  },
+  "solidCavity": {
+    "mesh": "hollow-cube",
+    "resolution": [13, 13, 13],
+    "voxelCount": 2170,
+    "work": 8256,
+    "coordinateEvidenceSha256": "sha256:b9e0bb286f652b7533879e6a125a0efde91c9431a7713d63de8caa03b584cd7c"
+  },
+  "solidSlanted": {
+    "mesh": "slanted-tetrahedron",
+    "resolution": [11, 11, 11],
+    "voxelCount": 307,
+    "work": 2940,
+    "coordinateEvidenceSha256": "sha256:42dfcea0d29d4e902eb8efcff83501c2b0c959ce6c50d147dd299ffc0941ee73"
+  }
+}

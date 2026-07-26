@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use sha2::{Digest, Sha256};
 use voxel_asset::{MAX_CONVERSION_SOURCE_INDICES, MAX_CONVERSION_SOURCE_VERTICES};
 
 use crate::ConversionError;
@@ -109,6 +110,36 @@ pub fn import_static_glb_scene(source: &[u8]) -> Result<ImportedModelScene, Conv
 
 pub fn import_static_glb(source: &[u8]) -> Result<ImportedStaticMesh, ConversionError> {
     flatten_static_scene(&import_static_glb_scene(source)?)
+}
+
+/// Hash one flattened UV attribute exactly as the converter samples it.
+///
+/// The identity includes the selected/instanced vertex order and explicit
+/// missing values, so a group/node selection cannot silently reuse the hash of
+/// another geometry view.
+pub fn texture_coordinate_source_hash(
+    mesh: &ImportedStaticMesh,
+    source_set_index: u32,
+) -> Option<String> {
+    let texture_coordinates = mesh
+        .texture_coordinates
+        .iter()
+        .find(|candidate| candidate.source_set_index == source_set_index)?;
+    let mut digest = Sha256::new();
+    digest.update(b"rusty-engine.texture-coordinates.v1\0");
+    digest.update(source_set_index.to_le_bytes());
+    digest.update((texture_coordinates.coordinates.len() as u64).to_le_bytes());
+    for coordinate in &texture_coordinates.coordinates {
+        match coordinate {
+            Some([u, v]) => {
+                digest.update([1]);
+                digest.update(u.to_bits().to_le_bytes());
+                digest.update(v.to_bits().to_le_bytes());
+            }
+            None => digest.update([0]),
+        }
+    }
+    Some(format!("sha256:{:x}", digest.finalize()))
 }
 
 pub fn flatten_static_scene(

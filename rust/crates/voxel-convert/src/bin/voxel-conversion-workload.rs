@@ -41,6 +41,7 @@ fn main() {
             "outputBytes": expected.canonical_json.len(),
             "sourceVertices": expected.source_vertices,
             "sourceTriangles": expected.source_triangles,
+            "voxelizationWork": expected.voxelization_work,
             "outputVoxels": expected.output_voxels,
             "sparseRuns": expected.sparse_runs,
             "contentHash": expected.content_hash,

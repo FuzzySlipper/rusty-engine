@@ -6,8 +6,9 @@ use voxel_asset::{
 };
 
 use crate::{
-    flatten_static_scene, import_static_glb_scene, ConversionError, ImportedModelScene,
-    ImportedPrimitiveGroup, ImportedStaticMesh, ImportedStaticTextureCoordinates,
+    flatten_static_scene, import_static_glb_scene, texture_coordinate_source_hash, ConversionError,
+    ImportedModelScene, ImportedPrimitiveGroup, ImportedStaticMesh,
+    ImportedStaticTextureCoordinates,
 };
 
 pub const MAX_MESH_SOURCE_ASSET_ID_BYTES: usize = 1_024;
@@ -91,6 +92,16 @@ pub struct MeshSourceNode {
     pub model_transform: [f64; 16],
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct MeshSourceTextureCoordinates {
+    pub attribute_name: String,
+    pub source_set_index: u32,
+    pub source_hash: String,
+    pub vertex_count: u32,
+    pub missing_vertex_count: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct MeshSourceMetadata {
@@ -103,6 +114,7 @@ pub struct MeshSourceMetadata {
     pub groups: Vec<MeshSourceGroup>,
     pub material_slots: Vec<MeshSourceMaterialSlot>,
     pub nodes: Vec<MeshSourceNode>,
+    pub texture_coordinates: Vec<MeshSourceTextureCoordinates>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -532,6 +544,39 @@ fn mesh_metadata(
                 model_transform: node.model_transform,
             })
             .collect(),
+        texture_coordinates: mesh
+            .texture_coordinates
+            .iter()
+            .map(|coordinates| {
+                Ok(MeshSourceTextureCoordinates {
+                    attribute_name: format!("TEXCOORD_{}", coordinates.source_set_index),
+                    source_set_index: coordinates.source_set_index,
+                    source_hash: texture_coordinate_source_hash(mesh, coordinates.source_set_index)
+                        .expect("iterated texture coordinate set exists"),
+                    vertex_count: u32::try_from(coordinates.coordinates.len()).map_err(|_| {
+                        ConversionError::one(
+                            "conversion.resourceLimit",
+                            "source.textureCoordinates",
+                            "texture coordinate count exceeds u32",
+                        )
+                    })?,
+                    missing_vertex_count: u32::try_from(
+                        coordinates
+                            .coordinates
+                            .iter()
+                            .filter(|value| value.is_none())
+                            .count(),
+                    )
+                    .map_err(|_| {
+                        ConversionError::one(
+                            "conversion.resourceLimit",
+                            "source.textureCoordinates",
+                            "missing texture coordinate count exceeds u32",
+                        )
+                    })?,
+                })
+            })
+            .collect::<Result<Vec<_>, ConversionError>>()?,
     })
 }
 
