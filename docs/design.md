@@ -111,6 +111,18 @@ source is a per-definition Engine vocabulary with no gameplay semantics, tag exc
 ambient callbacks. Trigger snapshots remain schema 1: definitions written before the geometry seam
 decode as `ActiveCollision`, and new definitions round-trip their geometry source exactly.
 
+`SpatialOcclusionService` is the corresponding read-only ray owner when a caller needs voxel and
+retained-entity occlusion in one result. It queries `VoxelCollisionScene` together with
+`EntityState`, deriving entity AABBs through the same active-collision selection and world-translation
+geometry used by `EntityMotionService`; lifecycle, enabled collision, bounds, and transform decide
+participation, while render visibility does not. One call inspects at most 4,096 entity records and
+accepts at most eight ignored source/endpoint identities, with typed rejection before any scan when
+those quotas or the ray contract are invalid. Strictly nearer hits win; an exact entity/voxel
+distance tie preserves the entity hit, and an exact entity tie preserves the lower stable entity
+ID. The service borrows both authorities immutably, so rejected and successful queries cannot
+mutate either one. Downstream callers may exclude their source and intended target, but they do not
+maintain a collider index or reproduce the combined ordering.
+
 Collision, navigation, and meshes must not become independent world authorities. Optimization may
 make rebuilding more incremental, but it must retain the same source revision and atomic coherence
 rule.

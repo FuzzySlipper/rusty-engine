@@ -1,9 +1,11 @@
 use core_ids::EntityId;
 use core_math::Vec3;
 use entity_state::{
-    BoundsCapability, EntityLifecycle, EntityState, EntityTransform, Quat, TransformCommand,
-    TransformError, TransformReceipt, TransformService,
+    BoundsCapability, EntityState, EntityTransform, Quat, TransformCommand, TransformError,
+    TransformReceipt, TransformService,
 };
+
+use crate::active_collision::active_entity_colliders;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EntityMotionCommand {
@@ -423,17 +425,9 @@ fn yaw_pitch_from_quat(value: Quat) -> (f32, f32) {
 }
 
 fn active_obstacles(state: &EntityState, mover: EntityId) -> Vec<(EntityId, BoundsCapability)> {
-    state
-        .entities()
-        .filter_map(|core| {
-            if core.id == mover || core.lifecycle != EntityLifecycle::Active {
-                return None;
-            }
-            state.active_collision(core.id)?;
-            let bounds = *state.bounds(core.id)?;
-            let translation = state.world_transform(core.id)?.translation;
-            Some((core.id, offset_bounds(bounds, translation)))
-        })
+    active_entity_colliders(state)
+        .filter(|collider| collider.entity != mover)
+        .map(|collider| (collider.entity, collider.bounds))
         .collect()
 }
 

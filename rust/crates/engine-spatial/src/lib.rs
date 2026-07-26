@@ -8,7 +8,9 @@
 
 #![forbid(unsafe_code)]
 
+mod active_collision;
 mod entity_motion;
+mod occlusion;
 mod physics;
 mod trigger;
 mod trigger_codec;
@@ -25,6 +27,10 @@ pub use entity_motion::{
     EntityMotionResolution, EntityMotionService, FirstPersonBasis, FirstPersonMotionCommand,
     FirstPersonMotionError, FirstPersonMotionInput, FirstPersonMotionReadout,
     FirstPersonMotionReceipt, FirstPersonMotionService, FirstPersonPose,
+};
+pub use occlusion::{
+    SpatialOcclusionError, SpatialOcclusionHit, SpatialOcclusionQuery, SpatialOcclusionService,
+    MAX_OCCLUSION_IGNORED_ENTITIES, MAX_OCCLUSION_QUERY_ENTITIES,
 };
 pub use physics::{
     integrate_kinematic, integrate_kinematic_with_query, CollisionMode, CollisionResolution,
