@@ -118,6 +118,7 @@ const expectedOwners = new Set([
   'entity-state', 'environment-authoring', 'render-model', 'render-presentation',
   'render-projection', 'state-machine', 'svc-collision', 'svc-mesh', 'svc-pathfinding',
   'svc-rng', 'svc-spatial', 'svc-volume', 'voxel-annotation', 'voxel-asset', 'voxel-convert',
+  'voxel-object-runtime',
   '@rusty-engine/render-contracts', '@rusty-engine/render-projection',
   '@rusty-engine/renderer-three', '@rusty-engine/renderer-host', 'external-project-adapter',
 ]);
