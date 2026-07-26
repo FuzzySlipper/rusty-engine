@@ -835,8 +835,13 @@ export class StudioWorkspaceStore {
   }
 
   async runVoxelAction(action: VoxelEditorAction): Promise<void> {
-    const document = this.#snapshot().authoringDocument;
-    if (document === null || this.#snapshot().operation !== 'idle') return;
+    const current = this.#snapshot();
+    const document = current.authoringDocument;
+    if (
+      document === null
+      || current.operation !== 'idle'
+      || !objectCandidateActionIsCurrent(action, current.voxelWorkspace.objectConversion)
+    ) return;
     const expectedProjectHash = document.identity.projectHash;
     this.#patch({ operation: 'voxel', lastError: null });
     try {
@@ -1462,6 +1467,12 @@ export class StudioWorkspaceStore {
       voxelWorkspace: {
         ...current.voxelWorkspace,
         validatedPick: null,
+        objectSourceInspection: resetSelection
+          ? null
+          : current.voxelWorkspace.objectSourceInspection,
+        objectConversion: resetSelection
+          ? null
+          : current.voxelWorkspace.objectConversion,
       },
       assetWorkspace: {
         selectedAssetId: project.assetBrowser.assets.some(
@@ -1578,6 +1589,27 @@ export class StudioWorkspaceStore {
 
   #patch(update: Partial<StudioWorkspaceSnapshot>): void {
     this.#snapshot.update((current) => ({ ...current, ...update }));
+  }
+}
+
+function objectCandidateActionIsCurrent(
+  action: VoxelEditorAction,
+  conversion: VoxelWorkspaceState['objectConversion'],
+): boolean {
+  switch (action.kind) {
+    case 'previewObjectFrame':
+      return conversion !== null
+        && action.planId === conversion.plan.planId
+        && action.expectedPlanHash === conversion.plan.planHash;
+    case 'applyObjectConversion':
+      return conversion !== null
+        && action.planId === conversion.plan.planId
+        && action.expectedPlanHash === conversion.plan.planHash
+        && action.expectedOutputHash === conversion.preview.outputHash;
+    case 'discardObjectConversion':
+      return conversion !== null && action.planId === conversion.plan.planId;
+    default:
+      return true;
   }
 }
 

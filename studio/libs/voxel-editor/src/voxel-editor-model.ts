@@ -113,6 +113,21 @@ export interface VoxelObjectClipControlOutput {
 }
 
 /**
+ * Static objects have only their required default frame. Animation controls
+ * may retain stale hidden form values when the source mode changes, so they
+ * must not participate in a static request.
+ */
+export function buildVoxelObjectClipControlForSource(
+  sourceKind: VoxelObjectSourceKind,
+  available: readonly VoxelObjectSourceClipReadout[],
+  input: VoxelObjectClipControlInput,
+): VoxelObjectClipControlOutput {
+  return sourceKind === 'static'
+    ? { clips: [], initialFrame: { kind: 'default' } }
+    : buildVoxelObjectClipControl(available, input);
+}
+
+/**
  * Maps transient form selections to the closed Rust clip request. It chooses
  * identities and time units only; sampling, deformation, deduplication, and
  * hashes remain entirely Rust-owned.
@@ -166,7 +181,7 @@ function secondsToMicroseconds(value: number, label: string): number {
 function objectClipId(name: string, sourceAnimationIndex: number): string {
   const slug = name
     .trim()
-    .toLocaleLowerCase()
+    .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
   const stableName = slug === '' ? 'animation' : slug;

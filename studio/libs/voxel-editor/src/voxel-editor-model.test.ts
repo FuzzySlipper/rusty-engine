@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   buildVoxelObjectClipControl,
+  buildVoxelObjectClipControlForSource,
   deriveVoxelPickValidation,
 } from './voxel-editor-model.js';
 
@@ -96,6 +97,44 @@ test('maps transient clip controls to stable closed Rust clip requests', () => {
   assert.equal(output.defaultClip, 'clip/idle-8');
   assert.deepEqual(output.initialFrame, {
     kind: 'clip', clipId: 'clip/walk-cycle-4', frameIndex: 0,
+  });
+});
+
+test('automatic clip identities are independent of locale-sensitive casing', () => {
+  assert.equal('IDLE'.toLocaleLowerCase('tr-TR'), 'ıdle');
+  const output = buildVoxelObjectClipControl([{
+    sourceAnimationIndex: 0,
+    name: 'IDLE',
+    durationMicroseconds: 1_000_000,
+    channelCount: 1,
+    targetNodeIndices: [0],
+    properties: ['rotation'],
+  }], {
+    selectedSourceClipNames: ['IDLE'],
+    sampleRateHz: 12,
+    startSeconds: 0,
+    endSeconds: '',
+    endPolicy: 'excludeLoopSeam',
+    defaultSourceClipName: 'IDLE',
+  });
+
+  assert.equal(output.clips[0]?.outputClipId, 'clip/idle-1');
+  assert.equal(output.defaultClip, 'clip/idle-1');
+});
+
+test('static object controls ignore hidden stale animation values', () => {
+  const output = buildVoxelObjectClipControlForSource('static', [], {
+    selectedSourceClipNames: ['stale-clip'],
+    sampleRateHz: Number.NaN,
+    startSeconds: -1,
+    endSeconds: '-2',
+    endPolicy: 'includeClipEnd',
+    defaultSourceClipName: 'stale-clip',
+  });
+
+  assert.deepEqual(output, {
+    clips: [],
+    initialFrame: { kind: 'default' },
   });
 });
 

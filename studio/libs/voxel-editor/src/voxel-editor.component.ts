@@ -41,7 +41,7 @@ import type {
   VoxelEditorAction,
   VoxelHostPathChooser,
 } from './voxel-editor-model.js';
-import { buildVoxelObjectClipControl } from './voxel-editor-model.js';
+import { buildVoxelObjectClipControlForSource } from './voxel-editor-model.js';
 
 type EditorTab = 'assets' | 'edit' | 'annotations' | 'convert';
 
@@ -822,7 +822,7 @@ export class VoxelEditorComponent {
     }
     let clipControl: VoxelObjectClipControlOutput;
     try {
-      clipControl = buildVoxelObjectClipControl(inspection.clips, {
+      clipControl = buildVoxelObjectClipControlForSource(this.objectSourceKind, inspection.clips, {
         selectedSourceClipNames: this.objectSelectedClips,
         sampleRateHz: this.objectSampleRateHz,
         startSeconds: this.objectStartSeconds,
@@ -1028,17 +1028,25 @@ export class VoxelEditorComponent {
   #scheduleObjectPlayback(): void {
     if (!this.objectPlaying()) return;
     const conversion = this.objectConversion();
-    const clip = conversion?.preview.clips.find(
+    if (conversion === null) {
+      this.pauseObjectPreview();
+      return;
+    }
+    const clip = conversion.preview.clips.find(
       (candidate) => candidate.outputClipId === this.objectPreviewClip,
     );
     if (clip === undefined || clip.storedFrameCount === 0) {
       this.pauseObjectPreview();
       return;
     }
+    const planId = conversion.plan.planId;
     const frame = clip.frames[this.objectPreviewFrame];
     const delay = Math.max(16, Math.round((frame?.durationMicroseconds ?? 83_333) / 1_000));
     this.#playbackTimer = setTimeout(() => {
-      if (!this.objectPlaying()) return;
+      if (!this.objectPlaying() || this.objectConversion()?.plan.planId !== planId) {
+        this.pauseObjectPreview();
+        return;
+      }
       this.previewObjectFrame((this.objectPreviewFrame + 1) % clip.storedFrameCount);
       this.#scheduleObjectPlayback();
     }, delay);

@@ -133,27 +133,54 @@ test('selection does not change when automatic transform settlement is rejected'
   assert.match(store.snapshot().lastError ?? '', /project\.staleHash/);
 });
 
-test('opening a second project clears project-scoped selection and preview even when entity ids overlap', async () => {
-  const transport = new FixtureTransport();
-  const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
+test('opening a second project clears project-scoped selection, preview, and private object work', async () => {
+  const client = new VoxelObjectFixtureClient();
+  client.openedProjectId = 'loading-bay-a';
+  const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
   await store.openProject('/external/loading-bay-a', 'content/projects/loading-bay.project.json');
   store.selectHierarchyNode(10);
   store.beginTranslationPreview(1);
   store.setPreviewTranslationAxis(0, 99);
+  await store.runVoxelAction({
+    kind: 'inspectObjectSource',
+    sourceKind: 'animated',
+    sourceAssetId: 'mesh-animation/character',
+    source: { scope: 'host', path: '/trusted/character.glb' },
+  });
+  await store.runVoxelAction(objectPrepareAction());
+  const staleConversion = store.snapshot().voxelWorkspace.objectConversion;
+  assert.ok(staleConversion !== null);
   assert.equal(store.snapshot().selection.entityId, 1);
   assert.deepEqual(store.snapshot().preview?.translation, [99, 2, 3]);
+  assert.equal(firstProjectionLabel(store), 'voxel-object-candidate-0');
 
-  transport.openedProjectId = 'loading-bay-b';
+  client.openedProjectId = 'loading-bay-b';
   await store.openProject('/external/loading-bay-b', 'content/projects/loading-bay.project.json');
 
   assert.equal(store.snapshot().authoringDocument?.identity.projectId, 'loading-bay-b');
   assert.equal(store.snapshot().selection.entityId, null);
   assert.equal(store.snapshot().selection.sceneNodeId, null);
   assert.equal(store.snapshot().preview, null);
-  assert.deepEqual(
-    transport.requests.map((request) => request.type),
-    ['describe', 'openProject', 'openProject'],
-  );
+  assert.equal(store.snapshot().voxelWorkspace.objectSourceInspection, null);
+  assert.equal(store.snapshot().voxelWorkspace.objectConversion, null);
+  assert.equal(firstProjectionLabel(store), 'player');
+
+  await store.runVoxelAction({
+    kind: 'previewObjectFrame',
+    planId: staleConversion.plan.planId,
+    expectedPlanHash: staleConversion.plan.planHash,
+    frame: { kind: 'clip', clipId: 'clip/walk-1', frameIndex: 1 },
+    maxPreviewSamples: 64,
+  });
+  await store.runVoxelAction({
+    kind: 'applyObjectConversion',
+    planId: staleConversion.plan.planId,
+    expectedPlanHash: staleConversion.plan.planHash,
+    expectedOutputHash: staleConversion.preview.outputHash,
+  });
+  assert.equal(client.previewRequestCount, 0);
+  assert.equal(client.applyRequestCount, 0);
+  assert.equal(firstProjectionLabel(store), 'player');
 });
 
 test('voxel-object source, shared candidate frames, stale apply, explicit discard, apply, and reopen stay distinct', async () => {
@@ -358,6 +385,9 @@ class VoxelObjectFixtureClient {
   rejectObjectApply = false;
   applied = false;
   attached = false;
+  openedProjectId = 'loading-bay';
+  previewRequestCount = 0;
+  applyRequestCount = 0;
 
   describe() {
     return Promise.resolve(described('describe-object') as never);
@@ -395,6 +425,7 @@ class VoxelObjectFixtureClient {
   }
 
   previewVoxelObjectConversion(input: { readonly frame: { readonly kind: string; readonly frameIndex?: number } }) {
+    this.previewRequestCount += 1;
     const frame = input.frame.kind === 'clip' ? input.frame.frameIndex ?? 0 : 0;
     return Promise.resolve({
       preview: objectPreview(frame),
@@ -404,6 +435,7 @@ class VoxelObjectFixtureClient {
   }
 
   applyVoxelObjectConversion() {
+    this.applyRequestCount += 1;
     if (this.rejectObjectApply) return Promise.reject(new Error('project.staleHash: source changed'));
     this.applied = true;
     return Promise.resolve({
@@ -444,7 +476,7 @@ class VoxelObjectFixtureClient {
   }
 
   #project() {
-    const project = projectReadout(false);
+    const project = projectReadout(false, this.openedProjectId);
     return {
       ...project,
       voxelObjectAuthoring: {
