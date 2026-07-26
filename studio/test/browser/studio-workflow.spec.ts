@@ -86,6 +86,7 @@ test('real project hierarchy, shared picking, transform settlement, reopen, and 
 test('project, scene, entity, light, and capability authoring flow through named Rust operations', async ({ page }) => {
   await page.goto('/');
   const shell = page.locator('[data-visual-id="studio-shell"]');
+  const viewport = page.locator('rusty-studio-viewport');
 
   await page.getByRole('button', { name: 'File', exact: true }).click();
   await page.getByRole('button', { name: 'New Project…', exact: true }).click();
@@ -116,6 +117,20 @@ test('project, scene, entity, light, and capability authoring flow through named
   await dialog.getByRole('button', { name: 'Create object', exact: true }).click();
   await expect(page.locator('.entity-row[data-entity-id="42"]')).toContainText('Key Light');
   await expect(page.locator('.viewport-source-readout')).toContainText('1 lights');
+  await expect(viewport).toHaveAttribute('data-lighting-mode', 'work_light');
+  await expect(viewport).toHaveAttribute('data-work-light-active', 'true');
+  const lightingToggle = page.locator('[data-action="toggle-work-light"]');
+  await expect(lightingToggle).toHaveAttribute('aria-pressed', 'true');
+  const projectHashBeforeLightingToggle = await projectHash(shell);
+  const workLightFrameHash = await rendererHash(viewport);
+  await lightingToggle.click();
+  await expect(viewport).toHaveAttribute('data-lighting-mode', 'authored_lights');
+  await expect(viewport).toHaveAttribute('data-work-light-active', 'false');
+  await expect.poll(() => rendererHash(viewport)).not.toBe(workLightFrameHash);
+  await expect(shell).toHaveAttribute('data-project-hash', projectHashBeforeLightingToggle);
+  await lightingToggle.click();
+  await expect(viewport).toHaveAttribute('data-lighting-mode', 'work_light');
+  await expect(viewport).toHaveAttribute('data-work-light-active', 'true');
 
   await page.locator('.entity-row[data-entity-id="42"]').click();
   await page.getByRole('button', { name: 'Entity', exact: true }).click();
@@ -195,6 +210,12 @@ test('host-user input settings and general asset import reimport persist through
   await expect(viewport).toHaveAttribute('data-camera-move-forward', 'ArrowUp');
   await expect(shell).toHaveAttribute('data-user-settings-status', 'loaded');
   await settings.getByRole('button', { name: 'Done', exact: true }).click();
+  const lightingToggle = page.locator('[data-action="toggle-work-light"]');
+  await expect(lightingToggle).toHaveAttribute('aria-pressed', 'true');
+  await lightingToggle.click();
+  await expect(shell).toHaveAttribute('data-lighting-mode', 'authored_lights');
+  await expect(viewport).toHaveAttribute('data-lighting-mode', 'authored_lights');
+  await expect(shell).toHaveAttribute('data-user-settings-status', 'loaded');
 
   await page.reload();
   await expect(shell).toHaveAttribute('data-user-settings-status', 'loaded');
@@ -202,6 +223,8 @@ test('host-user input settings and general asset import reimport persist through
   await expect(shell).toHaveAttribute('data-move-forward', 'ArrowUp');
   await expect(viewport).toHaveAttribute('data-camera-move-speed', '12');
   await expect(viewport).toHaveAttribute('data-camera-move-forward', 'ArrowUp');
+  await expect(shell).toHaveAttribute('data-lighting-mode', 'authored_lights');
+  await expect(viewport).toHaveAttribute('data-lighting-mode', 'authored_lights');
 
   const hashBeforePlan = await projectHash(shell);
   await page.getByRole('button', { name: 'File', exact: true }).click();

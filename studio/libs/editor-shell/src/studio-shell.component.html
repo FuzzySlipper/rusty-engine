@@ -13,6 +13,7 @@
   [attr.data-asset-plan]="state().assetWorkspace.plan?.reimportKind"
   [attr.data-selected-asset]="state().assetWorkspace.selectedAssetId"
   [attr.data-user-settings-status]="state().userSettings.status"
+  [attr.data-lighting-mode]="state().settings.lightingMode"
   [attr.data-camera-speed]="state().settings.cameraMoveSpeed"
   [attr.data-move-forward]="state().settings.keyboard.moveForward"
 >
@@ -70,6 +71,14 @@
         <label>
           <input type="checkbox" [ngModel]="state().settings.snappingEnabled" (ngModelChange)="store.updateSettings({ snappingEnabled: $event })" />
           Translation snapping
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            [ngModel]="state().settings.lightingMode === 'work_light'"
+            (ngModelChange)="store.updateSettings({ lightingMode: $event ? 'work_light' : 'authored_lights' })"
+          />
+          Editor work light
         </label>
         <button type="button" (click)="store.setSettingsOpen(true)">Studio Settings…</button>
       </section>
@@ -173,6 +182,14 @@
           <button type="button" [class.is-active]="state().settings.transformOrientation === 'world'" (click)="setTransformOrientation(state().settings.transformOrientation === 'world' ? 'local' : 'world')">{{ state().settings.transformOrientation }}</button>
           <button type="button" [class.is-active]="state().settings.gridVisible" (click)="store.updateSettings({ gridVisible: !state().settings.gridVisible })">Grid</button>
           <button type="button" [class.is-active]="state().settings.snappingEnabled" (click)="store.updateSettings({ snappingEnabled: !state().settings.snappingEnabled })">Snap {{ state().settings.translationSnap }}</button>
+          <button
+            type="button"
+            data-action="toggle-work-light"
+            [class.is-active]="state().settings.lightingMode === 'work_light'"
+            [attr.aria-pressed]="state().settings.lightingMode === 'work_light'"
+            title="Replace authored lighting with shadow-free editor work lights"
+            (click)="store.updateSettings({ lightingMode: state().settings.lightingMode === 'work_light' ? 'authored_lights' : 'work_light' })"
+          >Work Light</button>
         </div>
         <span class="viewport-mode">Shared renderer · orbit / WASD / wheel</span>
       </header>
@@ -182,6 +199,7 @@
           <rusty-studio-viewport
             [frame]="projection.frame"
             [frameGeneration]="projection.generation"
+            [lightingMode]="state().settings.lightingMode"
             [grid]="viewportGrid()"
             [controlPreferences]="viewportControlPreferences()"
             [selectedEntityId]="state().selection.entityId"

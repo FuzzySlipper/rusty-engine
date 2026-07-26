@@ -41,6 +41,13 @@ pointer-cancel restoration, and pointer-up settlement. It replaces Asha store/re
 facades with the successor's local preview, explicit world-to-local conversion, and named
 hash-and-revision-guarded Rust adapter mutation.
 
+The Work Light follow-up adapts `libs/studio-domain/src/studio-lighting.ts` and the explicit lighting
+choice in `libs/studio-shell/src/index.ts` at the same Studio pin. It retains the proven `Work Light`
+and `Authored Lights` modes, the two-light editor rig, disabled shadow intent, and a host-user default
+that remains compatible with older settings. The successor applies that choice to its disposable
+viewport frame and host-user settings owner; it does not restore Asha's store, scene-document mirror,
+or any path for the lighting toggle to mutate Rust-owned project content.
+
 ## Complete rendering successor donor
 
 The owner-approved rendering campaign #6156 uses a newer, rendering-specific Asha Engine baseline:

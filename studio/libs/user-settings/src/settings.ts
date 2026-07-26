@@ -27,6 +27,7 @@ export interface StudioHostUserSettingsArtifact {
     readonly transformOrientation: 'world' | 'local';
   };
   readonly sceneView: {
+    readonly lightingMode: 'work_light' | 'authored_lights';
     readonly gridVisible: boolean;
     readonly minorColor: readonly [number, number, number, number];
     readonly majorColor: readonly [number, number, number, number];
@@ -88,6 +89,7 @@ export function buildDefaultStudioHostUserSettings(
       transformOrientation: 'world',
     },
     sceneView: {
+      lightingMode: 'work_light',
       gridVisible: true,
       minorColor: [0.24, 0.4, 0.42, 0.36],
       majorColor: [0.32, 0.58, 0.58, 0.62],
@@ -192,6 +194,12 @@ export function validateStudioHostUserSettings(
     throw new TypeError('Transform orientation must be world or local.');
   }
   const sceneView = requireRecord(value['sceneView'], 'scene-view settings');
+  const lightingMode = sceneView['lightingMode'] === undefined
+    ? 'work_light'
+    : sceneView['lightingMode'];
+  if (lightingMode !== 'work_light' && lightingMode !== 'authored_lights') {
+    throw new TypeError('Studio lighting mode must be work_light or authored_lights.');
+  }
   const gridVisible = requireBoolean(sceneView['gridVisible'], 'grid visibility');
   const minorColor = requireColor(sceneView['minorColor'], 'minor grid color');
   const majorColor = requireColor(sceneView['majorColor'], 'major grid color');
@@ -239,6 +247,7 @@ export function validateStudioHostUserSettings(
       transformOrientation,
     },
     sceneView: {
+      lightingMode,
       gridVisible,
       minorColor,
       majorColor,

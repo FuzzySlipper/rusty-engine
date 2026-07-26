@@ -5,6 +5,7 @@ import {
   STUDIO_EDITOR_GRID,
   canvasPoint,
   movedPastPickThreshold,
+  presentStudioLighting,
   presentStudioSelection,
 } from './viewport-model.js';
 import { renderHandle, type RenderFrameDiff } from '@rusty-engine/render-contracts';
@@ -19,6 +20,61 @@ test('canvas-relative picking distinguishes a click from camera orbit input', ()
   assert.deepEqual(canvasPoint([151, 92], { left: 101, top: 42 }), [50, 50]);
   assert.equal(movedPastPickThreshold([10, 10], [13, 12]), false);
   assert.equal(movedPastPickThreshold([10, 10], [15, 10]), true);
+});
+
+test('work light replaces authored lights only in the disposable presentation', () => {
+  const canonical: RenderFrameDiff = {
+    schemaVersion: 1,
+    ops: [
+      {
+        op: 'create',
+        handle: renderHandle(7),
+        parent: null,
+        node: {
+          geometry: { kind: 'cube' },
+          material: { color: [0.2, 0.4, 0.6, 1], wireframe: false },
+          transform: {
+            translation: [1, 2, 3],
+            rotation: [0, 0, 0, 1],
+            scale: [2, 2, 2],
+          },
+          visible: true,
+          layer: 'scene',
+          metadata: { sourceEntity: 42, sourceSceneNode: 9, tags: [], label: 'lit object' },
+        },
+      },
+      {
+        op: 'createLight',
+        handle: renderHandle(8),
+        parent: null,
+        light: {
+          kind: 'directional',
+          color: [0.2, 0.3, 0.4],
+          intensity: 4,
+          enabled: true,
+          direction: [1, -1, 0],
+          shadowIntent: 'requested',
+        },
+      },
+    ],
+  };
+  const before = JSON.stringify(canonical);
+
+  const work = presentStudioLighting(canonical, 'work_light');
+
+  assert.equal(work.workLightActive, true);
+  assert.equal(work.authoredLightCount, 1);
+  assert.equal(work.activeLightCount, 2);
+  assert.equal(work.frame.ops.some((operation) => 'handle' in operation && operation.handle === 8), false);
+  const workLights = work.frame.ops.filter((operation) => operation.op === 'createLight');
+  assert.deepEqual(workLights.map((operation) => operation.light.kind), ['ambient', 'directional']);
+  assert.equal(workLights.every((operation) => operation.light.shadowIntent === 'disabled'), true);
+  assert.equal(JSON.stringify(canonical), before);
+
+  const authored = presentStudioLighting(canonical, 'authored_lights');
+  assert.equal(authored.workLightActive, false);
+  assert.equal(authored.activeLightCount, 1);
+  assert.equal(authored.frame, canonical);
 });
 
 test('selection and preview are disposable shared-renderer frame presentations', () => {

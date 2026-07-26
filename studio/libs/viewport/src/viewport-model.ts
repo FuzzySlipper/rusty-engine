@@ -30,6 +30,86 @@ export const STUDIO_EDITOR_GRID: EditorGridDescriptor = {
   },
 };
 
+export type StudioLightingMode = 'work_light' | 'authored_lights';
+
+export interface StudioLightingPresentation {
+  readonly frame: RenderFrameDiff;
+  readonly authoredLightCount: number;
+  readonly activeLightCount: number;
+  readonly workLightActive: boolean;
+}
+
+/**
+ * Replaces authored lights with a disposable, shadow-free editor rig when the
+ * human-facing work-light mode is active. The accepted Rust frame is never
+ * changed and authored lighting can be restored by presenting it again.
+ */
+export function presentStudioLighting(
+  frame: RenderFrameDiff,
+  mode: StudioLightingMode,
+): StudioLightingPresentation {
+  const authoredLightHandles = new Set(
+    frame.ops
+      .filter((operation) => operation.op === 'createLight')
+      .map((operation) => operation.handle),
+  );
+  const authoredLightCount = authoredLightHandles.size;
+  if (mode === 'authored_lights') {
+    return {
+      frame,
+      authoredLightCount,
+      activeLightCount: frame.ops.filter(
+        (operation) => operation.op === 'createLight' && operation.light.enabled,
+      ).length,
+      workLightActive: false,
+    };
+  }
+
+  const handles = availablePreviewHandles(frame, 2);
+  const ambientHandle = handles[0] as RenderHandle;
+  const directionalHandle = handles[1] as RenderHandle;
+  const retainedOps = frame.ops.filter((operation) => {
+    if (operation.op === 'createLight' || operation.op === 'updateLight') return false;
+    return operation.op !== 'destroy' || !authoredLightHandles.has(operation.handle);
+  });
+  return {
+    frame: {
+      schemaVersion: 1,
+      ops: [
+        ...retainedOps,
+        {
+          op: 'createLight',
+          handle: ambientHandle,
+          parent: null,
+          light: {
+            kind: 'ambient',
+            color: [1, 1, 1],
+            intensity: 0.62,
+            enabled: true,
+            shadowIntent: 'disabled',
+          },
+        },
+        {
+          op: 'createLight',
+          handle: directionalHandle,
+          parent: null,
+          light: {
+            kind: 'directional',
+            color: [1, 0.96, 0.9],
+            intensity: 1.15,
+            enabled: true,
+            direction: [-0.55, -0.8, -0.45],
+            shadowIntent: 'disabled',
+          },
+        },
+      ],
+    },
+    authoredLightCount,
+    activeLightCount: 2,
+    workLightActive: true,
+  };
+}
+
 export function canvasPoint(
   client: readonly [number, number],
   bounds: Pick<DOMRect, 'left' | 'top'>,

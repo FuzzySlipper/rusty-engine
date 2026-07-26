@@ -25,6 +25,7 @@ test('shell exposes the preserved editor surfaces and named parity operations', 
   assert.match(template, /<rusty-voxel-editor/);
   assert.match(template, /Import Project Asset/);
   assert.match(template, /studio-user-settings-status/);
+  assert.match(template, /data-action="toggle-work-light"/);
   assert.match(template, /captureKeyboardBinding/);
 });
 
@@ -32,7 +33,8 @@ test('viewport composes the shared renderer host without private Three ownership
   const viewport = await readFile(viewportUrl, 'utf8');
   assert.match(viewport, /mountRendererInspectionSurface/);
   assert.match(viewport, /presentStudioSelection/);
-  assert.match(viewport, /surface\.replaceFrame\(presentation\.frame\)/);
+  assert.match(viewport, /presentStudioLighting/);
+  assert.match(viewport, /surface\.replaceFrame\(lighting\.frame\)/);
   assert.match(viewport, /surface\.pick\(/);
   assert.match(viewport, /surface\.setGrid\(/);
   assert.match(viewport, /surface\.configureControlPreferences\(/);

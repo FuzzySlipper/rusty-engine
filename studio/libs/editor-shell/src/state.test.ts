@@ -165,8 +165,10 @@ test('host-user camera and keyboard settings persist outside project authority a
   await first.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
   assert.equal(first.snapshot().userSettings.status, 'defaulted');
   assert.equal(first.snapshot().settings.cameraMoveSpeed, 6);
+  assert.equal(first.snapshot().settings.lightingMode, 'work_light');
 
   first.updateSettings({
+    lightingMode: 'authored_lights',
     cameraMoveSpeed: 14,
     cameraBoostMultiplier: 5,
     invertLookY: true,
@@ -175,6 +177,7 @@ test('host-user camera and keyboard settings persist outside project authority a
   await first.closeProject();
   assert.match(settingsHost.text ?? '', /"cameraMoveSpeed": 14/);
   assert.match(settingsHost.text ?? '', /"moveForward": "ArrowUp"/);
+  assert.match(settingsHost.text ?? '', /"lightingMode": "authored_lights"/);
 
   const second = new StudioWorkspaceStore(
     new StudioAdapterClient(new FixtureTransport()),
@@ -183,6 +186,7 @@ test('host-user camera and keyboard settings persist outside project authority a
   await second.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
   assert.equal(second.snapshot().userSettings.status, 'loaded');
   assert.equal(second.snapshot().settings.cameraMoveSpeed, 14);
+  assert.equal(second.snapshot().settings.lightingMode, 'authored_lights');
   assert.equal(second.snapshot().settings.cameraBoostMultiplier, 5);
   assert.equal(second.snapshot().settings.invertLookY, true);
   assert.equal(second.snapshot().settings.keyboard.moveForward, 'ArrowUp');

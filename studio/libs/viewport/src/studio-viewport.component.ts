@@ -23,7 +23,9 @@ import {
   STUDIO_EDITOR_GRID,
   canvasPoint,
   movedPastPickThreshold,
+  presentStudioLighting,
   presentStudioSelection,
+  type StudioLightingMode,
   type StudioVoxelPreview,
 } from './viewport-model.js';
 import {
@@ -73,6 +75,8 @@ export interface StudioTransformGizmoDragFinished {
     '[attr.data-camera-move-speed]': 'controlPreferences().moveSpeed',
     '[attr.data-camera-move-forward]': 'controlPreferences().keyboard.moveForward',
     '[attr.data-renderer-error]': 'lastRendererError()',
+    '[attr.data-lighting-mode]': 'lightingMode()',
+    '[attr.data-work-light-active]': 'workLightActive()',
     '[attr.data-transform-gizmo-visible]': 'manipulatorTransform() !== null && transformTool() !== null',
     '[attr.data-transform-tool]': 'transformTool()',
     '[attr.data-transform-orientation]': 'transformOrientation()',
@@ -84,6 +88,7 @@ export interface StudioTransformGizmoDragFinished {
 export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   readonly frame = input<RenderFrameDiff | null>(null);
   readonly frameGeneration = input(0);
+  readonly lightingMode = input<StudioLightingMode>('work_light');
   readonly grid = input<EditorGridDescriptor | null>(STUDIO_EDITOR_GRID);
   readonly controlPreferences = input<RendererInspectionSurfaceControlPreferences>({
     moveSpeed: 6,
@@ -134,6 +139,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   readonly voxelPreviewKind = signal<StudioVoxelPreview['kind'] | null>(null);
   readonly selectedRenderHandle = signal<number | null>(null);
   readonly lastRendererError = signal('');
+  readonly workLightActive = signal(true);
   readonly activeTransformHandleLabel = signal<string | null>(null);
   readonly hoveredTransformHandleLabel = signal<string | null>(null);
 
@@ -166,6 +172,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       const previewEntityId = this.previewEntityId();
       const previewTransform = this.previewTransform();
       const voxelPreview = this.voxelPreview();
+      const lightingMode = this.lightingMode();
       if (frame !== null) {
         this.#replaceFrame(
           frame,
@@ -174,6 +181,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
           previewEntityId,
           previewTransform,
           voxelPreview,
+          lightingMode,
         );
       }
     });
@@ -385,6 +393,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
           this.previewEntityId(),
           this.previewTransform(),
           this.voxelPreview(),
+          this.lightingMode(),
         );
       }
       this.#replaceManipulatorOverlay(
@@ -408,6 +417,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     previewEntityId: number | null,
     previewTransform: Transform | null,
     voxelPreview: StudioVoxelPreview | null,
+    lightingMode: StudioLightingMode,
   ): void {
     const surface = this.#surface;
     const presentationKey = JSON.stringify([
@@ -416,6 +426,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       previewEntityId,
       previewTransform,
       voxelPreview,
+      lightingMode,
     ]);
     if (surface === null || presentationKey === this.#lastPresentationKey) return;
     const presentation = presentStudioSelection(
@@ -425,7 +436,8 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       previewTransform,
       voxelPreview,
     );
-    const receipt = surface.replaceFrame(presentation.frame);
+    const lighting = presentStudioLighting(presentation.frame, lightingMode);
+    const receipt = surface.replaceFrame(lighting.frame);
     if (!receipt.applied) {
       this.#fail(receipt.diagnostics.map((entry) => entry.message).join('; '));
       return;
@@ -434,6 +446,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     this.previewApplied.set(presentation.previewApplied);
     this.voxelPreviewKind.set(presentation.voxelPreviewKind);
     this.selectedRenderHandle.set(presentation.selectedHandle);
+    this.workLightActive.set(lighting.workLightActive);
     this.#syncReadout();
   }
 

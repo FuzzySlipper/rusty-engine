@@ -30,6 +30,7 @@
     </div>
   }
   <div class="renderer-readout">
+    <span>{{ workLightActive() ? 'work light' : 'authored lights' }}</span>
     <span>{{ retainedOpCount() }} retained ops</span>
     <span>camera {{ cameraRevision() }}</span>
   </div>

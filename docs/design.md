@@ -204,11 +204,18 @@ Escape, or pointer cancellation restores accepted or pointer-down state without 
 brush and bounded conversion samples use the same disposable debug-layer frame path. Every
 transform commit remains hash- and revision-guarded and is canonically reread from the Rust adapter.
 
+Lighting preview is also disposable Studio presentation state. `Work Light` removes authored light
+operations only from the frame being presented and adds one ambient and one directional editor light
+with shadows disabled; `Authored Lights` presents the accepted Rust projection unchanged. The choice
+is a backward-compatible host-user scene-view preference. Switching modes never edits project bytes,
+changes the owner readout, or gives the browser authority over stored lights.
+
 Studio's Node/HTTP host serves the isolated application, forwards bounded JSON to the explicit
 adapter binary, and owns one separate versioned host-user settings boundary. Preferences are keyed
 by canonical project root, stored outside project bytes and browser storage, guarded by SHA-256
 compare-and-swap and same-directory atomic replacement, and applied to renderer-host camera/input
-configuration without creating gameplay authority. The host does not interpret project content or
+configuration and Studio lighting presentation without creating gameplay authority. The host does
+not interpret project content or
 make HTTP/browser behavior an Engine prerequisite. Ordinary Rust verification remains independent
 of Studio, Node, the browser, and any sibling checkout; the cross-repository demo and Chromium proof
 is an explicit integration gate.

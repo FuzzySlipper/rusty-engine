@@ -39,6 +39,7 @@ import type {
   Transform,
 } from '@rusty-engine/render-contracts';
 import type {
+  StudioLightingMode,
   StudioTransformOrientation,
   StudioTransformTool,
 } from '@rusty-engine/studio-viewport';
@@ -132,6 +133,7 @@ export interface EditorSelectionState {
 }
 
 export interface StudioViewSettings {
+  readonly lightingMode: StudioLightingMode;
   readonly gridVisible: boolean;
   readonly snappingEnabled: boolean;
   readonly translationSnap: number;
@@ -1200,6 +1202,7 @@ export class StudioWorkspaceStore {
     const current = this.#snapshot();
     const defaults = viewSettings(buildDefaultStudioHostUserSettings(current.userSettings.projectKey));
     this.updateSettings({
+      lightingMode: defaults.lightingMode,
       gridVisible: defaults.gridVisible,
       snappingEnabled: defaults.snappingEnabled,
       translationSnap: defaults.translationSnap,
@@ -1640,6 +1643,7 @@ function sameTransform(left: Transform, right: Transform): boolean {
 function viewSettings(artifact: StudioHostUserSettingsArtifact): StudioViewSettings {
   return {
     theme: artifact.theme,
+    lightingMode: artifact.sceneView.lightingMode,
     snappingEnabled: artifact.editor.snappingEnabled,
     translationSnap: artifact.editor.translationSnap,
     translationSnapAxes: [...artifact.editor.translationSnapAxes],
@@ -1685,6 +1689,7 @@ function settingsArtifact(
       transformOrientation: settings.transformOrientation,
     },
     sceneView: {
+      lightingMode: settings.lightingMode,
       gridVisible: settings.gridVisible,
       minorColor: [...settings.minorColor],
       majorColor: [...settings.majorColor],
