@@ -111,13 +111,17 @@ barycentric, triangle, and material evidence until deterministic conflict resolu
 palette sampling. Imported UV attributes have selected-geometry SHA-256 identities; texture-bound
 cells interpolate the requested `TEXCOORD_n` and sample the bounded palette texture independently.
 
-Solid mode first requires a closed, consistently wound indexed manifold, retains conservative
-boundary evidence, and uses bounded perturbed X-ray parity to classify actual interior cell centers.
-Interior cells inherit the nearest positive-X exit material evidence, so multiple closed shells
-leave cavities empty. The shared ten-million-operation geometric work meter charges conservative
-candidate tests, ray/triangle tests, and interior classification; receipts expose the exact count.
-The selected Kenney wall remains surface-only because its render mesh duplicates vertices between
-faces instead of presenting a welded solid manifold.
+Solid mode first requires a closed, consistently wound geometric manifold. Topology identity unifies
+vertices only when all three finite positions are exactly coincident (with signed zero normalized),
+so face-local render vertices split by UV, normal, or material seams do not create false openings.
+There is deliberately no scale-dependent epsilon weld: near-coincident positions remain distinct so
+real gaps are not silently closed. Solid conversion then retains conservative boundary evidence and
+uses bounded perturbed X-ray parity to classify actual interior cell centers. Interior cells inherit
+the nearest positive-X exit material evidence, so multiple closed shells leave cavities empty. The
+shared ten-million-operation geometric work meter charges conservative candidate tests,
+ray/triangle tests, and interior classification; receipts expose the exact count. The checked
+Kenney artifact remains configured for surface mode as an authored output choice; its coincident
+face-seam vertices are accepted by solid conversion and are not an unsupported-topology boundary.
 
 The higher-level conversion owner imports a hash-pinned source with deterministic bounds, groups,
 and material-slot metadata, then separates `plan`, bounded `preview`, and guarded `apply`. Plans add
