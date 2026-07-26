@@ -1,0 +1,7 @@
+CC0 1.0 Universal
+
+The geometric and animation data in morph-animation.fixture.json was authored
+for Rusty Engine's deterministic conversion tests and is dedicated to the
+public domain under CC0 1.0 Universal.
+
+https://creativecommons.org/publicdomain/zero/1.0/

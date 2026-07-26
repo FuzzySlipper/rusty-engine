@@ -35,6 +35,19 @@ enum VisitState {
 pub(super) fn import_static_glb_scene(
     source: &[u8],
 ) -> Result<ImportedModelScene, ConversionError> {
+    let parsed = parse_embedded_glb(source)?;
+    import_glb_scene(&parsed, false)
+}
+
+pub(super) fn parse_animated_glb(
+    source: &[u8],
+) -> Result<(gltf::Gltf, ImportedModelScene), ConversionError> {
+    let parsed = parse_embedded_glb(source)?;
+    let scene = import_glb_scene(&parsed, true)?;
+    Ok((parsed, scene))
+}
+
+fn parse_embedded_glb(source: &[u8]) -> Result<gltf::Gltf, ConversionError> {
     if source.is_empty() || source.len() as u64 > MAX_CONVERSION_SOURCE_BYTES {
         return Err(ConversionError::one(
             "conversion.resourceLimit",
@@ -52,20 +65,13 @@ pub(super) fn import_static_glb_scene(
             format!("invalid GLB 2.0 source: {error}"),
         )
     })?;
-    let blob = parsed.blob.as_deref().ok_or_else(|| {
+    parsed.blob.as_deref().ok_or_else(|| {
         ConversionError::one(
             "conversion.unsupportedFeature",
             "source",
             "GLB source must contain one embedded BIN chunk",
         )
     })?;
-    if parsed.document.animations().next().is_some() || parsed.document.skins().next().is_some() {
-        return Err(ConversionError::one(
-            "conversion.unsupportedFeature",
-            "source",
-            "animation and skin sampling belong to the animated import stage",
-        ));
-    }
     for buffer in parsed.document.buffers() {
         if !matches!(buffer.source(), BufferSource::Bin) {
             return Err(ConversionError::one(
@@ -75,7 +81,27 @@ pub(super) fn import_static_glb_scene(
             ));
         }
     }
+    Ok(parsed)
+}
 
+fn import_glb_scene(
+    parsed: &gltf::Gltf,
+    allow_animated_features: bool,
+) -> Result<ImportedModelScene, ConversionError> {
+    let blob = parsed
+        .blob
+        .as_deref()
+        .expect("embedded GLB parser requires a BIN chunk");
+    if !allow_animated_features
+        && (parsed.document.animations().next().is_some()
+            || parsed.document.skins().next().is_some())
+    {
+        return Err(ConversionError::one(
+            "conversion.unsupportedFeature",
+            "source",
+            "animation and skin sampling belong to the animated import stage",
+        ));
+    }
     let default_scene = parsed.document.default_scene().ok_or_else(|| {
         ConversionError::one(
             "conversion.unsupportedFeature",
@@ -94,13 +120,18 @@ pub(super) fn import_static_glb_scene(
         default_scene.name(),
         format!("source.scenes[{}].name", default_scene.index()),
     )?;
-    let source_nodes = collect_source_nodes(&parsed.document)?;
+    let source_nodes = collect_source_nodes(&parsed.document, allow_animated_features)?;
     let roots = default_scene
         .nodes()
         .map(|node| node.index())
         .collect::<Vec<_>>();
     let (nodes, referenced_meshes) = traverse_default_scene(&source_nodes, &roots)?;
-    let (meshes, materials) = import_referenced_meshes(&parsed.document, blob, &referenced_meshes)?;
+    let (meshes, materials) = import_referenced_meshes(
+        &parsed.document,
+        blob,
+        &referenced_meshes,
+        allow_animated_features,
+    )?;
 
     Ok(ImportedModelScene {
         source_scene_index,
@@ -111,7 +142,10 @@ pub(super) fn import_static_glb_scene(
     })
 }
 
-fn collect_source_nodes(document: &gltf::Document) -> Result<Vec<SourceNode>, ConversionError> {
+fn collect_source_nodes(
+    document: &gltf::Document,
+    allow_animated_features: bool,
+) -> Result<Vec<SourceNode>, ConversionError> {
     let node_count = document.nodes().count();
     if node_count == 0 || node_count > MAX_IMPORTED_SCENE_NODES {
         return Err(ConversionError::one(
@@ -134,7 +168,7 @@ fn collect_source_nodes(document: &gltf::Document) -> Result<Vec<SourceNode>, Co
         .nodes()
         .map(|node| {
             let source_node_index = node.index();
-            if node.skin().is_some() || node.weights().is_some() {
+            if !allow_animated_features && (node.skin().is_some() || node.weights().is_some()) {
                 return Err(ConversionError::one(
                     "conversion.unsupportedFeature",
                     format!("source.nodes[{source_node_index}]"),
@@ -332,6 +366,7 @@ fn import_referenced_meshes(
     document: &gltf::Document,
     blob: &[u8],
     referenced_meshes: &BTreeSet<usize>,
+    allow_animated_features: bool,
 ) -> Result<(Vec<ImportedModelMesh>, Vec<ImportedMaterial>), ConversionError> {
     let material_count = u32::try_from(document.materials().count()).map_err(|_| {
         ConversionError::one(
@@ -385,6 +420,7 @@ fn import_referenced_meshes(
                 &mut total_vertices,
                 &mut total_indices,
                 &mut materials,
+                allow_animated_features,
             )?;
             primitive_ordinal = primitive_ordinal
                 .checked_add(1)
@@ -429,6 +465,7 @@ fn import_primitive(
     total_vertices: &mut usize,
     total_indices: &mut usize,
     materials: &mut BTreeMap<u32, Option<String>>,
+    allow_animated_features: bool,
 ) -> Result<ImportedModelPrimitive, ConversionError> {
     let primitive_index = primitive.index();
     let primitive_path = format!("source.meshes[{mesh_index}].primitives[{primitive_index}]");
@@ -439,7 +476,7 @@ fn import_primitive(
             "primitive mode must be TRIANGLES",
         ));
     }
-    if primitive.morph_targets().next().is_some() {
+    if !allow_animated_features && primitive.morph_targets().next().is_some() {
         return Err(ConversionError::one(
             "conversion.unsupportedFeature",
             format!("{primitive_path}.targets"),

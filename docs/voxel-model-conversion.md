@@ -25,11 +25,11 @@ The static path is already substantial:
 | `render-projection` | Stable retained voxel-instance/chunk handles and changed-payload projection. |
 | Studio | Project/host GLB selection, conversion settings, private Rust plan and renderer-visible preview, guarded apply/discard, canonical project persistence, import/export, and reopen integration proof. |
 
-The important gaps are behavioral rather than language-boundary gaps:
+The remaining gaps are behavioral rather than language-boundary gaps:
 
-- static import now handles bounded scene hierarchy and multiple meshes, but animation sampling,
-  skins, morph targets, and instance weights remain the separate #6238 responsibility;
-- the durable format and Studio controls describe one volume, not a reusable object and clips; and
+- static and animated import now share one bounded scene/primitive identity family, but animated
+  snapshots still need one fixed conversion grid and assembly into durable voxel-object clips;
+- Studio controls still describe one volume, not a reusable object and clips; and
 - retained voxel projection can replace changed chunk meshes, but no voxel-object resource,
   explicit clip sampler, or presentation-only playback owner exists.
 
@@ -135,7 +135,7 @@ perturbation makes geometry within roughly `2.4e-7` target-cell units of a row b
 ambiguous; and requests whose conservative candidate or parity work exceeds ten million operations
 must lower resolution or split the selected model.
 
-## Intended animated conversion path
+## Animated GLB sampling
 
 ```text
 bounded GLB bytes
@@ -148,6 +148,51 @@ bounded GLB bytes
   -> Studio save/reopen
   -> explicit runtime object admission and presentation playback
 ```
+
+`voxel-convert` now imports every uniquely named clip from the selected embedded GLB together with
+its reachable node channels, base transforms and instance morph weights, referenced skins, joint
+tables, inverse bind matrices, `JOINTS_0`/`WEIGHTS_0`, and position morph targets. This extends the
+same `ImportedModelScene`; each sampled `ImportedStaticMesh` therefore retains the static path's
+node/mesh/primitive groups, indices, material slots, UV sets, and source SHA identity. It does not
+define a renderer animation object or a second geometry authority.
+
+Animation time uses integer microsecond ticks. Source key times are rounded once to the nearest
+microsecond and must remain strictly increasing after quantization. A rate schedule always includes
+tick zero. `IncludeClipEnd` emits regular rounded rate ticks strictly before the duration and then
+the exact quantized duration once; `ExcludeLoopSeam` omits that final duplicate endpoint. A
+zero-duration clip has one sample at zero under either policy. Sampling clamps each channel before
+its first and after its last key while the clip duration is the greatest channel endpoint.
+
+`STEP`, `LINEAR`, and `CUBICSPLINE` follow the glTF channel rules. Linear rotations use normalized
+shortest-path spherical interpolation. Cubic values use their in/out tangents scaled by the
+quantized segment duration and sampled rotations are normalized. Every sample starts from the
+authored node TRS and instance/mesh morph weights, applies channel values, composes parents before
+children, applies position morph deltas, then applies four-weight linear skinning. The resulting
+positions are finite ordinary object-space indexed geometry ready for the static voxelizer.
+
+Anchor policy is explicit per request. `PreserveSourceSpace` retains authored root motion.
+`LockNodeToBindPose` left-multiplies every sampled position by the selected reachable node's bind
+model transform times the inverse of its sampled model transform. It therefore removes that
+node's motion without recentering the bind pose or choosing an implicit root by name.
+
+Import is bounded to 64 clips, 4,096 channels, one million input keys, four million sampled channel
+components, 128 skins, 256 joints per skin, 64 morph targets per primitive, and four million stored
+morph-position deltas. Accessor counts are checked before their buffers are collected. Requests are
+bounded to 240 Hz, 4,096 snapshots, one hour of quantized source time, and ten million vertex
+deformation work units. Clip absence, stale source SHA, unreachable or duplicate targets, collapsed
+time keys, bad accessors, bad joints/weights, non-finite values, invalid anchors, and exceeded limits
+return source-locatable classified diagnostics before a partial receipt is returned.
+
+The real CC0 Kenney retro-character GLB proves three named clips, a 45-joint skin, bind-pose and
+known-time deformation, identity preservation, loop scheduling, and repeat determinism. The
+adjacent checked `morph-animation.fixture.json` corpus is also CC0 and proves position morphs,
+linear/step/cubic interpolation, endpoint equality, and root-motion locking with exact coordinates.
+
+Deliberate limits are narrow and visible: offline deformation accepts one four-influence joint set
+(`JOINTS_0`/`WEIGHTS_0`), only reachable default-scene joints, and TRS animation rather than channels
+targeting matrix-authored nodes. Morph normal/tangent deltas are irrelevant to voxel positions and
+are not projected into the mesh snapshot. Additional joint sets must first be justified by a real
+conversion asset rather than silently changing work accounting.
 
 Rust owns source parsing, deformation, voxelization, canonical assets, validation, frame
 resolution, and renderer-neutral values. Studio owns source and clip selection, forms, preview

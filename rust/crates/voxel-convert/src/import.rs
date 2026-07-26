@@ -112,6 +112,12 @@ pub fn import_static_glb(source: &[u8]) -> Result<ImportedStaticMesh, Conversion
     flatten_static_scene(&import_static_glb_scene(source)?)
 }
 
+pub(crate) fn import_animated_glb_scene(
+    source: &[u8],
+) -> Result<(gltf::Gltf, ImportedModelScene), ConversionError> {
+    gltf_scene::parse_animated_glb(source)
+}
+
 /// Hash one flattened UV attribute exactly as the converter samples it.
 ///
 /// The identity includes the selected/instanced vertex order and explicit
@@ -144,6 +150,31 @@ pub fn texture_coordinate_source_hash(
 
 pub fn flatten_static_scene(
     scene: &ImportedModelScene,
+) -> Result<ImportedStaticMesh, ConversionError> {
+    flatten_model_scene(scene, |node, _mesh, primitive| {
+        primitive
+            .positions
+            .iter()
+            .map(|position| {
+                transform_point(node.model_transform, *position).ok_or_else(|| {
+                    ConversionError::one(
+                        "conversion.invalidTransform",
+                        format!("source.nodes[{}].transform", node.source_node_index),
+                        "composed node transform produced a non-finite position",
+                    )
+                })
+            })
+            .collect()
+    })
+}
+
+pub(crate) fn flatten_model_scene(
+    scene: &ImportedModelScene,
+    mut positions_for_primitive: impl FnMut(
+        &ImportedModelNode,
+        &ImportedModelMesh,
+        &ImportedModelPrimitive,
+    ) -> Result<Vec<[f64; 3]>, ConversionError>,
 ) -> Result<ImportedStaticMesh, ConversionError> {
     let mut positions = Vec::new();
     let texture_set_indices = scene
@@ -188,9 +219,22 @@ pub fn flatten_static_scene(
                 )
             })?;
         for primitive in &mesh.primitives {
+            let instance_positions = positions_for_primitive(node, mesh, primitive)?;
+            if instance_positions.len() != primitive.positions.len() {
+                return Err(ConversionError::one(
+                    "conversion.invalidDeformation",
+                    format!(
+                        "source.nodes[{}].meshes[{}].primitives[{}]",
+                        node.source_node_index,
+                        mesh.source_mesh_index,
+                        primitive.source_primitive_index
+                    ),
+                    "deformed POSITION count does not match the imported primitive",
+                ));
+            }
             ensure_total_limit(
                 positions.len(),
-                primitive.positions.len(),
+                instance_positions.len(),
                 MAX_CONVERSION_SOURCE_VERTICES,
                 "source.positions",
             )?;
@@ -207,17 +251,7 @@ pub fn flatten_static_scene(
                     "expanded vertex offset exceeds u32",
                 )
             })?;
-            for position in &primitive.positions {
-                positions.push(transform_point(node.model_transform, *position).ok_or_else(
-                    || {
-                        ConversionError::one(
-                            "conversion.invalidTransform",
-                            format!("source.nodes[{}].transform", node.source_node_index),
-                            "composed node transform produced a non-finite position",
-                        )
-                    },
-                )?);
-            }
+            positions.extend(instance_positions);
             for (source_set_index, flattened) in &mut texture_coordinates {
                 match primitive
                     .texture_coordinates
@@ -336,17 +370,17 @@ pub(crate) fn area_squared(positions: &[[f64; 3]], triangle: &ImportedTriangle) 
     dot(cross, cross)
 }
 
-pub(super) fn identity_matrix() -> [f64; 16] {
+pub(crate) fn identity_matrix() -> [f64; 16] {
     [
         1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
     ]
 }
 
-pub(super) fn matrix_from_gltf(matrix: [[f32; 4]; 4]) -> [f64; 16] {
+pub(crate) fn matrix_from_gltf(matrix: [[f32; 4]; 4]) -> [f64; 16] {
     std::array::from_fn(|index| f64::from(matrix[index / 4][index % 4]))
 }
 
-pub(super) fn multiply_matrices(left: [f64; 16], right: [f64; 16]) -> [f64; 16] {
+pub(crate) fn multiply_matrices(left: [f64; 16], right: [f64; 16]) -> [f64; 16] {
     let mut product = [0.0; 16];
     for column in 0..4 {
         for row in 0..4 {
@@ -358,7 +392,7 @@ pub(super) fn multiply_matrices(left: [f64; 16], right: [f64; 16]) -> [f64; 16] 
     product
 }
 
-pub(super) fn validate_affine_matrix(
+pub(crate) fn validate_affine_matrix(
     matrix: [f64; 16],
     path: impl Into<String>,
 ) -> Result<(), ConversionError> {
@@ -377,7 +411,7 @@ pub(super) fn validate_affine_matrix(
     Ok(())
 }
 
-fn transform_point(matrix: [f64; 16], point: [f64; 3]) -> Option<[f64; 3]> {
+pub(crate) fn transform_point(matrix: [f64; 16], point: [f64; 3]) -> Option<[f64; 3]> {
     let [x, y, z] = point;
     let transformed = [
         matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12],
@@ -398,7 +432,7 @@ fn dot(left: [f64; 3], right: [f64; 3]) -> f64 {
     left[0] * right[0] + left[1] * right[1] + left[2] * right[2]
 }
 
-pub(super) fn validate_imported_name(
+pub(crate) fn validate_imported_name(
     value: Option<&str>,
     path: impl Into<String>,
 ) -> Result<Option<String>, ConversionError> {

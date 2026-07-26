@@ -1,0 +1,25 @@
+{
+  "fixtureId": "cc0-morph-animation-v1",
+  "license": "CC0-1.0",
+  "description": "A quad whose upper edge moves forward as one morph weight pulses while its mesh node translates on X.",
+  "positions": [
+    [-1.0, 0.0, 0.0],
+    [1.0, 0.0, 0.0],
+    [1.0, 2.0, 0.0],
+    [-1.0, 2.0, 0.0]
+  ],
+  "indices": [0, 1, 2, 0, 2, 3],
+  "morphPositionDeltas": [
+    [0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0],
+    [0.0, 0.0, 1.0]
+  ],
+  "morphTimes": [0.0, 0.5, 1.0],
+  "morphWeights": [0.0, 1.0, 0.0],
+  "translationTimes": [0.0, 1.0],
+  "translationValues": [
+    [0.0, 0.0, 0.0],
+    [2.0, 0.0, 0.0]
+  ]
+}

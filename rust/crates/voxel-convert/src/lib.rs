@@ -1,10 +1,11 @@
-//! Bounded offline conversion from static GLB scenes to durable voxel assets.
+//! Bounded offline conversion from static or sampled GLB scenes to durable voxel assets.
 //!
 //! This crate is an authoring/build tool. It has no dependency on a downstream
 //! game runtime and is never invoked while admitting or running a project.
 
 #![forbid(unsafe_code)]
 
+mod animation;
 mod convert;
 mod diagnostic;
 mod import;
@@ -15,6 +16,18 @@ mod source;
 mod store;
 mod voxelize;
 
+pub use animation::{
+    import_animated_glb, sample_animation_bind_pose, sample_animation_clip, AnimationAnchorPolicy,
+    AnimationBindPoseReceipt, AnimationBindPoseRequest, AnimationChannelValues, AnimationEndPolicy,
+    AnimationInterpolation, AnimationMeshSnapshot, AnimationProperty, AnimationSampleReceipt,
+    AnimationSampleRequest, ImportedAnimatedModel, ImportedAnimationChannel, ImportedAnimationClip,
+    ImportedAnimationNode, ImportedNodeTransform, ImportedPrimitiveDeformation, ImportedSkin,
+    ANIMATION_TIMESTAMP_TICKS_PER_SECOND, MAX_ANIMATION_DEFORMATION_WORK,
+    MAX_ANIMATION_DURATION_MICROSECONDS, MAX_ANIMATION_SAMPLE_FRAMES, MAX_ANIMATION_SAMPLE_RATE_HZ,
+    MAX_IMPORTED_ANIMATION_CHANNELS, MAX_IMPORTED_ANIMATION_CLIPS,
+    MAX_IMPORTED_ANIMATION_KEYFRAMES, MAX_IMPORTED_ANIMATION_VALUES, MAX_IMPORTED_JOINTS_PER_SKIN,
+    MAX_IMPORTED_MORPH_POSITION_DELTAS, MAX_IMPORTED_MORPH_TARGETS, MAX_IMPORTED_SKINS,
+};
 pub use convert::{convert_glb, ConversionReceipt, CONVERTER_ID, MAX_SURFACE_SAMPLE_WORK};
 pub use diagnostic::{ConversionDiagnostic, ConversionError};
 pub use import::{
