@@ -123,14 +123,20 @@ test('automatic clip identities are independent of locale-sensitive casing', () 
 });
 
 test('static object controls ignore hidden stale animation values', () => {
-  const output = buildVoxelObjectClipControlForSource('static', [], {
+  const staleAnimationInput = {
     selectedSourceClipNames: ['stale-clip'],
     sampleRateHz: Number.NaN,
     startSeconds: -1,
     endSeconds: '-2',
     endPolicy: 'includeClipEnd',
     defaultSourceClipName: 'stale-clip',
-  });
+  } as const;
+
+  assert.throws(
+    () => buildVoxelObjectClipControlForSource('animated', [], staleAnimationInput),
+    /must be a finite non-negative number/,
+  );
+  const output = buildVoxelObjectClipControlForSource('static', [], staleAnimationInput);
 
   assert.deepEqual(output, {
     clips: [],
