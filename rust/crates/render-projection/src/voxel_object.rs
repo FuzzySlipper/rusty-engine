@@ -39,7 +39,7 @@ struct InstanceSnapshot {
 pub struct VoxelObjectRenderProjector {
     registry: StableHandleRegistry<String>,
     last_instances: BTreeMap<String, InstanceSnapshot>,
-    last_resources: BTreeMap<String, VoxelObjectRenderAsset>,
+    last_resource_hashes: BTreeMap<String, String>,
     last_materials: BTreeMap<String, RenderMaterialDescriptor>,
 }
 
@@ -54,7 +54,7 @@ impl VoxelObjectRenderProjector {
         Self {
             registry: StableHandleRegistry::new(RenderHandleNamespace::VOXEL_OBJECT),
             last_instances: BTreeMap::new(),
-            last_resources: BTreeMap::new(),
+            last_resource_hashes: BTreeMap::new(),
             last_materials: BTreeMap::new(),
         }
     }
@@ -66,8 +66,28 @@ impl VoxelObjectRenderProjector {
     ) -> Result<VoxelObjectProjectionResult, VoxelObjectProjectionError> {
         let validated = validate_and_snapshot(instances, materials)?;
         let current_instances = validated.instances;
-        let current_resources = validated.resources;
+        let requested_resources = validated.resources;
         let used_materials = validated.materials;
+        let current_resource_hashes = requested_resources
+            .iter()
+            .map(|(asset, request)| (asset.clone(), request.object.content_hash().to_string()))
+            .collect::<BTreeMap<_, _>>();
+        let mut pending_resources = BTreeMap::new();
+        for (asset_id, request) in &requested_resources {
+            let is_cached = self
+                .last_resource_hashes
+                .get(asset_id)
+                .is_some_and(|content_hash| content_hash == request.object.content_hash());
+            if is_cached {
+                continue;
+            }
+            let resource = voxel_object_render_asset(request.object);
+            resource
+                .validate()
+                .map_err(VoxelObjectProjectionError::InvalidResource)?;
+            pending_resources.insert(asset_id.clone(), resource);
+        }
+        let materialized_resources = pending_resources.keys().cloned().collect::<Vec<_>>();
         let mut registry = self.registry.clone();
         let mut operations = Vec::new();
 
@@ -91,12 +111,8 @@ impl VoxelObjectRenderProjector {
             }
         }
 
-        for (asset_id, resource) in &current_resources {
-            if self.last_resources.get(asset_id) != Some(resource) {
-                operations.push(RenderDiff::DefineVoxelObject {
-                    asset: resource.clone(),
-                });
-            }
+        for resource in pending_resources.into_values() {
+            operations.push(RenderDiff::DefineVoxelObject { asset: resource });
         }
 
         for instance in sorted_instances(instances) {
@@ -153,8 +169,8 @@ impl VoxelObjectRenderProjector {
             }
         }
 
-        for asset in self.last_resources.keys() {
-            if !current_resources.contains_key(asset) {
+        for asset in self.last_resource_hashes.keys() {
+            if !requested_resources.contains_key(asset) {
                 operations.push(RenderDiff::ReleaseVoxelObject {
                     asset: asset.clone(),
                 });
@@ -165,7 +181,7 @@ impl VoxelObjectRenderProjector {
             RenderFrameDiff::try_from_ops(operations).map_err(VoxelObjectProjectionError::Frame)?;
         self.registry = registry;
         self.last_instances = current_instances;
-        self.last_resources = current_resources;
+        self.last_resource_hashes = current_resource_hashes;
         self.last_materials = used_materials;
 
         Ok(VoxelObjectProjectionResult {
@@ -176,11 +192,8 @@ impl VoxelObjectRenderProjector {
                     .iter()
                     .map(|(id, snapshot)| (id.clone(), snapshot.frame))
                     .collect(),
-                resource_hashes: self
-                    .last_resources
-                    .iter()
-                    .map(|(id, resource)| (id.clone(), resource.content_hash.clone()))
-                    .collect(),
+                resource_hashes: self.last_resource_hashes.clone(),
+                materialized_resources,
             },
         })
     }
@@ -190,18 +203,22 @@ impl VoxelObjectRenderProjector {
     }
 }
 
-struct ValidatedProjection {
+struct RequestedResource<'a> {
+    object: &'a AdmittedVoxelObject,
+}
+
+struct ValidatedProjection<'a> {
     instances: BTreeMap<String, InstanceSnapshot>,
-    resources: BTreeMap<String, VoxelObjectRenderAsset>,
+    resources: BTreeMap<String, RequestedResource<'a>>,
     materials: BTreeMap<String, RenderMaterialDescriptor>,
 }
 
-fn validate_and_snapshot(
-    instances: &[VoxelObjectProjectionInstance<'_>],
+fn validate_and_snapshot<'a>(
+    instances: &[VoxelObjectProjectionInstance<'a>],
     materials: &BTreeMap<String, RenderMaterialDescriptor>,
-) -> Result<ValidatedProjection, VoxelObjectProjectionError> {
+) -> Result<ValidatedProjection<'a>, VoxelObjectProjectionError> {
     let mut snapshots = BTreeMap::new();
-    let mut resources = BTreeMap::new();
+    let mut resources = BTreeMap::<String, RequestedResource<'a>>::new();
     let mut used_materials = BTreeMap::new();
     for instance in instances {
         if instance.instance_id.trim().is_empty() {
@@ -226,18 +243,20 @@ fn validate_and_snapshot(
                 frame_count: instance.object.frames().len() as u32,
             });
         }
-        let resource = voxel_object_render_asset(instance.object);
-        resource
-            .validate()
-            .map_err(VoxelObjectProjectionError::InvalidResource)?;
-        if let Some(existing) = resources.get(resource.asset.as_str()) {
-            if existing != &resource {
+        let asset_id = instance.object.asset_id();
+        if let Some(existing) = resources.get(asset_id) {
+            if existing.object.content_hash() != instance.object.content_hash() {
                 return Err(VoxelObjectProjectionError::ConflictingResource {
-                    asset: resource.asset,
+                    asset: asset_id.to_string(),
                 });
             }
         } else {
-            resources.insert(resource.asset.clone(), resource);
+            resources.insert(
+                asset_id.to_string(),
+                RequestedResource {
+                    object: instance.object,
+                },
+            );
         }
 
         let bound_slots = instance
@@ -248,24 +267,7 @@ fn validate_and_snapshot(
             .map(|binding| binding.material_slot)
             .collect::<BTreeSet<_>>();
         for binding in &instance.object.source().material_palette {
-            let material = materials.get(&binding.material_asset_id).ok_or_else(|| {
-                VoxelObjectProjectionError::MissingMaterial {
-                    asset: binding.material_asset_id.clone(),
-                }
-            })?;
-            material
-                .validate()
-                .map_err(|source| VoxelObjectProjectionError::InvalidMaterial {
-                    asset: binding.material_asset_id.clone(),
-                    source,
-                })?;
-            if material.id != binding.material_asset_id {
-                return Err(VoxelObjectProjectionError::MaterialIdMismatch {
-                    expected: binding.material_asset_id.clone(),
-                    actual: material.id.clone(),
-                });
-            }
-            used_materials.insert(material.id.clone(), material.clone());
+            collect_material(&binding.material_asset_id, materials, &mut used_materials)?;
         }
         if let Some(slot) = instance
             .material_overrides
@@ -277,6 +279,9 @@ fn validate_and_snapshot(
                 instance: instance.instance_id.clone(),
                 slot,
             });
+        }
+        for binding in &instance.material_overrides {
+            collect_material(&binding.material, materials, &mut used_materials)?;
         }
         if snapshots
             .insert(
@@ -303,6 +308,33 @@ fn validate_and_snapshot(
         resources,
         materials: used_materials,
     })
+}
+
+fn collect_material(
+    asset_id: &str,
+    materials: &BTreeMap<String, RenderMaterialDescriptor>,
+    used_materials: &mut BTreeMap<String, RenderMaterialDescriptor>,
+) -> Result<(), VoxelObjectProjectionError> {
+    let material =
+        materials
+            .get(asset_id)
+            .ok_or_else(|| VoxelObjectProjectionError::MissingMaterial {
+                asset: asset_id.to_string(),
+            })?;
+    material
+        .validate()
+        .map_err(|source| VoxelObjectProjectionError::InvalidMaterial {
+            asset: asset_id.to_string(),
+            source,
+        })?;
+    if material.id != asset_id {
+        return Err(VoxelObjectProjectionError::MaterialIdMismatch {
+            expected: asset_id.to_string(),
+            actual: material.id.clone(),
+        });
+    }
+    used_materials.insert(material.id.clone(), material.clone());
+    Ok(())
 }
 
 fn sorted_instances<'a>(
@@ -402,6 +434,8 @@ pub struct VoxelObjectProjectionResult {
 pub struct VoxelObjectProjectionReadout {
     pub instance_frames: BTreeMap<String, u32>,
     pub resource_hashes: BTreeMap<String, String>,
+    /// Sorted asset identities whose complete geometry was built for this frame.
+    pub materialized_resources: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

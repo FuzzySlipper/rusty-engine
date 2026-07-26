@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
 use render_model::{
-    MaterialUvStrategy, RenderDiff, RenderMaterialDescriptor, RenderMetadata, Transform,
+    MaterialUvStrategy, MeshMaterialSlot, RenderDiff, RenderMaterialDescriptor, RenderMetadata,
+    Transform,
 };
 use render_projection::{VoxelObjectProjectionInstance, VoxelObjectRenderProjector};
 use voxel_asset::{
@@ -14,7 +15,7 @@ use voxel_asset::{
 use voxel_object_runtime::{admit_voxel_object, VoxelObjectRuntimeLimits};
 
 #[test]
-fn resource_instance_frame_swap_and_release_keep_the_handle_stable() {
+fn frame_only_projection_reuses_cached_resource_without_materialization() {
     let object = admitted();
     let mut projector = VoxelObjectRenderProjector::new();
     let mut instances = vec![instance(&object, 0)];
@@ -34,10 +35,15 @@ fn resource_instance_frame_swap_and_release_keep_the_handle_stable() {
         .ops
         .iter()
         .any(|op| matches!(op, RenderDiff::CreateVoxelObjectInstance { .. })));
+    assert_eq!(
+        created.readout.materialized_resources,
+        vec!["voxel-object/runner"]
+    );
 
     instances[0].frame = 1;
     let swapped = projector.project(&instances, &materials()).unwrap();
     assert_eq!(projector.handle("runner"), Some(handle));
+    assert!(swapped.readout.materialized_resources.is_empty());
     assert_eq!(swapped.frame.ops.len(), 1);
     assert!(matches!(
         swapped.frame.ops[0],
@@ -50,6 +56,96 @@ fn resource_instance_frame_swap_and_release_keep_the_handle_stable() {
         released.frame.ops[1],
         RenderDiff::ReleaseVoxelObject { .. }
     ));
+}
+
+#[test]
+fn shared_instances_materialize_one_resource() {
+    let object = admitted();
+    let mut projector = VoxelObjectRenderProjector::new();
+    let instances = vec![
+        named_instance(&object, 0, "runner-a"),
+        named_instance(&object, 1, "runner-b"),
+    ];
+    let created = projector.project(&instances, &materials()).unwrap();
+    assert_eq!(
+        created.readout.materialized_resources,
+        vec!["voxel-object/runner"]
+    );
+    assert_eq!(
+        created
+            .frame
+            .ops
+            .iter()
+            .filter(|operation| matches!(operation, RenderDiff::DefineVoxelObject { .. }))
+            .count(),
+        1
+    );
+
+    let unchanged = projector.project(&instances, &materials()).unwrap();
+    assert!(unchanged.readout.materialized_resources.is_empty());
+    assert!(unchanged.frame.ops.is_empty());
+}
+
+#[test]
+fn voxel_object_material_override_defines_the_selected_material() {
+    let object = admitted();
+    let mut projector = VoxelObjectRenderProjector::new();
+    let mut available_materials = materials();
+    let override_material = material("material/override", [0.1, 0.4, 0.9, 1.0]);
+    available_materials.insert(override_material.id.clone(), override_material);
+    let mut projection_instance = instance(&object, 0);
+    projection_instance.material_overrides = vec![MeshMaterialSlot {
+        slot: 1,
+        material: "material/override".to_string(),
+    }];
+
+    let projected = projector
+        .project(&[projection_instance], &available_materials)
+        .unwrap();
+    let defined_materials = projected
+        .frame
+        .ops
+        .iter()
+        .filter_map(|operation| match operation {
+            RenderDiff::DefineMaterial { material } => Some(material.id.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        defined_materials,
+        vec!["material/override", "material/runner"]
+    );
+    let created = projected
+        .frame
+        .ops
+        .iter()
+        .find_map(|operation| match operation {
+            RenderDiff::CreateVoxelObjectInstance { instance, .. } => Some(instance),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(created.material_overrides[0].material, "material/override");
+}
+
+#[test]
+fn missing_voxel_object_material_override_is_fail_atomic() {
+    let object = admitted();
+    let mut projector = VoxelObjectRenderProjector::new();
+    let mut projection_instance = instance(&object, 0);
+    projection_instance.material_overrides = vec![MeshMaterialSlot {
+        slot: 1,
+        material: "material/missing".to_string(),
+    }];
+
+    let error = projector
+        .project(&[projection_instance], &materials())
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        render_projection::VoxelObjectProjectionError::MissingMaterial { asset }
+            if asset == "material/missing"
+    ));
+    assert_eq!(projector.handle("runner"), None);
 }
 
 #[test]
@@ -74,8 +170,16 @@ fn instance(
     object: &voxel_object_runtime::AdmittedVoxelObject,
     frame: u32,
 ) -> VoxelObjectProjectionInstance<'_> {
+    named_instance(object, frame, "runner")
+}
+
+fn named_instance<'a>(
+    object: &'a voxel_object_runtime::AdmittedVoxelObject,
+    frame: u32,
+    instance_id: &str,
+) -> VoxelObjectProjectionInstance<'a> {
     VoxelObjectProjectionInstance {
-        instance_id: "runner".to_string(),
+        instance_id: instance_id.to_string(),
         object,
         frame,
         transform: Transform::IDENTITY,
@@ -91,18 +195,22 @@ fn instance(
 }
 
 fn materials() -> BTreeMap<String, RenderMaterialDescriptor> {
-    let material = RenderMaterialDescriptor {
+    let material = material("material/runner", [0.8, 0.2, 0.1, 1.0]);
+    BTreeMap::from([(material.id.clone(), material)])
+}
+
+fn material(id: &str, color: [f32; 4]) -> RenderMaterialDescriptor {
+    RenderMaterialDescriptor {
         schema_version: 1,
-        id: "material/runner".to_string(),
-        color: [0.8, 0.2, 0.1, 1.0],
+        id: id.to_string(),
+        color,
         texture: None,
         roughness: 1.0,
         texture_tint: [1.0; 4],
         emission_color: [0.0; 3],
         emission_intensity: 0.0,
         uv_strategy: MaterialUvStrategy::Flat,
-    };
-    BTreeMap::from([(material.id.clone(), material)])
+    }
 }
 
 fn admitted() -> voxel_object_runtime::AdmittedVoxelObject {
