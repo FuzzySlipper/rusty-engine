@@ -1,52 +1,6 @@
 import type { Transform } from '@rusty-engine/render-contracts';
-import type {
-  StudioTransformAxis,
-  StudioTransformOrientation,
-  StudioTransformTool,
-} from '@rusty-engine/studio-viewport';
 
-export interface TransformToolSettings {
-  readonly snappingEnabled: boolean;
-  readonly translationSnapAxes: readonly [number, number, number];
-  readonly rotationSnapDegrees: number;
-  readonly scaleSnapAxes: readonly [number, number, number];
-  readonly fineMultiplier: number;
-}
-
-export interface TransformToolDelta {
-  readonly local: Transform;
-  readonly world: Transform;
-  readonly parentWorld: Transform | null;
-  readonly tool: StudioTransformTool;
-  readonly orientation: StudioTransformOrientation;
-  readonly axis: StudioTransformAxis;
-  readonly delta: number;
-  readonly fine: boolean;
-  readonly toggleSnap: boolean;
-  readonly settings: TransformToolSettings;
-}
-
-export type TransformToolDragStart = Pick<
-  TransformToolDelta,
-  'local' | 'world' | 'parentWorld' | 'tool' | 'orientation' | 'axis'
->;
-
-export interface TransformToolDragState extends TransformToolDragStart {
-  readonly cumulativeDelta: number;
-}
-
-export interface TransformToolDragUpdate {
-  readonly delta: number;
-  readonly fine: boolean;
-  readonly toggleSnap: boolean;
-  readonly settings: TransformToolSettings;
-}
-
-export interface TransformToolDragResult {
-  readonly drag: TransformToolDragState;
-  readonly transform: Transform;
-}
-
+/** Resolves one local TRS against its parent for renderer-facing world presentation. */
 export function composeTransform(parent: Transform, local: Transform): Transform {
   const scaledLocal: readonly [number, number, number] = [
     local.translation[0] * parent.scale[0],
@@ -64,115 +18,17 @@ export function composeTransform(parent: Transform, local: Transform): Transform
   };
 }
 
-/**
- * Applies one cumulative gizmo displacement to a fixed drag baseline and
- * returns the local transform that the named Rust owner can later validate and
- * commit. Hierarchy conversion remains explicit; the helper never mutates
- * accepted project state.
- */
-export function applyTransformToolDelta(input: TransformToolDelta): Transform {
-  const fineMultiplier = input.fine ? input.settings.fineMultiplier : 1;
-  const delta = input.delta * fineMultiplier;
-  const snapping = input.toggleSnap
-    ? !input.settings.snappingEnabled
-    : input.settings.snappingEnabled;
-
-  switch (input.tool) {
-    case 'translate': {
-      const step = input.settings.translationSnapAxes[input.axis] * fineMultiplier;
-      const direction = input.orientation === 'world'
-        ? unitAxis(input.axis)
-        : rotateVector(input.world.rotation, unitAxis(input.axis));
-      const currentAlongAxis = dot(input.world.translation, direction);
-      const targetAlongAxis = snapping
-        ? quantize(currentAlongAxis + delta, step)
-        : currentAlongAxis + delta;
-      const worldTranslation = add(
-        input.world.translation,
-        multiply(direction, targetAlongAxis - currentAlongAxis),
-      );
-      return {
-        ...input.local,
-        translation: input.parentWorld === null
-          ? worldTranslation
-          : inverseTransformPoint(input.parentWorld, worldTranslation),
-      };
-    }
-    case 'rotate': {
-      const step = input.settings.rotationSnapDegrees * fineMultiplier;
-      const degrees = snapping ? quantize(delta, step) : delta;
-      const deltaRotation = axisAngle(unitAxis(input.axis), degrees * Math.PI / 180);
-      const worldRotation = input.orientation === 'world'
-        ? multiplyQuaternion(deltaRotation, input.world.rotation)
-        : multiplyQuaternion(input.world.rotation, deltaRotation);
-      return {
-        ...input.local,
-        rotation: input.parentWorld === null
-          ? worldRotation
-          : multiplyQuaternion(inverseQuaternion(input.parentWorld.rotation), worldRotation),
-      };
-    }
-    case 'scale': {
-      const step = input.settings.scaleSnapAxes[input.axis] * fineMultiplier;
-      if (input.orientation === 'local') {
-        const scale = [...input.local.scale] as [number, number, number];
-        scale[input.axis] = Math.max(Number.EPSILON, snapping
-          ? quantize(scale[input.axis] + delta, step)
-          : scale[input.axis] + delta);
-        return { ...input.local, scale };
-      }
-      // The persisted hierarchy is TRS-only. World-axis scale therefore uses
-      // the hierarchy's component-wise world scale representation; arbitrary
-      // shear is deliberately not invented by the editor.
-      const worldScale = [...input.world.scale] as [number, number, number];
-      worldScale[input.axis] = Math.max(Number.EPSILON, snapping
-        ? quantize(worldScale[input.axis] + delta, step)
-        : worldScale[input.axis] + delta);
-      return {
-        ...input.local,
-        scale: input.parentWorld === null
-          ? worldScale
-          : [
-              worldScale[0] / input.parentWorld.scale[0],
-              worldScale[1] / input.parentWorld.scale[1],
-              worldScale[2] / input.parentWorld.scale[2],
-            ],
-      };
-    }
-  }
-}
-
-/**
- * Captures the unsnapped pointer-down baseline for one transform drag.
- * Incremental pointer samples are accumulated separately from the snapped
- * presentation so small movements cannot be discarded by quantization.
- */
-export function beginTransformToolDrag(input: TransformToolDragStart): TransformToolDragState {
-  return { ...input, cumulativeDelta: 0 };
-}
-
-export function updateTransformToolDrag(
-  drag: TransformToolDragState,
-  update: TransformToolDragUpdate,
-): TransformToolDragResult {
-  const next = {
-    ...drag,
-    cumulativeDelta: drag.cumulativeDelta + update.delta,
-  };
+/** Converts a renderer-facing world candidate back to the selected Rust owner's local TRS. */
+export function localTransformFromWorld(parent: Transform | null, world: Transform): Transform {
+  if (parent === null) return cloneTransform(world);
   return {
-    drag: next,
-    transform: applyTransformToolDelta({
-      local: next.local,
-      world: next.world,
-      parentWorld: next.parentWorld,
-      tool: next.tool,
-      orientation: next.orientation,
-      axis: next.axis,
-      delta: next.cumulativeDelta,
-      fine: update.fine,
-      toggleSnap: update.toggleSnap,
-      settings: update.settings,
-    }),
+    translation: inverseTransformPoint(parent, world.translation),
+    rotation: multiplyQuaternion(inverseQuaternion(parent.rotation), world.rotation),
+    scale: [
+      world.scale[0] / parent.scale[0],
+      world.scale[1] / parent.scale[1],
+      world.scale[2] / parent.scale[2],
+    ],
   };
 }
 
@@ -187,19 +43,6 @@ function inverseTransformPoint(
     unrotated[1] / transform.scale[1],
     unrotated[2] / transform.scale[2],
   ];
-}
-
-function unitAxis(axis: StudioTransformAxis): readonly [number, number, number] {
-  return axis === 0 ? [1, 0, 0] : axis === 1 ? [0, 1, 0] : [0, 0, 1];
-}
-
-function axisAngle(
-  axis: readonly [number, number, number],
-  radians: number,
-): readonly [number, number, number, number] {
-  const half = radians / 2;
-  const sine = Math.sin(half);
-  return [axis[0] * sine, axis[1] * sine, axis[2] * sine, Math.cos(half)];
 }
 
 function multiplyQuaternion(
@@ -227,7 +70,7 @@ function normalizeQuaternion(
   value: readonly [number, number, number, number],
 ): readonly [number, number, number, number] {
   const length = Math.hypot(...value);
-  return value.map((component) => component / length) as unknown as readonly [number, number, number, number];
+  return value.map((component) => component / length) as [number, number, number, number];
 }
 
 function rotateVector(
@@ -245,15 +88,12 @@ function rotateVector(
   ];
 }
 
-function quantize(value: number, step: number): number {
-  return Math.round(value / step) * step;
-}
-
-function dot(
-  left: readonly [number, number, number],
-  right: readonly [number, number, number],
-): number {
-  return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
+function cloneTransform(transform: Transform): Transform {
+  return {
+    translation: [...transform.translation],
+    rotation: [...transform.rotation],
+    scale: [...transform.scale],
+  };
 }
 
 function add(
@@ -268,11 +108,4 @@ function subtract(
   right: readonly [number, number, number],
 ): readonly [number, number, number] {
   return [left[0] - right[0], left[1] - right[1], left[2] - right[2]];
-}
-
-function multiply(
-  vector: readonly [number, number, number],
-  scalar: number,
-): readonly [number, number, number] {
-  return [vector[0] * scalar, vector[1] * scalar, vector[2] * scalar];
 }

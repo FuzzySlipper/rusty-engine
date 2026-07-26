@@ -20,9 +20,8 @@ import type { EditorGridDescriptor, Transform } from '@rusty-engine/render-contr
 import type { StudioKeyboardBindings } from '@rusty-engine/studio-user-settings';
 import {
   StudioViewportComponent,
-  type StudioTransformGizmoDelta,
-  type StudioTransformAxis,
   type StudioTransformOrientation,
+  type StudioTransformSnapping,
   type StudioTransformTool,
   type StudioVoxelPreview,
   type VoxelViewportPickCandidate,
@@ -32,6 +31,8 @@ import {
   type VoxelBrushPreviewPresentation,
   type VoxelEditorAction,
 } from '@rusty-engine/studio-voxel-editor';
+
+import { composeTransform } from './transform-tools.js';
 
 import { STUDIO_WORKSPACE } from './tokens.js';
 import {
@@ -67,6 +68,7 @@ export class StudioShellComponent {
   readonly store = inject(STUDIO_WORKSPACE);
   readonly state = this.store.snapshot;
   readonly brushPreview = signal<VoxelBrushPreviewPresentation | null>(null);
+  readonly selectedTransformTool = signal<StudioTransformTool | null>(null);
   readonly hostPathDialog = signal<HostPathDialogState | null>(null);
   readonly visibleHostEntries = computed(() => {
     const dialog = this.hostPathDialog();
@@ -95,6 +97,34 @@ export class StudioShellComponent {
       scale: preview.scale,
     };
   });
+  readonly transformManipulatorTransform = computed<Transform | null>(() => {
+    const snapshot = this.state();
+    const document = snapshot.authoringDocument;
+    const entityId = snapshot.selection.entityId;
+    if (this.selectedTransformTool() === null || document === null || entityId === null) return null;
+    const node = document.sceneHierarchy.nodes.find(
+      (candidate) => candidate.entityId === entityId,
+    );
+    if (node === undefined) return null;
+    const preview = snapshot.preview?.entityId === entityId ? snapshot.preview : null;
+    if (preview === null) return node.worldTransform;
+    const local: Transform = {
+      translation: preview.translation,
+      rotation: preview.rotation,
+      scale: preview.scale,
+    };
+    if (node.parentNodeId === null) return local;
+    const parent = document.sceneHierarchy.nodes.find(
+      (candidate) => candidate.nodeId === node.parentNodeId,
+    );
+    return parent === undefined ? null : composeTransform(parent.worldTransform, local);
+  });
+  readonly transformSnapping = computed<StudioTransformSnapping>(() => ({
+    enabled: this.state().settings.snappingEnabled,
+    rotationDegrees: this.state().settings.rotationSnapDegrees,
+    scale: this.state().settings.scaleSnapAxes,
+    translation: this.state().settings.translationSnapAxes,
+  }));
   readonly viewportGrid = computed<EditorGridDescriptor | null>(() => {
     const settings = this.state().settings;
     if (!settings.gridVisible) return null;
@@ -564,8 +594,26 @@ export class StudioShellComponent {
   beginSelectedPreview(tool: StudioTransformTool = 'translate'): void {
     const entityId = this.store.selectedHierarchyNode()?.entityId;
     if (entityId !== null && entityId !== undefined) {
-      this.store.beginTransformPreview(entityId, tool, this.state().settings.transformOrientation);
+      this.selectedTransformTool.set(tool);
+      if (this.state().preview?.entityId === entityId) {
+        this.store.setPreviewTool(tool, this.state().settings.transformOrientation);
+      }
     }
+  }
+
+  selectPointerTool(): void {
+    const finish = async (): Promise<void> => {
+      if (this.state().preview !== null && !await this.store.commitPreview()) return;
+      this.selectedTransformTool.set(null);
+    };
+    void finish();
+  }
+
+  beginViewportTransformDrag(): void {
+    const entityId = this.store.selectedHierarchyNode()?.entityId;
+    const tool = this.selectedTransformTool();
+    if (entityId === null || entityId === undefined || tool === null) return;
+    this.store.beginTransformPreview(entityId, tool, this.state().settings.transformOrientation);
   }
 
   setTransformOrientation(orientation: StudioTransformOrientation): void {
@@ -573,12 +621,12 @@ export class StudioShellComponent {
     this.store.setPreviewOrientation(orientation);
   }
 
-  applyTransformGizmoDelta(delta: StudioTransformGizmoDelta): void {
-    this.store.applyPreviewToolDelta(delta.axis, delta.delta, delta.fine, delta.toggleSnap);
+  applyTransformCandidate(transform: Transform): void {
+    this.store.applyPreviewWorldTransform(transform);
   }
 
-  finishTransformGizmoDrag(axis: StudioTransformAxis, cancelled: boolean): void {
-    this.store.finishPreviewToolDrag(axis, cancelled);
+  finishTransformGizmoDrag(cancelled: boolean): void {
+    if (!cancelled) void this.store.commitPreview();
   }
 
   canPreviewTranslation(): boolean {
@@ -589,6 +637,7 @@ export class StudioShellComponent {
   updateTranslation(axis: 0 | 1 | 2, raw: string): void {
     const entityId = this.store.selectedHierarchyNode()?.entityId;
     if (entityId === null || entityId === undefined) return;
+    this.selectedTransformTool.set('translate');
     if (this.state().preview?.entityId !== entityId) {
       this.store.beginTranslationPreview(entityId);
     }
@@ -596,12 +645,14 @@ export class StudioShellComponent {
   }
 
   updateRotation(axis: 0 | 1 | 2 | 3, raw: string): void {
-    this.ensureSelectedPreview();
+    this.selectedTransformTool.set('rotate');
+    this.ensureSelectedPreview('rotate');
     this.store.setPreviewRotationAxis(axis, Number(raw));
   }
 
   updateScale(axis: 0 | 1 | 2, raw: string): void {
-    this.ensureSelectedPreview();
+    this.selectedTransformTool.set('scale');
+    this.ensureSelectedPreview('scale');
     this.store.setPreviewScaleAxis(axis, Number(raw));
   }
 
@@ -738,11 +789,17 @@ export class StudioShellComponent {
     ];
   }
 
-  private ensureSelectedPreview(): void {
+  private ensureSelectedPreview(tool: StudioTransformTool): void {
     const entityId = this.store.selectedHierarchyNode()?.entityId;
     if (entityId === null || entityId === undefined) return;
     if (this.state().preview?.entityId !== entityId) {
-      this.store.beginTranslationPreview(entityId);
+      this.store.beginTransformPreview(
+        entityId,
+        tool,
+        this.state().settings.transformOrientation,
+      );
+    } else {
+      this.store.setPreviewTool(tool, this.state().settings.transformOrientation);
     }
   }
 

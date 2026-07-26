@@ -26,6 +26,19 @@ import {
   presentStudioSelection,
   type StudioVoxelPreview,
 } from './viewport-model.js';
+import {
+  beginStudioTransformManipulatorDrag,
+  cancelStudioTransformManipulatorDrag,
+  projectStudioTransformManipulator,
+  studioTransformHandleFromId,
+  updateStudioTransformManipulatorDrag,
+  type StudioTransformHandle,
+  type StudioTransformManipulatorCamera,
+  type StudioTransformManipulatorDrag,
+  type StudioTransformOrientation,
+  type StudioTransformSnapping,
+  type StudioTransformTool,
+} from './transform-manipulator.js';
 
 type ViewportStatus = 'mounting' | 'ready' | 'error' | 'disposed';
 
@@ -38,19 +51,7 @@ export interface VoxelViewportPickCandidate {
   readonly maxDistance: number;
 }
 
-export type StudioTransformTool = 'translate' | 'rotate' | 'scale';
-export type StudioTransformOrientation = 'world' | 'local';
-export type StudioTransformAxis = 0 | 1 | 2;
-
-export interface StudioTransformGizmoDelta {
-  readonly axis: StudioTransformAxis;
-  readonly delta: number;
-  readonly fine: boolean;
-  readonly toggleSnap: boolean;
-}
-
 export interface StudioTransformGizmoDragFinished {
-  readonly axis: StudioTransformAxis;
   readonly cancelled: boolean;
 }
 
@@ -72,6 +73,11 @@ export interface StudioTransformGizmoDragFinished {
     '[attr.data-camera-move-speed]': 'controlPreferences().moveSpeed',
     '[attr.data-camera-move-forward]': 'controlPreferences().keyboard.moveForward',
     '[attr.data-renderer-error]': 'lastRendererError()',
+    '[attr.data-transform-gizmo-visible]': 'manipulatorTransform() !== null && transformTool() !== null',
+    '[attr.data-transform-tool]': 'transformTool()',
+    '[attr.data-transform-orientation]': 'transformOrientation()',
+    '[attr.data-active-transform-handle]': 'activeTransformHandleLabel()',
+    '[attr.data-hovered-transform-handle]': 'hoveredTransformHandleLabel()',
   },
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
@@ -97,8 +103,15 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   readonly selectedEntityId = input<number | null>(null);
   readonly previewEntityId = input<number | null>(null);
   readonly previewTransform = input<Transform | null>(null);
+  readonly manipulatorTransform = input<Transform | null>(null);
   readonly transformTool = input<StudioTransformTool | null>(null);
   readonly transformOrientation = input<StudioTransformOrientation>('world');
+  readonly transformSnapping = input<StudioTransformSnapping>({
+    enabled: true,
+    rotationDegrees: 15,
+    scale: [0.1, 0.1, 0.1],
+    translation: [0.25, 0.25, 0.25],
+  });
   readonly voxelPreview = input<StudioVoxelPreview | null>(null);
   readonly animatedMeshManifest = input<RendererAnimatedMeshResourceManifest | null>(null);
   readonly resolveAnimatedMeshResource = input<RendererAnimatedMeshResourceResolver | null>(null);
@@ -107,9 +120,10 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   readonly entityPicked = output<number | null>();
   readonly voxelPicked = output<VoxelViewportPickCandidate>();
   readonly rendererError = output<string>();
-  readonly transformDragStarted = output<StudioTransformAxis>();
-  readonly transformDelta = output<StudioTransformGizmoDelta>();
+  readonly transformDragStarted = output<void>();
+  readonly transformCandidate = output<Transform>();
   readonly transformDragFinished = output<StudioTransformGizmoDragFinished>();
+  readonly transformRevertRequested = output<void>();
 
   readonly status = signal<ViewportStatus>('mounting');
   readonly retainedOpCount = signal(0);
@@ -120,6 +134,8 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   readonly voxelPreviewKind = signal<StudioVoxelPreview['kind'] | null>(null);
   readonly selectedRenderHandle = signal<number | null>(null);
   readonly lastRendererError = signal('');
+  readonly activeTransformHandleLabel = signal<string | null>(null);
+  readonly hoveredTransformHandleLabel = signal<string | null>(null);
 
   @ViewChild('canvas', { static: true })
   private canvasElement!: ElementRef<HTMLCanvasElement>;
@@ -130,8 +146,17 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   #mountRevision = 0;
   #lastResourceKey = '';
   #lastPresentationKey = '';
+  #lastManipulatorKey = '';
   #pointerStart: readonly [number, number] | null = null;
   #pointerDragged = false;
+  #suppressNextClick = false;
+  #suppressClickTimer: ReturnType<typeof setTimeout> | null = null;
+  #activeManipulatorDrag: {
+    readonly pointerId: number;
+    readonly drag: StudioTransformManipulatorDrag;
+  } | null = null;
+  #activeManipulatorHandle: StudioTransformHandle | null = null;
+  #hoveredManipulatorHandle: StudioTransformHandle | null = null;
 
   constructor() {
     effect(() => {
@@ -154,6 +179,15 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     });
     effect(() => {
       this.#setGrid(this.grid());
+    });
+    effect(() => {
+      this.#replaceManipulatorOverlay(
+        this.manipulatorTransform(),
+        this.transformTool(),
+        this.transformOrientation(),
+        this.activeTransformHandleLabel(),
+        this.hoveredTransformHandleLabel(),
+      );
     });
     effect(() => {
       const preferences = this.controlPreferences();
@@ -182,6 +216,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.#destroyed = true;
+    if (this.#suppressClickTimer !== null) clearTimeout(this.#suppressClickTimer);
     this.#surface?.dispose();
     this.#surface = null;
     this.status.set('disposed');
@@ -189,11 +224,21 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
 
   pointerDown(event: PointerEvent): void {
     if (event.button !== 0) return;
+    if (this.#beginManipulatorDrag(event)) return;
     this.#pointerStart = [event.clientX, event.clientY];
     this.#pointerDragged = false;
   }
 
   pointerMove(event: PointerEvent): void {
+    const active = this.#activeManipulatorDrag;
+    if (active !== null && active.pointerId === event.pointerId) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this.#pointerDragged = true;
+      this.#emitManipulatorCandidate(active.drag, event);
+      return;
+    }
+    if (event.buttons === 0) this.#updateManipulatorHover(event);
     if (this.#pointerStart === null || this.#pointerDragged) return;
     this.#pointerDragged = movedPastPickThreshold(
       this.#pointerStart,
@@ -201,11 +246,50 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     );
   }
 
-  pointerUp(): void {
+  pointerUp(event: PointerEvent): void {
+    const active = this.#activeManipulatorDrag;
+    if (active !== null && active.pointerId === event.pointerId) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this.#emitManipulatorCandidate(active.drag, event);
+      this.#finishManipulatorDrag(event.pointerId, false);
+      return;
+    }
     this.#pointerStart = null;
   }
 
+  pointerCancel(event: PointerEvent): void {
+    const active = this.#activeManipulatorDrag;
+    if (active !== null && active.pointerId === event.pointerId) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this.transformCandidate.emit(cancelStudioTransformManipulatorDrag(active.drag).transform);
+      this.#finishManipulatorDrag(event.pointerId, true);
+      return;
+    }
+    this.#pointerStart = null;
+  }
+
+  keyDown(event: KeyboardEvent): void {
+    if (event.key !== 'Escape' || this.previewTransform() === null) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const active = this.#activeManipulatorDrag;
+    if (active !== null) {
+      this.transformCandidate.emit(cancelStudioTransformManipulatorDrag(active.drag).transform);
+      this.#finishManipulatorDrag(active.pointerId, true);
+    } else {
+      this.transformRevertRequested.emit();
+    }
+  }
+
   pick(event: MouseEvent): void {
+    if (this.#suppressNextClick) {
+      this.#suppressNextClick = false;
+      if (this.#suppressClickTimer !== null) clearTimeout(this.#suppressClickTimer);
+      this.#suppressClickTimer = null;
+      return;
+    }
     if (this.#pointerDragged) {
       this.#pointerDragged = false;
       return;
@@ -260,6 +344,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     this.#surface = null;
     previous?.dispose();
     this.#lastPresentationKey = '';
+    this.#lastManipulatorKey = '';
     this.lastRendererError.set('');
     this.status.set('mounting');
     try {
@@ -302,6 +387,13 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
           this.voxelPreview(),
         );
       }
+      this.#replaceManipulatorOverlay(
+        this.manipulatorTransform(),
+        this.transformTool(),
+        this.transformOrientation(),
+        this.activeTransformHandleLabel(),
+        this.hoveredTransformHandleLabel(),
+      );
       this.#syncReadout();
     } catch (error) {
       if (mountRevision !== this.#mountRevision) return;
@@ -345,40 +437,177 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     this.#syncReadout();
   }
 
-  beginGizmoDrag(event: PointerEvent, axis: StudioTransformAxis): void {
-    if (event.button !== 0 || this.transformTool() === null) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLElement)) return;
-    target.setPointerCapture(event.pointerId);
-    this.transformDragStarted.emit(axis);
-    let last = event.clientX - event.clientY;
-    const move = (moveEvent: PointerEvent): void => {
-      const current = moveEvent.clientX - moveEvent.clientY;
-      const pixels = current - last;
-      last = current;
-      if (Math.abs(pixels) < 0.01) return;
-      const sensitivity = this.transformTool() === 'rotate' ? 0.75 : 0.025;
-      this.transformDelta.emit({
-        axis,
-        delta: pixels * sensitivity,
-        fine: moveEvent.shiftKey,
-        toggleSnap: moveEvent.ctrlKey || moveEvent.metaKey,
+  #beginManipulatorDrag(event: PointerEvent): boolean {
+    const surface = this.#surface;
+    const transform = this.manipulatorTransform();
+    const tool = this.transformTool();
+    if (surface === null || transform === null || tool === null) return false;
+    const pointer = this.#canvasPoint(event);
+    const receipt = surface.pick({
+      point: pointer,
+      filter: {
+        channels: ['overlay'],
+        layers: ['debug'],
+        tags: ['studio-transform-manipulator'],
+      },
+    });
+    if (receipt.diagnostics.length > 0) {
+      this.#report(receipt.diagnostics.map((entry) => entry.message).join('; '));
+      return false;
+    }
+    const handle = receipt.hint === null
+      ? null
+      : studioTransformHandleFromId(receipt.hint.handle);
+    if (handle === null || handle.tool !== tool) return false;
+    try {
+      const drag = beginStudioTransformManipulatorDrag({
+        camera: this.#manipulatorCamera(),
+        handle,
+        orientation: this.transformOrientation(),
+        pointer,
+        revision: `${String(this.frameGeneration())}:${String(
+          this.previewEntityId() ?? this.selectedEntityId(),
+        )}`,
+        snapping: this.transformSnapping(),
+        source: transform,
       });
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this.canvasElement.nativeElement.focus({ preventScroll: true });
+      this.canvasElement.nativeElement.setPointerCapture(event.pointerId);
+      this.#activeManipulatorDrag = { pointerId: event.pointerId, drag };
+      this.#activeManipulatorHandle = handle;
+      this.activeTransformHandleLabel.set(handleLabel(handle));
+      this.transformDragStarted.emit();
+      this.#pointerStart = [event.clientX, event.clientY];
+      this.#pointerDragged = true;
+      return true;
+    } catch (error) {
+      this.#report(error instanceof Error ? error.message : 'transform drag could not begin');
+      return false;
+    }
+  }
+
+  #emitManipulatorCandidate(
+    drag: StudioTransformManipulatorDrag,
+    event: PointerEvent,
+  ): void {
+    try {
+      const candidate = updateStudioTransformManipulatorDrag(
+        drag,
+        this.#manipulatorCamera(),
+        this.#canvasPoint(event),
+        {
+          fine: event.shiftKey,
+          snapping: event.ctrlKey || event.metaKey
+            ? !drag.snapping.enabled
+            : drag.snapping.enabled,
+        },
+      );
+      this.transformCandidate.emit(candidate.transform);
+    } catch (error) {
+      this.#report(error instanceof Error ? error.message : 'transform drag could not update');
+    }
+  }
+
+  #finishManipulatorDrag(pointerId: number, cancelled: boolean): void {
+    this.#activeManipulatorDrag = null;
+    this.#activeManipulatorHandle = null;
+    this.activeTransformHandleLabel.set(null);
+    this.#pointerStart = null;
+    this.#pointerDragged = true;
+    this.#suppressNextClick = true;
+    if (this.#suppressClickTimer !== null) clearTimeout(this.#suppressClickTimer);
+    this.#suppressClickTimer = setTimeout(() => {
+      this.#suppressNextClick = false;
+      this.#suppressClickTimer = null;
+    }, 0);
+    try {
+      if (this.canvasElement.nativeElement.hasPointerCapture(pointerId)) {
+        this.canvasElement.nativeElement.releasePointerCapture(pointerId);
+      }
+    } catch {
+      // Pointer capture may already be gone after cancellation or host teardown.
+    }
+    this.transformDragFinished.emit({ cancelled });
+  }
+
+  #updateManipulatorHover(event: PointerEvent): void {
+    const surface = this.#surface;
+    if (surface === null || this.manipulatorTransform() === null || this.transformTool() === null) {
+      this.#setHoveredManipulator(null);
+      return;
+    }
+    const receipt = surface.pick({
+      point: this.#canvasPoint(event),
+      filter: {
+        channels: ['overlay'],
+        layers: ['debug'],
+        tags: ['studio-transform-manipulator'],
+      },
+    });
+    const handle = receipt.diagnostics.length === 0 && receipt.hint !== null
+      ? studioTransformHandleFromId(receipt.hint.handle)
+      : null;
+    this.#setHoveredManipulator(handle);
+  }
+
+  #setHoveredManipulator(handle: StudioTransformHandle | null): void {
+    const label = handle === null ? null : handleLabel(handle);
+    if (label === this.hoveredTransformHandleLabel()) return;
+    this.#hoveredManipulatorHandle = handle;
+    this.hoveredTransformHandleLabel.set(label);
+  }
+
+  #replaceManipulatorOverlay(
+    transform: Transform | null,
+    tool: StudioTransformTool | null,
+    orientation: StudioTransformOrientation,
+    activeLabel: string | null,
+    hoveredLabel: string | null,
+  ): void {
+    const surface = this.#surface;
+    if (surface === null) return;
+    const key = JSON.stringify([transform, tool, orientation, activeLabel, hoveredLabel]);
+    if (key === this.#lastManipulatorKey) return;
+    const receipt = transform === null || tool === null
+      ? surface.clearOverlayProjection()
+      : surface.replaceOverlayFrame(projectStudioTransformManipulator({
+          active: this.#activeManipulatorHandle,
+          hovered: this.#hoveredManipulatorHandle,
+          orientation,
+          tool,
+          transform,
+          visible: true,
+        }));
+    if (!receipt.applied) {
+      this.#fail(receipt.diagnostics.map((entry) => entry.message).join('; '));
+      return;
+    }
+    this.#lastManipulatorKey = key;
+  }
+
+  #canvasPoint(event: Pick<PointerEvent, 'clientX' | 'clientY'>): readonly [number, number] {
+    return canvasPoint(
+      [event.clientX, event.clientY],
+      this.canvasElement.nativeElement.getBoundingClientRect(),
+    );
+  }
+
+  #manipulatorCamera(): StudioTransformManipulatorCamera {
+    const surface = this.#surface;
+    if (surface === null) throw new Error('shared renderer surface is unavailable');
+    const camera = surface.camera();
+    const bounds = this.canvasElement.nativeElement.getBoundingClientRect();
+    return {
+      position: camera.pose.position,
+      basis: camera.basis,
+      fovYDegrees: camera.projection.fovYDegrees,
+      viewport: {
+        width: Math.max(1, bounds.width),
+        height: Math.max(1, bounds.height),
+      },
     };
-    const finish = (finishEvent: PointerEvent): void => {
-      target.removeEventListener('pointermove', move);
-      target.removeEventListener('pointerup', finish);
-      target.removeEventListener('pointercancel', finish);
-      this.transformDragFinished.emit({
-        axis,
-        cancelled: finishEvent.type === 'pointercancel',
-      });
-    };
-    target.addEventListener('pointermove', move);
-    target.addEventListener('pointerup', finish);
-    target.addEventListener('pointercancel', finish);
   }
 
   #setGrid(descriptor: EditorGridDescriptor | null): void {
@@ -428,4 +657,13 @@ function normalize(
   const length = Math.hypot(...vector);
   if (!Number.isFinite(length) || length <= Number.EPSILON) return null;
   return [vector[0] / length, vector[1] / length, vector[2] / length];
+}
+
+function handleLabel(handle: StudioTransformHandle): string {
+  const target = handle.kind === 'axis'
+    ? ['x', 'y', 'z'][handle.axis]
+    : handle.kind === 'plane'
+      ? handle.plane
+      : 'uniform';
+  return `${handle.tool}:${String(target)}`;
 }

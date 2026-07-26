@@ -379,6 +379,30 @@ void test('inspection surface keeps incremental runtime projection distinct from
   assert.equal(harness.surface.readout().retainedFrameHash, initial.retainedFrameHash);
 });
 
+void test('inspection surface replaces and clears disposable debug overlays independently', () => {
+  const harness = createInspectionHarness({ autoStart: false, frame: primitiveFrame(7) });
+  const authored = structuredClone(harness.backend.frames.get('authored'));
+  const overlayCreate = primitiveCreate(90);
+  const replaced = harness.surface.replaceOverlayFrame({
+    schemaVersion: 1,
+    ops: [{
+      ...overlayCreate,
+      node: { ...overlayCreate.node, layer: 'debug' },
+    }],
+  });
+
+  assert.equal(replaced.applied, true);
+  assert.equal(replaced.channel, 'overlay');
+  assert.equal(harness.backend.frames.get('overlay')?.ops.length, 1);
+  assert.deepEqual(harness.backend.frames.get('authored'), authored);
+
+  const cleared = harness.surface.clearOverlayProjection();
+  assert.equal(cleared.applied, true);
+  assert.equal(cleared.channel, 'overlay');
+  assert.equal(harness.backend.frames.get('overlay')?.ops.length, 0);
+  assert.deepEqual(harness.backend.frames.get('authored'), authored);
+});
+
 void test('inspection surface rejects malformed and over-limit runtime frames without changing retained runtime state', () => {
   const harness = createInspectionHarness({ autoStart: false });
   assert.equal(harness.surface.applyRuntimeFrame(primitiveFrame(8)).applied, true);

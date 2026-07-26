@@ -32,6 +32,15 @@ renderer; it does not copy Asha RuntimeSession, bridge/provider topology, univer
 generated-contract ceremony, proof dumps, or sibling-checkout assumptions. The untracked donor
 `assets/` directory and `untitled.scene.json` were never inputs.
 
+The transform-ergonomics follow-up adapts the proven interaction from
+`libs/studio-viewport/src/index.ts` at the Studio pin and the renderer-neutral math in
+`ts/packages/editor-tools/src/transform-manipulator.ts` plus its focused test at Asha Engine commit
+`6462a6de20d48ea1a3b7456826804bd9507860a5`. Rusty Studio keeps spatial overlay handles, typed
+pick-to-intent mapping, camera-aware world drag candidates, snapping, local/world orientation,
+pointer-cancel restoration, and pointer-up settlement. It replaces Asha store/revision/runtime
+facades with the successor's local preview, explicit world-to-local conversion, and named
+hash-and-revision-guarded Rust adapter mutation.
+
 ## Complete rendering successor donor
 
 The owner-approved rendering campaign #6156 uses a newer, rendering-specific Asha Engine baseline:

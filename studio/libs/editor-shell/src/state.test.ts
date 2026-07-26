@@ -43,7 +43,7 @@ test('workspace opens only through the adapter and keeps authority, projection, 
   store.beginTranslationPreview(1);
   store.setPreviewTranslationAxis(0, 4.5);
 
-  assert.equal(store.snapshot().selection.source, 'inspector');
+  assert.equal(store.snapshot().selection.source, 'hierarchy');
   assert.equal(store.snapshot().selection.sceneNodeId, 10);
   assert.deepEqual(store.snapshot().preview?.translation, [4.5, 2, 3]);
   assert.equal(store.snapshot().authoringDocument?.identity.projectHash, 'hash-before');
@@ -67,26 +67,38 @@ test('workspace opens only through the adapter and keeps authority, projection, 
   assert.deepEqual(store.selectedEntity()?.transform?.translation, [4.5, 2, 3]);
 });
 
-test('transform drag completion rebases the next drag and cancellation restores its pointer-down state', async () => {
+test('renderer world candidates update the local preview and explicit revert restores owner state', async () => {
   const store = new StudioWorkspaceStore(new StudioAdapterClient(new FixtureTransport()));
   await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
   store.beginTransformPreview(1, 'translate', 'world');
 
-  store.beginPreviewToolDrag(0);
-  store.applyPreviewToolDelta(0, 0.3, false, false);
-  store.finishPreviewToolDrag(0, false);
-  assert.deepEqual(store.snapshot().preview?.translation, [1.5, 2, 3]);
+  store.applyPreviewWorldTransform({
+    translation: [2.5, 3, 4],
+    rotation: [0, 0, 0, 1],
+    scale: [2, 3, 4],
+  });
+  assert.deepEqual(store.snapshot().preview?.translation, [2.5, 3, 4]);
+  assert.deepEqual(store.snapshot().preview?.scale, [2, 3, 4]);
 
-  store.beginPreviewToolDrag(0);
-  store.applyPreviewToolDelta(0, 0.3, false, false);
-  store.finishPreviewToolDrag(0, false);
-  assert.deepEqual(store.snapshot().preview?.translation, [2, 2, 3]);
+  store.revertPreview();
+  assert.equal(store.snapshot().preview, null);
+  assert.deepEqual(store.selectedEntity()?.transform?.translation, [1, 2, 3]);
+});
 
-  store.beginPreviewToolDrag(0);
-  store.applyPreviewToolDelta(0, 0.3, false, false);
-  assert.deepEqual(store.snapshot().preview?.translation, [2.5, 2, 3]);
-  store.finishPreviewToolDrag(0, true);
-  assert.deepEqual(store.snapshot().preview?.translation, [2, 2, 3]);
+test('changing selection commits a pending transform before selecting the next owner', async () => {
+  const transport = new FixtureTransport();
+  const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
+  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  store.selectHierarchyNode(10);
+  store.beginTranslationPreview(1);
+  store.setPreviewTranslationAxis(0, 4.5);
+
+  await store.selectHierarchyNode(20);
+
+  assert.equal(transport.requests.at(-1)?.type, 'setSceneObjectTransform');
+  assert.equal(store.snapshot().selection.entityId, 2);
+  assert.equal(store.snapshot().selection.sceneNodeId, 20);
+  assert.equal(store.snapshot().preview, null);
 });
 
 test('rejected mutation preserves the accepted document and disposable preview', async () => {
@@ -101,6 +113,22 @@ test('rejected mutation preserves the accepted document and disposable preview',
   await store.commitPreview();
 
   assert.equal(store.snapshot().authoringDocument?.identity.projectHash, 'hash-before');
+  assert.deepEqual(store.snapshot().preview?.translation, [1, 2, 99]);
+  assert.match(store.snapshot().lastError ?? '', /project\.staleHash/);
+});
+
+test('selection does not change when automatic transform settlement is rejected', async () => {
+  const transport = new FixtureTransport();
+  const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
+  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  store.selectHierarchyNode(10);
+  store.beginTranslationPreview(1);
+  store.setPreviewTranslationAxis(2, 99);
+  transport.rejectMutation = true;
+
+  await store.selectHierarchyNode(20);
+
+  assert.equal(store.snapshot().selection.entityId, 1);
   assert.deepEqual(store.snapshot().preview?.translation, [1, 2, 99]);
   assert.match(store.snapshot().lastError ?? '', /project\.staleHash/);
 });

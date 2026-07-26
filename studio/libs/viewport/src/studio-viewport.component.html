@@ -10,8 +10,9 @@
     aria-label="Shared Rusty renderer viewport"
     (pointerdown)="pointerDown($event)"
     (pointermove)="pointerMove($event)"
-    (pointerup)="pointerUp()"
-    (pointercancel)="pointerUp()"
+    (pointerup)="pointerUp($event)"
+    (pointercancel)="pointerCancel($event)"
+    (keydown)="keyDown($event)"
     (click)="pick($event)"
   ></canvas>
 
@@ -25,14 +26,7 @@
     <div class="preview-readout" data-preview-active="true">
       <strong>{{ transformTool() ?? 'transform' }} · {{ transformOrientation() }} #{{ previewEntityId() }}</strong>
       <span>{{ transform.translation.join(', ') }}</span>
-      <small>Disposable until explicit Rust commit</small>
-    </div>
-  }
-  @if (previewTransform() !== null && transformTool() !== null) {
-    <div class="transform-gizmo" [attr.data-tool]="transformTool()" [attr.data-orientation]="transformOrientation()" aria-label="Transform gizmo">
-      <button type="button" class="axis-x" aria-label="Drag X transform axis" (pointerdown)="beginGizmoDrag($event, 0)">X</button>
-      <button type="button" class="axis-y" aria-label="Drag Y transform axis" (pointerdown)="beginGizmoDrag($event, 1)">Y</button>
-      <button type="button" class="axis-z" aria-label="Drag Z transform axis" (pointerdown)="beginGizmoDrag($event, 2)">Z</button>
+      <small>Live preview · gizmo release or selection commits through Rust · Revert cancels</small>
     </div>
   }
   <div class="renderer-readout">

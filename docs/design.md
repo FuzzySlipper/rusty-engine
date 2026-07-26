@@ -187,16 +187,22 @@ validates the selected asset and animation clip, then projects typed resource de
 `defineAnimatedMesh`, instance creation, and named playback. Studio's trusted Node host only resolves
 bounded project-relative GLB bytes, rejects symbolic links, and verifies the admitted SHA-256 before
 the shared renderer consumes them; the browser has no filesystem authority. Angular owns the
-asset/clip controls and disposable transform gizmos, but does not construct a private Three scene or
-replace materials inside an imported animated hierarchy merely to show selection.
+asset/clip controls and renderer-neutral transform-manipulator intent, but does not construct a
+private Three scene or replace materials inside an imported animated hierarchy merely to show
+selection. The shared viewport projects the gizmo on its isolated debug overlay channel at the
+selected object's world transform and maps renderer picks back to typed handles.
 
 Angular owns forms, selection, transient brush state, and cancellation only. It structurally decodes
 the closed protocol but does not recompute hashes, validate voxel semantics, replay history, cast an
 authoritative ray, or forge conversion output. Renderer picks are untrusted hints transformed into
 an authored-cell claim and re-cast by Rust. Entity selection and transform preview are disposable
-derived frames applied through the shared renderer projection. Voxel brush and bounded conversion
-samples use the same disposable debug-layer frame path. Cancellation or discard reinstalls the
-accepted canonical frame, and commit still settles through the Rust adapter.
+derived frames applied through the shared renderer projection. During a gizmo drag, candidates stay
+transient; pointer release and a change to another selection settle the candidate through the named
+Rust transform operation. The selected tool remains disposable UI state across settlement and
+selection, so the gizmo reanchors to the newly accepted or selected transform. Explicit Revert,
+Escape, or pointer cancellation restores accepted or pointer-down state without publication. Voxel
+brush and bounded conversion samples use the same disposable debug-layer frame path. Every
+transform commit remains hash- and revision-guarded and is canonically reread from the Rust adapter.
 
 Studio's Node/HTTP host serves the isolated application, forwards bounded JSON to the explicit
 adapter binary, and owns one separate versioned host-user settings boundary. Preferences are keyed

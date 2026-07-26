@@ -39,7 +39,6 @@ import type {
   Transform,
 } from '@rusty-engine/render-contracts';
 import type {
-  StudioTransformAxis,
   StudioTransformOrientation,
   StudioTransformTool,
 } from '@rusty-engine/studio-viewport';
@@ -57,10 +56,7 @@ import {
   type StudioUserSettingsSnapshot,
 } from '@rusty-engine/studio-user-settings';
 import {
-  beginTransformToolDrag,
-  composeTransform,
-  updateTransformToolDrag,
-  type TransformToolDragState,
+  localTransformFromWorld,
 } from './transform-tools.js';
 
 export type StudioConnectionState =
@@ -111,11 +107,6 @@ export interface TransformPreviewState {
   readonly translation: readonly [number, number, number];
   readonly rotation: readonly [number, number, number, number];
   readonly scale: readonly [number, number, number];
-}
-
-interface ActiveTransformToolDrag {
-  readonly entityId: number;
-  readonly drag: TransformToolDragState;
 }
 
 export interface CreateProjectInput {
@@ -253,7 +244,8 @@ export class StudioWorkspaceStore {
   readonly #settingsClient: HttpStudioUserSettingsClient | null;
   readonly #snapshot = signal<StudioWorkspaceSnapshot>(initialSnapshot());
   readonly snapshot: Signal<StudioWorkspaceSnapshot> = this.#snapshot.asReadonly();
-  #activeTransformDrag: ActiveTransformToolDrag | null = null;
+  #previewCommit: Promise<boolean> | null = null;
+  #selectionRequest = 0;
   #settingsWriteChain: Promise<void> = Promise.resolve();
   #settingsGeneration = 0;
 
@@ -606,37 +598,41 @@ export class StudioWorkspaceStore {
     }
   }
 
-  selectEntity(entityId: number | null, source: EditorSelectionState['source']): void {
+  selectEntity(entityId: number | null, source: EditorSelectionState['source']): Promise<void> {
     const sceneNodeId = entityId === null
       ? null
       : (this.#snapshot().authoringDocument?.sceneHierarchy.nodes.find(
           (node) => node.entityId === entityId,
         )?.nodeId ?? null);
-    this.#patch({
-      selection: {
-        sceneNodeId,
-        entityId,
-        source: entityId === null ? null : source,
-      },
-      preview: this.#snapshot().preview?.entityId === entityId ? this.#snapshot().preview : null,
+    return this.#requestSelection({
+      sceneNodeId,
+      entityId,
+      source: entityId === null ? null : source,
     });
   }
 
-  selectHierarchyNode(sceneNodeId: number): void {
+  selectHierarchyNode(sceneNodeId: number): Promise<void> {
     const node = this.#snapshot().authoringDocument?.sceneHierarchy.nodes.find(
       (candidate) => candidate.nodeId === sceneNodeId,
     );
-    if (node === undefined) return;
-    this.#patch({
-      selection: {
-        sceneNodeId: node.nodeId,
-        entityId: node.entityId,
-        source: 'hierarchy',
-      },
-      preview: node.entityId !== null && this.#snapshot().preview?.entityId === node.entityId
-        ? this.#snapshot().preview
-        : null,
+    if (node === undefined) return Promise.resolve();
+    return this.#requestSelection({
+      sceneNodeId: node.nodeId,
+      entityId: node.entityId,
+      source: 'hierarchy',
     });
+  }
+
+  async #requestSelection(selection: EditorSelectionState): Promise<void> {
+    const request = ++this.#selectionRequest;
+    const preview = this.#snapshot().preview;
+    if (preview === null || preview.entityId === selection.entityId) {
+      this.#patch({ selection });
+      return;
+    }
+    const committed = await this.commitPreview();
+    if (!committed || request !== this.#selectionRequest) return;
+    this.#patch({ selection, preview: null });
   }
 
   beginTranslationPreview(entityId: number): void {
@@ -648,14 +644,22 @@ export class StudioWorkspaceStore {
     tool: StudioTransformTool,
     orientation: StudioTransformOrientation,
   ): void {
-    this.#activeTransformDrag = null;
-    const node = this.#snapshot().authoringDocument?.sceneHierarchy.nodes.find(
+    const current = this.#snapshot();
+    if (current.operation !== 'idle') return;
+    const existing = current.preview;
+    if (existing?.entityId === entityId) {
+      this.#patch({ preview: { ...existing, tool, orientation }, lastError: null });
+      return;
+    }
+    const node = current.authoringDocument?.sceneHierarchy.nodes.find(
       (candidate) => candidate.entityId === entityId,
     );
     if (node === undefined) return;
     const translation = node.localTransform.translation;
     this.#patch({
-      selection: { sceneNodeId: node.nodeId, entityId, source: 'inspector' },
+      selection: current.selection.entityId === entityId
+        ? current.selection
+        : { sceneNodeId: node.nodeId, entityId, source: 'inspector' },
       preview: {
         entityId,
         original: node.localTransform,
@@ -669,106 +673,42 @@ export class StudioWorkspaceStore {
     });
   }
 
-  beginPreviewToolDrag(axis: StudioTransformAxis): void {
+  applyPreviewWorldTransform(world: Transform): void {
     const current = this.#snapshot();
     const preview = current.preview;
-    if (preview === null) {
-      this.#activeTransformDrag = null;
-      return;
-    }
+    if (preview === null || !validTransform(world)) return;
     const node = current.authoringDocument?.sceneHierarchy.nodes.find(
       (candidate) => candidate.entityId === preview.entityId,
     );
-    if (node === undefined) {
-      this.#activeTransformDrag = null;
-      return;
-    }
+    if (node === undefined) return;
     const parentWorld = node.parentNodeId === null
       ? null
       : current.authoringDocument?.sceneHierarchy.nodes.find(
           (candidate) => candidate.nodeId === node.parentNodeId,
         )?.worldTransform ?? null;
-    const local: Transform = {
-      translation: preview.translation,
-      rotation: preview.rotation,
-      scale: preview.scale,
-    };
-    this.#activeTransformDrag = {
-      entityId: preview.entityId,
-      drag: beginTransformToolDrag({
-        local,
-        world: parentWorld === null ? local : composeTransform(parentWorld, local),
-        parentWorld,
-        tool: preview.tool,
-        orientation: preview.orientation,
-        axis,
-      }),
-    };
-  }
-
-  applyPreviewToolDelta(
-    axis: StudioTransformAxis,
-    delta: number,
-    fine: boolean,
-    toggleSnap: boolean,
-  ): void {
-    const current = this.#snapshot();
-    const preview = current.preview;
-    if (preview === null || !Number.isFinite(delta)) return;
-    let active = this.#activeTransformDrag;
-    if (
-      active === null
-      || active.entityId !== preview.entityId
-      || active.drag.axis !== axis
-      || active.drag.tool !== preview.tool
-      || active.drag.orientation !== preview.orientation
-    ) {
-      this.beginPreviewToolDrag(axis);
-      active = this.#activeTransformDrag;
-    }
-    if (active === null) return;
-    const result = updateTransformToolDrag(active.drag, {
-      delta,
-      fine,
-      toggleSnap,
-      settings: current.settings,
-    });
-    this.#activeTransformDrag = { ...active, drag: result.drag };
+    const local = localTransformFromWorld(parentWorld, world);
+    if (!validTransform(local)) return;
     this.#patch({
       preview: {
         ...preview,
-        translation: result.transform.translation,
-        rotation: result.transform.rotation,
-        scale: result.transform.scale,
-      },
-    });
-  }
-
-  finishPreviewToolDrag(axis: StudioTransformAxis, cancelled: boolean): void {
-    const active = this.#activeTransformDrag;
-    if (active === null || active.drag.axis !== axis) return;
-    this.#activeTransformDrag = null;
-    if (!cancelled) return;
-    const preview = this.#snapshot().preview;
-    if (preview === null || preview.entityId !== active.entityId) return;
-    this.#patch({
-      preview: {
-        ...preview,
-        translation: active.drag.local.translation,
-        rotation: active.drag.local.rotation,
-        scale: active.drag.local.scale,
+        translation: local.translation,
+        rotation: local.rotation,
+        scale: local.scale,
       },
     });
   }
 
   setPreviewOrientation(orientation: StudioTransformOrientation): void {
-    this.#activeTransformDrag = null;
     const preview = this.#snapshot().preview;
     if (preview !== null) this.#patch({ preview: { ...preview, orientation } });
   }
 
+  setPreviewTool(tool: StudioTransformTool, orientation: StudioTransformOrientation): void {
+    const preview = this.#snapshot().preview;
+    if (preview !== null) this.#patch({ preview: { ...preview, tool, orientation } });
+  }
+
   setPreviewTranslationAxis(axis: 0 | 1 | 2, value: number): void {
-    this.#activeTransformDrag = null;
     const preview = this.#snapshot().preview;
     if (preview === null) return;
     const translation: [number, number, number] = [...preview.translation];
@@ -777,7 +717,6 @@ export class StudioWorkspaceStore {
   }
 
   setPreviewRotationAxis(axis: 0 | 1 | 2 | 3, value: number): void {
-    this.#activeTransformDrag = null;
     const preview = this.#snapshot().preview;
     if (preview === null) return;
     const rotation: [number, number, number, number] = [...preview.rotation];
@@ -786,7 +725,6 @@ export class StudioWorkspaceStore {
   }
 
   setPreviewScaleAxis(axis: 0 | 1 | 2, value: number): void {
-    this.#activeTransformDrag = null;
     const preview = this.#snapshot().preview;
     if (preview === null) return;
     const scale: [number, number, number] = [...preview.scale];
@@ -794,33 +732,48 @@ export class StudioWorkspaceStore {
     this.#patch({ preview: { ...preview, scale } });
   }
 
-  cancelPreview(): void {
-    this.#activeTransformDrag = null;
+  revertPreview(): void {
     this.#patch({ preview: null, lastError: null });
   }
 
-  async commitPreview(): Promise<void> {
-    this.#activeTransformDrag = null;
+  commitPreview(): Promise<boolean> {
+    if (this.#previewCommit !== null) return this.#previewCommit;
+    const pending = this.#commitPreview();
+    this.#previewCommit = pending;
+    void pending.finally(() => {
+      if (this.#previewCommit === pending) this.#previewCommit = null;
+    });
+    return pending;
+  }
+
+  async #commitPreview(): Promise<boolean> {
     const current = this.#snapshot();
     const preview = current.preview;
     const document = current.authoringDocument;
-    if (preview === null || document === null) return;
+    if (preview === null || document === null) return true;
+    if (current.operation !== 'idle') return false;
+    const candidate: Transform = {
+      translation: preview.translation,
+      rotation: preview.rotation,
+      scale: preview.scale,
+    };
+    if (sameTransform(candidate, preview.original)) {
+      this.#patch({ preview: null, lastError: null });
+      return true;
+    }
     this.#patch({ operation: 'committing', lastError: null });
     try {
       const response = await this.#client.setSceneObjectTransform({
         expectedProjectHash: document.identity.projectHash,
         expectedSceneRevision: document.identity.sceneRevision,
         entityId: preview.entityId,
-        transform: {
-          translation: preview.translation,
-          rotation: preview.rotation,
-          scale: preview.scale,
-        },
+        transform: candidate,
       });
       this.#acceptProject(response.project, false);
-      this.#patch({ preview: null });
+      return true;
     } catch (error) {
       this.#operationFailed(error);
+      return false;
     }
   }
 
@@ -1342,7 +1295,6 @@ export class StudioWorkspaceStore {
   }
 
   #acceptProject(project: StudioProjectReadout, resetSelection: boolean): void {
-    this.#activeTransformDrag = null;
     const current = this.#snapshot();
     const entities = summarizeProjectionForUi(
       project.projection,
@@ -1670,6 +1622,19 @@ function projectionDescriptor(operation: RenderDiff): {
     default:
       return null;
   }
+}
+
+function validTransform(transform: Transform): boolean {
+  return transform.translation.every(Number.isFinite)
+    && transform.rotation.every(Number.isFinite)
+    && Math.hypot(...transform.rotation) > Number.EPSILON
+    && transform.scale.every((value) => Number.isFinite(value) && value > 0);
+}
+
+function sameTransform(left: Transform, right: Transform): boolean {
+  return left.translation.every((value, axis) => value === right.translation[axis])
+    && left.rotation.every((value, axis) => value === right.rotation[axis])
+    && left.scale.every((value, axis) => value === right.scale[axis]);
 }
 
 function viewSettings(artifact: StudioHostUserSettingsArtifact): StudioViewSettings {

@@ -275,7 +275,9 @@ void test('renderer-host declarations expose no concrete backend or donor runtim
   assert.match(editorDeclarationText, /readonly replaceChunks:/);
   assert.match(inspectionDeclarationText, /projection_only_inspection/);
   assert.match(inspectionDeclarationText, /readonly applyRuntimeFrame:/);
+  assert.match(inspectionDeclarationText, /readonly clearOverlayProjection:/);
   assert.match(inspectionDeclarationText, /readonly replaceAuthoredFrameChunks:/);
+  assert.match(inspectionDeclarationText, /readonly replaceOverlayFrame:/);
   assert.match(inspectionDeclarationText, /readonly setGrid:/);
   assert.match(surfaceDeclarationText, /RendererSurfacePickRequest/);
   assert.match(surfaceDeclarationText, /RendererSurfaceMovementResolver/);

@@ -54,7 +54,7 @@
     }
     @if (state().activeMenu === 'edit') {
       <section class="menu-popover edit-menu" aria-label="Edit menu">
-        <button type="button" [disabled]="state().preview === null" (click)="store.cancelPreview()">Cancel Transform Preview</button>
+        <button type="button" [disabled]="state().preview === null || state().operation !== 'idle'" (click)="store.revertPreview()">Revert Transform</button>
         <button type="button" [disabled]="state().preview === null || state().operation !== 'idle'" (click)="commitPreview()">Commit Transform</button>
         <hr />
         <button type="button" disabled title="Committed history will be supplied by the responsible Rust owner">Undo committed edit</button>
@@ -164,10 +164,10 @@
     <section class="viewport-column" data-visual-id="studio-viewport-column">
       <header class="viewport-toolbar">
         <div class="tool-group" aria-label="Transform tools">
-          <button type="button" class="is-active" title="Select">↖</button>
-          <button type="button" [class.is-active]="state().preview?.tool === 'translate'" [disabled]="!canPreviewTranslation()" (click)="beginSelectedPreview('translate')" title="Translate gizmo">✥</button>
-          <button type="button" [class.is-active]="state().preview?.tool === 'rotate'" [disabled]="!canPreviewTranslation()" (click)="beginSelectedPreview('rotate')" title="Rotate gizmo">⟳</button>
-          <button type="button" [class.is-active]="state().preview?.tool === 'scale'" [disabled]="!canPreviewTranslation()" (click)="beginSelectedPreview('scale')" title="Scale gizmo">↗</button>
+          <button type="button" [class.is-active]="selectedTransformTool() === null" (click)="selectPointerTool()" title="Select">↖</button>
+          <button type="button" [class.is-active]="selectedTransformTool() === 'translate'" [disabled]="!canPreviewTranslation() || state().operation !== 'idle'" (click)="beginSelectedPreview('translate')" title="Translate gizmo">✥</button>
+          <button type="button" [class.is-active]="selectedTransformTool() === 'rotate'" [disabled]="!canPreviewTranslation() || state().operation !== 'idle'" (click)="beginSelectedPreview('rotate')" title="Rotate gizmo">⟳</button>
+          <button type="button" [class.is-active]="selectedTransformTool() === 'scale'" [disabled]="!canPreviewTranslation() || state().operation !== 'idle'" (click)="beginSelectedPreview('scale')" title="Scale gizmo">↗</button>
         </div>
         <div class="tool-group">
           <button type="button" [class.is-active]="state().settings.transformOrientation === 'world'" (click)="setTransformOrientation(state().settings.transformOrientation === 'world' ? 'local' : 'world')">{{ state().settings.transformOrientation }}</button>
@@ -187,8 +187,10 @@
             [selectedEntityId]="state().selection.entityId"
             [previewEntityId]="state().preview?.entityId ?? null"
             [previewTransform]="transformPreview()"
-            [transformTool]="state().preview?.tool ?? null"
+            [manipulatorTransform]="transformManipulatorTransform()"
+            [transformTool]="selectedTransformTool()"
             [transformOrientation]="state().preview?.orientation ?? state().settings.transformOrientation"
+            [transformSnapping]="transformSnapping()"
             [voxelPreview]="voxelPreview()"
             [animatedMeshManifest]="animatedMeshManifest()"
             [resolveAnimatedMeshResource]="animatedMeshManifest() === null ? null : resolveAnimatedMeshResource"
@@ -196,9 +198,10 @@
             (entityPicked)="store.selectEntity($event, 'renderer')"
             (voxelPicked)="validateVoxelPick($event)"
             (rendererError)="store.reportUiError($event)"
-            (transformDragStarted)="store.beginPreviewToolDrag($event)"
-            (transformDelta)="applyTransformGizmoDelta($event)"
-            (transformDragFinished)="finishTransformGizmoDrag($event.axis, $event.cancelled)"
+            (transformDragStarted)="beginViewportTransformDrag()"
+            (transformCandidate)="applyTransformCandidate($event)"
+            (transformDragFinished)="finishTransformGizmoDrag($event.cancelled)"
+            (transformRevertRequested)="store.revertPreview()"
           />
           <div class="viewport-source-readout">
             <span>{{ projection.readout.retainedEntities }} entities</span>
@@ -409,13 +412,13 @@
                 }
               </div>
               <div class="inspector-actions">
-                <button type="button" [disabled]="state().preview === null" (click)="store.cancelPreview()">Cancel</button>
+                <button type="button" [disabled]="state().preview === null || state().operation !== 'idle'" (click)="store.revertPreview()">Revert</button>
                 <button type="button" class="primary" data-action="commit-transform" [disabled]="state().preview === null || state().operation !== 'idle'" (click)="commitPreview()">Commit</button>
               </div>
               @if (node.entityId === null) {
                 <small class="owner-note">This authored node has no entity identity, so the current typed entity operation is unavailable.</small>
               } @else {
-                <small class="owner-note">Local preview is disposable UI state. Commit is hash- and revision-guarded by Rust, then canonically reread.</small>
+                <small class="owner-note">Viewport drags commit on release; changing selection settles pending edits first. Revert is explicit. Every commit is hash- and revision-guarded by Rust, then canonically reread.</small>
               }
             </section>
             <section class="inspector-section">

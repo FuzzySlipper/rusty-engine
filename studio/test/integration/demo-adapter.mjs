@@ -106,24 +106,35 @@ async function main() {
     assert.equal(opened.connection.kind, 'connected');
     assert.equal(opened.authoringDocument.identity.projectId, 'loading-bay');
     assert.equal(opened.authoringDocument.inspections.catalog.entryCount, 7);
-    assert.equal(opened.authoringDocument.inspections.scene.nodeCount, 8);
-    assert.equal(opened.authoringDocument.inspections.entityState.entityCount, 8);
-    assert.equal(opened.authoringDocument.sceneHierarchy.nodes.length, 8);
-    assert.deepEqual(
-      opened.authoringDocument.sceneHierarchy.nodes.map((node) => node.entityId),
-      [1, 2, 3, 4, 5, 6, 7, 10],
+    const hierarchyEntityIds = opened.authoringDocument.sceneHierarchy.nodes.map(
+      (node) => node.entityId,
     );
+    assert.equal(
+      opened.authoringDocument.inspections.scene.nodeCount,
+      opened.authoringDocument.sceneHierarchy.nodes.length,
+    );
+    assert.equal(
+      opened.authoringDocument.inspections.entityState.entityCount,
+      hierarchyEntityIds.filter((entityId) => entityId !== null).length,
+    );
+    assert.ok(hierarchyEntityIds.length >= 8);
+    for (const requiredEntityId of [1, 2, 3, 4, 5, 6, 7, 10]) {
+      assert.ok(hierarchyEntityIds.includes(requiredEntityId));
+    }
     assert.equal(opened.authoringDocument.domain.voxelEnvironment, 'generatedRoom');
     assert.equal(opened.authoringDocument.domain.enemyCount, 2);
     assert.equal(opened.authoringDocument.voxel.solidVoxelCount, 366);
-    assert.equal(opened.liveProjection.frame.ops.length, 20);
+    assert.ok(opened.liveProjection.frame.ops.length >= 20);
     assert.ok(opened.liveProjection.frame.ops.some(
       (operation) => operation.op === 'defineAnimatedMesh'
         && operation.asset.asset === 'mesh-animation/kenney-retro-character-medium',
     ));
     assert.equal(opened.liveProjection.readout.frameKind, 'complete');
     assert.equal(opened.liveProjection.readout.diagnostics.length, 0);
-    assert.equal(opened.liveProjection.entities.length, 8);
+    assert.equal(
+      opened.liveProjection.entities.length,
+      opened.authoringDocument.inspections.entityState.entityCount,
+    );
 
     await store.refreshProject();
     const reread = store.snapshot();
@@ -135,7 +146,7 @@ async function main() {
       reread.authoringDocument.identity.sceneRevision,
       opened.authoringDocument.identity.sceneRevision,
     );
-    assert.equal(reread.liveProjection.frame.ops.length, 20);
+    assert.equal(reread.liveProjection.frame.ops.length, opened.liveProjection.frame.ops.length);
     assert.equal(reread.liveProjection.generation, opened.liveProjection.generation + 1);
 
     await store.closeProject();

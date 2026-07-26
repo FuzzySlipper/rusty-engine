@@ -128,6 +128,8 @@ export interface RendererInspectionSurface {
   readonly applyRuntimeFrame: (frame: RenderFrameDiff) => RendererEditorViewportChannelReceipt;
   /** Clear retained runtime projection without disturbing authored inspection content. */
   readonly clearRuntimeProjection: () => RendererEditorViewportChannelReceipt;
+  /** Clear disposable editor overlays without disturbing authored or runtime content. */
+  readonly clearOverlayProjection: () => RendererEditorViewportChannelReceipt;
   /** Replace host-user input preferences without resetting the disposable camera pose. */
   readonly configureControlPreferences: (
     preferences: RendererInspectionSurfaceControlPreferences,
@@ -143,6 +145,8 @@ export interface RendererInspectionSurface {
   ) => RendererEditorViewportChannelReceipt;
   /** Atomically replace authored content from one bounded frame. */
   readonly replaceFrame: (frame: RenderFrameDiff) => RendererEditorViewportChannelReceipt;
+  /** Atomically replace disposable debug-layer editor overlays. */
+  readonly replaceOverlayFrame: (frame: RenderFrameDiff) => RendererEditorViewportChannelReceipt;
   readonly resize: (size: RendererEditorViewportSize) => RendererEditorViewportSizeReceipt;
   readonly resizeToCanvas: () => RendererEditorViewportSizeReceipt;
   readonly setGrid: (descriptor: EditorGridDescriptor | null) => RendererEditorViewportGridReceipt;
@@ -309,6 +313,12 @@ export function createRendererInspectionSurfaceWithViewport(
   const clearRuntimeProjection = (): RendererEditorViewportChannelReceipt =>
     viewport.channels.runtime.clear();
 
+  const clearOverlayProjection = (): RendererEditorViewportChannelReceipt =>
+    viewport.channels.overlay.clear();
+
+  const replaceOverlayFrame = (frame: RenderFrameDiff): RendererEditorViewportChannelReceipt =>
+    viewport.channels.overlay.replace(frame);
+
   const setGrid = (
     descriptor: EditorGridDescriptor | null,
   ): RendererEditorViewportGridReceipt => {
@@ -361,6 +371,7 @@ export function createRendererInspectionSurfaceWithViewport(
     canvas,
     applyRuntimeFrame,
     camera: () => controls.camera(),
+    clearOverlayProjection,
     clearRuntimeProjection,
     configureControlPreferences: (preferences) => controls.configurePreferences(preferences),
     grid: () => viewport.grid(),
@@ -395,6 +406,7 @@ export function createRendererInspectionSurfaceWithViewport(
     renderOnce,
     replaceAuthoredFrameChunks,
     replaceFrame,
+    replaceOverlayFrame,
     resize: (size) => viewport.resize(size),
     resizeToCanvas,
     setGrid,

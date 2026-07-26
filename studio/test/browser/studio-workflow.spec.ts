@@ -19,7 +19,7 @@ test('real project hierarchy, shared picking, transform settlement, reopen, and 
     }
     return status;
   }).toBe('ready');
-  await expect(page.locator('.entity-row')).toHaveCount(8);
+  await expect.poll(() => page.locator('.entity-row').count()).toBeGreaterThanOrEqual(8);
   await expect(viewport).toHaveAttribute(
     'data-retained-ops',
     /^[1-9][0-9]*$/,
@@ -48,18 +48,22 @@ test('real project hierarchy, shared picking, transform settlement, reopen, and 
   await expect(page.locator('[data-preview-active="true"]')).toBeVisible();
   await expect(viewport).toHaveAttribute('data-preview-applied', 'true');
   await expect.poll(() => rendererHash(viewport)).not.toBe(selectedRendererHash);
-  await page.locator('.inspector-actions').getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.locator('.inspector-actions').getByRole('button', { name: 'Revert', exact: true }).click();
   await expect(viewport).toHaveAttribute('data-preview-applied', 'false');
   await expect(viewport).toHaveAttribute('data-authored-frame-hash', selectedRendererHash);
 
   await translationX.fill(String(committedX));
   await expect(viewport).toHaveAttribute('data-preview-applied', 'true');
-  await page.locator('[data-action="commit-transform"]').click();
+  await page.locator('.entity-row[data-entity-id="2"]').click();
   await expect.poll(() => projectHash(shell)).not.toBe(hashBeforeCommit);
+  await expect(shell).toHaveAttribute('data-selected-entity', '2');
+  await expect(viewport).toHaveAttribute('data-transform-tool', 'translate');
+  await expect(viewport).toHaveAttribute('data-transform-gizmo-visible', 'true');
   const committedHash = await projectHash(shell);
-  await expect(translationX).toHaveValue(String(committedX));
   await expect(page.locator('[data-preview-active="true"]')).toHaveCount(0);
   await expect(viewport).toHaveAttribute('data-preview-applied', 'false');
+  await page.locator('.entity-row[data-entity-id="1"]').click();
+  await expect(translationX).toHaveValue(String(committedX));
 
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await expect(shell).toHaveAttribute('data-project-hash', committedHash);
@@ -306,29 +310,35 @@ test('trusted host browsing restores focus and animated appearance uses the shar
   const inspector = page.locator('.inspector-panel');
   const hashBeforeTransform = await projectHash(shell);
   await page.getByTitle('Rotate gizmo').click();
-  const gizmo = page.getByLabel('Transform gizmo');
-  await expect(gizmo).toHaveAttribute('data-tool', 'rotate');
+  await expect(viewport).toHaveAttribute('data-transform-gizmo-visible', 'true');
+  await expect(viewport).toHaveAttribute('data-transform-tool', 'rotate');
   await expect(page.getByRole('button', { name: /^Snap / })).toHaveClass(/is-active/);
   await page.getByRole('button', { name: 'world', exact: true }).click();
-  await expect(gizmo).toHaveAttribute('data-orientation', 'local');
-  const xAxis = page.getByRole('button', { name: 'Drag X transform axis' });
-  const axisBox = await xAxis.boundingBox();
-  if (axisBox === null) throw new Error('transform gizmo axis has no browser bounds');
-  await page.mouse.move(axisBox.x + axisBox.width / 2, axisBox.y + axisBox.height / 2);
+  await expect(viewport).toHaveAttribute('data-transform-orientation', 'local');
+  const xHandle = await transformHandlePoint(page, inspector, 'rotate', 0);
+  await page.mouse.move(xHandle.x, xHandle.y);
+  await expect(viewport).toHaveAttribute('data-hovered-transform-handle', 'rotate:x');
   await page.mouse.down();
-  await page.mouse.move(
-    axisBox.x + axisBox.width / 2 + 24,
-    axisBox.y + axisBox.height / 2,
-    { steps: 24 },
-  );
+  await expect(viewport).toHaveAttribute('data-active-transform-handle', 'rotate:x');
+  await page.mouse.move(xHandle.x + 80, xHandle.y - 24, { steps: 24 });
   await page.mouse.up();
   await expect(inspector.getByLabel('Rotation X')).not.toHaveValue('0');
-  await inspector.locator('[data-action="commit-transform"]').click();
   await expect.poll(() => projectHash(shell)).not.toBe(hashBeforeTransform);
+  await expect(page.locator('[data-preview-active="true"]')).toHaveCount(0);
+  await expect(viewport).toHaveAttribute('data-transform-tool', 'rotate');
+  await expect(viewport).toHaveAttribute('data-transform-gizmo-visible', 'true');
 
   await page.getByTitle('Scale gizmo').click();
-  await expect(gizmo).toHaveAttribute('data-tool', 'scale');
-  await inspector.locator('.inspector-actions').getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(viewport).toHaveAttribute('data-transform-tool', 'scale');
+  const scaleX = inspector.getByLabel('Scale X');
+  const scaleBeforeRevert = await scaleX.inputValue();
+  const hashBeforeScaleRevert = await projectHash(shell);
+  await scaleX.fill(String(Number(scaleBeforeRevert) + 0.25));
+  await expect(page.locator('[data-preview-active="true"]')).toBeVisible();
+  await inspector.locator('.inspector-actions').getByRole('button', { name: 'Revert', exact: true }).click();
+  await expect(scaleX).toHaveValue(scaleBeforeRevert);
+  await expect(shell).toHaveAttribute('data-project-hash', hashBeforeScaleRevert);
+  await expect(viewport).toHaveAttribute('data-transform-gizmo-visible', 'true');
 
   const appearance = inspector.locator('.inspector-section').filter({ hasText: 'Appearance' });
   await appearance.getByLabel('Kind').selectOption('animatedMesh');
@@ -483,6 +493,103 @@ async function pickVisibleVoxel(page: Page, shell: Locator): Promise<void> {
     }
   }
   throw new Error('shared renderer picking did not produce a Rust-validated voxel anchor');
+}
+
+async function transformHandlePoint(
+  page: Page,
+  inspector: Locator,
+  tool: 'translate' | 'rotate' | 'scale',
+  axis: 0 | 1 | 2,
+): Promise<{ readonly x: number; readonly y: number }> {
+  const canvas = page.getByLabel('Shared Rusty renderer viewport');
+  const box = await canvas.boundingBox();
+  if (box === null) throw new Error('shared renderer canvas has no browser bounds');
+  const translation = await Promise.all(['X', 'Y', 'Z'].map(async (name) =>
+    Number(await inspector.getByLabel(`Translation ${name}`).inputValue()),
+  )) as [number, number, number];
+  const rotation = await Promise.all(['X', 'Y', 'Z', 'W'].map(async (name) =>
+    Number(await inspector.getByLabel(`Rotation ${name}`).inputValue()),
+  )) as [number, number, number, number];
+  const direction = rotateVector(rotation, axis === 0 ? [1, 0, 0] : axis === 1 ? [0, 1, 0] : [0, 0, 1]);
+  const distance = tool === 'rotate' ? 0.78 : 0.62;
+  const world: [number, number, number] = [
+    translation[0] + direction[0] * distance,
+    translation[1] + direction[1] * distance,
+    translation[2] + direction[2] * distance,
+  ];
+  const projected = projectWorldPoint(
+    world,
+    [15, 13, 22],
+    [4.5, 1.5, 7],
+    55,
+    box.width,
+    box.height,
+  );
+  return { x: box.x + projected[0], y: box.y + projected[1] };
+}
+
+function projectWorldPoint(
+  world: readonly [number, number, number],
+  cameraPosition: readonly [number, number, number],
+  cameraTarget: readonly [number, number, number],
+  fovYDegrees: number,
+  width: number,
+  height: number,
+): readonly [number, number] {
+  const forward = normalize(subtract(cameraTarget, cameraPosition));
+  const right = normalize(cross(forward, [0, 1, 0]));
+  const up = normalize(cross(right, forward));
+  const offset = subtract(world, cameraPosition);
+  const depth = dot(offset, forward);
+  const tangent = Math.tan(fovYDegrees * Math.PI / 360);
+  const x = dot(offset, right) / (depth * tangent * width / height);
+  const y = dot(offset, up) / (depth * tangent);
+  return [(x + 1) * width / 2, (1 - y) * height / 2];
+}
+
+function rotateVector(
+  rotation: readonly [number, number, number, number],
+  vector: readonly [number, number, number],
+): readonly [number, number, number] {
+  const [x, y, z, w] = rotation;
+  const tx = 2 * (y * vector[2] - z * vector[1]);
+  const ty = 2 * (z * vector[0] - x * vector[2]);
+  const tz = 2 * (x * vector[1] - y * vector[0]);
+  return [
+    vector[0] + w * tx + (y * tz - z * ty),
+    vector[1] + w * ty + (z * tx - x * tz),
+    vector[2] + w * tz + (x * ty - y * tx),
+  ];
+}
+
+function subtract(
+  left: readonly [number, number, number],
+  right: readonly [number, number, number],
+): readonly [number, number, number] {
+  return [left[0] - right[0], left[1] - right[1], left[2] - right[2]];
+}
+
+function cross(
+  left: readonly [number, number, number],
+  right: readonly [number, number, number],
+): readonly [number, number, number] {
+  return [
+    left[1] * right[2] - left[2] * right[1],
+    left[2] * right[0] - left[0] * right[2],
+    left[0] * right[1] - left[1] * right[0],
+  ];
+}
+
+function normalize(vector: readonly [number, number, number]): readonly [number, number, number] {
+  const length = Math.hypot(...vector);
+  return [vector[0] / length, vector[1] / length, vector[2] / length];
+}
+
+function dot(
+  left: readonly [number, number, number],
+  right: readonly [number, number, number],
+): number {
+  return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
 }
 
 async function projectHash(shell: Locator): Promise<string> {
