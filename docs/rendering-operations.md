@@ -134,6 +134,14 @@ uses the shared retained surface plus audio, billboard, particle, and telemetry 
 proves voxel meshes/edits, collision, navigation, combat, doors, beacon presentation, camera sync,
 reset/reopen cleanup, and real Chromium behavior.
 
+The camera-relative channel has a separate exact consumer certification. `rusty-engine-demo`
+commit `4b58555631badbe58fc4c2828dfa4e5bd1effb60` pins all four renderer packages to Engine commit
+`e622c941671bc0f167206b049ab94ea63495a86d`. It retains seven weapon-presentation nodes on
+`viewmodel` through the existing `RendererSurface`, with no downstream Three scene, renderer, or
+scheduling loop. Its real Chromium/WebGL acceptance covers world-camera motion, pick exclusion,
+desktop and narrow resize, death/reset restoration, disposal on return to the main menu, and remount
+on Continue.
+
 Studio is the second intended consumer. It uses the repository-local workspace while being built
 in this repository, but it must import the same four public package surfaces and host/editor APIs;
 it must not create an independent viewport renderer.
