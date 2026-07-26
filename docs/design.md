@@ -87,6 +87,30 @@ from them:
 game loop, actor policy, or component-local update callback. A downstream runtime decides when to
 invoke it and what accepted facts mean.
 
+`TriggerVolumeSystem` is the sole overlap authority for registered trigger volumes. Each
+`KinematicTriggerDefinition` names one trigger entity and a typed `TriggerGeometrySource` that
+selects where the volume's live AABB comes from during reconciliation:
+
+- `ActiveCollision` (the default and historical behavior) requires the trigger entity to be active
+  with an enabled collision capability in addition to bounds and a composed world transform. Such a
+  trigger entity is also a solid motion obstacle, because kinematic motion treats every active
+  collision body as solid.
+- `EntityBounds` derives the same AABB from the canonical entity lifecycle, bounds, and composed
+  world transform without consulting the collision capability at all. The trigger entity therefore
+  senses subjects without ever becoming a solid obstacle; its collision state, when present, is
+  irrelevant to sensing and produces no diagnostics.
+
+The boundary stays one-directional: motion solidity is owned exclusively by the collision
+capability (`EntityMotionService` obstacles are active-collision entities only), while trigger
+sensing is owned exclusively by `TriggerVolumeSystem` over `EntityState`. Subject eligibility is
+unchanged by the geometry source — a subject always requires the canonical active-collision and
+entity-state rules — and reconciliation stays bounded, deterministic, typed, snapshot-capable, and
+fail-closed with actionable stale/missing bounds or transform diagnostics. Downstream consumers
+must not recompute overlap, special-case motion, or maintain a second spatial authority; geometry
+source is a per-definition Engine vocabulary with no gameplay semantics, tag exceptions, or
+ambient callbacks. Trigger snapshots remain schema 1: definitions written before the geometry seam
+decode as `ActiveCollision`, and new definitions round-trip their geometry source exactly.
+
 Collision, navigation, and meshes must not become independent world authorities. Optimization may
 make rebuilding more incremental, but it must retain the same source revision and atomic coherence
 rule.

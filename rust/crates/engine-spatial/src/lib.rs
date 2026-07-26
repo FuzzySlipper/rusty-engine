@@ -32,9 +32,9 @@ pub use physics::{
     PhysicsStep, PhysicsWorld,
 };
 pub use trigger::{
-    KinematicTriggerDefinition, TriggerOverlapFact, TriggerOverlapFactKind, TriggerOverlapPair,
-    TriggerOverlapReadout, TriggerReconcileCause, TriggerReconcileReceipt, TriggerVolumeDiagnostic,
-    TriggerVolumeDiagnosticCode, TriggerVolumeError, TriggerVolumeSystem,
+    KinematicTriggerDefinition, TriggerGeometrySource, TriggerOverlapFact, TriggerOverlapFactKind,
+    TriggerOverlapPair, TriggerOverlapReadout, TriggerReconcileCause, TriggerReconcileReceipt,
+    TriggerVolumeDiagnostic, TriggerVolumeDiagnosticCode, TriggerVolumeError, TriggerVolumeSystem,
     MAX_ACTIVE_TRIGGER_OVERLAPS, MAX_TRIGGER_DEFINITIONS, TRIGGER_VOLUME_SNAPSHOT_SCHEMA_VERSION,
 };
 pub use trigger_codec::{decode_trigger_snapshot, encode_trigger_snapshot, TriggerVolumeSnapshot};

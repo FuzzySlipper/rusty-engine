@@ -3,8 +3,9 @@ use core_math::Vec3;
 use core_time::TickDelta;
 use engine_spatial::{
     decode_trigger_snapshot, encode_trigger_snapshot, integrate_kinematic,
-    integrate_kinematic_with_query, KinematicBody, KinematicShape, KinematicTriggerDefinition,
-    MaterialVoxel, PhysicsError, PhysicsStep, PhysicsWorld, TriggerOverlapFactKind,
+    integrate_kinematic_with_query, EntityMotionCommand, EntityMotionOutcome, EntityMotionService,
+    KinematicBody, KinematicShape, KinematicTriggerDefinition, MaterialVoxel, PhysicsError,
+    PhysicsStep, PhysicsWorld, TriggerGeometrySource, TriggerOverlapFactKind,
     TriggerReconcileCause, TriggerVolumeDiagnosticCode, TriggerVolumeSystem, VoxelCollisionScene,
 };
 use entity_state::{
@@ -347,6 +348,204 @@ fn malformed_definitions_stale_entities_and_read_quotas_are_typed() {
             .code,
         TriggerVolumeDiagnosticCode::QuotaExceeded
     );
+}
+
+#[test]
+fn non_solid_trigger_senses_kinematic_traversal_with_one_enter_and_one_exit() {
+    let trigger = EntityId::new(10);
+    let subject = EntityId::new(20);
+    let mut entities = EntityState::from_definitions([
+        // A registered trigger volume with bounds and transform but no collision
+        // capability: it must never become a solid motion obstacle.
+        EntityDefinition::new(trigger, "sensor zone")
+            .with_transform(Vec3::ZERO)
+            .with_bounds(Vec3::splat(-0.5), Vec3::splat(0.5)),
+        EntityDefinition::new(subject, "player")
+            .with_transform(Vec3::new(-2.0, 0.0, 0.0))
+            .with_bounds(Vec3::splat(-0.25), Vec3::splat(0.25))
+            .with_collision(true, false),
+    ])
+    .unwrap();
+    let mut triggers = TriggerVolumeSystem::new([KinematicTriggerDefinition::new(
+        trigger,
+        "zone.sensor",
+        ["zone"],
+    )
+    .with_geometry_source(TriggerGeometrySource::EntityBounds)])
+    .unwrap();
+
+    let outside = triggers
+        .reconcile(&entities, 1, TriggerReconcileCause::Spawn)
+        .unwrap();
+    assert!(outside.facts.is_empty());
+    assert!(outside.diagnostics.is_empty());
+
+    // Motion treats only active collision as solid: the subject enters the
+    // registered non-solid trigger volume without being blocked.
+    let revision = entities.revision();
+    let entered_motion = EntityMotionService
+        .apply(
+            &mut entities,
+            revision,
+            EntityMotionCommand {
+                entity: subject,
+                delta: Vec3::new(1.5, 0.0, 0.0),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        entered_motion.resolution.outcome,
+        EntityMotionOutcome::Moved {
+            to: Vec3::new(-0.5, 0.0, 0.0)
+        }
+    );
+    let entered = triggers
+        .reconcile(&entities, 2, TriggerReconcileCause::Movement)
+        .unwrap();
+    assert_eq!(entered.facts.len(), 1);
+    assert_eq!(entered.facts[0].kind, TriggerOverlapFactKind::Enter);
+    assert_eq!(entered.facts[0].pair.trigger_id(), trigger);
+    assert_eq!(entered.facts[0].pair.subject_id(), subject);
+    assert!(entered.diagnostics.is_empty());
+
+    // The traversal continues through the volume and out the other side,
+    // again unblocked, producing exactly one exit.
+    let revision = entities.revision();
+    let exited_motion = EntityMotionService
+        .apply(
+            &mut entities,
+            revision,
+            EntityMotionCommand {
+                entity: subject,
+                delta: Vec3::new(2.0, 0.0, 0.0),
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        exited_motion.resolution.outcome,
+        EntityMotionOutcome::Moved { .. }
+    ));
+    let exited = triggers
+        .reconcile(&entities, 3, TriggerReconcileCause::Movement)
+        .unwrap();
+    assert_eq!(exited.facts.len(), 1);
+    assert_eq!(exited.facts[0].kind, TriggerOverlapFactKind::Exit);
+    assert!(exited.active_overlaps.is_empty());
+}
+
+#[test]
+fn entity_bounds_trigger_ignores_collision_state_and_keeps_geometry_diagnostics() {
+    let sensor = EntityId::new(10);
+    let unbounded = EntityId::new(11);
+    let subject = EntityId::new(20);
+    let entities = EntityState::from_definitions([
+        // Collision capability present but disabled: irrelevant for an
+        // entity-bounds trigger and no longer reported as a diagnostic.
+        EntityDefinition::new(sensor, "disabled-collision sensor")
+            .with_transform(Vec3::ZERO)
+            .with_bounds(Vec3::splat(-0.5), Vec3::splat(0.5))
+            .with_collision(false, true),
+        // Missing bounds still fail closed with an actionable diagnostic.
+        EntityDefinition::new(unbounded, "unbounded sensor")
+            .with_transform(Vec3::new(10.0, 0.0, 0.0)),
+        EntityDefinition::new(subject, "player")
+            .with_transform(Vec3::ZERO)
+            .with_bounds(Vec3::splat(-0.25), Vec3::splat(0.25))
+            .with_collision(true, false),
+    ])
+    .unwrap();
+    let mut triggers = TriggerVolumeSystem::new([
+        KinematicTriggerDefinition::new(sensor, "zone.sensor", ["zone"])
+            .with_geometry_source(TriggerGeometrySource::EntityBounds),
+        KinematicTriggerDefinition::new(unbounded, "zone.unbounded", ["zone"])
+            .with_geometry_source(TriggerGeometrySource::EntityBounds),
+    ])
+    .unwrap();
+
+    let receipt = triggers
+        .reconcile(&entities, 1, TriggerReconcileCause::Spawn)
+        .unwrap();
+    assert_eq!(receipt.facts.len(), 1);
+    assert_eq!(receipt.facts[0].kind, TriggerOverlapFactKind::Enter);
+    assert_eq!(receipt.facts[0].pair.trigger_id(), sensor);
+    assert_eq!(receipt.diagnostics.len(), 1);
+    assert_eq!(
+        receipt.diagnostics[0].code,
+        TriggerVolumeDiagnosticCode::MissingBounds
+    );
+    assert_eq!(receipt.diagnostics[0].entity, Some(unbounded));
+}
+
+#[test]
+fn entity_bounds_trigger_keeps_canonical_subject_eligibility() {
+    let trigger = EntityId::new(10);
+    let subject = EntityId::new(20);
+    let entities = EntityState::from_definitions([
+        EntityDefinition::new(trigger, "sensor zone")
+            .with_transform(Vec3::ZERO)
+            .with_bounds(Vec3::splat(-0.5), Vec3::splat(0.5)),
+        // Subjects still require active collision even when the trigger does
+        // not: a subject with disabled collision is not sensed.
+        EntityDefinition::new(subject, "inactive subject")
+            .with_transform(Vec3::ZERO)
+            .with_bounds(Vec3::splat(-0.25), Vec3::splat(0.25))
+            .with_collision(false, false),
+    ])
+    .unwrap();
+    let mut triggers = TriggerVolumeSystem::new([KinematicTriggerDefinition::new(
+        trigger,
+        "zone.sensor",
+        ["zone"],
+    )
+    .with_geometry_source(TriggerGeometrySource::EntityBounds)])
+    .unwrap();
+
+    let receipt = triggers
+        .reconcile(&entities, 1, TriggerReconcileCause::Spawn)
+        .unwrap();
+    assert!(receipt.facts.is_empty());
+    assert!(receipt.active_overlaps.is_empty());
+    assert!(receipt.diagnostics.is_empty());
+}
+
+#[test]
+fn trigger_snapshots_preserve_geometry_source_and_decode_legacy_definitions() {
+    // Snapshots written before the geometry seam existed carry no geometry
+    // field; they decode as the historical active-collision behavior.
+    let legacy = r#"{
+  "schemaVersion": 1,
+  "revision": 0,
+  "definitions": [
+    {
+      "trigger": 10,
+      "scope": "zone.exit",
+      "tags": [
+        "exit"
+      ]
+    }
+  ],
+  "activeOverlaps": []
+}
+"#;
+    let restored = decode_trigger_snapshot(legacy).unwrap();
+    let definition = restored.definitions().next().unwrap();
+    assert_eq!(
+        definition.geometry_source(),
+        TriggerGeometrySource::ActiveCollision
+    );
+
+    // New snapshots round-trip the geometry source exactly.
+    let system = TriggerVolumeSystem::new([KinematicTriggerDefinition::new(
+        EntityId::new(10),
+        "zone.sensor",
+        ["zone"],
+    )
+    .with_geometry_source(TriggerGeometrySource::EntityBounds)])
+    .unwrap();
+    let encoded = encode_trigger_snapshot(&system).unwrap();
+    assert!(encoded.contains("\"geometry\": \"entityBounds\""));
+    let restored = decode_trigger_snapshot(&encoded).unwrap();
+    assert_eq!(restored, system);
 }
 
 fn trigger_fixture() -> (EntityState, TriggerVolumeSystem, EntityId, EntityId) {

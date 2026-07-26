@@ -11,12 +11,32 @@ pub const MAX_TRIGGER_DEFINITIONS: usize = 4_096;
 pub const MAX_ACTIVE_TRIGGER_OVERLAPS: usize = 1_000_000;
 const MAX_TRIGGER_READ_ITEMS: usize = 100_000;
 
+/// Selects where a registered trigger derives its live AABB during reconciliation.
+///
+/// `ActiveCollision` is the historical behavior: the trigger entity must be
+/// active and expose an enabled collision capability in addition to bounds and
+/// a composed world transform. `EntityBounds` derives the same AABB from the
+/// canonical entity lifecycle, bounds, and composed world transform without
+/// consulting the collision capability at all, so the trigger entity never has
+/// to become a solid motion obstacle to sense subjects. Subject eligibility is
+/// unaffected: subjects always require active collision regardless of the
+/// trigger's geometry source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TriggerGeometrySource {
+    #[default]
+    ActiveCollision,
+    EntityBounds,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct KinematicTriggerDefinition {
     pub trigger: u64,
     pub scope: String,
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub geometry: TriggerGeometrySource,
 }
 
 impl KinematicTriggerDefinition {
@@ -32,7 +52,20 @@ impl KinematicTriggerDefinition {
             trigger: trigger.raw(),
             scope: scope.into(),
             tags,
+            geometry: TriggerGeometrySource::ActiveCollision,
         }
+    }
+
+    /// Selects a non-default trigger geometry source. Existing definitions
+    /// keep `ActiveCollision`; `EntityBounds` registers a trigger that senses
+    /// from bounds and composed transform without requiring active collision.
+    pub const fn with_geometry_source(mut self, geometry: TriggerGeometrySource) -> Self {
+        self.geometry = geometry;
+        self
+    }
+
+    pub const fn geometry_source(&self) -> TriggerGeometrySource {
+        self.geometry
     }
 
     pub const fn trigger_id(&self) -> EntityId {
@@ -425,16 +458,28 @@ impl TriggerVolumeSystem {
         let trigger_ids = self.definitions.keys().copied().collect::<BTreeSet<_>>();
         let mut next = BTreeSet::new();
         let mut diagnostics = Vec::new();
-        for trigger in self.definitions.keys().copied() {
-            let Some(trigger_bounds) = live_aabb(entities, trigger, true, &mut diagnostics) else {
+        for definition in self.definitions.values() {
+            let trigger = definition.trigger_id();
+            let Some(trigger_bounds) = live_aabb(
+                entities,
+                trigger,
+                true,
+                &mut diagnostics,
+                definition.geometry,
+            ) else {
                 continue;
             };
             for entity in entities.entities() {
                 if entity.id == trigger || trigger_ids.contains(&entity.id) {
                     continue;
                 }
-                let Some(subject_bounds) = live_aabb(entities, entity.id, false, &mut diagnostics)
-                else {
+                let Some(subject_bounds) = live_aabb(
+                    entities,
+                    entity.id,
+                    false,
+                    &mut diagnostics,
+                    TriggerGeometrySource::ActiveCollision,
+                ) else {
                     continue;
                 };
                 if trigger_bounds.overlaps(subject_bounds) {

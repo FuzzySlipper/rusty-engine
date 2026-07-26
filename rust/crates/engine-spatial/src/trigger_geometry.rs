@@ -3,7 +3,7 @@ use core_math::Vec3;
 use entity_state::{EntityLifecycle, EntityState};
 
 use crate::trigger::diagnostic;
-use crate::{TriggerVolumeDiagnostic, TriggerVolumeDiagnosticCode};
+use crate::{TriggerGeometrySource, TriggerVolumeDiagnostic, TriggerVolumeDiagnosticCode};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct WorldAabb {
@@ -27,6 +27,7 @@ pub(crate) fn live_aabb(
     entity: EntityId,
     report: bool,
     diagnostics: &mut Vec<TriggerVolumeDiagnostic>,
+    geometry: TriggerGeometrySource,
 ) -> Option<WorldAabb> {
     let Some(core) = entities.core(entity) else {
         report_diagnostic(
@@ -48,25 +49,27 @@ pub(crate) fn live_aabb(
         );
         return None;
     }
-    if entities.collision(entity).is_none() {
-        report_diagnostic(
-            report,
-            diagnostics,
-            TriggerVolumeDiagnosticCode::MissingCollision,
-            entity,
-            "collision capability is missing",
-        );
-        return None;
-    }
-    if entities.active_collision(entity).is_none() {
-        report_diagnostic(
-            report,
-            diagnostics,
-            TriggerVolumeDiagnosticCode::InactiveCollision,
-            entity,
-            "collision capability is inactive",
-        );
-        return None;
+    if geometry == TriggerGeometrySource::ActiveCollision {
+        if entities.collision(entity).is_none() {
+            report_diagnostic(
+                report,
+                diagnostics,
+                TriggerVolumeDiagnosticCode::MissingCollision,
+                entity,
+                "collision capability is missing",
+            );
+            return None;
+        }
+        if entities.active_collision(entity).is_none() {
+            report_diagnostic(
+                report,
+                diagnostics,
+                TriggerVolumeDiagnosticCode::InactiveCollision,
+                entity,
+                "collision capability is inactive",
+            );
+            return None;
+        }
     }
     let Some(bounds) = entities.bounds(entity) else {
         report_diagnostic(
