@@ -67,6 +67,28 @@ test('workspace opens only through the adapter and keeps authority, projection, 
   assert.deepEqual(store.selectedEntity()?.transform?.translation, [4.5, 2, 3]);
 });
 
+test('transform drag completion rebases the next drag and cancellation restores its pointer-down state', async () => {
+  const store = new StudioWorkspaceStore(new StudioAdapterClient(new FixtureTransport()));
+  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  store.beginTransformPreview(1, 'translate', 'world');
+
+  store.beginPreviewToolDrag(0);
+  store.applyPreviewToolDelta(0, 0.3, false, false);
+  store.finishPreviewToolDrag(0, false);
+  assert.deepEqual(store.snapshot().preview?.translation, [1.5, 2, 3]);
+
+  store.beginPreviewToolDrag(0);
+  store.applyPreviewToolDelta(0, 0.3, false, false);
+  store.finishPreviewToolDrag(0, false);
+  assert.deepEqual(store.snapshot().preview?.translation, [2, 2, 3]);
+
+  store.beginPreviewToolDrag(0);
+  store.applyPreviewToolDelta(0, 0.3, false, false);
+  assert.deepEqual(store.snapshot().preview?.translation, [2.5, 2, 3]);
+  store.finishPreviewToolDrag(0, true);
+  assert.deepEqual(store.snapshot().preview?.translation, [2, 2, 3]);
+});
+
 test('rejected mutation preserves the accepted document and disposable preview', async () => {
   const transport = new FixtureTransport();
   const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));

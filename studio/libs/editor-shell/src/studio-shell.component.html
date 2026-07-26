@@ -196,7 +196,9 @@
             (entityPicked)="store.selectEntity($event, 'renderer')"
             (voxelPicked)="validateVoxelPick($event)"
             (rendererError)="store.reportUiError($event)"
+            (transformDragStarted)="store.beginPreviewToolDrag($event)"
             (transformDelta)="applyTransformGizmoDelta($event)"
+            (transformDragFinished)="finishTransformGizmoDrag($event.axis, $event.cancelled)"
           />
           <div class="viewport-source-readout">
             <span>{{ projection.readout.retainedEntities }} entities</span>

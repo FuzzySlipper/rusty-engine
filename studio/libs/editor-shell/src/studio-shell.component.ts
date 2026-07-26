@@ -21,6 +21,7 @@ import type { StudioKeyboardBindings } from '@rusty-engine/studio-user-settings'
 import {
   StudioViewportComponent,
   type StudioTransformGizmoDelta,
+  type StudioTransformAxis,
   type StudioTransformOrientation,
   type StudioTransformTool,
   type StudioVoxelPreview,
@@ -574,6 +575,10 @@ export class StudioShellComponent {
 
   applyTransformGizmoDelta(delta: StudioTransformGizmoDelta): void {
     this.store.applyPreviewToolDelta(delta.axis, delta.delta, delta.fine, delta.toggleSnap);
+  }
+
+  finishTransformGizmoDrag(axis: StudioTransformAxis, cancelled: boolean): void {
+    this.store.finishPreviewToolDrag(axis, cancelled);
   }
 
   canPreviewTranslation(): boolean {

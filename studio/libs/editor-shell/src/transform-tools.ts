@@ -26,6 +26,27 @@ export interface TransformToolDelta {
   readonly settings: TransformToolSettings;
 }
 
+export type TransformToolDragStart = Pick<
+  TransformToolDelta,
+  'local' | 'world' | 'parentWorld' | 'tool' | 'orientation' | 'axis'
+>;
+
+export interface TransformToolDragState extends TransformToolDragStart {
+  readonly cumulativeDelta: number;
+}
+
+export interface TransformToolDragUpdate {
+  readonly delta: number;
+  readonly fine: boolean;
+  readonly toggleSnap: boolean;
+  readonly settings: TransformToolSettings;
+}
+
+export interface TransformToolDragResult {
+  readonly drag: TransformToolDragState;
+  readonly transform: Transform;
+}
+
 export function composeTransform(parent: Transform, local: Transform): Transform {
   const scaledLocal: readonly [number, number, number] = [
     local.translation[0] * parent.scale[0],
@@ -44,9 +65,10 @@ export function composeTransform(parent: Transform, local: Transform): Transform
 }
 
 /**
- * Applies one disposable gizmo delta and returns the local transform that the
- * named Rust owner can later validate and commit. Hierarchy conversion remains
- * explicit; the helper never mutates accepted project state.
+ * Applies one cumulative gizmo displacement to a fixed drag baseline and
+ * returns the local transform that the named Rust owner can later validate and
+ * commit. Hierarchy conversion remains explicit; the helper never mutates
+ * accepted project state.
  */
 export function applyTransformToolDelta(input: TransformToolDelta): Transform {
   const fineMultiplier = input.fine ? input.settings.fineMultiplier : 1;
@@ -118,6 +140,40 @@ export function applyTransformToolDelta(input: TransformToolDelta): Transform {
       };
     }
   }
+}
+
+/**
+ * Captures the unsnapped pointer-down baseline for one transform drag.
+ * Incremental pointer samples are accumulated separately from the snapped
+ * presentation so small movements cannot be discarded by quantization.
+ */
+export function beginTransformToolDrag(input: TransformToolDragStart): TransformToolDragState {
+  return { ...input, cumulativeDelta: 0 };
+}
+
+export function updateTransformToolDrag(
+  drag: TransformToolDragState,
+  update: TransformToolDragUpdate,
+): TransformToolDragResult {
+  const next = {
+    ...drag,
+    cumulativeDelta: drag.cumulativeDelta + update.delta,
+  };
+  return {
+    drag: next,
+    transform: applyTransformToolDelta({
+      local: next.local,
+      world: next.world,
+      parentWorld: next.parentWorld,
+      tool: next.tool,
+      orientation: next.orientation,
+      axis: next.axis,
+      delta: next.cumulativeDelta,
+      fine: update.fine,
+      toggleSnap: update.toggleSnap,
+      settings: update.settings,
+    }),
+  };
 }
 
 function inverseTransformPoint(

@@ -308,6 +308,7 @@ test('trusted host browsing restores focus and animated appearance uses the shar
   await page.getByTitle('Rotate gizmo').click();
   const gizmo = page.getByLabel('Transform gizmo');
   await expect(gizmo).toHaveAttribute('data-tool', 'rotate');
+  await expect(page.getByRole('button', { name: /^Snap / })).toHaveClass(/is-active/);
   await page.getByRole('button', { name: 'world', exact: true }).click();
   await expect(gizmo).toHaveAttribute('data-orientation', 'local');
   const xAxis = page.getByRole('button', { name: 'Drag X transform axis' });
@@ -315,7 +316,11 @@ test('trusted host browsing restores focus and animated appearance uses the shar
   if (axisBox === null) throw new Error('transform gizmo axis has no browser bounds');
   await page.mouse.move(axisBox.x + axisBox.width / 2, axisBox.y + axisBox.height / 2);
   await page.mouse.down();
-  await page.mouse.move(axisBox.x + axisBox.width / 2 + 24, axisBox.y + axisBox.height / 2);
+  await page.mouse.move(
+    axisBox.x + axisBox.width / 2 + 24,
+    axisBox.y + axisBox.height / 2,
+    { steps: 24 },
+  );
   await page.mouse.up();
   await expect(inspector.getByLabel('Rotation X')).not.toHaveValue('0');
   await inspector.locator('[data-action="commit-transform"]').click();

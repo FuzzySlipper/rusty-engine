@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { applyTransformToolDelta } from './transform-tools.js';
+import {
+  applyTransformToolDelta,
+  beginTransformToolDrag,
+  updateTransformToolDrag,
+} from './transform-tools.js';
 
 const identity = {
   translation: [0, 0, 0] as const,
@@ -80,4 +84,48 @@ test('local rotation, world scale, anisotropic snap, and fine modifier stay expl
     settings,
   });
   assert.equal(unsnapped.translation[2], 0.3);
+});
+
+test('snapped drag sessions preserve small incremental movement for every transform tool', () => {
+  const cases = [
+    { tool: 'translate' as const, deltas: Array(40).fill(0.025), total: 1 },
+    { tool: 'rotate' as const, deltas: Array(24).fill(0.75), total: 18 },
+    { tool: 'scale' as const, deltas: Array(20).fill(0.025), total: 0.5 },
+  ];
+
+  for (const { tool, deltas, total } of cases) {
+    let drag = beginTransformToolDrag({
+      local: identity,
+      world: identity,
+      parentWorld: null,
+      tool,
+      orientation: 'world',
+      axis: 0,
+    });
+    let incremental: ReturnType<typeof applyTransformToolDelta> = identity;
+    for (const delta of deltas) {
+      const result = updateTransformToolDrag(drag, {
+        delta,
+        fine: false,
+        toggleSnap: false,
+        settings,
+      });
+      drag = result.drag;
+      incremental = result.transform;
+    }
+
+    const single = applyTransformToolDelta({
+      local: identity,
+      world: identity,
+      parentWorld: null,
+      tool,
+      orientation: 'world',
+      axis: 0,
+      delta: total,
+      fine: false,
+      toggleSnap: false,
+      settings,
+    });
+    assert.deepEqual(incremental, single, `${tool} increments must equal one cumulative drag`);
+  }
 });

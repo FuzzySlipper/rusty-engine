@@ -49,6 +49,11 @@ export interface StudioTransformGizmoDelta {
   readonly toggleSnap: boolean;
 }
 
+export interface StudioTransformGizmoDragFinished {
+  readonly axis: StudioTransformAxis;
+  readonly cancelled: boolean;
+}
+
 @Component({
   selector: 'rusty-studio-viewport',
   standalone: true,
@@ -102,7 +107,9 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   readonly entityPicked = output<number | null>();
   readonly voxelPicked = output<VoxelViewportPickCandidate>();
   readonly rendererError = output<string>();
+  readonly transformDragStarted = output<StudioTransformAxis>();
   readonly transformDelta = output<StudioTransformGizmoDelta>();
+  readonly transformDragFinished = output<StudioTransformGizmoDragFinished>();
 
   readonly status = signal<ViewportStatus>('mounting');
   readonly retainedOpCount = signal(0);
@@ -345,6 +352,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     const target = event.currentTarget;
     if (!(target instanceof HTMLElement)) return;
     target.setPointerCapture(event.pointerId);
+    this.transformDragStarted.emit(axis);
     let last = event.clientX - event.clientY;
     const move = (moveEvent: PointerEvent): void => {
       const current = moveEvent.clientX - moveEvent.clientY;
@@ -359,10 +367,14 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
         toggleSnap: moveEvent.ctrlKey || moveEvent.metaKey,
       });
     };
-    const finish = (): void => {
+    const finish = (finishEvent: PointerEvent): void => {
       target.removeEventListener('pointermove', move);
       target.removeEventListener('pointerup', finish);
       target.removeEventListener('pointercancel', finish);
+      this.transformDragFinished.emit({
+        axis,
+        cancelled: finishEvent.type === 'pointercancel',
+      });
     };
     target.addEventListener('pointermove', move);
     target.addEventListener('pointerup', finish);
