@@ -6,9 +6,10 @@ use voxel_asset::{
 };
 
 use crate::{
-    flatten_static_scene, import_static_glb_scene, texture_coordinate_source_hash, ConversionError,
-    ImportedModelScene, ImportedPrimitiveGroup, ImportedStaticMesh,
-    ImportedStaticTextureCoordinates,
+    flatten_static_scene, import_animated_glb, import_static_glb_scene, sample_animation_bind_pose,
+    texture_coordinate_source_hash, AnimationAnchorPolicy, AnimationBindPoseRequest,
+    ConversionError, ImportedAnimatedModel, ImportedModelScene, ImportedPrimitiveGroup,
+    ImportedStaticMesh, ImportedStaticTextureCoordinates,
 };
 
 pub const MAX_MESH_SOURCE_ASSET_ID_BYTES: usize = 1_024;
@@ -134,6 +135,14 @@ pub struct ImportedMeshSource {
     pub mesh: ImportedStaticMesh,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportedAnimatedMeshSource {
+    /// Bind-pose source view used for common metadata and material admission.
+    pub source: ImportedMeshSource,
+    /// Authority-bearing animation data used by explicit clip sampling.
+    pub model: ImportedAnimatedModel,
+}
+
 pub fn source_sha256(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
@@ -141,25 +150,9 @@ pub fn source_sha256(bytes: &[u8]) -> String {
 pub fn import_mesh_source(
     request: &MeshSourceImportRequest,
 ) -> Result<ImportedMeshSource, ConversionError> {
-    validate_import_request(request)?;
+    validate_import_request(request, AssetKind::StaticMesh)?;
     let source_hash = source_sha256(&request.source_bytes);
-    if request
-        .expected_source_sha256
-        .as_ref()
-        .is_some_and(|expected| expected != &source_hash)
-    {
-        return Err(ConversionError::one(
-            "conversion.sourceHashMismatch",
-            "expectedSourceSha256",
-            format!(
-                "expected {}, computed {source_hash}",
-                request
-                    .expected_source_sha256
-                    .as_deref()
-                    .expect("checked expected source hash")
-            ),
-        ));
-    }
+    validate_expected_source_hash(request, &source_hash)?;
     let scene = match request.format {
         MeshSourceFormat::Glb => import_static_glb_scene(&request.source_bytes)?,
     };
@@ -185,6 +178,49 @@ pub fn import_mesh_source(
         scene,
         mesh,
     })
+}
+
+pub fn import_animated_mesh_source(
+    request: &MeshSourceImportRequest,
+) -> Result<ImportedAnimatedMeshSource, ConversionError> {
+    validate_import_request(request, AssetKind::AnimatedMesh)?;
+    if request.mesh_primitive.is_some() {
+        return Err(ConversionError::one(
+            "conversion.unsupportedSource",
+            "meshPrimitive",
+            "animated object conversion requires the complete selected scene",
+        ));
+    }
+    let source_hash = source_sha256(&request.source_bytes);
+    validate_expected_source_hash(request, &source_hash)?;
+    let model = match request.format {
+        MeshSourceFormat::Glb => import_animated_glb(&request.source_bytes)?,
+    };
+    let bind_pose = sample_animation_bind_pose(
+        &model,
+        &AnimationBindPoseRequest {
+            expected_source_sha256: source_hash.clone(),
+            anchor_policy: AnimationAnchorPolicy::PreserveSourceSpace,
+        },
+    )?;
+    let metadata = mesh_metadata(&model.scene, &bind_pose.mesh)?;
+    let source = ImportedMeshSource {
+        receipt: MeshSourceImportReceipt {
+            source: MeshSourceRef {
+                asset_id: request.source_asset_id.clone(),
+                asset_version: request.asset_version,
+                source_sha256: source_hash,
+                mesh_primitive: None,
+            },
+            source_path: request.source_path.clone(),
+            format: request.format,
+            source_byte_count: request.source_bytes.len() as u64,
+            metadata,
+        },
+        scene: model.scene.clone(),
+        mesh: bind_pose.mesh,
+    };
+    Ok(ImportedAnimatedMeshSource { source, model })
 }
 
 fn select_primitive_group(
@@ -331,14 +367,17 @@ pub fn decode_mesh_source_import_request(
     Ok(request)
 }
 
-fn validate_import_request(request: &MeshSourceImportRequest) -> Result<(), ConversionError> {
+fn validate_import_request(
+    request: &MeshSourceImportRequest,
+    expected_kind: AssetKind,
+) -> Result<(), ConversionError> {
     match AssetId::parse(&request.source_asset_id) {
-        Ok(id) if id.kind() == AssetKind::StaticMesh => {}
+        Ok(id) if id.kind() == expected_kind => {}
         Ok(id) => {
             return Err(ConversionError::one(
                 "conversion.invalidSourceIdentity",
                 "sourceAssetId",
-                format!("expected static mesh identity, found {}", id.kind()),
+                format!("expected {expected_kind} identity, found {}", id.kind()),
             ));
         }
         Err(error) => {
@@ -393,6 +432,30 @@ fn validate_import_request(request: &MeshSourceImportRequest) -> Result<(), Conv
     Ok(())
 }
 
+fn validate_expected_source_hash(
+    request: &MeshSourceImportRequest,
+    source_hash: &str,
+) -> Result<(), ConversionError> {
+    if request
+        .expected_source_sha256
+        .as_ref()
+        .is_some_and(|expected| expected != source_hash)
+    {
+        return Err(ConversionError::one(
+            "conversion.sourceHashMismatch",
+            "expectedSourceSha256",
+            format!(
+                "expected {}, computed {source_hash}",
+                request
+                    .expected_source_sha256
+                    .as_deref()
+                    .expect("checked expected source hash")
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_string(value: &str, path: &'static str, limit: usize) -> Result<(), ConversionError> {
     if value.trim().is_empty() || value.len() > limit {
         return Err(ConversionError::one(
@@ -404,7 +467,7 @@ fn validate_string(value: &str, path: &'static str, limit: usize) -> Result<(), 
     Ok(())
 }
 
-fn mesh_metadata(
+pub(crate) fn mesh_metadata(
     scene: &ImportedModelScene,
     mesh: &ImportedStaticMesh,
 ) -> Result<MeshSourceMetadata, ConversionError> {

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use voxel_asset::VoxelAssetMaterialMapping;
 
 use crate::{
-    voxelize::MaterialEvidence, ConversionError, ConversionPlanRequest, ImportedMeshSource,
+    voxelize::MaterialEvidence, ConversionError, ConversionPlanSettings, ImportedMeshSource,
     ImportedStaticMesh, MeshSourceTextureCoordinates,
 };
 
@@ -99,7 +99,7 @@ pub(crate) fn canonicalize_material_policy(policy: &mut ConversionMaterialPolicy
 }
 
 pub(crate) fn resolve_material_map(
-    request: &ConversionPlanRequest,
+    settings: &ConversionPlanSettings,
     source: &ImportedMeshSource,
 ) -> Result<Vec<VoxelAssetMaterialMapping>, ConversionError> {
     let source_materials = source
@@ -114,7 +114,7 @@ pub(crate) fn resolve_material_map(
         })
         .collect::<BTreeMap<_, _>>();
     let mut resolved = BTreeMap::<u32, VoxelAssetMaterialMapping>::new();
-    for mapping in &request.settings.conversion.material_map {
+    for mapping in &settings.conversion.material_map {
         if resolved
             .insert(mapping.source_material_slot, mapping.clone())
             .is_some()
@@ -126,9 +126,9 @@ pub(crate) fn resolve_material_map(
             ));
         }
     }
-    validate_texture_assets(request)?;
+    validate_texture_assets(settings)?;
     let mut texture_slots = BTreeSet::new();
-    for binding in &request.settings.material_policy.texture_bindings {
+    for binding in &settings.material_policy.texture_bindings {
         if !texture_slots.insert(binding.source_material_slot) {
             return Err(ConversionError::one(
                 "conversion.invalidTextureMaterialRule",
@@ -147,23 +147,16 @@ pub(crate) fn resolve_material_map(
             })?;
         validate_texture_binding(binding)?;
         validate_uv_attribute(source, binding)?;
-        let texture = request
-            .settings
+        let texture = settings
             .material_policy
             .texture_assets
             .iter()
             .find(|asset| asset.texture == binding.texture)
             .ok_or_else(|| {
-                let same_identity =
-                    request
-                        .settings
-                        .material_policy
-                        .texture_assets
-                        .iter()
-                        .any(|asset| {
-                            asset.texture.texture_asset_id == binding.texture.texture_asset_id
-                                && asset.texture.asset_version == binding.texture.asset_version
-                        });
+                let same_identity = settings.material_policy.texture_assets.iter().any(|asset| {
+                    asset.texture.texture_asset_id == binding.texture.texture_asset_id
+                        && asset.texture.asset_version == binding.texture.asset_version
+                });
                 ConversionError::one(
                     if same_identity {
                         "conversion.textureHashMismatch"
@@ -184,7 +177,7 @@ pub(crate) fn resolve_material_map(
             },
         );
     }
-    if let Some(fallback) = request.settings.material_policy.default_voxel_material {
+    if let Some(fallback) = settings.material_policy.default_voxel_material {
         for (source_slot, source_name) in &source_materials {
             resolved
                 .entry(*source_slot)
@@ -262,14 +255,13 @@ impl<'a> MaterialSamplingContext<'a> {
 }
 
 pub(crate) fn material_sampling_context<'a>(
-    request: &'a ConversionPlanRequest,
+    settings: &'a ConversionPlanSettings,
     source: &'a ImportedMeshSource,
 ) -> Result<MaterialSamplingContext<'a>, ConversionError> {
     let mut bindings = BTreeMap::new();
-    for binding in &request.settings.material_policy.texture_bindings {
+    for binding in &settings.material_policy.texture_bindings {
         let uv_attribute = validate_uv_attribute(source, binding)?;
-        let texture = request
-            .settings
+        let texture = settings
             .material_policy
             .texture_assets
             .iter()
@@ -292,16 +284,15 @@ pub(crate) fn material_sampling_context<'a>(
     Ok(MaterialSamplingContext { bindings })
 }
 
-fn validate_texture_assets(request: &ConversionPlanRequest) -> Result<(), ConversionError> {
-    let palette = request
-        .settings
+fn validate_texture_assets(settings: &ConversionPlanSettings) -> Result<(), ConversionError> {
+    let palette = settings
         .conversion
         .material_palette
         .iter()
         .map(|binding| binding.material_slot)
         .collect::<BTreeSet<_>>();
     let mut identities = BTreeSet::new();
-    for asset in &request.settings.material_policy.texture_assets {
+    for asset in &settings.material_policy.texture_assets {
         validate_texture_source(&asset.texture)?;
         if !identities.insert(texture_key(&asset.texture)) {
             return Err(ConversionError::one(

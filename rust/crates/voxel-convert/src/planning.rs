@@ -146,8 +146,8 @@ pub fn plan_conversion(
     validate_transform(request.settings.transform)?;
 
     let mut effective_settings = request.settings.conversion.clone();
-    effective_settings.material_map = resolve_material_map(request, source)?;
-    let material_sampling = material_sampling_context(request, source)?;
+    effective_settings.material_map = resolve_material_map(&request.settings, source)?;
+    let material_sampling = material_sampling_context(&request.settings, source)?;
     let transformed_mesh = transform_mesh(&source.mesh, request.settings.transform)?;
     let conversion_request = VoxelConversionRequest {
         asset_id: request.target_asset_id.clone(),
@@ -361,7 +361,7 @@ fn validate_target(target_asset_id: &str) -> Result<(), ConversionError> {
     }
 }
 
-fn validate_transform(transform: [f64; 16]) -> Result<(), ConversionError> {
+pub(crate) fn validate_transform(transform: [f64; 16]) -> Result<(), ConversionError> {
     if transform.iter().any(|value| !value.is_finite())
         || transform[3].abs() > f64::EPSILON
         || transform[7].abs() > f64::EPSILON
@@ -377,7 +377,7 @@ fn validate_transform(transform: [f64; 16]) -> Result<(), ConversionError> {
     Ok(())
 }
 
-fn transform_mesh(
+pub(crate) fn transform_mesh(
     mesh: &ImportedStaticMesh,
     transform: [f64; 16],
 ) -> Result<ImportedStaticMesh, ConversionError> {

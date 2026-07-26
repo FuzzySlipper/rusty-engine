@@ -39,7 +39,8 @@ pub use frame::{
 };
 pub use object::{
     VoxelObjectAnimationFrame, VoxelObjectAsset, VoxelObjectClip, VoxelObjectFrameSelectionError,
-    VoxelObjectGrid, VoxelObjectProvenance, VoxelObjectProvenanceKind, VOXEL_OBJECT_SCHEMA_VERSION,
+    VoxelObjectGrid, VoxelObjectProvenance, VoxelObjectProvenanceKind,
+    VoxelObjectSourceClipProvenance, VOXEL_OBJECT_SCHEMA_VERSION,
 };
 pub use object_codec::{
     canonicalize_voxel_object, decode_voxel_object, encode_voxel_object, validate_voxel_object,

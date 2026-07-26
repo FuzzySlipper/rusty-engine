@@ -29,6 +29,86 @@ pub(crate) struct VoxelizationResult {
     pub work: u64,
 }
 
+/// One immutable source-space envelope used to map multiple sampled meshes to
+/// the same voxel grid. Object conversion computes this once across every
+/// selected frame; individual frame geometry must remain inside it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct VoxelizationSourceBounds {
+    pub min: [f64; 3],
+    pub max: [f64; 3],
+}
+
+impl VoxelizationSourceBounds {
+    pub(crate) fn for_mesh(mesh: &ImportedStaticMesh) -> Result<Self, ConversionError> {
+        let first = *mesh.positions.first().ok_or_else(|| {
+            ConversionError::one(
+                "conversion.invalidGeometry",
+                "source.positions",
+                "mesh has no positions",
+            )
+        })?;
+        let mut bounds = Self {
+            min: first,
+            max: first,
+        };
+        for position in mesh.positions.iter().skip(1) {
+            bounds.include(*position)?;
+        }
+        bounds.validate()?;
+        Ok(bounds)
+    }
+
+    pub(crate) fn include_mesh(
+        &mut self,
+        mesh: &ImportedStaticMesh,
+    ) -> Result<(), ConversionError> {
+        for position in &mesh.positions {
+            self.include(*position)?;
+        }
+        self.validate()
+    }
+
+    fn include(&mut self, position: [f64; 3]) -> Result<(), ConversionError> {
+        if position.iter().any(|component| !component.is_finite()) {
+            return Err(ConversionError::one(
+                "conversion.invalidGeometry",
+                "source.positions",
+                "source positions must be finite",
+            ));
+        }
+        for (axis, component) in position.into_iter().enumerate() {
+            self.min[axis] = self.min[axis].min(component);
+            self.max[axis] = self.max[axis].max(component);
+        }
+        Ok(())
+    }
+
+    fn validate(self) -> Result<(), ConversionError> {
+        if self
+            .min
+            .iter()
+            .chain(self.max.iter())
+            .any(|component| !component.is_finite())
+            || (0..3).any(|axis| self.min[axis] > self.max[axis])
+        {
+            return Err(ConversionError::one(
+                "conversion.invalidGeometry",
+                "source.bounds",
+                "source bounds must be finite and ordered",
+            ));
+        }
+        Ok(())
+    }
+
+    fn contains(self, position: [f64; 3]) -> bool {
+        (0..3).all(|axis| {
+            position[axis].is_finite()
+                && position[axis] >= self.min[axis]
+                && position[axis] <= self.max[axis]
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct MappedTriangle {
     points: [[f64; 3]; 3],
@@ -70,10 +150,31 @@ pub(crate) fn voxelize(
     request: &VoxelConversionRequest,
     mesh: &ImportedStaticMesh,
 ) -> Result<VoxelizationResult, ConversionError> {
+    let source_bounds = VoxelizationSourceBounds::for_mesh(mesh)?;
+    voxelize_with_source_bounds(request, mesh, source_bounds)
+}
+
+pub(crate) fn voxelize_with_source_bounds(
+    request: &VoxelConversionRequest,
+    mesh: &ImportedStaticMesh,
+    source_bounds: VoxelizationSourceBounds,
+) -> Result<VoxelizationResult, ConversionError> {
+    source_bounds.validate()?;
+    if mesh
+        .positions
+        .iter()
+        .any(|position| !source_bounds.contains(*position))
+    {
+        return Err(ConversionError::one(
+            "conversion.invalidGeometry",
+            "source.bounds",
+            "sampled mesh lies outside the fixed object conversion bounds",
+        ));
+    }
     if request.settings.mode == VoxelConversionMode::Solid {
         validate_closed_topology(mesh)?;
     }
-    let mapper = CoordinateMapper::new(&request.settings, &mesh.positions);
+    let mapper = CoordinateMapper::new(&request.settings, source_bounds);
     let triangles = mesh
         .triangles
         .iter()
@@ -537,15 +638,9 @@ struct CoordinateMapper {
 }
 
 impl CoordinateMapper {
-    fn new(settings: &VoxelConversionSettings, positions: &[[f64; 3]]) -> Self {
-        let mut source_min = [f64::INFINITY; 3];
-        let mut source_max = [f64::NEG_INFINITY; 3];
-        for position in positions {
-            for axis in 0..3 {
-                source_min[axis] = source_min[axis].min(position[axis]);
-                source_max[axis] = source_max[axis].max(position[axis]);
-            }
-        }
+    fn new(settings: &VoxelConversionSettings, bounds: VoxelizationSourceBounds) -> Self {
+        let source_min = bounds.min;
+        let source_max = bounds.max;
         let source_span: [f64; 3] = std::array::from_fn(|axis| source_max[axis] - source_min[axis]);
         let target_span: [f64; 3] = std::array::from_fn(|axis| {
             f64::from(settings.resolution[axis].saturating_sub(1)) * settings.cell_size

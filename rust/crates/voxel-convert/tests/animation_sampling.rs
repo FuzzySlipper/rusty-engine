@@ -1,7 +1,8 @@
 use voxel_convert::{
-    import_animated_glb, sample_animation_bind_pose, sample_animation_clip, AnimationAnchorPolicy,
-    AnimationBindPoseRequest, AnimationChannelValues, AnimationEndPolicy, AnimationSampleRequest,
-    MAX_IMPORTED_ANIMATION_CLIPS,
+    import_animated_glb, sample_animation_bind_pose, sample_animation_clip,
+    sample_animation_clip_range, AnimationAnchorPolicy, AnimationBindPoseRequest,
+    AnimationChannelValues, AnimationEndPolicy, AnimationSampleRangeRequest,
+    AnimationSampleRequest, MAX_IMPORTED_ANIMATION_CLIPS,
 };
 
 const CHARACTER: &[u8] = include_bytes!(concat!(
@@ -100,6 +101,49 @@ fn licensed_character_imports_named_clips_skin_and_deterministic_samples() {
             .timestamp_microseconds
             < loop_sampled.duration_microseconds
     );
+}
+
+#[test]
+fn clip_ranges_sample_absolute_times_without_rescaling_the_selected_interval() {
+    let source = morph_fixture_glb();
+    let model = import_animated_glb(&source).unwrap();
+    let request = AnimationSampleRangeRequest {
+        expected_source_sha256: model.source_sha256.clone(),
+        clip_name: "morph-linear".to_owned(),
+        sample_rate_hz: 2,
+        start_microseconds: 250_000,
+        end_microseconds: 750_000,
+        end_policy: AnimationEndPolicy::IncludeClipEnd,
+        anchor_policy: AnimationAnchorPolicy::PreserveSourceSpace,
+    };
+    let sampled = sample_animation_clip_range(&model, &request).unwrap();
+    assert_eq!(sampled.start_microseconds, 250_000);
+    assert_eq!(sampled.end_microseconds, 750_000);
+    assert_eq!(
+        sampled
+            .snapshots
+            .iter()
+            .map(|snapshot| snapshot.timestamp_microseconds)
+            .collect::<Vec<_>>(),
+        vec![250_000, 750_000]
+    );
+    assert_eq!(sampled.snapshots[0].mesh.positions[0], [-0.5, 0.0, 0.0]);
+    assert_eq!(sampled.snapshots[1].mesh.positions[0], [0.5, 0.0, 0.0]);
+    assert_eq!(
+        sampled,
+        sample_animation_clip_range(&model, &request).unwrap()
+    );
+
+    let error = sample_animation_clip_range(
+        &model,
+        &AnimationSampleRangeRequest {
+            start_microseconds: 750_001,
+            end_microseconds: 750_000,
+            ..request
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.diagnostics()[0].code, "conversion.invalidSampleRange");
 }
 
 #[test]

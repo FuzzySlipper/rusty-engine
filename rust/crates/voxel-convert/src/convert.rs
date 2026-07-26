@@ -11,7 +11,10 @@ use voxel_asset::{
 
 use crate::{
     material::MaterialSamplingContext,
-    voxelize::{voxelize, MaterialEvidence, MAX_GEOMETRIC_VOXELIZATION_WORK},
+    voxelize::{
+        voxelize, voxelize_with_source_bounds, MaterialEvidence, VoxelizationSourceBounds,
+        MAX_GEOMETRIC_VOXELIZATION_WORK,
+    },
     ConversionError, ImportedStaticMesh,
 };
 
@@ -65,6 +68,42 @@ pub(crate) fn convert_imported_mesh_with_material_sampling(
     source_byte_count: u64,
     material_sampling: Option<&MaterialSamplingContext<'_>>,
 ) -> Result<ConversionReceipt, ConversionError> {
+    convert_imported_mesh_with_material_sampling_and_bounds(
+        request,
+        mesh,
+        source_sha256,
+        source_byte_count,
+        material_sampling,
+        None,
+    )
+}
+
+pub(crate) fn convert_imported_mesh_with_material_sampling_in_bounds(
+    request: &VoxelConversionRequest,
+    mesh: &ImportedStaticMesh,
+    source_sha256: String,
+    source_byte_count: u64,
+    material_sampling: Option<&MaterialSamplingContext<'_>>,
+    source_bounds: VoxelizationSourceBounds,
+) -> Result<ConversionReceipt, ConversionError> {
+    convert_imported_mesh_with_material_sampling_and_bounds(
+        request,
+        mesh,
+        source_sha256,
+        source_byte_count,
+        material_sampling,
+        Some(source_bounds),
+    )
+}
+
+fn convert_imported_mesh_with_material_sampling_and_bounds(
+    request: &VoxelConversionRequest,
+    mesh: &ImportedStaticMesh,
+    source_sha256: String,
+    source_byte_count: u64,
+    material_sampling: Option<&MaterialSamplingContext<'_>>,
+    source_bounds: Option<VoxelizationSourceBounds>,
+) -> Result<ConversionReceipt, ConversionError> {
     validate_conversion_request(request, source_byte_count)?;
     if source_sha256 != request.expected_source_sha256 {
         return Err(ConversionError::one(
@@ -78,7 +117,8 @@ pub(crate) fn convert_imported_mesh_with_material_sampling(
     }
 
     validate_material_map(request, mesh)?;
-    let (cells, voxelization_work) = convert_cells(request, mesh, material_sampling)?;
+    let (cells, voxelization_work) =
+        convert_cells(request, mesh, material_sampling, source_bounds)?;
     let bounds = bounds_for_cells(&cells).expect("conversion rejects empty output");
     let sparse_runs = sparse_runs(&cells);
     let settings_sha256 = conversion_settings_sha256(&request.settings);
@@ -206,6 +246,7 @@ fn convert_cells(
     request: &VoxelConversionRequest,
     mesh: &ImportedStaticMesh,
     material_sampling: Option<&MaterialSamplingContext<'_>>,
+    source_bounds: Option<VoxelizationSourceBounds>,
 ) -> Result<(BTreeMap<[i64; 3], u16>, u64), ConversionError> {
     let material_map = request
         .settings
@@ -213,7 +254,10 @@ fn convert_cells(
         .iter()
         .map(|mapping| (mapping.source_material_slot, mapping.voxel_material_slot))
         .collect::<BTreeMap<_, _>>();
-    let voxelization = voxelize(request, mesh)?;
+    let voxelization = match source_bounds {
+        Some(bounds) => voxelize_with_source_bounds(request, mesh, bounds)?,
+        None => voxelize(request, mesh)?,
+    };
     let cells = voxelization
         .cells
         .into_iter()

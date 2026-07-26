@@ -163,6 +163,7 @@ fn object() -> VoxelObjectAsset {
                 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                     .to_string(),
             license_path: None,
+            source_clips: vec![],
         },
         content_hash: String::new(),
     })

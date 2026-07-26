@@ -6,7 +6,8 @@ use sha2::{Digest, Sha256};
 use crate::{
     frame::{canonicalize_frame, represented_voxel_count},
     validate_voxel_frame, VoxelAssetBounds, VoxelAssetMaterialBinding, VoxelAssetMaterialMapping,
-    VoxelObjectAsset, VoxelObjectProvenance, VOXEL_OBJECT_SCHEMA_VERSION,
+    VoxelObjectAsset, VoxelObjectProvenance, VoxelObjectProvenanceKind,
+    VOXEL_OBJECT_SCHEMA_VERSION,
 };
 
 pub const MAX_VOXEL_OBJECT_ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
@@ -315,6 +316,33 @@ fn semantic_diagnostics(object: &VoxelObjectAsset) -> Vec<VoxelObjectDiagnostic>
             ));
         }
     }
+    let provenance_clip_ids = object
+        .provenance
+        .source_clips
+        .iter()
+        .map(|clip| clip.output_clip_id.as_str())
+        .collect::<BTreeSet<_>>();
+    match object.provenance.kind {
+        VoxelObjectProvenanceKind::ConvertedAnimatedMesh
+            if !provenance_clip_ids.is_empty() && provenance_clip_ids != clip_ids =>
+        {
+            diagnostics.push(diagnostic(
+                "voxelObject.invalidProvenance",
+                "provenance.sourceClips",
+                "animated conversion provenance must name every output clip exactly once",
+            ));
+        }
+        VoxelObjectProvenanceKind::Authored | VoxelObjectProvenanceKind::ConvertedStaticMesh
+            if !object.provenance.source_clips.is_empty() =>
+        {
+            diagnostics.push(diagnostic(
+                "voxelObject.invalidProvenance",
+                "provenance.sourceClips",
+                "only converted animated meshes may carry source clip schedules",
+            ));
+        }
+        _ => {}
+    }
     diagnostics
 }
 
@@ -464,6 +492,46 @@ fn validate_provenance(
             ),
         ));
     }
+    if provenance.source_clips.len() > MAX_VOXEL_OBJECT_CLIPS {
+        diagnostics.push(diagnostic(
+            "voxelObject.resourceLimit",
+            "provenance.sourceClips",
+            format!("source clip count must be 0..={MAX_VOXEL_OBJECT_CLIPS}"),
+        ));
+    }
+    let mut output_ids = BTreeSet::new();
+    for (index, clip) in provenance.source_clips.iter().enumerate() {
+        let path = format!("provenance.sourceClips[{index}]");
+        if !valid_clip_id(&clip.output_clip_id) || !output_ids.insert(clip.output_clip_id.as_str())
+        {
+            diagnostics.push(diagnostic(
+                "voxelObject.invalidProvenance",
+                format!("{path}.outputClipId"),
+                "output clip ids must be unique scoped kebab-case values",
+            ));
+        }
+        validate_string(
+            &clip.source_clip_name,
+            format!("{path}.sourceClipName"),
+            diagnostics,
+        );
+        if clip.start_microseconds > clip.end_microseconds {
+            diagnostics.push(diagnostic(
+                "voxelObject.invalidProvenance",
+                format!("{path}.startMicroseconds"),
+                "source clip range must be ordered",
+            ));
+        }
+        if clip.sample_rate_hz == 0
+            || f64::from(clip.sample_rate_hz) > MAX_VOXEL_OBJECT_FRAMES_PER_SECOND
+        {
+            diagnostics.push(diagnostic(
+                "voxelObject.invalidProvenance",
+                format!("{path}.sampleRateHz"),
+                format!("sampleRateHz must be in 1..={MAX_VOXEL_OBJECT_FRAMES_PER_SECOND}"),
+            ));
+        }
+    }
 }
 
 fn append_frame_semantics(
@@ -526,6 +594,10 @@ fn canonicalize(object: &mut VoxelObjectAsset) {
             ))
     });
     object.clips.sort_by(|left, right| left.id.cmp(&right.id));
+    object
+        .provenance
+        .source_clips
+        .sort_by(|left, right| left.output_clip_id.cmp(&right.output_clip_id));
     canonicalize_frame(&mut object.default_frame);
     for clip in &mut object.clips {
         for frame in &mut clip.frames {

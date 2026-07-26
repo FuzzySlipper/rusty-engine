@@ -334,6 +334,7 @@ fn object_source() -> VoxelObjectAsset {
             settings_sha256:
                 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
             license_path: Some("models/LICENSE.txt".to_owned()),
+            source_clips: vec![],
         },
         content_hash: String::new(),
     }

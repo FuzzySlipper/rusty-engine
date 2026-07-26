@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 use super::{
     AnimationAnchorPolicy, AnimationBindPoseReceipt, AnimationBindPoseRequest, AnimationEndPolicy,
-    AnimationMeshSnapshot, AnimationProperty, AnimationSampleReceipt, AnimationSampleRequest,
+    AnimationMeshSnapshot, AnimationProperty, AnimationSampleRangeReceipt,
+    AnimationSampleRangeRequest, AnimationSampleReceipt, AnimationSampleRequest,
     ImportedAnimatedModel, ImportedAnimationClip, ImportedNodeTransform,
     ANIMATION_TIMESTAMP_TICKS_PER_SECOND, MAX_ANIMATION_DEFORMATION_WORK,
     MAX_ANIMATION_SAMPLE_FRAMES, MAX_ANIMATION_SAMPLE_RATE_HZ,
@@ -29,49 +30,16 @@ pub(super) fn sample_animation_clip(
     request: &AnimationSampleRequest,
 ) -> Result<AnimationSampleReceipt, ConversionError> {
     validate_source_identity(model, &request.expected_source_sha256)?;
-    if request.sample_rate_hz == 0 || request.sample_rate_hz > MAX_ANIMATION_SAMPLE_RATE_HZ {
-        return Err(ConversionError::one(
-            "conversion.resourceLimit",
-            "request.sampleRateHz",
-            format!("sample rate must be in 1..={MAX_ANIMATION_SAMPLE_RATE_HZ} Hz"),
-        ));
-    }
+    validate_sample_rate(request.sample_rate_hz)?;
     validate_anchor(model, request.anchor_policy)?;
-    let clip = model
-        .clips
-        .iter()
-        .find(|clip| clip.name == request.clip_name)
-        .ok_or_else(|| {
-            ConversionError::one(
-                "conversion.clipNotFound",
-                "request.clipName",
-                format!("animation clip {:?} is not present", request.clip_name),
-            )
-        })?;
+    let clip = find_clip(model, &request.clip_name)?;
     let timestamps = build_sample_schedule(
         clip.duration_microseconds,
         request.sample_rate_hz,
         request.end_policy,
     )?;
-    let work_per_snapshot = deformation_work_per_snapshot(model)?;
-    let deformation_work = work_per_snapshot
-        .checked_mul(timestamps.len() as u64)
-        .ok_or_else(|| deformation_limit("animation deformation work overflowed"))?;
-    if deformation_work > MAX_ANIMATION_DEFORMATION_WORK {
-        return Err(deformation_limit(&format!(
-            "animation deformation work {deformation_work} exceeds {MAX_ANIMATION_DEFORMATION_WORK}"
-        )));
-    }
-
-    let mut snapshots = Vec::with_capacity(timestamps.len());
-    for timestamp_microseconds in timestamps {
-        let pose = evaluate_pose(model, Some(clip), timestamp_microseconds)?;
-        let mesh = deform_pose(model, &pose, request.anchor_policy)?;
-        snapshots.push(AnimationMeshSnapshot {
-            timestamp_microseconds,
-            mesh,
-        });
-    }
+    let (deformation_work, snapshots) =
+        sample_timestamps(model, clip, timestamps, request.anchor_policy)?;
 
     Ok(AnimationSampleReceipt {
         source_sha256: model.source_sha256.clone(),
@@ -84,6 +52,104 @@ pub(super) fn sample_animation_clip(
         deformation_work,
         snapshots,
     })
+}
+
+pub(super) fn sample_animation_clip_range(
+    model: &ImportedAnimatedModel,
+    request: &AnimationSampleRangeRequest,
+) -> Result<AnimationSampleRangeReceipt, ConversionError> {
+    validate_source_identity(model, &request.expected_source_sha256)?;
+    validate_sample_rate(request.sample_rate_hz)?;
+    validate_anchor(model, request.anchor_policy)?;
+    let clip = find_clip(model, &request.clip_name)?;
+    if request.start_microseconds > request.end_microseconds
+        || request.end_microseconds > clip.duration_microseconds
+    {
+        return Err(ConversionError::one(
+            "conversion.invalidSampleRange",
+            "request.sampleRange",
+            format!(
+                "sample range {}..={} must be ordered inside clip duration {}",
+                request.start_microseconds, request.end_microseconds, clip.duration_microseconds
+            ),
+        ));
+    }
+    let timestamps = build_sample_schedule_range(
+        request.start_microseconds,
+        request.end_microseconds,
+        request.sample_rate_hz,
+        request.end_policy,
+    )?;
+    let (deformation_work, snapshots) =
+        sample_timestamps(model, clip, timestamps, request.anchor_policy)?;
+    Ok(AnimationSampleRangeReceipt {
+        source_sha256: model.source_sha256.clone(),
+        source_animation_index: clip.source_animation_index,
+        clip_name: clip.name.clone(),
+        clip_duration_microseconds: clip.duration_microseconds,
+        start_microseconds: request.start_microseconds,
+        end_microseconds: request.end_microseconds,
+        sample_rate_hz: request.sample_rate_hz,
+        end_policy: request.end_policy,
+        anchor_policy: request.anchor_policy,
+        deformation_work,
+        snapshots,
+    })
+}
+
+fn validate_sample_rate(sample_rate_hz: u32) -> Result<(), ConversionError> {
+    if sample_rate_hz == 0 || sample_rate_hz > MAX_ANIMATION_SAMPLE_RATE_HZ {
+        return Err(ConversionError::one(
+            "conversion.resourceLimit",
+            "request.sampleRateHz",
+            format!("sample rate must be in 1..={MAX_ANIMATION_SAMPLE_RATE_HZ} Hz"),
+        ));
+    }
+    Ok(())
+}
+
+fn find_clip<'a>(
+    model: &'a ImportedAnimatedModel,
+    clip_name: &str,
+) -> Result<&'a ImportedAnimationClip, ConversionError> {
+    model
+        .clips
+        .iter()
+        .find(|clip| clip.name == clip_name)
+        .ok_or_else(|| {
+            ConversionError::one(
+                "conversion.clipNotFound",
+                "request.clipName",
+                format!("animation clip {clip_name:?} is not present"),
+            )
+        })
+}
+
+fn sample_timestamps(
+    model: &ImportedAnimatedModel,
+    clip: &ImportedAnimationClip,
+    timestamps: Vec<u64>,
+    anchor_policy: AnimationAnchorPolicy,
+) -> Result<(u64, Vec<AnimationMeshSnapshot>), ConversionError> {
+    let work_per_snapshot = deformation_work_per_snapshot(model)?;
+    let deformation_work = work_per_snapshot
+        .checked_mul(timestamps.len() as u64)
+        .ok_or_else(|| deformation_limit("animation deformation work overflowed"))?;
+    if deformation_work > MAX_ANIMATION_DEFORMATION_WORK {
+        return Err(deformation_limit(&format!(
+            "animation deformation work {deformation_work} exceeds {MAX_ANIMATION_DEFORMATION_WORK}"
+        )));
+    }
+    let mut snapshots = Vec::with_capacity(timestamps.len());
+    for timestamp_microseconds in timestamps {
+        let pose = evaluate_pose(model, Some(clip), timestamp_microseconds)?;
+        let mesh = deform_pose(model, &pose, anchor_policy)?;
+        snapshots.push(AnimationMeshSnapshot {
+            timestamp_microseconds,
+            mesh,
+        });
+    }
+    Ok((deformation_work, snapshots))
 }
 
 pub(super) fn sample_animation_bind_pose(
@@ -156,8 +222,18 @@ fn build_sample_schedule(
     sample_rate_hz: u32,
     end_policy: AnimationEndPolicy,
 ) -> Result<Vec<u64>, ConversionError> {
+    build_sample_schedule_range(0, duration_microseconds, sample_rate_hz, end_policy)
+}
+
+fn build_sample_schedule_range(
+    start_microseconds: u64,
+    end_microseconds: u64,
+    sample_rate_hz: u32,
+    end_policy: AnimationEndPolicy,
+) -> Result<Vec<u64>, ConversionError> {
+    let duration_microseconds = end_microseconds - start_microseconds;
     if duration_microseconds == 0 {
-        return Ok(vec![0]);
+        return Ok(vec![start_microseconds]);
     }
     let rounded_threshold = duration_microseconds as u128 * sample_rate_hz as u128;
     let rounding_bias = u128::from(sample_rate_hz / 2);
@@ -182,18 +258,20 @@ fn build_sample_schedule(
         let numerator = sample_index
             .checked_mul(ANIMATION_TIMESTAMP_TICKS_PER_SECOND as u128)
             .ok_or_else(|| deformation_limit("sample timestamp numerator overflowed"))?;
-        let timestamp =
-            ((numerator + u128::from(sample_rate_hz / 2)) / sample_rate_hz as u128) as u64;
-        if timestamp >= duration_microseconds {
+        let offset = ((numerator + u128::from(sample_rate_hz / 2)) / sample_rate_hz as u128) as u64;
+        if offset >= duration_microseconds {
             break;
         }
+        let timestamp = start_microseconds
+            .checked_add(offset)
+            .ok_or_else(|| deformation_limit("sample timestamp overflowed"))?;
         if timestamps.last().copied() != Some(timestamp) {
             timestamps.push(timestamp);
         }
         sample_index += 1;
     }
-    if include_end && timestamps.last().copied() != Some(duration_microseconds) {
-        timestamps.push(duration_microseconds);
+    if include_end && timestamps.last().copied() != Some(end_microseconds) {
+        timestamps.push(end_microseconds);
     }
     if timestamps.len() > MAX_ANIMATION_SAMPLE_FRAMES {
         return Err(ConversionError::one(

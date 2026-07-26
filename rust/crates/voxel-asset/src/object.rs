@@ -74,6 +74,22 @@ pub struct VoxelObjectProvenance {
     pub settings_sha256: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub license_path: Option<String>,
+    /// Exact animated-source schedules retained by converted objects. Authored
+    /// and static-converted objects leave this empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_clips: Vec<VoxelObjectSourceClipProvenance>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct VoxelObjectSourceClipProvenance {
+    pub output_clip_id: String,
+    pub source_clip_name: String,
+    pub source_animation_index: u32,
+    pub start_microseconds: u64,
+    pub end_microseconds: u64,
+    pub sample_rate_hz: u32,
+    pub included_clip_end: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

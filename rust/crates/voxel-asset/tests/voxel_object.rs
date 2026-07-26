@@ -3,8 +3,9 @@ use voxel_asset::{
     with_computed_voxel_object_hashes, VoxelAssetBounds, VoxelAssetMaterialBinding,
     VoxelAssetMaterialMapping, VoxelCoordinateSystem, VoxelFrame, VoxelObjectAnimationFrame,
     VoxelObjectAsset, VoxelObjectClip, VoxelObjectGrid, VoxelObjectProvenance,
-    VoxelObjectProvenanceKind, VoxelRepresentation, VoxelRepresentationKind, VoxelSparseRun,
-    MAX_STRING_BYTES, MAX_VOXEL_OBJECT_TOTAL_VOXELS, VOXEL_OBJECT_SCHEMA_VERSION,
+    VoxelObjectProvenanceKind, VoxelObjectSourceClipProvenance, VoxelRepresentation,
+    VoxelRepresentationKind, VoxelSparseRun, MAX_STRING_BYTES, MAX_VOXEL_OBJECT_TOTAL_VOXELS,
+    VOXEL_OBJECT_SCHEMA_VERSION,
 };
 
 #[test]
@@ -12,6 +13,7 @@ fn static_and_animated_objects_are_canonical_and_frame_resolvable() {
     let mut source = object();
     source.material_palette.reverse();
     source.clips.reverse();
+    source.provenance.source_clips.reverse();
     let object = with_computed_voxel_object_hashes(source).unwrap();
     let first = encode_voxel_object(&object).unwrap();
     let decoded = decode_voxel_object(&first).unwrap();
@@ -286,6 +288,26 @@ fn object() -> VoxelObjectAsset {
             settings_sha256:
                 "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
             license_path: Some("models/LICENSE.txt".to_owned()),
+            source_clips: vec![
+                VoxelObjectSourceClipProvenance {
+                    output_clip_id: "walk".to_owned(),
+                    source_clip_name: "run".to_owned(),
+                    source_animation_index: 1,
+                    start_microseconds: 0,
+                    end_microseconds: 1_000_000,
+                    sample_rate_hz: 12,
+                    included_clip_end: false,
+                },
+                VoxelObjectSourceClipProvenance {
+                    output_clip_id: "idle".to_owned(),
+                    source_clip_name: "idle".to_owned(),
+                    source_animation_index: 0,
+                    start_microseconds: 0,
+                    end_microseconds: 1_000_000,
+                    sample_rate_hz: 6,
+                    included_clip_end: false,
+                },
+            ],
         },
         content_hash: String::new(),
     }

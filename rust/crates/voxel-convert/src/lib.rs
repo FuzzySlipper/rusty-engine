@@ -10,6 +10,8 @@ mod convert;
 mod diagnostic;
 mod import;
 mod material;
+mod object_conversion;
+mod object_query;
 mod planning;
 mod query;
 mod source;
@@ -17,11 +19,13 @@ mod store;
 mod voxelize;
 
 pub use animation::{
-    import_animated_glb, sample_animation_bind_pose, sample_animation_clip, AnimationAnchorPolicy,
-    AnimationBindPoseReceipt, AnimationBindPoseRequest, AnimationChannelValues, AnimationEndPolicy,
-    AnimationInterpolation, AnimationMeshSnapshot, AnimationProperty, AnimationSampleReceipt,
-    AnimationSampleRequest, ImportedAnimatedModel, ImportedAnimationChannel, ImportedAnimationClip,
-    ImportedAnimationNode, ImportedNodeTransform, ImportedPrimitiveDeformation, ImportedSkin,
+    import_animated_glb, sample_animation_bind_pose, sample_animation_clip,
+    sample_animation_clip_range, AnimationAnchorPolicy, AnimationBindPoseReceipt,
+    AnimationBindPoseRequest, AnimationChannelValues, AnimationEndPolicy, AnimationInterpolation,
+    AnimationMeshSnapshot, AnimationProperty, AnimationSampleRangeReceipt,
+    AnimationSampleRangeRequest, AnimationSampleReceipt, AnimationSampleRequest,
+    ImportedAnimatedModel, ImportedAnimationChannel, ImportedAnimationClip, ImportedAnimationNode,
+    ImportedNodeTransform, ImportedPrimitiveDeformation, ImportedSkin,
     ANIMATION_TIMESTAMP_TICKS_PER_SECOND, MAX_ANIMATION_DEFORMATION_WORK,
     MAX_ANIMATION_DURATION_MICROSECONDS, MAX_ANIMATION_SAMPLE_FRAMES, MAX_ANIMATION_SAMPLE_RATE_HZ,
     MAX_IMPORTED_ANIMATION_CHANNELS, MAX_IMPORTED_ANIMATION_CLIPS,
@@ -44,6 +48,8 @@ pub use material::{
     TextureMaterialMode, TextureSampleAsset, TextureSamplingPolicy, TextureSourceRef,
     TextureUvAttributeRef, TextureWrapPolicy, MAX_CONVERSION_TEXTURE_TEXELS,
 };
+pub use object_conversion::*;
+pub use object_query::*;
 pub use planning::{
     apply_conversion, apply_conversion_and_install, conversion_plan_hash, identity_transform,
     plan_conversion, plan_settings_sha256, preview_conversion, AppliedVoxelConversion,
@@ -57,11 +63,12 @@ pub use query::{
     VoxelModelWindowSample, MAX_MODEL_WINDOW_CELLS, MAX_MODEL_WINDOW_SAMPLES,
 };
 pub use source::{
-    decode_mesh_source_import_request, import_mesh_source, source_sha256, ImportedMeshSource,
-    MeshSourceBounds, MeshSourceFormat, MeshSourceGroup, MeshSourceImportReceipt,
-    MeshSourceImportRequest, MeshSourceMaterialSlot, MeshSourceMetadata, MeshSourceNode,
-    MeshSourceRef, MeshSourceTextureCoordinates, MAX_MESH_IMPORT_REQUEST_BYTES,
-    MAX_MESH_PRIMITIVE_BYTES, MAX_MESH_SOURCE_ASSET_ID_BYTES, MAX_MESH_SOURCE_PATH_BYTES,
+    decode_mesh_source_import_request, import_animated_mesh_source, import_mesh_source,
+    source_sha256, ImportedAnimatedMeshSource, ImportedMeshSource, MeshSourceBounds,
+    MeshSourceFormat, MeshSourceGroup, MeshSourceImportReceipt, MeshSourceImportRequest,
+    MeshSourceMaterialSlot, MeshSourceMetadata, MeshSourceNode, MeshSourceRef,
+    MeshSourceTextureCoordinates, MAX_MESH_IMPORT_REQUEST_BYTES, MAX_MESH_PRIMITIVE_BYTES,
+    MAX_MESH_SOURCE_ASSET_ID_BYTES, MAX_MESH_SOURCE_PATH_BYTES,
 };
 pub use store::{convert_and_install, decode_conversion_request, MAX_CONVERSION_REQUEST_BYTES};
 pub use voxel_asset::{

@@ -64,6 +64,7 @@ fn voxel_objects_are_canonical_owner_bytes_loaded_as_asset_data() {
                     "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                         .to_owned(),
                 license_path: None,
+                source_clips: vec![],
             },
             content_hash: String::new(),
         })

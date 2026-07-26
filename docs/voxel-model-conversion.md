@@ -1,6 +1,6 @@
 # Voxel model conversion and flipbook workflow
 
-Status: M12 working design and implementation schedule
+Status: current M12 design and implementation record
 
 Rusty Engine now distinguishes two durable voxel meanings:
 
@@ -25,13 +25,10 @@ The static path is already substantial:
 | `render-projection` | Stable retained voxel-instance/chunk handles and changed-payload projection. |
 | Studio | Project/host GLB selection, conversion settings, private Rust plan and renderer-visible preview, guarded apply/discard, canonical project persistence, import/export, and reopen integration proof. |
 
-The remaining conversion and authoring gaps are behavioral rather than language-boundary gaps:
-
-- static and animated import now share one bounded scene/primitive identity family, but animated
-  snapshots still need one fixed conversion grid and assembly into durable voxel-object clips;
-- Studio controls still describe one volume, not a reusable object and clips; and
-- the animated snapshots still need one temporally stable conversion assembly before Studio can
-  author and save the complete object workflow.
+Static and animated import now share one bounded scene/primitive identity family, and the offline
+converter assembles static defaults and sampled animated clips into durable voxel objects on one
+fixed grid. The remaining first-party authoring gap is Studio: its controls still describe one
+volume rather than a reusable object, clip ranges, and frame preview.
 
 The existing static workflow remains supported while these gaps close. M12 is an extension and
 quality campaign, not a rewrite of conversion or Studio.
@@ -44,7 +41,9 @@ quality campaign, not a rewrite of conversion or Studio.
 - right-handed Y-up local coordinates, positive cell size, chunk size, and a finite possibly
   fractional local pivot;
 - one required default `VoxelFrame`;
-- shared material palette, source-material mapping, and source/settings/tool provenance;
+- shared material palette, source-material mapping, and source/settings/tool provenance, including
+  exact source animation indices, names, ranges, rates, endpoint policies, and output clip IDs for
+  converted animated objects;
 - zero or more uniquely named clips with a default frame rate;
 - ordered frames with an optional per-frame duration override;
 - the exact union bounds of every stored frame;
@@ -198,6 +197,54 @@ Deliberate limits are narrow and visible: offline deformation accepts one four-i
 targeting matrix-authored nodes. Morph normal/tangent deltas are irrelevant to voxel positions and
 are not projected into the mesh snapshot. Additional joint sets must first be justified by a real
 conversion asset rather than silently changing work accounting.
+
+## Static and animated object conversion
+
+`voxel-convert` admits a static `mesh/...` source or a complete `mesh-animation/...` source through
+the same hash-pinned source receipt. Animated admission retains the authority-bearing clip model and
+also exposes one bind-pose mesh view for common groups, materials, UVs, and conversion settings. A
+static source produces only the required default frame. An animated request selects source clip
+names, absolute microsecond ranges, rates, endpoint policy, output clip IDs and names, an optional
+default clip, and one explicit animation anchor policy.
+
+Before voxelizing any frame, conversion transforms the bind pose and every selected sample and
+computes their exact union source envelope. M12C then maps every mesh through that immutable
+envelope with the same resolution, fit/origin policy, object-local `[0,0,0]` volume origin, pivot,
+palette, material map, texture policy, and deterministic surface-conflict rule. Individual frames
+cannot silently recompute their own scale or offset, which prevents breathing and grid drift. Every
+frame remains a complete schema-1 sparse arrangement; the durable object's bounds are the exact
+union of the converted default and clip frames.
+
+Frame duration is derived from adjacent integer-microsecond sample timestamps. An
+`ExcludeLoopSeam` clip holds its final sample through the exact selected range end, so its output
+duration equals the requested range. `IncludeClipEnd` retains the exact endpoint pose and gives it
+one nominal sample interval because schema 1 intentionally has no zero-duration frame. A zero-length
+range likewise produces one sample held for one nominal interval. Consecutive
+frames with equal resolved occupancy hashes are merged only while their summed duration remains
+representable; their complete source timestamp list remains in the conversion readout and timing is
+unchanged. Non-consecutive matches remain separate complete frames.
+
+Object plans bind the source snapshot, path, target identity, license, mesh settings, pivot, anchor,
+clip schedule, expected output hash, measured counts, bounds, and artifact size into one private
+prepared candidate. Preview and apply require the exact plan hash; apply may also pin the output
+hash. Preview reports sampled/stored frame counts, clip timings, union and per-frame bounds, voxel
+and run counts, deduplicated source timestamps, truncation, and bounded samples from an explicitly
+selected default or clip frame. Failed or stale apply is checked before the fail-atomic installer
+touches an existing asset.
+
+The same crate supplies stale-safe bounded object-info, frame-info, and frame-window queries plus
+the `voxel-object-convert` offline CLI. Conversion additionally caps aggregate deformation work at
+ten million units and aggregate geometric voxelization work at fifty million units; the durable
+schema continues to cap clips, sampled/stored frames, aggregate voxels, strings, coordinates,
+timing, and the 64 MiB artifact.
+
+Focused unoptimized local evidence on the checked Kenney character produced a three-sample run plus
+default frame in about 89 ms and a 30,642-byte canonical object. A 24 Hz low-resolution idle range
+sampled 25 poses, merged all equal quantized clip frames into one stored frame without changing the
+selected duration, and produced 5,458 bytes in about 589 ms. Timing is recorded as observational
+evidence rather than a machine-dependent CI threshold. Tests also cover repeatability, static
+objects, clip/range selection, anchor identity, palette stability, strict decoding, budgets, stale
+apply/install, selectable preview, object/frame/window queries, and the real CLI.
 
 Rust owns source parsing, deformation, voxelization, canonical assets, validation, frame
 resolution, bounded runtime admission, explicit-time playback, and renderer-neutral values. Studio
