@@ -96,9 +96,9 @@
         <section class="voxel-section">
           <header><strong>Voxel asset files</strong><span>trusted host open, save, and save-as with CAS</span></header>
           <div class="form-grid">
-            <label class="wide"><span>Import absolute path</span><input [(ngModel)]="importSourcePath" /></label>
+            <label class="wide"><span>Import absolute path</span><span class="host-path-field"><input [(ngModel)]="importSourcePath" /><button type="button" (click)="browseImportSource()">Browse…</button></span></label>
             <label class="wide"><span>Imported asset id</span><input [(ngModel)]="importTargetAssetId" /></label>
-            <label class="wide"><span>Export absolute path</span><input [(ngModel)]="exportTargetPath" /></label>
+            <label class="wide"><span>Export absolute path</span><span class="host-path-field"><input [(ngModel)]="exportTargetPath" /><button type="button" (click)="browseExportTarget()">Browse…</button></span></label>
             <label class="wide"><span>Expected target SHA-256 (replace only)</span><input [(ngModel)]="exportExpectedSha256" /></label>
           </div>
           <div class="button-row wrap">
@@ -312,10 +312,10 @@
           <div class="form-grid">
             <label class="wide"><span>Source asset</span><input [(ngModel)]="conversionSourceAsset" /></label>
             <label><span>Source scope</span><select [(ngModel)]="conversionSourceScope"><option value="project">Project</option><option value="host">Host file</option></select></label>
-            <label class="wide"><span>Source path</span><input [(ngModel)]="conversionSourcePath" /></label>
+            <label class="wide"><span>Source path</span><span class="host-path-field"><input [(ngModel)]="conversionSourcePath" /><button type="button" [disabled]="conversionSourceScope !== 'host'" (click)="browseConversionSource()">Browse…</button></span></label>
             <label class="wide"><span>Target asset</span><input [(ngModel)]="conversionTargetAsset" /></label>
             <label><span>License scope</span><select [(ngModel)]="conversionLicenseScope"><option value="project">Project</option><option value="host">Host file</option></select></label>
-            <label class="wide"><span>License path</span><input [(ngModel)]="conversionLicensePath" /></label>
+            <label class="wide"><span>License path</span><span class="host-path-field"><input [(ngModel)]="conversionLicensePath" /><button type="button" [disabled]="conversionLicenseScope !== 'host'" (click)="browseConversionLicense()">Browse…</button></span></label>
             <label class="wide"><span>Mesh primitive (for example group/0)</span><input [(ngModel)]="conversionMeshPrimitive" /></label>
             <label><span>Resolution X</span><input type="number" [(ngModel)]="conversionResolution[0]" /></label>
             <label><span>Resolution Y</span><input type="number" [(ngModel)]="conversionResolution[1]" /></label>

@@ -182,6 +182,14 @@ replacement is compare-and-swap guarded. Primitive/template generation, annotati
 conversion material policy, and deterministic environment generation remain in their Rust owners.
 Rejected or stale operations publish no bytes.
 
+Static and animated mesh appearance follows the same authority path. The downstream Rust adapter
+validates the selected asset and animation clip, then projects typed resource descriptors,
+`defineAnimatedMesh`, instance creation, and named playback. Studio's trusted Node host only resolves
+bounded project-relative GLB bytes, rejects symbolic links, and verifies the admitted SHA-256 before
+the shared renderer consumes them; the browser has no filesystem authority. Angular owns the
+asset/clip controls and disposable transform gizmos, but does not construct a private Three scene or
+replace materials inside an imported animated hierarchy merely to show selection.
+
 Angular owns forms, selection, transient brush state, and cancellation only. It structurally decodes
 the closed protocol but does not recompute hashes, validate voxel semantics, replay history, cast an
 authoritative ray, or forge conversion output. Renderer picks are untrusted hints transformed into

@@ -53,8 +53,7 @@ export interface StudioPresentationFrame {
 
 export interface StudioVoxelBrushPreview {
   readonly kind: 'brush';
-  readonly worldPoint: readonly [number, number, number];
-  readonly cellSize: number;
+  readonly transform: Transform;
   readonly radius: number;
   readonly mode: 'paint' | 'erase';
 }
@@ -80,7 +79,7 @@ export function presentStudioSelection(
   frame: RenderFrameDiff,
   selectedEntityId: number | null,
   previewEntityId: number | null,
-  previewTranslation: readonly [number, number, number] | null,
+  previewTransform: Transform | null,
   voxelPreview: StudioVoxelPreview | null = null,
 ): StudioPresentationFrame {
   const entityId = previewEntityId ?? selectedEntityId;
@@ -91,10 +90,10 @@ export function presentStudioSelection(
     ) ?? null;
   const transformPreviewApplied = creation !== null
     && previewEntityId === entityId
-    && previewTranslation !== null
-    && previewTranslation.every(Number.isFinite);
+    && previewTransform !== null
+    && validTransform(previewTransform);
   const transform: Transform | null = transformPreviewApplied
-    ? { ...creation.transform, translation: previewTranslation }
+    ? previewTransform
     : null;
   const selectionOps: readonly RenderDiff[] = creation === null
     ? []
@@ -102,7 +101,9 @@ export function presentStudioSelection(
         op: 'update',
         handle: creation.handle,
         transform,
-        material: { color: [0.96, 0.64, 0.2, 1], wireframe: true },
+        material: creation.supportsMaterialUpdate
+          ? { color: [0.96, 0.64, 0.2, 1], wireframe: true }
+          : null,
         visible: null,
         metadata: null,
       }];
@@ -128,19 +129,22 @@ function presentVoxelPreview(
   frame: RenderFrameDiff,
   preview: StudioVoxelPreview | null,
 ): readonly RenderDiff[] {
-  if (preview === null || !Number.isFinite(preview.cellSize) || preview.cellSize <= 0) return [];
+  if (preview === null) return [];
   if (preview.kind === 'brush') {
-    if (!preview.worldPoint.every(Number.isFinite) || !Number.isSafeInteger(preview.radius)) return [];
-    const size = preview.cellSize * (Math.max(0, preview.radius) * 2 + 1);
-    return [previewNode(
+    if (!validTransform(preview.transform) || !Number.isSafeInteger(preview.radius)) return [];
+    const diameter = Math.max(0, preview.radius) * 2 + 1;
+    return [previewNodeWithTransform(
       availablePreviewHandles(frame, 1)[0] as RenderHandle,
-      preview.worldPoint,
-      [size, size, size],
+      {
+        ...preview.transform,
+        scale: preview.transform.scale.map((value) => value * diameter) as unknown as Transform['scale'],
+      },
       preview.mode === 'paint' ? [0.2, 0.9, 0.55, 0.55] : [0.95, 0.24, 0.18, 0.55],
       ['studio-preview', 'voxel-brush-preview', `brush-mode:${preview.mode}`],
       'Voxel brush preview',
     )];
   }
+  if (!Number.isFinite(preview.cellSize) || preview.cellSize <= 0) return [];
   const samples = preview.samples.slice(0, MAX_CONVERSION_PREVIEW_NODES).filter(
     (sample) => sample.coordinate.every(Number.isFinite),
   );
@@ -168,6 +172,22 @@ function previewNode(
   tags: readonly string[],
   label: string,
 ): RenderDiff {
+  return previewNodeWithTransform(
+    handle,
+    { translation, rotation: [0, 0, 0, 1], scale },
+    color,
+    tags,
+    label,
+  );
+}
+
+function previewNodeWithTransform(
+  handle: RenderHandle,
+  transform: Transform,
+  color: readonly [number, number, number, number],
+  tags: readonly string[],
+  label: string,
+): RenderDiff {
   return {
     op: 'create',
     handle,
@@ -175,12 +195,18 @@ function previewNode(
     node: {
       geometry: { kind: 'cube' },
       material: { color, wireframe: true },
-      transform: { translation, rotation: [0, 0, 0, 1], scale },
+      transform,
       visible: true,
       layer: 'debug',
       metadata: { sourceEntity: null, sourceSceneNode: null, tags, label },
     },
   };
+}
+
+function validTransform(transform: Transform): boolean {
+  return transform.translation.every(Number.isFinite)
+    && transform.rotation.every(Number.isFinite)
+    && transform.scale.every((value) => Number.isFinite(value) && value > 0);
 }
 
 function availablePreviewHandles(frame: RenderFrameDiff, count: number): readonly RenderHandle[] {
@@ -201,6 +227,7 @@ interface CreatedPresentation {
   readonly handle: RenderHandle;
   readonly metadata: RenderMetadata;
   readonly transform: Transform;
+  readonly supportsMaterialUpdate: boolean;
 }
 
 function createdPresentation(operation: RenderDiff): CreatedPresentation | null {
@@ -210,19 +237,31 @@ function createdPresentation(operation: RenderDiff): CreatedPresentation | null 
         handle: operation.handle,
         metadata: operation.node.metadata,
         transform: operation.node.transform,
+        supportsMaterialUpdate: operation.node.geometry.kind !== 'group',
       };
     case 'createStaticMeshInstance':
+      return {
+        handle: operation.handle,
+        metadata: operation.instance.metadata,
+        transform: operation.instance.transform,
+        supportsMaterialUpdate: true,
+      };
     case 'createAnimatedMeshInstance':
       return {
         handle: operation.handle,
         metadata: operation.instance.metadata,
         transform: operation.instance.transform,
+        // Animated assets are object hierarchies. Their root has no single material
+        // for the generic update operation to replace, so selection stays visible
+        // through the Studio gizmo instead of mutating imported child materials.
+        supportsMaterialUpdate: false,
       };
     case 'createSprite':
       return {
         handle: operation.handle,
         metadata: operation.sprite.metadata,
         transform: operation.sprite.transform,
+        supportsMaterialUpdate: true,
       };
     default:
       return null;

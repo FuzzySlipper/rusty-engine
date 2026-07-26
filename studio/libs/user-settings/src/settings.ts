@@ -20,6 +20,11 @@ export interface StudioHostUserSettingsArtifact {
   readonly editor: {
     readonly snappingEnabled: boolean;
     readonly translationSnap: number;
+    readonly translationSnapAxes: readonly [number, number, number];
+    readonly rotationSnapDegrees: number;
+    readonly scaleSnapAxes: readonly [number, number, number];
+    readonly fineMultiplier: number;
+    readonly transformOrientation: 'world' | 'local';
   };
   readonly sceneView: {
     readonly gridVisible: boolean;
@@ -76,6 +81,11 @@ export function buildDefaultStudioHostUserSettings(
     editor: {
       snappingEnabled: true,
       translationSnap: 0.5,
+      translationSnapAxes: [0.5, 0.5, 0.5],
+      rotationSnapDegrees: 15,
+      scaleSnapAxes: [0.1, 0.1, 0.1],
+      fineMultiplier: 0.1,
+      transformOrientation: 'world',
     },
     sceneView: {
       gridVisible: true,
@@ -163,6 +173,24 @@ export function validateStudioHostUserSettings(
   const editor = requireRecord(value['editor'], 'editor settings');
   const snappingEnabled = requireBoolean(editor['snappingEnabled'], 'snapping enabled');
   const translationSnap = requirePositiveFinite(editor['translationSnap'], 'translation snap');
+  const translationSnapAxes = editor['translationSnapAxes'] === undefined
+    ? [translationSnap, translationSnap, translationSnap] as const
+    : requirePositiveVector3(editor['translationSnapAxes'], 'translation snap axes');
+  const rotationSnapDegrees = editor['rotationSnapDegrees'] === undefined
+    ? 15
+    : requirePositiveFinite(editor['rotationSnapDegrees'], 'rotation snap');
+  const scaleSnapAxes = editor['scaleSnapAxes'] === undefined
+    ? [0.1, 0.1, 0.1] as const
+    : requirePositiveVector3(editor['scaleSnapAxes'], 'scale snap axes');
+  const fineMultiplier = editor['fineMultiplier'] === undefined
+    ? 0.1
+    : requirePositiveUnit(editor['fineMultiplier'], 'fine transform multiplier');
+  const transformOrientation = editor['transformOrientation'] === undefined
+    ? 'world'
+    : editor['transformOrientation'];
+  if (transformOrientation !== 'world' && transformOrientation !== 'local') {
+    throw new TypeError('Transform orientation must be world or local.');
+  }
   const sceneView = requireRecord(value['sceneView'], 'scene-view settings');
   const gridVisible = requireBoolean(sceneView['gridVisible'], 'grid visibility');
   const minorColor = requireColor(sceneView['minorColor'], 'minor grid color');
@@ -201,7 +229,15 @@ export function validateStudioHostUserSettings(
     settingsVersion: RUSTY_STUDIO_HOST_USER_SETTINGS_VERSION,
     projectKey,
     theme,
-    editor: { snappingEnabled, translationSnap },
+    editor: {
+      snappingEnabled,
+      translationSnap,
+      translationSnapAxes,
+      rotationSnapDegrees,
+      scaleSnapAxes,
+      fineMultiplier,
+      transformOrientation,
+    },
     sceneView: {
       gridVisible,
       minorColor,
@@ -283,6 +319,26 @@ function requireUnitInterval(value: unknown, label: string): number {
     throw new TypeError(`${label} must be between zero and one.`);
   }
   return value;
+}
+
+function requirePositiveUnit(value: unknown, label: string): number {
+  const result = requirePositiveFinite(value, label);
+  if (result > 1) throw new TypeError(`${label} must be no greater than one.`);
+  return result;
+}
+
+function requirePositiveVector3(
+  value: unknown,
+  label: string,
+): readonly [number, number, number] {
+  if (!Array.isArray(value) || value.length !== 3) {
+    throw new TypeError(`${label} must contain three finite positive values.`);
+  }
+  return [
+    requirePositiveFinite(value[0], `${label} X`),
+    requirePositiveFinite(value[1], `${label} Y`),
+    requirePositiveFinite(value[2], `${label} Z`),
+  ];
 }
 
 function requireColor(

@@ -1,3 +1,5 @@
+import type { Transform } from '@rusty-engine/render-contracts';
+
 export type Vector3 = readonly [number, number, number];
 export type Vector3i = readonly [number, number, number];
 export type Quaternion = readonly [number, number, number, number];
@@ -183,6 +185,8 @@ export interface VoxelPickReadout {
   readonly instanceLocalPoint: Vector3;
   readonly worldPoint: Vector3;
   readonly worldDistance: number;
+  readonly hitPreviewTransform: Transform;
+  readonly placePreviewTransform: Transform;
 }
 
 export type VoxelAnnotationKind =
@@ -666,7 +670,7 @@ export function validateVoxelPickReadout(input: unknown, path: string): void {
   const value = closedObject(input, path, [
     'sceneId', 'instanceId', 'assetId', 'hitVoxel', 'hitFace', 'placeVoxel',
     'authorityHitVoxel', 'authorityPlaceVoxel', 'instanceLocalPoint', 'worldPoint',
-    'worldDistance',
+    'worldDistance', 'hitPreviewTransform', 'placePreviewTransform',
   ]);
   for (const field of ['sceneId', 'instanceId', 'assetId', 'hitFace']) {
     string(value[field], `${path}.${field}`);
@@ -676,6 +680,14 @@ export function validateVoxelPickReadout(input: unknown, path: string): void {
     'instanceLocalPoint', 'worldPoint',
   ]) vector3(value[field], `${path}.${field}`);
   number(value['worldDistance'], `${path}.worldDistance`);
+  for (const field of ['hitPreviewTransform', 'placePreviewTransform']) {
+    const transform = closedObject(value[field], `${path}.${field}`, [
+      'translation', 'rotation', 'scale',
+    ]);
+    vector3(transform['translation'], `${path}.${field}.translation`);
+    vector4(transform['rotation'], `${path}.${field}.rotation`);
+    vector3(transform['scale'], `${path}.${field}.scale`);
+  }
   enumValue(value['hitFace'], `${path}.hitFace`, [
     'negativeX', 'positiveX', 'negativeY', 'positiveY', 'negativeZ', 'positiveZ',
   ]);

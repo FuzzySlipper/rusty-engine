@@ -68,3 +68,28 @@ canvas:focus-visible {
 .renderer-readout {
   right: 8px;
 }
+
+.transform-gizmo {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  gap: 4px;
+  transform: translate(-50%, -50%);
+}
+
+.transform-gizmo button {
+  width: 30px;
+  height: 30px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  color: #fff;
+  background: #111b;
+  font-weight: 800;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.transform-gizmo .axis-x { color: #ef6961; }
+.transform-gizmo .axis-y { color: #5cdb88; }
+.transform-gizmo .axis-z { color: #669cf2; }

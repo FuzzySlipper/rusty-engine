@@ -262,6 +262,16 @@ small { color: var(--studio-muted); }
 .color-settings { grid-template-columns: repeat(5, minmax(76px, 1fr)); }
 .color-settings input { min-height: 30px; padding: 2px; }
 .keyboard-settings input { cursor: pointer; }
+.path-input { display: flex; min-width: 0; gap: 4px; color: inherit; text-transform: none; letter-spacing: normal; }
+.path-input input { min-width: 0; flex: 1; }
+.path-input button { white-space: nowrap; }
+.host-file-dialog { width: min(760px, 90vw); }
+.host-path-location { display: flex; align-items: center; gap: 8px; }
+.host-path-location code { min-width: 0; overflow: hidden; color: var(--studio-muted); text-overflow: ellipsis; white-space: nowrap; }
+.host-file-list { display: flex; min-height: 240px; max-height: 50vh; flex-direction: column; overflow: auto; border: 1px solid var(--studio-border); background: #11181c; }
+.host-file-list > button { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 8px; border: 0; border-bottom: 1px solid var(--studio-border-soft); border-radius: 0; background: transparent; text-align: left; }
+.host-file-list > button:hover { background: #203038; }
+.host-file-list > button small { color: var(--studio-muted); }
 
 @media (max-width: 1180px) {
   .workspace { grid-template-columns: 220px minmax(440px, 1fr) 260px; }

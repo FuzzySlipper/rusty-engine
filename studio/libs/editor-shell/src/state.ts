@@ -1,6 +1,7 @@
 import { signal, type Signal } from '@angular/core';
 import type {
   AdapterDescription,
+  AnimatedMeshResourceReadout,
   AssetBrowserReadout,
   AssetImportPlanReadout,
   CanonicalOwnerContent,
@@ -37,6 +38,11 @@ import type {
   RenderMetadata,
   Transform,
 } from '@rusty-engine/render-contracts';
+import type {
+  StudioTransformAxis,
+  StudioTransformOrientation,
+  StudioTransformTool,
+} from '@rusty-engine/studio-viewport';
 import {
   deriveVoxelPickValidation,
   type VoxelEditorAction,
@@ -50,6 +56,7 @@ import {
   type StudioKeyboardBindings,
   type StudioUserSettingsSnapshot,
 } from '@rusty-engine/studio-user-settings';
+import { applyTransformToolDelta, composeTransform } from './transform-tools.js';
 
 export type StudioConnectionState =
   | { readonly kind: 'disconnected'; readonly message: string }
@@ -66,6 +73,7 @@ export interface AuthoringDocumentView {
   readonly domain: LoadingBayDomainReadout;
   readonly voxel: Readonly<Record<string, unknown>> | null;
   readonly voxelAuthoring: VoxelAuthoringReadout;
+  readonly animatedMeshResources: readonly AnimatedMeshResourceReadout[];
 }
 
 export interface AssetWorkspaceState {
@@ -93,6 +101,8 @@ export interface LiveProjectionView {
 export interface TransformPreviewState {
   readonly entityId: number;
   readonly original: Transform;
+  readonly tool: StudioTransformTool;
+  readonly orientation: StudioTransformOrientation;
   readonly translation: readonly [number, number, number];
   readonly rotation: readonly [number, number, number, number];
   readonly scale: readonly [number, number, number];
@@ -124,6 +134,11 @@ export interface StudioViewSettings {
   readonly gridVisible: boolean;
   readonly snappingEnabled: boolean;
   readonly translationSnap: number;
+  readonly translationSnapAxes: readonly [number, number, number];
+  readonly rotationSnapDegrees: number;
+  readonly scaleSnapAxes: readonly [number, number, number];
+  readonly fineMultiplier: number;
+  readonly transformOrientation: StudioTransformOrientation;
   readonly theme: 'graphite' | 'highContrast';
   readonly minorColor: readonly [number, number, number, number];
   readonly majorColor: readonly [number, number, number, number];
@@ -614,6 +629,14 @@ export class StudioWorkspaceStore {
   }
 
   beginTranslationPreview(entityId: number): void {
+    this.beginTransformPreview(entityId, 'translate', this.#snapshot().settings.transformOrientation);
+  }
+
+  beginTransformPreview(
+    entityId: number,
+    tool: StudioTransformTool,
+    orientation: StudioTransformOrientation,
+  ): void {
     const node = this.#snapshot().authoringDocument?.sceneHierarchy.nodes.find(
       (candidate) => candidate.entityId === entityId,
     );
@@ -624,12 +647,65 @@ export class StudioWorkspaceStore {
       preview: {
         entityId,
         original: node.localTransform,
+        tool,
+        orientation,
         translation,
         rotation: node.localTransform.rotation,
         scale: node.localTransform.scale,
       },
       lastError: null,
     });
+  }
+
+  applyPreviewToolDelta(
+    axis: StudioTransformAxis,
+    delta: number,
+    fine: boolean,
+    toggleSnap: boolean,
+  ): void {
+    const current = this.#snapshot();
+    const preview = current.preview;
+    if (preview === null || !Number.isFinite(delta)) return;
+    const node = current.authoringDocument?.sceneHierarchy.nodes.find(
+      (candidate) => candidate.entityId === preview.entityId,
+    );
+    if (node === undefined) return;
+    const parentWorld = node.parentNodeId === null
+      ? null
+      : current.authoringDocument?.sceneHierarchy.nodes.find(
+          (candidate) => candidate.nodeId === node.parentNodeId,
+        )?.worldTransform ?? null;
+    const local: Transform = {
+      translation: preview.translation,
+      rotation: preview.rotation,
+      scale: preview.scale,
+    };
+    const world = parentWorld === null ? local : composeTransform(parentWorld, local);
+    const next = applyTransformToolDelta({
+      local,
+      world,
+      parentWorld,
+      tool: preview.tool,
+      orientation: preview.orientation,
+      axis,
+      delta,
+      fine,
+      toggleSnap,
+      settings: current.settings,
+    });
+    this.#patch({
+      preview: {
+        ...preview,
+        translation: next.translation,
+        rotation: next.rotation,
+        scale: next.scale,
+      },
+    });
+  }
+
+  setPreviewOrientation(orientation: StudioTransformOrientation): void {
+    const preview = this.#snapshot().preview;
+    if (preview !== null) this.#patch({ preview: { ...preview, orientation } });
   }
 
   setPreviewTranslationAxis(axis: 0 | 1 | 2, value: number): void {
@@ -1108,6 +1184,13 @@ export class StudioWorkspaceStore {
     const defaults = viewSettings(buildDefaultStudioHostUserSettings(current.userSettings.projectKey));
     this.updateSettings({
       gridVisible: defaults.gridVisible,
+      snappingEnabled: defaults.snappingEnabled,
+      translationSnap: defaults.translationSnap,
+      translationSnapAxes: defaults.translationSnapAxes,
+      rotationSnapDegrees: defaults.rotationSnapDegrees,
+      scaleSnapAxes: defaults.scaleSnapAxes,
+      fineMultiplier: defaults.fineMultiplier,
+      transformOrientation: defaults.transformOrientation,
       minorColor: defaults.minorColor,
       majorColor: defaults.majorColor,
       xAxisColor: defaults.xAxisColor,
@@ -1219,6 +1302,7 @@ export class StudioWorkspaceStore {
         domain: project.loadingBay,
         voxel: project.voxel ?? null,
         voxelAuthoring: project.voxelAuthoring,
+        animatedMeshResources: project.animatedMeshResources,
       },
       liveProjection: {
         frame: project.projection,
@@ -1528,6 +1612,11 @@ function viewSettings(artifact: StudioHostUserSettingsArtifact): StudioViewSetti
     theme: artifact.theme,
     snappingEnabled: artifact.editor.snappingEnabled,
     translationSnap: artifact.editor.translationSnap,
+    translationSnapAxes: [...artifact.editor.translationSnapAxes],
+    rotationSnapDegrees: artifact.editor.rotationSnapDegrees,
+    scaleSnapAxes: [...artifact.editor.scaleSnapAxes],
+    fineMultiplier: artifact.editor.fineMultiplier,
+    transformOrientation: artifact.editor.transformOrientation,
     gridVisible: artifact.sceneView.gridVisible,
     minorColor: [...artifact.sceneView.minorColor],
     majorColor: [...artifact.sceneView.majorColor],
@@ -1559,6 +1648,11 @@ function settingsArtifact(
     editor: {
       snappingEnabled: settings.snappingEnabled,
       translationSnap: settings.translationSnap,
+      translationSnapAxes: [...settings.translationSnapAxes],
+      rotationSnapDegrees: settings.rotationSnapDegrees,
+      scaleSnapAxes: [...settings.scaleSnapAxes],
+      fineMultiplier: settings.fineMultiplier,
+      transformOrientation: settings.transformOrientation,
     },
     sceneView: {
       gridVisible: settings.gridVisible,

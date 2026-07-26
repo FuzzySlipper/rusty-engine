@@ -29,6 +29,7 @@ import type {
 import type {
   VoxelBrushPreviewPresentation,
   VoxelEditorAction,
+  VoxelHostPathChooser,
 } from './voxel-editor-model.js';
 
 type EditorTab = 'assets' | 'edit' | 'annotations' | 'convert';
@@ -52,6 +53,7 @@ export class VoxelEditorComponent {
   } | null>(null);
   readonly historyPreview = input<VoxelHistoryRevertPreview | null>(null);
   readonly busy = input(false);
+  readonly chooseHostPath = input<VoxelHostPathChooser>(async () => null);
   readonly action = output<VoxelEditorAction>();
   readonly previewChange = output<VoxelBrushPreviewPresentation | null>();
 
@@ -395,8 +397,9 @@ export class VoxelEditorComponent {
     this.brushPreview.set(true);
     this.previewChange.emit({
       kind: 'brush',
-      worldPoint: pick.worldPoint,
-      cellSize: asset.inspection.cellSize,
+      transform: this.brushMode === 'paint'
+        ? pick.placePreviewTransform
+        : pick.hitPreviewTransform,
       radius: Math.max(0, integer(this.brushRadius, 0)),
       mode: this.brushMode,
     });
@@ -405,6 +408,43 @@ export class VoxelEditorComponent {
   cancelBrushPreview(): void {
     this.brushPreview.set(false);
     this.previewChange.emit(null);
+  }
+
+  browseImportSource(): void {
+    void this.chooseHostPath()({
+      kind: 'file',
+      title: 'Open voxel asset file',
+      initialPath: this.importSourcePath,
+      extensions: ['.json'],
+    }).then((path) => { if (path !== null) this.importSourcePath = path; });
+  }
+
+  browseExportTarget(): void {
+    void this.chooseHostPath()({
+      kind: 'directory',
+      title: 'Choose voxel export directory',
+      initialPath: hostParent(this.exportTargetPath),
+    }).then((path) => {
+      if (path !== null) this.exportTargetPath = `${path.replace(/\/+$/, '')}/voxel-export.avxl.json`;
+    });
+  }
+
+  browseConversionSource(): void {
+    void this.chooseHostPath()({
+      kind: 'file',
+      title: 'Choose mesh conversion source',
+      initialPath: this.conversionSourcePath,
+      extensions: ['.glb', '.gltf', '.json'],
+    }).then((path) => { if (path !== null) this.conversionSourcePath = path; });
+  }
+
+  browseConversionLicense(): void {
+    void this.chooseHostPath()({
+      kind: 'file',
+      title: 'Choose conversion license',
+      initialPath: this.conversionLicensePath,
+      extensions: ['.txt', '.md', '.license'],
+    }).then((path) => { if (path !== null) this.conversionLicensePath = path; });
   }
 
   applyBrush(): void {
@@ -780,6 +820,12 @@ function parseHexColor(value: string): readonly [number, number, number, number]
     Number.parseInt(match[1].slice(4, 6), 16) / 255,
     1,
   ];
+}
+
+function hostParent(path: string): string {
+  const normalized = path.replace(/\/+$/, '');
+  const separator = normalized.lastIndexOf('/');
+  return separator <= 0 ? '/' : normalized.slice(0, separator);
 }
 
 function tuple3(values: readonly number[]): readonly [number, number, number] {

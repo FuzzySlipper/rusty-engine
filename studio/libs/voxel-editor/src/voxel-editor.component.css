@@ -26,6 +26,9 @@ button:disabled { opacity: .42; cursor: default; }
 input, select { min-width: 0; padding: 5px 6px; box-sizing: border-box; width: 100%; }
 .form-row, .button-row, .axis-row, .chip-row { display: flex; gap: 5px; align-items: center; }
 .form-row input { flex: 1; }
+.host-path-field { display: flex; min-width: 0; gap: 4px; }
+.host-path-field input { min-width: 0; flex: 1; }
+.host-path-field button { white-space: nowrap; }
 .button-row { justify-content: flex-end; }
 .button-row.wrap, .chip-row { flex-wrap: wrap; justify-content: flex-start; }
 .axis-row input { width: 33.333%; }

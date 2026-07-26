@@ -48,3 +48,15 @@ void test('future or invalid settings preserve source text and disable replaceme
     /camera move speed must be finite and positive/i,
   );
 });
+
+void test('older v1 settings gain explicit transform-tool defaults without losing compatibility', () => {
+  const artifact = buildDefaultStudioHostUserSettings('rusty-studio-project:abc');
+  const legacy = JSON.stringify({
+    ...artifact,
+    editor: { snappingEnabled: true, translationSnap: 0.25 },
+  });
+  const parsed = parseStudioHostUserSettings(legacy);
+  assert.equal(parsed.status, 'loaded');
+  assert.deepEqual(parsed.artifact?.editor.translationSnapAxes, [0.25, 0.25, 0.25]);
+  assert.equal(parsed.artifact?.editor.transformOrientation, 'world');
+});

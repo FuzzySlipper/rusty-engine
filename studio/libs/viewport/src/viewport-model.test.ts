@@ -49,15 +49,19 @@ test('selection and preview are disposable shared-renderer frame presentations',
   assert.equal(selected.voxelPreviewKind, null);
   assert.equal(selected.frame.ops.at(-1)?.op, 'update');
 
-  const preview = presentStudioSelection(canonical, 42, 42, [5, 6, 7]);
+  const preview = presentStudioSelection(canonical, 42, 42, {
+    translation: [5, 6, 7],
+    rotation: [0, Math.SQRT1_2, 0, Math.SQRT1_2],
+    scale: [3, 4, 5],
+  });
   assert.equal(preview.previewApplied, true);
   const previewUpdate = preview.frame.ops.at(-1);
   assert.equal(previewUpdate?.op, 'update');
   if (previewUpdate?.op === 'update') {
     assert.deepEqual(previewUpdate.transform, {
       translation: [5, 6, 7],
-      rotation: [0, 0, 0, 1],
-      scale: [2, 2, 2],
+      rotation: [0, Math.SQRT1_2, 0, Math.SQRT1_2],
+      scale: [3, 4, 5],
     });
   }
 
@@ -67,8 +71,11 @@ test('selection and preview are disposable shared-renderer frame presentations',
 
   const brush = presentStudioSelection(canonical, 42, null, null, {
     kind: 'brush',
-    worldPoint: [1.5, 2.5, 3.5],
-    cellSize: 0.5,
+    transform: {
+      translation: [1.5, 2.5, 3.5],
+      rotation: [0, Math.SQRT1_2, 0, Math.SQRT1_2],
+      scale: [0.25, 0.5, 0.75],
+    },
     radius: 1,
     mode: 'erase',
   });
@@ -79,7 +86,8 @@ test('selection and preview are disposable shared-renderer frame presentations',
   if (brushCreate?.op === 'create') {
     assert.equal(brushCreate.node.layer, 'debug');
     assert.deepEqual(brushCreate.node.transform.translation, [1.5, 2.5, 3.5]);
-    assert.deepEqual(brushCreate.node.transform.scale, [1.5, 1.5, 1.5]);
+    assert.deepEqual(brushCreate.node.transform.rotation, [0, Math.SQRT1_2, 0, Math.SQRT1_2]);
+    assert.deepEqual(brushCreate.node.transform.scale, [0.75, 1.5, 2.25]);
   }
   assert.deepEqual(
     presentStudioSelection(canonical, 42, null, null).frame,
@@ -101,5 +109,55 @@ test('selection and preview are disposable shared-renderer frame presentations',
   assert.equal(firstSample?.op, 'create');
   if (firstSample?.op === 'create') {
     assert.deepEqual(firstSample.node.transform.translation, [1, 1, 1]);
+  }
+});
+
+test('animated selection preserves transform preview without replacing imported materials', () => {
+  const canonical: RenderFrameDiff = {
+    schemaVersion: 1,
+    ops: [{
+      op: 'createAnimatedMeshInstance',
+      handle: renderHandle(17),
+      parent: null,
+      instance: {
+        asset: 'character',
+        transform: {
+          translation: [1, 2, 3],
+          rotation: [0, 0, 0, 1],
+          scale: [1, 1, 1],
+        },
+        visible: true,
+        materialOverrides: [],
+        playback: {
+          kind: 'play',
+          clip: 'run',
+          loop: 'repeat',
+          speed: 1,
+          weight: 1,
+          restart: false,
+          fadeSeconds: null,
+        },
+        metadata: {
+          sourceEntity: 71,
+          sourceSceneNode: 9,
+          tags: [],
+          label: 'animated character',
+        },
+      },
+    }],
+  };
+  const previewTransform = {
+    translation: [4, 5, 6] as const,
+    rotation: [0, 0, 0, 1] as const,
+    scale: [2, 3, 4] as const,
+  };
+
+  const presentation = presentStudioSelection(canonical, 71, 71, previewTransform);
+
+  const selectionUpdate = presentation.frame.ops.at(-1);
+  assert.equal(selectionUpdate?.op, 'update');
+  if (selectionUpdate?.op === 'update') {
+    assert.deepEqual(selectionUpdate.transform, previewTransform);
+    assert.equal(selectionUpdate.material, null);
   }
 });

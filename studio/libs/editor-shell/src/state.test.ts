@@ -389,6 +389,7 @@ function projectReadout(changed: boolean, projectId = 'loading-bay'): unknown {
       instances: [],
       materials: [],
     },
+    animatedMeshResources: [],
     loadingBay: {
       sceneName: 'Loading Bay',
       entityCount: 2,

@@ -13,6 +13,7 @@ import {
   readStudioUserSettings,
   resolveStudioUserSettingsLocation,
   writeStudioUserSettings,
+  writeStudioUserSettingsWithMaintenance,
 } from '../scripts/studio-user-settings-service.js';
 
 void test('host settings survive a fresh service read and remain isolated per canonical project', async () => {
@@ -78,4 +79,53 @@ void test('host settings reject project-key substitution and symlink targets', a
     /regular non-symlink file/,
   );
   assert.equal(await readFile(outside, 'utf8'), '{}');
+});
+
+void test('competing same-target writes serialize into one commit and one stale result', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rusty-studio-settings-race-'));
+  const settingsRoot = join(root, 'settings');
+  const project = join(root, 'project');
+  await mkdir(project);
+  const location = await resolveStudioUserSettingsLocation({ projectRoot: project, settingsRoot });
+  const baseline = buildDefaultStudioHostUserSettings(location.projectKey);
+  const candidates = [11, 23].map((cameraMoveSpeed) => serializeStudioHostUserSettings({
+    ...baseline,
+    sceneView: { ...baseline.sceneView, cameraMoveSpeed },
+  }));
+
+  const results = await Promise.all(candidates.map((text) => writeStudioUserSettings({
+    projectRoot: project,
+    settingsRoot,
+    text,
+    expectedHash: null,
+  })));
+
+  assert.equal(results.filter((result) => result.ok).length, 1);
+  assert.equal(results.filter((result) => !result.ok && result.diagnostic === 'stale_user_settings').length, 1);
+  const stored = parseStudioHostUserSettings(
+    (await readStudioUserSettings({ projectRoot: project, settingsRoot })).text as string,
+  );
+  assert.equal(stored.status, 'loaded');
+  assert.ok([11, 23].includes(stored.artifact?.sceneView.cameraMoveSpeed as number));
+});
+
+void test('a post-rename maintenance failure still reports the committed settings truthfully', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rusty-studio-settings-commit-'));
+  const settingsRoot = join(root, 'settings');
+  const project = join(root, 'project');
+  await mkdir(project);
+  const location = await resolveStudioUserSettingsLocation({ projectRoot: project, settingsRoot });
+  const text = serializeStudioHostUserSettings(buildDefaultStudioHostUserSettings(location.projectKey));
+
+  const result = await writeStudioUserSettingsWithMaintenance({
+    projectRoot: project,
+    settingsRoot,
+    text,
+    expectedHash: null,
+  }, {
+    afterPublish: async () => { throw new Error('injected directory sync failure'); },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(await readFile(location.path, 'utf8'), text);
 });

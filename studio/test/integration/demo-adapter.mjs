@@ -105,7 +105,7 @@ async function main() {
     const opened = store.snapshot();
     assert.equal(opened.connection.kind, 'connected');
     assert.equal(opened.authoringDocument.identity.projectId, 'loading-bay');
-    assert.equal(opened.authoringDocument.inspections.catalog.entryCount, 6);
+    assert.equal(opened.authoringDocument.inspections.catalog.entryCount, 7);
     assert.equal(opened.authoringDocument.inspections.scene.nodeCount, 8);
     assert.equal(opened.authoringDocument.inspections.entityState.entityCount, 8);
     assert.equal(opened.authoringDocument.sceneHierarchy.nodes.length, 8);
@@ -116,7 +116,11 @@ async function main() {
     assert.equal(opened.authoringDocument.domain.voxelEnvironment, 'generatedRoom');
     assert.equal(opened.authoringDocument.domain.enemyCount, 2);
     assert.equal(opened.authoringDocument.voxel.solidVoxelCount, 366);
-    assert.equal(opened.liveProjection.frame.ops.length, 19);
+    assert.equal(opened.liveProjection.frame.ops.length, 20);
+    assert.ok(opened.liveProjection.frame.ops.some(
+      (operation) => operation.op === 'defineAnimatedMesh'
+        && operation.asset.asset === 'mesh-animation/kenney-retro-character-medium',
+    ));
     assert.equal(opened.liveProjection.readout.frameKind, 'complete');
     assert.equal(opened.liveProjection.readout.diagnostics.length, 0);
     assert.equal(opened.liveProjection.entities.length, 8);
@@ -131,7 +135,7 @@ async function main() {
       reread.authoringDocument.identity.sceneRevision,
       opened.authoringDocument.identity.sceneRevision,
     );
-    assert.equal(reread.liveProjection.frame.ops.length, 19);
+    assert.equal(reread.liveProjection.frame.ops.length, 20);
     assert.equal(reread.liveProjection.generation, opened.liveProjection.generation + 1);
 
     await store.closeProject();

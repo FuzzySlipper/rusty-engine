@@ -15,6 +15,7 @@ import type {
   VoxelMaterialBinding,
   VoxelModelWindowRequest,
   VoxelPickFace,
+  VoxelPickReadout,
   VoxelPrimitiveRequest,
   VoxelTemplateRequest,
 } from '@rusty-engine/studio-adapter-client';
@@ -30,11 +31,19 @@ export interface VoxelViewportPickCandidate {
 
 export interface VoxelBrushPreviewPresentation {
   readonly kind: 'brush';
-  readonly worldPoint: Vector3;
-  readonly cellSize: number;
+  readonly transform: VoxelPickReadout['hitPreviewTransform'];
   readonly radius: number;
   readonly mode: VoxelBrushMode;
 }
+
+export interface VoxelHostPathRequest {
+  readonly kind: 'file' | 'directory';
+  readonly title: string;
+  readonly initialPath: string;
+  readonly extensions?: readonly string[];
+}
+
+export type VoxelHostPathChooser = (request: VoxelHostPathRequest) => Promise<string | null>;
 
 export interface VoxelPickValidationInput {
   readonly sceneId: string;

@@ -9,6 +9,7 @@
   [attr.data-voxel-receipt]="state().voxelWorkspace.lastReceipt?.kind"
   [attr.data-voxel-assets]="state().authoringDocument?.voxelAuthoring?.assets?.length"
   [attr.data-project-assets]="state().authoringDocument?.assetBrowser?.assets?.length"
+  [attr.data-animated-instance-clips]="animatedProjectionClips()"
   [attr.data-asset-plan]="state().assetWorkspace.plan?.reimportKind"
   [attr.data-selected-asset]="state().assetWorkspace.selectedAssetId"
   [attr.data-user-settings-status]="state().userSettings.status"
@@ -85,11 +86,11 @@
   <section class="project-bar" data-visual-id="studio-project-open-controls">
     <label class="root-input">
       <span>External project root</span>
-      <input [(ngModel)]="projectRoot" placeholder="/absolute/path/to/project" autocomplete="off" />
+      <span class="path-input"><input [(ngModel)]="projectRoot" placeholder="/absolute/path/to/project" autocomplete="off" /><button type="button" (click)="browseProjectRoot()">Browse…</button></span>
     </label>
     <label class="project-file-input">
       <span>Project file</span>
-      <input [(ngModel)]="projectFile" autocomplete="off" />
+      <span class="path-input"><input [(ngModel)]="projectFile" autocomplete="off" /><button type="button" (click)="browseProjectFile()">Browse…</button></span>
     </label>
     <button type="button" class="primary" [disabled]="state().operation !== 'idle'" (click)="openProject()">
       {{ state().connection.kind === 'connected' ? 'Open' : 'Connect & Open' }}
@@ -164,11 +165,12 @@
       <header class="viewport-toolbar">
         <div class="tool-group" aria-label="Transform tools">
           <button type="button" class="is-active" title="Select">↖</button>
-          <button type="button" [disabled]="!canPreviewTranslation()" (click)="beginSelectedPreview()" title="Preview translation">✥</button>
-          <button type="button" [disabled]="!canPreviewTranslation()" (click)="beginSelectedPreview()" title="Preview full transform">⟳</button>
-          <button type="button" [disabled]="!canPreviewTranslation()" (click)="beginSelectedPreview()" title="Preview full transform">↗</button>
+          <button type="button" [class.is-active]="state().preview?.tool === 'translate'" [disabled]="!canPreviewTranslation()" (click)="beginSelectedPreview('translate')" title="Translate gizmo">✥</button>
+          <button type="button" [class.is-active]="state().preview?.tool === 'rotate'" [disabled]="!canPreviewTranslation()" (click)="beginSelectedPreview('rotate')" title="Rotate gizmo">⟳</button>
+          <button type="button" [class.is-active]="state().preview?.tool === 'scale'" [disabled]="!canPreviewTranslation()" (click)="beginSelectedPreview('scale')" title="Scale gizmo">↗</button>
         </div>
         <div class="tool-group">
+          <button type="button" [class.is-active]="state().settings.transformOrientation === 'world'" (click)="setTransformOrientation(state().settings.transformOrientation === 'world' ? 'local' : 'world')">{{ state().settings.transformOrientation }}</button>
           <button type="button" [class.is-active]="state().settings.gridVisible" (click)="store.updateSettings({ gridVisible: !state().settings.gridVisible })">Grid</button>
           <button type="button" [class.is-active]="state().settings.snappingEnabled" (click)="store.updateSettings({ snappingEnabled: !state().settings.snappingEnabled })">Snap {{ state().settings.translationSnap }}</button>
         </div>
@@ -184,11 +186,17 @@
             [controlPreferences]="viewportControlPreferences()"
             [selectedEntityId]="state().selection.entityId"
             [previewEntityId]="state().preview?.entityId ?? null"
-            [previewTranslation]="state().preview?.translation ?? null"
+            [previewTransform]="transformPreview()"
+            [transformTool]="state().preview?.tool ?? null"
+            [transformOrientation]="state().preview?.orientation ?? state().settings.transformOrientation"
             [voxelPreview]="voxelPreview()"
+            [animatedMeshManifest]="animatedMeshManifest()"
+            [resolveAnimatedMeshResource]="animatedMeshManifest() === null ? null : resolveAnimatedMeshResource"
+            [animatedMeshResourceKey]="animatedMeshResourceKey()"
             (entityPicked)="store.selectEntity($event, 'renderer')"
             (voxelPicked)="validateVoxelPick($event)"
             (rendererError)="store.reportUiError($event)"
+            (transformDelta)="applyTransformGizmoDelta($event)"
           />
           <div class="viewport-source-readout">
             <span>{{ projection.readout.retainedEntities }} entities</span>
@@ -311,6 +319,7 @@
           [conversion]="state().voxelWorkspace.conversion"
           [historyPreview]="state().voxelWorkspace.historyPreview"
           [busy]="state().operation !== 'idle'"
+          [chooseHostPath]="chooseHostPath"
           (action)="runVoxelAction($event)"
           (previewChange)="setBrushPreview($event)"
         />
@@ -409,9 +418,14 @@
             </section>
             <section class="inspector-section">
               <header><strong>Appearance</strong><span>shared renderer projection</span></header>
-              <label class="field-row"><span>Kind</span><select [(ngModel)]="appearanceKind"><option value="empty">Empty</option><option value="staticMesh">Static mesh</option><option value="light">Light</option></select></label>
+              <label class="field-row"><span>Kind</span><select [(ngModel)]="appearanceKind"><option value="empty">Empty</option><option value="staticMesh">Static mesh</option><option value="animatedMesh">Animated mesh</option><option value="light">Light</option></select></label>
               @if (appearanceKind === 'staticMesh') {
                 <label class="field-row"><span>Asset ID</span><input [(ngModel)]="appearanceAsset" placeholder="mesh/asset-id" /></label>
+                <label class="check-setting"><input type="checkbox" [(ngModel)]="appearanceVisible" /><span>Visible</span></label>
+              }
+              @if (appearanceKind === 'animatedMesh') {
+                <label class="field-row"><span>Asset</span><select [ngModel]="appearanceAsset" (ngModelChange)="chooseAnimatedMeshAsset('appearance', $event)"><option value="">Choose animated asset…</option>@for (resource of state().authoringDocument?.animatedMeshResources ?? []; track resource.asset) {<option [value]="resource.asset">{{ resource.asset }}</option>}</select></label>
+                <label class="field-row"><span>Clip</span><select [(ngModel)]="appearanceClip"><option value="">Choose clip…</option>@for (clip of animatedMeshClipIds(appearanceAsset); track clip) {<option [value]="clip">{{ clip }}</option>}</select></label>
                 <label class="check-setting"><input type="checkbox" [(ngModel)]="appearanceVisible" /><span>Visible</span></label>
               }
               @if (appearanceKind === 'light') {
@@ -496,6 +510,24 @@
               <span>Major line every</span>
               <input type="number" min="1" step="1" [value]="state().settings.majorLineEvery" (change)="store.updateSettings({ majorLineEvery: $any($event.target).valueAsNumber })" />
             </label>
+            @for (axis of [0, 1, 2]; track axis) {
+              <label>
+                <span>Translate {{ ['X', 'Y', 'Z'][axis] }} snap</span>
+                <input type="number" min="0.001" step="0.05" [value]="state().settings.translationSnapAxes[$any(axis)]" (change)="updateSnapAxis('translation', $any(axis), $any($event.target).valueAsNumber)" />
+              </label>
+              <label>
+                <span>Scale {{ ['X', 'Y', 'Z'][axis] }} snap</span>
+                <input type="number" min="0.001" step="0.05" [value]="state().settings.scaleSnapAxes[$any(axis)]" (change)="updateSnapAxis('scale', $any(axis), $any($event.target).valueAsNumber)" />
+              </label>
+            }
+            <label>
+              <span>Rotation snap (degrees)</span>
+              <input type="number" min="0.1" step="1" [value]="state().settings.rotationSnapDegrees" (change)="store.updateSettings({ rotationSnapDegrees: $any($event.target).valueAsNumber })" />
+            </label>
+            <label>
+              <span>Fine modifier multiplier</span>
+              <input type="number" min="0.01" max="1" step="0.05" [value]="state().settings.fineMultiplier" (change)="store.updateSettings({ fineMultiplier: $any($event.target).valueAsNumber })" />
+            </label>
             <label>
               <span>Grid opacity</span>
               <input type="number" min="0" max="1" step="0.05" [value]="state().settings.opacity" (change)="store.updateSettings({ opacity: $any($event.target).valueAsNumber })" />
@@ -515,7 +547,7 @@
           </label>
           <label class="check-setting">
             <input type="checkbox" [ngModel]="state().settings.snappingEnabled" (ngModelChange)="store.updateSettings({ snappingEnabled: $event })" />
-            <span>Enable translation snapping</span>
+            <span>Enable transform snapping (Ctrl/Cmd temporarily toggles; Shift is fine control)</span>
           </label>
           <fieldset>
             <legend>Grid colors</legend>
@@ -587,8 +619,8 @@
         </header>
         <div class="settings-body">
           @if (authoringDialog === 'createProject' || authoringDialog === 'saveProjectAs') {
-            <label><span>Project root</span><input [(ngModel)]="projectDraft.root" autocomplete="off" /></label>
-            <label><span>Project file</span><input [(ngModel)]="projectDraft.projectFile" autocomplete="off" /></label>
+            <label><span>Project root</span><span class="path-input"><input [(ngModel)]="projectDraft.root" autocomplete="off" /><button type="button" (click)="browseProjectDraftRoot()">Browse…</button></span></label>
+            <label><span>Project file</span><span class="path-input"><input [(ngModel)]="projectDraft.projectFile" autocomplete="off" /><button type="button" (click)="browseProjectDraftFile()">Browse…</button></span></label>
             <label><span>Project ID</span><input [(ngModel)]="projectDraft.projectId" /></label>
             <label><span>Name</span><input [(ngModel)]="projectDraft.name" /></label>
             @if (authoringDialog === 'createProject') {
@@ -607,13 +639,17 @@
             <label><span>Name</span><input [(ngModel)]="objectDraft.name" /></label>
             <label><span>Parent entity</span><input type="number" placeholder="root" [(ngModel)]="objectDraft.parentEntityId" /></label>
             <label><span>Child order</span><input type="number" min="0" step="1" [(ngModel)]="objectDraft.childOrder" /></label>
-            <label><span>Appearance</span><select [(ngModel)]="objectDraft.kind"><option value="empty">Empty</option><option value="staticMesh">Static mesh</option><option value="light">Light</option></select></label>
+            <label><span>Appearance</span><select [(ngModel)]="objectDraft.kind"><option value="empty">Empty</option><option value="staticMesh">Static mesh</option><option value="animatedMesh">Animated mesh</option><option value="light">Light</option></select></label>
             @if (objectDraft.kind === 'staticMesh') {<label><span>Asset ID</span><input [(ngModel)]="objectDraft.asset" placeholder="mesh/asset-id" /></label>}
+            @if (objectDraft.kind === 'animatedMesh') {
+              <label><span>Asset</span><select [ngModel]="objectDraft.asset" (ngModelChange)="chooseAnimatedMeshAsset('object', $event)"><option value="">Choose animated asset…</option>@for (resource of state().authoringDocument?.animatedMeshResources ?? []; track resource.asset) {<option [value]="resource.asset">{{ resource.asset }}</option>}</select></label>
+              <label><span>Clip</span><select [(ngModel)]="objectDraft.clip"><option value="">Choose clip…</option>@for (clip of animatedMeshClipIds(objectDraft.asset); track clip) {<option [value]="clip">{{ clip }}</option>}</select></label>
+            }
             <p>Creation installs hierarchy, full identity transform, appearance, and capability defaults as one atomic owner mutation.</p>
           }
           @if (authoringDialog === 'assetImport') {
             <label><span>Source scope</span><select [(ngModel)]="assetImportScope"><option value="project">Project-relative</option><option value="host">Trusted host path</option></select></label>
-            <label><span>Source mesh JSON</span><input [(ngModel)]="assetImportPath" autocomplete="off" /></label>
+            <label><span>Source mesh</span><span class="path-input"><input [(ngModel)]="assetImportPath" autocomplete="off" /><button type="button" [disabled]="assetImportScope !== 'host'" (click)="browseAssetImportSource()">Browse…</button></span></label>
             <label><span>Scale</span><input type="number" min="0.0001" step="0.1" [(ngModel)]="assetImportScale" /></label>
             <label><span>Material namespace</span><input [(ngModel)]="assetImportMaterialNamespace" placeholder="optional scoped-kebab" /></label>
             <label class="check-setting"><input type="checkbox" [(ngModel)]="assetImportGenerateCollision" /><span>Generate AABB collision when source is visual-only</span></label>
@@ -633,6 +669,39 @@
             <button type="button" (click)="authoringDialog = null">Cancel</button>
             <button type="button" class="primary" (click)="authoringDialog === 'object' ? createObject() : submitProjectDialog()">{{ authoringDialog === 'object' ? 'Create object' : authoringDialog === 'createProject' ? 'Create project' : 'Save copy' }}</button>
           }
+        </footer>
+      </section>
+    </div>
+  }
+
+  @if (hostPathDialog(); as browser) {
+    <div class="modal-backdrop" data-visual-id="studio-host-file-browser">
+      <section class="settings-dialog host-file-dialog" role="dialog" aria-modal="true" [attr.aria-label]="browser.request.title">
+        <header>
+          <div><strong>{{ browser.request.title }}</strong><small>Trusted host path · symlinks excluded</small></div>
+          <button type="button" aria-label="Close host file browser" (click)="cancelHostPathDialog()">×</button>
+        </header>
+        <div class="settings-body">
+          <div class="host-path-location">
+            <button type="button" [disabled]="browser.readout?.parent === null || browser.busy" (click)="navigateHostDirectory(browser.readout?.parent ?? '/')">↑ Parent</button>
+            <code>{{ browser.readout?.directory ?? browser.request.initialPath }}</code>
+          </div>
+          <input #hostPathFilter autofocus aria-label="Filter host files" placeholder="Filter this directory" [ngModel]="browser.filter" (ngModelChange)="setHostPathFilter($event)" />
+          @if (browser.error !== null) {<p class="asset-diagnostic is-error" role="alert">{{ browser.error }}</p>}
+          <div class="host-file-list" role="listbox" [attr.aria-busy]="browser.busy">
+            @for (entry of visibleHostEntries(); track entry.path) {
+              <button type="button" role="option" (click)="activateHostEntry(entry.path, entry.kind)">
+                <span>{{ entry.kind === 'directory' ? '▸' : '•' }}</span><strong>{{ entry.name }}</strong><small>{{ entry.kind }}</small>
+              </button>
+            } @empty {
+              <span>{{ browser.busy ? 'Reading directory…' : 'No matching entries.' }}</span>
+            }
+          </div>
+          @if (browser.readout?.truncated) {<small>Showing the first 512 bounded entries.</small>}
+        </div>
+        <footer>
+          <button type="button" (click)="cancelHostPathDialog()">Cancel</button>
+          @if (browser.request.kind === 'directory') {<button type="button" class="primary" [disabled]="browser.readout === null" (click)="chooseCurrentHostDirectory()">Choose this directory</button>}
         </footer>
       </section>
     </div>

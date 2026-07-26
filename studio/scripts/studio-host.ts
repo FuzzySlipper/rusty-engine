@@ -20,6 +20,8 @@ import {
   readStudioUserSettings,
   writeStudioUserSettings,
 } from './studio-user-settings-service.js';
+import { listStudioHostDirectory } from './studio-host-files-service.js';
+import { readStudioRenderResource } from './studio-render-resource-service.js';
 
 const DEFAULT_STATIC_ROOT = fileURLToPath(
   new URL('../dist/apps/studio-app/browser/', import.meta.url),
@@ -242,6 +244,57 @@ async function exchangeWithAdapter(
   response.end(responseLine);
 }
 
+async function exchangeHostFiles(
+  request: IncomingMessage,
+  response: ServerResponse,
+  url: URL,
+): Promise<void> {
+  if (request.method !== 'GET') {
+    response.writeHead(405, { allow: 'GET' });
+    response.end();
+    return;
+  }
+  const directories = url.searchParams.getAll('directory');
+  if (directories.length !== 1) {
+    sendError(response, 400, 'Exactly one host directory is required');
+    return;
+  }
+  sendJson(response, 200, await listStudioHostDirectory({
+    directory: directories[0] as string,
+    extensions: url.searchParams.getAll('extension'),
+  }));
+}
+
+async function exchangeRenderResource(
+  request: IncomingMessage,
+  response: ServerResponse,
+  url: URL,
+): Promise<void> {
+  if (request.method !== 'GET') {
+    response.writeHead(405, { allow: 'GET' });
+    response.end();
+    return;
+  }
+  const projectRoots = url.searchParams.getAll('projectRoot');
+  const sourcePaths = url.searchParams.getAll('sourcePath');
+  const contentHashes = url.searchParams.getAll('contentHash');
+  if (projectRoots.length !== 1 || sourcePaths.length !== 1 || contentHashes.length !== 1) {
+    sendError(response, 400, 'Exactly one projectRoot, sourcePath, and contentHash are required');
+    return;
+  }
+  const bytes = await readStudioRenderResource({
+    projectRoot: projectRoots[0] as string,
+    sourcePath: sourcePaths[0] as string,
+    contentHash: contentHashes[0] as string,
+  });
+  response.writeHead(200, {
+    'cache-control': 'no-store',
+    'content-type': 'model/gltf-binary',
+    'content-length': String(bytes.byteLength),
+  });
+  response.end(bytes);
+}
+
 async function serveStatic(
   request: IncomingMessage,
   response: ServerResponse,
@@ -379,6 +432,14 @@ async function main(): Promise<void> {
       }
       if (url.pathname === '/api/studio-user-settings') {
         await exchangeUserSettings(request, response, url, configured.settingsRoot);
+        return;
+      }
+      if (url.pathname === '/api/studio-host-files') {
+        await exchangeHostFiles(request, response, url);
+        return;
+      }
+      if (url.pathname === '/api/studio-render-resource') {
+        await exchangeRenderResource(request, response, url);
         return;
       }
       await serveStatic(request, response, configured.staticRoot, url.pathname);

@@ -10,7 +10,7 @@ import {
   unlink,
 } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import {
   parseStudioHostUserSettings,
@@ -45,6 +45,23 @@ export type StudioUserSettingsWriteResult =
         | 'stale_user_settings';
       readonly message: string;
     };
+
+export interface StudioUserSettingsPostCommitMaintenance {
+  readonly afterPublish: (path: string) => Promise<void>;
+}
+
+const writeTails = new Map<string, Promise<void>>();
+
+const defaultPostCommitMaintenance: StudioUserSettingsPostCommitMaintenance = {
+  async afterPublish(path): Promise<void> {
+    const directory = await open(dirname(path), 'r');
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
+  },
+};
 
 export function defaultStudioUserSettingsRoot(): string {
   const configured = process.env['XDG_CONFIG_HOME']?.trim();
@@ -118,6 +135,20 @@ export async function writeStudioUserSettings(options: {
   readonly expectedHash: string | null;
   readonly settingsRoot?: string;
 }): Promise<StudioUserSettingsWriteResult> {
+  return writeStudioUserSettingsWithMaintenance(options, defaultPostCommitMaintenance);
+}
+
+/**
+ * Same publication path with an injectable post-commit maintenance hook.
+ * This is exported from the host script so failure behavior at the rename
+ * boundary can be tested without creating a browser or Engine seam.
+ */
+export async function writeStudioUserSettingsWithMaintenance(options: {
+  readonly projectRoot: string;
+  readonly text: string;
+  readonly expectedHash: string | null;
+  readonly settingsRoot?: string;
+}, maintenance: StudioUserSettingsPostCommitMaintenance): Promise<StudioUserSettingsWriteResult> {
   const bytes = Buffer.from(options.text, 'utf8');
   if (bytes.byteLength > MAX_STUDIO_USER_SETTINGS_BYTES) {
     return {
@@ -142,43 +173,57 @@ export async function writeStudioUserSettings(options: {
       message: 'Host-user settings must be bound to the canonical project root key.',
     };
   }
-  const before = await readStudioUserSettings(options);
-  if (before.sha256 !== options.expectedHash) {
-    return {
-      ok: false,
-      diagnostic: 'stale_user_settings',
-      message: 'Host-user settings changed since they were loaded; reload before saving.',
-    };
-  }
-  await mkdir(location.settingsRoot, { recursive: true, mode: 0o700 });
-  const temporaryPath = join(location.settingsRoot, `.${randomUUID()}.tmp`);
-  let candidateCreated = false;
-  try {
-    const candidate = await open(temporaryPath, 'wx', 0o600);
-    candidateCreated = true;
-    try {
-      await candidate.writeFile(bytes);
-      await candidate.sync();
-    } finally {
-      await candidate.close();
-    }
-    const current = await readStudioUserSettings(options);
-    if (current.sha256 !== options.expectedHash) {
+  return serializeTargetWrite(location.path, async () => {
+    const before = await readStudioUserSettings(options);
+    if (before.sha256 !== options.expectedHash) {
       return {
         ok: false,
         diagnostic: 'stale_user_settings',
-        message: 'Host-user settings changed while a replacement was staged.',
-      };
+        message: 'Host-user settings changed since they were loaded; reload before saving.',
+      } as const;
     }
-    await rename(temporaryPath, location.path);
-    candidateCreated = false;
-    const readback = await readStudioUserSettings(options);
-    if (readback.sha256 !== sha256(bytes)) {
-      throw new Error('Host-user settings readback did not match the staged candidate.');
+    await mkdir(location.settingsRoot, { recursive: true, mode: 0o700 });
+    const temporaryPath = join(location.settingsRoot, `.${randomUUID()}.tmp`);
+    let candidateCreated = false;
+    try {
+      const candidate = await open(temporaryPath, 'wx', 0o600);
+      candidateCreated = true;
+      try {
+        await candidate.writeFile(bytes);
+        await candidate.sync();
+      } finally {
+        await candidate.close();
+      }
+      const current = await readStudioUserSettings(options);
+      if (current.sha256 !== options.expectedHash) {
+        return {
+          ok: false,
+          diagnostic: 'stale_user_settings',
+          message: 'Host-user settings changed while a replacement was staged.',
+        } as const;
+      }
+      await rename(temporaryPath, location.path);
+      candidateCreated = false;
+      const committedHash = sha256(bytes);
+      // Rename is the commit point. Directory durability maintenance cannot
+      // truthfully turn observable committed bytes into a rejected write.
+      await maintenance.afterPublish(location.path).catch(() => undefined);
+      return { ok: true, ...location, sha256: committedHash } as const;
+    } finally {
+      if (candidateCreated) await unlink(temporaryPath).catch(() => undefined);
     }
-    return { ok: true, ...location, sha256: readback.sha256 };
+  });
+}
+
+async function serializeTargetWrite<T>(path: string, operation: () => Promise<T>): Promise<T> {
+  const previous = writeTails.get(path) ?? Promise.resolve();
+  const run = previous.catch(() => undefined).then(operation);
+  const tail = run.then(() => undefined, () => undefined);
+  writeTails.set(path, tail);
+  try {
+    return await run;
   } finally {
-    if (candidateCreated) await unlink(temporaryPath).catch(() => undefined);
+    if (writeTails.get(path) === tail) writeTails.delete(path);
   }
 }
 

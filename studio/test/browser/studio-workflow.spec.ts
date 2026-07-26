@@ -168,7 +168,13 @@ test('host-user input settings and general asset import reimport persist through
   const shell = page.locator('[data-visual-id="studio-shell"]');
   const viewport = page.locator('rusty-studio-viewport');
   await expect(shell).toHaveAttribute('data-project-hash', /.+/);
-  await expect(viewport).toHaveAttribute('data-renderer-status', 'ready');
+  await expect.poll(async () => {
+    const status = await viewport.getAttribute('data-renderer-status');
+    if (status === 'error') {
+      throw new Error((await viewport.getAttribute('data-renderer-error')) ?? 'shared renderer failed');
+    }
+    return status;
+  }).toBe('ready');
 
   await page.getByRole('button', { name: 'View', exact: true }).click();
   await page.getByRole('button', { name: 'Studio Settings…', exact: true }).click();
@@ -197,7 +203,7 @@ test('host-user input settings and general asset import reimport persist through
   await page.getByRole('button', { name: 'File', exact: true }).click();
   await page.getByRole('button', { name: 'Import Project Asset…', exact: true }).click();
   let dialog = page.locator('[data-visual-id="studio-authoring-dialog"]');
-  await dialog.getByLabel('Source mesh JSON').fill('content/assets/studio-triangle.mesh.json');
+  await dialog.getByLabel('Source mesh').fill('content/assets/studio-triangle.mesh.json');
   await dialog.getByLabel('Scale', { exact: true }).fill('2');
   await dialog.getByLabel('Material namespace').fill('studio');
   await dialog.getByLabel('Generate AABB collision when source is visual-only').check();
@@ -207,7 +213,7 @@ test('host-user input settings and general asset import reimport persist through
   await expect(plan).toContainText('2 generated assets');
   await expect(shell).toHaveAttribute('data-project-hash', hashBeforePlan);
   await plan.getByRole('button', { name: 'Apply atomically', exact: true }).click();
-  await expect(shell).toHaveAttribute('data-project-assets', '8');
+  await expect(shell).toHaveAttribute('data-project-assets', '9');
   await expect.poll(() => projectHash(shell)).not.toBe(hashBeforePlan);
 
   const importedAsset = page.getByRole('option', { name: /mesh\/studio-triangle/ });
@@ -254,7 +260,7 @@ test('host-user input settings and general asset import reimport persist through
   await page.getByRole('button', { name: 'File', exact: true }).click();
   await page.getByRole('button', { name: 'Import Project Asset…', exact: true }).click();
   dialog = page.locator('[data-visual-id="studio-authoring-dialog"]');
-  await dialog.getByLabel('Source mesh JSON').fill('content/assets/rejected.mesh.json');
+  await dialog.getByLabel('Source mesh').fill('content/assets/rejected.mesh.json');
   await dialog.getByRole('button', { name: 'Prepare import', exact: true }).click();
   await expect(plan.locator('.asset-diagnostic.is-error').first()).toBeVisible();
   await expect(plan.getByRole('button', { name: 'Apply atomically', exact: true })).toBeDisabled();
@@ -264,9 +270,83 @@ test('host-user input settings and general asset import reimport persist through
   const persistedHash = await projectHash(shell);
   await page.reload();
   await expect(shell).toHaveAttribute('data-project-hash', persistedHash);
-  await expect(shell).toHaveAttribute('data-project-assets', '8');
+  await expect(shell).toHaveAttribute('data-project-assets', '9');
   await expect(shell).toHaveAttribute('data-user-settings-status', 'loaded');
   await expect(page.locator('.entity-row[data-entity-id="70"]')).toContainText('Imported Triangle');
+});
+
+test('trusted host browsing restores focus and animated appearance uses the shared renderer', async ({ page }) => {
+  await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(loadingBayProjectFile)}`);
+  const shell = page.locator('[data-visual-id="studio-shell"]');
+  const viewport = page.locator('rusty-studio-viewport');
+  await expect(shell).toHaveAttribute('data-project-hash', /.+/);
+  await expect.poll(async () => {
+    const status = await viewport.getAttribute('data-renderer-status');
+    if (status === 'error') {
+      throw new Error((await viewport.getAttribute('data-renderer-error')) ?? 'shared renderer failed');
+    }
+    return status;
+  }).toBe('ready');
+  await expect(viewport).toHaveAttribute('data-animated-mesh-resources', '1');
+
+  const projectControls = page.locator('[data-visual-id="studio-project-open-controls"]');
+  const browseRoot = projectControls.getByRole('button', { name: 'Browse…' }).first();
+  await browseRoot.click();
+  const browser = page.locator('[data-visual-id="studio-host-file-browser"]');
+  await expect(browser).toBeVisible();
+  await expect(browser.getByLabel('Filter host files')).toBeFocused();
+  await browser.getByLabel('Filter host files').fill('content');
+  await expect(browser.getByRole('option', { name: /content/ })).toBeVisible();
+  await browser.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(browser).toHaveCount(0);
+  await expect(browseRoot).toBeFocused();
+
+  await page.locator('.entity-row[data-entity-id="1"]').click();
+  await page.getByRole('button', { name: 'Entity', exact: true }).click();
+  const inspector = page.locator('.inspector-panel');
+  const hashBeforeTransform = await projectHash(shell);
+  await page.getByTitle('Rotate gizmo').click();
+  const gizmo = page.getByLabel('Transform gizmo');
+  await expect(gizmo).toHaveAttribute('data-tool', 'rotate');
+  await page.getByRole('button', { name: 'world', exact: true }).click();
+  await expect(gizmo).toHaveAttribute('data-orientation', 'local');
+  const xAxis = page.getByRole('button', { name: 'Drag X transform axis' });
+  const axisBox = await xAxis.boundingBox();
+  if (axisBox === null) throw new Error('transform gizmo axis has no browser bounds');
+  await page.mouse.move(axisBox.x + axisBox.width / 2, axisBox.y + axisBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(axisBox.x + axisBox.width / 2 + 24, axisBox.y + axisBox.height / 2);
+  await page.mouse.up();
+  await expect(inspector.getByLabel('Rotation X')).not.toHaveValue('0');
+  await inspector.locator('[data-action="commit-transform"]').click();
+  await expect.poll(() => projectHash(shell)).not.toBe(hashBeforeTransform);
+
+  await page.getByTitle('Scale gizmo').click();
+  await expect(gizmo).toHaveAttribute('data-tool', 'scale');
+  await inspector.locator('.inspector-actions').getByRole('button', { name: 'Cancel', exact: true }).click();
+
+  const appearance = inspector.locator('.inspector-section').filter({ hasText: 'Appearance' });
+  await appearance.getByLabel('Kind').selectOption('animatedMesh');
+  await appearance.getByLabel('Asset').selectOption('mesh-animation/kenney-retro-character-medium');
+  await appearance.getByLabel('Clip').selectOption('run');
+  const hashBeforeAppearance = await projectHash(shell);
+  await appearance.getByRole('button', { name: 'Apply appearance', exact: true }).click();
+  await expect.poll(() => projectHash(shell)).not.toBe(hashBeforeAppearance);
+  await expect(shell).toHaveAttribute('data-animated-instance-clips', /(?:^|,)run(?:,|$)/);
+  await expect.poll(async () => {
+    const status = await viewport.getAttribute('data-renderer-status');
+    if (status === 'error') {
+      throw new Error((await viewport.getAttribute('data-renderer-error')) ?? 'shared renderer failed');
+    }
+    return status;
+  }).toBe('ready');
+
+  const animatedHash = await projectHash(shell);
+  await page.reload();
+  await expect(shell).toHaveAttribute('data-project-hash', animatedHash);
+  await expect(shell).toHaveAttribute('data-animated-instance-clips', /(?:^|,)run(?:,|$)/);
+  await expect(viewport).toHaveAttribute('data-animated-mesh-resources', '1');
+  await expect(viewport).toHaveAttribute('data-renderer-status', 'ready');
 });
 
 test('voxel Studio owns the complete shared-renderer authoring workflow and rejects stale writes atomically', async ({ page }) => {

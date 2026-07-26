@@ -236,6 +236,12 @@ export interface StudioSceneObjectDraft {
 export type StudioSceneAppearance =
   | { readonly kind: 'empty' }
   | { readonly kind: 'staticMesh'; readonly asset: string; readonly visible: boolean }
+  | {
+      readonly kind: 'animatedMesh';
+      readonly asset: string;
+      readonly visible: boolean;
+      readonly clip: string;
+    }
   | { readonly kind: 'light'; readonly light: StoredLight };
 
 export type StoredLight =
@@ -747,9 +753,17 @@ export interface StudioProjectReadout {
   readonly assetBrowser: AssetBrowserReadout;
   readonly voxel?: Readonly<Record<string, unknown>>;
   readonly voxelAuthoring: VoxelAuthoringReadout;
+  readonly animatedMeshResources: readonly AnimatedMeshResourceReadout[];
   readonly loadingBay: LoadingBayDomainReadout;
   readonly projection: RenderFrameDiff;
   readonly projectionReadout: ProjectionReadout;
+}
+
+export interface AnimatedMeshResourceReadout {
+  readonly asset: string;
+  readonly contentHash: string;
+  readonly clipIds: readonly string[];
+  readonly sourcePath: string;
 }
 
 export interface AssetBrowserReadout {
@@ -857,7 +871,7 @@ export interface SceneHierarchyNodeReadout {
   readonly childOrder: number;
   readonly displayOrder: number;
   readonly depth: number;
-  readonly nodeKind: 'emptyGroup' | 'staticMesh' | 'sprite' | 'voxelVolume' | 'light' | 'marker' | 'entityInstance' | 'bootstrap';
+  readonly nodeKind: 'emptyGroup' | 'staticMesh' | 'animatedMesh' | 'sprite' | 'voxelVolume' | 'light' | 'marker' | 'entityInstance' | 'bootstrap';
   readonly label: string;
   readonly tags: readonly string[];
   readonly asset: string | null;
@@ -1193,6 +1207,7 @@ function projectReadout(input: unknown, path: string): void {
       'sceneHierarchy',
       'assetBrowser',
       'voxelAuthoring',
+      'animatedMeshResources',
       'loadingBay',
       'projection',
       'projectionReadout',
@@ -1207,6 +1222,7 @@ function projectReadout(input: unknown, path: string): void {
   optional(value['voxel'], `${path}.voxel`, looseRecord);
   voxelContract(`${path}.voxelAuthoring`, () =>
     validateVoxelAuthoringReadout(value['voxelAuthoring'], `${path}.voxelAuthoring`));
+  animatedMeshResources(value['animatedMeshResources'], `${path}.animatedMeshResources`);
   loadingBayReadout(value['loadingBay'], `${path}.loadingBay`);
   try {
     decodeRenderFrameDiff(value['projection']);
@@ -1217,6 +1233,19 @@ function projectReadout(input: unknown, path: string): void {
     );
   }
   projectionReadout(value['projectionReadout'], `${path}.projectionReadout`);
+}
+
+function animatedMeshResources(input: unknown, path: string): void {
+  list(input, path).forEach((entry, index) => {
+    const entryPath = `${path}[${String(index)}]`;
+    const resource = record(entry, entryPath, [
+      'asset', 'contentHash', 'clipIds', 'sourcePath',
+    ]);
+    text(resource['asset'], `${entryPath}.asset`);
+    text(resource['contentHash'], `${entryPath}.contentHash`);
+    stringList(resource['clipIds'], `${entryPath}.clipIds`);
+    text(resource['sourcePath'], `${entryPath}.sourcePath`);
+  });
 }
 
 function assetBrowser(input: unknown, path: string): void {
@@ -1350,6 +1379,7 @@ function hierarchyNode(input: unknown, path: string): void {
   choice(value['nodeKind'], `${path}.nodeKind`, [
     'emptyGroup',
     'staticMesh',
+    'animatedMesh',
     'sprite',
     'voxelVolume',
     'light',

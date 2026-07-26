@@ -10,9 +10,11 @@ import {
   type ElementRef,
   type OnDestroy,
 } from '@angular/core';
-import type { EditorGridDescriptor, RenderFrameDiff } from '@rusty-engine/render-contracts';
+import type { EditorGridDescriptor, RenderFrameDiff, Transform } from '@rusty-engine/render-contracts';
 import {
   mountRendererInspectionSurface,
+  type RendererAnimatedMeshResourceManifest,
+  type RendererAnimatedMeshResourceResolver,
   type RendererInspectionSurface,
   type RendererInspectionSurfaceControlPreferences,
 } from '@rusty-engine/renderer-host';
@@ -36,6 +38,17 @@ export interface VoxelViewportPickCandidate {
   readonly maxDistance: number;
 }
 
+export type StudioTransformTool = 'translate' | 'rotate' | 'scale';
+export type StudioTransformOrientation = 'world' | 'local';
+export type StudioTransformAxis = 0 | 1 | 2;
+
+export interface StudioTransformGizmoDelta {
+  readonly axis: StudioTransformAxis;
+  readonly delta: number;
+  readonly fine: boolean;
+  readonly toggleSnap: boolean;
+}
+
 @Component({
   selector: 'rusty-studio-viewport',
   standalone: true,
@@ -50,8 +63,10 @@ export interface VoxelViewportPickCandidate {
     '[attr.data-preview-applied]': 'previewApplied()',
     '[attr.data-voxel-preview-kind]': 'voxelPreviewKind()',
     '[attr.data-selected-render-handle]': 'selectedRenderHandle()',
+    '[attr.data-animated-mesh-resources]': 'animatedMeshManifest()?.resources?.length ?? 0',
     '[attr.data-camera-move-speed]': 'controlPreferences().moveSpeed',
     '[attr.data-camera-move-forward]': 'controlPreferences().keyboard.moveForward',
+    '[attr.data-renderer-error]': 'lastRendererError()',
   },
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
@@ -76,12 +91,18 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   });
   readonly selectedEntityId = input<number | null>(null);
   readonly previewEntityId = input<number | null>(null);
-  readonly previewTranslation = input<readonly [number, number, number] | null>(null);
+  readonly previewTransform = input<Transform | null>(null);
+  readonly transformTool = input<StudioTransformTool | null>(null);
+  readonly transformOrientation = input<StudioTransformOrientation>('world');
   readonly voxelPreview = input<StudioVoxelPreview | null>(null);
+  readonly animatedMeshManifest = input<RendererAnimatedMeshResourceManifest | null>(null);
+  readonly resolveAnimatedMeshResource = input<RendererAnimatedMeshResourceResolver | null>(null);
+  readonly animatedMeshResourceKey = input('');
 
   readonly entityPicked = output<number | null>();
   readonly voxelPicked = output<VoxelViewportPickCandidate>();
   readonly rendererError = output<string>();
+  readonly transformDelta = output<StudioTransformGizmoDelta>();
 
   readonly status = signal<ViewportStatus>('mounting');
   readonly retainedOpCount = signal(0);
@@ -91,12 +112,16 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   readonly previewApplied = signal(false);
   readonly voxelPreviewKind = signal<StudioVoxelPreview['kind'] | null>(null);
   readonly selectedRenderHandle = signal<number | null>(null);
+  readonly lastRendererError = signal('');
 
   @ViewChild('canvas', { static: true })
   private canvasElement!: ElementRef<HTMLCanvasElement>;
 
   #surface: RendererInspectionSurface | null = null;
   #destroyed = false;
+  #viewReady = false;
+  #mountRevision = 0;
+  #lastResourceKey = '';
   #lastPresentationKey = '';
   #pointerStart: readonly [number, number] | null = null;
   #pointerDragged = false;
@@ -107,7 +132,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       const frame = this.frame();
       const selectedEntityId = this.selectedEntityId();
       const previewEntityId = this.previewEntityId();
-      const previewTranslation = this.previewTranslation();
+      const previewTransform = this.previewTransform();
       const voxelPreview = this.voxelPreview();
       if (frame !== null) {
         this.#replaceFrame(
@@ -115,7 +140,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
           generation,
           selectedEntityId,
           previewEntityId,
-          previewTranslation,
+          previewTransform,
           voxelPreview,
         );
       }
@@ -127,9 +152,24 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       const preferences = this.controlPreferences();
       this.#configureControls(preferences);
     });
+    effect(() => {
+      const manifest = this.animatedMeshManifest();
+      const resolver = this.resolveAnimatedMeshResource();
+      const resourceKey = this.animatedMeshResourceKey();
+      const key = JSON.stringify([
+        resourceKey,
+        manifest?.kind ?? null,
+        manifest?.resources ?? [],
+        resolver === null,
+      ]);
+      if (key === this.#lastResourceKey) return;
+      this.#lastResourceKey = key;
+      if (this.#viewReady) void this.#mount();
+    });
   }
 
   ngAfterViewInit(): void {
+    this.#viewReady = true;
     void this.#mount();
   }
 
@@ -208,7 +248,19 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   }
 
   async #mount(): Promise<void> {
+    const mountRevision = ++this.#mountRevision;
+    const previous = this.#surface;
+    this.#surface = null;
+    previous?.dispose();
+    this.#lastPresentationKey = '';
+    this.lastRendererError.set('');
+    this.status.set('mounting');
     try {
+      const animatedMeshManifest = this.animatedMeshManifest();
+      const resolveAnimatedMeshResource = this.resolveAnimatedMeshResource();
+      if ((animatedMeshManifest === null) !== (resolveAnimatedMeshResource === null)) {
+        throw new Error('animated mesh manifest and resolver must be supplied together');
+      }
       const surface = await mountRendererInspectionSurface(
         this.canvasElement.nativeElement,
         {
@@ -221,9 +273,12 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
             ...this.controlPreferences(),
           },
           initialGrid: this.grid(),
+          ...(animatedMeshManifest === null || resolveAnimatedMeshResource === null
+            ? {}
+            : { animatedMeshManifest, resolveAnimatedMeshResource }),
         },
       );
-      if (this.#destroyed) {
+      if (this.#destroyed || mountRevision !== this.#mountRevision) {
         surface.dispose();
         return;
       }
@@ -236,12 +291,13 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
           this.frameGeneration(),
           this.selectedEntityId(),
           this.previewEntityId(),
-          this.previewTranslation(),
+          this.previewTransform(),
           this.voxelPreview(),
         );
       }
       this.#syncReadout();
     } catch (error) {
+      if (mountRevision !== this.#mountRevision) return;
       this.#fail(error instanceof Error ? error.message : 'shared renderer failed to mount');
     }
   }
@@ -251,7 +307,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     generation: number,
     selectedEntityId: number | null,
     previewEntityId: number | null,
-    previewTranslation: readonly [number, number, number] | null,
+    previewTransform: Transform | null,
     voxelPreview: StudioVoxelPreview | null,
   ): void {
     const surface = this.#surface;
@@ -259,7 +315,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       generation,
       selectedEntityId,
       previewEntityId,
-      previewTranslation,
+      previewTransform,
       voxelPreview,
     ]);
     if (surface === null || presentationKey === this.#lastPresentationKey) return;
@@ -267,7 +323,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       frame,
       selectedEntityId,
       previewEntityId,
-      previewTranslation,
+      previewTransform,
       voxelPreview,
     );
     const receipt = surface.replaceFrame(presentation.frame);
@@ -280,6 +336,37 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     this.voxelPreviewKind.set(presentation.voxelPreviewKind);
     this.selectedRenderHandle.set(presentation.selectedHandle);
     this.#syncReadout();
+  }
+
+  beginGizmoDrag(event: PointerEvent, axis: StudioTransformAxis): void {
+    if (event.button !== 0 || this.transformTool() === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLElement)) return;
+    target.setPointerCapture(event.pointerId);
+    let last = event.clientX - event.clientY;
+    const move = (moveEvent: PointerEvent): void => {
+      const current = moveEvent.clientX - moveEvent.clientY;
+      const pixels = current - last;
+      last = current;
+      if (Math.abs(pixels) < 0.01) return;
+      const sensitivity = this.transformTool() === 'rotate' ? 0.75 : 0.025;
+      this.transformDelta.emit({
+        axis,
+        delta: pixels * sensitivity,
+        fine: moveEvent.shiftKey,
+        toggleSnap: moveEvent.ctrlKey || moveEvent.metaKey,
+      });
+    };
+    const finish = (): void => {
+      target.removeEventListener('pointermove', move);
+      target.removeEventListener('pointerup', finish);
+      target.removeEventListener('pointercancel', finish);
+    };
+    target.addEventListener('pointermove', move);
+    target.addEventListener('pointerup', finish);
+    target.addEventListener('pointercancel', finish);
   }
 
   #setGrid(descriptor: EditorGridDescriptor | null): void {
@@ -318,6 +405,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   }
 
   #report(message: string): void {
+    this.lastRendererError.set(message);
     this.rendererError.emit(`Shared renderer: ${message}`);
   }
 }

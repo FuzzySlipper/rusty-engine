@@ -14,6 +14,12 @@ import {
 test('decodes the closed project response and delegates projection validation', () => {
   const response = projectOpened('request-1');
   response.project.identity.projectId = 'intentionally not semantically revalidated';
+  response.project.animatedMeshResources = [{
+    asset: 'mesh-animation/character',
+    contentHash: `sha256:${'1'.repeat(64)}`,
+    clipIds: ['idle', 'run'],
+    sourcePath: 'content/assets/character.glb',
+  }];
 
   const decoded = decodeStudioAdapterResponse(response);
 
@@ -23,6 +29,7 @@ test('decodes the closed project response and delegates projection validation', 
     'intentionally not semantically revalidated',
   );
   assert.equal(decoded.project.projection.ops.length, 0);
+  assert.deepEqual(decoded.project.animatedMeshResources[0]?.clipIds, ['idle', 'run']);
 });
 
 test('rejects unknown response families, extra fields, and malformed renderer frames', () => {
@@ -60,6 +67,19 @@ test('rejects unknown response families, extra fields, and malformed renderer fr
   assert.throws(
     () => decodeStudioAdapterResponse(incrementalFrame),
     /frameKind.*complete/,
+  );
+
+  const malformedResource = projectOpened('request-5');
+  malformedResource.project.animatedMeshResources = [{
+    asset: 'mesh-animation/character',
+    contentHash: `sha256:${'1'.repeat(64)}`,
+    clipIds: ['idle'],
+    sourcePath: 'content/assets/character.glb',
+    ambientUrl: 'file:///untrusted.glb',
+  }];
+  assert.throws(
+    () => decodeStudioAdapterResponse(malformedResource),
+    /animatedMeshResources\[0\]\.ambientUrl.*unknown/,
   );
 });
 
@@ -144,6 +164,16 @@ test('voxel response families are closed and named authoring calls preserve guar
       instanceLocalPoint: [4.5, 0.5, 7],
       worldPoint: [4.5, 0.5, 7],
       worldDistance: 12,
+      hitPreviewTransform: {
+        translation: [4.5, 0.5, 6.5],
+        rotation: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+      },
+      placePreviewTransform: {
+        translation: [4.5, 0.5, 7.5],
+        rotation: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+      },
     },
   };
   assert.equal(decodeStudioAdapterResponse(pick).type, 'voxelPickValidated');
@@ -399,6 +429,7 @@ function projectOpened(requestId: string): ProjectOpenedFixture {
         instances: [],
         materials: [],
       },
+      animatedMeshResources: [],
       loadingBay: {
         sceneName: 'Loading Bay',
         entityCount: 8,
@@ -462,6 +493,7 @@ interface ProjectOpenedFixture {
       instances: unknown[];
       materials: unknown[];
     };
+    animatedMeshResources: unknown[];
     loadingBay: Record<string, string | number>;
     projection: { schemaVersion: number; ops: unknown[] };
     projectionReadout: {
