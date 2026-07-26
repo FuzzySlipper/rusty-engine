@@ -11,7 +11,13 @@ import type {
   VoxelBounds,
   VoxelBrushMode,
   VoxelConversionSettings,
+  StoredVoxelObjectInstance,
   StudioFileSelection,
+  VoxelObjectClipConversionRequest,
+  VoxelObjectConversionSettings,
+  VoxelObjectFrameSelection,
+  VoxelObjectSourceClipReadout,
+  VoxelObjectSourceKind,
   VoxelMaterialBinding,
   VoxelModelWindowRequest,
   VoxelPickFace,
@@ -83,7 +89,89 @@ export type VoxelEditorAction =
   | { readonly kind: 'queryModel'; readonly assetId: string; readonly expectedAssetContentHash: string; readonly window?: VoxelModelWindowRequest }
   | { readonly kind: 'prepareConversion'; readonly sourceAssetId: string; readonly source: StudioFileSelection; readonly targetAssetId: string; readonly license?: StudioFileSelection; readonly meshPrimitive?: string; readonly settings: VoxelConversionSettings; readonly maxPreviewSamples: number }
   | { readonly kind: 'applyConversion'; readonly planId: string; readonly expectedPlanHash: string; readonly expectedOutputHash: string }
-  | { readonly kind: 'discardConversion'; readonly planId: string };
+  | { readonly kind: 'discardConversion'; readonly planId: string }
+  | { readonly kind: 'inspectObjectSource'; readonly sourceKind: VoxelObjectSourceKind; readonly sourceAssetId: string; readonly source: StudioFileSelection; readonly meshPrimitive?: string }
+  | { readonly kind: 'prepareObjectConversion'; readonly sourceKind: VoxelObjectSourceKind; readonly sourceAssetId: string; readonly source: StudioFileSelection; readonly targetAssetId: string; readonly license?: StudioFileSelection; readonly meshPrimitive?: string; readonly settings: VoxelObjectConversionSettings; readonly clips: readonly VoxelObjectClipConversionRequest[]; readonly defaultClip?: string; readonly frame: VoxelObjectFrameSelection; readonly maxPreviewSamples: number }
+  | { readonly kind: 'previewObjectFrame'; readonly planId: string; readonly expectedPlanHash: string; readonly frame: VoxelObjectFrameSelection; readonly maxPreviewSamples: number }
+  | { readonly kind: 'applyObjectConversion'; readonly planId: string; readonly expectedPlanHash: string; readonly expectedOutputHash: string }
+  | { readonly kind: 'discardObjectConversion'; readonly planId: string }
+  | { readonly kind: 'attachObjectInstance'; readonly sceneId: string; readonly instance: StoredVoxelObjectInstance };
+
+export interface VoxelObjectClipControlInput {
+  readonly selectedSourceClipNames: readonly string[];
+  readonly sampleRateHz: number;
+  readonly startSeconds: number;
+  readonly endSeconds: string;
+  readonly endPolicy: 'includeClipEnd' | 'excludeLoopSeam';
+  readonly defaultSourceClipName: string;
+}
+
+export interface VoxelObjectClipControlOutput {
+  readonly clips: readonly VoxelObjectClipConversionRequest[];
+  readonly defaultClip?: string;
+  readonly initialFrame: VoxelObjectFrameSelection;
+}
+
+/**
+ * Maps transient form selections to the closed Rust clip request. It chooses
+ * identities and time units only; sampling, deformation, deduplication, and
+ * hashes remain entirely Rust-owned.
+ */
+export function buildVoxelObjectClipControl(
+  available: readonly VoxelObjectSourceClipReadout[],
+  input: VoxelObjectClipControlInput,
+): VoxelObjectClipControlOutput {
+  const selected = new Set(input.selectedSourceClipNames);
+  const startMicroseconds = secondsToMicroseconds(input.startSeconds, 'startSeconds');
+  const endMicroseconds = input.endSeconds.trim() === ''
+    ? undefined
+    : secondsToMicroseconds(Number(input.endSeconds), 'endSeconds');
+  if (endMicroseconds !== undefined && endMicroseconds < startMicroseconds) {
+    throw new TypeError('Clip end must be greater than or equal to clip start.');
+  }
+  const sampleRateHz = Math.trunc(input.sampleRateHz);
+  if (!Number.isFinite(sampleRateHz) || sampleRateHz < 1 || sampleRateHz > 240) {
+    throw new TypeError('Clip sample rate must be an integer in 1..=240 Hz.');
+  }
+  const clips = available
+    .filter((clip) => selected.has(clip.name))
+    .map((clip) => ({
+      sourceClipName: clip.name,
+      outputClipId: objectClipId(clip.name, clip.sourceAnimationIndex),
+      outputName: clip.name,
+      sampleRateHz,
+      startMicroseconds,
+      ...(endMicroseconds === undefined ? {} : { endMicroseconds }),
+      endPolicy: input.endPolicy,
+    }));
+  const defaultClip = clips.find(
+    (clip) => clip.sourceClipName === input.defaultSourceClipName,
+  )?.outputClipId;
+  return {
+    clips,
+    ...(defaultClip === undefined ? {} : { defaultClip }),
+    initialFrame: clips[0] === undefined
+      ? { kind: 'default' }
+      : { kind: 'clip', clipId: clips[0].outputClipId, frameIndex: 0 },
+  };
+}
+
+function secondsToMicroseconds(value: number, label: string): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new TypeError(`${label} must be a finite non-negative number.`);
+  }
+  return Math.round(value * 1_000_000);
+}
+
+function objectClipId(name: string, sourceAnimationIndex: number): string {
+  const slug = name
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  const stableName = slug === '' ? 'animation' : slug;
+  return `clip/${stableName}-${String(sourceAnimationIndex + 1)}`;
+}
 
 /**
  * Converts a renderer hit into an explicitly untrusted authored-cell claim.

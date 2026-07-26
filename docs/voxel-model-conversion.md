@@ -23,12 +23,13 @@ The static path is already substantial:
 | `voxel-convert` | Bounded embedded GLB default-scene import with composed node transforms, multiple mesh instances/primitives, stable source identities, retained UV sets, explicit group/node selection, conservative triangle/cell coverage, closed-mesh interior classification, per-cell material evidence, contain/cover/stretch and origin policy, plan/preview/apply, bounded queries, stale guards, and fail-atomic installation. |
 | `engine-spatial` | Canonical material-voxel authority plus collision, navigation, and deterministic chunk meshes. |
 | `render-projection` | Stable retained voxel-instance/chunk handles and changed-payload projection. |
-| Studio | Project/host GLB selection, conversion settings, private Rust plan and renderer-visible preview, guarded apply/discard, canonical project persistence, import/export, and reopen integration proof. |
+| Studio | The existing volume workflow remains intact. Protocol 7 and the first-party UI now add static-object/animated-source inspection, clip/grid/pivot/material controls, Rust-frame scrub/playback, complete shared-renderer candidate frames, explicit apply/discard, canonical object readouts, and transformed object-instance intent. |
 
 Static and animated import now share one bounded scene/primitive identity family, and the offline
 converter assembles static defaults and sampled animated clips into durable voxel objects on one
-fixed grid. The remaining first-party authoring gap is Studio: its controls still describe one
-volume rather than a reusable object, clip ranges, and frame preview.
+fixed grid. The Engine-owned Studio surface now describes reusable objects, clip ranges, and exact
+stored-frame previews. The remaining integration gap is adoption by the external project-owned Rust
+adapter followed by pinned save/reopen and real-Chromium proof.
 
 The existing static workflow remains supported while these gaps close. M12 is an extension and
 quality campaign, not a rewrite of conversion or Studio.
@@ -294,6 +295,33 @@ release. Headless Rust and TypeScript tests prove admission, timing, reload, inv
 collision isolation, and cleanup; the focused Chromium/WebGL gate proves the same frame swap through
 the public shared renderer surface.
 
+## Studio protocol 7 authoring
+
+Studio keeps the volume converter unchanged and adds an explicit object/flipbook target. One named
+source-inspection request returns Rust-imported hierarchy, primitive groups, material slots, UV
+identity, clips, targeted nodes/properties, and diagnostics. Static sources may select the whole
+scene or one existing group/node selector; animated conversion deliberately selects the complete
+scene so skin and node animation remain coherent.
+
+Preparation carries the selected static/animated source mode, object identity, fixed local grid,
+pivot, anchor policy, clip schedules, palette/material policy, initial stored frame, and bounded
+sample quota. The response contains the immutable Rust plan/readout and a complete shared-renderer
+frame composed from canonical project content plus the private candidate. Scrub and transient
+play/pause controls issue only named stored-frame selections. They use Rust-provided frame durations
+and never derive occupancy, meshes, animation poses, bounds, or hashes.
+
+Apply pins project, plan, and output identity and returns a canonical project reread containing the
+object's grid, clips, every stored frame identity/timing, material bindings, provenance, and scene
+instances. A separate named operation attaches one transformed object instance with an explicit
+default or clip-frame posture. Rejected apply retains the private candidate; discard is explicit and
+returns a freshly composed canonical frame. Selecting or editing unrelated Studio content therefore
+does not turn candidate cleanup into ambient component lifecycle behavior.
+
+This repository owns the closed client, UI, state model, and standalone evidence. The concrete
+filesystem/project-schema adapter remains downstream in `rusty-engine-demo`; its adoption and the
+exact pinned Chromium/save/reopen proof are an explicit cross-repository dependency rather than an
+ordinary sibling-checkout requirement.
+
 ## Implementation schedule
 
 Den parent task `rusty-engine#6234` owns the campaign:
@@ -309,9 +337,10 @@ Den parent task `rusty-engine#6234` owns the campaign:
 | #6241 | Complete Studio object/flipbook authoring | #6239 and #6240 |
 | #6242 | Exact-revision runtime consumer and quality/performance closeout | #6241 |
 
-The fork after #6235 is deliberate: renderer/runtime work can prove a hand-authored object while
-import and voxelization improve independently. Animated conversion waits for both accurate geometry
-and sampled poses; Studio waits for a real converter and a shared runtime renderer path.
+The fork after #6235 is deliberate: renderer/runtime work could prove a hand-authored object while
+import and voxelization improved independently. Animated conversion then joined accurate geometry
+and sampled poses. Studio protocol 7 now uses that converter and shared runtime renderer path, with
+downstream adapter adoption as the final M12G integration step.
 
 ## Evidence and exclusions
 

@@ -1,6 +1,6 @@
 # Studio external-project adapter protocol
 
-Status: protocol 6 / M11F successor parity implemented; fresh exact-SHA acceptance pending
+Status: protocol 7 Engine surface implemented; downstream adapter adoption and exact-SHA acceptance pending
 
 Rusty Engine Studio talks to one project-owned Rust adapter at a time through a bounded JSON-lines
 process. The adapter is a downstream composition root: it understands that project's layout,
@@ -13,7 +13,7 @@ against a real external checkout without turning that checkout into an ordinary 
 
 ## Closed protocol
 
-Every request carries `protocolVersion: 6` and a caller-selected `requestId`. Version 6 contains
+Every request carries `protocolVersion: 7` and a caller-selected `requestId`. Version 7 contains
 only these tagged request families:
 
 | Request | Purpose | Canonical authority |
@@ -41,11 +41,16 @@ only these tagged request families:
 | `createVoxelAnnotationLayer`, `editVoxelAnnotation` | Create or transactionally edit typed semantic regions. | `voxel-annotation` plus target voxel identity |
 | `queryVoxelAnnotation`, `exportVoxelAnnotation`, `queryVoxelModel` | Return bounded owner readouts without sending canonical meaning to TypeScript. | `voxel-annotation`, `voxel-convert` query owners |
 | `prepareVoxelConversion`, `applyVoxelConversion`, `discardVoxelConversion` | Prepare a private bounded project/host GLB plan with primitive, affine, default-material, and typed texture policy; atomically install its exact output or discard it. | `voxel-convert`, `voxel-asset`, project adapter |
+| `inspectVoxelObjectSource` | Import a bounded static or animated GLB snapshot and expose Rust-derived hierarchy, groups, materials, UV sets, clips, channel targets, and classified diagnostics. | `voxel-convert`, project adapter |
+| `prepareVoxelObjectConversion`, `previewVoxelObjectConversion`, `applyVoxelObjectConversion`, `discardVoxelObjectConversion` | Retain one exact static-object or animated-flipbook candidate, select a stored frame for a complete shared-renderer projection, atomically install it, or explicitly discard it. | `voxel-convert`, `voxel-asset`, `voxel-object-runtime`, render projection, project adapter |
+| `attachVoxelObjectInstance` | Attach a transformed canonical object with one explicit default or clip-frame posture and material overrides. | downstream scene schema plus object admission/render projection |
 | `closeProject` | Release open-project and retained-projection state. | Project adapter host lifecycle |
 
 Responses are likewise a closed tagged union: `described`, `projectOpened`, `projectRead`,
 `entityTranslationApplied`, `projectMutationApplied`, `voxelPickValidated`, `voxelRead`,
-`voxelConversionPrepared`, `voxelConversionDiscarded`, `voxelHistoryRevertPrepared`,
+`voxelConversionPrepared`, `voxelConversionDiscarded`, `voxelObjectSourceInspected`,
+`voxelObjectConversionPrepared`, `voxelObjectConversionPreviewed`,
+`voxelObjectConversionDiscarded`, `voxelHistoryRevertPrepared`,
 `voxelHistoryRevertDiscarded`, `voxelAssetFileExported`, `assetImportPrepared`,
 `assetImportDiscarded`, `projectClosed`, or `rejected`. There is no
 generic method string, command registry, arbitrary payload, provider lookup, RuntimeSession, or
@@ -85,6 +90,18 @@ definitions, transformed scene instances, `engine-spatial` collision/edit/histor
 projection. The shared frame tags voxel assets and instances for renderer hint routing; Rust still
 revalidates the ray, transformed instance, local cell, and face before an edit can use the result.
 
+Protocol 7 adds a required `voxelObjectAuthoring` readout beside the unchanged voxel-volume
+readout. It exposes canonical object grid/pivot, frame identities and timing, clips, palette and
+source-material bindings, provenance, and transformed scene instances after every open, mutation,
+and reread. It is an inspection DTO over project-owned Rust content, not a TypeScript object format.
+
+Prepared object previews return a complete renderer-neutral frame composed by the downstream Rust
+adapter from the canonical project plus one private candidate instance. The frame contains the
+actual `defineVoxelObject` resource and object-instance operations produced through the shared
+runtime/projection path. Angular may select a clip/frame and run a disposable play timer, but every
+scrub or timer tick names a Rust-stored frame and receives another complete owner-produced frame.
+It never meshes sample voxels, deforms animation, computes timing, or manufactures hashes.
+
 ## Safety and atomicity
 
 The process bounds request and response bytes. The selected root must be absolute and the project
@@ -104,11 +121,14 @@ Every durable mutation is staged before publication:
 7. reread canonical bytes and confirm publication.
 
 Rejected, invalid, stale, and malformed operations leave the original project bytes unchanged.
-Prepared conversion plans and history reverts are private adapter-process values containing exact
-source/settings/project/asset identity. Visible fields are informative; apply succeeds only for the
-retained candidate and current optimistic guards. The adapter retains at most one prepared
-conversion and one prepared history move; a successful replacement prepare evicts the older
-candidate, whose identity then rejects without mutation. Voxel history is encoded beside the
+Prepared volume conversions, voxel-object conversions, and history reverts are private
+adapter-process values containing exact source/settings/project/asset identity. Visible fields are
+informative; apply succeeds only for the retained candidate and current optimistic guards. Object
+apply additionally pins the exact candidate output hash. Stale project/source/plan/output identity
+and an oversized renderer projection fail before publication. Object discard returns a newly
+composed canonical complete frame rather than asking Studio to restore browser-owned scene state.
+The adapter retains at most one prepared candidate of each kind; a successful replacement prepare
+evicts the older candidate, whose identity then rejects without mutation. Voxel history is encoded beside the
 embedded asset and reconstructed by a fresh process before query, undo, redo, or revert.
 
 Asset-import plans use the same pattern. The visible plan contains settings, source hash, generated

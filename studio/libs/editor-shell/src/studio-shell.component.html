@@ -336,10 +336,13 @@
       @if (inspectorMode === 'voxel') {
         <rusty-voxel-editor
           [authoring]="state().authoringDocument?.voxelAuthoring ?? null"
+          [objectAuthoring]="state().authoringDocument?.voxelObjectAuthoring ?? null"
           [entryScene]="state().authoringDocument?.identity?.entryScene ?? ''"
           [validatedPick]="state().voxelWorkspace.validatedPick"
           [lastReadout]="state().voxelWorkspace.lastReadout"
           [conversion]="state().voxelWorkspace.conversion"
+          [objectSourceInspection]="state().voxelWorkspace.objectSourceInspection"
+          [objectConversion]="state().voxelWorkspace.objectConversion"
           [historyPreview]="state().voxelWorkspace.historyPreview"
           [busy]="state().operation !== 'idle'"
           [chooseHostPath]="chooseHostPath"

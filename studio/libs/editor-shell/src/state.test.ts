@@ -156,6 +156,93 @@ test('opening a second project clears project-scoped selection and preview even 
   );
 });
 
+test('voxel-object source, shared candidate frames, stale apply, explicit discard, apply, and reopen stay distinct', async () => {
+  const client = new VoxelObjectFixtureClient();
+  const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
+  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+
+  await store.runVoxelAction({
+    kind: 'inspectObjectSource',
+    sourceKind: 'animated',
+    sourceAssetId: 'mesh-animation/character',
+    source: { scope: 'host', path: '/trusted/character.glb' },
+  });
+  assert.equal(store.snapshot().voxelWorkspace.objectSourceInspection?.clips[0]?.name, 'Walk');
+
+  await store.runVoxelAction(objectPrepareAction());
+  assert.equal(store.snapshot().voxelWorkspace.objectConversion?.preview.storedFrameCount, 3);
+  assert.equal(store.snapshot().liveProjection?.frame.ops[0]?.op, 'create');
+  assert.equal(firstProjectionLabel(store), 'voxel-object-candidate-0');
+
+  const conversion = store.snapshot().voxelWorkspace.objectConversion;
+  assert.ok(conversion !== null);
+  await store.runVoxelAction({
+    kind: 'previewObjectFrame',
+    planId: conversion.plan.planId,
+    expectedPlanHash: conversion.plan.planHash,
+    frame: { kind: 'clip', clipId: 'clip/walk-1', frameIndex: 1 },
+    maxPreviewSamples: 64,
+  });
+  assert.equal(store.snapshot().voxelWorkspace.objectConversion?.preview.selectedFrame.selection.kind, 'clip');
+  assert.equal(firstProjectionLabel(store), 'voxel-object-candidate-1');
+
+  client.rejectObjectApply = true;
+  await store.runVoxelAction({
+    kind: 'applyObjectConversion',
+    planId: conversion.plan.planId,
+    expectedPlanHash: conversion.plan.planHash,
+    expectedOutputHash: conversion.preview.outputHash,
+  });
+  assert.match(store.snapshot().lastError ?? '', /project\.staleHash/);
+  assert.equal(store.snapshot().authoringDocument?.voxelObjectAuthoring.assets.length, 0);
+  assert.ok(store.snapshot().voxelWorkspace.objectConversion !== null);
+
+  client.rejectObjectApply = false;
+  await store.runVoxelAction({
+    kind: 'discardObjectConversion',
+    planId: conversion.plan.planId,
+  });
+  assert.equal(store.snapshot().voxelWorkspace.objectConversion, null);
+  assert.equal(firstProjectionLabel(store), 'player');
+
+  await store.runVoxelAction(objectPrepareAction());
+  const preparedAgain = store.snapshot().voxelWorkspace.objectConversion;
+  assert.ok(preparedAgain !== null);
+  await store.runVoxelAction({
+    kind: 'applyObjectConversion',
+    planId: preparedAgain.plan.planId,
+    expectedPlanHash: preparedAgain.plan.planHash,
+    expectedOutputHash: preparedAgain.preview.outputHash,
+  });
+  assert.equal(store.snapshot().voxelWorkspace.objectConversion, null);
+  assert.equal(store.snapshot().authoringDocument?.voxelObjectAuthoring.assets[0]?.clips[0]?.frames.length, 2);
+
+  await store.runVoxelAction({
+    kind: 'attachObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instance: {
+      instanceId: 'character-one',
+      voxelObjectAssetId: 'voxel-object/character',
+      frame: { kind: 'clip', clipId: 'clip/walk-1', frameIndex: 1 },
+      translation: [4, 0, 2],
+      rotation: [0, 0, 0, 1],
+      scale: [2, 2, 2],
+      materialOverrides: [],
+    },
+  });
+  assert.deepEqual(
+    store.snapshot().authoringDocument?.voxelObjectAuthoring.instances[0]?.instance.translation,
+    [4, 0, 2],
+  );
+
+  const reopened = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
+  await reopened.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  assert.deepEqual(
+    reopened.snapshot().authoringDocument?.voxelObjectAuthoring,
+    store.snapshot().authoringDocument?.voxelObjectAuthoring,
+  );
+});
+
 test('host-user camera and keyboard settings persist outside project authority and reload by project root', async () => {
   const settingsHost = new FixtureSettingsHost();
   const first = new StudioWorkspaceStore(
@@ -267,6 +354,118 @@ class FixtureTransport implements StudioAdapterTransport {
   }
 }
 
+class VoxelObjectFixtureClient {
+  rejectObjectApply = false;
+  applied = false;
+  attached = false;
+
+  describe() {
+    return Promise.resolve(described('describe-object') as never);
+  }
+
+  openProject() {
+    return Promise.resolve({
+      type: 'projectOpened',
+      protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+      requestId: 'open-object',
+      project: this.#project(),
+    } as never);
+  }
+
+  readProject() {
+    return Promise.resolve({
+      type: 'projectRead',
+      protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+      requestId: 'read-object',
+      project: this.#project(),
+    } as never);
+  }
+
+  inspectVoxelObjectSource() {
+    return Promise.resolve({ inspection: objectSourceInspection() } as never);
+  }
+
+  prepareVoxelObjectConversion() {
+    return Promise.resolve({
+      plan: objectPlan(),
+      preview: objectPreview(0),
+      projection: objectCandidateProjection(0),
+      projectionReadout: projectionReadout(20),
+    } as never);
+  }
+
+  previewVoxelObjectConversion(input: { readonly frame: { readonly kind: string; readonly frameIndex?: number } }) {
+    const frame = input.frame.kind === 'clip' ? input.frame.frameIndex ?? 0 : 0;
+    return Promise.resolve({
+      preview: objectPreview(frame),
+      projection: objectCandidateProjection(frame),
+      projectionReadout: projectionReadout(20 + frame),
+    } as never);
+  }
+
+  applyVoxelObjectConversion() {
+    if (this.rejectObjectApply) return Promise.reject(new Error('project.staleHash: source changed'));
+    this.applied = true;
+    return Promise.resolve({
+      receipt: {
+        kind: 'voxelObjectConversionApplied',
+        planId: 'plan/object',
+        planHash: 'sha256:plan',
+        assetId: 'voxel-object/character',
+        outputHash: 'sha256:object',
+        storedFrames: 3,
+        aggregateVoxels: 3,
+      },
+      project: this.#project(),
+    } as never);
+  }
+
+  discardVoxelObjectConversion() {
+    const project = this.#project();
+    return Promise.resolve({
+      planId: 'plan/object',
+      projection: project.projection,
+      projectionReadout: project.projectionReadout,
+    } as never);
+  }
+
+  attachVoxelObjectInstance() {
+    this.attached = true;
+    return Promise.resolve({
+      receipt: {
+        kind: 'voxelObjectInstanceAttached',
+        sceneId: 'scene/loading-bay',
+        instanceId: 'character-one',
+        assetId: 'voxel-object/character',
+        frameKind: 'clip',
+      },
+      project: this.#project(),
+    } as never);
+  }
+
+  #project() {
+    const project = projectReadout(false);
+    return {
+      ...project,
+      voxelObjectAuthoring: {
+        assets: this.applied ? [objectAssetReadout()] : [],
+        instances: this.attached ? [{
+          sceneId: 'scene/loading-bay',
+          instance: {
+            instanceId: 'character-one',
+            voxelObjectAssetId: 'voxel-object/character',
+            frame: { kind: 'clip', clipId: 'clip/walk-1', frameIndex: 1 },
+            translation: [4, 0, 2],
+            rotation: [0, 0, 0, 1],
+            scale: [2, 2, 2],
+            materialOverrides: [],
+          },
+        }] : [],
+      },
+    };
+  }
+}
+
 class FixtureSettingsHost {
   readonly projectKey = 'rusty-studio-project:fixture';
   text: string | null = null;
@@ -346,7 +545,7 @@ function projectResponse(
   };
 }
 
-function projectReadout(changed: boolean, projectId = 'loading-bay'): unknown {
+function projectReadout(changed: boolean, projectId = 'loading-bay') {
   const translation = changed ? [4.5, 2, 3] : [1, 2, 3];
   return {
     identity: {
@@ -443,6 +642,10 @@ function projectReadout(changed: boolean, projectId = 'loading-bay'): unknown {
       instances: [],
       materials: [],
     },
+    voxelObjectAuthoring: {
+      assets: [],
+      instances: [],
+    },
     animatedMeshResources: [],
     loadingBay: {
       sceneName: 'Loading Bay',
@@ -483,6 +686,268 @@ function projectReadout(changed: boolean, projectId = 'loading-bay'): unknown {
       diagnostics: [],
     },
   };
+}
+
+function objectPrepareAction() {
+  return {
+    kind: 'prepareObjectConversion' as const,
+    sourceKind: 'animated' as const,
+    sourceAssetId: 'mesh-animation/character',
+    source: { scope: 'host' as const, path: '/trusted/character.glb' },
+    targetAssetId: 'voxel-object/character',
+    settings: {
+      mesh: objectMeshSettings(),
+      pivot: [0, 0, 0] as const,
+      anchorPolicy: { kind: 'preserveSourceSpace' as const },
+    },
+    clips: [{
+      sourceClipName: 'Walk',
+      outputClipId: 'clip/walk-1',
+      outputName: 'Walk',
+      sampleRateHz: 12,
+      startMicroseconds: 0,
+      endPolicy: 'excludeLoopSeam' as const,
+    }],
+    defaultClip: 'clip/walk-1',
+    frame: { kind: 'clip' as const, clipId: 'clip/walk-1', frameIndex: 0 },
+    maxPreviewSamples: 64,
+  };
+}
+
+function objectSourceInspection() {
+  return {
+    sourceKind: 'animated' as const,
+    source: {
+      assetId: 'mesh-animation/character',
+      assetVersion: 1,
+      sourceSha256: 'sha256:source',
+    },
+    sourcePath: '/trusted/character.glb',
+    sourceByteCount: 1024,
+    metadata: {
+      sourceSceneIndex: 0,
+      sourceSceneName: 'Character',
+      sourceBounds: { min: [-1, 0, -1] as const, max: [1, 2, 1] as const },
+      vertexCount: 4,
+      triangleCount: 2,
+      groups: [],
+      materialSlots: [{ sourceMaterialSlot: 0, sourceMaterialName: 'Body' }],
+      nodes: [],
+      textureCoordinates: [],
+    },
+    clips: [{
+      sourceAnimationIndex: 0,
+      name: 'Walk',
+      durationMicroseconds: 1_000_000,
+      channelCount: 2,
+      targetNodeIndices: [0],
+      properties: ['translation' as const],
+    }],
+    diagnostics: [],
+  };
+}
+
+function objectPlan() {
+  return {
+    planId: 'plan/object',
+    source: objectSourceInspection().source,
+    sourcePath: '/trusted/character.glb',
+    targetAssetId: 'voxel-object/character',
+    settings: {
+      mesh: objectMeshSettings(),
+      pivot: [0, 0, 0] as const,
+      anchorPolicy: { kind: 'preserveSourceSpace' as const },
+    },
+    clips: objectPrepareAction().clips,
+    defaultClip: 'clip/walk-1',
+    planner: 'rusty-engine.voxel-object-conversion.v1',
+    expectedSourceSha256: 'sha256:source',
+    settingsSha256: 'sha256:settings',
+    expectedOutputContentHash: 'sha256:object',
+    planHash: 'sha256:plan',
+    estimatedSampledFrames: 2,
+    estimatedStoredFrames: 3,
+    estimatedAggregateVoxels: 3,
+    estimatedArtifactBytes: 2048,
+    estimatedBounds: objectBounds(),
+    clipSummaries: [{
+      outputClipId: 'clip/walk-1',
+      sourceClipName: 'Walk',
+      sourceAnimationIndex: 0,
+      startMicroseconds: 0,
+      endMicroseconds: 1_000_000,
+      sampleRateHz: 12,
+      sampledFrameCount: 2,
+      storedFrameCount: 2,
+      durationMicroseconds: 1_000_000,
+    }],
+  };
+}
+
+function objectPreview(frameIndex: number) {
+  const frame = {
+    storedFrameIndex: frameIndex,
+    sourceTimestampsMicroseconds: [frameIndex * 500_000],
+    durationMicroseconds: 500_000,
+    bounds: objectBounds(),
+    voxelCount: 1,
+    sparseRunCount: 1,
+    voxelDataHash: `sha256:frame-${String(frameIndex)}`,
+  };
+  return {
+    planId: 'plan/object',
+    planHash: 'sha256:plan',
+    outputHash: 'sha256:object',
+    sampledFrameCount: 2,
+    storedFrameCount: 3,
+    aggregateVoxelCount: 3,
+    artifactBytes: 2048,
+    unionBounds: objectBounds(),
+    clips: [{
+      outputClipId: 'clip/walk-1',
+      sourceClipName: 'Walk',
+      sourceAnimationIndex: 0,
+      startMicroseconds: 0,
+      endMicroseconds: 1_000_000,
+      sampleRateHz: 12,
+      endPolicy: 'excludeLoopSeam' as const,
+      sampledFrameCount: 2,
+      storedFrameCount: 2,
+      durationMicroseconds: 1_000_000,
+      frames: [{ ...frame, storedFrameIndex: 0 }, { ...frame, storedFrameIndex: 1 }],
+    }],
+    selectedFrame: {
+      selection: { kind: 'clip' as const, clipId: 'clip/walk-1', frameIndex },
+      bounds: objectBounds(),
+      voxelCount: 1,
+      sparseRunCount: 1,
+      voxelDataHash: frame.voxelDataHash,
+      durationMicroseconds: 500_000,
+      sourceTimestampsMicroseconds: frame.sourceTimestampsMicroseconds,
+      sampleVoxels: [{ coordinate: [0, 0, 0] as const, materialSlot: 7 }],
+      samplesTruncated: false,
+    },
+  };
+}
+
+function objectCandidateProjection(frameIndex: number) {
+  return {
+    schemaVersion: 1 as const,
+    ops: [{
+      op: 'create' as const,
+      handle: 901,
+      parent: null,
+      node: {
+        geometry: { kind: 'cube' as const },
+        material: { color: [0.8, 0.5, 0.2, 1] as const, wireframe: false },
+        transform: transform([0, 0, 0]),
+        visible: true,
+        layer: 'scene' as const,
+        metadata: {
+          sourceEntity: null,
+          sourceSceneNode: null,
+          tags: ['voxel-object-candidate'],
+          label: `voxel-object-candidate-${String(frameIndex)}`,
+        },
+      },
+    }],
+  };
+}
+
+function projectionReadout(sourceRevision: number) {
+  return {
+    frameKind: 'complete' as const,
+    sourceRevision,
+    retainedEntities: 0,
+    retainedLights: 0,
+    retainedVoxelInstances: 0,
+    retainedVoxelChunks: 0,
+    diagnostics: [],
+  };
+}
+
+function objectAssetReadout() {
+  const defaultFrame = objectFrameReadout(null, 'sha256:default');
+  return {
+    assetId: 'voxel-object/character',
+    contentHash: 'sha256:object',
+    grid: {
+      coordinateSystem: 'rightHandedYUp' as const,
+      cellSize: 1,
+      chunkSize: 16,
+      pivot: [0, 0, 0] as const,
+    },
+    bounds: objectBounds(),
+    defaultFrame,
+    clips: [{
+      clipId: 'clip/walk-1',
+      name: 'Walk',
+      framesPerSecond: 12,
+      frames: [
+        objectFrameReadout(500_000, 'sha256:frame-0'),
+        objectFrameReadout(500_000, 'sha256:frame-1'),
+      ],
+    }],
+    defaultClip: 'clip/walk-1',
+    materialPalette: [{ materialSlot: 7, materialAssetId: 'material/wall-lines' }],
+    materialMap: [{ sourceMaterialSlot: 0, sourceMaterialName: 'Body', voxelMaterialSlot: 7 }],
+    provenance: {
+      kind: 'convertedAnimatedMesh' as const,
+      sourcePath: '/trusted/character.glb',
+      sourceSha256: 'sha256:source',
+      sourceByteCount: 1024,
+      converter: 'rusty-engine.mesh-to-voxel-object.v1',
+      settingsSha256: 'sha256:settings',
+      licensePath: null,
+      sourceClips: [{
+        outputClipId: 'clip/walk-1',
+        sourceClipName: 'Walk',
+        sourceAnimationIndex: 0,
+        startMicroseconds: 0,
+        endMicroseconds: 1_000_000,
+        sampleRateHz: 12,
+        includedClipEnd: false,
+      }],
+    },
+  };
+}
+
+function objectFrameReadout(durationMicroseconds: number | null, voxelDataHash: string) {
+  return {
+    bounds: objectBounds(),
+    voxelDataHash,
+    voxelCount: 1,
+    sparseRunCount: 1,
+    durationMicroseconds,
+  };
+}
+
+function objectBounds() {
+  return { min: [0, 0, 0] as const, max: [0, 0, 0] as const };
+}
+
+function objectMeshSettings() {
+  return {
+    conversion: {
+      resolution: [1, 1, 1] as const,
+      cellSize: 1,
+      chunkSize: 16,
+      origin: [0, 0, 0] as const,
+      fitPolicy: 'contain' as const,
+      originPolicy: 'targetMin' as const,
+      mode: 'surface' as const,
+      materialPalette: [{ materialSlot: 7, materialAssetId: 'material/wall-lines' }],
+      materialMap: [{ sourceMaterialSlot: 0, voxelMaterialSlot: 7 }],
+      maxOutputVoxels: 1,
+    },
+    transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+    materialPolicy: { textureAssets: [], textureBindings: [], defaultVoxelMaterial: 7 },
+  };
+}
+
+function firstProjectionLabel(store: StudioWorkspaceStore): string | null {
+  const operation = store.snapshot().liveProjection?.frame.ops[0];
+  return operation?.op === 'create' ? operation.node.metadata.label : null;
 }
 
 function hierarchyNode(

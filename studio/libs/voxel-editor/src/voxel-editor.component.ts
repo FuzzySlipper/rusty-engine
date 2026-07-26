@@ -1,7 +1,9 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   effect,
+  inject,
   input,
   output,
   signal,
@@ -20,17 +22,26 @@ import type {
   VoxelAuthoringReadout,
   VoxelConversionPlan,
   VoxelConversionPreview,
+  VoxelConversionSettings,
   VoxelHistoryRevertPreview,
   VoxelInstanceReadout,
+  VoxelObjectAssetAuthoringReadout,
+  VoxelObjectAuthoringReadout,
+  VoxelObjectConversionPlan,
+  VoxelObjectConversionPreview,
+  VoxelObjectFrameSelection,
+  VoxelObjectSourceInspection,
   VoxelPickReadout,
   VoxelReadout,
 } from '@rusty-engine/studio-adapter-client';
 
 import type {
   VoxelBrushPreviewPresentation,
+  VoxelObjectClipControlOutput,
   VoxelEditorAction,
   VoxelHostPathChooser,
 } from './voxel-editor-model.js';
+import { buildVoxelObjectClipControl } from './voxel-editor-model.js';
 
 type EditorTab = 'assets' | 'edit' | 'annotations' | 'convert';
 
@@ -44,12 +55,18 @@ type EditorTab = 'assets' | 'edit' | 'annotations' | 'convert';
 })
 export class VoxelEditorComponent {
   readonly authoring = input<VoxelAuthoringReadout | null>(null);
+  readonly objectAuthoring = input<VoxelObjectAuthoringReadout | null>(null);
   readonly entryScene = input('');
   readonly validatedPick = input<VoxelPickReadout | null>(null);
   readonly lastReadout = input<VoxelReadout | null>(null);
   readonly conversion = input<{
     readonly plan: VoxelConversionPlan;
     readonly preview: VoxelConversionPreview;
+  } | null>(null);
+  readonly objectSourceInspection = input<VoxelObjectSourceInspection | null>(null);
+  readonly objectConversion = input<{
+    readonly plan: VoxelObjectConversionPlan;
+    readonly preview: VoxelObjectConversionPreview;
   } | null>(null);
   readonly historyPreview = input<VoxelHistoryRevertPreview | null>(null);
   readonly busy = input(false);
@@ -60,6 +77,9 @@ export class VoxelEditorComponent {
   readonly tab = signal<EditorTab>('assets');
   readonly brushPreview = signal(false);
   readonly formError = signal<string | null>(null);
+  readonly objectPlaying = signal(false);
+  readonly #destroyRef = inject(DestroyRef);
+  #playbackTimer: ReturnType<typeof setTimeout> | null = null;
 
   selectedAssetId = '';
   selectedInstanceId = '';
@@ -157,6 +177,27 @@ export class VoxelEditorComponent {
   conversionTextureAssets = '[]';
   conversionTextureBindings = '[]';
   conversionMaxPreviewSamples = 256;
+  conversionTarget: 'volume' | 'object' = 'volume';
+  objectSourceKind: 'static' | 'animated' = 'static';
+  objectTargetAsset = 'voxel-object/converted-studio';
+  objectPivot = [0, 0, 0];
+  objectAnchorPolicy: 'preserveSourceSpace' | 'lockNodeToBindPose' = 'preserveSourceSpace';
+  objectAnchorNode = 0;
+  objectSelectedClips: string[] = [];
+  objectSampleRateHz = 12;
+  objectStartSeconds = 0;
+  objectEndSeconds = '';
+  objectEndPolicy: 'includeClipEnd' | 'excludeLoopSeam' = 'excludeLoopSeam';
+  objectDefaultClip = '';
+  objectPreviewClip = '';
+  objectPreviewFrame = 0;
+  objectSelectedAssetId = '';
+  objectInstanceId = 'voxel-object-instance';
+  objectInstanceTranslation = [0, 0, 0];
+  objectInstanceRotation = [0, 0, 0, 1];
+  objectInstanceScale = [1, 1, 1];
+  objectInstanceClip = '';
+  objectInstanceFrame = 0;
 
   constructor() {
     effect(() => {
@@ -165,6 +206,25 @@ export class VoxelEditorComponent {
       this.selectedAssetId = pick.assetId;
       this.selectedInstanceId = pick.instanceId;
     });
+    effect(() => {
+      const inspection = this.objectSourceInspection();
+      if (inspection === null) return;
+      const names = inspection.clips.map((clip) => clip.name);
+      this.objectSelectedClips = this.objectSelectedClips.filter((name) => names.includes(name));
+      if (inspection.sourceKind === 'animated' && this.objectSelectedClips.length === 0) {
+        this.objectSelectedClips = names;
+      }
+      const selected = this.objectSelectedClips[0] ?? '';
+      if (!names.includes(this.objectDefaultClip)) this.objectDefaultClip = selected;
+      if (!names.includes(this.objectPreviewClip)) this.objectPreviewClip = selected;
+    });
+    effect(() => {
+      const selection = this.objectConversion()?.preview.selectedFrame.selection;
+      if (selection?.kind !== 'clip') return;
+      this.objectPreviewClip = selection.clipId;
+      this.objectPreviewFrame = selection.frameIndex;
+    });
+    this.#destroyRef.onDestroy(() => this.pauseObjectPreview());
   }
 
   setTab(tab: EditorTab): void {
@@ -700,23 +760,8 @@ export class VoxelEditorComponent {
   }
 
   prepareConversion(): void {
-    const palette = this.selectedAsset()?.palette ?? [{
-      materialSlot: integer(this.newMaterialSlot, 1),
-      materialAssetId: this.newMaterialId,
-      displayName: this.newMaterialId,
-    }];
-    let transform: readonly number[];
-    let textureAssets: readonly TextureSampleAsset[];
-    let textureBindings: readonly TextureMaterialBinding[];
-    try {
-      transform = numericList(this.conversionTransform, 16, 'Affine transform');
-      textureAssets = parseTextureAssets(this.conversionTextureAssets);
-      textureBindings = parseTextureBindings(this.conversionTextureBindings);
-      this.formError.set(null);
-    } catch (error) {
-      this.formError.set(error instanceof Error ? error.message : 'Conversion settings are malformed.');
-      return;
-    }
+    const settings = this.meshConversionSettings(false);
+    if (settings === null) return;
     const action: VoxelEditorAction = {
       kind: 'prepareConversion',
       sourceAssetId: this.conversionSourceAsset,
@@ -733,39 +778,270 @@ export class VoxelEditorComponent {
       ...(this.conversionMeshPrimitive.trim() === ''
         ? {}
         : { meshPrimitive: this.conversionMeshPrimitive.trim() }),
-      settings: {
-        conversion: {
-          resolution: tuple3i(this.conversionResolution),
-          cellSize: positive(this.conversionCellSize, 1),
-          chunkSize: integer(this.conversionChunkSize, 16),
-          origin: tuple3i(this.conversionOrigin),
-          fitPolicy: this.conversionFitPolicy,
-          originPolicy: this.conversionOriginPolicy,
-          mode: this.conversionMode,
-          materialPalette: palette,
-          materialMap: palette.map((binding, sourceMaterialSlot) => ({
-            sourceMaterialSlot,
-            voxelMaterialSlot: binding.materialSlot,
-          })),
-          maxOutputVoxels: Math.max(
-            1,
-            integer(this.conversionResolution[0], 1)
-              * integer(this.conversionResolution[1], 1)
-              * integer(this.conversionResolution[2], 1),
-          ),
-        },
-        transform,
-        materialPolicy: {
-          textureAssets,
-          textureBindings,
-          ...(this.conversionDefaultMaterial.trim() === ''
-            ? {}
-            : { defaultVoxelMaterial: integer(Number(this.conversionDefaultMaterial), 1) }),
-        },
-      },
+      settings,
       maxPreviewSamples: Math.max(1, integer(this.conversionMaxPreviewSamples, 256)),
     };
     this.action.emit(action);
+  }
+
+  inspectObjectSource(): void {
+    this.pauseObjectPreview();
+    this.action.emit({
+      kind: 'inspectObjectSource',
+      sourceKind: this.objectSourceKind,
+      sourceAssetId: this.conversionSourceAsset,
+      source: { scope: this.conversionSourceScope, path: this.conversionSourcePath.trim() },
+    });
+  }
+
+  toggleObjectClip(sourceClipName: string, selected: boolean): void {
+    this.objectSelectedClips = selected
+      ? [...new Set([...this.objectSelectedClips, sourceClipName])]
+      : this.objectSelectedClips.filter((name) => name !== sourceClipName);
+    if (!this.objectSelectedClips.includes(this.objectDefaultClip)) {
+      this.objectDefaultClip = this.objectSelectedClips[0] ?? '';
+    }
+  }
+
+  objectClipSelected(sourceClipName: string): boolean {
+    return this.objectSelectedClips.includes(sourceClipName);
+  }
+
+  prepareObjectConversion(): void {
+    const settings = this.meshConversionSettings(true);
+    if (settings === null) return;
+    const inspection = this.objectSourceInspection();
+    if (
+      inspection === null
+      || inspection.sourceKind !== this.objectSourceKind
+      || inspection.source.assetId !== this.conversionSourceAsset
+      || inspection.sourcePath !== this.conversionSourcePath.trim()
+    ) {
+      this.formError.set('Inspect the selected source before preparing a voxel object.');
+      return;
+    }
+    let clipControl: VoxelObjectClipControlOutput;
+    try {
+      clipControl = buildVoxelObjectClipControl(inspection.clips, {
+        selectedSourceClipNames: this.objectSelectedClips,
+        sampleRateHz: this.objectSampleRateHz,
+        startSeconds: this.objectStartSeconds,
+        endSeconds: this.objectEndSeconds,
+        endPolicy: this.objectEndPolicy,
+        defaultSourceClipName: this.objectDefaultClip,
+      });
+    } catch (error) {
+      this.formError.set(error instanceof Error ? error.message : 'Clip controls are malformed.');
+      return;
+    }
+    const { clips, defaultClip, initialFrame } = clipControl;
+    this.objectPreviewClip = clips[0]?.outputClipId ?? '';
+    this.objectPreviewFrame = 0;
+    this.action.emit({
+      kind: 'prepareObjectConversion',
+      sourceKind: this.objectSourceKind,
+      sourceAssetId: this.conversionSourceAsset,
+      source: { scope: this.conversionSourceScope, path: this.conversionSourcePath.trim() },
+      targetAssetId: this.objectTargetAsset,
+      ...(this.conversionLicensePath.trim() === ''
+        ? {}
+        : {
+            license: {
+              scope: this.conversionLicenseScope,
+              path: this.conversionLicensePath.trim(),
+            },
+          }),
+      ...(this.objectSourceKind === 'static' && this.conversionMeshPrimitive.trim() !== ''
+        ? { meshPrimitive: this.conversionMeshPrimitive.trim() }
+        : {}),
+      settings: {
+        mesh: settings,
+        pivot: tuple3(this.objectPivot),
+        anchorPolicy: this.objectAnchorPolicy === 'preserveSourceSpace'
+          ? { kind: 'preserveSourceSpace' }
+          : {
+              kind: 'lockNodeToBindPose',
+              sourceNodeIndex: Math.max(0, integer(this.objectAnchorNode, 0)),
+            },
+      },
+      clips,
+      ...(defaultClip === undefined ? {} : { defaultClip }),
+      frame: initialFrame,
+      maxPreviewSamples: Math.max(1, integer(this.conversionMaxPreviewSamples, 256)),
+    });
+  }
+
+  previewObjectFrame(frameIndex = this.objectPreviewFrame): void {
+    const conversion = this.objectConversion();
+    if (conversion === null) return;
+    const clip = conversion.preview.clips.find(
+      (candidate) => candidate.outputClipId === this.objectPreviewClip,
+    );
+    const boundedFrame = clip === undefined
+      ? 0
+      : Math.min(Math.max(0, integer(frameIndex, 0)), Math.max(0, clip.storedFrameCount - 1));
+    this.objectPreviewFrame = boundedFrame;
+    const frame: VoxelObjectFrameSelection = clip === undefined
+      ? { kind: 'default' }
+      : { kind: 'clip', clipId: clip.outputClipId, frameIndex: boundedFrame };
+    this.action.emit({
+      kind: 'previewObjectFrame',
+      planId: conversion.plan.planId,
+      expectedPlanHash: conversion.plan.planHash,
+      frame,
+      maxPreviewSamples: Math.max(1, integer(this.conversionMaxPreviewSamples, 256)),
+    });
+  }
+
+  selectedObjectPreviewFrameMax(): number {
+    const clip = this.objectConversion()?.preview.clips.find(
+      (candidate) => candidate.outputClipId === this.objectPreviewClip,
+    );
+    return Math.max(0, (clip?.storedFrameCount ?? 1) - 1);
+  }
+
+  playObjectPreview(): void {
+    if (this.objectPlaying() || this.objectConversion() === null) return;
+    this.objectPlaying.set(true);
+    this.#scheduleObjectPlayback();
+  }
+
+  pauseObjectPreview(): void {
+    this.objectPlaying.set(false);
+    if (this.#playbackTimer !== null) clearTimeout(this.#playbackTimer);
+    this.#playbackTimer = null;
+  }
+
+  applyObjectConversion(): void {
+    const conversion = this.objectConversion();
+    if (conversion === null) return;
+    this.pauseObjectPreview();
+    this.action.emit({
+      kind: 'applyObjectConversion',
+      planId: conversion.plan.planId,
+      expectedPlanHash: conversion.plan.planHash,
+      expectedOutputHash: conversion.preview.outputHash,
+    });
+  }
+
+  discardObjectConversion(): void {
+    const conversion = this.objectConversion();
+    if (conversion === null) return;
+    this.pauseObjectPreview();
+    this.action.emit({ kind: 'discardObjectConversion', planId: conversion.plan.planId });
+  }
+
+  objectAssets(): readonly VoxelObjectAssetAuthoringReadout[] {
+    return this.objectAuthoring()?.assets ?? [];
+  }
+
+  selectedObjectAsset(): VoxelObjectAssetAuthoringReadout | null {
+    return this.objectAssets().find((asset) => asset.assetId === this.objectSelectedAssetId) ?? null;
+  }
+
+  chooseObjectAsset(assetId: string): void {
+    this.objectSelectedAssetId = assetId;
+    const asset = this.selectedObjectAsset();
+    this.objectInstanceClip = asset?.defaultClip ?? asset?.clips[0]?.clipId ?? '';
+    this.objectInstanceFrame = 0;
+  }
+
+  attachObjectInstance(): void {
+    const asset = this.selectedObjectAsset();
+    if (asset === null) return;
+    const clip = asset.clips.find((candidate) => candidate.clipId === this.objectInstanceClip);
+    const frame: VoxelObjectFrameSelection = clip === undefined
+      ? { kind: 'default' }
+      : {
+          kind: 'clip',
+          clipId: clip.clipId,
+          frameIndex: Math.min(
+            Math.max(0, integer(this.objectInstanceFrame, 0)),
+            Math.max(0, clip.frames.length - 1),
+          ),
+        };
+    this.action.emit({
+      kind: 'attachObjectInstance',
+      sceneId: this.entryScene(),
+      instance: {
+        instanceId: this.objectInstanceId.trim(),
+        voxelObjectAssetId: asset.assetId,
+        frame,
+        translation: tuple3(this.objectInstanceTranslation),
+        rotation: tuple4(this.objectInstanceRotation),
+        scale: tuple3(this.objectInstanceScale),
+        materialOverrides: [],
+      },
+    });
+  }
+
+  private meshConversionSettings(objectLocal: boolean): VoxelConversionSettings | null {
+    const palette = this.selectedAsset()?.palette ?? [{
+      materialSlot: integer(this.newMaterialSlot, 1),
+      materialAssetId: this.newMaterialId,
+      displayName: this.newMaterialId,
+    }];
+    let transform: readonly number[];
+    let textureAssets: readonly TextureSampleAsset[];
+    let textureBindings: readonly TextureMaterialBinding[];
+    try {
+      transform = numericList(this.conversionTransform, 16, 'Affine transform');
+      textureAssets = parseTextureAssets(this.conversionTextureAssets);
+      textureBindings = parseTextureBindings(this.conversionTextureBindings);
+      this.formError.set(null);
+    } catch (error) {
+      this.formError.set(error instanceof Error ? error.message : 'Conversion settings are malformed.');
+      return null;
+    }
+    return {
+      conversion: {
+        resolution: tuple3i(this.conversionResolution),
+        cellSize: positive(this.conversionCellSize, 1),
+        chunkSize: integer(this.conversionChunkSize, 16),
+        origin: objectLocal ? [0, 0, 0] : tuple3i(this.conversionOrigin),
+        fitPolicy: this.conversionFitPolicy,
+        originPolicy: this.conversionOriginPolicy,
+        mode: this.conversionMode,
+        materialPalette: palette,
+        materialMap: palette.map((binding, sourceMaterialSlot) => ({
+          sourceMaterialSlot,
+          voxelMaterialSlot: binding.materialSlot,
+        })),
+        maxOutputVoxels: Math.max(
+          1,
+          integer(this.conversionResolution[0], 1)
+            * integer(this.conversionResolution[1], 1)
+            * integer(this.conversionResolution[2], 1),
+        ),
+      },
+      transform,
+      materialPolicy: {
+        textureAssets,
+        textureBindings,
+        ...(this.conversionDefaultMaterial.trim() === ''
+          ? {}
+          : { defaultVoxelMaterial: integer(Number(this.conversionDefaultMaterial), 1) }),
+      },
+    };
+  }
+
+  #scheduleObjectPlayback(): void {
+    if (!this.objectPlaying()) return;
+    const conversion = this.objectConversion();
+    const clip = conversion?.preview.clips.find(
+      (candidate) => candidate.outputClipId === this.objectPreviewClip,
+    );
+    if (clip === undefined || clip.storedFrameCount === 0) {
+      this.pauseObjectPreview();
+      return;
+    }
+    const frame = clip.frames[this.objectPreviewFrame];
+    const delay = Math.max(16, Math.round((frame?.durationMicroseconds ?? 83_333) / 1_000));
+    this.#playbackTimer = setTimeout(() => {
+      if (!this.objectPlaying()) return;
+      this.previewObjectFrame((this.objectPreviewFrame + 1) % clip.storedFrameCount);
+      this.#scheduleObjectPlayback();
+    }, delay);
   }
 
   applyConversion(): void {
@@ -844,6 +1120,7 @@ function tuple4(values: readonly number[]): readonly [number, number, number, nu
     finite(values[3], 1),
   ];
 }
+
 
 function finite(value: number | undefined, fallback: number): number {
   return value !== undefined && Number.isFinite(value) ? value : fallback;

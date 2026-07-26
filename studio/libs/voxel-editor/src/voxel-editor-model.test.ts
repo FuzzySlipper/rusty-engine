@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { deriveVoxelPickValidation } from './voxel-editor-model.js';
+import {
+  buildVoxelObjectClipControl,
+  deriveVoxelPickValidation,
+} from './voxel-editor-model.js';
 
 test('derives asset-local untrusted pick claims through transformed instances', () => {
   const result = deriveVoxelPickValidation(
@@ -55,4 +58,57 @@ test('derives asset-local untrusted pick claims through transformed instances', 
 
   assert.deepEqual(result?.claimedVoxel, [0, 0, 0]);
   assert.equal(result?.claimedFace, 'negativeZ');
+});
+
+test('maps transient clip controls to stable closed Rust clip requests', () => {
+  const available = [
+    {
+      sourceAnimationIndex: 3,
+      name: 'Walk Cycle',
+      durationMicroseconds: 1_000_000,
+      channelCount: 2,
+      targetNodeIndices: [0],
+      properties: ['translation' as const],
+    },
+    {
+      sourceAnimationIndex: 7,
+      name: 'Idle',
+      durationMicroseconds: 2_000_000,
+      channelCount: 1,
+      targetNodeIndices: [0],
+      properties: ['rotation' as const],
+    },
+  ];
+  const output = buildVoxelObjectClipControl(available, {
+    selectedSourceClipNames: ['Idle', 'Walk Cycle'],
+    sampleRateHz: 12,
+    startSeconds: 0.25,
+    endSeconds: '0.75',
+    endPolicy: 'excludeLoopSeam',
+    defaultSourceClipName: 'Idle',
+  });
+
+  assert.deepEqual(output.clips.map((clip) => clip.outputClipId), [
+    'clip/walk-cycle-4', 'clip/idle-8',
+  ]);
+  assert.equal(output.clips[0]?.startMicroseconds, 250_000);
+  assert.equal(output.clips[0]?.endMicroseconds, 750_000);
+  assert.equal(output.defaultClip, 'clip/idle-8');
+  assert.deepEqual(output.initialFrame, {
+    kind: 'clip', clipId: 'clip/walk-cycle-4', frameIndex: 0,
+  });
+});
+
+test('rejects invalid transient clip ranges before invoking the adapter', () => {
+  assert.throws(
+    () => buildVoxelObjectClipControl([], {
+      selectedSourceClipNames: [],
+      sampleRateHz: 241,
+      startSeconds: 1,
+      endSeconds: '0',
+      endPolicy: 'includeClipEnd',
+      defaultSourceClipName: '',
+    }),
+    /end must be greater/,
+  );
 });

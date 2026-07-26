@@ -17,6 +17,10 @@ import type {
   StudioFileSelection,
   VoxelConversionPlan,
   VoxelConversionPreview,
+  VoxelObjectAuthoringReadout,
+  VoxelObjectConversionPlan,
+  VoxelObjectConversionPreview,
+  VoxelObjectSourceInspection,
   VoxelPickReadout,
   VoxelReadout,
   VoxelHistoryRevertPreview,
@@ -75,6 +79,7 @@ export interface AuthoringDocumentView {
   readonly domain: LoadingBayDomainReadout;
   readonly voxel: Readonly<Record<string, unknown>> | null;
   readonly voxelAuthoring: VoxelAuthoringReadout;
+  readonly voxelObjectAuthoring: VoxelObjectAuthoringReadout;
   readonly animatedMeshResources: readonly AnimatedMeshResourceReadout[];
 }
 
@@ -176,6 +181,11 @@ export interface VoxelWorkspaceState {
     readonly plan: VoxelConversionPlan;
     readonly preview: VoxelConversionPreview;
   } | null;
+  readonly objectSourceInspection: VoxelObjectSourceInspection | null;
+  readonly objectConversion: {
+    readonly plan: VoxelObjectConversionPlan;
+    readonly preview: VoxelObjectConversionPreview;
+  } | null;
   readonly historyPreview: VoxelHistoryRevertPreview | null;
   readonly lastReceipt: ProjectMutationReceipt | null;
   readonly message: string;
@@ -219,6 +229,8 @@ function initialSnapshot(): StudioWorkspaceSnapshot {
       validatedPick: null,
       lastReadout: null,
       conversion: null,
+      objectSourceInspection: null,
+      objectConversion: null,
       historyPreview: null,
       lastReceipt: null,
       message: 'Select a rendered voxel instance to begin authoring.',
@@ -578,6 +590,8 @@ export class StudioWorkspaceStore {
           validatedPick: null,
           lastReadout: null,
           conversion: null,
+          objectSourceInspection: null,
+          objectConversion: null,
           historyPreview: null,
           lastReceipt: null,
           message: 'Select a rendered voxel instance to begin authoring.',
@@ -1112,6 +1126,101 @@ export class StudioWorkspaceStore {
             },
           });
           return;
+        case 'inspectObjectSource': {
+          const response = await this.#client.inspectVoxelObjectSource({
+            expectedProjectHash,
+            sourceKind: action.sourceKind,
+            sourceAssetId: action.sourceAssetId,
+            source: action.source,
+            ...(action.meshPrimitive === undefined ? {} : { meshPrimitive: action.meshPrimitive }),
+          });
+          this.#patch({
+            operation: 'idle',
+            voxelWorkspace: {
+              ...this.#snapshot().voxelWorkspace,
+              objectSourceInspection: response.inspection,
+              message: `Inspected ${String(response.inspection.metadata.vertexCount)} vertices, ${String(response.inspection.metadata.triangleCount)} triangles, and ${String(response.inspection.clips.length)} clips.`,
+            },
+          });
+          return;
+        }
+        case 'prepareObjectConversion': {
+          const response = await this.#client.prepareVoxelObjectConversion({
+            expectedProjectHash,
+            sourceKind: action.sourceKind,
+            sourceAssetId: action.sourceAssetId,
+            source: action.source,
+            targetAssetId: action.targetAssetId,
+            ...(action.license === undefined ? {} : { license: action.license }),
+            ...(action.meshPrimitive === undefined ? {} : { meshPrimitive: action.meshPrimitive }),
+            settings: action.settings,
+            clips: action.clips,
+            ...(action.defaultClip === undefined ? {} : { defaultClip: action.defaultClip }),
+            frame: action.frame,
+            maxPreviewSamples: action.maxPreviewSamples,
+          });
+          this.#acceptObjectProjection(response.projection, response.projectionReadout);
+          this.#patch({
+            operation: 'idle',
+            voxelWorkspace: {
+              ...this.#snapshot().voxelWorkspace,
+              objectConversion: { plan: response.plan, preview: response.preview },
+              message: `Prepared ${String(response.preview.storedFrameCount)} stored frames with ${String(response.preview.aggregateVoxelCount)} aggregate voxels.`,
+            },
+          });
+          return;
+        }
+        case 'previewObjectFrame': {
+          const response = await this.#client.previewVoxelObjectConversion({
+            planId: action.planId,
+            expectedPlanHash: action.expectedPlanHash,
+            frame: action.frame,
+            maxPreviewSamples: action.maxPreviewSamples,
+          });
+          this.#acceptObjectProjection(response.projection, response.projectionReadout);
+          const current = this.#snapshot().voxelWorkspace.objectConversion;
+          this.#patch({
+            operation: 'idle',
+            voxelWorkspace: {
+              ...this.#snapshot().voxelWorkspace,
+              objectConversion: current === null
+                ? null
+                : { plan: current.plan, preview: response.preview },
+              message: `Previewing ${String(response.preview.selectedFrame.voxelCount)} voxels in the selected stored frame.`,
+            },
+          });
+          return;
+        }
+        case 'applyObjectConversion':
+          this.#acceptVoxelMutation(await this.#client.applyVoxelObjectConversion({
+            expectedProjectHash,
+            planId: action.planId,
+            expectedPlanHash: action.expectedPlanHash,
+            expectedOutputHash: action.expectedOutputHash,
+          }), false, true);
+          return;
+        case 'discardObjectConversion': {
+          const response = await this.#client.discardVoxelObjectConversion({
+            planId: action.planId,
+          });
+          this.#acceptObjectProjection(response.projection, response.projectionReadout);
+          this.#patch({
+            operation: 'idle',
+            voxelWorkspace: {
+              ...this.#snapshot().voxelWorkspace,
+              objectConversion: null,
+              message: 'Prepared voxel-object conversion discarded.',
+            },
+          });
+          return;
+        }
+        case 'attachObjectInstance':
+          this.#acceptVoxelMutation(await this.#client.attachVoxelObjectInstance({
+            expectedProjectHash,
+            sceneId: action.sceneId,
+            instance: action.instance,
+          }));
+          return;
       }
     } catch (error) {
       this.#operationFailed(error);
@@ -1257,6 +1366,7 @@ export class StudioWorkspaceStore {
   #acceptVoxelMutation(
     response: ProjectMutationAppliedResponse,
     clearConversion = false,
+    clearObjectConversion = false,
   ): void {
     this.#acceptProject(response.project, false);
     this.#patch({
@@ -1266,7 +1376,23 @@ export class StudioWorkspaceStore {
         lastReceipt: response.receipt,
         historyPreview: null,
         conversion: clearConversion ? null : this.#snapshot().voxelWorkspace.conversion,
+        objectConversion: clearObjectConversion
+          ? null
+          : this.#snapshot().voxelWorkspace.objectConversion,
         message: mutationMessage(response.receipt),
+      },
+    });
+  }
+
+  #acceptObjectProjection(frame: RenderFrameDiff, readout: ProjectionReadout): void {
+    const current = this.#snapshot();
+    const ownerEntityIds = current.authoringDocument?.inspections.entityState.entityIds ?? [];
+    this.#patch({
+      liveProjection: {
+        frame,
+        readout,
+        entities: summarizeProjectionForUi(frame, ownerEntityIds, []),
+        generation: (current.liveProjection?.generation ?? 0) + 1,
       },
     });
   }
@@ -1322,6 +1448,7 @@ export class StudioWorkspaceStore {
         domain: project.loadingBay,
         voxel: project.voxel ?? null,
         voxelAuthoring: project.voxelAuthoring,
+        voxelObjectAuthoring: project.voxelObjectAuthoring,
         animatedMeshResources: project.animatedMeshResources,
       },
       liveProjection: {
@@ -1500,6 +1627,8 @@ function mutationMessage(receipt: ProjectMutationReceipt): string {
     case 'voxelAnnotationCreated': return `Annotation layer ${receipt.layerId} created.`;
     case 'voxelAnnotationEdited': return `Annotation layer ${receipt.layerId} updated.`;
     case 'voxelConversionApplied': return `Conversion installed ${receipt.assetId}.`;
+    case 'voxelObjectConversionApplied': return `Voxel object ${receipt.assetId} installed with ${String(receipt.storedFrames)} stored frames.`;
+    case 'voxelObjectInstanceAttached': return `Voxel object instance ${receipt.instanceId} attached.`;
   }
 }
 

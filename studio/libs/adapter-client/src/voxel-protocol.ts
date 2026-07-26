@@ -482,7 +482,9 @@ export type ProjectMutationReceipt =
   | { readonly kind: 'voxelHistoryMoved'; readonly assetId: string; readonly contentHashBefore: string; readonly contentHashAfter: string; readonly cursorBefore: number; readonly cursorAfter: number; readonly undoDepth: number; readonly redoDepth: number; readonly changedVoxels: number }
   | { readonly kind: 'voxelAnnotationCreated'; readonly assetId: string; readonly layerId: string; readonly layerHash: string }
   | { readonly kind: 'voxelAnnotationEdited'; readonly assetId: string; readonly layerId: string; readonly layerHashBefore: string; readonly layerHashAfter: string; readonly affectedRegionIds: readonly string[] }
-  | { readonly kind: 'voxelConversionApplied'; readonly planId: string; readonly planHash: string; readonly assetId: string; readonly outputHash: string; readonly outputVoxels: number };
+  | { readonly kind: 'voxelConversionApplied'; readonly planId: string; readonly planHash: string; readonly assetId: string; readonly outputHash: string; readonly outputVoxels: number }
+  | { readonly kind: 'voxelObjectConversionApplied'; readonly planId: string; readonly planHash: string; readonly assetId: string; readonly outputHash: string; readonly storedFrames: number; readonly aggregateVoxels: number }
+  | { readonly kind: 'voxelObjectInstanceAttached'; readonly sceneId: string; readonly instanceId: string; readonly assetId: string; readonly frameKind: 'default' | 'clip' };
 
 export function validateVoxelAuthoringReadout(input: unknown, path: string): void {
   const value = closedObject(input, path, ['assets', 'instances', 'materials']);
@@ -661,6 +663,20 @@ export function validateProjectMutationReceipt(input: unknown, path: string): vo
       number(entry['outputVoxels'], `${path}.outputVoxels`);
       return;
     }
+    case 'voxelObjectConversionApplied': {
+      const entry = receipt([
+        'planId', 'planHash', 'assetId', 'outputHash', 'storedFrames', 'aggregateVoxels',
+      ]);
+      strings(entry, path, ['planId', 'planHash', 'assetId', 'outputHash']);
+      numbers(entry, path, ['storedFrames', 'aggregateVoxels']);
+      return;
+    }
+    case 'voxelObjectInstanceAttached': {
+      const entry = receipt(['sceneId', 'instanceId', 'assetId', 'frameKind']);
+      strings(entry, path, ['sceneId', 'instanceId', 'assetId']);
+      enumValue(entry['frameKind'], `${path}.frameKind`, ['default', 'clip']);
+      return;
+    }
     default:
       throw new TypeError(`${path}.kind is not a closed mutation receipt`);
   }
@@ -758,7 +774,7 @@ export function validateVoxelConversionPlan(input: unknown, path: string): void 
   }
   number(source['assetVersion'], `${path}.source.assetVersion`);
   number(value['estimatedOutputVoxels'], `${path}.estimatedOutputVoxels`);
-  validateConversionSettings(value['settings'], `${path}.settings`);
+  validateVoxelConversionSettings(value['settings'], `${path}.settings`);
   validateBounds(value['estimatedBounds'], `${path}.estimatedBounds`);
 }
 
@@ -1007,7 +1023,7 @@ function validateVoxelEditDelta(input: unknown, path: string): void {
   nullableNumber(value['afterMaterial'], `${path}.afterMaterial`);
 }
 
-function validateConversionSettings(input: unknown, path: string): void {
+export function validateVoxelConversionSettings(input: unknown, path: string): void {
   const value = closedObject(input, path, ['conversion', 'transform', 'materialPolicy']);
   const conversion = closedObject(value['conversion'], `${path}.conversion`, [
     'resolution', 'cellSize', 'chunkSize', 'origin', 'fitPolicy', 'originPolicy',

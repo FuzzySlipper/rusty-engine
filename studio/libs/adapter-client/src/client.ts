@@ -16,6 +16,10 @@ import {
   type StudioAdapterResponse,
   type VoxelConversionDiscardedResponse,
   type VoxelConversionPreparedResponse,
+  type VoxelObjectConversionDiscardedResponse,
+  type VoxelObjectConversionPreparedResponse,
+  type VoxelObjectConversionPreviewedResponse,
+  type VoxelObjectSourceInspectedResponse,
   type VoxelAssetFileExportedResponse,
   type VoxelHistoryRevertDiscardedResponse,
   type VoxelHistoryRevertPreparedResponse,
@@ -381,6 +385,54 @@ export class StudioAdapterClient {
     );
   }
 
+  inspectVoxelObjectSource(
+    input: RequestInput<'inspectVoxelObjectSource'>,
+  ): Promise<VoxelObjectSourceInspectedResponse> {
+    return this.#exchange(
+      this.#request('inspectVoxelObjectSource', input),
+      'voxelObjectSourceInspected',
+    );
+  }
+
+  prepareVoxelObjectConversion(
+    input: RequestInput<'prepareVoxelObjectConversion'>,
+  ): Promise<VoxelObjectConversionPreparedResponse> {
+    return this.#exchange(
+      this.#request('prepareVoxelObjectConversion', input),
+      'voxelObjectConversionPrepared',
+    );
+  }
+
+  previewVoxelObjectConversion(
+    input: RequestInput<'previewVoxelObjectConversion'>,
+  ): Promise<VoxelObjectConversionPreviewedResponse> {
+    return this.#exchange(
+      this.#request('previewVoxelObjectConversion', input),
+      'voxelObjectConversionPreviewed',
+    );
+  }
+
+  applyVoxelObjectConversion(
+    input: RequestInput<'applyVoxelObjectConversion'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('applyVoxelObjectConversion', input);
+  }
+
+  discardVoxelObjectConversion(
+    input: RequestInput<'discardVoxelObjectConversion'>,
+  ): Promise<VoxelObjectConversionDiscardedResponse> {
+    return this.#exchange(
+      this.#request('discardVoxelObjectConversion', input),
+      'voxelObjectConversionDiscarded',
+    );
+  }
+
+  attachVoxelObjectInstance(
+    input: RequestInput<'attachVoxelObjectInstance'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('attachVoxelObjectInstance', input);
+  }
+
   closeProject(): Promise<ProjectClosedResponse> {
     return this.#exchange(
       {
@@ -471,4 +523,6 @@ type MutationRequestType =
   | 'applyVoxelHistoryRevert'
   | 'createVoxelAnnotationLayer'
   | 'editVoxelAnnotation'
-  | 'applyVoxelConversion';
+  | 'applyVoxelConversion'
+  | 'applyVoxelObjectConversion'
+  | 'attachVoxelObjectInstance';

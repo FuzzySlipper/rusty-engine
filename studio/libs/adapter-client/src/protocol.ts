@@ -35,10 +35,26 @@ import {
   type VoxelTemplateRequest,
   type VoxelHistoryRevertPreview,
 } from './voxel-protocol.js';
+import {
+  validateVoxelObjectAuthoringReadout,
+  validateVoxelObjectConversionPlan,
+  validateVoxelObjectConversionPreview,
+  validateVoxelObjectSourceInspection,
+  type StoredVoxelObjectInstance,
+  type VoxelObjectAuthoringReadout,
+  type VoxelObjectClipConversionRequest,
+  type VoxelObjectConversionPlan,
+  type VoxelObjectConversionPreview,
+  type VoxelObjectConversionSettings,
+  type VoxelObjectFrameSelection,
+  type VoxelObjectSourceInspection,
+  type VoxelObjectSourceKind,
+} from './voxel-object-protocol.js';
 
 export type * from './voxel-protocol.js';
+export type * from './voxel-object-protocol.js';
 
-export const STUDIO_ADAPTER_PROTOCOL_VERSION = 6 as const;
+export const STUDIO_ADAPTER_PROTOCOL_VERSION = 7 as const;
 export const MAX_STUDIO_ADAPTER_REQUEST_BYTES = 256 * 1024;
 export const MAX_STUDIO_ADAPTER_RESPONSE_BYTES = 32 * 1024 * 1024;
 
@@ -94,6 +110,12 @@ export type StudioAdapterRequest =
   | PrepareVoxelConversionRequest
   | ApplyVoxelConversionRequest
   | DiscardVoxelConversionRequest
+  | InspectVoxelObjectSourceRequest
+  | PrepareVoxelObjectConversionRequest
+  | PreviewVoxelObjectConversionRequest
+  | ApplyVoxelObjectConversionRequest
+  | DiscardVoxelObjectConversionRequest
+  | AttachVoxelObjectInstanceRequest
   | CloseProjectRequest;
 
 interface RequestHeader {
@@ -554,6 +576,59 @@ export interface DiscardVoxelConversionRequest extends RequestHeader {
   readonly planId: string;
 }
 
+export interface InspectVoxelObjectSourceRequest extends RequestHeader {
+  readonly type: 'inspectVoxelObjectSource';
+  readonly expectedProjectHash: string;
+  readonly sourceKind: VoxelObjectSourceKind;
+  readonly sourceAssetId: string;
+  readonly source: StudioFileSelection;
+  readonly meshPrimitive?: string;
+}
+
+export interface PrepareVoxelObjectConversionRequest extends RequestHeader {
+  readonly type: 'prepareVoxelObjectConversion';
+  readonly expectedProjectHash: string;
+  readonly sourceKind: VoxelObjectSourceKind;
+  readonly sourceAssetId: string;
+  readonly source: StudioFileSelection;
+  readonly targetAssetId: string;
+  readonly license?: StudioFileSelection;
+  readonly meshPrimitive?: string;
+  readonly settings: VoxelObjectConversionSettings;
+  readonly clips: readonly VoxelObjectClipConversionRequest[];
+  readonly defaultClip?: string;
+  readonly frame: VoxelObjectFrameSelection;
+  readonly maxPreviewSamples: number;
+}
+
+export interface PreviewVoxelObjectConversionRequest extends RequestHeader {
+  readonly type: 'previewVoxelObjectConversion';
+  readonly planId: string;
+  readonly expectedPlanHash: string;
+  readonly frame: VoxelObjectFrameSelection;
+  readonly maxPreviewSamples: number;
+}
+
+export interface ApplyVoxelObjectConversionRequest extends RequestHeader {
+  readonly type: 'applyVoxelObjectConversion';
+  readonly expectedProjectHash: string;
+  readonly planId: string;
+  readonly expectedPlanHash: string;
+  readonly expectedOutputHash: string;
+}
+
+export interface DiscardVoxelObjectConversionRequest extends RequestHeader {
+  readonly type: 'discardVoxelObjectConversion';
+  readonly planId: string;
+}
+
+export interface AttachVoxelObjectInstanceRequest extends RequestHeader {
+  readonly type: 'attachVoxelObjectInstance';
+  readonly expectedProjectHash: string;
+  readonly sceneId: string;
+  readonly instance: StoredVoxelObjectInstance;
+}
+
 export interface CloseProjectRequest extends RequestHeader {
   readonly type: 'closeProject';
 }
@@ -570,6 +645,10 @@ export type StudioAdapterResponse =
   | VoxelReadResponse
   | VoxelConversionPreparedResponse
   | VoxelConversionDiscardedResponse
+  | VoxelObjectSourceInspectedResponse
+  | VoxelObjectConversionPreparedResponse
+  | VoxelObjectConversionPreviewedResponse
+  | VoxelObjectConversionDiscardedResponse
   | AssetImportPreparedResponse
   | AssetImportDiscardedResponse
   | VoxelHistoryRevertPreparedResponse
@@ -634,6 +713,33 @@ export interface VoxelConversionPreparedResponse extends ResponseHeader {
 export interface VoxelConversionDiscardedResponse extends ResponseHeader {
   readonly type: 'voxelConversionDiscarded';
   readonly planId: string;
+}
+
+export interface VoxelObjectSourceInspectedResponse extends ResponseHeader {
+  readonly type: 'voxelObjectSourceInspected';
+  readonly inspection: VoxelObjectSourceInspection;
+}
+
+export interface VoxelObjectConversionPreparedResponse extends ResponseHeader {
+  readonly type: 'voxelObjectConversionPrepared';
+  readonly plan: VoxelObjectConversionPlan;
+  readonly preview: VoxelObjectConversionPreview;
+  readonly projection: RenderFrameDiff;
+  readonly projectionReadout: ProjectionReadout;
+}
+
+export interface VoxelObjectConversionPreviewedResponse extends ResponseHeader {
+  readonly type: 'voxelObjectConversionPreviewed';
+  readonly preview: VoxelObjectConversionPreview;
+  readonly projection: RenderFrameDiff;
+  readonly projectionReadout: ProjectionReadout;
+}
+
+export interface VoxelObjectConversionDiscardedResponse extends ResponseHeader {
+  readonly type: 'voxelObjectConversionDiscarded';
+  readonly planId: string;
+  readonly projection: RenderFrameDiff;
+  readonly projectionReadout: ProjectionReadout;
 }
 
 export interface AssetImportPreparedResponse extends ResponseHeader {
@@ -733,6 +839,12 @@ export const STUDIO_ADAPTER_OPERATIONS = [
   'prepareVoxelConversion',
   'applyVoxelConversion',
   'discardVoxelConversion',
+  'inspectVoxelObjectSource',
+  'prepareVoxelObjectConversion',
+  'previewVoxelObjectConversion',
+  'applyVoxelObjectConversion',
+  'discardVoxelObjectConversion',
+  'attachVoxelObjectInstance',
   'closeProject',
 ] as const;
 
@@ -753,6 +865,7 @@ export interface StudioProjectReadout {
   readonly assetBrowser: AssetBrowserReadout;
   readonly voxel?: Readonly<Record<string, unknown>>;
   readonly voxelAuthoring: VoxelAuthoringReadout;
+  readonly voxelObjectAuthoring: VoxelObjectAuthoringReadout;
   readonly animatedMeshResources: readonly AnimatedMeshResourceReadout[];
   readonly loadingBay: LoadingBayDomainReadout;
   readonly projection: RenderFrameDiff;
@@ -1086,6 +1199,49 @@ export function decodeStudioAdapterResponse(input: unknown): StudioAdapterRespon
       text(value['planId'], '$.planId');
       return input as VoxelConversionDiscardedResponse;
     }
+    case 'voxelObjectSourceInspected': {
+      const value = record(input, '$', [
+        'type', 'protocolVersion', 'requestId', 'inspection',
+      ]);
+      responseHeader(value);
+      voxelContract('$.inspection', () =>
+        validateVoxelObjectSourceInspection(value['inspection'], '$.inspection'));
+      return input as VoxelObjectSourceInspectedResponse;
+    }
+    case 'voxelObjectConversionPrepared': {
+      const value = record(input, '$', [
+        'type', 'protocolVersion', 'requestId', 'plan', 'preview', 'projection',
+        'projectionReadout',
+      ]);
+      responseHeader(value);
+      voxelContract('$.plan', () =>
+        validateVoxelObjectConversionPlan(value['plan'], '$.plan'));
+      voxelContract('$.preview', () =>
+        validateVoxelObjectConversionPreview(value['preview'], '$.preview'));
+      completeProjection(value, '$');
+      return input as VoxelObjectConversionPreparedResponse;
+    }
+    case 'voxelObjectConversionPreviewed': {
+      const value = record(input, '$', [
+        'type', 'protocolVersion', 'requestId', 'preview', 'projection',
+        'projectionReadout',
+      ]);
+      responseHeader(value);
+      voxelContract('$.preview', () =>
+        validateVoxelObjectConversionPreview(value['preview'], '$.preview'));
+      completeProjection(value, '$');
+      return input as VoxelObjectConversionPreviewedResponse;
+    }
+    case 'voxelObjectConversionDiscarded': {
+      const value = record(input, '$', [
+        'type', 'protocolVersion', 'requestId', 'planId', 'projection',
+        'projectionReadout',
+      ]);
+      responseHeader(value);
+      text(value['planId'], '$.planId');
+      completeProjection(value, '$');
+      return input as VoxelObjectConversionDiscardedResponse;
+    }
     case 'assetImportPrepared': {
       const value = record(input, '$', [
         'type', 'protocolVersion', 'requestId', 'plan',
@@ -1159,6 +1315,18 @@ function responseHeader(value: Readonly<Record<string, unknown>>): void {
   text(value['requestId'], '$.requestId');
 }
 
+function completeProjection(value: Readonly<Record<string, unknown>>, path: string): void {
+  try {
+    decodeRenderFrameDiff(value['projection']);
+  } catch (error) {
+    fail(
+      `${path}.projection`,
+      error instanceof Error ? error.message : 'renderer contract rejected the frame',
+    );
+  }
+  projectionReadout(value['projectionReadout'], `${path}.projectionReadout`);
+}
+
 function voxelContract(path: string, validate: () => void): void {
   try {
     validate();
@@ -1192,7 +1360,7 @@ function adapterDescription(input: unknown, path: string): void {
   );
   const expected = STUDIO_ADAPTER_OPERATIONS;
   if (operations.length !== expected.length || operations.some((entry, index) => entry !== expected[index])) {
-    fail(`${path}.operations`, 'must name the protocol 6 operation set in order');
+    fail(`${path}.operations`, 'must name the protocol 7 operation set in order');
   }
 }
 
@@ -1207,6 +1375,7 @@ function projectReadout(input: unknown, path: string): void {
       'sceneHierarchy',
       'assetBrowser',
       'voxelAuthoring',
+      'voxelObjectAuthoring',
       'animatedMeshResources',
       'loadingBay',
       'projection',
@@ -1222,6 +1391,11 @@ function projectReadout(input: unknown, path: string): void {
   optional(value['voxel'], `${path}.voxel`, looseRecord);
   voxelContract(`${path}.voxelAuthoring`, () =>
     validateVoxelAuthoringReadout(value['voxelAuthoring'], `${path}.voxelAuthoring`));
+  voxelContract(`${path}.voxelObjectAuthoring`, () =>
+    validateVoxelObjectAuthoringReadout(
+      value['voxelObjectAuthoring'],
+      `${path}.voxelObjectAuthoring`,
+    ));
   animatedMeshResources(value['animatedMeshResources'], `${path}.animatedMeshResources`);
   loadingBayReadout(value['loadingBay'], `${path}.loadingBay`);
   try {
