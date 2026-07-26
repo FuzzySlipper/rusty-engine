@@ -90,14 +90,20 @@ artifact.
 ## Implemented conversion
 
 `voxel-convert` is a separate workspace crate with no downstream-runtime dependency. Its GLB importer
-accepts exactly one static mesh backed by an embedded BIN chunk. The mesh must be instantiated once
-by the only root node of the only default scene, with an identity node transform and no children,
-camera, skin, or instance weights. GLB scene transforms are rejected instead of being silently
-discarded; the explicit conversion-plan transform is the supported, hash-pinned way to position
-source geometry.
-The importer also rejects animation, skinning, morph targets, non-triangle modes, implicit indices,
-invalid indices, non-finite/degenerate geometry, and the M7B.1 resource ceilings, then exposes only
-positions, indexed triangles, and stable material slots to the converter.
+reads one explicit default scene backed by an embedded BIN chunk. It traverses bounded roots and
+children deterministically, composes finite affine node transforms, admits multiple mesh nodes and
+primitive groups, and retains exact source node/mesh/primitive/material identities plus bounded UV
+sets. The ordinary static converter receives one explicitly flattened model-space mesh; the
+higher-level import receipt can select the whole model, `group/<n>`, or one exact `node/<n>` subset.
+The separate hash-pinned conversion-plan transform still positions the resulting selected model as
+an authoring choice rather than replacing source-scene semantics.
+
+Static import rejects animation, skinning, morph targets, instance weights, hierarchy cycles or
+multiply-parented nodes, external buffers, non-triangle modes, implicit or invalid indices,
+non-finite transforms/positions/UVs, degenerate transformed geometry, excessive hierarchy or
+expanded geometry, and ambiguous/missing selections. External image URIs are not fetched or treated
+as geometry dependencies. The cohesive imported scene retains mesh-local primitives and node
+transforms so the later animation owner can deform the same family without a second parser.
 
 Surface mode maps the source bounds through the explicit fit/origin settings and samples each
 triangle at no more than half-cell spacing in target-grid coordinates. A ten-million-sample work

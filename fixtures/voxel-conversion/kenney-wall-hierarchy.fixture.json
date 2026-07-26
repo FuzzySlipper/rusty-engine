@@ -1,0 +1,25 @@
+{
+  "sourceFixture": "kenney-wall-a.glb",
+  "licenseFixture": "KENNEY-RETRO-URBAN-KIT-LICENSE.txt",
+  "sceneName": "licensed-hierarchy",
+  "sceneRoots": [0, 2],
+  "meshNames": ["wall-a-mesh", "wall-b-mesh"],
+  "nodes": [
+    {
+      "name": "root",
+      "translation": [10.0, 0.0, 0.0],
+      "scale": [2.0, 1.0, 1.0],
+      "children": [1]
+    },
+    {
+      "name": "wall-a",
+      "translation": [1.0, 2.0, 0.0],
+      "mesh": 0
+    },
+    {
+      "name": "wall-b",
+      "translation": [-3.0, 0.0, 0.0],
+      "mesh": 1
+    }
+  ]
+}

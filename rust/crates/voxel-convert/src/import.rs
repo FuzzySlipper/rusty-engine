@@ -1,15 +1,27 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use gltf::{buffer::Source as BufferSource, mesh::Mode};
-use voxel_asset::{
-    MAX_CONVERSION_SOURCE_BYTES, MAX_CONVERSION_SOURCE_INDICES, MAX_CONVERSION_SOURCE_VERTICES,
-};
+use voxel_asset::{MAX_CONVERSION_SOURCE_INDICES, MAX_CONVERSION_SOURCE_VERTICES};
 
 use crate::ConversionError;
+
+mod gltf_scene;
+
+pub const MAX_IMPORTED_SCENE_NODES: usize = 4_096;
+pub const MAX_IMPORTED_SCENE_DEPTH: usize = 256;
+pub const MAX_IMPORTED_SCENE_EDGES: usize = 16_384;
+pub const MAX_IMPORTED_SCENE_MESHES: usize = 4_096;
+pub const MAX_IMPORTED_SCENE_PRIMITIVES: usize = 8_192;
+pub const MAX_IMPORTED_SCENE_MESH_INSTANCES: usize = 4_096;
+pub const MAX_IMPORTED_TEXCOORD_SETS: usize = 8;
+pub const MAX_IMPORTED_NAME_BYTES: usize = 4_096;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportedStaticMesh {
     pub positions: Vec<[f64; 3]>,
+    /// Every imported `TEXCOORD_n` set in ascending source-set order.
+    /// Values align one-for-one with `positions`; `None` means that the owning
+    /// source primitive did not define that set.
+    pub texture_coordinates: Vec<ImportedStaticTextureCoordinates>,
     pub triangles: Vec<ImportedTriangle>,
     pub primitive_groups: Vec<ImportedPrimitiveGroup>,
     pub materials: Vec<ImportedMaterial>,
@@ -23,6 +35,8 @@ pub struct ImportedTriangle {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImportedPrimitiveGroup {
+    pub source_node_index: u32,
+    pub source_mesh_index: u32,
     pub source_primitive_index: u32,
     pub source_material_slot: u32,
     pub triangle_start: u32,
@@ -35,304 +49,231 @@ pub struct ImportedMaterial {
     pub source_material_name: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportedStaticTextureCoordinates {
+    pub source_set_index: u32,
+    pub coordinates: Vec<Option<[f64; 2]>>,
+}
+
+/// One selected GLB scene in source-local form.
+///
+/// Mesh geometry is retained once in mesh-local coordinates. Nodes retain the
+/// deterministic hierarchy and composed model transform separately. Static
+/// conversion flattens this family explicitly; animation sampling can deform
+/// the same indexed primitive family without defining another mesh authority.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportedModelScene {
+    pub source_scene_index: u32,
+    pub source_scene_name: Option<String>,
+    pub nodes: Vec<ImportedModelNode>,
+    pub meshes: Vec<ImportedModelMesh>,
+    pub materials: Vec<ImportedMaterial>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportedModelNode {
+    pub source_node_index: u32,
+    pub source_node_name: Option<String>,
+    pub parent_node_index: Option<u32>,
+    pub child_node_indices: Vec<u32>,
+    pub source_mesh_index: Option<u32>,
+    pub local_transform: [f64; 16],
+    pub model_transform: [f64; 16],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportedModelMesh {
+    pub source_mesh_index: u32,
+    pub source_mesh_name: Option<String>,
+    pub primitives: Vec<ImportedModelPrimitive>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportedModelPrimitive {
+    pub source_primitive_index: u32,
+    pub source_material_slot: u32,
+    pub positions: Vec<[f64; 3]>,
+    pub texture_coordinates: Vec<ImportedTextureCoordinates>,
+    pub indices: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportedTextureCoordinates {
+    pub source_set_index: u32,
+    pub coordinates: Vec<[f64; 2]>,
+}
+
+pub fn import_static_glb_scene(source: &[u8]) -> Result<ImportedModelScene, ConversionError> {
+    gltf_scene::import_static_glb_scene(source)
+}
+
 pub fn import_static_glb(source: &[u8]) -> Result<ImportedStaticMesh, ConversionError> {
-    if source.is_empty() || source.len() as u64 > MAX_CONVERSION_SOURCE_BYTES {
-        return Err(ConversionError::one(
-            "conversion.resourceLimit",
-            "source",
-            format!(
-                "source byte count {} is outside 1..={MAX_CONVERSION_SOURCE_BYTES}",
-                source.len()
-            ),
-        ));
-    }
-    let parsed = gltf::Gltf::from_slice(source).map_err(|error| {
-        ConversionError::one(
-            "conversion.invalidSource",
-            "source",
-            format!("invalid GLB 2.0 source: {error}"),
-        )
-    })?;
-    let blob = parsed.blob.as_deref().ok_or_else(|| {
-        ConversionError::one(
-            "conversion.unsupportedFeature",
-            "source",
-            "GLB source must contain one embedded BIN chunk",
-        )
-    })?;
-    if parsed.document.animations().next().is_some() || parsed.document.skins().next().is_some() {
-        return Err(ConversionError::one(
-            "conversion.unsupportedFeature",
-            "source",
-            "animated or skinned sources are outside the static conversion boundary",
-        ));
-    }
-    for buffer in parsed.document.buffers() {
-        if !matches!(buffer.source(), BufferSource::Bin) {
-            return Err(ConversionError::one(
-                "conversion.unsupportedFeature",
-                "source",
-                "GLB source may not reference external buffers",
-            ));
-        }
-    }
+    flatten_static_scene(&import_static_glb_scene(source)?)
+}
 
-    let mut meshes = parsed.document.meshes();
-    let mesh = meshes.next().ok_or_else(|| {
-        ConversionError::one(
-            "conversion.invalidGeometry",
-            "source.meshes",
-            "GLB contains no mesh",
-        )
-    })?;
-    if meshes.next().is_some() {
-        return Err(ConversionError::one(
-            "conversion.unsupportedFeature",
-            "source.meshes",
-            "conversion accepts exactly one static mesh",
-        ));
-    }
-    validate_single_identity_mesh_instance(&parsed.document, mesh.index())?;
-
-    let material_count = parsed.document.materials().count() as u32;
+pub fn flatten_static_scene(
+    scene: &ImportedModelScene,
+) -> Result<ImportedStaticMesh, ConversionError> {
     let mut positions = Vec::new();
+    let texture_set_indices = scene
+        .meshes
+        .iter()
+        .flat_map(|mesh| &mesh.primitives)
+        .flat_map(|primitive| &primitive.texture_coordinates)
+        .map(|texture_coordinates| texture_coordinates.source_set_index)
+        .collect::<BTreeSet<_>>();
+    let mut texture_coordinates = texture_set_indices
+        .into_iter()
+        .map(|source_set_index| (source_set_index, Vec::new()))
+        .collect::<BTreeMap<u32, Vec<Option<[f64; 2]>>>>();
     let mut triangles = Vec::new();
     let mut primitive_groups = Vec::new();
-    let mut materials = BTreeMap::<u32, Option<String>>::new();
-    for primitive in mesh.primitives() {
-        if primitive.mode() != Mode::Triangles || primitive.morph_targets().next().is_some() {
-            return Err(ConversionError::one(
-                "conversion.unsupportedPrimitive",
-                format!("source.meshes[0].primitives[{}]", primitive.index()),
-                "primitives must be non-morphing indexed triangle lists",
-            ));
-        }
-        let reader = primitive.reader(|buffer| match buffer.source() {
-            BufferSource::Bin => Some(blob),
-            BufferSource::Uri(_) => None,
-        });
-        let source_positions = reader.read_positions().ok_or_else(|| {
-            ConversionError::one(
-                "conversion.invalidGeometry",
-                format!(
-                    "source.meshes[0].primitives[{}].attributes.POSITION",
-                    primitive.index()
-                ),
-                "primitive is missing POSITION data",
-            )
-        })?;
-        ensure_total_limit(
-            positions.len(),
-            source_positions.len(),
-            MAX_CONVERSION_SOURCE_VERTICES,
-            "source.positions",
-        )?;
-        let vertex_offset = u32::try_from(positions.len()).map_err(|_| {
-            ConversionError::one(
-                "conversion.resourceLimit",
-                "source.positions",
-                "vertex offset exceeds u32",
-            )
-        })?;
-        let primitive_positions = source_positions
-            .map(|position| position.map(f64::from))
-            .collect::<Vec<_>>();
-        if primitive_positions
-            .iter()
-            .flatten()
-            .any(|component| !component.is_finite())
-        {
-            return Err(ConversionError::one(
-                "conversion.invalidGeometry",
-                format!(
-                    "source.meshes[0].primitives[{}].attributes.POSITION",
-                    primitive.index()
-                ),
-                "POSITION contains a non-finite component",
-            ));
-        }
+    let mut used_materials = BTreeSet::new();
+    let mut mesh_instance_count = 0usize;
 
-        let index_count = primitive
-            .indices()
+    for node in &scene.nodes {
+        let Some(mesh_index) = node.source_mesh_index else {
+            continue;
+        };
+        mesh_instance_count = mesh_instance_count.saturating_add(1);
+        if mesh_instance_count > MAX_IMPORTED_SCENE_MESH_INSTANCES {
+            return Err(ConversionError::one(
+                "conversion.resourceLimit",
+                "source.scene.meshInstances",
+                format!(
+                    "selected scene contains more than {MAX_IMPORTED_SCENE_MESH_INSTANCES} mesh instances"
+                ),
+            ));
+        }
+        let mesh = scene
+            .meshes
+            .iter()
+            .find(|mesh| mesh.source_mesh_index == mesh_index)
             .ok_or_else(|| {
                 ConversionError::one(
-                    "conversion.unsupportedPrimitive",
-                    format!("source.meshes[0].primitives[{}].indices", primitive.index()),
-                    "primitive must provide an explicit index accessor",
+                    "conversion.invalidGeometry",
+                    format!("source.nodes[{}].mesh", node.source_node_index),
+                    format!("referenced mesh {mesh_index} was not imported"),
                 )
-            })?
-            .count();
-        ensure_total_limit(
-            triangles.len().saturating_mul(3),
-            index_count,
-            MAX_CONVERSION_SOURCE_INDICES,
-            "source.indices",
-        )?;
-        let source_indices = reader.read_indices().expect("validated indexed primitive");
-        let indices = source_indices.into_u32().collect::<Vec<_>>();
-        if !indices.len().is_multiple_of(3)
-            || indices
-                .iter()
-                .any(|index| *index as usize >= primitive_positions.len())
-        {
-            return Err(ConversionError::one(
-                "conversion.invalidGeometry",
-                format!("source.meshes[0].primitives[{}].indices", primitive.index()),
-                "indices are not a valid triangle list for this primitive",
-            ));
-        }
-        let material = primitive.material();
-        let material_slot = material
-            .index()
-            .map(|index| index as u32)
-            .unwrap_or(material_count + primitive.index() as u32);
-        let material_name = material.name().map(str::to_string).or_else(|| {
-            material
-                .index()
-                .map(|index| format!("gltf-material/{index}"))
-        });
-        materials.entry(material_slot).or_insert(material_name);
-
-        positions.extend(primitive_positions);
-        let triangle_start = u32::try_from(triangles.len()).map_err(|_| {
-            ConversionError::one(
-                "conversion.resourceLimit",
-                "source.groups",
-                "primitive triangle start exceeds u32",
-            )
-        })?;
-        triangles.extend(indices.chunks_exact(3).map(|triangle| ImportedTriangle {
-            indices: [
-                triangle[0] + vertex_offset,
-                triangle[1] + vertex_offset,
-                triangle[2] + vertex_offset,
-            ],
-            source_material_slot: material_slot,
-        }));
-        primitive_groups.push(ImportedPrimitiveGroup {
-            source_primitive_index: primitive.index() as u32,
-            source_material_slot: material_slot,
-            triangle_start,
-            triangle_count: u32::try_from(indices.len() / 3).map_err(|_| {
+            })?;
+        for primitive in &mesh.primitives {
+            ensure_total_limit(
+                positions.len(),
+                primitive.positions.len(),
+                MAX_CONVERSION_SOURCE_VERTICES,
+                "source.positions",
+            )?;
+            ensure_total_limit(
+                triangles.len().saturating_mul(3),
+                primitive.indices.len(),
+                MAX_CONVERSION_SOURCE_INDICES,
+                "source.indices",
+            )?;
+            let vertex_offset = u32::try_from(positions.len()).map_err(|_| {
+                ConversionError::one(
+                    "conversion.resourceLimit",
+                    "source.positions",
+                    "expanded vertex offset exceeds u32",
+                )
+            })?;
+            for position in &primitive.positions {
+                positions.push(transform_point(node.model_transform, *position).ok_or_else(
+                    || {
+                        ConversionError::one(
+                            "conversion.invalidTransform",
+                            format!("source.nodes[{}].transform", node.source_node_index),
+                            "composed node transform produced a non-finite position",
+                        )
+                    },
+                )?);
+            }
+            for (source_set_index, flattened) in &mut texture_coordinates {
+                match primitive
+                    .texture_coordinates
+                    .iter()
+                    .find(|candidate| candidate.source_set_index == *source_set_index)
+                {
+                    Some(source) => flattened.extend(source.coordinates.iter().copied().map(Some)),
+                    None => flattened.extend(std::iter::repeat_n(None, primitive.positions.len())),
+                }
+            }
+            let triangle_start = u32::try_from(triangles.len()).map_err(|_| {
                 ConversionError::one(
                     "conversion.resourceLimit",
                     "source.groups",
-                    "primitive triangle count exceeds u32",
+                    "primitive triangle start exceeds u32",
                 )
-            })?,
-        });
+            })?;
+            triangles.extend(
+                primitive
+                    .indices
+                    .chunks_exact(3)
+                    .map(|triangle| ImportedTriangle {
+                        indices: [
+                            triangle[0] + vertex_offset,
+                            triangle[1] + vertex_offset,
+                            triangle[2] + vertex_offset,
+                        ],
+                        source_material_slot: primitive.source_material_slot,
+                    }),
+            );
+            primitive_groups.push(ImportedPrimitiveGroup {
+                source_node_index: node.source_node_index,
+                source_mesh_index: mesh.source_mesh_index,
+                source_primitive_index: primitive.source_primitive_index,
+                source_material_slot: primitive.source_material_slot,
+                triangle_start,
+                triangle_count: u32::try_from(primitive.indices.len() / 3).map_err(|_| {
+                    ConversionError::one(
+                        "conversion.resourceLimit",
+                        "source.groups",
+                        "primitive triangle count exceeds u32",
+                    )
+                })?,
+            });
+            used_materials.insert(primitive.source_material_slot);
+        }
     }
-    if positions.is_empty() || triangles.is_empty() || materials.is_empty() {
+
+    if positions.is_empty() || triangles.is_empty() || used_materials.is_empty() {
         return Err(ConversionError::one(
             "conversion.invalidGeometry",
-            "source.meshes[0]",
-            "mesh produced no indexed triangle geometry",
+            "source.scene",
+            "default scene produced no indexed triangle geometry",
+        ));
+    }
+    if texture_coordinates
+        .values()
+        .any(|coordinates| coordinates.len() != positions.len())
+    {
+        return Err(ConversionError::one(
+            "conversion.invalidGeometry",
+            "source.textureCoordinates",
+            "preserved TEXCOORD values do not align with imported positions",
         ));
     }
     validate_triangles(&positions, &triangles)?;
 
     Ok(ImportedStaticMesh {
         positions,
-        triangles,
-        primitive_groups,
-        materials: materials
+        texture_coordinates: texture_coordinates
             .into_iter()
             .map(
-                |(source_material_slot, source_material_name)| ImportedMaterial {
-                    source_material_slot,
-                    source_material_name,
+                |(source_set_index, coordinates)| ImportedStaticTextureCoordinates {
+                    source_set_index,
+                    coordinates,
                 },
             )
             .collect(),
+        triangles,
+        primitive_groups,
+        materials: scene
+            .materials
+            .iter()
+            .filter(|material| used_materials.contains(&material.source_material_slot))
+            .cloned()
+            .collect(),
     })
-}
-
-/// The first converter deliberately accepts one unambiguous mesh-local authoring
-/// shape. Scene traversal and transform composition can be added as a separate
-/// feature, but silently discarding either would corrupt authored geometry.
-fn validate_single_identity_mesh_instance(
-    document: &gltf::Document,
-    mesh_index: usize,
-) -> Result<(), ConversionError> {
-    let mut scenes = document.scenes();
-    let scene = scenes.next().ok_or_else(|| {
-        ConversionError::one(
-            "conversion.unsupportedFeature",
-            "source.scenes",
-            "conversion requires exactly one default scene",
-        )
-    })?;
-    if scenes.next().is_some() {
-        return Err(ConversionError::one(
-            "conversion.unsupportedFeature",
-            "source.scenes",
-            "conversion accepts exactly one scene",
-        ));
-    }
-    if document.default_scene().map(|candidate| candidate.index()) != Some(scene.index()) {
-        return Err(ConversionError::one(
-            "conversion.unsupportedFeature",
-            "source.scene",
-            "the single scene must be selected as the default scene",
-        ));
-    }
-
-    let mut nodes = document.nodes();
-    let node = nodes.next().ok_or_else(|| {
-        ConversionError::one(
-            "conversion.unsupportedFeature",
-            "source.nodes",
-            "the default scene must contain one mesh node",
-        )
-    })?;
-    if nodes.next().is_some() {
-        return Err(ConversionError::one(
-            "conversion.unsupportedFeature",
-            "source.nodes",
-            "conversion accepts one mesh instance and no additional scene nodes",
-        ));
-    }
-    let mut roots = scene.nodes();
-    if roots.next().map(|root| root.index()) != Some(node.index()) || roots.next().is_some() {
-        return Err(ConversionError::one(
-            "conversion.unsupportedFeature",
-            format!("source.scenes[{}].nodes", scene.index()),
-            "the single mesh node must be the default scene's only root",
-        ));
-    }
-    if node.mesh().map(|mesh| mesh.index()) != Some(mesh_index) {
-        return Err(ConversionError::one(
-            "conversion.unsupportedFeature",
-            format!("source.nodes[{}].mesh", node.index()),
-            "the default scene node must instantiate the single mesh exactly once",
-        ));
-    }
-    if node.children().next().is_some()
-        || node.camera().is_some()
-        || node.skin().is_some()
-        || node.weights().is_some()
-    {
-        return Err(ConversionError::one(
-            "conversion.unsupportedFeature",
-            format!("source.nodes[{}]", node.index()),
-            "mesh node children, cameras, skins, and instance weights are unsupported",
-        ));
-    }
-
-    const IDENTITY: [[f32; 4]; 4] = [
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    ];
-    if node.transform().matrix() != IDENTITY {
-        return Err(ConversionError::one(
-            "conversion.unsupportedFeature",
-            format!("source.nodes[{}].transform", node.index()),
-            "node transforms are unsupported; bake the transform into mesh positions before conversion",
-        ));
-    }
-    Ok(())
 }
 
 fn validate_triangles(
@@ -345,7 +286,7 @@ fn validate_triangles(
             return Err(ConversionError::one(
                 "conversion.invalidGeometry",
                 format!("source.triangles[{index}]"),
-                "triangle is degenerate",
+                "triangle is degenerate after scene transform composition",
             ));
         }
     }
@@ -364,6 +305,60 @@ pub(crate) fn area_squared(positions: &[[f64; 3]], triangle: &ImportedTriangle) 
     dot(cross, cross)
 }
 
+pub(super) fn identity_matrix() -> [f64; 16] {
+    [
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ]
+}
+
+pub(super) fn matrix_from_gltf(matrix: [[f32; 4]; 4]) -> [f64; 16] {
+    std::array::from_fn(|index| f64::from(matrix[index / 4][index % 4]))
+}
+
+pub(super) fn multiply_matrices(left: [f64; 16], right: [f64; 16]) -> [f64; 16] {
+    let mut product = [0.0; 16];
+    for column in 0..4 {
+        for row in 0..4 {
+            product[column * 4 + row] = (0..4)
+                .map(|inner| left[inner * 4 + row] * right[column * 4 + inner])
+                .sum();
+        }
+    }
+    product
+}
+
+pub(super) fn validate_affine_matrix(
+    matrix: [f64; 16],
+    path: impl Into<String>,
+) -> Result<(), ConversionError> {
+    if matrix.iter().any(|value| !value.is_finite())
+        || matrix[3].abs() > f64::EPSILON
+        || matrix[7].abs() > f64::EPSILON
+        || matrix[11].abs() > f64::EPSILON
+        || (matrix[15] - 1.0).abs() > f64::EPSILON
+    {
+        return Err(ConversionError::one(
+            "conversion.invalidTransform",
+            path,
+            "node transform must be a finite affine column-major matrix",
+        ));
+    }
+    Ok(())
+}
+
+fn transform_point(matrix: [f64; 16], point: [f64; 3]) -> Option<[f64; 3]> {
+    let [x, y, z] = point;
+    let transformed = [
+        matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12],
+        matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13],
+        matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14],
+    ];
+    transformed
+        .iter()
+        .all(|component| component.is_finite())
+        .then_some(transformed)
+}
+
 fn subtract(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
     [left[0] - right[0], left[1] - right[1], left[2] - right[2]]
 }
@@ -372,7 +367,24 @@ fn dot(left: [f64; 3], right: [f64; 3]) -> f64 {
     left[0] * right[0] + left[1] * right[1] + left[2] * right[2]
 }
 
-fn ensure_total_limit(
+pub(super) fn validate_imported_name(
+    value: Option<&str>,
+    path: impl Into<String>,
+) -> Result<Option<String>, ConversionError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.trim().is_empty() || value.len() > MAX_IMPORTED_NAME_BYTES {
+        return Err(ConversionError::one(
+            "conversion.invalidString",
+            path,
+            format!("name must contain 1..={MAX_IMPORTED_NAME_BYTES} UTF-8 bytes when present"),
+        ));
+    }
+    Ok(Some(value.to_owned()))
+}
+
+pub(super) fn ensure_total_limit(
     current: usize,
     incoming: usize,
     limit: usize,

@@ -20,15 +20,15 @@ The static path is already substantial:
 | Owner | Implemented behavior |
 |---|---|
 | `voxel-asset` | Strict schema-1 voxel volumes, sparse runs, bounds, palette/material bindings, provenance, canonical bytes, semantic hashes, and bounded conversion inputs. |
-| `voxel-convert` | Bounded embedded GLB import; static indexed triangles; surface and solid modes; contain/cover/stretch and origin policy; affine transforms; fallback and sampled texture material policy; plan/preview/apply; bounded model queries; stale guards; and fail-atomic CLI installation. |
+| `voxel-convert` | Bounded embedded GLB default-scene import with composed node transforms, multiple mesh instances/primitives, stable source identities, retained UV sets, explicit group/node selection, static indexed triangles, surface and solid modes, contain/cover/stretch and origin policy, affine transforms, material policy, plan/preview/apply, bounded queries, stale guards, and fail-atomic installation. |
 | `engine-spatial` | Canonical material-voxel authority plus collision, navigation, and deterministic chunk meshes. |
 | `render-projection` | Stable retained voxel-instance/chunk handles and changed-payload projection. |
 | Studio | Project/host GLB selection, conversion settings, private Rust plan and renderer-visible preview, guarded apply/discard, canonical project persistence, import/export, and reopen integration proof. |
 
 The important gaps are behavioral rather than language-boundary gaps:
 
-- import accepts one identity-transformed mesh instance and rejects scene hierarchy, multiple
-  meshes, animation, skins, morph targets, and instance weights;
+- static import now handles bounded scene hierarchy and multiple meshes, but animation sampling,
+  skins, morph targets, and instance weights remain the separate #6238 responsibility;
 - surface conversion samples triangle points rather than conservatively testing triangle/cell
   overlap;
 - solid conversion validates closed topology but fills the mapped axis-aligned bounds rather than
@@ -68,6 +68,37 @@ schema is justified. The public resolved-frame meaning does not depend on the st
 The generic content store recognizes voxel objects as durable asset data and can encode their
 canonical owner bytes. It does not decide a product path, scene attachment, playback, or collision
 policy.
+
+## Bounded model-scene import
+
+`voxel-convert` parses the selected GLB default scene into one reusable imported-model family before
+flattening static geometry. Mesh-local indexed primitives retain source node, mesh, primitive, and
+material indices plus every bounded `TEXCOORD_n` set. Reachable nodes retain their parent/child
+identity, local transform, and composed model transform. A later animation sampler can therefore
+deform the same primitive family instead of reparsing through another authority.
+
+Traversal is deterministic root order followed by source child order. It accepts multiple scenes
+but reads only the explicit default scene, multiple roots, transform hierarchies, multiple mesh
+definitions, and repeated mesh instances. The flattened static mesh duplicates geometry only at
+the explicit instance boundary. `meshPrimitive` remains backwards compatible: absent means the
+whole model, `group/<n>` selects one deterministic flattened primitive group, and `node/<n>` selects
+all groups attached to one exact source node. Canonical metadata exposes the source indices so
+equal names never become identity.
+
+The importer bounds source bytes, document nodes/edges/depth, meshes, mesh instances, primitives,
+UV sets, UTF-8 names, expanded vertices, and expanded indices. It rejects cycles, nodes reached from
+more than one root/parent, external buffer resources, unsupported primitive modes, implicit or bad
+indices, morph/skin/animation inputs in the static path, non-finite transforms/geometry/UVs, and
+degenerate transformed triangles with classified source paths. Texture image URIs are never opened
+or resolved by this host-neutral importer; only embedded geometry buffers and material identity are
+consumed.
+
+The licensed hierarchy corpus is the existing CC0 Kenney wall geometry plus the checked
+`kenney-wall-hierarchy.fixture.json` scene overlay. It creates a transformed parent/child branch and
+a second transformed mesh node using two mesh definitions and both source primitives. Tests prove
+composed transforms, unique node/mesh/primitive identities, UV preservation, deterministic whole
+model import, node/group selection, and bounded failure before partial geometry is returned. The
+adjacent Kenney license continues to govern the unchanged source geometry.
 
 ## Intended animated conversion path
 

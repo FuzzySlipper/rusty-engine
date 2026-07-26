@@ -5,7 +5,10 @@ use voxel_asset::{
     MAX_CONVERSION_SOURCE_BYTES, MAX_CONVERSION_SOURCE_INDICES, MAX_CONVERSION_SOURCE_VERTICES,
 };
 
-use crate::{import_static_glb, ConversionError, ImportedStaticMesh};
+use crate::{
+    flatten_static_scene, import_static_glb_scene, ConversionError, ImportedModelScene,
+    ImportedPrimitiveGroup, ImportedStaticMesh, ImportedStaticTextureCoordinates,
+};
 
 pub const MAX_MESH_SOURCE_ASSET_ID_BYTES: usize = 1_024;
 pub const MAX_MESH_SOURCE_PATH_BYTES: usize = 8_192;
@@ -64,6 +67,9 @@ pub struct MeshSourceGroup {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     pub source_material_slot: u32,
+    pub source_node_index: u32,
+    pub source_mesh_index: u32,
+    pub source_primitive_index: u32,
     pub index_start: u32,
     pub index_count: u32,
     pub bounds: MeshSourceBounds,
@@ -71,12 +77,32 @@ pub struct MeshSourceGroup {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct MeshSourceNode {
+    pub node_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub source_node_index: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_source_node_index: Option<u32>,
+    pub child_source_node_indices: Vec<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_mesh_index: Option<u32>,
+    pub local_transform: [f64; 16],
+    pub model_transform: [f64; 16],
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct MeshSourceMetadata {
+    pub source_scene_index: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_scene_name: Option<String>,
     pub source_bounds: MeshSourceBounds,
     pub vertex_count: u32,
     pub triangle_count: u32,
     pub groups: Vec<MeshSourceGroup>,
     pub material_slots: Vec<MeshSourceMaterialSlot>,
+    pub nodes: Vec<MeshSourceNode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -92,6 +118,7 @@ pub struct MeshSourceImportReceipt {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportedMeshSource {
     pub receipt: MeshSourceImportReceipt,
+    pub scene: ImportedModelScene,
     pub mesh: ImportedStaticMesh,
 }
 
@@ -121,14 +148,15 @@ pub fn import_mesh_source(
             ),
         ));
     }
-    let mesh = match request.format {
-        MeshSourceFormat::Glb => import_static_glb(&request.source_bytes)?,
+    let scene = match request.format {
+        MeshSourceFormat::Glb => import_static_glb_scene(&request.source_bytes)?,
     };
+    let mesh = flatten_static_scene(&scene)?;
     let mesh = match request.mesh_primitive.as_deref() {
         Some(group_id) => select_primitive_group(mesh, group_id)?,
         None => mesh,
     };
-    let metadata = mesh_metadata(&mesh)?;
+    let metadata = mesh_metadata(&scene, &mesh)?;
     Ok(ImportedMeshSource {
         receipt: MeshSourceImportReceipt {
             source: MeshSourceRef {
@@ -142,6 +170,7 @@ pub fn import_mesh_source(
             source_byte_count: request.source_bytes.len() as u64,
             metadata,
         },
+        scene,
         mesh,
     })
 }
@@ -150,31 +179,46 @@ fn select_primitive_group(
     mesh: ImportedStaticMesh,
     group_id: &str,
 ) -> Result<ImportedStaticMesh, ConversionError> {
-    let requested_index = group_id
+    let selected_groups = if let Some(index) = group_id
         .strip_prefix("group/")
+        .and_then(|value| value.parse::<usize>().ok())
+    {
+        mesh.primitive_groups
+            .get(index)
+            .copied()
+            .into_iter()
+            .collect::<Vec<_>>()
+    } else if let Some(node_index) = group_id
+        .strip_prefix("node/")
         .and_then(|value| value.parse::<u32>().ok())
-        .ok_or_else(|| {
-            ConversionError::one(
-                "conversion.unknownMeshPrimitive",
-                "meshPrimitive",
-                "meshPrimitive must name one imported group such as group/0",
-            )
-        })?;
-    let group = mesh
-        .primitive_groups
+    {
+        mesh.primitive_groups
+            .iter()
+            .filter(|group| group.source_node_index == node_index)
+            .copied()
+            .collect::<Vec<_>>()
+    } else {
+        return Err(ConversionError::one(
+            "conversion.unknownMeshPrimitive",
+            "meshPrimitive",
+            "meshPrimitive must name one imported group or mesh node such as group/0 or node/0",
+        ));
+    };
+    if selected_groups.is_empty() {
+        return Err(ConversionError::one(
+            "conversion.unknownMeshPrimitive",
+            "meshPrimitive",
+            format!("source scene has no selectable subset `{group_id}`"),
+        ));
+    }
+    let selected = selected_groups
         .iter()
-        .find(|group| group.source_primitive_index == requested_index)
-        .copied()
-        .ok_or_else(|| {
-            ConversionError::one(
-                "conversion.unknownMeshPrimitive",
-                "meshPrimitive",
-                format!("source mesh has no primitive group `{group_id}`"),
-            )
-        })?;
-    let start = group.triangle_start as usize;
-    let end = start.saturating_add(group.triangle_count as usize);
-    let selected = &mesh.triangles[start..end];
+        .flat_map(|group| {
+            let start = group.triangle_start as usize;
+            let end = start.saturating_add(group.triangle_count as usize);
+            mesh.triangles[start..end].iter().copied()
+        })
+        .collect::<Vec<_>>();
     let mut remap = std::collections::BTreeMap::<u32, u32>::new();
     for index in selected.iter().flat_map(|triangle| triangle.indices) {
         let next = remap.len() as u32;
@@ -191,21 +235,46 @@ fn select_primitive_group(
             source_material_slot: triangle.source_material_slot,
         })
         .collect::<Vec<_>>();
-    let triangle_count = triangles.len() as u32;
+    let mut triangle_start = 0u32;
+    let primitive_groups = selected_groups
+        .iter()
+        .map(|group| {
+            let selected = ImportedPrimitiveGroup {
+                triangle_start,
+                ..*group
+            };
+            triangle_start = triangle_start.saturating_add(group.triangle_count);
+            selected
+        })
+        .collect::<Vec<_>>();
+    let selected_materials = selected_groups
+        .iter()
+        .map(|group| group.source_material_slot)
+        .collect::<std::collections::BTreeSet<_>>();
     let materials = mesh
         .materials
         .into_iter()
-        .filter(|material| material.source_material_slot == group.source_material_slot)
+        .filter(|material| selected_materials.contains(&material.source_material_slot))
         .collect::<Vec<_>>();
+    let texture_coordinates = mesh
+        .texture_coordinates
+        .into_iter()
+        .map(|source| {
+            let mut coordinates = vec![None; remap.len()];
+            for (source_index, target_index) in &remap {
+                coordinates[*target_index as usize] = source.coordinates[*source_index as usize];
+            }
+            ImportedStaticTextureCoordinates {
+                source_set_index: source.source_set_index,
+                coordinates,
+            }
+        })
+        .collect();
     Ok(ImportedStaticMesh {
         positions,
+        texture_coordinates,
         triangles,
-        primitive_groups: vec![crate::ImportedPrimitiveGroup {
-            source_primitive_index: group.source_primitive_index,
-            source_material_slot: group.source_material_slot,
-            triangle_start: 0,
-            triangle_count,
-        }],
+        primitive_groups,
         materials,
     })
 }
@@ -323,7 +392,10 @@ fn validate_string(value: &str, path: &'static str, limit: usize) -> Result<(), 
     Ok(())
 }
 
-fn mesh_metadata(mesh: &ImportedStaticMesh) -> Result<MeshSourceMetadata, ConversionError> {
+fn mesh_metadata(
+    scene: &ImportedModelScene,
+    mesh: &ImportedStaticMesh,
+) -> Result<MeshSourceMetadata, ConversionError> {
     if mesh.positions.len() > MAX_CONVERSION_SOURCE_VERTICES
         || mesh.triangles.len().saturating_mul(3) > MAX_CONVERSION_SOURCE_INDICES
     {
@@ -342,7 +414,7 @@ fn mesh_metadata(mesh: &ImportedStaticMesh) -> Result<MeshSourceMetadata, Conver
     })?;
     let mut groups = Vec::with_capacity(mesh.primitive_groups.len());
     let mut expected_start = 0usize;
-    for primitive in &mesh.primitive_groups {
+    for (group_index, primitive) in mesh.primitive_groups.iter().enumerate() {
         let group_start = primitive.triangle_start as usize;
         let group_end = group_start.saturating_add(primitive.triangle_count as usize);
         if primitive.triangle_count == 0
@@ -364,15 +436,34 @@ fn mesh_metadata(mesh: &ImportedStaticMesh) -> Result<MeshSourceMetadata, Conver
             .flat_map(|triangle| triangle.indices)
             .map(|index| mesh.positions[index as usize])
             .collect::<Vec<_>>();
-        let label = mesh
+        let material_label = mesh
             .materials
             .iter()
             .find(|material| material.source_material_slot == material_slot)
-            .and_then(|material| material.source_material_name.clone());
+            .and_then(|material| material.source_material_name.as_deref());
+        let node = scene
+            .nodes
+            .iter()
+            .find(|node| node.source_node_index == primitive.source_node_index);
+        let source_mesh = scene
+            .meshes
+            .iter()
+            .find(|mesh| mesh.source_mesh_index == primitive.source_mesh_index);
+        let label = [
+            node.and_then(|node| node.source_node_name.as_deref()),
+            source_mesh.and_then(|mesh| mesh.source_mesh_name.as_deref()),
+            material_label,
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
         groups.push(MeshSourceGroup {
-            group_id: format!("group/{}", primitive.source_primitive_index),
-            label,
+            group_id: format!("group/{group_index}"),
+            label: (!label.is_empty()).then(|| label.join(" / ")),
             source_material_slot: material_slot,
+            source_node_index: primitive.source_node_index,
+            source_mesh_index: primitive.source_mesh_index,
+            source_primitive_index: primitive.source_primitive_index,
             index_start: u32::try_from(group_start.saturating_mul(3)).map_err(|_| {
                 ConversionError::one(
                     "conversion.resourceLimit",
@@ -401,6 +492,8 @@ fn mesh_metadata(mesh: &ImportedStaticMesh) -> Result<MeshSourceMetadata, Conver
         ));
     }
     Ok(MeshSourceMetadata {
+        source_scene_index: scene.source_scene_index,
+        source_scene_name: scene.source_scene_name.clone(),
         source_bounds,
         vertex_count: u32::try_from(mesh.positions.len()).map_err(|_| {
             ConversionError::one(
@@ -423,6 +516,20 @@ fn mesh_metadata(mesh: &ImportedStaticMesh) -> Result<MeshSourceMetadata, Conver
             .map(|material| MeshSourceMaterialSlot {
                 source_material_slot: material.source_material_slot,
                 source_material_name: material.source_material_name.clone(),
+            })
+            .collect(),
+        nodes: scene
+            .nodes
+            .iter()
+            .map(|node| MeshSourceNode {
+                node_id: format!("node/{}", node.source_node_index),
+                label: node.source_node_name.clone(),
+                source_node_index: node.source_node_index,
+                parent_source_node_index: node.parent_node_index,
+                child_source_node_indices: node.child_node_indices.clone(),
+                source_mesh_index: node.source_mesh_index,
+                local_transform: node.local_transform,
+                model_transform: node.model_transform,
             })
             .collect(),
     })
@@ -465,6 +572,17 @@ mod tests {
                 [11.0, 0.0, 0.0],
                 [10.0, 1.0, 0.0],
             ],
+            texture_coordinates: vec![ImportedStaticTextureCoordinates {
+                source_set_index: 0,
+                coordinates: vec![
+                    Some([0.0, 0.0]),
+                    Some([1.0, 0.0]),
+                    Some([0.0, 1.0]),
+                    Some([0.0, 0.0]),
+                    Some([1.0, 0.0]),
+                    Some([0.0, 1.0]),
+                ],
+            }],
             triangles: vec![
                 ImportedTriangle {
                     indices: [0, 1, 2],
@@ -477,12 +595,16 @@ mod tests {
             ],
             primitive_groups: vec![
                 ImportedPrimitiveGroup {
+                    source_node_index: 0,
+                    source_mesh_index: 0,
                     source_primitive_index: 0,
                     source_material_slot: 2,
                     triangle_start: 0,
                     triangle_count: 1,
                 },
                 ImportedPrimitiveGroup {
+                    source_node_index: 1,
+                    source_mesh_index: 1,
                     source_primitive_index: 1,
                     source_material_slot: 7,
                     triangle_start: 1,
@@ -505,6 +627,14 @@ mod tests {
         assert_eq!(selected.triangles[0].indices, [0, 1, 2]);
         assert_eq!(selected.primitive_groups[0].source_primitive_index, 1);
         assert_eq!(selected.materials[0].source_material_slot, 7);
+        assert_eq!(
+            selected.texture_coordinates[0].coordinates,
+            vec![Some([0.0, 0.0]), Some([1.0, 0.0]), Some([0.0, 1.0])]
+        );
+
+        let selected_node = select_primitive_group(mesh.clone(), "node/0").unwrap();
+        assert_eq!(selected_node.primitive_groups.len(), 1);
+        assert_eq!(selected_node.primitive_groups[0].source_node_index, 0);
 
         let error = select_primitive_group(mesh, "group/9").unwrap_err();
         assert_eq!(

@@ -1,4 +1,4 @@
-//! Bounded offline conversion from one static GLB mesh to a durable voxel asset.
+//! Bounded offline conversion from static GLB scenes to durable voxel assets.
 //!
 //! This crate is an authoring/build tool. It has no dependency on a downstream
 //! game runtime and is never invoked while admitting or running a project.
@@ -17,8 +17,13 @@ mod store;
 pub use convert::{convert_glb, ConversionReceipt, CONVERTER_ID, MAX_SURFACE_SAMPLE_WORK};
 pub use diagnostic::{ConversionDiagnostic, ConversionError};
 pub use import::{
-    import_static_glb, ImportedMaterial, ImportedPrimitiveGroup, ImportedStaticMesh,
-    ImportedTriangle,
+    flatten_static_scene, import_static_glb, import_static_glb_scene, ImportedMaterial,
+    ImportedModelMesh, ImportedModelNode, ImportedModelPrimitive, ImportedModelScene,
+    ImportedPrimitiveGroup, ImportedStaticMesh, ImportedStaticTextureCoordinates,
+    ImportedTextureCoordinates, ImportedTriangle, MAX_IMPORTED_NAME_BYTES,
+    MAX_IMPORTED_SCENE_DEPTH, MAX_IMPORTED_SCENE_EDGES, MAX_IMPORTED_SCENE_MESHES,
+    MAX_IMPORTED_SCENE_MESH_INSTANCES, MAX_IMPORTED_SCENE_NODES, MAX_IMPORTED_SCENE_PRIMITIVES,
+    MAX_IMPORTED_TEXCOORD_SETS,
 };
 pub use material::{
     ConversionMaterialPolicy, TextureChannelLayout, TextureColorSpace, TextureMaterialBinding,
@@ -40,9 +45,9 @@ pub use query::{
 pub use source::{
     decode_mesh_source_import_request, import_mesh_source, source_sha256, ImportedMeshSource,
     MeshSourceBounds, MeshSourceFormat, MeshSourceGroup, MeshSourceImportReceipt,
-    MeshSourceImportRequest, MeshSourceMaterialSlot, MeshSourceMetadata, MeshSourceRef,
-    MAX_MESH_IMPORT_REQUEST_BYTES, MAX_MESH_PRIMITIVE_BYTES, MAX_MESH_SOURCE_ASSET_ID_BYTES,
-    MAX_MESH_SOURCE_PATH_BYTES,
+    MeshSourceImportRequest, MeshSourceMaterialSlot, MeshSourceMetadata, MeshSourceNode,
+    MeshSourceRef, MAX_MESH_IMPORT_REQUEST_BYTES, MAX_MESH_PRIMITIVE_BYTES,
+    MAX_MESH_SOURCE_ASSET_ID_BYTES, MAX_MESH_SOURCE_PATH_BYTES,
 };
 pub use store::{convert_and_install, decode_conversion_request, MAX_CONVERSION_REQUEST_BYTES};
 pub use voxel_asset::{

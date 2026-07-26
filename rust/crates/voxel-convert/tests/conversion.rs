@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use voxel_asset::{decode_voxel_asset, VoxelConversionMode};
 use voxel_convert::{
     convert_and_install, convert_glb, decode_conversion_request, import_static_glb,
-    MAX_CONVERSION_REQUEST_BYTES, MAX_CONVERSION_SOURCE_BYTES,
+    import_static_glb_scene, MAX_CONVERSION_REQUEST_BYTES, MAX_CONVERSION_SOURCE_BYTES,
 };
 
 const SOURCE: &[u8] = include_bytes!(concat!(
@@ -28,6 +28,12 @@ fn real_glb_import_is_bounded_static_geometry_with_materials() {
     assert_eq!(mesh.positions.len(), 48);
     assert_eq!(mesh.triangles.len(), 12);
     assert_eq!(mesh.materials.len(), 2);
+    assert_eq!(mesh.texture_coordinates.len(), 1);
+    assert_eq!(mesh.texture_coordinates[0].source_set_index, 0);
+    assert!(mesh.texture_coordinates[0]
+        .coordinates
+        .iter()
+        .all(Option::is_some));
     assert_eq!(mesh.materials[0].source_material_slot, 0);
     assert_eq!(
         mesh.materials[0].source_material_name.as_deref(),
@@ -41,25 +47,42 @@ fn real_glb_import_is_bounded_static_geometry_with_materials() {
 }
 
 #[test]
-fn transformed_and_multiply_instanced_meshes_fail_closed() {
+fn transformed_and_multiply_instanced_meshes_compose_deterministically() {
     let transformed = mutate_glb_json(|document| {
         document["nodes"][0]["translation"] = serde_json::json!([1.0, 0.0, 0.0]);
     });
-    let error = import_static_glb(&transformed).unwrap_err();
-    assert_eq!(error.diagnostics()[0].code, "conversion.unsupportedFeature");
-    assert_eq!(error.diagnostics()[0].path, "source.nodes[0].transform");
+    let transformed_mesh = import_static_glb(&transformed).unwrap();
+    assert_eq!(transformed_mesh.positions[0], [0.5, 0.0, -0.5]);
 
     let instanced = mutate_glb_json(|document| {
-        let second = document["nodes"][0].clone();
+        let mut second = document["nodes"][0].clone();
+        second["name"] = "wall-b".into();
+        second["translation"] = serde_json::json!([2.0, 0.0, 0.0]);
         document["nodes"].as_array_mut().unwrap().push(second);
         document["scenes"][0]["nodes"]
             .as_array_mut()
             .unwrap()
             .push(1.into());
     });
-    let error = import_static_glb(&instanced).unwrap_err();
-    assert_eq!(error.diagnostics()[0].code, "conversion.unsupportedFeature");
-    assert_eq!(error.diagnostics()[0].path, "source.nodes");
+    let scene = import_static_glb_scene(&instanced).unwrap();
+    let mesh = import_static_glb(&instanced).unwrap();
+    assert_eq!(scene.nodes.len(), 2);
+    assert_eq!(scene.meshes.len(), 1);
+    assert_eq!(mesh.positions.len(), 96);
+    assert_eq!(mesh.triangles.len(), 24);
+    assert_eq!(mesh.primitive_groups.len(), 4);
+    assert_eq!(
+        mesh.primitive_groups
+            .iter()
+            .map(|group| (
+                group.source_node_index,
+                group.source_mesh_index,
+                group.source_primitive_index
+            ))
+            .collect::<Vec<_>>(),
+        vec![(0, 0, 0), (0, 0, 1), (1, 0, 0), (1, 0, 1)]
+    );
+    assert_eq!(mesh, import_static_glb(&instanced).unwrap());
 }
 
 #[test]
