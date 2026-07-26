@@ -103,8 +103,8 @@ the authority for this completion; no donor TypeScript semantic generator was co
 Protocol 5 and 6 close the non-voxel parity set without adding a generic editor command:
 
 - project create and save-as plus scene create, rename, delete, and entry-scene selection;
-- entity create, rename, reparent, delete, full translation/rotation/scale settlement, static-mesh or
-  typed light appearance, and collision/kinematic capability mutation;
+- entity create, rename, reparent, delete, full translation/rotation/scale settlement, static-mesh,
+  animated-mesh-with-clip, or typed light appearance, and collision/kinematic capability mutation;
 - a complete catalog browser with dependency, dependent, generated-lock, import provenance, source
   drift, and private prepare/apply/discard import or reimport candidates;
 - real imported static-mesh payloads and materials consumed by the same Rust projection and shared
@@ -119,6 +119,15 @@ is consolidated: current successor projects fix right-handed Y-up/meters, while 
 spacing, colors, visibility, and snapping behavior remain per-project host-user presentation. A
 future project-owned spatial convention requires a named Rust adapter operation rather than a
 browser-owned project codec.
+
+The review closure retains the remaining interaction-level behavior rather than treating the
+protocol rows alone as parity. A trusted host browser provides bounded directory navigation,
+extension filters, symbolic-link exclusion, and dialog focus restoration. Separate
+translate/rotate/scale gizmos provide world/local operation, parent-aware conversion, anisotropic
+snapping, fine and snap-toggle modifiers, disposable preview, one settlement, and cancellation.
+Animated GLB resources and named clips are Rust-admitted, hash-verified by the trusted host, and
+realized by the same shared renderer used for static meshes; Studio owns only selection controls and
+never creates a private Three scene.
 
 ## Cohesive successor modules
 
