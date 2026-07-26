@@ -167,6 +167,21 @@ ordinary Rust provider gate. Renderer picks and host readouts are hints/observat
 authority must revalidate; animation sampling, audio completion, particles, cameras, and editor
 previews never mutate gameplay.
 
+Camera-relative retained presentation is one explicit `viewmodel` render layer, not a downstream
+Three scene or weapon API. A caller creates a retained root on that layer and parents existing
+primitive, static-mesh, animated-mesh, voxel-object, or sprite instances below it. The neutral
+projection inherits the layer through the hierarchy and enforces fixed node, distinct-asset,
+asset-extent, translation, and scale limits before committing a frame. Retained lights are rejected
+inside this channel; the backend supplies a small neutral light rig.
+
+The Three adapter retains that hierarchy in a separate scene. The browser surface advances the
+shared renderer exactly once, renders the world through the caller-owned camera, clears depth, and
+renders the camera-relative scene through a fixed host-owned camera with the same projection and
+aspect. World camera motion therefore cannot move the local presentation, and world depth cannot
+clip it. The channel is excluded from picking and has no input or camera authority. Stop, resize,
+reset, frame rejection, resource failure, and disposal remain operations of the existing single
+surface lifecycle; no second scheduler or renderer owner exists.
+
 `@rusty-engine/renderer-host` is the shared browser and tool-facing entry point. It composes the
 retained Three surface, explicit caller-owned camera controls, animated resources, editor viewport,
 inspection surface, WebAudio, billboard, particle, telemetry, and DOM overlay mechanisms. Its small

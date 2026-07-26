@@ -40,6 +40,14 @@ export class RenderProjectionError extends Error {
   }
 }
 
+/** Hard retained-state limits for the camera-relative presentation channel. */
+export const MAX_VIEWMODEL_NODES = 128;
+export const MAX_VIEWMODEL_DISTINCT_ASSETS = 16;
+export const MAX_VIEWMODEL_ASSET_EXTENT = 16;
+export const MAX_VIEWMODEL_TRANSLATION_COMPONENT = 16;
+export const MAX_VIEWMODEL_ROTATION_COMPONENT = 1;
+export const MAX_VIEWMODEL_SCALE_COMPONENT = 64;
+
 export type RenderProjectionNodeKind = 'primitive' | 'staticMesh' | 'animatedMesh' | 'voxelObject' | 'sprite';
 
 export interface RenderProjectionNodeBase {
@@ -402,12 +410,16 @@ export class RenderProjection {
       meshPayload: null,
       node,
     };
+    this.#validateViewmodelInsertion(record, 'create');
     this.#insert(record);
     return { op: 'upsertNode', node: snapshotNode(record) };
   }
 
   #update(diff: Extract<RenderDiff, { op: 'update' }>): RenderProjectionInstruction {
     const record = this.#require(diff.handle, 'update');
+    if (record.layer === 'viewmodel' && diff.transform !== null) {
+      validateViewmodelTransform(diff.transform, 'update.transform');
+    }
     if (diff.transform !== null) {
       record.transform = clone(diff.transform);
       if (record.kind === 'primitive') {
@@ -507,6 +519,9 @@ export class RenderProjection {
       );
     }
     validateMeshPayload(diff.payload, 'replaceMeshPayload.payload');
+    if (record.layer === 'viewmodel') {
+      validateViewmodelBounds(diff.payload.bounds, 'replaceMeshPayload.payload.bounds');
+    }
     record.meshPayload = clone(diff.payload);
     return { op: 'upsertNode', node: snapshotNode(record) };
   }
@@ -514,6 +529,11 @@ export class RenderProjection {
   #createLight(diff: Extract<RenderDiff, { op: 'createLight' }>): RenderProjectionInstruction {
     this.#ensureFree(diff.handle, 'createLight');
     const parent = this.#parentHandle(diff.parent, 'createLight.parent');
+    if (parent !== null && this.#require(parent, 'createLight.parent').layer === 'viewmodel') {
+      throw new RenderProjectionError(
+        'createLight: camera-relative presentation uses the backend-owned neutral light rig',
+      );
+    }
     validateLight(diff.light, 'createLight.light');
     const record: MutableLight = {
       handle: diff.handle,
@@ -613,6 +633,7 @@ export class RenderProjection {
       instance,
       materialParameters: new Map(),
     };
+    this.#validateViewmodelInsertion(record, 'createStaticMeshInstance');
     asset.refCount += 1;
     this.#insert(record);
     return { op: 'upsertNode', node: snapshotNode(record) };
@@ -671,6 +692,7 @@ export class RenderProjection {
       instance,
       playback: clone(instance.playback),
     };
+    this.#validateViewmodelInsertion(record, 'createAnimatedMeshInstance');
     asset.refCount += 1;
     this.#insert(record);
     return { op: 'upsertNode', node: snapshotNode(record) };
@@ -696,13 +718,24 @@ export class RenderProjection {
   #defineVoxelObject(asset: VoxelObjectRenderAsset): RenderProjectionInstruction {
     validateVoxelObjectAsset(asset, `defineVoxelObject(${asset.asset})`);
     const existing = this.#voxelObjects.get(asset.asset);
+    const liveUpdates: Array<{
+      readonly payload: MeshPayloadDescriptor;
+      readonly record: MutableVoxelObjectNode;
+    }> = [];
     if (existing !== undefined) {
       for (const record of this.#nodes.values()) {
         if (record.kind !== 'voxelObject' || record.asset !== asset.asset) continue;
         validateVoxelObjectFrame(asset, record.frame, 'defineVoxelObject.liveInstance');
         validateVoxelObjectOverrides(asset, record.instance.materialOverrides, 'defineVoxelObject.liveInstance');
-        record.meshPayload = clone(asset.meshes[asset.frames[record.frame]!.mesh]!.payload);
+        const payload = asset.meshes[asset.frames[record.frame]!.mesh]!.payload;
+        if (record.layer === 'viewmodel') {
+          validateViewmodelBounds(payload.bounds, 'defineVoxelObject.liveInstance.bounds');
+        }
+        liveUpdates.push({ payload, record });
       }
+    }
+    for (const update of liveUpdates) {
+      update.record.meshPayload = clone(update.payload);
     }
     this.#voxelObjects.set(asset.asset, {
       asset: clone(asset),
@@ -758,6 +791,7 @@ export class RenderProjection {
       instance,
       frame: instance.frame,
     };
+    this.#validateViewmodelInsertion(record, 'createVoxelObjectInstance');
     asset.refCount += 1;
     this.#insert(record);
     return { op: 'upsertNode', node: snapshotNode(record) };
@@ -777,9 +811,13 @@ export class RenderProjection {
       throw new RenderProjectionError(`setVoxelObjectFrame: missing voxel object ${record.asset}`);
     }
     validateVoxelObjectFrame(asset.asset, diff.frame, 'setVoxelObjectFrame.frame');
+    const payload = asset.asset.meshes[asset.asset.frames[diff.frame]!.mesh]!.payload;
+    if (record.layer === 'viewmodel') {
+      validateViewmodelBounds(payload.bounds, 'setVoxelObjectFrame.bounds');
+    }
     record.frame = diff.frame;
     record.instance = { ...record.instance, frame: diff.frame };
-    record.meshPayload = clone(asset.asset.meshes[asset.asset.frames[diff.frame]!.mesh]!.payload);
+    record.meshPayload = clone(payload);
     return { op: 'upsertNode', node: snapshotNode(record) };
   }
 
@@ -802,6 +840,7 @@ export class RenderProjection {
       frameUv: this.#resolveSpriteUv(sprite.asset, sprite.frame),
       renderOrder: sprite.renderOrder,
     };
+    this.#validateViewmodelInsertion(record, 'createSprite');
     this.#insert(record);
     return { op: 'upsertNode', node: snapshotNode(record) };
   }
@@ -842,6 +881,69 @@ export class RenderProjection {
     this.#nodes.set(record.handle, record);
     if (record.parent !== null) {
       this.#require(record.parent, 'insert.parent').children.add(record.handle);
+    }
+  }
+
+  #validateViewmodelInsertion(record: NodeRecord, ctx: string): void {
+    if (record.layer !== 'viewmodel') {
+      return;
+    }
+    validateViewmodelTransform(record.transform, `${ctx}.transform`);
+    this.#validateViewmodelAsset(record, ctx);
+    const liveViewmodelNodes = [...this.#nodes.values()]
+      .filter((candidate) => candidate.layer === 'viewmodel');
+    if (liveViewmodelNodes.length >= MAX_VIEWMODEL_NODES) {
+      throw new RenderProjectionError(
+        `${ctx}: viewmodel node capacity ${MAX_VIEWMODEL_NODES} is exhausted`,
+      );
+    }
+    const assetKey = viewmodelAssetKey(record);
+    if (assetKey === null) {
+      return;
+    }
+    const assets = new Set(
+      liveViewmodelNodes
+        .map(viewmodelAssetKey)
+        .filter((candidate): candidate is string => candidate !== null),
+    );
+    if (!assets.has(assetKey) && assets.size >= MAX_VIEWMODEL_DISTINCT_ASSETS) {
+      throw new RenderProjectionError(
+        `${ctx}: viewmodel asset capacity ${MAX_VIEWMODEL_DISTINCT_ASSETS} is exhausted`,
+      );
+    }
+  }
+
+  #validateViewmodelAsset(record: NodeRecord, ctx: string): void {
+    if (record.kind === 'primitive') {
+      if (record.node.geometry.kind === 'line') {
+        validateViewmodelPoints(
+          [record.node.geometry.a, record.node.geometry.b],
+          `${ctx}.geometry`,
+        );
+      }
+      if (record.meshPayload !== null) {
+        validateViewmodelBounds(record.meshPayload.bounds, `${ctx}.meshPayload.bounds`);
+      }
+      return;
+    }
+    if (record.kind === 'animatedMesh') {
+      const asset = this.#animatedMeshes.get(record.asset);
+      if (asset === undefined) {
+        throw new RenderProjectionError(`${ctx}: missing animated mesh asset ${record.asset}`);
+      }
+      validateViewmodelBounds(asset.asset.bounds, `${ctx}.asset.bounds`);
+      return;
+    }
+    if (record.kind === 'sprite') {
+      if (record.sprite.size.some((component) => component > MAX_VIEWMODEL_ASSET_EXTENT)) {
+        throw new RenderProjectionError(
+          `${ctx}.sprite.size: viewmodel dimensions must not exceed ${MAX_VIEWMODEL_ASSET_EXTENT}`,
+        );
+      }
+      return;
+    }
+    if (record.meshPayload !== null) {
+      validateViewmodelBounds(record.meshPayload.bounds, `${ctx}.asset.bounds`);
     }
   }
 
@@ -942,6 +1044,67 @@ function cloneNodeRecord(record: NodeRecord): NodeRecord {
     };
   }
   return { ...clone(record), children };
+}
+
+function validateViewmodelTransform(transform: Transform, ctx: string): void {
+  const translationOutOfRange = transform.translation.some(
+    (component) => Math.abs(component) > MAX_VIEWMODEL_TRANSLATION_COMPONENT,
+  );
+  if (translationOutOfRange) {
+    throw new RenderProjectionError(
+      `${ctx}: viewmodel translation components must be within +/−${MAX_VIEWMODEL_TRANSLATION_COMPONENT}`,
+    );
+  }
+  const rotationOutOfRange = transform.rotation.some(
+    (component) => Math.abs(component) > MAX_VIEWMODEL_ROTATION_COMPONENT,
+  );
+  if (rotationOutOfRange) {
+    throw new RenderProjectionError(
+      `${ctx}: viewmodel rotation components must be within +/−${MAX_VIEWMODEL_ROTATION_COMPONENT}`,
+    );
+  }
+  const scaleOutOfRange = transform.scale.some(
+    (component) => Math.abs(component) > MAX_VIEWMODEL_SCALE_COMPONENT,
+  );
+  if (scaleOutOfRange) {
+    throw new RenderProjectionError(
+      `${ctx}: viewmodel scale components must be within +/−${MAX_VIEWMODEL_SCALE_COMPONENT}`,
+    );
+  }
+}
+
+function validateViewmodelBounds(
+  bounds: MeshPayloadDescriptor['bounds'],
+  ctx: string,
+): void {
+  validateViewmodelPoints([bounds.min, bounds.max], ctx);
+}
+
+function validateViewmodelPoints(
+  points: readonly (readonly [number, number, number])[],
+  ctx: string,
+): void {
+  if (points.some((point) =>
+    point.some((component) => Math.abs(component) > MAX_VIEWMODEL_ASSET_EXTENT))) {
+    throw new RenderProjectionError(
+      `${ctx}: viewmodel asset coordinates must be within +/−${MAX_VIEWMODEL_ASSET_EXTENT}`,
+    );
+  }
+}
+
+function viewmodelAssetKey(record: NodeRecord): string | null {
+  switch (record.kind) {
+    case 'primitive':
+      return null;
+    case 'staticMesh':
+      return `staticMesh:${record.asset}`;
+    case 'animatedMesh':
+      return `animatedMesh:${record.asset}`;
+    case 'voxelObject':
+      return `voxelObject:${record.asset}`;
+    case 'sprite':
+      return `sprite:${record.sprite.asset}`;
+  }
 }
 
 function replaceMap<K, V>(target: Map<K, V>, source: ReadonlyMap<K, V>): void {

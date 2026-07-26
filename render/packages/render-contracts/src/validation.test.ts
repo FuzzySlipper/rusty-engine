@@ -70,6 +70,37 @@ void test('typed handle constructors reject values that cannot cross JSON exactl
   assert.throws(() => audioHandle(Number.MAX_SAFE_INTEGER + 1), RangeError);
 });
 
+void test('render decoding admits the closed camera-relative viewmodel layer', () => {
+  const frame = decodeRenderFrameDiff({
+    schemaVersion: 1,
+    ops: [{
+      op: 'create',
+      handle: 1,
+      parent: null,
+      node: {
+        geometry: { kind: 'group' },
+        material: { color: [1, 1, 1, 1], wireframe: false },
+        transform: {
+          translation: [0, 0, 0],
+          rotation: [0, 0, 0, 1],
+          scale: [1, 1, 1],
+        },
+        visible: true,
+        layer: 'viewmodel',
+        metadata: {
+          sourceEntity: null,
+          sourceSceneNode: null,
+          tags: [],
+          label: 'camera-relative-root',
+        },
+      },
+    }],
+  });
+
+  assert.equal(frame.ops[0]?.op, 'create');
+  assert.equal(frame.ops[0]?.op === 'create' ? frame.ops[0].node.layer : null, 'viewmodel');
+});
+
 void test('presentation decoding rejects unsafe identities, sequence gaps, and nested drift', () => {
   const unsafe = mutableFixture('presentation-frame-v1.json');
   const unsafeOps = unsafe['ops'] as Array<Record<string, unknown>>;

@@ -169,6 +169,22 @@ resume, billboards, particles, telemetry, an inspection grid, and disposal throu
 WebGL contexts. Node tests retain the more exhaustive error, fallback, replacement, channel,
 resource, camera, and lifecycle matrix.
 
+The retained layer set also includes `viewmodel`, a renderer-neutral camera-relative presentation
+channel. It reuses the same retained hierarchy and primitive/static/animated/voxel/sprite resource
+operations. It is not a gameplay, weapon, input, camera, or generic UI model. The neutral projector
+admits at most 128 live channel nodes and 16 distinct referenced assets, bounds local asset
+coordinates and translation components to `+/-16`, rotation components to `+/-1`, and local scale
+components to `+/-64`.
+Oversized frames, transforms, assets, and retained channel lights reject before either neutral or
+Three state commits.
+
+The browser backend owns the realization: a separate retained Three scene, a fixed camera sharing
+the world projection/aspect, one animation advance, world render, depth clear, then viewmodel
+render. The ordinary world camera remains caller-owned. The viewmodel scene is not traversed by
+picking, and both scenes are released by the same surface disposal. Editor viewport channel
+policies continue to admit only their documented scene/debug layers; they do not silently turn
+product viewmodels into authored editor content.
+
 ## CI boundaries
 
 - **Engine:** Rust formatting, metadata, unit/integration tests, Clippy, standalone audit, and

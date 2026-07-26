@@ -33,7 +33,13 @@ export interface Material {
   readonly wireframe: boolean;
 }
 
-export type RenderLayer = 'scene' | 'debug' | 'ui';
+/**
+ * Retained composition channel.
+ *
+ * `viewmodel` is camera-relative presentation composed after world depth. It
+ * carries no camera, input, picking, or gameplay authority.
+ */
+export type RenderLayer = 'scene' | 'debug' | 'ui' | 'viewmodel';
 
 export interface RenderMetadata {
   readonly sourceEntity: number | null;

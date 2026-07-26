@@ -19,7 +19,13 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.snapshot).toContain('frame 1');
   expect(proof.snapshot).toContain('kind sprite');
   expect(proof.snapshot).toContain('kind light/point');
+  expect(proof.snapshot).toContain('layer viewmodel');
+  expect(proof.snapshot).toContain('label "viewmodel-static-proof"');
+  expect(proof.snapshot).toContain('label "viewmodel-animated-proof"');
   expect(proof.animationClip).toBe('run');
+  expect(proof.viewmodelAnimationClip).toBe('idle');
+  expect(proof.viewmodelNodeCount).toBe(3);
+  expect(proof.viewmodelPickExcluded).toBe(true);
   expect(proof.autoStartRenderCount).toBe(1);
   expect(proof.autoFrameIntervalMs).toBeGreaterThan(0);
   expect(proof.backendSubmissionDurationMs).toBeGreaterThanOrEqual(0);
@@ -42,8 +48,10 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.voxelFrame).toBe(1);
   expect(consoleErrors).toEqual([]);
 
+  const viewmodelBefore = await page.evaluate(() => window.__rustyRenderViewmodelState?.());
   await page.evaluate(() => window.__rustyRenderSetCameraPose?.([1, 2, 3]));
   await expect.poll(() => page.evaluate(() => window.__rustyRenderCameraPose?.())).toEqual([1, 2, 3]);
+  expect(await page.evaluate(() => window.__rustyRenderViewmodelState?.())).toEqual(viewmodelBefore);
   const cameraBefore = await page.evaluate(() => window.__rustyRenderCameraPose?.());
   await page.click('#renderer');
   await page.keyboard.down('KeyW');
@@ -53,6 +61,11 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(cameraBefore).toBeDefined();
   expect(cameraAfter).toBeDefined();
   expect(cameraAfter![2]).toBeLessThan(cameraBefore![2]);
+  expect(await page.evaluate(() => window.__rustyRenderViewmodelState?.())).toEqual(viewmodelBefore);
+
+  await page.setViewportSize({ width: 900, height: 600 });
+  await page.evaluate(() => window.__rustyRenderTick?.(216));
+  expect(await page.evaluate(() => window.__rustyRenderViewmodelState?.())).toEqual(viewmodelBefore);
 
   await page.evaluate(() => document.exitPointerLock());
   await page.click('#enable-audio');
@@ -61,6 +74,7 @@ test('shared host realizes retained, presentation, and inspection families in a 
   )).toEqual([]);
 
   await page.evaluate(() => window.__rustyRenderDispose?.());
+  expect(await page.evaluate(() => window.__rustyRenderBackendSnapshot?.())).toBe('(empty scene)\n');
   await expect(page.locator('[data-rusty-billboard-handle]')).toHaveCount(0);
   await expect(page.locator('[data-rusty-particle-id]')).toHaveCount(0);
   await expect(page.locator('[data-rusty-telemetry-handle]')).toHaveCount(0);

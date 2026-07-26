@@ -150,6 +150,7 @@ pub enum RenderLayer {
     Scene,
     Debug,
     Ui,
+    Viewmodel,
 }
 
 /// Authority provenance remains raw identity data at this border. The renderer
@@ -589,6 +590,22 @@ mod tests {
         .unwrap();
         let json = frame.encode_json().unwrap();
         assert!(json.contains("\"schemaVersion\": 1"));
+        assert_eq!(RenderFrameDiff::decode_json(&json).unwrap(), frame);
+    }
+
+    #[test]
+    fn camera_relative_viewmodel_layer_round_trips_without_backend_vocabulary() {
+        let mut node = RenderNode::new(Geometry::Group);
+        node.layer = RenderLayer::Viewmodel;
+        let frame = RenderFrameDiff::try_from_ops(vec![RenderDiff::Create {
+            handle: RenderHandle::new(8),
+            parent: None,
+            node,
+        }])
+        .unwrap();
+
+        let json = frame.encode_json().unwrap();
+        assert!(json.contains("\"layer\": \"viewmodel\""));
         assert_eq!(RenderFrameDiff::decode_json(&json).unwrap(), frame);
     }
 

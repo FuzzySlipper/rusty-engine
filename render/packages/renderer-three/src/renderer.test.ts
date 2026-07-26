@@ -325,6 +325,40 @@ void test('nested group snapshots retain their root scene layer', () => {
   assert.match(r.snapshot(), /handle 2  layer ui  shape cube/);
 });
 
+void test('camera-relative descendants live only in the dedicated viewmodel scene', () => {
+  const renderer = new ThreeRenderer();
+  renderer.applyDiff(createDiff(1, {
+    ...cubeNode('viewmodel-root'),
+    geometry: { kind: 'group' },
+    layer: 'viewmodel',
+  }));
+  renderer.applyDiff({
+    op: 'create',
+    handle: renderHandle(2),
+    parent: renderHandle(1),
+    node: {
+      ...cubeNode('viewmodel-child'),
+      transform: {
+        translation: [0.4, -0.35, -1.2],
+        rotation: [0, 0, 0, 1],
+        scale: [0.5, 0.5, 0.5],
+      },
+    },
+  });
+
+  const root = renderer.objectFor(renderHandle(1))!;
+  const child = renderer.objectFor(renderHandle(2))!;
+  assert.equal(root.parent?.name, 'viewmodel');
+  assert.equal(root.parent?.parent, renderer.viewmodelScene);
+  assert.equal(renderer.scene.getObjectByName('viewmodel-root'), undefined);
+  assert.equal(renderer.projectionIdentityForObject(child)?.layer, 'viewmodel');
+  assert.match(renderer.snapshot(), /handle 1  layer viewmodel  shape group/);
+  assert.match(renderer.snapshot(), /handle 2  layer viewmodel  shape cube/);
+
+  renderer.dispose();
+  assert.equal(renderer.viewmodelScene.children.length, 0);
+});
+
 void test('applyEncodedFrame strictly decodes and sequences create→update→destroy', () => {
   const fixture: unknown = JSON.parse(
     readFileSync(

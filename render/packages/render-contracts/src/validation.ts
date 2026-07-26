@@ -196,7 +196,11 @@ function renderNode(input: unknown, path: string): void {
   material(value['material'], `${path}.material`);
   transform(value['transform'], `${path}.transform`);
   booleanValue(value['visible'], `${path}.visible`);
-  enumeration(value['layer'], `${path}.layer`, ['scene', 'debug', 'ui'] as const);
+  enumeration(
+    value['layer'],
+    `${path}.layer`,
+    ['scene', 'debug', 'ui', 'viewmodel'] as const,
+  );
   metadata(value['metadata'], `${path}.metadata`);
 }
 

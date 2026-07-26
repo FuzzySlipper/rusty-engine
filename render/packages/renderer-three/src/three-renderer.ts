@@ -177,14 +177,16 @@ interface VoxelObjectDef {
  * A retained Three.js scene driven entirely by render diffs.
  *
  * Nodes are addressed by `RenderHandle`; the registry maps each handle to a
- * Three.js `Object3D`. Scene and debug layers are separate groups so overlays
- * can be toggled independently.
+ * Three.js `Object3D`. World layers share `scene`; camera-relative presentation
+ * is retained in `viewmodelScene` for an explicit after-depth host pass.
  */
 export class ThreeRenderer {
   readonly scene = new THREE.Scene();
+  readonly viewmodelScene = new THREE.Scene();
   readonly #sceneGroup = new THREE.Group();
   readonly #debugGroup = new THREE.Group();
   readonly #uiGroup = new THREE.Group();
+  readonly #viewmodelGroup = new THREE.Group();
   readonly #handles = new Map<RenderHandle, NodeEntry>();
   /** Defined static mesh assets, keyed by asset id (shared geometry lifecycle). */
   readonly #staticMeshes = new Map<string, StaticMeshDef>();
@@ -225,7 +227,10 @@ export class ThreeRenderer {
     this.#sceneGroup.name = 'scene';
     this.#debugGroup.name = 'debug';
     this.#uiGroup.name = 'ui';
+    this.#viewmodelGroup.name = 'viewmodel';
+    this.viewmodelScene.name = 'viewmodel';
     this.scene.add(this.#sceneGroup, this.#debugGroup, this.#uiGroup);
+    this.viewmodelScene.add(this.#viewmodelGroup);
   }
 
   #layerGroup(layer: RenderLayer): THREE.Group {
@@ -233,6 +238,7 @@ export class ThreeRenderer {
       case 'scene': return this.#sceneGroup;
       case 'debug': return this.#debugGroup;
       case 'ui': return this.#uiGroup;
+      case 'viewmodel': return this.#viewmodelGroup;
     }
   }
 
@@ -503,6 +509,7 @@ export class ThreeRenderer {
     }
     this.#voxelObjects.clear();
     this.scene.clear();
+    this.viewmodelScene.clear();
   }
 
   /** The Three.js object for a handle, for inspection/tests. */
@@ -525,9 +532,7 @@ export class ThreeRenderer {
         }
         return {
           handle,
-          layer: isDescendantOf(entry.object, this.#debugGroup)
-            ? 'debug'
-            : isDescendantOf(entry.object, this.#uiGroup) ? 'ui' : 'scene',
+          layer: this.#layerForObject(entry.object),
           metadata: readMetadata(entry.object),
         };
       }
@@ -599,9 +604,7 @@ export class ThreeRenderer {
       .map(([handle, entry]) => snapshotLine(
         handle,
         entry,
-        isDescendantOf(entry.object, this.#debugGroup)
-          ? 'debug'
-          : isDescendantOf(entry.object, this.#uiGroup) ? 'ui' : 'scene',
+        this.#layerForObject(entry.object),
       ))
       .join('\n') + '\n';
   }
@@ -623,6 +626,19 @@ export class ThreeRenderer {
       ownsGeometry: diff.node.geometry.kind !== 'group',
       viewMaterial: diff.node.material,
     });
+  }
+
+  #layerForObject(object: THREE.Object3D): RenderLayer {
+    if (isDescendantOf(object, this.#viewmodelGroup)) {
+      return 'viewmodel';
+    }
+    if (isDescendantOf(object, this.#debugGroup)) {
+      return 'debug';
+    }
+    if (isDescendantOf(object, this.#uiGroup)) {
+      return 'ui';
+    }
+    return 'scene';
   }
 
   #update(diff: Extract<RenderDiff, { op: 'update' }>): void {

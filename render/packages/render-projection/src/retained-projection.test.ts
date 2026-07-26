@@ -15,6 +15,10 @@ import {
   type VoxelObjectRenderAsset,
 } from '@rusty-engine/render-contracts';
 import {
+  MAX_VIEWMODEL_ASSET_EXTENT,
+  MAX_VIEWMODEL_DISTINCT_ASSETS,
+  MAX_VIEWMODEL_NODES,
+  MAX_VIEWMODEL_TRANSLATION_COMPONENT,
   RenderProjection,
   RenderProjectionError,
 } from './index.js';
@@ -91,6 +95,19 @@ function createPrimitive(handle: number, label = `node-${handle}`, parent: numbe
     handle: renderHandle(handle),
     parent: parent === null ? null : renderHandle(parent),
     node: cubeNode(label),
+  };
+}
+
+function viewmodelRoot(handle = 1): RenderDiff {
+  return {
+    op: 'create',
+    handle: renderHandle(handle),
+    parent: null,
+    node: {
+      ...cubeNode('camera-relative-root'),
+      geometry: { kind: 'group' },
+      layer: 'viewmodel',
+    },
   };
 }
 
@@ -225,6 +242,127 @@ void test('a rejected later operation rolls back the entire frame', () => {
 
   assert.deepEqual(projection.snapshot(), before);
   assert.equal(projection.has(renderHandle(11)), false);
+});
+
+void test('viewmodel descendants retain one bounded camera-relative channel', () => {
+  const projection = new RenderProjection();
+  projection.applyFrame({
+    schemaVersion: 1,
+    ops: [
+      { op: 'defineStaticMesh', asset: meshAsset('mesh/viewmodel') },
+      viewmodelRoot(),
+      {
+        op: 'createStaticMeshInstance',
+        handle: renderHandle(2),
+        parent: renderHandle(1),
+        instance: {
+          asset: 'mesh/viewmodel',
+          transform: {
+            translation: [0.4, -0.35, -1.2],
+            rotation: [0, 0, 0, 1],
+            scale: [0.5, 0.5, 0.5],
+          },
+          visible: true,
+          materialOverrides: [],
+          metadata: {
+            sourceEntity: null,
+            sourceSceneNode: null,
+            tags: [],
+            label: 'viewmodel-mesh',
+          },
+        },
+      },
+    ],
+  });
+
+  assert.equal(projection.node(renderHandle(1))?.layer, 'viewmodel');
+  assert.equal(projection.node(renderHandle(2))?.layer, 'viewmodel');
+  const before = projection.snapshot();
+  assert.throws(() => projection.applyDiff({
+    op: 'update',
+    handle: renderHandle(2),
+    transform: {
+      translation: [MAX_VIEWMODEL_TRANSLATION_COMPONENT + 1, 0, 0],
+      rotation: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+    },
+    material: null,
+    visible: null,
+    metadata: null,
+  }), /viewmodel translation/);
+  assert.throws(() => projection.applyDiff({
+    op: 'update',
+    handle: renderHandle(2),
+    transform: {
+      translation: [0, 0, 0],
+      rotation: [0, 0, 0, 2],
+      scale: [1, 1, 1],
+    },
+    material: null,
+    visible: null,
+    metadata: null,
+  }), /viewmodel rotation/);
+  assert.throws(() => projection.applyDiff({
+    op: 'createLight',
+    handle: renderHandle(3),
+    parent: renderHandle(1),
+    light: {
+      kind: 'ambient',
+      color: [1, 1, 1],
+      intensity: 1,
+      enabled: true,
+      shadowIntent: 'disabled',
+    },
+  }), /backend-owned neutral light rig/);
+  assert.throws(() => projection.applyDiff({
+    op: 'create',
+    handle: renderHandle(4),
+    parent: renderHandle(1),
+    node: {
+      ...cubeNode('oversized-line'),
+      geometry: {
+        kind: 'line',
+        a: [0, 0, 0],
+        b: [MAX_VIEWMODEL_ASSET_EXTENT + 1, 0, 0],
+      },
+    },
+  }), /viewmodel asset coordinates/);
+  assert.deepEqual(projection.snapshot(), before);
+});
+
+void test('viewmodel node and distinct-asset capacities reject without partial mutation', () => {
+  const projection = new RenderProjection();
+  projection.applyDiff(viewmodelRoot());
+  for (let index = 0; index < MAX_VIEWMODEL_DISTINCT_ASSETS; index += 1) {
+    projection.applyDiff({
+      op: 'createSprite',
+      handle: renderHandle(index + 2),
+      parent: renderHandle(1),
+      sprite: sprite(`viewmodel/sprite-${String(index)}`),
+    });
+  }
+  const assetBound = projection.snapshot();
+  assert.throws(() => projection.applyDiff({
+    op: 'createSprite',
+    handle: renderHandle(100),
+    parent: renderHandle(1),
+    sprite: sprite('viewmodel/one-too-many'),
+  }), /viewmodel asset capacity/);
+  assert.deepEqual(projection.snapshot(), assetBound);
+
+  for (
+    let handle = MAX_VIEWMODEL_DISTINCT_ASSETS + 2;
+    handle <= MAX_VIEWMODEL_NODES;
+    handle += 1
+  ) {
+    projection.applyDiff(createPrimitive(handle, `viewmodel-node-${String(handle)}`, 1));
+  }
+  const nodeBound = projection.snapshot();
+  assert.equal(nodeBound.nodes.filter((node) => node.layer === 'viewmodel').length, MAX_VIEWMODEL_NODES);
+  assert.throws(() => projection.applyDiff(
+    createPrimitive(MAX_VIEWMODEL_NODES + 1, 'one-too-many', 1),
+  ), /viewmodel node capacity/);
+  assert.deepEqual(projection.snapshot(), nodeBound);
 });
 
 void test('applies every operation in the committed Rust-authored retained fixture', () => {

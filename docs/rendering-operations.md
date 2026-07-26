@@ -62,6 +62,69 @@ decodes and applies one retained frame through contracts, neutral projection, th
 Three. Engine revision `8cb49db6cfe9471faa23ab0661656a2366a83d8c` is the first recorded
 successful public-package baseline.
 
+### Camera-relative retained presentation
+
+Consumers use the shared retained frame; they do not construct another Three scene, camera, render
+pass, or animation loop. Create a renderer-neutral root and parent ordinary retained assets below
+it:
+
+```ts
+{
+  schemaVersion: 1,
+  ops: [
+    {
+      op: 'create',
+      handle: renderHandle(900),
+      parent: null,
+      node: {
+        geometry: { kind: 'group' },
+        material: { color: [1, 1, 1, 1], wireframe: false },
+        transform: {
+          translation: [0, 0, 0],
+          rotation: [0, 0, 0, 1],
+          scale: [1, 1, 1],
+        },
+        visible: true,
+        layer: 'viewmodel',
+        metadata: {
+          sourceEntity: null,
+          sourceSceneNode: null,
+          tags: [],
+          label: 'viewmodel-root',
+        },
+      },
+    },
+    {
+      op: 'createAnimatedMeshInstance',
+      handle: renderHandle(901),
+      parent: renderHandle(900),
+      instance: {
+        asset: 'mesh-animation/example',
+        transform: {
+          translation: [0.45, -0.35, -1.2],
+          rotation: [0, 0, 0, 1],
+          scale: [1, 1, 1],
+        },
+        visible: true,
+        materialOverrides: [],
+        playback: null,
+        metadata: {
+          sourceEntity: null,
+          sourceSceneNode: null,
+          tags: [],
+          label: 'camera-relative-example',
+        },
+      },
+    },
+  ],
+}
+```
+
+Downstream Rust still owns weapon/equipment meaning and emits the selected visual and bounded
+disposable offsets as ordinary retained diffs. Apply those frames through `RendererSurface`.
+Camera synchronization, `start`, `stop`, `renderOnce`, resize, reset, picking, and `dispose` stay on
+that one surface. A rejected frame leaves both the neutral projection and backend unchanged.
+
 ## Reference consumer evidence
 
 `rusty-engine-demo` commit `42f428b0ee3f47de94d4372f512978f587d729f7` consumes that exact

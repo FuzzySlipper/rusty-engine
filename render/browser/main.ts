@@ -46,6 +46,9 @@ interface BrowserProof {
   readonly ready: true;
   readonly snapshot: string;
   readonly telemetryText: string | null;
+  readonly viewmodelAnimationClip: string | null;
+  readonly viewmodelNodeCount: number;
+  readonly viewmodelPickExcluded: boolean;
   readonly voxelFrame: number | null;
   readonly voxelFrameSwapApplied: boolean;
 }
@@ -56,9 +59,11 @@ declare global {
     __rustyRenderFailure?: string;
     __rustyRenderProof?: BrowserProof;
     __rustyRenderCameraPose?: () => readonly [number, number, number];
+    __rustyRenderBackendSnapshot?: () => string;
     __rustyRenderStartAudio?: () => Promise<void>;
     __rustyRenderSetCameraPose?: (position: readonly [number, number, number]) => void;
     __rustyRenderTick?: (timeMs: number) => void;
+    __rustyRenderViewmodelState?: () => readonly string[];
   }
 }
 
@@ -188,8 +193,14 @@ async function main(): Promise<void> {
   const context = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
   if (context === null || context.isContextLost()) throw new Error('real WebGL context is unavailable');
   const pick = surface.pick({ ray: { kind: 'viewport', point: [0, 0] }, maxDistance: 20 });
+  const viewmodelPick = surface.pick({
+    filter: { handles: [renderHandle(110), renderHandle(111)] },
+    ray: { kind: 'viewport', point: [0.65, -0.35] },
+    maxDistance: 20,
+  });
   const projected = surface.projectWorldPoint([0, 0, -5]);
   const snapshot = surface.snapshot();
+  const projection = surface.projectionSnapshot();
   const voxelNode = surface.projectionSnapshot().nodes.find((node) => node.handle === renderHandle(108));
   const proof: BrowserProof = {
     animationClip: surface.animatedMeshPlayback(renderHandle(105)).selectedClip,
@@ -212,16 +223,23 @@ async function main(): Promise<void> {
     ready: true,
     snapshot,
     telemetryText: overlays.querySelector('[data-rusty-telemetry-handle]')?.textContent ?? null,
+    viewmodelAnimationClip: surface.animatedMeshPlayback(renderHandle(111)).selectedClip,
+    viewmodelNodeCount: projection.nodes.filter((node) => node.layer === 'viewmodel').length,
+    viewmodelPickExcluded: viewmodelPick.hint === null,
     voxelFrame: voxelNode?.kind === 'voxelObject' ? voxelNode.frame : null,
     voxelFrameSwapApplied: voxelFrameSwap.applied,
   };
   window.__rustyRenderProof = proof;
+  window.__rustyRenderBackendSnapshot = () => surface.snapshot();
   window.__rustyRenderCameraPose = () => surface.cameraPose().position;
   window.__rustyRenderSetCameraPose = (position) => {
     surface.setCameraPose({ position, pitchDegrees: 0, yawDegrees: 0 });
     surface.renderOnce(100);
   };
   window.__rustyRenderTick = (timeMs) => surface.renderOnce(timeMs);
+  window.__rustyRenderViewmodelState = () => surface.projectionSnapshot().nodes
+    .filter((node) => node.layer === 'viewmodel')
+    .map((node) => `${String(node.handle)}:${JSON.stringify(node.transform)}`);
   window.__rustyRenderStartAudio = async () => {
     proof.audioResumeDiagnostics = (await audio.resume()).map((diagnostic) => diagnostic.code);
   };
@@ -494,6 +512,42 @@ function browserFrame(): RenderFrameDiff {
           asset: 'voxel-object/browser-proof', frame: 0,
           transform: identity([0, 0.5, -3], [1, 1, 1]), visible: true,
           materialOverrides: [], metadata: metadata('voxel-object-proof'),
+        },
+      },
+      {
+        op: 'create', handle: renderHandle(109), parent: null,
+        node: {
+          geometry: { kind: 'group' },
+          material: { color: [1, 1, 1, 1], wireframe: false },
+          transform: identity([0, 0, 0], [1, 1, 1]), visible: true, layer: 'viewmodel',
+          metadata: metadata('viewmodel-root'),
+        },
+      },
+      {
+        op: 'createStaticMeshInstance', handle: renderHandle(110), parent: renderHandle(109),
+        instance: {
+          asset: 'mesh/browser-proof',
+          transform: identity([0.65, -0.35, -1.4], [0.6, 0.6, 0.6]),
+          visible: true, materialOverrides: [], metadata: metadata('viewmodel-static-proof'),
+        },
+      },
+      {
+        op: 'createAnimatedMeshInstance', handle: renderHandle(111), parent: renderHandle(109),
+        instance: {
+          asset: ASSET,
+          transform: identity([-0.45, -0.4, -1.5], [20, 20, 20]),
+          visible: true,
+          materialOverrides: [],
+          playback: {
+            kind: 'play',
+            clip: 'idle',
+            loop: 'repeat',
+            speed: 1,
+            weight: 1,
+            restart: true,
+            fadeSeconds: null,
+          },
+          metadata: metadata('viewmodel-animated-proof'),
         },
       },
     ],

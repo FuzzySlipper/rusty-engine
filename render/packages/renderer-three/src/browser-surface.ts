@@ -19,6 +19,7 @@ import {
   type RendererProjectionIdentity,
 } from './three-renderer.js';
 import type { AnimatedMeshAssetSource, AnimatedMeshPlaybackReadout } from './animated-mesh.js';
+import { renderBrowserSurfaceFrame } from './browser-surface-render-pass.js';
 
 export interface ProjectedThreeRenderResult {
   readonly projection: RenderProjection;
@@ -185,10 +186,15 @@ export function mountRendererBrowserSurface(
   const keyLight = new THREE.DirectionalLight(0xffffff, 2.2);
   keyLight.position.set(5, 8, 6);
   renderer.scene.add(ambientLight, keyLight);
+  const viewmodelAmbientLight = new THREE.HemisphereLight(0xffffff, 0x263238, 2.4);
+  const viewmodelKeyLight = new THREE.DirectionalLight(0xffffff, 2.2);
+  viewmodelKeyLight.position.set(2, 3, 2);
+  renderer.viewmodelScene.add(viewmodelAmbientLight, viewmodelKeyLight);
   const frame = options.frame ?? createRendererBrowserSurfaceFrame();
   renderer.applyFrame(frame);
 
   const webgl = new THREE.WebGLRenderer({ canvas, antialias: true });
+  webgl.autoClear = false;
   webgl.setClearColor(options.clearColor ?? 0x101820, 1);
   const pixelRatio = validatePixelRatio(
     options.pixelRatio ?? globalThis.devicePixelRatio ?? 1,
@@ -204,6 +210,14 @@ export function mountRendererBrowserSurface(
     cameraProjection.near,
     cameraProjection.far,
   );
+  camera.name = 'world-camera';
+  const viewmodelCamera = new THREE.PerspectiveCamera(
+    cameraProjection.fovYDegrees,
+    1,
+    cameraProjection.near,
+    cameraProjection.far,
+  );
+  viewmodelCamera.name = 'viewmodel-camera';
   const raycaster = new THREE.Raycaster();
   const center = new THREE.Vector2(0, 0);
   const cameraLookTarget = new THREE.Vector3();
@@ -258,6 +272,8 @@ export function mountRendererBrowserSurface(
     }
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
+    viewmodelCamera.aspect = width / height;
+    viewmodelCamera.updateProjectionMatrix();
   };
 
   const renderOnce = (timeMs = globalThis.performance?.now() ?? 0): void => {
@@ -267,8 +283,13 @@ export function mountRendererBrowserSurface(
         ? 0
         : Math.min(0.05, Math.max(0, (timeMs - lastRenderTimeMs) / 1000));
     lastRenderTimeMs = timeMs;
-    renderer.advanceAnimation(deltaSeconds);
-    webgl.render(renderer.scene, camera);
+    renderBrowserSurfaceFrame(
+      webgl,
+      camera,
+      viewmodelCamera,
+      renderer,
+      deltaSeconds,
+    );
   };
 
   const projectWorldPoint = (
