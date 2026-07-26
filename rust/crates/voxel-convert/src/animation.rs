@@ -7,6 +7,8 @@ use crate::{ImportedModelScene, ImportedStaticMesh};
 mod import;
 mod sample;
 
+pub(crate) use sample::{preflight_animation_bind_pose, preflight_animation_clip_range};
+
 pub const ANIMATION_TIMESTAMP_TICKS_PER_SECOND: u64 = 1_000_000;
 pub const MAX_IMPORTED_ANIMATION_CLIPS: usize = 64;
 pub const MAX_IMPORTED_ANIMATION_CHANNELS: usize = 4_096;

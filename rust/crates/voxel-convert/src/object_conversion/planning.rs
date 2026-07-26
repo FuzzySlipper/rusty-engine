@@ -13,9 +13,10 @@ use voxel_asset::{
 use super::model::*;
 use super::validation::*;
 use crate::{
+    animation::{preflight_animation_bind_pose, preflight_animation_clip_range},
     convert::{convert_imported_mesh_with_material_sampling_in_bounds, replace_settings_identity},
     material::{material_sampling_context, resolve_material_map},
-    planning::transform_mesh,
+    planning::{transform_mesh, transform_mesh_owned, transform_position},
     sample_animation_bind_pose, sample_animation_clip_range,
     store::install_canonical_asset,
     voxelize::VoxelizationSourceBounds,
@@ -27,7 +28,6 @@ use crate::{
 struct SampledClip {
     request: VoxelObjectClipConversionRequest,
     sampling: AnimationSampleRangeReceipt,
-    meshes: Vec<ImportedStaticMesh>,
 }
 
 struct ConvertedFrame {
@@ -75,18 +75,16 @@ pub fn plan_animated_voxel_object_conversion(
 ) -> Result<PreparedVoxelObjectConversion, ConversionError> {
     validate_request(request, &source.source, AssetKind::AnimatedMesh)?;
     let clips = canonical_clip_requests(request)?;
-    let bind = sample_animation_bind_pose(
-        &source.model,
-        &AnimationBindPoseRequest {
-            expected_source_sha256: source.source.receipt.source.source_sha256.clone(),
-            anchor_policy: request.settings.anchor_policy,
-        },
-    )?;
-    let default_mesh = transform_mesh(&bind.mesh, request.settings.mesh.transform)?;
-    let mut deformation_work = bind.deformation_work;
-    let mut sampled_clips = Vec::with_capacity(clips.len());
-    let mut total_sampled_frames = 0usize;
-    for clip_request in clips {
+    let bind_request = AnimationBindPoseRequest {
+        expected_source_sha256: source.source.receipt.source.source_sha256.clone(),
+        anchor_policy: request.settings.anchor_policy,
+    };
+    let bind_estimate = preflight_animation_bind_pose(&source.model, &bind_request)?;
+    let mut retained_snapshot_bytes = bind_estimate.materialized_snapshot_bytes;
+    let mut deformation_work = bind_estimate.deformation_work;
+    let mut total_sampled_frames = 1usize;
+    let mut planned_clips = Vec::with_capacity(clips.len());
+    for clip_request in &clips {
         let source_clip = source
             .model
             .clips
@@ -105,20 +103,28 @@ pub fn plan_animated_voxel_object_conversion(
         let end_microseconds = clip_request
             .end_microseconds
             .unwrap_or(source_clip.duration_microseconds);
-        let sampling = sample_animation_clip_range(
-            &source.model,
-            &AnimationSampleRangeRequest {
-                expected_source_sha256: source.source.receipt.source.source_sha256.clone(),
-                clip_name: clip_request.source_clip_name.clone(),
-                sample_rate_hz: clip_request.sample_rate_hz,
-                start_microseconds: clip_request.start_microseconds,
-                end_microseconds,
-                end_policy: clip_request.end_policy,
-                anchor_policy: request.settings.anchor_policy,
-            },
-        )?;
+        let sampling_request = AnimationSampleRangeRequest {
+            expected_source_sha256: source.source.receipt.source.source_sha256.clone(),
+            clip_name: clip_request.source_clip_name.clone(),
+            sample_rate_hz: clip_request.sample_rate_hz,
+            start_microseconds: clip_request.start_microseconds,
+            end_microseconds,
+            end_policy: clip_request.end_policy,
+            anchor_policy: request.settings.anchor_policy,
+        };
+        let estimate = preflight_animation_clip_range(&source.model, &sampling_request)?;
+        retained_snapshot_bytes = retained_snapshot_bytes
+            .checked_add(estimate.materialized_snapshot_bytes)
+            .ok_or_else(|| {
+                aggregate_snapshot_storage_limit("retained snapshot storage overflowed")
+            })?;
+        if retained_snapshot_bytes > MAX_VOXEL_OBJECT_CONVERSION_RETAINED_SNAPSHOT_BYTES {
+            return Err(aggregate_snapshot_storage_limit(&format!(
+                "bind pose and selected clips require {retained_snapshot_bytes} estimated retained bytes; limit is {MAX_VOXEL_OBJECT_CONVERSION_RETAINED_SNAPSHOT_BYTES}"
+            )));
+        }
         deformation_work = deformation_work
-            .checked_add(sampling.deformation_work)
+            .checked_add(estimate.deformation_work)
             .ok_or_else(|| aggregate_limit("animation deformation work overflowed"))?;
         if deformation_work > MAX_VOXEL_OBJECT_CONVERSION_DEFORMATION_WORK {
             return Err(aggregate_limit(&format!(
@@ -126,22 +132,28 @@ pub fn plan_animated_voxel_object_conversion(
             )));
         }
         total_sampled_frames = total_sampled_frames
-            .checked_add(sampling.snapshots.len())
+            .checked_add(estimate.snapshot_count)
             .ok_or_else(|| aggregate_limit("sample frame count overflowed"))?;
         if total_sampled_frames > MAX_VOXEL_OBJECT_TOTAL_FRAMES {
             return Err(aggregate_limit(&format!(
                 "selected clips contain {total_sampled_frames} samples; limit is {MAX_VOXEL_OBJECT_TOTAL_FRAMES}"
             )));
         }
-        let meshes = sampling
-            .snapshots
-            .iter()
-            .map(|snapshot| transform_mesh(&snapshot.mesh, request.settings.mesh.transform))
-            .collect::<Result<Vec<_>, _>>()?;
+        planned_clips.push((clip_request.clone(), sampling_request));
+    }
+
+    let bind = sample_animation_bind_pose(&source.model, &bind_request)?;
+    debug_assert_eq!(
+        bind.estimated_materialized_snapshot_bytes,
+        bind_estimate.materialized_snapshot_bytes
+    );
+    let default_mesh = transform_mesh_owned(bind.mesh, request.settings.mesh.transform)?;
+    let mut sampled_clips = Vec::with_capacity(planned_clips.len());
+    for (clip_request, sampling_request) in planned_clips {
+        let sampling = sample_animation_clip_range(&source.model, &sampling_request)?;
         sampled_clips.push(SampledClip {
             request: clip_request,
             sampling,
-            meshes,
         });
     }
     let output = build_candidate(
@@ -165,8 +177,13 @@ fn build_candidate(
 ) -> Result<VoxelObjectConversionReceipt, ConversionError> {
     let mut fixed_bounds = VoxelizationSourceBounds::for_mesh(&default_mesh)?;
     for sampled in &sampled_clips {
-        for mesh in &sampled.meshes {
-            fixed_bounds.include_mesh(mesh)?;
+        for snapshot in &sampled.sampling.snapshots {
+            for position in &snapshot.mesh.positions {
+                fixed_bounds.include_position(transform_position(
+                    *position,
+                    request.settings.mesh.transform,
+                )?)?;
+            }
         }
     }
 
@@ -214,15 +231,12 @@ fn build_candidate(
 
     for sampled in sampled_clips {
         let durations = sample_durations(&sampled.sampling)?;
-        let mut converted = Vec::with_capacity(sampled.meshes.len());
-        for ((snapshot, mesh), duration) in sampled
-            .sampling
-            .snapshots
-            .iter()
-            .zip(&sampled.meshes)
-            .zip(durations)
-        {
-            let frame = convert_frame(mesh)?;
+        let sampled_frame_count = sampled.sampling.snapshots.len();
+        let mut converted = Vec::with_capacity(sampled_frame_count);
+        for (snapshot, duration) in sampled.sampling.snapshots.into_iter().zip(durations) {
+            let source_timestamp_microseconds = snapshot.timestamp_microseconds;
+            let mesh = transform_mesh_owned(snapshot.mesh, request.settings.mesh.transform)?;
+            let frame = convert_frame(&mesh)?;
             voxelization_work = voxelization_work
                 .checked_add(frame.voxelization_work)
                 .ok_or_else(|| aggregate_limit("voxelization work overflowed"))?;
@@ -244,7 +258,7 @@ fn build_candidate(
             converted.push(StoredFrame {
                 frame: frame.frame,
                 duration_microseconds: duration,
-                source_timestamps_microseconds: vec![snapshot.timestamp_microseconds],
+                source_timestamps_microseconds: vec![source_timestamp_microseconds],
                 voxel_count: frame.voxel_count,
                 sparse_run_count: frame.sparse_run_count,
             });
@@ -290,7 +304,7 @@ fn build_candidate(
             end_microseconds: sampled.sampling.end_microseconds,
             sample_rate_hz: sampled.sampling.sample_rate_hz,
             end_policy: sampled.sampling.end_policy,
-            sampled_frame_count: sampled.sampling.snapshots.len(),
+            sampled_frame_count,
             stored_frame_count: stored.len(),
             duration_microseconds,
             frames: frame_readouts,
@@ -354,6 +368,10 @@ fn build_candidate(
         asset,
         canonical_json,
     })
+}
+
+fn aggregate_snapshot_storage_limit(message: &str) -> ConversionError {
+    ConversionError::one("conversion.resourceLimit", "clips.snapshotStorage", message)
 }
 
 fn prepare_plan(

@@ -212,13 +212,17 @@ static source produces only the required default frame. An animated request sele
 names, absolute microsecond ranges, rates, endpoint policy, output clip IDs and names, an optional
 default clip, and one explicit animation anchor policy.
 
-Before voxelizing any frame, conversion transforms the bind pose and every selected sample and
-computes their exact union source envelope. M12C then maps every mesh through that immutable
-envelope with the same resolution, fit/origin policy, object-local `[0,0,0]` volume origin, pivot,
-palette, material map, texture policy, and deterministic surface-conflict rule. Individual frames
-cannot silently recompute their own scale or offset, which prevents breathing and grid drift. Every
-frame remains a complete schema-1 sparse arrangement; the durable object's bounds are the exact
-union of the converted default and clip frames.
+Before allocating the bind pose or any selected snapshots, object conversion preflights their
+combined retained-payload estimate against one 32 MiB ceiling. Repeating one individually valid
+source clip under distinct output identities therefore cannot multiply the per-sampling-call
+allowance. Once admitted, conversion transforms the owned bind mesh in place, scans transformed
+sample positions to compute the exact union source envelope without retaining a second topology
+family, and then consumes and transforms each sampled mesh in place as it is voxelized. M12C maps
+every mesh through that immutable envelope with the same resolution, fit/origin policy,
+object-local `[0,0,0]` volume origin, pivot, palette, material map, texture policy, and deterministic
+surface-conflict rule. Individual frames cannot silently recompute their own scale or offset, which
+prevents breathing and grid drift. Every frame remains a complete schema-1 sparse arrangement; the
+durable object's bounds are the exact union of the converted default and clip frames.
 
 Frame duration is derived from adjacent integer-microsecond sample timestamps. An
 `ExcludeLoopSeam` clip holds its final sample through the exact selected range end, so its output

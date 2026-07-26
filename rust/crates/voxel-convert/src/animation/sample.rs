@@ -27,6 +27,13 @@ struct EvaluatedPose {
     morph_weights: BTreeMap<u32, Vec<f64>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AnimationSamplingEstimate {
+    pub snapshot_count: usize,
+    pub deformation_work: u64,
+    pub materialized_snapshot_bytes: u64,
+}
+
 pub(super) fn sample_animation_clip(
     model: &ImportedAnimatedModel,
     request: &AnimationSampleRequest,
@@ -61,6 +68,37 @@ pub(super) fn sample_animation_clip_range(
     model: &ImportedAnimatedModel,
     request: &AnimationSampleRangeRequest,
 ) -> Result<AnimationSampleRangeReceipt, ConversionError> {
+    let (clip, timestamps) = prepare_animation_clip_range(model, request)?;
+    let (deformation_work, estimated_materialized_snapshot_bytes, snapshots) =
+        sample_timestamps(model, clip, timestamps, request.anchor_policy)?;
+    Ok(AnimationSampleRangeReceipt {
+        source_sha256: model.source_sha256.clone(),
+        source_animation_index: clip.source_animation_index,
+        clip_name: clip.name.clone(),
+        clip_duration_microseconds: clip.duration_microseconds,
+        start_microseconds: request.start_microseconds,
+        end_microseconds: request.end_microseconds,
+        sample_rate_hz: request.sample_rate_hz,
+        end_policy: request.end_policy,
+        anchor_policy: request.anchor_policy,
+        deformation_work,
+        estimated_materialized_snapshot_bytes,
+        snapshots,
+    })
+}
+
+pub(crate) fn preflight_animation_clip_range(
+    model: &ImportedAnimatedModel,
+    request: &AnimationSampleRangeRequest,
+) -> Result<AnimationSamplingEstimate, ConversionError> {
+    let (_, timestamps) = prepare_animation_clip_range(model, request)?;
+    estimate_sampling(model, timestamps.len())
+}
+
+fn prepare_animation_clip_range<'a>(
+    model: &'a ImportedAnimatedModel,
+    request: &AnimationSampleRangeRequest,
+) -> Result<(&'a ImportedAnimationClip, Vec<u64>), ConversionError> {
     validate_source_identity(model, &request.expected_source_sha256)?;
     validate_sample_rate(request.sample_rate_hz)?;
     validate_anchor(model, request.anchor_policy)?;
@@ -83,22 +121,7 @@ pub(super) fn sample_animation_clip_range(
         request.sample_rate_hz,
         request.end_policy,
     )?;
-    let (deformation_work, estimated_materialized_snapshot_bytes, snapshots) =
-        sample_timestamps(model, clip, timestamps, request.anchor_policy)?;
-    Ok(AnimationSampleRangeReceipt {
-        source_sha256: model.source_sha256.clone(),
-        source_animation_index: clip.source_animation_index,
-        clip_name: clip.name.clone(),
-        clip_duration_microseconds: clip.duration_microseconds,
-        start_microseconds: request.start_microseconds,
-        end_microseconds: request.end_microseconds,
-        sample_rate_hz: request.sample_rate_hz,
-        end_policy: request.end_policy,
-        anchor_policy: request.anchor_policy,
-        deformation_work,
-        estimated_materialized_snapshot_bytes,
-        snapshots,
-    })
+    Ok((clip, timestamps))
 }
 
 fn validate_sample_rate(sample_rate_hz: u32) -> Result<(), ConversionError> {
@@ -135,17 +158,7 @@ fn sample_timestamps(
     timestamps: Vec<u64>,
     anchor_policy: AnimationAnchorPolicy,
 ) -> Result<(u64, u64, Vec<AnimationMeshSnapshot>), ConversionError> {
-    let work_per_snapshot = deformation_work_per_snapshot(model)?;
-    let deformation_work = work_per_snapshot
-        .checked_mul(timestamps.len() as u64)
-        .ok_or_else(|| deformation_limit("animation deformation work overflowed"))?;
-    if deformation_work > MAX_ANIMATION_DEFORMATION_WORK {
-        return Err(deformation_limit(&format!(
-            "animation deformation work {deformation_work} exceeds {MAX_ANIMATION_DEFORMATION_WORK}"
-        )));
-    }
-    let estimated_materialized_snapshot_bytes =
-        estimated_materialized_snapshot_bytes(model, timestamps.len())?;
+    let estimate = estimate_sampling(model, timestamps.len())?;
     let mut snapshots = Vec::with_capacity(timestamps.len());
     for timestamp_microseconds in timestamps {
         let pose = evaluate_pose(model, Some(clip), timestamp_microseconds)?;
@@ -156,32 +169,54 @@ fn sample_timestamps(
         });
     }
     Ok((
-        deformation_work,
-        estimated_materialized_snapshot_bytes,
+        estimate.deformation_work,
+        estimate.materialized_snapshot_bytes,
         snapshots,
     ))
+}
+
+fn estimate_sampling(
+    model: &ImportedAnimatedModel,
+    snapshot_count: usize,
+) -> Result<AnimationSamplingEstimate, ConversionError> {
+    let work_per_snapshot = deformation_work_per_snapshot(model)?;
+    let snapshot_count_u64 = snapshot_count_from_usize(snapshot_count)?;
+    let deformation_work = work_per_snapshot
+        .checked_mul(snapshot_count_u64)
+        .ok_or_else(|| deformation_limit("animation deformation work overflowed"))?;
+    if deformation_work > MAX_ANIMATION_DEFORMATION_WORK {
+        return Err(deformation_limit(&format!(
+            "animation deformation work {deformation_work} exceeds {MAX_ANIMATION_DEFORMATION_WORK}"
+        )));
+    }
+    Ok(AnimationSamplingEstimate {
+        snapshot_count,
+        deformation_work,
+        materialized_snapshot_bytes: estimated_materialized_snapshot_bytes(model, snapshot_count)?,
+    })
+}
+
+pub(crate) fn preflight_animation_bind_pose(
+    model: &ImportedAnimatedModel,
+    request: &AnimationBindPoseRequest,
+) -> Result<AnimationSamplingEstimate, ConversionError> {
+    validate_source_identity(model, &request.expected_source_sha256)?;
+    validate_anchor(model, request.anchor_policy)?;
+    estimate_sampling(model, 1)
 }
 
 pub(super) fn sample_animation_bind_pose(
     model: &ImportedAnimatedModel,
     request: &AnimationBindPoseRequest,
 ) -> Result<AnimationBindPoseReceipt, ConversionError> {
-    validate_source_identity(model, &request.expected_source_sha256)?;
-    validate_anchor(model, request.anchor_policy)?;
-    let deformation_work = deformation_work_per_snapshot(model)?;
-    if deformation_work > MAX_ANIMATION_DEFORMATION_WORK {
-        return Err(deformation_limit(&format!(
-            "bind-pose deformation work {deformation_work} exceeds {MAX_ANIMATION_DEFORMATION_WORK}"
-        )));
-    }
-    let estimated_materialized_snapshot_bytes = estimated_materialized_snapshot_bytes(model, 1)?;
+    let estimate = preflight_animation_bind_pose(model, request)?;
     let pose = evaluate_pose(model, None, 0)?;
     let mesh = deform_pose(model, &pose, request.anchor_policy)?;
     Ok(AnimationBindPoseReceipt {
         source_sha256: model.source_sha256.clone(),
         anchor_policy: request.anchor_policy,
-        deformation_work,
-        estimated_materialized_snapshot_bytes,
+        deformation_work: estimate.deformation_work,
+        estimated_materialized_snapshot_bytes: estimate.materialized_snapshot_bytes,
         mesh,
     })
 }

@@ -52,23 +52,13 @@ impl VoxelizationSourceBounds {
             max: first,
         };
         for position in mesh.positions.iter().skip(1) {
-            bounds.include(*position)?;
+            bounds.include_position(*position)?;
         }
         bounds.validate()?;
         Ok(bounds)
     }
 
-    pub(crate) fn include_mesh(
-        &mut self,
-        mesh: &ImportedStaticMesh,
-    ) -> Result<(), ConversionError> {
-        for position in &mesh.positions {
-            self.include(*position)?;
-        }
-        self.validate()
-    }
-
-    fn include(&mut self, position: [f64; 3]) -> Result<(), ConversionError> {
+    pub(crate) fn include_position(&mut self, position: [f64; 3]) -> Result<(), ConversionError> {
         if position.iter().any(|component| !component.is_finite()) {
             return Err(ConversionError::one(
                 "conversion.invalidGeometry",

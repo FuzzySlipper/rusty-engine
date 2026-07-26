@@ -381,21 +381,34 @@ pub(crate) fn transform_mesh(
     mesh: &ImportedStaticMesh,
     transform: [f64; 16],
 ) -> Result<ImportedStaticMesh, ConversionError> {
-    let mut transformed = mesh.clone();
+    transform_mesh_owned(mesh.clone(), transform)
+}
+
+pub(crate) fn transform_mesh_owned(
+    mut transformed: ImportedStaticMesh,
+    transform: [f64; 16],
+) -> Result<ImportedStaticMesh, ConversionError> {
     for position in &mut transformed.positions {
-        let [x, y, z] = *position;
-        *position = [
-            transform[0] * x + transform[4] * y + transform[8] * z + transform[12],
-            transform[1] * x + transform[5] * y + transform[9] * z + transform[13],
-            transform[2] * x + transform[6] * y + transform[10] * z + transform[14],
-        ];
-        if position.iter().any(|component| !component.is_finite()) {
-            return Err(ConversionError::one(
-                "conversion.invalidTransform",
-                "settings.transform",
-                "transform produced a non-finite source position",
-            ));
-        }
+        *position = transform_position(*position, transform)?;
+    }
+    Ok(transformed)
+}
+
+pub(crate) fn transform_position(
+    [x, y, z]: [f64; 3],
+    transform: [f64; 16],
+) -> Result<[f64; 3], ConversionError> {
+    let transformed = [
+        transform[0] * x + transform[4] * y + transform[8] * z + transform[12],
+        transform[1] * x + transform[5] * y + transform[9] * z + transform[13],
+        transform[2] * x + transform[6] * y + transform[10] * z + transform[14],
+    ];
+    if transformed.iter().any(|component| !component.is_finite()) {
+        return Err(ConversionError::one(
+            "conversion.invalidTransform",
+            "settings.transform",
+            "transform produced a non-finite source position",
+        ));
     }
     Ok(transformed)
 }

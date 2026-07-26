@@ -8,6 +8,8 @@ pub const VOXEL_OBJECT_CONVERTER_ID: &str = "rusty-engine.mesh-to-voxel-object.v
 pub const MAX_VOXEL_OBJECT_CONVERSION_REQUEST_BYTES: usize = 1024 * 1024;
 pub const MAX_VOXEL_OBJECT_CONVERSION_VOXELIZATION_WORK: u64 = 50_000_000;
 pub const MAX_VOXEL_OBJECT_CONVERSION_DEFORMATION_WORK: u64 = 10_000_000;
+/// Combined bind-pose and selected-clip topology retained by one object plan.
+pub const MAX_VOXEL_OBJECT_CONVERSION_RETAINED_SNAPSHOT_BYTES: u64 = 32 * 1024 * 1024;
 pub const MAX_VOXEL_OBJECT_PREVIEW_SAMPLES: usize = 4_096;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

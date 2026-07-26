@@ -12,12 +12,14 @@ use voxel_convert::{
     decode_voxel_object_conversion_request, identity_transform, import_animated_mesh_source,
     import_mesh_source, plan_animated_voxel_object_conversion, plan_static_voxel_object_conversion,
     preview_voxel_object_conversion, query_voxel_object_frame, query_voxel_object_info,
-    query_voxel_object_window, AnimationAnchorPolicy, AnimationEndPolicy, ConversionMaterialPolicy,
+    query_voxel_object_window, sample_animation_clip_range, AnimationAnchorPolicy,
+    AnimationEndPolicy, AnimationSampleRangeRequest, ConversionMaterialPolicy,
     ConversionPlanSettings, MeshSourceFormat, MeshSourceImportRequest,
     VoxelObjectClipConversionRequest, VoxelObjectConversionApplyRequest,
     VoxelObjectConversionPlanRequest, VoxelObjectConversionPreviewRequest,
     VoxelObjectConversionSettings, VoxelObjectFrameRequest, VoxelObjectFrameSelection,
     VoxelObjectInfoRequest, VoxelObjectWindowRequest,
+    MAX_VOXEL_OBJECT_CONVERSION_RETAINED_SNAPSHOT_BYTES,
 };
 
 const STATIC_SOURCE: &[u8] = include_bytes!(concat!(
@@ -310,6 +312,74 @@ fn malformed_clip_budget_and_stale_requests_fail_before_install() {
 }
 
 #[test]
+fn aggregate_clip_snapshot_storage_is_bounded_before_accumulation() {
+    let source_bytes = repeated_triangle_animation_glb();
+    let imported = import_animated_mesh_source(&MeshSourceImportRequest {
+        source_asset_id: "mesh-animation/repeated-triangles".to_owned(),
+        asset_version: 1,
+        source_path: "fixtures/generated/repeated-triangles.glb".to_owned(),
+        format: MeshSourceFormat::Glb,
+        source_bytes,
+        expected_source_sha256: None,
+        mesh_primitive: None,
+    })
+    .unwrap();
+    assert_eq!(
+        imported.model.scene.meshes[0].primitives[0].positions.len(),
+        4
+    );
+    assert_eq!(
+        imported.model.scene.meshes[0].primitives[0].indices.len(),
+        30_000
+    );
+
+    let one_sample = sample_animation_clip_range(
+        &imported.model,
+        &AnimationSampleRangeRequest {
+            expected_source_sha256: imported.model.source_sha256.clone(),
+            clip_name: "move".to_owned(),
+            sample_rate_hz: 1,
+            start_microseconds: 0,
+            end_microseconds: 0,
+            end_policy: AnimationEndPolicy::IncludeClipEnd,
+            anchor_policy: AnimationAnchorPolicy::PreserveSourceSpace,
+        },
+    )
+    .unwrap();
+    assert_eq!(one_sample.snapshots.len(), 1);
+    assert!(
+        one_sample.estimated_materialized_snapshot_bytes
+            < MAX_VOXEL_OBJECT_CONVERSION_RETAINED_SNAPSHOT_BYTES
+    );
+
+    let clips = (0..256)
+        .map(|index| VoxelObjectClipConversionRequest {
+            source_clip_name: "move".to_owned(),
+            output_clip_id: format!("variants/clip-{index}"),
+            output_name: None,
+            sample_rate_hz: 1,
+            start_microseconds: 0,
+            end_microseconds: Some(0),
+            end_policy: AnimationEndPolicy::IncludeClipEnd,
+        })
+        .collect();
+    let request = object_request(
+        &imported.source,
+        "voxel-object/repeated-triangles",
+        clips,
+        None,
+        [2, 2, 2],
+    );
+    let error = plan_animated_voxel_object_conversion(&request, &imported).unwrap_err();
+    let diagnostic = &error.diagnostics()[0];
+    assert_eq!(diagnostic.code, "conversion.resourceLimit");
+    assert_eq!(diagnostic.path, "clips.snapshotStorage");
+    assert!(diagnostic.message.contains(&format!(
+        "limit is {MAX_VOXEL_OBJECT_CONVERSION_RETAINED_SNAPSHOT_BYTES}"
+    )));
+}
+
+#[test]
 fn identical_quantized_frames_merge_without_changing_the_selected_timing() {
     let imported = import_animated_mesh_source(&animated_import_request()).unwrap();
     let request = object_request(
@@ -430,6 +500,101 @@ fn object_request(
         },
         clips,
         default_clip,
+    }
+}
+
+fn repeated_triangle_animation_glb() -> Vec<u8> {
+    let mut bin = Vec::new();
+
+    let position_offset = bin.len();
+    for value in [
+        -1.0f32, 0.0, 0.0, // vertex 0
+        1.0, 0.0, 0.0, // vertex 1
+        1.0, 2.0, 0.0, // vertex 2
+        -1.0, 2.0, 0.0, // vertex 3
+    ] {
+        bin.extend_from_slice(&value.to_le_bytes());
+    }
+    let position_bytes = bin.len() - position_offset;
+
+    let index_offset = bin.len();
+    for _ in 0..5_000 {
+        for index in [0u16, 1, 2, 0, 2, 3] {
+            bin.extend_from_slice(&index.to_le_bytes());
+        }
+    }
+    let index_bytes = bin.len() - index_offset;
+
+    let time_offset = bin.len();
+    for value in [0.0f32, 1.0] {
+        bin.extend_from_slice(&value.to_le_bytes());
+    }
+    let time_bytes = bin.len() - time_offset;
+
+    let translation_offset = bin.len();
+    for value in [0.0f32, 0.0, 0.0, 0.25, 0.0, 0.0] {
+        bin.extend_from_slice(&value.to_le_bytes());
+    }
+    let translation_bytes = bin.len() - translation_offset;
+
+    let document = serde_json::json!({
+        "asset": {"version": "2.0", "generator": "rusty-engine-cc0-test-corpus"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"name": "moving-quad", "mesh": 0}],
+        "meshes": [{
+            "name": "repeated-triangle-quad",
+            "primitives": [{
+                "attributes": {"POSITION": 0},
+                "indices": 1,
+                "material": 0,
+                "mode": 4
+            }]
+        }],
+        "materials": [{"name": "repeated-triangle-material"}],
+        "animations": [{
+            "name": "move",
+            "samplers": [{"input": 2, "output": 3, "interpolation": "LINEAR"}],
+            "channels": [{"sampler": 0, "target": {"node": 0, "path": "translation"}}]
+        }],
+        "buffers": [{"byteLength": bin.len()}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": position_offset, "byteLength": position_bytes, "target": 34962},
+            {"buffer": 0, "byteOffset": index_offset, "byteLength": index_bytes, "target": 34963},
+            {"buffer": 0, "byteOffset": time_offset, "byteLength": time_bytes},
+            {"buffer": 0, "byteOffset": translation_offset, "byteLength": translation_bytes}
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3", "min": [-1.0, 0.0, 0.0], "max": [1.0, 2.0, 0.0]},
+            {"bufferView": 1, "componentType": 5123, "count": 30_000, "type": "SCALAR"},
+            {"bufferView": 2, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [0.0], "max": [1.0]},
+            {"bufferView": 3, "componentType": 5126, "count": 2, "type": "VEC3"}
+        ]
+    });
+    encode_glb(document, bin)
+}
+
+fn encode_glb(document: serde_json::Value, mut bin: Vec<u8>) -> Vec<u8> {
+    let mut json = serde_json::to_vec(&document).unwrap();
+    align_four(&mut json, b' ');
+    align_four(&mut bin, 0);
+    let total_length = 12 + 8 + json.len() + 8 + bin.len();
+    let mut glb = Vec::with_capacity(total_length);
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2u32.to_le_bytes());
+    glb.extend_from_slice(&(total_length as u32).to_le_bytes());
+    glb.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"JSON");
+    glb.extend_from_slice(&json);
+    glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"BIN\0");
+    glb.extend_from_slice(&bin);
+    glb
+}
+
+fn align_four(bytes: &mut Vec<u8>, padding: u8) {
+    while !bytes.len().is_multiple_of(4) {
+        bytes.push(padding);
     }
 }
 
