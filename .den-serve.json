@@ -1,0 +1,12 @@
+{
+  "project": "rusty-engine-studio",
+  "serve": {
+    "command": "pnpm run serve:studio -- --host {host} --port {port}",
+    "preferredPort": 4300,
+    "healthUrl": "/health",
+    "readyText": "\"project\":\"rusty-engine-studio\"",
+    "identityHeader": "X-Den-Project",
+    "reusePolicy": "broker_owned",
+    "startupTimeout": "180s"
+  }
+}

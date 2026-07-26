@@ -58,6 +58,22 @@ checkout, interpret project content, or acquire gameplay authority. To open on l
 one `root` and one project-relative `project` query parameter; the same controls remain visible in
 the shell.
 
+### Managed LAN preview
+
+The repository root includes a `den-serve` manifest for the complete built Studio host:
+
+```bash
+den-serve up rusty-engine-studio -repo /absolute/path/to/rusty-engine
+```
+
+The launcher builds Studio and, by default, builds the adapter from the exact public reference
+consumer revision in [`demo-consumer-source.json`](demo-consumer-source.json), cached outside this
+repository. It never discovers or inspects a sibling checkout. To select a consumer explicitly,
+set `RUSTY_STUDIO_CONSUMER_ROOT` to its absolute checkout path; to use an already-built adapter, set
+`RUSTY_STUDIO_ADAPTER_BINARY` to its absolute path. `den-serve` prints the managed LAN URL and owns
+the resulting process group; use `den-serve status`, `logs`, or `stop` with the same project and
+repository arguments for later lifecycle operations.
+
 The explicit real-consumer proof is separate and mutates only a temporary copy of the demo content
 and conversion fixtures:
 

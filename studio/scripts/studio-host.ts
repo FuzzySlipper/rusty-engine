@@ -26,6 +26,7 @@ import { readStudioRenderResource } from './studio-render-resource-service.js';
 const DEFAULT_STATIC_ROOT = fileURLToPath(
   new URL('../dist/apps/studio-app/browser/', import.meta.url),
 );
+const DEN_PROJECT = 'rusty-engine-studio';
 const MAX_ERROR_BYTES = 64 * 1024;
 
 interface HostOptions {
@@ -417,11 +418,12 @@ async function main(): Promise<void> {
     void (async () => {
       const url = new URL(request.url ?? '/', `http://${configured.host}:${String(configured.port)}`);
       if (url.pathname === '/health') {
-        const body = JSON.stringify({ status: 'ok' });
+        const body = JSON.stringify({ project: DEN_PROJECT, status: 'ok' });
         response.writeHead(200, {
           'cache-control': 'no-store',
           'content-type': 'application/json; charset=utf-8',
           'content-length': String(Buffer.byteLength(body)),
+          'x-den-project': DEN_PROJECT,
         });
         response.end(body);
         return;

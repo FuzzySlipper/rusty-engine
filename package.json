@@ -3,6 +3,7 @@
   "private": true,
   "packageManager": "pnpm@11.7.0",
   "scripts": {
+    "serve:studio": "pnpm --dir studio run serve:den",
     "verify:studio": "./scripts/verify-studio.sh",
     "verify:all": "./scripts/verify-all.sh"
   }

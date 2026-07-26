@@ -1,4 +1,5 @@
 /target/
+/node_modules/
 /render/**/node_modules/
 /render/.nx/
 /render/dist/
