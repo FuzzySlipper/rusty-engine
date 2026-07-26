@@ -177,13 +177,7 @@ pub(crate) fn flatten_model_scene(
     ) -> Result<Vec<[f64; 3]>, ConversionError>,
 ) -> Result<ImportedStaticMesh, ConversionError> {
     let mut positions = Vec::new();
-    let texture_set_indices = scene
-        .meshes
-        .iter()
-        .flat_map(|mesh| &mesh.primitives)
-        .flat_map(|primitive| &primitive.texture_coordinates)
-        .map(|texture_coordinates| texture_coordinates.source_set_index)
-        .collect::<BTreeSet<_>>();
+    let texture_set_indices = collect_texture_set_indices(scene)?;
     let mut texture_coordinates = texture_set_indices
         .into_iter()
         .map(|source_set_index| (source_set_index, Vec::new()))
@@ -339,6 +333,34 @@ pub(crate) fn flatten_model_scene(
             .cloned()
             .collect(),
     })
+}
+
+fn collect_texture_set_indices(
+    scene: &ImportedModelScene,
+) -> Result<BTreeSet<u32>, ConversionError> {
+    let mut source_set_indices = BTreeSet::new();
+    for mesh in &scene.meshes {
+        for primitive in &mesh.primitives {
+            for texture_coordinates in &primitive.texture_coordinates {
+                source_set_indices.insert(texture_coordinates.source_set_index);
+                if source_set_indices.len() > MAX_IMPORTED_TEXCOORD_SETS {
+                    return Err(ConversionError::one(
+                        "conversion.resourceLimit",
+                        format!(
+                            "source.meshes[{}].primitives[{}].attributes.TEXCOORD_{}",
+                            mesh.source_mesh_index,
+                            primitive.source_primitive_index,
+                            texture_coordinates.source_set_index
+                        ),
+                        format!(
+                            "selected model defines more than {MAX_IMPORTED_TEXCOORD_SETS} distinct TEXCOORD sets"
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(source_set_indices)
 }
 
 fn validate_triangles(

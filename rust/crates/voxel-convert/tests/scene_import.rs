@@ -1,6 +1,8 @@
 use voxel_convert::{
-    import_mesh_source, import_static_glb, import_static_glb_scene, source_sha256,
-    MeshSourceFormat, MeshSourceImportRequest, MAX_IMPORTED_SCENE_NODES,
+    flatten_static_scene, import_mesh_source, import_static_glb, import_static_glb_scene,
+    source_sha256, ImportedMaterial, ImportedModelMesh, ImportedModelNode, ImportedModelPrimitive,
+    ImportedModelScene, ImportedTextureCoordinates, MeshSourceFormat, MeshSourceImportRequest,
+    MAX_IMPORTED_SCENE_NODES, MAX_IMPORTED_TEXCOORD_SETS,
 };
 
 const SOURCE: &[u8] = include_bytes!(concat!(
@@ -151,6 +153,123 @@ fn scene_node_budget_is_checked_before_geometry_collection() {
     let error = import_static_glb_scene(&excessive).unwrap_err();
     assert_eq!(error.diagnostics()[0].code, "conversion.resourceLimit");
     assert_eq!(error.diagnostics()[0].path, "source.nodes");
+}
+
+#[test]
+fn flattened_scene_rejects_a_union_of_too_many_texture_coordinate_sets() {
+    let first_sets = (0..MAX_IMPORTED_TEXCOORD_SETS as u32).collect::<Vec<_>>();
+    let second_sets = (MAX_IMPORTED_TEXCOORD_SETS as u32..(MAX_IMPORTED_TEXCOORD_SETS as u32 * 2))
+        .collect::<Vec<_>>();
+    let error =
+        flatten_static_scene(&scene_with_texture_sets(&first_sets, &second_sets)).unwrap_err();
+
+    assert_eq!(error.diagnostics()[0].code, "conversion.resourceLimit");
+    assert_eq!(
+        error.diagnostics()[0].path,
+        "source.meshes[0].primitives[1].attributes.TEXCOORD_8"
+    );
+}
+
+#[test]
+fn flattened_scene_aligns_mixed_texture_coordinate_presence() {
+    let mesh = flatten_static_scene(&scene_with_texture_sets(&[0], &[1])).unwrap();
+
+    assert_eq!(
+        mesh.texture_coordinates
+            .iter()
+            .map(|texture_coordinates| texture_coordinates.source_set_index)
+            .collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+    assert_eq!(
+        mesh.texture_coordinates[0].coordinates,
+        vec![
+            Some([0.0, 0.0]),
+            Some([0.0, 1.0]),
+            Some([1.0, 0.0]),
+            None,
+            None,
+            None,
+        ]
+    );
+    assert_eq!(
+        mesh.texture_coordinates[1].coordinates,
+        vec![
+            None,
+            None,
+            None,
+            Some([1.0, 0.0]),
+            Some([1.0, 1.0]),
+            Some([2.0, 0.0]),
+        ]
+    );
+}
+
+fn scene_with_texture_sets(first_sets: &[u32], second_sets: &[u32]) -> ImportedModelScene {
+    ImportedModelScene {
+        source_scene_index: 0,
+        source_scene_name: Some("texture-set-test".to_owned()),
+        nodes: vec![ImportedModelNode {
+            source_node_index: 0,
+            source_node_name: Some("mesh-node".to_owned()),
+            parent_node_index: None,
+            child_node_indices: Vec::new(),
+            source_mesh_index: Some(0),
+            local_transform: identity_matrix(),
+            model_transform: identity_matrix(),
+        }],
+        meshes: vec![ImportedModelMesh {
+            source_mesh_index: 0,
+            source_mesh_name: Some("two-primitives".to_owned()),
+            primitives: vec![
+                primitive_with_texture_sets(0, 0.0, first_sets),
+                primitive_with_texture_sets(1, 1.0, second_sets),
+            ],
+        }],
+        materials: vec![
+            ImportedMaterial {
+                source_material_slot: 0,
+                source_material_name: Some("first".to_owned()),
+            },
+            ImportedMaterial {
+                source_material_slot: 1,
+                source_material_name: Some("second".to_owned()),
+            },
+        ],
+    }
+}
+
+fn primitive_with_texture_sets(
+    primitive_index: u32,
+    z: f64,
+    source_set_indices: &[u32],
+) -> ImportedModelPrimitive {
+    ImportedModelPrimitive {
+        source_primitive_index: primitive_index,
+        source_material_slot: primitive_index,
+        positions: vec![[0.0, 0.0, z], [1.0, 0.0, z], [0.0, 1.0, z]],
+        texture_coordinates: source_set_indices
+            .iter()
+            .map(|source_set_index| ImportedTextureCoordinates {
+                source_set_index: *source_set_index,
+                coordinates: vec![
+                    [f64::from(*source_set_index), 0.0],
+                    [f64::from(*source_set_index), 1.0],
+                    [f64::from(*source_set_index) + 1.0, 0.0],
+                ],
+            })
+            .collect(),
+        indices: vec![0, 1, 2],
+    }
+}
+
+fn identity_matrix() -> [f64; 16] {
+    [
+        1.0, 0.0, 0.0, 0.0, // first column
+        0.0, 1.0, 0.0, 0.0, // second column
+        0.0, 0.0, 1.0, 0.0, // third column
+        0.0, 0.0, 0.0, 1.0,
+    ]
 }
 
 fn hierarchy_fixture() -> Vec<u8> {

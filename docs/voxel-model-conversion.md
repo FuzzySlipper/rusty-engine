@@ -80,7 +80,8 @@ all groups attached to one exact source node. Canonical metadata exposes the sou
 equal names never become identity.
 
 The importer bounds source bytes, document nodes/edges/depth, meshes, mesh instances, primitives,
-UV sets, UTF-8 names, expanded vertices, and expanded indices. It rejects cycles, nodes reached from
+and the union of distinct UV sets across the selected model before allocating flattened attributes,
+along with UTF-8 names, expanded vertices, and expanded indices. It rejects cycles, nodes reached from
 more than one root/parent, external buffer resources, unsupported primitive modes, implicit or bad
 indices, morph/skin/animation inputs in the static path, non-finite transforms/geometry/UVs, and
 degenerate transformed triangles with classified source paths. Texture image URIs are never opened
