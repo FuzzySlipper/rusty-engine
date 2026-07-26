@@ -13,6 +13,7 @@ import type {
   BillboardProjectionDiagnostic,
   BillboardProjectionReadout,
 } from './host-types.js';
+import { rendererResourceContentHash } from './resource-content-hash.js';
 
 type Vec3 = readonly [number, number, number];
 type BillboardPresentationOp = Extract<PresentationOp, { readonly domain: 'billboard' }>;
@@ -499,13 +500,12 @@ function classifyBillboardHostError(
 }
 
 async function validateResourceHash(bytes: ArrayBuffer, expected: string): Promise<void> {
-  if (globalThis.crypto?.subtle === undefined) {
-    throw new RendererBillboardResourceError('hostFailure', 'Web Crypto SHA-256 is unavailable');
-  }
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
-  const actual = Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
+  const actual = await rendererResourceContentHash(bytes, expected).catch((cause: unknown) => {
+    throw new RendererBillboardResourceError(
+      'contentHashMismatch',
+      cause instanceof Error ? cause.message : String(cause),
+    );
+  });
   if (actual !== expected) {
     throw new RendererBillboardResourceError(
       'contentHashMismatch',
