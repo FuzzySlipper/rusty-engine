@@ -473,10 +473,13 @@ fn candidate_precedes(candidate: SurfaceCandidate, current: SurfaceCandidate) ->
 }
 
 fn validate_closed_topology(mesh: &ImportedStaticMesh) -> Result<(), ConversionError> {
-    let mut faces = BTreeSet::<[u32; 3]>::new();
-    let mut edges = BTreeMap::<(u32, u32), Vec<(u32, u32)>>::new();
+    let geometric_vertex_ids = geometric_vertex_ids(&mesh.positions);
+    let mut faces = BTreeSet::<[usize; 3]>::new();
+    let mut edges = BTreeMap::<(usize, usize), Vec<(usize, usize)>>::new();
     for triangle in &mesh.triangles {
-        let [a, b, c] = triangle.indices;
+        let [a, b, c] = triangle
+            .indices
+            .map(|index| geometric_vertex_ids[index as usize]);
         let mut face = [a, b, c];
         face.sort_unstable();
         if !faces.insert(face) {
@@ -498,6 +501,29 @@ fn validate_closed_topology(mesh: &ImportedStaticMesh) -> Result<(), ConversionE
         ));
     }
     Ok(())
+}
+
+fn geometric_vertex_ids(positions: &[[f64; 3]]) -> Vec<usize> {
+    let mut ids_by_position = BTreeMap::<[u64; 3], usize>::new();
+    positions
+        .iter()
+        .map(|position| {
+            let key = position.map(|component| {
+                if component == 0.0 {
+                    0.0f64.to_bits()
+                } else {
+                    component.to_bits()
+                }
+            });
+            if let Some(id) = ids_by_position.get(&key) {
+                *id
+            } else {
+                let id = ids_by_position.len();
+                ids_by_position.insert(key, id);
+                id
+            }
+        })
+        .collect()
 }
 
 struct CoordinateMapper {

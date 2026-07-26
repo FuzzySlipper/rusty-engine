@@ -116,9 +116,12 @@ clamp-to-edge nearest-texel sampling happen independently for each cell. The bin
 still chooses the representative/fallback source-material mapping for schema compatibility, but it
 does not replace per-cell UV evidence. Missing coordinates or UV hash drift fail before output.
 
-Solid conversion first requires unique faces and exactly two oppositely directed uses of every
-indexed edge. It keeps conservative boundary cells, then classifies voxel centers by deterministic
-X-ray parity through the closed mesh. A bounded set of tiny row perturbations avoids vertex/edge
+Solid conversion first assigns one topology vertex to every exactly coincident finite position,
+normalizing signed zero but using no scale-dependent epsilon. UV, hard-normal, and material seams
+can therefore retain distinct attribute vertices without opening an otherwise closed mesh. It then
+requires unique geometric faces and exactly two oppositely directed uses of every geometric edge.
+It keeps conservative boundary cells, then classifies voxel centers by deterministic X-ray parity
+through the closed mesh. A bounded set of tiny row perturbations avoids vertex/edge
 ambiguity; an odd crossing count after all attempts is rejected rather than guessed. Interior cells
 inherit material and barycentric evidence from their nearest positive-X exit surface. Multiple
 closed shells therefore preserve exterior cavities instead of filling the source AABB.
@@ -133,8 +136,9 @@ Feature limits remain explicit: surface occupancy is conservative at cell granul
 sub-cell feature is retained but not geometrically reconstructed; solid occupancy represents voxel
 centers, so a void narrower than one target cell may have no empty center; the tiny parity
 perturbation makes geometry within roughly `2.4e-7` target-cell units of a row boundary numerically
-ambiguous; and requests whose conservative candidate or parity work exceeds ten million operations
-must lower resolution or split the selected model.
+ambiguous; near-coincident positions are not welded because an epsilon could merge real features at
+another model scale; and requests whose conservative candidate or parity work exceeds ten million
+operations must lower resolution or split the selected model.
 
 ## Animated GLB sampling
 

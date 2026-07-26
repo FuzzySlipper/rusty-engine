@@ -319,9 +319,13 @@ fn texture_palette_uses_hash_pinned_barycentric_uv_per_voxel() {
 #[test]
 fn solid_topology_limits_and_rejected_install_leave_no_partial_output() {
     let imported = imported_source();
-    let mut solid_request = plan_request(&imported);
+    let mut open_request = import_request();
+    open_request.source_bytes = glb_with_removed_triangle();
+    open_request.expected_source_sha256 = None;
+    let open_imported = import_mesh_source(&open_request).unwrap();
+    let mut solid_request = plan_request(&open_imported);
     solid_request.settings.conversion.mode = VoxelConversionMode::Solid;
-    let error = plan_conversion(&solid_request, &imported).unwrap_err();
+    let error = plan_conversion(&solid_request, &open_imported).unwrap_err();
     assert_eq!(
         error.diagnostics()[0].code,
         "conversion.unsupportedTopology"
@@ -492,6 +496,25 @@ fn texture_binding(
 }
 
 fn glb_with_shared_primitive_material() -> Vec<u8> {
+    mutate_source_glb(|document| {
+        let first_material = document["meshes"][0]["primitives"][0]["material"].clone();
+        document["meshes"][0]["primitives"][1]["material"] = first_material;
+    })
+}
+
+fn glb_with_removed_triangle() -> Vec<u8> {
+    mutate_source_glb(|document| {
+        let accessor_index = document["meshes"][0]["primitives"][1]["indices"]
+            .as_u64()
+            .unwrap() as usize;
+        let count = document["accessors"][accessor_index]["count"]
+            .as_u64()
+            .unwrap();
+        document["accessors"][accessor_index]["count"] = (count - 3).into();
+    })
+}
+
+fn mutate_source_glb(change: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
     const JSON_CHUNK_TYPE: u32 = 0x4e4f_534a;
     assert_eq!(&SOURCE[..4], b"glTF");
     let json_len = u32::from_le_bytes(SOURCE[12..16].try_into().unwrap()) as usize;
@@ -501,8 +524,7 @@ fn glb_with_shared_primitive_material() -> Vec<u8> {
     );
     let json_end = 20 + json_len;
     let mut document: serde_json::Value = serde_json::from_slice(&SOURCE[20..json_end]).unwrap();
-    let first_material = document["meshes"][0]["primitives"][0]["material"].clone();
-    document["meshes"][0]["primitives"][1]["material"] = first_material;
+    change(&mut document);
 
     let mut json = serde_json::to_vec(&document).unwrap();
     while !json.len().is_multiple_of(4) {
