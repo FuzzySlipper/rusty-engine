@@ -5,6 +5,17 @@ export * from './presentation-host-set.js';
 export * from './browser-dom-hosts.js';
 
 export {
+  RUSTY_RENDERER_SURFACE_MAX_TIMING_DURATION_MS,
+  RUSTY_RENDERER_SURFACE_TIMING_SCHEMA_VERSION,
+} from './surface-timing.js';
+export type {
+  RendererSurfaceFrameIntervalStatus,
+  RendererSurfaceSubmissionDurationStatus,
+  RendererSurfaceTimingSample,
+  RendererSurfaceTimingSource,
+} from './surface-timing.js';
+
+export {
   RUSTY_RENDERER_EDITOR_VIEWPORT_CHANNEL_POLICIES,
   RUSTY_RENDERER_EDITOR_VIEWPORT_COMPATIBILITY_VERSION,
   RUSTY_RENDERER_EDITOR_VIEWPORT_MAX_FRAME_OPS,
@@ -134,6 +145,7 @@ export {
 export type {
   RendererLiveTelemetryCollectorOptions,
   RendererLiveTelemetrySample,
+  RendererSurfaceTelemetrySample,
   RendererTelemetryOverlayFrameReceipt,
   RendererTelemetryOverlayHostOptions,
   RendererTelemetryOverlaySink,

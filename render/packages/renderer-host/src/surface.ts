@@ -33,6 +33,12 @@ import {
   RendererPresentationHostSet,
   type RendererPresentationFrameReceipt,
 } from './presentation-host-set.js';
+import {
+  assertRendererSurfaceSourceTime,
+  RendererSurfaceTimingTracker,
+  type RendererSurfaceTimingSample,
+  type RendererSurfaceTimingSource,
+} from './surface-timing.js';
 
 export const RUSTY_RENDERER_HOST_COMPATIBILITY_VERSION = 'renderer-host.v1';
 
@@ -202,7 +208,8 @@ export interface RendererSurface {
   readonly pointerLocked: () => boolean;
   readonly projectWorldPoint: (position: RendererSurfaceVec3) => RendererSurfaceWorldProjection;
   readonly projectionSnapshot: () => RenderProjectionSnapshot;
-  readonly renderOnce: (timeMs?: number) => void;
+  /** Submit one explicit frame and return its renderer-owned timing sample. */
+  readonly renderOnce: (timeMs?: number) => RendererSurfaceTimingSample;
   readonly resetCamera: () => void;
   /** Synchronize a caller-owned camera, such as an authoritative game player view. */
   readonly setCameraPose: (
@@ -214,6 +221,8 @@ export interface RendererSurface {
   readonly snapshot: () => string;
   readonly start: () => void;
   readonly stop: () => void;
+  /** Read the latest automatic or explicit frame timing without starting another loop. */
+  readonly timing: () => RendererSurfaceTimingSample;
   readonly dispose: () => void;
 }
 
@@ -284,8 +293,13 @@ function mountPreparedRendererSurface(
   let presentationHosts = options.presentationHosts ?? null;
   let animationFrame: number | null = null;
   let lastRenderTimeMs: number | null = null;
+  const timing = new RendererSurfaceTimingTracker();
 
-  const renderOnce = (timeMs = globalThis.performance?.now() ?? 0): void => {
+  const renderFrame = (
+    timeMs: number,
+    source: RendererSurfaceTimingSource,
+  ): RendererSurfaceTimingSample => {
+    assertRendererSurfaceSourceTime(timeMs);
     const deltaSeconds = lastRenderTimeMs === null
       ? 0
       : Math.min(0.05, Math.max(0, (timeMs - lastRenderTimeMs) / 1_000));
@@ -294,11 +308,24 @@ function mountPreparedRendererSurface(
     const camera = controls.cameraSnapshot();
     backendSurface.setCameraPose(camera.pose, camera.basis);
     presentationHosts?.advance(deltaSeconds);
+    const backendSubmissionStartedMs = surfaceTimingNow();
     backendSurface.renderOnce(timeMs);
+    const backendSubmissionEndedMs = surfaceTimingNow();
+    return timing.record({
+      source,
+      sourceTimeMs: timeMs,
+      backendSubmissionStartedMs,
+      backendSubmissionEndedMs,
+    });
+  };
+  const renderOnce = (
+    timeMs = globalThis.performance?.now() ?? 0,
+  ): RendererSurfaceTimingSample => {
+    return renderFrame(timeMs, 'explicit');
   };
 
   const tick = (timeMs: number): void => {
-    renderOnce(timeMs);
+    renderFrame(timeMs, 'animationFrame');
     animationFrame = globalThis.requestAnimationFrame(tick);
   };
   const start = (): void => {
@@ -334,7 +361,7 @@ function mountPreparedRendererSurface(
     }
   };
 
-  renderOnce(0);
+  renderFrame(0, 'mount');
   if (options.autoStart !== false) {
     start();
   }
@@ -369,7 +396,7 @@ function mountPreparedRendererSurface(
     resetCamera: () => {
       controls.resetCamera();
       lastRenderTimeMs = null;
-      renderOnce(0);
+      renderFrame(0, 'cameraReset');
     },
     setCameraPose: (pose, basis) => {
       controls.setCameraPose(pose, basis);
@@ -381,12 +408,17 @@ function mountPreparedRendererSurface(
     snapshot: backendSurface.snapshot,
     start,
     stop,
+    timing: timing.read.bind(timing),
     dispose: () => {
       stop();
       controls.dispose();
       backendSurface.dispose();
     },
   };
+}
+
+function surfaceTimingNow(): number {
+  return globalThis.performance?.now() ?? 0;
 }
 
 function surfaceAnimationProjection(

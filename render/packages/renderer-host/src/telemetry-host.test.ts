@@ -15,6 +15,7 @@ import {
   RendererTelemetryOverlayHost,
   type RendererTelemetryOverlaySink,
 } from './telemetry-host.js';
+import { RendererSurfaceTimingTracker } from './surface-timing.js';
 
 class FakeOverlaySink implements RendererTelemetryOverlaySink {
   readonly rendered: Array<{
@@ -98,12 +99,32 @@ void test('telemetry overlay projects the same snapshot and local toggle changes
   assert.equal(created.applied, 1);
   assert.equal(created.readout.activeOverlays, 1);
 
-  const snapshot = host.sample({
+  const surfaceTiming = new RendererSurfaceTimingTracker();
+  surfaceTiming.record({
+    source: 'mount',
+    sourceTimeMs: 0,
+    backendSubmissionStartedMs: 1,
+    backendSubmissionEndedMs: 2,
+  });
+  const timing = surfaceTiming.record({
+    source: 'animationFrame',
+    sourceTimeMs: 16.5,
+    backendSubmissionStartedMs: 20,
+    backendSubmissionEndedMs: 22.25,
+  });
+  const snapshot = host.sampleSurface({
     sourceTick: 8,
-    frameTimeMs: 16.5,
+    timing,
     counters: { entityCount: 2, activeParticleCount: 12 },
   }, 250);
   assert.deepEqual(sink.rendered.at(-1)?.snapshot, snapshot);
+  assert.deepEqual(snapshot.metrics.map((metric) => metric.counter), [
+    'frameTimeMs',
+    'backendSubmissionDurationMs',
+    'entityCount',
+    'activeParticleCount',
+  ]);
+  assert.deepEqual(snapshot.frameTimeHistoryMs, [16.5]);
   assert.equal(host.toggleVisible(handle), false);
   assert.deepEqual(collector.readSnapshot(), snapshot, 'toggle is projection-local');
   assert.equal(sink.rendered.at(-1)?.descriptor.visible, false);
@@ -123,6 +144,31 @@ void test('telemetry overlay projects the same snapshot and local toggle changes
   assert.equal(sink.rendered.at(-1)?.descriptor.corner, 'bottomRight');
   host.applyPresentation(frame({ op: 'destroy', handle }));
   assert.deepEqual(sink.destroyed, [handle]);
+});
+
+void test('surface telemetry reports unavailable first cadence without inventing a zero', () => {
+  const collector = new RendererLiveTelemetryCollector({ expectedCounters: [] });
+  const timing = new RendererSurfaceTimingTracker().record({
+    source: 'mount',
+    sourceTimeMs: 0,
+    backendSubmissionStartedMs: 4,
+    backendSubmissionEndedMs: 5.5,
+  });
+  const snapshot = collector.sampleSurface({ sourceTick: 0, timing, counters: {} });
+
+  assert.deepEqual(snapshot.frameTimeHistoryMs, []);
+  assert.deepEqual(snapshot.metrics.map((metric) => metric.counter), [
+    'backendSubmissionDurationMs',
+  ]);
+  assert.equal(snapshot.diagnostics[0]?.code, 'counterUnavailable');
+  assert.equal(snapshot.diagnostics[0]?.counter, 'frameTimeMs');
+
+  assert.throws(() => collector.sampleSurface({
+    sourceTick: 1,
+    timing: { ...timing, frameIntervalStatus: 'available' },
+    counters: {},
+  }), /availability status/u);
+  assert.deepEqual(collector.readSnapshot(), snapshot, 'rejected timing is non-mutating');
 });
 
 void test('missing overlay realization does not block scene or other telemetry access', async () => {

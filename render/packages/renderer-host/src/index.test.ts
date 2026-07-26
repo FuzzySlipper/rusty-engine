@@ -282,7 +282,10 @@ void test('renderer-host declarations expose no concrete backend or donor runtim
   assert.match(surfaceDeclarationText, /RendererSurfacePickRequest/);
   assert.match(surfaceDeclarationText, /RendererSurfaceMovementResolver/);
   assert.match(surfaceDeclarationText, /readonly applyPresentation:/);
+  assert.match(surfaceDeclarationText, /readonly renderOnce:.*RendererSurfaceTimingSample/);
   assert.match(surfaceDeclarationText, /readonly setCameraPose:/);
+  assert.match(surfaceDeclarationText, /readonly timing:.*RendererSurfaceTimingSample/);
+  assert.match(declarationText, /RendererSurfaceTelemetrySample/);
   assert.doesNotMatch(surfaceDeclarationText, /inputSession|movementAuthority/);
 });
 

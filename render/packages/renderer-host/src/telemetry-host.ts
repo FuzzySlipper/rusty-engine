@@ -13,8 +13,16 @@ import type {
   TelemetryOverlayDiagnostic,
   TelemetryOverlayReadout,
 } from './host-types.js';
+import {
+  RUSTY_RENDERER_SURFACE_MAX_TIMING_DURATION_MS,
+  type RendererSurfaceFrameIntervalStatus,
+  type RendererSurfaceSubmissionDurationStatus,
+  type RendererSurfaceTimingSample,
+  type RendererSurfaceTimingSource,
+} from './surface-timing.js';
 
-type CountCounter = Exclude<LiveTelemetryCounter, 'frameTimeMs'>;
+type DurationCounter = 'frameTimeMs' | 'backendSubmissionDurationMs';
+type CountCounter = Exclude<LiveTelemetryCounter, DurationCounter>;
 type TelemetryPresentationOp = Extract<
   PresentationOp,
   { readonly domain: 'telemetryOverlay' }
@@ -34,6 +42,25 @@ const COUNTER_ORDER: readonly CountCounter[] = [
   'droppedFeedbackCount',
 ];
 
+const SURFACE_TIMING_SOURCES: readonly RendererSurfaceTimingSource[] = [
+  'mount',
+  'animationFrame',
+  'explicit',
+  'cameraReset',
+];
+const FRAME_INTERVAL_STATUSES: readonly RendererSurfaceFrameIntervalStatus[] = [
+  'available',
+  'firstFrame',
+  'sourceTimeRegressed',
+  'sourceTimeGapExceeded',
+];
+const SUBMISSION_DURATION_STATUSES: readonly RendererSurfaceSubmissionDurationStatus[] = [
+  'available',
+  'clockUnavailable',
+  'clockRegressed',
+  'durationExceeded',
+];
+
 export interface RendererLiveTelemetryCollectorOptions {
   readonly expectedCounters: readonly CountCounter[];
   readonly maxFrameTimeSamples?: number;
@@ -41,7 +68,26 @@ export interface RendererLiveTelemetryCollectorOptions {
 
 export interface RendererLiveTelemetrySample {
   readonly sourceTick: number;
+  /** Inter-frame cadence in milliseconds, not backend CPU/GPU work duration. */
   readonly frameTimeMs: number;
+  readonly counters: Readonly<Partial<Record<CountCounter, number | null | undefined>>>;
+}
+
+export interface RendererSurfaceTelemetrySample {
+  readonly sourceTick: number;
+  readonly timing: RendererSurfaceTimingSample;
+  readonly counters: Readonly<Partial<Record<CountCounter, number | null | undefined>>>;
+}
+
+interface DurationObservation {
+  readonly counter: DurationCounter;
+  readonly value: number | null;
+  readonly unavailableMessage: string | null;
+}
+
+interface ResolvedTelemetrySample {
+  readonly sourceTick: number;
+  readonly durations: readonly DurationObservation[];
   readonly counters: Readonly<Partial<Record<CountCounter, number | null | undefined>>>;
 }
 
@@ -63,26 +109,66 @@ export class RendererLiveTelemetryCollector {
   }
 
   sample(input: RendererLiveTelemetrySample): LiveTelemetrySnapshot {
+    return this.#record({
+      sourceTick: input.sourceTick,
+      durations: [{ counter: 'frameTimeMs', value: input.frameTimeMs, unavailableMessage: null }],
+      counters: input.counters,
+    });
+  }
+
+  sampleSurface(input: RendererSurfaceTelemetrySample): LiveTelemetrySnapshot {
+    validateSurfaceTiming(input.timing);
+    return this.#record({
+      sourceTick: input.sourceTick,
+      durations: [
+        durationObservation(
+          'frameTimeMs',
+          input.timing.frameIntervalMs,
+          input.timing.frameIntervalStatus,
+        ),
+        durationObservation(
+          'backendSubmissionDurationMs',
+          input.timing.backendSubmissionDurationMs,
+          input.timing.backendSubmissionDurationStatus,
+        ),
+      ],
+      counters: input.counters,
+    });
+  }
+
+  #record(input: ResolvedTelemetrySample): LiveTelemetrySnapshot {
     if (!Number.isSafeInteger(input.sourceTick) || input.sourceTick < 0) {
       throw new Error('sourceTick must be a non-negative safe integer');
     }
     const diagnostics: LiveTelemetryDiagnostic[] = [];
     const metrics: LiveTelemetryMetric[] = [];
-    if (validMetric(input.frameTimeMs)) {
-      this.#frameTimeHistory.push(input.frameTimeMs);
-      if (this.#frameTimeHistory.length > this.#maxFrameTimeSamples) {
-        this.#frameTimeHistory.splice(
-          0,
-          this.#frameTimeHistory.length - this.#maxFrameTimeSamples,
-        );
+    for (const duration of input.durations) {
+      if (duration.value === null) {
+        diagnostics.push({
+          code: 'counterUnavailable',
+          counter: duration.counter,
+          message: duration.unavailableMessage ?? `${duration.counter} is unavailable`,
+        });
+        continue;
       }
-      metrics.push(metric('frameTimeMs', input.frameTimeMs, 'durationMs', 'ms'));
-    } else {
-      diagnostics.push({
-        code: 'invalidSample',
-        counter: 'frameTimeMs',
-        message: 'frameTimeMs must be finite and non-negative',
-      });
+      if (!validMetric(duration.value)) {
+        diagnostics.push({
+          code: 'invalidSample',
+          counter: duration.counter,
+          message: `${duration.counter} must be finite and non-negative`,
+        });
+        continue;
+      }
+      if (duration.counter === 'frameTimeMs') {
+        this.#frameTimeHistory.push(duration.value);
+        if (this.#frameTimeHistory.length > this.#maxFrameTimeSamples) {
+          this.#frameTimeHistory.splice(
+            0,
+            this.#frameTimeHistory.length - this.#maxFrameTimeSamples,
+          );
+        }
+      }
+      metrics.push(metric(duration.counter, duration.value, 'durationMs', 'ms'));
     }
     for (const counter of COUNTER_ORDER) {
       const value = input.counters[counter];
@@ -194,7 +280,17 @@ export class RendererTelemetryOverlayHost {
     if (!Number.isFinite(elapsedMs) || elapsedMs < 0) {
       throw new Error('elapsedMs must be finite and non-negative');
     }
-    const snapshot = this.#collector.sample(input);
+    return this.#renderSnapshot(this.#collector.sample(input), elapsedMs);
+  }
+
+  sampleSurface(input: RendererSurfaceTelemetrySample, elapsedMs: number): LiveTelemetrySnapshot {
+    if (!Number.isFinite(elapsedMs) || elapsedMs < 0) {
+      throw new Error('elapsedMs must be finite and non-negative');
+    }
+    return this.#renderSnapshot(this.#collector.sampleSurface(input), elapsedMs);
+  }
+
+  #renderSnapshot(snapshot: LiveTelemetrySnapshot, elapsedMs: number): LiveTelemetrySnapshot {
     for (const [rawHandle, overlay] of this.#active) {
       if (!overlay.descriptor.visible) {
         continue;
@@ -289,6 +385,67 @@ export class RendererTelemetryOverlayHost {
         error instanceof Error ? error.message : String(error),
       );
     }
+  }
+}
+
+function durationObservation(
+  counter: DurationCounter,
+  value: number | null,
+  status: string,
+): DurationObservation {
+  return {
+    counter,
+    value,
+    unavailableMessage: value === null
+      ? `${counter} is unavailable because renderer surface timing status is ${status}`
+      : null,
+  };
+}
+
+function validateSurfaceTiming(timing: RendererSurfaceTimingSample): void {
+  if (timing.schemaVersion !== 1) {
+    throw new Error('renderer surface timing schemaVersion must be 1');
+  }
+  if (!Number.isSafeInteger(timing.renderSequence) || timing.renderSequence < 1) {
+    throw new Error('renderer surface timing renderSequence must be a positive safe integer');
+  }
+  if (!SURFACE_TIMING_SOURCES.includes(timing.source)) {
+    throw new Error('renderer surface timing source is unsupported');
+  }
+  if (
+    !Number.isFinite(timing.sourceTimeMs)
+    || timing.sourceTimeMs < 0
+    || timing.sourceTimeMs > Number.MAX_SAFE_INTEGER
+  ) {
+    throw new Error('renderer surface timing sourceTimeMs is outside the supported range');
+  }
+  if (!FRAME_INTERVAL_STATUSES.includes(timing.frameIntervalStatus)) {
+    throw new Error('renderer surface frameIntervalStatus is unsupported');
+  }
+  if (!SUBMISSION_DURATION_STATUSES.includes(timing.backendSubmissionDurationStatus)) {
+    throw new Error('renderer surface backendSubmissionDurationStatus is unsupported');
+  }
+  validateTimingMetric(
+    timing.frameIntervalMs,
+    timing.frameIntervalStatus === 'available',
+    'frameIntervalMs',
+  );
+  validateTimingMetric(
+    timing.backendSubmissionDurationMs,
+    timing.backendSubmissionDurationStatus === 'available',
+    'backendSubmissionDurationMs',
+  );
+}
+
+function validateTimingMetric(value: number | null, available: boolean, name: string): void {
+  if (
+    available !== (value !== null)
+    || (
+      value !== null
+      && (!validMetric(value) || value > RUSTY_RENDERER_SURFACE_MAX_TIMING_DURATION_MS)
+    )
+  ) {
+    throw new Error(`renderer surface timing ${name} does not match its availability status`);
   }
 }
 

@@ -149,6 +149,7 @@ export interface AnimationProjectionReadout {
 
 export type LiveTelemetryCounter =
   | 'frameTimeMs'
+  | 'backendSubmissionDurationMs'
   | 'entityCount'
   | 'activeCapabilityCount'
   | 'residentChunkCount'

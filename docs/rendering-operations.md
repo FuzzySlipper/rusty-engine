@@ -88,6 +88,42 @@ The consumer gate is intentionally post-push: an exact public Git dependency can
 that has not yet been published. Pull requests still receive the local render gate; the public
 package-preparation path is exercised immediately when the commit reaches `main`.
 
+## Surface timing and telemetry
+
+`RendererSurface` owns the browser animation loop and every explicit `renderOnce` submission, so it
+is also the source of renderer timing observations. One immutable `RendererSurfaceTimingSample` is
+produced after each successfully submitted frame:
+
+- `frameIntervalMs` is render cadence: the difference between consecutive surface source
+  timestamps. The existing telemetry metric `frameTimeMs` deliberately means this cadence. It is
+  not CPU work duration and it is not GPU completion time.
+- `backendSubmissionDurationMs` is synchronous host-clock time spent inside the backend
+  `renderOnce` call. It does not include asynchronous GPU completion.
+- the first frame, a regressed source timestamp, or a source gap above 60 seconds has no cadence
+  value and carries a classified status instead of inventing zero;
+- unavailable, regressed, or excessive backend-clock duration is likewise reported as unavailable;
+  and
+- the surface retains only its latest frozen sample. The telemetry collector's frame-time history
+  remains separately bounded to 1..=240 samples.
+
+An explicit caller receives the sample directly from `surface.renderOnce(timeMs)`. An auto-started
+caller reads the latest sample through `surface.timing()` without starting or polling another render
+loop. The existing overlay host accepts that value directly:
+
+```ts
+const timing = surface.timing();
+telemetry.sampleSurface({
+  sourceTick,
+  timing,
+  counters: { entityCount, drawCallCount },
+}, timing.sourceTimeMs);
+```
+
+The older `telemetry.sample({ frameTimeMs, ... })` seam remains available for a non-surface owner
+that already has a real cadence measurement. Downstream code must not use a placeholder zero or
+reinterpret `frameTimeMs` as backend submission time. Timing is read-only presentation diagnostics;
+it does not advance gameplay, camera authority, or animation scheduling.
+
 ## Resource and authority rules
 
 - Static/shared/animated mesh bytes, audio clips, fonts, icons, and particle sprites arrive through

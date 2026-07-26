@@ -29,8 +29,12 @@ interface BrowserProof {
   readonly animationClip: string | null;
   readonly audioApplied: number;
   audioResumeDiagnostics: readonly string[] | null;
+  readonly autoFrameIntervalMs: number | null;
+  readonly autoStartRenderCount: number;
+  readonly backendSubmissionDurationMs: number | null;
   readonly billboardText: string | null;
   readonly context: string;
+  readonly explicitFrameIntervalMs: number | null;
   readonly hostSurfaceKind: string;
   readonly inspectionGridLines: number | null;
   readonly inspectionSurfaceKind: string;
@@ -86,7 +90,6 @@ async function main(): Promise<void> {
       if (!response.ok) throw new Error(`animated fixture fetch failed: ${String(response.status)}`);
       return response.arrayBuffer();
     },
-    autoStart: false,
     controls: { enabled: true },
     frame: browserFrame(),
     pixelRatio: 1,
@@ -130,13 +133,20 @@ async function main(): Promise<void> {
   const presentation = await surface.applyPresentation(
     browserPresentationFrame(audioHash, spriteHash),
   );
-  telemetry.sample({
+  const renderSequenceBeforeAutoFrame = surface.timing().renderSequence;
+  surface.start();
+  surface.start();
+  await new Promise<void>((resolve) => globalThis.requestAnimationFrame(() => resolve()));
+  surface.stop();
+  const autoTiming = surface.timing();
+  telemetry.sampleSurface({
     sourceTick: 1,
-    frameTimeMs: 16.7,
+    timing: autoTiming,
     counters: { entityCount: 4, drawCallCount: 7 },
-  }, 300);
+  }, autoTiming.sourceTimeMs);
+  surface.resetCamera();
   surface.renderOnce(16);
-  surface.renderOnce(66);
+  const explicitTiming = surface.renderOnce(66);
 
   const inspection = await mountRendererInspectionSurface(inspectionCanvas, {
     autoStart: false,
@@ -175,8 +185,12 @@ async function main(): Promise<void> {
     animationClip: surface.animatedMeshPlayback(renderHandle(105)).selectedClip,
     audioApplied: presentation.domains.find((domain) => domain.domain === 'audio')?.applied ?? 0,
     audioResumeDiagnostics: null,
+    autoFrameIntervalMs: autoTiming.frameIntervalMs,
+    autoStartRenderCount: autoTiming.renderSequence - renderSequenceBeforeAutoFrame,
+    backendSubmissionDurationMs: autoTiming.backendSubmissionDurationMs,
     billboardText: overlays.querySelector('[data-rusty-billboard-handle]')?.textContent ?? null,
     context: context instanceof WebGL2RenderingContext ? 'webgl2' : 'webgl',
+    explicitFrameIntervalMs: explicitTiming.frameIntervalMs,
     hostSurfaceKind: surface.kind,
     inspectionGridLines: inspection.readout().grid?.renderedLineCount ?? null,
     inspectionSurfaceKind: inspection.kind,

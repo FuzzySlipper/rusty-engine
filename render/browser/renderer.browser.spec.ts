@@ -18,6 +18,10 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.snapshot).toContain('kind sprite');
   expect(proof.snapshot).toContain('kind light/point');
   expect(proof.animationClip).toBe('run');
+  expect(proof.autoStartRenderCount).toBe(1);
+  expect(proof.autoFrameIntervalMs).toBeGreaterThan(0);
+  expect(proof.backendSubmissionDurationMs).toBeGreaterThanOrEqual(0);
+  expect(proof.explicitFrameIntervalMs).toBe(50);
   expect(proof.lightCount).toBe(1);
   expect(proof.pickHandle).toBe(101);
   expect(proof.projectionInsideViewport).toBe(true);
@@ -28,6 +32,8 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.billboardText).toBe('Shared renderer host');
   expect(proof.particleElementCount).toBe(2);
   expect(proof.telemetryText).toContain('Renderer proof');
+  expect(proof.telemetryText).toContain('frameTimeMs:');
+  expect(proof.telemetryText).toContain('backendSubmissionDurationMs:');
   expect(proof.telemetryText).toContain('drawCallCount: 7 count');
   expect(proof.presentationDiagnostics).toEqual([]);
   expect(consoleErrors).toEqual([]);
