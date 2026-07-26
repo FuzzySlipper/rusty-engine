@@ -1,4 +1,5 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::mem::size_of;
 
 use super::{
     AnimationAnchorPolicy, AnimationBindPoseReceipt, AnimationBindPoseRequest, AnimationEndPolicy,
@@ -6,7 +7,8 @@ use super::{
     AnimationSampleRangeRequest, AnimationSampleReceipt, AnimationSampleRequest,
     ImportedAnimatedModel, ImportedAnimationClip, ImportedNodeTransform,
     ANIMATION_TIMESTAMP_TICKS_PER_SECOND, MAX_ANIMATION_DEFORMATION_WORK,
-    MAX_ANIMATION_SAMPLE_FRAMES, MAX_ANIMATION_SAMPLE_RATE_HZ,
+    MAX_ANIMATION_MATERIALIZED_SNAPSHOT_BYTES, MAX_ANIMATION_SAMPLE_FRAMES,
+    MAX_ANIMATION_SAMPLE_RATE_HZ,
 };
 use crate::import::{
     flatten_model_scene, identity_matrix, multiply_matrices, transform_point,
@@ -38,7 +40,7 @@ pub(super) fn sample_animation_clip(
         request.sample_rate_hz,
         request.end_policy,
     )?;
-    let (deformation_work, snapshots) =
+    let (deformation_work, estimated_materialized_snapshot_bytes, snapshots) =
         sample_timestamps(model, clip, timestamps, request.anchor_policy)?;
 
     Ok(AnimationSampleReceipt {
@@ -50,6 +52,7 @@ pub(super) fn sample_animation_clip(
         end_policy: request.end_policy,
         anchor_policy: request.anchor_policy,
         deformation_work,
+        estimated_materialized_snapshot_bytes,
         snapshots,
     })
 }
@@ -80,7 +83,7 @@ pub(super) fn sample_animation_clip_range(
         request.sample_rate_hz,
         request.end_policy,
     )?;
-    let (deformation_work, snapshots) =
+    let (deformation_work, estimated_materialized_snapshot_bytes, snapshots) =
         sample_timestamps(model, clip, timestamps, request.anchor_policy)?;
     Ok(AnimationSampleRangeReceipt {
         source_sha256: model.source_sha256.clone(),
@@ -93,6 +96,7 @@ pub(super) fn sample_animation_clip_range(
         end_policy: request.end_policy,
         anchor_policy: request.anchor_policy,
         deformation_work,
+        estimated_materialized_snapshot_bytes,
         snapshots,
     })
 }
@@ -130,7 +134,7 @@ fn sample_timestamps(
     clip: &ImportedAnimationClip,
     timestamps: Vec<u64>,
     anchor_policy: AnimationAnchorPolicy,
-) -> Result<(u64, Vec<AnimationMeshSnapshot>), ConversionError> {
+) -> Result<(u64, u64, Vec<AnimationMeshSnapshot>), ConversionError> {
     let work_per_snapshot = deformation_work_per_snapshot(model)?;
     let deformation_work = work_per_snapshot
         .checked_mul(timestamps.len() as u64)
@@ -140,6 +144,8 @@ fn sample_timestamps(
             "animation deformation work {deformation_work} exceeds {MAX_ANIMATION_DEFORMATION_WORK}"
         )));
     }
+    let estimated_materialized_snapshot_bytes =
+        estimated_materialized_snapshot_bytes(model, timestamps.len())?;
     let mut snapshots = Vec::with_capacity(timestamps.len());
     for timestamp_microseconds in timestamps {
         let pose = evaluate_pose(model, Some(clip), timestamp_microseconds)?;
@@ -149,7 +155,11 @@ fn sample_timestamps(
             mesh,
         });
     }
-    Ok((deformation_work, snapshots))
+    Ok((
+        deformation_work,
+        estimated_materialized_snapshot_bytes,
+        snapshots,
+    ))
 }
 
 pub(super) fn sample_animation_bind_pose(
@@ -164,14 +174,171 @@ pub(super) fn sample_animation_bind_pose(
             "bind-pose deformation work {deformation_work} exceeds {MAX_ANIMATION_DEFORMATION_WORK}"
         )));
     }
+    let estimated_materialized_snapshot_bytes = estimated_materialized_snapshot_bytes(model, 1)?;
     let pose = evaluate_pose(model, None, 0)?;
     let mesh = deform_pose(model, &pose, request.anchor_policy)?;
     Ok(AnimationBindPoseReceipt {
         source_sha256: model.source_sha256.clone(),
         anchor_policy: request.anchor_policy,
         deformation_work,
+        estimated_materialized_snapshot_bytes,
         mesh,
     })
+}
+
+fn estimated_materialized_snapshot_bytes(
+    model: &ImportedAnimatedModel,
+    snapshot_count: usize,
+) -> Result<u64, ConversionError> {
+    let mut position_count = 0u64;
+    let mut triangle_count = 0u64;
+    let mut primitive_group_count = 0u64;
+    let mut texture_set_indices = BTreeSet::new();
+    let mut used_material_slots = BTreeSet::new();
+
+    for mesh in &model.scene.meshes {
+        for primitive in &mesh.primitives {
+            texture_set_indices.extend(
+                primitive
+                    .texture_coordinates
+                    .iter()
+                    .map(|coordinates| coordinates.source_set_index),
+            );
+        }
+    }
+    for node in &model.scene.nodes {
+        let Some(mesh_index) = node.source_mesh_index else {
+            continue;
+        };
+        let mesh = model
+            .scene
+            .meshes
+            .iter()
+            .find(|mesh| mesh.source_mesh_index == mesh_index)
+            .ok_or_else(|| {
+                ConversionError::one(
+                    "conversion.invalidGeometry",
+                    format!("source.nodes[{}].mesh", node.source_node_index),
+                    format!("referenced mesh {mesh_index} was not imported"),
+                )
+            })?;
+        for primitive in &mesh.primitives {
+            position_count = checked_snapshot_add(
+                position_count,
+                snapshot_count_from_usize(primitive.positions.len())?,
+                "flattened position count",
+            )?;
+            triangle_count = checked_snapshot_add(
+                triangle_count,
+                snapshot_count_from_usize(primitive.indices.len() / 3)?,
+                "flattened triangle count",
+            )?;
+            primitive_group_count =
+                checked_snapshot_add(primitive_group_count, 1, "flattened primitive-group count")?;
+            used_material_slots.insert(primitive.source_material_slot);
+        }
+    }
+
+    let texture_set_count = snapshot_count_from_usize(texture_set_indices.len())?;
+    let texture_coordinate_count = position_count
+        .checked_mul(texture_set_count)
+        .ok_or_else(|| snapshot_storage_limit("texture-coordinate count overflowed"))?;
+    let mut material_count = 0u64;
+    let mut material_name_bytes = 0u64;
+    for material in model
+        .scene
+        .materials
+        .iter()
+        .filter(|material| used_material_slots.contains(&material.source_material_slot))
+    {
+        material_count = checked_snapshot_add(material_count, 1, "material count")?;
+        if let Some(name) = &material.source_material_name {
+            material_name_bytes = checked_snapshot_add(
+                material_name_bytes,
+                snapshot_count_from_usize(name.len())?,
+                "material-name bytes",
+            )?;
+        }
+    }
+
+    let mut bytes_per_snapshot = 0u64;
+    add_snapshot_allocation::<AnimationMeshSnapshot>(
+        &mut bytes_per_snapshot,
+        1,
+        "snapshot record",
+    )?;
+    add_snapshot_allocation::<[f64; 3]>(&mut bytes_per_snapshot, position_count, "positions")?;
+    add_snapshot_allocation::<crate::ImportedTriangle>(
+        &mut bytes_per_snapshot,
+        triangle_count,
+        "triangles",
+    )?;
+    add_snapshot_allocation::<crate::ImportedPrimitiveGroup>(
+        &mut bytes_per_snapshot,
+        primitive_group_count,
+        "primitive groups",
+    )?;
+    add_snapshot_allocation::<crate::ImportedStaticTextureCoordinates>(
+        &mut bytes_per_snapshot,
+        texture_set_count,
+        "texture-coordinate set records",
+    )?;
+    add_snapshot_allocation::<Option<[f64; 2]>>(
+        &mut bytes_per_snapshot,
+        texture_coordinate_count,
+        "texture coordinates",
+    )?;
+    add_snapshot_allocation::<crate::ImportedMaterial>(
+        &mut bytes_per_snapshot,
+        material_count,
+        "materials",
+    )?;
+    bytes_per_snapshot = checked_snapshot_add(
+        bytes_per_snapshot,
+        material_name_bytes,
+        "material-name storage",
+    )?;
+
+    let total = bytes_per_snapshot
+        .checked_mul(snapshot_count_from_usize(snapshot_count)?)
+        .ok_or_else(|| snapshot_storage_limit("aggregate snapshot storage overflowed"))?;
+    if total > MAX_ANIMATION_MATERIALIZED_SNAPSHOT_BYTES {
+        return Err(snapshot_storage_limit(&format!(
+            "materialized animation snapshots require {total} estimated retained bytes; limit is {MAX_ANIMATION_MATERIALIZED_SNAPSHOT_BYTES}"
+        )));
+    }
+    Ok(total)
+}
+
+fn add_snapshot_allocation<T>(
+    total: &mut u64,
+    count: u64,
+    label: &str,
+) -> Result<(), ConversionError> {
+    let element_size = u64::try_from(size_of::<T>())
+        .map_err(|_| snapshot_storage_limit("platform element size exceeds u64"))?;
+    let bytes = count
+        .checked_mul(element_size)
+        .ok_or_else(|| snapshot_storage_limit(&format!("{label} storage overflowed")))?;
+    *total = checked_snapshot_add(*total, bytes, label)?;
+    Ok(())
+}
+
+fn checked_snapshot_add(left: u64, right: u64, label: &str) -> Result<u64, ConversionError> {
+    left.checked_add(right)
+        .ok_or_else(|| snapshot_storage_limit(&format!("{label} overflowed")))
+}
+
+fn snapshot_count_from_usize(value: usize) -> Result<u64, ConversionError> {
+    u64::try_from(value).map_err(|_| snapshot_storage_limit("snapshot count exceeds u64"))
+}
+
+fn snapshot_storage_limit(message: &str) -> ConversionError {
+    ConversionError::one(
+        "conversion.resourceLimit",
+        "request.snapshotStorage",
+        message,
+    )
 }
 
 fn validate_source_identity(

@@ -183,9 +183,13 @@ Import is bounded to 64 clips, 4,096 channels, one million input keys, four mill
 components, 128 skins, 256 joints per skin, 64 morph targets per primitive, and four million stored
 morph-position deltas. Accessor counts are checked before their buffers are collected. Requests are
 bounded to 240 Hz, 4,096 snapshots, one hour of quantized source time, and ten million vertex
-deformation work units. Clip absence, stale source SHA, unreachable or duplicate targets, collapsed
-time keys, bad accessors, bad joints/weights, non-finite values, invalid anchors, and exceeded limits
-return source-locatable classified diagnostics before a partial receipt is returned.
+deformation work units. Before the first mesh snapshot is allocated, sampling also rejects an
+aggregate retained-payload estimate above 32 MiB. That estimate covers every flattened snapshot's
+positions, indexed triangles, primitive groups, UV sets and aligned optional coordinates, material
+records, and material-name bytes rather than treating vertex deformation as the only materialized
+cost. Clip absence, stale source SHA, unreachable or duplicate targets, collapsed time keys, bad
+accessors, bad joints/weights, non-finite values, invalid anchors, and exceeded limits return
+source-locatable classified diagnostics before a partial receipt is returned.
 
 The real CC0 Kenney retro-character GLB proves three named clips, a 45-joint skin, bind-pose and
 known-time deformation, identity preservation, loop scheduling, and repeat determinism. The

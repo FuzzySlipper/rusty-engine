@@ -2,7 +2,8 @@ use voxel_convert::{
     import_animated_glb, sample_animation_bind_pose, sample_animation_clip,
     sample_animation_clip_range, AnimationAnchorPolicy, AnimationBindPoseRequest,
     AnimationChannelValues, AnimationEndPolicy, AnimationSampleRangeRequest,
-    AnimationSampleRequest, MAX_IMPORTED_ANIMATION_CLIPS,
+    AnimationSampleRequest, MAX_ANIMATION_MATERIALIZED_SNAPSHOT_BYTES,
+    MAX_IMPORTED_ANIMATION_CLIPS,
 };
 
 const CHARACTER: &[u8] = include_bytes!(concat!(
@@ -56,6 +57,13 @@ fn licensed_character_imports_named_clips_skin_and_deterministic_samples() {
     let sampled = sample_animation_clip(&model, &request).unwrap();
     assert_eq!(sampled.duration_microseconds, 666_667);
     assert_eq!(sampled.snapshots.len(), 17);
+    assert_eq!(
+        sampled.estimated_materialized_snapshot_bytes,
+        bind.estimated_materialized_snapshot_bytes * sampled.snapshots.len() as u64
+    );
+    assert!(
+        sampled.estimated_materialized_snapshot_bytes <= MAX_ANIMATION_MATERIALIZED_SNAPSHOT_BYTES
+    );
     assert_eq!(sampled.snapshots.first().unwrap().timestamp_microseconds, 0);
     assert_eq!(
         sampled.snapshots.last().unwrap().timestamp_microseconds,
@@ -326,6 +334,32 @@ fn animated_sampling_rejects_stale_absent_unsupported_and_bounded_work() {
 }
 
 #[test]
+fn animation_snapshot_storage_is_bounded_before_topology_is_materialized() {
+    let source = repeated_triangle_animation_glb();
+    let model = import_animated_glb(&source).unwrap();
+    assert_eq!(model.scene.meshes[0].primitives[0].positions.len(), 4);
+    assert_eq!(model.scene.meshes[0].primitives[0].indices.len(), 30_000);
+
+    let error = sample_animation_clip(
+        &model,
+        &AnimationSampleRequest {
+            expected_source_sha256: model.source_sha256.clone(),
+            clip_name: "morph-linear".to_owned(),
+            sample_rate_hz: 240,
+            end_policy: AnimationEndPolicy::IncludeClipEnd,
+            anchor_policy: AnimationAnchorPolicy::PreserveSourceSpace,
+        },
+    )
+    .unwrap_err();
+    let diagnostic = &error.diagnostics()[0];
+    assert_eq!(diagnostic.code, "conversion.resourceLimit");
+    assert_eq!(diagnostic.path, "request.snapshotStorage");
+    assert!(diagnostic.message.contains(&format!(
+        "limit is {MAX_ANIMATION_MATERIALIZED_SNAPSHOT_BYTES}"
+    )));
+}
+
+#[test]
 fn animated_import_rejects_bad_joint_weight_and_non_finite_deformation_data() {
     let bad_joint = mutate_glb(CHARACTER, |document, bin| {
         overwrite_first_accessor_component(document, bin, 5, ComponentMutation::Maximum);
@@ -542,6 +576,35 @@ fn morph_fixture_glb() -> Vec<u8> {
         "accessors": accessors
     });
     encode_glb(document, bin)
+}
+
+fn repeated_triangle_animation_glb() -> Vec<u8> {
+    mutate_glb(&morph_fixture_glb(), |document, bin| {
+        let accessor_index = document["meshes"][0]["primitives"][0]["indices"]
+            .as_u64()
+            .unwrap() as usize;
+        align_four(bin, 0);
+        let byte_offset = bin.len();
+        for _ in 0..5_000 {
+            for index in [0u16, 1, 2, 0, 2, 3] {
+                bin.extend_from_slice(&index.to_le_bytes());
+            }
+        }
+        let buffer_views = document["bufferViews"].as_array_mut().unwrap();
+        let view_index = buffer_views.len();
+        buffer_views.push(serde_json::json!({
+            "buffer": 0,
+            "byteOffset": byte_offset,
+            "byteLength": 30_000 * 2,
+            "target": 34963
+        }));
+        let accessor = document["accessors"][accessor_index]
+            .as_object_mut()
+            .unwrap();
+        accessor.insert("bufferView".to_owned(), view_index.into());
+        accessor.remove("byteOffset");
+        accessor.insert("count".to_owned(), 30_000.into());
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

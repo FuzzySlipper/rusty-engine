@@ -20,6 +20,7 @@ pub const MAX_ANIMATION_SAMPLE_RATE_HZ: u32 = 240;
 pub const MAX_ANIMATION_SAMPLE_FRAMES: usize = 4_096;
 pub const MAX_ANIMATION_DURATION_MICROSECONDS: u64 = 3_600_000_000;
 pub const MAX_ANIMATION_DEFORMATION_WORK: u64 = 10_000_000;
+pub const MAX_ANIMATION_MATERIALIZED_SNAPSHOT_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportedAnimatedModel {
@@ -204,6 +205,7 @@ pub struct AnimationSampleReceipt {
     pub end_policy: AnimationEndPolicy,
     pub anchor_policy: AnimationAnchorPolicy,
     pub deformation_work: u64,
+    pub estimated_materialized_snapshot_bytes: u64,
     pub snapshots: Vec<AnimationMeshSnapshot>,
 }
 
@@ -219,6 +221,7 @@ pub struct AnimationSampleRangeReceipt {
     pub end_policy: AnimationEndPolicy,
     pub anchor_policy: AnimationAnchorPolicy,
     pub deformation_work: u64,
+    pub estimated_materialized_snapshot_bytes: u64,
     pub snapshots: Vec<AnimationMeshSnapshot>,
 }
 
@@ -227,6 +230,7 @@ pub struct AnimationBindPoseReceipt {
     pub source_sha256: String,
     pub anchor_policy: AnimationAnchorPolicy,
     pub deformation_work: u64,
+    pub estimated_materialized_snapshot_bytes: u64,
     pub mesh: ImportedStaticMesh,
 }
 
