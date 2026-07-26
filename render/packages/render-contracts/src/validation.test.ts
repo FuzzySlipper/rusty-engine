@@ -91,3 +91,54 @@ void test('presentation decoding rejects unsafe identities, sequence gaps, and n
   content['sendMessage'] = 'no';
   assert.throws(() => decodePresentationFrameDiff(unknown), /sendMessage is unknown/);
 });
+
+void test('voxel-object resources decode strictly and reject invalid frame references', () => {
+  const payload = {
+    layout: {
+      vertexCount: 3, indexCount: 3, indexWidth: 'u32',
+      attributes: [
+        { name: 'position', components: 3, kind: 'f32' },
+        { name: 'normal', components: 3, kind: 'f32' },
+      ],
+    },
+    groups: [{ materialSlot: 1, start: 0, count: 3 }],
+    bounds: { min: [0, 0, 0], max: [1, 1, 0] },
+    source: {
+      kind: 'inline',
+      positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      normals: [0, 0, 1, 0, 0, 1, 0, 0, 1],
+      indices: [0, 1, 2],
+    },
+    provenance: 'voxelObject',
+  };
+  const frame = {
+    schemaVersion: 1,
+    ops: [
+      {
+        op: 'defineVoxelObject',
+        asset: {
+          asset: 'voxel-object/runner', contentHash: 'sha256:runner',
+          meshes: [{ payload }], frames: [{ id: 'default', mesh: 0 }],
+          materialSlots: [{ slot: 1, material: 'material/runner' }],
+        },
+      },
+      {
+        op: 'createVoxelObjectInstance', handle: 7, parent: null,
+        instance: {
+          asset: 'voxel-object/runner', frame: 0,
+          transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+          visible: true, materialOverrides: [],
+          metadata: { sourceEntity: 7, sourceSceneNode: null, tags: [], label: 'runner' },
+        },
+      },
+      { op: 'setVoxelObjectFrame', handle: 7, frame: 0 },
+      { op: 'destroy', handle: 7 },
+      { op: 'releaseVoxelObject', asset: 'voxel-object/runner' },
+    ],
+  };
+  assert.equal(decodeRenderFrameDiff(frame).ops.length, 5);
+  const invalid = structuredClone(frame);
+  const definition = invalid.ops[0]!.asset as { frames: Array<{ id: string; mesh: number }> };
+  definition.frames[0]!.mesh = 1;
+  assert.throws(() => decodeRenderFrameDiff(invalid), /must be in 0\.\.=0/);
+});

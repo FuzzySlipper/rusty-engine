@@ -23,7 +23,9 @@
 
 #![forbid(unsafe_code)]
 
-use core_space::{ChunkCoord, Direction6, LocalVoxelCoord, VoxelCoord, VoxelGridSpec};
+use std::collections::BTreeMap;
+
+use core_space::{ChunkCoord, Direction6, VoxelCoord, VoxelGridSpec};
 use svc_spatial::VoxelWorld;
 use svc_volume::VoxelChunk;
 
@@ -73,11 +75,33 @@ pub struct MeshPayload {
     pub stats: MeshStats,
 }
 
+/// One local-space material cell accepted by the standalone object mesher.
+///
+/// The mesher deliberately owns no durable voxel-object schema. Asset admission
+/// resolves that schema into this small service input before asking for a mesh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeshVoxelCell {
+    pub coordinate: [i64; 3],
+    pub material_slot: u16,
+}
+
 /// A meshing failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MeshError {
     /// The chunk would emit more vertices than a `u32` index can address.
-    TooManyVertices { vertices: u64 },
+    TooManyVertices {
+        vertices: u64,
+    },
+    TooManyFaces {
+        faces: u64,
+        limit: u32,
+    },
+    InvalidCellSize,
+    InvalidPivot,
+    DuplicateCell {
+        coordinate: [i64; 3],
+    },
+    PositionOutOfRange,
 }
 
 impl core::fmt::Display for MeshError {
@@ -88,6 +112,17 @@ impl core::fmt::Display for MeshError {
                     f,
                     "mesh would need {vertices} vertices, exceeding u32 index range"
                 )
+            }
+            MeshError::TooManyFaces { faces, limit } => {
+                write!(f, "mesh would emit {faces} faces; limit is {limit}")
+            }
+            MeshError::InvalidCellSize => write!(f, "cell size must be finite and positive"),
+            MeshError::InvalidPivot => write!(f, "pivot components must be finite"),
+            MeshError::DuplicateCell { coordinate } => {
+                write!(f, "duplicate mesh cell at {coordinate:?}")
+            }
+            MeshError::PositionOutOfRange => {
+                write!(f, "mesh position is outside the finite f32 render range")
             }
         }
     }
@@ -124,6 +159,13 @@ fn face_corners(dir: Direction6) -> [[u32; 3]; 4] {
     out
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Face {
+    slot: u16,
+    coordinate: [i64; 3],
+    dir: Direction6,
+}
+
 // ── Mesher ─────────────────────────────────────────────────────────────────────
 
 /// Mesh a single chunk in isolation: out-of-chunk neighbours are treated as
@@ -137,6 +179,74 @@ pub fn mesh_chunk_standalone(
         let (c, l) = spec.voxel_to_chunk_local(v);
         c == coord && chunk.get(l).is_some_and(|x| x.is_opaque())
     })
+}
+
+/// Mesh a complete local-space cell arrangement around an explicit pivot.
+///
+/// Cells are canonicalized by coordinate before face emission, making output
+/// independent of caller iteration order. Omitted neighbours are empty. The
+/// face limit bounds both work and the renderer payload allocation.
+pub fn mesh_cells_standalone(
+    cell_size: f64,
+    pivot: [f64; 3],
+    cells: &[MeshVoxelCell],
+    max_faces: u32,
+) -> Result<MeshPayload, MeshError> {
+    if !cell_size.is_finite() || cell_size <= 0.0 {
+        return Err(MeshError::InvalidCellSize);
+    }
+    if !pivot.iter().all(|value| value.is_finite()) {
+        return Err(MeshError::InvalidPivot);
+    }
+
+    let mut occupied = BTreeMap::new();
+    for cell in cells {
+        if occupied
+            .insert(cell.coordinate, cell.material_slot)
+            .is_some()
+        {
+            return Err(MeshError::DuplicateCell {
+                coordinate: cell.coordinate,
+            });
+        }
+    }
+
+    let mut faces = Vec::new();
+    let mut faces_culled = 0_u32;
+    for (&coordinate, &slot) in &occupied {
+        for dir in Direction6::ALL {
+            let normal = dir.normal();
+            let neighbour = [
+                coordinate[0]
+                    .checked_add(normal.x as i64)
+                    .ok_or(MeshError::PositionOutOfRange)?,
+                coordinate[1]
+                    .checked_add(normal.y as i64)
+                    .ok_or(MeshError::PositionOutOfRange)?,
+                coordinate[2]
+                    .checked_add(normal.z as i64)
+                    .ok_or(MeshError::PositionOutOfRange)?,
+            ];
+            if occupied.contains_key(&neighbour) {
+                faces_culled = faces_culled.saturating_add(1);
+            } else {
+                let face_count = faces.len() as u64 + 1;
+                if face_count > u64::from(max_faces) {
+                    return Err(MeshError::TooManyFaces {
+                        faces: face_count,
+                        limit: max_faces,
+                    });
+                }
+                faces.push(Face {
+                    slot,
+                    coordinate,
+                    dir,
+                });
+            }
+        }
+    }
+
+    emit_faces(&mut faces, cell_size, pivot, faces_culled)
 }
 
 /// Mesh a resident chunk using its **resident neighbour chunks** for border
@@ -165,14 +275,7 @@ fn mesh_core(
     chunk: &VoxelChunk,
     occupied: impl Fn(VoxelCoord) -> bool,
 ) -> Result<MeshPayload, MeshError> {
-    let vs = spec.voxel_size() as f32;
-
     // Collect visible faces in deterministic order, with culling stats.
-    struct Face {
-        slot: u16,
-        local: LocalVoxelCoord,
-        dir: Direction6,
-    }
     let mut faces: Vec<Face> = Vec::new();
     let mut faces_culled = 0u32;
     for (local, value) in chunk.iter() {
@@ -186,15 +289,25 @@ fn mesh_core(
             } else {
                 faces.push(Face {
                     slot: material.raw(),
-                    local,
+                    coordinate: [i64::from(local.x), i64::from(local.y), i64::from(local.z)],
                     dir,
                 });
             }
         }
     }
 
+    emit_faces(&mut faces, spec.voxel_size(), [0.0; 3], faces_culled)
+}
+
+fn emit_faces(
+    faces: &mut [Face],
+    cell_size: f64,
+    pivot: [f64; 3],
+    faces_culled: u32,
+) -> Result<MeshPayload, MeshError> {
     // Group by material slot (stable sort preserves voxel/face order within a slot).
-    faces.sort_by_key(|f| f.slot);
+    // Stable sorting retains each input lane's canonical cell/direction order.
+    faces.sort_by_key(|face| face.slot);
 
     let vertex_count = faces.len() as u64 * 4;
     if vertex_count > u32::MAX as u64 {
@@ -212,7 +325,7 @@ fn mesh_core(
 
     let mut cur_slot: Option<u16> = None;
     let mut group_start: u32 = 0;
-    for face in &faces {
+    for face in faces.iter() {
         if cur_slot != Some(face.slot) {
             if let Some(slot) = cur_slot {
                 groups.push(MeshGroup {
@@ -229,11 +342,17 @@ fn mesh_core(
         let normal = face.dir.normal();
         let [nx, ny, nz] = [normal.x as f32, normal.y as f32, normal.z as f32];
         for corner in face_corners(face.dir) {
-            let p = [
-                (face.local.x + corner[0]) as f32 * vs,
-                (face.local.y + corner[1]) as f32 * vs,
-                (face.local.z + corner[2]) as f32 * vs,
-            ];
+            let mut p = [0.0_f32; 3];
+            for axis in 0..3 {
+                let value = ((face.coordinate[axis] as f64 + f64::from(corner[axis]))
+                    - pivot[axis])
+                    * cell_size;
+                let rendered = value as f32;
+                if !value.is_finite() || !rendered.is_finite() {
+                    return Err(MeshError::PositionOutOfRange);
+                }
+                p[axis] = rendered;
+            }
             for axis in 0..3 {
                 bmin[axis] = bmin[axis].min(p[axis]);
                 bmax[axis] = bmax[axis].max(p[axis]);
@@ -317,7 +436,7 @@ impl MeshPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core_space::{ChunkDims, GridId};
+    use core_space::{ChunkDims, GridId, LocalVoxelCoord};
     use core_voxel::VoxelValue;
 
     fn spec() -> VoxelGridSpec {
@@ -470,5 +589,39 @@ mod tests {
         let m = mesh_chunk_standalone(&spec(), ChunkCoord::ORIGIN, &c).unwrap();
         let golden = include_str!("../../../../fixtures/voxel-mesh/two-voxel-line.mesh.txt");
         assert_eq!(m.to_fixture_string(), golden);
+    }
+
+    #[test]
+    fn object_cells_are_order_independent_and_apply_fractional_pivot() {
+        let cells = [
+            MeshVoxelCell {
+                coordinate: [1, 0, 0],
+                material_slot: 2,
+            },
+            MeshVoxelCell {
+                coordinate: [0, 0, 0],
+                material_slot: 2,
+            },
+        ];
+        let reversed = [cells[1], cells[0]];
+        let a = mesh_cells_standalone(0.5, [0.5, 0.0, 0.0], &cells, 100).unwrap();
+        let b = mesh_cells_standalone(0.5, [0.5, 0.0, 0.0], &reversed, 100).unwrap();
+
+        assert_eq!(a, b);
+        assert_eq!(a.stats.quads, 10);
+        assert_eq!(a.bounds.min, [-0.25, 0.0, 0.0]);
+        assert_eq!(a.bounds.max, [0.75, 0.5, 0.5]);
+    }
+
+    #[test]
+    fn object_cell_face_budget_fails_before_payload_allocation() {
+        let cells = [MeshVoxelCell {
+            coordinate: [0, 0, 0],
+            material_slot: 1,
+        }];
+        assert_eq!(
+            mesh_cells_standalone(1.0, [0.0; 3], &cells, 5),
+            Err(MeshError::TooManyFaces { faces: 6, limit: 5 })
+        );
     }
 }

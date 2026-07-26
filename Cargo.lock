@@ -532,6 +532,9 @@ dependencies = [
  "render-model",
  "serde",
  "serde_json",
+ "svc-mesh",
+ "voxel-asset",
+ "voxel-object-runtime",
 ]
 
 [[package]]
@@ -821,6 +824,17 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "sha2",
+ "voxel-asset",
+]
+
+[[package]]
+name = "voxel-object-runtime"
+version = "0.1.0"
+dependencies = [
+ "core-assets",
+ "serde",
+ "serde_json",
+ "svc-mesh",
  "voxel-asset",
 ]
 

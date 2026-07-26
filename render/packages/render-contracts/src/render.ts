@@ -80,7 +80,7 @@ export interface MeshBoundsDescriptor {
   readonly max: Vec3;
 }
 
-export type MeshProvenance = 'voxelChunk' | 'staticAsset' | 'generated' | 'debug';
+export type MeshProvenance = 'voxelChunk' | 'voxelObject' | 'staticAsset' | 'generated' | 'debug';
 
 export type MeshPayloadSource =
   | {
@@ -169,6 +169,33 @@ export interface AnimatedMeshInstanceDescriptor {
   readonly visible: boolean;
   readonly materialOverrides: readonly MeshMaterialSlot[];
   readonly playback: AnimatedMeshPlaybackCommand | null;
+  readonly metadata: RenderMetadata;
+}
+
+export interface VoxelObjectRenderMesh {
+  readonly payload: MeshPayloadDescriptor;
+}
+
+export interface VoxelObjectRenderFrame {
+  readonly id: string;
+  readonly mesh: number;
+}
+
+/** Presentation-only frame resources. Collision and navigation are not renderer concerns. */
+export interface VoxelObjectRenderAsset {
+  readonly asset: string;
+  readonly contentHash: string;
+  readonly meshes: readonly VoxelObjectRenderMesh[];
+  readonly frames: readonly VoxelObjectRenderFrame[];
+  readonly materialSlots: readonly MeshMaterialSlot[];
+}
+
+export interface VoxelObjectInstanceDescriptor {
+  readonly asset: string;
+  readonly frame: number;
+  readonly transform: Transform;
+  readonly visible: boolean;
+  readonly materialOverrides: readonly MeshMaterialSlot[];
   readonly metadata: RenderMetadata;
 }
 
@@ -315,9 +342,13 @@ export type RenderDiff =
   | { readonly op: 'defineSpriteAtlas'; readonly atlas: SpriteAtlasDescriptor }
   | { readonly op: 'defineStaticMesh'; readonly asset: StaticMeshAsset }
   | { readonly op: 'defineAnimatedMesh'; readonly asset: AnimatedMeshAsset }
+  | { readonly op: 'defineVoxelObject'; readonly asset: VoxelObjectRenderAsset }
+  | { readonly op: 'releaseVoxelObject'; readonly asset: string }
   | { readonly op: 'createStaticMeshInstance'; readonly handle: RenderHandle; readonly parent: RenderHandle | null; readonly instance: StaticMeshInstanceDescriptor }
   | { readonly op: 'createAnimatedMeshInstance'; readonly handle: RenderHandle; readonly parent: RenderHandle | null; readonly instance: AnimatedMeshInstanceDescriptor }
   | { readonly op: 'setAnimatedMeshPlayback'; readonly handle: RenderHandle; readonly playback: AnimatedMeshPlaybackCommand }
+  | { readonly op: 'createVoxelObjectInstance'; readonly handle: RenderHandle; readonly parent: RenderHandle | null; readonly instance: VoxelObjectInstanceDescriptor }
+  | { readonly op: 'setVoxelObjectFrame'; readonly handle: RenderHandle; readonly frame: number }
   | { readonly op: 'createSprite'; readonly handle: RenderHandle; readonly parent: RenderHandle | null; readonly sprite: SpriteInstanceDescriptor }
   | { readonly op: 'updateSprite'; readonly handle: RenderHandle; readonly frame: number | null; readonly tint: Vec4 | null; readonly renderOrder: number | null; readonly visible: boolean | null };
 
@@ -333,6 +364,7 @@ export type RenderAssetKind =
   | 'spriteAtlas'
   | 'staticMesh'
   | 'animatedMesh'
+  | 'voxelObject'
   | 'audio'
   | 'font';
 

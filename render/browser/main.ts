@@ -46,6 +46,8 @@ interface BrowserProof {
   readonly ready: true;
   readonly snapshot: string;
   readonly telemetryText: string | null;
+  readonly voxelFrame: number | null;
+  readonly voxelFrameSwapApplied: boolean;
 }
 
 declare global {
@@ -94,6 +96,13 @@ async function main(): Promise<void> {
     frame: browserFrame(),
     pixelRatio: 1,
   });
+  const voxelFrameSwap = surface.applyFrame({
+    schemaVersion: 1,
+    ops: [{ op: 'setVoxelObjectFrame', handle: renderHandle(108), frame: 1 }],
+  });
+  if (!voxelFrameSwap.applied) {
+    throw new Error(`voxel frame swap failed: ${voxelFrameSwap.diagnostics.map((item) => item.message).join('; ')}`);
+  }
 
   const audio = new RendererAudioHost({
     resolveResource: async (clip) => ({ bytes: audioBytes.slice(0), contentHash: clip.contentHash }),
@@ -181,6 +190,7 @@ async function main(): Promise<void> {
   const pick = surface.pick({ ray: { kind: 'viewport', point: [0, 0] }, maxDistance: 20 });
   const projected = surface.projectWorldPoint([0, 0, -5]);
   const snapshot = surface.snapshot();
+  const voxelNode = surface.projectionSnapshot().nodes.find((node) => node.handle === renderHandle(108));
   const proof: BrowserProof = {
     animationClip: surface.animatedMeshPlayback(renderHandle(105)).selectedClip,
     audioApplied: presentation.domains.find((domain) => domain.domain === 'audio')?.applied ?? 0,
@@ -202,6 +212,8 @@ async function main(): Promise<void> {
     ready: true,
     snapshot,
     telemetryText: overlays.querySelector('[data-rusty-telemetry-handle]')?.textContent ?? null,
+    voxelFrame: voxelNode?.kind === 'voxelObject' ? voxelNode.frame : null,
+    voxelFrameSwapApplied: voxelFrameSwap.applied,
   };
   window.__rustyRenderProof = proof;
   window.__rustyRenderCameraPose = () => surface.cameraPose().position;
@@ -414,6 +426,19 @@ function browserFrame(): RenderFrameDiff {
         },
       },
       {
+        op: 'defineVoxelObject',
+        asset: {
+          asset: 'voxel-object/browser-proof',
+          contentHash: 'sha256:browser-voxel-object',
+          meshes: [
+            { payload: voxelObjectPayload(1) },
+            { payload: voxelObjectPayload(1.75) },
+          ],
+          frames: [{ id: 'default', mesh: 0 }, { id: 'pulse/0', mesh: 1 }],
+          materialSlots: [{ slot: 0, material: 'material/browser-proof' }],
+        },
+      },
+      {
         op: 'create', handle: renderHandle(100), parent: null,
         node: {
           geometry: { kind: 'group' },
@@ -463,6 +488,14 @@ function browserFrame(): RenderFrameDiff {
           position: [0, 3, -2], range: 20, decay: 2, shadowIntent: 'disabled',
         },
       },
+      {
+        op: 'createVoxelObjectInstance', handle: renderHandle(108), parent: null,
+        instance: {
+          asset: 'voxel-object/browser-proof', frame: 0,
+          transform: identity([0, 0.5, -3], [1, 1, 1]), visible: true,
+          materialOverrides: [], metadata: metadata('voxel-object-proof'),
+        },
+      },
     ],
   };
 }
@@ -502,6 +535,20 @@ function trianglePayload(): MeshPayloadDescriptor {
       normals: [0, 0, 1, 0, 0, 1, 0, 0, 1], indices: [0, 1, 2],
     },
     provenance: 'staticAsset',
+  };
+}
+
+function voxelObjectPayload(scale: number): MeshPayloadDescriptor {
+  const payload = trianglePayload();
+  if (payload.source.kind !== 'inline') throw new Error('browser voxel fixture must stay inline');
+  return {
+    ...payload,
+    bounds: { min: [-0.5 * scale, -0.5 * scale, 0], max: [0.5 * scale, 0.5 * scale, 0] },
+    source: {
+      ...payload.source,
+      positions: payload.source.positions.map((value) => value * scale),
+    },
+    provenance: 'voxelObject',
   };
 }
 

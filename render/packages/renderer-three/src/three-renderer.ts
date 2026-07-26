@@ -29,6 +29,8 @@ import type {
   StaticMeshAsset,
   TextureDescriptor,
   Transform,
+  VoxelObjectInstanceDescriptor,
+  VoxelObjectRenderAsset,
 } from '@rusty-engine/render-contracts';
 import {
   AnimatedMeshApplyError,
@@ -96,7 +98,7 @@ export class RenderResourceError extends Error {
   }
 }
 
-type NodeKind = 'primitive' | 'staticMesh' | 'animatedMesh' | 'sprite' | 'light';
+type NodeKind = 'primitive' | 'staticMesh' | 'animatedMesh' | 'voxelObject' | 'sprite' | 'light';
 
 interface NodeEntry {
   readonly object: THREE.Object3D;
@@ -131,12 +133,23 @@ interface NodeEntry {
   ownedMaterialIndices?: Set<number>;
   /** Complete per-slot feedback overrides, keyed by material-array index. */
   materialParameterOverrides?: Map<number, MaterialInstanceParameters>;
+  /** Durable descriptor-side selection; renderer clocks never own voxel playback. */
+  voxelFrame?: number;
+  voxelMaterialOverrides?: readonly MeshMaterialSlot[];
 }
 
 export interface RendererProjectionIdentity {
   readonly handle: RenderHandle;
   readonly layer: RenderLayer;
   readonly metadata: RenderMetadata;
+}
+
+export interface RendererVoxelObjectFrameReadout {
+  readonly handle: RenderHandle;
+  readonly asset: string;
+  readonly frame: number;
+  readonly frameId: string;
+  readonly mesh: number;
 }
 
 /** A defined static mesh asset: one shared geometry + materials, reference-counted. */
@@ -147,6 +160,16 @@ interface StaticMeshDef {
   readonly slotIndex: Map<number, number>;
   readonly materialSlots: readonly MeshMaterialSlot[];
   readonly collision: MeshCollisionPolicy;
+  refCount: number;
+}
+
+interface VoxelObjectDef {
+  readonly geometries: THREE.BufferGeometry[];
+  readonly frames: VoxelObjectRenderAsset['frames'];
+  readonly meshMaterialSlots: readonly (readonly number[])[];
+  readonly materials: THREE.Material[];
+  readonly slotIndex: Map<number, number>;
+  readonly materialSlots: readonly MeshMaterialSlot[];
   refCount: number;
 }
 
@@ -165,6 +188,7 @@ export class ThreeRenderer {
   readonly #handles = new Map<RenderHandle, NodeEntry>();
   /** Defined static mesh assets, keyed by asset id (shared geometry lifecycle). */
   readonly #staticMeshes = new Map<string, StaticMeshDef>();
+  readonly #voxelObjects = new Map<string, VoxelObjectDef>();
   /** Per-material-slot colours for the initial flat/debug material strategy. */
   readonly #slotColors = new Map<number, THREE.Color>();
   /** Material descriptors defined by retained operations, keyed by asset id. */
@@ -261,7 +285,7 @@ export class ThreeRenderer {
     this.applyFrame({ schemaVersion: 1, ops: [diff] });
   }
 
-  #applyDiff(diff: RenderDiff, preparedGeometry?: THREE.BufferGeometry): void {
+  #applyDiff(diff: RenderDiff, preparedGeometry?: readonly THREE.BufferGeometry[]): void {
     switch (diff.op) {
       case 'create':
         this.#create(diff);
@@ -273,7 +297,7 @@ export class ThreeRenderer {
         this.#destroy(diff);
         break;
       case 'replaceMeshPayload':
-        this.#replaceMeshPayload(diff, preparedGeometry);
+        this.#replaceMeshPayload(diff, preparedGeometry?.[0]);
         break;
       case 'createLight':
         this.#createLight(diff);
@@ -294,7 +318,7 @@ export class ThreeRenderer {
         this.#atlases.set(diff.atlas.id, diff.atlas);
         break;
       case 'defineStaticMesh':
-        this.#defineStaticMesh(diff.asset, preparedGeometry);
+        this.#defineStaticMesh(diff.asset, preparedGeometry?.[0]);
         break;
       case 'defineAnimatedMesh':
         this.#defineAnimatedMesh(diff);
@@ -304,6 +328,18 @@ export class ThreeRenderer {
         break;
       case 'setAnimatedMeshPlayback':
         this.#setAnimatedMeshPlayback(diff);
+        break;
+      case 'defineVoxelObject':
+        this.#defineVoxelObject(diff.asset, preparedGeometry);
+        break;
+      case 'releaseVoxelObject':
+        this.#releaseVoxelObject(diff.asset);
+        break;
+      case 'createVoxelObjectInstance':
+        this.#createVoxelObjectInstance(diff);
+        break;
+      case 'setVoxelObjectFrame':
+        this.#setVoxelObjectFrame(diff);
         break;
       case 'createStaticMeshInstance':
         this.#createStaticMeshInstance(diff);
@@ -317,23 +353,28 @@ export class ThreeRenderer {
     }
   }
 
-  #prepareFrame(frame: RenderFrameDiff): Map<number, THREE.BufferGeometry> {
-    const prepared = new Map<number, THREE.BufferGeometry>();
+  #prepareFrame(frame: RenderFrameDiff): Map<number, readonly THREE.BufferGeometry[]> {
+    const prepared = new Map<number, readonly THREE.BufferGeometry[]>();
     const selectedAnimatedClips = new Map<RenderHandle, string | null>();
     try {
       for (let index = 0; index < frame.ops.length; index += 1) {
         const operation = frame.ops[index]!;
         if (operation.op === 'defineStaticMesh') {
-          prepared.set(index, buildMeshGeometry(
+          prepared.set(index, [buildMeshGeometry(
             operation.asset.payload,
             this.#meshBufferSource,
             'defineStaticMesh',
-          ));
+          )]);
         } else if (operation.op === 'replaceMeshPayload') {
-          prepared.set(index, buildMeshGeometry(
+          prepared.set(index, [buildMeshGeometry(
             operation.payload,
             this.#meshBufferSource,
             'replaceMeshPayload',
+          )]);
+        } else if (operation.op === 'defineVoxelObject') {
+          prepared.set(index, buildVoxelObjectGeometries(
+            operation.asset,
+            this.#meshBufferSource,
           ));
         } else if (operation.op === 'defineAnimatedMesh') {
           // Definition performs all source/hash/clip checks without creating a
@@ -456,6 +497,11 @@ export class ThreeRenderer {
       definition.materials.forEach((material) => material.dispose());
     }
     this.#staticMeshes.clear();
+    for (const definition of this.#voxelObjects.values()) {
+      definition.geometries.forEach((geometry) => geometry.dispose());
+      definition.materials.forEach((material) => material.dispose());
+    }
+    this.#voxelObjects.clear();
     this.scene.clear();
   }
 
@@ -622,6 +668,10 @@ export class ThreeRenderer {
     } else if (entry.kind === 'animatedMesh') {
       this.#animatedMeshes.release(diff.handle);
       disposeObjectRecursive(entry.object);
+    } else if (entry.kind === 'voxelObject' && entry.asset !== undefined) {
+      disposeInstanceMaterials(entry);
+      const definition = this.#voxelObjects.get(entry.asset);
+      if (definition !== undefined) definition.refCount -= 1;
     } else if (entry.kind === 'light') {
       disposeLight(entry.object);
     } else {
@@ -786,6 +836,209 @@ export class ThreeRenderer {
     entry.object.userData['animatedMeshPlayback'] = this.#animatedMeshes.playback(handle);
   }
 
+  // ── Voxel-object resources + caller-driven frame swaps ────────────────────
+
+  #defineVoxelObject(
+    asset: VoxelObjectRenderAsset,
+    preparedGeometries?: readonly THREE.BufferGeometry[],
+  ): void {
+    const geometries = preparedGeometries === undefined
+      ? buildVoxelObjectGeometries(asset, this.#meshBufferSource)
+      : [...preparedGeometries];
+    if (geometries.length !== asset.meshes.length) {
+      throw new RenderApplyError(
+        `defineVoxelObject: prepared ${geometries.length} meshes for ${asset.meshes.length} descriptors`,
+      );
+    }
+    const slotIndex = new Map<number, number>();
+    const materials = asset.materialSlots.map((slot, index) => {
+      slotIndex.set(slot.slot, index);
+      return this.#materialFor(slot);
+    });
+    const existing = this.#voxelObjects.get(asset.asset);
+    const next: VoxelObjectDef = {
+      geometries,
+      frames: asset.frames,
+      meshMaterialSlots: asset.meshes.map((mesh) =>
+        mesh.payload.groups.map((group) => group.materialSlot)),
+      materials,
+      slotIndex,
+      materialSlots: asset.materialSlots,
+      refCount: existing?.refCount ?? 0,
+    };
+
+    if (existing !== undefined) {
+      for (const entry of this.#handles.values()) {
+        if (entry.kind !== 'voxelObject' || entry.asset !== asset.asset) continue;
+        const frame = entry.voxelFrame ?? 0;
+        const descriptor = next.frames[frame];
+        const geometry = descriptor === undefined ? undefined : next.geometries[descriptor.mesh];
+        if (descriptor === undefined || geometry === undefined) {
+          geometries.forEach((candidate) => candidate.dispose());
+          materials.forEach((candidate) => candidate.dispose());
+          throw new RenderApplyError(
+            `defineVoxelObject: live frame ${frame} is unavailable on ${asset.asset}`,
+          );
+        }
+        const instanceMaterials = this.#voxelObjectInstanceMaterials(
+          next,
+          entry.voxelMaterialOverrides ?? [],
+        );
+        disposeInstanceMaterials(entry);
+        const mesh = entry.object as THREE.Mesh;
+        mesh.geometry = geometry;
+        mesh.material = instanceMaterials.materials.length === 1
+          ? instanceMaterials.materials[0]!
+          : instanceMaterials.materials;
+        entry.materialIds = instanceMaterials.materialIds;
+        entry.ownedMaterialIndices = instanceMaterials.ownedMaterialIndices;
+        entry.meshMaterialSlots = asset.meshes[descriptor.mesh]!.payload.groups
+          .map((group) => group.materialSlot);
+      }
+      existing.geometries.forEach((geometry) => geometry.dispose());
+      existing.materials.forEach((material) => material.dispose());
+    }
+    this.#voxelObjects.set(asset.asset, next);
+  }
+
+  #releaseVoxelObject(asset: string): void {
+    const definition = this.#voxelObjects.get(asset);
+    if (definition === undefined) {
+      throw new RenderApplyError(`releaseVoxelObject: undefined voxel object ${asset}`);
+    }
+    if (definition.refCount !== 0) {
+      throw new RenderApplyError(
+        `releaseVoxelObject: ${asset} is in use by ${definition.refCount} instance(s)`,
+      );
+    }
+    definition.geometries.forEach((geometry) => geometry.dispose());
+    definition.materials.forEach((material) => material.dispose());
+    this.#voxelObjects.delete(asset);
+  }
+
+  #createVoxelObjectInstance(
+    diff: Extract<RenderDiff, { op: 'createVoxelObjectInstance' }>,
+  ): void {
+    if (this.#handles.has(diff.handle)) {
+      throw new RenderApplyError(
+        `createVoxelObjectInstance: handle ${diff.handle} already exists`,
+      );
+    }
+    const definition = this.#voxelObjects.get(diff.instance.asset);
+    if (definition === undefined) {
+      throw new RenderApplyError(
+        `createVoxelObjectInstance: undefined voxel object ${diff.instance.asset}`,
+      );
+    }
+    const frame = definition.frames[diff.instance.frame];
+    const geometry = frame === undefined ? undefined : definition.geometries[frame.mesh];
+    if (geometry === undefined) {
+      throw new RenderApplyError(
+        `createVoxelObjectInstance: frame ${diff.instance.frame} unavailable on ${diff.instance.asset}`,
+      );
+    }
+    const instanceMaterials = this.#voxelObjectInstanceMaterials(
+      definition,
+      diff.instance.materialOverrides,
+    );
+    const mesh = new THREE.Mesh(
+      geometry,
+      instanceMaterials.materials.length === 1
+        ? instanceMaterials.materials[0]!
+        : instanceMaterials.materials,
+    );
+    applyTransform(mesh, diff.instance.transform);
+    applyMetadata(mesh, diff.instance.metadata);
+    mesh.visible = diff.instance.visible;
+    const parent = diff.parent === null
+      ? this.#sceneGroup
+      : this.#require(diff.parent, 'createVoxelObjectInstance.parent').object;
+    parent.add(mesh);
+    definition.refCount += 1;
+    this.#handles.set(diff.handle, {
+      object: mesh,
+      kind: 'voxelObject',
+      shape: 'quad',
+      asset: diff.instance.asset,
+      ownsGeometry: false,
+      materialIds: instanceMaterials.materialIds,
+      ownedMaterialIndices: instanceMaterials.ownedMaterialIndices,
+      meshProvenance: 'voxelObject',
+      meshMaterialSlots: this.#voxelObjectMeshSlots(diff.instance.asset, diff.instance.frame),
+      voxelFrame: diff.instance.frame,
+      voxelMaterialOverrides: structuredClone(diff.instance.materialOverrides),
+    });
+  }
+
+  #setVoxelObjectFrame(diff: Extract<RenderDiff, { op: 'setVoxelObjectFrame' }>): void {
+    const entry = this.#require(diff.handle, 'setVoxelObjectFrame');
+    if (entry.kind !== 'voxelObject' || entry.asset === undefined) {
+      throw new RenderApplyError(`setVoxelObjectFrame: handle ${diff.handle} is not a voxel object`);
+    }
+    const definition = this.#voxelObjects.get(entry.asset);
+    const frame = definition?.frames[diff.frame];
+    const geometry = frame === undefined ? undefined : definition?.geometries[frame.mesh];
+    if (definition === undefined || frame === undefined || geometry === undefined) {
+      throw new RenderApplyError(
+        `setVoxelObjectFrame: frame ${diff.frame} unavailable on ${entry.asset}`,
+      );
+    }
+    (entry.object as THREE.Mesh).geometry = geometry;
+    entry.voxelFrame = diff.frame;
+    entry.meshMaterialSlots = this.#voxelObjectMeshSlots(entry.asset, diff.frame);
+    entry.object.userData['voxelObjectFrame'] = diff.frame;
+  }
+
+  #voxelObjectMeshSlots(asset: string, frame: number): number[] {
+    const definition = this.#voxelObjects.get(asset);
+    const frameDescriptor = definition?.frames[frame];
+    if (definition === undefined || frameDescriptor === undefined) return [];
+    return [...(definition.meshMaterialSlots[frameDescriptor.mesh] ?? [])];
+  }
+
+  #voxelObjectInstanceMaterials(
+    definition: VoxelObjectDef,
+    overrides: VoxelObjectInstanceDescriptor['materialOverrides'],
+  ): {
+    readonly materials: THREE.Material[];
+    readonly materialIds: (string | null)[];
+    readonly ownedMaterialIndices: Set<number>;
+  } {
+    const materials = definition.materials.slice();
+    const materialIds: (string | null)[] = definition.materialSlots.map((slot) => slot.material);
+    const ownedMaterialIndices = new Set<number>();
+    for (const override of overrides) {
+      const index = definition.slotIndex.get(override.slot);
+      if (index === undefined) {
+        throw new RenderApplyError(
+          `voxel object material override uses unbound slot ${override.slot}`,
+        );
+      }
+      materials[index] = this.#materialFor(override);
+      materialIds[index] = override.material;
+      ownedMaterialIndices.add(index);
+    }
+    return { materials, materialIds, ownedMaterialIndices };
+  }
+
+  /** Current renderer-side frame selection; never gameplay authority. */
+  voxelObjectFrame(handle: RenderHandle): RendererVoxelObjectFrameReadout | undefined {
+    const entry = this.#handles.get(handle);
+    if (entry?.kind !== 'voxelObject' || entry.asset === undefined || entry.voxelFrame === undefined) {
+      return undefined;
+    }
+    const definition = this.#voxelObjects.get(entry.asset);
+    const frame = definition?.frames[entry.voxelFrame];
+    if (frame === undefined) return undefined;
+    return {
+      handle,
+      asset: entry.asset,
+      frame: entry.voxelFrame,
+      frameId: frame.id,
+      mesh: frame.mesh,
+    };
+  }
+
   /** How many live instances reference a defined static mesh asset (0 if undefined). */
   instanceCountFor(asset: string): number {
     return this.#staticMeshes.get(asset)?.refCount ?? 0;
@@ -817,16 +1070,30 @@ export class ThreeRenderer {
         def.materials[index] = this.#materialFor(slot);
       }
     }
+    for (const def of this.#voxelObjects.values()) {
+      for (let index = 0; index < def.materialSlots.length; index += 1) {
+        const slot = def.materialSlots[index]!;
+        if (slot.material !== id) continue;
+        replacedSharedMaterials.add(def.materials[index]!);
+        def.materials[index] = this.#materialFor(slot);
+      }
+    }
 
     for (const entry of this.#handles.values()) {
       if (entry.meshMaterialSlots?.some(slot => `voxel-material/${String(slot)}` === id)) {
         this.#applyUploadedMeshMaterial(entry, entry.viewMaterial ?? MaterialFallback);
         continue;
       }
-      if (entry.kind !== 'staticMesh' || !entry.materialIds || entry.asset === undefined) {
+      if (
+        (entry.kind !== 'staticMesh' && entry.kind !== 'voxelObject')
+        || !entry.materialIds
+        || entry.asset === undefined
+      ) {
         continue;
       }
-      const def = this.#staticMeshes.get(entry.asset);
+      const def = entry.kind === 'staticMesh'
+        ? this.#staticMeshes.get(entry.asset)
+        : this.#voxelObjects.get(entry.asset);
       if (def === undefined) {
         continue;
       }
@@ -840,7 +1107,9 @@ export class ThreeRenderer {
         if (entry.ownedMaterialIndices?.has(i)) {
           arr[i]?.dispose();
         }
-        const parameters = entry.materialParameterOverrides?.get(i);
+        const parameters = entry.kind === 'staticMesh'
+          ? entry.materialParameterOverrides?.get(i)
+          : undefined;
         const baseSlot = def.materialSlots[i];
         const usesSharedBase = parameters === undefined && baseSlot?.material === id;
         const replacement = usesSharedBase
@@ -1298,6 +1567,19 @@ function snapshotLine(handle: number, entry: NodeEntry, layer: RenderLayer): str
       `label ${JSON.stringify(o.name)}`,
     ].join('  ');
   }
+  if (entry.kind === 'voxelObject') {
+    return [
+      head,
+      `kind voxelObject`,
+      `asset ${entry.asset}`,
+      `frame ${entry.voxelFrame ?? 0}`,
+      `pos ${fmtVec(o.position)}`,
+      `scale ${fmtVec(o.scale)}`,
+      `visible ${o.visible}`,
+      `materials ${fmtMaterials(o)}`,
+      `label ${JSON.stringify(o.name)}`,
+    ].join('  ');
+  }
   return [
     head,
     `shape ${entry.shape}`,
@@ -1431,6 +1713,39 @@ function buildMaterial(shape: Geometry['kind'], material: Material): THREE.Mater
  * unknown/stale handle, or a buffer too small for the declared layout fails closed
  * with a classified `RenderApplyError` — never a silent empty mesh.
  */
+function buildVoxelObjectGeometries(
+  asset: VoxelObjectRenderAsset,
+  bufferSource: MeshBufferSource | undefined,
+): THREE.BufferGeometry[] {
+  const geometries: THREE.BufferGeometry[] = [];
+  const slotIndices = new Map(asset.materialSlots.map((slot, index) => [slot.slot, index]));
+  try {
+    asset.meshes.forEach((mesh, index) => {
+      const geometry = buildMeshGeometry(
+        mesh.payload,
+        bufferSource,
+        `defineVoxelObject.meshes[${String(index)}]`,
+      );
+      geometry.clearGroups();
+      mesh.payload.groups.forEach((group) => {
+        const materialIndex = slotIndices.get(group.materialSlot);
+        if (materialIndex === undefined) {
+          geometry.dispose();
+          throw new RenderApplyError(
+            `defineVoxelObject.meshes[${String(index)}]: unbound material slot ${group.materialSlot}`,
+          );
+        }
+        geometry.addGroup(group.start, group.count, materialIndex);
+      });
+      geometries.push(geometry);
+    });
+    return geometries;
+  } catch (cause) {
+    geometries.forEach((geometry) => geometry.dispose());
+    throw cause;
+  }
+}
+
 function buildMeshGeometry(
   payload: MeshPayloadDescriptor,
   bufferSource: MeshBufferSource | undefined,
@@ -1744,8 +2059,10 @@ function animatedMeshError(cause: unknown): RenderApplyError {
   throw cause;
 }
 
-function disposePreparedGeometry(prepared: ReadonlyMap<number, THREE.BufferGeometry>): void {
-  for (const geometry of prepared.values()) {
-    geometry.dispose();
+function disposePreparedGeometry(
+  prepared: ReadonlyMap<number, readonly THREE.BufferGeometry[]>,
+): void {
+  for (const geometries of prepared.values()) {
+    geometries.forEach((geometry) => geometry.dispose());
   }
 }

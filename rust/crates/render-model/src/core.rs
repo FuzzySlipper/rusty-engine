@@ -4,6 +4,7 @@ use crate::{
     AnimatedMeshAsset, AnimatedMeshPlaybackCommand, LightDescriptor, MaterialInstanceParameters,
     MeshPayloadDescriptor, RenderMaterialDescriptor, SpriteAtlasDescriptor,
     SpriteInstanceDescriptor, StaticMeshAsset, StaticMeshInstanceDescriptor, TextureDescriptor,
+    VoxelObjectInstanceDescriptor, VoxelObjectRenderAsset,
 };
 
 pub const RENDER_FRAME_SCHEMA_VERSION: u32 = 1;
@@ -287,6 +288,12 @@ pub enum RenderDiff {
     DefineAnimatedMesh {
         asset: AnimatedMeshAsset,
     },
+    DefineVoxelObject {
+        asset: VoxelObjectRenderAsset,
+    },
+    ReleaseVoxelObject {
+        asset: String,
+    },
     CreateStaticMeshInstance {
         handle: RenderHandle,
         parent: Option<RenderHandle>,
@@ -300,6 +307,15 @@ pub enum RenderDiff {
     SetAnimatedMeshPlayback {
         handle: RenderHandle,
         playback: AnimatedMeshPlaybackCommand,
+    },
+    CreateVoxelObjectInstance {
+        handle: RenderHandle,
+        parent: Option<RenderHandle>,
+        instance: VoxelObjectInstanceDescriptor,
+    },
+    SetVoxelObjectFrame {
+        handle: RenderHandle,
+        frame: u32,
     },
     CreateSprite {
         handle: RenderHandle,
@@ -369,6 +385,13 @@ impl RenderDiff {
             Self::DefineAnimatedMesh { asset } => {
                 asset.validate().map_err(RenderOperationError::AnimatedMesh)
             }
+            Self::DefineVoxelObject { asset } => {
+                asset.validate().map_err(RenderOperationError::VoxelObject)
+            }
+            Self::ReleaseVoxelObject { asset } => {
+                crate::validate_asset_id(asset, crate::RenderAssetKind::VoxelObject)
+                    .map_err(RenderOperationError::Asset)
+            }
             Self::CreateStaticMeshInstance { instance, .. } => instance
                 .validate()
                 .map_err(RenderOperationError::StaticMeshInstance),
@@ -378,6 +401,10 @@ impl RenderDiff {
             Self::SetAnimatedMeshPlayback { playback, .. } => playback
                 .validate()
                 .map_err(RenderOperationError::AnimatedPlayback),
+            Self::CreateVoxelObjectInstance { instance, .. } => instance
+                .validate()
+                .map_err(RenderOperationError::VoxelObjectInstance),
+            Self::SetVoxelObjectFrame { .. } => Ok(()),
             Self::CreateSprite { sprite, .. } => {
                 sprite.validate().map_err(RenderOperationError::Sprite)
             }
@@ -396,6 +423,7 @@ impl RenderDiff {
             | Self::CreateLight { handle, parent, .. }
             | Self::CreateStaticMeshInstance { handle, parent, .. }
             | Self::CreateAnimatedMeshInstance { handle, parent, .. }
+            | Self::CreateVoxelObjectInstance { handle, parent, .. }
             | Self::CreateSprite { handle, parent, .. } => {
                 handle.validate()?;
                 if let Some(parent) = parent {
@@ -408,12 +436,15 @@ impl RenderDiff {
             | Self::UpdateLight { handle, .. }
             | Self::SetMaterialInstanceParameters { handle, .. }
             | Self::SetAnimatedMeshPlayback { handle, .. }
+            | Self::SetVoxelObjectFrame { handle, .. }
             | Self::UpdateSprite { handle, .. } => handle.validate()?,
             Self::DefineMaterial { .. }
             | Self::DefineTexture { .. }
             | Self::DefineSpriteAtlas { .. }
             | Self::DefineStaticMesh { .. }
-            | Self::DefineAnimatedMesh { .. } => {}
+            | Self::DefineAnimatedMesh { .. }
+            | Self::DefineVoxelObject { .. }
+            | Self::ReleaseVoxelObject { .. } => {}
         }
         Ok(())
     }
@@ -441,6 +472,9 @@ pub enum RenderOperationError {
     AnimatedMesh(crate::AnimatedMeshAssetError),
     AnimatedMeshInstance(crate::AnimatedMeshInstanceError),
     AnimatedPlayback(crate::AnimatedMeshPlaybackError),
+    VoxelObject(crate::VoxelObjectRenderAssetError),
+    VoxelObjectInstance(crate::VoxelObjectInstanceError),
+    Asset(crate::RenderAssetError),
     Sprite(crate::SpriteError),
     InvalidSpriteTint,
 }

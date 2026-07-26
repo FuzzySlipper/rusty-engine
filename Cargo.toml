@@ -16,6 +16,7 @@ members = [
     "rust/crates/voxel-asset",
     "rust/crates/voxel-annotation",
     "rust/crates/voxel-convert",
+    "rust/crates/voxel-object-runtime",
     "rust/crates/core-assets",
     "rust/crates/core-ids",
     "rust/crates/core-math",
@@ -49,6 +50,7 @@ state-machine = { path = "rust/crates/state-machine" }
 entity-state = { path = "rust/crates/entity-state" }
 voxel-asset = { path = "rust/crates/voxel-asset" }
 voxel-annotation = { path = "rust/crates/voxel-annotation" }
+voxel-object-runtime = { path = "rust/crates/voxel-object-runtime" }
 core-assets = { path = "rust/crates/core-assets" }
 core-ids = { path = "rust/crates/core-ids" }
 core-math = { path = "rust/crates/core-math" }

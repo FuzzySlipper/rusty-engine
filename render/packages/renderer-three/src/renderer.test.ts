@@ -872,6 +872,8 @@ import type {
   StaticMeshAsset,
   StaticMeshInstanceDescriptor,
   SpriteInstanceDescriptor,
+  VoxelObjectInstanceDescriptor,
+  VoxelObjectRenderAsset,
 } from '@rusty-engine/render-contracts';
 
 function crateAsset(): StaticMeshAsset {
@@ -895,6 +897,89 @@ function crateInstance(
     metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: asset },
   };
 }
+
+function voxelObjectAsset(over: Partial<VoxelObjectRenderAsset> = {}): VoxelObjectRenderAsset {
+  const second = quadPayload();
+  return {
+    asset: 'voxel-object/runner',
+    contentHash: 'sha256:runner-v1',
+    meshes: [
+      { payload: { ...quadPayload(), provenance: 'voxelObject' } },
+      {
+        payload: {
+          ...second,
+          bounds: { min: [0, 0, 0], max: [2, 1, 0] },
+          groups: [{ materialSlot: 2, start: 0, count: 6 }],
+          source: second.source.kind === 'inline'
+            ? { ...second.source, positions: second.source.positions.map((value, index) => index % 3 === 0 ? value * 2 : value) }
+            : second.source,
+          provenance: 'voxelObject',
+        },
+      },
+    ],
+    frames: [{ id: 'default', mesh: 0 }, { id: 'walk/0', mesh: 1 }],
+    materialSlots: [{ slot: 1, material: 'material/wood' }, { slot: 2, material: 'material/iron' }],
+    ...over,
+  };
+}
+
+function voxelObjectInstance(frame = 0): VoxelObjectInstanceDescriptor {
+  return {
+    asset: 'voxel-object/runner',
+    frame,
+    transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+    visible: true,
+    materialOverrides: [],
+    metadata: { sourceEntity: 9, sourceSceneNode: null, tags: ['voxel-object'], label: 'Runner' },
+  };
+}
+
+void test('voxel-object instances share frame meshes and swap frames without handle churn', () => {
+  const renderer = new ThreeRenderer();
+  const first = renderHandle(81);
+  const second = renderHandle(82);
+  renderer.applyDiff({ op: 'defineVoxelObject', asset: voxelObjectAsset() });
+  renderer.applyDiff({ op: 'createVoxelObjectInstance', handle: first, parent: null, instance: voxelObjectInstance() });
+  renderer.applyDiff({ op: 'createVoxelObjectInstance', handle: second, parent: null, instance: voxelObjectInstance() });
+  const firstMesh = renderer.objectFor(first) as THREE.Mesh;
+  const secondMesh = renderer.objectFor(second) as THREE.Mesh;
+  assert.equal(firstMesh.geometry, secondMesh.geometry);
+  const original = firstMesh.geometry;
+
+  renderer.applyDiff({ op: 'setVoxelObjectFrame', handle: first, frame: 1 });
+  assert.equal(renderer.objectFor(first), firstMesh, 'frame swap keeps the retained object and handle');
+  assert.notEqual(firstMesh.geometry, original);
+  assert.equal(secondMesh.geometry, original);
+  assert.equal(firstMesh.geometry.groups[0]?.materialIndex, 1, 'frame groups resolve palette slots');
+  assert.deepEqual(renderer.voxelObjectFrame(first), {
+    handle: first, asset: 'voxel-object/runner', frame: 1, frameId: 'walk/0', mesh: 1,
+  });
+  assert.equal(renderer.pickMesh(first)?.provenance, 'voxelObject');
+});
+
+void test('voxel-object frame failure is atomic and explicit release bounds GPU lifetime', () => {
+  const renderer = new ThreeRenderer();
+  const handle = renderHandle(83);
+  renderer.applyDiff({ op: 'defineVoxelObject', asset: voxelObjectAsset() });
+  renderer.applyDiff({ op: 'createVoxelObjectInstance', handle, parent: null, instance: voxelObjectInstance() });
+  const mesh = renderer.objectFor(handle) as THREE.Mesh;
+  const before = mesh.geometry;
+  assert.throws(
+    () => renderer.applyDiff({ op: 'setVoxelObjectFrame', handle, frame: 99 }),
+    /outside voxel object|unavailable/,
+  );
+  assert.equal(mesh.geometry, before);
+  assert.throws(
+    () => renderer.applyDiff({ op: 'releaseVoxelObject', asset: 'voxel-object/runner' }),
+    /in use by 1 instance/,
+  );
+
+  let disposed = 0;
+  before.addEventListener('dispose', () => { disposed += 1; });
+  renderer.applyDiff({ op: 'destroy', handle });
+  renderer.applyDiff({ op: 'releaseVoxelObject', asset: 'voxel-object/runner' });
+  assert.equal(disposed, 1);
+});
 
 void test('two instances share one BufferGeometry and the asset is reference-counted', () => {
   const r = new ThreeRenderer();

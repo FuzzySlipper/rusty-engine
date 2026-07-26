@@ -15,6 +15,8 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.snapshot).toContain('shape cube');
   expect(proof.snapshot).toContain('kind staticMesh');
   expect(proof.snapshot).toContain('kind animatedMesh');
+  expect(proof.snapshot).toContain('kind voxelObject');
+  expect(proof.snapshot).toContain('frame 1');
   expect(proof.snapshot).toContain('kind sprite');
   expect(proof.snapshot).toContain('kind light/point');
   expect(proof.animationClip).toBe('run');
@@ -36,6 +38,8 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.telemetryText).toContain('backendSubmissionDurationMs:');
   expect(proof.telemetryText).toContain('drawCallCount: 7 count');
   expect(proof.presentationDiagnostics).toEqual([]);
+  expect(proof.voxelFrameSwapApplied).toBe(true);
+  expect(proof.voxelFrame).toBe(1);
   expect(consoleErrors).toEqual([]);
 
   await page.evaluate(() => window.__rustyRenderSetCameraPose?.([1, 2, 3]));

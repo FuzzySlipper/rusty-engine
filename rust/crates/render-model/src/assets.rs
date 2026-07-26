@@ -13,6 +13,7 @@ pub enum RenderAssetKind {
     SpriteAtlas,
     StaticMesh,
     AnimatedMesh,
+    VoxelObject,
     Audio,
     Font,
 }
@@ -26,6 +27,7 @@ impl RenderAssetKind {
             Self::SpriteAtlas => &["sprite-sheet/", "sprite/"],
             Self::StaticMesh => &["mesh/"],
             Self::AnimatedMesh => &["mesh-animation/", "animated-mesh/"],
+            Self::VoxelObject => &["voxel-object/"],
             Self::Audio => &["audio/"],
             Self::Font => &["font/"],
         }

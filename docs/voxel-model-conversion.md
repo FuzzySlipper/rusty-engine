@@ -25,13 +25,13 @@ The static path is already substantial:
 | `render-projection` | Stable retained voxel-instance/chunk handles and changed-payload projection. |
 | Studio | Project/host GLB selection, conversion settings, private Rust plan and renderer-visible preview, guarded apply/discard, canonical project persistence, import/export, and reopen integration proof. |
 
-The remaining gaps are behavioral rather than language-boundary gaps:
+The remaining conversion and authoring gaps are behavioral rather than language-boundary gaps:
 
 - static and animated import now share one bounded scene/primitive identity family, but animated
   snapshots still need one fixed conversion grid and assembly into durable voxel-object clips;
 - Studio controls still describe one volume, not a reusable object and clips; and
-- retained voxel projection can replace changed chunk meshes, but no voxel-object resource,
-  explicit clip sampler, or presentation-only playback owner exists.
+- the animated snapshots still need one temporally stable conversion assembly before Studio can
+  author and save the complete object workflow.
 
 The existing static workflow remains supported while these gaps close. M12 is an extension and
 quality campaign, not a rewrite of conversion or Studio.
@@ -195,14 +195,48 @@ are not projected into the mesh snapshot. Additional joint sets must first be ju
 conversion asset rather than silently changing work accounting.
 
 Rust owns source parsing, deformation, voxelization, canonical assets, validation, frame
-resolution, and renderer-neutral values. Studio owns source and clip selection, forms, preview
-scrubbing, transient playback, and explicit apply/discard. A downstream product owns gameplay
-meaning and when to request playback.
+resolution, bounded runtime admission, explicit-time playback, and renderer-neutral values. Studio
+owns source and clip selection, forms, preview scrubbing, transient playback, and explicit
+apply/discard. A downstream product owns gameplay meaning and when to request playback.
 
-Playback will be a named presentation mechanism or an explicit-time sampler. It will not create a
-universal Engine scheduler, component-local update callback, ambient subscription, persisted
-closure, or second gameplay authority. Browser/WebGL realization remains in the isolated renderer
-backend and host; the asset and sampling mechanisms remain usable headlessly.
+Playback is a named, explicit-time sampler. It does not create a universal Engine scheduler,
+component-local update callback, ambient subscription, persisted closure, or second gameplay
+authority. Browser/WebGL realization remains in the isolated renderer backend and host; the asset
+and sampling mechanisms remain usable headlessly.
+
+## Runtime admission, playback, and shared realization
+
+`voxel-object-runtime` is the host-neutral live admission owner. It strictly decodes the canonical
+object, resolves every complete frame under caller-selected runtime work limits, meshes local cells
+around the durable fractional pivot, and deduplicates equal occupancy hashes into reusable mesh
+payloads. `svc-mesh` supplies the deterministic visible-face mechanism through a bounded
+standalone-cell entry point; neither crate imports a renderer, browser, filesystem, collision
+world, navigation world, or scheduler.
+
+Runtime readouts expose the exact object/content identity, frame and clip counts, per-clip frame
+indices and integer-microsecond durations, and unique mesh count. Admission bounds frame count,
+aggregate resolved cells, and aggregate unique visible faces before unbounded live allocations.
+Equal input produces byte-for-byte equal mesh streams independent of source cell order.
+
+`VoxelObjectPlayer` accepts caller-provided integer microsecond time. Its named `play`, `pause`,
+`resume`, and `stop` operations support once, repeat, and ping-pong selection plus an exact rational
+speed. Per-frame duration overrides take precedence over the clip rate. A durable posture stores
+clip, mode, rate, status, and elapsed caller time; restoring it attaches a fresh transient time
+anchor, so renderer clocks remain disposable and are never serialized.
+
+Collision is deliberately outside playback. `VisualOnly`, one explicit stable default or clip
+frame, and an external static-mesh proxy are the only runtime policies. Sampling a different visible
+frame does not mutate the selected collision cells and has no path to collision or navigation
+rebuilds.
+
+The Rust render contract defines one deduplicated voxel-object resource, stable instances, explicit
+frame swaps, and explicit resource release. `render-projection` converts admitted meshes and keeps
+instance handles stable across frame changes. The TypeScript retained projection mirrors this
+lifecycle, while the shared Three backend uploads one geometry per unique mesh, shares it across
+instances, swaps only the selected geometry, and disposes all object GPU resources on explicit
+release. Headless Rust and TypeScript tests prove admission, timing, reload, invalid-frame,
+collision isolation, and cleanup; the focused Chromium/WebGL gate proves the same frame swap through
+the public shared renderer surface.
 
 ## Implementation schedule
 

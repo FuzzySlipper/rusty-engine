@@ -12,6 +12,7 @@ import {
   type RenderNode,
   type SpriteInstanceDescriptor,
   type StaticMeshAsset,
+  type VoxelObjectRenderAsset,
 } from '@rusty-engine/render-contracts';
 import {
   RenderProjection,
@@ -138,6 +139,19 @@ function animatedMeshAsset(asset = 'mesh-animation/kenney-retro-character-medium
     defaultClip: 'idle',
     materialSlots: [{ slot: 0, material: 'material/kenney-human-male-a' }],
     bounds: { min: [-0.5, 0, -0.5], max: [0.5, 1.8, 0.5] },
+  };
+}
+
+function voxelObjectAsset(): VoxelObjectRenderAsset {
+  return {
+    asset: 'voxel-object/runner',
+    contentHash: 'sha256:runner',
+    meshes: [
+      { payload: { ...quadPayload(), provenance: 'voxelObject' } },
+      { payload: { ...quadPayload(), provenance: 'voxelObject', bounds: { min: [0, 0, 0], max: [2, 1, 0] } } },
+    ],
+    frames: [{ id: 'default', mesh: 0 }, { id: 'walk/0', mesh: 1 }],
+    materialSlots: [{ slot: 1, material: 'material/wood' }],
   };
 }
 
@@ -288,6 +302,42 @@ void test('tracks static mesh definitions and fails closed on in-use redefinitio
   projection.applyDiff({ op: 'destroy', handle: renderHandle(1) });
   assert.equal(projection.staticMeshRefCount('mesh/crate'), 0);
   assert.doesNotThrow(() => projection.applyDiff({ op: 'defineStaticMesh', asset: meshAsset() }));
+});
+
+void test('voxel objects retain stable instances, explicit frames, and bounded resource lifetime', () => {
+  const projection = new RenderProjection();
+  const handle = renderHandle(31);
+  projection.applyDiff({ op: 'defineVoxelObject', asset: voxelObjectAsset() });
+  projection.applyDiff({
+    op: 'createVoxelObjectInstance',
+    handle,
+    parent: null,
+    instance: {
+      asset: 'voxel-object/runner', frame: 0,
+      transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+      visible: true, materialOverrides: [],
+      metadata: { sourceEntity: 31, sourceSceneNode: null, tags: ['voxel-object'], label: 'runner' },
+    },
+  });
+  assert.equal(projection.voxelObjectRefCount('voxel-object/runner'), 1);
+  assert.equal(projection.node(handle)?.kind, 'voxelObject');
+  assert.equal(projection.pickMesh(handle)?.provenance, 'voxelObject');
+
+  projection.applyDiff({ op: 'setVoxelObjectFrame', handle, frame: 1 });
+  const node = projection.node(handle);
+  assert.equal(node?.kind, 'voxelObject');
+  if (node?.kind === 'voxelObject') assert.equal(node.frame, 1);
+  assert.throws(
+    () => projection.applyDiff({ op: 'setVoxelObjectFrame', handle, frame: 99 }),
+    /outside voxel object/,
+  );
+  assert.throws(
+    () => projection.applyDiff({ op: 'releaseVoxelObject', asset: 'voxel-object/runner' }),
+    /in use by 1 instance/,
+  );
+  projection.applyDiff({ op: 'destroy', handle });
+  projection.applyDiff({ op: 'releaseVoxelObject', asset: 'voxel-object/runner' });
+  assert.equal(projection.voxelObject('voxel-object/runner'), undefined);
 });
 
 void test('retains and resets handle-targeted material feedback parameters', () => {

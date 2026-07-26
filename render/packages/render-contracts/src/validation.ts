@@ -122,6 +122,16 @@ function renderDiff(input: unknown, path: string): void {
       animatedMesh(value['asset'], `${path}.asset`);
       return;
     }
+    case 'defineVoxelObject': {
+      const value = record(input, path, ['op', 'asset']);
+      voxelObject(value['asset'], `${path}.asset`);
+      return;
+    }
+    case 'releaseVoxelObject': {
+      const value = record(input, path, ['op', 'asset']);
+      nonEmptyText(value['asset'], `${path}.asset`);
+      return;
+    }
     case 'createStaticMeshInstance': {
       const value = record(input, path, ['op', 'handle', 'parent', 'instance']);
       handle(value['handle'], `${path}.handle`);
@@ -140,6 +150,19 @@ function renderDiff(input: unknown, path: string): void {
       const value = record(input, path, ['op', 'handle', 'playback']);
       handle(value['handle'], `${path}.handle`);
       playback(value['playback'], `${path}.playback`);
+      return;
+    }
+    case 'createVoxelObjectInstance': {
+      const value = record(input, path, ['op', 'handle', 'parent', 'instance']);
+      handle(value['handle'], `${path}.handle`);
+      nullableHandle(value['parent'], `${path}.parent`);
+      voxelObjectInstance(value['instance'], `${path}.instance`);
+      return;
+    }
+    case 'setVoxelObjectFrame': {
+      const value = record(input, path, ['op', 'handle', 'frame']);
+      handle(value['handle'], `${path}.handle`);
+      integer(value['frame'], `${path}.frame`, 0, 4_294_967_295);
       return;
     }
     case 'createSprite': {
@@ -259,7 +282,7 @@ function meshPayload(input: unknown, path: string): void {
   enumeration(
     value['provenance'],
     `${path}.provenance`,
-    ['voxelChunk', 'staticAsset', 'generated', 'debug'] as const,
+    ['voxelChunk', 'voxelObject', 'staticAsset', 'generated', 'debug'] as const,
   );
   const sourceBase = looseRecord(value['source'], `${path}.source`);
   const sourceKind = enumeration(
@@ -398,6 +421,62 @@ function animatedMeshInstance(input: unknown, path: string): void {
   booleanValue(value['visible'], `${path}.visible`);
   materialSlots(value['materialOverrides'], `${path}.materialOverrides`);
   nullable(value['playback'], `${path}.playback`, playback);
+  metadata(value['metadata'], `${path}.metadata`);
+}
+
+function voxelObject(input: unknown, path: string): void {
+  const value = record(input, path, ['asset', 'contentHash', 'meshes', 'frames', 'materialSlots']);
+  nonEmptyText(value['asset'], `${path}.asset`);
+  nonEmptyText(value['contentHash'], `${path}.contentHash`);
+  const slots = materialSlots(value['materialSlots'], `${path}.materialSlots`);
+  const meshes = list(value['meshes'], `${path}.meshes`);
+  if (meshes.length === 0 || meshes.length > 8_193) {
+    fail(`${path}.meshes`, 'must contain 1..=8193 entries');
+  }
+  let totalVertices = 0;
+  let totalIndices = 0;
+  meshes.forEach((item, index) => {
+    const meshPath = `${path}.meshes[${String(index)}]`;
+    const mesh = record(item, meshPath, ['payload']);
+    meshPayload(mesh['payload'], `${meshPath}.payload`);
+    const payload = looseRecord(mesh['payload'], `${meshPath}.payload`);
+    const layout = looseRecord(payload['layout'], `${meshPath}.payload.layout`);
+    totalVertices += layout['vertexCount'] as number;
+    totalIndices += layout['indexCount'] as number;
+    list(payload['groups'], `${meshPath}.payload.groups`).forEach((groupItem, groupIndex) => {
+      const group = looseRecord(groupItem, `${meshPath}.payload.groups[${String(groupIndex)}]`);
+      if (!slots.has(group['materialSlot'] as number)) {
+        fail(`${meshPath}.payload.groups[${String(groupIndex)}].materialSlot`, 'is not bound');
+      }
+    });
+  });
+  if (totalVertices > 8_000_000 || totalIndices > 12_000_000) {
+    fail(`${path}.meshes`, 'exceeds aggregate vertex/index work limits');
+  }
+  const frames = list(value['frames'], `${path}.frames`);
+  if (frames.length === 0 || frames.length > 8_193) {
+    fail(`${path}.frames`, 'must contain 1..=8193 entries');
+  }
+  const ids = new Set<string>();
+  frames.forEach((item, index) => {
+    const framePath = `${path}.frames[${String(index)}]`;
+    const frame = record(item, framePath, ['id', 'mesh']);
+    const id = nonEmptyText(frame['id'], `${framePath}.id`);
+    if (ids.has(id)) fail(`${framePath}.id`, 'is duplicated');
+    ids.add(id);
+    integer(frame['mesh'], `${framePath}.mesh`, 0, meshes.length - 1);
+  });
+}
+
+function voxelObjectInstance(input: unknown, path: string): void {
+  const value = record(input, path, [
+    'asset', 'frame', 'transform', 'visible', 'materialOverrides', 'metadata',
+  ]);
+  nonEmptyText(value['asset'], `${path}.asset`);
+  integer(value['frame'], `${path}.frame`, 0, 4_294_967_295);
+  transform(value['transform'], `${path}.transform`);
+  booleanValue(value['visible'], `${path}.visible`);
+  materialSlots(value['materialOverrides'], `${path}.materialOverrides`);
   metadata(value['metadata'], `${path}.metadata`);
 }
 

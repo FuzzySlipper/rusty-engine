@@ -1,0 +1,16 @@
+[package]
+name = "voxel-object-runtime"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+core-assets.workspace = true
+serde.workspace = true
+svc-mesh.workspace = true
+voxel-asset.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

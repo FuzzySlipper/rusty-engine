@@ -8,6 +8,7 @@ mod entity;
 mod model_preview;
 mod retained;
 mod voxel;
+mod voxel_object;
 
 pub use authored::*;
 pub use debug::*;
@@ -15,3 +16,4 @@ pub use entity::*;
 pub use model_preview::*;
 pub use retained::*;
 pub use voxel::*;
+pub use voxel_object::*;

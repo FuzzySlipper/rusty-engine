@@ -81,6 +81,7 @@ impl MeshBoundsDescriptor {
 #[serde(rename_all = "camelCase")]
 pub enum MeshProvenance {
     VoxelChunk,
+    VoxelObject,
     StaticAsset,
     #[default]
     Generated,
@@ -612,7 +613,7 @@ pub enum AnimatedMeshPlaybackError {
     InvalidFade,
 }
 
-fn validate_slots(slots: &[MeshMaterialSlot]) -> Result<(), MeshMaterialSlotError> {
+pub(crate) fn validate_slots(slots: &[MeshMaterialSlot]) -> Result<(), MeshMaterialSlotError> {
     let mut seen = BTreeSet::new();
     for slot in slots {
         if !seen.insert(slot.slot) {

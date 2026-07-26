@@ -311,3 +311,54 @@ fn unknown_contract_fields_fail_closed() {
         Err(RenderJsonError::Decode(_))
     ));
 }
+
+#[test]
+fn voxel_object_resource_and_frame_swap_survive_the_json_border() {
+    let asset = VoxelObjectRenderAsset {
+        asset: "voxel-object/runner".to_string(),
+        content_hash: "sha256:runner".to_string(),
+        meshes: vec![VoxelObjectRenderMesh {
+            payload: payload(MeshProvenance::VoxelObject),
+        }],
+        frames: vec![VoxelObjectRenderFrame {
+            id: "default".to_string(),
+            mesh: 0,
+        }],
+        material_slots: vec![MeshMaterialSlot {
+            slot: 0,
+            material: "material/plain".to_string(),
+        }],
+    };
+    let frame = RenderFrameDiff::try_from_ops(vec![
+        RenderDiff::DefineVoxelObject {
+            asset: asset.clone(),
+        },
+        RenderDiff::CreateVoxelObjectInstance {
+            handle: RenderHandle::new(9),
+            parent: None,
+            instance: VoxelObjectInstanceDescriptor {
+                asset: asset.asset,
+                frame: 0,
+                transform: Transform::IDENTITY,
+                visible: true,
+                material_overrides: Vec::new(),
+                metadata: metadata(9, "voxel object"),
+            },
+        },
+        RenderDiff::SetVoxelObjectFrame {
+            handle: RenderHandle::new(9),
+            frame: 0,
+        },
+        RenderDiff::Destroy {
+            handle: RenderHandle::new(9),
+        },
+        RenderDiff::ReleaseVoxelObject {
+            asset: "voxel-object/runner".to_string(),
+        },
+    ])
+    .unwrap();
+    assert_eq!(
+        RenderFrameDiff::decode_json(&frame.encode_json().unwrap()).unwrap(),
+        frame
+    );
+}

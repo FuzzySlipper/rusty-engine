@@ -11,9 +11,11 @@ mod core;
 mod editor_grid;
 mod lighting;
 mod mesh;
+mod voxel_object;
 
 pub use assets::*;
 pub use core::*;
 pub use editor_grid::*;
 pub use lighting::*;
 pub use mesh::*;
+pub use voxel_object::*;

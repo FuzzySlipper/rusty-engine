@@ -28,6 +28,8 @@ import type {
   StaticMeshInstanceDescriptor,
   TextureDescriptor,
   Transform,
+  VoxelObjectInstanceDescriptor,
+  VoxelObjectRenderAsset,
 } from '@rusty-engine/render-contracts';
 
 /** Raised when a render diff cannot be applied to the retained projection. */
@@ -38,7 +40,7 @@ export class RenderProjectionError extends Error {
   }
 }
 
-export type RenderProjectionNodeKind = 'primitive' | 'staticMesh' | 'animatedMesh' | 'sprite';
+export type RenderProjectionNodeKind = 'primitive' | 'staticMesh' | 'animatedMesh' | 'voxelObject' | 'sprite';
 
 export interface RenderProjectionNodeBase {
   readonly handle: RenderHandle;
@@ -77,6 +79,13 @@ export interface AnimatedMeshProjectionNode extends RenderProjectionNodeBase {
   readonly playback: AnimatedMeshPlaybackCommand | null;
 }
 
+export interface VoxelObjectProjectionNode extends RenderProjectionNodeBase {
+  readonly kind: 'voxelObject';
+  readonly asset: string;
+  readonly instance: VoxelObjectInstanceDescriptor;
+  readonly frame: number;
+}
+
 export interface SpriteProjectionNode extends RenderProjectionNodeBase {
   readonly kind: 'sprite';
   readonly sprite: SpriteInstanceDescriptor;
@@ -88,6 +97,7 @@ export type RenderProjectionNode =
   | PrimitiveProjectionNode
   | StaticMeshProjectionNode
   | AnimatedMeshProjectionNode
+  | VoxelObjectProjectionNode
   | SpriteProjectionNode;
 
 export type RenderProjectionInstruction =
@@ -96,6 +106,8 @@ export type RenderProjectionInstruction =
   | { readonly op: 'defineSpriteAtlas'; readonly atlas: SpriteAtlasDescriptor }
   | { readonly op: 'defineStaticMesh'; readonly asset: StaticMeshAsset }
   | { readonly op: 'defineAnimatedMesh'; readonly asset: AnimatedMeshAsset }
+  | { readonly op: 'defineVoxelObject'; readonly asset: VoxelObjectRenderAsset }
+  | { readonly op: 'releaseVoxelObject'; readonly asset: string }
   | { readonly op: 'upsertLight'; readonly light: RenderProjectionLight }
   | { readonly op: 'upsertNode'; readonly node: RenderProjectionNode }
   | { readonly op: 'removeLight'; readonly handle: RenderHandle }
@@ -115,9 +127,10 @@ export interface RenderProjectionSnapshot {
   readonly spriteAtlases: readonly SpriteAtlasDescriptor[];
   readonly staticMeshes: readonly StaticMeshAsset[];
   readonly animatedMeshes: readonly AnimatedMeshAsset[];
+  readonly voxelObjects: readonly VoxelObjectRenderAsset[];
 }
 
-type NodeRecord = MutablePrimitiveNode | MutableStaticMeshNode | MutableAnimatedMeshNode | MutableSpriteNode;
+type NodeRecord = MutablePrimitiveNode | MutableStaticMeshNode | MutableAnimatedMeshNode | MutableVoxelObjectNode | MutableSpriteNode;
 
 interface MutableNodeBase {
   handle: RenderHandle;
@@ -151,6 +164,13 @@ interface MutableAnimatedMeshNode extends MutableNodeBase {
   playback: AnimatedMeshPlaybackCommand | null;
 }
 
+interface MutableVoxelObjectNode extends MutableNodeBase {
+  kind: 'voxelObject';
+  asset: string;
+  instance: VoxelObjectInstanceDescriptor;
+  frame: number;
+}
+
 interface MutableSpriteNode extends MutableNodeBase {
   kind: 'sprite';
   sprite: SpriteInstanceDescriptor;
@@ -165,6 +185,11 @@ interface StaticMeshRecord {
 
 interface AnimatedMeshRecord {
   asset: AnimatedMeshAsset;
+  refCount: number;
+}
+
+interface VoxelObjectRecord {
+  asset: VoxelObjectRenderAsset;
   refCount: number;
 }
 
@@ -183,6 +208,7 @@ export class RenderProjection {
   readonly #spriteAtlases = new Map<string, SpriteAtlasDescriptor>();
   readonly #staticMeshes = new Map<string, StaticMeshRecord>();
   readonly #animatedMeshes = new Map<string, AnimatedMeshRecord>();
+  readonly #voxelObjects = new Map<string, VoxelObjectRecord>();
 
   /**
    * Apply a frame in authored order and return renderer-neutral instructions.
@@ -232,12 +258,20 @@ export class RenderProjection {
         return [this.#defineStaticMesh(diff.asset)];
       case 'defineAnimatedMesh':
         return [this.#defineAnimatedMesh(diff.asset)];
+      case 'defineVoxelObject':
+        return [this.#defineVoxelObject(diff.asset)];
+      case 'releaseVoxelObject':
+        return [this.#releaseVoxelObject(diff.asset)];
       case 'createStaticMeshInstance':
         return [this.#createStaticMeshInstance(diff)];
       case 'createAnimatedMeshInstance':
         return [this.#createAnimatedMeshInstance(diff)];
       case 'setAnimatedMeshPlayback':
         return [this.#setAnimatedMeshPlayback(diff)];
+      case 'createVoxelObjectInstance':
+        return [this.#createVoxelObjectInstance(diff)];
+      case 'setVoxelObjectFrame':
+        return [this.#setVoxelObjectFrame(diff)];
       case 'createSprite':
         return [this.#createSprite(diff)];
       case 'updateSprite':
@@ -287,12 +321,20 @@ export class RenderProjection {
     return clone(this.#animatedMeshes.get(asset)?.asset);
   }
 
+  voxelObject(asset: string): VoxelObjectRenderAsset | undefined {
+    return clone(this.#voxelObjects.get(asset)?.asset);
+  }
+
   staticMeshRefCount(asset: string): number {
     return this.#staticMeshes.get(asset)?.refCount ?? 0;
   }
 
   animatedMeshRefCount(asset: string): number {
     return this.#animatedMeshes.get(asset)?.refCount ?? 0;
+  }
+
+  voxelObjectRefCount(asset: string): number {
+    return this.#voxelObjects.get(asset)?.refCount ?? 0;
   }
 
   snapshot(): RenderProjectionSnapshot {
@@ -306,6 +348,9 @@ export class RenderProjection {
         .map((record) => clone(record.asset))
         .sort((a, b) => a.asset.localeCompare(b.asset)),
       animatedMeshes: [...this.#animatedMeshes.values()]
+        .map((record) => clone(record.asset))
+        .sort((a, b) => a.asset.localeCompare(b.asset)),
+      voxelObjects: [...this.#voxelObjects.values()]
         .map((record) => clone(record.asset))
         .sort((a, b) => a.asset.localeCompare(b.asset)),
     };
@@ -371,6 +416,8 @@ export class RenderProjection {
         record.instance = { ...record.instance, transform: clone(diff.transform) };
       } else if (record.kind === 'animatedMesh') {
         record.instance = { ...record.instance, transform: clone(diff.transform) };
+      } else if (record.kind === 'voxelObject') {
+        record.instance = { ...record.instance, transform: clone(diff.transform) };
       } else {
         record.sprite = { ...record.sprite, transform: clone(diff.transform) };
       }
@@ -389,6 +436,8 @@ export class RenderProjection {
         record.instance = { ...record.instance, visible: diff.visible };
       } else if (record.kind === 'animatedMesh') {
         record.instance = { ...record.instance, visible: diff.visible };
+      } else if (record.kind === 'voxelObject') {
+        record.instance = { ...record.instance, visible: diff.visible };
       } else {
         record.sprite = { ...record.sprite, visible: diff.visible };
       }
@@ -400,6 +449,8 @@ export class RenderProjection {
       } else if (record.kind === 'staticMesh') {
         record.instance = { ...record.instance, metadata: clone(diff.metadata) };
       } else if (record.kind === 'animatedMesh') {
+        record.instance = { ...record.instance, metadata: clone(diff.metadata) };
+      } else if (record.kind === 'voxelObject') {
         record.instance = { ...record.instance, metadata: clone(diff.metadata) };
       } else {
         record.sprite = { ...record.sprite, metadata: clone(diff.metadata) };
@@ -435,6 +486,11 @@ export class RenderProjection {
       const mesh = this.#animatedMeshes.get(record.asset);
       if (mesh !== undefined) {
         mesh.refCount -= 1;
+      }
+    } else if (record.kind === 'voxelObject') {
+      const object = this.#voxelObjects.get(record.asset);
+      if (object !== undefined) {
+        object.refCount -= 1;
       }
     }
     instructions.push({ op: 'removeNode', handle });
@@ -637,6 +693,96 @@ export class RenderProjection {
     return { op: 'upsertNode', node: snapshotNode(record) };
   }
 
+  #defineVoxelObject(asset: VoxelObjectRenderAsset): RenderProjectionInstruction {
+    validateVoxelObjectAsset(asset, `defineVoxelObject(${asset.asset})`);
+    const existing = this.#voxelObjects.get(asset.asset);
+    if (existing !== undefined) {
+      for (const record of this.#nodes.values()) {
+        if (record.kind !== 'voxelObject' || record.asset !== asset.asset) continue;
+        validateVoxelObjectFrame(asset, record.frame, 'defineVoxelObject.liveInstance');
+        validateVoxelObjectOverrides(asset, record.instance.materialOverrides, 'defineVoxelObject.liveInstance');
+        record.meshPayload = clone(asset.meshes[asset.frames[record.frame]!.mesh]!.payload);
+      }
+    }
+    this.#voxelObjects.set(asset.asset, {
+      asset: clone(asset),
+      refCount: existing?.refCount ?? 0,
+    });
+    return { op: 'defineVoxelObject', asset: clone(asset) };
+  }
+
+  #releaseVoxelObject(asset: string): RenderProjectionInstruction {
+    const existing = this.#voxelObjects.get(asset);
+    if (existing === undefined) {
+      throw new RenderProjectionError(`releaseVoxelObject: undefined voxel object ${asset}`);
+    }
+    if (existing.refCount !== 0) {
+      throw new RenderProjectionError(
+        `releaseVoxelObject: ${asset} is in use by ${existing.refCount} instance(s)`,
+      );
+    }
+    this.#voxelObjects.delete(asset);
+    return { op: 'releaseVoxelObject', asset };
+  }
+
+  #createVoxelObjectInstance(
+    diff: Extract<RenderDiff, { op: 'createVoxelObjectInstance' }>,
+  ): RenderProjectionInstruction {
+    this.#ensureFree(diff.handle, 'createVoxelObjectInstance');
+    const asset = this.#voxelObjects.get(diff.instance.asset);
+    if (asset === undefined) {
+      throw new RenderProjectionError(
+        `createVoxelObjectInstance: undefined voxel object ${diff.instance.asset}`,
+      );
+    }
+    validateVoxelObjectFrame(asset.asset, diff.instance.frame, 'createVoxelObjectInstance.frame');
+    validateVoxelObjectOverrides(
+      asset.asset,
+      diff.instance.materialOverrides,
+      'createVoxelObjectInstance.materialOverrides',
+    );
+    const parent = this.#parentHandle(diff.parent, 'createVoxelObjectInstance.parent');
+    const instance = clone(diff.instance);
+    const record: MutableVoxelObjectNode = {
+      handle: diff.handle,
+      parent,
+      children: new Set(),
+      kind: 'voxelObject',
+      layer: parent === null ? 'scene' : this.#require(parent, 'createVoxelObjectInstance.parent').layer,
+      transform: clone(instance.transform),
+      visible: instance.visible,
+      metadata: clone(instance.metadata),
+      material: null,
+      meshPayload: clone(asset.asset.meshes[asset.asset.frames[instance.frame]!.mesh]!.payload),
+      asset: instance.asset,
+      instance,
+      frame: instance.frame,
+    };
+    asset.refCount += 1;
+    this.#insert(record);
+    return { op: 'upsertNode', node: snapshotNode(record) };
+  }
+
+  #setVoxelObjectFrame(
+    diff: Extract<RenderDiff, { op: 'setVoxelObjectFrame' }>,
+  ): RenderProjectionInstruction {
+    const record = this.#require(diff.handle, 'setVoxelObjectFrame');
+    if (record.kind !== 'voxelObject') {
+      throw new RenderProjectionError(
+        `setVoxelObjectFrame: handle ${diff.handle} is not a voxel object`,
+      );
+    }
+    const asset = this.#voxelObjects.get(record.asset);
+    if (asset === undefined) {
+      throw new RenderProjectionError(`setVoxelObjectFrame: missing voxel object ${record.asset}`);
+    }
+    validateVoxelObjectFrame(asset.asset, diff.frame, 'setVoxelObjectFrame.frame');
+    record.frame = diff.frame;
+    record.instance = { ...record.instance, frame: diff.frame };
+    record.meshPayload = clone(asset.asset.meshes[asset.asset.frames[diff.frame]!.mesh]!.payload);
+    return { op: 'upsertNode', node: snapshotNode(record) };
+  }
+
   #createSprite(diff: Extract<RenderDiff, { op: 'createSprite' }>): RenderProjectionInstruction {
     this.#ensureFree(diff.handle, 'createSprite');
     const parent = this.#parentHandle(diff.parent, 'createSprite.parent');
@@ -751,6 +897,9 @@ export class RenderProjection {
     for (const [id, record] of this.#animatedMeshes) {
       projection.#animatedMeshes.set(id, { asset: clone(record.asset), refCount: record.refCount });
     }
+    for (const [id, record] of this.#voxelObjects) {
+      projection.#voxelObjects.set(id, { asset: clone(record.asset), refCount: record.refCount });
+    }
     return projection;
   }
 
@@ -762,6 +911,7 @@ export class RenderProjection {
     replaceMap(this.#spriteAtlases, projection.#spriteAtlases);
     replaceMap(this.#staticMeshes, projection.#staticMeshes);
     replaceMap(this.#animatedMeshes, projection.#animatedMeshes);
+    replaceMap(this.#voxelObjects, projection.#voxelObjects);
   }
 
   #stageFrame(frame: RenderFrameDiff): {
@@ -840,6 +990,15 @@ function snapshotNode(record: NodeRecord): RenderProjectionNode {
       playback: clone(record.playback),
     };
   }
+  if (record.kind === 'voxelObject') {
+    return {
+      ...base,
+      kind: 'voxelObject',
+      asset: record.asset,
+      instance: clone(record.instance),
+      frame: record.frame,
+    };
+  }
   return {
     ...base,
     kind: 'sprite',
@@ -878,6 +1037,79 @@ function validateAnimatedMeshAsset(asset: AnimatedMeshAsset, ctx: string): void 
     }
     materialSlots.add(slot);
   }
+}
+
+function validateVoxelObjectAsset(asset: VoxelObjectRenderAsset, ctx: string): void {
+  if (asset.asset.length === 0 || asset.contentHash.length === 0) {
+    throw new RenderProjectionError(`${ctx} asset and contentHash must be non-empty`);
+  }
+  if (asset.meshes.length === 0 || asset.meshes.length > 8_193) {
+    throw new RenderProjectionError(`${ctx}.meshes must contain 1..=8193 entries`);
+  }
+  if (asset.frames.length === 0 || asset.frames.length > 8_193) {
+    throw new RenderProjectionError(`${ctx}.frames must contain 1..=8193 entries`);
+  }
+  const slots = new Set<number>();
+  asset.materialSlots.forEach((binding, index) => {
+    const slot = requireNonNegativeInteger(binding.slot, `${ctx}.materialSlots[${index}].slot`);
+    if (slots.has(slot)) {
+      throw new RenderProjectionError(`${ctx}.materialSlots duplicate slot ${slot}`);
+    }
+    slots.add(slot);
+  });
+  let totalVertices = 0;
+  let totalIndices = 0;
+  asset.meshes.forEach((mesh, index) => {
+    validateMeshPayload(mesh.payload, `${ctx}.meshes[${index}].payload`);
+    totalVertices += mesh.payload.layout.vertexCount;
+    totalIndices += mesh.payload.layout.indexCount;
+    mesh.payload.groups.forEach((group, groupIndex) => {
+      if (!slots.has(group.materialSlot)) {
+        throw new RenderProjectionError(
+          `${ctx}.meshes[${index}].payload.groups[${groupIndex}] uses unbound slot ${group.materialSlot}`,
+        );
+      }
+    });
+  });
+  if (totalVertices > 8_000_000 || totalIndices > 12_000_000) {
+    throw new RenderProjectionError(`${ctx}.meshes exceeds aggregate vertex/index work limits`);
+  }
+  const frameIds = new Set<string>();
+  asset.frames.forEach((frame, index) => {
+    if (frame.id.length === 0 || frameIds.has(frame.id)) {
+      throw new RenderProjectionError(`${ctx}.frames[${index}].id must be non-empty and unique`);
+    }
+    frameIds.add(frame.id);
+    validateVoxelObjectFrame(asset, index, `${ctx}.frames[${index}]`);
+  });
+}
+
+function validateVoxelObjectFrame(asset: VoxelObjectRenderAsset, frame: number, ctx: string): void {
+  const index = requireNonNegativeInteger(frame, ctx);
+  const descriptor = asset.frames[index];
+  if (descriptor === undefined || asset.meshes[descriptor.mesh] === undefined) {
+    throw new RenderProjectionError(
+      `${ctx} ${index} is outside voxel object ${asset.asset} frame resources`,
+    );
+  }
+}
+
+function validateVoxelObjectOverrides(
+  asset: VoxelObjectRenderAsset,
+  overrides: VoxelObjectInstanceDescriptor['materialOverrides'],
+  ctx: string,
+): void {
+  const slots = new Set(asset.materialSlots.map((binding) => binding.slot));
+  const seen = new Set<number>();
+  overrides.forEach((binding, index) => {
+    if (seen.has(binding.slot)) {
+      throw new RenderProjectionError(`${ctx}[${index}] duplicates slot ${binding.slot}`);
+    }
+    if (!slots.has(binding.slot)) {
+      throw new RenderProjectionError(`${ctx}[${index}] uses unbound slot ${binding.slot}`);
+    }
+    seen.add(binding.slot);
+  });
 }
 
 function validatePlaybackCommand(
@@ -1011,6 +1243,7 @@ function validateOperationHandles(diff: RenderDiff): void {
     case 'createLight':
     case 'createStaticMeshInstance':
     case 'createAnimatedMeshInstance':
+    case 'createVoxelObjectInstance':
     case 'createSprite':
       requireSafeHandle(diff.handle, `${diff.op}.handle`);
       if (diff.parent !== null) requireSafeHandle(diff.parent, `${diff.op}.parent`);
@@ -1021,6 +1254,7 @@ function validateOperationHandles(diff: RenderDiff): void {
     case 'updateLight':
     case 'setMaterialInstanceParameters':
     case 'setAnimatedMeshPlayback':
+    case 'setVoxelObjectFrame':
     case 'updateSprite':
       requireSafeHandle(diff.handle, `${diff.op}.handle`);
       return;
@@ -1029,6 +1263,8 @@ function validateOperationHandles(diff: RenderDiff): void {
     case 'defineSpriteAtlas':
     case 'defineStaticMesh':
     case 'defineAnimatedMesh':
+    case 'defineVoxelObject':
+    case 'releaseVoxelObject':
       return;
   }
 }
