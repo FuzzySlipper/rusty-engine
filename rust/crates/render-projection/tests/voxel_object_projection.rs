@@ -12,7 +12,10 @@ use voxel_asset::{
     VoxelObjectProvenanceKind, VoxelRepresentation, VoxelRepresentationKind, VoxelSparseRun,
     VOXEL_OBJECT_SCHEMA_VERSION,
 };
-use voxel_object_runtime::{admit_voxel_object, VoxelObjectRuntimeLimits};
+use voxel_object_runtime::{
+    admit_voxel_object, VoxelObjectLoopMode, VoxelObjectPlaybackStatus, VoxelObjectPlayer,
+    VoxelObjectRuntimeLimits,
+};
 
 #[test]
 fn frame_only_projection_reuses_cached_resource_without_materialization() {
@@ -56,6 +59,32 @@ fn frame_only_projection_reuses_cached_resource_without_materialization() {
         released.frame.ops[1],
         RenderDiff::ReleaseVoxelObject { .. }
     ));
+}
+
+#[test]
+fn scrubbed_player_frame_drives_renderer_neutral_presentation_only() {
+    let object = admitted();
+    let mut projector = VoxelObjectRenderProjector::new();
+    let mut instances = vec![instance(&object, 0)];
+    projector.project(&instances, &materials()).unwrap();
+
+    let mut player = VoxelObjectPlayer::new();
+    player
+        .scrub(&object, "walk", 1, VoxelObjectLoopMode::Repeat)
+        .unwrap();
+    let sample = player.sample_at(&object, 8_000_000).unwrap();
+    assert_eq!(sample.status, VoxelObjectPlaybackStatus::Paused);
+    assert_eq!(sample.clip_frame, Some(1));
+    assert_eq!(sample.frame, 2);
+
+    instances[0].frame = sample.frame;
+    let presented = projector.project(&instances, &materials()).unwrap();
+    assert_eq!(presented.frame.ops.len(), 1);
+    assert!(matches!(
+        presented.frame.ops[0],
+        RenderDiff::SetVoxelObjectFrame { frame: 2, .. }
+    ));
+    assert!(presented.readout.materialized_resources.is_empty());
 }
 
 #[test]

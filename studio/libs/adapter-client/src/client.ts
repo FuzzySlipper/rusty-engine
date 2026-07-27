@@ -19,6 +19,7 @@ import {
   type VoxelObjectConversionDiscardedResponse,
   type VoxelObjectConversionPreparedResponse,
   type VoxelObjectConversionPreviewedResponse,
+  type VoxelObjectInstancePreviewedResponse,
   type VoxelObjectSourceInspectedResponse,
   type VoxelAssetFileExportedResponse,
   type VoxelHistoryRevertDiscardedResponse,
@@ -431,6 +432,15 @@ export class StudioAdapterClient {
     input: RequestInput<'attachVoxelObjectInstance'>,
   ): Promise<ProjectMutationAppliedResponse> {
     return this.#mutation('attachVoxelObjectInstance', input);
+  }
+
+  previewVoxelObjectInstance(
+    input: RequestInput<'previewVoxelObjectInstance'>,
+  ): Promise<VoxelObjectInstancePreviewedResponse> {
+    return this.#exchange(
+      this.#request('previewVoxelObjectInstance', input),
+      'voxelObjectInstancePreviewed',
+    );
   }
 
   closeProject(): Promise<ProjectClosedResponse> {

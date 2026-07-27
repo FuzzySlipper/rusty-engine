@@ -124,6 +124,36 @@ fn caller_driven_play_pause_resume_stop_and_reload_are_explicit_time() {
 }
 
 #[test]
+fn scrub_selects_an_exact_clip_frame_and_resume_uses_explicit_time() {
+    let admitted = admit_voxel_object(&object(), VoxelObjectRuntimeLimits::default()).unwrap();
+    let mut player = VoxelObjectPlayer::new();
+
+    player
+        .scrub(&admitted, "walk", 1, VoxelObjectLoopMode::Repeat)
+        .unwrap();
+    let scrubbed = player.sample_at(&admitted, 9_000_000).unwrap();
+    assert_eq!(scrubbed.status, VoxelObjectPlaybackStatus::Paused);
+    assert_eq!(scrubbed.clip_frame, Some(1));
+    assert_eq!(scrubbed.frame, 3);
+    assert_eq!(scrubbed.elapsed_micros, 100_000);
+
+    player.resume(9_000_000).unwrap();
+    let resumed = player.sample_at(&admitted, 9_100_000).unwrap();
+    assert_eq!(resumed.status, VoxelObjectPlaybackStatus::Playing);
+    assert_eq!(resumed.clip_frame, Some(0));
+    assert_eq!(resumed.frame, 2);
+
+    assert!(matches!(
+        player.scrub(&admitted, "walk", 99, VoxelObjectLoopMode::Repeat),
+        Err(VoxelObjectPlayerError::ClipFrameOutOfRange {
+            frame: 99,
+            frame_count: 2,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn once_repeat_ping_pong_speed_and_invalid_clips_are_deterministic() {
     let mut source = object_source();
     let walk = source

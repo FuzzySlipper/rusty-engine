@@ -298,7 +298,7 @@ project schema, trusted root, compatibility, and publication policy while compos
 `voxel-annotation`, `voxel-convert`, `content-store`, `engine-inspector`, and render-projection
 mechanisms.
 
-Protocol 6 executes one named request at a time. Reads rebuild canonical owner views. Mutations carry
+Protocol 8 executes one named request at a time. Reads rebuild canonical owner views. Mutations carry
 the accepted project hash plus narrower asset/revision/layer/plan guards, stage a complete candidate,
 rerun downstream admission and renderer projection, atomically publish the project file, and return
 a canonical reread. Voxel history and annotation documents are durable project data; conversion
@@ -311,6 +311,15 @@ Trusted host voxel/mesh/GLB/license paths are explicit, bounded, symlink-checked
 replacement is compare-and-swap guarded. Primitive/template generation, annotation semantics,
 conversion material policy, and deterministic environment generation remain in their Rust owners.
 Rejected or stale operations publish no bytes.
+
+Applied voxel-object animation is a disposable presentation session, not another authoring model.
+Studio selects a canonical instance and sends closed scrub/play/pause/sample/stop commands with an
+explicit timestamp. The project-owned adapter retains `VoxelObjectPlayer`; admitted Rust clip
+durations select the runtime frame, and render projection returns a complete neutral frame. Each
+readout names the saved initial frame separately from the transient posture and sampled frame.
+Neither the player posture nor the browser sampling cadence enters project or object bytes, and
+open, reread, close, and durable mutation discard the session. Conversion-candidate playback remains
+a separate pre-apply inspection path.
 
 Static and animated mesh appearance follows the same authority path. The downstream Rust adapter
 validates the selected asset and animation clip, then projects typed resource descriptors,

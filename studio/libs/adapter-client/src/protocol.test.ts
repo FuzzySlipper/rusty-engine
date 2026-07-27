@@ -307,7 +307,7 @@ test('protocol 7 closes history, file, and texture-policy response families', ()
   );
 });
 
-test('protocol 7 keeps voxel-object inspection, candidate projection, and durable readouts closed', async () => {
+test('protocol 8 keeps voxel-object candidates, applied playback, and durable readouts closed', async () => {
   const inspected = voxelObjectSourceInspected('object-source-1');
   assert.equal(decodeStudioAdapterResponse(inspected).type, 'voxelObjectSourceInspected');
   assert.throws(
@@ -343,6 +343,19 @@ test('protocol 7 keeps voxel-object inspection, candidate projection, and durabl
   };
   assert.throws(() => decodeStudioAdapterResponse(project), /updateCallback.*unknown/);
 
+  const playback = voxelObjectInstancePreviewed('object-playback-1');
+  const decodedPlayback = decodeStudioAdapterResponse(playback);
+  assert.equal(decodedPlayback.type, 'voxelObjectInstancePreviewed');
+  assert.equal(decodedPlayback.playback.durableFrame.kind, 'clip');
+  assert.equal(decodedPlayback.playback.runtimeFrame, 2);
+  assert.throws(
+    () => decodeStudioAdapterResponse({
+      ...playback,
+      playback: { ...playback.playback, browserTimer: 17 },
+    }),
+    /browserTimer.*unknown/,
+  );
+
   const transport = new RecordingTransport((request) => {
     if (request.type === 'inspectVoxelObjectSource') {
       assert.equal(request.sourceKind, 'animated');
@@ -361,6 +374,15 @@ test('protocol 7 keeps voxel-object inspection, candidate projection, and durabl
         projectionReadout: response.projectionReadout,
       };
     }
+    if (request.type === 'previewVoxelObjectInstance') {
+      assert.deepEqual(request.command, {
+        kind: 'scrub',
+        clipId: 'clip/walk-1',
+        clipFrame: 0,
+        loopMode: 'repeat',
+      });
+      return voxelObjectInstancePreviewed(request.requestId);
+    }
     throw new Error(`unexpected ${request.type}`);
   });
   const client = new StudioAdapterClient(transport);
@@ -376,8 +398,20 @@ test('protocol 7 keeps voxel-object inspection, candidate projection, and durabl
     frame: { kind: 'clip', clipId: 'clip/walk-1', frameIndex: 1 },
     maxPreviewSamples: 128,
   });
+  await client.previewVoxelObjectInstance({
+    expectedProjectHash: 'project-hash',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    nowMicroseconds: 1_000_000,
+    command: {
+      kind: 'scrub',
+      clipId: 'clip/walk-1',
+      clipFrame: 0,
+      loopMode: 'repeat',
+    },
+  });
   assert.deepEqual(transport.requests.map((request) => request.type), [
-    'inspectVoxelObjectSource', 'previewVoxelObjectConversion',
+    'inspectVoxelObjectSource', 'previewVoxelObjectConversion', 'previewVoxelObjectInstance',
   ]);
 });
 
@@ -865,6 +899,33 @@ function voxelObjectConversionPrepared(requestId: string) {
       }],
     },
     projectionReadout: emptyProjectionReadout(),
+  };
+}
+
+function voxelObjectInstancePreviewed(requestId: string) {
+  const candidate = voxelObjectConversionPrepared(requestId);
+  return {
+    type: 'voxelObjectInstancePreviewed',
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+    requestId,
+    playback: {
+      sceneId: 'scene/loading-bay',
+      instanceId: 'character-one',
+      voxelObjectAssetId: 'voxel-object/character',
+      projectHash: 'project-hash',
+      objectContentHash: 'sha256:output',
+      durableFrame: { kind: 'clip', clipId: 'clip/walk-1', frameIndex: 1 },
+      status: 'paused',
+      clipId: 'clip/walk-1',
+      loopMode: 'repeat',
+      rate: { numerator: 1, denominator: 1 },
+      elapsedMicroseconds: 0,
+      runtimeFrame: 2,
+      clipFrame: 0,
+      ended: false,
+    },
+    projection: candidate.projection,
+    projectionReadout: candidate.projectionReadout,
   };
 }
 

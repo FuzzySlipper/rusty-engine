@@ -161,6 +161,40 @@ export type VoxelObjectFrameSelection =
   | { readonly kind: 'default' }
   | { readonly kind: 'clip'; readonly clipId: string; readonly frameIndex: number };
 
+export type VoxelObjectLoopMode = 'once' | 'repeat' | 'pingPong';
+
+export type VoxelObjectPlaybackCommand =
+  | {
+      readonly kind: 'scrub';
+      readonly clipId: string;
+      readonly clipFrame: number;
+      readonly loopMode: VoxelObjectLoopMode;
+    }
+  | { readonly kind: 'play' }
+  | { readonly kind: 'pause' }
+  | { readonly kind: 'sample' }
+  | { readonly kind: 'stop' };
+
+export interface VoxelObjectInstancePlaybackReadout {
+  readonly sceneId: string;
+  readonly instanceId: string;
+  readonly voxelObjectAssetId: string;
+  readonly projectHash: string;
+  readonly objectContentHash: string;
+  readonly durableFrame: VoxelObjectFrameSelection;
+  readonly status: 'stopped' | 'playing' | 'paused';
+  readonly clipId: string | null;
+  readonly loopMode: VoxelObjectLoopMode;
+  readonly rate: {
+    readonly numerator: number;
+    readonly denominator: number;
+  };
+  readonly elapsedMicroseconds: number;
+  readonly runtimeFrame: number;
+  readonly clipFrame: number | null;
+  readonly ended: boolean;
+}
+
 export interface VoxelObjectConvertedFrameReadout {
   readonly storedFrameIndex: number;
   readonly sourceTimestampsMicroseconds: readonly number[];
@@ -414,6 +448,26 @@ export function validateVoxelObjectFrameSelection(input: unknown, path: string):
     return;
   }
   throw new TypeError(`${path}.kind is not a closed voxel-object frame selection`);
+}
+
+export function validateVoxelObjectInstancePlaybackReadout(input: unknown, path: string): void {
+  const value = closedObject(input, path, [
+    'sceneId', 'instanceId', 'voxelObjectAssetId', 'projectHash', 'objectContentHash',
+    'durableFrame', 'status', 'clipId', 'loopMode', 'rate', 'elapsedMicroseconds',
+    'runtimeFrame', 'clipFrame', 'ended',
+  ]);
+  strings(value, path, [
+    'sceneId', 'instanceId', 'voxelObjectAssetId', 'projectHash', 'objectContentHash',
+  ]);
+  validateVoxelObjectFrameSelection(value['durableFrame'], `${path}.durableFrame`);
+  enumValue(value['status'], `${path}.status`, ['stopped', 'playing', 'paused']);
+  nullableString(value['clipId'], `${path}.clipId`);
+  enumValue(value['loopMode'], `${path}.loopMode`, ['once', 'repeat', 'pingPong']);
+  const rate = closedObject(value['rate'], `${path}.rate`, ['numerator', 'denominator']);
+  integers(rate, `${path}.rate`, ['numerator', 'denominator']);
+  integers(value, path, ['elapsedMicroseconds', 'runtimeFrame']);
+  nullableInteger(value['clipFrame'], `${path}.clipFrame`);
+  boolean(value['ended'], `${path}.ended`);
 }
 
 function validateMeshSourceRef(input: unknown, path: string): void {

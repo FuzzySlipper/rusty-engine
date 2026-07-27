@@ -16,6 +16,7 @@ import type {
   VoxelObjectClipConversionRequest,
   VoxelObjectConversionSettings,
   VoxelObjectFrameSelection,
+  VoxelObjectPlaybackCommand,
   VoxelObjectSourceClipReadout,
   VoxelObjectSourceKind,
   VoxelMaterialBinding,
@@ -95,7 +96,8 @@ export type VoxelEditorAction =
   | { readonly kind: 'previewObjectFrame'; readonly planId: string; readonly expectedPlanHash: string; readonly frame: VoxelObjectFrameSelection; readonly maxPreviewSamples: number }
   | { readonly kind: 'applyObjectConversion'; readonly planId: string; readonly expectedPlanHash: string; readonly expectedOutputHash: string }
   | { readonly kind: 'discardObjectConversion'; readonly planId: string }
-  | { readonly kind: 'attachObjectInstance'; readonly sceneId: string; readonly instance: StoredVoxelObjectInstance };
+  | { readonly kind: 'attachObjectInstance'; readonly sceneId: string; readonly instance: StoredVoxelObjectInstance }
+  | { readonly kind: 'previewObjectInstance'; readonly sceneId: string; readonly instanceId: string; readonly nowMicroseconds: number; readonly command: VoxelObjectPlaybackCommand };
 
 export interface VoxelObjectClipControlInput {
   readonly selectedSourceClipNames: readonly string[];

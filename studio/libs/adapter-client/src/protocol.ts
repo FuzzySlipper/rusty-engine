@@ -39,6 +39,7 @@ import {
   validateVoxelObjectAuthoringReadout,
   validateVoxelObjectConversionPlan,
   validateVoxelObjectConversionPreview,
+  validateVoxelObjectInstancePlaybackReadout,
   validateVoxelObjectSourceInspection,
   type StoredVoxelObjectInstance,
   type VoxelObjectAuthoringReadout,
@@ -47,6 +48,8 @@ import {
   type VoxelObjectConversionPreview,
   type VoxelObjectConversionSettings,
   type VoxelObjectFrameSelection,
+  type VoxelObjectInstancePlaybackReadout,
+  type VoxelObjectPlaybackCommand,
   type VoxelObjectSourceInspection,
   type VoxelObjectSourceKind,
 } from './voxel-object-protocol.js';
@@ -54,7 +57,7 @@ import {
 export type * from './voxel-protocol.js';
 export type * from './voxel-object-protocol.js';
 
-export const STUDIO_ADAPTER_PROTOCOL_VERSION = 7 as const;
+export const STUDIO_ADAPTER_PROTOCOL_VERSION = 8 as const;
 export const MAX_STUDIO_ADAPTER_REQUEST_BYTES = 256 * 1024;
 export const MAX_STUDIO_ADAPTER_RESPONSE_BYTES = 32 * 1024 * 1024;
 
@@ -116,6 +119,7 @@ export type StudioAdapterRequest =
   | ApplyVoxelObjectConversionRequest
   | DiscardVoxelObjectConversionRequest
   | AttachVoxelObjectInstanceRequest
+  | PreviewVoxelObjectInstanceRequest
   | CloseProjectRequest;
 
 interface RequestHeader {
@@ -629,6 +633,15 @@ export interface AttachVoxelObjectInstanceRequest extends RequestHeader {
   readonly instance: StoredVoxelObjectInstance;
 }
 
+export interface PreviewVoxelObjectInstanceRequest extends RequestHeader {
+  readonly type: 'previewVoxelObjectInstance';
+  readonly expectedProjectHash: string;
+  readonly sceneId: string;
+  readonly instanceId: string;
+  readonly nowMicroseconds: number;
+  readonly command: VoxelObjectPlaybackCommand;
+}
+
 export interface CloseProjectRequest extends RequestHeader {
   readonly type: 'closeProject';
 }
@@ -649,6 +662,7 @@ export type StudioAdapterResponse =
   | VoxelObjectConversionPreparedResponse
   | VoxelObjectConversionPreviewedResponse
   | VoxelObjectConversionDiscardedResponse
+  | VoxelObjectInstancePreviewedResponse
   | AssetImportPreparedResponse
   | AssetImportDiscardedResponse
   | VoxelHistoryRevertPreparedResponse
@@ -738,6 +752,13 @@ export interface VoxelObjectConversionPreviewedResponse extends ResponseHeader {
 export interface VoxelObjectConversionDiscardedResponse extends ResponseHeader {
   readonly type: 'voxelObjectConversionDiscarded';
   readonly planId: string;
+  readonly projection: RenderFrameDiff;
+  readonly projectionReadout: ProjectionReadout;
+}
+
+export interface VoxelObjectInstancePreviewedResponse extends ResponseHeader {
+  readonly type: 'voxelObjectInstancePreviewed';
+  readonly playback: VoxelObjectInstancePlaybackReadout;
   readonly projection: RenderFrameDiff;
   readonly projectionReadout: ProjectionReadout;
 }
@@ -845,6 +866,7 @@ export const STUDIO_ADAPTER_OPERATIONS = [
   'applyVoxelObjectConversion',
   'discardVoxelObjectConversion',
   'attachVoxelObjectInstance',
+  'previewVoxelObjectInstance',
   'closeProject',
 ] as const;
 
@@ -1242,6 +1264,17 @@ export function decodeStudioAdapterResponse(input: unknown): StudioAdapterRespon
       completeProjection(value, '$');
       return input as VoxelObjectConversionDiscardedResponse;
     }
+    case 'voxelObjectInstancePreviewed': {
+      const value = record(input, '$', [
+        'type', 'protocolVersion', 'requestId', 'playback', 'projection',
+        'projectionReadout',
+      ]);
+      responseHeader(value);
+      voxelContract('$.playback', () =>
+        validateVoxelObjectInstancePlaybackReadout(value['playback'], '$.playback'));
+      completeProjection(value, '$');
+      return input as VoxelObjectInstancePreviewedResponse;
+    }
     case 'assetImportPrepared': {
       const value = record(input, '$', [
         'type', 'protocolVersion', 'requestId', 'plan',
@@ -1360,7 +1393,7 @@ function adapterDescription(input: unknown, path: string): void {
   );
   const expected = STUDIO_ADAPTER_OPERATIONS;
   if (operations.length !== expected.length || operations.some((entry, index) => entry !== expected[index])) {
-    fail(`${path}.operations`, 'must name the protocol 7 operation set in order');
+    fail(`${path}.operations`, 'must name the protocol 8 operation set in order');
   }
 }
 

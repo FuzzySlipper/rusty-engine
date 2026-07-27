@@ -30,6 +30,10 @@ import type {
   VoxelObjectConversionPlan,
   VoxelObjectConversionPreview,
   VoxelObjectFrameSelection,
+  VoxelObjectInstancePlaybackReadout,
+  VoxelObjectInstanceReadout,
+  VoxelObjectLoopMode,
+  VoxelObjectPlaybackCommand,
   VoxelObjectSourceInspection,
   VoxelPickReadout,
   VoxelReadout,
@@ -68,6 +72,7 @@ export class VoxelEditorComponent {
     readonly plan: VoxelObjectConversionPlan;
     readonly preview: VoxelObjectConversionPreview;
   } | null>(null);
+  readonly objectPlayback = input<VoxelObjectInstancePlaybackReadout | null>(null);
   readonly historyPreview = input<VoxelHistoryRevertPreview | null>(null);
   readonly busy = input(false);
   readonly chooseHostPath = input<VoxelHostPathChooser>(async () => null);
@@ -78,8 +83,10 @@ export class VoxelEditorComponent {
   readonly brushPreview = signal(false);
   readonly formError = signal<string | null>(null);
   readonly objectPlaying = signal(false);
+  readonly appliedObjectPlaying = signal(false);
   readonly #destroyRef = inject(DestroyRef);
   #playbackTimer: ReturnType<typeof setTimeout> | null = null;
+  #appliedPlaybackTimer: ReturnType<typeof setTimeout> | null = null;
 
   selectedAssetId = '';
   selectedInstanceId = '';
@@ -198,6 +205,10 @@ export class VoxelEditorComponent {
   objectInstanceScale = [1, 1, 1];
   objectInstanceClip = '';
   objectInstanceFrame = 0;
+  appliedObjectInstanceId = '';
+  appliedObjectClip = '';
+  appliedObjectFrame = 0;
+  appliedObjectLoopMode: VoxelObjectLoopMode = 'repeat';
 
   constructor() {
     effect(() => {
@@ -224,7 +235,25 @@ export class VoxelEditorComponent {
       this.objectPreviewClip = selection.clipId;
       this.objectPreviewFrame = selection.frameIndex;
     });
-    this.#destroyRef.onDestroy(() => this.pauseObjectPreview());
+    effect(() => {
+      const playback = this.objectPlayback();
+      if (playback === null || playback.instanceId !== this.appliedObjectInstanceId) {
+        this.appliedObjectPlaying.set(false);
+        this.#clearAppliedObjectPlaybackTimer();
+        return;
+      }
+      if (playback.clipId !== null) this.appliedObjectClip = playback.clipId;
+      if (playback.clipFrame !== null) this.appliedObjectFrame = playback.clipFrame;
+      this.appliedObjectLoopMode = playback.loopMode;
+      this.appliedObjectPlaying.set(playback.status === 'playing');
+      if (playback.status === 'playing') this.#scheduleAppliedObjectPlayback();
+      else this.#clearAppliedObjectPlaybackTimer();
+    });
+    this.#destroyRef.onDestroy(() => {
+      this.pauseObjectPreview();
+      this.appliedObjectPlaying.set(false);
+      this.#clearAppliedObjectPlaybackTimer();
+    });
   }
 
   setTab(tab: EditorTab): void {
@@ -935,6 +964,103 @@ export class VoxelEditorComponent {
     return this.objectAuthoring()?.assets ?? [];
   }
 
+  objectInstances(): readonly VoxelObjectInstanceReadout[] {
+    return this.objectAuthoring()?.instances ?? [];
+  }
+
+  selectedAppliedObjectInstance(): VoxelObjectInstanceReadout | null {
+    return this.objectInstances().find(
+      (entry) => entry.instance.instanceId === this.appliedObjectInstanceId,
+    ) ?? null;
+  }
+
+  selectedAppliedObjectAsset(): VoxelObjectAssetAuthoringReadout | null {
+    const instance = this.selectedAppliedObjectInstance();
+    if (instance === null) return null;
+    return this.objectAssets().find(
+      (asset) => asset.assetId === instance.instance.voxelObjectAssetId,
+    ) ?? null;
+  }
+
+  chooseAppliedObjectInstance(instanceId: string): void {
+    this.appliedObjectPlaying.set(false);
+    this.#clearAppliedObjectPlaybackTimer();
+    this.appliedObjectInstanceId = instanceId;
+    const asset = this.selectedAppliedObjectAsset();
+    this.appliedObjectClip = asset?.defaultClip ?? asset?.clips[0]?.clipId ?? '';
+    this.appliedObjectFrame = 0;
+    if (this.appliedObjectClip !== '') this.scrubAppliedObjectFrame(0);
+  }
+
+  chooseAppliedObjectClip(clipId: string): void {
+    this.appliedObjectClip = clipId;
+    this.appliedObjectFrame = 0;
+    this.scrubAppliedObjectFrame(0);
+  }
+
+  selectedAppliedObjectFrameMax(): number {
+    const clip = this.selectedAppliedObjectAsset()?.clips.find(
+      (candidate) => candidate.clipId === this.appliedObjectClip,
+    );
+    return Math.max(0, (clip?.frames.length ?? 1) - 1);
+  }
+
+  scrubAppliedObjectFrame(frameIndex = this.appliedObjectFrame): void {
+    const entry = this.selectedAppliedObjectInstance();
+    const clip = this.selectedAppliedObjectAsset()?.clips.find(
+      (candidate) => candidate.clipId === this.appliedObjectClip,
+    );
+    if (entry === null || clip === undefined) return;
+    this.appliedObjectPlaying.set(false);
+    this.#clearAppliedObjectPlaybackTimer();
+    this.appliedObjectFrame = Math.min(
+      Math.max(0, integer(frameIndex, 0)),
+      Math.max(0, clip.frames.length - 1),
+    );
+    this.#emitAppliedObjectPlayback(entry, {
+      kind: 'scrub',
+      clipId: clip.clipId,
+      clipFrame: this.appliedObjectFrame,
+      loopMode: this.appliedObjectLoopMode,
+    });
+  }
+
+  playAppliedObjectPreview(): void {
+    const entry = this.selectedAppliedObjectInstance();
+    const playback = this.objectPlayback();
+    if (
+      entry === null
+      || playback?.instanceId !== entry.instance.instanceId
+      || playback.status !== 'paused'
+    ) return;
+    this.appliedObjectPlaying.set(true);
+    this.#emitAppliedObjectPlayback(entry, { kind: 'play' });
+    this.#scheduleAppliedObjectPlayback();
+  }
+
+  pauseAppliedObjectPreview(): void {
+    const entry = this.selectedAppliedObjectInstance();
+    const playback = this.objectPlayback();
+    this.appliedObjectPlaying.set(false);
+    this.#clearAppliedObjectPlaybackTimer();
+    if (entry === null || playback?.status !== 'playing') return;
+    this.#emitAppliedObjectPlayback(entry, { kind: 'pause' });
+  }
+
+  stopAppliedObjectPreview(): void {
+    const entry = this.selectedAppliedObjectInstance();
+    this.appliedObjectPlaying.set(false);
+    this.#clearAppliedObjectPlaybackTimer();
+    if (entry === null) return;
+    this.#emitAppliedObjectPlayback(entry, { kind: 'stop' });
+  }
+
+  durableObjectFrameLabel(frame: VoxelObjectFrameSelection): string {
+    return frame.kind === 'default'
+      ? 'default frame'
+      : `${frame.clipId} frame ${String(frame.frameIndex)}`;
+  }
+
   selectedObjectAsset(): VoxelObjectAssetAuthoringReadout | null {
     return this.objectAssets().find((asset) => asset.assetId === this.objectSelectedAssetId) ?? null;
   }
@@ -1050,6 +1176,37 @@ export class VoxelEditorComponent {
       this.previewObjectFrame((this.objectPreviewFrame + 1) % clip.storedFrameCount);
       this.#scheduleObjectPlayback();
     }, delay);
+  }
+
+  #scheduleAppliedObjectPlayback(): void {
+    if (!this.appliedObjectPlaying() || this.#appliedPlaybackTimer !== null) return;
+    this.#appliedPlaybackTimer = setTimeout(() => {
+      this.#appliedPlaybackTimer = null;
+      if (!this.appliedObjectPlaying()) return;
+      const entry = this.selectedAppliedObjectInstance();
+      if (entry !== null && !this.busy()) {
+        this.#emitAppliedObjectPlayback(entry, { kind: 'sample' });
+      }
+      this.#scheduleAppliedObjectPlayback();
+    }, 50);
+  }
+
+  #clearAppliedObjectPlaybackTimer(): void {
+    if (this.#appliedPlaybackTimer !== null) clearTimeout(this.#appliedPlaybackTimer);
+    this.#appliedPlaybackTimer = null;
+  }
+
+  #emitAppliedObjectPlayback(
+    entry: VoxelObjectInstanceReadout,
+    command: VoxelObjectPlaybackCommand,
+  ): void {
+    this.action.emit({
+      kind: 'previewObjectInstance',
+      sceneId: entry.sceneId,
+      instanceId: entry.instance.instanceId,
+      nowMicroseconds: Math.round(performance.now() * 1_000),
+      command,
+    });
   }
 
   applyConversion(): void {

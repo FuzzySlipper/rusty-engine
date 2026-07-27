@@ -1,6 +1,6 @@
 # Studio external-project adapter protocol
 
-Status: protocol 7 Engine surface implemented; downstream adapter adoption and exact-SHA acceptance pending
+Status: protocol 8 Engine surface implemented; downstream adapters adopt versions deliberately
 
 Rusty Engine Studio talks to one project-owned Rust adapter at a time through a bounded JSON-lines
 process. The adapter is a downstream composition root: it understands that project's layout,
@@ -13,7 +13,7 @@ against a real external checkout without turning that checkout into an ordinary 
 
 ## Closed protocol
 
-Every request carries `protocolVersion: 7` and a caller-selected `requestId`. Version 7 contains
+Every request carries `protocolVersion: 8` and a caller-selected `requestId`. Version 8 contains
 only these tagged request families:
 
 | Request | Purpose | Canonical authority |
@@ -44,13 +44,14 @@ only these tagged request families:
 | `inspectVoxelObjectSource` | Import a bounded static or animated GLB snapshot and expose Rust-derived hierarchy, groups, materials, UV sets, clips, channel targets, and classified diagnostics. | `voxel-convert`, project adapter |
 | `prepareVoxelObjectConversion`, `previewVoxelObjectConversion`, `applyVoxelObjectConversion`, `discardVoxelObjectConversion` | Retain one exact static-object or animated-flipbook candidate, select a stored frame for a complete shared-renderer projection, atomically install it, or explicitly discard it. | `voxel-convert`, `voxel-asset`, `voxel-object-runtime`, render projection, project adapter |
 | `attachVoxelObjectInstance` | Attach a transformed canonical object with one explicit default or clip-frame posture and material overrides. | downstream scene schema plus object admission/render projection |
+| `previewVoxelObjectInstance` | Scrub, play, pause, sample, or stop one applied instance through explicit caller time while returning its saved pose, disposable playback posture, and a complete renderer-neutral projection. | `voxel-object-runtime`, render projection, downstream project adapter |
 | `closeProject` | Release open-project and retained-projection state. | Project adapter host lifecycle |
 
 Responses are likewise a closed tagged union: `described`, `projectOpened`, `projectRead`,
 `entityTranslationApplied`, `projectMutationApplied`, `voxelPickValidated`, `voxelRead`,
 `voxelConversionPrepared`, `voxelConversionDiscarded`, `voxelObjectSourceInspected`,
 `voxelObjectConversionPrepared`, `voxelObjectConversionPreviewed`,
-`voxelObjectConversionDiscarded`, `voxelHistoryRevertPrepared`,
+`voxelObjectConversionDiscarded`, `voxelObjectInstancePreviewed`, `voxelHistoryRevertPrepared`,
 `voxelHistoryRevertDiscarded`, `voxelAssetFileExported`, `assetImportPrepared`,
 `assetImportDiscarded`, `projectClosed`, or `rejected`. There is no
 generic method string, command registry, arbitrary payload, provider lookup, RuntimeSession, or
@@ -90,7 +91,7 @@ definitions, transformed scene instances, `engine-spatial` collision/edit/histor
 projection. The shared frame tags voxel assets and instances for renderer hint routing; Rust still
 revalidates the ray, transformed instance, local cell, and face before an edit can use the result.
 
-Protocol 7 adds a required `voxelObjectAuthoring` readout beside the unchanged voxel-volume
+Protocol 7 added a required `voxelObjectAuthoring` readout beside the unchanged voxel-volume
 readout. It exposes canonical object grid/pivot, frame identities and timing, clips, palette and
 source-material bindings, provenance, and transformed scene instances after every open, mutation,
 and reread. It is an inspection DTO over project-owned Rust content, not a TypeScript object format.
@@ -101,6 +102,15 @@ actual `defineVoxelObject` resource and object-instance operations produced thro
 runtime/projection path. Angular may select a clip/frame and run a disposable play timer, but every
 scrub or timer tick names a Rust-stored frame and receives another complete owner-produced frame.
 It never meshes sample voxels, deforms animation, computes timing, or manufactures hashes.
+
+Protocol 8 keeps applied-instance playback separate from candidate inspection. Studio sends a
+closed playback command and an explicit monotonic microsecond timestamp. The downstream adapter
+retains one disposable `VoxelObjectPlayer`, while Rust resolves admitted clip durations, playback
+posture, runtime frame identity, and the complete shared-renderer projection. The response reports
+the durable default/clip-frame selection beside the transient sampled frame and exact project/object
+hashes. Scrub, play, pause, and timer samples do not publish the player posture, revise the project,
+or rewrite the voxel-object artifact; `stop` presents the durable pose again. TypeScript schedules
+only the next sampling request and never advances frame indices or interprets clip durations.
 
 ## Safety and atomicity
 
@@ -127,6 +137,9 @@ informative; apply succeeds only for the retained candidate and current optimist
 apply additionally pins the exact candidate output hash. Stale project/source/plan/output identity
 and an oversized renderer projection fail before publication. Object discard returns a newly
 composed canonical complete frame rather than asking Studio to restore browser-owned scene state.
+Applied voxel-object playback is private adapter-process state as well. Open, reread, close, or any
+durable project mutation clears it, so a reopened project begins from canonical bytes and may start
+a fresh transient preview without reconstructing hidden browser state.
 The adapter retains at most one prepared candidate of each kind; a successful replacement prepare
 evicts the older candidate, whose identity then rejects without mutation. Voxel history is encoded beside the
 embedded asset and reconstructed by a fresh process before query, undo, redo, or revert.

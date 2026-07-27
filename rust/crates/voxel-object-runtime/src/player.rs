@@ -49,7 +49,8 @@ pub enum VoxelObjectPlaybackStatus {
     Paused,
 }
 
-/// Durable caller-owned playback posture. No host or renderer clock is stored.
+/// Caller-owned playback posture. A caller may persist it or keep it transient;
+/// no host or renderer clock is stored.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct VoxelObjectPlaybackPosture {
@@ -86,12 +87,22 @@ pub struct VoxelObjectPlaybackReadout<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VoxelObjectPlayerError {
-    UnknownClip { clip: String },
+    UnknownClip {
+        clip: String,
+    },
+    ClipFrameOutOfRange {
+        clip: String,
+        frame: u32,
+        frame_count: u32,
+    },
     InvalidRate,
     InvalidPosture,
     NotPlaying,
     NotPaused,
-    TimeMovedBackwards { previous: u64, current: u64 },
+    TimeMovedBackwards {
+        previous: u64,
+        current: u64,
+    },
     TimeOverflow,
 }
 
@@ -99,6 +110,14 @@ impl std::fmt::Display for VoxelObjectPlayerError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownClip { clip } => write!(formatter, "unknown voxel-object clip `{clip}`"),
+            Self::ClipFrameOutOfRange {
+                clip,
+                frame,
+                frame_count,
+            } => write!(
+                formatter,
+                "voxel-object clip `{clip}` frame {frame} is outside 0..{frame_count}"
+            ),
             Self::InvalidRate => write!(formatter, "playback rate terms must be non-zero"),
             Self::InvalidPosture => {
                 write!(formatter, "playback posture is internally inconsistent")
@@ -170,6 +189,43 @@ impl VoxelObjectPlayer {
             elapsed_micros: 0,
         };
         self.playing_anchor_micros = Some(now_micros);
+        Ok(())
+    }
+
+    /// Selects an exact stored clip frame as a paused, normal-rate posture.
+    ///
+    /// This is the host-neutral scrub operation. The caller chooses the clip,
+    /// frame, and loop policy while the runtime derives the canonical elapsed
+    /// time from admitted frame durations. A later [`Self::resume`] continues
+    /// from the selected pose using the caller's explicit clock.
+    pub fn scrub(
+        &mut self,
+        object: &AdmittedVoxelObject,
+        clip: &str,
+        clip_frame: u32,
+        loop_mode: VoxelObjectLoopMode,
+    ) -> Result<(), VoxelObjectPlayerError> {
+        let clip_readout = require_clip(object, clip)?;
+        let frame_count = clip_readout.frame_indices.len() as u32;
+        if clip_frame >= frame_count {
+            return Err(VoxelObjectPlayerError::ClipFrameOutOfRange {
+                clip: clip.to_string(),
+                frame: clip_frame,
+                frame_count,
+            });
+        }
+        let elapsed_micros = clip_readout.frame_durations_micros[..clip_frame as usize]
+            .iter()
+            .try_fold(0_u64, |elapsed, duration| elapsed.checked_add(*duration))
+            .ok_or(VoxelObjectPlayerError::TimeOverflow)?;
+        self.posture = VoxelObjectPlaybackPosture {
+            status: VoxelObjectPlaybackStatus::Paused,
+            clip: Some(clip.to_string()),
+            loop_mode,
+            rate: VoxelObjectPlaybackRate::NORMAL,
+            elapsed_micros,
+        };
+        self.playing_anchor_micros = None;
         Ok(())
     }
 

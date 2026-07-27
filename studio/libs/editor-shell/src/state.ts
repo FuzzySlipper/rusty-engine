@@ -20,6 +20,7 @@ import type {
   VoxelObjectAuthoringReadout,
   VoxelObjectConversionPlan,
   VoxelObjectConversionPreview,
+  VoxelObjectInstancePlaybackReadout,
   VoxelObjectSourceInspection,
   VoxelPickReadout,
   VoxelReadout,
@@ -186,6 +187,7 @@ export interface VoxelWorkspaceState {
     readonly plan: VoxelObjectConversionPlan;
     readonly preview: VoxelObjectConversionPreview;
   } | null;
+  readonly objectPlayback: VoxelObjectInstancePlaybackReadout | null;
   readonly historyPreview: VoxelHistoryRevertPreview | null;
   readonly lastReceipt: ProjectMutationReceipt | null;
   readonly message: string;
@@ -231,6 +233,7 @@ function initialSnapshot(): StudioWorkspaceSnapshot {
       conversion: null,
       objectSourceInspection: null,
       objectConversion: null,
+      objectPlayback: null,
       historyPreview: null,
       lastReceipt: null,
       message: 'Select a rendered voxel instance to begin authoring.',
@@ -599,6 +602,7 @@ export class StudioWorkspaceStore {
           conversion: null,
           objectSourceInspection: null,
           objectConversion: null,
+          objectPlayback: null,
           historyPreview: null,
           lastReceipt: null,
           message: 'Select a rendered voxel instance to begin authoring.',
@@ -1278,6 +1282,33 @@ export class StudioWorkspaceStore {
           this.#acceptVoxelMutation(response);
           return;
         }
+        case 'previewObjectInstance': {
+          const response = await this.#client.previewVoxelObjectInstance({
+            expectedProjectHash,
+            sceneId: action.sceneId,
+            instanceId: action.instanceId,
+            nowMicroseconds: action.nowMicroseconds,
+            command: action.command,
+          });
+          if (!this.#objectResponseIsCurrent(
+            action,
+            expectedProjectHash,
+            projectScopeGeneration,
+            objectOperationGeneration,
+          )) return;
+          this.#acceptObjectProjection(response.projection, response.projectionReadout);
+          this.#patch({
+            operation: 'idle',
+            voxelWorkspace: {
+              ...this.#snapshot().voxelWorkspace,
+              objectPlayback: response.playback,
+              message: response.playback.status === 'stopped'
+                ? `Restored ${response.playback.instanceId} to its saved initial pose.`
+                : `${response.playback.status === 'playing' ? 'Playing' : 'Previewing'} ${response.playback.instanceId} · ${response.playback.clipId ?? 'saved pose'} frame ${String(response.playback.clipFrame ?? 0)}.`,
+            },
+          });
+          return;
+        }
       }
     } catch (error) {
       if (objectAction && !this.#objectResponseIsCurrent(
@@ -1554,6 +1585,7 @@ export class StudioWorkspaceStore {
         objectConversion: resetSelection
           ? null
           : current.voxelWorkspace.objectConversion,
+        objectPlayback: null,
       },
       assetWorkspace: {
         selectedAssetId: project.assetBrowser.assets.some(
@@ -1702,6 +1734,7 @@ function isVoxelObjectAction(action: VoxelEditorAction): boolean {
     case 'applyObjectConversion':
     case 'discardObjectConversion':
     case 'attachObjectInstance':
+    case 'previewObjectInstance':
       return true;
     default:
       return false;

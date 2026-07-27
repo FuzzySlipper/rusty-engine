@@ -395,6 +395,36 @@ test('voxel-object source, shared candidate frames, stale apply, explicit discar
     reopened.snapshot().authoringDocument?.voxelObjectAuthoring,
     store.snapshot().authoringDocument?.voxelObjectAuthoring,
   );
+
+  await reopened.runVoxelAction({
+    kind: 'previewObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    nowMicroseconds: 5_000_000,
+    command: {
+      kind: 'scrub',
+      clipId: 'clip/walk-1',
+      clipFrame: 0,
+      loopMode: 'repeat',
+    },
+  });
+  assert.equal(reopened.snapshot().voxelWorkspace.objectPlayback?.status, 'paused');
+  assert.deepEqual(
+    reopened.snapshot().voxelWorkspace.objectPlayback?.durableFrame,
+    { kind: 'clip', clipId: 'clip/walk-1', frameIndex: 1 },
+  );
+  assert.equal(reopened.snapshot().voxelWorkspace.objectPlayback?.clipFrame, 0);
+  assert.equal(reopened.snapshot().authoringDocument?.identity.projectHash, 'hash-before');
+
+  await reopened.runVoxelAction({
+    kind: 'previewObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    nowMicroseconds: 5_100_000,
+    command: { kind: 'play' },
+  });
+  assert.equal(reopened.snapshot().voxelWorkspace.objectPlayback?.status, 'playing');
+  assert.equal(reopened.snapshot().authoringDocument?.identity.projectHash, 'hash-before');
 });
 
 test('host-user camera and keyboard settings persist outside project authority and reload by project root', async () => {
@@ -515,6 +545,8 @@ class VoxelObjectFixtureClient {
   openedProjectId = 'loading-bay';
   previewRequestCount = 0;
   applyRequestCount = 0;
+  playbackStatus: 'stopped' | 'playing' | 'paused' = 'stopped';
+  playbackFrame = 0;
   #blockedInspection: {
     readonly promise: Promise<unknown>;
     readonly resolve: (response: unknown) => void;
@@ -664,6 +696,46 @@ class VoxelObjectFixtureClient {
         frameKind: 'clip',
       },
       project: this.#project(),
+    } as never);
+  }
+
+  previewVoxelObjectInstance(input: {
+    readonly command: {
+      readonly kind: string;
+      readonly clipFrame?: number;
+    };
+  }) {
+    if (input.command.kind === 'scrub') {
+      this.playbackStatus = 'paused';
+      this.playbackFrame = input.command.clipFrame ?? 0;
+    } else if (input.command.kind === 'play') {
+      this.playbackStatus = 'playing';
+    } else if (input.command.kind === 'pause') {
+      this.playbackStatus = 'paused';
+    } else if (input.command.kind === 'sample') {
+      this.playbackFrame = (this.playbackFrame + 1) % 2;
+    } else if (input.command.kind === 'stop') {
+      this.playbackStatus = 'stopped';
+    }
+    return Promise.resolve({
+      playback: {
+        sceneId: 'scene/loading-bay',
+        instanceId: 'character-one',
+        voxelObjectAssetId: 'voxel-object/character',
+        projectHash: 'hash-before',
+        objectContentHash: 'sha256:object',
+        durableFrame: { kind: 'clip', clipId: 'clip/walk-1', frameIndex: 1 },
+        status: this.playbackStatus,
+        clipId: this.playbackStatus === 'stopped' ? null : 'clip/walk-1',
+        loopMode: this.playbackStatus === 'stopped' ? 'once' : 'repeat',
+        rate: { numerator: 1, denominator: 1 },
+        elapsedMicroseconds: this.playbackFrame * 100_000,
+        runtimeFrame: this.playbackFrame + 1,
+        clipFrame: this.playbackStatus === 'stopped' ? null : this.playbackFrame,
+        ended: false,
+      },
+      projection: objectCandidateProjection(this.playbackFrame),
+      projectionReadout: projectionReadout(20 + this.playbackFrame),
     } as never);
   }
 
