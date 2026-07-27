@@ -22,12 +22,12 @@ Pinned source commit: `a431974330589761c9e35fc4f8a55996a1b5ee48`
 
 Task #6138 adapts the tracked Asha Studio tree at
 `709e1be780796ca1b802df764f0ec064bd271bc4` into the isolated first-party `studio/` workspace.
-[`studio/donor-inventory.tsv`](../studio/donor-inventory.tsv) freezes all 147 tracked donor paths,
-and [`studio/donor-surface-disposition.tsv`](../studio/donor-surface-disposition.tsv) records the
+[`studio/donor-inventory.tsv`](../../studio/donor-inventory.tsv) freezes all 147 tracked donor paths,
+and [`studio/donor-surface-disposition.tsv`](../../studio/donor-surface-disposition.tsv) records the
 preserve, adapt, consolidate, historical-only, or exclude decision for every substantial surface.
 The complete parity baseline, exact tree/hash metadata, license status, untracked exclusions, and
 successor adaptations live in
-[`studio-migration-contract.md`](studio-migration-contract.md).
+[`studio-migration-contract.md`](../studio-migration-contract.md).
 
 The successor retains product workflows through a closed project-owned Rust adapter and the shared
 renderer; it does not copy Asha RuntimeSession, bridge/provider topology, universal commands,
@@ -57,7 +57,7 @@ The owner-approved rendering campaign #6156 uses a newer, rendering-specific Ash
 presentation stack, its animation state-machine dependency, the full retained TypeScript
 projection/Three/host implementation, and all directly consumed fixtures, goldens, manifests, and
 licenses. The exact 134-file inventory and transformation contract are in
-[rendering-successor-contract.md](rendering-successor-contract.md).
+[rendering-successor-contract.md](../rendering-successor-contract.md).
 
 This second pin does not reopen Asha as an operational dependency and does not supersede the older
 crate extraction baseline above. It is a bounded source locator for rendering work completed after
@@ -162,7 +162,7 @@ collision is an optional direct movement resolver rather than a runtime bridge.
 ### M11R completeness and external-consumer closeout
 
 Task #6163 closes the difference between a capability-level audit and literal source accounting.
-[`../render/donor-disposition.tsv`](../render/donor-disposition.tsv) has exactly one row for every
+[`render/donor-disposition.tsv`](../../render/donor-disposition.tsv) has exactly one row for every
 path in the frozen 134-file inventory. Each row names a final `adapted` or `equivalent` treatment,
 one capability from the successor matrix, concrete local evidence, and the representation change.
 The strict checker compares both sorted path sets, rejects duplicate/missing donors and non-final
@@ -181,7 +181,7 @@ provider gate, isolated browser gate, public-package gate, and downstream produc
 replace the donor's compatibility manifests and evidence catalogs. They prove behavior and
 isolation without restoring generated protocols, replay certification, or a universal host facade.
 Operational commands and intentional limitations are in
-[rendering-operations.md](rendering-operations.md).
+[rendering-operations.md](../rendering-operations.md).
 
 ## M11S functionality-equivalence donor
 
@@ -383,7 +383,7 @@ fixture at the pinned revision. Every inspected path is byte-unchanged at curren
 `6fceda24c30d2c22694f232f03fe2115fb1a462046fbbf719a90eea10dc9af00`; Asha's bounded importer
 proves it contains 48 positions, 36 indices, two triangle groups, and two named material slots.
 
-The successor-owned boundary is documented in [voxel-asset-format.md](voxel-asset-format.md).
+The successor-owned boundary is documented in [voxel-asset-format.md](../topics/voxel/voxel-asset-format.md).
 `voxel-asset` retains only strict schema/grid/bounds/material/provenance values, bounded sparse +X
 runs, canonical SHA-256 bytes, classified source paths, and preflight conversion settings. The GLB
 parser remains in the separate offline tool; `game-host` depends only on the durable asset crate. A
@@ -464,5 +464,5 @@ canonical frames until the animated corpus supplies size and load measurements. 
 object graph, Assimp dependency, MCP/bridge services, editor session, and renderer are excluded.
 
 The current contract and task ordering are documented in
-[voxel-model-conversion.md](voxel-model-conversion.md). Future source/algorithm transfers, fixtures,
+[voxel-model-conversion.md](../topics/voxel/voxel-model-conversion.md). Future source/algorithm transfers, fixtures,
 licenses, replacements, and exclusions discovered by #6236-#6242 must be appended here as they land.

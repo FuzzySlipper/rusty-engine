@@ -13,8 +13,8 @@ reference consumer is
 proved the provider boundary in this repository.
 
 Historical product experiments and measurements live in
-[experiment-results.md](experiment-results.md). Completed migration and extraction decisions live
-in [migration-cluster-ledger.md](migration-cluster-ledger.md).
+[experiment-results.md](migration/experiment-results.md). Completed migration and extraction decisions live
+in [migration-cluster-ledger.md](migration/migration-cluster-ledger.md).
 
 ## Design priorities
 
@@ -136,7 +136,7 @@ rule.
 The smaller `core-*` and `svc-*` crates are normal workspace packages, not an origin-oriented donor
 layer. They provide narrow identities, coordinate types, time values, voxel storage, collision,
 pathfinding, deterministic RNG, and meshing. Their exact donor sources and adaptations are recorded
-in [donor-provenance.md](donor-provenance.md).
+in [donor-provenance.md](migration/donor-provenance.md).
 
 These crates expose mechanism rather than policy. For example, `svc-pathfinding` can propose a path
 but does not own AI intent; `svc-rng` creates a scoped deterministic stream but does not decide what
@@ -244,14 +244,14 @@ and animated frames are presentation data unless a caller explicitly selects a s
 frame or proxy. Shared `VoxelFrame` resolution keeps both formats canonical without making visible
 frame swaps into world edits, collision/navigation rebuilds, or an Engine scheduler. The current
 M12 design and ordered implementation slices are in
-[voxel-model-conversion.md](voxel-model-conversion.md).
+[voxel-model-conversion.md](topics/voxel/voxel-model-conversion.md).
 
 `voxel-convert` is an offline authoring/build tool. It accepts one explicit request and bounded GLB
 source, completes conversion and validation before touching its target, then atomically installs the
 canonical artifact. Runtime consumers depend on `voxel-asset`, not the converter or GLB parser.
 
 The checked request, licensed source, and canonical output remain here because they are provider
-verification fixtures, not demo content. See [voxel-asset-format.md](voxel-asset-format.md).
+verification fixtures, not demo content. See [voxel-asset-format.md](topics/voxel/voxel-asset-format.md).
 
 ## Studio authoring boundary
 
@@ -392,6 +392,6 @@ Studio proves user-visible behavior in its supported host. Chromium success does
 browser semantics into Engine requirements, while headless success does not replace real host tests
 for genuinely host-owned behavior.
 
-Source organization follows [rust-style.md](rust-style.md): one primary behavior owner or cohesive
+Source organization follows [rust-style.md](topics/development/rust-style.md): one primary behavior owner or cohesive
 type family per file, thin crate roots, and no one-type-per-file rule. File size is a review signal,
 not a CI policy.

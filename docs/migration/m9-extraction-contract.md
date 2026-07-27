@@ -22,7 +22,7 @@ readout, TypeScript source imports and package exports, fixture paths in code an
 documentation commands, local scripts, and GitHub Actions. During M9, the machine-readable snapshot
 was `scripts/standalone-dependency-baseline.json`, checked by `scripts/audit-standalone.mjs`. Those
 Node-era controls left with the product dependency graph; the current provider-only gate is
-[`scripts/audit-standalone.sh`](../scripts/audit-standalone.sh).
+[`scripts/audit-standalone.sh`](../../scripts/audit-standalone.sh).
 
 At the start of M9 the audit records 55 distinct operational references. Historical references are
 permitted only as exact normalized file-and-line records in the baseline; no whole document is
@@ -165,7 +165,7 @@ The pinned Asha repository has no root `LICENSE`/`NOTICE`, the accepted Cargo ma
 `license`, and the accepted TypeScript package manifests declare no `license`. M9 must not invent a
 license assertion. This is a same-owner source transfer between the user's repositories; provenance
 is preserved with donor commit, source path, copied/adapted classification, and local destination in
-`docs/donor-provenance.md` and family READMEs.
+`docs/migration/donor-provenance.md` and family READMEs.
 
 Third-party registry dependencies retain their published licenses through Cargo/pnpm metadata and
 lockfiles. The only copied third-party binary asset carries its exact adjacent CC0 license text.

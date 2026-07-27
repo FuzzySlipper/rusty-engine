@@ -1,11 +1,11 @@
 # CI and governance recommendations for rusty-engine
 
-Status: recommendation / not yet implemented
+Status: recommendation / partially implemented
 Author: system-architect review
 Date: 2026-07
 Scope: CI tiering, dependency and contract enforcement, reviewer prompts, and porting the
 ASHA code map for external-agent onboarding.
-See also: [../design.md](../design.md), [../migration-cluster-ledger.md](../migration-cluster-ledger.md),
+See also: [../design.md](../design.md), [../migration-cluster-ledger.md](../migration/migration-cluster-ledger.md),
 [../../scripts/verify.sh](../../scripts/verify.sh)
 
 > This is a durable architectural recommendation, not a task queue. It records *why* each
@@ -172,10 +172,15 @@ That schema is precisely what an external agent needs: it answers "what is this,
 what must I not touch, how do I prove my change, and where does follow-up go" without any Den
 context.
 
+Implementation note (2026-07-26): `docs/agent-code-atlas.md` and ten
+Rusty-specific owner maps under `docs/code-map/` now implement the curated
+portion of this recommendation. The optional advisory freshness checker remains
+future work; Rusty does not carry Asha's generated inventory.
+
 **Recommendation for rusty:**
 
 - Create `docs/code-map/` with one page per coarse owner, reusing the ASHA per-page schema. Natural
-  pages for the current 27-crate layout: `entity-state`, `engine-spatial` (voxel authority +
+  pages for the current 28-crate layout: `entity-state`, `engine-spatial` (voxel authority +
   derived collision/nav/mesh/motion), `voxel-asset` + `voxel-convert`, `render-model` +
   `render-projection` + `render-presentation`, the `render/` TS workspace + hosts, `studio`,
   `content-store` + `asset-catalog` + `authored-scene` + `asset-import`, `environment-authoring`,
@@ -209,7 +214,7 @@ architecture/review agent loads. These are pure guidance and cost almost nothing
    (Den ADR `rusty-engine/host-platform-and-browser-validation-boundary`).
 3. **donor-disposition / absence-by-default** — new Asha-derived behavior has a named consumer, a
    disposition row, and does not restore the excluded runtime spine
-   (from [../migration-cluster-ledger.md](../migration-cluster-ledger.md)).
+   (from [../migration-cluster-ledger.md](../migration/migration-cluster-ledger.md)).
 4. **rust-to-ts border** — render-model changes carry a golden update and a TS decode-test update
    (pairs with §4).
 

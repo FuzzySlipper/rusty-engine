@@ -178,11 +178,11 @@ Den campaign #6156-#6163 uses the rendering-specific donor pin
 while replacing sessions, bridges, replay/certification, catalogs/bundles, registries, generated
 tunnels, and arbitrary fetch with explicit successor values and resource resolvers.
 
-The complete capability matrix is [`../render/completeness.tsv`](../render/completeness.tsv); the
+The complete capability matrix is [`render/completeness.tsv`](../../render/completeness.tsv); the
 literal 134-file accounting is
-[`../render/donor-disposition.tsv`](../render/donor-disposition.tsv). Engine Rust, the isolated
+[`render/donor-disposition.tsv`](../../render/donor-disposition.tsv). Engine Rust, the isolated
 renderer, public package preparation, and the external demo each have separate proportionate gates.
-See [rendering-operations.md](rendering-operations.md) for commands and known limitations.
+See [rendering-operations.md](../rendering-operations.md) for commands and known limitations.
 
 ### M11S: successor functionality equivalence
 
@@ -255,7 +255,7 @@ because an Asha feature once existed.
 ## Repository and documentation ownership
 
 Rusty Engine's Den project is the planning authority for future work. This repository's
-[design.md](design.md) is the current architectural description. This ledger changes only when a
+[design.md](../design.md) is the current architectural description. This ledger changes only when a
 cluster is accepted, reopened, combined, dropped, or newly justified by a concrete consumer.
 
 Historical inputs include the Asha Den documents `expressive-typescript-gameplay-composition`,

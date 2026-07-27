@@ -1,112 +1,194 @@
 # Rusty Engine
 
-Rusty Engine is a standalone, host-neutral provider for object-centric games. It owns reusable
-entity, spatial, collision, navigation, voxel, mesh, asset, offline-conversion, authoring, and shared
-rendering mechanisms. It does not own a complete game runtime, a game-specific project schema, a
-product shell, or game-specific presentation policy. Reusable scene, asset, voxel, and persistence
-formats may live here; the downstream product still owns their game meaning and storage policy.
+Rusty Engine is a standalone, host-neutral provider for object-centric games.
+It owns reusable entity, spatial, collision, navigation, voxel, asset,
+authoring, persistence, diagnostics, offline-conversion, and retained-rendering
+mechanisms. Downstream games own live gameplay state, substantial game logic,
+product orchestration, storage policy, and game-specific presentation.
 
-The loading-bay walking product that established these boundaries now lives in
-[`FuzzySlipper/rusty-engine-demo`](https://github.com/FuzzySlipper/rusty-engine-demo). That project
-depends one-way on an exact public Engine revision; Engine has no build, runtime, or checkout
-dependency on the demo.
+The architectural shorthand is:
+
+> Objects carry typed facts. Named services own mechanisms. Downstream games
+> own meaning and orchestration.
+
+Components are mostly data. Engine code uses direct, explicit services rather
+than ambient subscriptions, callback-driven components, service location, or a
+universal gameplay runtime.
+
+## Repository posture
+
+This repository is the canonical Rusty Engine provider. Asha is historical
+evidence and a donor source, not a compatibility target, runtime dependency, or
+required mental model.
+
+The loading-bay product that first proved the provider boundary lives in
+[`FuzzySlipper/rusty-engine-demo`](https://github.com/FuzzySlipper/rusty-engine-demo).
+That consumer pins an exact public Engine revision. Engine does not inspect or
+depend on a sibling demo checkout during ordinary work.
+
+Repository docs describe committed architecture and implementation surfaces.
+Den may hold current planning, review packets, and decisions when available,
+but the repository is intentionally navigable without Den access. Start with
+[the canonical design](docs/design.md) and the
+[agent code atlas](docs/agent-code-atlas.md).
 
 ## Provider boundary
 
 ```text
 downstream game policy and orchestration
              |
-             +--> entity-state
+             +--> entity-state / state-machine
+             +--> environment-authoring --> authored-scene
+             +--> content-store / asset-catalog / asset-import
              +--> engine-spatial --> core-* / svc-*
-             +--> voxel-asset
-             +--> render-model --> render-projection ----+--> retained JSON
-                              \-> render-presentation ----+
+             +--> voxel-asset / voxel-convert / voxel-object-runtime
+             +--> render-model --> render-projection --> render-presentation
+                                      |
+                                      +--> retained JSON
+                                      +--> isolated render/ workspace
+                                      +--> isolated studio/ workspace
 
-offline authoring input --> voxel-convert --> canonical voxel-asset JSON
-
-isolated render workspace --> retained TS projection --> Three backend / browser-webview host / editor surfaces
+engine-inspector reads owner facts; runtime libraries do not depend on it.
 ```
 
-The important ownership rule is mechanism here, game meaning downstream. `entity-state` provides
-typed entity capabilities and an atomic mutation boundary. `engine-spatial` composes one canonical
-voxel authority with derived collision, navigation, mesh, motion, and edit operations. The smaller
-`core-*` and `svc-*` crates remain independently useful implementation layers. `voxel-asset` and
-`voxel-convert` define a strict durable artifact and a bounded offline producer. `render-model` and
-`render-projection` provide the complete retained-scene border and fail-atomic adapters.
-`render-presentation` provides bounded animation, audio, billboard, particle, and telemetry
-mechanisms with no gameplay or renderer authority. The separately gated `render/` workspace is
-shared by downstream demo and Studio consumers.
+`entity-state` owns reusable entity invariants and atomic capability mutation.
+`engine-spatial` composes one canonical voxel authority with derived collision,
+navigation, mesh, motion, trigger, and edit mechanisms. Content and authoring
+crates own strict durable formats, validation, plans, and explicit mutation
+boundaries without imposing a universal product schema.
 
-The current rendering path uses TypeScript, Three/WebGL, DOM, WebAudio, and Chromium. Those are the
-current backend, host, and integration-test choices, not a commitment to web-game delivery. Ordinary
-Rust mechanisms require no browser, HTTP server, origin, URL route, or Node installation. A browser,
-Electron/Tauri webview, headless process, or future renderer can sit above the same explicit Engine
-borders without becoming a second gameplay authority.
+`render-model`, `render-projection`, and `render-presentation` own the complete
+renderer-neutral retained border. The separately gated `render/` workspace owns
+strict TypeScript decoding, retained projection, Three/WebGL resources, and
+host integration. The separately gated `studio/` workspace is a first-party
+authoring product over a closed external-project adapter.
 
-The implemented ownership and promotion rules are in [docs/design.md](docs/design.md).
+Three/WebGL, DOM/WebAudio, Chromium, and Angular are current backend or product
+choices, not ordinary Rust dependencies and not a commitment to web-game
+delivery. Browser evidence proves browser-owned behavior; headless evidence
+proves host-neutral mechanisms.
 
-## Repository map
+## Repository layout
 
-| Path | Responsibility |
-|---|---|
-| `rust/crates/entity-state` | Reusable entity capabilities, views, snapshots, and atomic invariant changes |
-| `rust/crates/engine-spatial` | Canonical voxel scene and derived collision, navigation, mesh, motion, and edit services |
-| `rust/crates/voxel-asset` | Strict canonical voxel-volume asset and conversion-input vocabulary |
-| `rust/crates/voxel-convert` | Bounded offline GLB conversion and atomic artifact installation |
-| `rust/crates/render-model` | Complete versioned retained-frame vocabulary and validation |
-| `rust/crates/render-projection` | Entity, authored, voxel, lighting/material, and debug projection |
-| `rust/crates/render-presentation` | Animation controllers and disposable audio, billboard, particle, telemetry projection |
-| `render` | Isolated TypeScript retained projection, Three backend, and renderer hosts |
-| `studio` | Isolated Angular/Nx authoring product over a project-owned Rust adapter and the shared renderer |
-| `rust/crates/core-*` | Small identity, math, time, space, voxel, and asset-reference foundations |
-| `rust/crates/svc-*` | Focused volume, spatial, collision, pathfinding, RNG, and mesh mechanisms |
-| `content/conversion` | Checked generic conversion request |
-| `content/assets` | Reproducible canonical voxel artifact |
-| `fixtures` | Repository-local provider fixtures, including the licensed Kenney source |
+Workspace inventory: **28 Cargo workspace crates, 4 public renderer packages,
+and 1 Studio application plus 5 Studio libraries.**
 
-## Verify
+```text
+rust/crates/
+  core-*                    typed IDs, assets, math, time, coordinates, voxel values
+  svc-*                     volume, spatial, collision, pathfinding, RNG, mesh
+  entity-state              capabilities, relationships, transforms, snapshots, atomic mutation
+  state-machine             explicit definitions, instances, and transitions
+  engine-spatial            canonical voxel space and synchronized derived mechanisms
+  content-store             manifests, source batches, prefabs, load/save plans, write sets
+  asset-catalog             asset versions, locks, dependencies, materials, fallbacks
+  asset-import              bounded offline mesh import and atomic publication
+  authored-scene            versioned scene documents, admission, validation, edits
+  environment-authoring     deterministic recipe planning and materialization
+  voxel-*                   stored artifacts, annotations, conversion, object runtime
+  render-*                  retained frame model, projection, presentation
+  engine-inspector          read-only diagnostics and rusty-inspect CLI
 
-Only a Rust toolchain and ordinary shell utilities are required for the provider gate:
+render/
+  packages/render-contracts strict TypeScript decoding of Rust retained frames
+  packages/render-projection retained client projection
+  packages/renderer-three   Three/WebGL backend and resource lifecycle
+  packages/renderer-host    browser/headless/editor host composition
+  browser/                  real Chromium/WebGL/WebAudio/DOM acceptance
+
+studio/
+  apps/studio-app           first-party Angular authoring application
+  libs/                     adapter client, editor shell, viewport, voxel editor, settings
+  scripts/ and test/        host services and isolated/integration proof
+
+content/                    checked generic conversion request and canonical artifact
+fixtures/                   provider-owned deterministic fixtures and licensed sources
+migration/                  machine-readable donor/equivalence accounting
+docs/                       architecture, code maps, topics, migration evidence, reviews
+scripts/                    provider, renderer, Studio, isolation, and consistency gates
+```
+
+The [agent code atlas](docs/agent-code-atlas.md) maps these paths to ownership,
+public surfaces, forbidden shortcuts, focused tests, and follow-up routes.
+
+## Architecture boundaries
+
+### Entity and service authority
+
+Downstream Rust owns the live gameplay loop and calls named Engine services
+directly. `entity-state` is the atomic boundary for entity capabilities; it is
+not a universal command route for collision, navigation, assets, presentation,
+or other service-owned state.
+
+### Content and persistence
+
+Reusable scene, asset, voxel, annotation, prefab, and persistence formats may
+live here. Their codecs validate bounded data and preserve typed failures.
+Consumers decide game meaning, admission timing, filesystem layout, and storage
+policy.
+
+### Rendering and hosts
+
+Rust produces complete renderer-neutral retained frames. TypeScript decodes and
+projects them; Three owns backend resources; hosts own DOM, audio, browser, and
+editor integration. None of those projections becomes gameplay authority.
+
+### Promotion
+
+New Engine abstractions need concrete consumer evidence. The multi-consumer
+promotion rule does not authorize silent loss of behavior during an approved
+parity campaign, and it does not justify speculative schedulers, behavior
+graphs, generic gameplay ASTs, or governance frameworks.
+
+## Common commands
+
+Run from the repository root.
+
+### Ordinary Rust provider gate
 
 ```bash
 ./scripts/verify.sh
 ```
 
-The gate checks formatting, locked Cargo metadata, standalone paths, documentation links, all
-workspace and provider-fixture tests, Clippy with warnings denied, and the converter's byte-for-byte
-reproducibility test. Install and verify the isolated renderer workspace separately with:
+This checks Rust formatting, standalone and isolation rules, documentation
+links, migration/equivalence accounting, locked workspace tests, and Clippy
+with warnings denied. It deliberately installs no Node dependencies.
+
+### Full repository gate
 
 ```bash
-./scripts/verify-render.sh
+./scripts/verify-all.sh
 ```
 
-That gate checks package boundaries, strict Rust-to-TypeScript decoding, retained projection,
-Three resource lifecycle, renderer hosts/editor/inspection, deterministic snapshots, and the real
-Chromium/WebGL/WebAudio/DOM/GLB path. Ordinary Engine verification deliberately does not install
-Node dependencies. Exact public Git-package consumption has its own clean temporary-consumer proof:
+This adds the isolated renderer and Studio gates.
+
+### Focused gates
+
+```bash
+./scripts/check-doc-links.sh
+./scripts/audit-standalone.sh
+./scripts/verify-render.sh
+./scripts/verify-studio.sh
+```
+
+Exact public renderer-package consumption has a clean temporary-consumer proof:
 
 ```bash
 ./scripts/verify-render-consumer.sh <40-character-public-sha>
 ```
 
-Studio has its own install and gate, so ordinary provider work still resolves no Angular/Nx or
-Playwright dependencies:
+Studio-to-product integration is explicit and never inferred from a sibling
+checkout:
 
 ```bash
-pnpm --dir studio install --frozen-lockfile
-./scripts/verify-studio.sh
 ./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo
 ```
 
-The integration gate selects the external consumer explicitly and CI checks out the exact revision
-recorded in `studio/demo-consumer-source.json`; Engine never inspects a sibling demo implicitly.
-
-Run the focused Rust checks directly with:
+### Focused Rust iteration
 
 ```bash
-./scripts/audit-standalone.sh
-./scripts/check-doc-links.sh
-cargo test --workspace --locked
+cargo test -p <crate-name> --locked
+cargo clippy -p <crate-name> --all-targets --locked -- -D warnings
 ```
 
 ## Offline voxel conversion
@@ -121,26 +203,34 @@ cargo run -q -p voxel-convert --bin voxel-convert -- \
 ```
 
 The format, limits, provenance, and failure behavior are documented in
-[docs/voxel-asset-format.md](docs/voxel-asset-format.md).
+[Stored voxel asset and offline conversion](docs/topics/voxel/voxel-asset-format.md).
 
-## Documentation
+## Key documents
 
-- [Current design](docs/design.md) — provider ownership, host/platform boundaries, dependency
-  direction, and promotion rules.
-- [Rendering successor contract](docs/rendering-successor-contract.md) — complete rendering scope,
-  ownership, adaptation, and closeout rule.
-- [Shared rendering operations](docs/rendering-operations.md) — verification, exact-revision
-  consumption, CI topology, resource rules, and known limitations.
-- [Studio migration contract](docs/studio-migration-contract.md) — first-party authoring scope,
-  owner adoption, isolation, parity accounting, and deliberate topology exclusions.
-- [Studio adapter protocol](docs/studio-adapter-protocol.md) — closed project-owned Rust operations,
-  optimistic guards, and cross-repository acceptance.
-- [Rust source organization](docs/rust-style.md) — lightweight module and behavior-owner style.
-- [Voxel asset format](docs/voxel-asset-format.md) — current durable format and converter boundary.
-- [Migration cluster ledger](docs/migration-cluster-ledger.md) — durable successor and extraction decisions.
-- [Experiment results](docs/experiment-results.md) — historical walking-product evidence and measurements.
-- [Donor provenance](docs/donor-provenance.md) — exact source revisions, adaptations, exclusions, and licenses.
-- [M9 extraction contract](docs/m9-extraction-contract.md) — historical standalone-repository closure.
+| Document | Purpose |
+|---|---|
+| [Documentation index](docs/README.md) | Organized entry point for all repository docs |
+| [Canonical design](docs/design.md) | Provider ownership, host/platform boundaries, dependency direction, promotion |
+| [Agent code atlas](docs/agent-code-atlas.md) | Owner routing, primary paths, public surfaces, gates, and common mistakes |
+| [Rust source organization](docs/topics/development/rust-style.md) | Lightweight module and behavior-owner style |
+| [Rendering successor contract](docs/rendering-successor-contract.md) | Complete shared-rendering scope and adaptation boundary |
+| [Rendering operations](docs/rendering-operations.md) | Verification, exact revision consumption, CI, resources, limitations |
+| [Studio migration contract](docs/studio-migration-contract.md) | First-party authoring scope, parity, isolation, owner adoption |
+| [Studio adapter protocol](docs/studio-adapter-protocol.md) | Closed external-project operations and optimistic guards |
+| [Voxel asset format](docs/topics/voxel/voxel-asset-format.md) | Durable volume format and bounded converter border |
+| [Voxel model conversion](docs/topics/voxel/voxel-model-conversion.md) | Object, animation, runtime, and Studio conversion workflow |
+| [Migration cluster ledger](docs/migration/migration-cluster-ledger.md) | Durable transfer, replacement, exclusion, and reopening decisions |
+| [Donor provenance](docs/migration/donor-provenance.md) | Exact donor revisions, adaptations, exclusions, and licenses |
 
-Rusty Engine is canonical for these provider crates. Asha remains historical evidence and a source
-locator, not a compatibility, build, runtime, or planning authority.
+## Notes for outside agents
+
+- Read `AGENTS.md`, `docs/design.md`, and `docs/agent-code-atlas.md` before
+  substantial work.
+- Treat code, manifests, tests, and repository gates as implementation truth.
+- Use Den for live task state when a Den task is supplied; do not require Den
+  merely to understand the checked-out provider.
+- Keep downstream game meaning downstream and host-specific behavior in its
+  explicit backend or product owner.
+- Do not hand-wave acceptance: run the gate for the surface actually changed,
+  including a real browser or external consumer when that surface owns the
+  behavior.
