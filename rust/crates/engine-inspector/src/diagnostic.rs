@@ -40,6 +40,7 @@ impl DiagnosticSeverity {
 pub enum DiagnosticDomain {
     AssetCatalog,
     EntityState,
+    GameplayMechanics,
     Scene,
     VoxelState,
     Persistence,
@@ -51,6 +52,7 @@ impl DiagnosticDomain {
         match self {
             Self::AssetCatalog => "assetCatalog",
             Self::EntityState => "entityState",
+            Self::GameplayMechanics => "gameplayMechanics",
             Self::Scene => "scene",
             Self::VoxelState => "voxelState",
             Self::Persistence => "persistence",

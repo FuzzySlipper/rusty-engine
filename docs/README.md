@@ -68,6 +68,7 @@ tests take precedence when describing implemented behavior.
 | Find the crate or package that owns a behavior | [agent-code-atlas.md](agent-code-atlas.md) |
 | Change entity components or atomic entity mutation | [Entity state and state machines](code-map/entity-state-and-state-machines.md) |
 | Change stats, tracks, effects, items, equipment, damage, or restoration | [Gameplay mechanics](code-map/gameplay-mechanics.md) |
+| Check active provider limitations and scheduled certification | [Known limitations](known-limitations.md) |
 | Change voxel collision, navigation, motion, or edits | [Spatial mechanisms](code-map/spatial-mechanisms.md) |
 | Change a stored asset, scene, prefab, or import | [Content, assets, and scenes](code-map/content-assets-and-scenes.md) |
 | Change voxel conversion or object playback | [Voxel assets and conversion](code-map/voxel-assets-and-conversion.md) |

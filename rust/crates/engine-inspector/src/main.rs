@@ -5,7 +5,8 @@ use asset_import::ImportContext;
 use engine_inspector::{
     entity_ids_in_category, inspect_catalog_json, inspect_content_manifest_json, inspect_entity,
     inspect_entity_state_json, inspect_import_manifest_json, inspect_import_source,
-    inspect_scene_json, inspect_voxel_asset_json, DiagnosticSet, EntityCategory,
+    inspect_mechanics_snapshot_json, inspect_scene_json, inspect_voxel_asset_json, DiagnosticSet,
+    EntityCategory,
 };
 
 const MAX_CATALOG_BYTES: usize = 16 * 1024 * 1024;
@@ -22,6 +23,7 @@ USAGE:
     rusty-inspect entity-state summary <entity-state.json>
     rusty-inspect entity-state entity <entity-state.json> <entity-id>
     rusty-inspect entity-state category <entity-state.json> <category>
+    rusty-inspect mechanics <entity-state.json> <mechanics-catalog.json> <entity-id>
     rusty-inspect voxel <voxel-asset.json>
     rusty-inspect content <content-manifest.json>
     rusty-inspect import-source <source-mesh.json>
@@ -57,6 +59,7 @@ fn run<O: Write, E: Write>(args: &[String], out: &mut O, err: &mut E) -> u8 {
         Some("catalog") => command_catalog(&args[1..], out, err),
         Some("scene") => command_scene(&args[1..], out, err),
         Some("entity-state") => command_entity_state(&args[1..], out, err),
+        Some("mechanics") => command_mechanics(&args[1..], out, err),
         Some("voxel") => command_voxel(&args[1..], out, err),
         Some("content") => command_content(&args[1..], out, err),
         Some("import-source") => command_import_source(&args[1..], out, err),
@@ -66,6 +69,31 @@ fn run<O: Write, E: Write>(args: &[String], out: &mut O, err: &mut E) -> u8 {
             let _ = write!(err, "{USAGE}");
             3
         }
+    }
+}
+
+fn command_mechanics<O: Write, E: Write>(args: &[String], out: &mut O, err: &mut E) -> u8 {
+    let [snapshot_path, catalog_path, entity] = args else {
+        return usage_error(
+            err,
+            "`mechanics` requires <entity-state.json> <mechanics-catalog.json> <entity-id>",
+        );
+    };
+    let Ok(entity) = entity.parse::<u64>() else {
+        return usage_error(err, "entity id must be an unsigned integer");
+    };
+    let Some(snapshot) = read_text(snapshot_path, MAX_ENTITY_STATE_BYTES, err) else {
+        return 2;
+    };
+    let Some(catalog) = read_text(catalog_path, MAX_CATALOG_BYTES, err) else {
+        return 2;
+    };
+    match inspect_mechanics_snapshot_json(&snapshot, &catalog, entity) {
+        Ok(report) => {
+            let _ = write!(out, "{}", report.to_text());
+            0
+        }
+        Err(diagnostics) => finish_failure(&diagnostics, err),
     }
 }
 
@@ -347,6 +375,7 @@ mod tests {
             "catalog",
             "scene",
             "entity-state",
+            "mechanics",
             "voxel",
             "content",
             "import-source",
@@ -395,6 +424,20 @@ mod tests {
         assert!(out.is_empty());
         assert!(err.contains("[fatal] persistence contentManifest.decode"));
         std::fs::remove_file(path.as_ref()).ok();
+    }
+
+    #[test]
+    fn mechanics_command_uses_strict_catalog_and_owner_diagnostics() {
+        let snapshot = temporary_file("mechanics-state", "{}");
+        let catalog = temporary_file("mechanics-catalog", "{}");
+        let snapshot_text = snapshot.to_string_lossy();
+        let catalog_text = catalog.to_string_lossy();
+        let (code, out, err) = run_text(&["mechanics", &snapshot_text, &catalog_text, "1"]);
+        assert_eq!(code, 2);
+        assert!(out.is_empty());
+        assert!(err.contains("[fatal] gameplayMechanics catalog.decode"));
+        std::fs::remove_file(snapshot).ok();
+        std::fs::remove_file(catalog).ok();
     }
 
     #[test]

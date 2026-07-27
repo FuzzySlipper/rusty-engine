@@ -1,0 +1,153 @@
+path	disposition	successor	proof	notes
+.github/workflows/ci.yml	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+.gitignore	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+AGENTS.md	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+Cargo.lock	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+Cargo.toml	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+README.md	adapted	docs/design.md	rust/crates/gameplay-mechanics/tests/contract.rs	Common numeric and source semantics were rewritten behind Rusty components and named services.
+consumers/minimal-game/Cargo.lock	excluded	none	docs/migration/donor-provenance.md	Repository topology or product-specific behavior was not transferred.
+consumers/minimal-game/Cargo.toml	excluded	none	docs/migration/donor-provenance.md	Repository topology or product-specific behavior was not transferred.
+consumers/minimal-game/src/bin/ruleweaver_core.rs	adapted	rust/crates/gameplay-mechanics/examples/compositions.rs	rust/crates/gameplay-mechanics/tests/gm5.rs	The d20-shaped composition became a downstream-owned direct-service example, not an Engine rules runtime.
+consumers/minimal-game/src/main.rs	excluded	none	docs/migration/donor-provenance.md	Repository topology or product-specific behavior was not transferred.
+crates/asha-rpg/Cargo.toml	excluded	none	docs/migration/donor-provenance.md	Historical crate topology and dependency grouping are deliberately excluded.
+crates/asha-rpg/src/lib.rs	excluded	none	docs/migration/donor-provenance.md	Universal registry, IR, session, encounter, replay, and facade topology are deliberately excluded.
+crates/asha-rpg/tests/public_facade.rs	excluded	none	docs/migration/donor-provenance.md	Repository topology or product-specific behavior was not transferred.
+crates/rpg-compiler/Cargo.toml	excluded	none	docs/migration/donor-provenance.md	Historical crate topology and dependency grouping are deliberately excluded.
+crates/rpg-compiler/src/artifact.rs	excluded	none	docs/migration/donor-provenance.md	Repository topology or product-specific behavior was not transferred.
+crates/rpg-compiler/src/bin/compile_play_bundle.rs	excluded	none	docs/migration/donor-provenance.md	Repository topology or product-specific behavior was not transferred.
+crates/rpg-compiler/src/bin/export_vocabulary.rs	excluded	none	docs/migration/donor-provenance.md	Repository topology or product-specific behavior was not transferred.
+crates/rpg-compiler/src/bin/validate_ir.rs	excluded	none	docs/migration/donor-provenance.md	Repository topology or product-specific behavior was not transferred.
+crates/rpg-compiler/src/bin/validate_play_bundle.rs	excluded	none	docs/migration/donor-provenance.md	Repository topology or product-specific behavior was not transferred.
+crates/rpg-compiler/src/compile.rs	adapted	rust/crates/gameplay-mechanics/src/catalog.rs	rust/crates/gameplay-mechanics/tests/gm1.rs	Strict reference admission and canonical ordering were retained in one bounded immutable catalog.
+crates/rpg-compiler/src/diagnostic.rs	adapted	rust/crates/gameplay-mechanics/src/error.rs	rust/crates/gameplay-mechanics/tests/gm5.rs	Actionable typed rejection identity was retained without compiler-stage diagnostics.
+crates/rpg-compiler/src/execute.rs	adapted	rust/crates/gameplay-mechanics/src/damage.rs	rust/crates/gameplay-mechanics/tests/gm3.rs	Checked deterministic damage staging and late-failure rollback became one direct component-local service.
+crates/rpg-compiler/src/lib.rs	excluded	none	docs/migration/donor-provenance.md	Repository topology or product-specific behavior was not transferred.
+crates/rpg-compiler/src/registry.rs	excluded	none	docs/migration/donor-provenance.md	Universal registry, IR, session, encounter, replay, and facade topology are deliberately excluded.
+crates/rpg-compiler/tests/semantic_kernel.rs	adopted	rust/crates/gameplay-mechanics/tests/contract.rs	rust/crates/gameplay-mechanics/tests/gm3.rs	Determinism, unknown-reference, bounded decision, and late-failure cases were retained as rewritten provider proofs.
+crates/rpg-core/Cargo.toml	excluded	none	docs/migration/donor-provenance.md	Historical crate topology and dependency grouping are deliberately excluded.
+crates/rpg-core/src/authority.rs	adapted	rust/crates/gameplay-mechanics/src/effect.rs	rust/crates/gameplay-mechanics/tests/gm2.rs	Source provenance, effect stacking, damage stages, and failure atomicity were rewritten without the authority aggregate.
+crates/rpg-core/src/lib.rs	adapted	rust/crates/gameplay-mechanics/src/lib.rs	rust/crates/gameplay-mechanics/tests/contract.rs	Selected public semantic families were re-exposed as Rusty-native components and services; the donor facade was not copied.
+crates/rpg-core/src/primitives.rs	adapted	rust/crates/gameplay-mechanics/src/component.rs	rust/crates/gameplay-mechanics/tests/gm1.rs	Bounded values and open identities became checked scalars, typed IDs, stats, and tracks.
+crates/rpg-ir/Cargo.toml	excluded	none	docs/migration/donor-provenance.md	Historical crate topology and dependency grouping are deliberately excluded.
+crates/rpg-ir/src/lib.rs	excluded	none	docs/migration/donor-provenance.md	Universal registry, IR, session, encounter, replay, and facade topology are deliberately excluded.
+crates/rpg-ir/src/normalized.rs	excluded	none	docs/migration/donor-provenance.md	Universal registry, IR, session, encounter, replay, and facade topology are deliberately excluded.
+crates/rpg-ir/src/play_bundle_artifact.rs	excluded	none	docs/migration/donor-provenance.md	Universal registry, IR, session, encounter, replay, and facade topology are deliberately excluded.
+crates/rpg-runtime/Cargo.toml	excluded	none	docs/migration/donor-provenance.md	Historical crate topology and dependency grouping are deliberately excluded.
+crates/rpg-runtime/src/encounter.rs	excluded	none	docs/migration/donor-provenance.md	Universal registry, IR, session, encounter, replay, and facade topology are deliberately excluded.
+crates/rpg-runtime/src/lib.rs	excluded	none	docs/migration/donor-provenance.md	Universal registry, IR, session, encounter, replay, and facade topology are deliberately excluded.
+crates/rpg-runtime/src/replay.rs	excluded	none	docs/migration/donor-provenance.md	Universal registry, IR, session, encounter, replay, and facade topology are deliberately excluded.
+crates/rpg-runtime/src/semantic_session.rs	excluded	none	docs/migration/donor-provenance.md	Universal registry, IR, session, encounter, replay, and facade topology are deliberately excluded.
+docs/design.md	adapted	docs/design.md	rust/crates/gameplay-mechanics/tests/contract.rs	Common numeric and source semantics were rewritten behind Rusty components and named services.
+docs/encounter-session-contract.md	excluded	none	docs/migration/donor-provenance.md	Repository topology or product-specific behavior was not transferred.
+docs/first-wave-primitive-catalog.md	adapted	docs/design.md	rust/crates/gameplay-mechanics/tests/contract.rs	Common numeric and source semantics were rewritten behind Rusty components and named services.
+docs/non-claims.md	adopted	docs/design.md	scripts/audit-standalone.sh	The useful negative boundary evidence is retained without donor governance topology.
+docs/ruleweaver-core-composition.md	adapted	rust/crates/gameplay-mechanics/examples/compositions.rs	rust/crates/gameplay-mechanics/tests/gm5.rs	The d20-shaped composition became a downstream-owned direct-service example, not an Engine rules runtime.
+examples/generate-portable-replay-source.ts	excluded	none	docs/migration/donor-provenance.md	Generated-source and vocabulary-codegen paths are deliberately excluded.
+examples/generate-ruleweaver-core-source.ts	excluded	none	docs/migration/donor-provenance.md	Generated-source and vocabulary-codegen paths are deliberately excluded.
+examples/representative-actions.ts	adapted	rust/crates/gameplay-mechanics/examples/compositions.rs	rust/crates/gameplay-mechanics/tests/gm5.rs	The d20-shaped composition became a downstream-owned direct-service example, not an Engine rules runtime.
+governance/architecture.md	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+governance/boundary-rules.md	adopted	docs/design.md	scripts/audit-standalone.sh	The useful negative boundary evidence is retained without donor governance topology.
+governance/change-amplification.json	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+governance/dependency-policy.toml	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+governance/ownership.toml	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+governance/upstream-asha.toml	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+package-lock.json	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+package.json	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+packages/authoring/README.md	excluded	none	docs/migration/donor-provenance.md	Repository topology or product-specific behavior was not transferred.
+packages/authoring/dist/builders.d.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/builders.d.ts.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/builders.js	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/builders.js.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/canonical.d.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/canonical.d.ts.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/canonical.js	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/canonical.js.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/catalogs.d.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/catalogs.d.ts.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/catalogs.js	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/catalogs.js.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/content-pack-builders.d.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/content-pack-builders.d.ts.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/content-pack-builders.js	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/content-pack-builders.js.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/content-patch-builders.d.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/content-patch-builders.d.ts.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/content-patch-builders.js	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/content-patch-builders.js.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/index.d.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/index.d.ts.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/index.js	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/index.js.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/low-level.d.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/low-level.d.ts.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/low-level.js	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/low-level.js.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/normalize.d.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/normalize.d.ts.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/normalize.js	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/normalize.js.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/play-bundle-compiler.d.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/play-bundle-compiler.d.ts.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/play-bundle-compiler.js	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/play-bundle-compiler.js.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/play-bundle-types.d.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/play-bundle-types.d.ts.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/play-bundle-types.js	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/play-bundle-types.js.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/ruleset-builders.d.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/ruleset-builders.d.ts.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/ruleset-builders.js	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/ruleset-builders.js.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/scenario-builders.d.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/scenario-builders.d.ts.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/scenario-builders.js	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/scenario-builders.js.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/types.d.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/types.d.ts.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/types.js	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/dist/types.js.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/package.json	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+packages/authoring/src/builders.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/src/canonical.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/src/catalogs.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/src/content-pack-builders.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/src/content-patch-builders.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/src/index.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/src/low-level.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/src/normalize.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/src/play-bundle-compiler.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/src/play-bundle-types.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/src/ruleset-builders.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/src/scenario-builders.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/src/types.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/test/action-procedures.test.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/test/authoring.test.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/test/catalog-authoring.test.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/test/contract-split.test.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/test/ruleset-materialization.test.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/test/ruleset-packages.test.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/test/test-ruleset.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/test/type-contracts.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/authoring/tsconfig.json	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+packages/ir/README.md	excluded	none	docs/migration/donor-provenance.md	Repository topology or product-specific behavior was not transferred.
+packages/ir/dist/generated-vocabulary.d.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/ir/dist/generated-vocabulary.d.ts.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/ir/dist/generated-vocabulary.js	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/ir/dist/generated-vocabulary.js.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/ir/dist/index.d.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/ir/dist/index.d.ts.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/ir/dist/index.js	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/ir/dist/index.js.map	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/ir/package.json	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+packages/ir/src/generated-vocabulary.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/ir/src/index.ts	excluded	none	docs/migration/donor-provenance.md	TypeScript authoring, generated vocabulary, package compiler, and cross-language IR authority are deliberately excluded.
+packages/ir/tsconfig.json	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+scripts/check-authoring-boundary.mjs	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+scripts/check-authoring-boundary.test.mjs	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+scripts/check-governance.mjs	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+scripts/check-governance.test.mjs	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+scripts/generate-ir-vocabulary.mjs	excluded	none	docs/migration/donor-provenance.md	Generated-source and vocabulary-codegen paths are deliberately excluded.
+scripts/report-change-amplification.mjs	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+scripts/report-change-amplification.test.mjs	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+tsconfig.base.json	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.
+tsconfig.test.json	excluded	none	docs/migration/donor-provenance.md	Donor repository governance, build, package, and CI infrastructure are not Engine runtime behavior.

@@ -43,6 +43,10 @@ restoration, and their bounded receipts.
 - [`gameplay-mechanics/tests/gm2.rs`](../../rust/crates/gameplay-mechanics/tests/gm2.rs)
 - [`gameplay-mechanics/tests/gm3.rs`](../../rust/crates/gameplay-mechanics/tests/gm3.rs)
 - [`gameplay-mechanics/tests/gm4.rs`](../../rust/crates/gameplay-mechanics/tests/gm4.rs)
+- [`gameplay-mechanics/tests/gm5.rs`](../../rust/crates/gameplay-mechanics/tests/gm5.rs)
+- [`gameplay-mechanics/examples/compositions.rs`](../../rust/crates/gameplay-mechanics/examples/compositions.rs)
+- [`engine-inspector/src/mechanics.rs`](../../rust/crates/engine-inspector/src/mechanics.rs)
+- [`gameplay-mechanics donor disposition`](../../migration/gameplay-mechanics-donor/disposition.tsv)
 - [Canonical design](../design.md)
 
 ## Public composition
@@ -127,10 +131,51 @@ rejects unresolved references before returning state. Consumers with additional
 registered component families pass their complete registry to
 `decode_snapshot_with_catalog_and_registry`.
 
+`MechanicsComponentKind::ALL` is the stable seven-kind inspection order. Each
+kind exposes its durable type identity, codec identity, and codec version.
+Current versions are:
+
+| Component | Type identity | Codec | Version |
+| --- | --- | --- | ---: |
+| Stats | `rusty.mechanics.stats` | `rusty.mechanics.stats-json` | 1 |
+| Tracks | `rusty.mechanics.tracks` | `rusty.mechanics.tracks-json` | 1 |
+| Intrinsic sources | `rusty.mechanics.intrinsic-sources` | `rusty.mechanics.intrinsic-sources-json` | 1 |
+| Active effects | `rusty.mechanics.active-effects` | `rusty.mechanics.active-effects-json` | 2 |
+| Inventory | `rusty.mechanics.inventory` | `rusty.mechanics.inventory-json` | 2 |
+| Unique item | `rusty.mechanics.item` | `rusty.mechanics.item-json` | 1 |
+| Equipment | `rusty.mechanics.equipment` | `rusty.mechanics.equipment-json` | 1 |
+
+Registration alone never serializes an arbitrary Rust type. Runtime-only
+registrations are omitted; durable extension values require the exact explicit
+codec above. Component revisions are instance-local and are reacquired after
+restore rather than persisted.
+
 `SourceDefinitionId` identifies authored behavior. `SourceInstanceIdentity`
 identifies one live intrinsic, effect, equipped-item, or request activation.
 Priority and typed instance identity provide canonical ordering. Receipts expose
 every Engine decision and the exact component revisions read.
+
+## Immutable inspection
+
+`MechanicsEntityView` exposes borrowed raw component views. The
+`engine-inspector` leaf adds `inspect_mechanics_entity`, which joins those facts
+with evaluated stat stages and attributed decisions, resolved track bounds,
+expanded effect activations, indexed unique inventory, capacity, and equipment.
+It accepts only immutable `EntityState` and catalog references. The companion
+`inspect_damage_receipt` projects every bounded part, decision, track change,
+fact, and source-cost field from the operation-local receipt.
+
+For a strict stored artifact, the CLI requires both authorities explicitly:
+
+```bash
+cargo run -p engine-inspector --bin rusty-inspect -- \
+  mechanics entity-state.json mechanics-catalog.json 42
+```
+
+The command admits the supplied catalog, reconstructs all required component
+extensions through the canonical registry, validates every catalog reference,
+then projects one entity. It does not infer a catalog, mutate the state, load a
+product schema, or render anything.
 
 ## Mutation and atomicity
 
@@ -247,14 +292,42 @@ not scan the entity population. Catalog definitions and nested source records
 are canonicalized at admission, so reordered authored input produces the same
 lookup order and diagnostic fingerprint.
 
+### Public variable-collection limits
+
+Every public variable collection is admitted or produced behind a fixed cap.
+Receipt arrays are not caller-managed journals; their limits derive from the
+same request/component/catalog caps and are checked before publication.
+
+| Surface | Collection cap and enforcement |
+| --- | --- |
+| Catalog families | stats 128, tracks 128, sources 256, damage kinds 64, effects 128, items 256, equipment slots 64, capacity metrics 32; `MechanicsCatalog::admit` rejects over-limit input |
+| Source/effect definitions | stat contributions 32 and damage responses 32 per source; sources 32 per effect; stacks 32; active instances 64; expanded effect activations 256 |
+| Item/slot definitions | sources 32, classifications 16, and capacity costs 32 per item; allowed classifications 16 per slot; required slots 8 |
+| Entity components | stats 128, tracks 128, intrinsic bindings 64, effects 64, fungible stacks 128, capacity limits 32, equipment assignments 32 |
+| Requests | damage parts 8, request-local sources 32, requested equipment slots 32; duplicate source/slot identities reject before mutation |
+| Stat/damage evidence | stat decisions 256; damage response decisions 256, parts 8, facts 128, and distinct touched tracks at most the 128 admitted catalog tracks |
+| Effect/equipment evidence | removed effects 64, activated effect sources 256, equipment changes and observed item revisions 32, equipped source activations 256 |
+| Inventory evidence | contained direct children 256, unique item projection 256, capacity arrays 32, and stack arrays 128; traversal counts report the bounded work |
+| Revision evidence | at most 32 equipped item slots plus the fixed owner component kinds; entries are sorted and deduplicated before return |
+| Inspector projection | exactly 7 presence rows; other arrays retain the component/evaluation/inventory/receipt caps above |
+
+The GM5 measurement adds 2,048 unrelated entities around a one-stat/one-track
+target and still reports zero intrinsic, effect, equipment, item, and
+request-source visits for both stat evaluation and one-part damage. Services
+clone only the component candidate they promise to replace (or the two
+homogeneous inventory candidates for transfer), never complete `EntityState`.
+
 ## Acceptance gates
 
 ```bash
 cargo test -p gameplay-mechanics --locked
 cargo test -p entity-state --locked
-cargo clippy -p gameplay-mechanics -p entity-state --all-targets --locked -- -D warnings
+cargo test -p engine-inspector --locked
+cargo run -p gameplay-mechanics --example compositions
+cargo clippy -p gameplay-mechanics -p entity-state -p engine-inspector --all-targets --locked -- -D warnings
 ./scripts/check-doc-links.sh
 ./scripts/check-asha-equivalence.sh --final
+./scripts/check-gameplay-mechanics-donor-disposition.sh
 ./scripts/verify.sh
 ```
 

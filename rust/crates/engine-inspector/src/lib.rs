@@ -11,6 +11,7 @@ mod catalog;
 mod diagnostic;
 mod entity;
 mod imports;
+mod mechanics;
 mod persistence;
 mod scene;
 mod voxel;
@@ -29,6 +30,17 @@ pub use entity::{
 pub use imports::{
     inspect_import_manifest, inspect_import_manifest_json, inspect_import_source,
     ImportManifestInspection, ImportSourceInspection,
+};
+pub use mechanics::{
+    inspect_damage_receipt, inspect_mechanics_entity, inspect_mechanics_snapshot_json,
+    DamageReceiptDecisionInspection, DamageReceiptFactInspection, DamageReceiptInspection,
+    DamageReceiptPartInspection, DamageReceiptTrackInspection, MechanicsCapacityInspection,
+    MechanicsComponentInspection, MechanicsEffectInspection, MechanicsEntityInspection,
+    MechanicsEquipmentAssignmentInspection, MechanicsInventoryCostInspection,
+    MechanicsInventoryInspection, MechanicsInventoryItemInspection, MechanicsItemInspection,
+    MechanicsSourceActivationInspection, MechanicsSourceBindingInspection,
+    MechanicsSourceCostInspection, MechanicsStatDecisionInspection, MechanicsStatInspection,
+    MechanicsTrackInspection,
 };
 pub use persistence::{
     inspect_content_manifest, inspect_content_manifest_json, ContentLoadStepInspection,

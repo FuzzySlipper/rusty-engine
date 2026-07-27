@@ -20,16 +20,21 @@ pub const INVENTORY_COMPONENT_TYPE_ID: &str = "rusty.mechanics.inventory";
 pub const ITEM_COMPONENT_TYPE_ID: &str = "rusty.mechanics.item";
 pub const EQUIPMENT_COMPONENT_TYPE_ID: &str = "rusty.mechanics.equipment";
 
-const STATS_CODEC_ID: &str = "rusty.mechanics.stats-json";
-const TRACKS_CODEC_ID: &str = "rusty.mechanics.tracks-json";
-const INTRINSIC_SOURCES_CODEC_ID: &str = "rusty.mechanics.intrinsic-sources-json";
-const ACTIVE_EFFECTS_CODEC_ID: &str = "rusty.mechanics.active-effects-json";
-const INVENTORY_CODEC_ID: &str = "rusty.mechanics.inventory-json";
-const ITEM_CODEC_ID: &str = "rusty.mechanics.item-json";
-const EQUIPMENT_CODEC_ID: &str = "rusty.mechanics.equipment-json";
-const COMPONENT_CODEC_VERSION: u32 = 1;
-const ACTIVE_EFFECTS_CODEC_VERSION: u32 = 2;
-const INVENTORY_CODEC_VERSION: u32 = 2;
+pub const STATS_COMPONENT_CODEC_ID: &str = "rusty.mechanics.stats-json";
+pub const TRACKS_COMPONENT_CODEC_ID: &str = "rusty.mechanics.tracks-json";
+pub const INTRINSIC_SOURCES_COMPONENT_CODEC_ID: &str = "rusty.mechanics.intrinsic-sources-json";
+pub const ACTIVE_EFFECTS_COMPONENT_CODEC_ID: &str = "rusty.mechanics.active-effects-json";
+pub const INVENTORY_COMPONENT_CODEC_ID: &str = "rusty.mechanics.inventory-json";
+pub const ITEM_COMPONENT_CODEC_ID: &str = "rusty.mechanics.item-json";
+pub const EQUIPMENT_COMPONENT_CODEC_ID: &str = "rusty.mechanics.equipment-json";
+
+pub const STATS_COMPONENT_CODEC_VERSION: u32 = 1;
+pub const TRACKS_COMPONENT_CODEC_VERSION: u32 = 1;
+pub const INTRINSIC_SOURCES_COMPONENT_CODEC_VERSION: u32 = 1;
+pub const ACTIVE_EFFECTS_COMPONENT_CODEC_VERSION: u32 = 2;
+pub const INVENTORY_COMPONENT_CODEC_VERSION: u32 = 2;
+pub const ITEM_COMPONENT_CODEC_VERSION: u32 = 1;
+pub const EQUIPMENT_COMPONENT_CODEC_VERSION: u32 = 1;
 
 pub const MAX_STATS_PER_ENTITY: usize = 128;
 pub const MAX_TRACKS_PER_ENTITY: usize = 128;
@@ -46,6 +51,66 @@ pub enum MechanicsComponentKind {
     Inventory,
     Item,
     Equipment,
+}
+
+impl MechanicsComponentKind {
+    pub const ALL: [Self; 7] = [
+        Self::Stats,
+        Self::Tracks,
+        Self::IntrinsicSources,
+        Self::ActiveEffects,
+        Self::Inventory,
+        Self::Item,
+        Self::Equipment,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Stats => StatsComponent::LABEL,
+            Self::Tracks => TracksComponent::LABEL,
+            Self::IntrinsicSources => IntrinsicSourcesComponent::LABEL,
+            Self::ActiveEffects => ActiveEffectsComponent::LABEL,
+            Self::Inventory => InventoryComponent::LABEL,
+            Self::Item => ItemComponent::LABEL,
+            Self::Equipment => EquipmentComponent::LABEL,
+        }
+    }
+
+    pub const fn type_id(self) -> &'static str {
+        match self {
+            Self::Stats => STATS_COMPONENT_TYPE_ID,
+            Self::Tracks => TRACKS_COMPONENT_TYPE_ID,
+            Self::IntrinsicSources => INTRINSIC_SOURCES_COMPONENT_TYPE_ID,
+            Self::ActiveEffects => ACTIVE_EFFECTS_COMPONENT_TYPE_ID,
+            Self::Inventory => INVENTORY_COMPONENT_TYPE_ID,
+            Self::Item => ITEM_COMPONENT_TYPE_ID,
+            Self::Equipment => EQUIPMENT_COMPONENT_TYPE_ID,
+        }
+    }
+
+    pub const fn codec_id(self) -> &'static str {
+        match self {
+            Self::Stats => STATS_COMPONENT_CODEC_ID,
+            Self::Tracks => TRACKS_COMPONENT_CODEC_ID,
+            Self::IntrinsicSources => INTRINSIC_SOURCES_COMPONENT_CODEC_ID,
+            Self::ActiveEffects => ACTIVE_EFFECTS_COMPONENT_CODEC_ID,
+            Self::Inventory => INVENTORY_COMPONENT_CODEC_ID,
+            Self::Item => ITEM_COMPONENT_CODEC_ID,
+            Self::Equipment => EQUIPMENT_COMPONENT_CODEC_ID,
+        }
+    }
+
+    pub const fn codec_version(self) -> u32 {
+        match self {
+            Self::Stats => STATS_COMPONENT_CODEC_VERSION,
+            Self::Tracks => TRACKS_COMPONENT_CODEC_VERSION,
+            Self::IntrinsicSources => INTRINSIC_SOURCES_COMPONENT_CODEC_VERSION,
+            Self::ActiveEffects => ACTIVE_EFFECTS_COMPONENT_CODEC_VERSION,
+            Self::Inventory => INVENTORY_COMPONENT_CODEC_VERSION,
+            Self::Item => ITEM_COMPONENT_CODEC_VERSION,
+            Self::Equipment => EQUIPMENT_COMPONENT_CODEC_VERSION,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -493,44 +558,44 @@ pub fn register_gameplay_components(
     let mut staged = registry.clone();
     staged.register(durable_registration::<StatsComponent>(
         STATS_COMPONENT_TYPE_ID,
-        STATS_CODEC_ID,
-        COMPONENT_CODEC_VERSION,
+        STATS_COMPONENT_CODEC_ID,
+        STATS_COMPONENT_CODEC_VERSION,
         validate_stats,
     ))?;
     staged.register(durable_registration::<TracksComponent>(
         TRACKS_COMPONENT_TYPE_ID,
-        TRACKS_CODEC_ID,
-        COMPONENT_CODEC_VERSION,
+        TRACKS_COMPONENT_CODEC_ID,
+        TRACKS_COMPONENT_CODEC_VERSION,
         validate_tracks,
     ))?;
     staged.register(durable_registration::<IntrinsicSourcesComponent>(
         INTRINSIC_SOURCES_COMPONENT_TYPE_ID,
-        INTRINSIC_SOURCES_CODEC_ID,
-        COMPONENT_CODEC_VERSION,
+        INTRINSIC_SOURCES_COMPONENT_CODEC_ID,
+        INTRINSIC_SOURCES_COMPONENT_CODEC_VERSION,
         validate_intrinsic_sources,
     ))?;
     staged.register(durable_registration::<ActiveEffectsComponent>(
         ACTIVE_EFFECTS_COMPONENT_TYPE_ID,
-        ACTIVE_EFFECTS_CODEC_ID,
-        ACTIVE_EFFECTS_CODEC_VERSION,
+        ACTIVE_EFFECTS_COMPONENT_CODEC_ID,
+        ACTIVE_EFFECTS_COMPONENT_CODEC_VERSION,
         validate_active_effects,
     ))?;
     staged.register(durable_registration::<InventoryComponent>(
         INVENTORY_COMPONENT_TYPE_ID,
-        INVENTORY_CODEC_ID,
-        INVENTORY_CODEC_VERSION,
+        INVENTORY_COMPONENT_CODEC_ID,
+        INVENTORY_COMPONENT_CODEC_VERSION,
         validate_inventory,
     ))?;
     staged.register(durable_registration::<ItemComponent>(
         ITEM_COMPONENT_TYPE_ID,
-        ITEM_CODEC_ID,
-        COMPONENT_CODEC_VERSION,
+        ITEM_COMPONENT_CODEC_ID,
+        ITEM_COMPONENT_CODEC_VERSION,
         |_| Ok(()),
     ))?;
     staged.register(durable_registration::<EquipmentComponent>(
         EQUIPMENT_COMPONENT_TYPE_ID,
-        EQUIPMENT_CODEC_ID,
-        COMPONENT_CODEC_VERSION,
+        EQUIPMENT_COMPONENT_CODEC_ID,
+        EQUIPMENT_COMPONENT_CODEC_VERSION,
         validate_equipment,
     ))?;
     *registry = staged;

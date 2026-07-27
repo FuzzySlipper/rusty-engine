@@ -22,6 +22,7 @@ Route read-only structured inspection of Engine-owned facts and the
 
 - [`engine-inspector/src/lib.rs`](../../rust/crates/engine-inspector/src/lib.rs)
 - [`engine-inspector/src/diagnostic.rs`](../../rust/crates/engine-inspector/src/diagnostic.rs)
+- [`engine-inspector/src/mechanics.rs`](../../rust/crates/engine-inspector/src/mechanics.rs)
 - [`engine-inspector/src/main.rs`](../../rust/crates/engine-inspector/src/main.rs)
 - [Inspection and diagnostics](../inspection-and-diagnostics.md)
 - [`audit-standalone.sh`](../../scripts/audit-standalone.sh)
@@ -33,6 +34,10 @@ Route read-only structured inspection of Engine-owned facts and the
   deterministic order, report its instance count, and list the exact component
   identities present on a focused entity. Store-side entity samples remain
   bounded and explicitly report truncation.
+- Mechanics reports strictly reconstruct with the caller-supplied catalog and
+  expose the fixed component presence/codec table, evaluated stat decisions,
+  tracks, effects, joined inventory, equipment, and bounded damage-receipt
+  detail without mutable access.
 - The `rusty-inspect` binary is a tool surface for humans and agents.
 - Consumers may render diagnostics, but the diagnostics do not redefine the
   facts they observe.

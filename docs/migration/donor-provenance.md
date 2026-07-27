@@ -484,6 +484,23 @@ revision, condition restrictions, automatic expiry owner, domain events, and aut
 remain excluded. The version-2 active-effects codec therefore persists only identity, definition,
 provenance, and stacks; downstream clocks and turns reconnect by stable effect identity.
 
+GM5 closes the literal donor audit. The checked
+[`migration/gameplay-mechanics-donor/disposition.tsv`](../../migration/gameplay-mechanics-donor/disposition.tsv)
+maps every one of the pinned donor tree's 152 paths: 3 adopted evidence rows, 12
+adapted/rewritten rows, and 137 exclusions. Each retained row names its successor owner and a
+rewritten proof; excluded rows explicitly keep donor crate/package/IR/session/replay/authoring and
+repository topology out. [`source.meta`](../../migration/gameplay-mechanics-donor/source.meta)
+records commit `e4d6d1afb5b8387de4ff805d73b2041df29ee590`, tree
+`3efee336ff8c6c9aeea2c37035d5258bfdf88847`, the item count, and the canonical path-set hash.
+
+No donor implementation file was copied verbatim. `rpg-core` primitives/authority,
+compiler admission/execution/diagnostic behavior, semantic-kernel failure cases, and the
+RuleWeaver-shaped composition were rewritten into the component/catalog/service owners and focused
+GM1-GM5 proofs named by the ledger. The local
+`check-gameplay-mechanics-donor-disposition.sh` gate validates this accounting without reading an
+Asha checkout; the separate builder is an explicit maintainer tool for re-auditing the pinned
+source, not an ordinary provider dependency.
+
 The operational dependency baseline is empty. After M10, Cargo metadata, provider fixture paths,
 shell scripts, executable documentation, and CI require only Rusty Engine; ordinary Engine work has
 no pnpm or Node graph at all. A clean clone with no Asha or demo sibling is the certification

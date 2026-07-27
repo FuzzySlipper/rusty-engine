@@ -207,6 +207,7 @@ dependencies = [
  "core-math",
  "engine-spatial",
  "entity-state",
+ "gameplay-mechanics",
  "serde",
  "serde_json",
  "voxel-asset",

@@ -61,7 +61,10 @@ without an Engine enum, global registry, or ECS scheduler.
 `gameplay-mechanics` optionally registers inert stats, tracks, sources, effects,
 inventory, unique-item, and equipment data in that same store, then exposes
 direct attributed stat, track, damage, and item/equipment services without
-owning product orchestration.
+owning product orchestration. The `engine-inspector` leaf can strictly reopen a
+mechanics snapshot with its admitted catalog and project component presence,
+evaluated stats, tracks, sources, effects, inventory, equipment, and receipt
+detail without mutable access.
 `engine-spatial` composes one canonical voxel authority with derived collision,
 navigation, mesh, motion, trigger, and edit mechanisms. Content and authoring
 crates own strict durable formats, validation, plans, and explicit mutation
@@ -205,6 +208,17 @@ cargo test -p <crate-name> --locked
 cargo clippy -p <crate-name> --all-targets --locked -- -D warnings
 ```
 
+The public mechanics example is a small downstream-style executable:
+
+```bash
+cargo run -p gameplay-mechanics --example compositions
+```
+
+It shows immediate shooter damage, infrastructure damage/repair and an
+explicitly scheduled effect, plus a d20-shaped preview/reaction/fresh-apply
+flow. None of the three creates an Engine session, scheduler, browser host, or
+rules interpreter.
+
 ## Offline voxel conversion
 
 Regenerate the checked generic artifact with:
@@ -226,6 +240,7 @@ The format, limits, provenance, and failure behavior are documented in
 | [Documentation index](docs/README.md) | Organized entry point for all repository docs |
 | [Canonical design](docs/design.md) | Provider ownership, host/platform boundaries, dependency direction, promotion |
 | [Agent code atlas](docs/agent-code-atlas.md) | Owner routing, primary paths, public surfaces, gates, and common mistakes |
+| [Known limitations](docs/known-limitations.md) | Active provider limitations and explicitly scheduled consumer certification |
 | [Rust source organization](docs/topics/development/rust-style.md) | Lightweight module and behavior-owner style |
 | [Rendering successor contract](docs/rendering-successor-contract.md) | Complete shared-rendering scope and adaptation boundary |
 | [Rendering operations](docs/rendering-operations.md) | Verification, exact revision consumption, CI, resources, limitations |

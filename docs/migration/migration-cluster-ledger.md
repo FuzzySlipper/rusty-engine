@@ -105,6 +105,7 @@ Every future cluster must preserve these properties:
 | M9 | Standalone repository | #6132-#6136 | The selected Rust donors, narrow local render edge, licensed fixture, verification, and CI became repository-local; the operational Asha dependency audit closed empty at the reviewed head above. |
 | M10 | External reference consumer | #6137, #6141-#6145 | The walking product moved to public `rusty-engine-demo`, depends one-way on an exact Engine revision, added downstream-only `ExtractionBeacon` semantics, and proved a second TypeScript-authored composition without another Rust change. At extraction time Engine retained only provider crates and converter evidence. |
 | M11R | Complete shared rendering | #6156-#6163 | The complete pinned Asha render investment was adapted into renderer-neutral Rust crates plus an isolated four-package TypeScript/Three/host workspace. Every one of 134 donor files has a final disposition; the demo deleted its private renderer and consumes the public exact-revision packages. |
+| GM0-GM5 | Initial gameplay-mechanics provider | #6284-#6289 | Seven ordinary durable component families, one immutable catalog, named stats/tracks/effects/damage/inventory/equipment services, strict reconstruction, read-only inspection, runnable compositions, bounded costs, and literal 152-item `asha-rpg` disposition landed without a session, scheduler, IR, or shadow state store. |
 
 Detailed measurements, implementation commits, browser behavior, and limitations are retained in
 [experiment-results.md](experiment-results.md). Exact donor sources and adaptations are in
@@ -127,6 +128,9 @@ The completed clusters answered the original architectural questions:
   workspace without restoring Asha's browser/runtime package graph.
 - The external demo builds and proves real product behavior from an exact public Engine revision,
   while Engine verifies independently as a provider.
+- Common stats, mutable tracks, attributed sources, explicit effects, damage/restoration,
+  inventory, unique-item containment, and equipment fit one optional component-backed provider
+  without turning the donor RPG runtime into Engine architecture.
 
 The migration therefore ended as a successor adoption, not a patch queue intended to flow back into
 Asha.
@@ -210,6 +214,24 @@ preferences. Angular/Nx and Playwright remain outside ordinary Engine installati
 
 Den remains authoritative for exact review state and final M11 acceptance.
 
+### GM0-GM5: gameplay-mechanics provider
+
+Tasks #6284-#6289 use `asha-rpg` revision
+`e4d6d1afb5b8387de4ff805d73b2041df29ee590` as bounded semantic and proof evidence. The successor
+is one optional Rust crate over the canonical `entity-state` component store, not a crate-topology
+port. Stats and tracks remain distinct; unique items are ordinary entities under canonical
+containment; named services own mutations; operation receipts are bounded explanations rather
+than events or replay records.
+
+The checked
+[`gameplay-mechanics-donor/disposition.tsv`](../../migration/gameplay-mechanics-donor/disposition.tsv)
+accounts for all 152 donor-tree items as 3 adopted evidence rows, 12 adapted/rewritten rows, and
+137 exclusions. The local checker proves the pinned path set is complete without requiring a donor
+checkout. Provider closeout includes strict seven-component reconstruction, immutable mechanics
+inspection, direct shooter/infrastructure/d20-shaped examples, and local-cost measurements.
+Reference-product migration and three-composition product reconciliation remain the explicit
+consumer stages after the reviewed provider revision; they are not hidden GM5 acceptance work.
+
 ## Reopened and absent clusters
 
 ### M7C: voxel annotations and edit history, reopened through M11S
@@ -221,10 +243,11 @@ that consumer; do not restore Asha's universal protocol, replay, collaboration, 
 
 ### Other absent families
 
-- Inventory/equipment should be added successor-native when a gameplay loop needs it; no compelling
-  donor closure has been identified.
-- Generic rules, modifiers, conditions, and relationship evaluation should emerge inside concrete
-  gameplay features before generalization.
+- The initial `gameplay-mechanics` provider now owns bounded inventory/equipment plus common numeric
+  source mechanisms. Product-specific item behavior, attacks, checks, turns, conditions, and
+  relationship policy remain downstream.
+- A universal rules language, condition/formula AST, scheduler, behavior graph, and RPG authority
+  session remain absent. Future smaller mechanisms still require concrete consumer evidence.
 - Dynamic physics should wait for behavior the current kinematic/collision path cannot express.
 - Networking, adversarial scripting, collaborative editing, and universal mod APIs are outside the
   current design decision.

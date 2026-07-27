@@ -6,8 +6,8 @@ state. They are not a runtime spine, repair authority, event route, replay log, 
 The current implementation has two layers:
 
 ```text
-asset-catalog  authored-scene  entity-state  engine-spatial  content-store  asset-import
-      \              |             |              |               |             /
+asset-catalog  authored-scene  entity-state  gameplay-mechanics  engine-spatial  content-store
+      \              |             |                 |                  |             /
                          engine-inspector (read-only leaf)
                                       |
                                 rusty-inspect CLI
@@ -22,8 +22,8 @@ dependency direction cannot give it authority over the owners it observes.
 
 - severity is `info`, `warning`, `error`, or `fatal`; only `fatal` means the artifact cannot be
   loaded at all;
-- domain identifies the direct owner: catalog, entity state, scene, voxel state, persistence, or
-  import;
+- domain identifies the direct owner: catalog, entity state, gameplay mechanics, scene, voxel
+  state, persistence, or import;
 - code remains an owner-local stable string instead of entering an engine-wide code registry;
 - location can name a local path, asset, entity, scene node, or voxel chunk;
 - remedies are advisory text and never authorize a mutation.
@@ -42,6 +42,7 @@ runtime calls continue to use `decode_scene` and `decode_manifest`, which valida
 | --- | --- | --- | --- |
 | Catalog | `inspect_catalog` | `catalog` | kinds, dependency counts, validation, optional lock drift |
 | Entity state | `inspect_entity_state` | `entity-state` | lifecycle, source, registered component identities/counts, per-entity presence, relationships, focused queries |
+| Gameplay mechanics | `inspect_mechanics_entity`, `inspect_damage_receipt` | `mechanics` | exact codec/presence metadata, evaluated stats and attributed decisions, tracks, effects, indexed inventory, equipment, bounded receipt stages and costs |
 | Scene | `inspect_scene` | `scene` | hierarchy/kind counts, validation, optional catalog cross-check |
 | Voxel state | `inspect_voxel_asset`, `inspect_voxel_state` | `voxel` | occupancy, materials, chunks, mesh/collision/navigation coherence |
 | Persistence | `inspect_content_manifest` | `content` | artifact roles/classes and dependency-ordered load plan |
@@ -50,6 +51,14 @@ runtime calls continue to use `decode_scene` and `decode_manifest`, which valida
 The voxel report rebuilds the ordinary `VoxelCollisionScene` from a validated voxel asset. Its
 chunk, collision, mesh, navigation, revision, and authority-hash readouts therefore describe the
 same projections gameplay queries use rather than a diagnostic-only model.
+
+The mechanics command takes an entity-state snapshot, a strict
+`MechanicsCatalogDefinition`, and an entity ID. It admits the caller-supplied
+catalog and uses the canonical gameplay registry for reconstruction before
+projecting state. The catalog version remains downstream compatibility
+authority; the fingerprint is diagnostic evidence only. Component revisions in
+the report are live instance-local evidence and therefore restart at restored
+slot revisions rather than pretending to be durable history.
 
 Run `cargo run -p engine-inspector --bin rusty-inspect -- --help` for command syntax. Exit status is
 zero for a clean inspection, one for an empty focused query, two for read/decode/validation/import

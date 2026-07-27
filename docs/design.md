@@ -265,6 +265,30 @@ component's catalog version and referenced definition before returning the candi
 Immutable catalog and entity-mechanics views expose canonical values and exact component revisions
 for analysis and later inspector projection without creating a mutation lane.
 
+GM5 stabilizes that initial provider surface rather than adding another runtime layer. All seven
+component type identities, codec identities, and positive codec versions are public metadata on
+`MechanicsComponentKind`; arbitrary registered component types remain runtime-only unless their
+own explicit durable codec says otherwise. Strict reconstruction rejects unknown required kinds,
+duplicate type/value records, codec drift, malformed component values, catalog-version mismatch,
+and unresolved definitions before returning a candidate. The downstream catalog version remains
+the compatibility and migration authority. The canonical definition fingerprint remains
+diagnostic/cache/receipt evidence and deliberately does not lock ordinary balance changes.
+
+`engine-inspector` is the read-only cross-owner leaf for the admitted result. Its mechanics report
+projects the fixed seven-kind presence table, evaluated stat stages and attributed decisions,
+resolved tracks, intrinsic/effect activations, joined indexed inventory, unique item identities,
+equipment assignments, and bounded traversal evidence. Its damage-receipt projection preserves
+the complete bounded stage/decision/change/fact detail. Inspection neither mutates components nor
+becomes a renderer, product schema, save owner, event journal, or replay authority.
+
+The direct consumer example under `gameplay-mechanics/examples` covers realtime shooter,
+infrastructure, and d20-shaped downstream composition with named services only. The GM5
+reconstruction proof attaches all seven component families, omits an explicitly runtime-only
+fixture from persistence, restores through the complete registry and catalog, then continues the
+same operation on original and restored state with the same authoritative result. A separate
+2,048-unrelated-entity measurement leaves the simple stat and one-part damage source costs at zero,
+matching the code path's exact slot lookups and component-local cloning.
+
 See [Gameplay mechanics](code-map/gameplay-mechanics.md) for entry points, frozen quotas, and focused
 gates.
 

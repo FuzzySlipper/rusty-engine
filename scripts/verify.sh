@@ -10,6 +10,7 @@ cargo fmt --all --check
 ./scripts/audit-studio-isolation.sh
 ./scripts/check-doc-links.sh
 ./scripts/check-asha-equivalence.sh --final
+./scripts/check-gameplay-mechanics-donor-disposition.sh
 ./scripts/test-asha-equivalence-checker.sh
 ./scripts/check-render-completeness.sh --strict
 ./scripts/test-render-completeness-checker.sh
