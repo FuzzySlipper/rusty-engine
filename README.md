@@ -1,8 +1,10 @@
 # Rusty Engine
 
-Rusty Engine is a standalone provider for object-centric games. It owns reusable entity, spatial,
-collision, navigation, voxel, mesh, asset, offline-conversion, and shared rendering mechanisms. It
-does not own a game runtime, project schema, browser shell, or game-specific presentation policy.
+Rusty Engine is a standalone, host-neutral provider for object-centric games. It owns reusable
+entity, spatial, collision, navigation, voxel, mesh, asset, offline-conversion, authoring, and shared
+rendering mechanisms. It does not own a complete game runtime, a game-specific project schema, a
+product shell, or game-specific presentation policy. Reusable scene, asset, voxel, and persistence
+formats may live here; the downstream product still owns their game meaning and storage policy.
 
 The loading-bay walking product that established these boundaries now lives in
 [`FuzzySlipper/rusty-engine-demo`](https://github.com/FuzzySlipper/rusty-engine-demo). That project
@@ -22,7 +24,7 @@ downstream game policy and orchestration
 
 offline authoring input --> voxel-convert --> canonical voxel-asset JSON
 
-isolated render workspace --> retained TS projection --> Three/host/editor surfaces
+isolated render workspace --> retained TS projection --> Three backend / browser-webview host / editor surfaces
 ```
 
 The important ownership rule is mechanism here, game meaning downstream. `entity-state` provides
@@ -34,6 +36,12 @@ voxel authority with derived collision, navigation, mesh, motion, and edit opera
 `render-presentation` provides bounded animation, audio, billboard, particle, and telemetry
 mechanisms with no gameplay or renderer authority. The separately gated `render/` workspace is
 shared by downstream demo and Studio consumers.
+
+The current rendering path uses TypeScript, Three/WebGL, DOM, WebAudio, and Chromium. Those are the
+current backend, host, and integration-test choices, not a commitment to web-game delivery. Ordinary
+Rust mechanisms require no browser, HTTP server, origin, URL route, or Node installation. A browser,
+Electron/Tauri webview, headless process, or future renderer can sit above the same explicit Engine
+borders without becoming a second gameplay authority.
 
 The implemented ownership and promotion rules are in [docs/design.md](docs/design.md).
 
@@ -117,7 +125,8 @@ The format, limits, provenance, and failure behavior are documented in
 
 ## Documentation
 
-- [Current design](docs/design.md) — provider ownership, dependency direction, and promotion rules.
+- [Current design](docs/design.md) — provider ownership, host/platform boundaries, dependency
+  direction, and promotion rules.
 - [Rendering successor contract](docs/rendering-successor-contract.md) — complete rendering scope,
   ownership, adaptation, and closeout rule.
 - [Shared rendering operations](docs/rendering-operations.md) — verification, exact-revision

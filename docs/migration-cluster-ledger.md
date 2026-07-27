@@ -37,6 +37,11 @@ dispositions, ordering lessons, and deferred decisions.
 - Anything not selected remains absent. Recovering a useful donor later is safer than deleting
   accidental structural inheritance.
 
+Absence by default rejects speculative topology; it is not a quota or deletion rule for useful,
+implemented behavior in an owner-approved equivalence campaign. A known first-party consumer such
+as Demo or Studio is concrete demand. Preserve the behavior it needs behind a successor-owned
+boundary, while removing only named obsolete authority, dependency, and proof structures.
+
 The complete crate inventory is linked from [donor-provenance.md](donor-provenance.md). Its
 portability classifications shortlist evidence; they do not waive a fresh consumer and dependency
 audit.
@@ -74,12 +79,14 @@ Every future cluster must preserve these properties:
    parallel gameplay truth.
 6. **Persistence clarity:** project content and runtime snapshots remain separate; neither requires
    event replay.
-7. **Product proof:** a product-facing cluster reaches the real browser/Three path as well as
-   focused tests.
+7. **Product proof:** a product-facing cluster reaches its real owning host path as well as focused
+   tests; Chromium/Three is the current reference where browser/WebGL behavior is actually owned.
 8. **Bounded amplification:** closeout identifies the surfaces changed by a content variation and a
    behavior variation.
 9. **Standalone operation:** no sibling checkout or host-global package link becomes operational.
 10. **Old-spine audit:** the change does not silently restore Asha's structural center.
+11. **Host neutrality:** browser validation remains in browser/backend owners and does not introduce
+    HTTP, DOM, URL, or Playwright requirements into host-neutral Engine mechanisms.
 
 ## Completed progression
 
@@ -177,6 +184,20 @@ literal 134-file accounting is
 renderer, public package preparation, and the external demo each have separate proportionate gates.
 See [rendering-operations.md](rendering-operations.md) for commands and known limitations.
 
+### M11S: successor functionality equivalence
+
+Den task #6164 runs before Studio implementation. It audits proven Asha entity, scene, catalog,
+asset, voxel, authoring, environment, level-generation, mesh-import, physics, serialization,
+annotation, edit-history, trigger, and related rule behavior against the thinner successor. Useful
+functionality is ported into an existing successor owner, consolidated behind a better-named owner,
+or replaced by equivalent successor behavior. Historical crate count and package names are not
+acceptance criteria.
+
+The campaign keeps the old RuntimeSession/bridge/replay/provider/codegen/proof topology excluded.
+It also prevents Studio from privately rebuilding a thin browser-shaped substitute merely because a
+shared Engine mechanism was missing. Every donor family receives an explicit preserve/adapt/replace/
+exclude disposition, focused owner-level evidence, and a host-neutrality check before M11S closes.
+
 ### M11: isolated first-party Studio
 
 Den task #6138 supersedes the old unscheduled M8 placeholder. The isolated `studio/` workspace now
@@ -189,13 +210,14 @@ preferences. Angular/Nx and Playwright remain outside ordinary Engine installati
 
 Den remains authoritative for exact review state and final M11 acceptance.
 
-## Deliberately unscheduled and absent clusters
+## Reopened and absent clusters
 
-### M7C: voxel annotations and edit history
+### M7C: voxel annotations and edit history, reopened through M11S
 
-Live edits and offline conversion did not produce a concrete consumer for undo, collaborative
-history, author annotations, or a universal edit protocol. Schedule this only when a named tool,
-provenance, collaboration, or diagnostic workflow establishes ownership and persistence semantics.
+The early live-edit and conversion slices did not yet justify a universal edit protocol. Studio is
+now a named consumer for author annotations and bounded edit history, so #6164 reopens the useful
+behavior before Studio implementation. Preserve annotation and undo/redo semantics where they serve
+that consumer; do not restore Asha's universal protocol, replay, collaboration, or proof topology.
 
 ### Other absent families
 
@@ -221,6 +243,11 @@ For any future Asha-derived capability:
 5. Slice work by complete capability outcomes, not crate, protocol, or historical task names.
 6. Close with focused tests, real product evidence when visible, persistence behavior, provenance,
    and the standalone/old-spine audits.
+
+For newly proposed capability, the concrete-consumer rule prevents speculative framework growth.
+For an owner-approved equivalence campaign such as M11R or M11S, the named predecessor and
+first-party consumers already establish the demand; the work must account for useful behavior rather
+than requiring each consumer to reimplement it before promotion.
 
 Do not create speculative tasks merely because the portability report labels something reusable or
 because an Asha feature once existed.

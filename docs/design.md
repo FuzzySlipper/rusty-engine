@@ -2,10 +2,12 @@
 
 Status: current provider architecture
 
-Rusty Engine is a standalone mechanism provider for object-centric games. Game policy,
-orchestration, project schemas, persistence aggregates, input, and the meaning of presentation
-intents belong to concrete downstream products. Shared renderer-neutral projection and renderer
-host mechanisms live here so the demo and Studio cannot drift into independent renderers. The first
+Rusty Engine is a standalone, host-neutral mechanism provider for object-centric games. Game policy,
+orchestration, game-specific project schemas, product persistence aggregates, input meaning, and the
+meaning of presentation intents belong to concrete downstream products. Reusable scene, entity,
+asset, voxel-authoring, serialization, and persistence mechanisms may live here when they remain
+independent of one game's vocabulary. Shared renderer-neutral projection and renderer host
+mechanisms live here so the demo and Studio cannot drift into independent renderers. The first
 reference consumer is
 [`rusty-engine-demo`](https://github.com/FuzzySlipper/rusty-engine-demo), extracted after it had
 proved the provider boundary in this repository.
@@ -25,6 +27,8 @@ in [migration-cluster-ledger.md](migration-cluster-ledger.md).
   service location.
 - Add traits, registries, protocols, and compatibility layers only after multiple concrete consumers
   prove the same seam.
+- Keep host-neutral mechanisms, renderer-neutral projection, backend realization, browser/webview
+  lifecycle, and product-shell policy in visibly separate owners.
 - Maintain a one-way dependency: consumers may depend on Engine; Engine never imports or checks out
   a consumer to verify itself.
 
@@ -48,12 +52,12 @@ services:   svc-volume / svc-spatial / svc-collision / svc-pathfinding / svc-rng
 
 offline only: GLB + request --> voxel-convert --> canonical voxel-asset JSON --> downstream admission
 
-isolated renderer workspace: retained JSON --> render-projection (TS) --> Three/host surfaces
+isolated renderer workspace: retained JSON --> render-projection (TS) --> Three backend / host adapters
 ```
 
-No Engine crate knows the downstream game's component families, event vocabulary, stored-project
-schema, or browser API. The Rust render crates know only renderer-neutral values and explicit
-read-only provider views; the isolated renderer workspace knows no gameplay authority.
+No Engine crate knows the downstream game's component families, event vocabulary, game-specific
+stored-project schema, or browser API. The Rust render crates know only renderer-neutral values and
+explicit read-only provider views; the isolated renderer workspace knows no gameplay authority.
 
 ## Entity capability boundary
 
@@ -197,6 +201,36 @@ preparation and peer graph are independently checked in a clean temporary consum
 boundary is not a workspace-only convention. Operational commands, CI ownership, and explicit
 limitations are recorded in [rendering-operations.md](rendering-operations.md).
 
+## Host and platform boundary
+
+Rusty Engine is not a web-game engine. The current first-party renderer and tool UI use web
+technology because Three/WebGL, DOM, WebAudio, and Chromium provide a practical backend, editor
+surface, and real integration environment. They are replaceable backend and host choices rather
+than Engine authority or a requirement that products be delivered over HTTP.
+
+The boundary is layered deliberately:
+
+- ordinary Rust crates own host-neutral state, services, authoring, persistence, and
+  renderer-neutral projection;
+- `@rusty-engine/render-contracts` and `@rusty-engine/render-projection` own strict data decoding and
+  retained projection without Three, DOM, browser lifecycle, or HTTP loading;
+- `@rusty-engine/renderer-three` owns Three/WebGL realization. Its current browser-surface modules
+  are explicit backend adapters, not a renderer-neutral or Engine-wide platform API;
+- `@rusty-engine/renderer-host` owns the current browser/webview lifecycle, DOM overlays, WebAudio,
+  input capture, inspection, and editor-host behavior; and
+- Demo and Studio own their product shells, window/application policy, semantic input mapping,
+  resource locations, and user-facing acceptance.
+
+Assets and project data cross public borders through explicit identities, descriptors, bytes,
+resolvers, and typed file operations. Core capability must not depend on public URLs, `fetch`,
+same-origin behavior, browser storage, an HTTP control route, or Playwright-only mutation hooks.
+Electron or Tauri may reuse the webview-facing adapters while supplying local window, filesystem,
+resource, and lifecycle ports. A headless process or future backend can reuse the authoritative and
+renderer-neutral layers without emulating a website.
+
+The durable decision and placement litmus tests are in Den ADR
+`rusty-engine/host-platform-and-browser-validation-boundary`.
+
 ## Durable voxel assets and offline conversion
 
 `voxel-asset` owns a strict schema, semantic validation, canonical encoding, content identity, and
@@ -284,11 +318,11 @@ is an explicit integration gate.
 
 A game built on Engine should own its complete behavioral story:
 
-1. authored configuration and its schema;
+1. game-specific authored configuration, schema, and meaning layered on reusable Engine formats;
 2. semantic admission into concrete game components;
 3. named services and centrally invoked systems;
 4. explicit scheduling and consequential typed facts/events;
-5. runtime snapshot and project persistence policy; and
+5. runtime snapshot, project storage location, and product migration policy; and
 6. input, readout, and typed presentation intents consumed by the shared renderer border.
 
 The reference demo owns all of those surfaces, including its `ExtractionBeacon` addition. That
@@ -311,6 +345,14 @@ either product's policy. When that evidence exists:
 Duplication across one early consumer is cheaper than a premature plugin API, registry, or universal
 gameplay abstraction.
 
+This rule governs newly invented abstractions; it is not a deletion filter during an approved
+successor migration. A proven donor capability required by a named first-party consumer may be
+preserved or adapted before two new implementations exist. Demo and Studio already establish
+concrete demand for shared rendering and authoring mechanisms. In a functionality-equivalence
+campaign, preserve useful behavior, remove obsolete topology, name every replacement or exclusion,
+and validate the successor-owned boundary rather than requiring the first consumer to rediscover the
+missing mechanism privately.
+
 ## Architectural exclusions
 
 The current provider deliberately excludes:
@@ -323,6 +365,8 @@ The current provider deliberately excludes:
 - replay or certification as a prerequisite for ordinary execution;
 - Node, browser, Three, WebAudio, DOM, Studio, or editor dependencies in ordinary Rust-provider
   work (they remain isolated under `render/` with their own gate);
+- HTTP serving, public URLs, browser storage, same-origin behavior, or a browser event loop as an
+  Engine capability prerequisite;
 - Asha's former Gameplay Fabric, runtime facade, provider/bundle lifecycle, and bridge topology; and
 - an operational dependency on `rusty-engine-demo` or any sibling checkout.
 
@@ -339,6 +383,14 @@ byte-reproducible conversion. The separately installed `render/` workspace has i
 TypeScript/browser gate. A third post-push gate installs the four render packages from the exact
 public Engine commit into a clean temporary consumer; the external demo retains its own complete
 product gate against an exact Engine revision.
+
+Validation follows ownership: focused Rust/headless tests prove Rust mechanisms; headless
+cross-language tests prove renderer-neutral contracts and projection; focused Three/WebGL evidence
+proves the backend; Chromium proves real DOM, WebAudio, input, canvas, and browser lifecycle; a
+packaged Electron/Tauri host will own its packaging/lifecycle proof when one exists; and Demo or
+Studio proves user-visible behavior in its supported host. Chromium success does not turn HTTP or
+browser semantics into Engine requirements, while headless success does not replace real host tests
+for genuinely host-owned behavior.
 
 Source organization follows [rust-style.md](rust-style.md): one primary behavior owner or cohesive
 type family per file, thin crate roots, and no one-type-per-file rule. File size is a review signal,

@@ -56,6 +56,29 @@ downstream game or Studio Rust authority
 - A renderer pick is a hint. The downstream authority must revalidate it before acting.
 - A renderer readout is observation. It cannot mutate or certify gameplay.
 
+## Platform posture
+
+This contract is host neutral even though its current complete realization uses Three/WebGL and a
+browser/webview. The layers have different portability obligations:
+
+- Rust render values and projection are independent of JavaScript, DOM, WebGL, and HTTP.
+- `render-contracts` and TypeScript `render-projection` are backend neutral and can run headlessly
+  without Three or DOM.
+- `renderer-three` owns the Three/WebGL backend. Its browser-surface and editor-viewport modules are
+  explicit current-host adapters, not requirements imposed on renderer-neutral consumers.
+- `renderer-host` owns current DOM, WebAudio, browser input/lifecycle, overlay, inspection, and tool
+  composition.
+
+Resources enter through explicit frame descriptions and caller-owned byte/resolver capabilities;
+arbitrary URL fetching, same-origin behavior, HTTP routing, and browser storage are not part of the
+render contract. Chromium is the current real-host acceptance substrate. It proves this adapter,
+including behavior that cannot be established headlessly, but does not make Rusty Engine a
+network-delivered web-game platform. Electron/Tauri webviews may reuse the current host layer, and a
+future backend may reuse the renderer-neutral border without preserving Three internals.
+
+The repository-wide placement and validation rules are in Den ADR
+`rusty-engine/host-platform-and-browser-validation-boundary`.
+
 ## Complete behavior families
 
 The machine-readable lifecycle is in
@@ -185,12 +208,17 @@ picking, and both scenes are released by the same surface disposal. Editor viewp
 policies continue to admit only their documented scene/debug layers; they do not silently turn
 product viewmodels into authored editor content.
 
+That repository-local fetch is fixture delivery inside the current browser adapter, not the public
+resource model. Consumers provide explicit resource resolvers or bytes; an Engine capability must
+not require an HTTP server or same-origin asset path.
+
 ## CI boundaries
 
 - **Engine:** Rust formatting, metadata, unit/integration tests, Clippy, standalone audit, and
   render completeness format. No Node installation.
 - **Render:** frozen pnpm install, boundary checks, typecheck, unit/golden tests, build, and real
-  Chromium/WebGL coverage. Triggered by `render/**` and named Rust render contract/fixture paths.
+  Chromium/WebGL coverage for the current backend and browser/webview host. Triggered by `render/**`
+  and named Rust render contract/fixture paths.
 - **Demo consumer:** exact-revision install plus full demo browser acceptance when shared render
   surfaces or demo integration change.
 - **Public package consumer:** post-push clean temporary install of all four Git subdirectories at
@@ -204,3 +232,7 @@ cross-language fixtures, demo migration, and browser evidence together prove pre
 representation change must name the replacement behavior. Nothing may be deferred merely because
 no current demo screen exercises it. Operational commands and intentional limitations are in
 [rendering-operations.md](rendering-operations.md).
+
+Closeout also requires platform dependencies to remain in their owning layers: renderer-neutral
+packages must not acquire Three/DOM/HTTP assumptions, and browser convenience must not create a new
+Rust authority or synthetic product API.

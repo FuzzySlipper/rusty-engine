@@ -1,7 +1,9 @@
 # Donor provenance
 
 Rusty Engine internalizes or selectively adapts Asha code only when that code sits below a
-successor-owned boundary and has a concrete consumer.
+successor-owned boundary and has a concrete consumer. During an owner-approved equivalence campaign,
+a known first-party predecessor and its Demo/Studio consumers satisfy that demand; the
+multiple-consumer promotion rule is not a deletion filter for proven functionality.
 
 ## Current repository disposition
 
@@ -135,6 +137,10 @@ evidence for downstream code to revalidate; neither can mutate gameplay. A real 
 the retained GLB and exercises every Three feature family through WebGL, while the Node suite owns
 the exhaustive resource and failure matrix.
 
+Chromium proves the current Three/browser adapter rather than a web-delivery requirement. The
+renderer-neutral Rust and TypeScript layers do not depend on DOM, HTTP, URL loading, or browser
+storage, and public resources enter through explicit frames and resolver/byte capabilities.
+
 Task #6161 adapts the complete donor `@asha/renderer-host` behavior into
 `@rusty-engine/renderer-host`. It retains explicit animated-GLB loading and hash checks, animation
 controller realization and sampled cues, WebAudio buses and spatial sources, localized/value/icon
@@ -176,6 +182,34 @@ replace the donor's compatibility manifests and evidence catalogs. They prove be
 isolation without restoring generated protocols, replay certification, or a universal host facade.
 Operational commands and intentional limitations are in
 [rendering-operations.md](rendering-operations.md).
+
+## M11S functionality-equivalence donor
+
+Task #6164 uses the same owner-approved Asha baseline as the rendering campaign,
+`6462a6de20d48ea1a3b7456826804bd9507860a5`, for a pre-Studio functionality-equivalence pass. Its
+acceptance unit is useful behavior, not crate name, crate count, or donor dependency topology.
+
+The required audit includes:
+
+- `core-catalog`, `core-entity`, and `core-scene` behavior not yet present in the thin successor;
+- voxel asset, annotation, conversion, and edit-history protocols and services, plus voxel-edit
+  rules;
+- entity/environment authoring, level generation, mesh import, physics, serialization, asset import,
+  trigger-volume, and animation-controller behavior; and
+- the related assets, entity-authoring, identity, presentation, render, scene, and state-machine
+  candidates where a required behavior has no cleaner successor owner.
+
+Existing Rusty Engine packages with similar names are not presumed equivalent. The campaign must
+map each useful donor behavior to an existing owner, a renamed or consolidated successor owner, an
+explicit equivalent implementation, or a named exclusion. Renaming and consolidation are welcome;
+silent functional loss is not. The final implementation should append exact source-to-successor
+mappings and evidence here.
+
+RuntimeSession, native/runtime bridges, replay and certification, global providers, universal
+protocol/codegen umbrellas, compatibility manifests, and proof catalogs remain excluded. Their
+absence does not justify dropping ordinary correctness properties such as validation, atomic
+replacement, stale-write rejection, bounded resource use, deterministic codecs, and failure
+non-mutation.
 
 ## Crate portability inventory
 
