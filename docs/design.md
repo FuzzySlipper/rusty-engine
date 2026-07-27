@@ -188,6 +188,22 @@ instance identity after load. Effect receipts expose the exact effect revision, 
 revisions, source expansion cost, removed/current instances, and activated source identities; they
 are operation evidence rather than an ambient event journal.
 
+GM3 promotes damage, healing, and repair through the existing direct service boundaries.
+`DamageService::preview` is a pure full-pipeline evaluation; `DamageService::apply` recomputes that
+evaluation against current components and atomically publishes the staged `TracksComponent`.
+Each part ledger discloses the fixed stages and explicit toward-zero rounding policy. Selected flat
+reductions aggregate in a checked wider intermediate before clamping at zero, while absorption
+visits canonical protection tracks only until the remaining damage is exhausted and marks depleted
+or later absorbers inapplicable. A late invalid part, bound, or arithmetic operation leaves every
+track and revision untouched. Typed depletion facts and bounded source-traversal evidence are
+returned to the downstream owner; receipts are not persisted or broadcast.
+
+Healing and repair deliberately remain `TrackService::restore` operations. They share the same
+stat-derived bounds and exact-slot mutation authority as damage without pretending restoration is
+negative damage. Realtime reactions and tabletop interrupts are explicit downstream orchestration:
+the owner may apply an effect or other state change after preview, then submits a fresh damage
+apply. Engine retains no pending hit, reaction window, combat session, event queue, or scheduler.
+
 Those splits deliberately avoid an unrestricted heterogeneous transaction and complete-world
 cloning. Each intermediate state is valid, and failure of the later step cannot expose an
 out-of-bounds track or an equipped item owned elsewhere. A future operation that cannot satisfy that

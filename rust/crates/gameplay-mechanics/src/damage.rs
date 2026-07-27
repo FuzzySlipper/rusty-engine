@@ -65,6 +65,7 @@ pub struct DamagePartReceipt {
     pub after_flat: MechanicsScalar,
     pub combined_scale_numerator: u128,
     pub combined_scale_denominator: u128,
+    pub rounding: RoundingPolicy,
     pub after_scale: MechanicsScalar,
     pub absorbed: MechanicsScalar,
     pub applied: MechanicsScalar,
@@ -200,6 +201,7 @@ impl DamageService {
                     after_flat: MechanicsScalar::zero(),
                     combined_scale_numerator: 1,
                     combined_scale_denominator: 1,
+                    rounding: RoundingPolicy::TowardZero,
                     after_scale: MechanicsScalar::zero(),
                     absorbed: MechanicsScalar::zero(),
                     applied: MechanicsScalar::zero(),
@@ -208,7 +210,7 @@ impl DamageService {
                 continue;
             }
 
-            let mut flat_total = MechanicsScalar::zero();
+            let mut flat_total = 0_i128;
             for candidate in &candidates {
                 if candidate.stage != ResponseStage::Flat
                     || decisions[candidate.decision_index].outcome != DecisionOutcome::Applied
@@ -217,13 +219,21 @@ impl DamageService {
                 }
                 if let DamageResponseDefinition::FlatReduction { amount, .. } = &candidate.response
                 {
-                    flat_total = flat_total.checked_add(*amount)?;
+                    flat_total = flat_total
+                        .checked_add(i128::from(amount.get()))
+                        .ok_or(crate::MechanicsArithmeticError::Overflow)?;
                 }
             }
-            let after_flat = if flat_total >= part.amount {
+            let after_flat = i128::from(part.amount.get())
+                .checked_sub(flat_total)
+                .ok_or(crate::MechanicsArithmeticError::Overflow)?;
+            let after_flat = if after_flat <= 0 {
                 MechanicsScalar::zero()
             } else {
-                part.amount.checked_sub(flat_total)?
+                MechanicsScalar::new(
+                    i64::try_from(after_flat)
+                        .map_err(|_| crate::MechanicsArithmeticError::Overflow)?,
+                )?
             };
 
             let mut combined_scale = CombinedRatio::one();
@@ -249,6 +259,11 @@ impl DamageService {
                 {
                     continue;
                 }
+                if remaining == MechanicsScalar::zero() {
+                    decisions[candidate_response.decision_index].outcome =
+                        DecisionOutcome::Inapplicable;
+                    continue;
+                }
                 let DamageResponseDefinition::Absorb { track, .. } = &candidate_response.response
                 else {
                     unreachable!("absorption stage contains absorption response");
@@ -269,6 +284,11 @@ impl DamageService {
                     track_bounds(state, catalog, request.target, track, &request.operation)?;
                 merge_evidence(&mut observed_revisions, &mut source_cost, observed, cost);
                 validate_current(request.target, track, before, minimum, maximum)?;
+                if before == minimum {
+                    decisions[candidate_response.decision_index].outcome =
+                        DecisionOutcome::Inapplicable;
+                    continue;
+                }
                 original_tracks.entry(track.clone()).or_insert(before);
                 let used = before.capped_nonnegative_distance_from(minimum, remaining)?;
                 let after = before.checked_sub(used)?;
@@ -326,6 +346,7 @@ impl DamageService {
                 after_flat,
                 combined_scale_numerator: combined_scale.numerator(),
                 combined_scale_denominator: combined_scale.denominator(),
+                rounding: RoundingPolicy::TowardZero,
                 after_scale,
                 absorbed,
                 applied,
@@ -643,6 +664,7 @@ fn merge_evidence(
     observed_revisions.append(&mut observed);
     source_cost.intrinsic_entries_visited += cost.intrinsic_entries_visited;
     source_cost.effect_entries_visited += cost.effect_entries_visited;
+    source_cost.effect_source_activations_visited += cost.effect_source_activations_visited;
     source_cost.equipment_entries_visited += cost.equipment_entries_visited;
     source_cost.item_components_read += cost.item_components_read;
     source_cost.request_entries_visited += cost.request_entries_visited;

@@ -41,6 +41,7 @@ restoration, and their bounded receipts.
 - [`gameplay-mechanics/tests/contract.rs`](../../rust/crates/gameplay-mechanics/tests/contract.rs)
 - [`gameplay-mechanics/tests/gm1.rs`](../../rust/crates/gameplay-mechanics/tests/gm1.rs)
 - [`gameplay-mechanics/tests/gm2.rs`](../../rust/crates/gameplay-mechanics/tests/gm2.rs)
+- [`gameplay-mechanics/tests/gm3.rs`](../../rust/crates/gameplay-mechanics/tests/gm3.rs)
 - [Canonical design](../design.md)
 
 ## Public composition
@@ -140,6 +141,31 @@ effect instance/definition identity, typed provenance, and stacks. Timers,
 timestamps, durations, turns, callbacks, and scheduler state belong to the
 downstream owner and reconnect through the stable effect instance identity.
 
+## Damage and restoration
+
+`DamageService` owns one fixed, auditable pipeline: prevention, selected flat
+reduction, combined exact scaling with one toward-zero rounding step, canonical
+protection-track absorption, and target-track application. Each part receipt
+records every numeric stage, the rounding policy, absorbed/applied/unapplied
+amounts, and the applied/suppressed/inapplicable decision for every collected
+source response. Protection and target depletion are typed facts for the
+downstream owner to interpret.
+
+Preview stages the complete multipart result without publishing it. Apply runs
+a fresh preview against current state and replaces the exact `TracksComponent`
+slot once; it never commits a retained preview. Flat reductions aggregate in a
+checked wider intermediate before clamping at zero. Absorption stops once no
+damage remains and treats both depleted protection tracks and later absorbers
+as inapplicable. Any stale revision, missing track, invalid current bound,
+receipt quota, or arithmetic failure leaves the slot and global revisions
+unchanged.
+
+Healing and repair use `TrackService::restore`, returning a separate
+`TrackMutationReceipt` under the same derived bounds. A realtime or turn-based
+owner that permits a reaction between inspection and resolution explicitly
+changes the relevant source/effect state and then submits a fresh damage apply;
+Engine stores no pending attack or reaction session.
+
 Do not route these operations through `EntityCommandBatch`, clone complete
 `EntityState`, expose mutable component references, or add a private entity map.
 If a future invariant cannot be split into valid states, route a narrowly
@@ -165,6 +191,8 @@ specified atomic seam to the `entity-state` owner.
   128.
 - Damage order: prevention, flat reduction, combined exact scale and one
   toward-zero rounding, ordered absorption, target application.
+- Damage source-cost evidence includes source collection performed while
+  resolving stat-derived protection and target bounds.
 - Track-room comparisons use a wider intermediate capped by the admitted
   operation amount, so both signed scalar endpoints remain valid track bounds.
 
@@ -193,6 +221,7 @@ Studio gate is additional evidence only when a Studio-owned boundary changes.
 - Storing final derived stats instead of admitted base values plus sources.
 - Treating tracks as negative stats or calling damage a restoration operation.
 - Reusing a preview after a reaction instead of submitting a fresh apply.
+- Treating repair/healing as signed damage instead of a bounded track restore.
 - Adding an item-instance namespace or unique-item list beside `EntityId` and
   containment.
 - Hiding effect timing or callbacks inside a component.
