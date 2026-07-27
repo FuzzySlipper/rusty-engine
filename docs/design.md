@@ -496,7 +496,13 @@ Rejected or stale operations publish no bytes.
 Applied voxel-object animation is a disposable presentation session, not another authoring model.
 Studio selects a canonical instance and sends closed scrub/play/pause/sample/stop commands with an
 explicit timestamp. The project-owned adapter retains `VoxelObjectPlayer`; admitted Rust clip
-durations select the runtime frame, and render projection returns a complete neutral frame. Each
+durations select the runtime frame, and render projection may return a retained
+`setVoxelObjectFrame` patch after its complete project frame has been accepted. Studio applies that
+patch to the existing authored renderer channel, waits for the renderer's successful generation
+receipt, presents the authored frame duration, and only then advances a virtual explicit clock by
+one pose. Slow adapter, transport, or renderer work therefore slows playback instead of skipping
+canonical poses. The compact complete frame remains available for remounts and presentation changes,
+and Studio periodically replaces from it so incremental history stays bounded. Each
 readout names the saved initial frame separately from the transient posture and sampled frame.
 Neither the player posture nor the browser sampling cadence enters project or object bytes, and
 open, reread, close, and durable mutation discard the session. Conversion-candidate playback remains
