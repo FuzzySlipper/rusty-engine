@@ -92,10 +92,14 @@ specified atomic seam to the `entity-state` owner.
 - Damage parts: 8.
 - Request-local sources: 32.
 - Receipt response decisions: 256.
+- Active-source collection and per-source decision expansion stop at that
+  receipt ceiling before cloning an over-limit entry.
 - Source bindings/effects: 64 each; equipment assignments: 32; inventory
   stacks: 128.
 - Damage order: prevention, flat reduction, combined exact scale and one
   toward-zero rounding, ordered absorption, target application.
+- Track-room comparisons use a wider intermediate capped by the admitted
+  operation amount, so both signed scalar endpoints remain valid track bounds.
 
 The base path does exact component-slot checks but visits zero entries for
 absent intrinsic, effect, inventory, equipment, or item state. Operations do

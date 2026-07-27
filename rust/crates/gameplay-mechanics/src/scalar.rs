@@ -50,6 +50,21 @@ impl MechanicsScalar {
         }
         Ok(self)
     }
+
+    pub(crate) fn capped_nonnegative_distance_from(
+        self,
+        lower: Self,
+        cap: Self,
+    ) -> Result<Self, MechanicsArithmeticError> {
+        let cap = cap.require_nonnegative()?;
+        let distance = i128::from(self.0) - i128::from(lower.0);
+        if distance < 0 {
+            return Err(MechanicsArithmeticError::Overflow);
+        }
+        let bounded = distance.min(i128::from(cap.0));
+        let bounded = i64::try_from(bounded).map_err(|_| MechanicsArithmeticError::Overflow)?;
+        Self::new(bounded)
+    }
 }
 
 impl Serialize for MechanicsScalar {

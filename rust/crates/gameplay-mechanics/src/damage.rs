@@ -4,12 +4,14 @@ use core_ids::EntityId;
 use entity_state::{ComponentRevision, EntityAuthoringService, EntityState};
 
 use crate::{
-    source::collect_active_sources, stat::track_bounds, track::ensure_revision, CombinedRatio,
-    DamageKindId, DamageResponseDefinition, DecisionOutcome, ExactRatio, MechanicsCatalog,
-    MechanicsComponentKind, MechanicsError, MechanicsScalar, ObservedComponentRevision,
-    OperationId, RequestSource, RoundingPolicy, SourceCollectionCost, SourceDefinitionId,
-    SourceInstanceIdentity, StackingGroupId, StackingPolicy, TrackId, TracksComponent,
-    MAX_REQUEST_SOURCES,
+    source::{collect_active_sources, ensure_receipt_capacity},
+    stat::track_bounds,
+    track::ensure_revision,
+    CombinedRatio, DamageKindId, DamageResponseDefinition, DecisionOutcome, ExactRatio,
+    MechanicsCatalog, MechanicsComponentKind, MechanicsError, MechanicsScalar,
+    ObservedComponentRevision, OperationId, RequestSource, RoundingPolicy, SourceCollectionCost,
+    SourceDefinitionId, SourceInstanceIdentity, StackingGroupId, StackingPolicy, TrackId,
+    TracksComponent, MAX_REQUEST_SOURCES,
 };
 
 pub const MAX_DAMAGE_PARTS: usize = 8;
@@ -157,6 +159,7 @@ impl DamageService {
             request.target,
             &request.operation,
             &request.request_sources,
+            MAX_DAMAGE_RECEIPT_DECISIONS,
         )?;
         observed_revisions.push(ObservedComponentRevision {
             entity: request.target,
@@ -174,12 +177,6 @@ impl DamageService {
             let part_index = part_index as u16;
             let mut candidates =
                 collect_response_candidates(catalog, &sources, part, part_index, &mut decisions)?;
-            if decisions.len() > MAX_DAMAGE_RECEIPT_DECISIONS {
-                return Err(MechanicsError::ReceiptQuotaExceeded {
-                    actual: decisions.len(),
-                    maximum: MAX_DAMAGE_RECEIPT_DECISIONS,
-                });
-            }
             select_responses(&mut candidates, &mut decisions);
 
             let prevented = candidates.iter().any(|candidate| {
@@ -273,8 +270,7 @@ impl DamageService {
                 merge_evidence(&mut observed_revisions, &mut source_cost, observed, cost);
                 validate_current(request.target, track, before, minimum, maximum)?;
                 original_tracks.entry(track.clone()).or_insert(before);
-                let available = before.checked_sub(minimum)?;
-                let used = available.min(remaining);
+                let used = before.capped_nonnegative_distance_from(minimum, remaining)?;
                 let after = before.checked_sub(used)?;
                 assert!(candidate.set_current(track, after));
                 absorbed = absorbed.checked_add(used)?;
@@ -311,8 +307,8 @@ impl DamageService {
             original_tracks
                 .entry(request.target_track.clone())
                 .or_insert(target_before);
-            let available = target_before.checked_sub(target_minimum)?;
-            let applied = available.min(remaining);
+            let applied =
+                target_before.capped_nonnegative_distance_from(target_minimum, remaining)?;
             let target_after = target_before.checked_sub(applied)?;
             assert!(candidate.set_current(&request.target_track, target_after));
             if target_before > target_minimum && target_after == target_minimum {
@@ -471,6 +467,11 @@ fn collect_response_candidates(
         let definition = catalog
             .source(&source.definition)
             .expect("source collection admits catalog definitions");
+        ensure_receipt_capacity(
+            decisions.len(),
+            definition.damage_responses.len().max(1),
+            MAX_DAMAGE_RECEIPT_DECISIONS,
+        )?;
         if definition.damage_responses.is_empty() {
             decisions.push(ResponseDecision {
                 part_index,

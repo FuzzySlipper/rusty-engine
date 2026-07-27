@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use core_ids::EntityId;
 use entity_state::EntityState;
 
-use crate::source::collect_active_sources;
+use crate::source::{collect_active_sources, ensure_receipt_capacity};
 use crate::{
     DecisionOutcome, MechanicsCatalog, MechanicsComponentKind, MechanicsError, MechanicsScalar,
     ObservedComponentRevision, OperationId, RequestSource, SourceCollectionCost,
@@ -78,8 +78,14 @@ impl StatService {
                 stat: stat.clone(),
             })?;
 
-        let (sources, source_cost, mut observed_revisions) =
-            collect_active_sources(state, catalog, entity, operation, request_sources)?;
+        let (sources, source_cost, mut observed_revisions) = collect_active_sources(
+            state,
+            catalog,
+            entity,
+            operation,
+            request_sources,
+            MAX_STAT_DECISIONS,
+        )?;
         observed_revisions.push(ObservedComponentRevision {
             entity,
             component: MechanicsComponentKind::Stats,
@@ -96,12 +102,21 @@ impl StatService {
             let definition = catalog
                 .source(&source.definition)
                 .expect("source collection admits catalog definitions");
-            let mut matched = false;
+            let matching_contributions = definition
+                .stat_contributions
+                .iter()
+                .filter(|contribution| &contribution.stat == stat)
+                .count();
+            ensure_receipt_capacity(
+                decisions.len(),
+                matching_contributions.max(1),
+                MAX_STAT_DECISIONS,
+            )?;
+            let matched = matching_contributions != 0;
             for (index, contribution) in definition.stat_contributions.iter().enumerate() {
                 if &contribution.stat != stat {
                     continue;
                 }
-                matched = true;
                 let decision_index = decisions.len();
                 decisions.push(StatDecision {
                     source: source.identity.clone(),
@@ -127,12 +142,6 @@ impl StatService {
                     amount: None,
                 });
             }
-        }
-        if decisions.len() > MAX_STAT_DECISIONS {
-            return Err(MechanicsError::ReceiptQuotaExceeded {
-                actual: decisions.len(),
-                maximum: MAX_STAT_DECISIONS,
-            });
         }
 
         select_stat_candidates(&candidates, &mut decisions);

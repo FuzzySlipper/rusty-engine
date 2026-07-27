@@ -146,32 +146,28 @@ impl TrackService {
             });
         }
 
-        let after = match request.kind {
+        let (after, applied_amount) = match request.kind {
             TrackAdjustmentKind::Spend => {
-                let attempted = before.checked_sub(amount)?;
-                if attempted < minimum {
+                let available = before.capped_nonnegative_distance_from(minimum, amount)?;
+                if available < amount {
+                    let attempted = before
+                        .get()
+                        .checked_sub(amount.get())
+                        .expect("admitted scalar difference fits in i64");
                     return Err(MechanicsError::TrackOutOfBounds {
                         entity: request.entity,
                         track: request.track.clone(),
-                        attempted: attempted.get(),
+                        attempted,
                         minimum: minimum.get(),
                         maximum: maximum.get(),
                     });
                 }
-                attempted
+                (before.checked_sub(amount)?, amount)
             }
             TrackAdjustmentKind::Restore => {
-                let room = maximum.checked_sub(before)?;
-                if amount >= room {
-                    maximum
-                } else {
-                    before.checked_add(amount)?
-                }
+                let applied = maximum.capped_nonnegative_distance_from(before, amount)?;
+                (before.checked_add(applied)?, applied)
             }
-        };
-        let applied_amount = match request.kind {
-            TrackAdjustmentKind::Spend => before.checked_sub(after)?,
-            TrackAdjustmentKind::Restore => after.checked_sub(before)?,
         };
         let mut candidate = component.clone();
         assert!(candidate.set_current(&request.track, after));

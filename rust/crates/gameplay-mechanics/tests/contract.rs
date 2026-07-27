@@ -15,6 +15,8 @@ use gameplay_mechanics::{
     StatContributionDefinition, StatDefinition, StatId, StatService, StatValue, StatsComponent,
     TrackAdjustmentKind, TrackDefinition, TrackId, TrackMaximum, TrackMutationRequest,
     TrackReconciliationRequest, TrackService, TrackValue, TracksComponent,
+    MAX_ABS_MECHANICS_SCALAR, MAX_CATALOG_SOURCES, MAX_DAMAGE_RECEIPT_DECISIONS,
+    MAX_RESPONSES_PER_SOURCE, MAX_STAT_CONTRIBUTIONS_PER_SOURCE, MAX_STAT_DECISIONS,
 };
 
 const SHOOTER: EntityId = EntityId::new(1);
@@ -26,6 +28,9 @@ const FORTIFIED_TARGET: EntityId = EntityId::new(6);
 const LATE_TARGET: EntityId = EntityId::new(7);
 const LATE_ARMOR_ITEM: EntityId = EntityId::new(8);
 const SECOND_OWNER: EntityId = EntityId::new(9);
+const FULL_SPAN_RESTORE_TARGET: EntityId = EntityId::new(10);
+const FULL_SPAN_DAMAGE_TARGET: EntityId = EntityId::new(11);
+const QUOTA_TARGET: EntityId = EntityId::new(12);
 
 fn scalar(value: i64) -> MechanicsScalar {
     MechanicsScalar::new(value).unwrap()
@@ -379,6 +384,134 @@ fn damage_request(
     }
 }
 
+struct QuotaFixture {
+    catalog: MechanicsCatalog,
+    state: EntityState,
+    stat: StatId,
+    track: TrackId,
+    damage_kind: DamageKindId,
+}
+
+fn quota_fixture(
+    source_count: usize,
+    entries_per_source: usize,
+    effect_count: usize,
+) -> QuotaFixture {
+    let version = CatalogVersion::parse(format!(
+        "quota-{source_count}-{entries_per_source}-{effect_count}.v1"
+    ))
+    .unwrap();
+    let stat = StatId::parse("quota_stat").unwrap();
+    let track = TrackId::parse("quota_track").unwrap();
+    let damage_kind = DamageKindId::parse("quota_damage").unwrap();
+    let effect = EffectDefinitionId::parse("quota_effect").unwrap();
+    let sources = (0..source_count)
+        .map(|source_index| SourceDefinition {
+            id: SourceDefinitionId::parse(format!("quota_source_{source_index}")).unwrap(),
+            priority: 0,
+            stat_contributions: (0..entries_per_source)
+                .map(|entry_index| StatContributionDefinition {
+                    stat: stat.clone(),
+                    amount: MechanicsScalar::zero(),
+                    stacking_group: StackingGroupId::parse(format!(
+                        "quota_stat_{source_index}_{entry_index}"
+                    ))
+                    .unwrap(),
+                    stacking: StackingPolicy::Sum,
+                })
+                .collect(),
+            damage_responses: (0..entries_per_source)
+                .map(|entry_index| DamageResponseDefinition::FlatReduction {
+                    selector: DamageKindSelector::Any,
+                    amount: MechanicsScalar::zero(),
+                    stacking_group: StackingGroupId::parse(format!(
+                        "quota_damage_{source_index}_{entry_index}"
+                    ))
+                    .unwrap(),
+                    stacking: StackingPolicy::Sum,
+                })
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    let effect_sources = sources.iter().map(|source| source.id.clone()).collect();
+    let catalog = MechanicsCatalog::admit(MechanicsCatalogDefinition {
+        version: version.clone(),
+        stats: vec![StatDefinition {
+            id: stat.clone(),
+            minimum: scalar(-100),
+            maximum: scalar(100),
+        }],
+        tracks: vec![TrackDefinition {
+            id: track.clone(),
+            minimum: MechanicsScalar::zero(),
+            maximum: TrackMaximum::Fixed { value: scalar(100) },
+        }],
+        sources,
+        damage_kinds: vec![DamageKindDefinition {
+            id: damage_kind.clone(),
+        }],
+        effects: vec![EffectDefinition {
+            id: effect.clone(),
+            sources: effect_sources,
+        }],
+        items: vec![],
+        equipment_slots: vec![],
+    })
+    .unwrap();
+    let registry = gameplay_mechanics::gameplay_component_registry().unwrap();
+    let mut state = EntityState::from_definitions_with_registry(
+        registry,
+        [EntityDefinition::new(QUOTA_TARGET, "quota-target")],
+    )
+    .unwrap();
+    attach(
+        &mut state,
+        QUOTA_TARGET,
+        StatsComponent::new(
+            version.clone(),
+            vec![StatValue {
+                stat: stat.clone(),
+                base: MechanicsScalar::zero(),
+            }],
+        )
+        .unwrap(),
+    );
+    attach(
+        &mut state,
+        QUOTA_TARGET,
+        TracksComponent::new(
+            version.clone(),
+            vec![TrackValue {
+                track: track.clone(),
+                current: scalar(100),
+            }],
+        )
+        .unwrap(),
+    );
+    attach(
+        &mut state,
+        QUOTA_TARGET,
+        ActiveEffectsComponent::new(
+            version,
+            (0..effect_count)
+                .map(|effect_index| ActiveEffectInstance {
+                    instance: EffectInstanceId::parse(format!("quota_effect_{effect_index}"))
+                        .unwrap(),
+                    definition: effect.clone(),
+                })
+                .collect(),
+        )
+        .unwrap(),
+    );
+    QuotaFixture {
+        catalog,
+        state,
+        stat,
+        track,
+        damage_kind,
+    }
+}
+
 #[test]
 fn shooter_damage_is_one_direct_fixed_pipeline_call_with_attributed_receipt() {
     let catalog = catalog();
@@ -689,6 +822,320 @@ fn bound_lowering_uses_a_valid_state_reconciliation_then_source_change() {
         )
         .unwrap();
     gameplay_mechanics::validate_state_against_catalog(&state, &catalog).unwrap();
+}
+
+#[test]
+fn full_span_signed_tracks_support_bounded_restore_and_damage() {
+    let version = CatalogVersion::parse("full-span.v1").unwrap();
+    let track = TrackId::parse("full_span").unwrap();
+    let damage_kind = DamageKindId::parse("boundary_damage").unwrap();
+    let catalog = MechanicsCatalog::admit(MechanicsCatalogDefinition {
+        version: version.clone(),
+        stats: vec![],
+        tracks: vec![TrackDefinition {
+            id: track.clone(),
+            minimum: scalar(-MAX_ABS_MECHANICS_SCALAR),
+            maximum: TrackMaximum::Fixed {
+                value: scalar(MAX_ABS_MECHANICS_SCALAR),
+            },
+        }],
+        sources: vec![],
+        damage_kinds: vec![DamageKindDefinition {
+            id: damage_kind.clone(),
+        }],
+        effects: vec![],
+        items: vec![],
+        equipment_slots: vec![],
+    })
+    .unwrap();
+    let registry = gameplay_mechanics::gameplay_component_registry().unwrap();
+    let mut state = EntityState::from_definitions_with_registry(
+        registry,
+        [
+            EntityDefinition::new(FULL_SPAN_RESTORE_TARGET, "full-span-restore"),
+            EntityDefinition::new(FULL_SPAN_DAMAGE_TARGET, "full-span-damage"),
+        ],
+    )
+    .unwrap();
+    attach(
+        &mut state,
+        FULL_SPAN_RESTORE_TARGET,
+        TracksComponent::new(
+            version.clone(),
+            vec![TrackValue {
+                track: track.clone(),
+                current: scalar(-MAX_ABS_MECHANICS_SCALAR),
+            }],
+        )
+        .unwrap(),
+    );
+    attach(
+        &mut state,
+        FULL_SPAN_DAMAGE_TARGET,
+        TracksComponent::new(
+            version,
+            vec![TrackValue {
+                track: track.clone(),
+                current: scalar(MAX_ABS_MECHANICS_SCALAR),
+            }],
+        )
+        .unwrap(),
+    );
+
+    let restore_revision = state
+        .component_revision::<TracksComponent>(FULL_SPAN_RESTORE_TARGET)
+        .unwrap();
+    let restore_operation = operation("full_span_restore");
+    let restored = TrackService::restore(
+        &mut state,
+        &catalog,
+        TrackMutationRequest {
+            operation: restore_operation.clone(),
+            source: request_identity(&restore_operation, "restore_origin"),
+            entity: FULL_SPAN_RESTORE_TARGET,
+            track: track.clone(),
+            amount: scalar(1),
+            kind: TrackAdjustmentKind::Spend,
+            expected_revision: Some(restore_revision.clone()),
+        },
+    )
+    .unwrap();
+    assert_eq!(restored.before.get(), -MAX_ABS_MECHANICS_SCALAR);
+    assert_eq!(restored.after.get(), -MAX_ABS_MECHANICS_SCALAR + 1);
+    assert_eq!(restored.applied_amount.get(), 1);
+    assert_eq!(
+        restored.observed_tracks_revision,
+        restore_revision.revision()
+    );
+    assert_eq!(
+        state
+            .component_revision::<TracksComponent>(FULL_SPAN_RESTORE_TARGET)
+            .unwrap()
+            .revision(),
+        restored.committed_tracks_revision
+    );
+
+    let before_rejected_spend = state
+        .component::<TracksComponent>(FULL_SPAN_RESTORE_TARGET)
+        .unwrap()
+        .unwrap()
+        .clone();
+    let before_rejected_spend_revision = state
+        .component_revision::<TracksComponent>(FULL_SPAN_RESTORE_TARGET)
+        .unwrap();
+    let spend_operation = operation("full_span_rejected_spend");
+    assert!(matches!(
+        TrackService::spend(
+            &mut state,
+            &catalog,
+            TrackMutationRequest {
+                operation: spend_operation.clone(),
+                source: request_identity(&spend_operation, "spend_origin"),
+                entity: FULL_SPAN_RESTORE_TARGET,
+                track: track.clone(),
+                amount: scalar(2),
+                kind: TrackAdjustmentKind::Restore,
+                expected_revision: None,
+            },
+        ),
+        Err(MechanicsError::TrackOutOfBounds {
+            attempted,
+            minimum,
+            maximum,
+            ..
+        }) if attempted == -MAX_ABS_MECHANICS_SCALAR - 1
+            && minimum == -MAX_ABS_MECHANICS_SCALAR
+            && maximum == MAX_ABS_MECHANICS_SCALAR
+    ));
+    assert_eq!(
+        state
+            .component::<TracksComponent>(FULL_SPAN_RESTORE_TARGET)
+            .unwrap()
+            .unwrap(),
+        &before_rejected_spend
+    );
+    assert_eq!(
+        state
+            .component_revision::<TracksComponent>(FULL_SPAN_RESTORE_TARGET)
+            .unwrap(),
+        before_rejected_spend_revision
+    );
+
+    let damage_revision = state
+        .component_revision::<TracksComponent>(FULL_SPAN_DAMAGE_TARGET)
+        .unwrap();
+    let damage_operation = operation("full_span_damage");
+    let damaged = DamageService::apply(
+        &mut state,
+        &catalog,
+        DamageRequest {
+            operation: damage_operation.clone(),
+            source: request_identity(&damage_operation, "damage_origin"),
+            actor: None,
+            target: FULL_SPAN_DAMAGE_TARGET,
+            target_track: track,
+            parts: vec![DamagePart {
+                amount: scalar(1),
+                kind: damage_kind,
+            }],
+            request_sources: vec![],
+            expected_tracks_revision: Some(damage_revision.clone()),
+        },
+    )
+    .unwrap();
+    assert_eq!(damaged.parts[0].applied.get(), 1);
+    assert_eq!(damaged.parts[0].unapplied, MechanicsScalar::zero());
+    assert_eq!(damaged.track_changes.len(), 1);
+    assert_eq!(
+        damaged.track_changes[0].before.get(),
+        MAX_ABS_MECHANICS_SCALAR
+    );
+    assert_eq!(
+        damaged.track_changes[0].after.get(),
+        MAX_ABS_MECHANICS_SCALAR - 1
+    );
+    assert_eq!(damaged.observed_tracks_revision, damage_revision.revision());
+    assert_eq!(
+        damaged.committed_tracks_revision,
+        Some(
+            state
+                .component_revision::<TracksComponent>(FULL_SPAN_DAMAGE_TARGET)
+                .unwrap()
+                .revision()
+        )
+    );
+}
+
+#[test]
+fn decision_quota_preflights_bound_source_and_response_expansion() {
+    assert_eq!(MAX_STAT_DECISIONS, MAX_DAMAGE_RECEIPT_DECISIONS);
+    for (source_count, entries_per_source, effect_count, expected_actual) in [
+        (MAX_CATALOG_SOURCES, 1, 2, MAX_STAT_DECISIONS + 1),
+        (
+            1,
+            MAX_STAT_CONTRIBUTIONS_PER_SOURCE,
+            9,
+            MAX_STAT_CONTRIBUTIONS_PER_SOURCE * 9,
+        ),
+    ] {
+        assert!(entries_per_source <= MAX_RESPONSES_PER_SOURCE);
+        let QuotaFixture {
+            catalog,
+            mut state,
+            stat,
+            track,
+            damage_kind,
+        } = quota_fixture(source_count, entries_per_source, effect_count);
+        let before_stats = state
+            .component::<StatsComponent>(QUOTA_TARGET)
+            .unwrap()
+            .unwrap()
+            .clone();
+        let before_stats_revision = state
+            .component_revision::<StatsComponent>(QUOTA_TARGET)
+            .unwrap();
+        let before_tracks = state
+            .component::<TracksComponent>(QUOTA_TARGET)
+            .unwrap()
+            .unwrap()
+            .clone();
+        let before_tracks_revision = state
+            .component_revision::<TracksComponent>(QUOTA_TARGET)
+            .unwrap();
+        let before_effects = state
+            .component::<ActiveEffectsComponent>(QUOTA_TARGET)
+            .unwrap()
+            .unwrap()
+            .clone();
+        let before_effects_revision = state
+            .component_revision::<ActiveEffectsComponent>(QUOTA_TARGET)
+            .unwrap();
+
+        let stat_operation = OperationId::parse(format!(
+            "quota_stat_{source_count}_{entries_per_source}_{effect_count}"
+        ))
+        .unwrap();
+        assert!(matches!(
+            StatService::evaluate(
+                &state,
+                &catalog,
+                QUOTA_TARGET,
+                &stat,
+                &stat_operation,
+                &[],
+            ),
+            Err(MechanicsError::ReceiptQuotaExceeded { actual, maximum })
+                if actual == expected_actual && maximum == MAX_STAT_DECISIONS
+        ));
+
+        let damage_operation = OperationId::parse(format!(
+            "quota_damage_{source_count}_{entries_per_source}_{effect_count}"
+        ))
+        .unwrap();
+        let damage_request = DamageRequest {
+            operation: damage_operation.clone(),
+            source: request_identity(&damage_operation, "damage_origin"),
+            actor: None,
+            target: QUOTA_TARGET,
+            target_track: track,
+            parts: vec![DamagePart {
+                amount: scalar(1),
+                kind: damage_kind,
+            }],
+            request_sources: vec![],
+            expected_tracks_revision: Some(before_tracks_revision.clone()),
+        };
+        assert!(matches!(
+            DamageService::preview(&state, &catalog, &damage_request),
+            Err(MechanicsError::ReceiptQuotaExceeded { actual, maximum })
+                if actual == expected_actual && maximum == MAX_DAMAGE_RECEIPT_DECISIONS
+        ));
+        assert!(matches!(
+            DamageService::apply(&mut state, &catalog, damage_request),
+            Err(MechanicsError::ReceiptQuotaExceeded { actual, maximum })
+                if actual == expected_actual && maximum == MAX_DAMAGE_RECEIPT_DECISIONS
+        ));
+
+        assert_eq!(
+            state
+                .component::<StatsComponent>(QUOTA_TARGET)
+                .unwrap()
+                .unwrap(),
+            &before_stats
+        );
+        assert_eq!(
+            state
+                .component_revision::<StatsComponent>(QUOTA_TARGET)
+                .unwrap(),
+            before_stats_revision
+        );
+        assert_eq!(
+            state
+                .component::<TracksComponent>(QUOTA_TARGET)
+                .unwrap()
+                .unwrap(),
+            &before_tracks
+        );
+        assert_eq!(
+            state
+                .component_revision::<TracksComponent>(QUOTA_TARGET)
+                .unwrap(),
+            before_tracks_revision
+        );
+        assert_eq!(
+            state
+                .component::<ActiveEffectsComponent>(QUOTA_TARGET)
+                .unwrap()
+                .unwrap(),
+            &before_effects
+        );
+        assert_eq!(
+            state
+                .component_revision::<ActiveEffectsComponent>(QUOTA_TARGET)
+                .unwrap(),
+            before_effects_revision
+        );
+    }
 }
 
 #[test]

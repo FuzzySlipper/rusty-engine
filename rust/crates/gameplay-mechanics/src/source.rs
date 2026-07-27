@@ -76,6 +76,7 @@ pub(crate) fn collect_active_sources(
     entity: EntityId,
     operation: &OperationId,
     request_sources: &[RequestSource],
+    maximum_sources: usize,
 ) -> Result<
     (
         Vec<ActiveSource>,
@@ -112,6 +113,7 @@ pub(crate) fn collect_active_sources(
                     instance: binding.instance.clone(),
                 },
                 binding.definition.clone(),
+                maximum_sources,
             )?;
         }
     }
@@ -147,6 +149,7 @@ pub(crate) fn collect_active_sources(
                         source: source.clone(),
                     },
                     source.clone(),
+                    maximum_sources,
                 )?;
             }
         }
@@ -223,6 +226,7 @@ pub(crate) fn collect_active_sources(
                         source: source.clone(),
                     },
                     source.clone(),
+                    maximum_sources,
                 )?;
             }
         }
@@ -238,6 +242,7 @@ pub(crate) fn collect_active_sources(
                 instance: request.instance.clone(),
             },
             request.definition.clone(),
+            maximum_sources,
         )?;
     }
 
@@ -285,7 +290,9 @@ fn push_source(
     collected: &mut Vec<ActiveSource>,
     identity: SourceInstanceIdentity,
     definition: SourceDefinitionId,
+    maximum_sources: usize,
 ) -> Result<(), MechanicsError> {
+    ensure_receipt_capacity(collected.len(), 1, maximum_sources)?;
     let admitted = catalog
         .source(&definition)
         .ok_or_else(|| MechanicsError::UnknownSource {
@@ -296,6 +303,18 @@ fn push_source(
         definition,
         priority: admitted.priority,
     });
+    Ok(())
+}
+
+pub(crate) fn ensure_receipt_capacity(
+    current: usize,
+    additional: usize,
+    maximum: usize,
+) -> Result<(), MechanicsError> {
+    let actual = current.saturating_add(additional);
+    if actual > maximum {
+        return Err(MechanicsError::ReceiptQuotaExceeded { actual, maximum });
+    }
     Ok(())
 }
 
