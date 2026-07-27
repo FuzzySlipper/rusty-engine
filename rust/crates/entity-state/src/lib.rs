@@ -23,7 +23,8 @@ pub use activation::{
     ComponentActivationState,
 };
 pub use authoring::{
-    EntityAuthoringError, EntityAuthoringFact, EntityAuthoringReceipt, EntityAuthoringService,
+    ComponentReplacement, EntityAuthoringError, EntityAuthoringFact, EntityAuthoringReceipt,
+    EntityAuthoringService, MAX_COMPONENT_REPLACEMENTS,
 };
 pub use component::{
     ComponentAccessError, ComponentCodec, ComponentCodecError, ComponentIdentityError,

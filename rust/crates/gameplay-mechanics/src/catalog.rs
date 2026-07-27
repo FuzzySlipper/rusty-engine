@@ -3,9 +3,11 @@ use std::fmt::Write;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::component::MAX_STACK_QUANTITY;
 use crate::{
-    CatalogVersion, DamageKindId, EffectDefinitionId, EquipmentSlotId, ExactRatio,
-    ItemDefinitionId, MechanicsScalar, SourceDefinitionId, StackingGroupId, StatId, TrackId,
+    CapacityMetricId, CatalogVersion, DamageKindId, EffectDefinitionId, EquipmentExclusivityId,
+    EquipmentSlotId, ExactRatio, ItemClassificationId, ItemDefinitionId, MechanicsScalar,
+    SourceDefinitionId, StackingGroupId, StatId, TrackId,
 };
 
 pub const MAX_CATALOG_STATS: usize = 128;
@@ -15,7 +17,13 @@ pub const MAX_CATALOG_DAMAGE_KINDS: usize = 64;
 pub const MAX_CATALOG_EFFECTS: usize = 128;
 pub const MAX_CATALOG_ITEMS: usize = 256;
 pub const MAX_CATALOG_EQUIPMENT_SLOTS: usize = 64;
+pub const MAX_CATALOG_CAPACITY_METRICS: usize = 32;
 pub const MAX_SOURCES_PER_EFFECT: usize = 32;
+pub const MAX_SOURCES_PER_ITEM: usize = 32;
+pub const MAX_ITEM_CLASSIFICATIONS: usize = 16;
+pub const MAX_CAPACITY_COSTS_PER_ITEM: usize = 32;
+pub const MAX_EQUIPMENT_SLOTS_PER_ITEM: u16 = 8;
+pub const MAX_CAPACITY_COST_UNITS: u64 = 1_000_000;
 pub const MAX_EFFECT_STACKS: u16 = 32;
 pub const MAX_EFFECT_INSTANCES_PER_GROUP: u16 = 64;
 pub const MAX_STAT_CONTRIBUTIONS_PER_SOURCE: usize = 32;
@@ -206,11 +214,35 @@ pub enum ItemKind {
     Unique,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CapacityMetricDefinition {
+    pub id: CapacityMetricId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ItemCapacityCost {
+    pub metric: CapacityMetricId,
+    pub units: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ItemEquipmentPolicy {
+    pub required_slots: u16,
+    pub exclusive_group: Option<EquipmentExclusivityId>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ItemDefinition {
     pub id: ItemDefinitionId,
     pub kind: ItemKind,
+    pub maximum_quantity: u64,
+    pub classifications: Vec<ItemClassificationId>,
+    pub capacity_costs: Vec<ItemCapacityCost>,
+    pub equipment: Option<ItemEquipmentPolicy>,
     pub sources: Vec<SourceDefinitionId>,
 }
 
@@ -218,6 +250,7 @@ pub struct ItemDefinition {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EquipmentSlotDefinition {
     pub id: EquipmentSlotId,
+    pub allowed_classifications: Vec<ItemClassificationId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -229,6 +262,7 @@ pub struct MechanicsCatalogDefinition {
     pub sources: Vec<SourceDefinition>,
     pub damage_kinds: Vec<DamageKindDefinition>,
     pub effects: Vec<EffectDefinition>,
+    pub capacity_metrics: Vec<CapacityMetricDefinition>,
     pub items: Vec<ItemDefinition>,
     pub equipment_slots: Vec<EquipmentSlotDefinition>,
 }
@@ -248,6 +282,7 @@ pub struct MechanicsCatalogView<'a> {
     sources: &'a [SourceDefinition],
     damage_kinds: &'a [DamageKindDefinition],
     effects: &'a [EffectDefinition],
+    capacity_metrics: &'a [CapacityMetricDefinition],
     items: &'a [ItemDefinition],
     equipment_slots: &'a [EquipmentSlotDefinition],
 }
@@ -281,6 +316,10 @@ impl<'a> MechanicsCatalogView<'a> {
         self.effects
     }
 
+    pub const fn capacity_metrics(self) -> &'a [CapacityMetricDefinition] {
+        self.capacity_metrics
+    }
+
     pub const fn items(self) -> &'a [ItemDefinition] {
         self.items
     }
@@ -298,6 +337,7 @@ struct FingerprintDefinition<'a> {
     sources: &'a [SourceDefinition],
     damage_kinds: &'a [DamageKindDefinition],
     effects: &'a [EffectDefinition],
+    capacity_metrics: &'a [CapacityMetricDefinition],
     items: &'a [ItemDefinition],
     equipment_slots: &'a [EquipmentSlotDefinition],
 }
@@ -313,6 +353,11 @@ impl MechanicsCatalog {
             MAX_CATALOG_DAMAGE_KINDS,
         )?;
         enforce_quota("effects", definition.effects.len(), MAX_CATALOG_EFFECTS)?;
+        enforce_quota(
+            "capacityMetrics",
+            definition.capacity_metrics.len(),
+            MAX_CATALOG_CAPACITY_METRICS,
+        )?;
         enforce_quota("items", definition.items.len(), MAX_CATALOG_ITEMS)?;
         enforce_quota(
             "equipmentSlots",
@@ -329,6 +374,12 @@ impl MechanicsCatalog {
         }
         for item in &mut definition.items {
             item.sources.sort();
+            item.classifications.sort();
+            item.capacity_costs
+                .sort_by(|left, right| left.metric.cmp(&right.metric));
+        }
+        for slot in &mut definition.equipment_slots {
+            slot.allowed_classifications.sort();
         }
         definition
             .stats
@@ -346,6 +397,9 @@ impl MechanicsCatalog {
             .effects
             .sort_by(|left, right| left.id.cmp(&right.id));
         definition
+            .capacity_metrics
+            .sort_by(|left, right| left.id.cmp(&right.id));
+        definition
             .items
             .sort_by(|left, right| left.id.cmp(&right.id));
         definition
@@ -361,6 +415,11 @@ impl MechanicsCatalog {
             "damage kind",
         )?;
         reject_duplicates(&definition.effects, |value| value.id.as_str(), "effect")?;
+        reject_duplicates(
+            &definition.capacity_metrics,
+            |value| value.id.as_str(),
+            "capacity metric",
+        )?;
         reject_duplicates(&definition.items, |value| value.id.as_str(), "item")?;
         reject_duplicates(
             &definition.equipment_slots,
@@ -500,8 +559,110 @@ impl MechanicsCatalog {
         }
         validate_effect_stacking_contract(&definition.effects)?;
         for item in &definition.items {
+            enforce_quota("sourcesPerItem", item.sources.len(), MAX_SOURCES_PER_ITEM)?;
+            enforce_quota(
+                "classificationsPerItem",
+                item.classifications.len(),
+                MAX_ITEM_CLASSIFICATIONS,
+            )?;
+            enforce_quota(
+                "capacityCostsPerItem",
+                item.capacity_costs.len(),
+                MAX_CAPACITY_COSTS_PER_ITEM,
+            )?;
             reject_duplicate_references(&item.sources, item.id.as_str(), "source")?;
+            reject_duplicate_references(
+                &item.classifications,
+                item.id.as_str(),
+                "item classification",
+            )?;
+            let cost_metrics = item
+                .capacity_costs
+                .iter()
+                .map(|cost| cost.metric.clone())
+                .collect::<Vec<_>>();
+            reject_duplicate_references(&cost_metrics, item.id.as_str(), "capacity metric")?;
             validate_source_references(&definition.sources, item.id.as_str(), &item.sources)?;
+            match item.kind {
+                ItemKind::Fungible => {
+                    if item.maximum_quantity == 0 || item.maximum_quantity > MAX_STACK_QUANTITY {
+                        return Err(CatalogError::InvalidItemQuantity {
+                            item: item.id.clone(),
+                            quantity: item.maximum_quantity,
+                            maximum: MAX_STACK_QUANTITY,
+                        });
+                    }
+                    if item.equipment.is_some() || !item.sources.is_empty() {
+                        return Err(CatalogError::InvalidItemPolicy {
+                            item: item.id.clone(),
+                            reason: "fungible items cannot own equipment policy or active sources",
+                        });
+                    }
+                }
+                ItemKind::Unique => {
+                    if item.maximum_quantity != 1 {
+                        return Err(CatalogError::InvalidItemQuantity {
+                            item: item.id.clone(),
+                            quantity: item.maximum_quantity,
+                            maximum: 1,
+                        });
+                    }
+                    if !item.sources.is_empty() && item.equipment.is_none() {
+                        return Err(CatalogError::InvalidItemPolicy {
+                            item: item.id.clone(),
+                            reason: "item sources require an equipment policy",
+                        });
+                    }
+                }
+            }
+            if let Some(equipment) = &item.equipment {
+                if equipment.required_slots == 0
+                    || equipment.required_slots > MAX_EQUIPMENT_SLOTS_PER_ITEM
+                {
+                    return Err(CatalogError::InvalidItemEquipmentSlots {
+                        item: item.id.clone(),
+                        required: equipment.required_slots,
+                        maximum: MAX_EQUIPMENT_SLOTS_PER_ITEM,
+                    });
+                }
+                if item.classifications.is_empty() {
+                    return Err(CatalogError::InvalidItemPolicy {
+                        item: item.id.clone(),
+                        reason: "equippable items require at least one classification",
+                    });
+                }
+            }
+            for cost in &item.capacity_costs {
+                if cost.units == 0 || cost.units > MAX_CAPACITY_COST_UNITS {
+                    return Err(CatalogError::InvalidCapacityCost {
+                        item: item.id.clone(),
+                        metric: cost.metric.clone(),
+                        units: cost.units,
+                        maximum: MAX_CAPACITY_COST_UNITS,
+                    });
+                }
+                if !contains_id(&definition.capacity_metrics, &cost.metric, |value| {
+                    &value.id
+                }) {
+                    return Err(CatalogError::UnknownReference {
+                        owner: item.id.to_string(),
+                        namespace: "capacity metric",
+                        reference: cost.metric.to_string(),
+                    });
+                }
+            }
+        }
+        for slot in &definition.equipment_slots {
+            enforce_quota(
+                "classificationsPerEquipmentSlot",
+                slot.allowed_classifications.len(),
+                MAX_ITEM_CLASSIFICATIONS,
+            )?;
+            reject_duplicate_references(
+                &slot.allowed_classifications,
+                slot.id.as_str(),
+                "item classification",
+            )?;
         }
 
         let bytes = serde_json::to_vec(&FingerprintDefinition {
@@ -510,6 +671,7 @@ impl MechanicsCatalog {
             sources: &definition.sources,
             damage_kinds: &definition.damage_kinds,
             effects: &definition.effects,
+            capacity_metrics: &definition.capacity_metrics,
             items: &definition.items,
             equipment_slots: &definition.equipment_slots,
         })
@@ -544,6 +706,7 @@ impl MechanicsCatalog {
             sources: &self.definition.sources,
             damage_kinds: &self.definition.damage_kinds,
             effects: &self.definition.effects,
+            capacity_metrics: &self.definition.capacity_metrics,
             items: &self.definition.items,
             equipment_slots: &self.definition.equipment_slots,
         }
@@ -571,6 +734,14 @@ impl MechanicsCatalog {
 
     pub fn source(&self, id: &SourceDefinitionId) -> Option<&SourceDefinition> {
         find_by_id(&self.definition.sources, id, |value| &value.id)
+    }
+
+    pub fn capacity_metrics(&self) -> &[CapacityMetricDefinition] {
+        &self.definition.capacity_metrics
+    }
+
+    pub fn capacity_metric(&self, id: &CapacityMetricId) -> Option<&CapacityMetricDefinition> {
+        find_by_id(&self.definition.capacity_metrics, id, |value| &value.id)
     }
 
     pub fn damage_kind(&self, id: &DamageKindId) -> Option<&DamageKindDefinition> {
@@ -644,6 +815,26 @@ pub enum CatalogError {
         field: &'static str,
         value: u16,
         maximum: u16,
+    },
+    InvalidItemQuantity {
+        item: ItemDefinitionId,
+        quantity: u64,
+        maximum: u64,
+    },
+    InvalidItemPolicy {
+        item: ItemDefinitionId,
+        reason: &'static str,
+    },
+    InvalidItemEquipmentSlots {
+        item: ItemDefinitionId,
+        required: u16,
+        maximum: u16,
+    },
+    InvalidCapacityCost {
+        item: ItemDefinitionId,
+        metric: CapacityMetricId,
+        units: u64,
+        maximum: u64,
     },
     InconsistentEffectStackingPolicy {
         group: StackingGroupId,
@@ -875,13 +1066,19 @@ mod tests {
                 id: DamageKindId::parse("impact").unwrap(),
             }],
             effects: vec![],
+            capacity_metrics: vec![],
             items: vec![ItemDefinition {
                 id: ItemDefinitionId::parse("armor").unwrap(),
                 kind: ItemKind::Unique,
+                maximum_quantity: 1,
+                classifications: vec![],
+                capacity_costs: vec![],
+                equipment: None,
                 sources: vec![],
             }],
             equipment_slots: vec![EquipmentSlotDefinition {
                 id: EquipmentSlotId::parse("body").unwrap(),
+                allowed_classifications: vec![],
             }],
         }
     }

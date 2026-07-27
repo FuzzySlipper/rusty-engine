@@ -351,10 +351,19 @@ fn mutate(state: &mut EntityState, command: RelationshipCommand) {
             }
         }
         RelationshipCommand::SetContainment { child, container } => {
-            state.containment.insert(child, container);
+            if let Some(previous) = state.containment.insert(child, container) {
+                remove_containment_child(state, previous, child);
+            }
+            state
+                .containment_children
+                .entry(container)
+                .or_default()
+                .insert(child);
         }
         RelationshipCommand::ClearContainment { child } => {
-            state.containment.remove(&child);
+            if let Some(container) = state.containment.remove(&child) {
+                remove_containment_child(state, container, child);
+            }
         }
         RelationshipCommand::SetSourceAncestry { entity, source } => {
             state.derived_from.insert(entity, source);
@@ -363,6 +372,19 @@ fn mutate(state: &mut EntityState, command: RelationshipCommand) {
             state.derived_from.remove(&entity);
         }
         RelationshipCommand::SetRenderGroup { .. } => unreachable!("validated before mutation"),
+    }
+}
+
+fn remove_containment_child(state: &mut EntityState, container: EntityId, child: EntityId) {
+    let remove_container = state
+        .containment_children
+        .get_mut(&container)
+        .is_some_and(|children| {
+            children.remove(&child);
+            children.is_empty()
+        });
+    if remove_container {
+        state.containment_children.remove(&container);
     }
 }
 

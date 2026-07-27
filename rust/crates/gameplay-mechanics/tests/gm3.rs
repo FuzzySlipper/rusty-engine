@@ -302,6 +302,7 @@ fn catalog() -> MechanicsCatalog {
                 sources: vec![source("invulnerability")],
             },
         ],
+        capacity_metrics: vec![],
         items: vec![],
         equipment_slots: vec![],
     })

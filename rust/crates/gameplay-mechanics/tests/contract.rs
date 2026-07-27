@@ -7,9 +7,10 @@ use gameplay_mechanics::{
     DamageKindDefinition, DamageKindId, DamageKindSelector, DamagePart, DamageRequest,
     DamageResponseDefinition, DamageService, DecisionOutcome, EffectDefinition, EffectDefinitionId,
     EffectInstanceId, EffectStackingPolicy, EquipmentAssignment, EquipmentComponent,
-    EquipmentService, EquipmentSlotDefinition, EquipmentSlotId, ExactRatio, IntrinsicSourceBinding,
-    IntrinsicSourcesComponent, ItemComponent, ItemDefinition, ItemDefinitionId, ItemKind,
-    ItemTransferRequest, MechanicsCatalog, MechanicsCatalogDefinition, MechanicsError,
+    EquipmentService, EquipmentSlotDefinition, EquipmentSlotId, EquipmentUnequipRequest,
+    ExactRatio, IntrinsicSourceBinding, IntrinsicSourcesComponent, InventoryComponent,
+    ItemClassificationId, ItemComponent, ItemDefinition, ItemDefinitionId, ItemEquipmentPolicy,
+    ItemKind, ItemTransferRequest, MechanicsCatalog, MechanicsCatalogDefinition, MechanicsError,
     MechanicsScalar, MechanicsSnapshotError, OperationId, RequestSource, SourceDefinition,
     SourceDefinitionId, SourceInstanceId, SourceInstanceIdentity, StackingGroupId, StackingPolicy,
     StatContribution, StatContributionDefinition, StatDefinition, StatId, StatService, StatValue,
@@ -205,12 +206,23 @@ fn catalog() -> MechanicsCatalog {
             maximum_stacks: 1,
             sources: vec![invulnerability_source()],
         }],
+        capacity_metrics: vec![],
         items: vec![ItemDefinition {
             id: armor_item(),
             kind: ItemKind::Unique,
+            maximum_quantity: 1,
+            classifications: vec![ItemClassificationId::parse("armor").unwrap()],
+            capacity_costs: vec![],
+            equipment: Some(ItemEquipmentPolicy {
+                required_slots: 1,
+                exclusive_group: None,
+            }),
             sources: vec![armor_source()],
         }],
-        equipment_slots: vec![EquipmentSlotDefinition { id: body_slot() }],
+        equipment_slots: vec![EquipmentSlotDefinition {
+            id: body_slot(),
+            allowed_classifications: vec![ItemClassificationId::parse("armor").unwrap()],
+        }],
     })
     .unwrap()
 }
@@ -253,6 +265,16 @@ fn state() -> EntityState {
             ],
         )
         .unwrap(),
+    );
+    attach(
+        &mut state,
+        SHOOTER,
+        InventoryComponent::new(catalog_version(), vec![]).unwrap(),
+    );
+    attach(
+        &mut state,
+        SECOND_OWNER,
+        InventoryComponent::new(catalog_version(), vec![]).unwrap(),
     );
     attach(
         &mut state,
@@ -447,6 +469,7 @@ fn quota_fixture(
             maximum_stacks: 1,
             sources: effect_sources,
         }],
+        capacity_metrics: vec![],
         items: vec![],
         equipment_slots: vec![],
     })
@@ -843,6 +866,7 @@ fn full_span_signed_tracks_support_bounded_restore_and_damage() {
             id: damage_kind.clone(),
         }],
         effects: vec![],
+        capacity_metrics: vec![],
         items: vec![],
         equipment_slots: vec![],
     })
@@ -1399,6 +1423,8 @@ fn unique_item_transfer_requires_explicit_unequip_then_changes_only_containment(
                 from_owner: SHOOTER,
                 to_owner: SECOND_OWNER,
                 expected_relationship_revision: before_revision,
+                expected_from_inventory_revision: None,
+                expected_to_inventory_revision: None,
             },
         ),
         Err(MechanicsError::ItemEquipped { .. })
@@ -1407,14 +1433,18 @@ fn unique_item_transfer_requires_explicit_unequip_then_changes_only_containment(
     assert_eq!(state.contained_in(ARMOR_ITEM), Some(SHOOTER));
 
     let unequip_operation = operation("unequip_for_transfer");
+    let expected_state_revision = state.revision();
     EquipmentService::unequip(
         &mut state,
         &catalog,
-        unequip_operation.clone(),
-        request_identity(&unequip_operation, "unequip_origin"),
-        SHOOTER,
-        body_slot(),
-        None,
+        EquipmentUnequipRequest {
+            operation: unequip_operation.clone(),
+            source: request_identity(&unequip_operation, "unequip_origin"),
+            owner: SHOOTER,
+            item: ARMOR_ITEM,
+            expected_equipment_revision: None,
+            expected_state_revision,
+        },
     )
     .unwrap();
     let item_revision = state
@@ -1432,6 +1462,8 @@ fn unique_item_transfer_requires_explicit_unequip_then_changes_only_containment(
             from_owner: SHOOTER,
             to_owner: SECOND_OWNER,
             expected_relationship_revision: relationship_revision,
+            expected_from_inventory_revision: None,
+            expected_to_inventory_revision: None,
         },
     )
     .unwrap();

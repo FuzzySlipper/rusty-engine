@@ -42,6 +42,7 @@ restoration, and their bounded receipts.
 - [`gameplay-mechanics/tests/gm1.rs`](../../rust/crates/gameplay-mechanics/tests/gm1.rs)
 - [`gameplay-mechanics/tests/gm2.rs`](../../rust/crates/gameplay-mechanics/tests/gm2.rs)
 - [`gameplay-mechanics/tests/gm3.rs`](../../rust/crates/gameplay-mechanics/tests/gm3.rs)
+- [`gameplay-mechanics/tests/gm4.rs`](../../rust/crates/gameplay-mechanics/tests/gm4.rs)
 - [Canonical design](../design.md)
 
 ## Public composition
@@ -96,6 +97,28 @@ instance. Each stack expands into a separately attributed source activation.
 The regular contribution/response stacking policy—not the effect lifecycle
 service—then decides which numeric or damage candidates apply.
 
+Inventory and equipment remain direct named services as well:
+
+```rust
+let inventory = InventoryService::view(&state, &catalog, owner)?;
+let transfer = InventoryService::transfer(&mut state, &catalog, stack_transfer)?;
+let equipped = EquipmentService::equip(&mut state, &catalog, equip_request)?;
+```
+
+Fungible quantities have one canonical stack per item definition; grant,
+consume, and transfer do not mint stack identities. Unique items use
+`EntityId` plus canonical containment. `InventoryView` joins the owner's
+component with the maintained direct-child containment index and reports
+capacity/traversal evidence without scanning unrelated entities. An item is an
+ordinary entity and may carry tracks, effects, or downstream components.
+
+Equipment assignments are slot references, not ownership. A multi-slot item
+appears once per required slot, but its sources activate once with
+`EquippedItem` provenance. Classification, exact slot count, containment,
+exclusivity, source quota, and target capacity failures are checked before
+publication. Transfer of a unique item deliberately rejects while equipped;
+the caller performs an exact unequip, then submits the containment transfer.
+
 The catalog version is downstream compatibility policy. Its SHA-256 fingerprint
 is computed from canonical admitted definitions without the version and is
 diagnostic/cache identity, not an automatic balance-change lock. Component
@@ -124,6 +147,14 @@ every Engine decision and the exact component revisions read.
   Maximum reconciliation makes `PreserveCurrent` versus `ClampToMaximum`
   explicit; ratio preservation remains intentionally absent.
 - Equipment changes publish one exact `EquipmentComponent` slot.
+- Fungible grant/consume publish one exact `InventoryComponent`. Transfer
+  validates both candidates, then uses the bounded homogeneous `entity-state`
+  replacement seam to publish both inventories in one global revision.
+- Unique-item transfer changes only canonical containment after checking both
+  inventory capacity projections and explicit inventory revision guards.
+- Item destruction rejects equipped references; accepted item destruction and
+  owner destruction use `entity-state` lifecycle cleanup so containment and
+  equipment cannot dangle.
 - Effect apply, refresh, replace, remove, and expire each validate a complete
   prospective `ActiveEffectsComponent` and publish that one exact slot. Receipts
   identify removed/current instances, activated sources, revisions, and bounded
@@ -140,6 +171,12 @@ The active-effects durable codec is version 2. It stores only catalog version,
 effect instance/definition identity, typed provenance, and stacks. Timers,
 timestamps, durations, turns, callbacks, and scheduler state belong to the
 downstream owner and reconnect through the stable effect instance identity.
+
+The inventory durable codec is version 2. It stores catalog version, canonical
+fungible stacks, and caller-authored capacity limits. Item and equipment
+components store only stable definition/slot/entity references. Strict
+reconstruction validates item definitions before joined inventory and
+equipment invariants.
 
 ## Damage and restoration
 
@@ -189,6 +226,14 @@ specified atomic seam to the `entity-state` owner.
   receipt ceiling before cloning an over-limit entry.
 - Intrinsic source bindings: 64; equipment assignments: 32; inventory stacks:
   128.
+- Homogeneous component replacements per publication: 32; capacity metrics per
+  catalog and limits per inventory: 32 each; item capacity costs: 32;
+  classifications per item/slot: 16; required slots per item: 8.
+- Contained entities visited per inventory projection: 256; equipped item
+  source activations: 256; sources per item: 32.
+- Item capacity cost units: `1_000_000`; inventory capacity limit units:
+  `1_000_000_000_000_000_000`; fungible quantities use the catalog's positive
+  per-definition maximum up to the `1_000_000_000` component stack bound.
 - Damage order: prevention, flat reduction, combined exact scale and one
   toward-zero rounding, ordered absorption, target application.
 - Damage source-cost evidence includes source collection performed while
@@ -224,6 +269,14 @@ Studio gate is additional evidence only when a Studio-owned boundary changes.
 - Treating repair/healing as signed damage instead of a bounded track restore.
 - Adding an item-instance namespace or unique-item list beside `EntityId` and
   containment.
+- Treating an equipment assignment as ownership, activating a multi-slot
+  item's sources once per slot, or transferring it without explicit unequip.
+- Defining Engine meanings for mass/power/volume instead of using typed
+  caller-named capacity metrics and costs.
+- Scanning every entity to build an inventory instead of using the maintained
+  direct containment index.
+- Adding item behavior callbacks, implicit split/merge lifecycle, or
+  stack-instance identities.
 - Hiding effect timing or callbacks inside a component.
 - Treating stack count as a free-form intensity formula, or making apply
   silently choose refresh/replace behavior for the caller.

@@ -70,7 +70,7 @@ explicit read-only provider views; the isolated renderer workspace knows no game
   components;
 - typed component registration, attach/read/has/replace/remove, deterministic per-type iteration,
   bounded inspection, and destruction cleanup;
-- read-only entity views and projection nodes; and
+- read-only entity views, projection nodes, and an identity-ordered reverse containment index; and
 - snapshot encoding plus one atomic `EntityCommandBatch` mutation boundary.
 
 `ComponentRegistry` is a bounded construction input for a particular `EntityState`, not a global
@@ -102,6 +102,17 @@ component shares one store, nor turn the store into a generic callback transacti
 Transform parenting, containment, and source ancestry remain explicit relationship maps rather than
 components.
 
+The one promoted cross-slot seam is
+`EntityAuthoringService::replace_components<T>`. It accepts at most 32 replacements of one
+registered component type, requires unique entity slots and each slot's exact revision, validates
+every candidate before writing any of them, then advances the global revision once. It exists for
+mechanisms such as a fungible transfer between two inventories; it is not a heterogeneous
+transaction, command language, callback route, or permission for unrelated component types to
+share an operation owner. Containment also maintains a reverse direct-child index so an inventory
+projection can enumerate one owner's contents without scanning the entity population. The forward
+relationship remains canonical, and reparenting, snapshot restoration, item destruction, and owner
+destruction update both directions together.
+
 The schema-3 snapshot keeps its established built-in JSON fields. A registered downstream type is
 either runtime-only and omitted, or durable through an explicit stable codec identity and positive
 version. Durable values occupy the omitted-when-empty `registeredComponents` section; restoration
@@ -126,8 +137,8 @@ version and a deterministic diagnostic fingerprint. Live values use seven indepe
 durable components: `StatsComponent`, `TracksComponent`, `IntrinsicSourcesComponent`,
 `ActiveEffectsComponent`, `InventoryComponent`, `ItemComponent`, and `EquipmentComponent`.
 Definitions and request/receipt values are not components. Components contain inert data and strict
-codecs; direct `StatService`, `TrackService`, `EffectService`, `DamageService`, and
-`EquipmentService` calls own validation and mutation.
+codecs; direct `StatService`, `TrackService`, `EffectService`, `DamageService`,
+`InventoryService`, `EquipmentService`, and `ItemService` calls own validation and mutation.
 
 GM0 freezes these mechanics contracts:
 
@@ -203,6 +214,42 @@ stat-derived bounds and exact-slot mutation authority as damage without pretendi
 negative damage. Realtime reactions and tabletop interrupts are explicit downstream orchestration:
 the owner may apply an effect or other state change after preview, then submits a fresh damage
 apply. Engine retains no pending hit, reaction window, combat session, event queue, or scheduler.
+
+GM4 promotes bounded inventory, unique-item ownership, equipment, and their source integration.
+Catalog item definitions classify an item as fungible or unique, assign caller-named capacity
+costs, and optionally declare an exact equipment slot count, classifications, one exclusivity
+group, and equipped sources. Capacity metric names have no Engine-defined meaning: one inventory
+may limit mass and another may limit power, volume, or a game-specific metric. Costs are positive
+bounded integers, quantity/cost accumulation uses checked wider intermediates, and receipts expose
+both the resolved usage and bounded traversal work.
+
+`InventoryComponent` stores one canonical stack per fungible definition plus optional capacity
+limits. Grant and consume replace one exact inventory slot. Fungible transfer prepares both
+inventory candidates and publishes them through the bounded homogeneous component-replacement seam;
+a stale revision, insufficient quantity, destination limit, or late candidate failure changes
+neither inventory. There is no stack-instance identity, implicit split/merge lifecycle, item
+behavior dispatch, or global inventory registry.
+
+A unique item is an ordinary entity with `ItemComponent`. Canonical containment is its ownership
+fact, while a joined `InventoryView` reads the owner's stack component and only the maintained
+direct containment children. Non-item children do not become inventory entries, and unrelated
+entities are never scanned. Because an item is an ordinary entity, it may also carry normal tracks,
+active effects, or downstream components without creating a second item-state system.
+
+`EquipmentComponent` stores canonical slot-to-item references, never ownership. Multi-slot
+equipment repeats the same item entity across its required slots, while classification,
+slot-count, containment, exclusivity, and aggregate source quotas are validated over the complete
+candidate before one exact equipment-slot replacement. An equipped item's sources activate once
+per item—not once per occupied slot—with `EquippedItem` provenance for both stat and damage
+ledgers. Swap is one equipment replacement; transfer remains the GM0 valid-state split of explicit
+unequip followed by a capacity-checked containment change. Destroying an equipped item is rejected.
+Destroying an unequipped item clears its containment and components, while destroying an owner
+removes its equipment component and releases its direct children without leaving references.
+
+The inventory durable codec is version 2 and stores only catalog version, canonical stacks, and
+capacity limits. Item and equipment codecs remain strict inert data. Reconstruction validates item
+kinds and catalog references before joined inventory/equipment invariants, and immutable component
+views plus the joined inventory projection expose exact revisions without providing mutation.
 
 Those splits deliberately avoid an unrestricted heterogeneous transaction and complete-world
 cloning. Each intermediate state is valid, and failure of the later step cannot expose an

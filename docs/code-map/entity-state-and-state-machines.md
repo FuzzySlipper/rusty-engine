@@ -44,6 +44,13 @@ relationships, activation, snapshots, and explicit state-machine instances.
   `EntityState`. The store supplies typed read/has/iteration while
   `EntityAuthoringService` owns attach/replace/remove guarded by an
   instance-local `ComponentRevision` for the exact entity/component slot.
+- `EntityAuthoringService::replace_components<T>` is the bounded exception for
+  one service that must publish several slots of the same component type. It
+  admits at most 32 unique entity slots, validates every exact revision and
+  candidate before writing, and advances the global revision once.
+- Containment keeps the forward ownership relationship plus a maintained
+  identity-ordered direct-child index. `contained_entities` and
+  `contained_entity_count` are owner-local reads, not population scans.
 - Downstream Rust composes these mechanisms directly with named game services.
 - Serialized entity snapshots are durable facts only where the owning consumer
   chooses to persist them.
@@ -105,6 +112,9 @@ snapshot restoration because those concurrency guards are instance-local.
 ## Private or forbidden paths
 
 - Do not route every service mutation through `entity-state` command batches.
+- Do not broaden homogeneous component replacement into a heterogeneous
+  transaction, command AST, callback pipeline, or generic service-owned state
+  route.
 - Do not add callbacks, subscriptions, renderer handles, I/O, or service
   location to components.
 - Do not turn `ComponentRegistry` into a global singleton, service/plugin

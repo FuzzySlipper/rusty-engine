@@ -219,6 +219,7 @@ fn definition() -> MechanicsCatalogDefinition {
                 &["stance_high_source"],
             ),
         ],
+        capacity_metrics: vec![],
         items: vec![],
         equipment_slots: vec![],
     }

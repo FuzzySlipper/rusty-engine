@@ -241,6 +241,7 @@ fn gm1_definition(version: &str) -> MechanicsCatalogDefinition {
         ],
         damage_kinds: vec![],
         effects: vec![],
+        capacity_metrics: vec![],
         items: vec![],
         equipment_slots: vec![],
     }

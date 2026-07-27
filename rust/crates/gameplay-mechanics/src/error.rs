@@ -4,9 +4,10 @@ use entity_state::{
 };
 
 use crate::{
-    CatalogVersion, DamageKindId, EffectDefinitionId, EffectInstanceId, EffectStackingPolicy,
-    EquipmentSlotId, ItemDefinitionId, MechanicsArithmeticError, MechanicsComponentDataError,
-    SourceDefinitionId, SourceInstanceIdentity, StackingGroupId, StatId, TrackId,
+    CapacityMetricId, CatalogVersion, DamageKindId, EffectDefinitionId, EffectInstanceId,
+    EffectStackingPolicy, EquipmentExclusivityId, EquipmentSlotId, ItemDefinitionId, ItemKind,
+    MechanicsArithmeticError, MechanicsComponentDataError, SourceDefinitionId,
+    SourceInstanceIdentity, StackingGroupId, StatId, TrackId,
 };
 
 #[derive(Debug)]
@@ -113,6 +114,9 @@ pub enum MechanicsError {
     UnknownEquipmentSlot {
         slot: EquipmentSlotId,
     },
+    UnknownCapacityMetric {
+        metric: CapacityMetricId,
+    },
     UnknownDamageKind {
         kind: DamageKindId,
     },
@@ -163,6 +167,43 @@ pub enum MechanicsError {
         owner: EntityId,
         slot: EquipmentSlotId,
     },
+    InventoryOwnerConflict {
+        owner: EntityId,
+    },
+    InventoryItemKindMismatch {
+        item: ItemDefinitionId,
+        expected: ItemKind,
+        actual: ItemKind,
+    },
+    InvalidInventoryQuantity {
+        item: ItemDefinitionId,
+        quantity: u64,
+    },
+    InventoryQuantityLimitExceeded {
+        item: ItemDefinitionId,
+        attempted: u64,
+        maximum: u64,
+    },
+    InventoryInsufficientQuantity {
+        owner: EntityId,
+        item: ItemDefinitionId,
+        requested: u64,
+        available: u64,
+    },
+    InventoryCapacityExceeded {
+        owner: EntityId,
+        metric: CapacityMetricId,
+        attempted: u64,
+        maximum: u64,
+    },
+    InventoryContainmentQuotaExceeded {
+        owner: EntityId,
+        actual: usize,
+        maximum: usize,
+    },
+    CapacityArithmeticOverflow {
+        metric: CapacityMetricId,
+    },
     EquipmentSlotOccupied {
         owner: EntityId,
         slot: EquipmentSlotId,
@@ -175,6 +216,33 @@ pub enum MechanicsError {
     EquipmentSlotEmpty {
         owner: EntityId,
         slot: EquipmentSlotId,
+    },
+    EquipmentItemNotAssigned {
+        owner: EntityId,
+        item: EntityId,
+    },
+    ItemNotEquippable {
+        item: EntityId,
+        definition: ItemDefinitionId,
+    },
+    EquipmentSlotCountMismatch {
+        item: EntityId,
+        expected: u16,
+        actual: usize,
+    },
+    EquipmentSlotClassificationMismatch {
+        item: EntityId,
+        slot: EquipmentSlotId,
+    },
+    EquipmentExclusivityConflict {
+        owner: EntityId,
+        group: EquipmentExclusivityId,
+        existing: EntityId,
+        requested: EntityId,
+    },
+    EquipmentSourceQuotaExceeded {
+        actual: usize,
+        maximum: usize,
     },
     IncompatibleItemKind {
         item: EntityId,

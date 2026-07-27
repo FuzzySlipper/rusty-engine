@@ -1,4 +1,7 @@
-use std::any::{Any, TypeId};
+use std::{
+    any::{Any, TypeId},
+    collections::BTreeSet,
+};
 
 use core_ids::{EntityId, TagId};
 
@@ -12,6 +15,15 @@ use crate::model::{
     KinematicComponent, TransformComponent,
 };
 use crate::relationship::{reroot_transform_children, RelationshipError};
+
+pub const MAX_COMPONENT_REPLACEMENTS: usize = 32;
+
+#[derive(Debug, Clone)]
+pub struct ComponentReplacement<T: EntityComponent> {
+    pub expected_revision: ComponentRevision,
+    pub entity: EntityId,
+    pub component: T,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntityAuthoringFact {
@@ -118,6 +130,14 @@ pub enum EntityAuthoringError {
         entity: EntityId,
         component: ComponentTypeId,
         reason: &'static str,
+    },
+    DuplicateComponentReplacement {
+        entity: EntityId,
+        component: ComponentTypeId,
+    },
+    ComponentReplacementLimitExceeded {
+        actual: usize,
+        maximum: usize,
     },
 }
 
@@ -322,6 +342,76 @@ impl EntityAuthoringService {
                 component: type_id,
             },
         )
+    }
+
+    /// Atomically replaces a bounded set of slots for one registered component type.
+    ///
+    /// Every exact slot guard and candidate value is validated before any slot changes. This is a
+    /// narrow homogeneous primitive for owners such as transfers between two instances of the same
+    /// component; it is not a heterogeneous command or transaction language.
+    pub fn replace_components<T: EntityComponent + PartialEq>(
+        self,
+        state: &mut EntityState,
+        mut replacements: Vec<ComponentReplacement<T>>,
+    ) -> Result<EntityAuthoringReceipt, EntityAuthoringError> {
+        if replacements.len() > MAX_COMPONENT_REPLACEMENTS {
+            return Err(EntityAuthoringError::ComponentReplacementLimitExceeded {
+                actual: replacements.len(),
+                maximum: MAX_COMPONENT_REPLACEMENTS,
+            });
+        }
+        replacements.sort_by_key(|replacement| replacement.entity);
+        let type_id = registered_type_id::<T>(state)?;
+        let mut seen = BTreeSet::new();
+        let mut changed = BTreeSet::new();
+        for replacement in &replacements {
+            if !seen.insert(replacement.entity) {
+                return Err(EntityAuthoringError::DuplicateComponentReplacement {
+                    entity: replacement.entity,
+                    component: type_id.clone(),
+                });
+            }
+            ensure_alive(state, replacement.entity)?;
+            ensure_component_revision::<T>(
+                state,
+                replacement.entity,
+                &replacement.expected_revision,
+            )?;
+            let before = state
+                .components
+                .get::<T>(replacement.entity)
+                .expect("registration checked")
+                .ok_or_else(|| EntityAuthoringError::ComponentAbsent {
+                    entity: replacement.entity,
+                    component: type_id.clone(),
+                })?;
+            validate_component(state, replacement.entity, &replacement.component, &type_id)?;
+            if before != &replacement.component {
+                changed.insert(replacement.entity);
+            }
+        }
+
+        let revision_before = state.revision;
+        let mut facts = Vec::with_capacity(changed.len());
+        for replacement in replacements {
+            if changed.contains(&replacement.entity) {
+                state
+                    .components
+                    .insert_unchecked(replacement.entity, replacement.component);
+                facts.push(EntityAuthoringFact::ComponentReplaced {
+                    entity: replacement.entity,
+                    component: type_id.clone(),
+                });
+            }
+        }
+        if !facts.is_empty() {
+            state.revision = state.revision.saturating_add(1);
+        }
+        Ok(EntityAuthoringReceipt {
+            revision_before,
+            revision_after: state.revision,
+            facts,
+        })
     }
 
     pub fn detach_component<T: EntityComponent>(

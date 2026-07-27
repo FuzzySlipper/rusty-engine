@@ -95,31 +95,6 @@ pub fn validate_state_against_catalog(
         }
         crate::effect::validate_active_effects_against_catalog(entity, component, catalog)?;
     }
-    for (entity, component) in state.components::<InventoryComponent>()? {
-        ensure_catalog_version(
-            catalog,
-            entity,
-            InventoryComponent::LABEL,
-            component.catalog_version(),
-        )?;
-        for stack in component.stacks() {
-            let definition = catalog.item(&stack.definition).ok_or_else(|| {
-                MechanicsError::InvalidCatalogReference {
-                    entity,
-                    component: InventoryComponent::LABEL,
-                    namespace: "item",
-                    reference: stack.definition.to_string(),
-                }
-            })?;
-            ensure_reference(
-                definition.kind == ItemKind::Fungible,
-                entity,
-                InventoryComponent::LABEL,
-                "fungible item",
-                stack.definition.to_string(),
-            )?;
-        }
-    }
     for (entity, component) in state.components::<ItemComponent>()? {
         ensure_catalog_version(
             catalog,
@@ -142,6 +117,41 @@ pub fn validate_state_against_catalog(
             "unique item",
             component.definition().to_string(),
         )?;
+    }
+    for (entity, component) in state.components::<InventoryComponent>()? {
+        ensure_catalog_version(
+            catalog,
+            entity,
+            InventoryComponent::LABEL,
+            component.catalog_version(),
+        )?;
+        for limit in component.capacity_limits() {
+            ensure_reference(
+                catalog.capacity_metric(limit.metric()).is_some(),
+                entity,
+                InventoryComponent::LABEL,
+                "capacity metric",
+                limit.metric().to_string(),
+            )?;
+        }
+        for stack in component.stacks() {
+            let definition = catalog.item(&stack.definition).ok_or_else(|| {
+                MechanicsError::InvalidCatalogReference {
+                    entity,
+                    component: InventoryComponent::LABEL,
+                    namespace: "item",
+                    reference: stack.definition.to_string(),
+                }
+            })?;
+            ensure_reference(
+                definition.kind == ItemKind::Fungible,
+                entity,
+                InventoryComponent::LABEL,
+                "fungible item",
+                stack.definition.to_string(),
+            )?;
+        }
+        crate::item::validate_inventory_state(state, catalog, entity, component)?;
     }
     for (owner, component) in state.components::<EquipmentComponent>()? {
         ensure_catalog_version(
@@ -181,6 +191,7 @@ pub fn validate_state_against_catalog(
                 item.definition().to_string(),
             )?;
         }
+        crate::item::validate_equipment_state(state, catalog, owner, component)?;
     }
 
     let validation_operation =

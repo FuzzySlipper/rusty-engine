@@ -109,6 +109,12 @@ mechanics_id!(/// One authored item definition.
     ItemDefinitionId);
 mechanics_id!(/// One authored equipment slot.
     EquipmentSlotId);
+mechanics_id!(/// One caller-defined inventory capacity dimension.
+    CapacityMetricId);
+mechanics_id!(/// One caller-defined structural item classification.
+    ItemClassificationId);
+mechanics_id!(/// One caller-defined mutually exclusive equipment group.
+    EquipmentExclusivityId);
 mechanics_id!(/// One authored damage classification.
     DamageKindId);
 mechanics_id!(/// One caller-owned operation correlation identity.

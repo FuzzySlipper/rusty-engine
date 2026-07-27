@@ -6,8 +6,8 @@ use entity_state::{
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{
-    ActiveEffectsComponent, CatalogVersion, EffectInstanceId, EquipmentSlotId, ItemDefinitionId,
-    MechanicsScalar, SourceDefinitionId, SourceInstanceId, StatId, TrackId,
+    ActiveEffectsComponent, CapacityMetricId, CatalogVersion, EffectInstanceId, EquipmentSlotId,
+    ItemDefinitionId, MechanicsScalar, SourceDefinitionId, SourceInstanceId, StatId, TrackId,
     MAX_ACTIVE_EFFECT_INSTANCES, MAX_EFFECT_STACKS, MAX_EQUIPMENT_ASSIGNMENTS,
     MAX_INTRINSIC_SOURCE_BINDINGS, MAX_INVENTORY_STACKS,
 };
@@ -29,10 +29,13 @@ const ITEM_CODEC_ID: &str = "rusty.mechanics.item-json";
 const EQUIPMENT_CODEC_ID: &str = "rusty.mechanics.equipment-json";
 const COMPONENT_CODEC_VERSION: u32 = 1;
 const ACTIVE_EFFECTS_CODEC_VERSION: u32 = 2;
+const INVENTORY_CODEC_VERSION: u32 = 2;
 
 pub const MAX_STATS_PER_ENTITY: usize = 128;
 pub const MAX_TRACKS_PER_ENTITY: usize = 128;
 pub const MAX_STACK_QUANTITY: u64 = 1_000_000_000;
+pub const MAX_INVENTORY_CAPACITY_LIMITS: usize = 32;
+pub const MAX_CAPACITY_LIMIT_UNITS: u64 = 1_000_000_000_000_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MechanicsComponentKind {
@@ -268,9 +271,31 @@ pub struct ItemStack {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct InventoryCapacityLimit {
+    metric: CapacityMetricId,
+    maximum: u64,
+}
+
+impl InventoryCapacityLimit {
+    pub const fn new(metric: CapacityMetricId, maximum: u64) -> Self {
+        Self { metric, maximum }
+    }
+
+    pub const fn metric(&self) -> &CapacityMetricId {
+        &self.metric
+    }
+
+    pub const fn maximum(&self) -> u64 {
+        self.maximum
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct InventoryComponent {
     catalog_version: CatalogVersion,
     stacks: Vec<ItemStack>,
+    capacity_limits: Vec<InventoryCapacityLimit>,
 }
 
 impl InventoryComponent {
@@ -278,7 +303,15 @@ impl InventoryComponent {
 
     pub fn new(
         catalog_version: CatalogVersion,
+        stacks: Vec<ItemStack>,
+    ) -> Result<Self, MechanicsComponentDataError> {
+        Self::with_capacity_limits(catalog_version, stacks, Vec::new())
+    }
+
+    pub fn with_capacity_limits(
+        catalog_version: CatalogVersion,
         mut stacks: Vec<ItemStack>,
+        mut capacity_limits: Vec<InventoryCapacityLimit>,
     ) -> Result<Self, MechanicsComponentDataError> {
         stacks.sort_by(|left, right| left.definition.cmp(&right.definition));
         validate_unique_quota(&stacks, MAX_INVENTORY_STACKS, "inventoryStacks", |value| {
@@ -293,9 +326,27 @@ impl InventoryComponent {
                 quantity: value.quantity,
             });
         }
+        capacity_limits.sort_by(|left, right| left.metric.cmp(&right.metric));
+        validate_unique_quota(
+            &capacity_limits,
+            MAX_INVENTORY_CAPACITY_LIMITS,
+            "inventoryCapacityLimits",
+            |value| value.metric.as_str(),
+        )?;
+        if let Some(value) = capacity_limits
+            .iter()
+            .find(|value| value.maximum > MAX_CAPACITY_LIMIT_UNITS)
+        {
+            return Err(MechanicsComponentDataError::InvalidCapacityLimit {
+                metric: value.metric.clone(),
+                maximum: value.maximum,
+                allowed: MAX_CAPACITY_LIMIT_UNITS,
+            });
+        }
         Ok(Self {
             catalog_version,
             stacks,
+            capacity_limits,
         })
     }
 
@@ -305,6 +356,10 @@ impl InventoryComponent {
 
     pub fn stacks(&self) -> &[ItemStack] {
         &self.stacks
+    }
+
+    pub fn capacity_limits(&self) -> &[InventoryCapacityLimit] {
+        &self.capacity_limits
     }
 }
 
@@ -367,11 +422,6 @@ impl EquipmentComponent {
             "equipmentAssignments",
             |value| value.slot.as_str(),
         )?;
-        let mut items: Vec<_> = assignments.iter().map(|value| value.item).collect();
-        items.sort();
-        if let Some(pair) = items.windows(2).find(|pair| pair[0] == pair[1]) {
-            return Err(MechanicsComponentDataError::DuplicateItem { item: pair[0] });
-        }
         Ok(Self {
             catalog_version,
             assignments,
@@ -407,12 +457,14 @@ pub enum MechanicsComponentDataError {
         field: &'static str,
         identity: String,
     },
-    DuplicateItem {
-        item: EntityId,
-    },
     InvalidQuantity {
         definition: ItemDefinitionId,
         quantity: u64,
+    },
+    InvalidCapacityLimit {
+        metric: CapacityMetricId,
+        maximum: u64,
+        allowed: u64,
     },
     InvalidEffectStacks {
         instance: EffectInstanceId,
@@ -466,7 +518,7 @@ pub fn register_gameplay_components(
     staged.register(durable_registration::<InventoryComponent>(
         INVENTORY_COMPONENT_TYPE_ID,
         INVENTORY_CODEC_ID,
-        COMPONENT_CODEC_VERSION,
+        INVENTORY_CODEC_VERSION,
         validate_inventory,
     ))?;
     staged.register(durable_registration::<ItemComponent>(
@@ -551,19 +603,25 @@ fn validate_inventory(value: &InventoryComponent) -> Result<(), String> {
     {
         return Err("inventory quantity is zero or exceeds the bound".to_string());
     }
+    validate_sorted_unique_quota(
+        &value.capacity_limits,
+        MAX_INVENTORY_CAPACITY_LIMITS,
+        |entry| entry.metric.as_str(),
+    )?;
+    if value
+        .capacity_limits
+        .iter()
+        .any(|entry| entry.maximum > MAX_CAPACITY_LIMIT_UNITS)
+    {
+        return Err("inventory capacity limit exceeds the bound".to_string());
+    }
     Ok(())
 }
 
 fn validate_equipment(value: &EquipmentComponent) -> Result<(), String> {
     validate_sorted_unique_quota(&value.assignments, MAX_EQUIPMENT_ASSIGNMENTS, |entry| {
         entry.slot.as_str()
-    })?;
-    let mut items: Vec<_> = value.assignments.iter().map(|entry| entry.item).collect();
-    items.sort();
-    if items.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err("equipment item is assigned more than once".to_string());
-    }
-    Ok(())
+    })
 }
 
 fn validate_unique_quota<T>(

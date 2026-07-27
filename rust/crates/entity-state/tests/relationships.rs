@@ -126,6 +126,64 @@ fn cycles_are_rejected_without_partial_mutation() {
 }
 
 #[test]
+fn containment_children_use_the_canonical_reverse_index_and_follow_reparenting() {
+    let mut state = fixture();
+    state
+        .apply_relationship(
+            0,
+            RelationshipCommand::SetContainment {
+                child: EntityId::new(3),
+                container: EntityId::new(1),
+            },
+        )
+        .unwrap();
+    state
+        .apply_relationship(
+            1,
+            RelationshipCommand::SetContainment {
+                child: EntityId::new(2),
+                container: EntityId::new(1),
+            },
+        )
+        .unwrap();
+    assert_eq!(state.contained_entity_count(EntityId::new(1)), 2);
+    assert_eq!(
+        state
+            .contained_entities(EntityId::new(1))
+            .collect::<Vec<_>>(),
+        vec![EntityId::new(2), EntityId::new(3)]
+    );
+
+    state
+        .apply_relationship(
+            2,
+            RelationshipCommand::SetContainment {
+                child: EntityId::new(2),
+                container: EntityId::new(3),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        state
+            .contained_entities(EntityId::new(1))
+            .collect::<Vec<_>>(),
+        vec![EntityId::new(3)]
+    );
+    assert_eq!(
+        state
+            .contained_entities(EntityId::new(3))
+            .collect::<Vec<_>>(),
+        vec![EntityId::new(2)]
+    );
+
+    EntityAuthoringService
+        .destroy(&mut state, 3, EntityId::new(3))
+        .unwrap();
+    assert_eq!(state.contained_entity_count(EntityId::new(1)), 0);
+    assert_eq!(state.contained_in(EntityId::new(2)), None);
+}
+
+#[test]
 fn keep_world_and_parent_destruction_reroot_children() {
     let mut state = fixture();
     state

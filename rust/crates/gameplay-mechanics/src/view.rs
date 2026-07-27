@@ -3,8 +3,9 @@ use entity_state::{ComponentRevision, EntityState};
 
 use crate::{
     ActiveEffectInstance, ActiveEffectsComponent, CatalogVersion, EffectSourceActivation,
-    IntrinsicSourceBinding, IntrinsicSourcesComponent, MechanicsCatalog, MechanicsError, StatValue,
-    StatsComponent, TrackValue, TracksComponent,
+    EquipmentAssignment, EquipmentComponent, IntrinsicSourceBinding, IntrinsicSourcesComponent,
+    InventoryCapacityLimit, InventoryComponent, ItemComponent, ItemDefinitionId, ItemStack,
+    MechanicsCatalog, MechanicsError, StatValue, StatsComponent, TrackValue, TracksComponent,
 };
 
 #[derive(Debug, Clone)]
@@ -117,12 +118,83 @@ impl<'a> ActiveEffectsView<'a> {
 }
 
 #[derive(Debug, Clone)]
+pub struct InventoryComponentView<'a> {
+    revision: ComponentRevision,
+    catalog_version: &'a CatalogVersion,
+    stacks: &'a [ItemStack],
+    capacity_limits: &'a [InventoryCapacityLimit],
+}
+
+impl<'a> InventoryComponentView<'a> {
+    pub fn revision(&self) -> &ComponentRevision {
+        &self.revision
+    }
+
+    pub const fn catalog_version(&self) -> &'a CatalogVersion {
+        self.catalog_version
+    }
+
+    pub const fn stacks(&self) -> &'a [ItemStack] {
+        self.stacks
+    }
+
+    pub const fn capacity_limits(&self) -> &'a [InventoryCapacityLimit] {
+        self.capacity_limits
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ItemView<'a> {
+    revision: ComponentRevision,
+    catalog_version: &'a CatalogVersion,
+    definition: &'a ItemDefinitionId,
+}
+
+impl<'a> ItemView<'a> {
+    pub fn revision(&self) -> &ComponentRevision {
+        &self.revision
+    }
+
+    pub const fn catalog_version(&self) -> &'a CatalogVersion {
+        self.catalog_version
+    }
+
+    pub const fn definition(&self) -> &'a ItemDefinitionId {
+        self.definition
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EquipmentView<'a> {
+    revision: ComponentRevision,
+    catalog_version: &'a CatalogVersion,
+    assignments: &'a [EquipmentAssignment],
+}
+
+impl<'a> EquipmentView<'a> {
+    pub fn revision(&self) -> &ComponentRevision {
+        &self.revision
+    }
+
+    pub const fn catalog_version(&self) -> &'a CatalogVersion {
+        self.catalog_version
+    }
+
+    pub const fn assignments(&self) -> &'a [EquipmentAssignment] {
+        self.assignments
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct MechanicsEntityView<'a> {
     entity: EntityId,
     stats: Option<StatsView<'a>>,
     tracks: Option<TracksView<'a>>,
     intrinsic_sources: Option<IntrinsicSourcesView<'a>>,
     active_effects: Option<ActiveEffectsView<'a>>,
+    inventory: Option<InventoryComponentView<'a>>,
+    item: Option<ItemView<'a>>,
+    equipment: Option<EquipmentView<'a>>,
 }
 
 impl<'a> MechanicsEntityView<'a> {
@@ -171,12 +243,46 @@ impl<'a> MechanicsEntityView<'a> {
                 })
             })
             .transpose()?;
+        let inventory = state
+            .component::<InventoryComponent>(entity)?
+            .map(|component| -> Result<_, MechanicsError> {
+                Ok(InventoryComponentView {
+                    revision: state.component_revision::<InventoryComponent>(entity)?,
+                    catalog_version: component.catalog_version(),
+                    stacks: component.stacks(),
+                    capacity_limits: component.capacity_limits(),
+                })
+            })
+            .transpose()?;
+        let item = state
+            .component::<ItemComponent>(entity)?
+            .map(|component| -> Result<_, MechanicsError> {
+                Ok(ItemView {
+                    revision: state.component_revision::<ItemComponent>(entity)?,
+                    catalog_version: component.catalog_version(),
+                    definition: component.definition(),
+                })
+            })
+            .transpose()?;
+        let equipment = state
+            .component::<EquipmentComponent>(entity)?
+            .map(|component| -> Result<_, MechanicsError> {
+                Ok(EquipmentView {
+                    revision: state.component_revision::<EquipmentComponent>(entity)?,
+                    catalog_version: component.catalog_version(),
+                    assignments: component.assignments(),
+                })
+            })
+            .transpose()?;
         Ok(Self {
             entity,
             stats,
             tracks,
             intrinsic_sources,
             active_effects,
+            inventory,
+            item,
+            equipment,
         })
     }
 
@@ -198,5 +304,17 @@ impl<'a> MechanicsEntityView<'a> {
 
     pub const fn active_effects(&self) -> Option<&ActiveEffectsView<'a>> {
         self.active_effects.as_ref()
+    }
+
+    pub const fn inventory(&self) -> Option<&InventoryComponentView<'a>> {
+        self.inventory.as_ref()
+    }
+
+    pub const fn item(&self) -> Option<&ItemView<'a>> {
+        self.item.as_ref()
+    }
+
+    pub const fn equipment(&self) -> Option<&EquipmentView<'a>> {
+        self.equipment.as_ref()
     }
 }

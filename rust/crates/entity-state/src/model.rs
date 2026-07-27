@@ -175,6 +175,7 @@ pub struct EntityState {
     pub(crate) inactive_controllers: BTreeSet<EntityId>,
     pub(crate) transform_parents: BTreeMap<EntityId, EntityId>,
     pub(crate) containment: BTreeMap<EntityId, EntityId>,
+    pub(crate) containment_children: BTreeMap<EntityId, BTreeSet<EntityId>>,
     pub(crate) derived_from: BTreeMap<EntityId, EntityId>,
 }
 
@@ -193,6 +194,7 @@ impl EntityState {
             inactive_controllers: BTreeSet::new(),
             transform_parents: BTreeMap::new(),
             containment: BTreeMap::new(),
+            containment_children: BTreeMap::new(),
             derived_from: BTreeMap::new(),
         }
     }
@@ -379,6 +381,23 @@ impl EntityState {
         self.containment.get(&entity).copied()
     }
 
+    /// Iterates the canonical direct containment children of one entity in identity order.
+    ///
+    /// This reads the maintained reverse relationship index and does not scan the entity
+    /// population or unrelated containment owners.
+    pub fn contained_entities(&self, container: EntityId) -> impl Iterator<Item = EntityId> + '_ {
+        self.containment_children
+            .get(&container)
+            .into_iter()
+            .flat_map(|children| children.iter().copied())
+    }
+
+    pub fn contained_entity_count(&self, container: EntityId) -> usize {
+        self.containment_children
+            .get(&container)
+            .map_or(0, BTreeSet::len)
+    }
+
     pub fn derived_from(&self, entity: EntityId) -> Option<EntityId> {
         self.derived_from.get(&entity).copied()
     }
@@ -522,8 +541,28 @@ impl EntityState {
         self.inactive_controllers.remove(&entity);
         self.transform_parents.remove(&entity);
         self.transform_parents.retain(|_, parent| *parent != entity);
-        self.containment.remove(&entity);
-        self.containment.retain(|_, container| *container != entity);
+        if let Some(container) = self.containment.remove(&entity) {
+            remove_containment_child(&mut self.containment_children, container, entity);
+        }
+        if let Some(children) = self.containment_children.remove(&entity) {
+            for child in children {
+                self.containment.remove(&child);
+            }
+        }
         self.derived_from.remove(&entity);
+    }
+}
+
+fn remove_containment_child(
+    index: &mut BTreeMap<EntityId, BTreeSet<EntityId>>,
+    container: EntityId,
+    child: EntityId,
+) {
+    let remove_container = index.get_mut(&container).is_some_and(|children| {
+        children.remove(&child);
+        children.is_empty()
+    });
+    if remove_container {
+        index.remove(&container);
     }
 }

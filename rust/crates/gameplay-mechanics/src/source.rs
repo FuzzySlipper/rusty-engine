@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ActiveEffectsComponent, CatalogVersion, EffectInstanceId, EquipmentComponent,
-    IntrinsicSourcesComponent, ItemComponent, ItemKind, MechanicsCatalog, MechanicsComponentKind,
+    IntrinsicSourcesComponent, ItemComponent, MechanicsCatalog, MechanicsComponentKind,
     MechanicsError, ObservedComponentRevision, OperationId, SourceDefinitionId, SourceInstanceId,
 };
 
@@ -214,60 +214,29 @@ pub(crate) fn collect_active_sources_with_effects_override(
             EquipmentComponent::LABEL,
             component.catalog_version(),
         )?;
-        for assignment in component.assignments() {
-            cost.equipment_entries_visited += 1;
-            if catalog.equipment_slot(&assignment.slot).is_none() {
-                return Err(MechanicsError::UnknownEquipmentSlot {
-                    slot: assignment.slot.clone(),
-                });
-            }
-            let actual_owner = state.contained_in(assignment.item);
-            if actual_owner != Some(entity) {
-                return Err(MechanicsError::ItemNotContained {
-                    item: assignment.item,
-                    expected_owner: entity,
-                    actual_owner,
-                });
-            }
-            let item = state.component::<ItemComponent>(assignment.item)?.ok_or(
-                MechanicsError::MissingComponent {
-                    entity: assignment.item,
-                    component: ItemComponent::LABEL,
-                },
-            )?;
-            observed_revisions.push(ObservedComponentRevision {
-                entity: assignment.item,
-                component: MechanicsComponentKind::Item,
-                revision: state
-                    .component_revision::<ItemComponent>(assignment.item)?
-                    .revision(),
-            });
-            cost.item_components_read += 1;
-            ensure_catalog_version(
-                catalog,
-                assignment.item,
-                ItemComponent::LABEL,
-                item.catalog_version(),
-            )?;
-            let item_definition =
-                catalog
-                    .item(item.definition())
-                    .ok_or_else(|| MechanicsError::UnknownItem {
-                        item: item.definition().clone(),
-                    })?;
-            if item_definition.kind != ItemKind::Unique {
-                return Err(MechanicsError::IncompatibleItemKind {
-                    item: assignment.item,
-                    definition: item.definition().clone(),
-                });
-            }
+        let validation = crate::item::validate_equipment_state(state, catalog, entity, component)?;
+        cost.equipment_entries_visited += component.assignments().len();
+        cost.item_components_read += validation.observed_items.len();
+        observed_revisions.extend(validation.observed_items);
+        let items = component
+            .assignments()
+            .iter()
+            .map(|assignment| assignment.item)
+            .collect::<std::collections::BTreeSet<_>>();
+        for item_entity in items {
+            let item = state
+                .component::<ItemComponent>(item_entity)?
+                .expect("equipment validation requires item components");
+            let item_definition = catalog
+                .item(item.definition())
+                .expect("equipment validation requires admitted item definitions");
             for source in &item_definition.sources {
                 push_source(
                     catalog,
                     &mut collected,
                     SourceInstanceIdentity::EquippedItem {
                         owner: entity,
-                        item: assignment.item,
+                        item: item_entity,
                         source: source.clone(),
                     },
                     source.clone(),

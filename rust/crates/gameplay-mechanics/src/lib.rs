@@ -26,22 +26,26 @@ mod track;
 mod view;
 
 pub use catalog::{
-    CatalogError, DamageKindDefinition, DamageKindSelector, DamageResponseDefinition,
-    EffectDefinition, EffectStackingPolicy, EquipmentSlotDefinition, ItemDefinition, ItemKind,
-    MechanicsCatalog, MechanicsCatalogDefinition, MechanicsCatalogView, SourceDefinition,
-    StackingPolicy, StatContribution, StatContributionDefinition, StatDefinition, TrackDefinition,
-    TrackMaximum, MAX_CATALOG_DAMAGE_KINDS, MAX_CATALOG_EFFECTS, MAX_CATALOG_EQUIPMENT_SLOTS,
-    MAX_CATALOG_ITEMS, MAX_CATALOG_SOURCES, MAX_CATALOG_STATS, MAX_CATALOG_TRACKS,
-    MAX_EFFECT_INSTANCES_PER_GROUP, MAX_EFFECT_STACKS, MAX_RESPONSES_PER_SOURCE,
-    MAX_SOURCES_PER_EFFECT, MAX_STAT_CONTRIBUTIONS_PER_SOURCE,
+    CapacityMetricDefinition, CatalogError, DamageKindDefinition, DamageKindSelector,
+    DamageResponseDefinition, EffectDefinition, EffectStackingPolicy, EquipmentSlotDefinition,
+    ItemCapacityCost, ItemDefinition, ItemEquipmentPolicy, ItemKind, MechanicsCatalog,
+    MechanicsCatalogDefinition, MechanicsCatalogView, SourceDefinition, StackingPolicy,
+    StatContribution, StatContributionDefinition, StatDefinition, TrackDefinition, TrackMaximum,
+    MAX_CAPACITY_COSTS_PER_ITEM, MAX_CAPACITY_COST_UNITS, MAX_CATALOG_CAPACITY_METRICS,
+    MAX_CATALOG_DAMAGE_KINDS, MAX_CATALOG_EFFECTS, MAX_CATALOG_EQUIPMENT_SLOTS, MAX_CATALOG_ITEMS,
+    MAX_CATALOG_SOURCES, MAX_CATALOG_STATS, MAX_CATALOG_TRACKS, MAX_EFFECT_INSTANCES_PER_GROUP,
+    MAX_EFFECT_STACKS, MAX_EQUIPMENT_SLOTS_PER_ITEM, MAX_ITEM_CLASSIFICATIONS,
+    MAX_RESPONSES_PER_SOURCE, MAX_SOURCES_PER_EFFECT, MAX_SOURCES_PER_ITEM,
+    MAX_STAT_CONTRIBUTIONS_PER_SOURCE,
 };
 pub use component::{
     gameplay_component_registry, register_gameplay_components, EquipmentAssignment,
-    EquipmentComponent, IntrinsicSourceBinding, IntrinsicSourcesComponent, InventoryComponent,
-    ItemComponent, ItemStack, MechanicsComponentDataError, MechanicsComponentKind,
-    ObservedComponentRevision, StatValue, StatsComponent, TrackValue, TracksComponent,
-    ACTIVE_EFFECTS_COMPONENT_TYPE_ID, EQUIPMENT_COMPONENT_TYPE_ID,
+    EquipmentComponent, IntrinsicSourceBinding, IntrinsicSourcesComponent, InventoryCapacityLimit,
+    InventoryComponent, ItemComponent, ItemStack, MechanicsComponentDataError,
+    MechanicsComponentKind, ObservedComponentRevision, StatValue, StatsComponent, TrackValue,
+    TracksComponent, ACTIVE_EFFECTS_COMPONENT_TYPE_ID, EQUIPMENT_COMPONENT_TYPE_ID,
     INTRINSIC_SOURCES_COMPONENT_TYPE_ID, INVENTORY_COMPONENT_TYPE_ID, ITEM_COMPONENT_TYPE_ID,
+    MAX_CAPACITY_LIMIT_UNITS, MAX_INVENTORY_CAPACITY_LIMITS, MAX_STACK_QUANTITY,
     STATS_COMPONENT_TYPE_ID, TRACKS_COMPONENT_TYPE_ID,
 };
 pub use damage::{
@@ -57,12 +61,17 @@ pub use effect::{
 };
 pub use error::{MechanicsError, MechanicsSnapshotError};
 pub use identity::{
-    CatalogVersion, DamageKindId, EffectDefinitionId, EffectInstanceId, EquipmentSlotId,
-    ItemDefinitionId, OperationId, SourceDefinitionId, SourceInstanceId, StackingGroupId, StatId,
-    TrackId, MAX_MECHANICS_ID_BYTES,
+    CapacityMetricId, CatalogVersion, DamageKindId, EffectDefinitionId, EffectInstanceId,
+    EquipmentExclusivityId, EquipmentSlotId, ItemClassificationId, ItemDefinitionId, OperationId,
+    SourceDefinitionId, SourceInstanceId, StackingGroupId, StatId, TrackId, MAX_MECHANICS_ID_BYTES,
 };
 pub use item::{
-    EquipmentMutationReceipt, EquipmentService, ItemTransferReceipt, ItemTransferRequest,
+    CapacityUsage, EquipmentEquipRequest, EquipmentMutationKind, EquipmentMutationReceipt,
+    EquipmentService, EquipmentSlotChange, EquipmentSwapRequest, EquipmentUnequipRequest,
+    InventoryMutationKind, InventoryMutationReceipt, InventoryMutationRequest, InventoryReadCost,
+    InventoryService, InventoryTransferReceipt, InventoryTransferRequest, InventoryView,
+    ItemDestroyReceipt, ItemDestroyRequest, ItemService, ItemTransferReceipt, ItemTransferRequest,
+    UniqueInventoryItem, MAX_CONTAINED_ENTITIES_PER_INVENTORY, MAX_EQUIPMENT_SOURCE_ACTIVATIONS,
 };
 pub use scalar::{
     CombinedRatio, ExactRatio, MechanicsArithmeticError, MechanicsScalar, RoundingPolicy,
@@ -87,5 +96,6 @@ pub use track::{
     TrackSetReceipt, TrackSetRequest,
 };
 pub use view::{
-    ActiveEffectsView, IntrinsicSourcesView, MechanicsEntityView, StatsView, TracksView,
+    ActiveEffectsView, EquipmentView, IntrinsicSourcesView, InventoryComponentView, ItemView,
+    MechanicsEntityView, StatsView, TracksView,
 };

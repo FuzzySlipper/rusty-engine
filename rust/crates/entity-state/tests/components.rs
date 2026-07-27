@@ -3,10 +3,10 @@ use core_math::Vec3;
 use entity_state::{
     decode_snapshot, decode_snapshot_with_registry, encode_snapshot, ComponentCodec,
     ComponentPersistence, ComponentRegistration, ComponentRegistrationError, ComponentRegistry,
-    ComponentTypeId, EntityAuthoringError, EntityAuthoringService, EntityComponent,
-    EntityDefinition, EntityState, EntityStateSnapshotError, RegisteredComponentSnapshotError,
-    TransformComponent, MAX_COMPONENT_INSPECTION_ENTITIES, MAX_COMPONENT_TYPE_ID_BYTES,
-    TRANSFORM_COMPONENT_TYPE_ID,
+    ComponentReplacement, ComponentTypeId, EntityAuthoringError, EntityAuthoringService,
+    EntityComponent, EntityDefinition, EntityState, EntityStateSnapshotError,
+    RegisteredComponentSnapshotError, TransformComponent, MAX_COMPONENT_INSPECTION_ENTITIES,
+    MAX_COMPONENT_TYPE_ID_BYTES, TRANSFORM_COMPONENT_TYPE_ID,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -239,6 +239,95 @@ fn typed_mutation_is_revision_guarded_validated_and_cleans_up_on_destroy() {
         Err(EntityAuthoringError::TombstonedEntity { .. })
     ));
     assert_eq!(state.revision(), 5);
+}
+
+#[test]
+fn homogeneous_component_replacements_validate_all_slots_before_one_publication() {
+    let first = EntityId::new(20);
+    let second = EntityId::new(21);
+    let mut state = EntityState::from_definitions([
+        EntityDefinition::new(first, "first"),
+        EntityDefinition::new(second, "second"),
+    ])
+    .unwrap();
+    state.register_component(runtime_registration()).unwrap();
+    let service = EntityAuthoringService;
+    for (entity, strength) in [(first, 10), (second, 20)] {
+        let revision = state.component_revision::<RuntimePower>(entity).unwrap();
+        service
+            .attach_component(&mut state, revision, entity, RuntimePower { strength })
+            .unwrap();
+    }
+
+    let before_revision = state.revision();
+    let first_revision = state.component_revision::<RuntimePower>(first).unwrap();
+    let second_revision = state.component_revision::<RuntimePower>(second).unwrap();
+    assert!(matches!(
+        service.replace_components(
+            &mut state,
+            vec![
+                ComponentReplacement {
+                    expected_revision: first_revision.clone(),
+                    entity: first,
+                    component: RuntimePower { strength: 30 },
+                },
+                ComponentReplacement {
+                    expected_revision: second_revision.clone(),
+                    entity: second,
+                    component: RuntimePower { strength: 101 },
+                },
+            ],
+        ),
+        Err(EntityAuthoringError::InvalidComponent { entity, .. }) if entity == second
+    ));
+    assert_eq!(state.revision(), before_revision);
+    assert_eq!(
+        state.component::<RuntimePower>(first).unwrap(),
+        Some(&RuntimePower { strength: 10 })
+    );
+    assert_eq!(
+        state.component::<RuntimePower>(second).unwrap(),
+        Some(&RuntimePower { strength: 20 })
+    );
+
+    let receipt = service
+        .replace_components(
+            &mut state,
+            vec![
+                ComponentReplacement {
+                    expected_revision: second_revision,
+                    entity: second,
+                    component: RuntimePower { strength: 40 },
+                },
+                ComponentReplacement {
+                    expected_revision: first_revision,
+                    entity: first,
+                    component: RuntimePower { strength: 30 },
+                },
+            ],
+        )
+        .unwrap();
+    assert_eq!(receipt.revision_before, before_revision);
+    assert_eq!(receipt.revision_after, before_revision + 1);
+    assert_eq!(
+        receipt
+            .facts
+            .iter()
+            .map(|fact| match fact {
+                entity_state::EntityAuthoringFact::ComponentReplaced { entity, .. } => *entity,
+                other => panic!("unexpected fact {other:?}"),
+            })
+            .collect::<Vec<_>>(),
+        vec![first, second]
+    );
+    assert_eq!(
+        state.component::<RuntimePower>(first).unwrap(),
+        Some(&RuntimePower { strength: 30 })
+    );
+    assert_eq!(
+        state.component::<RuntimePower>(second).unwrap(),
+        Some(&RuntimePower { strength: 40 })
+    );
 }
 
 #[test]
