@@ -267,6 +267,10 @@ export class StudioWorkspaceStore {
   #settingsGeneration = 0;
   #projectScopeGeneration = 0;
   #objectOperationGeneration = 0;
+  #queuedObjectPlaybackControl: Extract<
+    VoxelEditorAction,
+    { readonly kind: 'previewObjectInstance' }
+  > | null = null;
 
   constructor(
     client: StudioAdapterClient,
@@ -848,11 +852,14 @@ export class StudioWorkspaceStore {
   async runVoxelAction(action: VoxelEditorAction): Promise<void> {
     const current = this.#snapshot();
     const document = current.authoringDocument;
-    if (
-      document === null
-      || current.operation !== 'idle'
-      || !objectCandidateActionIsCurrent(action, current.voxelWorkspace.objectConversion)
-    ) return;
+    if (document === null) return;
+    if (current.operation !== 'idle') {
+      if (current.operation === 'voxel' && isObjectPlaybackControl(action)) {
+        this.#queuedObjectPlaybackControl = action;
+      }
+      return;
+    }
+    if (!objectCandidateActionIsCurrent(action, current.voxelWorkspace.objectConversion)) return;
     const expectedProjectHash = document.identity.projectHash;
     const projectScopeGeneration = this.#projectScopeGeneration;
     const objectAction = isVoxelObjectAction(action);
@@ -1318,7 +1325,16 @@ export class StudioWorkspaceStore {
         objectOperationGeneration,
       )) return;
       this.#operationFailed(error);
+    } finally {
+      this.#drainQueuedObjectPlaybackControl();
     }
+  }
+
+  #drainQueuedObjectPlaybackControl(): void {
+    const action = this.#queuedObjectPlaybackControl;
+    if (action === null || this.#snapshot().operation !== 'idle') return;
+    this.#queuedObjectPlaybackControl = null;
+    void this.runVoxelAction(action);
   }
 
   setHierarchyFilter(value: string): void {
@@ -1739,6 +1755,13 @@ function isVoxelObjectAction(action: VoxelEditorAction): boolean {
     default:
       return false;
   }
+}
+
+function isObjectPlaybackControl(
+  action: VoxelEditorAction,
+): action is Extract<VoxelEditorAction, { readonly kind: 'previewObjectInstance' }> {
+  return action.kind === 'previewObjectInstance'
+    && (action.command.kind === 'pause' || action.command.kind === 'stop');
 }
 
 function acceptedSelection(

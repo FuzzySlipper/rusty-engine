@@ -110,7 +110,9 @@ posture, runtime frame identity, and the complete shared-renderer projection. Th
 the durable default/clip-frame selection beside the transient sampled frame and exact project/object
 hashes. Scrub, play, pause, and timer samples do not publish the player posture, revise the project,
 or rewrite the voxel-object artifact; `stop` presents the durable pose again. TypeScript schedules
-only the next sampling request and never advances frame indices or interprets clip durations.
+only the next sampling request and never advances frame indices or interprets clip durations. A
+pause or stop chosen during an in-flight sample is queued as the next closed command; the latest
+user control wins, so stop may supersede a queued pause without racing adapter requests.
 
 ## Safety and atomicity
 

@@ -518,8 +518,8 @@
                         <input aria-label="Applied voxel-object preview frame" type="range" min="0" [max]="selectedAppliedObjectFrameMax()" [(ngModel)]="appliedObjectFrame" (change)="scrubAppliedObjectFrame()" />
                         <span>{{ appliedObjectFrame }} / {{ selectedAppliedObjectFrameMax() }}</span>
                         <button type="button" data-action="play-voxel-object-instance" [disabled]="busy() || appliedObjectPlaying() || objectPlayback()?.status !== 'paused'" (click)="playAppliedObjectPreview()">Play</button>
-                        <button type="button" data-action="pause-voxel-object-instance" [disabled]="busy() || !appliedObjectPlaying()" (click)="pauseAppliedObjectPreview()">Pause</button>
-                        <button type="button" data-action="stop-voxel-object-instance" [disabled]="busy() || objectPlayback()?.instanceId !== entry.instance.instanceId || objectPlayback()?.status === 'stopped'" (click)="stopAppliedObjectPreview()">Restore saved pose</button>
+                        <button type="button" data-action="pause-voxel-object-instance" [disabled]="!appliedObjectPlaying()" (click)="pauseAppliedObjectPreview()">Pause</button>
+                        <button type="button" data-action="stop-voxel-object-instance" [disabled]="objectPlayback()?.instanceId !== entry.instance.instanceId || objectPlayback()?.status === 'stopped'" (click)="stopAppliedObjectPreview()">Restore saved pose</button>
                       </div>
                     } @else {
                       <span>This object has no animated clips; its saved default frame is already shown.</span>

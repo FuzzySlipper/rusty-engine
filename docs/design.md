@@ -374,7 +374,10 @@ durations select the runtime frame, and render projection returns a complete neu
 readout names the saved initial frame separately from the transient posture and sampled frame.
 Neither the player posture nor the browser sampling cadence enters project or object bytes, and
 open, reread, close, and durable mutation discard the session. Conversion-candidate playback remains
-a separate pre-apply inspection path.
+a separate pre-apply inspection path. Pause and restore are user-priority controls: when one arrives
+while a sample is in flight, Studio retains the latest control and dispatches it immediately after
+that sample settles, with restore superseding an earlier queued pause. The adapter still receives
+one ordered closed command at a time.
 
 Static and animated mesh appearance follows the same authority path. The downstream Rust adapter
 validates the selected asset and animation clip, then projects typed resource descriptors,

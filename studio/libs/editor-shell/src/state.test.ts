@@ -427,6 +427,91 @@ test('voxel-object source, shared candidate frames, stale apply, explicit discar
   assert.equal(reopened.snapshot().authoringDocument?.identity.projectHash, 'hash-before');
 });
 
+test('pause and restore queue behind an in-flight applied-object sample', async () => {
+  const client = new VoxelObjectFixtureClient();
+  client.applied = true;
+  client.attached = true;
+  const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
+  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.runVoxelAction({
+    kind: 'previewObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    nowMicroseconds: 5_000_000,
+    command: {
+      kind: 'scrub',
+      clipId: 'clip/walk-1',
+      clipFrame: 0,
+      loopMode: 'repeat',
+    },
+  });
+  await store.runVoxelAction({
+    kind: 'previewObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    nowMicroseconds: 5_100_000,
+    command: { kind: 'play' },
+  });
+
+  client.blockNextPlayback();
+  const sample = store.runVoxelAction({
+    kind: 'previewObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    nowMicroseconds: 5_200_000,
+    command: { kind: 'sample' },
+  });
+  await store.runVoxelAction({
+    kind: 'previewObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    nowMicroseconds: 5_210_000,
+    command: { kind: 'pause' },
+  });
+  assert.equal(store.snapshot().operation, 'voxel');
+  assert.deepEqual(client.playbackCommands.slice(-1), ['sample']);
+  client.resolveBlockedPlayback();
+  await sample;
+  await Promise.resolve();
+  assert.equal(store.snapshot().voxelWorkspace.objectPlayback?.status, 'paused');
+  assert.deepEqual(client.playbackCommands.slice(-2), ['sample', 'pause']);
+
+  await store.runVoxelAction({
+    kind: 'previewObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    nowMicroseconds: 5_300_000,
+    command: { kind: 'play' },
+  });
+  client.blockNextPlayback();
+  const secondSample = store.runVoxelAction({
+    kind: 'previewObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    nowMicroseconds: 5_400_000,
+    command: { kind: 'sample' },
+  });
+  await store.runVoxelAction({
+    kind: 'previewObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    nowMicroseconds: 5_410_000,
+    command: { kind: 'pause' },
+  });
+  await store.runVoxelAction({
+    kind: 'previewObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    nowMicroseconds: 5_420_000,
+    command: { kind: 'stop' },
+  });
+  client.resolveBlockedPlayback();
+  await secondSample;
+  await Promise.resolve();
+  assert.equal(store.snapshot().voxelWorkspace.objectPlayback?.status, 'stopped');
+  assert.deepEqual(client.playbackCommands.slice(-2), ['sample', 'stop']);
+});
+
 test('host-user camera and keyboard settings persist outside project authority and reload by project root', async () => {
   const settingsHost = new FixtureSettingsHost();
   const first = new StudioWorkspaceStore(
@@ -547,6 +632,7 @@ class VoxelObjectFixtureClient {
   applyRequestCount = 0;
   playbackStatus: 'stopped' | 'playing' | 'paused' = 'stopped';
   playbackFrame = 0;
+  readonly playbackCommands: string[] = [];
   #blockedInspection: {
     readonly promise: Promise<unknown>;
     readonly resolve: (response: unknown) => void;
@@ -555,6 +641,11 @@ class VoxelObjectFixtureClient {
     readonly promise: Promise<unknown>;
     readonly resolve: (response: unknown) => void;
     readonly reject: (error: unknown) => void;
+    response: unknown | null;
+  } | null = null;
+  #blockedPlayback: {
+    readonly promise: Promise<unknown>;
+    readonly resolve: (response: unknown) => void;
     response: unknown | null;
   } | null = null;
 
@@ -643,6 +734,22 @@ class VoxelObjectFixtureClient {
     blocked.reject(new Error('late preview rejected'));
   }
 
+  blockNextPlayback() {
+    assert.equal(this.#blockedPlayback, null);
+    let resolve!: (response: unknown) => void;
+    const promise = new Promise<unknown>((resolvePromise) => {
+      resolve = resolvePromise;
+    });
+    this.#blockedPlayback = { promise, resolve, response: null };
+  }
+
+  resolveBlockedPlayback() {
+    const blocked = this.#blockedPlayback;
+    assert.ok(blocked !== null && blocked.response !== null);
+    this.#blockedPlayback = null;
+    blocked.resolve(blocked.response);
+  }
+
   previewVoxelObjectConversion(input: { readonly frame: { readonly kind: string; readonly frameIndex?: number } }) {
     this.previewRequestCount += 1;
     const frame = input.frame.kind === 'clip' ? input.frame.frameIndex ?? 0 : 0;
@@ -705,6 +812,7 @@ class VoxelObjectFixtureClient {
       readonly clipFrame?: number;
     };
   }) {
+    this.playbackCommands.push(input.command.kind);
     if (input.command.kind === 'scrub') {
       this.playbackStatus = 'paused';
       this.playbackFrame = input.command.clipFrame ?? 0;
@@ -717,7 +825,7 @@ class VoxelObjectFixtureClient {
     } else if (input.command.kind === 'stop') {
       this.playbackStatus = 'stopped';
     }
-    return Promise.resolve({
+    const response = {
       playback: {
         sceneId: 'scene/loading-bay',
         instanceId: 'character-one',
@@ -736,7 +844,12 @@ class VoxelObjectFixtureClient {
       },
       projection: objectCandidateProjection(this.playbackFrame),
       projectionReadout: projectionReadout(20 + this.playbackFrame),
-    } as never);
+    };
+    if (this.#blockedPlayback !== null) {
+      this.#blockedPlayback.response = response;
+      return this.#blockedPlayback.promise;
+    }
+    return Promise.resolve(response as never);
   }
 
   #project() {
