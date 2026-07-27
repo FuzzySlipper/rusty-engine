@@ -42,6 +42,7 @@ downstream game
   entities / game components / services / scheduling / persistence / presentation intent
                      |
                      +--> entity-state
+                     +--> gameplay-mechanics (optional)
                      +--> engine-spatial -------------------+
                      +--> voxel-asset                       |
                      +--> render-model --> render-projection----+
@@ -91,13 +92,15 @@ succeeds. Rejection changes neither values, relationships, slot revisions, nor t
 Slot revisions are process-local guards rather than durable facts and must be reacquired after
 snapshot restoration.
 
-A future service-specific prepared operation captures the revisions of exactly the component slots
-and relationship facts it reads, validates its complete candidate before publishing, and reports
-one typed service receipt. It may stage against an `EntityState` clone so a rejected multi-component
-candidate never reaches the live value. It must not replace those narrow guards with the global
-revision merely because every component shares one store, nor turn the store into a generic
-callback transaction language. Transform parenting, containment, and source ancestry remain
-explicit relationship maps rather than components.
+A service-specific prepared operation captures the revisions of exactly the component slots and
+relationship facts it reads, validates its complete candidate before publishing, and reports one
+typed service receipt. Ordinary operations stage only the exact component values they own; they do
+not clone the complete `EntityState`. A true cross-slot invariant must either use an explicit
+valid-state precondition/operation split or first earn the smallest reusable atomic publication seam
+at `entity-state`. It must not replace narrow guards with the global revision merely because every
+component shares one store, nor turn the store into a generic callback transaction language.
+Transform parenting, containment, and source ancestry remain explicit relationship maps rather than
+components.
 
 The schema-3 snapshot keeps its established built-in JSON fields. A registered downstream type is
 either runtime-only and omitted, or durable through an explicit stable codec identity and positive
@@ -110,6 +113,58 @@ The store does not expose archetypes, arbitrary ECS matching, implicit schedulin
 callbacks, service location, or game-specific state. A downstream service uses the command batch
 only when several reusable built-in component changes must commit together. Ordinary game
 component mutation and all substantial gameplay behavior remain with the downstream feature owner.
+
+## Gameplay mechanics boundary
+
+The optional `gameplay-mechanics` crate supplies a small common vocabulary for component-backed
+stats, mutable tracks, attributed sources, explicit effects, fungible stacks, unique items,
+equipment, and damage. It is not a game runtime. Downstream still owns attacks, targeting, turns,
+reactions, ticks, effect-expiration timing, complete saves, and the consequences of returned facts.
+
+`MechanicsCatalog` is an immutable admitted set of typed definitions with a downstream compatibility
+version and a deterministic diagnostic fingerprint. Live values use seven independently registered
+durable components: `StatsComponent`, `TracksComponent`, `IntrinsicSourcesComponent`,
+`ActiveEffectsComponent`, `InventoryComponent`, `ItemComponent`, and `EquipmentComponent`.
+Definitions and request/receipt values are not components. Components contain inert data and strict
+codecs; direct `StatService`, `TrackService`, `DamageService`, and `EquipmentService` calls own
+validation and mutation.
+
+GM0 freezes these mechanics contracts:
+
+- signed stored scalars are checked `i64` values bounded to `+/-1_000_000_000_000`; scale values are
+  normalized exact rationals with components at most `1_000_000`, combined exactly, then rounded
+  once toward zero;
+- a source definition is authored catalog data while `SourceInstanceIdentity` records whether one
+  live activation is intrinsic, effect-owned, equipped-item-owned, or request-local. Source
+  priority followed by that typed identity is the canonical order;
+- source decisions are explicit `Applied`, `Suppressed`, or `Inapplicable` receipt entries;
+- damage validates and stages every bounded part before publishing one `TracksComponent`
+  replacement. Its fixed order is prevention, flat reduction, combined exact scaling and one
+  rounding step, canonical protection-track absorption, then target-track application;
+- preview is pure and reports exact component revisions. Apply recomputes from current component
+  state instead of committing a retained preview;
+- unique stateful items are ordinary `EntityId` values with `ItemComponent`; ownership is the
+  canonical containment relationship. Equipment stores references but never a second ownership
+  list; and
+- lowering a source-derived track maximum uses a visible valid-state split:
+  `TrackService::reconcile_to_maximum` first lowers the current value while the old bound remains
+  valid, then the source/effect owner publishes its separate component change. Transfer similarly
+  rejects an equipped item until an explicit exact-slot unequip succeeds, then changes containment.
+
+Those splits deliberately avoid an unrestricted heterogeneous transaction and complete-world
+cloning. Each intermediate state is valid, and failure of the later step cannot expose an
+out-of-bounds track or an equipped item owned elsewhere. A future operation that cannot satisfy that
+rule must add a narrow generic seam at `entity-state`, not a mechanics store, command AST, or shadow
+revision.
+
+Entity-local evaluation performs exact component-slot lookups and iterates only present bounded
+entries. The focused base damage path visits zero intrinsic sources, effects, equipment
+assignments, item components, and request sources; it performs no global entity scan. Strict
+reconstruction supplies the explicit gameplay registry to `entity-state`, then validates every
+component's catalog version and referenced definition before returning the candidate state.
+
+See [Gameplay mechanics](code-map/gameplay-mechanics.md) for entry points, frozen quotas, and focused
+gates.
 
 ## Spatial authority and derived mechanisms
 

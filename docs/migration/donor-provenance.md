@@ -447,6 +447,32 @@ canonical provenance, the regenerated artifact content hash changed from
 `086d81f12403192c6d7568289c2b47771741e5620a967e5b5fe5093fd5608ab7`; the checked project embeds
 that exact canonical result.
 
+## Gameplay mechanics GM0 donor disposition
+
+`gameplay-mechanics` GM0 consulted `asha-rpg` at
+`e4d6d1afb5b8387de4ff805d73b2041df29ee590` as semantic and test evidence only. No Asha crate,
+runtime package, protocol, generated artifact, or sibling-checkout path enters Cargo metadata or
+provider verification.
+
+| Disposition | Donor evidence retained | Rusty implementation |
+|---|---|---|
+| Adopted | Stable typed source identities, deterministic tie ordering, checked bounded arithmetic, staged failure non-mutation, and explanations that distinguish applied, suppressed, and inapplicable candidates | Distinct ID newtypes, bounded scalars/normalized ratios, canonical source ordering, exact-slot candidates, and typed stat/damage receipts |
+| Adapted | Base numeric attributes, bounded current resources, modifier provenance, effect activations, fixed-stage prevention/reduction/scaling/absorption, item binding, equipment validation, and detailed witnesses | `StatsComponent`, `TracksComponent`, explicit source/effect/item/equipment components, immutable `MechanicsCatalog`, direct named services, canonical containment for unique `EntityId` items, and operation-local receipts |
+| Excluded | `MechanicsState`, RPG IR/program registries, compiled content/package locks, authority sessions, universal action/formula ASTs, broad event/trace/replay topology, automatic effect clocks, d20 runtime policy, TypeScript authoring authority, provider bridges, and compatibility aliases | No replacement; game policy and orchestration remain downstream, while entity lifecycle/relationships stay in `entity-state` |
+
+The donor's “resource” semantics are represented as tracks so durable current values cannot be
+confused with evaluated stats. Damage keeps the useful flat-before-scale, combine-then-round
+discipline but publishes every protection and target change through one `TracksComponent` slot. A
+unique item has no second instance identity: `ItemComponent` binds its ordinary entity to catalog
+content and canonical containment owns location.
+
+The accepted generic component API has no heterogeneous public transaction. GM0 therefore rejected
+complete-world cloning and a universal transaction extension. It proved two narrower valid-state
+splits: an equipped item must be explicitly unequipped before containment transfer, and a current
+track must be reconciled to a prospective lower bound before the effect/source component lowering
+that bound is changed. Late multipart damage needs no split because every touched track is
+co-located and staged in one component replacement.
+
 The operational dependency baseline is empty. After M10, Cargo metadata, provider fixture paths,
 shell scripts, executable documentation, and CI require only Rusty Engine; ordinary Engine work has
 no pnpm or Node graph at all. A clean clone with no Asha or demo sibling is the certification

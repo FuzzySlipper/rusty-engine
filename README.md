@@ -38,6 +38,7 @@ but the repository is intentionally navigable without Den access. Start with
 downstream game policy and orchestration
              |
              +--> entity-state / state-machine
+             +--> gameplay-mechanics
              +--> environment-authoring --> authored-scene
              +--> content-store / asset-catalog / asset-import
              +--> engine-spatial --> core-* / svc-*
@@ -57,6 +58,10 @@ per-entity/per-component revision-guarded mutation, deterministic iteration,
 bounded inspection, and
 optional versioned codecs let downstream Rust add inert component families
 without an Engine enum, global registry, or ECS scheduler.
+`gameplay-mechanics` optionally registers inert stats, tracks, sources, effects,
+inventory, unique-item, and equipment data in that same store, then exposes
+direct attributed stat, track, damage, and item/equipment services without
+owning product orchestration.
 `engine-spatial` composes one canonical voxel authority with derived collision,
 navigation, mesh, motion, trigger, and edit mechanisms. Content and authoring
 crates own strict durable formats, validation, plans, and explicit mutation
@@ -75,7 +80,7 @@ proves host-neutral mechanisms.
 
 ## Repository layout
 
-Workspace inventory: **28 Cargo workspace crates, 4 public renderer packages,
+Workspace inventory: **29 Cargo workspace crates, 4 public renderer packages,
 and 1 Studio application plus 5 Studio libraries.**
 
 ```text
@@ -84,6 +89,7 @@ rust/crates/
   svc-*                     volume, spatial, collision, pathfinding, RNG, mesh
   entity-state              typed components, relationships, transforms, snapshots, atomic mutation
   state-machine             explicit definitions, instances, and transitions
+  gameplay-mechanics        component-backed stats, tracks, sources, items, damage, restoration
   engine-spatial            canonical voxel space and synchronized derived mechanisms
   content-store             manifests, source batches, prefabs, load/save plans, write sets
   asset-catalog             asset versions, locks, dependencies, materials, fallbacks
@@ -123,7 +129,10 @@ public surfaces, forbidden shortcuts, focused tests, and follow-up routes.
 Downstream Rust owns the live gameplay loop and calls named Engine services
 directly. `entity-state` is the atomic boundary for entity components; it is
 not a universal command route for collision, navigation, assets, presentation,
-or other service-owned state.
+or other service-owned state. `gameplay-mechanics` owns only the reusable
+catalog/component/service contracts documented in its
+[code map](docs/code-map/gameplay-mechanics.md); downstream owns attacks, turns,
+ticks, consequences, and complete persistence.
 
 ### Content and persistence
 

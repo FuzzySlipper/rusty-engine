@@ -7,6 +7,7 @@ members = [
     "rust/crates/content-store",
     "rust/crates/environment-authoring",
     "rust/crates/engine-inspector",
+    "rust/crates/gameplay-mechanics",
     "rust/crates/render-model",
     "rust/crates/render-presentation",
     "rust/crates/render-projection",
@@ -43,6 +44,7 @@ content-store = { path = "rust/crates/content-store" }
 environment-authoring = { path = "rust/crates/environment-authoring" }
 engine-inspector = { path = "rust/crates/engine-inspector" }
 engine-spatial = { path = "rust/crates/engine-spatial" }
+gameplay-mechanics = { path = "rust/crates/gameplay-mechanics" }
 render-model = { path = "rust/crates/render-model" }
 render-presentation = { path = "rust/crates/render-presentation" }
 render-projection = { path = "rust/crates/render-projection" }
