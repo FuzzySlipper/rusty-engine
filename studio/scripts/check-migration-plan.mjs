@@ -115,7 +115,7 @@ for (const [surfaceId, rulePath] of rules) {
 const expectedOwners = new Set([
   'asset-catalog', 'asset-import', 'authored-scene', 'content-store', 'core-assets', 'core-ids',
   'core-math', 'core-space', 'core-time', 'core-voxel', 'engine-inspector', 'engine-spatial',
-  'entity-state', 'environment-authoring', 'render-model', 'render-presentation',
+  'entity-state', 'environment-authoring', 'gameplay-mechanics', 'render-model', 'render-presentation',
   'render-projection', 'state-machine', 'svc-collision', 'svc-mesh', 'svc-pathfinding',
   'svc-rng', 'svc-spatial', 'svc-volume', 'voxel-annotation', 'voxel-asset', 'voxel-convert',
   'voxel-object-runtime',

@@ -22,6 +22,8 @@ restoration, and their bounded receipts.
 - Entity lifecycle or containment authority; those remain in `entity-state`.
 - A mechanics world/store, ECS scheduler, gameplay AST, callback registry,
   ambient event bus, universal transaction, or replay/session layer.
+- Studio classifies this crate as `non-studio`; workspace-owner enumeration is
+  governance evidence only and introduces no Studio API or dependency.
 
 ## Primary paths
 
