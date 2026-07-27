@@ -3,6 +3,11 @@
 //! This crate provides inert registered component types, one immutable admitted
 //! catalog, and direct named services. It owns no entity registry, scheduler,
 //! session, renderer, I/O path, or ambient event bus.
+//!
+//! A stat is an admitted base scalar evaluated with attributed active sources.
+//! A track is durable current state constrained by fixed or stat-derived bounds.
+//! Stat evaluation never rewrites a track; callers use explicit track services
+//! for spend, restore, policy-governed set, and maximum reconciliation.
 
 #![forbid(unsafe_code)]
 
@@ -17,14 +22,16 @@ mod snapshot;
 mod source;
 mod stat;
 mod track;
+mod view;
 
 pub use catalog::{
     CatalogError, DamageKindDefinition, DamageKindSelector, DamageResponseDefinition,
     EffectDefinition, EquipmentSlotDefinition, ItemDefinition, ItemKind, MechanicsCatalog,
-    MechanicsCatalogDefinition, SourceDefinition, StackingPolicy, StatContributionDefinition,
-    StatDefinition, TrackDefinition, TrackMaximum, MAX_CATALOG_DAMAGE_KINDS, MAX_CATALOG_EFFECTS,
-    MAX_CATALOG_EQUIPMENT_SLOTS, MAX_CATALOG_ITEMS, MAX_CATALOG_SOURCES, MAX_CATALOG_STATS,
-    MAX_CATALOG_TRACKS, MAX_RESPONSES_PER_SOURCE, MAX_STAT_CONTRIBUTIONS_PER_SOURCE,
+    MechanicsCatalogDefinition, MechanicsCatalogView, SourceDefinition, StackingPolicy,
+    StatContribution, StatContributionDefinition, StatDefinition, TrackDefinition, TrackMaximum,
+    MAX_CATALOG_DAMAGE_KINDS, MAX_CATALOG_EFFECTS, MAX_CATALOG_EQUIPMENT_SLOTS, MAX_CATALOG_ITEMS,
+    MAX_CATALOG_SOURCES, MAX_CATALOG_STATS, MAX_CATALOG_TRACKS, MAX_RESPONSES_PER_SOURCE,
+    MAX_STAT_CONTRIBUTIONS_PER_SOURCE,
 };
 pub use component::{
     gameplay_component_registry, register_gameplay_components, ActiveEffectInstance,
@@ -62,8 +69,13 @@ pub use source::{
     MAX_ACTIVE_EFFECT_INSTANCES, MAX_EQUIPMENT_ASSIGNMENTS, MAX_INTRINSIC_SOURCE_BINDINGS,
     MAX_INVENTORY_STACKS, MAX_REQUEST_SOURCES,
 };
-pub use stat::{StatDecision, StatEvaluation, StatService, MAX_STAT_DECISIONS};
-pub use track::{
-    TrackAdjustmentKind, TrackMutationReceipt, TrackMutationRequest, TrackReconciliationReceipt,
-    TrackReconciliationRequest, TrackService,
+pub use stat::{
+    StatBaseMutationReceipt, StatBaseMutationRequest, StatDecision, StatEvaluation, StatService,
+    MAX_STAT_DECISIONS,
 };
+pub use track::{
+    TrackAdjustmentKind, TrackMutationReceipt, TrackMutationRequest, TrackReconciliationPolicy,
+    TrackReconciliationReceipt, TrackReconciliationRequest, TrackService, TrackSetPolicy,
+    TrackSetReceipt, TrackSetRequest,
+};
+pub use view::{IntrinsicSourcesView, MechanicsEntityView, StatsView, TracksView};

@@ -41,19 +41,19 @@ pub fn validate_state_against_catalog(
             component.catalog_version(),
         )?;
         for value in component.values() {
-            let definition = catalog.stat(&value.stat).ok_or_else(|| {
+            let definition = catalog.stat(value.stat()).ok_or_else(|| {
                 MechanicsError::InvalidCatalogReference {
                     entity,
                     component: StatsComponent::LABEL,
                     namespace: "stat",
-                    reference: value.stat.to_string(),
+                    reference: value.stat().to_string(),
                 }
             })?;
-            if value.base < definition.minimum || value.base > definition.maximum {
+            if value.base() < definition.minimum || value.base() > definition.maximum {
                 return Err(MechanicsError::StatOutOfBounds {
                     entity,
-                    stat: value.stat.clone(),
-                    attempted: value.base.get(),
+                    stat: value.stat().clone(),
+                    attempted: value.base().get(),
                     minimum: definition.minimum.get(),
                     maximum: definition.maximum.get(),
                 });
@@ -69,11 +69,11 @@ pub fn validate_state_against_catalog(
         )?;
         for binding in component.bindings() {
             ensure_reference(
-                catalog.source(&binding.definition).is_some(),
+                catalog.source(binding.definition()).is_some(),
                 entity,
                 crate::IntrinsicSourcesComponent::LABEL,
                 "source",
-                binding.definition.to_string(),
+                binding.definition().to_string(),
             )?;
         }
     }
@@ -193,12 +193,12 @@ pub fn validate_state_against_catalog(
         )?;
         for value in component.values() {
             let (minimum, maximum, _, _) =
-                track_bounds(state, catalog, entity, &value.track, &validation_operation)?;
-            if value.current < minimum || value.current > maximum {
+                track_bounds(state, catalog, entity, value.track(), &validation_operation)?;
+            if value.current() < minimum || value.current() > maximum {
                 return Err(MechanicsError::TrackOutOfBounds {
                     entity,
-                    track: value.track.clone(),
-                    attempted: value.current.get(),
+                    track: value.track().clone(),
+                    attempted: value.current().get(),
                     minimum: minimum.get(),
                     maximum: maximum.get(),
                 });

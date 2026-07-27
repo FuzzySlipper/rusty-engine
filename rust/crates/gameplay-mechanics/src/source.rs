@@ -110,9 +110,9 @@ pub(crate) fn collect_active_sources(
                 &mut collected,
                 SourceInstanceIdentity::Intrinsic {
                     entity,
-                    instance: binding.instance.clone(),
+                    instance: binding.instance().clone(),
                 },
-                binding.definition.clone(),
+                binding.definition().clone(),
                 maximum_sources,
             )?;
         }

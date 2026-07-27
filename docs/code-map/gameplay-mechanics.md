@@ -33,10 +33,12 @@ restoration, and their bounded receipts.
 - [`gameplay-mechanics/src/source.rs`](../../rust/crates/gameplay-mechanics/src/source.rs)
 - [`gameplay-mechanics/src/stat.rs`](../../rust/crates/gameplay-mechanics/src/stat.rs)
 - [`gameplay-mechanics/src/track.rs`](../../rust/crates/gameplay-mechanics/src/track.rs)
+- [`gameplay-mechanics/src/view.rs`](../../rust/crates/gameplay-mechanics/src/view.rs)
 - [`gameplay-mechanics/src/damage.rs`](../../rust/crates/gameplay-mechanics/src/damage.rs)
 - [`gameplay-mechanics/src/item.rs`](../../rust/crates/gameplay-mechanics/src/item.rs)
 - [`gameplay-mechanics/src/snapshot.rs`](../../rust/crates/gameplay-mechanics/src/snapshot.rs)
 - [`gameplay-mechanics/tests/contract.rs`](../../rust/crates/gameplay-mechanics/tests/contract.rs)
+- [`gameplay-mechanics/tests/gm1.rs`](../../rust/crates/gameplay-mechanics/tests/gm1.rs)
 - [Canonical design](../design.md)
 
 ## Public composition
@@ -53,8 +55,30 @@ let preview = DamageService::preview(&state, &catalog, &request)?;
 let receipt = DamageService::apply(&mut state, &catalog, request)?;
 ```
 
+The GM1 stat/track path is equally direct:
+
+```rust
+let evaluated = StatService::evaluate(
+    &state,
+    &catalog,
+    player,
+    &StatId::parse("max_health")?,
+    &OperationId::parse("inspect_health")?,
+    &[],
+)?;
+let mechanics = MechanicsEntityView::read(&state, player)?;
+let health = mechanics
+    .tracks()
+    .and_then(|view| {
+        view.values()
+            .iter()
+            .find(|value| value.track().as_str() == "health")
+    });
+```
+
 The catalog version is downstream compatibility policy. Its SHA-256 fingerprint
-is diagnostic/cache identity, not an automatic balance-change lock. Component
+is computed from canonical admitted definitions without the version and is
+diagnostic/cache identity, not an automatic balance-change lock. Component
 snapshots persist referenced IDs and the version; `decode_snapshot_with_catalog`
 rejects unresolved references before returning state. Consumers with additional
 registered component families pass their complete registry to
@@ -68,9 +92,17 @@ every Engine decision and the exact component revisions read.
 ## Mutation and atomicity
 
 - Stat evaluation and damage preview are read-only.
+- Stat evaluation selects contributions canonically, applies additions, combines
+  exact scales with one toward-zero rounding step, then resolves minimum and
+  maximum constraints. Its bounded decisions explain every Engine choice.
+- `StatService::set_base` publishes one exact `StatsComponent` replacement and
+  rejects a prospective value that would leave a stat-bounded track invalid.
 - Track mutation and complete multipart damage each publish one exact
   `TracksComponent` slot. All protection and target tracks are co-located there,
   so a rejected late part publishes nothing.
+- Track setting makes `RejectOutOfBounds` versus `ClampToBounds` explicit.
+  Maximum reconciliation makes `PreserveCurrent` versus `ClampToMaximum`
+  explicit; ratio preservation remains intentionally absent.
 - Equipment changes publish one exact `EquipmentComponent` slot.
 - Unique ownership is canonical containment. Transfer rejects an equipped item;
   callers explicitly unequip, then transfer. Both intermediate states are
@@ -89,9 +121,12 @@ specified atomic seam to the `entity-state` owner.
 - Scalar magnitude: `1_000_000_000_000`.
 - Ratio numerator/denominator: at most `1_000_000`, denominator nonzero,
   normalized at construction and decode.
+- Stat additions aggregate through a checked wider intermediate and must fit the
+  admitted scalar range before the checked exact scale stage.
 - Damage parts: 8.
 - Request-local sources: 32.
 - Receipt response decisions: 256.
+- Stats/tracks per entity: 128 each.
 - Active-source collection and per-source decision expansion stop at that
   receipt ceiling before cloning an over-limit entry.
 - Source bindings/effects: 64 each; equipment assignments: 32; inventory
@@ -103,7 +138,9 @@ specified atomic seam to the `entity-state` owner.
 
 The base path does exact component-slot checks but visits zero entries for
 absent intrinsic, effect, inventory, equipment, or item state. Operations do
-not scan the entity population.
+not scan the entity population. Catalog definitions and nested source records
+are canonicalized at admission, so reordered authored input produces the same
+lookup order and diagnostic fingerprint.
 
 ## Acceptance gates
 

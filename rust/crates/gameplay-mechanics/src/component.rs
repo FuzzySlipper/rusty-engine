@@ -54,8 +54,22 @@ pub struct ObservedComponentRevision {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StatValue {
-    pub stat: StatId,
-    pub base: MechanicsScalar,
+    stat: StatId,
+    base: MechanicsScalar,
+}
+
+impl StatValue {
+    pub const fn new(stat: StatId, base: MechanicsScalar) -> Self {
+        Self { stat, base }
+    }
+
+    pub const fn stat(&self) -> &StatId {
+        &self.stat
+    }
+
+    pub const fn base(&self) -> MechanicsScalar {
+        self.base
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +110,14 @@ impl StatsComponent {
             .ok()
             .map(|index| self.values[index].base)
     }
+
+    pub(crate) fn set_base(&mut self, stat: &StatId, base: MechanicsScalar) -> bool {
+        let Ok(index) = self.values.binary_search_by(|value| value.stat.cmp(stat)) else {
+            return false;
+        };
+        self.values[index].base = base;
+        true
+    }
 }
 
 impl EntityComponent for StatsComponent {}
@@ -103,8 +125,22 @@ impl EntityComponent for StatsComponent {}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct TrackValue {
-    pub track: TrackId,
-    pub current: MechanicsScalar,
+    track: TrackId,
+    current: MechanicsScalar,
+}
+
+impl TrackValue {
+    pub const fn new(track: TrackId, current: MechanicsScalar) -> Self {
+        Self { track, current }
+    }
+
+    pub const fn track(&self) -> &TrackId {
+        &self.track
+    }
+
+    pub const fn current(&self) -> MechanicsScalar {
+        self.current
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,8 +199,25 @@ impl EntityComponent for TracksComponent {}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct IntrinsicSourceBinding {
-    pub instance: SourceInstanceId,
-    pub definition: SourceDefinitionId,
+    instance: SourceInstanceId,
+    definition: SourceDefinitionId,
+}
+
+impl IntrinsicSourceBinding {
+    pub const fn new(instance: SourceInstanceId, definition: SourceDefinitionId) -> Self {
+        Self {
+            instance,
+            definition,
+        }
+    }
+
+    pub const fn instance(&self) -> &SourceInstanceId {
+        &self.instance
+    }
+
+    pub const fn definition(&self) -> &SourceDefinitionId {
+        &self.definition
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

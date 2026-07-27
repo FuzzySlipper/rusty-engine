@@ -12,11 +12,12 @@ use gameplay_mechanics::{
     ItemTransferRequest, MechanicsCatalog, MechanicsCatalogDefinition, MechanicsError,
     MechanicsScalar, MechanicsSnapshotError, OperationId, RequestSource, SourceDefinition,
     SourceDefinitionId, SourceInstanceId, SourceInstanceIdentity, StackingGroupId, StackingPolicy,
-    StatContributionDefinition, StatDefinition, StatId, StatService, StatValue, StatsComponent,
-    TrackAdjustmentKind, TrackDefinition, TrackId, TrackMaximum, TrackMutationRequest,
-    TrackReconciliationRequest, TrackService, TrackValue, TracksComponent,
-    MAX_ABS_MECHANICS_SCALAR, MAX_CATALOG_SOURCES, MAX_DAMAGE_RECEIPT_DECISIONS,
-    MAX_RESPONSES_PER_SOURCE, MAX_STAT_CONTRIBUTIONS_PER_SOURCE, MAX_STAT_DECISIONS,
+    StatContribution, StatContributionDefinition, StatDefinition, StatId, StatService, StatValue,
+    StatsComponent, TrackAdjustmentKind, TrackDefinition, TrackId, TrackMaximum,
+    TrackMutationRequest, TrackReconciliationPolicy, TrackReconciliationRequest, TrackService,
+    TrackValue, TracksComponent, MAX_ABS_MECHANICS_SCALAR, MAX_CATALOG_SOURCES,
+    MAX_DAMAGE_RECEIPT_DECISIONS, MAX_RESPONSES_PER_SOURCE, MAX_STAT_CONTRIBUTIONS_PER_SOURCE,
+    MAX_STAT_DECISIONS,
 };
 
 const SHOOTER: EntityId = EntityId::new(1);
@@ -173,7 +174,7 @@ fn catalog() -> MechanicsCatalog {
                 priority: 0,
                 stat_contributions: vec![StatContributionDefinition {
                     stat: stat_id(),
-                    amount: scalar(20),
+                    contribution: StatContribution::Add { amount: scalar(20) },
                     stacking_group: StackingGroupId::parse("maximum_health_bonus").unwrap(),
                     stacking: StackingPolicy::Sum,
                 }],
@@ -234,10 +235,7 @@ fn state() -> EntityState {
         SHOOTER,
         StatsComponent::new(
             catalog_version(),
-            vec![StatValue {
-                stat: stat_id(),
-                base: scalar(100),
-            }],
+            vec![StatValue::new(stat_id(), scalar(100))],
         )
         .unwrap(),
     );
@@ -247,14 +245,8 @@ fn state() -> EntityState {
         TracksComponent::new(
             catalog_version(),
             vec![
-                TrackValue {
-                    track: health(),
-                    current: scalar(100),
-                },
-                TrackValue {
-                    track: armor_track(),
-                    current: scalar(20),
-                },
+                TrackValue::new(health(), scalar(100)),
+                TrackValue::new(armor_track(), scalar(20)),
             ],
         )
         .unwrap(),
@@ -282,10 +274,7 @@ fn state() -> EntityState {
         BUILDING,
         TracksComponent::new(
             catalog_version(),
-            vec![TrackValue {
-                track: durability(),
-                current: scalar(200),
-            }],
+            vec![TrackValue::new(durability(), scalar(200))],
         )
         .unwrap(),
     );
@@ -301,10 +290,7 @@ fn state() -> EntityState {
             entity,
             StatsComponent::new(
                 catalog_version(),
-                vec![StatValue {
-                    stat: stat_id(),
-                    base: scalar(100),
-                }],
+                vec![StatValue::new(stat_id(), scalar(100))],
             )
             .unwrap(),
         );
@@ -313,10 +299,7 @@ fn state() -> EntityState {
             entity,
             TracksComponent::new(
                 catalog_version(),
-                vec![TrackValue {
-                    track: health(),
-                    current: scalar(100),
-                }],
+                vec![TrackValue::new(health(), scalar(100))],
             )
             .unwrap(),
         );
@@ -331,10 +314,10 @@ fn state() -> EntityState {
         FORTIFIED_TARGET,
         IntrinsicSourcesComponent::new(
             catalog_version(),
-            vec![IntrinsicSourceBinding {
-                instance: SourceInstanceId::parse("fortification_binding").unwrap(),
-                definition: fortification_source(),
-            }],
+            vec![IntrinsicSourceBinding::new(
+                SourceInstanceId::parse("fortification_binding").unwrap(),
+                fortification_source(),
+            )],
         )
         .unwrap(),
     );
@@ -412,7 +395,9 @@ fn quota_fixture(
             stat_contributions: (0..entries_per_source)
                 .map(|entry_index| StatContributionDefinition {
                     stat: stat.clone(),
-                    amount: MechanicsScalar::zero(),
+                    contribution: StatContribution::Add {
+                        amount: MechanicsScalar::zero(),
+                    },
                     stacking_group: StackingGroupId::parse(format!(
                         "quota_stat_{source_index}_{entry_index}"
                     ))
@@ -469,10 +454,7 @@ fn quota_fixture(
         QUOTA_TARGET,
         StatsComponent::new(
             version.clone(),
-            vec![StatValue {
-                stat: stat.clone(),
-                base: MechanicsScalar::zero(),
-            }],
+            vec![StatValue::new(stat.clone(), MechanicsScalar::zero())],
         )
         .unwrap(),
     );
@@ -481,10 +463,7 @@ fn quota_fixture(
         QUOTA_TARGET,
         TracksComponent::new(
             version.clone(),
-            vec![TrackValue {
-                track: track.clone(),
-                current: scalar(100),
-            }],
+            vec![TrackValue::new(track.clone(), scalar(100))],
         )
         .unwrap(),
     );
@@ -804,6 +783,7 @@ fn bound_lowering_uses_a_valid_state_reconciliation_then_source_change() {
             entity: FORTIFIED_TARGET,
             track: health(),
             prospective_maximum: scalar(100),
+            policy: TrackReconciliationPolicy::ClampToMaximum,
             expected_revision: None,
         },
     )
@@ -862,10 +842,10 @@ fn full_span_signed_tracks_support_bounded_restore_and_damage() {
         FULL_SPAN_RESTORE_TARGET,
         TracksComponent::new(
             version.clone(),
-            vec![TrackValue {
-                track: track.clone(),
-                current: scalar(-MAX_ABS_MECHANICS_SCALAR),
-            }],
+            vec![TrackValue::new(
+                track.clone(),
+                scalar(-MAX_ABS_MECHANICS_SCALAR),
+            )],
         )
         .unwrap(),
     );
@@ -874,10 +854,10 @@ fn full_span_signed_tracks_support_bounded_restore_and_damage() {
         FULL_SPAN_DAMAGE_TARGET,
         TracksComponent::new(
             version,
-            vec![TrackValue {
-                track: track.clone(),
-                current: scalar(MAX_ABS_MECHANICS_SCALAR),
-            }],
+            vec![TrackValue::new(
+                track.clone(),
+                scalar(MAX_ABS_MECHANICS_SCALAR),
+            )],
         )
         .unwrap(),
     );
@@ -1275,10 +1255,10 @@ fn stale_duplicate_invalid_and_late_rejections_do_not_mutate_tracks() {
 
     let invalid = IntrinsicSourcesComponent::new(
         catalog_version(),
-        vec![IntrinsicSourceBinding {
-            instance: SourceInstanceId::parse("unknown_binding").unwrap(),
-            definition: SourceDefinitionId::parse("missing_source").unwrap(),
-        }],
+        vec![IntrinsicSourceBinding::new(
+            SourceInstanceId::parse("unknown_binding").unwrap(),
+            SourceDefinitionId::parse("missing_source").unwrap(),
+        )],
     )
     .unwrap();
     attach(&mut state, SIMPLE_TARGET, invalid);

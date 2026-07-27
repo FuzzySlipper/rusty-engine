@@ -19,7 +19,7 @@ pub const MAX_STAT_CONTRIBUTIONS_PER_SOURCE: usize = 32;
 pub const MAX_RESPONSES_PER_SOURCE: usize = 32;
 pub const MAX_ABS_SOURCE_PRIORITY: i16 = 10_000;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StatDefinition {
     pub id: StatId,
@@ -27,14 +27,14 @@ pub struct StatDefinition {
     pub maximum: MechanicsScalar,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum TrackMaximum {
     Fixed { value: MechanicsScalar },
     Stat { stat: StatId },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct TrackDefinition {
     pub id: TrackId,
@@ -42,7 +42,7 @@ pub struct TrackDefinition {
     pub maximum: TrackMaximum,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum StackingPolicy {
     Sum,
@@ -51,16 +51,36 @@ pub enum StackingPolicy {
     UniqueBySource,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum StatContribution {
+    Add { amount: MechanicsScalar },
+    Scale { ratio: ExactRatio },
+    Minimum { value: MechanicsScalar },
+    Maximum { value: MechanicsScalar },
+}
+
+impl StatContribution {
+    pub(crate) const fn kind_name(&self) -> &'static str {
+        match self {
+            Self::Add { .. } => "add",
+            Self::Scale { .. } => "scale",
+            Self::Minimum { .. } => "minimum",
+            Self::Maximum { .. } => "maximum",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StatContributionDefinition {
     pub stat: StatId,
-    pub amount: MechanicsScalar,
+    pub contribution: StatContribution,
     pub stacking_group: StackingGroupId,
     pub stacking: StackingPolicy,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum DamageKindSelector {
     Any,
@@ -85,7 +105,7 @@ impl DamageKindSelector {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum DamageResponseDefinition {
     Prevent {
@@ -152,7 +172,7 @@ pub struct SourceDefinition {
     pub damage_responses: Vec<DamageResponseDefinition>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DamageKindDefinition {
     pub id: DamageKindId,
@@ -165,7 +185,7 @@ pub struct EffectDefinition {
     pub sources: Vec<SourceDefinitionId>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ItemKind {
     Fungible,
@@ -180,7 +200,7 @@ pub struct ItemDefinition {
     pub sources: Vec<SourceDefinitionId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EquipmentSlotDefinition {
     pub id: EquipmentSlotId,
@@ -205,6 +225,69 @@ pub struct MechanicsCatalog {
     fingerprint: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct MechanicsCatalogView<'a> {
+    version: &'a CatalogVersion,
+    fingerprint: &'a str,
+    stats: &'a [StatDefinition],
+    tracks: &'a [TrackDefinition],
+    sources: &'a [SourceDefinition],
+    damage_kinds: &'a [DamageKindDefinition],
+    effects: &'a [EffectDefinition],
+    items: &'a [ItemDefinition],
+    equipment_slots: &'a [EquipmentSlotDefinition],
+}
+
+impl<'a> MechanicsCatalogView<'a> {
+    pub const fn version(self) -> &'a CatalogVersion {
+        self.version
+    }
+
+    pub const fn fingerprint(self) -> &'a str {
+        self.fingerprint
+    }
+
+    pub const fn stats(self) -> &'a [StatDefinition] {
+        self.stats
+    }
+
+    pub const fn tracks(self) -> &'a [TrackDefinition] {
+        self.tracks
+    }
+
+    pub const fn sources(self) -> &'a [SourceDefinition] {
+        self.sources
+    }
+
+    pub const fn damage_kinds(self) -> &'a [DamageKindDefinition] {
+        self.damage_kinds
+    }
+
+    pub const fn effects(self) -> &'a [EffectDefinition] {
+        self.effects
+    }
+
+    pub const fn items(self) -> &'a [ItemDefinition] {
+        self.items
+    }
+
+    pub const fn equipment_slots(self) -> &'a [EquipmentSlotDefinition] {
+        self.equipment_slots
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FingerprintDefinition<'a> {
+    stats: &'a [StatDefinition],
+    tracks: &'a [TrackDefinition],
+    sources: &'a [SourceDefinition],
+    damage_kinds: &'a [DamageKindDefinition],
+    effects: &'a [EffectDefinition],
+    items: &'a [ItemDefinition],
+    equipment_slots: &'a [EquipmentSlotDefinition],
+}
+
 impl MechanicsCatalog {
     pub fn admit(mut definition: MechanicsCatalogDefinition) -> Result<Self, CatalogError> {
         enforce_quota("stats", definition.stats.len(), MAX_CATALOG_STATS)?;
@@ -223,6 +306,16 @@ impl MechanicsCatalog {
             MAX_CATALOG_EQUIPMENT_SLOTS,
         )?;
 
+        for source in &mut definition.sources {
+            source.stat_contributions.sort();
+            source.damage_responses.sort();
+        }
+        for effect in &mut definition.effects {
+            effect.sources.sort();
+        }
+        for item in &mut definition.items {
+            item.sources.sort();
+        }
         definition
             .stats
             .sort_by(|left, right| left.id.cmp(&right.id));
@@ -354,6 +447,7 @@ impl MechanicsCatalog {
             validate_stacking_contract(source)?;
         }
         validate_global_stacking_contract(&definition.sources)?;
+        validate_stat_contribution_kinds(&definition.sources)?;
 
         for effect in &definition.effects {
             reject_duplicate_references(&effect.sources, effect.id.as_str(), "source")?;
@@ -364,8 +458,16 @@ impl MechanicsCatalog {
             validate_source_references(&definition.sources, item.id.as_str(), &item.sources)?;
         }
 
-        let bytes = serde_json::to_vec(&definition)
-            .expect("catalog definition serialization is infallible");
+        let bytes = serde_json::to_vec(&FingerprintDefinition {
+            stats: &definition.stats,
+            tracks: &definition.tracks,
+            sources: &definition.sources,
+            damage_kinds: &definition.damage_kinds,
+            effects: &definition.effects,
+            items: &definition.items,
+            equipment_slots: &definition.equipment_slots,
+        })
+        .expect("catalog definition serialization is infallible");
         let digest = Sha256::digest(bytes);
         let mut fingerprint = String::with_capacity(71);
         fingerprint.push_str("sha256:");
@@ -385,6 +487,32 @@ impl MechanicsCatalog {
 
     pub fn fingerprint(&self) -> &str {
         &self.fingerprint
+    }
+
+    pub fn view(&self) -> MechanicsCatalogView<'_> {
+        MechanicsCatalogView {
+            version: self.version(),
+            fingerprint: self.fingerprint(),
+            stats: &self.definition.stats,
+            tracks: &self.definition.tracks,
+            sources: &self.definition.sources,
+            damage_kinds: &self.definition.damage_kinds,
+            effects: &self.definition.effects,
+            items: &self.definition.items,
+            equipment_slots: &self.definition.equipment_slots,
+        }
+    }
+
+    pub fn stats(&self) -> &[StatDefinition] {
+        &self.definition.stats
+    }
+
+    pub fn tracks(&self) -> &[TrackDefinition] {
+        &self.definition.tracks
+    }
+
+    pub fn sources(&self) -> &[SourceDefinition] {
+        &self.definition.sources
     }
 
     pub fn stat(&self, id: &StatId) -> Option<&StatDefinition> {
@@ -453,6 +581,13 @@ pub enum CatalogError {
     InconsistentStackingPolicy {
         source: SourceDefinitionId,
         group: StackingGroupId,
+    },
+    InconsistentStatContributionKind {
+        source: SourceDefinitionId,
+        stat: StatId,
+        group: StackingGroupId,
+        expected: &'static str,
+        actual: &'static str,
     },
 }
 
@@ -572,6 +707,36 @@ fn validate_global_stacking_contract(sources: &[SourceDefinition]) -> Result<(),
             return Err(CatalogError::InconsistentStackingPolicy {
                 source: pair[1].2.clone(),
                 group: pair[1].0.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_stat_contribution_kinds(sources: &[SourceDefinition]) -> Result<(), CatalogError> {
+    let mut contributions: Vec<(&StatId, &StackingGroupId, &'static str, &SourceDefinitionId)> =
+        sources
+            .iter()
+            .flat_map(|source| {
+                source.stat_contributions.iter().map(|contribution| {
+                    (
+                        &contribution.stat,
+                        &contribution.stacking_group,
+                        contribution.contribution.kind_name(),
+                        &source.id,
+                    )
+                })
+            })
+            .collect();
+    contributions.sort_by(|left, right| (left.0, left.1).cmp(&(right.0, right.1)));
+    for pair in contributions.windows(2) {
+        if pair[0].0 == pair[1].0 && pair[0].1 == pair[1].1 && pair[0].2 != pair[1].2 {
+            return Err(CatalogError::InconsistentStatContributionKind {
+                source: pair[1].3.clone(),
+                stat: pair[1].0.clone(),
+                group: pair[1].1.clone(),
+                expected: pair[0].2,
+                actual: pair[1].2,
             });
         }
     }

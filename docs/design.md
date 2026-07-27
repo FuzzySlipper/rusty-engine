@@ -151,6 +151,19 @@ GM0 freezes these mechanics contracts:
   valid, then the source/effect owner publishes its separate component change. Transfer similarly
   rejects an equipped item until an explicit exact-slot unequip succeeds, then changes containment.
 
+GM1 promotes the catalog/source/stat/track slice into the production API. Catalog admission
+canonicalizes both definition families and their bounded nested records; its diagnostic fingerprint
+covers admitted Engine definitions but deliberately excludes the downstream compatibility version.
+Stat evaluation applies selected additions, combines selected exact scales and rounds once toward
+zero, then resolves selected minimum/maximum constraints against the admitted stat bounds. The
+returned ledger records every applied, suppressed, and inapplicable contribution plus each numeric
+stage. The additive aggregate uses a checked wider intermediate and must fit the admitted scalar
+range before scaling; ratio products use checked wider intermediates as well.
+`StatService::set_base`, track spend/restore, policy-governed set, and maximum reconciliation
+stage one component replacement behind the exact slot revision. A base change that would strand a
+stat-bounded track is rejected until the caller reconciles that track. Rejection leaves both slot
+and global revisions unchanged.
+
 Those splits deliberately avoid an unrestricted heterogeneous transaction and complete-world
 cloning. Each intermediate state is valid, and failure of the later step cannot expose an
 out-of-bounds track or an equipped item owned elsewhere. A future operation that cannot satisfy that
@@ -162,6 +175,8 @@ entries. The focused base damage path visits zero intrinsic sources, effects, eq
 assignments, item components, and request sources; it performs no global entity scan. Strict
 reconstruction supplies the explicit gameplay registry to `entity-state`, then validates every
 component's catalog version and referenced definition before returning the candidate state.
+Immutable catalog and entity-mechanics views expose canonical values and exact component revisions
+for analysis and later inspector projection without creating a mutation lane.
 
 See [Gameplay mechanics](code-map/gameplay-mechanics.md) for entry points, frozen quotas, and focused
 gates.

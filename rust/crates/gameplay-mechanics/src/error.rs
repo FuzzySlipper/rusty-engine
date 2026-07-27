@@ -16,6 +16,9 @@ pub enum MechanicsError {
     Relationship(RelationshipError),
     Arithmetic(MechanicsArithmeticError),
     InvalidComponentData(MechanicsComponentDataError),
+    MissingEntity {
+        entity: EntityId,
+    },
     MissingComponent {
         entity: EntityId,
         component: &'static str,
@@ -37,6 +40,12 @@ pub enum MechanicsError {
         entity: EntityId,
         stat: StatId,
         attempted: i64,
+        minimum: i64,
+        maximum: i64,
+    },
+    InvalidResolvedStatBounds {
+        entity: EntityId,
+        stat: StatId,
         minimum: i64,
         maximum: i64,
     },

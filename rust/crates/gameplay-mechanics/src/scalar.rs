@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{cmp::Ordering, fmt};
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
@@ -110,6 +110,19 @@ impl<'de> Deserialize<'de> for ExactRatio {
     }
 }
 
+impl PartialOrd for ExactRatio {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ExactRatio {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (u64::from(self.numerator) * u64::from(other.denominator))
+            .cmp(&(u64::from(other.numerator) * u64::from(self.denominator)))
+    }
+}
+
 impl ExactRatio {
     pub fn new(numerator: u32, denominator: u32) -> Result<Self, MechanicsArithmeticError> {
         if denominator == 0 {
@@ -185,11 +198,26 @@ impl CombinedRatio {
         policy: RoundingPolicy,
     ) -> Result<MechanicsScalar, MechanicsArithmeticError> {
         let value = value.require_nonnegative()?;
-        let product = (value.get() as u128)
+        self.apply_signed(value, policy)
+    }
+
+    pub fn apply_signed(
+        self,
+        value: MechanicsScalar,
+        policy: RoundingPolicy,
+    ) -> Result<MechanicsScalar, MechanicsArithmeticError> {
+        let product = u128::from(value.get().unsigned_abs())
             .checked_mul(self.numerator)
             .ok_or(MechanicsArithmeticError::Overflow)?;
-        let scaled = match policy {
+        let magnitude = match policy {
             RoundingPolicy::TowardZero => product / self.denominator,
+        };
+        let magnitude =
+            i128::try_from(magnitude).map_err(|_| MechanicsArithmeticError::Overflow)?;
+        let scaled = if value.get().is_negative() {
+            -magnitude
+        } else {
+            magnitude
         };
         let scaled = i64::try_from(scaled).map_err(|_| MechanicsArithmeticError::Overflow)?;
         MechanicsScalar::new(scaled)
@@ -257,6 +285,17 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<ExactRatio>(r#"{"numerator":2,"denominator":4}"#).unwrap(),
             half
+        );
+        assert!(ExactRatio::new(2, 3).unwrap() > ExactRatio::new(1, 2).unwrap());
+        assert_eq!(
+            combined
+                .apply_signed(
+                    MechanicsScalar::new(-11).unwrap(),
+                    RoundingPolicy::TowardZero
+                )
+                .unwrap()
+                .get(),
+            -8
         );
     }
 }
