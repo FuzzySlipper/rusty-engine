@@ -228,6 +228,21 @@ interface QueuedObjectPlaybackControl {
   readonly expectedProjectHash: string;
 }
 
+interface ProjectionBaseIdentity {
+  readonly kind: 'project' | 'voxelObjectConversion';
+  readonly generation: number;
+  readonly projectScopeGeneration: number;
+  readonly key: string;
+}
+
+interface CanonicalProjectProjection {
+  readonly identity: ProjectionBaseIdentity;
+  readonly projectHash: string;
+  readonly projectScopeGeneration: number;
+  readonly frame: RenderFrameDiff;
+  readonly entities: readonly ProjectedEntityView[];
+}
+
 export interface StudioPlaybackTimer {
   readonly cancel: (handle: unknown) => void;
   readonly schedule: (callback: () => void, delayMilliseconds: number) => unknown;
@@ -310,6 +325,9 @@ export class StudioWorkspaceStore {
   #queuedObjectPlaybackControl: QueuedObjectPlaybackControl | null = null;
   #objectPlaybackSchedule: ObjectPlaybackSchedule | null = null;
   #retainedObjectFramePatches = 0;
+  #projectionBaseGeneration = 0;
+  #liveProjectionBase: ProjectionBaseIdentity | null = null;
+  #canonicalProjectProjection: CanonicalProjectProjection | null = null;
 
   constructor(
     client: StudioAdapterClient,
@@ -1246,7 +1264,14 @@ export class StudioWorkspaceStore {
             projectScopeGeneration,
             objectOperationGeneration,
           )) return;
-          this.#acceptObjectProjection(response.projection, response.projectionReadout);
+          this.#acceptCompleteObjectProjection(
+            response.projection,
+            response.projectionReadout,
+            this.#newProjectionBase(
+              'voxelObjectConversion',
+              `${response.plan.planId}@${response.plan.planHash}`,
+            ),
+          );
           this.#patch({
             operation: 'idle',
             voxelWorkspace: {
@@ -1270,7 +1295,14 @@ export class StudioWorkspaceStore {
             projectScopeGeneration,
             objectOperationGeneration,
           )) return;
-          this.#acceptObjectProjection(response.projection, response.projectionReadout);
+          this.#acceptCompleteObjectProjection(
+            response.projection,
+            response.projectionReadout,
+            this.#newProjectionBase(
+              'voxelObjectConversion',
+              `${action.planId}@${action.expectedPlanHash}`,
+            ),
+          );
           const current = this.#snapshot().voxelWorkspace.objectConversion;
           this.#patch({
             operation: 'idle',
@@ -1310,7 +1342,15 @@ export class StudioWorkspaceStore {
             projectScopeGeneration,
             objectOperationGeneration,
           )) return;
-          this.#acceptObjectProjection(response.projection, response.projectionReadout);
+          const canonical = this.#currentCanonicalProjectProjection();
+          if (canonical === null) {
+            throw new Error('Canonical project projection is unavailable after conversion discard.');
+          }
+          this.#acceptCompleteObjectProjection(
+            response.projection,
+            response.projectionReadout,
+            canonical.identity,
+          );
           this.#patch({
             operation: 'idle',
             voxelWorkspace: {
@@ -1350,7 +1390,7 @@ export class StudioWorkspaceStore {
             projectScopeGeneration,
             objectOperationGeneration,
           )) return;
-          const frameGeneration = this.#acceptObjectProjection(
+          const frameGeneration = this.#acceptCanonicalObjectProjection(
             response.projection,
             response.projectionReadout,
           );
@@ -1699,16 +1739,54 @@ export class StudioWorkspaceStore {
     });
   }
 
-  #acceptObjectProjection(frame: RenderFrameDiff, readout: ProjectionReadout): number {
+  #acceptCompleteObjectProjection(
+    frame: RenderFrameDiff,
+    readout: ProjectionReadout,
+    base: ProjectionBaseIdentity,
+  ): number {
+    if (frame.ops.length > 0 && isVoxelObjectFramePatch(frame)) {
+      throw new Error(`Complete ${base.kind} projection contained only a retained frame patch.`);
+    }
     const current = this.#snapshot();
     const ownerEntityIds = current.authoringDocument?.inspections.entityState.entityIds ?? [];
-    const compacted = current.liveProjection === null
-      ? null
-      : compactVoxelObjectFramePatch(current.liveProjection.frame, frame);
-    let acceptedFrame = frame;
+    this.#retainedObjectFramePatches = 0;
+    const generation = (current.liveProjection?.generation ?? 0) + 1;
+    this.#liveProjectionBase = base;
+    this.#patch({
+      liveProjection: {
+        frame,
+        framePatch: null,
+        readout,
+        entities: summarizeProjectionForUi(frame, ownerEntityIds, []),
+        generation,
+      },
+    });
+    return generation;
+  }
+
+  #acceptCanonicalObjectProjection(
+    frame: RenderFrameDiff,
+    readout: ProjectionReadout,
+  ): number {
+    const current = this.#snapshot();
+    const canonical = this.#currentCanonicalProjectProjection();
+    if (canonical === null) {
+      throw new Error('Applied voxel-object playback has no current canonical project projection.');
+    }
+    if (!isVoxelObjectFramePatch(frame)) {
+      return this.#acceptCompleteObjectProjection(frame, readout, canonical.identity);
+    }
+
+    const liveBaseIsCanonical = sameProjectionBase(this.#liveProjectionBase, canonical.identity)
+      && current.liveProjection !== null;
+    const base = liveBaseIsCanonical ? current.liveProjection : canonical;
+    const compacted = compactVoxelObjectFramePatch(base.frame, frame);
+    if (compacted === null) {
+      throw new Error('Applied voxel-object frame patch does not match its canonical project base.');
+    }
+
     let framePatch: RenderFrameDiff | null = null;
-    if (compacted !== null) {
-      acceptedFrame = compacted;
+    if (liveBaseIsCanonical) {
       this.#retainedObjectFramePatches += 1;
       if (this.#retainedObjectFramePatches < MAX_RETAINED_OBJECT_FRAME_PATCHES) {
         framePatch = frame;
@@ -1718,23 +1796,47 @@ export class StudioWorkspaceStore {
     } else {
       this.#retainedObjectFramePatches = 0;
     }
+
     const generation = (current.liveProjection?.generation ?? 0) + 1;
+    this.#liveProjectionBase = canonical.identity;
     this.#patch({
       liveProjection: {
-        frame: acceptedFrame,
+        frame: compacted,
         framePatch,
         readout,
-        entities: compacted === null
-          ? summarizeProjectionForUi(frame, ownerEntityIds, [])
-          : current.liveProjection?.entities ?? [],
+        entities: base.entities,
         generation,
       },
     });
     return generation;
   }
 
+  #newProjectionBase(
+    kind: ProjectionBaseIdentity['kind'],
+    key: string,
+  ): ProjectionBaseIdentity {
+    return {
+      kind,
+      generation: ++this.#projectionBaseGeneration,
+      projectScopeGeneration: this.#projectScopeGeneration,
+      key,
+    };
+  }
+
+  #currentCanonicalProjectProjection(): CanonicalProjectProjection | null {
+    const canonical = this.#canonicalProjectProjection;
+    const projectHash = this.#snapshot().authoringDocument?.identity.projectHash;
+    return canonical !== null
+      && canonical.projectScopeGeneration === this.#projectScopeGeneration
+      && canonical.projectHash === projectHash
+      ? canonical
+      : null;
+  }
+
   #invalidateProjectScope(): void {
     this.#projectScopeGeneration += 1;
+    this.#liveProjectionBase = null;
+    this.#canonicalProjectProjection = null;
     this.#invalidateObjectOperation();
   }
 
@@ -1793,6 +1895,15 @@ export class StudioWorkspaceStore {
       project.inspections.entityState.entityIds,
       [],
     );
+    const projectionBase = this.#newProjectionBase('project', project.identity.projectHash);
+    this.#canonicalProjectProjection = {
+      identity: projectionBase,
+      projectHash: project.identity.projectHash,
+      projectScopeGeneration: this.#projectScopeGeneration,
+      frame: project.projection,
+      entities,
+    };
+    this.#liveProjectionBase = projectionBase;
     const selection = acceptedSelection(project, current.selection, resetSelection);
     const connection = current.connection.kind === 'connected'
       ? {
@@ -1992,7 +2103,7 @@ function compactVoxelObjectFramePatch(
   base: RenderFrameDiff,
   patch: RenderFrameDiff,
 ): RenderFrameDiff | null {
-  if (patch.ops.some((operation) => operation.op !== 'setVoxelObjectFrame')) return null;
+  if (!isVoxelObjectFramePatch(patch)) return null;
   const frames = new Map<number, number>();
   for (const operation of patch.ops) {
     if (operation.op === 'setVoxelObjectFrame') frames.set(operation.handle, operation.frame);
@@ -2010,6 +2121,21 @@ function compactVoxelObjectFramePatch(
     };
   });
   return matched.size === frames.size ? { schemaVersion: 1, ops } : null;
+}
+
+function isVoxelObjectFramePatch(frame: RenderFrameDiff): boolean {
+  return frame.ops.every((operation) => operation.op === 'setVoxelObjectFrame');
+}
+
+function sameProjectionBase(
+  left: ProjectionBaseIdentity | null,
+  right: ProjectionBaseIdentity,
+): boolean {
+  return left !== null
+    && left.kind === right.kind
+    && left.generation === right.generation
+    && left.projectScopeGeneration === right.projectScopeGeneration
+    && left.key === right.key;
 }
 
 function objectPlaybackStepMicroseconds(

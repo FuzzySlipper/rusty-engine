@@ -8,6 +8,7 @@ import {
   type StudioAdapterRequest,
   type StudioAdapterTransport,
 } from '@rusty-engine/studio-adapter-client';
+import { decodeRenderFrameDiff } from '@rusty-engine/render-contracts';
 import {
   HttpStudioUserSettingsClient,
   buildDefaultStudioHostUserSettings,
@@ -435,7 +436,12 @@ test('pause and restore queue behind an in-flight applied-object sample', async 
   const client = new VoxelObjectFixtureClient();
   client.applied = true;
   client.attached = true;
-  const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
+  const timer = new ManualPlaybackTimer();
+  const store = new StudioWorkspaceStore(
+    client as unknown as StudioAdapterClient,
+    null,
+    timer,
+  );
   await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
   await store.runVoxelAction({
     kind: 'previewObjectInstance',
@@ -569,6 +575,119 @@ test('applied-object playback advances one virtual frame only after renderer ack
   timer.fireNext();
   await eventLoopTurn();
   assert.equal(client.playbackTimes.at(-1), 6_100_000);
+});
+
+test('applied playback restores its canonical entity base before retaining patches over a conversion candidate', async () => {
+  const client = new VoxelObjectFixtureClient();
+  client.applied = true;
+  client.attached = true;
+  const timer = new ManualPlaybackTimer();
+  const store = new StudioWorkspaceStore(
+    client as unknown as StudioAdapterClient,
+    null,
+    timer,
+  );
+  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+
+  await store.runVoxelAction(objectPrepareAction());
+  const candidate = store.snapshot().liveProjection?.frame.ops.find(
+    (operation) => operation.op === 'create' && operation.handle === 901,
+  );
+  assert.ok(candidate?.op === 'create');
+  assert.equal(candidate.node.metadata.sourceEntity, null);
+  assert.equal(candidate.node.metadata.label, 'voxel-object-candidate-0');
+
+  store.selectHierarchyNode(10);
+  await store.runVoxelAction({
+    kind: 'previewObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    nowMicroseconds: 5_000_000,
+    command: {
+      kind: 'scrub',
+      clipId: 'clip/walk-1',
+      clipFrame: 0,
+      loopMode: 'repeat',
+    },
+  });
+
+  const restored = store.snapshot().liveProjection;
+  assert.ok(restored !== null);
+  const restoredInstance = restored.frame.ops.find(
+    (operation) => operation.op === 'createVoxelObjectInstance' && operation.handle === 901,
+  );
+  assert.ok(restoredInstance?.op === 'createVoxelObjectInstance');
+  assert.doesNotThrow(() => decodeRenderFrameDiff(restored.frame));
+  assert.equal(restored.framePatch, null, 'candidate display must force a complete canonical replace');
+  assert.equal(restoredInstance.instance.asset, 'voxel-object/character');
+  assert.equal(restoredInstance.instance.frame, 0);
+  assert.deepEqual(restoredInstance.instance.transform, transform([4, 0, 2], [2, 2, 2]));
+  assert.deepEqual(restoredInstance.instance.metadata, {
+    sourceEntity: 1,
+    sourceSceneNode: 10,
+    tags: ['voxel-object'],
+    label: 'character-one',
+  });
+  assert.equal(
+    restored.frame.ops.some(
+      (operation) => operation.op === 'create'
+        && operation.node.metadata.label?.startsWith('voxel-object-candidate') === true,
+    ),
+    false,
+  );
+
+  await store.runVoxelAction({
+    kind: 'previewObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    nowMicroseconds: 5_100_000,
+    command: { kind: 'play' },
+  });
+  const playGeneration = store.snapshot().liveProjection?.generation;
+  assert.ok(playGeneration !== undefined);
+  assert.deepEqual(store.snapshot().liveProjection?.framePatch?.ops, []);
+  store.acknowledgeProjectionGeneration(playGeneration);
+  assert.equal(timer.nextDelayMilliseconds, 500);
+  timer.fireNext();
+  await eventLoopTurn();
+
+  const retained = store.snapshot().liveProjection;
+  assert.deepEqual(retained?.framePatch?.ops, [
+    { op: 'setVoxelObjectFrame', handle: 901, frame: 1 },
+  ]);
+  const retainedInstance = retained?.frame.ops.find(
+    (operation) => operation.op === 'createVoxelObjectInstance' && operation.handle === 901,
+  );
+  assert.ok(retainedInstance?.op === 'createVoxelObjectInstance');
+  assert.equal(retainedInstance.instance.metadata.sourceEntity, 1);
+  assert.equal(retainedInstance.instance.metadata.sourceSceneNode, 10);
+});
+
+test('applied playback rejects a retained frame patch outside the canonical project base', async () => {
+  const client = new VoxelObjectFixtureClient();
+  client.applied = true;
+  client.attached = true;
+  client.playbackHandle = 902;
+  const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
+  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  const canonicalFrame = store.snapshot().liveProjection?.frame;
+
+  await store.runVoxelAction({
+    kind: 'previewObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    nowMicroseconds: 5_000_000,
+    command: {
+      kind: 'scrub',
+      clipId: 'clip/walk-1',
+      clipFrame: 0,
+      loopMode: 'repeat',
+    },
+  });
+
+  assert.match(store.snapshot().lastError ?? '', /does not match its canonical project base/);
+  assert.deepEqual(store.snapshot().liveProjection?.frame, canonicalFrame);
+  assert.equal(store.snapshot().voxelWorkspace.objectPlayback, null);
 });
 
 test('project lifecycle discards queued applied-object controls from the replaced scope', async (t) => {
@@ -846,6 +965,7 @@ class VoxelObjectFixtureClient {
   applyRequestCount = 0;
   playbackStatus: 'stopped' | 'playing' | 'paused' = 'stopped';
   playbackFrame = 0;
+  playbackHandle = 901;
   readonly playbackCommands: string[] = [];
   readonly playbackTimes: number[] = [];
   #blockedInspection: {
@@ -1063,7 +1183,16 @@ class VoxelObjectFixtureClient {
         clipFrame: this.playbackStatus === 'stopped' ? null : this.playbackFrame,
         ended: false,
       },
-      projection: objectCandidateProjection(this.playbackFrame),
+      projection: {
+        schemaVersion: 1,
+        ops: input.command.kind === 'play' || input.command.kind === 'pause'
+          ? []
+          : [{
+              op: 'setVoxelObjectFrame',
+              handle: this.playbackHandle,
+              frame: this.playbackFrame,
+            }],
+      },
       projectionReadout: projectionReadout(20 + this.playbackFrame),
     };
     if (this.#blockedPlayback !== null) {
@@ -1077,6 +1206,12 @@ class VoxelObjectFixtureClient {
     const project = projectReadout(false, this.openedProjectId);
     return {
       ...project,
+      projection: this.attached
+        ? appliedVoxelObjectProjection(project.projection)
+        : project.projection,
+      projectionReadout: this.attached
+        ? { ...project.projectionReadout, retainedVoxelInstances: 1 }
+        : project.projectionReadout,
       voxelObjectAuthoring: {
         assets: this.applied ? [objectAssetReadout()] : [],
         instances: this.attached ? [{
@@ -1485,6 +1620,79 @@ function objectCandidateProjection(frameIndex: number) {
   };
 }
 
+function appliedVoxelObjectProjection(
+  project: ReturnType<typeof projectReadout>['projection'],
+) {
+  const payload = {
+    layout: {
+      vertexCount: 4,
+      indexCount: 6,
+      indexWidth: 'u32' as const,
+      attributes: [
+        { name: 'position' as const, components: 3 as const, kind: 'f32' as const },
+        { name: 'normal' as const, components: 3 as const, kind: 'f32' as const },
+      ],
+    },
+    groups: [{ materialSlot: 7, start: 0, count: 6 }],
+    bounds: { min: [0, 0, 0] as const, max: [1, 1, 0] as const },
+    source: {
+      kind: 'inline' as const,
+      positions: [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0],
+      normals: [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
+      indices: [0, 1, 2, 0, 2, 3],
+    },
+    provenance: 'voxelObject' as const,
+  };
+  return {
+    schemaVersion: 1 as const,
+    ops: [
+      ...project.ops,
+      {
+        op: 'defineMaterial' as const,
+        material: {
+          schemaVersion: 1,
+          id: 'material/wall-lines',
+          color: [0.8, 0.5, 0.2, 1] as const,
+          texture: null,
+          roughness: 1,
+          textureTint: [1, 1, 1, 1] as const,
+          emissionColor: [0, 0, 0] as const,
+          emissionIntensity: 0,
+          uvStrategy: 'flat' as const,
+        },
+      },
+      {
+        op: 'defineVoxelObject' as const,
+        asset: {
+          asset: 'voxel-object/character',
+          contentHash: 'sha256:object',
+          meshes: [{ payload }, { payload }],
+          frames: [{ id: 'walk/0', mesh: 0 }, { id: 'walk/1', mesh: 1 }],
+          materialSlots: [{ slot: 7, material: 'material/wall-lines' }],
+        },
+      },
+      {
+        op: 'createVoxelObjectInstance' as const,
+        handle: 901,
+        parent: null,
+        instance: {
+          asset: 'voxel-object/character',
+          frame: 1,
+          transform: transform([4, 0, 2], [2, 2, 2]),
+          visible: true,
+          materialOverrides: [],
+          metadata: {
+            sourceEntity: 1,
+            sourceSceneNode: 10,
+            tags: ['voxel-object'],
+            label: 'character-one',
+          },
+        },
+      },
+    ],
+  };
+}
+
 function projectionReadout(sourceRevision: number) {
   return {
     frameKind: 'complete' as const,
@@ -1610,10 +1818,13 @@ function hierarchyNode(
   };
 }
 
-function transform(translation: readonly number[]): unknown {
+function transform(
+  translation: readonly number[],
+  scale: readonly number[] = [1, 1, 1],
+): unknown {
   return {
     translation,
     rotation: [0, 0, 0, 1],
-    scale: [1, 1, 1],
+    scale,
   };
 }

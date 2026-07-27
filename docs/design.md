@@ -502,7 +502,11 @@ patch to the existing authored renderer channel, waits for the renderer's succes
 receipt, presents the authored frame duration, and only then advances a virtual explicit clock by
 one pose. Slow adapter, transport, or renderer work therefore slows playback instead of skipping
 canonical poses. The compact complete frame remains available for remounts and presentation changes,
-and Studio periodically replaces from it so incremental history stays bounded. Each
+and Studio periodically replaces from it so incremental history stays bounded. Retained frame
+patches are bound to the exact accepted project-projection base generation, not to numeric render
+handles alone. If a conversion candidate is currently displayed, Studio first compacts the applied
+frame onto the saved canonical project base and performs a complete replacement; only subsequent
+frames may use the retained patch path, and an unmatched patch fails closed. Each
 readout names the saved initial frame separately from the transient posture and sampled frame.
 Neither the player posture nor the browser sampling cadence enters project or object bytes, and
 open, reread, close, and durable mutation discard the session. Conversion-candidate playback remains
