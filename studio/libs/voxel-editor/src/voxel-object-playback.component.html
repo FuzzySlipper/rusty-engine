@@ -1,0 +1,46 @@
+@if (instance(); as entry) {
+  @if (asset(); as object) {
+    <div class="object-summary" data-visual-id="entity-voxel-object-playback">
+      <strong>{{ entry.instance.voxelObjectAssetId }}</strong>
+      <span>{{ object.clips.length }} clips · {{ object.grid.cellSize }} cell size</span>
+    </div>
+    <dl class="playback-readout">
+      <dt>Saved pose</dt><dd>{{ durableFrameLabel(entry.instance.frame) }}</dd>
+      <dt>Preview</dt><dd>
+        @if (playback()?.instanceId === entry.instance.instanceId) {
+          {{ playback()?.status }} · {{ playback()?.clipId ?? 'saved pose' }} · frame {{ playback()?.clipFrame ?? '—' }}
+        } @else { preparing preview }
+      </dd>
+    </dl>
+    @if (object.clips.length > 0) {
+      <div class="playback-fields">
+        <label>
+          <span>Clip</span>
+          <select aria-label="Entity voxel-object preview clip" [disabled]="busy()" [(ngModel)]="clipId" (ngModelChange)="chooseClip($event)">
+            @for (clip of object.clips; track clip.clipId) { <option [value]="clip.clipId">{{ clip.name ?? clip.clipId }}</option> }
+          </select>
+        </label>
+        <label>
+          <span>Loop</span>
+          <select aria-label="Entity voxel-object loop mode" [disabled]="busy()" [(ngModel)]="loopMode" (ngModelChange)="chooseLoopMode($event)">
+            <option value="once">Once</option>
+            <option value="repeat">Repeat</option>
+            <option value="pingPong">Ping-pong</option>
+          </select>
+        </label>
+      </div>
+      <label class="frame-control">
+        <span>Frame <output>{{ frameIndex }} / {{ frameMax() }}</output></span>
+        <input aria-label="Entity voxel-object preview frame" type="range" min="0" [max]="frameMax()" [disabled]="busy()" [(ngModel)]="frameIndex" (change)="scrub()" />
+      </label>
+      <div class="transport-controls">
+        <button type="button" data-action="play-entity-voxel-object" [disabled]="busy() || playing() || playback()?.status !== 'paused'" (click)="play()">Play</button>
+        <button type="button" data-action="pause-entity-voxel-object" [disabled]="!playing()" (click)="pause()">Pause</button>
+        <button type="button" class="restore" data-action="restore-entity-voxel-object" [disabled]="playback()?.instanceId !== entry.instance.instanceId || playback()?.status === 'stopped'" (click)="restore()">Restore saved pose</button>
+      </div>
+      <small>Preview timing and frame selection remain Rust-owned; these controls do not rewrite the saved pose.</small>
+    } @else {
+      <small>This voxel object has no animation clips; its saved default frame is already shown.</small>
+    }
+  }
+}

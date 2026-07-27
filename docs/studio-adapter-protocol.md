@@ -1,6 +1,6 @@
 # Studio external-project adapter protocol
 
-Status: protocol 8 Engine surface implemented; downstream adapters adopt versions deliberately
+Status: protocol 9 Engine surface implemented; downstream adapters adopt versions deliberately
 
 Rusty Engine Studio talks to one project-owned Rust adapter at a time through a bounded JSON-lines
 process. The adapter is a downstream composition root: it understands that project's layout,
@@ -13,7 +13,7 @@ against a real external checkout without turning that checkout into an ordinary 
 
 ## Closed protocol
 
-Every request carries `protocolVersion: 8` and a caller-selected `requestId`. Version 8 contains
+Every request carries `protocolVersion: 9` and a caller-selected `requestId`. Version 9 contains
 only these tagged request families:
 
 | Request | Purpose | Canonical authority |
@@ -115,6 +115,14 @@ pause or stop chosen during an in-flight sample is queued as the next closed com
 user control wins, so stop may supersede a queued pause without racing adapter requests. That queue
 is scoped to the current project and object-operation generations and is discarded by every
 canonical project lifecycle transition or accepted replacement.
+
+Protocol 9 makes the owning entity explicit for every applied voxel-object instance readout. The
+owner identity is supplied by the downstream Rust project schema, is repeated in hierarchy,
+entity-state inspection, and renderer metadata, and lets Studio locate the typed Voxel Object
+capability without matching labels or assets. Applied playback therefore lives in the selected
+Entity inspector; the conversion panel remains responsible for source inspection, candidates,
+canonical asset publication, and instance attachment. This is one explicit built-in capability,
+not a universal component-description or arbitrary command protocol.
 
 ## Safety and atomicity
 

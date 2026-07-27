@@ -1,0 +1,20 @@
+:host { display: block; min-width: 0; }
+.object-summary { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.object-summary strong, .object-summary span, dd { overflow-wrap: anywhere; }
+.object-summary span, label > span, small { color: #8ca3a7; font-size: 10px; }
+.playback-readout { display: grid; grid-template-columns: 68px minmax(0, 1fr); gap: 4px 7px; margin: 8px 0; font-size: 10px; }
+.playback-readout dt { color: #82999d; }
+.playback-readout dd { margin: 0; }
+.playback-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
+label { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+button, input, select { box-sizing: border-box; min-width: 0; width: 100%; font: inherit; color: inherit; background: #182428; border: 1px solid #34484d; border-radius: 3px; }
+button, select { padding: 5px 7px; }
+button { cursor: pointer; }
+button:hover:not(:disabled) { border-color: #63a6a6; background: #20373a; }
+button:disabled, input:disabled, select:disabled { opacity: .42; cursor: default; }
+.frame-control { margin-top: 8px; }
+.frame-control > span { display: flex; justify-content: space-between; gap: 8px; }
+.frame-control output { color: #d5e2e2; }
+.transport-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; margin-top: 8px; }
+.transport-controls .restore { grid-column: 1 / -1; }
+small { display: block; margin-top: 7px; line-height: 1.35; }

@@ -28,6 +28,7 @@ import {
 } from '@rusty-engine/studio-viewport';
 import {
   VoxelEditorComponent,
+  VoxelObjectPlaybackComponent,
   type VoxelBrushPreviewPresentation,
   type VoxelEditorAction,
 } from '@rusty-engine/studio-voxel-editor';
@@ -59,7 +60,12 @@ interface AnimatedMeshResourceDescriptor {
 @Component({
   selector: 'rusty-studio-shell',
   standalone: true,
-  imports: [FormsModule, StudioViewportComponent, VoxelEditorComponent],
+  imports: [
+    FormsModule,
+    StudioViewportComponent,
+    VoxelEditorComponent,
+    VoxelObjectPlaybackComponent,
+  ],
   templateUrl: './studio-shell.component.html',
   styleUrl: './studio-shell.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -782,6 +788,7 @@ export class StudioShellComponent {
       case 'emptyGroup': return '▾';
       case 'light': return '☀';
       case 'voxelVolume': return '▦';
+      case 'voxelObject': return '▤';
       case 'marker': return '⌖';
       default: return '◇';
     }

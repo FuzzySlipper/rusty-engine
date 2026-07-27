@@ -18,9 +18,11 @@ import type {
   VoxelConversionPlan,
   VoxelConversionPreview,
   VoxelObjectAuthoringReadout,
+  VoxelObjectAssetAuthoringReadout,
   VoxelObjectConversionPlan,
   VoxelObjectConversionPreview,
   VoxelObjectInstancePlaybackReadout,
+  VoxelObjectInstanceReadout,
   VoxelObjectSourceInspection,
   VoxelPickReadout,
   VoxelReadout,
@@ -1389,6 +1391,24 @@ export class StudioWorkspaceStore {
     const state = this.#snapshot();
     return state.liveProjection?.entities.find(
       (entity) => entity.entityId === state.selection.entityId,
+    ) ?? null;
+  }
+
+  selectedVoxelObjectInstance(): VoxelObjectInstanceReadout | null {
+    const state = this.#snapshot();
+    const entityId = state.selection.entityId;
+    if (entityId === null) return null;
+    return state.authoringDocument?.voxelObjectAuthoring.instances.find(
+      (entry) => entry.ownerEntityId === entityId,
+    ) ?? null;
+  }
+
+  selectedVoxelObjectAsset(): VoxelObjectAssetAuthoringReadout | null {
+    const state = this.#snapshot();
+    const instance = this.selectedVoxelObjectInstance();
+    if (instance === null) return null;
+    return state.authoringDocument?.voxelObjectAuthoring.assets.find(
+      (asset) => asset.assetId === instance.instance.voxelObjectAssetId,
     ) ?? null;
   }
 

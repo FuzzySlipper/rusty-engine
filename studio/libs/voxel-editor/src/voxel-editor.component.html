@@ -479,54 +479,8 @@
               <span>Scale</span><div class="axis-row">@for (axis of [0, 1, 2]; track axis) { <input type="number" step="0.1" [(ngModel)]="objectInstanceScale[axis]" /> }</div>
               <button type="button" class="primary" data-action="attach-voxel-object-instance" [disabled]="busy()" (click)="attachObjectInstance()">Attach object instance</button>
             }
-            @if (objectInstances().length > 0) {
-              <section class="nested-section" data-visual-id="voxel-object-instance-playback">
-                <header><strong>Applied instance playback</strong><span>transient preview · saved initial pose is unchanged</span></header>
-                <div class="item-list compact-list">
-                  @for (entry of objectInstances(); track entry.sceneId + ':' + entry.instance.instanceId) {
-                    <button
-                      type="button"
-                      [class.is-selected]="appliedObjectInstanceId === entry.instance.instanceId"
-                      [disabled]="busy()"
-                      (click)="chooseAppliedObjectInstance(entry.instance.instanceId)"
-                    >
-                      <strong>{{ entry.instance.instanceId }}</strong>
-                      <span>{{ entry.instance.voxelObjectAssetId }} · saved {{ durableObjectFrameLabel(entry.instance.frame) }}</span>
-                    </button>
-                  }
-                </div>
-                @if (selectedAppliedObjectInstance(); as entry) {
-                  @if (selectedAppliedObjectAsset(); as playbackAsset) {
-                    <dl class="readout-grid">
-                      <dt>Saved initial pose</dt><dd>{{ durableObjectFrameLabel(entry.instance.frame) }}</dd>
-                      <dt>Transient pose</dt><dd>
-                        @if (objectPlayback()?.instanceId === entry.instance.instanceId) {
-                          {{ objectPlayback()?.status }} · {{ objectPlayback()?.clipId ?? 'saved pose' }} · frame {{ objectPlayback()?.clipFrame ?? '—' }}
-                        } @else { not previewing }
-                      </dd>
-                    </dl>
-                    @if (playbackAsset.clips.length > 0) {
-                      <div class="playback-controls">
-                        <select aria-label="Applied voxel-object preview clip" [(ngModel)]="appliedObjectClip" (ngModelChange)="chooseAppliedObjectClip($event)">
-                          @for (clip of playbackAsset.clips; track clip.clipId) { <option [value]="clip.clipId">{{ clip.name ?? clip.clipId }}</option> }
-                        </select>
-                        <select aria-label="Applied voxel-object loop mode" [(ngModel)]="appliedObjectLoopMode" (ngModelChange)="scrubAppliedObjectFrame()">
-                          <option value="once">Once</option>
-                          <option value="repeat">Repeat</option>
-                          <option value="pingPong">Ping-pong</option>
-                        </select>
-                        <input aria-label="Applied voxel-object preview frame" type="range" min="0" [max]="selectedAppliedObjectFrameMax()" [(ngModel)]="appliedObjectFrame" (change)="scrubAppliedObjectFrame()" />
-                        <span>{{ appliedObjectFrame }} / {{ selectedAppliedObjectFrameMax() }}</span>
-                        <button type="button" data-action="play-voxel-object-instance" [disabled]="busy() || appliedObjectPlaying() || objectPlayback()?.status !== 'paused'" (click)="playAppliedObjectPreview()">Play</button>
-                        <button type="button" data-action="pause-voxel-object-instance" [disabled]="!appliedObjectPlaying()" (click)="pauseAppliedObjectPreview()">Pause</button>
-                        <button type="button" data-action="stop-voxel-object-instance" [disabled]="objectPlayback()?.instanceId !== entry.instance.instanceId || objectPlayback()?.status === 'stopped'" (click)="stopAppliedObjectPreview()">Restore saved pose</button>
-                      </div>
-                    } @else {
-                      <span>This object has no animated clips; its saved default frame is already shown.</span>
-                    }
-                  }
-                }
-              </section>
+            @if ((objectAuthoring()?.instances?.length ?? 0) > 0) {
+              <p class="inline-note" data-visual-id="voxel-object-entity-playback-note">Applied objects are entity capabilities. Select an instance in the hierarchy and use its Entity inspector for animation playback.</p>
             }
           </section>
         }

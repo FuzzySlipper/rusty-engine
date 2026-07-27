@@ -307,7 +307,7 @@ test('protocol 7 closes history, file, and texture-policy response families', ()
   );
 });
 
-test('protocol 8 keeps voxel-object candidates, applied playback, and durable readouts closed', async () => {
+test('protocol 9 keeps entity-owned voxel objects, applied playback, and durable readouts closed', async () => {
   const inspected = voxelObjectSourceInspected('object-source-1');
   assert.equal(decodeStudioAdapterResponse(inspected).type, 'voxelObjectSourceInspected');
   assert.throws(
@@ -336,7 +336,27 @@ test('protocol 8 keeps voxel-object candidates, applied playback, and durable re
 
   const project = projectOpened('object-project-1');
   project.project.voxelObjectAuthoring.assets = [voxelObjectAssetReadout()];
+  project.project.voxelObjectAuthoring.instances = [{
+    sceneId: 'scene/loading-bay',
+    ownerEntityId: 17,
+    instance: {
+      instanceId: 'character-one',
+      voxelObjectAssetId: 'voxel-object/character',
+      frame: { kind: 'clip', clipId: 'clip/walk-1', frameIndex: 0 },
+      translation: [0, 0, 0],
+      rotation: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+      materialOverrides: [],
+    },
+  }];
   assert.equal(decodeStudioAdapterResponse(project).type, 'projectOpened');
+  const decodedProject = decodeStudioAdapterResponse(project);
+  assert.equal(
+    decodedProject.type === 'projectOpened'
+      ? decodedProject.project.voxelObjectAuthoring.instances[0]?.ownerEntityId
+      : null,
+    17,
+  );
   project.project.voxelObjectAuthoring.assets[0] = {
     ...voxelObjectAssetReadout(),
     updateCallback: 'tick',

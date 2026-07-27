@@ -23,6 +23,8 @@ test('shell exposes the preserved editor surfaces and named parity operations', 
   assert.match(template, /Picking is active directly on the shared renderer canvas/);
   assert.match(template, />Voxel Authoring<\/button>/);
   assert.match(template, /<rusty-voxel-editor/);
+  assert.match(template, /data-visual-id="entity-voxel-object-component"/);
+  assert.match(template, /<rusty-voxel-object-playback/);
   assert.match(template, /Import Project Asset/);
   assert.match(template, /studio-user-settings-status/);
   assert.match(template, /data-action="toggle-work-light"/);

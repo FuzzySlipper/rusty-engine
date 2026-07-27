@@ -408,7 +408,7 @@ project schema, trusted root, compatibility, and publication policy while compos
 `voxel-annotation`, `voxel-convert`, `content-store`, `engine-inspector`, and render-projection
 mechanisms.
 
-Protocol 8 executes one named request at a time. Reads rebuild canonical owner views. Mutations carry
+Protocol 9 executes one named request at a time. Reads rebuild canonical owner views. Mutations carry
 the accepted project hash plus narrower asset/revision/layer/plan guards, stage a complete candidate,
 rerun downstream admission and renderer projection, atomically publish the project file, and return
 a canonical reread. Voxel history and annotation documents are durable project data; conversion
@@ -435,6 +435,14 @@ that sample settles, with restore superseding an earlier queued pause. The adapt
 one ordered closed command at a time. The queued control is bound to the exact project and object
 operation generations that admitted the sample; open, create, save-as, reread, close, or accepted
 project replacement invalidates it before any old-scope settlement can dispatch.
+
+An applied voxel-object readout names its downstream-owned entity explicitly. The same identity is
+present in the hierarchy, entity inspection, and renderer metadata, so the selected Entity
+inspector can host one typed Voxel Object capability editor without heuristics. Its clip, loop,
+scrub, play, pause, and restore controls are disposable presentation controls over the existing
+Rust player. Conversion-candidate playback remains in the Voxel conversion workflow. This explicit
+capability does not make Renderer Appearance a component registry and does not define a generic
+downstream component AST or editor-operation tunnel.
 
 Static and animated mesh appearance follows the same authority path. The downstream Rust adapter
 validates the selected asset and animation clip, then projects typed resource descriptors,

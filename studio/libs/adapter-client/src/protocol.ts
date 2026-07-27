@@ -57,7 +57,7 @@ import {
 export type * from './voxel-protocol.js';
 export type * from './voxel-object-protocol.js';
 
-export const STUDIO_ADAPTER_PROTOCOL_VERSION = 8 as const;
+export const STUDIO_ADAPTER_PROTOCOL_VERSION = 9 as const;
 export const MAX_STUDIO_ADAPTER_REQUEST_BYTES = 256 * 1024;
 export const MAX_STUDIO_ADAPTER_RESPONSE_BYTES = 32 * 1024 * 1024;
 
@@ -1393,7 +1393,7 @@ function adapterDescription(input: unknown, path: string): void {
   );
   const expected = STUDIO_ADAPTER_OPERATIONS;
   if (operations.length !== expected.length || operations.some((entry, index) => entry !== expected[index])) {
-    fail(`${path}.operations`, 'must name the protocol 8 operation set in order');
+    fail(`${path}.operations`, 'must name the protocol 9 operation set in order');
   }
 }
 

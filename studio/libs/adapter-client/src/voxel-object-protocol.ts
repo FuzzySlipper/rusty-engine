@@ -322,6 +322,7 @@ export interface StoredVoxelObjectInstance {
 
 export interface VoxelObjectInstanceReadout {
   readonly sceneId: string;
+  readonly ownerEntityId: number;
   readonly instance: StoredVoxelObjectInstance;
 }
 
@@ -410,8 +411,9 @@ export function validateVoxelObjectAuthoringReadout(input: unknown, path: string
     validateAssetAuthoring(entry, `${path}.assets[${String(index)}]`));
   array(value['instances'], `${path}.instances`).forEach((entry, index) => {
     const itemPath = `${path}.instances[${String(index)}]`;
-    const item = closedObject(entry, itemPath, ['sceneId', 'instance']);
+    const item = closedObject(entry, itemPath, ['sceneId', 'ownerEntityId', 'instance']);
     string(item['sceneId'], `${itemPath}.sceneId`);
+    integer(item['ownerEntityId'], `${itemPath}.ownerEntityId`);
     validateStoredVoxelObjectInstance(item['instance'], `${itemPath}.instance`);
   });
 }

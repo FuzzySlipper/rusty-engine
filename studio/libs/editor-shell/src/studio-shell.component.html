@@ -346,7 +346,6 @@
           [conversion]="state().voxelWorkspace.conversion"
           [objectSourceInspection]="state().voxelWorkspace.objectSourceInspection"
           [objectConversion]="state().voxelWorkspace.objectConversion"
-          [objectPlayback]="state().voxelWorkspace.objectPlayback"
           [historyPreview]="state().voxelWorkspace.historyPreview"
           [busy]="state().operation !== 'idle'"
           [chooseHostPath]="chooseHostPath"
@@ -446,8 +445,20 @@
                 <small class="owner-note">Viewport drags commit on release; changing selection settles pending edits first. Revert is explicit. Every commit is hash- and revision-guarded by Rust, then canonically reread.</small>
               }
             </section>
+            @if (store.selectedVoxelObjectInstance(); as voxelObjectInstance) {
+              <section class="inspector-section" data-visual-id="entity-voxel-object-component">
+                <header><strong>Voxel Object</strong><span>typed entity capability</span></header>
+                <rusty-voxel-object-playback
+                  [instance]="voxelObjectInstance"
+                  [asset]="store.selectedVoxelObjectAsset()"
+                  [playback]="state().voxelWorkspace.objectPlayback"
+                  [busy]="state().operation !== 'idle'"
+                  (action)="runVoxelAction($event)"
+                />
+              </section>
+            }
             <section class="inspector-section">
-              <header><strong>Appearance</strong><span>shared renderer projection</span></header>
+              <header><strong>Renderer Appearance</strong><span>built-in entity capability</span></header>
               <label class="field-row"><span>Kind</span><select [(ngModel)]="appearanceKind"><option value="empty">Empty</option><option value="staticMesh">Static mesh</option><option value="animatedMesh">Animated mesh</option><option value="light">Light</option></select></label>
               @if (appearanceKind === 'staticMesh') {
                 <label class="field-row"><span>Asset ID</span><input [(ngModel)]="appearanceAsset" placeholder="mesh/asset-id" /></label>

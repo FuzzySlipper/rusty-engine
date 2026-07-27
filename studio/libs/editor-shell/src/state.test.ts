@@ -395,6 +395,10 @@ test('voxel-object source, shared candidate frames, stale apply, explicit discar
     reopened.snapshot().authoringDocument?.voxelObjectAuthoring,
     store.snapshot().authoringDocument?.voxelObjectAuthoring,
   );
+  await reopened.selectEntity(1, 'hierarchy');
+  assert.equal(reopened.selectedVoxelObjectInstance()?.ownerEntityId, 1);
+  assert.equal(reopened.selectedVoxelObjectInstance()?.instance.instanceId, 'character-one');
+  assert.equal(reopened.selectedVoxelObjectAsset()?.assetId, 'voxel-object/character');
 
   await reopened.runVoxelAction({
     kind: 'previewObjectInstance',
@@ -984,6 +988,7 @@ class VoxelObjectFixtureClient {
         assets: this.applied ? [objectAssetReadout()] : [],
         instances: this.attached ? [{
           sceneId: 'scene/loading-bay',
+          ownerEntityId: 1,
           instance: {
             instanceId: 'character-one',
             voxelObjectAssetId: 'voxel-object/character',

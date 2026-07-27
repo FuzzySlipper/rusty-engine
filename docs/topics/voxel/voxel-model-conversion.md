@@ -23,7 +23,7 @@ The static path is already substantial:
 | `voxel-convert` | Bounded embedded GLB default-scene import with composed node transforms, multiple mesh instances/primitives, stable source identities, retained UV sets, explicit group/node selection, conservative triangle/cell coverage, closed-mesh interior classification, per-cell material evidence, contain/cover/stretch and origin policy, plan/preview/apply, bounded queries, stale guards, and fail-atomic installation. |
 | `engine-spatial` | Canonical material-voxel authority plus collision, navigation, and deterministic chunk meshes. |
 | `render-projection` | Stable retained voxel-instance/chunk handles and changed-payload projection. |
-| Studio | The existing volume workflow remains intact. Protocol 8 and the first-party UI add static-object/animated-source inspection, clip/grid/pivot/material controls, complete shared-renderer candidate frames, explicit apply/discard, canonical object readouts, transformed object-instance intent, and Rust-timed transient playback of applied instances. |
+| Studio | The existing volume workflow remains intact. Protocol 9 and the first-party UI add static-object/animated-source inspection, clip/grid/pivot/material controls, complete shared-renderer candidate frames, explicit apply/discard, entity-owned canonical object readouts, transformed object-instance intent, and Rust-timed transient playback of applied instances. |
 
 Static and animated import now share one bounded scene/primitive identity family, and the offline
 converter assembles static defaults and sampled animated clips into durable voxel objects on one
@@ -299,7 +299,7 @@ release. Headless Rust and TypeScript tests prove admission, timing, reload, inv
 collision isolation, and cleanup; the focused Chromium/WebGL gate proves the same frame swap through
 the public shared renderer surface.
 
-## Studio protocol 8 authoring and playback
+## Studio protocol 9 authoring and playback
 
 Studio keeps the volume converter unchanged and adds an explicit object/flipbook target. One named
 source-inspection request returns Rust-imported hierarchy, primitive groups, material slots, UV
@@ -326,6 +326,10 @@ sample/stop command with explicit caller time. The project adapter retains the h
 player, returns both the saved initial selection and transient sampled frame, and composes a complete
 renderer-neutral frame for every response. Open, reread, close, and durable mutation clear that
 private session. Browser code schedules requests but does not advance frames or persist posture.
+Each applied instance also names one downstream-owned entity. Studio correlates that explicit
+identity with hierarchy, entity inspection, and render metadata and presents playback as a typed
+Voxel Object capability on the selected Entity inspector. No label/asset matching or generic
+component-description schema is involved.
 
 This repository owns the closed client, UI, state model, and standalone evidence. Concrete
 filesystem/project-schema adapters remain downstream; `rusty-engine-voxels` owns the flipbook
@@ -349,7 +353,7 @@ Den parent task `rusty-engine#6234` owns the campaign:
 
 The fork after #6235 is deliberate: renderer/runtime work could prove a hand-authored object while
 import and voxelization improved independently. Animated conversion then joined accurate geometry
-and sampled poses. Studio protocol 8 uses that converter and shared runtime renderer path and adds
+and sampled poses. Studio protocol 9 uses that converter and shared runtime renderer path and adds
 transient playback of reopened applied instances without changing the durable object workflow.
 
 ## Evidence and exclusions
