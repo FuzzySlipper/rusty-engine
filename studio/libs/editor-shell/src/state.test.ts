@@ -512,6 +512,126 @@ test('pause and restore queue behind an in-flight applied-object sample', async 
   assert.deepEqual(client.playbackCommands.slice(-2), ['sample', 'stop']);
 });
 
+test('project lifecycle discards queued applied-object controls from the replaced scope', async (t) => {
+  const replacements = ['open', 'create', 'saveAs', 'read', 'close'] as const;
+  const controls = ['pause', 'stop'] as const;
+
+  for (const replacement of replacements) {
+    for (const control of controls) {
+      await t.test(`${replacement} drops queued ${control}`, async () => {
+        const client = new VoxelObjectFixtureClient();
+        client.applied = true;
+        client.attached = true;
+        client.openedProjectId = 'loading-bay-a';
+        const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
+        await store.openProject(
+          '/external/loading-bay-a',
+          'content/projects/loading-bay.project.json',
+        );
+        await beginAppliedObjectPlayback(store);
+
+        client.blockNextPlayback();
+        const staleSample = store.runVoxelAction({
+          kind: 'previewObjectInstance',
+          sceneId: 'scene/loading-bay',
+          instanceId: 'character-one',
+          nowMicroseconds: 5_200_000,
+          command: { kind: 'sample' },
+        });
+        await store.runVoxelAction({
+          kind: 'previewObjectInstance',
+          sceneId: 'scene/loading-bay',
+          instanceId: 'character-one',
+          nowMicroseconds: 5_210_000,
+          command: { kind: control },
+        });
+        assert.equal(store.snapshot().operation, 'voxel');
+        assert.equal(client.playbackCommands.at(-1), 'sample');
+
+        client.openedProjectId = 'loading-bay-b';
+        switch (replacement) {
+          case 'open':
+            await store.openProject(
+              '/external/loading-bay-b',
+              'content/projects/loading-bay.project.json',
+            );
+            break;
+          case 'create':
+            await store.createProject({
+              root: '/external/loading-bay-b',
+              projectFile: 'content/projects/loading-bay.project.json',
+              projectId: 'loading-bay-b',
+              name: 'Loading Bay B',
+              entryScene: 'scene/loading-bay',
+              entrySceneName: 'Loading Bay',
+            });
+            break;
+          case 'saveAs':
+            await store.saveProjectAs({
+              root: '/external/loading-bay-b',
+              projectFile: 'content/projects/loading-bay.project.json',
+              projectId: 'loading-bay-b',
+              name: 'Loading Bay B',
+            });
+            break;
+          case 'read':
+            await store.refreshProject();
+            break;
+          case 'close':
+            await store.closeProject();
+            break;
+        }
+
+        if (replacement === 'close') {
+          assert.equal(store.snapshot().authoringDocument, null);
+        } else {
+          assert.equal(store.snapshot().authoringDocument?.identity.projectId, 'loading-bay-b');
+          assert.equal(
+            store.snapshot().authoringDocument?.voxelObjectAuthoring.instances[0]?.instance.instanceId,
+            'character-one',
+            'replacement deliberately overlaps the old scene and instance identities',
+          );
+          assert.equal(store.snapshot().voxelWorkspace.objectPlayback, null);
+        }
+        assert.equal(store.snapshot().operation, 'idle');
+        assert.equal(store.snapshot().lastError, null);
+        const acceptedReplacement = store.snapshot();
+        const commandCount = client.playbackCommands.length;
+
+        client.resolveBlockedPlayback();
+        await staleSample;
+        await Promise.resolve();
+
+        assert.strictEqual(store.snapshot(), acceptedReplacement);
+        assert.equal(client.playbackCommands.length, commandCount);
+        assert.equal(client.playbackCommands.at(-1), 'sample');
+      });
+    }
+  }
+});
+
+async function beginAppliedObjectPlayback(store: StudioWorkspaceStore): Promise<void> {
+  await store.runVoxelAction({
+    kind: 'previewObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    nowMicroseconds: 5_000_000,
+    command: {
+      kind: 'scrub',
+      clipId: 'clip/walk-1',
+      clipFrame: 0,
+      loopMode: 'repeat',
+    },
+  });
+  await store.runVoxelAction({
+    kind: 'previewObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    nowMicroseconds: 5_100_000,
+    command: { kind: 'play' },
+  });
+}
+
 test('host-user camera and keyboard settings persist outside project authority and reload by project root', async () => {
   const settingsHost = new FixtureSettingsHost();
   const first = new StudioWorkspaceStore(
@@ -668,6 +788,10 @@ class VoxelObjectFixtureClient {
 
   saveProjectAs() {
     return Promise.resolve({ project: this.#project() } as never);
+  }
+
+  closeProject() {
+    return Promise.resolve({} as never);
   }
 
   readProject() {

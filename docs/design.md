@@ -377,7 +377,9 @@ open, reread, close, and durable mutation discard the session. Conversion-candid
 a separate pre-apply inspection path. Pause and restore are user-priority controls: when one arrives
 while a sample is in flight, Studio retains the latest control and dispatches it immediately after
 that sample settles, with restore superseding an earlier queued pause. The adapter still receives
-one ordered closed command at a time.
+one ordered closed command at a time. The queued control is bound to the exact project and object
+operation generations that admitted the sample; open, create, save-as, reread, close, or accepted
+project replacement invalidates it before any old-scope settlement can dispatch.
 
 Static and animated mesh appearance follows the same authority path. The downstream Rust adapter
 validates the selected asset and animation clip, then projects typed resource descriptors,

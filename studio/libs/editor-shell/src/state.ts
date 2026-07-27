@@ -211,6 +211,18 @@ export interface StudioWorkspaceSnapshot {
   readonly lastError: string | null;
 }
 
+type ObjectPlaybackControlAction = Extract<
+  VoxelEditorAction,
+  { readonly kind: 'previewObjectInstance' }
+>;
+
+interface QueuedObjectPlaybackControl {
+  readonly action: ObjectPlaybackControlAction;
+  readonly projectScopeGeneration: number;
+  readonly objectOperationGeneration: number;
+  readonly expectedProjectHash: string;
+}
+
 const INITIAL_ARTIFACT = buildDefaultStudioHostUserSettings('rusty-studio-project:scratch');
 const INITIAL_SETTINGS = viewSettings(INITIAL_ARTIFACT);
 
@@ -267,10 +279,7 @@ export class StudioWorkspaceStore {
   #settingsGeneration = 0;
   #projectScopeGeneration = 0;
   #objectOperationGeneration = 0;
-  #queuedObjectPlaybackControl: Extract<
-    VoxelEditorAction,
-    { readonly kind: 'previewObjectInstance' }
-  > | null = null;
+  #queuedObjectPlaybackControl: QueuedObjectPlaybackControl | null = null;
 
   constructor(
     client: StudioAdapterClient,
@@ -855,7 +864,12 @@ export class StudioWorkspaceStore {
     if (document === null) return;
     if (current.operation !== 'idle') {
       if (current.operation === 'voxel' && isObjectPlaybackControl(action)) {
-        this.#queuedObjectPlaybackControl = action;
+        this.#queuedObjectPlaybackControl = {
+          action,
+          projectScopeGeneration: this.#projectScopeGeneration,
+          objectOperationGeneration: this.#objectOperationGeneration,
+          expectedProjectHash: document.identity.projectHash,
+        };
       }
       return;
     }
@@ -1331,10 +1345,20 @@ export class StudioWorkspaceStore {
   }
 
   #drainQueuedObjectPlaybackControl(): void {
-    const action = this.#queuedObjectPlaybackControl;
-    if (action === null || this.#snapshot().operation !== 'idle') return;
+    const queued = this.#queuedObjectPlaybackControl;
+    if (queued === null) return;
+    const current = this.#snapshot();
+    if (
+      queued.projectScopeGeneration !== this.#projectScopeGeneration
+      || queued.objectOperationGeneration !== this.#objectOperationGeneration
+      || current.authoringDocument?.identity.projectHash !== queued.expectedProjectHash
+    ) {
+      this.#queuedObjectPlaybackControl = null;
+      return;
+    }
+    if (current.operation !== 'idle') return;
     this.#queuedObjectPlaybackControl = null;
-    void this.runVoxelAction(action);
+    void this.runVoxelAction(queued.action);
   }
 
   setHierarchyFilter(value: string): void {
@@ -1514,6 +1538,7 @@ export class StudioWorkspaceStore {
 
   #invalidateObjectOperation(): void {
     this.#objectOperationGeneration += 1;
+    this.#queuedObjectPlaybackControl = null;
   }
 
   #objectResponseIsCurrent(
@@ -1557,6 +1582,7 @@ export class StudioWorkspaceStore {
   }
 
   #acceptProject(project: StudioProjectReadout, resetSelection: boolean): void {
+    this.#invalidateObjectOperation();
     const current = this.#snapshot();
     const entities = summarizeProjectionForUi(
       project.projection,
@@ -1759,7 +1785,7 @@ function isVoxelObjectAction(action: VoxelEditorAction): boolean {
 
 function isObjectPlaybackControl(
   action: VoxelEditorAction,
-): action is Extract<VoxelEditorAction, { readonly kind: 'previewObjectInstance' }> {
+): action is ObjectPlaybackControlAction {
   return action.kind === 'previewObjectInstance'
     && (action.command.kind === 'pause' || action.command.kind === 'stop');
 }
