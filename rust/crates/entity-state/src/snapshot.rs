@@ -8,10 +8,13 @@ use core_ids::{
 use core_math::Vec3;
 use serde::{Deserialize, Serialize};
 
+use crate::component::{
+    ComponentRegistry, RegisteredComponentSnapshot, RegisteredComponentSnapshotError,
+};
 use crate::model::{
-    AssetBindingCapability, BoundsCapability, CollisionCapability, ControllerCapability,
+    AssetBindingComponent, BoundsComponent, CollisionComponent, ControllerComponent,
     EntityDefinition, EntityLifecycle, EntitySource, EntityState, EntityTransform,
-    KinematicCapability, Quat, RenderableCapability, TransformCapability,
+    KinematicComponent, Quat, RenderableComponent, TransformComponent,
 };
 
 pub const ENTITY_STATE_SNAPSHOT_SCHEMA_VERSION: u32 = 3;
@@ -22,6 +25,8 @@ pub struct EntityStateSnapshot {
     pub schema_version: u32,
     pub revision: u64,
     pub entities: Vec<EntitySnapshot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub registered_components: Vec<RegisteredComponentSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -146,6 +151,7 @@ pub enum EntityStateSnapshotError {
     InvalidLifecycleState { entity: u64, reason: &'static str },
     InvalidAssetReference { entity: u64, reason: String },
     InvalidDefinition(crate::model::EntityDefinitionError),
+    RegisteredComponent(RegisteredComponentSnapshotError),
 }
 
 impl std::fmt::Display for EntityStateSnapshotError {
@@ -155,6 +161,12 @@ impl std::fmt::Display for EntityStateSnapshotError {
 }
 
 impl std::error::Error for EntityStateSnapshotError {}
+
+impl From<RegisteredComponentSnapshotError> for EntityStateSnapshotError {
+    fn from(value: RegisteredComponentSnapshotError) -> Self {
+        Self::RegisteredComponent(value)
+    }
+}
 
 impl EntityState {
     pub fn snapshot(&self) -> EntityStateSnapshot {
@@ -180,10 +192,10 @@ impl EntityState {
                 let parent = self.transform_parents.get(entity).copied();
                 let parent_included = parent.is_none_or(|value| included.contains(&value));
                 let transform = if parent_included {
-                    self.transforms.get(entity).copied()
+                    self.transform(*entity).copied()
                 } else {
                     self.world_transform(*entity)
-                        .map(TransformCapability::from_transform)
+                        .map(TransformComponent::from_transform)
                 };
                 EntitySnapshot {
                     id: entity.raw(),
@@ -192,41 +204,37 @@ impl EntityState {
                     source: source_to_snapshot(&core.source),
                     labels: core.labels.iter().map(|label| label.raw()).collect(),
                     transform: transform.map(transform_to_snapshot),
-                    bounds: self.bounds.get(entity).map(|value| BoundsSnapshot {
+                    bounds: self.bounds(*entity).map(|value| BoundsSnapshot {
                         min: value.min.to_array(),
                         max: value.max.to_array(),
                     }),
-                    collision: self.collisions.get(entity).map(|value| CollisionSnapshot {
+                    collision: self.collision(*entity).map(|value| CollisionSnapshot {
                         enabled: value.enabled,
                         static_collider: value.static_collider,
                     }),
-                    renderable: self
-                        .renderables
-                        .get(entity)
-                        .map(|value| RenderableSnapshot {
-                            visible: value.visible,
-                            asset: value.asset.clone(),
-                        }),
-                    kinematic: self.kinematics.get(entity).map(|value| KinematicSnapshot {
+                    renderable: self.renderable(*entity).map(|value| RenderableSnapshot {
+                        visible: value.visible,
+                        asset: value.asset.clone(),
+                    }),
+                    kinematic: self.kinematic(*entity).map(|value| KinematicSnapshot {
                         half_extents: value.half_extents.to_array(),
                         velocity: value.velocity.to_array(),
                     }),
-                    controller: self.controllers.get(entity).map(|value| {
+                    controller: self.controller(*entity).map(|value| {
                         let active = !self.inactive_controllers.contains(entity);
                         match value {
-                            ControllerCapability::Process(id) => ControllerSnapshot::Process {
+                            ControllerComponent::Process(id) => ControllerSnapshot::Process {
                                 id: id.raw(),
                                 active,
                             },
-                            ControllerCapability::Subject(id) => ControllerSnapshot::Subject {
+                            ControllerComponent::Subject(id) => ControllerSnapshot::Subject {
                                 id: id.raw(),
                                 active,
                             },
                         }
                     }),
                     asset_binding: self
-                        .asset_bindings
-                        .get(entity)
+                        .asset_binding(*entity)
                         .map(|value| asset_to_snapshot(&value.asset)),
                     transform_parent: parent
                         .filter(|target| included.contains(target))
@@ -234,7 +242,7 @@ impl EntityState {
                     contained_in: self
                         .containment
                         .get(entity)
-                        .map(|value| value.container)
+                        .copied()
                         .filter(|target| included.contains(target))
                         .map(EntityId::raw),
                     derived_from: self
@@ -250,16 +258,25 @@ impl EntityState {
             schema_version: ENTITY_STATE_SNAPSHOT_SCHEMA_VERSION,
             revision: self.revision,
             entities,
+            registered_components: self.components.durable_snapshots(&included),
         }
     }
 
     pub fn from_snapshot(snapshot: EntityStateSnapshot) -> Result<Self, EntityStateSnapshotError> {
+        Self::from_snapshot_with_registry(snapshot, ComponentRegistry::default())
+    }
+
+    pub fn from_snapshot_with_registry(
+        snapshot: EntityStateSnapshot,
+        registry: ComponentRegistry,
+    ) -> Result<Self, EntityStateSnapshotError> {
         if snapshot.schema_version != ENTITY_STATE_SNAPSHOT_SCHEMA_VERSION {
             return Err(EntityStateSnapshotError::UnsupportedSchema {
                 actual: u64::from(snapshot.schema_version),
             });
         }
         let mut ids = BTreeSet::new();
+        let registered_components = snapshot.registered_components;
         let tombstones: BTreeSet<_> = snapshot
             .entities
             .iter()
@@ -293,29 +310,29 @@ impl EntityState {
                 .with_source(source)
                 .with_labels(entity.labels.into_iter().map(TagId::new));
             definition.transform = entity.transform.map(transform_from_snapshot);
-            definition.bounds = entity.bounds.map(|value| BoundsCapability {
+            definition.bounds = entity.bounds.map(|value| BoundsComponent {
                 min: vec3(value.min),
                 max: vec3(value.max),
             });
-            definition.collision = entity.collision.map(|value| CollisionCapability {
+            definition.collision = entity.collision.map(|value| CollisionComponent {
                 enabled: value.enabled,
                 static_collider: value.static_collider,
             });
-            definition.renderable = entity.renderable.map(|value| RenderableCapability {
+            definition.renderable = entity.renderable.map(|value| RenderableComponent {
                 visible: value.visible,
                 asset: value.asset,
             });
-            definition.kinematic = entity.kinematic.map(|value| KinematicCapability {
+            definition.kinematic = entity.kinematic.map(|value| KinematicComponent {
                 half_extents: vec3(value.half_extents),
                 velocity: vec3(value.velocity),
             });
             if let Some(controller) = entity.controller {
                 let (value, active) = match controller {
                     ControllerSnapshot::Process { id, active } => {
-                        (ControllerCapability::Process(ProcessId::new(id)), active)
+                        (ControllerComponent::Process(ProcessId::new(id)), active)
                     }
                     ControllerSnapshot::Subject { id, active } => {
-                        (ControllerCapability::Subject(SubjectId::new(id)), active)
+                        (ControllerComponent::Subject(SubjectId::new(id)), active)
                     }
                 };
                 definition.controller = Some(value);
@@ -327,7 +344,7 @@ impl EntityState {
                 .asset_binding
                 .map(|value| {
                     asset_from_snapshot(entity.id, value)
-                        .map(|asset| AssetBindingCapability { asset })
+                        .map(|asset| AssetBindingComponent { asset })
                 })
                 .transpose()?;
             definition.transform_parent = entity.transform_parent.map(EntityId::new);
@@ -337,7 +354,7 @@ impl EntityState {
             definitions.push(definition);
         }
 
-        let mut state = EntityState::from_definitions(definitions)
+        let mut state = EntityState::from_definitions_with_registry(registry, definitions)
             .map_err(EntityStateSnapshotError::InvalidDefinition)?;
         state.revision = snapshot.revision;
         for entity in inactive_controllers {
@@ -350,6 +367,19 @@ impl EntityState {
                 .expect("snapshot definition created entity")
                 .lifecycle = lifecycle_from_snapshot(lifecycle);
         }
+        let known_entities = state.entities.keys().copied().collect();
+        let tombstoned_entities = state
+            .entities
+            .iter()
+            .filter_map(|(entity, core)| {
+                (core.lifecycle == EntityLifecycle::Tombstoned).then_some(*entity)
+            })
+            .collect();
+        state.components.restore_registered_snapshots(
+            &registered_components,
+            &known_entities,
+            &tombstoned_entities,
+        )?;
         Ok(state)
     }
 }
@@ -364,6 +394,13 @@ pub fn encode_durable_snapshot(state: &EntityState) -> Result<String, EntityStat
 }
 
 pub fn decode_snapshot(input: &str) -> Result<EntityState, EntityStateSnapshotError> {
+    decode_snapshot_with_registry(input, ComponentRegistry::default())
+}
+
+pub fn decode_snapshot_with_registry(
+    input: &str,
+    registry: ComponentRegistry,
+) -> Result<EntityState, EntityStateSnapshotError> {
     let header: serde_json::Value =
         serde_json::from_str(input).map_err(EntityStateSnapshotError::Decode)?;
     let schema = header
@@ -374,12 +411,12 @@ pub fn decode_snapshot(input: &str) -> Result<EntityState, EntityStateSnapshotEr
         value if value == u64::from(ENTITY_STATE_SNAPSHOT_SCHEMA_VERSION) => {
             let snapshot: EntityStateSnapshot =
                 serde_json::from_str(input).map_err(EntityStateSnapshotError::Decode)?;
-            EntityState::from_snapshot(snapshot)
+            EntityState::from_snapshot_with_registry(snapshot, registry)
         }
         2 => {
             let legacy: LegacyEntityStateSnapshot =
                 serde_json::from_str(input).map_err(EntityStateSnapshotError::Decode)?;
-            EntityState::from_snapshot(legacy.upgrade())
+            EntityState::from_snapshot_with_registry(legacy.upgrade(), registry)
         }
         actual => Err(EntityStateSnapshotError::UnsupportedSchema { actual }),
     }
@@ -401,7 +438,7 @@ fn lifecycle_from_snapshot(value: SnapshotLifecycle) -> EntityLifecycle {
     }
 }
 
-fn transform_to_snapshot(value: TransformCapability) -> TransformSnapshot {
+fn transform_to_snapshot(value: TransformComponent) -> TransformSnapshot {
     TransformSnapshot {
         translation: value.translation.to_array(),
         rotation: [
@@ -414,8 +451,8 @@ fn transform_to_snapshot(value: TransformCapability) -> TransformSnapshot {
     }
 }
 
-fn transform_from_snapshot(value: TransformSnapshot) -> TransformCapability {
-    TransformCapability::from_transform(EntityTransform {
+fn transform_from_snapshot(value: TransformSnapshot) -> TransformComponent {
+    TransformComponent::from_transform(EntityTransform {
         translation: vec3(value.translation),
         rotation: Quat::new(
             value.rotation[0],
@@ -543,7 +580,7 @@ fn validate_tombstone_shape(entity: &EntitySnapshot) -> Result<(), EntityStateSn
     {
         return Err(EntityStateSnapshotError::InvalidLifecycleState {
             entity: entity.id,
-            reason: "tombstone carries capabilities or relationships",
+            reason: "tombstone carries components or relationships",
         });
     }
     Ok(())
@@ -614,6 +651,7 @@ impl LegacyEntityStateSnapshot {
                     derived_from: None,
                 })
                 .collect(),
+            registered_components: Vec::new(),
         }
     }
 }

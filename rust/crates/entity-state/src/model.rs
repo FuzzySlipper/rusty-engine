@@ -7,14 +7,18 @@ use core_ids::{
 };
 use core_math::Vec3;
 
-pub use crate::capability::{
-    AssetBindingCapability, BoundsCapability, CollisionCapability, ContainmentCapability,
-    ControllerCapability, KinematicCapability, RenderableCapability, TransformCapability,
-};
 use crate::command::{BatchReceipt, BatchRejection, EntityCommandBatch};
+use crate::component::{
+    ComponentAccessError, ComponentIter, ComponentRegistration, ComponentRegistrationError,
+    ComponentRegistry, ComponentRevision, ComponentStore, ComponentStoreInspection,
+    ComponentTypeId, EntityComponent,
+};
+pub use crate::components::{
+    AssetBindingComponent, BoundsComponent, CollisionComponent, ControllerComponent,
+    KinematicComponent, RenderableComponent, TransformComponent,
+};
 pub(crate) use crate::definition::{
-    bounds_are_valid, half_extents_are_valid, transform_is_valid, translation_is_valid,
-    validate_definition, velocity_is_valid,
+    transform_is_valid, translation_is_valid, validate_definition, velocity_is_valid,
 };
 pub use crate::definition::{
     EntityDefinition, EntityDefinitionError, MAX_ABS_TRANSLATION, MAX_ABS_VELOCITY,
@@ -126,15 +130,15 @@ pub struct EntityView {
     pub lifecycle: EntityLifecycle,
     pub source: EntitySource,
     pub labels: Vec<TagId>,
-    pub transform: Option<TransformCapability>,
+    pub transform: Option<TransformComponent>,
     pub world_transform: Option<EntityTransform>,
-    pub bounds: Option<BoundsCapability>,
-    pub collision: Option<CollisionCapability>,
-    pub renderable: Option<RenderableCapability>,
-    pub kinematic: Option<KinematicCapability>,
-    pub controller: Option<ControllerCapability>,
+    pub bounds: Option<BoundsComponent>,
+    pub collision: Option<CollisionComponent>,
+    pub renderable: Option<RenderableComponent>,
+    pub kinematic: Option<KinematicComponent>,
+    pub controller: Option<ControllerComponent>,
     pub controller_active: bool,
-    pub asset_binding: Option<AssetBindingCapability>,
+    pub asset_binding: Option<AssetBindingComponent>,
     pub transform_parent: Option<EntityId>,
     pub contained_in: Option<EntityId>,
     pub derived_from: Option<EntityId>,
@@ -163,25 +167,44 @@ pub struct ProjectionNode {
     pub visible: bool,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct EntityState {
     pub(crate) revision: u64,
     pub(crate) entities: BTreeMap<EntityId, EntityCore>,
-    pub(crate) transforms: BTreeMap<EntityId, TransformCapability>,
-    pub(crate) bounds: BTreeMap<EntityId, BoundsCapability>,
-    pub(crate) collisions: BTreeMap<EntityId, CollisionCapability>,
-    pub(crate) renderables: BTreeMap<EntityId, RenderableCapability>,
-    pub(crate) kinematics: BTreeMap<EntityId, KinematicCapability>,
-    pub(crate) controllers: BTreeMap<EntityId, ControllerCapability>,
+    pub(crate) components: ComponentStore,
     pub(crate) inactive_controllers: BTreeSet<EntityId>,
-    pub(crate) asset_bindings: BTreeMap<EntityId, AssetBindingCapability>,
     pub(crate) transform_parents: BTreeMap<EntityId, EntityId>,
-    pub(crate) containment: BTreeMap<EntityId, ContainmentCapability>,
+    pub(crate) containment: BTreeMap<EntityId, EntityId>,
     pub(crate) derived_from: BTreeMap<EntityId, EntityId>,
 }
 
+impl Default for EntityState {
+    fn default() -> Self {
+        Self::with_registry(ComponentRegistry::default())
+    }
+}
+
 impl EntityState {
+    pub fn with_registry(registry: ComponentRegistry) -> Self {
+        Self {
+            revision: 0,
+            entities: BTreeMap::new(),
+            components: ComponentStore::from_registry(&registry),
+            inactive_controllers: BTreeSet::new(),
+            transform_parents: BTreeMap::new(),
+            containment: BTreeMap::new(),
+            derived_from: BTreeMap::new(),
+        }
+    }
+
     pub fn from_definitions(
+        definitions: impl IntoIterator<Item = EntityDefinition>,
+    ) -> Result<Self, EntityDefinitionError> {
+        Self::from_definitions_with_registry(ComponentRegistry::default(), definitions)
+    }
+
+    pub fn from_definitions_with_registry(
+        registry: ComponentRegistry,
         definitions: impl IntoIterator<Item = EntityDefinition>,
     ) -> Result<Self, EntityDefinitionError> {
         let definitions: Vec<_> = definitions.into_iter().collect();
@@ -195,7 +218,7 @@ impl EntityState {
             validate_definition(definition)?;
         }
 
-        let mut state = Self::default();
+        let mut state = Self::with_registry(registry);
         for definition in &definitions {
             state.insert_definition(definition.clone());
         }
@@ -207,7 +230,67 @@ impl EntityState {
                 },
             )?;
         }
+        state.components.reset_revisions();
         Ok(state)
+    }
+
+    /// Adds a component type to this state instance without changing live state or its revision.
+    pub fn register_component<T: EntityComponent>(
+        &mut self,
+        registration: ComponentRegistration<T>,
+    ) -> Result<(), ComponentRegistrationError> {
+        self.components.register(registration)
+    }
+
+    pub fn component<T: EntityComponent>(
+        &self,
+        entity: EntityId,
+    ) -> Result<Option<&T>, ComponentAccessError> {
+        self.components.get::<T>(entity)
+    }
+
+    pub fn has_component<T: EntityComponent>(
+        &self,
+        entity: EntityId,
+    ) -> Result<bool, ComponentAccessError> {
+        self.components.has::<T>(entity)
+    }
+
+    pub fn components<T: EntityComponent>(
+        &self,
+    ) -> Result<ComponentIter<'_, T>, ComponentAccessError> {
+        self.components.iter::<T>()
+    }
+
+    pub fn component_type_id<T: EntityComponent>(
+        &self,
+    ) -> Result<&ComponentTypeId, ComponentAccessError> {
+        self.components.type_id_for::<T>()
+    }
+
+    /// Captures the instance-local revision for one entity/component slot.
+    ///
+    /// The slot may currently be absent. The returned guard is used by typed component mutation
+    /// and is unaffected by changes to other entities or component types.
+    pub fn component_revision<T: EntityComponent>(
+        &self,
+        entity: EntityId,
+    ) -> Result<ComponentRevision, ComponentAccessError> {
+        let component = self.components.type_id_for::<T>()?.clone();
+        let revision = self.components.revision::<T>(entity)?;
+        Ok(ComponentRevision {
+            entity,
+            component,
+            revision,
+        })
+    }
+
+    pub fn component_inspection(&self) -> ComponentStoreInspection {
+        self.components.inspection()
+    }
+
+    pub fn component_types_for_entity(&self, entity: EntityId) -> Vec<ComponentTypeId> {
+        self.components.types_for_entity(entity)
     }
 
     pub fn revision(&self) -> u64 {
@@ -232,46 +315,60 @@ impl EntityState {
         self.entities.get(&entity).map(|core| core.lifecycle)
     }
 
-    pub fn transform(&self, entity: EntityId) -> Option<&TransformCapability> {
-        self.transforms.get(&entity)
+    pub fn transform(&self, entity: EntityId) -> Option<&TransformComponent> {
+        self.components
+            .get::<TransformComponent>(entity)
+            .expect("built-in transform component is registered")
     }
 
-    pub fn bounds(&self, entity: EntityId) -> Option<&BoundsCapability> {
-        self.bounds.get(&entity)
+    pub fn bounds(&self, entity: EntityId) -> Option<&BoundsComponent> {
+        self.components
+            .get::<BoundsComponent>(entity)
+            .expect("built-in bounds component is registered")
     }
 
-    pub fn collision(&self, entity: EntityId) -> Option<&CollisionCapability> {
-        self.collisions.get(&entity)
+    pub fn collision(&self, entity: EntityId) -> Option<&CollisionComponent> {
+        self.components
+            .get::<CollisionComponent>(entity)
+            .expect("built-in collision component is registered")
     }
 
-    pub fn active_collision(&self, entity: EntityId) -> Option<&CollisionCapability> {
+    pub fn active_collision(&self, entity: EntityId) -> Option<&CollisionComponent> {
         (self.lifecycle(entity) == Some(EntityLifecycle::Active))
-            .then(|| self.collisions.get(&entity))
+            .then(|| self.collision(entity))
             .flatten()
             .filter(|collision| collision.enabled)
     }
 
-    pub fn renderable(&self, entity: EntityId) -> Option<&RenderableCapability> {
-        self.renderables.get(&entity)
+    pub fn renderable(&self, entity: EntityId) -> Option<&RenderableComponent> {
+        self.components
+            .get::<RenderableComponent>(entity)
+            .expect("built-in renderable component is registered")
     }
 
-    pub fn kinematic(&self, entity: EntityId) -> Option<&KinematicCapability> {
-        self.kinematics.get(&entity)
+    pub fn kinematic(&self, entity: EntityId) -> Option<&KinematicComponent> {
+        self.components
+            .get::<KinematicComponent>(entity)
+            .expect("built-in kinematic component is registered")
     }
 
-    pub fn controller(&self, entity: EntityId) -> Option<&ControllerCapability> {
-        self.controllers.get(&entity)
+    pub fn controller(&self, entity: EntityId) -> Option<&ControllerComponent> {
+        self.components
+            .get::<ControllerComponent>(entity)
+            .expect("built-in controller component is registered")
     }
 
-    pub fn active_controller(&self, entity: EntityId) -> Option<&ControllerCapability> {
+    pub fn active_controller(&self, entity: EntityId) -> Option<&ControllerComponent> {
         (self.lifecycle(entity) == Some(EntityLifecycle::Active)
             && !self.inactive_controllers.contains(&entity))
-        .then(|| self.controllers.get(&entity))
+        .then(|| self.controller(entity))
         .flatten()
     }
 
-    pub fn asset_binding(&self, entity: EntityId) -> Option<&AssetBindingCapability> {
-        self.asset_bindings.get(&entity)
+    pub fn asset_binding(&self, entity: EntityId) -> Option<&AssetBindingComponent> {
+        self.components
+            .get::<AssetBindingComponent>(entity)
+            .expect("built-in asset binding component is registered")
     }
 
     pub fn transform_parent(&self, entity: EntityId) -> Option<EntityId> {
@@ -279,7 +376,7 @@ impl EntityState {
     }
 
     pub fn contained_in(&self, entity: EntityId) -> Option<EntityId> {
-        self.containment.get(&entity).map(|value| value.container)
+        self.containment.get(&entity).copied()
     }
 
     pub fn derived_from(&self, entity: EntityId) -> Option<EntityId> {
@@ -309,45 +406,49 @@ impl EntityState {
             lifecycle: core.lifecycle,
             source: core.source.clone(),
             labels: core.labels.clone(),
-            transform: self.transforms.get(&entity).copied(),
+            transform: self.transform(entity).copied(),
             world_transform: self.world_transform(entity),
-            bounds: self.bounds.get(&entity).copied(),
-            collision: self.collisions.get(&entity).copied(),
-            renderable: self.renderables.get(&entity).cloned(),
-            kinematic: self.kinematics.get(&entity).copied(),
-            controller: self.controllers.get(&entity).copied(),
-            controller_active: self.controllers.contains_key(&entity)
+            bounds: self.bounds(entity).copied(),
+            collision: self.collision(entity).copied(),
+            renderable: self.renderable(entity).cloned(),
+            kinematic: self.kinematic(entity).copied(),
+            controller: self.controller(entity).copied(),
+            controller_active: self.controller(entity).is_some()
                 && !self.inactive_controllers.contains(&entity),
-            asset_binding: self.asset_bindings.get(&entity).cloned(),
+            asset_binding: self.asset_binding(entity).cloned(),
             transform_parent: self.transform_parents.get(&entity).copied(),
-            contained_in: self.containment.get(&entity).map(|value| value.container),
+            contained_in: self.containment.get(&entity).copied(),
             derived_from: self.derived_from.get(&entity).copied(),
         })
     }
 
     pub fn kinematic_bodies(&self) -> impl Iterator<Item = KinematicBodyView> + '_ {
-        self.kinematics.iter().filter_map(|(entity, kinematic)| {
-            if self.entities.get(entity)?.lifecycle != EntityLifecycle::Active {
-                return None;
-            }
-            let translation = self.transforms.get(entity)?.translation;
-            Some(KinematicBodyView {
-                entity: *entity,
-                translation,
-                half_extents: kinematic.half_extents,
-                velocity: kinematic.velocity,
+        self.components
+            .iter::<KinematicComponent>()
+            .expect("built-in kinematic component is registered")
+            .filter_map(|(entity, kinematic)| {
+                if self.entities.get(&entity)?.lifecycle != EntityLifecycle::Active {
+                    return None;
+                }
+                let translation = self.transform(entity)?.translation;
+                Some(KinematicBodyView {
+                    entity,
+                    translation,
+                    half_extents: kinematic.half_extents,
+                    velocity: kinematic.velocity,
+                })
             })
-        })
     }
 
     pub fn projection(&self) -> Vec<ProjectionNode> {
-        self.renderables
-            .iter()
+        self.components
+            .iter::<RenderableComponent>()
+            .expect("built-in renderable component is registered")
             .filter_map(|(entity, renderable)| {
-                let core = self.entities.get(entity)?;
-                let transform = self.world_transform(*entity);
+                let core = self.entities.get(&entity)?;
+                let transform = self.world_transform(entity);
                 Some(ProjectionNode {
-                    entity: *entity,
+                    entity,
                     name: core.name.clone(),
                     asset: renderable.asset.clone(),
                     translation: transform.map(|transform| transform.translation),
@@ -373,7 +474,7 @@ impl EntityState {
             if !seen.insert(current) {
                 return None;
             }
-            chain.push(self.transforms.get(&current)?.transform());
+            chain.push(self.transform(current)?.transform());
             cursor = self.transform_parents.get(&current).copied();
         }
         chain.into_iter().rev().reduce(EntityTransform::compose)
@@ -394,42 +495,35 @@ impl EntityState {
             },
         );
         if let Some(value) = definition.transform {
-            self.transforms.insert(id, value);
+            self.components.insert_unchecked(id, value);
         }
         if let Some(value) = definition.bounds {
-            self.bounds.insert(id, value);
+            self.components.insert_unchecked(id, value);
         }
         if let Some(value) = definition.collision {
-            self.collisions.insert(id, value);
+            self.components.insert_unchecked(id, value);
         }
         if let Some(value) = definition.renderable {
-            self.renderables.insert(id, value);
+            self.components.insert_unchecked(id, value);
         }
         if let Some(value) = definition.kinematic {
-            self.kinematics.insert(id, value);
+            self.components.insert_unchecked(id, value);
         }
         if let Some(value) = definition.controller {
-            self.controllers.insert(id, value);
+            self.components.insert_unchecked(id, value);
         }
         if let Some(value) = definition.asset_binding {
-            self.asset_bindings.insert(id, value);
+            self.components.insert_unchecked(id, value);
         }
     }
 
-    pub(crate) fn remove_capabilities_and_relations(&mut self, entity: EntityId) {
-        self.transforms.remove(&entity);
-        self.bounds.remove(&entity);
-        self.collisions.remove(&entity);
-        self.renderables.remove(&entity);
-        self.kinematics.remove(&entity);
-        self.controllers.remove(&entity);
+    pub(crate) fn remove_components_and_relations(&mut self, entity: EntityId) {
+        self.components.remove_entity(entity);
         self.inactive_controllers.remove(&entity);
-        self.asset_bindings.remove(&entity);
         self.transform_parents.remove(&entity);
         self.transform_parents.retain(|_, parent| *parent != entity);
         self.containment.remove(&entity);
-        self.containment
-            .retain(|_, value| value.container != entity);
+        self.containment.retain(|_, container| *container != entity);
         self.derived_from.remove(&entity);
     }
 }

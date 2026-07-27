@@ -66,12 +66,11 @@ impl TransformService {
             EntityLifecycle::Disabled => return Err(TransformError::Disabled { entity }),
             EntityLifecycle::Tombstoned => return Err(TransformError::Tombstoned { entity }),
         }
-        if !state.transforms.contains_key(&entity) {
+        if state.transform(entity).is_none() {
             return Err(TransformError::MissingTransform { entity });
         }
         if state
-            .collisions
-            .get(&entity)
+            .collision(entity)
             .is_some_and(|collision| collision.enabled && collision.static_collider)
         {
             return Err(TransformError::Immovable { entity });
@@ -94,8 +93,7 @@ impl TransformService {
         let entity = command.entity();
         self.eligible(state, entity)?;
         let before = state
-            .transforms
-            .get(&entity)
+            .transform(entity)
             .expect("eligibility checked")
             .transform();
         let after = match command {
@@ -110,9 +108,9 @@ impl TransformService {
         }
         let revision_before = state.revision;
         if before != after {
-            state.transforms.insert(
+            state.components.insert_unchecked(
                 entity,
-                crate::model::TransformCapability::from_transform(after),
+                crate::model::TransformComponent::from_transform(after),
             );
             state.revision = state.revision.saturating_add(1);
         }
@@ -124,8 +122,7 @@ impl TransformService {
             after,
             projection_changed: before != after
                 && state
-                    .renderables
-                    .get(&entity)
+                    .renderable(entity)
                     .is_some_and(|renderable| renderable.visible),
         })
     }

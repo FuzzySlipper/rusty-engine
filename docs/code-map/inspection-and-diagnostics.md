@@ -29,6 +29,10 @@ Route read-only structured inspection of Engine-owned facts and the
 ## Public downstream surfaces
 
 - The library accepts owner facts and returns structured read-only reports.
+- Entity reports enumerate every registered stable component type in
+  deterministic order, report its instance count, and list the exact component
+  identities present on a focused entity. Store-side entity samples remain
+  bounded and explicitly report truncation.
 - The `rusty-inspect` binary is a tool surface for humans and agents.
 - Consumers may render diagnostics, but the diagnostics do not redefine the
   facts they observe.

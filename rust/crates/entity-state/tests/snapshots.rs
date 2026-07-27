@@ -2,7 +2,7 @@ use core_assets::{AssetHash, AssetId, AssetReference, AssetVersionReq};
 use core_ids::{EntityId, ProcessId, SceneId, SceneNodeId, TagId};
 use core_math::Vec3;
 use entity_state::{
-    decode_snapshot, encode_durable_snapshot, encode_snapshot, ControllerCapability,
+    decode_snapshot, encode_durable_snapshot, encode_snapshot, ControllerComponent,
     EntityAuthoringService, EntityDefinition, EntityLifecycle, EntitySource, EntityState,
 };
 
@@ -15,7 +15,7 @@ fn asset(text: &str) -> AssetReference {
 }
 
 #[test]
-fn schema_three_round_trip_preserves_source_labels_capabilities_and_relationships() {
+fn schema_three_round_trip_preserves_source_labels_components_and_relationships() {
     let parent = EntityId::new(1);
     let child = EntityId::new(2);
     let mut state = EntityState::from_definitions([
@@ -31,7 +31,7 @@ fn schema_three_round_trip_preserves_source_labels_capabilities_and_relationship
         EntityDefinition::new(child, "child")
             .with_transform(Vec3::new(2.0, 0.0, 0.0))
             .with_collision(false, false)
-            .with_controller(ControllerCapability::Process(ProcessId::new(9)))
+            .with_controller(ControllerComponent::Process(ProcessId::new(9)))
             .with_transform_parent(parent)
             .with_containment(parent)
             .with_derivation(parent),
@@ -75,7 +75,7 @@ fn durable_snapshot_drops_tooling_and_reroots_retained_children() {
 }
 
 #[test]
-fn tombstones_round_trip_without_resurrecting_capabilities() {
+fn tombstones_round_trip_without_resurrecting_components() {
     let id = EntityId::new(20);
     let mut state = EntityState::from_definitions([EntityDefinition::new(id, "spent")
         .with_transform(Vec3::ONE)

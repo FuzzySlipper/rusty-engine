@@ -35,6 +35,9 @@ entity, authored-scene, voxel, and presentation facts.
   TypeScript contracts.
 - Projection crates translate owner facts into complete frames; they do not
   become a second source of gameplay truth.
+- Entity projection reads typed `EntityState` component views. Registering a
+  new downstream component does not implicitly render it; its owning consumer
+  must deliberately project any presentation meaning.
 - Downstream hosts may consume the frame through any conforming backend.
 
 ## Private or forbidden paths
@@ -42,6 +45,8 @@ entity, authored-scene, voxel, and presentation facts.
 - Do not add browser globals, HTTP, URL routes, DOM events, WebGL, or
   Playwright-only seams.
 - Do not store live renderer handles or infer gameplay state from presentation.
+- Do not add renderer behavior, resource loading, or projection callbacks to
+  entity components or the component registry.
 - Do not change the Rust frame without updating TypeScript decoding and golden
   evidence.
 - Do not depend on historical Asha runtime or bridge concepts.

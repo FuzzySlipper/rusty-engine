@@ -39,10 +39,18 @@ imports, prefab resolution, and authored scene admission and editing.
   loader.
 - Consumers decide where content bodies live and how admitted scene entities
   become game-owned live state.
+- `authored-scene` admission produces validated built-in `EntityDefinition`
+  data and commits it through `EntityAuthoringService`; those built-ins enter
+  the same typed store used by registered downstream components. A downstream
+  project schema remains responsible for admitting its additional component
+  families explicitly.
 
 ## Private or forbidden paths
 
 - Do not perform ambient filesystem I/O from data components.
+- Do not teach the generic component store to interpret one product's scene or
+  project schema, and do not serialize runtime-only components merely because
+  an authored scene mentions their owner.
 - Do not let a content manifest become an unbounded catch-all for game policy.
 - Do not make fallback rendering authoritative for collision or gameplay.
 - Do not mutate generated artifacts or manifests without their validating
@@ -70,4 +78,3 @@ Focused regressions live in each crate's `tests/` directory.
 - Scene recipe generation: [Environment authoring](environment-authoring.md).
 - Voxel-specific artifacts: [Voxel assets and conversion](voxel-assets-and-conversion.md).
 - Authoring UI and external-project operations: [Studio](studio.md).
-

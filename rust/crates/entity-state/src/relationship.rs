@@ -2,9 +2,7 @@ use std::collections::BTreeSet;
 
 use core_ids::EntityId;
 
-use crate::model::{
-    ContainmentCapability, EntityDefinition, EntityLifecycle, EntityState, TransformCapability,
-};
+use crate::model::{EntityDefinition, EntityLifecycle, EntityState, TransformComponent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransformParentMode {
@@ -254,8 +252,10 @@ pub(crate) fn reroot_transform_children(state: &mut EntityState, parent: EntityI
     for child in children {
         let world = state.world_transform(child);
         state.transform_parents.remove(&child);
-        if let (Some(world), Some(local)) = (world, state.transforms.get_mut(&child)) {
-            *local = TransformCapability::from_transform(world);
+        if let Some(world) = world {
+            state
+                .components
+                .insert_unchecked(child, TransformComponent::from_transform(world));
         }
     }
 }
@@ -290,7 +290,7 @@ fn validate_command(
             let links = state
                 .containment
                 .iter()
-                .map(|(entity, value)| (*entity, value.container))
+                .map(|(entity, container)| (*entity, *container))
                 .collect();
             ensure_acyclic(&links, RelationshipKind::Containment, child, container)?;
         }
@@ -335,9 +335,9 @@ fn mutate(state: &mut EntityState, command: RelationshipCommand) {
                 .flatten();
             state.transform_parents.insert(child, parent);
             if let (Some(world), Some(parent_world)) = (world, state.world_transform(parent)) {
-                state.transforms.insert(
+                state.components.insert_unchecked(
                     child,
-                    TransformCapability::from_transform(parent_world.relative_to(world)),
+                    TransformComponent::from_transform(parent_world.relative_to(world)),
                 );
             }
         }
@@ -346,14 +346,12 @@ fn mutate(state: &mut EntityState, command: RelationshipCommand) {
             state.transform_parents.remove(&child);
             if let Some(world) = world {
                 state
-                    .transforms
-                    .insert(child, TransformCapability::from_transform(world));
+                    .components
+                    .insert_unchecked(child, TransformComponent::from_transform(world));
             }
         }
         RelationshipCommand::SetContainment { child, container } => {
-            state
-                .containment
-                .insert(child, ContainmentCapability { container });
+            state.containment.insert(child, container);
         }
         RelationshipCommand::ClearContainment { child } => {
             state.containment.remove(&child);
@@ -384,7 +382,7 @@ fn readout(state: &EntityState, entity: EntityId) -> RelationshipReadout {
     RelationshipReadout {
         entity,
         transform_parent: state.transform_parents.get(&entity).copied(),
-        contained_in: state.containment.get(&entity).map(|value| value.container),
+        contained_in: state.containment.get(&entity).copied(),
         derived_from: state.derived_from.get(&entity).copied(),
     }
 }
@@ -421,7 +419,7 @@ fn ensure_pair(
 }
 
 fn ensure_transform(state: &EntityState, entity: EntityId) -> Result<(), RelationshipError> {
-    if state.transforms.contains_key(&entity) {
+    if state.transform(entity).is_some() {
         Ok(())
     } else {
         Err(RelationshipError::MissingTransform { entity })

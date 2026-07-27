@@ -119,13 +119,10 @@ struct ProjectedEntity {
 
 impl ProjectedEntity {
     fn from_state(entities: &EntityState, entity: EntityId) -> Self {
-        let transform = entities
-            .transforms
-            .get(&entity)
-            .map(|value| value.translation);
-        let collision = entities.collisions.get(&entity);
-        let visible = entities.renderables.get(&entity).map(|value| value.visible);
-        let velocity = entities.kinematics.get(&entity).map(|value| value.velocity);
+        let transform = entities.transform(entity).map(|value| value.translation);
+        let collision = entities.collision(entity);
+        let visible = entities.renderable(entity).map(|value| value.visible);
+        let velocity = entities.kinematic(entity).map(|value| value.velocity);
         Self {
             original_translation: transform,
             next_translation: transform,
@@ -260,11 +257,11 @@ pub(crate) fn apply_batch(
             let after = state
                 .next_translation
                 .expect("validated transform presence");
-            entities
-                .transforms
-                .get_mut(&entity)
-                .expect("validated transform presence")
-                .translation = after;
+            let mut transform = *entities
+                .transform(entity)
+                .expect("validated transform presence");
+            transform.translation = after;
+            entities.components.insert_unchecked(entity, transform);
             facts.push(EntityFact::TranslationChanged {
                 entity,
                 before,
@@ -279,11 +276,11 @@ pub(crate) fn apply_batch(
             let after = state
                 .next_collision_enabled
                 .expect("validated collision presence");
-            entities
-                .collisions
-                .get_mut(&entity)
-                .expect("validated collision presence")
-                .enabled = after;
+            let mut collision = *entities
+                .collision(entity)
+                .expect("validated collision presence");
+            collision.enabled = after;
+            entities.components.insert_unchecked(entity, collision);
             facts.push(EntityFact::CollisionChanged {
                 entity,
                 before,
@@ -296,11 +293,12 @@ pub(crate) fn apply_batch(
                 .original_visible
                 .expect("validated renderable presence");
             let after = state.next_visible.expect("validated renderable presence");
-            entities
-                .renderables
-                .get_mut(&entity)
+            let mut renderable = entities
+                .renderable(entity)
                 .expect("validated renderable presence")
-                .visible = after;
+                .clone();
+            renderable.visible = after;
+            entities.components.insert_unchecked(entity, renderable);
             facts.push(EntityFact::VisibilityChanged {
                 entity,
                 before,
@@ -313,11 +311,11 @@ pub(crate) fn apply_batch(
                 .original_velocity
                 .expect("validated kinematic presence");
             let after = state.next_velocity.expect("validated kinematic presence");
-            entities
-                .kinematics
-                .get_mut(&entity)
-                .expect("validated kinematic presence")
-                .velocity = after;
+            let mut kinematic = *entities
+                .kinematic(entity)
+                .expect("validated kinematic presence");
+            kinematic.velocity = after;
+            entities.components.insert_unchecked(entity, kinematic);
             facts.push(EntityFact::KinematicVelocityChanged {
                 entity,
                 before,

@@ -1,10 +1,10 @@
 use core_ids::{EntityId, ProcessId, TagId};
 use core_math::Vec3;
 use entity_state::{
-    encode_snapshot, ActivatableCapabilityKind, CapabilityActivation, CapabilityActivationState,
-    CollisionCapability, ControllerCapability, EntityAuthoringError, EntityAuthoringService,
-    EntityCapability, EntityCapabilityKind, EntityDefinition, EntityLifecycle, EntityState,
-    KinematicCapability, TransformCapability,
+    encode_snapshot, ActivatableComponentKind, CollisionComponent, ComponentActivation,
+    ComponentActivationState, ControllerComponent, EntityAuthoringError, EntityAuthoringService,
+    EntityDefinition, EntityLifecycle, EntityState, KinematicComponent, TransformComponent,
+    KINEMATIC_COMPONENT_TYPE_ID,
 };
 
 #[test]
@@ -89,7 +89,7 @@ fn repeated_lifecycle_and_activation_transitions_are_rejected_without_mutation()
     let mut state = EntityState::from_definitions([EntityDefinition::new(id, "actor")
         .with_transform(Vec3::ZERO)
         .with_collision(true, false)
-        .with_controller(ControllerCapability::Process(ProcessId::new(5)))])
+        .with_controller(ControllerComponent::Process(ProcessId::new(5)))])
     .expect("fixture");
 
     let before = encode_snapshot(&state).unwrap();
@@ -104,16 +104,16 @@ fn repeated_lifecycle_and_activation_transitions_are_rejected_without_mutation()
     assert_eq!(encode_snapshot(&state).unwrap(), before);
 
     assert!(matches!(
-        service.set_capability_activation(
+        service.set_component_activation(
             &mut state,
             0,
             id,
-            ActivatableCapabilityKind::Controller,
-            CapabilityActivation::Active,
+            ActivatableComponentKind::Controller,
+            ComponentActivation::Active,
         ),
         Err(EntityAuthoringError::Activation(
-            entity_state::CapabilityActivationError::AlreadyInState {
-                state: CapabilityActivationState::Active,
+            entity_state::ComponentActivationError::AlreadyInState {
+                state: ComponentActivationState::Active,
                 ..
             }
         ))
@@ -122,43 +122,43 @@ fn repeated_lifecycle_and_activation_transitions_are_rejected_without_mutation()
 }
 
 #[test]
-fn capabilities_are_typed_and_activation_is_distinct_from_entity_lifecycle() {
+fn components_are_typed_and_activation_is_distinct_from_entity_lifecycle() {
     let service = EntityAuthoringService;
     let id = EntityId::new(20);
     let mut state = EntityState::from_definitions([EntityDefinition::new(id, "actor")
         .with_transform(Vec3::ZERO)
         .with_collision(true, false)
-        .with_controller(ControllerCapability::Process(ProcessId::new(4)))])
+        .with_controller(ControllerComponent::Process(ProcessId::new(4)))])
     .expect("fixture");
 
     let readout = state
-        .capability_activation(id, ActivatableCapabilityKind::Collision)
+        .component_activation(id, ActivatableComponentKind::Collision)
         .expect("collision activation");
-    assert_eq!(readout.state, CapabilityActivationState::Active);
+    assert_eq!(readout.state, ComponentActivationState::Active);
     assert!(readout.effective);
 
     service.disable(&mut state, 0, id).expect("disable entity");
     let readout = state
-        .capability_activation(id, ActivatableCapabilityKind::Collision)
+        .component_activation(id, ActivatableComponentKind::Collision)
         .expect("collision activation");
-    assert_eq!(readout.state, CapabilityActivationState::Active);
+    assert_eq!(readout.state, ComponentActivationState::Active);
     assert!(!readout.effective);
 
     service
-        .set_capability_activation(
+        .set_component_activation(
             &mut state,
             1,
             id,
-            ActivatableCapabilityKind::Controller,
-            CapabilityActivation::Inactive,
+            ActivatableComponentKind::Controller,
+            ComponentActivation::Inactive,
         )
         .expect("controller deactivated");
     assert_eq!(
         state
-            .capability_activation(id, ActivatableCapabilityKind::Controller)
+            .component_activation(id, ActivatableComponentKind::Controller)
             .expect("controller readout")
             .state,
-        CapabilityActivationState::Inactive
+        ComponentActivationState::Inactive
     );
 }
 
@@ -168,57 +168,87 @@ fn attachment_validation_prevents_orphan_kinematics_and_transform_removal() {
     let id = EntityId::new(30);
     let mut state =
         EntityState::from_definitions([EntityDefinition::new(id, "moving")]).expect("fixture");
+    assert_eq!(
+        state
+            .component_activation(id, ActivatableComponentKind::Collision)
+            .unwrap()
+            .state,
+        ComponentActivationState::Absent
+    );
+    let kinematic_revision = state.component_revision::<KinematicComponent>(id).unwrap();
     assert!(matches!(
-        service.attach_capability(
+        service.attach_component(
             &mut state,
-            0,
+            kinematic_revision.clone(),
             id,
-            EntityCapability::Kinematic(KinematicCapability {
+            KinematicComponent {
                 half_extents: Vec3::ONE,
                 velocity: Vec3::ZERO,
-            })
+            }
         ),
-        Err(EntityAuthoringError::InvalidCapability {
-            capability: EntityCapabilityKind::Kinematic,
+        Err(EntityAuthoringError::InvalidComponent {
+            component,
             ..
-        })
+        }) if component.as_str() == KINEMATIC_COMPONENT_TYPE_ID
     ));
+    let transform_revision = state.component_revision::<TransformComponent>(id).unwrap();
     service
-        .attach_capability(
+        .attach_component(
             &mut state,
-            0,
+            transform_revision,
             id,
-            EntityCapability::Transform(TransformCapability::from_transform(
-                entity_state::EntityTransform::at(Vec3::ZERO),
-            )),
+            TransformComponent::from_transform(entity_state::EntityTransform::at(Vec3::ZERO)),
         )
         .expect("transform attached");
     service
-        .attach_capability(
+        .attach_component(
             &mut state,
-            1,
+            kinematic_revision,
             id,
-            EntityCapability::Kinematic(KinematicCapability {
+            KinematicComponent {
                 half_extents: Vec3::ONE,
                 velocity: Vec3::ZERO,
-            }),
+            },
         )
         .expect("kinematic attached");
+    let transform_revision = state.component_revision::<TransformComponent>(id).unwrap();
     assert!(matches!(
-        service.detach_capability(&mut state, 2, id, EntityCapabilityKind::Transform),
-        Err(EntityAuthoringError::CapabilityInUse { .. })
+        service.detach_component::<TransformComponent>(&mut state, transform_revision, id),
+        Err(EntityAuthoringError::ComponentInUse { .. })
     ));
     assert_eq!(state.revision(), 2);
 
+    let collision_revision = state.component_revision::<CollisionComponent>(id).unwrap();
     service
-        .attach_capability(
+        .attach_component(
             &mut state,
-            2,
+            collision_revision,
             id,
-            EntityCapability::Collision(CollisionCapability {
+            CollisionComponent {
                 enabled: false,
                 static_collider: false,
-            }),
+            },
         )
         .expect("collision attached");
+    let collision = state
+        .component_activation(id, ActivatableComponentKind::Collision)
+        .expect("collision readout");
+    assert_eq!(collision.state, ComponentActivationState::Inactive);
+    assert!(!collision.effective);
+    service
+        .set_component_activation(
+            &mut state,
+            3,
+            id,
+            ActivatableComponentKind::Collision,
+            ComponentActivation::Active,
+        )
+        .expect("collision activated");
+    assert!(state.active_collision(id).is_some());
+    service.disable(&mut state, 4, id).expect("entity disabled");
+    let collision = state
+        .component_activation(id, ActivatableComponentKind::Collision)
+        .expect("collision readout");
+    assert_eq!(collision.state, ComponentActivationState::Active);
+    assert!(!collision.effective);
 }

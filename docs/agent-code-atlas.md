@@ -38,7 +38,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 
 | Area | Map |
 |---|---|
-| Entity capabilities, atomic mutation, relationships, snapshots, state machines | [Entity state and state machines](code-map/entity-state-and-state-machines.md) |
+| Entity components, atomic mutation, relationships, snapshots, state machines | [Entity state and state machines](code-map/entity-state-and-state-machines.md) |
 | Canonical voxel space, collision, navigation, mesh, motion, triggers, edits | [Spatial mechanisms](code-map/spatial-mechanisms.md) |
 | Content manifests, catalogs, imports, prefabs, and authored scenes | [Content, assets, and scenes](code-map/content-assets-and-scenes.md) |
 | Stored voxel artifacts, annotations, GLB conversion, and object playback | [Voxel assets and conversion](code-map/voxel-assets-and-conversion.md) |
@@ -84,4 +84,3 @@ curated explanations into a generated governance system.
 - This does not make internal paths public to downstream consumers.
 - This does not transfer product policy, browser behavior, or Studio ownership
   into ordinary Rust provider crates.
-

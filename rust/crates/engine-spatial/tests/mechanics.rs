@@ -356,7 +356,7 @@ fn non_solid_trigger_senses_kinematic_traversal_with_one_enter_and_one_exit() {
     let subject = EntityId::new(20);
     let mut entities = EntityState::from_definitions([
         // A registered trigger volume with bounds and transform but no collision
-        // capability: it must never become a solid motion obstacle.
+        // component: it must never become a solid motion obstacle.
         EntityDefinition::new(trigger, "sensor zone")
             .with_transform(Vec3::ZERO)
             .with_bounds(Vec3::splat(-0.5), Vec3::splat(0.5)),
@@ -439,7 +439,7 @@ fn entity_bounds_trigger_ignores_collision_state_and_keeps_geometry_diagnostics(
     let unbounded = EntityId::new(11);
     let subject = EntityId::new(20);
     let entities = EntityState::from_definitions([
-        // Collision capability present but disabled: irrelevant for an
+        // Collision component present but disabled: irrelevant for an
         // entity-bounds trigger and no longer reported as a diagnostic.
         EntityDefinition::new(sensor, "disabled-collision sensor")
             .with_transform(Vec3::ZERO)

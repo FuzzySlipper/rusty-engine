@@ -14,10 +14,10 @@ const MAX_TRIGGER_READ_ITEMS: usize = 100_000;
 /// Selects where a registered trigger derives its live AABB during reconciliation.
 ///
 /// `ActiveCollision` is the historical behavior: the trigger entity must be
-/// active and expose an enabled collision capability in addition to bounds and
+/// active and expose an enabled collision component in addition to bounds and
 /// a composed world transform. `EntityBounds` derives the same AABB from the
 /// canonical entity lifecycle, bounds, and composed world transform without
-/// consulting the collision capability at all, so the trigger entity never has
+/// consulting the collision component at all, so the trigger entity never has
 /// to become a solid motion obstacle to sense subjects. Subject eligibility is
 /// unaffected: subjects always require active collision regardless of the
 /// trigger's geometry source.

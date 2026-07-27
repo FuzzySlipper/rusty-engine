@@ -26,7 +26,7 @@ only these tagged request families:
 | `createSceneObject`, `deleteSceneObject`, `renameSceneObject`, `reparentSceneObject` | Mutate canonical hierarchy and lifecycle with expected project and scene identity. | `authored-scene`, `entity-state`, downstream admission, `content-store` |
 | `setSceneObjectTransform`, `setEntityTranslation` | Apply a full or legacy translation-only authored transform with expected project hash and scene revision. | `authored-scene`, downstream admission, `content-store` |
 | `setSceneObjectAppearance` | Replace empty, static-mesh, or typed light appearance and rerun resource/projection admission. | `authored-scene`, `asset-catalog`, render projection, downstream admission |
-| `setEntityCollision`, `setEntityKinematic` | Attach, replace, or remove named entity capabilities atomically. | `entity-state`, downstream spatial admission, `content-store` |
+| `setEntityCollision`, `setEntityKinematic` | Attach, replace, or remove named entity components atomically. | `entity-state`, downstream spatial admission, `content-store` |
 | `upsertMaterial` | Create or replace one stored material definition. | `asset-catalog`, downstream admission, `content-store` |
 | `prepareAssetImport`, `prepareAssetReimport`, `applyAssetImport`, `discardAssetImport` | Read bounded project/host mesh sources into a private deterministic plan, expose diagnostics/dependencies/generated locks, then install the exact candidate atomically or discard it. | `asset-import`, `asset-catalog`, project adapter, `content-store` |
 | `initializeVoxelAsset`, `duplicateVoxelAsset`, `replaceVoxelPalette` | Create or change canonical project-embedded voxel assets under exact asset guards. | `voxel-asset`, `engine-spatial`, project adapter |
@@ -155,7 +155,7 @@ not the Angular shell, implements the resulting camera movement, boost, pan, orb
   annotation/model-query/conversion/environment operations.
   It closes and starts a fresh adapter process to verify reconstruction and byte-preserving stale
   rejection. Real Chromium workflows then cover canonical hierarchy selection, observable
-  shared-renderer selection/full-transform preview/cancel, project/scene/entity/light/capability
+  shared-renderer selection/full-transform preview/cancel, project/scene/entity/light/component
   authoring, general asset import/dependency/lock/source-drift/reimport, restart-stable host-user
   camera/input preferences, transformed voxel picking,
   shared-renderer brush/conversion preview restoration, brush undo/redo, annotations, private-plan

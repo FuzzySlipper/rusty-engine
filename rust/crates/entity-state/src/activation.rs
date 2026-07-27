@@ -3,44 +3,44 @@ use core_ids::EntityId;
 use crate::model::{EntityLifecycle, EntityState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActivatableCapabilityKind {
+pub enum ActivatableComponentKind {
     Collision,
     Controller,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CapabilityActivation {
+pub enum ComponentActivation {
     Inactive,
     Active,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CapabilityActivationState {
+pub enum ComponentActivationState {
     Absent,
     Inactive,
     Active,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CapabilityActivationReadout {
+pub struct ComponentActivationReadout {
     pub entity: EntityId,
-    pub capability: ActivatableCapabilityKind,
-    pub state: CapabilityActivationState,
+    pub component: ActivatableComponentKind,
+    pub state: ComponentActivationState,
     pub effective: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CapabilityActivationReceipt {
+pub struct ComponentActivationReceipt {
     pub revision_before: u64,
     pub revision_after: u64,
     pub entity: EntityId,
-    pub capability: ActivatableCapabilityKind,
-    pub before: CapabilityActivationState,
-    pub after: CapabilityActivationState,
+    pub component: ActivatableComponentKind,
+    pub before: ComponentActivationState,
+    pub after: ComponentActivationState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CapabilityActivationError {
+pub enum ComponentActivationError {
     StaleRevision {
         expected: u64,
         actual: u64,
@@ -51,134 +51,132 @@ pub enum CapabilityActivationError {
     TombstonedEntity {
         entity: EntityId,
     },
-    CapabilityAbsent {
+    ComponentAbsent {
         entity: EntityId,
-        capability: ActivatableCapabilityKind,
+        component: ActivatableComponentKind,
     },
     AlreadyInState {
         entity: EntityId,
-        capability: ActivatableCapabilityKind,
-        state: CapabilityActivationState,
+        component: ActivatableComponentKind,
+        state: ComponentActivationState,
     },
 }
 
-impl std::fmt::Display for CapabilityActivationError {
+impl std::fmt::Display for ComponentActivationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "capability activation rejected: {self:?}")
+        write!(formatter, "component activation rejected: {self:?}")
     }
 }
 
-impl std::error::Error for CapabilityActivationError {}
+impl std::error::Error for ComponentActivationError {}
 
 impl EntityState {
-    pub fn capability_activation(
+    pub fn component_activation(
         &self,
         entity: EntityId,
-        capability: ActivatableCapabilityKind,
-    ) -> Result<CapabilityActivationReadout, CapabilityActivationError> {
-        capability_activation(self, entity, capability)
+        component: ActivatableComponentKind,
+    ) -> Result<ComponentActivationReadout, ComponentActivationError> {
+        component_activation(self, entity, component)
     }
 
-    pub fn set_capability_activation(
+    pub fn set_component_activation(
         &mut self,
         expected_revision: u64,
         entity: EntityId,
-        capability: ActivatableCapabilityKind,
-        activation: CapabilityActivation,
-    ) -> Result<CapabilityActivationReceipt, CapabilityActivationError> {
-        set_capability_activation(self, expected_revision, entity, capability, activation)
+        component: ActivatableComponentKind,
+        activation: ComponentActivation,
+    ) -> Result<ComponentActivationReceipt, ComponentActivationError> {
+        set_component_activation(self, expected_revision, entity, component, activation)
     }
 }
 
-pub fn capability_activation(
+pub fn component_activation(
     state: &EntityState,
     entity: EntityId,
-    capability: ActivatableCapabilityKind,
-) -> Result<CapabilityActivationReadout, CapabilityActivationError> {
+    component: ActivatableComponentKind,
+) -> Result<ComponentActivationReadout, ComponentActivationError> {
     let core = state
         .entities
         .get(&entity)
-        .ok_or(CapabilityActivationError::UnknownEntity { entity })?;
+        .ok_or(ComponentActivationError::UnknownEntity { entity })?;
     if core.lifecycle == EntityLifecycle::Tombstoned {
-        return Err(CapabilityActivationError::TombstonedEntity { entity });
+        return Err(ComponentActivationError::TombstonedEntity { entity });
     }
-    let capability_state = match capability {
-        ActivatableCapabilityKind::Collision => match state.collisions.get(&entity) {
-            None => CapabilityActivationState::Absent,
-            Some(value) if value.enabled => CapabilityActivationState::Active,
-            Some(_) => CapabilityActivationState::Inactive,
+    let component_state = match component {
+        ActivatableComponentKind::Collision => match state.collision(entity) {
+            None => ComponentActivationState::Absent,
+            Some(value) if value.enabled => ComponentActivationState::Active,
+            Some(_) => ComponentActivationState::Inactive,
         },
-        ActivatableCapabilityKind::Controller => {
-            if !state.controllers.contains_key(&entity) {
-                CapabilityActivationState::Absent
+        ActivatableComponentKind::Controller => {
+            if state.controller(entity).is_none() {
+                ComponentActivationState::Absent
             } else if state.inactive_controllers.contains(&entity) {
-                CapabilityActivationState::Inactive
+                ComponentActivationState::Inactive
             } else {
-                CapabilityActivationState::Active
+                ComponentActivationState::Active
             }
         }
     };
-    Ok(CapabilityActivationReadout {
+    Ok(ComponentActivationReadout {
         entity,
-        capability,
-        state: capability_state,
+        component,
+        state: component_state,
         effective: core.lifecycle == EntityLifecycle::Active
-            && capability_state == CapabilityActivationState::Active,
+            && component_state == ComponentActivationState::Active,
     })
 }
 
-pub fn set_capability_activation(
+pub fn set_component_activation(
     state: &mut EntityState,
     expected_revision: u64,
     entity: EntityId,
-    capability: ActivatableCapabilityKind,
-    activation: CapabilityActivation,
-) -> Result<CapabilityActivationReceipt, CapabilityActivationError> {
+    component: ActivatableComponentKind,
+    activation: ComponentActivation,
+) -> Result<ComponentActivationReceipt, ComponentActivationError> {
     if state.revision != expected_revision {
-        return Err(CapabilityActivationError::StaleRevision {
+        return Err(ComponentActivationError::StaleRevision {
             expected: expected_revision,
             actual: state.revision,
         });
     }
-    let before = capability_activation(state, entity, capability)?.state;
-    if before == CapabilityActivationState::Absent {
-        return Err(CapabilityActivationError::CapabilityAbsent { entity, capability });
+    let before = component_activation(state, entity, component)?.state;
+    if before == ComponentActivationState::Absent {
+        return Err(ComponentActivationError::ComponentAbsent { entity, component });
     }
     let after = match activation {
-        CapabilityActivation::Inactive => CapabilityActivationState::Inactive,
-        CapabilityActivation::Active => CapabilityActivationState::Active,
+        ComponentActivation::Inactive => ComponentActivationState::Inactive,
+        ComponentActivation::Active => ComponentActivationState::Active,
     };
     if before == after {
-        return Err(CapabilityActivationError::AlreadyInState {
+        return Err(ComponentActivationError::AlreadyInState {
             entity,
-            capability,
+            component,
             state: before,
         });
     }
     let revision_before = state.revision;
-    match capability {
-        ActivatableCapabilityKind::Collision => {
-            state
-                .collisions
-                .get_mut(&entity)
-                .expect("presence checked")
-                .enabled = activation == CapabilityActivation::Active;
+    match component {
+        ActivatableComponentKind::Collision => {
+            let mut collision = *state.collision(entity).expect("presence checked");
+            collision.enabled = activation == ComponentActivation::Active;
+            state.components.insert_unchecked(entity, collision);
         }
-        ActivatableCapabilityKind::Controller => match activation {
-            CapabilityActivation::Inactive => {
+        ActivatableComponentKind::Controller => match activation {
+            ComponentActivation::Inactive => {
                 state.inactive_controllers.insert(entity);
             }
-            CapabilityActivation::Active => {
+            ComponentActivation::Active => {
                 state.inactive_controllers.remove(&entity);
             }
         },
     }
     state.revision = state.revision.saturating_add(1);
-    Ok(CapabilityActivationReceipt {
+    Ok(ComponentActivationReceipt {
         revision_before,
         revision_after: state.revision,
         entity,
-        capability,
+        component,
         before,
         after,
     })

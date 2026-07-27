@@ -4,9 +4,9 @@ use core_assets::AssetReference;
 use core_ids::{EntityId, TagId};
 use core_math::Vec3;
 
-use crate::capability::{
-    AssetBindingCapability, BoundsCapability, CollisionCapability, ControllerCapability,
-    KinematicCapability, RenderableCapability, TransformCapability,
+use crate::components::{
+    AssetBindingComponent, BoundsComponent, CollisionComponent, ControllerComponent,
+    KinematicComponent, RenderableComponent, TransformComponent,
 };
 use crate::model::EntitySource;
 use crate::value::EntityTransform;
@@ -20,13 +20,13 @@ pub struct EntityDefinition {
     pub name: String,
     pub source: EntitySource,
     pub labels: Vec<TagId>,
-    pub transform: Option<TransformCapability>,
-    pub bounds: Option<BoundsCapability>,
-    pub collision: Option<CollisionCapability>,
-    pub renderable: Option<RenderableCapability>,
-    pub kinematic: Option<KinematicCapability>,
-    pub controller: Option<ControllerCapability>,
-    pub asset_binding: Option<AssetBindingCapability>,
+    pub transform: Option<TransformComponent>,
+    pub bounds: Option<BoundsComponent>,
+    pub collision: Option<CollisionComponent>,
+    pub renderable: Option<RenderableComponent>,
+    pub kinematic: Option<KinematicComponent>,
+    pub controller: Option<ControllerComponent>,
+    pub asset_binding: Option<AssetBindingComponent>,
     pub transform_parent: Option<EntityId>,
     pub contained_in: Option<EntityId>,
     pub derived_from: Option<EntityId>,
@@ -63,24 +63,24 @@ impl EntityDefinition {
     }
 
     pub fn with_transform(mut self, translation: Vec3) -> Self {
-        self.transform = Some(TransformCapability::from_transform(EntityTransform::at(
+        self.transform = Some(TransformComponent::from_transform(EntityTransform::at(
             translation,
         )));
         self
     }
 
     pub fn with_full_transform(mut self, transform: EntityTransform) -> Self {
-        self.transform = Some(TransformCapability::from_transform(transform));
+        self.transform = Some(TransformComponent::from_transform(transform));
         self
     }
 
     pub fn with_bounds(mut self, min: Vec3, max: Vec3) -> Self {
-        self.bounds = Some(BoundsCapability { min, max });
+        self.bounds = Some(BoundsComponent { min, max });
         self
     }
 
     pub fn with_collision(mut self, enabled: bool, static_collider: bool) -> Self {
-        self.collision = Some(CollisionCapability {
+        self.collision = Some(CollisionComponent {
             enabled,
             static_collider,
         });
@@ -88,7 +88,7 @@ impl EntityDefinition {
     }
 
     pub fn with_renderable(mut self, asset: impl Into<String>, visible: bool) -> Self {
-        self.renderable = Some(RenderableCapability {
+        self.renderable = Some(RenderableComponent {
             visible,
             asset: asset.into(),
         });
@@ -96,20 +96,20 @@ impl EntityDefinition {
     }
 
     pub fn with_kinematic(mut self, half_extents: Vec3, velocity: Vec3) -> Self {
-        self.kinematic = Some(KinematicCapability {
+        self.kinematic = Some(KinematicComponent {
             half_extents,
             velocity,
         });
         self
     }
 
-    pub fn with_controller(mut self, controller: ControllerCapability) -> Self {
+    pub fn with_controller(mut self, controller: ControllerComponent) -> Self {
         self.controller = Some(controller);
         self
     }
 
     pub fn with_asset_binding(mut self, asset: AssetReference) -> Self {
-        self.asset_binding = Some(AssetBindingCapability { asset });
+        self.asset_binding = Some(AssetBindingComponent { asset });
         self
     }
 
@@ -254,7 +254,7 @@ pub(crate) fn transform_is_valid(value: EntityTransform) -> bool {
         && (value.rotation.norm_squared() - 1.0).abs() <= 0.001
 }
 
-pub(crate) fn bounds_are_valid(value: BoundsCapability) -> bool {
+pub(crate) fn bounds_are_valid(value: BoundsComponent) -> bool {
     translation_is_valid(value.min)
         && translation_is_valid(value.max)
         && value.min.x <= value.max.x

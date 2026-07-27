@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
 use core_ids::EntityId;
-use entity_state::{BoundsCapability, EntityState};
+use entity_state::{BoundsComponent, EntityState};
 
 use crate::active_collision::active_entity_colliders;
 use crate::{CollisionRayHit, VoxelCollisionScene};
@@ -148,7 +148,7 @@ fn validate_and_normalize(
     Ok(query.direction.map(|value| value / length))
 }
 
-fn bounds_as_f64(bounds: BoundsCapability) -> ([f64; 3], [f64; 3]) {
+fn bounds_as_f64(bounds: BoundsComponent) -> ([f64; 3], [f64; 3]) {
     let min = bounds.min.to_array().map(f64::from);
     let max = bounds.max.to_array().map(f64::from);
     (min, max)

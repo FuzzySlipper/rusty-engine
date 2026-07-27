@@ -1,52 +1,17 @@
+use std::any::{Any, TypeId};
+
 use core_ids::{EntityId, TagId};
 
 use crate::activation::{
-    ActivatableCapabilityKind, CapabilityActivation, CapabilityActivationError,
-    CapabilityActivationReceipt,
+    ActivatableComponentKind, ComponentActivation, ComponentActivationError,
+    ComponentActivationReceipt,
 };
+use crate::component::{ComponentRevision, ComponentTypeId, EntityComponent};
 use crate::model::{
-    bounds_are_valid, half_extents_are_valid, transform_is_valid, validate_definition,
-    velocity_is_valid, AssetBindingCapability, BoundsCapability, CollisionCapability,
-    ControllerCapability, EntityDefinition, EntityDefinitionError, EntityLifecycle, EntityState,
-    KinematicCapability, RenderableCapability, TransformCapability,
+    ControllerComponent, EntityDefinition, EntityDefinitionError, EntityLifecycle, EntityState,
+    KinematicComponent, TransformComponent,
 };
 use crate::relationship::{reroot_transform_children, RelationshipError};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EntityCapabilityKind {
-    Transform,
-    Bounds,
-    Collision,
-    Renderable,
-    Kinematic,
-    Controller,
-    AssetBinding,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum EntityCapability {
-    Transform(TransformCapability),
-    Bounds(BoundsCapability),
-    Collision(CollisionCapability),
-    Renderable(RenderableCapability),
-    Kinematic(KinematicCapability),
-    Controller(ControllerCapability),
-    AssetBinding(AssetBindingCapability),
-}
-
-impl EntityCapability {
-    pub const fn kind(&self) -> EntityCapabilityKind {
-        match self {
-            Self::Transform(_) => EntityCapabilityKind::Transform,
-            Self::Bounds(_) => EntityCapabilityKind::Bounds,
-            Self::Collision(_) => EntityCapabilityKind::Collision,
-            Self::Renderable(_) => EntityCapabilityKind::Renderable,
-            Self::Kinematic(_) => EntityCapabilityKind::Kinematic,
-            Self::Controller(_) => EntityCapabilityKind::Controller,
-            Self::AssetBinding(_) => EntityCapabilityKind::AssetBinding,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntityAuthoringFact {
@@ -69,13 +34,17 @@ pub enum EntityAuthoringFact {
         entity: EntityId,
         label: TagId,
     },
-    CapabilityAttached {
+    ComponentAttached {
         entity: EntityId,
-        capability: EntityCapabilityKind,
+        component: ComponentTypeId,
     },
-    CapabilityDetached {
+    ComponentReplaced {
         entity: EntityId,
-        capability: EntityCapabilityKind,
+        component: ComponentTypeId,
+    },
+    ComponentDetached {
+        entity: EntityId,
+        component: ComponentTypeId,
     },
 }
 
@@ -92,9 +61,21 @@ pub enum EntityAuthoringError {
         expected: u64,
         actual: u64,
     },
+    ComponentRevisionScopeMismatch {
+        entity: EntityId,
+        component: ComponentTypeId,
+        guard_entity: EntityId,
+        guard_component: ComponentTypeId,
+    },
+    StaleComponentRevision {
+        entity: EntityId,
+        component: ComponentTypeId,
+        expected: u64,
+        actual: u64,
+    },
     InvalidDefinition(EntityDefinitionError),
     Relationship(RelationshipError),
-    Activation(CapabilityActivationError),
+    Activation(ComponentActivationError),
     UnknownEntity {
         entity: EntityId,
     },
@@ -117,22 +98,25 @@ pub enum EntityAuthoringError {
         entity: EntityId,
         label: TagId,
     },
-    CapabilityAlreadyPresent {
-        entity: EntityId,
-        capability: EntityCapabilityKind,
+    UnregisteredComponent {
+        rust_type: &'static str,
     },
-    CapabilityAbsent {
+    ComponentAlreadyPresent {
         entity: EntityId,
-        capability: EntityCapabilityKind,
+        component: ComponentTypeId,
     },
-    InvalidCapability {
+    ComponentAbsent {
         entity: EntityId,
-        capability: EntityCapabilityKind,
-        reason: &'static str,
+        component: ComponentTypeId,
     },
-    CapabilityInUse {
+    InvalidComponent {
         entity: EntityId,
-        capability: EntityCapabilityKind,
+        component: ComponentTypeId,
+        reason: String,
+    },
+    ComponentInUse {
+        entity: EntityId,
+        component: ComponentTypeId,
         reason: &'static str,
     },
 }
@@ -157,8 +141,8 @@ impl From<RelationshipError> for EntityAuthoringError {
     }
 }
 
-impl From<CapabilityActivationError> for EntityAuthoringError {
-    fn from(value: CapabilityActivationError) -> Self {
+impl From<ComponentActivationError> for EntityAuthoringError {
+    fn from(value: ComponentActivationError) -> Self {
         Self::Activation(value)
     }
 }
@@ -178,7 +162,7 @@ impl EntityAuthoringService {
         let mut staged = state.clone();
         let mut facts = Vec::with_capacity(definitions.len());
         for definition in &definitions {
-            validate_definition(definition)?;
+            crate::definition::validate_definition(definition)?;
             if staged.entities.contains_key(&definition.id) {
                 return Err(EntityAuthoringError::DuplicateEntity {
                     entity: definition.id,
@@ -204,7 +188,7 @@ impl EntityAuthoringService {
         ensure_revision(state, expected_revision)?;
         ensure_alive(state, entity)?;
         reroot_transform_children(state, entity);
-        state.remove_capabilities_and_relations(entity);
+        state.remove_components_and_relations(entity);
         state
             .entities
             .get_mut(&entity)
@@ -275,119 +259,120 @@ impl EntityAuthoringService {
         bump_with_fact(state, EntityAuthoringFact::LabelRemoved { entity, label })
     }
 
-    pub fn attach_capability(
+    pub fn attach_component<T: EntityComponent>(
         self,
         state: &mut EntityState,
-        expected_revision: u64,
+        expected_revision: ComponentRevision,
         entity: EntityId,
-        capability: EntityCapability,
+        component: T,
     ) -> Result<EntityAuthoringReceipt, EntityAuthoringError> {
-        ensure_revision(state, expected_revision)?;
         ensure_alive(state, entity)?;
-        validate_capability(state, entity, &capability)?;
-        let kind = capability.kind();
-        if capability_present(state, entity, kind) {
-            return Err(EntityAuthoringError::CapabilityAlreadyPresent {
+        let type_id = ensure_component_revision::<T>(state, entity, &expected_revision)?;
+        if state
+            .components
+            .has::<T>(entity)
+            .expect("registration checked")
+        {
+            return Err(EntityAuthoringError::ComponentAlreadyPresent {
                 entity,
-                capability: kind,
+                component: type_id,
             });
         }
-        match capability {
-            EntityCapability::Transform(value) => {
-                state.transforms.insert(entity, value);
-            }
-            EntityCapability::Bounds(value) => {
-                state.bounds.insert(entity, value);
-            }
-            EntityCapability::Collision(value) => {
-                state.collisions.insert(entity, value);
-            }
-            EntityCapability::Renderable(value) => {
-                state.renderables.insert(entity, value);
-            }
-            EntityCapability::Kinematic(value) => {
-                state.kinematics.insert(entity, value);
-            }
-            EntityCapability::Controller(value) => {
-                state.controllers.insert(entity, value);
-            }
-            EntityCapability::AssetBinding(value) => {
-                state.asset_bindings.insert(entity, value);
-            }
-        }
+        validate_component(state, entity, &component, &type_id)?;
+        state.components.insert_unchecked(entity, component);
         bump_with_fact(
             state,
-            EntityAuthoringFact::CapabilityAttached {
+            EntityAuthoringFact::ComponentAttached {
                 entity,
-                capability: kind,
+                component: type_id,
             },
         )
     }
 
-    pub fn detach_capability(
+    pub fn replace_component<T: EntityComponent + PartialEq>(
         self,
         state: &mut EntityState,
-        expected_revision: u64,
+        expected_revision: ComponentRevision,
         entity: EntityId,
-        capability: EntityCapabilityKind,
+        component: T,
     ) -> Result<EntityAuthoringReceipt, EntityAuthoringError> {
-        ensure_revision(state, expected_revision)?;
         ensure_alive(state, entity)?;
-        if !capability_present(state, entity, capability) {
-            return Err(EntityAuthoringError::CapabilityAbsent { entity, capability });
-        }
-        if capability == EntityCapabilityKind::Transform && state.kinematics.contains_key(&entity) {
-            return Err(EntityAuthoringError::CapabilityInUse {
+        let type_id = ensure_component_revision::<T>(state, entity, &expected_revision)?;
+        let before = state
+            .components
+            .get::<T>(entity)
+            .expect("registration checked")
+            .ok_or_else(|| EntityAuthoringError::ComponentAbsent {
                 entity,
-                capability,
-                reason: "kinematic capability requires transform",
+                component: type_id.clone(),
+            })?;
+        validate_component(state, entity, &component, &type_id)?;
+        if before == &component {
+            return Ok(EntityAuthoringReceipt {
+                revision_before: state.revision,
+                revision_after: state.revision,
+                facts: Vec::new(),
             });
         }
-        match capability {
-            EntityCapabilityKind::Transform => {
-                reroot_transform_children(state, entity);
-                state.transform_parents.remove(&entity);
-                state.transforms.remove(&entity);
-            }
-            EntityCapabilityKind::Bounds => {
-                state.bounds.remove(&entity);
-            }
-            EntityCapabilityKind::Collision => {
-                state.collisions.remove(&entity);
-            }
-            EntityCapabilityKind::Renderable => {
-                state.renderables.remove(&entity);
-            }
-            EntityCapabilityKind::Kinematic => {
-                state.kinematics.remove(&entity);
-            }
-            EntityCapabilityKind::Controller => {
-                state.controllers.remove(&entity);
-                state.inactive_controllers.remove(&entity);
-            }
-            EntityCapabilityKind::AssetBinding => {
-                state.asset_bindings.remove(&entity);
-            }
-        }
+        state.components.insert_unchecked(entity, component);
         bump_with_fact(
             state,
-            EntityAuthoringFact::CapabilityDetached { entity, capability },
+            EntityAuthoringFact::ComponentReplaced {
+                entity,
+                component: type_id,
+            },
         )
     }
 
-    pub fn set_capability_activation(
+    pub fn detach_component<T: EntityComponent>(
+        self,
+        state: &mut EntityState,
+        expected_revision: ComponentRevision,
+        entity: EntityId,
+    ) -> Result<EntityAuthoringReceipt, EntityAuthoringError> {
+        ensure_alive(state, entity)?;
+        let type_id = ensure_component_revision::<T>(state, entity, &expected_revision)?;
+        if !state
+            .components
+            .has::<T>(entity)
+            .expect("registration checked")
+        {
+            return Err(EntityAuthoringError::ComponentAbsent {
+                entity,
+                component: type_id,
+            });
+        }
+        validate_detach::<T>(state, entity, &type_id)?;
+        if TypeId::of::<T>() == TypeId::of::<TransformComponent>() {
+            reroot_transform_children(state, entity);
+            state.transform_parents.remove(&entity);
+        }
+        state.components.remove_unchecked::<T>(entity);
+        if TypeId::of::<T>() == TypeId::of::<ControllerComponent>() {
+            state.inactive_controllers.remove(&entity);
+        }
+        bump_with_fact(
+            state,
+            EntityAuthoringFact::ComponentDetached {
+                entity,
+                component: type_id,
+            },
+        )
+    }
+
+    pub fn set_component_activation(
         self,
         state: &mut EntityState,
         expected_revision: u64,
         entity: EntityId,
-        capability: ActivatableCapabilityKind,
-        activation: CapabilityActivation,
-    ) -> Result<CapabilityActivationReceipt, EntityAuthoringError> {
-        Ok(crate::activation::set_capability_activation(
+        component: ActivatableComponentKind,
+        activation: ComponentActivation,
+    ) -> Result<ComponentActivationReceipt, EntityAuthoringError> {
+        Ok(crate::activation::set_component_activation(
             state,
             expected_revision,
             entity,
-            capability,
+            component,
             activation,
         )?)
     }
@@ -429,6 +414,105 @@ impl EntityAuthoringService {
             },
         )
     }
+}
+
+fn registered_type_id<T: EntityComponent>(
+    state: &EntityState,
+) -> Result<ComponentTypeId, EntityAuthoringError> {
+    state.components.type_id_for::<T>().cloned().map_err(|_| {
+        EntityAuthoringError::UnregisteredComponent {
+            rust_type: std::any::type_name::<T>(),
+        }
+    })
+}
+
+fn ensure_component_revision<T: EntityComponent>(
+    state: &EntityState,
+    entity: EntityId,
+    expected: &ComponentRevision,
+) -> Result<ComponentTypeId, EntityAuthoringError> {
+    let component = registered_type_id::<T>(state)?;
+    if expected.entity != entity || expected.component != component {
+        return Err(EntityAuthoringError::ComponentRevisionScopeMismatch {
+            entity,
+            component,
+            guard_entity: expected.entity,
+            guard_component: expected.component.clone(),
+        });
+    }
+    let actual = state
+        .components
+        .revision::<T>(entity)
+        .expect("registration checked");
+    if expected.revision != actual {
+        return Err(EntityAuthoringError::StaleComponentRevision {
+            entity,
+            component,
+            expected: expected.revision,
+            actual,
+        });
+    }
+    Ok(component)
+}
+
+fn validate_component<T: EntityComponent>(
+    state: &EntityState,
+    entity: EntityId,
+    value: &T,
+    type_id: &ComponentTypeId,
+) -> Result<(), EntityAuthoringError> {
+    state
+        .components
+        .validate(value)
+        .map_err(|error| EntityAuthoringError::InvalidComponent {
+            entity,
+            component: type_id.clone(),
+            reason: error.reason,
+        })?;
+    if TypeId::of::<T>() == TypeId::of::<KinematicComponent>() && state.transform(entity).is_none()
+    {
+        return Err(EntityAuthoringError::InvalidComponent {
+            entity,
+            component: type_id.clone(),
+            reason: "transform component is absent".to_string(),
+        });
+    }
+    if TypeId::of::<T>() == TypeId::of::<TransformComponent>()
+        && state
+            .collision(entity)
+            .is_some_and(|collision| collision.enabled && collision.static_collider)
+    {
+        let requested = (value as &dyn Any)
+            .downcast_ref::<TransformComponent>()
+            .expect("type identity checked");
+        if state
+            .transform(entity)
+            .is_some_and(|current| current != requested)
+        {
+            return Err(EntityAuthoringError::ComponentInUse {
+                entity,
+                component: type_id.clone(),
+                reason: "active static collision prevents transform replacement",
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_detach<T: EntityComponent>(
+    state: &EntityState,
+    entity: EntityId,
+    type_id: &ComponentTypeId,
+) -> Result<(), EntityAuthoringError> {
+    if TypeId::of::<T>() == TypeId::of::<TransformComponent>() && state.kinematic(entity).is_some()
+    {
+        return Err(EntityAuthoringError::ComponentInUse {
+            entity,
+            component: type_id.clone(),
+            reason: "kinematic component requires transform",
+        });
+    }
+    Ok(())
 }
 
 fn ensure_revision(state: &EntityState, expected: u64) -> Result<(), EntityAuthoringError> {
@@ -480,57 +564,4 @@ fn bump_with_fact(
         revision_after: state.revision,
         facts: vec![fact],
     })
-}
-
-fn capability_present(
-    state: &EntityState,
-    entity: EntityId,
-    capability: EntityCapabilityKind,
-) -> bool {
-    match capability {
-        EntityCapabilityKind::Transform => state.transforms.contains_key(&entity),
-        EntityCapabilityKind::Bounds => state.bounds.contains_key(&entity),
-        EntityCapabilityKind::Collision => state.collisions.contains_key(&entity),
-        EntityCapabilityKind::Renderable => state.renderables.contains_key(&entity),
-        EntityCapabilityKind::Kinematic => state.kinematics.contains_key(&entity),
-        EntityCapabilityKind::Controller => state.controllers.contains_key(&entity),
-        EntityCapabilityKind::AssetBinding => state.asset_bindings.contains_key(&entity),
-    }
-}
-
-fn validate_capability(
-    state: &EntityState,
-    entity: EntityId,
-    capability: &EntityCapability,
-) -> Result<(), EntityAuthoringError> {
-    let invalid = |capability, reason| EntityAuthoringError::InvalidCapability {
-        entity,
-        capability,
-        reason,
-    };
-    match capability {
-        EntityCapability::Transform(value) if !transform_is_valid(value.transform()) => Err(
-            invalid(EntityCapabilityKind::Transform, "invalid transform"),
-        ),
-        EntityCapability::Bounds(value) if !bounds_are_valid(*value) => {
-            Err(invalid(EntityCapabilityKind::Bounds, "invalid bounds"))
-        }
-        EntityCapability::Renderable(value) if value.asset.trim().is_empty() => Err(invalid(
-            EntityCapabilityKind::Renderable,
-            "render asset is empty",
-        )),
-        EntityCapability::Kinematic(value) if !state.transforms.contains_key(&entity) => Err(
-            invalid(EntityCapabilityKind::Kinematic, "transform is absent"),
-        ),
-        EntityCapability::Kinematic(value)
-            if !half_extents_are_valid(value.half_extents)
-                || !velocity_is_valid(value.velocity) =>
-        {
-            Err(invalid(
-                EntityCapabilityKind::Kinematic,
-                "invalid half extents or velocity",
-            ))
-        }
-        _ => Ok(()),
-    }
 }

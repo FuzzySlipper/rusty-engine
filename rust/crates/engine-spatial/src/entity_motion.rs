@@ -1,7 +1,7 @@
 use core_ids::EntityId;
 use core_math::Vec3;
 use entity_state::{
-    BoundsCapability, EntityState, EntityTransform, Quat, TransformCommand, TransformError,
+    BoundsComponent, EntityState, EntityTransform, Quat, TransformCommand, TransformError,
     TransformReceipt, TransformService,
 };
 
@@ -424,21 +424,21 @@ fn yaw_pitch_from_quat(value: Quat) -> (f32, f32) {
     (yaw.to_degrees(), pitch.to_degrees())
 }
 
-fn active_obstacles(state: &EntityState, mover: EntityId) -> Vec<(EntityId, BoundsCapability)> {
+fn active_obstacles(state: &EntityState, mover: EntityId) -> Vec<(EntityId, BoundsComponent)> {
     active_entity_colliders(state)
         .filter(|collider| collider.entity != mover)
         .map(|collider| (collider.entity, collider.bounds))
         .collect()
 }
 
-fn offset_bounds(bounds: BoundsCapability, origin: Vec3) -> BoundsCapability {
-    BoundsCapability {
+fn offset_bounds(bounds: BoundsComponent, origin: Vec3) -> BoundsComponent {
+    BoundsComponent {
         min: bounds.min + origin,
         max: bounds.max + origin,
     }
 }
 
-fn overlaps(left: BoundsCapability, right: BoundsCapability) -> bool {
+fn overlaps(left: BoundsComponent, right: BoundsComponent) -> bool {
     left.min.x < right.max.x
         && left.max.x > right.min.x
         && left.min.y < right.max.y

@@ -58,8 +58,10 @@ Names should reveal what a type is responsible for:
 | `Event` | A typed committed occurrence that has an explicit downstream route. |
 | `Snapshot` | Durable serialized state used to reconstruct a session. |
 
-These suffixes document roles; they are not base classes or required traits. Use a simpler name when
-it communicates ownership better.
+These suffixes document roles; they are not base classes. Types stored by `entity-state` implement
+its small `EntityComponent` marker and receive an explicit per-instance registration, but that
+marker provides no callbacks, discovery, scheduling, or behavior. Use a simpler name when it
+communicates ownership better.
 
 ## Keep authority direct
 
@@ -67,6 +69,10 @@ it communicates ownership better.
   components do not poll, subscribe, locate services, perform I/O, or update themselves.
 - Mutating fields should be private to the smallest practical module. Responsible services and
   systems expose explicit operations and return typed facts or receipts.
+- Entity component mutation goes through the state/authoring boundary with the exact
+  entity/component `ComponentRevision`; do not expose an unrestricted `&mut T` from the generic
+  store or use the global entity-state revision to make unrelated component slots conflict.
+  Services may stage a replacement value and commit it after their complete validation succeeds.
 - `Service` is for request-shaped behavior such as an attack or door transition. `System` is for a
   centrally invoked phase such as navigation or kinematic motion. Neither implies a framework.
 - Cross-mechanism ordering remains visible in a short service or system method. Do not replace
@@ -88,6 +94,10 @@ handler, prelude, gameplay AST, behavior graph, or macro-generated routing as a 
 Names such as `Manager`, `Handler`, and `Util` need a more precise responsibility before they enter
 the source tree.
 
+`entity-state::ComponentRegistry` is the narrow exception: it maps a stable data-type identity to a
+checked typed table and optional codec for one `EntityState` construction. It must not acquire
+service instances, callbacks, systems, automatic discovery, or process-global authority.
+
 Small private helpers are welcome beside their owner. Promote a helper only when multiple real
 callers establish the shared concept.
 
@@ -97,7 +107,7 @@ Visibility starts private, expands to `pub(crate)` for actual crate collaboratio
 only for an intentional crate API. Re-export only the public concepts callers should name; do not
 mirror every internal module through the crate root.
 
-Higher-level provider mechanisms may depend on entity state, spatial capabilities, and established
+Higher-level provider mechanisms may depend on entity state, spatial mechanisms, and established
 lower layers. Downstream game orchestration may depend on provider crates; the reverse dependency is
 not allowed. Avoid making Engine depend on a game host, browser shell, content generator, or sibling
 consumer checkout.

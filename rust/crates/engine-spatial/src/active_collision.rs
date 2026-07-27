@@ -1,13 +1,13 @@
 use core_ids::EntityId;
 use core_math::Vec3;
-use entity_state::{BoundsCapability, EntityState};
+use entity_state::{BoundsComponent, EntityState};
 
 /// One active entity collider expressed in the same translation-offset AABB
 /// used by [`crate::EntityMotionService`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct ActiveEntityCollider {
     pub entity: EntityId,
-    pub bounds: BoundsCapability,
+    pub bounds: BoundsComponent,
 }
 
 pub(crate) fn active_entity_colliders(
@@ -28,8 +28,8 @@ fn active_entity_collider(state: &EntityState, entity: EntityId) -> Option<Activ
     })
 }
 
-fn offset_bounds(bounds: BoundsCapability, origin: Vec3) -> BoundsCapability {
-    BoundsCapability {
+fn offset_bounds(bounds: BoundsComponent, origin: Vec3) -> BoundsComponent {
+    BoundsComponent {
         min: bounds.min + origin,
         max: bounds.max + origin,
     }

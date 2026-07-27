@@ -6,15 +6,19 @@ use entity_state::{
 };
 
 fn door_fixture() -> EntityState {
-    EntityState::from_definitions([EntityDefinition::new(EntityId::new(10), "security-door")
-        .with_transform(Vec3::ZERO)
-        .with_collision(true, true)
-        .with_renderable("mesh/security-door", true)])
+    EntityState::from_definitions([
+        EntityDefinition::new(EntityId::new(9), "room"),
+        EntityDefinition::new(EntityId::new(10), "security-door")
+            .with_transform(Vec3::ZERO)
+            .with_collision(true, true)
+            .with_renderable("mesh/security-door", true)
+            .with_containment(EntityId::new(9)),
+    ])
     .expect("valid fixture")
 }
 
 #[test]
-fn atomic_batch_applies_related_capability_changes_once() {
+fn atomic_batch_applies_related_component_changes_once() {
     let mut entities = door_fixture();
     let receipt = entities
         .apply_batch(EntityCommandBatch::new([
@@ -46,7 +50,7 @@ fn atomic_batch_applies_related_capability_changes_once() {
 }
 
 #[test]
-fn rejected_batch_leaves_every_capability_unchanged() {
+fn rejected_batch_leaves_every_component_unchanged() {
     let mut entities = door_fixture();
     let rejection = entities
         .apply_batch(EntityCommandBatch::new([EntityCommand::SetTranslation {
@@ -62,6 +66,13 @@ fn rejected_batch_leaves_every_capability_unchanged() {
         }
     );
     assert_eq!(entities.revision(), 0);
+    assert_eq!(
+        entities
+            .relationships(EntityId::new(10))
+            .unwrap()
+            .contained_in,
+        Some(EntityId::new(9))
+    );
     let view = entities.view(EntityId::new(10)).expect("door view");
     assert_eq!(view.transform.expect("transform").translation, Vec3::ZERO);
     assert!(view.collision.expect("collision").enabled);
@@ -101,7 +112,7 @@ fn snapshot_rejects_unknown_fields() {
 }
 
 #[test]
-fn kinematic_capability_round_trips_and_changes_atomically_with_position() {
+fn kinematic_component_round_trips_and_changes_atomically_with_position() {
     let id = EntityId::new(20);
     let mut entities =
         EntityState::from_definitions([EntityDefinition::new(id, "moving-platform")
@@ -130,7 +141,7 @@ fn kinematic_capability_round_trips_and_changes_atomically_with_position() {
 }
 
 #[test]
-fn kinematic_capability_requires_transform_and_positive_bounds() {
+fn kinematic_component_requires_transform_and_positive_bounds() {
     let id = EntityId::new(21);
     let missing_transform =
         EntityState::from_definitions([EntityDefinition::new(id, "orphan-motion")

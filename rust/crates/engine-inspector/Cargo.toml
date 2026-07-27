@@ -13,6 +13,7 @@ asset-import.workspace = true
 authored-scene.workspace = true
 content-store.workspace = true
 core-assets.workspace = true
+core-ids.workspace = true
 engine-spatial.workspace = true
 entity-state.workspace = true
 serde.workspace = true
@@ -20,7 +21,6 @@ serde_json.workspace = true
 voxel-asset.workspace = true
 
 [dev-dependencies]
-core-ids.workspace = true
 core-math.workspace = true
 
 [lints]

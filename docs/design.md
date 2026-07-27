@@ -32,8 +32,8 @@ in [migration-cluster-ledger.md](migration/migration-cluster-ledger.md).
 - Maintain a one-way dependency: consumers may depend on Engine; Engine never imports or checks out
   a consumer to verify itself.
 
-Object-centric does not mean Unity-style component scripts or a dynamic ECS world. It means entity
-identity and typed capability data remain easy to inspect while behavior is owned by explicit code.
+Object-centric does not mean Unity-style component scripts or an ECS scheduler. It means entity
+identity and typed component data remain easy to inspect while behavior is owned by explicit code.
 
 ## System at a glance
 
@@ -59,21 +59,57 @@ No Engine crate knows the downstream game's component families, event vocabulary
 stored-project schema, or browser API. The Rust render crates know only renderer-neutral values and
 explicit read-only provider views; the isolated renderer workspace knows no gameplay authority.
 
-## Entity capability boundary
+## Entity component boundary
 
 `entity-state::EntityState` owns reusable entity invariants:
 
-- stable identity, name, and lifecycle;
-- transform;
-- collision flags;
-- renderable identity and visibility;
-- kinematic extent and velocity;
-- read-only views and projection nodes; and
+- stable identity, name, lifecycle, labels, and explicit relationships;
+- one instance-owned typed component store with stable authored type identities;
+- built-in transform, bounds, collision, renderable, kinematic, controller, and asset-binding
+  components;
+- typed component registration, attach/read/has/replace/remove, deterministic per-type iteration,
+  bounded inspection, and destruction cleanup;
+- read-only entity views and projection nodes; and
 - snapshot encoding plus one atomic `EntityCommandBatch` mutation boundary.
 
-It does not expose arbitrary ECS queries, component matching, implicit scheduling, or game-specific
-state. A downstream service uses the batch only when several reusable capability changes must commit
-together. Ordinary game component mutation remains with the downstream feature owner.
+`ComponentRegistry` is a bounded construction input for a particular `EntityState`, not a global
+plugin registry. Registration maps one stable `ComponentTypeId` to one Rust type and rejects
+duplicate identities, conflicting Rust types, and codec drift before changing the instance. Rust
+`TypeId` and type names are internal downcast checks only; they never become durable identity.
+Downstream crates may declare and explicitly register their own inert component types without
+editing `entity-state` or a central component enum.
+
+Mutation remains service-owned. `EntityAuthoringService` performs typed attach, replacement, and
+removal without exposing `&mut T`; `TransformService`, activation, relationships, and
+`EntityCommandBatch` retain their narrower invariants and typed receipts. Generic component writes
+capture an instance-local `ComponentRevision` for one `(EntityId, ComponentTypeId)` slot. A change
+to a different entity or component type therefore does not make that guard stale. Each accepted
+slot change advances both its slot revision and the global `EntityState` revision; the global
+revision remains the durable/coarse ordering value used by established entity operations and
+snapshots. A staged built-in command batch advances the global revision once after all validation
+succeeds. Rejection changes neither values, relationships, slot revisions, nor the global revision.
+Slot revisions are process-local guards rather than durable facts and must be reacquired after
+snapshot restoration.
+
+A future service-specific prepared operation captures the revisions of exactly the component slots
+and relationship facts it reads, validates its complete candidate before publishing, and reports
+one typed service receipt. It may stage against an `EntityState` clone so a rejected multi-component
+candidate never reaches the live value. It must not replace those narrow guards with the global
+revision merely because every component shares one store, nor turn the store into a generic
+callback transaction language. Transform parenting, containment, and source ancestry remain
+explicit relationship maps rather than components.
+
+The schema-3 snapshot keeps its established built-in JSON fields. A registered downstream type is
+either runtime-only and omitted, or durable through an explicit stable codec identity and positive
+version. Durable values occupy the omitted-when-empty `registeredComponents` section; restoration
+requires the caller to supply the matching instance registry and rejects unknown required kinds,
+duplicates, tombstones, bad values, and codec identity/version drift. This is a component
+persistence seam, not a universal game save, replay format, or permission to persist callbacks.
+
+The store does not expose archetypes, arbitrary ECS matching, implicit scheduling, component
+callbacks, service location, or game-specific state. A downstream service uses the command batch
+only when several reusable built-in component changes must commit together. Ordinary game
+component mutation and all substantial gameplay behavior remain with the downstream feature owner.
 
 ## Spatial authority and derived mechanisms
 
@@ -96,16 +132,16 @@ invoke it and what accepted facts mean.
 selects where the volume's live AABB comes from during reconciliation:
 
 - `ActiveCollision` (the default and historical behavior) requires the trigger entity to be active
-  with an enabled collision capability in addition to bounds and a composed world transform. Such a
+  with an enabled collision component in addition to bounds and a composed world transform. Such a
   trigger entity is also a solid motion obstacle, because kinematic motion treats every active
   collision body as solid.
 - `EntityBounds` derives the same AABB from the canonical entity lifecycle, bounds, and composed
-  world transform without consulting the collision capability at all. The trigger entity therefore
+  world transform without consulting the collision component at all. The trigger entity therefore
   senses subjects without ever becoming a solid obstacle; its collision state, when present, is
   irrelevant to sensing and produces no diagnostics.
 
 The boundary stays one-directional: motion solidity is owned exclusively by the collision
-capability (`EntityMotionService` obstacles are active-collision entities only), while trigger
+component (`EntityMotionService` obstacles are active-collision entities only), while trigger
 sensing is owned exclusively by `TriggerVolumeSystem` over `EntityState`. Subject eligibility is
 unchanged by the geometry source — a subject always requires the canonical active-collision and
 entity-state rules — and reconciliation stays bounded, deterministic, typed, snapshot-capable, and
@@ -268,7 +304,7 @@ rerun downstream admission and renderer projection, atomically publish the proje
 a canonical reread. Voxel history and annotation documents are durable project data; conversion
 plans and prepared history reverts remain private process state, are limited to one retained
 candidate of each kind, and only matching identities can be applied. Project/scene/entity lifecycle,
-full transforms, typed lights and capabilities, and general mesh import/reimport each use named
+full transforms, typed lights and entity components, and general mesh import/reimport each use named
 operations rather than a universal editor mutation. Asset import candidates retain exact source,
 settings, generated-ID, project, and plan identity and replace only their own prior generated assets.
 Trusted host voxel/mesh/GLB/license paths are explicit, bounded, symlink-checked selections;

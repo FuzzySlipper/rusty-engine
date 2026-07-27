@@ -41,7 +41,7 @@ order, persistence, dependency direction, or presentation boundaries.
 > Objects carry typed facts. Named services own mechanisms. Downstream games
 > own meaning and orchestration.
 
-- Keep the provider object-centric: capabilities, spatial authority,
+- Keep the provider object-centric: entity components, spatial authority,
   responsible services, and typed facts must be easy to trace.
 - Components are mostly data. Do not add implicit update callbacks, ambient
   subscriptions, service location, renderer/I/O behavior, or hidden global
@@ -49,9 +49,11 @@ order, persistence, dependency direction, or presentation boundaries.
 - Downstream Rust calls direct named services. Engine does not own a universal
   game scheduler, gameplay AST, behavior graph, replay runtime, or ambient
   command/event bus.
-- `entity-state` owns reusable entity invariants and atomic capability
-  mutation. Its command batch is not a universal route for ordinary
-  service-owned state.
+- `entity-state` owns reusable entity invariants and one instance-owned typed
+  component store. Registration uses stable authored identities; mutation is
+  guarded by the exact entity/component slot revision and does not expose
+  unrestricted mutable component references. Its command batch is not a
+  universal route for ordinary service-owned state.
 - `engine-spatial` owns cohesive canonical voxel state when collision,
   navigation, mesh, motion, triggers, and edit history must remain synchronized.
 - Durable formats validate bounded data; consumers retain game meaning,
@@ -65,7 +67,7 @@ order, persistence, dependency direction, or presentation boundaries.
 rust/crates/
   core-*                    IDs, assets, math, time, coordinates, voxel values
   svc-*                     focused volume, spatial, collision, pathfinding, RNG, mesh
-  entity-state              entity facts and atomic capability mutation
+  entity-state              entity facts, typed component storage, atomic mutation
   state-machine             explicit definitions, instances, transitions
   engine-spatial            canonical voxel space and synchronized derivatives
   content-store             content manifests, batches, prefabs, load/save plans
@@ -93,7 +95,7 @@ follow-up routes, use [docs/agent-code-atlas.md](docs/agent-code-atlas.md).
 
 | Area | Primary owner | Must not acquire |
 |---|---|---|
-| Entity facts and capability mutation | `entity-state`, `state-machine` | Generic service routing, callbacks, renderer/I/O |
+| Entity facts and component mutation | `entity-state`, `state-machine` | Generic service routing, callbacks, renderer/I/O |
 | Canonical voxel world and derivatives | `engine-spatial`, `svc-*` | Game policy, browser input, duplicate authority |
 | Content, assets, prefabs, scenes | `content-store`, `asset-*`, `authored-scene` | Product storage policy, implicit spawn behavior |
 | Environment recipes | `environment-authoring` | Universal procgen framework, UI, scheduling |

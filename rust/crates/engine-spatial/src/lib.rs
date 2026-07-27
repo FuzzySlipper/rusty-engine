@@ -2,7 +2,7 @@
 //!
 //! The voxel authority and Parry collision projection expose a typed query
 //! vocabulary to a small, centrally scheduled motion system. Gameplay objects
-//! remain ordinary entity views with data capabilities; collision internals
+//! remain ordinary entity views with data components; collision internals
 //! never become the runtime spine and components do not acquire scattered
 //! update hooks.
 

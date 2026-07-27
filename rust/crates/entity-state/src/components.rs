@@ -1,17 +1,18 @@
 use core_assets::AssetReference;
-use core_ids::{EntityId, ProcessId, SubjectId};
+use core_ids::{ProcessId, SubjectId};
 use core_math::Vec3;
 
+use crate::component::EntityComponent;
 use crate::value::{EntityTransform, Quat};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TransformCapability {
+pub struct TransformComponent {
     pub translation: Vec3,
     pub rotation: Quat,
     pub scale: Vec3,
 }
 
-impl TransformCapability {
+impl TransformComponent {
     pub const fn from_transform(transform: EntityTransform) -> Self {
         Self {
             translation: transform.translation,
@@ -29,42 +30,51 @@ impl TransformCapability {
     }
 }
 
+impl EntityComponent for TransformComponent {}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct BoundsCapability {
+pub struct BoundsComponent {
     pub min: Vec3,
     pub max: Vec3,
 }
 
+impl EntityComponent for BoundsComponent {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CollisionCapability {
+pub struct CollisionComponent {
     pub enabled: bool,
     pub static_collider: bool,
 }
 
+impl EntityComponent for CollisionComponent {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RenderableCapability {
+pub struct RenderableComponent {
     pub visible: bool,
     pub asset: String,
 }
 
+impl EntityComponent for RenderableComponent {}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct KinematicCapability {
+pub struct KinematicComponent {
     pub half_extents: Vec3,
     pub velocity: Vec3,
 }
 
+impl EntityComponent for KinematicComponent {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ControllerCapability {
+pub enum ControllerComponent {
     Process(ProcessId),
     Subject(SubjectId),
 }
 
+impl EntityComponent for ControllerComponent {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AssetBindingCapability {
+pub struct AssetBindingComponent {
     pub asset: AssetReference,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ContainmentCapability {
-    pub container: EntityId,
-}
+impl EntityComponent for AssetBindingComponent {}

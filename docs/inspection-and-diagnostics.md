@@ -41,7 +41,7 @@ runtime calls continue to use `decode_scene` and `decode_manifest`, which valida
 | Area | Library view | CLI | Notable readout |
 | --- | --- | --- | --- |
 | Catalog | `inspect_catalog` | `catalog` | kinds, dependency counts, validation, optional lock drift |
-| Entity state | `inspect_entity_state` | `entity-state` | lifecycle, source, capabilities, relationships, focused queries |
+| Entity state | `inspect_entity_state` | `entity-state` | lifecycle, source, registered component identities/counts, per-entity presence, relationships, focused queries |
 | Scene | `inspect_scene` | `scene` | hierarchy/kind counts, validation, optional catalog cross-check |
 | Voxel state | `inspect_voxel_asset`, `inspect_voxel_state` | `voxel` | occupancy, materials, chunks, mesh/collision/navigation coherence |
 | Persistence | `inspect_content_manifest` | `content` | artifact roles/classes and dependency-ordered load plan |

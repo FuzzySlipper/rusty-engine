@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
+use core_ids::EntityId;
 use entity_state::{
     decode_snapshot, EntitySnapshot, EntitySourceSnapshot, EntityState, EntityStateSnapshot,
     EntityStateSnapshotError, SnapshotLifecycle,
@@ -20,7 +21,7 @@ pub struct EntityStateInspection {
     pub entity_count: usize,
     pub lifecycle: Vec<NamedCount>,
     pub sources: Vec<NamedCount>,
-    pub capabilities: Vec<NamedCount>,
+    pub components: Vec<NamedCount>,
     pub relationships: Vec<NamedCount>,
     pub entity_ids: Vec<u64>,
     pub diagnostics: DiagnosticSet,
@@ -34,7 +35,7 @@ pub struct EntityInspection {
     pub lifecycle: String,
     pub source: String,
     pub labels: Vec<u64>,
-    pub capabilities: Vec<String>,
+    pub components: Vec<String>,
     pub relationships: Vec<String>,
 }
 
@@ -86,7 +87,17 @@ impl EntityCategory {
 }
 
 pub fn inspect_entity_state(state: &EntityState) -> EntityStateInspection {
-    inspect_snapshot(&state.snapshot())
+    let mut inspection = inspect_snapshot(&state.snapshot());
+    inspection.components = state
+        .component_inspection()
+        .kinds
+        .into_iter()
+        .map(|kind| NamedCount {
+            name: kind.type_id.as_str().to_string(),
+            count: kind.count,
+        })
+        .collect();
+    inspection
 }
 
 pub fn inspect_entity_state_json(input: &str) -> Result<EntityStateInspection, DiagnosticSet> {
@@ -100,7 +111,16 @@ pub fn inspect_entity(state: &EntityState, id: u64) -> Option<EntityInspection> 
         .entities
         .iter()
         .find(|entity| entity.id == id)
-        .map(inspect_entity_record)
+        .map(|entity| {
+            inspect_entity_record(
+                entity,
+                state
+                    .component_types_for_entity(EntityId::new(id))
+                    .into_iter()
+                    .map(|type_id| type_id.as_str().to_string())
+                    .collect(),
+            )
+        })
 }
 
 pub fn entity_ids_in_category(state: &EntityState, category: EntityCategory) -> Vec<u64> {
@@ -121,7 +141,7 @@ impl EntityStateInspection {
         );
         push_counts(&mut output, "lifecycle", &self.lifecycle);
         push_counts(&mut output, "sources", &self.sources);
-        push_counts(&mut output, "capabilities", &self.capabilities);
+        push_counts(&mut output, "components", &self.components);
         push_counts(&mut output, "relationships", &self.relationships);
         let ids = self
             .entity_ids
@@ -138,7 +158,7 @@ impl EntityStateInspection {
 impl EntityInspection {
     pub fn to_text(&self) -> String {
         format!(
-            "entity id={} name={:?}\nlifecycle {}\nsource {}\nlabels [{}]\ncapabilities [{}]\nrelationships [{}]\n",
+            "entity id={} name={:?}\nlifecycle {}\nsource {}\nlabels [{}]\ncomponents [{}]\nrelationships [{}]\n",
             self.id,
             self.name,
             self.lifecycle,
@@ -148,7 +168,7 @@ impl EntityInspection {
                 .map(u64::to_string)
                 .collect::<Vec<_>>()
                 .join(","),
-            self.capabilities.join(","),
+            self.components.join(","),
             self.relationships.join(",")
         )
     }
@@ -157,14 +177,10 @@ impl EntityInspection {
 fn inspect_snapshot(snapshot: &EntityStateSnapshot) -> EntityStateInspection {
     let mut lifecycle = BTreeMap::new();
     let mut sources = BTreeMap::new();
-    let mut capabilities = BTreeMap::new();
     let mut relationships = BTreeMap::new();
     for entity in &snapshot.entities {
         increment(&mut lifecycle, lifecycle_label(entity.lifecycle));
         increment(&mut sources, source_label(&entity.source));
-        for capability in capability_names(entity) {
-            increment(&mut capabilities, capability);
-        }
         for relationship in relationship_kinds(entity) {
             increment(&mut relationships, relationship);
         }
@@ -175,14 +191,14 @@ fn inspect_snapshot(snapshot: &EntityStateSnapshot) -> EntityStateInspection {
         entity_count: snapshot.entities.len(),
         lifecycle: NamedCount::from_map(lifecycle),
         sources: NamedCount::from_map(sources),
-        capabilities: NamedCount::from_map(capabilities),
+        components: Vec::new(),
         relationships: NamedCount::from_map(relationships),
         entity_ids: snapshot.entities.iter().map(|entity| entity.id).collect(),
         diagnostics: DiagnosticSet::new(),
     }
 }
 
-fn inspect_entity_record(entity: &EntitySnapshot) -> EntityInspection {
+fn inspect_entity_record(entity: &EntitySnapshot, components: Vec<String>) -> EntityInspection {
     let mut relationships = Vec::new();
     if let Some(target) = entity.transform_parent {
         relationships.push(format!("transformParent={target}"));
@@ -199,38 +215,9 @@ fn inspect_entity_record(entity: &EntitySnapshot) -> EntityInspection {
         lifecycle: lifecycle_label(entity.lifecycle).to_string(),
         source: source_label(&entity.source).to_string(),
         labels: entity.labels.clone(),
-        capabilities: capability_names(entity)
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
+        components,
         relationships,
     }
-}
-
-fn capability_names(entity: &EntitySnapshot) -> Vec<&'static str> {
-    let mut names = Vec::new();
-    if entity.transform.is_some() {
-        names.push("transform");
-    }
-    if entity.bounds.is_some() {
-        names.push("bounds");
-    }
-    if entity.collision.is_some() {
-        names.push("collision");
-    }
-    if entity.renderable.is_some() {
-        names.push("renderable");
-    }
-    if entity.kinematic.is_some() {
-        names.push("kinematic");
-    }
-    if entity.controller.is_some() {
-        names.push("controller");
-    }
-    if entity.asset_binding.is_some() {
-        names.push("assetBinding");
-    }
-    names
 }
 
 fn relationship_kinds(entity: &EntitySnapshot) -> Vec<&'static str> {
@@ -308,6 +295,7 @@ fn entity_decode_failure(error: EntityStateSnapshotError) -> DiagnosticSet {
             "entityState.invalidAssetReference"
         }
         EntityStateSnapshotError::InvalidDefinition(_) => "entityState.invalidDefinition",
+        EntityStateSnapshotError::RegisteredComponent(_) => "entityState.registeredComponent",
     };
     DiagnosticSet::one(
         Diagnostic::new(
@@ -328,7 +316,10 @@ fn entity_decode_failure(error: EntityStateSnapshotError) -> DiagnosticSet {
 mod tests {
     use core_ids::EntityId;
     use core_math::Vec3;
-    use entity_state::{EntityDefinition, EntitySource, ENTITY_STATE_SNAPSHOT_SCHEMA_VERSION};
+    use entity_state::{
+        ComponentRegistration, ComponentTypeId, EntityAuthoringService, EntityComponent,
+        EntityDefinition, EntitySource, ENTITY_STATE_SNAPSHOT_SCHEMA_VERSION,
+    };
 
     use super::*;
 
@@ -360,7 +351,10 @@ mod tests {
             vec![1]
         );
         let entity = inspect_entity(&state, 2).unwrap();
-        assert_eq!(entity.capabilities, vec!["transform"]);
+        assert_eq!(
+            entity.components,
+            vec![entity_state::TRANSFORM_COMPONENT_TYPE_ID]
+        );
         assert_eq!(entity.relationships, vec!["transformParent=1"]);
         assert!(report.to_text().contains("entities=2"));
     }
@@ -370,5 +364,44 @@ mod tests {
         let failure = inspect_entity_state_json("{ nope").unwrap_err();
         assert!(failure.blocks_load());
         assert_eq!(failure.diagnostics[0].domain, DiagnosticDomain::EntityState);
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct InspectionFixtureComponent;
+
+    impl EntityComponent for InspectionFixtureComponent {}
+
+    #[test]
+    fn registered_component_kinds_counts_and_entity_presence_are_visible() {
+        let mut state = state();
+        state
+            .register_component(
+                ComponentRegistration::<InspectionFixtureComponent>::runtime_only(
+                    ComponentTypeId::parse("fixture.inspection").unwrap(),
+                ),
+            )
+            .unwrap();
+        let revision = state
+            .component_revision::<InspectionFixtureComponent>(EntityId::new(2))
+            .unwrap();
+        EntityAuthoringService
+            .attach_component(
+                &mut state,
+                revision,
+                EntityId::new(2),
+                InspectionFixtureComponent,
+            )
+            .unwrap();
+
+        let summary = inspect_entity_state(&state);
+        assert!(summary
+            .components
+            .iter()
+            .any(|item| item.name == "fixture.inspection" && item.count == 1));
+        let entity = inspect_entity(&state, 2).unwrap();
+        assert!(entity
+            .components
+            .iter()
+            .any(|component| component == "fixture.inspection"));
     }
 }

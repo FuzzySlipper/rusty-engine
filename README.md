@@ -51,7 +51,12 @@ downstream game policy and orchestration
 engine-inspector reads owner facts; runtime libraries do not depend on it.
 ```
 
-`entity-state` owns reusable entity invariants and atomic capability mutation.
+`entity-state` owns reusable entity invariants and an instance-owned typed
+component store. Stable authored type identities, explicit registration,
+per-entity/per-component revision-guarded mutation, deterministic iteration,
+bounded inspection, and
+optional versioned codecs let downstream Rust add inert component families
+without an Engine enum, global registry, or ECS scheduler.
 `engine-spatial` composes one canonical voxel authority with derived collision,
 navigation, mesh, motion, trigger, and edit mechanisms. Content and authoring
 crates own strict durable formats, validation, plans, and explicit mutation
@@ -77,7 +82,7 @@ and 1 Studio application plus 5 Studio libraries.**
 rust/crates/
   core-*                    typed IDs, assets, math, time, coordinates, voxel values
   svc-*                     volume, spatial, collision, pathfinding, RNG, mesh
-  entity-state              capabilities, relationships, transforms, snapshots, atomic mutation
+  entity-state              typed components, relationships, transforms, snapshots, atomic mutation
   state-machine             explicit definitions, instances, and transitions
   engine-spatial            canonical voxel space and synchronized derived mechanisms
   content-store             manifests, source batches, prefabs, load/save plans, write sets
@@ -116,7 +121,7 @@ public surfaces, forbidden shortcuts, focused tests, and follow-up routes.
 ### Entity and service authority
 
 Downstream Rust owns the live gameplay loop and calls named Engine services
-directly. `entity-state` is the atomic boundary for entity capabilities; it is
+directly. `entity-state` is the atomic boundary for entity components; it is
 not a universal command route for collision, navigation, assets, presentation,
 or other service-owned state.
 

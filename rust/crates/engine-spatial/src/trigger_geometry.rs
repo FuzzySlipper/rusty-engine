@@ -56,7 +56,7 @@ pub(crate) fn live_aabb(
                 diagnostics,
                 TriggerVolumeDiagnosticCode::MissingCollision,
                 entity,
-                "collision capability is missing",
+                "collision component is missing",
             );
             return None;
         }
@@ -66,7 +66,7 @@ pub(crate) fn live_aabb(
                 diagnostics,
                 TriggerVolumeDiagnosticCode::InactiveCollision,
                 entity,
-                "collision capability is inactive",
+                "collision component is inactive",
             );
             return None;
         }
@@ -77,7 +77,7 @@ pub(crate) fn live_aabb(
             diagnostics,
             TriggerVolumeDiagnosticCode::MissingBounds,
             entity,
-            "bounds capability is missing",
+            "bounds component is missing",
         );
         return None;
     };

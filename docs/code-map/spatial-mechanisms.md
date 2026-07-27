@@ -72,8 +72,7 @@ Provider evidence lives under
 
 - Stored voxel artifacts and offline conversion:
   [Voxel assets and conversion](voxel-assets-and-conversion.md).
-- Entity transforms and capabilities:
+- Entity transforms and components:
   [Entity state and state machines](entity-state-and-state-machines.md).
 - Retained visual projection:
   [Rust render model and projection](rust-render-model-and-projection.md).
-

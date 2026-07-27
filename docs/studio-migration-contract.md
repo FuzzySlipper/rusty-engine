@@ -52,7 +52,7 @@ reconcile every row before the old Studio can be considered retired.
 | Project content | Typed content browser, manifest closure, scene/asset navigation, prefab references, write authorization, source conflicts, and canonical whole-project saves | M11B/M11D |
 | Settings | Versioned project spatial settings, host-user settings outside browser storage, per-project identity, scene-view colors/grid, configurable movement keys, speed/boost, and look/pan inversion | M11C/M11D |
 | Hierarchy | Deterministic parent traversal, filtering with ancestor context, per-node expansion, visibility, selection, and refresh-stable UI expansion | M11C/M11D |
-| Inspector | Rust-described typed fields, references, diagnostics, entity definitions/capabilities, transforms, appearance, material and presentation values, and explicit unsupported-field states | M11B/M11D |
+| Inspector | Rust-described typed fields, references, diagnostics, entity definitions/components, transforms, appearance, material and presentation values, and explicit unsupported-field states | M11B/M11D |
 | Scene authoring | Create/update/delete scene nodes, canonical parent/child order, entity instances, lights, appearance bindings, local/world transform composition, and optimistic mutation | M11B/M11D |
 | Viewport | Shared authored/runtime/overlay channels, shared resource realization, ordinary lights/materials, renderer-owned grid, resize/lifecycle, and deterministic cleanup | M11D |
 | Camera | Orbit, pan, zoom, frame selection, camera-relative WASD, world-relative QE, focus/key cleanup, speed boost, stored presentation settings, and disposable preview state | M11C/M11D |
@@ -104,7 +104,7 @@ Protocol 5 and 6 close the non-voxel parity set without adding a generic editor 
 
 - project create and save-as plus scene create, rename, delete, and entry-scene selection;
 - entity create, rename, reparent, delete, full translation/rotation/scale settlement, static-mesh,
-  animated-mesh-with-clip, or typed light appearance, and collision/kinematic capability mutation;
+  animated-mesh-with-clip, or typed light appearance, and collision/kinematic component mutation;
 - a complete catalog browser with dependency, dependent, generated-lock, import provenance, source
   drift, and private prepare/apply/discard import or reimport candidates;
 - real imported static-mesh payloads and materials consumed by the same Rust projection and shared

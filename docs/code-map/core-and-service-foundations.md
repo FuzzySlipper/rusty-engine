@@ -71,8 +71,7 @@ cargo test -p svc-volume -p svc-spatial -p svc-collision -p svc-pathfinding -p s
 ## Follow-up routing
 
 - Cohesive spatial mutation: [Spatial mechanisms](spatial-mechanisms.md).
-- Entity identity and capabilities:
+- Entity identity and components:
   [Entity state and state machines](entity-state-and-state-machines.md).
 - Asset catalogs and storage:
   [Content, assets, and scenes](content-assets-and-scenes.md).
-
