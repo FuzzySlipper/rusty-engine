@@ -262,6 +262,7 @@ export class StudioWorkspaceStore {
   #selectionRequest = 0;
   #settingsWriteChain: Promise<void> = Promise.resolve();
   #settingsGeneration = 0;
+  #projectScopeGeneration = 0;
 
   constructor(
     client: StudioAdapterClient,
@@ -300,6 +301,7 @@ export class StudioWorkspaceStore {
 
   async openProject(root: string, projectFile: string): Promise<void> {
     if (!(await this.connect())) return;
+    this.#invalidateProjectScope();
     this.#patch({ operation: 'opening', lastError: null, activeMenu: null });
     try {
       await this.#settingsWriteChain;
@@ -314,6 +316,7 @@ export class StudioWorkspaceStore {
 
   async createProject(input: CreateProjectInput): Promise<void> {
     if (!(await this.connect())) return;
+    this.#invalidateProjectScope();
     this.#patch({ operation: 'opening', lastError: null, activeMenu: null });
     try {
       await this.#settingsWriteChain;
@@ -329,6 +332,7 @@ export class StudioWorkspaceStore {
   async saveProjectAs(input: SaveProjectAsInput): Promise<void> {
     const document = this.#snapshot().authoringDocument;
     if (document === null) return;
+    this.#invalidateProjectScope();
     this.#patch({ operation: 'committing', lastError: null, activeMenu: null });
     try {
       await this.#settingsWriteChain;
@@ -566,6 +570,7 @@ export class StudioWorkspaceStore {
 
   async closeProject(): Promise<void> {
     if (this.#snapshot().connection.kind !== 'connected') return;
+    this.#invalidateProjectScope();
     this.#patch({ operation: 'closing', lastError: null });
     try {
       await this.#settingsWriteChain;
@@ -843,6 +848,8 @@ export class StudioWorkspaceStore {
       || !objectCandidateActionIsCurrent(action, current.voxelWorkspace.objectConversion)
     ) return;
     const expectedProjectHash = document.identity.projectHash;
+    const projectScopeGeneration = this.#projectScopeGeneration;
+    const objectAction = isVoxelObjectAction(action);
     this.#patch({ operation: 'voxel', lastError: null });
     try {
       switch (action.kind) {
@@ -1139,6 +1146,11 @@ export class StudioWorkspaceStore {
             source: action.source,
             ...(action.meshPrimitive === undefined ? {} : { meshPrimitive: action.meshPrimitive }),
           });
+          if (!this.#objectResponseIsCurrent(
+            action,
+            expectedProjectHash,
+            projectScopeGeneration,
+          )) return;
           this.#patch({
             operation: 'idle',
             voxelWorkspace: {
@@ -1164,6 +1176,11 @@ export class StudioWorkspaceStore {
             frame: action.frame,
             maxPreviewSamples: action.maxPreviewSamples,
           });
+          if (!this.#objectResponseIsCurrent(
+            action,
+            expectedProjectHash,
+            projectScopeGeneration,
+          )) return;
           this.#acceptObjectProjection(response.projection, response.projectionReadout);
           this.#patch({
             operation: 'idle',
@@ -1182,6 +1199,11 @@ export class StudioWorkspaceStore {
             frame: action.frame,
             maxPreviewSamples: action.maxPreviewSamples,
           });
+          if (!this.#objectResponseIsCurrent(
+            action,
+            expectedProjectHash,
+            projectScopeGeneration,
+          )) return;
           this.#acceptObjectProjection(response.projection, response.projectionReadout);
           const current = this.#snapshot().voxelWorkspace.objectConversion;
           this.#patch({
@@ -1196,18 +1218,30 @@ export class StudioWorkspaceStore {
           });
           return;
         }
-        case 'applyObjectConversion':
-          this.#acceptVoxelMutation(await this.#client.applyVoxelObjectConversion({
+        case 'applyObjectConversion': {
+          const response = await this.#client.applyVoxelObjectConversion({
             expectedProjectHash,
             planId: action.planId,
             expectedPlanHash: action.expectedPlanHash,
             expectedOutputHash: action.expectedOutputHash,
-          }), false, true);
+          });
+          if (!this.#objectResponseIsCurrent(
+            action,
+            expectedProjectHash,
+            projectScopeGeneration,
+          )) return;
+          this.#acceptVoxelMutation(response, false, true);
           return;
+        }
         case 'discardObjectConversion': {
           const response = await this.#client.discardVoxelObjectConversion({
             planId: action.planId,
           });
+          if (!this.#objectResponseIsCurrent(
+            action,
+            expectedProjectHash,
+            projectScopeGeneration,
+          )) return;
           this.#acceptObjectProjection(response.projection, response.projectionReadout);
           this.#patch({
             operation: 'idle',
@@ -1219,15 +1253,27 @@ export class StudioWorkspaceStore {
           });
           return;
         }
-        case 'attachObjectInstance':
-          this.#acceptVoxelMutation(await this.#client.attachVoxelObjectInstance({
+        case 'attachObjectInstance': {
+          const response = await this.#client.attachVoxelObjectInstance({
             expectedProjectHash,
             sceneId: action.sceneId,
             instance: action.instance,
-          }));
+          });
+          if (!this.#objectResponseIsCurrent(
+            action,
+            expectedProjectHash,
+            projectScopeGeneration,
+          )) return;
+          this.#acceptVoxelMutation(response);
           return;
+        }
       }
     } catch (error) {
+      if (objectAction && !this.#objectResponseIsCurrent(
+        action,
+        expectedProjectHash,
+        projectScopeGeneration,
+      )) return;
       this.#operationFailed(error);
     }
   }
@@ -1400,6 +1446,22 @@ export class StudioWorkspaceStore {
         generation: (current.liveProjection?.generation ?? 0) + 1,
       },
     });
+  }
+
+  #invalidateProjectScope(): void {
+    this.#projectScopeGeneration += 1;
+  }
+
+  #objectResponseIsCurrent(
+    action: VoxelEditorAction,
+    expectedProjectHash: string,
+    projectScopeGeneration: number,
+  ): boolean {
+    const current = this.#snapshot();
+    return projectScopeGeneration === this.#projectScopeGeneration
+      && current.operation === 'voxel'
+      && current.authoringDocument?.identity.projectHash === expectedProjectHash
+      && objectCandidateActionIsCurrent(action, current.voxelWorkspace.objectConversion);
   }
 
   async #mutateProject(
@@ -1610,6 +1672,20 @@ function objectCandidateActionIsCurrent(
       return conversion !== null && action.planId === conversion.plan.planId;
     default:
       return true;
+  }
+}
+
+function isVoxelObjectAction(action: VoxelEditorAction): boolean {
+  switch (action.kind) {
+    case 'inspectObjectSource':
+    case 'prepareObjectConversion':
+    case 'previewObjectFrame':
+    case 'applyObjectConversion':
+    case 'discardObjectConversion':
+    case 'attachObjectInstance':
+      return true;
+    default:
+      return false;
   }
 }
 

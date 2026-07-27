@@ -183,6 +183,75 @@ test('opening a second project clears project-scoped selection, preview, and pri
   assert.equal(firstProjectionLabel(store), 'player');
 });
 
+test('project replacement ignores late object-preview success and failure without changing replacement state', async (t) => {
+  const replacements = ['open', 'create', 'saveAs'] as const;
+  const settlements = ['success', 'failure'] as const;
+
+  for (const replacement of replacements) {
+    for (const settlement of settlements) {
+      await t.test(`${replacement} followed by late ${settlement}`, async () => {
+        const client = new VoxelObjectFixtureClient();
+        client.openedProjectId = 'loading-bay-a';
+        const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
+        await store.openProject('/external/loading-bay-a', 'content/projects/loading-bay.project.json');
+        await store.runVoxelAction(objectPrepareAction());
+        const conversion = store.snapshot().voxelWorkspace.objectConversion;
+        assert.ok(conversion !== null);
+
+        client.blockNextPreview();
+        const pendingPreview = store.runVoxelAction({
+          kind: 'previewObjectFrame',
+          planId: conversion.plan.planId,
+          expectedPlanHash: conversion.plan.planHash,
+          frame: { kind: 'clip', clipId: 'clip/walk-1', frameIndex: 1 },
+          maxPreviewSamples: 64,
+        });
+        assert.equal(client.previewRequestCount, 1);
+        assert.equal(store.snapshot().operation, 'voxel');
+
+        client.openedProjectId = 'loading-bay-b';
+        switch (replacement) {
+          case 'open':
+            await store.openProject('/external/loading-bay-b', 'content/projects/loading-bay.project.json');
+            break;
+          case 'create':
+            await store.createProject({
+              root: '/external/loading-bay-b',
+              projectFile: 'content/projects/loading-bay.project.json',
+              projectId: 'loading-bay-b',
+              name: 'Loading Bay B',
+              entryScene: 'scene/loading-bay',
+              entrySceneName: 'Loading Bay',
+            });
+            break;
+          case 'saveAs':
+            await store.saveProjectAs({
+              root: '/external/loading-bay-b',
+              projectFile: 'content/projects/loading-bay.project.json',
+              projectId: 'loading-bay-b',
+              name: 'Loading Bay B',
+            });
+            break;
+        }
+
+        assert.equal(store.snapshot().authoringDocument?.identity.projectId, 'loading-bay-b');
+        assert.equal(store.snapshot().operation, 'idle');
+        assert.equal(store.snapshot().voxelWorkspace.objectConversion, null);
+        assert.equal(firstProjectionLabel(store), 'player');
+        const acceptedReplacement = store.snapshot();
+
+        if (settlement === 'success') client.resolveBlockedPreview();
+        else client.rejectBlockedPreview();
+        await pendingPreview;
+
+        assert.strictEqual(store.snapshot(), acceptedReplacement);
+        assert.equal(store.snapshot().lastError, null);
+        assert.equal(firstProjectionLabel(store), 'player');
+      });
+    }
+  }
+});
+
 test('voxel-object source, shared candidate frames, stale apply, explicit discard, apply, and reopen stay distinct', async () => {
   const client = new VoxelObjectFixtureClient();
   const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
@@ -388,6 +457,12 @@ class VoxelObjectFixtureClient {
   openedProjectId = 'loading-bay';
   previewRequestCount = 0;
   applyRequestCount = 0;
+  #blockedPreview: {
+    readonly promise: Promise<unknown>;
+    readonly resolve: (response: unknown) => void;
+    readonly reject: (error: unknown) => void;
+    response: unknown | null;
+  } | null = null;
 
   describe() {
     return Promise.resolve(described('describe-object') as never);
@@ -400,6 +475,14 @@ class VoxelObjectFixtureClient {
       requestId: 'open-object',
       project: this.#project(),
     } as never);
+  }
+
+  createProject() {
+    return Promise.resolve({ project: this.#project() } as never);
+  }
+
+  saveProjectAs() {
+    return Promise.resolve({ project: this.#project() } as never);
   }
 
   readProject() {
@@ -424,14 +507,44 @@ class VoxelObjectFixtureClient {
     } as never);
   }
 
+  blockNextPreview() {
+    assert.equal(this.#blockedPreview, null);
+    let resolve!: (response: unknown) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<unknown>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    this.#blockedPreview = { promise, resolve, reject, response: null };
+  }
+
+  resolveBlockedPreview() {
+    const blocked = this.#blockedPreview;
+    assert.ok(blocked !== null && blocked.response !== null);
+    this.#blockedPreview = null;
+    blocked.resolve(blocked.response);
+  }
+
+  rejectBlockedPreview() {
+    const blocked = this.#blockedPreview;
+    assert.ok(blocked !== null);
+    this.#blockedPreview = null;
+    blocked.reject(new Error('late preview rejected'));
+  }
+
   previewVoxelObjectConversion(input: { readonly frame: { readonly kind: string; readonly frameIndex?: number } }) {
     this.previewRequestCount += 1;
     const frame = input.frame.kind === 'clip' ? input.frame.frameIndex ?? 0 : 0;
-    return Promise.resolve({
+    const response = {
       preview: objectPreview(frame),
       projection: objectCandidateProjection(frame),
       projectionReadout: projectionReadout(20 + frame),
-    } as never);
+    };
+    if (this.#blockedPreview !== null) {
+      this.#blockedPreview.response = response;
+      return this.#blockedPreview.promise;
+    }
+    return Promise.resolve(response as never);
   }
 
   applyVoxelObjectConversion() {
