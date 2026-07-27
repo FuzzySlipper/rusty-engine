@@ -263,6 +263,7 @@ export class StudioWorkspaceStore {
   #settingsWriteChain: Promise<void> = Promise.resolve();
   #settingsGeneration = 0;
   #projectScopeGeneration = 0;
+  #objectOperationGeneration = 0;
 
   constructor(
     client: StudioAdapterClient,
@@ -448,6 +449,7 @@ export class StudioWorkspaceStore {
 
   async refreshProject(): Promise<void> {
     if (this.#snapshot().authoringDocument === null) return;
+    this.#invalidateObjectOperation();
     this.#patch({ operation: 'refreshing', lastError: null });
     try {
       const response = await this.#client.readProject();
@@ -850,6 +852,9 @@ export class StudioWorkspaceStore {
     const expectedProjectHash = document.identity.projectHash;
     const projectScopeGeneration = this.#projectScopeGeneration;
     const objectAction = isVoxelObjectAction(action);
+    const objectOperationGeneration = objectAction
+      ? ++this.#objectOperationGeneration
+      : this.#objectOperationGeneration;
     this.#patch({ operation: 'voxel', lastError: null });
     try {
       switch (action.kind) {
@@ -1150,6 +1155,7 @@ export class StudioWorkspaceStore {
             action,
             expectedProjectHash,
             projectScopeGeneration,
+            objectOperationGeneration,
           )) return;
           this.#patch({
             operation: 'idle',
@@ -1180,6 +1186,7 @@ export class StudioWorkspaceStore {
             action,
             expectedProjectHash,
             projectScopeGeneration,
+            objectOperationGeneration,
           )) return;
           this.#acceptObjectProjection(response.projection, response.projectionReadout);
           this.#patch({
@@ -1203,6 +1210,7 @@ export class StudioWorkspaceStore {
             action,
             expectedProjectHash,
             projectScopeGeneration,
+            objectOperationGeneration,
           )) return;
           this.#acceptObjectProjection(response.projection, response.projectionReadout);
           const current = this.#snapshot().voxelWorkspace.objectConversion;
@@ -1229,6 +1237,7 @@ export class StudioWorkspaceStore {
             action,
             expectedProjectHash,
             projectScopeGeneration,
+            objectOperationGeneration,
           )) return;
           this.#acceptVoxelMutation(response, false, true);
           return;
@@ -1241,6 +1250,7 @@ export class StudioWorkspaceStore {
             action,
             expectedProjectHash,
             projectScopeGeneration,
+            objectOperationGeneration,
           )) return;
           this.#acceptObjectProjection(response.projection, response.projectionReadout);
           this.#patch({
@@ -1263,6 +1273,7 @@ export class StudioWorkspaceStore {
             action,
             expectedProjectHash,
             projectScopeGeneration,
+            objectOperationGeneration,
           )) return;
           this.#acceptVoxelMutation(response);
           return;
@@ -1273,6 +1284,7 @@ export class StudioWorkspaceStore {
         action,
         expectedProjectHash,
         projectScopeGeneration,
+        objectOperationGeneration,
       )) return;
       this.#operationFailed(error);
     }
@@ -1450,15 +1462,22 @@ export class StudioWorkspaceStore {
 
   #invalidateProjectScope(): void {
     this.#projectScopeGeneration += 1;
+    this.#invalidateObjectOperation();
+  }
+
+  #invalidateObjectOperation(): void {
+    this.#objectOperationGeneration += 1;
   }
 
   #objectResponseIsCurrent(
     action: VoxelEditorAction,
     expectedProjectHash: string,
     projectScopeGeneration: number,
+    objectOperationGeneration: number,
   ): boolean {
     const current = this.#snapshot();
     return projectScopeGeneration === this.#projectScopeGeneration
+      && objectOperationGeneration === this.#objectOperationGeneration
       && current.operation === 'voxel'
       && current.authoringDocument?.identity.projectHash === expectedProjectHash
       && objectCandidateActionIsCurrent(action, current.voxelWorkspace.objectConversion);

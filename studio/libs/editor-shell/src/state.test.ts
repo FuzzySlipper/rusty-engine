@@ -252,6 +252,64 @@ test('project replacement ignores late object-preview success and failure withou
   }
 });
 
+test('refresh and a newer object request retain ownership over late object-preview settlement', async (t) => {
+  for (const settlement of ['success', 'failure'] as const) {
+    await t.test(`late preview ${settlement}`, async () => {
+      const client = new VoxelObjectFixtureClient();
+      const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
+      await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+      await store.runVoxelAction(objectPrepareAction());
+      const conversion = store.snapshot().voxelWorkspace.objectConversion;
+      assert.ok(conversion !== null);
+
+      client.blockNextPreview();
+      const stalePreview = store.runVoxelAction({
+        kind: 'previewObjectFrame',
+        planId: conversion.plan.planId,
+        expectedPlanHash: conversion.plan.planHash,
+        frame: { kind: 'clip', clipId: 'clip/walk-1', frameIndex: 1 },
+        maxPreviewSamples: 64,
+      });
+      assert.equal(store.snapshot().operation, 'voxel');
+
+      await store.refreshProject();
+      assert.equal(store.snapshot().operation, 'idle');
+      assert.strictEqual(store.snapshot().voxelWorkspace.objectConversion, conversion);
+      assert.equal(firstProjectionLabel(store), 'player');
+
+      client.blockNextInspection();
+      const newerInspection = store.runVoxelAction({
+        kind: 'inspectObjectSource',
+        sourceKind: 'animated',
+        sourceAssetId: 'mesh-animation/character',
+        source: { scope: 'host', path: '/trusted/character.glb' },
+      });
+      assert.equal(store.snapshot().operation, 'voxel');
+      const newerOperation = store.snapshot();
+
+      if (settlement === 'success') client.resolveBlockedPreview();
+      else client.rejectBlockedPreview();
+      await stalePreview;
+
+      assert.strictEqual(store.snapshot(), newerOperation);
+      assert.equal(store.snapshot().operation, 'voxel');
+      assert.strictEqual(store.snapshot().voxelWorkspace.objectConversion, conversion);
+      assert.equal(store.snapshot().voxelWorkspace.objectSourceInspection, null);
+      assert.equal(store.snapshot().lastError, null);
+      assert.equal(firstProjectionLabel(store), 'player');
+
+      client.resolveBlockedInspection();
+      await newerInspection;
+
+      assert.equal(store.snapshot().operation, 'idle');
+      assert.equal(store.snapshot().voxelWorkspace.objectSourceInspection?.clips[0]?.name, 'Walk');
+      assert.strictEqual(store.snapshot().voxelWorkspace.objectConversion, conversion);
+      assert.equal(store.snapshot().lastError, null);
+      assert.equal(firstProjectionLabel(store), 'player');
+    });
+  }
+});
+
 test('voxel-object source, shared candidate frames, stale apply, explicit discard, apply, and reopen stay distinct', async () => {
   const client = new VoxelObjectFixtureClient();
   const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
@@ -457,6 +515,10 @@ class VoxelObjectFixtureClient {
   openedProjectId = 'loading-bay';
   previewRequestCount = 0;
   applyRequestCount = 0;
+  #blockedInspection: {
+    readonly promise: Promise<unknown>;
+    readonly resolve: (response: unknown) => void;
+  } | null = null;
   #blockedPreview: {
     readonly promise: Promise<unknown>;
     readonly resolve: (response: unknown) => void;
@@ -495,6 +557,7 @@ class VoxelObjectFixtureClient {
   }
 
   inspectVoxelObjectSource() {
+    if (this.#blockedInspection !== null) return this.#blockedInspection.promise;
     return Promise.resolve({ inspection: objectSourceInspection() } as never);
   }
 
@@ -505,6 +568,22 @@ class VoxelObjectFixtureClient {
       projection: objectCandidateProjection(0),
       projectionReadout: projectionReadout(20),
     } as never);
+  }
+
+  blockNextInspection() {
+    assert.equal(this.#blockedInspection, null);
+    let resolve!: (response: unknown) => void;
+    const promise = new Promise<unknown>((resolvePromise) => {
+      resolve = resolvePromise;
+    });
+    this.#blockedInspection = { promise, resolve };
+  }
+
+  resolveBlockedInspection() {
+    const blocked = this.#blockedInspection;
+    assert.ok(blocked !== null);
+    this.#blockedInspection = null;
+    blocked.resolve({ inspection: objectSourceInspection() });
   }
 
   blockNextPreview() {
