@@ -788,7 +788,7 @@ export class StudioShellComponent {
       case 'emptyGroup': return '▾';
       case 'light': return '☀';
       case 'voxelVolume': return '▦';
-      case 'voxelObject': return '▤';
+      case 'entityInstance': return '▤';
       case 'marker': return '⌖';
       default: return '◇';
     }
