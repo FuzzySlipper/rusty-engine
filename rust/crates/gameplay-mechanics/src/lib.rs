@@ -14,6 +14,7 @@
 mod catalog;
 mod component;
 mod damage;
+mod effect;
 mod error;
 mod identity;
 mod item;
@@ -26,26 +27,33 @@ mod view;
 
 pub use catalog::{
     CatalogError, DamageKindDefinition, DamageKindSelector, DamageResponseDefinition,
-    EffectDefinition, EquipmentSlotDefinition, ItemDefinition, ItemKind, MechanicsCatalog,
-    MechanicsCatalogDefinition, MechanicsCatalogView, SourceDefinition, StackingPolicy,
-    StatContribution, StatContributionDefinition, StatDefinition, TrackDefinition, TrackMaximum,
-    MAX_CATALOG_DAMAGE_KINDS, MAX_CATALOG_EFFECTS, MAX_CATALOG_EQUIPMENT_SLOTS, MAX_CATALOG_ITEMS,
-    MAX_CATALOG_SOURCES, MAX_CATALOG_STATS, MAX_CATALOG_TRACKS, MAX_RESPONSES_PER_SOURCE,
-    MAX_STAT_CONTRIBUTIONS_PER_SOURCE,
+    EffectDefinition, EffectStackingPolicy, EquipmentSlotDefinition, ItemDefinition, ItemKind,
+    MechanicsCatalog, MechanicsCatalogDefinition, MechanicsCatalogView, SourceDefinition,
+    StackingPolicy, StatContribution, StatContributionDefinition, StatDefinition, TrackDefinition,
+    TrackMaximum, MAX_CATALOG_DAMAGE_KINDS, MAX_CATALOG_EFFECTS, MAX_CATALOG_EQUIPMENT_SLOTS,
+    MAX_CATALOG_ITEMS, MAX_CATALOG_SOURCES, MAX_CATALOG_STATS, MAX_CATALOG_TRACKS,
+    MAX_EFFECT_INSTANCES_PER_GROUP, MAX_EFFECT_STACKS, MAX_RESPONSES_PER_SOURCE,
+    MAX_SOURCES_PER_EFFECT, MAX_STAT_CONTRIBUTIONS_PER_SOURCE,
 };
 pub use component::{
-    gameplay_component_registry, register_gameplay_components, ActiveEffectInstance,
-    ActiveEffectsComponent, EquipmentAssignment, EquipmentComponent, IntrinsicSourceBinding,
-    IntrinsicSourcesComponent, InventoryComponent, ItemComponent, ItemStack,
-    MechanicsComponentDataError, MechanicsComponentKind, ObservedComponentRevision, StatValue,
-    StatsComponent, TrackValue, TracksComponent, ACTIVE_EFFECTS_COMPONENT_TYPE_ID,
-    EQUIPMENT_COMPONENT_TYPE_ID, INTRINSIC_SOURCES_COMPONENT_TYPE_ID, INVENTORY_COMPONENT_TYPE_ID,
-    ITEM_COMPONENT_TYPE_ID, STATS_COMPONENT_TYPE_ID, TRACKS_COMPONENT_TYPE_ID,
+    gameplay_component_registry, register_gameplay_components, EquipmentAssignment,
+    EquipmentComponent, IntrinsicSourceBinding, IntrinsicSourcesComponent, InventoryComponent,
+    ItemComponent, ItemStack, MechanicsComponentDataError, MechanicsComponentKind,
+    ObservedComponentRevision, StatValue, StatsComponent, TrackValue, TracksComponent,
+    ACTIVE_EFFECTS_COMPONENT_TYPE_ID, EQUIPMENT_COMPONENT_TYPE_ID,
+    INTRINSIC_SOURCES_COMPONENT_TYPE_ID, INVENTORY_COMPONENT_TYPE_ID, ITEM_COMPONENT_TYPE_ID,
+    STATS_COMPONENT_TYPE_ID, TRACKS_COMPONENT_TYPE_ID,
 };
 pub use damage::{
     DamageFact, DamagePart, DamagePartReceipt, DamagePreview, DamageReceipt, DamageRequest,
     DamageService, ResponseDecision, ResponseDecisionKind, TrackDamageChange, MAX_DAMAGE_PARTS,
     MAX_DAMAGE_RECEIPT_DECISIONS, MAX_DAMAGE_REQUEST_SOURCES,
+};
+pub use effect::{
+    ActiveEffectInstance, ActiveEffectsComponent, EffectApplyRequest, EffectMutationKind,
+    EffectMutationReceipt, EffectRefreshRequest, EffectRemovalRequest, EffectReplaceRequest,
+    EffectService, EffectSourceActivation, MAX_ACTIVE_EFFECT_INSTANCES,
+    MAX_EFFECT_SOURCE_ACTIVATIONS,
 };
 pub use error::{MechanicsError, MechanicsSnapshotError};
 pub use identity::{
@@ -66,8 +74,8 @@ pub use snapshot::{
 };
 pub use source::{
     ActiveSource, DecisionOutcome, RequestSource, SourceCollectionCost, SourceInstanceIdentity,
-    MAX_ACTIVE_EFFECT_INSTANCES, MAX_EQUIPMENT_ASSIGNMENTS, MAX_INTRINSIC_SOURCE_BINDINGS,
-    MAX_INVENTORY_STACKS, MAX_REQUEST_SOURCES,
+    MAX_EQUIPMENT_ASSIGNMENTS, MAX_INTRINSIC_SOURCE_BINDINGS, MAX_INVENTORY_STACKS,
+    MAX_REQUEST_SOURCES,
 };
 pub use stat::{
     StatBaseMutationReceipt, StatBaseMutationRequest, StatDecision, StatEvaluation, StatService,
@@ -78,4 +86,6 @@ pub use track::{
     TrackReconciliationReceipt, TrackReconciliationRequest, TrackService, TrackSetPolicy,
     TrackSetReceipt, TrackSetRequest,
 };
-pub use view::{IntrinsicSourcesView, MechanicsEntityView, StatsView, TracksView};
+pub use view::{
+    ActiveEffectsView, IntrinsicSourcesView, MechanicsEntityView, StatsView, TracksView,
+};

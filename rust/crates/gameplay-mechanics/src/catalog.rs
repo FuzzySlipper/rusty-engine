@@ -15,6 +15,9 @@ pub const MAX_CATALOG_DAMAGE_KINDS: usize = 64;
 pub const MAX_CATALOG_EFFECTS: usize = 128;
 pub const MAX_CATALOG_ITEMS: usize = 256;
 pub const MAX_CATALOG_EQUIPMENT_SLOTS: usize = 64;
+pub const MAX_SOURCES_PER_EFFECT: usize = 32;
+pub const MAX_EFFECT_STACKS: u16 = 32;
+pub const MAX_EFFECT_INSTANCES_PER_GROUP: u16 = 64;
 pub const MAX_STAT_CONTRIBUTIONS_PER_SOURCE: usize = 32;
 pub const MAX_RESPONSES_PER_SOURCE: usize = 32;
 pub const MAX_ABS_SOURCE_PRIORITY: i16 = 10_000;
@@ -178,10 +181,21 @@ pub struct DamageKindDefinition {
     pub id: DamageKindId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum EffectStackingPolicy {
+    IndependentByProvenance { maximum_instances: u16 },
+    Refresh,
+    Replace,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EffectDefinition {
     pub id: EffectDefinitionId,
+    pub stacking_group: StackingGroupId,
+    pub stacking: EffectStackingPolicy,
+    pub maximum_stacks: u16,
     pub sources: Vec<SourceDefinitionId>,
 }
 
@@ -450,9 +464,41 @@ impl MechanicsCatalog {
         validate_stat_contribution_kinds(&definition.sources)?;
 
         for effect in &definition.effects {
+            if effect.sources.is_empty() {
+                return Err(CatalogError::EmptyReferences {
+                    owner: effect.id.to_string(),
+                    namespace: "source",
+                });
+            }
+            enforce_quota(
+                "sourcesPerEffect",
+                effect.sources.len(),
+                MAX_SOURCES_PER_EFFECT,
+            )?;
+            if effect.maximum_stacks == 0 || effect.maximum_stacks > MAX_EFFECT_STACKS {
+                return Err(CatalogError::InvalidEffectLimit {
+                    effect: effect.id.clone(),
+                    field: "maximumStacks",
+                    value: effect.maximum_stacks,
+                    maximum: MAX_EFFECT_STACKS,
+                });
+            }
+            if let EffectStackingPolicy::IndependentByProvenance { maximum_instances } =
+                effect.stacking
+            {
+                if maximum_instances == 0 || maximum_instances > MAX_EFFECT_INSTANCES_PER_GROUP {
+                    return Err(CatalogError::InvalidEffectLimit {
+                        effect: effect.id.clone(),
+                        field: "maximumInstances",
+                        value: maximum_instances,
+                        maximum: MAX_EFFECT_INSTANCES_PER_GROUP,
+                    });
+                }
+            }
             reject_duplicate_references(&effect.sources, effect.id.as_str(), "source")?;
             validate_source_references(&definition.sources, effect.id.as_str(), &effect.sources)?;
         }
+        validate_effect_stacking_contract(&definition.effects)?;
         for item in &definition.items {
             reject_duplicate_references(&item.sources, item.id.as_str(), "source")?;
             validate_source_references(&definition.sources, item.id.as_str(), &item.sources)?;
@@ -589,6 +635,21 @@ pub enum CatalogError {
         expected: &'static str,
         actual: &'static str,
     },
+    EmptyReferences {
+        owner: String,
+        namespace: &'static str,
+    },
+    InvalidEffectLimit {
+        effect: EffectDefinitionId,
+        field: &'static str,
+        value: u16,
+        maximum: u16,
+    },
+    InconsistentEffectStackingPolicy {
+        group: StackingGroupId,
+        expected: EffectStackingPolicy,
+        actual: EffectStackingPolicy,
+    },
 }
 
 impl std::fmt::Display for CatalogError {
@@ -606,6 +667,22 @@ fn enforce_quota(field: &'static str, actual: usize, maximum: usize) -> Result<(
             actual,
             maximum,
         });
+    }
+    Ok(())
+}
+
+fn validate_effect_stacking_contract(effects: &[EffectDefinition]) -> Result<(), CatalogError> {
+    let mut policies = std::collections::BTreeMap::new();
+    for effect in effects {
+        if let Some(expected) = policies.insert(effect.stacking_group.clone(), effect.stacking) {
+            if expected != effect.stacking {
+                return Err(CatalogError::InconsistentEffectStackingPolicy {
+                    group: effect.stacking_group.clone(),
+                    expected,
+                    actual: effect.stacking,
+                });
+            }
+        }
     }
     Ok(())
 }

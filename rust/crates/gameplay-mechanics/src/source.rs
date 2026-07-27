@@ -9,7 +9,6 @@ use crate::{
 };
 
 pub const MAX_INTRINSIC_SOURCE_BINDINGS: usize = 64;
-pub const MAX_ACTIVE_EFFECT_INSTANCES: usize = 64;
 pub const MAX_EQUIPMENT_ASSIGNMENTS: usize = 32;
 pub const MAX_INVENTORY_STACKS: usize = 128;
 pub const MAX_REQUEST_SOURCES: usize = 32;
@@ -26,6 +25,7 @@ pub enum SourceInstanceIdentity {
         #[serde(with = "entity_id_serde")]
         entity: EntityId,
         effect: EffectInstanceId,
+        stack: u16,
         source: SourceDefinitionId,
     },
     EquippedItem {
@@ -65,6 +65,7 @@ pub enum DecisionOutcome {
 pub struct SourceCollectionCost {
     pub intrinsic_entries_visited: usize,
     pub effect_entries_visited: usize,
+    pub effect_source_activations_visited: usize,
     pub equipment_entries_visited: usize,
     pub item_components_read: usize,
     pub request_entries_visited: usize,
@@ -77,6 +78,33 @@ pub(crate) fn collect_active_sources(
     operation: &OperationId,
     request_sources: &[RequestSource],
     maximum_sources: usize,
+) -> Result<
+    (
+        Vec<ActiveSource>,
+        SourceCollectionCost,
+        Vec<ObservedComponentRevision>,
+    ),
+    MechanicsError,
+> {
+    collect_active_sources_with_effects_override(
+        state,
+        catalog,
+        entity,
+        operation,
+        request_sources,
+        maximum_sources,
+        None,
+    )
+}
+
+pub(crate) fn collect_active_sources_with_effects_override(
+    state: &EntityState,
+    catalog: &MechanicsCatalog,
+    entity: EntityId,
+    operation: &OperationId,
+    request_sources: &[RequestSource],
+    maximum_sources: usize,
+    active_effects_override: Option<&ActiveEffectsComponent>,
 ) -> Result<
     (
         Vec<ActiveSource>,
@@ -118,7 +146,12 @@ pub(crate) fn collect_active_sources(
         }
     }
 
-    if let Some(component) = state.component::<ActiveEffectsComponent>(entity)? {
+    let stored_effects = if active_effects_override.is_none() {
+        state.component::<ActiveEffectsComponent>(entity)?
+    } else {
+        None
+    };
+    if let Some(component) = active_effects_override.or(stored_effects) {
         observed_revisions.push(ObservedComponentRevision {
             entity,
             component: MechanicsComponentKind::ActiveEffects,
@@ -132,25 +165,37 @@ pub(crate) fn collect_active_sources(
             ActiveEffectsComponent::LABEL,
             component.catalog_version(),
         )?;
+        crate::effect::validate_active_effects_against_catalog(entity, component, catalog)?;
         for active in component.effects() {
             cost.effect_entries_visited += 1;
-            let definition = catalog.effect(&active.definition).ok_or_else(|| {
+            let definition = catalog.effect(active.definition()).ok_or_else(|| {
                 MechanicsError::UnknownEffect {
-                    effect: active.definition.clone(),
+                    effect: active.definition().clone(),
                 }
             })?;
-            for source in &definition.sources {
-                push_source(
-                    catalog,
-                    &mut collected,
-                    SourceInstanceIdentity::Effect {
-                        entity,
-                        effect: active.instance.clone(),
-                        source: source.clone(),
-                    },
-                    source.clone(),
-                    maximum_sources,
-                )?;
+            let additional = usize::from(active.stacks())
+                .checked_mul(definition.sources.len())
+                .ok_or(MechanicsError::ReceiptQuotaExceeded {
+                    actual: usize::MAX,
+                    maximum: maximum_sources,
+                })?;
+            ensure_receipt_capacity(collected.len(), additional, maximum_sources)?;
+            for stack in 1..=active.stacks() {
+                for source in &definition.sources {
+                    cost.effect_source_activations_visited += 1;
+                    push_source(
+                        catalog,
+                        &mut collected,
+                        SourceInstanceIdentity::Effect {
+                            entity,
+                            effect: active.instance().clone(),
+                            stack,
+                            source: source.clone(),
+                        },
+                        source.clone(),
+                        maximum_sources,
+                    )?;
+                }
             }
         }
     }

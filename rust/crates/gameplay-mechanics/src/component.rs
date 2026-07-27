@@ -6,10 +6,10 @@ use entity_state::{
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::{
-    CatalogVersion, EffectDefinitionId, EffectInstanceId, EquipmentSlotId, ItemDefinitionId,
+    ActiveEffectsComponent, CatalogVersion, EffectInstanceId, EquipmentSlotId, ItemDefinitionId,
     MechanicsScalar, SourceDefinitionId, SourceInstanceId, StatId, TrackId,
-    MAX_ACTIVE_EFFECT_INSTANCES, MAX_EQUIPMENT_ASSIGNMENTS, MAX_INTRINSIC_SOURCE_BINDINGS,
-    MAX_INVENTORY_STACKS,
+    MAX_ACTIVE_EFFECT_INSTANCES, MAX_EFFECT_STACKS, MAX_EQUIPMENT_ASSIGNMENTS,
+    MAX_INTRINSIC_SOURCE_BINDINGS, MAX_INVENTORY_STACKS,
 };
 
 pub const STATS_COMPONENT_TYPE_ID: &str = "rusty.mechanics.stats";
@@ -28,6 +28,7 @@ const INVENTORY_CODEC_ID: &str = "rusty.mechanics.inventory-json";
 const ITEM_CODEC_ID: &str = "rusty.mechanics.item-json";
 const EQUIPMENT_CODEC_ID: &str = "rusty.mechanics.equipment-json";
 const COMPONENT_CODEC_VERSION: u32 = 1;
+const ACTIVE_EFFECTS_CODEC_VERSION: u32 = 2;
 
 pub const MAX_STATS_PER_ENTITY: usize = 128;
 pub const MAX_TRACKS_PER_ENTITY: usize = 128;
@@ -260,51 +261,6 @@ impl EntityComponent for IntrinsicSourcesComponent {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ActiveEffectInstance {
-    pub instance: EffectInstanceId,
-    pub definition: EffectDefinitionId,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ActiveEffectsComponent {
-    catalog_version: CatalogVersion,
-    effects: Vec<ActiveEffectInstance>,
-}
-
-impl ActiveEffectsComponent {
-    pub const LABEL: &'static str = "ActiveEffectsComponent";
-
-    pub fn new(
-        catalog_version: CatalogVersion,
-        mut effects: Vec<ActiveEffectInstance>,
-    ) -> Result<Self, MechanicsComponentDataError> {
-        effects.sort_by(|left, right| left.instance.cmp(&right.instance));
-        validate_unique_quota(
-            &effects,
-            MAX_ACTIVE_EFFECT_INSTANCES,
-            "activeEffects",
-            |value| value.instance.as_str(),
-        )?;
-        Ok(Self {
-            catalog_version,
-            effects,
-        })
-    }
-
-    pub fn catalog_version(&self) -> &CatalogVersion {
-        &self.catalog_version
-    }
-
-    pub fn effects(&self) -> &[ActiveEffectInstance] {
-        &self.effects
-    }
-}
-
-impl EntityComponent for ActiveEffectsComponent {}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ItemStack {
     pub definition: ItemDefinitionId,
     pub quantity: u64,
@@ -458,6 +414,11 @@ pub enum MechanicsComponentDataError {
         definition: ItemDefinitionId,
         quantity: u64,
     },
+    InvalidEffectStacks {
+        instance: EffectInstanceId,
+        stacks: u16,
+        maximum: u16,
+    },
 }
 
 impl std::fmt::Display for MechanicsComponentDataError {
@@ -481,36 +442,43 @@ pub fn register_gameplay_components(
     staged.register(durable_registration::<StatsComponent>(
         STATS_COMPONENT_TYPE_ID,
         STATS_CODEC_ID,
+        COMPONENT_CODEC_VERSION,
         validate_stats,
     ))?;
     staged.register(durable_registration::<TracksComponent>(
         TRACKS_COMPONENT_TYPE_ID,
         TRACKS_CODEC_ID,
+        COMPONENT_CODEC_VERSION,
         validate_tracks,
     ))?;
     staged.register(durable_registration::<IntrinsicSourcesComponent>(
         INTRINSIC_SOURCES_COMPONENT_TYPE_ID,
         INTRINSIC_SOURCES_CODEC_ID,
+        COMPONENT_CODEC_VERSION,
         validate_intrinsic_sources,
     ))?;
     staged.register(durable_registration::<ActiveEffectsComponent>(
         ACTIVE_EFFECTS_COMPONENT_TYPE_ID,
         ACTIVE_EFFECTS_CODEC_ID,
+        ACTIVE_EFFECTS_CODEC_VERSION,
         validate_active_effects,
     ))?;
     staged.register(durable_registration::<InventoryComponent>(
         INVENTORY_COMPONENT_TYPE_ID,
         INVENTORY_CODEC_ID,
+        COMPONENT_CODEC_VERSION,
         validate_inventory,
     ))?;
     staged.register(durable_registration::<ItemComponent>(
         ITEM_COMPONENT_TYPE_ID,
         ITEM_CODEC_ID,
+        COMPONENT_CODEC_VERSION,
         |_| Ok(()),
     ))?;
     staged.register(durable_registration::<EquipmentComponent>(
         EQUIPMENT_COMPONENT_TYPE_ID,
         EQUIPMENT_CODEC_ID,
+        COMPONENT_CODEC_VERSION,
         validate_equipment,
     ))?;
     *registry = staged;
@@ -520,6 +488,7 @@ pub fn register_gameplay_components(
 fn durable_registration<T>(
     type_id: &'static str,
     codec_id: &'static str,
+    codec_version: u32,
     validator: fn(&T) -> Result<(), String>,
 ) -> ComponentRegistration<T>
 where
@@ -527,7 +496,7 @@ where
 {
     let codec = ComponentCodec::new(
         codec_id,
-        COMPONENT_CODEC_VERSION,
+        codec_version,
         |value| serde_json::to_value(value).expect("mechanics component codec is infallible"),
         |value| serde_json::from_value(value).map_err(|error| error.to_string()),
     )
@@ -558,9 +527,17 @@ fn validate_intrinsic_sources(value: &IntrinsicSourcesComponent) -> Result<(), S
 }
 
 fn validate_active_effects(value: &ActiveEffectsComponent) -> Result<(), String> {
-    validate_sorted_unique_quota(&value.effects, MAX_ACTIVE_EFFECT_INSTANCES, |entry| {
-        entry.instance.as_str()
-    })
+    validate_sorted_unique_quota(value.effects(), MAX_ACTIVE_EFFECT_INSTANCES, |entry| {
+        entry.instance().as_str()
+    })?;
+    if value
+        .effects()
+        .iter()
+        .any(|entry| entry.stacks() == 0 || entry.stacks() > MAX_EFFECT_STACKS)
+    {
+        return Err("active effect stacks are zero or exceed the bound".to_string());
+    }
+    Ok(())
 }
 
 fn validate_inventory(value: &InventoryComponent) -> Result<(), String> {

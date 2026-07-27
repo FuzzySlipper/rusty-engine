@@ -2,7 +2,8 @@ use core_ids::EntityId;
 use entity_state::{ComponentRevision, EntityState};
 
 use crate::{
-    CatalogVersion, IntrinsicSourceBinding, IntrinsicSourcesComponent, MechanicsError, StatValue,
+    ActiveEffectInstance, ActiveEffectsComponent, CatalogVersion, EffectSourceActivation,
+    IntrinsicSourceBinding, IntrinsicSourcesComponent, MechanicsCatalog, MechanicsError, StatValue,
     StatsComponent, TrackValue, TracksComponent,
 };
 
@@ -70,11 +71,58 @@ impl<'a> IntrinsicSourcesView<'a> {
 }
 
 #[derive(Debug, Clone)]
+pub struct ActiveEffectsView<'a> {
+    entity: EntityId,
+    revision: ComponentRevision,
+    catalog_version: &'a CatalogVersion,
+    effects: &'a [ActiveEffectInstance],
+}
+
+impl<'a> ActiveEffectsView<'a> {
+    pub fn revision(&self) -> &ComponentRevision {
+        &self.revision
+    }
+
+    pub const fn catalog_version(&self) -> &'a CatalogVersion {
+        self.catalog_version
+    }
+
+    pub const fn effects(&self) -> &'a [ActiveEffectInstance] {
+        self.effects
+    }
+
+    pub fn activated_sources(
+        &self,
+        catalog: &MechanicsCatalog,
+    ) -> Result<Vec<EffectSourceActivation>, MechanicsError> {
+        crate::source::ensure_catalog_version(
+            catalog,
+            self.entity,
+            ActiveEffectsComponent::LABEL,
+            self.catalog_version,
+        )?;
+        let component =
+            ActiveEffectsComponent::new(self.catalog_version.clone(), self.effects.to_vec())?;
+        crate::effect::validate_active_effects_against_catalog(self.entity, &component, catalog)?;
+        let mut activations = Vec::new();
+        for effect in self.effects {
+            activations.extend(crate::effect::effect_source_activations(
+                self.entity,
+                effect,
+                catalog,
+            )?);
+        }
+        Ok(activations)
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct MechanicsEntityView<'a> {
     entity: EntityId,
     stats: Option<StatsView<'a>>,
     tracks: Option<TracksView<'a>>,
     intrinsic_sources: Option<IntrinsicSourcesView<'a>>,
+    active_effects: Option<ActiveEffectsView<'a>>,
 }
 
 impl<'a> MechanicsEntityView<'a> {
@@ -112,11 +160,23 @@ impl<'a> MechanicsEntityView<'a> {
                 })
             })
             .transpose()?;
+        let active_effects = state
+            .component::<ActiveEffectsComponent>(entity)?
+            .map(|component| -> Result<_, MechanicsError> {
+                Ok(ActiveEffectsView {
+                    entity,
+                    revision: state.component_revision::<ActiveEffectsComponent>(entity)?,
+                    catalog_version: component.catalog_version(),
+                    effects: component.effects(),
+                })
+            })
+            .transpose()?;
         Ok(Self {
             entity,
             stats,
             tracks,
             intrinsic_sources,
+            active_effects,
         })
     }
 
@@ -134,5 +194,9 @@ impl<'a> MechanicsEntityView<'a> {
 
     pub const fn intrinsic_sources(&self) -> Option<&IntrinsicSourcesView<'a>> {
         self.intrinsic_sources.as_ref()
+    }
+
+    pub const fn active_effects(&self) -> Option<&ActiveEffectsView<'a>> {
+        self.active_effects.as_ref()
     }
 }

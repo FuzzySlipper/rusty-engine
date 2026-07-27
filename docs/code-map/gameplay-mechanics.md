@@ -30,6 +30,7 @@ restoration, and their bounded receipts.
 - [`gameplay-mechanics/src/lib.rs`](../../rust/crates/gameplay-mechanics/src/lib.rs)
 - [`gameplay-mechanics/src/catalog.rs`](../../rust/crates/gameplay-mechanics/src/catalog.rs)
 - [`gameplay-mechanics/src/component.rs`](../../rust/crates/gameplay-mechanics/src/component.rs)
+- [`gameplay-mechanics/src/effect.rs`](../../rust/crates/gameplay-mechanics/src/effect.rs)
 - [`gameplay-mechanics/src/source.rs`](../../rust/crates/gameplay-mechanics/src/source.rs)
 - [`gameplay-mechanics/src/stat.rs`](../../rust/crates/gameplay-mechanics/src/stat.rs)
 - [`gameplay-mechanics/src/track.rs`](../../rust/crates/gameplay-mechanics/src/track.rs)
@@ -39,6 +40,7 @@ restoration, and their bounded receipts.
 - [`gameplay-mechanics/src/snapshot.rs`](../../rust/crates/gameplay-mechanics/src/snapshot.rs)
 - [`gameplay-mechanics/tests/contract.rs`](../../rust/crates/gameplay-mechanics/tests/contract.rs)
 - [`gameplay-mechanics/tests/gm1.rs`](../../rust/crates/gameplay-mechanics/tests/gm1.rs)
+- [`gameplay-mechanics/tests/gm2.rs`](../../rust/crates/gameplay-mechanics/tests/gm2.rs)
 - [Canonical design](../design.md)
 
 ## Public composition
@@ -76,6 +78,23 @@ let health = mechanics
     });
 ```
 
+Effect ownership is also a direct call boundary. A downstream realtime tick,
+city phase, or tabletop turn owner decides when an effect expires and submits
+the exact instance operation; Engine stores no timing state:
+
+```rust
+let applied = EffectService::apply(&mut state, &catalog, apply_request)?;
+let expired = EffectService::expire(&mut state, &catalog, expire_request)?;
+```
+
+`EffectDefinition` admits one stacking group and policy, a maximum stack count,
+and a non-empty bounded source list. `IndependentByProvenance` permits bounded
+coexistence with unique typed provenance; `Refresh` updates one exact existing
+instance; `Replace` removes the occupied policy group and inserts one exact new
+instance. Each stack expands into a separately attributed source activation.
+The regular contribution/response stacking policy—not the effect lifecycle
+service—then decides which numeric or damage candidates apply.
+
 The catalog version is downstream compatibility policy. Its SHA-256 fingerprint
 is computed from canonical admitted definitions without the version and is
 diagnostic/cache identity, not an automatic balance-change lock. Component
@@ -104,12 +123,22 @@ every Engine decision and the exact component revisions read.
   Maximum reconciliation makes `PreserveCurrent` versus `ClampToMaximum`
   explicit; ratio preservation remains intentionally absent.
 - Equipment changes publish one exact `EquipmentComponent` slot.
+- Effect apply, refresh, replace, remove, and expire each validate a complete
+  prospective `ActiveEffectsComponent` and publish that one exact slot. Receipts
+  identify removed/current instances, activated sources, revisions, and bounded
+  traversal cost.
 - Unique ownership is canonical containment. Transfer rejects an equipped item;
   callers explicitly unequip, then transfer. Both intermediate states are
   valid.
 - Before removing an effect/source that lowers a derived maximum, reconcile the
   track to the prospective maximum, then publish the effect/source change. A
-  failed second step leaves a lower but valid current value.
+  rejected effect operation reports that bound without mutation; a failed retry
+  leaves the explicitly lowered but valid current value.
+
+The active-effects durable codec is version 2. It stores only catalog version,
+effect instance/definition identity, typed provenance, and stacks. Timers,
+timestamps, durations, turns, callbacks, and scheduler state belong to the
+downstream owner and reconnect through the stable effect instance identity.
 
 Do not route these operations through `EntityCommandBatch`, clone complete
 `EntityState`, expose mutable component references, or add a private entity map.
@@ -126,11 +155,14 @@ specified atomic seam to the `entity-state` owner.
 - Damage parts: 8.
 - Request-local sources: 32.
 - Receipt response decisions: 256.
+- Sources per effect: 32; stacks per instance: 32; active instances: 64;
+  independent instances per stacking group: 64; expanded active-effect sources
+  per entity: 256.
 - Stats/tracks per entity: 128 each.
 - Active-source collection and per-source decision expansion stop at that
   receipt ceiling before cloning an over-limit entry.
-- Source bindings/effects: 64 each; equipment assignments: 32; inventory
-  stacks: 128.
+- Intrinsic source bindings: 64; equipment assignments: 32; inventory stacks:
+  128.
 - Damage order: prevention, flat reduction, combined exact scale and one
   toward-zero rounding, ordered absorption, target application.
 - Track-room comparisons use a wider intermediate capped by the admitted
@@ -164,6 +196,8 @@ Studio gate is additional evidence only when a Studio-owned boundary changes.
 - Adding an item-instance namespace or unique-item list beside `EntityId` and
   containment.
 - Hiding effect timing or callbacks inside a component.
+- Treating stack count as a free-form intensity formula, or making apply
+  silently choose refresh/replace behavior for the caller.
 - Turning detailed receipts into an ambient journal, event bus, or replay
   requirement.
 

@@ -6,8 +6,8 @@ use gameplay_mechanics::{
     decode_snapshot_with_catalog, ActiveEffectInstance, ActiveEffectsComponent, CatalogVersion,
     DamageKindDefinition, DamageKindId, DamageKindSelector, DamagePart, DamageRequest,
     DamageResponseDefinition, DamageService, DecisionOutcome, EffectDefinition, EffectDefinitionId,
-    EffectInstanceId, EquipmentAssignment, EquipmentComponent, EquipmentService,
-    EquipmentSlotDefinition, EquipmentSlotId, ExactRatio, IntrinsicSourceBinding,
+    EffectInstanceId, EffectStackingPolicy, EquipmentAssignment, EquipmentComponent,
+    EquipmentService, EquipmentSlotDefinition, EquipmentSlotId, ExactRatio, IntrinsicSourceBinding,
     IntrinsicSourcesComponent, ItemComponent, ItemDefinition, ItemDefinitionId, ItemKind,
     ItemTransferRequest, MechanicsCatalog, MechanicsCatalogDefinition, MechanicsError,
     MechanicsScalar, MechanicsSnapshotError, OperationId, RequestSource, SourceDefinition,
@@ -15,9 +15,9 @@ use gameplay_mechanics::{
     StatContribution, StatContributionDefinition, StatDefinition, StatId, StatService, StatValue,
     StatsComponent, TrackAdjustmentKind, TrackDefinition, TrackId, TrackMaximum,
     TrackMutationRequest, TrackReconciliationPolicy, TrackReconciliationRequest, TrackService,
-    TrackValue, TracksComponent, MAX_ABS_MECHANICS_SCALAR, MAX_CATALOG_SOURCES,
-    MAX_DAMAGE_RECEIPT_DECISIONS, MAX_RESPONSES_PER_SOURCE, MAX_STAT_CONTRIBUTIONS_PER_SOURCE,
-    MAX_STAT_DECISIONS,
+    TrackValue, TracksComponent, MAX_ABS_MECHANICS_SCALAR, MAX_DAMAGE_RECEIPT_DECISIONS,
+    MAX_EFFECT_SOURCE_ACTIVATIONS, MAX_RESPONSES_PER_SOURCE, MAX_SOURCES_PER_EFFECT,
+    MAX_STAT_CONTRIBUTIONS_PER_SOURCE, MAX_STAT_DECISIONS,
 };
 
 const SHOOTER: EntityId = EntityId::new(1);
@@ -200,6 +200,9 @@ fn catalog() -> MechanicsCatalog {
         ],
         effects: vec![EffectDefinition {
             id: invulnerability_effect(),
+            stacking_group: StackingGroupId::parse("invulnerability_effects").unwrap(),
+            stacking: EffectStackingPolicy::Refresh,
+            maximum_stacks: 1,
             sources: vec![invulnerability_source()],
         }],
         items: vec![ItemDefinition {
@@ -437,6 +440,11 @@ fn quota_fixture(
         }],
         effects: vec![EffectDefinition {
             id: effect.clone(),
+            stacking_group: StackingGroupId::parse("quota_effects").unwrap(),
+            stacking: EffectStackingPolicy::IndependentByProvenance {
+                maximum_instances: 64,
+            },
+            maximum_stacks: 1,
             sources: effect_sources,
         }],
         items: vec![],
@@ -473,10 +481,18 @@ fn quota_fixture(
         ActiveEffectsComponent::new(
             version,
             (0..effect_count)
-                .map(|effect_index| ActiveEffectInstance {
-                    instance: EffectInstanceId::parse(format!("quota_effect_{effect_index}"))
-                        .unwrap(),
-                    definition: effect.clone(),
+                .map(|effect_index| {
+                    let provenance_operation = operation("quota_effect_seed");
+                    ActiveEffectInstance::new(
+                        EffectInstanceId::parse(format!("quota_effect_{effect_index}")).unwrap(),
+                        effect.clone(),
+                        request_identity(
+                            &provenance_operation,
+                            &format!("quota_effect_source_{effect_index}"),
+                        ),
+                        1,
+                    )
+                    .unwrap()
                 })
                 .collect(),
         )
@@ -674,10 +690,13 @@ fn tabletop_preview_is_pure_and_fresh_apply_recomputes_after_reaction() {
             TABLETOP_TARGET,
             ActiveEffectsComponent::new(
                 catalog_version(),
-                vec![ActiveEffectInstance {
-                    instance: EffectInstanceId::parse("shield_reaction").unwrap(),
-                    definition: invulnerability_effect(),
-                }],
+                vec![ActiveEffectInstance::new(
+                    EffectInstanceId::parse("shield_reaction").unwrap(),
+                    invulnerability_effect(),
+                    request_identity(&operation("shield_reaction_apply"), "shield_caster"),
+                    1,
+                )
+                .unwrap()],
             )
             .unwrap(),
         )
@@ -990,7 +1009,7 @@ fn full_span_signed_tracks_support_bounded_restore_and_damage() {
 fn decision_quota_preflights_bound_source_and_response_expansion() {
     assert_eq!(MAX_STAT_DECISIONS, MAX_DAMAGE_RECEIPT_DECISIONS);
     for (source_count, entries_per_source, effect_count, expected_actual) in [
-        (MAX_CATALOG_SOURCES, 1, 2, MAX_STAT_DECISIONS + 1),
+        (MAX_SOURCES_PER_EFFECT, 1, 9, MAX_SOURCES_PER_EFFECT * 9),
         (
             1,
             MAX_STAT_CONTRIBUTIONS_PER_SOURCE,
@@ -1035,18 +1054,21 @@ fn decision_quota_preflights_bound_source_and_response_expansion() {
             "quota_stat_{source_count}_{entries_per_source}_{effect_count}"
         ))
         .unwrap();
-        assert!(matches!(
-            StatService::evaluate(
-                &state,
-                &catalog,
-                QUOTA_TARGET,
-                &stat,
-                &stat_operation,
-                &[],
-            ),
-            Err(MechanicsError::ReceiptQuotaExceeded { actual, maximum })
-                if actual == expected_actual && maximum == MAX_STAT_DECISIONS
-        ));
+        let stat_result =
+            StatService::evaluate(&state, &catalog, QUOTA_TARGET, &stat, &stat_operation, &[]);
+        if source_count == MAX_SOURCES_PER_EFFECT {
+            assert!(matches!(
+                stat_result,
+                Err(MechanicsError::EffectSourceQuotaExceeded { actual, maximum })
+                    if actual == expected_actual && maximum == MAX_EFFECT_SOURCE_ACTIVATIONS
+            ));
+        } else {
+            assert!(matches!(
+                stat_result,
+                Err(MechanicsError::ReceiptQuotaExceeded { actual, maximum })
+                    if actual == expected_actual && maximum == MAX_STAT_DECISIONS
+            ));
+        }
 
         let damage_operation = OperationId::parse(format!(
             "quota_damage_{source_count}_{entries_per_source}_{effect_count}"
@@ -1065,16 +1087,31 @@ fn decision_quota_preflights_bound_source_and_response_expansion() {
             request_sources: vec![],
             expected_tracks_revision: Some(before_tracks_revision.clone()),
         };
-        assert!(matches!(
-            DamageService::preview(&state, &catalog, &damage_request),
-            Err(MechanicsError::ReceiptQuotaExceeded { actual, maximum })
-                if actual == expected_actual && maximum == MAX_DAMAGE_RECEIPT_DECISIONS
-        ));
-        assert!(matches!(
-            DamageService::apply(&mut state, &catalog, damage_request),
-            Err(MechanicsError::ReceiptQuotaExceeded { actual, maximum })
-                if actual == expected_actual && maximum == MAX_DAMAGE_RECEIPT_DECISIONS
-        ));
+        let preview_result = DamageService::preview(&state, &catalog, &damage_request);
+        let apply_result = DamageService::apply(&mut state, &catalog, damage_request);
+        if source_count == MAX_SOURCES_PER_EFFECT {
+            assert!(matches!(
+                preview_result,
+                Err(MechanicsError::EffectSourceQuotaExceeded { actual, maximum })
+                    if actual == expected_actual && maximum == MAX_EFFECT_SOURCE_ACTIVATIONS
+            ));
+            assert!(matches!(
+                apply_result,
+                Err(MechanicsError::EffectSourceQuotaExceeded { actual, maximum })
+                    if actual == expected_actual && maximum == MAX_EFFECT_SOURCE_ACTIVATIONS
+            ));
+        } else {
+            assert!(matches!(
+                preview_result,
+                Err(MechanicsError::ReceiptQuotaExceeded { actual, maximum })
+                    if actual == expected_actual && maximum == MAX_DAMAGE_RECEIPT_DECISIONS
+            ));
+            assert!(matches!(
+                apply_result,
+                Err(MechanicsError::ReceiptQuotaExceeded { actual, maximum })
+                    if actual == expected_actual && maximum == MAX_DAMAGE_RECEIPT_DECISIONS
+            ));
+        }
 
         assert_eq!(
             state

@@ -86,13 +86,14 @@ pub fn validate_state_against_catalog(
         )?;
         for effect in component.effects() {
             ensure_reference(
-                catalog.effect(&effect.definition).is_some(),
+                catalog.effect(effect.definition()).is_some(),
                 entity,
                 ActiveEffectsComponent::LABEL,
                 "effect",
-                effect.definition.to_string(),
+                effect.definition().to_string(),
             )?;
         }
+        crate::effect::validate_active_effects_against_catalog(entity, component, catalog)?;
     }
     for (entity, component) in state.components::<InventoryComponent>()? {
         ensure_catalog_version(

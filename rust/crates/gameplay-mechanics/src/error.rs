@@ -4,9 +4,9 @@ use entity_state::{
 };
 
 use crate::{
-    CatalogVersion, DamageKindId, EffectDefinitionId, EquipmentSlotId, ItemDefinitionId,
-    MechanicsArithmeticError, MechanicsComponentDataError, SourceDefinitionId,
-    SourceInstanceIdentity, StatId, TrackId,
+    CatalogVersion, DamageKindId, EffectDefinitionId, EffectInstanceId, EffectStackingPolicy,
+    EquipmentSlotId, ItemDefinitionId, MechanicsArithmeticError, MechanicsComponentDataError,
+    SourceDefinitionId, SourceInstanceIdentity, StackingGroupId, StatId, TrackId,
 };
 
 #[derive(Debug)]
@@ -61,6 +61,51 @@ pub enum MechanicsError {
     },
     UnknownEffect {
         effect: EffectDefinitionId,
+    },
+    DuplicateEffectInstance {
+        entity: EntityId,
+        instance: EffectInstanceId,
+    },
+    MissingEffectInstance {
+        entity: EntityId,
+        instance: EffectInstanceId,
+    },
+    EffectStackLimitExceeded {
+        effect: EffectDefinitionId,
+        stacks: u16,
+        maximum: u16,
+    },
+    EffectGroupLimitExceeded {
+        entity: EntityId,
+        group: StackingGroupId,
+        actual: usize,
+        maximum: u16,
+    },
+    EffectStackingConflict {
+        entity: EntityId,
+        group: StackingGroupId,
+        policy: EffectStackingPolicy,
+    },
+    EffectProvenanceConflict {
+        entity: EntityId,
+        group: StackingGroupId,
+        provenance: SourceInstanceIdentity,
+    },
+    EffectPolicyMismatch {
+        effect: EffectDefinitionId,
+        expected: &'static str,
+        actual: EffectStackingPolicy,
+    },
+    EffectSourceQuotaExceeded {
+        actual: usize,
+        maximum: usize,
+    },
+    EffectWouldInvalidateTrack {
+        entity: EntityId,
+        track: TrackId,
+        current: i64,
+        prospective_minimum: i64,
+        prospective_maximum: i64,
     },
     UnknownItem {
         item: ItemDefinitionId,

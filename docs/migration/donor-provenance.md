@@ -473,6 +473,17 @@ track must be reconciled to a prospective lower bound before the effect/source c
 that bound is changed. Late multipart damage needs no split because every touched track is
 co-located and staged in one component replacement.
 
+GM2 revisited the donor effect owner in
+`crates/rpg-core/src/authority.rs` at the same pinned revision. Rusty Engine adapted the useful
+`IndependentBySource`, `Refresh`, and `Replace` distinction as bounded
+`IndependentByProvenance`, `Refresh`, and `Replace` catalog policy. Typed provenance replaces the
+donor's RPG-specific source-entity key, and each stack activates ordinary admitted sources rather
+than carrying a rank formula. Apply, refresh, replace, remove, and expire are explicit named
+operations over one component slot. The donor's remaining-count, duration-anchor, application
+revision, condition restrictions, automatic expiry owner, domain events, and authority-state map
+remain excluded. The version-2 active-effects codec therefore persists only identity, definition,
+provenance, and stacks; downstream clocks and turns reconnect by stable effect identity.
+
 The operational dependency baseline is empty. After M10, Cargo metadata, provider fixture paths,
 shell scripts, executable documentation, and CI require only Rusty Engine; ordinary Engine work has
 no pnpm or Node graph at all. A clean clone with no Asha or demo sibling is the certification

@@ -126,8 +126,8 @@ version and a deterministic diagnostic fingerprint. Live values use seven indepe
 durable components: `StatsComponent`, `TracksComponent`, `IntrinsicSourcesComponent`,
 `ActiveEffectsComponent`, `InventoryComponent`, `ItemComponent`, and `EquipmentComponent`.
 Definitions and request/receipt values are not components. Components contain inert data and strict
-codecs; direct `StatService`, `TrackService`, `DamageService`, and `EquipmentService` calls own
-validation and mutation.
+codecs; direct `StatService`, `TrackService`, `EffectService`, `DamageService`, and
+`EquipmentService` calls own validation and mutation.
 
 GM0 freezes these mechanics contracts:
 
@@ -163,6 +163,30 @@ range before scaling; ratio products use checked wider intermediates as well.
 stage one component replacement behind the exact slot revision. A base change that would strand a
 stat-bounded track is rejected until the caller reconciles that track. Rejection leaves both slot
 and global revisions unchanged.
+
+GM2 promotes active effects into an explicit lifecycle without giving Engine a time owner. An
+admitted `EffectDefinition` binds one stacking group and policy, a bounded stack count, and one or
+more admitted source definitions. `ActiveEffectInstance` stores only stable instance and definition
+identity, typed provenance, and current stacks. `IndependentByProvenance`, `Refresh`, and `Replace`
+are catalog policy; apply, refresh, replace, remove, and expire remain distinct `EffectService`
+calls chosen by the downstream owner. Expire is deliberately removal with a caller-supplied
+operation identity—not a timer, turn hook, callback, or implicit update.
+
+Each effect stack activates a separately attributed copy of every bound source, after which the
+ordinary source stacking rules determine applied and suppressed stat or damage decisions. An effect
+operation validates the complete prospective `ActiveEffectsComponent`, all bounded source
+expansion, and every present stat-derived track before publishing one exact component slot. If
+removing or replacing an effect would strand a track above its new maximum, the operation returns
+`EffectWouldInvalidateTrack` without mutation. The downstream owner explicitly clamps that track
+to the reported prospective maximum through `TrackService::reconcile_to_maximum`, then retries the
+effect operation. This is the same valid-state split as GM0; no half-committed effect operation or
+heterogeneous transaction is introduced.
+
+The active-effects durable codec is version 2 and persists only those authoritative fields.
+Downstream duration, timestamp, day/phase, turn, and scheduling state reconnect by stable effect
+instance identity after load. Effect receipts expose the exact effect revision, observed component
+revisions, source expansion cost, removed/current instances, and activated source identities; they
+are operation evidence rather than an ambient event journal.
 
 Those splits deliberately avoid an unrestricted heterogeneous transaction and complete-world
 cloning. Each intermediate state is valid, and failure of the later step cannot expose an
