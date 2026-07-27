@@ -153,6 +153,9 @@ cargo clippy -p gameplay-mechanics -p entity-state --all-targets --locked -- -D 
 ./scripts/verify.sh
 ```
 
+Ordinary mechanics-only changes use the Rust provider gate; the isolated
+Studio gate is additional evidence only when a Studio-owned boundary changes.
+
 ## Common agent mistakes
 
 - Storing final derived stats instead of admitted base values plus sources.
