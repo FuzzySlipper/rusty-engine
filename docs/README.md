@@ -34,6 +34,7 @@ paths:
 | [rendering-operations.md](rendering-operations.md) | Renderer verification and operational limits |
 | [studio-migration-contract.md](studio-migration-contract.md) | Studio parity and owner-adoption contract |
 | [studio-adapter-protocol.md](studio-adapter-protocol.md) | Closed external-project adapter protocol |
+| [studio-downstream-entity-inspector-extensions.md](studio-downstream-entity-inspector-extensions.md) | Proposed typed downstream Entity inspector composition boundary and implementation order |
 
 ## Code maps
 
@@ -75,5 +76,6 @@ tests take precedence when describing implemented behavior.
 | Change a retained Rust render frame | [Rust render model and projection](code-map/rust-render-model-and-projection.md) |
 | Change Three/WebGL or a renderer host | [Renderer workspace and hosts](code-map/renderer-workspace-and-hosts.md) |
 | Change the first-party authoring UI | [Studio](code-map/studio.md) |
+| Plan a downstream typed Entity inspector panel | [Downstream Entity inspector extensions](studio-downstream-entity-inspector-extensions.md) |
 | Add inspection or diagnostics | [Inspection and diagnostics](code-map/inspection-and-diagnostics.md) |
 | Select or adapt donor behavior | [Migration cluster ledger](migration/migration-cluster-ledger.md) |

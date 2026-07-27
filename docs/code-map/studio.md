@@ -29,6 +29,7 @@ viewport, and its closed external-project adapter protocol.
 - [`studio/libs/user-settings`](../../studio/libs/user-settings)
 - [Studio migration contract](../studio-migration-contract.md)
 - [Studio adapter protocol](../studio-adapter-protocol.md)
+- [Proposed downstream Entity inspector extensions](../studio-downstream-entity-inspector-extensions.md)
 
 ## Public downstream surfaces
 
@@ -37,6 +38,9 @@ viewport, and its closed external-project adapter protocol.
 - The external consumer is always selected explicitly by an integration
   command; ordinary Engine work never scans a sibling checkout.
 - Renderer packages are consumed through their package roots.
+- The proposed downstream Entity inspector seam is static host composition plus
+  identity-only core metadata. It is not implemented yet; use its ordered Den
+  tasks rather than adding another hard-coded game component to the shell.
 
 ## Private or forbidden paths
 

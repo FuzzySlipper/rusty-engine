@@ -124,6 +124,12 @@ Entity inspector; the conversion panel remains responsible for source inspection
 canonical asset publication, and instance attachment. This is one explicit built-in capability,
 not a universal component-description or arbitrary command protocol.
 
+The proposed successor for other downstream components is documented in
+[`studio-downstream-entity-inspector-extensions.md`](studio-downstream-entity-inspector-extensions.md).
+It is not part of protocol 9. The proposal keeps the core protocol limited to bounded owner,
+component, and inspector-contract identity; downstream values and mutations remain in separately
+closed product-owned contracts composed statically by the downstream Studio host.
+
 ## Safety and atomicity
 
 The process bounds request and response bytes. The selected root must be absolute and the project
