@@ -153,7 +153,9 @@
               [attr.data-entity-id]="node.entityId"
               [class.is-selected]="state().selection.sceneNodeId === node.nodeId"
               [style.padding-left.px]="6 + node.depth * 14"
-              (click)="store.selectHierarchyNode(node.nodeId)"
+              title="Double-click to focus the viewport on this object"
+              (click)="selectHierarchyNode(node.nodeId, $event)"
+              (dblclick)="focusHierarchyNode(node.nodeId)"
             >
               <span class="entity-icon">{{ nodeIcon(node.nodeKind) }}</span>
               <span class="entity-label">{{ node.label }}</span>
@@ -197,6 +199,7 @@
       <div class="viewport-surface" data-visual-id="studio-viewport-readout">
         @if (state().liveProjection; as projection) {
           <rusty-studio-viewport
+            #studioViewport
             [frame]="projection.frame"
             [frameGeneration]="projection.generation"
             [lightingMode]="state().settings.lightingMode"

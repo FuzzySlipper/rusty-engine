@@ -133,6 +133,38 @@ void test('inspection controls apply configurable six-axis movement, boost, inve
   assert.equal(harness.surface.readout().lastCameraChange, 'pointer_pan');
 });
 
+void test('inspection surface retargets its orbit pivot without changing orientation or distance', () => {
+  const harness = createInspectionHarness({
+    autoStart: false,
+    controls: {
+      initialPosition: [8, 6, 10],
+      initialTarget: [1, 2, 3],
+    },
+  });
+  const before = harness.surface.readout();
+  const offset = before.camera.pose.position.map(
+    (coordinate, axis) => coordinate - [1, 2, 3][axis]!,
+  );
+
+  assert.equal(harness.surface.focusTarget([20, -4, 7]), true);
+
+  const focused = harness.surface.readout();
+  assertVectorApproximately(
+    focused.camera.pose.position.map((coordinate, axis) =>
+      coordinate - [20, -4, 7][axis]!),
+    offset,
+  );
+  assertVectorApproximately(focused.camera.basis.forward, before.camera.basis.forward);
+  assertVectorApproximately(focused.camera.basis.right, before.camera.basis.right);
+  assertVectorApproximately(focused.camera.basis.up, before.camera.basis.up);
+  assert.equal(focused.cameraDistance, before.cameraDistance);
+  assert.equal(focused.cameraRevision, before.cameraRevision + 1);
+  assert.equal(focused.lastCameraChange, 'focus_target');
+
+  assert.equal(harness.surface.focusTarget([Number.NaN, 0, 0]), false);
+  assert.deepEqual(harness.surface.readout(), focused);
+});
+
 void test('inspection surface applies replaces and clears the engine procedural grid', () => {
   const initialGrid = editorGridDescriptor();
   const harness = createInspectionHarness({ autoStart: false, initialGrid });
@@ -577,6 +609,20 @@ function assertAuthoredReadoutUnchanged(
   assert.equal(actual.retainedFrameHash, expected.retainedFrameHash, message);
   assert.equal(actual.retainedOpCount, expected.retainedOpCount, message);
   assert.equal(actual.viewportHash, expected.viewportHash, message);
+}
+
+function assertVectorApproximately(
+  actual: readonly number[],
+  expected: readonly number[],
+  tolerance = 0.000_000_001,
+): void {
+  assert.equal(actual.length, expected.length);
+  for (const [index, coordinate] of actual.entries()) {
+    assert.ok(
+      Math.abs(coordinate - expected[index]!) <= tolerance,
+      `coordinate ${String(index)}: expected ${String(expected[index])}, received ${String(coordinate)}`,
+    );
+  }
 }
 
 function inspectionEnvironment(

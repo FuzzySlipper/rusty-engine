@@ -258,7 +258,9 @@ export class StudioShellComponent {
 
   readonly #hostFiles = new HttpStudioHostFileBrowser();
   readonly #renderResources = new HttpStudioRenderResourceClient();
+  private readonly studioViewport = viewChild<StudioViewportComponent>('studioViewport');
   private readonly hostPathFilterElement = viewChild<ElementRef<HTMLInputElement>>('hostPathFilter');
+  #hierarchySelection = Promise.resolve();
   #hostPathResolve: ((path: string | null) => void) | null = null;
   #restoreFocus: HTMLElement | null = null;
 
@@ -577,6 +579,21 @@ export class StudioShellComponent {
 
   setInspectorMode(mode: 'entity' | 'voxel'): void {
     this.inspectorMode = mode;
+  }
+
+  selectHierarchyNode(nodeId: number, event: MouseEvent): void {
+    if (event.detail > 1) return;
+    this.#hierarchySelection = this.store.selectHierarchyNode(nodeId);
+  }
+
+  async focusHierarchyNode(nodeId: number): Promise<void> {
+    await this.#hierarchySelection;
+    if (this.state().selection.sceneNodeId !== nodeId) return;
+    const node = this.state().authoringDocument?.sceneHierarchy.nodes.find(
+      (candidate) => candidate.nodeId === nodeId,
+    );
+    if (node === undefined) return;
+    this.studioViewport()?.focusTarget(node.worldTransform.translation);
   }
 
   validateVoxelPick(candidate: VoxelViewportPickCandidate): void {

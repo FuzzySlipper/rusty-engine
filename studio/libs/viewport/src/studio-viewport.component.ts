@@ -74,6 +74,7 @@ export interface StudioTransformGizmoDragFinished {
     '[attr.data-animated-mesh-resources]': 'animatedMeshManifest()?.resources?.length ?? 0',
     '[attr.data-camera-move-speed]': 'controlPreferences().moveSpeed',
     '[attr.data-camera-move-forward]': 'controlPreferences().keyboard.moveForward',
+    '[attr.data-camera-revision]': 'cameraRevision()',
     '[attr.data-renderer-error]': 'lastRendererError()',
     '[attr.data-lighting-mode]': 'lightingMode()',
     '[attr.data-work-light-active]': 'workLightActive()',
@@ -228,6 +229,14 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     this.#surface?.dispose();
     this.#surface = null;
     this.status.set('disposed');
+  }
+
+  focusTarget(target: readonly [number, number, number]): boolean {
+    const surface = this.#surface;
+    if (surface === null || !surface.focusTarget(target)) return false;
+    this.canvasElement.nativeElement.focus({ preventScroll: true });
+    this.#syncReadout();
+    return true;
   }
 
   pointerDown(event: PointerEvent): void {

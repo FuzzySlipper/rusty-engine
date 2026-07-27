@@ -26,6 +26,12 @@ test('real project hierarchy, shared picking, transform settlement, reopen, and 
   );
   await expect(viewport).toHaveAttribute('data-authored-frame-hash', /.+/);
 
+  const cameraRevisionBeforeFocus = Number(await viewport.getAttribute('data-camera-revision'));
+  await page.locator('.entity-row[data-entity-id="1"]').dblclick();
+  await expect.poll(async () => Number(await viewport.getAttribute('data-camera-revision')))
+    .toBe(cameraRevisionBeforeFocus + 1);
+  await expect(viewport.locator('canvas')).toBeFocused();
+
   const pickedEntity = await pickVisibleEntity(page, shell);
   await expect(shell).toHaveAttribute('data-selection-source', 'renderer');
   await expect(page.locator(`.entity-row[data-entity-id="${pickedEntity}"]`)).toHaveClass(

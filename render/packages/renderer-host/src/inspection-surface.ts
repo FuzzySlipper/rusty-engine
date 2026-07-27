@@ -87,6 +87,7 @@ export type RendererInspectionSurfaceStatus = 'mounted' | 'running' | 'stopped' 
 
 export type RendererInspectionCameraChange =
   | 'initial_camera'
+  | 'focus_target'
   | 'keyboard_movement'
   | 'keyboard_orbit'
   | 'keyboard_zoom'
@@ -135,6 +136,8 @@ export interface RendererInspectionSurface {
     preferences: RendererInspectionSurfaceControlPreferences,
   ) => void;
   readonly dispose: () => void;
+  /** Retarget the disposable orbit pivot while preserving camera orientation and distance. */
+  readonly focusTarget: (target: InspectionVector) => boolean;
   readonly grid: () => EditorGridProjectionReadout | null;
   readonly pick: (request: RendererEditorViewportPickRequest) => RendererEditorViewportPickReceipt;
   readonly readout: () => RendererInspectionSurfaceReadout;
@@ -184,6 +187,7 @@ interface InspectionControls {
   readonly controlPreferences: () => RendererInspectionSurfaceControlPreferences;
   readonly dispose: () => void;
   readonly dragging: () => boolean;
+  readonly focusTarget: (target: InspectionVector) => boolean;
   readonly lastCameraChange: () => RendererInspectionCameraChange;
   readonly pressedMovementKeys: () => readonly string[];
   readonly pressedOrbitKeys: () => readonly string[];
@@ -374,6 +378,7 @@ export function createRendererInspectionSurfaceWithViewport(
     clearOverlayProjection,
     clearRuntimeProjection,
     configureControlPreferences: (preferences) => controls.configurePreferences(preferences),
+    focusTarget: (target) => controls.focusTarget(target),
     grid: () => viewport.grid(),
     pick: (request) => viewport.pick(request),
     readout: () => {
@@ -703,6 +708,16 @@ function createInspectionControls(
       keyboard: { ...preferences.keyboard },
     }),
     dragging: () => activePointerId !== null,
+    focusTarget: (nextTarget) => {
+      if (!allFinite([nextTarget])) return false;
+      return commitCamera(
+        [...nextTarget],
+        yawRadians,
+        pitchRadians,
+        distance,
+        'focus_target',
+      );
+    },
     lastCameraChange: () => lastCameraChange,
     pressedMovementKeys: () => [...pressedMovementKeys].sort(),
     pressedOrbitKeys: () => [...pressedOrbitKeys].sort(),
