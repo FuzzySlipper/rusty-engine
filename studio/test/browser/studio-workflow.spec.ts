@@ -232,6 +232,8 @@ test('host-user input settings and general asset import reimport persist through
   await expect(shell).toHaveAttribute('data-lighting-mode', 'authored_lights');
   await expect(viewport).toHaveAttribute('data-lighting-mode', 'authored_lights');
 
+  const assetsBeforeImport = await projectAssetCount(shell);
+  expect(assetsBeforeImport).toBeGreaterThan(0);
   const hashBeforePlan = await projectHash(shell);
   await page.getByRole('button', { name: 'File', exact: true }).click();
   await page.getByRole('button', { name: 'Import Project Asset…', exact: true }).click();
@@ -246,7 +248,8 @@ test('host-user input settings and general asset import reimport persist through
   await expect(plan).toContainText('2 generated assets');
   await expect(shell).toHaveAttribute('data-project-hash', hashBeforePlan);
   await plan.getByRole('button', { name: 'Apply atomically', exact: true }).click();
-  await expect(shell).toHaveAttribute('data-project-assets', '9');
+  await expect.poll(() => projectAssetCount(shell)).toBe(assetsBeforeImport + 2);
+  const assetsAfterImport = await projectAssetCount(shell);
   await expect.poll(() => projectHash(shell)).not.toBe(hashBeforePlan);
 
   const importedAsset = page.getByRole('option', { name: /mesh\/studio-triangle/ });
@@ -303,7 +306,7 @@ test('host-user input settings and general asset import reimport persist through
   const persistedHash = await projectHash(shell);
   await page.reload();
   await expect(shell).toHaveAttribute('data-project-hash', persistedHash);
-  await expect(shell).toHaveAttribute('data-project-assets', '9');
+  await expect.poll(() => projectAssetCount(shell)).toBe(assetsAfterImport);
   await expect(shell).toHaveAttribute('data-user-settings-status', 'loaded');
   await expect(page.locator('.entity-row[data-entity-id="70"]')).toContainText('Imported Triangle');
 });
@@ -623,6 +626,14 @@ function dot(
 
 async function projectHash(shell: Locator): Promise<string> {
   return (await shell.getAttribute('data-project-hash')) ?? '';
+}
+
+async function projectAssetCount(shell: Locator): Promise<number> {
+  const value = Number(await shell.getAttribute('data-project-assets'));
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`invalid project asset count: ${String(value)}`);
+  }
+  return value;
 }
 
 async function rendererHash(viewport: Locator): Promise<string> {

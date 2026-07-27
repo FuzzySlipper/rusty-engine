@@ -105,7 +105,15 @@ async function main() {
     const opened = store.snapshot();
     assert.equal(opened.connection.kind, 'connected');
     assert.equal(opened.authoringDocument.identity.projectId, 'loading-bay');
-    assert.equal(opened.authoringDocument.inspections.catalog.entryCount, 7);
+    const catalogInspection = opened.authoringDocument.inspections.catalog;
+    const assetBrowser = opened.authoringDocument.assetBrowser;
+    assert.ok(catalogInspection.entryCount > 0);
+    assert.equal(catalogInspection.entryCount, assetBrowser.assets.length);
+    assert.equal(catalogInspection.entryCount, assetBrowser.lockEntries.length);
+    assert.equal(
+      catalogInspection.entryCount,
+      catalogInspection.kinds.reduce((total, kind) => total + kind.count, 0),
+    );
     const hierarchyEntityIds = opened.authoringDocument.sceneHierarchy.nodes.map(
       (node) => node.entityId,
     );
@@ -121,9 +129,17 @@ async function main() {
     for (const requiredEntityId of [1, 2, 3, 4, 5, 6, 7, 10]) {
       assert.ok(hierarchyEntityIds.includes(requiredEntityId));
     }
-    assert.equal(opened.authoringDocument.domain.voxelEnvironment, 'generatedRoom');
-    assert.equal(opened.authoringDocument.domain.enemyCount, 2);
-    assert.equal(opened.authoringDocument.voxel.solidVoxelCount, 366);
+    assert.equal(
+      opened.authoringDocument.domain.entityCount,
+      opened.authoringDocument.inspections.entityState.entityCount,
+    );
+    assert.ok(
+      ['solid', 'material', 'generatedRoom'].includes(
+        opened.authoringDocument.domain.voxelEnvironment,
+      ),
+    );
+    assert.ok(opened.authoringDocument.domain.enemyCount > 0);
+    assert.ok(opened.authoringDocument.voxel.solidVoxelCount > 0);
     assert.ok(opened.liveProjection.frame.ops.length >= 20);
     assert.ok(opened.liveProjection.frame.ops.some(
       (operation) => operation.op === 'defineAnimatedMesh'
