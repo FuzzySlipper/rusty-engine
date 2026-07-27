@@ -102,7 +102,10 @@ export interface ProjectedEntityView {
 }
 
 export interface LiveProjectionView {
+  /** Compact complete authored frame used for remounts and presentation changes. */
   readonly frame: RenderFrameDiff;
+  /** Optional retained-state patch for the current generation. */
+  readonly framePatch: RenderFrameDiff | null;
   readonly readout: ProjectionReadout;
   readonly entities: readonly ProjectedEntityView[];
   readonly generation: number;
@@ -225,6 +228,28 @@ interface QueuedObjectPlaybackControl {
   readonly expectedProjectHash: string;
 }
 
+export interface StudioPlaybackTimer {
+  readonly cancel: (handle: unknown) => void;
+  readonly schedule: (callback: () => void, delayMilliseconds: number) => unknown;
+}
+
+interface ObjectPlaybackSchedule {
+  readonly sceneId: string;
+  readonly instanceId: string;
+  readonly expectedProjectHash: string;
+  readonly projectScopeGeneration: number;
+  virtualNowMicroseconds: number;
+  expectedFrameGeneration: number | null;
+  timerHandle: unknown | null;
+}
+
+const DEFAULT_PLAYBACK_TIMER: StudioPlaybackTimer = {
+  cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  schedule: (callback, delayMilliseconds) => setTimeout(callback, delayMilliseconds),
+};
+
+const MAX_RETAINED_OBJECT_FRAME_PATCHES = 120;
+
 const INITIAL_ARTIFACT = buildDefaultStudioHostUserSettings('rusty-studio-project:scratch');
 const INITIAL_SETTINGS = viewSettings(INITIAL_ARTIFACT);
 
@@ -273,6 +298,7 @@ function initialSnapshot(): StudioWorkspaceSnapshot {
 export class StudioWorkspaceStore {
   readonly #client: StudioAdapterClient;
   readonly #settingsClient: HttpStudioUserSettingsClient | null;
+  readonly #playbackTimer: StudioPlaybackTimer;
   readonly #snapshot = signal<StudioWorkspaceSnapshot>(initialSnapshot());
   readonly snapshot: Signal<StudioWorkspaceSnapshot> = this.#snapshot.asReadonly();
   #previewCommit: Promise<boolean> | null = null;
@@ -282,13 +308,17 @@ export class StudioWorkspaceStore {
   #projectScopeGeneration = 0;
   #objectOperationGeneration = 0;
   #queuedObjectPlaybackControl: QueuedObjectPlaybackControl | null = null;
+  #objectPlaybackSchedule: ObjectPlaybackSchedule | null = null;
+  #retainedObjectFramePatches = 0;
 
   constructor(
     client: StudioAdapterClient,
     settingsClient: HttpStudioUserSettingsClient | null = null,
+    playbackTimer: StudioPlaybackTimer = DEFAULT_PLAYBACK_TIMER,
   ) {
     this.#client = client;
     this.#settingsClient = settingsClient;
+    this.#playbackTimer = playbackTimer;
   }
 
   async connect(): Promise<boolean> {
@@ -860,7 +890,8 @@ export class StudioWorkspaceStore {
     }
   }
 
-  async runVoxelAction(action: VoxelEditorAction): Promise<void> {
+  async runVoxelAction(requestedAction: VoxelEditorAction): Promise<void> {
+    const action = this.#prepareObjectPlaybackAction(requestedAction);
     const current = this.#snapshot();
     const document = current.authoringDocument;
     if (document === null) return;
@@ -1319,7 +1350,10 @@ export class StudioWorkspaceStore {
             projectScopeGeneration,
             objectOperationGeneration,
           )) return;
-          this.#acceptObjectProjection(response.projection, response.projectionReadout);
+          const frameGeneration = this.#acceptObjectProjection(
+            response.projection,
+            response.projectionReadout,
+          );
           this.#patch({
             operation: 'idle',
             voxelWorkspace: {
@@ -1330,6 +1364,7 @@ export class StudioWorkspaceStore {
                 : `${response.playback.status === 'playing' ? 'Playing' : 'Previewing'} ${response.playback.instanceId} · ${response.playback.clipId ?? 'saved pose'} frame ${String(response.playback.clipFrame ?? 0)}.`,
             },
           });
+          this.#acceptObjectPlaybackResponse(action, response.playback, frameGeneration);
           return;
         }
       }
@@ -1340,10 +1375,136 @@ export class StudioWorkspaceStore {
         projectScopeGeneration,
         objectOperationGeneration,
       )) return;
+      if (action.kind === 'previewObjectInstance') this.#clearObjectPlaybackSchedule();
       this.#operationFailed(error);
     } finally {
       this.#drainQueuedObjectPlaybackControl();
     }
+  }
+
+  /**
+   * Confirms that the shared renderer accepted a projection generation.
+   * Playback waits for this acknowledgement before displaying the current
+   * pose for its authored duration and requesting exactly one successor pose.
+   */
+  acknowledgeProjectionGeneration(generation: number): void {
+    const schedule = this.#objectPlaybackSchedule;
+    const current = this.#snapshot();
+    if (
+      schedule === null
+      || schedule.expectedFrameGeneration !== generation
+      || schedule.timerHandle !== null
+      || current.operation !== 'idle'
+      || current.liveProjection?.generation !== generation
+      || schedule.projectScopeGeneration !== this.#projectScopeGeneration
+      || current.authoringDocument?.identity.projectHash !== schedule.expectedProjectHash
+    ) return;
+    const playback = current.voxelWorkspace.objectPlayback;
+    if (
+      playback?.status !== 'playing'
+      || playback.ended
+      || playback.sceneId !== schedule.sceneId
+      || playback.instanceId !== schedule.instanceId
+    ) {
+      this.#clearObjectPlaybackSchedule();
+      return;
+    }
+    const stepMicroseconds = objectPlaybackStepMicroseconds(
+      current.authoringDocument,
+      playback,
+    );
+    if (stepMicroseconds === null) {
+      this.#clearObjectPlaybackSchedule();
+      this.reportUiError('Voxel-object playback frame has no usable authored duration.');
+      return;
+    }
+    schedule.expectedFrameGeneration = null;
+    schedule.timerHandle = this.#playbackTimer.schedule(() => {
+      if (this.#objectPlaybackSchedule !== schedule) return;
+      schedule.timerHandle = null;
+      const latest = this.#snapshot();
+      if (
+        latest.operation !== 'idle'
+        || schedule.projectScopeGeneration !== this.#projectScopeGeneration
+        || latest.authoringDocument?.identity.projectHash !== schedule.expectedProjectHash
+        || latest.voxelWorkspace.objectPlayback?.status !== 'playing'
+      ) {
+        this.#clearObjectPlaybackSchedule();
+        return;
+      }
+      const nextNow = schedule.virtualNowMicroseconds + stepMicroseconds;
+      if (!Number.isSafeInteger(nextNow)) {
+        this.#clearObjectPlaybackSchedule();
+        this.reportUiError('Voxel-object playback virtual clock exceeded the safe integer range.');
+        return;
+      }
+      schedule.virtualNowMicroseconds = nextNow;
+      void this.runVoxelAction({
+        kind: 'previewObjectInstance',
+        sceneId: schedule.sceneId,
+        instanceId: schedule.instanceId,
+        nowMicroseconds: nextNow,
+        command: { kind: 'sample' },
+      });
+    }, Math.max(1, Math.ceil(stepMicroseconds / 1_000)));
+  }
+
+  #prepareObjectPlaybackAction(requested: VoxelEditorAction): VoxelEditorAction {
+    if (requested.kind !== 'previewObjectInstance' || requested.command.kind === 'sample') {
+      return requested;
+    }
+    const schedule = this.#objectPlaybackSchedule;
+    const nowMicroseconds = requested.command.kind === 'pause'
+      && schedule?.sceneId === requested.sceneId
+      && schedule.instanceId === requested.instanceId
+      ? schedule.virtualNowMicroseconds
+      : requested.nowMicroseconds;
+    this.#clearObjectPlaybackSchedule();
+    return nowMicroseconds === requested.nowMicroseconds
+      ? requested
+      : { ...requested, nowMicroseconds };
+  }
+
+  #acceptObjectPlaybackResponse(
+    action: ObjectPlaybackControlAction,
+    playback: VoxelObjectInstancePlaybackReadout,
+    frameGeneration: number,
+  ): void {
+    let schedule = this.#objectPlaybackSchedule;
+    if (action.command.kind === 'play') {
+      schedule = {
+        sceneId: action.sceneId,
+        instanceId: action.instanceId,
+        expectedProjectHash: playback.projectHash,
+        projectScopeGeneration: this.#projectScopeGeneration,
+        virtualNowMicroseconds: action.nowMicroseconds,
+        expectedFrameGeneration: null,
+        timerHandle: null,
+      };
+      this.#objectPlaybackSchedule = schedule;
+    } else if (action.command.kind !== 'sample') {
+      return;
+    }
+    if (
+      schedule === null
+      || schedule.sceneId !== action.sceneId
+      || schedule.instanceId !== action.instanceId
+      || playback.status !== 'playing'
+      || playback.ended
+    ) {
+      this.#clearObjectPlaybackSchedule();
+      return;
+    }
+    schedule.virtualNowMicroseconds = action.nowMicroseconds;
+    schedule.expectedFrameGeneration = frameGeneration;
+  }
+
+  #clearObjectPlaybackSchedule(): void {
+    const schedule = this.#objectPlaybackSchedule;
+    if (schedule?.timerHandle !== null && schedule?.timerHandle !== undefined) {
+      this.#playbackTimer.cancel(schedule.timerHandle);
+    }
+    this.#objectPlaybackSchedule = null;
   }
 
   #drainQueuedObjectPlaybackControl(): void {
@@ -1538,17 +1699,38 @@ export class StudioWorkspaceStore {
     });
   }
 
-  #acceptObjectProjection(frame: RenderFrameDiff, readout: ProjectionReadout): void {
+  #acceptObjectProjection(frame: RenderFrameDiff, readout: ProjectionReadout): number {
     const current = this.#snapshot();
     const ownerEntityIds = current.authoringDocument?.inspections.entityState.entityIds ?? [];
+    const compacted = current.liveProjection === null
+      ? null
+      : compactVoxelObjectFramePatch(current.liveProjection.frame, frame);
+    let acceptedFrame = frame;
+    let framePatch: RenderFrameDiff | null = null;
+    if (compacted !== null) {
+      acceptedFrame = compacted;
+      this.#retainedObjectFramePatches += 1;
+      if (this.#retainedObjectFramePatches < MAX_RETAINED_OBJECT_FRAME_PATCHES) {
+        framePatch = frame;
+      } else {
+        this.#retainedObjectFramePatches = 0;
+      }
+    } else {
+      this.#retainedObjectFramePatches = 0;
+    }
+    const generation = (current.liveProjection?.generation ?? 0) + 1;
     this.#patch({
       liveProjection: {
-        frame,
+        frame: acceptedFrame,
+        framePatch,
         readout,
-        entities: summarizeProjectionForUi(frame, ownerEntityIds, []),
-        generation: (current.liveProjection?.generation ?? 0) + 1,
+        entities: compacted === null
+          ? summarizeProjectionForUi(frame, ownerEntityIds, [])
+          : current.liveProjection?.entities ?? [],
+        generation,
       },
     });
+    return generation;
   }
 
   #invalidateProjectScope(): void {
@@ -1559,6 +1741,8 @@ export class StudioWorkspaceStore {
   #invalidateObjectOperation(): void {
     this.#objectOperationGeneration += 1;
     this.#queuedObjectPlaybackControl = null;
+    this.#clearObjectPlaybackSchedule();
+    this.#retainedObjectFramePatches = 0;
   }
 
   #objectResponseIsCurrent(
@@ -1632,6 +1816,7 @@ export class StudioWorkspaceStore {
       },
       liveProjection: {
         frame: project.projection,
+        framePatch: null,
         readout: project.projectionReadout,
         entities,
         generation: (current.liveProjection?.generation ?? 0) + 1,
@@ -1801,6 +1986,59 @@ function isVoxelObjectAction(action: VoxelEditorAction): boolean {
     default:
       return false;
   }
+}
+
+function compactVoxelObjectFramePatch(
+  base: RenderFrameDiff,
+  patch: RenderFrameDiff,
+): RenderFrameDiff | null {
+  if (patch.ops.some((operation) => operation.op !== 'setVoxelObjectFrame')) return null;
+  const frames = new Map<number, number>();
+  for (const operation of patch.ops) {
+    if (operation.op === 'setVoxelObjectFrame') frames.set(operation.handle, operation.frame);
+  }
+  if (frames.size === 0) return base;
+  const matched = new Set<number>();
+  const ops = base.ops.map((operation): RenderDiff => {
+    if (operation.op !== 'createVoxelObjectInstance') return operation;
+    const frame = frames.get(operation.handle);
+    if (frame === undefined) return operation;
+    matched.add(operation.handle);
+    return {
+      ...operation,
+      instance: { ...operation.instance, frame },
+    };
+  });
+  return matched.size === frames.size ? { schemaVersion: 1, ops } : null;
+}
+
+function objectPlaybackStepMicroseconds(
+  document: AuthoringDocumentView,
+  playback: VoxelObjectInstancePlaybackReadout,
+): number | null {
+  if (playback.clipId === null || playback.clipFrame === null) return null;
+  const asset = document.voxelObjectAuthoring.assets.find(
+    (candidate) => candidate.assetId === playback.voxelObjectAssetId,
+  );
+  const clip = asset?.clips.find((candidate) => candidate.clipId === playback.clipId);
+  const frame = clip?.frames[playback.clipFrame];
+  const authoredDuration = frame?.durationMicroseconds
+    ?? (clip === undefined || clip.framesPerSecond <= 0
+      ? null
+      : Math.round(1_000_000 / clip.framesPerSecond));
+  if (
+    authoredDuration === null
+    || !Number.isSafeInteger(authoredDuration)
+    || authoredDuration <= 0
+    || !Number.isSafeInteger(playback.rate.numerator)
+    || !Number.isSafeInteger(playback.rate.denominator)
+    || playback.rate.numerator <= 0
+    || playback.rate.denominator <= 0
+  ) return null;
+  const scaled = authoredDuration * playback.rate.denominator;
+  if (!Number.isSafeInteger(scaled)) return null;
+  const step = Math.ceil(scaled / playback.rate.numerator);
+  return Number.isSafeInteger(step) && step > 0 ? step : null;
 }
 
 function isObjectPlaybackControl(

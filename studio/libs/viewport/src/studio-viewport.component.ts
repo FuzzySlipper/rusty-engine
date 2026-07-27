@@ -88,6 +88,7 @@ export interface StudioTransformGizmoDragFinished {
 })
 export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   readonly frame = input<RenderFrameDiff | null>(null);
+  readonly framePatch = input<RenderFrameDiff | null>(null);
   readonly frameGeneration = input(0);
   readonly lightingMode = input<StudioLightingMode>('work_light');
   readonly grid = input<EditorGridDescriptor | null>(STUDIO_EDITOR_GRID);
@@ -124,6 +125,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   readonly animatedMeshResourceKey = input('');
 
   readonly entityPicked = output<number | null>();
+  readonly frameApplied = output<number>();
   readonly voxelPicked = output<VoxelViewportPickCandidate>();
   readonly rendererError = output<string>();
   readonly transformDragStarted = output<void>();
@@ -153,6 +155,8 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   #mountRevision = 0;
   #lastResourceKey = '';
   #lastPresentationKey = '';
+  #lastAppliedFrameGeneration = -1;
+  #authoredFrameReady = false;
   #lastManipulatorKey = '';
   #pointerStart: readonly [number, number] | null = null;
   #pointerDragged = false;
@@ -169,6 +173,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     effect(() => {
       const generation = this.frameGeneration();
       const frame = this.frame();
+      const framePatch = this.framePatch();
       const selectedEntityId = this.selectedEntityId();
       const previewEntityId = this.previewEntityId();
       const previewTransform = this.previewTransform();
@@ -177,6 +182,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       if (frame !== null) {
         this.#replaceFrame(
           frame,
+          framePatch,
           generation,
           selectedEntityId,
           previewEntityId,
@@ -361,6 +367,8 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     this.#surface = null;
     previous?.dispose();
     this.#lastPresentationKey = '';
+    this.#lastAppliedFrameGeneration = -1;
+    this.#authoredFrameReady = false;
     this.#lastManipulatorKey = '';
     this.lastRendererError.set('');
     this.status.set('mounting');
@@ -397,6 +405,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       if (frame !== null) {
         this.#replaceFrame(
           frame,
+          this.framePatch(),
           this.frameGeneration(),
           this.selectedEntityId(),
           this.previewEntityId(),
@@ -421,6 +430,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
 
   #replaceFrame(
     frame: RenderFrameDiff,
+    framePatch: RenderFrameDiff | null,
     generation: number,
     selectedEntityId: number | null,
     previewEntityId: number | null,
@@ -437,7 +447,21 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       voxelPreview,
       lightingMode,
     ]);
-    if (surface === null || presentationKey === this.#lastPresentationKey) return;
+    if (surface === null) return;
+    const generationChanged = generation !== this.#lastAppliedFrameGeneration;
+    if (generationChanged && framePatch !== null && this.#authoredFrameReady) {
+      const receipt = surface.applyAuthoredFrame(framePatch);
+      if (!receipt.applied) {
+        this.#fail(receipt.diagnostics.map((entry) => entry.message).join('; '));
+        return;
+      }
+      this.#lastAppliedFrameGeneration = generation;
+      this.#lastPresentationKey = presentationKey;
+      this.#syncReadout();
+      this.frameApplied.emit(generation);
+      return;
+    }
+    if (this.#authoredFrameReady && presentationKey === this.#lastPresentationKey) return;
     const presentation = presentStudioSelection(
       frame,
       selectedEntityId,
@@ -452,11 +476,14 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       return;
     }
     this.#lastPresentationKey = presentationKey;
+    this.#lastAppliedFrameGeneration = generation;
+    this.#authoredFrameReady = true;
     this.previewApplied.set(presentation.previewApplied);
     this.voxelPreviewKind.set(presentation.voxelPreviewKind);
     this.selectedRenderHandle.set(presentation.selectedHandle);
     this.workLightActive.set(lighting.workLightActive);
     this.#syncReadout();
+    if (generationChanged) this.frameApplied.emit(generation);
   }
 
   #beginManipulatorDrag(event: PointerEvent): boolean {

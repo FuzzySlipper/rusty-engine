@@ -1,9 +1,7 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  DestroyRef,
   effect,
-  inject,
   input,
   output,
   signal,
@@ -40,9 +38,7 @@ export class VoxelObjectPlaybackComponent {
   frameIndex = 0;
   loopMode: VoxelObjectLoopMode = 'repeat';
 
-  readonly #destroyRef = inject(DestroyRef);
   #instanceKey: string | null = null;
-  #playbackTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     effect(() => {
@@ -54,7 +50,6 @@ export class VoxelObjectPlaybackComponent {
       if (nextKey !== this.#instanceKey) {
         this.#instanceKey = nextKey;
         this.playing.set(false);
-        this.#clearTimer();
         this.clipId = selectedInitialClip(entry, asset);
         this.frameIndex = selectedInitialFrame(entry, this.clipId);
         if (entry !== null && this.clipId !== '') {
@@ -67,19 +62,12 @@ export class VoxelObjectPlaybackComponent {
       const playback = this.playback();
       if (entry === null || playback?.instanceId !== entry.instance.instanceId) {
         this.playing.set(false);
-        this.#clearTimer();
         return;
       }
       if (playback.clipId !== null) this.clipId = playback.clipId;
       if (playback.clipFrame !== null) this.frameIndex = playback.clipFrame;
       this.loopMode = playback.loopMode;
-      this.playing.set(playback.status === 'playing');
-      if (playback.status === 'playing') this.#scheduleSample();
-      else this.#clearTimer();
-    });
-    this.#destroyRef.onDestroy(() => {
-      this.#instanceKey = null;
-      this.#clearTimer();
+      this.playing.set(playback.status === 'playing' && !playback.ended);
     });
   }
 
@@ -104,7 +92,6 @@ export class VoxelObjectPlaybackComponent {
     const clip = this.asset()?.clips.find((candidate) => candidate.clipId === this.clipId);
     if (entry === null || clip === undefined) return;
     this.playing.set(false);
-    this.#clearTimer();
     this.frameIndex = Math.min(Math.max(0, integer(frameIndex)), this.frameMax());
     this.#emit(entry, {
       kind: 'scrub',
@@ -124,14 +111,12 @@ export class VoxelObjectPlaybackComponent {
     ) return;
     this.playing.set(true);
     this.#emit(entry, { kind: 'play' });
-    this.#scheduleSample();
   }
 
   pause(): void {
     const entry = this.instance();
     const playback = this.playback();
     this.playing.set(false);
-    this.#clearTimer();
     if (entry === null || playback?.status !== 'playing') return;
     this.#emit(entry, { kind: 'pause' });
   }
@@ -139,7 +124,6 @@ export class VoxelObjectPlaybackComponent {
   restore(): void {
     const entry = this.instance();
     this.playing.set(false);
-    this.#clearTimer();
     if (entry !== null) this.#emit(entry, { kind: 'stop' });
   }
 
@@ -147,22 +131,6 @@ export class VoxelObjectPlaybackComponent {
     return frame.kind === 'default'
       ? 'default frame'
       : `${frame.clipId} frame ${String(frame.frameIndex)}`;
-  }
-
-  #scheduleSample(): void {
-    if (!this.playing() || this.#playbackTimer !== null) return;
-    this.#playbackTimer = setTimeout(() => {
-      this.#playbackTimer = null;
-      if (!this.playing()) return;
-      const entry = this.instance();
-      if (entry !== null && !this.busy()) this.#emit(entry, { kind: 'sample' });
-      this.#scheduleSample();
-    }, 50);
-  }
-
-  #clearTimer(): void {
-    if (this.#playbackTimer !== null) clearTimeout(this.#playbackTimer);
-    this.#playbackTimer = null;
   }
 
   #emit(entry: VoxelObjectInstanceReadout, command: VoxelObjectPlaybackCommand): void {

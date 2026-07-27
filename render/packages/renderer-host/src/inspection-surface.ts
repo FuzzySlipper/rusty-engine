@@ -125,6 +125,8 @@ export interface RendererInspectionSurface {
   readonly role: 'projection_only_inspection';
   readonly canvas: HTMLCanvasElement;
   readonly camera: () => RendererEditorViewportCamera;
+  /** Apply one incremental authored frame to the already retained authored channel. */
+  readonly applyAuthoredFrame: (frame: RenderFrameDiff) => RendererEditorViewportChannelReceipt;
   /** Apply one incremental, projection-only runtime frame to the retained runtime channel. */
   readonly applyRuntimeFrame: (frame: RenderFrameDiff) => RendererEditorViewportChannelReceipt;
   /** Clear retained runtime projection without disturbing authored inspection content. */
@@ -307,6 +309,9 @@ export function createRendererInspectionSurfaceWithViewport(
   const replaceFrame = (frame: RenderFrameDiff): RendererEditorViewportChannelReceipt =>
     viewport.channels.authored.replace(frame);
 
+  const applyAuthoredFrame = (frame: RenderFrameDiff): RendererEditorViewportChannelReceipt =>
+    viewport.channels.authored.apply(frame);
+
   const replaceAuthoredFrameChunks = (
     chunks: readonly RenderFrameDiff[],
   ): RendererEditorViewportChannelReceipt => viewport.channels.authored.replaceChunks(chunks);
@@ -373,6 +378,7 @@ export function createRendererInspectionSurfaceWithViewport(
     kind: 'rusty_renderer_inspection_surface.v1',
     role: 'projection_only_inspection',
     canvas,
+    applyAuthoredFrame,
     applyRuntimeFrame,
     camera: () => controls.camera(),
     clearOverlayProjection,

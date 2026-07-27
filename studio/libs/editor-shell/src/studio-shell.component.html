@@ -201,6 +201,7 @@
           <rusty-studio-viewport
             #studioViewport
             [frame]="projection.frame"
+            [framePatch]="projection.framePatch"
             [frameGeneration]="projection.generation"
             [lightingMode]="state().settings.lightingMode"
             [grid]="viewportGrid()"
@@ -217,6 +218,7 @@
             [resolveAnimatedMeshResource]="animatedMeshManifest() === null ? null : resolveAnimatedMeshResource"
             [animatedMeshResourceKey]="animatedMeshResourceKey()"
             (entityPicked)="store.selectEntity($event, 'renderer')"
+            (frameApplied)="store.acknowledgeProjectionGeneration($event)"
             (voxelPicked)="validateVoxelPick($event)"
             (rendererError)="store.reportUiError($event)"
             (transformDragStarted)="beginViewportTransformDrag()"

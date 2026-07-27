@@ -253,6 +253,23 @@ void test('inspection surface retains accepted frames, fails closed on malformed
   assert.deepEqual(harness.backend.sizes.at(-1), { width: 1200, height: 700, pixelRatio: 2 });
 });
 
+void test('inspection surface incrementally applies an authored patch after its retained base', () => {
+  const harness = createInspectionHarness({ autoStart: false, frame: primitiveFrame(7) });
+  const initial = harness.surface.readout();
+
+  const applied = harness.surface.applyAuthoredFrame({
+    schemaVersion: 1,
+    ops: [updateVisibility(7, false)],
+  });
+
+  assert.equal(applied.applied, true);
+  assert.equal(applied.channel, 'authored');
+  assert.equal(applied.generation, 2);
+  assert.equal(harness.surface.readout().retainedOpCount, 2);
+  assert.notEqual(harness.surface.readout().retainedFrameHash, initial.retainedFrameHash);
+  assert.equal(harness.backend.frames.get('authored')?.ops.length, 2);
+});
+
 void test('inspection surface atomically replaces authored content at exact chunk and retained limits', () => {
   const harness = createInspectionHarness({ autoStart: false, frame: primitiveFrame(7) });
   const chunks = authoredHistoryChunks(41, [

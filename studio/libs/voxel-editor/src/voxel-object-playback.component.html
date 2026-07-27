@@ -8,7 +8,7 @@
       <dt>Saved pose</dt><dd>{{ durableFrameLabel(entry.instance.frame) }}</dd>
       <dt>Preview</dt><dd>
         @if (playback()?.instanceId === entry.instance.instanceId) {
-          {{ playback()?.status }} · {{ playback()?.clipId ?? 'saved pose' }} · frame {{ playback()?.clipFrame ?? '—' }}
+          {{ playback()?.status }} · {{ playback()?.clipId ?? 'saved pose' }} · frame {{ playback()?.clipFrame ?? '—' }}{{ playback()?.ended ? ' · ended' : '' }}
         } @else { preparing preview }
       </dd>
     </dl>
@@ -38,7 +38,7 @@
         <button type="button" data-action="pause-entity-voxel-object" [disabled]="!playing()" (click)="pause()">Pause</button>
         <button type="button" class="restore" data-action="restore-entity-voxel-object" [disabled]="playback()?.instanceId !== entry.instance.instanceId || playback()?.status === 'stopped'" (click)="restore()">Restore saved pose</button>
       </div>
-      <small>Preview timing and frame selection remain Rust-owned; these controls do not rewrite the saved pose.</small>
+      <small>Rust owns frame timing and selection; Studio waits for each rendered pose before scheduling the next. These controls do not rewrite the saved pose.</small>
     } @else {
       <small>This voxel object has no animation clips; its saved default frame is already shown.</small>
     }

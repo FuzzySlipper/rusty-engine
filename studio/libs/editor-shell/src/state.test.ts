@@ -14,7 +14,7 @@ import {
   serializeStudioHostUserSettings,
 } from '@rusty-engine/studio-user-settings';
 
-import { StudioWorkspaceStore } from './state.js';
+import { StudioWorkspaceStore, type StudioPlaybackTimer } from './state.js';
 import { HttpStudioAdapterTransport } from './transport.js';
 
 test('workspace opens only through the adapter and keeps authority, projection, preview, and selection distinct', async () => {
@@ -516,6 +516,61 @@ test('pause and restore queue behind an in-flight applied-object sample', async 
   assert.deepEqual(client.playbackCommands.slice(-2), ['sample', 'stop']);
 });
 
+test('applied-object playback advances one virtual frame only after renderer acknowledgement and completion', async () => {
+  const client = new VoxelObjectFixtureClient();
+  client.applied = true;
+  client.attached = true;
+  const timer = new ManualPlaybackTimer();
+  const store = new StudioWorkspaceStore(
+    client as unknown as StudioAdapterClient,
+    null,
+    timer,
+  );
+  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.runVoxelAction({
+    kind: 'previewObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    nowMicroseconds: 5_000_000,
+    command: {
+      kind: 'scrub',
+      clipId: 'clip/walk-1',
+      clipFrame: 0,
+      loopMode: 'repeat',
+    },
+  });
+  await store.runVoxelAction({
+    kind: 'previewObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    nowMicroseconds: 5_100_000,
+    command: { kind: 'play' },
+  });
+
+  const playGeneration = store.snapshot().liveProjection?.generation;
+  assert.ok(playGeneration !== undefined);
+  assert.equal(timer.pendingCount, 0, 'adapter completion alone must not advance playback');
+  store.acknowledgeProjectionGeneration(playGeneration);
+  assert.equal(timer.nextDelayMilliseconds, 500);
+
+  client.blockNextPlayback();
+  timer.fireNext();
+  assert.deepEqual(client.playbackCommands.slice(-2), ['play', 'sample']);
+  assert.equal(client.playbackTimes.at(-1), 5_600_000);
+  assert.equal(timer.pendingCount, 0, 'an in-flight sample must not schedule its successor');
+
+  client.resolveBlockedPlayback();
+  await eventLoopTurn();
+  const sampleGeneration = store.snapshot().liveProjection?.generation;
+  assert.ok(sampleGeneration !== undefined && sampleGeneration > playGeneration);
+  assert.equal(timer.pendingCount, 0, 'a completed sample still waits for renderer acknowledgement');
+  store.acknowledgeProjectionGeneration(sampleGeneration);
+  assert.equal(timer.nextDelayMilliseconds, 500);
+  timer.fireNext();
+  await eventLoopTurn();
+  assert.equal(client.playbackTimes.at(-1), 6_100_000);
+});
+
 test('project lifecycle discards queued applied-object controls from the replaced scope', async (t) => {
   const replacements = ['open', 'create', 'saveAs', 'read', 'close'] as const;
   const controls = ['pause', 'stop'] as const;
@@ -747,6 +802,41 @@ class FixtureTransport implements StudioAdapterTransport {
   }
 }
 
+class ManualPlaybackTimer implements StudioPlaybackTimer {
+  #nextHandle = 1;
+  readonly #pending = new Map<number, {
+    readonly callback: () => void;
+    readonly delayMilliseconds: number;
+  }>();
+
+  get pendingCount(): number {
+    return this.#pending.size;
+  }
+
+  get nextDelayMilliseconds(): number | null {
+    return this.#pending.values().next().value?.delayMilliseconds ?? null;
+  }
+
+  readonly cancel = (handle: unknown): void => {
+    if (typeof handle === 'number') this.#pending.delete(handle);
+  };
+
+  readonly schedule = (callback: () => void, delayMilliseconds: number): unknown => {
+    const handle = this.#nextHandle++;
+    this.#pending.set(handle, { callback, delayMilliseconds });
+    return handle;
+  };
+
+  fireNext(): void {
+    const entry = this.#pending.entries().next().value as
+      | readonly [number, { readonly callback: () => void }]
+      | undefined;
+    assert.ok(entry !== undefined, 'expected a pending playback timer');
+    this.#pending.delete(entry[0]);
+    entry[1].callback();
+  }
+}
+
 class VoxelObjectFixtureClient {
   rejectObjectApply = false;
   applied = false;
@@ -757,6 +847,7 @@ class VoxelObjectFixtureClient {
   playbackStatus: 'stopped' | 'playing' | 'paused' = 'stopped';
   playbackFrame = 0;
   readonly playbackCommands: string[] = [];
+  readonly playbackTimes: number[] = [];
   #blockedInspection: {
     readonly promise: Promise<unknown>;
     readonly resolve: (response: unknown) => void;
@@ -935,12 +1026,14 @@ class VoxelObjectFixtureClient {
   }
 
   previewVoxelObjectInstance(input: {
+    readonly nowMicroseconds: number;
     readonly command: {
       readonly kind: string;
       readonly clipFrame?: number;
     };
   }) {
     this.playbackCommands.push(input.command.kind);
+    this.playbackTimes.push(input.nowMicroseconds);
     if (input.command.kind === 'scrub') {
       this.playbackStatus = 'paused';
       this.playbackFrame = input.command.clipFrame ?? 0;
@@ -1486,6 +1579,10 @@ function objectMeshSettings() {
 function firstProjectionLabel(store: StudioWorkspaceStore): string | null {
   const operation = store.snapshot().liveProjection?.frame.ops[0];
   return operation?.op === 'create' ? operation.node.metadata.label : null;
+}
+
+function eventLoopTurn(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 function hierarchyNode(
