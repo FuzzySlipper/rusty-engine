@@ -328,6 +328,7 @@ test('voxel-object source, shared candidate frames, stale apply, explicit discar
   assert.equal(store.snapshot().voxelWorkspace.objectConversion?.preview.storedFrameCount, 3);
   assert.equal(store.snapshot().liveProjection?.frame.ops[0]?.op, 'create');
   assert.equal(firstProjectionLabel(store), 'voxel-object-candidate-0');
+  assert.match(store.snapshot().liveProjection?.meshResources[0]?.sourcePath ?? '', /candidate-0/u);
 
   const conversion = store.snapshot().voxelWorkspace.objectConversion;
   assert.ok(conversion !== null);
@@ -340,6 +341,7 @@ test('voxel-object source, shared candidate frames, stale apply, explicit discar
   });
   assert.equal(store.snapshot().voxelWorkspace.objectConversion?.preview.selectedFrame.selection.kind, 'clip');
   assert.equal(firstProjectionLabel(store), 'voxel-object-candidate-1');
+  assert.match(store.snapshot().liveProjection?.meshResources[0]?.sourcePath ?? '', /candidate-1/u);
 
   client.rejectObjectApply = true;
   await store.runVoxelAction({
@@ -359,6 +361,7 @@ test('voxel-object source, shared candidate frames, stale apply, explicit discar
   });
   assert.equal(store.snapshot().voxelWorkspace.objectConversion, null);
   assert.equal(firstProjectionLabel(store), 'player');
+  assert.match(store.snapshot().liveProjection?.meshResources[0]?.sourcePath ?? '', /canonical/u);
 
   await store.runVoxelAction(objectPrepareAction());
   const preparedAgain = store.snapshot().voxelWorkspace.objectConversion;
@@ -1067,6 +1070,7 @@ class VoxelObjectFixtureClient {
       preview: objectPreview(0),
       projection: objectCandidateProjection(0),
       projectionReadout: projectionReadout(20),
+      meshResources: [meshResourceReadout('2', 'candidate-0')],
     } as never);
   }
 
@@ -1134,6 +1138,7 @@ class VoxelObjectFixtureClient {
       preview: objectPreview(frame),
       projection: objectCandidateProjection(frame),
       projectionReadout: projectionReadout(20 + frame),
+      meshResources: [meshResourceReadout(frame === 0 ? '2' : '3', `candidate-${String(frame)}`)],
     };
     if (this.#blockedPreview !== null) {
       this.#blockedPreview.response = response;
@@ -1166,6 +1171,7 @@ class VoxelObjectFixtureClient {
       planId: 'plan/object',
       projection: project.projection,
       projectionReadout: project.projectionReadout,
+      meshResources: project.meshResources,
     } as never);
   }
 
@@ -1232,6 +1238,7 @@ class VoxelObjectFixtureClient {
             }],
       },
       projectionReadout: projectionReadout(20 + this.playbackFrame),
+      meshResources: [meshResourceReadout('1', 'canonical')],
     };
     if (this.#blockedPlayback !== null) {
       this.#blockedPlayback.response = response;
@@ -1244,6 +1251,7 @@ class VoxelObjectFixtureClient {
     const project = projectReadout(false, this.openedProjectId);
     return {
       ...project,
+      meshResources: [meshResourceReadout('1', 'canonical')],
       projection: this.attached
         ? appliedVoxelObjectProjection(project.projection)
         : project.projection,
@@ -1346,6 +1354,16 @@ function projectResponse(
     protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
     requestId,
     project: projectReadout(changed, projectId),
+  };
+}
+
+function meshResourceReadout(digestDigit: string, label: string) {
+  const digest = digestDigit.repeat(64);
+  return {
+    resource: `mesh-resource/${digest}`,
+    contentHash: `sha256:${digest}`,
+    byteLength: 1024,
+    sourcePath: `.rusty-engine-cache/render-resources/${label}-${digest}.rmesh`,
   };
 }
 

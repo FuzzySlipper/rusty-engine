@@ -342,6 +342,22 @@ test('protocol 9 keeps entity-owned voxel objects, applied playback, and durable
   assert.equal(decoded.type, 'voxelObjectConversionPrepared');
   assert.equal(decoded.preview.selectedFrame.voxelCount, 1);
   assert.equal(decoded.projection.ops[0]?.op, 'defineVoxelObject');
+  const digest = '4'.repeat(64);
+  const decodedWithResources = decodeStudioAdapterResponse({
+    ...prepared,
+    meshResources: [{
+      resource: `mesh-resource/${digest}`,
+      contentHash: `sha256:${digest}`,
+      byteLength: 1024,
+      sourcePath: `target/studio-render-resources/${digest}.rmesh`,
+    }],
+  });
+  assert.equal(
+    decodedWithResources.type === 'voxelObjectConversionPrepared'
+      ? decodedWithResources.meshResources?.[0]?.byteLength
+      : null,
+    1024,
+  );
   assert.throws(
     () => decodeStudioAdapterResponse({
       ...prepared,

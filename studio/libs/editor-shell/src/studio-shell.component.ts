@@ -189,7 +189,7 @@ export class StudioShellComponent {
     this.state().authoringDocument?.animatedMeshResources ?? [],
   ]));
   readonly meshResourceManifest = computed(() => {
-    const resources = this.state().authoringDocument?.meshResources ?? [];
+    const resources = this.state().liveProjection?.meshResources ?? [];
     if (resources.length === 0) return null;
     return {
       kind: 'rusty_renderer_mesh_resources.v1' as const,
@@ -202,7 +202,7 @@ export class StudioShellComponent {
   });
   readonly meshResourceKey = computed(() => JSON.stringify([
     this.state().userSettings.projectRoot,
-    this.state().authoringDocument?.meshResources ?? [],
+    this.state().liveProjection?.meshResources ?? [],
   ]));
   readonly gridColors = [
     { key: 'minorColor', label: 'Minor lines' },
@@ -289,7 +289,7 @@ export class StudioShellComponent {
     const snapshot = this.state();
     const projectRoot = snapshot.userSettings.projectRoot;
     if (projectRoot === null) throw new Error('Mesh resources require an open project root.');
-    const resource = snapshot.authoringDocument?.meshResources.find(
+    const resource = snapshot.liveProjection?.meshResources.find(
       (candidate) => candidate.resource === descriptor.resource,
     );
     if (resource === undefined

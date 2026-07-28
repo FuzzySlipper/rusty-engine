@@ -743,6 +743,7 @@ export interface VoxelObjectConversionPreparedResponse extends ResponseHeader {
   readonly preview: VoxelObjectConversionPreview;
   readonly projection: RenderFrameDiff;
   readonly projectionReadout: ProjectionReadout;
+  readonly meshResources?: readonly MeshResourceReadout[];
 }
 
 export interface VoxelObjectConversionPreviewedResponse extends ResponseHeader {
@@ -750,6 +751,7 @@ export interface VoxelObjectConversionPreviewedResponse extends ResponseHeader {
   readonly preview: VoxelObjectConversionPreview;
   readonly projection: RenderFrameDiff;
   readonly projectionReadout: ProjectionReadout;
+  readonly meshResources?: readonly MeshResourceReadout[];
 }
 
 export interface VoxelObjectConversionDiscardedResponse extends ResponseHeader {
@@ -757,6 +759,7 @@ export interface VoxelObjectConversionDiscardedResponse extends ResponseHeader {
   readonly planId: string;
   readonly projection: RenderFrameDiff;
   readonly projectionReadout: ProjectionReadout;
+  readonly meshResources?: readonly MeshResourceReadout[];
 }
 
 export interface VoxelObjectInstancePreviewedResponse extends ResponseHeader {
@@ -764,6 +767,7 @@ export interface VoxelObjectInstancePreviewedResponse extends ResponseHeader {
   readonly playback: VoxelObjectInstancePlaybackReadout;
   readonly projection: RenderFrameDiff;
   readonly projectionReadout: ProjectionReadout<ProjectionFrameKind>;
+  readonly meshResources?: readonly MeshResourceReadout[];
 }
 
 export interface AssetImportPreparedResponse extends ResponseHeader {
@@ -1246,48 +1250,72 @@ export function decodeStudioAdapterResponse(input: unknown): StudioAdapterRespon
       return input as VoxelObjectSourceInspectedResponse;
     }
     case 'voxelObjectConversionPrepared': {
-      const value = record(input, '$', [
-        'type', 'protocolVersion', 'requestId', 'plan', 'preview', 'projection',
-        'projectionReadout',
-      ]);
+      const value = record(
+        input,
+        '$',
+        [
+          'type', 'protocolVersion', 'requestId', 'plan', 'preview', 'projection',
+          'projectionReadout',
+        ],
+        ['meshResources'],
+      );
       responseHeader(value);
       voxelContract('$.plan', () =>
         validateVoxelObjectConversionPlan(value['plan'], '$.plan'));
       voxelContract('$.preview', () =>
         validateVoxelObjectConversionPreview(value['preview'], '$.preview'));
       completeProjection(value, '$');
+      optional(value['meshResources'], '$.meshResources', meshResources);
       return input as VoxelObjectConversionPreparedResponse;
     }
     case 'voxelObjectConversionPreviewed': {
-      const value = record(input, '$', [
-        'type', 'protocolVersion', 'requestId', 'preview', 'projection',
-        'projectionReadout',
-      ]);
+      const value = record(
+        input,
+        '$',
+        [
+          'type', 'protocolVersion', 'requestId', 'preview', 'projection',
+          'projectionReadout',
+        ],
+        ['meshResources'],
+      );
       responseHeader(value);
       voxelContract('$.preview', () =>
         validateVoxelObjectConversionPreview(value['preview'], '$.preview'));
       completeProjection(value, '$');
+      optional(value['meshResources'], '$.meshResources', meshResources);
       return input as VoxelObjectConversionPreviewedResponse;
     }
     case 'voxelObjectConversionDiscarded': {
-      const value = record(input, '$', [
-        'type', 'protocolVersion', 'requestId', 'planId', 'projection',
-        'projectionReadout',
-      ]);
+      const value = record(
+        input,
+        '$',
+        [
+          'type', 'protocolVersion', 'requestId', 'planId', 'projection',
+          'projectionReadout',
+        ],
+        ['meshResources'],
+      );
       responseHeader(value);
       text(value['planId'], '$.planId');
       completeProjection(value, '$');
+      optional(value['meshResources'], '$.meshResources', meshResources);
       return input as VoxelObjectConversionDiscardedResponse;
     }
     case 'voxelObjectInstancePreviewed': {
-      const value = record(input, '$', [
-        'type', 'protocolVersion', 'requestId', 'playback', 'projection',
-        'projectionReadout',
-      ]);
+      const value = record(
+        input,
+        '$',
+        [
+          'type', 'protocolVersion', 'requestId', 'playback', 'projection',
+          'projectionReadout',
+        ],
+        ['meshResources'],
+      );
       responseHeader(value);
       voxelContract('$.playback', () =>
         validateVoxelObjectInstancePlaybackReadout(value['playback'], '$.playback'));
       objectInstanceProjection(value, '$');
+      optional(value['meshResources'], '$.meshResources', meshResources);
       return input as VoxelObjectInstancePreviewedResponse;
     }
     case 'assetImportPrepared': {

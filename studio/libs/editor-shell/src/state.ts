@@ -110,6 +110,8 @@ export interface LiveProjectionView {
   /** Optional retained-state patch for the current generation. */
   readonly framePatch: RenderFrameDiff | null;
   readonly readout: ProjectionReadout<ProjectionFrameKind>;
+  /** Content-addressed resources required by this exact retained frame. */
+  readonly meshResources: readonly MeshResourceReadout[];
   readonly entities: readonly ProjectedEntityView[];
   readonly generation: number;
 }
@@ -243,6 +245,7 @@ interface CanonicalProjectProjection {
   readonly projectHash: string;
   readonly projectScopeGeneration: number;
   readonly frame: RenderFrameDiff;
+  readonly meshResources: readonly MeshResourceReadout[];
   readonly entities: readonly ProjectedEntityView[];
 }
 
@@ -1272,6 +1275,7 @@ export class StudioWorkspaceStore {
           this.#acceptCompleteObjectProjection(
             response.projection,
             response.projectionReadout,
+            response.meshResources ?? [],
             this.#newProjectionBase(
               'voxelObjectConversion',
               `${response.plan.planId}@${response.plan.planHash}`,
@@ -1303,6 +1307,7 @@ export class StudioWorkspaceStore {
           this.#acceptCompleteObjectProjection(
             response.projection,
             response.projectionReadout,
+            response.meshResources ?? [],
             this.#newProjectionBase(
               'voxelObjectConversion',
               `${action.planId}@${action.expectedPlanHash}`,
@@ -1354,6 +1359,7 @@ export class StudioWorkspaceStore {
           this.#acceptCompleteObjectProjection(
             response.projection,
             response.projectionReadout,
+            response.meshResources ?? canonical.meshResources,
             canonical.identity,
           );
           this.#patch({
@@ -1398,6 +1404,7 @@ export class StudioWorkspaceStore {
           const frameGeneration = this.#acceptCanonicalObjectProjection(
             response.projection,
             response.projectionReadout,
+            response.meshResources,
           );
           this.#patch({
             operation: 'idle',
@@ -1747,6 +1754,7 @@ export class StudioWorkspaceStore {
   #acceptCompleteObjectProjection(
     frame: RenderFrameDiff,
     readout: ProjectionReadout<ProjectionFrameKind>,
+    meshResources: readonly MeshResourceReadout[],
     base: ProjectionBaseIdentity,
   ): number {
     if (readout.frameKind !== 'complete') {
@@ -1765,6 +1773,7 @@ export class StudioWorkspaceStore {
         frame,
         framePatch: null,
         readout,
+        meshResources,
         entities: summarizeProjectionForUi(frame, ownerEntityIds, []),
         generation,
       },
@@ -1775,6 +1784,7 @@ export class StudioWorkspaceStore {
   #acceptCanonicalObjectProjection(
     frame: RenderFrameDiff,
     readout: ProjectionReadout<ProjectionFrameKind>,
+    meshResources: readonly MeshResourceReadout[] | undefined,
   ): number {
     const current = this.#snapshot();
     const canonical = this.#currentCanonicalProjectProjection();
@@ -1782,7 +1792,12 @@ export class StudioWorkspaceStore {
       throw new Error('Applied voxel-object playback has no current canonical project projection.');
     }
     if (!isVoxelObjectFramePatch(frame)) {
-      return this.#acceptCompleteObjectProjection(frame, readout, canonical.identity);
+      return this.#acceptCompleteObjectProjection(
+        frame,
+        readout,
+        meshResources ?? canonical.meshResources,
+        canonical.identity,
+      );
     }
 
     const liveBaseIsCanonical = sameProjectionBase(this.#liveProjectionBase, canonical.identity)
@@ -1812,6 +1827,7 @@ export class StudioWorkspaceStore {
         frame: compacted,
         framePatch,
         readout,
+        meshResources: meshResources ?? base.meshResources,
         entities: base.entities,
         generation,
       },
@@ -1909,6 +1925,7 @@ export class StudioWorkspaceStore {
       projectHash: project.identity.projectHash,
       projectScopeGeneration: this.#projectScopeGeneration,
       frame: project.projection,
+      meshResources: project.meshResources ?? [],
       entities,
     };
     this.#liveProjectionBase = projectionBase;
@@ -1938,6 +1955,7 @@ export class StudioWorkspaceStore {
         frame: project.projection,
         framePatch: null,
         readout: project.projectionReadout,
+        meshResources: project.meshResources ?? [],
         entities,
         generation: (current.liveProjection?.generation ?? 0) + 1,
       },

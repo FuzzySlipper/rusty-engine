@@ -84,7 +84,10 @@ The renderer contract's source variant and encoding name are the versioned data
 seam. Studio protocol 9 keeps existing inline adapters valid through an optional
 `meshResources` readout. An opting-in adapter supplies one mapping from resource
 identity/hash/length to its owner-chosen project-relative path. The projection
-contains no path.
+contains no path. Project readouts and each projection-bearing conversion or
+playback response carry the manifest for their exact frame; Studio changes the
+live frame and manifest atomically and retains the current set across ordinary
+frame-selection patches.
 
 Studio preloads the manifest before mounting the shared viewport. Its trusted
 Node host serves hash-checked `.rmesh` bytes over the existing bounded

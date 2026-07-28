@@ -88,9 +88,13 @@ These are readouts rebuilt from admitted Rust state on every read, not a second 
 Protocol 9 also admits one optional, independently versioned `meshResources` readout for adapters
 that opt into content-addressed retained mesh sources. The frame carries only renderer-neutral
 identity, hash, length, encoding, and stream offsets; the readout maps those identities to
-downstream-owned project-relative paths. Studio resolves the bounded bytes through its existing
-resource host before applying the frame. Inline adapters remain valid, and the authoritative voxel
-object remains unchanged. The format and migration contract are documented in
+downstream-owned project-relative paths. Project readouts and every conversion-candidate,
+discard, or applied-instance response that carries a projection may carry the manifest for that
+exact frame. Studio switches the live manifest and retained frame together, so a private candidate
+cannot accidentally resolve against the canonical project's resources. Studio resolves the
+bounded bytes through its existing resource host before applying the frame. Inline adapters remain
+valid, and the authoritative voxel object remains unchanged. The format and migration contract is
+documented in
 [the voxel mesh data-plane decision](topics/voxel/voxel-mesh-data-plane.md).
 
 The Converted Wall artifact additionally composes canonical `voxel-asset` payloads, catalog material
