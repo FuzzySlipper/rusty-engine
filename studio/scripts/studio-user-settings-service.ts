@@ -20,6 +20,11 @@ import {
 // writes, parsing, and preserved invalid text without constraining project data.
 export const MAX_STUDIO_USER_SETTINGS_BYTES = 64 * 1024;
 
+// This selector is normalized and hashed before any settings I/O. Bound the
+// JavaScript string work explicitly; unlike filesystem resource paths, this is
+// measured after trimming in UTF-16 code units rather than UTF-8 bytes.
+export const MAX_STUDIO_USER_SETTINGS_PROJECT_ROOT_CODE_UNITS = 4096;
+
 export interface StudioUserSettingsLocation {
   readonly canonicalProjectRoot: string;
   readonly projectKey: string;
@@ -81,8 +86,14 @@ export async function resolveStudioUserSettingsLocation(options: {
   readonly settingsRoot?: string;
 }): Promise<StudioUserSettingsLocation> {
   const requestedRoot = options.projectRoot.trim();
-  if (requestedRoot.length === 0 || requestedRoot.length > 4096 || requestedRoot.includes('\0')) {
-    throw new TypeError('A bounded, non-empty project root is required for host-user settings.');
+  if (requestedRoot.length === 0
+    || requestedRoot.length > MAX_STUDIO_USER_SETTINGS_PROJECT_ROOT_CODE_UNITS
+    || requestedRoot.includes('\0')) {
+    throw new TypeError(
+      'A non-empty project root of at most '
+      + `${String(MAX_STUDIO_USER_SETTINGS_PROJECT_ROOT_CODE_UNITS)} UTF-16 code units `
+      + 'is required for host-user settings.',
+    );
   }
   const absoluteRoot = resolve(requestedRoot);
   let canonicalProjectRoot = absoluteRoot;

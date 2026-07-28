@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { listStudioHostDirectory } from '../scripts/studio-host-files-service.js';
+import {
+  listStudioHostDirectory,
+  MAX_STUDIO_HOST_FILE_EXTENSION_CHARACTERS,
+  MAX_STUDIO_HOST_FILE_EXTENSION_FILTERS,
+} from '../scripts/studio-host-files-service.js';
 
 void test('trusted host directory listing navigates, filters, sorts, and excludes symlinks', async () => {
   const root = await mkdtemp(join(tmpdir(), 'rusty-studio-host-files-'));
@@ -28,5 +32,30 @@ void test('trusted host directory listing navigates, filters, sorts, and exclude
   await assert.rejects(
     () => listStudioHostDirectory({ directory: join(root, 'linked.txt') }),
     /Symbolic links are not accepted/,
+  );
+});
+
+void test('host file extension filters pin their count and ASCII character ceilings', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rusty-studio-host-filter-limits-'));
+  const exact = `.${'a'.repeat(MAX_STUDIO_HOST_FILE_EXTENSION_CHARACTERS - 1)}`;
+  assert.equal(exact.length, MAX_STUDIO_HOST_FILE_EXTENSION_CHARACTERS);
+  await listStudioHostDirectory({
+    directory: root,
+    extensions: Array.from({ length: MAX_STUDIO_HOST_FILE_EXTENSION_FILTERS }, () => exact),
+  });
+
+  await assert.rejects(
+    () => listStudioHostDirectory({ directory: root, extensions: [`${exact}a`] }),
+    /Invalid host file extension filter/,
+  );
+  await assert.rejects(
+    () => listStudioHostDirectory({
+      directory: root,
+      extensions: Array.from(
+        { length: MAX_STUDIO_HOST_FILE_EXTENSION_FILTERS + 1 },
+        () => '.json',
+      ),
+    }),
+    /extension filter is too broad/,
   );
 });

@@ -10,11 +10,28 @@ import {
   serializeStudioHostUserSettings,
 } from '../libs/user-settings/src/index.js';
 import {
+  MAX_STUDIO_USER_SETTINGS_PROJECT_ROOT_CODE_UNITS,
   readStudioUserSettings,
   resolveStudioUserSettingsLocation,
   writeStudioUserSettings,
   writeStudioUserSettingsWithMaintenance,
 } from '../scripts/studio-user-settings-service.js';
+
+void test('host settings project roots pin the trimmed UTF-16 code-unit ceiling', async () => {
+  const exact = `/${'é'.repeat(MAX_STUDIO_USER_SETTINGS_PROJECT_ROOT_CODE_UNITS - 1)}`;
+  assert.equal(exact.length, MAX_STUDIO_USER_SETTINGS_PROJECT_ROOT_CODE_UNITS);
+  assert.ok(Buffer.byteLength(exact, 'utf8') > MAX_STUDIO_USER_SETTINGS_PROJECT_ROOT_CODE_UNITS);
+  assert.equal(
+    (await resolveStudioUserSettingsLocation({ projectRoot: exact })).canonicalProjectRoot,
+    exact,
+  );
+
+  const oneOver = `/${'é'.repeat(MAX_STUDIO_USER_SETTINGS_PROJECT_ROOT_CODE_UNITS)}`;
+  await assert.rejects(
+    () => resolveStudioUserSettingsLocation({ projectRoot: oneOver }),
+    /at most 4096 UTF-16 code units/,
+  );
+});
 
 void test('host settings survive a fresh service read and remain isolated per canonical project', async () => {
   const root = await mkdtemp(join(tmpdir(), 'rusty-studio-settings-'));

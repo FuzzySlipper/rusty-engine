@@ -6,6 +6,10 @@ import { dirname, isAbsolute, join, normalize, parse } from 'node:path';
 // the path cap rejects malformed selections before filesystem traversal.
 export const MAX_STUDIO_HOST_FILE_ENTRIES = 512;
 export const MAX_STUDIO_HOST_PATH_BYTES = 4096;
+export const MAX_STUDIO_HOST_FILE_EXTENSION_FILTERS = 16;
+// Extension filters are ASCII-only, so characters, UTF-16 code units, and
+// UTF-8 bytes are identical for this bound.
+export const MAX_STUDIO_HOST_FILE_EXTENSION_CHARACTERS = 17;
 
 export interface StudioHostFileEntry {
   readonly name: string;
@@ -80,10 +84,13 @@ async function requireExistingChainWithoutSymlinks(path: string): Promise<void> 
 }
 
 function normalizeExtensions(values: readonly string[]): readonly string[] {
-  if (values.length > 16) throw new TypeError('Host file extension filter is too broad.');
+  if (values.length > MAX_STUDIO_HOST_FILE_EXTENSION_FILTERS) {
+    throw new TypeError('Host file extension filter is too broad.');
+  }
   return values.map((value) => {
     const extension = value.trim().toLocaleLowerCase();
-    if (!/^\.[a-z0-9][a-z0-9._-]{0,15}$/.test(extension)) {
+    if (extension.length > MAX_STUDIO_HOST_FILE_EXTENSION_CHARACTERS
+      || !/^\.[a-z0-9][a-z0-9._-]*$/.test(extension)) {
       throw new TypeError(`Invalid host file extension filter: ${value}`);
     }
     return extension;
