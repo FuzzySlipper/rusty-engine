@@ -1,6 +1,7 @@
 # Optional gameplay rules contract
 
-Status: accepted architecture; implementation is tracked separately
+Status: accepted architecture; Rust schema-1 substrate implemented; isolated
+TypeScript authoring support tracked separately
 
 This contract freezes the smallest host-neutral rules-package support justified
 by the first Rusty D20 slice. It is deliberately narrower than an RPG
@@ -46,6 +47,11 @@ must not depend on a downstream game, Node, TypeScript, a browser,
 sources, effects, inventory, equipment, damage, and restoration. A downstream
 compiler may produce definitions consumed by those mechanisms, but
 `gameplay-rules` does not bind an opaque payload to them.
+
+The shipped Rust paths and focused gates are mapped in
+[Gameplay rules](code-map/gameplay-rules.md). The implementation stores no
+package globally: admission and resolution return immutable owned values to
+the caller.
 
 ## Four visible representations
 

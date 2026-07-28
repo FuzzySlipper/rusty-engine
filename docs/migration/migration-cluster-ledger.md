@@ -1,6 +1,7 @@
 # Asha-to-Rusty Engine migration cluster ledger
 
-Status: M0-M11S and GM0-GM7I implemented; M11 Studio closeout and optional gameplay-rules implementation are in progress
+Status: M0-M11S, GM0-GM7I, and GR0-GR1 implemented; M11 Studio
+closeout and GR2 TypeScript authoring are in progress
 
 Evidence baselines:
 
@@ -107,6 +108,7 @@ Every future cluster must preserve these properties:
 | M11R | Complete shared rendering | #6156-#6163 | The complete pinned Asha render investment was adapted into renderer-neutral Rust crates plus an isolated four-package TypeScript/Three/host workspace. Every one of 134 donor files has a final disposition; the demo deleted its private renderer and consumes the public exact-revision packages. |
 | GM0-GM5 | Initial gameplay-mechanics provider | #6284-#6289 | Seven ordinary durable component families, one immutable catalog, named stats/tracks/effects/damage/inventory/equipment services, strict reconstruction, read-only inspection, runnable compositions, bounded costs, and literal 152-item `asha-rpg` disposition landed without a session, scheduler, IR, or shadow state store. |
 | GM7I | Infrastructure-shaped mechanics falsification | #6314, #6322 | A checked headless fixture composes canonical containment/equipment, attributed module/effect sources, stats/tracks, damage/repair, caller-owned expiry, and snapshot continuation. It exposed and closed prospective equipment-source track validation without adding product vocabulary or a rules framework. |
+| GR0-GR1 | Optional Rust gameplay-rules substrate | #6311-#6312 | A semantic-neutral schema-1 package contract and host-neutral Rust crate provide strict bounded admission, canonical bytes and fingerprints, exact dependency resolution, provenance, typed diagnostics, direct/artifact convergence, and complete donor accounting while every payload meaning and publication decision stays downstream. |
 
 ## Accepted successor work
 
@@ -115,8 +117,6 @@ live task and review state.
 
 | ID | Tasks | Accepted boundary |
 |---|---|---|
-| GR0 | #6311 | Freeze a semantic-neutral optional rules package envelope, exact dependency resolution, provenance, diagnostics, bounds, and isolated TypeScript ownership against Rusty D20 without an Engine rules language. |
-| GR1 | #6312 | Implement the host-neutral Rust `gameplay-rules` crate with direct-Rust and strict artifact paths. |
 | GR2 | #6313 | Implement the isolated `rules/` TypeScript contracts and authoring support while keeping ordinary provider verification Node-free. |
 
 Detailed measurements, implementation commits, browser behavior, and limitations are retained in

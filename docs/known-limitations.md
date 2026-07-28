@@ -27,21 +27,24 @@ downstream repositories.
   infrastructure, and Rusty D20 evidence.
 - **Last reviewed:** 2026-07-28 / codex
 
-## Gameplay rules support is designed but not implemented
+## Gameplay rules TypeScript authoring support is not implemented
 
 - **Status:** accepted-temporary
 - **Affected surface:** optional downstream-authored rules packages
-- **Limitation:** The schema-1 ownership, envelope, bounds, diagnostics,
-  dependency resolution, and isolated TypeScript boundary are frozen in
-  [gameplay-rules-contract.md](gameplay-rules-contract.md), but the Rust crate
-  and TypeScript packages do not yet exist.
-- **Impact:** Rules-heavy consumers must not treat the contract as a shipped
-  API or create a competing Engine-owned semantic IR while implementation is
-  pending.
-- **Detection:** `cargo metadata --format-version 1 --locked --no-deps` has no
-  `gameplay-rules` package and there is no `rules/` workspace.
-- **Follow-up:** GR1 implements the Rust package support and GR2 implements the
-  isolated authoring workspace before Rusty D20 consumes either.
+- **Limitation:** The optional Rust `gameplay-rules` crate now implements the
+  schema-1 envelope, bounds, canonicalization, fingerprints, provenance,
+  diagnostics, and exact package-set resolution. The separately gated
+  `rules/` TypeScript contracts and semantic-neutral authoring packages do not
+  yet exist.
+- **Impact:** Direct Rust construction and checked artifact admission are
+  usable and remain Node-free. A TypeScript author must not create a private
+  competing envelope/canonicalizer and claim cross-language parity before the
+  isolated shared packages land.
+- **Detection:** `cargo test -p gameplay-rules --locked` proves the Rust
+  substrate and canonical fixture; the repository currently has no `rules/`
+  workspace or `scripts/verify-rules.sh`.
+- **Follow-up:** GR2 implements the isolated authoring workspace and
+  cross-language drift gate before Rusty D20 relies on TypeScript emission.
 - **Last reviewed:** 2026-07-28 / codex
 
 ## Planar navigation footprint and multi-agent planning

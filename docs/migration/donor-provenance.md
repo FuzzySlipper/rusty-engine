@@ -508,10 +508,12 @@ owner. [`migration/gameplay-rules-donor/disposition.tsv`](../../migration/gamepl
 accounts for all 152 paths separately from the completed mechanics campaign.
 No prior mechanics disposition is silently reclassified.
 
-The new contract adapts only semantic-neutral lessons: strict versioned package
-envelopes, exact dependency graphs, canonical JSON, source provenance, bounded
-typed diagnostics, executable-value rejection, checked quotas, and
-fail-before-publication. These lessons are rewritten behind
+The contract and the Rust `gameplay-rules` crate adapt only semantic-neutral
+lessons: strict versioned package envelopes, exact dependency graphs,
+canonical JSON, source provenance, bounded typed diagnostics,
+executable-value rejection, checked quotas, and fail-before-publication. The
+rewritten implementation is mapped in
+[Gameplay rules](../code-map/gameplay-rules.md) and governed by
 [`gameplay-rules-contract.md`](../gameplay-rules-contract.md); no donor
 implementation file is copied.
 

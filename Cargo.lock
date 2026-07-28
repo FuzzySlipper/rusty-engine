@@ -284,6 +284,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "gameplay-rules"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -39,6 +39,7 @@ downstream game policy and orchestration
              |
              +--> entity-state / state-machine
              +--> gameplay-mechanics
+             +--> gameplay-rules
              +--> environment-authoring --> authored-scene
              +--> content-store / asset-catalog / asset-import
              +--> engine-spatial --> core-* / svc-*
@@ -58,6 +59,7 @@ per-entity/per-component revision-guarded mutation, deterministic iteration,
 bounded inspection, and
 optional versioned codecs let downstream Rust add inert component families
 without an Engine enum, global registry, or ECS scheduler.
+
 `gameplay-mechanics` optionally registers inert stats, tracks, sources, effects,
 inventory, unique-item, and equipment data in that same store, then exposes
 direct attributed stat, track, damage, and item/equipment services without
@@ -65,6 +67,14 @@ owning product orchestration. The `engine-inspector` leaf can strictly reopen a
 mechanics snapshot with its admitted catalog and project component presence,
 evaluated stats, tracks, sources, effects, inventory, equipment, and receipt
 detail without mutable access.
+
+`gameplay-rules` is an independent optional package boundary for rules-heavy
+consumers. It admits opaque schema-1 JSON or direct Rust candidates into the
+same immutable canonical representation, resolves exact package dependencies,
+and carries provenance and bounded diagnostics. Downstream games retain every
+payload meaning, compiler decision, publication target, and runtime operation;
+mechanics-only games do not depend on it.
+
 `engine-spatial` composes one canonical voxel authority with derived collision,
 navigation, mesh, motion, trigger, and edit mechanisms. Content and authoring
 crates own strict durable formats, validation, plans, and explicit mutation
@@ -83,7 +93,7 @@ proves host-neutral mechanisms.
 
 ## Repository layout
 
-Workspace inventory: **29 Cargo workspace crates, 4 public renderer packages,
+Workspace inventory: **30 Cargo workspace crates, 4 public renderer packages,
 and 1 Studio application plus 5 Studio libraries.**
 
 ```text
@@ -93,6 +103,7 @@ rust/crates/
   entity-state              typed components, relationships, transforms, snapshots, atomic mutation
   state-machine             explicit definitions, instances, and transitions
   gameplay-mechanics        component-backed stats, tracks, sources, items, damage, restoration
+  gameplay-rules            optional opaque package admission, provenance, diagnostics, resolution
   engine-spatial            canonical voxel space and synchronized derived mechanisms
   content-store             manifests, source batches, prefabs, load/save plans, write sets
   asset-catalog             asset versions, locks, dependencies, materials, fallbacks

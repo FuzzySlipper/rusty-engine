@@ -58,6 +58,10 @@ order, persistence, dependency direction, or presentation boundaries.
   effects, inventory/item/equipment data, damage, and restoration mechanisms.
   Downstream owns attacks, turns, ticks, effect timing, consequences, and
   complete saves.
+- `gameplay-rules` optionally owns strict semantic-neutral package admission,
+  exact dependencies, canonical bytes and fingerprints, provenance, and
+  bounded diagnostics. Downstream owns the opaque payload schema, semantic
+  compiler, publication, persistence policy, and execution.
 - `engine-spatial` owns cohesive canonical voxel state when collision,
   navigation, mesh, motion, triggers, and edit history must remain synchronized.
 - Durable formats validate bounded data; consumers retain game meaning,
@@ -74,6 +78,7 @@ rust/crates/
   entity-state              entity facts, typed component storage, atomic mutation
   state-machine             explicit definitions, instances, transitions
   gameplay-mechanics        stats, tracks, sources, items, damage, restoration
+  gameplay-rules            optional opaque packages, provenance, diagnostics, resolution
   engine-spatial            canonical voxel space and synchronized derivatives
   content-store             content manifests, batches, prefabs, load/save plans
   asset-catalog             versions, locks, dependencies, materials, fallbacks
@@ -102,6 +107,7 @@ follow-up routes, use [docs/agent-code-atlas.md](docs/agent-code-atlas.md).
 |---|---|---|
 | Entity facts and component mutation | `entity-state`, `state-machine` | Generic service routing, callbacks, renderer/I/O |
 | Reusable gameplay mechanics | `gameplay-mechanics` | Attacks, turns, ticks, game rules, complete saves |
+| Optional rules package support | `gameplay-rules` | Domain semantics, runtime evaluation, registries, complete saves |
 | Canonical voxel world and derivatives | `engine-spatial`, `svc-*` | Game policy, browser input, duplicate authority |
 | Content, assets, prefabs, scenes | `content-store`, `asset-*`, `authored-scene` | Product storage policy, implicit spawn behavior |
 | Environment recipes | `environment-authoring` | Universal procgen framework, UI, scheduling |

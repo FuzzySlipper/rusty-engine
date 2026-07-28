@@ -319,6 +319,17 @@ workspace, while Rust remains the semantic and runtime authority. Direct Rust
 construction and checked artifact admission require no Node or TypeScript at
 runtime.
 
+The Rust crate admits either an explicit `RulePackageCandidate` or strict
+schema-1 bytes into the same immutable `AdmittedRulePackage`. It owns canonical
+bytes and their content fingerprint, then resolves a complete caller-supplied
+set into deterministic dependency order only after aggregate bounds and every
+exact dependency have passed. It publishes nothing to a component store,
+catalog, filesystem, or global registry. Downstream code owns semantic
+compilation, publication, loading, and persistence of both its compiled
+definitions and any package files. See
+[Gameplay rules](code-map/gameplay-rules.md) for implementation paths and
+gates.
+
 This is not a universal gameplay IR. Engine defines no formula, predicate,
 operation, action, condition, effect, behavior, evaluator, registry, runtime
 session, scheduler, or d20 vocabulary through this surface. A mechanics-only
