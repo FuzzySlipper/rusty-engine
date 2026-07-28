@@ -264,6 +264,8 @@ const DEFAULT_PLAYBACK_TIMER: StudioPlaybackTimer = {
   schedule: (callback, delayMilliseconds) => setTimeout(callback, delayMilliseconds),
 };
 
+// A long-running preview periodically requests a complete owner frame instead
+// of retaining an unbounded patch chain in browser state.
 const MAX_RETAINED_OBJECT_FRAME_PATCHES = 120;
 
 const INITIAL_ARTIFACT = buildDefaultStudioHostUserSettings('rusty-studio-project:scratch');

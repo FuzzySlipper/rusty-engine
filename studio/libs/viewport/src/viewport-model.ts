@@ -203,6 +203,8 @@ export function presentStudioSelection(
   };
 }
 
+// Conversion samples are diagnostic preview geometry. Bound their temporary
+// render-node cost without changing the complete owner conversion result.
 const MAX_CONVERSION_PREVIEW_NODES = 512;
 
 function presentVoxelPreview(

@@ -1,6 +1,9 @@
 import { lstat, readdir } from 'node:fs/promises';
 import { dirname, isAbsolute, join, normalize, parse } from 'node:path';
 
+// Directory reads are UI projections, not recursive inventory authority. The
+// entry cap keeps one host-files response and one rendered list predictable;
+// the path cap rejects malformed selections before filesystem traversal.
 export const MAX_STUDIO_HOST_FILE_ENTRIES = 512;
 export const MAX_STUDIO_HOST_PATH_BYTES = 4096;
 

@@ -21,6 +21,8 @@ than a universal editor command layer.
 See [the Studio migration contract](../docs/studio-migration-contract.md).
 The closed adapter protocol and its explicit integration gate are documented in
 [the Studio adapter protocol](../docs/studio-adapter-protocol.md).
+The rationale and classification for every host/browser size ceiling is kept in
+[the Studio size-limit inventory](../docs/studio-size-limit-inventory.md).
 
 ## Isolated verification
 

@@ -10,7 +10,11 @@ import {
   resolve,
 } from 'node:path';
 
+// Render resources are read into one host Buffer and one browser ArrayBuffer.
+// Keep that allocation bounded and aligned with the browser transport.
 export const MAX_STUDIO_RENDER_RESOURCE_BYTES = 64 * 1024 * 1024;
+// Real host paths stay far below this ceiling; it guards malformed inputs
+// before path normalization and filesystem traversal.
 export const MAX_STUDIO_RENDER_RESOURCE_PATH_BYTES = 4096;
 
 export interface StudioRenderResourceRequest {

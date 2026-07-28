@@ -55,6 +55,20 @@ void test('future or invalid settings preserve source text and disable replaceme
     }),
     /lighting mode must be work_light or authored_lights/i,
   );
+  assert.throws(
+    () => validateStudioHostUserSettings({
+      ...artifact,
+      projectKey: '\u00e9'.repeat(81),
+    }),
+    /160-byte bound/u,
+  );
+  assert.throws(
+    () => validateStudioHostUserSettings({
+      ...artifact,
+      keyboard: { ...artifact.keyboard, moveForward: '\u00e9'.repeat(33) },
+    }),
+    /64-byte bound/u,
+  );
 });
 
 void test('older v1 settings gain explicit transform-tool and work-light defaults without losing compatibility', () => {

@@ -16,6 +16,8 @@ import {
   parseStudioHostUserSettings,
 } from '../libs/user-settings/src/index.js';
 
+// Settings are small human-editable JSON artifacts. The cap bounds reads,
+// writes, parsing, and preserved invalid text without constraining project data.
 export const MAX_STUDIO_USER_SETTINGS_BYTES = 64 * 1024;
 
 export interface StudioUserSettingsLocation {

@@ -1,6 +1,11 @@
 export const RUSTY_STUDIO_HOST_USER_SETTINGS_VERSION =
   'rusty-engine-studio-host-user-settings.v1' as const;
 
+// Persisted identifiers and bindings remain compact even when authored with
+// multibyte text; measure their serialized UTF-8 representation.
+const MAX_PROJECT_KEY_BYTES = 160;
+const MAX_KEYBOARD_BINDING_BYTES = 64;
+
 export interface StudioKeyboardBindings {
   readonly moveForward: string;
   readonly moveBackward: string;
@@ -167,7 +172,9 @@ export function validateStudioHostUserSettings(
     throw new TypeError('Host-user settings must use the supported Rusty Engine Studio v1 schema.');
   }
   const projectKey = requireNonEmpty(value['projectKey'], 'host project key');
-  if (projectKey.length > 160) throw new TypeError('Host project key exceeds its byte bound.');
+  if (new TextEncoder().encode(projectKey).byteLength > MAX_PROJECT_KEY_BYTES) {
+    throw new TypeError(`Host project key exceeds its ${String(MAX_PROJECT_KEY_BYTES)}-byte bound.`);
+  }
   const theme = value['theme'];
   if (theme !== 'graphite' && theme !== 'highContrast') {
     throw new TypeError('Studio theme must be graphite or highContrast.');
@@ -293,7 +300,11 @@ function requireNonEmpty(value: unknown, label: string): string {
 
 function requireBinding(value: unknown, label: string): string {
   const binding = requireNonEmpty(value, `${label} keyboard binding`);
-  if (binding.length > 64) throw new TypeError(`${label} keyboard binding exceeds its byte bound.`);
+  if (new TextEncoder().encode(binding).byteLength > MAX_KEYBOARD_BINDING_BYTES) {
+    throw new TypeError(
+      `${label} keyboard binding exceeds its ${String(MAX_KEYBOARD_BINDING_BYTES)}-byte bound.`,
+    );
+  }
   return binding;
 }
 

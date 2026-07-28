@@ -3,6 +3,9 @@ export type StudioStartupProject =
   | { readonly status: 'open'; readonly root: string; readonly projectFile: string }
   | { readonly status: 'invalid'; readonly diagnostic: string };
 
+// Startup query values are host path selectors. These ceilings reject
+// malformed URLs before they become adapter requests; they are not transfer
+// budgets for project content.
 const MAX_ROOT_LENGTH = 4096;
 const MAX_PROJECT_FILE_LENGTH = 1024;
 
