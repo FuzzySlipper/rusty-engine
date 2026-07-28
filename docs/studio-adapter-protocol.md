@@ -85,6 +85,14 @@ parentage, kind, and local/world transforms are produced in Rust. Every response
 frame, including resource definitions, so Studio can atomically replace the shared renderer channel.
 These are readouts rebuilt from admitted Rust state on every read, not a second content model.
 
+Protocol 9 also admits one optional, independently versioned `meshResources` readout for adapters
+that opt into content-addressed retained mesh sources. The frame carries only renderer-neutral
+identity, hash, length, encoding, and stream offsets; the readout maps those identities to
+downstream-owned project-relative paths. Studio resolves the bounded bytes through its existing
+resource host before applying the frame. Inline adapters remain valid, and the authoritative voxel
+object remains unchanged. The format and migration contract are documented in
+[the voxel mesh data-plane decision](topics/voxel/voxel-mesh-data-plane.md).
+
 The Converted Wall artifact additionally composes canonical `voxel-asset` payloads, catalog material
 definitions, transformed scene instances, `engine-spatial` collision/edit/history state,
 `voxel-annotation` layers, bounded `voxel-convert` model/conversion readouts, and voxel chunk

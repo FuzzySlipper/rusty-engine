@@ -16,7 +16,11 @@ import {
   pickProjectedObject,
   type RendererBrowserSurfacePickFilter,
 } from './browser-surface.js';
-import { ThreeRenderer, type MeshBufferSource } from './three-renderer.js';
+import {
+  ThreeRenderer,
+  type MeshBufferSource,
+  type MeshResourceSource,
+} from './three-renderer.js';
 import { ThreeEditorGridProjection } from './editor-grid.js';
 import { renderEditorViewportFrame } from './editor-viewport-render-pass.js';
 
@@ -71,6 +75,7 @@ export interface RendererEditorBackendOptions {
   readonly animatedMeshSource?: AnimatedMeshAssetSource;
   readonly clearColor?: number;
   readonly meshBufferSource?: MeshBufferSource;
+  readonly meshResourceSource?: MeshResourceSource;
   readonly pixelRatio?: number;
 }
 
@@ -255,6 +260,9 @@ function createChannelRenderer(options: RendererEditorBackendOptions): ThreeRend
     ...(options.meshBufferSource === undefined
       ? {}
       : { meshBufferSource: options.meshBufferSource }),
+    ...(options.meshResourceSource === undefined
+      ? {}
+      : { meshResourceSource: options.meshResourceSource }),
   });
 }
 

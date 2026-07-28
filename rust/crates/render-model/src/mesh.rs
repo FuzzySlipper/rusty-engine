@@ -36,6 +36,14 @@ pub enum MeshIndexWidth {
     U32,
 }
 
+/// Stable byte layout used by content-addressed mesh resources. The matching
+/// resource header and stream order are defined by `mesh_resource`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MeshResourceEncoding {
+    PackedStreamsLeV1,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MeshBufferLayout {
@@ -109,6 +117,17 @@ pub enum MeshPayloadSource {
         normals_byte_offset: u32,
         indices_byte_offset: u32,
     },
+    /// Durable, content-addressed bytes resolved by an explicit renderer host.
+    /// The identity names bytes, not a filesystem path or network location.
+    Resource {
+        resource: String,
+        content_hash: String,
+        byte_length: u32,
+        encoding: MeshResourceEncoding,
+        positions_byte_offset: u32,
+        normals_byte_offset: u32,
+        indices_byte_offset: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -125,54 +144,73 @@ impl MeshPayloadDescriptor {
     pub fn validate(&self) -> Result<(), MeshDescriptorError> {
         self.bounds.validate()?;
         validate_attributes(&self.layout)?;
-        if let MeshPayloadSource::Inline {
-            positions,
-            normals,
-            indices,
-        } = &self.source
-        {
-            if !positions
-                .iter()
-                .chain(normals)
-                .all(|value| value.is_finite())
-            {
-                return Err(MeshDescriptorError::NonFiniteAttribute);
+        match &self.source {
+            MeshPayloadSource::Inline {
+                positions,
+                normals,
+                indices,
+            } => {
+                if !positions
+                    .iter()
+                    .chain(normals)
+                    .all(|value| value.is_finite())
+                {
+                    return Err(MeshDescriptorError::NonFiniteAttribute);
+                }
+                let expected = self.layout.vertex_count as usize * 3;
+                if positions.len() != expected {
+                    return Err(MeshDescriptorError::AttributeLengthMismatch {
+                        name: MeshAttributeName::Position,
+                        expected,
+                        actual: positions.len(),
+                    });
+                }
+                if normals.len() != expected {
+                    return Err(MeshDescriptorError::AttributeLengthMismatch {
+                        name: MeshAttributeName::Normal,
+                        expected,
+                        actual: normals.len(),
+                    });
+                }
+                if indices.len() != self.layout.index_count as usize {
+                    return Err(MeshDescriptorError::IndexLengthMismatch {
+                        expected: self.layout.index_count as usize,
+                        actual: indices.len(),
+                    });
+                }
+                if let Some(index) = indices
+                    .iter()
+                    .copied()
+                    .find(|index| *index >= self.layout.vertex_count)
+                {
+                    return Err(MeshDescriptorError::IndexOutOfRange {
+                        index,
+                        vertex_count: self.layout.vertex_count,
+                    });
+                }
             }
-            let expected = self.layout.vertex_count as usize * 3;
-            if positions.len() != expected {
-                return Err(MeshDescriptorError::AttributeLengthMismatch {
-                    name: MeshAttributeName::Position,
-                    expected,
-                    actual: positions.len(),
-                });
+            MeshPayloadSource::SharedBuffer { buffer, .. } => {
+                if *buffer > JSON_SAFE_U64_MAX {
+                    return Err(MeshDescriptorError::UnsafeSharedBufferId { buffer: *buffer });
+                }
             }
-            if normals.len() != expected {
-                return Err(MeshDescriptorError::AttributeLengthMismatch {
-                    name: MeshAttributeName::Normal,
-                    expected,
-                    actual: normals.len(),
-                });
-            }
-            if indices.len() != self.layout.index_count as usize {
-                return Err(MeshDescriptorError::IndexLengthMismatch {
-                    expected: self.layout.index_count as usize,
-                    actual: indices.len(),
-                });
-            }
-            if let Some(index) = indices
-                .iter()
-                .copied()
-                .find(|index| *index >= self.layout.vertex_count)
-            {
-                return Err(MeshDescriptorError::IndexOutOfRange {
-                    index,
-                    vertex_count: self.layout.vertex_count,
-                });
-            }
-        } else if let MeshPayloadSource::SharedBuffer { buffer, .. } = &self.source {
-            if *buffer > JSON_SAFE_U64_MAX {
-                return Err(MeshDescriptorError::UnsafeSharedBufferId { buffer: *buffer });
-            }
+            MeshPayloadSource::Resource {
+                resource,
+                content_hash,
+                byte_length,
+                positions_byte_offset,
+                normals_byte_offset,
+                indices_byte_offset,
+                ..
+            } => validate_resource_source(
+                &self.layout,
+                resource,
+                content_hash,
+                *byte_length,
+                *positions_byte_offset,
+                *normals_byte_offset,
+                *indices_byte_offset,
+            )?,
         }
 
         let mut cursor = 0_u32;
@@ -207,6 +245,51 @@ impl MeshPayloadDescriptor {
         }
         Ok(())
     }
+}
+
+fn validate_resource_source(
+    layout: &MeshBufferLayout,
+    resource: &str,
+    content_hash: &str,
+    byte_length: u32,
+    positions_byte_offset: u32,
+    normals_byte_offset: u32,
+    indices_byte_offset: u32,
+) -> Result<(), MeshDescriptorError> {
+    crate::validate_mesh_resource_identity(resource, content_hash)
+        .map_err(|_| MeshDescriptorError::InvalidResourceIdentity)?;
+    if !(crate::MESH_RESOURCE_HEADER_BYTES..=crate::MAX_MESH_RESOURCE_BYTES).contains(&byte_length)
+    {
+        return Err(MeshDescriptorError::InvalidResourceByteLength { byte_length });
+    }
+    for offset in [
+        positions_byte_offset,
+        normals_byte_offset,
+        indices_byte_offset,
+    ] {
+        if offset < crate::MESH_RESOURCE_HEADER_BYTES || offset % 4 != 0 {
+            return Err(MeshDescriptorError::InvalidResourceOffset { offset });
+        }
+    }
+
+    let positions_bytes = u64::from(layout.vertex_count) * 3 * 4;
+    let normals_bytes = positions_bytes;
+    let indices_bytes = u64::from(layout.index_count) * 4;
+    let positions_end = u64::from(positions_byte_offset) + positions_bytes;
+    let normals_end = u64::from(normals_byte_offset) + normals_bytes;
+    let indices_end = u64::from(indices_byte_offset) + indices_bytes;
+    if positions_end > u64::from(byte_length)
+        || normals_end > u64::from(byte_length)
+        || indices_end > u64::from(byte_length)
+    {
+        return Err(MeshDescriptorError::ResourceStreamOutOfRange { byte_length });
+    }
+    if positions_end > u64::from(normals_byte_offset)
+        || normals_end > u64::from(indices_byte_offset)
+    {
+        return Err(MeshDescriptorError::ResourceStreamsOverlap);
+    }
+    Ok(())
 }
 
 fn validate_attributes(layout: &MeshBufferLayout) -> Result<(), MeshDescriptorError> {
@@ -282,6 +365,17 @@ pub enum MeshDescriptorError {
     UnsafeSharedBufferId {
         buffer: u64,
     },
+    InvalidResourceIdentity,
+    InvalidResourceByteLength {
+        byte_length: u32,
+    },
+    InvalidResourceOffset {
+        offset: u32,
+    },
+    ResourceStreamOutOfRange {
+        byte_length: u32,
+    },
+    ResourceStreamsOverlap,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

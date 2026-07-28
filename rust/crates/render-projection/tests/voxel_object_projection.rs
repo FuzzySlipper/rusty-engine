@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use render_model::{
-    MaterialUvStrategy, MeshMaterialSlot, RenderDiff, RenderMaterialDescriptor, RenderMetadata,
-    Transform,
+    MaterialUvStrategy, MeshMaterialSlot, MeshPayloadSource, RenderDiff, RenderMaterialDescriptor,
+    RenderMetadata, Transform,
 };
 use render_projection::{VoxelObjectProjectionInstance, VoxelObjectRenderProjector};
 use voxel_asset::{
@@ -112,6 +112,41 @@ fn shared_instances_materialize_one_resource() {
 
     let unchanged = projector.project(&instances, &materials()).unwrap();
     assert!(unchanged.readout.materialized_resources.is_empty());
+    assert!(unchanged.frame.ops.is_empty());
+}
+
+#[test]
+fn packed_projection_moves_mesh_streams_out_of_the_control_frame() {
+    let object = admitted();
+    let instances = vec![instance(&object, 0)];
+    let inline = VoxelObjectRenderProjector::new()
+        .project(&instances, &materials())
+        .unwrap();
+    let mut packed_projector = VoxelObjectRenderProjector::with_packed_mesh_resources();
+    let packed = packed_projector.project(&instances, &materials()).unwrap();
+
+    assert_eq!(packed.mesh_resources.len(), 1);
+    packed.mesh_resources[0].validate().unwrap();
+    let render_asset = packed
+        .frame
+        .ops
+        .iter()
+        .find_map(|operation| match operation {
+            RenderDiff::DefineVoxelObject { asset } => Some(asset),
+            _ => None,
+        })
+        .unwrap();
+    assert!(render_asset
+        .meshes
+        .iter()
+        .all(|mesh| matches!(mesh.payload.source, MeshPayloadSource::Resource { .. })));
+    assert!(
+        serde_json::to_vec(&packed.frame).unwrap().len()
+            < serde_json::to_vec(&inline.frame).unwrap().len()
+    );
+
+    let unchanged = packed_projector.project(&instances, &materials()).unwrap();
+    assert!(unchanged.mesh_resources.is_empty());
     assert!(unchanged.frame.ops.is_empty());
 }
 

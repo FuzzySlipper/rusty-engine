@@ -6,6 +6,7 @@ import type {
   AssetImportPlanReadout,
   CanonicalOwnerContent,
   LoadingBayDomainReadout,
+  MeshResourceReadout,
   OwnerInspections,
   ProjectionReadout,
   ProjectionFrameKind,
@@ -85,6 +86,7 @@ export interface AuthoringDocumentView {
   readonly voxelAuthoring: VoxelAuthoringReadout;
   readonly voxelObjectAuthoring: VoxelObjectAuthoringReadout;
   readonly animatedMeshResources: readonly AnimatedMeshResourceReadout[];
+  readonly meshResources: readonly MeshResourceReadout[];
 }
 
 export interface AssetWorkspaceState {
@@ -1930,6 +1932,7 @@ export class StudioWorkspaceStore {
         voxelAuthoring: project.voxelAuthoring,
         voxelObjectAuthoring: project.voxelObjectAuthoring,
         animatedMeshResources: project.animatedMeshResources,
+        meshResources: project.meshResources ?? [],
       },
       liveProjection: {
         frame: project.projection,

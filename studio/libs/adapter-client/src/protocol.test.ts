@@ -20,6 +20,12 @@ test('decodes the closed project response and delegates projection validation', 
     clipIds: ['idle', 'run'],
     sourcePath: 'content/assets/character.glb',
   }];
+  response.project.meshResources = [{
+    resource: `mesh-resource/${'2'.repeat(64)}`,
+    contentHash: `sha256:${'2'.repeat(64)}`,
+    byteLength: 1024,
+    sourcePath: `content/render/${'2'.repeat(64)}.rmesh`,
+  }];
 
   const decoded = decodeStudioAdapterResponse(response);
 
@@ -30,6 +36,7 @@ test('decodes the closed project response and delegates projection validation', 
   );
   assert.equal(decoded.project.projection.ops.length, 0);
   assert.deepEqual(decoded.project.animatedMeshResources[0]?.clipIds, ['idle', 'run']);
+  assert.equal(decoded.project.meshResources?.[0]?.byteLength, 1024);
 });
 
 test('rejects unknown response families, extra fields, and malformed renderer frames', () => {
@@ -80,6 +87,18 @@ test('rejects unknown response families, extra fields, and malformed renderer fr
   assert.throws(
     () => decodeStudioAdapterResponse(malformedResource),
     /animatedMeshResources\[0\]\.ambientUrl.*unknown/,
+  );
+
+  const malformedMeshResource = projectOpened('request-6');
+  malformedMeshResource.project.meshResources = [{
+    resource: `mesh-resource/${'2'.repeat(64)}`,
+    contentHash: `sha256:${'3'.repeat(64)}`,
+    byteLength: 1024,
+    sourcePath: 'content/render/mismatch.rmesh',
+  }];
+  assert.throws(
+    () => decodeStudioAdapterResponse(malformedMeshResource),
+    /content-addressed mesh resource/u,
   );
 });
 
@@ -650,6 +669,7 @@ interface ProjectOpenedFixture {
       instances: unknown[];
     };
     animatedMeshResources: unknown[];
+    meshResources?: unknown[];
     loadingBay: Record<string, string | number>;
     projection: { schemaVersion: number; ops: unknown[] };
     projectionReadout: {

@@ -292,7 +292,7 @@ function meshPayload(input: unknown, path: string): void {
   const sourceKind = enumeration(
     sourceBase['kind'],
     `${path}.source.kind`,
-    ['inline', 'sharedBuffer'] as const,
+    ['inline', 'sharedBuffer', 'resource'] as const,
   );
   if (sourceKind === 'inline') {
     const source = record(value['source'], `${path}.source`, [
@@ -306,7 +306,7 @@ function meshPayload(input: unknown, path: string): void {
         fail(`${path}.source.indices[${String(index)}]`, 'is outside vertex range');
       }
     });
-  } else {
+  } else if (sourceKind === 'sharedBuffer') {
     const source = record(value['source'], `${path}.source`, [
       'kind', 'buffer', 'positionsByteOffset', 'normalsByteOffset', 'indicesByteOffset',
     ]);
@@ -314,6 +314,47 @@ function meshPayload(input: unknown, path: string): void {
     nonNegativeInteger(source['positionsByteOffset'], `${path}.source.positionsByteOffset`);
     nonNegativeInteger(source['normalsByteOffset'], `${path}.source.normalsByteOffset`);
     nonNegativeInteger(source['indicesByteOffset'], `${path}.source.indicesByteOffset`);
+  } else {
+    const source = record(value['source'], `${path}.source`, [
+      'kind', 'resource', 'contentHash', 'byteLength', 'encoding',
+      'positionsByteOffset', 'normalsByteOffset', 'indicesByteOffset',
+    ]);
+    const resource = nonEmptyText(source['resource'], `${path}.source.resource`);
+    const contentHash = nonEmptyText(source['contentHash'], `${path}.source.contentHash`);
+    const digest = /^sha256:([0-9a-f]{64})$/u.exec(contentHash)?.[1];
+    if (digest === undefined) fail(`${path}.source.contentHash`, 'must be a lowercase SHA-256 identity');
+    if (resource !== `mesh-resource/${digest}`) {
+      fail(`${path}.source.resource`, 'must be the content-addressed mesh-resource identity');
+    }
+    const byteLength = integer(
+      source['byteLength'], `${path}.source.byteLength`, 16, 64 * 1024 * 1024,
+    );
+    enumeration(source['encoding'], `${path}.source.encoding`, ['packedStreamsLeV1'] as const);
+    const positionsByteOffset = integer(
+      source['positionsByteOffset'], `${path}.source.positionsByteOffset`, 16, 4_294_967_295,
+    );
+    const normalsByteOffset = integer(
+      source['normalsByteOffset'], `${path}.source.normalsByteOffset`, 16, 4_294_967_295,
+    );
+    const indicesByteOffset = integer(
+      source['indicesByteOffset'], `${path}.source.indicesByteOffset`, 16, 4_294_967_295,
+    );
+    for (const [name, offset] of [
+      ['positionsByteOffset', positionsByteOffset],
+      ['normalsByteOffset', normalsByteOffset],
+      ['indicesByteOffset', indicesByteOffset],
+    ] as const) {
+      if (offset % 4 !== 0) fail(`${path}.source.${name}`, 'must be four-byte aligned');
+    }
+    const positionsEnd = positionsByteOffset + vertexCount * 3 * 4;
+    const normalsEnd = normalsByteOffset + vertexCount * 3 * 4;
+    const indicesEnd = indicesByteOffset + indexCount * 4;
+    if (positionsEnd > byteLength || normalsEnd > byteLength || indicesEnd > byteLength) {
+      fail(`${path}.source`, 'declares a mesh stream outside the resource byte length');
+    }
+    if (positionsEnd > normalsByteOffset || normalsEnd > indicesByteOffset) {
+      fail(`${path}.source`, 'mesh resource streams must not overlap');
+    }
   }
   const groups = list(value['groups'], `${path}.groups`);
   let cursor = 0;

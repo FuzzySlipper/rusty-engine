@@ -173,3 +173,47 @@ void test('voxel-object resources decode strictly and reject invalid frame refer
   definition.frames[0]!.mesh = 1;
   assert.throws(() => decodeRenderFrameDiff(invalid), /must be in 0\.\.=0/);
 });
+
+void test('content-addressed mesh resources validate identity, layout, and bounds', () => {
+  const digest = '1'.repeat(64);
+  const frame = {
+    schemaVersion: 1,
+    ops: [{
+      op: 'replaceMeshPayload',
+      handle: 1,
+      payload: {
+        layout: {
+          vertexCount: 3,
+          indexCount: 3,
+          indexWidth: 'u32',
+          attributes: [
+            { name: 'position', components: 3, kind: 'f32' },
+            { name: 'normal', components: 3, kind: 'f32' },
+          ],
+        },
+        groups: [{ materialSlot: 0, start: 0, count: 3 }],
+        bounds: { min: [0, 0, 0], max: [1, 1, 0] },
+        source: {
+          kind: 'resource',
+          resource: `mesh-resource/${digest}`,
+          contentHash: `sha256:${digest}`,
+          byteLength: 100,
+          encoding: 'packedStreamsLeV1',
+          positionsByteOffset: 16,
+          normalsByteOffset: 52,
+          indicesByteOffset: 88,
+        },
+        provenance: 'voxelObject',
+      },
+    }],
+  };
+  assert.equal(decodeRenderFrameDiff(frame).ops.length, 1);
+
+  const wrongIdentity = structuredClone(frame);
+  wrongIdentity.ops[0]!.payload.source.resource = `mesh-resource/${'2'.repeat(64)}`;
+  assert.throws(() => decodeRenderFrameDiff(wrongIdentity), /content-addressed/u);
+
+  const outside = structuredClone(frame);
+  outside.ops[0]!.payload.source.byteLength = 99;
+  assert.throws(() => decodeRenderFrameDiff(outside), /outside the resource/u);
+});

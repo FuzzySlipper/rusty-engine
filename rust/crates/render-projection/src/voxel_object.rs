@@ -1,13 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use render_model::{
-    MaterialDescriptorError, MeshAttribute, MeshAttributeKind, MeshAttributeName,
-    MeshBoundsDescriptor, MeshBufferLayout, MeshDescriptorError, MeshGroupDescriptor,
-    MeshIndexWidth, MeshMaterialSlot, MeshPayloadDescriptor, MeshPayloadSource, MeshProvenance,
-    RenderDiff, RenderFrameDiff, RenderFrameError, RenderHandle, RenderMaterialDescriptor,
-    RenderMetadata, Transform, TransformError, VoxelObjectInstanceDescriptor,
-    VoxelObjectRenderAsset, VoxelObjectRenderAssetError, VoxelObjectRenderFrame,
-    VoxelObjectRenderMesh,
+    pack_mesh_resources, MaterialDescriptorError, MeshAttribute, MeshAttributeKind,
+    MeshAttributeName, MeshBoundsDescriptor, MeshBufferLayout, MeshDescriptorError,
+    MeshGroupDescriptor, MeshIndexWidth, MeshMaterialSlot, MeshPayloadDescriptor,
+    MeshPayloadSource, MeshProvenance, MeshResourceError, PackedMeshResource, RenderDiff,
+    RenderFrameDiff, RenderFrameError, RenderHandle, RenderMaterialDescriptor, RenderMetadata,
+    Transform, TransformError, VoxelObjectInstanceDescriptor, VoxelObjectRenderAsset,
+    VoxelObjectRenderAssetError, VoxelObjectRenderFrame, VoxelObjectRenderMesh,
+    MAX_MESH_RESOURCE_BYTES,
 };
 use voxel_object_runtime::{AdmittedVoxelObject, VoxelObjectFrameSource, VoxelObjectRuntimeFrame};
 
@@ -41,6 +42,13 @@ pub struct VoxelObjectRenderProjector {
     last_instances: BTreeMap<String, InstanceSnapshot>,
     last_resource_hashes: BTreeMap<String, String>,
     last_materials: BTreeMap<String, RenderMaterialDescriptor>,
+    mesh_payloads: VoxelObjectMeshPayloads,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VoxelObjectMeshPayloads {
+    Inline,
+    PackedResources { maximum_resource_bytes: u32 },
 }
 
 impl Default for VoxelObjectRenderProjector {
@@ -56,6 +64,18 @@ impl VoxelObjectRenderProjector {
             last_instances: BTreeMap::new(),
             last_resource_hashes: BTreeMap::new(),
             last_materials: BTreeMap::new(),
+            mesh_payloads: VoxelObjectMeshPayloads::Inline,
+        }
+    }
+
+    /// Builds content-addressed packed mesh resources instead of embedding
+    /// expanded number arrays in the retained control frame.
+    pub fn with_packed_mesh_resources() -> Self {
+        Self {
+            mesh_payloads: VoxelObjectMeshPayloads::PackedResources {
+                maximum_resource_bytes: MAX_MESH_RESOURCE_BYTES,
+            },
+            ..Self::new()
         }
     }
 
@@ -73,6 +93,7 @@ impl VoxelObjectRenderProjector {
             .map(|(asset, request)| (asset.clone(), request.object.content_hash().to_string()))
             .collect::<BTreeMap<_, _>>();
         let mut pending_resources = BTreeMap::new();
+        let mut packed_mesh_resources = BTreeMap::new();
         for (asset_id, request) in &requested_resources {
             let is_cached = self
                 .last_resource_hashes
@@ -81,10 +102,23 @@ impl VoxelObjectRenderProjector {
             if is_cached {
                 continue;
             }
-            let resource = voxel_object_render_asset(request.object);
+            let (resource, packed) = match self.mesh_payloads {
+                VoxelObjectMeshPayloads::Inline => {
+                    (voxel_object_render_asset(request.object), Vec::new())
+                }
+                VoxelObjectMeshPayloads::PackedResources {
+                    maximum_resource_bytes,
+                } => voxel_object_packed_render_asset(request.object, maximum_resource_bytes)
+                    .map_err(VoxelObjectProjectionError::MeshResource)?,
+            };
             resource
                 .validate()
                 .map_err(VoxelObjectProjectionError::InvalidResource)?;
+            for packed_resource in packed {
+                packed_mesh_resources
+                    .entry(packed_resource.resource.clone())
+                    .or_insert(packed_resource);
+            }
             pending_resources.insert(asset_id.clone(), resource);
         }
         let materialized_resources = pending_resources.keys().cloned().collect::<Vec<_>>();
@@ -186,6 +220,7 @@ impl VoxelObjectRenderProjector {
 
         Ok(VoxelObjectProjectionResult {
             frame,
+            mesh_resources: packed_mesh_resources.into_values().collect(),
             readout: VoxelObjectProjectionReadout {
                 instance_frames: self
                     .last_instances
@@ -376,6 +411,27 @@ pub fn voxel_object_render_asset(object: &AdmittedVoxelObject) -> VoxelObjectRen
     }
 }
 
+/// Produces the same renderer-neutral voxel-object descriptor as the inline
+/// path while moving its mesh streams into deterministic resource bytes.
+pub fn voxel_object_packed_render_asset(
+    object: &AdmittedVoxelObject,
+    maximum_resource_bytes: u32,
+) -> Result<(VoxelObjectRenderAsset, Vec<PackedMeshResource>), MeshResourceError> {
+    let mut asset = voxel_object_render_asset(object);
+    let packed = pack_mesh_resources(
+        &asset
+            .meshes
+            .iter()
+            .map(|mesh| mesh.payload.clone())
+            .collect::<Vec<_>>(),
+        maximum_resource_bytes,
+    )?;
+    for (mesh, payload) in asset.meshes.iter_mut().zip(packed.payloads) {
+        mesh.payload = payload;
+    }
+    Ok((asset, packed.resources))
+}
+
 pub fn voxel_object_mesh_payload(mesh: &svc_mesh::MeshPayload) -> MeshPayloadDescriptor {
     MeshPayloadDescriptor {
         layout: MeshBufferLayout {
@@ -427,6 +483,9 @@ fn frame_id(frame: &VoxelObjectRuntimeFrame) -> String {
 #[derive(Debug, Clone, PartialEq)]
 pub struct VoxelObjectProjectionResult {
     pub frame: RenderFrameDiff,
+    /// Owner-neutral bytes that the caller may publish through its chosen
+    /// resource policy. Empty for inline projections and cached resources.
+    pub mesh_resources: Vec<PackedMeshResource>,
     pub readout: VoxelObjectProjectionReadout,
 }
 
@@ -458,6 +517,7 @@ pub enum VoxelObjectProjectionError {
         frame_count: u32,
     },
     InvalidResource(VoxelObjectRenderAssetError),
+    MeshResource(MeshResourceError),
     ConflictingResource {
         asset: String,
     },

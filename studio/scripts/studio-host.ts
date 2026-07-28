@@ -196,7 +196,7 @@ async function exchangeRenderResource(
   });
   response.writeHead(200, {
     'cache-control': 'no-store',
-    'content-type': 'model/gltf-binary',
+    'content-type': 'application/octet-stream',
     'content-length': String(bytes.byteLength),
   });
   response.end(bytes);

@@ -892,9 +892,19 @@ export interface StudioProjectReadout {
   readonly voxelAuthoring: VoxelAuthoringReadout;
   readonly voxelObjectAuthoring: VoxelObjectAuthoringReadout;
   readonly animatedMeshResources: readonly AnimatedMeshResourceReadout[];
+  /** Optional protocol-9 extension. Its manifest and packed byte encoding are
+   * independently versioned, so existing inline adapters remain valid. */
+  readonly meshResources?: readonly MeshResourceReadout[];
   readonly loadingBay: LoadingBayDomainReadout;
   readonly projection: RenderFrameDiff;
   readonly projectionReadout: ProjectionReadout;
+}
+
+export interface MeshResourceReadout {
+  readonly resource: string;
+  readonly contentHash: string;
+  readonly byteLength: number;
+  readonly sourcePath: string;
 }
 
 export interface AnimatedMeshResourceReadout {
@@ -1435,7 +1445,7 @@ function projectReadout(input: unknown, path: string): void {
       'projection',
       'projectionReadout',
     ],
-    ['voxel'],
+    ['voxel', 'meshResources'],
   );
   projectIdentity(value['identity'], `${path}.identity`);
   canonicalOwnerContent(value['canonical'], `${path}.canonical`);
@@ -1451,6 +1461,7 @@ function projectReadout(input: unknown, path: string): void {
       `${path}.voxelObjectAuthoring`,
     ));
   animatedMeshResources(value['animatedMeshResources'], `${path}.animatedMeshResources`);
+  optional(value['meshResources'], `${path}.meshResources`, meshResources);
   loadingBayReadout(value['loadingBay'], `${path}.loadingBay`);
   try {
     decodeRenderFrameDiff(value['projection']);
@@ -1461,6 +1472,34 @@ function projectReadout(input: unknown, path: string): void {
     );
   }
   projectionReadout(value['projectionReadout'], `${path}.projectionReadout`);
+}
+
+function meshResources(input: unknown, path: string): void {
+  const identities = new Set<string>();
+  let aggregateBytes = 0;
+  list(input, path).forEach((entry, index) => {
+    const entryPath = `${path}[${String(index)}]`;
+    const resource = record(entry, entryPath, [
+      'resource', 'contentHash', 'byteLength', 'sourcePath',
+    ]);
+    const identity = text(resource['resource'], `${entryPath}.resource`);
+    const contentHash = text(resource['contentHash'], `${entryPath}.contentHash`);
+    const digest = /^sha256:([0-9a-f]{64})$/u.exec(contentHash)?.[1];
+    if (digest === undefined || identity !== `mesh-resource/${digest}`) {
+      fail(entryPath, 'must declare one content-addressed mesh resource identity');
+    }
+    if (identities.has(identity)) fail(`${entryPath}.resource`, 'is duplicated');
+    identities.add(identity);
+    const byteLength = integer(resource['byteLength'], `${entryPath}.byteLength`);
+    if (byteLength < 16 || byteLength > 64 * 1024 * 1024) {
+      fail(`${entryPath}.byteLength`, 'must be between 16 bytes and 64 MiB');
+    }
+    aggregateBytes += byteLength;
+    if (aggregateBytes > 256 * 1024 * 1024) {
+      fail(path, 'exceeds the aggregate mesh resource byte bound');
+    }
+    text(resource['sourcePath'], `${entryPath}.sourcePath`);
+  });
 }
 
 function animatedMeshResources(input: unknown, path: string): void {

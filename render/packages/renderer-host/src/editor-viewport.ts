@@ -18,6 +18,11 @@ import {
   type RendererAnimatedMeshResourceManifest,
   type RendererAnimatedMeshResourceResolver,
 } from './animated-mesh-host.js';
+import {
+  loadRendererMeshResourceSource,
+  type RendererMeshResourceManifest,
+  type RendererMeshResourceResolver,
+} from './mesh-resource-host.js';
 
 export const RUSTY_RENDERER_EDITOR_VIEWPORT_COMPATIBILITY_VERSION = 'editor-viewport.v1';
 export const RUSTY_RENDERER_EDITOR_VIEWPORT_MAX_FRAME_OPS = 4096;
@@ -80,8 +85,10 @@ export interface RendererEditorViewportOptions {
   readonly clearColor?: number;
   readonly initialCamera?: RendererEditorViewportCamera;
   readonly initialGrid?: EditorGridDescriptor | null;
+  readonly meshResourceManifest?: RendererMeshResourceManifest;
   readonly pixelRatio?: number;
   readonly resolveAnimatedMeshResource?: RendererAnimatedMeshResourceResolver;
+  readonly resolveMeshResource?: RendererMeshResourceResolver;
 }
 
 export type RendererEditorViewportDiagnosticCode =
@@ -289,6 +296,16 @@ export async function mountRendererEditorViewport(
         options.animatedMeshManifest,
         requireAnimatedMeshResolver(options.resolveAnimatedMeshResource),
       );
+  if ((options.meshResourceManifest === undefined)
+    !== (options.resolveMeshResource === undefined)) {
+    throw new Error('meshResourceManifest requires an explicit resource resolver');
+  }
+  const meshResourceSource = options.meshResourceManifest === undefined
+    ? undefined
+    : await loadRendererMeshResourceSource(
+        options.meshResourceManifest,
+        options.resolveMeshResource as RendererMeshResourceResolver,
+      );
   const bufferSource = options.bufferSource;
   const meshBufferSource = bufferSource === undefined
     ? undefined
@@ -299,6 +316,7 @@ export async function mountRendererEditorViewport(
   const backend = mountRendererEditorBackend(canvas, {
     ...(animatedMeshSource === undefined ? {} : { animatedMeshSource }),
     ...(meshBufferSource === undefined ? {} : { meshBufferSource }),
+    ...(meshResourceSource === undefined ? {} : { meshResourceSource }),
     ...(options.clearColor === undefined ? {} : { clearColor: options.clearColor }),
     ...(options.pixelRatio === undefined ? {} : { pixelRatio: options.pixelRatio }),
   });

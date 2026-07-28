@@ -16,6 +16,7 @@ import {
 import {
   ThreeRenderer,
   type MeshBufferSource,
+  type MeshResourceSource,
   type RendererProjectionIdentity,
 } from './three-renderer.js';
 import type { AnimatedMeshAssetSource, AnimatedMeshPlaybackReadout } from './animated-mesh.js';
@@ -34,6 +35,7 @@ export interface RendererBrowserSurfaceOptions {
   readonly clearColor?: number;
   readonly frame?: RenderFrameDiff;
   readonly meshBufferSource?: MeshBufferSource;
+  readonly meshResourceSource?: MeshResourceSource;
   readonly pixelRatio?: number;
 }
 
@@ -177,6 +179,8 @@ export function mountRendererBrowserSurface(
         ? {} : { animatedMeshSource: options.animatedMeshSource }),
       ...(options.meshBufferSource === undefined
         ? {} : { meshBufferSource: options.meshBufferSource }),
+      ...(options.meshResourceSource === undefined
+        ? {} : { meshResourceSource: options.meshResourceSource }),
     },
   );
   // Defined retained materials use MeshStandardMaterial. Keep the browser host responsible

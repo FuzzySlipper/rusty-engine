@@ -147,7 +147,7 @@ export class HttpStudioRenderResourceClient {
     const query = new URLSearchParams({ projectRoot, sourcePath, contentHash });
     const response = await this.#fetch(`${this.#endpoint}?${query.toString()}`, {
       method: 'GET',
-      headers: { accept: 'model/gltf-binary' },
+      headers: { accept: 'application/octet-stream' },
     });
     const declaredLength = response.headers.get('content-length');
     if (declaredLength !== null && Number(declaredLength) > MAX_STUDIO_RENDER_RESOURCE_BYTES) {

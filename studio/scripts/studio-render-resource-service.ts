@@ -26,7 +26,9 @@ export interface StudioRenderResourceRequest {
 /**
  * Resolve one owner-declared renderer resource through the trusted Node host.
  * The browser never receives general filesystem access: callers must provide a
- * project-relative path and the exact SHA-256 already admitted by Rust.
+ * project-relative path and the exact SHA-256 already admitted by Rust. GLB
+ * files and packed renderer-neutral `.rmesh` resources share this bounded
+ * byte channel; the Node host does not interpret either payload.
  */
 export async function readStudioRenderResource(
   request: StudioRenderResourceRequest,
@@ -82,8 +84,10 @@ function checkedSourcePath(requested: string): string {
     || normalize(requested) !== requested
     || requested === '..'
     || requested.startsWith('../')
-    || !requested.toLocaleLowerCase().endsWith('.glb')) {
-    throw new TypeError('Studio render resource must be a normalized project-relative GLB path.');
+    || !['.glb', '.rmesh'].some((extension) => requested.toLocaleLowerCase().endsWith(extension))) {
+    throw new TypeError(
+      'Studio render resource must be a normalized project-relative GLB or RMESH path.',
+    );
   }
   return requested;
 }

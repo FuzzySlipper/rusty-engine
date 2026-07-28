@@ -21,6 +21,10 @@ import type {
   RendererAnimatedMeshResourceManifest,
   RendererAnimatedMeshResourceResolver,
 } from './animated-mesh-host.js';
+import type {
+  RendererMeshResourceManifest,
+  RendererMeshResourceResolver,
+} from './mesh-resource-host.js';
 import { resolveRendererStoredEditorCamera } from './stored-editor-camera.js';
 
 export const RUSTY_RENDERER_INSPECTION_SURFACE_COMPATIBILITY_VERSION = 'inspection-surface.v1';
@@ -79,8 +83,10 @@ export interface RendererInspectionSurfaceOptions {
   readonly frame?: RenderFrameDiff;
   /** Optional engine-owned procedural editor grid shown with the inspection projection. */
   readonly initialGrid?: EditorGridDescriptor | null;
+  readonly meshResourceManifest?: RendererMeshResourceManifest;
   readonly pixelRatio?: number;
   readonly resolveAnimatedMeshResource?: RendererAnimatedMeshResourceResolver;
+  readonly resolveMeshResource?: RendererMeshResourceResolver;
 }
 
 export type RendererInspectionSurfaceStatus = 'mounted' | 'running' | 'stopped' | 'disposed';
@@ -225,10 +231,16 @@ export async function mountRendererInspectionSurface(
       : { animatedMeshManifest: options.animatedMeshManifest }),
     ...(options.bufferSource === undefined ? {} : { bufferSource: options.bufferSource }),
     ...(options.clearColor === undefined ? {} : { clearColor: options.clearColor }),
+    ...(options.meshResourceManifest === undefined
+      ? {}
+      : { meshResourceManifest: options.meshResourceManifest }),
     ...(options.pixelRatio === undefined ? {} : { pixelRatio: options.pixelRatio }),
     ...(options.resolveAnimatedMeshResource === undefined
       ? {}
       : { resolveAnimatedMeshResource: options.resolveAnimatedMeshResource }),
+    ...(options.resolveMeshResource === undefined
+      ? {}
+      : { resolveMeshResource: options.resolveMeshResource }),
   });
   try {
     return createRendererInspectionSurfaceWithViewport(

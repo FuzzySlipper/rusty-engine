@@ -57,6 +57,12 @@ interface AnimatedMeshResourceDescriptor {
   readonly clipIds: readonly string[];
 }
 
+interface MeshResourceDescriptor {
+  readonly resource: string;
+  readonly contentHash: string;
+  readonly byteLength: number;
+}
+
 @Component({
   selector: 'rusty-studio-shell',
   standalone: true,
@@ -182,6 +188,22 @@ export class StudioShellComponent {
     this.state().userSettings.projectRoot,
     this.state().authoringDocument?.animatedMeshResources ?? [],
   ]));
+  readonly meshResourceManifest = computed(() => {
+    const resources = this.state().authoringDocument?.meshResources ?? [];
+    if (resources.length === 0) return null;
+    return {
+      kind: 'rusty_renderer_mesh_resources.v1' as const,
+      resources: resources.map(({ resource, contentHash, byteLength }) => ({
+        resource,
+        contentHash,
+        byteLength,
+      })),
+    };
+  });
+  readonly meshResourceKey = computed(() => JSON.stringify([
+    this.state().userSettings.projectRoot,
+    this.state().authoringDocument?.meshResources ?? [],
+  ]));
   readonly gridColors = [
     { key: 'minorColor', label: 'Minor lines' },
     { key: 'majorColor', label: 'Major lines' },
@@ -258,6 +280,22 @@ export class StudioShellComponent {
     );
     if (resource === undefined || resource.contentHash !== descriptor.contentHash) {
       throw new Error(`Animated resource ${descriptor.asset} is not in the current Rust readout.`);
+    }
+    return this.#renderResources.read(projectRoot, resource.sourcePath, resource.contentHash);
+  };
+  readonly resolveMeshResource = async (
+    descriptor: MeshResourceDescriptor,
+  ): Promise<ArrayBuffer> => {
+    const snapshot = this.state();
+    const projectRoot = snapshot.userSettings.projectRoot;
+    if (projectRoot === null) throw new Error('Mesh resources require an open project root.');
+    const resource = snapshot.authoringDocument?.meshResources.find(
+      (candidate) => candidate.resource === descriptor.resource,
+    );
+    if (resource === undefined
+      || resource.contentHash !== descriptor.contentHash
+      || resource.byteLength !== descriptor.byteLength) {
+      throw new Error(`Mesh resource ${descriptor.resource} is not in the current Rust readout.`);
     }
     return this.#renderResources.read(projectRoot, resource.sourcePath, resource.contentHash);
   };

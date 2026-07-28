@@ -414,6 +414,13 @@ primitive and mesh geometry, materials, textures, sprites, static and animated a
 editor-grid descriptions, picks, validation, and canonical JSON. It contains no state store,
 catalog, filesystem, renderer object, runtime facade, or replay requirement.
 
+Large mesh streams may cross that border as versioned content-addressed resources instead of
+expanded JSON arrays. `render-model` owns deterministic bounded packing and byte-layout validation;
+the descriptor names identity, hash, length, encoding, and stream offsets but no path or URL.
+`render-projection` can return those derived bytes beside a control frame, while its caller owns
+publication and resolver policy. The durable format, measured tradeoffs, and migration are fixed in
+[the voxel mesh data-plane decision](topics/voxel/voxel-mesh-data-plane.md).
+
 `render-projection` owns deterministic, fail-atomic adapters over explicit read-only inputs. Entity
 projection reads `EntityState`; voxel projection reads `VoxelCollisionScene`; authored projection
 accepts one ordinary appearance/resource aggregate; debug projection accepts typed overlays. Each
@@ -565,6 +572,13 @@ one ordered closed command at a time. The queued control is bound to the exact p
 operation generations that admitted the sample; open, create, save-as, reread, close, or accepted
 project replacement invalidates it before any old-scope settlement can dispatch.
 
+Canonical voxel-object schema 1 remains sparse-run JSON and continues to anchor semantic hashes and
+provenance. Dense retained meshes are deterministic derived presentation resources, not a binary
+canonical sibling or second voxel authority. Complete definitions carry small resource descriptors;
+packed little-endian bytes use explicit downstream publication and host resolution. Steady-state
+frame swaps continue to carry no geometry. See
+[the voxel mesh data-plane decision](topics/voxel/voxel-mesh-data-plane.md).
+
 An applied voxel-object readout names its downstream-owned entity explicitly. The same identity is
 present in the hierarchy, entity inspection, and renderer metadata, so the selected Entity
 inspector can host one typed Voxel Object capability editor without heuristics. Its clip, loop,
@@ -576,8 +590,9 @@ downstream component AST or editor-operation tunnel.
 Static and animated mesh appearance follows the same authority path. The downstream Rust adapter
 validates the selected asset and animation clip, then projects typed resource descriptors,
 `defineAnimatedMesh`, instance creation, and named playback. Studio's trusted Node host only resolves
-bounded project-relative GLB bytes, rejects symbolic links, and verifies the admitted SHA-256 before
-the shared renderer consumes them; the browser has no filesystem authority. Angular owns the
+bounded project-relative GLB and packed mesh-resource bytes, rejects symbolic links, and verifies
+the admitted SHA-256 before the shared renderer consumes them; the browser has no filesystem
+authority. Angular owns the
 asset/clip controls and renderer-neutral transform-manipulator intent, but does not construct a
 private Three scene or replace materials inside an imported animated hierarchy merely to show
 selection. The shared viewport projects the gizmo on its isolated debug overlay channel at the

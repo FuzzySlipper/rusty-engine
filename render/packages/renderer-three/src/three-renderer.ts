@@ -84,6 +84,13 @@ export interface MeshBufferSource {
   releaseBuffer(buffer: number): void;
 }
 
+/** Explicit provider for durable content-addressed mesh bytes. Resource ids
+ * are renderer-neutral identities; providers own their location and cache. */
+export interface MeshResourceSource {
+  acquireResource(resource: string, contentHash: string, byteLength: number): MeshBufferView;
+  releaseResource(resource: string): void;
+}
+
 export type RenderResourceErrorCode = 'missing' | 'expired' | 'invalid' | 'providerFailure';
 
 /** Typed failure raised by an explicit renderer resource provider. */
@@ -210,6 +217,7 @@ export class ThreeRenderer {
    * shared-buffer sources fail closed (the inline fixture path still works for goldens).
    */
   readonly #meshBufferSource: MeshBufferSource | undefined;
+  readonly #meshResourceSource: MeshResourceSource | undefined;
   readonly #animatedMeshSource: AnimatedMeshAssetSource | undefined;
   readonly #animatedMeshes: AnimatedMeshRegistry;
   readonly #shadowsEnabled: boolean;
@@ -217,10 +225,12 @@ export class ThreeRenderer {
 
   constructor(options: {
     meshBufferSource?: MeshBufferSource;
+    meshResourceSource?: MeshResourceSource;
     animatedMeshSource?: AnimatedMeshAssetSource;
     shadowsEnabled?: boolean;
   } = {}) {
     this.#meshBufferSource = options.meshBufferSource;
+    this.#meshResourceSource = options.meshResourceSource;
     this.#animatedMeshSource = options.animatedMeshSource;
     this.#animatedMeshes = new AnimatedMeshRegistry(this.#animatedMeshSource);
     this.#shadowsEnabled = options.shadowsEnabled ?? false;
@@ -369,18 +379,21 @@ export class ThreeRenderer {
           prepared.set(index, [buildMeshGeometry(
             operation.asset.payload,
             this.#meshBufferSource,
+            this.#meshResourceSource,
             'defineStaticMesh',
           )]);
         } else if (operation.op === 'replaceMeshPayload') {
           prepared.set(index, [buildMeshGeometry(
             operation.payload,
             this.#meshBufferSource,
+            this.#meshResourceSource,
             'replaceMeshPayload',
           )]);
         } else if (operation.op === 'defineVoxelObject') {
           prepared.set(index, buildVoxelObjectGeometries(
             operation.asset,
             this.#meshBufferSource,
+            this.#meshResourceSource,
           ));
         } else if (operation.op === 'defineAnimatedMesh') {
           // Definition performs all source/hash/clip checks without creating a
@@ -722,6 +735,7 @@ export class ThreeRenderer {
     const geometry = preparedGeometry ?? buildMeshGeometry(
       asset.payload,
       this.#meshBufferSource,
+      this.#meshResourceSource,
       'defineStaticMesh',
     );
     const slotIndex = new Map<number, number>();
@@ -859,7 +873,7 @@ export class ThreeRenderer {
     preparedGeometries?: readonly THREE.BufferGeometry[],
   ): void {
     const geometries = preparedGeometries === undefined
-      ? buildVoxelObjectGeometries(asset, this.#meshBufferSource)
+      ? buildVoxelObjectGeometries(asset, this.#meshBufferSource, this.#meshResourceSource)
       : [...preparedGeometries];
     if (geometries.length !== asset.meshes.length) {
       throw new RenderApplyError(
@@ -1390,7 +1404,12 @@ export class ThreeRenderer {
       throw new RenderApplyError(`replaceMeshPayload: handle ${diff.handle} is not a mesh`);
     }
     const geometry = preparedGeometry
-      ?? buildMeshGeometry(diff.payload, this.#meshBufferSource, 'replaceMeshPayload');
+      ?? buildMeshGeometry(
+        diff.payload,
+        this.#meshBufferSource,
+        this.#meshResourceSource,
+        'replaceMeshPayload',
+      );
     const viewMaterial = entry.viewMaterial ?? MaterialFallback;
     const materials = diff.payload.groups.map((group) =>
       this.#uploadedMeshMaterial(group.materialSlot, viewMaterial));
@@ -1732,6 +1751,7 @@ function buildMaterial(shape: Geometry['kind'], material: Material): THREE.Mater
 function buildVoxelObjectGeometries(
   asset: VoxelObjectRenderAsset,
   bufferSource: MeshBufferSource | undefined,
+  resourceSource: MeshResourceSource | undefined,
 ): THREE.BufferGeometry[] {
   const geometries: THREE.BufferGeometry[] = [];
   const slotIndices = new Map(asset.materialSlots.map((slot, index) => [slot.slot, index]));
@@ -1740,6 +1760,7 @@ function buildVoxelObjectGeometries(
       const geometry = buildMeshGeometry(
         mesh.payload,
         bufferSource,
+        resourceSource,
         `defineVoxelObject.meshes[${String(index)}]`,
       );
       geometry.clearGroups();
@@ -1765,12 +1786,14 @@ function buildVoxelObjectGeometries(
 function buildMeshGeometry(
   payload: MeshPayloadDescriptor,
   bufferSource: MeshBufferSource | undefined,
+  resourceSource: MeshResourceSource | undefined,
   ctx: string,
 ): THREE.BufferGeometry {
-  const streams =
-    payload.source.kind === 'inline'
-      ? inlineStreams(payload.source)
-      : sharedBufferStreams(payload, payload.source, bufferSource, ctx);
+  const streams = payload.source.kind === 'inline'
+    ? inlineStreams(payload.source)
+    : payload.source.kind === 'sharedBuffer'
+      ? sharedBufferStreams(payload, payload.source, bufferSource, ctx)
+      : resourceStreams(payload, payload.source, resourceSource, ctx);
 
   const positionComponents = attributeComponents(payload, 'position');
   const normalComponents = attributeComponents(payload, 'normal');
@@ -1843,6 +1866,121 @@ function sharedBufferStreams(
   // Success path: release and surface a classified error if release itself fails.
   releaseBorrow(bufferSource, buffer, ctx);
   return streams;
+}
+
+function resourceStreams(
+  payload: MeshPayloadDescriptor,
+  source: Extract<MeshPayloadDescriptor['source'], { kind: 'resource' }>,
+  resourceSource: MeshResourceSource | undefined,
+  ctx: string,
+): MeshStreams {
+  if (resourceSource === undefined) {
+    throw new RenderApplyError(
+      `${ctx}: resource payload needs a mesh resource provider (${source.resource})`,
+    );
+  }
+  let view: MeshBufferView;
+  try {
+    view = resourceSource.acquireResource(
+      source.resource,
+      source.contentHash,
+      source.byteLength,
+    );
+  } catch (cause) {
+    throw classifyResourceError(cause, source.resource, ctx, 'unavailable');
+  }
+  let streams: MeshStreams;
+  try {
+    validatePackedResourceHeader(view.bytes, source, ctx);
+    streams = copyResourceStreams(view, payload, source, ctx);
+  } catch (cause) {
+    try {
+      resourceSource.releaseResource(source.resource);
+    } catch {
+      // The resource decode failure already in flight remains primary.
+    }
+    throw cause;
+  }
+  try {
+    resourceSource.releaseResource(source.resource);
+  } catch (cause) {
+    throw classifyResourceError(cause, source.resource, ctx, 'release failed');
+  }
+  return streams;
+}
+
+function validatePackedResourceHeader(
+  bytes: Uint8Array,
+  source: Extract<MeshPayloadDescriptor['source'], { kind: 'resource' }>,
+  ctx: string,
+): void {
+  const magic = [0x52, 0x4d, 0x53, 0x48, 0x4c, 0x45, 0x30, 0x31]; // RMSHLE01
+  if (bytes.byteLength !== source.byteLength
+    || magic.some((byte, index) => bytes[index] !== byte)
+    || bytes.byteLength < 16) {
+    throw new RenderApplyError(`${ctx}: mesh resource ${source.resource} has an invalid v1 header`);
+  }
+  const header = new DataView(bytes.buffer, bytes.byteOffset, 16);
+  if (header.getUint32(8, true) !== bytes.byteLength || header.getUint32(12, true) === 0) {
+    throw new RenderApplyError(`${ctx}: mesh resource ${source.resource} has an invalid v1 header`);
+  }
+}
+
+function copyResourceStreams(
+  view: MeshBufferView,
+  payload: MeshPayloadDescriptor,
+  source: Extract<MeshPayloadDescriptor['source'], { kind: 'resource' }>,
+  ctx: string,
+): MeshStreams {
+  const { vertexCount, indexCount } = payload.layout;
+  const positions = sliceFloat32(
+    view,
+    source.positionsByteOffset,
+    vertexCount * attributeComponents(payload, 'position'),
+    'positions',
+    source.resource,
+    ctx,
+  );
+  const normals = sliceFloat32(
+    view,
+    source.normalsByteOffset,
+    vertexCount * attributeComponents(payload, 'normal'),
+    'normals',
+    source.resource,
+    ctx,
+  );
+  const indices = sliceUint32(
+    view,
+    source.indicesByteOffset,
+    indexCount,
+    source.resource,
+    ctx,
+  );
+  for (const index of indices) {
+    if (index >= vertexCount) {
+      throw new RenderApplyError(
+        `${ctx}: index ${index} out of range for ${vertexCount} vertices (resource ${source.resource})`,
+      );
+    }
+  }
+  return { positions, normals, indices };
+}
+
+function classifyResourceError(
+  cause: unknown,
+  resource: string,
+  ctx: string,
+  what: string,
+): RenderApplyError {
+  if (cause instanceof RenderResourceError) {
+    return new RenderApplyError(
+      `${ctx}: resource ${resource} ${what} [${cause.code}]: ${cause.message}`,
+    );
+  }
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return new RenderApplyError(
+    `${ctx}: resource ${resource} ${what} [providerFailure]: ${message}`,
+  );
 }
 
 /** Copy + validate the three streams out of a borrowed view (no borrow retained). */
@@ -1930,7 +2068,7 @@ function sliceFloat32(
   byteOffset: number,
   count: number,
   label: string,
-  buffer: number,
+  buffer: number | string,
   ctx: string,
 ): Float32Array {
   const byteLength = count * Float32Array.BYTES_PER_ELEMENT;
@@ -1943,7 +2081,7 @@ function sliceUint32(
   view: MeshBufferView,
   byteOffset: number,
   count: number,
-  buffer: number,
+  buffer: number | string,
   ctx: string,
 ): Uint32Array {
   const byteLength = count * Uint32Array.BYTES_PER_ELEMENT;
@@ -1961,7 +2099,7 @@ function requireBytes(
   byteOffset: number,
   byteLength: number,
   label: string,
-  buffer: number,
+  buffer: number | string,
   ctx: string,
 ): Uint8Array {
   if (byteOffset < 0 || byteOffset + byteLength > view.bytes.length) {

@@ -22,6 +22,15 @@ test('render resources require an in-project regular file with the admitted hash
       contentHash,
     }), bytes);
 
+    const meshBytes = Buffer.from('RMSHLE01 packed mesh fixture');
+    await writeFile(join(directory, 'character.rmesh'), meshBytes);
+    const meshHash = `sha256:${createHash('sha256').update(meshBytes).digest('hex')}`;
+    assert.deepEqual(await readStudioRenderResource({
+      projectRoot: root,
+      sourcePath: 'content/assets/character.rmesh',
+      contentHash: meshHash,
+    }), meshBytes);
+
     await assert.rejects(
       readStudioRenderResource({
         projectRoot: root,

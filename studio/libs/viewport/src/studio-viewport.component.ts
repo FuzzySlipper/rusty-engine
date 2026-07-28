@@ -17,6 +17,8 @@ import {
   type RendererAnimatedMeshResourceResolver,
   type RendererInspectionSurface,
   type RendererInspectionSurfaceControlPreferences,
+  type RendererMeshResourceManifest,
+  type RendererMeshResourceResolver,
 } from '@rusty-engine/renderer-host';
 
 import {
@@ -72,6 +74,7 @@ export interface StudioTransformGizmoDragFinished {
     '[attr.data-voxel-preview-kind]': 'voxelPreviewKind()',
     '[attr.data-selected-render-handle]': 'selectedRenderHandle()',
     '[attr.data-animated-mesh-resources]': 'animatedMeshManifest()?.resources?.length ?? 0',
+    '[attr.data-mesh-resources]': 'meshResourceManifest()?.resources?.length ?? 0',
     '[attr.data-camera-move-speed]': 'controlPreferences().moveSpeed',
     '[attr.data-camera-move-forward]': 'controlPreferences().keyboard.moveForward',
     '[attr.data-camera-revision]': 'cameraRevision()',
@@ -123,6 +126,9 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   readonly animatedMeshManifest = input<RendererAnimatedMeshResourceManifest | null>(null);
   readonly resolveAnimatedMeshResource = input<RendererAnimatedMeshResourceResolver | null>(null);
   readonly animatedMeshResourceKey = input('');
+  readonly meshResourceManifest = input<RendererMeshResourceManifest | null>(null);
+  readonly resolveMeshResource = input<RendererMeshResourceResolver | null>(null);
+  readonly meshResourceKey = input('');
 
   readonly entityPicked = output<number | null>();
   readonly frameApplied = output<number>();
@@ -212,11 +218,18 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       const manifest = this.animatedMeshManifest();
       const resolver = this.resolveAnimatedMeshResource();
       const resourceKey = this.animatedMeshResourceKey();
+      const meshManifest = this.meshResourceManifest();
+      const meshResolver = this.resolveMeshResource();
+      const meshResourceKey = this.meshResourceKey();
       const key = JSON.stringify([
         resourceKey,
         manifest?.kind ?? null,
         manifest?.resources ?? [],
         resolver === null,
+        meshResourceKey,
+        meshManifest?.kind ?? null,
+        meshManifest?.resources ?? [],
+        meshResolver === null,
       ]);
       if (key === this.#lastResourceKey) return;
       this.#lastResourceKey = key;
@@ -375,8 +388,13 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     try {
       const animatedMeshManifest = this.animatedMeshManifest();
       const resolveAnimatedMeshResource = this.resolveAnimatedMeshResource();
+      const meshResourceManifest = this.meshResourceManifest();
+      const resolveMeshResource = this.resolveMeshResource();
       if ((animatedMeshManifest === null) !== (resolveAnimatedMeshResource === null)) {
         throw new Error('animated mesh manifest and resolver must be supplied together');
+      }
+      if ((meshResourceManifest === null) !== (resolveMeshResource === null)) {
+        throw new Error('mesh resource manifest and resolver must be supplied together');
       }
       const surface = await mountRendererInspectionSurface(
         this.canvasElement.nativeElement,
@@ -393,6 +411,9 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
           ...(animatedMeshManifest === null || resolveAnimatedMeshResource === null
             ? {}
             : { animatedMeshManifest, resolveAnimatedMeshResource }),
+          ...(meshResourceManifest === null || resolveMeshResource === null
+            ? {}
+            : { meshResourceManifest, resolveMeshResource }),
         },
       );
       if (this.#destroyed || mountRevision !== this.#mountRevision) {

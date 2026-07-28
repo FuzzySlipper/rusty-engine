@@ -32,6 +32,7 @@ selection.
 - [`voxel-object-runtime/src/lib.rs`](../../rust/crates/voxel-object-runtime/src/lib.rs)
 - [Voxel asset format](../topics/voxel/voxel-asset-format.md)
 - [Voxel model conversion](../topics/voxel/voxel-model-conversion.md)
+- [Voxel mesh data plane](../topics/voxel/voxel-mesh-data-plane.md)
 
 ## Public downstream surfaces
 
@@ -76,4 +77,3 @@ Important fixtures live under
 - Catalogs, manifests, and publication:
   [Content, assets, and scenes](content-assets-and-scenes.md).
 - Visual realization: [Rust render model and projection](rust-render-model-and-projection.md).
-

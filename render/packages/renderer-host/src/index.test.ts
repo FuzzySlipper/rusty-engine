@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,8 +13,10 @@ import {
   createRendererAnimatedMeshProjection,
   createRendererDefaultSurfaceFrame,
   createRendererSurfaceProjection,
+  loadRendererMeshResourceSource,
   resolveRendererStoredEditorCamera,
   type RendererAnimatedMeshResourceManifest,
+  type RendererMeshResourceManifest,
 } from './index.js';
 
 const ANIMATED_ASSET = 'mesh-animation/kenney-retro-character-medium';
@@ -143,6 +146,43 @@ void test('renderer-host creates a visible default surface frame', () => {
   const frame = createRendererDefaultSurfaceFrame();
   assert.equal(frame.schemaVersion, 1);
   assert.ok(frame.ops.some((op) => op.op === 'create'));
+});
+
+void test('mesh resource host admits exact bounded bytes and rejects drift', async () => {
+  const bytes = new Uint8Array(16);
+  bytes.set([0x52, 0x4d, 0x53, 0x48, 0x4c, 0x45, 0x30, 0x31]);
+  const header = new DataView(bytes.buffer);
+  header.setUint32(8, bytes.byteLength, true);
+  header.setUint32(12, 1, true);
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  const manifest: RendererMeshResourceManifest = {
+    kind: 'rusty_renderer_mesh_resources.v1',
+    resources: [{
+      resource: `mesh-resource/${digest}`,
+      contentHash: `sha256:${digest}`,
+      byteLength: bytes.byteLength,
+    }],
+  };
+  const source = await loadRendererMeshResourceSource(
+    manifest,
+    () => Promise.resolve(bytes.buffer.slice(0)),
+  );
+  assert.equal(
+    source.acquireResource(
+      manifest.resources[0]!.resource,
+      manifest.resources[0]!.contentHash,
+      bytes.byteLength,
+    ).bytes.byteLength,
+    bytes.byteLength,
+  );
+
+  await assert.rejects(
+    loadRendererMeshResourceSource(
+      manifest,
+      () => Promise.resolve(new ArrayBuffer(bytes.byteLength - 1)),
+    ),
+    /expected 16 bytes/u,
+  );
 });
 
 void test('renderer-host exposes backend-neutral stored editor camera resolution', () => {

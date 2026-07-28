@@ -715,4 +715,26 @@ void test('fails closed on unknown handles, unsupported ops, and malformed mesh 
       }),
     RenderProjectionError,
   );
+  const digest = '1'.repeat(64);
+  const malformedResource: MeshPayloadDescriptor = {
+    ...validPayload,
+    source: {
+      kind: 'resource',
+      resource: `mesh-resource/${'2'.repeat(64)}`,
+      contentHash: `sha256:${digest}`,
+      byteLength: 136,
+      encoding: 'packedStreamsLeV1',
+      positionsByteOffset: 16,
+      normalsByteOffset: 64,
+      indicesByteOffset: 112,
+    },
+  };
+  assert.throws(
+    () => projection.applyDiff({
+      op: 'replaceMeshPayload',
+      handle: renderHandle(1),
+      payload: malformedResource,
+    }),
+    /content-addressed identity/u,
+  );
 });

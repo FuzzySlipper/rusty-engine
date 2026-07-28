@@ -16,6 +16,7 @@ import {
   loadAnimatedMeshGlbResource,
   type MeshBufferView,
   type MeshBufferSource,
+  type MeshResourceSource,
 } from './backend.js';
 
 function cubeNode(label = 'cube'): RenderNode {
@@ -803,6 +804,95 @@ void test('replaceMeshPayload releases the borrow on success (borrow → copy �
   assert.equal(source.outstanding, 0, 'no borrow is retained past the upload');
 });
 
+// ── Content-addressed mesh resources ────────────────────────────────────────
+
+const RESOURCE_DIGEST = '1'.repeat(64);
+const RESOURCE_ID = `mesh-resource/${RESOURCE_DIGEST}`;
+const RESOURCE_HASH = `sha256:${RESOURCE_DIGEST}`;
+
+function quadResourceBytes(): Uint8Array {
+  const streams = quadHandleBytes();
+  const bytes = new Uint8Array(16 + streams.byteLength);
+  bytes.set([0x52, 0x4d, 0x53, 0x48, 0x4c, 0x45, 0x30, 0x31]);
+  const header = new DataView(bytes.buffer);
+  header.setUint32(8, bytes.byteLength, true);
+  header.setUint32(12, 1, true);
+  bytes.set(streams, 16);
+  return bytes;
+}
+
+function quadResourcePayload(): MeshPayloadDescriptor {
+  return {
+    ...quadPayload(),
+    source: {
+      kind: 'resource',
+      resource: RESOURCE_ID,
+      contentHash: RESOURCE_HASH,
+      byteLength: 136,
+      encoding: 'packedStreamsLeV1',
+      positionsByteOffset: 16,
+      normalsByteOffset: 64,
+      indicesByteOffset: 112,
+    },
+  };
+}
+
+class MapResourceSource implements MeshResourceSource {
+  readonly resources = new Map<string, Uint8Array>();
+  readonly acquired: string[] = [];
+  readonly released: string[] = [];
+
+  acquireResource(resource: string, contentHash: string, byteLength: number): MeshBufferView {
+    const bytes = this.resources.get(resource);
+    if (bytes === undefined) throw new RenderResourceError('missing', resource, 'missing resource');
+    if (contentHash !== RESOURCE_HASH || byteLength !== bytes.byteLength) {
+      throw new RenderResourceError('invalid', resource, 'descriptor mismatch');
+    }
+    this.acquired.push(resource);
+    return { bytes };
+  }
+
+  releaseResource(resource: string): void {
+    this.released.push(resource);
+  }
+}
+
+void test('resource mesh payloads produce equivalent geometry and release their borrow', () => {
+  const source = new MapResourceSource();
+  source.resources.set(RESOURCE_ID, quadResourceBytes());
+  const renderer = new ThreeRenderer({ meshResourceSource: source });
+  const handle = renderHandle(1);
+  renderer.applyDiff({ op: 'create', handle, parent: null, node: meshNode() });
+  renderer.applyDiff({ op: 'replaceMeshPayload', handle, payload: quadResourcePayload() });
+
+  const geometry = (renderer.objectFor(handle) as THREE.Mesh).geometry;
+  assert.deepEqual(Array.from(geometry.getIndex()!.array), [0, 1, 2, 0, 2, 3]);
+  assert.deepEqual(source.acquired, [RESOURCE_ID]);
+  assert.deepEqual(source.released, [RESOURCE_ID]);
+});
+
+void test('resource mesh payloads fail closed on missing providers and invalid headers', () => {
+  const handle = renderHandle(1);
+  const without = new ThreeRenderer();
+  without.applyDiff({ op: 'create', handle, parent: null, node: meshNode() });
+  assert.throws(
+    () => without.applyDiff({ op: 'replaceMeshPayload', handle, payload: quadResourcePayload() }),
+    /needs a mesh resource provider/u,
+  );
+
+  const source = new MapResourceSource();
+  const invalid = quadResourceBytes();
+  invalid[0] = 0;
+  source.resources.set(RESOURCE_ID, invalid);
+  const renderer = new ThreeRenderer({ meshResourceSource: source });
+  renderer.applyDiff({ op: 'create', handle, parent: null, node: meshNode() });
+  assert.throws(
+    () => renderer.applyDiff({ op: 'replaceMeshPayload', handle, payload: quadResourcePayload() }),
+    /invalid v1 header/u,
+  );
+  assert.deepEqual(source.released, [RESOURCE_ID]);
+});
+
 // ── Shared-buffer static mesh assets ──────────────────────────────────────────
 
 /** A `mesh/crate` static mesh asset whose payload is addressed by a shared-buffer id. */
@@ -989,6 +1079,25 @@ void test('voxel-object instances share frame meshes and swap frames without han
     handle: first, asset: 'voxel-object/runner', frame: 1, frameId: 'walk/0', mesh: 1,
   });
   assert.equal(renderer.pickMesh(first)?.provenance, 'voxelObject');
+});
+
+void test('voxel-object definitions consume the content-addressed mesh resource path', () => {
+  const source = new MapResourceSource();
+  source.resources.set(RESOURCE_ID, quadResourceBytes());
+  const renderer = new ThreeRenderer({ meshResourceSource: source });
+  const asset = voxelObjectAsset({
+    meshes: [{ payload: { ...quadResourcePayload(), provenance: 'voxelObject' } }],
+    frames: [{ id: 'default', mesh: 0 }],
+  });
+  renderer.applyDiff({ op: 'defineVoxelObject', asset });
+  renderer.applyDiff({
+    op: 'createVoxelObjectInstance',
+    handle: renderHandle(83),
+    parent: null,
+    instance: voxelObjectInstance(),
+  });
+  assert.deepEqual(source.acquired, [RESOURCE_ID]);
+  assert.deepEqual(source.released, [RESOURCE_ID]);
 });
 
 void test('voxel-object frame failure is atomic and explicit release bounds GPU lifetime', () => {

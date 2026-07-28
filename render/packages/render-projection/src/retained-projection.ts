@@ -1366,11 +1366,46 @@ function validateMeshPayload(payload: MeshPayloadDescriptor, ctx: string): void 
         );
       }
     });
-  } else {
+  } else if (payload.source.kind === 'sharedBuffer') {
     requireNonNegativeInteger(payload.source.buffer, `${ctx}.source.buffer`);
     requireNonNegativeInteger(payload.source.positionsByteOffset, `${ctx}.source.positionsByteOffset`);
     requireNonNegativeInteger(payload.source.normalsByteOffset, `${ctx}.source.normalsByteOffset`);
     requireNonNegativeInteger(payload.source.indicesByteOffset, `${ctx}.source.indicesByteOffset`);
+  } else {
+    const digest = /^sha256:([0-9a-f]{64})$/u.exec(payload.source.contentHash)?.[1];
+    if (digest === undefined || payload.source.resource !== `mesh-resource/${digest}`) {
+      throw new RenderProjectionError(`${ctx}.source has an invalid content-addressed identity`);
+    }
+    const byteLength = requireNonNegativeInteger(
+      payload.source.byteLength,
+      `${ctx}.source.byteLength`,
+    );
+    if (byteLength < 16 || byteLength > 64 * 1024 * 1024) {
+      throw new RenderProjectionError(`${ctx}.source.byteLength exceeds the resource bounds`);
+    }
+    const positionsByteOffset = requireNonNegativeInteger(
+      payload.source.positionsByteOffset,
+      `${ctx}.source.positionsByteOffset`,
+    );
+    const normalsByteOffset = requireNonNegativeInteger(
+      payload.source.normalsByteOffset,
+      `${ctx}.source.normalsByteOffset`,
+    );
+    const indicesByteOffset = requireNonNegativeInteger(
+      payload.source.indicesByteOffset,
+      `${ctx}.source.indicesByteOffset`,
+    );
+    if ([positionsByteOffset, normalsByteOffset, indicesByteOffset]
+      .some((offset) => offset < 16 || offset % 4 !== 0)) {
+      throw new RenderProjectionError(`${ctx}.source offsets must be aligned after the header`);
+    }
+    const positionsEnd = positionsByteOffset + vertexCount * positionComponents * 4;
+    const normalsEnd = normalsByteOffset + vertexCount * normalComponents * 4;
+    const indicesEnd = indicesByteOffset + indexCount * 4;
+    if (positionsEnd > byteLength || normalsEnd > byteLength || indicesEnd > byteLength
+      || positionsEnd > normalsByteOffset || normalsEnd > indicesByteOffset) {
+      throw new RenderProjectionError(`${ctx}.source streams exceed or overlap the resource`);
+    }
   }
 
   for (let i = 0; i < payload.groups.length; i += 1) {
