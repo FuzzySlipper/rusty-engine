@@ -39,6 +39,7 @@ if (
   || pin.largeProjectFile !== 'content/projects/retro-character-high-fidelity.project.json'
   || pin.runtimeReport !== 'evidence/initial-animated-voxel-report.json'
   || pin.qualityReport !== 'evidence/high-fidelity-animated-voxel-report.json'
+  || pin.dataPlaneReport !== 'evidence/mesh-data-plane.json'
   || pin.cargoPackage !== 'rusty-engine-voxels'
   || pin.adapterBinary !== 'rusty-engine-voxels-studio-adapter'
 ) {
@@ -51,6 +52,7 @@ process.stdout.write([
   pin.largeProjectFile,
   pin.runtimeReport,
   pin.qualityReport,
+  pin.dataPlaneReport,
   pin.adapterBinary,
 ].join('\n'));
 NODE
@@ -62,7 +64,8 @@ PROJECT_FILE="${PIN_VALUES[2]:-}"
 LARGE_PROJECT_FILE="${PIN_VALUES[3]:-}"
 RUNTIME_REPORT="${PIN_VALUES[4]:-}"
 QUALITY_REPORT="${PIN_VALUES[5]:-}"
-ADAPTER_BINARY="${PIN_VALUES[6]:-}"
+DATA_PLANE_REPORT="${PIN_VALUES[6]:-}"
+ADAPTER_BINARY="${PIN_VALUES[7]:-}"
 
 VOXEL_ROOT="$(realpath "$VOXEL_ROOT")"
 VOXEL_TOP="$(git -C "$VOXEL_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
@@ -86,13 +89,15 @@ node --input-type=module - \
   "$VOXEL_ROOT/engine-source.json" \
   "$VOXEL_ROOT/$RUNTIME_REPORT" \
   "$VOXEL_ROOT/$QUALITY_REPORT" \
+  "$VOXEL_ROOT/$DATA_PLANE_REPORT" \
   "$EXPECTED_ENGINE_COMMIT" <<'NODE'
 import { readFileSync } from 'node:fs';
 
 const source = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 const runtimeReport = JSON.parse(readFileSync(process.argv[3], 'utf8'));
 const qualityReport = JSON.parse(readFileSync(process.argv[4], 'utf8'));
-const expectedEngineCommit = process.argv[5];
+const dataPlaneReport = JSON.parse(readFileSync(process.argv[5], 'utf8'));
+const expectedEngineCommit = process.argv[6];
 if (
   source.schemaVersion !== 1
   || source.publicRepository !== 'https://github.com/FuzzySlipper/rusty-engine'
@@ -104,8 +109,18 @@ if (
 if (
   runtimeReport.runtime?.engineRevision !== expectedEngineCommit
   || qualityReport.runtime?.engineRevision !== expectedEngineCommit
+  || dataPlaneReport.engineRevision !== expectedEngineCommit
 ) {
   throw new Error('consumer reports were not produced by the reviewed Engine revision');
+}
+if (
+  dataPlaneReport.before?.completeProjectionJsonBytes !== 54_564_714
+  || dataPlaneReport.after?.studioControlResponseBytes !== 24_805
+  || dataPlaneReport.after?.packedResourceBytes !== 34_541_056
+  || !Number.isFinite(dataPlaneReport.after?.nodeJsonParseMilliseconds)
+  || !Number.isFinite(dataPlaneReport.after?.chromiumJsonParseMilliseconds)
+) {
+  throw new Error('consumer mesh data-plane evidence is incomplete or drifted');
 }
 const behavior = runtimeReport.runtime?.behavior;
 for (const field of [
@@ -162,6 +177,9 @@ console.log(JSON.stringify({
     qualityReport.runtime.resources.admissionAndMeshingMicroseconds,
   averageProjectionCpuNanosecondsPerSwap:
     qualityReport.runtime.frameSwitch.averageProjectionCpuNanosecondsPerSwap,
+  studioControlResponseBytes: dataPlaneReport.after.studioControlResponseBytes,
+  packedResourceBytes: dataPlaneReport.after.packedResourceBytes,
+  browserJsonParseMilliseconds: dataPlaneReport.after.chromiumJsonParseMilliseconds,
 }));
 NODE
 

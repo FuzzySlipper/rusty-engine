@@ -546,8 +546,8 @@ The current contract and completed task ordering are documented in
 [voxel-model-conversion.md](../topics/voxel/voxel-model-conversion.md).
 
 #6242 transfers no Asha or VoxelForge implementation. The public downstream
-`rusty-engine-voxels` revision `f315ccb8cbf9614abbe745acf9324201ae5b159f` composes the exact public
-Engine revision `ef9af77932a83dc3c441ef5f1eef9b752e16de6e` and owns project paths, schedules,
+`rusty-engine-voxels` revision `39a8b5abb37345c5ffead2297f701cbdcea7f4e5` composes the exact public
+Engine revision `1703f46f1624d32b8324f831107a068d5f66ab30` and owns project paths, schedules,
 collision policy, adapter schema, and checked reports. Its source corpus is Kenney's CC0
 `Animated Characters 1` retro-character GLB with the adjacent license retained in that consumer.
 The Engine repository retains only the exact source pin, the explicit clean-checkout integration
@@ -561,3 +561,7 @@ to record a real cost and practical limit, but one humanoid corpus does not just
 VoxelForge's C# override graph, Assimp integration, editor session, bridge services, or renderer.
 Asha RuntimeSession, replay/provider/project-bundle structure, browser paths in Rust, and collision
 derived from each visible pose remain excluded.
+
+#6331 keeps that same canonical object and adds only a derived presentation data plane. The
+consumer atomically publishes Engine-produced content-addressed mesh resources under its ignored
+cache policy; Engine, Studio, and the shared renderer retain no downstream filesystem meaning.

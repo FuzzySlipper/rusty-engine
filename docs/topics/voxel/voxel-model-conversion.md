@@ -341,8 +341,8 @@ cross-repository dependency rather than an ordinary sibling-checkout requirement
 
 [`studio/voxel-consumer-source.json`](../../../studio/voxel-consumer-source.json) pins the public
 `rusty-engine-voxels` consumer at
-`f315ccb8cbf9614abbe745acf9324201ae5b159f`. That consumer in turn pins the public Engine provider at
-`ef9af77932a83dc3c441ef5f1eef9b752e16de6e`; five Cargo dependencies, its provider source record,
+`39a8b5abb37345c5ffead2297f701cbdcea7f4e5`. That consumer in turn pins the public Engine provider at
+`1703f46f1624d32b8324f831107a068d5f66ab30`; six Cargo dependencies, its provider source record,
 and its checked reports must agree on that exact revision. The explicit
 [`verify-studio-voxel-integration.sh`](../../../scripts/verify-studio-voxel-integration.sh) gate
 accepts only a clean checkout at that consumer revision. It runs the downstream Rust and protocol
@@ -354,10 +354,15 @@ The checked Kenney retro-character corpus converts `idle`, `run`, and `jump` at 
 24 × 36 × 24 object stores 15 frames over 14 unique meshes in 656,537 canonical bytes. The
 96 × 144 × 96 comparison stores the same temporal content in 12,758,243 canonical bytes, resolves
 5,061,696 bytes of cells, and produces an estimated 34,541,208-byte unique CPU mesh payload. One
-unoptimized local observation measured 8.81 seconds for high-fidelity conversion and 2.60 seconds
-for admission plus meshing. A 512-swap Rust projection probe averaged 6.31 microseconds and emitted
+unoptimized local observation measured 8.95 seconds for high-fidelity conversion and 2.57 seconds
+for admission plus meshing. A 512-swap Rust projection probe averaged 6.33 microseconds and emitted
 89 bytes per ordinary frame selection because admitted meshes and renderer resources are reused.
 These timings are observations, not CI thresholds.
+
+The same exact consumer proves the mesh data plane against that high-fidelity object. Its former
+complete compatibility projection was 54,564,714 JSON bytes; Studio now opens a 24,805-byte control
+response plus one 34,541,056-byte packed resource. One local Chromium run parsed the control JSON
+in 0.4 ms, fetched the resource in 58.9 ms, and visibly admitted it through the shared renderer.
 
 Exact source timestamps are compared with their stored voxel poses using bounds, centroid, foot
 anchor, consecutive-pose continuity, loop seam, palette identity, and a deterministic 32 × 32

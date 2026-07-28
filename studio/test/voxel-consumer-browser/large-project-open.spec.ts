@@ -8,6 +8,8 @@ test.describe.serial('large admitted voxel-object project', () => {
     page,
   }) => {
     test.setTimeout(180_000);
+    await page.goto('/');
+    const dataPlane = await measureBrowserControlParse(page);
     await page.goto(
       `/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(largeProjectFile)}`,
     );
@@ -18,6 +20,31 @@ test.describe.serial('large admitted voxel-object project', () => {
       'data-retained-ops',
       /^[1-9][0-9]*$/,
     );
+    const resourceTiming = await page.evaluate(() =>
+      performance.getEntriesByType('resource')
+        .filter((entry) => entry.name.includes('/api/studio-render-resource')
+          && (entry.name.includes('.rmesh') || entry.name.includes('%2Ermesh')))
+        .map((entry) => {
+          const timing = entry as PerformanceResourceTiming;
+          return {
+            durationMilliseconds: timing.duration,
+            encodedBodyBytes: timing.encodedBodySize,
+          };
+        }));
+    expect(dataPlane.controlBytes).toBeLessThan(64 * 1024);
+    expect(dataPlane.resourceBytes).toBe(34_541_056);
+    expect(resourceTiming.length).toBeGreaterThan(0);
+    expect(resourceTiming.reduce((sum, entry) => sum + entry.encodedBodyBytes, 0))
+      .toBe(dataPlane.resourceBytes);
+    process.stdout.write(`${JSON.stringify({
+      kind: 'studioVoxelMeshDataPlaneBrowserEvidence',
+      projectFile: largeProjectFile,
+      controlBytes: dataPlane.controlBytes,
+      resourceBytes: dataPlane.resourceBytes,
+      adapterRoundTripMilliseconds: dataPlane.adapterRoundTripMilliseconds,
+      browserJsonParseMilliseconds: dataPlane.browserJsonParseMilliseconds,
+      resourceTiming,
+    })}\n`);
   });
 
   test('opens from the visible project controls', async ({ page }) => {
@@ -32,6 +59,47 @@ test.describe.serial('large admitted voxel-object project', () => {
     await expect(page.locator('.entity-row[data-entity-id="1"]')).toContainText('retro-character');
   });
 });
+
+async function measureBrowserControlParse(page: Page): Promise<{
+  readonly controlBytes: number;
+  readonly resourceBytes: number;
+  readonly adapterRoundTripMilliseconds: number;
+  readonly browserJsonParseMilliseconds: number;
+}> {
+  return page.evaluate(async ({ root, projectFile }) => {
+    const started = performance.now();
+    const response = await fetch('/api/studio-adapter', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        type: 'openProject',
+        protocolVersion: 9,
+        requestId: 'high-fidelity-browser-measurement',
+        root,
+        projectFile,
+      }),
+    });
+    const text = await response.text();
+    const received = performance.now();
+    if (!response.ok) throw new Error(`measurement open failed with HTTP ${String(response.status)}`);
+    const parseStarted = performance.now();
+    const decoded = JSON.parse(text) as {
+      readonly type?: string;
+      readonly project?: {
+        readonly meshResources?: readonly { readonly byteLength?: number }[];
+      };
+    };
+    const parsed = performance.now();
+    if (decoded.type !== 'projectOpened') throw new Error('measurement open was not accepted');
+    return {
+      controlBytes: new TextEncoder().encode(text).byteLength,
+      resourceBytes: (decoded.project?.meshResources ?? [])
+        .reduce((sum, resource) => sum + (resource.byteLength ?? 0), 0),
+      adapterRoundTripMilliseconds: Number((received - started).toFixed(3)),
+      browserJsonParseMilliseconds: Number((parsed - parseStarted).toFixed(3)),
+    };
+  }, { root: projectRoot, projectFile: largeProjectFile });
+}
 
 async function expectProjectOpen(page: Page, waitForOpening = false) {
   const shell = page.locator('[data-visual-id="studio-shell"]');

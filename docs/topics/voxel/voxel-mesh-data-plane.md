@@ -39,6 +39,20 @@ Both contain 14 unique flipbook meshes.
 | Full little-endian binary | 1.81 MB | 34.54 MB | Selected behind resource references |
 | Base plus whole-mesh binary deltas | 0.99 MB | 19.63 MB | Deferred: 64-67% of vertex values change |
 
+The implemented path is certified by `rusty-engine-voxels` revision
+`39a8b5abb37345c5ffead2297f701cbdcea7f4e5` against Engine revision
+`1703f46f1624d32b8324f831107a068d5f66ab30`:
+
+| Measured high-fidelity open | Before | Implemented |
+|---|---:|---:|
+| JSON control/projection | 54,564,714 bytes | 24,805 bytes |
+| Separate packed resource | — | 34,541,056 bytes |
+| JSON parse | 2,028 ms host-neutral proxy | 0.207 ms Node / 0.4 ms Chromium |
+
+The same Chromium observation fetched the resource in 58.9 ms and opened it
+visibly through the shared renderer. These timings are evidence from one
+unoptimized run, not thresholds; the exact checked report records their limits.
+
 Index topology changes by only 0.7-3.6%, so a later independently versioned
 format may share index streams. Version 1 deliberately does not add that
 complexity. It also does not use compression: this is a trusted local/LAN

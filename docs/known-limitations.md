@@ -70,16 +70,18 @@ downstream repositories.
 - **Status:** accepted-temporary
 - **Affected surface:** `svc-mesh`, `engine-spatial`, `render-model`, and the
   shared renderer border
-- **Limitation:** Engine represents bounded inline mesh data and explicit shared
-  buffer handles, but does not provide a generic content-addressed broker that
-  automatically promotes and caches mesh results across processes.
-- **Impact:** A consumer deliberately uses bounded inline data or supplies a
-  host-owned shared-buffer provider with explicit lifetime.
-- **Detection:** The engine-spatial live-remesh test and renderer-three
-  inline/shared lifecycle tests cover the current explicit paths.
-- **Follow-up:** Add a narrow host-owned broker only when measured transport
-  traffic justifies it.
-- **Last reviewed:** 2026-07-24 / codex
+- **Limitation:** Engine represents bounded inline data, explicit shared-buffer
+  handles, and content-addressed `packedStreamsLeV1` resources, but deliberately
+  does not auto-promote every mesh or own a generic cross-process cache broker.
+- **Impact:** A consumer chooses the packed projector when bulk transport is
+  justified and owns publication paths, cache lifetime, and host resolution.
+  Current Studio hosts eagerly preload at most 1,024 resources and 256 MiB.
+- **Detection:** `render-model`/`render-projection` resource tests, renderer
+  lifecycle tests, and the exact `rusty-engine-voxels` Chromium integration
+  cover the explicit paths.
+- **Follow-up:** Add measured lazy admission or a narrower host broker only if
+  a real corpus exceeds the current eager boundary.
+- **Last reviewed:** 2026-07-28 / codex
 
 ## Deliberate mechanics boundaries, not defects
 
