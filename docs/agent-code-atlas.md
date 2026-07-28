@@ -4,6 +4,11 @@ This atlas routes an unfamiliar agent to the owner of a mechanism without
 requiring campaign history or Den access. Current planning may live elsewhere;
 this document describes committed repository surfaces.
 
+The `gameplay-rules` row below is the one explicit planned surface: its
+reviewed contract is committed so downstream work can target a stable boundary,
+but no crate or TypeScript package exists until the corresponding
+implementation tasks land.
+
 ## How to use this atlas
 
 1. Read [design.md](design.md) for the provider boundary.
@@ -22,6 +27,7 @@ downstream game policy and orchestration
         |
         +--> entity-state / state-machine
         +--> gameplay-mechanics
+        +--> gameplay-rules (optional package support; implementation pending)
         +--> environment-authoring --> authored-scene
         +--> content-store / asset-catalog / asset-import
         +--> engine-spatial --> core-* / svc-*
@@ -41,6 +47,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 |---|---|
 | Entity components, atomic mutation, relationships, snapshots, state machines | [Entity state and state machines](code-map/entity-state-and-state-machines.md) |
 | Stats, tracks, sources, effects, items, equipment, damage, restoration | [Gameplay mechanics](code-map/gameplay-mechanics.md) |
+| Optional opaque rules packages, exact dependencies, provenance, canonicalization, and diagnostics (planned) | [Gameplay rules contract](gameplay-rules-contract.md) |
 | Canonical voxel space, collision, navigation, mesh, motion, triggers, edits | [Spatial mechanisms](code-map/spatial-mechanisms.md) |
 | Content manifests, catalogs, imports, prefabs, and authored scenes | [Content, assets, and scenes](code-map/content-assets-and-scenes.md) |
 | Stored voxel artifacts, annotations, GLB conversion, and object playback | [Voxel assets and conversion](code-map/voxel-assets-and-conversion.md) |

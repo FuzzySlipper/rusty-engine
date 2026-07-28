@@ -1,6 +1,6 @@
 # Asha-to-Rusty Engine migration cluster ledger
 
-Status: M0-M11S implemented; M11 Studio successor parity and closeout acceptance are in progress
+Status: M0-M11S and GM0-GM6 implemented; M11 Studio closeout and optional gameplay-rules implementation are in progress
 
 Evidence baselines:
 
@@ -106,6 +106,17 @@ Every future cluster must preserve these properties:
 | M10 | External reference consumer | #6137, #6141-#6145 | The walking product moved to public `rusty-engine-demo`, depends one-way on an exact Engine revision, added downstream-only `ExtractionBeacon` semantics, and proved a second TypeScript-authored composition without another Rust change. At extraction time Engine retained only provider crates and converter evidence. |
 | M11R | Complete shared rendering | #6156-#6163 | The complete pinned Asha render investment was adapted into renderer-neutral Rust crates plus an isolated four-package TypeScript/Three/host workspace. Every one of 134 donor files has a final disposition; the demo deleted its private renderer and consumes the public exact-revision packages. |
 | GM0-GM5 | Initial gameplay-mechanics provider | #6284-#6289 | Seven ordinary durable component families, one immutable catalog, named stats/tracks/effects/damage/inventory/equipment services, strict reconstruction, read-only inspection, runnable compositions, bounded costs, and literal 152-item `asha-rpg` disposition landed without a session, scheduler, IR, or shadow state store. |
+
+## Accepted successor work
+
+These accepted boundaries are not completed migration claims; Den owns their
+live task and review state.
+
+| ID | Tasks | Accepted boundary |
+|---|---|---|
+| GR0 | #6311 | Freeze a semantic-neutral optional rules package envelope, exact dependency resolution, provenance, diagnostics, bounds, and isolated TypeScript ownership against Rusty D20 without an Engine rules language. |
+| GR1 | #6312 | Implement the host-neutral Rust `gameplay-rules` crate with direct-Rust and strict artifact paths. |
+| GR2 | #6313 | Implement the isolated `rules/` TypeScript contracts and authoring support while keeping ordinary provider verification Node-free. |
 
 Detailed measurements, implementation commits, browser behavior, and limitations are retained in
 [experiment-results.md](experiment-results.md). Exact donor sources and adaptations are in

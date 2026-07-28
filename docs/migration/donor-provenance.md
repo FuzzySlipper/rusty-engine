@@ -214,7 +214,7 @@ non-mutation.
 ## Crate portability inventory
 
 The historical donor's
-[pinned Asha Engine crate portability report](https://github.com/FuzzySlipper/asha-engine/blob/a431974330589761c9e35fc4f8a55996a1b5ee48/docs/asha-crate-portability-report.md)
+[pinned Asha Engine crate portability report](https://github.com/FuzzySlipper/asha-engine/blob/6462a6de20d48ea1a3b7456826804bd9507860a5/docs/asha-crate-portability-report.md)
 audits all 97 Rust crates at the pinned source commit, including dependency hotspots, portability
 classifications, extraction order, structural-spine exclusions, and successor guardrails.
 
@@ -500,6 +500,27 @@ GM1-GM5 proofs named by the ledger. The local
 `check-gameplay-mechanics-donor-disposition.sh` gate validates this accounting without reading an
 Asha checkout; the separate builder is an explicit maintainer tool for re-auditing the pinned
 source, not an ordinary provider dependency.
+
+## Gameplay rules GR0 donor disposition
+
+GR0 re-audits the same pinned `asha-rpg` tree for a different and much smaller
+owner. [`migration/gameplay-rules-donor/disposition.tsv`](../../migration/gameplay-rules-donor/disposition.tsv)
+accounts for all 152 paths separately from the completed mechanics campaign.
+No prior mechanics disposition is silently reclassified.
+
+The new contract adapts only semantic-neutral lessons: strict versioned package
+envelopes, exact dependency graphs, canonical JSON, source provenance, bounded
+typed diagnostics, executable-value rejection, checked quotas, and
+fail-before-publication. These lessons are rewritten behind
+[`gameplay-rules-contract.md`](../gameplay-rules-contract.md); no donor
+implementation file is copied.
+
+The donor's formula, predicate, program, operation, semantic registry, content
+patch, generated RPG vocabulary, compiler meaning, session, authority,
+scheduler, event, replay, and downstream product topology remain excluded.
+Rusty D20 owns its concrete candidate schema and Rust semantic compiler. The
+separate checker proves complete local accounting without reading a donor
+checkout, while the builder remains an explicit maintainer-only re-audit tool.
 
 The operational dependency baseline is empty. After M10, Cargo metadata, provider fixture paths,
 shell scripts, executable documentation, and CI require only Rusty Engine; ordinary Engine work has

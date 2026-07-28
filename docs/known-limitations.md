@@ -5,24 +5,41 @@ architecture boundaries are stated separately so agents do not “fix” them by
 introducing a second authority. Product-specific limitations belong to their
 downstream repositories.
 
-## Gameplay mechanics awaits reference-consumer certification
+## Gameplay mechanics awaits three-consumer GM7 reconciliation
 
 - **Status:** accepted-temporary
-- **Affected surface:** the initial `gameplay-mechanics` provider revision
-- **Limitation:** GM0-GM5 prove the public provider, strict reconstruction,
-  inspection, quotas, and direct example compositions in Rusty Engine. The
-  external reference demo has not yet removed its private mechanics authority
-  and certified the exact provider revision in its real product path.
-- **Impact:** The provider APIs are independently usable, but Rusty Engine
-  alone cannot claim the reference product's save migration, controls,
-  presentation, or duplicate-authority removal.
+- **Affected surface:** the initial `gameplay-mechanics` provider and GM7
+  closeout
+- **Limitation:** GM0-GM6 and the reviewed external realtime demo prove the
+  provider and one real consumer. The bounded infrastructure fixture and
+  rules-heavy Rusty D20 consumer have not yet completed the final
+  three-composition reconciliation.
+- **Impact:** The provider APIs and realtime product path are independently
+  usable, but the campaign has not yet shown whether the other two composition
+  shapes reveal a smaller reusable gap or only downstream policy.
 - **Detection:** `cargo test -p gameplay-mechanics -p engine-inspector --locked`
   and `cargo run -p gameplay-mechanics --example compositions` prove the
   provider boundary. They deliberately do not launch or inspect a sibling demo.
-- **Follow-up:** `rusty-engine-demo` task #6290 performs the exact-revision
-  migration; Rusty Engine task #6291 reconciles the shooter, infrastructure,
-  and d20-shaped compositions with that external evidence.
-- **Last reviewed:** 2026-07-27 / codex
+- **Follow-up:** Rusty Engine task #6291 reconciles the reviewed shooter,
+  infrastructure, and Rusty D20 evidence.
+- **Last reviewed:** 2026-07-28 / codex
+
+## Gameplay rules support is designed but not implemented
+
+- **Status:** accepted-temporary
+- **Affected surface:** optional downstream-authored rules packages
+- **Limitation:** The schema-1 ownership, envelope, bounds, diagnostics,
+  dependency resolution, and isolated TypeScript boundary are frozen in
+  [gameplay-rules-contract.md](gameplay-rules-contract.md), but the Rust crate
+  and TypeScript packages do not yet exist.
+- **Impact:** Rules-heavy consumers must not treat the contract as a shipped
+  API or create a competing Engine-owned semantic IR while implementation is
+  pending.
+- **Detection:** `cargo metadata --format-version 1 --locked --no-deps` has no
+  `gameplay-rules` package and there is no `rules/` workspace.
+- **Follow-up:** GR1 implements the Rust package support and GR2 implements the
+  isolated authoring workspace before Rusty D20 consumes either.
+- **Last reviewed:** 2026-07-28 / codex
 
 ## Planar navigation footprint and multi-agent planning
 

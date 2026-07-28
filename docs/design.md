@@ -43,6 +43,7 @@ downstream game
                      |
                      +--> entity-state
                      +--> gameplay-mechanics (optional)
+                     +--> gameplay-rules (optional package support)
                      +--> engine-spatial -------------------+
                      +--> voxel-asset                       |
                      +--> render-model --> render-projection----+
@@ -291,6 +292,28 @@ matching the code path's exact slot lookups and component-local cloning.
 
 See [Gameplay mechanics](code-map/gameplay-mechanics.md) for entry points, frozen quotas, and focused
 gates.
+
+## Optional gameplay rules support
+
+Rules-heavy consumers may opt into a `gameplay-rules` sibling crate without
+making it a dependency of `entity-state` or `gameplay-mechanics`. It owns only
+a strict bounded package envelope, exact package dependencies, canonical
+encoding and fingerprints, source provenance, bounded diagnostics, and
+deterministic package-set resolution. The payload is opaque JSON.
+
+The downstream game owns the payload schema, every semantic definition and
+compiler rule, mechanics bindings, orchestration, persistence, and execution.
+TypeScript may produce immutable build-time candidates in an isolated
+workspace, while Rust remains the semantic and runtime authority. Direct Rust
+construction and checked artifact admission require no Node or TypeScript at
+runtime.
+
+This is not a universal gameplay IR. Engine defines no formula, predicate,
+operation, action, condition, effect, behavior, evaluator, registry, runtime
+session, scheduler, or d20 vocabulary through this surface. A mechanics-only
+game ignores it entirely. The exact schema-1 API, bounds, ordering, failure
+identity, TypeScript isolation, and first-consumer proof are frozen in
+[gameplay-rules-contract.md](gameplay-rules-contract.md).
 
 ## Spatial authority and derived mechanisms
 
@@ -591,8 +614,14 @@ either product's policy. When that evidence exists:
 4. add focused provider tests independent of either product; and
 5. keep Engine verification free of downstream checkouts.
 
-Duplication across one early consumer is cheaper than a premature plugin API, registry, or universal
-gameplay abstraction.
+Duplication across one early consumer is cheaper than a premature plugin API,
+registry, or universal gameplay abstraction. A first consumer may still earn a
+small representation-neutral support seam when the useful behavior can be
+stated without importing that consumer's vocabulary, the direct alternative
+would duplicate transport/admission infrastructure rather than product
+meaning, and the boundary is reviewed before implementation. The optional
+`gameplay-rules` envelope is this narrow exception; Rusty D20's actual rule
+schema and compiler remain downstream.
 
 This rule governs newly invented abstractions; it is not a deletion filter during an approved
 successor migration. A proven donor capability required by a named first-party consumer may be
@@ -610,7 +639,9 @@ The current provider deliberately excludes:
 - a strict ECS query/update framework or implicit component mutation rights;
 - game-specific component families, events, rules, and persistence schemas;
 - a service locator, dependency-injection container, or plugin registry;
-- a universal command/event union, behavior graph, or authored gameplay language;
+- a universal command/event union, behavior graph, or Engine-owned authored
+  gameplay language (the optional rules envelope carries an opaque
+  downstream-owned payload);
 - replay or certification as a prerequisite for ordinary execution;
 - Node, browser, Three, WebAudio, DOM, Studio, or editor dependencies in ordinary Rust-provider
   work (they remain isolated under `render/` with their own gate);

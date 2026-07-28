@@ -1,0 +1,153 @@
+path	disposition	successor	proof	notes
+.github/workflows/ci.yml	excluded	none	docs/gameplay-rules-contract.md	Donor repository governance, workspace, dependency, and build topology are not Engine runtime behavior.
+.gitignore	excluded	none	docs/gameplay-rules-contract.md	Donor repository governance, workspace, dependency, and build topology are not Engine runtime behavior.
+AGENTS.md	excluded	none	docs/gameplay-rules-contract.md	Donor repository governance, workspace, dependency, and build topology are not Engine runtime behavior.
+Cargo.lock	excluded	none	docs/gameplay-rules-contract.md	Donor repository governance, workspace, dependency, and build topology are not Engine runtime behavior.
+Cargo.toml	excluded	none	docs/gameplay-rules-contract.md	Donor repository governance, workspace, dependency, and build topology are not Engine runtime behavior.
+README.md	excluded	none	docs/gameplay-rules-contract.md	Donor repository governance, workspace, dependency, and build topology are not Engine runtime behavior.
+consumers/minimal-game/Cargo.lock	excluded	none	docs/gameplay-rules-contract.md	Donor consumers, replay generators, and RPG examples are product evidence rather than Engine package support.
+consumers/minimal-game/Cargo.toml	excluded	none	docs/gameplay-rules-contract.md	Donor consumers, replay generators, and RPG examples are product evidence rather than Engine package support.
+consumers/minimal-game/src/bin/ruleweaver_core.rs	excluded	none	docs/gameplay-rules-contract.md	Donor consumers, replay generators, and RPG examples are product evidence rather than Engine package support.
+consumers/minimal-game/src/main.rs	excluded	none	docs/gameplay-rules-contract.md	Donor consumers, replay generators, and RPG examples are product evidence rather than Engine package support.
+crates/asha-rpg/Cargo.toml	excluded	none	docs/gameplay-rules-contract.md	Authority session, encounter, lifecycle, replay, registry, and aggregate facade topology remain downstream or absent.
+crates/asha-rpg/src/lib.rs	excluded	none	docs/gameplay-rules-contract.md	Authority session, encounter, lifecycle, replay, registry, and aggregate facade topology remain downstream or absent.
+crates/asha-rpg/tests/public_facade.rs	excluded	none	docs/gameplay-rules-contract.md	Authority session, encounter, lifecycle, replay, registry, and aggregate facade topology remain downstream or absent.
+crates/rpg-compiler/Cargo.toml	excluded	none	docs/gameplay-rules-contract.md	Donor RPG compilation, execution, registry, CLI, and crate topology stay downstream; only separately named neutral lessons are retained.
+crates/rpg-compiler/src/artifact.rs	evidence	gameplay-rules artifact bounds	docs/gameplay-rules-contract.md	Artifact size, hash, and fail-closed decode behavior inform bounds; donor compiled RPG definitions are excluded.
+crates/rpg-compiler/src/bin/compile_play_bundle.rs	excluded	none	docs/gameplay-rules-contract.md	Donor RPG compilation, execution, registry, CLI, and crate topology stay downstream; only separately named neutral lessons are retained.
+crates/rpg-compiler/src/bin/export_vocabulary.rs	excluded	none	docs/gameplay-rules-contract.md	Donor RPG compilation, execution, registry, CLI, and crate topology stay downstream; only separately named neutral lessons are retained.
+crates/rpg-compiler/src/bin/validate_ir.rs	excluded	none	docs/gameplay-rules-contract.md	Donor RPG compilation, execution, registry, CLI, and crate topology stay downstream; only separately named neutral lessons are retained.
+crates/rpg-compiler/src/bin/validate_play_bundle.rs	excluded	none	docs/gameplay-rules-contract.md	Donor RPG compilation, execution, registry, CLI, and crate topology stay downstream; only separately named neutral lessons are retained.
+crates/rpg-compiler/src/compile.rs	evidence	gameplay-rules admission contract	docs/gameplay-rules-contract.md	Bounded validation and fail-before-publication behavior are evidence; all semantic compilation remains downstream.
+crates/rpg-compiler/src/diagnostic.rs	adapted	gameplay-rules diagnostics contract	docs/gameplay-rules-contract.md	Bounded typed diagnostic shape and source correlation are rewritten without donor semantic codes or compiler ownership.
+crates/rpg-compiler/src/execute.rs	excluded	none	docs/gameplay-rules-contract.md	Donor RPG compilation, execution, registry, CLI, and crate topology stay downstream; only separately named neutral lessons are retained.
+crates/rpg-compiler/src/lib.rs	excluded	none	docs/gameplay-rules-contract.md	Donor RPG compilation, execution, registry, CLI, and crate topology stay downstream; only separately named neutral lessons are retained.
+crates/rpg-compiler/src/registry.rs	excluded	none	docs/gameplay-rules-contract.md	Donor RPG compilation, execution, registry, CLI, and crate topology stay downstream; only separately named neutral lessons are retained.
+crates/rpg-compiler/tests/semantic_kernel.rs	evidence	gameplay-rules rejection fixtures	docs/gameplay-rules-contract.md	Failure-path proof shape informs future fixtures without transferring the donor semantic kernel.
+crates/rpg-core/Cargo.toml	excluded	none	docs/gameplay-rules-contract.md	RPG primitives and runtime authority belong to downstream semantic and component owners.
+crates/rpg-core/src/authority.rs	excluded	none	docs/gameplay-rules-contract.md	Authority session, encounter, lifecycle, replay, registry, and aggregate facade topology remain downstream or absent.
+crates/rpg-core/src/lib.rs	excluded	none	docs/gameplay-rules-contract.md	RPG primitives and runtime authority belong to downstream semantic and component owners.
+crates/rpg-core/src/primitives.rs	excluded	none	docs/gameplay-rules-contract.md	RPG primitives and runtime authority belong to downstream semantic and component owners.
+crates/rpg-ir/Cargo.toml	excluded	none	docs/gameplay-rules-contract.md	The universal formula, predicate, program, operation, reference, and generated RPG vocabulary are explicitly excluded.
+crates/rpg-ir/src/lib.rs	excluded	none	docs/gameplay-rules-contract.md	The universal formula, predicate, program, operation, reference, and generated RPG vocabulary are explicitly excluded.
+crates/rpg-ir/src/normalized.rs	excluded	none	docs/gameplay-rules-contract.md	The universal formula, predicate, program, operation, reference, and generated RPG vocabulary are explicitly excluded.
+crates/rpg-ir/src/play_bundle_artifact.rs	adapted	gameplay-rules package contract	docs/gameplay-rules-contract.md	Only strict package identity, exact dependency, provenance, and envelope lessons are rewritten; the donor RPG schema is excluded.
+crates/rpg-runtime/Cargo.toml	excluded	none	docs/gameplay-rules-contract.md	Authority session, encounter, lifecycle, replay, registry, and aggregate facade topology remain downstream or absent.
+crates/rpg-runtime/src/encounter.rs	excluded	none	docs/gameplay-rules-contract.md	Authority session, encounter, lifecycle, replay, registry, and aggregate facade topology remain downstream or absent.
+crates/rpg-runtime/src/lib.rs	excluded	none	docs/gameplay-rules-contract.md	Authority session, encounter, lifecycle, replay, registry, and aggregate facade topology remain downstream or absent.
+crates/rpg-runtime/src/replay.rs	excluded	none	docs/gameplay-rules-contract.md	Authority session, encounter, lifecycle, replay, registry, and aggregate facade topology remain downstream or absent.
+crates/rpg-runtime/src/semantic_session.rs	excluded	none	docs/gameplay-rules-contract.md	Authority session, encounter, lifecycle, replay, registry, and aggregate facade topology remain downstream or absent.
+docs/design.md	evidence	docs/gameplay-rules-contract.md	docs/gameplay-rules-contract.md	Historical ownership and non-claim language is evidence only; the successor contract is authoritative.
+docs/encounter-session-contract.md	excluded	none	docs/gameplay-rules-contract.md	Historical RPG design, primitive catalog, encounter, and composition documents are evidence but not successor specification.
+docs/first-wave-primitive-catalog.md	excluded	none	docs/gameplay-rules-contract.md	Historical RPG design, primitive catalog, encounter, and composition documents are evidence but not successor specification.
+docs/non-claims.md	evidence	docs/gameplay-rules-contract.md	docs/gameplay-rules-contract.md	Historical ownership and non-claim language is evidence only; the successor contract is authoritative.
+docs/ruleweaver-core-composition.md	excluded	none	docs/gameplay-rules-contract.md	Historical RPG design, primitive catalog, encounter, and composition documents are evidence but not successor specification.
+examples/generate-portable-replay-source.ts	excluded	none	docs/gameplay-rules-contract.md	Donor consumers, replay generators, and RPG examples are product evidence rather than Engine package support.
+examples/generate-ruleweaver-core-source.ts	excluded	none	docs/gameplay-rules-contract.md	Donor consumers, replay generators, and RPG examples are product evidence rather than Engine package support.
+examples/representative-actions.ts	excluded	none	docs/gameplay-rules-contract.md	Donor consumers, replay generators, and RPG examples are product evidence rather than Engine package support.
+governance/architecture.md	excluded	none	docs/gameplay-rules-contract.md	Donor repository governance, workspace, dependency, and build topology are not Engine runtime behavior.
+governance/boundary-rules.md	excluded	none	docs/gameplay-rules-contract.md	Donor repository governance, workspace, dependency, and build topology are not Engine runtime behavior.
+governance/change-amplification.json	excluded	none	docs/gameplay-rules-contract.md	Donor repository governance, workspace, dependency, and build topology are not Engine runtime behavior.
+governance/dependency-policy.toml	excluded	none	docs/gameplay-rules-contract.md	Donor repository governance, workspace, dependency, and build topology are not Engine runtime behavior.
+governance/ownership.toml	excluded	none	docs/gameplay-rules-contract.md	Donor repository governance, workspace, dependency, and build topology are not Engine runtime behavior.
+governance/upstream-asha.toml	excluded	none	docs/gameplay-rules-contract.md	Donor repository governance, workspace, dependency, and build topology are not Engine runtime behavior.
+package-lock.json	excluded	none	docs/gameplay-rules-contract.md	Donor repository governance, workspace, dependency, and build topology are not Engine runtime behavior.
+package.json	excluded	none	docs/gameplay-rules-contract.md	Donor repository governance, workspace, dependency, and build topology are not Engine runtime behavior.
+packages/authoring/README.md	evidence	docs/gameplay-rules-contract.md	docs/gameplay-rules-contract.md	Historical ownership and non-claim language is evidence only; the successor contract is authoritative.
+packages/authoring/dist/builders.d.ts	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/builders.d.ts.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/builders.js	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/builders.js.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/canonical.d.ts	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/canonical.d.ts.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/canonical.js	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/canonical.js.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/catalogs.d.ts	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/catalogs.d.ts.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/catalogs.js	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/catalogs.js.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/content-pack-builders.d.ts	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/content-pack-builders.d.ts.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/content-pack-builders.js	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/content-pack-builders.js.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/content-patch-builders.d.ts	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/content-patch-builders.d.ts.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/content-patch-builders.js	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/content-patch-builders.js.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/index.d.ts	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/index.d.ts.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/index.js	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/index.js.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/low-level.d.ts	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/low-level.d.ts.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/low-level.js	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/low-level.js.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/normalize.d.ts	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/normalize.d.ts.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/normalize.js	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/normalize.js.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/play-bundle-compiler.d.ts	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/play-bundle-compiler.d.ts.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/play-bundle-compiler.js	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/play-bundle-compiler.js.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/play-bundle-types.d.ts	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/play-bundle-types.d.ts.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/play-bundle-types.js	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/play-bundle-types.js.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/ruleset-builders.d.ts	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/ruleset-builders.d.ts.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/ruleset-builders.js	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/ruleset-builders.js.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/scenario-builders.d.ts	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/scenario-builders.d.ts.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/scenario-builders.js	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/scenario-builders.js.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/types.d.ts	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/types.d.ts.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/types.js	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/dist/types.js.map	excluded	none	docs/gameplay-rules-contract.md	Checked donor build output is not source and is not transferred.
+packages/authoring/package.json	excluded	none	docs/gameplay-rules-contract.md	RPG semantics, runtime or product topology, generated output, and repository scaffolding are not part of the semantic-neutral support surface.
+packages/authoring/src/builders.ts	excluded	none	docs/gameplay-rules-contract.md	RPG-specific builders, schemas, content patches, catalogs, and semantic tests belong to Rusty D20 or another downstream domain.
+packages/authoring/src/canonical.ts	adapted	isolated rules canonicalization contract	docs/gameplay-rules-contract.md	Deterministic canonical JSON is retained as a cross-language lesson under the stricter integer-only schema-1 contract.
+packages/authoring/src/catalogs.ts	excluded	none	docs/gameplay-rules-contract.md	RPG-specific builders, schemas, content patches, catalogs, and semantic tests belong to Rusty D20 or another downstream domain.
+packages/authoring/src/content-pack-builders.ts	excluded	none	docs/gameplay-rules-contract.md	RPG-specific builders, schemas, content patches, catalogs, and semantic tests belong to Rusty D20 or another downstream domain.
+packages/authoring/src/content-patch-builders.ts	excluded	none	docs/gameplay-rules-contract.md	RPG-specific builders, schemas, content patches, catalogs, and semantic tests belong to Rusty D20 or another downstream domain.
+packages/authoring/src/index.ts	excluded	none	docs/gameplay-rules-contract.md	RPG-specific builders, schemas, content patches, catalogs, and semantic tests belong to Rusty D20 or another downstream domain.
+packages/authoring/src/low-level.ts	excluded	none	docs/gameplay-rules-contract.md	RPG-specific builders, schemas, content patches, catalogs, and semantic tests belong to Rusty D20 or another downstream domain.
+packages/authoring/src/normalize.ts	evidence	isolated rules authoring boundary	docs/gameplay-rules-contract.md	Executable-value rejection is retained as evidence; RPG semantic normalization stays downstream.
+packages/authoring/src/play-bundle-compiler.ts	adapted	gameplay-rules package resolution contract	docs/gameplay-rules-contract.md	Only deterministic exact package graph and provenance lessons are retained; semantic compilation and content patches stay downstream.
+packages/authoring/src/play-bundle-types.ts	excluded	none	docs/gameplay-rules-contract.md	RPG-specific builders, schemas, content patches, catalogs, and semantic tests belong to Rusty D20 or another downstream domain.
+packages/authoring/src/ruleset-builders.ts	excluded	none	docs/gameplay-rules-contract.md	RPG-specific builders, schemas, content patches, catalogs, and semantic tests belong to Rusty D20 or another downstream domain.
+packages/authoring/src/scenario-builders.ts	excluded	none	docs/gameplay-rules-contract.md	RPG-specific builders, schemas, content patches, catalogs, and semantic tests belong to Rusty D20 or another downstream domain.
+packages/authoring/src/types.ts	excluded	none	docs/gameplay-rules-contract.md	RPG-specific builders, schemas, content patches, catalogs, and semantic tests belong to Rusty D20 or another downstream domain.
+packages/authoring/test/action-procedures.test.ts	excluded	none	docs/gameplay-rules-contract.md	RPG-specific builders, schemas, content patches, catalogs, and semantic tests belong to Rusty D20 or another downstream domain.
+packages/authoring/test/authoring.test.ts	evidence	isolated rules contract fixtures	docs/gameplay-rules-contract.md	Immutable authoring, contract separation, and package rejection cases inform focused successor fixtures.
+packages/authoring/test/catalog-authoring.test.ts	excluded	none	docs/gameplay-rules-contract.md	RPG-specific builders, schemas, content patches, catalogs, and semantic tests belong to Rusty D20 or another downstream domain.
+packages/authoring/test/contract-split.test.ts	evidence	isolated rules contract fixtures	docs/gameplay-rules-contract.md	Immutable authoring, contract separation, and package rejection cases inform focused successor fixtures.
+packages/authoring/test/ruleset-materialization.test.ts	excluded	none	docs/gameplay-rules-contract.md	RPG-specific builders, schemas, content patches, catalogs, and semantic tests belong to Rusty D20 or another downstream domain.
+packages/authoring/test/ruleset-packages.test.ts	evidence	isolated rules contract fixtures	docs/gameplay-rules-contract.md	Immutable authoring, contract separation, and package rejection cases inform focused successor fixtures.
+packages/authoring/test/test-ruleset.ts	excluded	none	docs/gameplay-rules-contract.md	RPG-specific builders, schemas, content patches, catalogs, and semantic tests belong to Rusty D20 or another downstream domain.
+packages/authoring/test/type-contracts.ts	excluded	none	docs/gameplay-rules-contract.md	RPG-specific builders, schemas, content patches, catalogs, and semantic tests belong to Rusty D20 or another downstream domain.
+packages/authoring/tsconfig.json	excluded	none	docs/gameplay-rules-contract.md	RPG semantics, runtime or product topology, generated output, and repository scaffolding are not part of the semantic-neutral support surface.
+packages/ir/README.md	excluded	none	docs/gameplay-rules-contract.md	The universal formula, predicate, program, operation, reference, and generated RPG vocabulary are explicitly excluded.
+packages/ir/dist/generated-vocabulary.d.ts	excluded	none	docs/gameplay-rules-contract.md	The universal formula, predicate, program, operation, reference, and generated RPG vocabulary are explicitly excluded.
+packages/ir/dist/generated-vocabulary.d.ts.map	excluded	none	docs/gameplay-rules-contract.md	The universal formula, predicate, program, operation, reference, and generated RPG vocabulary are explicitly excluded.
+packages/ir/dist/generated-vocabulary.js	excluded	none	docs/gameplay-rules-contract.md	The universal formula, predicate, program, operation, reference, and generated RPG vocabulary are explicitly excluded.
+packages/ir/dist/generated-vocabulary.js.map	excluded	none	docs/gameplay-rules-contract.md	The universal formula, predicate, program, operation, reference, and generated RPG vocabulary are explicitly excluded.
+packages/ir/dist/index.d.ts	excluded	none	docs/gameplay-rules-contract.md	The universal formula, predicate, program, operation, reference, and generated RPG vocabulary are explicitly excluded.
+packages/ir/dist/index.d.ts.map	excluded	none	docs/gameplay-rules-contract.md	The universal formula, predicate, program, operation, reference, and generated RPG vocabulary are explicitly excluded.
+packages/ir/dist/index.js	excluded	none	docs/gameplay-rules-contract.md	The universal formula, predicate, program, operation, reference, and generated RPG vocabulary are explicitly excluded.
+packages/ir/dist/index.js.map	excluded	none	docs/gameplay-rules-contract.md	The universal formula, predicate, program, operation, reference, and generated RPG vocabulary are explicitly excluded.
+packages/ir/package.json	excluded	none	docs/gameplay-rules-contract.md	The universal formula, predicate, program, operation, reference, and generated RPG vocabulary are explicitly excluded.
+packages/ir/src/generated-vocabulary.ts	excluded	none	docs/gameplay-rules-contract.md	The universal formula, predicate, program, operation, reference, and generated RPG vocabulary are explicitly excluded.
+packages/ir/src/index.ts	excluded	none	docs/gameplay-rules-contract.md	The universal formula, predicate, program, operation, reference, and generated RPG vocabulary are explicitly excluded.
+packages/ir/tsconfig.json	excluded	none	docs/gameplay-rules-contract.md	The universal formula, predicate, program, operation, reference, and generated RPG vocabulary are explicitly excluded.
+scripts/check-authoring-boundary.mjs	adapted	isolated rules boundary gate	docs/gameplay-rules-contract.md	The isolated authoring boundary-check pattern is retained without donor package topology or governance machinery.
+scripts/check-authoring-boundary.test.mjs	evidence	isolated rules boundary gate	docs/gameplay-rules-contract.md	Positive and negative boundary-check proof informs the successor gate.
+scripts/check-governance.mjs	excluded	none	docs/gameplay-rules-contract.md	Donor governance and change-amplification tooling is not part of the bounded support surface.
+scripts/check-governance.test.mjs	excluded	none	docs/gameplay-rules-contract.md	Donor governance and change-amplification tooling is not part of the bounded support surface.
+scripts/generate-ir-vocabulary.mjs	adapted	small Rust-owned contract export	docs/gameplay-rules-contract.md	Only the checked generated-contract drift pattern is retained; the donor RPG operation and capability vocabulary is excluded.
+scripts/report-change-amplification.mjs	excluded	none	docs/gameplay-rules-contract.md	Donor governance and change-amplification tooling is not part of the bounded support surface.
+scripts/report-change-amplification.test.mjs	excluded	none	docs/gameplay-rules-contract.md	Donor governance and change-amplification tooling is not part of the bounded support surface.
+tsconfig.base.json	excluded	none	docs/gameplay-rules-contract.md	Donor repository governance, workspace, dependency, and build topology are not Engine runtime behavior.
+tsconfig.test.json	excluded	none	docs/gameplay-rules-contract.md	Donor repository governance, workspace, dependency, and build topology are not Engine runtime behavior.

@@ -30,6 +30,7 @@ paths:
 | Document | Purpose |
 |---|---|
 | [inspection-and-diagnostics.md](inspection-and-diagnostics.md) | Read-only inspection contract |
+| [gameplay-rules-contract.md](gameplay-rules-contract.md) | Optional semantic-neutral rules package, resolution, provenance, and diagnostics contract |
 | [rendering-successor-contract.md](rendering-successor-contract.md) | Shared renderer transfer and ownership contract |
 | [rendering-operations.md](rendering-operations.md) | Renderer verification and operational limits |
 | [studio-migration-contract.md](studio-migration-contract.md) | Studio parity and owner-adoption contract |
@@ -69,6 +70,7 @@ tests take precedence when describing implemented behavior.
 | Find the crate or package that owns a behavior | [agent-code-atlas.md](agent-code-atlas.md) |
 | Change entity components or atomic entity mutation | [Entity state and state machines](code-map/entity-state-and-state-machines.md) |
 | Change stats, tracks, effects, items, equipment, damage, or restoration | [Gameplay mechanics](code-map/gameplay-mechanics.md) |
+| Package a downstream-authored rules candidate without giving Engine its meaning | [Optional gameplay rules contract](gameplay-rules-contract.md) |
 | Check active provider limitations and scheduled certification | [Known limitations](known-limitations.md) |
 | Change voxel collision, navigation, motion, or edits | [Spatial mechanisms](code-map/spatial-mechanisms.md) |
 | Change a stored asset, scene, prefab, or import | [Content, assets, and scenes](code-map/content-assets-and-scenes.md) |
