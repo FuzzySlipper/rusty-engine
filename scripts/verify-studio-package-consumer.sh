@@ -48,6 +48,12 @@ packages:
   - "."
 
 allowBuilds:
+  "@parcel/watcher": true
+  esbuild: true
+  less: true
+  lmdb: true
+  msgpackr-extract: true
+  nx: true
   "@rusty-engine/render-contracts@https://codeload.github.com/FuzzySlipper/rusty-engine/tar.gz/${ENGINE_REVISION}#path:render/packages/render-contracts": true
   "@rusty-engine/render-projection@https://codeload.github.com/FuzzySlipper/rusty-engine/tar.gz/${ENGINE_REVISION}#path:render/packages/render-projection": true
   "@rusty-engine/renderer-host@https://codeload.github.com/FuzzySlipper/rusty-engine/tar.gz/${ENGINE_REVISION}#path:render/packages/renderer-host": true
