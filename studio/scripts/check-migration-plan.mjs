@@ -66,6 +66,37 @@ if (demoSource.cargoPackage !== 'loading-bay-game' || demoSource.adapterBinary !
   throw new Error('Studio integration adapter identity changed without an explicit product decision');
 }
 
+const voxelSource = JSON.parse(readText(
+  process.env.STUDIO_VOXEL_SOURCE ?? 'voxel-consumer-source.json',
+));
+if (voxelSource.schemaVersion !== 1) throw new Error('unsupported voxel consumer source schema');
+if (voxelSource.repository !== 'FuzzySlipper/rusty-engine-voxels') {
+  throw new Error('Studio voxel integration must target the public canonical voxel repository');
+}
+if (voxelSource.publicRepository !== 'https://github.com/FuzzySlipper/rusty-engine-voxels') {
+  throw new Error('Studio voxel integration public repository changed without an explicit decision');
+}
+for (const field of ['commit', 'engineCommit']) {
+  if (!/^[0-9a-f]{40}$/.test(voxelSource[field])) {
+    throw new Error(`Studio voxel integration ${field} must be an exact Git revision`);
+  }
+}
+if (voxelSource.projectFile !== 'content/projects/voxel-lab.project.json') {
+  throw new Error('Studio voxel consumer project changed without an explicit product decision');
+}
+if (voxelSource.runtimeReport !== 'evidence/initial-animated-voxel-report.json') {
+  throw new Error('Studio voxel runtime evidence changed without an explicit product decision');
+}
+if (voxelSource.qualityReport !== 'evidence/high-fidelity-animated-voxel-report.json') {
+  throw new Error('Studio voxel quality evidence changed without an explicit product decision');
+}
+if (
+  voxelSource.cargoPackage !== 'rusty-engine-voxels'
+  || voxelSource.adapterBinary !== 'rusty-engine-voxels-studio-adapter'
+) {
+  throw new Error('Studio voxel integration adapter identity changed without an explicit decision');
+}
+
 const inventory = readTsv(process.env.STUDIO_DONOR_INVENTORY ?? 'donor-inventory.tsv', 'mode\tblob\tpath');
 if (inventory.length !== source.trackedFileCount) {
   throw new Error(`expected ${source.trackedFileCount} donor files, found ${inventory.length}`);
@@ -160,6 +191,22 @@ const workflowPinMarkers = [
 for (const marker of workflowPinMarkers) {
   if (!integrationWorkflow.includes(marker)) {
     throw new Error(`Studio integration workflow does not use the declared demo pin: ${marker}`);
+  }
+}
+
+const voxelIntegrationWorkflow = readText(
+  process.env.STUDIO_VOXEL_INTEGRATION_WORKFLOW
+    ?? '../.github/workflows/studio-voxel-integration.yml',
+);
+const voxelWorkflowPinMarkers = [
+  "readFileSync('studio/voxel-consumer-source.json'",
+  'repository: ${{ steps.voxel-consumer.outputs.repository }}',
+  'ref: ${{ steps.voxel-consumer.outputs.revision }}',
+  './scripts/verify-studio-voxel-integration.sh',
+];
+for (const marker of voxelWorkflowPinMarkers) {
+  if (!voxelIntegrationWorkflow.includes(marker)) {
+    throw new Error(`Studio voxel workflow does not use the declared consumer pin: ${marker}`);
   }
 }
 

@@ -1,0 +1,106 @@
+name: studio-voxel-integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'studio/voxel-consumer-source.json'
+      - 'studio/libs/adapter-client/**'
+      - 'studio/libs/editor-shell/**'
+      - 'studio/libs/voxel-editor/**'
+      - 'studio/libs/viewport/**'
+      - 'studio/apps/studio-app/**'
+      - 'studio/package.json'
+      - 'studio/pnpm-lock.yaml'
+      - 'studio/pnpm-workspace.yaml'
+      - 'studio/playwright.config.ts'
+      - 'studio/voxel-consumer.playwright.config.ts'
+      - 'studio/scripts/studio-host.ts'
+      - 'studio/test/voxel-consumer-browser/**'
+      - 'render/packages/renderer-host/**'
+      - 'scripts/verify-studio-voxel-integration.sh'
+      - '.github/workflows/studio-voxel-integration.yml'
+  pull_request:
+    paths:
+      - 'studio/voxel-consumer-source.json'
+      - 'studio/libs/adapter-client/**'
+      - 'studio/libs/editor-shell/**'
+      - 'studio/libs/voxel-editor/**'
+      - 'studio/libs/viewport/**'
+      - 'studio/apps/studio-app/**'
+      - 'studio/package.json'
+      - 'studio/pnpm-lock.yaml'
+      - 'studio/pnpm-workspace.yaml'
+      - 'studio/playwright.config.ts'
+      - 'studio/voxel-consumer.playwright.config.ts'
+      - 'studio/scripts/studio-host.ts'
+      - 'studio/test/voxel-consumer-browser/**'
+      - 'render/packages/renderer-host/**'
+      - 'scripts/verify-studio-voxel-integration.sh'
+      - '.github/workflows/studio-voxel-integration.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-studio-voxel-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Rusty Engine
+        uses: actions/checkout@v4
+
+      - name: Read the reviewed voxel consumer pin
+        id: voxel-consumer
+        run: |
+          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import { readFileSync } from 'node:fs';
+          const pin = JSON.parse(readFileSync('studio/voxel-consumer-source.json', 'utf8'));
+          if (
+            pin.schemaVersion !== 1
+            || pin.repository !== 'FuzzySlipper/rusty-engine-voxels'
+            || pin.publicRepository !== 'https://github.com/FuzzySlipper/rusty-engine-voxels'
+          ) {
+            throw new Error('studio/voxel-consumer-source.json has an unsupported repository identity');
+          }
+          for (const field of ['commit', 'engineCommit']) {
+            if (typeof pin[field] !== 'string' || !/^[0-9a-f]{40}$/.test(pin[field])) {
+              throw new Error(`${field} must name one exact public commit`);
+            }
+          }
+          console.log(`repository=${pin.repository}`);
+          console.log(`revision=${pin.commit}`);
+          NODE
+
+      - name: Check out exact voxel consumer
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.voxel-consumer.outputs.repository }}
+          ref: ${{ steps.voxel-consumer.outputs.revision }}
+          path: rusty-engine-voxels
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.89
+        with:
+          components: clippy, rustfmt
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: studio/pnpm-lock.yaml
+
+      - name: Install isolated Studio dependencies
+        run: pnpm --dir studio install --frozen-lockfile
+
+      - name: Install Chromium for the explicit browser integration gate
+        run: pnpm --dir studio exec playwright install --with-deps chromium
+
+      - name: Verify exact animated-voxel consumer integration
+        run: ./scripts/verify-studio-voxel-integration.sh "$GITHUB_WORKSPACE/rusty-engine-voxels"

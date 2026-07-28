@@ -56,8 +56,9 @@ Schema 1 stores every frame as a complete canonical sparse arrangement. This is 
 old VoxelForge model stored a base plus per-frame set/remove overrides, which is useful evidence that
 delta storage can work. It did not provide measurements for the converted animated corpus this
 pipeline will use. Full frames make validation, random access, preview, load failure, and runtime
-resolution local and obvious. M12H will measure real artifacts before a delta, reference, or packed
-schema is justified. The public resolved-frame meaning does not depend on the storage choice.
+resolution local and obvious. M12H has now measured complete-frame artifacts at two resolutions;
+the public resolved-frame meaning still does not depend on that storage choice, and the measured
+corpus does not yet justify making a more complicated encoding authoritative.
 
 The generic content store recognizes voxel objects as durable asset data and can encode their
 canonical owner bytes. It does not decide a product path, scene attachment, playback, or collision
@@ -336,6 +337,45 @@ filesystem/project-schema adapters remain downstream; `rusty-engine-voxels` owns
 experiment adapter and its exact pinned Chromium/save/reopen proof. That proof is an explicit
 cross-repository dependency rather than an ordinary sibling-checkout requirement.
 
+## M12H runtime-consumer and quality closeout
+
+[`studio/voxel-consumer-source.json`](../../../studio/voxel-consumer-source.json) pins the public
+`rusty-engine-voxels` consumer at
+`f315ccb8cbf9614abbe745acf9324201ae5b159f`. That consumer in turn pins the public Engine provider at
+`ef9af77932a83dc3c441ef5f1eef9b752e16de6e`; five Cargo dependencies, its provider source record,
+and its checked reports must agree on that exact revision. The explicit
+[`verify-studio-voxel-integration.sh`](../../../scripts/verify-studio-voxel-integration.sh) gate
+accepts only a clean checkout at that consumer revision. It runs the downstream Rust and protocol
+gates, copies content into a disposable project root, drives the normal adapter through current
+Studio and Chromium, and confirms that neither the reviewed checkout nor durable project bytes
+change.
+
+The checked Kenney retro-character corpus converts `idle`, `run`, and `jump` at 6 Hz. The baseline
+24 × 36 × 24 object stores 15 frames over 14 unique meshes in 656,537 canonical bytes. The
+96 × 144 × 96 comparison stores the same temporal content in 12,758,243 canonical bytes, resolves
+5,061,696 bytes of cells, and produces an estimated 34,541,208-byte unique CPU mesh payload. One
+unoptimized local observation measured 8.81 seconds for high-fidelity conversion and 2.60 seconds
+for admission plus meshing. A 512-swap Rust projection probe averaged 6.31 microseconds and emitted
+89 bytes per ordinary frame selection because admitted meshes and renderer resources are reused.
+These timings are observations, not CI thresholds.
+
+Exact source timestamps are compared with their stored voxel poses using bounds, centroid, foot
+anchor, consecutive-pose continuity, loop seam, palette identity, and a deterministic 32 × 32
+front silhouette. Minimum high-fidelity source/voxel silhouette overlap is 0.921 for `idle`, 0.905
+for `jump`, and 0.910 for `run`; all checked frames retain the same material slot. Chromium then
+proves that the saved default pose and consecutive `run` poses produce different canvas pixels,
+and exercises named selection, repeat, pause stability, resume, once-to-terminal, restore, and
+fresh reopen through the shared renderer. The adapter separately rejects missing and corrupt object
+files, while the Rust runtime proves the stable default collision hash is unchanged by visible
+playback.
+
+The evidence is deliberately bounded. It covers one CC0 humanoid and one material, uses a stylized
+6 Hz cadence, and stores complete poses without interpolation. Conservative surface coverage
+thickens sub-cell features. The high-fidelity result is an offline quality target rather than a
+recommended hot-reload default. Rust CPU time and retained payload bytes are measured, while
+Chromium reports end-to-end renderer acknowledgement only: the public renderer does not expose GPU
+timer queries or driver VRAM, so no isolated GPU-time or exact VRAM claim is made.
+
 ## Implementation schedule
 
 Den parent task `rusty-engine#6234` owns the campaign:
@@ -350,6 +390,9 @@ Den parent task `rusty-engine#6234` owns the campaign:
 | #6240 | Runtime admission, meshing, projection, and playback | #6235 |
 | #6241 | Complete Studio object/flipbook authoring | #6239 and #6240 |
 | #6242 | Exact-revision runtime consumer and quality/performance closeout | #6241 |
+
+The schedule is complete through #6242. The table remains as dependency history, not an active
+implementation queue.
 
 The fork after #6235 is deliberate: renderer/runtime work could prove a hand-authored object while
 import and voxelization improved independently. Animated conversion then joined accurate geometry

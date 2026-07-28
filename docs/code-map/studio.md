@@ -11,7 +11,7 @@ viewport, and its closed external-project adapter protocol.
 - Adapter client protocol, viewport integration, voxel editor, user settings,
   and Studio-owned host services.
 - Studio migration accounting and explicit owner-adoption evidence.
-- Browser and explicit external-demo integration gates.
+- Browser and explicit external-demo and voxel-consumer integration gates.
 
 ## Does not own
 
@@ -55,10 +55,11 @@ viewport, and its closed external-project adapter protocol.
 ```bash
 ./scripts/verify-studio.sh
 ./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo
+./scripts/verify-studio-voxel-integration.sh /absolute/path/to/rusty-engine-voxels
 ```
 
-The first command proves isolated Studio behavior. The second explicitly proves
-the current cross-repository adapter and browser workflow.
+The first command proves isolated Studio behavior. The other commands explicitly prove the current
+cross-repository demo workflow and the pinned animated-voxel runtime/quality workflow.
 
 ## Common agent mistakes
 
@@ -75,3 +76,5 @@ the current cross-repository adapter and browser workflow.
   [Renderer workspace and hosts](renderer-workspace-and-hosts.md).
 - Loading-bay product behavior belongs in the external `rusty-engine-demo`
   repository.
+- Voxel experiment content, quality reports, and adapter policy belong in the external
+  `rusty-engine-voxels` repository.

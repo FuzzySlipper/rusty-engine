@@ -5,6 +5,27 @@ architecture boundaries are stated separately so agents do not “fix” them by
 introducing a second authority. Product-specific limitations belong to their
 downstream repositories.
 
+## Animated voxel corpus breadth and GPU accounting
+
+- **Status:** accepted-temporary
+- **Affected surface:** `voxel-convert`, `voxel-object-runtime`, retained voxel-object rendering,
+  and the explicit Studio voxel-consumer integration
+- **Limitation:** The checked quality/performance corpus is one CC0 humanoid with one material and
+  three clips sampled at a stylized 6 Hz. Schema 1 stores complete poses. The renderer exposes
+  successful frame acknowledgement but not GPU timer queries or driver-reported VRAM.
+- **Impact:** The 96 × 144 × 96 quality target is 12,758,243 canonical bytes, has an estimated
+  34,541,208-byte unique CPU mesh payload, and took roughly 2.60 seconds to admit and mesh in one
+  unoptimized local observation. It is not an interactive conversion default. End-to-end Chromium
+  acknowledgement must not be reported as isolated GPU time, and CPU payload estimates must not be
+  reported as exact VRAM.
+- **Detection:** `./scripts/verify-studio-voxel-integration.sh
+  /absolute/path/to/the-exact-rusty-engine-voxels-checkout` validates the pinned reports, stable
+  collision, missing/corrupt rejection, and real Chromium playback. The source pin is
+  `studio/voxel-consumer-source.json`.
+- **Follow-up:** Add materially different licensed corpora and simultaneous-instance measurements
+  before choosing delta/reference storage, another cadence default, or renderer GPU instrumentation.
+- **Last reviewed:** 2026-07-27 / codex
+
 ## Gameplay mechanics awaits Rusty D20 GM7 reconciliation
 
 - **Status:** accepted-temporary

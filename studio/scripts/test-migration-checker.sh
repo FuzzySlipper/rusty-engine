@@ -38,6 +38,15 @@ if STUDIO_DEMO_SOURCE="$TASK_TMP/floating-demo-source.json" \
 fi
 grep -q 'demo commit must be an exact Git revision' "$TASK_TMP/output"
 
+sed -E 's/"engineCommit": "[0-9a-f]{40}"/"engineCommit": "main"/' \
+  "$STUDIO_ROOT/voxel-consumer-source.json" > "$TASK_TMP/floating-voxel-source.json"
+if STUDIO_VOXEL_SOURCE="$TASK_TMP/floating-voxel-source.json" \
+  node "$STUDIO_ROOT/scripts/check-migration-plan.mjs" > "$TASK_TMP/output" 2>&1; then
+  echo "Studio migration checker accepted a floating voxel Engine revision" >&2
+  exit 1
+fi
+grep -q 'engineCommit must be an exact Git revision' "$TASK_TMP/output"
+
 sed "s#readFileSync('studio/demo-consumer-source.json'#readFileSync('studio/floating-source.json'#" \
   "$STUDIO_ROOT/../.github/workflows/studio-demo-integration.yml" \
   > "$TASK_TMP/floating-workflow.yml"
@@ -47,5 +56,15 @@ if STUDIO_INTEGRATION_WORKFLOW="$TASK_TMP/floating-workflow.yml" \
   exit 1
 fi
 grep -q 'Studio integration workflow does not use the declared demo pin' "$TASK_TMP/output"
+
+sed "s#readFileSync('studio/voxel-consumer-source.json'#readFileSync('studio/floating-voxel-source.json'#" \
+  "$STUDIO_ROOT/../.github/workflows/studio-voxel-integration.yml" \
+  > "$TASK_TMP/floating-voxel-workflow.yml"
+if STUDIO_VOXEL_INTEGRATION_WORKFLOW="$TASK_TMP/floating-voxel-workflow.yml" \
+  node "$STUDIO_ROOT/scripts/check-migration-plan.mjs" > "$TASK_TMP/output" 2>&1; then
+  echo "Studio migration checker accepted a voxel workflow disconnected from its reviewed pin" >&2
+  exit 1
+fi
+grep -q 'Studio voxel workflow does not use the declared consumer pin' "$TASK_TMP/output"
 
 echo "Studio migration checker negative probes passed"

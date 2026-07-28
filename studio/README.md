@@ -89,3 +89,15 @@ previews, and canonical restoration. CI
 checks out the exact public demo revision declared in
 [`demo-consumer-source.json`](demo-consumer-source.json). Local integration remains explicit so the
 ordinary Engine and isolated Studio gates never acquire a sibling-checkout dependency.
+
+Animated voxel-object runtime and quality proof uses a separate public consumer and pin:
+
+```bash
+./scripts/verify-studio-voxel-integration.sh /absolute/path/to/rusty-engine-voxels
+```
+
+[`voxel-consumer-source.json`](voxel-consumer-source.json) names the exact consumer and Engine
+revisions plus the baseline runtime and high-fidelity quality reports. The gate accepts only a clean
+checkout, copies its content into a disposable project root, and drives normal Entity-inspector
+playback through Chromium and the shared renderer. It does not make the voxel experiment an
+ordinary Studio dependency or give Studio ownership of the downstream project schema.

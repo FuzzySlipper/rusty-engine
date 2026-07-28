@@ -194,6 +194,12 @@ not the Angular shell, implements the resulting camera movement, boost, pan, orb
 - `.github/workflows/studio-demo-integration.yml` checks out the public demo at the exact revision
   declared by `studio/demo-consumer-source.json` and runs that proof as an explicit integration
   gate. The pin makes downstream drift a conscious update instead of an ambient sibling checkout.
+- `./scripts/verify-studio-voxel-integration.sh /absolute/path/to/rusty-engine-voxels` separately
+  accepts only the exact public revision declared by `studio/voxel-consumer-source.json`. It checks
+  the consumer's exact Engine pin and runtime/quality reports, then drives saved-pose, named-clip,
+  repeat, pause/resume, once, restore, and reopen behavior through current Studio and the shared
+  renderer in Chromium. `.github/workflows/studio-voxel-integration.yml` reproduces the same clean
+  checkout; ordinary Studio and provider gates do not inspect a sibling voxel repository.
 
 Ordinary `./scripts/verify.sh` remains Rust/shell-only and does not inspect, build, or require a
 sibling demo checkout.

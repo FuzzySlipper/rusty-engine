@@ -542,6 +542,22 @@ candidate optimization lesson, while Rusty Engine voxel-object schema 1 delibera
 canonical frames until the animated corpus supplies size and load measurements. VoxelForge's C#
 object graph, Assimp dependency, MCP/bridge services, editor session, and renderer are excluded.
 
-The current contract and task ordering are documented in
-[voxel-model-conversion.md](../topics/voxel/voxel-model-conversion.md). Future source/algorithm transfers, fixtures,
-licenses, replacements, and exclusions discovered by #6236-#6242 must be appended here as they land.
+The current contract and completed task ordering are documented in
+[voxel-model-conversion.md](../topics/voxel/voxel-model-conversion.md).
+
+#6242 transfers no Asha or VoxelForge implementation. The public downstream
+`rusty-engine-voxels` revision `f315ccb8cbf9614abbe745acf9324201ae5b159f` composes the exact public
+Engine revision `ef9af77932a83dc3c441ef5f1eef9b752e16de6e` and owns project paths, schedules,
+collision policy, adapter schema, and checked reports. Its source corpus is Kenney's CC0
+`Animated Characters 1` retro-character GLB with the adjacent license retained in that consumer.
+The Engine repository retains only the exact source pin, the explicit clean-checkout integration
+gate, browser workflow, and summarized measurements; it does not copy the model, generated object,
+or downstream adapter.
+
+That closeout measures complete-frame schema 1 rather than importing VoxelForge's delta storage:
+the checked high-fidelity object is 12,758,243 bytes with a 34,541,208-byte estimated unique CPU
+mesh payload and roughly 2.60-second unoptimized admission/meshing observation. This is sufficient
+to record a real cost and practical limit, but one humanoid corpus does not justify transferring
+VoxelForge's C# override graph, Assimp integration, editor session, bridge services, or renderer.
+Asha RuntimeSession, replay/provider/project-bundle structure, browser paths in Rust, and collision
+derived from each visible pose remain excluded.
