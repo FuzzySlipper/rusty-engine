@@ -902,7 +902,8 @@ test('HTTP transport bounds both directions and leaves semantic decoding to the 
     text: async () => JSON.stringify({
       ok: false,
       code: 'studio_adapter_response_too_large',
-      message: 'Studio adapter response is 67108865 bytes; the protocol limit is 67108864 bytes',
+      message: 'Studio adapter response exceeded the 67108864-byte protocol limit '
+        + 'after receiving 67108865 bytes',
       limitBytes: 67_108_864,
       actualBytes: 67_108_865,
     }),
@@ -913,7 +914,7 @@ test('HTTP transport bounds both directions and leaves semantic decoding to the 
       protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
       requestId: 'typed-host-failure',
     }),
-    /response is 67108865 bytes; the protocol limit is 67108864 bytes/u,
+    /response exceeded the 67108864-byte protocol limit after receiving 67108865 bytes/u,
   );
 });
 

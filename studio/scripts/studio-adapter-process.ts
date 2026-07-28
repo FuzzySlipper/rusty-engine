@@ -9,6 +9,8 @@ const MAX_ADAPTER_STDERR_BYTES = 64 * 1024;
 interface PendingExchange {
   readonly resolve: (line: string) => void;
   readonly reject: (error: Error) => void;
+  readonly finish: () => void;
+  responseSettled: boolean;
 }
 
 export class StudioAdapterResponseLimitError extends Error {
@@ -19,8 +21,8 @@ export class StudioAdapterResponseLimitError extends Error {
     readonly actualBytes: number,
   ) {
     super(
-      `Studio adapter response is ${String(actualBytes)} bytes; `
-      + `the protocol limit is ${String(limitBytes)} bytes`,
+      `Studio adapter response exceeded the ${String(limitBytes)}-byte protocol limit `
+      + `after receiving ${String(actualBytes)} bytes`,
     );
     this.name = 'StudioAdapterResponseLimitError';
   }
@@ -30,9 +32,11 @@ export class StudioAdapterResponseLimitError extends Error {
  * Own one serial JSONL adapter process.
  *
  * The response bound is a liveness guard: a wedged adapter must not grow the
- * host heap forever while the host waits for a newline. An oversized complete
- * line fails only that exchange. Its bytes are drained without retention so a
- * conforming next request can continue on the same child process.
+ * host heap forever while the host waits for a newline. An oversized line
+ * rejects its caller as soon as the bound is crossed, while its remaining
+ * bytes are drained without retention before the serial queue writes another
+ * request. This preserves response attribution and keeps a conforming child
+ * available for the next exchange.
  */
 export class AdapterProcess {
   readonly #child: ChildProcessWithoutNullStreams;
@@ -67,22 +71,43 @@ export class AdapterProcess {
   }
 
   exchange(requestLine: string): Promise<string> {
-    const exchange = this.#serial.then(() => this.#exchangeOne(requestLine));
-    this.#serial = exchange.then(() => undefined, () => undefined);
-    return exchange;
+    let resolveResponse!: (line: string) => void;
+    let rejectResponse!: (error: Error) => void;
+    const response = new Promise<string>((resolvePromise, rejectPromise) => {
+      resolveResponse = resolvePromise;
+      rejectResponse = rejectPromise;
+    });
+    const lifecycle = this.#serial.then(
+      () => this.#exchangeOne(requestLine, resolveResponse, rejectResponse),
+    );
+    this.#serial = lifecycle.then(() => undefined, () => undefined);
+    return response;
   }
 
   close(): void {
     if (!this.#child.stdin.destroyed) this.#child.stdin.end();
   }
 
-  #exchangeOne(requestLine: string): Promise<string> {
-    if (this.#closedError !== null) return Promise.reject(this.#closedError);
-    if (this.#pending !== null) {
-      return Promise.reject(new Error('Studio adapter exchange overlap'));
+  #exchangeOne(
+    requestLine: string,
+    resolveResponse: (line: string) => void,
+    rejectResponse: (error: Error) => void,
+  ): Promise<void> {
+    if (this.#closedError !== null) {
+      rejectResponse(this.#closedError);
+      return Promise.resolve();
     }
-    return new Promise((resolvePromise, rejectPromise) => {
-      this.#pending = { resolve: resolvePromise, reject: rejectPromise };
+    if (this.#pending !== null) {
+      rejectResponse(new Error('Studio adapter exchange overlap'));
+      return Promise.resolve();
+    }
+    return new Promise((finish) => {
+      this.#pending = {
+        resolve: resolveResponse,
+        reject: rejectResponse,
+        finish,
+        responseSettled: false,
+      };
       this.#child.stdin.write(`${requestLine}\n`, (error) => {
         if (error !== null && error !== undefined) this.#fail(error);
       });
@@ -110,16 +135,27 @@ export class AdapterProcess {
       return;
     }
     if (chunk.byteLength !== newline + 1) {
-      pending.reject(new Error('Studio adapter emitted more than one response'));
-      this.#fail(new Error('Studio adapter emitted more than one response'));
+      const error = new Error('Studio adapter emitted more than one response');
+      if (!pending.responseSettled) {
+        pending.responseSettled = true;
+        pending.reject(error);
+      }
+      pending.finish();
+      this.#fail(error);
       this.#child.kill();
       return;
     }
     if (oversized) {
-      pending.reject(new StudioAdapterResponseLimitError(this.#responseByteLimit, actualBytes));
+      if (!pending.responseSettled) {
+        pending.responseSettled = true;
+        pending.reject(new StudioAdapterResponseLimitError(this.#responseByteLimit, actualBytes));
+      }
+      pending.finish();
       return;
     }
+    pending.responseSettled = true;
     pending.resolve((responseBytes as Buffer).toString('utf8').replace(/\r$/, ''));
+    pending.finish();
   }
 
   #retainResponseBytes(bytes: Buffer): void {
@@ -128,6 +164,14 @@ export class AdapterProcess {
     if (this.#responseByteCount > this.#responseByteLimit) {
       this.#discardingOversizedResponse = true;
       this.#responseChunks = [];
+      const pending = this.#pending;
+      if (pending !== null && !pending.responseSettled) {
+        pending.responseSettled = true;
+        pending.reject(new StudioAdapterResponseLimitError(
+          this.#responseByteLimit,
+          this.#responseByteCount,
+        ));
+      }
       return;
     }
     this.#responseChunks.push(bytes);
@@ -143,6 +187,12 @@ export class AdapterProcess {
     if (this.#closedError === null) this.#closedError = error;
     const pending = this.#pending;
     this.#pending = null;
-    pending?.reject(error);
+    if (pending !== null) {
+      if (!pending.responseSettled) {
+        pending.responseSettled = true;
+        pending.reject(error);
+      }
+      pending.finish();
+    }
   }
 }
