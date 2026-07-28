@@ -450,6 +450,30 @@
                 <small class="owner-note">Viewport drags commit on release; changing selection settles pending edits first. Revert is explicit. Every commit is hash- and revision-guarded by Rust, then canonically reread.</small>
               }
             </section>
+            @if (selectedEntityComponentReferences().length > 0) {
+              <section
+                class="inspector-section"
+                data-visual-id="entity-component-identities"
+              >
+                <header><strong>Components</strong><span>canonical identities</span></header>
+                @for (
+                  reference of selectedEntityComponentReferences();
+                  track reference.componentTypeId
+                ) {
+                  <dl class="identity-grid">
+                    <dt>Component</dt><dd>{{ reference.componentTypeId }}</dd>
+                    <dt>Inspector</dt>
+                    <dd>
+                      @if (reference.inspectorContract; as contract) {
+                        {{ contract.contractId }} v{{ contract.contractVersion }}
+                      } @else {
+                        identity only · read-only
+                      }
+                    </dd>
+                  </dl>
+                }
+              </section>
+            }
             @if (store.selectedVoxelObjectInstance(); as voxelObjectInstance) {
               <section class="inspector-section" data-visual-id="entity-voxel-object-component">
                 <header><strong>Voxel Object</strong><span>typed entity capability</span></header>
@@ -524,7 +548,7 @@
     <span>{{ state().connection.message }}</span>
     <span class="spacer"></span>
     @if (state().authoringDocument; as document) {
-      <span>{{ document.domain.voxelEnvironment }}</span>
+      <span>{{ document.sceneHierarchy.name ?? document.identity.entryScene }}</span>
       <span>{{ document.identity.currentSchemaVersion === document.identity.sourceSchemaVersion ? 'current schema' : 'migrated schema' }}</span>
       <span>Y-up</span>
     } @else {

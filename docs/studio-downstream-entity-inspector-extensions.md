@@ -1,13 +1,14 @@
 # Typed downstream Entity inspector extensions
 
-Status: **proposed architecture decision pending review and implementation**
+Status: **accepted architecture; protocol 10 identity envelope implemented, static outlet pending**
 
 Decision task: Den `rusty-engine#6300`
 
-This proposal defines the smallest boundary by which a downstream Rust project can put one of its
-own entity components in Rusty Engine Studio's Entity inspector. It does not describe an implemented
-extension API. The current protocol and hard-coded inspector remain authoritative until the ordered
-follow-up tasks land and pass review.
+This decision defines the smallest boundary by which a downstream Rust project can put one of its
+own entity components in Rusty Engine Studio's Entity inspector. Protocol 10 now implements the
+bounded identity envelope and removes the fixed Loading Bay summary. The inspector outlet, host
+mutation lease, built-in Voxel Object migration, and downstream panel remain ordered follow-ups
+until their own tasks land and pass review.
 
 ## Decision
 
@@ -34,11 +35,11 @@ Rust component and project schema.
 
 ## Why the current shape needs a boundary
 
-Protocol 9 and the current shell proved that entity-owned component controls are much easier to find
-than controls buried in a domain workflow. They also expose two kinds of central coupling:
+Protocol 9 and the pre-extension shell proved that entity-owned component controls are much easier
+to find than controls buried in a domain workflow. They also expose two kinds of central coupling:
 
-- `StudioProjectReadout` contains a fixed `loadingBay` domain summary even though Loading Bay is an
-  external product.
+- `StudioProjectReadout` contained a fixed `loadingBay` domain summary even though Loading Bay is an
+  external product. Protocol 10 removed it.
 - The Entity inspector template names Voxel Object, Renderer Appearance, Collision, and Kinematic
   directly. Adding a downstream Weapon, Door, Encounter, or other component would require another
   Engine template and protocol edit.
@@ -113,7 +114,8 @@ interface StudioProjectReadout {
 }
 ```
 
-The core decoder validates and bounds this envelope. It does not interpret either identity string.
+The protocol 10 core decoder validates and bounds this envelope. It does not interpret either
+identity string.
 The Rust project adapter must additionally prove that:
 
 - every `ownerEntityId` exists in the canonical entity inspection and hierarchy vocabulary;
@@ -145,10 +147,10 @@ impossible.
 
 ### Loading Bay extraction
 
-The next protocol revision should remove the fixed `loadingBay` field from the core
-`StudioProjectReadout`. Its summary and future domain readouts move to a Loading Bay-owned closed
-contract and client. The migration is a deliberate version cut: adapters adopt the new core version
-and downstream contract together, with no long-lived compatibility alias in Engine.
+Protocol 10 removed the fixed `loadingBay` field from the core `StudioProjectReadout`. Its summary
+and future domain readouts belong to a Loading Bay-owned closed contract and client. The migration
+is a deliberate version cut: adapters adopt the new core version and downstream contract together,
+with no long-lived compatibility alias in Engine.
 
 Voxel Object authoring remains a core protocol family because conversion, canonical object assets,
 runtime admission, playback, and projection are reusable Engine mechanisms. Moving its panel behind
@@ -398,9 +400,9 @@ Implementation is deliberately ordered so the generic seam follows the real seco
 1. **Freeze the downstream contract after GM6.** Audit the actual Loading Bay weapon component and
    durable project schema, implement or specify its two named Rust operations and closed readout,
    and provide fixtures without changing Engine.
-2. **Revise the core identity envelope.** Add bounded adapter contract advertisement and entity
-   component references, migrate the fixed Loading Bay summary out of the core readout, and preserve
-   unknown components as identity-only rows.
+2. **Revise the core identity envelope.** Protocol 10 adds bounded adapter contract advertisement
+   and entity component references, migrates the fixed Loading Bay summary out of the core readout,
+   and preserves unknown components as identity-only rows. Implemented by `rusty-engine#6302`.
 3. **Add static host composition.** Introduce the explicit contribution input/outlet and mutation
    settlement port, then move Voxel Object behind it without behavior loss.
 4. **Adopt from Loading Bay.** Build the downstream application composition root and Weapon panel,

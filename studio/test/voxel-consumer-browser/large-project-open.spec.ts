@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { STUDIO_ADAPTER_PROTOCOL_VERSION } from '@rusty-engine/studio-adapter-client';
 
 const projectRoot = requiredEnvironment('RUSTY_STUDIO_PROJECT_ROOT');
 const largeProjectFile = requiredEnvironment('RUSTY_STUDIO_LARGE_PROJECT_FILE');
@@ -73,7 +74,7 @@ async function measureBrowserControlParse(page: Page): Promise<{
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         type: 'openProject',
-        protocolVersion: 9,
+        protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
         requestId: 'high-fidelity-browser-measurement',
         root,
         projectFile,

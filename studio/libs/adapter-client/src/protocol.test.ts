@@ -5,7 +5,15 @@ import {
   StudioAdapterClient,
   StudioAdapterDecodeError,
   StudioAdapterOperationRejected,
+  MAX_STUDIO_ENTITY_COMPONENT_REFERENCES,
+  MAX_STUDIO_ENTITY_COMPONENTS_PER_OWNER,
+  MAX_STUDIO_ENTITY_INSPECTOR_CONTRACTS,
+  MAX_STUDIO_ENTITY_INSPECTOR_IDENTITY_BYTES,
   STUDIO_ADAPTER_PROTOCOL_VERSION,
+  STUDIO_ADAPTER_OPERATIONS,
+  VOXEL_OBJECT_COMPONENT_TYPE_ID,
+  VOXEL_OBJECT_INSPECTOR_CONTRACT_ID,
+  VOXEL_OBJECT_INSPECTOR_CONTRACT_VERSION,
   decodeStudioAdapterResponse,
   type StudioAdapterRequest,
   type StudioAdapterTransport,
@@ -99,6 +107,242 @@ test('rejects unknown response families, extra fields, and malformed renderer fr
   assert.throws(
     () => decodeStudioAdapterResponse(malformedMeshResource),
     /content-addressed mesh resource/u,
+  );
+});
+
+test('decodes bounded identity-only component references and rejects malformed ownership', () => {
+  const response = projectOpened('components-1');
+  setCanonicalOwners(response, [17]);
+  response.project.entityComponents = [
+    {
+      ownerEntityId: 17,
+      componentTypeId: 'rusty-engine-demo.loading-bay.weapon',
+      inspectorContract: {
+        contractId: 'rusty-engine-demo.loading-bay.weapon-authoring',
+        contractVersion: 1,
+      },
+    },
+    {
+      ownerEntityId: 17,
+      componentTypeId: 'vendor.runtime-only-observation',
+      inspectorContract: null,
+    },
+  ];
+
+  const decoded = decodeStudioAdapterResponse(response);
+  assert.equal(decoded.type, 'projectOpened');
+  assert.equal(
+    decoded.type === 'projectOpened'
+      ? decoded.project.entityComponents[1]?.inspectorContract
+      : undefined,
+    null,
+    'unknown components remain visible as identity-only rows',
+  );
+
+  const duplicate = structuredClone(response);
+  duplicate.project.entityComponents.push(entityComponentAt(duplicate, 0));
+  assert.throws(
+    () => decodeStudioAdapterResponse(duplicate),
+    /duplicates an entity\/component reference/u,
+  );
+
+  const absentFromInspection = structuredClone(response);
+  entityStateInspection(absentFromInspection)['entityIds'] = [];
+  assert.throws(
+    () => decodeStudioAdapterResponse(absentFromInspection),
+    /absent from canonical entity inspection/u,
+  );
+
+  const absentFromHierarchy = structuredClone(response);
+  absentFromHierarchy.project.sceneHierarchy.nodes = [];
+  assert.throws(
+    () => decodeStudioAdapterResponse(absentFromHierarchy),
+    /absent from the canonical scene hierarchy/u,
+  );
+
+  const extraField = structuredClone(response);
+  entityComponentAt(extraField, 0)['fieldSchema'] = {};
+  assert.throws(
+    () => decodeStudioAdapterResponse(extraField),
+    /fieldSchema.*unknown/u,
+  );
+});
+
+test('validates inspector contract advertisement and version consistency across responses', async () => {
+  const contract = {
+    contractId: 'rusty-engine-demo.loading-bay.weapon-authoring',
+    contractVersion: 1,
+  };
+  const transport = new RecordingTransport((request) => {
+    if (request.type === 'describe') {
+      return described(request.requestId, [contract]);
+    }
+    if (request.type !== 'openProject') throw new Error('unexpected operation');
+    const opened = projectOpened(request.requestId);
+    setCanonicalOwners(opened, [17]);
+    opened.project.entityComponents = [{
+      ownerEntityId: 17,
+      componentTypeId: 'rusty-engine-demo.loading-bay.weapon',
+      inspectorContract: contract,
+    }];
+    return opened;
+  });
+  const client = new StudioAdapterClient(transport);
+
+  await client.describe();
+  const opened = await client.openProject('/trusted/project', 'project.json');
+  assert.equal(opened.project.entityComponents[0]?.inspectorContract?.contractVersion, 1);
+
+  const mismatchedTransport = new RecordingTransport((request) => {
+    if (request.type === 'describe') {
+      return described(request.requestId, [contract]);
+    }
+    if (request.type !== 'openProject') throw new Error('unexpected operation');
+    const openedResponse = projectOpened(request.requestId);
+    setCanonicalOwners(openedResponse, [17]);
+    openedResponse.project.entityComponents = [{
+      ownerEntityId: 17,
+      componentTypeId: 'rusty-engine-demo.loading-bay.weapon',
+      inspectorContract: { ...contract, contractVersion: 2 },
+    }];
+    return openedResponse;
+  });
+  const mismatchedClient = new StudioAdapterClient(mismatchedTransport);
+  await mismatchedClient.describe();
+  await assert.rejects(
+    mismatchedClient.openProject('/trusted/project', 'project.json'),
+    /not advertised by the current adapter with the same version/u,
+  );
+
+  const undescribed = projectOpened('undescribed-contract');
+  setCanonicalOwners(undescribed, [17]);
+  undescribed.project.entityComponents = [{
+    ownerEntityId: 17,
+    componentTypeId: 'vendor.component',
+    inspectorContract: contract,
+  }];
+  const undescribedClient = new StudioAdapterClient(
+    new RecordingTransport((request) => ({
+      ...undescribed,
+      requestId: request.requestId,
+    })),
+  );
+  await assert.rejects(
+    undescribedClient.openProject('/trusted/project', 'project.json'),
+    /require a prior described adapter/u,
+  );
+});
+
+test('enforces exact identity, contract, total reference, and per-owner limits', () => {
+  const identityAtLimit = `a${'b'.repeat(MAX_STUDIO_ENTITY_INSPECTOR_IDENTITY_BYTES - 1)}`;
+  const identityOneOver = `${identityAtLimit}c`;
+  const exactContractDescription = described(
+    'contracts-exact',
+    Array.from({ length: MAX_STUDIO_ENTITY_INSPECTOR_CONTRACTS }, (_, index) => ({
+      contractId: `contract.${String(index)}`,
+      contractVersion: 1,
+    })),
+  );
+  assert.equal(decodeStudioAdapterResponse(exactContractDescription).type, 'described');
+  const tooManyContracts = structuredClone(exactContractDescription);
+  tooManyContracts.adapter.entityInspectorContracts.push({
+    contractId: 'contract.one-over',
+    contractVersion: 1,
+  });
+  assert.throws(
+    () => decodeStudioAdapterResponse(tooManyContracts),
+    /at most 64 contracts/u,
+  );
+
+  const invalidVersion = described('contracts-version', [{
+    contractId: 'contract.zero',
+    contractVersion: 0,
+  }]);
+  assert.throws(
+    () => decodeStudioAdapterResponse(invalidVersion),
+    /contractVersion.*positive/u,
+  );
+
+  const duplicateContract = described('contracts-duplicate', [
+    { contractId: 'contract.same', contractVersion: 1 },
+    { contractId: 'contract.same', contractVersion: 1 },
+  ]);
+  assert.throws(
+    () => decodeStudioAdapterResponse(duplicateContract),
+    /duplicates an advertised inspector contract/u,
+  );
+
+  const invalidContractField = described('contracts-closed', [{
+    contractId: 'contract.closed',
+    contractVersion: 1,
+    moduleUrl: 'https://invalid.example/plugin.js',
+  }]);
+  assert.throws(
+    () => decodeStudioAdapterResponse(invalidContractField),
+    /moduleUrl.*unknown/u,
+  );
+
+  const ownerCount = Math.ceil(
+    MAX_STUDIO_ENTITY_COMPONENT_REFERENCES / MAX_STUDIO_ENTITY_COMPONENTS_PER_OWNER,
+  );
+  const owners = Array.from({ length: ownerCount + 1 }, (_, index) => index + 1);
+  const exactReferences = projectOpened('references-exact');
+  setCanonicalOwners(exactReferences, owners);
+  exactReferences.project.entityComponents = Array.from(
+    { length: MAX_STUDIO_ENTITY_COMPONENT_REFERENCES },
+    (_, index) => ({
+      ownerEntityId: Math.floor(index / MAX_STUDIO_ENTITY_COMPONENTS_PER_OWNER) + 1,
+      componentTypeId: `component.${String(index)}`,
+      inspectorContract: null,
+    }),
+  );
+  entityComponentAt(exactReferences, 0)['componentTypeId'] = identityAtLimit;
+  assert.equal(decodeStudioAdapterResponse(exactReferences).type, 'projectOpened');
+
+  const identityTooLong = structuredClone(exactReferences);
+  entityComponentAt(identityTooLong, 0)['componentTypeId'] = identityOneOver;
+  assert.throws(
+    () => decodeStudioAdapterResponse(identityTooLong),
+    /1\.\.=128 ASCII bytes/u,
+  );
+
+  const badIdentitySyntax = structuredClone(exactReferences);
+  entityComponentAt(badIdentitySyntax, 0)['componentTypeId'] = 'Rust.Component';
+  assert.throws(
+    () => decodeStudioAdapterResponse(badIdentitySyntax),
+    /lowercase ASCII letter/u,
+  );
+
+  const tooManyReferences = structuredClone(exactReferences);
+  tooManyReferences.project.entityComponents.push({
+    ownerEntityId: owners.at(-1) as number,
+    componentTypeId: 'component.one-over',
+    inspectorContract: null,
+  });
+  assert.throws(
+    () => decodeStudioAdapterResponse(tooManyReferences),
+    /at most 4096 references/u,
+  );
+
+  const perOwnerExact = projectOpened('per-owner-exact');
+  setCanonicalOwners(perOwnerExact, [1]);
+  perOwnerExact.project.entityComponents = Array.from(
+    { length: MAX_STUDIO_ENTITY_COMPONENTS_PER_OWNER },
+    (_, index) => ({
+      ownerEntityId: 1,
+      componentTypeId: `component.${String(index)}`,
+      inspectorContract: null,
+    }),
+  );
+  assert.equal(decodeStudioAdapterResponse(perOwnerExact).type, 'projectOpened');
+  perOwnerExact.project.entityComponents.push({
+    ownerEntityId: 1,
+    componentTypeId: 'component.one-over',
+    inspectorContract: null,
+  });
+  assert.throws(
+    () => decodeStudioAdapterResponse(perOwnerExact),
+    /exceeds 32 component references/u,
   );
 });
 
@@ -370,6 +614,7 @@ test('protocol 9 keeps entity-owned voxel objects, applied playback, and durable
   );
 
   const project = projectOpened('object-project-1');
+  setCanonicalOwners(project, [17]);
   project.project.voxelObjectAuthoring.assets = [voxelObjectAssetReadout()];
   project.project.voxelObjectAuthoring.instances = [{
     sceneId: 'scene/loading-bay',
@@ -382,6 +627,14 @@ test('protocol 9 keeps entity-owned voxel objects, applied playback, and durable
       rotation: [0, 0, 0, 1],
       scale: [1, 1, 1],
       materialOverrides: [],
+    },
+  }];
+  project.project.entityComponents = [{
+    ownerEntityId: 17,
+    componentTypeId: VOXEL_OBJECT_COMPONENT_TYPE_ID,
+    inspectorContract: {
+      contractId: VOXEL_OBJECT_INSPECTOR_CONTRACT_ID,
+      contractVersion: VOXEL_OBJECT_INSPECTOR_CONTRACT_VERSION,
     },
   }];
   assert.equal(decodeStudioAdapterResponse(project).type, 'projectOpened');
@@ -617,19 +870,7 @@ function projectOpened(requestId: string): ProjectOpenedFixture {
         instances: [],
       },
       animatedMeshResources: [],
-      loadingBay: {
-        sceneName: 'Loading Bay',
-        entityCount: 8,
-        doorCount: 1,
-        switchCount: 1,
-        enemyCount: 2,
-        encounterCount: 1,
-        extractionBeaconCount: 1,
-        navigatorCount: 1,
-        playerControllerCount: 1,
-        weaponCount: 1,
-        voxelEnvironment: 'generatedRoom',
-      },
+      entityComponents: [],
       projection: {
         schemaVersion: 1,
         ops: [],
@@ -686,7 +927,7 @@ interface ProjectOpenedFixture {
     };
     animatedMeshResources: unknown[];
     meshResources?: unknown[];
-    loadingBay: Record<string, string | number>;
+    entityComponents: Array<Record<string, unknown>>;
     projection: { schemaVersion: number; ops: unknown[] };
     projectionReadout: {
       frameKind: string;
@@ -697,6 +938,75 @@ interface ProjectOpenedFixture {
       retainedVoxelChunks: number;
       diagnostics: unknown[];
     };
+  };
+}
+
+function described(
+  requestId: string,
+  entityInspectorContracts: Array<Record<string, unknown>> = [],
+) {
+  return {
+    type: 'described',
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+    requestId,
+    adapter: {
+      adapterId: 'fixture.adapter',
+      adapterVersion: 1,
+      protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+      projectKind: 'fixtureProject',
+      projectSchemaVersion: 1,
+      operations: STUDIO_ADAPTER_OPERATIONS,
+      entityInspectorContracts,
+    },
+  };
+}
+
+function setCanonicalOwners(
+  response: ProjectOpenedFixture,
+  owners: readonly number[],
+): void {
+  const entityState = entityStateInspection(response);
+  entityState['entityCount'] = owners.length;
+  entityState['entityIds'] = [...owners];
+  response.project.sceneHierarchy.rootNodeIds = [...owners];
+  response.project.sceneHierarchy.nodes = owners.map((ownerEntityId, index) => ({
+    nodeId: ownerEntityId,
+    parentNodeId: null,
+    childOrder: index,
+    displayOrder: index,
+    depth: 0,
+    nodeKind: 'entityInstance',
+    label: `Owner ${String(ownerEntityId)}`,
+    tags: [],
+    asset: null,
+    entityId: ownerEntityId,
+    localTransform: identityTransform(),
+    worldTransform: identityTransform(),
+  }));
+}
+
+function entityStateInspection(
+  response: ProjectOpenedFixture,
+): Record<string, unknown> {
+  const entityState = response.project.inspections['entityState'];
+  assert.ok(entityState !== undefined);
+  return entityState;
+}
+
+function entityComponentAt(
+  response: ProjectOpenedFixture,
+  index: number,
+): Record<string, unknown> {
+  const reference = response.project.entityComponents[index];
+  assert.ok(reference !== undefined);
+  return reference;
+}
+
+function identityTransform() {
+  return {
+    translation: [0, 0, 0],
+    rotation: [0, 0, 0, 1],
+    scale: [1, 1, 1],
   };
 }
 

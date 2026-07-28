@@ -1,6 +1,6 @@
 # Studio external-project adapter protocol
 
-Status: protocol 9 Engine surface implemented; downstream adapters adopt versions deliberately
+Status: protocol 10 Engine surface implemented; downstream adapters adopt versions deliberately
 
 Rusty Engine Studio talks to one project-owned Rust adapter at a time through a bounded JSON-lines
 process. The adapter is a downstream composition root: it understands that project's layout,
@@ -13,7 +13,7 @@ against a real external checkout without turning that checkout into an ordinary 
 
 ## Closed protocol
 
-Every request carries `protocolVersion: 9` and a caller-selected `requestId`. Version 9 contains
+Every request carries `protocolVersion: 10` and a caller-selected `requestId`. Version 10 contains
 only these tagged request families:
 
 | Request | Purpose | Canonical authority |
@@ -79,7 +79,7 @@ Opening `content/projects/loading-bay.project.json` exercises the shipped Engine
 - `render-projection` and `render-model` own the renderer-neutral retained frame.
 
 The adapter returns the canonical project, catalog, scene, entity-state, and content-manifest codec
-results alongside inspection DTOs, Loading Bay's explicitly named domain summary, voxel inspection,
+results alongside inspection DTOs, voxel inspection, bounded entity-component identity references,
 an authored-scene hierarchy readout, and the shared render frame. Hierarchy order, node identity,
 parentage, kind, and local/world transforms are produced in Rust. Every response carries a complete
 frame, including resource definitions, so Studio can atomically replace the shared renderer channel.
@@ -136,11 +136,18 @@ Entity inspector; the conversion panel remains responsible for source inspection
 canonical asset publication, and instance attachment. This is one explicit built-in capability,
 not a universal component-description or arbitrary command protocol.
 
-The proposed successor for other downstream components is documented in
+Protocol 10 implements the identity half of the downstream component seam documented in
 [`studio-downstream-entity-inspector-extensions.md`](studio-downstream-entity-inspector-extensions.md).
-It is not part of protocol 9. The proposal keeps the core protocol limited to bounded owner,
-component, and inspector-contract identity; downstream values and mutations remain in separately
-closed product-owned contracts composed statically by the downstream Studio host.
+`AdapterDescription.entityInspectorContracts` advertises bounded exact contract identities, while
+`StudioProjectReadout.entityComponents` attributes stable component and optional contract identity
+to canonical hierarchy/entity-state owners. The decoder bounds identities to 128 ASCII bytes,
+advertisements to 64, total references to 4096, and references per owner to 32. It rejects
+duplicates, orphan owners, malformed identities, non-positive versions, unadvertised contracts,
+and Voxel Object instances missing their exact built-in component reference. Unknown components
+without an inspector contract remain admitted as read-only identity. Component values, schemas,
+revisions, UI metadata, mutation payloads, module locations, and executable handles remain outside
+the core protocol; downstream values and mutations use separately closed product-owned contracts
+composed statically by the downstream Studio host.
 
 ## Safety and atomicity
 

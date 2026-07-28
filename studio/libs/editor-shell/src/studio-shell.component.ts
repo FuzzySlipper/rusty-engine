@@ -14,6 +14,7 @@ import type {
   AssetEntryReadout,
   OwnerDiagnostic,
   StoredLight,
+  StudioEntityComponentReference,
   StudioSceneAppearance,
 } from '@rusty-engine/studio-adapter-client';
 import type { EditorGridDescriptor, Transform } from '@rusty-engine/render-contracts';
@@ -130,6 +131,16 @@ export class StudioShellComponent {
       (candidate) => candidate.nodeId === node.parentNodeId,
     );
     return parent === undefined ? null : composeTransform(parent.worldTransform, local);
+  });
+  readonly selectedEntityComponentReferences = computed<
+    readonly StudioEntityComponentReference[]
+  >(() => {
+    const snapshot = this.state();
+    const entityId = snapshot.selection.entityId;
+    if (entityId === null) return [];
+    return (snapshot.authoringDocument?.entityComponents ?? []).filter(
+      (reference) => reference.ownerEntityId === entityId,
+    );
   });
   readonly transformSnapping = computed<StudioTransformSnapping>(() => ({
     enabled: this.state().settings.snappingEnabled,

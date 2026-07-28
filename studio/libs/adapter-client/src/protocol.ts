@@ -57,12 +57,21 @@ import {
 export type * from './voxel-protocol.js';
 export type * from './voxel-object-protocol.js';
 
-export const STUDIO_ADAPTER_PROTOCOL_VERSION = 9 as const;
+export const STUDIO_ADAPTER_PROTOCOL_VERSION = 10 as const;
 // Requests remain compact control-plane commands. Responses include complete
 // retained-frame readouts; 64 MiB admits the checked 96x144x96 voxel-object
 // corpus while retaining a finite host/browser liveness guard.
 export const MAX_STUDIO_ADAPTER_REQUEST_BYTES = 256 * 1024;
 export const MAX_STUDIO_ADAPTER_RESPONSE_BYTES = 64 * 1024 * 1024;
+export const MAX_STUDIO_ENTITY_INSPECTOR_IDENTITY_BYTES = 128;
+export const MAX_STUDIO_ENTITY_INSPECTOR_CONTRACTS = 64;
+export const MAX_STUDIO_ENTITY_COMPONENT_REFERENCES = 4_096;
+export const MAX_STUDIO_ENTITY_COMPONENTS_PER_OWNER = 32;
+
+export const VOXEL_OBJECT_COMPONENT_TYPE_ID = 'rusty.voxel-object.instance';
+export const VOXEL_OBJECT_INSPECTOR_CONTRACT_ID =
+  'rusty.studio.voxel-object-authoring';
+export const VOXEL_OBJECT_INSPECTOR_CONTRACT_VERSION = 1;
 
 export type StudioAdapterRequest =
   | DescribeRequest
@@ -884,6 +893,18 @@ export interface AdapterDescription {
   readonly projectKind: string;
   readonly projectSchemaVersion: number;
   readonly operations: typeof STUDIO_ADAPTER_OPERATIONS;
+  readonly entityInspectorContracts: readonly StudioEntityInspectorContractIdentity[];
+}
+
+export interface StudioEntityInspectorContractIdentity {
+  readonly contractId: string;
+  readonly contractVersion: number;
+}
+
+export interface StudioEntityComponentReference {
+  readonly ownerEntityId: number;
+  readonly componentTypeId: string;
+  readonly inspectorContract: StudioEntityInspectorContractIdentity | null;
 }
 
 export interface StudioProjectReadout {
@@ -899,7 +920,7 @@ export interface StudioProjectReadout {
   /** Optional protocol-9 extension. Its manifest and packed byte encoding are
    * independently versioned, so existing inline adapters remain valid. */
   readonly meshResources?: readonly MeshResourceReadout[];
-  readonly loadingBay: LoadingBayDomainReadout;
+  readonly entityComponents: readonly StudioEntityComponentReference[];
   readonly projection: RenderFrameDiff;
   readonly projectionReadout: ProjectionReadout;
 }
@@ -1108,20 +1129,6 @@ export interface PersistenceInspection {
     readonly path: string;
   }[];
   readonly diagnostics: DiagnosticSet;
-}
-
-export interface LoadingBayDomainReadout {
-  readonly sceneName: string;
-  readonly entityCount: number;
-  readonly doorCount: number;
-  readonly switchCount: number;
-  readonly enemyCount: number;
-  readonly encounterCount: number;
-  readonly extractionBeaconCount: number;
-  readonly navigatorCount: number;
-  readonly playerControllerCount: number;
-  readonly weaponCount: number;
-  readonly voxelEnvironment: string;
 }
 
 export type ProjectionFrameKind = 'complete' | 'incremental';
@@ -1441,6 +1448,7 @@ function adapterDescription(input: unknown, path: string): void {
     'projectKind',
     'projectSchemaVersion',
     'operations',
+    'entityInspectorContracts',
   ]);
   text(value['adapterId'], `${path}.adapterId`);
   integer(value['adapterVersion'], `${path}.adapterVersion`);
@@ -1452,8 +1460,71 @@ function adapterDescription(input: unknown, path: string): void {
   );
   const expected = STUDIO_ADAPTER_OPERATIONS;
   if (operations.length !== expected.length || operations.some((entry, index) => entry !== expected[index])) {
-    fail(`${path}.operations`, 'must name the protocol 9 operation set in order');
+    fail(`${path}.operations`, 'must name the protocol 10 operation set in order');
   }
+  inspectorContracts(
+    value['entityInspectorContracts'],
+    `${path}.entityInspectorContracts`,
+  );
+}
+
+function inspectorContracts(
+  input: unknown,
+  path: string,
+): readonly StudioEntityInspectorContractIdentity[] {
+  const entries = list(input, path);
+  if (entries.length > MAX_STUDIO_ENTITY_INSPECTOR_CONTRACTS) {
+    fail(
+      path,
+      `must contain at most ${String(MAX_STUDIO_ENTITY_INSPECTOR_CONTRACTS)} contracts`,
+    );
+  }
+  const identities = entries.map((entry, index) =>
+    inspectorContractIdentity(entry, `${path}[${String(index)}]`),
+  );
+  const seen = new Set<string>();
+  for (const [index, identity] of identities.entries()) {
+    const key = inspectorContractKey(identity);
+    if (seen.has(key)) {
+      fail(`${path}[${String(index)}]`, 'duplicates an advertised inspector contract');
+    }
+    seen.add(key);
+  }
+  return identities;
+}
+
+function inspectorContractIdentity(
+  input: unknown,
+  path: string,
+): StudioEntityInspectorContractIdentity {
+  const value = record(input, path, ['contractId', 'contractVersion']);
+  const contractId = stableInspectorIdentity(value['contractId'], `${path}.contractId`);
+  const contractVersion = integer(value['contractVersion'], `${path}.contractVersion`);
+  if (contractVersion === 0) {
+    fail(`${path}.contractVersion`, 'must be a positive safe integer');
+  }
+  return { contractId, contractVersion };
+}
+
+function stableInspectorIdentity(input: unknown, path: string): string {
+  const value = text(input, path);
+  if (value.length === 0 || value.length > MAX_STUDIO_ENTITY_INSPECTOR_IDENTITY_BYTES) {
+    fail(
+      path,
+      `must contain 1..=${String(MAX_STUDIO_ENTITY_INSPECTOR_IDENTITY_BYTES)} ASCII bytes`,
+    );
+  }
+  if (!/^[a-z][a-z0-9._-]*$/u.test(value)) {
+    fail(
+      path,
+      'must start with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, dot, underscore, or hyphen',
+    );
+  }
+  return value;
+}
+
+function inspectorContractKey(identity: StudioEntityInspectorContractIdentity): string {
+  return `${identity.contractId}\u0000${String(identity.contractVersion)}`;
 }
 
 function projectReadout(input: unknown, path: string): void {
@@ -1469,7 +1540,7 @@ function projectReadout(input: unknown, path: string): void {
       'voxelAuthoring',
       'voxelObjectAuthoring',
       'animatedMeshResources',
-      'loadingBay',
+      'entityComponents',
       'projection',
       'projectionReadout',
     ],
@@ -1490,7 +1561,7 @@ function projectReadout(input: unknown, path: string): void {
     ));
   animatedMeshResources(value['animatedMeshResources'], `${path}.animatedMeshResources`);
   optional(value['meshResources'], `${path}.meshResources`, meshResources);
-  loadingBayReadout(value['loadingBay'], `${path}.loadingBay`);
+  entityComponentReferences(value, path);
   try {
     decodeRenderFrameDiff(value['projection']);
   } catch (error) {
@@ -1500,6 +1571,129 @@ function projectReadout(input: unknown, path: string): void {
     );
   }
   projectionReadout(value['projectionReadout'], `${path}.projectionReadout`);
+}
+
+function entityComponentReferences(
+  project: Readonly<Record<string, unknown>>,
+  path: string,
+): void {
+  const references = list(project['entityComponents'], `${path}.entityComponents`);
+  if (references.length > MAX_STUDIO_ENTITY_COMPONENT_REFERENCES) {
+    fail(
+      `${path}.entityComponents`,
+      `must contain at most ${String(MAX_STUDIO_ENTITY_COMPONENT_REFERENCES)} references`,
+    );
+  }
+
+  const inspections = project['inspections'] as OwnerInspections;
+  const hierarchy = project['sceneHierarchy'] as SceneHierarchyReadout;
+  const knownInspectionOwners = new Set(inspections.entityState.entityIds);
+  const knownHierarchyOwners = new Set(
+    hierarchy.nodes.flatMap((node) => node.entityId === null ? [] : [node.entityId]),
+  );
+  const seen = new Set<string>();
+  const perOwner = new Map<number, number>();
+  const decoded: StudioEntityComponentReference[] = [];
+
+  references.forEach((entry, index) => {
+    const entryPath = `${path}.entityComponents[${String(index)}]`;
+    const value = record(entry, entryPath, [
+      'ownerEntityId',
+      'componentTypeId',
+      'inspectorContract',
+    ]);
+    const ownerEntityId = integer(value['ownerEntityId'], `${entryPath}.ownerEntityId`);
+    const componentTypeId = stableInspectorIdentity(
+      value['componentTypeId'],
+      `${entryPath}.componentTypeId`,
+    );
+    const inspectorContract = value['inspectorContract'] === null
+      ? null
+      : inspectorContractIdentity(
+          value['inspectorContract'],
+          `${entryPath}.inspectorContract`,
+        );
+    const key = `${String(ownerEntityId)}\u0000${componentTypeId}`;
+    if (seen.has(key)) {
+      fail(entryPath, 'duplicates an entity/component reference');
+    }
+    seen.add(key);
+
+    const ownerCount = (perOwner.get(ownerEntityId) ?? 0) + 1;
+    if (ownerCount > MAX_STUDIO_ENTITY_COMPONENTS_PER_OWNER) {
+      fail(
+        entryPath,
+        `owner ${String(ownerEntityId)} exceeds ${String(MAX_STUDIO_ENTITY_COMPONENTS_PER_OWNER)} component references`,
+      );
+    }
+    perOwner.set(ownerEntityId, ownerCount);
+    if (!knownInspectionOwners.has(ownerEntityId)) {
+      fail(`${entryPath}.ownerEntityId`, 'is absent from canonical entity inspection');
+    }
+    if (!knownHierarchyOwners.has(ownerEntityId)) {
+      fail(`${entryPath}.ownerEntityId`, 'is absent from the canonical scene hierarchy');
+    }
+    decoded.push({ ownerEntityId, componentTypeId, inspectorContract });
+  });
+
+  const referenceByOwnerAndType = new Map(
+    decoded.map((reference) => [
+      `${String(reference.ownerEntityId)}\u0000${reference.componentTypeId}`,
+      reference,
+    ]),
+  );
+  const voxelObjectAuthoring = project['voxelObjectAuthoring'] as VoxelObjectAuthoringReadout;
+  for (const [index, instance] of voxelObjectAuthoring.instances.entries()) {
+    const reference = referenceByOwnerAndType.get(
+      `${String(instance.ownerEntityId)}\u0000${VOXEL_OBJECT_COMPONENT_TYPE_ID}`,
+    );
+    if (reference === undefined) {
+      fail(
+        `${path}.voxelObjectAuthoring.instances[${String(index)}].ownerEntityId`,
+        `must have a ${VOXEL_OBJECT_COMPONENT_TYPE_ID} entity component reference`,
+      );
+    }
+    if (
+      reference.inspectorContract?.contractId !== VOXEL_OBJECT_INSPECTOR_CONTRACT_ID
+      || reference.inspectorContract.contractVersion
+        !== VOXEL_OBJECT_INSPECTOR_CONTRACT_VERSION
+    ) {
+      fail(
+        `${path}.entityComponents`,
+        `voxel object owner ${String(instance.ownerEntityId)} must name the exact built-in inspector contract`,
+      );
+    }
+  }
+}
+
+export function validateStudioEntityInspectorCompatibility(
+  adapter: AdapterDescription | null,
+  project: StudioProjectReadout,
+): void {
+  const contracted = project.entityComponents.filter(
+    (reference) => reference.inspectorContract !== null,
+  );
+  if (contracted.length === 0) return;
+  if (adapter === null) {
+    fail(
+      '$.project.entityComponents',
+      'contract-bearing component references require a prior described adapter',
+    );
+  }
+  const advertised = new Set(
+    adapter.entityInspectorContracts.map(inspectorContractKey),
+  );
+  for (const [index, reference] of project.entityComponents.entries()) {
+    if (
+      reference.inspectorContract !== null
+      && !advertised.has(inspectorContractKey(reference.inspectorContract))
+    ) {
+      fail(
+        `$.project.entityComponents[${String(index)}].inspectorContract`,
+        'is not advertised by the current adapter with the same version',
+      );
+    }
+  }
 }
 
 function meshResources(input: unknown, path: string): void {
@@ -1887,24 +2081,6 @@ function diagnosticLocation(input: unknown, path: string): void {
     if (chunk.length !== 3) fail(entryPath, 'must have exactly 3 entries');
     chunk.forEach((coordinate, index) => signedInteger(coordinate, `${entryPath}[${String(index)}]`));
   });
-}
-
-function loadingBayReadout(input: unknown, path: string): void {
-  const textFields = ['sceneName', 'voxelEnvironment'];
-  const countFields = [
-    'entityCount',
-    'doorCount',
-    'switchCount',
-    'enemyCount',
-    'encounterCount',
-    'extractionBeaconCount',
-    'navigatorCount',
-    'playerControllerCount',
-    'weaponCount',
-  ];
-  const value = record(input, path, [...textFields, ...countFields]);
-  for (const field of textFields) text(value[field], `${path}.${field}`);
-  for (const field of countFields) integer(value[field], `${path}.${field}`);
 }
 
 function projectionReadout(

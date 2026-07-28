@@ -1,6 +1,8 @@
 import {
   decodeStudioAdapterResponse,
   STUDIO_ADAPTER_PROTOCOL_VERSION,
+  validateStudioEntityInspectorCompatibility,
+  type AdapterDescription,
   type AdapterRejection,
   type AssetImportDiscardedResponse,
   type AssetImportPreparedResponse,
@@ -57,6 +59,7 @@ export class StudioAdapterOperationRejected extends Error {
 export class StudioAdapterClient {
   readonly #transport: StudioAdapterTransport;
   #nextRequestId = 1;
+  #adapterDescription: AdapterDescription | null = null;
 
   constructor(transport: StudioAdapterTransport) {
     this.#transport = transport;
@@ -489,6 +492,14 @@ export class StudioAdapterClient {
     if (response.type !== expectedType) {
       throw new Error(
         `Studio adapter returned ${response.type} for ${request.type}; expected ${expectedType}`,
+      );
+    }
+    if (response.type === 'described') {
+      this.#adapterDescription = response.adapter;
+    } else if ('project' in response) {
+      validateStudioEntityInspectorCompatibility(
+        this.#adapterDescription,
+        response.project,
       );
     }
     return response as Extract<StudioAdapterResponse, { readonly type: Type }>;

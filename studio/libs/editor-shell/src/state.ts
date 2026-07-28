@@ -5,7 +5,6 @@ import type {
   AssetBrowserReadout,
   AssetImportPlanReadout,
   CanonicalOwnerContent,
-  LoadingBayDomainReadout,
   MeshResourceReadout,
   OwnerInspections,
   ProjectionReadout,
@@ -13,6 +12,7 @@ import type {
   ProjectMutationAppliedResponse,
   SceneHierarchyNodeReadout,
   SceneHierarchyReadout,
+  StudioEntityComponentReference,
   StudioProjectIdentity,
   StudioProjectReadout,
   StudioAssetImportSettings,
@@ -81,7 +81,7 @@ export interface AuthoringDocumentView {
   readonly inspections: OwnerInspections;
   readonly sceneHierarchy: SceneHierarchyReadout;
   readonly assetBrowser: AssetBrowserReadout;
-  readonly domain: LoadingBayDomainReadout;
+  readonly entityComponents: readonly StudioEntityComponentReference[];
   readonly voxel: Readonly<Record<string, unknown>> | null;
   readonly voxelAuthoring: VoxelAuthoringReadout;
   readonly voxelObjectAuthoring: VoxelObjectAuthoringReadout;
@@ -1944,7 +1944,7 @@ export class StudioWorkspaceStore {
         inspections: project.inspections,
         sceneHierarchy: project.sceneHierarchy,
         assetBrowser: project.assetBrowser,
-        domain: project.loadingBay,
+        entityComponents: project.entityComponents,
         voxel: project.voxel ?? null,
         voxelAuthoring: project.voxelAuthoring,
         voxelObjectAuthoring: project.voxelObjectAuthoring,

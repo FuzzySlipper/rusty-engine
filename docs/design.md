@@ -534,7 +534,7 @@ project schema, trusted root, compatibility, and publication policy while compos
 `voxel-annotation`, `voxel-convert`, `content-store`, `engine-inspector`, and render-projection
 mechanisms.
 
-Protocol 9 executes one named request at a time. Reads rebuild canonical owner views. Mutations carry
+Protocol 10 executes one named request at a time. Reads rebuild canonical owner views. Mutations carry
 the accepted project hash plus narrower asset/revision/layer/plan guards, stage a complete candidate,
 rerun downstream admission and renderer projection, atomically publish the project file, and return
 a canonical reread. Voxel history and annotation documents are durable project data; conversion
@@ -547,6 +547,13 @@ Trusted host voxel/mesh/GLB/license paths are explicit, bounded, symlink-checked
 replacement is compare-and-swap guarded. Primitive/template generation, annotation semantics,
 conversion material policy, and deterministic environment generation remain in their Rust owners.
 Rejected or stale operations publish no bytes.
+
+Protocol 10 also carries only bounded identity for downstream entity components: canonical owner
+entity, stable component type, and an optional exact inspector-contract identity advertised by the
+adapter. It contains no component values, field schemas, mutation payloads, UI metadata, module
+locations, or executable handles. Unknown components remain visible and read-only. Product-owned
+typed read/mutation contracts and the statically composed inspector panel remain downstream; Engine
+does not acquire game vocabulary or a generic component bridge.
 
 Applied voxel-object animation is a disposable presentation session, not another authoring model.
 Studio selects a canonical instance and sends closed scrub/play/pause/sample/stop commands with an

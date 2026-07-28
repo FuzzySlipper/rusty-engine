@@ -29,7 +29,7 @@ viewport, and its closed external-project adapter protocol.
 - [`studio/libs/user-settings`](../../studio/libs/user-settings)
 - [Studio migration contract](../studio-migration-contract.md)
 - [Studio adapter protocol](../studio-adapter-protocol.md)
-- [Proposed downstream Entity inspector extensions](../studio-downstream-entity-inspector-extensions.md)
+- [Downstream Entity inspector extensions](../studio-downstream-entity-inspector-extensions.md)
 - [Voxel mesh data plane](../topics/voxel/voxel-mesh-data-plane.md)
 
 ## Public downstream surfaces
@@ -39,9 +39,10 @@ viewport, and its closed external-project adapter protocol.
 - The external consumer is always selected explicitly by an integration
   command; ordinary Engine work never scans a sibling checkout.
 - Renderer packages are consumed through their package roots.
-- The proposed downstream Entity inspector seam is static host composition plus
-  identity-only core metadata. It is not implemented yet; use its ordered Den
-  tasks rather than adding another hard-coded game component to the shell.
+- Protocol 10 implements the bounded identity-only half of the downstream Entity
+  inspector seam. Static host composition and the shared inspector outlet remain
+  the next ordered implementation step; do not add another hard-coded game
+  component to the shell.
 
 ## Private or forbidden paths
 

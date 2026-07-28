@@ -14,6 +14,7 @@ import { isAbsolute, join } from 'node:path';
 import { createInterface } from 'node:readline';
 
 import {
+  STUDIO_ADAPTER_PROTOCOL_VERSION,
   StudioAdapterClient,
   StudioAdapterOperationRejected,
 } from '../../libs/adapter-client/dist/index.js';
@@ -96,7 +97,7 @@ async function main() {
     const animatedEvidence = await verifyAnimatedObjectWorkflow(binary, root);
     process.stdout.write(`${JSON.stringify({
       kind: 'studioVoxelObjectIntegrationEvidence',
-      protocolVersion: 9,
+      protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
       static: staticEvidence,
       animated: animatedEvidence,
     })}\n`);
@@ -659,7 +660,9 @@ async function expectRejection(promise, code) {
 async function withClient(binary, action) {
   const transport = new JsonLineProcessTransport(binary);
   try {
-    return await action(new StudioAdapterClient(transport));
+    const client = new StudioAdapterClient(transport);
+    await client.describe();
+    return await action(client);
   } finally {
     await transport.close();
   }

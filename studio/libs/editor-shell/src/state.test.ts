@@ -1339,6 +1339,7 @@ function described(requestId: string): unknown {
       projectKind: 'loadingBayProject',
       projectSchemaVersion: 11,
       operations: STUDIO_ADAPTER_OPERATIONS,
+      entityInspectorContracts: [],
     },
   };
 }
@@ -1469,19 +1470,7 @@ function projectReadout(changed: boolean, projectId = 'loading-bay') {
       instances: [],
     },
     animatedMeshResources: [],
-    loadingBay: {
-      sceneName: 'Loading Bay',
-      entityCount: 2,
-      doorCount: 0,
-      switchCount: 0,
-      enemyCount: 0,
-      encounterCount: 0,
-      extractionBeaconCount: 0,
-      navigatorCount: 0,
-      playerControllerCount: 1,
-      weaponCount: 1,
-      voxelEnvironment: 'generatedRoom',
-    },
+    entityComponents: [],
     projection: {
       schemaVersion: 1,
       ops: [{

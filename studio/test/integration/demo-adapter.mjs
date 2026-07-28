@@ -129,16 +129,10 @@ async function main() {
     for (const requiredEntityId of [1, 2, 3, 4, 5, 6, 7, 10]) {
       assert.ok(hierarchyEntityIds.includes(requiredEntityId));
     }
-    assert.equal(
-      opened.authoringDocument.domain.entityCount,
-      opened.authoringDocument.inspections.entityState.entityCount,
-    );
-    assert.ok(
-      ['solid', 'material', 'generatedRoom'].includes(
-        opened.authoringDocument.domain.voxelEnvironment,
-      ),
-    );
-    assert.ok(opened.authoringDocument.domain.enemyCount > 0);
+    assert.ok(opened.authoringDocument.entityComponents.length > 0);
+    for (const reference of opened.authoringDocument.entityComponents) {
+      assert.ok(hierarchyEntityIds.includes(reference.ownerEntityId));
+    }
     assert.ok(opened.authoringDocument.voxel.solidVoxelCount > 0);
     assert.ok(opened.liveProjection.frame.ops.length >= 20);
     assert.ok(opened.liveProjection.frame.ops.some(
@@ -458,7 +452,9 @@ async function verifyVoxelPersistenceAcrossProcesses(binary, demoRoot) {
 async function withClient(binary, action) {
   const transport = new JsonLineProcessTransport(binary);
   try {
-    return await action(new StudioAdapterClient(transport));
+    const client = new StudioAdapterClient(transport);
+    await client.describe();
+    return await action(client);
   } finally {
     await transport.close();
   }
