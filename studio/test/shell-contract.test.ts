@@ -4,6 +4,11 @@ import test from 'node:test';
 
 const templateUrl = new URL('../libs/editor-shell/src/studio-shell.component.html', import.meta.url);
 const stateUrl = new URL('../libs/editor-shell/src/state.ts', import.meta.url);
+const inspectorUrl = new URL(
+  '../libs/editor-shell/src/voxel-object-inspector-panel.component.ts',
+  import.meta.url,
+);
+const appUrl = new URL('../apps/studio-app/src/app/app.ts', import.meta.url);
 const viewportUrl = new URL('../libs/viewport/src/studio-viewport.component.ts', import.meta.url);
 
 test('shell exposes the preserved editor surfaces and named parity operations', async () => {
@@ -23,12 +28,22 @@ test('shell exposes the preserved editor surfaces and named parity operations', 
   assert.match(template, /Picking is active directly on the shared renderer canvas/);
   assert.match(template, />Voxel Authoring<\/button>/);
   assert.match(template, /<rusty-voxel-editor/);
-  assert.match(template, /data-visual-id="entity-voxel-object-component"/);
-  assert.match(template, /<rusty-voxel-object-playback/);
+  assert.match(template, /\*ngComponentOutlet/);
+  assert.match(template, /activeEntityInspectorMatches/);
   assert.match(template, /Import Project Asset/);
   assert.match(template, /studio-user-settings-status/);
   assert.match(template, /data-action="toggle-work-light"/);
   assert.match(template, /captureKeyboardBinding/);
+});
+
+test('stock app explicitly composes the built-in Voxel Object inspector contribution', async () => {
+  const inspector = await readFile(inspectorUrl, 'utf8');
+  const app = await readFile(appUrl, 'utf8');
+  assert.match(inspector, /<rusty-voxel-object-playback/);
+  assert.match(inspector, /dataVisualId: 'entity-voxel-object-component'/);
+  assert.match(inspector, /VOXEL_OBJECT_INSPECTOR_CONTRACT_ID/);
+  assert.match(app, /RUSTY_ENGINE_ENTITY_INSPECTOR_CONTRIBUTIONS/);
+  assert.match(app, /\[entityInspectorContributions\]="entityInspectorContributions"/);
 });
 
 test('viewport composes the shared renderer host without private Three ownership', async () => {

@@ -1,3 +1,4 @@
+import { NgComponentOutlet } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -5,6 +6,7 @@ import {
   computed,
   effect,
   inject,
+  input,
   signal,
   viewChild,
   type ElementRef,
@@ -29,11 +31,17 @@ import {
 } from '@rusty-engine/studio-viewport';
 import {
   VoxelEditorComponent,
-  VoxelObjectPlaybackComponent,
   type VoxelBrushPreviewPresentation,
   type VoxelEditorAction,
 } from '@rusty-engine/studio-voxel-editor';
 
+import {
+  admitStudioEntityInspectorContributions,
+  matchStudioEntityInspectorContributions,
+  studioEntityInspectorInstanceKey,
+  type StudioEntityInspectorContribution,
+  type StudioEntityInspectorRenderMatch,
+} from './entity-inspector.js';
 import { composeTransform } from './transform-tools.js';
 
 import { STUDIO_WORKSPACE } from './tokens.js';
@@ -43,6 +51,10 @@ import {
   type StudioHostDirectoryReadout,
   type StudioHostPathRequest,
 } from './transport.js';
+import {
+  STUDIO_VOXEL_OBJECT_INSPECTOR_HOST,
+  type StudioVoxelObjectInspectorHost,
+} from './voxel-object-inspector-panel.component.js';
 
 interface HostPathDialogState {
   readonly request: StudioHostPathRequest;
@@ -69,10 +81,14 @@ interface MeshResourceDescriptor {
   standalone: true,
   imports: [
     FormsModule,
+    NgComponentOutlet,
     StudioViewportComponent,
     VoxelEditorComponent,
-    VoxelObjectPlaybackComponent,
   ],
+  providers: [{
+    provide: STUDIO_VOXEL_OBJECT_INSPECTOR_HOST,
+    useFactory: createStudioVoxelObjectInspectorHost,
+  }],
   templateUrl: './studio-shell.component.html',
   styleUrl: './studio-shell.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -80,6 +96,41 @@ interface MeshResourceDescriptor {
 export class StudioShellComponent {
   readonly store = inject(STUDIO_WORKSPACE);
   readonly state = this.store.snapshot;
+  readonly entityInspectorContributions =
+    input<readonly StudioEntityInspectorContribution[]>([]);
+  readonly admittedEntityInspectorContributions = computed(() =>
+    admitStudioEntityInspectorContributions(this.entityInspectorContributions()));
+  readonly activeEntityInspectorMatches = computed<
+    readonly StudioEntityInspectorRenderMatch[]
+  >(() => {
+    const snapshot = this.state();
+    const entityId = snapshot.selection.entityId;
+    if (
+      snapshot.connection.kind !== 'connected'
+      || snapshot.authoringDocument === null
+      || entityId === null
+    ) {
+      return [];
+    }
+    return matchStudioEntityInspectorContributions(
+      this.admittedEntityInspectorContributions(),
+      snapshot.authoringDocument.entityComponents,
+      snapshot.connection.adapter,
+      entityId,
+    ).flatMap((match) => {
+      const context = this.store.entityInspectorContext(match.reference);
+      return context === null
+        ? []
+        : [{
+            ...match,
+            context,
+            instanceKey: studioEntityInspectorInstanceKey(
+              match.contribution.key,
+              context,
+            ),
+          }];
+    });
+  });
   readonly brushPreview = signal<VoxelBrushPreviewPresentation | null>(null);
   readonly selectedTransformTool = signal<StudioTransformTool | null>(null);
   readonly hostPathDialog = signal<HostPathDialogState | null>(null);
@@ -142,6 +193,10 @@ export class StudioShellComponent {
       (reference) => reference.ownerEntityId === entityId,
     );
   });
+  readonly matchedEntityInspectorComponentTypes = computed(() =>
+    new Set(this.activeEntityInspectorMatches().map(
+      (match) => match.reference.componentTypeId,
+    )));
   readonly transformSnapping = computed<StudioTransformSnapping>(() => ({
     enabled: this.state().settings.snappingEnabled,
     rotationDegrees: this.state().settings.rotationSnapDegrees,
@@ -327,6 +382,15 @@ export class StudioShellComponent {
       if (canonicalRoot !== null) this.projectRoot = canonicalRoot;
       if (relativeProjectFile !== undefined) this.projectFile = relativeProjectFile;
     });
+  }
+
+  inspectorPanelInputs(
+    match: StudioEntityInspectorRenderMatch,
+  ): Record<string, unknown> {
+    return {
+      context: match.context,
+      mutationPort: this.store.entityInspectorMutationPort,
+    };
   }
 
   @HostBinding('class.theme-high-contrast')
@@ -919,6 +983,36 @@ export class StudioShellComponent {
       };
     }
   }
+}
+
+function createStudioVoxelObjectInspectorHost(): StudioVoxelObjectInspectorHost {
+  const store = inject(STUDIO_WORKSPACE);
+  return Object.freeze({
+    read: (ownerEntityId: number) => {
+      const snapshot = store.snapshot();
+      const instance = snapshot.authoringDocument?.voxelObjectAuthoring.instances.find(
+        (candidate) => candidate.ownerEntityId === ownerEntityId,
+      ) ?? null;
+      const asset = instance === null
+        ? null
+        : snapshot.authoringDocument?.voxelObjectAuthoring.assets.find(
+            (candidate) => candidate.assetId === instance.instance.voxelObjectAssetId,
+          ) ?? null;
+      const playback = instance !== null
+        && snapshot.voxelWorkspace.objectPlayback?.instanceId === instance.instance.instanceId
+        ? snapshot.voxelWorkspace.objectPlayback
+        : null;
+      return {
+        instance,
+        asset,
+        playback,
+        busy: snapshot.operation !== 'idle',
+      };
+    },
+    run: (action: VoxelEditorAction) => {
+      void store.runVoxelAction(action);
+    },
+  });
 }
 
 function hostParent(path: string): string {

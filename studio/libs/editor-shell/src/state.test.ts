@@ -15,8 +15,13 @@ import {
   serializeStudioHostUserSettings,
 } from '@rusty-engine/studio-user-settings';
 
+import { StudioEntityInspectorMutationError } from './entity-inspector.js';
 import { StudioWorkspaceStore, type StudioPlaybackTimer } from './state.js';
 import { HttpStudioAdapterTransport } from './transport.js';
+
+const FIXTURE_COMPONENT_TYPE_ID = 'fixture.weapon';
+const FIXTURE_CONTRACT_ID = 'fixture.weapon-authoring';
+const FIXTURE_CONTRACT_VERSION = 1;
 
 test('workspace opens only through the adapter and keeps authority, projection, preview, and selection distinct', async () => {
   const transport = new FixtureTransport();
@@ -132,6 +137,136 @@ test('selection does not change when automatic transform settlement is rejected'
   assert.equal(store.snapshot().selection.entityId, 1);
   assert.deepEqual(store.snapshot().preview?.translation, [1, 2, 99]);
   assert.match(store.snapshot().lastError ?? '', /project\.staleHash/);
+});
+
+test('entity inspector mutation lease serializes edits and accepts only a matching canonical reread', async () => {
+  const transport = new FixtureTransport();
+  transport.readProjectChanged = true;
+  const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
+  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  const context = await selectFixtureInspector(store);
+  const lease = store.entityInspectorMutationPort.acquire(context);
+
+  assert.equal(store.snapshot().operation, 'committing');
+  assert.throws(
+    () => store.entityInspectorMutationPort.acquire(context),
+    (error: unknown) =>
+      error instanceof StudioEntityInspectorMutationError
+      && error.code === 'inspectorMutation.busy',
+  );
+  await store.setEntityCollision(1, { enabled: true, staticCollider: true });
+  assert.equal(
+    transport.requests.some((request) => request.type === 'setEntityCollision'),
+    false,
+    'ordinary core mutation remains serialized behind the downstream lease',
+  );
+
+  const settlement = await lease.settle({
+    beforeProjectHash: 'hash-before',
+    afterProjectHash: 'hash-after',
+  });
+  assert.deepEqual(settlement, { kind: 'accepted', projectHash: 'hash-after' });
+  assert.equal(store.snapshot().authoringDocument?.identity.projectHash, 'hash-after');
+  assert.equal(store.snapshot().operation, 'idle');
+  assert.equal(transport.requests.at(-1)?.type, 'readProject');
+  await assert.rejects(
+    lease.settle({
+      beforeProjectHash: 'hash-before',
+      afterProjectHash: 'hash-after',
+    }),
+    (error: unknown) =>
+      error instanceof StudioEntityInspectorMutationError
+      && error.code === 'inspectorMutation.closed',
+  );
+});
+
+test('entity inspector rejection and hash mismatch preserve the accepted project', async (t) => {
+  await t.test('typed owner rejection', async () => {
+    const transport = new FixtureTransport();
+    const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
+    await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+    const lease = store.entityInspectorMutationPort.acquire(
+      await selectFixtureInspector(store),
+    );
+
+    assert.deepEqual(lease.reject(new Error('weapon policy rejected candidate')), {
+      kind: 'rejected',
+      message: 'weapon policy rejected candidate',
+    });
+    assert.equal(store.snapshot().operation, 'idle');
+    assert.equal(store.snapshot().authoringDocument?.identity.projectHash, 'hash-before');
+    assert.match(store.snapshot().lastError ?? '', /weapon policy rejected candidate/u);
+    assert.equal(transport.requests.at(-1)?.type, 'openProject');
+  });
+
+  await t.test('canonical reread hash mismatch', async () => {
+    const transport = new FixtureTransport();
+    const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
+    await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+    const lease = store.entityInspectorMutationPort.acquire(
+      await selectFixtureInspector(store),
+    );
+
+    await assert.rejects(
+      lease.settle({
+        beforeProjectHash: 'hash-before',
+        afterProjectHash: 'hash-after',
+      }),
+      (error: unknown) =>
+        error instanceof StudioEntityInspectorMutationError
+        && error.code === 'inspectorMutation.hashMismatch',
+    );
+    assert.equal(store.snapshot().operation, 'idle');
+    assert.equal(store.snapshot().authoringDocument?.identity.projectHash, 'hash-before');
+    assert.match(store.snapshot().lastError ?? '', /Canonical project reread/u);
+  });
+});
+
+test('late entity inspector settlement is discarded after selection or project replacement', async (t) => {
+  await t.test('selection generation', async () => {
+    const transport = new FixtureTransport();
+    const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
+    await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+    const lease = store.entityInspectorMutationPort.acquire(
+      await selectFixtureInspector(store),
+    );
+    transport.blockNextProjectRead();
+    const pending = lease.settle({
+      beforeProjectHash: 'hash-before',
+      afterProjectHash: 'hash-after',
+    });
+    await store.selectEntity(2, 'hierarchy');
+    transport.resolveBlockedProjectRead(true);
+
+    assert.deepEqual(await pending, { kind: 'stale' });
+    assert.equal(store.snapshot().selection.entityId, 2);
+    assert.equal(store.snapshot().authoringDocument?.identity.projectHash, 'hash-before');
+    assert.equal(store.snapshot().operation, 'idle');
+  });
+
+  await t.test('project and contract generations', async () => {
+    const transport = new FixtureTransport();
+    const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
+    await store.openProject('/external/loading-bay-a', 'content/projects/loading-bay.project.json');
+    const lease = store.entityInspectorMutationPort.acquire(
+      await selectFixtureInspector(store),
+    );
+    transport.blockNextProjectRead();
+    const pending = lease.settle({
+      beforeProjectHash: 'hash-before',
+      afterProjectHash: 'hash-after',
+    });
+
+    transport.openedProjectId = 'loading-bay-b';
+    await store.openProject('/external/loading-bay-b', 'content/projects/loading-bay.project.json');
+    transport.resolveBlockedProjectRead(true);
+
+    assert.deepEqual(await pending, { kind: 'stale' });
+    assert.equal(store.snapshot().authoringDocument?.identity.projectId, 'loading-bay-b');
+    assert.equal(store.snapshot().authoringDocument?.identity.projectHash, 'hash-before');
+    assert.equal(store.snapshot().selection.entityId, null);
+    assert.equal(store.snapshot().operation, 'idle');
+  });
 });
 
 test('opening a second project clears project-scoped selection, preview, and private object work', async () => {
@@ -921,10 +1056,27 @@ test('HTTP transport bounds both directions and leaves semantic decoding to the 
   );
 });
 
+async function selectFixtureInspector(store: StudioWorkspaceStore) {
+  await store.selectEntity(1, 'inspector');
+  const reference = store.snapshot().authoringDocument?.entityComponents.find(
+    (candidate) => candidate.componentTypeId === FIXTURE_COMPONENT_TYPE_ID,
+  );
+  assert.ok(reference !== undefined);
+  const context = store.entityInspectorContext(reference);
+  assert.ok(context !== null);
+  return context;
+}
+
 class FixtureTransport implements StudioAdapterTransport {
   readonly requests: StudioAdapterRequest[] = [];
   rejectMutation = false;
   openedProjectId = 'loading-bay';
+  readProjectChanged = false;
+  #blockNextProjectRead = false;
+  #blockedProjectRead: {
+    readonly requestId: string;
+    readonly resolve: (response: unknown) => void;
+  } | null = null;
 
   exchange(request: StudioAdapterRequest): Promise<unknown> {
     this.requests.push(request);
@@ -952,13 +1104,33 @@ class FixtureTransport implements StudioAdapterTransport {
       });
     }
     if (request.type === 'readProject') {
-      return Promise.resolve(projectResponse('projectRead', request.requestId, false));
+      if (this.#blockNextProjectRead) {
+        this.#blockNextProjectRead = false;
+        return new Promise((resolve) => {
+          this.#blockedProjectRead = { requestId: request.requestId, resolve };
+        });
+      }
+      return Promise.resolve(
+        projectResponse('projectRead', request.requestId, this.readProjectChanged),
+      );
     }
     return Promise.resolve({
       type: 'projectClosed',
       protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
       requestId: request.requestId,
     });
+  }
+
+  blockNextProjectRead(): void {
+    assert.equal(this.#blockedProjectRead, null);
+    this.#blockNextProjectRead = true;
+  }
+
+  resolveBlockedProjectRead(changed: boolean): void {
+    const blocked = this.#blockedProjectRead;
+    assert.ok(blocked !== null);
+    this.#blockedProjectRead = null;
+    blocked.resolve(projectResponse('projectRead', blocked.requestId, changed));
   }
 }
 
@@ -1339,7 +1511,10 @@ function described(requestId: string): unknown {
       projectKind: 'loadingBayProject',
       projectSchemaVersion: 11,
       operations: STUDIO_ADAPTER_OPERATIONS,
-      entityInspectorContracts: [],
+      entityInspectorContracts: [{
+        contractId: FIXTURE_CONTRACT_ID,
+        contractVersion: FIXTURE_CONTRACT_VERSION,
+      }],
     },
   };
 }
@@ -1470,7 +1645,14 @@ function projectReadout(changed: boolean, projectId = 'loading-bay') {
       instances: [],
     },
     animatedMeshResources: [],
-    entityComponents: [],
+    entityComponents: [{
+      ownerEntityId: 1,
+      componentTypeId: FIXTURE_COMPONENT_TYPE_ID,
+      inspectorContract: {
+        contractId: FIXTURE_CONTRACT_ID,
+        contractVersion: FIXTURE_CONTRACT_VERSION,
+      },
+    }],
     projection: {
       schemaVersion: 1,
       ops: [{

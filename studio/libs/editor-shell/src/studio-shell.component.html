@@ -466,6 +466,12 @@
                     <dd>
                       @if (reference.inspectorContract; as contract) {
                         {{ contract.contractId }} v{{ contract.contractVersion }}
+                        ·
+                        @if (matchedEntityInspectorComponentTypes().has(reference.componentTypeId)) {
+                          panel available
+                        } @else {
+                          identity only · read-only
+                        }
                       } @else {
                         identity only · read-only
                       }
@@ -474,16 +480,22 @@
                 }
               </section>
             }
-            @if (store.selectedVoxelObjectInstance(); as voxelObjectInstance) {
-              <section class="inspector-section" data-visual-id="entity-voxel-object-component">
-                <header><strong>Voxel Object</strong><span>typed entity capability</span></header>
-                <rusty-voxel-object-playback
-                  [instance]="voxelObjectInstance"
-                  [asset]="store.selectedVoxelObjectAsset()"
-                  [playback]="state().voxelWorkspace.objectPlayback"
-                  [busy]="state().operation !== 'idle'"
-                  (action)="runVoxelAction($event)"
-                />
+            @for (match of activeEntityInspectorMatches(); track match.instanceKey) {
+              <section
+                class="inspector-section"
+                [attr.data-visual-id]="match.contribution.dataVisualId ?? null"
+                [attr.data-component-type-id]="match.reference.componentTypeId"
+              >
+                <header>
+                  <strong>{{ match.contribution.title }}</strong>
+                  <span>typed entity capability</span>
+                </header>
+                <ng-container
+                  *ngComponentOutlet="
+                    match.contribution.panel;
+                    inputs: inspectorPanelInputs(match)
+                  "
+                ></ng-container>
               </section>
             }
             <section class="inspector-section">

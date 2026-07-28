@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, inject, type OnInit } from '@angular/core';
 import {
+  RUSTY_ENGINE_ENTITY_INSPECTOR_CONTRIBUTIONS,
   STUDIO_WORKSPACE,
   StudioShellComponent,
 } from '@rusty-engine/studio-editor-shell';
@@ -10,11 +11,17 @@ import { readStudioStartupProject } from './studio-startup.js';
   selector: 'rusty-root',
   standalone: true,
   imports: [StudioShellComponent],
-  template: '<rusty-studio-shell />',
+  template: `
+    <rusty-studio-shell
+      [entityInspectorContributions]="entityInspectorContributions"
+    />
+  `,
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class App implements OnInit {
   readonly #store = inject(STUDIO_WORKSPACE);
+  readonly entityInspectorContributions =
+    RUSTY_ENGINE_ENTITY_INSPECTOR_CONTRIBUTIONS;
 
   ngOnInit(): void {
     const startup = readStudioStartupProject(globalThis.location?.href ?? '');

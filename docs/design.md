@@ -551,9 +551,14 @@ Rejected or stale operations publish no bytes.
 Protocol 10 also carries only bounded identity for downstream entity components: canonical owner
 entity, stable component type, and an optional exact inspector-contract identity advertised by the
 adapter. It contains no component values, field schemas, mutation payloads, UI metadata, module
-locations, or executable handles. Unknown components remain visible and read-only. Product-owned
-typed read/mutation contracts and the statically composed inspector panel remain downstream; Engine
-does not acquire game vocabulary or a generic component bridge.
+locations, or executable handles. Unknown components remain visible and read-only. The Engine shell
+admits an immutable application-supplied contribution list, matches exact component/contract
+identities, and gives panels only owner/project generations plus a single mutation-settlement
+lease. Settlement serializes with core edits and accepts a downstream before/after hash receipt only
+after a matching canonical `readProject`; late project, selection, or contract settlements are
+discarded. The stock application explicitly composes Voxel Object through this same outlet.
+Product-owned typed read/mutation contracts and game panels remain downstream; Engine does not
+acquire game vocabulary, a service locator, or a generic component bridge.
 
 Applied voxel-object animation is a disposable presentation session, not another authoring model.
 Studio selects a canonical instance and sends closed scrub/play/pause/sample/stop commands with an

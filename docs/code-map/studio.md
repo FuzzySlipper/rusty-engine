@@ -40,9 +40,11 @@ viewport, and its closed external-project adapter protocol.
   command; ordinary Engine work never scans a sibling checkout.
 - Renderer packages are consumed through their package roots.
 - Protocol 10 implements the bounded identity-only half of the downstream Entity
-  inspector seam. Static host composition and the shared inspector outlet remain
-  the next ordered implementation step; do not add another hard-coded game
-  component to the shell.
+  inspector seam. `studio/libs/editor-shell/src/entity-inspector.ts` owns static
+  contribution admission, exact matching, remount generations, and the narrow
+  mutation-settlement contract. The shell owns the single outlet; the stock app
+  explicitly composes the built-in Voxel Object contribution. Do not add another
+  hard-coded game component to the shell.
 
 ## Private or forbidden paths
 

@@ -1,14 +1,15 @@
 # Typed downstream Entity inspector extensions
 
-Status: **accepted architecture; protocol 10 identity envelope implemented, static outlet pending**
+Status: **accepted architecture; protocol 10 identity envelope and static Engine outlet implemented**
 
 Decision task: Den `rusty-engine#6300`
 
 This decision defines the smallest boundary by which a downstream Rust project can put one of its
 own entity components in Rusty Engine Studio's Entity inspector. Protocol 10 now implements the
 bounded identity envelope and removes the fixed Loading Bay summary. The inspector outlet, host
-mutation lease, built-in Voxel Object migration, and downstream panel remain ordered follow-ups
-until their own tasks land and pass review.
+mutation lease, and built-in Voxel Object migration are implemented by Engine tasks `#6302` and
+`#6303`. The Loading Bay panel and final two-consumer reconciliation remain ordered follow-ups until
+their owning tasks land and pass review.
 
 ## Decision
 
@@ -216,7 +217,7 @@ request/response byte, process-lifecycle, and failure bounds as the current adap
 
 ## Static Studio host composition
 
-The Engine Studio shell will expose one host-level outlet and a small contribution contract from its
+The Engine Studio shell exposes one host-level outlet and a small contribution contract from its
 existing `editor-shell` public package. A new package is not justified solely to hold these few
 types.
 
@@ -234,7 +235,7 @@ interface StudioEntityInspectorContribution {
 }
 ```
 
-The exact panel interface should expose only common host context:
+The implemented panel interface exposes only common host context:
 
 - the selected `ownerEntityId` and stable `componentTypeId`;
 - current project identity/hash and a project/selection generation;
@@ -261,6 +262,15 @@ const contributions = [
 ```
 
 Engine never imports that downstream package. The dependency remains one-way.
+
+`StudioWorkspaceStore.entityInspectorMutationPort` admits at most one active lease. Acquisition
+requires the exact selected owner/component/contract, accepted project hash, adapter identity, and
+project/selection/contract generations. Core mutations remain serialized while it is active.
+Settlement accepts only the downstream receipt's before/after project hashes, performs the closed
+core `readProject`, and publishes that reread only when its hash matches. Project replacement,
+selection change, or a newer accepted contract generation makes the settlement stale; late success
+or failure cannot replace the newer project or operation state. Panels receive the narrow port,
+never the store or a generic command callback.
 
 ## Admission, isolation, and versioning
 
@@ -404,7 +414,8 @@ Implementation is deliberately ordered so the generic seam follows the real seco
    and entity component references, migrates the fixed Loading Bay summary out of the core readout,
    and preserves unknown components as identity-only rows. Implemented by `rusty-engine#6302`.
 3. **Add static host composition.** Introduce the explicit contribution input/outlet and mutation
-   settlement port, then move Voxel Object behind it without behavior loss.
+   settlement port, then move Voxel Object behind it without behavior loss. Implemented by
+   `rusty-engine#6303`.
 4. **Adopt from Loading Bay.** Build the downstream application composition root and Weapon panel,
    pin the reviewed Engine revision, and prove one real mutation through canonical reopen.
 5. **Close the promotion.** Run the isolated and exact-pinned integration gates, reconcile this

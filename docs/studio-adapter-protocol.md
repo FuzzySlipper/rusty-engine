@@ -149,6 +149,16 @@ revisions, UI metadata, mutation payloads, module locations, and executable hand
 the core protocol; downstream values and mutations use separately closed product-owned contracts
 composed statically by the downstream Studio host.
 
+The shared `editor-shell` implements that composition as one immutable application-root
+contribution list with exact `(componentTypeId, contractId, contractVersion)` admission and
+deterministic ordering. An exact advertised/reference match mounts the contribution; unsupported
+or contract-free identities stay visible and read-only. Panels receive common owner/project and
+generation context plus a single bounded mutation-settlement port. That port serializes against
+core edits, verifies a downstream before/after hash receipt through canonical `readProject`, and
+discards late settlement after project, selection, or contract replacement. It does not carry
+component values or invoke semantic operations. The stock app explicitly supplies the built-in
+Voxel Object contribution; downstream applications may statically add their own packages.
+
 ## Safety and atomicity
 
 The process bounds request and response bytes. The selected root must be absolute and the project

@@ -68,6 +68,15 @@ import {
 import {
   localTransformFromWorld,
 } from './transform-tools.js';
+import {
+  StudioEntityInspectorMutationError,
+  sameStudioEntityInspectorContext,
+  type StudioEntityInspectorContext,
+  type StudioEntityInspectorMutationLease,
+  type StudioEntityInspectorMutationPort,
+  type StudioEntityInspectorMutationReceipt,
+  type StudioEntityInspectorMutationSettlement,
+} from './entity-inspector.js';
 
 export type StudioConnectionState =
   | { readonly kind: 'disconnected'; readonly message: string }
@@ -264,6 +273,11 @@ interface ObjectPlaybackSchedule {
   timerHandle: unknown | null;
 }
 
+interface ActiveEntityInspectorMutation {
+  readonly id: number;
+  readonly context: StudioEntityInspectorContext;
+}
+
 const DEFAULT_PLAYBACK_TIMER: StudioPlaybackTimer = {
   cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   schedule: (callback, delayMilliseconds) => setTimeout(callback, delayMilliseconds),
@@ -336,6 +350,14 @@ export class StudioWorkspaceStore {
   #projectionBaseGeneration = 0;
   #liveProjectionBase: ProjectionBaseIdentity | null = null;
   #canonicalProjectProjection: CanonicalProjectProjection | null = null;
+  #selectionGeneration = 0;
+  #inspectorContractGeneration = 0;
+  #nextInspectorMutationId = 1;
+  #activeInspectorMutation: ActiveEntityInspectorMutation | null = null;
+  readonly entityInspectorMutationPort: StudioEntityInspectorMutationPort = Object.freeze({
+    acquire: (context: StudioEntityInspectorContext) =>
+      this.#acquireEntityInspectorMutation(context),
+  });
 
   constructor(
     client: StudioAdapterClient,
@@ -522,7 +544,13 @@ export class StudioWorkspaceStore {
   }
 
   async refreshProject(): Promise<void> {
-    if (this.#snapshot().authoringDocument === null) return;
+    const current = this.#snapshot();
+    if (
+      current.authoringDocument === null
+      || this.#activeInspectorMutation !== null
+    ) {
+      return;
+    }
     this.#invalidateObjectOperation();
     this.#patch({ operation: 'refreshing', lastError: null });
     try {
@@ -725,12 +753,12 @@ export class StudioWorkspaceStore {
     const request = ++this.#selectionRequest;
     const preview = this.#snapshot().preview;
     if (preview === null || preview.entityId === selection.entityId) {
-      this.#patch({ selection });
+      this.#acceptSelection(selection);
       return;
     }
     const committed = await this.commitPreview();
     if (!committed || request !== this.#selectionRequest) return;
-    this.#patch({ selection, preview: null });
+    this.#acceptSelection(selection, { preview: null });
   }
 
   beginTranslationPreview(entityId: number): void {
@@ -754,10 +782,12 @@ export class StudioWorkspaceStore {
     );
     if (node === undefined) return;
     const translation = node.localTransform.translation;
+    const selection = current.selection.entityId === entityId
+      ? current.selection
+      : { sceneNodeId: node.nodeId, entityId, source: 'inspector' as const };
+    if (selection !== current.selection) this.#selectionGeneration += 1;
     this.#patch({
-      selection: current.selection.entityId === entityId
-        ? current.selection
-        : { sceneNodeId: node.nodeId, entityId, source: 'inspector' },
+      selection,
       preview: {
         entityId,
         original: node.localTransform,
@@ -1607,6 +1637,35 @@ export class StudioWorkspaceStore {
     ) ?? null;
   }
 
+  entityInspectorContext(
+    reference: StudioEntityComponentReference,
+  ): StudioEntityInspectorContext | null {
+    const current = this.#snapshot();
+    const document = current.authoringDocument;
+    const contract = reference.inspectorContract;
+    if (
+      current.connection.kind !== 'connected'
+      || document === null
+      || contract === null
+      || current.selection.entityId !== reference.ownerEntityId
+      || !document.entityComponents.some((candidate) =>
+        sameEntityComponentReference(candidate, reference))
+    ) {
+      return null;
+    }
+    return Object.freeze({
+      ownerEntityId: reference.ownerEntityId,
+      componentTypeId: reference.componentTypeId,
+      inspectorContract: Object.freeze({ ...contract }),
+      project: Object.freeze({ ...document.identity }),
+      projectGeneration: this.#projectScopeGeneration,
+      selectionGeneration: this.#selectionGeneration,
+      contractGeneration: this.#inspectorContractGeneration,
+      adapterId: current.connection.adapter.adapterId,
+      busy: current.operation !== 'idle',
+    });
+  }
+
   selectedVoxelObjectInstance(): VoxelObjectInstanceReadout | null {
     const state = this.#snapshot();
     const entityId = state.selection.entityId;
@@ -1859,6 +1918,9 @@ export class StudioWorkspaceStore {
 
   #invalidateProjectScope(): void {
     this.#projectScopeGeneration += 1;
+    this.#selectionGeneration += 1;
+    this.#inspectorContractGeneration += 1;
+    this.#activeInspectorMutation = null;
     this.#liveProjectionBase = null;
     this.#canonicalProjectProjection = null;
     this.#invalidateObjectOperation();
@@ -1930,6 +1992,8 @@ export class StudioWorkspaceStore {
     };
     this.#liveProjectionBase = projectionBase;
     const selection = acceptedSelection(project, current.selection, resetSelection);
+    this.#inspectorContractGeneration += 1;
+    if (!sameSelection(selection, current.selection)) this.#selectionGeneration += 1;
     const connection = current.connection.kind === 'connected'
       ? {
           ...current.connection,
@@ -2085,6 +2149,164 @@ export class StudioWorkspaceStore {
     this.#patch({ operation: 'idle', lastError: message });
   }
 
+  #acceptSelection(
+    selection: EditorSelectionState,
+    update: Partial<StudioWorkspaceSnapshot> = {},
+  ): void {
+    if (!sameSelection(selection, this.#snapshot().selection)) {
+      this.#selectionGeneration += 1;
+    }
+    this.#patch({ ...update, selection });
+  }
+
+  #acquireEntityInspectorMutation(
+    context: StudioEntityInspectorContext,
+  ): StudioEntityInspectorMutationLease {
+    const current = this.#snapshot();
+    const canonical = this.#canonicalEntityInspectorContext(context);
+    if (
+      current.operation !== 'idle'
+      || current.preview !== null
+      || this.#activeInspectorMutation !== null
+    ) {
+      throw new StudioEntityInspectorMutationError(
+        'inspectorMutation.busy',
+        'Entity inspector mutation cannot begin while another Studio operation is active.',
+      );
+    }
+    if (canonical === null || !sameStudioEntityInspectorContext(context, canonical)) {
+      throw new StudioEntityInspectorMutationError(
+        'inspectorMutation.stale',
+        'Entity inspector mutation context is no longer current.',
+      );
+    }
+    const mutation: ActiveEntityInspectorMutation = {
+      id: this.#nextInspectorMutationId++,
+      context: canonical,
+    };
+    this.#activeInspectorMutation = mutation;
+    this.#patch({ operation: 'committing', lastError: null, activeMenu: null });
+    let closed = false;
+    return Object.freeze({
+      context: canonical,
+      settle: async (receipt: StudioEntityInspectorMutationReceipt) => {
+        if (closed) throw closedInspectorMutation();
+        closed = true;
+        return this.#settleEntityInspectorMutation(mutation, receipt);
+      },
+      reject: (error?: unknown) => {
+        if (closed) throw closedInspectorMutation();
+        closed = true;
+        return this.#rejectEntityInspectorMutation(mutation, error);
+      },
+    });
+  }
+
+  #canonicalEntityInspectorContext(
+    context: StudioEntityInspectorContext,
+  ): StudioEntityInspectorContext | null {
+    const document = this.#snapshot().authoringDocument;
+    const reference = document?.entityComponents.find((candidate) =>
+      candidate.ownerEntityId === context.ownerEntityId
+      && candidate.componentTypeId === context.componentTypeId
+      && sameInspectorContract(candidate.inspectorContract, context.inspectorContract));
+    return reference === undefined ? null : this.entityInspectorContext(reference);
+  }
+
+  async #settleEntityInspectorMutation(
+    mutation: ActiveEntityInspectorMutation,
+    receipt: StudioEntityInspectorMutationReceipt,
+  ): Promise<StudioEntityInspectorMutationSettlement> {
+    if (!this.#entityInspectorMutationIsCurrent(mutation)) {
+      this.#releaseStaleEntityInspectorMutation(mutation);
+      return { kind: 'stale' };
+    }
+    if (receipt.beforeProjectHash !== mutation.context.project.projectHash) {
+      return this.#failEntityInspectorMutation(
+        mutation,
+        new StudioEntityInspectorMutationError(
+          'inspectorMutation.hashMismatch',
+          'Entity inspector mutation receipt did not begin at the accepted project hash.',
+        ),
+      );
+    }
+    try {
+      const response = await this.#client.readProject();
+      if (!this.#entityInspectorMutationIsCurrent(mutation)) {
+        this.#releaseStaleEntityInspectorMutation(mutation);
+        return { kind: 'stale' };
+      }
+      if (response.project.identity.projectHash !== receipt.afterProjectHash) {
+        return this.#failEntityInspectorMutation(
+          mutation,
+          new StudioEntityInspectorMutationError(
+            'inspectorMutation.hashMismatch',
+            'Canonical project reread did not match the downstream mutation receipt.',
+          ),
+        );
+      }
+      this.#activeInspectorMutation = null;
+      this.#acceptProject(response.project, false);
+      return {
+        kind: 'accepted',
+        projectHash: response.project.identity.projectHash,
+      };
+    } catch (error) {
+      if (error instanceof StudioEntityInspectorMutationError) throw error;
+      if (!this.#entityInspectorMutationIsCurrent(mutation)) {
+        this.#releaseStaleEntityInspectorMutation(mutation);
+        return { kind: 'stale' };
+      }
+      this.#activeInspectorMutation = null;
+      this.#operationFailed(error);
+      throw error;
+    }
+  }
+
+  #rejectEntityInspectorMutation(
+    mutation: ActiveEntityInspectorMutation,
+    error?: unknown,
+  ): StudioEntityInspectorMutationSettlement {
+    if (!this.#entityInspectorMutationIsCurrent(mutation)) {
+      this.#releaseStaleEntityInspectorMutation(mutation);
+      return { kind: 'stale' };
+    }
+    this.#activeInspectorMutation = null;
+    const message = error === undefined
+      ? 'Entity inspector mutation was rejected by its downstream owner.'
+      : errorMessage(error);
+    this.#patch({ operation: 'idle', lastError: message });
+    return { kind: 'rejected', message };
+  }
+
+  #failEntityInspectorMutation(
+    mutation: ActiveEntityInspectorMutation,
+    error: StudioEntityInspectorMutationError,
+  ): never {
+    if (this.#activeInspectorMutation?.id === mutation.id) {
+      this.#activeInspectorMutation = null;
+      this.#patch({ operation: 'idle', lastError: error.message });
+    }
+    throw error;
+  }
+
+  #entityInspectorMutationIsCurrent(
+    mutation: ActiveEntityInspectorMutation,
+  ): boolean {
+    if (this.#activeInspectorMutation?.id !== mutation.id) return false;
+    const current = this.#canonicalEntityInspectorContext(mutation.context);
+    return current !== null
+      && sameStudioEntityInspectorContext(current, mutation.context);
+  }
+
+  #releaseStaleEntityInspectorMutation(mutation: ActiveEntityInspectorMutation): void {
+    if (this.#activeInspectorMutation?.id !== mutation.id) return;
+    this.#activeInspectorMutation = null;
+    if (this.#snapshot().operation === 'committing') {
+      this.#patch({ operation: 'idle' });
+    }
+  }
+
   #patch(update: Partial<StudioWorkspaceSnapshot>): void {
     this.#snapshot.update((current) => ({ ...current, ...update }));
   }
@@ -2192,6 +2414,40 @@ function objectPlaybackStepMicroseconds(
   if (!Number.isSafeInteger(scaled)) return null;
   const step = Math.ceil(scaled / playback.rate.numerator);
   return Number.isSafeInteger(step) && step > 0 ? step : null;
+}
+
+function sameSelection(
+  left: EditorSelectionState,
+  right: EditorSelectionState,
+): boolean {
+  return left.sceneNodeId === right.sceneNodeId
+    && left.entityId === right.entityId
+    && left.source === right.source;
+}
+
+function sameEntityComponentReference(
+  left: StudioEntityComponentReference,
+  right: StudioEntityComponentReference,
+): boolean {
+  return left.ownerEntityId === right.ownerEntityId
+    && left.componentTypeId === right.componentTypeId
+    && sameInspectorContract(left.inspectorContract, right.inspectorContract);
+}
+
+function sameInspectorContract(
+  left: StudioEntityComponentReference['inspectorContract'],
+  right: StudioEntityComponentReference['inspectorContract'],
+): boolean {
+  if (left === null || right === null) return left === right;
+  return left.contractId === right.contractId
+    && left.contractVersion === right.contractVersion;
+}
+
+function closedInspectorMutation(): StudioEntityInspectorMutationError {
+  return new StudioEntityInspectorMutationError(
+    'inspectorMutation.closed',
+    'Entity inspector mutation lease has already been settled.',
+  );
 }
 
 function isObjectPlaybackControl(
