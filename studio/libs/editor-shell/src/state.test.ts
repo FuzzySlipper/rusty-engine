@@ -864,10 +864,26 @@ test('HTTP transport bounds both directions and leaves semantic decoding to the 
   assert.equal(response.adapter.adapterId, 'rusty-engine-demo.loading-bay');
   assert.deepEqual(requests, ['/api/studio-adapter:POST']);
 
+  let oversizedRequestFetched = false;
+  const oversizedRequest = new HttpStudioAdapterTransport('/api/studio-adapter', async () => {
+    oversizedRequestFetched = true;
+    throw new Error('fetch must not run for an oversized request');
+  });
+  await assert.rejects(
+    oversizedRequest.exchange({
+      type: 'describe',
+      protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+      requestId: 'oversized-request',
+      padding: 'x'.repeat(256 * 1024),
+    } as unknown as StudioAdapterRequest),
+    /request exceeds the protocol byte bound/u,
+  );
+  assert.equal(oversizedRequestFetched, false);
+
   const oversized = new HttpStudioAdapterTransport('/api/studio-adapter', async () => ({
     ok: true,
     status: 200,
-    headers: new Headers({ 'content-length': String(32 * 1024 * 1024 + 1) }),
+    headers: new Headers({ 'content-length': String(64 * 1024 * 1024 + 1) }),
     text: async () => '',
   }));
   await assert.rejects(
@@ -876,7 +892,28 @@ test('HTTP transport bounds both directions and leaves semantic decoding to the 
       protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
       requestId: 'x',
     }),
-    /response exceeds/,
+    /response is 67108865 bytes; the protocol limit is 67108864 bytes/u,
+  );
+
+  const typedHostFailure = new HttpStudioAdapterTransport('/api/studio-adapter', async () => ({
+    ok: false,
+    status: 502,
+    headers: new Headers({ 'content-length': '151' }),
+    text: async () => JSON.stringify({
+      ok: false,
+      code: 'studio_adapter_response_too_large',
+      message: 'Studio adapter response is 67108865 bytes; the protocol limit is 67108864 bytes',
+      limitBytes: 67_108_864,
+      actualBytes: 67_108_865,
+    }),
+  }));
+  await assert.rejects(
+    typedHostFailure.exchange({
+      type: 'describe',
+      protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+      requestId: 'typed-host-failure',
+    }),
+    /response is 67108865 bytes; the protocol limit is 67108864 bytes/u,
   );
 });
 

@@ -34,14 +34,15 @@ export class HttpStudioAdapterTransport implements StudioAdapterTransport {
     });
     const declaredLength = response.headers.get('content-length');
     if (declaredLength !== null && Number(declaredLength) > MAX_STUDIO_ADAPTER_RESPONSE_BYTES) {
-      throw new Error('Studio adapter response exceeds the protocol byte bound');
+      throw new Error(adapterResponseLimitMessage(Number(declaredLength)));
     }
     const text = await response.text();
-    if (new TextEncoder().encode(text).byteLength > MAX_STUDIO_ADAPTER_RESPONSE_BYTES) {
-      throw new Error('Studio adapter response exceeds the protocol byte bound');
+    const responseBytes = new TextEncoder().encode(text).byteLength;
+    if (responseBytes > MAX_STUDIO_ADAPTER_RESPONSE_BYTES) {
+      throw new Error(adapterResponseLimitMessage(responseBytes));
     }
     if (!response.ok) {
-      throw new Error(`Studio host rejected the adapter exchange with HTTP ${String(response.status)}`);
+      throw new Error(studioHostError(text, response.status));
     }
     try {
       return JSON.parse(text) as unknown;
@@ -49,6 +50,24 @@ export class HttpStudioAdapterTransport implements StudioAdapterTransport {
       throw new Error('Studio host returned malformed JSON');
     }
   }
+}
+
+function adapterResponseLimitMessage(actualBytes: number): string {
+  return `Studio adapter response is ${String(actualBytes)} bytes; `
+    + `the protocol limit is ${String(MAX_STUDIO_ADAPTER_RESPONSE_BYTES)} bytes`;
+}
+
+function studioHostError(text: string, status: number): string {
+  try {
+    const decoded = JSON.parse(text) as unknown;
+    if (decoded !== null && typeof decoded === 'object' && !Array.isArray(decoded)) {
+      const message = (decoded as Record<string, unknown>)['message'];
+      if (typeof message === 'string' && message.length > 0) return message;
+    }
+  } catch {
+    // Preserve the stable HTTP fallback for non-JSON host/proxy failures.
+  }
+  return `Studio host rejected the adapter exchange with HTTP ${String(status)}`;
 }
 
 export interface StudioHostFileEntry {
@@ -99,7 +118,9 @@ export class HttpStudioHostFileBrowser {
   }
 }
 
-const MAX_STUDIO_RENDER_RESOURCE_BYTES = 64 * 1024 * 1024;
+// Keep browser allocation bounded and exactly aligned with the trusted host's
+// render-resource read ceiling.
+export const MAX_STUDIO_RENDER_RESOURCE_BYTES = 64 * 1024 * 1024;
 
 export type StudioRenderResourceFetch = (
   input: string,

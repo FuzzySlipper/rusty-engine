@@ -36,6 +36,7 @@ for (const field of ['commit', 'engineCommit']) {
 }
 if (
   pin.projectFile !== 'content/projects/voxel-lab.project.json'
+  || pin.largeProjectFile !== 'content/projects/retro-character-high-fidelity.project.json'
   || pin.runtimeReport !== 'evidence/initial-animated-voxel-report.json'
   || pin.qualityReport !== 'evidence/high-fidelity-animated-voxel-report.json'
   || pin.cargoPackage !== 'rusty-engine-voxels'
@@ -47,6 +48,7 @@ process.stdout.write([
   pin.commit,
   pin.engineCommit,
   pin.projectFile,
+  pin.largeProjectFile,
   pin.runtimeReport,
   pin.qualityReport,
   pin.adapterBinary,
@@ -57,9 +59,10 @@ mapfile -t PIN_VALUES <<< "$PIN_OUTPUT"
 EXPECTED_COMMIT="${PIN_VALUES[0]:-}"
 EXPECTED_ENGINE_COMMIT="${PIN_VALUES[1]:-}"
 PROJECT_FILE="${PIN_VALUES[2]:-}"
-RUNTIME_REPORT="${PIN_VALUES[3]:-}"
-QUALITY_REPORT="${PIN_VALUES[4]:-}"
-ADAPTER_BINARY="${PIN_VALUES[5]:-}"
+LARGE_PROJECT_FILE="${PIN_VALUES[3]:-}"
+RUNTIME_REPORT="${PIN_VALUES[4]:-}"
+QUALITY_REPORT="${PIN_VALUES[5]:-}"
+ADAPTER_BINARY="${PIN_VALUES[6]:-}"
 
 VOXEL_ROOT="$(realpath "$VOXEL_ROOT")"
 VOXEL_TOP="$(git -C "$VOXEL_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
@@ -190,6 +193,7 @@ cargo build --locked --manifest-path "$VOXEL_ROOT/Cargo.toml" --bin "$ADAPTER_BI
 RUSTY_STUDIO_ADAPTER_BINARY="$VOXEL_ROOT/target/debug/$ADAPTER_BINARY" \
 RUSTY_STUDIO_PROJECT_ROOT="$STUDIO_TEST_ROOT" \
 RUSTY_STUDIO_PROJECT_FILE="$PROJECT_FILE" \
+RUSTY_STUDIO_LARGE_PROJECT_FILE="$LARGE_PROJECT_FILE" \
 RUSTY_STUDIO_RUNTIME_REPORT="$RUNTIME_REPORT" \
 RUSTY_STUDIO_SETTINGS_ROOT="$STUDIO_SETTINGS_ROOT" \
 pnpm --dir studio exec playwright test \

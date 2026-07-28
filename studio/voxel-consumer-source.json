@@ -5,6 +5,7 @@
   "commit": "f315ccb8cbf9614abbe745acf9324201ae5b159f",
   "engineCommit": "ef9af77932a83dc3c441ef5f1eef9b752e16de6e",
   "projectFile": "content/projects/voxel-lab.project.json",
+  "largeProjectFile": "content/projects/retro-character-high-fidelity.project.json",
   "runtimeReport": "evidence/initial-animated-voxel-report.json",
   "qualityReport": "evidence/high-fidelity-animated-voxel-report.json",
   "cargoPackage": "rusty-engine-voxels",

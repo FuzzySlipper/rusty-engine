@@ -58,8 +58,11 @@ export type * from './voxel-protocol.js';
 export type * from './voxel-object-protocol.js';
 
 export const STUDIO_ADAPTER_PROTOCOL_VERSION = 9 as const;
+// Requests remain compact control-plane commands. Responses include complete
+// retained-frame readouts; 64 MiB admits the checked 96x144x96 voxel-object
+// corpus while retaining a finite host/browser liveness guard.
 export const MAX_STUDIO_ADAPTER_REQUEST_BYTES = 256 * 1024;
-export const MAX_STUDIO_ADAPTER_RESPONSE_BYTES = 32 * 1024 * 1024;
+export const MAX_STUDIO_ADAPTER_RESPONSE_BYTES = 64 * 1024 * 1024;
 
 export type StudioAdapterRequest =
   | DescribeRequest

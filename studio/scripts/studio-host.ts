@@ -1,4 +1,3 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -12,7 +11,6 @@ import { fileURLToPath } from 'node:url';
 
 import {
   MAX_STUDIO_ADAPTER_REQUEST_BYTES,
-  MAX_STUDIO_ADAPTER_RESPONSE_BYTES,
 } from '../libs/adapter-client/src/index.js';
 import {
   MAX_STUDIO_USER_SETTINGS_BYTES,
@@ -22,12 +20,15 @@ import {
 } from './studio-user-settings-service.js';
 import { listStudioHostDirectory } from './studio-host-files-service.js';
 import { readStudioRenderResource } from './studio-render-resource-service.js';
+import {
+  AdapterProcess,
+  StudioAdapterResponseLimitError,
+} from './studio-adapter-process.js';
 
 const DEFAULT_STATIC_ROOT = fileURLToPath(
   new URL('../dist/apps/studio-app/browser/', import.meta.url),
 );
 const DEN_PROJECT = 'rusty-engine-studio';
-const MAX_ERROR_BYTES = 64 * 1024;
 
 interface HostOptions {
   readonly adapterBinary: string;
@@ -35,101 +36,6 @@ interface HostOptions {
   readonly host: string;
   readonly port: number;
   readonly settingsRoot: string;
-}
-
-interface PendingExchange {
-  readonly resolve: (line: string) => void;
-  readonly reject: (error: Error) => void;
-}
-
-class AdapterProcess {
-  readonly #child: ChildProcessWithoutNullStreams;
-  #pending: PendingExchange | null = null;
-  #stdoutBuffer = Buffer.alloc(0);
-  #stderr = '';
-  #serial: Promise<void> = Promise.resolve();
-  #closedError: Error | null = null;
-
-  constructor(binary: string) {
-    this.#child = spawn(binary, [], { stdio: ['pipe', 'pipe', 'pipe'] });
-    this.#child.stdout.on('data', (chunk: Buffer) => this.#receive(chunk));
-    this.#child.stderr.setEncoding('utf8');
-    this.#child.stderr.on('data', (chunk: string) => {
-      this.#stderr = `${this.#stderr}${chunk}`.slice(-MAX_ERROR_BYTES);
-    });
-    this.#child.on('error', (error) => this.#fail(error));
-    this.#child.on('exit', (code, signal) => {
-      this.#fail(new Error(
-        `Studio adapter exited code=${String(code)} signal=${String(signal)}${
-          this.#stderr.length === 0 ? '' : `: ${this.#stderr}`
-        }`,
-      ));
-    });
-  }
-
-  exchange(requestLine: string): Promise<string> {
-    const exchange = this.#serial.then(() => this.#exchangeOne(requestLine));
-    this.#serial = exchange.then(() => undefined, () => undefined);
-    return exchange;
-  }
-
-  close(): void {
-    if (!this.#child.stdin.destroyed) this.#child.stdin.end();
-  }
-
-  #exchangeOne(requestLine: string): Promise<string> {
-    if (this.#closedError !== null) return Promise.reject(this.#closedError);
-    if (this.#pending !== null) {
-      return Promise.reject(new Error('Studio adapter exchange overlap'));
-    }
-    return new Promise((resolvePromise, rejectPromise) => {
-      this.#pending = { resolve: resolvePromise, reject: rejectPromise };
-      this.#child.stdin.write(`${requestLine}\n`, (error) => {
-        if (error !== null && error !== undefined) this.#fail(error);
-      });
-    });
-  }
-
-  #receive(chunk: Buffer): void {
-    this.#stdoutBuffer = Buffer.concat([this.#stdoutBuffer, chunk]);
-    const newline = this.#stdoutBuffer.indexOf(0x0a);
-    if (newline === -1) {
-      if (this.#stdoutBuffer.byteLength > MAX_STUDIO_ADAPTER_RESPONSE_BYTES) {
-        this.#fail(new Error('Studio adapter response exceeds the protocol byte bound'));
-        this.#child.kill();
-      }
-      return;
-    }
-
-    const responseBytes = this.#stdoutBuffer.subarray(0, newline);
-    this.#stdoutBuffer = this.#stdoutBuffer.subarray(newline + 1);
-    if (responseBytes.byteLength > MAX_STUDIO_ADAPTER_RESPONSE_BYTES) {
-      this.#fail(new Error('Studio adapter response exceeds the protocol byte bound'));
-      this.#child.kill();
-      return;
-    }
-    const pending = this.#pending;
-    this.#pending = null;
-    if (pending === null) {
-      this.#fail(new Error('Studio adapter emitted an unsolicited response'));
-      this.#child.kill();
-      return;
-    }
-    if (this.#stdoutBuffer.byteLength !== 0) {
-      pending.reject(new Error('Studio adapter emitted more than one response'));
-      this.#fail(new Error('Studio adapter emitted more than one response'));
-      this.#child.kill();
-      return;
-    }
-    pending.resolve(responseBytes.toString('utf8').replace(/\r$/, ''));
-  }
-
-  #fail(error: Error): void {
-    if (this.#closedError === null) this.#closedError = error;
-    const pending = this.#pending;
-    this.#pending = null;
-    pending?.reject(error);
-  }
 }
 
 async function readBoundedBody(request: IncomingMessage): Promise<string> {
@@ -447,7 +353,7 @@ async function main(): Promise<void> {
       await serveStatic(request, response, configured.staticRoot, url.pathname);
     })().catch((error: unknown) => {
       if (!response.headersSent) {
-        sendError(response, 502, error instanceof Error ? error.message : 'Studio host failure');
+        sendCaughtError(response, error);
       } else {
         response.destroy(error instanceof Error ? error : undefined);
       }
@@ -466,6 +372,20 @@ async function main(): Promise<void> {
   process.stdout.write(
     `Rusty Engine Studio listening on http://${configured.host}:${String(configured.port)}\n`,
   );
+}
+
+function sendCaughtError(response: ServerResponse, error: unknown): void {
+  if (error instanceof StudioAdapterResponseLimitError) {
+    sendJson(response, 502, {
+      ok: false,
+      code: error.code,
+      message: error.message,
+      limitBytes: error.limitBytes,
+      actualBytes: error.actualBytes,
+    });
+    return;
+  }
+  sendError(response, 502, error instanceof Error ? error.message : 'Studio host failure');
 }
 
 await main();
