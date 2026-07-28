@@ -97,7 +97,7 @@ if (
   || typeof StudioShellComponent !== 'function'
   || typeof StudioViewportComponent !== 'function'
   || typeof VoxelObjectPlaybackComponent !== 'function'
-  || buildDefaultStudioHostUserSettings('consumer').schemaVersion !== 2
+  || buildDefaultStudioHostUserSettings('consumer').schemaVersion !== 1
 ) {
   throw new Error('exact-revision Studio packages did not compose one coherent typed surface');
 }
@@ -137,7 +137,7 @@ renderer.dispose();
 
 if (
   STUDIO_ADAPTER_PROTOCOL_VERSION !== 10
-  || buildDefaultStudioHostUserSettings('consumer').schemaVersion !== 2
+  || buildDefaultStudioHostUserSettings('consumer').schemaVersion !== 1
   || projection.handleCount === 0
   || snapshot.length === 0
 ) {

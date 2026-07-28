@@ -108,6 +108,9 @@ importers:
 
   ../render/packages/renderer-three:
     dependencies:
+      '@types/three':
+        specifier: ^0.184.1
+        version: 0.184.1
       three:
         specifier: ^0.184.0
         version: 0.184.0
@@ -121,9 +124,6 @@ importers:
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3
-      '@types/three':
-        specifier: ^0.184.1
-        version: 0.184.1
 
   apps/studio-app:
     dependencies:

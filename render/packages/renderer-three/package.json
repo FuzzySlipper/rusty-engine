@@ -23,6 +23,7 @@
     "test": "tsc --build && node --test 'dist/**/*.test.js'"
   },
   "dependencies": {
+    "@types/three": "^0.184.1",
     "three": "^0.184.0"
   },
   "peerDependencies": {
@@ -32,7 +33,6 @@
   "devDependencies": {
     "@rusty-engine/render-contracts": "workspace:*",
     "@rusty-engine/render-projection": "workspace:*",
-    "@types/node": "^24.0.0",
-    "@types/three": "^0.184.1"
+    "@types/node": "^24.0.0"
   }
 }
