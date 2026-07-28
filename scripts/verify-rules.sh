@@ -4,7 +4,6 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-./scripts/verify.sh
-./scripts/verify-rules.sh
-./scripts/verify-render.sh
-./scripts/verify-studio.sh
+pnpm --dir rules install --frozen-lockfile
+pnpm --dir rules run verify
+cargo test -p gameplay-rules --locked

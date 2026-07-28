@@ -54,6 +54,7 @@ services:   svc-volume / svc-spatial / svc-collision / svc-pathfinding / svc-rng
 
 offline only: GLB + request --> voxel-convert --> canonical voxel-asset JSON --> downstream admission
 
+isolated rules workspace: downstream TS candidate --> canonical package JSON --> gameplay-rules (Rust)
 isolated renderer workspace: retained JSON --> render-projection (TS) --> Three backend / host adapters
 ```
 
@@ -317,7 +318,9 @@ compiler rule, mechanics bindings, orchestration, persistence, and execution.
 TypeScript may produce immutable build-time candidates in an isolated
 workspace, while Rust remains the semantic and runtime authority. Direct Rust
 construction and checked artifact admission require no Node or TypeScript at
-runtime.
+runtime. The implemented `rules/` workspace generates its shared envelope
+types and bounds from a Rust-owned descriptor, emits byte-identical canonical
+artifacts, and remains outside ordinary provider verification.
 
 The Rust crate admits either an explicit `RulePackageCandidate` or strict
 schema-1 bytes into the same immutable `AdmittedRulePackage`. It owns canonical
@@ -666,7 +669,8 @@ The current provider deliberately excludes:
   downstream-owned payload);
 - replay or certification as a prerequisite for ordinary execution;
 - Node, browser, Three, WebAudio, DOM, Studio, or editor dependencies in ordinary Rust-provider
-  work (they remain isolated under `render/` with their own gate);
+  work (Node-backed packages remain isolated under `rules/`, `render/`, or
+  `studio/` with their own gates);
 - HTTP serving, public URLs, browser storage, same-origin behavior, or a browser event loop as an
   Engine capability prerequisite;
 - Asha's former Gameplay Fabric, runtime facade, provider/bundle lifecycle, and bridge topology; and
@@ -681,13 +685,15 @@ second structural center.
 `./scripts/verify.sh` is the ordinary Rust-provider gate. It requires no Node installation or demo
 checkout and covers locked metadata, standalone path auditing, documentation links, formatting,
 workspace/provider fixtures (including renderer-neutral model/projection), Clippy, and
-byte-reproducible conversion. The separately installed `render/` workspace has its own frozen
-TypeScript/browser gate. A third post-push gate installs the four render packages from the exact
+byte-reproducible conversion. The separately installed `rules/` workspace has
+its own generated-contract and headless TypeScript gate, and `render/` has its
+own frozen TypeScript/browser gate. A post-push gate installs the four render packages from the exact
 public Engine commit into a clean temporary consumer; the external demo retains its own complete
 product gate against an exact Engine revision.
 
-Validation follows ownership: focused Rust/headless tests prove Rust mechanisms; headless
-cross-language tests prove renderer-neutral contracts and projection; focused Three/WebGL evidence
+Validation follows ownership: focused Rust/headless tests prove Rust mechanisms;
+headless cross-language tests prove rules artifacts plus renderer-neutral
+contracts and projection; focused Three/WebGL evidence
 proves the backend; Chromium proves real DOM, WebAudio, input, canvas, and browser lifecycle; a
 packaged Electron/Tauri host will own its packaging/lifecycle proof when one exists; and Demo or
 Studio proves user-visible behavior in its supported host. Chromium success does not turn HTTP or

@@ -1,0 +1,1 @@
+{"kind":"rusty.gameplay-rules.package","schemaVersion":1,"domain":"fixture","package":"unicode","version":1,"dependencies":[],"sources":[],"provenance":[],"payload":{"a":"line\nquote\"slash\\\u0001","é":"snowman ☃","中":["é","a"]}}

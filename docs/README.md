@@ -30,7 +30,7 @@ paths:
 | Document | Purpose |
 |---|---|
 | [inspection-and-diagnostics.md](inspection-and-diagnostics.md) | Read-only inspection contract |
-| [gameplay-rules-contract.md](gameplay-rules-contract.md) | Optional semantic-neutral rules package, resolution, provenance, and diagnostics contract |
+| [gameplay-rules-contract.md](gameplay-rules-contract.md) | Optional semantic-neutral Rust package and isolated TypeScript authoring, resolution, provenance, and diagnostics contract |
 | [rendering-successor-contract.md](rendering-successor-contract.md) | Shared renderer transfer and ownership contract |
 | [rendering-operations.md](rendering-operations.md) | Renderer verification and operational limits |
 | [studio-migration-contract.md](studio-migration-contract.md) | Studio parity and owner-adoption contract |

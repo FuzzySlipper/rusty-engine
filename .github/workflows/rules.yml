@@ -1,0 +1,82 @@
+name: rules
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'rules/**'
+      - 'fixtures/gameplay-rules/**'
+      - 'rust/crates/gameplay-rules/**'
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'docs/agent-code-atlas.md'
+      - 'docs/code-map/gameplay-rules.md'
+      - 'docs/design.md'
+      - 'docs/gameplay-rules-contract.md'
+      - 'docs/known-limitations.md'
+      - 'docs/README.md'
+      - 'docs/migration/donor-provenance.md'
+      - 'docs/migration/migration-cluster-ledger.md'
+      - 'migration/gameplay-rules-donor/**'
+      - 'scripts/audit-standalone.sh'
+      - 'scripts/check-doc-links.sh'
+      - 'scripts/check-gameplay-rules-donor-disposition.sh'
+      - 'scripts/build-gameplay-rules-donor-disposition.sh'
+      - 'scripts/verify-rules.sh'
+      - 'scripts/verify-all.sh'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/rules.yml'
+  pull_request:
+    paths:
+      - 'rules/**'
+      - 'fixtures/gameplay-rules/**'
+      - 'rust/crates/gameplay-rules/**'
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'docs/agent-code-atlas.md'
+      - 'docs/code-map/gameplay-rules.md'
+      - 'docs/design.md'
+      - 'docs/gameplay-rules-contract.md'
+      - 'docs/known-limitations.md'
+      - 'docs/README.md'
+      - 'docs/migration/donor-provenance.md'
+      - 'docs/migration/migration-cluster-ledger.md'
+      - 'migration/gameplay-rules-donor/**'
+      - 'scripts/audit-standalone.sh'
+      - 'scripts/check-doc-links.sh'
+      - 'scripts/check-gameplay-rules-donor-disposition.sh'
+      - 'scripts/build-gameplay-rules-donor-disposition.sh'
+      - 'scripts/verify-rules.sh'
+      - 'scripts/verify-all.sh'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/rules.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Rusty Engine
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: rules/pnpm-lock.yaml
+
+      - name: Verify isolated gameplay-rules workspace
+        run: ./scripts/verify-rules.sh

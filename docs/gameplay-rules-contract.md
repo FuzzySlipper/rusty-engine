@@ -1,7 +1,7 @@
 # Optional gameplay rules contract
 
-Status: accepted architecture; Rust schema-1 substrate implemented; isolated
-TypeScript authoring support tracked separately
+Status: accepted architecture; Rust schema-1 substrate and isolated TypeScript
+authoring support implemented
 
 This contract freezes the smallest host-neutral rules-package support justified
 by the first Rusty D20 slice. It is deliberately narrower than an RPG
@@ -330,7 +330,7 @@ Generated files are checked for drift. TypeScript does not generate domain
 schemas, validate d20 semantics, execute rules, call runtime services, or own
 mutable gameplay state.
 
-`scripts/verify-rules.sh` owns installation-independent package tests,
+`scripts/verify-rules.sh` owns the isolated package installation and tests,
 generated-contract drift, strict decode/canonicalization fixtures, and the
 Node-free boundary audit. CI exposes it as `verify-rules`.
 `scripts/verify-all.sh` may aggregate that isolated gate, while

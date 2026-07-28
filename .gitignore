@@ -8,5 +8,9 @@
 /render/coverage/
 /render/playwright-report/
 /render/test-results/
+/rules/node_modules/
+/rules/packages/*/node_modules/
+/rules/packages/*/dist/
+/rules/**/*.tsbuildinfo
 *.log
 .DS_Store

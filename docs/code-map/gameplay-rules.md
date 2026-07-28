@@ -39,7 +39,12 @@ and diagnostics without defining what any rule means.
 - [`gameplay-rules/src/resolve.rs`](../../rust/crates/gameplay-rules/src/resolve.rs)
 - [`gameplay-rules/src/diagnostic.rs`](../../rust/crates/gameplay-rules/src/diagnostic.rs)
 - [`gameplay-rules/src/error.rs`](../../rust/crates/gameplay-rules/src/error.rs)
+- [`gameplay-rules/src/contract.rs`](../../rust/crates/gameplay-rules/src/contract.rs)
 - [`gameplay-rules/tests/contract.rs`](../../rust/crates/gameplay-rules/tests/contract.rs)
+- [`gameplay-rules-contracts`](../../rules/packages/gameplay-rules-contracts/src/index.ts)
+- [`gameplay-rules-authoring`](../../rules/packages/gameplay-rules-authoring/src/index.ts)
+- [`Rust-owned contract generator`](../../rules/scripts/generate-contract.mjs)
+- [`rules workspace boundary audit`](../../rules/scripts/check-boundaries.mjs)
 - [`schema-1 canonical fixture`](../../fixtures/gameplay-rules/package-v1.canonical.json)
 - [Optional gameplay rules contract](../gameplay-rules-contract.md)
 - [`gameplay-rules` donor disposition](../../migration/gameplay-rules-donor/disposition.tsv)
@@ -96,22 +101,23 @@ save and not proof of semantic admission.
 ```bash
 cargo test -p gameplay-rules --locked
 cargo clippy -p gameplay-rules --all-targets --locked -- -D warnings
+./scripts/verify-rules.sh
 ./scripts/check-gameplay-rules-donor-disposition.sh
 ./scripts/check-doc-links.sh
 ./scripts/audit-standalone.sh
 ./scripts/verify.sh
 ```
 
-The contract suite covers direct/artifact convergence, canonical fixture
+The Rust and TypeScript contract suites cover direct/artifact convergence,
+byte-identical cross-language canonical emission, canonical fixture
 fingerprinting, duplicate JSON keys, malformed UTF-8 and Unicode, unsafe
 numbers, unknown fields, duplicate metadata, malformed provenance, exact
-dependency failures, deterministic cycles and diagnostics, and every
-per-package and aggregate exact/one-over bound.
+dependency failures, deterministic cycles and diagnostics, plain-data-only
+authoring, and every per-package and aggregate exact/one-over bound.
 
 Ordinary provider verification remains Node-free. The optional isolated
 TypeScript authoring workspace and its `verify-rules` gate are a separate
-surface; absence of that workspace does not weaken or add a runtime dependency
-to this Rust crate.
+surface and add no runtime dependency to this Rust crate.
 
 ## Common agent mistakes
 

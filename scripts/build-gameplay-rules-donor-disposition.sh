@@ -30,62 +30,74 @@ mkdir -p "$(dirname "$OUTPUT")"
     case "$path" in
       crates/rpg-ir/src/play_bundle_artifact.rs)
         disposition="adapted"
-        successor="gameplay-rules package contract"
+        successor="rust/crates/gameplay-rules/src/package.rs"
+        proof="fixtures/gameplay-rules/package-v1.canonical.json"
         notes="Only strict package identity, exact dependency, provenance, and envelope lessons are rewritten; the donor RPG schema is excluded."
         ;;
       crates/rpg-compiler/src/diagnostic.rs)
         disposition="adapted"
-        successor="gameplay-rules diagnostics contract"
+        successor="rust/crates/gameplay-rules/src/diagnostic.rs"
+        proof="rust/crates/gameplay-rules/tests/contract.rs"
         notes="Bounded typed diagnostic shape and source correlation are rewritten without donor semantic codes or compiler ownership."
         ;;
       packages/authoring/src/canonical.ts)
         disposition="adapted"
-        successor="isolated rules canonicalization contract"
+        successor="rules/packages/gameplay-rules-authoring/src/canonical.ts"
+        proof="rules/packages/gameplay-rules-authoring/src/authoring.test.ts"
         notes="Deterministic canonical JSON is retained as a cross-language lesson under the stricter integer-only schema-1 contract."
         ;;
       packages/authoring/src/play-bundle-compiler.ts)
         disposition="adapted"
-        successor="gameplay-rules package resolution contract"
+        successor="rust/crates/gameplay-rules/src/resolve.rs"
+        proof="rust/crates/gameplay-rules/tests/contract.rs"
         notes="Only deterministic exact package graph and provenance lessons are retained; semantic compilation and content patches stay downstream."
         ;;
       scripts/check-authoring-boundary.mjs)
         disposition="adapted"
-        successor="isolated rules boundary gate"
+        successor="rules/scripts/check-boundaries.mjs"
+        proof="rules/scripts/check-boundaries.mjs"
         notes="The isolated authoring boundary-check pattern is retained without donor package topology or governance machinery."
         ;;
       scripts/generate-ir-vocabulary.mjs)
         disposition="adapted"
-        successor="small Rust-owned contract export"
+        successor="rust/crates/gameplay-rules/src/contract.rs"
+        proof="rules/scripts/generate-contract.mjs"
         notes="Only the checked generated-contract drift pattern is retained; the donor RPG operation and capability vocabulary is excluded."
         ;;
       crates/rpg-compiler/src/artifact.rs)
         disposition="evidence"
-        successor="gameplay-rules artifact bounds"
+        successor="Rust and TypeScript bounded canonical writers"
+        proof="rust/crates/gameplay-rules/tests/contract.rs"
         notes="Artifact size, hash, and fail-closed decode behavior inform bounds; donor compiled RPG definitions are excluded."
         ;;
       crates/rpg-compiler/src/compile.rs)
         disposition="evidence"
-        successor="gameplay-rules admission contract"
+        successor="rust/crates/gameplay-rules/src/package.rs"
+        proof="rust/crates/gameplay-rules/tests/contract.rs"
         notes="Bounded validation and fail-before-publication behavior are evidence; all semantic compilation remains downstream."
         ;;
       crates/rpg-compiler/tests/semantic_kernel.rs)
         disposition="evidence"
-        successor="gameplay-rules rejection fixtures"
+        successor="rust/crates/gameplay-rules/tests/contract.rs"
+        proof="rust/crates/gameplay-rules/tests/contract.rs"
         notes="Failure-path proof shape informs future fixtures without transferring the donor semantic kernel."
         ;;
       packages/authoring/src/normalize.ts)
         disposition="evidence"
-        successor="isolated rules authoring boundary"
+        successor="rules/packages/gameplay-rules-contracts/src/validation.ts"
+        proof="rules/packages/gameplay-rules-authoring/src/authoring.test.ts"
         notes="Executable-value rejection is retained as evidence; RPG semantic normalization stays downstream."
         ;;
       packages/authoring/test/authoring.test.ts|packages/authoring/test/contract-split.test.ts|packages/authoring/test/ruleset-packages.test.ts)
         disposition="evidence"
-        successor="isolated rules contract fixtures"
+        successor="rules/packages/gameplay-rules-authoring/src/authoring.test.ts"
+        proof="rules/packages/gameplay-rules-authoring/src/authoring.test.ts"
         notes="Immutable authoring, contract separation, and package rejection cases inform focused successor fixtures."
         ;;
       scripts/check-authoring-boundary.test.mjs)
         disposition="evidence"
-        successor="isolated rules boundary gate"
+        successor="rules/scripts/check-boundaries.mjs"
+        proof="rules/scripts/check-boundaries.mjs"
         notes="Positive and negative boundary-check proof informs the successor gate."
         ;;
       docs/design.md|docs/non-claims.md|packages/authoring/README.md)

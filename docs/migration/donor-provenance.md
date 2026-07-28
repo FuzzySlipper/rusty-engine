@@ -508,11 +508,11 @@ owner. [`migration/gameplay-rules-donor/disposition.tsv`](../../migration/gamepl
 accounts for all 152 paths separately from the completed mechanics campaign.
 No prior mechanics disposition is silently reclassified.
 
-The contract and the Rust `gameplay-rules` crate adapt only semantic-neutral
-lessons: strict versioned package envelopes, exact dependency graphs,
-canonical JSON, source provenance, bounded typed diagnostics,
-executable-value rejection, checked quotas, and fail-before-publication. The
-rewritten implementation is mapped in
+The contract, Rust `gameplay-rules` crate, and isolated `rules/` workspace adapt
+only semantic-neutral lessons: strict versioned package envelopes, exact
+dependency graphs, canonical JSON, source provenance, bounded typed
+diagnostics, executable-value rejection, checked quotas, generated-contract
+drift detection, and fail-before-publication. The rewritten implementation is mapped in
 [Gameplay rules](../code-map/gameplay-rules.md) and governed by
 [`gameplay-rules-contract.md`](../gameplay-rules-contract.md); no donor
 implementation file is copied.
@@ -523,10 +523,12 @@ scheduler, event, replay, and downstream product topology remain excluded.
 Rusty D20 owns its concrete candidate schema and Rust semantic compiler. The
 separate checker proves complete local accounting without reading a donor
 checkout, while the builder remains an explicit maintainer-only re-audit tool.
+The TypeScript packages have their own lockfile and `verify-rules` gate; they
+do not enter the ordinary Rust provider dependency path.
 
 The operational dependency baseline is empty. After M10, Cargo metadata, provider fixture paths,
-shell scripts, executable documentation, and CI require only Rusty Engine; ordinary Engine work has
-no pnpm or Node graph at all. A clean clone with no Asha or demo sibling is the certification
+shell scripts, executable documentation, and CI require only Rusty Engine; ordinary Rust provider
+work has no pnpm or Node graph. A clean clone with no Asha or demo sibling is the certification
 boundary. Rusty Engine is canonical for provider work; Asha and its Den project remain immutable
 historical evidence and source locators only.
 

@@ -114,7 +114,20 @@ fn checked_fixture_locks_canonical_bytes_and_fingerprint() {
     assert_eq!(package.identity().package().as_str(), "core");
     assert_eq!(
         package.fingerprint().as_str(),
-        "7bd945f9ae2b341cefa6afef8775bb759966c12daf593fa02531c3ae8663e783"
+        "8ef484b4505310b757c59133985608c29d38b421e02488797cf7df9a999d57b2"
+    );
+}
+
+#[test]
+fn unicode_fixture_locks_cross_language_key_order_and_escaping() {
+    let fixture =
+        include_bytes!("../../../../fixtures/gameplay-rules/package-v1-unicode.canonical.json");
+    let package = decode_canonical_rule_package(fixture).unwrap();
+    assert_eq!(package.identity().package().as_str(), "unicode");
+    assert_eq!(encode_rule_package(&package), fixture);
+    assert_eq!(
+        package.payload()["a"],
+        Value::String("line\nquote\"slash\\\u{1}".to_string())
     );
 }
 

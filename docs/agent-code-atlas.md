@@ -4,9 +4,9 @@ This atlas routes an unfamiliar agent to the owner of a mechanism without
 requiring campaign history or Den access. Current planning may live elsewhere;
 this document describes committed repository surfaces.
 
-The optional Rust `gameplay-rules` package support is implemented. Its isolated
-TypeScript authoring workspace remains a separately gated optional surface and
-is never an ordinary provider dependency.
+The optional Rust `gameplay-rules` package support and isolated TypeScript
+authoring workspace are implemented. The workspace remains a separately gated
+optional surface and is never an ordinary provider dependency.
 
 ## How to use this atlas
 
@@ -26,7 +26,7 @@ downstream game policy and orchestration
         |
         +--> entity-state / state-machine
         +--> gameplay-mechanics
-        +--> gameplay-rules (optional package support)
+        +--> gameplay-rules <--> rules/ (optional build-time authoring)
         +--> environment-authoring --> authored-scene
         +--> content-store / asset-catalog / asset-import
         +--> engine-spatial --> core-* / svc-*
@@ -46,7 +46,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 |---|---|
 | Entity components, atomic mutation, relationships, snapshots, state machines | [Entity state and state machines](code-map/entity-state-and-state-machines.md) |
 | Stats, tracks, sources, effects, items, equipment, damage, restoration | [Gameplay mechanics](code-map/gameplay-mechanics.md) |
-| Optional opaque rules packages, exact dependencies, provenance, canonicalization, and diagnostics | [Gameplay rules](code-map/gameplay-rules.md) |
+| Optional opaque rules packages, TypeScript authoring, exact dependencies, provenance, canonicalization, and diagnostics | [Gameplay rules](code-map/gameplay-rules.md) |
 | Canonical voxel space, collision, navigation, mesh, motion, triggers, edits | [Spatial mechanisms](code-map/spatial-mechanisms.md) |
 | Content manifests, catalogs, imports, prefabs, and authored scenes | [Content, assets, and scenes](code-map/content-assets-and-scenes.md) |
 | Stored voxel artifacts, annotations, GLB conversion, and object playback | [Voxel assets and conversion](code-map/voxel-assets-and-conversion.md) |
@@ -65,6 +65,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 - [Rust source organization](topics/development/rust-style.md)
 - [Cargo workspace](../Cargo.toml)
 - [Provider gate](../scripts/verify.sh)
+- [Gameplay rules gate](../scripts/verify-rules.sh)
 - [Renderer gate](../scripts/verify-render.sh)
 - [Studio gate](../scripts/verify-studio.sh)
 

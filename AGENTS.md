@@ -90,12 +90,13 @@ rust/crates/
   engine-inspector          read-only diagnostics leaf and CLI
 
 render/                     isolated retained TS projection, Three backend, hosts
+rules/                      isolated semantic-neutral TS rules authoring
 studio/                     isolated Angular/Nx first-party authoring product
 content/                    checked generic content inputs and artifacts
 fixtures/                   deterministic provider and host evidence
 migration/                  machine-readable donor/equivalence accounting
 docs/                       design, atlas, topics, migration evidence, reviews
-scripts/                    provider, renderer, Studio, and isolation gates
+scripts/                    provider, rules, renderer, Studio, and isolation gates
 ```
 
 For path-level ownership, public surfaces, forbidden shortcuts, tests, and
@@ -113,6 +114,7 @@ follow-up routes, use [docs/agent-code-atlas.md](docs/agent-code-atlas.md).
 | Environment recipes | `environment-authoring` | Universal procgen framework, UI, scheduling |
 | Voxel artifacts and conversion | `voxel-*` | URL/fetch runtime import, game-specific animation policy |
 | Rust retained frames | `render-model`, `render-projection`, `render-presentation` | Three, DOM, WebAudio, gameplay authority |
+| Rules authoring | `rules/` | Domain semantics, runtime evaluation, browser/UI, ordinary Rust dependencies |
 | Renderer backend and hosts | `render/` | Gameplay authority, ordinary Rust dependencies |
 | First-party authoring product | `studio/` | Demo/game policy, implicit sibling access |
 | Inspection | `engine-inspector` | Mutation or runtime/library reverse dependencies |
@@ -130,7 +132,7 @@ Rusty Engine is host neutral, not a web-game engine.
   browser tests.
 - Browser evidence proves browser-owned behavior. Headless evidence proves
   host-neutral mechanisms. Neither substitutes for the other.
-- Studio and renderer packages remain separately isolated workspaces with
+- Rules, Studio, and renderer packages remain separately isolated workspaces with
   explicit gates.
 
 ## Donor and promotion rules
@@ -170,6 +172,7 @@ Run from the repository root.
 ./scripts/audit-studio-isolation.sh
 
 # Isolated products/backends
+./scripts/verify-rules.sh
 ./scripts/verify-render.sh
 ./scripts/verify-studio.sh
 

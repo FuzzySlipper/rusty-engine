@@ -1,7 +1,7 @@
 # Asha-to-Rusty Engine migration cluster ledger
 
-Status: M0-M11S, GM0-GM7I, and GR0-GR1 implemented; M11 Studio
-closeout and GR2 TypeScript authoring are in progress
+Status: M0-M11S, GM0-GM7I, and GR0-GR2 implemented; M11 Studio
+closeout is in progress
 
 Evidence baselines:
 
@@ -108,16 +108,7 @@ Every future cluster must preserve these properties:
 | M11R | Complete shared rendering | #6156-#6163 | The complete pinned Asha render investment was adapted into renderer-neutral Rust crates plus an isolated four-package TypeScript/Three/host workspace. Every one of 134 donor files has a final disposition; the demo deleted its private renderer and consumes the public exact-revision packages. |
 | GM0-GM5 | Initial gameplay-mechanics provider | #6284-#6289 | Seven ordinary durable component families, one immutable catalog, named stats/tracks/effects/damage/inventory/equipment services, strict reconstruction, read-only inspection, runnable compositions, bounded costs, and literal 152-item `asha-rpg` disposition landed without a session, scheduler, IR, or shadow state store. |
 | GM7I | Infrastructure-shaped mechanics falsification | #6314, #6322 | A checked headless fixture composes canonical containment/equipment, attributed module/effect sources, stats/tracks, damage/repair, caller-owned expiry, and snapshot continuation. It exposed and closed prospective equipment-source track validation without adding product vocabulary or a rules framework. |
-| GR0-GR1 | Optional Rust gameplay-rules substrate | #6311-#6312 | A semantic-neutral schema-1 package contract and host-neutral Rust crate provide strict bounded admission, canonical bytes and fingerprints, exact dependency resolution, provenance, typed diagnostics, direct/artifact convergence, and complete donor accounting while every payload meaning and publication decision stays downstream. |
-
-## Accepted successor work
-
-These accepted boundaries are not completed migration claims; Den owns their
-live task and review state.
-
-| ID | Tasks | Accepted boundary |
-|---|---|---|
-| GR2 | #6313 | Implement the isolated `rules/` TypeScript contracts and authoring support while keeping ordinary provider verification Node-free. |
+| GR0-GR2 | Optional gameplay-rules support | #6311-#6313 | A semantic-neutral schema-1 package contract, host-neutral Rust crate, and isolated two-package TypeScript authoring workspace provide strict bounded admission, generated contract types, canonical bytes and fingerprints, exact dependency resolution, provenance, typed diagnostics, direct/artifact convergence, and complete donor accounting. Byte-identical golden emission crosses TypeScript into Rust while every payload meaning and publication decision stays downstream and ordinary provider verification remains Node-free. |
 
 Detailed measurements, implementation commits, browser behavior, and limitations are retained in
 [experiment-results.md](experiment-results.md). Exact donor sources and adaptations are in

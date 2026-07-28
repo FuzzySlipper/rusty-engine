@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+mod contract;
 mod diagnostic;
 mod error;
 mod identity;
@@ -14,6 +15,7 @@ mod json;
 mod package;
 mod resolve;
 
+pub use contract::encode_rule_contract_descriptor;
 pub use diagnostic::{
     RuleDiagnostic, RuleDiagnosticCorrelation, RuleDiagnosticReport, RuleDiagnosticSeverity,
     MAX_DIAGNOSTIC_CODE_BYTES, MAX_DIAGNOSTIC_LOGICAL_PATH_BYTES, MAX_DIAGNOSTIC_MESSAGE_BYTES,

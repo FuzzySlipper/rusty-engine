@@ -39,7 +39,7 @@ downstream game policy and orchestration
              |
              +--> entity-state / state-machine
              +--> gameplay-mechanics
-             +--> gameplay-rules
+             +--> gameplay-rules <--> isolated rules/ authoring workspace
              +--> environment-authoring --> authored-scene
              +--> content-store / asset-catalog / asset-import
              +--> engine-spatial --> core-* / svc-*
@@ -71,9 +71,11 @@ detail without mutable access.
 `gameplay-rules` is an independent optional package boundary for rules-heavy
 consumers. It admits opaque schema-1 JSON or direct Rust candidates into the
 same immutable canonical representation, resolves exact package dependencies,
-and carries provenance and bounded diagnostics. Downstream games retain every
-payload meaning, compiler decision, publication target, and runtime operation;
-mechanics-only games do not depend on it.
+and carries provenance and bounded diagnostics. The isolated `rules/`
+workspace generates its TypeScript contract from the Rust owner and offers
+build-time canonical authoring without entering the ordinary provider graph.
+Downstream games retain every payload meaning, compiler decision, publication
+target, and runtime operation; mechanics-only games do not depend on it.
 
 `engine-spatial` composes one canonical voxel authority with derived collision,
 navigation, mesh, motion, trigger, and edit mechanisms. Content and authoring
@@ -93,8 +95,9 @@ proves host-neutral mechanisms.
 
 ## Repository layout
 
-Workspace inventory: **30 Cargo workspace crates, 4 public renderer packages,
-and 1 Studio application plus 5 Studio libraries.**
+Workspace inventory: **30 Cargo workspace crates, 2 public gameplay-rules
+packages, 4 public renderer packages, and 1 Studio application plus 5 Studio
+libraries.**
 
 ```text
 rust/crates/
@@ -121,6 +124,10 @@ render/
   packages/renderer-host    browser/headless/editor host composition
   browser/                  real Chromium/WebGL/WebAudio/DOM acceptance
 
+rules/
+  packages/gameplay-rules-contracts generated Rust-owned envelope contracts and strict decode
+  packages/gameplay-rules-authoring semantic-neutral canonical build-time authoring
+
 studio/
   apps/studio-app           first-party Angular authoring application
   libs/                     adapter client, editor shell, viewport, voxel editor, settings
@@ -130,7 +137,7 @@ content/                    checked generic conversion request and canonical art
 fixtures/                   provider-owned deterministic fixtures and licensed sources
 migration/                  machine-readable donor/equivalence accounting
 docs/                       architecture, code maps, topics, migration evidence, reviews
-scripts/                    provider, renderer, Studio, isolation, and consistency gates
+scripts/                    provider, rules, renderer, Studio, isolation, and consistency gates
 ```
 
 The [agent code atlas](docs/agent-code-atlas.md) maps these paths to ownership,
@@ -188,13 +195,14 @@ with warnings denied. It deliberately installs no Node dependencies.
 ./scripts/verify-all.sh
 ```
 
-This adds the isolated renderer and Studio gates.
+This adds the isolated gameplay-rules, renderer, and Studio gates.
 
 ### Focused gates
 
 ```bash
 ./scripts/check-doc-links.sh
 ./scripts/audit-standalone.sh
+./scripts/verify-rules.sh
 ./scripts/verify-render.sh
 ./scripts/verify-studio.sh
 ```

@@ -27,26 +27,6 @@ downstream repositories.
   infrastructure, and Rusty D20 evidence.
 - **Last reviewed:** 2026-07-28 / codex
 
-## Gameplay rules TypeScript authoring support is not implemented
-
-- **Status:** accepted-temporary
-- **Affected surface:** optional downstream-authored rules packages
-- **Limitation:** The optional Rust `gameplay-rules` crate now implements the
-  schema-1 envelope, bounds, canonicalization, fingerprints, provenance,
-  diagnostics, and exact package-set resolution. The separately gated
-  `rules/` TypeScript contracts and semantic-neutral authoring packages do not
-  yet exist.
-- **Impact:** Direct Rust construction and checked artifact admission are
-  usable and remain Node-free. A TypeScript author must not create a private
-  competing envelope/canonicalizer and claim cross-language parity before the
-  isolated shared packages land.
-- **Detection:** `cargo test -p gameplay-rules --locked` proves the Rust
-  substrate and canonical fixture; the repository currently has no `rules/`
-  workspace or `scripts/verify-rules.sh`.
-- **Follow-up:** GR2 implements the isolated authoring workspace and
-  cross-language drift gate before Rusty D20 relies on TypeScript emission.
-- **Last reviewed:** 2026-07-28 / codex
-
 ## Planar navigation footprint and multi-agent planning
 
 - **Status:** accepted-temporary
