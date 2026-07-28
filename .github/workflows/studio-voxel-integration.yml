@@ -102,5 +102,8 @@ jobs:
       - name: Install Chromium for the explicit browser integration gate
         run: pnpm --dir studio exec playwright install --with-deps chromium
 
+      - name: Stage the consumer outside the provider Cargo workspace
+        run: cp -a "$GITHUB_WORKSPACE/rusty-engine-voxels" "$RUNNER_TEMP/rusty-engine-voxels"
+
       - name: Verify exact animated-voxel consumer integration
-        run: ./scripts/verify-studio-voxel-integration.sh "$GITHUB_WORKSPACE/rusty-engine-voxels"
+        run: ./scripts/verify-studio-voxel-integration.sh "$RUNNER_TEMP/rusty-engine-voxels"
