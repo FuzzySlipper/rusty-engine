@@ -263,14 +263,23 @@ const contributions = [
 
 Engine never imports that downstream package. The dependency remains one-way.
 
+The public composition packages use the same exact-Git subdirectory shape as the shared renderer:
+`github:FuzzySlipper/rusty-engine#<sha>&path:studio/libs/<package>`. A product pins
+`adapter-client`, `editor-shell`, `user-settings`, `viewport`, and `voxel-editor` plus the four
+renderer packages to one reviewed public revision. Each package prepares and exposes only its
+`dist` entry points; its installed closure contains versioned peers rather than Engine workspace,
+link, or sibling-checkout paths. `verify-studio-package-consumer.sh` proves that closure from a
+clean temporary consumer before downstream adoption.
+
 `StudioWorkspaceStore.entityInspectorMutationPort` admits at most one active lease. Acquisition
 requires the exact selected owner/component/contract, accepted project hash, adapter identity, and
-project/selection/contract generations. Core mutations remain serialized while it is active.
-Settlement accepts only the downstream receipt's before/after project hashes, performs the closed
-core `readProject`, and publishes that reread only when its hash matches. Project replacement,
-selection change, or a newer accepted contract generation makes the settlement stale; late success
-or failure cannot replace the newer project or operation state. Panels receive the narrow port,
-never the store or a generic command callback.
+project/selection/contract generations. Core mutations and selection/remount requests remain
+serialized while it is active, including the interval after a downstream request has started but
+before its receipt is available. Settlement accepts only the downstream receipt's before/after
+project hashes, performs the closed core `readProject`, and publishes that reread only when its hash
+matches. Project replacement or a newer accepted contract generation makes the settlement stale;
+late success or failure cannot replace the newer project or operation state. Panels receive the
+narrow port, never the store or a generic command callback.
 
 ## Admission, isolation, and versioning
 

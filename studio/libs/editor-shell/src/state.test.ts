@@ -222,26 +222,43 @@ test('entity inspector rejection and hash mismatch preserve the accepted project
   });
 });
 
-test('late entity inspector settlement is discarded after selection or project replacement', async (t) => {
-  await t.test('selection generation', async () => {
+test('entity inspector settlement blocks selection remounts and discards replaced projects', async (t) => {
+  await t.test('selection remains pinned until a delayed mutation is canonically reread', async () => {
     const transport = new FixtureTransport();
     const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
     await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
     const lease = store.entityInspectorMutationPort.acquire(
       await selectFixtureInspector(store),
     );
+
+    await store.selectEntity(2, 'hierarchy');
+    assert.equal(
+      store.snapshot().selection.entityId,
+      1,
+      'selection cannot destroy the panel after its downstream mutation has begun',
+    );
+
     transport.blockNextProjectRead();
     const pending = lease.settle({
       beforeProjectHash: 'hash-before',
       afterProjectHash: 'hash-after',
     });
+
     await store.selectEntity(2, 'hierarchy');
+    assert.equal(
+      store.snapshot().selection.entityId,
+      1,
+      'selection remains pinned while the canonical reread is outstanding',
+    );
     transport.resolveBlockedProjectRead(true);
 
-    assert.deepEqual(await pending, { kind: 'stale' });
-    assert.equal(store.snapshot().selection.entityId, 2);
-    assert.equal(store.snapshot().authoringDocument?.identity.projectHash, 'hash-before');
+    assert.deepEqual(await pending, { kind: 'accepted', projectHash: 'hash-after' });
+    assert.equal(store.snapshot().selection.entityId, 1);
+    assert.equal(store.snapshot().authoringDocument?.identity.projectHash, 'hash-after');
     assert.equal(store.snapshot().operation, 'idle');
+
+    await store.selectEntity(2, 'hierarchy');
+    assert.equal(store.snapshot().selection.entityId, 2);
   });
 
   await t.test('project and contract generations', async () => {

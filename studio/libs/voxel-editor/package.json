@@ -1,7 +1,7 @@
 {
   "name": "@rusty-engine/studio-voxel-editor",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -15,9 +15,11 @@
       "types": "./dist/voxel-editor-model.d.ts"
     }
   },
+  "files": ["dist"],
   "scripts": {
     "prebuild": "pnpm --filter @rusty-engine/studio-adapter-client run build",
     "build": "tsc --project tsconfig.build.json",
+    "prepare": "pnpm run build",
     "pretypecheck": "pnpm --filter @rusty-engine/studio-adapter-client run build",
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "test": "pnpm run build && node --test 'dist/**/*.test.js'"
@@ -25,10 +27,13 @@
   "dependencies": {
     "@angular/common": "~21.2.0",
     "@angular/core": "~21.2.0",
-    "@angular/forms": "~21.2.0",
-    "@rusty-engine/studio-adapter-client": "workspace:*"
+    "@angular/forms": "~21.2.0"
+  },
+  "peerDependencies": {
+    "@rusty-engine/studio-adapter-client": "0.1.0"
   },
   "devDependencies": {
+    "@rusty-engine/studio-adapter-client": "workspace:*",
     "@types/node": "^24.0.0"
   }
 }

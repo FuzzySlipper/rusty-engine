@@ -58,12 +58,15 @@ viewport, and its closed external-project adapter protocol.
 
 ```bash
 ./scripts/verify-studio.sh
+./scripts/verify-studio-package-consumer.sh <40-character-public-sha>
 ./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo
 ./scripts/verify-studio-voxel-integration.sh /absolute/path/to/rusty-engine-voxels
 ```
 
-The first command proves isolated Studio behavior. The other commands explicitly prove the current
-cross-repository demo workflow and the pinned animated-voxel runtime/quality workflow.
+The first command proves isolated Studio behavior. The package-consumer command proves the public
+static-composition packages install from one exact Git revision without workspace or sibling paths.
+The other commands explicitly prove the current cross-repository demo workflow and the pinned
+animated-voxel runtime/quality workflow.
 
 ## Common agent mistakes
 

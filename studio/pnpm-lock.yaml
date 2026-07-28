@@ -138,11 +138,10 @@ importers:
         version: link:../../libs/user-settings
 
   libs/adapter-client:
-    dependencies:
-      '@rusty-engine/render-contracts':
-        specifier: link:../../../render/packages/render-contracts
-        version: link:../../../render/packages/render-contracts
     devDependencies:
+      '@rusty-engine/render-contracts':
+        specifier: workspace:*
+        version: link:../../../render/packages/render-contracts
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3
@@ -158,8 +157,9 @@ importers:
       '@angular/forms':
         specifier: ~21.2.0
         version: 21.2.18(@angular/common@21.2.18(@angular/core@21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2))(@angular/platform-browser@21.2.18(@angular/common@21.2.18(@angular/core@21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2)))(rxjs@7.8.2)
+    devDependencies:
       '@rusty-engine/render-contracts':
-        specifier: link:../../../render/packages/render-contracts
+        specifier: workspace:*
         version: link:../../../render/packages/render-contracts
       '@rusty-engine/studio-adapter-client':
         specifier: workspace:*
@@ -173,7 +173,6 @@ importers:
       '@rusty-engine/studio-voxel-editor':
         specifier: workspace:*
         version: link:../voxel-editor
-    devDependencies:
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3
@@ -189,19 +188,19 @@ importers:
       '@angular/core':
         specifier: ~21.2.0
         version: 21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2)
+    devDependencies:
       '@rusty-engine/render-contracts':
-        specifier: link:../../../render/packages/render-contracts
+        specifier: workspace:*
         version: link:../../../render/packages/render-contracts
       '@rusty-engine/render-projection':
-        specifier: link:../../../render/packages/render-projection
+        specifier: workspace:*
         version: link:../../../render/packages/render-projection
       '@rusty-engine/renderer-host':
-        specifier: link:../../../render/packages/renderer-host
+        specifier: workspace:*
         version: link:../../../render/packages/renderer-host
       '@rusty-engine/renderer-three':
-        specifier: link:../../../render/packages/renderer-three
+        specifier: workspace:*
         version: link:../../../render/packages/renderer-three
-    devDependencies:
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3
@@ -217,10 +216,10 @@ importers:
       '@angular/forms':
         specifier: ~21.2.0
         version: 21.2.18(@angular/common@21.2.18(@angular/core@21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2))(@angular/platform-browser@21.2.18(@angular/common@21.2.18(@angular/core@21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2))(rxjs@7.8.2))(@angular/core@21.2.18(@angular/compiler@21.2.18)(rxjs@7.8.2)))(rxjs@7.8.2)
+    devDependencies:
       '@rusty-engine/studio-adapter-client':
         specifier: workspace:*
         version: link:../adapter-client
-    devDependencies:
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3

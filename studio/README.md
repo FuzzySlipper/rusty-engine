@@ -39,6 +39,35 @@ pnpm run verify:studio
 
 Ordinary `./scripts/verify.sh` does not install or execute this workspace.
 
+## Exact public package consumption
+
+A downstream Studio composition root pins every Studio and renderer package it imports to the same
+public Engine revision. The supported package spec is:
+
+```text
+github:FuzzySlipper/rusty-engine#<40-character-sha>&path:<package-path>
+```
+
+The Studio package paths are `studio/libs/adapter-client`, `studio/libs/editor-shell`,
+`studio/libs/user-settings`, `studio/libs/viewport`, and `studio/libs/voxel-editor`. The renderer
+paths are `render/packages/render-contracts`, `render/packages/render-projection`,
+`render/packages/renderer-host`, and `render/packages/renderer-three`. A consumer declares all nine
+at one exact SHA; the Studio packages expose only built `dist` entry points and use ordinary
+versioned peers for this transitive closure. They contain no `workspace:`, `link:`, sibling path, or
+private build dependency after installation.
+
+After a candidate revision is public, verify that exact external installation and import surface:
+
+```bash
+./scripts/verify-studio-package-consumer.sh <40-character-public-sha>
+```
+
+This check creates a clean temporary consumer, installs all nine Git subdirectories, rejects any
+local/workspace resolution in its lockfile, typechecks the Angular shell/contribution/viewport/Voxel
+Object package-root surface, and executes the host-neutral adapter/settings/renderer entry points.
+Real downstream panel/product behavior remains the owning downstream repository's browser
+acceptance.
+
 ## Launching the editor
 
 Build the isolated application, build a downstream project's adapter, and start the explicit Node

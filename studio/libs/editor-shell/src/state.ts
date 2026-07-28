@@ -750,6 +750,7 @@ export class StudioWorkspaceStore {
   }
 
   async #requestSelection(selection: EditorSelectionState): Promise<void> {
+    if (this.#activeInspectorMutation !== null) return;
     const request = ++this.#selectionRequest;
     const preview = this.#snapshot().preview;
     if (preview === null || preview.entityId === selection.entityId) {

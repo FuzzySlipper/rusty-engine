@@ -1,7 +1,7 @@
 {
   "name": "@rusty-engine/studio-adapter-client",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -11,18 +11,21 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "files": ["dist"],
   "scripts": {
     "build:render-contracts": "tsc --project ../../../render/packages/render-contracts/tsconfig.consumer.json",
     "prebuild": "pnpm run build:render-contracts",
     "build": "tsc --project tsconfig.json",
+    "prepare": "pnpm run build",
     "pretypecheck": "pnpm run build:render-contracts",
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "test": "pnpm run build && node --test 'dist/**/*.test.js'"
   },
-  "dependencies": {
-    "@rusty-engine/render-contracts": "link:../../../render/packages/render-contracts"
+  "peerDependencies": {
+    "@rusty-engine/render-contracts": "0.1.0"
   },
   "devDependencies": {
+    "@rusty-engine/render-contracts": "workspace:*",
     "@types/node": "^24.0.0"
   }
 }
