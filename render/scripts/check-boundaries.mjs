@@ -8,7 +8,7 @@ const packages = new Map([
     peers: ['@rusty-engine/render-contracts'],
   }],
   ['renderer-three', {
-    dependencies: ['three'],
+    dependencies: ['@types/three', 'three'],
     peers: [
       '@rusty-engine/render-contracts',
       '@rusty-engine/render-projection',
