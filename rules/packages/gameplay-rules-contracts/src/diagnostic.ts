@@ -43,18 +43,11 @@ export interface RuleDiagnosticInput {
 export function admitRuleDiagnostics(
   inputs: readonly RuleDiagnosticInput[],
 ): readonly RuleDiagnostic[] {
-  validateInputArray(inputs, '$/diagnostics');
-  if (inputs.length > RULE_LIMITS.maxRuleDiagnostics) {
-    throw new RuleContractError(
-      'quota-exceeded',
-      '$/diagnostics',
-      'diagnostic report exceeds its item limit',
-      {
-        actual: inputs.length,
-        maximum: RULE_LIMITS.maxRuleDiagnostics,
-      },
-    );
-  }
+  validateInputArray(
+    inputs,
+    '$/diagnostics',
+    RULE_LIMITS.maxRuleDiagnostics,
+  );
   const diagnostics = inputs.map((input, index) =>
     admitDiagnostic(input, `$/diagnostics/${String(index)}`),
   );
@@ -283,7 +276,11 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
-function validateInputArray(value: unknown, path: string): void {
+function validateInputArray(
+  value: unknown,
+  path: string,
+  maximum: number,
+): void {
   if (!Array.isArray(value)) {
     throw new RuleContractError(
       'diagnostic-invalid',
@@ -291,23 +288,28 @@ function validateInputArray(value: unknown, path: string): void {
       'diagnostics must be an array',
     );
   }
+  if (value.length > maximum) {
+    throw new RuleContractError(
+      'quota-exceeded',
+      path,
+      'diagnostic report exceeds its item limit',
+      { actual: value.length, maximum },
+    );
+  }
   const descriptors = Object.getOwnPropertyDescriptors(value);
   const keys = Reflect.ownKeys(descriptors);
-  const expected = new Set<string>(['length']);
-  for (let index = 0; index < value.length; index += 1) {
-    expected.add(String(index));
-  }
   if (
-    keys.length !== expected.size ||
-    keys.some((key) => typeof key !== 'string' || !expected.has(key)) ||
-    Array.from({ length: value.length }, (_, index) => {
-      const descriptor = descriptors[String(index)];
+    keys.length !== value.length + 1 ||
+    keys.some((key) => {
+      if (key === 'length') return false;
+      if (!isCanonicalArrayIndex(key, value.length)) return true;
+      const descriptor = descriptors[key];
       return (
         descriptor === undefined ||
         !descriptor.enumerable ||
         !('value' in descriptor)
       );
-    }).some(Boolean)
+    })
   ) {
     throw new RuleContractError(
       'diagnostic-invalid',
@@ -315,6 +317,17 @@ function validateInputArray(value: unknown, path: string): void {
       'diagnostics must be a dense array without custom properties',
     );
   }
+}
+
+function isCanonicalArrayIndex(
+  key: string | symbol,
+  length: number,
+): key is string {
+  if (typeof key !== 'string' || !/^(?:0|[1-9][0-9]*)$/.test(key)) {
+    return false;
+  }
+  const index = Number(key);
+  return Number.isSafeInteger(index) && index < length;
 }
 
 function requireDiagnosticRecord(

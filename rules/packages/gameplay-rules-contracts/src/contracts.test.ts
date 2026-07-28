@@ -219,6 +219,37 @@ test('collection quotas reject before parsing an over-limit item', () => {
     'quota-exceeded',
     '$/dependencies',
   );
+
+  expectRuleError(
+    () =>
+      admitRulePackageValue({
+        ...validPackage(),
+        dependencies: new Array(
+          RULE_LIMITS.maxDependenciesPerRulePackage + 1,
+        ),
+      }),
+    'quota-exceeded',
+    '$/dependencies',
+  );
+  expectRuleError(
+    () =>
+      admitRuleDiagnostics(
+        new Array(RULE_LIMITS.maxRuleDiagnostics + 1),
+      ),
+    'quota-exceeded',
+    '$/diagnostics',
+  );
+  expectRuleError(
+    () =>
+      admitRulePackageValue({
+        ...validPackage(),
+        payload: new Array(
+          RULE_LIMITS.maxJsonNodesPerRulePackage + 1,
+        ),
+      }),
+    'json-node-quota-exceeded',
+    '$/payload',
+  );
 });
 
 test('package collections and JSON depth and node budgets accept exact limits', () => {

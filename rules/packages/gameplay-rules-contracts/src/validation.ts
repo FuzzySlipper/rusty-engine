@@ -83,6 +83,7 @@ export function admitRulePackageValue<Payload extends JsonValue = JsonValue>(
   const rawDependencies = requireArray(
     required(root, 'dependencies', '$'),
     '$/dependencies',
+    RULE_LIMITS.maxDependenciesPerRulePackage,
   );
   enforceCollectionQuota(
     '$/dependencies',
@@ -120,7 +121,11 @@ export function admitRulePackageValue<Payload extends JsonValue = JsonValue>(
     );
   }
 
-  const rawSources = requireArray(required(root, 'sources', '$'), '$/sources');
+  const rawSources = requireArray(
+    required(root, 'sources', '$'),
+    '$/sources',
+    RULE_LIMITS.maxSourcesPerRulePackage,
+  );
   enforceCollectionQuota(
     '$/sources',
     rawSources.length,
@@ -143,6 +148,7 @@ export function admitRulePackageValue<Payload extends JsonValue = JsonValue>(
   const rawProvenance = requireArray(
     required(root, 'provenance', '$'),
     '$/provenance',
+    RULE_LIMITS.maxProvenancePerRulePackage,
   );
   enforceCollectionQuota(
     '$/provenance',
@@ -269,6 +275,7 @@ export function normalizeJsonValue(
   active.add(value);
   try {
     if (Array.isArray(value)) {
+      budget.preflight(value.length, logicalPath);
       validateArrayShape(value, logicalPath);
       return Object.freeze(
         value.map((entry, index) =>
@@ -489,6 +496,23 @@ class JsonBudget {
       );
     }
   }
+
+  public preflight(additional: number, path: string): void {
+    if (
+      additional >
+      RULE_LIMITS.maxJsonNodesPerRulePackage - this.nodes
+    ) {
+      throw new RuleContractError(
+        'json-node-quota-exceeded',
+        path,
+        'JSON node count exceeds the package limit',
+        {
+          actual: this.nodes + additional,
+          maximum: RULE_LIMITS.maxJsonNodesPerRulePackage,
+        },
+      );
+    }
+  }
 }
 
 function requireRecord(
@@ -535,7 +559,11 @@ function requireRecord(
   return value as Readonly<Record<string, unknown>>;
 }
 
-function requireArray(value: unknown, path: string): readonly unknown[] {
+function requireArray(
+  value: unknown,
+  path: string,
+  maximum: number,
+): readonly unknown[] {
   if (!Array.isArray(value)) {
     throw new RuleContractError(
       'invalid-field-type',
@@ -543,6 +571,7 @@ function requireArray(value: unknown, path: string): readonly unknown[] {
       'expected an array',
     );
   }
+  enforceCollectionQuota(path, value.length, maximum);
   validateArrayShape(value, path);
   return value;
 }
@@ -637,21 +666,18 @@ function compareUtf8(left: string, right: string): number {
 function validateArrayShape(value: readonly unknown[], path: string): void {
   const descriptors = Object.getOwnPropertyDescriptors(value);
   const keys = Reflect.ownKeys(descriptors);
-  const expected = new Set<string>(['length']);
-  for (let index = 0; index < value.length; index += 1) {
-    expected.add(String(index));
-  }
   if (
-    keys.length !== expected.size ||
-    keys.some((key) => typeof key !== 'string' || !expected.has(key)) ||
-    Array.from({ length: value.length }, (_, index) => {
-      const descriptor = descriptors[String(index)];
+    keys.length !== value.length + 1 ||
+    keys.some((key) => {
+      if (key === 'length') return false;
+      if (!isCanonicalArrayIndex(key, value.length)) return true;
+      const descriptor = descriptors[key];
       return (
         descriptor === undefined ||
         !descriptor.enumerable ||
         !('value' in descriptor)
       );
-    }).some(Boolean)
+    })
   ) {
     throw new RuleContractError(
       'noncanonical-value',
@@ -659,4 +685,15 @@ function validateArrayShape(value: readonly unknown[], path: string): void {
       'JSON arrays must be dense and cannot contain custom properties',
     );
   }
+}
+
+function isCanonicalArrayIndex(
+  key: string | symbol,
+  length: number,
+): key is string {
+  if (typeof key !== 'string' || !/^(?:0|[1-9][0-9]*)$/.test(key)) {
+    return false;
+  }
+  const index = Number(key);
+  return Number.isSafeInteger(index) && index < length;
 }
