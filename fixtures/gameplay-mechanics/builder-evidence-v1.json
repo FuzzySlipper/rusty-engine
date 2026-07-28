@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "scope": "headless-gameplay-mechanics-builder-fixture",
+  "simple": {
+    "modules": 1,
+    "activeEffects": 1,
+    "statDecisions": 2,
+    "sourceCost": {
+      "intrinsicEntriesVisited": 0,
+      "effectEntriesVisited": 1,
+      "effectSourceActivationsVisited": 1,
+      "equipmentEntriesVisited": 1,
+      "itemComponentsRead": 1,
+      "requestEntriesVisited": 0
+    },
+    "snapshotBytes": 3484
+  },
+  "stressed": {
+    "modules": 8,
+    "activeEffects": 1,
+    "statDecisions": 9,
+    "sourceCost": {
+      "intrinsicEntriesVisited": 0,
+      "effectEntriesVisited": 1,
+      "effectSourceActivationsVisited": 1,
+      "equipmentEntriesVisited": 8,
+      "itemComponentsRead": 8,
+      "requestEntriesVisited": 0
+    },
+    "snapshotBytes": 8595
+  },
+  "quotas": {
+    "maxEquipmentAssignments": 32,
+    "maxDamageParts": 8,
+    "maxStatDecisions": 256,
+    "maxActiveEffectInstances": 64,
+    "maxEffectSourceActivations": 256
+  },
+  "memoryAccounting": {
+    "allocations": "not exposed by public APIs; no numeric allocation claim",
+    "clones": "not exposed by public APIs; visits and canonical bytes are recorded instead"
+  },
+  "nonClaims": [
+    "headless regression fixture, not an external consumer or live product proof",
+    "no allocation or clone count is inferred from visit counts",
+    "not a promotion vote for gameplay-rules"
+  ]
+}

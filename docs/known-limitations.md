@@ -5,21 +5,24 @@ architecture boundaries are stated separately so agents do not “fix” them by
 introducing a second authority. Product-specific limitations belong to their
 downstream repositories.
 
-## Gameplay mechanics awaits three-consumer GM7 reconciliation
+## Gameplay mechanics awaits Rusty D20 GM7 reconciliation
 
 - **Status:** accepted-temporary
 - **Affected surface:** the initial `gameplay-mechanics` provider and GM7
   closeout
-- **Limitation:** GM0-GM6 and the reviewed external realtime demo prove the
-  provider and one real consumer. The bounded infrastructure fixture and
-  rules-heavy Rusty D20 consumer have not yet completed the final
+- **Limitation:** GM0-GM6, the reviewed external realtime demo, and the bounded
+  infrastructure fixture prove the provider plus two composition shapes. The
+  rules-heavy Rusty D20 consumer has not yet completed the final
   three-composition reconciliation.
-- **Impact:** The provider APIs and realtime product path are independently
-  usable, but the campaign has not yet shown whether the other two composition
-  shapes reveal a smaller reusable gap or only downstream policy.
-- **Detection:** `cargo test -p gameplay-mechanics -p engine-inspector --locked`
-  and `cargo run -p gameplay-mechanics --example compositions` prove the
-  provider boundary. They deliberately do not launch or inspect a sibling demo.
+- **Impact:** The provider APIs, realtime product path, and infrastructure-shaped
+  direct composition are independently usable, but the campaign has not yet
+  shown whether the rules-heavy composition reveals another reusable gap or
+  only downstream policy.
+- **Detection:** `cargo test -p gameplay-mechanics --test gm7_builder --locked`,
+  `cargo test -p gameplay-mechanics -p engine-inspector --locked`, and
+  `cargo run -p gameplay-mechanics --example compositions` prove the
+  host-neutral provider shapes. They deliberately do not launch or inspect a
+  sibling product.
 - **Follow-up:** Rusty Engine task #6291 reconciles the reviewed shooter,
   infrastructure, and Rusty D20 evidence.
 - **Last reviewed:** 2026-07-28 / codex

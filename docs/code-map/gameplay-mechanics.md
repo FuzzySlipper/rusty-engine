@@ -44,7 +44,9 @@ restoration, and their bounded receipts.
 - [`gameplay-mechanics/tests/gm3.rs`](../../rust/crates/gameplay-mechanics/tests/gm3.rs)
 - [`gameplay-mechanics/tests/gm4.rs`](../../rust/crates/gameplay-mechanics/tests/gm4.rs)
 - [`gameplay-mechanics/tests/gm5.rs`](../../rust/crates/gameplay-mechanics/tests/gm5.rs)
+- [`gameplay-mechanics/tests/gm7_builder.rs`](../../rust/crates/gameplay-mechanics/tests/gm7_builder.rs)
 - [`gameplay-mechanics/examples/compositions.rs`](../../rust/crates/gameplay-mechanics/examples/compositions.rs)
+- [`builder cost evidence`](../../fixtures/gameplay-mechanics/builder-evidence-v1.json)
 - [`engine-inspector/src/mechanics.rs`](../../rust/crates/engine-inspector/src/mechanics.rs)
 - [`gameplay-mechanics donor disposition`](../../migration/gameplay-mechanics-donor/disposition.tsv)
 - [Canonical design](../design.md)
@@ -321,10 +323,41 @@ request-source visits for both stat evaluation and one-part damage. Services
 clone only the component candidate they promise to replace (or the two
 homogeneous inventory candidates for transfer), never complete `EntityState`.
 
+### Infrastructure falsification fixture
+
+`gm7_builder` composes the public APIs into one deliberately small
+infrastructure-shaped probe. Test-local authored identities give one entity a
+production stat and stat-bounded durability track. Contained module entities
+become attributed sources only through canonical equipment, a temporary
+improvement becomes an attributed effect source, and impact/repair use
+`DamageService` and `TrackService`. A test-local day/phase value decides when
+to call `EffectService::expire`; neither time nor product vocabulary enters an
+Engine type.
+
+The fixture covers stale track and relationship revisions, uncontained and
+non-equippable items, track and damage-part bounds, a late multipart damage
+failure, a rejected negative restore, effect/equipment prospective bound
+rejection, explicit reconciliation, snapshot/reopen, identical semantic
+evaluation, and continued mutation. Whole strict snapshots plus every
+registered mechanics slot revision and the global relationship revision prove
+that every rejection leaves components and relationships unchanged.
+
+The checked evidence compares one installed module with eight. Production
+evaluation grows from two to nine decisions, equipment visits and item reads
+grow from one to eight, and one effect entry/source activation remains one.
+The canonical snapshots are 3,484 and 8,595 bytes. Public APIs expose bounded
+visits and canonical bytes, not allocator or component-clone counters, so the
+fixture records no invented allocation/clone number.
+
+This is a headless regression and falsification fixture. It is not an external
+consumer, live product proof, a rules-support consumer, or a promotion vote for
+`gameplay-rules`.
+
 ## Acceptance gates
 
 ```bash
 cargo test -p gameplay-mechanics --locked
+cargo test -p gameplay-mechanics --test gm7_builder --locked
 cargo test -p entity-state --locked
 cargo test -p engine-inspector --locked
 cargo run -p gameplay-mechanics --example compositions

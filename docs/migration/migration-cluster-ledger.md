@@ -1,6 +1,6 @@
 # Asha-to-Rusty Engine migration cluster ledger
 
-Status: M0-M11S and GM0-GM6 implemented; M11 Studio closeout and optional gameplay-rules implementation are in progress
+Status: M0-M11S and GM0-GM7I implemented; M11 Studio closeout and optional gameplay-rules implementation are in progress
 
 Evidence baselines:
 
@@ -106,6 +106,7 @@ Every future cluster must preserve these properties:
 | M10 | External reference consumer | #6137, #6141-#6145 | The walking product moved to public `rusty-engine-demo`, depends one-way on an exact Engine revision, added downstream-only `ExtractionBeacon` semantics, and proved a second TypeScript-authored composition without another Rust change. At extraction time Engine retained only provider crates and converter evidence. |
 | M11R | Complete shared rendering | #6156-#6163 | The complete pinned Asha render investment was adapted into renderer-neutral Rust crates plus an isolated four-package TypeScript/Three/host workspace. Every one of 134 donor files has a final disposition; the demo deleted its private renderer and consumes the public exact-revision packages. |
 | GM0-GM5 | Initial gameplay-mechanics provider | #6284-#6289 | Seven ordinary durable component families, one immutable catalog, named stats/tracks/effects/damage/inventory/equipment services, strict reconstruction, read-only inspection, runnable compositions, bounded costs, and literal 152-item `asha-rpg` disposition landed without a session, scheduler, IR, or shadow state store. |
+| GM7I | Infrastructure-shaped mechanics falsification | #6314, #6322 | A checked headless fixture composes canonical containment/equipment, attributed module/effect sources, stats/tracks, damage/repair, caller-owned expiry, and snapshot continuation. It exposed and closed prospective equipment-source track validation without adding product vocabulary or a rules framework. |
 
 ## Accepted successor work
 
@@ -225,7 +226,7 @@ preferences. Angular/Nx and Playwright remain outside ordinary Engine installati
 
 Den remains authoritative for exact review state and final M11 acceptance.
 
-### GM0-GM5: gameplay-mechanics provider
+### GM0-GM7I: gameplay-mechanics provider and falsification
 
 Tasks #6284-#6289 use `asha-rpg` revision
 `e4d6d1afb5b8387de4ff805d73b2041df29ee590` as bounded semantic and proof evidence. The successor
@@ -242,6 +243,24 @@ checkout. Provider closeout includes strict seven-component reconstruction, immu
 inspection, direct shooter/infrastructure/d20-shaped examples, and local-cost measurements.
 Reference-product migration and three-composition product reconciliation remain the explicit
 consumer stages after the reviewed provider revision; they are not hidden GM5 acceptance work.
+
+The GM7I infrastructure-shaped fixture then exercised only the public provider:
+one entity with a production stat and stat-bounded durability track, contained
+and equipped modules, one temporary attributed effect, damage, restoration,
+explicit caller-owned expiry, reconciliation, strict reopen, and continued
+mutation. It found one genuine provider invariant: equipment source removal
+needed the same prospective track-bound validation already owned by effect
+removal. Task #6322 closed that gap at the equipment owner rather than hiding
+it in fixture orchestration.
+
+[`builder-evidence-v1.json`](../../fixtures/gameplay-mechanics/builder-evidence-v1.json)
+checks the measurable proof. One versus eight modules yields two versus nine
+production decisions, one versus eight equipment visits and item reads, one
+effect visit/activation in both cases, and canonical snapshots of 3,484 versus
+8,595 bytes. Allocation and clone counts are not observable through the public
+API, so no numeric claim is inferred. This remains a headless regression
+fixture, not an external consumer, live product certification, rules-support
+consumer, or promotion vote.
 
 ## Reopened and absent clusters
 
