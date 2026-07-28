@@ -2,9 +2,16 @@
   "schemaVersion": 1,
   "repository": "FuzzySlipper/rusty-engine-demo",
   "publicRepository": "https://github.com/FuzzySlipper/rusty-engine-demo",
-  "commit": "7221430d9ee1eb65a0f60bee25902379f38b5bb5",
+  "commit": "cd25485445bfb581c4005b221a23caa21408d327",
+  "engineCommit": "198dccaa3f6b15d776b58d0f60c0f025e4b12171",
   "projectFile": "content/projects/loading-bay.project.json",
   "voxelProjectFile": "content/projects/converted-wall.project.json",
   "cargoPackage": "loading-bay-game",
-  "adapterBinary": "studio-adapter"
+  "adapterBinary": "studio-adapter",
+  "studioApplication": "apps/loading-bay-studio",
+  "entityInspectorConsumer": {
+    "componentTypeId": "rusty-engine-demo.loading-bay.weapon",
+    "contractId": "rusty-engine-demo.loading-bay.weapon-authoring",
+    "contractVersion": 1
+  }
 }

@@ -1,25 +1,25 @@
 # Typed downstream Entity inspector extensions
 
-Status: **accepted architecture; protocol 10 identity envelope and static Engine outlet implemented**
+Status: **implemented and promoted through two reviewed consumers**
 
 Decision task: Den `rusty-engine#6300`
 
 This decision defines the smallest boundary by which a downstream Rust project can put one of its
-own entity components in Rusty Engine Studio's Entity inspector. Protocol 10 now implements the
-bounded identity envelope and removes the fixed Loading Bay summary. The inspector outlet, host
-mutation lease, and built-in Voxel Object migration are implemented by Engine tasks `#6302` and
-`#6303`. The Loading Bay panel and final two-consumer reconciliation remain ordered follow-ups until
-their owning tasks land and pass review.
+own entity components in Rusty Engine Studio's Entity inspector. Protocol 10 implements the bounded
+identity envelope and removes the fixed Loading Bay summary. Engine tasks `#6302` and `#6303`
+implemented the outlet, host mutation lease, and built-in Voxel Object migration;
+`rusty-engine-demo#6304` implemented the independent Loading Bay Weapon panel; and Engine task
+`#6305` promoted and certified the resulting two-consumer boundary.
 
 ## Decision
 
-Studio will support downstream Entity inspector panels through **static host composition**, not a
+Studio supports downstream Entity inspector panels through **static host composition**, not a
 runtime plugin system and not a universal component-description format.
 
-The next deliberate Studio adapter revision will carry only bounded component identity and owner
-metadata in its core project readout. A downstream UI package will be compiled into a downstream
-Studio application explicitly and will bind to a separate, closed, product-owned request/response
-contract. The core protocol will never carry the downstream component value, field schema, mutation
+Protocol 10 carries only bounded component identity and owner metadata in its core project readout.
+A downstream UI package is compiled into a downstream Studio application explicitly and binds to a
+separate, closed, product-owned request/response contract. The core protocol never carries the
+downstream component value, field schema, mutation
 payload, operation name, UI package path, or executable code.
 
 In one sentence:
@@ -28,11 +28,95 @@ In one sentence:
 > inspector contract can interpret it; the statically composed downstream package supplies that
 > contract, while downstream Rust remains the only semantic and mutation authority.
 
-The existing Voxel Object panel is the first component-shaped inspector surface. It will move behind
-the same static outlet as a built-in contribution. The first independent consumer that earns the
-shared seam will be a Loading Bay Weapon authoring panel owned by `rusty-engine-demo`, after the
-demo's gameplay-mechanics migration in Den task `rusty-engine-demo#6290` establishes its current
-Rust component and project schema.
+The Voxel Object panel is the Engine-owned built-in contribution. The first independent consumer is
+the Loading Bay Weapon authoring panel owned by `rusty-engine-demo`. Both now render through the same
+outlet while their values, named operations, validation, and Rust authorities remain separate.
+
+## Implemented contract audit
+
+The promoted revisions are exact and intentionally asymmetric:
+
+| Evidence | Exact revision | What it fixes |
+| --- | --- | --- |
+| Engine public composition packages | `198dccaa3f6b15d776b58d0f60c0f025e4b12171` | Protocol 10, public package preparation, the static outlet and mutation port, and the built-in Voxel Object contribution consumed by Loading Bay |
+| Loading Bay consumer | `cd25485445bfb581c4005b221a23caa21408d327` | Closed Weapon Rust contract, typed panel/client, downstream application composition root, and exact Engine package pins |
+| Engine integration pin | `studio/demo-consumer-source.json` | Names both revisions, the downstream app, and the exact Weapon component/contract identity; CI checks out the demo commit instead of discovering a sibling checkout |
+
+The Engine closeout review records its own exact head separately in Den. That review head runs the
+current Engine host and tests against the two immutable revisions above; it does not silently replace
+the package revision compiled into the downstream product.
+
+### Implemented names and owners
+
+| Concern | Implemented name | Owner |
+| --- | --- | --- |
+| Core protocol version | `STUDIO_ADAPTER_PROTOCOL_VERSION = 10` | `studio-adapter-client` and each project adapter |
+| Contract advertisement | `AdapterDescription.entityInspectorContracts` containing `StudioEntityInspectorContractIdentity` | Core protocol identity only |
+| Owner attribution | `StudioProjectReadout.entityComponents` containing `StudioEntityComponentReference` | Project adapter, checked against canonical hierarchy owners |
+| Static contribution | `StudioEntityInspectorContribution` admitted by `admitStudioEntityInspectorContributions` | `editor-shell` |
+| Panel inputs | `StudioEntityInspectorContext` and `StudioEntityInspectorMutationPort` | `editor-shell`; no store or semantic callback is exposed |
+| Mutation lifecycle | `StudioEntityInspectorMutationLease`, `StudioEntityInspectorMutationReceipt`, and `StudioEntityInspectorMutationSettlement` | `StudioWorkspaceStore`, exposed only through the narrow port |
+| Application outlet | `StudioShellComponent.entityInspectorContributions` and `NgComponentOutlet` | Explicit application composition root and Engine shell |
+| Built-in list | `RUSTY_ENGINE_ENTITY_INSPECTOR_CONTRIBUTIONS` | Stock Engine Studio app |
+| Voxel identity | `rusty.voxel-object.instance` / `rusty.studio.voxel-object-authoring` v1 | Engine Voxel Object protocol, runtime, projection, and built-in panel |
+| Weapon identity | `rusty-engine-demo.loading-bay.weapon` / `rusty-engine-demo.loading-bay.weapon-authoring` v1 | Loading Bay project adapter, Rust authoring service, typed client, and panel |
+| Weapon operations | `readLoadingBayWeapon` and `replaceLoadingBayWeapon` | Loading Bay closed request/response union, not the core client |
+
+### Implemented bounds
+
+| Boundary | Limit |
+| --- | --- |
+| Core adapter request / response | 256 KiB / 64 MiB |
+| Stable component and contract identity | 1–128 lowercase ASCII bytes matching `[a-z][a-z0-9._-]*` |
+| Advertised inspector contracts | 64 |
+| Entity-component references per project | 4,096 |
+| Entity-component references per owner | 32 |
+| Contract version | Positive JavaScript safe integer |
+| Contribution order | JavaScript safe integer; deterministic tie-breaks are title, component type, contract ID, then version |
+| Contribution title | Nonblank and 1–128 JavaScript string code units; it is presentation, not a wire identity |
+| Concurrent downstream inspector mutation leases | One per `StudioWorkspaceStore` |
+| Loading Bay Weapon request / response | 16 KiB / 32 KiB UTF-8 JSON |
+| Loading Bay request ID | 1–256 UTF-8 bytes |
+| Loading Bay project and component guards | Full lowercase `ContentHash` values parsed by Rust; the component hash covers the canonical stored item definition |
+
+### Compatibility rules
+
+- Core protocol version 10 is an explicit version cut; there is no protocol 9 alias for the removed
+  Loading Bay summary.
+- A reference owner must exist in the canonical hierarchy, `(ownerEntityId, componentTypeId)` must be
+  unique, and every non-null reference contract must be advertised by the adapter.
+- A contribution mounts only for an exact `(componentTypeId, contractId, contractVersion)` match.
+  Duplicate static contributions fail admission before use. There is no semver range negotiation.
+- A contract-free, uninstalled, or unsupported identity remains visible as
+  `identity only · read-only`; it cannot request code or an operation.
+- Project, selection, adapter, and contract generations are part of the panel context. A late read or
+  settlement cannot publish into a newer context.
+- A downstream lease accepts only a before/after project-hash receipt, performs core
+  `readProject`, and publishes only the matching canonical result. It never receives the candidate or
+  chooses the downstream Rust operation.
+- Public Engine packages and the downstream app are compile-time dependencies pinned to one exact
+  Git revision. Runtime discovery, module loading, filesystem scans, and Angular multi-providers are
+  not compatibility mechanisms.
+
+### Deliberate implementation refinements
+
+- The proposal sketched `expectedComponentRevision` as a number. Loading Bay correctly implements it
+  as the full lowercase content hash of the canonical `StoredItemDefinition`, because its authority
+  is project content rather than an `entity-state` slot counter.
+- The proposal's `LoadingBayWeaponDraft` became `LoadingBayWeaponCandidate`; the admitted Rust owner
+  defines its complete fields and returns a typed readout and receipt.
+- The implemented context also carries `contractGeneration` and `adapterId`; these close late-response
+  races without exposing a store, service locator, or downstream value.
+- `dataVisualId` is an optional contribution presentation/testing hint. It is static host metadata,
+  never adapter-supplied protocol data.
+- The project-owned executable and trusted host use one physical `/api/studio-adapter` transport for
+  core and Weapon requests. Their tags and decoders remain separate closed unions; no generic
+  extension envelope was added.
+- The external Weapon panel uses the mutation lease because its typed operation runs outside the core
+  client. Built-in Voxel operations already enter through named `StudioWorkspaceStore` methods, so
+  they share the store's serialization and canonical project acceptance without wrapping core values
+  in the downstream lease. Transient applied Voxel playback changes presentation only and publishes
+  no project bytes.
 
 ## Why the current shape needs a boundary
 
@@ -88,9 +172,8 @@ named downstream protocol and decoder. Engine does not add an `extension`, `invo
 
 ## What belongs in the core protocol
 
-The core protocol owns discoverability and attribution only. The proposed shapes are illustrative
-TypeScript names; implementation may refine naming while preserving their exact information
-boundary.
+The core protocol owns discoverability and attribution only. These are the implemented TypeScript
+names and exact information boundary:
 
 ```ts
 interface StudioEntityInspectorContractIdentity {
@@ -159,8 +242,8 @@ the static inspector outlet changes presentation composition, not semantic owner
 
 ## Downstream typed authoring contracts
 
-Each downstream component family owns a small closed protocol beside its Rust semantic owner. For
-the selected second consumer, the rough request vocabulary is:
+Each downstream component family owns a small closed protocol beside its Rust semantic owner. The
+implemented second consumer uses this request vocabulary:
 
 ```ts
 type LoadingBayWeaponAuthoringRequest =
@@ -180,15 +263,15 @@ interface ReplaceLoadingBayWeaponRequest {
   readonly contractVersion: 1;
   readonly requestId: string;
   readonly expectedProjectHash: string;
-  readonly expectedComponentRevision: number;
+  readonly expectedComponentRevision: string;
   readonly ownerEntityId: number;
-  readonly candidate: LoadingBayWeaponDraft;
+  readonly candidate: LoadingBayWeaponCandidate;
 }
 ```
 
-`LoadingBayWeaponDraft`, its readout, its exact revision, and its receipt are closed types in the
-downstream package. The implementation task must derive their fields from the post-`#6290` Rust
-component and project schema rather than inventing a parallel editor model in this proposal.
+`LoadingBayWeaponCandidate`, its readout, its content-hash revision, and its receipt are closed types
+in the downstream package. Their fields come from the admitted post-`#6290` Rust project schema;
+they are not a parallel Engine editor model.
 
 The operation path is explicit:
 
@@ -311,8 +394,7 @@ Angular, Node, Chromium, or the Engine Studio application.
 
 ### Bounds and failures
 
-The implementation must establish finite limits for advertised contracts, component references,
-components per entity, identity lengths, and downstream request/readout collections. A duplicate,
+The implementation enforces the finite limits recorded in the audit above. A duplicate,
 orphan owner, contract mismatch, stale project hash, stale component revision, malformed readout,
 oversized response, rejected candidate, or failed canonical reread leaves durable project bytes
 unchanged and the inspector visibly rejected or stale.
@@ -360,17 +442,15 @@ It is a strong test because:
 - neither Engine nor the Voxel Object protocol should learn the game's firing or ammunition
   semantics.
 
-The first panel is intentionally narrow. It will expose the exact durable weapon identity,
-definition/configuration, and initial inventory/equipment bindings already present after `#6290`,
-then support one complete replace operation through a named downstream Rust authoring service. The
-contract-freezing task must remove any field from that sentence which is not actually durable
-project authoring data.
+The first panel is intentionally narrow. It exposes the exact durable weapon identity and
+definition/configuration plus read-only initial inventory/equipment binding context, then supports
+one complete definition replacement through the named downstream Rust authoring service.
 
-The panel will not edit live ammunition, current firing cooldown, attack resolution, enemy health,
+The panel does not edit live ammunition, current firing cooldown, attack resolution, enemy health,
 fixed-tick state, or runtime save/checkpoint state. Runtime inspection is a separate product need and
 does not enter this project-authoring seam accidentally.
 
-Promotion succeeds only if Voxel Object and Loading Bay Weapon use the same identity matching,
+Promotion succeeded because Voxel Object and Loading Bay Weapon use the same identity matching,
 static outlet, compatibility admission, operation serialization, and canonical-reread mechanics
 while retaining completely different typed readouts and Rust operations.
 
@@ -416,21 +496,22 @@ policy. Only the built-in Voxel Object contribution remains in this repository.
 
 ## Implementation sequence
 
-Implementation is deliberately ordered so the generic seam follows the real second contract:
+Implementation was deliberately ordered so the generic seam followed the real second contract:
 
-1. **Freeze the downstream contract after GM6.** Audit the actual Loading Bay weapon component and
-   durable project schema, implement or specify its two named Rust operations and closed readout,
-   and provide fixtures without changing Engine.
-2. **Revise the core identity envelope.** Protocol 10 adds bounded adapter contract advertisement
-   and entity component references, migrates the fixed Loading Bay summary out of the core readout,
-   and preserves unknown components as identity-only rows. Implemented by `rusty-engine#6302`.
-3. **Add static host composition.** Introduce the explicit contribution input/outlet and mutation
-   settlement port, then move Voxel Object behind it without behavior loss. Implemented by
+1. **Freeze the downstream contract after GM6.** Audited the actual Loading Bay weapon component and
+   durable project schema, implemented its two named Rust operations and closed readout,
+   and provided fixtures without changing Engine. Implemented by `rusty-engine-demo#6301`.
+2. **Revise the core identity envelope.** Protocol 10 added bounded adapter contract advertisement
+   and entity component references, migrated the fixed Loading Bay summary out of the core readout,
+   and preserved unknown components as identity-only rows. Implemented by `rusty-engine#6302`.
+3. **Add static host composition.** Introduced the explicit contribution input/outlet and mutation
+   settlement port, then moved Voxel Object behind it without behavior loss. Implemented by
    `rusty-engine#6303`.
-4. **Adopt from Loading Bay.** Build the downstream application composition root and Weapon panel,
-   pin the reviewed Engine revision, and prove one real mutation through canonical reopen.
-5. **Close the promotion.** Run the isolated and exact-pinned integration gates, reconcile this
-   proposal with implemented names and limits, and update canonical design/protocol documents.
+4. **Adopt from Loading Bay.** Built the downstream application composition root and Weapon panel,
+   pinned the reviewed Engine revision, and proved real mutations through canonical reopen.
+   Implemented by `rusty-engine-demo#6304`.
+5. **Close the promotion.** The isolated and exact-pinned integration gates, implemented-name audit,
+   canonical documents, and fresh served two-panel proof are owned by `rusty-engine#6305`.
 
 The Den scheduling chain is:
 
@@ -442,18 +523,29 @@ The Den scheduling chain is:
 | 4 | `rusty-engine-demo#6304` — Compose the Loading Bay Weapon panel into Studio | Demo product/host | `rusty-engine-demo#6301`, `rusty-engine#6303` |
 | 5 | `rusty-engine#6305` — Close the two-consumer Entity inspector extension boundary | Engine integration/docs | `rusty-engine-demo#6304` |
 
-These are top-level follow-ups rather than subtasks because `#6300` is a design deliverable and may
-close after review without implying that the implementation campaign has shipped. Cross-project
-dependencies preserve the one-way code dependency while making the evidence order explicit.
+These were top-level tasks rather than subtasks because `#6300` was a design deliverable. The
+cross-project dependencies preserved the one-way code dependency while making the evidence order
+explicit. All five campaign tasks are now implemented; Den retains their review history.
 
 ## Scope accounting
 
-Task `rusty-engine#6300` is complete when this proposal is reviewable and its ordered Den tasks
-exist. It intentionally implements no protocol, panel outlet, downstream operation, or browser UI;
-the parent task explicitly calls for design and decomposition rather than a speculative framework.
+The original acceptance has no remaining implementation follow-up. The promoted gate serves the
+downstream-composed Studio in Chromium, exercises the built-in Voxel Object panel, injects one
+advertised but uninstalled identity to prove read-only fallback, performs a real Weapon replacement,
+observes the core canonical reread, reloads the page, and then starts a fresh host and adapter process
+to prove durable reconstruction.
 
-The follow-ups are implementation phases, not hidden acceptance gaps in `#6300`. None may claim the
-extension seam is implemented until the real Loading Bay mutation and fresh-process product proof
-pass. If the post-GM6 weapon schema does not contain suitable durable authoring data, the first
-follow-up must return to this decision instead of fabricating a parallel component merely to satisfy
-the planned example.
+The boundary remains deliberately smaller than a plugin platform:
+
+- adding another downstream component still requires a typed package, a closed Rust contract,
+  deliberate application composition, and an exact package-pin update;
+- there is no runtime install, hot reload, arbitrary payload, generic field renderer, reflection
+  protocol, store exposure, or service locator;
+- the stock Engine app contains only Engine-owned contributions; game panels remain in their product;
+  and
+- the exact cross-repository gate is the only Engine workflow allowed to inspect the explicitly
+  supplied demo checkout. Ordinary Engine and isolated Studio gates remain sibling-free.
+
+Those are current architectural limits, not deferred gaps in the original two-consumer acceptance.
+Any future request for runtime plugins, generalized form widgets, or a third consumer requires new
+consumer evidence and its own decision rather than reopening this campaign implicitly.

@@ -1,6 +1,6 @@
 # Studio external-project adapter protocol
 
-Status: protocol 10 Engine surface implemented; downstream adapters adopt versions deliberately
+Status: protocol 10 implemented and certified through Engine Voxel Object plus downstream Weapon consumers
 
 Rusty Engine Studio talks to one project-owned Rust adapter at a time through a bounded JSON-lines
 process. The adapter is a downstream composition root: it understands that project's layout,
@@ -136,7 +136,7 @@ Entity inspector; the conversion panel remains responsible for source inspection
 canonical asset publication, and instance attachment. This is one explicit built-in capability,
 not a universal component-description or arbitrary command protocol.
 
-Protocol 10 implements the identity half of the downstream component seam documented in
+Protocol 10 and the static shell implement the shared downstream component seam documented in
 [`studio-downstream-entity-inspector-extensions.md`](studio-downstream-entity-inspector-extensions.md).
 `AdapterDescription.entityInspectorContracts` advertises bounded exact contract identities, while
 `StudioProjectReadout.entityComponents` attributes stable component and optional contract identity
@@ -157,7 +157,12 @@ generation context plus a single bounded mutation-settlement port. That port ser
 core edits, verifies a downstream before/after hash receipt through canonical `readProject`, and
 discards late settlement after project, selection, or contract replacement. It does not carry
 component values or invoke semantic operations. The stock app explicitly supplies the built-in
-Voxel Object contribution; downstream applications may statically add their own packages.
+Voxel Object contribution. The reviewed Loading Bay application statically adds its independent
+`rusty-engine-demo.loading-bay.weapon` / `rusty-engine-demo.loading-bay.weapon-authoring` v1
+contribution, whose `readLoadingBayWeapon` and `replaceLoadingBayWeapon` tags remain in a separately
+decoded product-owned union. Unsupported but advertised identities remain visible and read-only.
+There is no dynamic import, extension payload, store/service locator, or runtime contribution
+discovery.
 
 ## Safety and atomicity
 
@@ -210,7 +215,8 @@ not the Angular shell, implements the resulting camera movement, boost, pan, orb
 - The demo's Rust gate tests protocol decoding, owner delegation, path safety, bounds, downstream
   semantic rejection, optimistic replacement, atomicity, and canonical reread.
 - `./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo` is the explicit
-  cross-repository proof. It builds the project-owned adapter, opens Loading Bay, then mutates a
+  cross-repository proof. It admits the exact demo and Engine revisions declared by
+  `studio/demo-consumer-source.json`, builds the project-owned adapter, opens Loading Bay, then mutates a
   temporary Converted Wall copy through brush/primitive/history-preview/template/host-file/
   annotation/model-query/conversion/environment operations.
   It closes and starts a fresh adapter process to verify reconstruction and byte-preserving stale
@@ -219,7 +225,12 @@ not the Angular shell, implements the resulting camera movement, boost, pan, orb
   authoring, general asset import/dependency/lock/source-drift/reimport, restart-stable host-user
   camera/input preferences, transformed voxel picking,
   shared-renderer brush/conversion preview restoration, brush undo/redo, annotations, private-plan
-  conversion, reload persistence, and stale non-mutation.
+  conversion, reload persistence, and stale non-mutation. It also builds and serves the downstream
+  Loading Bay Studio composition in fresh Chromium processes: the built-in Voxel Object panel runs
+  through the shared outlet, an advertised uninstalled identity degrades to read-only, and owner 88's
+  real Weapon damage is replaced, canonically reread, page-reloaded, and reconstructed by a fresh
+  host and Rust adapter process. `scripts/verify-studio-entity-inspector-integration.sh` owns this
+  focused sub-proof but is invoked only after the parent gate has admitted the exact clean consumer.
 - `.github/workflows/studio-demo-integration.yml` checks out the public demo at the exact revision
   declared by `studio/demo-consumer-source.json` and runs that proof as an explicit integration
   gate. The pin makes downstream drift a conscious update instead of an ambient sibling checkout.

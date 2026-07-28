@@ -27,6 +27,9 @@ viewport, and its closed external-project adapter protocol.
 - [`studio/libs/viewport`](../../studio/libs/viewport)
 - [`studio/libs/voxel-editor`](../../studio/libs/voxel-editor)
 - [`studio/libs/user-settings`](../../studio/libs/user-settings)
+- [`studio/libs/editor-shell/src/entity-inspector.ts`](../../studio/libs/editor-shell/src/entity-inspector.ts)
+- [`studio/scripts/check-entity-inspector-boundary.mjs`](../../studio/scripts/check-entity-inspector-boundary.mjs)
+- [`studio/test/entity-inspector-consumer-browser`](../../studio/test/entity-inspector-consumer-browser)
 - [Studio migration contract](../studio-migration-contract.md)
 - [Studio adapter protocol](../studio-adapter-protocol.md)
 - [Downstream Entity inspector extensions](../studio-downstream-entity-inspector-extensions.md)
@@ -39,12 +42,14 @@ viewport, and its closed external-project adapter protocol.
 - The external consumer is always selected explicitly by an integration
   command; ordinary Engine work never scans a sibling checkout.
 - Renderer packages are consumed through their package roots.
-- Protocol 10 implements the bounded identity-only half of the downstream Entity
-  inspector seam. `studio/libs/editor-shell/src/entity-inspector.ts` owns static
+- Protocol 10 and the shell implement the promoted downstream Entity inspector
+  seam. `studio/libs/editor-shell/src/entity-inspector.ts` owns static
   contribution admission, exact matching, remount generations, and the narrow
   mutation-settlement contract. The shell owns the single outlet; the stock app
-  explicitly composes the built-in Voxel Object contribution. Do not add another
-  hard-coded game component to the shell.
+  explicitly composes the built-in Voxel Object contribution. The exact-pinned
+  Loading Bay application composes its own Weapon contribution without adding
+  its value or operations to Engine. Do not add another hard-coded game
+  component to the shell.
 
 ## Private or forbidden paths
 
@@ -65,13 +70,19 @@ viewport, and its closed external-project adapter protocol.
 
 The first command proves isolated Studio behavior. The package-consumer command proves the public
 static-composition packages install from one exact Git revision without workspace or sibling paths.
-The other commands explicitly prove the current cross-repository demo workflow and the pinned
-animated-voxel runtime/quality workflow.
+The demo command admits only `studio/demo-consumer-source.json`, then invokes the focused
+two-consumer proof in `scripts/verify-studio-entity-inspector-integration.sh`. That proof serves the
+downstream-built application in Chromium, covers Voxel Object, unknown read-only fallback, a real
+Weapon replacement and canonical reread, then repeats the read in a fresh adapter process. The final
+command proves the pinned animated-voxel runtime/quality workflow.
 
 ## Common agent mistakes
 
 - Treating a mocked adapter receipt as proof of a real downstream mutation.
+- Treating an identity-only fixture as proof that a downstream panel can mutate and persist.
 - Adding product policy to the shared adapter-client or viewport.
+- Adding dynamic module discovery, a generic extension payload, or store access to make a third panel
+  easier to wire.
 - Reading sibling files directly instead of using the explicit adapter.
 - Requiring Studio dependencies for unrelated Rust changes.
 

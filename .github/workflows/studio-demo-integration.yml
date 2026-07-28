@@ -15,14 +15,23 @@ on:
       - 'studio/pnpm-lock.yaml'
       - 'studio/pnpm-workspace.yaml'
       - 'studio/playwright.config.ts'
+      - 'studio/entity-inspector-consumer.playwright.config.ts'
+      - 'studio/boundary-policy.json'
+      - 'studio/scripts/check-entity-inspector-boundary.mjs'
       - 'studio/scripts/studio-host.ts'
       - 'studio/scripts/studio-user-settings-service.ts'
       - 'studio/test/integration/**'
       - 'studio/test/browser/**'
+      - 'studio/test/entity-inspector-consumer-browser/**'
       - 'render/packages/renderer-host/**'
       - 'docs/studio-adapter-protocol.md'
+      - 'docs/studio-downstream-entity-inspector-extensions.md'
+      - 'docs/design.md'
+      - 'docs/code-map/studio.md'
+      - 'docs/agent-code-atlas.md'
       - 'scripts/verify-studio-demo-integration.sh'
       - 'scripts/verify-studio-browser-integration.sh'
+      - 'scripts/verify-studio-entity-inspector-integration.sh'
       - '.github/workflows/studio-demo-integration.yml'
   pull_request:
     paths:
@@ -37,14 +46,23 @@ on:
       - 'studio/pnpm-lock.yaml'
       - 'studio/pnpm-workspace.yaml'
       - 'studio/playwright.config.ts'
+      - 'studio/entity-inspector-consumer.playwright.config.ts'
+      - 'studio/boundary-policy.json'
+      - 'studio/scripts/check-entity-inspector-boundary.mjs'
       - 'studio/scripts/studio-host.ts'
       - 'studio/scripts/studio-user-settings-service.ts'
       - 'studio/test/integration/**'
       - 'studio/test/browser/**'
+      - 'studio/test/entity-inspector-consumer-browser/**'
       - 'render/packages/renderer-host/**'
       - 'docs/studio-adapter-protocol.md'
+      - 'docs/studio-downstream-entity-inspector-extensions.md'
+      - 'docs/design.md'
+      - 'docs/code-map/studio.md'
+      - 'docs/agent-code-atlas.md'
       - 'scripts/verify-studio-demo-integration.sh'
       - 'scripts/verify-studio-browser-integration.sh'
+      - 'scripts/verify-studio-entity-inspector-integration.sh'
       - '.github/workflows/studio-demo-integration.yml'
   workflow_dispatch:
 
@@ -98,7 +116,9 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-          cache-dependency-path: studio/pnpm-lock.yaml
+          cache-dependency-path: |
+            studio/pnpm-lock.yaml
+            rusty-engine-demo/pnpm-lock.yaml
 
       - name: Install isolated Studio dependencies
         run: pnpm --dir studio install --frozen-lockfile

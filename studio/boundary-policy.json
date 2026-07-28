@@ -7,9 +7,11 @@
     "/home/dev/asha-engine",
     "/home/dev/asha-studio",
     "/home/dev/asha-testing",
+    "/home/dev/rusty-engine-demo",
     "../asha-engine",
     "../asha-studio",
-    "../asha-testing"
+    "../asha-testing",
+    "../rusty-engine-demo"
   ],
   "allowedRendererPackages": [
     "@rusty-engine/render-contracts",

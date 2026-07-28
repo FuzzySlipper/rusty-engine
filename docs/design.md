@@ -556,9 +556,18 @@ admits an immutable application-supplied contribution list, matches exact compon
 identities, and gives panels only owner/project generations plus a single mutation-settlement
 lease. Settlement serializes with core edits and accepts a downstream before/after hash receipt only
 after a matching canonical `readProject`; late project, selection, or contract settlements are
-discarded. The stock application explicitly composes Voxel Object through this same outlet.
-Product-owned typed read/mutation contracts and game panels remain downstream; Engine does not
-acquire game vocabulary, a service locator, or a generic component bridge.
+discarded. The stock application explicitly composes the Engine-owned Voxel Object contribution.
+The reviewed Loading Bay application proves the same identity matching, static admission, outlet
+lifecycle, operation serialization, and canonical acceptance with its independently typed Weapon
+contract and Rust owner. Its panel calls only `readLoadingBayWeapon` and
+`replaceLoadingBayWeapon`; the core protocol sees neither value nor operation. The external panel
+uses the narrow lease for settlement, while built-in Voxel operations already enter the same store
+through named core methods. Exact Git package pins and an explicit cross-repository gate replace
+ambient sibling access. Product-owned typed read/mutation contracts and game panels remain
+downstream; Engine does not acquire game vocabulary, runtime plugin loading, a generic payload,
+store/service-locator exposure, or a universal component bridge. The implemented contract and
+limits are recorded in
+[the downstream Entity inspector decision](studio-downstream-entity-inspector-extensions.md).
 
 Applied voxel-object animation is a disposable presentation session, not another authoring model.
 Studio selects a canonical instance and sends closed scrub/play/pause/sample/stop commands with an
