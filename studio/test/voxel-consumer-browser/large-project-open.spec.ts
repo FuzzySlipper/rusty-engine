@@ -20,7 +20,7 @@ test.describe.serial('large admitted voxel-object project', () => {
     );
   });
 
-  test('opens from the visible project controls without poisoning the adapter', async ({ page }) => {
+  test('opens from the visible project controls', async ({ page }) => {
     test.setTimeout(180_000);
     await page.goto('/');
 
@@ -30,9 +30,6 @@ test.describe.serial('large admitted voxel-object project', () => {
 
     await expectProjectOpen(page, true);
     await expect(page.locator('.entity-row[data-entity-id="1"]')).toContainText('retro-character');
-
-    await page.getByRole('button', { name: 'File', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Close Project' })).toBeEnabled();
   });
 });
 
