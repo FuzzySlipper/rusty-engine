@@ -18,8 +18,9 @@ use gameplay_mechanics::{
     SourceInstanceIdentity, StackingGroupId, StackingPolicy, StatContribution,
     StatContributionDefinition, StatDefinition, StatId, StatService, StatValue, StatsComponent,
     TrackAdjustmentKind, TrackDefinition, TrackId, TrackMaximum, TrackMutationRequest,
-    TrackService, TrackValue, TracksComponent, INVENTORY_COMPONENT_TYPE_ID,
-    MAX_CONTAINED_ENTITIES_PER_INVENTORY, MAX_EQUIPMENT_SOURCE_ACTIVATIONS,
+    TrackReconciliationPolicy, TrackReconciliationRequest, TrackService, TrackValue,
+    TracksComponent, INVENTORY_COMPONENT_TYPE_ID, MAX_CONTAINED_ENTITIES_PER_INVENTORY,
+    MAX_EQUIPMENT_SOURCE_ACTIVATIONS,
 };
 
 const PLAYER: EntityId = EntityId::new(1_001);
@@ -1587,4 +1588,329 @@ fn gm4_catalog_and_snapshot_validation_reject_invalid_structural_references() {
             }
         ))
     ));
+}
+
+#[test]
+fn equipment_source_removal_rejects_then_reconciles_stat_bounded_tracks() {
+    const STRONG_MODULE: EntityId = EntityId::new(9_001);
+    const WEAK_MODULE: EntityId = EntityId::new(9_002);
+
+    let catalog = MechanicsCatalog::admit(MechanicsCatalogDefinition {
+        version: version(),
+        stats: vec![StatDefinition {
+            id: stat("durability_limit"),
+            minimum: scalar(0),
+            maximum: scalar(500),
+        }],
+        tracks: vec![TrackDefinition {
+            id: track("durability"),
+            minimum: scalar(0),
+            maximum: TrackMaximum::Stat {
+                stat: stat("durability_limit"),
+            },
+        }],
+        sources: vec![
+            SourceDefinition {
+                id: source("strong_module"),
+                priority: 0,
+                stat_contributions: vec![StatContributionDefinition {
+                    stat: stat("durability_limit"),
+                    contribution: StatContribution::Add { amount: scalar(50) },
+                    stacking_group: StackingGroupId::parse("durability_modules").unwrap(),
+                    stacking: StackingPolicy::Sum,
+                }],
+                damage_responses: vec![],
+            },
+            SourceDefinition {
+                id: source("weak_module"),
+                priority: 0,
+                stat_contributions: vec![StatContributionDefinition {
+                    stat: stat("durability_limit"),
+                    contribution: StatContribution::Add { amount: scalar(10) },
+                    stacking_group: StackingGroupId::parse("durability_modules").unwrap(),
+                    stacking: StackingPolicy::Sum,
+                }],
+                damage_responses: vec![],
+            },
+        ],
+        damage_kinds: vec![],
+        effects: vec![],
+        capacity_metrics: vec![],
+        items: vec![
+            unique_item(
+                "strong_module",
+                &["module"],
+                &[],
+                Some(1),
+                None,
+                &["strong_module"],
+            ),
+            unique_item(
+                "weak_module",
+                &["module"],
+                &[],
+                Some(1),
+                None,
+                &["weak_module"],
+            ),
+        ],
+        equipment_slots: vec![EquipmentSlotDefinition {
+            id: slot("module"),
+            allowed_classifications: vec![classification("module")],
+        }],
+    })
+    .unwrap();
+    let mut state = EntityState::from_definitions_with_registry(
+        gameplay_mechanics::gameplay_component_registry().unwrap(),
+        [
+            EntityDefinition::new(BUILDING, "fixture-owner"),
+            EntityDefinition::new(STRONG_MODULE, "strong-module").with_containment(BUILDING),
+            EntityDefinition::new(WEAK_MODULE, "weak-module").with_containment(BUILDING),
+        ],
+    )
+    .unwrap();
+    attach(
+        &mut state,
+        BUILDING,
+        StatsComponent::new(
+            version(),
+            vec![StatValue::new(stat("durability_limit"), scalar(100))],
+        )
+        .unwrap(),
+    );
+    attach(
+        &mut state,
+        BUILDING,
+        TracksComponent::new(
+            version(),
+            vec![TrackValue::new(track("durability"), scalar(100))],
+        )
+        .unwrap(),
+    );
+    attach(
+        &mut state,
+        BUILDING,
+        EquipmentComponent::new(version(), vec![]).unwrap(),
+    );
+    attach(
+        &mut state,
+        STRONG_MODULE,
+        ItemComponent::new(version(), item("strong_module")),
+    );
+    attach(
+        &mut state,
+        WEAK_MODULE,
+        ItemComponent::new(version(), item("weak_module")),
+    );
+
+    let equip_operation = operation("equip_strong_module");
+    let equip_state_revision = state.revision();
+    let equip = EquipmentService::equip(
+        &mut state,
+        &catalog,
+        EquipmentEquipRequest {
+            operation: equip_operation.clone(),
+            source: request_identity(&equip_operation, "fixture_owner"),
+            owner: BUILDING,
+            item: STRONG_MODULE,
+            slots: vec![slot("module")],
+            expected_equipment_revision: None,
+            expected_state_revision: equip_state_revision,
+        },
+    )
+    .unwrap();
+    assert_eq!(equip.tracks_validated, 1);
+    assert_eq!(equip.source_activations, 1);
+    assert_eq!(equip.source_cost.equipment_entries_visited, 1);
+    assert_eq!(equip.source_cost.item_components_read, 1);
+
+    let evaluated = StatService::evaluate(
+        &state,
+        &catalog,
+        BUILDING,
+        &stat("durability_limit"),
+        &operation("inspect_installed_module"),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(evaluated.value, scalar(150));
+    assert!(evaluated.decisions.iter().any(|decision| {
+        decision.outcome == gameplay_mechanics::DecisionOutcome::Applied
+            && matches!(
+                decision.source,
+                SourceInstanceIdentity::EquippedItem {
+                    owner: BUILDING,
+                    item: STRONG_MODULE,
+                    ..
+                }
+            )
+    }));
+
+    let restore_operation = operation("restore_to_installed_maximum");
+    TrackService::restore(
+        &mut state,
+        &catalog,
+        TrackMutationRequest {
+            operation: restore_operation.clone(),
+            source: request_identity(&restore_operation, "fixture_owner"),
+            entity: BUILDING,
+            track: track("durability"),
+            amount: scalar(50),
+            kind: TrackAdjustmentKind::Restore,
+            expected_revision: None,
+        },
+    )
+    .unwrap();
+
+    let equipment_revision = state
+        .component_revision::<EquipmentComponent>(BUILDING)
+        .unwrap();
+    let tracks_revision = state
+        .component_revision::<TracksComponent>(BUILDING)
+        .unwrap();
+    let state_revision = state.revision();
+    let before_rejections = encode_snapshot(&state).unwrap();
+
+    let swap_operation = operation("swap_to_weaker_module");
+    assert!(matches!(
+        EquipmentService::swap(
+            &mut state,
+            &catalog,
+            EquipmentSwapRequest {
+                operation: swap_operation.clone(),
+                source: request_identity(&swap_operation, "fixture_owner"),
+                owner: BUILDING,
+                outgoing_item: STRONG_MODULE,
+                incoming_item: WEAK_MODULE,
+                incoming_slots: vec![slot("module")],
+                expected_equipment_revision: Some(equipment_revision.clone()),
+                expected_state_revision: state_revision,
+            },
+        ),
+        Err(MechanicsError::EquipmentWouldInvalidateTrack {
+            owner: BUILDING,
+            current: 150,
+            prospective_minimum: 0,
+            prospective_maximum: 110,
+            ..
+        })
+    ));
+    assert_eq!(encode_snapshot(&state).unwrap(), before_rejections);
+
+    let unequip_operation = operation("unequip_strong_module");
+    assert!(matches!(
+        EquipmentService::unequip(
+            &mut state,
+            &catalog,
+            EquipmentUnequipRequest {
+                operation: unequip_operation.clone(),
+                source: request_identity(&unequip_operation, "fixture_owner"),
+                owner: BUILDING,
+                item: STRONG_MODULE,
+                expected_equipment_revision: Some(equipment_revision.clone()),
+                expected_state_revision: state_revision,
+            },
+        ),
+        Err(MechanicsError::EquipmentWouldInvalidateTrack {
+            owner: BUILDING,
+            current: 150,
+            prospective_minimum: 0,
+            prospective_maximum: 100,
+            ..
+        })
+    ));
+    assert_eq!(encode_snapshot(&state).unwrap(), before_rejections);
+    assert_eq!(
+        state
+            .component_revision::<EquipmentComponent>(BUILDING)
+            .unwrap(),
+        equipment_revision
+    );
+    assert_eq!(
+        state
+            .component_revision::<TracksComponent>(BUILDING)
+            .unwrap(),
+        tracks_revision
+    );
+    assert_eq!(state.revision(), state_revision);
+
+    let reconcile_operation = operation("reconcile_before_module_removal");
+    let reconcile = TrackService::reconcile_to_maximum(
+        &mut state,
+        &catalog,
+        TrackReconciliationRequest {
+            operation: reconcile_operation.clone(),
+            source: request_identity(&reconcile_operation, "fixture_owner"),
+            entity: BUILDING,
+            track: track("durability"),
+            prospective_maximum: scalar(100),
+            policy: TrackReconciliationPolicy::ClampToMaximum,
+            expected_revision: Some(tracks_revision),
+        },
+    )
+    .unwrap();
+    assert_eq!(reconcile.after, scalar(100));
+
+    let before_stale_retry = encode_snapshot(&state).unwrap();
+    assert!(matches!(
+        EquipmentService::unequip(
+            &mut state,
+            &catalog,
+            EquipmentUnequipRequest {
+                operation: unequip_operation.clone(),
+                source: request_identity(&unequip_operation, "fixture_owner"),
+                owner: BUILDING,
+                item: STRONG_MODULE,
+                expected_equipment_revision: Some(equipment_revision.clone()),
+                expected_state_revision: state_revision,
+            },
+        ),
+        Err(MechanicsError::Relationship(
+            entity_state::RelationshipError::StaleRevision { .. }
+        ))
+    ));
+    assert_eq!(encode_snapshot(&state).unwrap(), before_stale_retry);
+
+    let accepted_state_revision = state.revision();
+    let accepted = EquipmentService::unequip(
+        &mut state,
+        &catalog,
+        EquipmentUnequipRequest {
+            operation: unequip_operation.clone(),
+            source: request_identity(&unequip_operation, "fixture_owner"),
+            owner: BUILDING,
+            item: STRONG_MODULE,
+            expected_equipment_revision: Some(equipment_revision),
+            expected_state_revision: accepted_state_revision,
+        },
+    )
+    .unwrap();
+    assert_eq!(accepted.tracks_validated, 1);
+    assert_eq!(accepted.source_activations, 0);
+    assert_eq!(accepted.source_cost.equipment_entries_visited, 0);
+    assert_eq!(
+        state
+            .component::<TracksComponent>(BUILDING)
+            .unwrap()
+            .unwrap()
+            .current(&track("durability")),
+        Some(scalar(100))
+    );
+
+    let encoded = encode_snapshot(&state).unwrap();
+    let restored = decode_snapshot_with_catalog(&encoded, &catalog).unwrap();
+    assert_eq!(encode_snapshot(&restored).unwrap(), encoded);
+    assert_eq!(
+        StatService::evaluate(
+            &restored,
+            &catalog,
+            BUILDING,
+            &stat("durability_limit"),
+            &operation("inspect_after_reopen"),
+            &[],
+        )
+        .unwrap()
+        .value,
+        scalar(100)
+    );
 }

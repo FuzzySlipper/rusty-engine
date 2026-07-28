@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use core_ids::EntityId;
 use entity_state::{ComponentRevision, EntityAuthoringService, EntityState};
 
-use crate::source::{collect_active_sources_with_effects_override, ensure_receipt_capacity};
+use crate::source::{collect_active_sources_with_overrides, ensure_receipt_capacity};
 use crate::{
-    ActiveEffectsComponent, CombinedRatio, DecisionOutcome, MechanicsCatalog,
+    ActiveEffectsComponent, CombinedRatio, DecisionOutcome, EquipmentComponent, MechanicsCatalog,
     MechanicsComponentKind, MechanicsError, MechanicsScalar, ObservedComponentRevision,
     OperationId, RequestSource, RoundingPolicy, SourceCollectionCost, SourceDefinitionId,
     SourceInstanceIdentity, StackingGroupId, StackingPolicy, StatContribution, StatId,
@@ -181,6 +181,7 @@ impl StatService {
 struct EvaluationOverrides<'a> {
     stats: Option<&'a StatsComponent>,
     active_effects: Option<&'a ActiveEffectsComponent>,
+    equipment: Option<&'a EquipmentComponent>,
 }
 
 fn evaluate_with_stats_override(
@@ -224,16 +225,16 @@ fn evaluate_with_stats_override(
         })?;
     ensure_base_in_bounds(entity, stat, base, stat_definition)?;
 
-    let (sources, source_cost, mut observed_revisions) =
-        collect_active_sources_with_effects_override(
-            state,
-            catalog,
-            entity,
-            operation,
-            request_sources,
-            MAX_STAT_DECISIONS,
-            overrides.active_effects,
-        )?;
+    let (sources, source_cost, mut observed_revisions) = collect_active_sources_with_overrides(
+        state,
+        catalog,
+        entity,
+        operation,
+        request_sources,
+        MAX_STAT_DECISIONS,
+        overrides.active_effects,
+        overrides.equipment,
+    )?;
     observed_revisions.push(ObservedComponentRevision {
         entity,
         component: MechanicsComponentKind::Stats,
@@ -423,7 +424,14 @@ pub(crate) fn track_bounds(
     ),
     MechanicsError,
 > {
-    track_bounds_with_overrides(state, catalog, entity, track, operation, None, None)
+    track_bounds_with_overrides(
+        state,
+        catalog,
+        entity,
+        track,
+        operation,
+        EvaluationOverrides::default(),
+    )
 }
 
 fn track_bounds_with_overrides(
@@ -432,8 +440,7 @@ fn track_bounds_with_overrides(
     entity: EntityId,
     track: &TrackId,
     operation: &OperationId,
-    stats_override: Option<&StatsComponent>,
-    active_effects_override: Option<&ActiveEffectsComponent>,
+    overrides: EvaluationOverrides<'_>,
 ) -> Result<
     (
         MechanicsScalar,
@@ -467,10 +474,7 @@ fn track_bounds_with_overrides(
                 stat,
                 operation,
                 &[],
-                EvaluationOverrides {
-                    stats: stats_override,
-                    active_effects: active_effects_override,
-                },
+                overrides,
             )?;
             ensure_resolved_track_bounds(entity, track, definition.minimum, evaluated.value)?;
             Ok((
@@ -497,6 +501,7 @@ fn validate_tracks_with_stats_override(
         operation,
         Some(stats_override),
         None,
+        None,
     )?;
     Ok((revisions, cost))
 }
@@ -515,6 +520,25 @@ pub(crate) fn validate_tracks_with_effects_override(
         operation,
         None,
         Some(active_effects_override),
+        None,
+    )
+}
+
+pub(crate) fn validate_tracks_with_equipment_override(
+    state: &EntityState,
+    catalog: &MechanicsCatalog,
+    entity: EntityId,
+    operation: &OperationId,
+    equipment_override: &EquipmentComponent,
+) -> Result<(usize, Vec<ObservedComponentRevision>, SourceCollectionCost), MechanicsError> {
+    validate_tracks_with_overrides(
+        state,
+        catalog,
+        entity,
+        operation,
+        None,
+        None,
+        Some(equipment_override),
     )
 }
 
@@ -525,6 +549,7 @@ fn validate_tracks_with_overrides(
     operation: &OperationId,
     stats_override: Option<&StatsComponent>,
     active_effects_override: Option<&ActiveEffectsComponent>,
+    equipment_override: Option<&EquipmentComponent>,
 ) -> Result<(usize, Vec<ObservedComponentRevision>, SourceCollectionCost), MechanicsError> {
     let Some(tracks) = state.component::<TracksComponent>(entity)? else {
         return Ok((0, Vec::new(), SourceCollectionCost::default()));
@@ -550,8 +575,11 @@ fn validate_tracks_with_overrides(
             entity,
             value.track(),
             operation,
-            stats_override,
-            active_effects_override,
+            EvaluationOverrides {
+                stats: stats_override,
+                active_effects: active_effects_override,
+                equipment: equipment_override,
+            },
         )?;
         merge_source_cost(&mut source_cost, cost);
         observed_revisions.extend(revisions);

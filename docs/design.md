@@ -160,8 +160,9 @@ GM0 freezes these mechanics contracts:
   list; and
 - lowering a source-derived track maximum uses a visible valid-state split:
   `TrackService::reconcile_to_maximum` first lowers the current value while the old bound remains
-  valid, then the source/effect owner publishes its separate component change. Transfer similarly
-  rejects an equipped item until an explicit exact-slot unequip succeeds, then changes containment.
+  valid, then the source/effect/equipment owner publishes its separate component change. Transfer
+  similarly rejects an equipped item until an explicit exact-slot unequip succeeds, then changes
+  containment.
 
 GM1 promotes the catalog/source/stat/track slice into the production API. Catalog admission
 canonicalizes both definition families and their bounded nested records; its diagnostic fingerprint
@@ -246,6 +247,16 @@ ledgers. Swap is one equipment replacement; transfer remains the GM0 valid-state
 unequip followed by a capacity-checked containment change. Destroying an equipped item is rejected.
 Destroying an unequipped item clears its containment and components, while destroying an owner
 removes its equipment component and releases its direct children without leaving references.
+
+Equip, unequip, and swap also evaluate every present stat-bounded track against
+the complete prospective equipment source set before publication. A lowering
+mutation that would strand a track returns
+`EquipmentWouldInvalidateTrack` with the prospective bounds and changes no
+component, relationship, or revision. The caller reconciles the track to that
+maximum, reacquires the global relationship guard, and retries the exact
+equipment operation. Equipment receipts expose the bounded track/source
+validation work; no heterogeneous transaction or complete-state clone is
+introduced.
 
 The inventory durable codec is version 2 and stores only catalog version, canonical stacks, and
 capacity limits. Item and equipment codecs remain strict inert data. Reconstruction validates item

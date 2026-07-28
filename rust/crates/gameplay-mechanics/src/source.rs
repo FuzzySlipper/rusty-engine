@@ -113,6 +113,36 @@ pub(crate) fn collect_active_sources_with_effects_override(
     ),
     MechanicsError,
 > {
+    collect_active_sources_with_overrides(
+        state,
+        catalog,
+        entity,
+        operation,
+        request_sources,
+        maximum_sources,
+        active_effects_override,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn collect_active_sources_with_overrides(
+    state: &EntityState,
+    catalog: &MechanicsCatalog,
+    entity: EntityId,
+    operation: &OperationId,
+    request_sources: &[RequestSource],
+    maximum_sources: usize,
+    active_effects_override: Option<&ActiveEffectsComponent>,
+    equipment_override: Option<&EquipmentComponent>,
+) -> Result<
+    (
+        Vec<ActiveSource>,
+        SourceCollectionCost,
+        Vec<ObservedComponentRevision>,
+    ),
+    MechanicsError,
+> {
     let mut collected = Vec::new();
     let mut cost = SourceCollectionCost::default();
     let mut observed_revisions = Vec::new();
@@ -200,7 +230,12 @@ pub(crate) fn collect_active_sources_with_effects_override(
         }
     }
 
-    if let Some(component) = state.component::<EquipmentComponent>(entity)? {
+    let stored_equipment = if equipment_override.is_none() {
+        state.component::<EquipmentComponent>(entity)?
+    } else {
+        None
+    };
+    if let Some(component) = equipment_override.or(stored_equipment) {
         observed_revisions.push(ObservedComponentRevision {
             entity,
             component: MechanicsComponentKind::Equipment,

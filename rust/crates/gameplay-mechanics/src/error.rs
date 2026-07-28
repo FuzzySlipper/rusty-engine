@@ -108,6 +108,13 @@ pub enum MechanicsError {
         prospective_minimum: i64,
         prospective_maximum: i64,
     },
+    EquipmentWouldInvalidateTrack {
+        owner: EntityId,
+        track: TrackId,
+        current: i64,
+        prospective_minimum: i64,
+        prospective_maximum: i64,
+    },
     UnknownItem {
         item: ItemDefinitionId,
     },

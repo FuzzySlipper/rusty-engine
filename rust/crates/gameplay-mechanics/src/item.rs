@@ -10,7 +10,7 @@ use crate::{
     CapacityMetricId, CatalogVersion, EquipmentAssignment, EquipmentComponent, EquipmentSlotId,
     InventoryComponent, ItemComponent, ItemDefinition, ItemDefinitionId, ItemKind, ItemStack,
     MechanicsCatalog, MechanicsComponentKind, MechanicsError, ObservedComponentRevision,
-    OperationId, SourceInstanceIdentity, MAX_EQUIPMENT_ASSIGNMENTS,
+    OperationId, SourceCollectionCost, SourceInstanceIdentity, MAX_EQUIPMENT_ASSIGNMENTS,
 };
 
 pub const MAX_CONTAINED_ENTITIES_PER_INVENTORY: usize = 256;
@@ -475,6 +475,9 @@ pub struct EquipmentMutationReceipt {
     pub committed_equipment_revision: u64,
     pub observed_item_revisions: Vec<ObservedComponentRevision>,
     pub source_activations: usize,
+    pub tracks_validated: usize,
+    pub observed_revisions: Vec<ObservedComponentRevision>,
+    pub source_cost: SourceCollectionCost,
 }
 
 #[derive(Debug, Clone)]
@@ -1272,6 +1275,15 @@ fn finish_equipment_mutation(
     context: EquipmentMutationContext,
 ) -> Result<EquipmentMutationReceipt, MechanicsError> {
     let validation = validate_equipment_state(state, catalog, context.owner, &candidate)?;
+    let (tracks_validated, observed_revisions, source_cost) =
+        crate::stat::validate_tracks_with_equipment_override(
+            state,
+            catalog,
+            context.owner,
+            &context.operation,
+            &candidate,
+        )
+        .map_err(map_equipment_bound_reconciliation_error)?;
     let changes = equipment_changes(&prepared.component, &candidate);
     EntityAuthoringService.replace_component(
         state,
@@ -1296,7 +1308,29 @@ fn finish_equipment_mutation(
         committed_equipment_revision: committed.revision(),
         observed_item_revisions: validation.observed_items,
         source_activations: validation.source_activations,
+        tracks_validated,
+        observed_revisions,
+        source_cost,
     })
+}
+
+fn map_equipment_bound_reconciliation_error(error: MechanicsError) -> MechanicsError {
+    match error {
+        MechanicsError::TrackOutOfBounds {
+            entity,
+            track,
+            attempted,
+            minimum,
+            maximum,
+        } => MechanicsError::EquipmentWouldInvalidateTrack {
+            owner: entity,
+            track,
+            current: attempted,
+            prospective_minimum: minimum,
+            prospective_maximum: maximum,
+        },
+        other => other,
+    }
 }
 
 fn equipment_changes(

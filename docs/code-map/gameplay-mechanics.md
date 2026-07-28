@@ -191,7 +191,11 @@ product schema, or render anything.
 - Track setting makes `RejectOutOfBounds` versus `ClampToBounds` explicit.
   Maximum reconciliation makes `PreserveCurrent` versus `ClampToMaximum`
   explicit; ratio preservation remains intentionally absent.
-- Equipment changes publish one exact `EquipmentComponent` slot.
+- Equipment changes validate every present stat-bounded track against the
+  prospective equipment source set, then publish one exact
+  `EquipmentComponent` slot. A lowering change that would strand a track
+  reports `EquipmentWouldInvalidateTrack` without mutation; accepted receipts
+  expose the bounded track/source validation work.
 - Fungible grant/consume publish one exact `InventoryComponent`. Transfer
   validates both candidates, then uses the bounded homogeneous `entity-state`
   replacement seam to publish both inventories in one global revision.
@@ -207,10 +211,10 @@ product schema, or render anything.
 - Unique ownership is canonical containment. Transfer rejects an equipped item;
   callers explicitly unequip, then transfer. Both intermediate states are
   valid.
-- Before removing an effect/source that lowers a derived maximum, reconcile the
-  track to the prospective maximum, then publish the effect/source change. A
-  rejected effect operation reports that bound without mutation; a failed retry
-  leaves the explicitly lowered but valid current value.
+- Before removing an effect or equipped source that lowers a derived maximum,
+  reconcile the track to the prospective maximum, then publish the effect or
+  equipment change. A rejected operation reports that bound without mutation;
+  a failed retry leaves the explicitly lowered but valid current value.
 
 The active-effects durable codec is version 2. It stores only catalog version,
 effect instance/definition identity, typed provenance, and stacks. Timers,
