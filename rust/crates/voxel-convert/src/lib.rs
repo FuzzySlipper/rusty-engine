@@ -19,13 +19,14 @@ mod store;
 mod voxelize;
 
 pub use animation::{
-    import_animated_glb, sample_animation_bind_pose, sample_animation_clip,
-    sample_animation_clip_range, AnimationAnchorPolicy, AnimationBindPoseReceipt,
-    AnimationBindPoseRequest, AnimationChannelValues, AnimationEndPolicy, AnimationInterpolation,
-    AnimationMeshSnapshot, AnimationProperty, AnimationSampleRangeReceipt,
+    evaluate_clip_node_poses, import_animated_glb, sample_animation_bind_pose,
+    sample_animation_clip, sample_animation_clip_range, AdmittedRigidNodePose,
+    AnimationAnchorPolicy, AnimationBindPoseReceipt, AnimationBindPoseRequest,
+    AnimationChannelValues, AnimationEndPolicy, AnimationInterpolation, AnimationMeshSnapshot,
+    AnimationNodePose, AnimationNodePoseReceipt, AnimationProperty, AnimationSampleRangeReceipt,
     AnimationSampleRangeRequest, AnimationSampleReceipt, AnimationSampleRequest,
     ImportedAnimatedModel, ImportedAnimationChannel, ImportedAnimationClip, ImportedAnimationNode,
-    ImportedNodeTransform, ImportedPrimitiveDeformation, ImportedSkin,
+    ImportedNodeTransform, ImportedPrimitiveDeformation, ImportedSkin, NodePoseRigidScalePolicy,
     ANIMATION_TIMESTAMP_TICKS_PER_SECOND, MAX_ANIMATION_DEFORMATION_WORK,
     MAX_ANIMATION_DURATION_MICROSECONDS, MAX_ANIMATION_MATERIALIZED_SNAPSHOT_BYTES,
     MAX_ANIMATION_SAMPLE_FRAMES, MAX_ANIMATION_SAMPLE_RATE_HZ, MAX_IMPORTED_ANIMATION_CHANNELS,

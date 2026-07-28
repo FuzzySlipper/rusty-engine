@@ -1,31 +1,28 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::mem::size_of;
 
 use super::{
     AnimationAnchorPolicy, AnimationBindPoseReceipt, AnimationBindPoseRequest, AnimationEndPolicy,
-    AnimationMeshSnapshot, AnimationProperty, AnimationSampleRangeReceipt,
-    AnimationSampleRangeRequest, AnimationSampleReceipt, AnimationSampleRequest,
-    ImportedAnimatedModel, ImportedAnimationClip, ImportedNodeTransform,
+    AnimationMeshSnapshot, AnimationSampleRangeReceipt, AnimationSampleRangeRequest,
+    AnimationSampleReceipt, AnimationSampleRequest, ImportedAnimatedModel, ImportedAnimationClip,
     ANIMATION_TIMESTAMP_TICKS_PER_SECOND, MAX_ANIMATION_DEFORMATION_WORK,
     MAX_ANIMATION_MATERIALIZED_SNAPSHOT_BYTES, MAX_ANIMATION_SAMPLE_FRAMES,
     MAX_ANIMATION_SAMPLE_RATE_HZ,
 };
-use crate::import::{
-    flatten_model_scene, identity_matrix, multiply_matrices, transform_point,
-    validate_affine_matrix,
-};
+use crate::import::{flatten_model_scene, identity_matrix, multiply_matrices, transform_point};
 use crate::{ConversionError, ImportedModelMesh, ImportedModelNode, ImportedModelPrimitive};
 
 mod interpolation;
 mod matrix;
+mod pose;
 
-use interpolation::{sample_morph_weights, sample_rotation, sample_scale, sample_translation};
-use matrix::{compose_trs, invert_affine};
+pub use pose::{
+    evaluate_clip_node_poses, AdmittedRigidNodePose, AnimationNodePose, AnimationNodePoseReceipt,
+    NodePoseRigidScalePolicy,
+};
 
-struct EvaluatedPose {
-    model_transforms: BTreeMap<u32, [f64; 16]>,
-    morph_weights: BTreeMap<u32, Vec<f64>>,
-}
+use matrix::invert_affine;
+use pose::{evaluate_pose, find_clip, EvaluatedPose};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AnimationSamplingEstimate {
@@ -133,23 +130,6 @@ fn validate_sample_rate(sample_rate_hz: u32) -> Result<(), ConversionError> {
         ));
     }
     Ok(())
-}
-
-fn find_clip<'a>(
-    model: &'a ImportedAnimatedModel,
-    clip_name: &str,
-) -> Result<&'a ImportedAnimationClip, ConversionError> {
-    model
-        .clips
-        .iter()
-        .find(|clip| clip.name == clip_name)
-        .ok_or_else(|| {
-            ConversionError::one(
-                "conversion.clipNotFound",
-                "request.clipName",
-                format!("animation clip {clip_name:?} is not present"),
-            )
-        })
 }
 
 fn sample_timestamps(
@@ -520,116 +500,6 @@ fn deformation_work_per_snapshot(model: &ImportedAnimatedModel) -> Result<u64, C
         }
     }
     Ok(work)
-}
-
-fn evaluate_pose(
-    model: &ImportedAnimatedModel,
-    clip: Option<&ImportedAnimationClip>,
-    timestamp_microseconds: u64,
-) -> Result<EvaluatedPose, ConversionError> {
-    let mut transforms = model
-        .nodes
-        .iter()
-        .map(|node| (node.source_node_index, node.base_transform))
-        .collect::<BTreeMap<_, _>>();
-    let mut morph_weights = model
-        .nodes
-        .iter()
-        .map(|node| (node.source_node_index, node.base_morph_weights.clone()))
-        .collect::<BTreeMap<_, _>>();
-
-    if let Some(clip) = clip {
-        if timestamp_microseconds > clip.duration_microseconds {
-            return Err(ConversionError::one(
-                "conversion.invalidAnimation",
-                "request.sampleSchedule",
-                "sample timestamp exceeds the selected clip duration",
-            ));
-        }
-        for channel in &clip.channels {
-            match channel.property {
-                AnimationProperty::Translation => {
-                    let sampled = sample_translation(channel, timestamp_microseconds)?;
-                    let transform = transforms
-                        .get_mut(&channel.target_node_index)
-                        .expect("clip targets were validated during import");
-                    let ImportedNodeTransform::Decomposed { translation, .. } = transform else {
-                        unreachable!("matrix-authored animation targets are rejected at import")
-                    };
-                    *translation = sampled;
-                }
-                AnimationProperty::Rotation => {
-                    let sampled = sample_rotation(channel, timestamp_microseconds)?;
-                    let transform = transforms
-                        .get_mut(&channel.target_node_index)
-                        .expect("clip targets were validated during import");
-                    let ImportedNodeTransform::Decomposed { rotation, .. } = transform else {
-                        unreachable!("matrix-authored animation targets are rejected at import")
-                    };
-                    *rotation = sampled;
-                }
-                AnimationProperty::Scale => {
-                    let sampled = sample_scale(channel, timestamp_microseconds)?;
-                    let transform = transforms
-                        .get_mut(&channel.target_node_index)
-                        .expect("clip targets were validated during import");
-                    let ImportedNodeTransform::Decomposed { scale, .. } = transform else {
-                        unreachable!("matrix-authored animation targets are rejected at import")
-                    };
-                    *scale = sampled;
-                }
-                AnimationProperty::MorphWeights => {
-                    let sampled = sample_morph_weights(channel, timestamp_microseconds)?;
-                    *morph_weights
-                        .get_mut(&channel.target_node_index)
-                        .expect("clip targets were validated during import") = sampled;
-                }
-            }
-        }
-    }
-
-    let mut model_transforms = BTreeMap::new();
-    for scene_node in &model.scene.nodes {
-        let transform = transforms
-            .get(&scene_node.source_node_index)
-            .expect("animation nodes are aligned with selected scene nodes");
-        let local = match *transform {
-            ImportedNodeTransform::Matrix(matrix) => matrix,
-            ImportedNodeTransform::Decomposed {
-                translation,
-                rotation,
-                scale,
-            } => compose_trs(translation, rotation, scale),
-        };
-        validate_affine_matrix(
-            local,
-            format!(
-                "sample.nodes[{}].localTransform",
-                scene_node.source_node_index
-            ),
-        )?;
-        let model_transform = match scene_node.parent_node_index {
-            Some(parent) => multiply_matrices(
-                *model_transforms
-                    .get(&parent)
-                    .expect("scene traversal orders parents before children"),
-                local,
-            ),
-            None => local,
-        };
-        validate_affine_matrix(
-            model_transform,
-            format!(
-                "sample.nodes[{}].modelTransform",
-                scene_node.source_node_index
-            ),
-        )?;
-        model_transforms.insert(scene_node.source_node_index, model_transform);
-    }
-    Ok(EvaluatedPose {
-        model_transforms,
-        morph_weights,
-    })
 }
 
 fn deform_pose(

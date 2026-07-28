@@ -176,6 +176,21 @@ authored node TRS and instance/mesh morph weights, applies channel values, compo
 children, applies position morph deltas, then applies four-weight linear skinning. The resulting
 positions are finite ordinary object-space indexed geometry ready for the static voxelizer.
 
+`evaluate_clip_node_poses` is the transforms-only view of that same evaluator. Given one imported
+model, clip name, and explicit integer-microsecond timestamp, it returns every reachable node's
+local and composed world/model affine matrix in deterministic scene order without allocating a
+mesh snapshot. The clip timestamp must be inside the admitted duration and hierarchy cycles or
+non-finite transforms are typed failures. Morph-only channels remain valid: their values are
+sampled and validated but cannot alter a node transform. This seam exists for offline consumers
+such as rigid-part voxel authoring; it is not a skeletal runtime or another animation authority.
+
+Scale remains present in the affine matrices, including parent-composed base and animated scale.
+The optional rigid admission hook makes the caller choose `RequireUnitScale` or
+`AllowUniformScale`. It rejects non-uniform scale, shear, singular bases, and reflections, and it
+returns the original affine matrix plus the admitted uniform scale so no scale is silently lost.
+Callers that deliberately support arbitrary affine placement can use the raw matrix and own that
+policy themselves.
+
 Anchor policy is explicit per request. `PreserveSourceSpace` retains authored root motion.
 `LockNodeToBindPose` left-multiplies every sampled position by the selected reachable node's bind
 model transform times the inverse of its sampled model transform. It therefore removes that

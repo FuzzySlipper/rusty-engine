@@ -522,6 +522,13 @@ M12 design and ordered implementation slices are in
 source, completes conversion and validation before touching its target, then atomically installs the
 canonical artifact. Runtime consumers depend on `voxel-asset`, not the converter or GLB parser.
 
+The converter also exposes one narrow transforms-only authoring seam for imported animation clips.
+`evaluate_clip_node_poses` evaluates an explicit integer-microsecond time through the same channel
+and hierarchy owner used by mesh sampling, returning scale-preserving affine local and world
+transforms without materializing geometry. Callers that need rigid part placement must explicitly
+admit unit or uniform scale; non-uniform scale, shear, singular transforms, and reflections are
+typed rejections rather than values silently discarded by the Engine.
+
 The checked request, licensed source, and canonical output remain here because they are provider
 verification fixtures, not demo content. See [voxel-asset-format.md](topics/voxel/voxel-asset-format.md).
 

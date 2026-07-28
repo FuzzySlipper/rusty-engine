@@ -7,6 +7,11 @@ use crate::{ImportedModelScene, ImportedStaticMesh};
 mod import;
 mod sample;
 
+pub use sample::{
+    evaluate_clip_node_poses, AdmittedRigidNodePose, AnimationNodePose, AnimationNodePoseReceipt,
+    NodePoseRigidScalePolicy,
+};
+
 pub(crate) use sample::{preflight_animation_bind_pose, preflight_animation_clip_range};
 
 pub const ANIMATION_TIMESTAMP_TICKS_PER_SECOND: u64 = 1_000_000;

@@ -38,7 +38,9 @@ selection.
 
 - Strict JSON formats and codecs provide the durable border.
 - `voxel-convert` binaries and library APIs are offline producers with bounded
-  diagnostics and resource ceilings.
+  diagnostics and resource ceilings. Its narrow `evaluate_clip_node_poses`
+  seam returns canonical scale-preserving node transforms at one explicit
+  clip time without deforming or materializing a mesh.
 - `voxel-object-runtime` admits validated artifacts and exposes direct playback
   and realization mechanisms for downstream composition.
 
@@ -48,6 +50,9 @@ selection.
 - Do not make independently bounded items accumulate without an aggregate
   resource ceiling.
 - Do not infer game meaning from animation clips or collision modes.
+- Do not duplicate clip interpolation or silently drop node scale in a caller;
+  consume the converter's node-pose seam and choose its explicit rigid-scale
+  admission policy when rigid placement is required.
 - Do not bypass canonical encoding, hashes, provenance, or atomic installation.
 
 ## Acceptance gates and fixtures
