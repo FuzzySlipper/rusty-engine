@@ -18,8 +18,10 @@ cat > "$PROBE_ROOT/package.json" <<JSON
   "packageManager": "pnpm@11.7.0",
   "dependencies": {
     "@angular/common": "~21.2.0",
+    "@angular/compiler": "~21.2.0",
     "@angular/core": "~21.2.0",
     "@angular/forms": "~21.2.0",
+    "@angular/platform-browser": "~21.2.0",
     "@rusty-engine/render-contracts": "github:FuzzySlipper/rusty-engine#${ENGINE_REVISION}&path:render/packages/render-contracts",
     "@rusty-engine/render-projection": "github:FuzzySlipper/rusty-engine#${ENGINE_REVISION}&path:render/packages/render-projection",
     "@rusty-engine/renderer-host": "github:FuzzySlipper/rusty-engine#${ENGINE_REVISION}&path:render/packages/renderer-host",
@@ -29,6 +31,13 @@ cat > "$PROBE_ROOT/package.json" <<JSON
     "@rusty-engine/studio-user-settings": "github:FuzzySlipper/rusty-engine#${ENGINE_REVISION}&path:studio/libs/user-settings",
     "@rusty-engine/studio-viewport": "github:FuzzySlipper/rusty-engine#${ENGINE_REVISION}&path:studio/libs/viewport",
     "@rusty-engine/studio-voxel-editor": "github:FuzzySlipper/rusty-engine#${ENGINE_REVISION}&path:studio/libs/voxel-editor",
+    "rxjs": "~7.8.0",
+    "tslib": "^2.3.0"
+  },
+  "devDependencies": {
+    "@angular/build": "~21.2.0",
+    "@angular/cli": "~21.2.0",
+    "@angular/compiler-cli": "~21.2.0",
     "typescript": "~5.9.2"
   }
 }
@@ -74,7 +83,74 @@ do
   fi
 done
 
-cat > "$PROBE_ROOT/probe.ts" <<'TS'
+mkdir -p "$PROBE_ROOT/src"
+
+cat > "$PROBE_ROOT/angular.json" <<'JSON'
+{
+  "$schema": "./node_modules/@angular/cli/lib/config/schema.json",
+  "version": 1,
+  "newProjectRoot": "projects",
+  "projects": {
+    "exact-public-studio-consumer": {
+      "projectType": "application",
+      "root": "",
+      "sourceRoot": "src",
+      "architect": {
+        "build": {
+          "builder": "@angular/build:application",
+          "options": {
+            "browser": "src/main.ts",
+            "index": "src/index.html",
+            "outputPath": "dist",
+            "tsConfig": "tsconfig.app.json"
+          }
+        }
+      }
+    }
+  }
+}
+JSON
+
+cat > "$PROBE_ROOT/tsconfig.json" <<'JSON'
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "isolatedModules": true,
+    "skipLibCheck": false
+  },
+  "angularCompilerOptions": {
+    "enableI18nLegacyMessageIdFormat": false,
+    "strictInjectionParameters": true,
+    "strictInputAccessModifiers": true,
+    "strictTemplates": true
+  }
+}
+JSON
+
+cat > "$PROBE_ROOT/tsconfig.app.json" <<'JSON'
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist/out-tsc"
+  },
+  "include": ["src/**/*.ts"]
+}
+JSON
+
+cat > "$PROBE_ROOT/src/index.html" <<'HTML'
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>Exact public Studio package consumer</title></head>
+  <body><exact-public-studio-consumer></exact-public-studio-consumer></body>
+</html>
+HTML
+
+cat > "$PROBE_ROOT/src/main.ts" <<'TS'
+import { Component } from '@angular/core';
+import { bootstrapApplication } from '@angular/platform-browser';
 import {
   STUDIO_ADAPTER_PROTOCOL_VERSION,
   VOXEL_OBJECT_COMPONENT_TYPE_ID,
@@ -86,7 +162,10 @@ import {
 } from '@rusty-engine/studio-editor-shell';
 import { buildDefaultStudioHostUserSettings } from '@rusty-engine/studio-user-settings';
 import { StudioViewportComponent } from '@rusty-engine/studio-viewport';
-import { VoxelObjectPlaybackComponent } from '@rusty-engine/studio-voxel-editor';
+import {
+  VoxelEditorComponent,
+  VoxelObjectPlaybackComponent,
+} from '@rusty-engine/studio-voxel-editor';
 
 const contributions = admitStudioEntityInspectorContributions(
   RUSTY_ENGINE_ENTITY_INSPECTOR_CONTRIBUTIONS,
@@ -96,28 +175,35 @@ if (
   || contributions[0]?.componentTypeId !== VOXEL_OBJECT_COMPONENT_TYPE_ID
   || typeof StudioShellComponent !== 'function'
   || typeof StudioViewportComponent !== 'function'
+  || typeof VoxelEditorComponent !== 'function'
   || typeof VoxelObjectPlaybackComponent !== 'function'
   || buildDefaultStudioHostUserSettings('consumer').schemaVersion !== 1
 ) {
   throw new Error('exact-revision Studio packages did not compose one coherent typed surface');
 }
+
+@Component({
+  selector: 'exact-public-studio-consumer',
+  standalone: true,
+  imports: [
+    StudioShellComponent,
+    StudioViewportComponent,
+    VoxelEditorComponent,
+    VoxelObjectPlaybackComponent,
+  ],
+  template: `
+    <rusty-studio-shell />
+    <rusty-studio-viewport />
+    <rusty-voxel-editor />
+    <rusty-voxel-object-playback />
+  `,
+})
+class ExactPublicStudioConsumer {}
+
+void bootstrapApplication(ExactPublicStudioConsumer);
 TS
 
-cat > "$PROBE_ROOT/tsconfig.json" <<'JSON'
-{
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "preserve",
-    "moduleResolution": "bundler",
-    "strict": true,
-    "noEmit": true,
-    "skipLibCheck": false
-  },
-  "include": ["probe.ts"]
-}
-JSON
-
-pnpm --dir "$PROBE_ROOT" exec tsc --project tsconfig.json
+pnpm --dir "$PROBE_ROOT" exec ng build exact-public-studio-consumer
 
 pnpm --dir "$PROBE_ROOT" exec node --input-type=module <<'JS'
 import { STUDIO_ADAPTER_PROTOCOL_VERSION } from '@rusty-engine/studio-adapter-client';

@@ -16,5 +16,12 @@
       "@rusty-engine/studio-voxel-editor": ["../voxel-editor/dist/index.d.ts"],
       "@rusty-engine/studio-voxel-editor/model": ["../voxel-editor/dist/voxel-editor-model.d.ts"]
     }
+  },
+  "angularCompilerOptions": {
+    "compilationMode": "partial",
+    "enableI18nLegacyMessageIdFormat": false,
+    "strictInjectionParameters": true,
+    "strictInputAccessModifiers": true,
+    "strictTemplates": true
   }
 }

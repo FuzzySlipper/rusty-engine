@@ -14,7 +14,7 @@
   "files": ["dist"],
   "scripts": {
     "prebuild": "pnpm --dir ../.. run build:renderer",
-    "build": "tsc --project tsconfig.build.json",
+    "build": "ngc --project tsconfig.build.json",
     "prepare": "pnpm run build",
     "pretypecheck": "pnpm --dir ../.. run build:renderer",
     "typecheck": "tsc --project tsconfig.json --noEmit",

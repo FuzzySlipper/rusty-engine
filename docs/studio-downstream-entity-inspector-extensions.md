@@ -268,8 +268,10 @@ The public composition packages use the same exact-Git subdirectory shape as the
 `adapter-client`, `editor-shell`, `user-settings`, `viewport`, and `voxel-editor` plus the four
 renderer packages to one reviewed public revision. Each package prepares and exposes only its
 `dist` entry points; its installed closure contains versioned peers rather than Engine workspace,
-link, or sibling-checkout paths. `verify-studio-package-consumer.sh` proves that closure from a
-clean temporary consumer before downstream adoption.
+link, or sibling-checkout paths. Angular-bearing packages publish partial-compiled Angular metadata
+in those entry points. `verify-studio-package-consumer.sh` proves that closure from a clean
+temporary consumer by building an external Angular application that imports the shell, viewport,
+Voxel editor, and playback components before downstream adoption.
 
 `StudioWorkspaceStore.entityInspectorMutationPort` admits at most one active lease. Acquisition
 requires the exact selected owner/component/contract, accepted project hash, adapter identity, and

@@ -18,7 +18,7 @@
   "files": ["dist"],
   "scripts": {
     "prebuild": "pnpm --filter @rusty-engine/studio-adapter-client run build",
-    "build": "tsc --project tsconfig.build.json",
+    "build": "ngc --project tsconfig.build.json",
     "prepare": "pnpm run build",
     "pretypecheck": "pnpm --filter @rusty-engine/studio-adapter-client run build",
     "typecheck": "tsc --project tsconfig.json --noEmit",

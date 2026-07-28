@@ -63,8 +63,10 @@ After a candidate revision is public, verify that exact external installation an
 ```
 
 This check creates a clean temporary consumer, installs all nine Git subdirectories, rejects any
-local/workspace resolution in its lockfile, typechecks the Angular shell/contribution/viewport/Voxel
-Object package-root surface, and executes the host-neutral adapter/settings/renderer entry points.
+local/workspace resolution in its lockfile, builds a minimal external Angular application that
+imports the shell, viewport, Voxel editor, and playback components, and executes the host-neutral
+adapter/settings/renderer entry points. The Angular-bearing packages publish partial-compiled
+metadata so the consuming application's linker—not a source-copy workaround—finishes compilation.
 Real downstream panel/product behavior remains the owning downstream repository's browser
 acceptance.
 

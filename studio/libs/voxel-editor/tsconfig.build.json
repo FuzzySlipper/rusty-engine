@@ -12,5 +12,12 @@
     "paths": {
       "@rusty-engine/studio-adapter-client": ["../adapter-client/dist/index.d.ts"]
     }
+  },
+  "angularCompilerOptions": {
+    "compilationMode": "partial",
+    "enableI18nLegacyMessageIdFormat": false,
+    "strictInjectionParameters": true,
+    "strictInputAccessModifiers": true,
+    "strictTemplates": true
   }
 }

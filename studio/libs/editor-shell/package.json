@@ -14,7 +14,7 @@
   "files": ["dist"],
   "scripts": {
     "prebuild": "pnpm --filter @rusty-engine/studio-user-settings run build && pnpm --filter @rusty-engine/studio-adapter-client run build && pnpm --filter @rusty-engine/studio-viewport run build && pnpm --filter @rusty-engine/studio-voxel-editor run build",
-    "build": "tsc --project tsconfig.build.json",
+    "build": "ngc --project tsconfig.build.json",
     "prepare": "pnpm run build",
     "pretypecheck": "pnpm --filter @rusty-engine/studio-user-settings run build && pnpm --filter @rusty-engine/studio-adapter-client run build && pnpm --filter @rusty-engine/studio-viewport run build && pnpm --filter @rusty-engine/studio-voxel-editor run build",
     "typecheck": "tsc --project tsconfig.json --noEmit",
