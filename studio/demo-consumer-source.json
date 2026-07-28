@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "repository": "FuzzySlipper/rusty-engine-demo",
   "publicRepository": "https://github.com/FuzzySlipper/rusty-engine-demo",
-  "commit": "7d3cc9cc3c4eb1483834d8748e092a852f3d64b2",
+  "commit": "d17b96435f73de735be71b074b34022f77bcc343",
   "projectFile": "content/projects/loading-bay.project.json",
   "voxelProjectFile": "content/projects/converted-wall.project.json",
   "cargoPackage": "loading-bay-game",

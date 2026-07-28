@@ -115,8 +115,8 @@ for (const [surfaceId, rulePath] of rules) {
 const expectedOwners = new Set([
   'asset-catalog', 'asset-import', 'authored-scene', 'content-store', 'core-assets', 'core-ids',
   'core-math', 'core-space', 'core-time', 'core-voxel', 'engine-inspector', 'engine-spatial',
-  'entity-state', 'environment-authoring', 'gameplay-mechanics', 'render-model', 'render-presentation',
-  'render-projection', 'state-machine', 'svc-collision', 'svc-mesh', 'svc-pathfinding',
+  'entity-state', 'environment-authoring', 'gameplay-mechanics', 'gameplay-rules', 'render-model',
+  'render-presentation', 'render-projection', 'state-machine', 'svc-collision', 'svc-mesh', 'svc-pathfinding',
   'svc-rng', 'svc-spatial', 'svc-volume', 'voxel-annotation', 'voxel-asset', 'voxel-convert',
   'voxel-object-runtime',
   '@rusty-engine/render-contracts', '@rusty-engine/render-projection',
@@ -148,12 +148,19 @@ const contractHash = createHash('sha256')
   .digest('hex');
 if (contractHash.length !== 64) throw new Error('failed to hash Studio migration contract');
 
-const integrationWorkflow = readText('../.github/workflows/studio-demo-integration.yml');
-if (!integrationWorkflow.includes(`RUSTY_ENGINE_DEMO_REPOSITORY: ${demoSource.repository}`)) {
-  throw new Error('Studio integration workflow does not use the declared demo repository');
-}
-if (!integrationWorkflow.includes(`RUSTY_ENGINE_DEMO_REVISION: ${demoSource.commit}`)) {
-  throw new Error('Studio integration workflow does not use the exact declared demo revision');
+const integrationWorkflow = readText(
+  process.env.STUDIO_INTEGRATION_WORKFLOW ?? '../.github/workflows/studio-demo-integration.yml',
+);
+const workflowPinMarkers = [
+  "readFileSync('studio/demo-consumer-source.json'",
+  'repository: ${{ steps.demo-consumer.outputs.repository }}',
+  'ref: ${{ steps.demo-consumer.outputs.revision }}',
+  './scripts/verify-studio-demo-integration.sh',
+];
+for (const marker of workflowPinMarkers) {
+  if (!integrationWorkflow.includes(marker)) {
+    throw new Error(`Studio integration workflow does not use the declared demo pin: ${marker}`);
+  }
 }
 
 console.log(`Studio migration plan passed: ${inventory.length} donor files, ${rules.length} surfaces, ${adoption.length} owners`);

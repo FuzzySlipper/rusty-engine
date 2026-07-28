@@ -29,7 +29,7 @@ if STUDIO_OWNER_ADOPTION="$TASK_TMP/missing-owner.tsv" \
 fi
 grep -q 'current Rust workspace owner lacks Studio classification: voxel-annotation' "$TASK_TMP/output"
 
-sed 's/7d3cc9cc3c4eb1483834d8748e092a852f3d64b2/main/' \
+sed -E 's/"commit": "[0-9a-f]{40}"/"commit": "main"/' \
   "$STUDIO_ROOT/demo-consumer-source.json" > "$TASK_TMP/floating-demo-source.json"
 if STUDIO_DEMO_SOURCE="$TASK_TMP/floating-demo-source.json" \
   node "$STUDIO_ROOT/scripts/check-migration-plan.mjs" > "$TASK_TMP/output" 2>&1; then
@@ -37,5 +37,15 @@ if STUDIO_DEMO_SOURCE="$TASK_TMP/floating-demo-source.json" \
   exit 1
 fi
 grep -q 'demo commit must be an exact Git revision' "$TASK_TMP/output"
+
+sed "s#readFileSync('studio/demo-consumer-source.json'#readFileSync('studio/floating-source.json'#" \
+  "$STUDIO_ROOT/../.github/workflows/studio-demo-integration.yml" \
+  > "$TASK_TMP/floating-workflow.yml"
+if STUDIO_INTEGRATION_WORKFLOW="$TASK_TMP/floating-workflow.yml" \
+  node "$STUDIO_ROOT/scripts/check-migration-plan.mjs" > "$TASK_TMP/output" 2>&1; then
+  echo "Studio migration checker accepted a workflow disconnected from the reviewed pin" >&2
+  exit 1
+fi
+grep -q 'Studio integration workflow does not use the declared demo pin' "$TASK_TMP/output"
 
 echo "Studio migration checker negative probes passed"

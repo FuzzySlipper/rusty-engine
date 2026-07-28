@@ -8,6 +8,7 @@ import type {
   LoadingBayDomainReadout,
   OwnerInspections,
   ProjectionReadout,
+  ProjectionFrameKind,
   ProjectMutationAppliedResponse,
   SceneHierarchyNodeReadout,
   SceneHierarchyReadout,
@@ -106,7 +107,7 @@ export interface LiveProjectionView {
   readonly frame: RenderFrameDiff;
   /** Optional retained-state patch for the current generation. */
   readonly framePatch: RenderFrameDiff | null;
-  readonly readout: ProjectionReadout;
+  readonly readout: ProjectionReadout<ProjectionFrameKind>;
   readonly entities: readonly ProjectedEntityView[];
   readonly generation: number;
 }
@@ -1741,9 +1742,12 @@ export class StudioWorkspaceStore {
 
   #acceptCompleteObjectProjection(
     frame: RenderFrameDiff,
-    readout: ProjectionReadout,
+    readout: ProjectionReadout<ProjectionFrameKind>,
     base: ProjectionBaseIdentity,
   ): number {
+    if (readout.frameKind !== 'complete') {
+      throw new Error(`Complete ${base.kind} projection has an incremental readout.`);
+    }
     if (frame.ops.length > 0 && isVoxelObjectFramePatch(frame)) {
       throw new Error(`Complete ${base.kind} projection contained only a retained frame patch.`);
     }
@@ -1766,7 +1770,7 @@ export class StudioWorkspaceStore {
 
   #acceptCanonicalObjectProjection(
     frame: RenderFrameDiff,
-    readout: ProjectionReadout,
+    readout: ProjectionReadout<ProjectionFrameKind>,
   ): number {
     const current = this.#snapshot();
     const canonical = this.#currentCanonicalProjectProjection();

@@ -51,10 +51,6 @@ on:
 permissions:
   contents: read
 
-env:
-  RUSTY_ENGINE_DEMO_REPOSITORY: FuzzySlipper/rusty-engine-demo
-  RUSTY_ENGINE_DEMO_REVISION: 7d3cc9cc3c4eb1483834d8748e092a852f3d64b2
-
 jobs:
   verify-studio-demo-integration:
     runs-on: ubuntu-latest
@@ -62,11 +58,31 @@ jobs:
       - name: Check out Rusty Engine
         uses: actions/checkout@v4
 
+      - name: Read the reviewed demo consumer pin
+        id: demo-consumer
+        run: |
+          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import { readFileSync } from 'node:fs';
+          const pin = JSON.parse(readFileSync('studio/demo-consumer-source.json', 'utf8'));
+          if (
+            pin.schemaVersion !== 1
+            || typeof pin.repository !== 'string'
+            || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(pin.repository)
+          ) {
+            throw new Error('studio/demo-consumer-source.json has an unsupported shape');
+          }
+          if (typeof pin.commit !== 'string' || !/^[0-9a-f]{40}$/.test(pin.commit)) {
+            throw new Error('studio/demo-consumer-source.json must name one exact public commit');
+          }
+          console.log(`repository=${pin.repository}`);
+          console.log(`revision=${pin.commit}`);
+          NODE
+
       - name: Check out exact Rusty Engine Demo consumer
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.RUSTY_ENGINE_DEMO_REPOSITORY }}
-          ref: ${{ env.RUSTY_ENGINE_DEMO_REVISION }}
+          repository: ${{ steps.demo-consumer.outputs.repository }}
+          ref: ${{ steps.demo-consumer.outputs.revision }}
           path: rusty-engine-demo
 
       - name: Install Rust

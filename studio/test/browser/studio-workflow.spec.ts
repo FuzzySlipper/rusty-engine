@@ -1,10 +1,11 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { readFile, writeFile } from 'node:fs/promises';
+import { copyFile, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const projectRoot = requiredEnvironment('RUSTY_STUDIO_PROJECT_ROOT');
 const loadingBayProjectFile = 'content/projects/loading-bay.project.json';
 const convertedWallProjectFile = 'content/projects/converted-wall.project.json';
+const voxelObjectProjectFile = 'content/projects/studio-voxel-object.project.json';
 
 test('real project hierarchy, shared picking, transform settlement, reopen, and rejection stay coherent', async ({ page }) => {
   await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(loadingBayProjectFile)}`);
@@ -490,6 +491,195 @@ test('voxel Studio owns the complete shared-renderer authoring workflow and reje
   expect(await readFile(projectPath)).toEqual(externallyChanged);
 });
 
+test('animated voxel objects convert, discard, apply, attach, reload, and play through the shared renderer', async ({ page }) => {
+  test.setTimeout(90_000);
+  const projectPath = join(projectRoot, voxelObjectProjectFile);
+  await copyFile(join(projectRoot, loadingBayProjectFile), projectPath);
+  await page.goto(
+    `/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(voxelObjectProjectFile)}`,
+  );
+
+  const shell = page.locator('[data-visual-id="studio-shell"]');
+  const viewport = page.locator('rusty-studio-viewport');
+  const editor = page.locator('[data-visual-id="studio-voxel-editor"]');
+  await expect(shell).toHaveAttribute('data-project-hash', /.+/);
+  await expect(viewport).toHaveAttribute('data-renderer-status', 'ready');
+  const materialSection = editor.locator('.voxel-section').filter({
+    hasText: 'asset-catalog authority + style',
+  });
+  await materialSection.getByLabel('Asset id').fill('material/wall-lines');
+  const projectHashBeforeMaterial = await projectHash(shell);
+  await materialSection.getByRole('button', { name: 'Upsert material', exact: true }).click();
+  await expect.poll(() => projectHash(shell)).not.toBe(projectHashBeforeMaterial);
+  await expect(materialSection).toContainText('material/wall-lines');
+  const canonicalHash = await projectHash(shell);
+  const canonicalRendererHash = await rendererHash(viewport);
+
+  await editor.getByRole('button', { name: 'convert', exact: true }).click();
+  await editor.getByRole('button', { name: 'Object / flipbook', exact: true }).click();
+  await editor.getByLabel('Source mode').selectOption('animated');
+  await editor.getByLabel('Source asset').fill('mesh-animation/kenney-retro-character-medium');
+  await editor.getByLabel('Source path').fill('content/assets/kenney-retro-character-medium.glb');
+  await editor.getByLabel('License path').fill(
+    'content/assets/KENNEY-ANIMATED-CHARACTERS-RETRO-LICENSE.txt',
+  );
+  await editor.getByLabel('Target asset').fill('voxel-object/studio-character');
+  await editor.getByLabel('Resolution X').fill('8');
+  await editor.getByLabel('Resolution Y').fill('12');
+  await editor.getByLabel('Resolution Z').fill('8');
+  await editor.getByLabel('Preview samples').fill('1');
+  await expect(editor.getByLabel('Mesh subset (for example group/0)')).toBeDisabled();
+  await expect(editor).toContainText(
+    'Animated conversion currently admits the complete selected scene',
+  );
+
+  await editor.locator('[data-action="inspect-voxel-object-source"]').click();
+  const inspection = editor.locator('[data-visual-id="voxel-object-source-inspection"]');
+  await expect(inspection).toBeVisible({ timeout: 30_000 });
+  await expect(inspection).toContainText(/vertices · [1-9][0-9]* triangles/);
+  await expect(inspection).toContainText(/[1-9][0-9]* nodes · [1-9][0-9]* groups/);
+  const clipLabels = editor.locator('.clip-list label');
+  await expect(clipLabels).toHaveCount(3);
+  for (let index = 0; index < await clipLabels.count(); index += 1) {
+    const label = clipLabels.nth(index);
+    const checkbox = label.getByRole('checkbox');
+    if (/run/i.test((await label.textContent()) ?? '')) {
+      await checkbox.check();
+    } else {
+      await checkbox.uncheck();
+    }
+  }
+  await editor.getByLabel('Sample Hz').fill('4');
+  await editor.getByLabel('Start seconds').fill('0');
+  await editor.getByLabel('End seconds').fill('0.5');
+  await editor.getByLabel('End policy').selectOption('includeClipEnd');
+  await editor.getByLabel('Default clip').selectOption('run');
+
+  await editor.locator('[data-action="prepare-voxel-object-conversion"]').click();
+  let candidate = editor.locator('[data-visual-id="voxel-object-conversion-preview"]');
+  await expect(candidate).toBeVisible({ timeout: 30_000 });
+  await expect(candidate).toContainText(/stored \/ [2-9][0-9]* sampled frames/);
+  await expect(candidate).toContainText('Preview samples are truncated');
+  await expect(shell).toHaveAttribute('data-project-hash', canonicalHash);
+  await expect.poll(() => rendererHash(viewport)).not.toBe(canonicalRendererHash);
+  const candidateFrame = candidate.getByLabel('Preview voxel-object frame');
+  expect(Number(await candidateFrame.getAttribute('max'))).toBeGreaterThan(0);
+  const candidateFrameZeroHash = await rendererHash(viewport);
+  await setRange(candidateFrame, 1);
+  await expect.poll(() => rendererHash(viewport)).not.toBe(candidateFrameZeroHash);
+  const candidateFrameOneHash = await rendererHash(viewport);
+  const candidatePlay = candidate.getByRole('button', { name: 'Play', exact: true });
+  const candidatePause = candidate.getByRole('button', { name: 'Pause', exact: true });
+  await candidatePlay.click();
+  await expect(candidatePlay).toBeDisabled();
+  await expect(candidatePause).toBeEnabled();
+  await expect.poll(() => rendererHash(viewport), { timeout: 30_000 }).not.toBe(
+    candidateFrameOneHash,
+  );
+  await candidatePause.click();
+  await expect(candidatePlay).toBeEnabled();
+  await expect(candidatePause).toBeDisabled();
+
+  await candidate.getByRole('button', { name: 'Discard', exact: true }).click();
+  await expect(candidate).toHaveCount(0);
+  await expect(shell).toHaveAttribute('data-project-hash', canonicalHash);
+  await expect.poll(() => rendererHash(viewport)).toBe(canonicalRendererHash);
+
+  await editor.locator('[data-action="prepare-voxel-object-conversion"]').click();
+  candidate = editor.locator('[data-visual-id="voxel-object-conversion-preview"]');
+  await expect(candidate).toBeVisible({ timeout: 30_000 });
+  await candidate.locator('[data-action="apply-voxel-object-conversion"]').click();
+  await expect(candidate).toHaveCount(0);
+  await expect.poll(() => projectHash(shell)).not.toBe(canonicalHash);
+
+  const canonicalObjects = editor.locator('.voxel-section').filter({
+    hasText: 'project-owned content and transformed instances',
+  });
+  await canonicalObjects.getByRole('button', {
+    name: /voxel-object\/studio-character/,
+  }).click();
+  const authoring = editor.locator('[data-visual-id="voxel-object-authoring-readout"]');
+  await expect(canonicalObjects).toContainText('convertedAnimatedMesh');
+  await expect(authoring).toContainText('content/assets/kenney-retro-character-medium.glb');
+  await expect(authoring).toContainText('default clip/run-2');
+  await canonicalObjects.getByLabel('Instance id').fill('studio-character-object');
+  await canonicalObjects.getByLabel('Initial clip').selectOption({ label: 'run' });
+  await canonicalObjects.getByLabel('Initial frame').fill('1');
+  const axisRows = canonicalObjects.locator('.axis-row');
+  await fillAxisRow(axisRows.nth(0), ['4', '1', '8']);
+  await fillAxisRow(axisRows.nth(2), ['0.5', '0.5', '0.5']);
+  const rowsBeforeAttach = await page.locator('.entity-row').count();
+  const rendererBeforeAttach = await rendererHash(viewport);
+  await canonicalObjects.locator('[data-action="attach-voxel-object-instance"]').click();
+  await expect(page.locator('.entity-row')).toHaveCount(rowsBeforeAttach + 1);
+  await expect.poll(() => rendererHash(viewport)).not.toBe(rendererBeforeAttach);
+  const objectRow = page.locator('.entity-row').filter({ hasText: 'studio-character-object' });
+  await expect(objectRow).toHaveCount(1);
+  const ownerEntityId = await objectRow.getAttribute('data-entity-id');
+  expect(ownerEntityId).toMatch(/^[1-9][0-9]*$/);
+  const durableHash = await projectHash(shell);
+  const durableBytes = await readFile(projectPath);
+
+  await objectRow.click();
+  await page.getByRole('button', { name: 'Entity', exact: true }).click();
+  const component = page.locator('[data-visual-id="entity-voxel-object-component"]');
+  const playback = component.locator('rusty-voxel-object-playback');
+  await expect(component).toContainText('typed entity capability');
+  await expect(playback).toContainText('paused', { timeout: 30_000 });
+  await expect(playback).toContainText('Saved pose');
+  await expect(playback).toContainText('frame 1');
+  await expect(shell).toHaveAttribute('data-project-hash', durableHash);
+
+  const appliedFrame = component.getByLabel('Entity voxel-object preview frame');
+  await page.waitForTimeout(100);
+  const renderedSavedPose = await rendererHash(viewport);
+  await setRange(appliedFrame, 0);
+  await expect(playback).toContainText('frame 0');
+  await expect.poll(() => rendererHash(viewport)).not.toBe(renderedSavedPose);
+  const frameZeroRendererHash = await rendererHash(viewport);
+  await setRange(appliedFrame, 1);
+  await expect(playback).toContainText('frame 1');
+  await expect.poll(() => rendererHash(viewport)).not.toBe(frameZeroRendererHash);
+  const durableRendererHash = await rendererHash(viewport);
+  await setRange(appliedFrame, 0);
+  await expect(playback).toContainText('frame 0');
+  await expect.poll(() => rendererHash(viewport)).not.toBe(durableRendererHash);
+  const scrubbedRendererHash = await rendererHash(viewport);
+  await component.locator('[data-action="play-entity-voxel-object"]').click();
+  await expect(playback).toContainText('playing');
+  await expect.poll(() => rendererHash(viewport), { timeout: 30_000 }).not.toBe(
+    scrubbedRendererHash,
+  );
+  await component.locator('[data-action="pause-entity-voxel-object"]').click();
+  await expect(playback).toContainText('paused');
+  const rendererBeforeRestore = await rendererHash(viewport);
+  await component.locator('[data-action="restore-entity-voxel-object"]').click();
+  await expect(playback).toContainText('stopped');
+  await expect.poll(() => rendererHash(viewport)).not.toBe(rendererBeforeRestore);
+  await expect(shell).toHaveAttribute('data-project-hash', durableHash);
+  expect(await readFile(projectPath)).toEqual(durableBytes);
+
+  await page.reload();
+  await expect(shell).toHaveAttribute('data-project-hash', durableHash);
+  const reopenedRow = page.locator('.entity-row').filter({ hasText: 'studio-character-object' });
+  await expect(reopenedRow).toHaveCount(1);
+  await reopenedRow.click();
+  await page.getByRole('button', { name: 'Entity', exact: true }).click();
+  await expect(page.locator('[data-visual-id="entity-voxel-object-component"]')).toContainText(
+    'clip/run-2 frame 1',
+  );
+  process.stdout.write(`${JSON.stringify({
+    kind: 'studioVoxelObjectBrowserEvidence',
+    source: 'mesh-animation/kenney-retro-character-medium',
+    asset: 'voxel-object/studio-character',
+    instance: 'studio-character-object',
+    ownerEntityId,
+    discardedWithoutMutation: true,
+    playbackChangedBytes: false,
+    freshPageReadoutMatched: true,
+  })}\n`);
+});
+
 async function pickVisibleEntity(page: Page, shell: Locator): Promise<string> {
   const canvas = page.getByLabel('Shared Rusty renderer viewport');
   const viewport = page.locator('rusty-studio-viewport');
@@ -525,6 +715,25 @@ async function pickVisibleVoxel(page: Page, shell: Locator): Promise<void> {
     }
   }
   throw new Error('shared renderer picking did not produce a Rust-validated voxel anchor');
+}
+
+async function setRange(locator: Locator, value: number): Promise<void> {
+  await locator.evaluate((element, nextValue) => {
+    if (!(element instanceof HTMLInputElement)) {
+      throw new TypeError('range control is not an input element');
+    }
+    element.value = String(nextValue);
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }, value);
+}
+
+async function fillAxisRow(row: Locator, values: readonly string[]): Promise<void> {
+  const inputs = row.locator('input');
+  await expect(inputs).toHaveCount(values.length);
+  for (let index = 0; index < values.length; index += 1) {
+    await inputs.nth(index).fill(values[index] ?? '');
+  }
 }
 
 async function transformHandlePoint(

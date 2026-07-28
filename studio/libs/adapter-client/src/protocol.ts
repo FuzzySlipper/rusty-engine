@@ -760,7 +760,7 @@ export interface VoxelObjectInstancePreviewedResponse extends ResponseHeader {
   readonly type: 'voxelObjectInstancePreviewed';
   readonly playback: VoxelObjectInstancePlaybackReadout;
   readonly projection: RenderFrameDiff;
-  readonly projectionReadout: ProjectionReadout;
+  readonly projectionReadout: ProjectionReadout<ProjectionFrameKind>;
 }
 
 export interface AssetImportPreparedResponse extends ResponseHeader {
@@ -1107,8 +1107,10 @@ export interface LoadingBayDomainReadout {
   readonly voxelEnvironment: string;
 }
 
-export interface ProjectionReadout {
-  readonly frameKind: 'complete';
+export type ProjectionFrameKind = 'complete' | 'incremental';
+
+export interface ProjectionReadout<FrameKind extends ProjectionFrameKind = 'complete'> {
+  readonly frameKind: FrameKind;
   readonly sourceRevision: number;
   readonly retainedEntities: number;
   readonly retainedLights: number;
@@ -1272,7 +1274,7 @@ export function decodeStudioAdapterResponse(input: unknown): StudioAdapterRespon
       responseHeader(value);
       voxelContract('$.playback', () =>
         validateVoxelObjectInstancePlaybackReadout(value['playback'], '$.playback'));
-      completeProjection(value, '$');
+      objectInstanceProjection(value, '$');
       return input as VoxelObjectInstancePreviewedResponse;
     }
     case 'assetImportPrepared': {
@@ -1349,6 +1351,23 @@ function responseHeader(value: Readonly<Record<string, unknown>>): void {
 }
 
 function completeProjection(value: Readonly<Record<string, unknown>>, path: string): void {
+  rendererProjection(value, path);
+  projectionReadout(value['projectionReadout'], `${path}.projectionReadout`, ['complete']);
+}
+
+function objectInstanceProjection(
+  value: Readonly<Record<string, unknown>>,
+  path: string,
+): void {
+  rendererProjection(value, path);
+  projectionReadout(
+    value['projectionReadout'],
+    `${path}.projectionReadout`,
+    ['complete', 'incremental'],
+  );
+}
+
+function rendererProjection(value: Readonly<Record<string, unknown>>, path: string): void {
   try {
     decodeRenderFrameDiff(value['projection']);
   } catch (error) {
@@ -1357,7 +1376,6 @@ function completeProjection(value: Readonly<Record<string, unknown>>, path: stri
       error instanceof Error ? error.message : 'renderer contract rejected the frame',
     );
   }
-  projectionReadout(value['projectionReadout'], `${path}.projectionReadout`);
 }
 
 function voxelContract(path: string, validate: () => void): void {
@@ -1819,7 +1837,11 @@ function loadingBayReadout(input: unknown, path: string): void {
   for (const field of countFields) integer(value[field], `${path}.${field}`);
 }
 
-function projectionReadout(input: unknown, path: string): void {
+function projectionReadout(
+  input: unknown,
+  path: string,
+  frameKinds: readonly ProjectionFrameKind[] = ['complete'],
+): void {
   const value = record(input, path, [
     'frameKind',
     'sourceRevision',
@@ -1829,7 +1851,7 @@ function projectionReadout(input: unknown, path: string): void {
     'retainedVoxelChunks',
     'diagnostics',
   ]);
-  choice(value['frameKind'], `${path}.frameKind`, ['complete']);
+  choice(value['frameKind'], `${path}.frameKind`, frameKinds);
   integer(value['sourceRevision'], `${path}.sourceRevision`);
   integer(value['retainedEntities'], `${path}.retainedEntities`);
   integer(value['retainedLights'], `${path}.retainedLights`);

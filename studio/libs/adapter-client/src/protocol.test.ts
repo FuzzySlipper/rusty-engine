@@ -368,6 +368,26 @@ test('protocol 9 keeps entity-owned voxel objects, applied playback, and durable
   assert.equal(decodedPlayback.type, 'voxelObjectInstancePreviewed');
   assert.equal(decodedPlayback.playback.durableFrame.kind, 'clip');
   assert.equal(decodedPlayback.playback.runtimeFrame, 2);
+  const incrementalPlayback = {
+    ...playback,
+    projection: {
+      schemaVersion: 1,
+      ops: [{ op: 'setVoxelObjectFrame', handle: 101, frame: 1 }],
+    },
+    projectionReadout: {
+      ...playback.projectionReadout,
+      frameKind: 'incremental',
+    },
+  };
+  const decodedIncremental = decodeStudioAdapterResponse(incrementalPlayback);
+  assert.equal(decodedIncremental.type, 'voxelObjectInstancePreviewed');
+  assert.equal(decodedIncremental.projectionReadout.frameKind, 'incremental');
+  const preparedWithIncrementalReadout = voxelObjectConversionPrepared('object-incremental-1');
+  preparedWithIncrementalReadout.projectionReadout.frameKind = 'incremental';
+  assert.throws(
+    () => decodeStudioAdapterResponse(preparedWithIncrementalReadout),
+    /frameKind.*complete/,
+  );
   assert.throws(
     () => decodeStudioAdapterResponse({
       ...playback,
