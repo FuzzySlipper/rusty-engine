@@ -652,6 +652,15 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   );
   await component.locator('[data-action="pause-entity-voxel-object"]').click();
   await expect(playback).toContainText('paused');
+  if (await appliedFrame.inputValue() !== '0') {
+    const rendererBeforeDeterministicRestoreSetup = await rendererHash(viewport);
+    await setRange(appliedFrame, 0);
+    await expect(playback).toContainText('frame 0');
+    await expect.poll(() => rendererHash(viewport)).not.toBe(
+      rendererBeforeDeterministicRestoreSetup,
+    );
+  }
+  await expect(playback).toContainText('frame 0');
   const rendererBeforeRestore = await rendererHash(viewport);
   await component.locator('[data-action="restore-entity-voxel-object"]').click();
   await expect(playback).toContainText('stopped');
