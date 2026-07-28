@@ -50,14 +50,18 @@ export async function loadRendererMeshResourceSource(
     } catch (cause) {
       throw resourceError('mesh_resource_unavailable', descriptor.resource, cause);
     }
-    if (data.byteLength !== descriptor.byteLength) {
+    // The resolver owns `data` and may retain or mutate it after settlement.
+    // Snapshot synchronously before the first admission await, then validate
+    // and retain only these host-owned bytes under the content identity.
+    const admitted = data.slice(0);
+    if (admitted.byteLength !== descriptor.byteLength) {
       throw resourceError(
         'mesh_resource_byte_length_mismatch',
         descriptor.resource,
-        `expected ${String(descriptor.byteLength)} bytes, received ${String(data.byteLength)}`,
+        `expected ${String(descriptor.byteLength)} bytes, received ${String(admitted.byteLength)}`,
       );
     }
-    const actualHash = await rendererResourceContentHash(data, descriptor.contentHash);
+    const actualHash = await rendererResourceContentHash(admitted, descriptor.contentHash);
     if (actualHash !== descriptor.contentHash) {
       throw resourceError(
         'mesh_resource_content_hash_mismatch',
@@ -67,7 +71,7 @@ export async function loadRendererMeshResourceSource(
     }
     return [descriptor.resource, {
       descriptor,
-      bytes: new Uint8Array(data),
+      bytes: new Uint8Array(admitted),
     }] as const;
   }));
   const resources = new Map(loaded);

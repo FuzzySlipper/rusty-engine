@@ -185,6 +185,47 @@ void test('mesh resource host admits exact bounded bytes and rejects drift', asy
   );
 });
 
+void test('mesh resource host snapshots resolver-owned bytes before admission', async () => {
+  const expected = new Uint8Array(16);
+  expected.set([0x52, 0x4d, 0x53, 0x48, 0x4c, 0x45, 0x30, 0x31]);
+  const header = new DataView(expected.buffer);
+  header.setUint32(8, expected.byteLength, true);
+  header.setUint32(12, 1, true);
+  const digest = createHash('sha256').update(expected).digest('hex');
+  const manifest: RendererMeshResourceManifest = {
+    kind: 'rusty_renderer_mesh_resources.v1',
+    resources: [{
+      resource: `mesh-resource/${digest}`,
+      contentHash: `sha256:${digest}`,
+      byteLength: expected.byteLength,
+    }],
+  };
+  const resolverOwned = expected.buffer.slice(0);
+  const loading = loadRendererMeshResourceSource(
+    manifest,
+    () => Promise.resolve(resolverOwned),
+  );
+
+  // The loader resumes first, snapshots and hashes, then yields while settling
+  // the asynchronous admission. Mutation in that window must not change the
+  // bytes retained under the admitted content identity.
+  queueMicrotask(() => {
+    new Uint8Array(resolverOwned)[0] = 0;
+  });
+  const source = await loading;
+  const acquired = source.acquireResource(
+    manifest.resources[0]!.resource,
+    manifest.resources[0]!.contentHash,
+    expected.byteLength,
+  );
+  assert.deepEqual(acquired.bytes, expected);
+
+  // Nor may later mutation of the resolver's original buffer affect the
+  // already-admitted host resource.
+  new Uint8Array(resolverOwned).fill(0);
+  assert.deepEqual(acquired.bytes, expected);
+});
+
 void test('renderer-host exposes backend-neutral stored editor camera resolution', () => {
   const result = resolveRendererStoredEditorCamera({
     position: [0, 0, 5],
