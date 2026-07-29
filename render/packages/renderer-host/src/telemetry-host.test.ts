@@ -13,6 +13,7 @@ import { RendererPresentationHostSet } from './presentation-host-set.js';
 import {
   RendererLiveTelemetryCollector,
   RendererTelemetryOverlayHost,
+  type RendererSurfaceTelemetrySample,
   type RendererTelemetryOverlaySink,
 } from './telemetry-host.js';
 import { RendererSurfaceTimingTracker } from './surface-timing.js';
@@ -115,7 +116,7 @@ void test('surface telemetry takes renderer-owned counters from the immutable su
   const snapshot = collector.sampleSurface({
     sourceTick: 1,
     timing: submission,
-    counters: { drawCallCount: 999 },
+    counters: {},
   });
 
   assert.deepEqual(snapshot.metrics.map((metric) => [metric.counter, metric.value]), [
@@ -131,6 +132,100 @@ void test('surface telemetry takes renderer-owned counters from the immutable su
     'textureResourceCount',
     'triangleCount',
   ]);
+});
+
+void test('surface telemetry rejects forged ownership and statistics without mutation', () => {
+  const collector = new RendererLiveTelemetryCollector({
+    expectedCounters: ['entityCount', 'drawCallCount', 'geometryResourceCount'],
+  });
+  const timing = new RendererSurfaceTimingTracker().record({
+    source: 'explicit',
+    sourceTimeMs: 16,
+    backendSubmissionStartedMs: 1,
+    backendSubmissionEndedMs: 2,
+  });
+  const submission = createRendererSurfaceSubmissionSample(timing, {
+    drawCallCount: 7,
+    renderHandleCount: 12,
+    geometryResourceCount: 5,
+    materialResourceCount: 4,
+    textureResourceCount: 3,
+    animatedInstanceCount: 2,
+    triangleCount: 24,
+  });
+  const snapshot = collector.sampleSurface({
+    sourceTick: 1,
+    timing: submission,
+    counters: { entityCount: 6 },
+  });
+  const sampleForged = (value: unknown): void => {
+    collector.sampleSurface(value as RendererSurfaceTelemetrySample);
+  };
+  const assertUnchanged = (): void => {
+    assert.deepEqual(collector.readSnapshot(), snapshot);
+  };
+
+  assert.throws(() => sampleForged({
+    sourceTick: 2,
+    timing,
+    counters: { drawCallCount: 999, geometryResourceCount: 888 },
+  }), /statistics must be an object/u);
+  assertUnchanged();
+
+  const malformedStatistics = [
+    {
+      statistics: {
+        ...submission.statistics,
+        drawCallCount: {
+          ...submission.statistics.drawCallCount,
+          scope: 'liveResident',
+        },
+      },
+      error: /drawCallCount must use perSubmission scope/u,
+    },
+    {
+      statistics: {
+        ...submission.statistics,
+        drawCallCount: { scope: 'perSubmission', status: 'invented', value: null },
+      },
+      error: /drawCallCount status is unsupported/u,
+    },
+    {
+      statistics: { ...submission.statistics, extraCounter: submission.statistics.drawCallCount },
+      error: /complete supported shape/u,
+    },
+  ] as const;
+  for (const malformed of malformedStatistics) {
+    assert.throws(() => sampleForged({
+      sourceTick: 2,
+      timing: { ...submission, statistics: malformed.statistics },
+      counters: {},
+    }), malformed.error);
+    assertUnchanged();
+  }
+
+  assert.throws(() => sampleForged({
+    sourceTick: 2,
+    timing: submission,
+    counters: { drawCallCount: 999 },
+  }), /drawCallCount is not product-owned/u);
+  assertUnchanged();
+
+  assert.deepEqual(
+    snapshot.metrics.map((metric) => [metric.counter, metric.value]),
+    [
+      ['backendSubmissionDurationMs', 1],
+      ['entityCount', 6],
+      ['renderHandleCount', 12],
+      ['drawCallCount', 7],
+      ['geometryResourceCount', 5],
+      ['materialResourceCount', 4],
+      ['textureResourceCount', 3],
+      ['animatedInstanceCount', 2],
+      ['triangleCount', 24],
+    ],
+    'valid complete submission remains authoritative',
+  );
 });
 
 void test('telemetry overlay projects the same snapshot and local toggle changes no sample', () => {
@@ -161,9 +256,18 @@ void test('telemetry overlay projects the same snapshot and local toggle changes
     backendSubmissionStartedMs: 20,
     backendSubmissionEndedMs: 22.25,
   });
+  const submission = createRendererSurfaceSubmissionSample(timing, {
+    drawCallCount: undefined,
+    renderHandleCount: undefined,
+    geometryResourceCount: undefined,
+    materialResourceCount: undefined,
+    textureResourceCount: undefined,
+    animatedInstanceCount: undefined,
+    triangleCount: undefined,
+  });
   const snapshot = host.sampleSurface({
     sourceTick: 8,
-    timing,
+    timing: submission,
     counters: { entityCount: 2, activeParticleCount: 12 },
   }, 250);
   assert.deepEqual(sink.rendered.at(-1)?.snapshot, snapshot);
@@ -203,7 +307,16 @@ void test('surface telemetry reports unavailable first cadence without inventing
     backendSubmissionStartedMs: 4,
     backendSubmissionEndedMs: 5.5,
   });
-  const snapshot = collector.sampleSurface({ sourceTick: 0, timing, counters: {} });
+  const submission = createRendererSurfaceSubmissionSample(timing, {
+    drawCallCount: undefined,
+    renderHandleCount: undefined,
+    geometryResourceCount: undefined,
+    materialResourceCount: undefined,
+    textureResourceCount: undefined,
+    animatedInstanceCount: undefined,
+    triangleCount: undefined,
+  });
+  const snapshot = collector.sampleSurface({ sourceTick: 0, timing: submission, counters: {} });
 
   assert.deepEqual(snapshot.frameTimeHistoryMs, []);
   assert.deepEqual(snapshot.metrics.map((metric) => metric.counter), [
@@ -214,7 +327,7 @@ void test('surface telemetry reports unavailable first cadence without inventing
 
   assert.throws(() => collector.sampleSurface({
     sourceTick: 1,
-    timing: { ...timing, frameIntervalStatus: 'available' },
+    timing: { ...submission, frameIntervalStatus: 'available' },
     counters: {},
   }), /availability status/u);
   assert.deepEqual(collector.readSnapshot(), snapshot, 'rejected timing is non-mutating');

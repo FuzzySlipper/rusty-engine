@@ -24,9 +24,25 @@ import type {
   RendererSurfaceStatistic,
   RendererSurfaceSubmissionSample,
 } from './surface-statistics.js';
+import { assertRendererSurfaceStatisticsSample } from './surface-statistics.js';
 
 type DurationCounter = 'frameTimeMs' | 'backendSubmissionDurationMs';
 type CountCounter = Exclude<LiveTelemetryCounter, DurationCounter>;
+const SURFACE_OWNED_COUNTERS = [
+  'renderHandleCount',
+  'drawCallCount',
+  'geometryResourceCount',
+  'materialResourceCount',
+  'textureResourceCount',
+  'animatedInstanceCount',
+  'triangleCount',
+] as const satisfies readonly CountCounter[];
+type RendererSurfaceOwnedCounter = (typeof SURFACE_OWNED_COUNTERS)[number];
+export type RendererSurfaceProductTelemetryCounter = Exclude<
+  CountCounter,
+  RendererSurfaceOwnedCounter
+>;
+const SURFACE_OWNED_COUNTER_SET: ReadonlySet<CountCounter> = new Set(SURFACE_OWNED_COUNTERS);
 type TelemetryPresentationOp = Extract<
   PresentationOp,
   { readonly domain: 'telemetryOverlay' }
@@ -50,6 +66,9 @@ const COUNTER_ORDER: readonly CountCounter[] = [
   'activeParticleCount',
   'droppedFeedbackCount',
 ];
+const SURFACE_PRODUCT_COUNTERS: ReadonlySet<string> = new Set(
+  COUNTER_ORDER.filter((counter) => !SURFACE_OWNED_COUNTER_SET.has(counter)),
+);
 
 const SURFACE_TIMING_SOURCES: readonly RendererSurfaceTimingSource[] = [
   'mount',
@@ -84,8 +103,10 @@ export interface RendererLiveTelemetrySample {
 
 export interface RendererSurfaceTelemetrySample {
   readonly sourceTick: number;
-  readonly timing: RendererSurfaceTimingSample;
-  readonly counters: Readonly<Partial<Record<CountCounter, number | null | undefined>>>;
+  readonly timing: RendererSurfaceSubmissionSample;
+  readonly counters: Readonly<
+    Partial<Record<RendererSurfaceProductTelemetryCounter, number | null | undefined>>
+  >;
 }
 
 interface DurationObservation {
@@ -127,6 +148,8 @@ export class RendererLiveTelemetryCollector {
 
   sampleSurface(input: RendererSurfaceTelemetrySample): LiveTelemetrySnapshot {
     validateSurfaceTiming(input.timing);
+    assertRendererSurfaceStatisticsSample(input.timing.statistics);
+    validateSurfaceProductCounters(input.counters);
     return this.#record({
       sourceTick: input.sourceTick,
       durations: [
@@ -234,10 +257,9 @@ export class RendererLiveTelemetryCollector {
 }
 
 function surfaceOwnedCounters(
-  timing: RendererSurfaceTimingSample,
+  timing: RendererSurfaceSubmissionSample,
 ): Partial<Record<CountCounter, number | null>> {
-  if (!('statistics' in timing)) return {};
-  const statistics = (timing as RendererSurfaceSubmissionSample).statistics;
+  const statistics = timing.statistics;
   return {
     drawCallCount: statisticValue(statistics.drawCallCount),
     renderHandleCount: statisticValue(statistics.renderHandleCount),
@@ -247,6 +269,17 @@ function surfaceOwnedCounters(
     animatedInstanceCount: statisticValue(statistics.animatedInstanceCount),
     triangleCount: statisticValue(statistics.triangleCount),
   };
+}
+
+function validateSurfaceProductCounters(counters: unknown): void {
+  if (typeof counters !== 'object' || counters === null || Array.isArray(counters)) {
+    throw new Error('renderer surface product counters must be an object');
+  }
+  for (const counter of Object.keys(counters)) {
+    if (!SURFACE_PRODUCT_COUNTERS.has(counter)) {
+      throw new Error(`renderer surface telemetry counter ${counter} is not product-owned`);
+    }
+  }
 }
 
 function statisticValue(statistic: RendererSurfaceStatistic): number | null {

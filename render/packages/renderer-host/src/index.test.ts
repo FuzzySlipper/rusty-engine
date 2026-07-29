@@ -335,9 +335,16 @@ void test('animated resources and playback fail closed with typed diagnostics', 
 void test('renderer-host declarations expose no concrete backend or donor runtime types', () => {
   const declarationText = declaration('./index.d.ts');
   const surfaceDeclarationText = declaration('./surface.d.ts');
+  const telemetryDeclarationText = declaration('./telemetry-host.d.ts');
   const editorDeclarationText = declaration('./editor-viewport.d.ts');
   const inspectionDeclarationText = declaration('./inspection-surface.d.ts');
-  const all = [declarationText, surfaceDeclarationText, editorDeclarationText, inspectionDeclarationText].join('\n');
+  const all = [
+    declarationText,
+    surfaceDeclarationText,
+    telemetryDeclarationText,
+    editorDeclarationText,
+    inspectionDeclarationText,
+  ].join('\n');
 
   assert.doesNotMatch(all, new RegExp(`@${'asha'}/`));
   assert.doesNotMatch(all, new RegExp(['runtime', 'bridge'].join('-')));
@@ -370,6 +377,12 @@ void test('renderer-host declarations expose no concrete backend or donor runtim
   assert.match(declarationText, /RUSTY_RENDERER_SURFACE_STATISTICS_SCHEMA_VERSION/);
   assert.match(declarationText, /RendererSurfaceStatisticsSample/);
   assert.match(declarationText, /RendererSurfaceTelemetrySample/);
+  assert.match(declarationText, /RendererSurfaceProductTelemetryCounter/);
+  assert.match(telemetryDeclarationText, /readonly timing: RendererSurfaceSubmissionSample/);
+  assert.match(
+    telemetryDeclarationText,
+    /Partial<Record<RendererSurfaceProductTelemetryCounter, number \| null \| undefined>>/,
+  );
   assert.doesNotMatch(surfaceDeclarationText, /inputSession|movementAuthority/);
 });
 

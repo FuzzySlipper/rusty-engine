@@ -228,6 +228,9 @@ the disposed instance.
 `RendererLiveTelemetryCollector.sampleSurface` takes renderer-owned counters from a complete
 submission sample. Caller counters may still supply game/product values such as `entityCount`, but
 cannot override draw, handle, geometry, material, texture, animation, or triangle observations.
+The boundary rejects timing-only samples, malformed statistic shapes, statuses, or scopes, and
+renderer-owned keys in the caller counter map before changing telemetry history or its latest
+snapshot.
 
 ### Exact downstream certification
 

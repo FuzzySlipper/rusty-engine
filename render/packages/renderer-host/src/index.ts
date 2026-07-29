@@ -168,6 +168,7 @@ export {
 export type {
   RendererLiveTelemetryCollectorOptions,
   RendererLiveTelemetrySample,
+  RendererSurfaceProductTelemetryCounter,
   RendererSurfaceTelemetrySample,
   RendererTelemetryOverlayFrameReceipt,
   RendererTelemetryOverlayHostOptions,
