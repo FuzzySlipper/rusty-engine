@@ -26,6 +26,7 @@ Route read-only structured inspection of Engine-owned facts and the
 - [`engine-inspector/src/main.rs`](../../rust/crates/engine-inspector/src/main.rs)
 - [Inspection and diagnostics](../inspection-and-diagnostics.md)
 - [`audit-standalone.sh`](../../scripts/audit-standalone.sh)
+- [`dependency_boundary_check.py`](../../scripts/dependency_boundary_check.py)
 
 ## Public downstream surfaces
 
@@ -55,6 +56,7 @@ Route read-only structured inspection of Engine-owned facts and the
 ```bash
 cargo test -p engine-inspector --locked
 cargo clippy -p engine-inspector --all-targets --locked -- -D warnings
+python3 scripts/dependency_boundary_check.py
 ./scripts/audit-standalone.sh
 ./scripts/verify.sh
 ```

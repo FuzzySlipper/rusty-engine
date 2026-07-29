@@ -167,6 +167,8 @@ Run from the repository root.
 
 # Focused structural checks
 ./scripts/check-doc-links.sh
+python3 ./scripts/dependency_boundary_check.py
+python3 ./scripts/code_map_freshness.py  # advisory; reports drift without failing
 ./scripts/audit-standalone.sh
 ./scripts/audit-render-isolation.sh
 ./scripts/audit-studio-isolation.sh

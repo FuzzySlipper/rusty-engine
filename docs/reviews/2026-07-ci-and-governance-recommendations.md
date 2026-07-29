@@ -1,6 +1,6 @@
 # CI and governance recommendations for rusty-engine
 
-Status: recommendation / partially implemented
+Status: historical recommendation / reevaluated 2026-07-29
 Author: system-architect review
 Date: 2026-07
 Scope: CI tiering, dependency and contract enforcement, reviewer prompts, and porting the
@@ -12,6 +12,34 @@ See also: [../design.md](../design.md), [../migration-cluster-ledger.md](../migr
 > control should exist and at what hardness, so a future reader (including an external agent
 > with no Den access) can judge changes against intent rather than restore ASHA topology by
 > reflex.
+
+## 2026-07-29 reevaluation and current disposition
+
+This review remains useful reasoning, but its implementation counts and several
+"today" claims no longer describe the repository. The supported exact-pin
+Studio/demo integration was restored and independently approved in task #6258;
+the latest `main` integration run was also green before the CI changes below
+began. The current decisions are:
+
+| Recommendation | Disposition | Current implementation or decision |
+|---|---|---|
+| Existing deterministic provider checks remain Tier 1 | **Implemented** | `scripts/verify.sh` retains standalone, isolation, donor/equivalence, render-completeness, locked metadata, format, test, clippy, and old-spine absence checks. |
+| Add a hard Rust dependency-direction check | **Implemented** | `scripts/dependency_boundary_check.py` reads resolved Cargo package identities and normal/build reachability, including renamed and transitive dependencies. It enforces only explicit foundation, service, inspector-leaf, authority-to-projection, and renderer-neutral boundaries. `render-projection` is explicitly allowed to observe entity, spatial, voxel, and service facts. |
+| Add a generic advisory for every new cross-tier edge | **Rejected** | A baseline or tier registry would become a second architecture source and create judgement-heavy drift. The curated maps and review retain ownership of non-forbidden edges. |
+| Add the minimal render-model/TypeScript hard border proof | **Superseded by stronger existing coverage** | The committed comprehensive Rust retained-frame fixture is strictly decoded by `render-contracts`; Rust and TypeScript tests plus the hard render completeness inventory exercise both sides. No uncovered drift justifies schema code generation. |
+| Add coarse code-map pages and atlas | **Implemented and expanded** | `docs/agent-code-atlas.md` now routes twelve curated owner maps covering all 30 Cargo workspace packages plus the isolated renderer, rules, and Studio workspaces. The old ten-page/28-crate count below is historical. |
+| Add a code-map freshness advisory | **Implemented** | `scripts/code_map_freshness.py` checks Cargo-member assignments, stale crate paths, and resolving `Primary paths`. Drift remains non-blocking, while GitHub annotations and the step summary make it visible. |
+| Add separate committed reviewer-prompt files | **Superseded** | Root `AGENTS.md`, `docs/design.md`, the atlas/maps, host-boundary ADR, migration ledgers, and Rust/TypeScript style guidance already carry the state-mutation, host-neutrality, donor, and border questions. Another prompt family would duplicate current sources. |
+| Add a broad `advise.sh` for file size, names, and catch-all files | **Rejected** | These remain review signals in `docs/topics/development/rust-style.md`; they are not deterministic architecture failures. Only code-map freshness became an advisory. |
+| Port Asha lanes, policy registries, generated inventories, replay/WASM gates, or broad protocol codegen | **Rejected** | These remain disproportionate to Rusty's direct-owner architecture and current agent model. |
+
+The hard dependency checker is integrated into the provider gate. The former
+`Cargo.toml` text grep for `engine-inspector` was removed from
+`audit-standalone.sh` so renamed and transitive enforcement has one owner.
+Focused synthetic tests cover positive, direct, renamed, transitive, build, and
+advisory-drift cases. This reevaluation supersedes the suggested implementation
+order in section 9; the historical discussion below is retained to explain the
+tradeoffs.
 
 ---
 
@@ -172,10 +200,10 @@ That schema is precisely what an external agent needs: it answers "what is this,
 what must I not touch, how do I prove my change, and where does follow-up go" without any Den
 context.
 
-Implementation note (2026-07-26): `docs/agent-code-atlas.md` and ten
-Rusty-specific owner maps under `docs/code-map/` now implement the curated
-portion of this recommendation. The optional advisory freshness checker remains
-future work; Rusty does not carry Asha's generated inventory.
+Historical implementation note (2026-07-26, superseded by the 2026-07-29
+reevaluation above): `docs/agent-code-atlas.md` and ten Rusty-specific owner
+maps under `docs/code-map/` implemented the first curated portion. Rusty still
+does not carry Asha's generated inventory.
 
 **Recommendation for rusty:**
 

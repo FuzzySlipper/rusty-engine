@@ -81,16 +81,22 @@ This atlas intentionally does not port Asha's generated inventory. Rusty Engine
 has a smaller, coarser owner set, and a generated symbol/file dump would obscure
 the public mechanisms these maps are meant to explain.
 
-For now, validate links and the actual workspace directly:
+Validate the hard dependency direction, curated ownership assignments, and
+ordinary links directly:
 
 ```bash
+python3 scripts/dependency_boundary_check.py
+python3 scripts/code_map_freshness.py
 ./scripts/check-doc-links.sh
-cargo metadata --format-version 1 --locked --no-deps
 ```
 
-A future advisory checker may compare Cargo members and isolated package
-manifests against the owner pages. It should report drift without turning these
-curated explanations into a generated governance system.
+The dependency checker follows resolved normal/build workspace edges from
+`cargo metadata --locked --all-features` and hard-fails only the explicit
+architecture inversions in [design.md](design.md). The code-map checker compares
+Cargo members with links in each `Primary paths` section. It reports missing
+assignments, stale crate paths, and unresolved primary paths, emits GitHub
+annotations and a step summary in Actions, and deliberately returns success so
+curated grouping remains reviewer-owned.
 
 ## Non-claims
 
