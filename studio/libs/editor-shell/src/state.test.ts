@@ -8,7 +8,7 @@ import {
   type StudioAdapterRequest,
   type StudioAdapterTransport,
 } from '@rusty-engine/studio-adapter-client';
-import { decodeRenderFrameDiff } from '@rusty-engine/render-contracts';
+import { decodeRenderFrameDiff, type RenderFrameDiff } from '@rusty-engine/render-contracts';
 import {
   HttpStudioUserSettingsClient,
   buildDefaultStudioHostUserSettings,
@@ -670,6 +670,19 @@ test('placement resources are bounded, cancellable, and retained across attach r
   assert.equal(prepared.resourceFrame.ops.filter(
     (operation) => operation.op === 'defineVoxelObject',
   ).length, 1);
+  const definition = prepared.resourceFrame.ops.find(
+    (operation) => operation.op === 'defineVoxelObject',
+  );
+  assert.ok(definition?.op === 'defineVoxelObject');
+  assert.equal(definition.asset.meshes.every(
+    (mesh) => mesh.payload.source.kind === 'resource',
+  ), true);
+  assert.equal(
+    definition.asset.meshes[0]?.payload.source.kind === 'resource'
+      ? definition.asset.meshes[0].payload.source.resource
+      : null,
+    prepared.meshResources[0]?.resource,
+  );
   assert.equal(prepared.resourceFrame.ops.some(
     (operation) => operation.op === 'createVoxelObjectInstance',
   ), false);
@@ -1539,16 +1552,13 @@ class VoxelObjectFixtureClient {
 
   prepareVoxelObjectPlacement() {
     const project = projectReadout(false, this.openedProjectId);
-    const projection = appliedVoxelObjectProjection(project.projection);
+    const projection = decodeRenderFrameDiff(appliedVoxelObjectProjection(project.projection));
+    const resource = meshResourceReadout('4', 'placement');
     const response = {
       assetId: 'voxel-object/character',
       objectContentHash: this.stalePlacementResource ? 'sha256:stale' : 'sha256:object',
-      resourceFrame: {
-        schemaVersion: 1,
-        ops: projection.ops.filter((operation) =>
-          operation.op === 'defineMaterial' || operation.op === 'defineVoxelObject'),
-      },
-      meshResources: [meshResourceReadout('4', 'placement')],
+      resourceFrame: placementResourceFrame(projection, resource),
+      meshResources: [resource],
     };
     if (this.#blockedPlacementResource !== null) {
       this.#blockedPlacementResource.response = response;
@@ -2170,6 +2180,43 @@ function appliedVoxelObjectProjection(
         },
       },
     ],
+  };
+}
+
+function placementResourceFrame(
+  projection: RenderFrameDiff,
+  resource: ReturnType<typeof meshResourceReadout>,
+) {
+  return {
+    schemaVersion: 1 as const,
+    ops: projection.ops
+      .filter((operation) =>
+        operation.op === 'defineMaterial' || operation.op === 'defineVoxelObject')
+      .map((operation) => {
+        if (operation.op !== 'defineVoxelObject') return operation;
+        return {
+          ...operation,
+          asset: {
+            ...operation.asset,
+            meshes: operation.asset.meshes.map((mesh) => ({
+              ...mesh,
+              payload: {
+                ...mesh.payload,
+                source: {
+                  kind: 'resource' as const,
+                  resource: resource.resource,
+                  contentHash: resource.contentHash,
+                  byteLength: resource.byteLength,
+                  encoding: 'packedStreamsLeV1' as const,
+                  positionsByteOffset: 16,
+                  normalsByteOffset: 64,
+                  indicesByteOffset: 112,
+                },
+              },
+            })),
+          },
+        };
+      }),
   };
 }
 

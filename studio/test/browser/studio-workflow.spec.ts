@@ -2,6 +2,8 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { copyFile, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { installPackedPlacementResourceAdapter } from './packed-placement-resource.js';
+
 const projectRoot = requiredEnvironment('RUSTY_STUDIO_PROJECT_ROOT');
 const loadingBayProjectFile = 'content/projects/loading-bay.project.json';
 const convertedWallProjectFile = 'content/projects/converted-wall.project.json';
@@ -495,6 +497,7 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   test.setTimeout(90_000);
   const projectPath = join(projectRoot, voxelObjectProjectFile);
   await copyFile(join(projectRoot, loadingBayProjectFile), projectPath);
+  const packedPlacement = await installPackedPlacementResourceAdapter(page, projectRoot);
   await page.goto(
     `/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(voxelObjectProjectFile)}`,
   );
@@ -595,23 +598,42 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   const canonicalObjects = editor.locator('.voxel-section').filter({
     hasText: 'project-owned content and transformed instances',
   });
+  const canonicalMeshResourceCount = Number(await viewport.getAttribute('data-mesh-resources'));
   await canonicalObjects.getByRole('button', {
     name: /voxel-object\/studio-character/,
   }).click();
   await expect(viewport).toHaveAttribute('data-voxel-preview-kind', 'objectPlacement');
   await expect(viewport).toHaveAttribute('data-voxel-object-definitions', '1');
   await expect(viewport).toHaveAttribute('data-voxel-object-placement-ghosts', '1');
+  await expect(viewport).toHaveAttribute(
+    'data-mesh-resources',
+    String(canonicalMeshResourceCount + 1),
+  );
+  await expect.poll(() => packedPlacement.preparedCount).toBe(1);
+  await expect.poll(() => packedPlacement.resourceReadCount).toBeGreaterThan(0);
   const placementProjectHash = await projectHash(shell);
   const viewportCanvas = page.getByLabel('Shared Rusty renderer viewport');
   await viewportCanvas.focus();
   await viewportCanvas.press('Escape');
   await expect(viewport).not.toHaveAttribute('data-voxel-preview-kind', 'objectPlacement');
   await expect(viewport).toHaveAttribute('data-voxel-object-placement-ghosts', '0');
+  await expect(viewport).toHaveAttribute(
+    'data-mesh-resources',
+    String(canonicalMeshResourceCount),
+  );
   await expect(shell).toHaveAttribute('data-project-hash', placementProjectHash);
+  const resourceReadsBeforeReprepare = packedPlacement.resourceReadCount;
   await canonicalObjects.locator('[data-action="preview-voxel-object-placement"]').click();
   await expect(viewport).toHaveAttribute('data-voxel-preview-kind', 'objectPlacement');
   await expect(viewport).toHaveAttribute('data-voxel-object-definitions', '1');
   await expect(viewport).toHaveAttribute('data-voxel-object-placement-ghosts', '1');
+  await expect(viewport).toHaveAttribute(
+    'data-mesh-resources',
+    String(canonicalMeshResourceCount + 1),
+  );
+  await expect.poll(() => packedPlacement.preparedCount).toBe(2);
+  await expect.poll(() => packedPlacement.resourceReadCount)
+    .toBeGreaterThan(resourceReadsBeforeReprepare);
   await pickVoxelObjectPlacementLocation(page, canonicalObjects, viewport);
   const authoring = editor.locator('[data-visual-id="voxel-object-authoring-readout"]');
   await expect(canonicalObjects).toContainText('convertedAnimatedMesh');

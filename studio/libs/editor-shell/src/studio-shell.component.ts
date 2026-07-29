@@ -44,6 +44,11 @@ import {
   type StudioEntityInspectorRenderMatch,
 } from './entity-inspector.js';
 import { composeTransform } from './transform-tools.js';
+import {
+  activeStudioMeshResources,
+  resolveStudioMeshResource,
+  type StudioMeshResourceDescriptor,
+} from './mesh-resources.js';
 
 import { STUDIO_WORKSPACE } from './tokens.js';
 import {
@@ -69,12 +74,6 @@ interface AnimatedMeshResourceDescriptor {
   readonly asset: string;
   readonly contentHash: string;
   readonly clipIds: readonly string[];
-}
-
-interface MeshResourceDescriptor {
-  readonly resource: string;
-  readonly contentHash: string;
-  readonly byteLength: number;
 }
 
 @Component({
@@ -273,13 +272,7 @@ export class StudioShellComponent {
   readonly activeMeshResources = computed(() => {
     const canonical = this.state().liveProjection?.meshResources ?? [];
     const placement = this.state().voxelWorkspace.objectPlacementResource?.meshResources ?? [];
-    const resources = new Map(canonical.map((resource) => [resource.resource, resource]));
-    for (const resource of placement) {
-      const existing = resources.get(resource.resource);
-      if (existing === undefined) resources.set(resource.resource, resource);
-    }
-    return [...resources.values()].sort((left, right) =>
-      left.resource.localeCompare(right.resource));
+    return activeStudioMeshResources(canonical, placement);
   });
   readonly meshResourceManifest = computed(() => {
     const resources = this.activeMeshResources();
@@ -377,20 +370,17 @@ export class StudioShellComponent {
     return this.#renderResources.read(projectRoot, resource.sourcePath, resource.contentHash);
   };
   readonly resolveMeshResource = async (
-    descriptor: MeshResourceDescriptor,
+    descriptor: StudioMeshResourceDescriptor,
   ): Promise<ArrayBuffer> => {
     const snapshot = this.state();
     const projectRoot = snapshot.userSettings.projectRoot;
     if (projectRoot === null) throw new Error('Mesh resources require an open project root.');
-    const resource = snapshot.liveProjection?.meshResources.find(
-      (candidate) => candidate.resource === descriptor.resource,
+    return resolveStudioMeshResource(
+      projectRoot,
+      this.activeMeshResources(),
+      descriptor,
+      this.#renderResources.read.bind(this.#renderResources),
     );
-    if (resource === undefined
-      || resource.contentHash !== descriptor.contentHash
-      || resource.byteLength !== descriptor.byteLength) {
-      throw new Error(`Mesh resource ${descriptor.resource} is not in the current Rust readout.`);
-    }
-    return this.#renderResources.read(projectRoot, resource.sourcePath, resource.contentHash);
   };
 
   readonly #hostFiles = new HttpStudioHostFileBrowser();
