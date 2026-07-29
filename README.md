@@ -30,7 +30,10 @@ Repository docs describe committed architecture and implementation surfaces.
 Den may hold current planning, review packets, and decisions when available,
 but the repository is intentionally navigable without Den access. Start with
 [the canonical design](docs/design.md) and the
-[agent code atlas](docs/agent-code-atlas.md).
+[agent code atlas](docs/agent-code-atlas.md). The exact reviewed realtime,
+builder, and Rusty D20 evidence for the completed gameplay-mechanics campaign
+is indexed in the
+[campaign closeout](docs/gameplay-mechanics-campaign-closeout.md).
 
 ## Provider boundary
 

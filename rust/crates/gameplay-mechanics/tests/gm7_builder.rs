@@ -1,3 +1,6 @@
+use std::alloc::System;
+use std::hint::black_box;
+
 use core_ids::EntityId;
 use entity_state::{
     encode_snapshot, ComponentRevision, EntityAuthoringService, EntityComponent, EntityDefinition,
@@ -22,11 +25,46 @@ use gameplay_mechanics::{
     MAX_EQUIPMENT_ASSIGNMENTS, MAX_STAT_DECISIONS,
 };
 use serde::Deserialize;
+use stats_alloc::{Region, StatsAlloc, INSTRUMENTED_SYSTEM};
 
 const FACILITY: EntityId = EntityId::new(70_001);
 const UNCONTAINED_MODULE: EntityId = EntityId::new(70_100);
 const DECORATION: EntityId = EntityId::new(70_101);
 const MAX_FIXTURE_MODULES: usize = 8;
+
+#[global_allocator]
+static FIXTURE_ALLOCATOR: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MeasuredAllocations {
+    allocation_calls: u64,
+    reallocation_calls: u64,
+    allocated_bytes: u64,
+    net_reallocated_bytes: i64,
+}
+
+fn measure_allocations(iterations: u64, mut operation: impl FnMut()) -> MeasuredAllocations {
+    assert!(iterations > 0);
+    let region = Region::new(FIXTURE_ALLOCATOR);
+    for _ in 0..iterations {
+        operation();
+    }
+    let statistics = region.change();
+    let allocation_calls = statistics.allocations as u64;
+    let reallocation_calls = statistics.reallocations as u64;
+    let allocated_bytes = statistics.bytes_allocated as u64;
+    let net_reallocated_bytes = statistics.bytes_reallocated as i64;
+    assert_eq!(allocation_calls % iterations, 0);
+    assert_eq!(reallocation_calls % iterations, 0);
+    assert_eq!(allocated_bytes % iterations, 0);
+    assert_eq!(net_reallocated_bytes % iterations as i64, 0);
+    MeasuredAllocations {
+        allocation_calls: allocation_calls / iterations,
+        reallocation_calls: reallocation_calls / iterations,
+        allocated_bytes: allocated_bytes / iterations,
+        net_reallocated_bytes: net_reallocated_bytes / iterations as i64,
+    }
+}
 
 fn scalar(value: i64) -> MechanicsScalar {
     MechanicsScalar::new(value).unwrap()
@@ -1018,6 +1056,8 @@ struct BuilderEvidence {
     stressed: CostEvidence,
     quotas: QuotaEvidence,
     memory_accounting: MemoryAccounting,
+    release_measurement: ReleaseMeasurement,
+    api_amplification: ApiAmplification,
     non_claims: Vec<String>,
 }
 
@@ -1079,6 +1119,49 @@ struct MemoryAccounting {
     clones: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReleaseMeasurement {
+    profile: String,
+    rustc: String,
+    target: String,
+    iterations: u64,
+    simple_stat_evaluation: AllocationEvidence,
+    stressed_stat_evaluation: AllocationEvidence,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AllocationEvidence {
+    allocation_calls: u64,
+    reallocation_calls: u64,
+    allocated_bytes: u64,
+    net_reallocated_bytes: i64,
+}
+
+impl AllocationEvidence {
+    fn assert_matches(&self, actual: MeasuredAllocations) {
+        assert_eq!(self.allocation_calls, actual.allocation_calls);
+        assert_eq!(self.reallocation_calls, actual.reallocation_calls);
+        assert_eq!(self.allocated_bytes, actual.allocated_bytes);
+        assert_eq!(self.net_reallocated_bytes, actual.net_reallocated_bytes);
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ApiAmplification {
+    stat_evaluation: ApiOperationEvidence,
+    one_part_damage_apply: ApiOperationEvidence,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ApiOperationEvidence {
+    public_service_calls: usize,
+    component_slot_writes: usize,
+}
+
 #[test]
 fn checked_builder_evidence_records_bounded_costs_sizes_and_non_claims() {
     let catalog = catalog();
@@ -1093,7 +1176,7 @@ fn checked_builder_evidence_records_bounded_costs_sizes_and_non_claims() {
         "../../../../fixtures/gameplay-mechanics/builder-evidence-v1.json"
     ))
     .unwrap();
-    assert_eq!(evidence.schema_version, 1);
+    assert_eq!(evidence.schema_version, 2);
     assert_eq!(
         evidence.scope,
         "headless-gameplay-mechanics-builder-fixture"
@@ -1171,17 +1254,127 @@ fn checked_builder_evidence_records_bounded_costs_sizes_and_non_claims() {
     );
     assert_eq!(
         evidence.memory_accounting.allocations,
-        "not exposed by public APIs; no numeric allocation claim"
+        "isolated single-test System allocator observations for release stat evaluation; not a normative performance budget"
     );
     assert_eq!(
         evidence.memory_accounting.clones,
         "not exposed by public APIs; visits and canonical bytes are recorded instead"
     );
+    assert_eq!(evidence.release_measurement.profile, "release");
+    assert_eq!(
+        evidence.release_measurement.rustc,
+        "rustc 1.96.0 (ac68faa20 2026-05-25)"
+    );
+    assert_eq!(
+        evidence.release_measurement.target,
+        "x86_64-unknown-linux-gnu"
+    );
+    assert_eq!(evidence.release_measurement.iterations, 1_000);
+    assert_eq!(
+        evidence
+            .api_amplification
+            .stat_evaluation
+            .public_service_calls,
+        1
+    );
+    assert_eq!(
+        evidence
+            .api_amplification
+            .stat_evaluation
+            .component_slot_writes,
+        0
+    );
+    assert_eq!(
+        evidence
+            .api_amplification
+            .one_part_damage_apply
+            .public_service_calls,
+        1
+    );
+    assert_eq!(
+        evidence
+            .api_amplification
+            .one_part_damage_apply
+            .component_slot_writes,
+        1
+    );
+
+    if !cfg!(debug_assertions) {
+        let simple_stat = stat("production");
+        let simple_operation = operation("measure_simple_allocations");
+        let stressed_stat = stat("production");
+        let stressed_operation = operation("measure_stressed_allocations");
+
+        // Warm both paths before counting so the evidence describes the
+        // steady direct service call rather than one-time test initialization.
+        black_box(
+            StatService::evaluate(
+                &simple,
+                &catalog,
+                FACILITY,
+                &simple_stat,
+                &simple_operation,
+                &[],
+            )
+            .unwrap(),
+        );
+        black_box(
+            StatService::evaluate(
+                &stressed,
+                &catalog,
+                FACILITY,
+                &stressed_stat,
+                &stressed_operation,
+                &[],
+            )
+            .unwrap(),
+        );
+
+        let simple_allocations =
+            measure_allocations(evidence.release_measurement.iterations, || {
+                black_box(
+                    StatService::evaluate(
+                        &simple,
+                        &catalog,
+                        FACILITY,
+                        &simple_stat,
+                        &simple_operation,
+                        &[],
+                    )
+                    .unwrap(),
+                );
+            });
+        let stressed_allocations =
+            measure_allocations(evidence.release_measurement.iterations, || {
+                black_box(
+                    StatService::evaluate(
+                        &stressed,
+                        &catalog,
+                        FACILITY,
+                        &stressed_stat,
+                        &stressed_operation,
+                        &[],
+                    )
+                    .unwrap(),
+                );
+            });
+        println!("simple stat allocations: {simple_allocations:?}");
+        println!("stressed stat allocations: {stressed_allocations:?}");
+        evidence
+            .release_measurement
+            .simple_stat_evaluation
+            .assert_matches(simple_allocations);
+        evidence
+            .release_measurement
+            .stressed_stat_evaluation
+            .assert_matches(stressed_allocations);
+    }
     assert_eq!(
         evidence.non_claims,
         vec![
             "headless regression fixture, not an external consumer or live product proof",
-            "no allocation or clone count is inferred from visit counts",
+            "release allocation observations are compiler/platform-specific and not an API budget",
+            "no clone count is inferred from visit or allocation counts",
             "not a promotion vote for gameplay-rules",
         ]
     );

@@ -8,6 +8,10 @@ The optional Rust `gameplay-rules` package support and isolated TypeScript
 authoring workspace are implemented. The workspace remains a separately gated
 optional surface and is never an ordinary provider dependency.
 
+The completed three-composition mechanics/rules evidence, exact consumer pins,
+measured limits, and deliberate stopping point are indexed in the
+[gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md).
+
 ## How to use this atlas
 
 1. Read [design.md](design.md) for the provider boundary.
@@ -62,6 +66,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 - [Repository README](../README.md)
 - [Agent guidance](../AGENTS.md)
 - [Canonical design](design.md)
+- [Gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md)
 - [Rust source organization](topics/development/rust-style.md)
 - [Cargo workspace](../Cargo.toml)
 - [Provider gate](../scripts/verify.sh)

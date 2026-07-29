@@ -26,27 +26,25 @@ downstream repositories.
   before choosing delta/reference storage, another cadence default, or renderer GPU instrumentation.
 - **Last reviewed:** 2026-07-27 / codex
 
-## Gameplay mechanics awaits Rusty D20 GM7 reconciliation
+## Gameplay mechanics campaign breadth stops at three compositions
 
-- **Status:** accepted-temporary
-- **Affected surface:** the initial `gameplay-mechanics` provider and GM7
-  closeout
-- **Limitation:** GM0-GM6, the reviewed external realtime demo, and the bounded
-  infrastructure fixture prove the provider plus two composition shapes. The
-  rules-heavy Rusty D20 consumer has not yet completed the final
-  three-composition reconciliation.
-- **Impact:** The provider APIs, realtime product path, and infrastructure-shaped
-  direct composition are independently usable, but the campaign has not yet
-  shown whether the rules-heavy composition reveals another reusable gap or
-  only downstream policy.
-- **Detection:** `cargo test -p gameplay-mechanics --test gm7_builder --locked`,
-  `cargo test -p gameplay-mechanics -p engine-inspector --locked`, and
-  `cargo run -p gameplay-mechanics --example compositions` prove the
-  host-neutral provider shapes. They deliberately do not launch or inspect a
-  sibling product.
-- **Follow-up:** Rusty Engine task #6291 reconciles the reviewed shooter,
-  infrastructure, and Rusty D20 evidence.
-- **Last reviewed:** 2026-07-28 / codex
+- **Status:** deliberate-boundary
+- **Affected surface:** `gameplay-mechanics`, optional `gameplay-rules`, and
+  their downstream adoption evidence
+- **Limitation:** GM7 reconciles one realtime product, one bounded headless
+  infrastructure falsification fixture, and one real rules-heavy D20 product.
+  It does not certify a shipped builder, a second rules-heavy domain, or a
+  universal content/mod platform.
+- **Impact:** The initial provider campaign has no known acceptance gap. New
+  shared semantics still require a concrete consumer and must be promoted at
+  their narrow owner rather than inferred from these three compositions.
+- **Detection:** See the exact revision and acceptance mapping in the
+  [gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md),
+  then run the focused mechanics or rules gate for the surface being changed.
+- **Follow-up:** Downstream products own content and UI expansion. Create an
+  Engine task only when another concrete consumer exposes a reusable mechanism
+  gap.
+- **Last reviewed:** 2026-07-29 / codex
 
 ## Planar navigation footprint and multi-agent planning
 

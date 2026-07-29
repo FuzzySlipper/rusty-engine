@@ -501,6 +501,16 @@ GM1-GM5 proofs named by the ledger. The local
 Asha checkout; the separate builder is an explicit maintainer tool for re-auditing the pinned
 source, not an ordinary provider dependency.
 
+GM7 completes the consumer reconciliation without changing that literal donor
+decision. The exact realtime demo, infrastructure fixture, and Rusty D20 chain
+retained the component/catalog/service/receipt owners and exposed one generic
+equipment-bound invariant, fixed at `EquipmentService`. Rusty D20's separate UI
+baseline is exactly `rusty-engine-ui` revision
+`68ddfa5430ec3bc2cf7ca96963982db9511e79ba`; it is downstream product donor
+evidence, not an Engine dependency or an Asha disposition. Exact revisions,
+gates, measurements, and non-claims are indexed in the
+[campaign closeout](../gameplay-mechanics-campaign-closeout.md).
+
 ## Gameplay rules GR0 donor disposition
 
 GR0 re-audits the same pinned `asha-rpg` tree for a different and much smaller
@@ -525,6 +535,13 @@ separate checker proves complete local accounting without reading a donor
 checkout, while the builder remains an explicit maintainer-only re-audit tool.
 The TypeScript packages have their own lockfile and `verify-rules` gate; they
 do not enter the ordinary Rust provider dependency path.
+
+The first consumer closed at Rusty D20 revision
+`793dd6037d99091d958f675c98b35320b9aca307`. Its immutable TypeScript candidates
+are strictly admitted and semantically compiled by downstream Rust; the
+formula/action/reaction/runtime meaning remains excluded from this donor
+owner. A content-only addition using existing D20 primitives requires neither
+an Engine edit nor a new Rust semantic primitive.
 
 The operational dependency baseline is empty. After M10, Cargo metadata, provider fixture paths,
 shell scripts, executable documentation, and CI require only Rusty Engine; ordinary Rust provider

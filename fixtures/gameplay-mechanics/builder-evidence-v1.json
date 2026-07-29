@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "scope": "headless-gameplay-mechanics-builder-fixture",
   "simple": {
     "modules": 1,
@@ -37,12 +37,41 @@
     "maxEffectSourceActivations": 256
   },
   "memoryAccounting": {
-    "allocations": "not exposed by public APIs; no numeric allocation claim",
+    "allocations": "isolated single-test System allocator observations for release stat evaluation; not a normative performance budget",
     "clones": "not exposed by public APIs; visits and canonical bytes are recorded instead"
+  },
+  "releaseMeasurement": {
+    "profile": "release",
+    "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+    "target": "x86_64-unknown-linux-gnu",
+    "iterations": 1000,
+    "simpleStatEvaluation": {
+      "allocationCalls": 38,
+      "reallocationCalls": 0,
+      "allocatedBytes": 3160,
+      "netReallocatedBytes": 0
+    },
+    "stressedStatEvaluation": {
+      "allocationCalls": 108,
+      "reallocationCalls": 9,
+      "allocatedBytes": 9210,
+      "netReallocatedBytes": 4160
+    }
+  },
+  "apiAmplification": {
+    "statEvaluation": {
+      "publicServiceCalls": 1,
+      "componentSlotWrites": 0
+    },
+    "onePartDamageApply": {
+      "publicServiceCalls": 1,
+      "componentSlotWrites": 1
+    }
   },
   "nonClaims": [
     "headless regression fixture, not an external consumer or live product proof",
-    "no allocation or clone count is inferred from visit counts",
+    "release allocation observations are compiler/platform-specific and not an API budget",
+    "no clone count is inferred from visit or allocation counts",
     "not a promotion vote for gameplay-rules"
   ]
 }

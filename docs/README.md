@@ -14,6 +14,7 @@ does not require Den access.
 |---|---|
 | [design.md](design.md) | Canonical provider architecture, authority, dependency direction, and promotion rules |
 | [agent-code-atlas.md](agent-code-atlas.md) | Agent-oriented navigation across code owners, public surfaces, and gates |
+| [gameplay-mechanics-campaign-closeout.md](gameplay-mechanics-campaign-closeout.md) | Exact GM0-GM7 mechanics/rules consumer evidence, measured limits, donor pins, and stopping point |
 | [README.md](README.md) | This documentation index |
 
 ## Topic directories
@@ -71,6 +72,7 @@ tests take precedence when describing implemented behavior.
 | Change entity components or atomic entity mutation | [Entity state and state machines](code-map/entity-state-and-state-machines.md) |
 | Change stats, tracks, effects, items, equipment, damage, or restoration | [Gameplay mechanics](code-map/gameplay-mechanics.md) |
 | Package a downstream-authored rules candidate without giving Engine its meaning | [Gameplay rules](code-map/gameplay-rules.md) |
+| Audit the completed mechanics/rules campaign and exact consumers | [Gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md) |
 | Check active provider limitations and scheduled certification | [Known limitations](known-limitations.md) |
 | Change voxel collision, navigation, motion, or edits | [Spatial mechanisms](code-map/spatial-mechanisms.md) |
 | Change a stored asset, scene, prefab, or import | [Content, assets, and scenes](code-map/content-assets-and-scenes.md) |

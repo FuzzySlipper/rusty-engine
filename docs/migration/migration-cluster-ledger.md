@@ -232,8 +232,10 @@ accounts for all 152 donor-tree items as 3 adopted evidence rows, 12 adapted/rew
 137 exclusions. The local checker proves the pinned path set is complete without requiring a donor
 checkout. Provider closeout includes strict seven-component reconstruction, immutable mechanics
 inspection, direct shooter/infrastructure/d20-shaped examples, and local-cost measurements.
-Reference-product migration and three-composition product reconciliation remain the explicit
-consumer stages after the reviewed provider revision; they are not hidden GM5 acceptance work.
+Reference-product migration and three-composition reconciliation subsequently completed at the
+exact revisions indexed in
+[the campaign closeout](../gameplay-mechanics-campaign-closeout.md); they were explicit consumer
+stages rather than hidden GM5 acceptance work.
 
 The GM7I infrastructure-shaped fixture then exercised only the public provider:
 one entity with a production stat and stat-bounded durability track, contained
@@ -248,10 +250,19 @@ it in fixture orchestration.
 checks the measurable proof. One versus eight modules yields two versus nine
 production decisions, one versus eight equipment visits and item reads, one
 effect visit/activation in both cases, and canonical snapshots of 3,484 versus
-8,595 bytes. Allocation and clone counts are not observable through the public
-API, so no numeric claim is inferred. This remains a headless regression
+8,595 bytes. An isolated release observation on the recorded compiler/target
+measures 38 versus 108 allocation calls and 3,160 versus 9,210 allocated bytes
+per stat evaluation; the stressed path also performs 9 reallocations with
+4,160 net reallocated bytes. Those allocator values are evidence, not a stable
+budget, and clone counts remain unclaimed. This remains a headless regression
 fixture, not an external consumer, live product certification, rules-support
 consumer, or promotion vote.
+
+The exact realtime demo and Rusty D20 product evidence close the initial
+campaign without reopening excluded Asha topology. Rusty D20 uses the optional
+semantic-neutral package owner but keeps its D20 compiler, live orchestration,
+complete save, and UI downstream. No universal rules language, scheduler,
+event/replay owner, global registry, or complete-save authority was promoted.
 
 ## Reopened and absent clusters
 

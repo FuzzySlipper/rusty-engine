@@ -302,6 +302,14 @@ same operation on original and restored state with the same authoritative result
 2,048-unrelated-entity measurement leaves the simple stat and one-part damage source costs at zero,
 matching the code path's exact slot lookups and component-local cloning.
 
+GM7 reconciles that provider with an exact reviewed realtime product, the bounded in-repository
+infrastructure falsification fixture, and a real rules-heavy Rusty D20 product. The builder found
+one reusable equipment/track-bound invariant, which was fixed at `EquipmentService`; Rusty D20's
+schema, semantic compiler, orchestration, complete save, and UI remained downstream. The exact
+revisions, browser/fresh-process evidence, release allocation observations, quotas, dependency
+direction, and stopping point are recorded in
+[the gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md).
+
 See [Gameplay mechanics](code-map/gameplay-mechanics.md) for entry points, frozen quotas, and focused
 gates.
 

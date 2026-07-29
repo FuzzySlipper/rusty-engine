@@ -360,6 +360,18 @@ The in-repository infrastructure/builder fixture is a separate falsification
 probe for direct mechanics composition. It is not a second rules consumer and
 does not justify broadening this contract.
 
+That first-consumer proof is complete at reviewed Rusty D20 revision
+`793dd6037d99091d958f675c98b35320b9aca307`, using reviewed Engine revision
+`fb608e323a8b44a55195f5720101224ff37fd5db` and exact `rusty-engine-ui` donor
+revision `68ddfa5430ec3bc2cf7ca96963982db9511e79ba`. The downstream proof includes
+two source-correlated TypeScript-authored compositions, Node-free strict Rust
+compilation, canonical mechanics/RNG execution, a real Rust-host browser path,
+and fresh-process save/reopen. Its content-only addition regression uses the
+published D20 authoring surface without an Engine edit or new Rust semantic
+primitive. See the
+[gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md)
+for the exact review/gate ledger and non-claims.
+
 ## Compatibility posture
 
 Schema 1 is strict. Unknown envelope fields and unsupported schema versions

@@ -47,6 +47,7 @@ restoration, and their bounded receipts.
 - [`gameplay-mechanics/tests/gm7_builder.rs`](../../rust/crates/gameplay-mechanics/tests/gm7_builder.rs)
 - [`gameplay-mechanics/examples/compositions.rs`](../../rust/crates/gameplay-mechanics/examples/compositions.rs)
 - [`builder cost evidence`](../../fixtures/gameplay-mechanics/builder-evidence-v1.json)
+- [Completed campaign evidence](../gameplay-mechanics-campaign-closeout.md)
 - [`engine-inspector/src/mechanics.rs`](../../rust/crates/engine-inspector/src/mechanics.rs)
 - [`gameplay-mechanics donor disposition`](../../migration/gameplay-mechanics-donor/disposition.tsv)
 - [Canonical design](../design.md)
