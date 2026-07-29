@@ -541,7 +541,7 @@ project schema, trusted root, compatibility, and publication policy while compos
 `voxel-annotation`, `voxel-convert`, `content-store`, `engine-inspector`, and render-projection
 mechanisms.
 
-Protocol 10 executes one named request at a time. Reads rebuild canonical owner views. Mutations carry
+Protocol 11 executes one named request at a time. Reads rebuild canonical owner views. Mutations carry
 the accepted project hash plus narrower asset/revision/layer/plan guards, stage a complete candidate,
 rerun downstream admission and renderer projection, atomically publish the project file, and return
 a canonical reread. Voxel history and annotation documents are durable project data; conversion
@@ -555,7 +555,15 @@ replacement is compare-and-swap guarded. Primitive/template generation, annotati
 conversion material policy, and deterministic environment generation remain in their Rust owners.
 Rejected or stale operations publish no bytes.
 
-Protocol 10 also carries only bounded identity for downstream entity components: canonical owner
+Protocol 11's `prepareVoxelObjectPlacement` is a narrow read-only exception to complete live-project
+frames: it resolves the exact renderer resources for one canonical object that may have no live
+instance yet. Its response is resource-only, bounded, content-matched, and incapable of creating or
+updating a retained instance. Studio owns only the disposable ghost and one local candidate;
+`attachVoxelObjectInstance` remains the single downstream mutation that allocates an owner,
+validates the typed component, and atomically publishes project truth. The resource candidate may
+survive that canonical reread solely to keep the shared renderer mounted across placement.
+
+Protocol 11 retains protocol 10's bounded identity for downstream entity components: canonical owner
 entity, stable component type, and an optional exact inspector-contract identity advertised by the
 adapter. It contains no component values, field schemas, mutation payloads, UI metadata, module
 locations, or executable handles. Unknown components remain visible and read-only. The Engine shell

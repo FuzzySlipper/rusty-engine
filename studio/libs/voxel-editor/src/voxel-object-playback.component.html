@@ -42,5 +42,33 @@
     } @else {
       <small>This voxel object has no animation clips; its saved default frame is already shown.</small>
     }
+    <section class="duplicate-object" data-visual-id="entity-voxel-object-duplicate">
+      <strong>Duplicate instance</strong>
+      <label>
+        <span>New instance id</span>
+        <input aria-label="Duplicate voxel-object instance id" maxlength="128" [disabled]="busy()" [(ngModel)]="duplicateInstanceId" />
+      </label>
+      <span>Translation</span>
+      <div class="playback-fields duplicate-transform">
+        @for (axis of [0, 1, 2]; track axis) {
+          <label><span>{{ ['X', 'Y', 'Z'][axis] }}</span><input [attr.aria-label]="'Duplicate voxel-object translation ' + ['X', 'Y', 'Z'][axis]" type="number" step="0.1" [disabled]="busy()" [(ngModel)]="duplicateTranslation[axis]" /></label>
+        }
+      </div>
+      <span>Rotation quaternion</span>
+      <div class="playback-fields duplicate-transform duplicate-transform-four">
+        @for (axis of [0, 1, 2, 3]; track axis) {
+          <label><span>{{ ['X', 'Y', 'Z', 'W'][axis] }}</span><input [attr.aria-label]="'Duplicate voxel-object rotation ' + ['X', 'Y', 'Z', 'W'][axis]" type="number" step="0.01" [disabled]="busy()" [(ngModel)]="duplicateRotation[axis]" /></label>
+        }
+      </div>
+      <span>Scale</span>
+      <div class="playback-fields duplicate-transform">
+        @for (axis of [0, 1, 2]; track axis) {
+          <label><span>{{ ['X', 'Y', 'Z'][axis] }}</span><input [attr.aria-label]="'Duplicate voxel-object scale ' + ['X', 'Y', 'Z'][axis]" type="number" step="0.1" [disabled]="busy()" [(ngModel)]="duplicateScale[axis]" /></label>
+        }
+      </div>
+      @if (duplicateError(); as error) {<small class="duplicate-error" role="alert">{{ error }}</small>}
+      <button type="button" data-action="duplicate-voxel-object-instance" [disabled]="duplicateUnavailable()" (click)="duplicate()">Duplicate through owner</button>
+      <small>The canonical object asset and mesh resource remain shared; the downstream owner allocates a new entity and validates this complete instance.</small>
+    </section>
   }
 }

@@ -570,7 +570,7 @@ test('protocol 7 closes history, file, and texture-policy response families', ()
   );
 });
 
-test('protocol 9 keeps entity-owned voxel objects, applied playback, and durable readouts closed', async () => {
+test('protocol 11 keeps entity-owned voxel objects, applied playback, and durable readouts closed', async () => {
   const inspected = voxelObjectSourceInspected('object-source-1');
   assert.equal(decodeStudioAdapterResponse(inspected).type, 'voxelObjectSourceInspected');
   assert.throws(
@@ -740,6 +740,96 @@ test('protocol 9 keeps entity-owned voxel objects, applied playback, and durable
   });
   assert.deepEqual(transport.requests.map((request) => request.type), [
     'inspectVoxelObjectSource', 'previewVoxelObjectConversion', 'previewVoxelObjectInstance',
+  ]);
+});
+
+test('protocol 11 placement preparation carries one bounded resource-only voxel object', async () => {
+  const conversion = voxelObjectConversionPrepared('placement-source');
+  const objectContentHash = `sha256:${'5'.repeat(64)}`;
+  const resourceFrame = {
+    schemaVersion: 1 as const,
+    ops: conversion.projection.ops.map((operation) => operation.op === 'defineVoxelObject'
+      ? { ...operation, asset: { ...operation.asset, contentHash: objectContentHash } }
+      : operation),
+  };
+  const prepared = {
+    type: 'voxelObjectPlacementPrepared',
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+    requestId: 'placement-1',
+    assetId: 'voxel-object/character',
+    objectContentHash,
+    resourceFrame,
+  };
+  const decoded = decodeStudioAdapterResponse(prepared);
+  assert.equal(decoded.type, 'voxelObjectPlacementPrepared');
+  assert.equal(decoded.resourceFrame.ops[0]?.op, 'defineVoxelObject');
+
+  assert.throws(
+    () => decodeStudioAdapterResponse({
+      ...prepared,
+      resourceFrame: {
+        schemaVersion: 1,
+        ops: [...prepared.resourceFrame.ops, { op: 'setVoxelObjectFrame', handle: 1, frame: 0 }],
+      },
+    }),
+    /must be defineMaterial, defineTexture, or defineVoxelObject/u,
+  );
+  assert.throws(
+    () => decodeStudioAdapterResponse({
+      ...prepared,
+      resourceFrame: {
+        schemaVersion: 1,
+        ops: [...prepared.resourceFrame.ops, ...prepared.resourceFrame.ops],
+      },
+    }),
+    /exactly one matching defineVoxelObject/u,
+  );
+  assert.throws(
+    () => decodeStudioAdapterResponse({
+      ...prepared,
+      assetId: 'voxel-object/other',
+    }),
+    /asset\.asset.*must match/u,
+  );
+  assert.throws(
+    () => decodeStudioAdapterResponse({
+      ...prepared,
+      objectContentHash: `sha256:${'6'.repeat(64)}`,
+    }),
+    /asset\.contentHash.*must match/u,
+  );
+  assert.throws(
+    () => decodeStudioAdapterResponse({
+      ...prepared,
+      ambientRegistry: true,
+    }),
+    /ambientRegistry.*unknown/u,
+  );
+  assert.throws(
+    () => decodeStudioAdapterResponse({ ...prepared, assetId: 'x'.repeat(129) }),
+    /1\.\.=128 printable ASCII bytes/u,
+  );
+  assert.throws(
+    () => decodeStudioAdapterResponse({ ...prepared, objectContentHash: 'sha256:not-a-digest' }),
+    /lowercase SHA-256 content identity/u,
+  );
+
+  const transport = new RecordingTransport((request) => {
+    assert.equal(request.type, 'prepareVoxelObjectPlacement');
+    if (request.type !== 'prepareVoxelObjectPlacement') throw new Error('unexpected operation');
+    assert.equal(request.expectedProjectHash, 'project-hash');
+    assert.equal(request.assetId, prepared.assetId);
+    assert.equal(request.expectedObjectContentHash, prepared.objectContentHash);
+    return { ...prepared, requestId: request.requestId };
+  });
+  const client = new StudioAdapterClient(transport);
+  await client.prepareVoxelObjectPlacement({
+    expectedProjectHash: 'project-hash',
+    assetId: prepared.assetId,
+    expectedObjectContentHash: prepared.objectContentHash,
+  });
+  assert.deepEqual(transport.requests.map((request) => request.type), [
+    'prepareVoxelObjectPlacement',
   ]);
 });
 

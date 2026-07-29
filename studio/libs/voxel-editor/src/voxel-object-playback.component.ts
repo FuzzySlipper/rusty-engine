@@ -17,6 +17,11 @@ import type {
 } from '@rusty-engine/studio-adapter-client';
 
 import type { VoxelEditorAction } from './voxel-editor-model.js';
+import {
+  MAX_VOXEL_OBJECT_PLACEMENTS_PER_SESSION,
+  buildVoxelObjectPlacementCandidate,
+  duplicateVoxelObjectInstance,
+} from './voxel-object-placement.js';
 
 @Component({
   selector: 'rusty-voxel-object-playback',
@@ -30,13 +35,19 @@ export class VoxelObjectPlaybackComponent {
   readonly instance = input<VoxelObjectInstanceReadout | null>(null);
   readonly asset = input<VoxelObjectAssetAuthoringReadout | null>(null);
   readonly playback = input<VoxelObjectInstancePlaybackReadout | null>(null);
+  readonly knownInstanceIds = input<readonly string[]>([]);
   readonly busy = input(false);
   readonly action = output<VoxelEditorAction>();
   readonly playing = signal(false);
+  readonly duplicateError = signal<string | null>(null);
 
   clipId = '';
   frameIndex = 0;
   loopMode: VoxelObjectLoopMode = 'repeat';
+  duplicateInstanceId = '';
+  duplicateTranslation = [0, 0, 0];
+  duplicateRotation = [0, 0, 0, 1];
+  duplicateScale = [1, 1, 1];
 
   #instanceKey: string | null = null;
 
@@ -52,6 +63,22 @@ export class VoxelObjectPlaybackComponent {
         this.playing.set(false);
         this.clipId = selectedInitialClip(entry, asset);
         this.frameIndex = selectedInitialFrame(entry, this.clipId);
+        this.duplicateError.set(null);
+        if (entry !== null && asset !== null) {
+          try {
+            const candidate = duplicateVoxelObjectInstance(
+              entry,
+              new Set(this.knownInstanceIds()),
+              asset.grid.cellSize,
+            );
+            this.duplicateInstanceId = candidate.instanceId;
+            this.duplicateTranslation = [...candidate.translation];
+            this.duplicateRotation = [...candidate.rotation];
+            this.duplicateScale = [...candidate.scale];
+          } catch (error) {
+            this.duplicateError.set(error instanceof Error ? error.message : 'Duplicate quota is exhausted.');
+          }
+        }
         if (entry !== null && this.clipId !== '') {
           queueMicrotask(() => {
             if (this.#instanceKey === nextKey && !this.busy()) this.scrub(this.frameIndex);
@@ -125,6 +152,52 @@ export class VoxelObjectPlaybackComponent {
     const entry = this.instance();
     this.playing.set(false);
     if (entry !== null) this.#emit(entry, { kind: 'stop' });
+  }
+
+  duplicate(): void {
+    const entry = this.instance();
+    const asset = this.asset();
+    if (entry === null || asset === null || this.busy()) return;
+    if (this.knownInstanceIds().length >= MAX_VOXEL_OBJECT_PLACEMENTS_PER_SESSION) {
+      this.duplicateError.set('Voxel-object placement quota is exhausted for this Studio session.');
+      return;
+    }
+    const instanceId = this.duplicateInstanceId.trim();
+    if (this.knownInstanceIds().includes(instanceId)) {
+      this.duplicateError.set(`Voxel-object instance ${instanceId} already exists.`);
+      return;
+    }
+    try {
+      const frame = entry.instance.frame;
+      const candidate = buildVoxelObjectPlacementCandidate({
+        sceneId: entry.sceneId,
+        asset,
+        instanceId,
+        clipId: frame.kind === 'clip' ? frame.clipId : '',
+        frameIndex: frame.kind === 'clip' ? frame.frameIndex : 0,
+        translation: this.duplicateTranslation,
+        rotation: this.duplicateRotation,
+        scale: this.duplicateScale,
+        materialOverrides: entry.instance.materialOverrides,
+        canonicalMaterialIds: new Set([
+          ...asset.materialPalette.map((binding) => binding.materialAssetId),
+          ...entry.instance.materialOverrides.map((binding) => binding.materialAssetId),
+        ]),
+      });
+      this.duplicateError.set(null);
+      this.action.emit({
+        kind: 'attachObjectInstance',
+        sceneId: candidate.sceneId,
+        instance: candidate.instance,
+      });
+    } catch (error) {
+      this.duplicateError.set(error instanceof Error ? error.message : 'Duplicate candidate is invalid.');
+    }
+  }
+
+  duplicateUnavailable(): boolean {
+    return this.busy()
+      || this.knownInstanceIds().length >= MAX_VOXEL_OBJECT_PLACEMENTS_PER_SESSION;
   }
 
   durableFrameLabel(frame: VoxelObjectFrameSelection): string {

@@ -30,6 +30,7 @@ import type {
   VoxelReadout,
   VoxelHistoryRevertPreview,
   ProjectMutationReceipt,
+  StoredVoxelObjectInstance,
   StoredCollision,
   StoredKinematic,
   StudioSceneAppearance,
@@ -207,9 +208,25 @@ export interface VoxelWorkspaceState {
     readonly preview: VoxelObjectConversionPreview;
   } | null;
   readonly objectPlayback: VoxelObjectInstancePlaybackReadout | null;
+  readonly objectPlacementResource: VoxelObjectPlacementResourceState | null;
+  readonly objectPlacementHistory: VoxelObjectPlacementHistoryState | null;
   readonly historyPreview: VoxelHistoryRevertPreview | null;
   readonly lastReceipt: ProjectMutationReceipt | null;
   readonly message: string;
+}
+
+export interface VoxelObjectPlacementResourceState {
+  readonly assetId: string;
+  readonly objectContentHash: string;
+  readonly resourceFrame: RenderFrameDiff;
+  readonly meshResources: readonly MeshResourceReadout[];
+}
+
+export interface VoxelObjectPlacementHistoryState {
+  readonly state: 'placed' | 'undone';
+  readonly sceneId: string;
+  readonly ownerEntityId: number | null;
+  readonly instance: StoredVoxelObjectInstance;
 }
 
 export interface StudioWorkspaceSnapshot {
@@ -310,6 +327,8 @@ function initialSnapshot(): StudioWorkspaceSnapshot {
       objectSourceInspection: null,
       objectConversion: null,
       objectPlayback: null,
+      objectPlacementResource: null,
+      objectPlacementHistory: null,
       historyPreview: null,
       lastReceipt: null,
       message: 'Select a rendered voxel instance to begin authoring.',
@@ -702,6 +721,8 @@ export class StudioWorkspaceStore {
           objectSourceInspection: null,
           objectConversion: null,
           objectPlayback: null,
+          objectPlacementResource: null,
+          objectPlacementHistory: null,
           historyPreview: null,
           lastReceipt: null,
           message: 'Select a rendered voxel instance to begin authoring.',
@@ -950,6 +971,18 @@ export class StudioWorkspaceStore {
   async runVoxelAction(requestedAction: VoxelEditorAction): Promise<void> {
     const action = this.#prepareObjectPlaybackAction(requestedAction);
     const current = this.#snapshot();
+    if (action.kind === 'discardObjectPlacementResource') {
+      this.#invalidateObjectOperation();
+      this.#patch({
+        operation: current.operation === 'voxel' ? 'idle' : current.operation,
+        voxelWorkspace: {
+          ...current.voxelWorkspace,
+          objectPlacementResource: null,
+          message: 'Voxel-object placement preview discarded.',
+        },
+      });
+      return;
+    }
     const document = current.authoringDocument;
     if (document === null) return;
     if (current.operation !== 'idle') {
@@ -1403,6 +1436,45 @@ export class StudioWorkspaceStore {
           });
           return;
         }
+        case 'prepareObjectPlacementResource': {
+          const response = await this.#client.prepareVoxelObjectPlacement({
+            expectedProjectHash,
+            assetId: action.assetId,
+            expectedObjectContentHash: action.expectedObjectContentHash,
+          });
+          if (!this.#objectResponseIsCurrent(
+            action,
+            expectedProjectHash,
+            projectScopeGeneration,
+            objectOperationGeneration,
+          )) return;
+          if (
+            response.assetId !== action.assetId
+            || response.objectContentHash !== action.expectedObjectContentHash
+          ) {
+            throw new Error('Voxel-object placement resources did not match the requested asset identity.');
+          }
+          const canonicalAsset = this.#snapshot().authoringDocument?.voxelObjectAuthoring.assets.find(
+            (asset) => asset.assetId === response.assetId,
+          );
+          if (canonicalAsset?.contentHash !== response.objectContentHash) {
+            throw new Error('Voxel-object placement resources are stale against the canonical asset.');
+          }
+          this.#patch({
+            operation: 'idle',
+            voxelWorkspace: {
+              ...this.#snapshot().voxelWorkspace,
+              objectPlacementResource: {
+                assetId: response.assetId,
+                objectContentHash: response.objectContentHash,
+                resourceFrame: response.resourceFrame,
+                meshResources: response.meshResources ?? [],
+              },
+              message: `Prepared bounded placement resources for ${response.assetId}.`,
+            },
+          });
+          return;
+        }
         case 'attachObjectInstance': {
           const response = await this.#client.attachVoxelObjectInstance({
             expectedProjectHash,
@@ -1415,7 +1487,57 @@ export class StudioWorkspaceStore {
             projectScopeGeneration,
             objectOperationGeneration,
           )) return;
+          this.#acceptVoxelObjectAttachment(response, action.sceneId, action.instance);
+          return;
+        }
+        case 'undoObjectPlacement': {
+          const history = current.voxelWorkspace.objectPlacementHistory;
+          if (
+            history?.state !== 'placed'
+            || history.ownerEntityId === null
+            || history.instance.instanceId !== action.instanceId
+          ) {
+            throw new Error('The last voxel-object placement is no longer available to undo.');
+          }
+          const response = await this.#client.deleteSceneObject({
+            expectedProjectHash,
+            expectedSceneRevision: document.identity.sceneRevision,
+            entityId: history.ownerEntityId,
+          });
           this.#acceptVoxelMutation(response);
+          this.#patch({
+            voxelWorkspace: {
+              ...this.#snapshot().voxelWorkspace,
+              objectPlacementHistory: {
+                ...history,
+                state: 'undone',
+                ownerEntityId: null,
+              },
+              message: `Undid voxel-object placement ${history.instance.instanceId}.`,
+            },
+          });
+          return;
+        }
+        case 'reapplyObjectPlacement': {
+          const history = current.voxelWorkspace.objectPlacementHistory;
+          if (
+            history?.state !== 'undone'
+            || history.instance.instanceId !== action.instanceId
+          ) {
+            throw new Error('The last voxel-object placement is no longer available to reapply.');
+          }
+          const response = await this.#client.attachVoxelObjectInstance({
+            expectedProjectHash,
+            sceneId: history.sceneId,
+            instance: history.instance,
+          });
+          if (!this.#objectResponseIsCurrent(
+            action,
+            expectedProjectHash,
+            projectScopeGeneration,
+            objectOperationGeneration,
+          )) return;
+          this.#acceptVoxelObjectAttachment(response, history.sceneId, history.instance);
           return;
         }
         case 'previewObjectInstance': {
@@ -1811,6 +1933,44 @@ export class StudioWorkspaceStore {
     });
   }
 
+  #acceptVoxelObjectAttachment(
+    response: ProjectMutationAppliedResponse,
+    sceneId: string,
+    candidate: StoredVoxelObjectInstance,
+  ): void {
+    const attached = response.project.voxelObjectAuthoring.instances.find((entry) =>
+      entry.sceneId === sceneId
+      && entry.instance.instanceId === candidate.instanceId);
+    if (attached === undefined) {
+      this.#acceptVoxelMutation(response);
+      this.reportUiError(
+        `Canonical reread omitted accepted voxel-object instance ${candidate.instanceId}.`,
+      );
+      return;
+    }
+    this.#acceptVoxelMutation(response);
+    const node = response.project.sceneHierarchy.nodes.find(
+      (entry) => entry.entityId === attached.ownerEntityId,
+    );
+    this.#acceptSelection({
+      sceneNodeId: node?.nodeId ?? null,
+      entityId: attached.ownerEntityId,
+      source: 'inspector',
+    });
+    this.#patch({
+      voxelWorkspace: {
+        ...this.#snapshot().voxelWorkspace,
+        objectPlacementHistory: {
+          state: 'placed',
+          sceneId: attached.sceneId,
+          ownerEntityId: attached.ownerEntityId,
+          instance: attached.instance,
+        },
+        message: `Placed ${attached.instance.instanceId} on owner entity ${String(attached.ownerEntityId)}.`,
+      },
+    });
+  }
+
   #acceptCompleteObjectProjection(
     frame: RenderFrameDiff,
     readout: ProjectionReadout<ProjectionFrameKind>,
@@ -2036,6 +2196,18 @@ export class StudioWorkspaceStore {
           ? null
           : current.voxelWorkspace.objectConversion,
         objectPlayback: null,
+        objectPlacementResource: resetSelection
+          ? null
+          : reconcileObjectPlacementResource(
+              project,
+              current.voxelWorkspace.objectPlacementResource,
+            ),
+        objectPlacementHistory: resetSelection
+          ? null
+          : reconcileObjectPlacementHistory(
+              project,
+              current.voxelWorkspace.objectPlacementHistory,
+            ),
       },
       assetWorkspace: {
         selectedAssetId: project.assetBrowser.assets.some(
@@ -2341,7 +2513,11 @@ function isVoxelObjectAction(action: VoxelEditorAction): boolean {
     case 'previewObjectFrame':
     case 'applyObjectConversion':
     case 'discardObjectConversion':
+    case 'prepareObjectPlacementResource':
+    case 'discardObjectPlacementResource':
     case 'attachObjectInstance':
+    case 'undoObjectPlacement':
+    case 'reapplyObjectPlacement':
     case 'previewObjectInstance':
       return true;
     default:
@@ -2471,6 +2647,34 @@ function acceptedSelection(
   );
   if (node === undefined) return { sceneNodeId: null, entityId: null, source: null };
   return { sceneNodeId: node.nodeId, entityId: node.entityId, source: previous.source };
+}
+
+function reconcileObjectPlacementResource(
+  project: StudioProjectReadout,
+  resource: VoxelObjectPlacementResourceState | null,
+): VoxelObjectPlacementResourceState | null {
+  if (resource === null) return null;
+  const asset = project.voxelObjectAuthoring.assets.find(
+    (candidate) => candidate.assetId === resource.assetId,
+  );
+  return asset?.contentHash === resource.objectContentHash ? resource : null;
+}
+
+function reconcileObjectPlacementHistory(
+  project: StudioProjectReadout,
+  history: VoxelObjectPlacementHistoryState | null,
+): VoxelObjectPlacementHistoryState | null {
+  if (history === null) return null;
+  const instance = project.voxelObjectAuthoring.instances.find((entry) =>
+    entry.instance.instanceId === history.instance.instanceId);
+  if (history.state === 'undone') return instance === undefined ? history : null;
+  if (instance === undefined) return null;
+  return {
+    state: 'placed',
+    sceneId: instance.sceneId,
+    ownerEntityId: instance.ownerEntityId,
+    instance: instance.instance,
+  };
 }
 
 function mutationMessage(receipt: ProjectMutationReceipt): string {
@@ -2615,6 +2819,13 @@ function projectionDescriptor(operation: RenderDiff): {
         metadata: operation.instance.metadata,
       };
     case 'createAnimatedMeshInstance':
+      return {
+        handle: operation.handle,
+        asset: operation.instance.asset,
+        transform: operation.instance.transform,
+        metadata: operation.instance.metadata,
+      };
+    case 'createVoxelObjectInstance':
       return {
         handle: operation.handle,
         asset: operation.instance.asset,

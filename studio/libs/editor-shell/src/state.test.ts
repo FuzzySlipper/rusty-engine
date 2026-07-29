@@ -587,6 +587,167 @@ test('voxel-object source, shared candidate frames, stale apply, explicit discar
   assert.equal(reopened.snapshot().authoringDocument?.identity.projectHash, 'hash-before');
 });
 
+test('voxel-object placement selects canonical owners and keeps one bounded undo/reapply candidate', async () => {
+  const client = new VoxelObjectFixtureClient();
+  const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
+  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.runVoxelAction(objectPrepareAction());
+  const conversion = store.snapshot().voxelWorkspace.objectConversion;
+  assert.ok(conversion !== null);
+  await store.runVoxelAction({
+    kind: 'applyObjectConversion',
+    planId: conversion.plan.planId,
+    expectedPlanHash: conversion.plan.planHash,
+    expectedOutputHash: conversion.preview.outputHash,
+  });
+
+  const first = storedObjectInstance('placed-wall-a', [2, 0, 3]);
+  await store.runVoxelAction({
+    kind: 'attachObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instance: first,
+  });
+  assert.equal(store.snapshot().selection.entityId, 1);
+  assert.equal(store.snapshot().voxelWorkspace.objectPlacementHistory?.state, 'placed');
+
+  const second = storedObjectInstance('placed-wall-b', [4, 0, 3]);
+  await store.runVoxelAction({
+    kind: 'attachObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instance: second,
+  });
+  assert.equal(store.snapshot().authoringDocument?.voxelObjectAuthoring.instances.length, 2);
+  assert.equal(store.snapshot().selection.entityId, 2);
+  assert.equal(
+    store.snapshot().voxelWorkspace.objectPlacementHistory?.instance.instanceId,
+    'placed-wall-b',
+  );
+
+  await store.runVoxelAction({ kind: 'undoObjectPlacement', instanceId: 'placed-wall-b' });
+  assert.equal(store.snapshot().authoringDocument?.voxelObjectAuthoring.instances.length, 1);
+  assert.deepEqual(store.snapshot().voxelWorkspace.objectPlacementHistory, {
+    state: 'undone',
+    sceneId: 'scene/loading-bay',
+    ownerEntityId: null,
+    instance: second,
+  });
+
+  await store.runVoxelAction({ kind: 'reapplyObjectPlacement', instanceId: 'placed-wall-b' });
+  assert.equal(store.snapshot().authoringDocument?.voxelObjectAuthoring.instances.length, 2);
+  assert.equal(store.snapshot().voxelWorkspace.objectPlacementHistory?.state, 'placed');
+  assert.equal(
+    store.snapshot().voxelWorkspace.objectPlacementHistory?.instance.voxelObjectAssetId,
+    first.voxelObjectAssetId,
+  );
+
+  await store.refreshProject();
+  assert.equal(store.snapshot().voxelWorkspace.objectPlacementHistory?.state, 'placed');
+  await store.closeProject();
+  assert.equal(store.snapshot().voxelWorkspace.objectPlacementHistory, null);
+});
+
+test('placement resources are bounded, cancellable, and retained across attach rereads', async () => {
+  const client = new VoxelObjectFixtureClient();
+  const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
+  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.runVoxelAction(objectPrepareAction());
+  const conversion = store.snapshot().voxelWorkspace.objectConversion;
+  assert.ok(conversion !== null);
+  await store.runVoxelAction({
+    kind: 'applyObjectConversion',
+    planId: conversion.plan.planId,
+    expectedPlanHash: conversion.plan.planHash,
+    expectedOutputHash: conversion.preview.outputHash,
+  });
+
+  await store.runVoxelAction({
+    kind: 'prepareObjectPlacementResource',
+    assetId: 'voxel-object/character',
+    expectedObjectContentHash: 'sha256:object',
+  });
+  const prepared = store.snapshot().voxelWorkspace.objectPlacementResource;
+  assert.ok(prepared !== null);
+  assert.equal(prepared.resourceFrame.ops.filter(
+    (operation) => operation.op === 'defineVoxelObject',
+  ).length, 1);
+  assert.equal(prepared.resourceFrame.ops.some(
+    (operation) => operation.op === 'createVoxelObjectInstance',
+  ), false);
+  assert.match(prepared.meshResources[0]?.sourcePath ?? '', /placement/u);
+
+  await store.runVoxelAction({
+    kind: 'attachObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instance: storedObjectInstance('placed-with-resource', [2, 0, 3]),
+  });
+  assert.strictEqual(store.snapshot().voxelWorkspace.objectPlacementResource, prepared);
+  await store.refreshProject();
+  assert.strictEqual(store.snapshot().voxelWorkspace.objectPlacementResource, prepared);
+
+  await store.runVoxelAction({ kind: 'discardObjectPlacementResource' });
+  assert.equal(store.snapshot().voxelWorkspace.objectPlacementResource, null);
+
+  client.blockNextPlacementResource();
+  const pending = store.runVoxelAction({
+    kind: 'prepareObjectPlacementResource',
+    assetId: 'voxel-object/character',
+    expectedObjectContentHash: 'sha256:object',
+  });
+  assert.equal(store.snapshot().operation, 'voxel');
+  await store.runVoxelAction({ kind: 'discardObjectPlacementResource' });
+  assert.equal(store.snapshot().operation, 'idle');
+  client.resolveBlockedPlacementResource();
+  await pending;
+  assert.equal(store.snapshot().voxelWorkspace.objectPlacementResource, null);
+  assert.equal(store.snapshot().lastError, null);
+});
+
+test('mismatched placement resources fail without publishing a preview candidate', async () => {
+  const client = new VoxelObjectFixtureClient();
+  client.stalePlacementResource = true;
+  client.applied = true;
+  const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
+  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+
+  await store.runVoxelAction({
+    kind: 'prepareObjectPlacementResource',
+    assetId: 'voxel-object/character',
+    expectedObjectContentHash: 'sha256:object',
+  });
+  assert.equal(store.snapshot().voxelWorkspace.objectPlacementResource, null);
+  assert.match(store.snapshot().lastError ?? '', /did not match the requested asset identity/u);
+});
+
+test('rejected voxel-object placement publishes no candidate and leaves prior history current', async () => {
+  const client = new VoxelObjectFixtureClient();
+  const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
+  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.runVoxelAction(objectPrepareAction());
+  const conversion = store.snapshot().voxelWorkspace.objectConversion;
+  assert.ok(conversion !== null);
+  await store.runVoxelAction({
+    kind: 'applyObjectConversion',
+    planId: conversion.plan.planId,
+    expectedPlanHash: conversion.plan.planHash,
+    expectedOutputHash: conversion.preview.outputHash,
+  });
+  await store.runVoxelAction({
+    kind: 'attachObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instance: storedObjectInstance('accepted-wall', [1, 0, 1]),
+  });
+  const accepted = store.snapshot().voxelWorkspace.objectPlacementHistory;
+  client.rejectObjectAttach = true;
+  await store.runVoxelAction({
+    kind: 'attachObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instance: storedObjectInstance('rejected-wall', [9, 0, 9]),
+  });
+  assert.match(store.snapshot().lastError ?? '', /placement quota exhausted/u);
+  assert.equal(store.snapshot().authoringDocument?.voxelObjectAuthoring.instances.length, 1);
+  assert.strictEqual(store.snapshot().voxelWorkspace.objectPlacementHistory, accepted);
+});
+
 test('pause and restore queue behind an in-flight applied-object sample', async () => {
   const client = new VoxelObjectFixtureClient();
   client.applied = true;
@@ -1190,6 +1351,13 @@ class VoxelObjectFixtureClient {
   rejectObjectApply = false;
   applied = false;
   attached = false;
+  rejectObjectAttach = false;
+  stalePlacementResource = false;
+  readonly attachedInstances: {
+    readonly sceneId: string;
+    readonly ownerEntityId: number;
+    readonly instance: ReturnType<typeof storedObjectInstance>;
+  }[] = [];
   openedProjectId = 'loading-bay';
   previewRequestCount = 0;
   applyRequestCount = 0;
@@ -1209,6 +1377,11 @@ class VoxelObjectFixtureClient {
     response: unknown | null;
   } | null = null;
   #blockedPlayback: {
+    readonly promise: Promise<unknown>;
+    readonly resolve: (response: unknown) => void;
+    response: unknown | null;
+  } | null = null;
+  #blockedPlacementResource: {
     readonly promise: Promise<unknown>;
     readonly resolve: (response: unknown) => void;
     response: unknown | null;
@@ -1364,15 +1537,81 @@ class VoxelObjectFixtureClient {
     } as never);
   }
 
-  attachVoxelObjectInstance() {
+  prepareVoxelObjectPlacement() {
+    const project = projectReadout(false, this.openedProjectId);
+    const projection = appliedVoxelObjectProjection(project.projection);
+    const response = {
+      assetId: 'voxel-object/character',
+      objectContentHash: this.stalePlacementResource ? 'sha256:stale' : 'sha256:object',
+      resourceFrame: {
+        schemaVersion: 1,
+        ops: projection.ops.filter((operation) =>
+          operation.op === 'defineMaterial' || operation.op === 'defineVoxelObject'),
+      },
+      meshResources: [meshResourceReadout('4', 'placement')],
+    };
+    if (this.#blockedPlacementResource !== null) {
+      this.#blockedPlacementResource.response = response;
+      return this.#blockedPlacementResource.promise;
+    }
+    return Promise.resolve(response as never);
+  }
+
+  blockNextPlacementResource() {
+    assert.equal(this.#blockedPlacementResource, null);
+    let resolve!: (response: unknown) => void;
+    const promise = new Promise<unknown>((resolvePromise) => {
+      resolve = resolvePromise;
+    });
+    this.#blockedPlacementResource = { promise, resolve, response: null };
+  }
+
+  resolveBlockedPlacementResource() {
+    const blocked = this.#blockedPlacementResource;
+    assert.ok(blocked !== null && blocked.response !== null);
+    this.#blockedPlacementResource = null;
+    blocked.resolve(blocked.response);
+  }
+
+  attachVoxelObjectInstance(input: {
+    readonly sceneId: string;
+    readonly instance: ReturnType<typeof storedObjectInstance>;
+  }) {
+    if (this.rejectObjectAttach) {
+      return Promise.reject(new Error('voxelObject.placementQuota: placement quota exhausted'));
+    }
+    const ownerEntityId = this.attachedInstances.length + 1;
+    this.attachedInstances.push({
+      sceneId: input.sceneId,
+      ownerEntityId,
+      instance: structuredClone(input.instance),
+    });
     this.attached = true;
     return Promise.resolve({
       receipt: {
         kind: 'voxelObjectInstanceAttached',
+        sceneId: input.sceneId,
+        instanceId: input.instance.instanceId,
+        assetId: input.instance.voxelObjectAssetId,
+        frameKind: input.instance.frame.kind,
+      },
+      project: this.#project(),
+    } as never);
+  }
+
+  deleteSceneObject(input: { readonly entityId: number }) {
+    const index = this.attachedInstances.findIndex(
+      (entry) => entry.ownerEntityId === input.entityId,
+    );
+    if (index < 0) return Promise.reject(new Error('sceneObject.missing: owner not found'));
+    this.attachedInstances.splice(index, 1);
+    this.attached = this.attachedInstances.length > 0;
+    return Promise.resolve({
+      receipt: {
+        kind: 'sceneObjectDeleted',
         sceneId: 'scene/loading-bay',
-        instanceId: 'character-one',
-        assetId: 'voxel-object/character',
-        frameKind: 'clip',
+        entityId: input.entityId,
+        removedObjects: 1,
       },
       project: this.#project(),
     } as never);
@@ -1438,6 +1677,15 @@ class VoxelObjectFixtureClient {
 
   #project() {
     const project = projectReadout(false, this.openedProjectId);
+    const instances = this.attachedInstances.length > 0
+      ? this.attachedInstances
+      : this.attached
+        ? [{
+            sceneId: 'scene/loading-bay',
+            ownerEntityId: 1,
+            instance: storedObjectInstance('character-one', [4, 0, 2]),
+          }]
+        : [];
     return {
       ...project,
       meshResources: [meshResourceReadout('1', 'canonical')],
@@ -1449,19 +1697,7 @@ class VoxelObjectFixtureClient {
         : project.projectionReadout,
       voxelObjectAuthoring: {
         assets: this.applied ? [objectAssetReadout()] : [],
-        instances: this.attached ? [{
-          sceneId: 'scene/loading-bay',
-          ownerEntityId: 1,
-          instance: {
-            instanceId: 'character-one',
-            voxelObjectAssetId: 'voxel-object/character',
-            frame: { kind: 'clip', clipId: 'clip/walk-1', frameIndex: 1 },
-            translation: [4, 0, 2],
-            rotation: [0, 0, 0, 1],
-            scale: [2, 2, 2],
-            materialOverrides: [],
-          },
-        }] : [],
+        instances,
       },
     };
   }
@@ -1946,6 +2182,21 @@ function projectionReadout(sourceRevision: number) {
     retainedVoxelInstances: 0,
     retainedVoxelChunks: 0,
     diagnostics: [],
+  };
+}
+
+function storedObjectInstance(
+  instanceId: string,
+  translation: readonly [number, number, number],
+) {
+  return {
+    instanceId,
+    voxelObjectAssetId: 'voxel-object/character',
+    frame: { kind: 'clip' as const, clipId: 'clip/walk-1', frameIndex: 1 },
+    translation,
+    rotation: [0, 0, 0, 1] as const,
+    scale: [2, 2, 2] as const,
+    materialOverrides: [],
   };
 }
 

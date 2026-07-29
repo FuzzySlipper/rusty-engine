@@ -27,11 +27,12 @@ import {
   type StudioTransformSnapping,
   type StudioTransformTool,
   type StudioVoxelPreview,
+  type StudioVoxelObjectPlacementPick,
   type VoxelViewportPickCandidate,
 } from '@rusty-engine/studio-viewport';
 import {
   VoxelEditorComponent,
-  type VoxelBrushPreviewPresentation,
+  type VoxelEditorPreviewPresentation,
   type VoxelEditorAction,
 } from '@rusty-engine/studio-voxel-editor';
 
@@ -131,7 +132,22 @@ export class StudioShellComponent {
           }];
     });
   });
-  readonly brushPreview = signal<VoxelBrushPreviewPresentation | null>(null);
+  readonly voxelEditorPreview = signal<VoxelEditorPreviewPresentation | null>(null);
+  readonly objectPlacementHistoryReadout = computed(() => {
+    const history = this.state().voxelWorkspace.objectPlacementHistory;
+    return history === null ? null : {
+      state: history.state,
+      instanceId: history.instance.instanceId,
+      ownerEntityId: history.ownerEntityId,
+    };
+  });
+  readonly objectPlacementResourceReadout = computed(() => {
+    const resource = this.state().voxelWorkspace.objectPlacementResource;
+    return resource === null ? null : {
+      assetId: resource.assetId,
+      objectContentHash: resource.objectContentHash,
+    };
+  });
   readonly selectedTransformTool = signal<StudioTransformTool | null>(null);
   readonly hostPathDialog = signal<HostPathDialogState | null>(null);
   readonly visibleHostEntries = computed(() => {
@@ -143,8 +159,8 @@ export class StudioShellComponent {
       : dialog.readout.entries.filter((entry) => entry.name.toLocaleLowerCase().includes(filter));
   });
   readonly voxelPreview = computed<StudioVoxelPreview | null>(() => {
-    const brush = this.brushPreview();
-    if (brush !== null) return brush;
+    const editorPreview = this.voxelEditorPreview();
+    if (editorPreview !== null) return editorPreview;
     const conversion = this.state().voxelWorkspace.conversion;
     if (conversion === null) return null;
     return {
@@ -254,8 +270,19 @@ export class StudioShellComponent {
     this.state().userSettings.projectRoot,
     this.state().authoringDocument?.animatedMeshResources ?? [],
   ]));
+  readonly activeMeshResources = computed(() => {
+    const canonical = this.state().liveProjection?.meshResources ?? [];
+    const placement = this.state().voxelWorkspace.objectPlacementResource?.meshResources ?? [];
+    const resources = new Map(canonical.map((resource) => [resource.resource, resource]));
+    for (const resource of placement) {
+      const existing = resources.get(resource.resource);
+      if (existing === undefined) resources.set(resource.resource, resource);
+    }
+    return [...resources.values()].sort((left, right) =>
+      left.resource.localeCompare(right.resource));
+  });
   readonly meshResourceManifest = computed(() => {
-    const resources = this.state().liveProjection?.meshResources ?? [];
+    const resources = this.activeMeshResources();
     if (resources.length === 0) return null;
     return {
       kind: 'rusty_renderer_mesh_resources.v1' as const,
@@ -268,7 +295,7 @@ export class StudioShellComponent {
   });
   readonly meshResourceKey = computed(() => JSON.stringify([
     this.state().userSettings.projectRoot,
-    this.state().liveProjection?.meshResources ?? [],
+    this.activeMeshResources(),
   ]));
   readonly gridColors = [
     { key: 'minorColor', label: 'Minor lines' },
@@ -369,6 +396,7 @@ export class StudioShellComponent {
   readonly #hostFiles = new HttpStudioHostFileBrowser();
   readonly #renderResources = new HttpStudioRenderResourceClient();
   private readonly studioViewport = viewChild<StudioViewportComponent>('studioViewport');
+  private readonly voxelEditor = viewChild<VoxelEditorComponent>('voxelEditor');
   private readonly hostPathFilterElement = viewChild<ElementRef<HTMLInputElement>>('hostPathFilter');
   #hierarchySelection = Promise.resolve();
   #hostPathResolve: ((path: string | null) => void) | null = null;
@@ -697,6 +725,10 @@ export class StudioShellComponent {
   }
 
   setInspectorMode(mode: 'entity' | 'voxel'): void {
+    if (mode !== 'voxel') {
+      this.voxelEditor()?.cancelObjectPlacement();
+      this.voxelEditorPreview.set(null);
+    }
     this.inspectorMode = mode;
   }
 
@@ -723,8 +755,21 @@ export class StudioShellComponent {
     void this.store.runVoxelAction(action);
   }
 
-  setBrushPreview(preview: VoxelBrushPreviewPresentation | null): void {
-    this.brushPreview.set(preview);
+  setVoxelEditorPreview(preview: VoxelEditorPreviewPresentation | null): void {
+    this.voxelEditorPreview.set(preview);
+  }
+
+  placeVoxelObjectAtPick(pick: StudioVoxelObjectPlacementPick): void {
+    this.voxelEditor()?.applyObjectPlacementPick(pick.worldPoint);
+  }
+
+  commitVoxelObjectPlacement(): void {
+    this.voxelEditor()?.placeObjectInstance();
+  }
+
+  cancelVoxelObjectPlacement(): void {
+    this.voxelEditor()?.cancelObjectPlacement();
+    this.voxelEditorPreview.set(null);
   }
 
   beginSelectedPreview(tool: StudioTransformTool = 'translate'): void {
@@ -1005,6 +1050,9 @@ function createStudioVoxelObjectInspectorHost(): StudioVoxelObjectInspectorHost 
       return {
         instance,
         asset,
+        knownInstanceIds: snapshot.authoringDocument?.voxelObjectAuthoring.instances.map(
+          (entry) => entry.instance.instanceId,
+        ) ?? [],
         playback,
         busy: snapshot.operation !== 'idle',
       };

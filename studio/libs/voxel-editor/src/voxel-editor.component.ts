@@ -42,6 +42,19 @@ import type {
   VoxelHostPathChooser,
 } from './voxel-editor-model.js';
 import { buildVoxelObjectClipControlForSource } from './voxel-editor-model.js';
+import {
+  MAX_VOXEL_OBJECT_PLACEMENTS_PER_SESSION,
+  boundedVoxelObjectPlacementPalette,
+  buildVoxelObjectPlacementCandidate,
+  nextVoxelObjectInstanceId,
+  type VoxelObjectPlacementHistoryReadout,
+  type VoxelObjectPlacementPresentation,
+  type VoxelObjectPlacementResourceReadout,
+} from './voxel-object-placement.js';
+
+export type VoxelEditorPreviewPresentation =
+  | VoxelBrushPreviewPresentation
+  | VoxelObjectPlacementPresentation;
 
 type EditorTab = 'assets' | 'edit' | 'annotations' | 'convert';
 
@@ -69,15 +82,20 @@ export class VoxelEditorComponent {
     readonly preview: VoxelObjectConversionPreview;
   } | null>(null);
   readonly historyPreview = input<VoxelHistoryRevertPreview | null>(null);
+  readonly objectPlacementHistory = input<VoxelObjectPlacementHistoryReadout | null>(null);
+  readonly objectPlacementResource = input<VoxelObjectPlacementResourceReadout | null>(null);
   readonly busy = input(false);
   readonly chooseHostPath = input<VoxelHostPathChooser>(async () => null);
   readonly action = output<VoxelEditorAction>();
-  readonly previewChange = output<VoxelBrushPreviewPresentation | null>();
+  readonly previewChange = output<VoxelEditorPreviewPresentation | null>();
 
   readonly tab = signal<EditorTab>('assets');
   readonly brushPreview = signal(false);
   readonly formError = signal<string | null>(null);
   readonly objectPlaying = signal(false);
+  readonly objectPlacementActive = signal(false);
+  readonly objectPlacementSubmitting = signal(false);
+  readonly acceptedObjectPlacements = signal(0);
   readonly #destroyRef = inject(DestroyRef);
   #playbackTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -198,6 +216,11 @@ export class VoxelEditorComponent {
   objectInstanceScale = [1, 1, 1];
   objectInstanceClip = '';
   objectInstanceFrame = 0;
+  objectMaterialOverrideEnabled = false;
+  objectMaterialOverrideSlot = 0;
+  objectMaterialOverrideAsset = '';
+  #pendingPlacementInstanceId: string | null = null;
+  #pendingPlacementSawBusy = false;
   constructor() {
     effect(() => {
       const pick = this.validatedPick();
@@ -223,8 +246,64 @@ export class VoxelEditorComponent {
       this.objectPreviewClip = selection.clipId;
       this.objectPreviewFrame = selection.frameIndex;
     });
+    effect(() => {
+      const authoring = this.objectAuthoring();
+      const busy = this.busy();
+      const pending = this.#pendingPlacementInstanceId;
+      if (authoring === null) {
+        this.#pendingPlacementInstanceId = null;
+        this.#pendingPlacementSawBusy = false;
+        this.objectPlacementSubmitting.set(false);
+        if (this.objectPlacementActive()) {
+          this.objectPlacementActive.set(false);
+          this.previewChange.emit(null);
+        }
+        return;
+      }
+      if (pending !== null) {
+        const accepted = authoring.instances.some(
+          (entry) => entry.instance.instanceId === pending,
+        );
+        if (accepted) {
+          this.#pendingPlacementInstanceId = null;
+          this.#pendingPlacementSawBusy = false;
+          this.objectPlacementSubmitting.set(false);
+          this.acceptedObjectPlacements.update((count) => count + 1);
+          try {
+            this.objectInstanceId = nextVoxelObjectInstanceId(
+              pending,
+              new Set(authoring.instances.map((entry) => entry.instance.instanceId)),
+            );
+            queueMicrotask(() => this.refreshObjectPlacementPreview());
+          } catch (error) {
+            this.formError.set(error instanceof Error ? error.message : 'Placement quota is exhausted.');
+            this.objectPlacementActive.set(false);
+            this.previewChange.emit(null);
+          }
+        } else if (busy) {
+          this.#pendingPlacementSawBusy = true;
+        } else if (this.#pendingPlacementSawBusy) {
+          this.#pendingPlacementInstanceId = null;
+          this.#pendingPlacementSawBusy = false;
+          this.objectPlacementSubmitting.set(false);
+        }
+      }
+      if (
+        this.objectPlacementActive()
+        && !authoring.assets.some((asset) => asset.assetId === this.objectSelectedAssetId)
+      ) this.cancelObjectPlacement();
+    });
+    effect(() => {
+      const resource = this.objectPlacementResource();
+      if (resource === null || !this.objectPlacementActive()) return;
+      queueMicrotask(() => this.refreshObjectPlacementPreview());
+    });
     this.#destroyRef.onDestroy(() => {
       this.pauseObjectPreview();
+      this.previewChange.emit(null);
+      if (this.objectPlacementActive() || this.objectPlacementResource() !== null) {
+        this.action.emit({ kind: 'discardObjectPlacementResource' });
+      }
     });
   }
 
@@ -936,43 +1015,189 @@ export class VoxelEditorComponent {
     return this.objectAuthoring()?.assets ?? [];
   }
 
+  objectPlacementAssets(): readonly VoxelObjectAssetAuthoringReadout[] {
+    return boundedVoxelObjectPlacementPalette(this.objectAssets());
+  }
+
+  objectPlacementPaletteTruncated(): boolean {
+    return this.objectPlacementAssets().length < this.objectAssets().length;
+  }
+
   selectedObjectAsset(): VoxelObjectAssetAuthoringReadout | null {
     return this.objectAssets().find((asset) => asset.assetId === this.objectSelectedAssetId) ?? null;
   }
 
   chooseObjectAsset(assetId: string): void {
+    if (this.busy() || this.objectPlacementSubmitting()) return;
     this.objectSelectedAssetId = assetId;
     const asset = this.selectedObjectAsset();
     this.objectInstanceClip = asset?.defaultClip ?? asset?.clips[0]?.clipId ?? '';
     this.objectInstanceFrame = 0;
+    const firstBinding = asset?.materialPalette[0];
+    this.objectMaterialOverrideSlot = firstBinding?.materialSlot ?? 0;
+    this.objectMaterialOverrideAsset = firstBinding?.materialAssetId ?? this.materials()[0]?.assetId ?? '';
+    this.objectPlacementActive.set(asset !== null);
+    if (asset === null) {
+      this.previewChange.emit(null);
+      return;
+    }
+    if (!this.objectPlacementResourceReady()) {
+      if (this.objectPlacementResource() !== null) {
+        this.action.emit({ kind: 'discardObjectPlacementResource' });
+      }
+      this.action.emit({
+        kind: 'prepareObjectPlacementResource',
+        assetId: asset.assetId,
+        expectedObjectContentHash: asset.contentHash,
+      });
+      this.previewChange.emit(null);
+      return;
+    }
+    queueMicrotask(() => this.refreshObjectPlacementPreview());
   }
 
   attachObjectInstance(): void {
-    const asset = this.selectedObjectAsset();
-    if (asset === null) return;
-    const clip = asset.clips.find((candidate) => candidate.clipId === this.objectInstanceClip);
-    const frame: VoxelObjectFrameSelection = clip === undefined
-      ? { kind: 'default' }
-      : {
-          kind: 'clip',
-          clipId: clip.clipId,
-          frameIndex: Math.min(
-            Math.max(0, integer(this.objectInstanceFrame, 0)),
-            Math.max(0, clip.frames.length - 1),
-          ),
-        };
+    this.placeObjectInstance();
+  }
+
+  startObjectPlacement(): void {
+    if (this.selectedObjectAsset() === null || this.busy()) return;
+    this.objectPlacementActive.set(true);
+    if (!this.objectPlacementResourceReady()) {
+      const asset = this.selectedObjectAsset();
+      if (asset !== null) {
+        this.action.emit({
+          kind: 'prepareObjectPlacementResource',
+          assetId: asset.assetId,
+          expectedObjectContentHash: asset.contentHash,
+        });
+      }
+      this.previewChange.emit(null);
+      return;
+    }
+    this.refreshObjectPlacementPreview();
+  }
+
+  refreshObjectPlacementPreview(): void {
+    if (!this.objectPlacementActive()) return;
+    if (!this.objectPlacementResourceReady()) {
+      this.previewChange.emit(null);
+      return;
+    }
+    try {
+      const candidate = this.objectPlacementCandidate();
+      this.formError.set(null);
+      this.previewChange.emit(candidate.presentation);
+    } catch (error) {
+      this.previewChange.emit(null);
+      this.formError.set(error instanceof Error ? error.message : 'Voxel-object placement is invalid.');
+    }
+  }
+
+  applyObjectPlacementPick(worldPoint: readonly [number, number, number]): void {
+    if (!this.objectPlacementActive() || this.busy() || this.objectPlacementSubmitting()) return;
+    if (!worldPoint.every(Number.isFinite)) return;
+    this.objectInstanceTranslation = worldPoint.map(
+      (value) => Number(value.toFixed(6)),
+    );
+    this.refreshObjectPlacementPreview();
+  }
+
+  placeObjectInstance(): void {
+    if (
+      this.busy()
+      || this.objectPlacementSubmitting()
+      || this.objectPlacementUnavailable()
+    ) return;
+    this.objectPlacementActive.set(true);
+    let candidate;
+    try {
+      candidate = this.objectPlacementCandidate();
+    } catch (error) {
+      this.formError.set(error instanceof Error ? error.message : 'Voxel-object placement is invalid.');
+      this.previewChange.emit(null);
+      return;
+    }
+    this.formError.set(null);
+    this.#pendingPlacementInstanceId = candidate.instance.instanceId;
+    this.#pendingPlacementSawBusy = false;
+    this.objectPlacementSubmitting.set(true);
+    this.previewChange.emit(candidate.presentation);
     this.action.emit({
       kind: 'attachObjectInstance',
+      sceneId: candidate.sceneId,
+      instance: candidate.instance,
+    });
+  }
+
+  objectPlacementUnavailable(): boolean {
+    return !this.objectPlacementResourceReady()
+      || this.acceptedObjectPlacements() >= MAX_VOXEL_OBJECT_PLACEMENTS_PER_SESSION
+      || (this.objectAuthoring()?.instances.length ?? 0) >= MAX_VOXEL_OBJECT_PLACEMENTS_PER_SESSION;
+  }
+
+  cancelObjectPlacement(): void {
+    if (this.objectPlacementSubmitting()) return;
+    this.objectPlacementActive.set(false);
+    this.previewChange.emit(null);
+    if (this.objectPlacementResource() !== null || this.busy()) {
+      this.action.emit({ kind: 'discardObjectPlacementResource' });
+    }
+  }
+
+  objectPlacementResourceReady(): boolean {
+    const asset = this.selectedObjectAsset();
+    const resource = this.objectPlacementResource();
+    return asset !== null
+      && resource?.assetId === asset.assetId
+      && resource.objectContentHash === asset.contentHash;
+  }
+
+  chooseObjectPlacementClip(clipId: string): void {
+    this.objectInstanceClip = clipId;
+    this.objectInstanceFrame = 0;
+    this.refreshObjectPlacementPreview();
+  }
+
+  objectPlacementFrameMax(): number {
+    const clip = this.selectedObjectAsset()?.clips.find(
+      (candidate) => candidate.clipId === this.objectInstanceClip,
+    );
+    return Math.max(0, (clip?.frames.length ?? 1) - 1);
+  }
+
+  undoObjectPlacement(): void {
+    const history = this.objectPlacementHistory();
+    if (history?.state !== 'placed' || this.busy()) return;
+    this.action.emit({ kind: 'undoObjectPlacement', instanceId: history.instanceId });
+  }
+
+  reapplyObjectPlacement(): void {
+    const history = this.objectPlacementHistory();
+    if (history?.state !== 'undone' || this.busy()) return;
+    this.action.emit({ kind: 'reapplyObjectPlacement', instanceId: history.instanceId });
+  }
+
+  private objectPlacementCandidate() {
+    const asset = this.selectedObjectAsset();
+    if (asset === null) throw new TypeError('Choose a canonical voxel-object asset.');
+    const overrides = this.objectMaterialOverrideEnabled
+      ? [{
+          materialSlot: integer(this.objectMaterialOverrideSlot, -1),
+          materialAssetId: this.objectMaterialOverrideAsset,
+        }]
+      : [];
+    return buildVoxelObjectPlacementCandidate({
       sceneId: this.entryScene(),
-      instance: {
-        instanceId: this.objectInstanceId.trim(),
-        voxelObjectAssetId: asset.assetId,
-        frame,
-        translation: tuple3(this.objectInstanceTranslation),
-        rotation: tuple4(this.objectInstanceRotation),
-        scale: tuple3(this.objectInstanceScale),
-        materialOverrides: [],
-      },
+      asset,
+      instanceId: this.objectInstanceId,
+      clipId: this.objectInstanceClip,
+      frameIndex: Number(this.objectInstanceFrame),
+      translation: this.objectInstanceTranslation,
+      rotation: this.objectInstanceRotation,
+      scale: this.objectInstanceScale,
+      materialOverrides: overrides,
+      canonicalMaterialIds: new Set(this.materials().map((material) => material.assetId)),
     });
   }
 

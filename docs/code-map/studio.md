@@ -42,7 +42,7 @@ viewport, and its closed external-project adapter protocol.
 - The external consumer is always selected explicitly by an integration
   command; ordinary Engine work never scans a sibling checkout.
 - Renderer packages are consumed through their package roots.
-- Protocol 10 and the shell implement the promoted downstream Entity inspector
+- Protocol 11 retains the promoted downstream Entity inspector
   seam. `studio/libs/editor-shell/src/entity-inspector.ts` owns static
   contribution admission, exact matching, remount generations, and the narrow
   mutation-settlement contract. The shell owns the single outlet; the stock app
@@ -50,6 +50,9 @@ viewport, and its closed external-project adapter protocol.
   Loading Bay application composes its own Weapon contribution without adding
   its value or operations to Engine. Do not add another hard-coded game
   component to the shell.
+- Protocol 11 adds only the bounded `prepareVoxelObjectPlacement` presentation
+  read needed to preview an unused canonical object. Its resource-only frame is
+  merged by `viewport`; authoritative attachment remains downstream.
 
 ## Private or forbidden paths
 

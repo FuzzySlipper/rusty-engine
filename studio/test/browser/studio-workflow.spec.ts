@@ -598,22 +598,44 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   await canonicalObjects.getByRole('button', {
     name: /voxel-object\/studio-character/,
   }).click();
+  await expect(viewport).toHaveAttribute('data-voxel-preview-kind', 'objectPlacement');
+  await expect(viewport).toHaveAttribute('data-voxel-object-definitions', '1');
+  await expect(viewport).toHaveAttribute('data-voxel-object-placement-ghosts', '1');
+  const placementProjectHash = await projectHash(shell);
+  const viewportCanvas = page.getByLabel('Shared Rusty renderer viewport');
+  await viewportCanvas.focus();
+  await viewportCanvas.press('Escape');
+  await expect(viewport).not.toHaveAttribute('data-voxel-preview-kind', 'objectPlacement');
+  await expect(viewport).toHaveAttribute('data-voxel-object-placement-ghosts', '0');
+  await expect(shell).toHaveAttribute('data-project-hash', placementProjectHash);
+  await canonicalObjects.locator('[data-action="preview-voxel-object-placement"]').click();
+  await expect(viewport).toHaveAttribute('data-voxel-preview-kind', 'objectPlacement');
+  await expect(viewport).toHaveAttribute('data-voxel-object-definitions', '1');
+  await expect(viewport).toHaveAttribute('data-voxel-object-placement-ghosts', '1');
+  await pickVoxelObjectPlacementLocation(page, canonicalObjects, viewport);
   const authoring = editor.locator('[data-visual-id="voxel-object-authoring-readout"]');
   await expect(canonicalObjects).toContainText('convertedAnimatedMesh');
   await expect(authoring).toContainText('content/assets/kenney-retro-character-medium.glb');
   await expect(authoring).toContainText('default clip/run-2');
-  await canonicalObjects.getByLabel('Instance id').fill('studio-character-object');
-  await canonicalObjects.getByLabel('Initial clip').selectOption({ label: 'run' });
-  await canonicalObjects.getByLabel('Initial frame').fill('1');
+  await canonicalObjects.getByLabel('Voxel-object placement instance id').fill('studio-character-object');
+  await canonicalObjects.getByLabel('Voxel-object placement clip').selectOption({ label: 'run' });
+  await canonicalObjects.getByLabel('Voxel-object placement frame').fill('1');
   const axisRows = canonicalObjects.locator('.axis-row');
   await fillAxisRow(axisRows.nth(0), ['4', '1', '8']);
   await fillAxisRow(axisRows.nth(2), ['0.5', '0.5', '0.5']);
   const rowsBeforeAttach = await page.locator('.entity-row').count();
   const rendererBeforeAttach = await rendererHash(viewport);
-  await canonicalObjects.locator('[data-action="attach-voxel-object-instance"]').click();
+  await viewportCanvas.focus();
+  await viewportCanvas.press('Enter');
   await expect(page.locator('.entity-row')).toHaveCount(rowsBeforeAttach + 1);
   await expect.poll(() => rendererHash(viewport)).not.toBe(rendererBeforeAttach);
-  const objectRow = page.locator('.entity-row').filter({ hasText: 'studio-character-object' });
+  await expect(viewport).toHaveAttribute('data-voxel-object-definitions', '1');
+  await expect(viewport).toHaveAttribute('data-voxel-object-instances', '1');
+  await expect(viewport).toHaveAttribute('data-voxel-object-placement-ghosts', '1');
+  await expect(canonicalObjects.getByLabel('Voxel-object placement instance id')).toHaveValue(
+    'studio-character-object-2',
+  );
+  const objectRow = hierarchyRow(page, 'studio-character-object');
   await expect(objectRow).toHaveCount(1);
   const ownerEntityId = await objectRow.getAttribute('data-entity-id');
   expect(ownerEntityId).toMatch(/^[1-9][0-9]*$/);
@@ -668,26 +690,164 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   await expect(shell).toHaveAttribute('data-project-hash', durableHash);
   expect(await readFile(projectPath)).toEqual(durableBytes);
 
+  await page.getByRole('button', { name: 'Voxel', exact: true }).click();
+  await editor.getByRole('button', { name: 'convert', exact: true }).click();
+  await editor.getByRole('button', { name: 'Object / flipbook', exact: true }).click();
+  await editor.getByRole('button', { name: /voxel-object\/studio-character/ }).click();
+  const placementHistory = editor.locator('[data-visual-id="voxel-object-placement-history"]');
+  await expect(placementHistory).toContainText('studio-character-object · placed');
+  await placementHistory.locator('[data-action="undo-voxel-object-placement"]').click();
+  await expect(objectRow).toHaveCount(0);
+  await expect(placementHistory).toContainText('studio-character-object · undone');
+  const hashAfterUndo = await projectHash(shell);
+  expect(hashAfterUndo).not.toBe(durableHash);
+  await placementHistory.locator('[data-action="reapply-voxel-object-placement"]').click();
+  await expect(objectRow).toHaveCount(1);
+  await expect(placementHistory).toContainText('studio-character-object · placed');
+  const reappliedHash = await projectHash(shell);
+  expect(reappliedHash).not.toBe(hashAfterUndo);
+
   await page.reload();
-  await expect(shell).toHaveAttribute('data-project-hash', durableHash);
-  const reopenedRow = page.locator('.entity-row').filter({ hasText: 'studio-character-object' });
+  await expect(shell).toHaveAttribute('data-project-hash', reappliedHash);
+  const reopenedRow = hierarchyRow(page, 'studio-character-object');
   await expect(reopenedRow).toHaveCount(1);
   await reopenedRow.click();
   await page.getByRole('button', { name: 'Entity', exact: true }).click();
   await expect(page.locator('[data-visual-id="entity-voxel-object-component"]')).toContainText(
     'clip/run-2 frame 1',
   );
+
+  await page.getByRole('button', { name: 'Voxel', exact: true }).click();
+  await editor.getByRole('button', { name: 'convert', exact: true }).click();
+  await editor.getByRole('button', { name: 'Object / flipbook', exact: true }).click();
+  const reopenedObjects = editor.locator('.voxel-section').filter({
+    hasText: 'project-owned content and transformed instances',
+  });
+  await reopenedObjects.getByRole('button', { name: /voxel-object\/studio-character/ }).click();
+  await reopenedObjects.getByLabel('Voxel-object placement instance id').fill(
+    'studio-character-object-2',
+  );
+  await reopenedObjects.getByLabel('Voxel-object placement clip').selectOption({ label: 'run' });
+  await reopenedObjects.getByLabel('Voxel-object placement frame').fill('1');
+  await reopenedObjects.getByLabel('Voxel-object placement translation X').fill('6');
+  await reopenedObjects.getByLabel('Voxel-object placement translation Y').fill('1');
+  await reopenedObjects.getByLabel('Voxel-object placement translation Z').fill('8');
+  await reopenedObjects.getByLabel('Voxel-object placement scale X').fill('0.5');
+  await reopenedObjects.getByLabel('Voxel-object placement scale Y').fill('0.5');
+  await reopenedObjects.getByLabel('Voxel-object placement scale Z').fill('0.5');
+  const hashBeforeSecondPlacement = await projectHash(shell);
+  await reopenedObjects.locator('[data-action="attach-voxel-object-instance"]').click();
+  const secondRow = hierarchyRow(page, 'studio-character-object-2');
+  await expect(secondRow).toHaveCount(1);
+  await expect.poll(() => projectHash(shell)).not.toBe(hashBeforeSecondPlacement);
+  const secondPlacementHash = await projectHash(shell);
+  await page.waitForTimeout(100);
+  await expect(shell).toHaveAttribute('data-project-hash', secondPlacementHash);
+  await expect(viewport).toHaveAttribute('data-voxel-object-definitions', '1');
+  await expect(viewport).toHaveAttribute('data-voxel-object-instances', '2');
+
+  await page.getByRole('button', { name: 'Entity', exact: true }).click();
+  const duplicatePanel = page.locator('[data-visual-id="entity-voxel-object-duplicate"]');
+  await expect(duplicatePanel.locator('[data-action="duplicate-voxel-object-instance"]'))
+    .toBeEnabled({ timeout: 30_000 });
+  await duplicatePanel.getByLabel('Duplicate voxel-object instance id').fill(
+    'studio-character-object-copy',
+  );
+  await duplicatePanel.getByLabel('Duplicate voxel-object translation X').fill('8');
+  const hashBeforeDuplicate = await projectHash(shell);
+  await duplicatePanel.locator('[data-action="duplicate-voxel-object-instance"]').click();
+  const duplicateRow = hierarchyRow(page, 'studio-character-object-copy');
+  await expect(duplicateRow).toHaveCount(1);
+  await expect.poll(() => projectHash(shell)).not.toBe(hashBeforeDuplicate);
+  await expect(viewport).toHaveAttribute('data-voxel-object-definitions', '1');
+  await expect(viewport).toHaveAttribute('data-voxel-object-instances', '3');
+  const duplicateOwnerEntityId = await duplicateRow.getAttribute('data-entity-id');
+  expect(duplicateOwnerEntityId).toMatch(/^[1-9][0-9]*$/);
+  expect(duplicateOwnerEntityId).not.toBe(ownerEntityId);
+  await expect(shell).toHaveAttribute('data-selected-entity', duplicateOwnerEntityId as string);
+
+  await expect(shell).toHaveAttribute('data-studio-operation', 'idle', { timeout: 30_000 });
+  const duplicateTranslationX = page.getByLabel('Translation X');
+  await duplicateTranslationX.fill('8.5');
+  const hashBeforeDuplicateTransform = await projectHash(shell);
+  await page.locator('[data-action="commit-transform"]').click();
+  await expect.poll(() => projectHash(shell)).not.toBe(hashBeforeDuplicateTransform);
+
+  await page.getByRole('button', { name: 'Voxel', exact: true }).click();
+  await editor.getByRole('button', { name: 'convert', exact: true }).click();
+  await editor.getByRole('button', { name: 'Object / flipbook', exact: true }).click();
+  await editor.getByRole('button', { name: /voxel-object\/studio-character/ }).click();
+  const duplicateHistory = editor.locator('[data-visual-id="voxel-object-placement-history"]');
+  await expect(duplicateHistory).toContainText('studio-character-object-copy · placed');
+  await duplicateHistory.locator('[data-action="undo-voxel-object-placement"]').click();
+  await expect(duplicateRow).toHaveCount(0);
+  await expect(viewport).toHaveAttribute('data-voxel-object-instances', '2');
+  await duplicateHistory.locator('[data-action="reapply-voxel-object-placement"]').click();
+  await expect(duplicateRow).toHaveCount(1);
+  await expect(viewport).toHaveAttribute('data-voxel-object-definitions', '1');
+  await expect(viewport).toHaveAttribute('data-voxel-object-instances', '3');
+  const finalHash = await projectHash(shell);
+
+  await page.reload();
+  await expect(shell).toHaveAttribute('data-project-hash', finalHash);
+  await expect(hierarchyRow(page, 'studio-character-object')).toHaveCount(1);
+  await expect(hierarchyRow(page, 'studio-character-object-2')).toHaveCount(1);
+  const finalDuplicateRow = hierarchyRow(page, 'studio-character-object-copy');
+  await expect(finalDuplicateRow).toHaveCount(1);
+  await finalDuplicateRow.click();
+  await page.getByRole('button', { name: 'Entity', exact: true }).click();
+  await expect(page.getByLabel('Translation X')).toHaveValue('8.5');
   process.stdout.write(`${JSON.stringify({
     kind: 'studioVoxelObjectBrowserEvidence',
     source: 'mesh-animation/kenney-retro-character-medium',
     asset: 'voxel-object/studio-character',
     instance: 'studio-character-object',
     ownerEntityId,
+    duplicateOwnerEntityId,
+    retainedVoxelObjectDefinitions: 1,
+    retainedVoxelObjectInstances: 3,
+    placementUndoReapplied: true,
     discardedWithoutMutation: true,
     playbackChangedBytes: false,
     freshPageReadoutMatched: true,
   })}\n`);
 });
+
+function hierarchyRow(page: Page, label: string): Locator {
+  return page.locator('.entity-row').filter({
+    has: page.getByText(label, { exact: true }),
+  });
+}
+
+async function pickVoxelObjectPlacementLocation(
+  page: Page,
+  palette: Locator,
+  viewport: Locator,
+): Promise<void> {
+  const canvas = page.getByLabel('Shared Rusty renderer viewport');
+  const translation = [
+    palette.getByLabel('Voxel-object placement translation X'),
+    palette.getByLabel('Voxel-object placement translation Y'),
+    palette.getByLabel('Voxel-object placement translation Z'),
+  ];
+  const before = await Promise.all(translation.map((input) => input.inputValue()));
+  const box = await canvas.boundingBox();
+  if (box === null) throw new Error('shared renderer canvas has no browser bounds');
+  for (const yFraction of [0.6, 0.5, 0.7, 0.4]) {
+    for (const xFraction of [0.5, 0.4, 0.6, 0.3, 0.7]) {
+      const revision = await viewport.getAttribute('data-pick-revision');
+      await canvas.click({ position: { x: box.width * xFraction, y: box.height * yFraction } });
+      await expect(viewport).not.toHaveAttribute('data-pick-revision', revision ?? '0');
+      const after = await Promise.all(translation.map((input) => input.inputValue()));
+      if (after.some((value, index) => value !== before[index])) {
+        const alert = page.getByRole('alert');
+        if (await alert.isVisible()) await alert.getByRole('button', { name: 'Dismiss' }).click();
+        return;
+      }
+    }
+  }
+  throw new Error('voxel-object placement did not receive a shared-renderer surface pick');
+}
 
 async function pickVisibleEntity(page: Page, shell: Locator): Promise<string> {
   const canvas = page.getByLabel('Shared Rusty renderer viewport');

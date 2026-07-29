@@ -29,6 +29,13 @@
       <small>Live preview · gizmo release or selection commits through Rust · Revert cancels</small>
     </div>
   }
+  @if (voxelPreview()?.kind === 'objectPlacement') {
+    <div class="preview-readout object-placement-readout" data-object-placement-active="true">
+      <strong>Voxel-object placement</strong>
+      <span>Click an authored surface to move the ghost</span>
+      <small>Enter places · Escape cancels · numeric transform remains available in the palette</small>
+    </div>
+  }
   <div class="renderer-readout">
     <span>{{ workLightActive() ? 'work light' : 'authored lights' }}</span>
     <span>{{ retainedOpCount() }} retained ops</span>

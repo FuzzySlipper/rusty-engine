@@ -57,7 +57,7 @@ import {
 export type * from './voxel-protocol.js';
 export type * from './voxel-object-protocol.js';
 
-export const STUDIO_ADAPTER_PROTOCOL_VERSION = 10 as const;
+export const STUDIO_ADAPTER_PROTOCOL_VERSION = 11 as const;
 // Requests remain compact control-plane commands. Responses include complete
 // retained-frame readouts; 64 MiB admits the checked 96x144x96 voxel-object
 // corpus while retaining a finite host/browser liveness guard.
@@ -130,6 +130,7 @@ export type StudioAdapterRequest =
   | PreviewVoxelObjectConversionRequest
   | ApplyVoxelObjectConversionRequest
   | DiscardVoxelObjectConversionRequest
+  | PrepareVoxelObjectPlacementRequest
   | AttachVoxelObjectInstanceRequest
   | PreviewVoxelObjectInstanceRequest
   | CloseProjectRequest;
@@ -638,6 +639,18 @@ export interface DiscardVoxelObjectConversionRequest extends RequestHeader {
   readonly planId: string;
 }
 
+/**
+ * Resolves the renderer-owned resources for one already-authored voxel object.
+ * This is a read-only presentation request; attachment remains the sole
+ * durable placement mutation.
+ */
+export interface PrepareVoxelObjectPlacementRequest extends RequestHeader {
+  readonly type: 'prepareVoxelObjectPlacement';
+  readonly expectedProjectHash: string;
+  readonly assetId: string;
+  readonly expectedObjectContentHash: string;
+}
+
 export interface AttachVoxelObjectInstanceRequest extends RequestHeader {
   readonly type: 'attachVoxelObjectInstance';
   readonly expectedProjectHash: string;
@@ -674,6 +687,7 @@ export type StudioAdapterResponse =
   | VoxelObjectConversionPreparedResponse
   | VoxelObjectConversionPreviewedResponse
   | VoxelObjectConversionDiscardedResponse
+  | VoxelObjectPlacementPreparedResponse
   | VoxelObjectInstancePreviewedResponse
   | AssetImportPreparedResponse
   | AssetImportDiscardedResponse
@@ -768,6 +782,15 @@ export interface VoxelObjectConversionDiscardedResponse extends ResponseHeader {
   readonly planId: string;
   readonly projection: RenderFrameDiff;
   readonly projectionReadout: ProjectionReadout;
+  readonly meshResources?: readonly MeshResourceReadout[];
+}
+
+/** A bounded resource-only frame for one disposable Studio placement ghost. */
+export interface VoxelObjectPlacementPreparedResponse extends ResponseHeader {
+  readonly type: 'voxelObjectPlacementPrepared';
+  readonly assetId: string;
+  readonly objectContentHash: string;
+  readonly resourceFrame: RenderFrameDiff;
   readonly meshResources?: readonly MeshResourceReadout[];
 }
 
@@ -881,6 +904,7 @@ export const STUDIO_ADAPTER_OPERATIONS = [
   'previewVoxelObjectConversion',
   'applyVoxelObjectConversion',
   'discardVoxelObjectConversion',
+  'prepareVoxelObjectPlacement',
   'attachVoxelObjectInstance',
   'previewVoxelObjectInstance',
   'closeProject',
@@ -1308,6 +1332,21 @@ export function decodeStudioAdapterResponse(input: unknown): StudioAdapterRespon
       optional(value['meshResources'], '$.meshResources', meshResources);
       return input as VoxelObjectConversionDiscardedResponse;
     }
+    case 'voxelObjectPlacementPrepared': {
+      const value = record(
+        input,
+        '$',
+        [
+          'type', 'protocolVersion', 'requestId', 'assetId', 'objectContentHash',
+          'resourceFrame',
+        ],
+        ['meshResources'],
+      );
+      responseHeader(value);
+      voxelObjectPlacementResources(value, '$');
+      optional(value['meshResources'], '$.meshResources', meshResources);
+      return input as VoxelObjectPlacementPreparedResponse;
+    }
     case 'voxelObjectInstancePreviewed': {
       const value = record(
         input,
@@ -1426,6 +1465,85 @@ function rendererProjection(value: Readonly<Record<string, unknown>>, path: stri
   }
 }
 
+function voxelObjectPlacementResources(
+  value: Readonly<Record<string, unknown>>,
+  path: string,
+): void {
+  const assetId = boundedPresentationIdentity(value['assetId'], `${path}.assetId`);
+  const objectContentHash = sha256ContentHash(
+    value['objectContentHash'],
+    `${path}.objectContentHash`,
+  );
+  let frame: RenderFrameDiff;
+  try {
+    frame = decodeRenderFrameDiff(value['resourceFrame']);
+  } catch (error) {
+    fail(
+      `${path}.resourceFrame`,
+      error instanceof Error ? error.message : 'renderer contract rejected the frame',
+    );
+  }
+  if (frame.ops.length > 513) {
+    fail(`${path}.resourceFrame.ops`, 'must contain at most 513 resource definitions');
+  }
+  const materialIds = new Set<string>();
+  const textureIds = new Set<string>();
+  let objectDefinitions = 0;
+  for (const [index, operation] of frame.ops.entries()) {
+    const operationPath = `${path}.resourceFrame.ops[${String(index)}]`;
+    switch (operation.op) {
+      case 'defineMaterial':
+        if (materialIds.has(operation.material.id)) {
+          fail(`${operationPath}.material.id`, 'is duplicated');
+        }
+        materialIds.add(operation.material.id);
+        break;
+      case 'defineTexture':
+        if (textureIds.has(operation.texture.id)) {
+          fail(`${operationPath}.texture.id`, 'is duplicated');
+        }
+        textureIds.add(operation.texture.id);
+        break;
+      case 'defineVoxelObject':
+        objectDefinitions += 1;
+        if (operation.asset.asset !== assetId) {
+          fail(`${operationPath}.asset.asset`, 'must match $.assetId');
+        }
+        if (operation.asset.contentHash !== objectContentHash) {
+          fail(`${operationPath}.asset.contentHash`, 'must match $.objectContentHash');
+        }
+        break;
+      default:
+        fail(
+          `${operationPath}.op`,
+          'must be defineMaterial, defineTexture, or defineVoxelObject',
+        );
+    }
+  }
+  if (objectDefinitions !== 1) {
+    fail(
+      `${path}.resourceFrame.ops`,
+      'must contain exactly one matching defineVoxelObject operation',
+    );
+  }
+}
+
+function boundedPresentationIdentity(input: unknown, path: string): string {
+  const value = text(input, path);
+  if (value.length === 0 || value.length > 128 || !/^[\x21-\x7e]+$/u.test(value)) {
+    fail(path, 'must contain 1..=128 printable ASCII bytes without whitespace');
+  }
+  return value;
+}
+
+function sha256ContentHash(input: unknown, path: string): string {
+  const value = text(input, path);
+  if (!/^sha256:[0-9a-f]{64}$/u.test(value)) {
+    fail(path, 'must be one lowercase SHA-256 content identity');
+  }
+  return value;
+}
+
 function voxelContract(path: string, validate: () => void): void {
   try {
     validate();
@@ -1460,7 +1578,7 @@ function adapterDescription(input: unknown, path: string): void {
   );
   const expected = STUDIO_ADAPTER_OPERATIONS;
   if (operations.length !== expected.length || operations.some((entry, index) => entry !== expected[index])) {
-    fail(`${path}.operations`, 'must name the protocol 10 operation set in order');
+    fail(`${path}.operations`, 'must name the protocol 11 operation set in order');
   }
   inspectorContracts(
     value['entityInspectorContracts'],

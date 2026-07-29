@@ -59,6 +59,12 @@ export interface StudioTransformGizmoDragFinished {
   readonly cancelled: boolean;
 }
 
+export interface StudioVoxelObjectPlacementPick {
+  readonly worldPoint: readonly [number, number, number];
+  readonly worldNormal: readonly [number, number, number];
+  readonly sourceEntity: number | null;
+}
+
 @Component({
   selector: 'rusty-studio-viewport',
   standalone: true,
@@ -72,9 +78,13 @@ export interface StudioTransformGizmoDragFinished {
     '[attr.data-authored-frame-hash]': 'retainedFrameHash()',
     '[attr.data-preview-applied]': 'previewApplied()',
     '[attr.data-voxel-preview-kind]': 'voxelPreviewKind()',
+    '[attr.data-object-placement-interactive]': 'objectPlacementInteractive()',
     '[attr.data-selected-render-handle]': 'selectedRenderHandle()',
     '[attr.data-animated-mesh-resources]': 'animatedMeshManifest()?.resources?.length ?? 0',
     '[attr.data-mesh-resources]': 'meshResourceManifest()?.resources?.length ?? 0',
+    '[attr.data-voxel-object-definitions]': 'voxelObjectDefinitionCount()',
+    '[attr.data-voxel-object-instances]': 'voxelObjectInstanceCount()',
+    '[attr.data-voxel-object-placement-ghosts]': 'voxelObjectPlacementGhostCount()',
     '[attr.data-camera-move-speed]': 'controlPreferences().moveSpeed',
     '[attr.data-camera-move-forward]': 'controlPreferences().keyboard.moveForward',
     '[attr.data-camera-revision]': 'cameraRevision()',
@@ -123,6 +133,8 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     translation: [0.25, 0.25, 0.25],
   });
   readonly voxelPreview = input<StudioVoxelPreview | null>(null);
+  readonly voxelObjectPlacementResourceFrame = input<RenderFrameDiff | null>(null);
+  readonly objectPlacementInteractive = input(true);
   readonly animatedMeshManifest = input<RendererAnimatedMeshResourceManifest | null>(null);
   readonly resolveAnimatedMeshResource = input<RendererAnimatedMeshResourceResolver | null>(null);
   readonly animatedMeshResourceKey = input('');
@@ -138,6 +150,9 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   readonly transformCandidate = output<Transform>();
   readonly transformDragFinished = output<StudioTransformGizmoDragFinished>();
   readonly transformRevertRequested = output<void>();
+  readonly voxelObjectPlacementPicked = output<StudioVoxelObjectPlacementPick>();
+  readonly voxelObjectPlacementCommitRequested = output<void>();
+  readonly voxelObjectPlacementCancelRequested = output<void>();
 
   readonly status = signal<ViewportStatus>('mounting');
   readonly retainedOpCount = signal(0);
@@ -149,6 +164,9 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   readonly selectedRenderHandle = signal<number | null>(null);
   readonly lastRendererError = signal('');
   readonly workLightActive = signal(true);
+  readonly voxelObjectDefinitionCount = signal(0);
+  readonly voxelObjectInstanceCount = signal(0);
+  readonly voxelObjectPlacementGhostCount = signal(0);
   readonly activeTransformHandleLabel = signal<string | null>(null);
   readonly hoveredTransformHandleLabel = signal<string | null>(null);
 
@@ -184,6 +202,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       const previewEntityId = this.previewEntityId();
       const previewTransform = this.previewTransform();
       const voxelPreview = this.voxelPreview();
+      const voxelObjectPlacementResourceFrame = this.voxelObjectPlacementResourceFrame();
       const lightingMode = this.lightingMode();
       if (frame !== null) {
         this.#replaceFrame(
@@ -194,6 +213,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
           previewEntityId,
           previewTransform,
           voxelPreview,
+          voxelObjectPlacementResourceFrame,
           lightingMode,
         );
       }
@@ -260,7 +280,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
 
   pointerDown(event: PointerEvent): void {
     if (event.button !== 0) return;
-    if (this.#beginManipulatorDrag(event)) return;
+    if (this.voxelPreview()?.kind !== 'objectPlacement' && this.#beginManipulatorDrag(event)) return;
     this.#pointerStart = [event.clientX, event.clientY];
     this.#pointerDragged = false;
   }
@@ -307,6 +327,19 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   }
 
   keyDown(event: KeyboardEvent): void {
+    if (this.voxelPreview()?.kind === 'objectPlacement') {
+      if (!this.objectPlacementInteractive()) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        this.voxelObjectPlacementCancelRequested.emit();
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        this.voxelObjectPlacementCommitRequested.emit();
+      }
+      return;
+    }
     if (event.key !== 'Escape' || this.previewTransform() === null) return;
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -332,12 +365,16 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     }
     const surface = this.#surface;
     if (surface === null) return;
+    const placingObject = this.voxelPreview()?.kind === 'objectPlacement';
+    if (placingObject && !this.objectPlacementInteractive()) return;
     const receipt = surface.pick({
       point: canvasPoint(
         [event.clientX, event.clientY],
         this.canvasElement.nativeElement.getBoundingClientRect(),
       ),
-      filter: { channels: ['authored'] },
+      filter: placingObject
+        ? { channels: ['authored'], layers: ['scene'] }
+        : { channels: ['authored'] },
     });
     if (receipt.diagnostics.length > 0) {
       this.#report(receipt.diagnostics.map((entry) => entry.message).join('; '));
@@ -345,6 +382,18 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     }
     this.pickRevision.update((revision) => revision + 1);
     const hint = receipt.hint;
+    if (placingObject) {
+      if (hint === null) {
+        this.#report('Voxel-object placement requires a visible authored surface or a numeric transform.');
+        return;
+      }
+      this.voxelObjectPlacementPicked.emit({
+        worldPoint: hint.position,
+        worldNormal: hint.normal,
+        sourceEntity: hint.sourceTrace?.entity ?? null,
+      });
+      return;
+    }
     if (hint === null) {
       this.entityPicked.emit(null);
       return;
@@ -432,6 +481,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
           this.previewEntityId(),
           this.previewTransform(),
           this.voxelPreview(),
+          this.voxelObjectPlacementResourceFrame(),
           this.lightingMode(),
         );
       }
@@ -457,6 +507,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     previewEntityId: number | null,
     previewTransform: Transform | null,
     voxelPreview: StudioVoxelPreview | null,
+    voxelObjectPlacementResourceFrame: RenderFrameDiff | null,
     lightingMode: StudioLightingMode,
   ): void {
     const surface = this.#surface;
@@ -466,6 +517,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       previewEntityId,
       previewTransform,
       voxelPreview,
+      voxelObjectPlacementResourceFrame,
       lightingMode,
     ]);
     if (surface === null) return;
@@ -489,6 +541,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       previewEntityId,
       previewTransform,
       voxelPreview,
+      voxelObjectPlacementResourceFrame,
     );
     const lighting = presentStudioLighting(presentation.frame, lightingMode);
     const receipt = surface.replaceFrame(lighting.frame);
@@ -503,6 +556,17 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     this.voxelPreviewKind.set(presentation.voxelPreviewKind);
     this.selectedRenderHandle.set(presentation.selectedHandle);
     this.workLightActive.set(lighting.workLightActive);
+    this.voxelObjectDefinitionCount.set(lighting.frame.ops.filter(
+      (operation) => operation.op === 'defineVoxelObject',
+    ).length);
+    this.voxelObjectInstanceCount.set(lighting.frame.ops.filter(
+      (operation) => operation.op === 'createVoxelObjectInstance'
+        && operation.instance.metadata.sourceEntity !== null,
+    ).length);
+    this.voxelObjectPlacementGhostCount.set(lighting.frame.ops.filter(
+      (operation) => operation.op === 'createVoxelObjectInstance'
+        && operation.instance.metadata.tags.includes('voxel-object-placement-ghost'),
+    ).length);
     this.#syncReadout();
     if (generationChanged) this.frameApplied.emit(generation);
   }

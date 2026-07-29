@@ -18,3 +18,8 @@ button:disabled, input:disabled, select:disabled { opacity: .42; cursor: default
 .transport-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; margin-top: 8px; }
 .transport-controls .restore { grid-column: 1 / -1; }
 small { display: block; margin-top: 7px; line-height: 1.35; }
+.duplicate-object { display: grid; gap: 5px; margin-top: 10px; padding-top: 9px; border-top: 1px solid #34484d; }
+.duplicate-transform { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.duplicate-transform-four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.duplicate-transform input { width: 100%; min-width: 0; }
+.duplicate-error { color: #ff9b8a; }

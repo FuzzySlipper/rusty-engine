@@ -454,13 +454,16 @@
           <section class="voxel-section">
             <header><strong>Canonical voxel objects</strong><span>project-owned content and transformed instances</span></header>
             <div class="item-list">
-              @for (asset of objectAssets(); track asset.assetId) {
-                <button type="button" [class.is-selected]="objectSelectedAssetId === asset.assetId" (click)="chooseObjectAsset(asset.assetId)">
+              @for (asset of objectPlacementAssets(); track asset.assetId) {
+                <button type="button" [class.is-selected]="objectSelectedAssetId === asset.assetId" [disabled]="busy() || objectPlacementSubmitting()" (click)="chooseObjectAsset(asset.assetId)">
                   <strong>{{ asset.assetId }}</strong>
                   <span>{{ 1 + asset.clips.length }} frame groups · {{ asset.materialPalette.length }} bindings · {{ asset.provenance.kind }}</span>
                 </button>
               }
             </div>
+            @if (objectPlacementPaletteTruncated()) {
+              <p class="inline-note">Placement palette shows the first {{ objectPlacementAssets().length }} canonical objects; narrow the project asset set before placing more.</p>
+            }
             @if (selectedObjectAsset(); as asset) {
               <dl class="readout-grid" data-visual-id="voxel-object-authoring-readout">
                 <dt>Content</dt><dd>{{ asset.contentHash }}</dd>
@@ -469,15 +472,42 @@
                 <dt>Clips</dt><dd>{{ asset.clips.length }} · default {{ asset.defaultClip ?? 'default frame' }}</dd>
                 <dt>Source</dt><dd>{{ asset.provenance.sourcePath }}</dd>
               </dl>
-              <div class="form-grid compact">
-                <label class="wide"><span>Instance id</span><input [(ngModel)]="objectInstanceId" /></label>
-                <label><span>Initial clip</span><select [(ngModel)]="objectInstanceClip"><option value="">Default frame</option>@for (clip of asset.clips; track clip.clipId) { <option [value]="clip.clipId">{{ clip.name ?? clip.clipId }}</option> }</select></label>
-                <label><span>Initial frame</span><input type="number" min="0" [(ngModel)]="objectInstanceFrame" /></label>
+              <div class="form-grid compact" data-visual-id="voxel-object-placement-palette">
+                <label class="wide"><span>Instance id</span><input aria-label="Voxel-object placement instance id" maxlength="128" [(ngModel)]="objectInstanceId" (ngModelChange)="refreshObjectPlacementPreview()" /></label>
+                <label><span>Initial clip</span><select aria-label="Voxel-object placement clip" [ngModel]="objectInstanceClip" (ngModelChange)="chooseObjectPlacementClip($event)"><option value="">Default frame</option>@for (clip of asset.clips; track clip.clipId) { <option [value]="clip.clipId">{{ clip.name ?? clip.clipId }}</option> }</select></label>
+                <label><span>Initial frame</span><input aria-label="Voxel-object placement frame" type="number" min="0" [max]="objectPlacementFrameMax()" step="1" [(ngModel)]="objectInstanceFrame" (ngModelChange)="refreshObjectPlacementPreview()" /></label>
               </div>
-              <span>Translation</span><div class="axis-row">@for (axis of [0, 1, 2]; track axis) { <input type="number" step="0.1" [(ngModel)]="objectInstanceTranslation[axis]" /> }</div>
-              <span>Rotation quaternion</span><div class="axis-row four">@for (axis of [0, 1, 2, 3]; track axis) { <input type="number" step="0.01" [(ngModel)]="objectInstanceRotation[axis]" /> }</div>
-              <span>Scale</span><div class="axis-row">@for (axis of [0, 1, 2]; track axis) { <input type="number" step="0.1" [(ngModel)]="objectInstanceScale[axis]" /> }</div>
-              <button type="button" class="primary" data-action="attach-voxel-object-instance" [disabled]="busy()" (click)="attachObjectInstance()">Attach object instance</button>
+              <span>Translation</span><div class="axis-row">@for (axis of [0, 1, 2]; track axis) { <input [attr.aria-label]="'Voxel-object placement translation ' + ['X', 'Y', 'Z'][axis]" type="number" step="0.1" [(ngModel)]="objectInstanceTranslation[axis]" (ngModelChange)="refreshObjectPlacementPreview()" /> }</div>
+              <span>Rotation quaternion</span><div class="axis-row four">@for (axis of [0, 1, 2, 3]; track axis) { <input [attr.aria-label]="'Voxel-object placement rotation ' + ['X', 'Y', 'Z', 'W'][axis]" type="number" step="0.01" [(ngModel)]="objectInstanceRotation[axis]" (ngModelChange)="refreshObjectPlacementPreview()" /> }</div>
+              <span>Scale</span><div class="axis-row">@for (axis of [0, 1, 2]; track axis) { <input [attr.aria-label]="'Voxel-object placement scale ' + ['X', 'Y', 'Z'][axis]" type="number" step="0.1" [(ngModel)]="objectInstanceScale[axis]" (ngModelChange)="refreshObjectPlacementPreview()" /> }</div>
+              <label class="check-setting">
+                <input type="checkbox" aria-label="Override voxel-object placement material" [(ngModel)]="objectMaterialOverrideEnabled" (ngModelChange)="refreshObjectPlacementPreview()" />
+                <span>Material override</span>
+              </label>
+              @if (objectMaterialOverrideEnabled) {
+                <div class="form-grid compact">
+                  <label><span>Object slot</span><select aria-label="Voxel-object placement material slot" [(ngModel)]="objectMaterialOverrideSlot" (ngModelChange)="refreshObjectPlacementPreview()">@for (binding of asset.materialPalette; track binding.materialSlot) {<option [ngValue]="binding.materialSlot">{{ binding.materialSlot }} · {{ binding.displayName }}</option>}</select></label>
+                  <label><span>Project material</span><select aria-label="Voxel-object placement material" [(ngModel)]="objectMaterialOverrideAsset" (ngModelChange)="refreshObjectPlacementPreview()">@for (material of materials(); track material.assetId) {<option [value]="material.assetId">{{ material.assetId }}</option>}</select></label>
+                </div>
+              }
+              <div class="button-row">
+                <button type="button" data-action="preview-voxel-object-placement" [disabled]="busy() || objectPlacementSubmitting()" (click)="startObjectPlacement()">Preview placement</button>
+                <button type="button" data-action="cancel-voxel-object-placement" [disabled]="!objectPlacementActive() || objectPlacementSubmitting()" (click)="cancelObjectPlacement()">Cancel</button>
+                <button type="button" class="primary" data-action="attach-voxel-object-instance" [disabled]="busy() || objectPlacementSubmitting() || objectPlacementUnavailable()" (click)="attachObjectInstance()">Place & continue</button>
+              </div>
+              <p class="inline-note" data-visual-id="voxel-object-placement-status">
+                @if (objectPlacementSubmitting()) {Publishing one complete candidate…}
+                @else if (objectPlacementActive() && !objectPlacementResourceReady()) {Loading the selected object's bounded renderer resources…}
+                @else if (objectPlacementActive()) {Ghost active · click an authored viewport surface to move · Enter places · Escape cancels.}
+                @else {Choose Preview placement to show one disposable shared-renderer ghost.}
+              </p>
+              @if (objectPlacementHistory(); as history) {
+                <div class="button-row" data-visual-id="voxel-object-placement-history">
+                  <span>Last {{ history.instanceId }} · {{ history.state }}</span>
+                  <button type="button" data-action="undo-voxel-object-placement" [disabled]="busy() || history.state !== 'placed'" (click)="undoObjectPlacement()">Undo placement</button>
+                  <button type="button" data-action="reapply-voxel-object-placement" [disabled]="busy() || history.state !== 'undone'" (click)="reapplyObjectPlacement()">Reapply</button>
+                </div>
+              }
             }
             @if ((objectAuthoring()?.instances?.length ?? 0) > 0) {
               <p class="inline-note" data-visual-id="voxel-object-entity-playback-note">Applied objects are entity capabilities. Select an instance in the hierarchy and use its Entity inspector for animation playback.</p>

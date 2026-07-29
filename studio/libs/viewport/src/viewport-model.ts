@@ -147,9 +147,23 @@ export interface StudioVoxelConversionPreview {
   }[];
 }
 
+export interface StudioVoxelObjectPlacementPreview {
+  readonly kind: 'objectPlacement';
+  readonly assetId: string;
+  readonly assetContentHash: string;
+  readonly frameId: string;
+  readonly transform: Transform;
+  readonly materialOverrides: readonly {
+    readonly slot: number;
+    readonly material: string;
+  }[];
+  readonly label: string;
+}
+
 export type StudioVoxelPreview =
   | StudioVoxelBrushPreview
-  | StudioVoxelConversionPreview;
+  | StudioVoxelConversionPreview
+  | StudioVoxelObjectPlacementPreview;
 
 /**
  * Produces a disposable renderer presentation from the canonical Rust frame.
@@ -161,11 +175,19 @@ export function presentStudioSelection(
   previewEntityId: number | null,
   previewTransform: Transform | null,
   voxelPreview: StudioVoxelPreview | null = null,
+  voxelObjectPlacementResourceFrame: RenderFrameDiff | null = null,
 ): StudioPresentationFrame {
+  const resolvedFrame = voxelPreview?.kind === 'objectPlacement'
+    ? mergeVoxelObjectPlacementResources(
+        frame,
+        voxelObjectPlacementResourceFrame,
+        voxelPreview,
+      )
+    : frame;
   const entityId = previewEntityId ?? selectedEntityId;
   const creation = entityId === null
     ? null
-    : frame.ops.map(createdPresentation).find(
+    : resolvedFrame.ops.map(createdPresentation).find(
       (candidate) => candidate?.metadata.sourceEntity === entityId,
     ) ?? null;
   const transformPreviewApplied = creation !== null
@@ -187,12 +209,12 @@ export function presentStudioSelection(
         visible: null,
         metadata: null,
       }];
-  const voxelPreviewOps = presentVoxelPreview(frame, voxelPreview);
+  const voxelPreviewOps = presentVoxelPreview(resolvedFrame, voxelPreview);
   return {
     frame: {
       schemaVersion: 1,
       ops: [
-        ...frame.ops,
+        ...resolvedFrame.ops,
         ...selectionOps,
         ...voxelPreviewOps,
       ],
@@ -201,6 +223,73 @@ export function presentStudioSelection(
     previewApplied: transformPreviewApplied || voxelPreviewOps.length > 0,
     voxelPreviewKind: voxelPreviewOps.length === 0 ? null : voxelPreview?.kind ?? null,
   };
+}
+
+/**
+ * Adds a single adapter-provided placement resource without replacing or
+ * weakening canonical retained definitions. Identity conflicts fail closed so
+ * the caller receives the original frame and no ghost can be presented.
+ */
+export function mergeVoxelObjectPlacementResources(
+  frame: RenderFrameDiff,
+  resourceFrame: RenderFrameDiff | null,
+  preview: StudioVoxelObjectPlacementPreview,
+): RenderFrameDiff {
+  if (resourceFrame === null) return frame;
+  const additions: RenderDiff[] = [];
+  let matchingObjectDefinitions = 0;
+  for (const operation of resourceFrame.ops) {
+    if (operation.op === 'defineMaterial') {
+      const existing = frame.ops.find((candidate) =>
+        candidate.op === 'defineMaterial'
+        && candidate.material.id === operation.material.id);
+      if (existing !== undefined) {
+        if (existing.op !== 'defineMaterial' || !sameValue(existing.material, operation.material)) {
+          return frame;
+        }
+      } else {
+        additions.push(operation);
+      }
+      continue;
+    }
+    if (operation.op === 'defineTexture') {
+      const existing = frame.ops.find((candidate) =>
+        candidate.op === 'defineTexture'
+        && candidate.texture.id === operation.texture.id);
+      if (existing !== undefined) {
+        if (existing.op !== 'defineTexture' || !sameValue(existing.texture, operation.texture)) {
+          return frame;
+        }
+      } else {
+        additions.push(operation);
+      }
+      continue;
+    }
+    if (operation.op !== 'defineVoxelObject') return frame;
+    if (
+      operation.asset.asset !== preview.assetId
+      || operation.asset.contentHash !== preview.assetContentHash
+    ) return frame;
+    matchingObjectDefinitions += 1;
+    const existing = frame.ops.find((candidate) =>
+      candidate.op === 'defineVoxelObject'
+      && candidate.asset.asset === operation.asset.asset);
+    if (existing !== undefined) {
+      if (existing.op !== 'defineVoxelObject' || !sameValue(existing.asset, operation.asset)) {
+        return frame;
+      }
+    } else {
+      additions.push(operation);
+    }
+  }
+  if (matchingObjectDefinitions !== 1) return frame;
+  return additions.length === 0
+    ? frame
+    : { schemaVersion: 1, ops: [...frame.ops, ...additions] };
+}
+
+function sameValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 // Conversion samples are diagnostic preview geometry. Bound their temporary
@@ -226,6 +315,9 @@ function presentVoxelPreview(
       'Voxel brush preview',
     )];
   }
+  if (preview.kind === 'objectPlacement') {
+    return presentVoxelObjectPlacement(frame, preview);
+  }
   if (!Number.isFinite(preview.cellSize) || preview.cellSize <= 0) return [];
   const samples = preview.samples.slice(0, MAX_CONVERSION_PREVIEW_NODES).filter(
     (sample) => sample.coordinate.every(Number.isFinite),
@@ -244,6 +336,79 @@ function presentVoxelPreview(
     ['studio-preview', 'voxel-conversion-preview', `material-slot:${String(sample.materialSlot)}`],
     'Voxel conversion sample',
   ));
+}
+
+function presentVoxelObjectPlacement(
+  frame: RenderFrameDiff,
+  preview: StudioVoxelObjectPlacementPreview,
+): readonly RenderDiff[] {
+  if (!validTransform(preview.transform)) return [];
+  const definition = frame.ops.find((operation) =>
+    operation.op === 'defineVoxelObject'
+    && operation.asset.asset === preview.assetId
+    && operation.asset.contentHash === preview.assetContentHash);
+  if (definition?.op !== 'defineVoxelObject') return [];
+  const frameIndex = definition.asset.frames.findIndex((entry) => entry.id === preview.frameId);
+  if (frameIndex < 0) return [];
+  const boundSlots = new Set(definition.asset.materialSlots.map((entry) => entry.slot));
+  const definedMaterials = new Set(frame.ops.flatMap((operation) =>
+    operation.op === 'defineMaterial' ? [operation.material.id] : []));
+  const overrideSlots = new Set<number>();
+  if (preview.materialOverrides.some((entry) => {
+    if (
+      !Number.isSafeInteger(entry.slot)
+      || !boundSlots.has(entry.slot)
+      || !definedMaterials.has(entry.material)
+      || overrideSlots.has(entry.slot)
+    ) return true;
+    overrideSlots.add(entry.slot);
+    return false;
+  })) return [];
+  const handles = availablePreviewHandles(frame, 2);
+  const root = handles[0] as RenderHandle;
+  const instance = handles[1] as RenderHandle;
+  return [
+    {
+      op: 'create',
+      handle: root,
+      parent: null,
+      node: {
+        geometry: { kind: 'group' },
+        material: { color: [0.25, 0.9, 0.8, 0.45], wireframe: true },
+        transform: {
+          translation: [0, 0, 0],
+          rotation: [0, 0, 0, 1],
+          scale: [1, 1, 1],
+        },
+        visible: true,
+        layer: 'debug',
+        metadata: {
+          sourceEntity: null,
+          sourceSceneNode: null,
+          tags: ['studio-preview', 'voxel-object-placement-root'],
+          label: 'Voxel-object placement preview',
+        },
+      },
+    },
+    {
+      op: 'createVoxelObjectInstance',
+      handle: instance,
+      parent: root,
+      instance: {
+        asset: definition.asset.asset,
+        frame: frameIndex,
+        transform: preview.transform,
+        visible: true,
+        materialOverrides: preview.materialOverrides,
+        metadata: {
+          sourceEntity: null,
+          sourceSceneNode: null,
+          tags: ['studio-preview', 'voxel-object-placement-ghost'],
+          label: preview.label,
+        },
+      },
+    },
+  ];
 }
 
 function previewNode(
@@ -336,6 +501,13 @@ function createdPresentation(operation: RenderDiff): CreatedPresentation | null 
         // Animated assets are object hierarchies. Their root has no single material
         // for the generic update operation to replace, so selection stays visible
         // through the Studio gizmo instead of mutating imported child materials.
+        supportsMaterialUpdate: false,
+      };
+    case 'createVoxelObjectInstance':
+      return {
+        handle: operation.handle,
+        metadata: operation.instance.metadata,
+        transform: operation.instance.transform,
         supportsMaterialUpdate: false,
       };
     case 'createSprite':

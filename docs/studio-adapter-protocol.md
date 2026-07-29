@@ -1,6 +1,6 @@
 # Studio external-project adapter protocol
 
-Status: protocol 10 implemented and certified through Engine Voxel Object plus downstream Weapon consumers
+Status: protocol 11 implemented in Engine; exact downstream adapter certification required
 
 Rusty Engine Studio talks to one project-owned Rust adapter at a time through a bounded JSON-lines
 process. The adapter is a downstream composition root: it understands that project's layout,
@@ -13,7 +13,7 @@ against a real external checkout without turning that checkout into an ordinary 
 
 ## Closed protocol
 
-Every request carries `protocolVersion: 10` and a caller-selected `requestId`. Version 10 contains
+Every request carries `protocolVersion: 11` and a caller-selected `requestId`. Version 11 contains
 only these tagged request families:
 
 | Request | Purpose | Canonical authority |
@@ -43,6 +43,7 @@ only these tagged request families:
 | `prepareVoxelConversion`, `applyVoxelConversion`, `discardVoxelConversion` | Prepare a private bounded project/host GLB plan with primitive, affine, default-material, and typed texture policy; atomically install its exact output or discard it. | `voxel-convert`, `voxel-asset`, project adapter |
 | `inspectVoxelObjectSource` | Import a bounded static or animated GLB snapshot and expose Rust-derived hierarchy, groups, materials, UV sets, clips, channel targets, and classified diagnostics. | `voxel-convert`, project adapter |
 | `prepareVoxelObjectConversion`, `previewVoxelObjectConversion`, `applyVoxelObjectConversion`, `discardVoxelObjectConversion` | Retain one exact static-object or animated-flipbook candidate, select a stored frame for a complete shared-renderer projection, atomically install it, or explicitly discard it. | `voxel-convert`, `voxel-asset`, `voxel-object-runtime`, render projection, project adapter |
+| `prepareVoxelObjectPlacement` | Resolve one already-authored object's exact content-addressed mesh and renderer definitions for a disposable placement ghost; it creates no entity, instance, retained gameplay state, or project bytes. | downstream object admission/render projection and resource host |
 | `attachVoxelObjectInstance` | Attach a transformed canonical object with one explicit default or clip-frame posture and material overrides. | downstream scene schema plus object admission/render projection |
 | `previewVoxelObjectInstance` | Scrub, play, pause, sample, or stop one applied instance through explicit caller time while returning its saved pose, disposable playback posture, and a complete renderer-neutral projection. | `voxel-object-runtime`, render projection, downstream project adapter |
 | `closeProject` | Release open-project and retained-projection state. | Project adapter host lifecycle |
@@ -51,7 +52,8 @@ Responses are likewise a closed tagged union: `described`, `projectOpened`, `pro
 `entityTranslationApplied`, `projectMutationApplied`, `voxelPickValidated`, `voxelRead`,
 `voxelConversionPrepared`, `voxelConversionDiscarded`, `voxelObjectSourceInspected`,
 `voxelObjectConversionPrepared`, `voxelObjectConversionPreviewed`,
-`voxelObjectConversionDiscarded`, `voxelObjectInstancePreviewed`, `voxelHistoryRevertPrepared`,
+`voxelObjectConversionDiscarded`, `voxelObjectPlacementPrepared`,
+`voxelObjectInstancePreviewed`, `voxelHistoryRevertPrepared`,
 `voxelHistoryRevertDiscarded`, `voxelAssetFileExported`, `assetImportPrepared`,
 `assetImportDiscarded`, `projectClosed`, or `rejected`. There is no
 generic method string, command registry, arbitrary payload, provider lookup, RuntimeSession, or
@@ -163,6 +165,19 @@ contribution, whose `readLoadingBayWeapon` and `replaceLoadingBayWeapon` tags re
 decoded product-owned union. Unsupported but advertised identities remain visible and read-only.
 There is no dynamic import, extension payload, store/service locator, or runtime contribution
 discovery.
+
+Protocol 11 adds one deliberately narrower presentation read for viewport placement. An unused
+canonical voxel-object asset is absent from a complete project frame because no live retained
+instance references it. `prepareVoxelObjectPlacement` therefore returns a resource-only frame with
+at most bounded material and texture definitions and exactly one `defineVoxelObject` matching the
+requested asset and content hash. The core decoder rejects handles, instance creation, updates,
+release operations, a second object definition, identity mismatch, and unknown fields. Studio may
+retain only one such candidate, merge identical definitions without replacing canonical resources,
+and dispose it on cancel or project replacement. `attachVoxelObjectInstance` remains the only
+placement mutation: the downstream owner allocates the entity, validates the complete instance,
+atomically publishes it, and returns a canonical reread. Keeping the prepared resources through
+that reread avoids a renderer remount between ghost and accepted instance without making the ghost
+project truth.
 
 ## Safety and atomicity
 

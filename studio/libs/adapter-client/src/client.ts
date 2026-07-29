@@ -22,6 +22,7 @@ import {
   type VoxelObjectConversionPreparedResponse,
   type VoxelObjectConversionPreviewedResponse,
   type VoxelObjectInstancePreviewedResponse,
+  type VoxelObjectPlacementPreparedResponse,
   type VoxelObjectSourceInspectedResponse,
   type VoxelAssetFileExportedResponse,
   type VoxelHistoryRevertDiscardedResponse,
@@ -428,6 +429,15 @@ export class StudioAdapterClient {
     return this.#exchange(
       this.#request('discardVoxelObjectConversion', input),
       'voxelObjectConversionDiscarded',
+    );
+  }
+
+  prepareVoxelObjectPlacement(
+    input: RequestInput<'prepareVoxelObjectPlacement'>,
+  ): Promise<VoxelObjectPlacementPreparedResponse> {
+    return this.#exchange(
+      this.#request('prepareVoxelObjectPlacement', input),
+      'voxelObjectPlacementPrepared',
     );
   }
 

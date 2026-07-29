@@ -221,6 +221,13 @@ async function verifyStaticObjectWorkflow(binary, root) {
     assert.equal(asset.provenance.licensePath, licenseFile);
     assert.equal(asset.provenance.sourceClips.length, 0);
 
+    const placement = await client.prepareVoxelObjectPlacement({
+      expectedProjectHash: applied.project.identity.projectHash,
+      assetId: asset.assetId,
+      expectedObjectContentHash: asset.contentHash,
+    });
+    assertPlacementResources(placement, asset);
+
     const attached = await client.attachVoxelObjectInstance({
       expectedProjectHash: applied.project.identity.projectHash,
       sceneId: 'scene/converted-wall',
@@ -250,12 +257,71 @@ async function verifyStaticObjectWorkflow(binary, root) {
     assert.deepEqual(create.instance.transform.translation, [3, 2, 1]);
     assert.deepEqual(create.instance.transform.scale, [1, 2, 1]);
     assert.equal(create.instance.metadata.sourceEntity, instance.ownerEntityId);
+
+    const duplicateCandidate = {
+      instanceId: 'integration-wall-object-copy',
+      voxelObjectAssetId: asset.assetId,
+      frame: { kind: 'default' },
+      translation: [5, 2, 1],
+      rotation: [0, 0, 0, 1],
+      scale: [1, 2, 1],
+      materialOverrides: [{ materialSlot: 7, materialAssetId: 'material/concrete' }],
+    };
+    const duplicated = await client.attachVoxelObjectInstance({
+      expectedProjectHash: attached.project.identity.projectHash,
+      sceneId: 'scene/converted-wall',
+      instance: duplicateCandidate,
+    });
+    const duplicate = objectInstance(duplicated.project, duplicateCandidate.instanceId);
+    assert.notEqual(duplicate.ownerEntityId, instance.ownerEntityId);
+    const definitions = duplicated.project.projection.ops.filter(
+      (operation) => operation.op === 'defineVoxelObject'
+        && operation.asset.asset === asset.assetId,
+    );
+    const instances = duplicated.project.projection.ops.filter(
+      (operation) => operation.op === 'createVoxelObjectInstance'
+        && operation.instance.asset === asset.assetId,
+    );
+    assert.equal(definitions.length, 1, 'repeated placement reuses one object definition');
+    assert.equal(instances.length, 2, 'repeated placement retains distinct instances');
+    assert.deepEqual(
+      new Set(instances.map((operation) => operation.instance.metadata.sourceEntity)),
+      new Set([instance.ownerEntityId, duplicate.ownerEntityId]),
+    );
+
+    const undone = await client.deleteSceneObject({
+      expectedProjectHash: duplicated.project.identity.projectHash,
+      expectedSceneRevision: duplicated.project.identity.sceneRevision,
+      entityId: duplicate.ownerEntityId,
+    });
+    assert.equal(
+      undone.project.voxelObjectAuthoring.instances.some(
+        (entry) => entry.instance.instanceId === duplicateCandidate.instanceId,
+      ),
+      false,
+    );
+    const reapplied = await client.attachVoxelObjectInstance({
+      expectedProjectHash: undone.project.identity.projectHash,
+      sceneId: 'scene/converted-wall',
+      instance: duplicateCandidate,
+    });
+    const reappliedDuplicate = objectInstance(reapplied.project, duplicateCandidate.instanceId);
+    assert.notEqual(reappliedDuplicate.ownerEntityId, instance.ownerEntityId);
+    assert.equal(reapplied.project.projection.ops.filter(
+      (operation) => operation.op === 'defineVoxelObject'
+        && operation.asset.asset === asset.assetId,
+    ).length, 1);
+    assert.equal(reapplied.project.projection.ops.filter(
+      (operation) => operation.op === 'createVoxelObjectInstance'
+        && operation.instance.asset === asset.assetId,
+    ).length, 2);
     persisted = {
-      authoring: structuredClone(attached.project.voxelObjectAuthoring),
-      projectHash: attached.project.identity.projectHash,
+      authoring: structuredClone(reapplied.project.voxelObjectAuthoring),
+      projectHash: reapplied.project.identity.projectHash,
       bytes: await readFile(projectPath),
       ownerEntityId: instance.ownerEntityId,
-      projectionOperations: objectOperationNames(attached.project.projection),
+      duplicateOwnerEntityId: reappliedDuplicate.ownerEntityId,
+      projectionOperations: objectOperationNames(reapplied.project.projection),
     };
     await client.closeProject();
   });
@@ -282,6 +348,10 @@ async function verifyStaticObjectWorkflow(binary, root) {
   return {
     storedVoxels: staticVoxelCount(persisted.authoring),
     ownerEntityId: persisted.ownerEntityId,
+    duplicateOwnerEntityId: persisted.duplicateOwnerEntityId,
+    retainedDefinitionCount: 1,
+    retainedInstanceCount: 2,
+    placementUndoReapplied: true,
     projectionOperations: persisted.projectionOperations,
     dirtyApplyPreservedBytes: true,
     freshProcessReadoutMatched: true,
@@ -386,6 +456,13 @@ async function verifyAnimatedObjectWorkflow(binary, root) {
     assert.equal(asset.provenance.licensePath, animatedLicenseFile);
     assert.equal(asset.provenance.sourceClips[0]?.sourceClipName, sourceClip.name);
     assert.equal(asset.provenance.sourceClips[0]?.endMicroseconds, endMicroseconds);
+
+    const placement = await client.prepareVoxelObjectPlacement({
+      expectedProjectHash: applied.project.identity.projectHash,
+      assetId: asset.assetId,
+      expectedObjectContentHash: asset.contentHash,
+    });
+    assertPlacementResources(placement, asset);
 
     const attached = await client.attachVoxelObjectInstance({
       expectedProjectHash: applied.project.identity.projectHash,
@@ -536,7 +613,8 @@ async function prepareStaticObject(client, expectedProjectHash) {
         sourceMaterialName: 'wall_lines',
         voxelMaterialSlot: 7,
       }],
-      [4, 3, 2],
+      [32, 24, 16],
+      0.125,
     ),
     clips: [],
     frame: { kind: 'default' },
@@ -544,12 +622,12 @@ async function prepareStaticObject(client, expectedProjectHash) {
   });
 }
 
-function objectConversionSettings(materialAssetId, materialSlot, materialMap, resolution) {
+function objectConversionSettings(materialAssetId, materialSlot, materialMap, resolution, cellSize = 1) {
   return {
     mesh: {
       conversion: {
         resolution,
-        cellSize: 1,
+        cellSize,
         chunkSize: 16,
         origin: [0, 0, 0],
         fitPolicy: 'contain',
@@ -606,6 +684,22 @@ function assertCompleteObjectProjection(response, assetId) {
     assetId,
   ) !== undefined);
   assert.ok(Buffer.byteLength(JSON.stringify(response.projection), 'utf8') < 32 * 1024 * 1024);
+}
+
+function assertPlacementResources(response, asset) {
+  assert.equal(response.assetId, asset.assetId);
+  assert.equal(response.objectContentHash, asset.contentHash);
+  const allowed = new Set(['defineMaterial', 'defineTexture', 'defineVoxelObject']);
+  assert.equal(response.resourceFrame.ops.every((operation) => allowed.has(operation.op)), true);
+  const definitions = response.resourceFrame.ops.filter(
+    (operation) => operation.op === 'defineVoxelObject',
+  );
+  assert.equal(definitions.length, 1);
+  assert.equal(definitions[0].asset.asset, asset.assetId);
+  assert.equal(definitions[0].asset.contentHash, asset.contentHash);
+  assert.equal(response.resourceFrame.ops.some(
+    (operation) => operation.op === 'createVoxelObjectInstance',
+  ), false);
 }
 
 function objectOperation(frame, kind) {

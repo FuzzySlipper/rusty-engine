@@ -29,6 +29,7 @@ import {
 export interface StudioVoxelObjectInspectorReadout {
   readonly instance: VoxelObjectInstanceReadout | null;
   readonly asset: VoxelObjectAssetAuthoringReadout | null;
+  readonly knownInstanceIds: readonly string[];
   readonly playback: VoxelObjectInstancePlaybackReadout | null;
   readonly busy: boolean;
 }
@@ -49,6 +50,7 @@ export const STUDIO_VOXEL_OBJECT_INSPECTOR_HOST =
     <rusty-voxel-object-playback
       [instance]="readout().instance"
       [asset]="readout().asset"
+      [knownInstanceIds]="readout().knownInstanceIds"
       [playback]="readout().playback"
       [busy]="readout().busy"
       (action)="host.run($event)"

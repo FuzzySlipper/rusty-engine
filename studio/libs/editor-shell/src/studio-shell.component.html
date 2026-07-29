@@ -214,6 +214,8 @@
             [transformOrientation]="state().preview?.orientation ?? state().settings.transformOrientation"
             [transformSnapping]="transformSnapping()"
             [voxelPreview]="voxelPreview()"
+            [voxelObjectPlacementResourceFrame]="state().voxelWorkspace.objectPlacementResource?.resourceFrame ?? null"
+            [objectPlacementInteractive]="state().operation === 'idle'"
             [animatedMeshManifest]="animatedMeshManifest()"
             [resolveAnimatedMeshResource]="animatedMeshManifest() === null ? null : resolveAnimatedMeshResource"
             [animatedMeshResourceKey]="animatedMeshResourceKey()"
@@ -228,6 +230,9 @@
             (transformCandidate)="applyTransformCandidate($event)"
             (transformDragFinished)="finishTransformGizmoDrag($event.cancelled)"
             (transformRevertRequested)="store.revertPreview()"
+            (voxelObjectPlacementPicked)="placeVoxelObjectAtPick($event)"
+            (voxelObjectPlacementCommitRequested)="commitVoxelObjectPlacement()"
+            (voxelObjectPlacementCancelRequested)="cancelVoxelObjectPlacement()"
           />
           <div class="viewport-source-readout">
             <span>{{ projection.readout.retainedEntities }} entities</span>
@@ -343,6 +348,7 @@
       </header>
       @if (inspectorMode === 'voxel') {
         <rusty-voxel-editor
+          #voxelEditor
           [authoring]="state().authoringDocument?.voxelAuthoring ?? null"
           [objectAuthoring]="state().authoringDocument?.voxelObjectAuthoring ?? null"
           [entryScene]="state().authoringDocument?.identity?.entryScene ?? ''"
@@ -352,10 +358,12 @@
           [objectSourceInspection]="state().voxelWorkspace.objectSourceInspection"
           [objectConversion]="state().voxelWorkspace.objectConversion"
           [historyPreview]="state().voxelWorkspace.historyPreview"
+          [objectPlacementHistory]="objectPlacementHistoryReadout()"
+          [objectPlacementResource]="objectPlacementResourceReadout()"
           [busy]="state().operation !== 'idle'"
           [chooseHostPath]="chooseHostPath"
           (action)="runVoxelAction($event)"
-          (previewChange)="setBrushPreview($event)"
+          (previewChange)="setVoxelEditorPreview($event)"
         />
       } @else {
         @if (store.selectedHierarchyNode(); as node) {

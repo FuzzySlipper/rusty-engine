@@ -5,8 +5,9 @@ Status: **implemented and promoted through two reviewed consumers**
 Decision task: Den `rusty-engine#6300`
 
 This decision defines the smallest boundary by which a downstream Rust project can put one of its
-own entity components in Rusty Engine Studio's Entity inspector. Protocol 10 implements the bounded
-identity envelope and removes the fixed Loading Bay summary. Engine tasks `#6302` and `#6303`
+own entity components in Rusty Engine Studio's Entity inspector. Protocol 10 introduced the bounded
+identity envelope and removed the fixed Loading Bay summary; protocol 11 retains it unchanged.
+Engine tasks `#6302` and `#6303`
 implemented the outlet, host mutation lease, and built-in Voxel Object migration;
 `rusty-engine-demo#6304` implemented the independent Loading Bay Weapon panel; and Engine task
 `#6305` promoted and certified the resulting two-consumer boundary.
@@ -16,7 +17,7 @@ implemented the outlet, host mutation lease, and built-in Voxel Object migration
 Studio supports downstream Entity inspector panels through **static host composition**, not a
 runtime plugin system and not a universal component-description format.
 
-Protocol 10 carries only bounded component identity and owner metadata in its core project readout.
+Protocol 11 retains only bounded component identity and owner metadata in its core project readout.
 A downstream UI package is compiled into a downstream Studio application explicitly and binds to a
 separate, closed, product-owned request/response contract. The core protocol never carries the
 downstream component value, field schema, mutation
@@ -50,7 +51,7 @@ the package revision compiled into the downstream product.
 
 | Concern | Implemented name | Owner |
 | --- | --- | --- |
-| Core protocol version | `STUDIO_ADAPTER_PROTOCOL_VERSION = 10` | `studio-adapter-client` and each project adapter |
+| Core protocol version | `STUDIO_ADAPTER_PROTOCOL_VERSION = 11` | `studio-adapter-client` and each project adapter |
 | Contract advertisement | `AdapterDescription.entityInspectorContracts` containing `StudioEntityInspectorContractIdentity` | Core protocol identity only |
 | Owner attribution | `StudioProjectReadout.entityComponents` containing `StudioEntityComponentReference` | Project adapter, checked against canonical hierarchy owners |
 | Static contribution | `StudioEntityInspectorContribution` admitted by `admitStudioEntityInspectorContributions` | `editor-shell` |
@@ -198,7 +199,7 @@ interface StudioProjectReadout {
 }
 ```
 
-The protocol 10 core decoder validates and bounds this envelope. It does not interpret either
+The protocol 11 core decoder retains validation and bounds for this envelope. It does not interpret either
 identity string.
 The Rust project adapter must additionally prove that:
 
