@@ -121,6 +121,10 @@ export class AnimatedMeshRegistry {
     this.#assetSource = assetSource;
   }
 
+  get instanceCount(): number {
+    return this.#instances.size;
+  }
+
   define(asset: AnimatedMeshAsset): void {
     const existing = this.#assets.get(asset.asset);
     if (existing && existing.refCount > 0) {
@@ -257,6 +261,13 @@ export class AnimatedMeshRegistry {
     if (asset) {
       asset.refCount -= 1;
     }
+  }
+
+  dispose(): void {
+    for (const handle of [...this.#instances.keys()]) {
+      this.release(handle);
+    }
+    this.#assets.clear();
   }
 
   #requireInstance(handle: RenderHandle, ctx: string): AnimatedMeshInstanceRecord {

@@ -39,10 +39,40 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.audioApplied).toBe(1);
   expect(proof.billboardText).toBe('Shared renderer host');
   expect(proof.particleElementCount).toBe(2);
+  expect(proof.rendererStatistics.renderHandleCount).toEqual({
+    scope: 'liveResident', status: 'available', value: 10,
+  });
+  expect(proof.rendererStatistics.animatedInstanceCount).toEqual({
+    scope: 'liveResident', status: 'available', value: 2,
+  });
+  expect(proof.rendererStatistics.drawCallCount.status).toBe('available');
+  expect(proof.rendererStatistics.drawCallCount.value).toBeGreaterThan(0);
+  expect(proof.rendererStatistics.geometryResourceCount.status).toBe('available');
+  expect(proof.rendererStatistics.materialResourceCount.status).toBe('available');
+  expect(proof.rendererStatistics.textureResourceCount.status).toBe('available');
+  expect(proof.rendererStatistics.triangleCount.status).toBe('available');
+  expect(proof.resetRendererStatistics).toEqual(proof.rendererStatistics);
+  expect(proof.replacementRenderSequence).toBe(1);
+  expect(proof.replacementStatistics).toEqual({
+    schemaVersion: 1,
+    drawCallCount: { scope: 'perSubmission', status: 'available', value: 2 },
+    renderHandleCount: { scope: 'liveResident', status: 'available', value: 2 },
+    geometryResourceCount: { scope: 'liveResident', status: 'available', value: 2 },
+    materialResourceCount: { scope: 'liveResident', status: 'available', value: 2 },
+    textureResourceCount: { scope: 'liveResident', status: 'available', value: 0 },
+    animatedInstanceCount: { scope: 'liveResident', status: 'available', value: 0 },
+    triangleCount: { scope: 'perSubmission', status: 'available', value: 24 },
+  });
+  expect(proof.replacementDisposedWithHistoricalSample).toBe(true);
+  expect(proof.replacementDisposedRenderRejected).toBe(true);
   expect(proof.telemetryText).toContain('Renderer proof');
   expect(proof.telemetryText).toContain('frameTimeMs:');
   expect(proof.telemetryText).toContain('backendSubmissionDurationMs:');
-  expect(proof.telemetryText).toContain('drawCallCount: 7 count');
+  expect(proof.telemetryText).toContain(
+    `drawCallCount: ${String(proof.rendererStatistics.drawCallCount.value)} count`,
+  );
+  expect(proof.telemetryText).toContain('geometryResourceCount:');
+  expect(proof.telemetryText).toContain('animatedInstanceCount: 2 count');
   expect(proof.presentationDiagnostics).toEqual([]);
   expect(proof.voxelFrameSwapApplied).toBe(true);
   expect(proof.voxelFrame).toBe(1);

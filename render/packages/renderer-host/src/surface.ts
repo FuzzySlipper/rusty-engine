@@ -19,6 +19,7 @@ import {
   type AnimatedMeshAssetSource,
   type RendererBrowserSurface,
   type RendererBrowserSurfacePickDiagnostic,
+  type RendererBrowserSurfaceSubmissionStatistics,
 } from '@rusty-engine/renderer-three/backend';
 import {
   animationPlaybackReadout,
@@ -39,6 +40,10 @@ import {
   type RendererSurfaceTimingSample,
   type RendererSurfaceTimingSource,
 } from './surface-timing.js';
+import {
+  createRendererSurfaceSubmissionSample,
+  type RendererSurfaceSubmissionSample,
+} from './surface-statistics.js';
 
 export const RUSTY_RENDERER_HOST_COMPATIBILITY_VERSION = 'renderer-host.v1';
 
@@ -208,8 +213,8 @@ export interface RendererSurface {
   readonly pointerLocked: () => boolean;
   readonly projectWorldPoint: (position: RendererSurfaceVec3) => RendererSurfaceWorldProjection;
   readonly projectionSnapshot: () => RenderProjectionSnapshot;
-  /** Submit one explicit frame and return its renderer-owned timing sample. */
-  readonly renderOnce: (timeMs?: number) => RendererSurfaceTimingSample;
+  /** Submit one explicit frame and return its immutable renderer-owned sample. */
+  readonly renderOnce: (timeMs?: number) => RendererSurfaceSubmissionSample;
   readonly resetCamera: () => void;
   /** Synchronize a caller-owned camera, such as an authoritative game player view. */
   readonly setCameraPose: (
@@ -221,6 +226,8 @@ export interface RendererSurface {
   readonly snapshot: () => string;
   readonly start: () => void;
   readonly stop: () => void;
+  /** Read the latest automatic or explicit submission without polling another loop. */
+  readonly submission: () => RendererSurfaceSubmissionSample;
   /** Read the latest automatic or explicit frame timing without starting another loop. */
   readonly timing: () => RendererSurfaceTimingSample;
   readonly dispose: () => void;
@@ -294,11 +301,14 @@ function mountPreparedRendererSurface(
   let animationFrame: number | null = null;
   let lastRenderTimeMs: number | null = null;
   const timing = new RendererSurfaceTimingTracker();
+  let latestSubmission: RendererSurfaceSubmissionSample | null = null;
+  let disposed = false;
 
   const renderFrame = (
     timeMs: number,
     source: RendererSurfaceTimingSource,
-  ): RendererSurfaceTimingSample => {
+  ): RendererSurfaceSubmissionSample => {
+    if (disposed) throw new Error('renderer surface is disposed');
     assertRendererSurfaceSourceTime(timeMs);
     const deltaSeconds = lastRenderTimeMs === null
       ? 0
@@ -309,18 +319,19 @@ function mountPreparedRendererSurface(
     backendSurface.setCameraPose(camera.pose, camera.basis);
     presentationHosts?.advance(deltaSeconds);
     const backendSubmissionStartedMs = surfaceTimingNow();
-    backendSurface.renderOnce(timeMs);
+    const backendStatistics = backendSurface.renderOnce(timeMs);
     const backendSubmissionEndedMs = surfaceTimingNow();
-    return timing.record({
+    latestSubmission = surfaceSubmissionSample(timing.record({
       source,
       sourceTimeMs: timeMs,
       backendSubmissionStartedMs,
       backendSubmissionEndedMs,
-    });
+    }), backendStatistics);
+    return latestSubmission;
   };
   const renderOnce = (
     timeMs = globalThis.performance?.now() ?? 0,
-  ): RendererSurfaceTimingSample => {
+  ): RendererSurfaceSubmissionSample => {
     return renderFrame(timeMs, 'explicit');
   };
 
@@ -329,6 +340,7 @@ function mountPreparedRendererSurface(
     animationFrame = globalThis.requestAnimationFrame(tick);
   };
   const start = (): void => {
+    if (disposed) throw new Error('renderer surface is disposed');
     if (animationFrame === null) {
       animationFrame = globalThis.requestAnimationFrame(tick);
     }
@@ -408,13 +420,36 @@ function mountPreparedRendererSurface(
     snapshot: backendSurface.snapshot,
     start,
     stop,
+    submission: () => {
+      if (latestSubmission === null) {
+        throw new Error('renderer surface has not submitted a frame');
+      }
+      return latestSubmission;
+    },
     timing: timing.read.bind(timing),
     dispose: () => {
+      if (disposed) return;
       stop();
       controls.dispose();
       backendSurface.dispose();
+      disposed = true;
     },
   };
+}
+
+function surfaceSubmissionSample(
+  timing: RendererSurfaceTimingSample,
+  statistics: RendererBrowserSurfaceSubmissionStatistics,
+): RendererSurfaceSubmissionSample {
+  return createRendererSurfaceSubmissionSample(timing, {
+    drawCallCount: statistics.drawCallCount,
+    renderHandleCount: statistics.renderHandleCount,
+    geometryResourceCount: statistics.geometryResourceCount,
+    materialResourceCount: statistics.materialResourceCount,
+    textureResourceCount: statistics.textureResourceCount,
+    animatedInstanceCount: statistics.animatedInstanceCount,
+    triangleCount: statistics.triangleCount,
+  });
 }
 
 function surfaceTimingNow(): number {

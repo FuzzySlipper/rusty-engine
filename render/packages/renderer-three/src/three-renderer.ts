@@ -159,6 +159,15 @@ export interface RendererVoxelObjectFrameReadout {
   readonly mesh: number;
 }
 
+/** Exact renderer-owned retained resources; no gameplay or GPU-completion meaning. */
+export interface ThreeRendererResourceStatistics {
+  readonly renderHandleCount: number;
+  readonly geometryResourceCount: number;
+  readonly materialResourceCount: number;
+  readonly textureResourceCount: number;
+  readonly animatedInstanceCount: number;
+}
+
 /** A defined static mesh asset: one shared geometry + materials, reference-counted. */
 interface StaticMeshDef {
   readonly geometry: THREE.BufferGeometry;
@@ -222,6 +231,10 @@ export class ThreeRenderer {
   readonly #animatedMeshes: AnimatedMeshRegistry;
   readonly #shadowsEnabled: boolean;
   readonly #projection = new RenderProjection();
+  readonly #geometryResources = new Set<THREE.BufferGeometry>();
+  readonly #materialResources = new Set<THREE.Material>();
+  readonly #textureResourceReferences = new Map<THREE.Texture, number>();
+  #disposed = false;
 
   constructor(options: {
     meshBufferSource?: MeshBufferSource;
@@ -260,6 +273,9 @@ export class ThreeRenderer {
    * operation therefore leaves handles, resources, and scene objects unchanged.
    */
   applyFrame(frame: RenderFrameDiff): void {
+    if (this.#disposed) {
+      throw new RenderApplyError('renderer is disposed');
+    }
     try {
       this.#projection.validateFrame(frame);
     } catch (cause) {
@@ -473,6 +489,64 @@ export class ThreeRenderer {
     return this.#handles.size;
   }
 
+  /** Constant-time immutable readout cached after each accepted retained mutation. */
+  resourceStatistics(): ThreeRendererResourceStatistics {
+    return Object.freeze({
+      renderHandleCount: this.#handles.size,
+      geometryResourceCount: this.#geometryResources.size,
+      materialResourceCount: this.#materialResources.size,
+      textureResourceCount: this.#textureResourceReferences.size,
+      animatedInstanceCount: this.#animatedMeshes.instanceCount,
+    });
+  }
+
+  #trackObjectResources(root: THREE.Object3D): void {
+    root.traverse((object) => {
+      const resource = object as Partial<{
+        geometry: THREE.BufferGeometry;
+        material: THREE.Material | THREE.Material[];
+      }>;
+      if (resource.geometry instanceof THREE.BufferGeometry) {
+        this.#trackGeometryResource(resource.geometry);
+      }
+      if (Array.isArray(resource.material)) {
+        resource.material.forEach((material) => this.#trackMaterialResource(material));
+      } else if (resource.material instanceof THREE.Material) {
+        this.#trackMaterialResource(resource.material);
+      }
+    });
+  }
+
+  #trackGeometryResource(geometry: THREE.BufferGeometry): void {
+    if (this.#geometryResources.has(geometry)) return;
+    this.#geometryResources.add(geometry);
+    geometry.addEventListener('dispose', () => this.#geometryResources.delete(geometry));
+  }
+
+  #trackMaterialResource(material: THREE.Material): void {
+    if (this.#materialResources.has(material)) return;
+    this.#materialResources.add(material);
+    const textures = materialTextures(material);
+    for (const texture of textures) {
+      const references = this.#textureResourceReferences.get(texture) ?? 0;
+      if (references === 0) {
+        texture.addEventListener('dispose', () => this.#textureResourceReferences.delete(texture));
+      }
+      this.#textureResourceReferences.set(texture, references + 1);
+    }
+    material.addEventListener('dispose', () => {
+      if (!this.#materialResources.delete(material)) return;
+      for (const texture of textures) {
+        const references = this.#textureResourceReferences.get(texture);
+        if (references === undefined || references <= 1) {
+          this.#textureResourceReferences.delete(texture);
+        } else {
+          this.#textureResourceReferences.set(texture, references - 1);
+        }
+      }
+    });
+  }
+
   /** Renderer-local diagnostics/readback; never authority. */
   lightReadout(): readonly RendererLightReadout[] {
     return [...this.#handles.entries()]
@@ -503,6 +577,7 @@ export class ThreeRenderer {
 
   /** Release every retained renderer object and GPU-owned resource. */
   dispose(): void {
+    if (this.#disposed) return;
     const handlesByDepth = [...this.#handles.entries()]
       .sort((left, right) => objectDepth(right[1].object) - objectDepth(left[1].object))
       .map(([handle]) => handle);
@@ -521,8 +596,18 @@ export class ThreeRenderer {
       definition.materials.forEach((material) => material.dispose());
     }
     this.#voxelObjects.clear();
+    this.#animatedMeshes.dispose();
+    this.#slotColors.clear();
+    this.#materials.clear();
+    this.#fallbackMaterials.clear();
+    this.#textures.clear();
+    this.#atlases.clear();
     this.scene.clear();
     this.viewmodelScene.clear();
+    this.#geometryResources.clear();
+    this.#materialResources.clear();
+    this.#textureResourceReferences.clear();
+    this.#disposed = true;
   }
 
   /** The Three.js object for a handle, for inspection/tests. */
@@ -627,6 +712,7 @@ export class ThreeRenderer {
       throw new RenderApplyError(`create: handle ${diff.handle} already exists`);
     }
     const object = buildObject(diff.node);
+    this.#trackObjectResources(object);
     const parent =
       diff.parent === null
         ? this.#layerGroup(diff.node.layer)
@@ -666,6 +752,7 @@ export class ThreeRenderer {
         applyMaterial(entry, diff.material);
       }
       entry.viewMaterial = diff.material;
+      this.#trackObjectResources(entry.object);
     }
     if (diff.visible !== null) {
       entry.object.visible = diff.visible;
@@ -738,6 +825,7 @@ export class ThreeRenderer {
       this.#meshResourceSource,
       'defineStaticMesh',
     );
+    this.#trackGeometryResource(geometry);
     const slotIndex = new Map<number, number>();
     const materials = asset.materialSlots.map((s, i) => {
       slotIndex.set(s.slot, i);
@@ -839,6 +927,7 @@ export class ThreeRenderer {
     applyTransform(record.object, diff.instance.transform);
     applyMetadata(record.object, diff.instance.metadata);
     record.object.visible = diff.instance.visible;
+    this.#trackObjectResources(record.object);
     const parent =
       diff.parent === null ? this.#sceneGroup : this.#require(diff.parent, 'createAnimatedMeshInstance.parent').object;
     parent.add(record.object);
@@ -885,6 +974,7 @@ export class ThreeRenderer {
       slotIndex.set(slot.slot, index);
       return this.#materialFor(slot);
     });
+    geometries.forEach((geometry) => this.#trackGeometryResource(geometry));
     const existing = this.#voxelObjects.get(asset.asset);
     const next: VoxelObjectDef = {
       geometries,
@@ -1235,15 +1325,19 @@ export class ThreeRenderer {
     // so the gap is an observable diagnostic rather than silent.
     const descriptor = this.#materials.get(slot.material);
     if (descriptor) {
-      return standardMaterial(descriptor, parameters);
+      const material = standardMaterial(descriptor, parameters);
+      this.#trackMaterialResource(material);
+      return material;
     }
     this.#fallbackMaterialCount += 1;
     this.#fallbackMaterials.add(slot.material);
-    return new THREE.MeshStandardMaterial({
+    const material = new THREE.MeshStandardMaterial({
       color: this.#slotColor(slot.slot),
       roughness: 1,
       metalness: 0,
     });
+    this.#trackMaterialResource(material);
+    return material;
   }
 
   /** A registered texture descriptor by id, for inspection/tests. */
@@ -1313,6 +1407,7 @@ export class ThreeRenderer {
       depthWrite: s.depth === 'default',
     });
     const mesh = new THREE.Mesh(geometry, material);
+    this.#trackObjectResources(mesh);
     mesh.renderOrder = s.renderOrder;
     applyTransform(mesh, s.transform);
     applyMetadata(mesh, s.metadata);
@@ -1410,6 +1505,7 @@ export class ThreeRenderer {
         this.#meshResourceSource,
         'replaceMeshPayload',
       );
+    this.#trackGeometryResource(geometry);
     const viewMaterial = entry.viewMaterial ?? MaterialFallback;
     const materials = diff.payload.groups.map((group) =>
       this.#uploadedMeshMaterial(group.materialSlot, viewMaterial));
@@ -1441,10 +1537,11 @@ export class ThreeRenderer {
       material.opacity *= view.color[3];
       material.transparent = material.opacity < 1;
       material.wireframe = view.wireframe;
+      this.#trackMaterialResource(material);
       return material;
     }
     const slotColor = this.#slotColor(slot);
-    return new THREE.MeshStandardMaterial({
+    const material = new THREE.MeshStandardMaterial({
       color: new THREE.Color(
         slotColor.r * view.color[0],
         slotColor.g * view.color[1],
@@ -1456,6 +1553,8 @@ export class ThreeRenderer {
       roughness: 1,
       metalness: 0,
     });
+    this.#trackMaterialResource(material);
+    return material;
   }
 
   #applyUploadedMeshMaterial(entry: NodeEntry, view: Material): void {
@@ -2194,6 +2293,20 @@ function disposeObject(object: THREE.Object3D): void {
 
 function disposeObjectRecursive(object: THREE.Object3D): void {
   object.traverse((child) => disposeObject(child));
+}
+
+function materialTextures(material: THREE.Material): ReadonlySet<THREE.Texture> {
+  const textures = new Set<THREE.Texture>();
+  for (const value of Object.values(material)) {
+    if (value instanceof THREE.Texture) {
+      textures.add(value);
+    } else if (Array.isArray(value)) {
+      for (const candidate of value) {
+        if (candidate instanceof THREE.Texture) textures.add(candidate);
+      }
+    }
+  }
+  return textures;
 }
 
 function objectDepth(object: THREE.Object3D): number {

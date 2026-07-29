@@ -12,7 +12,8 @@ surface, and renderer host/resource lifecycle.
 - `@rusty-engine/render-projection`: retained client-side projection.
 - `@rusty-engine/renderer-three`: Three/WebGL resources and render passes.
 - `@rusty-engine/renderer-host`: backend/host composition, presentation hosts,
-  inspection surface, timing, camera, and editor viewport integration.
+  inspection surface, immutable submission/resource statistics, timing,
+  camera, and editor viewport integration.
 - `render/browser`: real Chromium/WebGL/WebAudio/DOM acceptance.
 
 ## Does not own
@@ -63,6 +64,8 @@ and the real browser path. Retained inputs live under
 - Proving only headless projection when the changed behavior is browser-owned.
 - Leaking backend-specific types into `render-contracts`.
 - Forgetting disposal, replacement, stale-frame, or partial-failure behavior.
+- Substituting authored entity/resource counts for renderer-owned submission
+  statistics, or treating an unavailable counter as zero.
 - Treating an exact-revision consumer install as interchangeable with a local
   workspace link.
 

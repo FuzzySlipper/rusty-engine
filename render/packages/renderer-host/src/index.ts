@@ -15,6 +15,15 @@ export type {
   RendererSurfaceTimingSource,
 } from './surface-timing.js';
 
+export { RUSTY_RENDERER_SURFACE_STATISTICS_SCHEMA_VERSION } from './surface-statistics.js';
+export type {
+  RendererSurfaceStatistic,
+  RendererSurfaceStatisticScope,
+  RendererSurfaceStatisticStatus,
+  RendererSurfaceStatisticsSample,
+  RendererSurfaceSubmissionSample,
+} from './surface-statistics.js';
+
 export {
   RUSTY_RENDERER_EDITOR_VIEWPORT_CHANNEL_POLICIES,
   RUSTY_RENDERER_EDITOR_VIEWPORT_COMPATIBILITY_VERSION,

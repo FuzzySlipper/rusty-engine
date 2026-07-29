@@ -20,6 +20,10 @@ import {
   type RendererSurfaceTimingSample,
   type RendererSurfaceTimingSource,
 } from './surface-timing.js';
+import type {
+  RendererSurfaceStatistic,
+  RendererSurfaceSubmissionSample,
+} from './surface-statistics.js';
 
 type DurationCounter = 'frameTimeMs' | 'backendSubmissionDurationMs';
 type CountCounter = Exclude<LiveTelemetryCounter, DurationCounter>;
@@ -36,6 +40,11 @@ const COUNTER_ORDER: readonly CountCounter[] = [
   'renderDiffCount',
   'renderHandleCount',
   'drawCallCount',
+  'geometryResourceCount',
+  'materialResourceCount',
+  'textureResourceCount',
+  'animatedInstanceCount',
+  'triangleCount',
   'activeAudioSourceCount',
   'activeBillboardCount',
   'activeParticleCount',
@@ -132,7 +141,10 @@ export class RendererLiveTelemetryCollector {
           input.timing.backendSubmissionDurationStatus,
         ),
       ],
-      counters: input.counters,
+      counters: {
+        ...input.counters,
+        ...surfaceOwnedCounters(input.timing),
+      },
     });
   }
 
@@ -219,6 +231,26 @@ export class RendererLiveTelemetryCollector {
   tryReadSnapshot(): LiveTelemetrySnapshot | null {
     return this.#snapshot === null ? null : this.readSnapshot();
   }
+}
+
+function surfaceOwnedCounters(
+  timing: RendererSurfaceTimingSample,
+): Partial<Record<CountCounter, number | null>> {
+  if (!('statistics' in timing)) return {};
+  const statistics = (timing as RendererSurfaceSubmissionSample).statistics;
+  return {
+    drawCallCount: statisticValue(statistics.drawCallCount),
+    renderHandleCount: statisticValue(statistics.renderHandleCount),
+    geometryResourceCount: statisticValue(statistics.geometryResourceCount),
+    materialResourceCount: statisticValue(statistics.materialResourceCount),
+    textureResourceCount: statisticValue(statistics.textureResourceCount),
+    animatedInstanceCount: statisticValue(statistics.animatedInstanceCount),
+    triangleCount: statisticValue(statistics.triangleCount),
+  };
+}
+
+function statisticValue(statistic: RendererSurfaceStatistic): number | null {
+  return statistic.status === 'available' ? statistic.value : null;
 }
 
 export interface RendererTelemetryOverlaySink {

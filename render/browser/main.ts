@@ -21,6 +21,8 @@ import {
   RendererTelemetryOverlayHost,
   mountRendererAnimatedMeshSurface,
   mountRendererInspectionSurface,
+  mountRendererSurface,
+  type RendererSurfaceStatisticsSample,
 } from '@rusty-engine/renderer-host';
 
 import characterUrl from '../../fixtures/render/assets/kenney-retro-character/character-medium.glb?url';
@@ -44,6 +46,12 @@ interface BrowserProof {
   readonly presentationDiagnostics: readonly string[];
   readonly projectionInsideViewport: boolean;
   readonly ready: true;
+  readonly rendererStatistics: RendererSurfaceStatisticsSample;
+  readonly replacementDisposedWithHistoricalSample: boolean;
+  readonly replacementDisposedRenderRejected: boolean;
+  readonly replacementRenderSequence: number;
+  readonly replacementStatistics: RendererSurfaceStatisticsSample;
+  readonly resetRendererStatistics: RendererSurfaceStatisticsSample;
   readonly snapshot: string;
   readonly telemetryText: string | null;
   readonly viewmodelAnimationClip: string | null;
@@ -127,7 +135,16 @@ async function main(): Promise<void> {
     sink: particleSink,
   });
   const telemetryCollector = new RendererLiveTelemetryCollector({
-    expectedCounters: ['entityCount', 'drawCallCount'],
+    expectedCounters: [
+      'entityCount',
+      'drawCallCount',
+      'renderHandleCount',
+      'geometryResourceCount',
+      'materialResourceCount',
+      'textureResourceCount',
+      'animatedInstanceCount',
+      'triangleCount',
+    ],
   });
   const telemetrySink = new RendererDomTelemetryOverlaySink({ container: overlays });
   const telemetry = new RendererTelemetryOverlayHost({
@@ -152,15 +169,36 @@ async function main(): Promise<void> {
   surface.start();
   await new Promise<void>((resolve) => globalThis.requestAnimationFrame(() => resolve()));
   surface.stop();
-  const autoTiming = surface.timing();
+  const autoSubmission = surface.submission();
   telemetry.sampleSurface({
     sourceTick: 1,
-    timing: autoTiming,
-    counters: { entityCount: 4, drawCallCount: 7 },
-  }, autoTiming.sourceTimeMs);
+    timing: autoSubmission,
+    counters: { entityCount: 4 },
+  }, autoSubmission.sourceTimeMs);
   surface.resetCamera();
+  const resetSubmission = surface.submission();
   surface.renderOnce(16);
   const explicitTiming = surface.renderOnce(66);
+
+  const replacementCanvas = document.createElement('canvas');
+  replacementCanvas.width = 64;
+  replacementCanvas.height = 64;
+  const replacementSurface = mountRendererSurface(replacementCanvas, {
+    autoStart: false,
+    frame: replacementFrame(),
+    pixelRatio: 1,
+  });
+  const replacementSubmission = replacementSurface.submission();
+  replacementSurface.dispose();
+  let replacementDisposedRenderRejected = false;
+  try {
+    replacementSurface.renderOnce(1);
+  } catch {
+    replacementDisposedRenderRejected = true;
+  }
+  const replacementDisposedWithHistoricalSample =
+    replacementSurface.submission() === replacementSubmission
+    && replacementSurface.snapshot() === '(empty scene)\n';
 
   const inspection = await mountRendererInspectionSurface(inspectionCanvas, {
     autoStart: false,
@@ -206,9 +244,9 @@ async function main(): Promise<void> {
     animationClip: surface.animatedMeshPlayback(renderHandle(105)).selectedClip,
     audioApplied: presentation.domains.find((domain) => domain.domain === 'audio')?.applied ?? 0,
     audioResumeDiagnostics: null,
-    autoFrameIntervalMs: autoTiming.frameIntervalMs,
-    autoStartRenderCount: autoTiming.renderSequence - renderSequenceBeforeAutoFrame,
-    backendSubmissionDurationMs: autoTiming.backendSubmissionDurationMs,
+    autoFrameIntervalMs: autoSubmission.frameIntervalMs,
+    autoStartRenderCount: autoSubmission.renderSequence - renderSequenceBeforeAutoFrame,
+    backendSubmissionDurationMs: autoSubmission.backendSubmissionDurationMs,
     billboardText: overlays.querySelector('[data-rusty-billboard-handle]')?.textContent ?? null,
     context: context instanceof WebGL2RenderingContext ? 'webgl2' : 'webgl',
     explicitFrameIntervalMs: explicitTiming.frameIntervalMs,
@@ -221,6 +259,12 @@ async function main(): Promise<void> {
     presentationDiagnostics: presentation.diagnostics.map((diagnostic) => diagnostic.code),
     projectionInsideViewport: projected.insideViewport,
     ready: true,
+    rendererStatistics: autoSubmission.statistics,
+    replacementDisposedRenderRejected,
+    replacementDisposedWithHistoricalSample,
+    replacementRenderSequence: replacementSubmission.renderSequence,
+    replacementStatistics: replacementSubmission.statistics,
+    resetRendererStatistics: resetSubmission.statistics,
     snapshot,
     telemetryText: overlays.querySelector('[data-rusty-telemetry-handle]')?.textContent ?? null,
     viewmodelAnimationClip: surface.animatedMeshPlayback(renderHandle(111)).selectedClip,
@@ -255,6 +299,32 @@ async function main(): Promise<void> {
     telemetrySink.dispose();
     await audio.dispose();
     URL.revokeObjectURL(spriteUrl);
+  };
+}
+
+function replacementFrame(): RenderFrameDiff {
+  return {
+    schemaVersion: 1,
+    ops: [
+      {
+        op: 'create', handle: renderHandle(1), parent: null,
+        node: {
+          geometry: { kind: 'cube' },
+          material: { color: [1, 1, 1, 1], wireframe: false },
+          transform: identity([0, 0, -3], [1, 1, 1]), visible: true, layer: 'scene',
+          metadata: metadata('replacement-world'),
+        },
+      },
+      {
+        op: 'create', handle: renderHandle(2), parent: null,
+        node: {
+          geometry: { kind: 'cube' },
+          material: { color: [1, 1, 1, 1], wireframe: false },
+          transform: identity([0, 0, -1], [1, 1, 1]), visible: true, layer: 'viewmodel',
+          metadata: metadata('replacement-viewmodel'),
+        },
+      },
+    ],
   };
 }
 

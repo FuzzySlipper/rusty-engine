@@ -177,16 +177,17 @@ produced after each successfully submitted frame:
 - the surface retains only its latest frozen sample. The telemetry collector's frame-time history
   remains separately bounded to 1..=240 samples.
 
-An explicit caller receives the sample directly from `surface.renderOnce(timeMs)`. An auto-started
-caller reads the latest sample through `surface.timing()` without starting or polling another render
-loop. The existing overlay host accepts that value directly:
+An explicit caller receives timing directly from `surface.renderOnce(timeMs)`. An auto-started
+caller reads the latest timing through `surface.timing()` without starting or polling another render
+loop. `surface.submission()` returns the complete latest immutable submission sample: the same
+timing plus renderer-owned statistics. The existing overlay host accepts that value directly:
 
 ```ts
-const timing = surface.timing();
+const timing = surface.submission();
 telemetry.sampleSurface({
   sourceTick,
   timing,
-  counters: { entityCount, drawCallCount },
+  counters: { entityCount },
 }, timing.sourceTimeMs);
 ```
 
@@ -194,6 +195,39 @@ The older `telemetry.sample({ frameTimeMs, ... })` seam remains available for a 
 that already has a real cadence measurement. Downstream code must not use a placeholder zero or
 reinterpret `frameTimeMs` as backend submission time. Timing is read-only presentation diagnostics;
 it does not advance gameplay, camera authority, or animation scheduling.
+
+### Submission and resource statistics
+
+Every successful automatic, mount, camera-reset, or explicit submission also publishes one frozen
+`RendererSurfaceStatisticsSample`. Each counter is a discriminated `available`, `unavailable`, or
+`unsupported` value; a missing value is never represented as zero. The counter itself carries its
+scope:
+
+- `drawCallCount` and `triangleCount` are `perSubmission`. Three resets its public renderer-info
+  counters before the combined world-plus-viewmodel submission and reads them after both passes.
+  They do not claim GPU completion or time.
+- `renderHandleCount`, `geometryResourceCount`, `materialResourceCount`,
+  `textureResourceCount`, and `animatedInstanceCount` are `liveResident`. They describe exact
+  backend-owned retained resources immediately after that submission, not authored/gameplay facts
+  and not cumulative allocation totals.
+
+Three caches live-resource counts after accepted retained mutations, so submitting or reading a
+sample is constant work apart from the render itself. It performs no scene traversal, GPU readback,
+query, fence, or synchronization in the frame loop. Resource identity is de-duplicated: two
+instances sharing one retained geometry count as one geometry, while independently cloned animated
+instance resources count independently.
+
+An accepted retained mutation becomes visible in statistics on the next successful submission; a
+rejected mutation changes neither renderer state nor the latest sample. Camera reset submits one
+ordinary classified sample without changing resource counts. Stopping a surface does not alter its
+latest sample. Disposing releases the backend resources, rejects future submissions, and leaves
+already returned samples as immutable historical observations rather than rewriting them to zero.
+A replacement `RendererSurface` starts a fresh sequence and never inherits samples or counters from
+the disposed instance.
+
+`RendererLiveTelemetryCollector.sampleSurface` takes renderer-owned counters from a complete
+submission sample. Caller counters may still supply game/product values such as `entityCount`, but
+cannot override draw, handle, geometry, material, texture, animation, or triangle observations.
 
 ## Resource and authority rules
 

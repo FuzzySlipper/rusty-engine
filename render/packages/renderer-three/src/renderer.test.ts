@@ -73,6 +73,56 @@ void test('destroy removes the node and frees the handle', () => {
   assert.ok(!r.has(renderHandle(1)));
 });
 
+void test('retained resource statistics stay exact across create update destroy and disposal', () => {
+  const renderer = new ThreeRenderer();
+  assert.deepEqual(renderer.resourceStatistics(), {
+    renderHandleCount: 0,
+    geometryResourceCount: 0,
+    materialResourceCount: 0,
+    textureResourceCount: 0,
+    animatedInstanceCount: 0,
+  });
+
+  renderer.applyDiff(createDiff(1, cubeNode()));
+  const created = renderer.resourceStatistics();
+  assert.deepEqual(created, {
+    renderHandleCount: 1,
+    geometryResourceCount: 1,
+    materialResourceCount: 1,
+    textureResourceCount: 0,
+    animatedInstanceCount: 0,
+  });
+  assert.equal(Object.isFrozen(created), true);
+
+  renderer.applyDiff({
+    op: 'update',
+    handle: renderHandle(1),
+    transform: null,
+    material: { color: [0.2, 0.4, 0.6, 1], wireframe: true },
+    visible: null,
+    metadata: null,
+  });
+  assert.deepEqual(renderer.resourceStatistics(), created, 'replacement owns one new material');
+
+  renderer.applyDiff({ op: 'destroy', handle: renderHandle(1) });
+  assert.deepEqual(renderer.resourceStatistics(), {
+    renderHandleCount: 0,
+    geometryResourceCount: 0,
+    materialResourceCount: 0,
+    textureResourceCount: 0,
+    animatedInstanceCount: 0,
+  });
+  renderer.dispose();
+  assert.deepEqual(renderer.resourceStatistics(), {
+    renderHandleCount: 0,
+    geometryResourceCount: 0,
+    materialResourceCount: 0,
+    textureResourceCount: 0,
+    animatedInstanceCount: 0,
+  });
+  assert.throws(() => renderer.applyDiff(createDiff(2, cubeNode())), /renderer is disposed/u);
+});
+
 void test('renderer-neutral lights retain parent, update, disable, degrade shadows, and destroy', () => {
   const renderer = new ThreeRenderer();
   renderer.applyDiff(createDiff(1, cubeNode('light-parent')));
@@ -1572,6 +1622,9 @@ void test('animated instances own disposable geometry without invalidating sibli
   const sourceScene = new THREE.Group();
   const sourceGeometry = new THREE.BoxGeometry(1, 1, 1);
   const sourceMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff });
+  const sourceTexture = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+  sourceTexture.needsUpdate = true;
+  sourceMaterial.map = sourceTexture;
   sourceScene.add(new THREE.Mesh(sourceGeometry, sourceMaterial));
   const source = new MapAnimatedMeshAssetSource([{
     asset: asset.asset,
@@ -1596,6 +1649,13 @@ void test('animated instances own disposable geometry without invalidating sibli
       },
     });
   }
+  assert.deepEqual(renderer.resourceStatistics(), {
+    renderHandleCount: 2,
+    geometryResourceCount: 2,
+    materialResourceCount: 2,
+    textureResourceCount: 1,
+    animatedInstanceCount: 2,
+  });
   const firstGeometry = firstMesh(renderer.objectFor(renderHandle(4201))!).geometry;
   const secondGeometry = firstMesh(renderer.objectFor(renderHandle(4202))!).geometry;
   let firstDisposed = false;
@@ -1611,6 +1671,13 @@ void test('animated instances own disposable geometry without invalidating sibli
   assert.equal(firstDisposed, true);
   assert.equal(secondDisposed, false);
   assert.equal(sourceDisposed, false);
+  assert.deepEqual(renderer.resourceStatistics(), {
+    renderHandleCount: 1,
+    geometryResourceCount: 1,
+    materialResourceCount: 1,
+    textureResourceCount: 1,
+    animatedInstanceCount: 1,
+  });
 
   renderer.applyDiff({
     op: 'createAnimatedMeshInstance',
@@ -1628,10 +1695,24 @@ void test('animated instances own disposable geometry without invalidating sibli
   assert.ok(renderer.objectFor(renderHandle(4201)));
   assert.ok(renderer.objectFor(renderHandle(4202)));
   assert.equal(sourceDisposed, false);
+  assert.deepEqual(renderer.resourceStatistics(), {
+    renderHandleCount: 2,
+    geometryResourceCount: 2,
+    materialResourceCount: 2,
+    textureResourceCount: 1,
+    animatedInstanceCount: 2,
+  });
 
   renderer.dispose();
   assert.equal(secondDisposed, true);
   assert.equal(sourceDisposed, false);
+  assert.deepEqual(renderer.resourceStatistics(), {
+    renderHandleCount: 0,
+    geometryResourceCount: 0,
+    materialResourceCount: 0,
+    textureResourceCount: 0,
+    animatedInstanceCount: 0,
+  });
 });
 
 void test('animated mesh adapter fails closed for missing resources and clips', () => {

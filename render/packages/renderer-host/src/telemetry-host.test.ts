@@ -16,6 +16,7 @@ import {
   type RendererTelemetryOverlaySink,
 } from './telemetry-host.js';
 import { RendererSurfaceTimingTracker } from './surface-timing.js';
+import { createRendererSurfaceSubmissionSample } from './surface-statistics.js';
 
 class FakeOverlaySink implements RendererTelemetryOverlaySink {
   readonly rendered: Array<{
@@ -82,6 +83,54 @@ void test('headless live telemetry omits unavailable counters and preserves boun
   assert.equal(snapshot.diagnostics[0]?.code, 'counterUnavailable');
   assert.equal(snapshot.diagnostics[0]?.counter, 'drawCallCount');
   assert.deepEqual(collector.readSnapshot(), snapshot);
+});
+
+void test('surface telemetry takes renderer-owned counters from the immutable submission sample', () => {
+  const collector = new RendererLiveTelemetryCollector({
+    expectedCounters: [
+      'drawCallCount',
+      'renderHandleCount',
+      'geometryResourceCount',
+      'materialResourceCount',
+      'textureResourceCount',
+      'animatedInstanceCount',
+      'triangleCount',
+    ],
+  });
+  const timing = new RendererSurfaceTimingTracker().record({
+    source: 'explicit',
+    sourceTimeMs: 16,
+    backendSubmissionStartedMs: 1,
+    backendSubmissionEndedMs: 2,
+  });
+  const submission = createRendererSurfaceSubmissionSample(timing, {
+    drawCallCount: 7,
+    renderHandleCount: 12,
+    geometryResourceCount: 5,
+    materialResourceCount: 4,
+    textureResourceCount: null,
+    animatedInstanceCount: 2,
+    triangleCount: undefined,
+  });
+  const snapshot = collector.sampleSurface({
+    sourceTick: 1,
+    timing: submission,
+    counters: { drawCallCount: 999 },
+  });
+
+  assert.deepEqual(snapshot.metrics.map((metric) => [metric.counter, metric.value]), [
+    ['backendSubmissionDurationMs', 1],
+    ['renderHandleCount', 12],
+    ['drawCallCount', 7],
+    ['geometryResourceCount', 5],
+    ['materialResourceCount', 4],
+    ['animatedInstanceCount', 2],
+  ]);
+  assert.deepEqual(snapshot.diagnostics.map((diagnostic) => diagnostic.counter), [
+    'frameTimeMs',
+    'textureResourceCount',
+    'triangleCount',
+  ]);
 });
 
 void test('telemetry overlay projects the same snapshot and local toggle changes no sample', () => {

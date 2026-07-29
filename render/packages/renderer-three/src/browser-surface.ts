@@ -18,6 +18,7 @@ import {
   type MeshBufferSource,
   type MeshResourceSource,
   type RendererProjectionIdentity,
+  type ThreeRendererResourceStatistics,
 } from './three-renderer.js';
 import type { AnimatedMeshAssetSource, AnimatedMeshPlaybackReadout } from './animated-mesh.js';
 import { renderBrowserSurfaceFrame } from './browser-surface-render-pass.js';
@@ -119,6 +120,13 @@ export interface RendererBrowserSurfacePickReceipt {
   readonly kind: 'rusty_renderer_browser_surface_pick.v1';
 }
 
+/** Exact Three submission facts consumed by the renderer-neutral host adapter. */
+export interface RendererBrowserSurfaceSubmissionStatistics extends ThreeRendererResourceStatistics {
+  readonly schemaVersion: 1;
+  readonly drawCallCount: number;
+  readonly triangleCount: number;
+}
+
 export interface RendererBrowserSurface {
   readonly kind: 'rusty_renderer_browser_surface.v1';
   readonly canvas: HTMLCanvasElement;
@@ -133,7 +141,7 @@ export interface RendererBrowserSurface {
   readonly applyFrame: (frame: RenderFrameDiff) => void;
   readonly pick: (request: RendererBrowserSurfacePickRequest) => RendererBrowserSurfacePickReceipt;
   readonly snapshot: () => string;
-  readonly renderOnce: (timeMs?: number) => void;
+  readonly renderOnce: (timeMs?: number) => RendererBrowserSurfaceSubmissionStatistics;
   readonly setCameraPose: (
     pose: RendererBrowserSurfaceCameraPose,
     basis?: RendererBrowserSurfaceCameraBasis,
@@ -199,6 +207,10 @@ export function mountRendererBrowserSurface(
 
   const webgl = new THREE.WebGLRenderer({ canvas, antialias: true });
   webgl.autoClear = false;
+  // One surface submission contains both world and viewmodel render passes.
+  // Disable Three's per-pass reset so its public info object accumulates exact
+  // counts until this owner resets it before the next submission.
+  webgl.info.autoReset = false;
   webgl.setClearColor(options.clearColor ?? 0x101820, 1);
   const pixelRatio = validatePixelRatio(
     options.pixelRatio ?? globalThis.devicePixelRatio ?? 1,
@@ -236,6 +248,7 @@ export function mountRendererBrowserSurface(
   let animationFrame: number | null = null;
   let lastRenderTimeMs: number | null = null;
   let logicalViewport = { width: 0, height: 0 };
+  let disposed = false;
 
   const setCameraPose = (
     pose: RendererBrowserSurfaceCameraPose,
@@ -280,13 +293,17 @@ export function mountRendererBrowserSurface(
     viewmodelCamera.updateProjectionMatrix();
   };
 
-  const renderOnce = (timeMs = globalThis.performance?.now() ?? 0): void => {
+  const renderOnce = (
+    timeMs = globalThis.performance?.now() ?? 0,
+  ): RendererBrowserSurfaceSubmissionStatistics => {
+    if (disposed) throw new Error('renderer browser surface is disposed');
     resize();
     const deltaSeconds =
       lastRenderTimeMs === null
         ? 0
         : Math.min(0.05, Math.max(0, (timeMs - lastRenderTimeMs) / 1000));
     lastRenderTimeMs = timeMs;
+    webgl.info.reset();
     renderBrowserSurfaceFrame(
       webgl,
       camera,
@@ -294,6 +311,12 @@ export function mountRendererBrowserSurface(
       renderer,
       deltaSeconds,
     );
+    return Object.freeze({
+      schemaVersion: 1,
+      drawCallCount: webgl.info.render.calls,
+      triangleCount: webgl.info.render.triangles,
+      ...renderer.resourceStatistics(),
+    });
   };
 
   const projectWorldPoint = (
@@ -314,6 +337,7 @@ export function mountRendererBrowserSurface(
   };
 
   const start = (): void => {
+    if (disposed) throw new Error('renderer browser surface is disposed');
     if (animationFrame !== null) {
       return;
     }
@@ -329,9 +353,11 @@ export function mountRendererBrowserSurface(
   };
 
   const dispose = (): void => {
+    if (disposed) return;
     stop();
     webgl.dispose();
     renderer.dispose();
+    disposed = true;
   };
 
   setCameraPose(currentCameraPose, currentCameraBasis ?? undefined);
