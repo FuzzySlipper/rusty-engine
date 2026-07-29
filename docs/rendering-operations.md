@@ -229,6 +229,33 @@ the disposed instance.
 submission sample. Caller counters may still supply game/product values such as `entityCount`, but
 cannot override draw, handle, geometry, material, texture, animation, or triangle observations.
 
+### Exact downstream certification
+
+The external Loading Bay consumer certified this public surface in
+`rusty-engine-demo` revision `92745e291097d22574ac3fe0d01c3b6e19a02697`, pinned to Engine
+revision `a6857d03141e162511231c276ee751a3413c90e5`. The product used its ordinary auto-started
+`RendererSurface`; the probe added no Three/WebGL import, private renderer access, second surface,
+or second frame loop. Three explicit submissions observed the real placeholder, a temporary richer
+load of 32 visible instances sharing four static resources, and the surface after destroying that
+temporary root:
+
+| Renderer statistic | Scope | Placeholder | Rich load | Restored |
+| --- | --- | ---: | ---: | ---: |
+| Draw calls | `perSubmission` | 39 | 71 | 39 |
+| Live render handles | `liveResident` | 51 | 84 | 51 |
+| Geometry resources | `liveResident` | 43 | 47 | 43 |
+| Material resources | `liveResident` | 55 | 59 | 55 |
+| Texture resources | `liveResident` | 0 | 0 | 0 |
+| Animated instances | `liveResident` | 0 | 0 | 0 |
+| Submitted triangles | `perSubmission` | 14,380 | 14,444 | 14,380 |
+
+Every value had `available` status, including the exact zeros. The richer load therefore proves
+counter sensitivity, shared-resource accounting, and disposal restoration through only the public
+surface. It is a deterministic stress load, not a substitute for measuring the final authored
+Loading Bay scene. The complete downstream product gate included a real Chromium/SwiftShader
+browser run; those exact counts are lifecycle/correctness evidence and make no hardware GPU timing
+claim. Downstream Den task #6378 and its checked evidence artifact own the product-side record.
+
 ## Resource and authority rules
 
 - Static/shared/animated mesh bytes, audio clips, fonts, icons, and particle sprites arrive through
