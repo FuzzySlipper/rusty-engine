@@ -240,8 +240,9 @@ not the Angular shell, implements the resulting camera movement, boost, pan, orb
   authoring, general asset import/dependency/lock/source-drift/reimport, restart-stable host-user
   camera/input preferences, transformed voxel picking,
   shared-renderer brush/conversion preview restoration, brush undo/redo, annotations, private-plan
-  conversion, reload persistence, and stale non-mutation. It also builds and serves the downstream
-  Loading Bay Studio composition in fresh Chromium processes: the built-in Voxel Object panel runs
+  conversion, resource-only voxel-object ghosts, repeated placement, Entity-inspector duplication,
+  placement undo/reapply, reload persistence, and stale non-mutation. It also builds and serves the
+  downstream Loading Bay Studio composition in fresh Chromium processes: the built-in Voxel Object panel runs
   through the shared outlet, an advertised uninstalled identity degrades to read-only, and owner 88's
   real Weapon damage is replaced, canonically reread, page-reloaded, and reconstructed by a fresh
   host and Rust adapter process. `scripts/verify-studio-entity-inspector-integration.sh` owns this

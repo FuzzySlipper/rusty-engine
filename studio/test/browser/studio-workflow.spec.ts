@@ -44,7 +44,7 @@ test('real project hierarchy, shared picking, transform settlement, reopen, and 
   await page.locator('.entity-row[data-entity-id="1"]').click();
   await expect(viewport).toHaveAttribute('data-selected-entity', '1');
   await page.waitForTimeout(50);
-  const translationX = page.getByLabel('Translation X');
+  const translationX = page.getByLabel('Translation X', { exact: true });
   const initialX = Number(await translationX.inputValue());
   const committedX = initialX + 0.5;
   const hashBeforeCommit = await projectHash(shell);
@@ -80,10 +80,10 @@ test('real project hierarchy, shared picking, transform settlement, reopen, and 
   await expect(shell).toHaveAttribute('data-project-hash', committedHash);
   await page.locator('.entity-row[data-entity-id="1"]').click();
   await page.getByRole('button', { name: 'Entity', exact: true }).click();
-  await expect(page.getByLabel('Translation X')).toHaveValue(String(committedX));
+  await expect(page.getByLabel('Translation X', { exact: true })).toHaveValue(String(committedX));
 
   const hashBeforeInvalidCommit = await projectHash(shell);
-  await page.getByLabel('Translation X').fill('2000000');
+  await page.getByLabel('Translation X', { exact: true }).fill('2000000');
   await page.locator('[data-action="commit-transform"]').click();
   await expect(page.getByRole('alert')).toContainText('invalid-scene-after-edit');
   await expect(shell).toHaveAttribute('data-project-hash', hashBeforeInvalidCommit);
@@ -767,7 +767,7 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   await expect(shell).toHaveAttribute('data-selected-entity', duplicateOwnerEntityId as string);
 
   await expect(shell).toHaveAttribute('data-studio-operation', 'idle', { timeout: 30_000 });
-  const duplicateTranslationX = page.getByLabel('Translation X');
+  const duplicateTranslationX = page.getByLabel('Translation X', { exact: true });
   await duplicateTranslationX.fill('8.5');
   const hashBeforeDuplicateTransform = await projectHash(shell);
   await page.locator('[data-action="commit-transform"]').click();
@@ -796,7 +796,7 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   await expect(finalDuplicateRow).toHaveCount(1);
   await finalDuplicateRow.click();
   await page.getByRole('button', { name: 'Entity', exact: true }).click();
-  await expect(page.getByLabel('Translation X')).toHaveValue('8.5');
+  await expect(page.getByLabel('Translation X', { exact: true })).toHaveValue('8.5');
   process.stdout.write(`${JSON.stringify({
     kind: 'studioVoxelObjectBrowserEvidence',
     source: 'mesh-animation/kenney-retro-character-medium',
