@@ -33,6 +33,7 @@ viewport, and its closed external-project adapter protocol.
 - [Studio migration contract](../studio-migration-contract.md)
 - [Studio adapter protocol](../studio-adapter-protocol.md)
 - [Downstream Entity inspector extensions](../studio-downstream-entity-inspector-extensions.md)
+- [Downstream Engine revision contract](../topics/development/downstream-engine-revisions.md)
 - [Voxel mesh data plane](../topics/voxel/voxel-mesh-data-plane.md)
 
 ## Public downstream surfaces

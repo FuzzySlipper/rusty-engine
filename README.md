@@ -264,6 +264,7 @@ The format, limits, provenance, and failure behavior are documented in
 | [Agent code atlas](docs/agent-code-atlas.md) | Owner routing, primary paths, public surfaces, gates, and common mistakes |
 | [Known limitations](docs/known-limitations.md) | Active provider limitations and explicitly scheduled consumer certification |
 | [Rust source organization](docs/topics/development/rust-style.md) | Lightweight module and behavior-owner style |
+| [Downstream Engine revision contract](docs/topics/development/downstream-engine-revisions.md) | One exact public provider commit per consumer, update commands, rollback, and certification boundaries |
 | [Rendering successor contract](docs/rendering-successor-contract.md) | Complete shared-rendering scope and adaptation boundary |
 | [Rendering operations](docs/rendering-operations.md) | Verification, exact revision consumption, CI, resources, limitations |
 | [Studio migration contract](docs/studio-migration-contract.md) | First-party authoring scope, parity, isolation, owner adoption |

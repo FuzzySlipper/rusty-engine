@@ -21,7 +21,7 @@ does not require Den access.
 
 | Directory | Contents |
 |---|---|
-| [topics/development/](topics/development/) | Rust source organization and implementation style |
+| [topics/development/](topics/development/) | Rust source organization, implementation style, and downstream revision updates |
 | [topics/voxel/](topics/voxel/) | Stored voxel formats, conversion, animation, and runtime admission |
 
 Several operational contracts intentionally remain at the docs root because
@@ -73,6 +73,7 @@ tests take precedence when describing implemented behavior.
 | Change stats, tracks, effects, items, equipment, damage, or restoration | [Gameplay mechanics](code-map/gameplay-mechanics.md) |
 | Package a downstream-authored rules candidate without giving Engine its meaning | [Gameplay rules](code-map/gameplay-rules.md) |
 | Audit the completed mechanics/rules campaign and exact consumers | [Gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md) |
+| Update a downstream consumer's exact Engine commit | [Downstream Engine revision contract](topics/development/downstream-engine-revisions.md) |
 | Check active provider limitations and scheduled certification | [Known limitations](known-limitations.md) |
 | Change voxel collision, navigation, motion, or edits | [Spatial mechanisms](code-map/spatial-mechanisms.md) |
 | Change a stored asset, scene, prefab, or import | [Content, assets, and scenes](code-map/content-assets-and-scenes.md) |

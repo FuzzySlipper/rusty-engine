@@ -68,6 +68,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 - [Canonical design](design.md)
 - [Gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md)
 - [Rust source organization](topics/development/rust-style.md)
+- [Downstream Engine revision contract](topics/development/downstream-engine-revisions.md)
 - [Cargo workspace](../Cargo.toml)
 - [Provider gate](../scripts/verify.sh)
 - [Gameplay rules gate](../scripts/verify-rules.sh)

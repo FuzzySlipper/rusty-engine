@@ -47,6 +47,7 @@ and diagnostics without defining what any rule means.
 - [`rules workspace boundary audit`](../../rules/scripts/check-boundaries.mjs)
 - [`schema-1 canonical fixture`](../../fixtures/gameplay-rules/package-v1.canonical.json)
 - [Optional gameplay rules contract](../gameplay-rules-contract.md)
+- [Downstream Engine revision contract](../topics/development/downstream-engine-revisions.md)
 - [Completed first-consumer evidence](../gameplay-mechanics-campaign-closeout.md)
 - [`gameplay-rules` donor disposition](../../migration/gameplay-rules-donor/disposition.tsv)
 

@@ -31,6 +31,7 @@ surface, and renderer host/resource lifecycle.
 - [`render/browser`](../../render/browser)
 - [`render/package.json`](../../render/package.json)
 - [Rendering operations](../rendering-operations.md)
+- [Downstream Engine revision contract](../topics/development/downstream-engine-revisions.md)
 - [Voxel mesh data plane](../topics/voxel/voxel-mesh-data-plane.md)
 
 ## Public downstream surfaces
