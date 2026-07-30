@@ -522,6 +522,7 @@ export function pickProjectedObject(
     return { diagnostics, hit: null, kind: 'rusty_renderer_browser_surface_pick.v1' };
   }
 
+  renderer.prepareStaticInstanceBatchesForPicking();
   renderer.scene.updateMatrixWorld(true);
   configurePickRay(raycaster, camera, center, request.ray);
   raycaster.far = request.maxDistance ?? Number.POSITIVE_INFINITY;

@@ -1308,34 +1308,44 @@ void test('compatible repeated static instances batch without losing handle iden
   assert.equal(renderer.resourceStatistics().geometryResourceCount, 0);
 });
 
-void test('dense level-scale repeated instances subdivide into effective culling batches', () => {
+void test('dense level-scale repeated instances compact visible members into bounded definition batches', () => {
   const renderer = new ThreeRenderer();
+  const definitionCount = 9;
   const instanceCount = 367;
   renderer.applyFrame({
     schemaVersion: 1,
     ops: [
-      { op: 'defineStaticMesh', asset: crateAsset() },
-      ...Array.from({ length: instanceCount }, (_, index): RenderDiff => ({
-        op: 'createStaticMeshInstance',
-        handle: renderHandle(3_000 + index),
-        parent: null,
-        instance: {
-          ...crateInstance(),
-          transform: {
-            // A compact 48-by-32-unit level-like distribution. The rejected
-            // 32-unit partition collapsed this into two oversized cells.
-            translation: [index % 48, 0, Math.floor(index / 48) * 4],
-            rotation: [0, 0, 0, 1],
-            scale: [1, 1, 1],
-          },
-          metadata: {
-            sourceEntity: 30_000 + index,
-            sourceSceneNode: null,
-            tags: ['dense-spatial-batch'],
-            label: `dense-spatial-crate-${String(index)}`,
-          },
+      ...Array.from({ length: definitionCount }, (_, index): RenderDiff => ({
+        op: 'defineStaticMesh',
+        asset: {
+          ...crateAsset(),
+          asset: `mesh/dense-${String(index)}`,
         },
       })),
+      ...Array.from({ length: instanceCount }, (_, index): RenderDiff => {
+        const asset = `mesh/dense-${String(index % definitionCount)}`;
+        return {
+          op: 'createStaticMeshInstance',
+          handle: renderHandle(3_000 + index),
+          parent: null,
+          instance: {
+            ...crateInstance(asset),
+            transform: {
+              // A compact 48-by-32-unit level-like distribution matching the
+              // acceptance consumer's repeated authored placement density.
+              translation: [index % 48, 0, Math.floor(index / 48) * 4],
+              rotation: [0, 0, 0, 1],
+              scale: [1, 1, 1],
+            },
+            metadata: {
+              sourceEntity: 30_000 + index,
+              sourceSceneNode: null,
+              tags: ['dense-spatial-batch'],
+              label: `dense-spatial-crate-${String(index)}`,
+            },
+          },
+        };
+      }),
     ],
   });
 
@@ -1343,31 +1353,48 @@ void test('dense level-scale repeated instances subdivide into effective culling
   renderer.scene.traverse((object) => {
     if (object instanceof THREE.InstancedMesh) batches.push(object);
   });
-  assert.equal(batches.length, 24);
   assert.equal(
-    Math.max(...batches.map((batch) => batch.count)),
-    16,
-    'level-scale content must not collapse into a few oversized culling groups',
+    batches.length,
+    definitionCount,
+    'draw groups stay bounded by compatible definitions, not spatial placement cells',
   );
   assert.equal(
     batches.reduce((total, batch) => total + batch.count, 0),
     instanceCount,
   );
-  assert.ok(batches.every((batch) => batch.frustumCulled));
-  assert.ok(batches.every((batch) => batch.boundingBox instanceof THREE.Box3));
-  assert.ok(batches.every((batch) => batch.boundingSphere instanceof THREE.Sphere));
 
-  const sample = batches.find((batch) =>
-    Array.from({ length: batch.count }, (_, index) =>
-      renderer.projectionIdentityForObject(batch, index)?.handle)
-      .includes(renderHandle(3_366)));
-  assert.ok(sample instanceof THREE.InstancedMesh);
+  const camera = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 100);
+  camera.up.set(0, 0, -1);
+  camera.position.set(8, 40, 8);
+  camera.lookAt(8, 0, 8);
+  camera.updateProjectionMatrix();
+  renderer.prepareStaticInstanceBatches(camera);
+
+  assert.equal(
+    batches.length,
+    definitionCount,
+    'moving-camera compaction must not multiply definition draw groups',
+  );
+  const submittedCount = batches.reduce((total, batch) => total + batch.count, 0);
+  assert.ok(submittedCount >= definitionCount * 2);
+  assert.ok(
+    submittedCount < instanceCount,
+    'only camera-visible members are submitted while retained identities remain resident',
+  );
+  for (const batch of batches) {
+    assert.equal(batch.frustumCulled, true);
+    assert.ok(batch.boundingBox instanceof THREE.Box3);
+    assert.ok(batch.boundingSphere instanceof THREE.Sphere);
+    for (let index = 0; index < batch.count; index += 1) {
+      assert.ok(renderer.projectionIdentityForObject(batch, index)?.handle !== undefined);
+    }
+  }
   assert.equal(renderer.handleCount, instanceCount);
   renderer.dispose();
   assert.equal(renderer.handleCount, 0);
 });
 
-void test('compatible static batches are spatially bounded and camera-cull independently', () => {
+void test('compatible static batches repack exact visible handles as the camera moves', () => {
   const renderer = new ThreeRenderer();
   renderer.applyFrame({
     schemaVersion: 1,
@@ -1399,35 +1426,44 @@ void test('compatible static batches are spatially bounded and camera-cull indep
   renderer.scene.traverse((object) => {
     if (object instanceof THREE.InstancedMesh) batches.push(object);
   });
-  assert.equal(batches.length, 2);
-  assert.deepEqual(batches.map((batch) => batch.count), [3, 3]);
-  assert.ok(batches.every((batch) => batch.frustumCulled));
-  assert.ok(batches.every((batch) => batch.boundingSphere instanceof THREE.Sphere));
-
-  const nearBatch = batches.find((batch) =>
-    renderer.projectionIdentityForObject(batch, 0)?.handle === renderHandle(2_000));
-  const farBatch = batches.find((batch) =>
-    renderer.projectionIdentityForObject(batch, 0)?.handle === renderHandle(2_003));
-  assert.ok(nearBatch instanceof THREE.InstancedMesh);
-  assert.ok(farBatch instanceof THREE.InstancedMesh);
+  assert.equal(batches.length, 1);
+  const batch = batches[0]!;
 
   const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
-  const frustum = new THREE.Frustum();
-  const projectionView = new THREE.Matrix4();
   const lookAt = (x: number): void => {
     camera.position.set(x, 0, 8);
     camera.lookAt(x, 0, 0);
-    camera.updateMatrixWorld(true);
-    projectionView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-    frustum.setFromProjectionMatrix(projectionView);
+    renderer.prepareStaticInstanceBatches(camera);
   };
 
   lookAt(0);
-  assert.equal(frustum.intersectsObject(nearBatch), true);
-  assert.equal(frustum.intersectsObject(farBatch), false);
+  assert.equal(batch.count, 3);
+  assert.deepEqual(
+    Array.from({ length: batch.count }, (_, index) =>
+      renderer.projectionIdentityForObject(batch, index)?.handle),
+    [renderHandle(2_000), renderHandle(2_001), renderHandle(2_002)],
+  );
   lookAt(128);
-  assert.equal(frustum.intersectsObject(nearBatch), false);
-  assert.equal(frustum.intersectsObject(farBatch), true);
+  assert.equal(batch.count, 3);
+  assert.deepEqual(
+    Array.from({ length: batch.count }, (_, index) =>
+      renderer.projectionIdentityForObject(batch, index)?.handle),
+    [renderHandle(2_003), renderHandle(2_004), renderHandle(2_005)],
+  );
+  renderer.prepareStaticInstanceBatchesForPicking();
+  assert.equal(batch.count, 6, 'arbitrary world-ray picking restores every retained candidate');
+  assert.deepEqual(
+    Array.from({ length: batch.count }, (_, index) =>
+      renderer.projectionIdentityForObject(batch, index)?.handle),
+    [
+      renderHandle(2_000),
+      renderHandle(2_001),
+      renderHandle(2_002),
+      renderHandle(2_003),
+      renderHandle(2_004),
+      renderHandle(2_005),
+    ],
+  );
 
   renderer.applyFrame({
     schemaVersion: 1,
@@ -1448,23 +1484,20 @@ void test('compatible static batches are spatially bounded and camera-cull indep
   renderer.scene.traverse((object) => {
     if (object instanceof THREE.InstancedMesh) regrouped.push(object);
   });
-  assert.deepEqual(regrouped.map((batch) => batch.count), [2, 4]);
-  const regroupedFar = regrouped.find((batch) =>
-    Array.from({ length: batch.count }, (_, index) =>
-      renderer.projectionIdentityForObject(batch, index)?.handle)
-      .includes(renderHandle(2_001)));
-  assert.ok(regroupedFar instanceof THREE.InstancedMesh);
-  const movedIndex = Array.from({ length: regroupedFar.count }, (_, index) =>
-    renderer.projectionIdentityForObject(regroupedFar, index)?.handle)
+  assert.deepEqual(regrouped, [batch], 'transform changes retain the definition batch');
+  lookAt(128);
+  assert.equal(batch.count, 4);
+  const movedIndex = Array.from({ length: batch.count }, (_, index) =>
+    renderer.projectionIdentityForObject(batch, index)?.handle)
     .indexOf(renderHandle(2_001));
   assert.notEqual(movedIndex, -1);
   const movedMatrix = new THREE.Matrix4();
-  regroupedFar.getMatrixAt(movedIndex, movedMatrix);
+  batch.getMatrixAt(movedIndex, movedMatrix);
   assert.deepEqual(
     new THREE.Vector3().setFromMatrixPosition(movedMatrix).toArray(),
     [131, 0, 0],
   );
-  assert.ok(regroupedFar.boundingSphere instanceof THREE.Sphere);
+  assert.ok(batch.boundingSphere instanceof THREE.Sphere);
   renderer.dispose();
   assert.equal(renderer.handleCount, 0);
 });

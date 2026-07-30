@@ -191,18 +191,13 @@ interface VoxelObjectDef {
 
 interface StaticInstanceBatch {
   readonly mesh: THREE.InstancedMesh;
+  candidateHandles: readonly RenderHandle[];
   handles: readonly RenderHandle[];
 }
 
 const STATIC_INSTANCE_BATCH_LAYER = 31;
 const MAX_STATIC_INSTANCE_BATCH_SIZE = 4_096;
 const MIN_STATIC_INSTANCE_BATCH_SIZE = 2;
-/**
- * Compatible retained instances batch only within one bounded world-space
- * cell. Aggregate instance bounds can then participate in ordinary Three
- * frustum culling without a scene-wide batch keeping distant work visible.
- */
-const STATIC_INSTANCE_BATCH_CELL_SIZE = 8;
 
 /**
  * A retained Three.js scene driven entirely by render diffs.
@@ -256,6 +251,7 @@ export class ThreeRenderer {
    */
   readonly #staticInstanceBatches = new Map<string, StaticInstanceBatch>();
   readonly #staticInstanceBatchByObject = new Map<THREE.InstancedMesh, StaticInstanceBatch>();
+  readonly #staticInstanceCandidateObjects = new WeakSet<THREE.Object3D>();
   #disposed = false;
 
   constructor(options: {
@@ -307,6 +303,7 @@ export class ThreeRenderer {
       throw cause;
     }
     const preparedGeometry = this.#prepareFrame(frame);
+    const staticInstanceBatchesChanged = this.#frameChangesStaticInstanceBatches(frame);
     const recursivelyDestroyed = new Set<RenderHandle>();
     try {
       for (let index = 0; index < frame.ops.length; index += 1) {
@@ -327,7 +324,9 @@ export class ThreeRenderer {
     }
     disposePreparedGeometry(preparedGeometry);
     this.#projection.applyFrame(frame);
-    this.#syncStaticInstanceBatches();
+    if (staticInstanceBatchesChanged) {
+      this.#syncStaticInstanceBatches();
+    }
   }
 
   /** Strictly decode a versioned contract payload and apply it. */
@@ -703,6 +702,51 @@ export class ThreeRenderer {
     return localNormal.clone().transformDirection(object.matrixWorld);
   }
 
+  /**
+   * Compact compatible retained static instances to the subset intersecting
+   * the current camera frustum. Logical handle meshes remain the retained
+   * hierarchy, transform, metadata, and lifecycle owners; this method changes
+   * only the disposable backend submission buffers.
+   */
+  prepareStaticInstanceBatches(camera: THREE.Camera): void {
+    if (this.#disposed) {
+      throw new RenderApplyError('renderer is disposed');
+    }
+    this.scene.updateMatrixWorld(true);
+    camera.updateMatrixWorld(true);
+    const projectionView = new THREE.Matrix4().multiplyMatrices(
+      camera.projectionMatrix,
+      camera.matrixWorldInverse,
+    );
+    const frustum = new THREE.Frustum().setFromProjectionMatrix(projectionView);
+
+    for (const batch of this.#staticInstanceBatches.values()) {
+      const visibleHandles = batch.candidateHandles.filter((handle) => {
+        const entry = this.#handles.get(handle);
+        return entry !== undefined
+          && entry.object instanceof THREE.Mesh
+          && frustum.intersectsObject(entry.object);
+      });
+      this.#writeStaticInstanceBatch(batch, visibleHandles);
+    }
+  }
+
+  /**
+   * Restore every compatible candidate to its definition batch for a
+   * renderer-side pick. Picks may use an arbitrary world ray outside the
+   * current camera frustum, so camera compaction must not narrow their exact
+   * retained-handle result set.
+   */
+  prepareStaticInstanceBatchesForPicking(): void {
+    if (this.#disposed) {
+      throw new RenderApplyError('renderer is disposed');
+    }
+    this.scene.updateMatrixWorld(true);
+    for (const batch of this.#staticInstanceBatches.values()) {
+      this.#writeStaticInstanceBatch(batch, batch.candidateHandles);
+    }
+  }
+
   /** Advance projection-only animation mixers by an explicit renderer frame delta. */
   advanceAnimation(deltaSeconds: number): void {
     try {
@@ -935,6 +979,7 @@ export class ThreeRenderer {
       ownedMaterialIndices.add(idx);
     }
     const mesh = new THREE.Mesh(def.geometry, materials.length === 1 ? materials[0]! : materials);
+    this.#staticInstanceCandidateObjects.add(mesh);
     applyTransform(mesh, diff.instance.transform);
     applyMetadata(mesh, diff.instance.metadata);
     mesh.visible = diff.instance.visible;
@@ -1126,6 +1171,7 @@ export class ThreeRenderer {
         ? instanceMaterials.materials[0]!
         : instanceMaterials.materials,
     );
+    this.#staticInstanceCandidateObjects.add(mesh);
     applyTransform(mesh, diff.instance.transform);
     applyMetadata(mesh, diff.instance.metadata);
     mesh.visible = diff.instance.visible;
@@ -1262,6 +1308,7 @@ export class ThreeRenderer {
         || !matrixIsFinite(entry.object.matrixWorld)
         || entry.object.customDepthMaterial !== undefined
         || entry.object.customDistanceMaterial !== undefined
+        || (this.#shadowsEnabled && entry.object.castShadow)
       ) {
         continue;
       }
@@ -1277,17 +1324,14 @@ export class ThreeRenderer {
       ) {
         continue;
       }
-      const key = [
-        staticInstanceCompatibilityKey(entry.object, materials),
-        `cell:${staticInstanceSpatialCellKey(entry.object.matrixWorld)}`,
-      ].join('|');
+      const key = staticInstanceCompatibilityKey(entry.object, materials);
       const group = candidates.get(key) ?? [];
       group.push({ handle, mesh: entry.object });
       candidates.set(key, group);
     }
 
     const retainedBatchKeys = new Set<string>();
-    for (const [spatialCompatibilityKey, group] of candidates.entries()) {
+    for (const [compatibilityKey, group] of candidates.entries()) {
       if (group.length < MIN_STATIC_INSTANCE_BATCH_SIZE) continue;
       for (
         let offset = 0;
@@ -1296,7 +1340,7 @@ export class ThreeRenderer {
       ) {
         const members = group.slice(offset, offset + MAX_STATIC_INSTANCE_BATCH_SIZE);
         if (members.length < MIN_STATIC_INSTANCE_BATCH_SIZE) continue;
-        const batchKey = `${spatialCompatibilityKey}|chunk:${String(
+        const batchKey = `${compatibilityKey}|chunk:${String(
           Math.floor(offset / MAX_STATIC_INSTANCE_BATCH_SIZE),
         )}`;
         retainedBatchKeys.add(batchKey);
@@ -1315,7 +1359,7 @@ export class ThreeRenderer {
             firstMaterials.length === 1 ? firstMaterials[0]! : firstMaterials,
             members.length,
           );
-          mesh.name = `static-instance-batch:${spatialCompatibilityKey}`;
+          mesh.name = `static-instance-batch:${compatibilityKey}`;
           mesh.castShadow = first.castShadow;
           mesh.receiveShadow = first.receiveShadow;
           mesh.renderOrder = first.renderOrder;
@@ -1323,23 +1367,13 @@ export class ThreeRenderer {
           mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
           mesh.layers.set(0);
           this.#sceneGroup.add(mesh);
-          batch = { mesh, handles: [] };
+          batch = { mesh, candidateHandles: [], handles: [] };
           this.#staticInstanceBatches.set(batchKey, batch);
           this.#staticInstanceBatchByObject.set(mesh, batch);
         }
 
-        batch.handles = members.map(({ handle }) => handle);
-        batch.mesh.count = members.length;
-        for (let index = 0; index < members.length; index += 1) {
-          const member = members[index]!;
-          batch.mesh.setMatrixAt(index, member.mesh.matrixWorld);
-          member.mesh.layers.set(STATIC_INSTANCE_BATCH_LAYER);
-        }
-        batch.mesh.instanceMatrix.needsUpdate = true;
-        batch.mesh.boundingBox = null;
-        batch.mesh.boundingSphere = null;
-        batch.mesh.computeBoundingBox();
-        batch.mesh.computeBoundingSphere();
+        batch.candidateHandles = members.map(({ handle }) => handle);
+        this.#writeStaticInstanceBatch(batch, batch.candidateHandles);
       }
     }
 
@@ -1348,6 +1382,91 @@ export class ThreeRenderer {
         this.#disposeStaticInstanceBatch(batchKey, batch);
       }
     }
+  }
+
+  #writeStaticInstanceBatch(
+    batch: StaticInstanceBatch,
+    submittedHandles: readonly RenderHandle[],
+  ): void {
+    for (const handle of batch.candidateHandles) {
+      const entry = this.#handles.get(handle);
+      if (entry?.object instanceof THREE.Mesh) {
+        entry.object.layers.set(STATIC_INSTANCE_BATCH_LAYER);
+      }
+    }
+
+    if (submittedHandles.length < MIN_STATIC_INSTANCE_BATCH_SIZE) {
+      batch.handles = [];
+      batch.mesh.count = 0;
+      batch.mesh.visible = false;
+      if (submittedHandles.length === 1) {
+        const entry = this.#handles.get(submittedHandles[0]!);
+        if (entry?.object instanceof THREE.Mesh) {
+          entry.object.layers.set(0);
+        }
+      }
+      return;
+    }
+
+    batch.handles = [...submittedHandles];
+    batch.mesh.visible = true;
+    batch.mesh.count = submittedHandles.length;
+    for (let index = 0; index < submittedHandles.length; index += 1) {
+      const entry = this.#handles.get(submittedHandles[index]!);
+      if (entry === undefined) {
+        throw new RenderApplyError(
+          `static instance batch references missing handle ${submittedHandles[index]}`,
+        );
+      }
+      batch.mesh.setMatrixAt(index, entry.object.matrixWorld);
+    }
+    batch.mesh.instanceMatrix.needsUpdate = true;
+    batch.mesh.boundingBox = null;
+    batch.mesh.boundingSphere = null;
+    batch.mesh.computeBoundingBox();
+    batch.mesh.computeBoundingSphere();
+  }
+
+  #frameChangesStaticInstanceBatches(frame: RenderFrameDiff): boolean {
+    return frame.ops.some((operation) => {
+      switch (operation.op) {
+        case 'defineMaterial':
+        case 'defineStaticMesh':
+        case 'defineVoxelObject':
+        case 'releaseVoxelObject':
+        case 'createStaticMeshInstance':
+        case 'createVoxelObjectInstance':
+        case 'setVoxelObjectFrame':
+        case 'setMaterialInstanceParameters':
+          return true;
+        case 'destroy':
+        case 'replaceMeshPayload': {
+          const entry = this.#handles.get(operation.handle);
+          return entry !== undefined && this.#objectTreeContainsStaticInstance(entry.object);
+        }
+        case 'update': {
+          if (
+            operation.transform === null
+            && operation.material === null
+            && operation.visible === null
+          ) {
+            return false;
+          }
+          const entry = this.#handles.get(operation.handle);
+          return entry !== undefined && this.#objectTreeContainsStaticInstance(entry.object);
+        }
+        default:
+          return false;
+      }
+    });
+  }
+
+  #objectTreeContainsStaticInstance(root: THREE.Object3D): boolean {
+    let found = false;
+    root.traverse((object) => {
+      found ||= this.#staticInstanceCandidateObjects.has(object);
+    });
+    return found;
   }
 
   #disposeStaticInstanceBatch(batchKey: string, batch: StaticInstanceBatch): void {
@@ -2456,13 +2575,6 @@ function staticInstanceCompatibilityKey(
     mesh.castShadow ? 'cast' : 'no-cast',
     mesh.receiveShadow ? 'receive' : 'no-receive',
   ].join('|');
-}
-
-function staticInstanceSpatialCellKey(matrixWorld: THREE.Matrix4): string {
-  const { elements } = matrixWorld;
-  return [elements[12]!, elements[13]!, elements[14]!]
-    .map((coordinate) => String(Math.floor(coordinate / STATIC_INSTANCE_BATCH_CELL_SIZE)))
-    .join(',');
 }
 
 function isEffectivelyVisible(object: THREE.Object3D, root: THREE.Object3D): boolean {

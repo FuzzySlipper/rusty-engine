@@ -6,6 +6,7 @@ type EditorViewportRenderChannel = SceneDepthChannel | 'overlay';
 interface EditorViewportRenderChannelProjection {
   readonly scene: THREE.Scene;
   advanceAnimation(deltaSeconds: number): void;
+  prepareStaticInstanceBatches(camera: THREE.Camera): void;
 }
 
 export interface EditorViewportRenderChannels {
@@ -32,6 +33,7 @@ export function renderEditorViewportFrame(
   for (const channel of SCENE_DEPTH_CHANNELS) {
     const renderer = channels.renderer(channel);
     renderer.advanceAnimation(deltaSeconds);
+    renderer.prepareStaticInstanceBatches(camera);
     driver.render(renderer.scene, camera);
   }
 
@@ -39,6 +41,7 @@ export function renderEditorViewportFrame(
 
   const overlay = channels.renderer('overlay');
   overlay.advanceAnimation(deltaSeconds);
+  overlay.prepareStaticInstanceBatches(camera);
   driver.clearDepth();
   driver.render(overlay.scene, camera);
 }
