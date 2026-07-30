@@ -44,6 +44,7 @@ import {
   createRendererSurfaceSubmissionSample,
   type RendererSurfaceSubmissionSample,
 } from './surface-statistics.js';
+import { RendererSurfaceReadinessPoll } from './surface-readiness-poll.js';
 import {
   RendererSurfaceSubmissionDemand,
   type RendererSurfaceViewportState,
@@ -342,12 +343,34 @@ function mountPreparedRendererSurface(
   let latestSubmission: RendererSurfaceSubmissionSample | null = null;
   const submissionDemand = new RendererSurfaceSubmissionDemand(surfaceViewport(canvas));
   let disposed = false;
+  const continuousDemand = () => ({
+    controls: controls.requiresAnimationFrame(),
+    presentation: presentationHosts?.requiresAnimationFrame() ?? false,
+    retainedAnimation: hasRetainedAnimation(latestSubmission),
+  });
+  const automaticReadinessPoll = new RendererSurfaceReadinessPoll({
+    isAccelerated: () =>
+      backendSurface.automaticSubmissionPacing().rendererClass === 'accelerated',
+    isReady: backendSurface.automaticSubmissionReady,
+    onReady: () => {
+      if (!disposed && animationFrame !== null) {
+        submissionDemand.request();
+      }
+    },
+  });
+  const requestAutomaticSubmission = (): void => {
+    submissionDemand.request();
+    if (animationFrame !== null) {
+      automaticReadinessPoll.request();
+    }
+  };
 
   const renderFrame = (
     timeMs: number,
     source: RendererSurfaceTimingSource,
   ): RendererSurfaceSubmissionSample => {
     if (disposed) throw new Error('renderer surface is disposed');
+    automaticReadinessPoll.cancel();
     assertRendererSurfaceSourceTime(timeMs);
     const deltaSeconds = lastRenderTimeMs === null
       ? 0
@@ -367,6 +390,12 @@ function mountPreparedRendererSurface(
       backendSubmissionEndedMs,
     }), backendStatistics);
     submissionDemand.submitted(surfaceViewport(canvas));
+    if (animationFrame !== null) {
+      const continuous = continuousDemand();
+      if (continuous.controls || continuous.presentation || continuous.retainedAnimation) {
+        automaticReadinessPoll.request();
+      }
+    }
     return latestSubmission;
   };
   const renderOnce = (
@@ -376,15 +405,11 @@ function mountPreparedRendererSurface(
   };
 
   const tick = (timeMs: number): void => {
-    if (submissionDemand.consume(surfaceViewport(canvas), {
-      controls: controls.requiresAnimationFrame(),
-      presentation: presentationHosts?.requiresAnimationFrame() ?? false,
-      retainedAnimation: hasRetainedAnimation(latestSubmission),
-    })) {
+    if (submissionDemand.consume(surfaceViewport(canvas), continuousDemand())) {
       if (backendSurface.automaticSubmissionReady()) {
         renderFrame(timeMs, 'animationFrame');
       } else {
-        submissionDemand.request();
+        requestAutomaticSubmission();
       }
     }
     animationFrame = globalThis.requestAnimationFrame(tick);
@@ -392,11 +417,12 @@ function mountPreparedRendererSurface(
   const start = (): void => {
     if (disposed) throw new Error('renderer surface is disposed');
     if (animationFrame === null) {
-      submissionDemand.request();
       animationFrame = globalThis.requestAnimationFrame(tick);
+      requestAutomaticSubmission();
     }
   };
   const stop = (): void => {
+    automaticReadinessPoll.cancel();
     if (animationFrame !== null) {
       globalThis.cancelAnimationFrame(animationFrame);
       animationFrame = null;
@@ -410,7 +436,7 @@ function mountPreparedRendererSurface(
       projection.validateFrame(nextFrame);
       backendSurface.applyFrame(nextFrame);
       projection.applyFrame(nextFrame);
-      submissionDemand.request();
+      requestAutomaticSubmission();
       return { applied: true, diagnostics: [] };
     } catch (cause) {
       return {
@@ -441,7 +467,7 @@ function mountPreparedRendererSurface(
       const receipt = await (presentationHosts ?? new RendererPresentationHostSet({}))
         .apply(presentationFrame);
       if (receipt.applied > 0) {
-        submissionDemand.request();
+        requestAutomaticSubmission();
       }
       return receipt;
     },
@@ -473,12 +499,12 @@ function mountPreparedRendererSurface(
       controls.setCameraPose(pose, basis);
       backendSurface.setCameraPose(pose, basis);
       if (!sameCameraSnapshot(before, controls.cameraSnapshot())) {
-        submissionDemand.request();
+        requestAutomaticSubmission();
       }
     },
     setPresentationHosts: (hosts) => {
       presentationHosts = hosts;
-      submissionDemand.request();
+      requestAutomaticSubmission();
     },
     snapshot: backendSurface.snapshot,
     start,

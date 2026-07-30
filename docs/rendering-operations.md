@@ -233,12 +233,16 @@ adding an unbounded extra delay. The diagnostic reports the selected duty after 
 unachievable pre-cap target. This is not a fixed-rate timer: the
 accelerated fast path can still submit four-millisecond work at 120 Hz and eight-millisecond work
 at 60 Hz, while slow completion yields materially more CPU time. Timer-query and completion
-polling are non-blocking and occur only in the existing animation-frame owner. Unsupported,
-disjoint, malformed, or failed timer timing retains the completion-wall policy instead of silently
-disabling pacing. `surface.automaticSubmissionPacing()` returns one frozen renderer-owned
-diagnostic with the timer mode, current measurement state, renderer class and allowance, latest
-completed decision's timer duration, observed completion age, effective duration, selected duty,
-decision time, admission deadline, and actual automatic admission observation.
+polling is non-blocking. The single RAF remains the only render scheduler; during accelerated
+demand, renderer-host may run one bounded readiness-probe burst between display callbacks. Those
+probes advance fence and timer-query observation but never render or request another RAF, are
+cancelled on replacement, stop, reset, and disposal, and are not used for software or unknown
+renderers. Unsupported, disjoint, malformed, or failed timer timing retains the completion-wall
+policy instead of silently disabling pacing. `surface.automaticSubmissionPacing()` returns one
+frozen renderer-owned diagnostic with the timer mode, current measurement state, renderer class
+and allowance, latest completed decision's timer duration, observed completion age, effective
+duration, selected duty, decision time, admission deadline, and actual automatic admission
+observation.
 Reading it never polls, submits, or starts another loop. Explicit
 `renderOnce`, camera reset, resource statistics, picking, and disposal keep their established
 semantics.

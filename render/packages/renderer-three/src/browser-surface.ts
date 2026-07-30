@@ -354,6 +354,15 @@ export function mountRendererBrowserSurface(
     });
   };
 
+  const automaticSubmissionReady = (): boolean => {
+    // Poll both completion owners independently. A pending exact fence still
+    // blocks admission, but it must not prevent the timer query from becoming
+    // observable and computing the next duty deadline.
+    const fenceReady = gpuSubmissionFence.ready();
+    const dutyReady = gpuSubmissionDuty.ready();
+    return fenceReady && dutyReady;
+  };
+
   const projectWorldPoint = (
     position: readonly [number, number, number],
   ): RendererBrowserSurfaceWorldProjection => {
@@ -367,7 +376,7 @@ export function mountRendererBrowserSurface(
   };
 
   const tick = (timeMs: number): void => {
-    if (gpuSubmissionFence.ready() && gpuSubmissionDuty.ready()) {
+    if (automaticSubmissionReady()) {
       renderOnce(timeMs);
     }
     animationFrame = globalThis.requestAnimationFrame(tick);
@@ -411,8 +420,7 @@ export function mountRendererBrowserSurface(
     renderer,
     frame,
     automaticSubmissionPacing: () => gpuSubmissionDuty.sample(),
-    automaticSubmissionReady: () =>
-      gpuSubmissionFence.ready() && gpuSubmissionDuty.ready(),
+    automaticSubmissionReady,
     animatedMeshPlayback: (handle) => renderer.animatedMeshPlayback(handle),
     applyFrame: (nextFrame) => renderer.applyFrame(nextFrame),
     cameraPose: () => currentCameraPose,

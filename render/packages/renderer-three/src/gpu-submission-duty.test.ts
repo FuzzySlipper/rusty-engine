@@ -58,10 +58,13 @@ void test('accelerated measured work ignores delayed polling while the fence ret
   timerDriver.result = { durationMs: 4, status: 'complete' };
   timerDriver.nowMs = 80;
 
-  // The timer result is already available, but the exact completion fence
-  // remains the first automatic-submission admission owner.
-  assert.equal(fence.ready() && duty.ready(), false);
-  assert.equal(duty.sample().state, 'measuring');
+  // Both completion owners advance independently. The measured timer can
+  // establish its accelerated deadline, while the exact completion fence still
+  // prevents a second automatic submission.
+  const fenceReady = fence.ready();
+  const dutyReady = duty.ready();
+  assert.equal(fenceReady && dutyReady, false);
+  assert.equal(dutyReady, true);
 
   fenceDriver.status = 'signaled';
   assert.equal(fence.ready() && duty.ready(), true);
