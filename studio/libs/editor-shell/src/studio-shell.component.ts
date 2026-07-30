@@ -7,6 +7,7 @@ import {
   effect,
   inject,
   input,
+  output,
   signal,
   viewChild,
   type ElementRef,
@@ -23,6 +24,7 @@ import type { EditorGridDescriptor, Transform } from '@rusty-engine/render-contr
 import type { StudioKeyboardBindings } from '@rusty-engine/studio-user-settings';
 import {
   StudioViewportComponent,
+  type StudioViewportFrameSubmitted,
   type StudioTransformOrientation,
   type StudioTransformSnapping,
   type StudioTransformTool,
@@ -96,6 +98,7 @@ interface AnimatedMeshResourceDescriptor {
 export class StudioShellComponent {
   readonly store = inject(STUDIO_WORKSPACE);
   readonly state = this.store.snapshot;
+  readonly frameSubmitted = output<StudioViewportFrameSubmitted>();
   readonly entityInspectorContributions =
     input<readonly StudioEntityInspectorContribution[]>([]);
   readonly admittedEntityInspectorContributions = computed(() =>

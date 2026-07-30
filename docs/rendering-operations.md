@@ -234,6 +234,11 @@ automatic-loop sample from being attributed to newly accepted content. Selection
 changes retain the authored generation and publish `presentation`; the legacy generation-only
 `frameApplied` output remains limited to accepted authored-generation changes.
 
+`StudioShellComponent` forwards the child's `frameSubmitted` event unchanged through its own public
+output. Product composition roots therefore observe the generation-associated renderer sample
+without reaching through Angular internals, mounting another viewport, or creating a second
+telemetry path. The shell retains its existing internal `frameApplied` workspace acknowledgement.
+
 Rejected frames publish neither output nor a new submission. Resize, stop, and disposal do not
 rewrite the last immutable historical sample, while remounting creates a new inspection surface
 whose submission sequence begins independently. Studio receives no Three/WebGL handle and does not

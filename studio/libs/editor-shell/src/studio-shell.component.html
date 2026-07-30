@@ -224,6 +224,7 @@
             [meshResourceKey]="meshResourceKey()"
             (entityPicked)="store.selectEntity($event, 'renderer')"
             (frameApplied)="store.acknowledgeProjectionGeneration($event)"
+            (frameSubmitted)="frameSubmitted.emit($event)"
             (voxelPicked)="validateVoxelPick($event)"
             (rendererError)="store.reportUiError($event)"
             (transformDragStarted)="beginViewportTransformDrag()"

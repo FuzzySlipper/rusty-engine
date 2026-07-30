@@ -61,6 +61,9 @@ viewport, and its closed external-project adapter protocol.
   Studio generation with the renderer-owned timing/resource sample; it exposes
   neither the surface nor Three/WebGL state and does not create another
   telemetry loop.
+- `studio/libs/editor-shell` forwards that exact `frameSubmitted` event through
+  a public shell output while retaining the generation-only `frameApplied`
+  workspace acknowledgement.
 
 ## Private or forbidden paths
 

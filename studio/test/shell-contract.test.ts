@@ -9,6 +9,10 @@ const inspectorUrl = new URL(
   import.meta.url,
 );
 const appUrl = new URL('../apps/studio-app/src/app/app.ts', import.meta.url);
+const shellUrl = new URL(
+  '../libs/editor-shell/src/studio-shell.component.ts',
+  import.meta.url,
+);
 const viewportUrl = new URL('../libs/viewport/src/studio-viewport.component.ts', import.meta.url);
 const viewportSubmissionUrl = new URL(
   '../libs/viewport/src/viewport-submission.ts',
@@ -51,8 +55,12 @@ test('stock app explicitly composes the built-in Voxel Object inspector contribu
 });
 
 test('viewport composes the shared renderer host without private Three ownership', async () => {
+  const shell = await readFile(shellUrl, 'utf8');
+  const template = await readFile(templateUrl, 'utf8');
   const viewport = await readFile(viewportUrl, 'utf8');
   const submission = await readFile(viewportSubmissionUrl, 'utf8');
+  assert.match(shell, /frameSubmitted = output<StudioViewportFrameSubmitted>/);
+  assert.match(template, /\(frameSubmitted\)="frameSubmitted\.emit\(\$event\)"/);
   assert.match(viewport, /mountRendererInspectionSurface/);
   assert.match(viewport, /presentStudioSelection/);
   assert.match(viewport, /presentStudioLighting/);
