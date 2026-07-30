@@ -13,47 +13,25 @@ if [[ "$DEMO_ROOT" != /* ]]; then
   echo "rusty-engine-demo root must be absolute: $DEMO_ROOT" >&2
   exit 2
 fi
-if [[ ! -f "$DEMO_ROOT/Cargo.toml" || ! -f "$DEMO_ROOT/AGENTS.md" ]]; then
+if [[
+  ! -f "$DEMO_ROOT/Cargo.toml"
+  || ! -f "$DEMO_ROOT/AGENTS.md"
+  || ! -f "$DEMO_ROOT/engine-source.json"
+  || ! -x "$DEMO_ROOT/scripts/engine-revision"
+]]; then
   echo "not a rusty-engine-demo checkout: $DEMO_ROOT" >&2
   exit 1
 fi
 
-CONSUMER_PIN_OUTPUT="$(node --input-type=module - "$PIN_FILE" <<'NODE'
-import { readFileSync } from 'node:fs';
-
-const pin = JSON.parse(readFileSync(process.argv[2], 'utf8'));
-if (
-  pin.schemaVersion !== 1
-  || pin.repository !== 'FuzzySlipper/rusty-engine-demo'
-  || pin.publicRepository !== 'https://github.com/FuzzySlipper/rusty-engine-demo'
-) {
-  throw new Error('demo consumer pin has an unsupported repository identity');
-}
-if (typeof pin.commit !== 'string' || !/^[0-9a-f]{40}$/.test(pin.commit)) {
-  throw new Error('demo consumer pin must contain one exact 40-character commit');
-}
-if (typeof pin.engineCommit !== 'string' || !/^[0-9a-f]{40}$/.test(pin.engineCommit)) {
-  throw new Error('demo consumer pin must contain one exact Engine commit');
-}
-if (
-  pin.projectFile !== 'content/projects/loading-bay.project.json'
-  || pin.voxelProjectFile !== 'content/projects/converted-wall.project.json'
-  || pin.cargoPackage !== 'loading-bay-game'
-  || pin.adapterBinary !== 'studio-adapter'
-  || pin.studioApplication !== 'apps/loading-bay-studio'
-  || pin.entityInspectorConsumer?.componentTypeId !== 'rusty-engine-demo.loading-bay.weapon'
-  || pin.entityInspectorConsumer?.contractId !== 'rusty-engine-demo.loading-bay.weapon-authoring'
-  || pin.entityInspectorConsumer?.contractVersion !== 1
-) {
-  throw new Error('demo consumer pin has an unsupported Entity inspector target');
-}
-process.stdout.write(`${pin.repository}\n${pin.commit}\n${pin.engineCommit}\n`);
-NODE
-)"
-mapfile -t CONSUMER_PIN <<< "$CONSUMER_PIN_OUTPUT"
-EXPECTED_REPOSITORY="${CONSUMER_PIN[0]:-}"
-EXPECTED_COMMIT="${CONSUMER_PIN[1]:-}"
-EXPECTED_ENGINE_COMMIT="${CONSUMER_PIN[2]:-}"
+REVISION_OUTPUT="$(node "$REPO_ROOT/studio/scripts/check-demo-consumer-revision.mjs" \
+  "$PIN_FILE" \
+  "$DEMO_ROOT/engine-source.json" \
+  --shell-values)"
+mapfile -t REVISION_VALUES <<< "$REVISION_OUTPUT"
+EXPECTED_REPOSITORY="${REVISION_VALUES[0]:-}"
+EXPECTED_COMMIT="${REVISION_VALUES[1]:-}"
+EXPECTED_ENGINE_COMMIT="${REVISION_VALUES[2]:-}"
+REVISION_EVIDENCE="${REVISION_VALUES[3]:-}"
 DEMO_ROOT="$(realpath "$DEMO_ROOT")"
 DEMO_TOP="$(git -C "$DEMO_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
 if [[ "$DEMO_TOP" != "$DEMO_ROOT" ]]; then
@@ -72,29 +50,14 @@ if [[ -n "$DEMO_STATUS" ]]; then
   exit 1
 fi
 
-node --input-type=module - "$DEMO_ROOT/package.json" "$EXPECTED_ENGINE_COMMIT" <<'NODE'
-import { readFileSync } from 'node:fs';
-
-const manifest = JSON.parse(readFileSync(process.argv[2], 'utf8'));
-const engineCommit = process.argv[3];
-const packages = new Map([
-  ['@rusty-engine/render-contracts', 'render/packages/render-contracts'],
-  ['@rusty-engine/render-projection', 'render/packages/render-projection'],
-  ['@rusty-engine/renderer-host', 'render/packages/renderer-host'],
-  ['@rusty-engine/renderer-three', 'render/packages/renderer-three'],
-  ['@rusty-engine/studio-adapter-client', 'studio/libs/adapter-client'],
-  ['@rusty-engine/studio-editor-shell', 'studio/libs/editor-shell'],
-  ['@rusty-engine/studio-user-settings', 'studio/libs/user-settings'],
-  ['@rusty-engine/studio-viewport', 'studio/libs/viewport'],
-  ['@rusty-engine/studio-voxel-editor', 'studio/libs/voxel-editor'],
-]);
-for (const [name, path] of packages) {
-  const expected = `github:FuzzySlipper/rusty-engine#${engineCommit}&path:${path}`;
-  if (manifest.dependencies?.[name] !== expected) {
-    throw new Error(`${name} must use the reviewed exact Engine revision ${expected}`);
-  }
-}
-NODE
+echo "$REVISION_EVIDENCE"
+(cd "$DEMO_ROOT" && ./scripts/engine-revision check)
+DEMO_STATUS="$(git -C "$DEMO_ROOT" status --porcelain=v1 --untracked-files=all)"
+if [[ -n "$DEMO_STATUS" ]]; then
+  echo "the consumer Engine revision check changed the reviewed checkout:" >&2
+  echo "$DEMO_STATUS" >&2
+  exit 1
+fi
 
 cd "$REPO_ROOT"
 pnpm --dir studio run check:boundaries
@@ -115,3 +78,17 @@ if [[ -n "$DEMO_STATUS" ]]; then
   echo "$DEMO_STATUS" >&2
   exit 1
 fi
+
+node --input-type=module - \
+  "$EXPECTED_REPOSITORY" \
+  "$EXPECTED_COMMIT" \
+  "$EXPECTED_ENGINE_COMMIT" <<'NODE'
+const [consumerRepository, consumerCommit, engineCommit] = process.argv.slice(2);
+console.log(JSON.stringify({
+  kind: 'studioDemoIntegrationCertified',
+  consumerRepository,
+  consumerCommit,
+  engineRepository: 'FuzzySlipper/rusty-engine',
+  engineCommit,
+}));
+NODE

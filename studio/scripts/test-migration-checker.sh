@@ -39,6 +39,15 @@ fi
 grep -q 'demo commit must be an exact Git revision' "$TASK_TMP/output"
 
 sed -E 's/"engineCommit": "[0-9a-f]{40}"/"engineCommit": "main"/' \
+  "$STUDIO_ROOT/demo-consumer-source.json" > "$TASK_TMP/floating-demo-engine-source.json"
+if STUDIO_DEMO_SOURCE="$TASK_TMP/floating-demo-engine-source.json" \
+  node "$STUDIO_ROOT/scripts/check-migration-plan.mjs" > "$TASK_TMP/output" 2>&1; then
+  echo "Studio migration checker accepted a floating demo Engine revision" >&2
+  exit 1
+fi
+grep -q 'demo engineCommit must be an exact Git revision' "$TASK_TMP/output"
+
+sed -E 's/"engineCommit": "[0-9a-f]{40}"/"engineCommit": "main"/' \
   "$STUDIO_ROOT/voxel-consumer-source.json" > "$TASK_TMP/floating-voxel-source.json"
 if STUDIO_VOXEL_SOURCE="$TASK_TMP/floating-voxel-source.json" \
   node "$STUDIO_ROOT/scripts/check-migration-plan.mjs" > "$TASK_TMP/output" 2>&1; then
@@ -56,6 +65,16 @@ if STUDIO_INTEGRATION_WORKFLOW="$TASK_TMP/floating-workflow.yml" \
   exit 1
 fi
 grep -q 'Studio integration workflow does not use the declared demo pin' "$TASK_TMP/output"
+
+sed 's#./scripts/engine-revision check#./scripts/engine-revision update#' \
+  "$STUDIO_ROOT/../scripts/verify-studio-demo-integration.sh" \
+  > "$TASK_TMP/integration-without-consumer-check.sh"
+if STUDIO_DEMO_INTEGRATION_SCRIPT="$TASK_TMP/integration-without-consumer-check.sh" \
+  node "$STUDIO_ROOT/scripts/check-migration-plan.mjs" > "$TASK_TMP/output" 2>&1; then
+  echo "Studio migration checker accepted integration without the consumer revision check" >&2
+  exit 1
+fi
+grep -q 'Studio demo integration omits consumer revision proof' "$TASK_TMP/output"
 
 sed "s#readFileSync('studio/voxel-consumer-source.json'#readFileSync('studio/floating-voxel-source.json'#" \
   "$STUDIO_ROOT/../.github/workflows/studio-voxel-integration.yml" \

@@ -18,6 +18,8 @@ on:
       - 'studio/entity-inspector-consumer.playwright.config.ts'
       - 'studio/boundary-policy.json'
       - 'studio/scripts/check-entity-inspector-boundary.mjs'
+      - 'studio/scripts/check-demo-consumer-revision.mjs'
+      - 'studio/scripts/check-demo-consumer-revision.test.mjs'
       - 'studio/scripts/studio-host.ts'
       - 'studio/scripts/studio-user-settings-service.ts'
       - 'studio/test/integration/**'
@@ -49,6 +51,8 @@ on:
       - 'studio/entity-inspector-consumer.playwright.config.ts'
       - 'studio/boundary-policy.json'
       - 'studio/scripts/check-entity-inspector-boundary.mjs'
+      - 'studio/scripts/check-demo-consumer-revision.mjs'
+      - 'studio/scripts/check-demo-consumer-revision.test.mjs'
       - 'studio/scripts/studio-host.ts'
       - 'studio/scripts/studio-user-settings-service.ts'
       - 'studio/test/integration/**'
@@ -84,16 +88,20 @@ jobs:
           const pin = JSON.parse(readFileSync('studio/demo-consumer-source.json', 'utf8'));
           if (
             pin.schemaVersion !== 1
-            || typeof pin.repository !== 'string'
-            || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(pin.repository)
+            || pin.repository !== 'FuzzySlipper/rusty-engine-demo'
+            || pin.publicRepository !== 'https://github.com/FuzzySlipper/rusty-engine-demo'
           ) {
-            throw new Error('studio/demo-consumer-source.json has an unsupported shape');
+            throw new Error('studio/demo-consumer-source.json has an unsupported repository identity');
           }
           if (typeof pin.commit !== 'string' || !/^[0-9a-f]{40}$/.test(pin.commit)) {
             throw new Error('studio/demo-consumer-source.json must name one exact public commit');
           }
+          if (typeof pin.engineCommit !== 'string' || !/^[0-9a-f]{40}$/.test(pin.engineCommit)) {
+            throw new Error('studio/demo-consumer-source.json must name one exact Engine commit');
+          }
           console.log(`repository=${pin.repository}`);
           console.log(`revision=${pin.commit}`);
+          console.log(`engine_revision=${pin.engineCommit}`);
           NODE
 
       - name: Check out exact Rusty Engine Demo consumer
@@ -128,3 +136,14 @@ jobs:
 
       - name: Verify exact downstream adapter integration
         run: ./scripts/verify-studio-demo-integration.sh "$GITHUB_WORKSPACE/rusty-engine-demo"
+
+      - name: Summarize certified consumer and provider revisions
+        if: ${{ success() }}
+        run: |
+          {
+            echo '### Studio demo reverse certification'
+            echo
+            echo "- Consumer: [${{ steps.demo-consumer.outputs.revision }}](https://github.com/${{ steps.demo-consumer.outputs.repository }}/commit/${{ steps.demo-consumer.outputs.revision }})"
+            echo "- Provider: [${{ steps.demo-consumer.outputs.engine_revision }}](https://github.com/FuzzySlipper/rusty-engine/commit/${{ steps.demo-consumer.outputs.engine_revision }})"
+            echo '- Proof: consumer revision check, locked build, adapter integration, and real Chromium workflows passed.'
+          } >> "$GITHUB_STEP_SUMMARY"

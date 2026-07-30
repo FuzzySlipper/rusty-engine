@@ -29,6 +29,7 @@ viewport, and its closed external-project adapter protocol.
 - [`studio/libs/user-settings`](../../studio/libs/user-settings)
 - [`studio/libs/editor-shell/src/entity-inspector.ts`](../../studio/libs/editor-shell/src/entity-inspector.ts)
 - [`studio/scripts/check-entity-inspector-boundary.mjs`](../../studio/scripts/check-entity-inspector-boundary.mjs)
+- [`studio/scripts/check-demo-consumer-revision.mjs`](../../studio/scripts/check-demo-consumer-revision.mjs)
 - [`studio/test/entity-inspector-consumer-browser`](../../studio/test/entity-inspector-consumer-browser)
 - [Studio migration contract](../studio-migration-contract.md)
 - [Studio adapter protocol](../studio-adapter-protocol.md)
@@ -74,11 +75,14 @@ viewport, and its closed external-project adapter protocol.
 
 The first command proves isolated Studio behavior. The package-consumer command proves the public
 static-composition packages install from one exact Git revision without workspace or sibling paths.
-The demo command admits only `studio/demo-consumer-source.json`, then invokes the focused
-two-consumer proof in `scripts/verify-studio-entity-inspector-integration.sh`. That proof serves the
-downstream-built application in Chromium, covers Voxel Object, unknown read-only fallback, a real
-Weapon replacement and canonical reread, then repeats the read in a fresh adapter process. The final
-command proves the pinned animated-voxel runtime/quality workflow.
+The demo command admits only `studio/demo-consumer-source.json`, proves that the selected public
+consumer's `engine-source.json` agrees with the reverse pin, and runs the consumer-owned revision
+checker before any build. That checker owns the Cargo, renderer-package, Studio-package, build-policy,
+and lock agreement. The gate then invokes the focused two-consumer proof in
+`scripts/verify-studio-entity-inspector-integration.sh`. That proof serves the downstream-built
+application in Chromium, covers Voxel Object, unknown read-only fallback, a real Weapon replacement
+and canonical reread, then repeats the read in a fresh adapter process. The final command proves the
+pinned animated-voxel runtime/quality workflow.
 
 ## Common agent mistakes
 

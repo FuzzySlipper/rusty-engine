@@ -231,8 +231,12 @@ not the Angular shell, implements the resulting camera movement, boost, pan, orb
   semantic rejection, optimistic replacement, atomicity, and canonical reread.
 - `./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo` is the explicit
   cross-repository proof. It admits the exact demo and Engine revisions declared by
-  `studio/demo-consumer-source.json`, builds the project-owned adapter, opens Loading Bay, then mutates a
-  temporary Converted Wall copy through brush/primitive/history-preview/template/host-file/
+  `studio/demo-consumer-source.json`, requires the selected consumer's `engine-source.json` to agree,
+  and runs that consumer's read-only `engine-revision check` before building anything. The consumer
+  checker proves its Cargo resolution, renderer and Studio packages, pnpm build policy, and generated
+  locks all use that one Engine commit. The integration then builds the project-owned adapter, opens
+  Loading Bay, and mutates a temporary Converted Wall copy through
+  brush/primitive/history-preview/template/host-file/
   annotation/model-query/conversion/environment operations.
   It closes and starts a fresh adapter process to verify reconstruction and byte-preserving stale
   rejection. Real Chromium workflows then cover canonical hierarchy selection, observable
@@ -249,7 +253,8 @@ not the Angular shell, implements the resulting camera movement, boost, pan, orb
   focused sub-proof but is invoked only after the parent gate has admitted the exact clean consumer.
 - `.github/workflows/studio-demo-integration.yml` checks out the public demo at the exact revision
   declared by `studio/demo-consumer-source.json` and runs that proof as an explicit integration
-  gate. The pin makes downstream drift a conscious update instead of an ambient sibling checkout.
+  gate. Its summary links both the certified consumer commit and the provider commit read from the
+  reverse pin. The pin makes downstream drift a conscious update instead of an ambient sibling checkout.
 - `./scripts/verify-studio-voxel-integration.sh /absolute/path/to/rusty-engine-voxels` separately
   accepts only the exact public revision declared by `studio/voxel-consumer-source.json`. It checks
   the consumer's exact Engine pin and runtime/quality reports, then drives saved-pose, named-clip,

@@ -56,6 +56,9 @@ if (demoSource.publicRepository !== 'https://github.com/FuzzySlipper/rusty-engin
 if (!/^[0-9a-f]{40}$/.test(demoSource.commit)) {
   throw new Error('Studio integration demo commit must be an exact Git revision');
 }
+if (!/^[0-9a-f]{40}$/.test(demoSource.engineCommit)) {
+  throw new Error('Studio integration demo engineCommit must be an exact Git revision');
+}
 if (demoSource.projectFile !== 'content/projects/loading-bay.project.json') {
   throw new Error('Studio integration project changed without an explicit product decision');
 }
@@ -186,11 +189,26 @@ const workflowPinMarkers = [
   "readFileSync('studio/demo-consumer-source.json'",
   'repository: ${{ steps.demo-consumer.outputs.repository }}',
   'ref: ${{ steps.demo-consumer.outputs.revision }}',
+  'engine_revision=${pin.engineCommit}',
   './scripts/verify-studio-demo-integration.sh',
+  'GITHUB_STEP_SUMMARY',
 ];
 for (const marker of workflowPinMarkers) {
   if (!integrationWorkflow.includes(marker)) {
     throw new Error(`Studio integration workflow does not use the declared demo pin: ${marker}`);
+  }
+}
+
+const demoIntegrationScript = readText(
+  process.env.STUDIO_DEMO_INTEGRATION_SCRIPT
+    ?? '../scripts/verify-studio-demo-integration.sh',
+);
+for (const marker of [
+  'check-demo-consumer-revision.mjs',
+  './scripts/engine-revision check',
+]) {
+  if (!demoIntegrationScript.includes(marker)) {
+    throw new Error(`Studio demo integration omits consumer revision proof: ${marker}`);
   }
 }
 

@@ -120,8 +120,11 @@ runs visible Chromium workflows for Loading Bay and Converted Wall through the s
 including project/scene/entity/asset/settings persistence, renderer-observable brush/conversion
 previews, and canonical restoration. CI
 checks out the exact public demo revision declared in
-[`demo-consumer-source.json`](demo-consumer-source.json). Local integration remains explicit so the
-ordinary Engine and isolated Studio gates never acquire a sibling-checkout dependency.
+[`demo-consumer-source.json`](demo-consumer-source.json). Before compilation, the gate checks that
+the selected consumer's own `engine-source.json` agrees with the Engine reverse pin and invokes the
+consumer-owned revision checker across Cargo, renderer, Studio, and lock carriers. Local integration
+remains explicit so the ordinary Engine and isolated Studio gates never acquire a sibling-checkout
+dependency.
 
 Animated voxel-object runtime and quality proof uses a separate public consumer and pin:
 
