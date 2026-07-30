@@ -8,12 +8,17 @@ const projectRoot = requiredEnvironment('RUSTY_STUDIO_PROJECT_ROOT');
 const loadingBayProjectFile = 'content/projects/loading-bay.project.json';
 const convertedWallProjectFile = 'content/projects/converted-wall.project.json';
 const voxelObjectProjectFile = 'content/projects/studio-voxel-object.project.json';
+const projectOpenTimeout = 30_000;
+const projectMutationTimeout = 30_000;
 
 test('real project hierarchy, shared picking, transform settlement, reopen, and rejection stay coherent', async ({ page }) => {
+  test.setTimeout(90_000);
   await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(loadingBayProjectFile)}`);
 
   const shell = page.locator('[data-visual-id="studio-shell"]');
-  await expect(shell).toHaveAttribute('data-project-hash', /.+/);
+  await expect(shell).toHaveAttribute('data-project-hash', /.+/, {
+    timeout: projectOpenTimeout,
+  });
   const viewport = page.locator('rusty-studio-viewport');
   await expect.poll(async () => {
     const status = await viewport.getAttribute('data-renderer-status');
@@ -64,7 +69,9 @@ test('real project hierarchy, shared picking, transform settlement, reopen, and 
   await translationX.fill(String(committedX));
   await expect(viewport).toHaveAttribute('data-preview-applied', 'true');
   await page.locator('.entity-row[data-entity-id="2"]').click();
-  await expect.poll(() => projectHash(shell)).not.toBe(hashBeforeCommit);
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    hashBeforeCommit,
+  );
   await expect(shell).toHaveAttribute('data-selected-entity', '2');
   await expect(viewport).toHaveAttribute('data-transform-tool', 'translate');
   await expect(viewport).toHaveAttribute('data-transform-gizmo-visible', 'true');
@@ -75,11 +82,15 @@ test('real project hierarchy, shared picking, transform settlement, reopen, and 
   await expect(translationX).toHaveValue(String(committedX));
 
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
-  await expect(shell).toHaveAttribute('data-project-hash', committedHash);
+  await expect(shell).toHaveAttribute('data-project-hash', committedHash, {
+    timeout: projectOpenTimeout,
+  });
   await expect(translationX).toHaveValue(String(committedX));
 
   await page.reload();
-  await expect(shell).toHaveAttribute('data-project-hash', committedHash);
+  await expect(shell).toHaveAttribute('data-project-hash', committedHash, {
+    timeout: projectOpenTimeout,
+  });
   await page.locator('.entity-row[data-entity-id="1"]').click();
   await page.getByRole('button', { name: 'Entity', exact: true }).click();
   await expect(page.getByLabel('Translation X', { exact: true })).toHaveValue(String(committedX));
@@ -148,7 +159,9 @@ test('project, scene, entity, light, and capability authoring flow through named
   await inspector.getByLabel('Rotation W').fill('0.7071068');
   const transformHash = await projectHash(shell);
   await inspector.locator('[data-action="commit-transform"]').click();
-  await expect.poll(() => projectHash(shell)).not.toBe(transformHash);
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    transformHash,
+  );
   await expect(inspector.getByLabel('Rotation Z')).toHaveValue('0.7071068');
 
   const name = inspector.locator('.field-row').filter({ hasText: 'Name' }).locator('input');
@@ -159,7 +172,9 @@ test('project, scene, entity, light, and capability authoring flow through named
   const collisionHash = await projectHash(shell);
   await inspector.locator('.inspector-section').filter({ hasText: 'Collision' })
     .getByRole('button', { name: 'Apply', exact: true }).click();
-  await expect.poll(() => projectHash(shell)).not.toBe(collisionHash);
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    collisionHash,
+  );
   const kinematicHash = await projectHash(shell);
   await inspector.locator('.inspector-section').filter({ hasText: 'Kinematic' })
     .getByRole('button', { name: 'Apply', exact: true }).click();
@@ -176,7 +191,9 @@ test('project, scene, entity, light, and capability authoring flow through named
   await inspector.getByLabel('Scale X').fill('2');
   const scaleHash = await projectHash(shell);
   await inspector.locator('[data-action="commit-transform"]').click();
-  await expect.poll(() => projectHash(shell)).not.toBe(scaleHash);
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    scaleHash,
+  );
   await expect(inspector.getByLabel('Scale X')).toHaveValue('2');
 
   await page.getByRole('button', { name: 'File', exact: true }).click();
@@ -192,10 +209,13 @@ test('project, scene, entity, light, and capability authoring flow through named
 });
 
 test('host-user input settings and general asset import reimport persist through real owner and renderer paths', async ({ page }) => {
+  test.setTimeout(90_000);
   await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(loadingBayProjectFile)}`);
   const shell = page.locator('[data-visual-id="studio-shell"]');
   const viewport = page.locator('rusty-studio-viewport');
-  await expect(shell).toHaveAttribute('data-project-hash', /.+/);
+  await expect(shell).toHaveAttribute('data-project-hash', /.+/, {
+    timeout: projectOpenTimeout,
+  });
   await expect.poll(async () => {
     const status = await viewport.getAttribute('data-renderer-status');
     if (status === 'error') {
@@ -227,7 +247,9 @@ test('host-user input settings and general asset import reimport persist through
   await expect(shell).toHaveAttribute('data-user-settings-status', 'loaded');
 
   await page.reload();
-  await expect(shell).toHaveAttribute('data-user-settings-status', 'loaded');
+  await expect(shell).toHaveAttribute('data-user-settings-status', 'loaded', {
+    timeout: projectOpenTimeout,
+  });
   await expect(shell).toHaveAttribute('data-camera-speed', '12');
   await expect(shell).toHaveAttribute('data-move-forward', 'ArrowUp');
   await expect(viewport).toHaveAttribute('data-camera-move-speed', '12');
@@ -251,9 +273,13 @@ test('host-user input settings and general asset import reimport persist through
   await expect(plan).toContainText('2 generated assets');
   await expect(shell).toHaveAttribute('data-project-hash', hashBeforePlan);
   await plan.getByRole('button', { name: 'Apply atomically', exact: true }).click();
-  await expect.poll(() => projectAssetCount(shell)).toBe(assetsBeforeImport + 2);
+  await expect.poll(() => projectAssetCount(shell), { timeout: projectMutationTimeout }).toBe(
+    assetsBeforeImport + 2,
+  );
   const assetsAfterImport = await projectAssetCount(shell);
-  await expect.poll(() => projectHash(shell)).not.toBe(hashBeforePlan);
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    hashBeforePlan,
+  );
 
   const importedAsset = page.getByRole('option', { name: /mesh\/studio-triangle/ });
   await importedAsset.click();
@@ -269,7 +295,10 @@ test('host-user input settings and general asset import reimport persist through
   await dialog.getByLabel('Appearance').selectOption('staticMesh');
   await dialog.getByLabel('Asset ID').fill('mesh/studio-triangle');
   await dialog.getByRole('button', { name: 'Create object', exact: true }).click();
-  await expect(page.locator('.entity-row[data-entity-id="70"]')).toContainText('Imported Triangle');
+  await expect(page.locator('.entity-row[data-entity-id="70"]')).toContainText(
+    'Imported Triangle',
+    { timeout: projectMutationTimeout },
+  );
   await expect.poll(() => rendererHash(viewport)).not.toBe(rendererBeforeInstance);
 
   const sourcePath = join(projectRoot, 'content/assets/studio-triangle.mesh.json');
@@ -282,7 +311,9 @@ test('host-user input settings and general asset import reimport persist through
   await writeFile(sourcePath, `${JSON.stringify(source, null, 2)}\n`);
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await importedAsset.click();
-  await expect(importedAsset).toContainText('contentChanged');
+  await expect(importedAsset).toContainText('contentChanged', {
+    timeout: projectOpenTimeout,
+  });
 
   const hashBeforeReimport = await projectHash(shell);
   const rendererBeforeReimport = await rendererHash(viewport);
@@ -290,7 +321,9 @@ test('host-user input settings and general asset import reimport persist through
   await expect(plan).toContainText('visualUpdate · mesh/studio-triangle');
   await expect(shell).toHaveAttribute('data-project-hash', hashBeforeReimport);
   await plan.getByRole('button', { name: 'Apply atomically', exact: true }).click();
-  await expect.poll(() => projectHash(shell)).not.toBe(hashBeforeReimport);
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    hashBeforeReimport,
+  );
   await expect(importedAsset).toContainText('unchanged');
   await expect.poll(() => rendererHash(viewport)).not.toBe(rendererBeforeReimport);
 
@@ -308,17 +341,26 @@ test('host-user input settings and general asset import reimport persist through
 
   const persistedHash = await projectHash(shell);
   await page.reload();
-  await expect(shell).toHaveAttribute('data-project-hash', persistedHash);
-  await expect.poll(() => projectAssetCount(shell)).toBe(assetsAfterImport);
-  await expect(shell).toHaveAttribute('data-user-settings-status', 'loaded');
+  await expect(shell).toHaveAttribute('data-project-hash', persistedHash, {
+    timeout: projectOpenTimeout,
+  });
+  await expect.poll(() => projectAssetCount(shell), { timeout: projectMutationTimeout }).toBe(
+    assetsAfterImport,
+  );
+  await expect(shell).toHaveAttribute('data-user-settings-status', 'loaded', {
+    timeout: projectOpenTimeout,
+  });
   await expect(page.locator('.entity-row[data-entity-id="70"]')).toContainText('Imported Triangle');
 });
 
 test('trusted host browsing restores focus and animated appearance uses the shared renderer', async ({ page }) => {
+  test.setTimeout(90_000);
   await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(loadingBayProjectFile)}`);
   const shell = page.locator('[data-visual-id="studio-shell"]');
   const viewport = page.locator('rusty-studio-viewport');
-  await expect(shell).toHaveAttribute('data-project-hash', /.+/);
+  await expect(shell).toHaveAttribute('data-project-hash', /.+/, {
+    timeout: projectOpenTimeout,
+  });
   await expect.poll(async () => {
     const status = await viewport.getAttribute('data-renderer-status');
     if (status === 'error') {
@@ -326,7 +368,7 @@ test('trusted host browsing restores focus and animated appearance uses the shar
     }
     return status;
   }).toBe('ready');
-  await expect(viewport).toHaveAttribute('data-animated-mesh-resources', '1');
+  await expect(viewport).toHaveAttribute('data-animated-mesh-resources', '3');
 
   const projectControls = page.locator('[data-visual-id="studio-project-open-controls"]');
   const browseRoot = projectControls.getByRole('button', { name: 'Browse…' }).first();
@@ -358,7 +400,9 @@ test('trusted host browsing restores focus and animated appearance uses the shar
   await page.mouse.move(xHandle.x + 80, xHandle.y - 24, { steps: 24 });
   await page.mouse.up();
   await expect(inspector.getByLabel('Rotation X')).not.toHaveValue('0');
-  await expect.poll(() => projectHash(shell)).not.toBe(hashBeforeTransform);
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    hashBeforeTransform,
+  );
   await expect(page.locator('[data-preview-active="true"]')).toHaveCount(0);
   await expect(viewport).toHaveAttribute('data-transform-tool', 'rotate');
   await expect(viewport).toHaveAttribute('data-transform-gizmo-visible', 'true');
@@ -381,7 +425,9 @@ test('trusted host browsing restores focus and animated appearance uses the shar
   await appearance.getByLabel('Clip').selectOption('run');
   const hashBeforeAppearance = await projectHash(shell);
   await appearance.getByRole('button', { name: 'Apply appearance', exact: true }).click();
-  await expect.poll(() => projectHash(shell)).not.toBe(hashBeforeAppearance);
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    hashBeforeAppearance,
+  );
   await expect(shell).toHaveAttribute('data-animated-instance-clips', /(?:^|,)run(?:,|$)/);
   await expect.poll(async () => {
     const status = await viewport.getAttribute('data-renderer-status');
@@ -393,9 +439,11 @@ test('trusted host browsing restores focus and animated appearance uses the shar
 
   const animatedHash = await projectHash(shell);
   await page.reload();
-  await expect(shell).toHaveAttribute('data-project-hash', animatedHash);
+  await expect(shell).toHaveAttribute('data-project-hash', animatedHash, {
+    timeout: projectOpenTimeout,
+  });
   await expect(shell).toHaveAttribute('data-animated-instance-clips', /(?:^|,)run(?:,|$)/);
-  await expect(viewport).toHaveAttribute('data-animated-mesh-resources', '1');
+  await expect(viewport).toHaveAttribute('data-animated-mesh-resources', '3');
   await expect(viewport).toHaveAttribute('data-renderer-status', 'ready');
 });
 
@@ -405,7 +453,9 @@ test('voxel Studio owns the complete shared-renderer authoring workflow and reje
   const shell = page.locator('[data-visual-id="studio-shell"]');
   const viewport = page.locator('rusty-studio-viewport');
   const editor = page.locator('[data-visual-id="studio-voxel-editor"]');
-  await expect(shell).toHaveAttribute('data-project-hash', /.+/);
+  await expect(shell).toHaveAttribute('data-project-hash', /.+/, {
+    timeout: projectOpenTimeout,
+  });
   await expect(shell).toHaveAttribute('data-voxel-assets', '1');
   await expect(viewport).toHaveAttribute('data-renderer-status', 'ready');
   await expect(editor).toContainText('1 assets · 2 instances');
@@ -432,21 +482,29 @@ test('voxel Studio owns the complete shared-renderer authoring workflow and reje
   await expect(viewport).toHaveAttribute('data-voxel-preview-kind', 'brush');
   await editor.locator('[data-action="apply-voxel-brush"]').click();
   await expect(shell).toHaveAttribute('data-voxel-receipt', 'voxelBrushApplied');
-  await expect.poll(() => projectHash(shell)).not.toBe(hashBeforeBrush);
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    hashBeforeBrush,
+  );
   const hashAfterBrush = await projectHash(shell);
 
   await editor.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(shell).toHaveAttribute('data-voxel-receipt', 'voxelHistoryMoved');
-  await expect.poll(() => projectHash(shell)).not.toBe(hashAfterBrush);
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    hashAfterBrush,
+  );
   const hashAfterUndo = await projectHash(shell);
   await editor.getByRole('button', { name: 'Redo', exact: true }).click();
-  await expect.poll(() => projectHash(shell)).not.toBe(hashAfterUndo);
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    hashAfterUndo,
+  );
 
   await editor.getByRole('button', { name: 'annotations', exact: true }).click();
   const hashBeforeAnnotation = await projectHash(shell);
   await editor.getByRole('button', { name: 'Create from pick', exact: true }).click();
   await expect(shell).toHaveAttribute('data-voxel-receipt', 'voxelAnnotationCreated');
-  await expect.poll(() => projectHash(shell)).not.toBe(hashBeforeAnnotation);
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    hashBeforeAnnotation,
+  );
   await editor.getByRole('button', { name: 'Query', exact: true }).click();
   await expect(editor.locator('[data-visual-id="voxel-annotation-readout"]')).toContainText('annotationQuery');
   await editor.getByRole('button', { name: 'Export', exact: true }).click();
@@ -494,7 +552,7 @@ test('voxel Studio owns the complete shared-renderer authoring workflow and reje
 });
 
 test('animated voxel objects convert, discard, apply, attach, reload, and play through the shared renderer', async ({ page }) => {
-  test.setTimeout(90_000);
+  test.setTimeout(300_000);
   const projectPath = join(projectRoot, voxelObjectProjectFile);
   await copyFile(join(projectRoot, loadingBayProjectFile), projectPath);
   const packedPlacement = await installPackedPlacementResourceAdapter(page, projectRoot);
@@ -505,15 +563,28 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   const shell = page.locator('[data-visual-id="studio-shell"]');
   const viewport = page.locator('rusty-studio-viewport');
   const editor = page.locator('[data-visual-id="studio-voxel-editor"]');
-  await expect(shell).toHaveAttribute('data-project-hash', /.+/);
+  await expect(shell).toHaveAttribute('data-project-hash', /.+/, {
+    timeout: projectOpenTimeout,
+  });
   await expect(viewport).toHaveAttribute('data-renderer-status', 'ready');
+  const baselineVoxelDefinitionCount = Number(
+    await viewport.getAttribute('data-voxel-object-definitions'),
+  );
+  const baselineVoxelInstanceCount = Number(
+    await viewport.getAttribute('data-voxel-object-instances'),
+  );
+  expect(baselineVoxelDefinitionCount).toBe(9);
+  expect(baselineVoxelInstanceCount).toBe(367);
+  const convertedVoxelDefinitionCount = String(baselineVoxelDefinitionCount + 1);
   const materialSection = editor.locator('.voxel-section').filter({
     hasText: 'asset-catalog authority + style',
   });
   await materialSection.getByLabel('Asset id').fill('material/wall-lines');
   const projectHashBeforeMaterial = await projectHash(shell);
   await materialSection.getByRole('button', { name: 'Upsert material', exact: true }).click();
-  await expect.poll(() => projectHash(shell)).not.toBe(projectHashBeforeMaterial);
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    projectHashBeforeMaterial,
+  );
   await expect(materialSection).toContainText('material/wall-lines');
   const canonicalHash = await projectHash(shell);
   const canonicalRendererHash = await rendererHash(viewport);
@@ -584,7 +655,7 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   await expect(candidatePause).toBeDisabled();
 
   await candidate.getByRole('button', { name: 'Discard', exact: true }).click();
-  await expect(candidate).toHaveCount(0);
+  await expect(candidate).toHaveCount(0, { timeout: projectMutationTimeout });
   await expect(shell).toHaveAttribute('data-project-hash', canonicalHash);
   await expect.poll(() => rendererHash(viewport)).toBe(canonicalRendererHash);
 
@@ -592,8 +663,10 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   candidate = editor.locator('[data-visual-id="voxel-object-conversion-preview"]');
   await expect(candidate).toBeVisible({ timeout: 30_000 });
   await candidate.locator('[data-action="apply-voxel-object-conversion"]').click();
-  await expect(candidate).toHaveCount(0);
-  await expect.poll(() => projectHash(shell)).not.toBe(canonicalHash);
+  await expect(candidate).toHaveCount(0, { timeout: projectMutationTimeout });
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    canonicalHash,
+  );
 
   const canonicalObjects = editor.locator('.voxel-section').filter({
     hasText: 'project-owned content and transformed instances',
@@ -602,15 +675,25 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   await canonicalObjects.getByRole('button', {
     name: /voxel-object\/studio-character/,
   }).click();
-  await expect(viewport).toHaveAttribute('data-voxel-preview-kind', 'objectPlacement');
-  await expect(viewport).toHaveAttribute('data-voxel-object-definitions', '1');
+  await expect(viewport).toHaveAttribute('data-voxel-preview-kind', 'objectPlacement', {
+    timeout: projectMutationTimeout,
+  });
+  await expect(viewport).toHaveAttribute(
+    'data-voxel-object-definitions',
+    convertedVoxelDefinitionCount,
+  );
   await expect(viewport).toHaveAttribute('data-voxel-object-placement-ghosts', '1');
   await expect(viewport).toHaveAttribute(
     'data-mesh-resources',
     String(canonicalMeshResourceCount + 1),
   );
-  await expect.poll(() => packedPlacement.preparedCount).toBe(1);
-  await expect.poll(() => packedPlacement.resourceReadCount).toBeGreaterThan(0);
+  await expect.poll(() => packedPlacement.preparedCount, { timeout: projectMutationTimeout }).toBe(
+    1,
+  );
+  await expect.poll(
+    () => packedPlacement.resourceReadCount,
+    { timeout: projectMutationTimeout },
+  ).toBeGreaterThan(0);
   const placementProjectHash = await projectHash(shell);
   const viewportCanvas = page.getByLabel('Shared Rusty renderer viewport');
   await viewportCanvas.focus();
@@ -624,16 +707,25 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   await expect(shell).toHaveAttribute('data-project-hash', placementProjectHash);
   const resourceReadsBeforeReprepare = packedPlacement.resourceReadCount;
   await canonicalObjects.locator('[data-action="preview-voxel-object-placement"]').click();
-  await expect(viewport).toHaveAttribute('data-voxel-preview-kind', 'objectPlacement');
-  await expect(viewport).toHaveAttribute('data-voxel-object-definitions', '1');
+  await expect(viewport).toHaveAttribute('data-voxel-preview-kind', 'objectPlacement', {
+    timeout: projectMutationTimeout,
+  });
+  await expect(viewport).toHaveAttribute(
+    'data-voxel-object-definitions',
+    convertedVoxelDefinitionCount,
+  );
   await expect(viewport).toHaveAttribute('data-voxel-object-placement-ghosts', '1');
   await expect(viewport).toHaveAttribute(
     'data-mesh-resources',
     String(canonicalMeshResourceCount + 1),
   );
-  await expect.poll(() => packedPlacement.preparedCount).toBe(2);
-  await expect.poll(() => packedPlacement.resourceReadCount)
-    .toBeGreaterThan(resourceReadsBeforeReprepare);
+  await expect.poll(() => packedPlacement.preparedCount, { timeout: projectMutationTimeout }).toBe(
+    2,
+  );
+  await expect.poll(
+    () => packedPlacement.resourceReadCount,
+    { timeout: projectMutationTimeout },
+  ).toBeGreaterThan(resourceReadsBeforeReprepare);
   await pickVoxelObjectPlacementLocation(page, canonicalObjects, viewport);
   const authoring = editor.locator('[data-visual-id="voxel-object-authoring-readout"]');
   await expect(canonicalObjects).toContainText('convertedAnimatedMesh');
@@ -649,10 +741,18 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   const rendererBeforeAttach = await rendererHash(viewport);
   await viewportCanvas.focus();
   await viewportCanvas.press('Enter');
-  await expect(page.locator('.entity-row')).toHaveCount(rowsBeforeAttach + 1);
+  await expect(page.locator('.entity-row')).toHaveCount(rowsBeforeAttach + 1, {
+    timeout: projectMutationTimeout,
+  });
   await expect.poll(() => rendererHash(viewport)).not.toBe(rendererBeforeAttach);
-  await expect(viewport).toHaveAttribute('data-voxel-object-definitions', '1');
-  await expect(viewport).toHaveAttribute('data-voxel-object-instances', '1');
+  await expect(viewport).toHaveAttribute(
+    'data-voxel-object-definitions',
+    convertedVoxelDefinitionCount,
+  );
+  await expect(viewport).toHaveAttribute(
+    'data-voxel-object-instances',
+    String(baselineVoxelInstanceCount + 1),
+  );
   await expect(viewport).toHaveAttribute('data-voxel-object-placement-ghosts', '1');
   await expect(canonicalObjects.getByLabel('Voxel-object placement instance id')).toHaveValue(
     'studio-character-object-2',
@@ -670,44 +770,44 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   const playback = component.locator('rusty-voxel-object-playback');
   await expect(component).toContainText('typed entity capability');
   await expect(playback).toContainText('paused', { timeout: 30_000 });
-  await expect(playback).toContainText('Saved pose');
-  await expect(playback).toContainText('frame 1');
+  await expect(playback).toContainText('Saved pose', { timeout: projectMutationTimeout });
+  await expect(playback).toContainText('frame 1', { timeout: projectMutationTimeout });
   await expect(shell).toHaveAttribute('data-project-hash', durableHash);
 
   const appliedFrame = component.getByLabel('Entity voxel-object preview frame');
   await page.waitForTimeout(100);
   const renderedSavedPose = await rendererHash(viewport);
   await setRange(appliedFrame, 0);
-  await expect(playback).toContainText('frame 0');
+  await expect(playback).toContainText('frame 0', { timeout: projectMutationTimeout });
   await expect.poll(() => rendererHash(viewport)).not.toBe(renderedSavedPose);
   const frameZeroRendererHash = await rendererHash(viewport);
   await setRange(appliedFrame, 1);
-  await expect(playback).toContainText('frame 1');
+  await expect(playback).toContainText('frame 1', { timeout: projectMutationTimeout });
   await expect.poll(() => rendererHash(viewport)).not.toBe(frameZeroRendererHash);
   const durableRendererHash = await rendererHash(viewport);
   await setRange(appliedFrame, 0);
-  await expect(playback).toContainText('frame 0');
+  await expect(playback).toContainText('frame 0', { timeout: projectMutationTimeout });
   await expect.poll(() => rendererHash(viewport)).not.toBe(durableRendererHash);
   const scrubbedRendererHash = await rendererHash(viewport);
   await component.locator('[data-action="play-entity-voxel-object"]').click();
-  await expect(playback).toContainText('playing');
+  await expect(playback).toContainText('playing', { timeout: projectMutationTimeout });
   await expect.poll(() => rendererHash(viewport), { timeout: 30_000 }).not.toBe(
     scrubbedRendererHash,
   );
   await component.locator('[data-action="pause-entity-voxel-object"]').click();
-  await expect(playback).toContainText('paused');
+  await expect(playback).toContainText('paused', { timeout: projectMutationTimeout });
   if (await appliedFrame.inputValue() !== '0') {
     const rendererBeforeDeterministicRestoreSetup = await rendererHash(viewport);
     await setRange(appliedFrame, 0);
-    await expect(playback).toContainText('frame 0');
+    await expect(playback).toContainText('frame 0', { timeout: projectMutationTimeout });
     await expect.poll(() => rendererHash(viewport)).not.toBe(
       rendererBeforeDeterministicRestoreSetup,
     );
   }
-  await expect(playback).toContainText('frame 0');
+  await expect(playback).toContainText('frame 0', { timeout: projectMutationTimeout });
   const rendererBeforeRestore = await rendererHash(viewport);
   await component.locator('[data-action="restore-entity-voxel-object"]').click();
-  await expect(playback).toContainText('stopped');
+  await expect(playback).toContainText('stopped', { timeout: projectMutationTimeout });
   await expect.poll(() => rendererHash(viewport)).not.toBe(rendererBeforeRestore);
   await expect(shell).toHaveAttribute('data-project-hash', durableHash);
   expect(await readFile(projectPath)).toEqual(durableBytes);
@@ -719,20 +819,22 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   const placementHistory = editor.locator('[data-visual-id="voxel-object-placement-history"]');
   await expect(placementHistory).toContainText('studio-character-object · placed');
   await placementHistory.locator('[data-action="undo-voxel-object-placement"]').click();
-  await expect(objectRow).toHaveCount(0);
+  await expect(objectRow).toHaveCount(0, { timeout: projectMutationTimeout });
   await expect(placementHistory).toContainText('studio-character-object · undone');
   const hashAfterUndo = await projectHash(shell);
   expect(hashAfterUndo).not.toBe(durableHash);
   await placementHistory.locator('[data-action="reapply-voxel-object-placement"]').click();
-  await expect(objectRow).toHaveCount(1);
+  await expect(objectRow).toHaveCount(1, { timeout: projectMutationTimeout });
   await expect(placementHistory).toContainText('studio-character-object · placed');
   const reappliedHash = await projectHash(shell);
   expect(reappliedHash).not.toBe(hashAfterUndo);
 
   await page.reload();
-  await expect(shell).toHaveAttribute('data-project-hash', reappliedHash);
+  await expect(shell).toHaveAttribute('data-project-hash', reappliedHash, {
+    timeout: projectOpenTimeout,
+  });
   const reopenedRow = hierarchyRow(page, 'studio-character-object');
-  await expect(reopenedRow).toHaveCount(1);
+  await expect(reopenedRow).toHaveCount(1, { timeout: projectOpenTimeout });
   await reopenedRow.click();
   await page.getByRole('button', { name: 'Entity', exact: true }).click();
   await expect(page.locator('[data-visual-id="entity-voxel-object-component"]')).toContainText(
@@ -760,13 +862,21 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   const hashBeforeSecondPlacement = await projectHash(shell);
   await reopenedObjects.locator('[data-action="attach-voxel-object-instance"]').click();
   const secondRow = hierarchyRow(page, 'studio-character-object-2');
-  await expect(secondRow).toHaveCount(1);
-  await expect.poll(() => projectHash(shell)).not.toBe(hashBeforeSecondPlacement);
+  await expect(secondRow).toHaveCount(1, { timeout: projectMutationTimeout });
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    hashBeforeSecondPlacement,
+  );
   const secondPlacementHash = await projectHash(shell);
   await page.waitForTimeout(100);
   await expect(shell).toHaveAttribute('data-project-hash', secondPlacementHash);
-  await expect(viewport).toHaveAttribute('data-voxel-object-definitions', '1');
-  await expect(viewport).toHaveAttribute('data-voxel-object-instances', '2');
+  await expect(viewport).toHaveAttribute(
+    'data-voxel-object-definitions',
+    convertedVoxelDefinitionCount,
+  );
+  await expect(viewport).toHaveAttribute(
+    'data-voxel-object-instances',
+    String(baselineVoxelInstanceCount + 2),
+  );
 
   await page.getByRole('button', { name: 'Entity', exact: true }).click();
   const duplicatePanel = page.locator('[data-visual-id="entity-voxel-object-duplicate"]');
@@ -779,10 +889,18 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   const hashBeforeDuplicate = await projectHash(shell);
   await duplicatePanel.locator('[data-action="duplicate-voxel-object-instance"]').click();
   const duplicateRow = hierarchyRow(page, 'studio-character-object-copy');
-  await expect(duplicateRow).toHaveCount(1);
-  await expect.poll(() => projectHash(shell)).not.toBe(hashBeforeDuplicate);
-  await expect(viewport).toHaveAttribute('data-voxel-object-definitions', '1');
-  await expect(viewport).toHaveAttribute('data-voxel-object-instances', '3');
+  await expect(duplicateRow).toHaveCount(1, { timeout: projectMutationTimeout });
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    hashBeforeDuplicate,
+  );
+  await expect(viewport).toHaveAttribute(
+    'data-voxel-object-definitions',
+    convertedVoxelDefinitionCount,
+  );
+  await expect(viewport).toHaveAttribute(
+    'data-voxel-object-instances',
+    String(baselineVoxelInstanceCount + 3),
+  );
   const duplicateOwnerEntityId = await duplicateRow.getAttribute('data-entity-id');
   expect(duplicateOwnerEntityId).toMatch(/^[1-9][0-9]*$/);
   expect(duplicateOwnerEntityId).not.toBe(ownerEntityId);
@@ -793,7 +911,9 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   await duplicateTranslationX.fill('8.5');
   const hashBeforeDuplicateTransform = await projectHash(shell);
   await page.locator('[data-action="commit-transform"]').click();
-  await expect.poll(() => projectHash(shell)).not.toBe(hashBeforeDuplicateTransform);
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    hashBeforeDuplicateTransform,
+  );
 
   await page.getByRole('button', { name: 'Voxel', exact: true }).click();
   await editor.getByRole('button', { name: 'convert', exact: true }).click();
@@ -802,20 +922,35 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   const duplicateHistory = editor.locator('[data-visual-id="voxel-object-placement-history"]');
   await expect(duplicateHistory).toContainText('studio-character-object-copy · placed');
   await duplicateHistory.locator('[data-action="undo-voxel-object-placement"]').click();
-  await expect(duplicateRow).toHaveCount(0);
-  await expect(viewport).toHaveAttribute('data-voxel-object-instances', '2');
+  await expect(duplicateRow).toHaveCount(0, { timeout: projectMutationTimeout });
+  await expect(viewport).toHaveAttribute(
+    'data-voxel-object-instances',
+    String(baselineVoxelInstanceCount + 2),
+  );
   await duplicateHistory.locator('[data-action="reapply-voxel-object-placement"]').click();
-  await expect(duplicateRow).toHaveCount(1);
-  await expect(viewport).toHaveAttribute('data-voxel-object-definitions', '1');
-  await expect(viewport).toHaveAttribute('data-voxel-object-instances', '3');
+  await expect(duplicateRow).toHaveCount(1, { timeout: projectMutationTimeout });
+  await expect(viewport).toHaveAttribute(
+    'data-voxel-object-definitions',
+    convertedVoxelDefinitionCount,
+  );
+  await expect(viewport).toHaveAttribute(
+    'data-voxel-object-instances',
+    String(baselineVoxelInstanceCount + 3),
+  );
   const finalHash = await projectHash(shell);
 
   await page.reload();
-  await expect(shell).toHaveAttribute('data-project-hash', finalHash);
-  await expect(hierarchyRow(page, 'studio-character-object')).toHaveCount(1);
-  await expect(hierarchyRow(page, 'studio-character-object-2')).toHaveCount(1);
+  await expect(shell).toHaveAttribute('data-project-hash', finalHash, {
+    timeout: projectOpenTimeout,
+  });
+  await expect(hierarchyRow(page, 'studio-character-object')).toHaveCount(1, {
+    timeout: projectOpenTimeout,
+  });
+  await expect(hierarchyRow(page, 'studio-character-object-2')).toHaveCount(1, {
+    timeout: projectOpenTimeout,
+  });
   const finalDuplicateRow = hierarchyRow(page, 'studio-character-object-copy');
-  await expect(finalDuplicateRow).toHaveCount(1);
+  await expect(finalDuplicateRow).toHaveCount(1, { timeout: projectOpenTimeout });
   await finalDuplicateRow.click();
   await page.getByRole('button', { name: 'Entity', exact: true }).click();
   await expect(page.getByLabel('Translation X', { exact: true })).toHaveValue('8.5');

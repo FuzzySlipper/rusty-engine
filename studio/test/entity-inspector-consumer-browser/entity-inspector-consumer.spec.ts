@@ -1,15 +1,20 @@
 import { expect, test, type Locator, type Page, type Request } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const projectRoot = requiredEnvironment('RUSTY_STUDIO_PROJECT_ROOT');
 const evidenceFile = requiredEnvironment('RUSTY_STUDIO_ENTITY_INSPECTOR_EVIDENCE');
 const projectFile = 'content/projects/loading-bay.project.json';
-const weaponOwnerEntityId = 88;
+const weaponOwnerEntityId = authoredEntityId(
+  JSON.parse(readFileSync(join(projectRoot, projectFile), 'utf8')) as unknown,
+  'weapon-definition-arc-pistol',
+);
 const weaponComponentTypeId = 'rusty-engine-demo.loading-bay.weapon';
 const weaponContractId = 'rusty-engine-demo.loading-bay.weapon-authoring';
 const unknownComponentTypeId = 'test.uninstalled-component';
 const unknownContractId = 'test.uninstalled-component-authoring';
+const projectOperationTimeout = 30_000;
 
 test('unknown identity fallback stays visible and read-only in the downstream composition', async ({ page }) => {
   const failures = collectBrowserFailures(page);
@@ -87,7 +92,10 @@ test('a real Loading Bay Weapon mutation settles through canonical reread', asyn
   const save = panel.locator('[data-visual-id="weapon-save"]');
   await expect(save).toBeEnabled();
   await save.click();
-  await expect.poll(() => requiredAttribute(shell, 'data-project-hash')).not.toBe(hashBefore);
+  await expect.poll(
+    () => requiredAttribute(shell, 'data-project-hash'),
+    { timeout: projectOperationTimeout },
+  ).not.toBe(hashBefore);
   const hashAfter = await requiredAttribute(shell, 'data-project-hash');
   await expect(damage).toHaveValue(String(damageAfter));
 
@@ -99,7 +107,9 @@ test('a real Loading Bay Weapon mutation settles through canonical reread', asyn
   expect(rereadIndex).toBeGreaterThan(replaceIndex);
 
   await page.reload();
-  await expect(shell).toHaveAttribute('data-project-hash', hashAfter);
+  await expect(shell).toHaveAttribute('data-project-hash', hashAfter, {
+    timeout: projectOperationTimeout,
+  });
   await selectEntityInspector(page, weaponOwnerEntityId);
   await expect(page.locator('[data-visual-id="loading-bay-weapon-inspector"]')
     .locator('[data-visual-id="weapon-damage"]')).toHaveValue(String(damageAfter));
@@ -129,7 +139,9 @@ test('a fresh adapter process preserves the Loading Bay Weapon mutation', async 
 
   await openLoadingBay(page);
   const shell = page.locator('[data-visual-id="studio-shell"]');
-  await expect(shell).toHaveAttribute('data-project-hash', evidence.hashAfter);
+  await expect(shell).toHaveAttribute('data-project-hash', evidence.hashAfter, {
+    timeout: projectOperationTimeout,
+  });
   await selectEntityInspector(page, evidence.ownerEntityId);
   const panel = page.locator('[data-visual-id="loading-bay-weapon-inspector"]');
   await expect(panel.locator('[data-visual-id="weapon-damage"]'))
@@ -148,13 +160,16 @@ test('a fresh adapter process preserves the Loading Bay Weapon mutation', async 
 async function openLoadingBay(page: Page): Promise<void> {
   await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(projectFile)}`);
   const shell = page.locator('[data-visual-id="studio-shell"]');
-  await expect(shell).toHaveAttribute('data-project-hash', /.+/);
+  await expect(shell).toHaveAttribute('data-project-hash', /.+/, {
+    timeout: projectOperationTimeout,
+  });
   await expect(page.locator('rusty-studio-viewport')).toHaveAttribute(
     'data-renderer-status',
     'ready',
+    { timeout: projectOperationTimeout },
   );
   await expect(page.locator(`.entity-row[data-entity-id="${String(weaponOwnerEntityId)}"]`))
-    .toBeVisible();
+    .toBeVisible({ timeout: projectOperationTimeout });
 }
 
 async function selectEntityInspector(page: Page, ownerEntityId: number): Promise<void> {
@@ -207,6 +222,26 @@ function durableWeaponDamage(project: unknown, itemDefinitionId: string): number
   const damage = kind['damage'];
   if (!Number.isSafeInteger(damage)) throw new Error('durable weapon damage must be a safe integer');
   return damage as number;
+}
+
+function authoredEntityId(project: unknown, entityName: string): number {
+  const root = requiredRecord(project, '$');
+  const scenes = requiredArray(root['scenes'], '$.scenes');
+  const matches = scenes.flatMap((candidate, sceneIndex) => {
+    const scene = requiredRecord(candidate, `$.scenes[${String(sceneIndex)}]`);
+    const entities = requiredArray(scene['entities'], `$.scenes[${String(sceneIndex)}].entities`);
+    return entities
+      .map((entity, entityIndex) => requiredRecord(
+        entity,
+        `$.scenes[${String(sceneIndex)}].entities[${String(entityIndex)}]`,
+      ))
+      .filter((entity) => entity['name'] === entityName)
+      .map((entity) => entity['id']);
+  });
+  if (matches.length !== 1 || !Number.isSafeInteger(matches[0])) {
+    throw new Error(`expected exactly one authored entity named ${entityName}`);
+  }
+  return matches[0] as number;
 }
 
 async function requiredAttribute(

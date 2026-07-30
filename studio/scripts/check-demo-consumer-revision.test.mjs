@@ -3,8 +3,8 @@ import test from 'node:test';
 
 import { certifyDemoConsumerRevision } from './check-demo-consumer-revision.mjs';
 
-const CONSUMER_COMMIT = '2a5a3851b3e008071ba38debc4695a91c9321f55';
-const ENGINE_COMMIT = 'db5641fc4e9d033112bc2b374a35933c3838e39c';
+const CONSUMER_COMMIT = 'fbcd352abf09661a5066c5f622140ac244321ebb';
+const ENGINE_COMMIT = 'af8d34c7fef57965fa27f9b14b08e2a45c357439';
 
 function consumerPin(overrides = {}) {
   return {
