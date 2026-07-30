@@ -170,7 +170,8 @@ The isolated workspace now exposes four layers with one-way dependencies:
 
 - `@rusty-engine/render-contracts` mirrors the complete Rust retained and presentation frames and
   strictly decodes unknown JSON before it reaches mutable renderer state;
-- `@rusty-engine/render-projection` applies whole retained frames fail-atomically and exposes a
+- `@rusty-engine/render-projection` applies whole retained frames fail-atomically with copy-on-write
+  staging for changed records and structurally shared immutable definitions, and exposes a
   backend-neutral scene/resource readout; and
 - `@rusty-engine/renderer-three` owns Three objects, shared-buffer borrows, GLB resources, material
   realization, texture/atlas retention and UV projection, sprites, lights, picking, browser

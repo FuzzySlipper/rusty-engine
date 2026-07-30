@@ -143,6 +143,46 @@ function meshAsset(asset = 'mesh/crate'): StaticMeshAsset {
   };
 }
 
+function largeMeshAsset(asset = 'mesh/large-unrelated'): StaticMeshAsset {
+  const quadCount = 1_024;
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const indices: number[] = [];
+  for (let quad = 0; quad < quadCount; quad += 1) {
+    const x = quad % 32;
+    const y = Math.floor(quad / 32);
+    positions.push(
+      x, y, 0,
+      x + 1, y, 0,
+      x + 1, y + 1, 0,
+      x, y + 1, 0,
+    );
+    normals.push(0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1);
+    const vertex = quad * 4;
+    indices.push(vertex, vertex + 1, vertex + 2, vertex, vertex + 2, vertex + 3);
+  }
+  return {
+    asset,
+    payload: {
+      layout: {
+        vertexCount: quadCount * 4,
+        indexCount: quadCount * 6,
+        indexWidth: 'u32',
+        attributes: [
+          { name: 'position', components: 3, kind: 'f32' },
+          { name: 'normal', components: 3, kind: 'f32' },
+        ],
+      },
+      groups: [{ materialSlot: 1, start: 0, count: quadCount * 6 }],
+      bounds: { min: [0, 0, 0], max: [32, 32, 0] },
+      source: { kind: 'inline', positions, normals, indices },
+      provenance: 'staticAsset',
+    },
+    materialSlots: [{ slot: 1, material: 'material/large' }],
+    collision: { kind: 'visualOnly' },
+  };
+}
+
 function animatedMeshAsset(asset = 'mesh-animation/kenney-retro-character-medium'): AnimatedMeshAsset {
   return {
     asset,
@@ -242,6 +282,117 @@ void test('a rejected later operation rolls back the entire frame', () => {
 
   assert.deepEqual(projection.snapshot(), before);
   assert.equal(projection.has(renderHandle(11)), false);
+});
+
+void test('small atomic frames structurally share unrelated retained definitions', () => {
+  const projection = new RenderProjection();
+  projection.applyFrame({
+    schemaVersion: 1,
+    ops: [
+      { op: 'defineStaticMesh', asset: largeMeshAsset() },
+      createPrimitive(1, 'moving-node'),
+    ],
+  });
+  const retainedAsset = projection.staticMesh('mesh/large-unrelated');
+  assert.ok(retainedAsset);
+
+  for (let tick = 1; tick <= 8; tick += 1) {
+    projection.applyFrame({
+      schemaVersion: 1,
+      ops: [{
+        op: 'update',
+        handle: renderHandle(1),
+        transform: {
+          translation: [tick, 0, 0],
+          rotation: [0, 0, 0, 1],
+          scale: [1, 1, 1],
+        },
+        material: null,
+        visible: null,
+        metadata: null,
+      }],
+    });
+    assert.deepEqual(projection.lastFrameStagingStatistics(), {
+      copiedNodeRecords: 1,
+      copiedLightRecords: 0,
+      copiedResourceRecords: 0,
+      sharedDefinitionRecords: 1,
+    });
+  }
+
+  assert.deepEqual(projection.staticMesh('mesh/large-unrelated'), retainedAsset);
+  const beforeRejectedFrame = projection.snapshot();
+  assert.throws(
+    () => projection.applyFrame({
+      schemaVersion: 1,
+      ops: [
+        {
+          op: 'update',
+          handle: renderHandle(1),
+          transform: {
+            translation: [99, 0, 0],
+            rotation: [0, 0, 0, 1],
+            scale: [1, 1, 1],
+          },
+          material: null,
+          visible: null,
+          metadata: null,
+        },
+        {
+          op: 'update',
+          handle: renderHandle(999),
+          transform: null,
+          material: null,
+          visible: false,
+          metadata: null,
+        },
+      ],
+    }),
+    /unknown handle 999/u,
+  );
+  assert.deepEqual(projection.snapshot(), beforeRejectedFrame);
+  assert.deepEqual(projection.staticMesh('mesh/large-unrelated'), retainedAsset);
+
+  assert.throws(
+    () => projection.applyFrame({
+      schemaVersion: 1,
+      ops: [
+        {
+          op: 'createStaticMeshInstance',
+          handle: renderHandle(2),
+          parent: null,
+          instance: {
+            asset: 'mesh/large-unrelated',
+            transform: {
+              translation: [0, 0, 0],
+              rotation: [0, 0, 0, 1],
+              scale: [1, 1, 1],
+            },
+            visible: true,
+            materialOverrides: [],
+            metadata: {
+              sourceEntity: 2,
+              sourceSceneNode: null,
+              tags: [],
+              label: 'rejected-large-instance',
+            },
+          },
+        },
+        {
+          op: 'update',
+          handle: renderHandle(999),
+          transform: null,
+          material: null,
+          visible: false,
+          metadata: null,
+        },
+      ],
+    }),
+    /unknown handle 999/u,
+  );
+  assert.equal(projection.has(renderHandle(2)), false);
+  assert.equal(projection.staticMeshRefCount('mesh/large-unrelated'), 0);
+  assert.deepEqual(projection.snapshot(), beforeRejectedFrame);
 });
 
 void test('viewmodel descendants retain one bounded camera-relative channel', () => {

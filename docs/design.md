@@ -434,8 +434,10 @@ publication and resolver policy. The durable format, measured tradeoffs, and mig
 projection reads `EntityState`; voxel projection reads `VoxelCollisionScene`; authored projection
 accepts one ordinary appearance/resource aggregate; debug projection accepts typed overlays. Each
 projector computes against cloned retained state, validates the complete frame, and commits stable
-handles only when construction succeeds. Missing resources are classified rather than resolved
-through an ambient registry.
+handles only when construction succeeds. The TypeScript retained projection stages frames with
+copy-on-write records: unchanged immutable definitions are structurally shared, while every
+record named by a mutation is privately copied before validation or commit. Missing resources are
+classified rather than resolved through an ambient registry.
 
 `render-presentation` owns the other renderer-neutral family: typed audio sources and impulses,
 world/entity billboards, bounded particle emitters and bursts, telemetry overlay requests, and

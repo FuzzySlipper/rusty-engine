@@ -138,6 +138,26 @@ export interface RenderProjectionSnapshot {
   readonly voxelObjects: readonly VoxelObjectRenderAsset[];
 }
 
+/**
+ * Bounded diagnostics for the most recently committed fail-atomic frame stage.
+ *
+ * Definition records counted as shared are immutable retained values reused by
+ * the stage. Only records named by a mutating operation are copied.
+ */
+export interface RenderProjectionStagingStatistics {
+  readonly copiedNodeRecords: number;
+  readonly copiedLightRecords: number;
+  readonly copiedResourceRecords: number;
+  readonly sharedDefinitionRecords: number;
+}
+
+interface MutableStagingStatistics {
+  copiedNodeRecords: number;
+  copiedLightRecords: number;
+  copiedResourceRecords: number;
+  sharedDefinitionRecords: number;
+}
+
 type NodeRecord = MutablePrimitiveNode | MutableStaticMeshNode | MutableAnimatedMeshNode | MutableVoxelObjectNode | MutableSpriteNode;
 
 interface MutableNodeBase {
@@ -209,14 +229,16 @@ interface MutableLight {
 
 /** A retained renderer-neutral projection driven only by render diffs. */
 export class RenderProjection {
-  readonly #nodes = new Map<RenderHandle, NodeRecord>();
-  readonly #lights = new Map<RenderHandle, MutableLight>();
-  readonly #materials = new Map<string, RenderMaterialDescriptor>();
-  readonly #textures = new Map<string, TextureDescriptor>();
-  readonly #spriteAtlases = new Map<string, SpriteAtlasDescriptor>();
-  readonly #staticMeshes = new Map<string, StaticMeshRecord>();
-  readonly #animatedMeshes = new Map<string, AnimatedMeshRecord>();
-  readonly #voxelObjects = new Map<string, VoxelObjectRecord>();
+  #nodes = new Map<RenderHandle, NodeRecord>();
+  #lights = new Map<RenderHandle, MutableLight>();
+  #materials = new Map<string, RenderMaterialDescriptor>();
+  #textures = new Map<string, TextureDescriptor>();
+  #spriteAtlases = new Map<string, SpriteAtlasDescriptor>();
+  #staticMeshes = new Map<string, StaticMeshRecord>();
+  #animatedMeshes = new Map<string, AnimatedMeshRecord>();
+  #voxelObjects = new Map<string, VoxelObjectRecord>();
+  #stagingStatistics: MutableStagingStatistics = emptyStagingStatistics();
+  #collectStagingStatistics = false;
 
   /**
    * Apply a frame in authored order and return renderer-neutral instructions.
@@ -297,6 +319,10 @@ export class RenderProjection {
 
   get handleCount(): number {
     return this.#nodes.size + this.#lights.size;
+  }
+
+  lastFrameStagingStatistics(): RenderProjectionStagingStatistics {
+    return { ...this.#stagingStatistics };
   }
 
   node(handle: RenderHandle): RenderProjectionNode | undefined {
@@ -416,10 +442,11 @@ export class RenderProjection {
   }
 
   #update(diff: Extract<RenderDiff, { op: 'update' }>): RenderProjectionInstruction {
-    const record = this.#require(diff.handle, 'update');
-    if (record.layer === 'viewmodel' && diff.transform !== null) {
+    const current = this.#require(diff.handle, 'update');
+    if (current.layer === 'viewmodel' && diff.transform !== null) {
       validateViewmodelTransform(diff.transform, 'update.transform');
     }
+    const record = this.#mutableNode(diff.handle, 'update');
     if (diff.transform !== null) {
       record.transform = clone(diff.transform);
       if (record.kind === 'primitive') {
@@ -476,7 +503,7 @@ export class RenderProjection {
     if (light !== undefined) {
       this.#lights.delete(handle);
       if (light.parent !== null) {
-        this.#require(light.parent, 'destroyLight.parent').children.delete(handle);
+        this.#mutableNode(light.parent, 'destroyLight.parent').children.delete(handle);
       }
       return [{ op: 'removeLight', handle }];
     }
@@ -487,20 +514,20 @@ export class RenderProjection {
     }
     this.#nodes.delete(handle);
     if (record.parent !== null) {
-      this.#require(record.parent, 'destroy.parent').children.delete(handle);
+      this.#mutableNode(record.parent, 'destroy.parent').children.delete(handle);
     }
     if (record.kind === 'staticMesh') {
-      const mesh = this.#staticMeshes.get(record.asset);
+      const mesh = this.#mutableStaticMesh(record.asset);
       if (mesh !== undefined) {
         mesh.refCount -= 1;
       }
     } else if (record.kind === 'animatedMesh') {
-      const mesh = this.#animatedMeshes.get(record.asset);
+      const mesh = this.#mutableAnimatedMesh(record.asset);
       if (mesh !== undefined) {
         mesh.refCount -= 1;
       }
     } else if (record.kind === 'voxelObject') {
-      const object = this.#voxelObjects.get(record.asset);
+      const object = this.#mutableVoxelObject(record.asset);
       if (object !== undefined) {
         object.refCount -= 1;
       }
@@ -512,15 +539,21 @@ export class RenderProjection {
   #replaceMeshPayload(
     diff: Extract<RenderDiff, { op: 'replaceMeshPayload' }>,
   ): RenderProjectionInstruction {
-    const record = this.#require(diff.handle, 'replaceMeshPayload');
-    if (record.kind !== 'primitive' || record.node.geometry.kind === 'group') {
+    const current = this.#require(diff.handle, 'replaceMeshPayload');
+    if (current.kind !== 'primitive' || current.node.geometry.kind === 'group') {
       throw new RenderProjectionError(
         `replaceMeshPayload: handle ${diff.handle} is not a primitive mesh`,
       );
     }
     validateMeshPayload(diff.payload, 'replaceMeshPayload.payload');
-    if (record.layer === 'viewmodel') {
+    if (current.layer === 'viewmodel') {
       validateViewmodelBounds(diff.payload.bounds, 'replaceMeshPayload.payload.bounds');
+    }
+    const record = this.#mutableNode(diff.handle, 'replaceMeshPayload');
+    if (record.kind !== 'primitive') {
+      throw new RenderProjectionError(
+        `replaceMeshPayload: handle ${diff.handle} is not a primitive mesh`,
+      );
     }
     record.meshPayload = clone(diff.payload);
     return { op: 'upsertNode', node: snapshotNode(record) };
@@ -542,19 +575,20 @@ export class RenderProjection {
     };
     this.#lights.set(diff.handle, record);
     if (parent !== null) {
-      this.#require(parent, 'createLight.parent').children.add(diff.handle);
+      this.#mutableNode(parent, 'createLight.parent').children.add(diff.handle);
     }
     return { op: 'upsertLight', light: snapshotLight(record) };
   }
 
   #updateLight(diff: Extract<RenderDiff, { op: 'updateLight' }>): RenderProjectionInstruction {
-    const record = this.#requireLight(diff.handle, 'updateLight');
+    const current = this.#requireLight(diff.handle, 'updateLight');
     validateLight(diff.light, 'updateLight.light');
-    if (record.light.kind !== diff.light.kind) {
+    if (current.light.kind !== diff.light.kind) {
       throw new RenderProjectionError(
-        `updateLight: handle ${diff.handle} cannot change kind from ${record.light.kind} to ${diff.light.kind}`,
+        `updateLight: handle ${diff.handle} cannot change kind from ${current.light.kind} to ${diff.light.kind}`,
       );
     }
+    const record = this.#mutableLight(diff.handle, 'updateLight');
     record.light = clone(diff.light);
     return { op: 'upsertLight', light: snapshotLight(record) };
   }
@@ -634,7 +668,7 @@ export class RenderProjection {
       materialParameters: new Map(),
     };
     this.#validateViewmodelInsertion(record, 'createStaticMeshInstance');
-    asset.refCount += 1;
+    this.#mutableStaticMesh(instance.asset)!.refCount += 1;
     this.#insert(record);
     return { op: 'upsertNode', node: snapshotNode(record) };
   }
@@ -642,16 +676,22 @@ export class RenderProjection {
   #setMaterialInstanceParameters(
     diff: Extract<RenderDiff, { op: 'setMaterialInstanceParameters' }>,
   ): RenderProjectionInstruction {
-    const record = this.#require(diff.handle, 'setMaterialInstanceParameters');
-    if (record.kind !== 'staticMesh') {
+    const current = this.#require(diff.handle, 'setMaterialInstanceParameters');
+    if (current.kind !== 'staticMesh') {
       throw new RenderProjectionError(
         `setMaterialInstanceParameters: handle ${diff.handle} is not a static mesh`,
       );
     }
-    const asset = this.#staticMeshes.get(record.asset);
+    const asset = this.#staticMeshes.get(current.asset);
     if (asset === undefined || !asset.asset.materialSlots.some((binding) => binding.slot === diff.slot)) {
       throw new RenderProjectionError(
-        `setMaterialInstanceParameters: unbound slot ${diff.slot} on ${record.asset}`,
+        `setMaterialInstanceParameters: unbound slot ${diff.slot} on ${current.asset}`,
+      );
+    }
+    const record = this.#mutableNode(diff.handle, 'setMaterialInstanceParameters');
+    if (record.kind !== 'staticMesh') {
+      throw new RenderProjectionError(
+        `setMaterialInstanceParameters: handle ${diff.handle} is not a static mesh`,
       );
     }
     if (diff.parameters === null) {
@@ -693,7 +733,7 @@ export class RenderProjection {
       playback: clone(instance.playback),
     };
     this.#validateViewmodelInsertion(record, 'createAnimatedMeshInstance');
-    asset.refCount += 1;
+    this.#mutableAnimatedMesh(instance.asset)!.refCount += 1;
     this.#insert(record);
     return { op: 'upsertNode', node: snapshotNode(record) };
   }
@@ -701,15 +741,19 @@ export class RenderProjection {
   #setAnimatedMeshPlayback(
     diff: Extract<RenderDiff, { op: 'setAnimatedMeshPlayback' }>,
   ): RenderProjectionInstruction {
-    const record = this.#require(diff.handle, 'setAnimatedMeshPlayback');
+    const current = this.#require(diff.handle, 'setAnimatedMeshPlayback');
+    if (current.kind !== 'animatedMesh') {
+      throw new RenderProjectionError(`setAnimatedMeshPlayback: handle ${diff.handle} is not an animated mesh`);
+    }
+    const asset = this.#animatedMeshes.get(current.asset);
+    if (asset === undefined) {
+      throw new RenderProjectionError(`setAnimatedMeshPlayback: missing animated mesh asset ${current.asset}`);
+    }
+    validatePlaybackCommand(asset.asset, diff.playback, 'setAnimatedMeshPlayback.playback');
+    const record = this.#mutableNode(diff.handle, 'setAnimatedMeshPlayback');
     if (record.kind !== 'animatedMesh') {
       throw new RenderProjectionError(`setAnimatedMeshPlayback: handle ${diff.handle} is not an animated mesh`);
     }
-    const asset = this.#animatedMeshes.get(record.asset);
-    if (asset === undefined) {
-      throw new RenderProjectionError(`setAnimatedMeshPlayback: missing animated mesh asset ${record.asset}`);
-    }
-    validatePlaybackCommand(asset.asset, diff.playback, 'setAnimatedMeshPlayback.playback');
     record.playback = clone(diff.playback);
     record.instance = { ...record.instance, playback: clone(diff.playback) };
     return { op: 'upsertNode', node: snapshotNode(record) };
@@ -720,7 +764,7 @@ export class RenderProjection {
     const existing = this.#voxelObjects.get(asset.asset);
     const liveUpdates: Array<{
       readonly payload: MeshPayloadDescriptor;
-      readonly record: MutableVoxelObjectNode;
+      readonly handle: RenderHandle;
     }> = [];
     if (existing !== undefined) {
       for (const record of this.#nodes.values()) {
@@ -731,11 +775,17 @@ export class RenderProjection {
         if (record.layer === 'viewmodel') {
           validateViewmodelBounds(payload.bounds, 'defineVoxelObject.liveInstance.bounds');
         }
-        liveUpdates.push({ payload, record });
+        liveUpdates.push({ payload, handle: record.handle });
       }
     }
     for (const update of liveUpdates) {
-      update.record.meshPayload = clone(update.payload);
+      const record = this.#mutableNode(update.handle, 'defineVoxelObject.liveInstance');
+      if (record.kind !== 'voxelObject') {
+        throw new RenderProjectionError(
+          `defineVoxelObject.liveInstance: handle ${update.handle} is not a voxel object`,
+        );
+      }
+      record.meshPayload = clone(update.payload);
     }
     this.#voxelObjects.set(asset.asset, {
       asset: clone(asset),
@@ -792,7 +842,7 @@ export class RenderProjection {
       frame: instance.frame,
     };
     this.#validateViewmodelInsertion(record, 'createVoxelObjectInstance');
-    asset.refCount += 1;
+    this.#mutableVoxelObject(instance.asset)!.refCount += 1;
     this.#insert(record);
     return { op: 'upsertNode', node: snapshotNode(record) };
   }
@@ -800,20 +850,26 @@ export class RenderProjection {
   #setVoxelObjectFrame(
     diff: Extract<RenderDiff, { op: 'setVoxelObjectFrame' }>,
   ): RenderProjectionInstruction {
-    const record = this.#require(diff.handle, 'setVoxelObjectFrame');
-    if (record.kind !== 'voxelObject') {
+    const current = this.#require(diff.handle, 'setVoxelObjectFrame');
+    if (current.kind !== 'voxelObject') {
       throw new RenderProjectionError(
         `setVoxelObjectFrame: handle ${diff.handle} is not a voxel object`,
       );
     }
-    const asset = this.#voxelObjects.get(record.asset);
+    const asset = this.#voxelObjects.get(current.asset);
     if (asset === undefined) {
-      throw new RenderProjectionError(`setVoxelObjectFrame: missing voxel object ${record.asset}`);
+      throw new RenderProjectionError(`setVoxelObjectFrame: missing voxel object ${current.asset}`);
     }
     validateVoxelObjectFrame(asset.asset, diff.frame, 'setVoxelObjectFrame.frame');
     const payload = asset.asset.meshes[asset.asset.frames[diff.frame]!.mesh]!.payload;
-    if (record.layer === 'viewmodel') {
+    if (current.layer === 'viewmodel') {
       validateViewmodelBounds(payload.bounds, 'setVoxelObjectFrame.bounds');
+    }
+    const record = this.#mutableNode(diff.handle, 'setVoxelObjectFrame');
+    if (record.kind !== 'voxelObject') {
+      throw new RenderProjectionError(
+        `setVoxelObjectFrame: handle ${diff.handle} is not a voxel object`,
+      );
     }
     record.frame = diff.frame;
     record.instance = { ...record.instance, frame: diff.frame };
@@ -846,7 +902,11 @@ export class RenderProjection {
   }
 
   #updateSprite(diff: Extract<RenderDiff, { op: 'updateSprite' }>): RenderProjectionInstruction {
-    const record = this.#require(diff.handle, 'updateSprite');
+    const current = this.#require(diff.handle, 'updateSprite');
+    if (current.kind !== 'sprite') {
+      throw new RenderProjectionError(`updateSprite: handle ${diff.handle} is not a sprite`);
+    }
+    const record = this.#mutableNode(diff.handle, 'updateSprite');
     if (record.kind !== 'sprite') {
       throw new RenderProjectionError(`updateSprite: handle ${diff.handle} is not a sprite`);
     }
@@ -880,7 +940,7 @@ export class RenderProjection {
   #insert(record: NodeRecord): void {
     this.#nodes.set(record.handle, record);
     if (record.parent !== null) {
-      this.#require(record.parent, 'insert.parent').children.add(record.handle);
+      this.#mutableNode(record.parent, 'insert.parent').children.add(record.handle);
     }
   }
 
@@ -976,51 +1036,99 @@ export class RenderProjection {
     return record;
   }
 
-  #clone(): RenderProjection {
+  #mutableNode(handle: RenderHandle, ctx: string): NodeRecord {
+    const record = copyNodeRecord(this.#require(handle, ctx));
+    this.#nodes.set(handle, record);
+    if (this.#collectStagingStatistics) {
+      this.#stagingStatistics.copiedNodeRecords += 1;
+    }
+    return record;
+  }
+
+  #mutableLight(handle: RenderHandle, ctx: string): MutableLight {
+    const record = { ...this.#requireLight(handle, ctx) };
+    this.#lights.set(handle, record);
+    if (this.#collectStagingStatistics) {
+      this.#stagingStatistics.copiedLightRecords += 1;
+    }
+    return record;
+  }
+
+  #mutableStaticMesh(asset: string): StaticMeshRecord | undefined {
+    const current = this.#staticMeshes.get(asset);
+    if (current === undefined) return undefined;
+    const record = { ...current };
+    this.#staticMeshes.set(asset, record);
+    if (this.#collectStagingStatistics) {
+      this.#stagingStatistics.copiedResourceRecords += 1;
+    }
+    return record;
+  }
+
+  #mutableAnimatedMesh(asset: string): AnimatedMeshRecord | undefined {
+    const current = this.#animatedMeshes.get(asset);
+    if (current === undefined) return undefined;
+    const record = { ...current };
+    this.#animatedMeshes.set(asset, record);
+    if (this.#collectStagingStatistics) {
+      this.#stagingStatistics.copiedResourceRecords += 1;
+    }
+    return record;
+  }
+
+  #mutableVoxelObject(asset: string): VoxelObjectRecord | undefined {
+    const current = this.#voxelObjects.get(asset);
+    if (current === undefined) return undefined;
+    const record = { ...current };
+    this.#voxelObjects.set(asset, record);
+    if (this.#collectStagingStatistics) {
+      this.#stagingStatistics.copiedResourceRecords += 1;
+    }
+    return record;
+  }
+
+  #fork(): RenderProjection {
     const projection = new RenderProjection();
-    for (const [handle, record] of this.#nodes) {
-      projection.#nodes.set(handle, cloneNodeRecord(record));
-    }
-    for (const [handle, light] of this.#lights) {
-      projection.#lights.set(handle, clone(light));
-    }
-    for (const [id, material] of this.#materials) {
-      projection.#materials.set(id, clone(material));
-    }
-    for (const [id, texture] of this.#textures) {
-      projection.#textures.set(id, clone(texture));
-    }
-    for (const [id, atlas] of this.#spriteAtlases) {
-      projection.#spriteAtlases.set(id, clone(atlas));
-    }
-    for (const [id, record] of this.#staticMeshes) {
-      projection.#staticMeshes.set(id, { asset: clone(record.asset), refCount: record.refCount });
-    }
-    for (const [id, record] of this.#animatedMeshes) {
-      projection.#animatedMeshes.set(id, { asset: clone(record.asset), refCount: record.refCount });
-    }
-    for (const [id, record] of this.#voxelObjects) {
-      projection.#voxelObjects.set(id, { asset: clone(record.asset), refCount: record.refCount });
-    }
+    projection.#nodes = new Map(this.#nodes);
+    projection.#lights = new Map(this.#lights);
+    projection.#materials = new Map(this.#materials);
+    projection.#textures = new Map(this.#textures);
+    projection.#spriteAtlases = new Map(this.#spriteAtlases);
+    projection.#staticMeshes = new Map(this.#staticMeshes);
+    projection.#animatedMeshes = new Map(this.#animatedMeshes);
+    projection.#voxelObjects = new Map(this.#voxelObjects);
+    projection.#stagingStatistics = {
+      ...emptyStagingStatistics(),
+      sharedDefinitionRecords:
+        this.#materials.size
+        + this.#textures.size
+        + this.#spriteAtlases.size
+        + this.#staticMeshes.size
+        + this.#animatedMeshes.size
+        + this.#voxelObjects.size,
+    };
+    projection.#collectStagingStatistics = true;
     return projection;
   }
 
   #replaceWith(projection: RenderProjection): void {
-    replaceMap(this.#nodes, projection.#nodes);
-    replaceMap(this.#lights, projection.#lights);
-    replaceMap(this.#materials, projection.#materials);
-    replaceMap(this.#textures, projection.#textures);
-    replaceMap(this.#spriteAtlases, projection.#spriteAtlases);
-    replaceMap(this.#staticMeshes, projection.#staticMeshes);
-    replaceMap(this.#animatedMeshes, projection.#animatedMeshes);
-    replaceMap(this.#voxelObjects, projection.#voxelObjects);
+    this.#nodes = projection.#nodes;
+    this.#lights = projection.#lights;
+    this.#materials = projection.#materials;
+    this.#textures = projection.#textures;
+    this.#spriteAtlases = projection.#spriteAtlases;
+    this.#staticMeshes = projection.#staticMeshes;
+    this.#animatedMeshes = projection.#animatedMeshes;
+    this.#voxelObjects = projection.#voxelObjects;
+    this.#stagingStatistics = projection.#stagingStatistics;
+    this.#collectStagingStatistics = false;
   }
 
   #stageFrame(frame: RenderFrameDiff): {
     readonly staged: RenderProjection;
     readonly instructions: readonly RenderProjectionInstruction[];
   } {
-    const staged = this.#clone();
+    const staged = this.#fork();
     const instructions: RenderProjectionInstruction[] = [];
     for (const diff of frame.ops) {
       instructions.push(...staged.applyDiff(diff));
@@ -1029,21 +1137,16 @@ export class RenderProjection {
   }
 }
 
-function cloneNodeRecord(record: NodeRecord): NodeRecord {
+function copyNodeRecord(record: NodeRecord): NodeRecord {
   const children = new Set(record.children);
-  if (record.kind === 'primitive') {
-    return { ...clone(record), children };
-  }
   if (record.kind === 'staticMesh') {
     return {
-      ...clone(record),
+      ...record,
       children,
-      materialParameters: new Map(
-        [...record.materialParameters].map(([slot, parameters]) => [slot, clone(parameters)]),
-      ),
+      materialParameters: new Map(record.materialParameters),
     };
   }
-  return { ...clone(record), children };
+  return { ...record, children };
 }
 
 function validateViewmodelTransform(transform: Transform, ctx: string): void {
@@ -1107,11 +1210,13 @@ function viewmodelAssetKey(record: NodeRecord): string | null {
   }
 }
 
-function replaceMap<K, V>(target: Map<K, V>, source: ReadonlyMap<K, V>): void {
-  target.clear();
-  for (const [key, value] of source) {
-    target.set(key, value);
-  }
+function emptyStagingStatistics(): MutableStagingStatistics {
+  return {
+    copiedNodeRecords: 0,
+    copiedLightRecords: 0,
+    copiedResourceRecords: 0,
+    sharedDefinitionRecords: 0,
+  };
 }
 
 function snapshotLight(record: MutableLight): RenderProjectionLight {
