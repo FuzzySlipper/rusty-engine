@@ -212,10 +212,20 @@ scope:
   and not cumulative allocation totals.
 
 Three caches live-resource counts after accepted retained mutations, so submitting or reading a
-sample is constant work apart from the render itself. It performs no scene traversal, GPU readback,
-query, fence, or synchronization in the frame loop. Resource identity is de-duplicated: two
+sample is constant work apart from the render itself. Resource identity is de-duplicated: two
 instances sharing one retained geometry count as one geometry, while independently cloned animated
 instance resources count independently.
+
+Automatic WebGL2 submission uses asynchronous backend pacing without adding another render loop.
+One completion fence bounds queued command streams. When
+`EXT_disjoint_timer_query_webgl2` is available, the previous submission's GPU duration determines
+an equal headroom interval, capped at 100 ms, before the next automatic submission. This is not a
+fixed-rate timer: fast work whose execution plus headroom fits between display callbacks still
+submits at display rate, while a slow software renderer yields proportionate CPU time. Timer-query
+polling is non-blocking and occurs only in the existing animation-frame owner. Unsupported,
+disjoint, malformed, or failed timing degrades to the completion fence alone. Explicit
+`renderOnce`, camera reset, resource statistics, picking, and disposal keep their established
+semantics.
 
 An accepted retained mutation becomes visible in statistics on the next successful submission; a
 rejected mutation changes neither renderer state nor the latest sample. Camera reset submits one

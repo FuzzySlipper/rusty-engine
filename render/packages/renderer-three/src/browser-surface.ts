@@ -26,6 +26,10 @@ import {
   RendererGpuSubmissionFence,
   type RendererGpuSubmissionFenceDriver,
 } from './gpu-submission-fence.js';
+import {
+  RendererGpuSubmissionDuty,
+  type RendererGpuSubmissionTimerDriver,
+} from './gpu-submission-duty.js';
 
 export interface ProjectedThreeRenderResult {
   readonly projection: RenderProjection;
@@ -215,6 +219,9 @@ export function mountRendererBrowserSurface(
   const gpuSubmissionFence = new RendererGpuSubmissionFence(
     webGl2SubmissionFenceDriver(webgl.getContext()),
   );
+  const gpuSubmissionDuty = new RendererGpuSubmissionDuty(
+    webGl2SubmissionTimerDriver(webgl.getContext()),
+  );
   webgl.autoClear = false;
   // One surface submission contains both world and viewmodel render passes.
   // Disable Three's per-pass reset so its public info object accumulates exact
@@ -313,13 +320,20 @@ export function mountRendererBrowserSurface(
         : Math.min(0.05, Math.max(0, (timeMs - lastRenderTimeMs) / 1000));
     lastRenderTimeMs = timeMs;
     webgl.info.reset();
-    renderBrowserSurfaceFrame(
-      webgl,
-      camera,
-      viewmodelCamera,
-      renderer,
-      deltaSeconds,
-    );
+    gpuSubmissionDuty.begin();
+    try {
+      renderBrowserSurfaceFrame(
+        webgl,
+        camera,
+        viewmodelCamera,
+        renderer,
+        deltaSeconds,
+      );
+    } catch (cause) {
+      gpuSubmissionDuty.aborted();
+      throw cause;
+    }
+    gpuSubmissionDuty.submitted();
     gpuSubmissionFence.submitted();
     return Object.freeze({
       schemaVersion: 1,
@@ -342,7 +356,7 @@ export function mountRendererBrowserSurface(
   };
 
   const tick = (timeMs: number): void => {
-    if (gpuSubmissionFence.ready()) {
+    if (gpuSubmissionFence.ready() && gpuSubmissionDuty.ready()) {
       renderOnce(timeMs);
     }
     animationFrame = globalThis.requestAnimationFrame(tick);
@@ -368,6 +382,7 @@ export function mountRendererBrowserSurface(
     if (disposed) return;
     stop();
     gpuSubmissionFence.dispose();
+    gpuSubmissionDuty.dispose();
     webgl.dispose();
     renderer.dispose();
     disposed = true;
@@ -384,7 +399,8 @@ export function mountRendererBrowserSurface(
     canvas,
     renderer,
     frame,
-    automaticSubmissionReady: gpuSubmissionFence.ready.bind(gpuSubmissionFence),
+    automaticSubmissionReady: () =>
+      gpuSubmissionFence.ready() && gpuSubmissionDuty.ready(),
     animatedMeshPlayback: (handle) => renderer.animatedMeshPlayback(handle),
     applyFrame: (nextFrame) => renderer.applyFrame(nextFrame),
     cameraPose: () => currentCameraPose,
@@ -420,6 +436,50 @@ function webGl2SubmissionFenceDriver(
         return 'signaled';
       }
       return 'failed';
+    },
+  };
+}
+
+function webGl2SubmissionTimerDriver(
+  context: WebGLRenderingContext | WebGL2RenderingContext,
+): RendererGpuSubmissionTimerDriver | null {
+  if (!('createQuery' in context)) {
+    return null;
+  }
+  const webgl2 = context;
+  const timer = webgl2.getExtension('EXT_disjoint_timer_query_webgl2');
+  if (timer === null) {
+    return null;
+  }
+  return {
+    begin: () => {
+      const query = webgl2.createQuery();
+      if (query === null) {
+        return null;
+      }
+      webgl2.beginQuery(timer.TIME_ELAPSED_EXT, query);
+      return query;
+    },
+    delete: (query) => webgl2.deleteQuery(query as WebGLQuery),
+    end: () => webgl2.endQuery(timer.TIME_ELAPSED_EXT),
+    now: () => globalThis.performance?.now() ?? 0,
+    poll: (query) => {
+      if (webgl2.getParameter(timer.GPU_DISJOINT_EXT) === true) {
+        return { status: 'failed' };
+      }
+      if (webgl2.getQueryParameter(
+        query as WebGLQuery,
+        webgl2.QUERY_RESULT_AVAILABLE,
+      ) !== true) {
+        return { status: 'pending' };
+      }
+      const nanoseconds = webgl2.getQueryParameter(
+        query as WebGLQuery,
+        webgl2.QUERY_RESULT,
+      );
+      return typeof nanoseconds === 'number'
+        ? { durationMs: nanoseconds / 1_000_000, status: 'complete' }
+        : { status: 'failed' };
     },
   };
 }
