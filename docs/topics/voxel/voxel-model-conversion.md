@@ -286,14 +286,17 @@ and sampling mechanisms remain usable headlessly.
 `voxel-object-runtime` is the host-neutral live admission owner. It strictly decodes the canonical
 object, resolves every complete frame under caller-selected runtime work limits, meshes local cells
 around the durable fractional pivot, and deduplicates equal occupancy hashes into reusable mesh
-payloads. `svc-mesh` supplies the deterministic visible-face mechanism through a bounded
-standalone-cell entry point; neither crate imports a renderer, browser, filesystem, collision
-world, navigation world, or scheduler.
+payloads. `svc-mesh` supplies the deterministic visible-surface mechanism through a bounded
+standalone-cell entry point. It greedily merges only coplanar adjacent unit faces with the same
+material slot and outward normal; holes, relief, opposing normals, disconnected regions, bounds,
+and winding remain exact. Neither crate imports a renderer, browser, filesystem, collision world,
+navigation world, or scheduler.
 
 Runtime readouts expose the exact object/content identity, frame and clip counts, per-clip frame
 indices and integer-microsecond durations, and unique mesh count. Admission bounds frame count,
-aggregate resolved cells, and aggregate unique visible faces before unbounded live allocations.
-Equal input produces byte-for-byte equal mesh streams independent of source cell order.
+aggregate resolved cells, and aggregate unmerged visible unit faces before greedy payload
+allocation. Compression therefore cannot weaken the existing work quota. Equal input produces
+byte-for-byte equal mesh streams independent of source cell order.
 
 `VoxelObjectPlayer` accepts caller-provided integer microsecond time. Its named `play`, `pause`,
 `resume`, and `stop` operations support once, repeat, and ping-pong selection plus an exact rational

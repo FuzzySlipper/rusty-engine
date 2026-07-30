@@ -9,6 +9,7 @@ use voxel_asset::{VoxelFrameCell, VoxelObjectAsset};
 pub struct VoxelObjectRuntimeLimits {
     pub max_frames: u32,
     pub max_resolved_voxels: u64,
+    /// Aggregate visible unit faces before deterministic greedy compression.
     pub max_unique_mesh_faces: u64,
 }
 

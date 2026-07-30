@@ -1,4 +1,4 @@
-//! Deterministic visible-face voxel mesher → [`MeshPayload`].
+//! Deterministic greedy visible-surface voxel mesher → [`MeshPayload`].
 //!
 //! # Lane
 //!
@@ -10,20 +10,22 @@
 //!
 //! # This implementation
 //!
-//! **Naive visible-face** meshing: every solid voxel emits the faces whose
-//! neighbour is non-opaque; internal faces (and border faces against resident
-//! neighbour chunks) are culled. Greedy/face merging, UV/atlas, and interleaved
-//! buffers are deferred (ADR 0007 non-goals).
+//! Every solid voxel contributes the faces whose neighbour is non-opaque;
+//! internal faces (and border faces against resident neighbour chunks) are
+//! culled. Remaining coplanar faces with the same material and normal are
+//! greedily merged into deterministic rectangles. UV/atlas and interleaved
+//! buffers remain deferred (ADR 0007 non-goals).
 //!
-//! Output is **deterministic**: voxels in `core-space` X-fastest order, faces in
-//! `Direction6::ALL` order, faces grouped by ascending `material_slot`. Separate
-//! `f32` position/normal streams + a `u32` index stream — a 1:1 `BufferGeometry`
+//! Output is **deterministic**: material slot, `Direction6`, plane, row, and
+//! column order are all explicit. Rectangle growth prefers the positive
+//! in-plane `u` axis before the positive `v` axis. Separate `f32`
+//! position/normal streams + a `u32` index stream form a 1:1 `BufferGeometry`
 //! match. Vertices are **chunk-local** (origin = chunk min corner); world
 //! placement is the render node transform.
 
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use core_space::{ChunkCoord, Direction6, VoxelCoord, VoxelGridSpec};
 use svc_spatial::VoxelWorld;
@@ -52,9 +54,15 @@ pub struct MeshBounds {
 pub struct MeshStats {
     pub vertices: u32,
     pub indices: u32,
-    /// Emitted faces (quads).
+    /// Greedy output rectangles.
     pub quads: u32,
+    /// Greedy output rectangles, retained as the historical emitted-face name.
     pub faces_emitted: u32,
+    /// Visible unit faces before greedy merging.
+    ///
+    /// Runtime admission charges this value so compression never weakens the
+    /// existing bounded-work contract.
+    pub source_faces: u32,
     /// Faces culled because the neighbour was opaque (internal or resident border).
     pub faces_culled: u32,
 }
@@ -132,38 +140,145 @@ impl std::error::Error for MeshError {}
 
 // ── Face geometry ──────────────────────────────────────────────────────────────
 
-/// The four corner offsets (in `{0,1}` voxel units) of the face on `dir`, wound
-/// CCW so the polygon normal points outward along `dir`.
-fn face_corners(dir: Direction6) -> [[u32; 3]; 4] {
-    let a = dir.axis().index();
+fn in_plane_axes(dir: Direction6) -> (usize, usize) {
+    let axis = dir.axis().index();
     // The two in-plane axes ordered so `u × v = +a` (right-handed), making the
     // CCW loop's normal point along `+a` for positive faces.
-    let (u, v) = match a {
+    match axis {
         0 => (1, 2), // X: Y,Z  (Y×Z = X)
         1 => (2, 0), // Y: Z,X  (Z×X = Y)
         _ => (0, 1), // Z: X,Y  (X×Y = Z)
-    };
-    let fixed = if dir.is_positive() { 1 } else { 0 };
-    // CCW loop in the (u,v) plane.
-    let loop_uv = [(0u32, 0u32), (1, 0), (1, 1), (0, 1)];
-    let mut out = [[0u32; 3]; 4];
-    for (i, (uu, vv)) in loop_uv.iter().enumerate() {
-        out[i][a] = fixed;
-        out[i][u] = *uu;
-        out[i][v] = *vv;
     }
-    // Flip winding for negative faces so the normal still points outward.
-    if !dir.is_positive() {
-        out.swap(1, 3);
-    }
-    out
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct Face {
     slot: u16,
     coordinate: [i64; 3],
     dir: Direction6,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Quad {
+    slot: u16,
+    coordinate: [i64; 3],
+    dir: Direction6,
+    u_length: u32,
+    v_length: u32,
+}
+
+/// Merge each exact `(material, normal, plane)` lane independently.
+///
+/// The remaining cells in a lane are ordered `(v, u)`. The least cell starts a
+/// rectangle, which grows along `u` and then across complete rows along `v`.
+/// Removing each accepted rectangle makes disconnected regions and holes
+/// deterministic without ever bridging absent cells.
+fn greedy_merge_faces(faces: Vec<Face>) -> Result<Vec<Quad>, MeshError> {
+    let mut planes: BTreeMap<(u16, Direction6, i64), BTreeSet<(i64, i64)>> = BTreeMap::new();
+    for face in faces {
+        let axis = face.dir.axis().index();
+        let (u_axis, v_axis) = in_plane_axes(face.dir);
+        planes
+            .entry((face.slot, face.dir, face.coordinate[axis]))
+            .or_default()
+            .insert((face.coordinate[v_axis], face.coordinate[u_axis]));
+    }
+
+    let mut quads = Vec::new();
+    for ((slot, dir, plane), mut cells) in planes {
+        let axis = dir.axis().index();
+        let (u_axis, v_axis) = in_plane_axes(dir);
+        while let Some(&(v_start, u_start)) = cells.first() {
+            let mut u_length = 1_u32;
+            loop {
+                let Some(next_u) = u_start.checked_add(i64::from(u_length)) else {
+                    return Err(MeshError::PositionOutOfRange);
+                };
+                if cells.contains(&(v_start, next_u)) {
+                    u_length = u_length.checked_add(1).ok_or(MeshError::TooManyVertices {
+                        vertices: u64::from(u32::MAX) + 1,
+                    })?;
+                } else {
+                    break;
+                }
+            }
+
+            let mut v_length = 1_u32;
+            'rows: loop {
+                let Some(next_v) = v_start.checked_add(i64::from(v_length)) else {
+                    return Err(MeshError::PositionOutOfRange);
+                };
+                for u_offset in 0..u_length {
+                    let Some(u) = u_start.checked_add(i64::from(u_offset)) else {
+                        return Err(MeshError::PositionOutOfRange);
+                    };
+                    if !cells.contains(&(next_v, u)) {
+                        break 'rows;
+                    }
+                }
+                v_length = v_length.checked_add(1).ok_or(MeshError::TooManyVertices {
+                    vertices: u64::from(u32::MAX) + 1,
+                })?;
+            }
+
+            for v_offset in 0..v_length {
+                let v = v_start
+                    .checked_add(i64::from(v_offset))
+                    .ok_or(MeshError::PositionOutOfRange)?;
+                for u_offset in 0..u_length {
+                    let u = u_start
+                        .checked_add(i64::from(u_offset))
+                        .ok_or(MeshError::PositionOutOfRange)?;
+                    cells.remove(&(v, u));
+                }
+            }
+
+            let mut coordinate = [0_i64; 3];
+            coordinate[axis] = plane;
+            coordinate[u_axis] = u_start;
+            coordinate[v_axis] = v_start;
+            quads.push(Quad {
+                slot,
+                coordinate,
+                dir,
+                u_length,
+                v_length,
+            });
+        }
+    }
+    Ok(quads)
+}
+
+/// The four absolute grid points of one greedy quad, wound CCW so the polygon
+/// normal points outward along `quad.dir`.
+fn quad_corners(quad: Quad) -> Result<[[i64; 3]; 4], MeshError> {
+    let axis = quad.dir.axis().index();
+    let (u_axis, v_axis) = in_plane_axes(quad.dir);
+    let fixed = i64::from(quad.dir.is_positive());
+    let loop_uv = [
+        (0_i64, 0_i64),
+        (i64::from(quad.u_length), 0),
+        (i64::from(quad.u_length), i64::from(quad.v_length)),
+        (0, i64::from(quad.v_length)),
+    ];
+    let mut out = [[0_i64; 3]; 4];
+    for (index, (u_offset, v_offset)) in loop_uv.into_iter().enumerate() {
+        let mut point = quad.coordinate;
+        point[axis] = point[axis]
+            .checked_add(fixed)
+            .ok_or(MeshError::PositionOutOfRange)?;
+        point[u_axis] = point[u_axis]
+            .checked_add(u_offset)
+            .ok_or(MeshError::PositionOutOfRange)?;
+        point[v_axis] = point[v_axis]
+            .checked_add(v_offset)
+            .ok_or(MeshError::PositionOutOfRange)?;
+        out[index] = point;
+    }
+    if !quad.dir.is_positive() {
+        out.swap(1, 3);
+    }
+    Ok(out)
 }
 
 // ── Mesher ─────────────────────────────────────────────────────────────────────
@@ -246,7 +361,9 @@ pub fn mesh_cells_standalone(
         }
     }
 
-    emit_faces(&mut faces, cell_size, pivot, faces_culled)
+    let source_faces = faces.len() as u32;
+    let quads = greedy_merge_faces(faces)?;
+    emit_quads(&quads, cell_size, pivot, source_faces, faces_culled)
 }
 
 /// Mesh a resident chunk using its **resident neighbour chunks** for border
@@ -296,37 +413,42 @@ fn mesh_core(
         }
     }
 
-    emit_faces(&mut faces, spec.voxel_size(), [0.0; 3], faces_culled)
+    let source_faces = faces.len() as u32;
+    let quads = greedy_merge_faces(faces)?;
+    emit_quads(
+        &quads,
+        spec.voxel_size(),
+        [0.0; 3],
+        source_faces,
+        faces_culled,
+    )
 }
 
-fn emit_faces(
-    faces: &mut [Face],
+fn emit_quads(
+    quads: &[Quad],
     cell_size: f64,
     pivot: [f64; 3],
+    source_faces: u32,
     faces_culled: u32,
 ) -> Result<MeshPayload, MeshError> {
-    // Group by material slot (stable sort preserves voxel/face order within a slot).
-    // Stable sorting retains each input lane's canonical cell/direction order.
-    faces.sort_by_key(|face| face.slot);
-
-    let vertex_count = faces.len() as u64 * 4;
+    let vertex_count = quads.len() as u64 * 4;
     if vertex_count > u32::MAX as u64 {
         return Err(MeshError::TooManyVertices {
             vertices: vertex_count,
         });
     }
 
-    let mut positions: Vec<f32> = Vec::with_capacity(faces.len() * 12);
-    let mut normals: Vec<f32> = Vec::with_capacity(faces.len() * 12);
-    let mut indices: Vec<u32> = Vec::with_capacity(faces.len() * 6);
+    let mut positions: Vec<f32> = Vec::with_capacity(quads.len() * 12);
+    let mut normals: Vec<f32> = Vec::with_capacity(quads.len() * 12);
+    let mut indices: Vec<u32> = Vec::with_capacity(quads.len() * 6);
     let mut groups: Vec<MeshGroup> = Vec::new();
     let mut bmin = [f32::INFINITY; 3];
     let mut bmax = [f32::NEG_INFINITY; 3];
 
     let mut cur_slot: Option<u16> = None;
     let mut group_start: u32 = 0;
-    for face in faces.iter() {
-        if cur_slot != Some(face.slot) {
+    for quad in quads {
+        if cur_slot != Some(quad.slot) {
             if let Some(slot) = cur_slot {
                 groups.push(MeshGroup {
                     material_slot: slot,
@@ -334,19 +456,17 @@ fn emit_faces(
                     count: indices.len() as u32 - group_start,
                 });
             }
-            cur_slot = Some(face.slot);
+            cur_slot = Some(quad.slot);
             group_start = indices.len() as u32;
         }
 
         let base = (positions.len() / 3) as u32;
-        let normal = face.dir.normal();
+        let normal = quad.dir.normal();
         let [nx, ny, nz] = [normal.x as f32, normal.y as f32, normal.z as f32];
-        for corner in face_corners(face.dir) {
+        for point in quad_corners(*quad)? {
             let mut p = [0.0_f32; 3];
             for axis in 0..3 {
-                let value = ((face.coordinate[axis] as f64 + f64::from(corner[axis]))
-                    - pivot[axis])
-                    * cell_size;
+                let value = (point[axis] as f64 - pivot[axis]) * cell_size;
                 let rendered = value as f32;
                 if !value.is_finite() || !rendered.is_finite() {
                     return Err(MeshError::PositionOutOfRange);
@@ -371,7 +491,7 @@ fn emit_faces(
         });
     }
 
-    let bounds = if faces.is_empty() {
+    let bounds = if quads.is_empty() {
         MeshBounds {
             min: [0.0; 3],
             max: [0.0; 3],
@@ -385,8 +505,9 @@ fn emit_faces(
     let stats = MeshStats {
         vertices: (positions.len() / 3) as u32,
         indices: indices.len() as u32,
-        quads: faces.len() as u32,
-        faces_emitted: faces.len() as u32,
+        quads: quads.len() as u32,
+        faces_emitted: quads.len() as u32,
+        source_faces,
         faces_culled,
     };
     Ok(MeshPayload {
@@ -407,8 +528,8 @@ impl MeshPayload {
         let st = self.stats;
         let _ = writeln!(
             s,
-            "mesh v={} i={} quads={} emitted={} culled={}",
-            st.vertices, st.indices, st.quads, st.faces_emitted, st.faces_culled
+            "mesh v={} i={} quads={} emitted={} source={} culled={}",
+            st.vertices, st.indices, st.quads, st.faces_emitted, st.source_faces, st.faces_culled
         );
         let _ = writeln!(
             s,
@@ -460,6 +581,7 @@ mod tests {
         let c = chunk_with(&[(l(1, 1, 1), 1)]);
         let m = mesh_chunk_standalone(&spec(), ChunkCoord::ORIGIN, &c).unwrap();
         assert_eq!(m.stats.quads, 6);
+        assert_eq!(m.stats.source_faces, 6);
         assert_eq!(m.stats.vertices, 24);
         assert_eq!(m.stats.indices, 36);
         assert_eq!(m.stats.faces_culled, 0);
@@ -475,7 +597,7 @@ mod tests {
 
     #[test]
     fn emitted_winding_matches_emitted_normal() {
-        let c = chunk_with(&[(l(1, 1, 1), 1)]);
+        let c = chunk_with(&[(l(1, 1, 1), 1), (l(2, 1, 1), 1)]);
         let m = mesh_chunk_standalone(&spec(), ChunkCoord::ORIGIN, &c).unwrap();
         for tri in m.indices.chunks_exact(3) {
             let p: Vec<[f32; 3]> = tri
@@ -513,8 +635,10 @@ mod tests {
     fn two_adjacent_voxels_cull_the_shared_face() {
         let c = chunk_with(&[(l(1, 1, 1), 1), (l(2, 1, 1), 1)]);
         let m = mesh_chunk_standalone(&spec(), ChunkCoord::ORIGIN, &c).unwrap();
-        // 12 potential faces, 2 shared (one each side) culled → 10 emitted.
-        assert_eq!(m.stats.quads, 10);
+        // 12 potential faces, 2 shared faces culled, and the remaining ten
+        // source faces merge into the six rectangles of one cuboid.
+        assert_eq!(m.stats.quads, 6);
+        assert_eq!(m.stats.source_faces, 10);
         assert_eq!(m.stats.faces_culled, 2);
     }
 
@@ -524,7 +648,10 @@ mod tests {
         c.fill_region(l(0, 0, 0), l(4, 4, 4), VoxelValue::solid_raw(1))
             .unwrap();
         let m = mesh_chunk_standalone(&spec(), ChunkCoord::ORIGIN, &c).unwrap();
-        assert_eq!(m.stats.quads, 6 * 4 * 4); // exterior shell only
+        assert_eq!(m.stats.quads, 6);
+        assert_eq!(m.stats.source_faces, 6 * 4 * 4);
+        assert_eq!(m.bounds.min, [0.0; 3]);
+        assert_eq!(m.bounds.max, [4.0; 3]);
     }
 
     #[test]
@@ -608,7 +735,8 @@ mod tests {
         let b = mesh_cells_standalone(0.5, [0.5, 0.0, 0.0], &reversed, 100).unwrap();
 
         assert_eq!(a, b);
-        assert_eq!(a.stats.quads, 10);
+        assert_eq!(a.stats.quads, 6);
+        assert_eq!(a.stats.source_faces, 10);
         assert_eq!(a.bounds.min, [-0.25, 0.0, 0.0]);
         assert_eq!(a.bounds.max, [0.75, 0.5, 0.5]);
     }
@@ -619,9 +747,120 @@ mod tests {
             coordinate: [0, 0, 0],
             material_slot: 1,
         }];
+        let exact = mesh_cells_standalone(1.0, [0.0; 3], &cells, 6).unwrap();
+        assert_eq!(exact.stats.source_faces, 6);
         assert_eq!(
             mesh_cells_standalone(1.0, [0.0; 3], &cells, 5),
             Err(MeshError::TooManyFaces { faces: 6, limit: 5 })
         );
+    }
+
+    #[test]
+    fn greedy_rectangles_preserve_exact_material_surface_with_holes_and_relief() {
+        let mut cells = Vec::new();
+        for y in 0..3 {
+            for x in 0..3 {
+                if [x, y] != [1, 1] {
+                    cells.push(MeshVoxelCell {
+                        coordinate: [x, y, 0],
+                        material_slot: 1,
+                    });
+                }
+            }
+        }
+        cells.extend([
+            MeshVoxelCell {
+                coordinate: [0, 0, 1],
+                material_slot: 1,
+            },
+            MeshVoxelCell {
+                coordinate: [4, 0, 0],
+                material_slot: 2,
+            },
+            MeshVoxelCell {
+                coordinate: [4, 1, 0],
+                material_slot: 2,
+            },
+        ]);
+
+        let faces = visible_faces(&cells);
+        let quads = greedy_merge_faces(faces.iter().copied().collect()).unwrap();
+        assert_eq!(expand_quads(&quads), faces);
+        assert!(
+            quads.len() < faces.len(),
+            "the fixture must exercise actual merging"
+        );
+        assert!(quads.iter().any(|quad| quad.slot == 1));
+        assert!(quads.iter().any(|quad| quad.slot == 2));
+
+        let mesh = mesh_cells_standalone(1.0, [0.0; 3], &cells, 1_000).unwrap();
+        assert_eq!(mesh.stats.source_faces as usize, faces.len());
+        assert_eq!(mesh.stats.quads as usize, quads.len());
+        assert_eq!(mesh.bounds.min, [0.0, 0.0, 0.0]);
+        assert_eq!(mesh.bounds.max, [5.0, 3.0, 2.0]);
+    }
+
+    #[test]
+    fn broad_same_material_wall_collapses_without_weakening_source_face_accounting() {
+        let cells = (0..32)
+            .flat_map(|y| {
+                (0..48).map(move |x| MeshVoxelCell {
+                    coordinate: [x, y, 0],
+                    material_slot: 7,
+                })
+            })
+            .collect::<Vec<_>>();
+        let mesh = mesh_cells_standalone(0.25, [0.0; 3], &cells, 4_000).unwrap();
+
+        assert_eq!(mesh.stats.source_faces, 3_232);
+        assert_eq!(mesh.stats.quads, 6);
+        assert_eq!(mesh.stats.vertices, 24);
+        assert_eq!(mesh.bounds.max, [12.0, 8.0, 0.25]);
+    }
+
+    fn visible_faces(cells: &[MeshVoxelCell]) -> BTreeSet<Face> {
+        let occupied = cells
+            .iter()
+            .map(|cell| (cell.coordinate, cell.material_slot))
+            .collect::<BTreeMap<_, _>>();
+        let mut faces = BTreeSet::new();
+        for (&coordinate, &slot) in &occupied {
+            for dir in Direction6::ALL {
+                let offset = dir.offset();
+                let neighbour = [
+                    coordinate[0] + i64::from(offset[0]),
+                    coordinate[1] + i64::from(offset[1]),
+                    coordinate[2] + i64::from(offset[2]),
+                ];
+                if !occupied.contains_key(&neighbour) {
+                    faces.insert(Face {
+                        slot,
+                        coordinate,
+                        dir,
+                    });
+                }
+            }
+        }
+        faces
+    }
+
+    fn expand_quads(quads: &[Quad]) -> BTreeSet<Face> {
+        let mut faces = BTreeSet::new();
+        for quad in quads {
+            let (u_axis, v_axis) = in_plane_axes(quad.dir);
+            for v_offset in 0..quad.v_length {
+                for u_offset in 0..quad.u_length {
+                    let mut coordinate = quad.coordinate;
+                    coordinate[u_axis] += i64::from(u_offset);
+                    coordinate[v_axis] += i64::from(v_offset);
+                    faces.insert(Face {
+                        slot: quad.slot,
+                        coordinate,
+                        dir: quad.dir,
+                    });
+                }
+            }
+        }
+        faces
     }
 }

@@ -356,7 +356,8 @@ from them:
 - `svc-spatial` and `svc-volume` store deterministic voxel state;
 - `svc-collision` builds Parry-backed collision queries;
 - `svc-pathfinding` derives bounded navigation projections;
-- `svc-mesh` derives deterministic visible-face meshes; and
+- `svc-mesh` derives deterministic visible-surface meshes, greedily merging
+  only coplanar adjacent faces with identical material and normal; and
 - `VoxelEditService` validates an expected-revision transaction and replaces the complete coherent
   result only after every affected projection succeeds.
 

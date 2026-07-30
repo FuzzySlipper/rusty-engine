@@ -466,7 +466,7 @@ mod tests {
         let state = report.state.as_ref().unwrap();
         assert_eq!(state.solid_voxel_count, 2);
         assert_eq!(state.collider_chunk_count, 1);
-        assert_eq!(state.chunks[0].quads, 10);
+        assert_eq!(state.chunks[0].quads, 6);
         assert!(state.projections_coherent);
         assert!(report.to_text().contains("chunk [0,0,0]"));
     }

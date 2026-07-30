@@ -26,6 +26,14 @@ Inline payloads remain supported for bounded fixtures and consumers that do not
 need a bulk-data channel. `sharedBuffer` remains a separate transient
 borrow-handle seam; it is not a durable resource identity.
 
+Before either inline or packed projection, `svc-mesh` deterministically merges
+coplanar adjacent visible unit faces only when material slot and outward normal
+also match. This reduces redundant geometry without changing canonical voxel
+bytes, bounds, holes, relief, material boundaries, normals, winding, picking
+identity, or renderer ownership. Runtime admission continues to charge the
+unmerged visible-face count, so greedy compression does not relax its bounded
+work limit.
+
 ## Evidence and rejected candidates
 
 The decision uses the checked `rusty-engine-voxels` baseline and 96x144x96

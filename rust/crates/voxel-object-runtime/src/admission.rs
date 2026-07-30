@@ -206,7 +206,7 @@ impl<'a> AdmissionBuilder<'a> {
             })?;
             self.unique_mesh_faces = self
                 .unique_mesh_faces
-                .saturating_add(u64::from(mesh.stats.faces_emitted));
+                .saturating_add(u64::from(mesh.stats.source_faces));
             if self.unique_mesh_faces > self.limits.max_unique_mesh_faces {
                 return Err(VoxelObjectAdmissionError::MeshFaceLimit {
                     count: self.unique_mesh_faces,
