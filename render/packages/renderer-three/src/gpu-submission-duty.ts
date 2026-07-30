@@ -69,7 +69,13 @@ interface RendererGpuSubmissionDutyOptions {
 
 interface RendererGpuSubmissionPendingMeasurement {
   readonly query: object;
+  readonly startedAtMs: number;
   readonly submittedAtMs: number;
+}
+
+interface RendererGpuSubmissionActiveMeasurement {
+  readonly query: object;
+  readonly startedAtMs: number | null;
 }
 
 const FAST_GPU_DURATION_MS = 8;
@@ -106,7 +112,7 @@ export class RendererGpuSubmissionDuty {
   readonly #driver: RendererGpuSubmissionTimerDriver | null;
   readonly #maximumPendingMeasurements: number;
   readonly #rendererClass: RendererGpuSubmissionClass;
-  #active: object | null = null;
+  #active: RendererGpuSubmissionActiveMeasurement | null = null;
   #disposed = false;
   #fallbackSubmittedAtMs: number | null = null;
   #minimumIntervalMs = 0;
@@ -154,9 +160,12 @@ export class RendererGpuSubmissionDuty {
       return;
     }
     try {
-      this.#active = this.#driver.begin();
-      if (this.#active === null) {
+      const startedAtMs = this.#readNow();
+      const query = this.#driver.begin();
+      if (query === null) {
         this.#disableTimer();
+      } else {
+        this.#active = { query, startedAtMs };
       }
     } catch {
       this.#disableTimer();
@@ -172,23 +181,37 @@ export class RendererGpuSubmissionDuty {
       this.#disablePacing();
       return;
     }
+    const active = this.#active;
+    const deadlineOriginMs = acceleratedDeadlineOrigin(
+      this.#rendererClass,
+      active?.startedAtMs ?? null,
+      submittedAtMs,
+    );
     this.#notBeforeMs = Math.max(
       this.#notBeforeMs,
-      submittedAtMs + this.#minimumIntervalMs,
+      deadlineOriginMs + this.#minimumIntervalMs,
     );
     this.#sample = updateDutySample(this.#sample, {
       mode: this.#mode(),
       state: 'measuring',
     });
-    if (this.#driver === null || this.#timerDisabled || this.#active === null) {
+    if (this.#driver === null || this.#timerDisabled || active === null) {
       this.#fallbackSubmittedAtMs = submittedAtMs;
       return;
     }
-    const query = this.#active;
+    const { query } = active;
     this.#active = null;
     try {
       this.#driver.end(query);
-      this.#pending.push({ query, submittedAtMs });
+      this.#pending.push({
+        query,
+        startedAtMs: acceleratedDeadlineOrigin(
+          this.#rendererClass,
+          active.startedAtMs,
+          submittedAtMs,
+        ),
+        submittedAtMs,
+      });
     } catch {
       this.#delete(query);
       this.#disableTimer();
@@ -200,7 +223,7 @@ export class RendererGpuSubmissionDuty {
     if (this.#driver === null || this.#active === null) {
       return;
     }
-    const query = this.#active;
+    const { query } = this.#active;
     this.#active = null;
     try {
       this.#driver.end(query);
@@ -253,12 +276,17 @@ export class RendererGpuSubmissionDuty {
       }
       this.#pending.splice(index, 1);
       this.#delete(pending.query);
-      this.#completeDecision(nowMs, result.durationMs, pending.submittedAtMs);
+      this.#completeDecision(
+        nowMs,
+        result.durationMs,
+        pending.startedAtMs,
+        pending.submittedAtMs,
+      );
     }
     if (this.#fallbackSubmittedAtMs !== null) {
       const submittedAtMs = this.#fallbackSubmittedAtMs;
       this.#fallbackSubmittedAtMs = null;
-      this.#completeDecision(nowMs, null, submittedAtMs);
+      this.#completeDecision(nowMs, null, submittedAtMs, submittedAtMs);
     }
     const admissionLimit = this.#mode() === 'timerQuery'
       ? this.#maximumPendingMeasurements
@@ -304,7 +332,7 @@ export class RendererGpuSubmissionDuty {
     if (this.#driver === null || this.#active === null) {
       return;
     }
-    const query = this.#active;
+    const { query } = this.#active;
     this.#active = null;
     try {
       this.#driver.end(query);
@@ -362,6 +390,7 @@ export class RendererGpuSubmissionDuty {
   #completeDecision(
     nowMs: number,
     timerDurationMs: number | null,
+    startedAtMs: number,
     submittedAtMs: number,
   ): void {
     const completionAgeMs = Math.max(0, nowMs - submittedAtMs);
@@ -397,9 +426,12 @@ export class RendererGpuSubmissionDuty {
       ? MAXIMUM_GPU_DUTY_FRACTION
       : effectiveDurationMs / (effectiveDurationMs + headroomMs);
     this.#minimumIntervalMs = effectiveDurationMs + headroomMs;
+    const deadlineOriginMs = acceleratedTimerIsAuthoritative
+      ? startedAtMs
+      : submittedAtMs;
     this.#notBeforeMs = Math.max(
       this.#notBeforeMs,
-      submittedAtMs + this.#minimumIntervalMs,
+      deadlineOriginMs + this.#minimumIntervalMs,
     );
     this.#sample = Object.freeze({
       schemaVersion: 1,
@@ -438,6 +470,18 @@ function defaultSubmissionClock(): RendererGpuSubmissionClock {
   return {
     now: () => globalThis.performance?.now() ?? 0,
   };
+}
+
+function acceleratedDeadlineOrigin(
+  rendererClass: RendererGpuSubmissionClass,
+  startedAtMs: number | null,
+  submittedAtMs: number,
+): number {
+  return rendererClass === 'accelerated'
+    && startedAtMs !== null
+    && startedAtMs <= submittedAtMs
+    ? startedAtMs
+    : submittedAtMs;
 }
 
 function dutySample(

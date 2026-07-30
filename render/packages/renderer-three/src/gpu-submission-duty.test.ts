@@ -26,6 +26,39 @@ void test('fast completed work retains display-rate automatic submission', () =>
   assert.equal(driver.deleted, 1);
 });
 
+void test('accelerated measured deadline starts with enclosed work rather than double-counting submit return', () => {
+  const driver = new FakeTimerDriver();
+  const duty = new RendererGpuSubmissionDuty(driver, {
+    maximumPendingMeasurements: 8,
+    rendererClass: 'accelerated',
+  });
+
+  driver.nowMs = 100;
+  duty.begin();
+  // The timer query already encloses GPU work while the synchronous render
+  // call is active. Its eight-millisecond duration plus equal headroom targets
+  // the next 60 Hz source interval from that start, not from the later return.
+  driver.nowMs = 104;
+  duty.submitted();
+  driver.result = { durationMs: 8, status: 'complete' };
+  driver.nowMs = 116;
+
+  assert.equal(duty.ready(), true);
+  assert.equal(duty.sample().completionAgeMs, 12);
+  assert.equal(duty.sample().effectiveDurationMs, 8);
+  assert.equal(duty.sample().admittedAtMs, 116);
+
+  driver.nowMs = 116;
+  duty.begin();
+  driver.nowMs = 120;
+  duty.submitted();
+  driver.resultBySequence.set(2, { status: 'pending' });
+  driver.nowMs = 131.9;
+  assert.equal(duty.ready(), false);
+  driver.nowMs = 132;
+  assert.equal(duty.ready(), true);
+});
+
 void test('slow completed work progressively lowers automatic GPU duty', () => {
   const driver = new FakeTimerDriver();
   const duty = new RendererGpuSubmissionDuty(driver);
@@ -320,10 +353,12 @@ void test('software rendering treats observed completion age as work pressure', 
     rendererClass: 'software',
   });
 
+  driver.nowMs = 100;
   duty.begin();
+  driver.nowMs = 104;
   duty.submitted();
   driver.result = { durationMs: 3, status: 'complete' };
-  driver.nowMs = 15;
+  driver.nowMs = 119;
 
   assert.equal(duty.ready(), false);
   assert.deepEqual(duty.sample(), {
@@ -336,15 +371,17 @@ void test('software rendering treats observed completion age as work pressure', 
     completionAllowanceMs: 0,
     effectiveDurationMs: 15,
     targetDutyFraction: 4 / 15,
-    admittedAtMs: 56.25,
+    // Software completion backpressure remains anchored to the completed
+    // submission wall clock, rather than the accelerated timer-query start.
+    admittedAtMs: 160.25,
     admissionObservedAtMs: null,
-    observedAtMs: 15,
+    observedAtMs: 119,
     maximumPendingMeasurements: 1,
     pendingMeasurementCount: 0,
   });
-  driver.nowMs = 56.24;
+  driver.nowMs = 160.24;
   assert.equal(duty.ready(), false);
-  driver.nowMs = 56.25;
+  driver.nowMs = 160.25;
   assert.equal(duty.ready(), true);
 });
 

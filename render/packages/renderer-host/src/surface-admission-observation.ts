@@ -18,8 +18,11 @@ export interface RendererSurfaceAutomaticSubmissionAdmissionBackend {
   readonly mode: RendererSurfaceAutomaticSubmissionPacingMode;
   readonly state: RendererSurfaceAutomaticSubmissionPacingState;
   readonly rendererClass: RendererSurfaceAutomaticSubmissionClass;
+  readonly timerDurationMs: number | null;
+  readonly effectiveDurationMs: number | null;
   readonly admittedAtMs: number | null;
   readonly admissionObservedAtMs: number | null;
+  readonly observedAtMs: number | null;
   readonly automaticSubmissionLimit: number;
   readonly pendingMeasurementCount: number;
   readonly completionFenceMode: 'active' | 'disabled' | 'unsupported';
@@ -50,8 +53,11 @@ export interface RendererSurfaceAutomaticSubmissionBackendReadout {
   readonly mode: RendererSurfaceAutomaticSubmissionPacingMode;
   readonly state: RendererSurfaceAutomaticSubmissionPacingState;
   readonly rendererClass: RendererSurfaceAutomaticSubmissionClass;
+  readonly timerDurationMs: number | null;
+  readonly effectiveDurationMs: number | null;
   readonly admittedAtMs: number | null;
   readonly admissionObservedAtMs: number | null;
+  readonly observedAtMs: number | null;
   readonly automaticSubmissionLimit: number;
   readonly pendingMeasurementCount: number;
   readonly completionFenceMode: 'active' | 'disabled' | 'unsupported';
@@ -101,8 +107,11 @@ export class RendererSurfaceAutomaticSubmissionAdmissionObservation {
         mode: backend.mode,
         state: backend.state,
         rendererClass: backend.rendererClass,
+        timerDurationMs: backend.timerDurationMs,
+        effectiveDurationMs: backend.effectiveDurationMs,
         admittedAtMs: backend.admittedAtMs,
         admissionObservedAtMs: backend.admissionObservedAtMs,
+        observedAtMs: backend.observedAtMs,
         automaticSubmissionLimit: backend.automaticSubmissionLimit,
         pendingMeasurementCount: backend.pendingMeasurementCount,
         completionFenceMode: backend.completionFenceMode,

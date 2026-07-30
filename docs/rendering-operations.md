@@ -230,7 +230,9 @@ software renderers report a short timer duration while their asynchronous comple
 occupies browser CPU. The Three backend therefore classifies the concrete WebGL renderer locally:
 a positively identified software renderer uses all observed completion wall latency as effective
 work. A valid timer result on positively identified accelerated hardware is authoritative for
-execution duration, so delayed query-result polling does not inflate GPU work. Unknown renderers
+execution duration, so delayed query-result polling does not inflate GPU work. The accelerated
+prospective deadline is anchored when the enclosing timer query begins, rather than after the
+synchronous submission returns; this avoids charging already enclosed work twice. Unknown renderers
 and timing fallback paths retain one ordinary 60 Hz polling allowance before wall latency
 contributes. Every nonzero effective duration receives at least equal headroom, so
 even a seconds-long software submission cannot exceed fifty-percent automatic duty. Up to 100 ms
@@ -255,7 +257,8 @@ availability and occupancy. The same readout includes `hostAdmission`: exact lif
 counters plus the most recent 64 RAF admission attempts. Each attempt carries its source time,
 request/resize/controls/presentation/retained-animation demand reasons, the
 `admitted`/`backendBlocked`/`noDemand` outcome, and the backend's pre-submission capacity,
-measurement, and fence state. The bounded history makes sparse RAF delivery, missing owner demand,
+measurement, fence state, timer/effective duration, decision observation time, and deadline. The
+bounded history makes sparse RAF delivery, missing owner demand,
 and backend rejection distinguishable even when a consumer observes only occasional accepted
 submissions. Reading it never polls, submits, mutates demand, or starts another loop. Explicit
 `renderOnce`, camera reset, resource statistics, picking, and disposal keep their established
