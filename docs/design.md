@@ -494,7 +494,14 @@ timer timing retains completion-wall pacing and immediately restores strict sing
 and the public renderer surface exposes a frozen
 read-only sample of the renderer class, applied allowance, latest decision, admission deadline,
 actual automatic admission observation, selected capacity, timer-query occupancy, and sync-fence
-occupancy without adding a polling or submission path. An explicit `renderOnce`
+occupancy without adding a polling or submission path. The host adds one fixed-size immutable
+admission history to that same readout. It records each recent RAF source time, the exact
+request/resize/controls/presentation/retained-animation demand reasons, whether the attempt had no
+demand, was rejected by backend readiness, or was admitted, and the pre-submission capacity and
+occupancy state. Lifetime outcome counters remain exact after the history rolls over. Reading the
+history never polls WebGL, schedules work, or mutates demand, so it can distinguish browser-callback,
+host-demand, and backend-admission failures without becoming a second renderer observer.
+An explicit `renderOnce`
 remains unconditional. Each submitted frame advances the shared renderer exactly once,
 renders the world through the caller-owned camera, clears depth, and renders the camera-relative
 scene through a fixed host-owned camera with the same projection and aspect.

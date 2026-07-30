@@ -53,6 +53,28 @@ test('shared host realizes retained, presentation, and inspection families in a 
     .toBeLessThanOrEqual(proof.automaticSubmissionPacing.maximumPendingSubmissions);
   expect(proof.automaticSubmissionPacing.pendingMeasurementCount)
     .toBeLessThanOrEqual(proof.automaticSubmissionPacing.maximumPendingMeasurements);
+  const hostAdmission = proof.automaticSubmissionPacing.hostAdmission;
+  expect(hostAdmission.attemptCount).toBeGreaterThanOrEqual(1);
+  expect(
+    hostAdmission.admittedCount
+      + hostAdmission.backendBlockedCount
+      + hostAdmission.noDemandCount,
+  ).toBe(hostAdmission.attemptCount);
+  expect(hostAdmission.recentAttempts.length).toBeGreaterThanOrEqual(1);
+  expect(hostAdmission.recentAttempts.length).toBeLessThanOrEqual(64);
+  for (const [index, attempt] of hostAdmission.recentAttempts.entries()) {
+    expect(['admitted', 'backendBlocked', 'noDemand']).toContain(attempt.outcome);
+    expect(attempt.sourceTimeMs).toBeGreaterThanOrEqual(0);
+    expect(attempt.backend.pendingSubmissionCount)
+      .toBeLessThanOrEqual(attempt.backend.maximumPendingSubmissions);
+    expect(attempt.backend.pendingMeasurementCount)
+      .toBeLessThanOrEqual(attempt.backend.automaticSubmissionLimit);
+    const previous = hostAdmission.recentAttempts[index - 1];
+    if (previous !== undefined) {
+      expect(attempt.sequence).toBe(previous.sequence + 1);
+      expect(attempt.sourceTimeMs).toBeGreaterThanOrEqual(previous.sourceTimeMs);
+    }
+  }
   if (proof.automaticSubmissionPacing.mode === 'timerQuery') {
     expect(proof.automaticSubmissionPacing.timerDurationMs).toBeGreaterThanOrEqual(0);
     expect(proof.automaticSubmissionPacing.automaticSubmissionLimit)

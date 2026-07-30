@@ -251,8 +251,13 @@ frozen renderer-owned diagnostic with the timer mode, current measurement state,
 and allowance, latest completed decision's timer duration, observed completion age, effective
 duration, selected duty, decision time, admission deadline, actual automatic admission
 observation, selected and current admission limits, timer-query occupancy, and sync-fence
-availability and occupancy.
-Reading it never polls, submits, or starts another loop. Explicit
+availability and occupancy. The same readout includes `hostAdmission`: exact lifetime outcome
+counters plus the most recent 64 RAF admission attempts. Each attempt carries its source time,
+request/resize/controls/presentation/retained-animation demand reasons, the
+`admitted`/`backendBlocked`/`noDemand` outcome, and the backend's pre-submission capacity,
+measurement, and fence state. The bounded history makes sparse RAF delivery, missing owner demand,
+and backend rejection distinguishable even when a consumer observes only occasional accepted
+submissions. Reading it never polls, submits, mutates demand, or starts another loop. Explicit
 `renderOnce`, camera reset, resource statistics, picking, and disposal keep their established
 semantics.
 

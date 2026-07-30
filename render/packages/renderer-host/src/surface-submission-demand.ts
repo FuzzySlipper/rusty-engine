@@ -11,6 +11,17 @@ export interface RendererSurfaceContinuousDemand {
   readonly retainedAnimation: boolean;
 }
 
+/** Exact owner reasons considered by one automatic-submission attempt. */
+export interface RendererSurfaceSubmissionDemandDecision {
+  readonly schemaVersion: 1;
+  readonly requested: boolean;
+  readonly viewportChanged: boolean;
+  readonly controls: boolean;
+  readonly presentation: boolean;
+  readonly retainedAnimation: boolean;
+  readonly shouldSubmit: boolean;
+}
+
 /**
  * Coalesces automatic surface submissions without creating another scheduler.
  *
@@ -34,15 +45,31 @@ export class RendererSurfaceSubmissionDemand {
     viewport: RendererSurfaceViewportState,
     continuous: RendererSurfaceContinuousDemand,
   ): boolean {
+    return this.consumeDecision(viewport, continuous).shouldSubmit;
+  }
+
+  consumeDecision(
+    viewport: RendererSurfaceViewportState,
+    continuous: RendererSurfaceContinuousDemand,
+  ): RendererSurfaceSubmissionDemandDecision {
     const viewportChanged = !sameViewport(this.#viewport, viewport);
     this.#viewport = viewport;
-    const shouldSubmit = this.#requested
+    const requested = this.#requested;
+    const shouldSubmit = requested
       || viewportChanged
       || continuous.controls
       || continuous.presentation
       || continuous.retainedAnimation;
     this.#requested = false;
-    return shouldSubmit;
+    return Object.freeze({
+      schemaVersion: 1,
+      requested,
+      viewportChanged,
+      controls: continuous.controls,
+      presentation: continuous.presentation,
+      retainedAnimation: continuous.retainedAnimation,
+      shouldSubmit,
+    });
   }
 
   submitted(viewport: RendererSurfaceViewportState): void {

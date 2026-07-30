@@ -5,6 +5,16 @@ export * from './presentation-host-set.js';
 export * from './browser-dom-hosts.js';
 
 export {
+  RUSTY_RENDERER_SURFACE_ADMISSION_HISTORY_LIMIT,
+} from './surface-admission-observation.js';
+export type {
+  RendererSurfaceAutomaticSubmissionAdmissionBackend,
+  RendererSurfaceAutomaticSubmissionAdmissionAttempt,
+  RendererSurfaceAutomaticSubmissionAdmissionOutcome,
+  RendererSurfaceAutomaticSubmissionAdmissionSample,
+} from './surface-admission-observation.js';
+
+export {
   RUSTY_RENDERER_SURFACE_MAX_TIMING_DURATION_MS,
   RUSTY_RENDERER_SURFACE_TIMING_SCHEMA_VERSION,
 } from './surface-timing.js';

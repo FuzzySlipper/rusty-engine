@@ -44,6 +44,10 @@ import {
   createRendererSurfaceSubmissionSample,
   type RendererSurfaceSubmissionSample,
 } from './surface-statistics.js';
+import {
+  RendererSurfaceAutomaticSubmissionAdmissionObservation,
+  type RendererSurfaceAutomaticSubmissionAdmissionSample,
+} from './surface-admission-observation.js';
 import { RendererSurfaceReadinessPoll } from './surface-readiness-poll.js';
 import {
   RendererSurfaceSubmissionDemand,
@@ -98,6 +102,7 @@ export interface RendererSurfaceAutomaticSubmissionPacingSample {
   readonly pendingSubmissionCount: number;
   readonly maximumPendingMeasurements: number;
   readonly pendingMeasurementCount: number;
+  readonly hostAdmission: RendererSurfaceAutomaticSubmissionAdmissionSample;
 }
 
 export interface RendererSurfaceOptions {
@@ -349,6 +354,8 @@ function mountPreparedRendererSurface(
   const timing = new RendererSurfaceTimingTracker();
   let latestSubmission: RendererSurfaceSubmissionSample | null = null;
   const submissionDemand = new RendererSurfaceSubmissionDemand(surfaceViewport(canvas));
+  const automaticSubmissionAdmission =
+    new RendererSurfaceAutomaticSubmissionAdmissionObservation();
   let disposed = false;
   const continuousDemand = () => ({
     controls: controls.requiresAnimationFrame(),
@@ -412,8 +419,26 @@ function mountPreparedRendererSurface(
   };
 
   const tick = (timeMs: number): void => {
-    if (submissionDemand.consume(surfaceViewport(canvas), continuousDemand())) {
-      if (backendSurface.automaticSubmissionReady()) {
+    const demand = submissionDemand.consumeDecision(
+      surfaceViewport(canvas),
+      continuousDemand(),
+    );
+    if (!demand.shouldSubmit) {
+      automaticSubmissionAdmission.record(
+        timeMs,
+        'noDemand',
+        demand,
+        backendSurface.automaticSubmissionPacing(),
+      );
+    } else {
+      const ready = backendSurface.automaticSubmissionReady();
+      automaticSubmissionAdmission.record(
+        timeMs,
+        ready ? 'admitted' : 'backendBlocked',
+        demand,
+        backendSurface.automaticSubmissionPacing(),
+      );
+      if (ready) {
         renderFrame(timeMs, 'animationFrame');
       } else {
         requestAutomaticSubmission();
@@ -478,7 +503,10 @@ function mountPreparedRendererSurface(
       }
       return receipt;
     },
-    automaticSubmissionPacing: backendSurface.automaticSubmissionPacing,
+    automaticSubmissionPacing: () => Object.freeze({
+      ...backendSurface.automaticSubmissionPacing(),
+      hostAdmission: automaticSubmissionAdmission.sample(),
+    }),
     cameraPose: controls.cameraPose,
     cameraProjection: backendSurface.cameraProjection,
     inputReadout: controls.inputReadout,

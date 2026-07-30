@@ -23,14 +23,38 @@ const IDLE: RendererSurfaceContinuousDemand = {
 void test('static automatic submissions are coalesced until owner state changes', () => {
   const demand = new RendererSurfaceSubmissionDemand(VIEWPORT);
 
-  assert.equal(demand.consume(VIEWPORT, IDLE), false);
+  assert.deepEqual(demand.consumeDecision(VIEWPORT, IDLE), {
+    schemaVersion: 1,
+    requested: false,
+    viewportChanged: false,
+    controls: false,
+    presentation: false,
+    retainedAnimation: false,
+    shouldSubmit: false,
+  });
   demand.request();
   demand.request();
-  assert.equal(demand.consume(VIEWPORT, IDLE), true);
+  assert.deepEqual(demand.consumeDecision(VIEWPORT, IDLE), {
+    schemaVersion: 1,
+    requested: true,
+    viewportChanged: false,
+    controls: false,
+    presentation: false,
+    retainedAnimation: false,
+    shouldSubmit: true,
+  });
   assert.equal(demand.consume(VIEWPORT, IDLE), false);
 
   const resized = { ...VIEWPORT, clientWidth: 960 };
-  assert.equal(demand.consume(resized, IDLE), true);
+  assert.deepEqual(demand.consumeDecision(resized, IDLE), {
+    schemaVersion: 1,
+    requested: false,
+    viewportChanged: true,
+    controls: false,
+    presentation: false,
+    retainedAnimation: false,
+    shouldSubmit: true,
+  });
   assert.equal(demand.consume(resized, IDLE), false);
 });
 
