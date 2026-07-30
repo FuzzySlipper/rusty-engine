@@ -35,6 +35,8 @@ import {
 import { classifyGpuSubmissionRendererName } from './gpu-submission-class.js';
 import { resolveRendererPixelRatio } from './software-renderer-resolution.js';
 
+const ACCELERATED_AUTOMATIC_SUBMISSION_CAPACITY = 8;
+
 export interface ProjectedThreeRenderResult {
   readonly projection: RenderProjection;
   readonly renderer: ThreeRenderer;
@@ -224,12 +226,24 @@ export function mountRendererBrowserSurface(
   const webgl = new THREE.WebGLRenderer({ canvas, antialias: true });
   const webglContext = webgl.getContext();
   const gpuSubmissionClass = classifyGpuSubmissionRenderer(webglContext);
+  const gpuSubmissionFenceDriver = webGl2SubmissionFenceDriver(webglContext);
+  const gpuSubmissionTimerDriver = webGl2SubmissionTimerDriver(webglContext);
+  const automaticSubmissionCapacity =
+    gpuSubmissionClass === 'accelerated'
+      && gpuSubmissionFenceDriver !== null
+      && gpuSubmissionTimerDriver !== null
+      ? ACCELERATED_AUTOMATIC_SUBMISSION_CAPACITY
+      : 1;
   const gpuSubmissionFence = new RendererGpuSubmissionFence(
-    webGl2SubmissionFenceDriver(webglContext),
+    gpuSubmissionFenceDriver,
+    { maximumPendingSubmissions: automaticSubmissionCapacity },
   );
   const gpuSubmissionDuty = new RendererGpuSubmissionDuty(
-    webGl2SubmissionTimerDriver(webglContext),
-    { rendererClass: gpuSubmissionClass },
+    gpuSubmissionTimerDriver,
+    {
+      maximumPendingMeasurements: automaticSubmissionCapacity,
+      rendererClass: gpuSubmissionClass,
+    },
   );
   webgl.autoClear = false;
   // One surface submission contains both world and viewmodel render passes.
@@ -355,11 +369,16 @@ export function mountRendererBrowserSurface(
   };
 
   const automaticSubmissionReady = (): boolean => {
-    // Poll both completion owners independently. A pending exact fence still
-    // blocks admission, but it must not prevent the timer query from becoming
-    // observable and computing the next duty deadline.
-    const fenceReady = gpuSubmissionFence.ready();
+    // Poll both completion owners independently. Accelerated WebGL2 may keep a
+    // small exact fence/query ring so delayed browser observability cannot
+    // become a frame-rate cap. Timer failure immediately restores a strict
+    // single-fence limit; software and unknown renderers never enter the ring.
     const dutyReady = gpuSubmissionDuty.ready();
+    const fenceReady = gpuSubmissionFence.ready(
+      gpuSubmissionDuty.sample().mode === 'timerQuery'
+        ? automaticSubmissionCapacity
+        : 1,
+    );
     return fenceReady && dutyReady;
   };
 

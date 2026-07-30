@@ -217,8 +217,12 @@ instances sharing one retained geometry count as one geometry, while independent
 instance resources count independently.
 
 Automatic WebGL2 submission uses asynchronous backend pacing without adding another render loop.
-One completion fence bounds queued command streams. When
-`EXT_disjoint_timer_query_webgl2` is available, the previous submission's GPU duration determines
+Software, unknown, and timer-fallback paths keep one completion fence and one timer measurement
+in flight. Positively identified accelerated WebGL2 with working fence and timer-query support may
+instead use an eight-slot renderer-owned fence/query ring. The fixed cap bounds queued command
+streams while allowing display-rate work to continue when Radeon/ANGLE exposes a completed query
+50–100 ms after the measured 4–7 ms GPU work. When
+`EXT_disjoint_timer_query_webgl2` is available, completed submissions' GPU durations determine
 an adaptive headroom interval before the next automatic submission. Some
 software renderers report a short timer duration while their asynchronous completion still
 occupies browser CPU. The Three backend therefore classifies the concrete WebGL renderer locally:
@@ -232,7 +236,9 @@ of additional progressive headroom lowers ordinary slow work toward a twenty-per
 adding an unbounded extra delay. The diagnostic reports the selected duty after that bound, not an
 unachievable pre-cap target. This is not a fixed-rate timer: the
 accelerated fast path can still submit four-millisecond work at 120 Hz and eight-millisecond work
-at 60 Hz, while slow completion yields materially more CPU time. Timer-query and completion
+at 60 Hz, while slow completion yields materially more CPU time. Delayed browser observability
+can fill the accelerated ring, but cannot grow it or silently become an unbounded queue. Any
+timer-query failure immediately restores strict one-fence admission. Timer-query and completion
 polling is non-blocking. The single RAF remains the only render scheduler; during accelerated
 demand, renderer-host may run one bounded readiness-probe burst between display callbacks. Those
 probes advance fence and timer-query observation but never render or request another RAF, are

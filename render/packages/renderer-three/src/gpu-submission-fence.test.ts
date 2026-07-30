@@ -37,6 +37,58 @@ void test('a later explicit submission replaces the fence and covers prior work'
   assert.equal(fence.ready(), true);
 });
 
+void test('accelerated automatic work uses a fixed completion ring without becoming unbounded', () => {
+  const driver = new FakeFenceDriver();
+  const fence = new RendererGpuSubmissionFence(driver, {
+    maximumPendingSubmissions: 3,
+  });
+
+  for (let sequence = 1; sequence <= 3; sequence += 1) {
+    assert.equal(fence.ready(), true);
+    fence.submitted();
+    driver.statusBySequence.set(sequence, 'pending');
+  }
+  assert.equal(fence.ready(), false);
+  assert.equal(driver.created, 3);
+
+  driver.statusBySequence.set(1, 'signaled');
+  assert.equal(fence.ready(), true);
+  fence.submitted();
+  assert.equal(driver.created, 4);
+  assert.equal(fence.ready(), false);
+
+  fence.dispose();
+  assert.equal(driver.deleted, 4);
+});
+
+void test('a runtime timer fallback can restore the strict one-fence admission limit', () => {
+  const driver = new FakeFenceDriver();
+  const fence = new RendererGpuSubmissionFence(driver, {
+    maximumPendingSubmissions: 3,
+  });
+
+  fence.submitted();
+  fence.submitted();
+  assert.equal(fence.ready(), true);
+  assert.equal(fence.ready(1), false);
+
+  driver.statusBySequence.set(1, 'signaled');
+  assert.equal(fence.ready(1), false);
+  driver.statusBySequence.set(2, 'signaled');
+  assert.equal(fence.ready(1), true);
+});
+
+void test('invalid completion-ring bounds fail before any driver mutation', () => {
+  const driver = new FakeFenceDriver();
+  assert.throws(
+    () => new RendererGpuSubmissionFence(driver, {
+      maximumPendingSubmissions: 0,
+    }),
+    /maximum pending GPU submissions must be a positive safe integer/,
+  );
+  assert.equal(driver.created, 0);
+});
+
 void test('unsupported and failed fences degrade without deadlocking rendering', () => {
   const unsupported = new RendererGpuSubmissionFence(null);
   unsupported.submitted();
@@ -71,6 +123,7 @@ void test('driver exceptions disable optional pacing without escaping or leaking
 
 class FakeFenceDriver implements RendererGpuSubmissionFenceDriver {
   status: RendererGpuSubmissionFencePoll = 'pending';
+  readonly statusBySequence = new Map<number, RendererGpuSubmissionFencePoll>();
   created = 0;
   deleted = 0;
   flushed = 0;
@@ -93,10 +146,11 @@ class FakeFenceDriver implements RendererGpuSubmissionFenceDriver {
     this.flushed += 1;
   }
 
-  poll(_fence: object): RendererGpuSubmissionFencePoll {
+  poll(fence: object): RendererGpuSubmissionFencePoll {
     if (this.throwOnPoll) {
       throw new Error('driver poll failed');
     }
-    return this.status;
+    const sequence = (fence as { readonly sequence: number }).sequence;
+    return this.statusBySequence.get(sequence) ?? this.status;
   }
 }

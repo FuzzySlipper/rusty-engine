@@ -465,9 +465,12 @@ The Three adapter retains that hierarchy in a separate scene. The browser surfac
 animation-frame scheduler and coalesces accepted retained mutations, camera changes, and resizes
 into its next backend submission. Active controls, animation, or particles retain continuous
 display-clock advancement; an unchanged static scene does not continuously resubmit work to the
-backend. On WebGL2, the backend also keeps at most one automatic GPU command stream in flight;
-newer retained and camera state remains coalesced until its completion fence signals. When the
-browser exposes asynchronous WebGL2 timer queries, the backend also leaves a completion-derived,
+backend. On WebGL2, software, unknown, and timing-fallback paths keep at most one automatic GPU
+command stream in flight. Positively identified accelerated WebGL2 with working completion fences
+and timer queries may use a fixed eight-slot renderer-owned fence/query ring. This remains bounded
+completion safety while avoiding a false 50–100 ms cadence cap on real accelerated drivers whose
+query results become observable long after their measured 4–7 ms GPU work. When the browser
+exposes asynchronous WebGL2 timer queries, the backend also leaves a completion-derived,
 bounded progressive headroom interval after measured GPU execution before admitting another
 automatic submission. Software renderers can under-report timer duration while asynchronous completion still
 occupies browser CPU. The Three backend classifies the concrete WebGL renderer without exposing its
@@ -486,7 +489,8 @@ ratio at 0.25—one-sixteenth of the CSS pixel count for requests at or above on
 CSS pixel—while preserving CSS layout, projection, picking, content, and caller-requested ratios
 below that ceiling. Accelerated and unknown renderers retain their requested ratio. Unsupported or
 disjoint
-timer timing retains completion-wall pacing, and the public renderer surface exposes a frozen
+timer timing retains completion-wall pacing and immediately restores strict one-fence admission,
+and the public renderer surface exposes a frozen
 read-only sample of the renderer class, applied allowance, latest decision, admission deadline, and
 actual automatic admission observation without adding a polling or submission path. An explicit `renderOnce`
 remains unconditional. Each submitted frame advances the shared renderer exactly once,

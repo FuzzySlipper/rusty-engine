@@ -10,46 +10,66 @@ export interface RendererGpuSubmissionFenceDriver {
   readonly poll: (fence: object) => RendererGpuSubmissionFencePoll;
 }
 
+export interface RendererGpuSubmissionFenceOptions {
+  readonly maximumPendingSubmissions?: number;
+}
+
 /**
- * Bounds automatic WebGL work to one submitted GPU command stream.
+ * Bounds automatic WebGL work to a fixed number of submitted command streams.
  *
  * Explicit rendering remains caller-owned. The browser surface consults this
  * fence only before its automatic loop submits another frame.
  */
 export class RendererGpuSubmissionFence {
   readonly #driver: RendererGpuSubmissionFenceDriver | null;
+  readonly #maximumPendingSubmissions: number;
   #disabled = false;
-  #pending: object | null = null;
+  readonly #pending: object[] = [];
 
-  constructor(driver: RendererGpuSubmissionFenceDriver | null) {
+  constructor(
+    driver: RendererGpuSubmissionFenceDriver | null,
+    options: RendererGpuSubmissionFenceOptions = {},
+  ) {
     this.#driver = driver;
+    this.#maximumPendingSubmissions = positiveInteger(
+      options.maximumPendingSubmissions ?? 1,
+      'maximum pending GPU submissions',
+    );
   }
 
-  ready(): boolean {
-    if (this.#driver === null || this.#disabled || this.#pending === null) {
+  ready(maximumPendingSubmissions = this.#maximumPendingSubmissions): boolean {
+    const admissionLimit = Math.min(
+      this.#maximumPendingSubmissions,
+      positiveInteger(
+        maximumPendingSubmissions,
+        'automatic pending GPU submission limit',
+      ),
+    );
+    if (this.#driver === null || this.#disabled) {
       return true;
     }
-    let status: RendererGpuSubmissionFencePoll;
-    try {
-      status = this.#driver.poll(this.#pending);
-    } catch {
-      this.#disable();
-      return true;
+    for (let index = this.#pending.length - 1; index >= 0; index -= 1) {
+      const fence = this.#pending[index];
+      if (fence === undefined) {
+        continue;
+      }
+      let status: RendererGpuSubmissionFencePoll;
+      try {
+        status = this.#driver.poll(fence);
+      } catch {
+        this.#disable();
+        return true;
+      }
+      if (status === 'failed') {
+        this.#disable();
+        return true;
+      }
+      if (status === 'signaled') {
+        this.#delete(fence);
+        this.#pending.splice(index, 1);
+      }
     }
-    if (status === 'pending') {
-      return false;
-    }
-    if (status === 'failed') {
-      this.#disable();
-      return true;
-    }
-    try {
-      this.#driver.delete(this.#pending);
-    } catch {
-      this.#disabled = true;
-    }
-    this.#pending = null;
-    return true;
+    return this.#pending.length < admissionLimit;
   }
 
   submitted(): void {
@@ -57,15 +77,21 @@ export class RendererGpuSubmissionFence {
       return;
     }
     try {
-      if (this.#pending !== null) {
-        this.#driver.delete(this.#pending);
-        this.#pending = null;
+      // Automatic callers consult ready() first. An explicit caller is allowed
+      // to replace the oldest observation; the newly inserted fence covers all
+      // earlier commands in WebGL submission order.
+      while (this.#pending.length >= this.#maximumPendingSubmissions) {
+        const oldest = this.#pending.shift();
+        if (oldest !== undefined) {
+          this.#delete(oldest);
+        }
       }
-      this.#pending = this.#driver.create();
-      if (this.#pending === null) {
+      const fence = this.#driver.create();
+      if (fence === null) {
         this.#disabled = true;
         return;
       }
+      this.#pending.push(fence);
       this.#driver.flush();
     } catch {
       this.#disable();
@@ -77,15 +103,29 @@ export class RendererGpuSubmissionFence {
   }
 
   #disable(): void {
-    if (this.#driver !== null && this.#pending !== null) {
-      try {
-        this.#driver.delete(this.#pending);
-      } catch {
-        // Synchronization is an optional pacing mechanism. Context-loss and
-        // driver cleanup failures must not become a renderer lifecycle failure.
-      }
+    for (const fence of this.#pending) {
+      this.#delete(fence);
     }
-    this.#pending = null;
+    this.#pending.length = 0;
     this.#disabled = true;
   }
+
+  #delete(fence: object): void {
+    if (this.#driver === null) {
+      return;
+    }
+    try {
+      this.#driver.delete(fence);
+    } catch {
+      // Synchronization is an optional pacing mechanism. Context-loss and
+      // driver cleanup failures must not become a renderer lifecycle failure.
+    }
+  }
+}
+
+function positiveInteger(value: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new RangeError(`${label} must be a positive safe integer`);
+  }
+  return value;
 }

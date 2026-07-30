@@ -44,7 +44,7 @@ void test('slow completed work progressively lowers automatic GPU duty', () => {
   assert.equal(duty.ready(), true);
 });
 
-void test('accelerated measured work ignores delayed polling while the fence retains one in-flight submission', () => {
+void test('accelerated measured work ignores delayed polling while the default fence remains strict', () => {
   const timerDriver = new FakeTimerDriver();
   const fenceDriver = new FakeFenceDriver();
   const duty = new RendererGpuSubmissionDuty(timerDriver, {
@@ -84,6 +84,88 @@ void test('accelerated measured work ignores delayed polling while the fence ret
     admissionObservedAtMs: 80,
     observedAtMs: 80,
   });
+});
+
+void test('accelerated measurements pipeline display-rate work behind a strict fixed cap', () => {
+  const timerDriver = new FakeTimerDriver();
+  const fenceDriver = new FakeFenceDriver();
+  const capacity = 8;
+  const duty = new RendererGpuSubmissionDuty(timerDriver, {
+    maximumPendingMeasurements: capacity,
+    rendererClass: 'accelerated',
+  });
+  const fence = new RendererGpuSubmissionFence(fenceDriver, {
+    maximumPendingSubmissions: capacity,
+  });
+
+  for (let sequence = 1; sequence <= capacity; sequence += 1) {
+    assert.equal(fence.ready() && duty.ready(), true);
+    duty.begin();
+    duty.submitted();
+    fence.submitted();
+    timerDriver.resultBySequence.set(sequence, { status: 'pending' });
+    fenceDriver.statusBySequence.set(sequence, 'pending');
+    timerDriver.nowMs += 8;
+  }
+  assert.equal(fence.ready() && duty.ready(), false);
+
+  timerDriver.resultBySequence.set(1, {
+    durationMs: 4,
+    status: 'complete',
+  });
+  fenceDriver.statusBySequence.set(1, 'signaled');
+  assert.equal(fence.ready() && duty.ready(), true);
+  assert.equal(duty.sample().effectiveDurationMs, 4);
+  assert.equal(duty.sample().completionAgeMs, 64);
+  assert.equal(duty.sample().admittedAtMs, 56);
+
+  duty.begin();
+  duty.submitted();
+  fence.submitted();
+  assert.equal(timerDriver.created, capacity + 1);
+  assert.equal(fenceDriver.created, capacity + 1);
+
+  duty.dispose();
+  fence.dispose();
+  assert.equal(timerDriver.deleted, capacity + 1);
+  assert.equal(fenceDriver.deleted, capacity + 1);
+});
+
+void test('a completed accelerated measurement paces later ring submissions prospectively', () => {
+  const driver = new FakeTimerDriver();
+  const duty = new RendererGpuSubmissionDuty(driver, {
+    maximumPendingMeasurements: 8,
+    rendererClass: 'accelerated',
+  });
+
+  duty.begin();
+  duty.submitted();
+  driver.resultBySequence.set(1, {
+    durationMs: 12,
+    status: 'complete',
+  });
+  driver.nowMs = 50;
+  assert.equal(duty.ready(), true);
+  assert.equal(duty.sample().targetDutyFraction, 1 / 3);
+
+  duty.begin();
+  duty.submitted();
+  driver.nowMs = 85.9;
+  assert.equal(duty.ready(), false);
+  driver.nowMs = 86;
+  assert.equal(duty.ready(), true);
+});
+
+void test('invalid measurement-ring bounds fail before timer mutation', () => {
+  const driver = new FakeTimerDriver();
+  assert.throws(
+    () => new RendererGpuSubmissionDuty(driver, {
+      maximumPendingMeasurements: Number.NaN,
+      rendererClass: 'accelerated',
+    }),
+    /maximum pending GPU measurements must be a positive safe integer/,
+  );
+  assert.equal(driver.created, 0);
 });
 
 void test('late completion wall time corrects an under-reported timer duration for an unknown renderer', () => {
@@ -307,6 +389,7 @@ class FakeTimerDriver implements RendererGpuSubmissionTimerDriver {
   ended = 0;
   nowMs = 0;
   result: RendererGpuSubmissionTimerPoll = { status: 'pending' };
+  readonly resultBySequence = new Map<number, RendererGpuSubmissionTimerPoll>();
   throwOnPoll = false;
 
   begin(): object {
@@ -326,16 +409,18 @@ class FakeTimerDriver implements RendererGpuSubmissionTimerDriver {
     return this.nowMs;
   }
 
-  poll(_query: object): RendererGpuSubmissionTimerPoll {
+  poll(query: object): RendererGpuSubmissionTimerPoll {
     if (this.throwOnPoll) {
       throw new Error('timer poll failed');
     }
-    return this.result;
+    const sequence = (query as { readonly sequence: number }).sequence;
+    return this.resultBySequence.get(sequence) ?? this.result;
   }
 }
 
 class FakeFenceDriver implements RendererGpuSubmissionFenceDriver {
   status: RendererGpuSubmissionFencePoll = 'pending';
+  readonly statusBySequence = new Map<number, RendererGpuSubmissionFencePoll>();
   created = 0;
   deleted = 0;
   flushed = 0;
@@ -353,7 +438,8 @@ class FakeFenceDriver implements RendererGpuSubmissionFenceDriver {
     this.flushed += 1;
   }
 
-  poll(_fence: object): RendererGpuSubmissionFencePoll {
-    return this.status;
+  poll(fence: object): RendererGpuSubmissionFencePoll {
+    const sequence = (fence as { readonly sequence: number }).sequence;
+    return this.statusBySequence.get(sequence) ?? this.status;
   }
 }

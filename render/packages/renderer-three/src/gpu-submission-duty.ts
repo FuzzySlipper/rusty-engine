@@ -56,7 +56,13 @@ interface RendererGpuSubmissionClock {
 
 interface RendererGpuSubmissionDutyOptions {
   readonly clock?: RendererGpuSubmissionClock;
+  readonly maximumPendingMeasurements?: number;
   readonly rendererClass?: RendererGpuSubmissionClass;
+}
+
+interface RendererGpuSubmissionPendingMeasurement {
+  readonly query: object;
+  readonly submittedAtMs: number;
 }
 
 const FAST_GPU_DURATION_MS = 8;
@@ -91,13 +97,15 @@ export class RendererGpuSubmissionDuty {
   readonly #clock: RendererGpuSubmissionClock;
   readonly #completionAllowanceMs: number;
   readonly #driver: RendererGpuSubmissionTimerDriver | null;
+  readonly #maximumPendingMeasurements: number;
   readonly #rendererClass: RendererGpuSubmissionClass;
   #active: object | null = null;
   #disposed = false;
+  #fallbackSubmittedAtMs: number | null = null;
+  #minimumIntervalMs = 0;
   #notBeforeMs = 0;
-  #pending: object | null = null;
+  readonly #pending: RendererGpuSubmissionPendingMeasurement[] = [];
   #sample: RendererGpuSubmissionDutySample;
-  #submittedAtMs: number | null = null;
   #timerDisabled = false;
 
   constructor(
@@ -107,6 +115,10 @@ export class RendererGpuSubmissionDuty {
     this.#driver = driver;
     this.#clock = options.clock ?? driver ?? defaultSubmissionClock();
     this.#rendererClass = options.rendererClass ?? 'unknown';
+    this.#maximumPendingMeasurements = positiveInteger(
+      options.maximumPendingMeasurements ?? 1,
+      'maximum pending GPU measurements',
+    );
     this.#completionAllowanceMs = this.#rendererClass === 'software'
       ? 0
       : COMPLETION_POLL_ALLOWANCE_MS;
@@ -123,12 +135,13 @@ export class RendererGpuSubmissionDuty {
       return;
     }
     this.#discardActive();
-    this.#discardPending();
-    this.#notBeforeMs = 0;
-    this.#submittedAtMs = null;
+    while (this.#pending.length >= this.#maximumPendingMeasurements) {
+      this.#discardOldestPending();
+    }
+    this.#fallbackSubmittedAtMs = null;
     this.#sample = updateDutySample(this.#sample, {
       mode: this.#mode(),
-      state: 'idle',
+      state: this.#pending.length === 0 ? 'idle' : 'measuring',
     });
     if (this.#driver === null || this.#timerDisabled) {
       return;
@@ -152,22 +165,27 @@ export class RendererGpuSubmissionDuty {
       this.#disablePacing();
       return;
     }
-    this.#submittedAtMs = submittedAtMs;
+    this.#notBeforeMs = Math.max(
+      this.#notBeforeMs,
+      submittedAtMs + this.#minimumIntervalMs,
+    );
     this.#sample = updateDutySample(this.#sample, {
       mode: this.#mode(),
       state: 'measuring',
     });
     if (this.#driver === null || this.#timerDisabled || this.#active === null) {
+      this.#fallbackSubmittedAtMs = submittedAtMs;
       return;
     }
     const query = this.#active;
     this.#active = null;
     try {
       this.#driver.end(query);
-      this.#pending = query;
+      this.#pending.push({ query, submittedAtMs });
     } catch {
       this.#delete(query);
       this.#disableTimer();
+      this.#fallbackSubmittedAtMs = submittedAtMs;
     }
   }
 
@@ -195,46 +213,58 @@ export class RendererGpuSubmissionDuty {
       this.#disablePacing();
       return true;
     }
-    if (this.#pending !== null) {
+    for (let index = 0; index < this.#pending.length;) {
+      const pending = this.#pending[index];
+      if (pending === undefined) {
+        index += 1;
+        continue;
+      }
       let result: RendererGpuSubmissionTimerPoll;
       if (this.#driver === null) {
-        this.#disableTimer();
         result = { status: 'failed' };
       } else {
         try {
-          result = this.#driver.poll(this.#pending);
+          result = this.#driver.poll(pending.query);
         } catch {
-          this.#disableTimer();
           result = { status: 'failed' };
         }
       }
       if (result.status === 'pending') {
-        this.#sample = updateDutySample(this.#sample, {
-          mode: this.#mode(),
-          state: 'measuring',
-        });
-        return false;
+        index += 1;
+        continue;
       }
-      if (result.status === 'failed') {
+      if (result.status === 'failed'
+        || !Number.isFinite(result.durationMs)
+        || result.durationMs < 0) {
+        const fallbackSubmittedAtMs = Math.max(
+          pending.submittedAtMs,
+          ...this.#pending.map((measurement) => measurement.submittedAtMs),
+        );
         this.#disableTimer();
-      } else {
-        const query = this.#pending;
-        this.#pending = null;
-        this.#delete(query);
-        if (!Number.isFinite(result.durationMs) || result.durationMs < 0) {
-          this.#disableTimer();
-        } else {
-          this.#completeDecision(nowMs, result.durationMs);
-        }
+        this.#fallbackSubmittedAtMs = fallbackSubmittedAtMs;
+        break;
       }
+      this.#pending.splice(index, 1);
+      this.#delete(pending.query);
+      this.#completeDecision(nowMs, result.durationMs, pending.submittedAtMs);
     }
-    if (this.#submittedAtMs !== null && this.#pending === null) {
-      this.#completeDecision(nowMs, null);
+    if (this.#fallbackSubmittedAtMs !== null) {
+      const submittedAtMs = this.#fallbackSubmittedAtMs;
+      this.#fallbackSubmittedAtMs = null;
+      this.#completeDecision(nowMs, null, submittedAtMs);
     }
-    const ready = nowMs >= this.#notBeforeMs;
+    const admissionLimit = this.#mode() === 'timerQuery'
+      ? this.#maximumPendingMeasurements
+      : 1;
+    const capacityAvailable = this.#pending.length < admissionLimit;
+    const ready = capacityAvailable && nowMs >= this.#notBeforeMs;
     this.#sample = updateDutySample(this.#sample, {
       mode: this.#mode(),
-      state: ready ? 'ready' : 'waiting',
+      state: ready
+        ? 'ready'
+        : capacityAvailable
+          ? 'waiting'
+          : 'measuring',
       ...(ready ? { admissionObservedAtMs: nowMs } : {}),
     });
     return ready;
@@ -250,7 +280,8 @@ export class RendererGpuSubmissionDuty {
     }
     this.#discardActive();
     this.#discardPending();
-    this.#submittedAtMs = null;
+    this.#fallbackSubmittedAtMs = null;
+    this.#minimumIntervalMs = 0;
     this.#notBeforeMs = 0;
     this.#disposed = true;
     this.#sample = updateDutySample(this.#sample, { state: 'disposed' });
@@ -271,12 +302,17 @@ export class RendererGpuSubmissionDuty {
   }
 
   #discardPending(): void {
-    if (this.#pending === null) {
-      return;
+    for (const pending of this.#pending) {
+      this.#delete(pending.query);
     }
-    const query = this.#pending;
-    this.#pending = null;
-    this.#delete(query);
+    this.#pending.length = 0;
+  }
+
+  #discardOldestPending(): void {
+    const pending = this.#pending.shift();
+    if (pending !== undefined) {
+      this.#delete(pending.query);
+    }
   }
 
   #delete(query: object): void {
@@ -300,7 +336,8 @@ export class RendererGpuSubmissionDuty {
   #disablePacing(): void {
     this.#discardActive();
     this.#discardPending();
-    this.#submittedAtMs = null;
+    this.#fallbackSubmittedAtMs = null;
+    this.#minimumIntervalMs = 0;
     this.#notBeforeMs = 0;
     this.#timerDisabled = true;
     this.#sample = updateDutySample(this.#sample, {
@@ -309,11 +346,12 @@ export class RendererGpuSubmissionDuty {
     });
   }
 
-  #completeDecision(nowMs: number, timerDurationMs: number | null): void {
-    if (this.#submittedAtMs === null) {
-      return;
-    }
-    const completionAgeMs = Math.max(0, nowMs - this.#submittedAtMs);
+  #completeDecision(
+    nowMs: number,
+    timerDurationMs: number | null,
+    submittedAtMs: number,
+  ): void {
+    const completionAgeMs = Math.max(0, nowMs - submittedAtMs);
     const completionPressureMs = Math.max(
       0,
       completionAgeMs - this.#completionAllowanceMs,
@@ -345,7 +383,11 @@ export class RendererGpuSubmissionDuty {
     const targetDutyFraction = effectiveDurationMs <= Number.EPSILON
       ? MAXIMUM_GPU_DUTY_FRACTION
       : effectiveDurationMs / (effectiveDurationMs + headroomMs);
-    this.#notBeforeMs = this.#submittedAtMs + effectiveDurationMs + headroomMs;
+    this.#minimumIntervalMs = effectiveDurationMs + headroomMs;
+    this.#notBeforeMs = Math.max(
+      this.#notBeforeMs,
+      submittedAtMs + this.#minimumIntervalMs,
+    );
     this.#sample = Object.freeze({
       schemaVersion: 1,
       mode: this.#mode(),
@@ -360,7 +402,6 @@ export class RendererGpuSubmissionDuty {
       admissionObservedAtMs: null,
       observedAtMs: nowMs,
     });
-    this.#submittedAtMs = null;
   }
 
   #mode(): RendererGpuSubmissionDutyMode {
@@ -419,4 +460,11 @@ function updateDutySample(
     ...current,
     ...update,
   });
+}
+
+function positiveInteger(value: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new RangeError(`${label} must be a positive safe integer`);
+  }
+  return value;
 }
