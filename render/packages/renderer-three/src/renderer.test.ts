@@ -1227,7 +1227,7 @@ void test('compatible repeated static instances batch without losing handle iden
         instance: {
           ...crateInstance(),
           transform: {
-            translation: [index % 30, 0, Math.floor(index / 30)],
+            translation: [(index % 30) / 4, 0, Math.floor(index / 30) / 2],
             rotation: [0, 0, 0, 1],
             scale: [1, 1, 1],
           },
@@ -1272,7 +1272,7 @@ void test('compatible repeated static instances batch without losing handle iden
       op: 'update',
       handle: renderHandle(1_127),
       transform: {
-        translation: [12, 2, 3],
+        translation: [6, 2, 3],
         rotation: [0, 0, 0, 1],
         scale: [1, 1, 1],
       },
@@ -1288,7 +1288,7 @@ void test('compatible repeated static instances batch without losing handle iden
   assert.equal(currentBatches[0], batch, 'transform-only updates reuse the batch allocation');
   const matrix = new THREE.Matrix4();
   batch.getMatrixAt(127, matrix);
-  assert.deepEqual(new THREE.Vector3().setFromMatrixPosition(matrix).toArray(), [12, 2, 3]);
+  assert.deepEqual(new THREE.Vector3().setFromMatrixPosition(matrix).toArray(), [6, 2, 3]);
 
   let disposed = false;
   batch.addEventListener('dispose', () => { disposed = true; });
@@ -1306,6 +1306,65 @@ void test('compatible repeated static instances batch without losing handle iden
   renderer.dispose();
   assert.equal(renderer.handleCount, 0);
   assert.equal(renderer.resourceStatistics().geometryResourceCount, 0);
+});
+
+void test('dense level-scale repeated instances subdivide into effective culling batches', () => {
+  const renderer = new ThreeRenderer();
+  const instanceCount = 367;
+  renderer.applyFrame({
+    schemaVersion: 1,
+    ops: [
+      { op: 'defineStaticMesh', asset: crateAsset() },
+      ...Array.from({ length: instanceCount }, (_, index): RenderDiff => ({
+        op: 'createStaticMeshInstance',
+        handle: renderHandle(3_000 + index),
+        parent: null,
+        instance: {
+          ...crateInstance(),
+          transform: {
+            // A compact 48-by-32-unit level-like distribution. The rejected
+            // 32-unit partition collapsed this into two oversized cells.
+            translation: [index % 48, 0, Math.floor(index / 48) * 4],
+            rotation: [0, 0, 0, 1],
+            scale: [1, 1, 1],
+          },
+          metadata: {
+            sourceEntity: 30_000 + index,
+            sourceSceneNode: null,
+            tags: ['dense-spatial-batch'],
+            label: `dense-spatial-crate-${String(index)}`,
+          },
+        },
+      })),
+    ],
+  });
+
+  const batches: THREE.InstancedMesh[] = [];
+  renderer.scene.traverse((object) => {
+    if (object instanceof THREE.InstancedMesh) batches.push(object);
+  });
+  assert.equal(batches.length, 24);
+  assert.equal(
+    Math.max(...batches.map((batch) => batch.count)),
+    16,
+    'level-scale content must not collapse into a few oversized culling groups',
+  );
+  assert.equal(
+    batches.reduce((total, batch) => total + batch.count, 0),
+    instanceCount,
+  );
+  assert.ok(batches.every((batch) => batch.frustumCulled));
+  assert.ok(batches.every((batch) => batch.boundingBox instanceof THREE.Box3));
+  assert.ok(batches.every((batch) => batch.boundingSphere instanceof THREE.Sphere));
+
+  const sample = batches.find((batch) =>
+    Array.from({ length: batch.count }, (_, index) =>
+      renderer.projectionIdentityForObject(batch, index)?.handle)
+      .includes(renderHandle(3_366)));
+  assert.ok(sample instanceof THREE.InstancedMesh);
+  assert.equal(renderer.handleCount, instanceCount);
+  renderer.dispose();
+  assert.equal(renderer.handleCount, 0);
 });
 
 void test('compatible static batches are spatially bounded and camera-cull independently', () => {

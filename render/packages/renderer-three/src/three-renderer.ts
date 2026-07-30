@@ -202,7 +202,7 @@ const MIN_STATIC_INSTANCE_BATCH_SIZE = 2;
  * cell. Aggregate instance bounds can then participate in ordinary Three
  * frustum culling without a scene-wide batch keeping distant work visible.
  */
-const STATIC_INSTANCE_BATCH_CELL_SIZE = 32;
+const STATIC_INSTANCE_BATCH_CELL_SIZE = 8;
 
 /**
  * A retained Three.js scene driven entirely by render diffs.
