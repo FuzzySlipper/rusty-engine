@@ -168,7 +168,7 @@ export interface ThreeRendererResourceStatistics {
   readonly animatedInstanceCount: number;
 }
 
-/** A defined static mesh asset: one shared geometry + materials, reference-counted. */
+/** A retained static mesh definition: shared resources plus a live-instance count. */
 interface StaticMeshDef {
   readonly geometry: THREE.BufferGeometry;
   readonly materials: THREE.Material[];
@@ -204,7 +204,7 @@ export class ThreeRenderer {
   readonly #uiGroup = new THREE.Group();
   readonly #viewmodelGroup = new THREE.Group();
   readonly #handles = new Map<RenderHandle, NodeEntry>();
-  /** Defined static mesh assets, keyed by asset id (shared geometry lifecycle). */
+  /** Retained static mesh definitions, keyed by asset id. */
   readonly #staticMeshes = new Map<string, StaticMeshDef>();
   readonly #voxelObjects = new Map<string, VoxelObjectDef>();
   /** Per-material-slot colours for the initial flat/debug material strategy. */
@@ -776,9 +776,9 @@ export class ThreeRenderer {
     }
     entry.object.parent?.remove(entry.object);
     if (entry.kind === 'staticMesh' && entry.asset !== undefined) {
-      // Shared geometry: dispose only this instance's override materials, then
-      // release the asset reference. The asset's geometry is disposed only when
-      // its last instance is gone (reference-safe — never while another shares it).
+      // Shared definitions outlive their instances. Destroy only this instance's
+      // override materials and release its live-instance count; a later retained
+      // create may reuse the definition without a second define.
       disposeInstanceMaterials(entry);
       this.#releaseStaticMesh(entry.asset);
     } else if (entry.kind === 'animatedMesh') {
@@ -897,11 +897,6 @@ export class ThreeRenderer {
       return;
     }
     def.refCount -= 1;
-    if (def.refCount <= 0) {
-      def.geometry.dispose();
-      def.materials.forEach((m) => m.dispose());
-      this.#staticMeshes.delete(asset);
-    }
   }
 
   // ── Animated mesh assets + named playback (projection-only) ────────────────

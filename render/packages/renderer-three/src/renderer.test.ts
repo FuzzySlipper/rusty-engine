@@ -1186,7 +1186,7 @@ void test('two instances share one BufferGeometry and the asset is reference-cou
   assert.equal(r.instanceCountFor('mesh/crate'), 2);
 });
 
-void test('destroying one instance does not dispose geometry still used by another', () => {
+void test('static mesh definitions survive zero instances and dispose only on redefine or renderer disposal', () => {
   const r = new ThreeRenderer();
   r.applyDiff({ op: 'defineStaticMesh', asset: crateAsset() });
   r.applyDiff({ op: 'createStaticMeshInstance', handle: renderHandle(1), parent: null, instance: crateInstance() });
@@ -1201,8 +1201,132 @@ void test('destroying one instance does not dispose geometry still used by anoth
   assert.equal(r.instanceCountFor('mesh/crate'), 1);
 
   r.applyDiff({ op: 'destroy', handle: renderHandle(2) });
-  assert.ok(disposed, 'shared geometry is disposed when the last instance is gone');
+  assert.equal(disposed, false, 'retained definition survives when its last instance is gone');
   assert.equal(r.instanceCountFor('mesh/crate'), 0);
+  assert.deepEqual(r.resourceStatistics(), {
+    renderHandleCount: 0,
+    geometryResourceCount: 1,
+    materialResourceCount: 2,
+    textureResourceCount: 0,
+    animatedInstanceCount: 0,
+  });
+
+  r.applyDiff({
+    op: 'createStaticMeshInstance',
+    handle: renderHandle(3),
+    parent: null,
+    instance: crateInstance(),
+  });
+  assert.equal((r.objectFor(renderHandle(3)) as THREE.Mesh).geometry, shared);
+  assert.equal(r.instanceCountFor('mesh/crate'), 1);
+
+  r.applyDiff({ op: 'destroy', handle: renderHandle(3) });
+  r.applyDiff({ op: 'defineStaticMesh', asset: crateAsset() });
+  assert.equal(disposed, true, 'redefining an unused asset disposes the replaced definition');
+
+  const replacement = (() => {
+    r.applyDiff({
+      op: 'createStaticMeshInstance',
+      handle: renderHandle(4),
+      parent: null,
+      instance: crateInstance(),
+    });
+    return (r.objectFor(renderHandle(4)) as THREE.Mesh).geometry;
+  })();
+  let replacementDisposed = false;
+  replacement.addEventListener('dispose', () => { replacementDisposed = true; });
+  r.applyDiff({ op: 'destroy', handle: renderHandle(4) });
+  assert.equal(replacementDisposed, false);
+  r.dispose();
+  assert.equal(replacementDisposed, true, 'renderer disposal releases retained definitions');
+  assert.deepEqual(r.resourceStatistics(), {
+    renderHandleCount: 0,
+    geometryResourceCount: 0,
+    materialResourceCount: 0,
+    textureResourceCount: 0,
+    animatedInstanceCount: 0,
+  });
+});
+
+void test('a frame can destroy the last static mesh instance and recreate it without resource churn', () => {
+  const r = new ThreeRenderer();
+  r.applyFrame({
+    schemaVersion: 1,
+    ops: [
+      { op: 'defineStaticMesh', asset: crateAsset() },
+      {
+        op: 'createStaticMeshInstance',
+        handle: renderHandle(1),
+        parent: null,
+        instance: crateInstance(),
+      },
+    ],
+  });
+  const shared = (r.objectFor(renderHandle(1)) as THREE.Mesh).geometry;
+  const before = r.resourceStatistics();
+
+  r.applyFrame({
+    schemaVersion: 1,
+    ops: [
+      { op: 'destroy', handle: renderHandle(1) },
+      {
+        op: 'createStaticMeshInstance',
+        handle: renderHandle(2),
+        parent: null,
+        instance: {
+          ...crateInstance(),
+          metadata: {
+            sourceEntity: 2,
+            sourceSceneNode: null,
+            tags: ['same-frame'],
+            label: 'same-frame replacement',
+          },
+        },
+      },
+    ],
+  });
+
+  assert.equal(r.has(renderHandle(1)), false);
+  assert.equal((r.objectFor(renderHandle(2)) as THREE.Mesh).geometry, shared);
+  assert.equal(r.instanceCountFor('mesh/crate'), 1);
+  assert.deepEqual(r.resourceStatistics(), before);
+  assert.doesNotMatch(r.snapshot(), /handle 1 /u);
+  assert.match(
+    r.snapshot(),
+    /handle 2 .*kind staticMesh .*asset mesh\/crate .*label "same-frame replacement"/u,
+  );
+});
+
+void test('a rejected static mesh replacement frame leaves the live instance and resources unchanged', () => {
+  const r = new ThreeRenderer();
+  r.applyDiff({ op: 'defineStaticMesh', asset: crateAsset() });
+  r.applyDiff({
+    op: 'createStaticMeshInstance',
+    handle: renderHandle(1),
+    parent: null,
+    instance: crateInstance(),
+  });
+  const beforeObject = r.objectFor(renderHandle(1));
+  const beforeSnapshot = r.snapshot();
+  const beforeResources = r.resourceStatistics();
+
+  assert.throws(() => r.applyFrame({
+    schemaVersion: 1,
+    ops: [
+      { op: 'destroy', handle: renderHandle(1) },
+      {
+        op: 'createStaticMeshInstance',
+        handle: renderHandle(2),
+        parent: null,
+        instance: crateInstance('mesh/missing'),
+      },
+    ],
+  }), /undefined static mesh asset mesh\/missing/);
+
+  assert.equal(r.objectFor(renderHandle(1)), beforeObject);
+  assert.equal(r.has(renderHandle(2)), false);
+  assert.equal(r.snapshot(), beforeSnapshot);
+  assert.deepEqual(r.resourceStatistics(), beforeResources);
 });
 
 void test('per-instance material overrides apply only to that instance', () => {

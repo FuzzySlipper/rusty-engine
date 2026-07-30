@@ -439,6 +439,70 @@ void test('tracks static mesh definitions and fails closed on in-use redefinitio
 
   projection.applyDiff({ op: 'destroy', handle: renderHandle(1) });
   assert.equal(projection.staticMeshRefCount('mesh/crate'), 0);
+
+  const beforeRejectedFrame = projection.snapshot();
+  assert.throws(
+    () => projection.applyFrame({
+      schemaVersion: 1,
+      ops: [
+        {
+          op: 'createStaticMeshInstance',
+          handle: renderHandle(2),
+          parent: null,
+          instance: {
+            asset: 'mesh/missing',
+            transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+            visible: true,
+            materialOverrides: [],
+            metadata: { sourceEntity: 2, sourceSceneNode: null, tags: [], label: 'missing' },
+          },
+        },
+      ],
+    }),
+    /undefined static mesh asset mesh\/missing/,
+  );
+  assert.deepEqual(projection.snapshot(), beforeRejectedFrame);
+
+  projection.applyFrame({
+    schemaVersion: 1,
+    ops: [{
+      op: 'createStaticMeshInstance',
+      handle: renderHandle(2),
+      parent: null,
+      instance: {
+        asset: 'mesh/crate',
+        transform: { translation: [2, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+        visible: true,
+        materialOverrides: [],
+        metadata: { sourceEntity: 2, sourceSceneNode: null, tags: [], label: 'recreated crate' },
+      },
+    }],
+  });
+  assert.equal(projection.staticMeshRefCount('mesh/crate'), 1);
+  assert.equal(projection.node(renderHandle(2))?.metadata.label, 'recreated crate');
+  projection.applyFrame({
+    schemaVersion: 1,
+    ops: [
+      { op: 'destroy', handle: renderHandle(2) },
+      {
+        op: 'createStaticMeshInstance',
+        handle: renderHandle(3),
+        parent: null,
+        instance: {
+          asset: 'mesh/crate',
+          transform: { translation: [3, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+          visible: true,
+          materialOverrides: [],
+          metadata: { sourceEntity: 3, sourceSceneNode: null, tags: [], label: 'same-frame crate' },
+        },
+      },
+    ],
+  });
+  assert.equal(projection.has(renderHandle(2)), false);
+  assert.equal(projection.node(renderHandle(3))?.metadata.label, 'same-frame crate');
+  assert.equal(projection.staticMeshRefCount('mesh/crate'), 1);
+
+  projection.applyDiff({ op: 'destroy', handle: renderHandle(3) });
   assert.doesNotThrow(() => projection.applyDiff({ op: 'defineStaticMesh', asset: meshAsset() }));
 });
 

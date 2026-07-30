@@ -54,6 +54,10 @@ interface BrowserProof {
   readonly replacementStatistics: RendererSurfaceStatisticsSample;
   readonly resetRendererStatistics: RendererSurfaceStatisticsSample;
   readonly snapshot: string;
+  readonly staticMeshRecreateApplied: boolean;
+  readonly staticMeshRecreateDisposed: boolean;
+  readonly staticMeshRecreateSnapshot: string;
+  readonly staticMeshRecreateStatistics: RendererSurfaceStatisticsSample;
   readonly telemetryText: string | null;
   readonly viewmodelAnimationClip: string | null;
   readonly viewmodelNodeCount: number;
@@ -201,6 +205,38 @@ async function main(): Promise<void> {
     replacementSurface.submission() === replacementSubmission
     && replacementSurface.snapshot() === '(empty scene)\n';
 
+  const staticMeshCanvas = document.createElement('canvas');
+  staticMeshCanvas.width = 64;
+  staticMeshCanvas.height = 64;
+  const staticMeshSurface = mountRendererSurface(staticMeshCanvas, {
+    autoStart: false,
+    frame: staticMeshLifetimeFrame(),
+    pixelRatio: 1,
+  });
+  const staticMeshRecreate = staticMeshSurface.applyFrame({
+    schemaVersion: 1,
+    ops: [
+      { op: 'destroy', handle: renderHandle(1) },
+      {
+        op: 'createStaticMeshInstance',
+        handle: renderHandle(2),
+        parent: null,
+        instance: {
+          asset: 'mesh/static-lifetime-proof',
+          transform: identity([0, 0, -2], [1, 1, 1]),
+          visible: true,
+          materialOverrides: [],
+          metadata: metadata('static-lifetime-recreated'),
+        },
+      },
+    ],
+  });
+  staticMeshSurface.renderOnce(1);
+  const staticMeshRecreateSnapshot = staticMeshSurface.snapshot();
+  const staticMeshRecreateStatistics = staticMeshSurface.submission().statistics;
+  staticMeshSurface.dispose();
+  const staticMeshRecreateDisposed = staticMeshSurface.snapshot() === '(empty scene)\n';
+
   const inspection = await mountRendererInspectionSurface(inspectionCanvas, {
     autoStart: false,
     frame: inspectionFrame(),
@@ -269,6 +305,10 @@ async function main(): Promise<void> {
     replacementStatistics: replacementSubmission.statistics,
     resetRendererStatistics: resetSubmission.statistics,
     snapshot,
+    staticMeshRecreateApplied: staticMeshRecreate.applied,
+    staticMeshRecreateDisposed,
+    staticMeshRecreateSnapshot,
+    staticMeshRecreateStatistics,
     telemetryText: overlays.querySelector('[data-rusty-telemetry-handle]')?.textContent ?? null,
     viewmodelAnimationClip: surface.animatedMeshPlayback(renderHandle(111)).selectedClip,
     viewmodelNodeCount: projection.nodes.filter((node) => node.layer === 'viewmodel').length,
@@ -325,6 +365,35 @@ function replacementFrame(): RenderFrameDiff {
           material: { color: [1, 1, 1, 1], wireframe: false },
           transform: identity([0, 0, -1], [1, 1, 1]), visible: true, layer: 'viewmodel',
           metadata: metadata('replacement-viewmodel'),
+        },
+      },
+    ],
+  };
+}
+
+function staticMeshLifetimeFrame(): RenderFrameDiff {
+  return {
+    schemaVersion: 1,
+    ops: [
+      {
+        op: 'defineStaticMesh',
+        asset: {
+          asset: 'mesh/static-lifetime-proof',
+          payload: trianglePayload(),
+          materialSlots: [{ slot: 0, material: 'material/static-lifetime-proof' }],
+          collision: { kind: 'visualOnly' },
+        },
+      },
+      {
+        op: 'createStaticMeshInstance',
+        handle: renderHandle(1),
+        parent: null,
+        instance: {
+          asset: 'mesh/static-lifetime-proof',
+          transform: identity([0, 0, -2], [1, 1, 1]),
+          visible: true,
+          materialOverrides: [],
+          metadata: metadata('static-lifetime-initial'),
         },
       },
     ],

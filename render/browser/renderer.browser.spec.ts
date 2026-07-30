@@ -71,6 +71,25 @@ test('shared host realizes retained, presentation, and inspection families in a 
   });
   expect(proof.replacementDisposedWithHistoricalSample).toBe(true);
   expect(proof.replacementDisposedRenderRejected).toBe(true);
+  expect(proof.staticMeshRecreateApplied).toBe(true);
+  expect(proof.staticMeshRecreateSnapshot).not.toContain('static-lifetime-initial');
+  expect(proof.staticMeshRecreateSnapshot).toContain('static-lifetime-recreated');
+  expect(proof.staticMeshRecreateStatistics.renderHandleCount).toEqual({
+    scope: 'liveResident', status: 'available', value: 1,
+  });
+  expect(proof.staticMeshRecreateStatistics.geometryResourceCount).toEqual({
+    scope: 'liveResident', status: 'available', value: 1,
+  });
+  expect(proof.staticMeshRecreateStatistics.materialResourceCount).toEqual({
+    scope: 'liveResident', status: 'available', value: 1,
+  });
+  expect(proof.staticMeshRecreateStatistics.drawCallCount).toEqual({
+    scope: 'perSubmission', status: 'available', value: 1,
+  });
+  expect(proof.staticMeshRecreateStatistics.triangleCount).toEqual({
+    scope: 'perSubmission', status: 'available', value: 1,
+  });
+  expect(proof.staticMeshRecreateDisposed).toBe(true);
   expect(proof.telemetryText).toContain('Renderer proof');
   expect(proof.telemetryText).toContain('frameTimeMs:');
   expect(proof.telemetryText).toContain('backendSubmissionDurationMs:');
