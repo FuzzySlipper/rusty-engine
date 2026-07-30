@@ -10,6 +10,10 @@ const inspectorUrl = new URL(
 );
 const appUrl = new URL('../apps/studio-app/src/app/app.ts', import.meta.url);
 const viewportUrl = new URL('../libs/viewport/src/studio-viewport.component.ts', import.meta.url);
+const viewportSubmissionUrl = new URL(
+  '../libs/viewport/src/viewport-submission.ts',
+  import.meta.url,
+);
 
 test('shell exposes the preserved editor surfaces and named parity operations', async () => {
   const template = await readFile(templateUrl, 'utf8');
@@ -48,15 +52,22 @@ test('stock app explicitly composes the built-in Voxel Object inspector contribu
 
 test('viewport composes the shared renderer host without private Three ownership', async () => {
   const viewport = await readFile(viewportUrl, 'utf8');
+  const submission = await readFile(viewportSubmissionUrl, 'utf8');
   assert.match(viewport, /mountRendererInspectionSurface/);
   assert.match(viewport, /presentStudioSelection/);
   assert.match(viewport, /presentStudioLighting/);
-  assert.match(viewport, /surface\.replaceFrame\(lighting\.frame\)/);
+  assert.match(viewport, /submitStudioViewportFrame/);
+  assert.match(viewport, /frameSubmitted = output<StudioViewportFrameSubmitted>/);
+  assert.match(submission, /surface\.replaceFrame\(frame\)/);
+  assert.match(submission, /surface\.applyAuthoredFrame\(frame\)/);
+  assert.match(submission, /surface\.renderOnce\(\)/);
+  assert.match(submission, /submission: surface\.submission\(\)/);
   assert.match(viewport, /surface\.pick\(/);
   assert.match(viewport, /surface\.setGrid\(/);
   assert.match(viewport, /surface\.configureControlPreferences\(/);
   assert.match(viewport, /surface\.dispose\(\)/);
   assert.doesNotMatch(viewport, /from ['"]three/);
+  assert.doesNotMatch(submission, /from ['"]three/);
 });
 
 test('shell state keeps canonical content, projection, selection, and preview as distinct models', async () => {

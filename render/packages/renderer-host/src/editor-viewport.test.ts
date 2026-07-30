@@ -153,8 +153,18 @@ void test('editor viewport owns bounded lifecycle resize clear and channel dispo
   viewport.start();
   assert.equal(viewport.readout().status, 'running');
   assert.equal(backend.starts, 1);
-  viewport.renderOnce(33);
+  const submission = viewport.renderOnce(33);
   assert.deepEqual(backend.renderTimes, [33]);
+  assert.deepEqual(submission, {
+    schemaVersion: 1,
+    drawCallCount: { scope: 'perSubmission', status: 'available', value: 4 },
+    renderHandleCount: { scope: 'liveResident', status: 'available', value: 3 },
+    geometryResourceCount: { scope: 'liveResident', status: 'available', value: 2 },
+    materialResourceCount: { scope: 'liveResident', status: 'available', value: 2 },
+    textureResourceCount: { scope: 'liveResident', status: 'available', value: 0 },
+    animatedInstanceCount: { scope: 'liveResident', status: 'available', value: 0 },
+    triangleCount: { scope: 'perSubmission', status: 'available', value: 24 },
+  });
   viewport.stop();
   assert.equal(viewport.readout().status, 'stopped');
   assert.equal(backend.stops, 1);
@@ -178,6 +188,46 @@ void test('editor viewport owns bounded lifecycle resize clear and channel dispo
   assert.equal(viewport.readout().status, 'disposed');
   assert.equal(backend.disposals, 1);
   assert.equal(viewport.channels.runtime.apply(primitiveFrame(1, 'late-runtime', 'scene')).applied, false);
+  assert.equal(viewport.renderOnce().drawCallCount.status, 'unavailable');
+});
+
+void test('editor viewport preserves unavailable and unsupported backend statistics', () => {
+  const backend = new FakeEditorViewportBackend();
+  const viewport = createRendererEditorViewportWithBackend(backend, { autoStart: false });
+  backend.submission = {
+    drawCallCount: null,
+    renderHandleCount: undefined,
+    geometryResourceCount: 2,
+    materialResourceCount: 3,
+    textureResourceCount: null,
+    animatedInstanceCount: undefined,
+    triangleCount: 12,
+  };
+
+  const submission = viewport.renderOnce(50);
+
+  assert.deepEqual(submission.drawCallCount, {
+    scope: 'perSubmission',
+    status: 'unavailable',
+    value: null,
+  });
+  assert.deepEqual(submission.renderHandleCount, {
+    scope: 'liveResident',
+    status: 'unsupported',
+    value: null,
+  });
+  assert.deepEqual(submission.textureResourceCount, {
+    scope: 'liveResident',
+    status: 'unavailable',
+    value: null,
+  });
+  assert.deepEqual(submission.animatedInstanceCount, {
+    scope: 'liveResident',
+    status: 'unsupported',
+    value: null,
+  });
+  assert.equal(Object.isFrozen(submission), true);
+  assert.equal(Object.isFrozen(submission.drawCallCount), true);
 });
 
 void test('editor viewport validates and realizes one public procedural grid outside scene channels', () => {
@@ -333,6 +383,15 @@ class FakeEditorViewportBackend implements RendererEditorViewportBackendPort {
     diagnostics: [],
     hit: null,
   };
+  submission: ReturnType<RendererEditorViewportBackendPort['renderOnce']> = {
+    drawCallCount: 4,
+    renderHandleCount: 3,
+    geometryResourceCount: 2,
+    materialResourceCount: 2,
+    textureResourceCount: 0,
+    animatedInstanceCount: 0,
+    triangleCount: 24,
+  };
 
   replaceChannel(channel: 'runtime' | 'authored' | 'overlay', frame: RenderFrameDiff): void {
     if (this.rejectChannel === channel) {
@@ -371,8 +430,9 @@ class FakeEditorViewportBackend implements RendererEditorViewportBackendPort {
     return this.pickResult;
   }
 
-  renderOnce(timeMs?: number): void {
+  renderOnce(timeMs?: number): ReturnType<RendererEditorViewportBackendPort['renderOnce']> {
     this.renderTimes.push(timeMs);
+    return this.submission;
   }
 
   start(): void {

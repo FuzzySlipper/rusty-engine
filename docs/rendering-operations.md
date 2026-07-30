@@ -225,6 +225,20 @@ already returned samples as immutable historical observations rather than rewrit
 A replacement `RendererSurface` starts a fresh sequence and never inherits samples or counters from
 the disposed instance.
 
+The Studio inspection surface uses the same statistics and timing owner. After a complete,
+incremental, or presentation-only authored frame is accepted, `StudioViewportComponent` performs
+one explicit submission and only then reads `RendererInspectionSurface.submission()`. Its public
+`frameSubmitted` output associates that immutable sample with the authored generation and a closed
+`complete`, `incremental`, or `presentation` update kind. This ordering prevents an earlier
+automatic-loop sample from being attributed to newly accepted content. Selection and preview
+changes retain the authored generation and publish `presentation`; the legacy generation-only
+`frameApplied` output remains limited to accepted authored-generation changes.
+
+Rejected frames publish neither output nor a new submission. Resize, stop, and disposal do not
+rewrite the last immutable historical sample, while remounting creates a new inspection surface
+whose submission sequence begins independently. Studio receives no Three/WebGL handle and does not
+create a telemetry loop or counter path of its own.
+
 `RendererLiveTelemetryCollector.sampleSurface` takes renderer-owned counters from a complete
 submission sample. Caller counters may still supply game/product values such as `entityCount`, but
 cannot override draw, handle, geometry, material, texture, animation, or triangle observations.

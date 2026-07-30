@@ -52,6 +52,13 @@ void test('real projection channels isolate equal handles in fixed runtime autho
   assert.match(channels.snapshot(), /^\[runtime\]/);
   assert.match(channels.snapshot(), /\[authored\]/);
   assert.match(channels.snapshot(), /\[overlay\]/);
+  assert.deepEqual(channels.resourceStatistics(), {
+    renderHandleCount: 3,
+    geometryResourceCount: 3,
+    materialResourceCount: 3,
+    textureResourceCount: 0,
+    animatedInstanceCount: 0,
+  });
 
   channels.dispose();
 });

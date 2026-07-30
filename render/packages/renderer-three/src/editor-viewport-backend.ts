@@ -20,6 +20,7 @@ import {
   ThreeRenderer,
   type MeshBufferSource,
   type MeshResourceSource,
+  type ThreeRendererResourceStatistics,
 } from './three-renderer.js';
 import { ThreeEditorGridProjection } from './editor-grid.js';
 import { renderEditorViewportFrame } from './editor-viewport-render-pass.js';
@@ -79,11 +80,19 @@ export interface RendererEditorBackendOptions {
   readonly pixelRatio?: number;
 }
 
+/** Exact Three submission facts consumed by the renderer-neutral editor host. */
+export interface RendererEditorBackendSubmissionStatistics
+  extends ThreeRendererResourceStatistics {
+  readonly schemaVersion: 1;
+  readonly drawCallCount: number;
+  readonly triangleCount: number;
+}
+
 export interface RendererEditorBackend {
   readonly dispose: () => void;
   readonly gridReadout: () => EditorGridProjectionReadout | null;
   readonly pick: (request: RendererEditorBackendPickRequest) => RendererEditorBackendPickReceipt;
-  readonly renderOnce: (timeMs?: number) => void;
+  readonly renderOnce: (timeMs?: number) => RendererEditorBackendSubmissionStatistics;
   readonly replaceChannel: (channel: RendererEditorBackendChannel, frame: RenderFrameDiff) => void;
   readonly resize: (size: RendererEditorBackendSize) => void;
   readonly setCamera: (camera: RendererEditorBackendCamera) => void;
@@ -132,6 +141,19 @@ export class RendererEditorProjectionChannels {
     return CHANNEL_ORDER.map((channel) =>
       `[${channel}]\n${this.renderer(channel).snapshot()}`,
     ).join('\n');
+  }
+
+  resourceStatistics(): ThreeRendererResourceStatistics {
+    const statistics = CHANNEL_ORDER.map((channel) =>
+      this.renderer(channel).resourceStatistics(),
+    );
+    return Object.freeze({
+      renderHandleCount: sumStatistics(statistics, 'renderHandleCount'),
+      geometryResourceCount: sumStatistics(statistics, 'geometryResourceCount'),
+      materialResourceCount: sumStatistics(statistics, 'materialResourceCount'),
+      textureResourceCount: sumStatistics(statistics, 'textureResourceCount'),
+      animatedInstanceCount: sumStatistics(statistics, 'animatedInstanceCount'),
+    });
   }
 
   dispose(): void {
@@ -192,13 +214,22 @@ export function mountRendererEditorBackend(
     gridProjection.setCamera(next);
   };
 
-  const renderOnce = (timeMs = globalThis.performance?.now() ?? 0): void => {
+  const renderOnce = (
+    timeMs = globalThis.performance?.now() ?? 0,
+  ): RendererEditorBackendSubmissionStatistics => {
     requireActive(disposed);
     const deltaSeconds = lastRenderTimeMs === null
       ? 0
       : Math.min(0.05, Math.max(0, (timeMs - lastRenderTimeMs) / 1000));
     lastRenderTimeMs = timeMs;
+    webgl.info.reset();
     renderEditorViewportFrame(webgl, camera, gridProjection.scene, channels, deltaSeconds);
+    return Object.freeze({
+      schemaVersion: 1,
+      drawCallCount: webgl.info.render.calls,
+      triangleCount: webgl.info.render.triangles,
+      ...channels.resourceStatistics(),
+    });
   };
 
   const tick = (timeMs: number): void => {
@@ -250,6 +281,20 @@ export function mountRendererEditorBackend(
       webgl.dispose();
     },
   };
+}
+
+function sumStatistics(
+  statistics: readonly ThreeRendererResourceStatistics[],
+  key: keyof ThreeRendererResourceStatistics,
+): number {
+  let total = 0;
+  for (const sample of statistics) {
+    total += sample[key];
+    if (!Number.isSafeInteger(total)) {
+      throw new Error(`editor renderer ${key} exceeds Number.MAX_SAFE_INTEGER`);
+    }
+  }
+  return total;
 }
 
 function createChannelRenderer(options: RendererEditorBackendOptions): ThreeRenderer {

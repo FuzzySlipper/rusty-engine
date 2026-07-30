@@ -270,6 +270,76 @@ void test('inspection surface incrementally applies an authored patch after its 
   assert.equal(harness.backend.frames.get('authored')?.ops.length, 2);
 });
 
+void test('inspection surface publishes immutable mount explicit and automatic submission samples', () => {
+  const harness = createInspectionHarness({ autoStart: true, frame: primitiveFrame(7) });
+  const mounted = harness.surface.submission();
+  assert.equal(mounted.renderSequence, 1);
+  assert.equal(mounted.source, 'mount');
+  assert.equal(mounted.sourceTimeMs, 0);
+  assert.equal(mounted.statistics.drawCallCount.value, 4);
+  assert.equal(mounted.statistics.renderHandleCount.value, 3);
+  assert.equal(Object.isFrozen(mounted), true);
+  assert.equal(Object.isFrozen(mounted.statistics), true);
+
+  harness.backend.submission = {
+    drawCallCount: 9,
+    renderHandleCount: 8,
+    geometryResourceCount: 7,
+    materialResourceCount: 6,
+    textureResourceCount: 5,
+    animatedInstanceCount: 4,
+    triangleCount: 3,
+  };
+  harness.animation.runNext(16);
+  const automatic = harness.surface.submission();
+  assert.equal(automatic.renderSequence, 2);
+  assert.equal(automatic.source, 'animationFrame');
+  assert.equal(automatic.sourceTimeMs, 16);
+  assert.equal(automatic.statistics.drawCallCount.value, 9);
+  assert.equal(mounted.statistics.drawCallCount.value, 4);
+
+  harness.surface.renderOnce(33);
+  const explicit = harness.surface.submission();
+  assert.equal(explicit.renderSequence, 3);
+  assert.equal(explicit.source, 'explicit');
+  assert.equal(explicit.sourceTimeMs, 33);
+  assert.equal(explicit.frameIntervalMs, 17);
+  assert.equal(explicit.frameIntervalStatus, 'available');
+});
+
+void test('inspection submission preserves classified counters and lifecycle history', () => {
+  const harness = createInspectionHarness({ autoStart: false, frame: primitiveFrame(7) });
+  harness.backend.submission = {
+    drawCallCount: null,
+    renderHandleCount: undefined,
+    geometryResourceCount: 2,
+    materialResourceCount: 3,
+    textureResourceCount: null,
+    animatedInstanceCount: undefined,
+    triangleCount: 12,
+  };
+  harness.surface.renderOnce(25);
+  const classified = harness.surface.submission();
+  assert.equal(classified.statistics.drawCallCount.status, 'unavailable');
+  assert.equal(classified.statistics.renderHandleCount.status, 'unsupported');
+  assert.equal(classified.statistics.textureResourceCount.status, 'unavailable');
+  assert.equal(classified.statistics.animatedInstanceCount.status, 'unsupported');
+
+  harness.canvas.clientWidth = 900;
+  harness.canvas.clientHeight = 500;
+  assert.equal(harness.surface.resizeToCanvas().applied, true);
+  harness.surface.stop();
+  assert.equal(harness.surface.submission(), classified);
+
+  harness.surface.dispose();
+  assert.equal(harness.surface.submission(), classified);
+
+  const replacement = createInspectionHarness({ autoStart: false, frame: primitiveFrame(8) });
+  assert.equal(replacement.surface.submission().renderSequence, 1);
+  assert.notEqual(replacement.surface.submission(), classified);
+  replacement.surface.dispose();
+});
+
 void test('inspection surface atomically replaces authored content at exact chunk and retained limits', () => {
   const harness = createInspectionHarness({ autoStart: false, frame: primitiveFrame(7) });
   const chunks = authoredHistoryChunks(41, [
@@ -813,6 +883,15 @@ class FakeEditorViewportBackend implements RendererEditorViewportBackendPort {
   disposals = 0;
   grid: EditorGridDescriptor | null = null;
   rejectChannel: 'runtime' | 'authored' | 'overlay' | null = null;
+  submission: ReturnType<RendererEditorViewportBackendPort['renderOnce']> = {
+    drawCallCount: 4,
+    renderHandleCount: 3,
+    geometryResourceCount: 2,
+    materialResourceCount: 2,
+    textureResourceCount: 0,
+    animatedInstanceCount: 0,
+    triangleCount: 24,
+  };
 
   replaceChannel(channel: 'runtime' | 'authored' | 'overlay', frame: RenderFrameDiff): void {
     if (this.rejectChannel === channel) {
@@ -844,7 +923,9 @@ class FakeEditorViewportBackend implements RendererEditorViewportBackendPort {
     return { diagnostics: [], hit: null };
   }
 
-  renderOnce(): void {}
+  renderOnce(): ReturnType<RendererEditorViewportBackendPort['renderOnce']> {
+    return this.submission;
+  }
 
   start(): void {}
 

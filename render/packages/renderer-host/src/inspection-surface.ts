@@ -25,6 +25,12 @@ import type {
   RendererMeshResourceManifest,
   RendererMeshResourceResolver,
 } from './mesh-resource-host.js';
+import type { RendererSurfaceSubmissionSample } from './surface-statistics.js';
+import {
+  assertRendererSurfaceSourceTime,
+  RendererSurfaceTimingTracker,
+  type RendererSurfaceTimingSource,
+} from './surface-timing.js';
 import { resolveRendererStoredEditorCamera } from './stored-editor-camera.js';
 
 export const RUSTY_RENDERER_INSPECTION_SURFACE_COMPATIBILITY_VERSION = 'inspection-surface.v1';
@@ -163,6 +169,8 @@ export interface RendererInspectionSurface {
   readonly setGrid: (descriptor: EditorGridDescriptor | null) => RendererEditorViewportGridReceipt;
   readonly start: () => void;
   readonly stop: () => void;
+  /** Read the latest automatic, mount, or explicit immutable submission sample. */
+  readonly submission: () => RendererSurfaceSubmissionSample;
 }
 
 interface RendererInspectionAnimationScheduler {
@@ -266,6 +274,8 @@ export function createRendererInspectionSurfaceWithViewport(
   let animationHandle: number | null = null;
   let gridRevision = 0;
   let lastRenderTimeMs: number | null = null;
+  const timing = new RendererSurfaceTimingTracker();
+  let latestSubmission: RendererSurfaceSubmissionSample | null = null;
   let status: RendererInspectionSurfaceStatus = 'mounted';
 
   const resizeToCanvas = (): RendererEditorViewportSizeReceipt => viewport.resize({
@@ -276,23 +286,42 @@ export function createRendererInspectionSurfaceWithViewport(
 
   let resizeObserver: RendererInspectionResizeObserver | null = null;
 
-  const renderOnce = (timeMs = environment.animation.now()): void => {
+  const renderFrame = (
+    timeMs: number,
+    source: RendererSurfaceTimingSource,
+  ): void => {
     if (status === 'disposed') {
       return;
     }
+    assertRendererSurfaceSourceTime(timeMs);
     const deltaSeconds = lastRenderTimeMs === null
       ? 0
       : Math.min(0.1, Math.max(0, (timeMs - lastRenderTimeMs) / 1000));
     lastRenderTimeMs = timeMs;
     controls.update(deltaSeconds);
-    viewport.renderOnce(timeMs);
+    const backendSubmissionStartedMs = surfaceTimingNow();
+    const statistics = viewport.renderOnce(timeMs);
+    const backendSubmissionEndedMs = surfaceTimingNow();
+    latestSubmission = Object.freeze({
+      ...timing.record({
+        source,
+        sourceTimeMs: timeMs,
+        backendSubmissionStartedMs,
+        backendSubmissionEndedMs,
+      }),
+      statistics,
+    });
+  };
+
+  const renderOnce = (timeMs = environment.animation.now()): void => {
+    renderFrame(timeMs, 'explicit');
   };
 
   const tick = (timeMs: number): void => {
     if (status !== 'running') {
       return;
     }
-    renderOnce(timeMs);
+    renderFrame(timeMs, 'animationFrame');
     animationHandle = environment.animation.request(tick);
   };
 
@@ -375,7 +404,7 @@ export function createRendererInspectionSurfaceWithViewport(
     }
 
     resizeToCanvas();
-    renderOnce(0);
+    renderFrame(0, 'mount');
     if (options.autoStart !== false) {
       start();
     }
@@ -435,6 +464,12 @@ export function createRendererInspectionSurfaceWithViewport(
     setGrid,
     start,
     stop,
+    submission: () => {
+      if (latestSubmission === null) {
+        throw new Error('renderer inspection surface has not submitted a frame');
+      }
+      return latestSubmission;
+    },
     dispose: () => {
       if (status === 'disposed') {
         return;
@@ -446,6 +481,10 @@ export function createRendererInspectionSurfaceWithViewport(
       viewport.dispose();
     },
   };
+}
+
+function surfaceTimingNow(): number {
+  return globalThis.performance?.now() ?? 0;
 }
 
 function createInspectionControls(

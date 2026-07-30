@@ -55,6 +55,12 @@ viewport, and its closed external-project adapter protocol.
 - Protocol 11 adds only the bounded `prepareVoxelObjectPlacement` presentation
   read needed to preview an unused canonical object. Its resource-only frame is
   merged by `viewport`; authoritative attachment remains downstream.
+- `studio/libs/viewport` emits immutable `frameSubmitted` observations only
+  after an accepted complete, incremental, or presentation-only frame has been
+  submitted through its private shared inspection surface. The event pairs the
+  Studio generation with the renderer-owned timing/resource sample; it exposes
+  neither the surface nor Three/WebGL state and does not create another
+  telemetry loop.
 
 ## Private or forbidden paths
 

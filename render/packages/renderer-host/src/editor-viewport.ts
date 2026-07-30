@@ -23,6 +23,11 @@ import {
   type RendererMeshResourceManifest,
   type RendererMeshResourceResolver,
 } from './mesh-resource-host.js';
+import {
+  createRendererSurfaceStatisticsSample,
+  type RendererSurfaceStatisticsInput,
+  type RendererSurfaceStatisticsSample,
+} from './surface-statistics.js';
 
 export const RUSTY_RENDERER_EDITOR_VIEWPORT_COMPATIBILITY_VERSION = 'editor-viewport.v1';
 export const RUSTY_RENDERER_EDITOR_VIEWPORT_MAX_FRAME_OPS = 4096;
@@ -209,7 +214,8 @@ export interface RendererEditorViewport {
   readonly grid: () => EditorGridProjectionReadout | null;
   readonly pick: (request: RendererEditorViewportPickRequest) => RendererEditorViewportPickReceipt;
   readonly readout: () => RendererEditorViewportReadout;
-  readonly renderOnce: (timeMs?: number) => void;
+  /** Submit one frame and return renderer-neutral statistics for that submission. */
+  readonly renderOnce: (timeMs?: number) => RendererSurfaceStatisticsSample;
   readonly resize: (size: RendererEditorViewportSize) => RendererEditorViewportSizeReceipt;
   readonly setCamera: (camera: RendererEditorViewportCamera) => RendererEditorViewportCameraReceipt;
   readonly setGrid: (descriptor: EditorGridDescriptor | null) => RendererEditorViewportGridReceipt;
@@ -236,7 +242,7 @@ export interface RendererEditorViewportBackendPort {
   readonly dispose: () => void;
   readonly gridReadout: () => EditorGridProjectionReadout | null;
   readonly pick: (request: BackendPickRequest) => BackendPickReceipt;
-  readonly renderOnce: (timeMs?: number) => void;
+  readonly renderOnce: (timeMs?: number) => RendererSurfaceStatisticsInput;
   readonly replaceChannel: (channel: RendererEditorViewportChannel, frame: RenderFrameDiff) => void;
   readonly resize: (size: RendererEditorViewportSize) => void;
   readonly setCamera: (camera: Omit<RendererEditorViewportCamera, 'source'>) => void;
@@ -473,9 +479,18 @@ export function createRendererEditorViewportWithBackend(
     pick: (request) => pickViewport(status, size, states, backend, diagnostics, request),
     readout,
     renderOnce: (timeMs) => {
-      if (status !== 'disposed') {
-        backend.renderOnce(timeMs);
+      if (status === 'disposed') {
+        return createRendererSurfaceStatisticsSample({
+          drawCallCount: null,
+          renderHandleCount: null,
+          geometryResourceCount: null,
+          materialResourceCount: null,
+          textureResourceCount: null,
+          animatedInstanceCount: null,
+          triangleCount: null,
+        });
       }
+      return createRendererSurfaceStatisticsSample(backend.renderOnce(timeMs));
     },
     start: () => {
       if (status !== 'disposed' && status !== 'running') {

@@ -43,6 +43,11 @@ import {
   type StudioTransformSnapping,
   type StudioTransformTool,
 } from './transform-manipulator.js';
+import {
+  submitStudioViewportFrame,
+  type StudioViewportFrameSubmitted,
+  type StudioViewportFrameUpdateKind,
+} from './viewport-submission.js';
 
 type ViewportStatus = 'mounting' | 'ready' | 'error' | 'disposed';
 
@@ -144,6 +149,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
 
   readonly entityPicked = output<number | null>();
   readonly frameApplied = output<number>();
+  readonly frameSubmitted = output<StudioViewportFrameSubmitted>();
   readonly voxelPicked = output<VoxelViewportPickCandidate>();
   readonly rendererError = output<string>();
   readonly transformDragStarted = output<void>();
@@ -523,14 +529,14 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     if (surface === null) return;
     const generationChanged = generation !== this.#lastAppliedFrameGeneration;
     if (generationChanged && framePatch !== null && this.#authoredFrameReady) {
-      const receipt = surface.applyAuthoredFrame(framePatch);
-      if (!receipt.applied) {
-        this.#fail(receipt.diagnostics.map((entry) => entry.message).join('; '));
+      const submitted = this.#submitFrame(surface, framePatch, generation, 'incremental');
+      if (submitted === null) {
         return;
       }
       this.#lastAppliedFrameGeneration = generation;
       this.#lastPresentationKey = presentationKey;
       this.#syncReadout();
+      this.frameSubmitted.emit(submitted);
       this.frameApplied.emit(generation);
       return;
     }
@@ -544,9 +550,13 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       voxelObjectPlacementResourceFrame,
     );
     const lighting = presentStudioLighting(presentation.frame, lightingMode);
-    const receipt = surface.replaceFrame(lighting.frame);
-    if (!receipt.applied) {
-      this.#fail(receipt.diagnostics.map((entry) => entry.message).join('; '));
+    const submitted = this.#submitFrame(
+      surface,
+      lighting.frame,
+      generation,
+      generationChanged ? 'complete' : 'presentation',
+    );
+    if (submitted === null) {
       return;
     }
     this.#lastPresentationKey = presentationKey;
@@ -568,7 +578,27 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
         && operation.instance.metadata.tags.includes('voxel-object-placement-ghost'),
     ).length);
     this.#syncReadout();
+    this.frameSubmitted.emit(submitted);
     if (generationChanged) this.frameApplied.emit(generation);
+  }
+
+  #submitFrame(
+    surface: RendererInspectionSurface,
+    frame: RenderFrameDiff,
+    generation: number,
+    updateKind: StudioViewportFrameUpdateKind,
+  ): StudioViewportFrameSubmitted | null {
+    try {
+      const result = submitStudioViewportFrame(surface, frame, generation, updateKind);
+      if (!result.receipt.applied) {
+        this.#fail(result.receipt.diagnostics.map((entry) => entry.message).join('; '));
+        return null;
+      }
+      return result.event;
+    } catch (error) {
+      this.#fail(error instanceof Error ? error.message : 'shared renderer frame submission failed');
+      return null;
+    }
   }
 
   #beginManipulatorDrag(event: PointerEvent): boolean {
