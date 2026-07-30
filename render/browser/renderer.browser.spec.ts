@@ -85,6 +85,12 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.rendererStatistics.textureResourceCount.status).toBe('available');
   expect(proof.rendererStatistics.triangleCount.status).toBe('available');
   expect(proof.resetRendererStatistics).toEqual(proof.rendererStatistics);
+  expect(proof.staticDemandApplied).toBe(true);
+  expect(proof.staticDemandIdleRenderCount).toBe(1);
+  expect(proof.staticDemandRejectedApplied).toBe(false);
+  expect(proof.staticDemandRejectedRenderCount).toBe(0);
+  expect(proof.staticDemandDirtyRenderCount).toBe(1);
+  expect(proof.staticDemandCameraRenderCount).toBe(1);
   expect(proof.replacementRenderSequence).toBe(1);
   expect(proof.replacementStatistics).toEqual({
     schemaVersion: 1,

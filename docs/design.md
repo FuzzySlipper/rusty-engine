@@ -461,13 +461,17 @@ projection inherits the layer through the hierarchy and enforces fixed node, dis
 asset-extent, translation, and scale limits before committing a frame. Retained lights are rejected
 inside this channel; the backend supplies a small neutral light rig.
 
-The Three adapter retains that hierarchy in a separate scene. The browser surface advances the
-shared renderer exactly once, renders the world through the caller-owned camera, clears depth, and
-renders the camera-relative scene through a fixed host-owned camera with the same projection and
-aspect. World camera motion therefore cannot move the local presentation, and world depth cannot
-clip it. The channel is excluded from picking and has no input or camera authority. Stop, resize,
-reset, frame rejection, resource failure, and disposal remain operations of the existing single
-surface lifecycle; no second scheduler or renderer owner exists.
+The Three adapter retains that hierarchy in a separate scene. The browser surface owns one
+animation-frame scheduler and coalesces accepted retained mutations, camera changes, and resizes
+into its next backend submission. Active controls, animation, or particles retain continuous
+display-clock advancement; an unchanged static scene does not continuously resubmit work to the
+backend. An explicit `renderOnce` remains unconditional. Each submitted frame advances the shared
+renderer exactly once, renders the world through the caller-owned camera, clears depth, and renders
+the camera-relative scene through a fixed host-owned camera with the same projection and aspect.
+World camera motion therefore cannot move the local presentation, and world depth cannot clip it.
+The channel is excluded from picking and has no input or camera authority. Stop, resize, reset,
+frame rejection, resource failure, and disposal remain operations of the existing single surface
+lifecycle; no second scheduler or renderer owner exists.
 
 `@rusty-engine/renderer-host` is the shared browser and tool-facing entry point. It composes the
 retained Three surface, explicit caller-owned camera controls, animated resources, editor viewport,

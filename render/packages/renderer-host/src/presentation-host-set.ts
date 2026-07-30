@@ -26,6 +26,13 @@ export interface RendererPresentationDomainHost {
 export interface RendererAdvancingPresentationDomainHost
   extends RendererPresentationDomainHost {
   readonly advance: (deltaSeconds: number) => PresentationDomainReceipt;
+  /**
+   * Reports whether this mechanism currently needs display-clock advancement.
+   *
+   * Custom advancing hosts that omit this method retain the conservative
+   * always-advance behavior.
+   */
+  readonly requiresAnimationFrame?: () => boolean;
 }
 
 export interface RendererPresentationHosts {
@@ -125,6 +132,13 @@ export class RendererPresentationHostSet {
       diagnostics.push(...receipt.diagnostics.map((diagnostic) => ({ domain, ...diagnostic })));
     }
     return { schemaVersion: 1, advancedDomains, applied, diagnostics };
+  }
+
+  requiresAnimationFrame(): boolean {
+    return ADVANCING_DOMAIN_ORDER.some((domain) => {
+      const host = this.#hosts[domain];
+      return host !== undefined && (host.requiresAnimationFrame?.() ?? true);
+    });
   }
 }
 

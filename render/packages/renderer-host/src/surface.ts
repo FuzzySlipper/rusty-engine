@@ -44,6 +44,10 @@ import {
   createRendererSurfaceSubmissionSample,
   type RendererSurfaceSubmissionSample,
 } from './surface-statistics.js';
+import {
+  RendererSurfaceSubmissionDemand,
+  type RendererSurfaceViewportState,
+} from './surface-submission-demand.js';
 
 export const RUSTY_RENDERER_HOST_COMPATIBILITY_VERSION = 'renderer-host.v1';
 
@@ -302,6 +306,7 @@ function mountPreparedRendererSurface(
   let lastRenderTimeMs: number | null = null;
   const timing = new RendererSurfaceTimingTracker();
   let latestSubmission: RendererSurfaceSubmissionSample | null = null;
+  const submissionDemand = new RendererSurfaceSubmissionDemand(surfaceViewport(canvas));
   let disposed = false;
 
   const renderFrame = (
@@ -327,6 +332,7 @@ function mountPreparedRendererSurface(
       backendSubmissionStartedMs,
       backendSubmissionEndedMs,
     }), backendStatistics);
+    submissionDemand.submitted(surfaceViewport(canvas));
     return latestSubmission;
   };
   const renderOnce = (
@@ -336,12 +342,19 @@ function mountPreparedRendererSurface(
   };
 
   const tick = (timeMs: number): void => {
-    renderFrame(timeMs, 'animationFrame');
+    if (submissionDemand.consume(surfaceViewport(canvas), {
+      controls: controls.requiresAnimationFrame(),
+      presentation: presentationHosts?.requiresAnimationFrame() ?? false,
+      retainedAnimation: hasRetainedAnimation(latestSubmission),
+    })) {
+      renderFrame(timeMs, 'animationFrame');
+    }
     animationFrame = globalThis.requestAnimationFrame(tick);
   };
   const start = (): void => {
     if (disposed) throw new Error('renderer surface is disposed');
     if (animationFrame === null) {
+      submissionDemand.request();
       animationFrame = globalThis.requestAnimationFrame(tick);
     }
   };
@@ -359,6 +372,7 @@ function mountPreparedRendererSurface(
       projection.validateFrame(nextFrame);
       backendSurface.applyFrame(nextFrame);
       projection.applyFrame(nextFrame);
+      submissionDemand.request();
       return { applied: true, diagnostics: [] };
     } catch (cause) {
       return {
@@ -386,7 +400,12 @@ function mountPreparedRendererSurface(
     animatedMeshPlayback: (handle) => animationProjection.playback(handle),
     applyFrame,
     applyPresentation: async (presentationFrame) => {
-      return (presentationHosts ?? new RendererPresentationHostSet({})).apply(presentationFrame);
+      const receipt = await (presentationHosts ?? new RendererPresentationHostSet({}))
+        .apply(presentationFrame);
+      if (receipt.applied > 0) {
+        submissionDemand.request();
+      }
+      return receipt;
     },
     cameraPose: controls.cameraPose,
     cameraProjection: backendSurface.cameraProjection,
@@ -411,11 +430,16 @@ function mountPreparedRendererSurface(
       renderFrame(0, 'cameraReset');
     },
     setCameraPose: (pose, basis) => {
+      const before = controls.cameraSnapshot();
       controls.setCameraPose(pose, basis);
       backendSurface.setCameraPose(pose, basis);
+      if (!sameCameraSnapshot(before, controls.cameraSnapshot())) {
+        submissionDemand.request();
+      }
     },
     setPresentationHosts: (hosts) => {
       presentationHosts = hosts;
+      submissionDemand.request();
     },
     snapshot: backendSurface.snapshot,
     start,
@@ -514,6 +538,7 @@ interface RendererSurfaceFirstPersonControls {
   readonly lockPointer: () => void;
   readonly movementState: () => RendererSurfaceMovementState;
   readonly pointerLocked: () => boolean;
+  readonly requiresAnimationFrame: () => boolean;
   readonly resetCamera: () => void;
   readonly setCameraPose: (
     pose: RendererSurfaceCameraPose,
@@ -689,6 +714,14 @@ function createRendererSurfaceFirstPersonControls(
     },
     movementState: () => movementState,
     pointerLocked,
+    requiresAnimationFrame: () => (
+      enabled
+      && (
+        pressedCodes.size > 0
+        || pendingLook[0] !== 0
+        || pendingLook[1] !== 0
+      )
+    ),
     resetCamera,
     setCameraPose,
     update,
@@ -708,6 +741,51 @@ function createRendererSurfaceFirstPersonControls(
 }
 
 const MOVEMENT_CODES = new Set(['KeyA', 'KeyD', 'KeyS', 'KeyW']);
+
+function hasRetainedAnimation(
+  submission: RendererSurfaceSubmissionSample | null,
+): boolean {
+  const statistic = submission?.statistics.animatedInstanceCount;
+  return statistic?.status === 'available' && statistic.value > 0;
+}
+
+function surfaceViewport(canvas: HTMLCanvasElement): RendererSurfaceViewportState {
+  return {
+    bufferHeight: canvas.height,
+    bufferWidth: canvas.width,
+    clientHeight: canvas.clientHeight,
+    clientWidth: canvas.clientWidth,
+  };
+}
+
+function sameCameraSnapshot(
+  left: RendererSurfaceCameraSnapshot,
+  right: RendererSurfaceCameraSnapshot,
+): boolean {
+  return sameVector(left.pose.position, right.pose.position)
+    && left.pose.pitchDegrees === right.pose.pitchDegrees
+    && left.pose.yawDegrees === right.pose.yawDegrees
+    && sameOptionalBasis(left.basis, right.basis);
+}
+
+function sameOptionalBasis(
+  left: RendererSurfaceCameraBasis | undefined,
+  right: RendererSurfaceCameraBasis | undefined,
+): boolean {
+  if (left === undefined || right === undefined) {
+    return left === right;
+  }
+  return sameVector(left.forward, right.forward)
+    && sameVector(left.right, right.right)
+    && sameVector(left.up, right.up);
+}
+
+function sameVector(
+  left: readonly [number, number, number],
+  right: readonly [number, number, number],
+): boolean {
+  return left[0] === right[0] && left[1] === right[1] && left[2] === right[2];
+}
 
 function axis(pressed: ReadonlySet<string>, positive: string, negative: string): number {
   return Number(pressed.has(positive)) - Number(pressed.has(negative));

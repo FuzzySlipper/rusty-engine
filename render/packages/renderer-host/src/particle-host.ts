@@ -165,6 +165,14 @@ export class RendererParticleHost {
     return { applied: this.#particles.size, diagnostics, readout: this.readout() };
   }
 
+  requiresAnimationFrame(): boolean {
+    return this.#particles.size > 0
+      || this.#burstEmitters.size > 0
+      || [...this.#emitters.values()].some((emitter) => (
+        emitter.descriptor.visible && emitter.descriptor.ratePerSecond > 0
+      ));
+  }
+
   readout(): ParticleProjectionReadout {
     return {
       activeEmitters: this.#emitters.size,

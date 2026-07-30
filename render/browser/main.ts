@@ -64,6 +64,12 @@ interface BrowserProof {
   readonly staticMeshRecreateDisposed: boolean;
   readonly staticMeshRecreateSnapshot: string;
   readonly staticMeshRecreateStatistics: RendererSurfaceStatisticsSample;
+  readonly staticDemandApplied: boolean;
+  readonly staticDemandCameraRenderCount: number;
+  readonly staticDemandDirtyRenderCount: number;
+  readonly staticDemandIdleRenderCount: number;
+  readonly staticDemandRejectedApplied: boolean;
+  readonly staticDemandRejectedRenderCount: number;
   readonly telemetryText: string | null;
   readonly viewmodelAnimationClip: string | null;
   readonly viewmodelNodeCount: number;
@@ -210,6 +216,54 @@ async function main(): Promise<void> {
   const replacementDisposedWithHistoricalSample =
     replacementSurface.submission() === replacementSubmission
     && replacementSurface.snapshot() === '(empty scene)\n';
+
+  const staticDemandCanvas = document.createElement('canvas');
+  staticDemandCanvas.width = 64;
+  staticDemandCanvas.height = 64;
+  const staticDemandSurface = mountRendererSurface(staticDemandCanvas, {
+    autoStart: false,
+    frame: replacementFrame(),
+    pixelRatio: 1,
+  });
+  const staticDemandMountSequence = staticDemandSurface.submission().renderSequence;
+  staticDemandSurface.start();
+  await waitAnimationFrames(3);
+  const staticDemandIdleSequence = staticDemandSurface.submission().renderSequence;
+  const staticDemandRejected = staticDemandSurface.applyFrame({
+    schemaVersion: 1,
+    ops: [{
+      op: 'update',
+      handle: renderHandle(999),
+      transform: identity([1, 0, -3], [1, 1, 1]),
+      material: null,
+      visible: null,
+      metadata: null,
+    }],
+  });
+  await waitAnimationFrames(3);
+  const staticDemandRejectedSequence = staticDemandSurface.submission().renderSequence;
+  const staticDemandApplied = staticDemandSurface.applyFrame({
+    schemaVersion: 1,
+    ops: [{
+      op: 'update',
+      handle: renderHandle(1),
+      transform: identity([1, 0, -3], [1, 1, 1]),
+      material: null,
+      visible: null,
+      metadata: null,
+    }],
+  });
+  await waitAnimationFrames(3);
+  const staticDemandDirtySequence = staticDemandSurface.submission().renderSequence;
+  staticDemandSurface.setCameraPose({
+    position: [1, 1.62, 8],
+    pitchDegrees: 0,
+    yawDegrees: 0,
+  });
+  await waitAnimationFrames(3);
+  const staticDemandCameraSequence = staticDemandSurface.submission().renderSequence;
+  staticDemandSurface.stop();
+  staticDemandSurface.dispose();
 
   const staticMeshCanvas = document.createElement('canvas');
   staticMeshCanvas.width = 64;
@@ -382,6 +436,13 @@ async function main(): Promise<void> {
     staticMeshRecreateDisposed,
     staticMeshRecreateSnapshot,
     staticMeshRecreateStatistics,
+    staticDemandApplied: staticDemandApplied.applied,
+    staticDemandCameraRenderCount: staticDemandCameraSequence - staticDemandDirtySequence,
+    staticDemandDirtyRenderCount: staticDemandDirtySequence - staticDemandIdleSequence,
+    staticDemandIdleRenderCount: staticDemandIdleSequence - staticDemandMountSequence,
+    staticDemandRejectedApplied: staticDemandRejected.applied,
+    staticDemandRejectedRenderCount:
+      staticDemandRejectedSequence - staticDemandIdleSequence,
     telemetryText: overlays.querySelector('[data-rusty-telemetry-handle]')?.textContent ?? null,
     viewmodelAnimationClip: surface.animatedMeshPlayback(renderHandle(111)).selectedClip,
     viewmodelNodeCount: projection.nodes.filter((node) => node.layer === 'viewmodel').length,
@@ -416,6 +477,12 @@ async function main(): Promise<void> {
     await audio.dispose();
     URL.revokeObjectURL(spriteUrl);
   };
+}
+
+async function waitAnimationFrames(count: number): Promise<void> {
+  for (let index = 0; index < count; index += 1) {
+    await new Promise<void>((resolve) => globalThis.requestAnimationFrame(() => resolve()));
+  }
 }
 
 function replacementFrame(): RenderFrameDiff {

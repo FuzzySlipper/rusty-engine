@@ -150,6 +150,10 @@ export class RendererAnimationHost {
     return { applied: this.#controllers.size, diagnostics, cues, readout: this.readout() };
   }
 
+  requiresAnimationFrame(): boolean {
+    return this.#controllers.size > 0;
+  }
+
   readout(): AnimationProjectionReadout {
     return {
       activeControllers: this.#controllers.size,
