@@ -57,11 +57,14 @@ void test('late completion wall time corrects an under-reported timer duration',
     schemaVersion: 1,
     mode: 'timerQuery',
     state: 'waiting',
+    rendererClass: 'unknown',
     timerDurationMs: 4,
     completionAgeMs: 33,
+    completionAllowanceMs: 17,
     effectiveDurationMs: 16,
     targetDutyFraction: 0.25,
     admittedAtMs: 64,
+    admissionObservedAtMs: null,
     observedAtMs: 33,
   });
   assert.equal(Object.isFrozen(duty.sample()), true);
@@ -73,7 +76,7 @@ void test('late completion wall time corrects an under-reported timer duration',
 
 void test('completion wall latency paces automatic work without timer-query support', () => {
   const clock = new FakeTimerDriver();
-  const duty = new RendererGpuSubmissionDuty(null, clock);
+  const duty = new RendererGpuSubmissionDuty(null, { clock });
 
   duty.begin();
   duty.submitted();
@@ -84,11 +87,14 @@ void test('completion wall latency paces automatic work without timer-query supp
     schemaVersion: 1,
     mode: 'completionOnly',
     state: 'waiting',
+    rendererClass: 'unknown',
     timerDurationMs: null,
     completionAgeMs: 33,
+    completionAllowanceMs: 17,
     effectiveDurationMs: 16,
     targetDutyFraction: 0.25,
     admittedAtMs: 64,
+    admissionObservedAtMs: null,
     observedAtMs: 33,
   });
   clock.nowMs = 64;
@@ -109,15 +115,50 @@ void test('failed timer query retains completion-wall pacing', () => {
     schemaVersion: 1,
     mode: 'timerFailed',
     state: 'waiting',
+    rendererClass: 'unknown',
     timerDurationMs: null,
     completionAgeMs: 33,
+    completionAllowanceMs: 17,
     effectiveDurationMs: 16,
     targetDutyFraction: 0.25,
     admittedAtMs: 64,
+    admissionObservedAtMs: null,
     observedAtMs: 33,
   });
   assert.equal(driver.deleted, 1);
   driver.nowMs = 64;
+  assert.equal(duty.ready(), true);
+});
+
+void test('software rendering treats observed completion age as work pressure', () => {
+  const driver = new FakeTimerDriver();
+  const duty = new RendererGpuSubmissionDuty(driver, {
+    rendererClass: 'software',
+  });
+
+  duty.begin();
+  duty.submitted();
+  driver.result = { durationMs: 3, status: 'complete' };
+  driver.nowMs = 15;
+
+  assert.equal(duty.ready(), false);
+  assert.deepEqual(duty.sample(), {
+    schemaVersion: 1,
+    mode: 'timerQuery',
+    state: 'waiting',
+    rendererClass: 'software',
+    timerDurationMs: 3,
+    completionAgeMs: 15,
+    completionAllowanceMs: 0,
+    effectiveDurationMs: 15,
+    targetDutyFraction: 4 / 15,
+    admittedAtMs: 56.25,
+    admissionObservedAtMs: null,
+    observedAtMs: 15,
+  });
+  driver.nowMs = 56.24;
+  assert.equal(duty.ready(), false);
+  driver.nowMs = 56.25;
   assert.equal(duty.ready(), true);
 });
 

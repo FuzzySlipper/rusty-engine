@@ -221,17 +221,19 @@ One completion fence bounds queued command streams. When
 `EXT_disjoint_timer_query_webgl2` is available, the previous submission's GPU duration determines
 an adaptive headroom interval, capped at 100 ms, before the next automatic submission. Some
 software renderers report a short timer duration while their asynchronous completion still
-occupies browser CPU, so completion wall latency beyond one ordinary 60 Hz polling interval also
-contributes to the effective duration. Work completed within that allowance keeps the
-timer-derived fast path. Above eight milliseconds of effective work, the target duty falls
-smoothly from fifty percent toward a twenty-percent floor. This is not a fixed-rate timer: fast
-four-millisecond work can still submit at 120 Hz and eight-millisecond work at 60 Hz, while slow
-completion yields materially more CPU time. Timer-query and completion polling are non-blocking
-and occur only in the existing animation-frame owner. Unsupported, disjoint, malformed, or failed
-timer timing retains the completion-wall policy instead of silently disabling pacing.
-`surface.automaticSubmissionPacing()` returns one frozen renderer-owned diagnostic with the timer
-mode, current measurement state, and latest completed decision's timer duration, observed
-completion age, effective duration, selected duty, observation time, and admission deadline.
+occupies browser CPU. The Three backend therefore classifies the concrete WebGL renderer locally:
+a positively identified software renderer uses all observed completion wall latency as effective
+work, while accelerated and unknown renderers retain one ordinary 60 Hz polling allowance before
+wall latency contributes. Above eight milliseconds of effective work, the target duty falls
+smoothly from fifty percent toward a twenty-percent floor. This is not a fixed-rate timer: the
+accelerated fast path can still submit four-millisecond work at 120 Hz and eight-millisecond work
+at 60 Hz, while slow completion yields materially more CPU time. Timer-query and completion
+polling are non-blocking and occur only in the existing animation-frame owner. Unsupported,
+disjoint, malformed, or failed timer timing retains the completion-wall policy instead of silently
+disabling pacing. `surface.automaticSubmissionPacing()` returns one frozen renderer-owned
+diagnostic with the timer mode, current measurement state, renderer class and allowance, latest
+completed decision's timer duration, observed completion age, effective duration, selected duty,
+decision time, admission deadline, and actual automatic admission observation.
 Reading it never polls, submits, or starts another loop. Explicit
 `renderOnce`, camera reset, resource statistics, picking, and disposal keep their established
 semantics.

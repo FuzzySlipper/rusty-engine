@@ -470,13 +470,16 @@ newer retained and camera state remains coalesced until its completion fence sig
 browser exposes asynchronous WebGL2 timer queries, the backend also leaves a completion-derived,
 bounded headroom interval after measured GPU execution before admitting another automatic
 submission. Software renderers can under-report timer duration while asynchronous completion still
-occupies browser CPU, so completion wall latency beyond one ordinary polling interval also
-contributes to effective work. Fast completion retains 120 Hz for four-millisecond work and 60 Hz
-for eight-millisecond work. Slower completion progressively reduces target duty toward twenty
-percent so software rendering yields materially more browser and host CPU time. This remains
-workload-derived rather than a fixed frame-rate cap. Unsupported or disjoint timer timing retains
-completion-wall pacing, and the public renderer surface exposes a frozen read-only sample of the
-latest admission decision without adding a polling or submission path. An explicit `renderOnce`
+occupies browser CPU. The Three backend classifies the concrete WebGL renderer without exposing its
+raw identity: positively identified software rendering uses the complete observed completion wall
+latency as effective work, while accelerated and unknown renderers retain one ordinary polling
+interval before wall latency adds pressure. The accelerated fast path retains 120 Hz for
+four-millisecond work and 60 Hz for eight-millisecond work. Slower completion progressively reduces
+target duty toward twenty percent so software rendering yields materially more browser and host CPU
+time. This remains workload-derived rather than a fixed frame-rate cap. Unsupported or disjoint
+timer timing retains completion-wall pacing, and the public renderer surface exposes a frozen
+read-only sample of the renderer class, applied allowance, latest decision, admission deadline, and
+actual automatic admission observation without adding a polling or submission path. An explicit `renderOnce`
 remains unconditional. Each submitted frame advances the shared renderer exactly once,
 renders the world through the caller-owned camera, clears depth, and renders the camera-relative
 scene through a fixed host-owned camera with the same projection and aspect.

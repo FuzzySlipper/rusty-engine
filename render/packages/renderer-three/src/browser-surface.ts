@@ -29,8 +29,10 @@ import {
 import {
   RendererGpuSubmissionDuty,
   type RendererGpuSubmissionDutySample,
+  type RendererGpuSubmissionClass,
   type RendererGpuSubmissionTimerDriver,
 } from './gpu-submission-duty.js';
+import { classifyGpuSubmissionRendererName } from './gpu-submission-class.js';
 
 export interface ProjectedThreeRenderResult {
   readonly projection: RenderProjection;
@@ -219,11 +221,14 @@ export function mountRendererBrowserSurface(
   renderer.applyFrame(frame);
 
   const webgl = new THREE.WebGLRenderer({ canvas, antialias: true });
+  const webglContext = webgl.getContext();
+  const gpuSubmissionClass = classifyGpuSubmissionRenderer(webglContext);
   const gpuSubmissionFence = new RendererGpuSubmissionFence(
-    webGl2SubmissionFenceDriver(webgl.getContext()),
+    webGl2SubmissionFenceDriver(webglContext),
   );
   const gpuSubmissionDuty = new RendererGpuSubmissionDuty(
-    webGl2SubmissionTimerDriver(webgl.getContext()),
+    webGl2SubmissionTimerDriver(webglContext),
+    { rendererClass: gpuSubmissionClass },
   );
   webgl.autoClear = false;
   // One surface submission contains both world and viewmodel render passes.
@@ -486,6 +491,22 @@ function webGl2SubmissionTimerDriver(
         : { status: 'failed' };
     },
   };
+}
+
+function classifyGpuSubmissionRenderer(
+  context: WebGLRenderingContext | WebGL2RenderingContext,
+): RendererGpuSubmissionClass {
+  let renderer: unknown;
+  try {
+    const debug = context.getExtension('WEBGL_debug_renderer_info');
+    if (debug === null) {
+      return 'unknown';
+    }
+    renderer = context.getParameter(debug.UNMASKED_RENDERER_WEBGL);
+  } catch {
+    return 'unknown';
+  }
+  return classifyGpuSubmissionRendererName(renderer);
 }
 
 export function projectWorldPointWithPerspectiveCamera(

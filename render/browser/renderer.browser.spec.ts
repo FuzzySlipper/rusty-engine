@@ -26,13 +26,16 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.viewmodelAnimationClip).toBe('idle');
   expect(proof.viewmodelNodeCount).toBe(3);
   expect(proof.viewmodelPickExcluded).toBe(true);
-  expect(proof.autoStartRenderCount).toBe(1);
+  expect(proof.autoStartRenderCount).toBe(4);
   expect(proof.autoFrameIntervalMs).toBeGreaterThan(0);
   expect(proof.backendSubmissionDurationMs).toBeGreaterThanOrEqual(0);
   expect(['completionOnly', 'timerFailed', 'timerQuery'])
     .toContain(proof.automaticSubmissionPacing.mode);
   expect(proof.automaticSubmissionPacing.state).toBe('measuring');
+  expect(['accelerated', 'software', 'unknown'])
+    .toContain(proof.automaticSubmissionPacing.rendererClass);
   expect(proof.automaticSubmissionPacing.completionAgeMs).toBeGreaterThanOrEqual(0);
+  expect(proof.automaticSubmissionPacing.completionAllowanceMs).toBeGreaterThanOrEqual(0);
   expect(proof.automaticSubmissionPacing.effectiveDurationMs).toBeGreaterThanOrEqual(0);
   expect(proof.automaticSubmissionPacing.targetDutyFraction).toBeGreaterThanOrEqual(0.2);
   expect(proof.automaticSubmissionPacing.targetDutyFraction).toBeLessThanOrEqual(0.5);
@@ -42,6 +45,24 @@ test('shared host realizes retained, presentation, and inspection families in a 
     expect(proof.automaticSubmissionPacing.timerDurationMs).toBeGreaterThanOrEqual(0);
   } else {
     expect(proof.automaticSubmissionPacing.timerDurationMs).toBeNull();
+  }
+  expect(proof.automaticSubmissionPacingSamples).toHaveLength(4);
+  expect(proof.automaticSubmissionIntervalsMs).toHaveLength(4);
+  expect(proof.automaticSubmissionSourceTimesMs).toHaveLength(4);
+  for (const [index, sample] of proof.automaticSubmissionPacingSamples.entries()) {
+    expect(sample.state).toBe('measuring');
+    expect(sample.rendererClass).toBe(proof.automaticSubmissionPacing.rendererClass);
+    expect(sample.admissionObservedAtMs ?? 0)
+      .toBeGreaterThanOrEqual(sample.admittedAtMs ?? 0);
+    expect(proof.automaticSubmissionSourceTimesMs[index]).toBeGreaterThanOrEqual(0);
+  }
+  if (proof.automaticSubmissionPacing.rendererClass === 'software') {
+    expect(proof.automaticSubmissionPacing.completionAllowanceMs).toBe(0);
+    for (const interval of proof.automaticSubmissionIntervalsMs.slice(1)) {
+      expect(interval).toBeGreaterThanOrEqual(50);
+    }
+  } else {
+    expect(proof.automaticSubmissionPacing.completionAllowanceMs).toBe(17);
   }
   expect(proof.batchedStaticPickHandle).toBe(1150);
   expect(proof.batchedStaticStatistics.drawCallCount).toEqual({

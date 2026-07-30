@@ -26,6 +26,11 @@ export type RendererGpuSubmissionDutyState =
   | 'ready'
   | 'waiting';
 
+export type RendererGpuSubmissionClass =
+  | 'accelerated'
+  | 'software'
+  | 'unknown';
+
 /**
  * Immutable observation of the current pacing state and latest completed
  * automatic-admission decision.
@@ -34,16 +39,24 @@ export interface RendererGpuSubmissionDutySample {
   readonly schemaVersion: 1;
   readonly mode: RendererGpuSubmissionDutyMode;
   readonly state: RendererGpuSubmissionDutyState;
+  readonly rendererClass: RendererGpuSubmissionClass;
   readonly timerDurationMs: number | null;
   readonly completionAgeMs: number | null;
+  readonly completionAllowanceMs: number;
   readonly effectiveDurationMs: number | null;
   readonly targetDutyFraction: number | null;
   readonly admittedAtMs: number | null;
+  readonly admissionObservedAtMs: number | null;
   readonly observedAtMs: number | null;
 }
 
 interface RendererGpuSubmissionClock {
   readonly now: () => number;
+}
+
+interface RendererGpuSubmissionDutyOptions {
+  readonly clock?: RendererGpuSubmissionClock;
+  readonly rendererClass?: RendererGpuSubmissionClass;
 }
 
 const FAST_GPU_DURATION_MS = 8;
@@ -56,16 +69,17 @@ const MINIMUM_GPU_DUTY_FRACTION = 0.2;
  * Leaves completion-derived browser headroom after automatic WebGL work.
  *
  * A timer query measures the previous submission without blocking the browser
- * thread. Because software renderers may report a short GPU timer duration
- * while their completion still occupies browser CPU, the estimator also
- * includes completion wall latency beyond one ordinary 60 Hz polling interval.
- * The next automatic submission is admitted after the effective duration plus
- * a completion-derived, bounded idle interval. Work completed within that
- * polling allowance retains the timer-derived fast path: four-millisecond work
- * remains 120 Hz capable and eight-millisecond work remains 60 Hz capable.
- * Slower completion progressively reduces target duty toward twenty percent so
- * software rendering yields materially more browser and host CPU time without
- * adding a second loop or a fixed frame-rate cap.
+ * thread. Positively identified software renderers can report a short GPU timer
+ * duration while asynchronous completion still occupies browser CPU, so their
+ * complete observed wall latency contributes to effective work. Accelerated
+ * and unknown renderers retain one ordinary 60 Hz polling allowance before wall
+ * latency adds pressure. The next automatic submission is admitted after the
+ * effective duration plus a completion-derived, bounded idle interval. The
+ * accelerated fast path keeps four-millisecond work 120 Hz capable and
+ * eight-millisecond work 60 Hz capable. Slower completion progressively
+ * reduces target duty toward twenty percent so software rendering yields
+ * materially more browser and host CPU time without adding a second loop or a
+ * fixed frame-rate cap.
  *
  * Explicit rendering remains caller-owned. Beginning a replacement submission
  * discards any older measurement and never waits for this optional pacing
@@ -73,7 +87,9 @@ const MINIMUM_GPU_DUTY_FRACTION = 0.2;
  */
 export class RendererGpuSubmissionDuty {
   readonly #clock: RendererGpuSubmissionClock;
+  readonly #completionAllowanceMs: number;
   readonly #driver: RendererGpuSubmissionTimerDriver | null;
+  readonly #rendererClass: RendererGpuSubmissionClass;
   #active: object | null = null;
   #disposed = false;
   #notBeforeMs = 0;
@@ -84,13 +100,19 @@ export class RendererGpuSubmissionDuty {
 
   constructor(
     driver: RendererGpuSubmissionTimerDriver | null,
-    clock: RendererGpuSubmissionClock = driver ?? defaultSubmissionClock(),
+    options: RendererGpuSubmissionDutyOptions = {},
   ) {
     this.#driver = driver;
-    this.#clock = clock;
+    this.#clock = options.clock ?? driver ?? defaultSubmissionClock();
+    this.#rendererClass = options.rendererClass ?? 'unknown';
+    this.#completionAllowanceMs = this.#rendererClass === 'software'
+      ? 0
+      : COMPLETION_POLL_ALLOWANCE_MS;
     this.#sample = dutySample(
       driver === null ? 'completionOnly' : 'timerQuery',
       'idle',
+      this.#rendererClass,
+      this.#completionAllowanceMs,
     );
   }
 
@@ -211,6 +233,7 @@ export class RendererGpuSubmissionDuty {
     this.#sample = updateDutySample(this.#sample, {
       mode: this.#mode(),
       state: ready ? 'ready' : 'waiting',
+      ...(ready ? { admissionObservedAtMs: nowMs } : {}),
     });
     return ready;
   }
@@ -291,7 +314,7 @@ export class RendererGpuSubmissionDuty {
     const completionAgeMs = Math.max(0, nowMs - this.#submittedAtMs);
     const completionPressureMs = Math.max(
       0,
-      completionAgeMs - COMPLETION_POLL_ALLOWANCE_MS,
+      completionAgeMs - this.#completionAllowanceMs,
     );
     const effectiveDurationMs = Math.max(
       timerDurationMs ?? 0,
@@ -314,11 +337,14 @@ export class RendererGpuSubmissionDuty {
       schemaVersion: 1,
       mode: this.#mode(),
       state: nowMs >= this.#notBeforeMs ? 'ready' : 'waiting',
+      rendererClass: this.#rendererClass,
       timerDurationMs,
       completionAgeMs,
+      completionAllowanceMs: this.#completionAllowanceMs,
       effectiveDurationMs,
       targetDutyFraction,
       admittedAtMs: this.#notBeforeMs,
+      admissionObservedAtMs: null,
       observedAtMs: nowMs,
     });
     this.#submittedAtMs = null;
@@ -350,23 +376,31 @@ function defaultSubmissionClock(): RendererGpuSubmissionClock {
 function dutySample(
   mode: RendererGpuSubmissionDutyMode,
   state: RendererGpuSubmissionDutyState,
+  rendererClass: RendererGpuSubmissionClass,
+  completionAllowanceMs: number,
 ): RendererGpuSubmissionDutySample {
   return Object.freeze({
     schemaVersion: 1,
     mode,
     state,
+    rendererClass,
     timerDurationMs: null,
     completionAgeMs: null,
+    completionAllowanceMs,
     effectiveDurationMs: null,
     targetDutyFraction: null,
     admittedAtMs: null,
+    admissionObservedAtMs: null,
     observedAtMs: null,
   });
 }
 
 function updateDutySample(
   current: RendererGpuSubmissionDutySample,
-  update: Partial<Pick<RendererGpuSubmissionDutySample, 'mode' | 'state'>>,
+  update: Partial<Pick<
+    RendererGpuSubmissionDutySample,
+    'admissionObservedAtMs' | 'mode' | 'state'
+  >>,
 ): RendererGpuSubmissionDutySample {
   return Object.freeze({
     ...current,

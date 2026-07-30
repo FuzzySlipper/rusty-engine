@@ -33,6 +33,10 @@ interface BrowserProof {
   readonly audioApplied: number;
   audioResumeDiagnostics: readonly string[] | null;
   readonly automaticSubmissionPacing: RendererSurfaceAutomaticSubmissionPacingSample;
+  readonly automaticSubmissionPacingSamples:
+    readonly RendererSurfaceAutomaticSubmissionPacingSample[];
+  readonly automaticSubmissionIntervalsMs: readonly (number | null)[];
+  readonly automaticSubmissionSourceTimesMs: readonly number[];
   readonly autoFrameIntervalMs: number | null;
   readonly autoStartRenderCount: number;
   readonly backendSubmissionDurationMs: number | null;
@@ -187,9 +191,18 @@ async function main(): Promise<void> {
   const renderSequenceBeforeAutoFrame = surface.timing().renderSequence;
   surface.start();
   surface.start();
-  await waitForAnimationFrame(
-    () => surface.timing().renderSequence > renderSequenceBeforeAutoFrame,
-  );
+  const automaticSubmissionPacingSamples: RendererSurfaceAutomaticSubmissionPacingSample[] = [];
+  const automaticSubmissionIntervalsMs: (number | null)[] = [];
+  const automaticSubmissionSourceTimesMs: number[] = [];
+  for (let index = 0; index < 4; index += 1) {
+    const sequenceBeforeFrame = surface.timing().renderSequence;
+    await waitForAnimationFrame(
+      () => surface.timing().renderSequence > sequenceBeforeFrame,
+    );
+    automaticSubmissionPacingSamples.push(surface.automaticSubmissionPacing());
+    automaticSubmissionIntervalsMs.push(surface.submission().frameIntervalMs);
+    automaticSubmissionSourceTimesMs.push(surface.submission().sourceTimeMs);
+  }
   surface.stop();
   const autoSubmission = surface.submission();
   const automaticSubmissionPacing = surface.automaticSubmissionPacing();
@@ -427,6 +440,9 @@ async function main(): Promise<void> {
     audioApplied: presentation.domains.find((domain) => domain.domain === 'audio')?.applied ?? 0,
     audioResumeDiagnostics: null,
     automaticSubmissionPacing,
+    automaticSubmissionPacingSamples,
+    automaticSubmissionIntervalsMs,
+    automaticSubmissionSourceTimesMs,
     autoFrameIntervalMs: autoSubmission.frameIntervalMs,
     autoStartRenderCount: autoSubmission.renderSequence - renderSequenceBeforeAutoFrame,
     backendSubmissionDurationMs: autoSubmission.backendSubmissionDurationMs,

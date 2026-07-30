@@ -71,16 +71,24 @@ export type RendererSurfaceAutomaticSubmissionPacingState =
   | 'ready'
   | 'waiting';
 
+export type RendererSurfaceAutomaticSubmissionClass =
+  | 'accelerated'
+  | 'software'
+  | 'unknown';
+
 /** Renderer-owned observation of the latest automatic admission decision. */
 export interface RendererSurfaceAutomaticSubmissionPacingSample {
   readonly schemaVersion: 1;
   readonly mode: RendererSurfaceAutomaticSubmissionPacingMode;
   readonly state: RendererSurfaceAutomaticSubmissionPacingState;
+  readonly rendererClass: RendererSurfaceAutomaticSubmissionClass;
   readonly timerDurationMs: number | null;
   readonly completionAgeMs: number | null;
+  readonly completionAllowanceMs: number;
   readonly effectiveDurationMs: number | null;
   readonly targetDutyFraction: number | null;
   readonly admittedAtMs: number | null;
+  readonly admissionObservedAtMs: number | null;
   readonly observedAtMs: number | null;
 }
 
