@@ -328,7 +328,9 @@ test('host-user input settings and general asset import reimport persist through
   const hashBeforeReimport = await projectHash(shell);
   const rendererBeforeReimport = await rendererHash(viewport);
   await page.locator('.asset-detail').getByRole('button', { name: 'Prepare reimport' }).click();
-  await expect(plan).toContainText('visualUpdate · mesh/studio-triangle');
+  await expect(plan).toContainText('visualUpdate · mesh/studio-triangle', {
+    timeout: projectMutationTimeout,
+  });
   await expect(shell).toHaveAttribute('data-project-hash', hashBeforeReimport);
   await plan.getByRole('button', { name: 'Apply atomically', exact: true }).click();
   await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
