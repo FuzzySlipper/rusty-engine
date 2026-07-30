@@ -15,6 +15,7 @@ export interface RendererGpuSubmissionTimerDriver {
 }
 
 const FAST_GPU_DURATION_MS = 8;
+const COMPLETION_POLL_ALLOWANCE_MS = 17;
 const MAXIMUM_GPU_DUTY_FRACTION = 0.5;
 const MAXIMUM_GPU_HEADROOM_MS = 100;
 const MINIMUM_GPU_DUTY_FRACTION = 0.2;
@@ -23,11 +24,14 @@ const MINIMUM_GPU_DUTY_FRACTION = 0.2;
  * Leaves completion-derived browser headroom after automatic WebGL work.
  *
  * A timer query measures the previous submission without blocking the browser
- * thread. The next automatic submission is admitted after the measured GPU
- * duration plus a completion-derived, bounded idle interval. Work at or below
- * eight milliseconds receives equal headroom, retaining 120 Hz for four
- * millisecond work and 60 Hz for eight millisecond work. Slower backends
- * progressively reduce their target GPU duty toward twenty percent so
+ * thread. Because software renderers may report a short GPU timer duration
+ * while their completion still occupies browser CPU, the estimator also
+ * includes completion wall latency beyond one ordinary 60 Hz polling interval.
+ * The next automatic submission is admitted after the effective duration plus
+ * a completion-derived, bounded idle interval. Work completed within that
+ * polling allowance retains the timer-derived fast path: four-millisecond work
+ * remains 120 Hz capable and eight-millisecond work remains 60 Hz capable.
+ * Slower completion progressively reduces target duty toward twenty percent so
  * software rendering yields materially more browser and host CPU time without
  * adding a second loop or a fixed frame-rate cap.
  *
@@ -127,19 +131,28 @@ export class RendererGpuSubmissionDuty {
         this.#disable();
         return true;
       }
+      const completionAgeMs = Math.max(0, nowMs - this.#submittedAtMs);
+      const completionPressureMs = Math.max(
+        0,
+        completionAgeMs - COMPLETION_POLL_ALLOWANCE_MS,
+      );
+      const effectiveDurationMs = Math.max(
+        result.durationMs,
+        completionPressureMs,
+      );
       const targetDutyFraction = Math.min(
         MAXIMUM_GPU_DUTY_FRACTION,
         Math.max(
           MINIMUM_GPU_DUTY_FRACTION,
           (MAXIMUM_GPU_DUTY_FRACTION * FAST_GPU_DURATION_MS)
-            / Math.max(result.durationMs, Number.EPSILON),
+            / Math.max(effectiveDurationMs, Number.EPSILON),
         ),
       );
       const headroomMs = Math.min(
         MAXIMUM_GPU_HEADROOM_MS,
-        result.durationMs * ((1 / targetDutyFraction) - 1),
+        effectiveDurationMs * ((1 / targetDutyFraction) - 1),
       );
-      this.#notBeforeMs = this.#submittedAtMs + result.durationMs + headroomMs;
+      this.#notBeforeMs = this.#submittedAtMs + effectiveDurationMs + headroomMs;
       this.#submittedAtMs = null;
     }
     return nowMs >= this.#notBeforeMs;

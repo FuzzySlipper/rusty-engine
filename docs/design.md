@@ -469,12 +469,14 @@ backend. On WebGL2, the backend also keeps at most one automatic GPU command str
 newer retained and camera state remains coalesced until its completion fence signals. When the
 browser exposes asynchronous WebGL2 timer queries, the backend also leaves a completion-derived,
 bounded headroom interval after measured GPU execution before admitting another automatic
-submission. Work at or below eight milliseconds receives equal headroom, retaining 120 Hz for
-four-millisecond work and 60 Hz for eight-millisecond work. Slower backends progressively reduce
-their target GPU duty toward twenty percent so software rendering yields materially more browser
-and host CPU time. This is workload-derived rather than a fixed frame-rate cap. Unsupported or
-disjoint timing fails open to the completion-fence behavior. An explicit `renderOnce` remains
-unconditional. Each submitted frame advances the shared renderer exactly once,
+submission. Software renderers can under-report timer duration while asynchronous completion still
+occupies browser CPU, so completion wall latency beyond one ordinary polling interval also
+contributes to effective work. Fast completion retains 120 Hz for four-millisecond work and 60 Hz
+for eight-millisecond work. Slower completion progressively reduces target duty toward twenty
+percent so software rendering yields materially more browser and host CPU time. This remains
+workload-derived rather than a fixed frame-rate cap. Unsupported or disjoint timing fails open to
+the completion-fence behavior. An explicit `renderOnce` remains unconditional. Each submitted
+frame advances the shared renderer exactly once,
 renders the world through the caller-owned camera, clears depth, and renders the camera-relative
 scene through a fixed host-owned camera with the same projection and aspect.
 World camera motion therefore cannot move the local presentation, and world depth cannot clip it.

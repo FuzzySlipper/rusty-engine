@@ -29,11 +29,33 @@ void test('slow completed work progressively lowers automatic GPU duty', () => {
   driver.nowMs = 1;
   duty.submitted();
   driver.result = { durationMs: 12, status: 'complete' };
-  driver.nowMs = 36.9;
+  driver.nowMs = 10;
 
   assert.equal(duty.ready(), false);
   assert.equal(driver.deleted, 1);
+  driver.nowMs = 36.9;
+  assert.equal(duty.ready(), false);
   driver.nowMs = 37;
+  assert.equal(duty.ready(), true);
+});
+
+void test('late completion wall time corrects an under-reported timer duration', () => {
+  const driver = new FakeTimerDriver();
+  const duty = new RendererGpuSubmissionDuty(driver);
+
+  duty.begin();
+  duty.submitted();
+  driver.result = { durationMs: 4, status: 'complete' };
+  driver.nowMs = 33;
+
+  // Thirty-three milliseconds to observe completion leaves sixteen
+  // milliseconds of pressure after one ordinary 60 Hz polling allowance.
+  // That effective duration targets twenty-five-percent duty: 64 ms total.
+  assert.equal(duty.ready(), false);
+  assert.equal(driver.deleted, 1);
+  driver.nowMs = 63.9;
+  assert.equal(duty.ready(), false);
+  driver.nowMs = 64;
   assert.equal(duty.ready(), true);
 });
 
@@ -44,6 +66,8 @@ void test('completion-derived headroom is bounded for exceptionally slow work', 
   duty.begin();
   duty.submitted();
   driver.result = { durationMs: 500, status: 'complete' };
+  driver.nowMs = 500;
+  assert.equal(duty.ready(), false);
   driver.nowMs = 599.9;
   assert.equal(duty.ready(), false);
   driver.nowMs = 600;
