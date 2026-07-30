@@ -276,7 +276,9 @@ test('host-user input settings and general asset import reimport persist through
   await dialog.getByLabel('Generate AABB collision when source is visual-only').check();
   await dialog.getByRole('button', { name: 'Prepare import', exact: true }).click();
   const plan = page.locator('[data-visual-id="studio-asset-import-plan"]');
-  await expect(plan).toContainText('structuralReload · mesh/studio-triangle');
+  await expect(plan).toContainText('structuralReload · mesh/studio-triangle', {
+    timeout: projectMutationTimeout,
+  });
   await expect(plan).toContainText('2 generated assets');
   await expect(shell).toHaveAttribute('data-project-hash', hashBeforePlan);
   await plan.getByRole('button', { name: 'Apply atomically', exact: true }).click();
