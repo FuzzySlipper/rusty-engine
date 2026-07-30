@@ -465,9 +465,11 @@ The Three adapter retains that hierarchy in a separate scene. The browser surfac
 animation-frame scheduler and coalesces accepted retained mutations, camera changes, and resizes
 into its next backend submission. Active controls, animation, or particles retain continuous
 display-clock advancement; an unchanged static scene does not continuously resubmit work to the
-backend. An explicit `renderOnce` remains unconditional. Each submitted frame advances the shared
-renderer exactly once, renders the world through the caller-owned camera, clears depth, and renders
-the camera-relative scene through a fixed host-owned camera with the same projection and aspect.
+backend. On WebGL2, the backend also keeps at most one automatic GPU command stream in flight;
+newer retained and camera state remains coalesced until its completion fence signals. An explicit
+`renderOnce` remains unconditional. Each submitted frame advances the shared renderer exactly once,
+renders the world through the caller-owned camera, clears depth, and renders the camera-relative
+scene through a fixed host-owned camera with the same projection and aspect.
 World camera motion therefore cannot move the local presentation, and world depth cannot clip it.
 The channel is excluded from picking and has no input or camera authority. Stop, resize, reset,
 frame rejection, resource failure, and disposal remain operations of the existing single surface

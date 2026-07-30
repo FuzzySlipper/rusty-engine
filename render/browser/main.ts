@@ -65,6 +65,7 @@ interface BrowserProof {
   readonly staticMeshRecreateSnapshot: string;
   readonly staticMeshRecreateStatistics: RendererSurfaceStatisticsSample;
   readonly staticDemandApplied: boolean;
+  readonly staticDemandCameraPosition: readonly [number, number, number];
   readonly staticDemandCameraRenderCount: number;
   readonly staticDemandDirtyRenderCount: number;
   readonly staticDemandIdleRenderCount: number;
@@ -184,7 +185,9 @@ async function main(): Promise<void> {
   const renderSequenceBeforeAutoFrame = surface.timing().renderSequence;
   surface.start();
   surface.start();
-  await new Promise<void>((resolve) => globalThis.requestAnimationFrame(() => resolve()));
+  await waitForAnimationFrame(
+    () => surface.timing().renderSequence > renderSequenceBeforeAutoFrame,
+  );
   surface.stop();
   const autoSubmission = surface.submission();
   telemetry.sampleSurface({
@@ -227,7 +230,9 @@ async function main(): Promise<void> {
   });
   const staticDemandMountSequence = staticDemandSurface.submission().renderSequence;
   staticDemandSurface.start();
-  await waitAnimationFrames(3);
+  await waitForAnimationFrame(
+    () => staticDemandSurface.submission().renderSequence > staticDemandMountSequence,
+  );
   const staticDemandIdleSequence = staticDemandSurface.submission().renderSequence;
   const staticDemandRejected = staticDemandSurface.applyFrame({
     schemaVersion: 1,
@@ -253,15 +258,30 @@ async function main(): Promise<void> {
       metadata: null,
     }],
   });
-  await waitAnimationFrames(3);
+  await waitForAnimationFrame(
+    () => staticDemandSurface.submission().renderSequence > staticDemandIdleSequence,
+  );
   const staticDemandDirtySequence = staticDemandSurface.submission().renderSequence;
   staticDemandSurface.setCameraPose({
     position: [1, 1.62, 8],
     pitchDegrees: 0,
     yawDegrees: 0,
   });
-  await waitAnimationFrames(3);
+  staticDemandSurface.setCameraPose({
+    position: [2, 1.62, 8],
+    pitchDegrees: 0,
+    yawDegrees: 0,
+  });
+  staticDemandSurface.setCameraPose({
+    position: [3, 1.62, 8],
+    pitchDegrees: 0,
+    yawDegrees: 0,
+  });
+  await waitForAnimationFrame(
+    () => staticDemandSurface.submission().renderSequence > staticDemandDirtySequence,
+  );
   const staticDemandCameraSequence = staticDemandSurface.submission().renderSequence;
+  const staticDemandCameraPosition = staticDemandSurface.cameraPose().position;
   staticDemandSurface.stop();
   staticDemandSurface.dispose();
 
@@ -437,6 +457,7 @@ async function main(): Promise<void> {
     staticMeshRecreateSnapshot,
     staticMeshRecreateStatistics,
     staticDemandApplied: staticDemandApplied.applied,
+    staticDemandCameraPosition,
     staticDemandCameraRenderCount: staticDemandCameraSequence - staticDemandDirtySequence,
     staticDemandDirtyRenderCount: staticDemandDirtySequence - staticDemandIdleSequence,
     staticDemandIdleRenderCount: staticDemandIdleSequence - staticDemandMountSequence,
@@ -483,6 +504,19 @@ async function waitAnimationFrames(count: number): Promise<void> {
   for (let index = 0; index < count; index += 1) {
     await new Promise<void>((resolve) => globalThis.requestAnimationFrame(() => resolve()));
   }
+}
+
+async function waitForAnimationFrame(
+  predicate: () => boolean,
+  maximumFrames = 120,
+): Promise<void> {
+  for (let index = 0; index < maximumFrames; index += 1) {
+    if (predicate()) {
+      return;
+    }
+    await waitAnimationFrames(1);
+  }
+  throw new Error(`renderer condition did not settle within ${maximumFrames} animation frames`);
 }
 
 function replacementFrame(): RenderFrameDiff {

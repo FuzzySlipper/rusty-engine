@@ -90,6 +90,7 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.staticDemandRejectedApplied).toBe(false);
   expect(proof.staticDemandRejectedRenderCount).toBe(0);
   expect(proof.staticDemandDirtyRenderCount).toBe(1);
+  expect(proof.staticDemandCameraPosition).toEqual([3, 1.62, 8]);
   expect(proof.staticDemandCameraRenderCount).toBe(1);
   expect(proof.replacementRenderSequence).toBe(1);
   expect(proof.replacementStatistics).toEqual({

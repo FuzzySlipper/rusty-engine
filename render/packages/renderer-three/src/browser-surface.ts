@@ -22,6 +22,10 @@ import {
 } from './three-renderer.js';
 import type { AnimatedMeshAssetSource, AnimatedMeshPlaybackReadout } from './animated-mesh.js';
 import { renderBrowserSurfaceFrame } from './browser-surface-render-pass.js';
+import {
+  RendererGpuSubmissionFence,
+  type RendererGpuSubmissionFenceDriver,
+} from './gpu-submission-fence.js';
 
 export interface ProjectedThreeRenderResult {
   readonly projection: RenderProjection;
@@ -141,6 +145,8 @@ export interface RendererBrowserSurface {
   readonly applyFrame: (frame: RenderFrameDiff) => void;
   readonly pick: (request: RendererBrowserSurfacePickRequest) => RendererBrowserSurfacePickReceipt;
   readonly snapshot: () => string;
+  /** Internal automatic-loop readiness; explicit renderOnce remains unconditional. */
+  readonly automaticSubmissionReady: () => boolean;
   readonly renderOnce: (timeMs?: number) => RendererBrowserSurfaceSubmissionStatistics;
   readonly setCameraPose: (
     pose: RendererBrowserSurfaceCameraPose,
@@ -206,6 +212,9 @@ export function mountRendererBrowserSurface(
   renderer.applyFrame(frame);
 
   const webgl = new THREE.WebGLRenderer({ canvas, antialias: true });
+  const gpuSubmissionFence = new RendererGpuSubmissionFence(
+    webGl2SubmissionFenceDriver(webgl.getContext()),
+  );
   webgl.autoClear = false;
   // One surface submission contains both world and viewmodel render passes.
   // Disable Three's per-pass reset so its public info object accumulates exact
@@ -311,6 +320,7 @@ export function mountRendererBrowserSurface(
       renderer,
       deltaSeconds,
     );
+    gpuSubmissionFence.submitted();
     return Object.freeze({
       schemaVersion: 1,
       drawCallCount: webgl.info.render.calls,
@@ -332,7 +342,9 @@ export function mountRendererBrowserSurface(
   };
 
   const tick = (timeMs: number): void => {
-    renderOnce(timeMs);
+    if (gpuSubmissionFence.ready()) {
+      renderOnce(timeMs);
+    }
     animationFrame = globalThis.requestAnimationFrame(tick);
   };
 
@@ -355,6 +367,7 @@ export function mountRendererBrowserSurface(
   const dispose = (): void => {
     if (disposed) return;
     stop();
+    gpuSubmissionFence.dispose();
     webgl.dispose();
     renderer.dispose();
     disposed = true;
@@ -371,6 +384,7 @@ export function mountRendererBrowserSurface(
     canvas,
     renderer,
     frame,
+    automaticSubmissionReady: gpuSubmissionFence.ready.bind(gpuSubmissionFence),
     animatedMeshPlayback: (handle) => renderer.animatedMeshPlayback(handle),
     applyFrame: (nextFrame) => renderer.applyFrame(nextFrame),
     cameraPose: () => currentCameraPose,
@@ -383,6 +397,30 @@ export function mountRendererBrowserSurface(
     start,
     stop,
     dispose,
+  };
+}
+
+function webGl2SubmissionFenceDriver(
+  context: WebGLRenderingContext | WebGL2RenderingContext,
+): RendererGpuSubmissionFenceDriver | null {
+  if (!('fenceSync' in context)) {
+    return null;
+  }
+  const webgl2 = context;
+  return {
+    create: () => webgl2.fenceSync(webgl2.SYNC_GPU_COMMANDS_COMPLETE, 0),
+    delete: (fence) => webgl2.deleteSync(fence as WebGLSync),
+    flush: () => webgl2.flush(),
+    poll: (fence) => {
+      const status = webgl2.clientWaitSync(fence as WebGLSync, 0, 0);
+      if (status === webgl2.TIMEOUT_EXPIRED) {
+        return 'pending';
+      }
+      if (status === webgl2.ALREADY_SIGNALED || status === webgl2.CONDITION_SATISFIED) {
+        return 'signaled';
+      }
+      return 'failed';
+    },
   };
 }
 

@@ -347,7 +347,11 @@ function mountPreparedRendererSurface(
       presentation: presentationHosts?.requiresAnimationFrame() ?? false,
       retainedAnimation: hasRetainedAnimation(latestSubmission),
     })) {
-      renderFrame(timeMs, 'animationFrame');
+      if (backendSurface.automaticSubmissionReady()) {
+        renderFrame(timeMs, 'animationFrame');
+      } else {
+        submissionDemand.request();
+      }
     }
     animationFrame = globalThis.requestAnimationFrame(tick);
   };
