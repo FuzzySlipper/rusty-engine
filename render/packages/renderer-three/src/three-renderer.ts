@@ -891,7 +891,6 @@ export class ThreeRenderer {
       this.#releaseStaticMesh(entry.asset);
     } else if (entry.kind === 'animatedMesh') {
       this.#animatedMeshes.release(diff.handle);
-      disposeObjectRecursive(entry.object);
     } else if (entry.kind === 'voxelObject' && entry.asset !== undefined) {
       disposeInstanceMaterials(entry);
       const definition = this.#voxelObjects.get(entry.asset);
@@ -1040,7 +1039,7 @@ export class ThreeRenderer {
       kind: 'animatedMesh',
       shape: 'quad',
       asset: diff.instance.asset,
-      ownsGeometry: true,
+      ownsGeometry: false,
     });
     this.#syncAnimatedMeshPlayback(diff.handle, this.#require(diff.handle, 'createAnimatedMeshInstance'));
   }

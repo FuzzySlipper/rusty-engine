@@ -27,6 +27,9 @@ surface, and renderer host/resource lifecycle.
 - [`render/packages/render-contracts/src`](../../render/packages/render-contracts/src)
 - [`render/packages/render-projection/src`](../../render/packages/render-projection/src)
 - [`render/packages/renderer-three/src`](../../render/packages/renderer-three/src)
+  - `animated-mesh.ts` owns asset-scoped geometry/material templates, independent
+    per-instance skeleton/mixer state, and their retained replacement/disposal
+    lifecycle.
 - [`render/packages/renderer-host/src`](../../render/packages/renderer-host/src)
 - [`render/browser`](../../render/browser)
 - [`render/package.json`](../../render/package.json)

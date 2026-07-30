@@ -677,6 +677,12 @@ bundle containing the exact GLB bytes, an `AnimatedMeshAsset` descriptor, catalo
 source/artifact manifest. Reimport replaces that bundle as one structural transaction; the original
 host selection is provenance, not a reopen dependency. `voxel-convert` remains the owner of
 animation sampling and voxel materialization rather than becoming the Studio import operation.
+The Three backend clones imported geometry and materials once into an asset-scoped retained
+definition. Animated instances share those immutable render resources while `SkeletonUtils` gives
+each instance its own hierarchy, skeleton, mixer, actions, and playback state. Destroying the last
+instance retains the admitted definition for later recreation; definition replacement or renderer
+disposal releases its geometry and materials exactly once without taking ownership of the caller's
+resolved GLB source objects.
 Angular owns the
 asset/clip controls and renderer-neutral transform-manipulator intent, but does not construct a
 private Three scene or replace materials inside an imported animated hierarchy merely to show

@@ -63,6 +63,7 @@ export interface AnimatedMeshPoseSample {
 interface AnimatedMeshAssetRecord {
   readonly asset: AnimatedMeshAsset;
   readonly resource: AnimatedMeshResource;
+  readonly scene: THREE.Object3D;
   refCount: number;
 }
 
@@ -145,7 +146,11 @@ export class AnimatedMeshRegistry {
       );
     }
     assertClipDescriptors(asset, resource);
-    this.#assets.set(asset.asset, { asset, resource, refCount: 0 });
+    const scene = createAnimatedMeshAssetScene(resource.scene);
+    if (existing) {
+      disposeAnimatedMeshAssetScene(existing.scene);
+    }
+    this.#assets.set(asset.asset, { asset, resource, scene, refCount: 0 });
   }
 
   create(handle: RenderHandle, instance: AnimatedMeshInstanceDescriptor): AnimatedMeshInstanceRecord {
@@ -158,7 +163,7 @@ export class AnimatedMeshRegistry {
         `createAnimatedMeshInstance: material overrides are not implemented for animated mesh ${instance.asset}`,
       );
     }
-    const object = cloneAnimatedMeshInstance(record.resource.scene);
+    const object = SkeletonUtils.clone(record.scene);
     const mixer = new THREE.AnimationMixer(object);
     const actions = new Map<string, THREE.AnimationAction>();
     for (const clip of record.asset.clips) {
@@ -256,6 +261,7 @@ export class AnimatedMeshRegistry {
       return;
     }
     instance.mixer.stopAllAction();
+    instance.mixer.uncacheRoot(instance.object);
     this.#instances.delete(handle);
     const asset = this.#assets.get(instance.asset);
     if (asset) {
@@ -266,6 +272,9 @@ export class AnimatedMeshRegistry {
   dispose(): void {
     for (const handle of [...this.#instances.keys()]) {
       this.release(handle);
+    }
+    for (const asset of this.#assets.values()) {
+      disposeAnimatedMeshAssetScene(asset.scene);
     }
     this.#assets.clear();
   }
@@ -279,20 +288,58 @@ export class AnimatedMeshRegistry {
   }
 }
 
-function cloneAnimatedMeshInstance(source: THREE.Object3D): THREE.Object3D {
-  const instance = SkeletonUtils.clone(source);
-  instance.traverse((object) => {
+function createAnimatedMeshAssetScene(source: THREE.Object3D): THREE.Object3D {
+  const scene = SkeletonUtils.clone(source);
+  const geometries = new Map<THREE.BufferGeometry, THREE.BufferGeometry>();
+  const materials = new Map<THREE.Material, THREE.Material>();
+  scene.traverse((object) => {
     const mesh = object as THREE.Mesh;
     if (mesh.geometry instanceof THREE.BufferGeometry) {
-      mesh.geometry = mesh.geometry.clone();
+      const sourceGeometry = mesh.geometry;
+      let geometry = geometries.get(sourceGeometry);
+      if (geometry === undefined) {
+        geometry = sourceGeometry.clone();
+        geometries.set(sourceGeometry, geometry);
+      }
+      mesh.geometry = geometry;
     }
     if (Array.isArray(mesh.material)) {
-      mesh.material = mesh.material.map((material) => material.clone());
+      mesh.material = mesh.material.map((material) => cloneSharedMaterial(material, materials));
     } else if (mesh.material instanceof THREE.Material) {
-      mesh.material = mesh.material.clone();
+      mesh.material = cloneSharedMaterial(mesh.material, materials);
     }
   });
-  return instance;
+  return scene;
+}
+
+function cloneSharedMaterial(
+  source: THREE.Material,
+  materials: Map<THREE.Material, THREE.Material>,
+): THREE.Material {
+  let material = materials.get(source);
+  if (material === undefined) {
+    material = source.clone();
+    materials.set(source, material);
+  }
+  return material;
+}
+
+function disposeAnimatedMeshAssetScene(scene: THREE.Object3D): void {
+  const geometries = new Set<THREE.BufferGeometry>();
+  const materials = new Set<THREE.Material>();
+  scene.traverse((object) => {
+    const mesh = object as THREE.Mesh;
+    if (mesh.geometry instanceof THREE.BufferGeometry) {
+      geometries.add(mesh.geometry);
+    }
+    if (Array.isArray(mesh.material)) {
+      mesh.material.forEach((material) => materials.add(material));
+    } else if (mesh.material instanceof THREE.Material) {
+      materials.add(mesh.material);
+    }
+  });
+  geometries.forEach((geometry) => geometry.dispose());
+  materials.forEach((material) => material.dispose());
 }
 
 function assertClipDescriptors(asset: AnimatedMeshAsset, resource: AnimatedMeshResource): void {

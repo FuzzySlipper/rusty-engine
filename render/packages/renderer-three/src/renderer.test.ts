@@ -2066,7 +2066,7 @@ function testAnimatedMeshSource(asset = animatedMeshAsset()): MapAnimatedMeshAss
   return new MapAnimatedMeshAssetSource([{ asset: asset.asset, contentHash: asset.contentHash, scene, clips }]);
 }
 
-void test('loads the committed animated GLB fixture and exposes named clips', async () => {
+void test('committed animated GLB instances share GPU resources while playback remains independent', async () => {
   const testGlobal = globalThis as unknown as { self: unknown };
   const priorSelf = testGlobal.self;
   testGlobal.self = globalThis;
@@ -2084,6 +2084,54 @@ void test('loads the committed animated GLB fixture and exposes named clips', as
       resource.clips.map((clip) => clip.name).sort(),
       ['idle', 'jump', 'run'],
     );
+    const asset = animatedMeshAsset();
+    const renderer = new ThreeRenderer({
+      animatedMeshSource: new MapAnimatedMeshAssetSource([resource]),
+    });
+    renderer.applyDiff({ op: 'defineAnimatedMesh', asset });
+    for (const [handle, clip] of [
+      [renderHandle(4098), 'idle'],
+      [renderHandle(4099), 'run'],
+    ] as const) {
+      renderer.applyDiff({
+        op: 'createAnimatedMeshInstance',
+        handle,
+        parent: null,
+        instance: {
+          asset: asset.asset,
+          transform: { translation: [handle - 4098, 0, -2], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+          materialOverrides: [],
+          playback: {
+            kind: 'play',
+            clip,
+            loop: 'repeat',
+            speed: 1,
+            weight: 1,
+            restart: true,
+            fadeSeconds: null,
+          },
+          visible: true,
+          metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: `animated-${handle}` },
+        },
+      });
+    }
+    assert.deepEqual(renderer.resourceStatistics(), {
+      renderHandleCount: 2,
+      geometryResourceCount: 1,
+      materialResourceCount: 1,
+      textureResourceCount: 0,
+      animatedInstanceCount: 2,
+    });
+    const idle = firstMesh(renderer.objectFor(renderHandle(4098))!) as THREE.SkinnedMesh;
+    const run = firstMesh(renderer.objectFor(renderHandle(4099))!) as THREE.SkinnedMesh;
+    assert.equal(idle.geometry, run.geometry);
+    assert.equal(idle.material, run.material);
+    assert.notEqual(idle.skeleton, run.skeleton);
+    assert.notEqual(idle.skeleton.bones[0], run.skeleton.bones[0]);
+    renderer.advanceAnimation(0.25);
+    assert.equal(renderer.animatedMeshPlayback(renderHandle(4098))?.currentClip, 'idle');
+    assert.equal(renderer.animatedMeshPlayback(renderHandle(4099))?.currentClip, 'run');
+    renderer.dispose();
   } finally {
     console.warn = priorWarn;
     console.error = priorError;
@@ -2146,7 +2194,7 @@ void test('animated mesh playback is command-selected and advances through rende
   assert.deepEqual(r.animatedMeshPlayback(handle)?.diagnostics, ['animation_stopped']);
 });
 
-void test('animated instances own disposable geometry without invalidating sibling channels or source resources', () => {
+void test('animated instances reuse asset-scoped geometry and materials with independent skeletons and lifecycle', () => {
   const asset = animatedMeshAsset({ clips: [], defaultClip: null });
   const sourceScene = new THREE.Group();
   const sourceGeometry = new THREE.BoxGeometry(1, 1, 1);
@@ -2154,7 +2202,12 @@ void test('animated instances own disposable geometry without invalidating sibli
   const sourceTexture = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
   sourceTexture.needsUpdate = true;
   sourceMaterial.map = sourceTexture;
-  sourceScene.add(new THREE.Mesh(sourceGeometry, sourceMaterial));
+  const sourceBone = new THREE.Bone();
+  sourceBone.name = 'root-bone';
+  const sourceMesh = new THREE.SkinnedMesh(sourceGeometry, sourceMaterial);
+  sourceMesh.add(sourceBone);
+  sourceMesh.bind(new THREE.Skeleton([sourceBone]));
+  sourceScene.add(sourceMesh);
   const source = new MapAnimatedMeshAssetSource([{
     asset: asset.asset,
     contentHash: asset.contentHash,
@@ -2163,42 +2216,55 @@ void test('animated instances own disposable geometry without invalidating sibli
   }]);
   const renderer = new ThreeRenderer({ animatedMeshSource: source });
   renderer.applyDiff({ op: 'defineAnimatedMesh', asset });
-  for (const handle of [renderHandle(4201), renderHandle(4202)]) {
+  const createInstance = (handle: ReturnType<typeof renderHandle>, translationX = 0): void => {
     renderer.applyDiff({
       op: 'createAnimatedMeshInstance',
       handle,
       parent: null,
       instance: {
         asset: asset.asset,
-        transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+        transform: { translation: [translationX, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
         materialOverrides: [],
         playback: null,
         visible: true,
         metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: `animated-${handle}` },
       },
     });
+  };
+  for (const handle of [renderHandle(4201), renderHandle(4202)]) {
+    createInstance(handle);
   }
   assert.deepEqual(renderer.resourceStatistics(), {
     renderHandleCount: 2,
-    geometryResourceCount: 2,
-    materialResourceCount: 2,
+    geometryResourceCount: 1,
+    materialResourceCount: 1,
     textureResourceCount: 1,
     animatedInstanceCount: 2,
   });
-  const firstGeometry = firstMesh(renderer.objectFor(renderHandle(4201))!).geometry;
-  const secondGeometry = firstMesh(renderer.objectFor(renderHandle(4202))!).geometry;
-  let firstDisposed = false;
-  let secondDisposed = false;
+  const firstMeshInstance = firstMesh(renderer.objectFor(renderHandle(4201))!) as THREE.SkinnedMesh;
+  const secondMeshInstance = firstMesh(renderer.objectFor(renderHandle(4202))!) as THREE.SkinnedMesh;
+  const firstGeometry = firstMeshInstance.geometry;
+  const secondGeometry = secondMeshInstance.geometry;
+  const firstMaterial = firstMeshInstance.material as THREE.Material;
+  const secondMaterial = secondMeshInstance.material as THREE.Material;
+  let sharedGeometryDisposed = false;
+  let sharedMaterialDisposed = false;
   let sourceDisposed = false;
-  firstGeometry.addEventListener('dispose', () => { firstDisposed = true; });
-  secondGeometry.addEventListener('dispose', () => { secondDisposed = true; });
+  firstGeometry.addEventListener('dispose', () => { sharedGeometryDisposed = true; });
+  firstMaterial.addEventListener('dispose', () => { sharedMaterialDisposed = true; });
   sourceGeometry.addEventListener('dispose', () => { sourceDisposed = true; });
 
-  assert.notEqual(firstGeometry, secondGeometry);
+  assert.equal(firstGeometry, secondGeometry);
+  assert.equal(firstMaterial, secondMaterial);
   assert.notEqual(firstGeometry, sourceGeometry);
+  assert.notEqual(firstMaterial, sourceMaterial);
+  assert.notEqual(firstMeshInstance.skeleton, secondMeshInstance.skeleton);
+  assert.notEqual(firstMeshInstance.skeleton.bones[0], secondMeshInstance.skeleton.bones[0]);
+  firstMeshInstance.skeleton.bones[0]!.position.x = 3;
+  assert.equal(secondMeshInstance.skeleton.bones[0]!.position.x, 0);
   renderer.applyDiff({ op: 'destroy', handle: renderHandle(4201) });
-  assert.equal(firstDisposed, true);
-  assert.equal(secondDisposed, false);
+  assert.equal(sharedGeometryDisposed, false);
+  assert.equal(sharedMaterialDisposed, false);
   assert.equal(sourceDisposed, false);
   assert.deepEqual(renderer.resourceStatistics(), {
     renderHandleCount: 1,
@@ -2208,32 +2274,32 @@ void test('animated instances own disposable geometry without invalidating sibli
     animatedInstanceCount: 1,
   });
 
-  renderer.applyDiff({
-    op: 'createAnimatedMeshInstance',
-    handle: renderHandle(4201),
-    parent: null,
-    instance: {
-      asset: asset.asset,
-      transform: { translation: [1, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
-      materialOverrides: [],
-      playback: null,
-      visible: true,
-      metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: 'animated-4201-readded' },
-    },
+  renderer.applyDiff({ op: 'destroy', handle: renderHandle(4202) });
+  assert.equal(sharedGeometryDisposed, false);
+  assert.equal(sharedMaterialDisposed, false);
+  assert.deepEqual(renderer.resourceStatistics(), {
+    renderHandleCount: 0,
+    geometryResourceCount: 1,
+    materialResourceCount: 1,
+    textureResourceCount: 1,
+    animatedInstanceCount: 0,
   });
+  createInstance(renderHandle(4201), 1);
+  createInstance(renderHandle(4202), 2);
   assert.ok(renderer.objectFor(renderHandle(4201)));
   assert.ok(renderer.objectFor(renderHandle(4202)));
   assert.equal(sourceDisposed, false);
   assert.deepEqual(renderer.resourceStatistics(), {
     renderHandleCount: 2,
-    geometryResourceCount: 2,
-    materialResourceCount: 2,
+    geometryResourceCount: 1,
+    materialResourceCount: 1,
     textureResourceCount: 1,
     animatedInstanceCount: 2,
   });
 
   renderer.dispose();
-  assert.equal(secondDisposed, true);
+  assert.equal(sharedGeometryDisposed, true);
+  assert.equal(sharedMaterialDisposed, true);
   assert.equal(sourceDisposed, false);
   assert.deepEqual(renderer.resourceStatistics(), {
     renderHandleCount: 0,
