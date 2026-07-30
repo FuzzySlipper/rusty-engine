@@ -67,14 +67,14 @@ async function measureBrowserControlParse(page: Page): Promise<{
   readonly adapterRoundTripMilliseconds: number;
   readonly browserJsonParseMilliseconds: number;
 }> {
-  return page.evaluate(async ({ root, projectFile }) => {
+  return page.evaluate(async ({ root, projectFile, protocolVersion }) => {
     const started = performance.now();
     const response = await fetch('/api/studio-adapter', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         type: 'openProject',
-        protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+        protocolVersion,
         requestId: 'high-fidelity-browser-measurement',
         root,
         projectFile,
@@ -99,7 +99,11 @@ async function measureBrowserControlParse(page: Page): Promise<{
       adapterRoundTripMilliseconds: Number((received - started).toFixed(3)),
       browserJsonParseMilliseconds: Number((parsed - parseStarted).toFixed(3)),
     };
-  }, { root: projectRoot, projectFile: largeProjectFile });
+  }, {
+    root: projectRoot,
+    projectFile: largeProjectFile,
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+  });
 }
 
 async function expectProjectOpen(page: Page, waitForOpening = false) {
