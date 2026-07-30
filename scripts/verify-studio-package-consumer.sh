@@ -177,7 +177,7 @@ const contributions = admitStudioEntityInspectorContributions(
   RUSTY_ENGINE_ENTITY_INSPECTOR_CONTRIBUTIONS,
 );
 if (
-  STUDIO_ADAPTER_PROTOCOL_VERSION !== 11
+  STUDIO_ADAPTER_PROTOCOL_VERSION !== 12
   || contributions[0]?.componentTypeId !== VOXEL_OBJECT_COMPONENT_TYPE_ID
   || typeof StudioShellComponent !== 'function'
   || typeof StudioViewportComponent !== 'function'
@@ -228,7 +228,7 @@ const snapshot = renderer.snapshot();
 renderer.dispose();
 
 if (
-  STUDIO_ADAPTER_PROTOCOL_VERSION !== 11
+  STUDIO_ADAPTER_PROTOCOL_VERSION !== 12
   || buildDefaultStudioHostUserSettings('consumer').schemaVersion !== 1
   || projection.handleCount === 0
   || snapshot.length === 0

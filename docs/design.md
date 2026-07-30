@@ -550,7 +550,7 @@ project schema, trusted root, compatibility, and publication policy while compos
 `voxel-annotation`, `voxel-convert`, `content-store`, `engine-inspector`, and render-projection
 mechanisms.
 
-Protocol 11 executes one named request at a time. Reads rebuild canonical owner views. Mutations carry
+Protocol 12 executes one named request at a time. Reads rebuild canonical owner views. Mutations carry
 the accepted project hash plus narrower asset/revision/layer/plan guards, stage a complete candidate,
 rerun downstream admission and renderer projection, atomically publish the project file, and return
 a canonical reread. Voxel history and annotation documents are durable project data; conversion
@@ -568,11 +568,17 @@ Protocol 11's `prepareVoxelObjectPlacement` is a narrow read-only exception to c
 frames: it resolves the exact renderer resources for one canonical object that may have no live
 instance yet. Its response is resource-only, bounded, content-matched, and incapable of creating or
 updating a retained instance. Studio owns only the disposable ghost and one local candidate;
-`attachVoxelObjectInstance` remains the single downstream mutation that allocates an owner,
-validates the typed component, and atomically publishes project truth. The resource candidate may
-survive that canonical reread solely to keep the shared renderer mounted across placement.
+`attachVoxelObjectInstance` remains the focused one-instance downstream mutation. Protocol 12 adds
+`attachVoxelObjectInstances` for 1–32 create-only placements when a composition would otherwise
+repeat the entire project mutation and complete readout. The downstream adapter stages every
+request-order owner allocation, typed component, complete admission, projection, and durable write
+before one atomic publication; duplicate, colliding, stale, invalid, or over-quota entries publish
+nothing. Success returns one ordered owner receipt and one canonical reread. Studio accepts that
+readout once and clears its local single-placement undo candidate rather than pretending a member
+represents the atomic batch. The resource candidate may survive a canonical reread solely to keep
+the shared renderer mounted across placement.
 
-Protocol 11 retains protocol 10's bounded identity for downstream entity components: canonical owner
+Protocol 12 retains protocol 10's bounded identity for downstream entity components: canonical owner
 entity, stable component type, and an optional exact inspector-contract identity advertised by the
 adapter. It contains no component values, field schemas, mutation payloads, UI metadata, module
 locations, or executable handles. Unknown components remain visible and read-only. The Engine shell

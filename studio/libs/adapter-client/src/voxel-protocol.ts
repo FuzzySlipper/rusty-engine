@@ -4,6 +4,12 @@ export type Vector3 = readonly [number, number, number];
 export type Vector3i = readonly [number, number, number];
 export type Quaternion = readonly [number, number, number, number];
 
+/**
+ * One Studio mutation may attach enough object instances for a composed room
+ * without turning a control-plane request into an unbounded project payload.
+ */
+export const MAX_VOXEL_OBJECT_INSTANCE_BATCH = 32;
+
 export interface VoxelBounds {
   readonly min: Vector3i;
   readonly max: Vector3i;
@@ -484,7 +490,17 @@ export type ProjectMutationReceipt =
   | { readonly kind: 'voxelAnnotationEdited'; readonly assetId: string; readonly layerId: string; readonly layerHashBefore: string; readonly layerHashAfter: string; readonly affectedRegionIds: readonly string[] }
   | { readonly kind: 'voxelConversionApplied'; readonly planId: string; readonly planHash: string; readonly assetId: string; readonly outputHash: string; readonly outputVoxels: number }
   | { readonly kind: 'voxelObjectConversionApplied'; readonly planId: string; readonly planHash: string; readonly assetId: string; readonly outputHash: string; readonly storedFrames: number; readonly aggregateVoxels: number }
-  | { readonly kind: 'voxelObjectInstanceAttached'; readonly sceneId: string; readonly instanceId: string; readonly assetId: string; readonly frameKind: 'default' | 'clip' };
+  | { readonly kind: 'voxelObjectInstanceAttached'; readonly sceneId: string; readonly instanceId: string; readonly assetId: string; readonly frameKind: 'default' | 'clip' }
+  | {
+    readonly kind: 'voxelObjectInstancesAttached';
+    readonly placements: readonly {
+      readonly sceneId: string;
+      readonly instanceId: string;
+      readonly assetId: string;
+      readonly frameKind: 'default' | 'clip';
+      readonly ownerEntityId: number;
+    }[];
+  };
 
 export function validateVoxelAuthoringReadout(input: unknown, path: string): void {
   const value = closedObject(input, path, ['assets', 'instances', 'materials']);
@@ -675,6 +691,41 @@ export function validateProjectMutationReceipt(input: unknown, path: string): vo
       const entry = receipt(['sceneId', 'instanceId', 'assetId', 'frameKind']);
       strings(entry, path, ['sceneId', 'instanceId', 'assetId']);
       enumValue(entry['frameKind'], `${path}.frameKind`, ['default', 'clip']);
+      return;
+    }
+    case 'voxelObjectInstancesAttached': {
+      const entry = receipt(['placements']);
+      const placements = array(entry['placements'], `${path}.placements`);
+      if (placements.length === 0 || placements.length > MAX_VOXEL_OBJECT_INSTANCE_BATCH) {
+        throw new TypeError(
+          `${path}.placements must contain 1..=${String(MAX_VOXEL_OBJECT_INSTANCE_BATCH)} placements`,
+        );
+      }
+      const instanceIds = new Set<string>();
+      const ownerEntityIds = new Set<number>();
+      placements.forEach((placement, index) => {
+        const placementPath = `${path}.placements[${String(index)}]`;
+        const value = closedObject(placement, placementPath, [
+          'sceneId', 'instanceId', 'assetId', 'frameKind', 'ownerEntityId',
+        ]);
+        strings(value, placementPath, ['sceneId', 'instanceId', 'assetId']);
+        enumValue(value['frameKind'], `${placementPath}.frameKind`, ['default', 'clip']);
+        const ownerEntityId = positiveSafeInteger(
+          value['ownerEntityId'],
+          `${placementPath}.ownerEntityId`,
+        );
+        const instanceId = value['instanceId'] as string;
+        if (instanceIds.has(instanceId)) {
+          throw new TypeError(`${placementPath}.instanceId duplicates ${JSON.stringify(instanceId)}`);
+        }
+        if (ownerEntityIds.has(ownerEntityId)) {
+          throw new TypeError(
+            `${placementPath}.ownerEntityId duplicates ${String(ownerEntityId)}`,
+          );
+        }
+        instanceIds.add(instanceId);
+        ownerEntityIds.add(ownerEntityId);
+      });
       return;
     }
     default:
@@ -1145,6 +1196,13 @@ function string(input: unknown, path: string): string {
 function number(input: unknown, path: string): number {
   if (typeof input !== 'number' || !Number.isFinite(input)) {
     throw new TypeError(`${path} must be a finite number`);
+  }
+  return input;
+}
+
+function positiveSafeInteger(input: unknown, path: string): number {
+  if (typeof input !== 'number' || !Number.isSafeInteger(input) || input <= 0) {
+    throw new TypeError(`${path} must be a positive safe integer`);
   }
   return input;
 }

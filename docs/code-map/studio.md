@@ -44,7 +44,7 @@ viewport, and its closed external-project adapter protocol.
 - The external consumer is always selected explicitly by an integration
   command; ordinary Engine work never scans a sibling checkout.
 - Renderer packages are consumed through their package roots.
-- Protocol 11 retains the promoted downstream Entity inspector
+- Protocol 12 retains the promoted downstream Entity inspector
   seam. `studio/libs/editor-shell/src/entity-inspector.ts` owns static
   contribution admission, exact matching, remount generations, and the narrow
   mutation-settlement contract. The shell owns the single outlet; the stock app
@@ -52,9 +52,13 @@ viewport, and its closed external-project adapter protocol.
   Loading Bay application composes its own Weapon contribution without adding
   its value or operations to Engine. Do not add another hard-coded game
   component to the shell.
-- Protocol 11 adds only the bounded `prepareVoxelObjectPlacement` presentation
+- Protocol 11 added only the bounded `prepareVoxelObjectPlacement` presentation
   read needed to preview an unused canonical object. Its resource-only frame is
   merged by `viewport`; authoritative attachment remains downstream.
+- Protocol 12 adds one create-only `attachVoxelObjectInstances` request for
+  1–32 ordered placements. Downstream Rust stages owner allocation, complete
+  admission, projection, and publication; Studio accepts one canonical readout
+  and never implements a placement loop or parallel history authority.
 - `studio/libs/viewport` emits immutable `frameSubmitted` observations only
   after an accepted complete, incremental, or presentation-only frame has been
   submitted through its private shared inspection surface. The event pairs the

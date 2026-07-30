@@ -99,6 +99,13 @@ export type VoxelEditorAction =
   | { readonly kind: 'prepareObjectPlacementResource'; readonly assetId: string; readonly expectedObjectContentHash: string }
   | { readonly kind: 'discardObjectPlacementResource' }
   | { readonly kind: 'attachObjectInstance'; readonly sceneId: string; readonly instance: StoredVoxelObjectInstance }
+  | {
+    readonly kind: 'attachObjectInstances';
+    readonly placements: readonly {
+      readonly sceneId: string;
+      readonly instance: StoredVoxelObjectInstance;
+    }[];
+  }
   | { readonly kind: 'undoObjectPlacement'; readonly instanceId: string }
   | { readonly kind: 'reapplyObjectPlacement'; readonly instanceId: string }
   | { readonly kind: 'previewObjectInstance'; readonly sceneId: string; readonly instanceId: string; readonly nowMicroseconds: number; readonly command: VoxelObjectPlaybackCommand };

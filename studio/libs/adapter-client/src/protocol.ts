@@ -56,8 +56,9 @@ import {
 
 export type * from './voxel-protocol.js';
 export type * from './voxel-object-protocol.js';
+export { MAX_VOXEL_OBJECT_INSTANCE_BATCH } from './voxel-protocol.js';
 
-export const STUDIO_ADAPTER_PROTOCOL_VERSION = 11 as const;
+export const STUDIO_ADAPTER_PROTOCOL_VERSION = 12 as const;
 // Requests remain compact control-plane commands. Responses include complete
 // retained-frame readouts; 64 MiB admits the checked 96x144x96 voxel-object
 // corpus while retaining a finite host/browser liveness guard.
@@ -132,6 +133,7 @@ export type StudioAdapterRequest =
   | DiscardVoxelObjectConversionRequest
   | PrepareVoxelObjectPlacementRequest
   | AttachVoxelObjectInstanceRequest
+  | AttachVoxelObjectInstancesRequest
   | PreviewVoxelObjectInstanceRequest
   | CloseProjectRequest;
 
@@ -658,6 +660,15 @@ export interface AttachVoxelObjectInstanceRequest extends RequestHeader {
   readonly instance: StoredVoxelObjectInstance;
 }
 
+export interface AttachVoxelObjectInstancesRequest extends RequestHeader {
+  readonly type: 'attachVoxelObjectInstances';
+  readonly expectedProjectHash: string;
+  readonly placements: readonly {
+    readonly sceneId: string;
+    readonly instance: StoredVoxelObjectInstance;
+  }[];
+}
+
 export interface PreviewVoxelObjectInstanceRequest extends RequestHeader {
   readonly type: 'previewVoxelObjectInstance';
   readonly expectedProjectHash: string;
@@ -906,6 +917,7 @@ export const STUDIO_ADAPTER_OPERATIONS = [
   'discardVoxelObjectConversion',
   'prepareVoxelObjectPlacement',
   'attachVoxelObjectInstance',
+  'attachVoxelObjectInstances',
   'previewVoxelObjectInstance',
   'closeProject',
 ] as const;
@@ -1578,7 +1590,7 @@ function adapterDescription(input: unknown, path: string): void {
   );
   const expected = STUDIO_ADAPTER_OPERATIONS;
   if (operations.length !== expected.length || operations.some((entry, index) => entry !== expected[index])) {
-    fail(`${path}.operations`, 'must name the protocol 11 operation set in order');
+    fail(`${path}.operations`, 'must name the protocol 12 operation set in order');
   }
   inspectorContracts(
     value['entityInspectorContracts'],

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  MAX_VOXEL_OBJECT_INSTANCE_BATCH,
   STUDIO_ADAPTER_PROTOCOL_VERSION,
   STUDIO_ADAPTER_OPERATIONS,
   StudioAdapterClient,
@@ -761,6 +762,132 @@ test('rejected voxel-object placement publishes no candidate and leaves prior hi
   assert.strictEqual(store.snapshot().voxelWorkspace.objectPlacementHistory, accepted);
 });
 
+test('voxel-object batch placement is one bounded mutation with deterministic owner selection', async () => {
+  const client = new VoxelObjectFixtureClient();
+  const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
+  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.runVoxelAction(objectPrepareAction());
+  const conversion = store.snapshot().voxelWorkspace.objectConversion;
+  assert.ok(conversion !== null);
+  await store.runVoxelAction({
+    kind: 'applyObjectConversion',
+    planId: conversion.plan.planId,
+    expectedPlanHash: conversion.plan.planHash,
+    expectedOutputHash: conversion.preview.outputHash,
+  });
+
+  await store.runVoxelAction({
+    kind: 'attachObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instance: storedObjectInstance('prior-single', [0, 0, 0]),
+  });
+  assert.ok(store.snapshot().voxelWorkspace.objectPlacementHistory !== null);
+
+  const placements = Array.from(
+    { length: MAX_VOXEL_OBJECT_INSTANCE_BATCH },
+    (_, index) => ({
+      sceneId: 'scene/loading-bay',
+      instance: storedObjectInstance(
+        `batch-${String(index + 1)}`,
+        [index + 1, 0, 2],
+      ),
+    }),
+  );
+  await store.runVoxelAction({ kind: 'attachObjectInstances', placements });
+
+  assert.equal(client.batchAttachRequestCount, 1);
+  assert.equal(
+    store.snapshot().authoringDocument?.voxelObjectAuthoring.instances.length,
+    MAX_VOXEL_OBJECT_INSTANCE_BATCH + 1,
+  );
+  assert.equal(
+    store.snapshot().selection.entityId,
+    MAX_VOXEL_OBJECT_INSTANCE_BATCH + 1,
+  );
+  assert.equal(store.snapshot().voxelWorkspace.objectPlacementHistory, null);
+  const receipt = store.snapshot().voxelWorkspace.lastReceipt;
+  assert.equal(receipt?.kind, 'voxelObjectInstancesAttached');
+  assert.equal(
+    receipt?.kind === 'voxelObjectInstancesAttached'
+      ? receipt.placements.length
+      : 0,
+    MAX_VOXEL_OBJECT_INSTANCE_BATCH,
+  );
+});
+
+test('voxel-object batch preflight and late rejection preserve project, selection, and history', async () => {
+  const client = new VoxelObjectFixtureClient();
+  const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
+  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.runVoxelAction(objectPrepareAction());
+  const conversion = store.snapshot().voxelWorkspace.objectConversion;
+  assert.ok(conversion !== null);
+  await store.runVoxelAction({
+    kind: 'applyObjectConversion',
+    planId: conversion.plan.planId,
+    expectedPlanHash: conversion.plan.planHash,
+    expectedOutputHash: conversion.preview.outputHash,
+  });
+  await store.runVoxelAction({
+    kind: 'attachObjectInstance',
+    sceneId: 'scene/loading-bay',
+    instance: storedObjectInstance('accepted-before-batch', [1, 0, 1]),
+  });
+  const beforeProject = store.snapshot().authoringDocument;
+  const beforeSelection = store.snapshot().selection;
+  const beforeHistory = store.snapshot().voxelWorkspace.objectPlacementHistory;
+
+  const oneOver = Array.from(
+    { length: MAX_VOXEL_OBJECT_INSTANCE_BATCH + 1 },
+    (_, index) => ({
+      sceneId: 'scene/loading-bay',
+      instance: storedObjectInstance(`one-over-${String(index)}`, [index, 0, 0]),
+    }),
+  );
+  await store.runVoxelAction({ kind: 'attachObjectInstances', placements: oneOver });
+  assert.match(store.snapshot().lastError ?? '', /requires 1\.\.=32 instances/u);
+  assert.equal(client.batchAttachRequestCount, 0);
+  assert.strictEqual(store.snapshot().authoringDocument, beforeProject);
+  assert.strictEqual(store.snapshot().selection, beforeSelection);
+  assert.strictEqual(store.snapshot().voxelWorkspace.objectPlacementHistory, beforeHistory);
+
+  const duplicate = {
+    sceneId: 'scene/loading-bay',
+    instance: storedObjectInstance('duplicate-in-batch', [2, 0, 2]),
+  };
+  await store.runVoxelAction({
+    kind: 'attachObjectInstances',
+    placements: [duplicate, duplicate],
+  });
+  assert.match(store.snapshot().lastError ?? '', /duplicates instance duplicate-in-batch/u);
+  assert.equal(client.batchAttachRequestCount, 0);
+
+  await store.runVoxelAction({
+    kind: 'attachObjectInstances',
+    placements: [{
+      sceneId: 'scene/loading-bay',
+      instance: storedObjectInstance('accepted-before-batch', [3, 0, 3]),
+    }],
+  });
+  assert.match(store.snapshot().lastError ?? '', /collides with existing instance/u);
+  assert.equal(client.batchAttachRequestCount, 0);
+
+  client.rejectObjectBatchAtIndex = MAX_VOXEL_OBJECT_INSTANCE_BATCH - 1;
+  const lateInvalid = Array.from(
+    { length: MAX_VOXEL_OBJECT_INSTANCE_BATCH },
+    (_, index) => ({
+      sceneId: 'scene/loading-bay',
+      instance: storedObjectInstance(`late-invalid-${String(index)}`, [index, 1, 0]),
+    }),
+  );
+  await store.runVoxelAction({ kind: 'attachObjectInstances', placements: lateInvalid });
+  assert.match(store.snapshot().lastError ?? '', /placement index 31 rejected/u);
+  assert.equal(client.batchAttachRequestCount, 1);
+  assert.strictEqual(store.snapshot().authoringDocument, beforeProject);
+  assert.strictEqual(store.snapshot().selection, beforeSelection);
+  assert.strictEqual(store.snapshot().voxelWorkspace.objectPlacementHistory, beforeHistory);
+});
+
 test('pause and restore queue behind an in-flight applied-object sample', async () => {
   const client = new VoxelObjectFixtureClient();
   client.applied = true;
@@ -1365,6 +1492,8 @@ class VoxelObjectFixtureClient {
   applied = false;
   attached = false;
   rejectObjectAttach = false;
+  rejectObjectBatchAtIndex: number | null = null;
+  batchAttachRequestCount = 0;
   stalePlacementResource = false;
   readonly attachedInstances: {
     readonly sceneId: string;
@@ -1604,6 +1733,44 @@ class VoxelObjectFixtureClient {
         instanceId: input.instance.instanceId,
         assetId: input.instance.voxelObjectAssetId,
         frameKind: input.instance.frame.kind,
+      },
+      project: this.#project(),
+    } as never);
+  }
+
+  attachVoxelObjectInstances(input: {
+    readonly placements: readonly {
+      readonly sceneId: string;
+      readonly instance: ReturnType<typeof storedObjectInstance>;
+    }[];
+  }) {
+    this.batchAttachRequestCount += 1;
+    if (this.rejectObjectBatchAtIndex !== null) {
+      return Promise.reject(
+        new Error(`voxelObject.batchEntry: placement index ${String(this.rejectObjectBatchAtIndex)} rejected`),
+      );
+    }
+    const nextOwnerEntityId = this.attachedInstances.reduce(
+      (maximum, entry) => Math.max(maximum, entry.ownerEntityId),
+      0,
+    ) + 1;
+    const staged = input.placements.map((placement, index) => ({
+      sceneId: placement.sceneId,
+      ownerEntityId: nextOwnerEntityId + index,
+      instance: structuredClone(placement.instance),
+    }));
+    this.attachedInstances.push(...staged);
+    this.attached = true;
+    return Promise.resolve({
+      receipt: {
+        kind: 'voxelObjectInstancesAttached',
+        placements: staged.map((placement) => ({
+          sceneId: placement.sceneId,
+          instanceId: placement.instance.instanceId,
+          assetId: placement.instance.voxelObjectAssetId,
+          frameKind: placement.instance.frame.kind,
+          ownerEntityId: placement.ownerEntityId,
+        })),
       },
       project: this.#project(),
     } as never);

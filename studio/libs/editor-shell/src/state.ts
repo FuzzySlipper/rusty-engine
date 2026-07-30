@@ -38,6 +38,7 @@ import type {
   VoxelAuthoringReadout,
 } from '@rusty-engine/studio-adapter-client';
 import {
+  MAX_VOXEL_OBJECT_INSTANCE_BATCH,
   StudioAdapterOperationRejected,
 } from '@rusty-engine/studio-adapter-client';
 import type { StudioAdapterClient } from '@rusty-engine/studio-adapter-client';
@@ -997,6 +998,13 @@ export class StudioWorkspaceStore {
       return;
     }
     if (!objectCandidateActionIsCurrent(action, current.voxelWorkspace.objectConversion)) return;
+    if (action.kind === 'attachObjectInstances') {
+      const error = objectInstanceBatchPreflightError(document, action.placements);
+      if (error !== null) {
+        this.reportUiError(error);
+        return;
+      }
+    }
     const expectedProjectHash = document.identity.projectHash;
     const projectScopeGeneration = this.#projectScopeGeneration;
     const objectAction = isVoxelObjectAction(action);
@@ -1490,6 +1498,20 @@ export class StudioWorkspaceStore {
           this.#acceptVoxelObjectAttachment(response, action.sceneId, action.instance);
           return;
         }
+        case 'attachObjectInstances': {
+          const response = await this.#client.attachVoxelObjectInstances({
+            expectedProjectHash,
+            placements: action.placements,
+          });
+          if (!this.#objectResponseIsCurrent(
+            action,
+            expectedProjectHash,
+            projectScopeGeneration,
+            objectOperationGeneration,
+          )) return;
+          this.#acceptVoxelObjectAttachments(response, action.placements);
+          return;
+        }
         case 'undoObjectPlacement': {
           const history = current.voxelWorkspace.objectPlacementHistory;
           if (
@@ -1967,6 +1989,66 @@ export class StudioWorkspaceStore {
           instance: attached.instance,
         },
         message: `Placed ${attached.instance.instanceId} on owner entity ${String(attached.ownerEntityId)}.`,
+      },
+    });
+  }
+
+  #acceptVoxelObjectAttachments(
+    response: ProjectMutationAppliedResponse,
+    placements: readonly {
+      readonly sceneId: string;
+      readonly instance: StoredVoxelObjectInstance;
+    }[],
+  ): void {
+    if (
+      response.receipt.kind !== 'voxelObjectInstancesAttached'
+      || response.receipt.placements.length !== placements.length
+    ) {
+      throw new Error('Canonical batch placement receipt did not match the submitted batch.');
+    }
+    const attached = placements.map((candidate, index) => {
+      const receipt = response.receipt.kind === 'voxelObjectInstancesAttached'
+        ? response.receipt.placements[index]
+        : undefined;
+      if (
+        receipt === undefined
+        || receipt.sceneId !== candidate.sceneId
+        || receipt.instanceId !== candidate.instance.instanceId
+        || receipt.assetId !== candidate.instance.voxelObjectAssetId
+        || receipt.frameKind !== candidate.instance.frame.kind
+      ) {
+        throw new Error(
+          `Canonical batch placement receipt diverged at index ${String(index)}.`,
+        );
+      }
+      const canonical = response.project.voxelObjectAuthoring.instances.find((entry) =>
+        entry.sceneId === candidate.sceneId
+        && entry.instance.instanceId === candidate.instance.instanceId);
+      if (canonical === undefined || canonical.ownerEntityId !== receipt.ownerEntityId) {
+        throw new Error(
+          `Canonical reread omitted batch voxel-object instance ${candidate.instance.instanceId}.`,
+        );
+      }
+      return canonical;
+    });
+    this.#acceptVoxelMutation(response);
+    const selected = attached.at(-1);
+    if (selected === undefined) {
+      throw new Error('Canonical batch placement unexpectedly contained no instances.');
+    }
+    const node = response.project.sceneHierarchy.nodes.find(
+      (entry) => entry.entityId === selected.ownerEntityId,
+    );
+    this.#acceptSelection({
+      sceneNodeId: node?.nodeId ?? null,
+      entityId: selected.ownerEntityId,
+      source: 'inspector',
+    });
+    this.#patch({
+      voxelWorkspace: {
+        ...this.#snapshot().voxelWorkspace,
+        objectPlacementHistory: null,
+        message: `Placed ${String(attached.length)} voxel-object instances; selected owner entity ${String(selected.ownerEntityId)}.`,
       },
     });
   }
@@ -2516,6 +2598,7 @@ function isVoxelObjectAction(action: VoxelEditorAction): boolean {
     case 'prepareObjectPlacementResource':
     case 'discardObjectPlacementResource':
     case 'attachObjectInstance':
+    case 'attachObjectInstances':
     case 'undoObjectPlacement':
     case 'reapplyObjectPlacement':
     case 'previewObjectInstance':
@@ -2710,7 +2793,38 @@ function mutationMessage(receipt: ProjectMutationReceipt): string {
     case 'voxelConversionApplied': return `Conversion installed ${receipt.assetId}.`;
     case 'voxelObjectConversionApplied': return `Voxel object ${receipt.assetId} installed with ${String(receipt.storedFrames)} stored frames.`;
     case 'voxelObjectInstanceAttached': return `Voxel object instance ${receipt.instanceId} attached.`;
+    case 'voxelObjectInstancesAttached': return `${String(receipt.placements.length)} voxel object instances attached.`;
   }
+}
+
+function objectInstanceBatchPreflightError(
+  project: Pick<StudioProjectReadout, 'voxelObjectAuthoring'>,
+  placements: readonly {
+    readonly sceneId: string;
+    readonly instance: StoredVoxelObjectInstance;
+  }[],
+): string | null {
+  if (
+    placements.length === 0
+    || placements.length > MAX_VOXEL_OBJECT_INSTANCE_BATCH
+  ) {
+    return `Voxel-object batch placement requires 1..=${String(MAX_VOXEL_OBJECT_INSTANCE_BATCH)} instances.`;
+  }
+  const existing = new Set(
+    project.voxelObjectAuthoring.instances.map((entry) => entry.instance.instanceId),
+  );
+  const requested = new Set<string>();
+  for (const [index, placement] of placements.entries()) {
+    const instanceId = placement.instance.instanceId;
+    if (requested.has(instanceId)) {
+      return `Voxel-object batch placement duplicates instance ${instanceId} at index ${String(index)}.`;
+    }
+    if (existing.has(instanceId)) {
+      return `Voxel-object batch placement collides with existing instance ${instanceId}.`;
+    }
+    requested.add(instanceId);
+  }
+  return null;
 }
 
 /**

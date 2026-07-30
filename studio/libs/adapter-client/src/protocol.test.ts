@@ -5,6 +5,7 @@ import {
   StudioAdapterClient,
   StudioAdapterDecodeError,
   StudioAdapterOperationRejected,
+  MAX_VOXEL_OBJECT_INSTANCE_BATCH,
   MAX_STUDIO_ENTITY_COMPONENT_REFERENCES,
   MAX_STUDIO_ENTITY_COMPONENTS_PER_OWNER,
   MAX_STUDIO_ENTITY_INSPECTOR_CONTRACTS,
@@ -570,7 +571,7 @@ test('protocol 7 closes history, file, and texture-policy response families', ()
   );
 });
 
-test('protocol 11 keeps entity-owned voxel objects, applied playback, and durable readouts closed', async () => {
+test('protocol 12 keeps entity-owned voxel objects, applied playback, and durable readouts closed', async () => {
   const inspected = voxelObjectSourceInspected('object-source-1');
   assert.equal(decodeStudioAdapterResponse(inspected).type, 'voxelObjectSourceInspected');
   assert.throws(
@@ -743,7 +744,7 @@ test('protocol 11 keeps entity-owned voxel objects, applied playback, and durabl
   ]);
 });
 
-test('protocol 11 placement preparation carries one bounded resource-only voxel object', async () => {
+test('protocol 12 placement preparation carries one bounded resource-only voxel object', async () => {
   const conversion = voxelObjectConversionPrepared('placement-source');
   const objectContentHash = `sha256:${'5'.repeat(64)}`;
   const resourceFrame = {
@@ -830,6 +831,107 @@ test('protocol 11 placement preparation carries one bounded resource-only voxel 
   });
   assert.deepEqual(transport.requests.map((request) => request.type), [
     'prepareVoxelObjectPlacement',
+  ]);
+});
+
+test('protocol 12 carries one closed bounded voxel-object placement batch and one readout', async () => {
+  const project = projectOpened('batch-project');
+  const owners = Array.from(
+    { length: MAX_VOXEL_OBJECT_INSTANCE_BATCH },
+    (_, index) => index + 1,
+  );
+  setCanonicalOwners(project, owners);
+  const placements = owners.map((ownerEntityId, index) => ({
+    sceneId: 'scene/loading-bay',
+    instanceId: `batch-${String(index + 1)}`,
+    assetId: 'voxel-object/character',
+    frameKind: 'clip' as const,
+    ownerEntityId,
+  }));
+  const applied = {
+    type: 'projectMutationApplied',
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+    requestId: 'batch-1',
+    receipt: {
+      kind: 'voxelObjectInstancesAttached',
+      placements,
+    },
+    project: project.project,
+  };
+  const decoded = decodeStudioAdapterResponse(applied);
+  assert.equal(decoded.type, 'projectMutationApplied');
+  assert.equal(
+    decoded.type === 'projectMutationApplied'
+      && decoded.receipt.kind === 'voxelObjectInstancesAttached'
+      ? decoded.receipt.placements.length
+      : 0,
+    MAX_VOXEL_OBJECT_INSTANCE_BATCH,
+  );
+
+  assert.throws(
+    () => decodeStudioAdapterResponse({
+      ...applied,
+      receipt: {
+        kind: 'voxelObjectInstancesAttached',
+        placements: [...placements, {
+          ...placements[0],
+          instanceId: 'batch-one-over',
+          ownerEntityId: MAX_VOXEL_OBJECT_INSTANCE_BATCH + 1,
+        }],
+      },
+    }),
+    /must contain 1\.\.=32 placements/u,
+  );
+  assert.throws(
+    () => decodeStudioAdapterResponse({
+      ...applied,
+      receipt: {
+        kind: 'voxelObjectInstancesAttached',
+        placements: [placements[0], { ...placements[1], instanceId: placements[0]?.instanceId }],
+      },
+    }),
+    /instanceId duplicates/u,
+  );
+  assert.throws(
+    () => decodeStudioAdapterResponse({
+      ...applied,
+      receipt: {
+        kind: 'voxelObjectInstancesAttached',
+        placements: [placements[0], { ...placements[1], ownerEntityId: placements[0]?.ownerEntityId }],
+      },
+    }),
+    /ownerEntityId duplicates/u,
+  );
+
+  const transport = new RecordingTransport((request) => {
+    assert.equal(request.type, 'attachVoxelObjectInstances');
+    if (request.type !== 'attachVoxelObjectInstances') throw new Error('unexpected operation');
+    assert.equal(request.expectedProjectHash, 'project-hash');
+    assert.equal(request.placements.length, MAX_VOXEL_OBJECT_INSTANCE_BATCH);
+    assert.deepEqual(
+      request.placements.map((placement) => placement.instance.instanceId),
+      placements.map((placement) => placement.instanceId),
+    );
+    return { ...applied, requestId: request.requestId };
+  });
+  const client = new StudioAdapterClient(transport);
+  await client.attachVoxelObjectInstances({
+    expectedProjectHash: 'project-hash',
+    placements: placements.map((placement, index) => ({
+      sceneId: placement.sceneId,
+      instance: {
+        instanceId: placement.instanceId,
+        voxelObjectAssetId: placement.assetId,
+        frame: { kind: 'clip', clipId: 'clip/walk-1', frameIndex: 0 },
+        translation: [index, 0, 0],
+        rotation: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+        materialOverrides: [],
+      },
+    })),
+  });
+  assert.deepEqual(transport.requests.map((request) => request.type), [
+    'attachVoxelObjectInstances',
   ]);
 });
 

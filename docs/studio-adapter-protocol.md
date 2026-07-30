@@ -1,6 +1,6 @@
 # Studio external-project adapter protocol
 
-Status: protocol 11 implemented in Engine; exact downstream adapter certification required
+Status: protocol 12 implemented in Engine; exact downstream adapter certification required
 
 Rusty Engine Studio talks to one project-owned Rust adapter at a time through a bounded JSON-lines
 process. The adapter is a downstream composition root: it understands that project's layout,
@@ -13,7 +13,7 @@ against a real external checkout without turning that checkout into an ordinary 
 
 ## Closed protocol
 
-Every request carries `protocolVersion: 11` and a caller-selected `requestId`. Version 11 contains
+Every request carries `protocolVersion: 12` and a caller-selected `requestId`. Version 12 contains
 only these tagged request families:
 
 | Request | Purpose | Canonical authority |
@@ -45,6 +45,7 @@ only these tagged request families:
 | `prepareVoxelObjectConversion`, `previewVoxelObjectConversion`, `applyVoxelObjectConversion`, `discardVoxelObjectConversion` | Retain one exact static-object or animated-flipbook candidate, select a stored frame for a complete shared-renderer projection, atomically install it, or explicitly discard it. | `voxel-convert`, `voxel-asset`, `voxel-object-runtime`, render projection, project adapter |
 | `prepareVoxelObjectPlacement` | Resolve one already-authored object's exact content-addressed mesh and renderer definitions for a disposable placement ghost; it creates no entity, instance, retained gameplay state, or project bytes. | downstream object admission/render projection and resource host |
 | `attachVoxelObjectInstance` | Attach a transformed canonical object with one explicit default or clip-frame posture and material overrides. | downstream scene schema plus object admission/render projection |
+| `attachVoxelObjectInstances` | Attach 1–32 ordered transformed canonical objects in one create-only, fail-atomic downstream mutation and return one canonical project readout. | downstream scene schema, owner allocation, complete project admission, persistence, and object render projection |
 | `previewVoxelObjectInstance` | Scrub, play, pause, sample, or stop one applied instance through explicit caller time while returning its saved pose, disposable playback posture, and a complete renderer-neutral projection. | `voxel-object-runtime`, render projection, downstream project adapter |
 | `closeProject` | Release open-project and retained-projection state. | Project adapter host lifecycle |
 
@@ -178,6 +179,19 @@ placement mutation: the downstream owner allocates the entity, validates the com
 atomically publishes it, and returns a canonical reread. Keeping the prepared resources through
 that reread avoids a renderer remount between ghost and accepted instance without making the ghost
 project truth.
+
+Protocol 12 retains the single-placement path and adds one bounded batch mutation for authored
+composition. `attachVoxelObjectInstances` carries 1–32 ordered `(sceneId, instance)` entries under
+one expected project hash. The downstream adapter rejects duplicate request identities, collisions
+with existing instances, stale hashes, invalid later entries, exhausted owner or aggregate project
+quotas, and oversized request/readout bytes before publication. It stages every owner allocation,
+typed component, scene entry, complete project admission, renderer projection, and project-store
+write before committing. Success returns one ordered receipt with the stable owner allocated for
+each entry and one canonical project readout. Studio accepts that readout once and selects the last
+request-order owner; it deliberately clears the one-placement undo candidate because pretending
+one member represented the atomic batch would be misleading. Rejection leaves the previous
+project, selection, local one-placement history, and renderer projection unchanged. The operation
+is generic Studio composition and carries no product vocabulary or placement-loop callback.
 
 ## Safety and atomicity
 

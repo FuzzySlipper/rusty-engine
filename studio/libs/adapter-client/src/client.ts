@@ -447,6 +447,12 @@ export class StudioAdapterClient {
     return this.#mutation('attachVoxelObjectInstance', input);
   }
 
+  attachVoxelObjectInstances(
+    input: RequestInput<'attachVoxelObjectInstances'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('attachVoxelObjectInstances', input);
+  }
+
   previewVoxelObjectInstance(
     input: RequestInput<'previewVoxelObjectInstance'>,
   ): Promise<VoxelObjectInstancePreviewedResponse> {
@@ -556,4 +562,5 @@ type MutationRequestType =
   | 'editVoxelAnnotation'
   | 'applyVoxelConversion'
   | 'applyVoxelObjectConversion'
-  | 'attachVoxelObjectInstance';
+  | 'attachVoxelObjectInstance'
+  | 'attachVoxelObjectInstances';
