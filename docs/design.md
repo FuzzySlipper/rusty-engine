@@ -480,7 +480,7 @@ fifty-percent automatic duty; up to 100 ms of additional progressive headroom lo
 work toward twenty percent without adding an unbounded extra delay. Software rendering therefore
 yields materially more browser and host CPU time. This remains workload-derived rather than a
 fixed frame-rate cap. Positively identified software rasterizers also cap the WebGL backing-buffer
-ratio at 0.5 while preserving CSS layout, projection, picking, content, and caller-requested ratios
+ratio at 0.375 while preserving CSS layout, projection, picking, content, and caller-requested ratios
 below that ceiling. Accelerated and unknown renderers retain their requested ratio. Unsupported or
 disjoint
 timer timing retains completion-wall pacing, and the public renderer surface exposes a frozen
