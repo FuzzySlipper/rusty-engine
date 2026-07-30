@@ -71,15 +71,17 @@ const MINIMUM_GPU_DUTY_FRACTION = 0.2;
  * A timer query measures the previous submission without blocking the browser
  * thread. Positively identified software renderers can report a short GPU timer
  * duration while asynchronous completion still occupies browser CPU, so their
- * complete observed wall latency contributes to effective work. Accelerated
- * and unknown renderers retain one ordinary 60 Hz polling allowance before wall
- * latency adds pressure. The next automatic submission is admitted after the
- * effective duration plus a completion-derived, bounded idle interval. The
- * accelerated fast path keeps four-millisecond work 120 Hz capable and
- * eight-millisecond work 60 Hz capable. Slower completion progressively
- * reduces target duty toward twenty percent so software rendering yields
- * materially more browser and host CPU time without adding a second loop or a
- * fixed frame-rate cap.
+ * complete observed wall latency contributes to effective work. A valid timer
+ * result on positively identified accelerated hardware is authoritative for
+ * execution duration: delayed animation-frame polling does not become GPU
+ * work. Unknown renderers and timing fallback paths retain one ordinary 60 Hz
+ * polling allowance before wall latency adds pressure. The next automatic
+ * submission is admitted after the effective duration plus a
+ * completion-derived, bounded idle interval. The accelerated fast path keeps
+ * four-millisecond work 120 Hz capable and eight-millisecond work 60 Hz
+ * capable. Slower completion progressively reduces target duty toward twenty
+ * percent so software rendering yields materially more browser and host CPU
+ * time without adding a second loop or a fixed frame-rate cap.
  *
  * Explicit rendering remains caller-owned. Beginning a replacement submission
  * discards any older measurement and never waits for this optional pacing
@@ -316,10 +318,11 @@ export class RendererGpuSubmissionDuty {
       0,
       completionAgeMs - this.#completionAllowanceMs,
     );
-    const effectiveDurationMs = Math.max(
-      timerDurationMs ?? 0,
-      completionPressureMs,
-    );
+    const acceleratedTimerIsAuthoritative =
+      this.#rendererClass === 'accelerated' && timerDurationMs !== null;
+    const effectiveDurationMs = acceleratedTimerIsAuthoritative
+      ? timerDurationMs
+      : Math.max(timerDurationMs ?? 0, completionPressureMs);
     const requestedDutyFraction = Math.min(
       MAXIMUM_GPU_DUTY_FRACTION,
       Math.max(

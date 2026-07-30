@@ -472,9 +472,11 @@ bounded progressive headroom interval after measured GPU execution before admitt
 automatic submission. Software renderers can under-report timer duration while asynchronous completion still
 occupies browser CPU. The Three backend classifies the concrete WebGL renderer without exposing its
 raw identity: positively identified software rendering uses the complete observed completion wall
-latency as effective work, while accelerated and unknown renderers retain one ordinary polling
-interval before wall latency adds pressure. The accelerated fast path retains 120 Hz for
-four-millisecond work and 60 Hz for eight-millisecond work. Every nonzero measured submission
+latency as effective work. A valid timer result on positively identified accelerated hardware is
+authoritative for execution duration, so delayed query-result polling does not inflate GPU work;
+unknown renderers and timing fallback paths retain one ordinary polling interval before wall
+latency adds pressure. The accelerated fast path retains 120 Hz for four-millisecond work and 60 Hz
+for eight-millisecond work. Every nonzero measured submission
 receives at least equal completion headroom, so exceptionally slow work cannot silently exceed
 fifty-percent automatic duty; up to 100 ms of additional progressive headroom lowers ordinary slow
 work toward twenty percent without adding an unbounded extra delay. Software rendering therefore

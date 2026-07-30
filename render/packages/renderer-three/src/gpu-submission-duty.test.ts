@@ -6,6 +6,11 @@ import {
   type RendererGpuSubmissionTimerDriver,
   type RendererGpuSubmissionTimerPoll,
 } from './gpu-submission-duty.js';
+import {
+  RendererGpuSubmissionFence,
+  type RendererGpuSubmissionFenceDriver,
+  type RendererGpuSubmissionFencePoll,
+} from './gpu-submission-fence.js';
 
 void test('fast completed work retains display-rate automatic submission', () => {
   const driver = new FakeTimerDriver();
@@ -39,7 +44,46 @@ void test('slow completed work progressively lowers automatic GPU duty', () => {
   assert.equal(duty.ready(), true);
 });
 
-void test('late completion wall time corrects an under-reported timer duration', () => {
+void test('accelerated measured work ignores delayed polling while the fence retains one in-flight submission', () => {
+  const timerDriver = new FakeTimerDriver();
+  const fenceDriver = new FakeFenceDriver();
+  const duty = new RendererGpuSubmissionDuty(timerDriver, {
+    rendererClass: 'accelerated',
+  });
+  const fence = new RendererGpuSubmissionFence(fenceDriver);
+
+  duty.begin();
+  duty.submitted();
+  fence.submitted();
+  timerDriver.result = { durationMs: 4, status: 'complete' };
+  timerDriver.nowMs = 80;
+
+  // The timer result is already available, but the exact completion fence
+  // remains the first automatic-submission admission owner.
+  assert.equal(fence.ready() && duty.ready(), false);
+  assert.equal(duty.sample().state, 'measuring');
+
+  fenceDriver.status = 'signaled';
+  assert.equal(fence.ready() && duty.ready(), true);
+  assert.equal(fenceDriver.deleted, 1);
+  assert.equal(timerDriver.deleted, 1);
+  assert.deepEqual(duty.sample(), {
+    schemaVersion: 1,
+    mode: 'timerQuery',
+    state: 'ready',
+    rendererClass: 'accelerated',
+    timerDurationMs: 4,
+    completionAgeMs: 80,
+    completionAllowanceMs: 17,
+    effectiveDurationMs: 4,
+    targetDutyFraction: 0.5,
+    admittedAtMs: 8,
+    admissionObservedAtMs: 80,
+    observedAtMs: 80,
+  });
+});
+
+void test('late completion wall time corrects an under-reported timer duration for an unknown renderer', () => {
   const driver = new FakeTimerDriver();
   const duty = new RendererGpuSubmissionDuty(driver);
 
@@ -284,5 +328,29 @@ class FakeTimerDriver implements RendererGpuSubmissionTimerDriver {
       throw new Error('timer poll failed');
     }
     return this.result;
+  }
+}
+
+class FakeFenceDriver implements RendererGpuSubmissionFenceDriver {
+  status: RendererGpuSubmissionFencePoll = 'pending';
+  created = 0;
+  deleted = 0;
+  flushed = 0;
+
+  create(): object {
+    this.created += 1;
+    return { sequence: this.created };
+  }
+
+  delete(_fence: object): void {
+    this.deleted += 1;
+  }
+
+  flush(): void {
+    this.flushed += 1;
+  }
+
+  poll(_fence: object): RendererGpuSubmissionFencePoll {
+    return this.status;
   }
 }

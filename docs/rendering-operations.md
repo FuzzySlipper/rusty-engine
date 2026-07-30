@@ -223,8 +223,10 @@ an adaptive headroom interval before the next automatic submission. Some
 software renderers report a short timer duration while their asynchronous completion still
 occupies browser CPU. The Three backend therefore classifies the concrete WebGL renderer locally:
 a positively identified software renderer uses all observed completion wall latency as effective
-work, while accelerated and unknown renderers retain one ordinary 60 Hz polling allowance before
-wall latency contributes. Every nonzero effective duration receives at least equal headroom, so
+work. A valid timer result on positively identified accelerated hardware is authoritative for
+execution duration, so delayed query-result polling does not inflate GPU work. Unknown renderers
+and timing fallback paths retain one ordinary 60 Hz polling allowance before wall latency
+contributes. Every nonzero effective duration receives at least equal headroom, so
 even a seconds-long software submission cannot exceed fifty-percent automatic duty. Up to 100 ms
 of additional progressive headroom lowers ordinary slow work toward a twenty-percent floor without
 adding an unbounded extra delay. The diagnostic reports the selected duty after that bound, not an
