@@ -29,6 +29,20 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.autoStartRenderCount).toBe(1);
   expect(proof.autoFrameIntervalMs).toBeGreaterThan(0);
   expect(proof.backendSubmissionDurationMs).toBeGreaterThanOrEqual(0);
+  expect(['completionOnly', 'timerFailed', 'timerQuery'])
+    .toContain(proof.automaticSubmissionPacing.mode);
+  expect(proof.automaticSubmissionPacing.state).toBe('measuring');
+  expect(proof.automaticSubmissionPacing.completionAgeMs).toBeGreaterThanOrEqual(0);
+  expect(proof.automaticSubmissionPacing.effectiveDurationMs).toBeGreaterThanOrEqual(0);
+  expect(proof.automaticSubmissionPacing.targetDutyFraction).toBeGreaterThanOrEqual(0.2);
+  expect(proof.automaticSubmissionPacing.targetDutyFraction).toBeLessThanOrEqual(0.5);
+  expect(proof.automaticSubmissionPacing.admittedAtMs).toBeGreaterThanOrEqual(0);
+  expect(proof.automaticSubmissionPacing.observedAtMs).toBeGreaterThanOrEqual(0);
+  if (proof.automaticSubmissionPacing.mode === 'timerQuery') {
+    expect(proof.automaticSubmissionPacing.timerDurationMs).toBeGreaterThanOrEqual(0);
+  } else {
+    expect(proof.automaticSubmissionPacing.timerDurationMs).toBeNull();
+  }
   expect(proof.batchedStaticPickHandle).toBe(1150);
   expect(proof.batchedStaticStatistics.drawCallCount).toEqual({
     scope: 'perSubmission', status: 'available', value: 1,

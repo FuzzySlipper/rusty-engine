@@ -22,6 +22,7 @@ import {
   mountRendererAnimatedMeshSurface,
   mountRendererInspectionSurface,
   mountRendererSurface,
+  type RendererSurfaceAutomaticSubmissionPacingSample,
   type RendererSurfaceStatisticsSample,
 } from '@rusty-engine/renderer-host';
 
@@ -31,6 +32,7 @@ interface BrowserProof {
   readonly animationClip: string | null;
   readonly audioApplied: number;
   audioResumeDiagnostics: readonly string[] | null;
+  readonly automaticSubmissionPacing: RendererSurfaceAutomaticSubmissionPacingSample;
   readonly autoFrameIntervalMs: number | null;
   readonly autoStartRenderCount: number;
   readonly backendSubmissionDurationMs: number | null;
@@ -190,6 +192,7 @@ async function main(): Promise<void> {
   );
   surface.stop();
   const autoSubmission = surface.submission();
+  const automaticSubmissionPacing = surface.automaticSubmissionPacing();
   telemetry.sampleSurface({
     sourceTick: 1,
     timing: autoSubmission,
@@ -423,6 +426,7 @@ async function main(): Promise<void> {
     animationClip: surface.animatedMeshPlayback(renderHandle(105)).selectedClip,
     audioApplied: presentation.domains.find((domain) => domain.domain === 'audio')?.applied ?? 0,
     audioResumeDiagnostics: null,
+    automaticSubmissionPacing,
     autoFrameIntervalMs: autoSubmission.frameIntervalMs,
     autoStartRenderCount: autoSubmission.renderSequence - renderSequenceBeforeAutoFrame,
     backendSubmissionDurationMs: autoSubmission.backendSubmissionDurationMs,

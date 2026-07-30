@@ -59,6 +59,31 @@ export interface RendererBackendDiagnostics {
   readonly publicContract: 'rusty-renderer-surface.v1';
 }
 
+export type RendererSurfaceAutomaticSubmissionPacingMode =
+  | 'completionOnly'
+  | 'timerFailed'
+  | 'timerQuery';
+
+export type RendererSurfaceAutomaticSubmissionPacingState =
+  | 'disposed'
+  | 'idle'
+  | 'measuring'
+  | 'ready'
+  | 'waiting';
+
+/** Renderer-owned observation of the latest automatic admission decision. */
+export interface RendererSurfaceAutomaticSubmissionPacingSample {
+  readonly schemaVersion: 1;
+  readonly mode: RendererSurfaceAutomaticSubmissionPacingMode;
+  readonly state: RendererSurfaceAutomaticSubmissionPacingState;
+  readonly timerDurationMs: number | null;
+  readonly completionAgeMs: number | null;
+  readonly effectiveDurationMs: number | null;
+  readonly targetDutyFraction: number | null;
+  readonly admittedAtMs: number | null;
+  readonly observedAtMs: number | null;
+}
+
 export interface RendererSurfaceOptions {
   readonly autoStart?: boolean;
   readonly clearColor?: number;
@@ -208,6 +233,7 @@ export interface RendererSurface {
   readonly applyPresentation: (
     frame: PresentationFrameDiff,
   ) => Promise<RendererPresentationFrameReceipt>;
+  readonly automaticSubmissionPacing: () => RendererSurfaceAutomaticSubmissionPacingSample;
   readonly cameraPose: () => RendererSurfaceCameraPose;
   readonly cameraProjection: () => PerspectiveProjection;
   readonly inputReadout: () => RendererSurfaceInputReadout;
@@ -411,6 +437,7 @@ function mountPreparedRendererSurface(
       }
       return receipt;
     },
+    automaticSubmissionPacing: backendSurface.automaticSubmissionPacing,
     cameraPose: controls.cameraPose,
     cameraProjection: backendSurface.cameraProjection,
     inputReadout: controls.inputReadout,

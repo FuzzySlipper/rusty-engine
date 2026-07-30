@@ -28,6 +28,7 @@ import {
 } from './gpu-submission-fence.js';
 import {
   RendererGpuSubmissionDuty,
+  type RendererGpuSubmissionDutySample,
   type RendererGpuSubmissionTimerDriver,
 } from './gpu-submission-duty.js';
 
@@ -151,6 +152,8 @@ export interface RendererBrowserSurface {
   readonly snapshot: () => string;
   /** Internal automatic-loop readiness; explicit renderOnce remains unconditional. */
   readonly automaticSubmissionReady: () => boolean;
+  /** Immutable backend pacing state and latest completed admission decision. */
+  readonly automaticSubmissionPacing: () => RendererGpuSubmissionDutySample;
   readonly renderOnce: (timeMs?: number) => RendererBrowserSurfaceSubmissionStatistics;
   readonly setCameraPose: (
     pose: RendererBrowserSurfaceCameraPose,
@@ -399,6 +402,7 @@ export function mountRendererBrowserSurface(
     canvas,
     renderer,
     frame,
+    automaticSubmissionPacing: () => gpuSubmissionDuty.sample(),
     automaticSubmissionReady: () =>
       gpuSubmissionFence.ready() && gpuSubmissionDuty.ready(),
     animatedMeshPlayback: (handle) => renderer.animatedMeshPlayback(handle),

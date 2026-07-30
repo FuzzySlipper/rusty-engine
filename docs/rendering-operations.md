@@ -228,7 +228,11 @@ smoothly from fifty percent toward a twenty-percent floor. This is not a fixed-r
 four-millisecond work can still submit at 120 Hz and eight-millisecond work at 60 Hz, while slow
 completion yields materially more CPU time. Timer-query and completion polling are non-blocking
 and occur only in the existing animation-frame owner. Unsupported, disjoint, malformed, or failed
-timing degrades to the completion fence alone. Explicit
+timer timing retains the completion-wall policy instead of silently disabling pacing.
+`surface.automaticSubmissionPacing()` returns one frozen renderer-owned diagnostic with the timer
+mode, current measurement state, and latest completed decision's timer duration, observed
+completion age, effective duration, selected duty, observation time, and admission deadline.
+Reading it never polls, submits, or starts another loop. Explicit
 `renderOnce`, camera reset, resource statistics, picking, and disposal keep their established
 semantics.
 

@@ -53,8 +53,70 @@ void test('late completion wall time corrects an under-reported timer duration',
   // That effective duration targets twenty-five-percent duty: 64 ms total.
   assert.equal(duty.ready(), false);
   assert.equal(driver.deleted, 1);
+  assert.deepEqual(duty.sample(), {
+    schemaVersion: 1,
+    mode: 'timerQuery',
+    state: 'waiting',
+    timerDurationMs: 4,
+    completionAgeMs: 33,
+    effectiveDurationMs: 16,
+    targetDutyFraction: 0.25,
+    admittedAtMs: 64,
+    observedAtMs: 33,
+  });
+  assert.equal(Object.isFrozen(duty.sample()), true);
   driver.nowMs = 63.9;
   assert.equal(duty.ready(), false);
+  driver.nowMs = 64;
+  assert.equal(duty.ready(), true);
+});
+
+void test('completion wall latency paces automatic work without timer-query support', () => {
+  const clock = new FakeTimerDriver();
+  const duty = new RendererGpuSubmissionDuty(null, clock);
+
+  duty.begin();
+  duty.submitted();
+  clock.nowMs = 33;
+
+  assert.equal(duty.ready(), false);
+  assert.deepEqual(duty.sample(), {
+    schemaVersion: 1,
+    mode: 'completionOnly',
+    state: 'waiting',
+    timerDurationMs: null,
+    completionAgeMs: 33,
+    effectiveDurationMs: 16,
+    targetDutyFraction: 0.25,
+    admittedAtMs: 64,
+    observedAtMs: 33,
+  });
+  clock.nowMs = 64;
+  assert.equal(duty.ready(), true);
+});
+
+void test('failed timer query retains completion-wall pacing', () => {
+  const driver = new FakeTimerDriver();
+  const duty = new RendererGpuSubmissionDuty(driver);
+
+  duty.begin();
+  duty.submitted();
+  driver.result = { status: 'failed' };
+  driver.nowMs = 33;
+
+  assert.equal(duty.ready(), false);
+  assert.deepEqual(duty.sample(), {
+    schemaVersion: 1,
+    mode: 'timerFailed',
+    state: 'waiting',
+    timerDurationMs: null,
+    completionAgeMs: 33,
+    effectiveDurationMs: 16,
+    targetDutyFraction: 0.25,
+    admittedAtMs: 64,
+    observedAtMs: 33,
+  });
+  assert.equal(driver.deleted, 1);
   driver.nowMs = 64;
   assert.equal(duty.ready(), true);
 });
@@ -99,6 +161,8 @@ void test('explicit replacement and abort release older query state', () => {
   assert.equal(driver.ended, 2);
   assert.equal(driver.deleted, 2);
   assert.equal(duty.ready(), true);
+  duty.dispose();
+  assert.equal(duty.sample().state, 'disposed');
 });
 
 void test('unsupported disjoint and exceptional timing degrade without deadlock', () => {

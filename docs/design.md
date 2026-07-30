@@ -474,9 +474,10 @@ occupies browser CPU, so completion wall latency beyond one ordinary polling int
 contributes to effective work. Fast completion retains 120 Hz for four-millisecond work and 60 Hz
 for eight-millisecond work. Slower completion progressively reduces target duty toward twenty
 percent so software rendering yields materially more browser and host CPU time. This remains
-workload-derived rather than a fixed frame-rate cap. Unsupported or disjoint timing fails open to
-the completion-fence behavior. An explicit `renderOnce` remains unconditional. Each submitted
-frame advances the shared renderer exactly once,
+workload-derived rather than a fixed frame-rate cap. Unsupported or disjoint timer timing retains
+completion-wall pacing, and the public renderer surface exposes a frozen read-only sample of the
+latest admission decision without adding a polling or submission path. An explicit `renderOnce`
+remains unconditional. Each submitted frame advances the shared renderer exactly once,
 renders the world through the caller-owned camera, clears depth, and renders the camera-relative
 scene through a fixed host-owned camera with the same projection and aspect.
 World camera motion therefore cannot move the local presentation, and world depth cannot clip it.
