@@ -14,18 +14,22 @@ export interface RendererGpuSubmissionTimerDriver {
   readonly poll: (query: object) => RendererGpuSubmissionTimerPoll;
 }
 
-const TARGET_GPU_DUTY_FRACTION = 0.5;
+const FAST_GPU_DURATION_MS = 8;
+const MAXIMUM_GPU_DUTY_FRACTION = 0.5;
 const MAXIMUM_GPU_HEADROOM_MS = 100;
+const MINIMUM_GPU_DUTY_FRACTION = 0.2;
 
 /**
  * Leaves completion-derived browser headroom after automatic WebGL work.
  *
  * A timer query measures the previous submission without blocking the browser
  * thread. The next automatic submission is admitted after the measured GPU
- * duration plus an equal, bounded idle interval. Fast backends whose work and
- * headroom fit within one display interval therefore retain display-rate
- * rendering, while slower software renderers yield CPU time without adding a
- * second loop or a fixed frame-rate cap.
+ * duration plus a completion-derived, bounded idle interval. Work at or below
+ * eight milliseconds receives equal headroom, retaining 120 Hz for four
+ * millisecond work and 60 Hz for eight millisecond work. Slower backends
+ * progressively reduce their target GPU duty toward twenty percent so
+ * software rendering yields materially more browser and host CPU time without
+ * adding a second loop or a fixed frame-rate cap.
  *
  * Explicit rendering remains caller-owned. Beginning a replacement submission
  * discards any older measurement and never waits for this optional pacing
@@ -123,9 +127,17 @@ export class RendererGpuSubmissionDuty {
         this.#disable();
         return true;
       }
+      const targetDutyFraction = Math.min(
+        MAXIMUM_GPU_DUTY_FRACTION,
+        Math.max(
+          MINIMUM_GPU_DUTY_FRACTION,
+          (MAXIMUM_GPU_DUTY_FRACTION * FAST_GPU_DURATION_MS)
+            / Math.max(result.durationMs, Number.EPSILON),
+        ),
+      );
       const headroomMs = Math.min(
         MAXIMUM_GPU_HEADROOM_MS,
-        result.durationMs * ((1 / TARGET_GPU_DUTY_FRACTION) - 1),
+        result.durationMs * ((1 / targetDutyFraction) - 1),
       );
       this.#notBeforeMs = this.#submittedAtMs + result.durationMs + headroomMs;
       this.#submittedAtMs = null;

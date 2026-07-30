@@ -467,13 +467,14 @@ into its next backend submission. Active controls, animation, or particles retai
 display-clock advancement; an unchanged static scene does not continuously resubmit work to the
 backend. On WebGL2, the backend also keeps at most one automatic GPU command stream in flight;
 newer retained and camera state remains coalesced until its completion fence signals. When the
-browser exposes asynchronous WebGL2 timer queries, the backend also leaves an equal, bounded
-headroom interval after measured GPU execution before admitting another automatic submission.
-This completion-duty policy is workload-derived rather than a fixed frame-rate cap: work whose GPU
-time plus headroom fits within one display interval retains display-rate rendering, while slower
-software backends yield browser and host CPU time. Unsupported or disjoint timing fails open to the
-completion-fence behavior. An explicit `renderOnce` remains unconditional. Each submitted frame
-advances the shared renderer exactly once,
+browser exposes asynchronous WebGL2 timer queries, the backend also leaves a completion-derived,
+bounded headroom interval after measured GPU execution before admitting another automatic
+submission. Work at or below eight milliseconds receives equal headroom, retaining 120 Hz for
+four-millisecond work and 60 Hz for eight-millisecond work. Slower backends progressively reduce
+their target GPU duty toward twenty percent so software rendering yields materially more browser
+and host CPU time. This is workload-derived rather than a fixed frame-rate cap. Unsupported or
+disjoint timing fails open to the completion-fence behavior. An explicit `renderOnce` remains
+unconditional. Each submitted frame advances the shared renderer exactly once,
 renders the world through the caller-owned camera, clears depth, and renders the camera-relative
 scene through a fixed host-owned camera with the same projection and aspect.
 World camera motion therefore cannot move the local presentation, and world depth cannot clip it.

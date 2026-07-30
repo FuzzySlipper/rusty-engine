@@ -21,7 +21,7 @@ void test('fast completed work retains display-rate automatic submission', () =>
   assert.equal(driver.deleted, 1);
 });
 
-void test('slow completed work receives equal completion-derived headroom', () => {
+void test('slow completed work progressively lowers automatic GPU duty', () => {
   const driver = new FakeTimerDriver();
   const duty = new RendererGpuSubmissionDuty(driver);
 
@@ -29,13 +29,11 @@ void test('slow completed work receives equal completion-derived headroom', () =
   driver.nowMs = 1;
   duty.submitted();
   driver.result = { durationMs: 12, status: 'complete' };
-  driver.nowMs = 16;
+  driver.nowMs = 36.9;
 
   assert.equal(duty.ready(), false);
   assert.equal(driver.deleted, 1);
-  driver.nowMs = 24.9;
-  assert.equal(duty.ready(), false);
-  driver.nowMs = 25;
+  driver.nowMs = 37;
   assert.equal(duty.ready(), true);
 });
 
