@@ -48,7 +48,14 @@ export interface RendererGpuSubmissionDutySample {
   readonly admittedAtMs: number | null;
   readonly admissionObservedAtMs: number | null;
   readonly observedAtMs: number | null;
+  readonly maximumPendingMeasurements: number;
+  readonly pendingMeasurementCount: number;
 }
+
+type RendererGpuSubmissionDutyDecisionSample = Omit<
+  RendererGpuSubmissionDutySample,
+  'maximumPendingMeasurements' | 'pendingMeasurementCount'
+>;
 
 interface RendererGpuSubmissionClock {
   readonly now: () => number;
@@ -105,7 +112,7 @@ export class RendererGpuSubmissionDuty {
   #minimumIntervalMs = 0;
   #notBeforeMs = 0;
   readonly #pending: RendererGpuSubmissionPendingMeasurement[] = [];
-  #sample: RendererGpuSubmissionDutySample;
+  #sample: RendererGpuSubmissionDutyDecisionSample;
   #timerDisabled = false;
 
   constructor(
@@ -271,7 +278,13 @@ export class RendererGpuSubmissionDuty {
   }
 
   sample(): RendererGpuSubmissionDutySample {
-    return this.#sample;
+    return Object.freeze({
+      ...this.#sample,
+      maximumPendingMeasurements: this.#mode() === 'timerQuery'
+        ? this.#maximumPendingMeasurements
+        : 1,
+      pendingMeasurementCount: this.#pending.length,
+    });
   }
 
   dispose(): void {
@@ -432,7 +445,7 @@ function dutySample(
   state: RendererGpuSubmissionDutyState,
   rendererClass: RendererGpuSubmissionClass,
   completionAllowanceMs: number,
-): RendererGpuSubmissionDutySample {
+): RendererGpuSubmissionDutyDecisionSample {
   return Object.freeze({
     schemaVersion: 1,
     mode,
@@ -450,12 +463,12 @@ function dutySample(
 }
 
 function updateDutySample(
-  current: RendererGpuSubmissionDutySample,
+  current: RendererGpuSubmissionDutyDecisionSample,
   update: Partial<Pick<
-    RendererGpuSubmissionDutySample,
+    RendererGpuSubmissionDutyDecisionSample,
     'admissionObservedAtMs' | 'mode' | 'state'
   >>,
-): RendererGpuSubmissionDutySample {
+): RendererGpuSubmissionDutyDecisionSample {
   return Object.freeze({
     ...current,
     ...update,

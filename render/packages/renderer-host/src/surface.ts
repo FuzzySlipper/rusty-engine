@@ -91,6 +91,13 @@ export interface RendererSurfaceAutomaticSubmissionPacingSample {
   readonly admittedAtMs: number | null;
   readonly admissionObservedAtMs: number | null;
   readonly observedAtMs: number | null;
+  readonly automaticSubmissionCapacity: number;
+  readonly automaticSubmissionLimit: number;
+  readonly completionFenceMode: 'active' | 'disabled' | 'unsupported';
+  readonly maximumPendingSubmissions: number;
+  readonly pendingSubmissionCount: number;
+  readonly maximumPendingMeasurements: number;
+  readonly pendingMeasurementCount: number;
 }
 
 export interface RendererSurfaceOptions {

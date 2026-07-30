@@ -14,6 +14,19 @@ export interface RendererGpuSubmissionFenceOptions {
   readonly maximumPendingSubmissions?: number;
 }
 
+export type RendererGpuSubmissionFenceMode =
+  | 'active'
+  | 'disabled'
+  | 'unsupported';
+
+/** Read-only completion-fence capacity; reading it never polls WebGL. */
+export interface RendererGpuSubmissionFenceSample {
+  readonly schemaVersion: 1;
+  readonly mode: RendererGpuSubmissionFenceMode;
+  readonly maximumPendingSubmissions: number;
+  readonly pendingSubmissionCount: number;
+}
+
 /**
  * Bounds automatic WebGL work to a fixed number of submitted command streams.
  *
@@ -96,6 +109,19 @@ export class RendererGpuSubmissionFence {
     } catch {
       this.#disable();
     }
+  }
+
+  sample(): RendererGpuSubmissionFenceSample {
+    return Object.freeze({
+      schemaVersion: 1,
+      mode: this.#driver === null
+        ? 'unsupported'
+        : this.#disabled
+          ? 'disabled'
+          : 'active',
+      maximumPendingSubmissions: this.#maximumPendingSubmissions,
+      pendingSubmissionCount: this.#pending.length,
+    });
   }
 
   dispose(): void {

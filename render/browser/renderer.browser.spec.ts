@@ -41,10 +41,25 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.automaticSubmissionPacing.targetDutyFraction).toBeLessThanOrEqual(0.5);
   expect(proof.automaticSubmissionPacing.admittedAtMs).toBeGreaterThanOrEqual(0);
   expect(proof.automaticSubmissionPacing.observedAtMs).toBeGreaterThanOrEqual(0);
+  expect(proof.automaticSubmissionPacing.automaticSubmissionCapacity)
+    .toBeGreaterThanOrEqual(1);
+  expect(proof.automaticSubmissionPacing.automaticSubmissionLimit)
+    .toBeGreaterThanOrEqual(1);
+  expect(proof.automaticSubmissionPacing.automaticSubmissionLimit)
+    .toBeLessThanOrEqual(proof.automaticSubmissionPacing.automaticSubmissionCapacity);
+  expect(['active', 'disabled', 'unsupported'])
+    .toContain(proof.automaticSubmissionPacing.completionFenceMode);
+  expect(proof.automaticSubmissionPacing.pendingSubmissionCount)
+    .toBeLessThanOrEqual(proof.automaticSubmissionPacing.maximumPendingSubmissions);
+  expect(proof.automaticSubmissionPacing.pendingMeasurementCount)
+    .toBeLessThanOrEqual(proof.automaticSubmissionPacing.maximumPendingMeasurements);
   if (proof.automaticSubmissionPacing.mode === 'timerQuery') {
     expect(proof.automaticSubmissionPacing.timerDurationMs).toBeGreaterThanOrEqual(0);
+    expect(proof.automaticSubmissionPacing.automaticSubmissionLimit)
+      .toBe(proof.automaticSubmissionPacing.automaticSubmissionCapacity);
   } else {
     expect(proof.automaticSubmissionPacing.timerDurationMs).toBeNull();
+    expect(proof.automaticSubmissionPacing.automaticSubmissionLimit).toBe(1);
   }
   expect(proof.automaticSubmissionPacingSamples).toHaveLength(4);
   expect(proof.automaticSubmissionIntervalsMs).toHaveLength(4);
@@ -52,6 +67,12 @@ test('shared host realizes retained, presentation, and inspection families in a 
   for (const [index, sample] of proof.automaticSubmissionPacingSamples.entries()) {
     expect(sample.state).toBe('measuring');
     expect(sample.rendererClass).toBe(proof.automaticSubmissionPacing.rendererClass);
+    expect(sample.automaticSubmissionCapacity)
+      .toBe(proof.automaticSubmissionPacing.automaticSubmissionCapacity);
+    expect(sample.pendingSubmissionCount)
+      .toBeLessThanOrEqual(sample.maximumPendingSubmissions);
+    expect(sample.pendingMeasurementCount)
+      .toBeLessThanOrEqual(sample.maximumPendingMeasurements);
     expect(sample.admissionObservedAtMs ?? 0)
       .toBeGreaterThanOrEqual(sample.admittedAtMs ?? 0);
     expect(proof.automaticSubmissionSourceTimesMs[index]).toBeGreaterThanOrEqual(0);

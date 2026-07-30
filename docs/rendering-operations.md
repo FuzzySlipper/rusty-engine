@@ -217,10 +217,12 @@ instances sharing one retained geometry count as one geometry, while independent
 instance resources count independently.
 
 Automatic WebGL2 submission uses asynchronous backend pacing without adding another render loop.
-Software, unknown, and timer-fallback paths keep one completion fence and one timer measurement
-in flight. Positively identified accelerated WebGL2 with working fence and timer-query support may
-instead use an eight-slot renderer-owned fence/query ring. The fixed cap bounds queued command
-streams while allowing display-rate work to continue when Radeon/ANGLE exposes a completed query
+Software, unknown, and timer-fallback paths keep at most one timer measurement and, where
+available, one completion fence in flight. Positively identified accelerated WebGL2 with working
+timer-query support may instead use an eight-slot renderer-owned completion-query ring. Each timer
+query is a completion observation for its enclosed command stream; a sync-fence ring supplies an
+additional bound where WebGL exposes that mechanism. The fixed cap bounds queued command streams
+while allowing display-rate work to continue when Radeon/ANGLE exposes a completed query
 50–100 ms after the measured 4–7 ms GPU work. When
 `EXT_disjoint_timer_query_webgl2` is available, completed submissions' GPU durations determine
 an adaptive headroom interval before the next automatic submission. Some
@@ -238,17 +240,18 @@ unachievable pre-cap target. This is not a fixed-rate timer: the
 accelerated fast path can still submit four-millisecond work at 120 Hz and eight-millisecond work
 at 60 Hz, while slow completion yields materially more CPU time. Delayed browser observability
 can fill the accelerated ring, but cannot grow it or silently become an unbounded queue. Any
-timer-query failure immediately restores strict one-fence admission. Timer-query and completion
+timer-query failure immediately restores strict single-slot admission. Timer-query and completion
 polling is non-blocking. The single RAF remains the only render scheduler; during accelerated
 demand, renderer-host may run one bounded readiness-probe burst between display callbacks. Those
-probes advance fence and timer-query observation but never render or request another RAF, are
+probes advance available fence and timer-query observation but never render or request another RAF, are
 cancelled on replacement, stop, reset, and disposal, and are not used for software or unknown
 renderers. Unsupported, disjoint, malformed, or failed timer timing retains the completion-wall
 policy instead of silently disabling pacing. `surface.automaticSubmissionPacing()` returns one
 frozen renderer-owned diagnostic with the timer mode, current measurement state, renderer class
 and allowance, latest completed decision's timer duration, observed completion age, effective
-duration, selected duty, decision time, admission deadline, and actual automatic admission
-observation.
+duration, selected duty, decision time, admission deadline, actual automatic admission
+observation, selected and current admission limits, timer-query occupancy, and sync-fence
+availability and occupancy.
 Reading it never polls, submits, or starts another loop. Explicit
 `renderOnce`, camera reset, resource statistics, picking, and disposal keep their established
 semantics.

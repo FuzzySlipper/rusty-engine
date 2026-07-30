@@ -83,6 +83,8 @@ void test('accelerated measured work ignores delayed polling while the default f
     admittedAtMs: 8,
     admissionObservedAtMs: 80,
     observedAtMs: 80,
+    maximumPendingMeasurements: 1,
+    pendingMeasurementCount: 0,
   });
 });
 
@@ -108,6 +110,14 @@ void test('accelerated measurements pipeline display-rate work behind a strict f
     timerDriver.nowMs += 8;
   }
   assert.equal(fence.ready() && duty.ready(), false);
+  assert.equal(duty.sample().maximumPendingMeasurements, capacity);
+  assert.equal(duty.sample().pendingMeasurementCount, capacity);
+  assert.deepEqual(fence.sample(), {
+    schemaVersion: 1,
+    mode: 'active',
+    maximumPendingSubmissions: capacity,
+    pendingSubmissionCount: capacity,
+  });
 
   timerDriver.resultBySequence.set(1, {
     durationMs: 4,
@@ -129,6 +139,45 @@ void test('accelerated measurements pipeline display-rate work behind a strict f
   fence.dispose();
   assert.equal(timerDriver.deleted, capacity + 1);
   assert.equal(fenceDriver.deleted, capacity + 1);
+});
+
+void test('the timer-query ring stays bounded when accelerated WebGL has no sync fences', () => {
+  const timerDriver = new FakeTimerDriver();
+  const capacity = 8;
+  const duty = new RendererGpuSubmissionDuty(timerDriver, {
+    maximumPendingMeasurements: capacity,
+    rendererClass: 'accelerated',
+  });
+  const unsupportedFence = new RendererGpuSubmissionFence(null, {
+    maximumPendingSubmissions: capacity,
+  });
+
+  for (let sequence = 1; sequence <= capacity; sequence += 1) {
+    assert.equal(unsupportedFence.ready(capacity) && duty.ready(), true);
+    duty.begin();
+    duty.submitted();
+    timerDriver.resultBySequence.set(sequence, { status: 'pending' });
+    timerDriver.nowMs += 8;
+  }
+  assert.equal(unsupportedFence.ready(capacity) && duty.ready(), false);
+  assert.equal(duty.sample().pendingMeasurementCount, capacity);
+  assert.deepEqual(unsupportedFence.sample(), {
+    schemaVersion: 1,
+    mode: 'unsupported',
+    maximumPendingSubmissions: capacity,
+    pendingSubmissionCount: 0,
+  });
+
+  timerDriver.resultBySequence.set(1, {
+    durationMs: 4,
+    status: 'complete',
+  });
+  assert.equal(unsupportedFence.ready(capacity) && duty.ready(), true);
+  assert.equal(duty.sample().pendingMeasurementCount, capacity - 1);
+
+  duty.dispose();
+  unsupportedFence.dispose();
+  assert.equal(timerDriver.deleted, capacity);
 });
 
 void test('a completed accelerated measurement paces later ring submissions prospectively', () => {
@@ -195,6 +244,8 @@ void test('late completion wall time corrects an under-reported timer duration f
     admittedAtMs: 64,
     admissionObservedAtMs: null,
     observedAtMs: 33,
+    maximumPendingMeasurements: 1,
+    pendingMeasurementCount: 0,
   });
   assert.equal(Object.isFrozen(duty.sample()), true);
   driver.nowMs = 63.9;
@@ -225,6 +276,8 @@ void test('completion wall latency paces automatic work without timer-query supp
     admittedAtMs: 64,
     admissionObservedAtMs: null,
     observedAtMs: 33,
+    maximumPendingMeasurements: 1,
+    pendingMeasurementCount: 0,
   });
   clock.nowMs = 64;
   assert.equal(duty.ready(), true);
@@ -253,6 +306,8 @@ void test('failed timer query retains completion-wall pacing', () => {
     admittedAtMs: 64,
     admissionObservedAtMs: null,
     observedAtMs: 33,
+    maximumPendingMeasurements: 1,
+    pendingMeasurementCount: 0,
   });
   assert.equal(driver.deleted, 1);
   driver.nowMs = 64;
@@ -284,6 +339,8 @@ void test('software rendering treats observed completion age as work pressure', 
     admittedAtMs: 56.25,
     admissionObservedAtMs: null,
     observedAtMs: 15,
+    maximumPendingMeasurements: 1,
+    pendingMeasurementCount: 0,
   });
   driver.nowMs = 56.24;
   assert.equal(duty.ready(), false);

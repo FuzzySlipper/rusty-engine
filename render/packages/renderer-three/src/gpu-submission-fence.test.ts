@@ -17,6 +17,12 @@ void test('automatic GPU submission stays blocked until the exact fence signals'
   assert.equal(driver.flushed, 1);
   assert.equal(fence.ready(), false);
   assert.equal(fence.ready(), false);
+  assert.deepEqual(fence.sample(), {
+    schemaVersion: 1,
+    mode: 'active',
+    maximumPendingSubmissions: 1,
+    pendingSubmissionCount: 1,
+  });
   driver.status = 'signaled';
   assert.equal(fence.ready(), true);
   assert.equal(driver.deleted, 1);
@@ -93,6 +99,12 @@ void test('unsupported and failed fences degrade without deadlocking rendering',
   const unsupported = new RendererGpuSubmissionFence(null);
   unsupported.submitted();
   assert.equal(unsupported.ready(), true);
+  assert.deepEqual(unsupported.sample(), {
+    schemaVersion: 1,
+    mode: 'unsupported',
+    maximumPendingSubmissions: 1,
+    pendingSubmissionCount: 0,
+  });
 
   const driver = new FakeFenceDriver();
   driver.status = 'failed';
@@ -100,6 +112,7 @@ void test('unsupported and failed fences degrade without deadlocking rendering',
   failed.submitted();
   assert.equal(failed.ready(), true);
   assert.equal(driver.deleted, 1);
+  assert.equal(failed.sample().mode, 'disabled');
 });
 
 void test('driver exceptions disable optional pacing without escaping or leaking', () => {

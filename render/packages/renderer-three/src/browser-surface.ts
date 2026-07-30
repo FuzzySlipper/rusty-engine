@@ -25,6 +25,7 @@ import { renderBrowserSurfaceFrame } from './browser-surface-render-pass.js';
 import {
   RendererGpuSubmissionFence,
   type RendererGpuSubmissionFenceDriver,
+  type RendererGpuSubmissionFenceMode,
 } from './gpu-submission-fence.js';
 import {
   RendererGpuSubmissionDuty,
@@ -33,9 +34,8 @@ import {
   type RendererGpuSubmissionTimerDriver,
 } from './gpu-submission-duty.js';
 import { classifyGpuSubmissionRendererName } from './gpu-submission-class.js';
+import { automaticSubmissionCapacity } from './gpu-submission-capacity.js';
 import { resolveRendererPixelRatio } from './software-renderer-resolution.js';
-
-const ACCELERATED_AUTOMATIC_SUBMISSION_CAPACITY = 8;
 
 export interface ProjectedThreeRenderResult {
   readonly projection: RenderProjection;
@@ -141,6 +141,15 @@ export interface RendererBrowserSurfaceSubmissionStatistics extends ThreeRendere
   readonly triangleCount: number;
 }
 
+export interface RendererBrowserSurfaceAutomaticSubmissionPacingSample
+  extends RendererGpuSubmissionDutySample {
+  readonly automaticSubmissionCapacity: number;
+  readonly automaticSubmissionLimit: number;
+  readonly completionFenceMode: RendererGpuSubmissionFenceMode;
+  readonly maximumPendingSubmissions: number;
+  readonly pendingSubmissionCount: number;
+}
+
 export interface RendererBrowserSurface {
   readonly kind: 'rusty_renderer_browser_surface.v1';
   readonly canvas: HTMLCanvasElement;
@@ -158,7 +167,8 @@ export interface RendererBrowserSurface {
   /** Internal automatic-loop readiness; explicit renderOnce remains unconditional. */
   readonly automaticSubmissionReady: () => boolean;
   /** Immutable backend pacing state and latest completed admission decision. */
-  readonly automaticSubmissionPacing: () => RendererGpuSubmissionDutySample;
+  readonly automaticSubmissionPacing:
+    () => RendererBrowserSurfaceAutomaticSubmissionPacingSample;
   readonly renderOnce: (timeMs?: number) => RendererBrowserSurfaceSubmissionStatistics;
   readonly setCameraPose: (
     pose: RendererBrowserSurfaceCameraPose,
@@ -228,20 +238,18 @@ export function mountRendererBrowserSurface(
   const gpuSubmissionClass = classifyGpuSubmissionRenderer(webglContext);
   const gpuSubmissionFenceDriver = webGl2SubmissionFenceDriver(webglContext);
   const gpuSubmissionTimerDriver = webGl2SubmissionTimerDriver(webglContext);
-  const automaticSubmissionCapacity =
-    gpuSubmissionClass === 'accelerated'
-      && gpuSubmissionFenceDriver !== null
-      && gpuSubmissionTimerDriver !== null
-      ? ACCELERATED_AUTOMATIC_SUBMISSION_CAPACITY
-      : 1;
+  const selectedAutomaticSubmissionCapacity = automaticSubmissionCapacity(
+    gpuSubmissionClass,
+    gpuSubmissionTimerDriver !== null,
+  );
   const gpuSubmissionFence = new RendererGpuSubmissionFence(
     gpuSubmissionFenceDriver,
-    { maximumPendingSubmissions: automaticSubmissionCapacity },
+    { maximumPendingSubmissions: selectedAutomaticSubmissionCapacity },
   );
   const gpuSubmissionDuty = new RendererGpuSubmissionDuty(
     gpuSubmissionTimerDriver,
     {
-      maximumPendingMeasurements: automaticSubmissionCapacity,
+      maximumPendingMeasurements: selectedAutomaticSubmissionCapacity,
       rendererClass: gpuSubmissionClass,
     },
   );
@@ -370,13 +378,14 @@ export function mountRendererBrowserSurface(
 
   const automaticSubmissionReady = (): boolean => {
     // Poll both completion owners independently. Accelerated WebGL2 may keep a
-    // small exact fence/query ring so delayed browser observability cannot
-    // become a frame-rate cap. Timer failure immediately restores a strict
-    // single-fence limit; software and unknown renderers never enter the ring.
+    // small exact timer-query ring so delayed browser observability cannot
+    // become a frame-rate cap; a sync-fence ring adds another bound where
+    // available. Timer failure immediately restores a strict single-slot
+    // limit; software and unknown renderers never enter the ring.
     const dutyReady = gpuSubmissionDuty.ready();
     const fenceReady = gpuSubmissionFence.ready(
       gpuSubmissionDuty.sample().mode === 'timerQuery'
-        ? automaticSubmissionCapacity
+        ? selectedAutomaticSubmissionCapacity
         : 1,
     );
     return fenceReady && dutyReady;
@@ -438,7 +447,18 @@ export function mountRendererBrowserSurface(
     canvas,
     renderer,
     frame,
-    automaticSubmissionPacing: () => gpuSubmissionDuty.sample(),
+    automaticSubmissionPacing: () => {
+      const dutySample = gpuSubmissionDuty.sample();
+      const fenceSample = gpuSubmissionFence.sample();
+      return Object.freeze({
+        ...dutySample,
+        automaticSubmissionCapacity: selectedAutomaticSubmissionCapacity,
+        automaticSubmissionLimit: dutySample.maximumPendingMeasurements,
+        completionFenceMode: fenceSample.mode,
+        maximumPendingSubmissions: fenceSample.maximumPendingSubmissions,
+        pendingSubmissionCount: fenceSample.pendingSubmissionCount,
+      });
+    },
     automaticSubmissionReady,
     animatedMeshPlayback: (handle) => renderer.animatedMeshPlayback(handle),
     applyFrame: (nextFrame) => renderer.applyFrame(nextFrame),

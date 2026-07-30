@@ -466,8 +466,9 @@ animation-frame scheduler and coalesces accepted retained mutations, camera chan
 into its next backend submission. Active controls, animation, or particles retain continuous
 display-clock advancement; an unchanged static scene does not continuously resubmit work to the
 backend. On WebGL2, software, unknown, and timing-fallback paths keep at most one automatic GPU
-command stream in flight. Positively identified accelerated WebGL2 with working completion fences
-and timer queries may use a fixed eight-slot renderer-owned fence/query ring. This remains bounded
+command stream in flight. Positively identified accelerated WebGL2 with working timer queries
+may use a fixed eight-slot renderer-owned completion-query ring; a sync-fence ring adds an
+independent bound when that WebGL mechanism is available. This remains bounded
 completion safety while avoiding a false 50–100 ms cadence cap on real accelerated drivers whose
 query results become observable long after their measured 4–7 ms GPU work. When the browser
 exposes asynchronous WebGL2 timer queries, the backend also leaves a completion-derived,
@@ -489,10 +490,11 @@ ratio at 0.25—one-sixteenth of the CSS pixel count for requests at or above on
 CSS pixel—while preserving CSS layout, projection, picking, content, and caller-requested ratios
 below that ceiling. Accelerated and unknown renderers retain their requested ratio. Unsupported or
 disjoint
-timer timing retains completion-wall pacing and immediately restores strict one-fence admission,
+timer timing retains completion-wall pacing and immediately restores strict single-slot admission,
 and the public renderer surface exposes a frozen
-read-only sample of the renderer class, applied allowance, latest decision, admission deadline, and
-actual automatic admission observation without adding a polling or submission path. An explicit `renderOnce`
+read-only sample of the renderer class, applied allowance, latest decision, admission deadline,
+actual automatic admission observation, selected capacity, timer-query occupancy, and sync-fence
+occupancy without adding a polling or submission path. An explicit `renderOnce`
 remains unconditional. Each submitted frame advances the shared renderer exactly once,
 renders the world through the caller-owned camera, clears depth, and renders the camera-relative
 scene through a fixed host-owned camera with the same projection and aspect.
@@ -501,10 +503,10 @@ The channel is excluded from picking and has no input or camera authority. Stop,
 frame rejection, resource failure, and disposal remain operations of the existing single surface
 lifecycle; no second render scheduler or renderer owner exists. While accelerated demand is
 active, renderer-host may run one bounded, non-rendering readiness-probe burst between display
-callbacks so the fence and timer-query result become observable before the next RAF. The probe
+callbacks so available fence and timer-query results become observable before the next RAF. The probe
 never submits or requests another RAF, is cancelled on replacement, stop, reset, and disposal, and
 is not used for software or unknown renderers. Fence and measured-duty readiness advance
-independently, while automatic admission still requires both.
+independently, while automatic admission still requires every available completion owner.
 
 `@rusty-engine/renderer-host` is the shared browser and tool-facing entry point. It composes the
 retained Three surface, explicit caller-owned camera controls, animated resources, editor viewport,
