@@ -1,6 +1,6 @@
 use asset_catalog::encode_catalog;
 
-use crate::ImportedAssets;
+use crate::{ImportedAnimatedGlb, ImportedAssets};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeneratedArtifact {
@@ -36,6 +36,33 @@ pub fn render_artifacts(
         GeneratedArtifact {
             relative_path: format!("{name}.static-mesh.json"),
             bytes: mesh.into_bytes(),
+        },
+    ];
+    artifacts.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok(artifacts)
+}
+
+pub fn render_animated_glb_artifacts(
+    name: &str,
+    assets: &ImportedAnimatedGlb,
+) -> Result<Vec<GeneratedArtifact>, ArtifactRenderError> {
+    let catalog =
+        encode_catalog(&assets.catalog).map_err(|error| ArtifactRenderError(error.to_string()))?;
+    let mut mesh = serde_json::to_string_pretty(&assets.animated_mesh)
+        .map_err(|error| ArtifactRenderError(error.to_string()))?;
+    mesh.push('\n');
+    let mut artifacts = vec![
+        GeneratedArtifact {
+            relative_path: format!("{name}.animated-mesh.json"),
+            bytes: mesh.into_bytes(),
+        },
+        GeneratedArtifact {
+            relative_path: assets.runtime_resource_path.clone(),
+            bytes: assets.runtime_resource_bytes.clone(),
+        },
+        GeneratedArtifact {
+            relative_path: format!("{name}.catalog.json"),
+            bytes: catalog.into_bytes(),
         },
     ];
     artifacts.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));

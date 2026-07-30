@@ -16,6 +16,10 @@ impl ImportSeverity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ImportCode {
     SourceTooLarge,
+    ResourceLimit,
+    InvalidContainer,
+    InvalidAnimation,
+    ExternalResource,
     UnsupportedSchema,
     MalformedSource,
     UnsupportedFeature,
@@ -37,6 +41,10 @@ impl ImportCode {
     pub const fn label(self) -> &'static str {
         match self {
             Self::SourceTooLarge => "sourceTooLarge",
+            Self::ResourceLimit => "resourceLimit",
+            Self::InvalidContainer => "invalidContainer",
+            Self::InvalidAnimation => "invalidAnimation",
+            Self::ExternalResource => "externalResource",
             Self::UnsupportedSchema => "unsupportedSchema",
             Self::MalformedSource => "malformedSource",
             Self::UnsupportedFeature => "unsupportedFeature",

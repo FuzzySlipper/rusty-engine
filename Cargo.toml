@@ -39,6 +39,7 @@ edition = "2021"
 
 [workspace.dependencies]
 asset-import = { path = "rust/crates/asset-import" }
+voxel-convert = { path = "rust/crates/voxel-convert" }
 authored-scene = { path = "rust/crates/authored-scene" }
 asset-catalog = { path = "rust/crates/asset-catalog" }
 content-store = { path = "rust/crates/content-store" }

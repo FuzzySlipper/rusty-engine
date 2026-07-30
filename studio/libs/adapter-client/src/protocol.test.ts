@@ -954,6 +954,21 @@ test('asset import plans, browser provenance, and named client calls stay closed
   const decoded = decodeStudioAdapterResponse(prepared);
   assert.equal(decoded.type, 'assetImportPrepared');
   assert.equal(decoded.plan.meshAssetId, 'mesh/studio-triangle');
+  const animated = decodeStudioAdapterResponse({
+    ...prepared,
+    plan: {
+      ...prepared.plan,
+      source: { scope: 'project', path: 'content/assets/actor-medium.glb' },
+      meshAssetId: 'mesh-animation/actor-medium',
+      generatedArtifacts: [
+        { relativePath: 'actor-medium.animated-mesh.json', byteCount: 512 },
+        { relativePath: 'actor-medium.glb', byteCount: 335_000 },
+      ],
+      generatedAssetIds: ['mesh-animation/actor-medium'],
+    },
+  });
+  assert.equal(animated.type, 'assetImportPrepared');
+  assert.equal(animated.plan.meshAssetId, 'mesh-animation/actor-medium');
   assert.throws(
     () => decodeStudioAdapterResponse({
       ...prepared,

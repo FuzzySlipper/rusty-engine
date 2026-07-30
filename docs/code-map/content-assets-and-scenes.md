@@ -11,8 +11,9 @@ imports, prefab resolution, and authored scene admission and editing.
   codecs, load/save plans, prefabs, and atomic write sets.
 - `asset-catalog`: asset entries, versions, locks, dependencies, materials,
   fallbacks, and catalog validation.
-- `asset-import`: bounded offline source parsing, import planning, generated
-  artifacts, sidecars, reimport decisions, and atomic publication.
+- `asset-import`: bounded offline textual static-mesh and binary animated-GLB
+  parsing, import planning, generated artifacts, sidecars, reimport decisions,
+  and atomic publication.
 - `authored-scene`: versioned scene documents, hierarchy, references, lights,
   validation, admission plans, and explicit edit commands.
 
@@ -37,6 +38,10 @@ imports, prefab resolution, and authored scene admission and editing.
   mutation services.
 - The `rusty-asset-import` binary is an offline producer, not a runtime asset
   loader.
+- `plan_animated_glb_import` emits exact retained GLB bytes, a validated
+  `AnimatedMeshAsset`, catalog entry, and provenance manifest. It consumes the
+  canonical bounded GLB scene/skin/clip parser without sampling or voxelizing
+  the source.
 - Consumers decide where content bodies live and how admitted scene entities
   become game-owned live state.
 - `authored-scene` admission produces validated built-in `EntityDefinition`

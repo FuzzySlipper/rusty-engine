@@ -3,10 +3,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use asset_import::{
-    decode_import_manifest, decode_sidecar, encode_sidecar, init_metadata, plan_import,
-    publish_directory_atomically, publish_directory_with_sidecar_atomically, reconcile,
-    sidecar_path, ImportContext, ImportMode, ImportSettings, SourceUri, IMPORTER_VERSION,
-    MAX_SOURCE_BYTES,
+    decode_import_manifest, decode_sidecar, encode_sidecar, init_metadata,
+    plan_animated_glb_import, plan_import, publish_directory_atomically,
+    publish_directory_with_sidecar_atomically, reconcile, sidecar_path, ImportContext, ImportMode,
+    ImportPlan, ImportSettings, SourceUri, IMPORTER_VERSION, MAX_SOURCE_BYTES,
 };
 
 const MAX_AUXILIARY_BYTES: usize = 4 * 1024 * 1024;
@@ -44,7 +44,7 @@ fn import_command(
     source_path: &Path,
     output: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let source_text = read_bounded_text(source_path, MAX_SOURCE_BYTES)?;
+    let source_bytes = read_bounded(source_path, MAX_SOURCE_BYTES)?;
     let source_uri = source_uri(source_path);
     let metadata_path = PathBuf::from(sidecar_path(&source_path.to_string_lossy()));
     let sidecar = if metadata_path.is_file() {
@@ -68,14 +68,15 @@ fn import_command(
     } else {
         ImportMode::DryRun
     };
-    let provisional = plan_import(
+    let provisional = plan_source(
         &source_uri,
-        &source_text,
+        source_path,
+        &source_bytes,
         &context,
         mode,
         None,
         sidecar.as_ref(),
-    );
+    )?;
     let prior = provisional
         .files
         .iter()
@@ -84,14 +85,15 @@ fn import_command(
             read_bounded_text(&output.join(&file.relative_path), MAX_AUXILIARY_BYTES).ok()
         })
         .and_then(|text| decode_import_manifest(&text).ok());
-    let plan = plan_import(
+    let plan = plan_source(
         &source_uri,
-        &source_text,
+        source_path,
+        &source_bytes,
         &context,
         mode,
         prior.as_ref(),
         sidecar.as_ref(),
-    );
+    )?;
     print!("{}", plan.report);
     if plan.has_errors {
         return Err("source admission failed".into());
@@ -137,6 +139,45 @@ fn import_command(
     Ok(())
 }
 
+fn plan_source(
+    source_uri: &SourceUri,
+    source_path: &Path,
+    source_bytes: &[u8],
+    context: &ImportContext,
+    mode: ImportMode,
+    prior: Option<&asset_import::ImportManifest>,
+    sidecar: Option<&asset_import::SidecarMetadata>,
+) -> Result<ImportPlan, Box<dyn std::error::Error>> {
+    if source_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("glb"))
+    {
+        return Ok(plan_animated_glb_import(
+            source_uri,
+            source_bytes,
+            context,
+            mode,
+            prior,
+            sidecar,
+        ));
+    }
+    let source_text = std::str::from_utf8(source_bytes).map_err(|error| {
+        format!(
+            "{} is not UTF-8 and is not a .glb source: {error}",
+            source_path.display()
+        )
+    })?;
+    Ok(plan_import(
+        source_uri,
+        source_text,
+        context,
+        mode,
+        prior,
+        sidecar,
+    ))
+}
+
 fn init_sidecar(
     source_path: &Path,
     explicit: Option<&Path>,
@@ -149,10 +190,19 @@ fn init_sidecar(
     if path.exists() {
         return Err(format!("sidecar already exists: {}", path.display()).into());
     }
+    let declared_kind = if source_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("glb"))
+    {
+        "animatedMesh"
+    } else {
+        "mesh"
+    };
     let metadata = init_metadata(
         source_uri(source_path),
         &bytes,
-        "mesh",
+        declared_kind,
         IMPORTER_VERSION,
         ImportSettings::default(),
         &format!(
@@ -242,5 +292,5 @@ fn read_bounded_text(path: &Path, limit: usize) -> std::io::Result<String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  rusty-asset-import plan <source.mesh.json> <output-dir>\n  rusty-asset-import write <source.mesh.json> <output-dir>\n  rusty-asset-import init-sidecar <source> [sidecar]\n  rusty-asset-import validate-sidecar <source> [sidecar]"
+    "usage:\n  rusty-asset-import plan <source.mesh.json|source.glb> <output-dir>\n  rusty-asset-import write <source.mesh.json|source.glb> <output-dir>\n  rusty-asset-import init-sidecar <source> [sidecar]\n  rusty-asset-import validate-sidecar <source> [sidecar]"
 }

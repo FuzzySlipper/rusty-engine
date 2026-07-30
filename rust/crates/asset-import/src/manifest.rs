@@ -250,12 +250,15 @@ pub fn plan_reimport(prior: &ImportManifest, next: &ImportManifest) -> ReimportP
     if changed.is_empty() && prior.source_hash == next.source_hash {
         return ReimportPlan::Noop;
     }
-    if changed
-        .iter()
-        .any(|path| path.ends_with(".static-mesh.json"))
-    {
+    if changed.iter().any(|path| {
+        path.ends_with(".static-mesh.json")
+            || path.ends_with(".animated-mesh.json")
+            || path.ends_with(".glb")
+    }) {
         ReimportPlan::StructuralReload {
-            reason: "geometry, groups, materials, or collision structure changed".to_owned(),
+            reason:
+                "retained geometry, materials, animation, resources, or collision structure changed"
+                    .to_owned(),
             changed,
         }
     } else {

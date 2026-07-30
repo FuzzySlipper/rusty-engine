@@ -2,8 +2,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-use asset_catalog::validate_catalog;
+use asset_catalog::{decode_catalog, validate_catalog};
 use asset_import::*;
+use render_model::AnimatedMeshAsset;
 
 const VALID: &str = r#"{
   "schemaVersion": 1,
@@ -17,6 +18,11 @@ const VALID: &str = r#"{
   "groups": [{"materialSlot": 0, "start": 0, "count": 3}],
   "collision": "aabbFallback"
 }"#;
+
+const ANIMATED_GLB: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
+));
 
 fn uri() -> SourceUri {
     SourceUri::RelativePath("assets/fixture-triangle.mesh.json".to_owned())
@@ -39,6 +45,311 @@ fn valid_source_produces_deterministic_native_assets_and_manifest() {
     assert_eq!(
         assets.static_mesh.payload.provenance,
         render_model::MeshProvenance::StaticAsset
+    );
+}
+
+#[test]
+fn animated_glb_produces_deterministic_runtime_resource_descriptor_and_provenance() {
+    let uri = SourceUri::RelativePath("content/actors/character-medium.glb".to_owned());
+    let first = plan_animated_glb_import(
+        &uri,
+        ANIMATED_GLB,
+        &ImportContext::default(),
+        ImportMode::DryRun,
+        None,
+        None,
+    );
+    let second = plan_animated_glb_import(
+        &uri,
+        ANIMATED_GLB,
+        &ImportContext::default(),
+        ImportMode::DryRun,
+        None,
+        None,
+    );
+    assert!(!first.has_errors);
+    assert_eq!(first.files, second.files);
+    assert_eq!(first.manifest, second.manifest);
+    assert!(matches!(
+        first.reimport,
+        Some(ReimportPlan::StructuralReload { .. })
+    ));
+
+    let resource = artifact(&first, "character-medium.glb");
+    assert_eq!(resource.bytes, ANIMATED_GLB);
+    let descriptor: AnimatedMeshAsset =
+        serde_json::from_slice(&artifact(&first, "character-medium.animated-mesh.json").bytes)
+            .unwrap();
+    descriptor.validate().unwrap();
+    assert_eq!(descriptor.asset, "mesh-animation/character-medium");
+    assert_eq!(
+        descriptor.content_hash.as_deref(),
+        Some("sha256:c71255a41c0373f0d2ef52593369d5fd9d2f6220ae548aff8cd6bf5edb403674")
+    );
+    assert_eq!(
+        descriptor
+            .clips
+            .iter()
+            .map(|clip| clip.id.as_str())
+            .collect::<Vec<_>>(),
+        ["idle", "run", "jump"]
+    );
+    assert_eq!(descriptor.default_clip.as_deref(), Some("idle"));
+    assert!(descriptor.material_slots.is_empty());
+
+    let catalog = decode_catalog(
+        std::str::from_utf8(&artifact(&first, "character-medium.catalog.json").bytes).unwrap(),
+    )
+    .unwrap();
+    assert!(validate_catalog(&catalog).is_ok());
+    let entry = catalog.entries.first().unwrap();
+    assert_eq!(entry.id.as_str(), descriptor.asset);
+    assert_eq!(entry.source_path.as_deref(), Some("character-medium.glb"));
+
+    let manifest = first.manifest.as_ref().unwrap();
+    assert_eq!(
+        manifest.source_schema_version,
+        SUPPORTED_ANIMATED_GLB_VERSION
+    );
+    assert_eq!(manifest.importer_version, IMPORTER_VERSION);
+    assert_eq!(manifest.mesh_asset_id, descriptor.asset);
+    assert_eq!(
+        manifest.source_hash,
+        "c71255a41c0373f0d2ef52593369d5fd9d2f6220ae548aff8cd6bf5edb403674"
+    );
+
+    let imported = import_animated_glb_asset(&uri, ANIMATED_GLB, &ImportContext::default())
+        .assets
+        .unwrap();
+    assert_eq!(imported.receipt.node_count, 61);
+    assert_eq!(imported.receipt.skin_count, 1);
+    assert_eq!(imported.receipt.joint_count, 45);
+    assert_eq!(imported.receipt.material_count, 1);
+    assert_eq!(imported.receipt.texture_count, 1);
+    assert_eq!(imported.receipt.image_count, 1);
+    assert_eq!(imported.receipt.clip_count, 3);
+    assert_eq!(imported.receipt.channel_count, 56);
+    assert_eq!(imported.receipt.keyframe_count, 1048);
+}
+
+#[test]
+fn animated_glb_reimport_and_settings_are_closed_and_structural() {
+    let uri = SourceUri::RelativePath("content/actors/character-medium.glb".to_owned());
+    let prior = plan_animated_glb_import(
+        &uri,
+        ANIMATED_GLB,
+        &ImportContext::default(),
+        ImportMode::DryRun,
+        None,
+        None,
+    )
+    .manifest
+    .unwrap();
+    assert_eq!(plan_reimport(&prior, &prior), ReimportPlan::Noop);
+
+    let mut changed = ANIMATED_GLB.to_vec();
+    let last = changed.last_mut().expect("fixture is non-empty");
+    *last ^= 1;
+    let changed_plan = plan_animated_glb_import(
+        &uri,
+        &changed,
+        &ImportContext::default(),
+        ImportMode::DryRun,
+        Some(&prior),
+        None,
+    );
+    assert!(!changed_plan.has_errors, "{:?}", changed_plan.diagnostics);
+    assert!(matches!(
+        changed_plan.reimport,
+        Some(ReimportPlan::StructuralReload { .. })
+    ));
+
+    for settings in [
+        ImportSettings {
+            scale: 2.0,
+            ..ImportSettings::default()
+        },
+        ImportSettings {
+            generate_collision: true,
+            ..ImportSettings::default()
+        },
+        ImportSettings {
+            material_namespace: Some("actors".to_owned()),
+            ..ImportSettings::default()
+        },
+    ] {
+        let plan = plan_animated_glb_import(
+            &uri,
+            ANIMATED_GLB,
+            &ImportContext {
+                available_textures: None,
+                settings,
+            },
+            ImportMode::DryRun,
+            Some(&prior),
+            None,
+        );
+        assert!(plan.has_errors);
+        assert!(plan.files.is_empty());
+        assert!(plan
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == ImportCode::InvalidImportSettings));
+    }
+}
+
+#[test]
+fn animated_glb_rejects_static_external_and_over_quota_sources_without_artifacts() {
+    let static_uri = SourceUri::RelativePath("content/actors/static-triangle.glb".to_owned());
+    let static_glb = static_triangle_glb();
+    let static_plan = plan_animated_glb_import(
+        &static_uri,
+        &static_glb,
+        &ImportContext::default(),
+        ImportMode::DryRun,
+        None,
+        None,
+    );
+    assert!(static_plan.has_errors);
+    assert!(static_plan.files.is_empty());
+    assert!(
+        static_plan
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == ImportCode::InvalidAnimation),
+        "{:?}",
+        static_plan.diagnostics
+    );
+
+    let external = test_glb(
+        r#"{"asset":{"version":"2.0"},"buffers":[{"byteLength":4}],"images":[{"uri":"actor.png"}]}"#,
+        &[0; 4],
+    );
+    let external_plan = plan_animated_glb_import(
+        &SourceUri::RelativePath("content/actors/external.glb".to_owned()),
+        &external,
+        &ImportContext::default(),
+        ImportMode::DryRun,
+        None,
+        None,
+    );
+    assert!(external_plan.has_errors);
+    assert!(external_plan.files.is_empty());
+    assert!(external_plan
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == ImportCode::ExternalResource));
+
+    let external_buffer = test_glb(
+        r#"{
+          "asset":{"version":"2.0"},
+          "buffers":[
+            {"byteLength":4},
+            {"uri":"actor.bin","byteLength":4}
+          ]
+        }"#,
+        &[0; 4],
+    );
+    let external_buffer_plan = plan_animated_glb_import(
+        &SourceUri::RelativePath("content/actors/external-buffer.glb".to_owned()),
+        &external_buffer,
+        &ImportContext::default(),
+        ImportMode::DryRun,
+        None,
+        None,
+    );
+    assert!(external_buffer_plan.has_errors);
+    assert!(external_buffer_plan.files.is_empty());
+    assert!(external_buffer_plan
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == ImportCode::ExternalResource));
+
+    let materials = std::iter::repeat_n("{}", MAX_ANIMATED_GLB_MATERIALS + 1)
+        .collect::<Vec<_>>()
+        .join(",");
+    let over_quota = test_glb(
+        &format!(
+            "{{\"asset\":{{\"version\":\"2.0\"}},\"buffers\":[{{\"byteLength\":4}}],\"materials\":[{materials}]}}"
+        ),
+        &[0; 4],
+    );
+    let over_quota_plan = plan_animated_glb_import(
+        &SourceUri::RelativePath("content/actors/too-many-materials.glb".to_owned()),
+        &over_quota,
+        &ImportContext::default(),
+        ImportMode::DryRun,
+        None,
+        None,
+    );
+    assert!(over_quota_plan.has_errors);
+    assert!(over_quota_plan.files.is_empty());
+    assert!(over_quota_plan
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == ImportCode::ResourceLimit));
+
+    let malformed_plan = plan_animated_glb_import(
+        &SourceUri::RelativePath("content/actors/malformed.glb".to_owned()),
+        b"not a GLB",
+        &ImportContext::default(),
+        ImportMode::DryRun,
+        None,
+        None,
+    );
+    assert!(malformed_plan.has_errors);
+    assert!(malformed_plan.files.is_empty());
+    assert!(malformed_plan
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == ImportCode::InvalidContainer));
+
+    let required_extension = test_glb(
+        r#"{
+          "asset":{"version":"2.0"},
+          "extensionsUsed":["EXT_meshopt_compression"],
+          "buffers":[{"byteLength":4}]
+        }"#,
+        &[0; 4],
+    );
+    let extension_plan = plan_animated_glb_import(
+        &SourceUri::RelativePath("content/actors/compressed.glb".to_owned()),
+        &required_extension,
+        &ImportContext::default(),
+        ImportMode::DryRun,
+        None,
+        None,
+    );
+    assert!(extension_plan.has_errors);
+    assert!(extension_plan.files.is_empty());
+    assert!(extension_plan
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == ImportCode::UnsupportedFeature));
+
+    let mut duplicate_clip = ANIMATED_GLB.to_vec();
+    let jump = duplicate_clip
+        .windows(4)
+        .position(|window| window == b"jump")
+        .expect("fixture contains jump clip");
+    duplicate_clip[jump..jump + 4].copy_from_slice(b"idle");
+    let duplicate_clip_plan = plan_animated_glb_import(
+        &SourceUri::RelativePath("content/actors/duplicate-clip.glb".to_owned()),
+        &duplicate_clip,
+        &ImportContext::default(),
+        ImportMode::DryRun,
+        None,
+        None,
+    );
+    assert!(duplicate_clip_plan.has_errors);
+    assert!(duplicate_clip_plan.files.is_empty());
+    assert!(
+        duplicate_clip_plan
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == ImportCode::InvalidAnimation),
+        "{:?}",
+        duplicate_clip_plan.diagnostics
     );
 }
 
@@ -341,6 +652,39 @@ fn cli_initializes_validates_plans_and_publishes_offline() {
 }
 
 #[test]
+fn cli_publishes_animated_glb_without_utf8_or_original_path_dependency() {
+    let root = temp_directory("animated-cli");
+    let source = root.join("actor-medium.glb");
+    let output = root.join("imported");
+    fs::write(&source, ANIMATED_GLB).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_rusty-asset-import"))
+        .arg("write")
+        .arg(&source)
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        fs::read(output.join("actor-medium.glb")).unwrap(),
+        ANIMATED_GLB
+    );
+    assert!(output.join("actor-medium.animated-mesh.json").is_file());
+    assert!(output.join("actor-medium.catalog.json").is_file());
+    assert!(output.join("actor-medium.import.json").is_file());
+    fs::remove_file(source).unwrap();
+    let descriptor: AnimatedMeshAsset =
+        serde_json::from_slice(&fs::read(output.join("actor-medium.animated-mesh.json")).unwrap())
+            .unwrap();
+    descriptor.validate().unwrap();
+    assert_eq!(descriptor.asset, "mesh-animation/actor-medium");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn cli_rejects_oversized_sources_before_publishing() {
     let root = temp_directory("oversized-source");
     let source = root.join("oversized.mesh.json");
@@ -369,4 +713,64 @@ fn temp_directory(tag: &str) -> PathBuf {
     }
     fs::create_dir(&path).unwrap();
     path
+}
+
+fn artifact<'a>(plan: &'a ImportPlan, path: &str) -> &'a GeneratedArtifact {
+    plan.files
+        .iter()
+        .find(|artifact| artifact.relative_path == path)
+        .unwrap_or_else(|| panic!("missing artifact {path}"))
+}
+
+fn test_glb(json: &str, bin: &[u8]) -> Vec<u8> {
+    let mut json = json.as_bytes().to_vec();
+    while !json.len().is_multiple_of(4) {
+        json.push(b' ');
+    }
+    let mut bin = bin.to_vec();
+    while !bin.len().is_multiple_of(4) {
+        bin.push(0);
+    }
+    let total = 12 + 8 + json.len() + 8 + bin.len();
+    let mut bytes = Vec::with_capacity(total);
+    bytes.extend_from_slice(b"glTF");
+    bytes.extend_from_slice(&2u32.to_le_bytes());
+    bytes.extend_from_slice(&(total as u32).to_le_bytes());
+    bytes.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&0x4e4f_534au32.to_le_bytes());
+    bytes.extend_from_slice(&json);
+    bytes.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&0x004e_4942u32.to_le_bytes());
+    bytes.extend_from_slice(&bin);
+    bytes
+}
+
+fn static_triangle_glb() -> Vec<u8> {
+    let mut bin = Vec::new();
+    for value in [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
+        bin.extend_from_slice(&value.to_le_bytes());
+    }
+    for index in [0u16, 1, 2] {
+        bin.extend_from_slice(&index.to_le_bytes());
+    }
+    bin.extend_from_slice(&[0, 0]);
+    test_glb(
+        r#"{
+          "asset":{"version":"2.0"},
+          "scene":0,
+          "scenes":[{"nodes":[0]}],
+          "nodes":[{"mesh":0}],
+          "buffers":[{"byteLength":44}],
+          "bufferViews":[
+            {"buffer":0,"byteOffset":0,"byteLength":36,"target":34962},
+            {"buffer":0,"byteOffset":36,"byteLength":6,"target":34963}
+          ],
+          "accessors":[
+            {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},
+            {"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}
+          ],
+          "meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1,"mode":4}]}]
+        }"#,
+        &bin,
+    )
 }

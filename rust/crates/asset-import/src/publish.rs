@@ -311,10 +311,7 @@ fn stage_and_verify(plan: &ImportPlan, staging: &Path) -> Result<(), Publication
             ));
         }
     }
-    let name = manifest
-        .mesh_asset_id
-        .strip_prefix("mesh/")
-        .ok_or(PublicationError::InvalidPlan)?;
+    let name = import_asset_name(&manifest.mesh_asset_id)?;
     let manifest_path = format!("{name}.import.json");
     let expected =
         crate::encode_import_manifest(manifest).map_err(|_| PublicationError::InvalidPlan)?;
@@ -332,10 +329,7 @@ fn validate_file_closure(
         .manifest
         .as_ref()
         .ok_or(PublicationError::InvalidPlan)?;
-    let name = manifest
-        .mesh_asset_id
-        .strip_prefix("mesh/")
-        .ok_or(PublicationError::InvalidPlan)?;
+    let name = import_asset_name(&manifest.mesh_asset_id)?;
     let manifest_path = format!("{name}.import.json");
     let mut expected: BTreeSet<_> = manifest
         .artifacts
@@ -347,4 +341,11 @@ fn validate_file_closure(
         return Err(PublicationError::InvalidPlan);
     }
     Ok(())
+}
+
+fn import_asset_name(asset_id: &str) -> Result<&str, PublicationError> {
+    asset_id
+        .strip_prefix("mesh/")
+        .or_else(|| asset_id.strip_prefix("mesh-animation/"))
+        .ok_or(PublicationError::InvalidPlan)
 }

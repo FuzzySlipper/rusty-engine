@@ -1,7 +1,8 @@
 use crate::{
-    build_manifest, encode_import_manifest, import_text, plan_reimport, render_artifacts,
-    GeneratedArtifact, ImportContext, ImportDiagnostic, ImportManifest, ReimportPlan,
-    SidecarMetadata, SourceUri,
+    build_manifest, encode_import_manifest, import_animated_glb_asset, import_text, plan_reimport,
+    render_animated_glb_artifacts, render_artifacts, GeneratedArtifact, ImportContext,
+    ImportDiagnostic, ImportManifest, ReimportPlan, SidecarMetadata, SourceUri,
+    SUPPORTED_ANIMATED_GLB_VERSION,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,6 +121,124 @@ pub fn plan_import(
     });
     report.push_str(&format!("asset: {}\n", assets.static_mesh.asset));
     report.push_str(&format!("sourceHash: {}\n", manifest.source_hash));
+    report.push_str(&format!("reimportPlan: {}\n", reimport.label()));
+    report.push_str("files:\n");
+    for file in &files {
+        report.push_str(&format!(
+            "  {} {} bytes\n",
+            file.relative_path,
+            file.bytes.len()
+        ));
+    }
+    report.push_str(match mode {
+        ImportMode::DryRun => "result: ok; dry-run leaves storage unchanged\n",
+        ImportMode::Write => "result: ok; publication candidate ready\n",
+    });
+    ImportPlan {
+        mode,
+        source_uri: source_uri.clone(),
+        diagnostics: outcome.diagnostics,
+        files,
+        manifest: Some(manifest),
+        reimport: Some(reimport),
+        sidecar_update,
+        report,
+        has_errors: false,
+    }
+}
+
+pub fn plan_animated_glb_import(
+    source_uri: &SourceUri,
+    source_bytes: &[u8],
+    context: &ImportContext,
+    mode: ImportMode,
+    prior: Option<&ImportManifest>,
+    sidecar: Option<&SidecarMetadata>,
+) -> ImportPlan {
+    let outcome = import_animated_glb_asset(source_uri, source_bytes, context);
+    let mut report = format!(
+        "rusty-asset-import: {}\nkind: animatedGlb\nmode: {}\ndiagnostics: {}\n",
+        source_uri.value(),
+        mode.label(),
+        outcome.diagnostics.len()
+    );
+    for diagnostic in &outcome.diagnostics {
+        report.push_str("  ");
+        report.push_str(&diagnostic.render());
+        report.push('\n');
+    }
+    let Some(assets) = outcome.assets else {
+        report.push_str("result: failed; no publication candidate produced\n");
+        return ImportPlan {
+            mode,
+            source_uri: source_uri.clone(),
+            diagnostics: outcome.diagnostics,
+            files: Vec::new(),
+            manifest: None,
+            reimport: None,
+            sidecar_update: None,
+            report,
+            has_errors: true,
+        };
+    };
+    let name = assets
+        .animated_mesh
+        .asset
+        .strip_prefix("mesh-animation/")
+        .unwrap_or(&assets.animated_mesh.asset);
+    let Ok(mut files) = render_animated_glb_artifacts(name, &assets) else {
+        report.push_str("result: failed; generated artifacts could not be encoded\n");
+        return ImportPlan {
+            mode,
+            source_uri: source_uri.clone(),
+            diagnostics: outcome.diagnostics,
+            files: Vec::new(),
+            manifest: None,
+            reimport: None,
+            sidecar_update: None,
+            report,
+            has_errors: true,
+        };
+    };
+    let manifest = build_manifest(
+        source_uri.value(),
+        source_bytes,
+        SUPPORTED_ANIMATED_GLB_VERSION,
+        &assets.animated_mesh.asset,
+        sidecar.map(|metadata| metadata.guid.clone()),
+        &files,
+    );
+    let manifest_json = encode_import_manifest(&manifest)
+        .expect("newly built animated import manifest is valid and serializable");
+    files.push(GeneratedArtifact {
+        relative_path: format!("{name}.import.json"),
+        bytes: manifest_json.into_bytes(),
+    });
+    files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    let reimport = prior
+        .map(|prior| plan_reimport(prior, &manifest))
+        .unwrap_or_else(|| ReimportPlan::StructuralReload {
+            reason: "first import".to_owned(),
+            changed: manifest
+                .artifacts
+                .iter()
+                .map(|artifact| artifact.relative_path.clone())
+                .collect(),
+        });
+    let sidecar_update = sidecar.map(|prior| {
+        let mut next = prior.clone();
+        next.source_uri = source_uri.clone();
+        next.source_hash = manifest.source_hash.clone();
+        next.importer_version = manifest.importer_version;
+        next.generated_artifacts = manifest.artifacts.clone();
+        next
+    });
+    report.push_str(&format!("asset: {}\n", assets.animated_mesh.asset));
+    report.push_str(&format!("sourceHash: {}\n", manifest.source_hash));
+    report.push_str(&format!(
+        "clips: {} channels: {} keyframes: {}\n",
+        assets.receipt.clip_count, assets.receipt.channel_count, assets.receipt.keyframe_count
+    ));
     report.push_str(&format!("reimportPlan: {}\n", reimport.label()));
     report.push_str("files:\n");
     for file in &files {

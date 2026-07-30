@@ -671,7 +671,13 @@ validates the selected asset and animation clip, then projects typed resource de
 `defineAnimatedMesh`, instance creation, and named playback. Studio's trusted Node host only resolves
 bounded project-relative GLB and packed mesh-resource bytes, rejects symbolic links, and verifies
 the admitted SHA-256 before the shared renderer consumes them; the browser has no filesystem
-authority. Angular owns the
+authority. Binary animated-mesh import enters through `asset-import`, which reuses the canonical
+bounded GLB scene/skin/clip parser, rejects external buffers and images, and emits one deterministic
+bundle containing the exact GLB bytes, an `AnimatedMeshAsset` descriptor, catalog entry, and
+source/artifact manifest. Reimport replaces that bundle as one structural transaction; the original
+host selection is provenance, not a reopen dependency. `voxel-convert` remains the owner of
+animation sampling and voxel materialization rather than becoming the Studio import operation.
+Angular owns the
 asset/clip controls and renderer-neutral transform-manipulator intent, but does not construct a
 private Three scene or replace materials inside an imported animated hierarchy merely to show
 selection. The shared viewport projects the gizmo on its isolated debug overlay channel at the

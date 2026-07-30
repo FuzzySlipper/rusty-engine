@@ -40,11 +40,13 @@ version = "0.1.0"
 dependencies = [
  "asset-catalog",
  "core-assets",
+ "gltf",
  "render-model",
  "serde",
  "serde_json",
  "serde_path_to_error",
  "sha2",
+ "voxel-convert",
 ]
 
 [[package]]

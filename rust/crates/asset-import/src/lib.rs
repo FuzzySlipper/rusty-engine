@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod animated_glb;
 mod artifact;
 mod diagnostic;
 mod fingerprint;
@@ -15,7 +16,15 @@ mod publish;
 mod sidecar;
 mod source;
 
-pub use artifact::{render_artifacts, ArtifactRenderError, GeneratedArtifact};
+pub use animated_glb::{
+    import_animated_glb_asset, AnimatedGlbImportOutcome, AnimatedGlbImportReceipt,
+    ImportedAnimatedGlb, MAX_ANIMATED_GLB_EMBEDDED_IMAGE_BYTES,
+    MAX_ANIMATED_GLB_EMBEDDED_IMAGE_TOTAL_BYTES, MAX_ANIMATED_GLB_IMAGES, MAX_ANIMATED_GLB_JOINTS,
+    MAX_ANIMATED_GLB_MATERIALS, MAX_ANIMATED_GLB_TEXTURES, SUPPORTED_ANIMATED_GLB_VERSION,
+};
+pub use artifact::{
+    render_animated_glb_artifacts, render_artifacts, ArtifactRenderError, GeneratedArtifact,
+};
 pub use diagnostic::{ImportCode, ImportDiagnostic, ImportSeverity};
 pub use importer::{import, import_with_context, ImportContext, ImportOutcome, ImportedAssets};
 pub use manifest::{
@@ -23,7 +32,7 @@ pub use manifest::{
     plan_reimport, validate_import_manifest, ArtifactFingerprint, ImportManifest,
     ImportManifestCodecError, ReimportPlan,
 };
-pub use plan::{plan_import, ImportMode, ImportPlan};
+pub use plan::{plan_animated_glb_import, plan_import, ImportMode, ImportPlan};
 pub use publish::{
     publish_directory_atomically, publish_directory_with_sidecar_atomically, PublicationError,
     PublicationReceipt,
@@ -38,7 +47,7 @@ pub use source::{
     MAX_SOURCE_BYTES, MAX_SOURCE_INDICES, MAX_SOURCE_VERTICES, SUPPORTED_SOURCE_SCHEMA,
 };
 
-pub const IMPORTER_VERSION: u32 = 1;
+pub const IMPORTER_VERSION: u32 = 2;
 
 pub fn import_text(text: &str, locus: &str, context: &ImportContext) -> ImportOutcome {
     let parsed = parse_source(text, locus);
