@@ -33,6 +33,7 @@ import {
   type RendererGpuSubmissionTimerDriver,
 } from './gpu-submission-duty.js';
 import { classifyGpuSubmissionRendererName } from './gpu-submission-class.js';
+import { resolveRendererPixelRatio } from './software-renderer-resolution.js';
 
 export interface ProjectedThreeRenderResult {
   readonly projection: RenderProjection;
@@ -236,8 +237,10 @@ export function mountRendererBrowserSurface(
   // counts until this owner resets it before the next submission.
   webgl.info.autoReset = false;
   webgl.setClearColor(options.clearColor ?? 0x101820, 1);
-  const pixelRatio = validatePixelRatio(
-    options.pixelRatio ?? globalThis.devicePixelRatio ?? 1,
+  const requestedPixelRatio = options.pixelRatio ?? globalThis.devicePixelRatio ?? 1;
+  const pixelRatio = resolveRendererPixelRatio(
+    requestedPixelRatio,
+    gpuSubmissionClass,
   );
   webgl.setPixelRatio(pixelRatio);
 
@@ -301,11 +304,11 @@ export function mountRendererBrowserSurface(
   const resize = (): void => {
     const width = Math.max(
       1,
-      canvas.clientWidth || Math.round(canvas.width / pixelRatio) || 800,
+      canvas.clientWidth || Math.round(canvas.width / requestedPixelRatio) || 800,
     );
     const height = Math.max(
       1,
-      canvas.clientHeight || Math.round(canvas.height / pixelRatio) || 450,
+      canvas.clientHeight || Math.round(canvas.height / requestedPixelRatio) || 450,
     );
     if (logicalViewport.width !== width || logicalViewport.height !== height) {
       webgl.setSize(width, height, false);
@@ -546,13 +549,6 @@ function validatePerspectiveProjection(projection: PerspectiveProjection): Persp
     near: projection.near,
     far: projection.far,
   };
-}
-
-function validatePixelRatio(pixelRatio: number): number {
-  if (!Number.isFinite(pixelRatio) || pixelRatio <= 0) {
-    throw new RangeError('renderer pixel ratio must be finite and greater than zero');
-  }
-  return pixelRatio;
 }
 
 export function createRendererBrowserSurfaceFrame(): RenderFrameDiff {

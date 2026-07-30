@@ -60,6 +60,7 @@ interface BrowserProof {
   readonly projectionInsideViewport: boolean;
   readonly ready: true;
   readonly rendererStatistics: RendererSurfaceStatisticsSample;
+  readonly rendererBufferPixelRatio: readonly [number, number];
   readonly replacementDisposedWithHistoricalSample: boolean;
   readonly replacementDisposedRenderRejected: boolean;
   readonly replacementRenderSequence: number;
@@ -465,6 +466,10 @@ async function main(): Promise<void> {
     presentationDiagnostics: presentation.diagnostics.map((diagnostic) => diagnostic.code),
     projectionInsideViewport: projected.insideViewport,
     ready: true,
+    rendererBufferPixelRatio: [
+      canvas.width / canvas.clientWidth,
+      canvas.height / canvas.clientHeight,
+    ],
     rendererStatistics: autoSubmission.statistics,
     replacementDisposedRenderRejected,
     replacementDisposedWithHistoricalSample,

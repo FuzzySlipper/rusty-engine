@@ -162,7 +162,7 @@ void test('software rendering treats observed completion age as work pressure', 
   assert.equal(duty.ready(), true);
 });
 
-void test('exceptionally slow work honors selected duty within a finite headroom bound', () => {
+void test('exceptionally slow work retains equal headroom plus a bounded progressive gap', () => {
   const driver = new FakeTimerDriver();
   const duty = new RendererGpuSubmissionDuty(driver);
 
@@ -171,11 +171,11 @@ void test('exceptionally slow work honors selected duty within a finite headroom
   driver.result = { durationMs: 500, status: 'complete' };
   driver.nowMs = 500;
   assert.equal(duty.ready(), false);
-  assert.equal(duty.sample().targetDutyFraction, 0.2);
-  assert.equal(duty.sample().admittedAtMs, 2_500);
-  driver.nowMs = 2_499.9;
+  assert.equal(duty.sample().targetDutyFraction, 5 / 11);
+  assert.equal(duty.sample().admittedAtMs, 1_100);
+  driver.nowMs = 1_099.9;
   assert.equal(duty.ready(), false);
-  driver.nowMs = 2_500;
+  driver.nowMs = 1_100;
   assert.equal(duty.ready(), true);
 });
 
@@ -192,33 +192,13 @@ void test('multi-second software completion cannot collapse to a one-hundred-ms 
 
   assert.equal(duty.ready(), false);
   assert.equal(duty.sample().effectiveDurationMs, 1_257);
-  assert.equal(duty.sample().admittedAtMs, 6_257);
-  assert.equal(duty.sample().targetDutyFraction, 1_257 / 6_257);
+  assert.equal(duty.sample().admittedAtMs, 2_614);
+  assert.equal(duty.sample().targetDutyFraction, 1_257 / 2_614);
   driver.nowMs = 1_357;
   assert.equal(duty.ready(), false);
-  driver.nowMs = 6_256.9;
+  driver.nowMs = 2_613.9;
   assert.equal(duty.ready(), false);
-  driver.nowMs = 6_257;
-  assert.equal(duty.ready(), true);
-});
-
-void test('automatic headroom remains bounded for pathological work', () => {
-  const driver = new FakeTimerDriver();
-  const duty = new RendererGpuSubmissionDuty(driver, {
-    rendererClass: 'software',
-  });
-
-  duty.begin();
-  duty.submitted();
-  driver.result = { durationMs: 10_000, status: 'complete' };
-  driver.nowMs = 10_000;
-
-  assert.equal(duty.ready(), false);
-  assert.equal(duty.sample().admittedAtMs, 15_000);
-  assert.equal(duty.sample().targetDutyFraction, 2 / 3);
-  driver.nowMs = 14_999.9;
-  assert.equal(duty.ready(), false);
-  driver.nowMs = 15_000;
+  driver.nowMs = 2_614;
   assert.equal(duty.ready(), true);
 });
 

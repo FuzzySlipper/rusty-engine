@@ -224,10 +224,11 @@ software renderers report a short timer duration while their asynchronous comple
 occupies browser CPU. The Three backend therefore classifies the concrete WebGL renderer locally:
 a positively identified software renderer uses all observed completion wall latency as effective
 work, while accelerated and unknown renderers retain one ordinary 60 Hz polling allowance before
-wall latency contributes. Slow work receives the full recovery window required by its selected
-duty down to twenty percent. A five-second headroom ceiling keeps pathological work responsive, and
-the diagnostic reports the achievable duty after that ceiling rather than an unachievable pre-cap
-target. This is not a fixed-rate timer: the
+wall latency contributes. Every nonzero effective duration receives at least equal headroom, so
+even a seconds-long software submission cannot exceed fifty-percent automatic duty. Up to 100 ms
+of additional progressive headroom lowers ordinary slow work toward a twenty-percent floor without
+adding an unbounded extra delay. The diagnostic reports the selected duty after that bound, not an
+unachievable pre-cap target. This is not a fixed-rate timer: the
 accelerated fast path can still submit four-millisecond work at 120 Hz and eight-millisecond work
 at 60 Hz, while slow completion yields materially more CPU time. Timer-query and completion
 polling are non-blocking and occur only in the existing animation-frame owner. Unsupported,
@@ -239,6 +240,13 @@ decision time, admission deadline, and actual automatic admission observation.
 Reading it never polls, submits, or starts another loop. Explicit
 `renderOnce`, camera reset, resource statistics, picking, and disposal keep their established
 semantics.
+
+The browser backend additionally caps a positively identified software rasterizer's backing-buffer
+ratio at `0.5`. This reduces the cost of the first complete submission as well as later camera
+frames; scheduling alone cannot yield CPU time already consumed by one expensive raster. The CSS
+viewport, camera projection, normalized picking, retained content, and lifecycle remain unchanged,
+and lower caller requests are preserved. Accelerated and unknown renderers retain the requested
+ratio.
 
 An accepted retained mutation becomes visible in statistics on the next successful submission; a
 rejected mutation changes neither renderer state nor the latest sample. Camera reset submits one

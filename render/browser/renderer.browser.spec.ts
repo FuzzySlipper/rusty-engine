@@ -58,11 +58,15 @@ test('shared host realizes retained, presentation, and inspection families in a 
   }
   if (proof.automaticSubmissionPacing.rendererClass === 'software') {
     expect(proof.automaticSubmissionPacing.completionAllowanceMs).toBe(0);
+    expect(proof.rendererBufferPixelRatio[0]).toBeCloseTo(0.5);
+    expect(proof.rendererBufferPixelRatio[1]).toBeCloseTo(0.5);
     for (const interval of proof.automaticSubmissionIntervalsMs.slice(1)) {
       expect(interval).toBeGreaterThanOrEqual(50);
     }
   } else {
     expect(proof.automaticSubmissionPacing.completionAllowanceMs).toBe(17);
+    expect(proof.rendererBufferPixelRatio[0]).toBeCloseTo(1);
+    expect(proof.rendererBufferPixelRatio[1]).toBeCloseTo(1);
   }
   expect(proof.batchedStaticPickHandle).toBe(1150);
   expect(proof.batchedStaticStatistics.drawCallCount).toEqual({
