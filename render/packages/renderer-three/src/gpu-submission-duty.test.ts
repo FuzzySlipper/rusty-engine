@@ -162,7 +162,7 @@ void test('software rendering treats observed completion age as work pressure', 
   assert.equal(duty.ready(), true);
 });
 
-void test('completion-derived headroom is bounded for exceptionally slow work', () => {
+void test('exceptionally slow work retains equal headroom plus a bounded progressive gap', () => {
   const driver = new FakeTimerDriver();
   const duty = new RendererGpuSubmissionDuty(driver);
 
@@ -171,9 +171,34 @@ void test('completion-derived headroom is bounded for exceptionally slow work', 
   driver.result = { durationMs: 500, status: 'complete' };
   driver.nowMs = 500;
   assert.equal(duty.ready(), false);
-  driver.nowMs = 599.9;
+  assert.equal(duty.sample().targetDutyFraction, 5 / 11);
+  assert.equal(duty.sample().admittedAtMs, 1_100);
+  driver.nowMs = 1_099.9;
   assert.equal(duty.ready(), false);
-  driver.nowMs = 600;
+  driver.nowMs = 1_100;
+  assert.equal(duty.ready(), true);
+});
+
+void test('multi-second software completion cannot collapse to a one-hundred-ms gap', () => {
+  const driver = new FakeTimerDriver();
+  const duty = new RendererGpuSubmissionDuty(driver, {
+    rendererClass: 'software',
+  });
+
+  duty.begin();
+  duty.submitted();
+  driver.result = { durationMs: 1_236, status: 'complete' };
+  driver.nowMs = 1_257;
+
+  assert.equal(duty.ready(), false);
+  assert.equal(duty.sample().effectiveDurationMs, 1_257);
+  assert.equal(duty.sample().admittedAtMs, 2_614);
+  assert.equal(duty.sample().targetDutyFraction, 1_257 / 2_614);
+  driver.nowMs = 1_357;
+  assert.equal(duty.ready(), false);
+  driver.nowMs = 2_613.9;
+  assert.equal(duty.ready(), false);
+  driver.nowMs = 2_614;
   assert.equal(duty.ready(), true);
 });
 

@@ -219,13 +219,16 @@ instance resources count independently.
 Automatic WebGL2 submission uses asynchronous backend pacing without adding another render loop.
 One completion fence bounds queued command streams. When
 `EXT_disjoint_timer_query_webgl2` is available, the previous submission's GPU duration determines
-an adaptive headroom interval, capped at 100 ms, before the next automatic submission. Some
+an adaptive headroom interval before the next automatic submission. Some
 software renderers report a short timer duration while their asynchronous completion still
 occupies browser CPU. The Three backend therefore classifies the concrete WebGL renderer locally:
 a positively identified software renderer uses all observed completion wall latency as effective
 work, while accelerated and unknown renderers retain one ordinary 60 Hz polling allowance before
-wall latency contributes. Above eight milliseconds of effective work, the target duty falls
-smoothly from fifty percent toward a twenty-percent floor. This is not a fixed-rate timer: the
+wall latency contributes. Every nonzero effective duration receives at least equal headroom, so
+even a seconds-long software submission cannot exceed fifty-percent automatic duty. Up to 100 ms
+of additional progressive headroom lowers ordinary slow work toward a twenty-percent floor without
+adding an unbounded extra delay. The diagnostic reports the selected duty after that bound, not an
+unachievable pre-cap target. This is not a fixed-rate timer: the
 accelerated fast path can still submit four-millisecond work at 120 Hz and eight-millisecond work
 at 60 Hz, while slow completion yields materially more CPU time. Timer-query and completion
 polling are non-blocking and occur only in the existing animation-frame owner. Unsupported,

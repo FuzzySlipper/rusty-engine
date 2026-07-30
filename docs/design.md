@@ -468,15 +468,18 @@ display-clock advancement; an unchanged static scene does not continuously resub
 backend. On WebGL2, the backend also keeps at most one automatic GPU command stream in flight;
 newer retained and camera state remains coalesced until its completion fence signals. When the
 browser exposes asynchronous WebGL2 timer queries, the backend also leaves a completion-derived,
-bounded headroom interval after measured GPU execution before admitting another automatic
-submission. Software renderers can under-report timer duration while asynchronous completion still
+bounded progressive headroom interval after measured GPU execution before admitting another
+automatic submission. Software renderers can under-report timer duration while asynchronous completion still
 occupies browser CPU. The Three backend classifies the concrete WebGL renderer without exposing its
 raw identity: positively identified software rendering uses the complete observed completion wall
 latency as effective work, while accelerated and unknown renderers retain one ordinary polling
 interval before wall latency adds pressure. The accelerated fast path retains 120 Hz for
-four-millisecond work and 60 Hz for eight-millisecond work. Slower completion progressively reduces
-target duty toward twenty percent so software rendering yields materially more browser and host CPU
-time. This remains workload-derived rather than a fixed frame-rate cap. Unsupported or disjoint
+four-millisecond work and 60 Hz for eight-millisecond work. Every nonzero measured submission
+receives at least equal completion headroom, so exceptionally slow work cannot silently exceed
+fifty-percent automatic duty; up to 100 ms of additional progressive headroom lowers ordinary slow
+work toward twenty percent without adding an unbounded extra delay. Software rendering therefore
+yields materially more browser and host CPU time. This remains workload-derived rather than a
+fixed frame-rate cap. Unsupported or disjoint
 timer timing retains completion-wall pacing, and the public renderer surface exposes a frozen
 read-only sample of the renderer class, applied allowance, latest decision, admission deadline, and
 actual automatic admission observation without adding a polling or submission path. An explicit `renderOnce`

@@ -62,7 +62,7 @@ interface RendererGpuSubmissionDutyOptions {
 const FAST_GPU_DURATION_MS = 8;
 const COMPLETION_POLL_ALLOWANCE_MS = 17;
 const MAXIMUM_GPU_DUTY_FRACTION = 0.5;
-const MAXIMUM_GPU_HEADROOM_MS = 100;
+const MAXIMUM_ADDITIONAL_GPU_HEADROOM_MS = 100;
 const MINIMUM_GPU_DUTY_FRACTION = 0.2;
 
 /**
@@ -320,7 +320,7 @@ export class RendererGpuSubmissionDuty {
       timerDurationMs ?? 0,
       completionPressureMs,
     );
-    const targetDutyFraction = Math.min(
+    const requestedDutyFraction = Math.min(
       MAXIMUM_GPU_DUTY_FRACTION,
       Math.max(
         MINIMUM_GPU_DUTY_FRACTION,
@@ -328,10 +328,20 @@ export class RendererGpuSubmissionDuty {
           / Math.max(effectiveDurationMs, Number.EPSILON),
       ),
     );
-    const headroomMs = Math.min(
-      MAXIMUM_GPU_HEADROOM_MS,
-      effectiveDurationMs * ((1 / targetDutyFraction) - 1),
+    const requestedHeadroomMs = effectiveDurationMs
+      * ((1 / requestedDutyFraction) - 1);
+    // The base headroom makes the stated fifty-percent maximum duty real even
+    // when one software-rendered submission takes seconds. Only the additional
+    // progressive headroom is capped, so exceptional work cannot collapse back
+    // toward continuous GPU/CPU saturation while still retaining a bounded
+    // latency penalty beyond equal work/headroom.
+    const headroomMs = effectiveDurationMs + Math.min(
+      MAXIMUM_ADDITIONAL_GPU_HEADROOM_MS,
+      Math.max(0, requestedHeadroomMs - effectiveDurationMs),
     );
+    const targetDutyFraction = effectiveDurationMs <= Number.EPSILON
+      ? MAXIMUM_GPU_DUTY_FRACTION
+      : effectiveDurationMs / (effectiveDurationMs + headroomMs);
     this.#notBeforeMs = this.#submittedAtMs + effectiveDurationMs + headroomMs;
     this.#sample = Object.freeze({
       schemaVersion: 1,
