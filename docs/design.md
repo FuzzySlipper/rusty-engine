@@ -474,12 +474,12 @@ occupies browser CPU. The Three backend classifies the concrete WebGL renderer w
 raw identity: positively identified software rendering uses the complete observed completion wall
 latency as effective work, while accelerated and unknown renderers retain one ordinary polling
 interval before wall latency adds pressure. The accelerated fast path retains 120 Hz for
-four-millisecond work and 60 Hz for eight-millisecond work. Every nonzero measured submission
-receives at least equal completion headroom, so exceptionally slow work cannot silently exceed
-fifty-percent automatic duty; up to 100 ms of additional progressive headroom lowers ordinary slow
-work toward twenty percent without adding an unbounded extra delay. Software rendering therefore
-yields materially more browser and host CPU time. This remains workload-derived rather than a
-fixed frame-rate cap. Unsupported or disjoint
+four-millisecond work and 60 Hz for eight-millisecond work. Slower work receives the full recovery
+window required by the selected duty down to twenty percent, bounded by a five-second maximum
+headroom so pathological work cannot make automatic rendering indefinitely unresponsive. Software
+rendering therefore yields materially more browser and host CPU time. The diagnostic reports the
+achievable duty after that bound. This remains workload-derived rather than a fixed frame-rate cap.
+Unsupported or disjoint
 timer timing retains completion-wall pacing, and the public renderer surface exposes a frozen
 read-only sample of the renderer class, applied allowance, latest decision, admission deadline, and
 actual automatic admission observation without adding a polling or submission path. An explicit `renderOnce`

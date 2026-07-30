@@ -224,11 +224,10 @@ software renderers report a short timer duration while their asynchronous comple
 occupies browser CPU. The Three backend therefore classifies the concrete WebGL renderer locally:
 a positively identified software renderer uses all observed completion wall latency as effective
 work, while accelerated and unknown renderers retain one ordinary 60 Hz polling allowance before
-wall latency contributes. Every nonzero effective duration receives at least equal headroom, so
-even a seconds-long software submission cannot exceed fifty-percent automatic duty. Up to 100 ms
-of additional progressive headroom lowers ordinary slow work toward a twenty-percent floor without
-adding an unbounded extra delay. The diagnostic reports the selected duty after that bound, not an
-unachievable pre-cap target. This is not a fixed-rate timer: the
+wall latency contributes. Slow work receives the full recovery window required by its selected
+duty down to twenty percent. A five-second headroom ceiling keeps pathological work responsive, and
+the diagnostic reports the achievable duty after that ceiling rather than an unachievable pre-cap
+target. This is not a fixed-rate timer: the
 accelerated fast path can still submit four-millisecond work at 120 Hz and eight-millisecond work
 at 60 Hz, while slow completion yields materially more CPU time. Timer-query and completion
 polling are non-blocking and occur only in the existing animation-frame owner. Unsupported,
