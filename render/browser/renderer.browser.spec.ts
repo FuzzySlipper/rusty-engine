@@ -29,6 +29,27 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.autoStartRenderCount).toBe(1);
   expect(proof.autoFrameIntervalMs).toBeGreaterThan(0);
   expect(proof.backendSubmissionDurationMs).toBeGreaterThanOrEqual(0);
+  expect(proof.batchedStaticPickHandle).toBe(1150);
+  expect(proof.batchedStaticStatistics.drawCallCount).toEqual({
+    scope: 'perSubmission', status: 'available', value: 1,
+  });
+  expect(proof.batchedStaticStatistics.triangleCount).toEqual({
+    scope: 'perSubmission', status: 'available', value: 300,
+  });
+  expect(proof.batchedStaticStatistics.renderHandleCount).toEqual({
+    scope: 'liveResident', status: 'available', value: 300,
+  });
+  expect(proof.batchedStaticResetStatistics).toEqual(proof.batchedStaticStatistics);
+  expect(proof.batchedStaticRecreateStatistics.drawCallCount).toEqual({
+    scope: 'perSubmission', status: 'available', value: 1,
+  });
+  expect(proof.batchedStaticRecreateStatistics.triangleCount).toEqual({
+    scope: 'perSubmission', status: 'available', value: 2,
+  });
+  expect(proof.batchedStaticRecreateStatistics.renderHandleCount).toEqual({
+    scope: 'liveResident', status: 'available', value: 2,
+  });
+  expect(proof.batchedStaticDisposed).toBe(true);
   expect(proof.explicitFrameIntervalMs).toBe(50);
   expect(proof.lightCount).toBe(1);
   expect(proof.pickHandle).toBe(101);

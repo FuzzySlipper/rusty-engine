@@ -34,6 +34,11 @@ interface BrowserProof {
   readonly autoFrameIntervalMs: number | null;
   readonly autoStartRenderCount: number;
   readonly backendSubmissionDurationMs: number | null;
+  readonly batchedStaticPickHandle: number | null;
+  readonly batchedStaticRecreateStatistics: RendererSurfaceStatisticsSample;
+  readonly batchedStaticResetStatistics: RendererSurfaceStatisticsSample;
+  readonly batchedStaticStatistics: RendererSurfaceStatisticsSample;
+  readonly batchedStaticDisposed: boolean;
   readonly billboardText: string | null;
   readonly context: string;
   readonly explicitFrameIntervalMs: number | null;
@@ -237,6 +242,60 @@ async function main(): Promise<void> {
   staticMeshSurface.dispose();
   const staticMeshRecreateDisposed = staticMeshSurface.snapshot() === '(empty scene)\n';
 
+  const batchedStaticCanvas = document.createElement('canvas');
+  batchedStaticCanvas.width = 64;
+  batchedStaticCanvas.height = 64;
+  const batchedStaticSurface = mountRendererSurface(batchedStaticCanvas, {
+    autoStart: false,
+    frame: batchedStaticMeshFrame(),
+    pixelRatio: 1,
+  });
+  batchedStaticSurface.renderOnce(1);
+  const batchedStaticStatistics = batchedStaticSurface.submission().statistics;
+  const batchedStaticPick = batchedStaticSurface.pick({
+    filter: { handles: [renderHandle(1_150)] },
+    ray: { kind: 'viewport', point: [0, 0] },
+    maxDistance: 20,
+  });
+  batchedStaticCanvas.width = 96;
+  batchedStaticCanvas.height = 80;
+  batchedStaticSurface.resetCamera();
+  batchedStaticSurface.renderOnce(1.5);
+  const batchedStaticResetStatistics = batchedStaticSurface.submission().statistics;
+  batchedStaticSurface.applyFrame({
+    schemaVersion: 1,
+    ops: [
+      ...Array.from({ length: 299 }, (_, index) => ({
+        op: 'destroy' as const,
+        handle: renderHandle(1_000 + index),
+      })),
+      {
+        op: 'update' as const,
+        handle: renderHandle(1_299),
+        transform: identity([0, 1.62, -3], [1, 1, 1]),
+        material: null,
+        visible: null,
+        metadata: null,
+      },
+      {
+        op: 'createStaticMeshInstance' as const,
+        handle: renderHandle(2_000),
+        parent: null,
+        instance: {
+          asset: 'mesh/static-batch-proof',
+          transform: identity([0, 1.62, -3], [1, 1, 1]),
+          visible: true,
+          materialOverrides: [],
+          metadata: metadata('static-batch-recreated', 2_000),
+        },
+      },
+    ],
+  });
+  batchedStaticSurface.renderOnce(2);
+  const batchedStaticRecreateStatistics = batchedStaticSurface.submission().statistics;
+  batchedStaticSurface.dispose();
+  const batchedStaticDisposed = batchedStaticSurface.snapshot() === '(empty scene)\n';
+
   const inspection = await mountRendererInspectionSurface(inspectionCanvas, {
     autoStart: false,
     frame: inspectionFrame(),
@@ -285,6 +344,11 @@ async function main(): Promise<void> {
     autoFrameIntervalMs: autoSubmission.frameIntervalMs,
     autoStartRenderCount: autoSubmission.renderSequence - renderSequenceBeforeAutoFrame,
     backendSubmissionDurationMs: autoSubmission.backendSubmissionDurationMs,
+    batchedStaticPickHandle: batchedStaticPick.hint?.handle ?? null,
+    batchedStaticRecreateStatistics,
+    batchedStaticResetStatistics,
+    batchedStaticStatistics,
+    batchedStaticDisposed,
     billboardText: overlays.querySelector('[data-rusty-billboard-handle]')?.textContent ?? null,
     context: context instanceof WebGL2RenderingContext ? 'webgl2' : 'webgl',
     explicitFrameIntervalMs: explicitTiming.frameIntervalMs,
@@ -396,6 +460,35 @@ function staticMeshLifetimeFrame(): RenderFrameDiff {
           metadata: metadata('static-lifetime-initial'),
         },
       },
+    ],
+  };
+}
+
+function batchedStaticMeshFrame(): RenderFrameDiff {
+  return {
+    schemaVersion: 1,
+    ops: [
+      {
+        op: 'defineStaticMesh',
+        asset: {
+          asset: 'mesh/static-batch-proof',
+          payload: trianglePayload(),
+          materialSlots: [{ slot: 0, material: 'material/static-batch-proof' }],
+          collision: { kind: 'visualOnly' },
+        },
+      },
+      ...Array.from({ length: 300 }, (_, index) => ({
+        op: 'createStaticMeshInstance' as const,
+        handle: renderHandle(1_000 + index),
+        parent: null,
+        instance: {
+          asset: 'mesh/static-batch-proof',
+          transform: identity([0, 1.62, -2], [1, 1, 1]),
+          visible: true,
+          materialOverrides: [],
+          metadata: metadata(`static-batch-${String(index)}`, 1_000 + index),
+        },
+      })),
     ],
   };
 }

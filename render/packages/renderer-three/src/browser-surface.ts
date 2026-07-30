@@ -527,13 +527,20 @@ export function pickProjectedObject(
   raycaster.far = request.maxDistance ?? Number.POSITIVE_INFINITY;
   const intersections = raycaster.intersectObjects(renderer.scene.children, true);
   for (const intersection of intersections) {
-    const identity = renderer.projectionIdentityForObject(intersection.object);
+    const identity = renderer.projectionIdentityForObject(
+      intersection.object,
+      intersection.instanceId,
+    );
     if (identity === undefined || !pickIdentityMatches(identity, request.filter)) {
       continue;
     }
     const worldNormal = intersection.face?.normal.clone() ?? new THREE.Vector3(0, 0, 0);
-    if (intersection.face !== null) {
-      worldNormal.transformDirection(intersection.object.matrixWorld);
+    if (intersection.face !== null && intersection.face !== undefined) {
+      worldNormal.copy(renderer.projectionWorldNormalForObject(
+        intersection.object,
+        intersection.instanceId,
+        intersection.face.normal,
+      ));
     }
     return {
       diagnostics: [],

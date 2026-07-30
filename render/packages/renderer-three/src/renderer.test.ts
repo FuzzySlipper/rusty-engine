@@ -1118,6 +1118,17 @@ void test('voxel-object instances share frame meshes and swap frames without han
   const firstMesh = renderer.objectFor(first) as THREE.Mesh;
   const secondMesh = renderer.objectFor(second) as THREE.Mesh;
   assert.equal(firstMesh.geometry, secondMesh.geometry);
+  const initialBatch = renderer.scene.children
+    .flatMap((object) => {
+      const found: THREE.InstancedMesh[] = [];
+      object.traverse((child) => {
+        if (child instanceof THREE.InstancedMesh) found.push(child);
+      });
+      return found;
+    })[0];
+  assert.ok(initialBatch instanceof THREE.InstancedMesh);
+  assert.equal(initialBatch.count, 2);
+  assert.equal(renderer.projectionIdentityForObject(initialBatch, 1)?.handle, second);
   const original = firstMesh.geometry;
 
   renderer.applyDiff({ op: 'setVoxelObjectFrame', handle: first, frame: 1 });
@@ -1129,6 +1140,22 @@ void test('voxel-object instances share frame meshes and swap frames without han
     handle: first, asset: 'voxel-object/runner', frame: 1, frameId: 'walk/0', mesh: 1,
   });
   assert.equal(renderer.pickMesh(first)?.provenance, 'voxelObject');
+  assert.equal(
+    renderer.scene.children.some((object) => {
+      let found = false;
+      object.traverse((child) => { found ||= child instanceof THREE.InstancedMesh; });
+      return found;
+    }),
+    false,
+    'different voxel frames keep their incompatible geometries as ordinary meshes',
+  );
+  renderer.applyDiff({ op: 'setVoxelObjectFrame', handle: second, frame: 1 });
+  const replacementBatches: THREE.InstancedMesh[] = [];
+  renderer.scene.traverse((object) => {
+    if (object instanceof THREE.InstancedMesh) replacementBatches.push(object);
+  });
+  assert.equal(replacementBatches.length, 1);
+  assert.equal(replacementBatches[0]?.count, 2);
 });
 
 void test('voxel-object definitions consume the content-addressed mesh resource path', () => {
@@ -1184,6 +1211,187 @@ void test('two instances share one BufferGeometry and the asset is reference-cou
   const b = r.objectFor(renderHandle(2)) as THREE.Mesh;
   assert.equal(a.geometry, b.geometry, 'instances must share one geometry');
   assert.equal(r.instanceCountFor('mesh/crate'), 2);
+});
+
+void test('compatible repeated static instances batch without losing handle identity or lifecycle', () => {
+  const renderer = new ThreeRenderer();
+  const instanceCount = 300;
+  renderer.applyFrame({
+    schemaVersion: 1,
+    ops: [
+      { op: 'defineStaticMesh', asset: crateAsset() },
+      ...Array.from({ length: instanceCount }, (_, index): RenderDiff => ({
+        op: 'createStaticMeshInstance',
+        handle: renderHandle(1_000 + index),
+        parent: null,
+        instance: {
+          ...crateInstance(),
+          transform: {
+            translation: [index % 30, 0, Math.floor(index / 30)],
+            rotation: [0, 0, 0, 1],
+            scale: [1, 1, 1],
+          },
+          metadata: {
+            sourceEntity: 10_000 + index,
+            sourceSceneNode: null,
+            tags: ['repeated'],
+            label: `crate-${String(index)}`,
+          },
+        },
+      })),
+    ],
+  });
+
+  const batches: THREE.InstancedMesh[] = [];
+  renderer.scene.traverse((object) => {
+    if (object instanceof THREE.InstancedMesh) batches.push(object);
+  });
+  assert.equal(batches.length, 1);
+  const batch = batches[0]!;
+  assert.equal(batch.count, instanceCount);
+  assert.equal(renderer.handleCount, instanceCount);
+  assert.equal(renderer.objectFor(renderHandle(1_127)) instanceof THREE.Mesh, true);
+  assert.equal(renderer.objectFor(renderHandle(1_127)) instanceof THREE.InstancedMesh, false);
+  assert.deepEqual(renderer.projectionIdentityForObject(batch, 127), {
+    handle: renderHandle(1_127),
+    layer: 'scene',
+    metadata: {
+      sourceEntity: 10_127,
+      sourceSceneNode: null,
+      tags: ['repeated'],
+      label: 'crate-127',
+    },
+  });
+
+  renderer.applyFrame({
+    schemaVersion: 1,
+    ops: [{
+      op: 'update',
+      handle: renderHandle(1_127),
+      transform: {
+        translation: [44, 2, 3],
+        rotation: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+      },
+      material: null,
+      visible: null,
+      metadata: null,
+    }],
+  });
+  const currentBatches: THREE.InstancedMesh[] = [];
+  renderer.scene.traverse((object) => {
+    if (object instanceof THREE.InstancedMesh) currentBatches.push(object);
+  });
+  assert.equal(currentBatches[0], batch, 'transform-only updates reuse the batch allocation');
+  const matrix = new THREE.Matrix4();
+  batch.getMatrixAt(127, matrix);
+  assert.deepEqual(new THREE.Vector3().setFromMatrixPosition(matrix).toArray(), [44, 2, 3]);
+
+  let disposed = false;
+  batch.addEventListener('dispose', () => { disposed = true; });
+  renderer.applyFrame({
+    schemaVersion: 1,
+    ops: Array.from({ length: instanceCount - 1 }, (_, index): RenderDiff => ({
+      op: 'destroy',
+      handle: renderHandle(1_000 + index),
+    })),
+  });
+  assert.equal(disposed, true, 'a no-longer-useful batch releases its instance buffer');
+  assert.equal(renderer.has(renderHandle(1_299)), true);
+  assert.equal(renderer.objectFor(renderHandle(1_299))?.layers.test(new THREE.Layers()), true);
+  assert.equal(renderer.instanceCountFor('mesh/crate'), 1);
+  renderer.dispose();
+  assert.equal(renderer.handleCount, 0);
+  assert.equal(renderer.resourceStatistics().geometryResourceCount, 0);
+});
+
+void test('batch admission excludes invisible, overridden, reflected, and non-world instances', () => {
+  const renderer = new ThreeRenderer();
+  renderer.applyFrame({
+    schemaVersion: 1,
+    ops: [
+      { op: 'defineStaticMesh', asset: crateAsset() },
+      {
+        op: 'create',
+        handle: renderHandle(1),
+        parent: null,
+        node: {
+          ...cubeNode('viewmodel-parent'),
+          geometry: { kind: 'group' },
+          layer: 'viewmodel',
+        },
+      },
+      {
+        op: 'createStaticMeshInstance',
+        handle: renderHandle(2),
+        parent: null,
+        instance: crateInstance(),
+      },
+      {
+        op: 'createStaticMeshInstance',
+        handle: renderHandle(3),
+        parent: null,
+        instance: {
+          ...crateInstance(),
+          transform: {
+            translation: [2, 0, 0],
+            rotation: [0, 0, 0, 1],
+            scale: [1, 1, 1],
+          },
+        },
+      },
+      {
+        op: 'createStaticMeshInstance',
+        handle: renderHandle(4),
+        parent: null,
+        instance: { ...crateInstance(), visible: false },
+      },
+      {
+        op: 'createStaticMeshInstance',
+        handle: renderHandle(5),
+        parent: null,
+        instance: crateInstance('mesh/crate', [{ slot: 1, material: 'material/red' }]),
+      },
+      {
+        op: 'createStaticMeshInstance',
+        handle: renderHandle(6),
+        parent: null,
+        instance: {
+          ...crateInstance(),
+          transform: {
+            translation: [4, 0, 0],
+            rotation: [0, 0, 0, 1],
+            scale: [-1, 1, 1],
+          },
+        },
+      },
+      {
+        op: 'createStaticMeshInstance',
+        handle: renderHandle(7),
+        parent: renderHandle(1),
+        instance: crateInstance(),
+      },
+    ],
+  });
+
+  const batches: THREE.InstancedMesh[] = [];
+  renderer.scene.traverse((object) => {
+    if (object instanceof THREE.InstancedMesh) batches.push(object);
+  });
+  assert.equal(batches.length, 1);
+  assert.equal(batches[0]?.count, 2);
+  assert.deepEqual(
+    [0, 1].map((index) => renderer.projectionIdentityForObject(batches[0]!, index)?.handle),
+    [renderHandle(2), renderHandle(3)],
+  );
+  for (const handle of [4, 5, 6, 7]) {
+    const object = renderer.objectFor(renderHandle(handle));
+    assert.equal(object?.layers.test(new THREE.Layers()), true);
+  }
+  assert.equal(
+    renderer.projectionIdentityForObject(renderer.objectFor(renderHandle(7))!)?.layer,
+    'viewmodel',
+  );
 });
 
 void test('static mesh definitions survive zero instances and dispose only on redefine or renderer disposal', () => {
