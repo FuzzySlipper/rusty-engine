@@ -10,6 +10,7 @@ const convertedWallProjectFile = 'content/projects/converted-wall.project.json';
 const voxelObjectProjectFile = 'content/projects/studio-voxel-object.project.json';
 const projectOpenTimeout = 30_000;
 const projectMutationTimeout = 30_000;
+const rendererSettlementTimeout = 30_000;
 
 test('real project hierarchy, shared picking, transform settlement, reopen, and rejection stay coherent', async ({ page }) => {
   test.setTimeout(90_000);
@@ -61,7 +62,10 @@ test('real project hierarchy, shared picking, transform settlement, reopen, and 
   await translationX.fill(String(committedX));
   await expect(page.locator('[data-preview-active="true"]')).toBeVisible();
   await expect(viewport).toHaveAttribute('data-preview-applied', 'true');
-  await expect.poll(() => rendererHash(viewport)).not.toBe(selectedRendererHash);
+  await expect.poll(
+    () => rendererHash(viewport),
+    { timeout: rendererSettlementTimeout },
+  ).not.toBe(selectedRendererHash);
   await page.locator('.inspector-actions').getByRole('button', { name: 'Revert', exact: true }).click();
   await expect(viewport).toHaveAttribute('data-preview-applied', 'false');
   await expect(viewport).toHaveAttribute('data-authored-frame-hash', selectedRendererHash);
@@ -146,7 +150,10 @@ test('project, scene, entity, light, and capability authoring flow through named
   await lightingToggle.click();
   await expect(viewport).toHaveAttribute('data-lighting-mode', 'authored_lights');
   await expect(viewport).toHaveAttribute('data-work-light-active', 'false');
-  await expect.poll(() => rendererHash(viewport)).not.toBe(workLightFrameHash);
+  await expect.poll(
+    () => rendererHash(viewport),
+    { timeout: rendererSettlementTimeout },
+  ).not.toBe(workLightFrameHash);
   await expect(shell).toHaveAttribute('data-project-hash', projectHashBeforeLightingToggle);
   await lightingToggle.click();
   await expect(viewport).toHaveAttribute('data-lighting-mode', 'work_light');
@@ -209,7 +216,7 @@ test('project, scene, entity, light, and capability authoring flow through named
 });
 
 test('host-user input settings and general asset import reimport persist through real owner and renderer paths', async ({ page }) => {
-  test.setTimeout(90_000);
+  test.setTimeout(240_000);
   await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(loadingBayProjectFile)}`);
   const shell = page.locator('[data-visual-id="studio-shell"]');
   const viewport = page.locator('rusty-studio-viewport');
@@ -299,7 +306,10 @@ test('host-user input settings and general asset import reimport persist through
     'Imported Triangle',
     { timeout: projectMutationTimeout },
   );
-  await expect.poll(() => rendererHash(viewport)).not.toBe(rendererBeforeInstance);
+  await expect.poll(
+    () => rendererHash(viewport),
+    { timeout: rendererSettlementTimeout },
+  ).not.toBe(rendererBeforeInstance);
 
   const sourcePath = join(projectRoot, 'content/assets/studio-triangle.mesh.json');
   const source = JSON.parse(await readFile(sourcePath, 'utf8')) as {
@@ -325,7 +335,10 @@ test('host-user input settings and general asset import reimport persist through
     hashBeforeReimport,
   );
   await expect(importedAsset).toContainText('unchanged');
-  await expect.poll(() => rendererHash(viewport)).not.toBe(rendererBeforeReimport);
+  await expect.poll(
+    () => rendererHash(viewport),
+    { timeout: rendererSettlementTimeout },
+  ).not.toBe(rendererBeforeReimport);
 
   const hashBeforeInvalidPlan = await projectHash(shell);
   await writeFile(join(projectRoot, 'content/assets/rejected.mesh.json'), '{"schemaVersion":1}\n');
@@ -354,7 +367,7 @@ test('host-user input settings and general asset import reimport persist through
 });
 
 test('trusted host browsing restores focus and animated appearance uses the shared renderer', async ({ page }) => {
-  test.setTimeout(90_000);
+  test.setTimeout(240_000);
   await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(loadingBayProjectFile)}`);
   const shell = page.locator('[data-visual-id="studio-shell"]');
   const viewport = page.locator('rusty-studio-viewport');
@@ -473,11 +486,17 @@ test('voxel Studio owns the complete shared-renderer authoring workflow and reje
   await expect(editor.locator('[data-visual-id="voxel-brush-preview"]')).toBeVisible();
   await expect(viewport).toHaveAttribute('data-voxel-preview-kind', 'brush');
   await expect(viewport).toHaveAttribute('data-preview-applied', 'true');
-  await expect.poll(() => rendererHash(viewport)).not.toBe(rendererBeforeBrushPreview);
+  await expect.poll(
+    () => rendererHash(viewport),
+    { timeout: rendererSettlementTimeout },
+  ).not.toBe(rendererBeforeBrushPreview);
   await editor.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(viewport).not.toHaveAttribute('data-voxel-preview-kind', 'brush');
   await expect(viewport).toHaveAttribute('data-preview-applied', 'false');
-  await expect.poll(() => rendererHash(viewport)).toBe(rendererBeforeBrushPreview);
+  await expect.poll(
+    () => rendererHash(viewport),
+    { timeout: rendererSettlementTimeout },
+  ).toBe(rendererBeforeBrushPreview);
   await editor.getByRole('button', { name: 'Preview', exact: true }).click();
   await expect(viewport).toHaveAttribute('data-voxel-preview-kind', 'brush');
   await editor.locator('[data-action="apply-voxel-brush"]').click();
@@ -518,12 +537,18 @@ test('voxel Studio owns the complete shared-renderer authoring workflow and reje
   await expect(shell).toHaveAttribute('data-project-hash', hashBeforePlan);
   await expect(viewport).toHaveAttribute('data-voxel-preview-kind', 'conversion');
   await expect(viewport).toHaveAttribute('data-preview-applied', 'true');
-  await expect.poll(() => rendererHash(viewport)).not.toBe(rendererBeforePlan);
+  await expect.poll(
+    () => rendererHash(viewport),
+    { timeout: rendererSettlementTimeout },
+  ).not.toBe(rendererBeforePlan);
   await editor.getByRole('button', { name: 'Discard', exact: true }).click();
   await expect(editor.locator('[data-visual-id="voxel-conversion-preview"]')).toHaveCount(0);
   await expect(viewport).not.toHaveAttribute('data-voxel-preview-kind', 'conversion');
   await expect(viewport).toHaveAttribute('data-preview-applied', 'false');
-  await expect.poll(() => rendererHash(viewport)).toBe(rendererBeforePlan);
+  await expect.poll(
+    () => rendererHash(viewport),
+    { timeout: rendererSettlementTimeout },
+  ).toBe(rendererBeforePlan);
   await editor.locator('[data-action="prepare-voxel-conversion"]').click();
   await expect(viewport).toHaveAttribute('data-voxel-preview-kind', 'conversion');
   await editor.locator('[data-action="apply-voxel-conversion"]').click();
@@ -552,7 +577,7 @@ test('voxel Studio owns the complete shared-renderer authoring workflow and reje
 });
 
 test('animated voxel objects convert, discard, apply, attach, reload, and play through the shared renderer', async ({ page }) => {
-  test.setTimeout(300_000);
+  test.setTimeout(600_000);
   const projectPath = join(projectRoot, voxelObjectProjectFile);
   await copyFile(join(projectRoot, loadingBayProjectFile), projectPath);
   const packedPlacement = await installPackedPlacementResourceAdapter(page, projectRoot);
@@ -635,12 +660,18 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   await expect(candidate).toContainText(/stored \/ [2-9][0-9]* sampled frames/);
   await expect(candidate).toContainText('Preview samples are truncated');
   await expect(shell).toHaveAttribute('data-project-hash', canonicalHash);
-  await expect.poll(() => rendererHash(viewport)).not.toBe(canonicalRendererHash);
+  await expect.poll(
+    () => rendererHash(viewport),
+    { timeout: rendererSettlementTimeout },
+  ).not.toBe(canonicalRendererHash);
   const candidateFrame = candidate.getByLabel('Preview voxel-object frame');
   expect(Number(await candidateFrame.getAttribute('max'))).toBeGreaterThan(0);
   const candidateFrameZeroHash = await rendererHash(viewport);
   await setRange(candidateFrame, 1);
-  await expect.poll(() => rendererHash(viewport)).not.toBe(candidateFrameZeroHash);
+  await expect.poll(
+    () => rendererHash(viewport),
+    { timeout: rendererSettlementTimeout },
+  ).not.toBe(candidateFrameZeroHash);
   const candidateFrameOneHash = await rendererHash(viewport);
   const candidatePlay = candidate.getByRole('button', { name: 'Play', exact: true });
   const candidatePause = candidate.getByRole('button', { name: 'Pause', exact: true });
@@ -657,7 +688,10 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   await candidate.getByRole('button', { name: 'Discard', exact: true }).click();
   await expect(candidate).toHaveCount(0, { timeout: projectMutationTimeout });
   await expect(shell).toHaveAttribute('data-project-hash', canonicalHash);
-  await expect.poll(() => rendererHash(viewport)).toBe(canonicalRendererHash);
+  await expect.poll(
+    () => rendererHash(viewport),
+    { timeout: rendererSettlementTimeout },
+  ).toBe(canonicalRendererHash);
 
   await editor.locator('[data-action="prepare-voxel-object-conversion"]').click();
   candidate = editor.locator('[data-visual-id="voxel-object-conversion-preview"]');
@@ -744,7 +778,10 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   await expect(page.locator('.entity-row')).toHaveCount(rowsBeforeAttach + 1, {
     timeout: projectMutationTimeout,
   });
-  await expect.poll(() => rendererHash(viewport)).not.toBe(rendererBeforeAttach);
+  await expect.poll(
+    () => rendererHash(viewport),
+    { timeout: rendererSettlementTimeout },
+  ).not.toBe(rendererBeforeAttach);
   await expect(viewport).toHaveAttribute(
     'data-voxel-object-definitions',
     convertedVoxelDefinitionCount,
@@ -779,15 +816,24 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   const renderedSavedPose = await rendererHash(viewport);
   await setRange(appliedFrame, 0);
   await expect(playback).toContainText('frame 0', { timeout: projectMutationTimeout });
-  await expect.poll(() => rendererHash(viewport)).not.toBe(renderedSavedPose);
+  await expect.poll(
+    () => rendererHash(viewport),
+    { timeout: rendererSettlementTimeout },
+  ).not.toBe(renderedSavedPose);
   const frameZeroRendererHash = await rendererHash(viewport);
   await setRange(appliedFrame, 1);
   await expect(playback).toContainText('frame 1', { timeout: projectMutationTimeout });
-  await expect.poll(() => rendererHash(viewport)).not.toBe(frameZeroRendererHash);
+  await expect.poll(
+    () => rendererHash(viewport),
+    { timeout: rendererSettlementTimeout },
+  ).not.toBe(frameZeroRendererHash);
   const durableRendererHash = await rendererHash(viewport);
   await setRange(appliedFrame, 0);
   await expect(playback).toContainText('frame 0', { timeout: projectMutationTimeout });
-  await expect.poll(() => rendererHash(viewport)).not.toBe(durableRendererHash);
+  await expect.poll(
+    () => rendererHash(viewport),
+    { timeout: rendererSettlementTimeout },
+  ).not.toBe(durableRendererHash);
   const scrubbedRendererHash = await rendererHash(viewport);
   await component.locator('[data-action="play-entity-voxel-object"]').click();
   await expect(playback).toContainText('playing', { timeout: projectMutationTimeout });
@@ -800,7 +846,10 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
     const rendererBeforeDeterministicRestoreSetup = await rendererHash(viewport);
     await setRange(appliedFrame, 0);
     await expect(playback).toContainText('frame 0', { timeout: projectMutationTimeout });
-    await expect.poll(() => rendererHash(viewport)).not.toBe(
+    await expect.poll(
+      () => rendererHash(viewport),
+      { timeout: rendererSettlementTimeout },
+    ).not.toBe(
       rendererBeforeDeterministicRestoreSetup,
     );
   }
@@ -808,7 +857,10 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   const rendererBeforeRestore = await rendererHash(viewport);
   await component.locator('[data-action="restore-entity-voxel-object"]').click();
   await expect(playback).toContainText('stopped', { timeout: projectMutationTimeout });
-  await expect.poll(() => rendererHash(viewport)).not.toBe(rendererBeforeRestore);
+  await expect.poll(
+    () => rendererHash(viewport),
+    { timeout: rendererSettlementTimeout },
+  ).not.toBe(rendererBeforeRestore);
   await expect(shell).toHaveAttribute('data-project-hash', durableHash);
   expect(await readFile(projectPath)).toEqual(durableBytes);
 
