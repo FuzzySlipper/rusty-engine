@@ -133,6 +133,19 @@ export class AnimatedMeshRegistry {
         `defineAnimatedMesh: asset ${asset.asset} is in use by ${existing.refCount} instance(s)`,
       );
     }
+    const resource = this.#validatedResource(asset);
+    const scene = createAnimatedMeshAssetScene(resource.scene);
+    if (existing) {
+      disposeAnimatedMeshAssetScene(existing.scene);
+    }
+    this.#assets.set(asset.asset, { asset, resource, scene, refCount: 0 });
+  }
+
+  validateDefinition(asset: AnimatedMeshAsset): void {
+    this.#validatedResource(asset);
+  }
+
+  #validatedResource(asset: AnimatedMeshAsset): AnimatedMeshResource {
     if (asset.runtimeFormat !== 'glb') {
       throw new AnimatedMeshApplyError(`defineAnimatedMesh: unsupported runtime format ${asset.runtimeFormat}`);
     }
@@ -146,11 +159,7 @@ export class AnimatedMeshRegistry {
       );
     }
     assertClipDescriptors(asset, resource);
-    const scene = createAnimatedMeshAssetScene(resource.scene);
-    if (existing) {
-      disposeAnimatedMeshAssetScene(existing.scene);
-    }
-    this.#assets.set(asset.asset, { asset, resource, scene, refCount: 0 });
+    return resource;
   }
 
   create(handle: RenderHandle, instance: AnimatedMeshInstanceDescriptor): AnimatedMeshInstanceRecord {

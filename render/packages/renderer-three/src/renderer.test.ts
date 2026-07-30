@@ -2200,6 +2200,18 @@ void test('animated instances reuse asset-scoped geometry and materials with ind
   const sourceGeometry = new THREE.BoxGeometry(1, 1, 1);
   const sourceMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff });
   const sourceTexture = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+  let geometryCloneCount = 0;
+  let materialCloneCount = 0;
+  const cloneSourceGeometry = sourceGeometry.clone.bind(sourceGeometry);
+  const cloneSourceMaterial = sourceMaterial.clone.bind(sourceMaterial);
+  sourceGeometry.clone = () => {
+    geometryCloneCount += 1;
+    return cloneSourceGeometry();
+  };
+  sourceMaterial.clone = () => {
+    materialCloneCount += 1;
+    return cloneSourceMaterial();
+  };
   sourceTexture.needsUpdate = true;
   sourceMaterial.map = sourceTexture;
   const sourceBone = new THREE.Bone();
@@ -2234,6 +2246,8 @@ void test('animated instances reuse asset-scoped geometry and materials with ind
   for (const handle of [renderHandle(4201), renderHandle(4202)]) {
     createInstance(handle);
   }
+  assert.equal(geometryCloneCount, 1);
+  assert.equal(materialCloneCount, 1);
   assert.deepEqual(renderer.resourceStatistics(), {
     renderHandleCount: 2,
     geometryResourceCount: 1,

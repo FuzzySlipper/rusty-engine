@@ -434,9 +434,9 @@ export class ThreeRenderer {
             this.#meshResourceSource,
           ));
         } else if (operation.op === 'defineAnimatedMesh') {
-          // Definition performs all source/hash/clip checks without creating a
-          // live instance, so it is safe to run before the retained mutation.
-          new AnimatedMeshRegistry(this.#animatedMeshSource).define(operation.asset);
+          // Validate the exact source/hash/clip contract without allocating the
+          // asset-scoped render template before the retained mutation.
+          this.#animatedMeshes.validateDefinition(operation.asset);
         } else if (
           operation.op === 'createAnimatedMeshInstance'
           && operation.instance.materialOverrides.length > 0
