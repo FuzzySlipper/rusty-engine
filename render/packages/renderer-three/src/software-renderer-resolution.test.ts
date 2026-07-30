@@ -4,9 +4,9 @@ import test from 'node:test';
 import { resolveRendererPixelRatio } from './software-renderer-resolution.js';
 
 void test('software rendering bounds backing-buffer work without changing smaller requests', () => {
-  assert.equal(resolveRendererPixelRatio(2, 'software'), 0.375);
-  assert.equal(resolveRendererPixelRatio(1, 'software'), 0.375);
-  assert.equal(resolveRendererPixelRatio(0.25, 'software'), 0.25);
+  assert.equal(resolveRendererPixelRatio(2, 'software'), 0.25);
+  assert.equal(resolveRendererPixelRatio(1, 'software'), 0.25);
+  assert.equal(resolveRendererPixelRatio(0.125, 'software'), 0.125);
 });
 
 void test('accelerated and unknown renderers preserve the requested ratio', () => {

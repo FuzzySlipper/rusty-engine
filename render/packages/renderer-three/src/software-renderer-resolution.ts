@@ -1,6 +1,6 @@
 import type { RendererGpuSubmissionClass } from './gpu-submission-duty.js';
 
-const SOFTWARE_RENDERER_PIXEL_RATIO_CEILING = 0.375;
+const SOFTWARE_RENDERER_PIXEL_RATIO_CEILING = 0.25;
 
 /**
  * Resolve the backing-buffer ratio owned by the concrete browser backend.

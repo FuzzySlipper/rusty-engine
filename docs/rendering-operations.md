@@ -242,7 +242,8 @@ Reading it never polls, submits, or starts another loop. Explicit
 semantics.
 
 The browser backend additionally caps a positively identified software rasterizer's backing-buffer
-ratio at `0.375`. This reduces the cost of the first complete submission as well as later camera
+ratio at `0.25`, bounding requests at or above one device pixel per CSS pixel to one-sixteenth of
+the CSS pixel count. This reduces the cost of the first complete submission as well as later camera
 frames; scheduling alone cannot yield CPU time already consumed by one expensive raster. The CSS
 viewport, camera projection, normalized picking, retained content, and lifecycle remain unchanged,
 and lower caller requests are preserved. Accelerated and unknown renderers retain the requested
