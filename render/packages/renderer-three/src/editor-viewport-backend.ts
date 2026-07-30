@@ -222,14 +222,20 @@ export function mountRendererEditorBackend(
       ? 0
       : Math.min(0.05, Math.max(0, (timeMs - lastRenderTimeMs) / 1000));
     lastRenderTimeMs = timeMs;
-    webgl.info.reset();
-    renderEditorViewportFrame(webgl, camera, gridProjection.scene, channels, deltaSeconds);
-    return Object.freeze({
-      schemaVersion: 1,
-      drawCallCount: webgl.info.render.calls,
-      triangleCount: webgl.info.render.triangles,
-      ...channels.resourceStatistics(),
-    });
+    const previousAutoReset = webgl.info.autoReset;
+    webgl.info.autoReset = false;
+    try {
+      webgl.info.reset();
+      renderEditorViewportFrame(webgl, camera, gridProjection.scene, channels, deltaSeconds);
+      return Object.freeze({
+        schemaVersion: 1,
+        drawCallCount: webgl.info.render.calls,
+        triangleCount: webgl.info.render.triangles,
+        ...channels.resourceStatistics(),
+      });
+    } finally {
+      webgl.info.autoReset = previousAutoReset;
+    }
   };
 
   const tick = (timeMs: number): void => {

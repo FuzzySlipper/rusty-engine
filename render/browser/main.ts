@@ -39,6 +39,7 @@ interface BrowserProof {
   readonly explicitFrameIntervalMs: number | null;
   readonly hostSurfaceKind: string;
   readonly inspectionGridLines: number | null;
+  readonly inspectionRendererStatistics: RendererSurfaceStatisticsSample;
   readonly inspectionSurfaceKind: string;
   readonly lightCount: number;
   readonly particleElementCount: number;
@@ -227,6 +228,7 @@ async function main(): Promise<void> {
     pixelRatio: 1,
   });
   inspection.renderOnce(16);
+  const inspectionSubmission = inspection.submission();
 
   const context = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
   if (context === null || context.isContextLost()) throw new Error('real WebGL context is unavailable');
@@ -252,6 +254,7 @@ async function main(): Promise<void> {
     explicitFrameIntervalMs: explicitTiming.frameIntervalMs,
     hostSurfaceKind: surface.kind,
     inspectionGridLines: inspection.readout().grid?.renderedLineCount ?? null,
+    inspectionRendererStatistics: inspectionSubmission.statistics,
     inspectionSurfaceKind: inspection.kind,
     lightCount: snapshot.match(/kind light\//gu)?.length ?? 0,
     particleElementCount: particleSink.activeCount,

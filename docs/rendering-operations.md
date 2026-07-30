@@ -234,6 +234,11 @@ automatic-loop sample from being attributed to newly accepted content. Selection
 changes retain the authored generation and publish `presentation`; the legacy generation-only
 `frameApplied` output remains limited to accepted authored-generation changes.
 
+The editor backend counts one complete submission across its runtime, authored, procedural-grid,
+and overlay render passes. Three's per-render automatic statistics reset is disabled only while
+that explicit multi-pass submission is measured, then restored. An empty final overlay therefore
+cannot erase the visible authored and grid work from the reported draw and triangle counts.
+
 `StudioShellComponent` forwards the child's `frameSubmitted` event unchanged through its own public
 output. Product composition roots therefore observe the generation-associated renderer sample
 without reaching through Angular internals, mounting another viewport, or creating a second

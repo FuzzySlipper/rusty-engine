@@ -36,6 +36,12 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.hostSurfaceKind).toBe('rusty_renderer_surface.v1');
   expect(proof.inspectionSurfaceKind).toBe('rusty_renderer_inspection_surface.v1');
   expect(proof.inspectionGridLines).toBeGreaterThan(0);
+  expect(proof.inspectionRendererStatistics.drawCallCount).toEqual({
+    scope: 'perSubmission', status: 'available', value: 2,
+  });
+  expect(proof.inspectionRendererStatistics.triangleCount).toEqual({
+    scope: 'perSubmission', status: 'available', value: 12,
+  });
   expect(proof.audioApplied).toBe(1);
   expect(proof.billboardText).toBe('Shared renderer host');
   expect(proof.particleElementCount).toBe(2);
