@@ -480,10 +480,11 @@ latency as effective work. A valid timer result on positively identified acceler
 authoritative for execution duration, so delayed query-result polling does not inflate GPU work;
 unknown renderers and timing fallback paths retain one ordinary polling interval before wall
 latency adds pressure. The accelerated fast path retains 120 Hz for four-millisecond work and 60 Hz
-for eight-millisecond work. Its prospective deadline begins when the enclosing timer query begins,
-not after the synchronous `renderOnce` call returns: work already enclosed by the timer is not
-charged a second time after CPU submission. Software, unknown, and timing-fallback deadlines remain
-completion-wall-based. Every nonzero measured submission
+for eight-millisecond work. Its prospective deadline is expressed in the accepted animation-frame
+submission clock, rather than the later callback-observation wall clock: callback jitter cannot
+turn a display-rate source into skipped presentation intervals, and work already enclosed by the
+timer is not charged a second time after CPU submission. Software, unknown, and timing-fallback
+deadlines remain completion-wall-based. Every nonzero measured submission
 receives at least equal completion headroom, so exceptionally slow work cannot silently exceed
 fifty-percent automatic duty; up to 100 ms of additional progressive headroom lowers ordinary slow
 work toward twenty percent without adding an unbounded extra delay. Software rendering therefore

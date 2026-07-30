@@ -431,7 +431,7 @@ function mountPreparedRendererSurface(
         backendSurface.automaticSubmissionPacing(),
       );
     } else {
-      const ready = backendSurface.automaticSubmissionReady();
+      const ready = backendSurface.automaticSubmissionReady(timeMs);
       automaticSubmissionAdmission.record(
         timeMs,
         ready ? 'admitted' : 'backendBlocked',

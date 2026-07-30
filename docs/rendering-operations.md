@@ -231,8 +231,9 @@ occupies browser CPU. The Three backend therefore classifies the concrete WebGL 
 a positively identified software renderer uses all observed completion wall latency as effective
 work. A valid timer result on positively identified accelerated hardware is authoritative for
 execution duration, so delayed query-result polling does not inflate GPU work. The accelerated
-prospective deadline is anchored when the enclosing timer query begins, rather than after the
-synchronous submission returns; this avoids charging already enclosed work twice. Unknown renderers
+prospective deadline is anchored to the accepted animation-frame submission timestamp, rather than
+the later callback-observation wall clock; this avoids both charging already enclosed work twice
+and skipping a display interval because callback jitter changed between frames. Unknown renderers
 and timing fallback paths retain one ordinary 60 Hz polling allowance before wall latency
 contributes. Every nonzero effective duration receives at least equal headroom, so
 even a seconds-long software submission cannot exceed fifty-percent automatic duty. Up to 100 ms

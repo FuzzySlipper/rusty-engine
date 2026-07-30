@@ -59,6 +59,39 @@ void test('accelerated measured deadline starts with enclosed work rather than d
   assert.equal(duty.ready(), true);
 });
 
+void test('accelerated admission uses the RAF submission clock instead of callback-observation jitter', () => {
+  const driver = new FakeTimerDriver();
+  const duty = new RendererGpuSubmissionDuty(driver, {
+    maximumPendingMeasurements: 8,
+    rendererClass: 'accelerated',
+  });
+
+  // The stable presentation clock says this frame belongs to 100 ms, while
+  // JavaScript happens to observe and submit it much later on the wall clock.
+  driver.nowMs = 1_000;
+  duty.begin(100);
+  driver.nowMs = 1_004;
+  duty.submitted();
+  driver.result = { durationMs: 8, status: 'complete' };
+  driver.nowMs = 1_050;
+
+  assert.equal(duty.ready(115.9), false);
+  assert.equal(duty.ready(116), true);
+  assert.equal(duty.sample().admittedAtMs, 116);
+  assert.equal(duty.sample().admissionObservedAtMs, 1_050);
+
+  duty.begin(116);
+  driver.nowMs = 1_054;
+  duty.submitted();
+  driver.resultBySequence.set(2, { status: 'pending' });
+  driver.nowMs = 1_100;
+
+  // Wall-clock observation is far beyond the next deadline, but the following
+  // display source has not reached it yet.
+  assert.equal(duty.ready(131.9), false);
+  assert.equal(duty.ready(132), true);
+});
+
 void test('slow completed work progressively lowers automatic GPU duty', () => {
   const driver = new FakeTimerDriver();
   const duty = new RendererGpuSubmissionDuty(driver);
