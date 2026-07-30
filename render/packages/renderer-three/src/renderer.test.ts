@@ -1249,6 +1249,9 @@ void test('compatible repeated static instances batch without losing handle iden
   assert.equal(batches.length, 1);
   const batch = batches[0]!;
   assert.equal(batch.count, instanceCount);
+  assert.equal(batch.frustumCulled, true);
+  assert.ok(batch.boundingBox instanceof THREE.Box3);
+  assert.ok(batch.boundingSphere instanceof THREE.Sphere);
   assert.equal(renderer.handleCount, instanceCount);
   assert.equal(renderer.objectFor(renderHandle(1_127)) instanceof THREE.Mesh, true);
   assert.equal(renderer.objectFor(renderHandle(1_127)) instanceof THREE.InstancedMesh, false);
@@ -1269,7 +1272,7 @@ void test('compatible repeated static instances batch without losing handle iden
       op: 'update',
       handle: renderHandle(1_127),
       transform: {
-        translation: [44, 2, 3],
+        translation: [12, 2, 3],
         rotation: [0, 0, 0, 1],
         scale: [1, 1, 1],
       },
@@ -1285,7 +1288,7 @@ void test('compatible repeated static instances batch without losing handle iden
   assert.equal(currentBatches[0], batch, 'transform-only updates reuse the batch allocation');
   const matrix = new THREE.Matrix4();
   batch.getMatrixAt(127, matrix);
-  assert.deepEqual(new THREE.Vector3().setFromMatrixPosition(matrix).toArray(), [44, 2, 3]);
+  assert.deepEqual(new THREE.Vector3().setFromMatrixPosition(matrix).toArray(), [12, 2, 3]);
 
   let disposed = false;
   batch.addEventListener('dispose', () => { disposed = true; });
@@ -1303,6 +1306,108 @@ void test('compatible repeated static instances batch without losing handle iden
   renderer.dispose();
   assert.equal(renderer.handleCount, 0);
   assert.equal(renderer.resourceStatistics().geometryResourceCount, 0);
+});
+
+void test('compatible static batches are spatially bounded and camera-cull independently', () => {
+  const renderer = new ThreeRenderer();
+  renderer.applyFrame({
+    schemaVersion: 1,
+    ops: [
+      { op: 'defineStaticMesh', asset: crateAsset() },
+      ...[0, 1, 2, 128, 129, 130].map((x, index): RenderDiff => ({
+        op: 'createStaticMeshInstance',
+        handle: renderHandle(2_000 + index),
+        parent: null,
+        instance: {
+          ...crateInstance(),
+          transform: {
+            translation: [x, 0, 0],
+            rotation: [0, 0, 0, 1],
+            scale: [1, 1, 1],
+          },
+          metadata: {
+            sourceEntity: 20_000 + index,
+            sourceSceneNode: null,
+            tags: ['spatial-batch'],
+            label: `spatial-crate-${String(index)}`,
+          },
+        },
+      })),
+    ],
+  });
+
+  const batches: THREE.InstancedMesh[] = [];
+  renderer.scene.traverse((object) => {
+    if (object instanceof THREE.InstancedMesh) batches.push(object);
+  });
+  assert.equal(batches.length, 2);
+  assert.deepEqual(batches.map((batch) => batch.count), [3, 3]);
+  assert.ok(batches.every((batch) => batch.frustumCulled));
+  assert.ok(batches.every((batch) => batch.boundingSphere instanceof THREE.Sphere));
+
+  const nearBatch = batches.find((batch) =>
+    renderer.projectionIdentityForObject(batch, 0)?.handle === renderHandle(2_000));
+  const farBatch = batches.find((batch) =>
+    renderer.projectionIdentityForObject(batch, 0)?.handle === renderHandle(2_003));
+  assert.ok(nearBatch instanceof THREE.InstancedMesh);
+  assert.ok(farBatch instanceof THREE.InstancedMesh);
+
+  const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
+  const frustum = new THREE.Frustum();
+  const projectionView = new THREE.Matrix4();
+  const lookAt = (x: number): void => {
+    camera.position.set(x, 0, 8);
+    camera.lookAt(x, 0, 0);
+    camera.updateMatrixWorld(true);
+    projectionView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    frustum.setFromProjectionMatrix(projectionView);
+  };
+
+  lookAt(0);
+  assert.equal(frustum.intersectsObject(nearBatch), true);
+  assert.equal(frustum.intersectsObject(farBatch), false);
+  lookAt(128);
+  assert.equal(frustum.intersectsObject(nearBatch), false);
+  assert.equal(frustum.intersectsObject(farBatch), true);
+
+  renderer.applyFrame({
+    schemaVersion: 1,
+    ops: [{
+      op: 'update',
+      handle: renderHandle(2_001),
+      transform: {
+        translation: [131, 0, 0],
+        rotation: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+      },
+      material: null,
+      visible: null,
+      metadata: null,
+    }],
+  });
+  const regrouped: THREE.InstancedMesh[] = [];
+  renderer.scene.traverse((object) => {
+    if (object instanceof THREE.InstancedMesh) regrouped.push(object);
+  });
+  assert.deepEqual(regrouped.map((batch) => batch.count), [2, 4]);
+  const regroupedFar = regrouped.find((batch) =>
+    Array.from({ length: batch.count }, (_, index) =>
+      renderer.projectionIdentityForObject(batch, index)?.handle)
+      .includes(renderHandle(2_001)));
+  assert.ok(regroupedFar instanceof THREE.InstancedMesh);
+  const movedIndex = Array.from({ length: regroupedFar.count }, (_, index) =>
+    renderer.projectionIdentityForObject(regroupedFar, index)?.handle)
+    .indexOf(renderHandle(2_001));
+  assert.notEqual(movedIndex, -1);
+  const movedMatrix = new THREE.Matrix4();
+  regroupedFar.getMatrixAt(movedIndex, movedMatrix);
+  assert.deepEqual(
+    new THREE.Vector3().setFromMatrixPosition(movedMatrix).toArray(),
+    [131, 0, 0],
+  );
+  assert.ok(regroupedFar.boundingSphere instanceof THREE.Sphere);
+  renderer.dispose();
+  assert.equal(renderer.handleCount, 0);
 });
 
 void test('batch admission excludes invisible, overridden, reflected, and non-world instances', () => {

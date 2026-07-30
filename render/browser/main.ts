@@ -35,6 +35,7 @@ interface BrowserProof {
   readonly autoStartRenderCount: number;
   readonly backendSubmissionDurationMs: number | null;
   readonly batchedStaticPickHandle: number | null;
+  readonly batchedStaticFarStatistics: RendererSurfaceStatisticsSample;
   readonly batchedStaticRecreateStatistics: RendererSurfaceStatisticsSample;
   readonly batchedStaticResetStatistics: RendererSurfaceStatisticsSample;
   readonly batchedStaticStatistics: RendererSurfaceStatisticsSample;
@@ -257,6 +258,13 @@ async function main(): Promise<void> {
     ray: { kind: 'viewport', point: [0, 0] },
     maxDistance: 20,
   });
+  batchedStaticSurface.setCameraPose({
+    position: [512, 1.62, 8],
+    yawDegrees: 0,
+    pitchDegrees: 0,
+  });
+  batchedStaticSurface.renderOnce(1.25);
+  const batchedStaticFarStatistics = batchedStaticSurface.submission().statistics;
   batchedStaticCanvas.width = 96;
   batchedStaticCanvas.height = 80;
   batchedStaticSurface.resetCamera();
@@ -344,6 +352,7 @@ async function main(): Promise<void> {
     autoFrameIntervalMs: autoSubmission.frameIntervalMs,
     autoStartRenderCount: autoSubmission.renderSequence - renderSequenceBeforeAutoFrame,
     backendSubmissionDurationMs: autoSubmission.backendSubmissionDurationMs,
+    batchedStaticFarStatistics,
     batchedStaticPickHandle: batchedStaticPick.hint?.handle ?? null,
     batchedStaticRecreateStatistics,
     batchedStaticResetStatistics,
@@ -483,7 +492,10 @@ function batchedStaticMeshFrame(): RenderFrameDiff {
         parent: null,
         instance: {
           asset: 'mesh/static-batch-proof',
-          transform: identity([0, 1.62, -2], [1, 1, 1]),
+          transform: identity(
+            [index < 200 ? 0 : 512, 1.62, -2],
+            [1, 1, 1],
+          ),
           visible: true,
           materialOverrides: [],
           metadata: metadata(`static-batch-${String(index)}`, 1_000 + index),

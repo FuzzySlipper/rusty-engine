@@ -197,6 +197,12 @@ interface StaticInstanceBatch {
 const STATIC_INSTANCE_BATCH_LAYER = 31;
 const MAX_STATIC_INSTANCE_BATCH_SIZE = 4_096;
 const MIN_STATIC_INSTANCE_BATCH_SIZE = 2;
+/**
+ * Compatible retained instances batch only within one bounded world-space
+ * cell. Aggregate instance bounds can then participate in ordinary Three
+ * frustum culling without a scene-wide batch keeping distant work visible.
+ */
+const STATIC_INSTANCE_BATCH_CELL_SIZE = 32;
 
 /**
  * A retained Three.js scene driven entirely by render diffs.
@@ -1271,14 +1277,17 @@ export class ThreeRenderer {
       ) {
         continue;
       }
-      const key = staticInstanceCompatibilityKey(entry.object, materials);
+      const key = [
+        staticInstanceCompatibilityKey(entry.object, materials),
+        `cell:${staticInstanceSpatialCellKey(entry.object.matrixWorld)}`,
+      ].join('|');
       const group = candidates.get(key) ?? [];
       group.push({ handle, mesh: entry.object });
       candidates.set(key, group);
     }
 
     const retainedBatchKeys = new Set<string>();
-    for (const [compatibilityKey, group] of candidates.entries()) {
+    for (const [spatialCompatibilityKey, group] of candidates.entries()) {
       if (group.length < MIN_STATIC_INSTANCE_BATCH_SIZE) continue;
       for (
         let offset = 0;
@@ -1287,7 +1296,7 @@ export class ThreeRenderer {
       ) {
         const members = group.slice(offset, offset + MAX_STATIC_INSTANCE_BATCH_SIZE);
         if (members.length < MIN_STATIC_INSTANCE_BATCH_SIZE) continue;
-        const batchKey = `${compatibilityKey}|chunk:${String(
+        const batchKey = `${spatialCompatibilityKey}|chunk:${String(
           Math.floor(offset / MAX_STATIC_INSTANCE_BATCH_SIZE),
         )}`;
         retainedBatchKeys.add(batchKey);
@@ -1306,14 +1315,11 @@ export class ThreeRenderer {
             firstMaterials.length === 1 ? firstMaterials[0]! : firstMaterials,
             members.length,
           );
-          mesh.name = `static-instance-batch:${compatibilityKey}`;
+          mesh.name = `static-instance-batch:${spatialCompatibilityKey}`;
           mesh.castShadow = first.castShadow;
           mesh.receiveShadow = first.receiveShadow;
           mesh.renderOrder = first.renderOrder;
-          // Exact per-instance bounds change with retained transforms. Disabling
-          // frustum culling avoids stale aggregate bounds; ray picking lazily
-          // rebuilds the invalidated bounding sphere below.
-          mesh.frustumCulled = false;
+          mesh.frustumCulled = true;
           mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
           mesh.layers.set(0);
           this.#sceneGroup.add(mesh);
@@ -1332,6 +1338,8 @@ export class ThreeRenderer {
         batch.mesh.instanceMatrix.needsUpdate = true;
         batch.mesh.boundingBox = null;
         batch.mesh.boundingSphere = null;
+        batch.mesh.computeBoundingBox();
+        batch.mesh.computeBoundingSphere();
       }
     }
 
@@ -2448,6 +2456,13 @@ function staticInstanceCompatibilityKey(
     mesh.castShadow ? 'cast' : 'no-cast',
     mesh.receiveShadow ? 'receive' : 'no-receive',
   ].join('|');
+}
+
+function staticInstanceSpatialCellKey(matrixWorld: THREE.Matrix4): string {
+  const { elements } = matrixWorld;
+  return [elements[12]!, elements[13]!, elements[14]!]
+    .map((coordinate) => String(Math.floor(coordinate / STATIC_INSTANCE_BATCH_CELL_SIZE)))
+    .join(',');
 }
 
 function isEffectivelyVisible(object: THREE.Object3D, root: THREE.Object3D): boolean {

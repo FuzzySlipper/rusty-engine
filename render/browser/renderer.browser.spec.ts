@@ -34,7 +34,13 @@ test('shared host realizes retained, presentation, and inspection families in a 
     scope: 'perSubmission', status: 'available', value: 1,
   });
   expect(proof.batchedStaticStatistics.triangleCount).toEqual({
-    scope: 'perSubmission', status: 'available', value: 300,
+    scope: 'perSubmission', status: 'available', value: 200,
+  });
+  expect(proof.batchedStaticFarStatistics.drawCallCount).toEqual({
+    scope: 'perSubmission', status: 'available', value: 1,
+  });
+  expect(proof.batchedStaticFarStatistics.triangleCount).toEqual({
+    scope: 'perSubmission', status: 'available', value: 100,
   });
   expect(proof.batchedStaticStatistics.renderHandleCount).toEqual({
     scope: 'liveResident', status: 'available', value: 300,
