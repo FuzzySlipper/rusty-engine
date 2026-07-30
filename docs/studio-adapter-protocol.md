@@ -262,5 +262,9 @@ not the Angular shell, implements the resulting camera movement, boost, pan, orb
   renderer in Chromium. `.github/workflows/studio-voxel-integration.yml` reproduces the same clean
   checkout; ordinary Studio and provider gates do not inspect a sibling voxel repository.
 
+The demo and voxel reverse-certification lanes are independent. Advancing or proving the demo pin
+does not certify the separately pinned voxel consumer; that consumer remains on its last supported
+Engine and protocol pair until its own public revision and Engine-owned reverse pin advance together.
+
 Ordinary `./scripts/verify.sh` remains Rust/shell-only and does not inspect, build, or require a
 sibling demo checkout.
