@@ -94,18 +94,82 @@ pub struct VoxelObjectHitRegion {
     pub primitive: VoxelObjectCollisionPrimitive,
 }
 
+/// Coarse authored collision geometry in local voxel-cell coordinates.
+///
+/// Primitives use the object's [`VoxelObjectGrid::coordinate_system`]. Schema
+/// 1 currently admits only right-handed Y-up coordinates, so capsules are
+/// always aligned to local +Y. A capsule's `half_height` is half of its
+/// cylindrical axis segment and excludes its hemispherical caps: the segment
+/// endpoints are `center.y +/- half_height`, while the total Y half-extent is
+/// `half_height + radius`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase", tag = "kind")]
 pub enum VoxelObjectCollisionPrimitive {
+    /// Axis-aligned local box. `half_extents` measure from `center` to each
+    /// face in voxel-cell units.
     Box {
         center: [f64; 3],
         half_extents: [f64; 3],
     },
+    /// Local +Y capsule. `half_height` excludes the two radius-sized caps.
     Capsule {
         center: [f64; 3],
         radius: f64,
         half_height: f64,
     },
+}
+
+impl VoxelObjectCollisionPrimitive {
+    /// Capsule cylindrical-axis endpoints in local voxel-cell coordinates.
+    ///
+    /// Returns `None` for boxes.
+    #[must_use]
+    pub fn capsule_axis_endpoints(&self) -> Option<([f64; 3], [f64; 3])> {
+        match self {
+            Self::Capsule {
+                center,
+                half_height,
+                ..
+            } => {
+                let mut minimum = *center;
+                minimum[1] -= half_height;
+                let mut maximum = *center;
+                maximum[1] += half_height;
+                Some((minimum, maximum))
+            }
+            Self::Box { .. } => None,
+        }
+    }
+
+    /// Axis-aligned local bounds including capsule caps.
+    #[must_use]
+    pub fn local_bounds(&self) -> ([f64; 3], [f64; 3]) {
+        match self {
+            Self::Box {
+                center,
+                half_extents,
+            } => (
+                std::array::from_fn(|axis| center[axis] - half_extents[axis]),
+                std::array::from_fn(|axis| center[axis] + half_extents[axis]),
+            ),
+            Self::Capsule {
+                center,
+                radius,
+                half_height,
+            } => (
+                [
+                    center[0] - radius,
+                    center[1] - half_height - radius,
+                    center[2] - radius,
+                ],
+                [
+                    center[0] + radius,
+                    center[1] + half_height + radius,
+                    center[2] + radius,
+                ],
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

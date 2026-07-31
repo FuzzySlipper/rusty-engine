@@ -589,7 +589,10 @@ collision facts. Those facts preserve rig-free attachment points and optional ca
 hit-region geometry; they do not derive collision from visible voxels, assign combat meaning, or
 mutate a collision world. `voxel-asset` validates, canonicalizes, and content-hash binds them.
 `voxel-object-runtime` preserves them as immutable frame readout while continuing to deduplicate
-meshes solely by voxel geometry. Downstream chooses whether and how to apply these facts.
+meshes solely by voxel geometry. Positions and dimensions use local voxel-cell units under the
+object grid's right-handed Y-up convention. Capsules are local-Y aligned; `halfHeight` measures
+half the cylindrical axis segment excluding the hemispherical radius-sized caps, so total Y extent
+is `2 * (halfHeight + radius)`. Downstream chooses whether and how to apply these facts.
 
 `voxel-convert` is an offline authoring/build tool. It accepts one explicit request and bounded GLB
 source, completes conversion and validation before touching its target, then atomically installs the

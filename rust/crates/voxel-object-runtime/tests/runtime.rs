@@ -41,6 +41,28 @@ fn admission_resolves_readouts_and_deduplicates_identical_frame_meshes() {
         Some(VoxelObjectCollisionPrimitive::Capsule { radius: 0.75, .. })
     ));
     assert_eq!(
+        admitted.frames()[1]
+            .collision
+            .as_ref()
+            .unwrap()
+            .body
+            .as_ref()
+            .unwrap()
+            .capsule_axis_endpoints(),
+        Some(([0.0, 0.0, 0.0], [0.0, 2.0, 0.0]))
+    );
+    assert_eq!(
+        admitted.frames()[1]
+            .collision
+            .as_ref()
+            .unwrap()
+            .body
+            .as_ref()
+            .unwrap()
+            .local_bounds(),
+        ([-0.75, -0.75, -0.75], [0.75, 2.75, 0.75])
+    );
+    assert_eq!(
         admitted.frames()[1].collision.as_ref().unwrap().hit_regions[0].id,
         "head"
     );

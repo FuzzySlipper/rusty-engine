@@ -46,7 +46,9 @@ selection.
 - `voxel-object-runtime` admits validated artifacts and exposes direct playback
   and realization mechanisms for downstream composition. Runtime frame anchor
   lookup and collision metadata are read-only; the caller owns world
-  application and game meaning.
+  application and game meaning. Capsule facts use the schema's right-handed
+  local-Y axis and exclude caps from `halfHeight`; use the public endpoint and
+  bounds helpers instead of importing a host API's capsule convention.
 
 ## Private or forbidden paths
 

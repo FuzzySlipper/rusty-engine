@@ -142,6 +142,12 @@ fn frame_facts_are_bounded_canonical_and_content_hash_bound() {
             .collect::<Vec<_>>(),
         ["head", "torso"]
     );
+    let body = frame.collision.as_ref().unwrap().body.as_ref().unwrap();
+    assert_eq!(
+        body.capsule_axis_endpoints(),
+        Some(([0.0, 0.0, 0.0], [0.0, 4.0, 0.0]))
+    );
+    assert_eq!(body.local_bounds(), ([-1.0, -1.0, -1.0], [1.0, 5.0, 1.0]));
     assert_ne!(canonical.content_hash, baseline_hash);
     assert_eq!(
         decode_voxel_object(&encode_voxel_object(&canonical).unwrap()).unwrap(),
