@@ -132,8 +132,10 @@ Animated voxel-object runtime and quality proof uses a separate public consumer 
 ./scripts/verify-studio-voxel-integration.sh /absolute/path/to/rusty-engine-voxels
 ```
 
-[`voxel-consumer-source.json`](voxel-consumer-source.json) names the exact consumer and Engine
-revisions plus the baseline runtime and high-fidelity quality reports. The gate accepts only a clean
-checkout, copies its content into a disposable project root, and drives normal Entity-inspector
+[`voxel-consumer-source.json`](voxel-consumer-source.json) names the exact consumer and live Engine
+revisions, the separate historical Engine revision that owns the checked evidence, and the baseline
+runtime and high-fidelity quality reports. The gate runs the consumer-owned revision checker before
+compilation, accepts only a clean checkout, copies its content into a disposable project root, and
+drives normal Entity-inspector
 playback through Chromium and the shared renderer. It does not make the voxel experiment an
 ordinary Studio dependency or give Studio ownership of the downstream project schema.

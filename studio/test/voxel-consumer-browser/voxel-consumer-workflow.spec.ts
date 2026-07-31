@@ -6,6 +6,7 @@ import { join } from 'node:path';
 const projectRoot = requiredEnvironment('RUSTY_STUDIO_PROJECT_ROOT');
 const projectFile = requiredEnvironment('RUSTY_STUDIO_PROJECT_FILE');
 const runtimeReportFile = requiredEnvironment('RUSTY_STUDIO_RUNTIME_REPORT');
+const engineCommit = requiredEnvironment('RUSTY_STUDIO_ENGINE_COMMIT');
 
 test('exact pinned voxel consumer reopens and visibly plays its Studio-authored flipbook', async ({ page }) => {
   test.setTimeout(90_000);
@@ -139,7 +140,8 @@ test('exact pinned voxel consumer reopens and visibly plays its Studio-authored 
 
   process.stdout.write(`${JSON.stringify({
     kind: 'studioVoxelConsumerBrowserEvidence',
-    engineRevision: runtimeEvidence.runtime.engineRevision,
+    engineRevision: engineCommit,
+    evidenceEngineRevision: runtimeEvidence.runtime.engineRevision,
     projectFile,
     projectHash,
     savedPose: 'default',

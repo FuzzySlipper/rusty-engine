@@ -79,7 +79,7 @@ if (voxelSource.repository !== 'FuzzySlipper/rusty-engine-voxels') {
 if (voxelSource.publicRepository !== 'https://github.com/FuzzySlipper/rusty-engine-voxels') {
   throw new Error('Studio voxel integration public repository changed without an explicit decision');
 }
-for (const field of ['commit', 'engineCommit']) {
+for (const field of ['commit', 'engineCommit', 'evidenceEngineCommit']) {
   if (!/^[0-9a-f]{40}$/.test(voxelSource[field])) {
     throw new Error(`Studio voxel integration ${field} must be an exact Git revision`);
   }
@@ -220,12 +220,22 @@ const voxelWorkflowPinMarkers = [
   "readFileSync('studio/voxel-consumer-source.json'",
   'repository: ${{ steps.voxel-consumer.outputs.repository }}',
   'ref: ${{ steps.voxel-consumer.outputs.revision }}',
+  'engine_revision=${pin.engineCommit}',
   './scripts/verify-studio-voxel-integration.sh',
+  'GITHUB_STEP_SUMMARY',
 ];
 for (const marker of voxelWorkflowPinMarkers) {
   if (!voxelIntegrationWorkflow.includes(marker)) {
     throw new Error(`Studio voxel workflow does not use the declared consumer pin: ${marker}`);
   }
+}
+
+const voxelIntegrationScript = readText(
+  process.env.STUDIO_VOXEL_INTEGRATION_SCRIPT
+    ?? '../scripts/verify-studio-voxel-integration.sh',
+);
+if (!voxelIntegrationScript.includes('./scripts/engine-revision check')) {
+  throw new Error('Studio voxel integration omits consumer revision proof');
 }
 
 console.log(`Studio migration plan passed: ${inventory.length} donor files, ${rules.length} surfaces, ${adoption.length} owners`);

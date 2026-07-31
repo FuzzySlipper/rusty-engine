@@ -63,13 +63,14 @@ jobs:
           ) {
             throw new Error('studio/voxel-consumer-source.json has an unsupported repository identity');
           }
-          for (const field of ['commit', 'engineCommit']) {
+          for (const field of ['commit', 'engineCommit', 'evidenceEngineCommit']) {
             if (typeof pin[field] !== 'string' || !/^[0-9a-f]{40}$/.test(pin[field])) {
               throw new Error(`${field} must name one exact public commit`);
             }
           }
           console.log(`repository=${pin.repository}`);
           console.log(`revision=${pin.commit}`);
+          console.log(`engine_revision=${pin.engineCommit}`);
           NODE
 
       - name: Check out exact voxel consumer
@@ -107,3 +108,12 @@ jobs:
 
       - name: Verify exact animated-voxel consumer integration
         run: ./scripts/verify-studio-voxel-integration.sh "$RUNNER_TEMP/rusty-engine-voxels"
+
+      - name: Record exact reverse-certification revisions
+        run: |
+          {
+            echo '## Rusty Engine voxel consumer certification'
+            echo
+            echo '- Consumer commit: `${{ steps.voxel-consumer.outputs.revision }}`'
+            echo '- Engine commit: `${{ steps.voxel-consumer.outputs.engine_revision }}`'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -29,7 +29,7 @@ if (
 ) {
   throw new Error('voxel consumer pin has an unsupported repository identity');
 }
-for (const field of ['commit', 'engineCommit']) {
+for (const field of ['commit', 'engineCommit', 'evidenceEngineCommit']) {
   if (typeof pin[field] !== 'string' || !/^[0-9a-f]{40}$/.test(pin[field])) {
     throw new Error(`voxel consumer pin ${field} must be one exact 40-character commit`);
   }
@@ -48,6 +48,7 @@ if (
 process.stdout.write([
   pin.commit,
   pin.engineCommit,
+  pin.evidenceEngineCommit,
   pin.projectFile,
   pin.largeProjectFile,
   pin.runtimeReport,
@@ -60,12 +61,13 @@ NODE
 mapfile -t PIN_VALUES <<< "$PIN_OUTPUT"
 EXPECTED_COMMIT="${PIN_VALUES[0]:-}"
 EXPECTED_ENGINE_COMMIT="${PIN_VALUES[1]:-}"
-PROJECT_FILE="${PIN_VALUES[2]:-}"
-LARGE_PROJECT_FILE="${PIN_VALUES[3]:-}"
-RUNTIME_REPORT="${PIN_VALUES[4]:-}"
-QUALITY_REPORT="${PIN_VALUES[5]:-}"
-DATA_PLANE_REPORT="${PIN_VALUES[6]:-}"
-ADAPTER_BINARY="${PIN_VALUES[7]:-}"
+EXPECTED_EVIDENCE_ENGINE_COMMIT="${PIN_VALUES[2]:-}"
+PROJECT_FILE="${PIN_VALUES[3]:-}"
+LARGE_PROJECT_FILE="${PIN_VALUES[4]:-}"
+RUNTIME_REPORT="${PIN_VALUES[5]:-}"
+QUALITY_REPORT="${PIN_VALUES[6]:-}"
+DATA_PLANE_REPORT="${PIN_VALUES[7]:-}"
+ADAPTER_BINARY="${PIN_VALUES[8]:-}"
 
 VOXEL_ROOT="$(realpath "$VOXEL_ROOT")"
 VOXEL_TOP="$(git -C "$VOXEL_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
@@ -85,12 +87,26 @@ if [[ -n "$VOXEL_STATUS" ]]; then
   exit 1
 fi
 
+if [[ ! -x "$VOXEL_ROOT/scripts/engine-revision" ]]; then
+  echo "reviewed voxel consumer does not provide ./scripts/engine-revision" >&2
+  exit 1
+fi
+REVISION_CHECK="$(cd "$VOXEL_ROOT" && ./scripts/engine-revision check)"
+echo "$REVISION_CHECK"
+if ! grep -Fq \
+  "Engine revision $EXPECTED_ENGINE_COMMIT is coherent across" \
+  <<< "$REVISION_CHECK"; then
+  echo "consumer revision check did not certify the Engine reverse pin" >&2
+  exit 1
+fi
+
 node --input-type=module - \
   "$VOXEL_ROOT/engine-source.json" \
   "$VOXEL_ROOT/$RUNTIME_REPORT" \
   "$VOXEL_ROOT/$QUALITY_REPORT" \
   "$VOXEL_ROOT/$DATA_PLANE_REPORT" \
-  "$EXPECTED_ENGINE_COMMIT" <<'NODE'
+  "$EXPECTED_ENGINE_COMMIT" \
+  "$EXPECTED_EVIDENCE_ENGINE_COMMIT" <<'NODE'
 import { readFileSync } from 'node:fs';
 
 const source = JSON.parse(readFileSync(process.argv[2], 'utf8'));
@@ -98,20 +114,21 @@ const runtimeReport = JSON.parse(readFileSync(process.argv[3], 'utf8'));
 const qualityReport = JSON.parse(readFileSync(process.argv[4], 'utf8'));
 const dataPlaneReport = JSON.parse(readFileSync(process.argv[5], 'utf8'));
 const expectedEngineCommit = process.argv[6];
+const expectedEvidenceEngineCommit = process.argv[7];
 if (
   source.schemaVersion !== 1
-  || source.publicRepository !== 'https://github.com/FuzzySlipper/rusty-engine'
+  || source.repository !== 'https://github.com/FuzzySlipper/rusty-engine'
   || source.commit !== expectedEngineCommit
   || source.studioDirectory !== 'studio'
 ) {
   throw new Error('consumer does not use the reviewed exact public Engine revision');
 }
 if (
-  runtimeReport.runtime?.engineRevision !== expectedEngineCommit
-  || qualityReport.runtime?.engineRevision !== expectedEngineCommit
-  || dataPlaneReport.engineRevision !== expectedEngineCommit
+  runtimeReport.runtime?.engineRevision !== expectedEvidenceEngineCommit
+  || qualityReport.runtime?.engineRevision !== expectedEvidenceEngineCommit
+  || dataPlaneReport.engineRevision !== expectedEvidenceEngineCommit
 ) {
-  throw new Error('consumer reports were not produced by the reviewed Engine revision');
+  throw new Error('consumer reports drifted from their recorded historical Engine revision');
 }
 if (
   dataPlaneReport.before?.completeProjectionJsonBytes !== 54_564_714
@@ -170,6 +187,7 @@ for (const clipId of ['clip/idle', 'clip/run', 'clip/jump']) {
 console.log(JSON.stringify({
   kind: 'voxelConsumerQualityEvidence',
   engineRevision: expectedEngineCommit,
+  evidenceEngineRevision: expectedEvidenceEngineCommit,
   clips: [...clips.keys()],
   canonicalObjectBytes: qualityReport.runtime.resources.canonicalObjectBytes,
   uniqueMeshPayloadBytes: qualityReport.runtime.resources.uniqueMeshPayloadBytes,
@@ -200,6 +218,24 @@ if ! grep -Fq '"missingAssetRejected":true' "$STUDIO_SMOKE_OUTPUT" \
   echo "consumer Studio smoke did not prove missing and corrupt object rejection" >&2
   exit 1
 fi
+EXPECTED_LARGE_RESOURCE_BYTES="$(node --input-type=module - "$STUDIO_SMOKE_OUTPUT" <<'NODE'
+import { readFileSync } from 'node:fs';
+
+const records = readFileSync(process.argv[2], 'utf8')
+  .split('\n')
+  .filter((line) => line.startsWith('{'))
+  .map((line) => JSON.parse(line));
+const evidence = records.find((record) => record.protocolVersion === 12);
+if (
+  evidence === undefined
+  || !Number.isSafeInteger(evidence.highFidelityPackedResourceBytes)
+  || evidence.highFidelityPackedResourceBytes <= 0
+) {
+  throw new Error('consumer Studio smoke omitted the current high-fidelity resource size');
+}
+process.stdout.write(String(evidence.highFidelityPackedResourceBytes));
+NODE
+)"
 
 cp -a "$VOXEL_ROOT/content" "$STUDIO_TEST_ROOT/content"
 cp -a "$VOXEL_ROOT/evidence" "$STUDIO_TEST_ROOT/evidence"
@@ -214,6 +250,8 @@ RUSTY_STUDIO_PROJECT_FILE="$PROJECT_FILE" \
 RUSTY_STUDIO_LARGE_PROJECT_FILE="$LARGE_PROJECT_FILE" \
 RUSTY_STUDIO_RUNTIME_REPORT="$RUNTIME_REPORT" \
 RUSTY_STUDIO_SETTINGS_ROOT="$STUDIO_SETTINGS_ROOT" \
+RUSTY_STUDIO_EXPECTED_LARGE_RESOURCE_BYTES="$EXPECTED_LARGE_RESOURCE_BYTES" \
+RUSTY_STUDIO_ENGINE_COMMIT="$EXPECTED_ENGINE_COMMIT" \
 pnpm --dir studio exec playwright test \
   --config voxel-consumer.playwright.config.ts
 
