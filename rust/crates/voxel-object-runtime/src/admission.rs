@@ -3,7 +3,8 @@ use std::{collections::BTreeMap, sync::Arc};
 use svc_mesh::{mesh_cells_standalone, MeshError, MeshVoxelCell};
 use voxel_asset::{
     canonicalize_voxel_object, decode_voxel_object, VoxelFrameCell, VoxelObjectAsset,
-    VoxelObjectError, VoxelObjectFrameSelectionError,
+    VoxelObjectError, VoxelObjectFrameAnchor, VoxelObjectFrameCollision,
+    VoxelObjectFrameSelectionError,
 };
 
 use crate::{
@@ -89,6 +90,8 @@ pub fn admit_voxel_object(
         VoxelObjectFrameSource::Default,
         object.default_frame.voxel_data_hash.clone(),
         default_cells,
+        Vec::new(),
+        None,
     )?;
 
     let mut clips = Vec::with_capacity(object.clips.len());
@@ -108,6 +111,8 @@ pub fn admit_voxel_object(
                 },
                 animation_frame.frame.voxel_data_hash.clone(),
                 cells,
+                animation_frame.anchors.clone(),
+                animation_frame.collision.clone(),
             )?;
             frame_indices.push(runtime_index);
             let frame_duration = animation_frame
@@ -166,6 +171,8 @@ impl<'a> AdmissionBuilder<'a> {
         source: VoxelObjectFrameSource,
         voxel_data_hash: String,
         cells: Vec<VoxelFrameCell>,
+        anchors: Vec<VoxelObjectFrameAnchor>,
+        collision: Option<VoxelObjectFrameCollision>,
     ) -> Result<u32, VoxelObjectAdmissionError> {
         self.resolved_voxels = self.resolved_voxels.saturating_add(cells.len() as u64);
         if self.resolved_voxels > self.limits.max_resolved_voxels {
@@ -226,6 +233,8 @@ impl<'a> AdmissionBuilder<'a> {
             voxel_data_hash,
             cells,
             mesh_index,
+            anchors: anchors.into(),
+            collision,
         });
         Ok(index)
     }

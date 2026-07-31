@@ -1,7 +1,8 @@
 use voxel_asset::{
     encode_voxel_object, with_computed_voxel_object_hashes, VoxelAssetBounds,
     VoxelAssetMaterialBinding, VoxelAssetMaterialMapping, VoxelCoordinateSystem, VoxelFrame,
-    VoxelObjectAnimationFrame, VoxelObjectAsset, VoxelObjectClip, VoxelObjectGrid,
+    VoxelObjectAnimationFrame, VoxelObjectAsset, VoxelObjectClip, VoxelObjectCollisionPrimitive,
+    VoxelObjectFrameAnchor, VoxelObjectFrameCollision, VoxelObjectGrid, VoxelObjectHitRegion,
     VoxelObjectProvenance, VoxelObjectProvenanceKind, VoxelRepresentation, VoxelRepresentationKind,
     VoxelSparseRun, VOXEL_OBJECT_SCHEMA_VERSION,
 };
@@ -24,6 +25,28 @@ fn admission_resolves_readouts_and_deduplicates_identical_frame_meshes() {
     assert_eq!(
         admitted.frames()[0].mesh_index,
         admitted.frames()[1].mesh_index
+    );
+    assert_eq!(
+        admitted.frames()[1].anchor("head").unwrap().position,
+        [0.0, 2.0, 0.0]
+    );
+    assert!(admitted.frames()[1].anchor("missing").is_none());
+    assert!(matches!(
+        admitted.frames()[1]
+            .collision
+            .as_ref()
+            .unwrap()
+            .body
+            .as_ref(),
+        Some(VoxelObjectCollisionPrimitive::Capsule { radius: 0.75, .. })
+    ));
+    assert_eq!(
+        admitted.frames()[1].collision.as_ref().unwrap().hit_regions[0].id,
+        "head"
+    );
+    assert!(
+        admitted.frames()[0].anchors.is_empty() && admitted.frames()[0].collision.is_none(),
+        "default geometry has no implicit authored facts"
     );
     assert_eq!(admitted.clip("walk").unwrap().frame_indices, [2, 3]);
     assert_eq!(
@@ -165,6 +188,8 @@ fn once_repeat_ping_pong_speed_and_invalid_clips_are_deterministic() {
     walk.frames[1].duration_seconds = Some(0.1);
     walk.frames.push(VoxelObjectAnimationFrame {
         duration_seconds: Some(0.1),
+        anchors: Vec::new(),
+        collision: None,
         frame: frame([0, 0, 1], 1, 1),
     });
     source.bounds.max[2] = 1;
@@ -286,6 +311,24 @@ fn object_source() -> VoxelObjectAsset {
         frames_per_second: 6.0,
         frames: vec![VoxelObjectAnimationFrame {
             duration_seconds: None,
+            anchors: vec![VoxelObjectFrameAnchor {
+                id: "head".to_owned(),
+                position: [0.0, 2.0, 0.0],
+            }],
+            collision: Some(VoxelObjectFrameCollision {
+                body: Some(VoxelObjectCollisionPrimitive::Capsule {
+                    center: [0.0, 1.0, 0.0],
+                    radius: 0.75,
+                    half_height: 1.0,
+                }),
+                hit_regions: vec![VoxelObjectHitRegion {
+                    id: "head".to_owned(),
+                    primitive: VoxelObjectCollisionPrimitive::Box {
+                        center: [0.0, 2.0, 0.0],
+                        half_extents: [0.5, 0.5, 0.5],
+                    },
+                }],
+            }),
             frame: default_frame.clone(),
         }],
     };
@@ -296,10 +339,14 @@ fn object_source() -> VoxelObjectAsset {
         frames: vec![
             VoxelObjectAnimationFrame {
                 duration_seconds: Some(0.1),
+                anchors: Vec::new(),
+                collision: None,
                 frame: frame([0, 0, 0], 1, 1),
             },
             VoxelObjectAnimationFrame {
                 duration_seconds: None,
+                anchors: Vec::new(),
+                collision: None,
                 frame: VoxelFrame {
                     bounds: VoxelAssetBounds {
                         min: [0, 0, 0],

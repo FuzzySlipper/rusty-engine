@@ -304,10 +304,14 @@ fn object() -> VoxelObjectAsset {
             frames: vec![
                 VoxelObjectAnimationFrame {
                     duration_seconds: None,
+                    anchors: Vec::new(),
+                    collision: None,
                     frame: default_frame,
                 },
                 VoxelObjectAnimationFrame {
                     duration_seconds: None,
+                    anchors: Vec::new(),
+                    collision: None,
                     frame: frame([1, 0, 0]),
                 },
             ],

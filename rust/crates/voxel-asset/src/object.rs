@@ -58,9 +58,54 @@ pub struct VoxelObjectClip {
 pub struct VoxelObjectAnimationFrame {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_seconds: Option<f64>,
+    /// Named local-space attachment facts for this pose.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub anchors: Vec<VoxelObjectFrameAnchor>,
+    /// Optional coarse collision facts authored independently from visible
+    /// voxel occupancy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collision: Option<VoxelObjectFrameCollision>,
     /// Schema 1 stores a complete resolved frame. Delta/reference encodings are
     /// intentionally deferred until measured artifacts justify their cost.
     pub frame: VoxelFrame,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct VoxelObjectFrameAnchor {
+    pub id: String,
+    /// Position in the object's local voxel-cell coordinate space.
+    pub position: [f64; 3],
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct VoxelObjectFrameCollision {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<VoxelObjectCollisionPrimitive>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hit_regions: Vec<VoxelObjectHitRegion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct VoxelObjectHitRegion {
+    pub id: String,
+    pub primitive: VoxelObjectCollisionPrimitive,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase", tag = "kind")]
+pub enum VoxelObjectCollisionPrimitive {
+    Box {
+        center: [f64; 3],
+        half_extents: [f64; 3],
+    },
+    Capsule {
+        center: [f64; 3],
+        radius: f64,
+        half_height: f64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -2,9 +2,11 @@ use voxel_asset::{
     decode_voxel_object, encode_voxel_object, resolve_voxel_frame, validate_voxel_object,
     with_computed_voxel_object_hashes, VoxelAssetBounds, VoxelAssetMaterialBinding,
     VoxelAssetMaterialMapping, VoxelCoordinateSystem, VoxelFrame, VoxelObjectAnimationFrame,
-    VoxelObjectAsset, VoxelObjectClip, VoxelObjectGrid, VoxelObjectProvenance,
+    VoxelObjectAsset, VoxelObjectClip, VoxelObjectCollisionPrimitive, VoxelObjectFrameAnchor,
+    VoxelObjectFrameCollision, VoxelObjectGrid, VoxelObjectHitRegion, VoxelObjectProvenance,
     VoxelObjectProvenanceKind, VoxelObjectSourceClipProvenance, VoxelRepresentation,
-    VoxelRepresentationKind, VoxelSparseRun, MAX_STRING_BYTES, MAX_VOXEL_OBJECT_TOTAL_VOXELS,
+    VoxelRepresentationKind, VoxelSparseRun, MAX_STRING_BYTES, MAX_VOXEL_OBJECT_ANCHORS_PER_FRAME,
+    MAX_VOXEL_OBJECT_HIT_REGIONS_PER_FRAME, MAX_VOXEL_OBJECT_TOTAL_VOXELS,
     VOXEL_OBJECT_SCHEMA_VERSION,
 };
 
@@ -75,6 +77,193 @@ fn full_frame_hashes_are_semantic_but_timing_changes_object_identity() {
 }
 
 #[test]
+fn frame_facts_are_bounded_canonical_and_content_hash_bound() {
+    let baseline = with_computed_voxel_object_hashes(object()).unwrap();
+    let baseline_hash = baseline.content_hash.clone();
+    let mut source = object();
+    let frame = &mut source.clips[1].frames[0];
+    frame.anchors = vec![
+        VoxelObjectFrameAnchor {
+            id: "right_hand".to_owned(),
+            position: [1.0, 2.0, 3.0],
+        },
+        VoxelObjectFrameAnchor {
+            id: "head".to_owned(),
+            position: [0.0, 4.0, 0.0],
+        },
+    ];
+    frame.collision = Some(VoxelObjectFrameCollision {
+        body: Some(VoxelObjectCollisionPrimitive::Capsule {
+            center: [0.0, 2.0, 0.0],
+            radius: 1.0,
+            half_height: 2.0,
+        }),
+        hit_regions: vec![
+            VoxelObjectHitRegion {
+                id: "torso".to_owned(),
+                primitive: VoxelObjectCollisionPrimitive::Box {
+                    center: [0.0, 2.0, 0.0],
+                    half_extents: [1.0, 2.0, 0.5],
+                },
+            },
+            VoxelObjectHitRegion {
+                id: "head".to_owned(),
+                primitive: VoxelObjectCollisionPrimitive::Capsule {
+                    center: [0.0, 4.0, 0.0],
+                    radius: 0.75,
+                    half_height: 0.5,
+                },
+            },
+        ],
+    });
+    let canonical = with_computed_voxel_object_hashes(source).unwrap();
+    let frame = &canonical
+        .clips
+        .iter()
+        .find(|clip| clip.id == "idle")
+        .unwrap()
+        .frames[0];
+    assert_eq!(
+        frame
+            .anchors
+            .iter()
+            .map(|anchor| anchor.id.as_str())
+            .collect::<Vec<_>>(),
+        ["head", "right_hand"]
+    );
+    assert_eq!(
+        frame
+            .collision
+            .as_ref()
+            .unwrap()
+            .hit_regions
+            .iter()
+            .map(|region| region.id.as_str())
+            .collect::<Vec<_>>(),
+        ["head", "torso"]
+    );
+    assert_ne!(canonical.content_hash, baseline_hash);
+    assert_eq!(
+        decode_voxel_object(&encode_voxel_object(&canonical).unwrap()).unwrap(),
+        canonical
+    );
+
+    let mut tampered = canonical.clone();
+    tampered
+        .clips
+        .iter_mut()
+        .find(|clip| clip.id == "idle")
+        .unwrap()
+        .frames[0]
+        .anchors[0]
+        .position[1] += 1.0;
+    assert!(validate_voxel_object(&tampered)
+        .unwrap_err()
+        .diagnostics()
+        .iter()
+        .any(|item| item.code == "voxelObject.contentHashMismatch"));
+
+    let mut exact = object();
+    exact.clips[1].frames[0].anchors = (0..MAX_VOXEL_OBJECT_ANCHORS_PER_FRAME)
+        .map(|index| VoxelObjectFrameAnchor {
+            id: format!("anchor-{index}"),
+            position: [index as f64, 0.0, 0.0],
+        })
+        .collect();
+    exact.clips[1].frames[0].collision = Some(VoxelObjectFrameCollision {
+        body: None,
+        hit_regions: (0..MAX_VOXEL_OBJECT_HIT_REGIONS_PER_FRAME)
+            .map(|index| VoxelObjectHitRegion {
+                id: format!("region-{index}"),
+                primitive: VoxelObjectCollisionPrimitive::Box {
+                    center: [0.0, 0.0, 0.0],
+                    half_extents: [1.0, 1.0, 1.0],
+                },
+            })
+            .collect(),
+    });
+    with_computed_voxel_object_hashes(exact.clone()).expect("exact limits are admitted");
+    exact.clips[1].frames[0]
+        .anchors
+        .push(VoxelObjectFrameAnchor {
+            id: "one-over".to_owned(),
+            position: [0.0, 0.0, 0.0],
+        });
+    exact.clips[1].frames[0]
+        .collision
+        .as_mut()
+        .unwrap()
+        .hit_regions
+        .push(VoxelObjectHitRegion {
+            id: "one-over".to_owned(),
+            primitive: VoxelObjectCollisionPrimitive::Box {
+                center: [0.0, 0.0, 0.0],
+                half_extents: [1.0, 1.0, 1.0],
+            },
+        });
+    let error = with_computed_voxel_object_hashes(exact).unwrap_err();
+    assert_eq!(
+        error
+            .diagnostics()
+            .iter()
+            .filter(|item| item.code == "voxelObject.resourceLimit")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn malformed_duplicate_and_non_finite_frame_facts_fail_closed() {
+    let mut source = object();
+    let frame = &mut source.clips[1].frames[0];
+    frame.anchors = vec![
+        VoxelObjectFrameAnchor {
+            id: "head".to_owned(),
+            position: [0.0, f64::NAN, 0.0],
+        },
+        VoxelObjectFrameAnchor {
+            id: "head".to_owned(),
+            position: [0.0, 1.0, 0.0],
+        },
+    ];
+    frame.collision = Some(VoxelObjectFrameCollision {
+        body: Some(VoxelObjectCollisionPrimitive::Capsule {
+            center: [0.0, 0.0, 0.0],
+            radius: 0.0,
+            half_height: 1.0,
+        }),
+        hit_regions: vec![
+            VoxelObjectHitRegion {
+                id: "head".to_owned(),
+                primitive: VoxelObjectCollisionPrimitive::Box {
+                    center: [0.0, 0.0, 0.0],
+                    half_extents: [1.0, 1.0, 1.0],
+                },
+            },
+            VoxelObjectHitRegion {
+                id: "head".to_owned(),
+                primitive: VoxelObjectCollisionPrimitive::Box {
+                    center: [0.0, 0.0, 0.0],
+                    half_extents: [1.0, f64::INFINITY, 1.0],
+                },
+            },
+        ],
+    });
+    let error = with_computed_voxel_object_hashes(source).unwrap_err();
+    for expected in [
+        "voxelObject.invalidFrameAnchor",
+        "voxelObject.invalidLocalPoint",
+        "voxelObject.invalidHitRegion",
+        "voxelObject.invalidCollisionPrimitive",
+    ] {
+        assert!(
+            error.diagnostics().iter().any(|item| item.code == expected),
+            "missing {expected}"
+        );
+    }
+}
+
+#[test]
 fn clip_timing_identity_and_aggregate_limits_fail_closed() {
     let baseline = with_computed_voxel_object_hashes(object()).unwrap();
     let baseline_bytes = encode_voxel_object(&baseline).unwrap();
@@ -114,6 +303,8 @@ fn clip_timing_identity_and_aggregate_limits_fail_closed() {
         frames: (0..16)
             .map(|_| VoxelObjectAnimationFrame {
                 duration_seconds: None,
+                anchors: Vec::new(),
+                collision: None,
                 frame: million.clone(),
             })
             .collect(),
@@ -210,6 +401,8 @@ fn object() -> VoxelObjectAsset {
         frames_per_second: 6.0,
         frames: vec![VoxelObjectAnimationFrame {
             duration_seconds: None,
+            anchors: Vec::new(),
+            collision: None,
             frame: default_frame.clone(),
         }],
     };
@@ -220,10 +413,14 @@ fn object() -> VoxelObjectAsset {
         frames: vec![
             VoxelObjectAnimationFrame {
                 duration_seconds: Some(0.1),
+                anchors: Vec::new(),
+                collision: None,
                 frame: frame([0, 0, 0], 1, 1),
             },
             VoxelObjectAnimationFrame {
                 duration_seconds: None,
+                anchors: Vec::new(),
+                collision: None,
                 frame: VoxelFrame {
                     bounds: VoxelAssetBounds {
                         min: [0, 0, 0],

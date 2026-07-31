@@ -9,12 +9,14 @@ selection.
 ## Owns
 
 - `voxel-asset`: canonical versioned voxel-volume, voxel-frame, and
-  voxel-object formats plus strict codecs and limits.
+  voxel-object formats plus strict codecs and limits, including bounded
+  per-frame local anchors and coarse collision facts.
 - `voxel-annotation`: versioned annotation layers, queries, and atomic edits.
 - `voxel-convert`: bounded offline GLB import, geometric voxelization,
   animation sampling, conversion planning, and atomic installation.
-- `voxel-object-runtime`: admitted runtime frames, clips, playback state, mesh
-  realization, and explicit collision policy.
+- `voxel-object-runtime`: admitted runtime frames, immutable frame-fact
+  readout, clips, playback state, mesh realization, and explicit collision
+  policy.
 
 ## Does not own
 
@@ -42,7 +44,9 @@ selection.
   seam returns canonical scale-preserving node transforms at one explicit
   clip time without deforming or materializing a mesh.
 - `voxel-object-runtime` admits validated artifacts and exposes direct playback
-  and realization mechanisms for downstream composition.
+  and realization mechanisms for downstream composition. Runtime frame anchor
+  lookup and collision metadata are read-only; the caller owns world
+  application and game meaning.
 
 ## Private or forbidden paths
 

@@ -273,6 +273,8 @@ fn build_candidate(
             .iter()
             .map(|frame| VoxelObjectAnimationFrame {
                 duration_seconds: Some(frame.duration_microseconds as f64 / 1_000_000.0),
+                anchors: Vec::new(),
+                collision: None,
                 frame: frame.frame.clone(),
             })
             .collect::<Vec<_>>();

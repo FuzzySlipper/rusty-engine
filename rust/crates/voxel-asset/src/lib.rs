@@ -38,15 +38,17 @@ pub use frame::{
     VoxelFrameDiagnostic, VoxelFrameError, MAX_VOXEL_FRAME_COORDINATE_ABS,
 };
 pub use object::{
-    VoxelObjectAnimationFrame, VoxelObjectAsset, VoxelObjectClip, VoxelObjectFrameSelectionError,
-    VoxelObjectGrid, VoxelObjectProvenance, VoxelObjectProvenanceKind,
+    VoxelObjectAnimationFrame, VoxelObjectAsset, VoxelObjectClip, VoxelObjectCollisionPrimitive,
+    VoxelObjectFrameAnchor, VoxelObjectFrameCollision, VoxelObjectFrameSelectionError,
+    VoxelObjectGrid, VoxelObjectHitRegion, VoxelObjectProvenance, VoxelObjectProvenanceKind,
     VoxelObjectSourceClipProvenance, VOXEL_OBJECT_SCHEMA_VERSION,
 };
 pub use object_codec::{
     canonicalize_voxel_object, decode_voxel_object, encode_voxel_object, validate_voxel_object,
     with_computed_voxel_object_hashes, VoxelObjectDiagnostic, VoxelObjectError,
-    MAX_VOXEL_OBJECT_ARTIFACT_BYTES, MAX_VOXEL_OBJECT_CLIPS, MAX_VOXEL_OBJECT_FRAMES_PER_CLIP,
-    MAX_VOXEL_OBJECT_FRAMES_PER_SECOND, MAX_VOXEL_OBJECT_FRAME_DURATION_SECONDS,
+    MAX_VOXEL_OBJECT_ANCHORS_PER_FRAME, MAX_VOXEL_OBJECT_ARTIFACT_BYTES, MAX_VOXEL_OBJECT_CLIPS,
+    MAX_VOXEL_OBJECT_FRAMES_PER_CLIP, MAX_VOXEL_OBJECT_FRAMES_PER_SECOND,
+    MAX_VOXEL_OBJECT_FRAME_DURATION_SECONDS, MAX_VOXEL_OBJECT_HIT_REGIONS_PER_FRAME,
     MAX_VOXEL_OBJECT_TOTAL_FRAMES, MAX_VOXEL_OBJECT_TOTAL_VOXELS,
 };
 pub use palette::{

@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use svc_mesh::MeshPayload;
-use voxel_asset::{VoxelFrameCell, VoxelObjectAsset};
+use voxel_asset::{
+    VoxelFrameCell, VoxelObjectAsset, VoxelObjectFrameAnchor, VoxelObjectFrameCollision,
+};
 
 /// Runtime work limits are deliberately tighter than durable schema limits for
 /// allocations created while resolving and meshing a live object.
@@ -36,6 +38,17 @@ pub struct VoxelObjectRuntimeFrame {
     pub voxel_data_hash: String,
     pub cells: Arc<[VoxelFrameCell]>,
     pub mesh_index: u32,
+    pub anchors: Arc<[VoxelObjectFrameAnchor]>,
+    pub collision: Option<VoxelObjectFrameCollision>,
+}
+
+impl VoxelObjectRuntimeFrame {
+    pub fn anchor(&self, id: &str) -> Option<&VoxelObjectFrameAnchor> {
+        self.anchors
+            .binary_search_by_key(&id, |anchor| anchor.id.as_str())
+            .ok()
+            .map(|index| &self.anchors[index])
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

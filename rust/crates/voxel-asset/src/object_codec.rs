@@ -6,8 +6,8 @@ use sha2::{Digest, Sha256};
 use crate::{
     frame::{canonicalize_frame, represented_voxel_count},
     validate_voxel_frame, VoxelAssetBounds, VoxelAssetMaterialBinding, VoxelAssetMaterialMapping,
-    VoxelObjectAsset, VoxelObjectProvenance, VoxelObjectProvenanceKind,
-    VOXEL_OBJECT_SCHEMA_VERSION,
+    VoxelObjectAsset, VoxelObjectCollisionPrimitive, VoxelObjectFrameCollision,
+    VoxelObjectProvenance, VoxelObjectProvenanceKind, VOXEL_OBJECT_SCHEMA_VERSION,
 };
 
 pub const MAX_VOXEL_OBJECT_ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
@@ -17,6 +17,9 @@ pub const MAX_VOXEL_OBJECT_TOTAL_FRAMES: usize = 8_192;
 pub const MAX_VOXEL_OBJECT_TOTAL_VOXELS: usize = 16_777_216;
 pub const MAX_VOXEL_OBJECT_FRAMES_PER_SECOND: f64 = 240.0;
 pub const MAX_VOXEL_OBJECT_FRAME_DURATION_SECONDS: f64 = 60.0;
+pub const MAX_VOXEL_OBJECT_ANCHORS_PER_FRAME: usize = 64;
+pub const MAX_VOXEL_OBJECT_HIT_REGIONS_PER_FRAME: usize = 32;
+const MAX_VOXEL_OBJECT_LOCAL_COORDINATE_ABS: f64 = 1_000_000.0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoxelObjectDiagnostic {
@@ -268,6 +271,7 @@ fn semantic_diagnostics(object: &VoxelObjectAsset) -> Vec<VoxelObjectDiagnostic>
                     ),
                 ));
             }
+            validate_frame_metadata(animation_frame, &path, &mut diagnostics);
             append_frame_semantics(
                 &animation_frame.frame,
                 &format!("{path}.frame"),
@@ -373,6 +377,143 @@ fn validate_grid(object: &VoxelObjectAsset, diagnostics: &mut Vec<VoxelObjectDia
             "pivot components must be finite and stay within +/-1,000,000 cells",
         ));
     }
+}
+
+fn validate_frame_metadata(
+    frame: &crate::VoxelObjectAnimationFrame,
+    path: &str,
+    diagnostics: &mut Vec<VoxelObjectDiagnostic>,
+) {
+    if frame.anchors.len() > MAX_VOXEL_OBJECT_ANCHORS_PER_FRAME {
+        diagnostics.push(diagnostic(
+            "voxelObject.resourceLimit",
+            format!("{path}.anchors"),
+            format!("anchor count must be 0..={MAX_VOXEL_OBJECT_ANCHORS_PER_FRAME}"),
+        ));
+    }
+    let mut anchor_ids = BTreeSet::new();
+    for (index, anchor) in frame.anchors.iter().enumerate() {
+        let anchor_path = format!("{path}.anchors[{index}]");
+        if !valid_frame_fact_id(&anchor.id) || !anchor_ids.insert(anchor.id.as_str()) {
+            diagnostics.push(diagnostic(
+                "voxelObject.invalidFrameAnchor",
+                format!("{anchor_path}.id"),
+                "anchor ids must be unique lowercase authored identities",
+            ));
+        }
+        validate_local_point(
+            anchor.position,
+            format!("{anchor_path}.position"),
+            diagnostics,
+        );
+    }
+    if let Some(collision) = &frame.collision {
+        validate_frame_collision(collision, path, diagnostics);
+    }
+}
+
+fn validate_frame_collision(
+    collision: &VoxelObjectFrameCollision,
+    path: &str,
+    diagnostics: &mut Vec<VoxelObjectDiagnostic>,
+) {
+    if collision.body.is_none() && collision.hit_regions.is_empty() {
+        diagnostics.push(diagnostic(
+            "voxelObject.invalidFrameCollision",
+            format!("{path}.collision"),
+            "collision metadata must contain a body or at least one hit region",
+        ));
+    }
+    if let Some(body) = &collision.body {
+        validate_collision_primitive(body, &format!("{path}.collision.body"), diagnostics);
+    }
+    if collision.hit_regions.len() > MAX_VOXEL_OBJECT_HIT_REGIONS_PER_FRAME {
+        diagnostics.push(diagnostic(
+            "voxelObject.resourceLimit",
+            format!("{path}.collision.hitRegions"),
+            format!("hit region count must be 0..={MAX_VOXEL_OBJECT_HIT_REGIONS_PER_FRAME}"),
+        ));
+    }
+    let mut region_ids = BTreeSet::new();
+    for (index, region) in collision.hit_regions.iter().enumerate() {
+        let region_path = format!("{path}.collision.hitRegions[{index}]");
+        if !valid_frame_fact_id(&region.id) || !region_ids.insert(region.id.as_str()) {
+            diagnostics.push(diagnostic(
+                "voxelObject.invalidHitRegion",
+                format!("{region_path}.id"),
+                "hit region ids must be unique lowercase authored identities",
+            ));
+        }
+        validate_collision_primitive(&region.primitive, &region_path, diagnostics);
+    }
+}
+
+fn validate_collision_primitive(
+    primitive: &VoxelObjectCollisionPrimitive,
+    path: &str,
+    diagnostics: &mut Vec<VoxelObjectDiagnostic>,
+) {
+    match primitive {
+        VoxelObjectCollisionPrimitive::Box {
+            center,
+            half_extents,
+        } => {
+            validate_local_point(*center, format!("{path}.center"), diagnostics);
+            if half_extents.iter().any(|value| {
+                !value.is_finite()
+                    || *value <= 0.0
+                    || *value > MAX_VOXEL_OBJECT_LOCAL_COORDINATE_ABS
+            }) {
+                diagnostics.push(diagnostic(
+                    "voxelObject.invalidCollisionPrimitive",
+                    format!("{path}.halfExtents"),
+                    "box half extents must be finite and in (0,1000000]",
+                ));
+            }
+        }
+        VoxelObjectCollisionPrimitive::Capsule {
+            center,
+            radius,
+            half_height,
+        } => {
+            validate_local_point(*center, format!("{path}.center"), diagnostics);
+            if !valid_positive_extent(*radius) {
+                diagnostics.push(diagnostic(
+                    "voxelObject.invalidCollisionPrimitive",
+                    format!("{path}.radius"),
+                    "capsule radius must be finite and in (0,1000000]",
+                ));
+            }
+            if !valid_positive_extent(*half_height) {
+                diagnostics.push(diagnostic(
+                    "voxelObject.invalidCollisionPrimitive",
+                    format!("{path}.halfHeight"),
+                    "capsule halfHeight must be finite and in (0,1000000]",
+                ));
+            }
+        }
+    }
+}
+
+fn validate_local_point(
+    point: [f64; 3],
+    path: impl Into<String>,
+    diagnostics: &mut Vec<VoxelObjectDiagnostic>,
+) {
+    if point
+        .iter()
+        .any(|value| !value.is_finite() || value.abs() > MAX_VOXEL_OBJECT_LOCAL_COORDINATE_ABS)
+    {
+        diagnostics.push(diagnostic(
+            "voxelObject.invalidLocalPoint",
+            path,
+            "local point components must be finite and stay within +/-1000000 cells",
+        ));
+    }
+}
+
+fn valid_positive_extent(value: f64) -> bool {
+    value.is_finite() && value > 0.0 && value <= MAX_VOXEL_OBJECT_LOCAL_COORDINATE_ABS
 }
 
 fn validate_materials(
@@ -601,6 +742,12 @@ fn canonicalize(object: &mut VoxelObjectAsset) {
     canonicalize_frame(&mut object.default_frame);
     for clip in &mut object.clips {
         for frame in &mut clip.frames {
+            frame.anchors.sort_by(|left, right| left.id.cmp(&right.id));
+            if let Some(collision) = &mut frame.collision {
+                collision
+                    .hit_regions
+                    .sort_by(|left, right| left.id.cmp(&right.id));
+            }
             canonicalize_frame(&mut frame.frame);
         }
     }
@@ -652,6 +799,17 @@ fn valid_clip_id(value: &str) -> bool {
                 && segment
                     .bytes()
                     .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
+}
+
+fn valid_frame_fact_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= crate::MAX_STRING_BYTES
+        && !value.starts_with(['-', '_', '/'])
+        && !value.ends_with(['-', '_', '/'])
+        && !value.contains("//")
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'/')
         })
 }
 

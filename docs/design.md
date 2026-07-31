@@ -584,6 +584,13 @@ frame swaps into world edits, collision/navigation rebuilds, or an Engine schedu
 M12 design and ordered implementation slices are in
 [voxel-model-conversion.md](topics/voxel/voxel-model-conversion.md).
 
+An animation frame may additionally carry bounded named local-space anchors and coarse authored
+collision facts. Those facts preserve rig-free attachment points and optional capsule/box body or
+hit-region geometry; they do not derive collision from visible voxels, assign combat meaning, or
+mutate a collision world. `voxel-asset` validates, canonicalizes, and content-hash binds them.
+`voxel-object-runtime` preserves them as immutable frame readout while continuing to deduplicate
+meshes solely by voxel geometry. Downstream chooses whether and how to apply these facts.
+
 `voxel-convert` is an offline authoring/build tool. It accepts one explicit request and bounded GLB
 source, completes conversion and validation before touching its target, then atomically installs the
 canonical artifact. Runtime consumers depend on `voxel-asset`, not the converter or GLB parser.
