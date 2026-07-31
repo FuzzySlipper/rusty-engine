@@ -512,12 +512,12 @@ scene through a fixed host-owned camera with the same projection and aspect.
 World camera motion therefore cannot move the local presentation, and world depth cannot clip it.
 The channel is excluded from picking and has no input or camera authority. Stop, resize, reset,
 frame rejection, resource failure, and disposal remain operations of the existing single surface
-lifecycle; no second render scheduler or renderer owner exists. While accelerated demand is
-active, renderer-host may run one bounded, non-rendering readiness-probe burst between display
-callbacks so available fence and timer-query results become observable before the next RAF. The probe
-never submits or requests another RAF, is cancelled on replacement, stop, reset, and disposal, and
-is not used for software or unknown renderers. Fence and measured-duty readiness advance
-independently, while automatic admission still requires every available completion owner.
+lifecycle; no second render scheduler or renderer owner exists. Fence and measured-duty readiness
+advance independently when the single RAF owner evaluates the next automatic submission, while
+automatic admission still requires every available completion owner. The host does not run
+inter-frame timer bursts to poll WebGL readiness: once the accelerated completion ring exists, those
+non-rendering driver calls cannot create a presentation opportunity and only compete with browser
+delivery of the next RAF.
 
 `@rusty-engine/renderer-host` is the shared browser and tool-facing entry point. It composes the
 retained Three surface, explicit caller-owned camera controls, animated resources, editor viewport,

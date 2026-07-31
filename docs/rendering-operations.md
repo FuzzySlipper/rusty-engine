@@ -244,12 +244,12 @@ accelerated fast path can still submit four-millisecond work at 120 Hz and eight
 at 60 Hz, while slow completion yields materially more CPU time. Delayed browser observability
 can fill the accelerated ring, but cannot grow it or silently become an unbounded queue. Any
 timer-query failure immediately restores strict single-slot admission. Timer-query and completion
-polling is non-blocking. The single RAF remains the only render scheduler; during accelerated
-demand, renderer-host may run one bounded readiness-probe burst between display callbacks. Those
-probes advance available fence and timer-query observation but never render or request another RAF, are
-cancelled on replacement, stop, reset, and disposal, and are not used for software or unknown
-renderers. Unsupported, disjoint, malformed, or failed timer timing retains the completion-wall
-policy instead of silently disabling pacing. `surface.automaticSubmissionPacing()` returns one
+polling is non-blocking and occurs only when the single RAF owner evaluates an automatic
+submission. The host does not run timer-based readiness bursts between display callbacks: after
+accelerated completion became a bounded ring, such probes could not create a presentation
+opportunity and merely competed with delivery of the next RAF. Unsupported, disjoint, malformed,
+or failed timer timing retains the completion-wall policy instead of silently disabling pacing.
+`surface.automaticSubmissionPacing()` returns one
 frozen renderer-owned diagnostic with the timer mode, current measurement state, renderer class
 and allowance, latest completed decision's timer duration, observed completion age, effective
 duration, selected duty, decision time, admission deadline, actual automatic admission

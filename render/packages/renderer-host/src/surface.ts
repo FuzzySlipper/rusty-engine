@@ -48,7 +48,6 @@ import {
   RendererSurfaceAutomaticSubmissionAdmissionObservation,
   type RendererSurfaceAutomaticSubmissionAdmissionSample,
 } from './surface-admission-observation.js';
-import { RendererSurfaceReadinessPoll } from './surface-readiness-poll.js';
 import {
   RendererSurfaceSubmissionDemand,
   type RendererSurfaceViewportState,
@@ -362,21 +361,8 @@ function mountPreparedRendererSurface(
     presentation: presentationHosts?.requiresAnimationFrame() ?? false,
     retainedAnimation: hasRetainedAnimation(latestSubmission),
   });
-  const automaticReadinessPoll = new RendererSurfaceReadinessPoll({
-    isAccelerated: () =>
-      backendSurface.automaticSubmissionPacing().rendererClass === 'accelerated',
-    isReady: backendSurface.automaticSubmissionReady,
-    onReady: () => {
-      if (!disposed && animationFrame !== null) {
-        submissionDemand.request();
-      }
-    },
-  });
   const requestAutomaticSubmission = (): void => {
     submissionDemand.request();
-    if (animationFrame !== null) {
-      automaticReadinessPoll.request();
-    }
   };
 
   const renderFrame = (
@@ -384,7 +370,6 @@ function mountPreparedRendererSurface(
     source: RendererSurfaceTimingSource,
   ): RendererSurfaceSubmissionSample => {
     if (disposed) throw new Error('renderer surface is disposed');
-    automaticReadinessPoll.cancel();
     assertRendererSurfaceSourceTime(timeMs);
     const deltaSeconds = lastRenderTimeMs === null
       ? 0
@@ -404,12 +389,6 @@ function mountPreparedRendererSurface(
       backendSubmissionEndedMs,
     }), backendStatistics);
     submissionDemand.submitted(surfaceViewport(canvas));
-    if (animationFrame !== null) {
-      const continuous = continuousDemand();
-      if (continuous.controls || continuous.presentation || continuous.retainedAnimation) {
-        automaticReadinessPoll.request();
-      }
-    }
     return latestSubmission;
   };
   const renderOnce = (
@@ -454,7 +433,6 @@ function mountPreparedRendererSurface(
     }
   };
   const stop = (): void => {
-    automaticReadinessPoll.cancel();
     if (animationFrame !== null) {
       globalThis.cancelAnimationFrame(animationFrame);
       animationFrame = null;
