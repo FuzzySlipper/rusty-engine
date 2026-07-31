@@ -504,9 +504,12 @@ occupancy without adding a polling or submission path. The host adds one fixed-s
 admission history to that same readout. It records each recent RAF source time, the exact
 request/resize/controls/presentation/retained-animation demand reasons, whether the attempt had no
 demand, was rejected by backend readiness, or was admitted, and the pre-submission capacity and
-occupancy state. Lifetime outcome counters remain exact after the history rolls over. Reading the
-history never polls WebGL, schedules work, or mutates demand, so it can distinguish browser-callback,
-host-demand, and backend-admission failures without becoming a second renderer observer.
+occupancy state. Each attempt also records immutable wall-clock phase boundaries from callback
+entry and successor registration through demand, backend readiness, controls, camera,
+presentation, backend submission, and callback exit; unreached phases are null. Lifetime outcome
+counters remain exact after the history rolls over. Reading the history never polls WebGL,
+schedules work, or mutates demand, so it can distinguish callback work, post-callback browser
+delay, host-demand, and backend-admission failures without becoming a second renderer observer.
 An explicit `renderOnce`
 remains unconditional. Each submitted frame advances the shared renderer exactly once,
 renders the world through the caller-owned camera, clears depth, and renders the camera-relative

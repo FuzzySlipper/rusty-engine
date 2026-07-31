@@ -36,6 +36,19 @@ const BACKEND = Object.freeze({
   pendingSubmissionCount: 2,
 });
 
+const CALLBACK = Object.freeze({
+  schemaVersion: 1 as const,
+  callbackStartedAtMs: 16,
+  successorQueuedAtMs: 16.1,
+  demandObservedAtMs: 16.2,
+  backendReadinessObservedAtMs: 16.3,
+  controlsUpdatedAtMs: 16.4,
+  cameraUpdatedAtMs: 16.5,
+  presentationAdvancedAtMs: 16.6,
+  backendSubmittedAtMs: 18.7,
+  callbackEndedAtMs: 18.8,
+});
+
 void test('host admission observation separates demand backend blocks and admissions', () => {
   const observation = new RendererSurfaceAutomaticSubmissionAdmissionObservation();
 
@@ -43,12 +56,25 @@ void test('host admission observation separates demand backend blocks and admiss
     ...DEMAND,
     controls: false,
     shouldSubmit: false,
-  }, BACKEND);
+  }, BACKEND, {
+    ...CALLBACK,
+    backendReadinessObservedAtMs: null,
+    controlsUpdatedAtMs: null,
+    cameraUpdatedAtMs: null,
+    presentationAdvancedAtMs: null,
+    backendSubmittedAtMs: null,
+  });
   observation.record(32, 'backendBlocked', DEMAND, {
     ...BACKEND,
     state: 'waiting',
+  }, {
+    ...CALLBACK,
+    controlsUpdatedAtMs: null,
+    cameraUpdatedAtMs: null,
+    presentationAdvancedAtMs: null,
+    backendSubmittedAtMs: null,
   });
-  observation.record(48, 'admitted', DEMAND, BACKEND);
+  observation.record(48, 'admitted', DEMAND, BACKEND, CALLBACK);
 
   const sample = observation.sample();
   assert.deepEqual(
@@ -81,6 +107,8 @@ void test('host admission observation separates demand backend blocks and admiss
   assert.equal(Object.isFrozen(sample), true);
   assert.equal(Object.isFrozen(sample.recentAttempts), true);
   assert.equal(Object.isFrozen(sample.recentAttempts[0]?.backend), true);
+  assert.equal(Object.isFrozen(sample.recentAttempts[0]?.callback), true);
+  assert.deepEqual(sample.recentAttempts.at(-1)?.callback, CALLBACK);
 });
 
 void test('host admission history is bounded while lifetime counters remain exact', () => {
@@ -93,7 +121,13 @@ void test('host admission history is bounded while lifetime counters remain exac
   const attemptCount = RUSTY_RENDERER_SURFACE_ADMISSION_HISTORY_LIMIT + 9;
 
   for (let index = 0; index < attemptCount; index += 1) {
-    observation.record(index * 8, outcomes[index % outcomes.length] ?? 'admitted', DEMAND, BACKEND);
+    observation.record(
+      index * 8,
+      outcomes[index % outcomes.length] ?? 'admitted',
+      DEMAND,
+      BACKEND,
+      CALLBACK,
+    );
   }
 
   const sample = observation.sample();

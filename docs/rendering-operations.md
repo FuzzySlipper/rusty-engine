@@ -261,9 +261,13 @@ counters plus the most recent 64 RAF admission attempts. Each attempt carries it
 request/resize/controls/presentation/retained-animation demand reasons, the
 `admitted`/`backendBlocked`/`noDemand` outcome, and the backend's pre-submission capacity,
 measurement, fence state, timer/effective duration, decision observation time, and deadline. The
-bounded history makes sparse RAF delivery, missing owner demand,
-and backend rejection distinguishable even when a consumer observes only occasional accepted
-submissions. Reading it never polls, submits, mutates demand, or starts another loop. Explicit
+same attempt also carries wall-clock boundaries for callback entry, successor registration,
+demand evaluation, backend readiness, controls, camera, presentation, backend submission, and
+callback exit; phases not reached by a no-demand or blocked attempt are explicitly null. The
+bounded history therefore distinguishes callback CPU work and post-callback browser delay in
+addition to sparse RAF delivery, missing owner demand, and backend rejection, even when a consumer
+observes only occasional accepted submissions. Reading it never polls, submits, mutates demand, or
+starts another loop. Explicit
 `renderOnce`, camera reset, resource statistics, picking, and disposal keep their established
 semantics.
 

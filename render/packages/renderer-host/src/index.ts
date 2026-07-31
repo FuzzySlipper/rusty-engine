@@ -12,6 +12,7 @@ export type {
   RendererSurfaceAutomaticSubmissionAdmissionAttempt,
   RendererSurfaceAutomaticSubmissionAdmissionOutcome,
   RendererSurfaceAutomaticSubmissionAdmissionSample,
+  RendererSurfaceAutomaticSubmissionCallbackPhases,
 } from './surface-admission-observation.js';
 
 export {

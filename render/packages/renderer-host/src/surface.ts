@@ -47,6 +47,7 @@ import {
 import {
   RendererSurfaceAutomaticSubmissionAdmissionObservation,
   type RendererSurfaceAutomaticSubmissionAdmissionSample,
+  type RendererSurfaceAutomaticSubmissionCallbackPhases,
 } from './surface-admission-observation.js';
 import {
   RendererSurfaceSubmissionDemand,
@@ -365,10 +366,18 @@ function mountPreparedRendererSurface(
     submissionDemand.request();
   };
 
+  interface RenderFrameResult {
+    readonly submission: RendererSurfaceSubmissionSample;
+    readonly controlsUpdatedAtMs: number;
+    readonly cameraUpdatedAtMs: number;
+    readonly presentationAdvancedAtMs: number;
+    readonly backendSubmittedAtMs: number;
+  }
+
   const renderFrame = (
     timeMs: number,
     source: RendererSurfaceTimingSource,
-  ): RendererSurfaceSubmissionSample => {
+  ): RenderFrameResult => {
     if (disposed) throw new Error('renderer surface is disposed');
     assertRendererSurfaceSourceTime(timeMs);
     const deltaSeconds = lastRenderTimeMs === null
@@ -376,9 +385,12 @@ function mountPreparedRendererSurface(
       : Math.min(0.05, Math.max(0, (timeMs - lastRenderTimeMs) / 1_000));
     lastRenderTimeMs = timeMs;
     controls.update(deltaSeconds);
+    const controlsUpdatedAtMs = surfaceTimingNow();
     const camera = controls.cameraSnapshot();
     backendSurface.setCameraPose(camera.pose, camera.basis);
+    const cameraUpdatedAtMs = surfaceTimingNow();
     presentationHosts?.advance(deltaSeconds);
+    const presentationAdvancedAtMs = surfaceTimingNow();
     const backendSubmissionStartedMs = surfaceTimingNow();
     const backendStatistics = backendSurface.renderOnce(timeMs);
     const backendSubmissionEndedMs = surfaceTimingNow();
@@ -389,41 +401,85 @@ function mountPreparedRendererSurface(
       backendSubmissionEndedMs,
     }), backendStatistics);
     submissionDemand.submitted(surfaceViewport(canvas));
-    return latestSubmission;
+    return {
+      submission: latestSubmission,
+      controlsUpdatedAtMs,
+      cameraUpdatedAtMs,
+      presentationAdvancedAtMs,
+      backendSubmittedAtMs: backendSubmissionEndedMs,
+    };
   };
   const renderOnce = (
     timeMs = globalThis.performance?.now() ?? 0,
   ): RendererSurfaceSubmissionSample => {
-    return renderFrame(timeMs, 'explicit');
+    return renderFrame(timeMs, 'explicit').submission;
   };
 
   const tick = (timeMs: number): void => {
+    const callbackStartedAtMs = surfaceTimingNow();
     // Register the sole successor before camera, presentation, and WebGL work.
     // Browsers can otherwise miss the next display scheduling window when the
     // callback requests its successor only after submitting the current frame.
     animationFrame = globalThis.requestAnimationFrame(tick);
+    const successorQueuedAtMs = surfaceTimingNow();
     const demand = submissionDemand.consumeDecision(
       surfaceViewport(canvas),
       continuousDemand(),
     );
+    const demandObservedAtMs = surfaceTimingNow();
     if (!demand.shouldSubmit) {
+      const callbackEndedAtMs = surfaceTimingNow();
       automaticSubmissionAdmission.record(
         timeMs,
         'noDemand',
         demand,
         backendSurface.automaticSubmissionPacing(),
+        callbackPhases({
+          callbackStartedAtMs,
+          successorQueuedAtMs,
+          demandObservedAtMs,
+          callbackEndedAtMs,
+        }),
       );
     } else {
       const ready = backendSurface.automaticSubmissionReady(timeMs);
-      automaticSubmissionAdmission.record(
-        timeMs,
-        ready ? 'admitted' : 'backendBlocked',
-        demand,
-        backendSurface.automaticSubmissionPacing(),
-      );
+      const backendReadinessObservedAtMs = surfaceTimingNow();
+      const backendPacing = backendSurface.automaticSubmissionPacing();
       if (ready) {
-        renderFrame(timeMs, 'animationFrame');
+        const rendered = renderFrame(timeMs, 'animationFrame');
+        const callbackEndedAtMs = surfaceTimingNow();
+        automaticSubmissionAdmission.record(
+          timeMs,
+          'admitted',
+          demand,
+          backendPacing,
+          callbackPhases({
+            callbackStartedAtMs,
+            successorQueuedAtMs,
+            demandObservedAtMs,
+            backendReadinessObservedAtMs,
+            controlsUpdatedAtMs: rendered.controlsUpdatedAtMs,
+            cameraUpdatedAtMs: rendered.cameraUpdatedAtMs,
+            presentationAdvancedAtMs: rendered.presentationAdvancedAtMs,
+            backendSubmittedAtMs: rendered.backendSubmittedAtMs,
+            callbackEndedAtMs,
+          }),
+        );
       } else {
+        const callbackEndedAtMs = surfaceTimingNow();
+        automaticSubmissionAdmission.record(
+          timeMs,
+          'backendBlocked',
+          demand,
+          backendPacing,
+          callbackPhases({
+            callbackStartedAtMs,
+            successorQueuedAtMs,
+            demandObservedAtMs,
+            backendReadinessObservedAtMs,
+            callbackEndedAtMs,
+          }),
+        );
         requestAutomaticSubmission();
       }
     }
@@ -559,6 +615,33 @@ function surfaceSubmissionSample(
 
 function surfaceTimingNow(): number {
   return globalThis.performance?.now() ?? 0;
+}
+
+function callbackPhases(
+  input: {
+    readonly callbackStartedAtMs: number;
+    readonly successorQueuedAtMs: number;
+    readonly demandObservedAtMs: number;
+    readonly backendReadinessObservedAtMs?: number;
+    readonly controlsUpdatedAtMs?: number;
+    readonly cameraUpdatedAtMs?: number;
+    readonly presentationAdvancedAtMs?: number;
+    readonly backendSubmittedAtMs?: number;
+    readonly callbackEndedAtMs: number;
+  },
+): RendererSurfaceAutomaticSubmissionCallbackPhases {
+  return Object.freeze({
+    schemaVersion: 1,
+    callbackStartedAtMs: input.callbackStartedAtMs,
+    successorQueuedAtMs: input.successorQueuedAtMs,
+    demandObservedAtMs: input.demandObservedAtMs,
+    backendReadinessObservedAtMs: input.backendReadinessObservedAtMs ?? null,
+    controlsUpdatedAtMs: input.controlsUpdatedAtMs ?? null,
+    cameraUpdatedAtMs: input.cameraUpdatedAtMs ?? null,
+    presentationAdvancedAtMs: input.presentationAdvancedAtMs ?? null,
+    backendSubmittedAtMs: input.backendSubmittedAtMs ?? null,
+    callbackEndedAtMs: input.callbackEndedAtMs,
+  });
 }
 
 function surfaceAnimationProjection(

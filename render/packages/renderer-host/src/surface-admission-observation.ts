@@ -37,6 +37,27 @@ export interface RendererSurfaceAutomaticSubmissionAdmissionAttempt {
   readonly outcome: RendererSurfaceAutomaticSubmissionAdmissionOutcome;
   readonly demand: RendererSurfaceSubmissionDemandDecision;
   readonly backend: RendererSurfaceAutomaticSubmissionAdmissionBackend;
+  readonly callback: RendererSurfaceAutomaticSubmissionCallbackPhases;
+}
+
+/**
+ * Wall-clock phase boundaries for one host RAF callback.
+ *
+ * These immutable timestamps attribute callback work without polling,
+ * scheduling, or submitting anything beyond the owning RAF callback. A null
+ * phase was not reached for that outcome.
+ */
+export interface RendererSurfaceAutomaticSubmissionCallbackPhases {
+  readonly schemaVersion: 1;
+  readonly callbackStartedAtMs: number;
+  readonly successorQueuedAtMs: number;
+  readonly demandObservedAtMs: number;
+  readonly backendReadinessObservedAtMs: number | null;
+  readonly controlsUpdatedAtMs: number | null;
+  readonly cameraUpdatedAtMs: number | null;
+  readonly presentationAdvancedAtMs: number | null;
+  readonly backendSubmittedAtMs: number | null;
+  readonly callbackEndedAtMs: number;
 }
 
 /** Bounded immutable observation of every recent host RAF admission attempt. */
@@ -84,6 +105,7 @@ export class RendererSurfaceAutomaticSubmissionAdmissionObservation {
     outcome: RendererSurfaceAutomaticSubmissionAdmissionOutcome,
     demand: RendererSurfaceSubmissionDemandDecision,
     backend: RendererSurfaceAutomaticSubmissionBackendReadout,
+    callback: RendererSurfaceAutomaticSubmissionCallbackPhases,
   ): void {
     this.#attemptCount += 1;
     switch (outcome) {
@@ -103,6 +125,7 @@ export class RendererSurfaceAutomaticSubmissionAdmissionObservation {
       sourceTimeMs,
       outcome,
       demand,
+      callback: Object.freeze({ ...callback }),
       backend: Object.freeze({
         mode: backend.mode,
         state: backend.state,
