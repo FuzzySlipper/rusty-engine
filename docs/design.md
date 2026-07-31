@@ -465,7 +465,9 @@ The Three adapter retains that hierarchy in a separate scene. The browser surfac
 animation-frame scheduler and coalesces accepted retained mutations, camera changes, and resizes
 into its next backend submission. Active controls, animation, or particles retain continuous
 display-clock advancement; an unchanged static scene does not continuously resubmit work to the
-backend. On WebGL2, software, unknown, and timing-fallback paths keep at most one automatic GPU
+backend. The single callback registers its sole successor before camera, presentation, and WebGL
+work so current submission load cannot delay registration beyond the browser's next display
+scheduling window. On WebGL2, software, unknown, and timing-fallback paths keep at most one automatic GPU
 command stream in flight. Positively identified accelerated WebGL2 with working timer queries
 may use a fixed eight-slot renderer-owned completion-query ring; a sync-fence ring adds an
 independent bound when that WebGL mechanism is available. This remains bounded

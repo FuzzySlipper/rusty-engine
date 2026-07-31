@@ -419,10 +419,12 @@ export function mountRendererBrowserSurface(
   };
 
   const tick = (timeMs: number): void => {
+    // Keep exactly one RAF queued before this callback touches WebGL so the
+    // browser can schedule the successor independently of submission work.
+    animationFrame = globalThis.requestAnimationFrame(tick);
     if (automaticSubmissionReady(timeMs)) {
       renderOnce(timeMs);
     }
-    animationFrame = globalThis.requestAnimationFrame(tick);
   };
 
   const start = (): void => {

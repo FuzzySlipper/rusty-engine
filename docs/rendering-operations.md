@@ -161,9 +161,11 @@ package-preparation path is exercised immediately when the commit reaches `main`
 
 ## Surface timing and telemetry
 
-`RendererSurface` owns the browser animation loop and every explicit `renderOnce` submission, so it
-is also the source of renderer timing observations. One immutable `RendererSurfaceTimingSample` is
-produced after each successfully submitted frame:
+`RendererSurface` owns the browser animation loop and every explicit `renderOnce` submission. The
+single callback registers its sole successor before camera, presentation, and WebGL work so the
+current submission cannot delay registration beyond the browser's next display scheduling window.
+The surface is also the source of renderer timing observations. One immutable
+`RendererSurfaceTimingSample` is produced after each successfully submitted frame:
 
 - `frameIntervalMs` is render cadence: the difference between consecutive surface source
   timestamps. The existing telemetry metric `frameTimeMs` deliberately means this cadence. It is

@@ -398,6 +398,10 @@ function mountPreparedRendererSurface(
   };
 
   const tick = (timeMs: number): void => {
+    // Register the sole successor before camera, presentation, and WebGL work.
+    // Browsers can otherwise miss the next display scheduling window when the
+    // callback requests its successor only after submitting the current frame.
+    animationFrame = globalThis.requestAnimationFrame(tick);
     const demand = submissionDemand.consumeDecision(
       surfaceViewport(canvas),
       continuousDemand(),
@@ -423,7 +427,6 @@ function mountPreparedRendererSurface(
         requestAutomaticSubmission();
       }
     }
-    animationFrame = globalThis.requestAnimationFrame(tick);
   };
   const start = (): void => {
     if (disposed) throw new Error('renderer surface is disposed');
