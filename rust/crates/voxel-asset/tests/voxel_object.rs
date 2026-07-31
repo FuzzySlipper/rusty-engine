@@ -219,6 +219,35 @@ fn frame_facts_are_bounded_canonical_and_content_hash_bound() {
 }
 
 #[test]
+fn arbitrary_finite_frame_facts_round_trip_without_hash_drift() {
+    let mut source = object();
+    source.clips[1].frames_per_second = 29.999985000007502;
+    let frame = &mut source.clips[1].frames[0];
+    frame.duration_seconds = Some(0.050001);
+    frame.anchors.push(VoxelObjectFrameAnchor {
+        id: "head".to_owned(),
+        position: [-0.7078944505682253, 30.412909749883482, 5.514810415091855],
+    });
+    frame.collision = Some(VoxelObjectFrameCollision {
+        body: None,
+        hit_regions: vec![VoxelObjectHitRegion {
+            id: "head".to_owned(),
+            primitive: VoxelObjectCollisionPrimitive::Box {
+                center: [-0.7078944505682253, 30.412909749883482, 5.514810415091855],
+                half_extents: [1.2846152840524279, 1.0, 1.9556489550735954],
+            },
+        }],
+    });
+
+    let canonical = with_computed_voxel_object_hashes(source).unwrap();
+    let encoded = encode_voxel_object(&canonical).unwrap();
+    let decoded = decode_voxel_object(&encoded).unwrap();
+
+    assert_eq!(decoded, canonical);
+    assert_eq!(encode_voxel_object(&decoded).unwrap(), encoded);
+}
+
+#[test]
 fn malformed_duplicate_and_non_finite_frame_facts_fail_closed() {
     let mut source = object();
     let frame = &mut source.clips[1].frames[0];
