@@ -39,6 +39,7 @@ surface, and renderer host/resource lifecycle.
 - [Rendering operations](../rendering-operations.md)
 - [Downstream Engine revision contract](../topics/development/downstream-engine-revisions.md)
 - [Voxel mesh data plane](../topics/voxel/voxel-mesh-data-plane.md)
+- [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
 
 ## Public downstream surfaces
 

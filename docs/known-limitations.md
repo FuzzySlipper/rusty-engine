@@ -5,6 +5,22 @@ architecture boundaries are stated separately so agents do not “fix” them by
 introducing a second authority. Product-specific limitations belong to their
 downstream repositories.
 
+## Runtime voxel surface textures are contract-only
+
+- **Status:** scheduled
+- **Affected surface:** `svc-mesh`, `render-model`, `render-projection`, the isolated renderer,
+  and Studio voxel authoring
+- **Limitation:** The VTX0 decision and executable cell-space orientation/atlas spike are present,
+  but production mesh payloads do not yet emit tile-space attributes and retained voxel materials
+  do not yet realize PNG tile or atlas-region resources. Current voxel surfaces remain color-only.
+- **Detection:** `cargo test -p svc-mesh --locked` proves the selected basis, negative-coordinate
+  phase, chunk continuity, greedy geometry counts, and atlas formula without claiming visible
+  rendering.
+- **Follow-up:** Complete the ordered VTX1–VTX5 resource, mesh stream, material, renderer, and
+  Studio slices, then certify them in the exact public voxel consumer. The owning contract is
+  [runtime voxel surface textures](topics/voxel/voxel-surface-textures.md).
+- **Last reviewed:** 2026-08-01 / codex
+
 ## Animated voxel corpus breadth and GPU accounting
 
 - **Status:** accepted-temporary

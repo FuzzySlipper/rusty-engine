@@ -35,10 +35,14 @@ selection.
 - [Voxel asset format](../topics/voxel/voxel-asset-format.md)
 - [Voxel model conversion](../topics/voxel/voxel-model-conversion.md)
 - [Voxel mesh data plane](../topics/voxel/voxel-mesh-data-plane.md)
+- [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
 
 ## Public downstream surfaces
 
 - Strict JSON formats and codecs provide the durable border.
+- Runtime surface texture mapping is deliberately separate from conversion-time
+  source texture sampling; use the runtime texture decision before changing
+  either seam.
 - `voxel-convert` binaries and library APIs are offline producers with bounded
   diagnostics and resource ceilings. Its narrow `evaluate_clip_node_poses`
   seam returns canonical scale-preserving node transforms at one explicit

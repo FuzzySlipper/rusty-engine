@@ -13,8 +13,9 @@
 //! Every solid voxel contributes the faces whose neighbour is non-opaque;
 //! internal faces (and border faces against resident neighbour chunks) are
 //! culled. Remaining coplanar faces with the same material and normal are
-//! greedily merged into deterministic rectangles. UV/atlas and interleaved
-//! buffers remain deferred (ADR 0007 non-goals).
+//! greedily merged into deterministic rectangles. Runtime texture coordinates
+//! use the executable outward-facing basis in [`texture_mapping`]; emitting the
+//! selected tile-space vertex stream remains the VTX2 follow-on.
 //!
 //! Output is **deterministic**: material slot, `Direction6`, plane, row, and
 //! column order are all explicit. Rectangle growth prefers the positive
@@ -30,6 +31,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use core_space::{ChunkCoord, Direction6, VoxelCoord, VoxelGridSpec};
 use svc_spatial::VoxelWorld;
 use svc_volume::VoxelChunk;
+
+pub mod texture_mapping;
 
 /// One contiguous run of indices sharing a material slot — maps 1:1 to a
 /// `THREE.BufferGeometry` group (`addGroup(start, count, materialIndex)`).
@@ -559,6 +562,7 @@ mod tests {
     use super::*;
     use core_space::{ChunkDims, GridId, LocalVoxelCoord};
     use core_voxel::VoxelValue;
+    use texture_mapping::{project_voxel_surface_tile_corners, repeat_voxel_tile_coordinate};
 
     fn spec() -> VoxelGridSpec {
         VoxelGridSpec::new(GridId::new(0), 1.0, ChunkDims::cubic(4).unwrap()).unwrap()
@@ -816,6 +820,125 @@ mod tests {
         assert_eq!(mesh.stats.quads, 6);
         assert_eq!(mesh.stats.vertices, 24);
         assert_eq!(mesh.bounds.max, [12.0, 8.0, 0.25]);
+    }
+
+    #[test]
+    fn texture_mapping_spike_preserves_greedy_geometry_for_rectangles_and_material_borders() {
+        let cases = [(1_i64, 1_i64, 6_u32, 6_u32), (7, 1, 30, 6), (5, 3, 46, 6)];
+        for (width, height, source_faces, quads) in cases {
+            let cells = (0..height)
+                .flat_map(|y| {
+                    (0..width).map(move |x| MeshVoxelCell {
+                        coordinate: [x, y, 0],
+                        material_slot: 1,
+                    })
+                })
+                .collect::<Vec<_>>();
+            let mesh = mesh_cells_standalone(1.0, [0.0; 3], &cells, 100).unwrap();
+            assert_eq!(mesh.stats.source_faces, source_faces);
+            assert_eq!(mesh.stats.quads, quads);
+            assert_eq!(mesh.stats.vertices, quads * 4);
+            assert_eq!(mesh.stats.indices, quads * 6);
+        }
+
+        let mixed = [
+            MeshVoxelCell {
+                coordinate: [0, 0, 0],
+                material_slot: 1,
+            },
+            MeshVoxelCell {
+                coordinate: [1, 0, 0],
+                material_slot: 2,
+            },
+        ];
+        let mesh = mesh_cells_standalone(1.0, [0.0; 3], &mixed, 100).unwrap();
+        assert_eq!(mesh.stats.source_faces, 10);
+        assert_eq!(mesh.stats.quads, 10);
+        assert_eq!(mesh.groups.len(), 2);
+    }
+
+    #[test]
+    fn wound_greedy_corners_have_nonmirrored_tile_space_on_all_six_faces() {
+        for dir in Direction6::ALL {
+            let quad = Quad {
+                slot: 1,
+                coordinate: [-7, -5, -3],
+                dir,
+                u_length: 5,
+                v_length: 3,
+            };
+            let corners = quad_corners(quad).unwrap();
+            let tiles = project_voxel_surface_tile_corners(dir, corners, [0, 0, 0]).unwrap();
+            let signed_area = tiles
+                .iter()
+                .zip(tiles.iter().cycle().skip(1))
+                .take(4)
+                .map(|(left, right)| left[0] * right[1] - left[1] * right[0])
+                .sum::<f32>()
+                * 0.5;
+            assert!(
+                signed_area > 0.0,
+                "tile winding mirrored for {dir:?}: {tiles:?}"
+            );
+            let u_min = tiles
+                .iter()
+                .map(|point| point[0])
+                .fold(f32::INFINITY, f32::min);
+            let u_max = tiles
+                .iter()
+                .map(|point| point[0])
+                .fold(f32::NEG_INFINITY, f32::max);
+            let v_min = tiles
+                .iter()
+                .map(|point| point[1])
+                .fold(f32::INFINITY, f32::min);
+            let v_max = tiles
+                .iter()
+                .map(|point| point[1])
+                .fold(f32::NEG_INFINITY, f32::max);
+            assert_eq!((u_max - u_min) * (v_max - v_min), 15.0);
+        }
+    }
+
+    #[test]
+    fn independently_meshed_chunk_origins_share_one_texture_phase() {
+        let left = project_voxel_surface_tile_corners(
+            Direction6::PosZ,
+            [[15, 0, 1], [16, 0, 1], [16, 1, 1], [15, 1, 1]],
+            [-16, -8, 0],
+        )
+        .unwrap();
+        let right = project_voxel_surface_tile_corners(
+            Direction6::PosZ,
+            [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]],
+            [0, -8, 0],
+        )
+        .unwrap();
+        assert_eq!([left[1], left[2]], [right[0], right[3]]);
+    }
+
+    #[test]
+    fn atlas_repeat_spike_keeps_each_region_isolated_over_an_n_by_m_quad() {
+        let regions = [
+            ([0.0_f64, 0.0_f64], [32.0_f64, 16.0_f64]),
+            ([40.0_f64, 8.0_f64], [16.0_f64, 24.0_f64]),
+        ];
+        for (minimum, extent) in regions {
+            for tile in [[-3.25, -1.5], [0.0, 0.0], [2.75, 1.25], [5.0, 3.0]] {
+                let repeated = repeat_voxel_tile_coordinate(tile, [1.0, 1.0], [0.0, 0.0]).unwrap();
+                let uv = [
+                    (minimum[0] + 0.5 + repeated[0] * (extent[0] - 1.0)) / 64.0,
+                    (minimum[1] + 0.5 + repeated[1] * (extent[1] - 1.0)) / 64.0,
+                ];
+                let safe_min = [(minimum[0] + 0.5) / 64.0, (minimum[1] + 0.5) / 64.0];
+                let safe_max = [
+                    (minimum[0] + extent[0] - 0.5) / 64.0,
+                    (minimum[1] + extent[1] - 0.5) / 64.0,
+                ];
+                assert!((safe_min[0]..=safe_max[0]).contains(&uv[0]));
+                assert!((safe_min[1]..=safe_max[1]).contains(&uv[1]));
+            }
+        }
     }
 
     fn visible_faces(cells: &[MeshVoxelCell]) -> BTreeSet<Face> {

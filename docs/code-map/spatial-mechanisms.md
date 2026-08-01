@@ -31,6 +31,7 @@ from it.
 - [`svc-collision`](../../rust/crates/svc-collision)
 - [`svc-pathfinding`](../../rust/crates/svc-pathfinding)
 - [`svc-mesh`](../../rust/crates/svc-mesh)
+- [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
 
 ## Public downstream surfaces
 
@@ -40,6 +41,9 @@ from it.
   must stay synchronized with canonical voxel edits.
 - The smaller service crates remain useful where a consumer needs only one
   focused mechanism.
+- `svc-mesh::texture_mapping` owns the executable six-face tile basis and exact
+  cell-space projection used by the one greedy mesher; it owns no image or GPU
+  resource.
 
 ## Private or forbidden paths
 

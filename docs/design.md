@@ -423,6 +423,16 @@ These crates expose mechanism rather than policy. For example, `svc-pathfinding`
 but does not own AI intent; `svc-rng` creates a scoped deterministic stream but does not decide what
 is random; `svc-mesh` emits geometry but owns no renderer.
 
+Runtime voxel surface textures preserve that boundary and the single greedy mesher. The mesher
+projects canonical integer grid points into a deterministic outward-facing tile basis; material
+definitions own color-only, whole-texture repeat, or atlas-region repeat; renderer-neutral frames
+own bounded content-addressed encoded resources; and the isolated backend owns decode, GPU sampling,
+and disposal. Atlas repetition happens inside the assigned region through a derived sampling
+specialization, not by expanding a greedy rectangle or remeshing in TypeScript. World chunks use
+absolute voxel origins for continuous phase, while voxel objects use object-local coordinates. The
+selected formats, orientation, sampling, quotas, and failure behavior are fixed in
+[the runtime voxel surface texture decision](topics/voxel/voxel-surface-textures.md).
+
 ## Shared rendering boundary
 
 `render-model` owns the complete versioned retained-frame vocabulary: stable handles, hierarchy,
@@ -436,6 +446,9 @@ the descriptor names identity, hash, length, encoding, and stream offsets but no
 `render-projection` can return those derived bytes beside a control frame, while its caller owns
 publication and resolver policy. The durable format, measured tradeoffs, and migration are fixed in
 [the voxel mesh data-plane decision](topics/voxel/voxel-mesh-data-plane.md).
+Runtime image bytes and voxel tile-space/atlas mapping use the adjacent
+[voxel surface texture decision](topics/voxel/voxel-surface-textures.md); they do not turn a path,
+URL, browser image, or Three texture into Rust authority.
 
 `render-projection` owns deterministic, fail-atomic adapters over explicit read-only inputs. Entity
 projection reads `EntityState`; voxel projection reads `VoxelCollisionScene`; authored projection

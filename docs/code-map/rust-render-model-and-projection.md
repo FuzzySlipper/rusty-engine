@@ -29,6 +29,7 @@ entity, authored-scene, voxel, and presentation facts.
 - [Rendering successor contract](../rendering-successor-contract.md)
 - [Rendering operations](../rendering-operations.md)
 - [Voxel mesh data plane](../topics/voxel/voxel-mesh-data-plane.md)
+- [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
 
 ## Public downstream surfaces
 

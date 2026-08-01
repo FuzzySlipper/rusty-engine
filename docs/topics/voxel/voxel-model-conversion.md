@@ -126,6 +126,9 @@ texture binding names a hash-pinned imported `TEXCOORD_n`; barycentric UV interp
 clamp-to-edge nearest-texel sampling happen independently for each cell. The binding's `sampleUv`
 still chooses the representative/fallback source-material mapping for schema compatibility, but it
 does not replace per-cell UV evidence. Missing coordinates or UV hash drift fail before output.
+This offline palette-selection mechanism is not a runtime surface texture. The independent runtime
+tile and atlas contract is [voxel surface textures](voxel-surface-textures.md); its material
+bindings must not reuse conversion sampling requests as presentation state.
 
 Solid conversion first assigns one topology vertex to every exactly coincident finite position,
 normalizing signed zero but using no scale-dependent epsilon. UV, hard-normal, and material seams

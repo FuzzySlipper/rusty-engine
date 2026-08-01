@@ -34,6 +34,12 @@ identity, or renderer ownership. Runtime admission continues to charge the
 unmerged visible-face count, so greedy compression does not relax its bounded
 work limit.
 
+Runtime tile-space attributes and atlas-region repetition preserve this exact
+partition. Their orientation, coordinate origin, sampling, and quota contract
+is defined separately in
+[runtime voxel surface textures](voxel-surface-textures.md); ordinary whole-atlas
+wrapping and per-voxel face expansion are not valid implementations.
+
 ## Evidence and rejected candidates
 
 The decision uses the checked `rusty-engine-voxels` baseline and 96x144x96
