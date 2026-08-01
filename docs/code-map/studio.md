@@ -105,6 +105,10 @@ application in Chromium, covers Voxel Object, unknown read-only fallback, a real
 and canonical reread, then repeats the read in a fresh adapter process. The final command proves the
 pinned animated-voxel runtime/quality workflow.
 
+Browser rejection proof uses the same bounded project-mutation readiness budget as successful
+preparation, then requires a visible error diagnostic, a disabled apply action, and an unchanged
+project hash. A short presentation timeout is not an authority or atomicity boundary.
+
 ## Common agent mistakes
 
 - Treating a mocked adapter receipt as proof of a real downstream mutation.

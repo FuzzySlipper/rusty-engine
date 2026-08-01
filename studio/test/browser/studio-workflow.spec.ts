@@ -351,9 +351,11 @@ test('host-user input settings and general asset import reimport persist through
   dialog = page.locator('[data-visual-id="studio-authoring-dialog"]');
   await dialog.getByLabel('Source mesh').fill('content/assets/rejected.mesh.json');
   await dialog.getByRole('button', { name: 'Prepare import', exact: true }).click();
-  await expect(plan.locator('.asset-diagnostic.is-error').first()).toBeVisible({
+  const invalidDiagnostic = plan.locator('.asset-diagnostic.is-error').first();
+  await expect(invalidDiagnostic).toBeVisible({
     timeout: projectMutationTimeout,
   });
+  await expect(invalidDiagnostic).toContainText('error ·');
   await expect(plan.getByRole('button', { name: 'Apply atomically', exact: true })).toBeDisabled();
   await expect(shell).toHaveAttribute('data-project-hash', hashBeforeInvalidPlan);
   await plan.getByRole('button', { name: 'Discard', exact: true }).click();
