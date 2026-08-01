@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "repository": "FuzzySlipper/rusty-engine-voxels",
   "publicRepository": "https://github.com/FuzzySlipper/rusty-engine-voxels",
-  "commit": "0281a77887884aaabbb1acc1972f3a2f57ef34f0",
+  "commit": "b7d56a919cc91973637b312fea541814818f1c18",
   "engineCommit": "c02754812d53df5363c9e6475c685c54e532f5e5",
   "evidenceEngineCommit": "1703f46f1624d32b8324f831107a068d5f66ab30",
   "projectFile": "content/projects/voxel-lab.project.json",
