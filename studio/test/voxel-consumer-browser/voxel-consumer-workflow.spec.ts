@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { readFile } from 'node:fs/promises';
@@ -273,13 +273,13 @@ test('runtime voxel surfaces author repeat and atlas mappings through Rust and r
   await expect(atlas).toBeVisible();
   const mobileAuthoringPixelHash = sha256(await surfaces.screenshot());
   expect(mobileAuthoringPixelHash).not.toBe(initialPixelHash);
-  await page.getByRole('button', { name: 'Close Project' }).click();
+  await closeProjectThroughFileMenu(page);
   await expect(viewport).toHaveAttribute('data-texture-resources', '0');
   await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(projectFile)}`);
   await expect(shell).toHaveAttribute('data-project-hash', atlasProjectHash);
   await expect(viewport).toHaveAttribute('data-renderer-status', 'ready');
   await expect(viewport).toHaveAttribute('data-texture-resources', '1');
-  await page.getByRole('button', { name: 'Close Project' }).click();
+  await closeProjectThroughFileMenu(page);
   await expect(viewport).toHaveAttribute('data-texture-resources', '0');
   expect((await readFile(projectPath)).byteLength).toBeGreaterThan(0);
 
@@ -324,7 +324,7 @@ test('fresh Studio host reopens the persisted atlas surface and disposes it on c
   await expect(surfaces.locator('[data-visual-id="voxel-surface-texture-readout"]'))
     .toContainText('16 × 8 px');
   const freshHostPixelHash = sha256(await canvas.screenshot());
-  await page.getByRole('button', { name: 'Close Project' }).click();
+  await closeProjectThroughFileMenu(page);
   await expect(viewport).toHaveAttribute('data-texture-resources', '0');
   process.stdout.write(`${JSON.stringify({
     kind: 'studioVoxelSurfaceFreshHostEvidence',
@@ -353,6 +353,15 @@ async function scrubAndWait(
   await expect(playback).toContainText(`frame ${String(value)}`);
   await expect.poll(() => rendererHash(viewport), { timeout: 30_000 }).not.toBe(before);
   return Number((performance.now() - started).toFixed(3));
+}
+
+async function closeProjectThroughFileMenu(page: Page): Promise<void> {
+  const closeProject = page.getByRole('button', { name: 'Close Project' });
+  if (!(await closeProject.isVisible())) {
+    await page.getByRole('button', { name: 'File', exact: true }).click();
+  }
+  await expect(closeProject).toBeVisible({ timeout: 30_000 });
+  await closeProject.click();
 }
 
 async function rendererHash(viewport: Locator): Promise<string> {
