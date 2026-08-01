@@ -8,7 +8,8 @@ use asset_import::{
     plan_animated_glb_import, plan_animated_gltf_import, plan_import, publish_directory_atomically,
     publish_directory_with_sidecar_atomically, reconcile, reconcile_source_hash, sidecar_path,
     GltfResource, GltfSourceClosure, ImportContext, ImportMode, ImportPlan, ImportSettings,
-    SourceUri, IMPORTER_VERSION, MAX_GLTF_RESOURCE_BYTES, MAX_SOURCE_BYTES,
+    SourceUri, IMPORTER_VERSION, MAX_GLTF_RESOURCE_BYTES, MAX_GLTF_TOTAL_RESOURCE_BYTES,
+    MAX_SOURCE_BYTES,
 };
 
 const MAX_AUXILIARY_BYTES: usize = 4 * 1024 * 1024;
@@ -340,11 +341,26 @@ fn load_gltf_source_closure(
     source_path: &Path,
     root_json: Vec<u8>,
 ) -> Result<GltfSourceClosure, Box<dyn std::error::Error>> {
+    load_gltf_source_closure_with_limits(
+        source_path,
+        root_json,
+        MAX_GLTF_RESOURCE_BYTES,
+        MAX_GLTF_TOTAL_RESOURCE_BYTES,
+    )
+}
+
+fn load_gltf_source_closure_with_limits(
+    source_path: &Path,
+    root_json: Vec<u8>,
+    per_resource_limit: usize,
+    aggregate_limit: usize,
+) -> Result<GltfSourceClosure, Box<dyn std::error::Error>> {
     let resource_uris =
         gltf_relative_resource_uris(&root_json).map_err(|diagnostic| diagnostic.render())?;
     let parent = source_path.parent().unwrap_or_else(|| Path::new("."));
     let canonical_parent = fs::canonicalize(parent)?;
     let mut resources = Vec::with_capacity(resource_uris.len());
+    let mut retained_bytes = 0usize;
     for uri in resource_uris {
         let candidate = canonical_parent.join(&uri);
         let canonical = fs::canonicalize(&candidate).map_err(|error| {
@@ -356,10 +372,25 @@ fn load_gltf_source_closure(
             )
             .into());
         }
-        resources.push(GltfResource {
-            uri,
-            bytes: read_bounded(&canonical, MAX_GLTF_RESOURCE_BYTES)?,
-        });
+        let remaining = aggregate_limit.checked_sub(retained_bytes).ok_or_else(|| {
+            format!(
+                "source.resources: total resource bytes exceed the {aggregate_limit}-byte admission limit"
+            )
+        })?;
+        let read_limit = per_resource_limit.min(remaining);
+        let bytes = read_bounded(&canonical, read_limit).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::InvalidData {
+                format!(
+                    "source.resources[{uri}]: resource exceeds its remaining bounded allowance: {error}"
+                )
+            } else {
+                format!("source.resources[{uri}]: resource could not be read: {error}")
+            }
+        })?;
+        retained_bytes = retained_bytes
+            .checked_add(bytes.len())
+            .ok_or_else(|| "source.resources: total resource byte count overflowed".to_owned())?;
+        resources.push(GltfResource { uri, bytes });
     }
     Ok(GltfSourceClosure {
         root_json,
@@ -375,4 +406,51 @@ fn is_extension(path: &Path, expected: &str) -> bool {
 
 fn usage() -> &'static str {
     "usage:\n  rusty-asset-import plan <source.mesh.json|source.glb|source.gltf> <output-dir>\n  rusty-asset-import write <source.mesh.json|source.glb|source.gltf> <output-dir>\n  rusty-asset-import init-sidecar <source> [sidecar]\n  rusty-asset-import validate-sidecar <source> [sidecar]"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gltf_loader_accepts_exact_aggregate_and_rejects_one_over_before_retention() {
+        let root = std::env::temp_dir().join(format!(
+            "rusty-asset-import-gltf-loader-{}",
+            std::process::id()
+        ));
+        if root.exists() {
+            fs::remove_dir_all(&root).unwrap();
+        }
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("bounded.gltf");
+        let document = br#"{
+          "asset":{"version":"2.0"},
+          "buffers":[
+            {"uri":"first.bin","byteLength":4},
+            {"uri":"second.bin","byteLength":4}
+          ]
+        }"#;
+        fs::write(&source, document).unwrap();
+        fs::write(root.join("first.bin"), [1, 2, 3, 4]).unwrap();
+        fs::write(root.join("second.bin"), [5, 6, 7, 8]).unwrap();
+        let exact = load_gltf_source_closure_with_limits(&source, document.to_vec(), 4, 8)
+            .expect("the exact aggregate limit is admitted");
+        assert_eq!(
+            exact
+                .resources
+                .iter()
+                .map(|resource| resource.bytes.len())
+                .sum::<usize>(),
+            8
+        );
+
+        fs::write(root.join("second.bin"), [5, 6, 7, 8, 9]).unwrap();
+        let sentinel = root.join("published.sentinel");
+        fs::write(&sentinel, b"unchanged").unwrap();
+        let failure = load_gltf_source_closure_with_limits(&source, document.to_vec(), 5, 8)
+            .expect_err("one byte over the aggregate limit must reject");
+        assert!(failure.to_string().contains("remaining bounded allowance"));
+        assert_eq!(fs::read(&sentinel).unwrap(), b"unchanged");
+        fs::remove_dir_all(root).unwrap();
+    }
 }
