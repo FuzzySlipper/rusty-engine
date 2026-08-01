@@ -8,7 +8,7 @@
   </header>
 
   <nav class="voxel-tabs" aria-label="Voxel authoring sections">
-    @for (section of ['assets', 'edit', 'annotations', 'convert']; track section) {
+    @for (section of ['assets', 'surfaces', 'edit', 'annotations', 'convert']; track section) {
       <button type="button" [class.is-active]="tab() === section" (click)="setTab($any(section))">
         {{ section }}
       </button>
@@ -160,6 +160,122 @@
               </div>
             </div>
           }
+        </section>
+      </div>
+    }
+
+    @if (tab() === 'surfaces') {
+      <div class="voxel-scroll" data-visual-id="voxel-surface-authoring">
+        <section class="voxel-section surface-intro">
+          <header><strong>Runtime voxel surfaces</strong><span>Rust-owned texture, atlas, material, and assignment</span></header>
+          <p>
+            This texture is sampled by the runtime voxel renderer. It is separate from the
+            source-texture sampling controls under Convert, which only classify mesh-to-voxel input.
+          </p>
+          <p>The shared viewport is the authoritative preview; Studio does not create a second preview shader.</p>
+        </section>
+
+        <section class="voxel-section">
+          <header><strong>Published surfaces</strong><span>{{ surfaceMaterials().length }} materials</span></header>
+          <div class="item-list">
+            @for (material of surfaceMaterials(); track material.materialAssetId) {
+              <button type="button" (click)="chooseSurfaceMaterial(material.materialAssetId)">
+                <strong>{{ material.materialAssetId }}</strong>
+                <span>{{ material.mapping.kind }} · {{ material.textureAssetId }} · {{ material.assignments.length }} assignments</span>
+              </button>
+            } @empty {
+              <p class="voxel-empty">No runtime voxel surface material has been published.</p>
+            }
+          </div>
+        </section>
+
+        <section class="voxel-section">
+          <header><strong>Texture import or reimport</strong><span>bounded PNG · immutable content hash</span></header>
+          <div class="form-grid">
+            <label class="wide"><span>Texture asset id</span><input [(ngModel)]="surfaceTextureAssetId" /></label>
+            <label><span>Source scope</span><select [(ngModel)]="surfaceTextureScope"><option value="project">Project</option><option value="host">Trusted host</option></select></label>
+            <label><span>Filter</span><select [(ngModel)]="surfaceFilter"><option value="nearest">Nearest</option><option value="linear">Linear</option></select></label>
+            <label class="wide"><span>PNG source</span><span class="host-path-field"><input [(ngModel)]="surfaceTexturePath" /><button type="button" (click)="browseSurfaceTexture()">Browse…</button></span></label>
+            <label class="wide"><span>Expected texture hash (required to replace)</span><input [(ngModel)]="surfaceExpectedTextureHash" /></label>
+          </div>
+          @if (selectedSurfaceTexture(); as texture) {
+            <dl class="readout-grid" data-visual-id="voxel-surface-texture-readout">
+              <dt>Content</dt><dd>{{ texture.contentHash }}</dd>
+              <dt>Dimensions</dt><dd>{{ texture.width }} × {{ texture.height }} px</dd>
+              <dt>Encoded</dt><dd>{{ texture.encodedByteLength }} bytes</dd>
+              <dt>Sampling</dt><dd>{{ texture.filter }} · {{ texture.wrap }}</dd>
+              <dt>Source</dt><dd>{{ texture.sourcePath }}</dd>
+            </dl>
+          }
+        </section>
+
+        <section class="voxel-section">
+          <header><strong>Surface mapping</strong><span>repeat or padded atlas region</span></header>
+          <div class="form-grid">
+            <label><span>Mapping</span><select [(ngModel)]="surfaceMapping"><option value="repeat">Repeat</option><option value="atlas">Atlas</option></select></label>
+            <label><span>Alpha</span><select [(ngModel)]="surfaceAlphaMode"><option value="opaque">Opaque</option><option value="mask">Mask</option><option value="blend">Blend</option></select></label>
+            @if (surfaceAlphaMode === 'mask') {
+              <label><span>Alpha cutoff</span><input type="number" min="0" max="1" step="0.05" [(ngModel)]="surfaceAlphaCutoff" /></label>
+            }
+            <label class="wide"><span>Material asset id</span><input [(ngModel)]="surfaceMaterialId" /></label>
+            <label class="wide"><span>Expected material hash (required to replace)</span><input [(ngModel)]="surfaceExpectedMaterialHash" /></label>
+            <label><span>Tint</span><input type="color" [(ngModel)]="surfaceColor" /></label>
+            <label><span>Roughness</span><input type="number" min="0" step="0.05" [(ngModel)]="surfaceRoughness" /></label>
+            <label><span>Emissive</span><input type="number" min="0" step="0.05" [(ngModel)]="surfaceEmissive" /></label>
+          </div>
+          <span>Tile scale in cells</span>
+          <div class="axis-row two" aria-label="Tile scale in cells">
+            @for (axis of [0, 1]; track axis) { <input type="number" min="0.0001" step="0.25" [(ngModel)]="surfaceTileScale[axis]" /> }
+          </div>
+          <span>Tile origin in cells</span>
+          <div class="axis-row two" aria-label="Tile origin in cells">
+            @for (axis of [0, 1]; track axis) { <input type="number" step="0.25" [(ngModel)]="surfaceTileOrigin[axis]" /> }
+          </div>
+
+          @if (surfaceMapping === 'atlas') {
+            <div class="atlas-editor" data-visual-id="voxel-atlas-editor">
+              <div class="form-grid">
+                <label class="wide"><span>Atlas asset id</span><input [(ngModel)]="surfaceAtlasId" /></label>
+                <label class="wide"><span>Expected atlas hash (required to edit)</span><input [(ngModel)]="surfaceExpectedAtlasHash" /></label>
+                <label class="wide"><span>Region id</span><input [(ngModel)]="surfaceRegionId" /></label>
+              </div>
+              <span>Content minimum (pixels)</span>
+              <div class="axis-row two">
+                @for (axis of [0, 1]; track axis) { <input type="number" min="0" [(ngModel)]="surfaceRegionMin[axis]" /> }
+              </div>
+              <span>Content extent (pixels)</span>
+              <div class="axis-row two">
+                @for (axis of [0, 1]; track axis) { <input type="number" min="1" [(ngModel)]="surfaceRegionExtent[axis]" /> }
+              </div>
+              <span>Padding left / right / bottom / top (pixels)</span>
+              <div class="axis-row four">
+                @for (axis of [0, 1, 2, 3]; track axis) { <input type="number" min="0" [(ngModel)]="surfaceRegionPadding[axis]" /> }
+              </div>
+              <div class="atlas-region-preview" role="img" aria-label="Atlas region and half texel inset preview">
+                <span>padding</span><strong>{{ surfaceRegionId }}</strong><small>half-texel inset</small>
+              </div>
+              <dl class="readout-grid">
+                <dt>Pixel bounds</dt><dd>{{ surfaceRegionMin.join(', ') }} + {{ surfaceRegionExtent.join(' × ') }}</dd>
+                <dt>Normalized safe bounds</dt><dd>{{ surfaceNormalizedBounds() }}</dd>
+                <dt>Policy</dt><dd>{{ surfaceFilter }} · clamp · halfTexel</dd>
+              </dl>
+            </div>
+          }
+        </section>
+
+        <section class="voxel-section">
+          <header><strong>Authoritative assignment</strong><span>atomic project mutation</span></header>
+          <div class="form-grid">
+            <label class="wide"><span>Scene id</span><input [placeholder]="entryScene()" [(ngModel)]="surfaceSceneId" /></label>
+            <label class="wide"><span>Voxel instance id</span><input [placeholder]="selectedInstance()?.instance?.instanceId ?? ''" [(ngModel)]="surfaceInstanceId" /></label>
+            <label><span>Material slot</span><input type="number" min="0" [(ngModel)]="surfaceMaterialSlot" /></label>
+          </div>
+          <div class="button-row wrap">
+            <button type="button" class="primary" data-action="apply-voxel-surface" [disabled]="busy()" (click)="upsertSurfaceMaterial()">Import and apply surface</button>
+            <button type="button" [disabled]="busy() || surfaceMaterials().length === 0" (click)="removeSurfaceMaterial()">Remove unused surface</button>
+          </div>
+          <p>Apply is guarded by the current project and content hashes. Typed rejection leaves project bytes, selection, and viewport unchanged.</p>
+          @if (formError(); as error) { <p class="form-error" role="alert">{{ error }}</p> }
         </section>
       </div>
     }

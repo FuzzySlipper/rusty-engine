@@ -25,6 +25,9 @@ import type {
   VoxelPickReadout,
   VoxelPrimitiveRequest,
   VoxelTemplateRequest,
+  VoxelSurfaceAssignmentDraft,
+  VoxelSurfaceMaterialDraft,
+  VoxelSurfaceTextureFilter,
 } from '@rusty-engine/studio-adapter-client';
 
 export interface VoxelViewportPickCandidate {
@@ -64,6 +67,24 @@ export interface VoxelPickValidationInput {
 
 export type VoxelEditorAction =
   | { readonly kind: 'upsertMaterial'; readonly assetId: string; readonly definition: StoredMaterialDefinition }
+  | {
+    readonly kind: 'upsertVoxelSurfaceMaterial';
+    readonly textureAssetId: string;
+    readonly expectedTextureContentHash: string | null;
+    readonly textureSource: StudioFileSelection;
+    readonly filter: VoxelSurfaceTextureFilter;
+    readonly material: VoxelSurfaceMaterialDraft;
+    readonly assignment: VoxelSurfaceAssignmentDraft;
+  }
+  | {
+    readonly kind: 'removeVoxelSurfaceMaterial';
+    readonly materialAssetId: string;
+    readonly expectedMaterialContentHash: string;
+    readonly textureAssetId: string;
+    readonly expectedTextureContentHash: string;
+    readonly atlasAssetId: string | null;
+    readonly expectedAtlasContentHash: string | null;
+  }
   | { readonly kind: 'initializeAsset'; readonly assetId: string; readonly cellSize: number; readonly chunkSize: number; readonly origin: Vector3i; readonly bounds: VoxelBounds; readonly materialPalette: readonly VoxelMaterialBinding[]; readonly initialMaterialSlot: number }
   | { readonly kind: 'duplicateAsset'; readonly sourceAssetId: string; readonly expectedSourceContentHash: string; readonly targetAssetId: string }
   | { readonly kind: 'attachInstance'; readonly sceneId: string; readonly instance: StoredVoxelInstance }

@@ -1,9 +1,8 @@
 # Runtime voxel surface textures
 
-Status: selected VTX0 contract with VTX1 bounded PNG resource realization,
-VTX2 tile-coordinate mesh streams, VTX3 canonical material/atlas bindings, and
-VTX4 Three-backend sampling implemented. Studio authoring remains the VTX5
-follow-on.
+Status: VTX0–VTX5 implemented: bounded PNG resources, tile-coordinate mesh
+streams, canonical material/atlas bindings, Three-backend sampling, and strict
+Studio authoring through a downstream Rust adapter.
 
 ## Decision and ownership
 
@@ -282,8 +281,11 @@ cargo clippy -p svc-mesh --all-targets --locked -- -D warnings
 - VTX4 realizes the selected sampling specialization in the existing Three
   mesh/material path and supplies framebuffer/Chromium proof. This slice is
   implemented.
-- VTX5 routes canonical texture/atlas authoring through the existing Studio
-  adapter and project mutation boundary.
+- VTX5 routes PNG import/reimport, texture and atlas inspection, region editing,
+  material-slot assignment, removal, strict readback, and renderer resource
+  resolution through protocol 14 and the existing Studio project mutation
+  boundary. TypeScript retains only form and observational state; the selected
+  downstream Rust adapter owns canonical admission and persistence.
 
 Model-conversion source sampling remains in `voxel-convert`; none of these
 follow-ons should reuse its palette sampling structs as a runtime material

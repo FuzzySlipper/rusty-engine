@@ -6,6 +6,7 @@ import type {
   AssetImportPlanReadout,
   CanonicalOwnerContent,
   MeshResourceReadout,
+  TextureResourceReadout,
   OwnerInspections,
   ProjectionReadout,
   ProjectionFrameKind,
@@ -36,6 +37,7 @@ import type {
   StudioSceneAppearance,
   StudioSceneObjectDraft,
   VoxelAuthoringReadout,
+  VoxelSurfaceAuthoringReadout,
 } from '@rusty-engine/studio-adapter-client';
 import {
   MAX_VOXEL_OBJECT_INSTANCE_BATCH,
@@ -95,9 +97,11 @@ export interface AuthoringDocumentView {
   readonly entityComponents: readonly StudioEntityComponentReference[];
   readonly voxel: Readonly<Record<string, unknown>> | null;
   readonly voxelAuthoring: VoxelAuthoringReadout;
+  readonly voxelSurfaceAuthoring: VoxelSurfaceAuthoringReadout;
   readonly voxelObjectAuthoring: VoxelObjectAuthoringReadout;
   readonly animatedMeshResources: readonly AnimatedMeshResourceReadout[];
   readonly meshResources: readonly MeshResourceReadout[];
+  readonly textureResources: readonly TextureResourceReadout[];
 }
 
 export interface AssetWorkspaceState {
@@ -123,6 +127,7 @@ export interface LiveProjectionView {
   readonly readout: ProjectionReadout<ProjectionFrameKind>;
   /** Content-addressed resources required by this exact retained frame. */
   readonly meshResources: readonly MeshResourceReadout[];
+  readonly textureResources: readonly TextureResourceReadout[];
   readonly entities: readonly ProjectedEntityView[];
   readonly generation: number;
 }
@@ -273,6 +278,7 @@ interface CanonicalProjectProjection {
   readonly projectScopeGeneration: number;
   readonly frame: RenderFrameDiff;
   readonly meshResources: readonly MeshResourceReadout[];
+  readonly textureResources: readonly TextureResourceReadout[];
   readonly entities: readonly ProjectedEntityView[];
 }
 
@@ -1035,6 +1041,28 @@ export class StudioWorkspaceStore {
             expectedProjectHash,
             assetId: action.assetId,
             definition: action.definition,
+          }));
+          return;
+        case 'upsertVoxelSurfaceMaterial':
+          this.#acceptVoxelMutation(await this.#client.upsertVoxelSurfaceMaterial({
+            expectedProjectHash,
+            textureAssetId: action.textureAssetId,
+            expectedTextureContentHash: action.expectedTextureContentHash,
+            textureSource: action.textureSource,
+            filter: action.filter,
+            material: action.material,
+            assignment: action.assignment,
+          }));
+          return;
+        case 'removeVoxelSurfaceMaterial':
+          this.#acceptVoxelMutation(await this.#client.removeVoxelSurfaceMaterial({
+            expectedProjectHash,
+            materialAssetId: action.materialAssetId,
+            expectedMaterialContentHash: action.expectedMaterialContentHash,
+            textureAssetId: action.textureAssetId,
+            expectedTextureContentHash: action.expectedTextureContentHash,
+            atlasAssetId: action.atlasAssetId,
+            expectedAtlasContentHash: action.expectedAtlasContentHash,
           }));
           return;
         case 'initializeAsset':
@@ -2092,6 +2120,9 @@ export class StudioWorkspaceStore {
         framePatch: null,
         readout,
         meshResources,
+        textureResources: base.kind === 'project'
+          ? this.#currentCanonicalProjectProjection()?.textureResources ?? []
+          : [],
         entities: summarizeProjectionForUi(frame, ownerEntityIds, []),
         generation,
       },
@@ -2146,6 +2177,7 @@ export class StudioWorkspaceStore {
         framePatch,
         readout,
         meshResources: meshResources ?? base.meshResources,
+        textureResources: base.textureResources,
         entities: base.entities,
         generation,
       },
@@ -2247,6 +2279,7 @@ export class StudioWorkspaceStore {
       projectScopeGeneration: this.#projectScopeGeneration,
       frame: project.projection,
       meshResources: project.meshResources ?? [],
+      textureResources: project.textureResources ?? [],
       entities,
     };
     this.#liveProjectionBase = projectionBase;
@@ -2270,15 +2303,18 @@ export class StudioWorkspaceStore {
         entityComponents: project.entityComponents,
         voxel: project.voxel ?? null,
         voxelAuthoring: project.voxelAuthoring,
+        voxelSurfaceAuthoring: project.voxelSurfaceAuthoring,
         voxelObjectAuthoring: project.voxelObjectAuthoring,
         animatedMeshResources: project.animatedMeshResources,
         meshResources: project.meshResources ?? [],
+        textureResources: project.textureResources ?? [],
       },
       liveProjection: {
         frame: project.projection,
         framePatch: null,
         readout: project.projectionReadout,
         meshResources: project.meshResources ?? [],
+        textureResources: project.textureResources ?? [],
         entities,
         generation: (current.liveProjection?.generation ?? 0) + 1,
       },

@@ -1,6 +1,6 @@
 # Studio external-project adapter protocol
 
-Status: protocol 13 implemented in Engine; exact downstream adapter certification required
+Status: protocol 14 implemented in Engine; exact downstream adapter certification required
 
 Rusty Engine Studio talks to one project-owned Rust adapter at a time through a bounded JSON-lines
 process. The adapter is a downstream composition root: it understands that project's layout,
@@ -13,7 +13,7 @@ against a real external checkout without turning that checkout into an ordinary 
 
 ## Closed protocol
 
-Every request carries `protocolVersion: 13` and a caller-selected `requestId`. Version 13 contains
+Every request carries `protocolVersion: 14` and a caller-selected `requestId`. Version 14 contains
 only these tagged request families:
 
 | Request | Purpose | Canonical authority |
@@ -29,6 +29,7 @@ only these tagged request families:
 | `setSceneObjectAppearance` | Replace empty, static-mesh, or typed light appearance and rerun resource/projection admission. | `authored-scene`, `asset-catalog`, render projection, downstream admission |
 | `setEntityCollision`, `setEntityKinematic` | Attach, replace, or remove named entity components atomically. | `entity-state`, downstream spatial admission, `content-store` |
 | `upsertMaterial` | Create or replace one stored material definition. | `asset-catalog`, downstream admission, `content-store` |
+| `upsertVoxelSurfaceMaterial`, `removeVoxelSurfaceMaterial` | Atomically admit or remove one bounded PNG texture, optional atlas, canonical voxel surface material, and exact instance-slot assignment under project and content-hash guards. | `render-model`, `asset-catalog`, render projection, downstream project adapter |
 | `prepareAssetImport`, `prepareAssetReimport`, `applyAssetImport`, `discardAssetImport` | Read bounded project/host textual static-mesh or binary animated-GLB sources into a private deterministic plan, expose diagnostics/dependencies/generated locks, then install the exact candidate atomically or discard it. | `asset-import`, `asset-catalog`, project adapter, `content-store` |
 | `initializeVoxelAsset`, `duplicateVoxelAsset`, `replaceVoxelPalette` | Create or change canonical project-embedded voxel assets under exact asset guards. | `voxel-asset`, `engine-spatial`, project adapter |
 | `attachVoxelInstance`, `setVoxelInstanceTransform`, `removeVoxelInstance` | Manage transformed scene instances without giving Studio scene authority. | downstream scene schema plus `authored-scene`/projection admission |
@@ -69,6 +70,12 @@ The isolated Studio workspace includes the same-repository renderer packages exp
 `viewport` library mounts `renderer-host`, which composes render-projection and renderer-three;
 Studio does not import Three, retain a private scene graph, translate materials/resources, own a
 raycaster, or duplicate renderer disposal.
+
+Protocol 14 also requires one closed `voxelSurfaceAuthoring` readout. Its texture,
+atlas, material, assignment, version, and hash facts are reconstructed by the
+downstream Rust adapter. Optional `textureResources` identify only admitted
+content-addressed PNG bytes; Studio resolves them through the existing trusted
+host resource route and never treats a browser-selected path as catalog truth.
 
 ## Loading Bay owner composition
 

@@ -179,6 +179,18 @@ export class StudioAdapterClient {
     return this.#mutation('setEntityKinematic', input);
   }
 
+  upsertVoxelSurfaceMaterial(
+    input: RequestInput<'upsertVoxelSurfaceMaterial'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('upsertVoxelSurfaceMaterial', input);
+  }
+
+  removeVoxelSurfaceMaterial(
+    input: RequestInput<'removeVoxelSurfaceMaterial'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('removeVoxelSurfaceMaterial', input);
+  }
+
   setEntityTranslation(
     input: SetEntityTranslationInput,
   ): Promise<EntityTranslationAppliedResponse> {
@@ -549,6 +561,8 @@ type MutationRequestType =
   | 'setEntityCollision'
   | 'setEntityKinematic'
   | 'upsertMaterial'
+  | 'upsertVoxelSurfaceMaterial'
+  | 'removeVoxelSurfaceMaterial'
   | 'applyAssetImport'
   | 'initializeVoxelAsset'
   | 'duplicateVoxelAsset'

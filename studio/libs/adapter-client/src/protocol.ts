@@ -53,12 +53,20 @@ import {
   type VoxelObjectSourceInspection,
   type VoxelObjectSourceKind,
 } from './voxel-object-protocol.js';
+import {
+  validateVoxelSurfaceAuthoringReadout,
+  type VoxelSurfaceAssignmentDraft,
+  type VoxelSurfaceAuthoringReadout,
+  type VoxelSurfaceMaterialDraft,
+  type VoxelSurfaceTextureFilter,
+} from './voxel-surface-protocol.js';
 
 export type * from './voxel-protocol.js';
 export type * from './voxel-object-protocol.js';
+export type * from './voxel-surface-protocol.js';
 export { MAX_VOXEL_OBJECT_INSTANCE_BATCH } from './voxel-protocol.js';
 
-export const STUDIO_ADAPTER_PROTOCOL_VERSION = 13 as const;
+export const STUDIO_ADAPTER_PROTOCOL_VERSION = 14 as const;
 // Requests remain compact control-plane commands. Responses include complete
 // retained-frame readouts; 64 MiB admits the checked 96x144x96 voxel-object
 // corpus while retaining a finite host/browser liveness guard.
@@ -95,6 +103,8 @@ export type StudioAdapterRequest =
   | SetEntityKinematicRequest
   | SetEntityTranslationRequest
   | UpsertMaterialRequest
+  | UpsertVoxelSurfaceMaterialRequest
+  | RemoveVoxelSurfaceMaterialRequest
   | PrepareAssetImportRequest
   | PrepareAssetReimportRequest
   | ApplyAssetImportRequest
@@ -339,6 +349,34 @@ export interface UpsertMaterialRequest extends RequestHeader {
   readonly expectedProjectHash: string;
   readonly assetId: string;
   readonly definition: StoredMaterialDefinition;
+}
+
+/**
+ * One Rust-owned transaction imports/reimports the PNG, validates the complete
+ * catalog closure, publishes the material, and assigns it to one canonical
+ * voxel-object slot. Studio supplies form intent and a trusted path only.
+ */
+export interface UpsertVoxelSurfaceMaterialRequest extends RequestHeader {
+  readonly type: 'upsertVoxelSurfaceMaterial';
+  readonly expectedProjectHash: string;
+  readonly textureAssetId: string;
+  readonly expectedTextureContentHash: string | null;
+  readonly textureSource: StudioFileSelection;
+  readonly filter: VoxelSurfaceTextureFilter;
+  readonly material: VoxelSurfaceMaterialDraft;
+  readonly assignment: VoxelSurfaceAssignmentDraft;
+}
+
+/** Remove one surface material and its now-unreferenced atlas/texture closure. */
+export interface RemoveVoxelSurfaceMaterialRequest extends RequestHeader {
+  readonly type: 'removeVoxelSurfaceMaterial';
+  readonly expectedProjectHash: string;
+  readonly materialAssetId: string;
+  readonly expectedMaterialContentHash: string;
+  readonly textureAssetId: string;
+  readonly expectedTextureContentHash: string;
+  readonly atlasAssetId: string | null;
+  readonly expectedAtlasContentHash: string | null;
 }
 
 export interface PrepareAssetImportRequest extends RequestHeader {
@@ -888,6 +926,8 @@ export const STUDIO_ADAPTER_OPERATIONS = [
   'setEntityKinematic',
   'setEntityTranslation',
   'upsertMaterial',
+  'upsertVoxelSurfaceMaterial',
+  'removeVoxelSurfaceMaterial',
   'prepareAssetImport',
   'prepareAssetReimport',
   'applyAssetImport',
@@ -961,17 +1001,27 @@ export interface StudioProjectReadout {
   readonly assetBrowser: AssetBrowserReadout;
   readonly voxel?: Readonly<Record<string, unknown>>;
   readonly voxelAuthoring: VoxelAuthoringReadout;
+  readonly voxelSurfaceAuthoring: VoxelSurfaceAuthoringReadout;
   readonly voxelObjectAuthoring: VoxelObjectAuthoringReadout;
   readonly animatedMeshResources: readonly AnimatedMeshResourceReadout[];
   /** Optional protocol-9 extension. Its manifest and packed byte encoding are
    * independently versioned, so existing inline adapters remain valid. */
   readonly meshResources?: readonly MeshResourceReadout[];
+  /** Optional protocol-14 content-addressed PNG resources for retained textures. */
+  readonly textureResources?: readonly TextureResourceReadout[];
   readonly entityComponents: readonly StudioEntityComponentReference[];
   readonly projection: RenderFrameDiff;
   readonly projectionReadout: ProjectionReadout;
 }
 
 export interface MeshResourceReadout {
+  readonly resource: string;
+  readonly contentHash: string;
+  readonly byteLength: number;
+  readonly sourcePath: string;
+}
+
+export interface TextureResourceReadout {
   readonly resource: string;
   readonly contentHash: string;
   readonly byteLength: number;
@@ -1680,13 +1730,14 @@ function projectReadout(input: unknown, path: string): void {
       'sceneHierarchy',
       'assetBrowser',
       'voxelAuthoring',
+      'voxelSurfaceAuthoring',
       'voxelObjectAuthoring',
       'animatedMeshResources',
       'entityComponents',
       'projection',
       'projectionReadout',
     ],
-    ['voxel', 'meshResources'],
+    ['voxel', 'meshResources', 'textureResources'],
   );
   projectIdentity(value['identity'], `${path}.identity`);
   canonicalOwnerContent(value['canonical'], `${path}.canonical`);
@@ -1696,6 +1747,11 @@ function projectReadout(input: unknown, path: string): void {
   optional(value['voxel'], `${path}.voxel`, looseRecord);
   voxelContract(`${path}.voxelAuthoring`, () =>
     validateVoxelAuthoringReadout(value['voxelAuthoring'], `${path}.voxelAuthoring`));
+  voxelContract(`${path}.voxelSurfaceAuthoring`, () =>
+    validateVoxelSurfaceAuthoringReadout(
+      value['voxelSurfaceAuthoring'],
+      `${path}.voxelSurfaceAuthoring`,
+    ));
   voxelContract(`${path}.voxelObjectAuthoring`, () =>
     validateVoxelObjectAuthoringReadout(
       value['voxelObjectAuthoring'],
@@ -1703,6 +1759,7 @@ function projectReadout(input: unknown, path: string): void {
     ));
   animatedMeshResources(value['animatedMeshResources'], `${path}.animatedMeshResources`);
   optional(value['meshResources'], `${path}.meshResources`, meshResources);
+  optional(value['textureResources'], `${path}.textureResources`, textureResources);
   entityComponentReferences(value, path);
   try {
     decodeRenderFrameDiff(value['projection']);
@@ -1861,6 +1918,34 @@ function meshResources(input: unknown, path: string): void {
     aggregateBytes += byteLength;
     if (aggregateBytes > 256 * 1024 * 1024) {
       fail(path, 'exceeds the aggregate mesh resource byte bound');
+    }
+    text(resource['sourcePath'], `${entryPath}.sourcePath`);
+  });
+}
+
+function textureResources(input: unknown, path: string): void {
+  const identities = new Set<string>();
+  let aggregateBytes = 0;
+  list(input, path).forEach((entry, index) => {
+    const entryPath = `${path}[${String(index)}]`;
+    const resource = record(entry, entryPath, [
+      'resource', 'contentHash', 'byteLength', 'sourcePath',
+    ]);
+    const identity = text(resource['resource'], `${entryPath}.resource`);
+    const contentHash = text(resource['contentHash'], `${entryPath}.contentHash`);
+    const digest = /^sha256:([0-9a-f]{64})$/u.exec(contentHash)?.[1];
+    if (digest === undefined || identity !== `texture-resource/${digest}`) {
+      fail(entryPath, 'must declare one content-addressed texture resource identity');
+    }
+    if (identities.has(identity)) fail(`${entryPath}.resource`, 'is duplicated');
+    identities.add(identity);
+    const byteLength = integer(resource['byteLength'], `${entryPath}.byteLength`);
+    if (byteLength < 1 || byteLength > 16 * 1024 * 1024) {
+      fail(`${entryPath}.byteLength`, 'must be between 1 byte and 16 MiB');
+    }
+    aggregateBytes += byteLength;
+    if (aggregateBytes > 128 * 1024 * 1024) {
+      fail(path, 'exceeds the aggregate texture resource byte bound');
     }
     text(resource['sourcePath'], `${entryPath}.sourcePath`);
   });

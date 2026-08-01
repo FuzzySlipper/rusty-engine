@@ -512,6 +512,54 @@ pub struct TextureDescriptor {
 }
 
 impl TextureDescriptor {
+    /// Admit exact encoded PNG bytes and derive every retained identity fact.
+    ///
+    /// The returned descriptor references the caller-owned content-addressed
+    /// resource instead of cloning the bytes. Callers remain responsible for
+    /// publishing those exact bytes and resolving the resource at the host
+    /// boundary.
+    pub fn admit_png_rgba8_resource(
+        id: String,
+        encoded_bytes: &[u8],
+        filter: TextureFilter,
+        wrap: TextureWrap,
+        version: u32,
+    ) -> Result<Self, TextureError> {
+        let byte_length = u32::try_from(encoded_bytes.len()).map_err(|_| {
+            TextureError::EncodedByteQuotaExceeded {
+                byte_length: u32::MAX,
+            }
+        })?;
+        if byte_length == 0 || byte_length > MAX_TEXTURE_ENCODED_BYTES {
+            return Err(TextureError::EncodedByteQuotaExceeded { byte_length });
+        }
+        let [width, height] = png_rgba8_dimensions(encoded_bytes)?;
+        validate_png_rgba8(encoded_bytes, width, height)?;
+        let content_hash = format!("sha256:{:x}", Sha256::digest(encoded_bytes));
+        let resource = format!(
+            "texture-resource/{}",
+            content_hash.strip_prefix("sha256:").expect("owned SHA-256")
+        );
+        let descriptor = Self {
+            id,
+            width,
+            height,
+            filter,
+            wrap,
+            content_hash: Some(content_hash.clone()),
+            version,
+            payload: Some(TexturePayloadDescriptor {
+                encoding: TextureEncoding::PngRgba8,
+                color_space: TextureColorSpace::Srgb,
+                content_hash,
+                byte_length,
+                source: TexturePayloadSource::Resource { resource },
+            }),
+        };
+        descriptor.validate()?;
+        Ok(descriptor)
+    }
+
     pub fn validate(&self) -> Result<(), TextureError> {
         validate_asset_id(&self.id, RenderAssetKind::Texture).map_err(TextureError::Asset)?;
         if self.width == 0 || self.height == 0 {
@@ -547,6 +595,29 @@ impl TextureDescriptor {
         }
         Ok(())
     }
+}
+
+fn png_rgba8_dimensions(bytes: &[u8]) -> Result<[u32; 2], TextureError> {
+    const SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    if bytes.get(..8) != Some(SIGNATURE)
+        || bytes.get(12..16) != Some(b"IHDR")
+        || bytes.get(8..12) != Some(&13_u32.to_be_bytes())
+    {
+        return Err(TextureError::InvalidPng);
+    }
+    let width = u32::from_be_bytes(
+        bytes
+            .get(16..20)
+            .and_then(|value| value.try_into().ok())
+            .ok_or(TextureError::InvalidPng)?,
+    );
+    let height = u32::from_be_bytes(
+        bytes
+            .get(20..24)
+            .and_then(|value| value.try_into().ok())
+            .ok_or(TextureError::InvalidPng)?,
+    );
+    Ok([width, height])
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1002,6 +1073,39 @@ mod tests {
             png_drift.payload.as_mut().unwrap().content_hash = drift_hash;
         }
         assert_eq!(png_drift.validate(), Err(TextureError::InvalidPng));
+    }
+
+    #[test]
+    fn png_resource_admission_derives_dimensions_hash_and_resource_identity() {
+        let admitted = TextureDescriptor::admit_png_rgba8_resource(
+            "texture/checker".to_string(),
+            CHECKER_PNG,
+            TextureFilter::Linear,
+            TextureWrap::Clamp,
+            3,
+        )
+        .expect("admit checked PNG");
+        assert_eq!([admitted.width, admitted.height], [2, 1]);
+        assert_eq!(admitted.content_hash.as_deref(), Some(CHECKER_HASH));
+        assert_eq!(admitted.version, 3);
+        assert!(matches!(
+            admitted.payload.as_ref().map(|payload| &payload.source),
+            Some(TexturePayloadSource::Resource { resource })
+                if resource == &format!("texture-resource/{}", &CHECKER_HASH[7..])
+        ));
+
+        let mut unsupported = CHECKER_PNG.to_vec();
+        unsupported[24] = 16;
+        assert_eq!(
+            TextureDescriptor::admit_png_rgba8_resource(
+                "texture/checker".to_string(),
+                &unsupported,
+                TextureFilter::Nearest,
+                TextureWrap::Repeat,
+                1,
+            ),
+            Err(TextureError::InvalidPng),
+        );
     }
 
     #[test]

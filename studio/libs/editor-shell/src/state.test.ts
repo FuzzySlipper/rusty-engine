@@ -2111,6 +2111,11 @@ function projectReadout(changed: boolean, projectId = 'loading-bay') {
       instances: [],
       materials: [],
     },
+    voxelSurfaceAuthoring: {
+      textures: [],
+      atlases: [],
+      materials: [],
+    },
     voxelObjectAuthoring: {
       assets: [],
       instances: [],

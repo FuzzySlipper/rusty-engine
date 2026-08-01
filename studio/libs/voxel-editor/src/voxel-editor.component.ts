@@ -33,6 +33,8 @@ import type {
   VoxelObjectSourceInspection,
   VoxelPickReadout,
   VoxelReadout,
+  VoxelSurfaceAuthoringReadout,
+  VoxelSurfaceMaterialReadout,
 } from '@rusty-engine/studio-adapter-client';
 
 import type {
@@ -56,7 +58,7 @@ export type VoxelEditorPreviewPresentation =
   | VoxelBrushPreviewPresentation
   | VoxelObjectPlacementPresentation;
 
-type EditorTab = 'assets' | 'edit' | 'annotations' | 'convert';
+type EditorTab = 'assets' | 'surfaces' | 'edit' | 'annotations' | 'convert';
 
 @Component({
   selector: 'rusty-voxel-editor',
@@ -69,6 +71,7 @@ type EditorTab = 'assets' | 'edit' | 'annotations' | 'convert';
 export class VoxelEditorComponent {
   readonly authoring = input<VoxelAuthoringReadout | null>(null);
   readonly objectAuthoring = input<VoxelObjectAuthoringReadout | null>(null);
+  readonly surfaceAuthoring = input<VoxelSurfaceAuthoringReadout | null>(null);
   readonly entryScene = input('');
   readonly validatedPick = input<VoxelPickReadout | null>(null);
   readonly lastReadout = input<VoxelReadout | null>(null);
@@ -107,6 +110,31 @@ export class VoxelEditorComponent {
   materialColor = '#e58b42';
   materialRoughness = 0.8;
   materialEmissive = 0;
+
+  surfaceTextureAssetId = 'texture/voxel/studio-surface';
+  surfaceTexturePath = 'content/textures/studio-surface.png';
+  surfaceTextureScope: 'project' | 'host' = 'project';
+  surfaceExpectedTextureHash = '';
+  surfaceFilter: 'nearest' | 'linear' = 'nearest';
+  surfaceMaterialId = 'material/voxel/studio-surface';
+  surfaceExpectedMaterialHash = '';
+  surfaceColor = '#ffffff';
+  surfaceRoughness = 0.8;
+  surfaceEmissive = 0;
+  surfaceAlphaMode: 'opaque' | 'mask' | 'blend' = 'opaque';
+  surfaceAlphaCutoff = 0.5;
+  surfaceMapping: 'repeat' | 'atlas' = 'repeat';
+  surfaceAtlasId = 'sprite-sheet/voxel/studio-atlas';
+  surfaceExpectedAtlasHash = '';
+  surfaceRegionId = 'tile';
+  surfaceRegionMin = [1, 1];
+  surfaceRegionExtent = [16, 16];
+  surfaceRegionPadding = [1, 1, 1, 1];
+  surfaceTileScale = [1, 1];
+  surfaceTileOrigin = [0, 0];
+  surfaceSceneId = '';
+  surfaceInstanceId = '';
+  surfaceMaterialSlot = 1;
 
   newAssetId = 'voxel-volume/studio-volume';
   duplicateAssetId = 'voxel-volume/studio-volume-copy';
@@ -227,6 +255,7 @@ export class VoxelEditorComponent {
       if (pick === null) return;
       this.selectedAssetId = pick.assetId;
       this.selectedInstanceId = pick.instanceId;
+      this.surfaceInstanceId = pick.instanceId;
     });
     effect(() => {
       const inspection = this.objectSourceInspection();
@@ -324,6 +353,27 @@ export class VoxelEditorComponent {
     return this.authoring()?.materials ?? [];
   }
 
+  surfaceMaterials(): readonly VoxelSurfaceMaterialReadout[] {
+    return this.surfaceAuthoring()?.materials ?? [];
+  }
+
+  selectedSurfaceTexture() {
+    return this.surfaceAuthoring()?.textures.find(
+      (texture) => texture.textureAssetId === this.surfaceTextureAssetId,
+    ) ?? null;
+  }
+
+  surfaceNormalizedBounds(): string {
+    const texture = this.selectedSurfaceTexture();
+    if (texture === null || this.surfaceMapping !== 'atlas') return 'available after admitted texture readback';
+    const min = this.surfaceRegionMin.map((value, axis) =>
+      (value + 0.5) / (axis === 0 ? texture.width : texture.height));
+    const max = this.surfaceRegionMin.map((value, axis) =>
+      (value + this.surfaceRegionExtent[axis]! - 0.5)
+        / (axis === 0 ? texture.width : texture.height));
+    return `${min.map((value) => value.toFixed(5)).join(', ')} → ${max.map((value) => value.toFixed(5)).join(', ')}`;
+  }
+
   selectedAsset(): VoxelAssetAuthoringReadout | null {
     const assets = this.assets();
     return assets.find((asset) => asset.inspection.assetId === this.selectedAssetId)
@@ -367,6 +417,150 @@ export class VoxelEditorComponent {
       kind: 'upsertMaterial',
       assetId: this.materialId,
       definition: materialDefinition(this.materialColor, this.materialRoughness, this.materialEmissive),
+    });
+  }
+
+  chooseSurfaceMaterial(materialAssetId: string): void {
+    const material = this.surfaceMaterials().find(
+      (candidate) => candidate.materialAssetId === materialAssetId,
+    );
+    if (material === undefined) return;
+    this.surfaceMaterialId = material.materialAssetId;
+    this.surfaceExpectedMaterialHash = material.contentHash;
+    this.surfaceTextureAssetId = material.textureAssetId;
+    this.surfaceExpectedTextureHash = material.textureContentHash;
+    this.surfaceMapping = material.mapping.kind;
+    this.surfaceTileScale = [...material.mapping.tileScaleCells];
+    this.surfaceTileOrigin = [...material.mapping.tileOriginCells];
+    if (material.mapping.kind === 'atlas') {
+      const mapping = material.mapping;
+      this.surfaceAtlasId = mapping.atlasAssetId;
+      this.surfaceExpectedAtlasHash = mapping.atlasContentHash;
+      this.surfaceRegionId = mapping.regionId;
+      const atlas = this.surfaceAuthoring()?.atlases.find(
+        (candidate) => candidate.atlasAssetId === mapping.atlasAssetId,
+      );
+      const region = atlas?.regions.find((candidate) => candidate.id === mapping.regionId);
+      if (region !== undefined) {
+        this.surfaceRegionMin = [...region.contentMin];
+        this.surfaceRegionExtent = [...region.contentExtent];
+        this.surfaceRegionPadding = [
+          region.padding.left,
+          region.padding.right,
+          region.padding.bottom,
+          region.padding.top,
+        ];
+      }
+    }
+    const assignment = material.assignments[0];
+    if (assignment !== undefined) {
+      this.surfaceSceneId = assignment.sceneId;
+      this.surfaceInstanceId = assignment.instanceId;
+      this.surfaceMaterialSlot = assignment.materialSlot;
+    }
+  }
+
+  browseSurfaceTexture(): void {
+    void this.chooseHostPath()({
+      kind: 'file',
+      title: 'Choose runtime voxel surface PNG',
+      initialPath: this.surfaceTexturePath,
+      extensions: ['.png'],
+    }).then((path) => { if (path !== null) this.surfaceTexturePath = path; });
+  }
+
+  upsertSurfaceMaterial(): void {
+    this.formError.set(null);
+    try {
+      const sceneId = this.surfaceSceneId.trim() || this.entryScene();
+      const instanceId = this.surfaceInstanceId.trim() || this.selectedInstance()?.instance.instanceId;
+      if (sceneId === '' || instanceId === undefined || instanceId === '') {
+        throw new TypeError('A scene and voxel instance are required for surface assignment.');
+      }
+      const material = materialDefinition(
+        this.surfaceColor,
+        this.surfaceRoughness,
+        this.surfaceEmissive,
+      );
+      const definition: StoredMaterialDefinition = {
+        ...material,
+        style: {
+          ...material.style,
+          uvStrategy: this.surfaceMapping === 'atlas' ? 'atlas' : 'planar',
+        },
+      };
+      const mapping = this.surfaceMapping === 'repeat'
+        ? {
+            kind: 'repeat' as const,
+            tileScaleCells: tuple2Positive(this.surfaceTileScale, 'Tile scale'),
+            tileOriginCells: tuple2Finite(this.surfaceTileOrigin, 'Tile origin'),
+          }
+        : {
+            kind: 'atlas' as const,
+            atlasAssetId: requiredText(this.surfaceAtlasId, 'Atlas asset id'),
+            expectedAtlasContentHash: nullableText(this.surfaceExpectedAtlasHash),
+            regions: [{
+              id: requiredText(this.surfaceRegionId, 'Atlas region id'),
+              contentMin: tuple2Integer(this.surfaceRegionMin, 0, 'Region minimum'),
+              contentExtent: tuple2Integer(this.surfaceRegionExtent, 1, 'Region extent'),
+              padding: {
+                left: integer(this.surfaceRegionPadding[0], 0),
+                right: integer(this.surfaceRegionPadding[1], 0),
+                bottom: integer(this.surfaceRegionPadding[2], 0),
+                top: integer(this.surfaceRegionPadding[3], 0),
+              },
+              inset: 'halfTexel' as const,
+            }],
+            regionId: requiredText(this.surfaceRegionId, 'Atlas region id'),
+            tileScaleCells: tuple2Positive(this.surfaceTileScale, 'Tile scale'),
+            tileOriginCells: tuple2Finite(this.surfaceTileOrigin, 'Tile origin'),
+          };
+      this.action.emit({
+        kind: 'upsertVoxelSurfaceMaterial',
+        textureAssetId: requiredText(this.surfaceTextureAssetId, 'Texture asset id'),
+        expectedTextureContentHash: nullableText(this.surfaceExpectedTextureHash),
+        textureSource: {
+          scope: this.surfaceTextureScope,
+          path: requiredText(this.surfaceTexturePath, 'Runtime texture source'),
+        },
+        filter: this.surfaceFilter,
+        material: {
+          materialAssetId: requiredText(this.surfaceMaterialId, 'Material asset id'),
+          expectedMaterialContentHash: nullableText(this.surfaceExpectedMaterialHash),
+          definition,
+          alphaMode: this.surfaceAlphaMode === 'mask'
+            ? { kind: 'mask', cutoff: Math.min(1, Math.max(0, finite(this.surfaceAlphaCutoff, 0.5))) }
+            : { kind: this.surfaceAlphaMode },
+          mapping,
+        },
+        assignment: {
+          sceneId,
+          instanceId,
+          materialSlot: integer(this.surfaceMaterialSlot, 0),
+        },
+      });
+    } catch (error) {
+      this.formError.set(error instanceof Error ? error.message : 'Surface material form is invalid.');
+    }
+  }
+
+  removeSurfaceMaterial(): void {
+    const material = this.surfaceMaterials().find(
+      (candidate) => candidate.materialAssetId === this.surfaceMaterialId,
+    );
+    if (material === undefined) return;
+    this.action.emit({
+      kind: 'removeVoxelSurfaceMaterial',
+      materialAssetId: material.materialAssetId,
+      expectedMaterialContentHash: material.contentHash,
+      textureAssetId: material.textureAssetId,
+      expectedTextureContentHash: material.textureContentHash,
+      atlasAssetId: material.mapping.kind === 'atlas'
+        ? material.mapping.atlasAssetId
+        : null,
+      expectedAtlasContentHash: material.mapping.kind === 'atlas'
+        ? material.mapping.atlasContentHash
+        : null,
     });
   }
 
@@ -1353,6 +1547,42 @@ function tuple4(values: readonly number[]): readonly [number, number, number, nu
     finite(values[2], 0),
     finite(values[3], 1),
   ];
+}
+
+function tuple2Finite(values: readonly number[], label: string): readonly [number, number] {
+  if (values.length !== 2 || values.some((value) => !Number.isFinite(value))) {
+    throw new TypeError(`${label} requires two finite values.`);
+  }
+  return [values[0]!, values[1]!];
+}
+
+function tuple2Positive(values: readonly number[], label: string): readonly [number, number] {
+  const result = tuple2Finite(values, label);
+  if (result.some((value) => value <= 0)) throw new TypeError(`${label} values must be positive.`);
+  return result;
+}
+
+function tuple2Integer(
+  values: readonly number[],
+  minimum: number,
+  label: string,
+): readonly [number, number] {
+  const result = tuple2Finite(values, label);
+  if (result.some((value) => !Number.isSafeInteger(value) || value < minimum)) {
+    throw new TypeError(`${label} values must be integers at least ${String(minimum)}.`);
+  }
+  return result;
+}
+
+function requiredText(value: string, label: string): string {
+  const result = value.trim();
+  if (result === '') throw new TypeError(`${label} is required.`);
+  return result;
+}
+
+function nullableText(value: string): string | null {
+  const result = value.trim();
+  return result === '' ? null : result;
 }
 
 

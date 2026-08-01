@@ -52,7 +52,7 @@ viewport, and its closed external-project adapter protocol.
   host identity at `/health`, `/api/studio-status`, and the title bar. Manifest drift terminates the
   complete process group with `studioRestartRequired`; it never silently keeps a stale adapter.
 - Renderer packages are consumed through their package roots.
-- Protocol 13 retains the promoted downstream Entity inspector
+- Protocol 14 retains the promoted downstream Entity inspector
   seam. `studio/libs/editor-shell/src/entity-inspector.ts` owns static
   contribution admission, exact matching, remount generations, and the narrow
   mutation-settlement contract. The shell owns the single outlet; the stock app
@@ -72,6 +72,10 @@ viewport, and its closed external-project adapter protocol.
   visual-local transforms separately; admitted mesh bounds, origin triad,
   contact plane, clearance, and lower-bound alignment remain disposable UI
   observations over the named Rust mutation.
+- Protocol 14 adds strict Rust-authored voxel texture/atlas/material readouts,
+  named upsert/removal requests, a keyboard-accessible Studio surfaces panel,
+  and exact content-addressed PNG resolver wiring into the one viewport. The
+  downstream adapter remains the catalog, persistence, and assignment owner.
 - `studio/libs/viewport` emits immutable `frameSubmitted` observations only
   after an accepted complete, incremental, or presentation-only frame has been
   submitted through its private shared inspection surface. The event pairs the

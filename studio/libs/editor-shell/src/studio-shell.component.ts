@@ -53,6 +53,10 @@ import {
   resolveStudioMeshResource,
   type StudioMeshResourceDescriptor,
 } from './mesh-resources.js';
+import {
+  resolveStudioTextureResource,
+  type StudioTextureResourceDescriptor,
+} from './texture-resources.js';
 
 import { STUDIO_WORKSPACE } from './tokens.js';
 import {
@@ -339,6 +343,22 @@ export class StudioShellComponent {
     this.state().userSettings.projectRoot,
     this.activeMeshResources(),
   ]));
+  readonly textureResourceManifest = computed(() => {
+    const resources = this.state().liveProjection?.textureResources ?? [];
+    if (resources.length === 0) return null;
+    return {
+      kind: 'rusty_renderer_texture_resources.v1' as const,
+      resources: resources.map(({ resource, contentHash, byteLength }) => ({
+        resource,
+        contentHash,
+        byteLength,
+      })),
+    };
+  });
+  readonly textureResourceKey = computed(() => JSON.stringify([
+    this.state().userSettings.projectRoot,
+    this.state().liveProjection?.textureResources ?? [],
+  ]));
   readonly gridColors = [
     { key: 'minorColor', label: 'Minor lines' },
     { key: 'majorColor', label: 'Major lines' },
@@ -427,6 +447,19 @@ export class StudioShellComponent {
     return resolveStudioMeshResource(
       projectRoot,
       this.activeMeshResources(),
+      descriptor,
+      this.#renderResources.read.bind(this.#renderResources),
+    );
+  };
+  readonly resolveTextureResource = async (
+    descriptor: StudioTextureResourceDescriptor,
+  ): Promise<ArrayBuffer> => {
+    const snapshot = this.state();
+    const projectRoot = snapshot.userSettings.projectRoot;
+    if (projectRoot === null) throw new Error('Texture resources require an open project root.');
+    return resolveStudioTextureResource(
+      projectRoot,
+      snapshot.liveProjection?.textureResources ?? [],
       descriptor,
       this.#renderResources.read.bind(this.#renderResources),
     );

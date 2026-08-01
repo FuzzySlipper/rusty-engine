@@ -19,6 +19,8 @@ import {
   type RendererInspectionSurfaceControlPreferences,
   type RendererMeshResourceManifest,
   type RendererMeshResourceResolver,
+  type RendererTextureResourceManifest,
+  type RendererTextureResourceResolver,
 } from '@rusty-engine/renderer-host';
 
 import {
@@ -88,6 +90,7 @@ export interface StudioVoxelObjectPlacementPick {
     '[attr.data-selected-render-handle]': 'selectedRenderHandle()',
     '[attr.data-animated-mesh-resources]': 'animatedMeshManifest()?.resources?.length ?? 0',
     '[attr.data-mesh-resources]': 'meshResourceManifest()?.resources?.length ?? 0',
+    '[attr.data-texture-resources]': 'textureResourceManifest()?.resources?.length ?? 0',
     '[attr.data-voxel-object-definitions]': 'voxelObjectDefinitionCount()',
     '[attr.data-voxel-object-instances]': 'voxelObjectInstanceCount()',
     '[attr.data-voxel-object-placement-ghosts]': 'voxelObjectPlacementGhostCount()',
@@ -148,6 +151,9 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
   readonly meshResourceManifest = input<RendererMeshResourceManifest | null>(null);
   readonly resolveMeshResource = input<RendererMeshResourceResolver | null>(null);
   readonly meshResourceKey = input('');
+  readonly textureResourceManifest = input<RendererTextureResourceManifest | null>(null);
+  readonly resolveTextureResource = input<RendererTextureResourceResolver | null>(null);
+  readonly textureResourceKey = input('');
 
   readonly entityPicked = output<number | null>();
   readonly frameApplied = output<number>();
@@ -249,6 +255,9 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       const meshManifest = this.meshResourceManifest();
       const meshResolver = this.resolveMeshResource();
       const meshResourceKey = this.meshResourceKey();
+      const textureManifest = this.textureResourceManifest();
+      const textureResolver = this.resolveTextureResource();
+      const textureResourceKey = this.textureResourceKey();
       const key = JSON.stringify([
         resourceKey,
         manifest?.kind ?? null,
@@ -258,6 +267,10 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
         meshManifest?.kind ?? null,
         meshManifest?.resources ?? [],
         meshResolver === null,
+        textureResourceKey,
+        textureManifest?.kind ?? null,
+        textureManifest?.resources ?? [],
+        textureResolver === null,
       ]);
       if (key === this.#lastResourceKey) return;
       this.#lastResourceKey = key;
@@ -447,11 +460,16 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       const resolveAnimatedMeshResource = this.resolveAnimatedMeshResource();
       const meshResourceManifest = this.meshResourceManifest();
       const resolveMeshResource = this.resolveMeshResource();
+      const textureResourceManifest = this.textureResourceManifest();
+      const resolveTextureResource = this.resolveTextureResource();
       if ((animatedMeshManifest === null) !== (resolveAnimatedMeshResource === null)) {
         throw new Error('animated mesh manifest and resolver must be supplied together');
       }
       if ((meshResourceManifest === null) !== (resolveMeshResource === null)) {
         throw new Error('mesh resource manifest and resolver must be supplied together');
+      }
+      if ((textureResourceManifest === null) !== (resolveTextureResource === null)) {
+        throw new Error('texture resource manifest and resolver must be supplied together');
       }
       const surface = await mountRendererInspectionSurface(
         this.canvasElement.nativeElement,
@@ -471,6 +489,9 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
           ...(meshResourceManifest === null || resolveMeshResource === null
             ? {}
             : { meshResourceManifest, resolveMeshResource }),
+          ...(textureResourceManifest === null || resolveTextureResource === null
+            ? {}
+            : { textureResourceManifest, resolveTextureResource }),
         },
       );
       if (this.#destroyed || mountRevision !== this.#mountRevision) {

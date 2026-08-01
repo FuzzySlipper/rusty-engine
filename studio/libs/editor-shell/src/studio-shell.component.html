@@ -233,6 +233,9 @@
             [meshResourceManifest]="meshResourceManifest()"
             [resolveMeshResource]="meshResourceManifest() === null ? null : resolveMeshResource"
             [meshResourceKey]="meshResourceKey()"
+            [textureResourceManifest]="textureResourceManifest()"
+            [resolveTextureResource]="textureResourceManifest() === null ? null : resolveTextureResource"
+            [textureResourceKey]="textureResourceKey()"
             (entityPicked)="store.selectEntity($event, 'renderer')"
             (frameApplied)="store.acknowledgeProjectionGeneration($event)"
             (frameSubmitted)="frameSubmitted.emit($event)"
@@ -363,6 +366,7 @@
           #voxelEditor
           [authoring]="state().authoringDocument?.voxelAuthoring ?? null"
           [objectAuthoring]="state().authoringDocument?.voxelObjectAuthoring ?? null"
+          [surfaceAuthoring]="state().authoringDocument?.voxelSurfaceAuthoring ?? null"
           [entryScene]="state().authoringDocument?.identity?.entryScene ?? ''"
           [validatedPick]="state().voxelWorkspace.validatedPick"
           [lastReadout]="state().voxelWorkspace.lastReadout"

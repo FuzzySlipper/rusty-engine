@@ -571,7 +571,7 @@ test('protocol 7 closes history, file, and texture-policy response families', ()
   );
 });
 
-test('protocol 13 keeps entity-owned voxel objects, applied playback, and durable readouts closed', async () => {
+test('protocol 14 keeps entity-owned voxel objects, applied playback, and durable readouts closed', async () => {
   const inspected = voxelObjectSourceInspected('object-source-1');
   assert.equal(decodeStudioAdapterResponse(inspected).type, 'voxelObjectSourceInspected');
   assert.throws(
@@ -744,7 +744,7 @@ test('protocol 13 keeps entity-owned voxel objects, applied playback, and durabl
   ]);
 });
 
-test('protocol 13 placement preparation carries one bounded resource-only voxel object', async () => {
+test('protocol 14 placement preparation carries one bounded resource-only voxel object', async () => {
   const conversion = voxelObjectConversionPrepared('placement-source');
   const objectContentHash = `sha256:${'5'.repeat(64)}`;
   const resourceFrame = {
@@ -834,7 +834,7 @@ test('protocol 13 placement preparation carries one bounded resource-only voxel 
   ]);
 });
 
-test('protocol 13 carries one closed bounded voxel-object placement batch and one readout', async () => {
+test('protocol 14 carries one closed bounded voxel-object placement batch and one readout', async () => {
   const project = projectOpened('batch-project');
   const owners = Array.from(
     { length: MAX_VOXEL_OBJECT_INSTANCE_BATCH },
@@ -993,6 +993,104 @@ test('asset import plans, browser provenance, and named client calls stay closed
   assert.equal(response.plan.hasErrors, false);
 });
 
+test('protocol 14 admits exact Rust-owned voxel surface resources and rejects drift', () => {
+  const opened = projectOpened('surface-project');
+  const digest = 'a'.repeat(64);
+  opened.project.textureResources = [{
+    resource: `texture-resource/${digest}`,
+    contentHash: `sha256:${digest}`,
+    byteLength: 82,
+    sourcePath: `.rusty-engine/textures/${digest}.png`,
+  }];
+  opened.project.voxelSurfaceAuthoring = {
+    textures: [{
+      textureAssetId: 'texture/voxel/checker',
+      version: 1,
+      contentHash: `sha256:${digest}`,
+      sourcePath: `.rusty-engine/textures/${digest}.png`,
+      width: 2,
+      height: 2,
+      encodedByteLength: 82,
+      filter: 'nearest',
+      wrap: 'clamp',
+    }],
+    atlases: [{
+      atlasAssetId: 'sprite-sheet/voxel/checker',
+      version: 1,
+      contentHash: `sha256:${'b'.repeat(64)}`,
+      textureAssetId: 'texture/voxel/checker',
+      textureVersion: 1,
+      textureContentHash: `sha256:${digest}`,
+      regions: [{
+        id: 'left',
+        contentMin: [0, 0],
+        contentExtent: [1, 2],
+        padding: { left: 0, right: 1, bottom: 0, top: 0 },
+        inset: 'halfTexel',
+      }],
+    }],
+    materials: [{
+      materialAssetId: 'material/voxel/checker',
+      version: 1,
+      contentHash: `sha256:${'c'.repeat(64)}`,
+      definition: surfaceMaterialDefinition(),
+      textureAssetId: 'texture/voxel/checker',
+      textureVersion: 1,
+      textureContentHash: `sha256:${digest}`,
+      alphaMode: { kind: 'opaque' },
+      mapping: {
+        kind: 'atlas',
+        atlasAssetId: 'sprite-sheet/voxel/checker',
+        atlasVersion: 1,
+        atlasContentHash: `sha256:${'b'.repeat(64)}`,
+        regionId: 'left',
+        tileScaleCells: [0.5, 2],
+        tileOriginCells: [0.25, -0.5],
+      },
+      assignments: [{ sceneId: 'scene/loading-bay', instanceId: 'fixture', materialSlot: 1 }],
+    }],
+  };
+  const decoded = decodeStudioAdapterResponse(opened);
+  assert.equal(decoded.type, 'projectOpened');
+  if (decoded.type !== 'projectOpened') throw new Error('unexpected response');
+  assert.equal(decoded.project.voxelSurfaceAuthoring.materials[0]?.mapping.kind, 'atlas');
+
+  const wrongResource = structuredClone(opened);
+  (wrongResource.project.textureResources?.[0] as Record<string, unknown>)['resource'] =
+    `mesh-resource/${digest}`;
+  assert.throws(
+    () => decodeStudioAdapterResponse(wrongResource),
+    /content-addressed texture resource/u,
+  );
+
+  const widenedAtlas = structuredClone(opened);
+  const mapping = (widenedAtlas.project.voxelSurfaceAuthoring.materials[0] as {
+    mapping: Record<string, unknown>;
+  }).mapping;
+  mapping['regions'] = [];
+  assert.throws(() => decodeStudioAdapterResponse(widenedAtlas), /regions.*not allowed/u);
+});
+
+function surfaceMaterialDefinition() {
+  return {
+    authority: {
+      solid: false,
+      collidable: false,
+      occludes: false,
+      structuralClass: 'decorative',
+    },
+    style: {
+      color: [1, 1, 1, 1],
+      texture: null,
+      textureTint: [1, 1, 1, 1],
+      emissionColor: [0, 0, 0, 1],
+      roughness: 0.8,
+      emissive: 0,
+      uvStrategy: 'atlas',
+    },
+  };
+}
+
 function projectOpened(requestId: string): ProjectOpenedFixture {
   return {
     type: 'projectOpened',
@@ -1072,6 +1170,11 @@ function projectOpened(requestId: string): ProjectOpenedFixture {
         instances: [],
         materials: [],
       },
+      voxelSurfaceAuthoring: {
+        textures: [],
+        atlases: [],
+        materials: [],
+      },
       voxelObjectAuthoring: {
         assets: [],
         instances: [],
@@ -1128,10 +1231,16 @@ interface ProjectOpenedFixture {
       instances: unknown[];
       materials: unknown[];
     };
+    voxelSurfaceAuthoring: {
+      textures: unknown[];
+      atlases: unknown[];
+      materials: unknown[];
+    };
     voxelObjectAuthoring: {
       assets: unknown[];
       instances: unknown[];
     };
+    textureResources?: unknown[];
     animatedMeshResources: unknown[];
     meshResources?: unknown[];
     entityComponents: Array<Record<string, unknown>>;
