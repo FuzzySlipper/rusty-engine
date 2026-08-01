@@ -31,6 +31,15 @@ test('render resources require an in-project regular file with the admitted hash
       contentHash: meshHash,
     }), meshBytes);
 
+    const textureBytes = Buffer.from('bounded admitted PNG fixture');
+    await writeFile(join(directory, 'surface.png'), textureBytes);
+    const textureHash = `sha256:${createHash('sha256').update(textureBytes).digest('hex')}`;
+    assert.deepEqual(await readStudioRenderResource({
+      projectRoot: root,
+      sourcePath: 'content/assets/surface.png',
+      contentHash: textureHash,
+    }), textureBytes);
+
     await assert.rejects(
       readStudioRenderResource({
         projectRoot: root,
@@ -45,7 +54,7 @@ test('render resources require an in-project regular file with the admitted hash
         sourcePath: '../character.glb',
         contentHash,
       }),
-      /project-relative GLB/u,
+      /project-relative GLB, PNG, or RMESH/u,
     );
   } finally {
     await rm(root, { recursive: true, force: true });

@@ -209,6 +209,12 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
 
   constructor() {
     effect(() => {
+      const key = this.#resourceKey();
+      if (key === this.#lastResourceKey) return;
+      this.#lastResourceKey = key;
+      if (this.#viewReady) void this.#mount();
+    });
+    effect(() => {
       const generation = this.frameGeneration();
       const frame = this.frame();
       const framePatch = this.framePatch();
@@ -248,34 +254,29 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       const preferences = this.controlPreferences();
       this.#configureControls(preferences);
     });
-    effect(() => {
-      const manifest = this.animatedMeshManifest();
-      const resolver = this.resolveAnimatedMeshResource();
-      const resourceKey = this.animatedMeshResourceKey();
-      const meshManifest = this.meshResourceManifest();
-      const meshResolver = this.resolveMeshResource();
-      const meshResourceKey = this.meshResourceKey();
-      const textureManifest = this.textureResourceManifest();
-      const textureResolver = this.resolveTextureResource();
-      const textureResourceKey = this.textureResourceKey();
-      const key = JSON.stringify([
-        resourceKey,
-        manifest?.kind ?? null,
-        manifest?.resources ?? [],
-        resolver === null,
-        meshResourceKey,
-        meshManifest?.kind ?? null,
-        meshManifest?.resources ?? [],
-        meshResolver === null,
-        textureResourceKey,
-        textureManifest?.kind ?? null,
-        textureManifest?.resources ?? [],
-        textureResolver === null,
-      ]);
-      if (key === this.#lastResourceKey) return;
-      this.#lastResourceKey = key;
-      if (this.#viewReady) void this.#mount();
-    });
+  }
+
+  #resourceKey(): string {
+    const animatedManifest = this.animatedMeshManifest();
+    const animatedResolver = this.resolveAnimatedMeshResource();
+    const meshManifest = this.meshResourceManifest();
+    const meshResolver = this.resolveMeshResource();
+    const textureManifest = this.textureResourceManifest();
+    const textureResolver = this.resolveTextureResource();
+    return JSON.stringify([
+      this.animatedMeshResourceKey(),
+      animatedManifest?.kind ?? null,
+      animatedManifest?.resources ?? [],
+      animatedResolver === null,
+      this.meshResourceKey(),
+      meshManifest?.kind ?? null,
+      meshManifest?.resources ?? [],
+      meshResolver === null,
+      this.textureResourceKey(),
+      textureManifest?.kind ?? null,
+      textureManifest?.resources ?? [],
+      textureResolver === null,
+    ]);
   }
 
   ngAfterViewInit(): void {
