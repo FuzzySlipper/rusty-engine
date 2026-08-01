@@ -274,13 +274,13 @@ test('runtime voxel surfaces author repeat and atlas mappings through Rust and r
   const mobileAuthoringPixelHash = sha256(await surfaces.screenshot());
   expect(mobileAuthoringPixelHash).not.toBe(initialPixelHash);
   await closeProjectThroughFileMenu(page);
-  await expect(viewport).toHaveAttribute('data-texture-resources', '0');
+  await expect(viewport).toHaveCount(0);
   await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(projectFile)}`);
   await expect(shell).toHaveAttribute('data-project-hash', atlasProjectHash);
   await expect(viewport).toHaveAttribute('data-renderer-status', 'ready');
   await expect(viewport).toHaveAttribute('data-texture-resources', '1');
   await closeProjectThroughFileMenu(page);
-  await expect(viewport).toHaveAttribute('data-texture-resources', '0');
+  await expect(viewport).toHaveCount(0);
   expect((await readFile(projectPath)).byteLength).toBeGreaterThan(0);
 
   process.stdout.write(`${JSON.stringify({
@@ -325,7 +325,7 @@ test('fresh Studio host reopens the persisted atlas surface and disposes it on c
     .toContainText('16 × 8 px');
   const freshHostPixelHash = sha256(await canvas.screenshot());
   await closeProjectThroughFileMenu(page);
-  await expect(viewport).toHaveAttribute('data-texture-resources', '0');
+  await expect(viewport).toHaveCount(0);
   process.stdout.write(`${JSON.stringify({
     kind: 'studioVoxelSurfaceFreshHostEvidence',
     engineRevision: engineCommit,
