@@ -1059,8 +1059,12 @@ function voxelSurfaceBrowserFrame(orientation: 'standard' | 'rotated'): RenderFr
   const tileCoordinates = orientation === 'standard'
     ? [-1,-1, 1,-1, 1,1, -1,1]
     : [1,-1, 1,1, -1,1, -1,-1];
-  const tileScaleCells = orientation === 'standard' ? [1, 1] : [0.5, 2];
-  const tileOriginCells = orientation === 'standard' ? [0, 0] : [0.25, -0.5];
+  const tileScaleCells: readonly [number, number] = orientation === 'standard'
+    ? [1, 1]
+    : [0.5, 2];
+  const tileOriginCells: readonly [number, number] = orientation === 'standard'
+    ? [0, 0]
+    : [0.25, -0.5];
   return {
     schemaVersion: 1,
     ops: [
