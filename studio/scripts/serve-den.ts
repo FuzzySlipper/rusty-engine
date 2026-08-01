@@ -10,6 +10,7 @@ const STUDIO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ENGINE_ROOT = resolve(STUDIO_ROOT, '..');
 const CONSUMER_SOURCE_FILE = resolve(STUDIO_ROOT, 'demo-consumer-source.json');
 const HOST_SHUTDOWN_TIMEOUT_MILLISECONDS = 10_000;
+const PROCESS_GROUP_POLL_MILLISECONDS = 20;
 
 interface DemoConsumerSource {
   readonly schemaVersion: number;
@@ -25,6 +26,11 @@ interface ManagedAdapter {
   readonly binary: string;
   readonly source: DemoConsumerSource;
   readonly sourceFingerprint: string;
+}
+
+export interface DetachedHostResult {
+  readonly code: number | null;
+  readonly restartRequired: boolean;
 }
 
 export interface StudioRestartRequiredReceipt {
@@ -221,16 +227,101 @@ async function managedAdapter(): Promise<ManagedAdapter> {
   };
 }
 
+function signalProcessGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
+  try {
+    process.kill(-pid, signal);
+    return true;
+  } catch (error: unknown) {
+    if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return false;
+    throw error;
+  }
+}
+
+async function waitForProcessGroupExit(pid: number, timeoutMilliseconds: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (Date.now() < deadline) {
+    if (!signalProcessGroup(pid, 0)) return true;
+    await new Promise<void>((resolvePromise) => {
+      setTimeout(resolvePromise, PROCESS_GROUP_POLL_MILLISECONDS);
+    });
+  }
+  return !signalProcessGroup(pid, 0);
+}
+
+/**
+ * Shut down one detached host and every descendant that inherited its process
+ * group. The same bounded TERM -> KILL owner is used for signals, manifest
+ * restarts, host crashes, and spawn errors so an unexpected host exit cannot
+ * orphan a resistant adapter.
+ */
+export async function shutdownDetachedProcessGroup(
+  pid: number | undefined,
+  timeoutMilliseconds = HOST_SHUTDOWN_TIMEOUT_MILLISECONDS,
+): Promise<void> {
+  if (pid === undefined || !signalProcessGroup(pid, 'SIGTERM')) return;
+  if (await waitForProcessGroupExit(pid, timeoutMilliseconds)) return;
+  if (!signalProcessGroup(pid, 'SIGKILL')) return;
+  if (!await waitForProcessGroupExit(pid, timeoutMilliseconds)) {
+    throw new Error(`detached Studio host process group ${pid} survived SIGKILL`);
+  }
+}
+
+export async function runDetachedHostProcess(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  registerRestartRequired?: (restartRequired: () => void) => () => void,
+  shutdownTimeoutMilliseconds = HOST_SHUTDOWN_TIMEOUT_MILLISECONDS,
+): Promise<DetachedHostResult> {
+  return new Promise<DetachedHostResult>((resolvePromise, rejectPromise) => {
+    const child = spawn(command, args, { cwd, stdio: 'inherit', detached: true });
+    let restartRequired = false;
+    let shutdownPromise: Promise<void> | undefined;
+    let settled = false;
+    const shutdown = (): Promise<void> => {
+      shutdownPromise ??= shutdownDetachedProcessGroup(child.pid, shutdownTimeoutMilliseconds);
+      return shutdownPromise;
+    };
+    const onSignal = (): void => { void shutdown(); };
+    process.once('SIGINT', onSignal);
+    process.once('SIGTERM', onSignal);
+    const stopWatchingManifest = registerRestartRequired?.(() => {
+      if (restartRequired || settled) return;
+      restartRequired = true;
+      void shutdown();
+    }) ?? (() => undefined);
+    const cleanup = (): void => {
+      stopWatchingManifest();
+      process.off('SIGINT', onSignal);
+      process.off('SIGTERM', onSignal);
+    };
+    const finish = async (code: number | null, error?: unknown): Promise<void> => {
+      if (settled) return;
+      settled = true;
+      try {
+        await shutdown();
+        cleanup();
+        if (error !== undefined) rejectPromise(error);
+        else resolvePromise({ code, restartRequired });
+      } catch (shutdownError: unknown) {
+        cleanup();
+        rejectPromise(shutdownError);
+      }
+    };
+    child.once('error', (error) => { void finish(null, error); });
+    child.once('exit', (code) => { void finish(code); });
+  });
+}
+
 async function runHost(
   managed: ManagedAdapter,
   engineSourceCommit: string,
   host: string,
   port: number,
 ): Promise<void> {
-  const code = await new Promise<number | null>((resolvePromise, rejectPromise) => {
-    const child = spawn(
-      'pnpm',
-      [
+  const result = await runDetachedHostProcess(
+    'pnpm',
+    [
         'run',
         'host',
         '--',
@@ -250,60 +341,21 @@ async function runHost(
         managed.source.commit,
         '--expected-adapter-id',
         managed.source.adapterId,
-      ],
-      { cwd: STUDIO_ROOT, stdio: 'inherit', detached: true },
-    );
-    let terminating = false;
-    let restartRequired = false;
-    let killTimer: ReturnType<typeof setTimeout> | undefined;
-    const terminateGroup = (signal: NodeJS.Signals): void => {
-      if (child.pid === undefined) return;
-      try {
-        process.kill(-child.pid, signal);
-      } catch {
-        // The process group may already have completed between observation and signal.
-      }
-    };
-    const beginTermination = (reason: 'signal' | 'restart_required'): void => {
-      if (terminating) return;
-      terminating = true;
-      restartRequired = reason === 'restart_required';
-      terminateGroup('SIGTERM');
-      killTimer = setTimeout(() => terminateGroup('SIGKILL'), HOST_SHUTDOWN_TIMEOUT_MILLISECONDS);
-      killTimer.unref();
-    };
-    const onSignal = (): void => beginTermination('signal');
-    process.once('SIGINT', onSignal);
-    process.once('SIGTERM', onSignal);
-    const stopWatchingManifest = watchConsumerIdentity(
+    ],
+    STUDIO_ROOT,
+    (restartRequired) => watchConsumerIdentity(
       CONSUMER_SOURCE_FILE,
       managed.sourceFingerprint,
       (receipt) => {
-        if (terminating) return;
         process.stderr.write(`${JSON.stringify({
           ...receipt,
           previousConsumerCommit: managed.source.commit,
         })}\n`);
-        beginTermination('restart_required');
+        restartRequired();
       },
-    );
-    const cleanup = (): void => {
-      clearTimeout(killTimer);
-      stopWatchingManifest();
-      process.off('SIGINT', onSignal);
-      process.off('SIGTERM', onSignal);
-      // A crashed host must not leave an adapter in the detached process group.
-      terminateGroup('SIGTERM');
-    };
-    child.once('error', (error) => {
-      cleanup();
-      rejectPromise(error);
-    });
-    child.once('exit', (exitCode) => {
-      cleanup();
-      resolvePromise(restartRequired ? 75 : exitCode);
-    });
-  });
+    ),
+  );
+  const code = result.restartRequired ? 75 : result.code;
   if (code !== 0 && code !== null) process.exitCode = code;
 }
 
