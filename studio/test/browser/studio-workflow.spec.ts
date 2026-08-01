@@ -472,11 +472,20 @@ test('project glTF closures pack to GLB, reimport external drift, and reopen in 
   await expect(viewport).toHaveAttribute('data-animated-mesh-resources', String(animatedBefore + 1));
   const reopenedStored = JSON.parse(
     await readFile(join(projectRoot, loadingBayProjectFile), 'utf8'),
-  ) as { assets: Array<{ id: string; catalog?: { sourcePath?: string } }> };
-  expect(
-    reopenedStored.assets.find((asset) => asset.id === 'mesh-animation/browser-gltf-actor')
-      ?.catalog?.sourcePath,
-  ).toBe(secondRuntimePath);
+  ) as {
+    assets: Array<{
+      id: string;
+      catalog?: { sourcePath?: string };
+      import?: { source?: { path?: string } };
+    }>;
+  };
+  const reopenedActor = reopenedStored.assets.find(
+    (asset) => asset.id === 'mesh-animation/browser-gltf-actor',
+  );
+  expect(reopenedActor?.catalog?.sourcePath).toBe(secondRuntimePath);
+  expect(reopenedActor?.import?.source?.path).toBe(
+    'content/assets/browser-gltf/browser-gltf-actor.gltf',
+  );
 });
 
 test('trusted host browsing restores focus and animated appearance uses the shared renderer', async ({ page }) => {

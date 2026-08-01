@@ -96,7 +96,10 @@ static-composition packages install from one exact Git revision without workspac
 The demo command admits only `studio/demo-consumer-source.json`, proves that the selected public
 consumer's `engine-source.json` agrees with the reverse pin, and runs the consumer-owned revision
 checker before any build. That checker owns the Cargo, renderer-package, Studio-package, build-policy,
-and lock agreement. The gate then invokes the focused two-consumer proof in
+and lock agreement. Its browser workflow also imports a project-local `.gltf` closure with external
+buffer and texture resources, observes external-only drift, reapplies the import, and proves after
+reload that authored `.gltf` provenance still names a content-addressed GLB runtime resource. The gate
+then invokes the focused two-consumer proof in
 `scripts/verify-studio-entity-inspector-integration.sh`. That proof serves the downstream-built
 application in Chromium, covers Voxel Object, unknown read-only fallback, a real Weapon replacement
 and canonical reread, then repeats the read in a fresh adapter process. The final command proves the
