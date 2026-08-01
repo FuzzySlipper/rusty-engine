@@ -1,5 +1,15 @@
 import { expect, test } from '@playwright/test';
 
+function framebufferColorClass(pixel: readonly number[]): string {
+  expect(pixel).toHaveLength(4);
+  expect(pixel[3]).toBe(255);
+  return pixel.slice(0, 3).map((channel) => {
+    if (channel < 40) return 'low';
+    if (channel > 180) return 'high';
+    return 'mid';
+  }).join('/');
+}
+
 test('shared host realizes retained, presentation, and inspection families in a real browser', async ({ page }) => {
   const consoleErrors: string[] = [];
   page.on('console', (message) => {
@@ -236,18 +246,50 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.presentationDiagnostics).toEqual([]);
   expect(proof.voxelFrameSwapApplied).toBe(true);
   expect(proof.voxelFrame).toBe(1);
-  expect(proof.voxelSurfaceAtlasPixel[0]).toBeGreaterThan(120);
-  expect(proof.voxelSurfaceAtlasPixel[1]).toBeLessThan(24);
-  expect(proof.voxelSurfaceAtlasPixel[2]).toBeLessThan(24);
-  expect(proof.voxelSurfaceAtlasPixel[3]).toBe(255);
+  const standardVoxelAtlas = proof.voxelSurfaceAtlasPixels.find(
+    ({ orientation }) => orientation === 'standard',
+  );
+  const rotatedVoxelAtlas = proof.voxelSurfaceAtlasPixels.find(
+    ({ orientation }) => orientation === 'rotated',
+  );
+  expect(standardVoxelAtlas?.pixels.map(framebufferColorClass)).toEqual([
+    'high/low/high',
+    'low/high/high',
+    'high/mid/low',
+    'high/high/high',
+    'high/low/high',
+    'low/high/high',
+    'high/mid/low',
+    'high/high/high',
+  ]);
+  expect(rotatedVoxelAtlas?.pixels.map(framebufferColorClass)).toEqual([
+    'low/low/high',
+    'high/mid/low',
+    'low/mid/high',
+    'mid/high/low',
+    'low/low/high',
+    'high/mid/low',
+    'low/mid/high',
+    'mid/high/low',
+  ]);
   expect(proof.voxelSurfaceSpecializations).toEqual([{
-    material: 'material/voxel-atlas-proof',
-    texture: 'texture/voxel-atlas-proof',
+    material: 'material/voxel-atlas-proof-standard',
+    texture: 'texture/voxel-atlas-proof-standard',
     mapping: 'atlas',
     tileScaleCells: [1, 1],
-    tileOriginCells: [-8, 4],
-    sampleUvMin: [0.375, 0.5],
-    sampleUvMax: [0.375, 0.5],
+    tileOriginCells: [0, 0],
+    sampleUvMin: [0.25, 0.25],
+    sampleUvMax: [0.75, 0.75],
+    alphaMode: 'opaque',
+    alphaCutoff: null,
+  }, {
+    material: 'material/voxel-atlas-proof-rotated',
+    texture: 'texture/voxel-atlas-proof-rotated',
+    mapping: 'atlas',
+    tileScaleCells: [1, 1],
+    tileOriginCells: [0, 0],
+    sampleUvMin: [0.25, 0.25],
+    sampleUvMax: [0.75, 0.75],
     alphaMode: 'opaque',
     alphaCutoff: null,
   }]);
