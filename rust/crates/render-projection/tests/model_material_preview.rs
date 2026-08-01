@@ -52,6 +52,7 @@ fn request() -> ModelMaterialPreviewRequest {
             emission_color: [0.0; 3],
             emission_intensity: 0.0,
             uv_strategy: MaterialUvStrategy::Flat,
+            voxel_surface: None,
         },
         mesh_asset: StaticMeshAsset {
             asset: "mesh/preview-triangle".to_owned(),

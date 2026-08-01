@@ -142,6 +142,59 @@ void test('texture payload decoding is strict, bounded, and content-addressed', 
   assert.throws(() => decodeRenderFrameDiff(unknown), /runtimeUrl is unknown/u);
 });
 
+void test('voxel surface material decoding preserves strict resolved atlas provenance', () => {
+  const frame = {
+    schemaVersion: 1,
+    ops: [{
+      op: 'defineMaterial',
+      material: {
+        schemaVersion: 2,
+        id: 'material/stone',
+        color: [1, 1, 1, 1],
+        texture: 'texture/voxel-surfaces',
+        roughness: 1,
+        textureTint: [1, 1, 1, 1],
+        emissionColor: [0, 0, 0],
+        emissionIntensity: 0,
+        uvStrategy: 'atlas',
+        voxelSurface: {
+          schemaVersion: 1,
+          filter: 'linear',
+          wrap: 'clamp',
+          alphaMode: { kind: 'mask', cutoff: 0.5 },
+          mapping: {
+            kind: 'atlas',
+            atlas: 'sprite-sheet/voxel-surfaces',
+            atlasVersion: 1,
+            atlasContentHash: 'bb01',
+            texture: 'texture/voxel-surfaces',
+            textureVersion: 2,
+            textureContentHash: 'aa02',
+            region: {
+              id: 'stone',
+              contentMin: [2, 2],
+              contentExtent: [28, 28],
+              padding: { left: 1, right: 1, bottom: 1, top: 1 },
+              inset: 'halfTexel',
+            },
+            tileScaleCells: [1, 2],
+            tileOriginCells: [-4, 8],
+          },
+        },
+      },
+    }],
+  };
+  assert.equal(decodeRenderFrameDiff(frame).ops[0]?.op, 'defineMaterial');
+
+  const insufficientPadding = structuredClone(frame);
+  insufficientPadding.ops[0]!.material.voxelSurface.mapping.region.padding.left = 0;
+  assert.throws(() => decodeRenderFrameDiff(insufficientPadding), /padding.left/);
+
+  const mismatchedTexture = structuredClone(frame);
+  mismatchedTexture.ops[0]!.material.voxelSurface.mapping.texture = 'texture/other';
+  assert.throws(() => decodeRenderFrameDiff(mismatchedTexture), /must match material texture/);
+});
+
 void test('presentation decoding rejects unsafe identities, sequence gaps, and nested drift', () => {
   const unsafe = mutableFixture('presentation-frame-v1.json');
   const unsafeOps = unsafe['ops'] as Array<Record<string, unknown>>;

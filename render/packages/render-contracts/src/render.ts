@@ -261,6 +261,56 @@ export interface SpriteAtlasDescriptor {
 
 export type MaterialUvStrategy = 'flat' | 'planar' | 'atlas';
 
+export type VoxelSurfaceAlphaMode =
+  | { readonly kind: 'opaque' }
+  | { readonly kind: 'mask'; readonly cutoff: number }
+  | { readonly kind: 'blend' };
+
+export interface VoxelAtlasPaddingDescriptor {
+  readonly left: number;
+  readonly right: number;
+  readonly bottom: number;
+  readonly top: number;
+}
+
+export interface VoxelAtlasRegionDescriptor {
+  readonly id: string;
+  readonly contentMin: readonly [number, number];
+  readonly contentExtent: readonly [number, number];
+  readonly padding: VoxelAtlasPaddingDescriptor;
+  readonly inset: 'halfTexel';
+}
+
+export type VoxelSurfaceMappingDescriptor =
+  | {
+      readonly kind: 'repeat';
+      readonly texture: string;
+      readonly textureVersion: number;
+      readonly textureContentHash: string;
+      readonly tileScaleCells: Vec2;
+      readonly tileOriginCells: Vec2;
+    }
+  | {
+      readonly kind: 'atlas';
+      readonly atlas: string;
+      readonly atlasVersion: number;
+      readonly atlasContentHash: string;
+      readonly texture: string;
+      readonly textureVersion: number;
+      readonly textureContentHash: string;
+      readonly region: VoxelAtlasRegionDescriptor;
+      readonly tileScaleCells: Vec2;
+      readonly tileOriginCells: Vec2;
+    };
+
+export interface VoxelSurfaceDescriptor {
+  readonly schemaVersion: 1;
+  readonly filter: 'nearest' | 'linear';
+  readonly wrap: 'clamp' | 'repeat';
+  readonly alphaMode: VoxelSurfaceAlphaMode;
+  readonly mapping: VoxelSurfaceMappingDescriptor;
+}
+
 export interface RenderMaterialDescriptor {
   readonly schemaVersion: number;
   readonly id: string;
@@ -271,6 +321,7 @@ export interface RenderMaterialDescriptor {
   readonly emissionColor: Vec3;
   readonly emissionIntensity: number;
   readonly uvStrategy: MaterialUvStrategy;
+  readonly voxelSurface?: VoxelSurfaceDescriptor;
 }
 
 export interface MaterialInstanceParameters {

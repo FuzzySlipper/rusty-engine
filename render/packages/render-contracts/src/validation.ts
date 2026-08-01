@@ -574,10 +574,10 @@ function playback(input: unknown, path: string): void {
 }
 
 function renderMaterial(input: unknown, path: string): void {
-  const value = record(input, path, [
+  const value = recordOptional(input, path, [
     'schemaVersion', 'id', 'color', 'texture', 'roughness', 'textureTint',
     'emissionColor', 'emissionIntensity', 'uvStrategy',
-  ]);
+  ], ['voxelSurface']);
   integer(value['schemaVersion'], `${path}.schemaVersion`, 1, 4_294_967_295);
   nonEmptyText(value['id'], `${path}.id`);
   color4(value['color'], `${path}.color`);
@@ -587,6 +587,75 @@ function renderMaterial(input: unknown, path: string): void {
   color3(value['emissionColor'], `${path}.emissionColor`);
   nonNegativeFinite(value['emissionIntensity'], `${path}.emissionIntensity`);
   enumeration(value['uvStrategy'], `${path}.uvStrategy`, ['flat', 'planar', 'atlas'] as const);
+  if (Object.hasOwn(value, 'voxelSurface')) {
+    voxelSurface(value['voxelSurface'], `${path}.voxelSurface`, value['texture']);
+  }
+}
+
+function voxelSurface(input: unknown, path: string, materialTexture: unknown): void {
+  const value = record(input, path, ['schemaVersion', 'filter', 'wrap', 'alphaMode', 'mapping']);
+  integer(value['schemaVersion'], `${path}.schemaVersion`, 1, 1);
+  const filter = enumeration(value['filter'], `${path}.filter`, ['nearest', 'linear'] as const);
+  const wrap = enumeration(value['wrap'], `${path}.wrap`, ['clamp', 'repeat'] as const);
+  const alpha = looseRecord(value['alphaMode'], `${path}.alphaMode`);
+  const alphaKind = enumeration(alpha['kind'], `${path}.alphaMode.kind`, ['opaque', 'mask', 'blend'] as const);
+  if (alphaKind === 'mask') {
+    const mask = record(value['alphaMode'], `${path}.alphaMode`, ['kind', 'cutoff']);
+    range(mask['cutoff'], `${path}.alphaMode.cutoff`, 0, 1);
+  } else {
+    record(value['alphaMode'], `${path}.alphaMode`, ['kind']);
+  }
+
+  const mapping = looseRecord(value['mapping'], `${path}.mapping`);
+  const kind = enumeration(mapping['kind'], `${path}.mapping.kind`, ['repeat', 'atlas'] as const);
+  const common = kind === 'repeat'
+    ? record(value['mapping'], `${path}.mapping`, [
+        'kind', 'texture', 'textureVersion', 'textureContentHash', 'tileScaleCells', 'tileOriginCells',
+      ])
+    : record(value['mapping'], `${path}.mapping`, [
+        'kind', 'atlas', 'atlasVersion', 'atlasContentHash', 'texture', 'textureVersion',
+        'textureContentHash', 'region', 'tileScaleCells', 'tileOriginCells',
+      ]);
+  const texture = nonEmptyText(common['texture'], `${path}.mapping.texture`);
+  if (materialTexture !== texture) fail(`${path}.mapping.texture`, 'must match material texture');
+  integer(common['textureVersion'], `${path}.mapping.textureVersion`, 1, 4_294_967_295);
+  nonEmptyText(common['textureContentHash'], `${path}.mapping.textureContentHash`);
+  boundedTilePair(common['tileScaleCells'], `${path}.mapping.tileScaleCells`, 1 / 256, 4_096);
+  boundedTilePair(common['tileOriginCells'], `${path}.mapping.tileOriginCells`, -16_777_216, 16_777_216);
+  if (kind === 'repeat') {
+    if (wrap !== 'repeat') fail(`${path}.wrap`, 'repeat mapping requires repeat wrap');
+    return;
+  }
+  if (wrap !== 'clamp') fail(`${path}.wrap`, 'atlas mapping requires clamp wrap');
+  nonEmptyText(common['atlas'], `${path}.mapping.atlas`);
+  integer(common['atlasVersion'], `${path}.mapping.atlasVersion`, 1, 4_294_967_295);
+  nonEmptyText(common['atlasContentHash'], `${path}.mapping.atlasContentHash`);
+  const region = record(common['region'], `${path}.mapping.region`, [
+    'id', 'contentMin', 'contentExtent', 'padding', 'inset',
+  ]);
+  nonEmptyText(region['id'], `${path}.mapping.region.id`);
+  integerPair(region['contentMin'], `${path}.mapping.region.contentMin`, 0, 4_294_967_295);
+  integerPair(region['contentExtent'], `${path}.mapping.region.contentExtent`, 1, 4_294_967_295);
+  enumeration(region['inset'], `${path}.mapping.region.inset`, ['halfTexel'] as const);
+  const padding = record(region['padding'], `${path}.mapping.region.padding`, [
+    'left', 'right', 'bottom', 'top',
+  ]);
+  for (const side of ['left', 'right', 'bottom', 'top'] as const) {
+    const minimum = filter === 'linear' ? 1 : 0;
+    integer(padding[side], `${path}.mapping.region.padding.${side}`, minimum, 32);
+  }
+}
+
+function boundedTilePair(input: unknown, path: string, minimum: number, maximum: number): void {
+  const values = tuple(input, path, 2);
+  range(values[0], `${path}[0]`, minimum, maximum);
+  range(values[1], `${path}[1]`, minimum, maximum);
+}
+
+function integerPair(input: unknown, path: string, minimum: number, maximum: number): void {
+  const values = tuple(input, path, 2);
+  integer(values[0], `${path}[0]`, minimum, maximum);
+  integer(values[1], `${path}[1]`, minimum, maximum);
 }
 
 function materialParameters(input: unknown, path: string): void {

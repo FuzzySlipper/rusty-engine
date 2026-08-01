@@ -62,9 +62,19 @@ impl VoxelMaterialTable {
         catalog: &AssetCatalog,
         id: VoxelMaterialId,
     ) -> VoxelRenderResolution {
-        match self.material_definition(catalog, id) {
+        match self
+            .material_asset(id)
+            .ok_or(VoxelMaterialError::Unmapped(id))
+            .and_then(|asset| {
+                catalog
+                    .render_material(asset)
+                    .map_err(|_| VoxelMaterialError::NotAMaterial {
+                        id,
+                        asset: asset.as_str().to_string(),
+                    })
+            }) {
             Ok(material) => VoxelRenderResolution {
-                material: material.render_projection(),
+                material,
                 used_fallback: false,
             },
             Err(_) => VoxelRenderResolution {
@@ -127,5 +137,6 @@ fn fallback_render_material() -> RenderMaterial {
         emission_color: Rgba::DEBUG_GREY,
         emissive: 0.0,
         uv_strategy: UvStrategy::Flat,
+        voxel_surface: None,
     }
 }

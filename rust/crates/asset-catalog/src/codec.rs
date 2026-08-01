@@ -2,8 +2,10 @@ use core_assets::{AssetHash, AssetId, AssetKind, AssetReference, AssetVersionReq
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AssetCatalog, AssetLock, AssetLockEntry, CatalogEntry, MaterialAuthority, MaterialDefinition,
-    MaterialStyle, Rgba, StructuralClass, UvStrategy,
+    AssetCatalog, AssetLock, AssetLockEntry, AtlasInset, AtlasPadding, AtlasRegionDefinition,
+    CatalogEntry, MaterialAuthority, MaterialDefinition, MaterialStyle, Rgba, StructuralClass,
+    TextureDefinition, TextureFilter, TextureWrap, UvStrategy, VoxelAlphaMode,
+    VoxelAtlasDefinition, VoxelSurfaceBinding, VoxelSurfaceMapping,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +48,10 @@ pub struct StoredCatalogEntry {
     #[serde(default)]
     pub dependencies: Vec<StoredAssetReference>,
     pub material: Option<StoredMaterialDefinition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture: Option<StoredTextureDefinition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voxel_atlas: Option<StoredVoxelAtlasDefinition>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +102,76 @@ pub struct StoredMaterialStyle {
     pub roughness: f32,
     pub emissive: f32,
     pub uv_strategy: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voxel_surface: Option<StoredVoxelSurfaceBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StoredTextureDefinition {
+    pub width: u32,
+    pub height: u32,
+    pub filter: String,
+    pub wrap: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StoredVoxelAtlasDefinition {
+    pub schema_version: u32,
+    pub texture: StoredAssetReference,
+    pub regions: Vec<StoredAtlasRegionDefinition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StoredAtlasRegionDefinition {
+    pub id: String,
+    pub content_min: [u32; 2],
+    pub content_extent: [u32; 2],
+    pub padding: StoredAtlasPadding,
+    pub inset: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StoredAtlasPadding {
+    pub left: u16,
+    pub right: u16,
+    pub bottom: u16,
+    pub top: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StoredVoxelSurfaceBinding {
+    pub schema_version: u32,
+    pub mapping: StoredVoxelSurfaceMapping,
+    pub alpha_mode: StoredVoxelAlphaMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", deny_unknown_fields, rename_all = "camelCase")]
+pub enum StoredVoxelSurfaceMapping {
+    Repeat {
+        texture: StoredAssetReference,
+        tile_scale_cells: [f32; 2],
+        tile_origin_cells: [f32; 2],
+    },
+    Atlas {
+        atlas: StoredAssetReference,
+        region: String,
+        tile_scale_cells: [f32; 2],
+        tile_origin_cells: [f32; 2],
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", deny_unknown_fields, rename_all = "camelCase")]
+pub enum StoredVoxelAlphaMode {
+    Opaque,
+    Mask { cutoff: f32 },
+    Blend,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -205,6 +281,11 @@ impl StoredCatalogEntry {
                 .as_ref()
                 .map(|material| StoredMaterialDefinition::from_material(material, index))
                 .transpose()?,
+            texture: entry.texture.as_ref().map(StoredTextureDefinition::from),
+            voxel_atlas: entry
+                .voxel_atlas
+                .as_ref()
+                .map(StoredVoxelAtlasDefinition::from),
         })
     }
 
@@ -227,6 +308,14 @@ impl StoredCatalogEntry {
             material: self
                 .material
                 .map(|material| material.into_material(&format!("{base}.material")))
+                .transpose()?,
+            texture: self
+                .texture
+                .map(|texture| texture.into_texture(&format!("{base}.texture")))
+                .transpose()?,
+            voxel_atlas: self
+                .voxel_atlas
+                .map(|atlas| atlas.into_atlas(&format!("{base}.voxelAtlas")))
                 .transpose()?,
         })
     }
@@ -315,6 +404,11 @@ impl StoredMaterialDefinition {
                 roughness: material.style.roughness,
                 emissive: material.style.emissive,
                 uv_strategy: uv_strategy_tag(material.style.uv_strategy).to_string(),
+                voxel_surface: material
+                    .style
+                    .voxel_surface
+                    .as_ref()
+                    .map(StoredVoxelSurfaceBinding::from),
             },
         })
     }
@@ -349,6 +443,11 @@ impl StoredMaterialDefinition {
                     ));
                 }
             },
+            voxel_surface: self
+                .style
+                .voxel_surface
+                .map(|surface| surface.into_surface(&format!("{style_path}.voxelSurface")))
+                .transpose()?,
         };
         let authority = MaterialAuthority {
             solid: self.authority.solid,
@@ -367,6 +466,189 @@ impl StoredMaterialDefinition {
             },
         };
         Ok(MaterialDefinition { authority, style })
+    }
+}
+
+impl From<&TextureDefinition> for StoredTextureDefinition {
+    fn from(texture: &TextureDefinition) -> Self {
+        Self {
+            width: texture.width,
+            height: texture.height,
+            filter: texture_filter_tag(texture.filter).to_string(),
+            wrap: texture_wrap_tag(texture.wrap).to_string(),
+        }
+    }
+}
+
+impl StoredTextureDefinition {
+    fn into_texture(self, path: &str) -> Result<TextureDefinition, AssetCatalogCodecError> {
+        Ok(TextureDefinition {
+            width: self.width,
+            height: self.height,
+            filter: parse_texture_filter(&format!("{path}.filter"), &self.filter)?,
+            wrap: parse_texture_wrap(&format!("{path}.wrap"), &self.wrap)?,
+        })
+    }
+}
+
+impl From<&VoxelAtlasDefinition> for StoredVoxelAtlasDefinition {
+    fn from(atlas: &VoxelAtlasDefinition) -> Self {
+        Self {
+            schema_version: atlas.schema_version,
+            texture: StoredAssetReference::from(&atlas.texture),
+            regions: atlas
+                .regions
+                .iter()
+                .map(StoredAtlasRegionDefinition::from)
+                .collect(),
+        }
+    }
+}
+
+impl StoredVoxelAtlasDefinition {
+    fn into_atlas(self, path: &str) -> Result<VoxelAtlasDefinition, AssetCatalogCodecError> {
+        Ok(VoxelAtlasDefinition {
+            schema_version: self.schema_version,
+            texture: self.texture.into_reference(&format!("{path}.texture"))?,
+            regions: self
+                .regions
+                .into_iter()
+                .enumerate()
+                .map(|(index, region)| region.into_region(&format!("{path}.regions[{index}]")))
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+impl From<&AtlasRegionDefinition> for StoredAtlasRegionDefinition {
+    fn from(region: &AtlasRegionDefinition) -> Self {
+        Self {
+            id: region.id.clone(),
+            content_min: region.content_min,
+            content_extent: region.content_extent,
+            padding: StoredAtlasPadding {
+                left: region.padding.left,
+                right: region.padding.right,
+                bottom: region.padding.bottom,
+                top: region.padding.top,
+            },
+            inset: match region.inset {
+                AtlasInset::HalfTexel => "halfTexel".to_string(),
+            },
+        }
+    }
+}
+
+impl StoredAtlasRegionDefinition {
+    fn into_region(self, path: &str) -> Result<AtlasRegionDefinition, AssetCatalogCodecError> {
+        Ok(AtlasRegionDefinition {
+            id: self.id,
+            content_min: self.content_min,
+            content_extent: self.content_extent,
+            padding: AtlasPadding {
+                left: self.padding.left,
+                right: self.padding.right,
+                bottom: self.padding.bottom,
+                top: self.padding.top,
+            },
+            inset: match self.inset.as_str() {
+                "halfTexel" => AtlasInset::HalfTexel,
+                other => {
+                    return Err(AssetCatalogCodecError::new(
+                        format!("{path}.inset"),
+                        format!("unknown atlas inset `{other}`"),
+                    ));
+                }
+            },
+        })
+    }
+}
+
+impl From<&VoxelSurfaceBinding> for StoredVoxelSurfaceBinding {
+    fn from(surface: &VoxelSurfaceBinding) -> Self {
+        let mapping = match &surface.mapping {
+            VoxelSurfaceMapping::Repeat {
+                texture,
+                tile_scale_cells,
+                tile_origin_cells,
+            } => StoredVoxelSurfaceMapping::Repeat {
+                texture: StoredAssetReference::from(texture),
+                tile_scale_cells: *tile_scale_cells,
+                tile_origin_cells: *tile_origin_cells,
+            },
+            VoxelSurfaceMapping::Atlas {
+                atlas,
+                region,
+                tile_scale_cells,
+                tile_origin_cells,
+            } => StoredVoxelSurfaceMapping::Atlas {
+                atlas: StoredAssetReference::from(atlas),
+                region: region.clone(),
+                tile_scale_cells: *tile_scale_cells,
+                tile_origin_cells: *tile_origin_cells,
+            },
+        };
+        let alpha_mode = match surface.alpha_mode {
+            VoxelAlphaMode::Opaque => StoredVoxelAlphaMode::Opaque,
+            VoxelAlphaMode::Mask { cutoff } => StoredVoxelAlphaMode::Mask { cutoff },
+            VoxelAlphaMode::Blend => StoredVoxelAlphaMode::Blend,
+        };
+        Self {
+            schema_version: surface.schema_version,
+            mapping,
+            alpha_mode,
+        }
+    }
+}
+
+impl StoredVoxelSurfaceBinding {
+    fn into_surface(self, path: &str) -> Result<VoxelSurfaceBinding, AssetCatalogCodecError> {
+        let mapping = match self.mapping {
+            StoredVoxelSurfaceMapping::Repeat {
+                texture,
+                tile_scale_cells,
+                tile_origin_cells,
+            } => VoxelSurfaceMapping::Repeat {
+                texture: texture.into_reference(&format!("{path}.mapping.texture"))?,
+                tile_scale_cells: finite_pair(
+                    &format!("{path}.mapping.tileScaleCells"),
+                    tile_scale_cells,
+                )?,
+                tile_origin_cells: finite_pair(
+                    &format!("{path}.mapping.tileOriginCells"),
+                    tile_origin_cells,
+                )?,
+            },
+            StoredVoxelSurfaceMapping::Atlas {
+                atlas,
+                region,
+                tile_scale_cells,
+                tile_origin_cells,
+            } => VoxelSurfaceMapping::Atlas {
+                atlas: atlas.into_reference(&format!("{path}.mapping.atlas"))?,
+                region,
+                tile_scale_cells: finite_pair(
+                    &format!("{path}.mapping.tileScaleCells"),
+                    tile_scale_cells,
+                )?,
+                tile_origin_cells: finite_pair(
+                    &format!("{path}.mapping.tileOriginCells"),
+                    tile_origin_cells,
+                )?,
+            },
+        };
+        let alpha_mode = match self.alpha_mode {
+            StoredVoxelAlphaMode::Opaque => VoxelAlphaMode::Opaque,
+            StoredVoxelAlphaMode::Mask { cutoff } => VoxelAlphaMode::Mask {
+                cutoff: finite(&format!("{path}.alphaMode.cutoff"), cutoff)?,
+            },
+            StoredVoxelAlphaMode::Blend => VoxelAlphaMode::Blend,
+        };
+        Ok(VoxelSurfaceBinding {
+            schema_version: self.schema_version,
+            mapping,
+            alpha_mode,
+        })
     }
 }
 
@@ -471,6 +753,42 @@ fn uv_strategy_tag(value: UvStrategy) -> &'static str {
     }
 }
 
+fn texture_filter_tag(value: TextureFilter) -> &'static str {
+    match value {
+        TextureFilter::Nearest => "nearest",
+        TextureFilter::Linear => "linear",
+    }
+}
+
+fn parse_texture_filter(path: &str, value: &str) -> Result<TextureFilter, AssetCatalogCodecError> {
+    match value {
+        "nearest" => Ok(TextureFilter::Nearest),
+        "linear" => Ok(TextureFilter::Linear),
+        other => Err(AssetCatalogCodecError::new(
+            path,
+            format!("unsupported texture filter `{other}`"),
+        )),
+    }
+}
+
+fn texture_wrap_tag(value: TextureWrap) -> &'static str {
+    match value {
+        TextureWrap::Clamp => "clamp",
+        TextureWrap::Repeat => "repeat",
+    }
+}
+
+fn parse_texture_wrap(path: &str, value: &str) -> Result<TextureWrap, AssetCatalogCodecError> {
+    match value {
+        "clamp" => Ok(TextureWrap::Clamp),
+        "repeat" => Ok(TextureWrap::Repeat),
+        other => Err(AssetCatalogCodecError::new(
+            path,
+            format!("unsupported texture wrap `{other}`"),
+        )),
+    }
+}
+
 fn rgba_array(value: Rgba) -> [f32; 4] {
     [value.r, value.g, value.b, value.a]
 }
@@ -506,4 +824,11 @@ fn finite(path: &str, value: f32) -> Result<f32, AssetCatalogCodecError> {
     } else {
         Err(AssetCatalogCodecError::new(path, "value must be finite"))
     }
+}
+
+fn finite_pair(path: &str, value: [f32; 2]) -> Result<[f32; 2], AssetCatalogCodecError> {
+    Ok([
+        finite(&format!("{path}[0]"), value[0])?,
+        finite(&format!("{path}[1]"), value[1])?,
+    ])
 }

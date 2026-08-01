@@ -24,6 +24,7 @@ entity, authored-scene, voxel, and presentation facts.
 
 - [`render-model/src/lib.rs`](../../rust/crates/render-model/src/lib.rs)
 - [`render-projection/src/lib.rs`](../../rust/crates/render-projection/src/lib.rs)
+- [`render-projection/src/material.rs`](../../rust/crates/render-projection/src/material.rs)
 - [`render-presentation/src/lib.rs`](../../rust/crates/render-presentation/src/lib.rs)
 - [`fixtures/render`](../../fixtures/render)
 - [Rendering successor contract](../rendering-successor-contract.md)
@@ -39,6 +40,9 @@ entity, authored-scene, voxel, and presentation facts.
   own where those bytes are published.
 - Projection crates translate owner facts into complete frames; they do not
   become a second source of gameplay truth.
+- `project_catalog_material` validates the complete catalog candidate and
+  projects immutable texture/atlas/region provenance into the optional strict
+  voxel-surface material descriptor before retained publication.
 - Entity projection reads typed `EntityState` component views. Registering a
   new downstream component does not implicitly render it; its owning consumer
   must deliberately project any presentation meaning.

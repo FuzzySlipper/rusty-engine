@@ -169,6 +169,188 @@ pub enum MaterialUvStrategy {
     Atlas,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum VoxelSurfaceAlphaModeDescriptor {
+    Opaque,
+    Mask { cutoff: f32 },
+    Blend,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VoxelAtlasPaddingDescriptor {
+    pub left: u16,
+    pub right: u16,
+    pub bottom: u16,
+    pub top: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VoxelAtlasRegionDescriptor {
+    pub id: String,
+    pub content_min: [u32; 2],
+    pub content_extent: [u32; 2],
+    pub padding: VoxelAtlasPaddingDescriptor,
+    pub inset: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum VoxelSurfaceMappingDescriptor {
+    Repeat {
+        texture: String,
+        texture_version: u32,
+        texture_content_hash: String,
+        tile_scale_cells: [f32; 2],
+        tile_origin_cells: [f32; 2],
+    },
+    Atlas {
+        atlas: String,
+        atlas_version: u32,
+        atlas_content_hash: String,
+        texture: String,
+        texture_version: u32,
+        texture_content_hash: String,
+        region: VoxelAtlasRegionDescriptor,
+        tile_scale_cells: [f32; 2],
+        tile_origin_cells: [f32; 2],
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VoxelSurfaceDescriptor {
+    pub schema_version: u32,
+    pub filter: TextureFilter,
+    pub wrap: TextureWrap,
+    pub alpha_mode: VoxelSurfaceAlphaModeDescriptor,
+    pub mapping: VoxelSurfaceMappingDescriptor,
+}
+
+impl VoxelSurfaceDescriptor {
+    pub fn validate(&self) -> Result<(), VoxelSurfaceDescriptorError> {
+        if self.schema_version != 1 {
+            return Err(VoxelSurfaceDescriptorError::InvalidSchemaVersion);
+        }
+        if let VoxelSurfaceAlphaModeDescriptor::Mask { cutoff } = self.alpha_mode {
+            if !cutoff.is_finite() || !(0.0..=1.0).contains(&cutoff) {
+                return Err(VoxelSurfaceDescriptorError::InvalidAlphaCutoff);
+            }
+        }
+        let (texture, texture_version, texture_hash, scale, origin) = match &self.mapping {
+            VoxelSurfaceMappingDescriptor::Repeat {
+                texture,
+                texture_version,
+                texture_content_hash,
+                tile_scale_cells,
+                tile_origin_cells,
+            } => {
+                if self.wrap != TextureWrap::Repeat {
+                    return Err(VoxelSurfaceDescriptorError::InvalidWrap);
+                }
+                (
+                    texture,
+                    *texture_version,
+                    texture_content_hash,
+                    tile_scale_cells,
+                    tile_origin_cells,
+                )
+            }
+            VoxelSurfaceMappingDescriptor::Atlas {
+                atlas,
+                atlas_version,
+                atlas_content_hash,
+                texture,
+                texture_version,
+                texture_content_hash,
+                region,
+                tile_scale_cells,
+                tile_origin_cells,
+            } => {
+                validate_asset_id(atlas, RenderAssetKind::SpriteAtlas)
+                    .map_err(|_| VoxelSurfaceDescriptorError::InvalidAtlasReference)?;
+                if *atlas_version == 0 || atlas_content_hash.is_empty() {
+                    return Err(VoxelSurfaceDescriptorError::InvalidAtlasProvenance);
+                }
+                if self.wrap != TextureWrap::Clamp {
+                    return Err(VoxelSurfaceDescriptorError::InvalidWrap);
+                }
+                validate_voxel_region(region, self.filter)?;
+                (
+                    texture,
+                    *texture_version,
+                    texture_content_hash,
+                    tile_scale_cells,
+                    tile_origin_cells,
+                )
+            }
+        };
+        validate_asset_id(texture, RenderAssetKind::Texture)
+            .map_err(|_| VoxelSurfaceDescriptorError::InvalidTextureReference)?;
+        if texture_version == 0 || texture_hash.is_empty() {
+            return Err(VoxelSurfaceDescriptorError::InvalidTextureProvenance);
+        }
+        if scale
+            .iter()
+            .any(|value| !value.is_finite() || !(1.0 / 256.0..=4_096.0).contains(value))
+        {
+            return Err(VoxelSurfaceDescriptorError::InvalidTileScale);
+        }
+        if origin
+            .iter()
+            .any(|value| !value.is_finite() || value.abs() > 16_777_216.0)
+        {
+            return Err(VoxelSurfaceDescriptorError::InvalidTileOrigin);
+        }
+        Ok(())
+    }
+
+    pub fn texture(&self) -> &str {
+        match &self.mapping {
+            VoxelSurfaceMappingDescriptor::Repeat { texture, .. }
+            | VoxelSurfaceMappingDescriptor::Atlas { texture, .. } => texture,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VoxelSurfaceDescriptorError {
+    InvalidSchemaVersion,
+    InvalidAlphaCutoff,
+    InvalidTextureReference,
+    InvalidTextureProvenance,
+    InvalidAtlasReference,
+    InvalidAtlasProvenance,
+    InvalidAtlasRegion,
+    InvalidAtlasPadding,
+    InvalidWrap,
+    InvalidTileScale,
+    InvalidTileOrigin,
+}
+
+fn validate_voxel_region(
+    region: &VoxelAtlasRegionDescriptor,
+    filter: TextureFilter,
+) -> Result<(), VoxelSurfaceDescriptorError> {
+    if region.id.is_empty() || region.content_extent.contains(&0) || region.inset != "halfTexel" {
+        return Err(VoxelSurfaceDescriptorError::InvalidAtlasRegion);
+    }
+    let padding = [
+        region.padding.left,
+        region.padding.right,
+        region.padding.bottom,
+        region.padding.top,
+    ];
+    if padding.into_iter().any(|value| value > 32)
+        || (filter == TextureFilter::Linear && padding.contains(&0))
+    {
+        return Err(VoxelSurfaceDescriptorError::InvalidAtlasPadding);
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RenderMaterialDescriptor {
@@ -181,6 +363,8 @@ pub struct RenderMaterialDescriptor {
     pub emission_color: [f32; 3],
     pub emission_intensity: f32,
     pub uv_strategy: MaterialUvStrategy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voxel_surface: Option<VoxelSurfaceDescriptor>,
 }
 
 impl RenderMaterialDescriptor {
@@ -209,6 +393,14 @@ impl RenderMaterialDescriptor {
         {
             return Err(MaterialDescriptorError::InvalidEmission);
         }
+        if let Some(surface) = &self.voxel_surface {
+            surface
+                .validate()
+                .map_err(MaterialDescriptorError::InvalidVoxelSurface)?;
+            if self.texture.as_deref() != Some(surface.texture()) {
+                return Err(MaterialDescriptorError::VoxelTextureMismatch);
+            }
+        }
         Ok(())
     }
 }
@@ -221,6 +413,8 @@ pub enum MaterialDescriptorError {
     InvalidColor,
     InvalidRoughness,
     InvalidEmission,
+    InvalidVoxelSurface(VoxelSurfaceDescriptorError),
+    VoxelTextureMismatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -851,6 +1045,72 @@ mod tests {
                 width: MAX_TEXTURE_DIMENSION + 1,
                 height: MAX_TEXTURE_DIMENSION,
             })
+        );
+    }
+
+    #[test]
+    fn voxel_surface_material_border_is_strict_and_legacy_omission_is_exact() {
+        let surface = VoxelSurfaceDescriptor {
+            schema_version: 1,
+            filter: TextureFilter::Linear,
+            wrap: TextureWrap::Clamp,
+            alpha_mode: VoxelSurfaceAlphaModeDescriptor::Mask { cutoff: 0.5 },
+            mapping: VoxelSurfaceMappingDescriptor::Atlas {
+                atlas: "sprite-sheet/voxel-surfaces".to_string(),
+                atlas_version: 2,
+                atlas_content_hash: "bb02".to_string(),
+                texture: "texture/voxel-surfaces".to_string(),
+                texture_version: 3,
+                texture_content_hash: "aa03".to_string(),
+                region: VoxelAtlasRegionDescriptor {
+                    id: "stone".to_string(),
+                    content_min: [2, 2],
+                    content_extent: [28, 28],
+                    padding: VoxelAtlasPaddingDescriptor {
+                        left: 1,
+                        right: 1,
+                        bottom: 1,
+                        top: 1,
+                    },
+                    inset: "halfTexel".to_string(),
+                },
+                tile_scale_cells: [1.0, 2.0],
+                tile_origin_cells: [-4.0, 8.0],
+            },
+        };
+        assert_eq!(surface.validate(), Ok(()));
+        let material = RenderMaterialDescriptor {
+            schema_version: 2,
+            id: "material/stone".to_string(),
+            color: [1.0; 4],
+            texture: Some("texture/voxel-surfaces".to_string()),
+            roughness: 1.0,
+            texture_tint: [1.0; 4],
+            emission_color: [0.0; 3],
+            emission_intensity: 0.0,
+            uv_strategy: MaterialUvStrategy::Atlas,
+            voxel_surface: Some(surface.clone()),
+        };
+        assert_eq!(material.validate(), Ok(()));
+
+        let mut invalid_padding = surface;
+        if let VoxelSurfaceMappingDescriptor::Atlas { region, .. } = &mut invalid_padding.mapping {
+            region.padding.left = 0;
+        }
+        assert_eq!(
+            invalid_padding.validate(),
+            Err(VoxelSurfaceDescriptorError::InvalidAtlasPadding)
+        );
+
+        let legacy = RenderMaterialDescriptor {
+            voxel_surface: None,
+            ..material
+        };
+        let encoded = serde_json::to_string(&legacy).unwrap();
+        assert!(!encoded.contains("voxelSurface"));
+        assert_eq!(
+            serde_json::from_str::<RenderMaterialDescriptor>(&encoded).unwrap(),
+            legacy
         );
     }
 }

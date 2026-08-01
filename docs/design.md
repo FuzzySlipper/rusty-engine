@@ -459,6 +459,11 @@ copy-on-write records: unchanged immutable definitions are structurally shared, 
 record named by a mutation is privately copied before validation or commit. Missing resources are
 classified rather than resolved through an ambient registry.
 
+The optional catalog-material adapter is another explicit read-only projection: it validates one
+complete `AssetCatalog` candidate, resolves exact version/hash-pinned voxel texture and atlas
+dependencies, and emits immutable renderer-neutral provenance. It does not mutate catalog, voxel,
+collision, navigation, or voxel-object state.
+
 `render-presentation` owns the other renderer-neutral family: typed audio sources and impulses,
 world/entity billboards, bounded particle emitters and bursts, telemetry overlay requests, and
 animation graph/controller/playback projection. Its controller is an explicitly invoked mechanism,

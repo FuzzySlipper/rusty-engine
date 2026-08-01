@@ -10,7 +10,7 @@ imports, prefab resolution, and authored scene admission and editing.
 - `content-store`: bounded source batches, content hashes, manifests, owner
   codecs, load/save plans, prefabs, and atomic write sets.
 - `asset-catalog`: asset entries, versions, locks, dependencies, materials,
-  fallbacks, and catalog validation.
+  canonical voxel texture/atlas bindings, fallbacks, and catalog validation.
 - `asset-import`: bounded offline textual static-mesh, binary GLB, and explicit
   JSON glTF source-closure admission; deterministic GLB runtime packing; import
   planning, generated artifacts, sidecars, reimport decisions, and atomic
@@ -29,6 +29,8 @@ imports, prefab resolution, and authored scene admission and editing.
 - [`content-store/src/lib.rs`](../../rust/crates/content-store/src/lib.rs)
 - [`content-store/src/manifest.rs`](../../rust/crates/content-store/src/manifest.rs)
 - [`asset-catalog/src/lib.rs`](../../rust/crates/asset-catalog/src/lib.rs)
+- [`asset-catalog/src/material.rs`](../../rust/crates/asset-catalog/src/material.rs)
+- [`asset-catalog/src/validation.rs`](../../rust/crates/asset-catalog/src/validation.rs)
 - [`asset-import/src/lib.rs`](../../rust/crates/asset-import/src/lib.rs)
 - [`asset-import/src/gltf_package.rs`](../../rust/crates/asset-import/src/gltf_package.rs)
 - [`authored-scene/src/lib.rs`](../../rust/crates/authored-scene/src/lib.rs)
@@ -56,6 +58,9 @@ imports, prefab resolution, and authored scene admission and editing.
   failures produce no publication candidate.
 - Consumers decide where content bodies live and how admitted scene entities
   become game-owned live state.
+- Voxel surface materials use exact version/hash-pinned texture or sprite-sheet
+  dependencies. Atlas regions remain presentation facts; voxel cells and
+  voxel-object frames retain material slots only.
 - `authored-scene` admission produces validated built-in `EntityDefinition`
   data and commits it through `EntityAuthoringService`; those built-ins enter
   the same typed store used by registered downstream components. A downstream

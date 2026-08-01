@@ -1,6 +1,10 @@
 use core_assets::{AssetHash, AssetId, AssetKind, AssetReference, AssetVersionReq};
 
-use crate::MaterialDefinition;
+use crate::{
+    MaterialDefinition, RenderMaterial, ResolvedVoxelSurface, ResolvedVoxelSurfaceMapping,
+    TextureDefinition, VoxelAtlasDefinition, VoxelSurfaceBinding, VoxelSurfaceMapping,
+    VoxelSurfaceResolutionError,
+};
 
 /// One authored asset definition.
 #[derive(Debug, Clone, PartialEq)]
@@ -14,6 +18,10 @@ pub struct CatalogEntry {
     pub dependencies: Vec<AssetReference>,
     /// Required for material IDs and rejected for every other asset kind.
     pub material: Option<MaterialDefinition>,
+    /// Optional canonical texture facts. Legacy texture entries may omit this.
+    pub texture: Option<TextureDefinition>,
+    /// Optional voxel atlas facts, owned by a sprite-sheet asset.
+    pub voxel_atlas: Option<VoxelAtlasDefinition>,
 }
 
 impl CatalogEntry {
@@ -26,6 +34,8 @@ impl CatalogEntry {
             label: None,
             dependencies: Vec::new(),
             material: None,
+            texture: None,
+            voxel_atlas: None,
         }
     }
 
@@ -55,6 +65,16 @@ impl CatalogEntry {
 
     pub fn with_material(mut self, material: MaterialDefinition) -> Self {
         self.material = Some(material);
+        self
+    }
+
+    pub fn with_texture(mut self, texture: TextureDefinition) -> Self {
+        self.texture = Some(texture);
+        self
+    }
+
+    pub fn with_voxel_atlas(mut self, atlas: VoxelAtlasDefinition) -> Self {
+        self.voxel_atlas = Some(atlas);
         self
     }
 }
@@ -87,6 +107,116 @@ impl AssetCatalog {
         self.entries.iter()
     }
 
+    pub fn resolve_voxel_surface(
+        &self,
+        surface: &VoxelSurfaceBinding,
+    ) -> Result<ResolvedVoxelSurface, VoxelSurfaceResolutionError> {
+        match &surface.mapping {
+            VoxelSurfaceMapping::Repeat {
+                texture,
+                tile_scale_cells,
+                tile_origin_cells,
+            } => {
+                let texture_entry = self.resolve_exact(texture)?;
+                let texture_definition = texture_entry
+                    .texture
+                    .as_ref()
+                    .ok_or(VoxelSurfaceResolutionError::MissingTextureDefinition)?;
+                Ok(ResolvedVoxelSurface {
+                    schema_version: surface.schema_version,
+                    filter: texture_definition.filter,
+                    wrap: texture_definition.wrap,
+                    alpha_mode: surface.alpha_mode,
+                    mapping: ResolvedVoxelSurfaceMapping::Repeat {
+                        texture: texture.clone(),
+                        texture_version: texture_entry.version,
+                        tile_scale_cells: *tile_scale_cells,
+                        tile_origin_cells: *tile_origin_cells,
+                    },
+                })
+            }
+            VoxelSurfaceMapping::Atlas {
+                atlas,
+                region,
+                tile_scale_cells,
+                tile_origin_cells,
+            } => {
+                let atlas_entry = self.resolve_exact(atlas)?;
+                let atlas_definition = atlas_entry
+                    .voxel_atlas
+                    .as_ref()
+                    .ok_or(VoxelSurfaceResolutionError::MissingAtlasDefinition)?;
+                let texture_entry = self.resolve_exact(&atlas_definition.texture)?;
+                let texture_definition = texture_entry
+                    .texture
+                    .as_ref()
+                    .ok_or(VoxelSurfaceResolutionError::MissingTextureDefinition)?;
+                let region = atlas_definition
+                    .regions
+                    .iter()
+                    .find(|candidate| candidate.id == *region)
+                    .cloned()
+                    .ok_or(VoxelSurfaceResolutionError::MissingAtlasRegion)?;
+                Ok(ResolvedVoxelSurface {
+                    schema_version: surface.schema_version,
+                    filter: texture_definition.filter,
+                    wrap: texture_definition.wrap,
+                    alpha_mode: surface.alpha_mode,
+                    mapping: ResolvedVoxelSurfaceMapping::Atlas {
+                        atlas: atlas.clone(),
+                        atlas_version: atlas_entry.version,
+                        texture: atlas_definition.texture.clone(),
+                        texture_version: texture_entry.version,
+                        region,
+                        tile_scale_cells: *tile_scale_cells,
+                        tile_origin_cells: *tile_origin_cells,
+                    },
+                })
+            }
+        }
+    }
+
+    pub fn render_material(
+        &self,
+        id: &AssetId,
+    ) -> Result<RenderMaterial, VoxelSurfaceResolutionError> {
+        let entry = self
+            .get(id)
+            .ok_or(VoxelSurfaceResolutionError::MissingAsset)?;
+        let definition = entry
+            .material
+            .as_ref()
+            .ok_or(VoxelSurfaceResolutionError::MissingAsset)?;
+        match &definition.style.voxel_surface {
+            Some(surface) => {
+                Ok(definition.render_projection_with_surface(self.resolve_voxel_surface(surface)?))
+            }
+            None => Ok(definition.render_projection()),
+        }
+    }
+
+    fn resolve_exact(
+        &self,
+        reference: &AssetReference,
+    ) -> Result<&CatalogEntry, VoxelSurfaceResolutionError> {
+        let entry = self
+            .get(reference.id())
+            .ok_or(VoxelSurfaceResolutionError::MissingAsset)?;
+        let version_matches = match reference.version() {
+            AssetVersionReq::Any => true,
+            AssetVersionReq::Exact(version) => entry.version == version,
+            AssetVersionReq::AtLeast(version) => entry.version >= version,
+        };
+        if !version_matches
+            || reference
+                .hash()
+                .is_some_and(|hash| entry.hash.as_ref() != Some(hash))
+        {
+            return Err(VoxelSurfaceResolutionError::StaleReference);
+        }
+        Ok(entry)
+    }
+
     /// A deterministic copy. Entry identity controls order; dependency order is
     /// normalized without changing authored multiplicity so validation can still
     /// report the original semantic content.
@@ -107,6 +237,9 @@ impl AssetCatalog {
                             .cmp(&right.hash().map(AssetHash::as_str))
                     })
             });
+            if let Some(atlas) = &mut entry.voxel_atlas {
+                atlas.regions.sort_by(|left, right| left.id.cmp(&right.id));
+            }
         }
         catalog
     }

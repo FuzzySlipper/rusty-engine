@@ -303,6 +303,7 @@ pub fn import_with_context(source: &SourceMesh, context: &ImportContext) -> Impo
                 } else {
                     UvStrategy::Flat
                 },
+                voxel_surface: None,
             },
         };
         push_unique(

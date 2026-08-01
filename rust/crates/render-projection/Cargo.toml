@@ -7,6 +7,8 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
+asset-catalog.workspace = true
+core-assets.workspace = true
 core-ids.workspace = true
 engine-spatial = { path = "../engine-spatial" }
 entity-state = { path = "../entity-state" }

@@ -32,6 +32,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_path_to_error",
+ "sha2",
 ]
 
 [[package]]
@@ -556,6 +557,8 @@ dependencies = [
 name = "render-projection"
 version = "0.1.0"
 dependencies = [
+ "asset-catalog",
+ "core-assets",
  "core-ids",
  "core-math",
  "engine-spatial",

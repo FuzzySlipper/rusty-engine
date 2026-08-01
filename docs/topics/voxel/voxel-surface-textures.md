@@ -1,9 +1,9 @@
 # Runtime voxel surface textures
 
-Status: selected VTX0 contract with VTX1 bounded PNG resource realization and
-the VTX2 tile-coordinate mesh stream implemented. Canonical voxel material
-bindings, atlas sampling specialization, and Studio authoring remain the
-ordered VTX3–VTX5 follow-ons.
+Status: selected VTX0 contract with VTX1 bounded PNG resource realization,
+VTX2 tile-coordinate mesh streams, and VTX3 canonical material/atlas bindings
+implemented. Backend atlas sampling and Studio authoring remain the ordered
+VTX4–VTX5 follow-ons.
 
 ## Decision and ownership
 
@@ -186,6 +186,18 @@ the generic `MeshStandardMaterial` path. Retained identity replacement rebuilds
 dependent materials only after decode succeeds and disposes the replaced GPU
 resource exactly once. Legacy payload omission remains color-only.
 
+VTX3 implements the canonical binding subset through `asset-catalog` and the
+renderer-neutral material border. Texture entries own bounded dimensions and
+filter/wrap facts; sprite-sheet entries may own schema-1 voxel atlases with
+integer content rectangles, explicit padding, and the fixed half-texel inset.
+Material entries optionally own an exact-pinned repeat or atlas-region mapping,
+tile scale/origin, alpha mode, tint, and existing authority facts. Admission
+checks the complete content-addressed dependency closure, region aggregates,
+padded overlap, linear-filter gutter, and exact version/hash before projection.
+`render-projection::project_catalog_material` returns immutable resolved
+texture, atlas, region, version, and hash provenance. Omitted fields retain the
+old color-only canonical JSON and behavior.
+
 ## Executable spike and measurements
 
 `svc-mesh` tests exercise the actual greedy partition together with the VTX0
@@ -235,7 +247,8 @@ cargo clippy -p svc-mesh --all-targets --locked -- -D warnings
 - VTX2 consumes `svc-mesh::texture_mapping` from the one existing greedy
   `MeshPayload` path and versions inline/packed tile-space streams.
 - VTX3 owns canonical material and atlas bindings in `asset-catalog` and the
-  renderer-neutral material border; voxel cells retain slots only.
+  renderer-neutral material border; voxel cells retain slots only. This slice
+  is implemented.
 - VTX4 realizes the selected sampling specialization in the existing Three
   mesh/material path and supplies framebuffer/Chromium proof.
 - VTX5 routes canonical texture/atlas authoring through the existing Studio

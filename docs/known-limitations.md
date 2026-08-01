@@ -5,20 +5,22 @@ architecture boundaries are stated separately so agents do not “fix” them by
 introducing a second authority. Product-specific limitations belong to their
 downstream repositories.
 
-## Runtime voxel surface textures are partly implemented
+## Runtime voxel surface textures need backend sampling and authoring
 
 - **Status:** scheduled
 - **Affected surface:** `svc-mesh`, `render-model`, `render-projection`, the isolated renderer,
   and Studio voxel authoring
 - **Limitation:** Production voxel mesh payloads emit the VTX2 tile-space
-  attribute, and VTX1 admits and realizes bounded PNG resources on generic
-  retained mesh materials. Canonical voxel material mappings and atlas-region
-  sampling are not yet connected, so current voxel surfaces remain color-only.
+  attribute, VTX1 admits and realizes bounded PNG resources on generic retained
+  mesh materials, and VTX3 admits exact-pinned canonical tile/atlas bindings
+  with resolved renderer-neutral provenance. The Three backend does not yet
+  apply the voxel sampling specialization, so current voxel surfaces remain
+  color-only despite the complete neutral binding.
 - **Detection:** `cargo test -p svc-mesh --locked` proves the selected basis, negative-coordinate
   phase, chunk continuity, greedy geometry counts, and atlas formula without claiming visible
   rendering.
-- **Follow-up:** Complete the ordered VTX3–VTX5 material, renderer, and
-  Studio slices, then certify them in the exact public voxel consumer. The owning contract is
+- **Follow-up:** Complete the ordered VTX4–VTX5 renderer and Studio slices,
+  then certify them in the exact public voxel consumer. The owning contract is
   [runtime voxel surface textures](topics/voxel/voxel-surface-textures.md).
 - **Last reviewed:** 2026-08-01 / codex
 

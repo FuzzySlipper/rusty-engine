@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+mod admission;
 mod catalog;
 mod change;
 mod codec;
@@ -17,6 +18,7 @@ mod material;
 mod validation;
 mod voxel;
 
+pub use admission::{AdmittedAssetCatalog, AssetCatalogStore, CatalogAdmissionError};
 pub use catalog::{AssetCatalog, CatalogEntry};
 pub use change::{
     classify_material_change, material_change_impact, revalidate_asset, ChangeImpactReport,
@@ -25,8 +27,10 @@ pub use change::{
 pub use codec::{
     decode_catalog, decode_lock, encode_catalog, encode_lock, AssetCatalogCodecError,
     StoredAssetCatalog, StoredAssetLock, StoredAssetLockEntry, StoredAssetReference,
-    StoredAssetVersionRequirement, StoredCatalogEntry, StoredMaterialAuthority,
-    StoredMaterialDefinition, StoredMaterialStyle,
+    StoredAssetVersionRequirement, StoredAtlasPadding, StoredAtlasRegionDefinition,
+    StoredCatalogEntry, StoredMaterialAuthority, StoredMaterialDefinition, StoredMaterialStyle,
+    StoredTextureDefinition, StoredVoxelAlphaMode, StoredVoxelAtlasDefinition,
+    StoredVoxelSurfaceBinding, StoredVoxelSurfaceMapping,
 };
 pub use dependency::DependencyGraph;
 pub use fallback::{fallback_for, AssetContext, FallbackOutcome, FallbackVisual};
@@ -35,8 +39,13 @@ pub use lock::{
     LockValidationReport,
 };
 pub use material::{
-    CollisionMaterial, MaterialAuthority, MaterialDefinition, MaterialStyle, RenderMaterial, Rgba,
-    StructuralClass, UvStrategy,
+    AtlasInset, AtlasPadding, AtlasRegionDefinition, CollisionMaterial, MaterialAuthority,
+    MaterialDefinition, MaterialStyle, RenderMaterial, ResolvedVoxelSurface,
+    ResolvedVoxelSurfaceMapping, Rgba, StructuralClass, TextureDefinition, TextureFilter,
+    TextureWrap, UvStrategy, VoxelAlphaMode, VoxelAtlasDefinition, VoxelSurfaceBinding,
+    VoxelSurfaceMapping, VoxelSurfaceResolutionError, MAX_AGGREGATE_ATLAS_REGIONS,
+    MAX_ATLAS_PADDING, MAX_ATLAS_REGIONS, MAX_TEXTURE_DIMENSION, MAX_TEXTURE_TEXELS,
+    MAX_TILE_ORIGIN_CELLS, MAX_TILE_SCALE_CELLS, MIN_TILE_SCALE_CELLS,
 };
 pub use validation::{
     validate_catalog, CatalogDiagnostic, CatalogValidationError, CatalogValidationReport,

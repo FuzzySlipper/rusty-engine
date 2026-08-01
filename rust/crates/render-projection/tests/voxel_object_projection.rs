@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 use render_model::{
     MaterialUvStrategy, MeshMaterialSlot, MeshPayloadSource, RenderDiff, RenderMaterialDescriptor,
-    RenderMetadata, Transform,
+    RenderMetadata, TextureFilter, TextureWrap, Transform, VoxelSurfaceAlphaModeDescriptor,
+    VoxelSurfaceDescriptor, VoxelSurfaceMappingDescriptor,
 };
 use render_projection::{VoxelObjectProjectionInstance, VoxelObjectRenderProjector};
 use voxel_asset::{
@@ -196,6 +197,42 @@ fn voxel_object_material_override_defines_the_selected_material() {
 }
 
 #[test]
+fn material_slot_can_switch_from_color_to_tile_without_voxel_republication() {
+    let object = admitted();
+    let instances = vec![instance(&object, 0)];
+    let mut projector = VoxelObjectRenderProjector::new();
+    projector.project(&instances, &materials()).unwrap();
+
+    let mut tiled = material("material/runner", [0.8, 0.2, 0.1, 1.0]);
+    tiled.texture = Some("texture/runner-tile".to_string());
+    tiled.uv_strategy = MaterialUvStrategy::Planar;
+    tiled.voxel_surface = Some(VoxelSurfaceDescriptor {
+        schema_version: 1,
+        filter: TextureFilter::Nearest,
+        wrap: TextureWrap::Repeat,
+        alpha_mode: VoxelSurfaceAlphaModeDescriptor::Opaque,
+        mapping: VoxelSurfaceMappingDescriptor::Repeat {
+            texture: "texture/runner-tile".to_string(),
+            texture_version: 1,
+            texture_content_hash: "aa01".to_string(),
+            tile_scale_cells: [1.0, 1.0],
+            tile_origin_cells: [0.0, 0.0],
+        },
+    });
+    let updated = projector
+        .project(
+            &instances,
+            &BTreeMap::from([(tiled.id.clone(), tiled.clone())]),
+        )
+        .unwrap();
+    assert_eq!(
+        updated.frame.ops,
+        vec![RenderDiff::DefineMaterial { material: tiled }]
+    );
+    assert!(updated.readout.materialized_resources.is_empty());
+}
+
+#[test]
 fn missing_voxel_object_material_override_is_fail_atomic() {
     let object = admitted();
     let mut projector = VoxelObjectRenderProjector::new();
@@ -278,6 +315,7 @@ fn material(id: &str, color: [f32; 4]) -> RenderMaterialDescriptor {
         emission_color: [0.0; 3],
         emission_intensity: 0.0,
         uv_strategy: MaterialUvStrategy::Flat,
+        voxel_surface: None,
     }
 }
 

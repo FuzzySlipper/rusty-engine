@@ -12,6 +12,7 @@ fn material() -> RenderMaterialDescriptor {
         emission_color: [0.0; 3],
         emission_intensity: 0.0,
         uv_strategy: MaterialUvStrategy::Planar,
+        voxel_surface: None,
     }
 }
 
