@@ -23,6 +23,8 @@ export function certifyDemoConsumerRevision(pin, engineSource) {
     || pin.voxelProjectFile !== 'content/projects/converted-wall.project.json'
     || pin.cargoPackage !== 'loading-bay-game'
     || pin.adapterBinary !== 'studio-adapter'
+    || pin.adapterId !== 'rusty-engine-demo.loading-bay'
+    || pin.protocolVersion !== 13
     || pin.studioApplication !== 'apps/loading-bay-studio'
     || !isRecord(pin.entityInspectorConsumer)
     || pin.entityInspectorConsumer.componentTypeId !== 'rusty-engine-demo.loading-bay.weapon'

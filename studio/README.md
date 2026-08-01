@@ -101,11 +101,26 @@ den-serve up rusty-engine-studio -repo /absolute/path/to/rusty-engine
 
 The launcher builds Studio and, by default, builds the adapter from the exact public reference
 consumer revision in [`demo-consumer-source.json`](demo-consumer-source.json), cached outside this
-repository. It never discovers or inspects a sibling checkout. To select a consumer explicitly,
-set `RUSTY_STUDIO_CONSUMER_ROOT` to its absolute checkout path; to use an already-built adapter, set
-`RUSTY_STUDIO_ADAPTER_BINARY` to its absolute path. `den-serve` prints the managed LAN URL and owns
-the resulting process group; use `den-serve status`, `logs`, or `stop` with the same project and
-repository arguments for later lifecycle operations.
+repository. It never discovers or inspects a sibling checkout. The managed path does not accept a
+sibling root or arbitrary prebuilt adapter override: those remain available only through the lower
+level `pnpm run host` development command and are reported as `unmanaged`.
+
+Before listening, the managed host sends the strict current `describe` request, checks the configured
+adapter identity and protocol, and hashes the exact adapter binary. `/health` and
+`/api/studio-status` expose one frozen readout containing the Engine source commit, configured public
+consumer repository/commit, running adapter build commit and binary SHA-256, and negotiated protocol.
+The same compact identity appears in the title bar. Verify it before trusting a screenshot:
+
+```bash
+curl -fsS http://127.0.0.1:4300/api/studio-status | jq .
+```
+
+The supervisor watches only `demo-consumer-source.json`. If its bytes change, it emits a structured
+`studioRestartRequired` receipt, terminates the complete host/adapter process group within a bounded
+grace period, and exits instead of serving the stale process. Run the normal `den-serve up` command
+again to build and admit the new exact consumer. `den-serve` prints the managed LAN URL and owns the
+resulting process group; use `den-serve status`, `logs`, or `stop` with the same project and repository
+arguments for later lifecycle operations.
 
 The explicit real-consumer proof is separate and mutates only a temporary copy of the demo content
 and conversion fixtures:

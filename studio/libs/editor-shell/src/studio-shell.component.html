@@ -39,7 +39,17 @@
     </div>
     <div class="adapter-state" [class.is-ready]="state().connection.kind === 'connected'">
       <span class="status-dot"></span>
-      {{ state().connection.kind }}
+      <span>{{ state().connection.kind }}</span>
+      <small
+        data-visual-id="studio-runtime-identity"
+        [attr.data-runtime-mode]="hostStatus()?.mode ?? 'loading'"
+        [attr.data-engine-source]="hostStatus()?.engineSourceCommit"
+        [attr.data-consumer-commit]="hostStatus()?.configuredConsumer?.commit"
+        [attr.data-adapter-build]="hostStatus()?.runningAdapter?.buildCommit"
+        [attr.data-adapter-binary-sha256]="hostStatus()?.runningAdapter?.binarySha256"
+        [attr.data-protocol-version]="hostStatus()?.runningAdapter?.protocolVersion"
+        [title]="hostStatusError() ?? hostStatusLabel()"
+      >{{ hostStatusLabel() }}</small>
     </div>
 
     @if (state().activeMenu === 'file') {

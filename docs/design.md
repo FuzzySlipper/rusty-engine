@@ -774,7 +774,12 @@ adapter binary, and owns one separate versioned host-user settings boundary. Pre
 by canonical project root, stored outside project bytes and browser storage, guarded by SHA-256
 compare-and-swap and same-directory atomic replacement, and applied to renderer-host camera/input
 configuration and Studio lighting presentation without creating gameplay authority. The host does
-not interpret project content or
+not interpret project content. Its managed serve path handshakes the exact configured adapter before
+listening and publishes one frozen operational identity containing the Engine source commit,
+configured consumer commit, adapter build commit and binary hash, and negotiated protocol. A change
+to the sole consumer identity manifest terminates the bounded host/adapter process group with an
+explicit restart-required receipt; operational status remains observational and never becomes
+project authority. The host does
 make HTTP/browser behavior an Engine prerequisite. Ordinary Rust verification remains independent
 of Studio, Node, the browser, and any sibling checkout; the cross-repository demo and Chromium proof
 is an explicit integration gate.

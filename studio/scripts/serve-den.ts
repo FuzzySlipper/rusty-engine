@@ -1,11 +1,15 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { watch } from 'node:fs';
 import { access, mkdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { basename, dirname, isAbsolute, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const STUDIO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const ENGINE_ROOT = resolve(STUDIO_ROOT, '..');
 const CONSUMER_SOURCE_FILE = resolve(STUDIO_ROOT, 'demo-consumer-source.json');
+const HOST_SHUTDOWN_TIMEOUT_MILLISECONDS = 10_000;
 
 interface DemoConsumerSource {
   readonly schemaVersion: number;
@@ -13,6 +17,59 @@ interface DemoConsumerSource {
   readonly commit: string;
   readonly cargoPackage: string;
   readonly adapterBinary: string;
+  readonly adapterId: string;
+  readonly protocolVersion: number;
+}
+
+interface ManagedAdapter {
+  readonly binary: string;
+  readonly source: DemoConsumerSource;
+  readonly sourceFingerprint: string;
+}
+
+export interface StudioRestartRequiredReceipt {
+  readonly kind: 'studioRestartRequired';
+  readonly code: 'consumer_identity_changed' | 'consumer_identity_unreadable';
+  readonly manifest: string;
+  readonly message?: string;
+}
+
+export function watchConsumerIdentity(
+  manifest: string,
+  initialFingerprint: string,
+  restartRequired: (receipt: StudioRestartRequiredReceipt) => void,
+): () => void {
+  let checking = false;
+  let stopped = false;
+  const manifestName = basename(manifest);
+  // Watch the containing directory so an atomic manifest replacement does not
+  // strand the watcher on the old inode after an unchanged replacement.
+  const watcher = watch(dirname(manifest), { persistent: false }, (_event, filename) => {
+    if (filename !== null && filename.toString() !== manifestName) return;
+    if (checking || stopped) return;
+    checking = true;
+    void readFile(manifest).then((bytes) => {
+      const fingerprint = createHash('sha256').update(bytes).digest('hex');
+      if (fingerprint !== initialFingerprint) {
+        restartRequired({
+          kind: 'studioRestartRequired',
+          code: 'consumer_identity_changed',
+          manifest,
+        });
+      }
+    }).catch((error: unknown) => {
+      restartRequired({
+        kind: 'studioRestartRequired',
+        code: 'consumer_identity_unreadable',
+        message: error instanceof Error ? error.message : String(error),
+        manifest,
+      });
+    }).finally(() => { checking = false; });
+  });
+  return () => {
+    stopped = true;
+    watcher.close();
+  };
 }
 
 function argumentValue(name: string): string | undefined {
@@ -40,7 +97,10 @@ function validConsumerSource(value: unknown): value is DemoConsumerSource {
     && typeof source['cargoPackage'] === 'string'
     && source['cargoPackage'].length > 0
     && typeof source['adapterBinary'] === 'string'
-    && source['adapterBinary'].length > 0;
+    && source['adapterBinary'].length > 0
+    && typeof source['adapterId'] === 'string'
+    && source['adapterId'].length > 0
+    && source['protocolVersion'] === 13;
 }
 
 async function consumerSource(): Promise<DemoConsumerSource> {
@@ -148,25 +208,25 @@ async function buildConsumerAdapter(root: string, source: DemoConsumerSource): P
   return binary;
 }
 
-async function adapterBinary(): Promise<string> {
-  const explicitBinary = argumentValue('--adapter-binary')
-    ?? process.env['RUSTY_STUDIO_ADAPTER_BINARY'];
-  if (explicitBinary !== undefined) {
-    if (!isAbsolute(explicitBinary)) throw new Error('Studio adapter binary must be absolute');
-    if (!await fileExists(explicitBinary)) {
-      throw new Error(`Studio adapter binary is unavailable: ${explicitBinary}`);
-    }
-    return explicitBinary;
-  }
-
+async function managedAdapter(): Promise<ManagedAdapter> {
   const source = await consumerSource();
-  const explicitConsumer = argumentValue('--consumer-root')
-    ?? process.env['RUSTY_STUDIO_CONSUMER_ROOT'];
-  const root = explicitConsumer ?? await exactConsumerCheckout(source);
-  return buildConsumerAdapter(root, source);
+  const sourceFingerprint = createHash('sha256')
+    .update(await readFile(CONSUMER_SOURCE_FILE))
+    .digest('hex');
+  const root = await exactConsumerCheckout(source);
+  return {
+    binary: await buildConsumerAdapter(root, source),
+    source,
+    sourceFingerprint,
+  };
 }
 
-async function runHost(binary: string, host: string, port: number): Promise<void> {
+async function runHost(
+  managed: ManagedAdapter,
+  engineSourceCommit: string,
+  host: string,
+  port: number,
+): Promise<void> {
   const code = await new Promise<number | null>((resolvePromise, rejectPromise) => {
     const child = spawn(
       'pnpm',
@@ -175,32 +235,115 @@ async function runHost(binary: string, host: string, port: number): Promise<void
         'host',
         '--',
         '--adapter-binary',
-        binary,
+        managed.binary,
         '--host',
         host,
         '--port',
         String(port),
+        '--engine-source-commit',
+        engineSourceCommit,
+        '--consumer-repository',
+        managed.source.publicRepository,
+        '--consumer-commit',
+        managed.source.commit,
+        '--adapter-build-commit',
+        managed.source.commit,
+        '--expected-adapter-id',
+        managed.source.adapterId,
       ],
-      { cwd: STUDIO_ROOT, stdio: 'inherit' },
+      { cwd: STUDIO_ROOT, stdio: 'inherit', detached: true },
     );
-    child.once('error', rejectPromise);
-    child.once('exit', (exitCode) => resolvePromise(exitCode));
+    let terminating = false;
+    let restartRequired = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const terminateGroup = (signal: NodeJS.Signals): void => {
+      if (child.pid === undefined) return;
+      try {
+        process.kill(-child.pid, signal);
+      } catch {
+        // The process group may already have completed between observation and signal.
+      }
+    };
+    const beginTermination = (reason: 'signal' | 'restart_required'): void => {
+      if (terminating) return;
+      terminating = true;
+      restartRequired = reason === 'restart_required';
+      terminateGroup('SIGTERM');
+      killTimer = setTimeout(() => terminateGroup('SIGKILL'), HOST_SHUTDOWN_TIMEOUT_MILLISECONDS);
+      killTimer.unref();
+    };
+    const onSignal = (): void => beginTermination('signal');
+    process.once('SIGINT', onSignal);
+    process.once('SIGTERM', onSignal);
+    const stopWatchingManifest = watchConsumerIdentity(
+      CONSUMER_SOURCE_FILE,
+      managed.sourceFingerprint,
+      (receipt) => {
+        if (terminating) return;
+        process.stderr.write(`${JSON.stringify({
+          ...receipt,
+          previousConsumerCommit: managed.source.commit,
+        })}\n`);
+        beginTermination('restart_required');
+      },
+    );
+    const cleanup = (): void => {
+      clearTimeout(killTimer);
+      stopWatchingManifest();
+      process.off('SIGINT', onSignal);
+      process.off('SIGTERM', onSignal);
+      // A crashed host must not leave an adapter in the detached process group.
+      terminateGroup('SIGTERM');
+    };
+    child.once('error', (error) => {
+      cleanup();
+      rejectPromise(error);
+    });
+    child.once('exit', (exitCode) => {
+      cleanup();
+      resolvePromise(restartRequired ? 75 : exitCode);
+    });
   });
   if (code !== 0 && code !== null) process.exitCode = code;
 }
 
+async function engineSourceCommit(): Promise<string> {
+  const commit = (await commandOutput('git', ['rev-parse', 'HEAD'], ENGINE_ROOT)).trim();
+  if (!/^[0-9a-f]{40}$/u.test(commit)) {
+    throw new Error(`Engine source did not resolve one exact commit: ${commit}`);
+  }
+  return commit;
+}
+
 async function main(): Promise<void> {
+  rejectUnsupportedManagedOverrides();
   const host = requiredArgument('--host');
   const port = Number(requiredArgument('--port'));
   if (host.length === 0 || /\s/.test(host)) throw new Error('--host must be a non-empty address');
   if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
     throw new Error('--port must be an integer from 1 through 65535');
   }
-  const [binary] = await Promise.all([
-    adapterBinary(),
+  const [managed, engineCommit] = await Promise.all([
+    managedAdapter(),
+    engineSourceCommit(),
     runChecked('pnpm', ['run', 'build'], STUDIO_ROOT),
   ]);
-  await runHost(binary, host, port);
+  await runHost(managed, engineCommit, host, port);
 }
 
-await main();
+function rejectUnsupportedManagedOverrides(): void {
+  const argumentsPresent = ['--adapter-binary', '--consumer-root']
+    .filter((name) => process.argv.includes(name));
+  const environmentPresent = ['RUSTY_STUDIO_ADAPTER_BINARY', 'RUSTY_STUDIO_CONSUMER_ROOT']
+    .filter((name) => process.env[name] !== undefined);
+  const present = [...argumentsPresent, ...environmentPresent];
+  if (present.length === 0) return;
+  throw new Error(
+    `managed Studio does not accept ${present.join(', ')}; `
+    + 'build Studio and use `pnpm run host -- --adapter-binary /absolute/path` '
+    + 'for an explicit downstream adapter',
+  );
+}
+
+const invokedPath = process.argv[1] === undefined ? null : pathToFileURL(resolve(process.argv[1])).href;
+if (invokedPath === import.meta.url) await main();

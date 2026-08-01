@@ -87,7 +87,22 @@ small { color: var(--studio-muted); }
 .menu-strip button { border: 0; background: transparent; border-radius: 0; }
 .document-title { display: flex; flex-direction: column; min-width: 0; text-align: center; }
 .document-title span, .document-title small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.adapter-state { display: flex; align-items: center; gap: 6px; color: var(--studio-muted); text-transform: capitalize; }
+.adapter-state {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: 0 6px;
+  color: var(--studio-muted);
+  text-transform: capitalize;
+}
+.adapter-state small {
+  grid-column: 2;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #7b5553; }
 .adapter-state.is-ready .status-dot { background: var(--studio-accent); box-shadow: 0 0 8px var(--studio-accent); }
 

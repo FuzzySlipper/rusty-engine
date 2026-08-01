@@ -12,6 +12,29 @@ const projectOpenTimeout = 30_000;
 const projectMutationTimeout = 30_000;
 const rendererSettlementTimeout = 30_000;
 
+test('served Studio exposes the exact running adapter and configured consumer identity', async ({ page }) => {
+  await page.goto('/');
+  const identity = page.locator('[data-visual-id="studio-runtime-identity"]');
+  await expect(identity).toBeVisible();
+  await expect(identity).toHaveAttribute('data-protocol-version', '13');
+  await expect(identity).toHaveAttribute('data-adapter-binary-sha256', /^[0-9a-f]{64}$/u);
+  const expectedEngine = process.env['RUSTY_STUDIO_ENGINE_SOURCE_COMMIT'];
+  if (expectedEngine === undefined) {
+    await expect(identity).toHaveAttribute('data-runtime-mode', 'unmanaged');
+    return;
+  }
+  await expect(identity).toHaveAttribute('data-runtime-mode', 'managed');
+  await expect(identity).toHaveAttribute('data-engine-source', expectedEngine);
+  await expect(identity).toHaveAttribute(
+    'data-consumer-commit',
+    requiredEnvironment('RUSTY_STUDIO_CONSUMER_COMMIT'),
+  );
+  await expect(identity).toHaveAttribute(
+    'data-adapter-build',
+    requiredEnvironment('RUSTY_STUDIO_ADAPTER_BUILD_COMMIT'),
+  );
+});
+
 test('real project hierarchy, shared picking, transform settlement, reopen, and rejection stay coherent', async ({ page }) => {
   test.setTimeout(90_000);
   await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(loadingBayProjectFile)}`);

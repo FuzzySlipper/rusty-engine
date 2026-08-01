@@ -1,8 +1,10 @@
 import {
   MAX_STUDIO_ADAPTER_REQUEST_BYTES,
   MAX_STUDIO_ADAPTER_RESPONSE_BYTES,
+  decodeStudioHostStatus,
   type StudioAdapterRequest,
   type StudioAdapterTransport,
+  type StudioHostStatus,
 } from '@rusty-engine/studio-adapter-client';
 
 export type StudioFetch = (
@@ -49,6 +51,35 @@ export class HttpStudioAdapterTransport implements StudioAdapterTransport {
     } catch {
       throw new Error('Studio host returned malformed JSON');
     }
+  }
+}
+
+export class HttpStudioHostStatusClient {
+  readonly #endpoint: string;
+  readonly #fetch: StudioFetch;
+
+  constructor(
+    endpoint = '/api/studio-status',
+    fetchImplementation: StudioFetch = globalThis.fetch.bind(globalThis),
+  ) {
+    this.#endpoint = endpoint;
+    this.#fetch = fetchImplementation;
+  }
+
+  async read(): Promise<StudioHostStatus> {
+    const response = await this.#fetch(this.#endpoint, {
+      method: 'GET',
+      headers: { accept: 'application/json' },
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(studioHostError(text, response.status));
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(text) as unknown;
+    } catch {
+      throw new Error('Studio host returned malformed status JSON');
+    }
+    return decodeStudioHostStatus(decoded);
   }
 }
 

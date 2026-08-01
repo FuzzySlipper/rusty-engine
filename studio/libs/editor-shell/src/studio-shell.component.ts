@@ -17,6 +17,7 @@ import type {
   AssetEntryReadout,
   OwnerDiagnostic,
   StoredLight,
+  StudioHostStatus,
   StudioEntityComponentReference,
   StudioSceneAppearance,
 } from '@rusty-engine/studio-adapter-client';
@@ -56,6 +57,7 @@ import {
 import { STUDIO_WORKSPACE } from './tokens.js';
 import {
   HttpStudioHostFileBrowser,
+  HttpStudioHostStatusClient,
   HttpStudioRenderResourceClient,
   type StudioHostDirectoryReadout,
   type StudioHostPathRequest,
@@ -99,6 +101,15 @@ interface AnimatedMeshResourceDescriptor {
 export class StudioShellComponent {
   readonly store = inject(STUDIO_WORKSPACE);
   readonly state = this.store.snapshot;
+  readonly hostStatus = signal<StudioHostStatus | null>(null);
+  readonly hostStatusError = signal<string | null>(null);
+  readonly hostStatusLabel = computed(() => {
+    const status = this.hostStatus();
+    if (status === null) return this.hostStatusError() === null ? 'identity loading' : 'identity unavailable';
+    const engine = status.engineSourceCommit?.slice(0, 8) ?? 'unmanaged';
+    const consumer = status.configuredConsumer?.commit.slice(0, 8) ?? 'unmanaged';
+    return `Engine ${engine} · consumer ${consumer} · protocol ${String(status.runningAdapter.protocolVersion)}`;
+  });
   readonly frameSubmitted = output<StudioViewportFrameSubmitted>();
   readonly entityInspectorContributions =
     input<readonly StudioEntityInspectorContribution[]>([]);
@@ -422,6 +433,7 @@ export class StudioShellComponent {
   };
 
   readonly #hostFiles = new HttpStudioHostFileBrowser();
+  readonly #hostStatus = new HttpStudioHostStatusClient();
   readonly #renderResources = new HttpStudioRenderResourceClient();
   private readonly studioViewport = viewChild<StudioViewportComponent>('studioViewport');
   private readonly voxelEditor = viewChild<VoxelEditorComponent>('voxelEditor');
@@ -431,6 +443,13 @@ export class StudioShellComponent {
   #restoreFocus: HTMLElement | null = null;
 
   constructor() {
+    void this.#hostStatus.read().then((status) => {
+      this.hostStatus.set(status);
+      this.hostStatusError.set(null);
+    }).catch((error: unknown) => {
+      this.hostStatus.set(null);
+      this.hostStatusError.set(error instanceof Error ? error.message : String(error));
+    });
     effect(() => {
       const snapshot = this.state();
       const canonicalRoot = snapshot.userSettings.projectRoot;

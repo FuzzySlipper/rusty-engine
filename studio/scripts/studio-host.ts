@@ -1,4 +1,5 @@
 import { createReadStream } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import {
@@ -11,6 +12,9 @@ import { fileURLToPath } from 'node:url';
 
 import {
   MAX_STUDIO_ADAPTER_REQUEST_BYTES,
+  StudioAdapterClient,
+  decodeStudioHostStatus,
+  type StudioHostStatus,
 } from '../libs/adapter-client/src/index.js';
 import {
   MAX_STUDIO_USER_SETTINGS_BYTES,
@@ -36,6 +40,15 @@ interface HostOptions {
   readonly host: string;
   readonly port: number;
   readonly settingsRoot: string;
+  readonly managedIdentity: ManagedHostIdentity | null;
+}
+
+interface ManagedHostIdentity {
+  readonly engineSourceCommit: string;
+  readonly consumerRepository: string;
+  readonly consumerCommit: string;
+  readonly adapterBuildCommit: string;
+  readonly expectedAdapterId: string;
 }
 
 async function readBoundedBody(request: IncomingMessage): Promise<string> {
@@ -301,13 +314,44 @@ function options(): HostOptions {
   const host = argumentValue('--host', '127.0.0.1');
   const port = Number(argumentValue('--port', '4300'));
   const settingsRoot = argumentValue('--settings-root', defaultStudioUserSettingsRoot());
+  const managedIdentity = managedHostIdentity();
   if (!isAbsolute(adapterBinary)) throw new Error('--adapter-binary must be absolute');
   if (!isAbsolute(staticRoot)) throw new Error('--static-root must be absolute');
   if (!isAbsolute(settingsRoot)) throw new Error('--settings-root must be absolute');
   if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
     throw new Error('--port must be an integer from 1 through 65535');
   }
-  return { adapterBinary, staticRoot, host, port, settingsRoot };
+  return { adapterBinary, staticRoot, host, port, settingsRoot, managedIdentity };
+}
+
+function managedHostIdentity(): ManagedHostIdentity | null {
+  const names = [
+    '--engine-source-commit',
+    '--consumer-repository',
+    '--consumer-commit',
+    '--adapter-build-commit',
+    '--expected-adapter-id',
+  ] as const;
+  const values = names.map((name) => optionalArgumentValue(name));
+  if (values.every((value) => value === undefined)) return null;
+  if (values.some((value) => value === undefined)) {
+    throw new Error(`managed Studio identity requires ${names.join(', ')}`);
+  }
+  return {
+    engineSourceCommit: values[0] as string,
+    consumerRepository: values[1] as string,
+    consumerCommit: values[2] as string,
+    adapterBuildCommit: values[3] as string,
+    expectedAdapterId: values[4] as string,
+  };
+}
+
+function optionalArgumentValue(name: string): string | undefined {
+  const index = process.argv.indexOf(name);
+  if (index === -1) return undefined;
+  const value = process.argv[index + 1];
+  if (value === undefined || value.startsWith('--')) throw new Error(`${name} requires a value`);
+  return value;
 }
 
 async function main(): Promise<void> {
@@ -320,18 +364,68 @@ async function main(): Promise<void> {
   if (!indexMetadata.isFile()) throw new Error('--static-root must contain index.html');
 
   const adapter = new AdapterProcess(configured.adapterBinary);
+  let hostStatus: StudioHostStatus;
+  try {
+    const client = new StudioAdapterClient({
+      exchange: async (request) => JSON.parse(
+        await adapter.exchange(JSON.stringify(request)),
+      ) as unknown,
+    });
+    const described = await client.describe();
+    if (
+      configured.managedIdentity !== null
+      && described.adapter.adapterId !== configured.managedIdentity.expectedAdapterId
+    ) {
+      throw new Error(
+        `Studio adapter identity mismatch: running ${described.adapter.adapterId}, `
+        + `configured ${configured.managedIdentity.expectedAdapterId}`,
+      );
+    }
+    hostStatus = decodeStudioHostStatus({
+      schemaVersion: 1,
+      project: DEN_PROJECT,
+      status: 'ok',
+      mode: configured.managedIdentity === null ? 'unmanaged' : 'managed',
+      engineSourceCommit: configured.managedIdentity?.engineSourceCommit ?? null,
+      configuredConsumer: configured.managedIdentity === null ? null : {
+        repository: configured.managedIdentity.consumerRepository,
+        commit: configured.managedIdentity.consumerCommit,
+      },
+      runningAdapter: {
+        adapterId: described.adapter.adapterId,
+        adapterVersion: described.adapter.adapterVersion,
+        protocolVersion: described.adapter.protocolVersion,
+        buildCommit: configured.managedIdentity?.adapterBuildCommit ?? null,
+        binarySha256: await sha256File(configured.adapterBinary),
+      },
+    });
+  } catch (error) {
+    await adapter.close();
+    throw error;
+  }
   const server = createServer((request, response) => {
     void (async () => {
       const url = new URL(request.url ?? '/', `http://${configured.host}:${String(configured.port)}`);
       if (url.pathname === '/health') {
-        const body = JSON.stringify({ project: DEN_PROJECT, status: 'ok' });
+        const body = JSON.stringify(hostStatus);
         response.writeHead(200, {
           'cache-control': 'no-store',
           'content-type': 'application/json; charset=utf-8',
           'content-length': String(Buffer.byteLength(body)),
           'x-den-project': DEN_PROJECT,
+          'x-rusty-engine-source': hostStatus.engineSourceCommit ?? 'unmanaged',
+          'x-studio-consumer': hostStatus.configuredConsumer?.commit ?? 'unmanaged',
         });
         response.end(body);
+        return;
+      }
+      if (url.pathname === '/api/studio-status') {
+        if (request.method !== 'GET') {
+          response.writeHead(405, { allow: 'GET' });
+          response.end();
+          return;
+        }
+        sendJson(response, 200, hostStatus);
         return;
       }
       if (url.pathname === '/api/studio-adapter') {
@@ -363,15 +457,24 @@ async function main(): Promise<void> {
     server.once('error', rejectPromise);
     server.listen(configured.port, configured.host, resolvePromise);
   });
+  let shuttingDown = false;
   const shutdown = (): void => {
-    adapter.close();
+    if (shuttingDown) return;
+    shuttingDown = true;
     server.close();
+    void adapter.close();
   };
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
   process.stdout.write(
     `Rusty Engine Studio listening on http://${configured.host}:${String(configured.port)}\n`,
   );
+}
+
+async function sha256File(path: string): Promise<string> {
+  const digest = createHash('sha256');
+  for await (const chunk of createReadStream(path)) digest.update(chunk as Buffer);
+  return digest.digest('hex');
 }
 
 function sendCaughtError(response: ServerResponse, error: unknown): void {

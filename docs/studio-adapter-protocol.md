@@ -245,6 +245,18 @@ canonical project root outside project content, protected by SHA-256 compare-and
 size checks, same-directory atomic replacement, and future-version preservation. Renderer-host,
 not the Angular shell, implements the resulting camera movement, boost, pan, orbit, and input cleanup.
 
+The host also owns a separate strict schema-1 runtime-identity readout. Managed `den-serve` starts
+only after a current `describe` handshake succeeds and the configured adapter ID and protocol match.
+`/health`, `/api/studio-status`, and the compact title-bar observation expose the exact Engine source
+commit, configured public consumer repository/commit, adapter build commit, executable SHA-256, and
+negotiated protocol. This is operational evidence, not project or gameplay authority. Direct
+`pnpm run host` use remains explicitly `unmanaged` and cannot claim source/build commits.
+
+The managed supervisor hashes and watches only `studio/demo-consumer-source.json`. Identity drift or
+an unreadable replacement produces a `studioRestartRequired` receipt and bounded process-group
+termination; no branch lookup, downgrade, fallback, or stale adapter remains available on the old
+port.
+
 ## Gates
 
 - `./scripts/verify-studio.sh` checks and tests the TypeScript boundary without any demo checkout.

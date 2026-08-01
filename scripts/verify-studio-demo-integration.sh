@@ -52,6 +52,9 @@ EXPECTED_REPOSITORY="${REVISION_VALUES[0]:-}"
 EXPECTED_COMMIT="${REVISION_VALUES[1]:-}"
 EXPECTED_ENGINE_COMMIT="${REVISION_VALUES[2]:-}"
 REVISION_EVIDENCE="${REVISION_VALUES[3]:-}"
+EXPECTED_PUBLIC_REPOSITORY="$(node -p "require('$PIN_FILE').publicRepository")"
+EXPECTED_ADAPTER_ID="$(node -p "require('$PIN_FILE').adapterId")"
+ENGINE_SOURCE_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD)"
 DEMO_ROOT="$(realpath "$DEMO_ROOT")"
 DEMO_TOP="$(git -C "$DEMO_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
 if [[ "$DEMO_TOP" != "$DEMO_ROOT" ]]; then
@@ -92,7 +95,12 @@ if [[ "$RUN_BROWSER" == 1 ]]; then
   node studio/test/integration/demo-voxel-objects.mjs \
     --demo-root "$DEMO_ROOT" \
     --adapter-binary "$DEMO_ROOT/target/debug/studio-adapter"
-  ./scripts/verify-studio-browser-integration.sh "$DEMO_ROOT"
+  RUSTY_STUDIO_ENGINE_SOURCE_COMMIT="$ENGINE_SOURCE_COMMIT" \
+  RUSTY_STUDIO_CONSUMER_REPOSITORY="$EXPECTED_PUBLIC_REPOSITORY" \
+  RUSTY_STUDIO_CONSUMER_COMMIT="$EXPECTED_COMMIT" \
+  RUSTY_STUDIO_ADAPTER_BUILD_COMMIT="$EXPECTED_COMMIT" \
+  RUSTY_STUDIO_EXPECTED_ADAPTER_ID="$EXPECTED_ADAPTER_ID" \
+    ./scripts/verify-studio-browser-integration.sh "$DEMO_ROOT"
 fi
 if [[ "$RUN_ENTITY_INSPECTOR" == 1 ]]; then
   ./scripts/verify-studio-entity-inspector-integration.sh "$DEMO_ROOT"

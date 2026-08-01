@@ -9,6 +9,25 @@ import {
   StudioAdapterResponseLimitError,
 } from '../scripts/studio-adapter-process.js';
 
+test('an unavailable adapter rejects promptly and bounded close completes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rusty-studio-adapter-process-missing-'));
+  const adapter = new AdapterProcess(join(root, 'missing-adapter'));
+  try {
+    await assert.rejects(
+      adapter.exchange(JSON.stringify({ requestId: 'missing' })),
+      /ENOENT|spawn/u,
+    );
+    await Promise.race([
+      adapter.close(),
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new Error('adapter close did not complete after spawn failure')), 500);
+      }),
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('an oversized response fails one exchange without killing the adapter process', async () => {
   const root = await mkdtemp(join(tmpdir(), 'rusty-studio-adapter-process-'));
   const fixture = join(root, 'fixture-adapter.mjs');
@@ -44,7 +63,7 @@ lines.on('line', (line) => {
       { ok: true, requestId: 'next' },
     );
   } finally {
-    adapter.close();
+    await adapter.close();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -105,7 +124,7 @@ lines.on('line', (line) => {
   } finally {
     clearTimeout(timeout);
     await writeFile(release, 'release').catch(() => undefined);
-    adapter.close();
+    await adapter.close();
     await rm(root, { recursive: true, force: true });
   }
 });

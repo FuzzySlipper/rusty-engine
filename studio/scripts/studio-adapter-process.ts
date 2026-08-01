@@ -5,6 +5,7 @@ import { MAX_STUDIO_ADAPTER_RESPONSE_BYTES } from '../libs/adapter-client/src/in
 // Retain enough recent diagnostics for an actionable failure without allowing
 // an adapter's stderr stream to become unbounded host state.
 const MAX_ADAPTER_STDERR_BYTES = 64 * 1024;
+const ADAPTER_CLOSE_GRACE_MILLISECONDS = 2_000;
 
 interface PendingExchange {
   readonly resolve: (line: string) => void;
@@ -48,25 +49,34 @@ export class AdapterProcess {
   #stderr = '';
   #serial: Promise<void> = Promise.resolve();
   #closedError: Error | null = null;
+  readonly #terminated: Promise<void>;
+  #resolveTerminated!: () => void;
 
   constructor(binary: string, responseByteLimit = MAX_STUDIO_ADAPTER_RESPONSE_BYTES) {
     if (!Number.isSafeInteger(responseByteLimit) || responseByteLimit < 1) {
       throw new TypeError('Studio adapter response byte limit must be a positive safe integer');
     }
     this.#responseByteLimit = responseByteLimit;
+    this.#terminated = new Promise((resolve) => { this.#resolveTerminated = resolve; });
     this.#child = spawn(binary, [], { stdio: ['pipe', 'pipe', 'pipe'] });
     this.#child.stdout.on('data', (chunk: Buffer) => this.#receive(chunk));
     this.#child.stderr.setEncoding('utf8');
     this.#child.stderr.on('data', (chunk: string) => {
       this.#stderr = `${this.#stderr}${chunk}`.slice(-MAX_ADAPTER_STDERR_BYTES);
     });
-    this.#child.on('error', (error) => this.#fail(error));
+    this.#child.on('error', (error) => {
+      this.#fail(error);
+      // A spawn failure does not reliably produce a later exit event. Treat it
+      // as terminal so bounded host cleanup cannot wait forever for one.
+      this.#resolveTerminated();
+    });
     this.#child.on('exit', (code, signal) => {
       this.#fail(new Error(
         `Studio adapter exited code=${String(code)} signal=${String(signal)}${
           this.#stderr.length === 0 ? '' : `: ${this.#stderr}`
         }`,
       ));
+      this.#resolveTerminated();
     });
   }
 
@@ -84,8 +94,26 @@ export class AdapterProcess {
     return response;
   }
 
-  close(): void {
+  async close(): Promise<void> {
     if (!this.#child.stdin.destroyed) this.#child.stdin.end();
+    if (await this.#waitForExit(ADAPTER_CLOSE_GRACE_MILLISECONDS)) return;
+    this.#child.kill('SIGTERM');
+    if (await this.#waitForExit(ADAPTER_CLOSE_GRACE_MILLISECONDS)) return;
+    this.#child.kill('SIGKILL');
+    await this.#terminated;
+  }
+
+  async #waitForExit(milliseconds: number): Promise<boolean> {
+    if (this.#child.exitCode !== null || this.#child.signalCode !== null) return true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), milliseconds);
+      timer.unref();
+    });
+    const exited = this.#terminated.then(() => true);
+    const result = await Promise.race([exited, timedOut]);
+    clearTimeout(timer);
+    return result;
   }
 
   #exchangeOne(

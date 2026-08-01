@@ -65,7 +65,12 @@ if (demoSource.projectFile !== 'content/projects/loading-bay.project.json') {
 if (demoSource.voxelProjectFile !== 'content/projects/converted-wall.project.json') {
   throw new Error('Studio voxel integration project changed without an explicit product decision');
 }
-if (demoSource.cargoPackage !== 'loading-bay-game' || demoSource.adapterBinary !== 'studio-adapter') {
+if (
+  demoSource.cargoPackage !== 'loading-bay-game'
+  || demoSource.adapterBinary !== 'studio-adapter'
+  || demoSource.adapterId !== 'rusty-engine-demo.loading-bay'
+  || demoSource.protocolVersion !== 13
+) {
   throw new Error('Studio integration adapter identity changed without an explicit product decision');
 }
 

@@ -48,6 +48,9 @@ viewport, and its closed external-project adapter protocol.
   runtime resource remains one hash-verified GLB.
 - The external consumer is always selected explicitly by an integration
   command; ordinary Engine work never scans a sibling checkout.
+- Managed `serve-den` admits the exact configured consumer before listening and exposes one frozen
+  host identity at `/health`, `/api/studio-status`, and the title bar. Manifest drift terminates the
+  complete process group with `studioRestartRequired`; it never silently keeps a stale adapter.
 - Renderer packages are consumed through their package roots.
 - Protocol 13 retains the promoted downstream Entity inspector
   seam. `studio/libs/editor-shell/src/entity-inspector.ts` owns static
