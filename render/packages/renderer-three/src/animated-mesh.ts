@@ -44,6 +44,40 @@ export interface AnimatedMeshPlaybackReadout {
   readonly controllerClips: readonly AnimatedMeshControllerClip[];
 }
 
+export type AnimatedMeshSampleDiagnosticCode =
+  | 'bone_matrix_non_finite'
+  | 'bone_matrix_singular'
+  | 'node_quaternion_invalid'
+  | 'node_scale_invalid'
+  | 'node_transform_non_finite'
+  | 'sampled_bounds_implausible'
+  | 'vertex_budget_exceeded';
+
+export interface AnimatedMeshSampleDiagnostic {
+  readonly code: AnimatedMeshSampleDiagnosticCode;
+  readonly message: string;
+  readonly node: string | null;
+}
+
+export interface AnimatedMeshSampleBounds {
+  readonly min: readonly [number, number, number];
+  readonly max: readonly [number, number, number];
+}
+
+export interface AnimatedMeshSampleReadout {
+  readonly handle: RenderHandle;
+  readonly asset: string;
+  readonly contentHash: string | null;
+  readonly clip: string;
+  readonly normalizedTime: number;
+  readonly durationSeconds: number;
+  readonly assetBounds: AnimatedMeshSampleBounds;
+  readonly sampledWorldBounds: AnimatedMeshSampleBounds | null;
+  readonly sampledVertexCount: number;
+  readonly boneCount: number;
+  readonly diagnostics: readonly AnimatedMeshSampleDiagnostic[];
+}
+
 export interface AnimatedMeshControllerClip {
   readonly clip: string;
   readonly weight: number;
@@ -262,6 +296,59 @@ export class AnimatedMeshRegistry {
       diagnostics: playbackDiagnostics(instance, action),
       controllerClips: instance.controllerClips,
     };
+  }
+
+  sample(handle: RenderHandle, clipId: string, normalizedTime: number): AnimatedMeshSampleReadout {
+    if (!Number.isFinite(normalizedTime) || normalizedTime < 0 || normalizedTime > 1) {
+      throw new AnimatedMeshApplyError(
+        'sampleAnimatedMesh: normalizedTime must be finite and between 0 and 1',
+      );
+    }
+    const instance = this.#requireInstance(handle, 'sampleAnimatedMesh');
+    const action = instance.actions.get(clipId);
+    if (action === undefined) {
+      throw new AnimatedMeshApplyError(
+        `sampleAnimatedMesh: missing clip ${clipId} on ${instance.asset}`,
+      );
+    }
+    const durationSeconds = action.getClip().duration;
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+      throw new AnimatedMeshApplyError(
+        `sampleAnimatedMesh: clip ${clipId} has an invalid duration`,
+      );
+    }
+    instance.mixer.stopAllAction();
+    action.reset();
+    action.enabled = true;
+    action.paused = false;
+    action.clampWhenFinished = true;
+    action.setLoop(THREE.LoopOnce, 1);
+    action.setEffectiveTimeScale(1);
+    action.setEffectiveWeight(1);
+    action.play();
+    instance.mixer.setTime(durationSeconds * normalizedTime);
+    action.paused = true;
+    instance.currentClip = clipId;
+    instance.commandSelected = true;
+    instance.status = 'paused';
+    instance.loop = 'once';
+    instance.speed = 1;
+    instance.weight = 1;
+    instance.controllerClips = [];
+    const asset = this.#assets.get(instance.asset);
+    if (asset === undefined) {
+      throw new AnimatedMeshApplyError(
+        `sampleAnimatedMesh: missing defined asset ${instance.asset}`,
+      );
+    }
+    return diagnoseAnimatedMeshSample(
+      instance,
+      clipId,
+      normalizedTime,
+      durationSeconds,
+      asset.asset.bounds,
+      asset.asset.contentHash,
+    );
   }
 
   release(handle: RenderHandle): void {
@@ -567,4 +654,179 @@ function playbackDiagnostics(
     return ['animation_paused'];
   }
   return [];
+}
+
+const ANIMATED_MESH_SAMPLE_MAX_VERTICES = 1_000_000;
+const ANIMATED_MESH_SAMPLE_MAX_DIAGNOSTICS = 64;
+
+function diagnoseAnimatedMeshSample(
+  instance: AnimatedMeshInstanceRecord,
+  clipId: string,
+  normalizedTime: number,
+  durationSeconds: number,
+  assetBounds: AnimatedMeshSampleBounds,
+  contentHash: string | null,
+): AnimatedMeshSampleReadout {
+  const diagnostics: AnimatedMeshSampleDiagnostic[] = [];
+  const appendDiagnostic = (
+    code: AnimatedMeshSampleDiagnosticCode,
+    message: string,
+    node: THREE.Object3D | null,
+  ): void => {
+    if (diagnostics.length < ANIMATED_MESH_SAMPLE_MAX_DIAGNOSTICS) {
+      diagnostics.push({ code, message, node: nodeName(node) });
+    }
+  };
+  let boneCount = 0;
+  let sampledVertexCount = 0;
+  let vertexBudgetExceeded = false;
+  const sampledBounds = new THREE.Box3();
+  const vertex = new THREE.Vector3();
+  const skinMatrix = new THREE.Matrix4();
+
+  instance.object.updateMatrixWorld(true);
+  instance.object.traverse((node) => {
+    if (!finiteTransform(node)) {
+      appendDiagnostic('node_transform_non_finite', 'node transform contains a non-finite value', node);
+    }
+    const quaternionLengthSquared = node.quaternion.lengthSq();
+    if (!Number.isFinite(quaternionLengthSquared) || quaternionLengthSquared < 1e-12) {
+      appendDiagnostic('node_quaternion_invalid', 'node quaternion is non-finite or has zero length', node);
+    }
+    if (
+      !Number.isFinite(node.scale.x)
+      || !Number.isFinite(node.scale.y)
+      || !Number.isFinite(node.scale.z)
+      || Math.abs(node.scale.x) < 1e-12
+      || Math.abs(node.scale.y) < 1e-12
+      || Math.abs(node.scale.z) < 1e-12
+    ) {
+      appendDiagnostic('node_scale_invalid', 'node scale is non-finite or singular', node);
+    }
+
+    if (node instanceof THREE.Bone) {
+      boneCount += 1;
+    }
+    if (!(node instanceof THREE.Mesh)) {
+      return;
+    }
+    const positions = node.geometry.getAttribute('position');
+    if (positions === undefined) {
+      return;
+    }
+    if (sampledVertexCount + positions.count > ANIMATED_MESH_SAMPLE_MAX_VERTICES) {
+      vertexBudgetExceeded = true;
+      return;
+    }
+    if (node instanceof THREE.SkinnedMesh) {
+      node.skeleton.update();
+      for (let boneIndex = 0; boneIndex < node.skeleton.bones.length; boneIndex += 1) {
+        const bone = node.skeleton.bones[boneIndex];
+        const inverse = node.skeleton.boneInverses[boneIndex];
+        if (bone === undefined || inverse === undefined) {
+          continue;
+        }
+        skinMatrix.multiplyMatrices(bone.matrixWorld, inverse);
+        if (!skinMatrix.elements.every(Number.isFinite)) {
+          appendDiagnostic('bone_matrix_non_finite', 'bone skin matrix contains a non-finite value', bone);
+        } else if (Math.abs(skinMatrix.determinant()) < 1e-12) {
+          appendDiagnostic('bone_matrix_singular', 'bone skin matrix is singular', bone);
+        }
+      }
+    }
+    for (let index = 0; index < positions.count; index += 1) {
+      vertex.fromBufferAttribute(positions, index);
+      if (node instanceof THREE.SkinnedMesh) {
+        node.applyBoneTransform(index, vertex);
+      }
+      node.localToWorld(vertex);
+      sampledBounds.expandByPoint(vertex);
+    }
+    sampledVertexCount += positions.count;
+  });
+
+  if (vertexBudgetExceeded) {
+    appendDiagnostic(
+      'vertex_budget_exceeded',
+      `sample contains more than ${ANIMATED_MESH_SAMPLE_MAX_VERTICES} vertices`,
+      null,
+    );
+  }
+  const readoutBounds = !sampledBounds.isEmpty() && !vertexBudgetExceeded
+    ? boxReadout(sampledBounds)
+    : null;
+  if (
+    readoutBounds !== null
+    && boundsExpansionIsImplausible(assetBounds, readoutBounds, instance.object)
+  ) {
+    appendDiagnostic(
+      'sampled_bounds_implausible',
+      'sampled world bounds expand beyond eight times the admitted asset extent',
+      null,
+    );
+  }
+  return {
+    handle: instance.handle,
+    asset: instance.asset,
+    contentHash,
+    clip: clipId,
+    normalizedTime,
+    durationSeconds,
+    assetBounds: {
+      min: [...assetBounds.min],
+      max: [...assetBounds.max],
+    },
+    sampledWorldBounds: readoutBounds,
+    sampledVertexCount,
+    boneCount,
+    diagnostics,
+  };
+}
+
+function finiteTransform(node: THREE.Object3D): boolean {
+  return [
+    ...node.position.toArray(),
+    ...node.quaternion.toArray(),
+    ...node.scale.toArray(),
+    ...node.matrix.elements,
+    ...node.matrixWorld.elements,
+  ].every(Number.isFinite);
+}
+
+function nodeName(node: THREE.Object3D | null): string | null {
+  if (node === null) return null;
+  return node.name.length > 0 ? node.name : `${node.type}:${node.id}`;
+}
+
+function boxReadout(bounds: THREE.Box3): AnimatedMeshSampleBounds {
+  return {
+    min: bounds.min.toArray(),
+    max: bounds.max.toArray(),
+  };
+}
+
+function boundsExpansionIsImplausible(
+  asset: AnimatedMeshSampleBounds,
+  sampled: AnimatedMeshSampleBounds,
+  object: THREE.Object3D,
+): boolean {
+  const assetExtent = Math.max(
+    asset.max[0] - asset.min[0],
+    asset.max[1] - asset.min[1],
+    asset.max[2] - asset.min[2],
+    1e-6,
+  );
+  const sampledExtent = Math.max(
+    sampled.max[0] - sampled.min[0],
+    sampled.max[1] - sampled.min[1],
+    sampled.max[2] - sampled.min[2],
+  );
+  const worldScale = object.getWorldScale(new THREE.Vector3());
+  const maximumWorldScale = Math.max(
+    Math.abs(worldScale.x),
+    Math.abs(worldScale.y),
+    Math.abs(worldScale.z),
+    1e-6,
+  );
+  return sampledExtent > assetExtent * maximumWorldScale * 8;
 }

@@ -10,6 +10,22 @@ test('shared host realizes retained, presentation, and inspection families in a 
   await page.waitForFunction(() => window.__rustyRenderProof?.ready === true);
 
   const proof = await page.evaluate(() => window.__rustyRenderProof!);
+  expect(proof.animatedCapture).toEqual({
+    asset: 'mesh-animation/kenney-retro-character-medium',
+    contactSheetPng: true,
+    contentHash: 'sha256:c71255a41c0373f0d2ef52593369d5fd9d2f6220ae548aff8cd6bf5edb403674',
+    diagnostics: [
+      ['sampled_bounds_implausible'],
+      ['sampled_bounds_implausible'],
+      ['sampled_bounds_implausible'],
+    ],
+    imageCount: 3,
+    individualPngs: true,
+    normalizedTimes: [0, 0.5, 1],
+    providerRevision: '1111111111111111111111111111111111111111',
+    statisticsAvailable: [true, true, true],
+    worldBoundsPresent: [true, true, true],
+  });
   expect(['webgl', 'webgl2']).toContain(proof.context);
   expect(proof.snapshot).toContain('shape group');
   expect(proof.snapshot).toContain('shape cube');

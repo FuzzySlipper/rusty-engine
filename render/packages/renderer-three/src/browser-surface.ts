@@ -20,7 +20,11 @@ import {
   type RendererProjectionIdentity,
   type ThreeRendererResourceStatistics,
 } from './three-renderer.js';
-import type { AnimatedMeshAssetSource, AnimatedMeshPlaybackReadout } from './animated-mesh.js';
+import type {
+  AnimatedMeshAssetSource,
+  AnimatedMeshPlaybackReadout,
+  AnimatedMeshSampleReadout,
+} from './animated-mesh.js';
 import { renderBrowserSurfaceFrame } from './browser-surface-render-pass.js';
 import {
   RendererGpuSubmissionFence,
@@ -161,6 +165,11 @@ export interface RendererBrowserSurface {
     position: readonly [number, number, number],
   ) => RendererBrowserSurfaceWorldProjection;
   readonly animatedMeshPlayback: (handle: import('@rusty-engine/render-contracts').RenderHandle) => AnimatedMeshPlaybackReadout | undefined;
+  readonly sampleAnimatedMesh: (
+    handle: import('@rusty-engine/render-contracts').RenderHandle,
+    clipId: string,
+    normalizedTime: number,
+  ) => AnimatedMeshSampleReadout;
   readonly applyFrame: (frame: RenderFrameDiff) => void;
   readonly pick: (request: RendererBrowserSurfacePickRequest) => RendererBrowserSurfacePickReceipt;
   readonly snapshot: () => string;
@@ -479,6 +488,8 @@ export function mountRendererBrowserSurface(
     },
     automaticSubmissionReady,
     animatedMeshPlayback: (handle) => renderer.animatedMeshPlayback(handle),
+    sampleAnimatedMesh: (handle, clipId, normalizedTime) =>
+      renderer.sampleAnimatedMesh(handle, clipId, normalizedTime),
     applyFrame: (nextFrame) => renderer.applyFrame(nextFrame),
     cameraPose: () => currentCameraPose,
     cameraProjection: () => cameraProjection,

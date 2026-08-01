@@ -734,6 +734,13 @@ each instance its own hierarchy, skeleton, mixer, actions, and playback state. D
 instance retains the admitted definition for later recreation; definition replacement or renderer
 disposal releases its geometry and materials exactly once without taking ownership of the caller's
 resolved GLB source objects.
+The mounted `RendererSurface` also owns deterministic animation inspection. A caller can stop its
+automatic loop, pose one retained instance at a bounded normalized clip time through that same
+mixer, submit the fixed frame, and encode individual PNGs, a contact sheet, and a revision-bound
+JSON manifest. Sampled skinned-vertex bounds and bounded matrix/interpolation diagnostics are
+renderer observations: they neither clamp the animation nor become project, asset, or gameplay
+authority. Contact sheets may include the disposable origin, bounds, and contact-plane overlays,
+but do not introduce a second loader, scene, skeleton, mixer, or render loop.
 Angular owns the
 asset/clip controls and renderer-neutral transform-manipulator intent, but does not construct a
 private Three scene or replace materials inside an imported animated hierarchy merely to show

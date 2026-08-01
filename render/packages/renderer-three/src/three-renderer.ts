@@ -38,6 +38,7 @@ import {
   type AnimatedMeshAssetSource,
   type AnimatedMeshControllerClip,
   type AnimatedMeshPlaybackReadout,
+  type AnimatedMeshSampleReadout,
 } from './animated-mesh.js';
 import {
   applyLightDescriptor,
@@ -764,6 +765,21 @@ export class ThreeRenderer {
   /** Projection/debug readback for animated mesh playback; never authority. */
   animatedMeshPlayback(handle: RenderHandle): AnimatedMeshPlaybackReadout | undefined {
     return this.#animatedMeshes.playback(handle);
+  }
+
+  /** Deterministically pose and inspect one retained animated instance. */
+  sampleAnimatedMesh(
+    handle: RenderHandle,
+    clipId: string,
+    normalizedTime: number,
+  ): AnimatedMeshSampleReadout {
+    try {
+      const sample = this.#animatedMeshes.sample(handle, clipId, normalizedTime);
+      this.#syncAnimatedMeshPlayback(handle, this.#require(handle, 'sampleAnimatedMesh'));
+      return sample;
+    } catch (cause) {
+      throw animatedMeshError(cause);
+    }
   }
 
   /** Apply renderer-local clip weights resolved from an authority controller projection. */

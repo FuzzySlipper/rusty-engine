@@ -1,6 +1,7 @@
 // @rusty-engine/renderer-host public barrel.
 
 export * from './surface.js';
+export * from './animated-mesh-capture.js';
 export * from './presentation-host-set.js';
 export * from './browser-dom-hosts.js';
 

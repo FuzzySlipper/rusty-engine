@@ -244,12 +244,50 @@ export interface RendererSurfaceProjectionReceipt {
   readonly snapshot: RenderProjectionSnapshot;
 }
 
+export type RendererAnimatedMeshSampleDiagnosticCode =
+  | 'bone_matrix_non_finite'
+  | 'bone_matrix_singular'
+  | 'node_quaternion_invalid'
+  | 'node_scale_invalid'
+  | 'node_transform_non_finite'
+  | 'sampled_bounds_implausible'
+  | 'vertex_budget_exceeded';
+
+export interface RendererAnimatedMeshSampleReadout {
+  readonly handle: RenderHandle;
+  readonly asset: string;
+  readonly contentHash: string | null;
+  readonly clip: string;
+  readonly normalizedTime: number;
+  readonly durationSeconds: number;
+  readonly assetBounds: {
+    readonly min: readonly [number, number, number];
+    readonly max: readonly [number, number, number];
+  };
+  readonly sampledWorldBounds: {
+    readonly min: readonly [number, number, number];
+    readonly max: readonly [number, number, number];
+  } | null;
+  readonly sampledVertexCount: number;
+  readonly boneCount: number;
+  readonly diagnostics: readonly {
+    readonly code: RendererAnimatedMeshSampleDiagnosticCode;
+    readonly message: string;
+    readonly node: string | null;
+  }[];
+}
+
 export interface RendererSurface {
   readonly kind: 'rusty_renderer_surface.v1';
   readonly backend: RendererBackendDiagnostics;
   readonly canvas: HTMLCanvasElement;
   readonly animationProjection: RendererAnimatedMeshProjection;
   readonly animatedMeshPlayback: (handle: RenderHandle) => RendererAnimatedMeshPlaybackReadout;
+  readonly sampleAnimatedMesh: (
+    handle: RenderHandle,
+    clipId: string,
+    normalizedTime: number,
+  ) => RendererAnimatedMeshSampleReadout;
   readonly applyFrame: (frame: RenderFrameDiff) => RendererAnimatedMeshFrameReceipt;
   readonly applyPresentation: (
     frame: PresentationFrameDiff,
@@ -531,6 +569,8 @@ function mountPreparedRendererSurface(
     canvas,
     animationProjection,
     animatedMeshPlayback: (handle) => animationProjection.playback(handle),
+    sampleAnimatedMesh: (handle, clipId, normalizedTime) =>
+      backendSurface.sampleAnimatedMesh(handle, clipId, normalizedTime),
     applyFrame,
     applyPresentation: async (presentationFrame) => {
       const receipt = await (presentationHosts ?? new RendererPresentationHostSet({}))

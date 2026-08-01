@@ -28,9 +28,12 @@ surface, and renderer host/resource lifecycle.
 - [`render/packages/render-projection/src`](../../render/packages/render-projection/src)
 - [`render/packages/renderer-three/src`](../../render/packages/renderer-three/src)
   - `animated-mesh.ts` owns asset-scoped geometry/material templates, independent
-    per-instance skeleton/mixer state, and their retained replacement/disposal
-    lifecycle.
+    per-instance skeleton/mixer state, exact normalized sampling, bounded
+    deformation diagnostics, and their retained replacement/disposal lifecycle.
 - [`render/packages/renderer-host/src`](../../render/packages/renderer-host/src)
+  - `animated-mesh-capture.ts` owns deterministic PNG/contact-sheet encoding
+    over an already-mounted `RendererSurface`; it does not load assets or own a
+    second animation loop.
 - [`render/browser`](../../render/browser)
 - [`render/package.json`](../../render/package.json)
 - [Rendering operations](../rendering-operations.md)

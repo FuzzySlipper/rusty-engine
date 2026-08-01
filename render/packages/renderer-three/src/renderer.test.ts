@@ -2131,6 +2131,25 @@ void test('committed animated GLB instances share GPU resources while playback r
     renderer.advanceAnimation(0.25);
     assert.equal(renderer.animatedMeshPlayback(renderHandle(4098))?.currentClip, 'idle');
     assert.equal(renderer.animatedMeshPlayback(renderHandle(4099))?.currentClip, 'run');
+    const idleSample = renderer.sampleAnimatedMesh(renderHandle(4098), 'idle', 0.25);
+    const runBefore = renderer.animatedMeshPlayback(renderHandle(4099));
+    const runSample = renderer.sampleAnimatedMesh(renderHandle(4099), 'run', 0.75);
+    assert.equal(idleSample.normalizedTime, 0.25);
+    assert.equal(runSample.normalizedTime, 0.75);
+    assert.equal(idleSample.contentHash, asset.contentHash);
+    assert.ok(idleSample.sampledVertexCount > 0);
+    assert.ok(idleSample.boneCount > 0);
+    assert.notEqual(idleSample.sampledWorldBounds, null);
+    assert.deepEqual(idleSample.diagnostics, []);
+    assert.deepEqual(runSample.diagnostics, []);
+    assert.equal(runBefore?.currentClip, 'run');
+    assert.equal(renderer.animatedMeshPlayback(renderHandle(4098))?.status, 'paused');
+    assert.equal(renderer.animatedMeshPlayback(renderHandle(4099))?.status, 'paused');
+    assert.notDeepEqual(idleSample.sampledWorldBounds, runSample.sampledWorldBounds);
+    idle.skeleton.bones[0]!.scale.set(0, 1, 1);
+    const invalidSample = renderer.sampleAnimatedMesh(renderHandle(4098), 'idle', 0.5);
+    assert.ok(invalidSample.diagnostics.some((item) => item.code === 'node_scale_invalid'));
+    assert.ok(invalidSample.diagnostics.some((item) => item.code === 'bone_matrix_singular'));
     renderer.dispose();
   } finally {
     console.warn = priorWarn;
@@ -2192,6 +2211,14 @@ void test('animated mesh playback is command-selected and advances through rende
   r.applyDiff({ op: 'setAnimatedMeshPlayback', handle, playback: { kind: 'stop', fadeSeconds: null } });
   assert.equal(r.animatedMeshPlayback(handle)?.status, 'stopped');
   assert.deepEqual(r.animatedMeshPlayback(handle)?.diagnostics, ['animation_stopped']);
+  assert.throws(
+    () => r.sampleAnimatedMesh(handle, 'run', 1.01),
+    /normalizedTime must be finite and between 0 and 1/,
+  );
+  assert.throws(
+    () => r.sampleAnimatedMesh(handle, 'missing', 0.5),
+    /missing clip missing/,
+  );
 });
 
 void test('animated instances reuse asset-scoped geometry and materials with independent skeletons and lifecycle', () => {

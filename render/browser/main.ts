@@ -19,6 +19,7 @@ import {
   RendererParticleHost,
   RendererPresentationHostSet,
   RendererTelemetryOverlayHost,
+  captureRendererAnimatedMesh,
   mountRendererAnimatedMeshSurface,
   mountRendererInspectionSurface,
   mountRendererSurface,
@@ -29,6 +30,18 @@ import {
 import characterUrl from '../../fixtures/render/assets/kenney-retro-character/character-medium.glb?url';
 
 interface BrowserProof {
+  readonly animatedCapture: {
+    readonly asset: string;
+    readonly contactSheetPng: boolean;
+    readonly contentHash: string | null;
+    readonly diagnostics: readonly (readonly string[])[];
+    readonly imageCount: number;
+    readonly individualPngs: boolean;
+    readonly normalizedTimes: readonly number[];
+    readonly providerRevision: string;
+    readonly statisticsAvailable: readonly boolean[];
+    readonly worldBoundsPresent: readonly boolean[];
+  };
   readonly animationClip: string | null;
   readonly audioApplied: number;
   audioResumeDiagnostics: readonly string[] | null;
@@ -207,6 +220,13 @@ async function main(): Promise<void> {
   surface.stop();
   const autoSubmission = surface.submission();
   const automaticSubmissionPacing = surface.automaticSubmissionPacing();
+  const animatedCapture = captureRendererAnimatedMesh(surface, {
+    handle: renderHandle(105),
+    clip: 'run',
+    normalizedTimes: [0, 0.5, 1],
+    providerRevision: '1111111111111111111111111111111111111111',
+    overlaysIncluded: true,
+  });
   telemetry.sampleSurface({
     sourceTick: 1,
     timing: autoSubmission,
@@ -437,6 +457,24 @@ async function main(): Promise<void> {
   const projection = surface.projectionSnapshot();
   const voxelNode = surface.projectionSnapshot().nodes.find((node) => node.handle === renderHandle(108));
   const proof: BrowserProof = {
+    animatedCapture: {
+      asset: animatedCapture.manifest.asset,
+      contactSheetPng: animatedCapture.contactSheetPngDataUrl.startsWith('data:image/png;base64,'),
+      contentHash: animatedCapture.manifest.contentHash,
+      diagnostics: animatedCapture.manifest.samples.map(
+        (sample) => sample.diagnostics.map((diagnostic) => diagnostic.code),
+      ),
+      imageCount: animatedCapture.images.length,
+      individualPngs: animatedCapture.images.every((image) => image.pngDataUrl.startsWith('data:image/png;base64,')),
+      normalizedTimes: animatedCapture.manifest.samples.map((sample) => sample.normalizedTime),
+      providerRevision: animatedCapture.manifest.providerRevision,
+      statisticsAvailable: animatedCapture.manifest.samples.map(
+        (sample) => sample.statistics.animatedInstanceCount.status === 'available',
+      ),
+      worldBoundsPresent: animatedCapture.manifest.samples.map(
+        (sample) => sample.sampledWorldBounds !== null,
+      ),
+    },
     animationClip: surface.animatedMeshPlayback(renderHandle(105)).selectedClip,
     audioApplied: presentation.domains.find((domain) => domain.domain === 'audio')?.applied ?? 0,
     audioResumeDiagnostics: null,
