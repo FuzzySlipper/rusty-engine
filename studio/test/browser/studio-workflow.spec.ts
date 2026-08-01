@@ -107,6 +107,71 @@ test('real project hierarchy, shared picking, transform settlement, reopen, and 
   await expect(page.locator('[data-preview-active="true"]')).toBeVisible();
 });
 
+test('visual-local grounding aligns real actors and props without changing world authority', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(loadingBayProjectFile)}`);
+
+  const shell = page.locator('[data-visual-id="studio-shell"]');
+  const viewport = page.locator('rusty-studio-viewport');
+  await expect(shell).toHaveAttribute('data-project-hash', /.+/, {
+    timeout: projectOpenTimeout,
+  });
+  await expect(viewport).toHaveAttribute('data-renderer-status', 'ready', {
+    timeout: rendererSettlementTimeout,
+  });
+
+  await page.locator('.entity-row[data-entity-id="4"]').click();
+  await page.getByRole('button', { name: 'Entity', exact: true }).click();
+  const worldReadout = page.locator('[data-visual-id="world-transform-readout"]');
+  const visualY = page.getByLabel('Visual translation Y', { exact: true });
+  const clearance = page.locator('[data-visual-id="grounding-metrics"] dd').nth(2);
+  await expect(worldReadout).toContainText('7.5, 1.5, 12.5');
+  await expect(visualY).toHaveValue('-1.76503');
+  await expect.poll(async () => Math.abs(Number(await clearance.textContent()))).toBeLessThan(0.000_01);
+
+  const alignedHash = await projectHash(shell);
+  await visualY.fill('0');
+  await visualY.press('Tab');
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    alignedHash,
+  );
+  await expect(worldReadout).toContainText('7.5, 1.5, 12.5');
+  await expect.poll(async () => Number(await clearance.textContent())).toBeGreaterThan(1);
+  const unalignedHash = await projectHash(shell);
+
+  await page.getByRole('button', { name: 'Align lower bound to contact plane' }).click();
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    unalignedHash,
+  );
+  await expect.poll(async () => Math.abs(Number(await clearance.textContent()))).toBeLessThan(0.000_01);
+  await expect(worldReadout).toContainText('7.5, 1.5, 12.5');
+  const settledVisualY = Number(await visualY.inputValue());
+  expect(Math.abs(settledVisualY + 1.765_03)).toBeLessThan(0.000_1);
+  const settledHash = await projectHash(shell);
+
+  await page.reload();
+  await expect(shell).toHaveAttribute('data-project-hash', settledHash, {
+    timeout: projectOpenTimeout,
+  });
+  await page.locator('.entity-row[data-entity-id="4"]').click();
+  await page.getByRole('button', { name: 'Entity', exact: true }).click();
+  await expect(page.locator('[data-visual-id="world-transform-readout"]')).toContainText(
+    '7.5, 1.5, 12.5',
+  );
+  await expect.poll(async () => Math.abs(Number(
+    await page.locator('[data-visual-id="grounding-metrics"] dd').nth(2).textContent(),
+  ))).toBeLessThan(0.000_01);
+
+  await page.locator('.entity-row[data-entity-id="6"]').click();
+  await expect(page.getByLabel('Visual translation Y', { exact: true })).toHaveValue('-0.775');
+  await expect(page.locator('[data-visual-id="world-transform-readout"]')).toContainText(
+    '11.5, 1.5, 21.5',
+  );
+  await expect.poll(async () => Math.abs(Number(
+    await page.locator('[data-visual-id="grounding-metrics"] dd').nth(2).textContent(),
+  ))).toBeLessThan(0.000_01);
+});
+
 test('project, scene, entity, light, and capability authoring flow through named Rust operations', async ({ page }) => {
   await page.goto('/');
   const shell = page.locator('[data-visual-id="studio-shell"]');
@@ -539,7 +604,7 @@ test('trusted host browsing restores focus and animated appearance uses the shar
   await expect(viewport).toHaveAttribute('data-active-transform-handle', 'rotate:x');
   await page.mouse.move(xHandle.x + 80, xHandle.y - 24, { steps: 24 });
   await page.mouse.up();
-  await expect(inspector.getByLabel('Rotation X')).not.toHaveValue('0');
+  await expect(inspector.getByLabel('Rotation X', { exact: true })).not.toHaveValue('0');
   await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
     hashBeforeTransform,
   );
@@ -549,7 +614,7 @@ test('trusted host browsing restores focus and animated appearance uses the shar
 
   await page.getByTitle('Scale gizmo').click();
   await expect(viewport).toHaveAttribute('data-transform-tool', 'scale');
-  const scaleX = inspector.getByLabel('Scale X');
+  const scaleX = inspector.getByLabel('Scale X', { exact: true });
   const scaleBeforeRevert = await scaleX.inputValue();
   const hashBeforeScaleRevert = await projectHash(shell);
   await scaleX.fill(String(Number(scaleBeforeRevert) + 0.25));
@@ -1251,10 +1316,10 @@ async function transformHandlePoint(
   const box = await canvas.boundingBox();
   if (box === null) throw new Error('shared renderer canvas has no browser bounds');
   const translation = await Promise.all(['X', 'Y', 'Z'].map(async (name) =>
-    Number(await inspector.getByLabel(`Translation ${name}`).inputValue()),
+    Number(await inspector.getByLabel(`Translation ${name}`, { exact: true }).inputValue()),
   )) as [number, number, number];
   const rotation = await Promise.all(['X', 'Y', 'Z', 'W'].map(async (name) =>
-    Number(await inspector.getByLabel(`Rotation ${name}`).inputValue()),
+    Number(await inspector.getByLabel(`Rotation ${name}`, { exact: true }).inputValue()),
   )) as [number, number, number, number];
   const direction = rotateVector(rotation, axis === 0 ? [1, 0, 0] : axis === 1 ? [0, 1, 0] : [0, 0, 1]);
   const distance = tool === 'rotate' ? 0.78 : 0.62;

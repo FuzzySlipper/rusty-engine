@@ -189,7 +189,7 @@ test('grounding inspection adds only disposable triad bounds and contact-plane l
     operation.op === 'create'
     && operation.node.metadata.tags.includes('grounding-inspection'));
   assert.equal(diagnostics.length, 19);
-  assert.equal(presentation.previewApplied, true);
+  assert.equal(presentation.previewApplied, false);
   assert.equal(canonical.ops.length, 0);
   assert.equal(diagnostics.every((operation) =>
     operation.op === 'create'
@@ -201,6 +201,22 @@ test('grounding inspection adds only disposable triad bounds and contact-plane l
     clearance: Number.NaN,
   });
   assert.equal(malformed.frame.ops.length, 0);
+
+  const withBrush = presentStudioSelection(canonical, null, null, null, {
+    kind: 'brush',
+    transform: {
+      translation: [0, 0, 0],
+      rotation: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+    },
+    radius: 1,
+    mode: 'paint',
+  }, null, inspection);
+  const createdHandles = withBrush.frame.ops.flatMap((operation) =>
+    operation.op === 'create' ? [operation.handle] : []);
+  assert.equal(new Set(createdHandles).size, createdHandles.length);
+  assert.equal(withBrush.previewApplied, true);
+  assert.equal(withBrush.voxelPreviewKind, 'brush');
 });
 
 test('voxel-object placement adds one disposable instance while reusing the canonical definition', () => {

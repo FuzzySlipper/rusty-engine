@@ -221,7 +221,10 @@ export function presentStudioSelection(
         metadata: null,
       }];
   const voxelPreviewOps = presentVoxelPreview(resolvedFrame, voxelPreview);
-  const groundingOps = presentGroundingInspection(resolvedFrame, groundingInspection);
+  const groundingOps = presentGroundingInspection({
+    ...resolvedFrame,
+    ops: [...resolvedFrame.ops, ...selectionOps, ...voxelPreviewOps],
+  }, groundingInspection);
   return {
     frame: {
       schemaVersion: 1,
@@ -233,7 +236,7 @@ export function presentStudioSelection(
       ],
     },
     selectedHandle: creation?.handle ?? null,
-    previewApplied: transformPreviewApplied || voxelPreviewOps.length > 0 || groundingOps.length > 0,
+    previewApplied: transformPreviewApplied || voxelPreviewOps.length > 0,
     voxelPreviewKind: voxelPreviewOps.length === 0 ? null : voxelPreview?.kind ?? null,
   };
 }

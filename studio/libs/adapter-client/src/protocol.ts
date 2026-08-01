@@ -1602,7 +1602,7 @@ function adapterDescription(input: unknown, path: string): void {
   );
   const expected = STUDIO_ADAPTER_OPERATIONS;
   if (operations.length !== expected.length || operations.some((entry, index) => entry !== expected[index])) {
-    fail(`${path}.operations`, 'must name the protocol 12 operation set in order');
+    fail(`${path}.operations`, 'must name the protocol 13 operation set in order');
   }
   inspectorContracts(
     value['entityInspectorContracts'],

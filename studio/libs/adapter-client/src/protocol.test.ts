@@ -571,7 +571,7 @@ test('protocol 7 closes history, file, and texture-policy response families', ()
   );
 });
 
-test('protocol 12 keeps entity-owned voxel objects, applied playback, and durable readouts closed', async () => {
+test('protocol 13 keeps entity-owned voxel objects, applied playback, and durable readouts closed', async () => {
   const inspected = voxelObjectSourceInspected('object-source-1');
   assert.equal(decodeStudioAdapterResponse(inspected).type, 'voxelObjectSourceInspected');
   assert.throws(
@@ -744,7 +744,7 @@ test('protocol 12 keeps entity-owned voxel objects, applied playback, and durabl
   ]);
 });
 
-test('protocol 12 placement preparation carries one bounded resource-only voxel object', async () => {
+test('protocol 13 placement preparation carries one bounded resource-only voxel object', async () => {
   const conversion = voxelObjectConversionPrepared('placement-source');
   const objectContentHash = `sha256:${'5'.repeat(64)}`;
   const resourceFrame = {
@@ -834,7 +834,7 @@ test('protocol 12 placement preparation carries one bounded resource-only voxel 
   ]);
 });
 
-test('protocol 12 carries one closed bounded voxel-object placement batch and one readout', async () => {
+test('protocol 13 carries one closed bounded voxel-object placement batch and one readout', async () => {
   const project = projectOpened('batch-project');
   const owners = Array.from(
     { length: MAX_VOXEL_OBJECT_INSTANCE_BATCH },

@@ -6,7 +6,7 @@ Decision task: Den `rusty-engine#6300`
 
 This decision defines the smallest boundary by which a downstream Rust project can put one of its
 own entity components in Rusty Engine Studio's Entity inspector. Protocol 10 introduced the bounded
-identity envelope and removed the fixed Loading Bay summary; protocol 12 retains it unchanged.
+identity envelope and removed the fixed Loading Bay summary; protocol 13 retains it unchanged.
 Engine tasks `#6302` and `#6303`
 implemented the outlet, host mutation lease, and built-in Voxel Object migration;
 `rusty-engine-demo#6304` implemented the independent Loading Bay Weapon panel; and Engine task
@@ -199,7 +199,7 @@ interface StudioProjectReadout {
 }
 ```
 
-The protocol 12 core decoder retains validation and bounds for this envelope. It does not interpret either
+The protocol 13 core decoder retains validation and bounds for this envelope. It does not interpret either
 identity string.
 The Rust project adapter must additionally prove that:
 
