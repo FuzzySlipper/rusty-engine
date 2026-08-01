@@ -166,11 +166,12 @@ pub fn repeat_voxel_tile_coordinate(
         if !scale.is_finite() || !(MIN_TILE_SCALE_CELLS..=MAX_TILE_SCALE_CELLS).contains(&scale) {
             return Err(VoxelTextureMappingError::InvalidTileScale);
         }
-        let delta = coordinate - origin;
         let precision_unit = scale.min(1.0);
-        if delta.abs() > precision_unit * MAX_TILE_PHASE_RATIO {
+        let precision_bound = precision_unit * MAX_TILE_PHASE_RATIO;
+        if coordinate.abs() > precision_bound || origin.abs() > precision_bound {
             return Err(VoxelTextureMappingError::InsufficientTileCoordinatePrecision);
         }
+        let delta = coordinate - origin;
         output[axis] = delta.rem_euclid(scale) / scale;
     }
     Ok(output)
@@ -279,6 +280,22 @@ mod tests {
                 [MAX_EXACT_TILE_COORDINATE as f64, 0.0],
                 [minimum, minimum],
                 [0.0, 0.0],
+            ),
+            Err(VoxelTextureMappingError::InsufficientTileCoordinatePrecision),
+        );
+        assert_eq!(
+            repeat_voxel_tile_coordinate(
+                [MAX_EXACT_TILE_COORDINATE as f64, 0.0],
+                [1.0, 1.0],
+                [MAX_EXACT_TILE_COORDINATE as f64, 0.0],
+            ),
+            Err(VoxelTextureMappingError::InsufficientTileCoordinatePrecision),
+        );
+        assert_eq!(
+            repeat_voxel_tile_coordinate(
+                [-(MAX_EXACT_TILE_COORDINATE as f64), 0.0],
+                [1.0, 1.0],
+                [-(MAX_EXACT_TILE_COORDINATE as f64), 0.0],
             ),
             Err(VoxelTextureMappingError::InsufficientTileCoordinatePrecision),
         );

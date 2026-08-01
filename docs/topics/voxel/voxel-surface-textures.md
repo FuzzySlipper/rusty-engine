@@ -36,8 +36,10 @@ outside that inclusive coordinate range rejects with
 `voxelTexture.tileCoordinateOutOfRange`. This bound does not constrain an
 untextured world. Exact integers are not sufficient by themselves: material
 admission also enforces
-`abs(tileCoordinate - tileOriginCells) <= min(tileScaleCells, 1) * 2^22` on
-both axes. This joint bound preserves at least two representable `f32`
+`max(abs(tileCoordinate), abs(tileOriginCells)) <= min(tileScaleCells, 1) *
+2^22` on both axes. The actual encoded/interpolated coordinate and uniform
+origin are bounded separately; a large matching origin cannot hide precision
+already lost before subtraction. This joint bound preserves at least two representable `f32`
 intervals across one cell or the authored repeat period, whichever is smaller.
 A pair outside it rejects with
 `voxelTexture.insufficientCoordinatePrecision`; it never reaches shader
