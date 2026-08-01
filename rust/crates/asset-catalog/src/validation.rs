@@ -69,6 +69,11 @@ pub enum CatalogValidationError {
         from: AssetId,
         reference: AssetId,
     },
+    ConflictingSurfaceTexture {
+        from: AssetId,
+        style_texture: AssetId,
+        surface_texture: AssetId,
+    },
     MissingTextureDefinition {
         from: AssetId,
         texture: AssetId,
@@ -152,6 +157,7 @@ impl CatalogValidationError {
             Self::StaleDependencyHash { .. } => "stale_dependency_hash",
             Self::UnpinnedSurfaceReference { .. } => "unpinned_surface_reference",
             Self::UndeclaredSurfaceDependency { .. } => "undeclared_surface_dependency",
+            Self::ConflictingSurfaceTexture { .. } => "conflicting_surface_texture",
             Self::MissingTextureDefinition { .. } => "missing_texture_definition",
             Self::InvalidTextureDimensions { .. } => "invalid_texture_dimensions",
             Self::InvalidSurfaceSchema { .. } => "invalid_surface_schema",
@@ -351,6 +357,7 @@ pub fn validate_catalog(catalog: &AssetCatalog) -> CatalogValidationReport {
             .as_ref()
             .and_then(|material| material.style.voxel_surface.as_ref())
         {
+            validate_surface_texture_identity(catalog, entry, surface, &mut errors);
             validate_surface(catalog, entry, surface, &mut errors);
         }
     }
@@ -363,6 +370,37 @@ pub fn validate_catalog(catalog: &AssetCatalog) -> CatalogValidationReport {
         errors.push(CatalogValidationError::DependencyCycle { path });
     }
     CatalogValidationReport { errors }
+}
+
+fn validate_surface_texture_identity(
+    catalog: &AssetCatalog,
+    entry: &CatalogEntry,
+    surface: &crate::VoxelSurfaceBinding,
+    errors: &mut Vec<CatalogValidationError>,
+) {
+    let Some(style_texture) = entry
+        .material
+        .as_ref()
+        .and_then(|material| material.style.texture.as_ref())
+    else {
+        return;
+    };
+    let surface_texture = match &surface.mapping {
+        VoxelSurfaceMapping::Repeat { texture, .. } => Some(texture),
+        VoxelSurfaceMapping::Atlas { atlas, .. } => catalog
+            .get(atlas.id())
+            .and_then(|target| target.voxel_atlas.as_ref())
+            .map(|definition| &definition.texture),
+    };
+    if let Some(surface_texture) = surface_texture {
+        if style_texture != surface_texture {
+            errors.push(CatalogValidationError::ConflictingSurfaceTexture {
+                from: entry.id.clone(),
+                style_texture: style_texture.id().clone(),
+                surface_texture: surface_texture.id().clone(),
+            });
+        }
+    }
 }
 
 fn validate_payload_kind(entry: &CatalogEntry, errors: &mut Vec<CatalogValidationError>) {

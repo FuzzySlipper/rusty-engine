@@ -123,3 +123,23 @@ fn invalid_candidate_never_projects_or_mutates_the_admitted_catalog() {
         Some("texture/voxel-atlas")
     );
 }
+
+#[test]
+fn conflicting_legacy_texture_never_projects_over_surface_authority() {
+    let mut candidate = catalog();
+    candidate
+        .entries
+        .iter_mut()
+        .find(|entry| entry.id.as_str() == "material/stone")
+        .unwrap()
+        .material
+        .as_mut()
+        .unwrap()
+        .style
+        .texture = Some(pinned("texture/conflicting", 1, "ffff"));
+    assert!(matches!(
+        project_catalog_material(&candidate, &id("material/stone")),
+        Err(CatalogMaterialProjectionError::InvalidCatalog { codes })
+            if codes.iter().any(|code| code == "conflicting_surface_texture")
+    ));
+}

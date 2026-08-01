@@ -377,6 +377,52 @@ fn voxel_surface_dependency_and_atlas_failures_reject_before_resolution() {
 }
 
 #[test]
+fn voxel_surface_rejects_conflicting_legacy_texture_facts() {
+    let original = surface_catalog();
+
+    for material_id in ["material/repeating-stone", "material/atlas-stone"] {
+        let mut conflicting = original.clone();
+        conflicting
+            .entries
+            .iter_mut()
+            .find(|entry| entry.id.as_str() == material_id)
+            .unwrap()
+            .material
+            .as_mut()
+            .unwrap()
+            .style
+            .texture = Some(pinned("texture/conflicting", 1, "ffff"));
+        assert!(validate_catalog(&conflicting)
+            .errors
+            .iter()
+            .any(|error| matches!(
+                error,
+                CatalogValidationError::ConflictingSurfaceTexture { from, .. }
+                    if from.as_str() == material_id
+            )));
+        let encoded = encode_catalog(&conflicting).unwrap();
+        let reopened = decode_catalog(&encoded).unwrap();
+        assert!(validate_catalog(&reopened)
+            .errors
+            .iter()
+            .any(|error| matches!(
+                error,
+                CatalogValidationError::ConflictingSurfaceTexture { .. }
+            )));
+    }
+
+    let mut omitted = original.clone();
+    for entry in &mut omitted.entries {
+        if let Some(style) = entry.material.as_mut().map(|material| &mut material.style) {
+            if style.voxel_surface.is_some() {
+                style.texture = None;
+            }
+        }
+    }
+    assert!(validate_catalog(&omitted).is_ok());
+}
+
+#[test]
 fn atlas_padding_tile_and_region_quota_boundaries_are_typed() {
     let mut catalog = surface_catalog();
     let atlas_entry = catalog
