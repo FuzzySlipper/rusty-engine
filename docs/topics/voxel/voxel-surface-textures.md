@@ -34,7 +34,14 @@ The vertex attribute is two signed `f32` values in **voxel-cell units**, not
 normalized 0–1 UVs. Integers through `±16,777,216` are exact; a textured mesh
 outside that inclusive coordinate range rejects with
 `voxelTexture.tileCoordinateOutOfRange`. This bound does not constrain an
-untextured world.
+untextured world. Exact integers are not sufficient by themselves: material
+admission also enforces
+`abs(tileCoordinate - tileOriginCells) <= min(tileScaleCells, 1) * 2^22` on
+both axes. This joint bound preserves at least two representable `f32`
+intervals across one cell or the authored repeat period, whichever is smaller.
+A pair outside it rejects with
+`voxelTexture.insufficientCoordinatePrecision`; it never reaches shader
+interpolation with an already-quantized phase.
 
 For canonical world chunks, grid points are projected after adding the chunk's
 absolute voxel origin. Neighboring chunks therefore have the same phase even
@@ -157,7 +164,7 @@ checked before retaining or decoding the next item.
 | Regions in one retained frame | 4,096 | `voxelAtlas.aggregateRegionQuotaExceeded` |
 | Region padding per side | 0–32 pixels | `voxelAtlas.invalidPadding` |
 | Tile scale per axis | 1/256–4,096 cells | `voxelTexture.invalidTileScale` |
-| Tile coordinate/origin magnitude | 16,777,216 cells | `voxelTexture.tileCoordinateOutOfRange` |
+| Tile coordinate/origin magnitude | 16,777,216 cells, plus the joint coordinate/scale precision bound | `voxelTexture.tileCoordinateOutOfRange`, `voxelTexture.insufficientCoordinatePrecision` |
 | Voxel surface specializations | 64 | `voxelTexture.specializationQuotaExceeded` |
 
 Zero dimensions, unsupported PNG features/encoding, decoded-dimension mismatch,
@@ -172,7 +179,8 @@ catalog, project, or GPU publication.
 
 `svc-mesh` tests exercise the actual greedy partition together with the VTX0
 coordinate functions. They cover all six directions, negative origins,
-right-handed winding, exact-coordinate limit/one-over, `1×1`, `1×7`, and `5×3`
+right-handed winding, exact-coordinate limit/one-over, limiting
+shader-equivalent phase precision and rejection, `1×1`, `1×7`, and `5×3`
 surfaces, mixed material borders, neighboring chunk origins, and two atlas
 regions. The atlas reference calculation uses the same safe-rectangle formula
 selected above.

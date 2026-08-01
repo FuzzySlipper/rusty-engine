@@ -16,6 +16,12 @@ pub const MIN_TILE_SCALE_CELLS: f64 = 1.0 / 256.0;
 /// Largest supported authored tile period, in voxel-cell units.
 pub const MAX_TILE_SCALE_CELLS: f64 = 4096.0;
 
+/// Maximum ratio between a repeated coordinate magnitude and the smaller of
+/// one cell or its authored tile period. At this bound an f32 varying retains
+/// at least two representable intervals across that unit, including the
+/// shortest supported 1/256-cell period.
+pub const MAX_TILE_PHASE_RATIO: f64 = (1_u64 << 22) as f64;
+
 /// One signed world/object axis used by the outward-facing texture basis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SignedTextureAxis {
@@ -160,18 +166,24 @@ pub fn repeat_voxel_tile_coordinate(
         if !scale.is_finite() || !(MIN_TILE_SCALE_CELLS..=MAX_TILE_SCALE_CELLS).contains(&scale) {
             return Err(VoxelTextureMappingError::InvalidTileScale);
         }
-        output[axis] = (coordinate - origin).rem_euclid(scale) / scale;
+        let delta = coordinate - origin;
+        let precision_unit = scale.min(1.0);
+        if delta.abs() > precision_unit * MAX_TILE_PHASE_RATIO {
+            return Err(VoxelTextureMappingError::InsufficientTileCoordinatePrecision);
+        }
+        output[axis] = delta.rem_euclid(scale) / scale;
     }
     Ok(output)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoxelTextureMappingError {
     CoordinateOverflow,
     CoordinateOutOfExactRange { coordinate: i64, limit: i64 },
     NonFiniteMapping,
     MappingCoordinateOutOfRange,
     InvalidTileScale,
+    InsufficientTileCoordinatePrecision,
 }
 
 impl core::fmt::Display for VoxelTextureMappingError {
@@ -190,6 +202,10 @@ impl core::fmt::Display for VoxelTextureMappingError {
             Self::InvalidTileScale => write!(
                 formatter,
                 "voxel texture tile scale must be from {MIN_TILE_SCALE_CELLS} through {MAX_TILE_SCALE_CELLS} cells",
+            ),
+            Self::InsufficientTileCoordinatePrecision => write!(
+                formatter,
+                "voxel texture coordinate and scale exceed the f32 repeat-phase precision bound",
             ),
         }
     }
@@ -252,6 +268,42 @@ mod tests {
                 [MAX_EXACT_TILE_COORDINATE as f64 + 1.0, 0.0],
             ),
             Err(VoxelTextureMappingError::MappingCoordinateOutOfRange),
+        );
+    }
+
+    #[test]
+    fn shader_equivalent_repeat_rejects_quantized_phase_at_the_coordinate_limit() {
+        let minimum = MIN_TILE_SCALE_CELLS;
+        assert_eq!(
+            repeat_voxel_tile_coordinate(
+                [MAX_EXACT_TILE_COORDINATE as f64, 0.0],
+                [minimum, minimum],
+                [0.0, 0.0],
+            ),
+            Err(VoxelTextureMappingError::InsufficientTileCoordinatePrecision),
+        );
+
+        let limiting_coordinate = minimum * MAX_TILE_PHASE_RATIO;
+        let base = limiting_coordinate as f32;
+        let half_phase = (limiting_coordinate + minimum / 2.0) as f32;
+        let full_phase = (limiting_coordinate + minimum) as f32;
+        assert_ne!(base, half_phase);
+        assert_ne!(half_phase, full_phase);
+        assert_eq!(
+            repeat_voxel_tile_coordinate(
+                [limiting_coordinate, limiting_coordinate - 16.0],
+                [minimum, minimum],
+                [0.0, 0.0],
+            ),
+            Ok([0.0, 0.0]),
+        );
+        assert_eq!(
+            repeat_voxel_tile_coordinate(
+                [limiting_coordinate + minimum, 0.0],
+                [minimum, minimum],
+                [0.0, 0.0],
+            ),
+            Err(VoxelTextureMappingError::InsufficientTileCoordinatePrecision),
         );
     }
 
