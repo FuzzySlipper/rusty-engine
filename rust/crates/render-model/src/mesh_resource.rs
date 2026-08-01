@@ -7,6 +7,8 @@ use crate::{MeshDescriptorError, MeshPayloadDescriptor, MeshPayloadSource, MeshR
 /// One resource remains comfortably inside the Studio host/browser allocation
 /// ceiling. Larger payload sets are partitioned deterministically.
 pub const MAX_MESH_RESOURCE_BYTES: u32 = 64 * 1024 * 1024;
+/// Matches the owning renderer-host admission ceiling for one retained set.
+pub const MAX_MESH_RESOURCE_AGGREGATE_BYTES: usize = 256 * 1024 * 1024;
 pub const MESH_RESOURCE_HEADER_BYTES: u32 = 16;
 pub const MESH_RESOURCE_MAGIC: [u8; 8] = *b"RMSHLE01";
 pub const MESH_RESOURCE_MAGIC_V2: [u8; 8] = *b"RMSHLE02";
@@ -118,6 +120,9 @@ pub fn pack_mesh_resources(
         current += stream_bytes;
     }
     ranges.push(start..payloads.len());
+    validate_aggregate_resource_bytes(ranges.iter().map(|range| {
+        MESH_RESOURCE_HEADER_BYTES as usize + stream_lengths[range.clone()].iter().sum::<usize>()
+    }))?;
 
     let mut packed_payloads = payloads.to_vec();
     let mut resources_by_id = BTreeMap::new();
@@ -283,6 +288,28 @@ fn push_f32s(bytes: &mut Vec<u8>, values: &[f32]) {
     }
 }
 
+fn validate_aggregate_resource_bytes(
+    resource_bytes: impl IntoIterator<Item = usize>,
+) -> Result<(), MeshResourceError> {
+    let mut total = 0_usize;
+    for bytes in resource_bytes {
+        total =
+            total
+                .checked_add(bytes)
+                .ok_or(MeshResourceError::AggregateResourceBytesExceeded {
+                    bytes: usize::MAX,
+                    maximum: MAX_MESH_RESOURCE_AGGREGATE_BYTES,
+                })?;
+        if total > MAX_MESH_RESOURCE_AGGREGATE_BYTES {
+            return Err(MeshResourceError::AggregateResourceBytesExceeded {
+                bytes: total,
+                maximum: MAX_MESH_RESOURCE_AGGREGATE_BYTES,
+            });
+        }
+    }
+    Ok(())
+}
+
 fn push_u32s(bytes: &mut Vec<u8>, values: &[u32]) {
     bytes.reserve(values.len() * 4);
     for value in values {
@@ -309,6 +336,10 @@ pub enum MeshResourceError {
     },
     ResourceTooLarge {
         bytes: usize,
+    },
+    AggregateResourceBytesExceeded {
+        bytes: usize,
+        maximum: usize,
     },
     InvalidPackedPayload {
         index: usize,
@@ -462,5 +493,20 @@ mod tests {
             .payloads
             .iter()
             .for_each(|payload| payload.validate().unwrap());
+    }
+
+    #[test]
+    fn v2_aggregate_admission_accepts_the_host_limit_and_rejects_one_over() {
+        assert_eq!(
+            validate_aggregate_resource_bytes([64 * 1024 * 1024; 4]),
+            Ok(())
+        );
+        assert_eq!(
+            validate_aggregate_resource_bytes([64 * 1024 * 1024; 4].into_iter().chain([1])),
+            Err(MeshResourceError::AggregateResourceBytesExceeded {
+                bytes: MAX_MESH_RESOURCE_AGGREGATE_BYTES + 1,
+                maximum: MAX_MESH_RESOURCE_AGGREGATE_BYTES,
+            })
+        );
     }
 }

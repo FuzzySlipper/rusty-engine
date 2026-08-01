@@ -14,14 +14,14 @@
 //! internal faces (and border faces against resident neighbour chunks) are
 //! culled. Remaining coplanar faces with the same material and normal are
 //! greedily merged into deterministic rectangles. Runtime texture coordinates
-//! use the executable outward-facing basis in [`texture_mapping`]; emitting the
-//! selected tile-space vertex stream remains the VTX2 follow-on.
+//! use the executable outward-facing basis in [`texture_mapping`] and are
+//! emitted by the same production rectangle path as positions and normals.
 //!
 //! Output is **deterministic**: material slot, `Direction6`, plane, row, and
 //! column order are all explicit. Rectangle growth prefers the positive
 //! in-plane `u` axis before the positive `v` axis. Separate `f32`
-//! position/normal streams + a `u32` index stream form a 1:1 `BufferGeometry`
-//! match. Vertices are **chunk-local** (origin = chunk min corner); world
+//! position/normal/tile-coordinate streams + a `u32` index stream form a 1:1
+//! `BufferGeometry` match. Vertices are **chunk-local** (origin = chunk min corner); world
 //! placement is the render node transform.
 
 #![forbid(unsafe_code)]

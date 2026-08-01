@@ -75,8 +75,10 @@ internet transfer size.
 
 ## `packedStreamsLeV1` and `packedStreamsLeV2`
 
-Each resource is at most 64 MiB. `pack_mesh_resources` partitions an ordered
-payload set deterministically before that ceiling, so a longer animation becomes
+Each resource is at most 64 MiB and one returned set is at most 256 MiB,
+matching renderer-host admission. `pack_mesh_resources` rejects the aggregate
+before allocating output resources and partitions an ordered payload set
+deterministically before the per-resource ceiling, so a longer animation becomes
 multiple independently bounded resources instead of one oversized response.
 One mesh must fit in one resource. Resource sets are empty-safe; non-empty
 resources have this 16-byte header:
