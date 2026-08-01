@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { copyFile, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { installPackedPlacementResourceAdapter } from './packed-placement-resource.js';
@@ -370,6 +370,115 @@ test('host-user input settings and general asset import reimport persist through
   await expect(page.locator('.entity-row[data-entity-id="70"]')).toContainText('Imported Triangle');
 });
 
+test('project glTF closures pack to GLB, reimport external drift, and reopen in the real renderer', async ({ page }) => {
+  test.setTimeout(240_000);
+  const fixture = await writeExternalGltfFixture(
+    join(projectRoot, 'content/assets/actor-kit/arc-warden.glb'),
+    join(projectRoot, 'content/assets/browser-gltf/browser-gltf-actor.gltf'),
+  );
+  await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(loadingBayProjectFile)}`);
+  const shell = page.locator('[data-visual-id="studio-shell"]');
+  const viewport = page.locator('rusty-studio-viewport');
+  await expect(shell).toHaveAttribute('data-project-hash', /.+/, {
+    timeout: projectOpenTimeout,
+  });
+  await expect.poll(async () => {
+    const status = await viewport.getAttribute('data-renderer-status');
+    if (status === 'error') {
+      throw new Error((await viewport.getAttribute('data-renderer-error')) ?? 'shared renderer failed');
+    }
+    return status;
+  }).toBe('ready');
+
+  const assetsBefore = await projectAssetCount(shell);
+  const animatedBefore = Number(await viewport.getAttribute('data-animated-mesh-resources'));
+  const hashBefore = await projectHash(shell);
+  await page.getByRole('button', { name: 'File', exact: true }).click();
+  await page.getByRole('button', { name: 'Import Project Asset…', exact: true }).click();
+  const dialog = page.locator('[data-visual-id="studio-authoring-dialog"]');
+  await dialog.getByLabel('Source mesh').fill('content/assets/browser-gltf/browser-gltf-actor.gltf');
+  await dialog.getByRole('button', { name: 'Prepare import', exact: true }).click();
+  const plan = page.locator('[data-visual-id="studio-asset-import-plan"]');
+  await expect(plan).toContainText('structuralReload · mesh-animation/browser-gltf-actor', {
+    timeout: projectMutationTimeout,
+  });
+  await expect(shell).toHaveAttribute('data-project-hash', hashBefore);
+  await plan.getByRole('button', { name: 'Apply atomically', exact: true }).click();
+  await expect.poll(() => projectAssetCount(shell), { timeout: projectMutationTimeout }).toBe(
+    assetsBefore + 1,
+  );
+  await expect(viewport).toHaveAttribute('data-animated-mesh-resources', String(animatedBefore + 1));
+  const imported = page.getByRole('option', { name: /mesh-animation\/browser-gltf-actor/ });
+  await imported.click();
+  await expect(imported).toContainText('unchanged');
+  await expect(page.locator('.asset-detail')).toContainText(
+    'source project:content/assets/browser-gltf/browser-gltf-actor.gltf',
+  );
+
+  let stored = JSON.parse(await readFile(join(projectRoot, loadingBayProjectFile), 'utf8')) as {
+    assets: Array<{
+      id: string;
+      catalog?: { sourcePath?: string };
+      import?: { source?: { path?: string } };
+    }>;
+  };
+  let storedActor = stored.assets.find((asset) => asset.id === 'mesh-animation/browser-gltf-actor');
+  expect(storedActor?.import?.source?.path).toBe(
+    'content/assets/browser-gltf/browser-gltf-actor.gltf',
+  );
+  const firstRuntimePath = storedActor?.catalog?.sourcePath;
+  expect(firstRuntimePath).toMatch(
+    /^content\/assets\/browser-gltf\/browser-gltf-actor\.rusty-import-[0-9a-f]{16}\.glb$/u,
+  );
+  const firstRuntime = await readFile(join(projectRoot, firstRuntimePath ?? ''));
+  expect(firstRuntime.subarray(0, 4).toString('ascii')).toBe('glTF');
+
+  const changedTexture = await readFile(fixture.imagePath);
+  changedTexture[changedTexture.length - 1] ^= 1;
+  await writeFile(fixture.imagePath, changedTexture);
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await imported.click();
+  await expect(imported).toContainText('contentChanged', { timeout: projectOpenTimeout });
+  const hashBeforeReimport = await projectHash(shell);
+  await page.locator('.asset-detail').getByRole('button', { name: 'Prepare reimport' }).click();
+  await expect(plan).toContainText('mesh-animation/browser-gltf-actor', {
+    timeout: projectMutationTimeout,
+  });
+  await expect(shell).toHaveAttribute('data-project-hash', hashBeforeReimport);
+  await plan.getByRole('button', { name: 'Apply atomically', exact: true }).click();
+  await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
+    hashBeforeReimport,
+  );
+  await expect(imported).toContainText('unchanged');
+  stored = JSON.parse(await readFile(join(projectRoot, loadingBayProjectFile), 'utf8'));
+  storedActor = stored.assets.find((asset) => asset.id === 'mesh-animation/browser-gltf-actor');
+  const secondRuntimePath = storedActor?.catalog?.sourcePath;
+  expect(secondRuntimePath).not.toBe(firstRuntimePath);
+  expect((await readFile(join(projectRoot, secondRuntimePath ?? ''))).subarray(0, 4).toString('ascii'))
+    .toBe('glTF');
+
+  const persistedHash = await projectHash(shell);
+  await page.reload();
+  await expect(shell).toHaveAttribute('data-project-hash', persistedHash, {
+    timeout: projectOpenTimeout,
+  });
+  await expect.poll(async () => {
+    const status = await viewport.getAttribute('data-renderer-status');
+    if (status === 'error') {
+      throw new Error((await viewport.getAttribute('data-renderer-error')) ?? 'shared renderer failed');
+    }
+    return status;
+  }).toBe('ready');
+  await expect(viewport).toHaveAttribute('data-animated-mesh-resources', String(animatedBefore + 1));
+  const reopenedStored = JSON.parse(
+    await readFile(join(projectRoot, loadingBayProjectFile), 'utf8'),
+  ) as { assets: Array<{ id: string; catalog?: { sourcePath?: string } }> };
+  expect(
+    reopenedStored.assets.find((asset) => asset.id === 'mesh-animation/browser-gltf-actor')
+      ?.catalog?.sourcePath,
+  ).toBe(secondRuntimePath);
+});
+
 test('trusted host browsing restores focus and animated appearance uses the shared renderer', async ({ page }) => {
   test.setTimeout(240_000);
   await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(loadingBayProjectFile)}`);
@@ -385,7 +494,8 @@ test('trusted host browsing restores focus and animated appearance uses the shar
     }
     return status;
   }).toBe('ready');
-  await expect(viewport).toHaveAttribute('data-animated-mesh-resources', '3');
+  const animatedResourceCount = await viewport.getAttribute('data-animated-mesh-resources');
+  expect(Number(animatedResourceCount)).toBeGreaterThanOrEqual(3);
 
   const projectControls = page.locator('[data-visual-id="studio-project-open-controls"]');
   const browseRoot = projectControls.getByRole('button', { name: 'Browse…' }).first();
@@ -460,7 +570,7 @@ test('trusted host browsing restores focus and animated appearance uses the shar
     timeout: projectOpenTimeout,
   });
   await expect(shell).toHaveAttribute('data-animated-instance-clips', /(?:^|,)run(?:,|$)/);
-  await expect(viewport).toHaveAttribute('data-animated-mesh-resources', '3');
+  await expect(viewport).toHaveAttribute('data-animated-mesh-resources', animatedResourceCount ?? '');
   await expect(viewport).toHaveAttribute('data-renderer-status', 'ready');
 });
 
@@ -1235,4 +1345,46 @@ function requiredEnvironment(name: string): string {
   const value = process.env[name];
   if (value === undefined || value.length === 0) throw new Error(`${name} is required`);
   return value;
+}
+
+async function writeExternalGltfFixture(
+  sourceGlbPath: string,
+  targetGltfPath: string,
+): Promise<{ readonly imagePath: string }> {
+  const glb = await readFile(sourceGlbPath);
+  expect(glb.subarray(0, 4).toString('ascii')).toBe('glTF');
+  const jsonLength = glb.readUInt32LE(12);
+  const jsonEnd = 20 + jsonLength;
+  const document = JSON.parse(glb.subarray(20, jsonEnd).toString('utf8')) as {
+    buffers: Array<{ byteLength: number; uri?: string }>;
+    bufferViews: Array<{ byteOffset?: number; byteLength: number }>;
+    images: Array<{ bufferView?: number; mimeType?: string; uri?: string }>;
+  };
+  const buffer = document.buffers[0];
+  const image = document.images[0];
+  if (buffer === undefined || image === undefined || image.bufferView === undefined) {
+    throw new Error('checked actor GLB must contain one embedded buffer and image');
+  }
+  const binStart = jsonEnd + 8;
+  const bin = glb.subarray(binStart, binStart + buffer.byteLength);
+  const imageView = document.bufferViews[image.bufferView];
+  if (imageView === undefined) throw new Error('checked actor image buffer view is missing');
+  const imageStart = imageView.byteOffset ?? 0;
+  const imageBytes = bin.subarray(imageStart, imageStart + imageView.byteLength);
+  const targetDirectory = join(targetGltfPath, '..');
+  const bufferPath = join(targetDirectory, 'buffers/browser-gltf-actor.bin');
+  const imagePath = join(targetDirectory, 'textures/browser-gltf-actor.png');
+  buffer.uri = 'buffers/browser-gltf-actor.bin';
+  delete image.bufferView;
+  image.uri = 'textures/browser-gltf-actor.png';
+  await Promise.all([
+    mkdir(join(targetDirectory, 'buffers'), { recursive: true }),
+    mkdir(join(targetDirectory, 'textures'), { recursive: true }),
+  ]);
+  await Promise.all([
+    writeFile(targetGltfPath, JSON.stringify(document)),
+    writeFile(bufferPath, bin),
+    writeFile(imagePath, imageBytes),
+  ]);
+  return { imagePath };
 }
