@@ -12,6 +12,10 @@ The completed three-composition mechanics/rules evidence, exact consumer pins,
 measured limits, and deliberate stopping point are indexed in the
 [gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md).
 
+The completed runtime voxel texture/atlas owner chain, exact public Studio
+consumer, measured costs, and deliberate stopping point are indexed in the
+[textured voxel campaign closeout](textured-voxel-campaign-closeout.md).
+
 ## How to use this atlas
 
 1. Read [design.md](design.md) for the provider boundary.
@@ -67,6 +71,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 - [Agent guidance](../AGENTS.md)
 - [Canonical design](design.md)
 - [Gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md)
+- [Textured voxel campaign closeout](textured-voxel-campaign-closeout.md)
 - [Rust source organization](topics/development/rust-style.md)
 - [Downstream Engine revision contract](topics/development/downstream-engine-revisions.md)
 - [Cargo workspace](../Cargo.toml)

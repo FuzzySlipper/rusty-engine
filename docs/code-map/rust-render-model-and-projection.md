@@ -31,6 +31,7 @@ entity, authored-scene, voxel, and presentation facts.
 - [Rendering operations](../rendering-operations.md)
 - [Voxel mesh data plane](../topics/voxel/voxel-mesh-data-plane.md)
 - [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
+- [Textured voxel campaign closeout](../textured-voxel-campaign-closeout.md)
 
 ## Public downstream surfaces
 

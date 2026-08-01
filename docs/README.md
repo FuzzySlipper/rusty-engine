@@ -15,6 +15,7 @@ does not require Den access.
 | [design.md](design.md) | Canonical provider architecture, authority, dependency direction, and promotion rules |
 | [agent-code-atlas.md](agent-code-atlas.md) | Agent-oriented navigation across code owners, public surfaces, and gates |
 | [gameplay-mechanics-campaign-closeout.md](gameplay-mechanics-campaign-closeout.md) | Exact GM0-GM7 mechanics/rules consumer evidence, measured limits, donor pins, and stopping point |
+| [textured-voxel-campaign-closeout.md](textured-voxel-campaign-closeout.md) | VTX0-VTX6 ownership, measured geometry/resource costs, exact consumer proof, and stopping point |
 | [README.md](README.md) | This documentation index |
 
 ## Topic directories
@@ -73,6 +74,7 @@ tests take precedence when describing implemented behavior.
 | Change stats, tracks, effects, items, equipment, damage, or restoration | [Gameplay mechanics](code-map/gameplay-mechanics.md) |
 | Package a downstream-authored rules candidate without giving Engine its meaning | [Gameplay rules](code-map/gameplay-rules.md) |
 | Audit the completed mechanics/rules campaign and exact consumers | [Gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md) |
+| Audit the completed textured-voxel campaign and exact consumer | [Textured voxel campaign closeout](textured-voxel-campaign-closeout.md) |
 | Update a downstream consumer's exact Engine commit | [Downstream Engine revision contract](topics/development/downstream-engine-revisions.md) |
 | Check active provider limitations and scheduled certification | [Known limitations](known-limitations.md) |
 | Change voxel collision, navigation, motion, or edits | [Spatial mechanisms](code-map/spatial-mechanisms.md) |

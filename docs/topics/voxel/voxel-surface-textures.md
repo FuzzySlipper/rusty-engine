@@ -1,8 +1,11 @@
 # Runtime voxel surface textures
 
-Status: VTX0–VTX5 implemented: bounded PNG resources, tile-coordinate mesh
-streams, canonical material/atlas bindings, Three-backend sampling, and strict
-Studio authoring through a downstream Rust adapter.
+Status: VTX0-VTX6 implemented and reconciled: bounded PNG resources,
+tile-coordinate mesh streams, canonical material/atlas bindings, Three-backend
+sampling, strict Studio authoring through a downstream Rust adapter, and one
+exact public consumer. See the
+[campaign closeout](../../textured-voxel-campaign-closeout.md) for the measured
+end-to-end evidence and stopping point.
 
 ## Decision and ownership
 
@@ -261,6 +264,15 @@ a coordinated texture/material redefinition keeps the same geometry resource,
 four vertices, six indices, and object handle; no remesh or per-cell resource
 is created.
 
+The exact public consumer adds a deterministic 588-byte, 16x8 asymmetric atlas
+with two padded directional regions. Its `48x32x1` wall and `48x1x32` floor each
+retain the untextured baseline's six quads, 24 vertices, and 36 indices while
+adding 192 bytes of tile coordinates. Real Studio replacement, reload, and a
+second host/adapter process retain one texture while open and observe resource
+counts `0 -> 1 -> 0` across close/reopen/close. Exact hashes, the adjacent-chunk
+and mixed-material measurements, and the limits of that evidence are recorded
+in the [campaign closeout](../../textured-voxel-campaign-closeout.md).
+
 Run the proof with:
 
 ```bash
@@ -286,6 +298,10 @@ cargo clippy -p svc-mesh --all-targets --locked -- -D warnings
   resolution through protocol 14 and the existing Studio project mutation
   boundary. TypeScript retains only form and observational state; the selected
   downstream Rust adapter owns canonical admission and persistence.
+- VTX6 reconciles these owners with the exact public Studio consumer, records
+  geometry/resource measurements, and freezes the initial contract and
+  deliberate non-goals in the
+  [campaign closeout](../../textured-voxel-campaign-closeout.md).
 
 Model-conversion source sampling remains in `voxel-convert`; none of these
 follow-ons should reuse its palette sampling structs as a runtime material

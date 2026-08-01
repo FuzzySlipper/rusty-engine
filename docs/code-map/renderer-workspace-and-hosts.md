@@ -43,6 +43,7 @@ surface, and renderer host/resource lifecycle.
 - [Downstream Engine revision contract](../topics/development/downstream-engine-revisions.md)
 - [Voxel mesh data plane](../topics/voxel/voxel-mesh-data-plane.md)
 - [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
+- [Textured voxel campaign closeout](../textured-voxel-campaign-closeout.md)
 
 ## Public downstream surfaces
 
@@ -51,6 +52,10 @@ surface, and renderer host/resource lifecycle.
   [`verify-render-consumer.sh`](../../scripts/verify-render-consumer.sh).
 - Browser, webview, and headless hosts compose over the same explicit retained
   border without owning game state.
+- Textured voxel replacement reuses retained geometry/object handles and the
+  reference-counted texture owner. The exact public consumer's lifecycle and
+  provider disposal evidence are reconciled in the
+  [textured voxel campaign closeout](../textured-voxel-campaign-closeout.md).
 
 ## Private or forbidden paths
 

@@ -431,7 +431,9 @@ and disposal. Atlas repetition happens inside the assigned region through a deri
 specialization, not by expanding a greedy rectangle or remeshing in TypeScript. World chunks use
 absolute voxel origins for continuous phase, while voxel objects use object-local coordinates. The
 selected formats, orientation, sampling, quotas, and failure behavior are fixed in
-[the runtime voxel surface texture decision](topics/voxel/voxel-surface-textures.md).
+[the runtime voxel surface texture decision](topics/voxel/voxel-surface-textures.md). The exact
+provider-to-consumer ownership chain, measured geometry/resource costs, and deliberate stopping point
+are recorded in the [textured voxel campaign closeout](textured-voxel-campaign-closeout.md).
 
 ## Shared rendering boundary
 

@@ -36,6 +36,8 @@ viewport, and its closed external-project adapter protocol.
 - [Downstream Entity inspector extensions](../studio-downstream-entity-inspector-extensions.md)
 - [Downstream Engine revision contract](../topics/development/downstream-engine-revisions.md)
 - [Voxel mesh data plane](../topics/voxel/voxel-mesh-data-plane.md)
+- [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
+- [Textured voxel campaign closeout](../textured-voxel-campaign-closeout.md)
 
 ## Public downstream surfaces
 
@@ -115,7 +117,11 @@ then invokes the focused two-consumer proof in
 `scripts/verify-studio-entity-inspector-integration.sh`. That proof serves the downstream-built
 application in Chromium, covers Voxel Object, unknown read-only fallback, a real Weapon replacement
 and canonical reread, then repeats the read in a fresh adapter process. The final command proves the
-pinned animated-voxel runtime/quality workflow.
+pinned animated-voxel runtime/quality workflow and the checked runtime texture/atlas workflow. It
+renders asymmetric repeat and atlas pixels through the one viewport, replaces material bindings
+without changing greedy geometry, saves and reopens canonical identities, records one retained
+texture, destroys the viewport resources on close, and repeats the reopen/disposal proof in a second
+Studio host and adapter process.
 
 The local demo command defaults to both proofs and builds Studio plus the project-owned adapter once.
 CI selects its `browser` and `entity-inspector` modes in parallel, then retains

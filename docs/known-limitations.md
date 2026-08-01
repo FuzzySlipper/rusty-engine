@@ -5,6 +5,30 @@ architecture boundaries are stated separately so agents do not “fix” them by
 introducing a second authority. Product-specific limitations belong to their
 downstream repositories.
 
+## Textured voxel atlas filtering and corpus breadth
+
+- **Status:** accepted-temporary
+- **Affected surface:** `asset-catalog`, `svc-mesh`, retained render
+  projection, `renderer-three`, and the explicit Studio voxel-consumer
+  integration
+- **Limitation:** The initial runtime surface contract admits non-interlaced
+  RGBA8 PNG albedo, nearest or linear filtering, and one-pixel linear atlas
+  gutters without mipmaps. The checked art corpus is one deterministic 16x8
+  directional atlas plus color-only, repeat, and atlas-region materials. It
+  does not measure GPU time or driver VRAM.
+- **Impact:** Large faces and strips retain the greedy partition and the exact
+  consumer proves orientation, repetition, replacement, reopen, and disposal,
+  but this is not evidence for mipmapped atlas gutters, compressed GPU-native
+  formats, normal/emissive texture maps, or broad production art styles.
+- **Detection:** See the exact hashes, geometry/resource counts, and browser
+  proof in the
+  [textured voxel campaign closeout](textured-voxel-campaign-closeout.md), then
+  run `./scripts/verify-render.sh` and the explicit Studio voxel-consumer gate.
+- **Follow-up:** Add a new format, mip policy, or specialization only when a
+  concrete consumer supplies a bounded corpus and demonstrates a reusable
+  mechanism gap.
+- **Last reviewed:** 2026-08-01 / codex
+
 ## Animated voxel corpus breadth and GPU accounting
 
 - **Status:** accepted-temporary

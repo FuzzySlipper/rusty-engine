@@ -303,8 +303,11 @@ port.
 - `./scripts/verify-studio-voxel-integration.sh /absolute/path/to/rusty-engine-voxels` separately
   accepts only the exact public revision declared by `studio/voxel-consumer-source.json`. It checks
   the consumer's exact Engine pin and runtime/quality reports, then drives saved-pose, named-clip,
-  repeat, pause/resume, once, restore, and reopen behavior through current Studio and the shared
-  renderer in Chromium. `.github/workflows/studio-voxel-integration.yml` reproduces the same clean
+  repeat, pause/resume, once, restore, runtime texture/atlas authoring, asymmetric framebuffer
+  pixels, replacement, fresh-host reopen, resource counts, and disposal through current Studio and
+  the shared renderer in Chromium. The exact measurements and stopping point are recorded in the
+  [textured voxel campaign closeout](textured-voxel-campaign-closeout.md).
+  `.github/workflows/studio-voxel-integration.yml` reproduces the same clean
   checkout; ordinary Studio and provider gates do not inspect a sibling voxel repository.
 
 The demo and voxel reverse-certification lanes are independent. Advancing or proving the demo pin

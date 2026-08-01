@@ -38,7 +38,10 @@ Runtime tile-space attributes and atlas-region repetition preserve this exact
 partition. Their orientation, coordinate origin, sampling, and quota contract
 is defined separately in
 [runtime voxel surface textures](voxel-surface-textures.md); ordinary whole-atlas
-wrapping and per-voxel face expansion are not valid implementations.
+wrapping and per-voxel face expansion are not valid implementations. The
+[textured voxel campaign closeout](../../textured-voxel-campaign-closeout.md)
+records the measured VTX2 stream cost and proves that the public textured wall,
+floor, and long surfaces retain this greedy partition.
 
 ## Evidence and rejected candidates
 

@@ -128,7 +128,9 @@ still chooses the representative/fallback source-material mapping for schema com
 does not replace per-cell UV evidence. Missing coordinates or UV hash drift fail before output.
 This offline palette-selection mechanism is not a runtime surface texture. The independent runtime
 tile and atlas contract is [voxel surface textures](voxel-surface-textures.md); its material
-bindings must not reuse conversion sampling requests as presentation state.
+bindings must not reuse conversion sampling requests as presentation state. The
+[textured voxel campaign closeout](../../textured-voxel-campaign-closeout.md)
+records the exact downstream proof that keeps these two mechanisms distinct.
 
 Solid conversion first assigns one topology vertex to every exactly coincident finite position,
 normalizing signed zero but using no scale-dependent epsilon. UV, hard-normal, and material seams
