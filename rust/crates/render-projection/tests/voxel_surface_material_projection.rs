@@ -8,6 +8,10 @@ use core_assets::{AssetHash, AssetId, AssetReference, AssetVersionReq};
 use render_model::{MaterialUvStrategy, VoxelSurfaceMappingDescriptor};
 use render_projection::{project_catalog_material, CatalogMaterialProjectionError};
 
+const TEXTURE_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const ATLAS_HASH: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const MATERIAL_HASH: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
 fn id(value: &str) -> AssetId {
     AssetId::parse(value).unwrap()
 }
@@ -21,10 +25,14 @@ fn pinned(value: &str, version: u32, hash: &str) -> AssetReference {
 }
 
 fn catalog() -> AssetCatalog {
-    let texture = pinned("texture/voxel-atlas", 2, "aa02");
-    let atlas = pinned("sprite-sheet/voxel-atlas", 3, "bb03");
+    catalog_with_hashes(TEXTURE_HASH, ATLAS_HASH)
+}
+
+fn catalog_with_hashes(texture_hash: &str, atlas_hash: &str) -> AssetCatalog {
+    let texture = pinned("texture/voxel-atlas", 2, texture_hash);
+    let atlas = pinned("sprite-sheet/voxel-atlas", 3, atlas_hash);
     let texture_entry = CatalogEntry::new(texture.id().clone(), 2)
-        .with_hash(AssetHash::parse("aa02").unwrap())
+        .with_hash(AssetHash::parse(texture_hash).unwrap())
         .with_texture(TextureDefinition {
             width: 32,
             height: 32,
@@ -32,7 +40,7 @@ fn catalog() -> AssetCatalog {
             wrap: TextureWrap::Clamp,
         });
     let atlas_entry = CatalogEntry::new(atlas.id().clone(), 3)
-        .with_hash(AssetHash::parse("bb03").unwrap())
+        .with_hash(AssetHash::parse(atlas_hash).unwrap())
         .with_dependencies(vec![texture.clone()])
         .with_voxel_atlas(VoxelAtlasDefinition {
             schema_version: 1,
@@ -59,7 +67,7 @@ fn catalog() -> AssetCatalog {
         alpha_mode: VoxelAlphaMode::Blend,
     });
     let material = CatalogEntry::new(id("material/stone"), 1)
-        .with_hash(AssetHash::parse("cc01").unwrap())
+        .with_hash(AssetHash::parse(MATERIAL_HASH).unwrap())
         .with_dependencies(vec![atlas])
         .with_material(MaterialDefinition {
             authority: MaterialAuthority {
@@ -92,13 +100,22 @@ fn canonical_surface_projects_exact_renderer_provenance_without_voxel_authority(
         } => {
             assert_eq!(atlas, "sprite-sheet/voxel-atlas");
             assert_eq!(atlas_version, 3);
-            assert_eq!(atlas_content_hash, "bb03");
+            assert_eq!(atlas_content_hash, format!("sha256:{ATLAS_HASH}"));
             assert_eq!(texture_version, 2);
-            assert_eq!(texture_content_hash, "aa02");
+            assert_eq!(texture_content_hash, format!("sha256:{TEXTURE_HASH}"));
             assert_eq!(region.id, "stone");
         }
         other => panic!("unexpected mapping: {other:?}"),
     }
+}
+
+#[test]
+fn algorithm_ambiguous_surface_hash_never_reaches_the_renderer_contract() {
+    let candidate = catalog_with_hashes("aa02", "bb03");
+    assert!(matches!(
+        project_catalog_material(&candidate, &id("material/stone")),
+        Err(CatalogMaterialProjectionError::InvalidSha256ContentHash)
+    ));
 }
 
 #[test]

@@ -15,6 +15,7 @@ pub enum CatalogMaterialProjectionError {
     MissingMaterial,
     UnresolvedSurface,
     MissingContentHash,
+    InvalidSha256ContentHash,
     InvalidDescriptor(MaterialDescriptorError),
 }
 
@@ -163,10 +164,14 @@ fn surface_texture_id(surface: &ResolvedVoxelSurface) -> &str {
 fn reference_hash(
     reference: &core_assets::AssetReference,
 ) -> Result<String, CatalogMaterialProjectionError> {
-    reference
+    let digest = reference
         .hash()
-        .map(|hash| hash.as_str().to_string())
-        .ok_or(CatalogMaterialProjectionError::MissingContentHash)
+        .map(core_assets::AssetHash::as_str)
+        .ok_or(CatalogMaterialProjectionError::MissingContentHash)?;
+    if digest.len() != 64 {
+        return Err(CatalogMaterialProjectionError::InvalidSha256ContentHash);
+    }
+    Ok(format!("sha256:{digest}"))
 }
 
 fn rgba(value: asset_catalog::Rgba) -> [f32; 4] {
