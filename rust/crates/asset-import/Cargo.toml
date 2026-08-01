@@ -8,6 +8,7 @@ workspace = true
 
 [dependencies]
 asset-catalog.workspace = true
+base64.workspace = true
 core-assets.workspace = true
 gltf.workspace = true
 render-model.workspace = true

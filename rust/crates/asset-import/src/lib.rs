@@ -9,6 +9,7 @@ mod animated_glb;
 mod artifact;
 mod diagnostic;
 mod fingerprint;
+mod gltf_package;
 mod importer;
 mod manifest;
 mod plan;
@@ -26,21 +27,29 @@ pub use artifact::{
     render_animated_glb_artifacts, render_artifacts, ArtifactRenderError, GeneratedArtifact,
 };
 pub use diagnostic::{ImportCode, ImportDiagnostic, ImportSeverity};
+pub use gltf_package::{
+    admit_gltf_source, gltf_relative_resource_uris, GltfResource, GltfSourceClosure,
+    PackedGltfSource, MAX_GLTF_RESOURCE_BYTES, MAX_GLTF_RESOURCE_COUNT,
+    MAX_GLTF_TOTAL_RESOURCE_BYTES,
+};
 pub use importer::{import, import_with_context, ImportContext, ImportOutcome, ImportedAssets};
 pub use manifest::{
-    build_manifest, decode_import_manifest, detect_source_drift, encode_import_manifest,
-    plan_reimport, validate_import_manifest, ArtifactFingerprint, ImportManifest,
-    ImportManifestCodecError, ReimportPlan,
+    build_manifest, build_manifest_with_source_hash, decode_import_manifest, detect_source_drift,
+    encode_import_manifest, plan_reimport, validate_import_manifest, ArtifactFingerprint,
+    ImportManifest, ImportManifestCodecError, ReimportPlan,
 };
-pub use plan::{plan_animated_glb_import, plan_import, ImportMode, ImportPlan};
+pub use plan::{
+    plan_animated_glb_import, plan_animated_gltf_import, plan_import, ImportMode, ImportPlan,
+};
 pub use publish::{
     publish_directory_atomically, publish_directory_with_sidecar_atomically, PublicationError,
     PublicationReceipt,
 };
 pub use sidecar::{
-    decode_sidecar, detect_duplicate_guids, encode_sidecar, init_metadata, reconcile, sidecar_path,
-    AssetGuid, ImportSettings, ProjectOverride, SidecarCodecError, SidecarMetadata,
-    SidecarOverrideError, SidecarStatus, SourceUri, SIDECAR_SCHEMA_VERSION,
+    decode_sidecar, detect_duplicate_guids, encode_sidecar, init_metadata,
+    init_metadata_with_source_hash, reconcile, reconcile_source_hash, sidecar_path, AssetGuid,
+    ImportSettings, ProjectOverride, SidecarCodecError, SidecarMetadata, SidecarOverrideError,
+    SidecarStatus, SourceUri, SIDECAR_SCHEMA_VERSION,
 };
 pub use source::{
     parse_source, SourceCollision, SourceGroup, SourceMaterial, SourceMesh, SourceParse,

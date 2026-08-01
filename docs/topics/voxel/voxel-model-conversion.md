@@ -80,6 +80,16 @@ whole model, `group/<n>` selects one deterministic flattened primitive group, an
 all groups attached to one exact source node. Canonical metadata exposes the source indices so
 equal names never become identity.
 
+JSON glTF is admitted one layer earlier by `asset-import`, not by an ambient
+resolver in `voxel-convert`. The caller supplies the root bytes and the exact
+bounded resource closure discovered by `gltf_relative_resource_uris`.
+`admit_gltf_source` validates relative identities, data URIs, MIME/extension
+agreement, byte lengths, counts, and aggregate size, fingerprints the complete
+closure, and deterministically packs it into GLB. Static callers may pass that
+packed GLB to `import_mesh_source`; animated import planning uses the same
+scene/skin/clip path automatically. This retains one normalization owner and
+one runtime format while allowing ordinary multi-file glTF authoring exports.
+
 The importer bounds source bytes, document nodes/edges/depth, meshes, mesh instances, primitives,
 and the union of distinct UV sets across the selected model before allocating flattened attributes,
 along with UTF-8 names, expanded vertices, and expanded indices. It rejects cycles, nodes reached from

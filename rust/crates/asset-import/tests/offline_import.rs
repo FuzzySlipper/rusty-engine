@@ -4,7 +4,9 @@ use std::process::Command;
 
 use asset_catalog::{decode_catalog, validate_catalog};
 use asset_import::*;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use render_model::AnimatedMeshAsset;
+use voxel_convert::{import_mesh_source, MeshSourceFormat, MeshSourceImportRequest};
 
 const VALID: &str = r#"{
   "schemaVersion": 1,
@@ -130,6 +132,164 @@ fn animated_glb_produces_deterministic_runtime_resource_descriptor_and_provenanc
     assert_eq!(imported.receipt.clip_count, 3);
     assert_eq!(imported.receipt.channel_count, 56);
     assert_eq!(imported.receipt.keyframe_count, 1048);
+}
+
+#[test]
+fn gltf_closure_converges_with_glb_for_static_and_animated_sources() {
+    let static_glb = static_triangle_glb();
+    let static_source = external_gltf(&static_glb, "geometry.bin", None);
+    let packed = admit_gltf_source(&static_source).unwrap();
+    let static_import = import_mesh_source(&MeshSourceImportRequest {
+        source_asset_id: "mesh/static-triangle".to_owned(),
+        asset_version: 1,
+        source_path: "static-triangle.gltf".to_owned(),
+        format: MeshSourceFormat::Glb,
+        source_bytes: packed.glb_bytes,
+        expected_source_sha256: None,
+        mesh_primitive: None,
+    })
+    .unwrap();
+    assert_eq!(static_import.mesh.positions.len(), 3);
+    assert_eq!(static_import.mesh.triangles[0].indices, [0, 1, 2]);
+
+    let animated_source = external_gltf(ANIMATED_GLB, "actor.bin", Some("textures/actor.png"));
+    let uri = SourceUri::RelativePath("content/actors/actor-external.gltf".to_owned());
+    let first = plan_animated_gltf_import(
+        &uri,
+        &animated_source,
+        &ImportContext::default(),
+        ImportMode::DryRun,
+        None,
+        None,
+    );
+    let second = plan_animated_gltf_import(
+        &uri,
+        &animated_source,
+        &ImportContext::default(),
+        ImportMode::DryRun,
+        None,
+        None,
+    );
+    assert!(!first.has_errors, "{:?}", first.diagnostics);
+    assert_eq!(first.files, second.files);
+    assert_eq!(first.manifest, second.manifest);
+    assert!(artifact(&first, "actor-external.glb")
+        .bytes
+        .starts_with(b"glTF"));
+    let descriptor: AnimatedMeshAsset =
+        serde_json::from_slice(&artifact(&first, "actor-external.animated-mesh.json").bytes)
+            .unwrap();
+    assert_eq!(descriptor.clips.len(), 3);
+    assert_eq!(first.manifest.as_ref().unwrap().source_uri, uri.value());
+}
+
+#[test]
+fn gltf_data_uris_and_resource_fingerprint_are_bounded_and_deterministic() {
+    let mut source = external_gltf(ANIMATED_GLB, "actor.bin", Some("actor.png"));
+    let buffer = source.resources.remove(0);
+    let mut root: serde_json::Value = serde_json::from_slice(&source.root_json).unwrap();
+    root["buffers"][0]["uri"] = serde_json::Value::String(format!(
+        "data:application/octet-stream;base64,{}",
+        BASE64.encode(&buffer.bytes)
+    ));
+    let image = source.resources.remove(0);
+    root["images"][0]["uri"] = serde_json::Value::String(format!(
+        "data:image/png;base64,{}",
+        BASE64.encode(&image.bytes)
+    ));
+    source.root_json = serde_json::to_vec(&root).unwrap();
+    assert!(gltf_relative_resource_uris(&source.root_json)
+        .unwrap()
+        .is_empty());
+    let packed = admit_gltf_source(&source).unwrap();
+    assert!(packed.external_resource_uris.is_empty());
+
+    let external = external_gltf(ANIMATED_GLB, "actor.bin", None);
+    let first = admit_gltf_source(&external).unwrap();
+    let mut changed = external.clone();
+    changed.resources[0].bytes[0] ^= 1;
+    let second = admit_gltf_source(&changed).unwrap();
+    assert_ne!(first.source_hash, second.source_hash);
+}
+
+#[test]
+fn gltf_closure_rejects_ambient_paths_collisions_missing_and_unsupported_resources() {
+    let base = external_gltf(&static_triangle_glb(), "geometry.bin", None);
+    for uri in [
+        "https://example.invalid/geometry.bin",
+        "/tmp/geometry.bin",
+        "../geometry.bin",
+        "nested\\geometry.bin",
+        "geometry.bin?revision=1",
+    ] {
+        let mut root: serde_json::Value = serde_json::from_slice(&base.root_json).unwrap();
+        root["buffers"][0]["uri"] = serde_json::Value::String(uri.to_owned());
+        let failure = gltf_relative_resource_uris(&serde_json::to_vec(&root).unwrap()).unwrap_err();
+        assert_eq!(failure.code, ImportCode::ExternalResource, "{uri}");
+    }
+
+    let missing = GltfSourceClosure {
+        root_json: base.root_json.clone(),
+        resources: Vec::new(),
+    };
+    assert_eq!(
+        admit_gltf_source(&missing).unwrap_err().code,
+        ImportCode::ExternalResource
+    );
+
+    let mut duplicate = base.clone();
+    duplicate.resources.push(duplicate.resources[0].clone());
+    assert_eq!(
+        admit_gltf_source(&duplicate).unwrap_err().code,
+        ImportCode::MalformedSource
+    );
+
+    let mut wrong_length = base.clone();
+    let mut wrong_root: serde_json::Value =
+        serde_json::from_slice(&wrong_length.root_json).unwrap();
+    wrong_root["buffers"][0]["byteLength"] = serde_json::Value::from(1);
+    wrong_length.root_json = serde_json::to_vec(&wrong_root).unwrap();
+    assert_eq!(
+        admit_gltf_source(&wrong_length).unwrap_err().code,
+        ImportCode::InvalidContainer
+    );
+
+    let mut unsupported_root: serde_json::Value = serde_json::from_slice(&base.root_json).unwrap();
+    unsupported_root["images"] = serde_json::json!([{"uri":"texture.gif"}]);
+    let unsupported = GltfSourceClosure {
+        root_json: serde_json::to_vec(&unsupported_root).unwrap(),
+        resources: vec![
+            base.resources[0].clone(),
+            GltfResource {
+                uri: "texture.gif".to_owned(),
+                bytes: vec![1, 2, 3],
+            },
+        ],
+    };
+    assert_eq!(
+        admit_gltf_source(&unsupported).unwrap_err().code,
+        ImportCode::UnsupportedFeature
+    );
+
+    let mut collision_root: serde_json::Value = serde_json::from_slice(&base.root_json).unwrap();
+    collision_root["images"] = serde_json::json!([{"uri":"geometry%2Ebin"}]);
+    let failure =
+        gltf_relative_resource_uris(&serde_json::to_vec(&collision_root).unwrap()).unwrap_err();
+    assert_eq!(failure.code, ImportCode::MalformedSource);
+
+    let too_many = GltfSourceClosure {
+        root_json: base.root_json,
+        resources: (0..=MAX_GLTF_RESOURCE_COUNT)
+            .map(|index| GltfResource {
+                uri: format!("resource-{index}.bin"),
+                bytes: vec![1],
+            })
+            .collect(),
+    };
+    assert_eq!(
+        admit_gltf_source(&too_many).unwrap_err().code,
+        ImportCode::ResourceLimit
+    );
 }
 
 #[test]
@@ -685,6 +845,82 @@ fn cli_publishes_animated_glb_without_utf8_or_original_path_dependency() {
 }
 
 #[test]
+fn cli_loads_gltf_closure_and_missing_resource_failure_preserves_publication() {
+    let root = temp_directory("gltf-cli");
+    let source = root.join("actor-external.gltf");
+    let output = root.join("imported");
+    let closure = external_gltf(
+        ANIMATED_GLB,
+        "buffers/actor.bin",
+        Some("textures/actor.png"),
+    );
+    fs::write(&source, &closure.root_json).unwrap();
+    for resource in &closure.resources {
+        let path = root.join(&resource.uri);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, &resource.bytes).unwrap();
+    }
+    let binary = env!("CARGO_BIN_EXE_rusty-asset-import");
+    let initialized = Command::new(binary)
+        .arg("init-sidecar")
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(initialized.status.success());
+    let unchanged = Command::new(binary)
+        .arg("validate-sidecar")
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&unchanged.stdout).contains("status unchanged"));
+    let buffer_path = root.join("buffers/actor.bin");
+    let original_buffer = fs::read(&buffer_path).unwrap();
+    let mut changed_buffer = original_buffer.clone();
+    *changed_buffer.last_mut().unwrap() ^= 1;
+    fs::write(&buffer_path, &changed_buffer).unwrap();
+    let changed = Command::new(binary)
+        .arg("validate-sidecar")
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&changed.stdout).contains("status contentChanged"));
+    fs::write(&buffer_path, original_buffer).unwrap();
+    let result = Command::new(binary)
+        .arg("write")
+        .arg(&source)
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(output.join("actor-external.glb").is_file());
+    let manifest_before = fs::read(output.join("actor-external.import.json")).unwrap();
+    let runtime_before = fs::read(output.join("actor-external.glb")).unwrap();
+
+    fs::remove_file(root.join("textures/actor.png")).unwrap();
+    let rejected = Command::new(binary)
+        .arg("write")
+        .arg(&source)
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("referenced resource"));
+    assert_eq!(
+        fs::read(output.join("actor-external.import.json")).unwrap(),
+        manifest_before
+    );
+    assert_eq!(
+        fs::read(output.join("actor-external.glb")).unwrap(),
+        runtime_before
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn cli_rejects_oversized_sources_before_publishing() {
     let root = temp_directory("oversized-source");
     let source = root.join("oversized.mesh.json");
@@ -773,4 +1009,46 @@ fn static_triangle_glb() -> Vec<u8> {
         }"#,
         &bin,
     )
+}
+
+fn external_gltf(glb: &[u8], buffer_uri: &str, image_uri: Option<&str>) -> GltfSourceClosure {
+    assert_eq!(&glb[..4], b"glTF");
+    let json_length = u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize;
+    let json_end = 20 + json_length;
+    let mut root: serde_json::Value = serde_json::from_slice(&glb[20..json_end]).unwrap();
+    let bin_header = json_end;
+    assert_eq!(
+        u32::from_le_bytes(glb[bin_header + 4..bin_header + 8].try_into().unwrap()),
+        0x004e_4942
+    );
+    let bin_start = bin_header + 8;
+    let declared_buffer_length = root["buffers"][0]["byteLength"].as_u64().unwrap() as usize;
+    let bin = glb[bin_start..bin_start + declared_buffer_length].to_vec();
+    root["buffers"][0]["uri"] = serde_json::Value::String(buffer_uri.to_owned());
+    let mut resources = vec![GltfResource {
+        uri: buffer_uri.to_owned(),
+        bytes: bin.clone(),
+    }];
+    if let Some(image_uri) = image_uri {
+        let view_index = root["images"][0]["bufferView"].as_u64().unwrap() as usize;
+        let view = &root["bufferViews"][view_index];
+        let offset = view["byteOffset"].as_u64().unwrap_or(0) as usize;
+        let length = view["byteLength"].as_u64().unwrap() as usize;
+        let image_bytes = bin[offset..offset + length].to_vec();
+        let image = root["images"][0].as_object_mut().unwrap();
+        image.remove("bufferView");
+        image.insert(
+            "uri".to_owned(),
+            serde_json::Value::String(image_uri.to_owned()),
+        );
+        resources.push(GltfResource {
+            uri: image_uri.to_owned(),
+            bytes: image_bytes,
+        });
+        resources.sort_by(|left, right| left.uri.cmp(&right.uri));
+    }
+    GltfSourceClosure {
+        root_json: serde_json::to_vec(&root).unwrap(),
+        resources,
+    }
 }

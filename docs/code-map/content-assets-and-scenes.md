@@ -11,9 +11,10 @@ imports, prefab resolution, and authored scene admission and editing.
   codecs, load/save plans, prefabs, and atomic write sets.
 - `asset-catalog`: asset entries, versions, locks, dependencies, materials,
   fallbacks, and catalog validation.
-- `asset-import`: bounded offline textual static-mesh and binary animated-GLB
-  parsing, import planning, generated artifacts, sidecars, reimport decisions,
-  and atomic publication.
+- `asset-import`: bounded offline textual static-mesh, binary GLB, and explicit
+  JSON glTF source-closure admission; deterministic GLB runtime packing; import
+  planning, generated artifacts, sidecars, reimport decisions, and atomic
+  publication.
 - `authored-scene`: versioned scene documents, hierarchy, references, lights,
   validation, admission plans, and explicit edit commands.
 
@@ -29,6 +30,7 @@ imports, prefab resolution, and authored scene admission and editing.
 - [`content-store/src/manifest.rs`](../../rust/crates/content-store/src/manifest.rs)
 - [`asset-catalog/src/lib.rs`](../../rust/crates/asset-catalog/src/lib.rs)
 - [`asset-import/src/lib.rs`](../../rust/crates/asset-import/src/lib.rs)
+- [`asset-import/src/gltf_package.rs`](../../rust/crates/asset-import/src/gltf_package.rs)
 - [`authored-scene/src/lib.rs`](../../rust/crates/authored-scene/src/lib.rs)
 - [`authored-scene/src/admission.rs`](../../rust/crates/authored-scene/src/admission.rs)
 
@@ -42,6 +44,16 @@ imports, prefab resolution, and authored scene admission and editing.
   `AnimatedMeshAsset`, catalog entry, and provenance manifest. It consumes the
   canonical bounded GLB scene/skin/clip parser without sampling or voxelizing
   the source.
+- `admit_gltf_source` accepts root JSON plus an immutable set of canonical
+  resource identities and bytes. `gltf_relative_resource_uris` tells an
+  explicit filesystem-owning adapter what to load; neither function performs
+  I/O. `plan_animated_gltf_import` fingerprints that complete closure and packs
+  it into the existing GLB runtime artifact before using the same importer.
+- The CLI resolves those relative resource identities beneath the selected
+  root's directory after canonicalization. Data URIs are decoded only by the
+  bounded Rust admission path. Network, absolute, traversal, query/fragment,
+  duplicate/colliding, missing, extra, unsupported MIME/extension, and quota
+  failures produce no publication candidate.
 - Consumers decide where content bodies live and how admitted scene entities
   become game-owned live state.
 - `authored-scene` admission produces validated built-in `EntityDefinition`

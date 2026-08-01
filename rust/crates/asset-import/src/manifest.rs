@@ -138,6 +138,24 @@ pub fn build_manifest(
     guid: Option<AssetGuid>,
     artifacts: &[GeneratedArtifact],
 ) -> ImportManifest {
+    build_manifest_with_source_hash(
+        source_uri,
+        fingerprint_hex(source_bytes),
+        source_schema_version,
+        mesh_asset_id,
+        guid,
+        artifacts,
+    )
+}
+
+pub fn build_manifest_with_source_hash(
+    source_uri: impl Into<String>,
+    source_hash: impl Into<String>,
+    source_schema_version: u32,
+    mesh_asset_id: impl Into<String>,
+    guid: Option<AssetGuid>,
+    artifacts: &[GeneratedArtifact],
+) -> ImportManifest {
     let mut fingerprints: Vec<_> = artifacts
         .iter()
         .map(|artifact| ArtifactFingerprint {
@@ -150,7 +168,7 @@ pub fn build_manifest(
     ImportManifest {
         schema_version: IMPORT_MANIFEST_SCHEMA_VERSION,
         source_uri: source_uri.into(),
-        source_hash: fingerprint_hex(source_bytes),
+        source_hash: source_hash.into(),
         source_schema_version,
         importer_version: IMPORTER_VERSION,
         mesh_asset_id: mesh_asset_id.into(),

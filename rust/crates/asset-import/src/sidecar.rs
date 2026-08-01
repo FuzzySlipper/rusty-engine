@@ -176,12 +176,30 @@ pub fn init_metadata(
     settings: ImportSettings,
     uniqueness_salt: &str,
 ) -> SidecarMetadata {
+    init_metadata_with_source_hash(
+        source_uri,
+        fingerprint_hex(source_bytes),
+        declared_kind,
+        importer_version,
+        settings,
+        uniqueness_salt,
+    )
+}
+
+pub fn init_metadata_with_source_hash(
+    source_uri: SourceUri,
+    source_hash: String,
+    declared_kind: impl Into<String>,
+    importer_version: u32,
+    settings: ImportSettings,
+    uniqueness_salt: &str,
+) -> SidecarMetadata {
     let guid = AssetGuid::mint(&format!("{}|{uniqueness_salt}", source_uri.value()));
     SidecarMetadata {
         schema_version: SIDECAR_SCHEMA_VERSION,
         guid,
         source_uri,
-        source_hash: fingerprint_hex(source_bytes),
+        source_hash,
         importer_version,
         declared_kind: declared_kind.into(),
         labels: Vec::new(),
@@ -214,10 +232,17 @@ pub fn reconcile(
     current_uri: &SourceUri,
     current_bytes: &[u8],
 ) -> SidecarStatus {
+    reconcile_source_hash(prior, current_uri, fingerprint_hex(current_bytes))
+}
+
+pub fn reconcile_source_hash(
+    prior: Option<&SidecarMetadata>,
+    current_uri: &SourceUri,
+    current_hash: String,
+) -> SidecarStatus {
     let Some(prior) = prior else {
         return SidecarStatus::MissingSidecar;
     };
-    let current_hash = fingerprint_hex(current_bytes);
     if prior.source_hash != current_hash {
         SidecarStatus::ContentChanged {
             from: prior.source_hash.clone(),

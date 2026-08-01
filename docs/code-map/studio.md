@@ -41,6 +41,11 @@ viewport, and its closed external-project adapter protocol.
 
 - The closed adapter protocol defines operations a downstream product may
   implement without granting Studio direct access to engine or game internals.
+- The asset-source chooser truthfully includes `.gltf`; the request still
+  carries only the selected project/host path. A downstream trusted adapter may
+  use `asset-import`'s resource-discovery API to load the bounded closure and
+  must never delegate URI resolution to Angular or the browser. The published
+  runtime resource remains one hash-verified GLB.
 - The external consumer is always selected explicitly by an integration
   command; ordinary Engine work never scans a sibling checkout.
 - Renderer packages are consumed through their package roots.

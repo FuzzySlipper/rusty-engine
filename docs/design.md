@@ -708,13 +708,18 @@ downstream component AST or editor-operation tunnel.
 Static and animated mesh appearance follows the same authority path. The downstream Rust adapter
 validates the selected asset and animation clip, then projects typed resource descriptors,
 `defineAnimatedMesh`, instance creation, and named playback. Studio's trusted Node host only resolves
-bounded project-relative GLB and packed mesh-resource bytes, rejects symbolic links, and verifies
+bounded project-relative mesh sources and packed mesh-resource bytes, rejects symbolic links, and verifies
 the admitted SHA-256 before the shared renderer consumes them; the browser has no filesystem
-authority. Binary animated-mesh import enters through `asset-import`, which reuses the canonical
-bounded GLB scene/skin/clip parser, rejects external buffers and images, and emits one deterministic
-bundle containing the exact GLB bytes, an `AnimatedMeshAsset` descriptor, catalog entry, and
-source/artifact manifest. Reimport replaces that bundle as one structural transaction; the original
-host selection is provenance, not a reopen dependency. `voxel-convert` remains the owner of
+authority. Animated-mesh import enters through `asset-import`. A GLB remains an exact single-file
+source. A JSON `.gltf` enters as an explicit immutable closure containing its root plus only the
+bounded project-relative or data-URI buffers and PNG/JPEG images named by that root. The library
+rejects network, absolute, traversal, ambiguous, missing, extra, unsupported, and over-quota
+resources without resolving the filesystem; the CLI or downstream adapter owns symlink-checked
+loading. It deterministically packs an admitted closure into the same self-contained GLB runtime
+contract, then reuses the canonical scene/skin/clip parser and emits one bundle containing the GLB,
+an `AnimatedMeshAsset` descriptor, catalog entry, and a manifest whose source hash binds the entire
+closure. Reimport replaces that bundle as one structural transaction; the original host selection
+is provenance, not a reopen dependency. `voxel-convert` remains the owner of
 animation sampling and voxel materialization rather than becoming the Studio import operation.
 The Three backend clones imported geometry and materials once into an asset-scoped retained
 definition. Animated instances share those immutable render resources while `SkeletonUtils` gives
