@@ -263,14 +263,14 @@ test('shared host realizes retained, presentation, and inspection families in a 
     'high/high/high',
   ]);
   expect(rotatedVoxelAtlas?.pixels.map(framebufferColorClass)).toEqual([
-    'low/low/high',
-    'high/mid/low',
     'low/mid/high',
     'mid/high/low',
     'low/low/high',
     'high/mid/low',
+    'high/mid/low',
+    'high/mid/low',
     'low/mid/high',
-    'mid/high/low',
+    'low/mid/high',
   ]);
   expect(proof.voxelSurfaceSpecializations).toEqual([{
     material: 'material/voxel-atlas-proof-standard',
@@ -286,8 +286,8 @@ test('shared host realizes retained, presentation, and inspection families in a 
     material: 'material/voxel-atlas-proof-rotated',
     texture: 'texture/voxel-atlas-proof-rotated',
     mapping: 'atlas',
-    tileScaleCells: [1, 1],
-    tileOriginCells: [0, 0],
+    tileScaleCells: [0.5, 2],
+    tileOriginCells: [0.25, -0.5],
     sampleUvMin: [0.25, 0.25],
     sampleUvMax: [0.75, 0.75],
     alphaMode: 'opaque',

@@ -245,17 +245,22 @@ resource headers:
 | `128×1×1` strip | 6 | 24 | 36 | 576 | 144 | 192 | 912 |
 | two resident solid chunks | 10 | 40 | 60 | 960 | 240 | 320 | 1,520 |
 
-The VTX4 browser proof renders a tracked 4-by-3 atlas whose one-pixel red
-content region is surrounded by a blue extruded gutter and an adjacent green
-pixel. One greedy quad spans 16-by-16 cell-space units using four vertices, six
-indices, and 32 bytes of tile coordinates. The real Chromium framebuffer reads
-red at the quad center with no green or blue bleed, while the immutable backend
-readout records the exact half-texel safe UV `[0.375, 0.5]`. The same browser
-frame exercises whole-texture repeat on ordinary and voxel-object geometry,
-including frame replacement, reset, resize, and disposal. Headless replacement
-tests prove that a coordinated texture/material redefinition keeps the same
-geometry resource, four vertices, six indices, and object handle; no remesh or
-per-cell resource is created.
+The VTX4 browser proof renders a tracked asymmetric four-by-four content region
+inside a padded six-by-six atlas. Two greedy quads each retain four vertices,
+six indices, and 32 bytes of tile coordinates. Their coordinates cross negative
+and positive phases over two repeat periods; one uses the standard U/V basis
+with identity scale/origin and the other rotates the basis while using authored
+scale `[0.5, 2]` and origin `[0.25, -0.5]`. Real Chromium reads eight
+framebuffer positions from each quad and must observe the expected distinct
+four-color sequences. Constant sampling, lost repetition, ignored scale/origin,
+or swapped/mirrored orientation therefore changes the visible evidence. The
+immutable backend readout also records the exact safe UV rectangle
+`[0.25, 0.25]` through `[0.75, 0.75]`. The same browser frame exercises
+whole-texture repeat on ordinary and voxel-object geometry, including frame
+replacement, reset, resize, and disposal. Headless replacement tests prove that
+a coordinated texture/material redefinition keeps the same geometry resource,
+four vertices, six indices, and object handle; no remesh or per-cell resource
+is created.
 
 Run the proof with:
 
