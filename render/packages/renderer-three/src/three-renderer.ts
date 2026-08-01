@@ -2233,6 +2233,9 @@ function buildMeshGeometry(
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(streams.positions, positionComponents));
   geometry.setAttribute('normal', new THREE.BufferAttribute(streams.normals, normalComponents));
+  if (streams.uvs !== undefined) {
+    geometry.setAttribute('uv', new THREE.BufferAttribute(streams.uvs, 2));
+  }
   geometry.setIndex(new THREE.BufferAttribute(streams.indices, 1));
   // One draw group per material slot (BufferGeometry.addGroup(start, count, index)).
   payload.groups.forEach((g, i) => geometry.addGroup(g.start, g.count, i));
@@ -2246,6 +2249,7 @@ function buildMeshGeometry(
 interface MeshStreams {
   readonly positions: Float32Array;
   readonly normals: Float32Array;
+  readonly uvs: Float32Array | undefined;
   readonly indices: Uint32Array;
 }
 
@@ -2254,6 +2258,7 @@ function inlineStreams(source: Extract<MeshPayloadDescriptor['source'], { kind: 
   return {
     positions: new Float32Array(source.positions),
     normals: new Float32Array(source.normals),
+    uvs: source.uvs === undefined ? undefined : new Float32Array(source.uvs),
     indices: new Uint32Array(source.indices),
   };
 }
@@ -2346,15 +2351,21 @@ function validatePackedResourceHeader(
   source: Extract<MeshPayloadDescriptor['source'], { kind: 'resource' }>,
   ctx: string,
 ): void {
-  const magic = [0x52, 0x4d, 0x53, 0x48, 0x4c, 0x45, 0x30, 0x31]; // RMSHLE01
+  const version = source.encoding === 'packedStreamsLeV1' ? 0x31 : 0x32;
+  const versionLabel = source.encoding === 'packedStreamsLeV1' ? 'v1' : 'v2';
+  const magic = [0x52, 0x4d, 0x53, 0x48, 0x4c, 0x45, 0x30, version];
   if (bytes.byteLength !== source.byteLength
     || magic.some((byte, index) => bytes[index] !== byte)
     || bytes.byteLength < 16) {
-    throw new RenderApplyError(`${ctx}: mesh resource ${source.resource} has an invalid v1 header`);
+    throw new RenderApplyError(
+      `${ctx}: mesh resource ${source.resource} has an invalid ${versionLabel} header`,
+    );
   }
   const header = new DataView(bytes.buffer, bytes.byteOffset, 16);
   if (header.getUint32(8, true) !== bytes.byteLength || header.getUint32(12, true) === 0) {
-    throw new RenderApplyError(`${ctx}: mesh resource ${source.resource} has an invalid v1 header`);
+    throw new RenderApplyError(
+      `${ctx}: mesh resource ${source.resource} has an invalid ${versionLabel} header`,
+    );
   }
 }
 
@@ -2381,6 +2392,17 @@ function copyResourceStreams(
     source.resource,
     ctx,
   );
+  const uvs = source.uvsByteOffset === undefined
+    ? undefined
+    : sliceFloat32(
+      view,
+      source.uvsByteOffset,
+      vertexCount * attributeComponents(payload, 'uv'),
+      'uvs',
+      source.resource,
+      ctx,
+    );
+  validateTileCoordinateStream(payload, uvs, source.resource, ctx);
   const indices = sliceUint32(
     view,
     source.indicesByteOffset,
@@ -2395,7 +2417,7 @@ function copyResourceStreams(
       );
     }
   }
-  return { positions, normals, indices };
+  return { positions, normals, uvs, indices };
 }
 
 function classifyResourceError(
@@ -2442,6 +2464,17 @@ function copySharedBufferStreams(
     source.buffer,
     ctx,
   );
+  const uvs = source.uvsByteOffset === undefined
+    ? undefined
+    : sliceFloat32(
+      view,
+      source.uvsByteOffset,
+      vertexCount * attributeComponents(payload, 'uv'),
+      'uvs',
+      source.buffer,
+      ctx,
+    );
+  validateTileCoordinateStream(payload, uvs, `buffer ${source.buffer}`, ctx);
   const indices = sliceUint32(view, source.indicesByteOffset, indexCount, source.buffer, ctx);
 
   for (let i = 0; i < indices.length; i++) {
@@ -2451,7 +2484,27 @@ function copySharedBufferStreams(
       );
     }
   }
-  return { positions, normals, indices };
+  return { positions, normals, uvs, indices };
+}
+
+function validateTileCoordinateStream(
+  payload: MeshPayloadDescriptor,
+  uvs: Float32Array | undefined,
+  source: string,
+  ctx: string,
+): void {
+  if (uvs === undefined) return;
+  const voxelCoordinates = payload.provenance === 'voxelChunk'
+    || payload.provenance === 'voxelObject';
+  for (let index = 0; index < uvs.length; index++) {
+    const coordinate = uvs[index] as number;
+    if (!Number.isFinite(coordinate)
+      || (voxelCoordinates && Math.abs(coordinate) > 16_777_216)) {
+      throw new RenderApplyError(
+        `${ctx}: invalid voxel tile coordinate ${coordinate} at uvs[${index}] (${source})`,
+      );
+    }
+  }
 }
 
 /** Map a provider error to a renderer-boundary `RenderApplyError`. */
@@ -2489,9 +2542,9 @@ function releaseBorrowBestEffort(bufferSource: MeshBufferSource, buffer: number)
 }
 
 /** Components-per-vertex for a declared attribute (defaults to 3 if unspecified). */
-function attributeComponents(payload: MeshPayloadDescriptor, name: 'position' | 'normal'): number {
+function attributeComponents(payload: MeshPayloadDescriptor, name: 'position' | 'normal' | 'uv'): number {
   const attribute = payload.layout.attributes.find((a) => a.name === name);
-  return attribute?.components ?? 3;
+  return attribute?.components ?? (name === 'uv' ? 2 : 3);
 }
 
 /** Copy `count` f32s out of a borrowed buffer at `byteOffset`, failing closed if out of bounds. */

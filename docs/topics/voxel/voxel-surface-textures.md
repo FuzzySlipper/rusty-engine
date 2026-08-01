@@ -1,8 +1,9 @@
 # Runtime voxel surface textures
 
-Status: selected VTX0 contract. The coordinate seam and proof are implemented;
-resource admission, mesh streams, canonical material bindings, Three realization,
-and Studio authoring are the ordered VTX1–VTX5 follow-ons.
+Status: selected VTX0 contract with the VTX2 tile-coordinate mesh stream
+implemented. Texture resource admission, canonical material bindings, Three
+sampling realization, and Studio authoring remain the ordered VTX1/VTX3–VTX5
+follow-ons.
 
 ## Decision and ownership
 
@@ -194,11 +195,22 @@ selected above.
 | `5×3×1` rectangle | 46 | 6 | 24 | 36 | unchanged |
 | two adjacent, different materials | 10 | 10 | 40 | 60 | unchanged |
 
-VTX0 emits no new production attribute yet, so geometry and resource bytes are
-identical to the untextured baseline. VTX2 adds eight `f32` values (32 bytes)
-per greedy quad to inline and packed mesh payloads while preserving these exact
-quad/index counts. Expanding to unit faces would turn the `5×3` top and bottom
-alone from two quads into thirty and is rejected as the general atlas design.
+VTX2 adds eight `f32` values (32 bytes) per greedy quad to voxel inline and
+packed-v2 mesh payloads while preserving these exact quad/index counts. Legacy
+color-only payloads omit the attribute and retain exact packed-v1 bytes.
+Expanding to unit faces would turn the `5×3` top and bottom alone from two quads
+into thirty and is rejected as the general atlas design.
+
+The production corpus regression records the attribute cost independently of
+resource headers:
+
+| Corpus | Quads | Vertices | Indices | Position + normal bytes | Index bytes | Tile-coordinate bytes | Complete streams |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| sparse one voxel | 6 | 24 | 36 | 576 | 144 | 192 | 912 |
+| solid `4×4×4` | 6 | 24 | 36 | 576 | 144 | 192 | 912 |
+| checkerboard `4×4×1` | 48 | 192 | 288 | 4,608 | 1,152 | 1,536 | 7,296 |
+| `128×1×1` strip | 6 | 24 | 36 | 576 | 144 | 192 | 912 |
+| two resident solid chunks | 10 | 40 | 60 | 960 | 240 | 320 | 1,520 |
 
 Run the proof with:
 

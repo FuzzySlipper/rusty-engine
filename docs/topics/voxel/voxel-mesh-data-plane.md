@@ -73,7 +73,7 @@ complexity. It also does not use compression: this is a trusted local/LAN
 workflow, and predictable bounded decode and main-thread work matter more than
 internet transfer size.
 
-## `packedStreamsLeV1`
+## `packedStreamsLeV1` and `packedStreamsLeV2`
 
 Each resource is at most 64 MiB. `pack_mesh_resources` partitions an ordered
 payload set deterministically before that ceiling, so a longer animation becomes
@@ -92,6 +92,16 @@ as little-endian `f32`, and indices as little-endian `u32`. The retained source
 descriptor carries the three aligned offsets, complete resource byte length,
 and `packedStreamsLeV1` encoding. Layout counts determine each stream length;
 streams may not overlap or exceed the resource.
+
+`packedStreamsLeV2` is the exact VTX2 extension for payloads that declare the
+two-component tile-coordinate/`uv` attribute. Its header magic is `RMSHLE02`
+and its stream order is positions, normals, tile coordinates, then indices.
+The descriptor carries the fourth aligned offset and the strict Rust and
+TypeScript borders require v2 exactly when that attribute is present. The
+packer partitions when the source shape changes, so a resource never mixes v1
+and v2 payloads. Color-only inputs retain byte-exact v1 serialization; the
+committed one-triangle regression remains
+`sha256:daeca78b7e966826d5311bf7aeb02e11baf414a6fe2fd395d00e9782f21d3659`.
 
 The SHA-256 of the complete header and body is both the `contentHash`
 (`sha256:<64 lowercase hex>`) and the suffix of the identity
@@ -123,7 +133,8 @@ Node host serves hash-checked `.rmesh` bytes over the existing bounded
 crate or renderer-neutral TypeScript package knows that endpoint, filesystem
 layout, or HTTP exists.
 
-An incompatible binary layout must use a new encoding and header version. An
+An incompatible binary layout beyond the defined v1/v2 shapes must use a new
+encoding and header version. An
 incompatible manifest must use a new manifest `kind`. A future change to the
 closed Studio operation family still requires a Studio protocol version bump;
 this optional resource readout does not change that family.

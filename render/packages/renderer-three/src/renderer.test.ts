@@ -521,6 +521,25 @@ function quadPayload(): MeshPayloadDescriptor {
   };
 }
 
+function texturedQuadPayload(): MeshPayloadDescriptor {
+  const payload = quadPayload();
+  if (payload.source.kind !== 'inline') throw new Error('quad fixture must remain inline');
+  return {
+    ...payload,
+    layout: {
+      ...payload.layout,
+      attributes: [...payload.layout.attributes, { name: 'uv', components: 2, kind: 'f32' }],
+    },
+    source: {
+      kind: 'inline',
+      positions: payload.source.positions,
+      normals: payload.source.normals,
+      uvs: [0, 0, 1, 0, 1, 1, 0, 1],
+      indices: payload.source.indices,
+    },
+  };
+}
+
 void test('replaceMeshPayload uploads a BufferGeometry with groups and material slots', () => {
   const r = new ThreeRenderer();
   const h = renderHandle(1);
@@ -887,6 +906,48 @@ function quadResourcePayload(): MeshPayloadDescriptor {
   };
 }
 
+function texturedQuadResourceBytes(): Uint8Array {
+  const inline = texturedQuadPayload().source;
+  assert.equal(inline.kind, 'inline');
+  const positions = inline.positions;
+  const normals = inline.normals;
+  const uvs = inline.uvs!;
+  const indices = inline.indices;
+  const bytes = new Uint8Array(16 + (positions.length + normals.length + uvs.length + indices.length) * 4);
+  bytes.set([0x52, 0x4d, 0x53, 0x48, 0x4c, 0x45, 0x30, 0x32]);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(8, bytes.byteLength, true);
+  view.setUint32(12, 1, true);
+  let offset = 16;
+  for (const value of [...positions, ...normals, ...uvs]) {
+    view.setFloat32(offset, value, true);
+    offset += 4;
+  }
+  for (const value of indices) {
+    view.setUint32(offset, value, true);
+    offset += 4;
+  }
+  return bytes;
+}
+
+function texturedQuadResourcePayload(): MeshPayloadDescriptor {
+  const payload = texturedQuadPayload();
+  return {
+    ...payload,
+    source: {
+      kind: 'resource',
+      resource: RESOURCE_ID,
+      contentHash: RESOURCE_HASH,
+      byteLength: 168,
+      encoding: 'packedStreamsLeV2',
+      positionsByteOffset: 16,
+      normalsByteOffset: 64,
+      uvsByteOffset: 112,
+      indicesByteOffset: 144,
+    },
+  };
+}
+
 class MapResourceSource implements MeshResourceSource {
   readonly resources = new Map<string, Uint8Array>();
   readonly acquired: string[] = [];
@@ -918,6 +979,52 @@ void test('resource mesh payloads produce equivalent geometry and release their 
   const geometry = (renderer.objectFor(handle) as THREE.Mesh).geometry;
   assert.deepEqual(Array.from(geometry.getIndex()!.array), [0, 1, 2, 0, 2, 3]);
   assert.deepEqual(source.acquired, [RESOURCE_ID]);
+  assert.deepEqual(source.released, [RESOURCE_ID]);
+});
+
+void test('inline and packed-v2 voxel meshes converge on one tile-coordinate attribute', () => {
+  const inlineRenderer = new ThreeRenderer();
+  const handle = renderHandle(1);
+  inlineRenderer.applyDiff({ op: 'create', handle, parent: null, node: meshNode() });
+  inlineRenderer.applyDiff({ op: 'replaceMeshPayload', handle, payload: texturedQuadPayload() });
+
+  const source = new MapResourceSource();
+  source.resources.set(RESOURCE_ID, texturedQuadResourceBytes());
+  const packedRenderer = new ThreeRenderer({ meshResourceSource: source });
+  packedRenderer.applyDiff({ op: 'create', handle, parent: null, node: meshNode() });
+  packedRenderer.applyDiff({
+    op: 'replaceMeshPayload',
+    handle,
+    payload: texturedQuadResourcePayload(),
+  });
+
+  const inlineUvs = (inlineRenderer.objectFor(handle) as THREE.Mesh).geometry.getAttribute('uv');
+  const packedUvs = (packedRenderer.objectFor(handle) as THREE.Mesh).geometry.getAttribute('uv');
+  assert.deepEqual(Array.from(inlineUvs.array), [0, 0, 1, 0, 1, 1, 0, 1]);
+  assert.deepEqual(Array.from(packedUvs.array), Array.from(inlineUvs.array));
+  assert.deepEqual(source.released, [RESOURCE_ID]);
+});
+
+void test('packed-v2 voxel UV admission is finite, bounded, fail-atomic, and releases', () => {
+  const source = new MapResourceSource();
+  const invalid = texturedQuadResourceBytes();
+  new DataView(invalid.buffer).setFloat32(112, Number.NaN, true);
+  source.resources.set(RESOURCE_ID, invalid);
+  const renderer = new ThreeRenderer({ meshResourceSource: source });
+  const handle = renderHandle(1);
+  renderer.applyDiff({ op: 'create', handle, parent: null, node: meshNode() });
+  renderer.applyDiff({ op: 'replaceMeshPayload', handle, payload: texturedQuadPayload() });
+  const original = (renderer.objectFor(handle) as THREE.Mesh).geometry;
+
+  assert.throws(
+    () => renderer.applyDiff({
+      op: 'replaceMeshPayload',
+      handle,
+      payload: texturedQuadResourcePayload(),
+    }),
+    /invalid voxel tile coordinate NaN at uvs\[0\]/u,
+  );
+  assert.equal((renderer.objectFor(handle) as THREE.Mesh).geometry, original);
   assert.deepEqual(source.released, [RESOURCE_ID]);
 });
 

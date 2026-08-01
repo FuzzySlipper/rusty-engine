@@ -449,6 +449,11 @@ pub fn voxel_object_mesh_payload(mesh: &svc_mesh::MeshPayload) -> MeshPayloadDes
                     components: 3,
                     kind: MeshAttributeKind::F32,
                 },
+                MeshAttribute {
+                    name: MeshAttributeName::Uv,
+                    components: 2,
+                    kind: MeshAttributeKind::F32,
+                },
             ],
         },
         groups: mesh
@@ -467,6 +472,7 @@ pub fn voxel_object_mesh_payload(mesh: &svc_mesh::MeshPayload) -> MeshPayloadDes
         source: MeshPayloadSource::Inline {
             positions: mesh.positions.clone(),
             normals: mesh.normals.clone(),
+            uvs: Some(mesh.tile_coordinates.clone()),
             indices: mesh.indices.clone(),
         },
         provenance: MeshProvenance::VoxelObject,

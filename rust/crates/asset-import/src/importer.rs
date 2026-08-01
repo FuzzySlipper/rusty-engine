@@ -220,6 +220,7 @@ pub fn import_with_context(source: &SourceMesh, context: &ImportContext) -> Impo
             source: MeshPayloadSource::Inline {
                 positions,
                 normals: source.normals.clone(),
+                uvs: None,
                 indices: source.indices.clone(),
             },
             provenance: MeshProvenance::StaticAsset,

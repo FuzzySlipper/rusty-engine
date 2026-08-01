@@ -150,6 +150,7 @@ pub struct VoxelMeshChunk {
     pub translation: [f32; 3],
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
+    pub tile_coordinates: Vec<f32>,
     pub indices: Vec<u32>,
     pub groups: Vec<VoxelMeshGroup>,
     pub bounds_min: [f32; 3],
@@ -635,6 +636,7 @@ fn build_mesh_chunks(world: &VoxelWorld) -> Result<Vec<VoxelMeshChunk>, Collisio
                 translation: [origin.x as f32, origin.y as f32, origin.z as f32],
                 positions: mesh.positions,
                 normals: mesh.normals,
+                tile_coordinates: mesh.tile_coordinates,
                 indices: mesh.indices,
                 groups: mesh
                     .groups

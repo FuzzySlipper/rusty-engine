@@ -295,11 +295,20 @@ function meshPayload(input: unknown, path: string): void {
     ['inline', 'sharedBuffer', 'resource'] as const,
   );
   if (sourceKind === 'inline') {
-    const source = record(value['source'], `${path}.source`, [
-      'kind', 'positions', 'normals', 'indices',
-    ]);
+    const source = recordOptional(value['source'], `${path}.source`,
+      ['kind', 'positions', 'normals', 'indices'], ['uvs']);
     numberList(source['positions'], `${path}.source.positions`, vertexCount * 3, false);
     numberList(source['normals'], `${path}.source.normals`, vertexCount * 3, false);
+    if (names.has('uv') !== Object.hasOwn(source, 'uvs')) {
+      fail(`${path}.source.uvs`, 'must be present exactly when the uv attribute is declared');
+    }
+    if (Object.hasOwn(source, 'uvs')) {
+      const uvs = numberList(source['uvs'], `${path}.source.uvs`, vertexCount * 2, false);
+      if ((value['provenance'] === 'voxelChunk' || value['provenance'] === 'voxelObject')
+        && uvs.some((coordinate) => Math.abs(coordinate) > 16_777_216)) {
+        fail(`${path}.source.uvs`, 'voxel tile coordinate exceeds the exact f32 integer range');
+      }
+    }
     const indices = numberList(source['indices'], `${path}.source.indices`, indexCount, true);
     indices.forEach((item, index) => {
       if (item >= vertexCount) {
@@ -307,18 +316,24 @@ function meshPayload(input: unknown, path: string): void {
       }
     });
   } else if (sourceKind === 'sharedBuffer') {
-    const source = record(value['source'], `${path}.source`, [
-      'kind', 'buffer', 'positionsByteOffset', 'normalsByteOffset', 'indicesByteOffset',
-    ]);
+    const source = recordOptional(value['source'], `${path}.source`,
+      ['kind', 'buffer', 'positionsByteOffset', 'normalsByteOffset', 'indicesByteOffset'],
+      ['uvsByteOffset']);
     safeInteger(source['buffer'], `${path}.source.buffer`);
     nonNegativeInteger(source['positionsByteOffset'], `${path}.source.positionsByteOffset`);
     nonNegativeInteger(source['normalsByteOffset'], `${path}.source.normalsByteOffset`);
+    if (names.has('uv') !== Object.hasOwn(source, 'uvsByteOffset')) {
+      fail(`${path}.source.uvsByteOffset`, 'must be present exactly when the uv attribute is declared');
+    }
+    if (Object.hasOwn(source, 'uvsByteOffset')) {
+      nonNegativeInteger(source['uvsByteOffset'], `${path}.source.uvsByteOffset`);
+    }
     nonNegativeInteger(source['indicesByteOffset'], `${path}.source.indicesByteOffset`);
   } else {
-    const source = record(value['source'], `${path}.source`, [
+    const source = recordOptional(value['source'], `${path}.source`, [
       'kind', 'resource', 'contentHash', 'byteLength', 'encoding',
       'positionsByteOffset', 'normalsByteOffset', 'indicesByteOffset',
-    ]);
+    ], ['uvsByteOffset']);
     const resource = nonEmptyText(source['resource'], `${path}.source.resource`);
     const contentHash = nonEmptyText(source['contentHash'], `${path}.source.contentHash`);
     const digest = /^sha256:([0-9a-f]{64})$/u.exec(contentHash)?.[1];
@@ -329,30 +344,44 @@ function meshPayload(input: unknown, path: string): void {
     const byteLength = integer(
       source['byteLength'], `${path}.source.byteLength`, 16, 64 * 1024 * 1024,
     );
-    enumeration(source['encoding'], `${path}.source.encoding`, ['packedStreamsLeV1'] as const);
+    const encoding = enumeration(source['encoding'], `${path}.source.encoding`,
+      ['packedStreamsLeV1', 'packedStreamsLeV2'] as const);
+    if (names.has('uv') !== Object.hasOwn(source, 'uvsByteOffset')
+      || (encoding === 'packedStreamsLeV1' && Object.hasOwn(source, 'uvsByteOffset'))
+      || (encoding === 'packedStreamsLeV2' && !Object.hasOwn(source, 'uvsByteOffset'))) {
+      fail(`${path}.source`, 'mesh resource encoding and uv stream must agree');
+    }
     const positionsByteOffset = integer(
       source['positionsByteOffset'], `${path}.source.positionsByteOffset`, 16, 4_294_967_295,
     );
     const normalsByteOffset = integer(
       source['normalsByteOffset'], `${path}.source.normalsByteOffset`, 16, 4_294_967_295,
     );
+    const uvsByteOffset = Object.hasOwn(source, 'uvsByteOffset')
+      ? integer(source['uvsByteOffset'], `${path}.source.uvsByteOffset`, 16, 4_294_967_295)
+      : undefined;
     const indicesByteOffset = integer(
       source['indicesByteOffset'], `${path}.source.indicesByteOffset`, 16, 4_294_967_295,
     );
     for (const [name, offset] of [
       ['positionsByteOffset', positionsByteOffset],
       ['normalsByteOffset', normalsByteOffset],
+      ...(uvsByteOffset === undefined ? [] : [['uvsByteOffset', uvsByteOffset] as const]),
       ['indicesByteOffset', indicesByteOffset],
     ] as const) {
       if (offset % 4 !== 0) fail(`${path}.source.${name}`, 'must be four-byte aligned');
     }
     const positionsEnd = positionsByteOffset + vertexCount * 3 * 4;
     const normalsEnd = normalsByteOffset + vertexCount * 3 * 4;
+    const uvsEnd = uvsByteOffset === undefined ? normalsEnd : uvsByteOffset + vertexCount * 2 * 4;
     const indicesEnd = indicesByteOffset + indexCount * 4;
-    if (positionsEnd > byteLength || normalsEnd > byteLength || indicesEnd > byteLength) {
+    if (positionsEnd > byteLength || normalsEnd > byteLength || uvsEnd > byteLength
+      || indicesEnd > byteLength) {
       fail(`${path}.source`, 'declares a mesh stream outside the resource byte length');
     }
-    if (positionsEnd > normalsByteOffset || normalsEnd > indicesByteOffset) {
+    if (positionsEnd > normalsByteOffset
+      || (uvsByteOffset === undefined ? normalsEnd : uvsEnd) > indicesByteOffset
+      || (uvsByteOffset !== undefined && normalsEnd > uvsByteOffset)) {
       fail(`${path}.source`, 'mesh resource streams must not overlap');
     }
   }
@@ -1026,6 +1055,23 @@ function record(input: unknown, path: string, keys: readonly string[]): Record<s
     if (!expected.has(key)) fail(`${path}.${key}`, 'is unknown');
   });
   keys.forEach((key) => {
+    if (!Object.hasOwn(value, key)) fail(`${path}.${key}`, 'is required');
+  });
+  return value;
+}
+
+function recordOptional(
+  input: unknown,
+  path: string,
+  required: readonly string[],
+  optional: readonly string[],
+): Record<string, unknown> {
+  const value = looseRecord(input, path);
+  const expected = new Set([...required, ...optional]);
+  Object.keys(value).forEach((key) => {
+    if (!expected.has(key)) fail(`${path}.${key}`, 'is unknown');
+  });
+  required.forEach((key) => {
     if (!Object.hasOwn(value, key)) fail(`${path}.${key}`, 'is required');
   });
   return value;

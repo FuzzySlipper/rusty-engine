@@ -136,10 +136,14 @@ fn packed_projection_moves_mesh_streams_out_of_the_control_frame() {
             _ => None,
         })
         .unwrap();
-    assert!(render_asset
-        .meshes
-        .iter()
-        .all(|mesh| matches!(mesh.payload.source, MeshPayloadSource::Resource { .. })));
+    assert!(render_asset.meshes.iter().all(|mesh| matches!(
+        mesh.payload.source,
+        MeshPayloadSource::Resource {
+            encoding: render_model::MeshResourceEncoding::PackedStreamsLeV2,
+            uvs_byte_offset: Some(_),
+            ..
+        }
+    )));
     assert!(
         serde_json::to_vec(&packed.frame).unwrap().len()
             < serde_json::to_vec(&inline.frame).unwrap().len()

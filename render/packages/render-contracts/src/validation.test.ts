@@ -216,4 +216,35 @@ void test('content-addressed mesh resources validate identity, layout, and bound
   const outside = structuredClone(frame);
   outside.ops[0]!.payload.source.byteLength = 99;
   assert.throws(() => decodeRenderFrameDiff(outside), /outside the resource/u);
+
+  type MutableMeshFrame = {
+    ops: Array<{
+      payload: {
+        layout: { attributes: Array<Record<string, unknown>> };
+        source: Record<string, unknown>;
+      };
+    }>;
+  };
+  const textured = structuredClone(frame) as unknown as MutableMeshFrame;
+  textured.ops[0]!.payload.layout.attributes.push({ name: 'uv', components: 2, kind: 'f32' });
+  textured.ops[0]!.payload.source['encoding'] = 'packedStreamsLeV2';
+  textured.ops[0]!.payload.source['uvsByteOffset'] = 88;
+  textured.ops[0]!.payload.source['indicesByteOffset'] = 112;
+  textured.ops[0]!.payload.source['byteLength'] = 124;
+  assert.equal(decodeRenderFrameDiff(textured).ops.length, 1);
+
+  const mismatched = structuredClone(textured);
+  mismatched.ops[0]!.payload.source['encoding'] = 'packedStreamsLeV1';
+  assert.throws(() => decodeRenderFrameDiff(mismatched), /encoding and uv stream/u);
+
+  const malformedInline = structuredClone(frame) as unknown as MutableMeshFrame;
+  malformedInline.ops[0]!.payload.layout.attributes.push({ name: 'uv', components: 2, kind: 'f32' });
+  malformedInline.ops[0]!.payload.source = {
+    kind: 'inline',
+    positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+    normals: [0, 0, 1, 0, 0, 1, 0, 0, 1],
+    uvs: [0, 0, 1, 0, 16_777_218, 1],
+    indices: [0, 1, 2],
+  };
+  assert.throws(() => decodeRenderFrameDiff(malformedInline), /exact f32 integer range/u);
 });

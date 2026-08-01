@@ -42,7 +42,12 @@ pub enum MeshIndexWidth {
 #[serde(rename_all = "camelCase")]
 pub enum MeshResourceEncoding {
     PackedStreamsLeV1,
+    PackedStreamsLeV2,
 }
+
+/// Largest integer-valued tile coordinate that survives an f32 transport
+/// exactly. Voxel producers use the same limit when admitting coordinates.
+pub const MAX_EXACT_VOXEL_TILE_COORDINATE: f32 = 16_777_216.0;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -107,6 +112,8 @@ pub enum MeshPayloadSource {
     Inline {
         positions: Vec<f32>,
         normals: Vec<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        uvs: Option<Vec<f32>>,
         indices: Vec<u32>,
     },
     /// Shared bytes are resolved through the renderer resource provider. This
@@ -115,6 +122,8 @@ pub enum MeshPayloadSource {
         buffer: u64,
         positions_byte_offset: u32,
         normals_byte_offset: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        uvs_byte_offset: Option<u32>,
         indices_byte_offset: u32,
     },
     /// Durable, content-addressed bytes resolved by an explicit renderer host.
@@ -126,6 +135,8 @@ pub enum MeshPayloadSource {
         encoding: MeshResourceEncoding,
         positions_byte_offset: u32,
         normals_byte_offset: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        uvs_byte_offset: Option<u32>,
         indices_byte_offset: u32,
     },
 }
@@ -148,11 +159,13 @@ impl MeshPayloadDescriptor {
             MeshPayloadSource::Inline {
                 positions,
                 normals,
+                uvs,
                 indices,
             } => {
                 if !positions
                     .iter()
                     .chain(normals)
+                    .chain(uvs.iter().flatten())
                     .all(|value| value.is_finite())
                 {
                     return Err(MeshDescriptorError::NonFiniteAttribute);
@@ -172,6 +185,17 @@ impl MeshPayloadDescriptor {
                         actual: normals.len(),
                     });
                 }
+                validate_optional_uv_stream(&self.layout, uvs.as_deref())?;
+                if matches!(
+                    self.provenance,
+                    MeshProvenance::VoxelChunk | MeshProvenance::VoxelObject
+                ) && uvs.as_ref().is_some_and(|values| {
+                    values
+                        .iter()
+                        .any(|value| value.abs() > MAX_EXACT_VOXEL_TILE_COORDINATE)
+                }) {
+                    return Err(MeshDescriptorError::VoxelTileCoordinateOutOfRange);
+                }
                 if indices.len() != self.layout.index_count as usize {
                     return Err(MeshDescriptorError::IndexLengthMismatch {
                         expected: self.layout.index_count as usize,
@@ -189,17 +213,24 @@ impl MeshPayloadDescriptor {
                     });
                 }
             }
-            MeshPayloadSource::SharedBuffer { buffer, .. } => {
+            MeshPayloadSource::SharedBuffer {
+                buffer,
+                uvs_byte_offset,
+                ..
+            } => {
                 if *buffer > JSON_SAFE_U64_MAX {
                     return Err(MeshDescriptorError::UnsafeSharedBufferId { buffer: *buffer });
                 }
+                validate_optional_uv_offset(&self.layout, *uvs_byte_offset)?;
             }
             MeshPayloadSource::Resource {
                 resource,
                 content_hash,
                 byte_length,
+                encoding,
                 positions_byte_offset,
                 normals_byte_offset,
+                uvs_byte_offset,
                 indices_byte_offset,
                 ..
             } => validate_resource_source(
@@ -207,9 +238,13 @@ impl MeshPayloadDescriptor {
                 resource,
                 content_hash,
                 *byte_length,
-                *positions_byte_offset,
-                *normals_byte_offset,
-                *indices_byte_offset,
+                ResourceStreamSource {
+                    encoding: *encoding,
+                    positions_byte_offset: *positions_byte_offset,
+                    normals_byte_offset: *normals_byte_offset,
+                    uvs_byte_offset: *uvs_byte_offset,
+                    indices_byte_offset: *indices_byte_offset,
+                },
             )?,
         }
 
@@ -247,26 +282,50 @@ impl MeshPayloadDescriptor {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ResourceStreamSource {
+    encoding: MeshResourceEncoding,
+    positions_byte_offset: u32,
+    normals_byte_offset: u32,
+    uvs_byte_offset: Option<u32>,
+    indices_byte_offset: u32,
+}
+
 fn validate_resource_source(
     layout: &MeshBufferLayout,
     resource: &str,
     content_hash: &str,
     byte_length: u32,
-    positions_byte_offset: u32,
-    normals_byte_offset: u32,
-    indices_byte_offset: u32,
+    streams: ResourceStreamSource,
 ) -> Result<(), MeshDescriptorError> {
+    let ResourceStreamSource {
+        encoding,
+        positions_byte_offset,
+        normals_byte_offset,
+        uvs_byte_offset,
+        indices_byte_offset,
+    } = streams;
     crate::validate_mesh_resource_identity(resource, content_hash)
         .map_err(|_| MeshDescriptorError::InvalidResourceIdentity)?;
     if !(crate::MESH_RESOURCE_HEADER_BYTES..=crate::MAX_MESH_RESOURCE_BYTES).contains(&byte_length)
     {
         return Err(MeshDescriptorError::InvalidResourceByteLength { byte_length });
     }
+    validate_optional_uv_offset(layout, uvs_byte_offset)?;
+    if matches!(encoding, MeshResourceEncoding::PackedStreamsLeV1) && uvs_byte_offset.is_some() {
+        return Err(MeshDescriptorError::ResourceEncodingDoesNotMatchAttributes);
+    }
+    if matches!(encoding, MeshResourceEncoding::PackedStreamsLeV2) && uvs_byte_offset.is_none() {
+        return Err(MeshDescriptorError::ResourceEncodingDoesNotMatchAttributes);
+    }
     for offset in [
         positions_byte_offset,
         normals_byte_offset,
         indices_byte_offset,
-    ] {
+    ]
+    .into_iter()
+    .chain(uvs_byte_offset)
+    {
         if offset < crate::MESH_RESOURCE_HEADER_BYTES || offset % 4 != 0 {
             return Err(MeshDescriptorError::InvalidResourceOffset { offset });
         }
@@ -274,20 +333,66 @@ fn validate_resource_source(
 
     let positions_bytes = u64::from(layout.vertex_count) * 3 * 4;
     let normals_bytes = positions_bytes;
+    let uvs_bytes = u64::from(layout.vertex_count) * 2 * 4;
     let indices_bytes = u64::from(layout.index_count) * 4;
     let positions_end = u64::from(positions_byte_offset) + positions_bytes;
     let normals_end = u64::from(normals_byte_offset) + normals_bytes;
+    let uvs_end = uvs_byte_offset.map(|offset| u64::from(offset) + uvs_bytes);
     let indices_end = u64::from(indices_byte_offset) + indices_bytes;
     if positions_end > u64::from(byte_length)
         || normals_end > u64::from(byte_length)
+        || uvs_end.is_some_and(|end| end > u64::from(byte_length))
         || indices_end > u64::from(byte_length)
     {
         return Err(MeshDescriptorError::ResourceStreamOutOfRange { byte_length });
     }
     if positions_end > u64::from(normals_byte_offset)
-        || normals_end > u64::from(indices_byte_offset)
+        || uvs_byte_offset.is_some_and(|offset| normals_end > u64::from(offset))
+        || uvs_end.map_or(normals_end, |end| end) > u64::from(indices_byte_offset)
     {
         return Err(MeshDescriptorError::ResourceStreamsOverlap);
+    }
+    Ok(())
+}
+
+fn validate_optional_uv_stream(
+    layout: &MeshBufferLayout,
+    uvs: Option<&[f32]>,
+) -> Result<(), MeshDescriptorError> {
+    let declared = layout
+        .attributes
+        .iter()
+        .any(|attribute| attribute.name == MeshAttributeName::Uv);
+    if declared != uvs.is_some() {
+        return Err(MeshDescriptorError::OptionalAttributeSourceMismatch {
+            name: MeshAttributeName::Uv,
+        });
+    }
+    if let Some(values) = uvs {
+        let expected = layout.vertex_count as usize * 2;
+        if values.len() != expected {
+            return Err(MeshDescriptorError::AttributeLengthMismatch {
+                name: MeshAttributeName::Uv,
+                expected,
+                actual: values.len(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_optional_uv_offset(
+    layout: &MeshBufferLayout,
+    offset: Option<u32>,
+) -> Result<(), MeshDescriptorError> {
+    let declared = layout
+        .attributes
+        .iter()
+        .any(|attribute| attribute.name == MeshAttributeName::Uv);
+    if declared != offset.is_some() {
+        return Err(MeshDescriptorError::OptionalAttributeSourceMismatch {
+            name: MeshAttributeName::Uv,
+        });
     }
     Ok(())
 }
@@ -362,6 +467,10 @@ pub enum MeshDescriptorError {
     },
     InvalidBounds,
     NonFiniteAttribute,
+    OptionalAttributeSourceMismatch {
+        name: MeshAttributeName,
+    },
+    VoxelTileCoordinateOutOfRange,
     UnsafeSharedBufferId {
         buffer: u64,
     },
@@ -376,6 +485,7 @@ pub enum MeshDescriptorError {
         byte_length: u32,
     },
     ResourceStreamsOverlap,
+    ResourceEncodingDoesNotMatchAttributes,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -763,6 +873,7 @@ mod tests {
             source: MeshPayloadSource::Inline {
                 positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
                 normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+                uvs: None,
                 indices: vec![0, 1, 2],
             },
             provenance: MeshProvenance::StaticAsset,
@@ -809,11 +920,65 @@ mod tests {
             buffer: JSON_SAFE_U64_MAX + 1,
             positions_byte_offset: 0,
             normals_byte_offset: 36,
+            uvs_byte_offset: None,
             indices_byte_offset: 72,
         };
         assert!(matches!(
             payload.validate(),
             Err(MeshDescriptorError::UnsafeSharedBufferId { .. })
         ));
+    }
+
+    #[test]
+    fn voxel_uv_stream_must_match_layout_length_finiteness_and_exact_range() {
+        let mut payload = triangle();
+        payload.provenance = MeshProvenance::VoxelObject;
+        payload.layout.attributes.push(MeshAttribute {
+            name: MeshAttributeName::Uv,
+            components: 2,
+            kind: MeshAttributeKind::F32,
+        });
+        assert_eq!(
+            payload.validate(),
+            Err(MeshDescriptorError::OptionalAttributeSourceMismatch {
+                name: MeshAttributeName::Uv,
+            })
+        );
+
+        if let MeshPayloadSource::Inline { uvs, .. } = &mut payload.source {
+            *uvs = Some(vec![0.0; 5]);
+        }
+        assert!(matches!(
+            payload.validate(),
+            Err(MeshDescriptorError::AttributeLengthMismatch {
+                name: MeshAttributeName::Uv,
+                ..
+            })
+        ));
+        if let MeshPayloadSource::Inline { uvs, .. } = &mut payload.source {
+            *uvs = Some(vec![0.0, 0.0, 1.0, 0.0, f32::NAN, 1.0]);
+        }
+        assert_eq!(
+            payload.validate(),
+            Err(MeshDescriptorError::NonFiniteAttribute)
+        );
+        if let MeshPayloadSource::Inline { uvs, .. } = &mut payload.source {
+            *uvs = Some(vec![
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                MAX_EXACT_VOXEL_TILE_COORDINATE + 2.0,
+            ]);
+        }
+        assert_eq!(
+            payload.validate(),
+            Err(MeshDescriptorError::VoxelTileCoordinateOutOfRange)
+        );
+        if let MeshPayloadSource::Inline { uvs, .. } = &mut payload.source {
+            *uvs = Some(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
+        }
+        assert_eq!(payload.validate(), Ok(()));
     }
 }

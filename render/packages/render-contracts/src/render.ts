@@ -67,7 +67,7 @@ export interface MeshAttribute {
 }
 
 export type MeshIndexWidth = 'u32';
-export type MeshResourceEncoding = 'packedStreamsLeV1';
+export type MeshResourceEncoding = 'packedStreamsLeV1' | 'packedStreamsLeV2';
 
 export interface MeshBufferLayout {
   readonly vertexCount: number;
@@ -94,6 +94,7 @@ export type MeshPayloadSource =
       readonly kind: 'inline';
       readonly positions: readonly number[];
       readonly normals: readonly number[];
+      readonly uvs?: readonly number[];
       readonly indices: readonly number[];
     }
   | {
@@ -101,6 +102,7 @@ export type MeshPayloadSource =
       readonly buffer: number;
       readonly positionsByteOffset: number;
       readonly normalsByteOffset: number;
+      readonly uvsByteOffset?: number;
       readonly indicesByteOffset: number;
     }
   | {
@@ -111,6 +113,7 @@ export type MeshPayloadSource =
       readonly encoding: MeshResourceEncoding;
       readonly positionsByteOffset: number;
       readonly normalsByteOffset: number;
+      readonly uvsByteOffset?: number;
       readonly indicesByteOffset: number;
     };
 

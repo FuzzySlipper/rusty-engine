@@ -46,6 +46,7 @@ fn payload(provenance: MeshProvenance) -> MeshPayloadDescriptor {
         source: MeshPayloadSource::Inline {
             positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
             normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            uvs: None,
             indices: vec![0, 1, 2],
         },
         provenance,

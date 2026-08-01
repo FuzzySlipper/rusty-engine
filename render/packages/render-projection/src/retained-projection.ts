@@ -1458,10 +1458,23 @@ function validateMeshPayload(payload: MeshPayloadDescriptor, ctx: string): void 
   const indexCount = requireNonNegativeInteger(payload.layout.indexCount, `${ctx}.layout.indexCount`);
   const positionComponents = attributeComponents(payload, 'position', ctx);
   const normalComponents = attributeComponents(payload, 'normal', ctx);
+  const uvAttribute = payload.layout.attributes.find((attribute) => attribute.name === 'uv');
+  const hasUvs = uvAttribute !== undefined;
 
   if (payload.source.kind === 'inline') {
     requireLength(payload.source.positions, vertexCount * positionComponents, `${ctx}.source.positions`);
     requireLength(payload.source.normals, vertexCount * normalComponents, `${ctx}.source.normals`);
+    if (hasUvs !== (payload.source.uvs !== undefined)) {
+      throw new RenderProjectionError(`${ctx}.source.uvs must match the declared uv attribute`);
+    }
+    if (payload.source.uvs !== undefined) {
+      requireLength(payload.source.uvs, vertexCount * 2, `${ctx}.source.uvs`);
+      payload.source.uvs.forEach((value, index) => requireFinite(value, `${ctx}.source.uvs[${index}]`));
+      if ((payload.provenance === 'voxelChunk' || payload.provenance === 'voxelObject')
+        && payload.source.uvs.some((value) => Math.abs(value) > 16_777_216)) {
+        throw new RenderProjectionError(`${ctx}.source.uvs exceeds the voxel tile-coordinate range`);
+      }
+    }
     requireLength(payload.source.indices, indexCount, `${ctx}.source.indices`);
     payload.source.indices.forEach((index, i) => {
       const value = requireNonNegativeInteger(index, `${ctx}.source.indices[${i}]`);
@@ -1475,6 +1488,12 @@ function validateMeshPayload(payload: MeshPayloadDescriptor, ctx: string): void 
     requireNonNegativeInteger(payload.source.buffer, `${ctx}.source.buffer`);
     requireNonNegativeInteger(payload.source.positionsByteOffset, `${ctx}.source.positionsByteOffset`);
     requireNonNegativeInteger(payload.source.normalsByteOffset, `${ctx}.source.normalsByteOffset`);
+    if (hasUvs !== (payload.source.uvsByteOffset !== undefined)) {
+      throw new RenderProjectionError(`${ctx}.source.uvsByteOffset must match the declared uv attribute`);
+    }
+    if (payload.source.uvsByteOffset !== undefined) {
+      requireNonNegativeInteger(payload.source.uvsByteOffset, `${ctx}.source.uvsByteOffset`);
+    }
     requireNonNegativeInteger(payload.source.indicesByteOffset, `${ctx}.source.indicesByteOffset`);
   } else {
     const digest = /^sha256:([0-9a-f]{64})$/u.exec(payload.source.contentHash)?.[1];
@@ -1496,19 +1515,34 @@ function validateMeshPayload(payload: MeshPayloadDescriptor, ctx: string): void 
       payload.source.normalsByteOffset,
       `${ctx}.source.normalsByteOffset`,
     );
+    const uvsByteOffset = payload.source.uvsByteOffset === undefined
+      ? undefined
+      : requireNonNegativeInteger(
+        payload.source.uvsByteOffset,
+        `${ctx}.source.uvsByteOffset`,
+      );
+    if (hasUvs !== (uvsByteOffset !== undefined)
+      || (payload.source.encoding === 'packedStreamsLeV1' && uvsByteOffset !== undefined)
+      || (payload.source.encoding === 'packedStreamsLeV2' && uvsByteOffset === undefined)) {
+      throw new RenderProjectionError(`${ctx}.source encoding and uv stream must agree`);
+    }
     const indicesByteOffset = requireNonNegativeInteger(
       payload.source.indicesByteOffset,
       `${ctx}.source.indicesByteOffset`,
     );
-    if ([positionsByteOffset, normalsByteOffset, indicesByteOffset]
+    if ([positionsByteOffset, normalsByteOffset, uvsByteOffset, indicesByteOffset]
+      .filter((offset): offset is number => offset !== undefined)
       .some((offset) => offset < 16 || offset % 4 !== 0)) {
       throw new RenderProjectionError(`${ctx}.source offsets must be aligned after the header`);
     }
     const positionsEnd = positionsByteOffset + vertexCount * positionComponents * 4;
     const normalsEnd = normalsByteOffset + vertexCount * normalComponents * 4;
+    const uvsEnd = uvsByteOffset === undefined ? normalsEnd : uvsByteOffset + vertexCount * 2 * 4;
     const indicesEnd = indicesByteOffset + indexCount * 4;
-    if (positionsEnd > byteLength || normalsEnd > byteLength || indicesEnd > byteLength
-      || positionsEnd > normalsByteOffset || normalsEnd > indicesByteOffset) {
+    if (positionsEnd > byteLength || normalsEnd > byteLength || uvsEnd > byteLength
+      || indicesEnd > byteLength || positionsEnd > normalsByteOffset
+      || (uvsByteOffset === undefined ? normalsEnd : uvsEnd) > indicesByteOffset
+      || (uvsByteOffset !== undefined && normalsEnd > uvsByteOffset)) {
       throw new RenderProjectionError(`${ctx}.source streams exceed or overlap the resource`);
     }
   }

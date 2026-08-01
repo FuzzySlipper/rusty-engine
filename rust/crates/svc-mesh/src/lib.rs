@@ -31,6 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use core_space::{ChunkCoord, Direction6, VoxelCoord, VoxelGridSpec};
 use svc_spatial::VoxelWorld;
 use svc_volume::VoxelChunk;
+use texture_mapping::{project_voxel_surface_tile_point, VoxelTextureMappingError};
 
 pub mod texture_mapping;
 
@@ -78,6 +79,9 @@ pub struct MeshPayload {
     pub positions: Vec<f32>,
     /// 3 `f32` per vertex (outward face normal).
     pub normals: Vec<f32>,
+    /// 2 signed `f32` cell-space coordinates per vertex. World chunks use
+    /// absolute voxel coordinates; voxel objects use object-local coordinates.
+    pub tile_coordinates: Vec<f32>,
     /// 3 `u32` per triangle.
     pub indices: Vec<u32>,
     /// Groups in ascending `material_slot` order; their `count`s tile `indices`.
@@ -113,6 +117,7 @@ pub enum MeshError {
         coordinate: [i64; 3],
     },
     PositionOutOfRange,
+    TextureMapping(VoxelTextureMappingError),
 }
 
 impl core::fmt::Display for MeshError {
@@ -135,6 +140,7 @@ impl core::fmt::Display for MeshError {
             MeshError::PositionOutOfRange => {
                 write!(f, "mesh position is outside the finite f32 render range")
             }
+            MeshError::TextureMapping(source) => source.fmt(f),
         }
     }
 }
@@ -366,7 +372,7 @@ pub fn mesh_cells_standalone(
 
     let source_faces = faces.len() as u32;
     let quads = greedy_merge_faces(faces)?;
-    emit_quads(&quads, cell_size, pivot, source_faces, faces_culled)
+    emit_quads(&quads, cell_size, pivot, [0; 3], source_faces, faces_culled)
 }
 
 /// Mesh a resident chunk using its **resident neighbour chunks** for border
@@ -422,6 +428,7 @@ fn mesh_core(
         &quads,
         spec.voxel_size(),
         [0.0; 3],
+        spec.chunk_origin_voxel(coord).to_array(),
         source_faces,
         faces_culled,
     )
@@ -431,6 +438,7 @@ fn emit_quads(
     quads: &[Quad],
     cell_size: f64,
     pivot: [f64; 3],
+    texture_coordinate_origin: [i64; 3],
     source_faces: u32,
     faces_culled: u32,
 ) -> Result<MeshPayload, MeshError> {
@@ -443,6 +451,7 @@ fn emit_quads(
 
     let mut positions: Vec<f32> = Vec::with_capacity(quads.len() * 12);
     let mut normals: Vec<f32> = Vec::with_capacity(quads.len() * 12);
+    let mut tile_coordinates: Vec<f32> = Vec::with_capacity(quads.len() * 8);
     let mut indices: Vec<u32> = Vec::with_capacity(quads.len() * 6);
     let mut groups: Vec<MeshGroup> = Vec::new();
     let mut bmin = [f32::INFINITY; 3];
@@ -482,6 +491,10 @@ fn emit_quads(
             }
             positions.extend_from_slice(&p);
             normals.extend_from_slice(&[nx, ny, nz]);
+            tile_coordinates.extend_from_slice(
+                &project_voxel_surface_tile_point(quad.dir, point, texture_coordinate_origin)
+                    .map_err(MeshError::TextureMapping)?,
+            );
         }
         // Two CCW triangles of the quad: (0,1,2) (0,2,3).
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -516,6 +529,7 @@ fn emit_quads(
     Ok(MeshPayload {
         positions,
         normals,
+        tile_coordinates,
         indices,
         groups,
         bounds,
@@ -562,7 +576,9 @@ mod tests {
     use super::*;
     use core_space::{ChunkDims, GridId, LocalVoxelCoord};
     use core_voxel::VoxelValue;
-    use texture_mapping::{project_voxel_surface_tile_corners, repeat_voxel_tile_coordinate};
+    use texture_mapping::{
+        project_voxel_surface_tile_corners, repeat_voxel_tile_coordinate, VoxelTextureMappingError,
+    };
 
     fn spec() -> VoxelGridSpec {
         VoxelGridSpec::new(GridId::new(0), 1.0, ChunkDims::cubic(4).unwrap()).unwrap()
@@ -915,6 +931,173 @@ mod tests {
         )
         .unwrap();
         assert_eq!([left[1], left[2]], [right[0], right[3]]);
+    }
+
+    #[test]
+    fn production_mesh_stream_uses_world_chunk_origins_and_object_local_coordinates() {
+        let chunk = chunk_with(&[(l(0, 0, 0), 1)]);
+        let world_mesh = mesh_chunk_standalone(&spec(), ChunkCoord::new(1, 0, 0), &chunk).unwrap();
+        let object_mesh = mesh_cells_standalone(
+            1.0,
+            [0.0; 3],
+            &[MeshVoxelCell {
+                coordinate: [0, 0, 0],
+                material_slot: 1,
+            }],
+            10,
+        )
+        .unwrap();
+        assert!(world_mesh.tile_coordinates.contains(&4.0));
+        assert!(!object_mesh.tile_coordinates.contains(&4.0));
+
+        let pivoted = mesh_cells_standalone(
+            1.0,
+            [0.75, -0.5, 2.0],
+            &[MeshVoxelCell {
+                coordinate: [0, 0, 0],
+                material_slot: 1,
+            }],
+            10,
+        )
+        .unwrap();
+        assert_eq!(object_mesh.tile_coordinates, pivoted.tile_coordinates);
+        assert_ne!(object_mesh.positions, pivoted.positions);
+    }
+
+    #[test]
+    fn production_mesh_stream_rejects_the_first_unrepresentable_rectangle() {
+        let last = MeshVoxelCell {
+            coordinate: [texture_mapping::MAX_EXACT_TILE_COORDINATE - 1, 0, 0],
+            material_slot: 1,
+        };
+        let accepted = mesh_cells_standalone(1.0, [0.0; 3], &[last], 10).unwrap();
+        assert_eq!(
+            accepted.tile_coordinates.len(),
+            accepted.stats.vertices as usize * 2
+        );
+
+        let first_rejected = MeshVoxelCell {
+            coordinate: [texture_mapping::MAX_EXACT_TILE_COORDINATE, 0, 0],
+            material_slot: 1,
+        };
+        assert!(matches!(
+            mesh_cells_standalone(1.0, [0.0; 3], &[first_rejected], 10),
+            Err(MeshError::TextureMapping(
+                VoxelTextureMappingError::CoordinateOutOfExactRange { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn representative_corpora_record_exact_tile_attribute_cost() {
+        let sparse = mesh_cells_standalone(
+            1.0,
+            [0.0; 3],
+            &[MeshVoxelCell {
+                coordinate: [0, 0, 0],
+                material_slot: 1,
+            }],
+            10,
+        )
+        .unwrap();
+        let solid_cells = (0..4)
+            .flat_map(|x| (0..4).flat_map(move |y| (0..4).map(move |z| [x, y, z])))
+            .map(|coordinate| MeshVoxelCell {
+                coordinate,
+                material_slot: 1,
+            })
+            .collect::<Vec<_>>();
+        let solid = mesh_cells_standalone(1.0, [0.0; 3], &solid_cells, 512).unwrap();
+        let checker_cells = (0..4)
+            .flat_map(|x| (0..4).map(move |y| [x, y, 0]))
+            .map(|coordinate| MeshVoxelCell {
+                coordinate,
+                material_slot: if (coordinate[0] + coordinate[1]) % 2 == 0 {
+                    1
+                } else {
+                    2
+                },
+            })
+            .collect::<Vec<_>>();
+        let checker = mesh_cells_standalone(1.0, [0.0; 3], &checker_cells, 256).unwrap();
+        let strip_cells = (0..128)
+            .map(|x| MeshVoxelCell {
+                coordinate: [x, 0, 0],
+                material_slot: 1,
+            })
+            .collect::<Vec<_>>();
+        let strip = mesh_cells_standalone(1.0, [0.0; 3], &strip_cells, 1024).unwrap();
+
+        let mut world = VoxelWorld::new(spec());
+        for x in 0..2 {
+            let mut chunk = VoxelChunk::from_spec(&spec());
+            chunk
+                .fill_region(l(0, 0, 0), l(4, 4, 4), VoxelValue::solid_raw(1))
+                .unwrap();
+            world.insert(ChunkCoord::new(x, 0, 0), chunk);
+        }
+        world.drain_dirty();
+        let multi = (0..2)
+            .map(|x| {
+                mesh_chunk_in_world(&world, ChunkCoord::new(x, 0, 0))
+                    .unwrap()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        let measurements = [
+            (
+                "sparse",
+                sparse.stats.quads,
+                sparse.stats.vertices,
+                sparse.stats.indices,
+                sparse.tile_coordinates.len() * 4,
+            ),
+            (
+                "solid",
+                solid.stats.quads,
+                solid.stats.vertices,
+                solid.stats.indices,
+                solid.tile_coordinates.len() * 4,
+            ),
+            (
+                "checker",
+                checker.stats.quads,
+                checker.stats.vertices,
+                checker.stats.indices,
+                checker.tile_coordinates.len() * 4,
+            ),
+            (
+                "strip",
+                strip.stats.quads,
+                strip.stats.vertices,
+                strip.stats.indices,
+                strip.tile_coordinates.len() * 4,
+            ),
+            (
+                "multi",
+                multi.iter().map(|mesh| mesh.stats.quads).sum(),
+                multi.iter().map(|mesh| mesh.stats.vertices).sum(),
+                multi.iter().map(|mesh| mesh.stats.indices).sum(),
+                multi
+                    .iter()
+                    .map(|mesh| mesh.tile_coordinates.len() * 4)
+                    .sum(),
+            ),
+        ];
+        assert_eq!(
+            measurements,
+            [
+                ("sparse", 6, 24, 36, 192),
+                ("solid", 6, 24, 36, 192),
+                ("checker", 48, 192, 288, 1536),
+                ("strip", 6, 24, 36, 192),
+                ("multi", 10, 40, 60, 320),
+            ]
+        );
+        for (_, _, vertices, _, uv_bytes) in measurements {
+            assert_eq!(uv_bytes, vertices as usize * 2 * 4);
+        }
     }
 
     #[test]
