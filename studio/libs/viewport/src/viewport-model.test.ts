@@ -168,6 +168,41 @@ test('selection and preview are disposable shared-renderer frame presentations',
   }
 });
 
+test('grounding inspection adds only disposable triad bounds and contact-plane lines', () => {
+  const canonical: RenderFrameDiff = { schemaVersion: 1, ops: [] };
+  const inspection = {
+    origin: [2, 3, 4] as const,
+    bounds: { min: [1, 0.5, 3] as const, max: [3, 5, 6] as const },
+    contactPlaneY: 0,
+    clearance: 0.5,
+  };
+  const presentation = presentStudioSelection(
+    canonical,
+    null,
+    null,
+    null,
+    null,
+    null,
+    inspection,
+  );
+  const diagnostics = presentation.frame.ops.filter((operation) =>
+    operation.op === 'create'
+    && operation.node.metadata.tags.includes('grounding-inspection'));
+  assert.equal(diagnostics.length, 19);
+  assert.equal(presentation.previewApplied, true);
+  assert.equal(canonical.ops.length, 0);
+  assert.equal(diagnostics.every((operation) =>
+    operation.op === 'create'
+    && operation.node.geometry.kind === 'line'
+    && operation.node.layer === 'debug'), true);
+
+  const malformed = presentStudioSelection(canonical, null, null, null, null, null, {
+    ...inspection,
+    clearance: Number.NaN,
+  });
+  assert.equal(malformed.frame.ops.length, 0);
+});
+
 test('voxel-object placement adds one disposable instance while reusing the canonical definition', () => {
   const canonical: RenderFrameDiff = {
     schemaVersion: 1,

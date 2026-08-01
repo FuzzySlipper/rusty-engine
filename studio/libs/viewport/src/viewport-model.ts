@@ -131,6 +131,16 @@ export interface StudioPresentationFrame {
   readonly voxelPreviewKind: StudioVoxelPreview['kind'] | null;
 }
 
+export interface StudioGroundingInspection {
+  readonly origin: readonly [number, number, number];
+  readonly bounds: {
+    readonly min: readonly [number, number, number];
+    readonly max: readonly [number, number, number];
+  };
+  readonly contactPlaneY: number;
+  readonly clearance: number;
+}
+
 export interface StudioVoxelBrushPreview {
   readonly kind: 'brush';
   readonly transform: Transform;
@@ -176,6 +186,7 @@ export function presentStudioSelection(
   previewTransform: Transform | null,
   voxelPreview: StudioVoxelPreview | null = null,
   voxelObjectPlacementResourceFrame: RenderFrameDiff | null = null,
+  groundingInspection: StudioGroundingInspection | null = null,
 ): StudioPresentationFrame {
   const resolvedFrame = voxelPreview?.kind === 'objectPlacement'
     ? mergeVoxelObjectPlacementResources(
@@ -210,6 +221,7 @@ export function presentStudioSelection(
         metadata: null,
       }];
   const voxelPreviewOps = presentVoxelPreview(resolvedFrame, voxelPreview);
+  const groundingOps = presentGroundingInspection(resolvedFrame, groundingInspection);
   return {
     frame: {
       schemaVersion: 1,
@@ -217,12 +229,73 @@ export function presentStudioSelection(
         ...resolvedFrame.ops,
         ...selectionOps,
         ...voxelPreviewOps,
+        ...groundingOps,
       ],
     },
     selectedHandle: creation?.handle ?? null,
-    previewApplied: transformPreviewApplied || voxelPreviewOps.length > 0,
+    previewApplied: transformPreviewApplied || voxelPreviewOps.length > 0 || groundingOps.length > 0,
     voxelPreviewKind: voxelPreviewOps.length === 0 ? null : voxelPreview?.kind ?? null,
   };
+}
+
+function presentGroundingInspection(
+  frame: RenderFrameDiff,
+  inspection: StudioGroundingInspection | null,
+): readonly RenderDiff[] {
+  if (inspection === null) return [];
+  const values = [
+    ...inspection.origin,
+    ...inspection.bounds.min,
+    ...inspection.bounds.max,
+    inspection.contactPlaneY,
+    inspection.clearance,
+  ];
+  if (!values.every(Number.isFinite)) return [];
+  const [minX, minY, minZ] = inspection.bounds.min;
+  const [maxX, maxY, maxZ] = inspection.bounds.max;
+  if (minX > maxX || minY > maxY || minZ > maxZ) return [];
+  const corners = [
+    [minX, minY, minZ], [maxX, minY, minZ], [maxX, maxY, minZ], [minX, maxY, minZ],
+    [minX, minY, maxZ], [maxX, minY, maxZ], [maxX, maxY, maxZ], [minX, maxY, maxZ],
+  ] as const;
+  const boundsEdges = [
+    [0, 1], [1, 2], [2, 3], [3, 0],
+    [4, 5], [5, 6], [6, 7], [7, 4],
+    [0, 4], [1, 5], [2, 6], [3, 7],
+  ] as const;
+  const extent = Math.max(maxX - minX, maxZ - minZ, 1) * 0.6;
+  const centerX = (minX + maxX) / 2;
+  const centerZ = (minZ + maxZ) / 2;
+  const planeY = inspection.contactPlaneY;
+  const lines: { readonly a: readonly [number, number, number]; readonly b: readonly [number, number, number]; readonly color: readonly [number, number, number, number]; readonly tag: string }[] = [
+    { a: inspection.origin, b: [inspection.origin[0] + extent, inspection.origin[1], inspection.origin[2]], color: [0.95, 0.2, 0.18, 1], tag: 'origin-x' },
+    { a: inspection.origin, b: [inspection.origin[0], inspection.origin[1] + extent, inspection.origin[2]], color: [0.2, 0.9, 0.38, 1], tag: 'origin-y' },
+    { a: inspection.origin, b: [inspection.origin[0], inspection.origin[1], inspection.origin[2] + extent], color: [0.24, 0.48, 1, 1], tag: 'origin-z' },
+    ...boundsEdges.map(([a, b]) => ({ a: corners[a], b: corners[b], color: [1, 0.72, 0.16, 0.95] as const, tag: 'visual-bounds' })),
+    { a: [centerX - extent, planeY, centerZ - extent], b: [centerX + extent, planeY, centerZ - extent], color: [0.2, 0.88, 0.86, 0.82], tag: 'contact-plane' },
+    { a: [centerX + extent, planeY, centerZ - extent], b: [centerX + extent, planeY, centerZ + extent], color: [0.2, 0.88, 0.86, 0.82], tag: 'contact-plane' },
+    { a: [centerX + extent, planeY, centerZ + extent], b: [centerX - extent, planeY, centerZ + extent], color: [0.2, 0.88, 0.86, 0.82], tag: 'contact-plane' },
+    { a: [centerX - extent, planeY, centerZ + extent], b: [centerX - extent, planeY, centerZ - extent], color: [0.2, 0.88, 0.86, 0.82], tag: 'contact-plane' },
+  ];
+  const handles = availablePreviewHandles(frame, lines.length);
+  return lines.map((line, index) => ({
+    op: 'create' as const,
+    handle: handles[index] as RenderHandle,
+    parent: null,
+    node: {
+      geometry: { kind: 'line' as const, a: line.a, b: line.b },
+      material: { color: line.color, wireframe: false },
+      transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+      visible: true,
+      layer: 'debug' as const,
+      metadata: {
+        sourceEntity: null,
+        sourceSceneNode: null,
+        tags: ['studio-presentation', 'grounding-inspection', line.tag],
+        label: 'Renderable grounding inspection',
+      },
+    },
+  }));
 }
 
 /**

@@ -2,7 +2,7 @@ use core_ids::EntityId;
 use core_math::Vec3;
 use entity_state::{
     decode_snapshot, encode_snapshot, EntityCommand, EntityCommandBatch, EntityCommandError,
-    EntityDefinition, EntityDefinitionError, EntityFact, EntityState,
+    EntityDefinition, EntityDefinitionError, EntityFact, EntityState, EntityTransform,
 };
 
 fn door_fixture() -> EntityState {
@@ -102,6 +102,63 @@ fn snapshot_round_trip_preserves_entity_state_and_projection() {
         entities.view(EntityId::new(10))
     );
     assert_eq!(restored.projection(), entities.projection());
+}
+
+#[test]
+fn renderable_local_transform_round_trips_without_moving_entity_authority() {
+    let id = EntityId::new(11);
+    let world = EntityTransform::at(Vec3::new(4.0, 3.0, 2.0));
+    let visual_local = EntityTransform::at(Vec3::new(0.0, -1.25, 0.0));
+    let entities = EntityState::from_definitions([EntityDefinition::new(id, "offset-mesh")
+        .with_full_transform(world)
+        .with_renderable("mesh/offset", true)
+        .with_renderable_local_transform(visual_local)])
+    .expect("valid renderable-local transform");
+
+    assert_eq!(entities.world_transform(id), Some(world));
+    assert_eq!(
+        entities
+            .view(id)
+            .unwrap()
+            .renderable
+            .unwrap()
+            .local_transform,
+        visual_local
+    );
+    let encoded = encode_snapshot(&entities).expect("encode");
+    assert!(encoded.contains("localTransform"));
+    let restored = decode_snapshot(&encoded).expect("decode");
+    assert_eq!(restored.world_transform(id), Some(world));
+    assert_eq!(restored.projection(), entities.projection());
+}
+
+#[test]
+fn identity_renderable_transform_keeps_legacy_snapshot_shape() {
+    let encoded = encode_snapshot(&door_fixture()).expect("encode");
+    assert!(!encoded.contains("localTransform"));
+    let restored = decode_snapshot(&encoded).expect("decode legacy-compatible shape");
+    assert_eq!(
+        restored
+            .view(EntityId::new(10))
+            .unwrap()
+            .renderable
+            .unwrap()
+            .local_transform,
+        EntityTransform::IDENTITY
+    );
+}
+
+#[test]
+fn invalid_renderable_local_transform_is_typed_and_rejected() {
+    let id = EntityId::new(12);
+    let invalid = EntityState::from_definitions([EntityDefinition::new(id, "invalid-offset")
+        .with_renderable("mesh/offset", true)
+        .with_renderable_local_transform(EntityTransform::at(Vec3::new(0.0, f32::NAN, 0.0)))])
+    .expect_err("non-finite visual offsets must reject");
+    assert_eq!(
+        invalid,
+        EntityDefinitionError::InvalidRenderableTransform { entity: id }
+    );
 }
 
 #[test]

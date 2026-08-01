@@ -155,6 +155,12 @@ export class StudioAdapterClient {
     return this.#mutation('setSceneObjectTransform', input);
   }
 
+  setSceneObjectRenderableTransform(
+    input: RequestInput<'setSceneObjectRenderableTransform'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('setSceneObjectRenderableTransform', input);
+  }
+
   setSceneObjectAppearance(
     input: RequestInput<'setSceneObjectAppearance'>,
   ): Promise<ProjectMutationAppliedResponse> {
@@ -538,6 +544,7 @@ type MutationRequestType =
   | 'renameSceneObject'
   | 'reparentSceneObject'
   | 'setSceneObjectTransform'
+  | 'setSceneObjectRenderableTransform'
   | 'setSceneObjectAppearance'
   | 'setEntityCollision'
   | 'setEntityKinematic'

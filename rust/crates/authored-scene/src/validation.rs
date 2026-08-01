@@ -11,6 +11,7 @@ use crate::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransformInvalid {
+    RequiresSchema5,
     NonFiniteTranslation,
     TranslationOutOfRange,
     NonFiniteRotation,
@@ -22,6 +23,7 @@ pub enum TransformInvalid {
 impl TransformInvalid {
     pub const fn code(self) -> &'static str {
         match self {
+            Self::RequiresSchema5 => "requires-schema-5",
             Self::NonFiniteTranslation => "non-finite-translation",
             Self::TranslationOutOfRange => "translation-out-of-range",
             Self::NonFiniteRotation => "non-finite-rotation",
@@ -55,6 +57,13 @@ pub enum SceneValidationError {
     InvalidTransform {
         node: SceneNodeId,
         reason: TransformInvalid,
+    },
+    InvalidRenderableTransform {
+        node: SceneNodeId,
+        reason: TransformInvalid,
+    },
+    RenderableTransformWithoutAsset {
+        node: SceneNodeId,
     },
     BlankLabel {
         node: SceneNodeId,
@@ -128,6 +137,8 @@ impl SceneValidationError {
             Self::UnknownParent { .. } => "unknown-parent",
             Self::Cycle { .. } => "cycle",
             Self::InvalidTransform { .. } => "invalid-transform",
+            Self::InvalidRenderableTransform { .. } => "invalid-renderable-transform",
+            Self::RenderableTransformWithoutAsset { .. } => "renderable-transform-without-asset",
             Self::BlankLabel { .. } => "blank-label",
             Self::BlankTag { .. } => "blank-tag",
             Self::DuplicateTag { .. } => "duplicate-tag",
@@ -178,6 +189,14 @@ impl SceneValidationError {
             Self::InvalidTransform { node, reason } => (
                 format!("nodes[{}].transform", node.raw()),
                 format!("transform is invalid: {}", reason.code()),
+            ),
+            Self::InvalidRenderableTransform { node, reason } => (
+                format!("nodes[{}].renderableTransform", node.raw()),
+                format!("renderable transform is invalid: {}", reason.code()),
+            ),
+            Self::RenderableTransformWithoutAsset { node } => (
+                format!("nodes[{}].renderableTransform", node.raw()),
+                "renderable transform requires an asset-bearing node".to_string(),
             ),
             Self::BlankLabel { node } => (
                 format!("nodes[{}].metadata.label", node.raw()),
@@ -345,6 +364,22 @@ pub fn validate_scene(document: &FlatSceneDocument) -> SceneValidationReport {
                 node: node.id,
                 reason,
             });
+        }
+        if let Err(reason) = validate_transform(node.renderable_transform) {
+            errors.push(SceneValidationError::InvalidRenderableTransform {
+                node: node.id,
+                reason,
+            });
+        } else if node.renderable_transform != SceneTransform::IDENTITY {
+            if document.schema_version < 5 || document.metadata.authoring_format_version < 5 {
+                errors.push(SceneValidationError::InvalidRenderableTransform {
+                    node: node.id,
+                    reason: TransformInvalid::RequiresSchema5,
+                });
+            } else if node.kind.asset().is_none() {
+                errors
+                    .push(SceneValidationError::RenderableTransformWithoutAsset { node: node.id });
+            }
         }
         if node
             .metadata

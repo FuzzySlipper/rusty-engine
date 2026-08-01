@@ -619,9 +619,10 @@ fn register_builtin_components(
             RENDERABLE_COMPONENT_TYPE_ID,
         ))
         .with_validator(|value| {
-            (!value.asset.trim().is_empty())
-                .then_some(())
-                .ok_or_else(|| "render asset is empty".to_string())
+            (!value.asset.trim().is_empty()
+                && crate::definition::transform_is_valid(value.local_transform))
+            .then_some(())
+            .ok_or_else(|| "render asset is empty or local transform is invalid".to_string())
         }),
     )?;
     registry.register(

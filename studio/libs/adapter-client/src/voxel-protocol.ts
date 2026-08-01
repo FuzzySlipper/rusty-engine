@@ -469,6 +469,7 @@ export type ProjectMutationReceipt =
   | { readonly kind: 'sceneObjectRenamed'; readonly entityId: number }
   | { readonly kind: 'sceneObjectReparented'; readonly entityId: number }
   | { readonly kind: 'sceneObjectTransformSet'; readonly entityId: number }
+  | { readonly kind: 'sceneObjectRenderableTransformSet'; readonly entityId: number }
   | { readonly kind: 'sceneObjectAppearanceSet'; readonly entityId: number }
   | { readonly kind: 'entityCollisionSet'; readonly entityId: number; readonly attached: boolean }
   | { readonly kind: 'entityKinematicSet'; readonly entityId: number; readonly attached: boolean }
@@ -543,6 +544,7 @@ export function validateProjectMutationReceipt(input: unknown, path: string): vo
     case 'sceneObjectRenamed':
     case 'sceneObjectReparented':
     case 'sceneObjectTransformSet':
+    case 'sceneObjectRenderableTransformSet':
     case 'sceneObjectAppearanceSet':
       number(receipt(['entityId'])['entityId'], `${path}.entityId`);
       return;

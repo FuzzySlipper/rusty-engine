@@ -104,11 +104,13 @@ pub struct CollisionSnapshot {
     pub static_collider: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RenderableSnapshot {
     pub visible: bool,
     pub asset: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_transform: Option<TransformSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -215,6 +217,13 @@ impl EntityState {
                     renderable: self.renderable(*entity).map(|value| RenderableSnapshot {
                         visible: value.visible,
                         asset: value.asset.clone(),
+                        local_transform: (value.local_transform != EntityTransform::IDENTITY).then(
+                            || {
+                                transform_to_snapshot(TransformComponent::from_transform(
+                                    value.local_transform,
+                                ))
+                            },
+                        ),
                     }),
                     kinematic: self.kinematic(*entity).map(|value| KinematicSnapshot {
                         half_extents: value.half_extents.to_array(),
@@ -321,6 +330,11 @@ impl EntityState {
             definition.renderable = entity.renderable.map(|value| RenderableComponent {
                 visible: value.visible,
                 asset: value.asset,
+                local_transform: value
+                    .local_transform
+                    .map(transform_from_snapshot)
+                    .map(TransformComponent::transform)
+                    .unwrap_or(EntityTransform::IDENTITY),
             });
             definition.kinematic = entity.kinematic.map(|value| KinematicComponent {
                 half_extents: vec3(value.half_extents),

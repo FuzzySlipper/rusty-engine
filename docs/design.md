@@ -75,6 +75,13 @@ explicit read-only provider views; the isolated renderer workspace knows no game
 - read-only entity views, projection nodes, and an identity-ordered reverse containment index; and
 - snapshot encoding plus one atomic `EntityCommandBatch` mutation boundary.
 
+Renderable facts carry one explicit renderable-local transform in addition to the entity transform.
+The entity transform remains the sole world, gameplay, and spatial authority. Render projection
+composes `entity world * renderable local` only when constructing the retained visual instance;
+collision, navigation, motion, triggers, gameplay services, and entity relationships never observe
+that presentation offset. Identity is the compatibility default and is omitted from older durable
+snapshot and authored-scene encodings. Authored scene schema 5 owns non-identity visual-local TRS.
+
 `ComponentRegistry` is a bounded construction input for a particular `EntityState`, not a global
 plugin registry. Registration maps one stable `ComponentTypeId` to one Rust type and rejects
 duplicate identities, conflicting Rust types, and codec drift before changing the instance. Rust
@@ -744,6 +751,10 @@ selection, so the gizmo reanchors to the newly accepted or selected transform. E
 Escape, or pointer cancellation restores accepted or pointer-down state without publication. Voxel
 brush and bounded conversion samples use the same disposable debug-layer frame path. Every
 transform commit remains hash- and revision-guarded and is canonically reread from the Rust adapter.
+Studio exposes entity/world transform and renderable-local transform as separate owners. Its origin
+triad, admitted mesh bounds, contact plane, and numeric clearance are disposable observations of the
+retained frame. “Align lower bound to contact plane” solves a new renderable-local offset and submits
+the named revision-guarded scene mutation; it does not move entity or spatial authority.
 
 Lighting preview is also disposable Studio presentation state. `Work Light` removes authored light
 operations only from the frame being presented and adds one ambient and one directional editor light

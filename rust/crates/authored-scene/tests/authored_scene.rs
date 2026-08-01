@@ -19,6 +19,7 @@ fn tree_flat_roundtrip_and_world_transforms_are_deterministic() {
     let child = SceneNode {
         id: SceneNodeId::new(2),
         transform: translated(2.0, 0.0, 0.0),
+        renderable_transform: SceneTransform::IDENTITY,
         kind: SceneNodeKind::StaticMesh(mesh_reference()),
         metadata: NodeMetadata {
             label: Some("Child".into()),
@@ -29,6 +30,7 @@ fn tree_flat_roundtrip_and_world_transforms_are_deterministic() {
     let root = SceneNode {
         id: SceneNodeId::new(1),
         transform: translated(10.0, 0.0, 0.0),
+        renderable_transform: SceneTransform::IDENTITY,
         kind: SceneNodeKind::EmptyGroup,
         metadata: NodeMetadata::default(),
         children: vec![child],
@@ -89,6 +91,50 @@ fn strict_codec_is_canonical_and_rejects_nested_unknowns_and_trailing_input() {
         .unwrap_err()
         .message
         .contains("asset-kind-mismatch"));
+}
+
+#[test]
+fn renderable_transform_is_canonical_and_legacy_scenes_default_to_identity() {
+    let mut document = simple_document();
+    document.schema_version = 5;
+    document.metadata.authoring_format_version = 5;
+    document.nodes[1].renderable_transform = translated(0.0, -1.5, 0.0);
+
+    let encoded = encode_scene(&document).unwrap();
+    assert!(encoded.contains("renderableTransform"));
+    let restored = decode_scene(&encoded).unwrap();
+    assert_eq!(restored, document.canonical());
+
+    let legacy = encode_scene(&simple_document()).unwrap();
+    assert!(!legacy.contains("renderableTransform"));
+    let restored_legacy = decode_scene(&legacy).unwrap();
+    assert_eq!(
+        restored_legacy.nodes[1].renderable_transform,
+        SceneTransform::IDENTITY
+    );
+}
+
+#[test]
+fn renderable_transform_requires_current_schema_and_an_asset_owner() {
+    let mut old_schema = simple_document();
+    old_schema.nodes[1].renderable_transform = translated(0.0, -1.0, 0.0);
+    assert!(validate_scene(&old_schema).errors.contains(
+        &SceneValidationError::InvalidRenderableTransform {
+            node: SceneNodeId::new(2),
+            reason: TransformInvalid::RequiresSchema5,
+        }
+    ));
+
+    let mut non_asset = FlatSceneDocument::new(SceneId::new(5));
+    non_asset.nodes.push(SceneNodeRecord {
+        renderable_transform: translated(0.0, -1.0, 0.0),
+        ..record(1, None, SceneNodeKind::EmptyGroup)
+    });
+    assert!(validate_scene(&non_asset).errors.contains(
+        &SceneValidationError::RenderableTransformWithoutAsset {
+            node: SceneNodeId::new(1),
+        }
+    ));
 }
 
 #[test]
@@ -240,6 +286,53 @@ fn typed_edits_use_revisions_and_never_partially_mutate_on_failure() {
 }
 
 #[test]
+fn renderable_transform_edit_is_revision_guarded_and_asset_scoped() {
+    let mut document = simple_document();
+    let offset = translated(0.0, -2.0, 0.0);
+    let receipt = SceneEditService
+        .apply(
+            &mut document,
+            0,
+            SceneEditCommand::SetRenderableTransform {
+                id: SceneNodeId::new(2),
+                transform: offset,
+            },
+        )
+        .unwrap();
+    assert_eq!((receipt.revision_before, receipt.revision_after), (0, 1));
+    assert_eq!(document.schema_version, 5);
+    assert_eq!(document.metadata.authoring_format_version, 5);
+    assert_eq!(document.nodes[1].renderable_transform, offset);
+
+    let stale_source = document.clone();
+    assert!(matches!(
+        SceneEditService.apply(
+            &mut document,
+            0,
+            SceneEditCommand::SetRenderableTransform {
+                id: SceneNodeId::new(2),
+                transform: SceneTransform::IDENTITY,
+            },
+        ),
+        Err(SceneEditError::StaleRevision { .. })
+    ));
+    assert_eq!(document, stale_source);
+
+    assert!(matches!(
+        SceneEditService.apply(
+            &mut document,
+            1,
+            SceneEditCommand::SetRenderableTransform {
+                id: SceneNodeId::new(1),
+                transform: offset,
+            },
+        ),
+        Err(SceneEditError::WrongObjectKind { .. })
+    ));
+    assert_eq!(document, stale_source);
+}
+
+#[test]
 fn specialized_edits_validate_kinds_and_reconcile_voxel_dependencies() {
     let first_voxel = voxel_reference();
     let second_voxel = AssetReference::new(
@@ -364,7 +457,10 @@ fn selection_does_not_canonicalize_or_mutate_the_authored_document() {
 
 #[test]
 fn admission_resolves_every_reference_and_applies_as_one_entity_transaction() {
-    let document = complete_document();
+    let mut document = complete_document();
+    document.schema_version = 5;
+    document.metadata.authoring_format_version = 5;
+    document.nodes[1].renderable_transform = translated(0.0, -1.5, 0.0);
     let empty_context = SceneResolutionContext::default();
     let error = SceneAdmissionPlan::prepare(&document, &empty_context).unwrap_err();
     let SceneAdmissionError::UnresolvedReferences { errors } = error else {
@@ -453,6 +549,22 @@ fn admission_resolves_every_reference_and_applies_as_one_entity_transaction() {
             .unwrap()
             .asset,
         "mesh/room"
+    );
+    assert_eq!(
+        state
+            .view(EntityId::new(101))
+            .unwrap()
+            .renderable
+            .unwrap()
+            .local_transform,
+        translated(0.0, -1.5, 0.0)
+    );
+    assert_eq!(
+        state
+            .world_transform(EntityId::new(101))
+            .unwrap()
+            .translation,
+        Vec3::new(12.0, 0.0, 0.0)
     );
 }
 
@@ -648,6 +760,7 @@ fn record(id: u64, parent: Option<u64>, kind: SceneNodeKind) -> SceneNodeRecord 
         parent: parent.map(SceneNodeId::new),
         child_order: 0,
         transform: SceneTransform::IDENTITY,
+        renderable_transform: SceneTransform::IDENTITY,
         kind,
         metadata: NodeMetadata::default(),
     }

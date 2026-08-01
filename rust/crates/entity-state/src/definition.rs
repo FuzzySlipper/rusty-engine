@@ -91,7 +91,15 @@ impl EntityDefinition {
         self.renderable = Some(RenderableComponent {
             visible,
             asset: asset.into(),
+            local_transform: EntityTransform::IDENTITY,
         });
+        self
+    }
+
+    pub fn with_renderable_local_transform(mut self, transform: EntityTransform) -> Self {
+        if let Some(renderable) = &mut self.renderable {
+            renderable.local_transform = transform;
+        }
         self
     }
 
@@ -138,6 +146,7 @@ pub enum EntityDefinitionError {
     InvalidTransform { entity: EntityId },
     InvalidBounds { entity: EntityId },
     EmptyAsset { entity: EntityId },
+    InvalidRenderableTransform { entity: EntityId },
     KinematicMissingTransform { entity: EntityId },
     InvalidKinematicHalfExtents { entity: EntityId },
     InvalidKinematicVelocity { entity: EntityId },
@@ -204,6 +213,15 @@ pub(crate) fn validate_definition(
         .is_some_and(|value| value.asset.trim().is_empty())
     {
         return Err(EntityDefinitionError::EmptyAsset {
+            entity: definition.id,
+        });
+    }
+    if definition
+        .renderable
+        .as_ref()
+        .is_some_and(|value| !transform_is_valid(value.local_transform))
+    {
+        return Err(EntityDefinitionError::InvalidRenderableTransform {
             entity: definition.id,
         });
     }

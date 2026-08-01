@@ -64,6 +64,8 @@ struct StoredSceneNode {
     #[serde(default)]
     pub tags: Vec<String>,
     pub transform: StoredTransform,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renderable_transform: Option<StoredTransform>,
     pub kind: StoredNodeKind,
 }
 
@@ -311,6 +313,8 @@ impl From<&SceneNodeRecord> for StoredSceneNode {
             label: node.metadata.label.clone(),
             tags: node.metadata.tags.clone(),
             transform: node.transform.into(),
+            renderable_transform: (node.renderable_transform != SceneTransform::IDENTITY)
+                .then(|| node.renderable_transform.into()),
             kind: StoredNodeKind::from(&node.kind),
         }
     }
@@ -324,6 +328,10 @@ impl StoredSceneNode {
             parent: self.parent.map(SceneNodeId::new),
             child_order: self.child_order,
             transform: self.transform.into(),
+            renderable_transform: self
+                .renderable_transform
+                .map(Into::into)
+                .unwrap_or(SceneTransform::IDENTITY),
             kind: self.kind.into_kind(&format!("{path}.kind"))?,
             metadata: NodeMetadata {
                 label: self.label,

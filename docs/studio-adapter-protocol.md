@@ -1,6 +1,6 @@
 # Studio external-project adapter protocol
 
-Status: protocol 12 implemented in Engine; exact downstream adapter certification required
+Status: protocol 13 implemented in Engine; exact downstream adapter certification required
 
 Rusty Engine Studio talks to one project-owned Rust adapter at a time through a bounded JSON-lines
 process. The adapter is a downstream composition root: it understands that project's layout,
@@ -13,7 +13,7 @@ against a real external checkout without turning that checkout into an ordinary 
 
 ## Closed protocol
 
-Every request carries `protocolVersion: 12` and a caller-selected `requestId`. Version 12 contains
+Every request carries `protocolVersion: 13` and a caller-selected `requestId`. Version 13 contains
 only these tagged request families:
 
 | Request | Purpose | Canonical authority |
@@ -25,6 +25,7 @@ only these tagged request families:
 | `createScene`, `renameScene`, `deleteScene`, `setEntryScene` | Manage the finite stored scene set and active entry scene through project-owned policy. | project adapter, `authored-scene`, `content-store` |
 | `createSceneObject`, `deleteSceneObject`, `renameSceneObject`, `reparentSceneObject` | Mutate canonical hierarchy and lifecycle with expected project and scene identity. | `authored-scene`, `entity-state`, downstream admission, `content-store` |
 | `setSceneObjectTransform`, `setEntityTranslation` | Apply a full or legacy translation-only authored transform with expected project hash and scene revision. | `authored-scene`, downstream admission, `content-store` |
+| `setSceneObjectRenderableTransform` | Apply one presentation-only local TRS after entity/world authority with expected project hash and scene revision. | `authored-scene`, `entity-state`, render projection, downstream admission |
 | `setSceneObjectAppearance` | Replace empty, static-mesh, or typed light appearance and rerun resource/projection admission. | `authored-scene`, `asset-catalog`, render projection, downstream admission |
 | `setEntityCollision`, `setEntityKinematic` | Attach, replace, or remove named entity components atomically. | `entity-state`, downstream spatial admission, `content-store` |
 | `upsertMaterial` | Create or replace one stored material definition. | `asset-catalog`, downstream admission, `content-store` |
@@ -84,9 +85,15 @@ Opening `content/projects/loading-bay.project.json` exercises the shipped Engine
 The adapter returns the canonical project, catalog, scene, entity-state, and content-manifest codec
 results alongside inspection DTOs, voxel inspection, bounded entity-component identity references,
 an authored-scene hierarchy readout, and the shared render frame. Hierarchy order, node identity,
-parentage, kind, and local/world transforms are produced in Rust. Every response carries a complete
+parentage, kind, local/world transform, and renderable-local transform are produced in Rust. Every response carries a complete
 frame, including resource definitions, so Studio can atomically replace the shared renderer channel.
 These are readouts rebuilt from admitted Rust state on every read, not a second content model.
+
+Protocol 13 keeps grounding observational. Studio derives selected admitted static/animated mesh
+bounds from the complete retained frame, presents an origin triad, bounds, contact plane, and
+numeric clearance on the disposable debug layer, then submits only the named renderable-local
+mutation when the user aligns the lower bound. The adapter validates and publishes through
+`authored-scene`; entity/world, collision, navigation, and gameplay transforms do not change.
 
 Protocol 9 also admits one optional, independently versioned `meshResources` readout for adapters
 that opt into content-addressed retained mesh sources. The frame carries only renderer-neutral

@@ -28,6 +28,7 @@ import {
   presentStudioLighting,
   presentStudioSelection,
   type StudioLightingMode,
+  type StudioGroundingInspection,
   type StudioVoxelPreview,
 } from './viewport-model.js';
 import {
@@ -138,6 +139,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     translation: [0.25, 0.25, 0.25],
   });
   readonly voxelPreview = input<StudioVoxelPreview | null>(null);
+  readonly groundingInspection = input<StudioGroundingInspection | null>(null);
   readonly voxelObjectPlacementResourceFrame = input<RenderFrameDiff | null>(null);
   readonly objectPlacementInteractive = input(true);
   readonly animatedMeshManifest = input<RendererAnimatedMeshResourceManifest | null>(null);
@@ -524,6 +526,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       previewTransform,
       voxelPreview,
       voxelObjectPlacementResourceFrame,
+      this.groundingInspection(),
       lightingMode,
     ]);
     if (surface === null) return;
@@ -548,6 +551,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       previewTransform,
       voxelPreview,
       voxelObjectPlacementResourceFrame,
+      this.groundingInspection(),
     );
     const lighting = presentStudioLighting(presentation.frame, lightingMode);
     const submitted = this.#submitFrame(

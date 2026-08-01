@@ -48,10 +48,15 @@ pub struct CollisionComponent {
 
 impl EntityComponent for CollisionComponent {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RenderableComponent {
     pub visible: bool,
     pub asset: String,
+    /// Presentation-only transform composed after the entity world transform.
+    ///
+    /// Spatial, collision, navigation, and gameplay owners continue to observe
+    /// the entity transform without this local visual correction.
+    pub local_transform: EntityTransform,
 }
 
 impl EntityComponent for RenderableComponent {}

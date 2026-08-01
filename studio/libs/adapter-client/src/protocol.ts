@@ -58,7 +58,7 @@ export type * from './voxel-protocol.js';
 export type * from './voxel-object-protocol.js';
 export { MAX_VOXEL_OBJECT_INSTANCE_BATCH } from './voxel-protocol.js';
 
-export const STUDIO_ADAPTER_PROTOCOL_VERSION = 12 as const;
+export const STUDIO_ADAPTER_PROTOCOL_VERSION = 13 as const;
 // Requests remain compact control-plane commands. Responses include complete
 // retained-frame readouts; 64 MiB admits the checked 96x144x96 voxel-object
 // corpus while retaining a finite host/browser liveness guard.
@@ -89,6 +89,7 @@ export type StudioAdapterRequest =
   | RenameSceneObjectRequest
   | ReparentSceneObjectRequest
   | SetSceneObjectTransformRequest
+  | SetSceneObjectRenderableTransformRequest
   | SetSceneObjectAppearanceRequest
   | SetEntityCollisionRequest
   | SetEntityKinematicRequest
@@ -235,6 +236,14 @@ export interface ReparentSceneObjectRequest extends RequestHeader {
 
 export interface SetSceneObjectTransformRequest extends RequestHeader {
   readonly type: 'setSceneObjectTransform';
+  readonly expectedProjectHash: string;
+  readonly expectedSceneRevision: number;
+  readonly entityId: number;
+  readonly transform: Transform;
+}
+
+export interface SetSceneObjectRenderableTransformRequest extends RequestHeader {
+  readonly type: 'setSceneObjectRenderableTransform';
   readonly expectedProjectHash: string;
   readonly expectedSceneRevision: number;
   readonly entityId: number;
@@ -873,6 +882,7 @@ export const STUDIO_ADAPTER_OPERATIONS = [
   'renameSceneObject',
   'reparentSceneObject',
   'setSceneObjectTransform',
+  'setSceneObjectRenderableTransform',
   'setSceneObjectAppearance',
   'setEntityCollision',
   'setEntityKinematic',
@@ -1087,6 +1097,8 @@ export interface SceneHierarchyNodeReadout {
   readonly entityId: number | null;
   readonly localTransform: Transform;
   readonly worldTransform: Transform;
+  /** Presentation-only transform composed after world authority. */
+  readonly renderableTransform: Transform;
 }
 
 export interface NamedCount {
@@ -1990,6 +2002,7 @@ function hierarchyNode(input: unknown, path: string): void {
     'entityId',
     'localTransform',
     'worldTransform',
+    'renderableTransform',
   ]);
   for (const field of ['nodeId', 'childOrder', 'displayOrder', 'depth']) {
     integer(value[field], `${path}.${field}`);
@@ -2014,6 +2027,7 @@ function hierarchyNode(input: unknown, path: string): void {
   nullable(value['entityId'], `${path}.entityId`, integer);
   transform(value['localTransform'], `${path}.localTransform`);
   transform(value['worldTransform'], `${path}.worldTransform`);
+  transform(value['renderableTransform'], `${path}.renderableTransform`);
 }
 
 function transform(input: unknown, path: string): void {

@@ -240,6 +240,7 @@ impl SceneAdmissionPlan {
             if let Some(asset) = node.kind.asset() {
                 definition = definition
                     .with_renderable(asset.id().as_str(), true)
+                    .with_renderable_local_transform(node.renderable_transform)
                     .with_asset_binding(asset.clone());
             }
             definitions.push(definition);

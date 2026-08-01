@@ -437,6 +437,7 @@ fn build_scene(
         parent: request.target.voxel_parent_id,
         child_order: request.target.voxel_child_order,
         transform: request.target.voxel_transform,
+        renderable_transform: SceneTransform::IDENTITY,
         kind: SceneNodeKind::VoxelVolume(asset_reference),
         metadata: NodeMetadata {
             label: request.target.voxel_label.clone(),
@@ -509,6 +510,7 @@ fn marker_node(
             rotation: authored_scene::Quat::new(0.0, half_yaw.sin(), 0.0, half_yaw.cos()),
             scale: Vec3::ONE,
         },
+        renderable_transform: SceneTransform::IDENTITY,
         kind: SceneNodeKind::Marker(SceneMarker {
             marker_id: target.marker_id.clone(),
         }),

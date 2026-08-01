@@ -49,7 +49,7 @@ viewport, and its closed external-project adapter protocol.
 - The external consumer is always selected explicitly by an integration
   command; ordinary Engine work never scans a sibling checkout.
 - Renderer packages are consumed through their package roots.
-- Protocol 12 retains the promoted downstream Entity inspector
+- Protocol 13 retains the promoted downstream Entity inspector
   seam. `studio/libs/editor-shell/src/entity-inspector.ts` owns static
   contribution admission, exact matching, remount generations, and the narrow
   mutation-settlement contract. The shell owns the single outlet; the stock app
@@ -64,6 +64,11 @@ viewport, and its closed external-project adapter protocol.
   1–32 ordered placements. Downstream Rust stages owner allocation, complete
   admission, projection, and publication; Studio accepts one canonical readout
   and never implements a placement loop or parallel history authority.
+- Protocol 13 adds `setSceneObjectRenderableTransform` plus a strict
+  `renderableTransform` hierarchy readout. Studio presents entity/world and
+  visual-local transforms separately; admitted mesh bounds, origin triad,
+  contact plane, clearance, and lower-bound alignment remain disposable UI
+  observations over the named Rust mutation.
 - `studio/libs/viewport` emits immutable `frameSubmitted` observations only
   after an accepted complete, incremental, or presentation-only frame has been
   submitted through its private shared inspection surface. The event pairs the

@@ -92,7 +92,10 @@ impl EntityRenderProjector {
                 });
                 continue;
             }
-            let transform = node.transform.unwrap_or(EntityTransform::IDENTITY);
+            let transform = node
+                .transform
+                .unwrap_or(EntityTransform::IDENTITY)
+                .compose(node.renderable_local_transform);
             let metadata = RenderMetadata {
                 source_entity: Some(node.entity.raw()),
                 source_scene_node: None,
@@ -352,5 +355,37 @@ mod tests {
             result.diagnostics[0],
             EntityProjectionDiagnostic::MissingAsset { entity, .. } if entity == id
         ));
+    }
+
+    #[test]
+    fn renderable_local_transform_changes_only_visual_projection() {
+        let id = EntityId::new(13);
+        let world = EntityTransform::at(Vec3::new(8.0, 2.5, -3.0));
+        let state = EntityState::from_definitions([EntityDefinition::new(id, "grounded-visual")
+            .with_full_transform(world)
+            .with_collision(true, false)
+            .with_renderable("mesh/grounded", true)
+            .with_renderable_local_transform(EntityTransform::at(Vec3::new(0.0, -2.5, 0.0)))])
+        .unwrap();
+        let assets = BTreeMap::from([(
+            "mesh/grounded".to_string(),
+            ResolvedRenderAsset {
+                id: "mesh/grounded".to_string(),
+                kind: RenderAssetKind::StaticMesh,
+                content_hash: Some("cafe".to_string()),
+                version: 1,
+            },
+        )]);
+
+        let projected = EntityRenderProjector::new()
+            .project(&state, &assets)
+            .unwrap();
+        assert!(matches!(
+            &projected.frame.ops[0],
+            RenderDiff::CreateStaticMeshInstance { instance, .. }
+                if instance.transform.translation == [8.0, 0.0, -3.0]
+        ));
+        assert_eq!(state.world_transform(id), Some(world));
+        assert!(state.collision(id).unwrap().enabled);
     }
 }

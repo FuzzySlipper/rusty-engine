@@ -20,11 +20,12 @@ import type {
   StudioEntityComponentReference,
   StudioSceneAppearance,
 } from '@rusty-engine/studio-adapter-client';
-import type { EditorGridDescriptor, Transform } from '@rusty-engine/render-contracts';
+import type { EditorGridDescriptor, MeshBoundsDescriptor, Transform } from '@rusty-engine/render-contracts';
 import type { StudioKeyboardBindings } from '@rusty-engine/studio-user-settings';
 import {
   StudioViewportComponent,
   type StudioViewportFrameSubmitted,
+  type StudioGroundingInspection,
   type StudioTransformOrientation,
   type StudioTransformSnapping,
   type StudioTransformTool,
@@ -45,7 +46,7 @@ import {
   type StudioEntityInspectorContribution,
   type StudioEntityInspectorRenderMatch,
 } from './entity-inspector.js';
-import { composeTransform } from './transform-tools.js';
+import { composeTransform, localTransformFromWorld } from './transform-tools.js';
 import {
   activeStudioMeshResources,
   resolveStudioMeshResource,
@@ -221,6 +222,40 @@ export class StudioShellComponent {
     scale: this.state().settings.scaleSnapAxes,
     translation: this.state().settings.translationSnapAxes,
   }));
+  readonly groundingInspection = computed<StudioGroundingInspection | null>(() => {
+    const snapshot = this.state();
+    const node = this.store.selectedHierarchyNode();
+    const entity = this.store.selectedEntity();
+    const frame = snapshot.liveProjection?.frame;
+    if (
+      node?.asset === null
+      || node?.asset === undefined
+      || entity === null
+      || entity.transform === null
+      || frame === undefined
+    ) {
+      return null;
+    }
+    const definition = frame.ops.find((operation) =>
+      (operation.op === 'defineStaticMesh' || operation.op === 'defineAnimatedMesh')
+      && operation.asset.asset === node.asset);
+    const localBounds = definition?.op === 'defineStaticMesh'
+      ? definition.asset.payload.bounds
+      : definition?.op === 'defineAnimatedMesh'
+        ? definition.asset.bounds
+        : null;
+    if (localBounds === null) return null;
+    const bounds = transformedBounds(localBounds, entity.transform);
+    const contactPlaneY = snapshot.settings.gridVisible
+      ? (this.viewportGrid()?.grid.origin[1] ?? 0)
+      : 0;
+    return {
+      origin: entity.transform.translation,
+      bounds,
+      contactPlaneY,
+      clearance: bounds.min[1] - contactPlaneY,
+    };
+  });
   readonly viewportGrid = computed<EditorGridDescriptor | null>(() => {
     const settings = this.state().settings;
     if (!settings.gridVisible) return null;
@@ -848,6 +883,79 @@ export class StudioShellComponent {
     return this.store.selectedHierarchyNode()?.localTransform.scale[axis] ?? null;
   }
 
+  renderableTranslation(axis: 0 | 1 | 2): number | null {
+    return this.store.selectedHierarchyNode()?.renderableTransform.translation[axis] ?? null;
+  }
+
+  renderableRotation(axis: 0 | 1 | 2 | 3): number | null {
+    return this.store.selectedHierarchyNode()?.renderableTransform.rotation[axis] ?? null;
+  }
+
+  renderableScale(axis: 0 | 1 | 2): number | null {
+    return this.store.selectedHierarchyNode()?.renderableTransform.scale[axis] ?? null;
+  }
+
+  updateRenderableTranslation(axis: 0 | 1 | 2, raw: string): void {
+    this.updateRenderableTransform('translation', axis, Number(raw));
+  }
+
+  updateRenderableRotation(axis: 0 | 1 | 2 | 3, raw: string): void {
+    this.updateRenderableTransform('rotation', axis, Number(raw));
+  }
+
+  updateRenderableScale(axis: 0 | 1 | 2, raw: string): void {
+    this.updateRenderableTransform('scale', axis, Number(raw));
+  }
+
+  alignRenderableLowerBound(): void {
+    const node = this.store.selectedHierarchyNode();
+    const entity = this.store.selectedEntity();
+    const inspection = this.groundingInspection();
+    if (
+      node?.entityId === null
+      || node?.entityId === undefined
+      || entity === null
+      || entity.transform === null
+      || inspection === null
+    ) return;
+    const desiredWorld: Transform = {
+      ...entity.transform,
+      translation: [
+        entity.transform.translation[0],
+        entity.transform.translation[1] - inspection.clearance,
+        entity.transform.translation[2],
+      ],
+    };
+    void this.store.setSceneObjectRenderableTransform(
+      node.entityId,
+      localTransformFromWorld(node.worldTransform, desiredWorld),
+    );
+  }
+
+  private updateRenderableTransform(
+    field: 'translation' | 'rotation' | 'scale',
+    axis: 0 | 1 | 2 | 3,
+    value: number,
+  ): void {
+    const node = this.store.selectedHierarchyNode();
+    if (node?.entityId === null || node?.entityId === undefined || !Number.isFinite(value)) return;
+    const translation = [...node.renderableTransform.translation] as [number, number, number];
+    const rotation = [...node.renderableTransform.rotation] as [number, number, number, number];
+    const scale = [...node.renderableTransform.scale] as [number, number, number];
+    if (field === 'rotation') {
+      rotation[axis] = value;
+    } else if (field === 'translation') {
+      translation[axis as 0 | 1 | 2] = value;
+    } else {
+      scale[axis as 0 | 1 | 2] = value;
+    }
+    void this.store.setSceneObjectRenderableTransform(node.entityId, {
+      translation,
+      rotation,
+      scale,
+    });
+  }
+
   renameSelected(name: string): void {
     const entityId = this.store.selectedHierarchyNode()?.entityId;
     if (entityId !== null && entityId !== undefined) {
@@ -1070,4 +1178,53 @@ function absoluteHostPath(root: string, path: string): string {
 function relativeHostPath(root: string, path: string): string | null {
   const prefix = `${root.replace(/\/+$/, '')}/`;
   return path.startsWith(prefix) ? path.slice(prefix.length) : null;
+}
+
+function transformedBounds(
+  bounds: MeshBoundsDescriptor,
+  transform: Transform,
+): StudioGroundingInspection['bounds'] {
+  const corners: readonly (readonly [number, number, number])[] = [
+    [bounds.min[0], bounds.min[1], bounds.min[2]],
+    [bounds.max[0], bounds.min[1], bounds.min[2]],
+    [bounds.min[0], bounds.max[1], bounds.min[2]],
+    [bounds.max[0], bounds.max[1], bounds.min[2]],
+    [bounds.min[0], bounds.min[1], bounds.max[2]],
+    [bounds.max[0], bounds.min[1], bounds.max[2]],
+    [bounds.min[0], bounds.max[1], bounds.max[2]],
+    [bounds.max[0], bounds.max[1], bounds.max[2]],
+  ];
+  const points = corners.map((point) => transformPoint(transform, point));
+  return {
+    min: [
+      Math.min(...points.map((point) => point[0])),
+      Math.min(...points.map((point) => point[1])),
+      Math.min(...points.map((point) => point[2])),
+    ],
+    max: [
+      Math.max(...points.map((point) => point[0])),
+      Math.max(...points.map((point) => point[1])),
+      Math.max(...points.map((point) => point[2])),
+    ],
+  };
+}
+
+function transformPoint(
+  transform: Transform,
+  point: readonly [number, number, number],
+): readonly [number, number, number] {
+  const scaled: readonly [number, number, number] = [
+    point[0] * transform.scale[0],
+    point[1] * transform.scale[1],
+    point[2] * transform.scale[2],
+  ];
+  const [x, y, z, w] = transform.rotation;
+  const tx = 2 * (y * scaled[2] - z * scaled[1]);
+  const ty = 2 * (z * scaled[0] - x * scaled[2]);
+  const tz = 2 * (x * scaled[1] - y * scaled[0]);
+  return [
+    transform.translation[0] + scaled[0] + w * tx + (y * tz - z * ty),
+    transform.translation[1] + scaled[1] + w * ty + (z * tx - x * tz),
+    transform.translation[2] + scaled[2] + w * tz + (x * ty - y * tx),
+  ];
 }

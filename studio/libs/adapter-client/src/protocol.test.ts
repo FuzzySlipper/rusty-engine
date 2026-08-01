@@ -1189,6 +1189,7 @@ function setCanonicalOwners(
     entityId: ownerEntityId,
     localTransform: identityTransform(),
     worldTransform: identityTransform(),
+    renderableTransform: identityTransform(),
   }));
 }
 

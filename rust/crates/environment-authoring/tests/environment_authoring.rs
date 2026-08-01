@@ -176,6 +176,7 @@ fn materialization_rebuilds_dependencies_from_the_resulting_nodes() {
         parent: None,
         child_order: 2,
         transform: SceneTransform::IDENTITY,
+        renderable_transform: SceneTransform::IDENTITY,
         kind: SceneNodeKind::VoxelVolume(old_reference),
         metadata: NodeMetadata::default(),
     });
@@ -203,6 +204,7 @@ fn materialization_rejects_conflicting_constraints_for_a_shared_asset_id() {
         parent: None,
         child_order: 2,
         transform: SceneTransform::IDENTITY,
+        renderable_transform: SceneTransform::IDENTITY,
         kind: SceneNodeKind::VoxelVolume(pinned),
         metadata: NodeMetadata::default(),
     });
@@ -231,6 +233,7 @@ fn base_scene(with_parent: bool) -> FlatSceneDocument {
             parent: None,
             child_order: 0,
             transform: SceneTransform::IDENTITY,
+            renderable_transform: SceneTransform::IDENTITY,
             kind: SceneNodeKind::Bootstrap(SceneBootstrapBindings {
                 generator: Some(SceneGeneratorBinding {
                     provider_id: TUNNEL_GENERATOR_ID.to_string(),
@@ -248,6 +251,7 @@ fn base_scene(with_parent: bool) -> FlatSceneDocument {
             parent: None,
             child_order: 1,
             transform: SceneTransform::at(Vec3::new(10.0, 0.0, 0.0)),
+            renderable_transform: SceneTransform::IDENTITY,
             kind: SceneNodeKind::EmptyGroup,
             metadata: NodeMetadata::default(),
         });

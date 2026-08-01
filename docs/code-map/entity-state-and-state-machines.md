@@ -54,9 +54,14 @@ relationships, activation, snapshots, and explicit state-machine instances.
 - Downstream Rust composes these mechanisms directly with named game services.
 - Serialized entity snapshots are durable facts only where the owning consumer
   chooses to persist them.
+- `RenderableComponent::local_transform` is presentation-only. Entity/world
+  transform remains authoritative for every spatial and gameplay consumer;
+  render projection alone composes the visual-local value.
 - Runtime-only registrations are omitted from snapshots. Durable downstream
   components require an explicit codec identity/version and the same registry
   during decode; built-in schema-3 fields retain their established JSON shape.
+  Identity visual-local transforms remain omitted so earlier snapshots decode
+  to the same presentation.
 
 ## Downstream extension pattern
 

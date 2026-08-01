@@ -230,6 +230,8 @@ fn validation_node(error: &SceneValidationError) -> Option<u64> {
         SceneValidationError::DuplicateNodeId { id } => Some(id.raw()),
         SceneValidationError::UnknownParent { node, .. }
         | SceneValidationError::InvalidTransform { node, .. }
+        | SceneValidationError::InvalidRenderableTransform { node, .. }
+        | SceneValidationError::RenderableTransformWithoutAsset { node }
         | SceneValidationError::BlankLabel { node }
         | SceneValidationError::BlankTag { node }
         | SceneValidationError::DuplicateTag { node, .. }
@@ -295,6 +297,7 @@ mod tests {
             parent: None,
             child_order: 0,
             transform: SceneTransform::IDENTITY,
+            renderable_transform: SceneTransform::IDENTITY,
             kind: SceneNodeKind::StaticMesh(asset.clone()),
             metadata: NodeMetadata::default(),
         };
@@ -335,6 +338,7 @@ mod tests {
                 parent: None,
                 child_order: 0,
                 transform: SceneTransform::IDENTITY,
+                renderable_transform: SceneTransform::IDENTITY,
                 kind: SceneNodeKind::EmptyGroup,
                 metadata: NodeMetadata::default(),
             },
@@ -343,6 +347,7 @@ mod tests {
                 parent: None,
                 child_order: 1,
                 transform: SceneTransform::IDENTITY,
+                renderable_transform: SceneTransform::IDENTITY,
                 kind: SceneNodeKind::EmptyGroup,
                 metadata: NodeMetadata::default(),
             },

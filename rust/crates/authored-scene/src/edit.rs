@@ -69,6 +69,10 @@ pub enum SceneEditCommand {
         id: SceneNodeId,
         transform: SceneTransform,
     },
+    SetRenderableTransform {
+        id: SceneNodeId,
+        transform: SceneTransform,
+    },
     SetKind {
         id: SceneNodeId,
         kind: SceneNodeKind,
@@ -195,6 +199,9 @@ impl SceneEditService {
                 validate_parent(&next, record.id, record.parent)?;
                 require_non_blank_label(record.id, record.metadata.label.as_deref())?;
                 upgrade_schema_for_kind(&mut next, &record.kind);
+                if record.renderable_transform != SceneTransform::IDENTITY {
+                    upgrade_schema(&mut next, 5);
+                }
                 next.nodes.push(record.clone());
                 reconcile_assets = true;
                 None
@@ -243,10 +250,23 @@ impl SceneEditService {
                     .transform = *transform;
                 Some(*id)
             }
+            SceneEditCommand::SetRenderableTransform { id, transform } => {
+                let node = find_node_mut(&mut next, *id)
+                    .ok_or(SceneEditError::MissingObject { id: *id })?;
+                if node.kind.asset().is_none() {
+                    return Err(SceneEditError::WrongObjectKind { id: *id });
+                }
+                node.renderable_transform = *transform;
+                upgrade_schema(&mut next, 5);
+                Some(*id)
+            }
             SceneEditCommand::SetKind { id, kind } => {
                 let node = find_node_mut(&mut next, *id)
                     .ok_or(SceneEditError::MissingObject { id: *id })?;
                 node.kind = kind.clone();
+                if node.kind.asset().is_none() {
+                    node.renderable_transform = SceneTransform::IDENTITY;
+                }
                 upgrade_schema_for_kind(&mut next, kind);
                 reconcile_assets = true;
                 Some(*id)

@@ -547,6 +547,22 @@ export class StudioWorkspaceStore {
     }));
   }
 
+  async setSceneObjectRenderableTransform(
+    entityId: number,
+    transform: Transform,
+  ): Promise<void> {
+    if (!validTransform(transform)) {
+      this.reportUiError('Renderable-local transform must be finite with positive scale.');
+      return;
+    }
+    await this.#mutateProject((document) => this.#client.setSceneObjectRenderableTransform({
+      expectedProjectHash: document.identity.projectHash,
+      expectedSceneRevision: document.identity.sceneRevision,
+      entityId,
+      transform,
+    }));
+  }
+
   async setEntityCollision(entityId: number, collision: StoredCollision | null): Promise<void> {
     await this.#mutateProject((document) => this.#client.setEntityCollision({
       expectedProjectHash: document.identity.projectHash,
@@ -2771,6 +2787,7 @@ function mutationMessage(receipt: ProjectMutationReceipt): string {
     case 'sceneObjectRenamed': return `Entity ${String(receipt.entityId)} renamed.`;
     case 'sceneObjectReparented': return `Entity ${String(receipt.entityId)} reparented.`;
     case 'sceneObjectTransformSet': return `Entity ${String(receipt.entityId)} transform stored.`;
+    case 'sceneObjectRenderableTransformSet': return `Entity ${String(receipt.entityId)} visual-local transform stored.`;
     case 'sceneObjectAppearanceSet': return `Entity ${String(receipt.entityId)} appearance stored.`;
     case 'entityCollisionSet': return `Entity ${String(receipt.entityId)} collision ${receipt.attached ? 'attached' : 'removed'}.`;
     case 'entityKinematicSet': return `Entity ${String(receipt.entityId)} kinematic data ${receipt.attached ? 'attached' : 'removed'}.`;

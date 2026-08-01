@@ -9,7 +9,7 @@ import {
   type StudioAdapterRequest,
   type StudioAdapterTransport,
 } from '@rusty-engine/studio-adapter-client';
-import { decodeRenderFrameDiff, type RenderFrameDiff } from '@rusty-engine/render-contracts';
+import { decodeRenderFrameDiff, type RenderFrameDiff, type Transform } from '@rusty-engine/render-contracts';
 import {
   HttpStudioUserSettingsClient,
   buildDefaultStudioHostUserSettings,
@@ -72,6 +72,28 @@ test('workspace opens only through the adapter and keeps authority, projection, 
   assert.equal(store.snapshot().authoringDocument?.identity.projectHash, 'hash-after');
   assert.equal(store.snapshot().preview, null);
   assert.deepEqual(store.selectedEntity()?.transform?.translation, [4.5, 2, 3]);
+});
+
+test('visual-local mutation stays distinct from entity world authority', async () => {
+  const transport = new FixtureTransport();
+  const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
+  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+
+  await store.setSceneObjectRenderableTransform(1, transform([0, -1.25, 0]) as Transform);
+
+  const request = transport.requests.at(-1);
+  assert.equal(request?.type, 'setSceneObjectRenderableTransform');
+  if (request?.type === 'setSceneObjectRenderableTransform') {
+    assert.equal(request.expectedProjectHash, 'hash-before');
+    assert.equal(request.expectedSceneRevision, 11);
+    assert.deepEqual(request.transform.translation, [0, -1.25, 0]);
+  }
+  const node = store.selectedHierarchyNode()
+    ?? store.snapshot().authoringDocument?.sceneHierarchy.nodes[0];
+  assert.deepEqual(node?.worldTransform.translation, [1, 2, 3]);
+  assert.deepEqual(node?.renderableTransform.translation, [0, -1.25, 0]);
+  assert.deepEqual(store.selectedEntity()?.transform?.translation ??
+    store.snapshot().liveProjection?.entities[0]?.transform?.translation, [1, 0.75, 3]);
 });
 
 test('renderer world candidates update the local preview and explicit revert restores owner state', async () => {
@@ -1421,6 +1443,25 @@ class FixtureTransport implements StudioAdapterTransport {
         project: projectReadout(true),
       });
     }
+    if (request.type === 'setSceneObjectRenderableTransform') {
+      const project = projectReadout(false) as ReturnType<typeof projectReadout>;
+      project.identity.projectHash = 'hash-visual-after';
+      project.identity.sceneRevision = 12;
+      project.sceneHierarchy.revision = 12;
+      (project.sceneHierarchy.nodes[0] as { renderableTransform: unknown }).renderableTransform =
+        request.transform;
+      const operation = project.projection.ops[0];
+      if (operation?.op === 'create') {
+        operation.node.transform = transform([1, 0.75, 3]);
+      }
+      return Promise.resolve({
+        type: 'projectMutationApplied',
+        protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+        requestId: request.requestId,
+        receipt: { kind: 'sceneObjectRenderableTransformSet', entityId: request.entityId },
+        project,
+      });
+    }
     if (request.type === 'readProject') {
       if (this.#blockNextProjectRead) {
         this.#blockNextProjectRead = false;
@@ -2524,6 +2565,7 @@ function hierarchyNode(
     entityId,
     localTransform: transform(translation),
     worldTransform: transform(translation),
+    renderableTransform: transform([0, 0, 0]),
   };
 }
 

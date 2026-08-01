@@ -5,7 +5,7 @@ use core_ids::{PrefabId, SceneId, SceneNodeId};
 
 use crate::{SceneLight, SceneTransform};
 
-pub const CURRENT_SCENE_SCHEMA_VERSION: u32 = 4;
+pub const CURRENT_SCENE_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SceneEntityReference {
@@ -124,6 +124,8 @@ pub struct SceneMetadata {
 pub struct SceneNode {
     pub id: SceneNodeId,
     pub transform: SceneTransform,
+    /// Presentation-only transform applied to this node's renderable asset.
+    pub renderable_transform: SceneTransform,
     pub kind: SceneNodeKind,
     pub metadata: NodeMetadata,
     pub children: Vec<SceneNode>,
@@ -134,6 +136,7 @@ impl SceneNode {
         Self {
             id,
             transform: SceneTransform::IDENTITY,
+            renderable_transform: SceneTransform::IDENTITY,
             kind,
             metadata: NodeMetadata::default(),
             children: Vec::new(),
@@ -181,6 +184,7 @@ pub struct SceneNodeRecord {
     pub parent: Option<SceneNodeId>,
     pub child_order: u32,
     pub transform: SceneTransform,
+    pub renderable_transform: SceneTransform,
     pub kind: SceneNodeKind,
     pub metadata: NodeMetadata,
 }
@@ -297,6 +301,7 @@ impl FlatSceneDocument {
             nodes.push(SceneNode {
                 id: record.id,
                 transform: record.transform,
+                renderable_transform: record.renderable_transform,
                 kind: record.kind.clone(),
                 metadata: record.metadata.clone(),
                 children: descendants,
@@ -317,6 +322,7 @@ fn flatten_into(
         parent,
         child_order,
         transform: node.transform,
+        renderable_transform: node.renderable_transform,
         kind: node.kind.clone(),
         metadata: node.metadata.clone(),
     });

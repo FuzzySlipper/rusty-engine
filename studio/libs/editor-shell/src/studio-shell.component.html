@@ -214,6 +214,7 @@
             [transformOrientation]="state().preview?.orientation ?? state().settings.transformOrientation"
             [transformSnapping]="transformSnapping()"
             [voxelPreview]="voxelPreview()"
+            [groundingInspection]="groundingInspection()"
             [voxelObjectPlacementResourceFrame]="state().voxelWorkspace.objectPlacementResource?.resourceFrame ?? null"
             [objectPlacementInteractive]="state().operation === 'idle'"
             [animatedMeshManifest]="animatedMeshManifest()"
@@ -459,6 +460,81 @@
                 <small class="owner-note">Viewport drags commit on release; changing selection settles pending edits first. Revert is explicit. Every commit is hash- and revision-guarded by Rust, then canonically reread.</small>
               }
             </section>
+            @if (node.asset !== null) {
+              <section class="inspector-section" data-visual-id="renderable-local-transform">
+                <header><strong>Visual-local transform</strong><span>presentation only</span></header>
+                <div class="owner-note" data-visual-id="world-transform-readout">
+                  Entity world position:
+                  {{ node.worldTransform.translation[0] }},
+                  {{ node.worldTransform.translation[1] }},
+                  {{ node.worldTransform.translation[2] }}
+                </div>
+                <small>Visual translation</small>
+                <div class="vector-editor">
+                  @for (axis of ['X', 'Y', 'Z']; track axis; let index = $index) {
+                    <label>
+                      <span>{{ axis }}</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        [attr.aria-label]="'Visual translation ' + axis"
+                        [disabled]="node.entityId === null || state().operation !== 'idle'"
+                        [value]="renderableTranslation($any(index))"
+                        (change)="updateRenderableTranslation($any(index), $any($event.target).value)"
+                      />
+                    </label>
+                  }
+                </div>
+                <small>Visual rotation quaternion</small>
+                <div class="vector-editor vector-editor-four">
+                  @for (axis of ['X', 'Y', 'Z', 'W']; track axis; let index = $index) {
+                    <label>
+                      <span>{{ axis }}</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        [attr.aria-label]="'Visual rotation ' + axis"
+                        [disabled]="node.entityId === null || state().operation !== 'idle'"
+                        [value]="renderableRotation($any(index))"
+                        (change)="updateRenderableRotation($any(index), $any($event.target).value)"
+                      />
+                    </label>
+                  }
+                </div>
+                <small>Visual scale</small>
+                <div class="vector-editor">
+                  @for (axis of ['X', 'Y', 'Z']; track axis; let index = $index) {
+                    <label>
+                      <span>{{ axis }}</span>
+                      <input
+                        type="number"
+                        step="0.05"
+                        [attr.aria-label]="'Visual scale ' + axis"
+                        [disabled]="node.entityId === null || state().operation !== 'idle'"
+                        [value]="renderableScale($any(index))"
+                        (change)="updateRenderableScale($any(index), $any($event.target).value)"
+                      />
+                    </label>
+                  }
+                </div>
+                @if (groundingInspection(); as grounding) {
+                  <dl class="dense-readout" data-visual-id="grounding-metrics">
+                    <div><dt>Lower bound</dt><dd>{{ grounding.bounds.min[1] }}</dd></div>
+                    <div><dt>Contact plane</dt><dd>{{ grounding.contactPlaneY }}</dd></div>
+                    <div><dt>Clearance</dt><dd>{{ grounding.clearance }}</dd></div>
+                  </dl>
+                  <button
+                    type="button"
+                    data-action="align-renderable-lower-bound"
+                    [disabled]="node.entityId === null || state().operation !== 'idle'"
+                    (click)="alignRenderableLowerBound()"
+                  >Align lower bound to contact plane</button>
+                  <small class="owner-note">The viewport triad, bounds, and contact plane are disposable diagnostics. Alignment changes only this visual-local offset; entity world, collision, navigation, and gameplay transforms remain unchanged.</small>
+                } @else {
+                  <small class="owner-note">This asset has no admitted mesh bounds in the current retained frame, so grounding diagnostics and automatic alignment are unavailable.</small>
+                }
+              </section>
+            }
             @if (selectedEntityComponentReferences().length > 0) {
               <section
                 class="inspector-section"
