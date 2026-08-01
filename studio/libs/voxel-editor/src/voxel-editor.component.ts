@@ -128,7 +128,7 @@ export class VoxelEditorComponent {
   surfaceExpectedAtlasHash = '';
   surfaceRegionId = 'tile';
   surfaceRegionMin = [1, 1];
-  surfaceRegionExtent = [16, 16];
+  surfaceRegionExtent: [number, number] = [16, 16];
   surfaceRegionPadding = [1, 1, 1, 1];
   surfaceTileScale = [1, 1];
   surfaceTileOrigin = [0, 0];
@@ -368,9 +368,10 @@ export class VoxelEditorComponent {
     if (texture === null || this.surfaceMapping !== 'atlas') return 'available after admitted texture readback';
     const min = this.surfaceRegionMin.map((value, axis) =>
       (value + 0.5) / (axis === 0 ? texture.width : texture.height));
-    const max = this.surfaceRegionMin.map((value, axis) =>
-      (value + this.surfaceRegionExtent[axis]! - 0.5)
-        / (axis === 0 ? texture.width : texture.height));
+    const max = this.surfaceRegionMin.map((value, axis) => {
+      const extent = axis === 0 ? this.surfaceRegionExtent[0] : this.surfaceRegionExtent[1];
+      return (value + extent - 0.5) / (axis === 0 ? texture.width : texture.height);
+    });
     return `${min.map((value) => value.toFixed(5)).join(', ')} → ${max.map((value) => value.toFixed(5)).join(', ')}`;
   }
 
@@ -1556,10 +1557,17 @@ function tuple4(values: readonly number[]): readonly [number, number, number, nu
 }
 
 function tuple2Finite(values: readonly number[], label: string): readonly [number, number] {
-  if (values.length !== 2 || values.some((value) => !Number.isFinite(value))) {
+  const [first, second] = values;
+  if (
+    values.length !== 2
+    || first === undefined
+    || second === undefined
+    || !Number.isFinite(first)
+    || !Number.isFinite(second)
+  ) {
     throw new TypeError(`${label} requires two finite values.`);
   }
-  return [values[0]!, values[1]!];
+  return [first, second];
 }
 
 function tuple2Positive(values: readonly number[], label: string): readonly [number, number] {
