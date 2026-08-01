@@ -35,7 +35,7 @@ test('rejects an old adapter before listening, then exposes the exact current id
     const rejected = hostProcess(oldAdapter, staticRoot, rejectedPort);
     const rejection = await processResult(rejected);
     assert.notEqual(rejection.code, 0);
-    assert.match(rejection.stderr, /protocolVersion.*must equal 13/u);
+    assert.match(rejection.stderr, /protocolVersion.*must equal 14/u);
     await assert.rejects(fetch(`http://127.0.0.1:${String(rejectedPort)}/health`));
 
     const port = await freePort();

@@ -69,7 +69,7 @@ if (
   demoSource.cargoPackage !== 'loading-bay-game'
   || demoSource.adapterBinary !== 'studio-adapter'
   || demoSource.adapterId !== 'rusty-engine-demo.loading-bay'
-  || demoSource.protocolVersion !== 13
+  || demoSource.protocolVersion !== 14
 ) {
   throw new Error('Studio integration adapter identity changed without an explicit product decision');
 }

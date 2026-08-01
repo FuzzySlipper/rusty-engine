@@ -24,7 +24,7 @@ export function certifyDemoConsumerRevision(pin, engineSource) {
     || pin.cargoPackage !== 'loading-bay-game'
     || pin.adapterBinary !== 'studio-adapter'
     || pin.adapterId !== 'rusty-engine-demo.loading-bay'
-    || pin.protocolVersion !== 13
+    || pin.protocolVersion !== 14
     || pin.studioApplication !== 'apps/loading-bay-studio'
     || !isRecord(pin.entityInspectorConsumer)
     || pin.entityInspectorConsumer.componentTypeId !== 'rusty-engine-demo.loading-bay.weapon'

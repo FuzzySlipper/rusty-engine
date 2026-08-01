@@ -18,7 +18,7 @@ function consumerPin(overrides = {}) {
     cargoPackage: 'loading-bay-game',
     adapterBinary: 'studio-adapter',
     adapterId: 'rusty-engine-demo.loading-bay',
-    protocolVersion: 13,
+    protocolVersion: 14,
     studioApplication: 'apps/loading-bay-studio',
     entityInspectorConsumer: {
       componentTypeId: 'rusty-engine-demo.loading-bay.weapon',

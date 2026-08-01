@@ -55,7 +55,7 @@ function managedStatus() {
     runningAdapter: {
       adapterId: 'rusty-engine-demo.loading-bay',
       adapterVersion: 1,
-      protocolVersion: 13,
+      protocolVersion: 14,
       buildCommit: CONSUMER,
       binarySha256: BINARY,
     },

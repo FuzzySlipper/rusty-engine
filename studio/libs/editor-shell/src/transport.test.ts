@@ -20,7 +20,7 @@ test('reads the exact frozen managed Studio runtime identity', async () => {
       runningAdapter: {
         adapterId: 'rusty-engine-demo.loading-bay',
         adapterVersion: 1,
-        protocolVersion: 13,
+        protocolVersion: 14,
         buildCommit: '2'.repeat(40),
         binarySha256: '3'.repeat(64),
       },
@@ -29,7 +29,7 @@ test('reads the exact frozen managed Studio runtime identity', async () => {
   const status = await client.read();
   assert.equal(status.engineSourceCommit, '1'.repeat(40));
   assert.equal(status.configuredConsumer?.commit, '2'.repeat(40));
-  assert.equal(status.runningAdapter.protocolVersion, 13);
+  assert.equal(status.runningAdapter.protocolVersion, 14);
   assert.ok(Object.isFrozen(status));
 });
 
@@ -47,7 +47,7 @@ test('rejects a host status whose adapter build does not match its consumer', as
     runningAdapter: {
       adapterId: 'rusty-engine-demo.loading-bay',
       adapterVersion: 1,
-      protocolVersion: 13,
+      protocolVersion: 14,
       buildCommit: '4'.repeat(40),
       binarySha256: '3'.repeat(64),
     },

@@ -12,9 +12,11 @@ interface PackedPlacementPayload {
   readonly payload: Record<string, unknown>;
   readonly positions: readonly number[];
   readonly normals: readonly number[];
+  readonly uvs: readonly number[] | null;
   readonly indices: readonly number[];
   positionsByteOffset: number;
   normalsByteOffset: number;
+  uvsByteOffset: number | null;
   indicesByteOffset: number;
 }
 
@@ -78,9 +80,13 @@ async function packPlacementResponse(
         payload,
         positions: numberArray(source['positions'], 'placement positions'),
         normals: numberArray(source['normals'], 'placement normals'),
+        uvs: Object.hasOwn(source, 'uvs')
+          ? numberArray(source['uvs'], 'placement uvs')
+          : null,
         indices: integerArray(source['indices'], 'placement indices'),
         positionsByteOffset: 0,
         normalsByteOffset: 0,
+        uvsByteOffset: null,
         indicesByteOffset: 0,
       });
     }
@@ -93,11 +99,16 @@ async function packPlacementResponse(
     byteLength += payload.positions.length * 4;
     payload.normalsByteOffset = byteLength;
     byteLength += payload.normals.length * 4;
+    if (payload.uvs !== null) {
+      payload.uvsByteOffset = byteLength;
+      byteLength += payload.uvs.length * 4;
+    }
     payload.indicesByteOffset = byteLength;
     byteLength += payload.indices.length * 4;
   }
   const bytes = Buffer.alloc(byteLength);
-  Buffer.from('RMSHLE01', 'ascii').copy(bytes, 0);
+  Buffer.from(payloads.some(({ uvs }) => uvs !== null) ? 'RMSHLE02' : 'RMSHLE01', 'ascii')
+    .copy(bytes, 0);
   bytes.writeUInt32LE(byteLength, 8);
   bytes.writeUInt32LE(1, 12);
   for (const payload of payloads) {
@@ -106,6 +117,9 @@ async function packPlacementResponse(
     });
     payload.normals.forEach((value, index) => {
       bytes.writeFloatLE(value, payload.normalsByteOffset + index * 4);
+    });
+    payload.uvs?.forEach((value, index) => {
+      bytes.writeFloatLE(value, (payload.uvsByteOffset as number) + index * 4);
     });
     payload.indices.forEach((value, index) => {
       bytes.writeUInt32LE(value, payload.indicesByteOffset + index * 4);
@@ -122,9 +136,10 @@ async function packPlacementResponse(
       resource,
       contentHash,
       byteLength,
-      encoding: 'packedStreamsLeV1',
+      encoding: payload.uvs === null ? 'packedStreamsLeV1' : 'packedStreamsLeV2',
       positionsByteOffset: payload.positionsByteOffset,
       normalsByteOffset: payload.normalsByteOffset,
+      ...(payload.uvsByteOffset === null ? {} : { uvsByteOffset: payload.uvsByteOffset }),
       indicesByteOffset: payload.indicesByteOffset,
     };
   }

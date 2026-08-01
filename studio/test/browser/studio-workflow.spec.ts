@@ -16,7 +16,7 @@ test('served Studio exposes the exact running adapter and configured consumer id
   await page.goto('/');
   const identity = page.locator('[data-visual-id="studio-runtime-identity"]');
   await expect(identity).toBeVisible();
-  await expect(identity).toHaveAttribute('data-protocol-version', '13');
+  await expect(identity).toHaveAttribute('data-protocol-version', '14');
   await expect(identity).toHaveAttribute('data-adapter-binary-sha256', /^[0-9a-f]{64}$/u);
   const expectedEngine = process.env['RUSTY_STUDIO_ENGINE_SOURCE_COMMIT'];
   if (expectedEngine === undefined) {
@@ -916,6 +916,9 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   await expect.poll(() => projectHash(shell), { timeout: projectMutationTimeout }).not.toBe(
     canonicalHash,
   );
+  await expect(shell).toHaveAttribute('data-studio-operation', 'idle', {
+    timeout: projectMutationTimeout,
+  });
 
   const canonicalObjects = editor.locator('.voxel-section').filter({
     hasText: 'project-owned content and transformed instances',
@@ -924,6 +927,9 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   await canonicalObjects.getByRole('button', {
     name: /voxel-object\/studio-character/,
   }).click();
+  await expect.poll(() => packedPlacement.preparedCount, { timeout: projectMutationTimeout }).toBe(
+    1,
+  );
   await expect(viewport).toHaveAttribute('data-voxel-preview-kind', 'objectPlacement', {
     timeout: projectMutationTimeout,
   });
@@ -935,9 +941,6 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   await expect(viewport).toHaveAttribute(
     'data-mesh-resources',
     String(canonicalMeshResourceCount + 1),
-  );
-  await expect.poll(() => packedPlacement.preparedCount, { timeout: projectMutationTimeout }).toBe(
-    1,
   );
   await expect.poll(
     () => packedPlacement.resourceReadCount,

@@ -106,7 +106,7 @@ function validConsumerSource(value: unknown): value is DemoConsumerSource {
     && source['adapterBinary'].length > 0
     && typeof source['adapterId'] === 'string'
     && source['adapterId'].length > 0
-    && source['protocolVersion'] === 13;
+    && source['protocolVersion'] === 14;
 }
 
 async function consumerSource(): Promise<DemoConsumerSource> {
