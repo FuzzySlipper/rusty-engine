@@ -23,7 +23,9 @@
     "test": "tsc --build && node --test 'dist/**/*.test.js'"
   },
   "dependencies": {
+    "@noble/hashes": "^2.0.1",
     "@types/three": "^0.184.1",
+    "fflate": "^0.8.2",
     "three": "^0.184.0"
   },
   "peerDependencies": {

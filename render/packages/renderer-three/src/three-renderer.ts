@@ -58,6 +58,7 @@ import {
   meshMaterials,
   type RendererMeshPresentationReadout,
 } from './mesh-presentation.js';
+import { decodeAdmittedPngTexture, PngTextureError } from './png-texture.js';
 
 /** Raised when a diff cannot be applied (duplicate, unknown, or stale handle). */
 export class RenderApplyError extends Error {
@@ -88,6 +89,12 @@ export interface MeshBufferSource {
 /** Explicit provider for durable content-addressed mesh bytes. Resource ids
  * are renderer-neutral identities; providers own their location and cache. */
 export interface MeshResourceSource {
+  acquireResource(resource: string, contentHash: string, byteLength: number): MeshBufferView;
+  releaseResource(resource: string): void;
+}
+
+/** Explicit provider for content-addressed encoded texture bytes. */
+export interface TextureResourceSource {
   acquireResource(resource: string, contentHash: string, byteLength: number): MeshBufferView;
   releaseResource(resource: string): void;
 }
@@ -169,6 +176,61 @@ export interface ThreeRendererResourceStatistics {
   readonly animatedInstanceCount: number;
 }
 
+export interface RendererTextureResourceReadout {
+  readonly id: string;
+  readonly resource: string | null;
+  readonly contentHash: string;
+  readonly encodedBytes: number;
+  readonly decodedBytes: number;
+}
+
+export const RUSTY_RENDERER_TEXTURE_MAX_RETAINED = 256;
+export const RUSTY_RENDERER_TEXTURE_MAX_ENCODED_BYTES = 128 * 1024 * 1024;
+export const RUSTY_RENDERER_TEXTURE_MAX_DECODED_BYTES = 256 * 1024 * 1024;
+
+export interface RendererTextureResourceBudget {
+  readonly count: number;
+  readonly encodedBytes: number;
+  readonly decodedBytes: number;
+}
+
+/** Checked prospective admission shared by retained-frame preflight and quota proof. */
+export function admitRendererTextureResourceBudget(
+  current: RendererTextureResourceBudget,
+  previous: Pick<RendererTextureResourceReadout, 'encodedBytes' | 'decodedBytes'> | undefined,
+  next: Pick<RendererTextureResourceReadout, 'encodedBytes' | 'decodedBytes'> | undefined,
+): RendererTextureResourceBudget {
+  const count = current.count - (previous === undefined ? 0 : 1) + (next === undefined ? 0 : 1);
+  const encodedBytes = current.encodedBytes - (previous?.encodedBytes ?? 0)
+    + (next?.encodedBytes ?? 0);
+  const decodedBytes = current.decodedBytes - (previous?.decodedBytes ?? 0)
+    + (next?.decodedBytes ?? 0);
+  if (![count, encodedBytes, decodedBytes].every(Number.isSafeInteger)
+    || count < 0 || encodedBytes < 0 || decodedBytes < 0) {
+    throw new RenderApplyError('defineTexture: texture resource budget arithmetic is invalid');
+  }
+  if (count > RUSTY_RENDERER_TEXTURE_MAX_RETAINED) {
+    throw new RenderApplyError('defineTexture: retained texture quota exceeded');
+  }
+  if (encodedBytes > RUSTY_RENDERER_TEXTURE_MAX_ENCODED_BYTES) {
+    throw new RenderApplyError('defineTexture: aggregate encoded texture byte quota exceeded');
+  }
+  if (decodedBytes > RUSTY_RENDERER_TEXTURE_MAX_DECODED_BYTES) {
+    throw new RenderApplyError('defineTexture: aggregate decoded texture byte quota exceeded');
+  }
+  return { count, encodedBytes, decodedBytes };
+}
+
+interface RetainedTextureResource {
+  readonly texture: THREE.DataTexture;
+  readonly readout: RendererTextureResourceReadout;
+}
+
+interface PreparedFrameResources {
+  readonly geometries: Map<number, readonly THREE.BufferGeometry[]>;
+  readonly textures: Map<number, RetainedTextureResource | null>;
+}
+
 /** A retained static mesh definition: shared resources plus a live-instance count. */
 interface StaticMeshDef {
   readonly geometry: THREE.BufferGeometry;
@@ -238,6 +300,7 @@ export class ThreeRenderer {
    */
   readonly #meshBufferSource: MeshBufferSource | undefined;
   readonly #meshResourceSource: MeshResourceSource | undefined;
+  readonly #textureResourceSource: TextureResourceSource | undefined;
   readonly #animatedMeshSource: AnimatedMeshAssetSource | undefined;
   readonly #animatedMeshes: AnimatedMeshRegistry;
   readonly #shadowsEnabled: boolean;
@@ -245,6 +308,8 @@ export class ThreeRenderer {
   readonly #geometryResources = new Set<THREE.BufferGeometry>();
   readonly #materialResources = new Set<THREE.Material>();
   readonly #textureResourceReferences = new Map<THREE.Texture, number>();
+  readonly #textureResourceObjects = new Set<THREE.Texture>();
+  readonly #textureResources = new Map<string, RetainedTextureResource>();
   /**
    * Renderer-owned submission batches. Logical retained meshes remain the
    * handle/metadata/hierarchy authority; compatible world-static meshes are
@@ -258,11 +323,13 @@ export class ThreeRenderer {
   constructor(options: {
     meshBufferSource?: MeshBufferSource;
     meshResourceSource?: MeshResourceSource;
+    textureResourceSource?: TextureResourceSource;
     animatedMeshSource?: AnimatedMeshAssetSource;
     shadowsEnabled?: boolean;
   } = {}) {
     this.#meshBufferSource = options.meshBufferSource;
     this.#meshResourceSource = options.meshResourceSource;
+    this.#textureResourceSource = options.textureResourceSource;
     this.#animatedMeshSource = options.animatedMeshSource;
     this.#animatedMeshes = new AnimatedMeshRegistry(this.#animatedMeshSource);
     this.#shadowsEnabled = options.shadowsEnabled ?? false;
@@ -303,7 +370,7 @@ export class ThreeRenderer {
       }
       throw cause;
     }
-    const preparedGeometry = this.#prepareFrame(frame);
+    const prepared = this.#prepareFrame(frame);
     const staticInstanceBatchesChanged = this.#frameChangesStaticInstanceBatches(frame);
     const recursivelyDestroyed = new Set<RenderHandle>();
     try {
@@ -315,15 +382,16 @@ export class ThreeRenderer {
           }
           this.#destroy(op, recursivelyDestroyed);
         } else {
-          this.#applyDiff(op, preparedGeometry.get(index));
-          preparedGeometry.delete(index);
+          this.#applyDiff(op, prepared.geometries.get(index), prepared.textures.get(index));
+          prepared.geometries.delete(index);
+          prepared.textures.delete(index);
         }
       }
     } catch (cause) {
-      disposePreparedGeometry(preparedGeometry);
+      disposePreparedFrame(prepared);
       throw cause;
     }
-    disposePreparedGeometry(preparedGeometry);
+    disposePreparedFrame(prepared);
     this.#projection.applyFrame(frame);
     if (staticInstanceBatchesChanged) {
       this.#syncStaticInstanceBatches();
@@ -340,7 +408,11 @@ export class ThreeRenderer {
     this.applyFrame({ schemaVersion: 1, ops: [diff] });
   }
 
-  #applyDiff(diff: RenderDiff, preparedGeometry?: readonly THREE.BufferGeometry[]): void {
+  #applyDiff(
+    diff: RenderDiff,
+    preparedGeometry?: readonly THREE.BufferGeometry[],
+    preparedTexture?: RetainedTextureResource | null,
+  ): void {
     switch (diff.op) {
       case 'create':
         this.#create(diff);
@@ -367,7 +439,7 @@ export class ThreeRenderer {
         this.#setMaterialInstanceParameters(diff);
         break;
       case 'defineTexture':
-        this.#textures.set(diff.texture.id, diff.texture);
+        this.#defineTexture(diff.texture, preparedTexture);
         break;
       case 'defineSpriteAtlas':
         this.#atlases.set(diff.atlas.id, diff.atlas);
@@ -408,32 +480,82 @@ export class ThreeRenderer {
     }
   }
 
-  #prepareFrame(frame: RenderFrameDiff): Map<number, readonly THREE.BufferGeometry[]> {
-    const prepared = new Map<number, readonly THREE.BufferGeometry[]>();
+  #prepareFrame(frame: RenderFrameDiff): PreparedFrameResources {
+    const prepared: PreparedFrameResources = {
+      geometries: new Map(),
+      textures: new Map(),
+    };
     const selectedAnimatedClips = new Map<RenderHandle, string | null>();
+    const textureVersions = new Map([...this.#textures].map(([id, value]) => [id, value.version]));
+    const texturePayloads = new Map([...this.#textureResources].map(([id, value]) => [id, value.readout]));
+    let textureBudget: RendererTextureResourceBudget = {
+      count: texturePayloads.size,
+      encodedBytes: [...texturePayloads.values()].reduce((sum, value) => sum + value.encodedBytes, 0),
+      decodedBytes: [...texturePayloads.values()].reduce((sum, value) => sum + value.decodedBytes, 0),
+    };
     try {
       for (let index = 0; index < frame.ops.length; index += 1) {
         const operation = frame.ops[index]!;
         if (operation.op === 'defineStaticMesh') {
-          prepared.set(index, [buildMeshGeometry(
+          prepared.geometries.set(index, [buildMeshGeometry(
             operation.asset.payload,
             this.#meshBufferSource,
             this.#meshResourceSource,
             'defineStaticMesh',
           )]);
         } else if (operation.op === 'replaceMeshPayload') {
-          prepared.set(index, [buildMeshGeometry(
+          prepared.geometries.set(index, [buildMeshGeometry(
             operation.payload,
             this.#meshBufferSource,
             this.#meshResourceSource,
             'replaceMeshPayload',
           )]);
         } else if (operation.op === 'defineVoxelObject') {
-          prepared.set(index, buildVoxelObjectGeometries(
+          prepared.geometries.set(index, buildVoxelObjectGeometries(
             operation.asset,
             this.#meshBufferSource,
             this.#meshResourceSource,
           ));
+        } else if (operation.op === 'defineTexture') {
+          const currentVersion = textureVersions.get(operation.texture.id);
+          if (currentVersion !== undefined && operation.texture.version <= currentVersion) {
+            throw new RenderApplyError(
+              `defineTexture: stale or duplicate version ${String(operation.texture.version)} for ${operation.texture.id}`,
+            );
+          }
+          const previous = texturePayloads.get(operation.texture.id);
+          const payload = operation.texture.payload;
+          if (payload === undefined) {
+            textureBudget = admitRendererTextureResourceBudget(textureBudget, previous, undefined);
+            texturePayloads.delete(operation.texture.id);
+            prepared.textures.set(index, null);
+          } else {
+            const nextDecoded = operation.texture.width * operation.texture.height * 4;
+            const prospective = {
+              encodedBytes: payload.byteLength,
+              decodedBytes: nextDecoded,
+            };
+            textureBudget = admitRendererTextureResourceBudget(
+              textureBudget,
+              previous,
+              prospective,
+            );
+            const retained = prepareTextureResource(
+              operation.texture,
+              this.#textureResourceSource,
+              'defineTexture',
+            );
+            texturePayloads.set(operation.texture.id, retained.readout);
+            prepared.textures.set(index, retained);
+          }
+          textureVersions.set(operation.texture.id, operation.texture.version);
+        } else if (operation.op === 'defineMaterial') {
+          if (operation.material.schemaVersion >= 3 && operation.material.texture !== null
+            && !texturePayloads.has(operation.material.texture)) {
+            throw new RenderApplyError(
+              `defineMaterial: texture ${operation.material.texture} has no admitted retained payload`,
+            );
+          }
         } else if (operation.op === 'defineAnimatedMesh') {
           // Validate the exact source/hash/clip contract without allocating the
           // asset-scoped render template before the retained mutation.
@@ -477,7 +599,7 @@ export class ThreeRenderer {
       }
       return prepared;
     } catch (cause) {
-      disposePreparedGeometry(prepared);
+      disposePreparedFrame(prepared);
       throw animatedMeshError(cause);
     }
   }
@@ -518,7 +640,7 @@ export class ThreeRenderer {
       renderHandleCount: this.#handles.size,
       geometryResourceCount: this.#geometryResources.size,
       materialResourceCount: this.#materialResources.size,
-      textureResourceCount: this.#textureResourceReferences.size,
+      textureResourceCount: this.#textureResourceObjects.size,
       animatedInstanceCount: this.#animatedMeshes.instanceCount,
     });
   }
@@ -552,9 +674,7 @@ export class ThreeRenderer {
     const textures = materialTextures(material);
     for (const texture of textures) {
       const references = this.#textureResourceReferences.get(texture) ?? 0;
-      if (references === 0) {
-        texture.addEventListener('dispose', () => this.#textureResourceReferences.delete(texture));
-      }
+      this.#trackTextureResource(texture);
       this.#textureResourceReferences.set(texture, references + 1);
     }
     material.addEventListener('dispose', () => {
@@ -567,6 +687,15 @@ export class ThreeRenderer {
           this.#textureResourceReferences.set(texture, references - 1);
         }
       }
+    });
+  }
+
+  #trackTextureResource(texture: THREE.Texture): void {
+    if (this.#textureResourceObjects.has(texture)) return;
+    this.#textureResourceObjects.add(texture);
+    texture.addEventListener('dispose', () => {
+      this.#textureResourceObjects.delete(texture);
+      this.#textureResourceReferences.delete(texture);
     });
   }
 
@@ -624,6 +753,10 @@ export class ThreeRenderer {
     this.#slotColors.clear();
     this.#materials.clear();
     this.#fallbackMaterials.clear();
+    for (const retained of this.#textureResources.values()) {
+      retained.texture.dispose();
+    }
+    this.#textureResources.clear();
     this.#textures.clear();
     this.#atlases.clear();
     this.scene.clear();
@@ -631,6 +764,7 @@ export class ThreeRenderer {
     this.#geometryResources.clear();
     this.#materialResources.clear();
     this.#textureResourceReferences.clear();
+    this.#textureResourceObjects.clear();
     this.#disposed = true;
   }
 
@@ -1510,6 +1644,28 @@ export class ThreeRenderer {
     this.#replaceLiveMaterial(material.id);
   }
 
+  /** Publish a preflighted texture and rebuild every material that references it. */
+  #defineTexture(
+    descriptor: TextureDescriptor,
+    prepared: RetainedTextureResource | null | undefined,
+  ): void {
+    if (descriptor.payload !== undefined && prepared === undefined) {
+      throw new RenderApplyError(`defineTexture: missing prepared payload for ${descriptor.id}`);
+    }
+    const previous = this.#textureResources.get(descriptor.id);
+    this.#textures.set(descriptor.id, structuredClone(descriptor));
+    if (prepared === null || descriptor.payload === undefined) {
+      this.#textureResources.delete(descriptor.id);
+    } else if (prepared !== undefined) {
+      this.#textureResources.set(descriptor.id, prepared);
+      this.#trackTextureResource(prepared.texture);
+    }
+    for (const material of this.#materials.values()) {
+      if (material.texture === descriptor.id) this.#replaceLiveMaterial(material.id);
+    }
+    previous?.texture.dispose();
+  }
+
   /** Rebuild shared bases and every live instance material bound to `id`. */
   #replaceLiveMaterial(id: string): void {
     const replacedSharedMaterials = new Set<THREE.Material>();
@@ -1658,7 +1814,10 @@ export class ThreeRenderer {
     // so the gap is an observable diagnostic rather than silent.
     const descriptor = this.#materials.get(slot.material);
     if (descriptor) {
-      const material = standardMaterial(descriptor, parameters);
+      const texture = descriptor.texture === null
+        ? undefined
+        : this.#textureResources.get(descriptor.texture)?.texture;
+      const material = standardMaterial(descriptor, parameters, texture);
       this.#trackMaterialResource(material);
       return material;
     }
@@ -1675,7 +1834,15 @@ export class ThreeRenderer {
 
   /** A registered texture descriptor by id, for inspection/tests. */
   textureDescriptor(id: string): TextureDescriptor | undefined {
-    return this.#textures.get(id);
+    const descriptor = this.#textures.get(id);
+    return descriptor === undefined ? undefined : structuredClone(descriptor);
+  }
+
+  /** Immutable diagnostics for admitted encoded/decoded texture resources. */
+  textureResourceReadout(): readonly RendererTextureResourceReadout[] {
+    return Object.freeze([...this.#textureResources.values()]
+      .map((retained) => Object.freeze({ ...retained.readout }))
+      .sort((left, right) => left.id.localeCompare(right.id)));
   }
 
   /** A registered sprite atlas by id, for inspection/tests. */
@@ -1865,7 +2032,10 @@ export class ThreeRenderer {
   #uploadedMeshMaterial(slot: number, view: Material): THREE.MeshStandardMaterial {
     const descriptor = this.#materials.get(`voxel-material/${String(slot)}`);
     if (descriptor !== undefined) {
-      const material = standardMaterial(descriptor);
+      const texture = descriptor.texture === null
+        ? undefined
+        : this.#textureResources.get(descriptor.texture)?.texture;
+      const material = standardMaterial(descriptor, undefined, texture);
       material.color.multiply(new THREE.Color(view.color[0], view.color[1], view.color[2]));
       material.opacity *= view.color[3];
       material.transparent = material.opacity < 1;
@@ -2095,6 +2265,7 @@ function disposeInstanceMaterials(entry: NodeEntry): void {
 function standardMaterial(
   descriptor: RenderMaterialDescriptor,
   parameters?: MaterialInstanceParameters,
+  texture?: THREE.Texture,
 ): THREE.MeshStandardMaterial {
   const tint = parameters?.textureTint ?? descriptor.textureTint;
   const emissionColor = parameters?.emissionColor ?? descriptor.emissionColor;
@@ -2110,10 +2281,100 @@ function standardMaterial(
     emissive: new THREE.Color(emissionColor[0], emissionColor[1], emissionColor[2]),
     emissiveIntensity: emissionIntensity,
     metalness: 0,
+    map: texture ?? null,
     opacity,
     roughness: descriptor.roughness,
     transparent: opacity < 1,
   });
+}
+
+function prepareTextureResource(
+  descriptor: TextureDescriptor,
+  resourceSource: TextureResourceSource | undefined,
+  ctx: string,
+): RetainedTextureResource {
+  const payload = descriptor.payload;
+  if (payload === undefined) {
+    throw new RenderApplyError(`${ctx}: texture ${descriptor.id} has no retained payload`);
+  }
+  let bytes: Uint8Array;
+  let borrowedResource: string | undefined;
+  if (payload.source.kind === 'inline') {
+    bytes = Uint8Array.from(payload.source.encodedBytes);
+  } else {
+    if (resourceSource === undefined) {
+      throw new RenderApplyError(
+        `${ctx}: resource texture needs a texture resource provider (${payload.source.resource})`,
+      );
+    }
+    try {
+      const view = resourceSource.acquireResource(
+        payload.source.resource,
+        payload.contentHash,
+        payload.byteLength,
+      );
+      bytes = view.bytes.slice();
+      borrowedResource = payload.source.resource;
+    } catch (cause) {
+      throw classifyResourceError(
+        cause,
+        payload.source.resource,
+        ctx,
+        'unavailable',
+      );
+    }
+  }
+
+  let decoded: ReturnType<typeof decodeAdmittedPngTexture>;
+  try {
+    decoded = decodeAdmittedPngTexture(descriptor, bytes);
+  } catch (cause) {
+    if (borrowedResource !== undefined && resourceSource !== undefined) {
+      try {
+        resourceSource.releaseResource(borrowedResource);
+      } catch {
+        // Preserve the primary decode/admission failure.
+      }
+    }
+    if (cause instanceof PngTextureError) {
+      throw new RenderApplyError(`${ctx}: texture ${descriptor.id} rejected: ${cause.message}`);
+    }
+    throw cause;
+  }
+  if (borrowedResource !== undefined && resourceSource !== undefined) {
+    try {
+      resourceSource.releaseResource(borrowedResource);
+    } catch (cause) {
+      throw classifyResourceError(cause, borrowedResource, ctx, 'release failed');
+    }
+  }
+
+  const texture = new THREE.DataTexture(
+    decoded.pixels,
+    decoded.width,
+    decoded.height,
+    THREE.RGBAFormat,
+    THREE.UnsignedByteType,
+  );
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.flipY = false;
+  texture.generateMipmaps = false;
+  texture.magFilter = descriptor.filter === 'nearest' ? THREE.NearestFilter : THREE.LinearFilter;
+  texture.minFilter = descriptor.filter === 'nearest' ? THREE.NearestFilter : THREE.LinearFilter;
+  texture.wrapS = descriptor.wrap === 'repeat' ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
+  texture.wrapT = descriptor.wrap === 'repeat' ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
+  texture.unpackAlignment = 1;
+  texture.needsUpdate = true;
+  return {
+    texture,
+    readout: Object.freeze({
+      id: descriptor.id,
+      resource: payload.source.kind === 'resource' ? payload.source.resource : null,
+      contentHash: payload.contentHash,
+      encodedBytes: payload.byteLength,
+      decodedBytes: decoded.pixels.byteLength,
+    }),
+  };
 }
 
 // ── Builders (contract → Three.js) ────────────────────────────────────────────
@@ -2744,5 +3005,12 @@ function disposePreparedGeometry(
 ): void {
   for (const geometries of prepared.values()) {
     geometries.forEach((geometry) => geometry.dispose());
+  }
+}
+
+function disposePreparedFrame(prepared: PreparedFrameResources): void {
+  disposePreparedGeometry(prepared.geometries);
+  for (const retained of prepared.textures.values()) {
+    retained?.texture.dispose();
   }
 }

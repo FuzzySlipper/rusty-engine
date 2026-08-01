@@ -101,6 +101,47 @@ void test('render decoding admits the closed camera-relative viewmodel layer', (
   assert.equal(frame.ops[0]?.op === 'create' ? frame.ops[0].node.layer : null, 'viewmodel');
 });
 
+void test('texture payload decoding is strict, bounded, and content-addressed', () => {
+  const digest = 'a'.repeat(64);
+  const frame = {
+    schemaVersion: 1,
+    ops: [{
+      op: 'defineTexture',
+      texture: {
+        id: 'texture/checker',
+        width: 2,
+        height: 1,
+        filter: 'nearest',
+        wrap: 'repeat',
+        contentHash: `sha256:${digest}`,
+        version: 1,
+        payload: {
+          encoding: 'pngRgba8',
+          colorSpace: 'srgb',
+          contentHash: `sha256:${digest}`,
+          byteLength: 2,
+          source: { kind: 'inline', encodedBytes: [137, 80] },
+        },
+      },
+    }],
+  };
+  assert.equal(decodeRenderFrameDiff(frame).ops.length, 1);
+
+  const drift = structuredClone(frame);
+  drift.ops[0]!.texture.payload.contentHash = `sha256:${'b'.repeat(64)}`;
+  assert.throws(() => decodeRenderFrameDiff(drift), /canonical texture content hash/u);
+
+  const oversized = structuredClone(frame);
+  oversized.ops[0]!.texture.width = 4_097;
+  assert.throws(() => decodeRenderFrameDiff(oversized), /must be in 1\.\.=4096/u);
+
+  const unknown = structuredClone(frame) as typeof frame & {
+    ops: Array<{ texture: { payload: Record<string, unknown> } }>;
+  };
+  unknown.ops[0]!.texture.payload['runtimeUrl'] = 'https://must-not-cross.example';
+  assert.throws(() => decodeRenderFrameDiff(unknown), /runtimeUrl is unknown/u);
+});
+
 void test('presentation decoding rejects unsafe identities, sequence gaps, and nested drift', () => {
   const unsafe = mutableFixture('presentation-frame-v1.json');
   const unsafeOps = unsafe['ops'] as Array<Record<string, unknown>>;

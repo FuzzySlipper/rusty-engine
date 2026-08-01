@@ -71,6 +71,7 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
         wrap: TextureWrap::Repeat,
         content_hash: Some("cafe".to_string()),
         version: 1,
+        payload: None,
     };
     let atlas = SpriteAtlasDescriptor {
         id: "sprite/sparks".to_string(),

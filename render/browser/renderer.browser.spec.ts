@@ -6,8 +6,10 @@ test('shared host realizes retained, presentation, and inspection families in a 
     if (message.type() === 'error') consoleErrors.push(message.text());
   });
   await page.goto('/browser/');
-  await expect.poll(() => page.evaluate(() => window.__rustyRenderFailure ?? null)).toBeNull();
-  await page.waitForFunction(() => window.__rustyRenderProof?.ready === true);
+  await expect.poll(() => page.evaluate(() => ({
+    failure: window.__rustyRenderFailure ?? null,
+    ready: window.__rustyRenderProof?.ready ?? false,
+  }))).toEqual({ failure: null, ready: true });
 
   const proof = await page.evaluate(() => window.__rustyRenderProof!);
   expect(proof.animatedCapture).toEqual({
@@ -181,6 +183,7 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.rendererStatistics.geometryResourceCount.status).toBe('available');
   expect(proof.rendererStatistics.materialResourceCount.status).toBe('available');
   expect(proof.rendererStatistics.textureResourceCount.status).toBe('available');
+  expect(proof.rendererStatistics.textureResourceCount.value).toBeGreaterThanOrEqual(1);
   expect(proof.rendererStatistics.triangleCount.status).toBe('available');
   expect(proof.resetRendererStatistics).toEqual(proof.rendererStatistics);
   expect(proof.staticDemandApplied).toBe(true);

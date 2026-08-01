@@ -1,9 +1,9 @@
 # Runtime voxel surface textures
 
-Status: selected VTX0 contract with the VTX2 tile-coordinate mesh stream
-implemented. Texture resource admission, canonical material bindings, Three
-sampling realization, and Studio authoring remain the ordered VTX1/VTX3–VTX5
-follow-ons.
+Status: selected VTX0 contract with VTX1 bounded PNG resource realization and
+the VTX2 tile-coordinate mesh stream implemented. Canonical voxel material
+bindings, atlas sampling specialization, and Studio authoring remain the
+ordered VTX3–VTX5 follow-ons.
 
 ## Decision and ownership
 
@@ -127,7 +127,7 @@ No TypeScript remeshing, per-voxel fallback, or second voxel renderer is allowed
 
 ## Texture resource and material semantics
 
-The initial encoded format is PNG. The admitted byte identity is
+The VTX1 encoded format is non-interlaced RGBA8 PNG. The admitted byte identity is
 `texture-resource/<sha256 hex>` and its `contentHash` is the SHA-256 of the exact
 encoded bytes. The logical catalog identity remains `texture/<name>`. The
 renderer-neutral descriptor carries identity, encoding, exact encoded length,
@@ -178,6 +178,14 @@ typed errors under `texture.*`, `voxelTexture.*`, or `voxelAtlas.*`. Arithmetic
 overflow reports the owning quota error. Validation completes before frame,
 catalog, project, or GPU publication.
 
+VTX1 implements the texture subset through `render-model`, strict TypeScript
+decode, `renderer-host` preloading, and one retained Three `DataTexture` path.
+Inline and content-addressed sources converge on the same decoded RGBA8 pixels;
+filter, wrap, sRGB interpretation, tint, alpha, and existing emission remain on
+the generic `MeshStandardMaterial` path. Retained identity replacement rebuilds
+dependent materials only after decode succeeds and disposes the replaced GPU
+resource exactly once. Legacy payload omission remains color-only.
+
 ## Executable spike and measurements
 
 `svc-mesh` tests exercise the actual greedy partition together with the VTX0
@@ -222,8 +230,8 @@ cargo clippy -p svc-mesh --all-targets --locked -- -D warnings
 ## Follow-on contract touchpoints
 
 - VTX1 extends existing `render-model` texture resources, retained projection,
-  strict TypeScript decoding, and Three resource lifecycle with the PNG byte
-  contract above.
+  strict TypeScript decoding, renderer-host resource preload, and Three
+  lifecycle with the PNG byte contract above. This slice is implemented.
 - VTX2 consumes `svc-mesh::texture_mapping` from the one existing greedy
   `MeshPayload` path and versions inline/packed tile-space streams.
 - VTX3 owns canonical material and atlas bindings in `asset-catalog` and the

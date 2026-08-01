@@ -24,6 +24,11 @@ import {
   type RendererMeshResourceResolver,
 } from './mesh-resource-host.js';
 import {
+  loadRendererTextureResourceSource,
+  type RendererTextureResourceManifest,
+  type RendererTextureResourceResolver,
+} from './texture-resource-host.js';
+import {
   createRendererSurfaceStatisticsSample,
   type RendererSurfaceStatisticsInput,
   type RendererSurfaceStatisticsSample,
@@ -94,6 +99,8 @@ export interface RendererEditorViewportOptions {
   readonly pixelRatio?: number;
   readonly resolveAnimatedMeshResource?: RendererAnimatedMeshResourceResolver;
   readonly resolveMeshResource?: RendererMeshResourceResolver;
+  readonly resolveTextureResource?: RendererTextureResourceResolver;
+  readonly textureResourceManifest?: RendererTextureResourceManifest;
 }
 
 export type RendererEditorViewportDiagnosticCode =
@@ -312,6 +319,16 @@ export async function mountRendererEditorViewport(
         options.meshResourceManifest,
         options.resolveMeshResource as RendererMeshResourceResolver,
       );
+  if ((options.textureResourceManifest === undefined)
+    !== (options.resolveTextureResource === undefined)) {
+    throw new Error('textureResourceManifest requires an explicit resource resolver');
+  }
+  const textureResourceSource = options.textureResourceManifest === undefined
+    ? undefined
+    : await loadRendererTextureResourceSource(
+        options.textureResourceManifest,
+        options.resolveTextureResource as RendererTextureResourceResolver,
+      );
   const bufferSource = options.bufferSource;
   const meshBufferSource = bufferSource === undefined
     ? undefined
@@ -323,6 +340,7 @@ export async function mountRendererEditorViewport(
     ...(animatedMeshSource === undefined ? {} : { animatedMeshSource }),
     ...(meshBufferSource === undefined ? {} : { meshBufferSource }),
     ...(meshResourceSource === undefined ? {} : { meshResourceSource }),
+    ...(textureResourceSource === undefined ? {} : { textureResourceSource }),
     ...(options.clearColor === undefined ? {} : { clearColor: options.clearColor }),
     ...(options.pixelRatio === undefined ? {} : { pixelRatio: options.pixelRatio }),
   });

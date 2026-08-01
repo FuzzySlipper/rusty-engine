@@ -10,14 +10,14 @@ downstream repositories.
 - **Status:** scheduled
 - **Affected surface:** `svc-mesh`, `render-model`, `render-projection`, the isolated renderer,
   and Studio voxel authoring
-- **Limitation:** Production voxel mesh payloads now emit the VTX2 tile-space
-  attribute through inline and packed-v2 resources, but retained voxel
-  materials do not yet realize PNG tile or atlas-region resources. Current
-  voxel surfaces remain color-only.
+- **Limitation:** Production voxel mesh payloads emit the VTX2 tile-space
+  attribute, and VTX1 admits and realizes bounded PNG resources on generic
+  retained mesh materials. Canonical voxel material mappings and atlas-region
+  sampling are not yet connected, so current voxel surfaces remain color-only.
 - **Detection:** `cargo test -p svc-mesh --locked` proves the selected basis, negative-coordinate
   phase, chunk continuity, greedy geometry counts, and atlas formula without claiming visible
   rendering.
-- **Follow-up:** Complete the ordered VTX1/VTX3–VTX5 resource, material, renderer, and
+- **Follow-up:** Complete the ordered VTX3–VTX5 material, renderer, and
   Studio slices, then certify them in the exact public voxel consumer. The owning contract is
   [runtime voxel surface textures](topics/voxel/voxel-surface-textures.md).
 - **Last reviewed:** 2026-08-01 / codex

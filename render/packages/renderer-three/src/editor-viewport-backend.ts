@@ -20,6 +20,7 @@ import {
   ThreeRenderer,
   type MeshBufferSource,
   type MeshResourceSource,
+  type TextureResourceSource,
   type ThreeRendererResourceStatistics,
 } from './three-renderer.js';
 import { ThreeEditorGridProjection } from './editor-grid.js';
@@ -77,6 +78,7 @@ export interface RendererEditorBackendOptions {
   readonly clearColor?: number;
   readonly meshBufferSource?: MeshBufferSource;
   readonly meshResourceSource?: MeshResourceSource;
+  readonly textureResourceSource?: TextureResourceSource;
   readonly pixelRatio?: number;
 }
 
@@ -314,6 +316,9 @@ function createChannelRenderer(options: RendererEditorBackendOptions): ThreeRend
     ...(options.meshResourceSource === undefined
       ? {}
       : { meshResourceSource: options.meshResourceSource }),
+    ...(options.textureResourceSource === undefined
+      ? {}
+      : { textureResourceSource: options.textureResourceSource }),
   });
 }
 

@@ -221,6 +221,20 @@ export interface VoxelObjectInstanceDescriptor {
 
 export type TextureFilter = 'nearest' | 'linear';
 export type TextureWrap = 'clamp' | 'repeat';
+export type TextureEncoding = 'pngRgba8';
+export type TextureColorSpace = 'srgb';
+
+export type TexturePayloadSource =
+  | { readonly kind: 'inline'; readonly encodedBytes: readonly number[] }
+  | { readonly kind: 'resource'; readonly resource: string };
+
+export interface TexturePayloadDescriptor {
+  readonly encoding: TextureEncoding;
+  readonly colorSpace: TextureColorSpace;
+  readonly contentHash: string;
+  readonly byteLength: number;
+  readonly source: TexturePayloadSource;
+}
 
 export interface TextureDescriptor {
   readonly id: string;
@@ -230,6 +244,7 @@ export interface TextureDescriptor {
   readonly wrap: TextureWrap;
   readonly contentHash: string | null;
   readonly version: number;
+  readonly payload?: TexturePayloadDescriptor;
 }
 
 export interface SpriteFrameRect {

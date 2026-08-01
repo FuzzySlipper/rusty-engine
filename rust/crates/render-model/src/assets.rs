@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::{MeshProvenance, RenderHandle, RenderMetadata, Transform, JSON_SAFE_U64_MAX};
 
@@ -264,6 +265,42 @@ pub enum TextureWrap {
     Repeat,
 }
 
+pub const MAX_TEXTURE_DIMENSION: u32 = 4_096;
+pub const MAX_TEXTURE_TEXELS: u64 = 16_777_216;
+pub const MAX_TEXTURE_ENCODED_BYTES: u32 = 16 * 1024 * 1024;
+pub const MAX_RETAINED_TEXTURES: usize = 256;
+pub const MAX_AGGREGATE_TEXTURE_ENCODED_BYTES: u64 = 128 * 1024 * 1024;
+pub const MAX_AGGREGATE_TEXTURE_DECODED_BYTES: u64 = 256 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextureEncoding {
+    PngRgba8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextureColorSpace {
+    Srgb,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum TexturePayloadSource {
+    Inline { encoded_bytes: Vec<u8> },
+    Resource { resource: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TexturePayloadDescriptor {
+    pub encoding: TextureEncoding,
+    pub color_space: TextureColorSpace,
+    pub content_hash: String,
+    pub byte_length: u32,
+    pub source: TexturePayloadSource,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TextureDescriptor {
@@ -274,6 +311,10 @@ pub struct TextureDescriptor {
     pub wrap: TextureWrap,
     pub content_hash: Option<String>,
     pub version: u32,
+    /// Omitted legacy descriptors retain their historical metadata-only,
+    /// color-fallback meaning. New retained textures use this exact PNG source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<TexturePayloadDescriptor>,
 }
 
 impl TextureDescriptor {
@@ -285,12 +326,30 @@ impl TextureDescriptor {
                 height: self.height,
             });
         }
+        if self.width > MAX_TEXTURE_DIMENSION || self.height > MAX_TEXTURE_DIMENSION {
+            return Err(TextureError::DimensionQuotaExceeded {
+                width: self.width,
+                height: self.height,
+            });
+        }
+        let texels = u64::from(self.width)
+            .checked_mul(u64::from(self.height))
+            .ok_or(TextureError::TexelQuotaExceeded)?;
+        if texels > MAX_TEXTURE_TEXELS {
+            return Err(TextureError::TexelQuotaExceeded);
+        }
+        if self.version == 0 {
+            return Err(TextureError::InvalidVersion);
+        }
         if self
             .content_hash
             .as_ref()
             .is_some_and(|hash| hash.trim().is_empty())
         {
             return Err(TextureError::EmptyContentHash);
+        }
+        if let Some(payload) = &self.payload {
+            validate_texture_payload(self, payload)?;
         }
         Ok(())
     }
@@ -300,7 +359,141 @@ impl TextureDescriptor {
 pub enum TextureError {
     Asset(RenderAssetError),
     ZeroDimension { width: u32, height: u32 },
+    DimensionQuotaExceeded { width: u32, height: u32 },
+    TexelQuotaExceeded,
+    InvalidVersion,
     EmptyContentHash,
+    EncodedByteQuotaExceeded { byte_length: u32 },
+    InvalidContentHash,
+    InvalidResourceIdentity,
+    InlineByteLengthMismatch,
+    InlineContentHashMismatch,
+    InvalidPng,
+    PngDimensionMismatch,
+    UnsupportedPng,
+}
+
+fn validate_texture_payload(
+    texture: &TextureDescriptor,
+    payload: &TexturePayloadDescriptor,
+) -> Result<(), TextureError> {
+    if payload.byte_length == 0 || payload.byte_length > MAX_TEXTURE_ENCODED_BYTES {
+        return Err(TextureError::EncodedByteQuotaExceeded {
+            byte_length: payload.byte_length,
+        });
+    }
+    let digest = payload
+        .content_hash
+        .strip_prefix("sha256:")
+        .filter(|value| {
+            value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        })
+        .ok_or(TextureError::InvalidContentHash)?;
+    if texture.content_hash.as_deref() != Some(payload.content_hash.as_str()) {
+        return Err(TextureError::InvalidContentHash);
+    }
+    match &payload.source {
+        TexturePayloadSource::Inline { encoded_bytes } => {
+            if encoded_bytes.len() != payload.byte_length as usize {
+                return Err(TextureError::InlineByteLengthMismatch);
+            }
+            let actual = format!("sha256:{:x}", Sha256::digest(encoded_bytes));
+            if actual != payload.content_hash {
+                return Err(TextureError::InlineContentHashMismatch);
+            }
+            validate_png_rgba8(encoded_bytes, texture.width, texture.height)?;
+        }
+        TexturePayloadSource::Resource { resource } => {
+            if resource != &format!("texture-resource/{digest}") {
+                return Err(TextureError::InvalidResourceIdentity);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_png_rgba8(bytes: &[u8], width: u32, height: u32) -> Result<(), TextureError> {
+    const SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    if bytes.get(..8) != Some(SIGNATURE) {
+        return Err(TextureError::InvalidPng);
+    }
+    let mut offset = 8_usize;
+    let mut saw_ihdr = false;
+    let mut saw_idat = false;
+    let mut saw_iend = false;
+    while offset < bytes.len() {
+        let length = bytes
+            .get(offset..offset + 4)
+            .and_then(|value| value.try_into().ok())
+            .map(u32::from_be_bytes)
+            .ok_or(TextureError::InvalidPng)? as usize;
+        let kind = bytes
+            .get(offset + 4..offset + 8)
+            .ok_or(TextureError::InvalidPng)?;
+        let data_start = offset.checked_add(8).ok_or(TextureError::InvalidPng)?;
+        let data_end = data_start
+            .checked_add(length)
+            .ok_or(TextureError::InvalidPng)?;
+        let chunk_end = data_end.checked_add(4).ok_or(TextureError::InvalidPng)?;
+        if chunk_end > bytes.len() {
+            return Err(TextureError::InvalidPng);
+        }
+        let expected_crc = u32::from_be_bytes(
+            bytes[data_end..chunk_end]
+                .try_into()
+                .map_err(|_| TextureError::InvalidPng)?,
+        );
+        if png_crc32(&bytes[offset + 4..data_end]) != expected_crc {
+            return Err(TextureError::InvalidPng);
+        }
+        match kind {
+            b"IHDR" if !saw_ihdr && offset == 8 && length == 13 => {
+                let data = &bytes[data_start..data_end];
+                let actual_width = u32::from_be_bytes(data[0..4].try_into().expect("IHDR width"));
+                let actual_height = u32::from_be_bytes(data[4..8].try_into().expect("IHDR height"));
+                if [actual_width, actual_height] != [width, height] {
+                    return Err(TextureError::PngDimensionMismatch);
+                }
+                if data[8..13] != [8, 6, 0, 0, 0] {
+                    return Err(TextureError::UnsupportedPng);
+                }
+                saw_ihdr = true;
+            }
+            b"IDAT" if saw_ihdr && !saw_iend => saw_idat = true,
+            b"IEND" if saw_ihdr && saw_idat && length == 0 => {
+                saw_iend = true;
+                if chunk_end != bytes.len() {
+                    return Err(TextureError::InvalidPng);
+                }
+            }
+            b"IHDR" | b"IEND" => return Err(TextureError::InvalidPng),
+            _ => {}
+        }
+        offset = chunk_end;
+    }
+    if saw_ihdr && saw_idat && saw_iend {
+        Ok(())
+    } else {
+        Err(TextureError::InvalidPng)
+    }
+}
+
+fn png_crc32(bytes: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 0 {
+                crc >> 1
+            } else {
+                (crc >> 1) ^ 0xedb8_8320
+            };
+        }
+    }
+    !crc
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -516,6 +709,15 @@ fn valid_color<const N: usize>(values: [f32; N]) -> bool {
 mod tests {
     use super::*;
 
+    const CHECKER_PNG: &[u8] = &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 244, 34, 127, 138, 0, 0, 0, 15, 73, 68, 65, 84, 120, 156, 99, 248, 207, 0, 68,
+        255, 25, 26, 0, 16, 121, 3, 126, 153, 113, 48, 89, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96,
+        130,
+    ];
+    const CHECKER_HASH: &str =
+        "sha256:a58d5395a03945e56638dba7ae6158b2fdaf013610a798c059a6d88231a052ae";
+
     #[test]
     fn narrow_asset_view_checks_kind_without_becoming_a_catalog() {
         let asset = ResolvedRenderAsset {
@@ -567,6 +769,88 @@ mod tests {
         assert_eq!(
             atlas.validate(),
             Err(SpriteAtlasError::DuplicateFrame { frame: 0 })
+        );
+    }
+
+    #[test]
+    fn texture_payload_admits_exact_rgba8_png_and_rejects_hash_or_png_drift() {
+        let texture = TextureDescriptor {
+            id: "texture/checker".to_string(),
+            width: 2,
+            height: 1,
+            filter: TextureFilter::Nearest,
+            wrap: TextureWrap::Repeat,
+            content_hash: Some(CHECKER_HASH.to_string()),
+            version: 1,
+            payload: Some(TexturePayloadDescriptor {
+                encoding: TextureEncoding::PngRgba8,
+                color_space: TextureColorSpace::Srgb,
+                content_hash: CHECKER_HASH.to_string(),
+                byte_length: CHECKER_PNG.len() as u32,
+                source: TexturePayloadSource::Inline {
+                    encoded_bytes: CHECKER_PNG.to_vec(),
+                },
+            }),
+        };
+        assert_eq!(texture.validate(), Ok(()));
+
+        let mut hash_drift = texture.clone();
+        hash_drift.payload.as_mut().unwrap().content_hash = format!("sha256:{}", "0".repeat(64));
+        assert_eq!(hash_drift.validate(), Err(TextureError::InvalidContentHash));
+
+        let mut png_drift = texture;
+        if let TexturePayloadSource::Inline { encoded_bytes } =
+            &mut png_drift.payload.as_mut().unwrap().source
+        {
+            encoded_bytes[32] ^= 1;
+            let drift_hash = format!("sha256:{:x}", Sha256::digest(encoded_bytes));
+            png_drift.content_hash = Some(drift_hash.clone());
+            png_drift.payload.as_mut().unwrap().content_hash = drift_hash;
+        }
+        assert_eq!(png_drift.validate(), Err(TextureError::InvalidPng));
+    }
+
+    #[test]
+    fn texture_payload_resource_identity_and_bounds_fail_closed() {
+        let descriptor = TextureDescriptor {
+            id: "texture/checker".to_string(),
+            width: MAX_TEXTURE_DIMENSION,
+            height: MAX_TEXTURE_DIMENSION,
+            filter: TextureFilter::Linear,
+            wrap: TextureWrap::Clamp,
+            content_hash: Some(CHECKER_HASH.to_string()),
+            version: 1,
+            payload: Some(TexturePayloadDescriptor {
+                encoding: TextureEncoding::PngRgba8,
+                color_space: TextureColorSpace::Srgb,
+                content_hash: CHECKER_HASH.to_string(),
+                byte_length: CHECKER_PNG.len() as u32,
+                source: TexturePayloadSource::Resource {
+                    resource: format!("texture-resource/{}", &CHECKER_HASH[7..]),
+                },
+            }),
+        };
+        assert_eq!(descriptor.validate(), Ok(()));
+
+        let mut wrong_resource = descriptor.clone();
+        if let TexturePayloadSource::Resource { resource } =
+            &mut wrong_resource.payload.as_mut().unwrap().source
+        {
+            *resource = "texture-resource/wrong".to_string();
+        }
+        assert_eq!(
+            wrong_resource.validate(),
+            Err(TextureError::InvalidResourceIdentity)
+        );
+
+        let mut too_wide = descriptor;
+        too_wide.width = MAX_TEXTURE_DIMENSION + 1;
+        assert_eq!(
+            too_wide.validate(),
+            Err(TextureError::DimensionQuotaExceeded {
+                width: MAX_TEXTURE_DIMENSION + 1,
+                height: MAX_TEXTURE_DIMENSION,
+            })
         );
     }
 }

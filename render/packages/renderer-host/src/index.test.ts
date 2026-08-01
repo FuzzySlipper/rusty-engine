@@ -14,9 +14,11 @@ import {
   createRendererDefaultSurfaceFrame,
   createRendererSurfaceProjection,
   loadRendererMeshResourceSource,
+  loadRendererTextureResourceSource,
   resolveRendererStoredEditorCamera,
   type RendererAnimatedMeshResourceManifest,
   type RendererMeshResourceManifest,
+  type RendererTextureResourceManifest,
 } from './index.js';
 
 const ANIMATED_ASSET = 'mesh-animation/kenney-retro-character-medium';
@@ -224,6 +226,35 @@ void test('mesh resource host snapshots resolver-owned bytes before admission', 
   // already-admitted host resource.
   new Uint8Array(resolverOwned).fill(0);
   assert.deepEqual(acquired.bytes, expected);
+});
+
+void test('texture resource host admits canonical bounded bytes and snapshots resolver ownership', async () => {
+  const expected = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+  const digest = createHash('sha256').update(expected).digest('hex');
+  const manifest: RendererTextureResourceManifest = {
+    kind: 'rusty_renderer_texture_resources.v1',
+    resources: [{
+      resource: `texture-resource/${digest}`,
+      contentHash: `sha256:${digest}`,
+      byteLength: expected.byteLength,
+    }],
+  };
+  const resolverOwned = expected.buffer.slice(0);
+  const source = await loadRendererTextureResourceSource(
+    manifest,
+    () => Promise.resolve(resolverOwned),
+  );
+  new Uint8Array(resolverOwned).fill(0);
+  const admitted = source.acquireResource(
+    manifest.resources[0]!.resource,
+    manifest.resources[0]!.contentHash,
+    expected.byteLength,
+  );
+  assert.deepEqual(admitted.bytes, expected);
+  assert.throws(
+    () => source.acquireResource(manifest.resources[0]!.resource, 'sha256:wrong', expected.byteLength),
+    /does not match the admitted resource manifest/u,
+  );
 });
 
 void test('renderer-host exposes backend-neutral stored editor camera resolution', () => {

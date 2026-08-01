@@ -25,6 +25,10 @@ import type {
   RendererMeshResourceManifest,
   RendererMeshResourceResolver,
 } from './mesh-resource-host.js';
+import type {
+  RendererTextureResourceManifest,
+  RendererTextureResourceResolver,
+} from './texture-resource-host.js';
 import type { RendererSurfaceSubmissionSample } from './surface-statistics.js';
 import {
   assertRendererSurfaceSourceTime,
@@ -93,6 +97,8 @@ export interface RendererInspectionSurfaceOptions {
   readonly pixelRatio?: number;
   readonly resolveAnimatedMeshResource?: RendererAnimatedMeshResourceResolver;
   readonly resolveMeshResource?: RendererMeshResourceResolver;
+  readonly resolveTextureResource?: RendererTextureResourceResolver;
+  readonly textureResourceManifest?: RendererTextureResourceManifest;
 }
 
 export type RendererInspectionSurfaceStatus = 'mounted' | 'running' | 'stopped' | 'disposed';
@@ -249,6 +255,12 @@ export async function mountRendererInspectionSurface(
     ...(options.resolveMeshResource === undefined
       ? {}
       : { resolveMeshResource: options.resolveMeshResource }),
+    ...(options.resolveTextureResource === undefined
+      ? {}
+      : { resolveTextureResource: options.resolveTextureResource }),
+    ...(options.textureResourceManifest === undefined
+      ? {}
+      : { textureResourceManifest: options.textureResourceManifest }),
   });
   try {
     return createRendererInspectionSurfaceWithViewport(

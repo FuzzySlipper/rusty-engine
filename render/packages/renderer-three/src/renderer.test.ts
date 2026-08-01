@@ -6,17 +6,25 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { bytesToHex } from '@noble/hashes/utils.js';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { zlibSync } from 'fflate';
 
 import { renderHandle, type AnimatedMeshAsset, type RenderDiff, type RenderNode } from '@rusty-engine/render-contracts';
 import {
   MapAnimatedMeshAssetSource,
   RenderApplyError,
   RenderResourceError,
+  RUSTY_RENDERER_TEXTURE_MAX_DECODED_BYTES,
+  RUSTY_RENDERER_TEXTURE_MAX_ENCODED_BYTES,
+  RUSTY_RENDERER_TEXTURE_MAX_RETAINED,
   ThreeRenderer,
+  admitRendererTextureResourceBudget,
   loadAnimatedMeshGlbResource,
   type MeshBufferView,
   type MeshBufferSource,
   type MeshResourceSource,
+  type TextureResourceSource,
 } from './backend.js';
 
 function cubeNode(label = 'cube'): RenderNode {
@@ -1877,6 +1885,259 @@ function woodMaterial(): RenderMaterialDescriptor {
     uvStrategy: 'flat',
   };
 }
+
+function pngCrc32(bytes: Uint8Array): number {
+  let crc = 0xffff_ffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) {
+      crc = (crc & 1) === 0 ? crc >>> 1 : (crc >>> 1) ^ 0xedb8_8320;
+    }
+  }
+  return (crc ^ 0xffff_ffff) >>> 0;
+}
+
+function pngChunk(type: string, data: Uint8Array): Uint8Array {
+  const chunk = new Uint8Array(12 + data.byteLength);
+  const view = new DataView(chunk.buffer);
+  view.setUint32(0, data.byteLength, false);
+  for (let index = 0; index < 4; index++) chunk[4 + index] = type.charCodeAt(index);
+  chunk.set(data, 8);
+  view.setUint32(8 + data.byteLength, pngCrc32(chunk.subarray(4, 8 + data.byteLength)), false);
+  return chunk;
+}
+
+function rgbaPng(width: number, height: number, pixels: readonly number[]): Uint8Array {
+  assert.equal(pixels.length, width * height * 4);
+  const header = new Uint8Array(13);
+  const headerView = new DataView(header.buffer);
+  headerView.setUint32(0, width, false);
+  headerView.setUint32(4, height, false);
+  header.set([8, 6, 0, 0, 0], 8);
+  const filtered = new Uint8Array(height * (width * 4 + 1));
+  for (let row = 0; row < height; row++) {
+    filtered[row * (width * 4 + 1)] = 0;
+    filtered.set(pixels.slice(row * width * 4, (row + 1) * width * 4), row * (width * 4 + 1) + 1);
+  }
+  const chunks = [
+    pngChunk('IHDR', header),
+    pngChunk('IDAT', zlibSync(filtered)),
+    pngChunk('IEND', new Uint8Array()),
+  ];
+  const bytes = new Uint8Array(8 + chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0));
+  bytes.set([137, 80, 78, 71, 13, 10, 26, 10]);
+  let offset = 8;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+function textureDescriptor(
+  bytes: Uint8Array,
+  version = 1,
+  source: 'inline' | 'resource' = 'inline',
+): import('@rusty-engine/render-contracts').TextureDescriptor {
+  const digest = bytesToHex(sha256(bytes));
+  const contentHash = `sha256:${digest}`;
+  return {
+    id: 'texture/checker',
+    width: 2,
+    height: 1,
+    filter: 'nearest',
+    wrap: 'repeat',
+    contentHash,
+    version,
+    payload: {
+      encoding: 'pngRgba8',
+      colorSpace: 'srgb',
+      contentHash,
+      byteLength: bytes.byteLength,
+      source: source === 'inline'
+        ? { kind: 'inline', encodedBytes: [...bytes] }
+        : { kind: 'resource', resource: `texture-resource/${digest}` },
+    },
+  };
+}
+
+function texturedMaterial(): RenderMaterialDescriptor {
+  return {
+    ...woodMaterial(),
+    schemaVersion: 3,
+    texture: 'texture/checker',
+    uvStrategy: 'atlas',
+  };
+}
+
+function texturedPlankAsset(): StaticMeshAsset {
+  return {
+    asset: 'mesh/textured-plank',
+    payload: { ...texturedQuadPayload(), provenance: 'staticAsset' },
+    materialSlots: [{ slot: 0, material: 'material/wood' }],
+    collision: { kind: 'visualOnly' },
+  };
+}
+
+class TestTextureResourceSource implements TextureResourceSource {
+  readonly acquired: string[] = [];
+  readonly released: string[] = [];
+
+  constructor(readonly bytes: Uint8Array) {}
+
+  acquireResource(resource: string, contentHash: string, byteLength: number): MeshBufferView {
+    const expected = textureDescriptor(this.bytes, 1, 'resource').payload!;
+    assert.equal(resource, expected.source.kind === 'resource' ? expected.source.resource : null);
+    assert.equal(contentHash, expected.contentHash);
+    assert.equal(byteLength, this.bytes.byteLength);
+    this.acquired.push(resource);
+    return { bytes: this.bytes };
+  }
+
+  releaseResource(resource: string): void {
+    this.released.push(resource);
+  }
+}
+
+void test('inline and resource PNG textures converge on one generic static-mesh material path', () => {
+  const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 128]);
+  const source = new TestTextureResourceSource(bytes);
+  const inline = new ThreeRenderer();
+  const resource = new ThreeRenderer({ textureResourceSource: source });
+  for (const [renderer, kind] of [[inline, 'inline'], [resource, 'resource']] as const) {
+    renderer.applyFrame({ schemaVersion: 1, ops: [
+      { op: 'defineTexture', texture: textureDescriptor(bytes, 1, kind) },
+      { op: 'defineMaterial', material: texturedMaterial() },
+      { op: 'defineStaticMesh', asset: texturedPlankAsset() },
+      {
+        op: 'createStaticMeshInstance', handle: renderHandle(301), parent: null,
+        instance: crateInstance('mesh/textured-plank'),
+      },
+      {
+        op: 'createStaticMeshInstance', handle: renderHandle(302), parent: null,
+        instance: crateInstance('mesh/textured-plank'),
+      },
+    ] });
+    const first = (renderer.objectFor(renderHandle(301)) as THREE.Mesh).material as THREE.MeshStandardMaterial;
+    const second = (renderer.objectFor(renderHandle(302)) as THREE.Mesh).material as THREE.MeshStandardMaterial;
+    assert.ok(first.map instanceof THREE.DataTexture);
+    assert.equal(first.map, second.map, 'instances share one retained texture');
+    assert.deepEqual([...((first.map.image as { data: Uint8Array }).data)], [255, 0, 0, 255, 0, 255, 0, 128]);
+    assert.equal(first.map.colorSpace, THREE.SRGBColorSpace);
+    assert.equal(first.map.magFilter, THREE.NearestFilter);
+    assert.equal(first.map.wrapS, THREE.RepeatWrapping);
+    assert.equal(renderer.resourceStatistics().textureResourceCount, 1);
+    assert.equal(renderer.textureResourceReadout()[0]?.decodedBytes, 8);
+  }
+  assert.equal(source.acquired.length, 1);
+  assert.deepEqual(source.released, source.acquired);
+});
+
+void test('texture redefine is stale-safe and disposes replaced and final GPU resources exactly once', () => {
+  const beforeBytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
+  const afterBytes = rgbaPng(2, 1, [0, 0, 255, 255, 255, 255, 0, 255]);
+  const renderer = new ThreeRenderer();
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture: textureDescriptor(beforeBytes) },
+    { op: 'defineMaterial', material: texturedMaterial() },
+    { op: 'defineStaticMesh', asset: texturedPlankAsset() },
+    {
+      op: 'createStaticMeshInstance', handle: renderHandle(303), parent: null,
+      instance: crateInstance('mesh/textured-plank'),
+    },
+  ] });
+  const mesh = renderer.objectFor(renderHandle(303)) as THREE.Mesh;
+  const oldTexture = (mesh.material as THREE.MeshStandardMaterial).map!;
+  let oldDisposals = 0;
+  oldTexture.addEventListener('dispose', () => { oldDisposals += 1; });
+
+  renderer.applyDiff({ op: 'defineTexture', texture: textureDescriptor(afterBytes, 2) });
+  const newTexture = (mesh.material as THREE.MeshStandardMaterial).map!;
+  assert.notEqual(newTexture, oldTexture);
+  assert.equal(oldDisposals, 1);
+  const descriptorBeforeStale = renderer.textureDescriptor('texture/checker');
+  assert.throws(
+    () => renderer.applyDiff({ op: 'defineTexture', texture: textureDescriptor(beforeBytes, 1) }),
+    /stale or duplicate version/u,
+  );
+  assert.equal((mesh.material as THREE.MeshStandardMaterial).map, newTexture);
+  assert.deepEqual(renderer.textureDescriptor('texture/checker'), descriptorBeforeStale);
+
+  let finalDisposals = 0;
+  newTexture.addEventListener('dispose', () => { finalDisposals += 1; });
+  renderer.dispose();
+  renderer.dispose();
+  assert.equal(finalDisposals, 1);
+  assert.equal(renderer.resourceStatistics().textureResourceCount, 0);
+});
+
+void test('retained texture budget accepts every exact limit and rejects each one-over prospectively', () => {
+  const exact = {
+    count: RUSTY_RENDERER_TEXTURE_MAX_RETAINED - 1,
+    encodedBytes: RUSTY_RENDERER_TEXTURE_MAX_ENCODED_BYTES - 1,
+    decodedBytes: RUSTY_RENDERER_TEXTURE_MAX_DECODED_BYTES - 4,
+  };
+  assert.deepEqual(
+    admitRendererTextureResourceBudget(exact, undefined, { encodedBytes: 1, decodedBytes: 4 }),
+    {
+      count: RUSTY_RENDERER_TEXTURE_MAX_RETAINED,
+      encodedBytes: RUSTY_RENDERER_TEXTURE_MAX_ENCODED_BYTES,
+      decodedBytes: RUSTY_RENDERER_TEXTURE_MAX_DECODED_BYTES,
+    },
+  );
+  assert.throws(
+    () => admitRendererTextureResourceBudget(
+      { ...exact, count: RUSTY_RENDERER_TEXTURE_MAX_RETAINED },
+      undefined,
+      { encodedBytes: 1, decodedBytes: 4 },
+    ),
+    /retained texture quota exceeded/u,
+  );
+  assert.throws(
+    () => admitRendererTextureResourceBudget(
+      { ...exact, encodedBytes: RUSTY_RENDERER_TEXTURE_MAX_ENCODED_BYTES },
+      undefined,
+      { encodedBytes: 1, decodedBytes: 4 },
+    ),
+    /aggregate encoded texture byte quota exceeded/u,
+  );
+  assert.throws(
+    () => admitRendererTextureResourceBudget(
+      { ...exact, decodedBytes: RUSTY_RENDERER_TEXTURE_MAX_DECODED_BYTES - 3 },
+      undefined,
+      { encodedBytes: 1, decodedBytes: 4 },
+    ),
+    /aggregate decoded texture byte quota exceeded/u,
+  );
+});
+
+void test('malformed texture bytes reject the complete frame and release the resource borrow', () => {
+  const expected = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
+  const corrupt = expected.slice();
+  corrupt[corrupt.length - 1] = (corrupt[corrupt.length - 1] ?? 0) ^ 1;
+  const released: string[] = [];
+  const source: TextureResourceSource = {
+    acquireResource: () => ({ bytes: corrupt }),
+    releaseResource: (resource) => { released.push(resource); },
+  };
+  const renderer = new ThreeRenderer({ textureResourceSource: source });
+  renderer.applyDiff(createDiff(1, cubeNode('stable')));
+  const before = renderer.snapshot();
+  const descriptor = textureDescriptor(expected, 1, 'resource');
+  assert.throws(
+    () => renderer.applyFrame({ schemaVersion: 1, ops: [
+      createDiff(2, cubeNode('must-not-commit')),
+      { op: 'defineTexture', texture: descriptor },
+    ] }),
+    /content hash mismatch/u,
+  );
+  assert.equal(renderer.snapshot(), before);
+  assert.equal(renderer.has(renderHandle(2)), false);
+  assert.equal(renderer.textureDescriptor(descriptor.id), undefined);
+  assert.deepEqual(released, [
+    descriptor.payload?.source.kind === 'resource' ? descriptor.payload.source.resource : '',
+  ]);
+});
 
 void test('defineMaterial maps a static-mesh slot to its defined colour, not a placeholder', () => {
   const r = new ThreeRenderer();

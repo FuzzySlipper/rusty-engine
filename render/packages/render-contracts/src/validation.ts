@@ -597,14 +597,43 @@ function materialParameters(input: unknown, path: string): void {
 }
 
 function texture(input: unknown, path: string): void {
-  const value = record(input, path, ['id', 'width', 'height', 'filter', 'wrap', 'contentHash', 'version']);
+  const value = recordOptional(input, path,
+    ['id', 'width', 'height', 'filter', 'wrap', 'contentHash', 'version'], ['payload']);
   nonEmptyText(value['id'], `${path}.id`);
-  integer(value['width'], `${path}.width`, 1, 4_294_967_295);
-  integer(value['height'], `${path}.height`, 1, 4_294_967_295);
+  const width = integer(value['width'], `${path}.width`, 1, 4_096);
+  const height = integer(value['height'], `${path}.height`, 1, 4_096);
+  if (width * height > 16_777_216) fail(path, 'texture texel quota exceeded');
   enumeration(value['filter'], `${path}.filter`, ['nearest', 'linear'] as const);
   enumeration(value['wrap'], `${path}.wrap`, ['clamp', 'repeat'] as const);
   nullable(value['contentHash'], `${path}.contentHash`, nonEmptyText);
-  integer(value['version'], `${path}.version`, 0, 4_294_967_295);
+  integer(value['version'], `${path}.version`, 1, 4_294_967_295);
+  if (Object.hasOwn(value, 'payload')) {
+    const payload = record(value['payload'], `${path}.payload`, [
+      'encoding', 'colorSpace', 'contentHash', 'byteLength', 'source',
+    ]);
+    enumeration(payload['encoding'], `${path}.payload.encoding`, ['pngRgba8'] as const);
+    enumeration(payload['colorSpace'], `${path}.payload.colorSpace`, ['srgb'] as const);
+    const contentHash = nonEmptyText(payload['contentHash'], `${path}.payload.contentHash`);
+    const digest = /^sha256:([0-9a-f]{64})$/u.exec(contentHash)?.[1];
+    if (digest === undefined || value['contentHash'] !== contentHash) {
+      fail(`${path}.payload.contentHash`, 'must be the canonical texture content hash');
+    }
+    const byteLength = integer(payload['byteLength'], `${path}.payload.byteLength`, 1, 16 * 1024 * 1024);
+    const source = looseRecord(payload['source'], `${path}.payload.source`);
+    const kind = enumeration(source['kind'], `${path}.payload.source.kind`, ['inline', 'resource'] as const);
+    if (kind === 'inline') {
+      const exact = record(source, `${path}.payload.source`, ['kind', 'encodedBytes']);
+      const bytes = numberList(exact['encodedBytes'], `${path}.payload.source.encodedBytes`, byteLength, true);
+      bytes.forEach((byte, index) => {
+        if (byte > 255) fail(`${path}.payload.source.encodedBytes[${String(index)}]`, 'must be a byte');
+      });
+    } else {
+      const exact = record(source, `${path}.payload.source`, ['kind', 'resource']);
+      if (exact['resource'] !== `texture-resource/${digest}`) {
+        fail(`${path}.payload.source.resource`, 'must match the content hash');
+      }
+    }
+  }
 }
 
 function spriteAtlas(input: unknown, path: string): void {

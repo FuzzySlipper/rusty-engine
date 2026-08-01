@@ -18,6 +18,7 @@ import {
   type MeshBufferSource,
   type MeshResourceSource,
   type RendererProjectionIdentity,
+  type TextureResourceSource,
   type ThreeRendererResourceStatistics,
 } from './three-renderer.js';
 import type {
@@ -55,6 +56,7 @@ export interface RendererBrowserSurfaceOptions {
   readonly frame?: RenderFrameDiff;
   readonly meshBufferSource?: MeshBufferSource;
   readonly meshResourceSource?: MeshResourceSource;
+  readonly textureResourceSource?: TextureResourceSource;
   readonly pixelRatio?: number;
 }
 
@@ -230,6 +232,8 @@ export function mountRendererBrowserSurface(
         ? {} : { meshBufferSource: options.meshBufferSource }),
       ...(options.meshResourceSource === undefined
         ? {} : { meshResourceSource: options.meshResourceSource }),
+      ...(options.textureResourceSource === undefined
+        ? {} : { textureResourceSource: options.textureResourceSource }),
     },
   );
   // Defined retained materials use MeshStandardMaterial. Keep the browser host responsible

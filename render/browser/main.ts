@@ -801,24 +801,42 @@ function browserFrame(): RenderFrameDiff {
     schemaVersion: 1,
     ops: [
       {
+        op: 'defineTexture',
+        texture: {
+          id: 'texture/browser-proof', width: 2, height: 1, filter: 'nearest',
+          wrap: 'repeat',
+          contentHash: 'sha256:a58d5395a03945e56638dba7ae6158b2fdaf013610a798c059a6d88231a052ae',
+          version: 1,
+          payload: {
+            encoding: 'pngRgba8',
+            colorSpace: 'srgb',
+            contentHash: 'sha256:a58d5395a03945e56638dba7ae6158b2fdaf013610a798c059a6d88231a052ae',
+            byteLength: 72,
+            source: {
+              kind: 'inline',
+              encodedBytes: [
+                137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82,
+                0, 0, 0, 2, 0, 0, 0, 1, 8, 6, 0, 0, 0, 244, 34, 127, 138, 0,
+                0, 0, 15, 73, 68, 65, 84, 120, 156, 99, 248, 207, 0, 68, 255, 25,
+                26, 0, 16, 121, 3, 126, 153, 113, 48, 89, 0, 0, 0, 0, 73, 69, 78,
+                68, 174, 66, 96, 130,
+              ],
+            },
+          },
+        },
+      },
+      {
         op: 'defineMaterial',
         material: {
-          schemaVersion: 2,
+          schemaVersion: 3,
           id: 'material/browser-proof',
           color: [0.25, 0.7, 0.9, 1],
-          texture: null,
+          texture: 'texture/browser-proof',
           roughness: 0.8,
           textureTint: [1, 1, 1, 1],
           emissionColor: [0, 0, 0],
           emissionIntensity: 0,
-          uvStrategy: 'flat',
-        },
-      },
-      {
-        op: 'defineTexture',
-        texture: {
-          id: 'texture/browser-proof', width: 2, height: 2, filter: 'nearest',
-          wrap: 'clamp', contentHash: null, version: 1,
+          uvStrategy: 'atlas',
         },
       },
       {
@@ -991,13 +1009,16 @@ function trianglePayload(): MeshPayloadDescriptor {
       attributes: [
         { name: 'position', components: 3, kind: 'f32' },
         { name: 'normal', components: 3, kind: 'f32' },
+        { name: 'uv', components: 2, kind: 'f32' },
       ],
     },
     groups: [{ materialSlot: 0, start: 0, count: 3 }],
     bounds: { min: [-0.5, -0.5, 0], max: [0.5, 0.5, 0] },
     source: {
       kind: 'inline', positions: [-0.5, -0.5, 0, 0.5, -0.5, 0, 0, 0.5, 0],
-      normals: [0, 0, 1, 0, 0, 1, 0, 0, 1], indices: [0, 1, 2],
+      normals: [0, 0, 1, 0, 0, 1, 0, 0, 1],
+      uvs: [0, 0, 2, 0, 1, 1],
+      indices: [0, 1, 2],
     },
     provenance: 'staticAsset',
   };
