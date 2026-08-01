@@ -30,6 +30,9 @@ surface, and renderer host/resource lifecycle.
   - `animated-mesh.ts` owns asset-scoped geometry/material templates, independent
     per-instance skeleton/mixer state, exact normalized sampling, bounded
     deformation diagnostics, and their retained replacement/disposal lifecycle.
+  - `voxel-surface-material.ts` owns the Three shader specialization for
+    Euclidean whole-texture repeat and half-texel-safe atlas-region sampling;
+    it observes renderer-neutral material and texture facts and never remeshes.
 - [`render/packages/renderer-host/src`](../../render/packages/renderer-host/src)
   - `animated-mesh-capture.ts` owns deterministic PNG/contact-sheet encoding
     over an already-mounted `RendererSurface`; it does not load assets or own a

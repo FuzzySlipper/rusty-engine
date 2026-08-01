@@ -236,6 +236,21 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.presentationDiagnostics).toEqual([]);
   expect(proof.voxelFrameSwapApplied).toBe(true);
   expect(proof.voxelFrame).toBe(1);
+  expect(proof.voxelSurfaceAtlasPixel[0]).toBeGreaterThan(120);
+  expect(proof.voxelSurfaceAtlasPixel[1]).toBeLessThan(24);
+  expect(proof.voxelSurfaceAtlasPixel[2]).toBeLessThan(24);
+  expect(proof.voxelSurfaceAtlasPixel[3]).toBe(255);
+  expect(proof.voxelSurfaceSpecializations).toEqual([{
+    material: 'material/voxel-atlas-proof',
+    texture: 'texture/voxel-atlas-proof',
+    mapping: 'atlas',
+    tileScaleCells: [1, 1],
+    tileOriginCells: [-8, 4],
+    sampleUvMin: [0.375, 0.5],
+    sampleUvMax: [0.375, 0.5],
+    alphaMode: 'opaque',
+    alphaCutoff: null,
+  }]);
   expect(consoleErrors).toEqual([]);
 
   const viewmodelBefore = await page.evaluate(() => window.__rustyRenderViewmodelState?.());

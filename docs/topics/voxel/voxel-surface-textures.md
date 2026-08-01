@@ -1,9 +1,9 @@
 # Runtime voxel surface textures
 
 Status: selected VTX0 contract with VTX1 bounded PNG resource realization,
-VTX2 tile-coordinate mesh streams, and VTX3 canonical material/atlas bindings
-implemented. Backend atlas sampling and Studio authoring remain the ordered
-VTX4–VTX5 follow-ons.
+VTX2 tile-coordinate mesh streams, VTX3 canonical material/atlas bindings, and
+VTX4 Three-backend sampling implemented. Studio authoring remains the VTX5
+follow-on.
 
 ## Decision and ownership
 
@@ -119,11 +119,13 @@ version with measured per-level gutters rather than silently weakening it.
 The specialization key is the canonical tuple
 `(voxelSurfaceV1, mappingKind, filter, alphaMode)`. Texture identity, atlas
 region, tile scale/origin, tint, and emission are uniforms/resource bindings,
-not shader variants. The backend retains at most 64 voxel surface
-specializations, reference-counts dependent materials, replaces dependents
-atomically after a new texture is ready, and disposes the specialization only
-after its final dependent is gone. Reset/dispose clears all retained resources.
-No TypeScript remeshing, per-voxel fallback, or second voxel renderer is allowed.
+not shader variants. Schema 1 has twelve possible specialization keys, below
+the contract limit of 64. The backend retains the specialization on its owning
+material, replaces dependent materials only after the complete candidate
+texture/material closure validates and the new texture is ready, and disposes
+the material and texture through the existing reference-counted lifecycle.
+Reset/dispose clears all retained resources. No TypeScript remeshing,
+per-voxel fallback, or second voxel renderer is allowed.
 
 ## Texture resource and material semantics
 
@@ -198,6 +200,17 @@ padded overlap, linear-filter gutter, and exact version/hash before projection.
 texture, atlas, region, version, and hash provenance. Omitted fields retain the
 old color-only canonical JSON and behavior.
 
+VTX4 implements the backend subset through the existing retained Three mesh
+and `MeshStandardMaterial` path. It specializes Three's existing map UV varying
+at shader compilation, applies Euclidean repeat and the atlas safe rectangle,
+and retains normal base color/tint, emission, alpha, lighting, and instance
+behavior. Final-frame preflight validates the exact texture version, content
+hash, filter/wrap policy, retained payload, and atlas content bounds before any
+backend mutation. A texture and every dependent material may therefore be
+redefined atomically in either operation order; a stale or incomplete candidate
+leaves the prior geometry, material, texture, readout, and renderer statistics
+unchanged.
+
 ## Executable spike and measurements
 
 `svc-mesh` tests exercise the actual greedy partition together with the VTX0
@@ -232,6 +245,18 @@ resource headers:
 | `128×1×1` strip | 6 | 24 | 36 | 576 | 144 | 192 | 912 |
 | two resident solid chunks | 10 | 40 | 60 | 960 | 240 | 320 | 1,520 |
 
+The VTX4 browser proof renders a tracked 4-by-3 atlas whose one-pixel red
+content region is surrounded by a blue extruded gutter and an adjacent green
+pixel. One greedy quad spans 16-by-16 cell-space units using four vertices, six
+indices, and 32 bytes of tile coordinates. The real Chromium framebuffer reads
+red at the quad center with no green or blue bleed, while the immutable backend
+readout records the exact half-texel safe UV `[0.375, 0.5]`. The same browser
+frame exercises whole-texture repeat on ordinary and voxel-object geometry,
+including frame replacement, reset, resize, and disposal. Headless replacement
+tests prove that a coordinated texture/material redefinition keeps the same
+geometry resource, four vertices, six indices, and object handle; no remesh or
+per-cell resource is created.
+
 Run the proof with:
 
 ```bash
@@ -250,7 +275,8 @@ cargo clippy -p svc-mesh --all-targets --locked -- -D warnings
   renderer-neutral material border; voxel cells retain slots only. This slice
   is implemented.
 - VTX4 realizes the selected sampling specialization in the existing Three
-  mesh/material path and supplies framebuffer/Chromium proof.
+  mesh/material path and supplies framebuffer/Chromium proof. This slice is
+  implemented.
 - VTX5 routes canonical texture/atlas authoring through the existing Studio
   adapter and project mutation boundary.
 

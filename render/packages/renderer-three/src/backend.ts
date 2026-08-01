@@ -7,3 +7,4 @@ export * from './animated-mesh.js';
 export * from './browser-surface.js';
 export * from './browser-surface-render-pass.js';
 export * from './editor-viewport-backend.js';
+export * from './voxel-surface-material.js';

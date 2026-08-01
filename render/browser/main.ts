@@ -26,6 +26,7 @@ import {
   type RendererSurfaceAutomaticSubmissionPacingSample,
   type RendererSurfaceStatisticsSample,
 } from '@rusty-engine/renderer-host';
+import { mountRendererBrowserSurface } from '@rusty-engine/renderer-three';
 
 import characterUrl from '../../fixtures/render/assets/kenney-retro-character/character-medium.glb?url';
 
@@ -97,6 +98,8 @@ interface BrowserProof {
   readonly viewmodelPickExcluded: boolean;
   readonly voxelFrame: number | null;
   readonly voxelFrameSwapApplied: boolean;
+  readonly voxelSurfaceAtlasPixel: readonly [number, number, number, number];
+  readonly voxelSurfaceSpecializations: readonly unknown[];
 }
 
 declare global {
@@ -444,6 +447,37 @@ async function main(): Promise<void> {
   inspection.renderOnce(16);
   const inspectionSubmission = inspection.submission();
 
+  const voxelSurfaceCanvas = document.createElement('canvas');
+  voxelSurfaceCanvas.width = 64;
+  voxelSurfaceCanvas.height = 64;
+  voxelSurfaceCanvas.style.cssText = 'position:fixed;left:-10000px;top:0;width:64px;height:64px';
+  document.body.appendChild(voxelSurfaceCanvas);
+  const voxelSurface = mountRendererBrowserSurface(voxelSurfaceCanvas, {
+    autoStart: false,
+    camera: {
+      initialPose: { position: [0, 0, 2], pitchDegrees: 0, yawDegrees: 0 },
+    },
+    clearColor: 0x000000,
+    frame: voxelSurfaceBrowserFrame(),
+    pixelRatio: 1,
+  });
+  voxelSurface.renderOnce(1);
+  const voxelContext = voxelSurfaceCanvas.getContext('webgl2')
+    ?? voxelSurfaceCanvas.getContext('webgl');
+  if (voxelContext === null) throw new Error('voxel texture WebGL context is unavailable');
+  const voxelPixel = new Uint8Array(4);
+  voxelContext.readPixels(
+    Math.floor(voxelSurfaceCanvas.width / 2),
+    Math.floor(voxelSurfaceCanvas.height / 2),
+    1,
+    1,
+    voxelContext.RGBA,
+    voxelContext.UNSIGNED_BYTE,
+    voxelPixel,
+  );
+  const voxelSurfaceAtlasPixel = [...voxelPixel] as [number, number, number, number];
+  const voxelSurfaceSpecializations = voxelSurface.renderer.voxelSurfaceMaterialReadout();
+
   const context = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
   if (context === null || context.isContextLost()) throw new Error('real WebGL context is unavailable');
   const pick = surface.pick({ ray: { kind: 'viewport', point: [0, 0] }, maxDistance: 20 });
@@ -533,6 +567,8 @@ async function main(): Promise<void> {
     viewmodelPickExcluded: viewmodelPick.hint === null,
     voxelFrame: voxelNode?.kind === 'voxelObject' ? voxelNode.frame : null,
     voxelFrameSwapApplied: voxelFrameSwap.applied,
+    voxelSurfaceAtlasPixel,
+    voxelSurfaceSpecializations,
   };
   window.__rustyRenderProof = proof;
   window.__rustyRenderBackendSnapshot = () => surface.snapshot();
@@ -550,6 +586,8 @@ async function main(): Promise<void> {
   };
   audioButton.addEventListener('click', () => void window.__rustyRenderStartAudio?.());
   window.__rustyRenderDispose = async () => {
+    voxelSurface.dispose();
+    voxelSurfaceCanvas.remove();
     inspection.dispose();
     surface.dispose();
     animation.cleanup();
@@ -837,6 +875,20 @@ function browserFrame(): RenderFrameDiff {
           emissionColor: [0, 0, 0],
           emissionIntensity: 0,
           uvStrategy: 'atlas',
+          voxelSurface: {
+            schemaVersion: 1,
+            filter: 'nearest',
+            wrap: 'repeat',
+            alphaMode: { kind: 'opaque' },
+            mapping: {
+              kind: 'repeat',
+              texture: 'texture/browser-proof',
+              textureVersion: 1,
+              textureContentHash: 'sha256:a58d5395a03945e56638dba7ae6158b2fdaf013610a798c059a6d88231a052ae',
+              tileScaleCells: [1, 1],
+              tileOriginCells: [0, 0],
+            },
+          },
         },
       },
       {
@@ -977,6 +1029,122 @@ function browserFrame(): RenderFrameDiff {
             fadeSeconds: null,
           },
           metadata: metadata('viewmodel-animated-proof'),
+        },
+      },
+    ],
+  };
+}
+
+function voxelSurfaceBrowserFrame(): RenderFrameDiff {
+  const contentHash = 'sha256:0913ab94c38bcae9f4dfd73ccf05543fa087da5b1a80194b2986ecb31614a86d';
+  return {
+    schemaVersion: 1,
+    ops: [
+      {
+        op: 'defineTexture',
+        texture: {
+          id: 'texture/voxel-atlas-proof',
+          width: 4,
+          height: 3,
+          filter: 'linear',
+          wrap: 'clamp',
+          contentHash,
+          version: 1,
+          payload: {
+            encoding: 'pngRgba8',
+            colorSpace: 'srgb',
+            contentHash,
+            byteLength: 80,
+            source: {
+              kind: 'inline',
+              encodedBytes: [
+                137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,4,0,0,0,3,
+                8,6,0,0,0,180,244,174,198,0,0,0,23,73,68,65,84,120,156,99,96,96,
+                248,255,31,21,3,9,16,11,204,1,65,116,21,0,77,2,23,233,67,124,57,188,
+                0,0,0,0,73,69,78,68,174,66,96,130,
+              ],
+            },
+          },
+        },
+      },
+      {
+        op: 'defineMaterial',
+        material: {
+          schemaVersion: 3,
+          id: 'material/voxel-atlas-proof',
+          color: [1, 1, 1, 1],
+          texture: 'texture/voxel-atlas-proof',
+          roughness: 1,
+          textureTint: [1, 1, 1, 1],
+          emissionColor: [0, 0, 0],
+          emissionIntensity: 0,
+          uvStrategy: 'atlas',
+          voxelSurface: {
+            schemaVersion: 1,
+            filter: 'linear',
+            wrap: 'clamp',
+            alphaMode: { kind: 'opaque' },
+            mapping: {
+              kind: 'atlas',
+              atlas: 'sprite-sheet/voxel-atlas-proof',
+              atlasVersion: 1,
+              atlasContentHash: 'atlas-proof',
+              texture: 'texture/voxel-atlas-proof',
+              textureVersion: 1,
+              textureContentHash: contentHash,
+              region: {
+                id: 'red',
+                contentMin: [1, 1],
+                contentExtent: [1, 1],
+                padding: { left: 1, right: 1, bottom: 1, top: 1 },
+                inset: 'halfTexel',
+              },
+              tileScaleCells: [1, 1],
+              tileOriginCells: [-8, 4],
+            },
+          },
+        },
+      },
+      {
+        op: 'defineStaticMesh',
+        asset: {
+          asset: 'mesh/voxel-atlas-proof',
+          payload: {
+            layout: {
+              vertexCount: 4,
+              indexCount: 6,
+              indexWidth: 'u32',
+              attributes: [
+                { name: 'position', components: 3, kind: 'f32' },
+                { name: 'normal', components: 3, kind: 'f32' },
+                { name: 'uv', components: 2, kind: 'f32' },
+              ],
+            },
+            groups: [{ materialSlot: 0, start: 0, count: 6 }],
+            bounds: { min: [-1, -1, 0], max: [1, 1, 0] },
+            source: {
+              kind: 'inline',
+              positions: [-1,-1,0, 1,-1,0, 1,1,0, -1,1,0],
+              normals: [0,0,1, 0,0,1, 0,0,1, 0,0,1],
+              uvs: [-8,4, 8,4, 8,20, -8,20],
+              indices: [0,1,2, 0,2,3],
+            },
+            provenance: 'voxelChunk',
+          },
+          materialSlots: [{ slot: 0, material: 'material/voxel-atlas-proof' }],
+          collision: { kind: 'visualOnly' },
+        },
+      },
+      {
+        op: 'createStaticMeshInstance',
+        handle: renderHandle(1),
+        parent: null,
+        instance: {
+          asset: 'mesh/voxel-atlas-proof',
+          transform: identity([0, 0, -2], [1, 1, 1]),
+          visible: true,
+          materialOverrides: [],
+          metadata: metadata('voxel-atlas-visible-proof'),
         },
       },
     ],

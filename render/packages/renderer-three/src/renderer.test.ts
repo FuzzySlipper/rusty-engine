@@ -1970,6 +1970,78 @@ function texturedMaterial(): RenderMaterialDescriptor {
   };
 }
 
+function voxelTexturedMaterial(
+  texture: import('@rusty-engine/render-contracts').TextureDescriptor,
+  mapping: 'repeat' | 'atlas' = 'repeat',
+): RenderMaterialDescriptor {
+  const common = {
+    texture: texture.id,
+    textureVersion: texture.version,
+    textureContentHash: texture.contentHash!,
+    tileScaleCells: [1, 1] as const,
+    tileOriginCells: [-4, 8] as const,
+  };
+  return {
+    ...texturedMaterial(),
+    id: `material/voxel-${mapping}`,
+    texture: texture.id,
+    emissionColor: [0.1, 0.2, 0.3],
+    emissionIntensity: 0.5,
+    voxelSurface: {
+      schemaVersion: 1,
+      filter: texture.filter,
+      wrap: texture.wrap,
+      alphaMode: mapping === 'atlas'
+        ? { kind: 'mask', cutoff: 0.4 }
+        : { kind: 'opaque' },
+      mapping: mapping === 'repeat'
+        ? { kind: 'repeat', ...common }
+        : {
+            kind: 'atlas',
+            atlas: 'sprite-sheet/voxel-atlas',
+            atlasVersion: 1,
+            atlasContentHash: 'atlas-hash',
+            region: {
+              id: 'stone',
+              contentMin: [1, 1],
+              contentExtent: [2, 2],
+              padding: { left: 1, right: 1, bottom: 1, top: 1 },
+              inset: 'halfTexel',
+            },
+            ...common,
+          },
+    },
+  };
+}
+
+function voxelTextureDescriptor(
+  bytes: Uint8Array,
+  width: number,
+  height: number,
+  version = 1,
+  filter: 'nearest' | 'linear' = 'nearest',
+  wrap: 'repeat' | 'clamp' = 'repeat',
+): import('@rusty-engine/render-contracts').TextureDescriptor {
+  const digest = bytesToHex(sha256(bytes));
+  const contentHash = `sha256:${digest}`;
+  return {
+    id: 'texture/checker',
+    width,
+    height,
+    filter,
+    wrap,
+    contentHash,
+    version,
+    payload: {
+      encoding: 'pngRgba8',
+      colorSpace: 'srgb',
+      contentHash,
+      byteLength: bytes.byteLength,
+      source: { kind: 'inline', encodedBytes: [...bytes] },
+    },
+  };
+}
+
 function texturedPlankAsset(): StaticMeshAsset {
   return {
     asset: 'mesh/textured-plank',
@@ -2069,6 +2141,117 @@ void test('texture redefine is stale-safe and disposes replaced and final GPU re
   renderer.dispose();
   assert.equal(finalDisposals, 1);
   assert.equal(renderer.resourceStatistics().textureResourceCount, 0);
+});
+
+void test('voxel surface specializes one greedy quad for repeat and atlas-safe sampling', () => {
+  const pixels = Array.from({ length: 4 * 4 }, (_, index) => [
+    index * 11 % 255,
+    index * 23 % 255,
+    index * 37 % 255,
+    255,
+  ]).flat();
+  const bytes = rgbaPng(4, 4, pixels);
+  const texture = voxelTextureDescriptor(bytes, 4, 4, 1, 'linear', 'clamp');
+  const material = voxelTexturedMaterial(texture, 'atlas');
+  const renderer = new ThreeRenderer();
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture },
+    { op: 'defineMaterial', material },
+    {
+      op: 'defineStaticMesh',
+      asset: {
+        asset: 'mesh/textured-plank',
+        payload: { ...texturedQuadPayload(), provenance: 'voxelChunk' },
+        materialSlots: [{ slot: 0, material: material.id }],
+        collision: { kind: 'visualOnly' },
+      },
+    },
+    {
+      op: 'createStaticMeshInstance', handle: renderHandle(320), parent: null,
+      instance: crateInstance('mesh/textured-plank'),
+    },
+  ] });
+
+  const mesh = renderer.objectFor(renderHandle(320)) as THREE.Mesh;
+  const geometry = mesh.geometry as THREE.BufferGeometry;
+  const realized = mesh.material as THREE.MeshStandardMaterial;
+  assert.equal(geometry.getAttribute('position').count, 4, 'greedy quad remains four vertices');
+  assert.equal(geometry.index?.count, 6, 'greedy quad remains two triangles');
+  assert.deepEqual(renderer.voxelSurfaceMaterialReadout(), [{
+    material: 'material/voxel-atlas',
+    texture: 'texture/checker',
+    mapping: 'atlas',
+    tileScaleCells: [1, 1],
+    tileOriginCells: [-4, 8],
+    sampleUvMin: [0.375, 0.375],
+    sampleUvMax: [0.625, 0.625],
+    alphaMode: 'mask',
+    alphaCutoff: 0.4,
+  }]);
+  assert.equal(realized.alphaTest, 0.4);
+  assert.equal(realized.transparent, false);
+  const shader = {
+    uniforms: {} as Record<string, { value: unknown }>,
+    vertexShader: '#include <uv_pars_vertex>\nvoid main(){#include <uv_vertex>}',
+    fragmentShader: '#include <map_pars_fragment>\nvoid main(){#include <map_fragment>}',
+  };
+  realized.onBeforeCompile(shader as never, {} as never);
+  assert.match(shader.fragmentShader, /fract\(\(vMapUv/u);
+  assert.match(shader.fragmentShader, /mix\(rustyVoxelUvMin, rustyVoxelUvMax/u);
+  assert.deepEqual(
+    (shader.uniforms['rustyVoxelUvMin']?.value as THREE.Vector2).toArray(),
+    [0.375, 0.375],
+  );
+});
+
+void test('voxel texture and material redefine is final-frame atomic without remeshing', () => {
+  const beforeBytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
+  const afterBytes = rgbaPng(2, 1, [0, 0, 255, 255, 255, 255, 0, 255]);
+  const beforeTexture = voxelTextureDescriptor(beforeBytes, 2, 1);
+  const afterTexture = voxelTextureDescriptor(afterBytes, 2, 1, 2);
+  const renderer = new ThreeRenderer();
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture: beforeTexture },
+    { op: 'defineMaterial', material: voxelTexturedMaterial(beforeTexture) },
+    {
+      op: 'defineStaticMesh',
+      asset: {
+        asset: 'mesh/textured-plank',
+        payload: { ...texturedQuadPayload(), provenance: 'voxelChunk' },
+        materialSlots: [{ slot: 0, material: 'material/voxel-repeat' }],
+        collision: { kind: 'visualOnly' },
+      },
+    },
+    {
+      op: 'createStaticMeshInstance', handle: renderHandle(321), parent: null,
+      instance: crateInstance('mesh/textured-plank'),
+    },
+  ] });
+  const mesh = renderer.objectFor(renderHandle(321)) as THREE.Mesh;
+  const geometry = mesh.geometry;
+  const oldMaterial = mesh.material;
+  const oldTexture = (oldMaterial as THREE.MeshStandardMaterial).map;
+  const beforeStats = renderer.resourceStatistics();
+  const beforeReadout = renderer.voxelSurfaceMaterialReadout();
+
+  assert.throws(
+    () => renderer.applyDiff({ op: 'defineTexture', texture: afterTexture }),
+    /needs texture texture\/checker version 1/u,
+  );
+  assert.equal(mesh.geometry, geometry);
+  assert.equal(mesh.material, oldMaterial);
+  assert.equal((mesh.material as THREE.MeshStandardMaterial).map, oldTexture);
+  assert.deepEqual(renderer.resourceStatistics(), beforeStats);
+  assert.deepEqual(renderer.voxelSurfaceMaterialReadout(), beforeReadout);
+
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture: afterTexture },
+    { op: 'defineMaterial', material: voxelTexturedMaterial(afterTexture) },
+  ] });
+  assert.equal(mesh.geometry, geometry, 'material replacement does not remesh');
+  assert.notEqual(mesh.material, oldMaterial);
+  assert.equal(geometry.getAttribute('position').count, 4);
+  assert.equal(renderer.resourceStatistics().geometryResourceCount, beforeStats.geometryResourceCount);
 });
 
 void test('retained texture budget accepts every exact limit and rejects each one-over prospectively', () => {

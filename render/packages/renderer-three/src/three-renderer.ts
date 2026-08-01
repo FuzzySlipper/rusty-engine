@@ -59,6 +59,12 @@ import {
   type RendererMeshPresentationReadout,
 } from './mesh-presentation.js';
 import { decodeAdmittedPngTexture, PngTextureError } from './png-texture.js';
+import {
+  resolveVoxelSurfaceMaterial,
+  specializeVoxelSurfaceMaterial,
+  VoxelSurfaceMaterialError,
+  type VoxelSurfaceMaterialReadout,
+} from './voxel-surface-material.js';
 
 /** Raised when a diff cannot be applied (duplicate, unknown, or stale handle). */
 export class RenderApplyError extends Error {
@@ -373,6 +379,8 @@ export class ThreeRenderer {
     const prepared = this.#prepareFrame(frame);
     const staticInstanceBatchesChanged = this.#frameChangesStaticInstanceBatches(frame);
     const recursivelyDestroyed = new Set<RenderHandle>();
+    const changedMaterialIds = new Set<string>();
+    const changedTextureIds = new Set<string>();
     try {
       for (let index = 0; index < frame.ops.length; index += 1) {
         const op = frame.ops[index]!;
@@ -382,10 +390,24 @@ export class ThreeRenderer {
           }
           this.#destroy(op, recursivelyDestroyed);
         } else {
-          this.#applyDiff(op, prepared.geometries.get(index), prepared.textures.get(index));
+          this.#applyDiff(
+            op,
+            prepared.geometries.get(index),
+            prepared.textures.get(index),
+            changedMaterialIds,
+            changedTextureIds,
+          );
           prepared.geometries.delete(index);
           prepared.textures.delete(index);
         }
+      }
+      for (const material of this.#materials.values()) {
+        if (material.texture !== null && changedTextureIds.has(material.texture)) {
+          changedMaterialIds.add(material.id);
+        }
+      }
+      for (const materialId of [...changedMaterialIds].sort()) {
+        this.#replaceLiveMaterial(materialId);
       }
     } catch (cause) {
       disposePreparedFrame(prepared);
@@ -412,6 +434,8 @@ export class ThreeRenderer {
     diff: RenderDiff,
     preparedGeometry?: readonly THREE.BufferGeometry[],
     preparedTexture?: RetainedTextureResource | null,
+    changedMaterialIds?: Set<string>,
+    changedTextureIds?: Set<string>,
   ): void {
     switch (diff.op) {
       case 'create':
@@ -433,13 +457,13 @@ export class ThreeRenderer {
         this.#updateLight(diff);
         break;
       case 'defineMaterial':
-        this.#defineMaterial(diff.material);
+        this.#defineMaterial(diff.material, changedMaterialIds);
         break;
       case 'setMaterialInstanceParameters':
         this.#setMaterialInstanceParameters(diff);
         break;
       case 'defineTexture':
-        this.#defineTexture(diff.texture, preparedTexture);
+        this.#defineTexture(diff.texture, preparedTexture, changedTextureIds);
         break;
       case 'defineSpriteAtlas':
         this.#atlases.set(diff.atlas.id, diff.atlas);
@@ -487,6 +511,12 @@ export class ThreeRenderer {
     };
     const selectedAnimatedClips = new Map<RenderHandle, string | null>();
     const textureVersions = new Map([...this.#textures].map(([id, value]) => [id, value.version]));
+    const textureDescriptors = new Map(
+      [...this.#textures].map(([id, value]) => [id, structuredClone(value)]),
+    );
+    const materialDescriptors = new Map(
+      [...this.#materials].map(([id, value]) => [id, structuredClone(value)]),
+    );
     const texturePayloads = new Map([...this.#textureResources].map(([id, value]) => [id, value.readout]));
     let textureBudget: RendererTextureResourceBudget = {
       count: texturePayloads.size,
@@ -549,13 +579,9 @@ export class ThreeRenderer {
             prepared.textures.set(index, retained);
           }
           textureVersions.set(operation.texture.id, operation.texture.version);
+          textureDescriptors.set(operation.texture.id, structuredClone(operation.texture));
         } else if (operation.op === 'defineMaterial') {
-          if (operation.material.schemaVersion >= 3 && operation.material.texture !== null
-            && !texturePayloads.has(operation.material.texture)) {
-            throw new RenderApplyError(
-              `defineMaterial: texture ${operation.material.texture} has no admitted retained payload`,
-            );
-          }
+          materialDescriptors.set(operation.material.id, structuredClone(operation.material));
         } else if (operation.op === 'defineAnimatedMesh') {
           // Validate the exact source/hash/clip contract without allocating the
           // asset-scoped render template before the retained mutation.
@@ -594,6 +620,30 @@ export class ThreeRenderer {
             selectedAnimatedClips.set(operation.handle, operation.playback.clip);
           } else if (operation.playback.kind === 'stop') {
             selectedAnimatedClips.set(operation.handle, null);
+          }
+        }
+      }
+      for (const material of materialDescriptors.values()) {
+        if (material.schemaVersion >= 3 && material.texture !== null
+          && !texturePayloads.has(material.texture)) {
+          throw new RenderApplyError(
+            `defineMaterial: texture ${material.texture} has no admitted retained payload`,
+          );
+        }
+        if (material.voxelSurface !== undefined) {
+          const texture = textureDescriptors.get(material.voxelSurface.mapping.texture);
+          if (texture === undefined) {
+            throw new RenderApplyError(
+              `defineMaterial: missing voxel surface texture ${material.voxelSurface.mapping.texture}`,
+            );
+          }
+          try {
+            resolveVoxelSurfaceMaterial(material, texture);
+          } catch (cause) {
+            if (cause instanceof VoxelSurfaceMaterialError) {
+              throw new RenderApplyError(`defineMaterial: ${cause.message}`);
+            }
+            throw cause;
           }
         }
       }
@@ -1639,15 +1689,20 @@ export class ThreeRenderer {
    * output deterministically without a destroy+create. This renderer owns only
    * presentation state; downstream authority decides which definitions it emits.
    */
-  #defineMaterial(material: RenderMaterialDescriptor): void {
+  #defineMaterial(material: RenderMaterialDescriptor, changed?: Set<string>): void {
     this.#materials.set(material.id, material);
-    this.#replaceLiveMaterial(material.id);
+    if (changed === undefined) {
+      this.#replaceLiveMaterial(material.id);
+    } else {
+      changed.add(material.id);
+    }
   }
 
   /** Publish a preflighted texture and rebuild every material that references it. */
   #defineTexture(
     descriptor: TextureDescriptor,
     prepared: RetainedTextureResource | null | undefined,
+    changed?: Set<string>,
   ): void {
     if (descriptor.payload !== undefined && prepared === undefined) {
       throw new RenderApplyError(`defineTexture: missing prepared payload for ${descriptor.id}`);
@@ -1660,8 +1715,12 @@ export class ThreeRenderer {
       this.#textureResources.set(descriptor.id, prepared);
       this.#trackTextureResource(prepared.texture);
     }
-    for (const material of this.#materials.values()) {
-      if (material.texture === descriptor.id) this.#replaceLiveMaterial(material.id);
+    if (changed === undefined) {
+      for (const material of this.#materials.values()) {
+        if (material.texture === descriptor.id) this.#replaceLiveMaterial(material.id);
+      }
+    } else {
+      changed.add(descriptor.id);
     }
     previous?.texture.dispose();
   }
@@ -1817,7 +1876,10 @@ export class ThreeRenderer {
       const texture = descriptor.texture === null
         ? undefined
         : this.#textureResources.get(descriptor.texture)?.texture;
-      const material = standardMaterial(descriptor, parameters, texture);
+      const textureDescriptor = descriptor.texture === null
+        ? undefined
+        : this.#textures.get(descriptor.texture);
+      const material = standardMaterial(descriptor, parameters, texture, textureDescriptor);
       this.#trackMaterialResource(material);
       return material;
     }
@@ -1843,6 +1905,16 @@ export class ThreeRenderer {
     return Object.freeze([...this.#textureResources.values()]
       .map((retained) => Object.freeze({ ...retained.readout }))
       .sort((left, right) => left.id.localeCompare(right.id)));
+  }
+
+  /** Immutable presentation-only specialization readout for diagnostics/tests. */
+  voxelSurfaceMaterialReadout(): readonly VoxelSurfaceMaterialReadout[] {
+    return Object.freeze([...this.#materialResources]
+      .map((material) => material.userData['rustyVoxelSurface'] as
+        VoxelSurfaceMaterialReadout | undefined)
+      .filter((value): value is VoxelSurfaceMaterialReadout => value !== undefined)
+      .map((value) => Object.freeze(structuredClone(value)))
+      .sort((left, right) => left.material.localeCompare(right.material)));
   }
 
   /** A registered sprite atlas by id, for inspection/tests. */
@@ -2266,6 +2338,7 @@ function standardMaterial(
   descriptor: RenderMaterialDescriptor,
   parameters?: MaterialInstanceParameters,
   texture?: THREE.Texture,
+  textureDescriptor?: TextureDescriptor,
 ): THREE.MeshStandardMaterial {
   const tint = parameters?.textureTint ?? descriptor.textureTint;
   const emissionColor = parameters?.emissionColor ?? descriptor.emissionColor;
@@ -2276,7 +2349,7 @@ function standardMaterial(
     descriptor.color[2] * tint[2],
   );
   const opacity = descriptor.color[3] * tint[3];
-  return new THREE.MeshStandardMaterial({
+  const material = new THREE.MeshStandardMaterial({
     color,
     emissive: new THREE.Color(emissionColor[0], emissionColor[1], emissionColor[2]),
     emissiveIntensity: emissionIntensity,
@@ -2286,6 +2359,15 @@ function standardMaterial(
     roughness: descriptor.roughness,
     transparent: opacity < 1,
   });
+  if (descriptor.voxelSurface !== undefined) {
+    if (texture === undefined || textureDescriptor === undefined) {
+      throw new RenderApplyError(
+        `material ${descriptor.id} has no realized voxel texture ${descriptor.voxelSurface.mapping.texture}`,
+      );
+    }
+    specializeVoxelSurfaceMaterial(material, descriptor, textureDescriptor);
+  }
+  return material;
 }
 
 function prepareTextureResource(
