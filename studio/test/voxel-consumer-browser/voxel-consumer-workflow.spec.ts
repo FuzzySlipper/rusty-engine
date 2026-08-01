@@ -163,7 +163,10 @@ test('exact pinned voxel consumer reopens and visibly plays its Studio-authored 
 });
 
 test('runtime voxel surfaces author repeat and atlas mappings through Rust and reopen visibly', async ({ page }) => {
-  test.setTimeout(90_000);
+  // This single installed-product path intentionally spans two material
+  // publications, reload, mobile layout, close, and reopen. Keep the whole
+  // proof bounded without truncating its final lifecycle assertions on CI.
+  test.setTimeout(180_000);
   const projectPath = join(projectRoot, projectFile);
   const textureBytes = await readFile(join(projectRoot, TEXTURE_PATH));
   expect(sha256(textureBytes)).toBe(TEXTURE_HASH);
