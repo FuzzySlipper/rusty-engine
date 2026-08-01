@@ -291,6 +291,17 @@ mod tests {
         assert_ne!(half_phase, full_phase);
         assert_eq!(
             repeat_voxel_tile_coordinate(
+                [
+                    f64::from((-limiting_coordinate + minimum / 2.0) as f32),
+                    0.0
+                ],
+                [minimum, minimum],
+                [0.0, 0.0],
+            ),
+            Ok([0.5, 0.0]),
+        );
+        assert_eq!(
+            repeat_voxel_tile_coordinate(
                 [limiting_coordinate, limiting_coordinate - 16.0],
                 [minimum, minimum],
                 [0.0, 0.0],
@@ -304,6 +315,30 @@ mod tests {
                 [0.0, 0.0],
             ),
             Err(VoxelTextureMappingError::InsufficientTileCoordinatePrecision),
+        );
+
+        let integer_limit = limiting_coordinate as i64;
+        let left_chunk_seam = project_voxel_surface_tile_point(
+            Direction6::PosZ,
+            [16, 0, 0],
+            [integer_limit - 16, 0, 0],
+        )
+        .unwrap();
+        let right_chunk_seam =
+            project_voxel_surface_tile_point(Direction6::PosZ, [0, 0, 0], [integer_limit, 0, 0])
+                .unwrap();
+        assert_eq!(left_chunk_seam, right_chunk_seam);
+        assert_eq!(
+            repeat_voxel_tile_coordinate(
+                left_chunk_seam.map(f64::from),
+                [minimum, minimum],
+                [0.0, 0.0],
+            ),
+            repeat_voxel_tile_coordinate(
+                right_chunk_seam.map(f64::from),
+                [minimum, minimum],
+                [0.0, 0.0],
+            ),
         );
     }
 
