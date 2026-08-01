@@ -2,14 +2,15 @@
   "schemaVersion": 1,
   "repository": "FuzzySlipper/rusty-engine-voxels",
   "publicRepository": "https://github.com/FuzzySlipper/rusty-engine-voxels",
-  "commit": "9885001aae641b390b6aa33fb04041ae50df8961",
-  "engineCommit": "93eac6a9895f12b0d6a71d9f78e39649919abe2c",
+  "commit": "a5c66e26a93ebdc2833c8c22371fb5dbd4524804",
+  "engineCommit": "c02754812d53df5363c9e6475c685c54e532f5e5",
   "evidenceEngineCommit": "1703f46f1624d32b8324f831107a068d5f66ab30",
   "projectFile": "content/projects/voxel-lab.project.json",
   "largeProjectFile": "content/projects/retro-character-high-fidelity.project.json",
   "runtimeReport": "evidence/initial-animated-voxel-report.json",
   "qualityReport": "evidence/high-fidelity-animated-voxel-report.json",
   "dataPlaneReport": "evidence/mesh-data-plane.json",
+  "texturedSurfaceReport": "evidence/textured-voxel-surfaces.json",
   "cargoPackage": "rusty-engine-voxels",
   "adapterBinary": "rusty-engine-voxels-studio-adapter"
 }

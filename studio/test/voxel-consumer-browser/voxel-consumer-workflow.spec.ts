@@ -1,19 +1,15 @@
 import { expect, test, type Locator } from '@playwright/test';
+import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const projectRoot = requiredEnvironment('RUSTY_STUDIO_PROJECT_ROOT');
 const projectFile = requiredEnvironment('RUSTY_STUDIO_PROJECT_FILE');
 const runtimeReportFile = requiredEnvironment('RUSTY_STUDIO_RUNTIME_REPORT');
 const engineCommit = requiredEnvironment('RUSTY_STUDIO_ENGINE_COMMIT');
-const CHECKER_PNG = Uint8Array.from([
-  137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82,
-  0, 0, 0, 2, 0, 0, 0, 1, 8, 6, 0, 0, 0, 244, 34, 127, 138,
-  0, 0, 0, 15, 73, 68, 65, 84, 120, 156, 99, 248, 207, 0, 68, 255,
-  25, 26, 0, 16, 121, 3, 126, 153, 113, 48, 89, 0, 0, 0, 0, 73,
-  69, 78, 68, 174, 66, 96, 130,
-]);
+const TEXTURE_PATH = 'content/textures/directional-atlas.png';
+const TEXTURE_HASH = 'ac1a8a3685fe0b5b42c585f4f5cf8e246721a09497644eacddf36372a377fd99';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -169,10 +165,8 @@ test('exact pinned voxel consumer reopens and visibly plays its Studio-authored 
 test('runtime voxel surfaces author repeat and atlas mappings through Rust and reopen visibly', async ({ page }) => {
   test.setTimeout(90_000);
   const projectPath = join(projectRoot, projectFile);
-  const textureDirectory = join(projectRoot, 'content/textures');
-  const texturePath = join(textureDirectory, 'studio-surface.png');
-  await mkdir(textureDirectory, { recursive: true });
-  await writeFile(texturePath, CHECKER_PNG);
+  const textureBytes = await readFile(join(projectRoot, TEXTURE_PATH));
+  expect(sha256(textureBytes)).toBe(TEXTURE_HASH);
 
   await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(projectFile)}`);
   const shell = page.locator('[data-visual-id="studio-shell"]');
@@ -183,13 +177,21 @@ test('runtime voxel surfaces author repeat and atlas mappings through Rust and r
   const initialProjectHash = await requiredAttribute(shell, 'data-project-hash');
   const initialRendererHash = await rendererHash(viewport);
   const initialPixels = await canvas.screenshot();
+  const initialPixelHash = sha256(initialPixels);
 
   await page.getByRole('button', { name: 'Voxel', exact: true }).click();
   const editor = page.locator('[data-visual-id="studio-voxel-editor"]');
   await editor.getByRole('button', { name: 'surfaces', exact: true }).click();
   const surfaces = editor.locator('[data-visual-id="voxel-surface-authoring"]');
   await expect(surfaces).toContainText('Runtime voxel surfaces');
-  await surfaces.getByLabel('PNG source').fill('content/textures/studio-surface.png');
+  await surfaces.getByLabel('PNG source').fill(TEXTURE_PATH);
+  await surfaces.getByLabel('Filter').selectOption('linear');
+  const tileScale = surfaces.getByLabel('Tile scale in cells').locator('input');
+  const tileOrigin = surfaces.getByLabel('Tile origin in cells').locator('input');
+  await tileScale.nth(0).fill('0.5');
+  await tileScale.nth(1).fill('2');
+  await tileOrigin.nth(0).fill('0.25');
+  await tileOrigin.nth(1).fill('-0.5');
   await surfaces.getByLabel('Scene id').fill('scene/voxel-lab');
   await surfaces.getByLabel('Voxel instance id').fill('retro-character');
   await surfaces.getByLabel('Material slot').fill('1');
@@ -205,11 +207,13 @@ test('runtime voxel surfaces author repeat and atlas mappings through Rust and r
   });
   await expect(shell).not.toHaveAttribute('data-project-hash', initialProjectHash);
   await expect(surfaces.locator('[data-visual-id="voxel-surface-texture-readout"]'))
-    .toContainText('2 × 1 px');
+    .toContainText('16 × 8 px');
+  await expect(viewport).toHaveAttribute('data-texture-resources', '1');
   await expect(surfaces).toContainText('repeat · texture/voxel/studio-surface · 1 assignments');
   await expect.poll(() => rendererHash(viewport)).not.toBe(initialRendererHash);
   const repeatRendererHash = await rendererHash(viewport);
   const repeatPixels = await canvas.screenshot();
+  const repeatPixelHash = sha256(repeatPixels);
   expect(repeatPixels.equals(initialPixels)).toBe(false);
 
   await surfaces.getByRole('button', { name: /material\/voxel\/studio-surface/ }).click();
@@ -220,45 +224,113 @@ test('runtime voxel surfaces author repeat and atlas mappings through Rust and r
   const minimum = atlas.locator('.axis-row.two').nth(0).locator('input');
   const extent = atlas.locator('.axis-row.two').nth(1).locator('input');
   const padding = atlas.locator('.axis-row.four').locator('input');
-  await minimum.nth(0).fill('2');
-  await minimum.nth(1).fill('0');
-  await extent.nth(0).fill('1');
-  await extent.nth(1).fill('1');
-  for (let index = 0; index < 4; index += 1) await padding.nth(index).fill('0');
+  await minimum.nth(0).fill('15');
+  await minimum.nth(1).fill('7');
+  await extent.nth(0).fill('6');
+  await extent.nth(1).fill('6');
+  for (let index = 0; index < 4; index += 1) await padding.nth(index).fill('1');
   await surfaces.locator('[data-action="apply-voxel-surface"]').click();
   const error = page.locator('[data-visual-id="studio-error-state"]');
   await expect(error).toContainText(/surface|atlas|project\.rejected/u);
   await expect(shell).toHaveAttribute('data-project-hash', repeatProjectHash);
   expect(await rendererHash(viewport)).toBe(repeatRendererHash);
 
-  await minimum.nth(0).fill('0');
-  await extent.nth(0).fill('2');
+  await minimum.nth(0).fill('1');
+  await minimum.nth(1).fill('1');
   await surfaces.locator('[data-action="apply-voxel-surface"]').click();
   await expect(error).toHaveCount(0);
   await expect(shell).not.toHaveAttribute('data-project-hash', repeatProjectHash);
   await expect(surfaces).toContainText('atlas · texture/voxel/studio-surface · 1 assignments');
   await expect(atlas).toContainText('half-texel inset');
-  await expect(atlas).toContainText('0.25000, 0.50000 → 0.75000, 0.50000');
+  await expect(atlas).toContainText('0.09375, 0.18750 → 0.40625, 0.81250');
+  await expect(viewport).toHaveAttribute('data-texture-resources', '1');
   await expect.poll(() => rendererHash(viewport)).not.toBe(repeatRendererHash);
   const atlasProjectHash = await requiredAttribute(shell, 'data-project-hash');
   const atlasRendererHash = await rendererHash(viewport);
+  const atlasPixelHash = sha256(await canvas.screenshot());
+  expect(atlasPixelHash).not.toBe(repeatPixelHash);
 
   await page.reload();
   await expect(shell).toHaveAttribute('data-project-hash', atlasProjectHash);
   await expect(viewport).toHaveAttribute('data-renderer-status', 'ready');
   await expect(viewport).toHaveAttribute('data-authored-frame-hash', atlasRendererHash);
+  await expect(viewport).toHaveAttribute('data-texture-resources', '1');
+  const reopenedPixelHash = sha256(await canvas.screenshot());
+  expect(reopenedPixelHash).toBe(atlasPixelHash);
   await page.getByRole('button', { name: 'Voxel', exact: true }).click();
   await editor.getByRole('button', { name: 'surfaces', exact: true }).click();
   await expect(surfaces).toContainText('atlas · texture/voxel/studio-surface · 1 assignments');
   await surfaces.getByRole('button', { name: /material\/voxel\/studio-surface/ }).click();
   await expect(atlas).toBeVisible();
+  await expect(atlas).toContainText('0.09375, 0.18750 → 0.40625, 0.81250');
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(surfaces).toBeVisible();
   await expect(surfaces.locator('[data-action="apply-voxel-surface"]')).toBeVisible();
   await expect(atlas).toBeVisible();
-  expect((await surfaces.screenshot()).byteLength).toBeGreaterThan(0);
+  const mobileAuthoringPixelHash = sha256(await surfaces.screenshot());
+  expect(mobileAuthoringPixelHash).not.toBe(initialPixelHash);
+  await page.getByRole('button', { name: 'Close Project' }).click();
+  await expect(viewport).toHaveAttribute('data-texture-resources', '0');
+  await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(projectFile)}`);
+  await expect(shell).toHaveAttribute('data-project-hash', atlasProjectHash);
+  await expect(viewport).toHaveAttribute('data-renderer-status', 'ready');
+  await expect(viewport).toHaveAttribute('data-texture-resources', '1');
+  await page.getByRole('button', { name: 'Close Project' }).click();
+  await expect(viewport).toHaveAttribute('data-texture-resources', '0');
   expect((await readFile(projectPath)).byteLength).toBeGreaterThan(0);
+
+  process.stdout.write(`${JSON.stringify({
+    kind: 'studioVoxelSurfaceBrowserEvidence',
+    engineRevision: engineCommit,
+    texturePath: TEXTURE_PATH,
+    textureSha256: TEXTURE_HASH,
+    textureDimensions: [16, 8],
+    repeatRendererHash,
+    atlasRendererHash,
+    initialPixelHash,
+    repeatPixelHash,
+    atlasPixelHash,
+    reopenedPixelHash,
+    mobileAuthoringPixelHash,
+    retainedTextureResources: 1,
+    closeReopenCloseResourceCounts: [0, 1, 0],
+    atlasSafeBounds: [0.09375, 0.1875, 0.40625, 0.8125],
+    tileScaleCells: [0.5, 2],
+    tileOriginCells: [0.25, -0.5],
+    reopenMatched: true,
+  })}\n`);
+});
+
+test('fresh Studio host reopens the persisted atlas surface and disposes it on close', async ({ page }) => {
+  test.skip(process.env['RUSTY_STUDIO_EXPECT_PREAUTHORED_SURFACE'] !== '1');
+  test.setTimeout(60_000);
+  await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(projectFile)}`);
+  const shell = page.locator('[data-visual-id="studio-shell"]');
+  const viewport = page.locator('rusty-studio-viewport');
+  const canvas = page.getByLabel('Shared Rusty renderer viewport');
+  await expect(shell).toHaveAttribute('data-project-hash', /.+/);
+  await expect(viewport).toHaveAttribute('data-renderer-status', 'ready');
+  await expect(viewport).toHaveAttribute('data-texture-resources', '1');
+  await page.getByRole('button', { name: 'Voxel', exact: true }).click();
+  const editor = page.locator('[data-visual-id="studio-voxel-editor"]');
+  await editor.getByRole('button', { name: 'surfaces', exact: true }).click();
+  const surfaces = editor.locator('[data-visual-id="voxel-surface-authoring"]');
+  await expect(surfaces).toContainText('atlas · texture/voxel/studio-surface · 1 assignments');
+  await surfaces.getByRole('button', { name: /material\/voxel\/studio-surface/ }).click();
+  await expect(surfaces.locator('[data-visual-id="voxel-surface-texture-readout"]'))
+    .toContainText('16 × 8 px');
+  const freshHostPixelHash = sha256(await canvas.screenshot());
+  await page.getByRole('button', { name: 'Close Project' }).click();
+  await expect(viewport).toHaveAttribute('data-texture-resources', '0');
+  process.stdout.write(`${JSON.stringify({
+    kind: 'studioVoxelSurfaceFreshHostEvidence',
+    engineRevision: engineCommit,
+    textureSha256: TEXTURE_HASH,
+    freshHostPixelHash,
+    retainedTextureResources: 1,
+    retainedTextureResourcesAfterClose: 0,
+  })}\n`);
 });
 
 async function scrubAndWait(
@@ -294,6 +366,10 @@ function requiredEnvironment(name: string): string {
   const value = process.env[name];
   if (value === undefined || value.length === 0) throw new Error(`${name} is required`);
   return value;
+}
+
+function sha256(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex');
 }
 
 interface RuntimeEvidenceReport {

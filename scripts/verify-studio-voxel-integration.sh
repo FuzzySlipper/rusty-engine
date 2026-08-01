@@ -40,6 +40,7 @@ if (
   || pin.runtimeReport !== 'evidence/initial-animated-voxel-report.json'
   || pin.qualityReport !== 'evidence/high-fidelity-animated-voxel-report.json'
   || pin.dataPlaneReport !== 'evidence/mesh-data-plane.json'
+  || pin.texturedSurfaceReport !== 'evidence/textured-voxel-surfaces.json'
   || pin.cargoPackage !== 'rusty-engine-voxels'
   || pin.adapterBinary !== 'rusty-engine-voxels-studio-adapter'
 ) {
@@ -54,6 +55,7 @@ process.stdout.write([
   pin.runtimeReport,
   pin.qualityReport,
   pin.dataPlaneReport,
+  pin.texturedSurfaceReport,
   pin.adapterBinary,
 ].join('\n'));
 NODE
@@ -67,7 +69,8 @@ LARGE_PROJECT_FILE="${PIN_VALUES[4]:-}"
 RUNTIME_REPORT="${PIN_VALUES[5]:-}"
 QUALITY_REPORT="${PIN_VALUES[6]:-}"
 DATA_PLANE_REPORT="${PIN_VALUES[7]:-}"
-ADAPTER_BINARY="${PIN_VALUES[8]:-}"
+TEXTURED_SURFACE_REPORT="${PIN_VALUES[8]:-}"
+ADAPTER_BINARY="${PIN_VALUES[9]:-}"
 
 VOXEL_ROOT="$(realpath "$VOXEL_ROOT")"
 VOXEL_TOP="$(git -C "$VOXEL_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
@@ -105,6 +108,7 @@ node --input-type=module - \
   "$VOXEL_ROOT/$RUNTIME_REPORT" \
   "$VOXEL_ROOT/$QUALITY_REPORT" \
   "$VOXEL_ROOT/$DATA_PLANE_REPORT" \
+  "$VOXEL_ROOT/$TEXTURED_SURFACE_REPORT" \
   "$EXPECTED_ENGINE_COMMIT" \
   "$EXPECTED_EVIDENCE_ENGINE_COMMIT" <<'NODE'
 import { readFileSync } from 'node:fs';
@@ -113,8 +117,9 @@ const source = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 const runtimeReport = JSON.parse(readFileSync(process.argv[3], 'utf8'));
 const qualityReport = JSON.parse(readFileSync(process.argv[4], 'utf8'));
 const dataPlaneReport = JSON.parse(readFileSync(process.argv[5], 'utf8'));
-const expectedEngineCommit = process.argv[6];
-const expectedEvidenceEngineCommit = process.argv[7];
+const texturedSurfaceReport = JSON.parse(readFileSync(process.argv[6], 'utf8'));
+const expectedEngineCommit = process.argv[7];
+const expectedEvidenceEngineCommit = process.argv[8];
 if (
   source.schemaVersion !== 1
   || source.repository !== 'https://github.com/FuzzySlipper/rusty-engine'
@@ -138,6 +143,22 @@ if (
   || !Number.isFinite(dataPlaneReport.after?.chromiumJsonParseMilliseconds)
 ) {
   throw new Error('consumer mesh data-plane evidence is incomplete or drifted');
+}
+if (
+  texturedSurfaceReport.schemaVersion !== 1
+  || texturedSurfaceReport.providerRevision !== expectedEngineCommit
+  || texturedSurfaceReport.fixture?.contentHash
+    !== 'sha256:ac1a8a3685fe0b5b42c585f4f5cf8e246721a09497644eacddf36372a377fd99'
+  || texturedSurfaceReport.fixture?.dimensions?.[0] !== 16
+  || texturedSurfaceReport.fixture?.dimensions?.[1] !== 8
+  || texturedSurfaceReport.fixture?.encodedByteLength !== 588
+  || texturedSurfaceReport.largeGreedySurfaces?.wall48x32x1?.quads !== 6
+  || texturedSurfaceReport.largeGreedySurfaces?.floor48x1x32?.quads !== 6
+  || texturedSurfaceReport.adjacentChunks?.continuous !== true
+  || texturedSurfaceReport.adjacentChunks?.seamU !== 0
+  || texturedSurfaceReport.mixedMaterials?.mesh?.groups?.length !== 4
+) {
+  throw new Error('consumer textured-voxel evidence is incomplete or drifted');
 }
 const behavior = runtimeReport.runtime?.behavior;
 for (const field of [
@@ -198,6 +219,10 @@ console.log(JSON.stringify({
   studioControlResponseBytes: dataPlaneReport.after.studioControlResponseBytes,
   packedResourceBytes: dataPlaneReport.after.packedResourceBytes,
   browserJsonParseMilliseconds: dataPlaneReport.after.chromiumJsonParseMilliseconds,
+  texturedWallQuads: texturedSurfaceReport.largeGreedySurfaces.wall48x32x1.quads,
+  texturedFloorQuads: texturedSurfaceReport.largeGreedySurfaces.floor48x1x32.quads,
+  texturedAdjacentChunkSeamU: texturedSurfaceReport.adjacentChunks.seamU,
+  texturedMaterialGroups: texturedSurfaceReport.mixedMaterials.mesh.groups.length,
 }));
 NODE
 
@@ -254,6 +279,19 @@ RUSTY_STUDIO_EXPECTED_LARGE_RESOURCE_BYTES="$EXPECTED_LARGE_RESOURCE_BYTES" \
 RUSTY_STUDIO_ENGINE_COMMIT="$EXPECTED_ENGINE_COMMIT" \
 pnpm --dir studio exec playwright test \
   --config voxel-consumer.playwright.config.ts
+
+RUSTY_STUDIO_ADAPTER_BINARY="$VOXEL_ROOT/target/debug/$ADAPTER_BINARY" \
+RUSTY_STUDIO_PROJECT_ROOT="$STUDIO_TEST_ROOT" \
+RUSTY_STUDIO_PROJECT_FILE="$PROJECT_FILE" \
+RUSTY_STUDIO_LARGE_PROJECT_FILE="$LARGE_PROJECT_FILE" \
+RUSTY_STUDIO_RUNTIME_REPORT="$RUNTIME_REPORT" \
+RUSTY_STUDIO_SETTINGS_ROOT="$STUDIO_SETTINGS_ROOT" \
+RUSTY_STUDIO_EXPECTED_LARGE_RESOURCE_BYTES="$EXPECTED_LARGE_RESOURCE_BYTES" \
+RUSTY_STUDIO_ENGINE_COMMIT="$EXPECTED_ENGINE_COMMIT" \
+RUSTY_STUDIO_EXPECT_PREAUTHORED_SURFACE=1 \
+pnpm --dir studio exec playwright test \
+  --config voxel-consumer.playwright.config.ts \
+  --grep "fresh Studio host reopens"
 
 VOXEL_STATUS="$(git -C "$VOXEL_ROOT" status --porcelain=v1 --untracked-files=all)"
 if [[ -n "$VOXEL_STATUS" ]]; then
