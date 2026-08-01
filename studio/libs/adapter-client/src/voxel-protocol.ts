@@ -501,7 +501,26 @@ export type ProjectMutationReceipt =
       readonly frameKind: 'default' | 'clip';
       readonly ownerEntityId: number;
     }[];
-  };
+  }
+  | {
+      readonly kind: 'voxelSurfaceMaterialUpserted';
+      readonly textureAssetId: string;
+      readonly textureContentHash: string;
+      readonly materialAssetId: string;
+      readonly materialContentHash: string;
+      readonly atlas: {
+        readonly atlasAssetId: string;
+        readonly atlasContentHash: string;
+      } | null;
+      readonly sceneId: string;
+      readonly instanceId: string;
+      readonly materialSlot: number;
+    }
+  | {
+      readonly kind: 'voxelSurfaceMaterialRemoved';
+      readonly materialAssetId: string;
+      readonly textureAssetId: string;
+    };
 
 export function validateVoxelAuthoringReadout(input: unknown, path: string): void {
   const value = closedObject(input, path, ['assets', 'instances', 'materials']);
@@ -728,6 +747,32 @@ export function validateProjectMutationReceipt(input: unknown, path: string): vo
         instanceIds.add(instanceId);
         ownerEntityIds.add(ownerEntityId);
       });
+      return;
+    }
+    case 'voxelSurfaceMaterialUpserted': {
+      const entry = receipt([
+        'textureAssetId', 'textureContentHash', 'materialAssetId', 'materialContentHash',
+        'atlas', 'sceneId', 'instanceId', 'materialSlot',
+      ]);
+      strings(entry, path, [
+        'textureAssetId', 'textureContentHash', 'materialAssetId', 'materialContentHash',
+        'sceneId', 'instanceId',
+      ]);
+      const materialSlot = number(entry['materialSlot'], `${path}.materialSlot`);
+      if (!Number.isSafeInteger(materialSlot) || materialSlot < 0) {
+        throw new TypeError(`${path}.materialSlot must be a non-negative safe integer`);
+      }
+      if (entry['atlas'] !== null) {
+        const atlas = closedObject(entry['atlas'], `${path}.atlas`, [
+          'atlasAssetId', 'atlasContentHash',
+        ]);
+        strings(atlas, `${path}.atlas`, ['atlasAssetId', 'atlasContentHash']);
+      }
+      return;
+    }
+    case 'voxelSurfaceMaterialRemoved': {
+      const entry = receipt(['materialAssetId', 'textureAssetId']);
+      strings(entry, path, ['materialAssetId', 'textureAssetId']);
       return;
     }
     default:

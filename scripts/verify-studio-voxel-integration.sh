@@ -225,7 +225,7 @@ const records = readFileSync(process.argv[2], 'utf8')
   .split('\n')
   .filter((line) => line.startsWith('{'))
   .map((line) => JSON.parse(line));
-const evidence = records.find((record) => record.protocolVersion === 13);
+const evidence = records.find((record) => record.protocolVersion === 14);
 if (
   evidence === undefined
   || !Number.isSafeInteger(evidence.highFidelityPackedResourceBytes)

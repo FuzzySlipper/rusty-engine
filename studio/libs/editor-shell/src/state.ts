@@ -2847,6 +2847,8 @@ function mutationMessage(receipt: ProjectMutationReceipt): string {
     case 'voxelObjectConversionApplied': return `Voxel object ${receipt.assetId} installed with ${String(receipt.storedFrames)} stored frames.`;
     case 'voxelObjectInstanceAttached': return `Voxel object instance ${receipt.instanceId} attached.`;
     case 'voxelObjectInstancesAttached': return `${String(receipt.placements.length)} voxel object instances attached.`;
+    case 'voxelSurfaceMaterialUpserted': return `Voxel surface ${receipt.materialAssetId} applied to ${receipt.instanceId}.`;
+    case 'voxelSurfaceMaterialRemoved': return `Voxel surface ${receipt.materialAssetId} removed.`;
   }
 }
 

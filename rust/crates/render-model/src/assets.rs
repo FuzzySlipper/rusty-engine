@@ -197,7 +197,12 @@ pub struct VoxelAtlasRegionDescriptor {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum VoxelSurfaceMappingDescriptor {
     Repeat {
         texture: String,
@@ -1196,6 +1201,14 @@ mod tests {
             voxel_surface: Some(surface.clone()),
         };
         assert_eq!(material.validate(), Ok(()));
+        let material_json = serde_json::to_string(&material).unwrap();
+        assert!(material_json.contains("\"textureContentHash\":\"aa03\""));
+        assert!(material_json.contains("\"tileScaleCells\":[1.0,2.0]"));
+        assert!(!material_json.contains("texture_content_hash"));
+        assert_eq!(
+            serde_json::from_str::<RenderMaterialDescriptor>(&material_json).unwrap(),
+            material
+        );
 
         let mut invalid_padding = surface;
         if let VoxelSurfaceMappingDescriptor::Atlas { region, .. } = &mut invalid_padding.mapping {

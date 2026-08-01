@@ -484,6 +484,12 @@ export class VoxelEditorComponent {
       );
       const definition: StoredMaterialDefinition = {
         ...material,
+        authority: {
+          solid: false,
+          collidable: false,
+          occludes: false,
+          structuralClass: 'decorative',
+        },
         style: {
           ...material.style,
           uvStrategy: this.surfaceMapping === 'atlas' ? 'atlas' : 'planar',

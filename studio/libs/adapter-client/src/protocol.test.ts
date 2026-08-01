@@ -1055,6 +1055,41 @@ test('protocol 14 admits exact Rust-owned voxel surface resources and rejects dr
   if (decoded.type !== 'projectOpened') throw new Error('unexpected response');
   assert.equal(decoded.project.voxelSurfaceAuthoring.materials[0]?.mapping.kind, 'atlas');
 
+  const applied = decodeStudioAdapterResponse({
+    type: 'projectMutationApplied',
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+    requestId: 'surface-applied',
+    receipt: {
+      kind: 'voxelSurfaceMaterialUpserted',
+      textureAssetId: 'texture/voxel/checker',
+      textureContentHash: `sha256:${digest}`,
+      materialAssetId: 'material/voxel/checker',
+      materialContentHash: `sha256:${'c'.repeat(64)}`,
+      atlas: {
+        atlasAssetId: 'sprite-sheet/voxel/checker',
+        atlasContentHash: `sha256:${'b'.repeat(64)}`,
+      },
+      sceneId: 'scene/loading-bay',
+      instanceId: 'fixture',
+      materialSlot: 1,
+    },
+    project: opened.project,
+  });
+  assert.equal(applied.type, 'projectMutationApplied');
+  assert.equal(applied.type === 'projectMutationApplied' ? applied.receipt.kind : '',
+    'voxelSurfaceMaterialUpserted');
+  assert.equal(decodeStudioAdapterResponse({
+    type: 'projectMutationApplied',
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+    requestId: 'surface-removed',
+    receipt: {
+      kind: 'voxelSurfaceMaterialRemoved',
+      materialAssetId: 'material/voxel/checker',
+      textureAssetId: 'texture/voxel/checker',
+    },
+    project: opened.project,
+  }).type, 'projectMutationApplied');
+
   const wrongResource = structuredClone(opened);
   (wrongResource.project.textureResources?.[0] as Record<string, unknown>)['resource'] =
     `mesh-resource/${digest}`;
