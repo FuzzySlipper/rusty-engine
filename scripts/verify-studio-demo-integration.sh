@@ -3,10 +3,11 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEMO_ROOT="${1:-${RUSTY_ENGINE_DEMO_ROOT:-}}"
+MODE="${2:-all}"
 PIN_FILE="$REPO_ROOT/studio/demo-consumer-source.json"
 
 if [[ -z "$DEMO_ROOT" ]]; then
-  echo "usage: $0 <absolute-rusty-engine-demo-root>" >&2
+  echo "usage: $0 <absolute-rusty-engine-demo-root> [all|browser|entity-inspector]" >&2
   exit 2
 fi
 if [[ "$DEMO_ROOT" != /* ]]; then
@@ -22,6 +23,25 @@ if [[
   echo "not a rusty-engine-demo checkout: $DEMO_ROOT" >&2
   exit 1
 fi
+case "$MODE" in
+  all)
+    RUN_BROWSER=1
+    RUN_ENTITY_INSPECTOR=1
+    ;;
+  browser)
+    RUN_BROWSER=1
+    RUN_ENTITY_INSPECTOR=0
+    ;;
+  entity-inspector)
+    RUN_BROWSER=0
+    RUN_ENTITY_INSPECTOR=1
+    ;;
+  *)
+    echo "unsupported integration mode: $MODE" >&2
+    echo "usage: $0 <absolute-rusty-engine-demo-root> [all|browser|entity-inspector]" >&2
+    exit 2
+    ;;
+esac
 
 REVISION_OUTPUT="$(node "$REPO_ROOT/studio/scripts/check-demo-consumer-revision.mjs" \
   "$PIN_FILE" \
@@ -60,17 +80,23 @@ if [[ -n "$DEMO_STATUS" ]]; then
 fi
 
 cd "$REPO_ROOT"
-pnpm --dir studio run check:boundaries
-pnpm --dir studio --filter @rusty-engine/studio-editor-shell run build
+if [[ "$RUN_BROWSER" == 1 ]]; then
+  pnpm --dir studio run check:boundaries
+  pnpm --dir studio run build
+fi
 cargo build --locked --manifest-path "$DEMO_ROOT/Cargo.toml" --bin studio-adapter
-node studio/test/integration/demo-adapter.mjs \
-  --demo-root "$DEMO_ROOT" \
-  --adapter-binary "$DEMO_ROOT/target/debug/studio-adapter"
-node studio/test/integration/demo-voxel-objects.mjs \
-  --demo-root "$DEMO_ROOT" \
-  --adapter-binary "$DEMO_ROOT/target/debug/studio-adapter"
-./scripts/verify-studio-browser-integration.sh "$DEMO_ROOT"
-./scripts/verify-studio-entity-inspector-integration.sh "$DEMO_ROOT"
+if [[ "$RUN_BROWSER" == 1 ]]; then
+  node studio/test/integration/demo-adapter.mjs \
+    --demo-root "$DEMO_ROOT" \
+    --adapter-binary "$DEMO_ROOT/target/debug/studio-adapter"
+  node studio/test/integration/demo-voxel-objects.mjs \
+    --demo-root "$DEMO_ROOT" \
+    --adapter-binary "$DEMO_ROOT/target/debug/studio-adapter"
+  ./scripts/verify-studio-browser-integration.sh "$DEMO_ROOT"
+fi
+if [[ "$RUN_ENTITY_INSPECTOR" == 1 ]]; then
+  ./scripts/verify-studio-entity-inspector-integration.sh "$DEMO_ROOT"
+fi
 
 DEMO_STATUS="$(git -C "$DEMO_ROOT" status --porcelain=v1 --untracked-files=all)"
 if [[ -n "$DEMO_STATUS" ]]; then
@@ -82,13 +108,15 @@ fi
 node --input-type=module - \
   "$EXPECTED_REPOSITORY" \
   "$EXPECTED_COMMIT" \
-  "$EXPECTED_ENGINE_COMMIT" <<'NODE'
-const [consumerRepository, consumerCommit, engineCommit] = process.argv.slice(2);
+  "$EXPECTED_ENGINE_COMMIT" \
+  "$MODE" <<'NODE'
+const [consumerRepository, consumerCommit, engineCommit, mode] = process.argv.slice(2);
 console.log(JSON.stringify({
   kind: 'studioDemoIntegrationCertified',
   consumerRepository,
   consumerCommit,
   engineRepository: 'FuzzySlipper/rusty-engine',
   engineCommit,
+  mode,
 }));
 NODE

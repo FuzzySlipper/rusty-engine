@@ -266,9 +266,14 @@ not the Angular shell, implements the resulting camera movement, boost, pan, orb
   host and Rust adapter process. `scripts/verify-studio-entity-inspector-integration.sh` owns this
   focused sub-proof but is invoked only after the parent gate has admitted the exact clean consumer.
 - `.github/workflows/studio-demo-integration.yml` checks out the public demo at the exact revision
-  declared by `studio/demo-consumer-source.json` and runs that proof as an explicit integration
-  gate. Its summary links both the certified consumer commit and the provider commit read from the
-  reverse pin. The pin makes downstream drift a conscious update instead of an ambient sibling checkout.
+  declared by `studio/demo-consumer-source.json` and runs the Studio browser and downstream-built
+  Entity-inspector proofs as independent parallel jobs. Each job performs the exact revision and
+  clean-checkout admission before its real Chromium owner; a final `verify-studio-demo-integration`
+  job fails unless both pass. The local parent command still runs both modes while building Studio
+  and the adapter only once. Its summary links both the certified consumer commit and the provider
+  commit read from the reverse pin. Documentation-only changes do not trigger this gate. Provider
+  work triggers it by deliberately advancing the reverse pin, since an arbitrary Rust path trigger
+  would otherwise rerun the old consumer and could not certify the changed implementation.
 - `./scripts/verify-studio-voxel-integration.sh /absolute/path/to/rusty-engine-voxels` separately
   accepts only the exact public revision declared by `studio/voxel-consumer-source.json`. It checks
   the consumer's exact Engine pin and runtime/quality reports, then drives saved-pose, named-clip,

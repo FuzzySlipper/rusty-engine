@@ -105,6 +105,13 @@ application in Chromium, covers Voxel Object, unknown read-only fallback, a real
 and canonical reread, then repeats the read in a fresh adapter process. The final command proves the
 pinned animated-voxel runtime/quality workflow.
 
+The local demo command defaults to both proofs and builds Studio plus the project-owned adapter once.
+CI selects its `browser` and `entity-inspector` modes in parallel, then retains
+`verify-studio-demo-integration` as the aggregate exact-revision gate. Documentation-only changes do
+not start this long consumer proof. Provider changes become eligible only by deliberately advancing
+`studio/demo-consumer-source.json`; directly triggering on an arbitrary Rust crate would merely rerun
+the old consumer pin and could not certify the changed provider implementation.
+
 Browser rejection proof uses the same bounded project-mutation readiness budget as successful
 preparation, then requires a visible error diagnostic, a disabled apply action, and an unchanged
 project hash. A short presentation timeout is not an authority or atomicity boundary.

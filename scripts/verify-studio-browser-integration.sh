@@ -13,6 +13,17 @@ if [[ ! -f "$DEMO_ROOT/Cargo.toml" || ! -f "$DEMO_ROOT/AGENTS.md" ]]; then
   exit 1
 fi
 
+STUDIO_STATIC_ROOT="$REPO_ROOT/studio/dist/apps/studio-app/browser"
+ADAPTER_BINARY="$DEMO_ROOT/target/debug/studio-adapter"
+if [[ ! -f "$STUDIO_STATIC_ROOT/index.html" ]]; then
+  echo "the parent integration gate must build Studio before browser proof: $STUDIO_STATIC_ROOT/index.html" >&2
+  exit 1
+fi
+if [[ ! -x "$ADAPTER_BINARY" ]]; then
+  echo "the parent integration gate must build the exact consumer adapter before browser proof: $ADAPTER_BINARY" >&2
+  exit 1
+fi
+
 STUDIO_TEST_ROOT="$(mktemp -d /tmp/rusty-engine-studio-browser.XXXXXX)"
 STUDIO_SETTINGS_ROOT="$(mktemp -d /tmp/rusty-engine-studio-settings.XXXXXX)"
 cleanup() {
@@ -25,10 +36,7 @@ cp -a "$DEMO_ROOT/content" "$STUDIO_TEST_ROOT/content"
 cp -a "$DEMO_ROOT/fixtures" "$STUDIO_TEST_ROOT/fixtures"
 
 cd "$REPO_ROOT"
-pnpm --dir studio run build
-cargo build --manifest-path "$DEMO_ROOT/Cargo.toml" --bin studio-adapter
-
-RUSTY_STUDIO_ADAPTER_BINARY="$DEMO_ROOT/target/debug/studio-adapter" \
+RUSTY_STUDIO_ADAPTER_BINARY="$ADAPTER_BINARY" \
 RUSTY_STUDIO_PROJECT_ROOT="$STUDIO_TEST_ROOT" \
 RUSTY_STUDIO_SETTINGS_ROOT="$STUDIO_SETTINGS_ROOT" \
 pnpm --dir studio run test:browser-integration

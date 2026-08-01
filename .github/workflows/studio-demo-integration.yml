@@ -26,14 +26,10 @@ on:
       - 'studio/test/browser/**'
       - 'studio/test/entity-inspector-consumer-browser/**'
       - 'render/packages/renderer-host/**'
-      - 'docs/studio-adapter-protocol.md'
-      - 'docs/studio-downstream-entity-inspector-extensions.md'
-      - 'docs/design.md'
-      - 'docs/code-map/studio.md'
-      - 'docs/agent-code-atlas.md'
       - 'scripts/verify-studio-demo-integration.sh'
       - 'scripts/verify-studio-browser-integration.sh'
       - 'scripts/verify-studio-entity-inspector-integration.sh'
+      - 'scripts/check-studio-demo-ci-policy.py'
       - '.github/workflows/studio-demo-integration.yml'
   pull_request:
     paths:
@@ -59,14 +55,10 @@ on:
       - 'studio/test/browser/**'
       - 'studio/test/entity-inspector-consumer-browser/**'
       - 'render/packages/renderer-host/**'
-      - 'docs/studio-adapter-protocol.md'
-      - 'docs/studio-downstream-entity-inspector-extensions.md'
-      - 'docs/design.md'
-      - 'docs/code-map/studio.md'
-      - 'docs/agent-code-atlas.md'
       - 'scripts/verify-studio-demo-integration.sh'
       - 'scripts/verify-studio-browser-integration.sh'
       - 'scripts/verify-studio-entity-inspector-integration.sh'
+      - 'scripts/check-studio-demo-ci-policy.py'
       - '.github/workflows/studio-demo-integration.yml'
   workflow_dispatch:
 
@@ -74,8 +66,13 @@ permissions:
   contents: read
 
 jobs:
-  verify-studio-demo-integration:
+  demo_browser:
+    name: verify-studio-demo-browser
     runs-on: ubuntu-latest
+    outputs:
+      repository: ${{ steps.demo-consumer.outputs.repository }}
+      revision: ${{ steps.demo-consumer.outputs.revision }}
+      engine_revision: ${{ steps.demo-consumer.outputs.engine_revision }}
     steps:
       - name: Check out Rusty Engine
         uses: actions/checkout@v4
@@ -124,6 +121,64 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+          cache-dependency-path: studio/pnpm-lock.yaml
+
+      - name: Install isolated Studio dependencies
+        run: pnpm --dir studio install --frozen-lockfile
+
+      - name: Install Chromium for the explicit browser integration gate
+        run: pnpm --dir studio exec playwright install --with-deps chromium
+
+      - name: Verify exact downstream adapter and Studio browser integration
+        run: ./scripts/verify-studio-demo-integration.sh "$GITHUB_WORKSPACE/rusty-engine-demo" browser
+
+  entity_inspector:
+    name: verify-studio-demo-entity-inspector
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Rusty Engine
+        uses: actions/checkout@v4
+
+      - name: Read the reviewed demo consumer pin
+        id: demo-consumer
+        run: |
+          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import { readFileSync } from 'node:fs';
+          const pin = JSON.parse(readFileSync('studio/demo-consumer-source.json', 'utf8'));
+          if (
+            pin.schemaVersion !== 1
+            || pin.repository !== 'FuzzySlipper/rusty-engine-demo'
+            || pin.publicRepository !== 'https://github.com/FuzzySlipper/rusty-engine-demo'
+          ) {
+            throw new Error('studio/demo-consumer-source.json has an unsupported repository identity');
+          }
+          if (typeof pin.commit !== 'string' || !/^[0-9a-f]{40}$/.test(pin.commit)) {
+            throw new Error('studio/demo-consumer-source.json must name one exact public commit');
+          }
+          console.log(`repository=${pin.repository}`);
+          console.log(`revision=${pin.commit}`);
+          NODE
+
+      - name: Check out exact Rusty Engine Demo consumer
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.demo-consumer.outputs.repository }}
+          ref: ${{ steps.demo-consumer.outputs.revision }}
+          path: rusty-engine-demo
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
           cache-dependency-path: |
             studio/pnpm-lock.yaml
             rusty-engine-demo/pnpm-lock.yaml
@@ -134,16 +189,31 @@ jobs:
       - name: Install Chromium for the explicit browser integration gate
         run: pnpm --dir studio exec playwright install --with-deps chromium
 
-      - name: Verify exact downstream adapter integration
-        run: ./scripts/verify-studio-demo-integration.sh "$GITHUB_WORKSPACE/rusty-engine-demo"
+      - name: Verify downstream-built entity inspector integration
+        run: ./scripts/verify-studio-demo-integration.sh "$GITHUB_WORKSPACE/rusty-engine-demo" entity-inspector
+
+  verify-studio-demo-integration:
+    needs: [demo_browser, entity_inspector]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    env:
+      BROWSER_RESULT: ${{ needs.demo_browser.result }}
+      ENTITY_INSPECTOR_RESULT: ${{ needs.entity_inspector.result }}
+    steps:
+      - name: Require both downstream browser owners
+        run: |
+          if [[ "$BROWSER_RESULT" != success || "$ENTITY_INSPECTOR_RESULT" != success ]]; then
+            echo "demo browser result: $BROWSER_RESULT" >&2
+            echo "entity inspector result: $ENTITY_INSPECTOR_RESULT" >&2
+            exit 1
+          fi
 
       - name: Summarize certified consumer and provider revisions
-        if: ${{ success() }}
         run: |
           {
             echo '### Studio demo reverse certification'
             echo
-            echo "- Consumer: [${{ steps.demo-consumer.outputs.revision }}](https://github.com/${{ steps.demo-consumer.outputs.repository }}/commit/${{ steps.demo-consumer.outputs.revision }})"
-            echo "- Provider: [${{ steps.demo-consumer.outputs.engine_revision }}](https://github.com/FuzzySlipper/rusty-engine/commit/${{ steps.demo-consumer.outputs.engine_revision }})"
-            echo '- Proof: consumer revision check, locked build, adapter integration, and real Chromium workflows passed.'
+            echo "- Consumer: [${{ needs.demo_browser.outputs.revision }}](https://github.com/${{ needs.demo_browser.outputs.repository }}/commit/${{ needs.demo_browser.outputs.revision }})"
+            echo "- Provider: [${{ needs.demo_browser.outputs.engine_revision }}](https://github.com/FuzzySlipper/rusty-engine/commit/${{ needs.demo_browser.outputs.engine_revision }})"
+            echo '- Proof: exact revision checks, locked builds, adapter integration, and both parallel real Chromium owners passed.'
           } >> "$GITHUB_STEP_SUMMARY"

@@ -11,6 +11,7 @@ cargo fmt --all --check
 python3 ./scripts/dependency_boundary_check.py
 python3 ./scripts/code_map_freshness.py
 PYTHONDONTWRITEBYTECODE=1 python3 ./scripts/test_architecture_checks.py
+PYTHONDONTWRITEBYTECODE=1 python3 ./scripts/check-studio-demo-ci-policy.py
 ./scripts/check-doc-links.sh
 ./scripts/check-asha-equivalence.sh --final
 ./scripts/check-gameplay-mechanics-donor-disposition.sh
