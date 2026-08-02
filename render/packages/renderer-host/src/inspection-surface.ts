@@ -1,11 +1,14 @@
 // Projection-only interactive viewer for downstream visual-authoring tools.
 
 import type {
+  AnimatedMeshPlaybackCommand,
   EditorGridDescriptor,
   EditorGridProjectionReadout,
   PerspectiveProjection,
   RenderFrameDiff,
+  RenderHandle,
 } from '@rusty-engine/render-contracts';
+import type { RendererAnimatedMeshSampleReadout } from './surface.js';
 import type {
   RendererEditorViewport,
   RendererEditorViewportBufferSource,
@@ -162,6 +165,17 @@ export interface RendererInspectionSurface {
   readonly pick: (request: RendererEditorViewportPickRequest) => RendererEditorViewportPickReceipt;
   readonly readout: () => RendererInspectionSurfaceReadout;
   readonly renderOnce: (timeMs?: number) => void;
+  /** Deterministically sample an authored animated mesh without mutating project state. */
+  readonly sampleAnimatedMesh: (
+    handle: RenderHandle,
+    clipId: string,
+    normalizedTime: number,
+  ) => RendererAnimatedMeshSampleReadout;
+  /** Apply disposable authored-channel playback for human inspection only. */
+  readonly setAnimatedMeshPlayback: (
+    handle: RenderHandle,
+    playback: AnimatedMeshPlaybackCommand,
+  ) => void;
   /** Atomically replace authored content from individually bounded transport frames. */
   readonly replaceAuthoredFrameChunks: (
     chunks: readonly RenderFrameDiff[],
@@ -468,6 +482,10 @@ export function createRendererInspectionSurfaceWithViewport(
       };
     },
     renderOnce,
+    sampleAnimatedMesh: (handle, clipId, normalizedTime) =>
+      viewport.sampleAnimatedMesh('authored', handle, clipId, normalizedTime),
+    setAnimatedMeshPlayback: (handle, playback) =>
+      viewport.setAnimatedMeshPlayback('authored', handle, playback),
     replaceAuthoredFrameChunks,
     replaceFrame,
     replaceOverlayFrame,

@@ -585,7 +585,7 @@ test('project glTF closures pack to GLB, reimport external drift, and reopen in 
   );
 });
 
-test('trusted host browsing restores focus and animated appearance uses the shared renderer', async ({ page }) => {
+test('trusted host browsing restores focus and animated appearance uses the shared renderer', async ({ page }, testInfo) => {
   test.setTimeout(240_000);
   await page.goto(`/?root=${encodeURIComponent(projectRoot)}&project=${encodeURIComponent(loadingBayProjectFile)}`);
   const shell = page.locator('[data-visual-id="studio-shell"]');
@@ -669,6 +669,30 @@ test('trusted host browsing restores focus and animated appearance uses the shar
     }
     return status;
   }).toBe('ready');
+
+  await page.getByRole('button', { name: 'Tools', exact: true }).click();
+  await page.getByRole('button', { name: 'Animation Inspection', exact: true }).click();
+  const animationInspection = page.locator('[data-visual-id="animation-inspection-workflow"]');
+  await expect(animationInspection).toBeVisible();
+  await expect(shell).toHaveAttribute('data-animation-inspection-tool', 'active');
+  await animationInspection.getByLabel('Animation inspection clip').selectOption('run');
+  await animationInspection.getByLabel('Animation inspection normalized time').fill('0.5');
+  await expect(animationInspection.locator('[data-visual-id="animation-inspection-readout"]'))
+    .toContainText('run 50%');
+  await animationInspection.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(animationInspection.locator('[data-visual-id="animation-inspection-readout"]'))
+    .toContainText('Playing run');
+  await animationInspection.getByRole('button', { name: 'Pause', exact: true }).click();
+  await animationInspection.getByRole('button', { name: 'Capture 5-frame sheet', exact: true }).click();
+  await expect(shell).toHaveAttribute('data-animation-inspection-frames', '5');
+  const contactSheet = animationInspection.locator('img[alt="run animation contact sheet"]');
+  await expect(contactSheet).toHaveAttribute('src', /^data:image\/png;base64,/u);
+  const contactSheetPath = testInfo.outputPath('animation-inspection-run-contact-sheet.png');
+  await contactSheet.screenshot({ path: contactSheetPath });
+  await testInfo.attach('animation-inspection-run-contact-sheet', {
+    path: contactSheetPath,
+    contentType: 'image/png',
+  });
 
   const animatedHash = await projectHash(shell);
   await page.reload();

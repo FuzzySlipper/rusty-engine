@@ -1,6 +1,7 @@
 // Backend-neutral retained editor/product viewport.
 
 import type {
+  AnimatedMeshPlaybackCommand,
   CameraBasis,
   CameraPose,
   EditorGridDescriptor,
@@ -11,6 +12,7 @@ import type {
   RenderHandle,
   RenderLayer,
 } from '@rusty-engine/render-contracts';
+import type { RendererAnimatedMeshSampleReadout } from './surface.js';
 import { RenderProjection, type RenderProjectionSnapshot } from '@rusty-engine/render-projection';
 import { mountRendererEditorBackend } from '@rusty-engine/renderer-three/backend';
 import {
@@ -223,6 +225,17 @@ export interface RendererEditorViewport {
   readonly readout: () => RendererEditorViewportReadout;
   /** Submit one frame and return renderer-neutral statistics for that submission. */
   readonly renderOnce: (timeMs?: number) => RendererSurfaceStatisticsSample;
+  readonly sampleAnimatedMesh: (
+    channel: RendererEditorViewportChannel,
+    handle: RenderHandle,
+    clipId: string,
+    normalizedTime: number,
+  ) => RendererAnimatedMeshSampleReadout;
+  readonly setAnimatedMeshPlayback: (
+    channel: RendererEditorViewportChannel,
+    handle: RenderHandle,
+    playback: AnimatedMeshPlaybackCommand,
+  ) => void;
   readonly resize: (size: RendererEditorViewportSize) => RendererEditorViewportSizeReceipt;
   readonly setCamera: (camera: RendererEditorViewportCamera) => RendererEditorViewportCameraReceipt;
   readonly setGrid: (descriptor: EditorGridDescriptor | null) => RendererEditorViewportGridReceipt;
@@ -250,6 +263,17 @@ export interface RendererEditorViewportBackendPort {
   readonly gridReadout: () => EditorGridProjectionReadout | null;
   readonly pick: (request: BackendPickRequest) => BackendPickReceipt;
   readonly renderOnce: (timeMs?: number) => RendererSurfaceStatisticsInput;
+  readonly sampleAnimatedMesh: (
+    channel: RendererEditorViewportChannel,
+    handle: RenderHandle,
+    clipId: string,
+    normalizedTime: number,
+  ) => RendererAnimatedMeshSampleReadout;
+  readonly setAnimatedMeshPlayback: (
+    channel: RendererEditorViewportChannel,
+    handle: RenderHandle,
+    playback: AnimatedMeshPlaybackCommand,
+  ) => void;
   readonly replaceChannel: (channel: RendererEditorViewportChannel, frame: RenderFrameDiff) => void;
   readonly resize: (size: RendererEditorViewportSize) => void;
   readonly setCamera: (camera: Omit<RendererEditorViewportCamera, 'source'>) => void;
@@ -495,6 +519,22 @@ export function createRendererEditorViewportWithBackend(
       }
     },
     pick: (request) => pickViewport(status, size, states, backend, diagnostics, request),
+    sampleAnimatedMesh: (channel, handle, clipId, normalizedTime) => {
+      if (status === 'disposed') throw new Error('editor viewport is disposed');
+      const state = requireState(states, channel);
+      if (state.disposed || !state.projection.snapshot().nodes.some((node) => node.handle === handle)) {
+        throw new Error(`editor viewport channel ${channel} does not retain animated handle ${handle}`);
+      }
+      return backend.sampleAnimatedMesh(channel, handle, clipId, normalizedTime);
+    },
+    setAnimatedMeshPlayback: (channel, handle, playback) => {
+      if (status === 'disposed') throw new Error('editor viewport is disposed');
+      const state = requireState(states, channel);
+      if (state.disposed || !state.projection.snapshot().nodes.some((node) => node.handle === handle)) {
+        throw new Error(`editor viewport channel ${channel} does not retain animated handle ${handle}`);
+      }
+      backend.setAnimatedMeshPlayback(channel, handle, playback);
+    },
     readout,
     renderOnce: (timeMs) => {
       if (status === 'disposed') {

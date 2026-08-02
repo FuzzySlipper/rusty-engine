@@ -435,6 +435,12 @@ class FakeEditorViewportBackend implements RendererEditorViewportBackendPort {
     return this.submission;
   }
 
+  sampleAnimatedMesh(): ReturnType<RendererEditorViewportBackendPort['sampleAnimatedMesh']> {
+    throw new Error('fake animated mesh sample is not configured');
+  }
+
+  setAnimatedMeshPlayback(): void {}
+
   start(): void {
     this.starts += 1;
   }

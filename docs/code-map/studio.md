@@ -87,6 +87,16 @@ viewport, and its closed external-project adapter protocol.
 - `studio/libs/editor-shell` forwards that exact `frameSubmitted` event through
   a public shell output while retaining the generation-only `frameApplied`
   workspace acknowledgement.
+- Tools > Animation Inspection operates on the selected authored animated-mesh
+  handle through that same shared inspection surface. Human users can choose a
+  canonical clip, scrub an exact normalized time, play or pause with an
+  explicit cross-fade, and open or download a bounded five-frame labeled
+  contact sheet. These controls mutate only disposable renderer playback; they
+  never write authored project state.
+- `RendererInspectionSurface.sampleAnimatedMesh` and
+  `setAnimatedMeshPlayback` are the corresponding generic agent/tool seam.
+  They remain channel-checked, handle-checked, renderer-owned, and lifecycle
+  bounded; Studio exposes no Three scene, mixer, loader, or WebGL object.
 
 ## Private or forbidden paths
 

@@ -307,6 +307,30 @@ void test('inspection surface publishes immutable mount explicit and automatic s
   assert.equal(explicit.frameIntervalStatus, 'available');
 });
 
+void test('inspection surface delegates disposable authored animation sampling and playback', () => {
+  const harness = createInspectionHarness({ autoStart: false, frame: primitiveFrame(7) });
+  const before = harness.surface.readout().retainedFrameHash;
+
+  const sample = harness.surface.sampleAnimatedMesh(renderHandle(7), 'run', 0.5);
+  harness.surface.setAnimatedMeshPlayback(renderHandle(7), {
+    kind: 'play',
+    clip: 'idle',
+    loop: 'repeat',
+    speed: 1,
+    weight: 1,
+    restart: true,
+    fadeSeconds: 0.2,
+  });
+
+  assert.equal(sample.clip, 'run');
+  assert.equal(sample.normalizedTime, 0.5);
+  assert.deepEqual(harness.backend.animationSamples, [['authored', 7, 'run', 0.5]]);
+  assert.equal(harness.backend.playbackCommands[0]?.[0], 'authored');
+  assert.equal(harness.backend.playbackCommands[0]?.[1], 7);
+  assert.equal(harness.backend.playbackCommands[0]?.[2].kind, 'play');
+  assert.equal(harness.surface.readout().retainedFrameHash, before);
+});
+
 void test('inspection submission preserves classified counters and lifecycle history', () => {
   const harness = createInspectionHarness({ autoStart: false, frame: primitiveFrame(7) });
   harness.backend.submission = {
@@ -892,6 +916,17 @@ class FakeEditorViewportBackend implements RendererEditorViewportBackendPort {
     animatedInstanceCount: 0,
     triangleCount: 24,
   };
+  readonly animationSamples: Array<[
+    'runtime' | 'authored' | 'overlay',
+    number,
+    string,
+    number,
+  ]> = [];
+  readonly playbackCommands: Array<[
+    'runtime' | 'authored' | 'overlay',
+    number,
+    Parameters<RendererEditorViewportBackendPort['setAnimatedMeshPlayback']>[2],
+  ]> = [];
 
   replaceChannel(channel: 'runtime' | 'authored' | 'overlay', frame: RenderFrameDiff): void {
     if (this.rejectChannel === channel) {
@@ -925,6 +960,36 @@ class FakeEditorViewportBackend implements RendererEditorViewportBackendPort {
 
   renderOnce(): ReturnType<RendererEditorViewportBackendPort['renderOnce']> {
     return this.submission;
+  }
+
+  sampleAnimatedMesh(
+    channel: 'runtime' | 'authored' | 'overlay',
+    handle: Parameters<RendererEditorViewportBackendPort['sampleAnimatedMesh']>[1],
+    clipId: string,
+    normalizedTime: number,
+  ): ReturnType<RendererEditorViewportBackendPort['sampleAnimatedMesh']> {
+    this.animationSamples.push([channel, handle, clipId, normalizedTime]);
+    return {
+      handle,
+      asset: 'animated/test',
+      contentHash: 'sha256:test',
+      clip: clipId,
+      normalizedTime,
+      durationSeconds: 1,
+      assetBounds: { min: [-1, 0, -1], max: [1, 2, 1] },
+      sampledWorldBounds: { min: [-1, 0, -1], max: [1, 2, 1] },
+      sampledVertexCount: 24,
+      boneCount: 12,
+      diagnostics: [],
+    };
+  }
+
+  setAnimatedMeshPlayback(
+    channel: 'runtime' | 'authored' | 'overlay',
+    handle: Parameters<RendererEditorViewportBackendPort['setAnimatedMeshPlayback']>[1],
+    playback: Parameters<RendererEditorViewportBackendPort['setAnimatedMeshPlayback']>[2],
+  ): void {
+    this.playbackCommands.push([channel, handle, playback]);
   }
 
   start(): void {}

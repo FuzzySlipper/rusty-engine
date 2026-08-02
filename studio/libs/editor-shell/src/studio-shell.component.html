@@ -17,6 +17,9 @@
   [attr.data-camera-speed]="state().settings.cameraMoveSpeed"
   [attr.data-move-forward]="state().settings.keyboard.moveForward"
   [attr.data-pivot-grounding-tool]="pivotGroundingToolActive ? 'active' : 'inactive'"
+  [attr.data-animation-inspection-tool]="animationInspectionToolActive ? 'active' : 'inactive'"
+  [attr.data-animation-inspection-clip]="effectiveAnimationInspectionClip()"
+  [attr.data-animation-inspection-frames]="animationInspectionCapture()?.samples?.length ?? 0"
 >
   <header class="titlebar">
     <div class="brand" aria-label="Rusty Engine Studio">
@@ -98,6 +101,7 @@
       <section class="menu-popover tools-menu" aria-label="Tools menu">
         <button type="button" disabled title="Picking is active directly on the shared renderer canvas">Viewport Picking · active</button>
         <button type="button" (click)="openPivotGroundingTool()">Pivot &amp; Grounding</button>
+        <button type="button" (click)="openAnimationInspectionTool()">Animation Inspection</button>
         <button type="button" (click)="setInspectorMode('voxel'); store.toggleMenu(null)">Voxel Authoring</button>
         <button type="button" (click)="setInspectorMode('voxel'); store.toggleMenu(null)">Convert Mesh to Voxel…</button>
       </section>
@@ -355,8 +359,8 @@
     <aside class="panel inspector-panel" data-visual-id="studio-inspector-panel">
       <header class="panel-heading">
         <div>
-          <strong>{{ pivotGroundingToolActive ? 'Pivot & Grounding' : inspectorMode === 'entity' ? 'Inspector' : 'Voxel Editor' }}</strong>
-          <small>{{ pivotGroundingToolActive ? 'Renderable-local presentation' : inspectorMode === 'entity' ? 'Typed owner operation' : state().voxelWorkspace.message }}</small>
+          <strong>{{ animationInspectionToolActive ? 'Animation Inspection' : pivotGroundingToolActive ? 'Pivot & Grounding' : inspectorMode === 'entity' ? 'Inspector' : 'Voxel Editor' }}</strong>
+          <small>{{ animationInspectionToolActive ? 'Shared retained renderer' : pivotGroundingToolActive ? 'Renderable-local presentation' : inspectorMode === 'entity' ? 'Typed owner operation' : state().voxelWorkspace.message }}</small>
         </div>
         <div class="inspector-mode-tabs">
           <button type="button" [class.is-active]="inspectorMode === 'entity'" (click)="setInspectorMode('entity')">Entity</button>
@@ -398,6 +402,46 @@
             }
           </section>
         }
+        @if (animationInspectionToolActive) {
+          <section class="animation-inspection-workflow" data-visual-id="animation-inspection-workflow" aria-label="Animation inspection workflow">
+            <header><strong>Animation Inspection</strong><span>disposable viewport playback</span></header>
+            @if (selectedAnimatedMeshResource(); as resource) {
+              <p>Inspect <strong>{{ resource.asset }}</strong> through the same retained renderer used by the Studio viewport. Scrubbing and playback do not change the authored project.</p>
+              <label class="field-row">
+                <span>Clip</span>
+                <select aria-label="Animation inspection clip" [ngModel]="effectiveAnimationInspectionClip()" (ngModelChange)="chooseAnimationInspectionClip($event)">
+                  @for (clip of resource.clipIds; track clip) {
+                    <option [value]="clip">{{ clip }}</option>
+                  }
+                </select>
+              </label>
+              <label class="field-row">
+                <span>Normalized time · {{ (animationInspectionTime * 100).toFixed(0) }}%</span>
+                <input aria-label="Animation inspection normalized time" type="range" min="0" max="1" step="0.01" [ngModel]="animationInspectionTime" (ngModelChange)="sampleAnimationInspection($event)" />
+              </label>
+              <label class="field-row">
+                <span>Cross-fade seconds</span>
+                <input aria-label="Animation inspection fade seconds" type="number" min="0" max="2" step="0.05" [(ngModel)]="animationInspectionFadeSeconds" />
+              </label>
+              <div class="inspector-actions">
+                <button type="button" (click)="playAnimationInspection()">Play</button>
+                <button type="button" (click)="pauseAnimationInspection()">Pause</button>
+                <button type="button" (click)="captureAnimationInspection()">Capture 5-frame sheet</button>
+              </div>
+              <small data-visual-id="animation-inspection-readout">{{ animationInspectionReadout() }}</small>
+              @if (animationInspectionCapture(); as capture) {
+                <figure class="animation-contact-sheet">
+                  <a [href]="capture.contactSheetPngDataUrl" target="_blank" rel="noopener" [download]="capture.clip + '-animation-contact-sheet.png'" title="Open or download the full-size contact sheet">
+                    <img [src]="capture.contactSheetPngDataUrl" [alt]="capture.clip + ' animation contact sheet'" />
+                  </a>
+                  <figcaption>{{ capture.clip }} · 0 / 25 / 50 / 75 / 100%</figcaption>
+                </figure>
+              }
+            } @else {
+              <p>Select an animated mesh from the hierarchy or shared viewport. Static meshes and empty entities do not have clip playback.</p>
+            }
+          </section>
+        }
         @if (store.selectedHierarchyNode(); as node) {
           <section class="inspector-content">
             <div class="entity-title">
@@ -413,7 +457,7 @@
               <dt>Asset</dt><dd>{{ node.asset ?? 'none' }}</dd>
               <dt>Parent</dt><dd>{{ node.parentNodeId ?? 'root' }}</dd>
             </dl>
-            @if (!pivotGroundingToolActive) {
+            @if (!pivotGroundingToolActive && !animationInspectionToolActive) {
               <section class="inspector-section">
                 <header><strong>Identity & hierarchy</strong><span>entity definition</span></header>
               <label class="field-row">

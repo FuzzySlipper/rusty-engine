@@ -7,11 +7,13 @@ import type {
   EditorGridDescriptor,
   EditorGridProjectionReadout,
   PerspectiveProjection,
+  AnimatedMeshPlaybackCommand,
   RenderFrameDiff,
   RenderHandle,
   RenderLayer,
 } from '@rusty-engine/render-contracts';
 import type { AnimatedMeshAssetSource } from './animated-mesh.js';
+import type { AnimatedMeshSampleReadout } from './animated-mesh.js';
 import {
   pickProjectedObject,
   type RendererBrowserSurfacePickFilter,
@@ -95,6 +97,17 @@ export interface RendererEditorBackend {
   readonly gridReadout: () => EditorGridProjectionReadout | null;
   readonly pick: (request: RendererEditorBackendPickRequest) => RendererEditorBackendPickReceipt;
   readonly renderOnce: (timeMs?: number) => RendererEditorBackendSubmissionStatistics;
+  readonly sampleAnimatedMesh: (
+    channel: RendererEditorBackendChannel,
+    handle: RenderHandle,
+    clipId: string,
+    normalizedTime: number,
+  ) => AnimatedMeshSampleReadout;
+  readonly setAnimatedMeshPlayback: (
+    channel: RendererEditorBackendChannel,
+    handle: RenderHandle,
+    playback: AnimatedMeshPlaybackCommand,
+  ) => void;
   readonly replaceChannel: (channel: RendererEditorBackendChannel, frame: RenderFrameDiff) => void;
   readonly resize: (size: RendererEditorBackendSize) => void;
   readonly setCamera: (camera: RendererEditorBackendCamera) => void;
@@ -274,6 +287,15 @@ export function mountRendererEditorBackend(
     gridReadout: () => gridProjection.readout(),
     resize,
     pick: (request) => pickAcrossChannels(channels, camera, raycaster, pickPoint, request),
+    sampleAnimatedMesh: (channel, handle, clipId, normalizedTime) =>
+      channels.renderer(channel).sampleAnimatedMesh(handle, clipId, normalizedTime),
+    setAnimatedMeshPlayback: (channel, handle, playback) => {
+      channels.renderer(channel).applyDiff({
+        op: 'setAnimatedMeshPlayback',
+        handle,
+        playback,
+      });
+    },
     renderOnce,
     start,
     stop,

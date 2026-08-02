@@ -10,9 +10,16 @@ import {
   type ElementRef,
   type OnDestroy,
 } from '@angular/core';
-import type { EditorGridDescriptor, RenderFrameDiff, Transform } from '@rusty-engine/render-contracts';
+import type {
+  AnimatedMeshPlaybackCommand,
+  EditorGridDescriptor,
+  RenderFrameDiff,
+  Transform,
+} from '@rusty-engine/render-contracts';
+import { renderHandle, type RenderHandle } from '@rusty-engine/render-contracts';
 import {
   mountRendererInspectionSurface,
+  type RendererAnimatedMeshSampleReadout,
   type RendererAnimatedMeshResourceManifest,
   type RendererAnimatedMeshResourceResolver,
   type RendererInspectionSurface,
@@ -71,6 +78,13 @@ export interface StudioVoxelObjectPlacementPick {
   readonly worldPoint: readonly [number, number, number];
   readonly worldNormal: readonly [number, number, number];
   readonly sourceEntity: number | null;
+}
+
+export interface StudioAnimationInspectionCapture {
+  readonly clip: string;
+  readonly contactSheetPngDataUrl: string;
+  readonly normalizedTimes: readonly number[];
+  readonly samples: readonly RendererAnimatedMeshSampleReadout[];
 }
 
 @Component({
@@ -298,6 +312,116 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     this.canvasElement.nativeElement.focus({ preventScroll: true });
     this.#syncReadout();
     return true;
+  }
+
+  sampleSelectedAnimatedMesh(
+    clip: string,
+    normalizedTime: number,
+  ): RendererAnimatedMeshSampleReadout {
+    const surface = this.#requireAnimationInspectionSurface();
+    const sample = surface.sampleAnimatedMesh(
+      this.#requireSelectedAnimatedHandle(),
+      clip,
+      normalizedTime,
+    );
+    this.#focusAnimationSample(surface, sample);
+    surface.renderOnce(0);
+    this.#syncReadout();
+    return sample;
+  }
+
+  setSelectedAnimatedMeshPlayback(playback: AnimatedMeshPlaybackCommand): void {
+    const surface = this.#requireAnimationInspectionSurface();
+    surface.setAnimatedMeshPlayback(this.#requireSelectedAnimatedHandle(), playback);
+    surface.start();
+    this.#syncReadout();
+  }
+
+  captureSelectedAnimatedMesh(
+    clip: string,
+    normalizedTimes: readonly number[] = [0, 0.25, 0.5, 0.75, 1],
+  ): StudioAnimationInspectionCapture {
+    if (
+      normalizedTimes.length < 1
+      || normalizedTimes.length > 8
+      || normalizedTimes.some((value) => !Number.isFinite(value) || value < 0 || value > 1)
+    ) {
+      throw new Error('animation inspection requires one to eight normalized frame times');
+    }
+    const surface = this.#requireAnimationInspectionSurface();
+    const handle = this.#requireSelectedAnimatedHandle();
+    const source = this.canvasElement.nativeElement;
+    const cellWidth = 240;
+    const cellHeight = 160;
+    const contactSheet = source.ownerDocument.createElement('canvas');
+    contactSheet.width = cellWidth * normalizedTimes.length;
+    contactSheet.height = cellHeight;
+    const context = contactSheet.getContext('2d');
+    if (context === null) throw new Error('animation inspection requires a 2D canvas');
+    const samples: RendererAnimatedMeshSampleReadout[] = [];
+    surface.stop();
+    try {
+      for (const [index, normalizedTime] of normalizedTimes.entries()) {
+        const sample = surface.sampleAnimatedMesh(handle, clip, normalizedTime);
+        samples.push(sample);
+        if (index === 0) this.#focusAnimationSample(surface, sample);
+        surface.renderOnce(0);
+        const x = index * cellWidth;
+        const crop = animationSampleCrop(source, surface.camera(), sample.sampledWorldBounds);
+        context.drawImage(
+          source,
+          crop.x,
+          crop.y,
+          crop.width,
+          crop.height,
+          x,
+          0,
+          cellWidth,
+          cellHeight,
+        );
+        context.fillStyle = 'rgba(0, 0, 0, 0.78)';
+        context.fillRect(x, cellHeight - 26, cellWidth, 26);
+        context.fillStyle = '#ffffff';
+        context.font = '14px sans-serif';
+        context.fillText(`${clip} · ${(normalizedTime * 100).toFixed(0)}%`, x + 8, cellHeight - 8);
+      }
+    } finally {
+      surface.start();
+      this.#syncReadout();
+    }
+    return Object.freeze({
+      clip,
+      contactSheetPngDataUrl: contactSheet.toDataURL('image/png'),
+      normalizedTimes: [...normalizedTimes],
+      samples: Object.freeze(samples),
+    });
+  }
+
+  #requireAnimationInspectionSurface(): RendererInspectionSurface {
+    const surface = this.#surface;
+    if (surface === null || this.status() !== 'ready') {
+      throw new Error('shared renderer is not ready for animation inspection');
+    }
+    return surface;
+  }
+
+  #focusAnimationSample(
+    surface: RendererInspectionSurface,
+    sample: RendererAnimatedMeshSampleReadout,
+  ): void {
+    const bounds = sample.sampledWorldBounds;
+    if (bounds === null) return;
+    surface.focusTarget([
+      (bounds.min[0] + bounds.max[0]) / 2,
+      (bounds.min[1] + bounds.max[1]) / 2,
+      (bounds.min[2] + bounds.max[2]) / 2,
+    ]);
+  }
+
+  #requireSelectedAnimatedHandle(): RenderHandle {
+    const handle = this.selectedRenderHandle();
+    if (handle === null) throw new Error('select a retained animated mesh first');
+    return renderHandle(handle);
   }
 
   pointerDown(event: PointerEvent): void {
@@ -847,6 +971,67 @@ function normalize(
   const length = Math.hypot(...vector);
   if (!Number.isFinite(length) || length <= Number.EPSILON) return null;
   return [vector[0] / length, vector[1] / length, vector[2] / length];
+}
+
+function animationSampleCrop(
+  canvas: HTMLCanvasElement,
+  camera: ReturnType<RendererInspectionSurface['camera']>,
+  bounds: RendererAnimatedMeshSampleReadout['sampledWorldBounds'],
+): { readonly x: number; readonly y: number; readonly width: number; readonly height: number } {
+  if (bounds === null) return { x: 0, y: 0, width: canvas.width, height: canvas.height };
+  const halfFov = Math.tan((camera.projection.fovYDegrees * Math.PI) / 360);
+  const aspect = canvas.width / canvas.height;
+  const points: Array<readonly [number, number]> = [];
+  for (const x of [bounds.min[0], bounds.max[0]]) {
+    for (const y of [bounds.min[1], bounds.max[1]]) {
+      for (const z of [bounds.min[2], bounds.max[2]]) {
+        const relative: readonly [number, number, number] = [
+          x - camera.pose.position[0],
+          y - camera.pose.position[1],
+          z - camera.pose.position[2],
+        ];
+        const depth = dot3(relative, camera.basis.forward);
+        if (depth <= camera.projection.near) continue;
+        const normalizedX = dot3(relative, camera.basis.right) / (depth * halfFov * aspect);
+        const normalizedY = dot3(relative, camera.basis.up) / (depth * halfFov);
+        points.push([
+          (normalizedX * 0.5 + 0.5) * canvas.width,
+          (-normalizedY * 0.5 + 0.5) * canvas.height,
+        ]);
+      }
+    }
+  }
+  if (points.length === 0) return { x: 0, y: 0, width: canvas.width, height: canvas.height };
+  let minX = Math.min(...points.map((point) => point[0]));
+  let maxX = Math.max(...points.map((point) => point[0]));
+  let minY = Math.min(...points.map((point) => point[1]));
+  let maxY = Math.max(...points.map((point) => point[1]));
+  const padX = Math.max(20, (maxX - minX) * 0.2);
+  const padY = Math.max(20, (maxY - minY) * 0.2);
+  minX = Math.max(0, minX - padX);
+  maxX = Math.min(canvas.width, maxX + padX);
+  minY = Math.max(0, minY - padY);
+  maxY = Math.min(canvas.height, maxY + padY);
+  const targetAspect = 240 / 160;
+  let width = Math.max(1, maxX - minX);
+  let height = Math.max(1, maxY - minY);
+  if (width / height < targetAspect) {
+    const expanded = Math.min(canvas.width, height * targetAspect);
+    minX = Math.max(0, Math.min(canvas.width - expanded, (minX + maxX - expanded) / 2));
+    width = expanded;
+  } else {
+    const expanded = Math.min(canvas.height, width / targetAspect);
+    minY = Math.max(0, Math.min(canvas.height - expanded, (minY + maxY - expanded) / 2));
+    height = expanded;
+  }
+  return { x: minX, y: minY, width, height };
+}
+
+function dot3(
+  left: readonly [number, number, number],
+  right: readonly [number, number, number],
+): number {
+  return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
 }
 
 function handleLabel(handle: StudioTransformHandle): string {

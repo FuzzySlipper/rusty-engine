@@ -25,6 +25,7 @@ import type { EditorGridDescriptor, MeshBoundsDescriptor, Transform } from '@rus
 import type { StudioKeyboardBindings } from '@rusty-engine/studio-user-settings';
 import {
   StudioViewportComponent,
+  type StudioAnimationInspectionCapture,
   type StudioViewportFrameSubmitted,
   type StudioGroundingInspection,
   type StudioTransformOrientation,
@@ -359,6 +360,17 @@ export class StudioShellComponent {
     this.state().userSettings.projectRoot,
     this.state().liveProjection?.textureResources ?? [],
   ]));
+  readonly selectedAnimatedMeshResource = computed(() => {
+    const asset = this.store.selectedHierarchyNode()?.asset;
+    if (asset === null || asset === undefined) return null;
+    return this.state().authoringDocument?.animatedMeshResources.find(
+      (resource) => resource.asset === asset,
+    ) ?? null;
+  });
+  readonly animationInspectionCapture = signal<StudioAnimationInspectionCapture | null>(null);
+  readonly animationInspectionReadout = signal(
+    'Select a retained animated mesh, then scrub or play a clip.',
+  );
   readonly gridColors = [
     { key: 'minorColor', label: 'Minor lines' },
     { key: 'majorColor', label: 'Major lines' },
@@ -380,6 +392,10 @@ export class StudioShellComponent {
   projectFile = 'content/projects/converted-wall.project.json';
   inspectorMode: 'entity' | 'voxel' = 'voxel';
   pivotGroundingToolActive = false;
+  animationInspectionToolActive = false;
+  animationInspectionClip = '';
+  animationInspectionTime = 0;
+  animationInspectionFadeSeconds = 0.15;
   authoringDialog: 'createProject' | 'saveProjectAs' | 'scene' | 'object' | 'assetImport' | null = null;
 
   projectDraft = {
@@ -812,12 +828,107 @@ export class StudioShellComponent {
     }
     this.inspectorMode = mode;
     this.pivotGroundingToolActive = false;
+    this.animationInspectionToolActive = false;
   }
 
   openPivotGroundingTool(): void {
     this.setInspectorMode('entity');
     this.pivotGroundingToolActive = true;
     this.store.toggleMenu(null);
+  }
+
+  openAnimationInspectionTool(): void {
+    this.setInspectorMode('entity');
+    this.animationInspectionToolActive = true;
+    this.animationInspectionClip = this.selectedAnimatedMeshResource()?.clipIds[0] ?? '';
+    this.animationInspectionTime = 0;
+    this.animationInspectionCapture.set(null);
+    this.store.toggleMenu(null);
+  }
+
+  chooseAnimationInspectionClip(clip: string): void {
+    this.animationInspectionClip = clip;
+    this.animationInspectionTime = 0;
+    this.animationInspectionCapture.set(null);
+    this.sampleAnimationInspection(0);
+  }
+
+  effectiveAnimationInspectionClip(): string {
+    const clips = this.selectedAnimatedMeshResource()?.clipIds ?? [];
+    return clips.includes(this.animationInspectionClip)
+      ? this.animationInspectionClip
+      : clips[0] ?? '';
+  }
+
+  sampleAnimationInspection(raw: number | string): void {
+    const normalizedTime = Number(raw);
+    if (!Number.isFinite(normalizedTime)) return;
+    this.animationInspectionTime = normalizedTime;
+    try {
+      const clip = this.effectiveAnimationInspectionClip();
+      this.animationInspectionClip = clip;
+      const sample = this.studioViewport()?.sampleSelectedAnimatedMesh(
+        clip,
+        normalizedTime,
+      );
+      if (sample === undefined) throw new Error('shared Studio viewport is unavailable');
+      this.animationInspectionReadout.set(
+        `${sample.clip} ${(sample.normalizedTime * 100).toFixed(0)}% · ${sample.boneCount} bones · ${sample.sampledVertexCount} sampled vertices · ${sample.diagnostics.length} diagnostics`,
+      );
+    } catch (error) {
+      this.store.reportUiError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  playAnimationInspection(): void {
+    try {
+      const clip = this.effectiveAnimationInspectionClip();
+      this.animationInspectionClip = clip;
+      this.studioViewport()?.setSelectedAnimatedMeshPlayback({
+        kind: 'play',
+        clip,
+        loop: 'repeat',
+        speed: 1,
+        weight: 1,
+        restart: true,
+        fadeSeconds: Math.max(0, this.animationInspectionFadeSeconds),
+      });
+      this.animationInspectionReadout.set(
+        `Playing ${clip} · fade ${Math.max(0, this.animationInspectionFadeSeconds).toFixed(2)}s`,
+      );
+    } catch (error) {
+      this.store.reportUiError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  pauseAnimationInspection(): void {
+    try {
+      this.studioViewport()?.setSelectedAnimatedMeshPlayback({ kind: 'pause' });
+      this.animationInspectionReadout.set(`Paused ${this.animationInspectionClip}`);
+    } catch (error) {
+      this.store.reportUiError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  captureAnimationInspection(): void {
+    try {
+      const clip = this.effectiveAnimationInspectionClip();
+      this.animationInspectionClip = clip;
+      const capture = this.studioViewport()?.captureSelectedAnimatedMesh(
+        clip,
+      );
+      if (capture === undefined) throw new Error('shared Studio viewport is unavailable');
+      this.animationInspectionCapture.set(capture);
+      const diagnosticCount = capture.samples.reduce(
+        (total, sample) => total + sample.diagnostics.length,
+        0,
+      );
+      this.animationInspectionReadout.set(
+        `Captured ${capture.samples.length} labeled frames · ${diagnosticCount} diagnostics`,
+      );
+    } catch (error) {
+      this.store.reportUiError(error instanceof Error ? error.message : String(error));
+    }
   }
 
   selectHierarchyNode(nodeId: number, event: MouseEvent): void {
