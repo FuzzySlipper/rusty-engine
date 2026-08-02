@@ -3,9 +3,10 @@ use core_math::Vec3;
 use entity_state::{
     decode_snapshot, encode_snapshot, validate_rigid_body, ComponentPersistence,
     EntityAuthoringError, EntityAuthoringService, EntityDefinition, EntityState,
-    KinematicComponent, RigidBodyComponent, RigidBodyShape, RigidBodyStatePublicationError,
-    RigidBodyStateReplacement, RigidBodyValidationError, TransformComponent, MAX_RIGID_BODY_MASS,
-    RIGID_BODY_CODEC_VERSION, RIGID_BODY_COMPONENT_TYPE_ID,
+    EntityStateSnapshotError, KinematicComponent, KinematicSnapshot, RigidBodyComponent,
+    RigidBodyShape, RigidBodyStatePublicationError, RigidBodyStateReplacement,
+    RigidBodyValidationError, TransformComponent, MAX_RIGID_BODY_MASS, RIGID_BODY_CODEC_VERSION,
+    RIGID_BODY_COMPONENT_TYPE_ID,
 };
 
 #[test]
@@ -183,6 +184,42 @@ fn kinematic_and_dynamic_rigid_body_components_conflict_without_mutation() {
     ));
     assert_eq!(encode_snapshot(&dynamic_state).unwrap(), bytes_before);
     assert!(dynamic_state.kinematic(dynamic_entity).is_none());
+}
+
+#[test]
+fn snapshot_restore_rejects_kinematic_and_dynamic_rigid_body_conflict() {
+    let entity = EntityId::new(76);
+    let body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 1.0);
+    let mut source = EntityState::from_definitions([
+        EntityDefinition::new(entity, "forged mover").with_transform(Vec3::ZERO)
+    ])
+    .unwrap();
+    let body_slot = source
+        .component_revision::<RigidBodyComponent>(entity)
+        .unwrap();
+    EntityAuthoringService
+        .attach_component(&mut source, body_slot, entity, body)
+        .unwrap();
+    let source_bytes = encode_snapshot(&source).unwrap();
+
+    let mut forged = source.snapshot();
+    forged.entities[0].kinematic = Some(KinematicSnapshot {
+        half_extents: [0.5, 0.5, 0.5],
+        velocity: [0.0, 0.0, 0.0],
+    });
+    let forged_bytes = serde_json::to_string_pretty(&forged).unwrap();
+
+    assert!(matches!(
+        decode_snapshot(&forged_bytes),
+        Err(EntityStateSnapshotError::ConflictingComponents {
+            entity: 76,
+            first: "kinematic",
+            second: "rigid-body",
+        })
+    ));
+    assert_eq!(encode_snapshot(&source).unwrap(), source_bytes);
+    assert!(source.kinematic(entity).is_none());
+    assert_eq!(source.rigid_body(entity), Some(&body));
 }
 
 #[test]

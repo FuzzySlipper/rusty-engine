@@ -148,12 +148,27 @@ pub enum EntityStateSnapshotError {
     Encode(serde_json::Error),
     Decode(serde_json::Error),
     MissingSchema,
-    UnsupportedSchema { actual: u64 },
-    DuplicateEntity { entity: u64 },
-    InvalidLifecycleState { entity: u64, reason: &'static str },
-    InvalidAssetReference { entity: u64, reason: String },
+    UnsupportedSchema {
+        actual: u64,
+    },
+    DuplicateEntity {
+        entity: u64,
+    },
+    InvalidLifecycleState {
+        entity: u64,
+        reason: &'static str,
+    },
+    InvalidAssetReference {
+        entity: u64,
+        reason: String,
+    },
     InvalidDefinition(crate::model::EntityDefinitionError),
     RegisteredComponent(RegisteredComponentSnapshotError),
+    ConflictingComponents {
+        entity: u64,
+        first: &'static str,
+        second: &'static str,
+    },
 }
 
 impl std::fmt::Display for EntityStateSnapshotError {
@@ -394,6 +409,15 @@ impl EntityState {
             &known_entities,
             &tombstoned_entities,
         )?;
+        for entity in state.entities.keys().copied() {
+            if state.kinematic(entity).is_some() && state.rigid_body(entity).is_some() {
+                return Err(EntityStateSnapshotError::ConflictingComponents {
+                    entity: entity.raw(),
+                    first: "kinematic",
+                    second: "rigid-body",
+                });
+            }
+        }
         Ok(state)
     }
 }
