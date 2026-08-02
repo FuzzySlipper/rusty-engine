@@ -75,7 +75,28 @@ export interface AnimatedMeshSampleReadout {
   readonly sampledWorldBounds: AnimatedMeshSampleBounds | null;
   readonly sampledVertexCount: number;
   readonly boneCount: number;
+  readonly skinningFacts: AnimatedMeshSkinningFacts;
   readonly diagnostics: readonly AnimatedMeshSampleDiagnostic[];
+}
+
+export interface AnimatedMeshSkinningFacts {
+  readonly joints: readonly {
+    readonly name: string;
+    readonly parent: string | null;
+    readonly restLocalMatrix: readonly number[];
+    readonly inverseBindMatrix: readonly number[] | null;
+  }[];
+  readonly skinnedMeshCount: number;
+  readonly inverseBindMatrixCount: number;
+  readonly inverseBindMatricesFinite: boolean;
+  readonly weightedVertexCount: number;
+  readonly maximumWeightSumError: number;
+  readonly weightsNormalized: boolean;
+  readonly interpolationModes: readonly ('discrete' | 'linear' | 'smooth')[];
+  readonly instanceRootDistinctFromTemplate: boolean;
+  readonly skeletonsIndependentFromTemplate: boolean;
+  readonly sharedGeometryCount: number;
+  readonly sharedMaterialCount: number;
 }
 
 export interface AnimatedMeshControllerClip {
@@ -343,6 +364,8 @@ export class AnimatedMeshRegistry {
     }
     return diagnoseAnimatedMeshSample(
       instance,
+      asset.scene,
+      action.getClip(),
       clipId,
       normalizedTime,
       durationSeconds,
@@ -661,6 +684,8 @@ const ANIMATED_MESH_SAMPLE_MAX_DIAGNOSTICS = 64;
 
 function diagnoseAnimatedMeshSample(
   instance: AnimatedMeshInstanceRecord,
+  assetTemplate: THREE.Object3D,
+  clip: THREE.AnimationClip,
   clipId: string,
   normalizedTime: number,
   durationSeconds: number,
@@ -683,6 +708,7 @@ function diagnoseAnimatedMeshSample(
   const sampledBounds = new THREE.Box3();
   const vertex = new THREE.Vector3();
   const skinMatrix = new THREE.Matrix4();
+  const facts = animatedMeshSkinningFacts(instance.object, assetTemplate, clip);
 
   instance.object.updateMatrixWorld(true);
   instance.object.traverse((node) => {
@@ -779,7 +805,108 @@ function diagnoseAnimatedMeshSample(
     sampledWorldBounds: readoutBounds,
     sampledVertexCount,
     boneCount,
+    skinningFacts: facts,
     diagnostics,
+  };
+}
+
+const ANIMATED_MESH_SAMPLE_MAX_JOINTS = 256;
+const NORMALIZED_WEIGHT_TOLERANCE = 1e-4;
+
+function animatedMeshSkinningFacts(
+  instance: THREE.Object3D,
+  assetTemplate: THREE.Object3D,
+  clip: THREE.AnimationClip,
+): AnimatedMeshSkinningFacts {
+  const templateBones = new Map<string, THREE.Bone>();
+  const templateInverses = new Map<string, THREE.Matrix4>();
+  const templateSkeletons = new Set<THREE.Skeleton>();
+  const templateMeshes = new Map<string, THREE.Mesh>();
+  assetTemplate.updateMatrixWorld(true);
+  assetTemplate.traverse((node) => {
+    if (node instanceof THREE.Bone) templateBones.set(node.name, node);
+    if (node instanceof THREE.Mesh) templateMeshes.set(node.name, node);
+    if (node instanceof THREE.SkinnedMesh) {
+      templateSkeletons.add(node.skeleton);
+      node.skeleton.bones.forEach((bone, index) => {
+        const inverse = node.skeleton.boneInverses[index];
+        if (inverse !== undefined) templateInverses.set(bone.name, inverse);
+      });
+    }
+  });
+  if (templateBones.size > ANIMATED_MESH_SAMPLE_MAX_JOINTS) {
+    throw new AnimatedMeshApplyError(
+      `sampleAnimatedMesh: joint count exceeds ${ANIMATED_MESH_SAMPLE_MAX_JOINTS}`,
+    );
+  }
+
+  let skinnedMeshCount = 0;
+  let inverseBindMatrixCount = 0;
+  let inverseBindMatricesFinite = true;
+  let weightedVertexCount = 0;
+  let maximumWeightSumError = 0;
+  let skeletonsIndependentFromTemplate = true;
+  let sharedGeometryCount = 0;
+  let sharedMaterialCount = 0;
+  instance.updateMatrixWorld(true);
+  instance.traverse((node) => {
+    if (!(node instanceof THREE.Mesh)) return;
+    const templateMesh = templateMeshes.get(node.name);
+    if (templateMesh?.geometry === node.geometry) sharedGeometryCount += 1;
+    if (templateMesh?.material === node.material) sharedMaterialCount += 1;
+    if (!(node instanceof THREE.SkinnedMesh)) return;
+    skinnedMeshCount += 1;
+    if (templateSkeletons.has(node.skeleton)) skeletonsIndependentFromTemplate = false;
+    node.skeleton.bones.forEach((bone, index) => {
+      if (templateBones.get(bone.name) === bone) skeletonsIndependentFromTemplate = false;
+      const inverse = node.skeleton.boneInverses[index];
+      if (inverse !== undefined) {
+        inverseBindMatrixCount += 1;
+        if (!inverse.elements.every(Number.isFinite)) inverseBindMatricesFinite = false;
+      }
+    });
+    const weights = node.geometry.getAttribute('skinWeight');
+    if (weights === undefined) return;
+    for (let index = 0; index < weights.count; index += 1) {
+      const sum = weights.getX(index)
+        + (weights.itemSize > 1 ? weights.getY(index) : 0)
+        + (weights.itemSize > 2 ? weights.getZ(index) : 0)
+        + (weights.itemSize > 3 ? weights.getW(index) : 0);
+      if (sum > 0) {
+        weightedVertexCount += 1;
+        maximumWeightSumError = Math.max(maximumWeightSumError, Math.abs(sum - 1));
+      }
+    }
+  });
+
+  const interpolationModes = [...new Set(clip.tracks.map((track) => {
+    switch (track.getInterpolation()) {
+      case THREE.InterpolateDiscrete: return 'discrete' as const;
+      case THREE.InterpolateSmooth: return 'smooth' as const;
+      default: return 'linear' as const;
+    }
+  }))].sort();
+  return {
+    joints: [...templateBones.values()].map((bone) => ({
+      name: bone.name,
+      parent: bone.parent instanceof THREE.Bone ? bone.parent.name : null,
+      restLocalMatrix: [...bone.matrix.elements],
+      inverseBindMatrix: templateInverses.has(bone.name)
+        ? [...(templateInverses.get(bone.name) as THREE.Matrix4).elements]
+        : null,
+    })),
+    skinnedMeshCount,
+    inverseBindMatrixCount,
+    inverseBindMatricesFinite,
+    weightedVertexCount,
+    maximumWeightSumError,
+    weightsNormalized: weightedVertexCount > 0
+      && maximumWeightSumError <= NORMALIZED_WEIGHT_TOLERANCE,
+    interpolationModes,
+    instanceRootDistinctFromTemplate: instance !== assetTemplate,
+    skeletonsIndependentFromTemplate,
+    sharedGeometryCount,
+    sharedMaterialCount,
   };
 }
 

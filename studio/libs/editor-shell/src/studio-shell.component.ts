@@ -368,6 +368,9 @@ export class StudioShellComponent {
     ) ?? null;
   });
   readonly animationInspectionCapture = signal<StudioAnimationInspectionCapture | null>(null);
+  readonly animationInspectionSample = signal<
+    ReturnType<StudioViewportComponent['sampleSelectedAnimatedMesh']> | null
+  >(null);
   readonly animationInspectionReadout = signal(
     'Select a retained animated mesh, then scrub or play a clip.',
   );
@@ -843,6 +846,7 @@ export class StudioShellComponent {
     this.animationInspectionClip = this.selectedAnimatedMeshResource()?.clipIds[0] ?? '';
     this.animationInspectionTime = 0;
     this.animationInspectionCapture.set(null);
+    this.animationInspectionSample.set(null);
     this.store.toggleMenu(null);
   }
 
@@ -850,6 +854,7 @@ export class StudioShellComponent {
     this.animationInspectionClip = clip;
     this.animationInspectionTime = 0;
     this.animationInspectionCapture.set(null);
+    this.animationInspectionSample.set(null);
     this.sampleAnimationInspection(0);
   }
 
@@ -872,8 +877,10 @@ export class StudioShellComponent {
         normalizedTime,
       );
       if (sample === undefined) throw new Error('shared Studio viewport is unavailable');
+      this.animationInspectionSample.set(sample);
+      const facts = sample.skinningFacts;
       this.animationInspectionReadout.set(
-        `${sample.clip} ${(sample.normalizedTime * 100).toFixed(0)}% · ${sample.boneCount} bones · ${sample.sampledVertexCount} sampled vertices · ${sample.diagnostics.length} diagnostics`,
+        `${sample.clip} ${(sample.normalizedTime * 100).toFixed(0)}% / ${sample.durationSeconds.toFixed(3)}s · ${facts.joints.length} joints · ${facts.inverseBindMatrixCount} inverse binds (${facts.inverseBindMatricesFinite ? 'finite' : 'invalid'}) · weights ${facts.weightsNormalized ? 'normalized' : 'invalid'} (max error ${facts.maximumWeightSumError.toExponential(2)}) · ${facts.interpolationModes.join('/')} interpolation · clone ${facts.instanceRootDistinctFromTemplate && facts.skeletonsIndependentFromTemplate ? 'independent' : 'invalid'} · shared geometry/material ${facts.sharedGeometryCount}/${facts.sharedMaterialCount} · ${sample.diagnostics.length} diagnostics`,
       );
     } catch (error) {
       this.store.reportUiError(error instanceof Error ? error.message : String(error));
@@ -884,6 +891,8 @@ export class StudioShellComponent {
     try {
       const clip = this.effectiveAnimationInspectionClip();
       this.animationInspectionClip = clip;
+      const fadeSeconds = Math.min(2, Math.max(0, this.animationInspectionFadeSeconds));
+      this.animationInspectionFadeSeconds = fadeSeconds;
       this.studioViewport()?.setSelectedAnimatedMeshPlayback({
         kind: 'play',
         clip,
@@ -891,10 +900,10 @@ export class StudioShellComponent {
         speed: 1,
         weight: 1,
         restart: true,
-        fadeSeconds: Math.max(0, this.animationInspectionFadeSeconds),
+        fadeSeconds,
       });
       this.animationInspectionReadout.set(
-        `Playing ${clip} · fade ${Math.max(0, this.animationInspectionFadeSeconds).toFixed(2)}s`,
+        `Playing ${clip} · fade ${fadeSeconds.toFixed(2)}s`,
       );
     } catch (error) {
       this.store.reportUiError(error instanceof Error ? error.message : String(error));

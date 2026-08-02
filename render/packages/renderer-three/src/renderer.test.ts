@@ -2690,6 +2690,15 @@ void test('committed animated GLB instances share GPU resources while playback r
     assert.equal(idleSample.contentHash, asset.contentHash);
     assert.ok(idleSample.sampledVertexCount > 0);
     assert.ok(idleSample.boneCount > 0);
+    assert.ok(idleSample.skinningFacts.joints.length > 0);
+    assert.ok(idleSample.skinningFacts.joints.every((joint) => joint.restLocalMatrix.length === 16));
+    assert.equal(idleSample.skinningFacts.inverseBindMatricesFinite, true);
+    assert.equal(idleSample.skinningFacts.weightsNormalized, true);
+    assert.deepEqual(idleSample.skinningFacts.interpolationModes, ['linear']);
+    assert.equal(idleSample.skinningFacts.instanceRootDistinctFromTemplate, true);
+    assert.equal(idleSample.skinningFacts.skeletonsIndependentFromTemplate, true);
+    assert.ok(idleSample.skinningFacts.sharedGeometryCount > 0);
+    assert.ok(idleSample.skinningFacts.sharedMaterialCount > 0);
     assert.notEqual(idleSample.sampledWorldBounds, null);
     assert.deepEqual(idleSample.diagnostics, []);
     assert.deepEqual(runSample.diagnostics, []);

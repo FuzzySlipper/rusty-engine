@@ -679,7 +679,15 @@ test('trusted host browsing restores focus and animated appearance uses the shar
   await animationInspection.getByLabel('Animation inspection normalized time').fill('0.5');
   await expect(animationInspection.locator('[data-visual-id="animation-inspection-readout"]'))
     .toContainText('run 50%');
+  await expect(animationInspection.locator('[data-visual-id="animation-inspection-readout"]'))
+    .toContainText('inverse binds');
+  await expect(animationInspection.locator('[data-visual-id="animation-skinning-facts"]'))
+    .toContainText('Weights');
+  const hashBeforeDisposablePlayback = await projectHash(shell);
+  await animationInspection.getByLabel('Animation inspection fade seconds').fill('9');
   await animationInspection.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(animationInspection.getByLabel('Animation inspection fade seconds')).toHaveValue('2');
+  await expect(shell).toHaveAttribute('data-project-hash', hashBeforeDisposablePlayback);
   await expect(animationInspection.locator('[data-visual-id="animation-inspection-readout"]'))
     .toContainText('Playing run');
   await animationInspection.getByRole('button', { name: 'Pause', exact: true }).click();

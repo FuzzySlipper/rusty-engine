@@ -332,7 +332,10 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
 
   setSelectedAnimatedMeshPlayback(playback: AnimatedMeshPlaybackCommand): void {
     const surface = this.#requireAnimationInspectionSurface();
-    surface.setAnimatedMeshPlayback(this.#requireSelectedAnimatedHandle(), playback);
+    surface.setAnimatedMeshPlayback(
+      this.#requireSelectedAnimatedHandle(),
+      boundedAnimationInspectionPlayback(playback),
+    );
     surface.start();
     this.#syncReadout();
   }
@@ -963,6 +966,20 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
     this.lastRendererError.set(message);
     this.rendererError.emit(`Shared renderer: ${message}`);
   }
+}
+
+function boundedAnimationInspectionPlayback(
+  playback: AnimatedMeshPlaybackCommand,
+): AnimatedMeshPlaybackCommand {
+  if (playback.kind !== 'play' && playback.kind !== 'stop') return playback;
+  const fadeSeconds = playback.fadeSeconds;
+  if (
+    fadeSeconds !== null
+    && (!Number.isFinite(fadeSeconds) || fadeSeconds < 0 || fadeSeconds > 2)
+  ) {
+    throw new Error('animation inspection fade seconds must be finite and between 0 and 2');
+  }
+  return playback;
 }
 
 function normalize(

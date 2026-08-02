@@ -980,6 +980,20 @@ class FakeEditorViewportBackend implements RendererEditorViewportBackendPort {
       sampledWorldBounds: { min: [-1, 0, -1], max: [1, 2, 1] },
       sampledVertexCount: 24,
       boneCount: 12,
+      skinningFacts: {
+        joints: [],
+        skinnedMeshCount: 1,
+        inverseBindMatrixCount: 12,
+        inverseBindMatricesFinite: true,
+        weightedVertexCount: 24,
+        maximumWeightSumError: 0,
+        weightsNormalized: true,
+        interpolationModes: ['linear'],
+        instanceRootDistinctFromTemplate: true,
+        skeletonsIndependentFromTemplate: true,
+        sharedGeometryCount: 1,
+        sharedMaterialCount: 1,
+      },
       diagnostics: [],
     };
   }

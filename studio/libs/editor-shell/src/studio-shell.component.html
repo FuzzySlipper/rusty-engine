@@ -429,6 +429,23 @@
                 <button type="button" (click)="captureAnimationInspection()">Capture 5-frame sheet</button>
               </div>
               <small data-visual-id="animation-inspection-readout">{{ animationInspectionReadout() }}</small>
+              @if (animationInspectionSample(); as sample) {
+                <details class="animation-skinning-facts" data-visual-id="animation-skinning-facts">
+                  <summary>Skinning facts · {{ sample.skinningFacts.joints.length }} joints · {{ sample.durationSeconds.toFixed(3) }}s</summary>
+                  <dl class="identity-grid">
+                    <dt>Inverse binds</dt><dd>{{ sample.skinningFacts.inverseBindMatrixCount }} · {{ sample.skinningFacts.inverseBindMatricesFinite ? 'finite' : 'invalid' }}</dd>
+                    <dt>Weights</dt><dd>{{ sample.skinningFacts.weightsNormalized ? 'normalized' : 'invalid' }} · max error {{ sample.skinningFacts.maximumWeightSumError.toExponential(2) }}</dd>
+                    <dt>Interpolation</dt><dd>{{ sample.skinningFacts.interpolationModes.join(', ') }}</dd>
+                    <dt>Clone / skeleton</dt><dd>{{ sample.skinningFacts.instanceRootDistinctFromTemplate ? 'root independent' : 'root shared' }} · {{ sample.skinningFacts.skeletonsIndependentFromTemplate ? 'skeleton independent' : 'skeleton shared' }}</dd>
+                    <dt>Shared render data</dt><dd>{{ sample.skinningFacts.sharedGeometryCount }} geometry · {{ sample.skinningFacts.sharedMaterialCount }} material</dd>
+                  </dl>
+                  <ol class="animation-joint-facts">
+                    @for (joint of sample.skinningFacts.joints; track joint.name) {
+                      <li><code>{{ joint.name }}</code> ← {{ joint.parent ?? 'root' }} · rest {{ joint.restLocalMatrix.length }} · inverse bind {{ joint.inverseBindMatrix === null ? 'none' : joint.inverseBindMatrix.length }}</li>
+                    }
+                  </ol>
+                </details>
+              }
               @if (animationInspectionCapture(); as capture) {
                 <figure class="animation-contact-sheet">
                   <a [href]="capture.contactSheetPngDataUrl" target="_blank" rel="noopener" [download]="capture.clip + '-animation-contact-sheet.png'" title="Open or download the full-size contact sheet">

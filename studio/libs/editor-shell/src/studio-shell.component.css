@@ -288,6 +288,16 @@ small { color: var(--studio-muted); }
   border: 1px solid var(--studio-border);
   background: #0d1418;
 }
+.animation-skinning-facts { border: 1px solid var(--studio-border); padding: 0.5rem; }
+.animation-skinning-facts summary { cursor: pointer; color: var(--studio-accent); }
+.animation-joint-facts {
+  max-height: 12rem;
+  margin: 0.5rem 0 0;
+  padding-left: 1.5rem;
+  overflow: auto;
+  color: var(--studio-muted);
+  font-size: 10px;
+}
 
 .statusbar { display: flex; align-items: center; gap: 14px; padding: 0 8px; border-top: 1px solid var(--studio-border); background: var(--studio-chrome); color: var(--studio-muted); font-size: 11px; }
 .statusbar .spacer { flex: 1; }

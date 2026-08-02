@@ -270,6 +270,25 @@ export interface RendererAnimatedMeshSampleReadout {
   } | null;
   readonly sampledVertexCount: number;
   readonly boneCount: number;
+  readonly skinningFacts: {
+    readonly joints: readonly {
+      readonly name: string;
+      readonly parent: string | null;
+      readonly restLocalMatrix: readonly number[];
+      readonly inverseBindMatrix: readonly number[] | null;
+    }[];
+    readonly skinnedMeshCount: number;
+    readonly inverseBindMatrixCount: number;
+    readonly inverseBindMatricesFinite: boolean;
+    readonly weightedVertexCount: number;
+    readonly maximumWeightSumError: number;
+    readonly weightsNormalized: boolean;
+    readonly interpolationModes: readonly ('discrete' | 'linear' | 'smooth')[];
+    readonly instanceRootDistinctFromTemplate: boolean;
+    readonly skeletonsIndependentFromTemplate: boolean;
+    readonly sharedGeometryCount: number;
+    readonly sharedMaterialCount: number;
+  };
   readonly diagnostics: readonly {
     readonly code: RendererAnimatedMeshSampleDiagnosticCode;
     readonly message: string;
