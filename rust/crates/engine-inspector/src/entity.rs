@@ -296,6 +296,9 @@ fn entity_decode_failure(error: EntityStateSnapshotError) -> DiagnosticSet {
         }
         EntityStateSnapshotError::InvalidDefinition(_) => "entityState.invalidDefinition",
         EntityStateSnapshotError::RegisteredComponent(_) => "entityState.registeredComponent",
+        EntityStateSnapshotError::ConflictingComponents { .. } => {
+            "entityState.conflictingComponents"
+        }
     };
     DiagnosticSet::one(
         Diagnostic::new(
@@ -364,6 +367,20 @@ mod tests {
         let failure = inspect_entity_state_json("{ nope").unwrap_err();
         assert!(failure.blocks_load());
         assert_eq!(failure.diagnostics[0].domain, DiagnosticDomain::EntityState);
+    }
+
+    #[test]
+    fn conflicting_component_snapshot_has_a_stable_diagnostic() {
+        let failure = entity_decode_failure(EntityStateSnapshotError::ConflictingComponents {
+            entity: 1,
+            first: "kinematic",
+            second: "rigid-body",
+        });
+        assert!(failure.blocks_load());
+        assert_eq!(
+            failure.diagnostics[0].code,
+            "entityState.conflictingComponents"
+        );
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
