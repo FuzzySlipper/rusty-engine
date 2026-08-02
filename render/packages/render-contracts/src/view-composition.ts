@@ -225,9 +225,10 @@ function projection(value: RendererCompositionProjection, path: string): void {
 }
 
 function viewport(value: RendererCompositionViewport, path: string): void {
-  for (const [name, component] of Object.entries(value)) {
-    finite(component, `${path}.${name}`);
-  }
+  finite(value.x, `${path}.x`);
+  finite(value.y, `${path}.y`);
+  finite(value.width, `${path}.width`);
+  finite(value.height, `${path}.height`);
   if (value.x < 0 || value.y < 0 || value.width <= 0 || value.height <= 0) {
     fail(path, 'must have non-negative origin and positive extent');
   }

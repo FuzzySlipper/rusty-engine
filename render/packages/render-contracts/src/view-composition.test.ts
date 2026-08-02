@@ -100,3 +100,30 @@ void test('rejects non-finite transforms and aggregate target pixel exhaustion',
   exhausted.presentations = [];
   assert.throws(() => validateMutable(exhausted), /aggregate pixels/u);
 });
+
+void test('rejects every omitted view and presentation viewport coordinate', () => {
+  for (const coordinate of ['x', 'y', 'width', 'height'] as const) {
+    const missingViewCoordinate = structuredClone(composition()) as unknown as {
+      views: Array<{ viewport: Partial<Record<typeof coordinate, number>> }>;
+    };
+    delete missingViewCoordinate.views[0]!.viewport[coordinate];
+    assert.throws(
+      () => validateRendererViewComposition(missingViewCoordinate as never),
+      new RegExp(`composition\\.views\\[0\\]\\.viewport\\.${coordinate} must be finite`, 'u'),
+    );
+
+    const missingPresentationCoordinate = structuredClone(composition()) as unknown as {
+      presentations: Array<{
+        destination: { viewport: Partial<Record<typeof coordinate, number>> };
+      }>;
+    };
+    delete missingPresentationCoordinate.presentations[0]!.destination.viewport[coordinate];
+    assert.throws(
+      () => validateRendererViewComposition(missingPresentationCoordinate as never),
+      new RegExp(
+        `composition\\.presentations\\[0\\]\\.destination\\.viewport\\.${coordinate} must be finite`,
+        'u',
+      ),
+    );
+  }
+});
