@@ -144,7 +144,12 @@ test('visual-local grounding aligns real actors and props without changing world
   });
 
   await page.locator('.entity-row[data-entity-id="4"]').click();
-  await page.getByRole('button', { name: 'Entity', exact: true }).click();
+  await page.getByRole('button', { name: 'Tools', exact: true }).click();
+  await page.getByRole('button', { name: 'Pivot & Grounding', exact: true }).click();
+  await expect(shell).toHaveAttribute('data-pivot-grounding-tool', 'active');
+  await expect(page.locator('[data-visual-id="pivot-grounding-workflow"]')).toContainText(
+    'Inspect the selected renderable',
+  );
   const worldReadout = page.locator('[data-visual-id="world-transform-readout"]');
   const visualY = page.getByLabel('Visual translation Y', { exact: true });
   const clearance = page.locator('[data-visual-id="grounding-metrics"] dd').nth(2);

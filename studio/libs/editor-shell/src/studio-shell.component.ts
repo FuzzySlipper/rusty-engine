@@ -379,6 +379,7 @@ export class StudioShellComponent {
   projectRoot = '';
   projectFile = 'content/projects/converted-wall.project.json';
   inspectorMode: 'entity' | 'voxel' = 'voxel';
+  pivotGroundingToolActive = false;
   authoringDialog: 'createProject' | 'saveProjectAs' | 'scene' | 'object' | 'assetImport' | null = null;
 
   projectDraft = {
@@ -810,6 +811,13 @@ export class StudioShellComponent {
       this.voxelEditorPreview.set(null);
     }
     this.inspectorMode = mode;
+    this.pivotGroundingToolActive = false;
+  }
+
+  openPivotGroundingTool(): void {
+    this.setInspectorMode('entity');
+    this.pivotGroundingToolActive = true;
+    this.store.toggleMenu(null);
   }
 
   selectHierarchyNode(nodeId: number, event: MouseEvent): void {

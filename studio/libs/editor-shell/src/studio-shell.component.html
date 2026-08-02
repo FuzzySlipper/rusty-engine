@@ -16,6 +16,7 @@
   [attr.data-lighting-mode]="state().settings.lightingMode"
   [attr.data-camera-speed]="state().settings.cameraMoveSpeed"
   [attr.data-move-forward]="state().settings.keyboard.moveForward"
+  [attr.data-pivot-grounding-tool]="pivotGroundingToolActive ? 'active' : 'inactive'"
 >
   <header class="titlebar">
     <div class="brand" aria-label="Rusty Engine Studio">
@@ -96,6 +97,7 @@
     @if (state().activeMenu === 'tools') {
       <section class="menu-popover tools-menu" aria-label="Tools menu">
         <button type="button" disabled title="Picking is active directly on the shared renderer canvas">Viewport Picking · active</button>
+        <button type="button" (click)="openPivotGroundingTool()">Pivot &amp; Grounding</button>
         <button type="button" (click)="setInspectorMode('voxel'); store.toggleMenu(null)">Voxel Authoring</button>
         <button type="button" (click)="setInspectorMode('voxel'); store.toggleMenu(null)">Convert Mesh to Voxel…</button>
       </section>
@@ -353,8 +355,8 @@
     <aside class="panel inspector-panel" data-visual-id="studio-inspector-panel">
       <header class="panel-heading">
         <div>
-          <strong>{{ inspectorMode === 'entity' ? 'Inspector' : 'Voxel Editor' }}</strong>
-          <small>{{ inspectorMode === 'entity' ? 'Typed owner operation' : state().voxelWorkspace.message }}</small>
+          <strong>{{ pivotGroundingToolActive ? 'Pivot & Grounding' : inspectorMode === 'entity' ? 'Inspector' : 'Voxel Editor' }}</strong>
+          <small>{{ pivotGroundingToolActive ? 'Renderable-local presentation' : inspectorMode === 'entity' ? 'Typed owner operation' : state().voxelWorkspace.message }}</small>
         </div>
         <div class="inspector-mode-tabs">
           <button type="button" [class.is-active]="inspectorMode === 'entity'" (click)="setInspectorMode('entity')">Entity</button>
@@ -382,6 +384,20 @@
           (previewChange)="setVoxelEditorPreview($event)"
         />
       } @else {
+        @if (pivotGroundingToolActive) {
+          <section class="pivot-grounding-workflow" data-visual-id="pivot-grounding-workflow" aria-label="Pivot and grounding workflow">
+            <header><strong>Pivot &amp; Grounding</strong><span>visual authoring</span></header>
+            @if (store.selectedHierarchyNode(); as selectedNode) {
+              @if (selectedNode.asset !== null) {
+                <p>Inspect the selected renderable's world origin, visual-local transform, bounds, contact plane, and clearance below. The viewport shows the same origin, bounds, and contact plane.</p>
+              } @else {
+                <p>The selected node has no renderable. Select a static or animated mesh from the hierarchy or shared viewport.</p>
+              }
+            } @else {
+              <p>Select a static or animated mesh from the hierarchy or shared viewport. This workflow edits presentation alignment only; gameplay and collision transforms stay unchanged.</p>
+            }
+          </section>
+        }
         @if (store.selectedHierarchyNode(); as node) {
           <section class="inspector-content">
             <div class="entity-title">
@@ -397,8 +413,9 @@
               <dt>Asset</dt><dd>{{ node.asset ?? 'none' }}</dd>
               <dt>Parent</dt><dd>{{ node.parentNodeId ?? 'root' }}</dd>
             </dl>
-            <section class="inspector-section">
-              <header><strong>Identity & hierarchy</strong><span>entity definition</span></header>
+            @if (!pivotGroundingToolActive) {
+              <section class="inspector-section">
+                <header><strong>Identity & hierarchy</strong><span>entity definition</span></header>
               <label class="field-row">
                 <span>Name</span>
                 <input #entityName [ngModel]="node.label" [disabled]="node.entityId === null" />
@@ -413,9 +430,9 @@
               </div>
               <button type="button" [disabled]="node.entityId === null || state().operation !== 'idle'" (click)="reparentSelected(parentEntity.value, childOrder.value)">Apply parent and order</button>
               <small class="owner-note">Leave parent empty for a root object. Rust validates parent identity and rejects hierarchy cycles atomically.</small>
-            </section>
-            <section class="inspector-section">
-              <header><strong>Transform</strong><span>authored-scene</span></header>
+              </section>
+              <section class="inspector-section">
+                <header><strong>Transform</strong><span>authored-scene</span></header>
               <small>Translation</small>
               <div class="vector-editor">
                 @for (axis of ['X', 'Y', 'Z']; track axis; let index = $index) {
@@ -473,9 +490,10 @@
               } @else {
                 <small class="owner-note">Viewport drags commit on release; changing selection settles pending edits first. Revert is explicit. Every commit is hash- and revision-guarded by Rust, then canonically reread.</small>
               }
-            </section>
+              </section>
+            }
             @if (node.asset !== null) {
-              <section class="inspector-section" data-visual-id="renderable-local-transform">
+              <section class="inspector-section" data-visual-id="renderable-local-transform" [attr.data-pivot-grounding-active]="pivotGroundingToolActive">
                 <header><strong>Visual-local transform</strong><span>presentation only</span></header>
                 <div class="owner-note" data-visual-id="world-transform-readout">
                   Entity world position:

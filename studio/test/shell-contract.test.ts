@@ -34,6 +34,9 @@ test('shell exposes the preserved editor surfaces and named parity operations', 
   }
   assert.match(template, /<rusty-studio-viewport/);
   assert.match(template, /Picking is active directly on the shared renderer canvas/);
+  assert.match(template, />Pivot &amp; Grounding<\/button>/);
+  assert.match(template, /data-visual-id="pivot-grounding-workflow"/);
+  assert.match(template, /openPivotGroundingTool/);
   assert.match(template, />Voxel Authoring<\/button>/);
   assert.match(template, /<rusty-voxel-editor/);
   assert.match(template, /\*ngComponentOutlet/);
