@@ -38,6 +38,7 @@ pub struct SourceMesh {
     pub name: String,
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
+    pub uvs: Option<Vec<f32>>,
     pub indices: Vec<u32>,
     pub materials: Vec<SourceMaterial>,
     pub groups: Vec<SourceGroup>,
@@ -57,6 +58,8 @@ struct StoredSource {
     name: String,
     positions: Vec<f32>,
     normals: Vec<f32>,
+    #[serde(default)]
+    uvs: Option<Vec<f32>>,
     indices: Vec<u32>,
     #[serde(default)]
     materials: Option<Vec<SourceMaterial>>,
@@ -168,6 +171,10 @@ pub fn parse_source(text: &str, locus: &str) -> SourceParse {
     }
     if stored.positions.len() / 3 > MAX_SOURCE_VERTICES
         || stored.normals.len() / 3 > MAX_SOURCE_VERTICES
+        || stored
+            .uvs
+            .as_ref()
+            .is_some_and(|uvs| uvs.len() / 2 > MAX_SOURCE_VERTICES)
     {
         diagnostics.push(ImportDiagnostic::error(
             ImportCode::SourceTooLarge,
@@ -230,6 +237,7 @@ pub fn parse_source(text: &str, locus: &str) -> SourceParse {
                 name: stored.name,
                 positions: stored.positions,
                 normals: stored.normals,
+                uvs: stored.uvs,
                 indices: stored.indices,
                 materials,
                 groups,

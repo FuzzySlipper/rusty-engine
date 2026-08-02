@@ -85,6 +85,7 @@ interface BrowserProof {
   readonly staticMeshRecreateDisposed: boolean;
   readonly staticMeshRecreateSnapshot: string;
   readonly staticMeshRecreateStatistics: RendererSurfaceStatisticsSample;
+  readonly staticMeshTexturePixels: readonly (readonly [number, number, number, number])[];
   readonly staticDemandApplied: boolean;
   readonly staticDemandCameraPosition: readonly [number, number, number];
   readonly staticDemandCameraRenderCount: number;
@@ -494,6 +495,42 @@ async function main(): Promise<void> {
     ({ proofSurface }) => proofSurface.renderer.voxelSurfaceMaterialReadout(),
   );
 
+  const staticMeshTextureCanvas = document.createElement('canvas');
+  staticMeshTextureCanvas.width = 256;
+  staticMeshTextureCanvas.height = 128;
+  staticMeshTextureCanvas.style.cssText =
+    'position:fixed;left:-10000px;top:0;width:256px;height:128px';
+  document.body.appendChild(staticMeshTextureCanvas);
+  const staticMeshTextureSurface = mountRendererBrowserSurface(staticMeshTextureCanvas, {
+    autoStart: false,
+    camera: {
+      initialPose: { position: [0, 0, 1], pitchDegrees: 0, yawDegrees: 0 },
+      projection: { fovYDegrees: 90, near: 0.1, far: 10 },
+    },
+    clearColor: 0x000000,
+    frame: staticMeshTextureBrowserFrame(),
+    pixelRatio: 1,
+  });
+  staticMeshTextureSurface.renderOnce(1);
+  const staticMeshTextureContext = staticMeshTextureCanvas.getContext('webgl2')
+    ?? staticMeshTextureCanvas.getContext('webgl');
+  if (staticMeshTextureContext === null) {
+    throw new Error('static mesh texture WebGL context is unavailable');
+  }
+  const staticMeshTexturePixels = [0.375, 0.625].map((fraction) => {
+    const pixel = new Uint8Array(4);
+    staticMeshTextureContext.readPixels(
+      Math.floor(staticMeshTextureContext.drawingBufferWidth * fraction),
+      Math.floor(staticMeshTextureContext.drawingBufferHeight / 2),
+      1,
+      1,
+      staticMeshTextureContext.RGBA,
+      staticMeshTextureContext.UNSIGNED_BYTE,
+      pixel,
+    );
+    return [...pixel] as [number, number, number, number];
+  });
+
   const context = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
   if (context === null || context.isContextLost()) throw new Error('real WebGL context is unavailable');
   const pick = surface.pick({ ray: { kind: 'viewport', point: [0, 0] }, maxDistance: 20 });
@@ -569,6 +606,7 @@ async function main(): Promise<void> {
     staticMeshRecreateDisposed,
     staticMeshRecreateSnapshot,
     staticMeshRecreateStatistics,
+    staticMeshTexturePixels,
     staticDemandApplied: staticDemandApplied.applied,
     staticDemandCameraPosition,
     staticDemandCameraRenderCount: staticDemandCameraSequence - staticDemandDirtySequence,
@@ -606,6 +644,8 @@ async function main(): Promise<void> {
       proofSurface.dispose();
       proofCanvas.remove();
     }
+    staticMeshTextureSurface.dispose();
+    staticMeshTextureCanvas.remove();
     inspection.dispose();
     surface.dispose();
     animation.cleanup();
@@ -1175,6 +1215,98 @@ function voxelSurfaceBrowserFrame(orientation: 'standard' | 'rotated'): RenderFr
           visible: true,
           materialOverrides: [],
           metadata: metadata(`voxel-atlas-visible-proof-${suffix}`),
+        },
+      },
+    ],
+  };
+}
+
+function staticMeshTextureBrowserFrame(): RenderFrameDiff {
+  const contentHash = 'sha256:a58d5395a03945e56638dba7ae6158b2fdaf013610a798c059a6d88231a052ae';
+  return {
+    schemaVersion: 1,
+    ops: [
+      {
+        op: 'defineTexture',
+        texture: {
+          id: 'texture/static-mesh-uv-proof',
+          width: 2,
+          height: 1,
+          filter: 'nearest',
+          wrap: 'clamp',
+          contentHash,
+          version: 1,
+          payload: {
+            encoding: 'pngRgba8',
+            colorSpace: 'srgb',
+            contentHash,
+            byteLength: 72,
+            source: {
+              kind: 'inline',
+              encodedBytes: [
+                137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,2,0,0,0,1,
+                8,6,0,0,0,244,34,127,138,0,0,0,15,73,68,65,84,120,156,99,248,
+                207,0,68,255,25,26,0,16,121,3,126,153,113,48,89,0,0,0,0,73,69,
+                78,68,174,66,96,130,
+              ],
+            },
+          },
+        },
+      },
+      {
+        op: 'defineMaterial',
+        material: {
+          schemaVersion: 3,
+          id: 'material/static-mesh-uv-proof',
+          color: [1, 1, 1, 1],
+          texture: 'texture/static-mesh-uv-proof',
+          roughness: 1,
+          textureTint: [1, 1, 1, 1],
+          emissionColor: [0, 0, 0],
+          emissionIntensity: 0,
+          uvStrategy: 'planar',
+        },
+      },
+      {
+        op: 'defineStaticMesh',
+        asset: {
+          asset: 'mesh/static-mesh-uv-proof',
+          payload: {
+            layout: {
+              vertexCount: 4,
+              indexCount: 6,
+              indexWidth: 'u32',
+              attributes: [
+                { name: 'position', components: 3, kind: 'f32' },
+                { name: 'normal', components: 3, kind: 'f32' },
+                { name: 'uv', components: 2, kind: 'f32' },
+              ],
+            },
+            groups: [{ materialSlot: 0, start: 0, count: 6 }],
+            bounds: { min: [-1, -0.5, 0], max: [1, 0.5, 0] },
+            source: {
+              kind: 'inline',
+              positions: [-1,-0.5,0, 1,-0.5,0, 1,0.5,0, -1,0.5,0],
+              normals: [0,0,1, 0,0,1, 0,0,1, 0,0,1],
+              uvs: [0,0, 1,0, 1,1, 0,1],
+              indices: [0,1,2, 0,2,3],
+            },
+            provenance: 'staticAsset',
+          },
+          materialSlots: [{ slot: 0, material: 'material/static-mesh-uv-proof' }],
+          collision: { kind: 'visualOnly' },
+        },
+      },
+      {
+        op: 'createStaticMeshInstance',
+        handle: renderHandle(1),
+        parent: null,
+        instance: {
+          asset: 'mesh/static-mesh-uv-proof',
+          transform: identity([0, 0, 0], [1, 1, 1]),
+          visible: true,
+          materialOverrides: [],
+          metadata: metadata('static-mesh-uv-visible-proof'),
         },
       },
     ],

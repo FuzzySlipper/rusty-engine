@@ -42,6 +42,11 @@ imports, prefab resolution, and authored scene admission and editing.
   mutation services.
 - The `rusty-asset-import` binary is an offline producer, not a runtime asset
   loader.
+- Textual static-mesh sources may omit UVs or provide exactly one finite `f32x2`
+  UV per position vertex. `asset-import` validates that stream and preserves it
+  through the renderer-neutral inline payload; deterministic resource packing
+  selects packed mesh V2 when UVs are present and retains the V1 shape for
+  color-only sources.
 - `plan_animated_glb_import` emits exact retained GLB bytes, a validated
   `AnimatedMeshAsset`, catalog entry, and provenance manifest. It consumes the
   canonical bounded GLB scene/skin/clip parser without sampling or voxelizing

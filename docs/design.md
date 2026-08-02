@@ -737,7 +737,12 @@ validates the selected asset and animation clip, then projects typed resource de
 `defineAnimatedMesh`, instance creation, and named playback. Studio's trusted Node host only resolves
 bounded project-relative mesh sources and packed mesh-resource bytes, rejects symbolic links, and verifies
 the admitted SHA-256 before the shared renderer consumes them; the browser has no filesystem
-authority. Animated-mesh import enters through `asset-import`. A GLB remains an exact single-file
+authority. A textual static-mesh source may omit texture coordinates or provide exactly one finite
+`f32x2` UV per position vertex. `asset-import` validates that cardinality and retains the stream in
+the renderer-neutral payload; deterministic packing uses V2 for UV-bearing meshes while unchanged
+color-only sources retain the V1 shape. The Three backend binds this ordinary geometry UV stream to
+the exact resolved material texture without acquiring asset authority or entering the voxel-surface
+shader specialization. Animated-mesh import enters through `asset-import`. A GLB remains an exact single-file
 source. A JSON `.gltf` enters as an explicit immutable closure containing its root plus only the
 bounded project-relative or data-URI buffers and PNG/JPEG images named by that root. The library
 rejects network, absolute, traversal, ambiguous, missing, extra, unsupported, and over-quota

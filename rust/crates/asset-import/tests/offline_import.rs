@@ -5,7 +5,10 @@ use std::process::Command;
 use asset_catalog::{decode_catalog, validate_catalog};
 use asset_import::*;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use render_model::AnimatedMeshAsset;
+use render_model::{
+    pack_mesh_resources, AnimatedMeshAsset, MeshPayloadSource, MeshResourceEncoding,
+    MESH_RESOURCE_MAGIC_V2,
+};
 use voxel_convert::{import_mesh_source, MeshSourceFormat, MeshSourceImportRequest};
 
 const VALID: &str = r#"{
@@ -19,6 +22,20 @@ const VALID: &str = r#"{
   ],
   "groups": [{"materialSlot": 0, "start": 0, "count": 3}],
   "collision": "aabbFallback"
+}"#;
+
+const TEXTURED_VALID: &str = r#"{
+  "schemaVersion": 1,
+  "name": "textured-triangle",
+  "positions": [0, 0, 0, 1, 0, 0, 0, 1, 0],
+  "normals": [0, 0, 1, 0, 0, 1, 0, 0, 1],
+  "uvs": [0, 0, 1, 0, 0, 1],
+  "indices": [0, 1, 2],
+  "materials": [
+    {"slot": 0, "name": "checker", "color": [1, 1, 1, 1], "texture": "checker"}
+  ],
+  "groups": [{"materialSlot": 0, "start": 0, "count": 3}],
+  "collision": "visualOnly"
 }"#;
 
 const ANIMATED_GLB: &[u8] = include_bytes!(concat!(
@@ -48,6 +65,74 @@ fn valid_source_produces_deterministic_native_assets_and_manifest() {
         assets.static_mesh.payload.provenance,
         render_model::MeshProvenance::StaticAsset
     );
+}
+
+#[test]
+fn authored_uvs_reach_static_mesh_and_partition_into_packed_v2_bytes() {
+    let imported = import_text(
+        TEXTURED_VALID,
+        "textured-triangle.mesh.json",
+        &ImportContext::with_textures(["checker".to_owned()]),
+    );
+    assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
+    let mesh = imported.assets.unwrap().static_mesh;
+    assert!(mesh
+        .payload
+        .layout
+        .attributes
+        .iter()
+        .any(|attribute| attribute.name == render_model::MeshAttributeName::Uv));
+    assert!(matches!(
+        &mesh.payload.source,
+        MeshPayloadSource::Inline { uvs: Some(uvs), .. }
+            if uvs == &[0.0, 0.0, 1.0, 0.0, 0.0, 1.0]
+    ));
+
+    let packed = pack_mesh_resources(&[mesh.payload], 1024).unwrap();
+    assert_eq!(packed.payloads.len(), 1);
+    assert_eq!(packed.resources.len(), 1);
+    assert_eq!(&packed.resources[0].bytes[..8], &MESH_RESOURCE_MAGIC_V2);
+    assert!(matches!(
+        packed.payloads[0].source,
+        MeshPayloadSource::Resource {
+            encoding: MeshResourceEncoding::PackedStreamsLeV2,
+            uvs_byte_offset: Some(_),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn authored_uvs_are_optional_but_must_match_vertices_and_be_finite() {
+    let legacy = import_text(VALID, "legacy.mesh.json", &ImportContext::default());
+    assert!(!legacy.has_errors(), "{:?}", legacy.diagnostics);
+    assert!(matches!(
+        legacy.assets.unwrap().static_mesh.payload.source,
+        MeshPayloadSource::Inline { uvs: None, .. }
+    ));
+
+    let mismatched = TEXTURED_VALID.replace("\"uvs\": [0, 0, 1, 0, 0, 1]", "\"uvs\": [0, 0, 1, 0]");
+    let rejected = import_text(
+        &mismatched,
+        "mismatched-uv.mesh.json",
+        &ImportContext::default(),
+    );
+    assert!(rejected.assets.is_none());
+    assert!(rejected
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == ImportCode::AttributeLengthMismatch));
+
+    let mut parsed = parse_source(TEXTURED_VALID, "non-finite-uv.mesh.json")
+        .mesh
+        .unwrap();
+    parsed.uvs.as_mut().unwrap()[2] = f32::INFINITY;
+    let rejected = import(&parsed);
+    assert!(rejected.assets.is_none());
+    assert!(rejected
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == ImportCode::NonFiniteValue));
 }
 
 #[test]

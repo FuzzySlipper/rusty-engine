@@ -235,6 +235,10 @@ test('shared host realizes retained, presentation, and inspection families in a 
     scope: 'perSubmission', status: 'available', value: 1,
   });
   expect(proof.staticMeshRecreateDisposed).toBe(true);
+  expect(proof.staticMeshTexturePixels.map(framebufferColorClass)).toEqual([
+    'high/low/low',
+    'low/high/low',
+  ]);
   expect(proof.telemetryText).toContain('Renderer proof');
   expect(proof.telemetryText).toContain('frameTimeMs:');
   expect(proof.telemetryText).toContain('backendSubmissionDurationMs:');

@@ -94,6 +94,18 @@ pub fn import_with_context(source: &SourceMesh, context: &ImportContext) -> Impo
             "supply one xyz normal per vertex",
         ));
     }
+    if source
+        .uvs
+        .as_ref()
+        .is_some_and(|uvs| uvs.len() != source.positions.len() / 3 * 2)
+    {
+        diagnostics.push(ImportDiagnostic::error(
+            ImportCode::AttributeLengthMismatch,
+            &mesh_id,
+            "UV and position stream vertex counts differ",
+            "supply one finite uv pair per vertex or omit the UV stream",
+        ));
+    }
     if !source.indices.len().is_multiple_of(3) {
         diagnostics.push(ImportDiagnostic::error(
             ImportCode::UnsupportedTopology,
@@ -106,6 +118,7 @@ pub fn import_with_context(source: &SourceMesh, context: &ImportContext) -> Impo
         .positions
         .iter()
         .chain(&source.normals)
+        .chain(source.uvs.iter().flatten())
         .any(|value| !value.is_finite())
     {
         diagnostics.push(ImportDiagnostic::error(
@@ -205,7 +218,14 @@ pub fn import_with_context(source: &SourceMesh, context: &ImportContext) -> Impo
                         components: 3,
                         kind: MeshAttributeKind::F32,
                     },
-                ],
+                ]
+                .into_iter()
+                .chain(source.uvs.as_ref().map(|_| MeshAttribute {
+                    name: MeshAttributeName::Uv,
+                    components: 2,
+                    kind: MeshAttributeKind::F32,
+                }))
+                .collect(),
             },
             groups: source
                 .groups
@@ -220,7 +240,7 @@ pub fn import_with_context(source: &SourceMesh, context: &ImportContext) -> Impo
             source: MeshPayloadSource::Inline {
                 positions,
                 normals: source.normals.clone(),
-                uvs: None,
+                uvs: source.uvs.clone(),
                 indices: source.indices.clone(),
             },
             provenance: MeshProvenance::StaticAsset,

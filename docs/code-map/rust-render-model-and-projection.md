@@ -37,8 +37,9 @@ entity, authored-scene, voxel, and presentation facts.
 
 - `render-model` is the Rust-owned serialized border consumed by retained
   TypeScript contracts.
-- Its packed-mesh helper creates deterministic bounded resource bytes; callers
-  own where those bytes are published.
+- Its packed-mesh helper creates deterministic bounded resource bytes; UV-free
+  payloads retain packed V1 while UV-bearing payloads use packed V2 with an
+  explicit stream offset. Callers own where those bytes are published.
 - Projection crates translate owner facts into complete frames; they do not
   become a second source of gameplay truth.
 - `project_catalog_material` validates the complete catalog candidate and

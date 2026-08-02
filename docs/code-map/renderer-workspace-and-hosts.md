@@ -52,6 +52,10 @@ surface, and renderer host/resource lifecycle.
   [`verify-render-consumer.sh`](../../scripts/verify-render-consumer.sh).
 - Browser, webview, and headless hosts compose over the same explicit retained
   border without owning game state.
+- Generic static meshes bind the renderer-neutral `uv` attribute directly to
+  the resolved material texture. Whole-texture and atlas-region voxel sampling
+  remain an explicit voxel-surface specialization; ordinary textured meshes do
+  not enter that shader path.
 - Textured voxel replacement reuses retained geometry/object handles and the
   reference-counted texture owner. The exact public consumer's lifecycle and
   provider disposal evidence are reconciled in the
