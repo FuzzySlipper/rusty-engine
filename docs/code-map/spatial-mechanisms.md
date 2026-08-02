@@ -45,7 +45,9 @@ from it.
 - `VoxelCollisionScene::replace_static_mesh_colliders` projects immutable
   content plus caller-owned instance transforms at a separate exact revision.
   World queries combine those triangles with voxel colliders, while voxel
-  edit picking deliberately retains its voxel-only result type.
+  edit picking deliberately retains its voxel-only result type. Prepared voxel
+  edits and history reverts guard that independent revision before swapping a
+  rebuilt scene.
 - `svc-mesh::texture_mapping` owns the executable six-face tile basis and exact
   cell-space projection used by the one greedy mesher; it owns no image or GPU
   resource.

@@ -378,8 +378,11 @@ builds Parry triangle meshes, and atomically replaces one complete instance
 projection at an exact independent revision. World ray and AABB/sweep queries
 consider voxel and triangle colliders together; voxel-edit raycasts remain
 voxel-only so an external mesh cannot forge a voxel edit anchor. Voxel rebuilds
-preserve the derived static projection, while persistence/reopen reconstructs it
-from downstream content and entity facts rather than serializing Parry state.
+preserve the derived static projection. Prepared voxel edits and history reverts
+capture its independent revision and reject if it changes before commit, so a
+voxel swap cannot roll back a newer collider replacement. Persistence/reopen
+reconstructs the projection from downstream content and entity facts rather
+than serializing Parry state.
 Static triangle meshes are non-dynamic colliders; caller-driven non-kinematic
 rigid-body response is a separate mechanism.
 

@@ -1,13 +1,15 @@
 use core_math::Vec3;
 use core_space::Face;
 use engine_spatial::{
-    decode_voxel_edit_history, encode_voxel_edit_history, MaterialVoxel, VoxelBoxFill,
-    VoxelCollisionScene, VoxelEdit, VoxelEditHistory, VoxelEditHistoryCodecError,
-    VoxelEditHistoryDiffOptions, VoxelEditHistoryError, VoxelEditHistoryLimits, VoxelEditService,
-    VoxelEditTransaction, VoxelPickError, VoxelPickHint, VoxelPickService, VoxelPrimitive,
-    VoxelPrimitiveEditService, VoxelPrimitiveError, VoxelPrimitiveMaterial, VoxelPrimitiveRequest,
-    VoxelTemplate, VoxelTemplateEditService, VoxelTemplateError, VoxelTemplateRequest,
-    MAX_VOXEL_EDITS_PER_TRANSACTION, VOXEL_HOUSE_TEMPLATE_BOUNDS,
+    decode_voxel_edit_history, encode_voxel_edit_history, MaterialVoxel, StaticMeshAssetId,
+    StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
+    VoxelBoxFill, VoxelCollisionScene, VoxelEdit, VoxelEditApplyError, VoxelEditHistory,
+    VoxelEditHistoryCodecError, VoxelEditHistoryDiffOptions, VoxelEditHistoryError,
+    VoxelEditHistoryLimits, VoxelEditService, VoxelEditTransaction, VoxelPickError, VoxelPickHint,
+    VoxelPickService, VoxelPrimitive, VoxelPrimitiveEditService, VoxelPrimitiveError,
+    VoxelPrimitiveMaterial, VoxelPrimitiveRequest, VoxelTemplate, VoxelTemplateEditService,
+    VoxelTemplateError, VoxelTemplateRequest, MAX_VOXEL_EDITS_PER_TRANSACTION,
+    VOXEL_HOUSE_TEMPLATE_BOUNDS,
 };
 use entity_state::{EntityTransform, Quat};
 
@@ -88,6 +90,38 @@ fn edit_preview_rebuilds_without_mutation_then_commits_exact_candidate() {
     assert!(receipt
         .projections
         .is_coherent_with(receipt.accepted_revision));
+}
+
+#[test]
+fn edit_preview_rejects_a_later_static_collision_replacement_without_rollback() {
+    let mut scene = scene();
+    let edits = [VoxelEdit::Set {
+        address: [3, 0, 0],
+        material_slot: 2,
+    }];
+    let prepared = VoxelEditService::preview(
+        &scene,
+        VoxelEditTransaction {
+            expected_revision: scene.source_revision(),
+            edits: &edits,
+        },
+    )
+    .unwrap();
+    let source_revision = scene.source_revision();
+    let authority_hash = scene.authority_hash();
+    install_static_mesh(&mut scene);
+
+    assert!(matches!(
+        VoxelEditService::commit(&mut scene, prepared),
+        Err(VoxelEditApplyError::PreparedStaticCollisionChanged {
+            expected_revision: 0,
+            actual_revision: 1,
+        })
+    ));
+    assert_eq!(scene.source_revision(), source_revision);
+    assert_eq!(scene.authority_hash(), authority_hash);
+    assert_eq!(scene.static_mesh_collision_revision(), 1);
+    assert!(scene.aabb_overlaps_solid([-0.25, -0.25, 1.9], [0.25, 0.25, 2.1]));
 }
 
 #[test]
@@ -190,6 +224,41 @@ fn bounded_history_undo_redo_revert_and_fork_keep_one_coherent_scene() {
     ));
     assert!(has_voxel(&scene, [5, 0, 0]));
     assert!(!has_voxel(&scene, [4, 0, 0]));
+}
+
+#[test]
+fn history_preview_rejects_a_later_static_collision_replacement_without_rollback() {
+    let mut scene = scene();
+    let mut history = VoxelEditHistory::new(&scene);
+    history
+        .apply(
+            &mut scene,
+            &[VoxelEdit::Set {
+                address: [3, 0, 0],
+                material_slot: 2,
+            }],
+        )
+        .unwrap();
+    let prepared = history
+        .preview_revert_to_cursor(&scene, 0, VoxelEditHistoryDiffOptions { max_samples: 8 })
+        .unwrap();
+    let cursor = history.cursor();
+    let source_revision = scene.source_revision();
+    let authority_hash = scene.authority_hash();
+    install_static_mesh(&mut scene);
+
+    assert!(matches!(
+        history.commit_revert(&mut scene, prepared),
+        Err(VoxelEditHistoryError::StaleStaticCollision {
+            expected_revision: 0,
+            actual_revision: 1,
+        })
+    ));
+    assert_eq!(history.cursor(), cursor);
+    assert_eq!(scene.source_revision(), source_revision);
+    assert_eq!(scene.authority_hash(), authority_hash);
+    assert_eq!(scene.static_mesh_collision_revision(), 1);
+    assert!(scene.aabb_overlaps_solid([-0.25, -0.25, 1.9], [0.25, 0.25, 2.1]));
 }
 
 #[test]
@@ -441,6 +510,28 @@ fn scene() -> VoxelCollisionScene {
         ],
     )
     .unwrap()
+}
+
+fn install_static_mesh(scene: &mut VoxelCollisionScene) {
+    let asset = StaticMeshColliderAsset::new(
+        StaticMeshAssetId(71),
+        vec![[-1.0, -1.0, 2.0], [1.0, -1.0, 2.0], [0.0, 1.0, 2.0]],
+        vec![[0, 1, 2]],
+    )
+    .unwrap();
+    let hash = asset.geometry_hash;
+    scene
+        .replace_static_mesh_colliders(
+            0,
+            [asset],
+            [StaticMeshColliderInstance {
+                id: StaticMeshInstanceId(79),
+                asset: StaticMeshAssetId(71),
+                expected_geometry_hash: hash,
+                transform: StaticMeshTransform::IDENTITY,
+            }],
+        )
+        .unwrap();
 }
 
 fn has_voxel(scene: &VoxelCollisionScene, address: [i64; 3]) -> bool {

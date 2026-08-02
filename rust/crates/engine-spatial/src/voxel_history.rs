@@ -105,6 +105,7 @@ pub struct VoxelEditHistoryRevertReceipt {
 pub struct PreparedVoxelHistoryRevert {
     expected_revision: VoxelSourceRevision,
     expected_hash: u64,
+    expected_static_collision_revision: u64,
     target_cursor: usize,
     candidate: VoxelCollisionScene,
     receipt: VoxelEditHistoryRevertReceipt,
@@ -126,6 +127,10 @@ pub enum VoxelEditHistoryError {
     StaleRevision {
         expected: VoxelSourceRevision,
         actual: VoxelSourceRevision,
+    },
+    StaleStaticCollision {
+        expected_revision: u64,
+        actual_revision: u64,
     },
     InvalidCursor {
         requested: usize,
@@ -351,6 +356,7 @@ impl VoxelEditHistory {
         Ok(PreparedVoxelHistoryRevert {
             expected_revision: scene.source_revision(),
             expected_hash: scene.authority_hash(),
+            expected_static_collision_revision: scene.static_mesh_collision_revision(),
             target_cursor,
             candidate,
             receipt,
@@ -369,6 +375,13 @@ impl VoxelEditHistory {
             return Err(VoxelEditHistoryError::StaleAuthority {
                 expected: prepared.expected_hash,
                 actual: scene.authority_hash(),
+            });
+        }
+        let actual_static_collision_revision = scene.static_mesh_collision_revision();
+        if actual_static_collision_revision != prepared.expected_static_collision_revision {
+            return Err(VoxelEditHistoryError::StaleStaticCollision {
+                expected_revision: prepared.expected_static_collision_revision,
+                actual_revision: actual_static_collision_revision,
             });
         }
         *scene = prepared.candidate;

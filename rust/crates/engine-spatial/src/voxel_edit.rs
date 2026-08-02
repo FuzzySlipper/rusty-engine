@@ -200,6 +200,10 @@ pub enum VoxelEditApplyError {
         expected_hash: u64,
         actual_hash: u64,
     },
+    PreparedStaticCollisionChanged {
+        expected_revision: u64,
+        actual_revision: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,6 +221,7 @@ pub struct VoxelEditDelta {
 pub struct PreparedVoxelEdit {
     expected_revision: VoxelSourceRevision,
     expected_hash: u64,
+    expected_static_collision_revision: u64,
     candidate: VoxelCollisionScene,
     receipt: VoxelEditReceipt,
     deltas: Vec<VoxelEditDelta>,
@@ -244,6 +249,12 @@ impl std::fmt::Display for VoxelEditApplyError {
             Self::ProjectionBuild(error) => write!(formatter, "projection rebuild failed: {error}"),
             Self::PreparedStateChanged { .. } => {
                 write!(formatter, "voxel authority changed after preview")
+            }
+            Self::PreparedStaticCollisionChanged { .. } => {
+                write!(
+                    formatter,
+                    "static collision projection changed after preview"
+                )
             }
         }
     }
@@ -473,6 +484,7 @@ impl VoxelEditService {
         Ok(PreparedVoxelEdit {
             expected_revision: scene.source_revision,
             expected_hash: scene.authority_hash,
+            expected_static_collision_revision: scene.static_mesh_collision_revision(),
             candidate: rebuilt,
             receipt,
             deltas,
@@ -494,6 +506,13 @@ impl VoxelEditService {
                 actual_revision: scene.source_revision,
                 expected_hash: prepared.expected_hash,
                 actual_hash: scene.authority_hash,
+            });
+        }
+        let actual_static_collision_revision = scene.static_mesh_collision_revision();
+        if actual_static_collision_revision != prepared.expected_static_collision_revision {
+            return Err(VoxelEditApplyError::PreparedStaticCollisionChanged {
+                expected_revision: prepared.expected_static_collision_revision,
+                actual_revision: actual_static_collision_revision,
             });
         }
         let receipt = prepared.receipt;
