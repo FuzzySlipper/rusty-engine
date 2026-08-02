@@ -5,9 +5,14 @@ use std::process::Command;
 use asset_catalog::{decode_catalog, validate_catalog};
 use asset_import::*;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use core_space::{WorldPos, WorldVec};
 use render_model::{
-    pack_mesh_resources, AnimatedMeshAsset, MeshPayloadSource, MeshResourceEncoding,
-    MESH_RESOURCE_MAGIC_V2,
+    pack_mesh_resources, AnimatedMeshAsset, CollisionResolution, MeshPayloadSource,
+    MeshResourceEncoding, MESH_RESOURCE_MAGIC_V2,
+};
+use svc_collision::{
+    Ray, StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance,
+    StaticMeshCollisionProjection, StaticMeshInstanceId, StaticMeshTransform,
 };
 use voxel_convert::{import_mesh_source, MeshSourceFormat, MeshSourceImportRequest};
 
@@ -41,6 +46,11 @@ const TEXTURED_VALID: &str = r#"{
 const ANIMATED_GLB: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
+));
+
+const STATIC_RAMP: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../fixtures/collision/static-ramp.mesh.json"
 ));
 
 fn uri() -> SourceUri {
@@ -133,6 +143,64 @@ fn authored_uvs_are_optional_but_must_match_vertices_and_be_finite() {
         .diagnostics
         .iter()
         .any(|diagnostic| diagnostic.code == ImportCode::NonFiniteValue));
+}
+
+#[test]
+fn golden_static_ramp_imports_into_the_shared_trimesh_query_service() {
+    let imported = import_text(
+        STATIC_RAMP,
+        "fixtures/collision/static-ramp.mesh.json",
+        &ImportContext::default(),
+    );
+    assert!(!imported.has_errors(), "{:?}", imported.diagnostics);
+    let mesh = imported.assets.unwrap().static_mesh;
+    let CollisionResolution::Trimesh { payload } = mesh.resolve_collision() else {
+        panic!("fixture must resolve exact triangle collision");
+    };
+    let MeshPayloadSource::Inline {
+        positions, indices, ..
+    } = payload.source
+    else {
+        panic!("offline import collision geometry is resolved before renderer packing");
+    };
+    let asset = StaticMeshColliderAsset::new(
+        StaticMeshAssetId(1),
+        positions
+            .chunks_exact(3)
+            .map(|point| [point[0] as f64, point[1] as f64, point[2] as f64])
+            .collect(),
+        indices
+            .chunks_exact(3)
+            .map(|triangle| [triangle[0], triangle[1], triangle[2]])
+            .collect(),
+    )
+    .unwrap();
+    let hash = asset.geometry_hash;
+    let mut collision = StaticMeshCollisionProjection::default();
+    collision
+        .replace_all(
+            0,
+            [asset],
+            [StaticMeshColliderInstance {
+                id: StaticMeshInstanceId(2),
+                asset: StaticMeshAssetId(1),
+                expected_geometry_hash: hash,
+                transform: StaticMeshTransform::IDENTITY,
+            }],
+        )
+        .unwrap();
+    let ramp = collision
+        .raycast(
+            Ray::new(WorldPos::new(1.0, 3.0, 0.0), WorldVec::new(0.0, -1.0, 0.0)),
+            10.0,
+        )
+        .unwrap();
+    assert!((ramp.point.y - 1.0).abs() < 1.0e-6);
+    assert!(collision.swept_aabb_overlaps(
+        WorldPos::new(2.0, 0.5, -0.25),
+        WorldPos::new(2.5, 1.5, 0.25),
+        WorldVec::new(1.0, 0.0, 0.0),
+    ));
 }
 
 #[test]

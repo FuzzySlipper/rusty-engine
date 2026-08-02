@@ -442,7 +442,7 @@ function staticMesh(input: unknown, path: string): void {
   const kind = enumeration(
     collisionBase['kind'],
     `${path}.collision.kind`,
-    ['visualOnly', 'proxy', 'aabbFallback'] as const,
+    ['visualOnly', 'proxy', 'aabbFallback', 'trimesh'] as const,
   );
   if (kind === 'proxy') {
     const collision = record(value['collision'], `${path}.collision`, ['kind', 'proxyAsset']);

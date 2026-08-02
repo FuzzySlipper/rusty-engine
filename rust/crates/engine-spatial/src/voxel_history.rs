@@ -325,13 +325,14 @@ impl VoxelEditHistory {
             .source_revision()
             .checked_next()
             .ok_or(VoxelEditHistoryError::RevisionExhausted)?;
-        let candidate = VoxelCollisionScene::from_material_voxels_at_revision(
+        let mut candidate = VoxelCollisionScene::from_material_voxels_at_revision(
             self.base_voxel_size,
             self.base_chunk_size,
             material_voxels(&target_map),
             target_revision,
         )
         .map_err(VoxelEditHistoryError::Rebuild)?;
+        candidate.preserve_static_mesh_projection_from(scene);
         let current_map = material_map(scene.material_voxels());
         let diff = summarize_diff(
             &current_map,

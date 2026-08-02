@@ -29,6 +29,7 @@ pub struct SourceGroup {
 pub enum SourceCollision {
     VisualOnly,
     AabbFallback,
+    Trimesh,
     Proxy(String),
 }
 
@@ -197,6 +198,7 @@ pub fn parse_source(text: &str, locus: &str) -> SourceParse {
         Some(StoredCollision::Label(label)) if label == "aabbFallback" => {
             SourceCollision::AabbFallback
         }
+        Some(StoredCollision::Label(label)) if label == "trimesh" => SourceCollision::Trimesh,
         Some(StoredCollision::Proxy(proxy)) if !proxy.proxy.is_empty() => {
             SourceCollision::Proxy(proxy.proxy)
         }
@@ -204,7 +206,7 @@ pub fn parse_source(text: &str, locus: &str) -> SourceParse {
             diagnostics.push(ImportDiagnostic::error(
                 ImportCode::MalformedSource,
                 format!("{locus}#collision"),
-                "collision must be visualOnly, aabbFallback, or a proxy object",
+                "collision must be visualOnly, aabbFallback, trimesh, or a proxy object",
                 "choose a supported collision policy",
             ));
             SourceCollision::VisualOnly

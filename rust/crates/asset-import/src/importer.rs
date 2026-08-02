@@ -410,6 +410,7 @@ fn collision_policy(source: &SourceMesh, settings: &ImportSettings) -> MeshColli
         }
         SourceCollision::VisualOnly => MeshCollisionPolicy::VisualOnly,
         SourceCollision::AabbFallback => MeshCollisionPolicy::AabbFallback,
+        SourceCollision::Trimesh => MeshCollisionPolicy::Trimesh,
         SourceCollision::Proxy(name) => MeshCollisionPolicy::Proxy {
             proxy_asset: format!("mesh/{name}"),
         },

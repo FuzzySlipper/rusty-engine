@@ -515,6 +515,10 @@ pub enum MeshCollisionPolicy {
         proxy_asset: String,
     },
     AabbFallback,
+    /// Use the exact validated mesh positions and triangle indices. The caller
+    /// resolves any content-addressed payload bytes before constructing the
+    /// host-neutral collision projection.
+    Trimesh,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -560,6 +564,9 @@ impl StaticMeshAsset {
                 min: self.payload.bounds.min,
                 max: self.payload.bounds.max,
             },
+            MeshCollisionPolicy::Trimesh => CollisionResolution::Trimesh {
+                payload: self.payload.clone(),
+            },
         }
     }
 }
@@ -575,6 +582,7 @@ pub enum CollisionResolution {
     None,
     Proxy { proxy_asset: String },
     Aabb { min: [f32; 3], max: [f32; 3] },
+    Trimesh { payload: MeshPayloadDescriptor },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -898,6 +906,25 @@ mod tests {
             asset.resolve_collision(),
             CollisionResolution::Aabb { .. }
         ));
+    }
+
+    #[test]
+    fn trimesh_collision_resolves_the_exact_validated_payload() {
+        let payload = triangle();
+        let asset = StaticMeshAsset {
+            asset: "mesh/ramp".to_string(),
+            payload: payload.clone(),
+            material_slots: vec![MeshMaterialSlot {
+                slot: 0,
+                material: "material/plain".to_string(),
+            }],
+            collision: MeshCollisionPolicy::Trimesh,
+        };
+        assert_eq!(asset.validate(), Ok(()));
+        assert_eq!(
+            asset.resolve_collision(),
+            CollisionResolution::Trimesh { payload }
+        );
     }
 
     #[test]

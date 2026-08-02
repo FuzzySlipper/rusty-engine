@@ -29,6 +29,7 @@ from it.
 - [`svc-volume`](../../rust/crates/svc-volume)
 - [`svc-spatial`](../../rust/crates/svc-spatial)
 - [`svc-collision`](../../rust/crates/svc-collision)
+  - [`static_mesh.rs`](../../rust/crates/svc-collision/src/static_mesh.rs)
 - [`svc-pathfinding`](../../rust/crates/svc-pathfinding)
 - [`svc-mesh`](../../rust/crates/svc-mesh)
 - [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
@@ -41,6 +42,10 @@ from it.
   must stay synchronized with canonical voxel edits.
 - The smaller service crates remain useful where a consumer needs only one
   focused mechanism.
+- `VoxelCollisionScene::replace_static_mesh_colliders` projects immutable
+  content plus caller-owned instance transforms at a separate exact revision.
+  World queries combine those triangles with voxel colliders, while voxel
+  edit picking deliberately retains its voxel-only result type.
 - `svc-mesh::texture_mapping` owns the executable six-face tile basis and exact
   cell-space projection used by the one greedy mesher; it owns no image or GPU
   resource.

@@ -42,12 +42,14 @@ dependencies = [
  "asset-catalog",
  "base64",
  "core-assets",
+ "core-space",
  "gltf",
  "render-model",
  "serde",
  "serde_json",
  "serde_path_to_error",
  "sha2",
+ "svc-collision",
  "voxel-convert",
 ]
 

@@ -430,7 +430,7 @@ impl VoxelEditService {
                 address,
                 material_slot,
             });
-        let rebuilt = VoxelCollisionScene::build_at_revision(
+        let mut rebuilt = VoxelCollisionScene::build_at_revision(
             scene.voxel_size,
             scene.chunk_size,
             material_voxels,
@@ -438,6 +438,7 @@ impl VoxelEditService {
             accepted.revision_after,
         )
         .map_err(VoxelEditApplyError::ProjectionBuild)?;
+        rebuilt.preserve_static_mesh_projection_from(scene);
         let changed_min = [0, 1, 2].map(|axis| {
             deltas
                 .iter()

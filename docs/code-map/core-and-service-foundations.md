@@ -32,6 +32,9 @@ volume, spatial-index, collision, pathfinding, RNG, and mesh mechanisms.
 - [`svc-volume`](../../rust/crates/svc-volume)
 - [`svc-spatial`](../../rust/crates/svc-spatial)
 - [`svc-collision`](../../rust/crates/svc-collision)
+  - [`static_mesh.rs`](../../rust/crates/svc-collision/src/static_mesh.rs) owns
+    bounded immutable triangle assets, exact-revision instance projection, and
+    Parry-backed ray/AABB/sweep queries.
 - [`svc-pathfinding`](../../rust/crates/svc-pathfinding)
 - [`svc-rng`](../../rust/crates/svc-rng)
 - [`svc-mesh`](../../rust/crates/svc-mesh)
@@ -43,6 +46,9 @@ volume, spatial-index, collision, pathfinding, RNG, and mesh mechanisms.
   services must share canonical mutable state.
 - New downstream use should depend only on the narrow foundations it actually
   needs.
+- Static triangle instances retain only derived query state here. Callers own
+  asset resolution, entity identity/transforms, persistence, and replacement
+  timing.
 
 ## Private or forbidden paths
 

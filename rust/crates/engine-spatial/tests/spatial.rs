@@ -2,7 +2,9 @@ use core_ids::EntityId;
 use core_math::Vec3;
 use engine_spatial::{
     CollisionSceneError, GeneratedRoomConfig, KinematicMotionSystem, MaterialVoxel, MotionAxis,
-    MotionFact, VoxelAuthorityValidationError, VoxelCollisionScene, VoxelEdit, VoxelEditApplyError,
+    MotionFact, SpatialCollisionHit, StaticMeshAssetId, StaticMeshColliderAsset,
+    StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
+    VoxelAuthorityValidationError, VoxelCollisionScene, VoxelEdit, VoxelEditApplyError,
     VoxelEditRejection, VoxelEditService, VoxelEditTransaction, VoxelSourceRevision,
     MAX_VOXEL_COORDINATE_ABS, MAX_VOXEL_MATERIAL_SLOT,
 };
@@ -23,6 +25,55 @@ fn collision_queries_cover_chunks_negative_space_and_raycast() {
         .expect("wall should be hit");
     assert_eq!(hit.voxel, [2, 1, 0]);
     assert_eq!(hit.distance, 1.5);
+}
+
+#[test]
+fn static_mesh_projection_joins_world_queries_and_survives_voxel_rebuilds() {
+    let mut scene =
+        VoxelCollisionScene::from_solid_voxels(1.0, 8, [[6, 0, 0]]).expect("valid scene");
+    let asset = StaticMeshColliderAsset::new(
+        StaticMeshAssetId(17),
+        vec![[-1.0, -1.0, 2.0], [1.0, -1.0, 2.0], [0.0, 1.0, 2.0]],
+        vec![[0, 1, 2]],
+    )
+    .unwrap();
+    let hash = asset.geometry_hash;
+    scene
+        .replace_static_mesh_colliders(
+            0,
+            [asset],
+            [StaticMeshColliderInstance {
+                id: StaticMeshInstanceId(23),
+                asset: StaticMeshAssetId(17),
+                expected_geometry_hash: hash,
+                transform: StaticMeshTransform::IDENTITY,
+            }],
+        )
+        .unwrap();
+    assert!(matches!(
+        scene.raycast_world([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 10.0),
+        Some(SpatialCollisionHit::StaticMesh(hit))
+            if hit.instance == StaticMeshInstanceId(23)
+                && (hit.distance - 2.0).abs() < 1.0e-9
+    ));
+
+    VoxelEditService::apply(
+        &mut scene,
+        VoxelEditTransaction {
+            expected_revision: VoxelSourceRevision::INITIAL,
+            edits: &[VoxelEdit::Set {
+                address: [7, 0, 0],
+                material_slot: 1,
+            }],
+        },
+    )
+    .unwrap();
+    assert_eq!(scene.static_mesh_collision_revision(), 1);
+    assert!(matches!(
+        scene.raycast_world([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 10.0),
+        Some(SpatialCollisionHit::StaticMesh(hit))
+            if hit.instance == StaticMeshInstanceId(23)
+    ));
 }
 
 #[test]

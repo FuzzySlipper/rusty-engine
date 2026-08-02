@@ -47,6 +47,10 @@ imports, prefab resolution, and authored scene admission and editing.
   through the renderer-neutral inline payload; deterministic resource packing
   selects packed mesh V2 when UVs are present and retains the V1 shape for
   color-only sources.
+- Their strict `collision` field accepts `trimesh` in addition to visual-only,
+  bounds, and proxy policies. The resulting `StaticMeshAsset` retains the exact
+  validated payload for an explicit collision adapter; `asset-import` does not
+  build or schedule live colliders.
 - `plan_animated_glb_import` emits exact retained GLB bytes, a validated
   `AnimatedMeshAsset`, catalog entry, and provenance manifest. It consumes the
   canonical bounded GLB scene/skin/clip parser without sampling or voxelizing

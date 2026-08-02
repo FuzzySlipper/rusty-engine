@@ -133,7 +133,8 @@ export interface MeshMaterialSlot {
 export type MeshCollisionPolicy =
   | { readonly kind: 'visualOnly' }
   | { readonly kind: 'proxy'; readonly proxyAsset: string }
-  | { readonly kind: 'aabbFallback' };
+  | { readonly kind: 'aabbFallback' }
+  | { readonly kind: 'trimesh' };
 
 export interface StaticMeshAsset {
   readonly asset: string;

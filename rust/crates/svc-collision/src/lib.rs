@@ -1,4 +1,4 @@
-//! `parry3d`-backed collision projection derived from voxel authority.
+//! `parry3d`-backed collision projection derived from voxel and static-mesh authority.
 //!
 //! # Lane
 //!
@@ -12,7 +12,9 @@
 //!
 //! - **Derived, not authoritative.** Each chunk collider records the
 //!   `content_hash` of the chunk it was built from; [`CollisionProjection::is_chunk_stale`]
-//!   detects drift so rebuilds stay coordinated with the chunk dirty queue.
+//!   detects drift so rebuilds stay coordinated with the chunk dirty queue. Immutable
+//!   triangle assets and caller-owned instances enter through one exact-revision,
+//!   fail-atomic replacement boundary.
 //! - **Typed boundary.** ASHA coordinate types (`WorldPos`, `VoxelGridSpec`) cross
 //!   the public API; `parry3d` `Pose`/`Vector`/`Compound` (glam-backed) stay
 //!   internal so coordinate-space distinctions are not erased.
@@ -20,9 +22,9 @@
 //! - **No raw parry-world mutation is exposed.** Callers build/reconcile and query;
 //!   they never poke the parry compound directly.
 //!
-//! Initial projection: each solid voxel becomes a world-positioned cuboid in a
-//! per-chunk `Compound`. Greedy/heightfield/trimesh optimisation and per-material
-//! collision classes are deferred (decisions 1/5).
+//! Each solid voxel becomes a world-positioned cuboid in a per-chunk `Compound`.
+//! External static assets use bounded Parry triangle meshes; callers retain asset,
+//! entity, transform, storage, and lifecycle authority.
 //!
 //! Queries are the **one shared vocabulary** for picking, camera, and placement:
 //! [`CollisionProjection::contains_point`] (occupancy), [`CollisionProjection::raycast`]
@@ -33,6 +35,16 @@
 //! renderer picks are hints revalidated here (#2259).
 
 #![forbid(unsafe_code)]
+
+mod static_mesh;
+
+pub use static_mesh::{
+    StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance,
+    StaticMeshCollisionError, StaticMeshCollisionProjection, StaticMeshCollisionReceipt,
+    StaticMeshHit, StaticMeshInstanceId, StaticMeshTransform, MAX_STATIC_MESH_ASSETS,
+    MAX_STATIC_MESH_INSTANCES, MAX_STATIC_MESH_TRIANGLES, MAX_STATIC_MESH_TRIANGLES_PER_ASSET,
+    MAX_STATIC_MESH_VERTICES, MAX_STATIC_MESH_VERTICES_PER_ASSET,
+};
 
 use std::collections::BTreeMap;
 
@@ -166,6 +178,21 @@ pub struct VoxelHit {
     pub distance: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CollisionHit {
+    Voxel(VoxelHit),
+    StaticMesh(StaticMeshHit),
+}
+
+impl CollisionHit {
+    pub fn distance(self) -> f64 {
+        match self {
+            Self::Voxel(hit) => hit.distance,
+            Self::StaticMesh(hit) => hit.distance,
+        }
+    }
+}
+
 // ── Projection ─────────────────────────────────────────────────────────────────
 
 /// The collision projection of a single resident chunk.
@@ -184,6 +211,7 @@ pub struct CollisionProjection {
     world_offset: WorldVec,
     /// Only chunks with at least one solid voxel appear here (deterministic order).
     chunks: BTreeMap<ChunkCoord, ChunkCollider>,
+    static_meshes: StaticMeshCollisionProjection,
     /// Bumped on every (re)build so downstream can cheaply detect projection changes.
     version: u64,
 }
@@ -232,6 +260,7 @@ impl CollisionProjection {
             grid: world.grid(),
             world_offset,
             chunks: BTreeMap::new(),
+            static_meshes: StaticMeshCollisionProjection::default(),
             version: 0,
         };
         for (coord, chunk) in world.resident_chunks() {
@@ -253,6 +282,34 @@ impl CollisionProjection {
     /// Number of chunks that currently have a collider (non-empty chunks).
     pub fn collider_count(&self) -> usize {
         self.chunks.len()
+    }
+
+    pub fn static_mesh_revision(&self) -> u64 {
+        self.static_meshes.revision()
+    }
+
+    pub fn static_mesh_asset_count(&self) -> usize {
+        self.static_meshes.asset_count()
+    }
+
+    pub fn static_mesh_instance_count(&self) -> usize {
+        self.static_meshes.instance_count()
+    }
+
+    pub fn replace_static_meshes(
+        &mut self,
+        expected_revision: u64,
+        assets: impl IntoIterator<Item = StaticMeshColliderAsset>,
+        instances: impl IntoIterator<Item = StaticMeshColliderInstance>,
+    ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
+        self.static_meshes
+            .replace_all(expected_revision, assets, instances)
+    }
+
+    /// Preserve the caller-owned derived static-mesh projection while voxel
+    /// authority is rebuilt transactionally.
+    pub fn copy_static_meshes_from(&mut self, source: &Self) {
+        self.static_meshes = source.static_meshes.clone();
     }
 
     /// Whether `chunk` currently has a collider in the projection.
@@ -284,7 +341,7 @@ impl CollisionProjection {
             .map(|coord| format!("{},{},{}", coord.x, coord.y, coord.z))
             .collect::<Vec<_>>()
             .join(";");
-        let projection_key = if self.world_offset == WorldVec::ZERO {
+        let mut projection_key = if self.world_offset == WorldVec::ZERO {
             format!(
                 "{source_hash:016x}|v{}|n{}|{chunks}",
                 self.version(),
@@ -300,6 +357,13 @@ impl CollisionProjection {
                 self.world_offset.z.to_bits(),
             )
         };
+        if self.static_meshes.revision() != 0 {
+            projection_key.push_str(&format!(
+                "|s{}:{:016x}",
+                self.static_meshes.revision(),
+                self.static_meshes.identity_hash()
+            ));
+        }
         CollisionProjectionIdentity {
             source_hash,
             projection_hash: fnv1a64(projection_key.as_bytes()),
@@ -438,6 +502,28 @@ impl CollisionProjection {
         })
     }
 
+    /// Cast against voxel and external static-mesh colliders and return the
+    /// nearest hit. Exact-distance ties prefer voxel authority so existing voxel
+    /// edit anchors remain deterministic.
+    pub fn raycast_world(&self, ray: Ray, max_distance: f64) -> Option<CollisionHit> {
+        let voxel = self.raycast(ray, max_distance).map(CollisionHit::Voxel);
+        let static_mesh = self
+            .static_meshes
+            .raycast(ray, max_distance)
+            .map(CollisionHit::StaticMesh);
+        match (voxel, static_mesh) {
+            (Some(voxel), Some(static_mesh)) => {
+                if static_mesh.distance() < voxel.distance() {
+                    Some(static_mesh)
+                } else {
+                    Some(voxel)
+                }
+            }
+            (Some(hit), None) | (None, Some(hit)) => Some(hit),
+            (None, None) => None,
+        }
+    }
+
     /// Whether the world-space AABB `[min, max]` overlaps any solid voxel collider.
     /// The placement/camera-basics shape query. Only chunks the AABB spans are tested.
     pub fn aabb_overlaps_solid(&self, min: WorldPos, max: WorldPos) -> bool {
@@ -469,7 +555,7 @@ impl CollisionProjection {
                 }
             }
         }
-        false
+        self.static_meshes.aabb_overlaps(lo, hi)
     }
 
     /// Whether an AABB translated along one axis intersects any solid collider
@@ -506,18 +592,49 @@ impl CollisionProjection {
             max.y + translation.y,
             max.z + translation.z,
         );
-        self.aabb_overlaps_solid(
-            WorldPos::new(
-                min.x.min(destination_min.x),
-                min.y.min(destination_min.y),
-                min.z.min(destination_min.z),
-            ),
-            WorldPos::new(
-                max.x.max(destination_max.x),
-                max.y.max(destination_max.y),
-                max.z.max(destination_max.z),
-            ),
-        )
+        let swept_min = WorldPos::new(
+            min.x.min(destination_min.x),
+            min.y.min(destination_min.y),
+            min.z.min(destination_min.z),
+        );
+        let swept_max = WorldPos::new(
+            max.x.max(destination_max.x),
+            max.y.max(destination_max.y),
+            max.z.max(destination_max.z),
+        );
+        let voxel_overlap = self.aabb_overlaps_voxels(swept_min, swept_max);
+        voxel_overlap
+            || self
+                .static_meshes
+                .swept_aabb_overlaps(min, max, translation)
+    }
+
+    fn aabb_overlaps_voxels(&self, min: WorldPos, max: WorldPos) -> bool {
+        let lo = WorldPos::new(min.x.min(max.x), min.y.min(max.y), min.z.min(max.z));
+        let hi = WorldPos::new(min.x.max(max.x), min.y.max(max.y), min.z.max(max.z));
+        let half = Vector::new(
+            (hi.x - lo.x) * 0.5,
+            (hi.y - lo.y) * 0.5,
+            (hi.z - lo.z) * 0.5,
+        );
+        let cuboid = Cuboid::new(half);
+        let pose = Pose::from_translation(Vector::new(
+            (lo.x + hi.x) * 0.5,
+            (lo.y + hi.y) * 0.5,
+            (lo.z + hi.z) * 0.5,
+        ));
+        let id = identity();
+        let vmin = self.grid.world_to_voxel(lo - self.world_offset);
+        let vmax = self.grid.world_to_voxel(hi - self.world_offset);
+        let span = ChunkRegion::new(self.grid.voxel_to_chunk(vmin), {
+            let c = self.grid.voxel_to_chunk(vmax);
+            ChunkCoord::new(c.x + 1, c.y + 1, c.z + 1)
+        });
+        span.iter().any(|chunk| {
+            self.chunks.get(&chunk).is_some_and(|collider| {
+                intersection_test(&pose, &cuboid, &id, &collider.shape) == Ok(true)
+            })
+        })
     }
 }
 
@@ -808,6 +925,47 @@ mod tests {
             min,
             max,
             WorldVec::new(f64::INFINITY, 0.0, 0.0)
+        ));
+    }
+
+    #[test]
+    fn voxel_and_static_mesh_colliders_share_nearest_hit_and_sweep_queries() {
+        let world = world_with(ChunkCoord::new(0, 0, 0), &[LocalVoxelCoord::new(0, 0, 4)]);
+        let mut projection = CollisionProjection::build(&world);
+        let asset = StaticMeshColliderAsset::new(
+            StaticMeshAssetId(3),
+            vec![[-1.0, -1.0, 2.0], [1.0, -1.0, 2.0], [0.0, 1.0, 2.0]],
+            vec![[0, 1, 2]],
+        )
+        .unwrap();
+        let hash = asset.geometry_hash;
+        projection
+            .replace_static_meshes(
+                0,
+                [asset],
+                [StaticMeshColliderInstance {
+                    id: StaticMeshInstanceId(9),
+                    asset: StaticMeshAssetId(3),
+                    expected_geometry_hash: hash,
+                    transform: StaticMeshTransform::IDENTITY,
+                }],
+            )
+            .unwrap();
+
+        let ray = Ray::new(WorldPos::new(0.0, 0.0, 0.0), WorldVec::new(0.0, 0.0, 1.0));
+        assert_eq!(projection.raycast(ray, 10.0).unwrap().voxel.z, 4);
+        assert!(matches!(
+            projection.raycast_world(ray, 10.0),
+            Some(CollisionHit::StaticMesh(StaticMeshHit {
+                instance: StaticMeshInstanceId(9),
+                distance,
+                ..
+            })) if (distance - 2.0).abs() < 1.0e-9
+        ));
+        assert!(projection.axis_swept_aabb_overlaps_solid(
+            WorldPos::new(-0.25, -0.25, 0.0),
+            WorldPos::new(0.25, 0.25, 0.5),
+            WorldVec::new(0.0, 0.0, 3.0),
         ));
     }
 

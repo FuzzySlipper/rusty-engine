@@ -368,6 +368,21 @@ from them:
 - `VoxelEditService` validates an expected-revision transaction and replaces the complete coherent
   result only after every affected projection succeeds.
 
+Static mesh collision enters that same query owner without becoming voxel or
+renderer authority. `MeshCollisionPolicy::Trimesh` retains the exact validated
+mesh payload selected by offline import. An explicit filesystem/content adapter
+resolves renderer-resource bytes when needed, then supplies bounded positions,
+triangle indices, immutable geometry identity, and caller-owned instance
+transforms to `svc-collision`. The service validates and hash-binds each asset,
+builds Parry triangle meshes, and atomically replaces one complete instance
+projection at an exact independent revision. World ray and AABB/sweep queries
+consider voxel and triangle colliders together; voxel-edit raycasts remain
+voxel-only so an external mesh cannot forge a voxel edit anchor. Voxel rebuilds
+preserve the derived static projection, while persistence/reopen reconstructs it
+from downstream content and entity facts rather than serializing Parry state.
+Static triangle meshes are non-dynamic colliders; caller-driven non-kinematic
+rigid-body response is a separate mechanism.
+
 `KinematicMotionSystem` is a centrally invoked mechanism over explicit body views. It supplies no
 game loop, actor policy, or component-local update callback. A downstream runtime decides when to
 invoke it and what accepted facts mean.

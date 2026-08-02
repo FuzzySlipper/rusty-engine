@@ -45,6 +45,11 @@ pub use trigger::{
 };
 pub use trigger_codec::{decode_trigger_snapshot, encode_trigger_snapshot, TriggerVolumeSnapshot};
 
+pub use svc_collision::{
+    StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance,
+    StaticMeshCollisionError, StaticMeshCollisionReceipt, StaticMeshHit, StaticMeshInstanceId,
+    StaticMeshTransform,
+};
 pub use voxel_edit::{
     validate_material_voxel, validate_voxel_address, validate_voxel_material_slot,
     PreparedVoxelEdit, ValidatedVoxelEditTransaction, VoxelAuthorityValidationError, VoxelEdit,
@@ -85,7 +90,7 @@ use core_voxel::{VoxelMaterialId, VoxelValue};
 use entity_state::{
     BatchRejection, EntityCommand, EntityCommandBatch, EntityFact, EntityState, KinematicBodyView,
 };
-use svc_collision::{CollisionProjection, Ray};
+use svc_collision::{CollisionHit, CollisionProjection, Ray};
 use svc_mesh::{mesh_chunk_in_world, MeshError};
 use svc_pathfinding::{
     build_nav_projection, propose_direct_nav_movement, propose_projected_direct_nav_movement,
@@ -243,6 +248,12 @@ pub struct CollisionRayHit {
     pub face: Face,
     pub point: [f64; 3],
     pub distance: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SpatialCollisionHit {
+    Voxel(CollisionRayHit),
+    StaticMesh(StaticMeshHit),
 }
 
 /// One bounded path-following proposal derived from the scene's canonical
@@ -598,6 +609,51 @@ impl VoxelCollisionScene {
                 point: hit.point.to_array(),
                 distance: hit.distance,
             })
+    }
+
+    /// Cast against the coherent voxel projection plus the caller-supplied
+    /// static-mesh projection. Voxel-only editing continues to use [`Self::raycast`].
+    pub fn raycast_world(
+        &self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+    ) -> Option<SpatialCollisionHit> {
+        self.projection
+            .raycast_world(
+                Ray::new(
+                    WorldPos::new(origin[0], origin[1], origin[2]),
+                    WorldVec::new(direction[0], direction[1], direction[2]),
+                ),
+                max_distance,
+            )
+            .map(|hit| match hit {
+                CollisionHit::Voxel(hit) => SpatialCollisionHit::Voxel(CollisionRayHit {
+                    voxel: hit.voxel.to_array(),
+                    face: hit.face,
+                    point: hit.point.to_array(),
+                    distance: hit.distance,
+                }),
+                CollisionHit::StaticMesh(hit) => SpatialCollisionHit::StaticMesh(hit),
+            })
+    }
+
+    pub fn static_mesh_collision_revision(&self) -> u64 {
+        self.projection.static_mesh_revision()
+    }
+
+    pub fn replace_static_mesh_colliders(
+        &mut self,
+        expected_revision: u64,
+        assets: impl IntoIterator<Item = StaticMeshColliderAsset>,
+        instances: impl IntoIterator<Item = StaticMeshColliderInstance>,
+    ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
+        self.projection
+            .replace_static_meshes(expected_revision, assets, instances)
+    }
+
+    fn preserve_static_mesh_projection_from(&mut self, source: &Self) {
+        self.projection.copy_static_meshes_from(&source.projection);
     }
 
     pub fn aabb_overlaps_solid(&self, min: [f64; 3], max: [f64; 3]) -> bool {

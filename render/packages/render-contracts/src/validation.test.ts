@@ -45,6 +45,16 @@ void test('strict TypeScript decoders accept the committed Rust render fixtures'
   assert.equal(decodePresentationFrameDiff(fixture('presentation-frame-v1.json')).ops.length, 5);
 });
 
+void test('static mesh collision decoding admits the Rust-owned trimesh policy', () => {
+  const frame = mutableFixture('retained-frame-v1.json');
+  const operations = frame['ops'] as Array<Record<string, unknown>>;
+  const definition = operations.find((operation) => operation['op'] === 'defineStaticMesh');
+  assert.ok(definition);
+  const asset = definition['asset'] as Record<string, unknown>;
+  asset['collision'] = { kind: 'trimesh' };
+  assert.equal(decodeRenderFrameDiff(frame).ops.length, operations.length);
+});
+
 void test('render decoding rejects unsafe handles and unknown nested fields', () => {
   const unsafe = mutableFixture('retained-frame-v1.json');
   const unsafeOps = unsafe['ops'] as Array<Record<string, unknown>>;

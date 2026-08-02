@@ -204,6 +204,7 @@ fn collision_label(collision: &SourceCollision) -> String {
     match collision {
         SourceCollision::VisualOnly => "visualOnly".to_string(),
         SourceCollision::AabbFallback => "aabbFallback".to_string(),
+        SourceCollision::Trimesh => "trimesh".to_string(),
         SourceCollision::Proxy(path) => format!("proxy:{path}"),
     }
 }
@@ -238,6 +239,11 @@ mod tests {
         assert_eq!(report.produced_asset_count, 0);
         assert_eq!(report.diagnostics.diagnostics[0].code, "malformedSource");
         assert!(report.diagnostics.has_errors());
+    }
+
+    #[test]
+    fn trimesh_collision_uses_the_canonical_source_label() {
+        assert_eq!(collision_label(&SourceCollision::Trimesh), "trimesh");
     }
 
     #[test]
