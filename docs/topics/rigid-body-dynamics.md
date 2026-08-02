@@ -31,8 +31,9 @@ boundary.
   prepares the complete candidate step off-side, atomically publishes exact
   entity slots, and only then advances its immutable derived readout. The
   public `prepare`/`commit` split permits useful caller work between those
-  phases; any intervening transform or rigid-body slot change rejects the
-  entire candidate as stale.
+  phases; any intervening transform or rigid-body slot change, admitted-body
+  set change, transform parenting, or voxel/static-mesh environment change
+  rejects the entire candidate as stale.
 - Downstream Rust owns fixed-step scheduling, catch-up choice within Engine's
   bound, forces and impulses selected by gameplay, spawn/despawn, consequences,
   complete saves, and presentation.

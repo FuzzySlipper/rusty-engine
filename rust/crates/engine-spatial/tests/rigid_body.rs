@@ -7,8 +7,8 @@ use engine_spatial::{
 };
 use entity_state::{
     decode_snapshot, encode_snapshot, EntityAuthoringService, EntityDefinition, EntityState,
-    EntityTransform, RigidBodyComponent, RigidBodyShape, RigidBodyStatePublicationError,
-    TransformComponent,
+    EntityTransform, RelationshipCommand, RigidBodyComponent, RigidBodyShape,
+    RigidBodyStatePublicationError, TransformComponent, TransformParentMode,
 };
 
 fn body_state(
@@ -266,6 +266,78 @@ fn prepared_steps_reject_stale_slots_without_publishing_derived_state() {
         )) if stale == entity
     ));
     assert_eq!(encode_snapshot(&state).unwrap(), bytes_before);
+    assert!(service.readout().is_none());
+}
+
+#[test]
+fn prepared_steps_bind_relationship_and_body_set_authority() {
+    let body_entity = EntityId::new(32);
+    let parent_entity = EntityId::new(33);
+    let body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 1.0);
+    let mut state = EntityState::from_definitions([
+        EntityDefinition::new(body_entity, "body").with_transform(Vec3::new(0.0, 2.0, 0.0)),
+        EntityDefinition::new(parent_entity, "parent").with_transform(Vec3::ZERO),
+    ])
+    .unwrap();
+    let body_slot = state
+        .component_revision::<RigidBodyComponent>(body_entity)
+        .unwrap();
+    EntityAuthoringService
+        .attach_component(&mut state, body_slot, body_entity, body)
+        .unwrap();
+    let scene = empty_scene();
+    let mut service = RigidBodyService::default();
+    let prepared = service
+        .prepare(&state, &scene, RigidBodyStepRequest::single(1.0 / 60.0))
+        .unwrap();
+    state
+        .apply_relationship(
+            state.revision(),
+            RelationshipCommand::SetTransformParent {
+                child: body_entity,
+                parent: parent_entity,
+                mode: TransformParentMode::KeepLocal,
+            },
+        )
+        .unwrap();
+    let bytes_before = encode_snapshot(&state).unwrap();
+
+    assert!(matches!(
+        service.commit(&mut state, &scene, prepared),
+        Err(RigidBodyStepError::StaleRelationship { entity }) if entity == body_entity
+    ));
+    assert_eq!(encode_snapshot(&state).unwrap(), bytes_before);
+    assert!(service.readout().is_none());
+
+    let first = EntityId::new(34);
+    let added = EntityId::new(35);
+    let mut body_set = EntityState::from_definitions([
+        EntityDefinition::new(first, "first body").with_transform(Vec3::new(0.0, 2.0, 0.0)),
+        EntityDefinition::new(added, "later body").with_transform(Vec3::new(2.0, 2.0, 0.0)),
+    ])
+    .unwrap();
+    let first_slot = body_set
+        .component_revision::<RigidBodyComponent>(first)
+        .unwrap();
+    EntityAuthoringService
+        .attach_component(&mut body_set, first_slot, first, body)
+        .unwrap();
+    let prepared = service
+        .prepare(&body_set, &scene, RigidBodyStepRequest::single(1.0 / 60.0))
+        .unwrap();
+    let added_slot = body_set
+        .component_revision::<RigidBodyComponent>(added)
+        .unwrap();
+    EntityAuthoringService
+        .attach_component(&mut body_set, added_slot, added, body)
+        .unwrap();
+    let bytes_before = encode_snapshot(&body_set).unwrap();
+
+    assert!(matches!(
+        service.commit(&mut body_set, &scene, prepared),
+        Err(RigidBodyStepError::StaleBodySet)
+    ));
+    assert_eq!(encode_snapshot(&body_set).unwrap(), bytes_before);
     assert!(service.readout().is_none());
 }
 

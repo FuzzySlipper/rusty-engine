@@ -120,6 +120,8 @@ pub enum RigidBodyStepError {
     Backend(DynamicsError),
     Publication(RigidBodyStatePublicationError),
     OutputOutOfRange { entity: EntityId },
+    StaleBodySet,
+    StaleRelationship { entity: EntityId },
     StaleEnvironment,
     GenerationExhausted,
 }
@@ -135,6 +137,8 @@ impl RigidBodyStepError {
             Self::Backend(error) => error.code(),
             Self::Publication(error) => error.code(),
             Self::OutputOutOfRange { .. } => "rigid-body-output-out-of-range",
+            Self::StaleBodySet => "stale-rigid-body-set",
+            Self::StaleRelationship { .. } => "stale-rigid-body-relationship",
             Self::StaleEnvironment => "stale-rigid-body-environment",
             Self::GenerationExhausted => "rigid-body-generation-exhausted",
         }
@@ -254,6 +258,7 @@ impl RigidBodyService {
         if environment != environment_identity(scene) {
             return Err(RigidBodyStepError::StaleEnvironment);
         }
+        validate_prepared_entity_authority(entities, &canonical)?;
         let output: BTreeMap<_, _> = candidate
             .bodies
             .into_iter()
@@ -347,6 +352,32 @@ impl RigidBodyService {
             contacts,
         })
     }
+}
+
+fn validate_prepared_entity_authority(
+    entities: &EntityState,
+    canonical: &[CanonicalBody],
+) -> Result<(), RigidBodyStepError> {
+    let current_entities = entities
+        .rigid_bodies()
+        .map(|(entity, _)| entity)
+        .collect::<Vec<_>>();
+    if current_entities.len() != canonical.len()
+        || current_entities
+            .iter()
+            .zip(canonical)
+            .any(|(current, prepared)| *current != prepared.entity)
+    {
+        return Err(RigidBodyStepError::StaleBodySet);
+    }
+    for body in canonical {
+        if entities.transform_parent(body.entity).is_some() {
+            return Err(RigidBodyStepError::StaleRelationship {
+                entity: body.entity,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn environment_identity(scene: &VoxelCollisionScene) -> RigidBodyEnvironmentIdentity {
