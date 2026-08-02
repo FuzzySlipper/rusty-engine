@@ -152,6 +152,13 @@ retains the compatible single-camera behavior.
 
 ## Reference consumer evidence
 
+Rusty Roguelike commit `098b6d6c468711b4c149583996ac5147c9f58941` pins Engine commit
+`8673aaa6d0b811195b3904f34d7729c0d6e92530` for the first exact multi-view consumer. One public
+surface renders the already-admitted retained local scene through a bounded orthographic offscreen
+view and GPU-presents it as a responsive inset. The real desktop/mobile proof inspects distinct
+framebuffer regions, target revision replacement, narrow sizing, save/reopen continuity, and
+unchanged Rust session/minimap facts; it does not move discovery or visibility into TypeScript.
+
 `rusty-engine-demo` commit `42f428b0ee3f47de94d4372f512978f587d729f7` consumes that exact
 Engine baseline with no sibling override. Its private render-contracts and renderer-three packages
 are deleted. The loading-bay product maps typed Rust facts into shared presentation descriptors and
@@ -405,7 +412,9 @@ claim. Downstream Den task #6378 and its checked evidence artifact own the produ
 - Multi-view composition currently supports one RGBA8 sRGB color policy, optional depth24, nearest
   or linear sampling, and GPU presentation onto the primary surface. It does not expose arbitrary
   render-target materials, CPU readback, target feedback, cubemaps, post-processing, gameplay
-  minimap discovery, or another render scheduler.
+  minimap discovery, or another render scheduler. Exact downstream certification is Rusty Roguelike
+  `098b6d6c468711b4c149583996ac5147c9f58941`, pinning Engine
+  `8673aaa6d0b811195b3904f34d7729c0d6e92530`.
 - Animation is deterministic controller/playback presentation, not skeletal state authority.
   Sampled cues cannot mutate gameplay directly.
 - DOM billboards, particle billboards, and telemetry are default host realizations. A consumer may

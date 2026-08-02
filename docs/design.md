@@ -615,6 +615,14 @@ browser selects disabled world defaults, retains the neutral viewmodel default, 
 retained-light count exactly matches Rust projection while a real framebuffer shows localized warm
 falloff. This is consumer evidence for the generic mechanism, not Engine ownership of torch policy.
 
+Rusty Roguelike exact revision `098b6d6c468711b4c149583996ac5147c9f58941` is the first public
+multi-view consumer and pins Engine `8673aaa6d0b811195b3904f34d7729c0d6e92530`. It uses the
+renderer-neutral contract to GPU-present an orthographic picture-in-picture over the exact
+Rust-admitted retained local scene. Its desktop/mobile Chromium proof inspects distinct primary and
+inset pixels, replaces the target across compact resize, and confirms that session revision and the
+complete Rust minimap projection do not change. The accessible detailed minimap remains a separate
+consumer of Rust-owned discovery and visibility facts.
+
 External consumers pin all four render packages to one exact public Engine commit. Their package
 preparation and peer graph are independently checked in a clean temporary consumer, so the shared
 boundary is not a workspace-only convention. Operational commands, CI ownership, and explicit

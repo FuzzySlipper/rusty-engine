@@ -17,7 +17,10 @@ downstream repositories.
 - **Detection:** Inspect `RendererSurface.viewCompositionReadout()` and run
   `./scripts/verify-render.sh`; contract and backend tests cover quotas, immutable atomic
   replacement, stale revisions, allocation failure, and disposal, while the real Chromium proof
-  inspects distinct primary and offscreen pixels at desktop and narrow sizes.
+  inspects distinct primary and offscreen pixels at desktop and narrow sizes. Rusty Roguelike exact
+  revision `098b6d6c468711b4c149583996ac5147c9f58941`, pinning Engine
+  `8673aaa6d0b811195b3904f34d7729c0d6e92530`, supplies the public consumer proof without acquiring
+  discovery or visibility authority.
 - **Follow-up:** Add another target format or consumption mode only with a concrete consumer and a
   bounded renderer-neutral contract.
 - **Last reviewed:** 2026-08-02 / codex

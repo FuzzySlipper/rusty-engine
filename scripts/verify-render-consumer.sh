@@ -51,12 +51,46 @@ for package_name in render-contracts render-projection renderer-host renderer-th
 done
 
 pnpm --dir "$PROBE_ROOT" exec node --input-type=module <<'JS'
-import { decodeRenderFrameDiff } from '@rusty-engine/render-contracts';
+import {
+  decodeRenderFrameDiff,
+  validateRendererViewComposition,
+} from '@rusty-engine/render-contracts';
 import { RenderProjection } from '@rusty-engine/render-projection';
 import { createRendererDefaultSurfaceFrame } from '@rusty-engine/renderer-host';
 import { ThreeRenderer } from '@rusty-engine/renderer-three';
 
 const frame = decodeRenderFrameDiff(createRendererDefaultSurfaceFrame());
+const composition = validateRendererViewComposition({
+  schemaVersion: 1,
+  cameras: [{
+    id: 'camera.consumer-proof',
+    pose: { position: [0, 8, 0], pitchDegrees: -90, yawDegrees: 0 },
+    projection: { kind: 'orthographic', verticalSize: 12, near: 0.1, far: 24 },
+  }],
+  targets: [{
+    id: 'target.consumer-proof', revision: 1, width: 64, height: 64,
+    color: 'rgba8_srgb', depth: 'depth24', sampling: 'nearest',
+  }],
+  views: [{
+    id: 'view.consumer-proof', cameraId: 'camera.consumer-proof', order: 1,
+    target: {
+      kind: 'offscreen',
+      targetId: 'target.consumer-proof',
+      targetRevision: 1,
+    },
+    viewport: { x: 0, y: 0, width: 1, height: 1 },
+  }],
+  presentations: [{
+    id: 'presentation.consumer-proof',
+    sourceTargetId: 'target.consumer-proof',
+    sourceTargetRevision: 1,
+    destination: {
+      kind: 'primary',
+      viewport: { x: 0.7, y: 0.7, width: 0.25, height: 0.25 },
+    },
+    order: 2,
+  }],
+});
 const projection = new RenderProjection();
 const instructions = projection.applyFrame(frame);
 const renderer = new ThreeRenderer();
@@ -64,7 +98,12 @@ renderer.applyFrame(frame);
 const snapshot = renderer.snapshot();
 renderer.dispose();
 
-if (instructions.length === 0 || projection.handleCount === 0 || snapshot.length === 0) {
+if (
+  composition.targets.length !== 1
+  || instructions.length === 0
+  || projection.handleCount === 0
+  || snapshot.length === 0
+) {
   throw new Error('exact-revision renderer packages did not execute one coherent retained frame');
 }
 console.log('EXACT_PUBLIC_RENDER_CONSUMER_OK');
