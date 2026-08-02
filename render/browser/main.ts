@@ -120,10 +120,13 @@ interface BrowserProof {
   }[];
   readonly voxelSurfaceSpecializations: readonly unknown[];
   readonly viewComposition: {
+    readonly cameraUpdateApplied: boolean;
+    readonly cameraUpdateTargetStatus: string | null;
     readonly cameraPosition: readonly [number, number, number] | null;
     readonly disposedResources: { readonly presentationCount: number; readonly targetCount: number };
     readonly drawCallCount: number;
     readonly frameReplacementApplied: boolean;
+    readonly frameReplacementTargetStatus: string | null;
     readonly invalidApplied: boolean;
     readonly narrowPixels: readonly (readonly [number, number, number, number])[];
     readonly pixels: readonly (readonly [number, number, number, number])[];
@@ -677,8 +680,14 @@ async function main(): Promise<void> {
       metadata: null,
     }],
   });
+  const frameReplacementTargetStatus = compositionSurface
+    .viewCompositionReadout().targets[0]?.status ?? null;
   const resizeReceipt = compositionSurface.configureViews(viewComposition(2, 192));
   compositionSurface.renderOnce(2);
+  const cameraUpdateReceipt = compositionSurface.configureViews(viewComposition(2, 192, 7));
+  const cameraUpdateTargetStatus = compositionSurface
+    .viewCompositionReadout().targets[0]?.status ?? null;
+  compositionSurface.renderOnce(3);
   const staleReceipt = compositionSurface.configureViews(viewComposition(1, 128));
   const invalidComposition = structuredClone(viewComposition(2, 192)) as unknown as {
     presentations: Array<{ destination: { kind: string } }>;
@@ -689,7 +698,7 @@ async function main(): Promise<void> {
   );
   compositionCanvas.style.width = '160px';
   compositionCanvas.style.height = '100px';
-  compositionSurface.renderOnce(3);
+  compositionSurface.renderOnce(4);
   const narrowPixels = readCompositionPixels(compositionContext);
   const compositionReadout = compositionSurface.viewCompositionReadout();
   compositionSurface.dispose();
@@ -797,11 +806,14 @@ async function main(): Promise<void> {
     voxelSurfaceAtlasPixels,
     voxelSurfaceSpecializations,
     viewComposition: {
+      cameraUpdateApplied: cameraUpdateReceipt.applied,
+      cameraUpdateTargetStatus,
       cameraPosition: compositionReadout.cameras
         .find((camera) => camera.id === 'camera.overview')?.pose.position ?? null,
       disposedResources,
       drawCallCount: compositionSubmission.statistics.drawCallCount.value ?? -1,
       frameReplacementApplied: compositionFrameReplacement.applied,
+      frameReplacementTargetStatus,
       invalidApplied: invalidReceipt.applied,
       narrowPixels,
       pixels,
@@ -1502,7 +1514,11 @@ function staticMeshTextureBrowserFrame(): RenderFrameDiff {
   };
 }
 
-function viewComposition(revision: number, targetSize: number): RendererViewComposition {
+function viewComposition(
+  revision: number,
+  targetSize: number,
+  overviewZ = revision === 1 ? 8 : 7.5,
+): RendererViewComposition {
   return {
     schemaVersion: 1,
     cameras: [
@@ -1513,7 +1529,7 @@ function viewComposition(revision: number, targetSize: number): RendererViewComp
       },
       {
         id: 'camera.overview',
-        pose: { position: [0, 3, revision === 1 ? 8 : 7.5], pitchDegrees: -10, yawDegrees: 0 },
+        pose: { position: [0, 3, overviewZ], pitchDegrees: -10, yawDegrees: 0 },
         projection: { kind: 'perspective', fovYDegrees: 58, near: 0.1, far: 50 },
       },
     ],

@@ -604,9 +604,12 @@ primary-surface viewport without CPU readback or exposing a Three texture. Confi
 deeply frozen, fully validated, and GPU resources are prepared before one atomic publication.
 Duplicate producers, stale target revisions, feedback destinations, allocation failure, and quota
 failure leave the prior composition current. Target replacement and surface disposal release the
-backend resources, while an omitted composition preserves the original single-camera path and
-submission loop. Cameras, viewports, targets, and their readout are presentation facts only; they
-do not own visibility, discovery, navigation, input, or another retained scene.
+backend resources. Readout distinguishes targets that were never rendered, are current, or became
+stale after an accepted retained-scene or composition change; only a subsequent caller-owned
+submission makes stale target content current again. An omitted composition preserves the original
+single-camera path and submission loop. Cameras, viewports, targets, and their readout are
+presentation facts only; they do not own visibility, discovery, navigation, input, or another
+retained scene.
 
 Rusty Roguelike is the first exact public consumer of that policy at
 `e88856aca2b07212e79ca8a9a8cdc904cb49bd61`, pinning Engine

@@ -210,8 +210,8 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.viewComposition.staleDiagnostic).toBe('stale_target_revision');
   expect(proof.viewComposition.invalidApplied).toBe(false);
   expect(proof.viewComposition.frameReplacementApplied).toBe(true);
-  expect(proof.viewComposition.cameraPosition).toEqual([0, 3, 7.5]);
-  expect(proof.viewComposition.readout.revision).toBe(2);
+  expect(proof.viewComposition.cameraPosition).toEqual([0, 3, 7]);
+  expect(proof.viewComposition.readout.revision).toBe(3);
   expect(proof.viewComposition.readout.resources).toEqual({
     presentationCount: 1,
     targetCount: 1,
@@ -223,8 +223,11 @@ test('shared host realizes retained, presentation, and inspection families in a 
     height: 192,
     status: 'current',
   })]);
+  expect(proof.viewComposition.frameReplacementTargetStatus).toBe('stale');
+  expect(proof.viewComposition.cameraUpdateApplied).toBe(true);
+  expect(proof.viewComposition.cameraUpdateTargetStatus).toBe('stale');
   expect(proof.viewComposition.readout.targets[0]?.lastRefreshedSubmission)
-    .toBeGreaterThanOrEqual(3);
+    .toBeGreaterThanOrEqual(4);
   expect(proof.viewComposition.disposedResources).toEqual({
     presentationCount: 0,
     targetCount: 0,

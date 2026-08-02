@@ -563,7 +563,10 @@ export function mountRendererBrowserSurface(
     animatedMeshPlayback: (handle) => renderer.animatedMeshPlayback(handle),
     sampleAnimatedMesh: (handle, clipId, normalizedTime) =>
       renderer.sampleAnimatedMesh(handle, clipId, normalizedTime),
-    applyFrame: (nextFrame) => renderer.applyFrame(nextFrame),
+    applyFrame: (nextFrame) => {
+      renderer.applyFrame(nextFrame);
+      viewComposition.invalidate();
+    },
     configureViews: (composition) => viewComposition.configure(composition),
     cameraPose: () => currentCameraPose,
     cameraProjection: () => cameraProjection,

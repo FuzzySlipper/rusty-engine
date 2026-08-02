@@ -32,7 +32,7 @@ export interface RendererViewCompositionReadout {
   readonly cameras: RendererViewComposition['cameras'];
   readonly targets: readonly (RendererCompositionTarget & {
     readonly lastRefreshedSubmission: number | null;
-    readonly status: 'current' | 'never_rendered';
+    readonly status: 'current' | 'never_rendered' | 'stale';
   })[];
   readonly views: RendererViewComposition['views'];
   readonly presentations: RendererViewComposition['presentations'];
@@ -55,6 +55,7 @@ interface TargetResource {
   readonly descriptor: RendererCompositionTarget;
   readonly target: THREE.WebGLRenderTarget;
   lastRefreshedSubmission: number | null;
+  stale: boolean;
 }
 
 interface PresentationResource {
@@ -128,7 +129,9 @@ export class RendererViewCompositionBackend {
       return Object.freeze({
         ...descriptor,
         lastRefreshedSubmission,
-        status: lastRefreshedSubmission === null ? 'never_rendered' : 'current',
+        status: lastRefreshedSubmission === null
+          ? 'never_rendered'
+          : resource?.stale === true ? 'stale' : 'current',
       } as const);
     });
     return Object.freeze({
@@ -203,6 +206,12 @@ export class RendererViewCompositionBackend {
     }
   }
 
+  /** Mark reusable targets stale after retained scene facts change. */
+  invalidate(): void {
+    if (this.#disposed) return;
+    for (const resource of this.#targets.values()) resource.stale = true;
+  }
+
   dispose(): void {
     if (this.#disposed) return;
     disposePresentations(this.#presentations);
@@ -231,7 +240,7 @@ export class RendererViewCompositionBackend {
           continue;
         }
         const target = createTarget(descriptor);
-        const resource = { descriptor, target, lastRefreshedSubmission: null };
+        const resource = { descriptor, target, lastRefreshedSubmission: null, stale: true };
         createdTargets.push(resource);
         this.#webgl.initRenderTarget(target);
         targets.set(descriptor.id, resource);
@@ -256,6 +265,7 @@ export class RendererViewCompositionBackend {
     this.#composition = prepared.composition;
     this.#presentations = prepared.presentations;
     this.#targets = prepared.targets;
+    this.invalidate();
     this.#revision += 1;
     for (const descriptor of prepared.composition.targets) {
       this.#highestTargetRevision.set(descriptor.id, descriptor.revision);
@@ -294,6 +304,7 @@ export class RendererViewCompositionBackend {
     this.#projection.prepareStaticInstanceBatches(camera);
     this.#webgl.render(this.#projection.scene, camera);
     target.lastRefreshedSubmission = submission;
+    target.stale = false;
   }
 
   #renderPrimaryView(
