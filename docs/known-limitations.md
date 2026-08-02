@@ -5,6 +5,21 @@ architecture boundaries are stated separately so agents do not “fix” them by
 introducing a second authority. Product-specific limitations belong to their
 downstream repositories.
 
+## Non-kinematic rigid bodies
+
+- **Status:** in-progress-bounded-provider
+- **Affected surface:** `entity-state`, `svc-collision`, and `engine-spatial`
+- **Limitation:**
+The #6531 implementation is intentionally bounded to dynamic spheres, cuboids,
+and local +Y capsules with positive mass and solver-derived inertia. Dynamic
+triangle meshes and arbitrary inertia tensors are not admitted. Discrete and
+continuous collision each have explicit per-step motion ceilings; exceeding a
+ceiling rejects the step rather than silently accepting tunneling. Repeatability
+is certified for one exact Engine/backend build and target, not across backend
+upgrades or different floating-point environments. See
+[Rigid-body dynamics](topics/rigid-body-dynamics.md).
+- **Follow-up:** Close #6531 with exact provider and downstream consumer proof.
+
 ## Textured voxel atlas filtering and corpus breadth
 
 - **Status:** accepted-temporary

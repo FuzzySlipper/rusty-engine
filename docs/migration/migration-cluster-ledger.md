@@ -280,7 +280,10 @@ that consumer; do not restore Asha's universal protocol, replay, collaboration, 
   relationship policy remain downstream.
 - A universal rules language, condition/formula AST, scheduler, behavior graph, and RPG authority
   session remain absent. Future smaller mechanisms still require concrete consumer evidence.
-- Dynamic physics should wait for behavior the current kinematic/collision path cannot express.
+- Dynamic physics was deliberately deferred until the current kinematic/collision
+  path could not express a concrete consumer need. Task #6531 reopens that exact
+  gap as a bounded caller-driven rigid-body service; it does not reopen Asha's
+  scheduler, runtime facade, or universal physics session.
 - Networking, adversarial scripting, collaborative editing, and universal mod APIs are outside the
   current design decision.
 - Replay may return for a named debugging or product need as an observer of ordinary execution, not

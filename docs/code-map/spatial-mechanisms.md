@@ -30,6 +30,7 @@ from it.
 - [`svc-spatial`](../../rust/crates/svc-spatial)
 - [`svc-collision`](../../rust/crates/svc-collision)
   - [`static_mesh.rs`](../../rust/crates/svc-collision/src/static_mesh.rs)
+- [Rigid-body dynamics](../topics/rigid-body-dynamics.md)
 - [`svc-pathfinding`](../../rust/crates/svc-pathfinding)
 - [`svc-mesh`](../../rust/crates/svc-mesh)
 - [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
@@ -51,6 +52,10 @@ from it.
 - `svc-mesh::texture_mapping` owns the executable six-face tile basis and exact
   cell-space projection used by the one greedy mesher; it owns no image or GPU
   resource.
+- The caller-driven rigid-body service consumes exact entity component slots
+  plus this canonical voxel/static-triangle environment. Rapier caches are
+  derived, bounded, and non-durable; complete accepted steps publish atomically
+  through entity-state.
 
 ## Private or forbidden paths
 

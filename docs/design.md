@@ -383,8 +383,16 @@ capture its independent revision and reject if it changes before commit, so a
 voxel swap cannot roll back a newer collider replacement. Persistence/reopen
 reconstructs the projection from downstream content and entity facts rather
 than serializing Parry state.
-Static triangle meshes are non-dynamic colliders; caller-driven non-kinematic
-rigid-body response is a separate mechanism.
+Static triangle meshes are non-dynamic colliders. Caller-driven non-kinematic
+rigid-body response is a separate named mechanism: durable transform and
+schema-1 rigid-body component facts remain in `entity-state`, while
+`svc-collision` uses a contained single-threaded Rapier/Parry backend as derived
+state and `engine-spatial` owns bounded fixed-step preparation plus atomic exact-
+slot publication. Downstream owns step timing, gameplay-selected impulses,
+consequences, complete saves, and presentation. Kinematic controller motion is
+not redefined as a dynamic body. The backend choice, numeric guarantees, CCD
+limits, and forbidden scheduler/session shapes are specified in
+[Rigid-body dynamics](topics/rigid-body-dynamics.md).
 
 `KinematicMotionSystem` is a centrally invoked mechanism over explicit body views. It supplies no
 game loop, actor policy, or component-local update callback. A downstream runtime decides when to

@@ -13,6 +13,7 @@ mod components;
 mod definition;
 mod model;
 mod relationship;
+mod rigid_body;
 mod snapshot;
 mod transform;
 mod value;
@@ -44,12 +45,19 @@ pub use model::{
     AssetBindingComponent, BoundsComponent, CollisionComponent, ControllerComponent, EntityCore,
     EntityDefinition, EntityDefinitionError, EntityLifecycle, EntitySource, EntityState,
     EntityTransform, EntityView, KinematicBodyView, KinematicComponent, ProjectionNode, Quat,
-    RenderableComponent, TransformComponent, ViewError, MAX_ABS_TRANSLATION, MAX_ABS_VELOCITY,
+    RenderableComponent, RigidBodyComponent, RigidBodyInertiaPolicy, RigidBodyMode, RigidBodyShape,
+    TransformComponent, ViewError, MAX_ABS_TRANSLATION, MAX_ABS_VELOCITY,
 };
 pub use relationship::{
     apply_relationship, preview_relationship, RelationshipCommand, RelationshipError,
     RelationshipKind, RelationshipPreview, RelationshipReadout, RelationshipReceipt,
     TransformParentMode,
+};
+pub use rigid_body::{
+    validate_rigid_body, RigidBodyValidationError, MAX_RIGID_BODY_DAMPING, MAX_RIGID_BODY_FRICTION,
+    MAX_RIGID_BODY_GRAVITY_SCALE, MAX_RIGID_BODY_MASS, MAX_RIGID_BODY_RESTITUTION,
+    MAX_RIGID_BODY_SHAPE_EXTENT, MAX_RIGID_BODY_SPEED, RIGID_BODY_CODEC_ID,
+    RIGID_BODY_CODEC_VERSION, RIGID_BODY_COMPONENT_TYPE_ID,
 };
 pub use snapshot::{
     decode_snapshot, decode_snapshot_with_registry, encode_durable_snapshot, encode_snapshot,

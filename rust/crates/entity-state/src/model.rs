@@ -15,7 +15,8 @@ use crate::component::{
 };
 pub use crate::components::{
     AssetBindingComponent, BoundsComponent, CollisionComponent, ControllerComponent,
-    KinematicComponent, RenderableComponent, TransformComponent,
+    KinematicComponent, RenderableComponent, RigidBodyComponent, RigidBodyInertiaPolicy,
+    RigidBodyMode, RigidBodyShape, TransformComponent,
 };
 pub(crate) use crate::definition::{
     transform_is_valid, translation_is_valid, validate_definition, velocity_is_valid,
@@ -136,6 +137,7 @@ pub struct EntityView {
     pub collision: Option<CollisionComponent>,
     pub renderable: Option<RenderableComponent>,
     pub kinematic: Option<KinematicComponent>,
+    pub rigid_body: Option<RigidBodyComponent>,
     pub controller: Option<ControllerComponent>,
     pub controller_active: bool,
     pub asset_binding: Option<AssetBindingComponent>,
@@ -355,6 +357,18 @@ impl EntityState {
             .expect("built-in kinematic component is registered")
     }
 
+    pub fn rigid_body(&self, entity: EntityId) -> Option<&RigidBodyComponent> {
+        self.components
+            .get::<RigidBodyComponent>(entity)
+            .expect("built-in rigid-body component is registered")
+    }
+
+    pub fn rigid_bodies(&self) -> ComponentIter<'_, RigidBodyComponent> {
+        self.components
+            .iter::<RigidBodyComponent>()
+            .expect("built-in rigid-body component is registered")
+    }
+
     pub fn controller(&self, entity: EntityId) -> Option<&ControllerComponent> {
         self.components
             .get::<ControllerComponent>(entity)
@@ -432,6 +446,7 @@ impl EntityState {
             collision: self.collision(entity).copied(),
             renderable: self.renderable(entity).cloned(),
             kinematic: self.kinematic(entity).copied(),
+            rigid_body: self.rigid_body(entity).copied(),
             controller: self.controller(entity).copied(),
             controller_active: self.controller(entity).is_some()
                 && !self.inactive_controllers.contains(&entity),

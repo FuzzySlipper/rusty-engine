@@ -646,6 +646,7 @@ fn register_builtin_components(
             ASSET_BINDING_COMPONENT_TYPE_ID,
         )),
     )?;
+    registry.register(crate::rigid_body::rigid_body_registration())?;
     Ok(())
 }
 
