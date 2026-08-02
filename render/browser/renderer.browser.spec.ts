@@ -10,6 +10,16 @@ function framebufferColorClass(pixel: readonly number[]): string {
   }).join('/');
 }
 
+function compositionColorClass(pixel: readonly number[]): 'red' | 'green' {
+  expect(pixel).toHaveLength(4);
+  expect(pixel[3]).toBe(255);
+  const [red = 0, green = 0, blue = 0] = pixel;
+  if (red > green * 2 && red > blue * 2) return 'red';
+  expect(green).toBeGreaterThan(red * 2);
+  expect(green).toBeGreaterThan(blue * 1.25);
+  return 'green';
+}
+
 test('shared host realizes retained, presentation, and inspection families in a real browser', async ({ page }) => {
   const consoleErrors: string[] = [];
   page.on('console', (message) => {
@@ -195,6 +205,36 @@ test('shared host realizes retained, presentation, and inspection families in a 
     tabIndex: -1,
     touchAction: 'pan-x',
   });
+  expect(proof.viewComposition.resizeApplied).toBe(true);
+  expect(proof.viewComposition.staleApplied).toBe(false);
+  expect(proof.viewComposition.staleDiagnostic).toBe('stale_target_revision');
+  expect(proof.viewComposition.invalidApplied).toBe(false);
+  expect(proof.viewComposition.frameReplacementApplied).toBe(true);
+  expect(proof.viewComposition.cameraPosition).toEqual([0, 3, 7.5]);
+  expect(proof.viewComposition.readout.revision).toBe(2);
+  expect(proof.viewComposition.readout.resources).toEqual({
+    presentationCount: 1,
+    targetCount: 1,
+  });
+  expect(proof.viewComposition.readout.targets).toEqual([expect.objectContaining({
+    id: 'target.overview',
+    revision: 2,
+    width: 192,
+    height: 192,
+    status: 'current',
+  })]);
+  expect(proof.viewComposition.readout.targets[0]?.lastRefreshedSubmission)
+    .toBeGreaterThanOrEqual(3);
+  expect(proof.viewComposition.disposedResources).toEqual({
+    presentationCount: 0,
+    targetCount: 0,
+  });
+  expect(proof.viewComposition.pixels.map(compositionColorClass)).toEqual([
+    'red', 'green', 'red', 'green',
+  ]);
+  expect(proof.viewComposition.narrowPixels.map(compositionColorClass)).toEqual([
+    'red', 'green', 'red', 'green',
+  ]);
   expect(proof.pickHandle).toBe(101);
   expect(proof.projectionInsideViewport).toBe(true);
   expect(proof.hostSurfaceKind).toBe('rusty_renderer_surface.v1');

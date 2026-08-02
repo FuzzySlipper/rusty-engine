@@ -8,7 +8,7 @@ surface, and renderer host/resource lifecycle.
 ## Owns
 
 - `@rusty-engine/render-contracts`: strict decoding of the Rust retained-frame
-  border.
+  border and bounded renderer-neutral multi-view composition descriptors.
 - `@rusty-engine/render-projection`: retained client-side projection.
 - `@rusty-engine/renderer-three`: Three/WebGL resources and render passes.
 - `@rusty-engine/renderer-host`: backend/host composition, presentation hosts,
@@ -36,6 +36,9 @@ surface, and renderer host/resource lifecycle.
   - `lighting.ts` owns bounded Three light realization, requested-shadow status,
     and typed lighting-policy failures; `browser-surface.ts` owns the independent
     world/viewmodel neutral rigs and WebGL shadow-map switch.
+  - `view-composition.ts` owns atomic Three camera/target/presentation realization,
+    stale target revision guards, deterministic view order, physical-pixel viewport
+    conversion, and target/presentation disposal. It is backend-private.
 - [`render/packages/renderer-host/src`](../../render/packages/renderer-host/src)
   - `animated-mesh-capture.ts` owns deterministic PNG/contact-sheet encoding
     over an already-mounted `RendererSurface`; it does not load assets or own a
@@ -55,6 +58,9 @@ surface, and renderer host/resource lifecycle.
   [`verify-render-consumer.sh`](../../scripts/verify-render-consumer.sh).
 - Browser, webview, and headless hosts compose over the same explicit retained
   border without owning game state.
+- `RendererSurface.configureViews` publishes a complete immutable composition;
+  `viewCompositionReadout` exposes target freshness and resource counts without
+  exposing WebGL, Three textures, or a CPU readback path.
 - Generic static meshes bind the renderer-neutral `uv` attribute directly to
   the resolved material texture. Whole-texture and atlas-region voxel sampling
   remain an explicit voxel-surface specialization; ordinary textured meshes do

@@ -8,6 +8,7 @@ import {
   type MeshPayloadDescriptor,
   type PresentationFrameDiff,
   type RenderFrameDiff,
+  type RendererViewComposition,
 } from '@rusty-engine/render-contracts';
 import {
   RendererAnimationHost,
@@ -118,6 +119,19 @@ interface BrowserProof {
     readonly pixels: readonly (readonly [number, number, number, number])[];
   }[];
   readonly voxelSurfaceSpecializations: readonly unknown[];
+  readonly viewComposition: {
+    readonly cameraPosition: readonly [number, number, number] | null;
+    readonly disposedResources: { readonly presentationCount: number; readonly targetCount: number };
+    readonly drawCallCount: number;
+    readonly frameReplacementApplied: boolean;
+    readonly invalidApplied: boolean;
+    readonly narrowPixels: readonly (readonly [number, number, number, number])[];
+    readonly pixels: readonly (readonly [number, number, number, number])[];
+    readonly readout: ReturnType<RendererSurface['viewCompositionReadout']>;
+    readonly resizeApplied: boolean;
+    readonly staleApplied: boolean;
+    readonly staleDiagnostic: string | null;
+  };
 }
 
 declare global {
@@ -632,6 +646,56 @@ async function main(): Promise<void> {
     return [...pixel] as [number, number, number, number];
   });
 
+  const compositionCanvas = document.createElement('canvas');
+  compositionCanvas.width = 320;
+  compositionCanvas.height = 200;
+  compositionCanvas.style.cssText = 'width:320px;height:200px';
+  document.body.appendChild(compositionCanvas);
+  const compositionSurface = mountRendererSurface(compositionCanvas, {
+    autoStart: false,
+    clearColor: 0x020408,
+    controls: { enabled: false, initialPosition: [0, 2, 8] },
+    frame: viewCompositionFrame(),
+    pixelRatio: 1,
+    viewComposition: viewComposition(1, 128),
+  });
+  const compositionSubmission = compositionSurface.renderOnce(1);
+  const compositionContext = compositionCanvas.getContext('webgl2')
+    ?? compositionCanvas.getContext('webgl');
+  if (compositionContext === null) throw new Error('view composition WebGL context is unavailable');
+  const pixels = readCompositionPixels(compositionContext);
+  compositionSurface.start();
+  compositionSurface.stop();
+  const compositionFrameReplacement = compositionSurface.applyFrame({
+    schemaVersion: 1,
+    ops: [{
+      op: 'update',
+      handle: renderHandle(1),
+      transform: identity([-2, 1, -5], [3, 3, 3]),
+      material: null,
+      visible: null,
+      metadata: null,
+    }],
+  });
+  const resizeReceipt = compositionSurface.configureViews(viewComposition(2, 192));
+  compositionSurface.renderOnce(2);
+  const staleReceipt = compositionSurface.configureViews(viewComposition(1, 128));
+  const invalidComposition = structuredClone(viewComposition(2, 192)) as unknown as {
+    presentations: Array<{ destination: { kind: string } }>;
+  };
+  invalidComposition.presentations[0]!.destination.kind = 'offscreen';
+  const invalidReceipt = compositionSurface.configureViews(
+    invalidComposition as unknown as RendererViewComposition,
+  );
+  compositionCanvas.style.width = '160px';
+  compositionCanvas.style.height = '100px';
+  compositionSurface.renderOnce(3);
+  const narrowPixels = readCompositionPixels(compositionContext);
+  const compositionReadout = compositionSurface.viewCompositionReadout();
+  compositionSurface.dispose();
+  const disposedResources = compositionSurface.viewCompositionReadout().resources;
+  compositionCanvas.remove();
+
   const context = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
   if (context === null || context.isContextLost()) throw new Error('real WebGL context is unavailable');
   const pick = surface.pick({ ray: { kind: 'viewport', point: [0, 0] }, maxDistance: 20 });
@@ -732,6 +796,20 @@ async function main(): Promise<void> {
     voxelFrameSwapApplied: voxelFrameSwap.applied,
     voxelSurfaceAtlasPixels,
     voxelSurfaceSpecializations,
+    viewComposition: {
+      cameraPosition: compositionReadout.cameras
+        .find((camera) => camera.id === 'camera.overview')?.pose.position ?? null,
+      disposedResources,
+      drawCallCount: compositionSubmission.statistics.drawCallCount.value ?? -1,
+      frameReplacementApplied: compositionFrameReplacement.applied,
+      invalidApplied: invalidReceipt.applied,
+      narrowPixels,
+      pixels,
+      readout: compositionReadout,
+      resizeApplied: resizeReceipt.applied,
+      staleApplied: staleReceipt.applied,
+      staleDiagnostic: staleReceipt.diagnostics[0]?.code ?? null,
+    },
   };
   window.__rustyRenderProof = proof;
   window.__rustyRenderBackendSnapshot = () => surface.snapshot();
@@ -1422,6 +1500,98 @@ function staticMeshTextureBrowserFrame(): RenderFrameDiff {
       },
     ],
   };
+}
+
+function viewComposition(revision: number, targetSize: number): RendererViewComposition {
+  return {
+    schemaVersion: 1,
+    cameras: [
+      {
+        id: 'camera.front-inset',
+        pose: { position: [0, 2, 8], pitchDegrees: -8, yawDegrees: 0 },
+        projection: { kind: 'perspective', fovYDegrees: 55, near: 0.1, far: 50 },
+      },
+      {
+        id: 'camera.overview',
+        pose: { position: [0, 3, revision === 1 ? 8 : 7.5], pitchDegrees: -10, yawDegrees: 0 },
+        projection: { kind: 'perspective', fovYDegrees: 58, near: 0.1, far: 50 },
+      },
+    ],
+    targets: [{
+      id: 'target.overview', revision, width: targetSize, height: targetSize,
+      color: 'rgba8_srgb', depth: 'depth24', sampling: 'nearest',
+    }],
+    views: [
+      {
+        id: 'view.front-inset', cameraId: 'camera.front-inset', order: 10,
+        target: { kind: 'primary' },
+        viewport: { x: 0.03, y: 0.04, width: 0.34, height: 0.35 },
+      },
+      {
+        id: 'view.overview', cameraId: 'camera.overview', order: 20,
+        target: { kind: 'offscreen', targetId: 'target.overview', targetRevision: revision },
+        viewport: { x: 0, y: 0, width: 1, height: 1 },
+      },
+    ],
+    presentations: [{
+      id: 'presentation.overview', sourceTargetId: 'target.overview',
+      sourceTargetRevision: revision, order: 30,
+      destination: {
+        kind: 'primary',
+        viewport: { x: 0.58, y: 0.52, width: 0.38, height: 0.42 },
+      },
+    }],
+  };
+}
+
+function viewCompositionFrame(): RenderFrameDiff {
+  return {
+    schemaVersion: 1,
+    ops: [
+      {
+        op: 'create', handle: renderHandle(1), parent: null,
+        node: {
+          geometry: { kind: 'cube' },
+          material: { color: [1, 0.04, 0.02, 1], wireframe: false },
+          transform: identity([-2, 1, -5], [3, 3, 3]), visible: true, layer: 'scene',
+          metadata: metadata('composition-red'),
+        },
+      },
+      {
+        op: 'create', handle: renderHandle(2), parent: null,
+        node: {
+          geometry: { kind: 'cube' },
+          material: { color: [0.02, 1, 0.04, 1], wireframe: false },
+          transform: identity([2, 1, -5], [3, 3, 3]), visible: true, layer: 'scene',
+          metadata: metadata('composition-green'),
+        },
+      },
+    ],
+  };
+}
+
+function readCompositionPixels(
+  context: WebGLRenderingContext | WebGL2RenderingContext,
+): readonly (readonly [number, number, number, number])[] {
+  const positions = [
+    [0.69, 0.71],
+    [0.8, 0.71],
+    [0.35, 0.45],
+    [0.55, 0.45],
+  ] as const;
+  return positions.map(([x, y]) => {
+    const pixel = new Uint8Array(4);
+    context.readPixels(
+      Math.floor(context.drawingBufferWidth * x),
+      Math.floor(context.drawingBufferHeight * y),
+      1,
+      1,
+      context.RGBA,
+      context.UNSIGNED_BYTE,
+      pixel,
+    );
+    return [...pixel] as [number, number, number, number];
+  });
 }
 
 function inspectionFrame(): RenderFrameDiff {

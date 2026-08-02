@@ -7,6 +7,7 @@ import type {
   RenderFrameDiff,
   RenderHandle,
   RenderLayer,
+  RendererViewComposition,
 } from '@rusty-engine/render-contracts';
 import {
   RenderProjection,
@@ -157,6 +158,7 @@ export interface RendererSurfaceOptions {
   readonly pixelRatio?: number;
   readonly presentationHosts?: RendererPresentationHostSet;
   readonly projection?: PerspectiveProjection;
+  readonly viewComposition?: RendererViewComposition;
 }
 
 export interface RendererSurfaceMeshBufferSource {
@@ -360,6 +362,10 @@ export interface RendererSurface {
   readonly cameraProjection: () => PerspectiveProjection;
   readonly inputReadout: () => RendererSurfaceInputReadout;
   readonly lightingReadout: () => RendererSurfaceLightingReadout;
+  readonly configureViews: (
+    composition: RendererViewComposition,
+  ) => ReturnType<RendererBrowserSurface['configureViews']>;
+  readonly viewCompositionReadout: () => ReturnType<RendererBrowserSurface['viewCompositionReadout']>;
   readonly lockPointer: () => void;
   readonly movementState: () => RendererSurfaceMovementState;
   readonly pick: (request: RendererSurfacePickRequest) => RendererSurfacePickReceipt;
@@ -452,6 +458,8 @@ function mountPreparedRendererSurface(
       ...(options.pixelRatio === undefined ? {} : { pixelRatio: options.pixelRatio }),
       lighting,
       frame,
+      ...(options.viewComposition === undefined
+        ? {} : { viewComposition: options.viewComposition }),
     });
   } catch (cause) {
     controls.dispose();
@@ -662,6 +670,12 @@ function mountPreparedRendererSurface(
     cameraProjection: backendSurface.cameraProjection,
     inputReadout: controls.inputReadout,
     lightingReadout: backendSurface.lightingReadout,
+    configureViews: (composition) => {
+      const receipt = backendSurface.configureViews(composition);
+      if (receipt.applied) requestAutomaticSubmission();
+      return receipt;
+    },
+    viewCompositionReadout: backendSurface.viewCompositionReadout,
     lockPointer: controls.lockPointer,
     movementState: controls.movementState,
     pick: (request) => {

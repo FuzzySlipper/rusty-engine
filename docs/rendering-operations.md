@@ -125,6 +125,31 @@ disposable offsets as ordinary retained diffs. Apply those frames through `Rende
 Camera synchronization, `start`, `stop`, `renderOnce`, resize, reset, picking, and `dispose` stay on
 that one surface. A rejected frame leaves both the neutral projection and backend unchanged.
 
+### Bounded multi-view composition
+
+`RendererSurfaceOptions.viewComposition` and `surface.configureViews(...)` accept schema-1
+renderer-neutral camera, target, view, and presentation descriptors. The provider admits at most
+four cameras, four named targets, eight views, four target presentations, 2,048 pixels per target
+dimension, and 8,388,608 aggregate target pixels. A target revision is a caller-owned monotonic
+resource identity: changing dimensions, format, depth, or sampling requires a higher revision, and
+an old revision cannot be recreated after removal.
+
+Each submission renders offscreen producers first, then primary views and target presentations by
+`order` and stable identifier. Every view observes the same retained scene snapshot. A presentation
+samples its target directly on the GPU into a normalized lower-left primary viewport; the public
+surface exposes only an immutable status/resource readout, never a Three texture, WebGL framebuffer,
+or CPU pixel buffer. A target that has not yet rendered reports `never_rendered`; a refreshed target
+reports the exact surface submission that last produced it. Target-to-target presentation is
+rejected to keep feedback unsupported and explicit.
+
+Configuration validation and resource allocation complete before publication. Invalid identities,
+non-finite camera facts, duplicate producers, stale revisions, quota overflow, and allocation
+failure return a typed non-applying receipt and retain the previous composition. Resize uses the
+surface's physical backing-buffer coordinates after accounting for the backend pixel ratio.
+Replacing or removing a target disposes its GPU resource; disposing the surface releases every
+target and presentation while preserving the one caller-owned start/stop/render loop. Omission
+retains the compatible single-camera behavior.
+
 ## Reference consumer evidence
 
 `rusty-engine-demo` commit `42f428b0ee3f47de94d4372f512978f587d729f7` consumes that exact
@@ -377,6 +402,10 @@ claim. Downstream Den task #6378 and its checked evidence artifact own the produ
   `b1f0415af6266783246371d227a2272de7d9f0d6`. Its clean full gate proves a Rust-projected torch
   count equals the public retained-light readout and a real Chromium framebuffer has localized warm
   falloff; the consumer retains placement and gameplay meaning.
+- Multi-view composition currently supports one RGBA8 sRGB color policy, optional depth24, nearest
+  or linear sampling, and GPU presentation onto the primary surface. It does not expose arbitrary
+  render-target materials, CPU readback, target feedback, cubemaps, post-processing, gameplay
+  minimap discovery, or another render scheduler.
 - Animation is deterministic controller/playback presentation, not skeletal state authority.
   Sampled cues cannot mutate gameplay directly.
 - DOM billboards, particle billboards, and telemetry are default host realizations. A consumer may

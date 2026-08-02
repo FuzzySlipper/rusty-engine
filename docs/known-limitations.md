@@ -5,6 +5,23 @@ architecture boundaries are stated separately so agents do not “fix” them by
 introducing a second authority. Product-specific limitations belong to their
 downstream repositories.
 
+## Multi-view render-target composition
+
+- **Status:** implemented-bounded
+- **Affected surface:** `render-contracts`, `renderer-three`, and `renderer-host`
+- **Limitation:** One surface can render bounded perspective or orthographic views into the primary
+  surface or RGBA8 sRGB named targets and can present those targets back onto the primary surface.
+  Supported target policy is optional depth24 plus nearest or linear sampling. There is no public
+  CPU readback, target-to-target feedback, cubemap, arbitrary target material, post-processing
+  graph, cross-backend target interchange, or gameplay minimap/discovery policy.
+- **Detection:** Inspect `RendererSurface.viewCompositionReadout()` and run
+  `./scripts/verify-render.sh`; contract and backend tests cover quotas, immutable atomic
+  replacement, stale revisions, allocation failure, and disposal, while the real Chromium proof
+  inspects distinct primary and offscreen pixels at desktop and narrow sizes.
+- **Follow-up:** Add another target format or consumption mode only with a concrete consumer and a
+  bounded renderer-neutral contract.
+- **Last reviewed:** 2026-08-02 / codex
+
 ## Browser lighting and shadows
 
 - **Status:** implemented-bounded

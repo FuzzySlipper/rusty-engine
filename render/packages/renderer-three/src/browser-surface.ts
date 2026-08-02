@@ -11,6 +11,7 @@ import {
   type RenderLayer,
   type RenderNode,
   type PerspectiveProjection,
+  type RendererViewComposition,
   type Transform,
 } from '@rusty-engine/render-contracts';
 import {
@@ -45,6 +46,12 @@ import {
 import { classifyGpuSubmissionRendererName } from './gpu-submission-class.js';
 import { automaticSubmissionCapacity } from './gpu-submission-capacity.js';
 import { resolveRendererPixelRatio } from './software-renderer-resolution.js';
+import {
+  RendererViewCompositionBackend,
+  RendererViewCompositionPolicyError,
+  type RendererViewCompositionReadout,
+  type RendererViewCompositionReceipt,
+} from './view-composition.js';
 
 export interface ProjectedThreeRenderResult {
   readonly projection: RenderProjection;
@@ -63,6 +70,7 @@ export interface RendererBrowserSurfaceOptions {
   readonly textureResourceSource?: TextureResourceSource;
   readonly pixelRatio?: number;
   readonly lighting?: RendererBrowserSurfaceLightingOptions;
+  readonly viewComposition?: RendererViewComposition;
 }
 
 export type RendererDefaultLightingMode = 'neutral' | 'disabled';
@@ -199,6 +207,8 @@ export interface RendererBrowserSurface {
   readonly cameraPose: () => RendererBrowserSurfaceCameraPose;
   readonly cameraProjection: () => PerspectiveProjection;
   readonly lightingReadout: () => RendererBrowserSurfaceLightingReadout;
+  readonly configureViews: (composition: RendererViewComposition) => RendererViewCompositionReceipt;
+  readonly viewCompositionReadout: () => RendererViewCompositionReadout;
   readonly projectWorldPoint: (
     position: readonly [number, number, number],
   ) => RendererBrowserSurfaceWorldProjection;
@@ -358,7 +368,20 @@ export function mountRendererBrowserSurface(
   let automaticSubmissionSourceTimeMs: number | null = null;
   let lastRenderTimeMs: number | null = null;
   let logicalViewport = { width: 0, height: 0 };
+  let submissionSequence = 0;
   let disposed = false;
+  const viewComposition = new RendererViewCompositionBackend(webgl, renderer);
+  if (options.viewComposition !== undefined) {
+    const receipt = viewComposition.configure(options.viewComposition);
+    if (!receipt.applied) {
+      viewComposition.dispose();
+      webgl.dispose();
+      renderer.dispose();
+      throw new RendererViewCompositionPolicyError(
+        receipt.diagnostics[0]?.message ?? 'view composition was rejected',
+      );
+    }
+  }
 
   const setCameraPose = (
     pose: RendererBrowserSurfaceCameraPose,
@@ -425,6 +448,8 @@ export function mountRendererBrowserSurface(
         renderer,
         deltaSeconds,
       );
+      submissionSequence += 1;
+      viewComposition.render(submissionSequence, canvas.width, canvas.height);
     } catch (cause) {
       gpuSubmissionDuty.aborted();
       throw cause;
@@ -505,6 +530,7 @@ export function mountRendererBrowserSurface(
     stop();
     gpuSubmissionFence.dispose();
     gpuSubmissionDuty.dispose();
+    viewComposition.dispose();
     webgl.dispose();
     renderer.dispose();
     disposed = true;
@@ -538,6 +564,7 @@ export function mountRendererBrowserSurface(
     sampleAnimatedMesh: (handle, clipId, normalizedTime) =>
       renderer.sampleAnimatedMesh(handle, clipId, normalizedTime),
     applyFrame: (nextFrame) => renderer.applyFrame(nextFrame),
+    configureViews: (composition) => viewComposition.configure(composition),
     cameraPose: () => currentCameraPose,
     cameraProjection: () => cameraProjection,
     lightingReadout: () => {
@@ -560,6 +587,7 @@ export function mountRendererBrowserSurface(
         retainedLights,
       });
     },
+    viewCompositionReadout: () => viewComposition.readout(),
     projectWorldPoint,
     pick: (request) => pickProjectedObject(renderer, camera, raycaster, center, request),
     snapshot: () => renderer.snapshot(),

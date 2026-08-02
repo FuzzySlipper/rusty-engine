@@ -595,6 +595,19 @@ state and reports each request as active, disabled, or unsupported. Color, inten
 and active-shadow ceilings are provider facts. Games still own artistic values and when their Rust
 authority emits or replaces light descriptors.
 
+The same single surface optionally owns one bounded renderer-neutral view composition. Stable
+camera descriptors select finite poses and perspective or orthographic projections; named render
+targets select exact dimensions, RGBA8 sRGB color, optional depth, sampling, and a caller-owned
+monotonic revision. Ordered views render the already-retained world scene either into the primary
+surface or a named target. Ordered presentations can sample a named target into a normalized
+primary-surface viewport without CPU readback or exposing a Three texture. Configuration is cloned,
+deeply frozen, fully validated, and GPU resources are prepared before one atomic publication.
+Duplicate producers, stale target revisions, feedback destinations, allocation failure, and quota
+failure leave the prior composition current. Target replacement and surface disposal release the
+backend resources, while an omitted composition preserves the original single-camera path and
+submission loop. Cameras, viewports, targets, and their readout are presentation facts only; they
+do not own visibility, discovery, navigation, input, or another retained scene.
+
 Rusty Roguelike is the first exact public consumer of that policy at
 `e88856aca2b07212e79ca8a9a8cdc904cb49bd61`, pinning Engine
 `b1f0415af6266783246371d227a2272de7d9f0d6`. Its Rust projection owns authored torch facts; the
@@ -619,7 +632,8 @@ The boundary is layered deliberately:
 - ordinary Rust crates own host-neutral state, services, authoring, persistence, and
   renderer-neutral projection;
 - `@rusty-engine/render-contracts` and `@rusty-engine/render-projection` own strict data decoding and
-  retained projection without Three, DOM, browser lifecycle, or HTTP loading;
+  retained projection plus the bounded multi-view descriptor without Three, DOM, browser lifecycle,
+  or HTTP loading;
 - `@rusty-engine/renderer-three` owns Three/WebGL realization. Its current browser-surface modules
   are explicit backend adapters, not a renderer-neutral or Engine-wide platform API;
 - `@rusty-engine/renderer-host` owns the current browser/webview lifecycle, DOM overlays, WebAudio,
