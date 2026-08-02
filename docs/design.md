@@ -595,6 +595,13 @@ state and reports each request as active, disabled, or unsupported. Color, inten
 and active-shadow ceilings are provider facts. Games still own artistic values and when their Rust
 authority emits or replaces light descriptors.
 
+Rusty Roguelike is the first exact public consumer of that policy at
+`e88856aca2b07212e79ca8a9a8cdc904cb49bd61`, pinning Engine
+`b1f0415af6266783246371d227a2272de7d9f0d6`. Its Rust projection owns authored torch facts; the
+browser selects disabled world defaults, retains the neutral viewmodel default, and proves that the
+retained-light count exactly matches Rust projection while a real framebuffer shows localized warm
+falloff. This is consumer evidence for the generic mechanism, not Engine ownership of torch policy.
+
 External consumers pin all four render packages to one exact public Engine commit. Their package
 preparation and peer graph are independently checked in a clean temporary consumer, so the shared
 boundary is not a workspace-only convention. Operational commands, CI ownership, and explicit

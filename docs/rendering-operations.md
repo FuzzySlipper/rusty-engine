@@ -372,6 +372,11 @@ claim. Downstream Den task #6378 and its checked evidence artifact own the produ
 - Shadows remain the ordinary Three shadow-map implementation over retained scene meshes and
   directional/point/spot lights. Ambient requests are explicitly unsupported, and no automatic light
   placement, artistic exposure policy, or gameplay lighting is inferred.
+- Exact downstream lighting certification is owned by Rusty Roguelike commit
+  `e88856aca2b07212e79ca8a9a8cdc904cb49bd61`, which pins Engine
+  `b1f0415af6266783246371d227a2272de7d9f0d6`. Its clean full gate proves a Rust-projected torch
+  count equals the public retained-light readout and a real Chromium framebuffer has localized warm
+  falloff; the consumer retains placement and gameplay meaning.
 - Animation is deterministic controller/playback presentation, not skeletal state authority.
   Sampled cues cannot mutate gameplay directly.
 - DOM billboards, particle billboards, and telemetry are default host realizations. A consumer may
