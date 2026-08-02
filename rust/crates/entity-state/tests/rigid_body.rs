@@ -1,10 +1,11 @@
 use core_ids::EntityId;
 use core_math::Vec3;
 use entity_state::{
-    decode_snapshot, encode_snapshot, ComponentPersistence, EntityAuthoringError,
-    EntityAuthoringService, EntityDefinition, EntityState, RigidBodyComponent, RigidBodyShape,
-    RigidBodyStatePublicationError, RigidBodyStateReplacement, RigidBodyValidationError,
-    TransformComponent, RIGID_BODY_CODEC_VERSION, RIGID_BODY_COMPONENT_TYPE_ID,
+    decode_snapshot, encode_snapshot, validate_rigid_body, ComponentPersistence,
+    EntityAuthoringError, EntityAuthoringService, EntityDefinition, EntityState,
+    KinematicComponent, RigidBodyComponent, RigidBodyShape, RigidBodyStatePublicationError,
+    RigidBodyStateReplacement, RigidBodyValidationError, TransformComponent, MAX_RIGID_BODY_MASS,
+    RIGID_BODY_CODEC_VERSION, RIGID_BODY_COMPONENT_TYPE_ID,
 };
 
 #[test]
@@ -82,6 +83,106 @@ fn invalid_rigid_body_rejects_without_mutation() {
     ));
     assert_eq!(state.revision(), revision_before);
     assert_eq!(state.rigid_body(entity), None);
+}
+
+#[test]
+fn rigid_body_mass_is_strictly_positive_and_bounded() {
+    let shape = RigidBodyShape::Sphere { radius: 1.0 };
+    for mass in [0.0, -1.0, f32::INFINITY, f32::NAN] {
+        assert_eq!(
+            validate_rigid_body(&RigidBodyComponent::dynamic(shape, mass)),
+            Err(RigidBodyValidationError::InvalidMass)
+        );
+    }
+    assert!(validate_rigid_body(&RigidBodyComponent::dynamic(shape, MAX_RIGID_BODY_MASS)).is_ok());
+    assert_eq!(
+        validate_rigid_body(&RigidBodyComponent::dynamic(
+            shape,
+            MAX_RIGID_BODY_MASS + 1.0
+        )),
+        Err(RigidBodyValidationError::InvalidMass)
+    );
+
+    let entity = EntityId::new(73);
+    let mut state =
+        EntityState::from_definitions([
+            EntityDefinition::new(entity, "massless crate").with_transform(Vec3::ZERO)
+        ])
+        .unwrap();
+    let bytes_before = encode_snapshot(&state).unwrap();
+    let slot = state
+        .component_revision::<RigidBodyComponent>(entity)
+        .unwrap();
+    assert!(matches!(
+        EntityAuthoringService.attach_component(
+            &mut state,
+            slot,
+            entity,
+            RigidBodyComponent::dynamic(shape, 0.0),
+        ),
+        Err(EntityAuthoringError::InvalidComponent { reason, .. })
+            if reason == RigidBodyValidationError::InvalidMass.code()
+    ));
+    assert_eq!(encode_snapshot(&state).unwrap(), bytes_before);
+}
+
+#[test]
+fn kinematic_and_dynamic_rigid_body_components_conflict_without_mutation() {
+    let kinematic_entity = EntityId::new(74);
+    let mut kinematic_state =
+        EntityState::from_definitions([EntityDefinition::new(kinematic_entity, "kinematic mover")
+            .with_transform(Vec3::ZERO)
+            .with_kinematic(Vec3::new(0.5, 0.5, 0.5), Vec3::ZERO)])
+        .unwrap();
+    let bytes_before = encode_snapshot(&kinematic_state).unwrap();
+    let body_slot = kinematic_state
+        .component_revision::<RigidBodyComponent>(kinematic_entity)
+        .unwrap();
+    assert!(matches!(
+        EntityAuthoringService.attach_component(
+            &mut kinematic_state,
+            body_slot,
+            kinematic_entity,
+            RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 1.0),
+        ),
+        Err(EntityAuthoringError::ComponentInUse { reason, .. })
+            if reason == "kinematic component conflicts with dynamic rigid-body motion"
+    ));
+    assert_eq!(encode_snapshot(&kinematic_state).unwrap(), bytes_before);
+    assert!(kinematic_state.rigid_body(kinematic_entity).is_none());
+
+    let dynamic_entity = EntityId::new(75);
+    let body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 1.0);
+    let mut dynamic_state =
+        EntityState::from_definitions([
+            EntityDefinition::new(dynamic_entity, "dynamic mover").with_transform(Vec3::ZERO)
+        ])
+        .unwrap();
+    let body_slot = dynamic_state
+        .component_revision::<RigidBodyComponent>(dynamic_entity)
+        .unwrap();
+    EntityAuthoringService
+        .attach_component(&mut dynamic_state, body_slot, dynamic_entity, body)
+        .unwrap();
+    let bytes_before = encode_snapshot(&dynamic_state).unwrap();
+    let kinematic_slot = dynamic_state
+        .component_revision::<KinematicComponent>(dynamic_entity)
+        .unwrap();
+    assert!(matches!(
+        EntityAuthoringService.attach_component(
+            &mut dynamic_state,
+            kinematic_slot,
+            dynamic_entity,
+            KinematicComponent {
+                half_extents: Vec3::new(0.5, 0.5, 0.5),
+                velocity: Vec3::ZERO,
+            },
+        ),
+        Err(EntityAuthoringError::ComponentInUse { reason, .. })
+            if reason == "dynamic rigid-body component conflicts with kinematic motion"
+    ));
+    assert_eq!(encode_snapshot(&dynamic_state).unwrap(), bytes_before);
+    assert!(dynamic_state.kinematic(dynamic_entity).is_none());
 }
 
 #[test]

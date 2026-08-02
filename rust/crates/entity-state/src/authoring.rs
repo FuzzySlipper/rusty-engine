@@ -12,7 +12,7 @@ use crate::activation::{
 use crate::component::{ComponentRevision, ComponentTypeId, EntityComponent};
 use crate::model::{
     ControllerComponent, EntityDefinition, EntityDefinitionError, EntityLifecycle, EntityState,
-    KinematicComponent, TransformComponent,
+    KinematicComponent, RigidBodyComponent, TransformComponent,
 };
 use crate::relationship::{reroot_transform_children, RelationshipError};
 
@@ -565,6 +565,22 @@ fn validate_component<T: EntityComponent>(
             entity,
             component: type_id.clone(),
             reason: "transform component is absent".to_string(),
+        });
+    }
+    if TypeId::of::<T>() == TypeId::of::<KinematicComponent>() && state.rigid_body(entity).is_some()
+    {
+        return Err(EntityAuthoringError::ComponentInUse {
+            entity,
+            component: type_id.clone(),
+            reason: "dynamic rigid-body component conflicts with kinematic motion",
+        });
+    }
+    if TypeId::of::<T>() == TypeId::of::<RigidBodyComponent>() && state.kinematic(entity).is_some()
+    {
+        return Err(EntityAuthoringError::ComponentInUse {
+            entity,
+            component: type_id.clone(),
+            reason: "kinematic component conflicts with dynamic rigid-body motion",
         });
     }
     if TypeId::of::<T>() == TypeId::of::<TransformComponent>()

@@ -67,7 +67,7 @@ pub fn validate_rigid_body(value: &RigidBodyComponent) -> Result<(), RigidBodyVa
     if !shape_is_valid(value.shape) {
         return Err(RigidBodyValidationError::InvalidShape);
     }
-    if !value.mass.is_finite() || !(0.0..=MAX_RIGID_BODY_MASS).contains(&value.mass) {
+    if !value.mass.is_finite() || value.mass <= 0.0 || value.mass > MAX_RIGID_BODY_MASS {
         return Err(RigidBodyValidationError::InvalidMass);
     }
     if value.inertia != RigidBodyInertiaPolicy::DeriveFromShapeAndMass {
