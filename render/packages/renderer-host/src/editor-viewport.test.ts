@@ -368,12 +368,28 @@ void test('one degraded resource channel leaves healthy runtime and overlay proj
   assert.equal(viewport.readout().diagnostics.at(-1)?.channel, 'authored');
 });
 
+void test('editor viewport delegates world projection to the exact mounted backend camera', () => {
+  const backend = new FakeEditorViewportBackend();
+  const viewport = createRendererEditorViewportWithBackend(backend, { autoStart: false });
+
+  assert.deepEqual(viewport.projectWorldPoint([7, 3, -2]), {
+    xPixels: 107,
+    yPixels: 203,
+    depth: 0.5,
+    distance: 9,
+    insideViewport: true,
+    occluded: false,
+  });
+  assert.deepEqual(backend.projectedPoints, [[7, 3, -2]]);
+});
+
 class FakeEditorViewportBackend implements RendererEditorViewportBackendPort {
   readonly frames = new Map<string, RenderFrameDiff>();
   readonly cameras: unknown[] = [];
   readonly sizes: unknown[] = [];
   readonly renderTimes: Array<number | undefined> = [];
   readonly pickRequests: Array<{ readonly point: readonly [number, number] }> = [];
+  readonly projectedPoints: Array<readonly [number, number, number]> = [];
   grid: EditorGridProjectionReadout | null = null;
   starts = 0;
   stops = 0;
@@ -428,6 +444,18 @@ class FakeEditorViewportBackend implements RendererEditorViewportBackendPort {
   pick(request: { readonly point: readonly [number, number] }): ReturnType<RendererEditorViewportBackendPort['pick']> {
     this.pickRequests.push(structuredClone(request));
     return this.pickResult;
+  }
+
+  projectWorldPoint(position: readonly [number, number, number]) {
+    this.projectedPoints.push([...position]);
+    return {
+      xPixels: 100 + position[0],
+      yPixels: 200 + position[1],
+      depth: 0.5,
+      distance: 9,
+      insideViewport: true,
+      occluded: false as const,
+    };
   }
 
   renderOnce(timeMs?: number): ReturnType<RendererEditorViewportBackendPort['renderOnce']> {

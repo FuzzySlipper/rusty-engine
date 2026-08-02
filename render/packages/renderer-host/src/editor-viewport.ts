@@ -215,6 +215,15 @@ export interface RendererEditorViewportReadout {
   readonly viewportHash: string;
 }
 
+export interface RendererEditorViewportWorldProjection {
+  readonly xPixels: number;
+  readonly yPixels: number;
+  readonly depth: number;
+  readonly distance: number;
+  readonly insideViewport: boolean;
+  readonly occluded: false;
+}
+
 export interface RendererEditorViewport {
   readonly kind: 'rusty_renderer_editor_viewport.v1';
   readonly channels: Readonly<Record<RendererEditorViewportChannel, RendererEditorViewportChannelHandle>>;
@@ -222,6 +231,10 @@ export interface RendererEditorViewport {
   readonly dispose: () => void;
   readonly grid: () => EditorGridProjectionReadout | null;
   readonly pick: (request: RendererEditorViewportPickRequest) => RendererEditorViewportPickReceipt;
+  /** Project a retained world point through the exact mounted backend camera. */
+  readonly projectWorldPoint: (
+    position: readonly [number, number, number],
+  ) => RendererEditorViewportWorldProjection;
   readonly readout: () => RendererEditorViewportReadout;
   /** Submit one frame and return renderer-neutral statistics for that submission. */
   readonly renderOnce: (timeMs?: number) => RendererSurfaceStatisticsSample;
@@ -262,6 +275,9 @@ export interface RendererEditorViewportBackendPort {
   readonly dispose: () => void;
   readonly gridReadout: () => EditorGridProjectionReadout | null;
   readonly pick: (request: BackendPickRequest) => BackendPickReceipt;
+  readonly projectWorldPoint?: (
+    position: readonly [number, number, number],
+  ) => RendererEditorViewportWorldProjection;
   readonly renderOnce: (timeMs?: number) => RendererSurfaceStatisticsInput;
   readonly sampleAnimatedMesh: (
     channel: RendererEditorViewportChannel,
@@ -519,6 +535,13 @@ export function createRendererEditorViewportWithBackend(
       }
     },
     pick: (request) => pickViewport(status, size, states, backend, diagnostics, request),
+    projectWorldPoint: (position) => {
+      if (status === 'disposed') throw new Error('editor viewport is disposed');
+      if (backend.projectWorldPoint === undefined) {
+        throw new Error('editor viewport backend does not expose world projection');
+      }
+      return backend.projectWorldPoint(position);
+    },
     sampleAnimatedMesh: (channel, handle, clipId, normalizedTime) => {
       if (status === 'disposed') throw new Error('editor viewport is disposed');
       const state = requireState(states, channel);

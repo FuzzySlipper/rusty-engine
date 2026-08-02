@@ -92,10 +92,22 @@ export interface RendererEditorBackendSubmissionStatistics
   readonly triangleCount: number;
 }
 
+export interface RendererEditorBackendWorldProjection {
+  readonly xPixels: number;
+  readonly yPixels: number;
+  readonly depth: number;
+  readonly distance: number;
+  readonly insideViewport: boolean;
+  readonly occluded: false;
+}
+
 export interface RendererEditorBackend {
   readonly dispose: () => void;
   readonly gridReadout: () => EditorGridProjectionReadout | null;
   readonly pick: (request: RendererEditorBackendPickRequest) => RendererEditorBackendPickReceipt;
+  readonly projectWorldPoint: (
+    position: readonly [number, number, number],
+  ) => RendererEditorBackendWorldProjection;
   readonly renderOnce: (timeMs?: number) => RendererEditorBackendSubmissionStatistics;
   readonly sampleAnimatedMesh: (
     channel: RendererEditorBackendChannel,
@@ -287,6 +299,21 @@ export function mountRendererEditorBackend(
     gridReadout: () => gridProjection.readout(),
     resize,
     pick: (request) => pickAcrossChannels(channels, camera, raycaster, pickPoint, request),
+    projectWorldPoint: (position) => {
+      requireActive(disposed);
+      const world = new THREE.Vector3(...position);
+      const projected = world.clone().project(camera);
+      return {
+        xPixels: ((projected.x + 1) / 2) * size.width,
+        yPixels: ((1 - projected.y) / 2) * size.height,
+        depth: Math.max(0, Math.min(1, (projected.z + 1) / 2)),
+        distance: camera.position.distanceTo(world),
+        insideViewport: projected.x >= -1 && projected.x <= 1
+          && projected.y >= -1 && projected.y <= 1
+          && projected.z >= -1 && projected.z <= 1,
+        occluded: false,
+      };
+    },
     sampleAnimatedMesh: (channel, handle, clipId, normalizedTime) =>
       channels.renderer(channel).sampleAnimatedMesh(handle, clipId, normalizedTime),
     setAnimatedMeshPlayback: (channel, handle, playback) => {

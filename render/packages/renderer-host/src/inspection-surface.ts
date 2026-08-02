@@ -163,6 +163,8 @@ export interface RendererInspectionSurface {
   readonly focusTarget: (target: InspectionVector) => boolean;
   readonly grid: () => EditorGridProjectionReadout | null;
   readonly pick: (request: RendererEditorViewportPickRequest) => RendererEditorViewportPickReceipt;
+  /** Project a world point through the exact mounted editor backend camera. */
+  readonly projectWorldPoint: RendererEditorViewport['projectWorldPoint'];
   readonly readout: () => RendererInspectionSurfaceReadout;
   readonly renderOnce: (timeMs?: number) => void;
   /** Deterministically sample an authored animated mesh without mutating project state. */
@@ -454,6 +456,7 @@ export function createRendererInspectionSurfaceWithViewport(
     focusTarget: (target) => controls.focusTarget(target),
     grid: () => viewport.grid(),
     pick: (request) => viewport.pick(request),
+    projectWorldPoint: (position) => viewport.projectWorldPoint(position),
     readout: () => {
       const viewportReadout = viewport.readout();
       const authored = viewportReadout.channels.find((channel) => channel.channel === 'authored');

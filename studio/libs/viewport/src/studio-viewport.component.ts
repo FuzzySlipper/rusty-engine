@@ -370,7 +370,7 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
         if (index === 0) this.#focusAnimationSample(surface, sample);
         surface.renderOnce(0);
         const x = index * cellWidth;
-        const crop = animationSampleCrop(source, surface.camera(), sample.sampledWorldBounds);
+        const crop = animationSampleCrop(source, surface, sample.sampledWorldBounds);
         context.drawImage(
           source,
           crop.x,
@@ -992,29 +992,18 @@ function normalize(
 
 function animationSampleCrop(
   canvas: HTMLCanvasElement,
-  camera: ReturnType<RendererInspectionSurface['camera']>,
+  surface: RendererInspectionSurface,
   bounds: RendererAnimatedMeshSampleReadout['sampledWorldBounds'],
 ): { readonly x: number; readonly y: number; readonly width: number; readonly height: number } {
   if (bounds === null) return { x: 0, y: 0, width: canvas.width, height: canvas.height };
-  const halfFov = Math.tan((camera.projection.fovYDegrees * Math.PI) / 360);
-  const aspect = canvas.width / canvas.height;
   const points: Array<readonly [number, number]> = [];
   for (const x of [bounds.min[0], bounds.max[0]]) {
     for (const y of [bounds.min[1], bounds.max[1]]) {
       for (const z of [bounds.min[2], bounds.max[2]]) {
-        const relative: readonly [number, number, number] = [
-          x - camera.pose.position[0],
-          y - camera.pose.position[1],
-          z - camera.pose.position[2],
-        ];
-        const depth = dot3(relative, camera.basis.forward);
-        if (depth <= camera.projection.near) continue;
-        const normalizedX = dot3(relative, camera.basis.right) / (depth * halfFov * aspect);
-        const normalizedY = dot3(relative, camera.basis.up) / (depth * halfFov);
-        points.push([
-          (normalizedX * 0.5 + 0.5) * canvas.width,
-          (-normalizedY * 0.5 + 0.5) * canvas.height,
-        ]);
+        const projected = surface.projectWorldPoint([x, y, z]);
+        if (projected.distance > 0 && projected.depth < 1) {
+          points.push([projected.xPixels, projected.yPixels]);
+        }
       }
     }
   }
@@ -1042,13 +1031,6 @@ function animationSampleCrop(
     height = expanded;
   }
   return { x: minX, y: minY, width, height };
-}
-
-function dot3(
-  left: readonly [number, number, number],
-  right: readonly [number, number, number],
-): number {
-  return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
 }
 
 function handleLabel(handle: StudioTransformHandle): string {
