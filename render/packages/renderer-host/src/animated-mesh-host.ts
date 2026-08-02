@@ -13,6 +13,7 @@ export type RendererHostDiagnosticCode =
   | 'animated_mesh_content_hash_mismatch'
   | 'animated_mesh_clip_unavailable'
   | 'animated_mesh_frame_rejected'
+  | 'renderer_lighting_policy_rejected'
   | 'animated_mesh_handle_unavailable'
   | 'animation_not_started'
   | 'animation_paused'

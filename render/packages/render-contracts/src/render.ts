@@ -376,6 +376,9 @@ export interface MeshPickHit {
 
 export type LightShadowIntent = 'disabled' | 'requested';
 
+/** Maximum retained light intensity accepted by every renderer boundary. */
+export const MAX_RENDER_LIGHT_INTENSITY = 10_000;
+
 export type LightDescriptor =
   | {
       readonly kind: 'ambient';

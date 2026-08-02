@@ -5,6 +5,21 @@ architecture boundaries are stated separately so agents do not “fix” them by
 introducing a second authority. Product-specific limitations belong to their
 downstream repositories.
 
+## Browser lighting and shadows
+
+- **Status:** implemented-bounded
+- **Affected surface:** retained light descriptors, `renderer-three`, and `renderer-host`
+- **Limitation:** The public browser surface can preserve or disable the neutral world/viewmodel rigs
+  and can enable a bounded Three shadow map for retained directional, point, and spot requests.
+  Ambient shadow requests remain unsupported. This is not an environment-lighting system,
+  post-processing pipeline, automatic light-density policy, or cross-backend shadow guarantee.
+- **Detection:** Inspect `RendererSurface.lightingReadout()` and run `./scripts/verify-render.sh`;
+  the real browser proof covers default compatibility, independent rig selection, all retained light
+  kinds, active/unsupported shadow status, and lifecycle disposal.
+- **Follow-up:** Add another backend or richer light/shadow resources only with a concrete consumer
+  and a bounded renderer-neutral contract.
+- **Last reviewed:** 2026-08-02 / codex
+
 ## Non-kinematic rigid bodies
 
 - **Status:** provider-implemented-awaiting-consumer

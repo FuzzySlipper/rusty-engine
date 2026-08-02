@@ -219,6 +219,52 @@ void test('point and spot adapters preserve range, decay, cone, and direction', 
   assert.deepEqual(renderer.lightReadout().map((light) => light.shadowStatus), ['active', 'active']);
 });
 
+void test('shadow admission is bounded and rejected frames are atomic', () => {
+  const renderer = new ThreeRenderer({ shadowsEnabled: true, maximumActiveShadowLights: 1 });
+  const requested = (handle: number): RenderDiff => ({
+    op: 'createLight',
+    handle: renderHandle(handle),
+    parent: null,
+    light: {
+      kind: 'point', color: [1, 0.5, 0.25], intensity: 4, enabled: true,
+      position: [handle, 2, 0], range: 8, decay: 2, shadowIntent: 'requested',
+    },
+  });
+  assert.throws(
+    () => renderer.applyFrame({ schemaVersion: 1, ops: [requested(40), requested(41)] }),
+    (error: unknown) => error instanceof Error
+      && error.name === 'RendererLightingPolicyError'
+      && 'code' in error
+      && error.code === 'shadow_budget_exceeded',
+  );
+  assert.equal(renderer.lightReadout().length, 0);
+  renderer.applyFrame({ schemaVersion: 1, ops: [requested(40)] });
+  assert.deepEqual(renderer.lightReadout().map((light) => light.shadowStatus), ['active']);
+
+  const unsupported = new ThreeRenderer({ shadowsEnabled: false, maximumActiveShadowLights: 0 });
+  unsupported.applyFrame({ schemaVersion: 1, ops: [requested(50), requested(51)] });
+  assert.deepEqual(
+    unsupported.lightReadout().map((light) => light.shadowStatus),
+    ['requested_unsupported', 'requested_unsupported'],
+  );
+});
+
+void test('lighting configuration and descriptor intensity have hard bounds', () => {
+  assert.throws(
+    () => new ThreeRenderer({ shadowsEnabled: true, maximumActiveShadowLights: 9 }),
+    /maximumActiveShadowLights/u,
+  );
+  const renderer = new ThreeRenderer();
+  assert.throws(() => renderer.applyFrame({ schemaVersion: 1, ops: [{
+    op: 'createLight', handle: renderHandle(60), parent: null,
+    light: {
+      kind: 'ambient', color: [1, 1, 1], intensity: 10_001, enabled: true,
+      shadowIntent: 'disabled',
+    },
+  }] }), /intensity/u);
+  assert.equal(renderer.lightReadout().length, 0);
+});
+
 void test('malformed and kind-changing lights fail closed', () => {
   const renderer = new ThreeRenderer();
   assert.throws(() => renderer.applyDiff({

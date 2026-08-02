@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub const MAX_RENDER_LIGHT_INTENSITY: f32 = 10_000.0;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LightShadowIntent {
@@ -74,7 +76,7 @@ impl LightDescriptor {
         {
             return Err(LightDescriptorError::InvalidColor);
         }
-        if !intensity.is_finite() || intensity < 0.0 {
+        if !intensity.is_finite() || !(0.0..=MAX_RENDER_LIGHT_INTENSITY).contains(&intensity) {
             return Err(LightDescriptorError::InvalidIntensity);
         }
         match self {
@@ -215,5 +217,23 @@ mod tests {
             },
         ];
         assert!(lights.iter().all(|light| light.validate().is_ok()));
+    }
+
+    #[test]
+    fn light_intensity_has_a_shared_hard_ceiling() {
+        let exact = LightDescriptor::Ambient {
+            color: [1.0; 3],
+            intensity: MAX_RENDER_LIGHT_INTENSITY,
+            enabled: true,
+            shadow_intent: LightShadowIntent::Disabled,
+        };
+        let over = LightDescriptor::Ambient {
+            color: [1.0; 3],
+            intensity: MAX_RENDER_LIGHT_INTENSITY + 1.0,
+            enabled: true,
+            shadow_intent: LightShadowIntent::Disabled,
+        };
+        assert_eq!(exact.validate(), Ok(()));
+        assert_eq!(over.validate(), Err(LightDescriptorError::InvalidIntensity));
     }
 }

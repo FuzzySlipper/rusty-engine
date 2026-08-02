@@ -19,6 +19,7 @@ import {
   MAX_VIEWMODEL_DISTINCT_ASSETS,
   MAX_VIEWMODEL_NODES,
   MAX_VIEWMODEL_TRANSLATION_COMPONENT,
+  MAX_RETAINED_LIGHTS,
   RenderProjection,
   RenderProjectionError,
 } from './index.js';
@@ -76,6 +77,34 @@ void test('neutral projection rejects malformed lights and kind-changing updates
       position: [0, 0, 0], range: null, decay: 2, shadowIntent: 'disabled',
     },
   }), /cannot change kind/);
+});
+
+void test('retained light quota admits the exact limit and rejects one over atomically', () => {
+  const projection = new RenderProjection();
+  projection.applyFrame({
+    schemaVersion: 1,
+    ops: Array.from({ length: MAX_RETAINED_LIGHTS }, (_, index) => ({
+      op: 'createLight' as const,
+      handle: renderHandle(index + 1),
+      parent: null,
+      light: {
+        kind: 'ambient' as const,
+        color: [1, 1, 1] as const,
+        intensity: 1,
+        enabled: true,
+        shadowIntent: 'disabled' as const,
+      },
+    })),
+  });
+  assert.equal(projection.snapshot().lights.length, MAX_RETAINED_LIGHTS);
+  assert.throws(() => projection.applyDiff({
+    op: 'createLight', handle: renderHandle(MAX_RETAINED_LIGHTS + 1), parent: null,
+    light: {
+      kind: 'ambient', color: [1, 1, 1], intensity: 1, enabled: true,
+      shadowIntent: 'disabled',
+    },
+  }), /retained light quota/u);
+  assert.equal(projection.snapshot().lights.length, MAX_RETAINED_LIGHTS);
 });
 
 function cubeNode(label = 'cube'): RenderNode {

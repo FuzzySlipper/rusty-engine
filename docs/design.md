@@ -587,6 +587,14 @@ the surface-owned animation projection, but the surface does not discover servic
 ambient callbacks. Demo and Studio consumers provide typed frames and resource resolvers instead
 of constructing Three scenes of their own.
 
+The surface lighting contract is versioned and observational. Omitted settings retain the compatible
+two-light neutral rig independently in the world and viewmodel scenes; a consumer may disable either
+rig and supply ordinary retained lights instead. The host validates a bounded shadow policy before
+mounting, while `renderer-three` preflights active requested-shadow count before changing retained
+state and reports each request as active, disabled, or unsupported. Color, intensity, retained-light,
+and active-shadow ceilings are provider facts. Games still own artistic values and when their Rust
+authority emits or replaces light descriptors.
+
 External consumers pin all four render packages to one exact public Engine commit. Their package
 preparation and peer graph are independently checked in a clean temporary consumer, so the shared
 boundary is not a workspace-only convention. Operational commands, CI ownership, and explicit

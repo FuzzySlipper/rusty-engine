@@ -1,7 +1,21 @@
 // Renderer-neutral light descriptors adapted to retained Three.js lights.
 
 import * as THREE from 'three';
+import { MAX_RENDER_LIGHT_INTENSITY } from '@rusty-engine/render-contracts';
 import type { LightDescriptor, RenderHandle } from '@rusty-engine/render-contracts';
+
+export const RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS = 8;
+
+export type RendererLightingPolicyErrorCode =
+  | 'invalid_shadow_limit'
+  | 'shadow_budget_exceeded';
+
+export class RendererLightingPolicyError extends Error {
+  constructor(readonly code: RendererLightingPolicyErrorCode, message: string) {
+    super(message);
+    this.name = 'RendererLightingPolicyError';
+  }
+}
 
 export type RendererLightShadowStatus = 'disabled' | 'active' | 'requested_unsupported';
 
@@ -126,8 +140,12 @@ export function validateLightDescriptor(
       throw createError(`${ctx}.color[${index}] must be finite and in 0..=1`);
     }
   });
-  if (!Number.isFinite(descriptor.intensity) || descriptor.intensity < 0) {
-    throw createError(`${ctx}.intensity must be finite and non-negative`);
+  if (!Number.isFinite(descriptor.intensity)
+    || descriptor.intensity < 0
+    || descriptor.intensity > MAX_RENDER_LIGHT_INTENSITY) {
+    throw createError(
+      `${ctx}.intensity must be finite and in 0..=${String(MAX_RENDER_LIGHT_INTENSITY)}`,
+    );
   }
   if (descriptor.kind === 'directional' || descriptor.kind === 'spot') {
     descriptor.direction.forEach((value, index) => {
@@ -172,7 +190,7 @@ function applyShadowIntent(
   descriptor: LightDescriptor,
   shadowsEnabled: boolean,
 ): void {
-  if ('castShadow' in light) {
+  if (descriptor.kind !== 'ambient' && 'castShadow' in light) {
     (light as THREE.DirectionalLight | THREE.PointLight | THREE.SpotLight).castShadow =
       shadowsEnabled && descriptor.shadowIntent === 'requested';
   }

@@ -13,7 +13,7 @@ surface, and renderer host/resource lifecycle.
 - `@rusty-engine/renderer-three`: Three/WebGL resources and render passes.
 - `@rusty-engine/renderer-host`: backend/host composition, presentation hosts,
   inspection surface, immutable submission/resource statistics, timing,
-  camera, and editor viewport integration.
+  camera, versioned default-light/shadow policy and readout, and editor viewport integration.
 - `render/browser`: real Chromium/WebGL/WebAudio/DOM acceptance.
 
 ## Does not own
@@ -33,6 +33,9 @@ surface, and renderer host/resource lifecycle.
   - `voxel-surface-material.ts` owns the Three shader specialization for
     Euclidean whole-texture repeat and half-texel-safe atlas-region sampling;
     it observes renderer-neutral material and texture facts and never remeshes.
+  - `lighting.ts` owns bounded Three light realization, requested-shadow status,
+    and typed lighting-policy failures; `browser-surface.ts` owns the independent
+    world/viewmodel neutral rigs and WebGL shadow-map switch.
 - [`render/packages/renderer-host/src`](../../render/packages/renderer-host/src)
   - `animated-mesh-capture.ts` owns deterministic PNG/contact-sheet encoding
     over an already-mounted `RendererSurface`; it does not load assets or own a

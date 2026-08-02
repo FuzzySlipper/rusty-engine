@@ -5,6 +5,9 @@
 // touches raw runtime transports. Browser/Three/WebGPU bindings consume the
 // returned neutral instructions or inspect the retained snapshot.
 
+import {
+  MAX_RENDER_LIGHT_INTENSITY,
+} from '@rusty-engine/render-contracts';
 import type {
   AnimatedMeshAsset,
   AnimatedMeshInstanceDescriptor,
@@ -47,6 +50,7 @@ export const MAX_VIEWMODEL_ASSET_EXTENT = 16;
 export const MAX_VIEWMODEL_TRANSLATION_COMPONENT = 16;
 export const MAX_VIEWMODEL_ROTATION_COMPONENT = 1;
 export const MAX_VIEWMODEL_SCALE_COMPONENT = 64;
+export const MAX_RETAINED_LIGHTS = 256;
 
 export type RenderProjectionNodeKind = 'primitive' | 'staticMesh' | 'animatedMesh' | 'voxelObject' | 'sprite';
 
@@ -561,6 +565,11 @@ export class RenderProjection {
 
   #createLight(diff: Extract<RenderDiff, { op: 'createLight' }>): RenderProjectionInstruction {
     this.#ensureFree(diff.handle, 'createLight');
+    if (this.#lights.size >= MAX_RETAINED_LIGHTS) {
+      throw new RenderProjectionError(
+        `createLight: retained light quota ${String(MAX_RETAINED_LIGHTS)} exceeded`,
+      );
+    }
     const parent = this.#parentHandle(diff.parent, 'createLight.parent');
     if (parent !== null && this.#require(parent, 'createLight.parent').layer === 'viewmodel') {
       throw new RenderProjectionError(
@@ -1402,6 +1411,11 @@ function validatePlaybackCommand(
 function validateLight(light: LightDescriptor, ctx: string): void {
   requireColor(light.color, `${ctx}.color`);
   requireFiniteNonNegative(light.intensity, `${ctx}.intensity`);
+  if (light.intensity > MAX_RENDER_LIGHT_INTENSITY) {
+    throw new RenderProjectionError(
+      `${ctx}.intensity must not exceed ${String(MAX_RENDER_LIGHT_INTENSITY)}`,
+    );
+  }
   if (light.kind === 'directional') {
     requireDirection(light.direction, `${ctx}.direction`);
     return;

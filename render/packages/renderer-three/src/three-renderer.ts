@@ -46,6 +46,8 @@ import {
   disposeLight,
   lightShadowStatus,
   projectionParentHandle,
+  RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS,
+  RendererLightingPolicyError,
   validateLightDescriptor,
   type RendererLightReadout,
 } from './lighting.js';
@@ -310,6 +312,7 @@ export class ThreeRenderer {
   readonly #animatedMeshSource: AnimatedMeshAssetSource | undefined;
   readonly #animatedMeshes: AnimatedMeshRegistry;
   readonly #shadowsEnabled: boolean;
+  readonly #maximumActiveShadowLights: number;
   readonly #projection = new RenderProjection();
   readonly #geometryResources = new Set<THREE.BufferGeometry>();
   readonly #materialResources = new Set<THREE.Material>();
@@ -332,6 +335,7 @@ export class ThreeRenderer {
     textureResourceSource?: TextureResourceSource;
     animatedMeshSource?: AnimatedMeshAssetSource;
     shadowsEnabled?: boolean;
+    maximumActiveShadowLights?: number;
   } = {}) {
     this.#meshBufferSource = options.meshBufferSource;
     this.#meshResourceSource = options.meshResourceSource;
@@ -339,6 +343,16 @@ export class ThreeRenderer {
     this.#animatedMeshSource = options.animatedMeshSource;
     this.#animatedMeshes = new AnimatedMeshRegistry(this.#animatedMeshSource);
     this.#shadowsEnabled = options.shadowsEnabled ?? false;
+    this.#maximumActiveShadowLights = options.maximumActiveShadowLights
+      ?? RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS;
+    if (!Number.isSafeInteger(this.#maximumActiveShadowLights)
+      || this.#maximumActiveShadowLights < 0
+      || this.#maximumActiveShadowLights > RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS) {
+      throw new RendererLightingPolicyError(
+        'invalid_shadow_limit',
+        `maximumActiveShadowLights must be an integer in 0..=${String(RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS)}`,
+      );
+    }
     this.#sceneGroup.name = 'scene';
     this.#debugGroup.name = 'debug';
     this.#uiGroup.name = 'ui';
@@ -369,7 +383,8 @@ export class ThreeRenderer {
       throw new RenderApplyError('renderer is disposed');
     }
     try {
-      this.#projection.validateFrame(frame);
+      const instructions = this.#projection.validateFrame(frame);
+      this.#validateShadowBudget(instructions);
     } catch (cause) {
       if (cause instanceof RenderProjectionError) {
         throw new RenderApplyError(cause.message);
@@ -417,6 +432,42 @@ export class ThreeRenderer {
     this.#projection.applyFrame(frame);
     if (staticInstanceBatchesChanged) {
       this.#syncStaticInstanceBatches();
+    }
+    if (this.#shadowsEnabled) {
+      this.#sceneGroup.traverse((object) => {
+        if (object instanceof THREE.Mesh) {
+          object.castShadow = true;
+          object.receiveShadow = true;
+        }
+      });
+    }
+  }
+
+  #validateShadowBudget(
+    instructions: ReturnType<RenderProjection['validateFrame']>,
+  ): void {
+    if (!this.#shadowsEnabled) return;
+    const active = new Set(
+      this.#projection.snapshot().lights
+        .filter(({ light }) => activeShadowRequest(light))
+        .map(({ handle }) => handle),
+    );
+    for (const instruction of instructions) {
+      if (instruction.op === 'removeLight') {
+        active.delete(instruction.handle);
+      } else if (instruction.op === 'upsertLight') {
+        if (activeShadowRequest(instruction.light.light)) {
+          active.add(instruction.light.handle);
+        } else {
+          active.delete(instruction.light.handle);
+        }
+      }
+      if (active.size > this.#maximumActiveShadowLights) {
+        throw new RendererLightingPolicyError(
+          'shadow_budget_exceeded',
+          `active shadow light quota ${String(this.#maximumActiveShadowLights)} exceeded`,
+        );
+      }
     }
   }
 
@@ -3095,4 +3146,8 @@ function disposePreparedFrame(prepared: PreparedFrameResources): void {
   for (const retained of prepared.textures.values()) {
     retained?.texture.dispose();
   }
+}
+
+function activeShadowRequest(light: LightDescriptor): boolean {
+  return light.enabled && light.kind !== 'ambient' && light.shadowIntent === 'requested';
 }

@@ -168,6 +168,27 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.batchedStaticDisposed).toBe(true);
   expect(proof.explicitFrameIntervalMs).toBe(50);
   expect(proof.lightCount).toBe(1);
+  expect(proof.defaultLightingReadout.defaultLights).toEqual({
+    world: 'neutral', viewmodel: 'neutral',
+  });
+  expect(proof.defaultLightingReadout.neutralLightCounts).toEqual({ world: 2, viewmodel: 2 });
+  expect(proof.defaultLightingReadout.shadows.enabled).toBe(false);
+  expect(proof.authoredLightingReadout.defaultLights).toEqual({
+    world: 'disabled', viewmodel: 'neutral',
+  });
+  expect(proof.authoredLightingReadout.neutralLightCounts).toEqual({ world: 0, viewmodel: 2 });
+  expect(proof.authoredLightingReadout.retainedLights).toHaveLength(4);
+  expect(proof.authoredLightingReadout.shadows).toEqual({
+    enabled: true,
+    maximumActiveLights: 3,
+    activeLights: 3,
+    requestedUnsupportedLights: 1,
+  });
+  expect(proof.authoredLightingRejected).toEqual({
+    applied: false,
+    diagnostic: 'renderer_lighting_policy_rejected',
+    retainedLightCount: 4,
+  });
   expect(proof.pickHandle).toBe(101);
   expect(proof.projectionInsideViewport).toBe(true);
   expect(proof.hostSurfaceKind).toBe('rusty_renderer_surface.v1');

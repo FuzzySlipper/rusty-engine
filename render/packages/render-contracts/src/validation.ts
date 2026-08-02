@@ -1,4 +1,4 @@
-import type { RenderFrameDiff } from './render.js';
+import { MAX_RENDER_LIGHT_INTENSITY, type RenderFrameDiff } from './render.js';
 import type { PresentationFrameDiff } from './presentation.js';
 
 const JSON_SAFE_INTEGER_MAX = 9_007_199_254_740_991;
@@ -764,7 +764,7 @@ function light(input: unknown, path: string): void {
         : [...common, 'position', 'direction', 'range', 'decay', 'outerAngleRadians', 'penumbra'];
   const value = record(input, path, keys);
   color3(value['color'], `${path}.color`);
-  nonNegativeFinite(value['intensity'], `${path}.intensity`);
+  range(value['intensity'], `${path}.intensity`, 0, MAX_RENDER_LIGHT_INTENSITY);
   booleanValue(value['enabled'], `${path}.enabled`);
   enumeration(value['shadowIntent'], `${path}.shadowIntent`, ['disabled', 'requested'] as const);
   if (kind === 'directional' || kind === 'spot') direction(value['direction'], `${path}.direction`);

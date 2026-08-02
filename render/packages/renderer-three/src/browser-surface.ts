@@ -21,6 +21,10 @@ import {
   type TextureResourceSource,
   type ThreeRendererResourceStatistics,
 } from './three-renderer.js';
+import {
+  RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS,
+  RendererLightingPolicyError,
+} from './lighting.js';
 import type {
   AnimatedMeshAssetSource,
   AnimatedMeshPlaybackReadout,
@@ -58,6 +62,37 @@ export interface RendererBrowserSurfaceOptions {
   readonly meshResourceSource?: MeshResourceSource;
   readonly textureResourceSource?: TextureResourceSource;
   readonly pixelRatio?: number;
+  readonly lighting?: RendererBrowserSurfaceLightingOptions;
+}
+
+export type RendererDefaultLightingMode = 'neutral' | 'disabled';
+
+export interface RendererBrowserSurfaceLightingOptions {
+  readonly schemaVersion: 1;
+  readonly defaultLights: {
+    readonly world: RendererDefaultLightingMode;
+    readonly viewmodel: RendererDefaultLightingMode;
+  };
+  readonly shadows: {
+    readonly enabled: boolean;
+    readonly maximumActiveLights: number;
+  };
+}
+
+export interface RendererBrowserSurfaceLightingReadout {
+  readonly schemaVersion: 1;
+  readonly defaultLights: {
+    readonly world: RendererDefaultLightingMode;
+    readonly viewmodel: RendererDefaultLightingMode;
+  };
+  readonly neutralLightCounts: { readonly world: number; readonly viewmodel: number };
+  readonly shadows: {
+    readonly enabled: boolean;
+    readonly maximumActiveLights: number;
+    readonly activeLights: number;
+    readonly requestedUnsupportedLights: number;
+  };
+  readonly retainedLights: ReturnType<ThreeRenderer['lightReadout']>;
 }
 
 export interface RendererBrowserSurfaceCameraPose {
@@ -163,6 +198,7 @@ export interface RendererBrowserSurface {
   readonly frame: RenderFrameDiff;
   readonly cameraPose: () => RendererBrowserSurfaceCameraPose;
   readonly cameraProjection: () => PerspectiveProjection;
+  readonly lightingReadout: () => RendererBrowserSurfaceLightingReadout;
   readonly projectWorldPoint: (
     position: readonly [number, number, number],
   ) => RendererBrowserSurfaceWorldProjection;
@@ -224,6 +260,7 @@ export function mountRendererBrowserSurface(
   canvas: HTMLCanvasElement,
   options: RendererBrowserSurfaceOptions = {},
 ): RendererBrowserSurface {
+  const lighting = normalizeLightingOptions(options.lighting);
   const renderer = new ThreeRenderer(
     {
       ...(options.animatedMeshSource === undefined
@@ -234,23 +271,24 @@ export function mountRendererBrowserSurface(
         ? {} : { meshResourceSource: options.meshResourceSource }),
       ...(options.textureResourceSource === undefined
         ? {} : { textureResourceSource: options.textureResourceSource }),
+      shadowsEnabled: lighting.shadows.enabled,
+      maximumActiveShadowLights: lighting.shadows.maximumActiveLights,
     },
   );
   // Defined retained materials use MeshStandardMaterial. Keep the browser host responsible
   // for a small neutral light rig; the retained projection carries appearance
   // parameters, never renderer-owned light state or gameplay authority.
-  const ambientLight = new THREE.HemisphereLight(0xffffff, 0x263238, 2.4);
-  const keyLight = new THREE.DirectionalLight(0xffffff, 2.2);
-  keyLight.position.set(5, 8, 6);
-  renderer.scene.add(ambientLight, keyLight);
-  const viewmodelAmbientLight = new THREE.HemisphereLight(0xffffff, 0x263238, 2.4);
-  const viewmodelKeyLight = new THREE.DirectionalLight(0xffffff, 2.2);
-  viewmodelKeyLight.position.set(2, 3, 2);
-  renderer.viewmodelScene.add(viewmodelAmbientLight, viewmodelKeyLight);
+  const worldNeutralLights = lighting.defaultLights.world === 'neutral'
+    ? createNeutralLights([5, 8, 6]) : [];
+  if (worldNeutralLights.length > 0) renderer.scene.add(...worldNeutralLights);
+  const viewmodelNeutralLights = lighting.defaultLights.viewmodel === 'neutral'
+    ? createNeutralLights([2, 3, 2]) : [];
+  if (viewmodelNeutralLights.length > 0) renderer.viewmodelScene.add(...viewmodelNeutralLights);
   const frame = options.frame ?? createRendererBrowserSurfaceFrame();
   renderer.applyFrame(frame);
 
   const webgl = new THREE.WebGLRenderer({ canvas, antialias: true });
+  webgl.shadowMap.enabled = lighting.shadows.enabled;
   const webglContext = webgl.getContext();
   const gpuSubmissionClass = classifyGpuSubmissionRenderer(webglContext);
   const gpuSubmissionFenceDriver = webGl2SubmissionFenceDriver(webglContext);
@@ -497,6 +535,26 @@ export function mountRendererBrowserSurface(
     applyFrame: (nextFrame) => renderer.applyFrame(nextFrame),
     cameraPose: () => currentCameraPose,
     cameraProjection: () => cameraProjection,
+    lightingReadout: () => {
+      const retainedLights = renderer.lightReadout();
+      return Object.freeze({
+        schemaVersion: 1,
+        defaultLights: Object.freeze({ ...lighting.defaultLights }),
+        neutralLightCounts: Object.freeze({
+          world: worldNeutralLights.length,
+          viewmodel: viewmodelNeutralLights.length,
+        }),
+        shadows: Object.freeze({
+          enabled: lighting.shadows.enabled,
+          maximumActiveLights: lighting.shadows.maximumActiveLights,
+          activeLights: retainedLights.filter((light) => light.shadowStatus === 'active').length,
+          requestedUnsupportedLights: retainedLights.filter(
+            (light) => light.shadowStatus === 'requested_unsupported',
+          ).length,
+        }),
+        retainedLights,
+      });
+    },
     projectWorldPoint,
     pick: (request) => pickProjectedObject(renderer, camera, raycaster, center, request),
     snapshot: () => renderer.snapshot(),
@@ -506,6 +564,47 @@ export function mountRendererBrowserSurface(
     stop,
     dispose,
   };
+}
+
+function normalizeLightingOptions(
+  options: RendererBrowserSurfaceLightingOptions | undefined,
+): RendererBrowserSurfaceLightingOptions {
+  const normalized = options ?? {
+    schemaVersion: 1,
+    defaultLights: { world: 'neutral', viewmodel: 'neutral' },
+    shadows: {
+      enabled: false,
+      maximumActiveLights: RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS,
+    },
+  } as const;
+  if (normalized.schemaVersion !== 1) {
+    throw new RendererLightingPolicyError('invalid_shadow_limit', 'lighting.schemaVersion must equal 1');
+  }
+  for (const [name, mode] of Object.entries(normalized.defaultLights)) {
+    if (mode !== 'neutral' && mode !== 'disabled') {
+      throw new RendererLightingPolicyError(
+        'invalid_shadow_limit',
+        `lighting.defaultLights.${name} must be neutral or disabled`,
+      );
+    }
+  }
+  const limit = normalized.shadows.maximumActiveLights;
+  if (!Number.isSafeInteger(limit) || limit < 0 || limit > RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS) {
+    throw new RendererLightingPolicyError(
+      'invalid_shadow_limit',
+      `lighting.shadows.maximumActiveLights must be in 0..=${String(RUSTY_RENDERER_MAX_ACTIVE_SHADOW_LIGHTS)}`,
+    );
+  }
+  return normalized;
+}
+
+function createNeutralLights(
+  keyPosition: readonly [number, number, number],
+): readonly [THREE.HemisphereLight, THREE.DirectionalLight] {
+  const ambient = new THREE.HemisphereLight(0xffffff, 0x263238, 2.4);
+  const key = new THREE.DirectionalLight(0xffffff, 2.2);
+  key.position.set(...keyPosition);
+  return [ambient, key];
 }
 
 function webGl2SubmissionFenceDriver(

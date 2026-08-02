@@ -16,6 +16,7 @@ import {
 import {
   createRendererBrowserSurfaceFrame,
   mountRendererBrowserSurface,
+  RendererLightingPolicyError,
   type AnimatedMeshAssetSource,
   type RendererBrowserSurface,
   type RendererBrowserSurfacePickDiagnostic,
@@ -55,6 +56,47 @@ import {
 } from './surface-submission-demand.js';
 
 export const RUSTY_RENDERER_HOST_COMPATIBILITY_VERSION = 'renderer-host.v1';
+export const RUSTY_RENDERER_SURFACE_LIGHTING_SCHEMA_VERSION = 1;
+export const RUSTY_RENDERER_SURFACE_MAX_ACTIVE_SHADOW_LIGHTS = 8;
+
+export type RendererSurfaceDefaultLightingMode = 'neutral' | 'disabled';
+
+export interface RendererSurfaceLightingOptions {
+  readonly schemaVersion: 1;
+  readonly defaultLights?: {
+    readonly world?: RendererSurfaceDefaultLightingMode;
+    readonly viewmodel?: RendererSurfaceDefaultLightingMode;
+  };
+  readonly shadows?: {
+    readonly enabled?: boolean;
+    readonly maximumActiveLights?: number;
+  };
+}
+
+export interface RendererSurfaceLightingReadout {
+  readonly schemaVersion: 1;
+  readonly defaultLights: {
+    readonly world: RendererSurfaceDefaultLightingMode;
+    readonly viewmodel: RendererSurfaceDefaultLightingMode;
+  };
+  readonly neutralLightCounts: { readonly world: number; readonly viewmodel: number };
+  readonly shadows: {
+    readonly enabled: boolean;
+    readonly maximumActiveLights: number;
+    readonly activeLights: number;
+    readonly requestedUnsupportedLights: number;
+  };
+  readonly retainedLights: ReturnType<RendererBrowserSurface['lightingReadout']>['retainedLights'];
+}
+
+export class RendererSurfaceLightingError extends Error {
+  readonly code = 'invalid_lighting_policy' as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'RendererSurfaceLightingError';
+  }
+}
 
 export type RendererBackendFamily = 'threejs';
 
@@ -110,6 +152,7 @@ export interface RendererSurfaceOptions {
   readonly clearColor?: number;
   readonly controls?: RendererSurfaceControlsOptions;
   readonly frame?: RenderFrameDiff;
+  readonly lighting?: RendererSurfaceLightingOptions;
   readonly meshBufferSource?: RendererSurfaceMeshBufferSource;
   readonly pixelRatio?: number;
   readonly presentationHosts?: RendererPresentationHostSet;
@@ -316,6 +359,7 @@ export interface RendererSurface {
   readonly cameraPose: () => RendererSurfaceCameraPose;
   readonly cameraProjection: () => PerspectiveProjection;
   readonly inputReadout: () => RendererSurfaceInputReadout;
+  readonly lightingReadout: () => RendererSurfaceLightingReadout;
   readonly lockPointer: () => void;
   readonly movementState: () => RendererSurfaceMovementState;
   readonly pick: (request: RendererSurfacePickRequest) => RendererSurfacePickReceipt;
@@ -389,6 +433,7 @@ function mountPreparedRendererSurface(
   animatedMeshSource?: AnimatedMeshAssetSource,
   contentHashes: ReadonlyMap<string, string> = new Map(),
 ): RendererSurface {
+  const lighting = normalizeSurfaceLighting(options.lighting);
   const frame = options.frame ?? createRendererDefaultSurfaceFrame();
   const projection = new RenderProjection();
   projection.applyFrame(frame);
@@ -403,6 +448,7 @@ function mountPreparedRendererSurface(
     },
     ...(options.clearColor === undefined ? {} : { clearColor: options.clearColor }),
     ...(options.pixelRatio === undefined ? {} : { pixelRatio: options.pixelRatio }),
+    lighting,
     frame,
   });
   const animationProjection = surfaceAnimationProjection(backendSurface, contentHashes);
@@ -569,7 +615,9 @@ function mountPreparedRendererSurface(
       return {
         applied: false,
         diagnostics: [{
-          code: 'animated_mesh_frame_rejected',
+          code: cause instanceof RendererLightingPolicyError
+            ? 'renderer_lighting_policy_rejected'
+            : 'animated_mesh_frame_rejected',
           message: cause instanceof Error ? cause.message : String(cause),
           asset: null,
           handle: null,
@@ -607,6 +655,7 @@ function mountPreparedRendererSurface(
     cameraPose: controls.cameraPose,
     cameraProjection: backendSurface.cameraProjection,
     inputReadout: controls.inputReadout,
+    lightingReadout: backendSurface.lightingReadout,
     lockPointer: controls.lockPointer,
     movementState: controls.movementState,
     pick: (request) => {
@@ -1039,6 +1088,45 @@ function emptyMovementState(
     blockedAxes: [],
     collided: false,
     resolutionId: null,
+  };
+}
+
+function normalizeSurfaceLighting(
+  options: RendererSurfaceLightingOptions | undefined,
+): {
+  readonly schemaVersion: 1;
+  readonly defaultLights: {
+    readonly world: RendererSurfaceDefaultLightingMode;
+    readonly viewmodel: RendererSurfaceDefaultLightingMode;
+  };
+  readonly shadows: { readonly enabled: boolean; readonly maximumActiveLights: number };
+} {
+  if (options !== undefined && options.schemaVersion !== RUSTY_RENDERER_SURFACE_LIGHTING_SCHEMA_VERSION) {
+    throw new RendererSurfaceLightingError('lighting.schemaVersion must equal 1');
+  }
+  const world = options?.defaultLights?.world ?? 'neutral';
+  const viewmodel = options?.defaultLights?.viewmodel ?? 'neutral';
+  if ((world !== 'neutral' && world !== 'disabled')
+    || (viewmodel !== 'neutral' && viewmodel !== 'disabled')) {
+    throw new RendererSurfaceLightingError('default lighting mode must be neutral or disabled');
+  }
+  const enabled = options?.shadows?.enabled ?? false;
+  if (typeof enabled !== 'boolean') {
+    throw new RendererSurfaceLightingError('lighting.shadows.enabled must be boolean');
+  }
+  const maximumActiveLights = options?.shadows?.maximumActiveLights
+    ?? RUSTY_RENDERER_SURFACE_MAX_ACTIVE_SHADOW_LIGHTS;
+  if (!Number.isSafeInteger(maximumActiveLights)
+    || maximumActiveLights < 0
+    || maximumActiveLights > RUSTY_RENDERER_SURFACE_MAX_ACTIVE_SHADOW_LIGHTS) {
+    throw new RendererSurfaceLightingError(
+      `lighting.shadows.maximumActiveLights must be in 0..=${String(RUSTY_RENDERER_SURFACE_MAX_ACTIVE_SHADOW_LIGHTS)}`,
+    );
+  }
+  return {
+    schemaVersion: 1,
+    defaultLights: { world, viewmodel },
+    shadows: { enabled, maximumActiveLights },
   };
 }
 

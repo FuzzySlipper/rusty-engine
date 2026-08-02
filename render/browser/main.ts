@@ -24,6 +24,7 @@ import {
   mountRendererInspectionSurface,
   mountRendererSurface,
   type RendererSurfaceAutomaticSubmissionPacingSample,
+  type RendererSurface,
   type RendererSurfaceStatisticsSample,
 } from '@rusty-engine/renderer-host';
 import { mountRendererBrowserSurface } from '@rusty-engine/renderer-three';
@@ -68,6 +69,13 @@ interface BrowserProof {
   readonly inspectionRendererStatistics: RendererSurfaceStatisticsSample;
   readonly inspectionSurfaceKind: string;
   readonly lightCount: number;
+  readonly defaultLightingReadout: ReturnType<RendererSurface['lightingReadout']>;
+  readonly authoredLightingReadout: ReturnType<RendererSurface['lightingReadout']>;
+  readonly authoredLightingRejected: {
+    readonly applied: boolean;
+    readonly diagnostic: string | null;
+    readonly retainedLightCount: number;
+  };
   readonly particleElementCount: number;
   readonly pickHandle: number | null;
   readonly presentationDiagnostics: readonly string[];
@@ -154,6 +162,46 @@ async function main(): Promise<void> {
     frame: browserFrame(),
     pixelRatio: 1,
   });
+  const lightingCanvas = document.createElement('canvas');
+  lightingCanvas.width = 96;
+  lightingCanvas.height = 64;
+  const lightingSurface = mountRendererSurface(lightingCanvas, {
+    autoStart: false,
+    lighting: {
+      schemaVersion: 1,
+      defaultLights: { world: 'disabled', viewmodel: 'neutral' },
+      shadows: { enabled: true, maximumActiveLights: 3 },
+    },
+    frame: {
+      schemaVersion: 1,
+      ops: [
+        { op: 'createLight', handle: renderHandle(801), parent: null, light: {
+          kind: 'ambient', color: [0.05, 0.07, 0.1], intensity: 0.2, enabled: true,
+          shadowIntent: 'requested',
+        } },
+        { op: 'createLight', handle: renderHandle(802), parent: null, light: {
+          kind: 'directional', color: [0.3, 0.4, 0.7], intensity: 0.5, enabled: true,
+          direction: [-1, -2, -1], shadowIntent: 'requested',
+        } },
+        { op: 'createLight', handle: renderHandle(803), parent: null, light: {
+          kind: 'point', color: [1, 0.4, 0.1], intensity: 5, enabled: true,
+          position: [0, 2, 0], range: 10, decay: 2, shadowIntent: 'requested',
+        } },
+        { op: 'createLight', handle: renderHandle(804), parent: null, light: {
+          kind: 'spot', color: [0.2, 0.5, 1], intensity: 3, enabled: true,
+          position: [2, 4, 0], direction: [0, -1, 0], range: 12, decay: 2,
+          outerAngleRadians: 0.6, penumbra: 0.25, shadowIntent: 'requested',
+        } },
+      ],
+    },
+  });
+  lightingSurface.renderOnce(1);
+  const rejectedLighting = lightingSurface.applyFrame({ schemaVersion: 1, ops: [{
+    op: 'createLight', handle: renderHandle(805), parent: null, light: {
+      kind: 'point', color: [1, 1, 1], intensity: 1, enabled: true,
+      position: [0, 1, 0], range: 5, decay: 2, shadowIntent: 'requested',
+    },
+  }] });
   const voxelFrameSwap = surface.applyFrame({
     schemaVersion: 1,
     ops: [{ op: 'setVoxelObjectFrame', handle: renderHandle(108), frame: 1 }],
@@ -586,6 +634,13 @@ async function main(): Promise<void> {
     inspectionRendererStatistics: inspectionSubmission.statistics,
     inspectionSurfaceKind: inspection.kind,
     lightCount: snapshot.match(/kind light\//gu)?.length ?? 0,
+    defaultLightingReadout: surface.lightingReadout(),
+    authoredLightingReadout: lightingSurface.lightingReadout(),
+    authoredLightingRejected: {
+      applied: rejectedLighting.applied,
+      diagnostic: rejectedLighting.diagnostics[0]?.code ?? null,
+      retainedLightCount: lightingSurface.lightingReadout().retainedLights.length,
+    },
     particleElementCount: particleSink.activeCount,
     pickHandle: pick.hint?.handle ?? null,
     presentationDiagnostics: presentation.diagnostics.map((diagnostic) => diagnostic.code),
@@ -646,6 +701,8 @@ async function main(): Promise<void> {
     }
     staticMeshTextureSurface.dispose();
     staticMeshTextureCanvas.remove();
+    lightingSurface.dispose();
+    lightingCanvas.remove();
     inspection.dispose();
     surface.dispose();
     animation.cleanup();

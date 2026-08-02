@@ -365,8 +365,13 @@ claim. Downstream Den task #6378 and its checked evidence artifact own the produ
   leave room for another backend, but no WebGPU implementation is claimed.
 - JavaScript-facing Rust integers are limited to `0..=2^53-1`; both Rust encoding and TypeScript
   decoding reject larger identities rather than silently losing precision.
-- Shadow descriptors preserve intent, but the Three host reports explicit degradation when shadows
-  are disabled or unsupported instead of pretending the requested result was realized.
+- `RendererSurfaceOptions.lighting` schema 1 independently selects `neutral` or `disabled` default
+  rigs for world and viewmodel, and enables a bounded retained-shadow budget. Omission preserves the
+  old neutral/neutral, shadows-disabled behavior. `lightingReadout()` reports neutral counts and each
+  retained request as active, disabled, or unsupported; rejected over-budget frames are atomic.
+- Shadows remain the ordinary Three shadow-map implementation over retained scene meshes and
+  directional/point/spot lights. Ambient requests are explicitly unsupported, and no automatic light
+  placement, artistic exposure policy, or gameplay lighting is inferred.
 - Animation is deterministic controller/playback presentation, not skeletal state authority.
   Sampled cues cannot mutate gameplay directly.
 - DOM billboards, particle billboards, and telemetry are default host realizations. A consumer may
