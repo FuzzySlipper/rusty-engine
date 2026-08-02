@@ -29,6 +29,7 @@ relationships, activation, snapshots, and explicit state-machine instances.
 - [`entity-state/src/component/registration.rs`](../../rust/crates/entity-state/src/component/registration.rs)
 - [`entity-state/src/components.rs`](../../rust/crates/entity-state/src/components.rs)
 - [`entity-state/src/rigid_body.rs`](../../rust/crates/entity-state/src/rigid_body.rs)
+- [`entity-state/src/rigid_body_publication.rs`](../../rust/crates/entity-state/src/rigid_body_publication.rs)
 - [`entity-state/src/authoring.rs`](../../rust/crates/entity-state/src/authoring.rs)
 - [`entity-state/src/command.rs`](../../rust/crates/entity-state/src/command.rs)
 - [`entity-state/src/relationship.rs`](../../rust/crates/entity-state/src/relationship.rs)
@@ -67,6 +68,10 @@ relationships, activation, snapshots, and explicit state-machine instances.
   schema-1 codec stores inert non-kinematic body facts, while the named spatial
   service owns all solver behavior and exact-slot publication. No backend
   handles or callbacks are components.
+- `replace_rigid_body_states` is a second deliberately narrow publication
+  exception: it atomically replaces the exact transform and rigid-body slots
+  prepared by the spatial service. It is bounded to 1,024 unique entities and
+  validates every candidate and slot guard before writing.
 
 ## Downstream extension pattern
 

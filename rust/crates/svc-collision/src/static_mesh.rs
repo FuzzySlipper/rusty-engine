@@ -160,6 +160,12 @@ pub struct StaticMeshCollisionProjection {
 }
 
 impl StaticMeshCollisionProjection {
+    pub(crate) fn dynamics_shapes(&self) -> impl Iterator<Item = SharedShape> + '_ {
+        self.instances
+            .values()
+            .map(|instance| instance.shape.clone())
+    }
+
     pub fn revision(&self) -> u64 {
         self.revision
     }

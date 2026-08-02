@@ -7,7 +7,7 @@ downstream repositories.
 
 ## Non-kinematic rigid bodies
 
-- **Status:** in-progress-bounded-provider
+- **Status:** provider-implemented-awaiting-consumer
 - **Affected surface:** `entity-state`, `svc-collision`, and `engine-spatial`
 - **Limitation:**
 The #6531 implementation is intentionally bounded to dynamic spheres, cuboids,

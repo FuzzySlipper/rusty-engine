@@ -12,6 +12,7 @@ mod active_collision;
 mod entity_motion;
 mod occlusion;
 mod physics;
+mod rigid_body;
 mod trigger;
 mod trigger_codec;
 mod trigger_geometry;
@@ -36,6 +37,11 @@ pub use physics::{
     integrate_kinematic, integrate_kinematic_with_query, CollisionMode, CollisionResolution,
     IntegrationResult, KinematicBody, KinematicCollisionQuery, KinematicShape, PhysicsError,
     PhysicsStep, PhysicsWorld,
+};
+pub use rigid_body::{
+    PreparedRigidBodyStep, RigidBodyAction, RigidBodyContactReadout, RigidBodyMotionFact,
+    RigidBodyService, RigidBodyStepError, RigidBodyStepReceipt, RigidBodyStepRequest,
+    RigidBodyWorldReadout,
 };
 pub use trigger::{
     KinematicTriggerDefinition, TriggerGeometrySource, TriggerOverlapFact, TriggerOverlapFactKind,

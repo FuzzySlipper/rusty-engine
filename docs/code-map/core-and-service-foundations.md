@@ -35,7 +35,8 @@ volume, spatial-index, collision, pathfinding, RNG, and mesh mechanisms.
   - [`static_mesh.rs`](../../rust/crates/svc-collision/src/static_mesh.rs) owns
     bounded immutable triangle assets, exact-revision instance projection, and
     Parry-backed ray/AABB/sweep queries.
-  - the contained Rapier backend owns bounded derived non-kinematic solver state;
+  - [`dynamics.rs`](../../rust/crates/svc-collision/src/dynamics.rs) owns the
+    contained bounded Rapier non-kinematic solver adapter;
     see [Rigid-body dynamics](../topics/rigid-body-dynamics.md).
 - [`svc-pathfinding`](../../rust/crates/svc-pathfinding)
 - [`svc-rng`](../../rust/crates/svc-rng)

@@ -11,5 +11,8 @@ core-space  = { path = "../core-space" }
 core-voxel  = { path = "../core-voxel" }
 svc-volume  = { path = "../svc-volume" }
 svc-spatial = { path = "../svc-spatial" }
-# The ONLY parry consumer in the workspace (f64 to match core-space WorldScalar).
-parry3d-f64 = "0.28"
+# The ONLY Parry/Rapier consumer in the workspace (f64 to match core-space WorldScalar).
+# Rapier 0.34 uses Parry 0.29, so keep the direct query and solver geometry on
+# one exact minor release instead of retaining two shape stacks.
+parry3d-f64 = { version = "0.29", features = ["enhanced-determinism"] }
+rapier3d-f64 = { version = "0.34", default-features = false, features = ["dim3", "f64", "std", "enhanced-determinism"] }

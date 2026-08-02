@@ -29,7 +29,10 @@ boundary.
   never save authority.
 - One named `engine-spatial` rigid-body service validates a bounded request,
   prepares the complete candidate step off-side, atomically publishes exact
-  entity slots, and only then retains the candidate derived world.
+  entity slots, and only then advances its immutable derived readout. The
+  public `prepare`/`commit` split permits useful caller work between those
+  phases; any intervening transform or rigid-body slot change rejects the
+  entire candidate as stale.
 - Downstream Rust owns fixed-step scheduling, catch-up choice within Engine's
   bound, forces and impulses selected by gameplay, spawn/despawn, consequences,
   complete saves, and presentation.
@@ -60,6 +63,28 @@ limit. Faster bodies must opt into continuous collision and remain below its
 larger explicit limit; exceeding either is a typed rejection before mutation.
 Dynamic triangle meshes are unsupported. Schema 1 admits spheres, cuboids, and
 local +Y capsules with solver-derived inertia from a positive authored mass.
+
+## Bounded service contract
+
+One request admits at most 1,024 bodies, 4,096 actions, 4,096 returned active
+contacts, and 8 fixed substeps. A step is in the inclusive range 1/1000 through
+1/15 second as represented by the public `f32` request. Islands are implicitly
+bounded by the admitted body count. The discrete translation estimate is at
+most 1 cell-space unit per substep; CCD raises that explicit ceiling to 100 but
+does not remove it. Forces persist across all requested substeps, while impulses
+are applied exactly once.
+
+`RigidBodyStepReceipt` contains the before/after motion facts for every body and
+the active contacts observed after the final substep. Contact facts identify a
+dynamic pair or a dynamic body against the canonical static environment; they
+are bounded observations, not gameplay events or durable collision history.
+The service rebuilds Rapier state from canonical entity and spatial facts for
+each candidate, so snapshot reopen needs no solver serialization.
+
+The narrow entity-state publication primitive admits at most 1,024 unique
+transform/body pairs. It validates all candidates and both exact component slot
+revisions before the first write, advances the entity-state revision once, and
+does not generalize into a heterogeneous transaction language.
 
 ## Dependency audit
 
