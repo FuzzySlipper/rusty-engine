@@ -285,7 +285,12 @@ export function mountRendererBrowserSurface(
     ? createNeutralLights([2, 3, 2]) : [];
   if (viewmodelNeutralLights.length > 0) renderer.viewmodelScene.add(...viewmodelNeutralLights);
   const frame = options.frame ?? createRendererBrowserSurfaceFrame();
-  renderer.applyFrame(frame);
+  try {
+    renderer.applyFrame(frame);
+  } catch (cause) {
+    renderer.dispose();
+    throw cause;
+  }
 
   const webgl = new THREE.WebGLRenderer({ canvas, antialias: true });
   webgl.shadowMap.enabled = lighting.shadows.enabled;

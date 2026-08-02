@@ -76,6 +76,12 @@ interface BrowserProof {
     readonly diagnostic: string | null;
     readonly retainedLightCount: number;
   };
+  readonly rejectedMountCleanup: {
+    readonly pointerLockRequests: number;
+    readonly rejected: boolean;
+    readonly tabIndex: number;
+    readonly touchAction: string;
+  };
   readonly particleElementCount: number;
   readonly pickHandle: number | null;
   readonly presentationDiagnostics: readonly string[];
@@ -202,6 +208,53 @@ async function main(): Promise<void> {
       position: [0, 1, 0], range: 5, decay: 2, shadowIntent: 'requested',
     },
   }] });
+
+  const rejectedMountCanvas = document.createElement('canvas');
+  rejectedMountCanvas.tabIndex = -1;
+  rejectedMountCanvas.style.touchAction = 'pan-x';
+  let pointerLockRequests = 0;
+  Object.defineProperty(rejectedMountCanvas, 'requestPointerLock', {
+    configurable: true,
+    value: () => { pointerLockRequests += 1; },
+  });
+  let rejectedMount = false;
+  try {
+    mountRendererSurface(rejectedMountCanvas, {
+      autoStart: false,
+      controls: { enabled: true },
+      lighting: {
+        schemaVersion: 1,
+        shadows: { enabled: true, maximumActiveLights: 1 },
+      },
+      frame: {
+        schemaVersion: 1,
+        ops: [-1, 1].map((x, index) => ({
+          op: 'createLight' as const,
+          handle: renderHandle(901 + index),
+          parent: null,
+          light: {
+            kind: 'point' as const,
+            color: [1, 0.8, 0.5] as const,
+            intensity: 2,
+            enabled: true,
+            position: [x, 2, -4] as const,
+            range: 8,
+            decay: 2,
+            shadowIntent: 'requested' as const,
+          },
+        })),
+      },
+    });
+  } catch {
+    rejectedMount = true;
+  }
+  rejectedMountCanvas.dispatchEvent(new PointerEvent('pointerdown', { button: 0 }));
+  const rejectedMountCleanup = {
+    pointerLockRequests,
+    rejected: rejectedMount,
+    tabIndex: rejectedMountCanvas.tabIndex,
+    touchAction: rejectedMountCanvas.style.touchAction,
+  };
   const voxelFrameSwap = surface.applyFrame({
     schemaVersion: 1,
     ops: [{ op: 'setVoxelObjectFrame', handle: renderHandle(108), frame: 1 }],
@@ -641,6 +694,7 @@ async function main(): Promise<void> {
       diagnostic: rejectedLighting.diagnostics[0]?.code ?? null,
       retainedLightCount: lightingSurface.lightingReadout().retainedLights.length,
     },
+    rejectedMountCleanup,
     particleElementCount: particleSink.activeCount,
     pickHandle: pick.hint?.handle ?? null,
     presentationDiagnostics: presentation.diagnostics.map((diagnostic) => diagnostic.code),

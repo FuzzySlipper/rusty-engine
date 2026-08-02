@@ -189,6 +189,12 @@ test('shared host realizes retained, presentation, and inspection families in a 
     diagnostic: 'renderer_lighting_policy_rejected',
     retainedLightCount: 4,
   });
+  expect(proof.rejectedMountCleanup).toEqual({
+    pointerLockRequests: 0,
+    rejected: true,
+    tabIndex: -1,
+    touchAction: 'pan-x',
+  });
   expect(proof.pickHandle).toBe(101);
   expect(proof.projectionInsideViewport).toBe(true);
   expect(proof.hostSurfaceKind).toBe('rusty_renderer_surface.v1');

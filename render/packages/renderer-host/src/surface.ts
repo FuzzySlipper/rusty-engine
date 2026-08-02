@@ -438,19 +438,25 @@ function mountPreparedRendererSurface(
   const projection = new RenderProjection();
   projection.applyFrame(frame);
   const controls = createRendererSurfaceFirstPersonControls(canvas, options.controls);
-  const backendSurface = mountRendererBrowserSurface(canvas, {
-    autoStart: false,
-    ...(animatedMeshSource === undefined ? {} : { animatedMeshSource }),
-    ...(options.meshBufferSource === undefined ? {} : { meshBufferSource: options.meshBufferSource }),
-    camera: {
-      initialPose: controls.cameraPose(),
-      ...(options.projection === undefined ? {} : { projection: options.projection }),
-    },
-    ...(options.clearColor === undefined ? {} : { clearColor: options.clearColor }),
-    ...(options.pixelRatio === undefined ? {} : { pixelRatio: options.pixelRatio }),
-    lighting,
-    frame,
-  });
+  let backendSurface: RendererBrowserSurface;
+  try {
+    backendSurface = mountRendererBrowserSurface(canvas, {
+      autoStart: false,
+      ...(animatedMeshSource === undefined ? {} : { animatedMeshSource }),
+      ...(options.meshBufferSource === undefined ? {} : { meshBufferSource: options.meshBufferSource }),
+      camera: {
+        initialPose: controls.cameraPose(),
+        ...(options.projection === undefined ? {} : { projection: options.projection }),
+      },
+      ...(options.clearColor === undefined ? {} : { clearColor: options.clearColor }),
+      ...(options.pixelRatio === undefined ? {} : { pixelRatio: options.pixelRatio }),
+      lighting,
+      frame,
+    });
+  } catch (cause) {
+    controls.dispose();
+    throw cause;
+  }
   const animationProjection = surfaceAnimationProjection(backendSurface, contentHashes);
   let presentationHosts = options.presentationHosts ?? null;
   let animationFrame: number | null = null;

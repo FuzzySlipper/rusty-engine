@@ -104,7 +104,7 @@ export function lightShadowStatus(
   descriptor: LightDescriptor,
   shadowsEnabled: boolean,
 ): RendererLightShadowStatus {
-  if (descriptor.shadowIntent === 'disabled') {
+  if (!descriptor.enabled || descriptor.shadowIntent === 'disabled') {
     return 'disabled';
   }
   return shadowsEnabled && descriptor.kind !== 'ambient' ? 'active' : 'requested_unsupported';
@@ -192,7 +192,7 @@ function applyShadowIntent(
 ): void {
   if (descriptor.kind !== 'ambient' && 'castShadow' in light) {
     (light as THREE.DirectionalLight | THREE.PointLight | THREE.SpotLight).castShadow =
-      shadowsEnabled && descriptor.shadowIntent === 'requested';
+      shadowsEnabled && descriptor.enabled && descriptor.shadowIntent === 'requested';
   }
 }
 

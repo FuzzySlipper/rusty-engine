@@ -241,6 +241,16 @@ void test('shadow admission is bounded and rejected frames are atomic', () => {
   renderer.applyFrame({ schemaVersion: 1, ops: [requested(40)] });
   assert.deepEqual(renderer.lightReadout().map((light) => light.shadowStatus), ['active']);
 
+  const disabledRequest = requested(41) as Extract<RenderDiff, { op: 'createLight' }>;
+  renderer.applyFrame({ schemaVersion: 1, ops: [{
+    ...disabledRequest,
+    light: { ...disabledRequest.light, enabled: false },
+  }] });
+  assert.deepEqual(
+    renderer.lightReadout().map((light) => light.shadowStatus),
+    ['active', 'disabled'],
+  );
+
   const unsupported = new ThreeRenderer({ shadowsEnabled: false, maximumActiveShadowLights: 0 });
   unsupported.applyFrame({ schemaVersion: 1, ops: [requested(50), requested(51)] });
   assert.deepEqual(
