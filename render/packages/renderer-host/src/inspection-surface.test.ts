@@ -165,6 +165,22 @@ void test('inspection surface retargets its orbit pivot without changing orienta
   assert.deepEqual(harness.surface.readout(), focused);
 });
 
+void test('inspection surface frames finite bounds from a deterministic front view', () => {
+  const harness = createInspectionHarness({ autoStart: false });
+
+  assert.equal(harness.surface.frameBounds({ min: [-1, 0, -0.5], max: [1, 2, 0.5] }), true);
+  const framed = harness.surface.readout();
+  assertVectorApproximately(framed.camera.basis.forward, [0, 0, -1]);
+  assertVectorApproximately(framed.camera.pose.position, [0, 1, framed.cameraDistance]);
+  assert.equal(framed.lastCameraChange, 'frame_bounds');
+
+  assert.equal(
+    harness.surface.frameBounds({ min: [1, 0, 0], max: [-1, 2, 1] }),
+    false,
+  );
+  assert.deepEqual(harness.surface.readout(), framed);
+});
+
 void test('inspection surface applies replaces and clears the engine procedural grid', () => {
   const initialGrid = editorGridDescriptor();
   const harness = createInspectionHarness({ autoStart: false, initialGrid });

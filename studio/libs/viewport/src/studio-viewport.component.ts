@@ -367,7 +367,9 @@ export class StudioViewportComponent implements AfterViewInit, OnDestroy {
       for (const [index, normalizedTime] of normalizedTimes.entries()) {
         const sample = surface.sampleAnimatedMesh(handle, clip, normalizedTime);
         samples.push(sample);
-        if (index === 0) this.#focusAnimationSample(surface, sample);
+        if (index === 0 && sample.sampledWorldBounds !== null) {
+          surface.frameBounds(sample.sampledWorldBounds);
+        }
         surface.renderOnce(0);
         const x = index * cellWidth;
         const crop = animationSampleCrop(source, surface, sample.sampledWorldBounds);

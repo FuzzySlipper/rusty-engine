@@ -108,6 +108,7 @@ export type RendererInspectionSurfaceStatus = 'mounted' | 'running' | 'stopped' 
 
 export type RendererInspectionCameraChange =
   | 'initial_camera'
+  | 'frame_bounds'
   | 'focus_target'
   | 'keyboard_movement'
   | 'keyboard_orbit'
@@ -161,6 +162,11 @@ export interface RendererInspectionSurface {
   readonly dispose: () => void;
   /** Retarget the disposable orbit pivot while preserving camera orientation and distance. */
   readonly focusTarget: (target: InspectionVector) => boolean;
+  /** Frame finite world bounds from a deterministic front inspection view. */
+  readonly frameBounds: (bounds: {
+    readonly min: InspectionVector;
+    readonly max: InspectionVector;
+  }) => boolean;
   readonly grid: () => EditorGridProjectionReadout | null;
   readonly pick: (request: RendererEditorViewportPickRequest) => RendererEditorViewportPickReceipt;
   /** Project a world point through the exact mounted editor backend camera. */
@@ -225,6 +231,10 @@ interface InspectionControls {
   readonly controlPreferences: () => RendererInspectionSurfaceControlPreferences;
   readonly dispose: () => void;
   readonly dragging: () => boolean;
+  readonly frameBounds: (bounds: {
+    readonly min: InspectionVector;
+    readonly max: InspectionVector;
+  }) => boolean;
   readonly focusTarget: (target: InspectionVector) => boolean;
   readonly lastCameraChange: () => RendererInspectionCameraChange;
   readonly pressedMovementKeys: () => readonly string[];
@@ -453,6 +463,7 @@ export function createRendererInspectionSurfaceWithViewport(
     clearOverlayProjection,
     clearRuntimeProjection,
     configureControlPreferences: (preferences) => controls.configurePreferences(preferences),
+    frameBounds: (bounds) => controls.frameBounds(bounds),
     focusTarget: (target) => controls.focusTarget(target),
     grid: () => viewport.grid(),
     pick: (request) => viewport.pick(request),
@@ -798,6 +809,33 @@ function createInspectionControls(
       keyboard: { ...preferences.keyboard },
     }),
     dragging: () => activePointerId !== null,
+    frameBounds: (bounds) => {
+      if (!allFinite([bounds.min, bounds.max])) return false;
+      const extent: InspectionVector = [
+        bounds.max[0] - bounds.min[0],
+        bounds.max[1] - bounds.min[1],
+        bounds.max[2] - bounds.min[2],
+      ];
+      if (extent.some((value) => value < 0)) return false;
+      const center: InspectionVector = [
+        (bounds.min[0] + bounds.max[0]) / 2,
+        (bounds.min[1] + bounds.max[1]) / 2,
+        (bounds.min[2] + bounds.max[2]) / 2,
+      ];
+      const halfFov = Math.tan(camera.projection.fovYDegrees * Math.PI / 360);
+      const aspect = Math.max(0.1, (canvas.clientWidth || canvas.width) / (canvas.clientHeight || canvas.height));
+      const fittedDistance = Math.max(
+        extent[1] / 2 / halfFov,
+        extent[0] / 2 / (halfFov * aspect),
+      ) * 1.35 + extent[2] / 2;
+      return commitCamera(
+        center,
+        0,
+        0,
+        clamp(fittedDistance, minimumDistance, maximumDistance),
+        'frame_bounds',
+      );
+    },
     focusTarget: (nextTarget) => {
       if (!allFinite([nextTarget])) return false;
       return commitCamera(
