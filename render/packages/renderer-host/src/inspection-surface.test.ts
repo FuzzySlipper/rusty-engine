@@ -986,6 +986,7 @@ class FakeEditorViewportBackend implements RendererEditorViewportBackendPort {
         inverseBindMatrixCount: 12,
         inverseBindMatricesFinite: true,
         weightedVertexCount: 24,
+        invalidWeightVertexCount: 0,
         maximumWeightSumError: 0,
         weightsNormalized: true,
         interpolationModes: ['linear'],

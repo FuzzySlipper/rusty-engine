@@ -2617,6 +2617,49 @@ function testAnimatedMeshSource(asset = animatedMeshAsset()): MapAnimatedMeshAss
   return new MapAnimatedMeshAssetSource([{ asset: asset.asset, contentHash: asset.contentHash, scene, clips }]);
 }
 
+function diagnosticSkinnedMeshSource(
+  asset: AnimatedMeshAsset,
+  boneCount: number,
+  weightRows: readonly (readonly [number, number, number, number])[],
+): MapAnimatedMeshAssetSource {
+  const scene = new THREE.Group();
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(
+    weightRows.flatMap((_, index) => [index * 0.1, 0, 0]),
+    3,
+  ));
+  geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(
+    weightRows.flatMap(() => [0, 0, 0, 0]),
+    4,
+  ));
+  geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(
+    weightRows.flatMap((row) => [...row]),
+    4,
+  ));
+  const bones = Array.from({ length: boneCount }, (_, index) => {
+    const bone = new THREE.Bone();
+    bone.name = `joint-${String(index)}`;
+    return bone;
+  });
+  for (let index = 1; index < bones.length; index += 1) {
+    bones[index - 1]!.add(bones[index]!);
+  }
+  const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshBasicMaterial());
+  if (bones[0] !== undefined) mesh.add(bones[0]);
+  mesh.bind(new THREE.Skeleton(bones));
+  scene.add(mesh);
+  return new MapAnimatedMeshAssetSource([{
+    asset: asset.asset,
+    contentHash: asset.contentHash,
+    scene,
+    clips: asset.clips.map((clip) => new THREE.AnimationClip(
+      clip.name ?? clip.id,
+      clip.durationSeconds ?? 1,
+      [],
+    )),
+  }]);
+}
+
 void test('committed animated GLB instances share GPU resources while playback remains independent', async () => {
   const testGlobal = globalThis as unknown as { self: unknown };
   const priorSelf = testGlobal.self;
@@ -2779,6 +2822,70 @@ void test('animated mesh playback is command-selected and advances through rende
     () => r.sampleAnimatedMesh(handle, 'missing', 0.5),
     /missing clip missing/,
   );
+});
+
+void test('animated skinning inspection rejects an over-budget hierarchy before playback mutation', () => {
+  const asset = animatedMeshAsset();
+  const renderer = new ThreeRenderer({
+    animatedMeshSource: diagnosticSkinnedMeshSource(asset, 257, [[1, 0, 0, 0]]),
+  });
+  const handle = renderHandle(4198);
+  renderer.applyDiff({ op: 'defineAnimatedMesh', asset });
+  renderer.applyDiff({
+    op: 'createAnimatedMeshInstance',
+    handle,
+    parent: null,
+    instance: {
+      asset: asset.asset,
+      transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+      materialOverrides: [],
+      playback: {
+        kind: 'play', clip: 'run', loop: 'repeat', speed: 1, weight: 1,
+        restart: true, fadeSeconds: null,
+      },
+      visible: true,
+      metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: 'joint-budget' },
+    },
+  });
+  renderer.advanceAnimation(0.25);
+  const before = renderer.animatedMeshPlayback(handle);
+  assert.throws(
+    () => renderer.sampleAnimatedMesh(handle, 'idle', 0.5),
+    /joint count exceeds 256/,
+  );
+  assert.deepEqual(renderer.animatedMeshPlayback(handle), before);
+  renderer.dispose();
+});
+
+void test('animated skinning inspection rejects zero and non-finite weight sums as normalized', () => {
+  const asset = animatedMeshAsset();
+  const renderer = new ThreeRenderer({
+    animatedMeshSource: diagnosticSkinnedMeshSource(asset, 1, [
+      [1, 0, 0, 0],
+      [0, 0, 0, 0],
+      [Number.NaN, 0, 0, 0],
+    ]),
+  });
+  const handle = renderHandle(4199);
+  renderer.applyDiff({ op: 'defineAnimatedMesh', asset });
+  renderer.applyDiff({
+    op: 'createAnimatedMeshInstance',
+    handle,
+    parent: null,
+    instance: {
+      asset: asset.asset,
+      transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+      materialOverrides: [],
+      playback: null,
+      visible: true,
+      metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: 'invalid-weights' },
+    },
+  });
+  const sample = renderer.sampleAnimatedMesh(handle, 'idle', 0.5);
+  assert.equal(sample.skinningFacts.weightedVertexCount, 3);
+  assert.equal(sample.skinningFacts.invalidWeightVertexCount, 2);
+  assert.equal(sample.skinningFacts.weightsNormalized, false);
+  renderer.dispose();
 });
 
 void test('animated instances reuse asset-scoped geometry and materials with independent skeletons and lifecycle', () => {

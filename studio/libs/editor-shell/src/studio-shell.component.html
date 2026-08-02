@@ -434,7 +434,7 @@
                   <summary>Skinning facts · {{ sample.skinningFacts.joints.length }} joints · {{ sample.durationSeconds.toFixed(3) }}s</summary>
                   <dl class="identity-grid">
                     <dt>Inverse binds</dt><dd>{{ sample.skinningFacts.inverseBindMatrixCount }} · {{ sample.skinningFacts.inverseBindMatricesFinite ? 'finite' : 'invalid' }}</dd>
-                    <dt>Weights</dt><dd>{{ sample.skinningFacts.weightsNormalized ? 'normalized' : 'invalid' }} · max error {{ sample.skinningFacts.maximumWeightSumError.toExponential(2) }}</dd>
+                    <dt>Weights</dt><dd>{{ sample.skinningFacts.weightsNormalized ? 'normalized' : 'invalid' }} · {{ sample.skinningFacts.invalidWeightVertexCount }} invalid · max error {{ sample.skinningFacts.maximumWeightSumError.toExponential(2) }}</dd>
                     <dt>Interpolation</dt><dd>{{ sample.skinningFacts.interpolationModes.join(', ') }}</dd>
                     <dt>Clone / skeleton</dt><dd>{{ sample.skinningFacts.instanceRootDistinctFromTemplate ? 'root independent' : 'root shared' }} · {{ sample.skinningFacts.skeletonsIndependentFromTemplate ? 'skeleton independent' : 'skeleton shared' }}</dd>
                     <dt>Shared render data</dt><dd>{{ sample.skinningFacts.sharedGeometryCount }} geometry · {{ sample.skinningFacts.sharedMaterialCount }} material</dd>

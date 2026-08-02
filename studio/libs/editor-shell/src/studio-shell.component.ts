@@ -880,7 +880,7 @@ export class StudioShellComponent {
       this.animationInspectionSample.set(sample);
       const facts = sample.skinningFacts;
       this.animationInspectionReadout.set(
-        `${sample.clip} ${(sample.normalizedTime * 100).toFixed(0)}% / ${sample.durationSeconds.toFixed(3)}s · ${facts.joints.length} joints · ${facts.inverseBindMatrixCount} inverse binds (${facts.inverseBindMatricesFinite ? 'finite' : 'invalid'}) · weights ${facts.weightsNormalized ? 'normalized' : 'invalid'} (max error ${facts.maximumWeightSumError.toExponential(2)}) · ${facts.interpolationModes.join('/')} interpolation · clone ${facts.instanceRootDistinctFromTemplate && facts.skeletonsIndependentFromTemplate ? 'independent' : 'invalid'} · shared geometry/material ${facts.sharedGeometryCount}/${facts.sharedMaterialCount} · ${sample.diagnostics.length} diagnostics`,
+        `${sample.clip} ${(sample.normalizedTime * 100).toFixed(0)}% / ${sample.durationSeconds.toFixed(3)}s · ${facts.joints.length} joints · ${facts.inverseBindMatrixCount} inverse binds (${facts.inverseBindMatricesFinite ? 'finite' : 'invalid'}) · weights ${facts.weightsNormalized ? 'normalized' : 'invalid'} (${facts.invalidWeightVertexCount} invalid, max error ${facts.maximumWeightSumError.toExponential(2)}) · ${facts.interpolationModes.join('/')} interpolation · clone ${facts.instanceRootDistinctFromTemplate && facts.skeletonsIndependentFromTemplate ? 'independent' : 'invalid'} · shared geometry/material ${facts.sharedGeometryCount}/${facts.sharedMaterialCount} · ${sample.diagnostics.length} diagnostics`,
       );
     } catch (error) {
       this.store.reportUiError(error instanceof Error ? error.message : String(error));

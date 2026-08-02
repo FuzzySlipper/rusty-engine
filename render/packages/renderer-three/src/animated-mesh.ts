@@ -90,6 +90,7 @@ export interface AnimatedMeshSkinningFacts {
   readonly inverseBindMatrixCount: number;
   readonly inverseBindMatricesFinite: boolean;
   readonly weightedVertexCount: number;
+  readonly invalidWeightVertexCount: number;
   readonly maximumWeightSumError: number;
   readonly weightsNormalized: boolean;
   readonly interpolationModes: readonly ('discrete' | 'linear' | 'smooth')[];
@@ -338,6 +339,19 @@ export class AnimatedMeshRegistry {
         `sampleAnimatedMesh: clip ${clipId} has an invalid duration`,
       );
     }
+    const asset = this.#assets.get(instance.asset);
+    if (asset === undefined) {
+      throw new AnimatedMeshApplyError(
+        `sampleAnimatedMesh: missing defined asset ${instance.asset}`,
+      );
+    }
+    // Skinning inspection is a bounded preflight. It must complete before the
+    // disposable mixer or playback record changes so rejection is fail-atomic.
+    const skinningFacts = animatedMeshSkinningFacts(
+      instance.object,
+      asset.scene,
+      action.getClip(),
+    );
     instance.mixer.stopAllAction();
     action.reset();
     action.enabled = true;
@@ -356,16 +370,9 @@ export class AnimatedMeshRegistry {
     instance.speed = 1;
     instance.weight = 1;
     instance.controllerClips = [];
-    const asset = this.#assets.get(instance.asset);
-    if (asset === undefined) {
-      throw new AnimatedMeshApplyError(
-        `sampleAnimatedMesh: missing defined asset ${instance.asset}`,
-      );
-    }
     return diagnoseAnimatedMeshSample(
       instance,
-      asset.scene,
-      action.getClip(),
+      skinningFacts,
       clipId,
       normalizedTime,
       durationSeconds,
@@ -684,8 +691,7 @@ const ANIMATED_MESH_SAMPLE_MAX_DIAGNOSTICS = 64;
 
 function diagnoseAnimatedMeshSample(
   instance: AnimatedMeshInstanceRecord,
-  assetTemplate: THREE.Object3D,
-  clip: THREE.AnimationClip,
+  skinningFacts: AnimatedMeshSkinningFacts,
   clipId: string,
   normalizedTime: number,
   durationSeconds: number,
@@ -708,7 +714,6 @@ function diagnoseAnimatedMeshSample(
   const sampledBounds = new THREE.Box3();
   const vertex = new THREE.Vector3();
   const skinMatrix = new THREE.Matrix4();
-  const facts = animatedMeshSkinningFacts(instance.object, assetTemplate, clip);
 
   instance.object.updateMatrixWorld(true);
   instance.object.traverse((node) => {
@@ -805,7 +810,7 @@ function diagnoseAnimatedMeshSample(
     sampledWorldBounds: readoutBounds,
     sampledVertexCount,
     boneCount,
-    skinningFacts: facts,
+    skinningFacts,
     diagnostics,
   };
 }
@@ -844,6 +849,7 @@ function animatedMeshSkinningFacts(
   let inverseBindMatrixCount = 0;
   let inverseBindMatricesFinite = true;
   let weightedVertexCount = 0;
+  let invalidWeightVertexCount = 0;
   let maximumWeightSumError = 0;
   let skeletonsIndependentFromTemplate = true;
   let sharedGeometryCount = 0;
@@ -872,10 +878,12 @@ function animatedMeshSkinningFacts(
         + (weights.itemSize > 1 ? weights.getY(index) : 0)
         + (weights.itemSize > 2 ? weights.getZ(index) : 0)
         + (weights.itemSize > 3 ? weights.getW(index) : 0);
-      if (sum > 0) {
-        weightedVertexCount += 1;
-        maximumWeightSumError = Math.max(maximumWeightSumError, Math.abs(sum - 1));
+      weightedVertexCount += 1;
+      if (!Number.isFinite(sum) || sum <= 0) {
+        invalidWeightVertexCount += 1;
+        continue;
       }
+      maximumWeightSumError = Math.max(maximumWeightSumError, Math.abs(sum - 1));
     }
   });
 
@@ -899,8 +907,10 @@ function animatedMeshSkinningFacts(
     inverseBindMatrixCount,
     inverseBindMatricesFinite,
     weightedVertexCount,
+    invalidWeightVertexCount,
     maximumWeightSumError,
     weightsNormalized: weightedVertexCount > 0
+      && invalidWeightVertexCount === 0
       && maximumWeightSumError <= NORMALIZED_WEIGHT_TOLERANCE,
     interpolationModes,
     instanceRootDistinctFromTemplate: instance !== assetTemplate,

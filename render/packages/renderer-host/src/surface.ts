@@ -281,6 +281,7 @@ export interface RendererAnimatedMeshSampleReadout {
     readonly inverseBindMatrixCount: number;
     readonly inverseBindMatricesFinite: boolean;
     readonly weightedVertexCount: number;
+    readonly invalidWeightVertexCount: number;
     readonly maximumWeightSumError: number;
     readonly weightsNormalized: boolean;
     readonly interpolationModes: readonly ('discrete' | 'linear' | 'smooth')[];
