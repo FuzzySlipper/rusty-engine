@@ -234,14 +234,14 @@ fn conservative_surface_cells(
                         }
                         Some(_) => {}
                         None => {
+                            if cells.len() >= request.settings.max_output_voxels as usize {
+                                return Err(output_limit_error(cells.len() + 1, request));
+                            }
                             cells.insert(coordinate, candidate);
                         }
                     }
                 }
             }
-        }
-        if cells.len() > request.settings.max_output_voxels as usize {
-            return Err(output_limit_error(cells.len(), request));
         }
     }
     Ok(cells)

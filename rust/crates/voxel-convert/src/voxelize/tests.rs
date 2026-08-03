@@ -205,6 +205,38 @@ fn geometric_candidate_work_is_bounded_before_cell_iteration() {
         .contains("surface triangle/cell coverage"));
 }
 
+#[test]
+fn high_span_surface_output_is_rejected_before_over_limit_retention() {
+    let mesh = ImportedStaticMesh {
+        positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0 / 2_048.0, 0.0]],
+        texture_coordinates: Vec::new(),
+        triangles: vec![ImportedTriangle {
+            indices: [0, 1, 2],
+            source_material_slot: 1,
+        }],
+        primitive_groups: vec![ImportedPrimitiveGroup {
+            source_node_index: 0,
+            source_mesh_index: 0,
+            source_primitive_index: 0,
+            source_material_slot: 1,
+            triangle_start: 0,
+            triangle_count: 1,
+        }],
+        materials: vec![ImportedMaterial {
+            source_material_slot: 1,
+            source_material_name: None,
+        }],
+    };
+    let mut request = request(&mesh, [4_096, 4, 2], VoxelConversionMode::Surface);
+    request.settings.max_output_voxels = 8;
+
+    let error = voxelize(&request, &mesh).unwrap_err();
+    assert_eq!(error.diagnostics()[0].code, "conversion.outputLimit");
+    assert!(error.diagnostics()[0]
+        .message
+        .contains("conversion would produce 9 voxels; requested limit is 8"));
+}
+
 fn fixture() -> GeometryFixture {
     let fixture: GeometryFixture = serde_json::from_str(GEOMETRY_FIXTURE).unwrap();
     assert_eq!(fixture.schema_version, 1);
