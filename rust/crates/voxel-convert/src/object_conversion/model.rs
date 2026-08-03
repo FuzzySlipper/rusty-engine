@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use voxel_asset::{VoxelAssetBounds, VoxelObjectAsset};
 
-use crate::{AnimationAnchorPolicy, AnimationEndPolicy, ConversionPlanSettings, MeshSourceRef};
+use crate::{
+    AnimationAnchorPolicy, AnimationEndPolicy, ConversionPlanSettings, MeshSourceBounds,
+    MeshSourceRef,
+};
 
 pub const VOXEL_OBJECT_CONVERSION_PLANNER_ID: &str = "rusty-engine.voxel-object-conversion.v1";
 pub const VOXEL_OBJECT_CONVERTER_ID: &str = "rusty-engine.mesh-to-voxel-object.v1";
@@ -17,6 +20,11 @@ pub const MAX_VOXEL_OBJECT_PREVIEW_SAMPLES: usize = 4_096;
 pub struct VoxelObjectConversionSettings {
     /// Existing M12C geometry, material, transform, and grid policy.
     pub mesh: ConversionPlanSettings,
+    /// Optional fixed envelope in transformed source space. Separate static
+    /// selections using identical bounds map into one mutually registered
+    /// voxel lattice instead of being independently contain-fitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_bounds: Option<MeshSourceBounds>,
     /// Stable object-local pivot in voxel-cell coordinates.
     pub pivot: [f64; 3],
     /// Explicit animation anchoring applied to the bind pose and every sample.

@@ -175,17 +175,23 @@ fn build_candidate(
     provenance_kind: VoxelObjectProvenanceKind,
     deformation_work: u64,
 ) -> Result<VoxelObjectConversionReceipt, ConversionError> {
-    let mut fixed_bounds = VoxelizationSourceBounds::for_mesh(&default_mesh)?;
-    for sampled in &sampled_clips {
-        for snapshot in &sampled.sampling.snapshots {
-            for position in &snapshot.mesh.positions {
-                fixed_bounds.include_position(transform_position(
-                    *position,
-                    request.settings.mesh.transform,
-                )?)?;
+    let fixed_bounds = match request.settings.source_bounds {
+        Some(bounds) => VoxelizationSourceBounds::from_explicit(bounds.min, bounds.max)?,
+        None => {
+            let mut bounds = VoxelizationSourceBounds::for_mesh(&default_mesh)?;
+            for sampled in &sampled_clips {
+                for snapshot in &sampled.sampling.snapshots {
+                    for position in &snapshot.mesh.positions {
+                        bounds.include_position(transform_position(
+                            *position,
+                            request.settings.mesh.transform,
+                        )?)?;
+                    }
+                }
             }
+            bounds
         }
-    }
+    };
 
     let mut effective_settings = request.settings.mesh.conversion.clone();
     effective_settings.material_map = resolve_material_map(&request.settings.mesh, source)?;

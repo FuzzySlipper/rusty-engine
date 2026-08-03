@@ -9,6 +9,7 @@ use super::{
     VoxelObjectClipConversionRequest, VoxelObjectConversionPlan, VoxelObjectConversionPlanRequest,
     VoxelObjectConversionSettings,
 };
+use crate::voxelize::VoxelizationSourceBounds;
 use crate::{plan_settings_sha256, ConversionError, ImportedMeshSource};
 
 pub(super) fn validate_request(
@@ -66,6 +67,9 @@ pub(super) fn validate_request(
         }
     }
     crate::planning::validate_transform(request.settings.mesh.transform)?;
+    if let Some(bounds) = request.settings.source_bounds {
+        VoxelizationSourceBounds::from_explicit(bounds.min, bounds.max)?;
+    }
     if request.settings.mesh.conversion.origin != [0, 0, 0] {
         return Err(ConversionError::one(
             "conversion.invalidObjectGrid",
@@ -141,6 +145,7 @@ pub(super) fn object_settings_sha256(
     canonical_clips.sort_by(|left, right| left.output_clip_id.cmp(&right.output_clip_id));
     sha256_json(&(
         plan_settings_sha256(&settings.mesh),
+        settings.source_bounds,
         settings.pivot,
         settings.anchor_policy,
         canonical_clips,

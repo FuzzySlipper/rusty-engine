@@ -14,7 +14,7 @@ use voxel_convert::{
     preview_voxel_object_conversion, query_voxel_object_frame, query_voxel_object_info,
     query_voxel_object_window, sample_animation_clip_range, AnimationAnchorPolicy,
     AnimationEndPolicy, AnimationSampleRangeRequest, ConversionMaterialPolicy,
-    ConversionPlanSettings, MeshSourceFormat, MeshSourceImportRequest,
+    ConversionPlanSettings, MeshSourceBounds, MeshSourceFormat, MeshSourceImportRequest,
     VoxelObjectClipConversionRequest, VoxelObjectConversionApplyRequest,
     VoxelObjectConversionPlanRequest, VoxelObjectConversionPreviewRequest,
     VoxelObjectConversionSettings, VoxelObjectFrameRequest, VoxelObjectFrameSelection,
@@ -155,6 +155,75 @@ fn static_object_plan_preview_apply_query_and_cli_are_hash_guarded() {
         prepared.candidate().asset
     );
     fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn static_piece_bakes_share_one_explicit_source_envelope() {
+    let whole = import_mesh_source(&static_import_request()).unwrap();
+    let shared_bounds = whole.receipt.metadata.source_bounds;
+    let resolution = [24, 16, 8];
+    let mut whole_request = object_request(
+        &whole,
+        "voxel-object/kenney-wall-whole",
+        Vec::new(),
+        None,
+        resolution,
+    );
+    whole_request.settings.source_bounds = Some(shared_bounds);
+    let whole_conversion = plan_static_voxel_object_conversion(&whole_request, &whole).unwrap();
+    let whole_cells = frame_coordinates(&whole_conversion.candidate().asset);
+
+    let mut assembled_cells = std::collections::BTreeSet::new();
+    for group_index in 0..2 {
+        let mut import = static_import_request();
+        import.mesh_primitive = Some(format!("group/{group_index}"));
+        let piece = import_mesh_source(&import).unwrap();
+        let mut request = object_request(
+            &piece,
+            &format!("voxel-object/kenney-wall-piece-{group_index}"),
+            Vec::new(),
+            None,
+            resolution,
+        );
+        request.settings.source_bounds = Some(shared_bounds);
+        let encoded = serde_json::to_string(&request).unwrap();
+        assert_eq!(
+            decode_voxel_object_conversion_request(&encoded).unwrap(),
+            request
+        );
+        let prepared = plan_static_voxel_object_conversion(&request, &piece).unwrap();
+        let repeated = plan_static_voxel_object_conversion(&request, &piece).unwrap();
+        assert_eq!(prepared.candidate(), repeated.candidate());
+        assembled_cells.extend(frame_coordinates(&prepared.candidate().asset));
+    }
+    assert_eq!(assembled_cells, whole_cells);
+
+    let mut expanded = whole_request.clone();
+    expanded.settings.source_bounds = Some(MeshSourceBounds {
+        min: shared_bounds.min.map(|component| component - 0.25),
+        max: shared_bounds.max.map(|component| component + 0.25),
+    });
+    let expanded = plan_static_voxel_object_conversion(&expanded, &whole).unwrap();
+    assert_ne!(
+        expanded.plan().settings_sha256,
+        whole_conversion.plan().settings_sha256
+    );
+
+    let mut invalid = whole_request.clone();
+    invalid.settings.source_bounds = Some(MeshSourceBounds {
+        min: shared_bounds.max,
+        max: shared_bounds.min,
+    });
+    let error = plan_static_voxel_object_conversion(&invalid, &whole).unwrap_err();
+    assert_eq!(error.diagnostics()[0].code, "conversion.invalidSettings");
+
+    let mut excludes_source = whole_request;
+    excludes_source.settings.source_bounds = Some(MeshSourceBounds {
+        min: [0.0, 0.0, 0.0],
+        max: [0.5, 0.5, 0.5],
+    });
+    let error = plan_static_voxel_object_conversion(&excludes_source, &whole).unwrap_err();
+    assert_eq!(error.diagnostics()[0].code, "conversion.invalidGeometry");
 }
 
 #[test]
@@ -434,6 +503,20 @@ fn static_import_request() -> MeshSourceImportRequest {
     }
 }
 
+fn frame_coordinates(
+    object: &voxel_asset::VoxelObjectAsset,
+) -> std::collections::BTreeSet<[i64; 3]> {
+    let material_slots = object
+        .material_palette
+        .iter()
+        .map(|binding| binding.material_slot);
+    resolve_voxel_frame(&object.default_frame, material_slots)
+        .unwrap()
+        .into_iter()
+        .map(|cell| cell.coordinate)
+        .collect()
+}
+
 fn animated_import_request() -> MeshSourceImportRequest {
     MeshSourceImportRequest {
         source_asset_id: "mesh-animation/retro-character".to_owned(),
@@ -491,6 +574,7 @@ fn object_request(
                 transform: identity_transform(),
                 material_policy: ConversionMaterialPolicy::default(),
             },
+            source_bounds: None,
             pivot: [
                 f64::from(resolution[0].saturating_sub(1)) / 2.0,
                 0.0,

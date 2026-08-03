@@ -262,6 +262,13 @@ surface-conflict rule. Individual frames cannot silently recompute their own sca
 prevents breathing and grid drift. Every frame remains a complete schema-1 sparse arrangement; the
 durable object's bounds are the exact union of the converted default and clip frames.
 
+Static piece baking can name that same envelope explicitly as `settings.sourceBounds`. The bounds
+are finite, strictly increasing coordinates in the source space after the request's mesh transform;
+every selected vertex must remain inside them. Separate `meshPrimitive` imports that reuse identical
+bounds, resolution, and fit policy therefore produce mutually registered cell sets that can be
+assembled without independently rescaling each piece. The explicit bounds participate in settings,
+plan, and output provenance hashes, and omission retains the ordinary per-selection bounds behavior.
+
 Frame duration is derived from adjacent integer-microsecond sample timestamps. An
 `ExcludeLoopSeam` clip holds its final sample through the exact selected range end, so its output
 duration equals the requested range. `IncludeClipEnd` retains the exact endpoint pose and gives it

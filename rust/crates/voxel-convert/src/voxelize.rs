@@ -39,6 +39,23 @@ pub(crate) struct VoxelizationSourceBounds {
 }
 
 impl VoxelizationSourceBounds {
+    pub(crate) fn from_explicit(min: [f64; 3], max: [f64; 3]) -> Result<Self, ConversionError> {
+        let bounds = Self { min, max };
+        if min
+            .iter()
+            .chain(max.iter())
+            .any(|component| !component.is_finite())
+            || (0..3).any(|axis| min[axis] >= max[axis])
+        {
+            return Err(ConversionError::one(
+                "conversion.invalidSettings",
+                "settings.sourceBounds",
+                "explicit source bounds must be finite and strictly increasing on every axis",
+            ));
+        }
+        Ok(bounds)
+    }
+
     pub(crate) fn for_mesh(mesh: &ImportedStaticMesh) -> Result<Self, ConversionError> {
         let first = *mesh.positions.first().ok_or_else(|| {
             ConversionError::one(
