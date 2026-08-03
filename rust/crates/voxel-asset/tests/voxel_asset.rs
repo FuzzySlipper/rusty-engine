@@ -5,8 +5,8 @@ use voxel_asset::{
     VoxelAssetProvenance, VoxelAssetProvenanceKind, VoxelConversionFitPolicy, VoxelConversionMode,
     VoxelConversionOriginPolicy, VoxelConversionRequest, VoxelConversionSettings,
     VoxelCoordinateSystem, VoxelPaletteUpdateError, VoxelPaletteUpdateRequest, VoxelRepresentation,
-    VoxelRepresentationKind, VoxelSparseRun, MAX_CONVERSION_SOURCE_BYTES,
-    VOXEL_ASSET_SCHEMA_VERSION,
+    VoxelRepresentationKind, VoxelSparseRun, MAX_CONVERSION_RESOLUTION_AXIS,
+    MAX_CONVERSION_SOURCE_BYTES, VOXEL_ASSET_SCHEMA_VERSION,
 };
 
 #[test]
@@ -163,8 +163,19 @@ fn conversion_input_fixes_identity_settings_and_hard_limits_before_parsing() {
         diagnostic.code == "conversion.resourceLimit" && diagnostic.path == "source"
     }));
 
+    let mut high_density = request.clone();
+    high_density.settings.resolution = [1_024, 1_024, 4];
+    high_density.settings.origin = [0, 0, 0];
+    validate_conversion_request(&high_density, 3_352).unwrap();
+
+    let mut representational_limit = request.clone();
+    representational_limit.settings.resolution = [MAX_CONVERSION_RESOLUTION_AXIS, 1, 1];
+    representational_limit.settings.origin = [-1_000_000, 0, 0];
+    validate_conversion_request(&representational_limit, 3_352).unwrap();
+
     let mut excessive_resolution = request.clone();
-    excessive_resolution.settings.resolution = [257, 1, 1];
+    excessive_resolution.settings.resolution = [MAX_CONVERSION_RESOLUTION_AXIS + 1, 1, 1];
+    excessive_resolution.settings.origin = [-1_000_000, 0, 0];
     let error = validate_conversion_request(&excessive_resolution, 3_352).unwrap_err();
     assert!(error
         .diagnostics()

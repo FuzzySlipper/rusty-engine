@@ -105,6 +105,20 @@ fn adjacent_primitives_keep_distinct_groups_when_they_share_a_material() {
 }
 
 #[test]
+fn high_density_conversion_is_governed_by_measured_work_not_an_axis_preset() {
+    let imported = imported_source();
+    let mut request = plan_request(&imported);
+    request.settings.conversion.resolution = [64, 512, 64];
+    request.settings.conversion.origin = [0, 0, 0];
+    request.settings.conversion.max_output_voxels = 1_000_000;
+
+    let prepared = plan_conversion(&request, &imported).unwrap();
+    assert_eq!(prepared.plan().settings.conversion.resolution[1], 512);
+    assert!(prepared.candidate().voxelization_work <= 10_000_000);
+    assert!(prepared.candidate().output_voxels <= 1_000_000);
+}
+
+#[test]
 fn plan_preview_apply_are_hash_guarded_bounded_and_transform_aware() {
     let imported = imported_source();
     let baseline_request = plan_request(&imported);

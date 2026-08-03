@@ -115,6 +115,13 @@ cell volume is charged before iteration against a ten-million-operation geometri
 The conversion receipt reports the measured work; the old `MAX_SURFACE_SAMPLE_WORK` name remains a
 compatibility alias for `MAX_GEOMETRIC_VOXELIZATION_WORK`.
 
+Conversion resolution is allowed across the complete durable coordinate span: as many as 2,000,001
+cells on one axis and the corresponding checked three-axis product. This deliberately high ceiling
+is a representation guard, not a recommended workload or quality preset. The pre-iteration
+ten-million geometric-work meter and the request's at-most-one-million retained-voxel limit remain
+the practical computation and memory admission owners, so 512- and 1,024-cell character bakes do
+not require arbitrary cap increments while oversized work still fails before its cell loops.
+
 This semantic algorithm change is provenance-visible as
 `rusty-engine.mesh-to-voxel.v2`; existing v1 assets remain valid data, while a re-conversion records
 the geometric owner that produced the new candidate.

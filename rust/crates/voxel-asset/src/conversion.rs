@@ -9,8 +9,11 @@ use crate::codec::{valid_sha256, MAX_MATERIAL_MAPPINGS, MAX_REPRESENTED_VOXELS, 
 pub const MAX_CONVERSION_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_CONVERSION_SOURCE_VERTICES: usize = 2_000_000;
 pub const MAX_CONVERSION_SOURCE_INDICES: usize = 6_000_000;
-pub const MAX_CONVERSION_RESOLUTION_AXIS: u32 = 256;
-pub const MAX_CONVERSION_CELLS: u64 = 16_777_216;
+/// Largest lattice span representable by the durable +/-1,000,000-cell
+/// coordinate contract. Conversion work and retained output have independent,
+/// substantially tighter measured limits; this is not a product-tuning cap.
+pub const MAX_CONVERSION_RESOLUTION_AXIS: u32 = 2_000_001;
+pub const MAX_CONVERSION_CELLS: u64 = 8_000_012_000_006_000_001;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
