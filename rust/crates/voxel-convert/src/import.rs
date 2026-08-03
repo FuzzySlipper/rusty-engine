@@ -369,7 +369,7 @@ fn validate_triangles(
 ) -> Result<(), ConversionError> {
     for (index, triangle) in triangles.iter().enumerate() {
         let [a, b, c] = triangle.indices;
-        if a == b || b == c || c == a || area_squared(positions, triangle) <= f64::EPSILON {
+        if a == b || b == c || c == a || triangle_is_degenerate(positions, triangle) {
             return Err(ConversionError::one(
                 "conversion.invalidGeometry",
                 format!("source.triangles[{index}]"),
@@ -380,16 +380,34 @@ fn validate_triangles(
     Ok(())
 }
 
-pub(crate) fn area_squared(positions: &[[f64; 3]], triangle: &ImportedTriangle) -> f64 {
+fn triangle_is_degenerate(positions: &[[f64; 3]], triangle: &ImportedTriangle) -> bool {
     let [a, b, c] = triangle.indices.map(|index| positions[index as usize]);
     let ab = subtract(b, a);
     let ac = subtract(c, a);
+    let bc = subtract(c, b);
+    let component_scale = ab
+        .iter()
+        .chain(ac.iter())
+        .map(|component| component.abs())
+        .fold(0.0_f64, f64::max);
+    if component_scale == 0.0 {
+        return true;
+    }
+
+    // Normalize before comparing squared area with squared edge length.  This
+    // keeps the decision invariant under uniform source-unit changes and also
+    // avoids overflow/underflow for otherwise finite transformed positions.
+    let ab = ab.map(|component| component / component_scale);
+    let ac = ac.map(|component| component / component_scale);
+    let bc = bc.map(|component| component / component_scale);
     let cross = [
         ab[1] * ac[2] - ab[2] * ac[1],
         ab[2] * ac[0] - ab[0] * ac[2],
         ab[0] * ac[1] - ab[1] * ac[0],
     ];
-    dot(cross, cross)
+    let normalized_area_squared = dot(cross, cross);
+    let longest_edge_squared = dot(ab, ab).max(dot(ac, ac)).max(dot(bc, bc));
+    normalized_area_squared <= f64::EPSILON * longest_edge_squared * longest_edge_squared
 }
 
 pub(crate) fn identity_matrix() -> [f64; 16] {
@@ -492,4 +510,39 @@ pub(super) fn ensure_total_limit(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{triangle_is_degenerate, validate_triangles, ImportedTriangle};
+
+    const TRIANGLE: ImportedTriangle = ImportedTriangle {
+        indices: [0, 1, 2],
+        source_material_slot: 0,
+    };
+
+    #[test]
+    fn legitimate_triangle_admission_is_uniform_scale_invariant() {
+        let source = [[0.0, 0.0, 0.0], [3.0e-4, 0.0, 0.0], [0.0, 4.75e-5, 0.0]];
+
+        for scale in [1.0 / 128.0, 1.0e-2, 1.0, 1.0e2] {
+            let positions = source.map(|position| position.map(|component| component * scale));
+            assert!(
+                !triangle_is_degenerate(&positions, &TRIANGLE),
+                "legitimate triangle rejected at scale {scale}"
+            );
+            validate_triangles(&positions, &[TRIANGLE]).unwrap();
+        }
+    }
+
+    #[test]
+    fn collinear_triangle_rejection_is_uniform_scale_invariant() {
+        let source = [[0.0, 0.0, 0.0], [3.0e-4, 0.0, 0.0], [6.0e-4, 0.0, 0.0]];
+
+        for scale in [1.0e-2, 1.0, 1.0e2] {
+            let positions = source.map(|position| position.map(|component| component * scale));
+            assert!(triangle_is_degenerate(&positions, &TRIANGLE));
+            assert!(validate_triangles(&positions, &[TRIANGLE]).is_err());
+        }
+    }
 }
