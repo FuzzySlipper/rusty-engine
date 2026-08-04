@@ -2634,6 +2634,42 @@ void test('a sprite frame with no atlas frame falls back to full UVs and is coun
   assert.equal(r.spriteFallbackCount, 1);
 });
 
+void test('sprite atlases bind retained PNG textures and refresh live sprites on replacement', () => {
+  const beforeBytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 128]);
+  const afterBytes = rgbaPng(2, 1, [0, 0, 255, 255, 255, 255, 0, 255]);
+  const atlas: SpriteAtlasDescriptor = {
+    id: 'sprite/textured-spark-sheet',
+    texture: 'texture/checker',
+    frames: [{ frame: 0, uvMin: [0, 0], uvMax: [0.5, 1] }],
+  };
+  const sprite = atlasSprite(0);
+  const renderer = new ThreeRenderer();
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture: textureDescriptor(beforeBytes) },
+    { op: 'defineSpriteAtlas', atlas },
+    { op: 'createSprite', handle: renderHandle(2), parent: null, sprite: { ...sprite, asset: atlas.id } },
+  ] });
+
+  const mesh = renderer.objectFor(renderHandle(2)) as THREE.Mesh;
+  const material = mesh.material as THREE.MeshBasicMaterial;
+  assert.ok(material.map instanceof THREE.DataTexture);
+  assert.equal(material.transparent, true, 'texture alpha must remain observable with an opaque tint');
+  assert.deepEqual(
+    [...((material.map.image as { data: Uint8Array }).data)],
+    [255, 0, 0, 255, 0, 255, 0, 128],
+  );
+  assert.deepEqual(spriteUv(renderer, 2), [0, 0, 0.5, 1]);
+
+  const previousTexture = material.map;
+  renderer.applyDiff({ op: 'defineTexture', texture: textureDescriptor(afterBytes, 2) });
+  const replaced = (renderer.objectFor(renderHandle(2)) as THREE.Mesh).material as THREE.MeshBasicMaterial;
+  assert.notEqual(replaced.map, previousTexture, 'live sprites must follow retained texture replacement');
+  assert.deepEqual(
+    [...((replaced.map as THREE.DataTexture).image as { data: Uint8Array }).data],
+    [0, 0, 255, 255, 255, 255, 0, 255],
+  );
+});
+
 void test('instance of an undefined asset, and redefine while in use, are classified errors', () => {
   const r = new ThreeRenderer();
   assert.throws(

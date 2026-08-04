@@ -396,6 +396,7 @@ export class ThreeRenderer {
     const recursivelyDestroyed = new Set<RenderHandle>();
     const changedMaterialIds = new Set<string>();
     const changedTextureIds = new Set<string>();
+    const changedSpriteAtlasIds = new Set<string>();
     try {
       for (let index = 0; index < frame.ops.length; index += 1) {
         const op = frame.ops[index]!;
@@ -411,6 +412,7 @@ export class ThreeRenderer {
             prepared.textures.get(index),
             changedMaterialIds,
             changedTextureIds,
+            changedSpriteAtlasIds,
           );
           prepared.geometries.delete(index);
           prepared.textures.delete(index);
@@ -424,6 +426,7 @@ export class ThreeRenderer {
       for (const materialId of [...changedMaterialIds].sort()) {
         this.#replaceLiveMaterial(materialId);
       }
+      this.#replaceLiveSpriteMaterials(changedTextureIds, changedSpriteAtlasIds);
     } catch (cause) {
       disposePreparedFrame(prepared);
       throw cause;
@@ -487,6 +490,7 @@ export class ThreeRenderer {
     preparedTexture?: RetainedTextureResource | null,
     changedMaterialIds?: Set<string>,
     changedTextureIds?: Set<string>,
+    changedSpriteAtlasIds?: Set<string>,
   ): void {
     switch (diff.op) {
       case 'create':
@@ -518,6 +522,7 @@ export class ThreeRenderer {
         break;
       case 'defineSpriteAtlas':
         this.#atlases.set(diff.atlas.id, diff.atlas);
+        changedSpriteAtlasIds?.add(diff.atlas.id);
         break;
       case 'defineStaticMesh':
         this.#defineStaticMesh(diff.asset, preparedGeometry?.[0]);
@@ -2022,13 +2027,7 @@ export class ThreeRenderer {
     // the node origin.
     const geometry = new THREE.PlaneGeometry(s.size[0], s.size[1]);
     geometry.translate((0.5 - s.pivot[0]) * s.size[0], (0.5 - s.pivot[1]) * s.size[1], 0);
-    const material = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(s.tint[0], s.tint[1], s.tint[2]),
-      opacity: s.tint[3],
-      transparent: s.tint[3] < 1,
-      depthTest: s.depth !== 'depthTestOff',
-      depthWrite: s.depth === 'default',
-    });
+    const material = this.#spriteMaterialFor(s);
     const mesh = new THREE.Mesh(geometry, material);
     this.#trackObjectResources(mesh);
     mesh.renderOrder = s.renderOrder;
@@ -2074,7 +2073,7 @@ export class ThreeRenderer {
       entry.sprite = { ...entry.sprite, tint: diff.tint };
       material.color.setRGB(diff.tint[0], diff.tint[1], diff.tint[2]);
       material.opacity = diff.tint[3];
-      material.transparent = diff.tint[3] < 1;
+      material.transparent = diff.tint[3] < 1 || material.map !== null;
     }
     if (diff.renderOrder !== null) {
       entry.sprite = { ...entry.sprite, renderOrder: diff.renderOrder };
@@ -2083,6 +2082,51 @@ export class ThreeRenderer {
     if (diff.visible !== null) {
       mesh.visible = diff.visible;
       entry.sprite = { ...entry.sprite, visible: diff.visible };
+    }
+  }
+
+  /** Build the presentation material for a sprite, including its atlas texture. */
+  #spriteMaterialFor(sprite: SpriteInstanceDescriptor): THREE.MeshBasicMaterial {
+    const atlas = this.#atlases.get(sprite.asset);
+    const texture = atlas === undefined
+      ? undefined
+      : this.#textureResources.get(atlas.texture)?.texture;
+    const material = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(sprite.tint[0], sprite.tint[1], sprite.tint[2]),
+      map: texture ?? null,
+      opacity: sprite.tint[3],
+      // Encoded sprite textures may carry alpha even when the authority tint is opaque.
+      transparent: sprite.tint[3] < 1 || texture !== undefined,
+      depthTest: sprite.depth !== 'depthTestOff',
+      depthWrite: sprite.depth === 'default',
+    });
+    this.#trackMaterialResource(material);
+    return material;
+  }
+
+  /** Replace only live sprite materials whose atlas texture identity changed. */
+  #replaceLiveSpriteMaterials(
+    changedTextureIds: ReadonlySet<string>,
+    changedSpriteAtlasIds: ReadonlySet<string>,
+  ): void {
+    if (changedTextureIds.size === 0 && changedSpriteAtlasIds.size === 0) return;
+    for (const entry of this.#handles.values()) {
+      if (entry.kind !== 'sprite' || entry.sprite === undefined) continue;
+      const atlas = this.#atlases.get(entry.sprite.asset);
+      if (
+        atlas === undefined
+        || (
+          !changedSpriteAtlasIds.has(entry.sprite.asset)
+          && !changedTextureIds.has(atlas.texture)
+        )
+      ) {
+        continue;
+      }
+      const mesh = entry.object as THREE.Mesh;
+      const previous = mesh.material as THREE.MeshBasicMaterial;
+      const next = this.#spriteMaterialFor(entry.sprite);
+      mesh.material = next;
+      previous.dispose();
     }
   }
 
