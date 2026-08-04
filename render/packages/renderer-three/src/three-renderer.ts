@@ -619,6 +619,7 @@ export class ThreeRenderer {
         if (operation.op === 'defineStaticMesh') {
           prepared.geometries.set(index, [buildMeshGeometry(
             operation.asset.payload,
+            operation.asset.materialSlots,
             this.#meshBufferSource,
             this.#meshResourceSource,
             'defineStaticMesh',
@@ -626,6 +627,7 @@ export class ThreeRenderer {
         } else if (operation.op === 'replaceMeshPayload') {
           prepared.geometries.set(index, [buildMeshGeometry(
             operation.payload,
+            undefined,
             this.#meshBufferSource,
             this.#meshResourceSource,
             'replaceMeshPayload',
@@ -1367,6 +1369,7 @@ export class ThreeRenderer {
     // fails closed below — never silently producing empty geometry.
     const geometry = preparedGeometry ?? buildMeshGeometry(
       asset.payload,
+      asset.materialSlots,
       this.#meshBufferSource,
       this.#meshResourceSource,
       'defineStaticMesh',
@@ -2361,6 +2364,7 @@ export class ThreeRenderer {
     const geometry = preparedGeometry
       ?? buildMeshGeometry(
         diff.payload,
+        undefined,
         this.#meshBufferSource,
         this.#meshResourceSource,
         'replaceMeshPayload',
@@ -2822,6 +2826,7 @@ function buildVoxelObjectGeometries(
     asset.meshes.forEach((mesh, index) => {
       const geometry = buildMeshGeometry(
         mesh.payload,
+        undefined,
         bufferSource,
         resourceSource,
         `defineVoxelObject.meshes[${String(index)}]`,
@@ -2848,6 +2853,7 @@ function buildVoxelObjectGeometries(
 
 function buildMeshGeometry(
   payload: MeshPayloadDescriptor,
+  materialSlots: readonly MeshMaterialSlot[] | undefined,
   bufferSource: MeshBufferSource | undefined,
   resourceSource: MeshResourceSource | undefined,
   ctx: string,
@@ -2869,7 +2875,33 @@ function buildMeshGeometry(
   }
   geometry.setIndex(new THREE.BufferAttribute(streams.indices, 1));
   // One draw group per material slot (BufferGeometry.addGroup(start, count, index)).
-  payload.groups.forEach((g, i) => geometry.addGroup(g.start, g.count, i));
+  // Static meshes carry an independently ordered material table, so the
+  // contract slot must be resolved to that table's array index. Payload-only
+  // uploads (replaceMeshPayload) intentionally retain their group-order
+  // material array and therefore omit materialSlots here.
+  const slotIndices = materialSlots === undefined
+    ? undefined
+    : new Map(materialSlots.map((slot, index) => [slot.slot, index]));
+  // Older direct renderer callers sometimes label a payload `staticAsset` while
+  // supplying only the positional material array (the projection path does not
+  // emit those unbound descriptors). Preserve that compatibility case only when
+  // none of the payload slots can be resolved; a partially-bound table still
+  // fails closed instead of silently binding one group to the wrong material.
+  const hasUnresolvedSlot = slotIndices !== undefined
+    && payload.groups.some((group) => !slotIndices.has(group.materialSlot));
+  const hasResolvedSlot = slotIndices !== undefined
+    && payload.groups.some((group) => slotIndices.has(group.materialSlot));
+  const usePositionalGroups = slotIndices !== undefined && hasUnresolvedSlot && !hasResolvedSlot;
+  for (let index = 0; index < payload.groups.length; index += 1) {
+    const group = payload.groups[index]!;
+    const materialIndex = slotIndices?.get(group.materialSlot)
+      ?? (slotIndices === undefined || usePositionalGroups ? index : undefined);
+    if (materialIndex === undefined) {
+      geometry.dispose();
+      throw new RenderApplyError(`${ctx}: unbound material slot ${group.materialSlot}`);
+    }
+    geometry.addGroup(group.start, group.count, materialIndex);
+  }
   geometry.boundingBox = new THREE.Box3(
     new THREE.Vector3(payload.bounds.min[0], payload.bounds.min[1], payload.bounds.min[2]),
     new THREE.Vector3(payload.bounds.max[0], payload.bounds.max[1], payload.bounds.max[2]),

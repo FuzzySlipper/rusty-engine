@@ -1307,6 +1307,38 @@ function crateAsset(): StaticMeshAsset {
   };
 }
 
+void test('defineStaticMesh resolves draw groups through shuffled material slots', () => {
+  const asset: StaticMeshAsset = {
+    ...crateAsset(),
+    payload: {
+      ...quadPayload(),
+      provenance: 'staticAsset',
+      groups: [
+        { materialSlot: 122, start: 0, count: 3 },
+        { materialSlot: 68, start: 3, count: 3 },
+      ],
+    },
+    materialSlots: [
+      { slot: 68, material: 'material/floor' },
+      { slot: 122, material: 'material/mural' },
+    ],
+  };
+  const renderer = new ThreeRenderer();
+  renderer.applyDiff({ op: 'defineStaticMesh', asset });
+  renderer.applyDiff({
+    op: 'createStaticMeshInstance',
+    handle: renderHandle(1),
+    parent: null,
+    instance: crateInstance(asset.asset),
+  });
+
+  const geometry = (renderer.objectFor(renderHandle(1)) as THREE.Mesh).geometry;
+  assert.deepEqual(
+    geometry.groups.map((group) => [group.start, group.count, group.materialIndex]),
+    [[0, 3, 1], [3, 3, 0]],
+  );
+});
+
 function crateInstance(
   asset = 'mesh/crate',
   overrides: StaticMeshInstanceDescriptor['materialOverrides'] = [],
