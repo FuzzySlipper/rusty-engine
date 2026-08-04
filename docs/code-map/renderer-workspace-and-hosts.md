@@ -39,6 +39,9 @@ surface, and renderer host/resource lifecycle.
   - `view-composition.ts` owns atomic Three camera/target/presentation realization,
     stale target revision guards, deterministic view order, physical-pixel viewport
     conversion, and target/presentation disposal. It is backend-private.
+  - `three-renderer.ts` owns the frozen CPU visibility readout: effective retained
+    visibility and camera-frustum membership per handle. It explicitly reports
+    GPU occlusion as `notMeasured` rather than inventing a depth authority.
 - [`render/packages/renderer-host/src`](../../render/packages/renderer-host/src)
   - `animated-mesh-capture.ts` owns deterministic PNG/contact-sheet encoding
     over an already-mounted `RendererSurface`; it does not load assets or own a
@@ -61,6 +64,9 @@ surface, and renderer host/resource lifecycle.
 - `RendererSurface.configureViews` publishes a complete immutable composition;
   `viewCompositionReadout` exposes target freshness and resource counts without
   exposing WebGL, Three textures, or a CPU readback path.
+- `RendererSurface.visibilityReadout` and the editor viewport counterpart expose
+  deterministic per-handle CPU visibility facts for their camera passes. They
+  are optional work-gating observations, not gameplay or renderer authority.
 - Generic static meshes bind the renderer-neutral `uv` attribute directly to
   the resolved material texture. Whole-texture and atlas-region voxel sampling
   remain an explicit voxel-surface specialization; ordinary textured meshes do

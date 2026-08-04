@@ -60,6 +60,41 @@ test('shared host realizes retained, presentation, and inspection families in a 
   expect(proof.snapshot).toContain('layer viewmodel');
   expect(proof.snapshot).toContain('label "viewmodel-static-proof"');
   expect(proof.snapshot).toContain('label "viewmodel-animated-proof"');
+  expect(proof.visibilityReadout.schemaVersion).toBe(1);
+  expect(proof.visibilityReadout.world.basis).toBe('cpuFrustum');
+  expect(proof.visibilityReadout.world.occlusion).toBe('notMeasured');
+  expect(proof.visibilityReadout.viewmodel.basis).toBe('cpuFrustum');
+  expect(proof.visibilityReadout.viewmodel.occlusion).toBe('notMeasured');
+  expect(proof.visibilityReadout.views).toEqual([]);
+  expect(proof.visibilityReadout.world.handles).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        handle: 101,
+        state: 'frustumVisible',
+        inFrustum: true,
+        effectivelyVisible: true,
+        occlusion: 'notMeasured',
+      }),
+    ]),
+  );
+  expect(proof.visibilityReadout.viewmodel.handles).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        handle: 110,
+        state: 'frustumVisible',
+        inFrustum: true,
+        effectivelyVisible: true,
+        occlusion: 'notMeasured',
+      }),
+    ]),
+  );
+  for (const pass of [proof.visibilityReadout.world, proof.visibilityReadout.viewmodel]) {
+    for (const handle of pass.handles) {
+      expect(['frustumVisible', 'outsideFrustum', 'hidden', 'notDrawable'])
+        .toContain(handle.state);
+      expect(handle.occlusion).toBe('notMeasured');
+    }
+  }
   expect(proof.animationClip).toBe('run');
   expect(proof.viewmodelAnimationClip).toBe('idle');
   expect(proof.viewmodelNodeCount).toBe(3);

@@ -175,6 +175,38 @@ export interface RendererVoxelObjectFrameReadout {
   readonly mesh: number;
 }
 
+/** Why a retained handle is or is not eligible for the current camera. */
+export type RendererHandleVisibilityState =
+  | 'frustumVisible'
+  | 'outsideFrustum'
+  | 'hidden'
+  | 'notDrawable';
+
+/**
+ * CPU-side visibility facts for one retained handle.
+ *
+ * `inFrustum` is a geometric camera test and `effectivelyVisible` includes the
+ * retained node's own visibility plus every ancestor's visibility. The Three
+ * backend does not claim GPU occlusion-query results here: `occlusion` is
+ * deliberately explicit so consumers cannot mistake this readout for a
+ * depth-buffer or visibility-buffer authority.
+ */
+export interface RendererHandleVisibilityReadout {
+  readonly handle: RenderHandle;
+  readonly state: RendererHandleVisibilityState;
+  readonly inFrustum: boolean;
+  readonly effectivelyVisible: boolean;
+  readonly occlusion: 'notMeasured';
+}
+
+/** A deterministic visibility snapshot for one camera and retained scene. */
+export interface RendererVisibilityReadout {
+  readonly schemaVersion: 1;
+  readonly basis: 'cpuFrustum';
+  readonly occlusion: 'notMeasured';
+  readonly handles: readonly RendererHandleVisibilityReadout[];
+}
+
 /** Exact renderer-owned retained resources; no gameplay or GPU-completion meaning. */
 export interface ThreeRendererResourceStatistics {
   readonly renderHandleCount: number;
@@ -973,6 +1005,61 @@ export class ThreeRenderer {
       });
       this.#writeStaticInstanceBatch(batch, visibleHandles);
     }
+  }
+
+  /**
+   * Read CPU-side camera visibility for every retained handle in one scene.
+   *
+   * This intentionally reports frustum/effective-visibility facts only. A
+   * browser depth buffer or GPU occlusion query is asynchronous and backend
+   * dependent, so this API does not pretend to know whether another object
+   * occluded a handle after rasterization. Consumers can safely use
+   * `state === 'frustumVisible'` to avoid work for hidden or out-of-frustum nodes and
+   * must treat `occlusion: 'notMeasured'` as an explicit non-claim.
+   */
+  visibilityReadout(
+    camera: THREE.Camera,
+    scene: THREE.Scene = this.scene,
+  ): RendererVisibilityReadout {
+    if (this.#disposed) {
+      throw new RenderApplyError('renderer is disposed');
+    }
+    camera.updateMatrixWorld(true);
+    scene.updateMatrixWorld(true);
+    this.prepareSpritesForCamera(camera, scene);
+    const projectionView = new THREE.Matrix4().multiplyMatrices(
+      camera.projectionMatrix,
+      camera.matrixWorldInverse,
+    );
+    const frustum = new THREE.Frustum().setFromProjectionMatrix(projectionView);
+    const handles = [...this.#handles.entries()]
+      .filter(([, entry]) => isDescendantOf(entry.object, scene))
+      .sort(([left], [right]) => left - right)
+      .map(([handle, entry]) => {
+        const effectivelyVisible = isEffectivelyVisible(entry.object, scene);
+        const drawable = isDrawableEntry(entry);
+        const inFrustum = drawable && objectIntersectsFrustum(frustum, entry.object);
+        const state: RendererHandleVisibilityState = !drawable
+          ? 'notDrawable'
+          : !effectivelyVisible
+            ? 'hidden'
+            : !inFrustum
+              ? 'outsideFrustum'
+              : 'frustumVisible';
+        return Object.freeze({
+          handle,
+          state,
+          inFrustum,
+          effectivelyVisible,
+          occlusion: 'notMeasured' as const,
+        });
+      });
+    return Object.freeze({
+      schemaVersion: 1,
+      basis: 'cpuFrustum' as const,
+      occlusion: 'notMeasured' as const,
+      handles: Object.freeze(handles),
+    });
   }
 
   /**
@@ -3197,6 +3284,28 @@ function isEffectivelyVisible(object: THREE.Object3D, root: THREE.Object3D): boo
     candidate = candidate.parent;
   }
   return false;
+}
+
+function isDrawableEntry(entry: NodeEntry): boolean {
+  return entry.kind !== 'light' && !(entry.kind === 'primitive' && entry.shape === 'group');
+}
+
+function objectIntersectsFrustum(frustum: THREE.Frustum, object: THREE.Object3D): boolean {
+  let drawable = false;
+  let intersects = false;
+  object.traverse((candidate) => {
+    if (drawable && intersects) return;
+    if (!isFrustumDrawable(candidate)) return;
+    drawable = true;
+    intersects ||= frustum.intersectsObject(candidate);
+  });
+  return drawable && intersects;
+}
+
+function isFrustumDrawable(object: THREE.Object3D): object is THREE.Mesh | THREE.Line | THREE.Points {
+  return object instanceof THREE.Mesh
+    || object instanceof THREE.Line
+    || object instanceof THREE.Points;
 }
 
 function matrixIsFinite(matrix: THREE.Matrix4): boolean {

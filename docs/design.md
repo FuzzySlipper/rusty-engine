@@ -617,6 +617,14 @@ single-camera path and submission loop. Cameras, viewports, targets, and their r
 presentation facts only; they do not own visibility, discovery, navigation, input, or another
 retained scene.
 
+The retained Three backend also exposes a frozen visibility readout through browser and editor
+surfaces. For each retained handle and camera pass it reports effective retained visibility and
+CPU geometry-bound frustum membership, with a deterministic `frustumVisible`, `outsideFrustum`,
+`hidden`, or `notDrawable` state. This is a readout and optional work-gating hint, not renderer or gameplay
+authority; it describes the current retained state and camera, not a historical last-rendered bit.
+GPU depth/occlusion is intentionally reported as `notMeasured`; asynchronous,
+backend-specific occlusion queries remain outside this contract.
+
 Rusty Roguelike is the first exact public consumer of that policy at
 `e88856aca2b07212e79ca8a9a8cdc904cb49bd61`, pinning Engine
 `b1f0415af6266783246371d227a2272de7d9f0d6`. Its Rust projection owns authored torch facts; the

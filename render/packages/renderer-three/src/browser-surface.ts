@@ -19,6 +19,7 @@ import {
   type MeshBufferSource,
   type MeshResourceSource,
   type RendererProjectionIdentity,
+  type RendererVisibilityReadout,
   type TextureResourceSource,
   type ThreeRendererResourceStatistics,
 } from './three-renderer.js';
@@ -51,6 +52,7 @@ import {
   RendererViewCompositionPolicyError,
   type RendererViewCompositionReadout,
   type RendererViewCompositionReceipt,
+  type RendererViewCompositionVisibilityReadout,
 } from './view-composition.js';
 
 export interface ProjectedThreeRenderResult {
@@ -225,6 +227,14 @@ export interface RendererBrowserSurfaceSubmissionStatistics extends ThreeRendere
   readonly triangleCount: number;
 }
 
+/** Visibility facts for both camera passes owned by one browser surface. */
+export interface RendererBrowserSurfaceVisibilityReadout {
+  readonly schemaVersion: 1;
+  readonly world: RendererVisibilityReadout;
+  readonly viewmodel: RendererVisibilityReadout;
+  readonly views: RendererViewCompositionVisibilityReadout['views'];
+}
+
 export interface RendererBrowserSurfaceAutomaticSubmissionPacingSample
   extends RendererGpuSubmissionDutySample {
   readonly automaticSubmissionCapacity: number;
@@ -242,6 +252,7 @@ export interface RendererBrowserSurface {
   readonly cameraPose: () => RendererBrowserSurfaceCameraPose;
   readonly cameraProjection: () => PerspectiveProjection;
   readonly lightingReadout: () => RendererBrowserSurfaceLightingReadout;
+  readonly visibilityReadout: () => RendererBrowserSurfaceVisibilityReadout;
   readonly configureViews: (composition: RendererViewComposition) => RendererViewCompositionReceipt;
   readonly viewCompositionReadout: () => RendererViewCompositionReadout;
   readonly projectWorldPoint: (
@@ -626,6 +637,12 @@ export function mountRendererBrowserSurface(
         retainedLights,
       });
     },
+    visibilityReadout: () => Object.freeze({
+      schemaVersion: 1,
+      world: renderer.visibilityReadout(camera, renderer.scene),
+      viewmodel: renderer.visibilityReadout(viewmodelCamera, renderer.viewmodelScene),
+      views: viewComposition.visibilityReadout().views,
+    }),
     viewCompositionReadout: () => viewComposition.readout(),
     projectWorldPoint,
     pick: (request) => pickProjectedObject(renderer, camera, raycaster, center, request),

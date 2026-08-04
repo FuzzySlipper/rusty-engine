@@ -215,6 +215,27 @@ export interface RendererEditorViewportReadout {
   readonly viewportHash: string;
 }
 
+export interface RendererEditorViewportVisibilityReadout {
+  readonly schemaVersion: 1;
+  readonly basis: 'cpuFrustum';
+  readonly occlusion: 'notMeasured';
+  readonly channels: readonly {
+    readonly channel: RendererEditorViewportChannel;
+    readonly visibility: {
+      readonly schemaVersion: 1;
+      readonly basis: 'cpuFrustum';
+      readonly occlusion: 'notMeasured';
+      readonly handles: readonly {
+        readonly handle: RenderHandle;
+        readonly state: 'frustumVisible' | 'outsideFrustum' | 'hidden' | 'notDrawable';
+        readonly inFrustum: boolean;
+        readonly effectivelyVisible: boolean;
+        readonly occlusion: 'notMeasured';
+      }[];
+    };
+  }[];
+}
+
 export interface RendererEditorViewportWorldProjection {
   readonly xPixels: number;
   readonly yPixels: number;
@@ -236,6 +257,8 @@ export interface RendererEditorViewport {
     position: readonly [number, number, number],
   ) => RendererEditorViewportWorldProjection;
   readonly readout: () => RendererEditorViewportReadout;
+  /** CPU frustum/effective visibility for each retained editor channel. */
+  readonly visibilityReadout: () => RendererEditorViewportVisibilityReadout;
   /** Submit one frame and return renderer-neutral statistics for that submission. */
   readonly renderOnce: (timeMs?: number) => RendererSurfaceStatisticsSample;
   readonly sampleAnimatedMesh: (
@@ -279,6 +302,7 @@ export interface RendererEditorViewportBackendPort {
     position: readonly [number, number, number],
   ) => RendererEditorViewportWorldProjection;
   readonly renderOnce: (timeMs?: number) => RendererSurfaceStatisticsInput;
+  readonly visibilityReadout: () => RendererEditorViewportVisibilityReadout;
   readonly sampleAnimatedMesh: (
     channel: RendererEditorViewportChannel,
     handle: RenderHandle,
@@ -559,6 +583,10 @@ export function createRendererEditorViewportWithBackend(
       backend.setAnimatedMeshPlayback(channel, handle, playback);
     },
     readout,
+    visibilityReadout: () => {
+      if (status === 'disposed') throw new Error('editor viewport is disposed');
+      return backend.visibilityReadout();
+    },
     renderOnce: (timeMs) => {
       if (status === 'disposed') {
         return createRendererSurfaceStatisticsSample({

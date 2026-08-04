@@ -102,6 +102,31 @@ export interface RendererSurfaceLightingReadout {
   readonly retainedLights: ReturnType<RendererBrowserSurface['lightingReadout']>['retainedLights'];
 }
 
+export interface RendererSurfaceVisibilityReadout {
+  readonly schemaVersion: 1;
+  readonly world: RendererSurfaceVisibilityPassReadout;
+  readonly viewmodel: RendererSurfaceVisibilityPassReadout;
+  readonly views: readonly {
+    readonly viewId: string;
+    readonly cameraId: string;
+    readonly target: 'primary' | 'offscreen';
+    readonly visibility: RendererSurfaceVisibilityPassReadout;
+  }[];
+}
+
+export interface RendererSurfaceVisibilityPassReadout {
+  readonly schemaVersion: 1;
+  readonly basis: 'cpuFrustum';
+  readonly occlusion: 'notMeasured';
+  readonly handles: readonly {
+    readonly handle: RenderHandle;
+    readonly state: 'frustumVisible' | 'outsideFrustum' | 'hidden' | 'notDrawable';
+    readonly inFrustum: boolean;
+    readonly effectivelyVisible: boolean;
+    readonly occlusion: 'notMeasured';
+  }[];
+}
+
 export class RendererSurfaceLightingError extends Error {
   readonly code = 'invalid_lighting_policy' as const;
 
@@ -394,6 +419,7 @@ export interface RendererSurface {
   readonly cameraProjection: () => PerspectiveProjection;
   readonly inputReadout: () => RendererSurfaceInputReadout;
   readonly lightingReadout: () => RendererSurfaceLightingReadout;
+  readonly visibilityReadout: () => RendererSurfaceVisibilityReadout;
   readonly configureViews: (
     composition: RendererViewComposition,
   ) => ReturnType<RendererBrowserSurface['configureViews']>;
@@ -779,6 +805,7 @@ function mountPreparedRendererSurface(
     cameraProjection: backendSurface.cameraProjection,
     inputReadout: controls.inputReadout,
     lightingReadout: backendSurface.lightingReadout,
+    visibilityReadout: backendSurface.visibilityReadout,
     configureViews: (composition) => {
       const receipt = backendSurface.configureViews(composition);
       if (receipt.applied) requestAutomaticSubmission();

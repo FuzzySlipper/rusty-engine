@@ -23,6 +23,7 @@ import {
   type MeshBufferSource,
   type MeshResourceSource,
   type TextureResourceSource,
+  type RendererVisibilityReadout,
   type ThreeRendererResourceStatistics,
 } from './three-renderer.js';
 import { ThreeEditorGridProjection } from './editor-grid.js';
@@ -92,6 +93,17 @@ export interface RendererEditorBackendSubmissionStatistics
   readonly triangleCount: number;
 }
 
+/** Visibility facts for each retained editor channel under the active camera. */
+export interface RendererEditorBackendVisibilityReadout {
+  readonly schemaVersion: 1;
+  readonly basis: 'cpuFrustum';
+  readonly occlusion: 'notMeasured';
+  readonly channels: readonly {
+    readonly channel: RendererEditorBackendChannel;
+    readonly visibility: RendererVisibilityReadout;
+  }[];
+}
+
 export interface RendererEditorBackendWorldProjection {
   readonly xPixels: number;
   readonly yPixels: number;
@@ -109,6 +121,7 @@ export interface RendererEditorBackend {
     position: readonly [number, number, number],
   ) => RendererEditorBackendWorldProjection;
   readonly renderOnce: (timeMs?: number) => RendererEditorBackendSubmissionStatistics;
+  readonly visibilityReadout: () => RendererEditorBackendVisibilityReadout;
   readonly sampleAnimatedMesh: (
     channel: RendererEditorBackendChannel,
     handle: RenderHandle,
@@ -297,6 +310,18 @@ export function mountRendererEditorBackend(
       gridProjection.setDescriptor(descriptor);
     },
     gridReadout: () => gridProjection.readout(),
+    visibilityReadout: () => Object.freeze({
+      schemaVersion: 1,
+      basis: 'cpuFrustum' as const,
+      occlusion: 'notMeasured' as const,
+      channels: Object.freeze(CHANNEL_ORDER.map((channel) => Object.freeze({
+        channel,
+        visibility: channels.renderer(channel).visibilityReadout(
+          camera,
+          channels.renderer(channel).scene,
+        ),
+      }))),
+    }),
     resize,
     pick: (request) => pickAcrossChannels(channels, camera, raycaster, pickPoint, request),
     projectWorldPoint: (position) => {

@@ -63,6 +63,7 @@ export type {
   RendererEditorViewportPickReceipt,
   RendererEditorViewportPickRequest,
   RendererEditorViewportReadout,
+  RendererEditorViewportVisibilityReadout,
   RendererEditorViewportSize,
   RendererEditorViewportSizeReceipt,
   RendererEditorViewportStatus,

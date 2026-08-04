@@ -72,6 +72,7 @@ interface BrowserProof {
   readonly inspectionSurfaceKind: string;
   readonly lightCount: number;
   readonly defaultLightingReadout: ReturnType<RendererSurface['lightingReadout']>;
+  readonly visibilityReadout: ReturnType<RendererSurface['visibilityReadout']>;
   readonly authoredLightingReadout: ReturnType<RendererSurface['lightingReadout']>;
   readonly authoredLightingRejected: {
     readonly applied: boolean;
@@ -802,6 +803,7 @@ async function main(): Promise<void> {
   const projected = surface.projectWorldPoint([0, 0, -5]);
   const snapshot = surface.snapshot();
   const projection = surface.projectionSnapshot();
+  const visibilityReadout = surface.visibilityReadout();
   const voxelNode = surface.projectionSnapshot().nodes.find((node) => node.handle === renderHandle(108));
   const proof: BrowserProof = {
     animatedCapture: {
@@ -847,6 +849,7 @@ async function main(): Promise<void> {
     inspectionSurfaceKind: inspection.kind,
     lightCount: snapshot.match(/kind light\//gu)?.length ?? 0,
     defaultLightingReadout: surface.lightingReadout(),
+    visibilityReadout,
     authoredLightingReadout: lightingSurface.lightingReadout(),
     authoredLightingRejected: {
       applied: rejectedLighting.applied,

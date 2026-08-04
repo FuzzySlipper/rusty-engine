@@ -83,6 +83,32 @@ void test('composition publication is immutable and target revisions cannot be r
   assert.deepEqual(manager.readout().targets, []);
 });
 
+void test('composition visibility preserves configured view and camera identity', () => {
+  const visibility = {
+    schemaVersion: 1 as const,
+    basis: 'cpuFrustum' as const,
+    occlusion: 'notMeasured' as const,
+    handles: [],
+  };
+  const manager = new RendererViewCompositionBackend(
+    { initRenderTarget: () => undefined } as unknown as THREE.WebGLRenderer,
+    {
+      scene: {},
+      visibilityReadout: () => visibility,
+    } as unknown as ThreeRenderer,
+  );
+  assert.equal(manager.configure(composition()).applied, true);
+  assert.deepEqual(manager.visibilityReadout(), {
+    schemaVersion: 1,
+    views: [{
+      viewId: 'view.overview',
+      cameraId: 'camera.overview',
+      target: 'offscreen',
+      visibility,
+    }],
+  });
+});
+
 void test('changed target facts require a higher revision and publish exactly once', () => {
   const initialized: THREE.WebGLRenderTarget[] = [];
   let disposed = 0;

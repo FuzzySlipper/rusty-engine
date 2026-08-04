@@ -7,7 +7,7 @@ import {
   type RendererViewComposition,
 } from '@rusty-engine/render-contracts';
 
-import type { ThreeRenderer } from './three-renderer.js';
+import type { RendererVisibilityReadout, ThreeRenderer } from './three-renderer.js';
 
 export type RendererViewCompositionDiagnosticCode =
   | 'invalid_view_composition'
@@ -40,6 +40,16 @@ export interface RendererViewCompositionReadout {
     readonly presentationCount: number;
     readonly targetCount: number;
   };
+}
+
+export interface RendererViewCompositionVisibilityReadout {
+  readonly schemaVersion: 1;
+  readonly views: readonly {
+    readonly viewId: string;
+    readonly cameraId: string;
+    readonly target: RendererCompositionView['target']['kind'];
+    readonly visibility: RendererVisibilityReadout;
+  }[];
 }
 
 export class RendererViewCompositionPolicyError extends Error {
@@ -146,6 +156,23 @@ export class RendererViewCompositionBackend {
         targetCount: this.#targets.size,
       }),
     });
+  }
+
+  visibilityReadout(): RendererViewCompositionVisibilityReadout {
+    const views = this.#composition.views
+      .map((view) => {
+        const camera = this.#cameras.get(view.cameraId);
+        if (camera === undefined) return null;
+        return Object.freeze({
+          viewId: view.id,
+          cameraId: view.cameraId,
+          target: view.target.kind,
+          visibility: this.#projection.visibilityReadout(camera, this.#projection.scene),
+        });
+      })
+      .filter((view): view is NonNullable<typeof view> => view !== null)
+      .sort((left, right) => left.viewId.localeCompare(right.viewId));
+    return Object.freeze({ schemaVersion: 1, views: Object.freeze(views) });
   }
 
   render(submission: number, primaryWidth: number, primaryHeight: number): void {

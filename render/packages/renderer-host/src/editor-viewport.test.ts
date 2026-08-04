@@ -36,6 +36,12 @@ void test('editor viewport isolates equal handles across deterministic runtime a
     viewport.readout().channels.map((channel) => channel.projection.nodes[0]?.handle),
     [7, 7, 7],
   );
+  assert.deepEqual(viewport.visibilityReadout(), {
+    schemaVersion: 1,
+    basis: 'cpuFrustum',
+    occlusion: 'notMeasured',
+    channels: [],
+  });
 
   const rustNamespacedHandle = renderHandle((2 ** 40) + 1);
   assert.equal(
@@ -461,6 +467,10 @@ class FakeEditorViewportBackend implements RendererEditorViewportBackendPort {
   renderOnce(timeMs?: number): ReturnType<RendererEditorViewportBackendPort['renderOnce']> {
     this.renderTimes.push(timeMs);
     return this.submission;
+  }
+
+  visibilityReadout(): ReturnType<RendererEditorViewportBackendPort['visibilityReadout']> {
+    return { schemaVersion: 1, basis: 'cpuFrustum', occlusion: 'notMeasured', channels: [] };
   }
 
   sampleAnimatedMesh(): ReturnType<RendererEditorViewportBackendPort['sampleAnimatedMesh']> {

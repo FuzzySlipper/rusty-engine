@@ -978,6 +978,10 @@ class FakeEditorViewportBackend implements RendererEditorViewportBackendPort {
     return this.submission;
   }
 
+  visibilityReadout(): ReturnType<RendererEditorViewportBackendPort['visibilityReadout']> {
+    return { schemaVersion: 1, basis: 'cpuFrustum', occlusion: 'notMeasured', channels: [] };
+  }
+
   sampleAnimatedMesh(
     channel: 'runtime' | 'authored' | 'overlay',
     handle: Parameters<RendererEditorViewportBackendPort['sampleAnimatedMesh']>[1],

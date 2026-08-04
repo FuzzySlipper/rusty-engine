@@ -440,6 +440,83 @@ void test('nested group snapshots retain their root scene layer', () => {
   assert.match(r.snapshot(), /handle 2  layer ui  shape cube/);
 });
 
+void test('visibilityReadout classifies retained handles by effective visibility and frustum', () => {
+  const renderer = new ThreeRenderer();
+  const positionedCube = (
+    translation: readonly [number, number, number],
+    visible = true,
+  ): RenderNode => ({
+    ...cubeNode(),
+    transform: { translation, rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+    visible,
+  });
+  renderer.applyFrame({
+    schemaVersion: 1,
+    ops: [
+      createDiff(1, positionedCube([0, 0, -5])),
+      createDiff(2, positionedCube([100, 0, -5])),
+      createDiff(3, positionedCube([0, 0, -5], false)),
+      {
+        op: 'create',
+        handle: renderHandle(4),
+        parent: null,
+        node: { ...positionedCube([0, 0, -5], false), geometry: { kind: 'group' } },
+      },
+      {
+        op: 'create',
+        handle: renderHandle(5),
+        parent: renderHandle(4),
+        node: positionedCube([0, 0, 0]),
+      },
+    ],
+  });
+  const camera = new THREE.PerspectiveCamera(90, 1, 0.1, 20);
+  camera.lookAt(0, 0, -1);
+  camera.updateProjectionMatrix();
+
+  const readout = renderer.visibilityReadout(camera);
+  const repeated = renderer.visibilityReadout(camera);
+  assert.deepEqual(readout, repeated, 'visibility readout is deterministic');
+  assert.equal(readout.schemaVersion, 1);
+  assert.equal(readout.basis, 'cpuFrustum');
+  assert.equal(readout.occlusion, 'notMeasured');
+  assert.deepEqual(readout.handles.map(({ handle }) => handle), [1, 2, 3, 4, 5]);
+  assert.deepEqual(
+    readout.handles.map(({ handle, state, inFrustum, effectivelyVisible, occlusion }) => ({
+      handle,
+      state,
+      inFrustum,
+      effectivelyVisible,
+      occlusion,
+    })),
+    [
+      { handle: 1, state: 'frustumVisible', inFrustum: true, effectivelyVisible: true, occlusion: 'notMeasured' },
+      { handle: 2, state: 'outsideFrustum', inFrustum: false, effectivelyVisible: true, occlusion: 'notMeasured' },
+      { handle: 3, state: 'hidden', inFrustum: true, effectivelyVisible: false, occlusion: 'notMeasured' },
+      { handle: 4, state: 'notDrawable', inFrustum: false, effectivelyVisible: false, occlusion: 'notMeasured' },
+      { handle: 5, state: 'hidden', inFrustum: true, effectivelyVisible: false, occlusion: 'notMeasured' },
+    ],
+  );
+  assert.equal(Object.isFrozen(readout), true);
+  assert.equal(Object.isFrozen(readout.handles), true);
+  assert.deepEqual(renderer.visibilityReadout(camera, renderer.viewmodelScene), {
+    schemaVersion: 1,
+    basis: 'cpuFrustum',
+    occlusion: 'notMeasured',
+    handles: [],
+  });
+
+  renderer.applyDiff({ op: 'destroy', handle: renderHandle(2) });
+  assert.equal(
+    renderer.visibilityReadout(camera).handles.some(({ handle }) => handle === renderHandle(2)),
+    false,
+    'destroyed handles disappear from a fresh readout',
+  );
+
+  renderer.dispose();
+  assert.throws(() => renderer.visibilityReadout(camera), /renderer is disposed/u);
+});
+
 void test('camera-relative descendants live only in the dedicated viewmodel scene', () => {
   const renderer = new ThreeRenderer();
   renderer.applyDiff(createDiff(1, {
@@ -1614,6 +1691,13 @@ void test('compatible static batches repack exact visible handles as the camera 
       renderer.projectionIdentityForObject(batch, index)?.handle),
     [renderHandle(2_000), renderHandle(2_001), renderHandle(2_002)],
   );
+  assert.deepEqual(
+    renderer.visibilityReadout(camera).handles
+      .filter(({ state }) => state === 'frustumVisible')
+      .map(({ handle }) => handle),
+    [renderHandle(2_000), renderHandle(2_001), renderHandle(2_002)],
+    'visibility query matches the prepared static batch for the same camera',
+  );
   lookAt(128);
   assert.equal(batch.count, 3);
   assert.deepEqual(
@@ -1634,6 +1718,13 @@ void test('compatible static batches repack exact visible handles as the camera 
       renderHandle(2_004),
       renderHandle(2_005),
     ],
+  );
+  assert.deepEqual(
+    renderer.visibilityReadout(camera).handles
+      .filter(({ state }) => state === 'frustumVisible')
+      .map(({ handle }) => handle),
+    [renderHandle(2_003), renderHandle(2_004), renderHandle(2_005)],
+    'picking does not broaden a fresh visibility query',
   );
 
   renderer.applyFrame({
