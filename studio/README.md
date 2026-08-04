@@ -72,17 +72,21 @@ acceptance.
 
 ## Launching the editor
 
-Build the isolated application, build a downstream project's adapter, and start the explicit Node
-host with an absolute adapter path:
+Build the isolated application and start the generic Node host at one stable address:
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm run build
-pnpm run host -- --adapter-binary /absolute/path/to/studio-adapter
+pnpm run host -- --host 127.0.0.1 --port 4300
 ```
 
-The host serves the built application and forwards only bounded JSON requests at
-`/api/studio-adapter` to that adapter's closed JSONL protocol. Its separate
+The host starts without a product adapter. When the user opens a project, it reads exactly one
+trusted root-local `.rusty-studio.json` bootstrap, starts the declared adapter command in that
+root, performs the strict `describe` handshake, and opens the selected project through a
+transactional `/api/studio-session/open` request. The browser never reads the manifest and Studio
+never parses the project schema. A failed build, start, handshake, or project open leaves the prior
+admitted adapter/project usable where one exists. The host forwards only bounded JSON requests at
+`/api/studio-adapter` to the selected adapter's closed JSONL protocol. Its separate
 `/api/studio-user-settings` boundary persists versioned per-canonical-project UI, grid, and camera
 preferences outside project bytes and browser storage. The default location is
 `$XDG_CONFIG_HOME/rusty-engine-studio/projects` (or the platform home config directory); pass an
@@ -90,6 +94,11 @@ absolute `--settings-root` to choose another host-owned location. It does not in
 checkout, interpret project content, or acquire gameplay authority. To open on launch, use exactly
 one `root` and one project-relative `project` query parameter; the same controls remain visible in
 the shell.
+
+For exact pinned-consumer certification, retain the explicit adapter launcher or use
+`pnpm run serve:den`; that path still builds and admits the configured public consumer before
+listening. Generic root-local discovery is a trusted development workflow, not a global registry,
+plugin marketplace, schema loader, or security policy.
 
 ### Managed LAN preview
 

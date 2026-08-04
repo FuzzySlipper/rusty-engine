@@ -16,6 +16,7 @@ import {
   type ProjectSavedAsResponse,
   type StudioAdapterRequest,
   type StudioAdapterResponse,
+  type StudioProjectReadout,
   type VoxelConversionDiscardedResponse,
   type VoxelConversionPreparedResponse,
   type VoxelObjectConversionDiscardedResponse,
@@ -64,6 +65,15 @@ export class StudioAdapterClient {
 
   constructor(transport: StudioAdapterTransport) {
     this.#transport = transport;
+  }
+
+  resetDescription(): void {
+    this.#adapterDescription = null;
+  }
+
+  acceptSession(adapter: AdapterDescription, project: StudioProjectReadout): void {
+    this.#adapterDescription = adapter;
+    validateStudioEntityInspectorCompatibility(this.#adapterDescription, project);
   }
 
   describe(): Promise<DescribedResponse> {

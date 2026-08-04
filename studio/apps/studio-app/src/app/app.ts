@@ -29,7 +29,6 @@ export class App implements OnInit {
       void this.#store.openProject(startup.root, startup.projectFile);
       return;
     }
-    void this.#store.connect();
     if (startup.status === 'invalid') this.#store.reportUiError(startup.diagnostic);
   }
 }

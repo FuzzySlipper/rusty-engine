@@ -81,6 +81,7 @@ import {
   type StudioEntityInspectorMutationReceipt,
   type StudioEntityInspectorMutationSettlement,
 } from './entity-inspector.js';
+import type { StudioProjectSessionPort } from './transport.js';
 
 export type StudioConnectionState =
   | { readonly kind: 'disconnected'; readonly message: string }
@@ -361,6 +362,7 @@ function initialSnapshot(): StudioWorkspaceSnapshot {
 export class StudioWorkspaceStore {
   readonly #client: StudioAdapterClient;
   readonly #settingsClient: HttpStudioUserSettingsClient | null;
+  readonly #sessionClient: StudioProjectSessionPort | null;
   readonly #playbackTimer: StudioPlaybackTimer;
   readonly #snapshot = signal<StudioWorkspaceSnapshot>(initialSnapshot());
   readonly snapshot: Signal<StudioWorkspaceSnapshot> = this.#snapshot.asReadonly();
@@ -389,10 +391,12 @@ export class StudioWorkspaceStore {
     client: StudioAdapterClient,
     settingsClient: HttpStudioUserSettingsClient | null = null,
     playbackTimer: StudioPlaybackTimer = DEFAULT_PLAYBACK_TIMER,
+    sessionClient: StudioProjectSessionPort | null = null,
   ) {
     this.#client = client;
     this.#settingsClient = settingsClient;
     this.#playbackTimer = playbackTimer;
+    this.#sessionClient = sessionClient;
   }
 
   async connect(): Promise<boolean> {
@@ -423,6 +427,29 @@ export class StudioWorkspaceStore {
   }
 
   async openProject(root: string, projectFile: string): Promise<void> {
+    if (this.#sessionClient !== null) {
+      this.#patch({ operation: 'opening', lastError: null, activeMenu: null });
+      try {
+        await this.#settingsWriteChain;
+        const userSettings = await this.#loadUserSettings(root);
+        const session = await this.#sessionClient.openProject(root, projectFile);
+        this.#client.resetDescription();
+        this.#client.acceptSession(session.adapter, session.project);
+        this.#patch({
+          connection: {
+            kind: 'connected',
+            adapter: session.adapter,
+            message: `${session.adapter.adapterId} is ready. Opening ${session.project.identity.name}…`,
+          },
+        });
+        this.#invalidateProjectScope();
+        this.#acceptProject(session.project, true);
+        this.#acceptUserSettings(userSettings);
+      } catch (error) {
+        this.#operationFailed(error);
+      }
+      return;
+    }
     if (!(await this.connect())) return;
     this.#invalidateProjectScope();
     this.#patch({ operation: 'opening', lastError: null, activeMenu: null });

@@ -7,6 +7,11 @@ import { MAX_STUDIO_ADAPTER_RESPONSE_BYTES } from '../libs/adapter-client/src/in
 const MAX_ADAPTER_STDERR_BYTES = 64 * 1024;
 const ADAPTER_CLOSE_GRACE_MILLISECONDS = 2_000;
 
+export interface AdapterProcessOptions {
+  readonly args?: readonly string[];
+  readonly cwd?: string;
+}
+
 interface PendingExchange {
   readonly resolve: (line: string) => void;
   readonly reject: (error: Error) => void;
@@ -49,16 +54,24 @@ export class AdapterProcess {
   #stderr = '';
   #serial: Promise<void> = Promise.resolve();
   #closedError: Error | null = null;
-  readonly #terminated: Promise<void>;
-  #resolveTerminated!: () => void;
 
-  constructor(binary: string, responseByteLimit = MAX_STUDIO_ADAPTER_RESPONSE_BYTES) {
+  constructor(
+    binary: string,
+    responseByteLimit = MAX_STUDIO_ADAPTER_RESPONSE_BYTES,
+    options: AdapterProcessOptions = {},
+  ) {
     if (!Number.isSafeInteger(responseByteLimit) || responseByteLimit < 1) {
       throw new TypeError('Studio adapter response byte limit must be a positive safe integer');
     }
     this.#responseByteLimit = responseByteLimit;
-    this.#terminated = new Promise((resolve) => { this.#resolveTerminated = resolve; });
-    this.#child = spawn(binary, [], { stdio: ['pipe', 'pipe', 'pipe'] });
+    this.#child = spawn(binary, options.args ?? [], {
+      cwd: options.cwd,
+      // Adapters may be launchers which build or supervise another process.
+      // Own a process group so host shutdown cannot leave those descendants
+      // behind when a project is switched or the host exits.
+      detached: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
     this.#child.stdout.on('data', (chunk: Buffer) => this.#receive(chunk));
     this.#child.stderr.setEncoding('utf8');
     this.#child.stderr.on('data', (chunk: string) => {
@@ -66,9 +79,8 @@ export class AdapterProcess {
     });
     this.#child.on('error', (error) => {
       this.#fail(error);
-      // A spawn failure does not reliably produce a later exit event. Treat it
-      // as terminal so bounded host cleanup cannot wait forever for one.
-      this.#resolveTerminated();
+      // A spawn failure does not reliably produce a later exit event. The
+      // failed child has no process group, so close() can finish immediately.
     });
     this.#child.on('exit', (code, signal) => {
       this.#fail(new Error(
@@ -76,7 +88,6 @@ export class AdapterProcess {
           this.#stderr.length === 0 ? '' : `: ${this.#stderr}`
         }`,
       ));
-      this.#resolveTerminated();
     });
   }
 
@@ -96,24 +107,51 @@ export class AdapterProcess {
 
   async close(): Promise<void> {
     if (!this.#child.stdin.destroyed) this.#child.stdin.end();
-    if (await this.#waitForExit(ADAPTER_CLOSE_GRACE_MILLISECONDS)) return;
-    this.#child.kill('SIGTERM');
-    if (await this.#waitForExit(ADAPTER_CLOSE_GRACE_MILLISECONDS)) return;
-    this.#child.kill('SIGKILL');
-    await this.#terminated;
+    if (await this.#waitForProcessGroup(ADAPTER_CLOSE_GRACE_MILLISECONDS)) return;
+    this.#signalProcessGroup('SIGTERM');
+    if (await this.#waitForProcessGroup(ADAPTER_CLOSE_GRACE_MILLISECONDS)) return;
+    this.#signalProcessGroup('SIGKILL');
+    await this.#waitForProcessGroup(ADAPTER_CLOSE_GRACE_MILLISECONDS);
   }
 
-  async #waitForExit(milliseconds: number): Promise<boolean> {
-    if (this.#child.exitCode !== null || this.#child.signalCode !== null) return true;
+  async #waitForProcessGroup(milliseconds: number): Promise<boolean> {
+    if (!this.#processGroupAlive()) return true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Promise<false>((resolve) => {
       timer = setTimeout(() => resolve(false), milliseconds);
-      timer.unref();
     });
-    const exited = this.#terminated.then(() => true);
+    const exited = (async () => {
+      while (this.#processGroupAlive()) {
+        await new Promise<void>((resolvePromise) => {
+          setTimeout(resolvePromise, 25);
+        });
+      }
+      return true;
+    })();
     const result = await Promise.race([exited, timedOut]);
     clearTimeout(timer);
     return result;
+  }
+
+  #processGroupAlive(): boolean {
+    const pid = this.#child.pid;
+    if (pid === undefined) return false;
+    try {
+      process.kill(-pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  #signalProcessGroup(signal: NodeJS.Signals): void {
+    const pid = this.#child.pid;
+    if (pid === undefined) return;
+    try {
+      process.kill(-pid, signal);
+    } catch {
+      // The group may have exited between the liveness probe and signal.
+    }
   }
 
   #exchangeOne(

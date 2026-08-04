@@ -30,6 +30,10 @@ viewport, and its closed external-project adapter protocol.
 - [`studio/libs/editor-shell/src/entity-inspector.ts`](../../studio/libs/editor-shell/src/entity-inspector.ts)
 - [`studio/scripts/check-entity-inspector-boundary.mjs`](../../studio/scripts/check-entity-inspector-boundary.mjs)
 - [`studio/scripts/check-demo-consumer-revision.mjs`](../../studio/scripts/check-demo-consumer-revision.mjs)
+- [`studio/scripts/studio-adapter-host.ts`](../../studio/scripts/studio-adapter-host.ts)
+- [`studio/scripts/studio-adapter-process.ts`](../../studio/scripts/studio-adapter-process.ts)
+- [`scripts/verify-studio-generic-browser-integration.sh`](../../scripts/verify-studio-generic-browser-integration.sh)
+- [`studio/test/generic-browser`](../../studio/test/generic-browser)
 - [`studio/test/entity-inspector-consumer-browser`](../../studio/test/entity-inspector-consumer-browser)
 - [Studio migration contract](../studio-migration-contract.md)
 - [Studio adapter protocol](../studio-adapter-protocol.md)
@@ -53,6 +57,10 @@ viewport, and its closed external-project adapter protocol.
 - Managed `serve-den` admits the exact configured consumer before listening and exposes one frozen
   host identity at `/health`, `/api/studio-status`, and the title bar. Manifest drift terminates the
   complete process group with `studioRestartRequired`; it never silently keeps a stale adapter.
+- Generic `host` starts adapterless and uses one explicit `/api/studio-session/open` transaction to
+  read a selected root's `.rusty-studio.json`, start its command, handshake the adapter, and open
+  the project. The bootstrap is a bounded trusted development input; it does not transfer project
+  schema or semantic authority to Studio. Status reports the active root, adapter, and protocol.
 - Renderer packages are consumed through their package roots.
 - Protocol 14 retains the promoted downstream Entity inspector
   seam. `studio/libs/editor-shell/src/entity-inspector.ts` owns static
@@ -110,6 +118,9 @@ viewport, and its closed external-project adapter protocol.
 
 ```bash
 ./scripts/verify-studio.sh
+./scripts/verify-studio-generic-browser-integration.sh \
+  /absolute/path/to/rusty-engine-demo \
+  /absolute/path/to/rusty-engine-voxels
 ./scripts/verify-studio-package-consumer.sh <40-character-public-sha>
 ./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo
 ./scripts/verify-studio-voxel-integration.sh /absolute/path/to/rusty-engine-voxels

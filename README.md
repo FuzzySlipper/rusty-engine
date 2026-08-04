@@ -96,6 +96,14 @@ choices, not ordinary Rust dependencies and not a commitment to web-game
 delivery. Browser evidence proves browser-owned behavior; headless evidence
 proves host-neutral mechanisms.
 
+The first-party Studio can run as one generic adapterless host for trusted local
+development. Opening a project sends its root and project-relative file through
+one `/api/studio-session/open` transaction; the host reads that root's bounded
+`.rusty-studio.json`, starts the declared adapter, and publishes the adapter
+identity plus canonical project readout only after handshake and admission. The
+browser never parses the project schema. Exact `serve:den` and consumer
+integration gates remain explicit pinned certification paths.
+
 ## Repository layout
 
 Workspace inventory: **30 Cargo workspace crates, 2 public gameplay-rules

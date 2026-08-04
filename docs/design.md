@@ -860,13 +860,18 @@ with shadows disabled; `Authored Lights` presents the accepted Rust projection u
 is a backward-compatible host-user scene-view preference. Switching modes never edits project bytes,
 changes the owner readout, or gives the browser authority over stored lights.
 
-Studio's Node/HTTP host serves the isolated application, forwards bounded JSON to the explicit
-adapter binary, and owns one separate versioned host-user settings boundary. Preferences are keyed
+Studio's Node/HTTP host serves the isolated application, forwards bounded JSON to one selected
+project-owned adapter, and owns one separate versioned host-user settings boundary. Generic Studio
+starts at one stable address and discovers a trusted root-local `.rusty-studio.json` bootstrap only
+when an operator opens a project. The bounded bootstrap names a command/argv and root-relative cwd;
+it is not a registry, plugin marketplace, schema loader, or global service locator. Studio performs
+the build/start/describe/open transaction and keeps the prior admitted session until the candidate
+has passed all stages. The adapter remains the project schema and semantic authority. Preferences are keyed
 by canonical project root, stored outside project bytes and browser storage, guarded by SHA-256
 compare-and-swap and same-directory atomic replacement, and applied to renderer-host camera/input
 configuration and Studio lighting presentation without creating gameplay authority. The host does
 not interpret project content. Its managed serve path handshakes the exact configured adapter before
-listening and publishes one frozen operational identity containing the Engine source commit,
+listening and publishes one operational identity containing the active root, Engine source commit,
 configured consumer commit, adapter build commit and binary hash, and negotiated protocol. A change
 to the sole consumer identity manifest terminates the bounded host/adapter process group with an
 explicit restart-required receipt; operational status remains observational and never becomes

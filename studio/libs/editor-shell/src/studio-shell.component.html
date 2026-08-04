@@ -52,6 +52,8 @@
         [attr.data-adapter-build]="hostStatus()?.runningAdapter?.buildCommit"
         [attr.data-adapter-binary-sha256]="hostStatus()?.runningAdapter?.binarySha256"
         [attr.data-protocol-version]="hostStatus()?.runningAdapter?.protocolVersion"
+        [attr.data-active-project-root]="hostStatus()?.activeProjectRoot"
+        [attr.data-active-project-file]="hostStatus()?.activeProjectFile"
         [title]="hostStatusError() ?? hostStatusLabel()"
       >{{ hostStatusLabel() }}</small>
     </div>

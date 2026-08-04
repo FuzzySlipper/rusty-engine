@@ -17,6 +17,8 @@ test('reads the exact frozen managed Studio runtime identity', async () => {
         repository: 'https://github.com/FuzzySlipper/rusty-engine-demo',
         commit: '2'.repeat(40),
       },
+      activeProjectRoot: '/work/loading-bay',
+      activeProjectFile: 'content/projects/loading-bay.project.json',
       runningAdapter: {
         adapterId: 'rusty-engine-demo.loading-bay',
         adapterVersion: 1,
@@ -44,6 +46,8 @@ test('rejects a host status whose adapter build does not match its consumer', as
       repository: 'https://github.com/FuzzySlipper/rusty-engine-demo',
       commit: '2'.repeat(40),
     },
+    activeProjectRoot: '/work/loading-bay',
+    activeProjectFile: 'content/projects/loading-bay.project.json',
     runningAdapter: {
       adapterId: 'rusty-engine-demo.loading-bay',
       adapterVersion: 1,

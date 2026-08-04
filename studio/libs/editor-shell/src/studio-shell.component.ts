@@ -113,7 +113,8 @@ export class StudioShellComponent {
     if (status === null) return this.hostStatusError() === null ? 'identity loading' : 'identity unavailable';
     const engine = status.engineSourceCommit?.slice(0, 8) ?? 'unmanaged';
     const consumer = status.configuredConsumer?.commit.slice(0, 8) ?? 'unmanaged';
-    return `Engine ${engine} · consumer ${consumer} · protocol ${String(status.runningAdapter.protocolVersion)}`;
+    const root = status.activeProjectRoot ?? 'no project';
+    return `${status.runningAdapter.adapterId} · protocol ${String(status.runningAdapter.protocolVersion)} · ${root} · Engine ${engine} · consumer ${consumer}`;
   });
   readonly frameSubmitted = output<StudioViewportFrameSubmitted>();
   readonly entityInspectorContributions =
@@ -494,6 +495,7 @@ export class StudioShellComponent {
   #hierarchySelection = Promise.resolve();
   #hostPathResolve: ((path: string | null) => void) | null = null;
   #restoreFocus: HTMLElement | null = null;
+  #statusRefreshKey: string | null = null;
 
   constructor() {
     void this.#hostStatus.read().then((status) => {
@@ -509,6 +511,13 @@ export class StudioShellComponent {
       const relativeProjectFile = snapshot.authoringDocument?.identity.relativeProjectFile;
       if (canonicalRoot !== null) this.projectRoot = canonicalRoot;
       if (relativeProjectFile !== undefined) this.projectFile = relativeProjectFile;
+      const statusKey = canonicalRoot === null || relativeProjectFile === undefined
+        ? null
+        : `${canonicalRoot}\0${relativeProjectFile}`;
+      if (statusKey !== null && statusKey !== this.#statusRefreshKey) {
+        this.#statusRefreshKey = statusKey;
+        void this.#readHostStatus();
+      }
     });
   }
 
@@ -527,7 +536,18 @@ export class StudioShellComponent {
   }
 
   openProject(): void {
-    void this.store.openProject(this.projectRoot, this.projectFile);
+    void this.store.openProject(this.projectRoot, this.projectFile)
+      .finally(() => { void this.#readHostStatus(); });
+  }
+
+  async #readHostStatus(): Promise<void> {
+    try {
+      this.hostStatus.set(await this.#hostStatus.read());
+      this.hostStatusError.set(null);
+    } catch (error: unknown) {
+      this.hostStatus.set(null);
+      this.hostStatusError.set(error instanceof Error ? error.message : String(error));
+    }
   }
 
   browseProjectRoot(): void {

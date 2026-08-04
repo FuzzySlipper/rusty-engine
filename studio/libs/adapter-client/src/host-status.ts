@@ -20,6 +20,8 @@ export interface StudioHostStatus {
   readonly mode: 'managed' | 'unmanaged';
   readonly engineSourceCommit: string | null;
   readonly configuredConsumer: StudioConfiguredConsumerIdentity | null;
+  readonly activeProjectRoot: string | null;
+  readonly activeProjectFile: string | null;
   readonly runningAdapter: StudioRunningAdapterIdentity;
 }
 
@@ -35,6 +37,8 @@ export function decodeStudioHostStatus(input: unknown): StudioHostStatus {
     'mode',
     'engineSourceCommit',
     'configuredConsumer',
+    'activeProjectRoot',
+    'activeProjectFile',
     'runningAdapter',
   ]);
   if (value['schemaVersion'] !== STUDIO_HOST_STATUS_SCHEMA_VERSION) {
@@ -51,6 +55,11 @@ export function decodeStudioHostStatus(input: unknown): StudioHostStatus {
   const configuredConsumer = value['configuredConsumer'] === null
     ? null
     : configuredConsumerIdentity(value['configuredConsumer'], '$.configuredConsumer');
+  const activeProjectRoot = nullablePath(value['activeProjectRoot'], '$.activeProjectRoot');
+  const activeProjectFile = nullableProjectFile(value['activeProjectFile'], '$.activeProjectFile');
+  if ((activeProjectRoot === null) !== (activeProjectFile === null)) {
+    fail('$', 'activeProjectRoot and activeProjectFile must be both null or both present');
+  }
   const runningAdapter = runningAdapterIdentity(value['runningAdapter'], '$.runningAdapter');
   if (value['mode'] === 'managed') {
     if (engineSourceCommit === null || configuredConsumer === null) {
@@ -73,8 +82,26 @@ export function decodeStudioHostStatus(input: unknown): StudioHostStatus {
     mode: value['mode'],
     engineSourceCommit,
     configuredConsumer,
+    activeProjectRoot,
+    activeProjectFile,
     runningAdapter,
   }) as StudioHostStatus;
+}
+
+function nullablePath(input: unknown, path: string): string | null {
+  if (input === null) return null;
+  if (typeof input !== 'string' || input.length === 0 || input.includes('\0')) {
+    fail(path, 'must be null or a nonempty path without NUL');
+  }
+  return input;
+}
+
+function nullableProjectFile(input: unknown, path: string): string | null {
+  if (input === null) return null;
+  if (typeof input !== 'string' || input.length === 0 || input.includes('\0') || input.startsWith('/')) {
+    fail(path, 'must be null or a nonempty project-relative path');
+  }
+  return input;
 }
 
 function configuredConsumerIdentity(

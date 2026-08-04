@@ -4,6 +4,7 @@ import { StudioAdapterClient } from '@rusty-engine/studio-adapter-client';
 import { HttpStudioUserSettingsClient } from '@rusty-engine/studio-user-settings';
 import {
   HttpStudioAdapterTransport,
+  HttpStudioProjectSessionClient,
   STUDIO_WORKSPACE,
   StudioWorkspaceStore,
 } from '@rusty-engine/studio-editor-shell';
@@ -18,6 +19,8 @@ void bootstrapApplication(App, {
       useFactory: () => new StudioWorkspaceStore(
         new StudioAdapterClient(new HttpStudioAdapterTransport()),
         new HttpStudioUserSettingsClient(),
+        undefined,
+        new HttpStudioProjectSessionClient(),
       ),
     },
   ],

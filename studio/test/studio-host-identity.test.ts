@@ -47,6 +47,8 @@ test('rejects an old adapter before listening, then exposes the exact current id
       assert.equal(status.configuredConsumer?.commit, CONSUMER);
       assert.equal(status.runningAdapter.buildCommit, CONSUMER);
       assert.equal(status.runningAdapter.protocolVersion, STUDIO_ADAPTER_PROTOCOL_VERSION);
+      assert.equal(status.activeProjectRoot, null);
+      assert.equal(status.activeProjectFile, null);
       assert.equal(
         status.runningAdapter.binarySha256,
         createHash('sha256').update(await readFile(currentAdapter)).digest('hex'),

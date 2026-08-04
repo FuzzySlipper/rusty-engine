@@ -52,6 +52,8 @@ function managedStatus() {
       repository: 'https://github.com/FuzzySlipper/rusty-engine-demo',
       commit: CONSUMER,
     },
+    activeProjectRoot: '/work/loading-bay',
+    activeProjectFile: 'content/projects/loading-bay.project.json',
     runningAdapter: {
       adapterId: 'rusty-engine-demo.loading-bay',
       adapterVersion: 1,

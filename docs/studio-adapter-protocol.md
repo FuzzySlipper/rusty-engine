@@ -11,6 +11,40 @@ owners.
 The first implementation is the `rusty-engine-demo` Loading Bay adapter. It proves the boundary
 against a real external checkout without turning that checkout into an ordinary Engine dependency.
 
+## Generic host discovery
+
+`pnpm run host` is intentionally generic and starts at one stable address without a product
+adapter. Each trusted development project root may carry a bounded `.rusty-studio.json` bootstrap:
+
+```json
+{
+  "schemaVersion": 1,
+  "adapter": {
+    "command": ["./scripts/studio-adapter.sh"],
+    "cwd": "."
+  }
+}
+```
+
+The manifest is a root-local launch description, not a registry, plugin marketplace, schema loader,
+or service locator. Its command is an explicit argv array and its working directory must remain
+inside the selected root. The Node host reads only this bootstrap, applies bounded shape and path
+checks, starts the candidate in a dedicated process group, and performs `describe` followed by
+`openProject` before publishing the new session. A failed read, start, handshake, identity check,
+or project admission terminates only the candidate and preserves the prior admitted session. The
+browser sends one bounded `POST /api/studio-session/open` request and receives the adapter
+description, canonical project readout, and active host identity together; it never reads the
+bootstrap or parses a project schema. `/api/studio-status` reports the active root, project file,
+adapter identity, and protocol once a project is open; an idle generic host reports readiness only
+through `/health` until a root is selected.
+
+The root manifests for `rusty-engine-demo` and `rusty-engine-voxels` are examples of this trusted
+development seam. Exact CI and `serve:den` certification remain explicit managed launch paths and
+continue to pin, build, and verify their named downstream consumer. Generic discovery does not
+replace those consumer-owned gates. In generic mode the existing `runningAdapter.binarySha256`
+field carries the selected bootstrap's content digest as the launch identity; managed mode carries
+the admitted executable digest.
+
 ## Closed protocol
 
 Every request carries `protocolVersion: 14` and a caller-selected `requestId`. Version 14 contains

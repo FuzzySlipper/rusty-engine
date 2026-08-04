@@ -2,9 +2,11 @@ import {
   MAX_STUDIO_ADAPTER_REQUEST_BYTES,
   MAX_STUDIO_ADAPTER_RESPONSE_BYTES,
   decodeStudioHostStatus,
+  decodeStudioSessionOpenedResponse,
   type StudioAdapterRequest,
   type StudioAdapterTransport,
   type StudioHostStatus,
+  type StudioSessionOpenedResponse,
 } from '@rusty-engine/studio-adapter-client';
 
 export type StudioFetch = (
@@ -51,6 +53,44 @@ export class HttpStudioAdapterTransport implements StudioAdapterTransport {
     } catch {
       throw new Error('Studio host returned malformed JSON');
     }
+  }
+}
+
+export interface StudioProjectSessionPort {
+  openProject(root: string, projectFile: string): Promise<StudioSessionOpenedResponse>;
+}
+
+export class HttpStudioProjectSessionClient implements StudioProjectSessionPort {
+  readonly #endpoint: string;
+  readonly #fetch: StudioFetch;
+
+  constructor(
+    endpoint = '/api/studio-session/open',
+    fetchImplementation: StudioFetch = globalThis.fetch.bind(globalThis),
+  ) {
+    this.#endpoint = endpoint;
+    this.#fetch = fetchImplementation;
+  }
+
+  async openProject(root: string, projectFile: string): Promise<StudioSessionOpenedResponse> {
+    const body = JSON.stringify({ root, projectFile });
+    if (new TextEncoder().encode(body).byteLength > MAX_STUDIO_ADAPTER_REQUEST_BYTES) {
+      throw new Error('Studio session request exceeds the protocol byte bound');
+    }
+    const response = await this.#fetch(this.#endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body,
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(studioHostError(text, response.status));
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(text) as unknown;
+    } catch {
+      throw new Error('Studio host returned malformed session JSON');
+    }
+    return decodeStudioSessionOpenedResponse(decoded);
   }
 }
 
