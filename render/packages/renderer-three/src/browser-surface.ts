@@ -73,6 +73,41 @@ export interface RendererBrowserSurfaceOptions {
   readonly viewComposition?: RendererViewComposition;
 }
 
+export interface RendererBrowserSurfaceLogicalViewport {
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * Recover the logical viewport from a canvas without feeding a capped backing
+ * buffer back into the next resize calculation. Once a logical viewport has
+ * been observed, it remains authoritative until CSS supplies a new size.
+ */
+export function resolveRendererBrowserSurfaceLogicalViewport(
+  clientWidth: number,
+  clientHeight: number,
+  backingWidth: number,
+  backingHeight: number,
+  initialPixelRatio: number,
+  previousWidth = 0,
+  previousHeight = 0,
+): RendererBrowserSurfaceLogicalViewport {
+  const width = clientWidth > 0
+    ? clientWidth
+    : previousWidth > 0
+      ? previousWidth
+      : (Number.isFinite(backingWidth) ? backingWidth / initialPixelRatio : 0);
+  const height = clientHeight > 0
+    ? clientHeight
+    : previousHeight > 0
+      ? previousHeight
+      : (Number.isFinite(backingHeight) ? backingHeight / initialPixelRatio : 0);
+  return {
+    width: Math.max(1, Math.round(width) || 800),
+    height: Math.max(1, Math.round(height) || 450),
+  };
+}
+
 export type RendererDefaultLightingMode = 'neutral' | 'disabled';
 
 export interface RendererBrowserSurfaceLightingOptions {
@@ -408,13 +443,14 @@ export function mountRendererBrowserSurface(
   };
 
   const resize = (): void => {
-    const width = Math.max(
-      1,
-      canvas.clientWidth || Math.round(canvas.width / requestedPixelRatio) || 800,
-    );
-    const height = Math.max(
-      1,
-      canvas.clientHeight || Math.round(canvas.height / requestedPixelRatio) || 450,
+    const { width, height } = resolveRendererBrowserSurfaceLogicalViewport(
+      canvas.clientWidth,
+      canvas.clientHeight,
+      canvas.width,
+      canvas.height,
+      requestedPixelRatio,
+      logicalViewport.width,
+      logicalViewport.height,
     );
     if (logicalViewport.width !== width || logicalViewport.height !== height) {
       webgl.setSize(width, height, false);
