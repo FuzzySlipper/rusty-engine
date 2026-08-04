@@ -2126,6 +2126,13 @@ export class ThreeRenderer {
       const previous = mesh.material as THREE.MeshBasicMaterial;
       const next = this.#spriteMaterialFor(entry.sprite);
       mesh.material = next;
+      if (changedSpriteAtlasIds.has(entry.sprite.asset)) {
+        mesh.userData['uv'] = this.#applySpriteUv(
+          mesh.geometry,
+          entry.sprite.asset,
+          entry.sprite.frame,
+        );
+      }
       previous.dispose();
     }
   }

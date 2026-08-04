@@ -2668,6 +2668,21 @@ void test('sprite atlases bind retained PNG textures and refresh live sprites on
     [...((replaced.map as THREE.DataTexture).image as { data: Uint8Array }).data],
     [0, 0, 255, 255, 255, 255, 0, 255],
   );
+
+  const lateAtlasRenderer = new ThreeRenderer();
+  lateAtlasRenderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture: textureDescriptor(beforeBytes) },
+    { op: 'createSprite', handle: renderHandle(3), parent: null, sprite: { ...sprite, asset: atlas.id } },
+  ] });
+  assert.equal(
+    (lateAtlasRenderer.objectFor(renderHandle(3)) as THREE.Mesh).material instanceof THREE.MeshBasicMaterial,
+    true,
+  );
+  assert.deepEqual(spriteUv(lateAtlasRenderer, 3), [0, 0, 1, 1]);
+  lateAtlasRenderer.applyDiff({ op: 'defineSpriteAtlas', atlas });
+  const lateAtlasMesh = lateAtlasRenderer.objectFor(renderHandle(3)) as THREE.Mesh;
+  assert.ok((lateAtlasMesh.material as THREE.MeshBasicMaterial).map instanceof THREE.DataTexture);
+  assert.deepEqual(spriteUv(lateAtlasRenderer, 3), [0, 0, 0.5, 1]);
 });
 
 void test('instance of an undefined asset, and redefine while in use, are classified errors', () => {
