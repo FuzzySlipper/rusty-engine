@@ -22,6 +22,8 @@ import {
   type RendererBrowserSurface,
   type RendererBrowserSurfacePickDiagnostic,
   type RendererBrowserSurfaceSubmissionStatistics,
+  type MeshResourceSource,
+  type TextureResourceSource,
 } from '@rusty-engine/renderer-three/backend';
 import {
   animationPlaybackReadout,
@@ -32,6 +34,16 @@ import {
   type RendererAnimatedMeshResourceManifest,
   type RendererAnimatedMeshResourceResolver,
 } from './animated-mesh-host.js';
+import {
+  loadRendererMeshResourceSource,
+  type RendererMeshResourceManifest,
+  type RendererMeshResourceResolver,
+} from './mesh-resource-host.js';
+import {
+  loadRendererTextureResourceSource,
+  type RendererTextureResourceManifest,
+  type RendererTextureResourceResolver,
+} from './texture-resource-host.js';
 import {
   RendererPresentationHostSet,
   type RendererPresentationFrameReceipt,
@@ -170,6 +182,26 @@ export interface RendererAnimatedMeshSurfaceOptions extends RendererSurfaceOptio
   readonly animatedMeshManifest: RendererAnimatedMeshResourceManifest;
   readonly resolveAnimatedMeshResource: RendererAnimatedMeshResourceResolver;
 }
+
+/**
+ * Resource-backed game-surface options. Resource manifests are admitted by the
+ * host before Three is mounted, so a failed resolver, length, or content-hash
+ * check cannot leave a partially mounted surface behind.
+ */
+export type RendererSurfaceResourceOptions = RendererSurfaceOptions & (
+  | {
+      readonly meshResourceManifest?: RendererMeshResourceManifest;
+      readonly resolveMeshResource?: RendererMeshResourceResolver;
+      readonly textureResourceManifest: RendererTextureResourceManifest;
+      readonly resolveTextureResource: RendererTextureResourceResolver;
+    }
+  | {
+      readonly meshResourceManifest: RendererMeshResourceManifest;
+      readonly resolveMeshResource: RendererMeshResourceResolver;
+      readonly textureResourceManifest?: RendererTextureResourceManifest;
+      readonly resolveTextureResource?: RendererTextureResourceResolver;
+    }
+);
 
 export interface RendererSurfaceControlsOptions {
   /** Controls are opt-in so mounting a renderer never captures input implicitly. */
@@ -410,11 +442,72 @@ export function createRendererDefaultSurfaceFrame(): RenderFrameDiff {
   return createRendererBrowserSurfaceFrame();
 }
 
+function hasRendererSurfaceResources(
+  options: RendererSurfaceOptions | RendererSurfaceResourceOptions,
+): options is RendererSurfaceResourceOptions {
+  const candidate = options as RendererSurfaceResourceOptions;
+  return candidate.meshResourceManifest !== undefined
+    || candidate.resolveMeshResource !== undefined
+    || candidate.textureResourceManifest !== undefined
+    || candidate.resolveTextureResource !== undefined;
+}
+
+async function loadRendererSurfaceResources(
+  options: RendererSurfaceResourceOptions,
+): Promise<Pick<RendererPreparedSurfaceResources, 'meshResourceSource' | 'textureResourceSource'>> {
+  if ((options.meshResourceManifest === undefined)
+    !== (options.resolveMeshResource === undefined)) {
+    throw new Error('meshResourceManifest requires an explicit resource resolver');
+  }
+  if ((options.textureResourceManifest === undefined)
+    !== (options.resolveTextureResource === undefined)) {
+    throw new Error('textureResourceManifest requires an explicit resource resolver');
+  }
+  const meshResourceSource = options.meshResourceManifest === undefined
+    ? undefined
+    : await loadRendererMeshResourceSource(
+        options.meshResourceManifest,
+        options.resolveMeshResource as RendererMeshResourceResolver,
+      );
+  const textureResourceSource = options.textureResourceManifest === undefined
+    ? undefined
+    : await loadRendererTextureResourceSource(
+        options.textureResourceManifest,
+        options.resolveTextureResource as RendererTextureResourceResolver,
+      );
+  return {
+    ...(meshResourceSource === undefined ? {} : { meshResourceSource }),
+    ...(textureResourceSource === undefined ? {} : { textureResourceSource }),
+  };
+}
+
 export function mountRendererSurface(
   canvas: HTMLCanvasElement,
-  options: RendererSurfaceOptions = {},
-): RendererSurface {
+  options: RendererSurfaceResourceOptions,
+): Promise<RendererSurface>;
+
+export function mountRendererSurface(
+  canvas: HTMLCanvasElement,
+  options?: RendererSurfaceOptions,
+): RendererSurface;
+
+export function mountRendererSurface(
+  canvas: HTMLCanvasElement,
+  options: RendererSurfaceOptions | RendererSurfaceResourceOptions = {},
+): RendererSurface | Promise<RendererSurface> {
+  if (hasRendererSurfaceResources(options)) {
+    return mountRendererSurfaceWithResources(canvas, options);
+  }
   return mountPreparedRendererSurface(canvas, options);
+}
+
+/** Mount a game surface after admitting its content-addressed mesh/texture resources. */
+export async function mountRendererSurfaceWithResources(
+  canvas: HTMLCanvasElement,
+  options: RendererSurfaceResourceOptions,
+): Promise<RendererSurface> {
+  const resources = await loadRendererSurfaceResources(options);
+  return mountPreparedRendererSurface(canvas, options, resources);
 }
 
 export async function mountRendererAnimatedMeshSurface(
@@ -428,16 +521,24 @@ export async function mountRendererAnimatedMeshSurface(
   return mountPreparedRendererSurface(
     canvas,
     options,
-    source,
-    contentHashesByAsset(options.animatedMeshManifest),
+    {
+      animatedMeshSource: source,
+      contentHashes: contentHashesByAsset(options.animatedMeshManifest),
+    },
   );
+}
+
+interface RendererPreparedSurfaceResources {
+  readonly animatedMeshSource?: AnimatedMeshAssetSource;
+  readonly contentHashes?: ReadonlyMap<string, string>;
+  readonly meshResourceSource?: MeshResourceSource;
+  readonly textureResourceSource?: TextureResourceSource;
 }
 
 function mountPreparedRendererSurface(
   canvas: HTMLCanvasElement,
   options: RendererSurfaceOptions,
-  animatedMeshSource?: AnimatedMeshAssetSource,
-  contentHashes: ReadonlyMap<string, string> = new Map(),
+  resources: RendererPreparedSurfaceResources = {},
 ): RendererSurface {
   const lighting = normalizeSurfaceLighting(options.lighting);
   const frame = options.frame ?? createRendererDefaultSurfaceFrame();
@@ -448,8 +549,13 @@ function mountPreparedRendererSurface(
   try {
     backendSurface = mountRendererBrowserSurface(canvas, {
       autoStart: false,
-      ...(animatedMeshSource === undefined ? {} : { animatedMeshSource }),
+      ...(resources.animatedMeshSource === undefined
+        ? {} : { animatedMeshSource: resources.animatedMeshSource }),
       ...(options.meshBufferSource === undefined ? {} : { meshBufferSource: options.meshBufferSource }),
+      ...(resources.meshResourceSource === undefined
+        ? {} : { meshResourceSource: resources.meshResourceSource }),
+      ...(resources.textureResourceSource === undefined
+        ? {} : { textureResourceSource: resources.textureResourceSource }),
       camera: {
         initialPose: controls.cameraPose(),
         ...(options.projection === undefined ? {} : { projection: options.projection }),
@@ -465,7 +571,10 @@ function mountPreparedRendererSurface(
     controls.dispose();
     throw cause;
   }
-  const animationProjection = surfaceAnimationProjection(backendSurface, contentHashes);
+  const animationProjection = surfaceAnimationProjection(
+    backendSurface,
+    resources.contentHashes ?? new Map(),
+  );
   let presentationHosts = options.presentationHosts ?? null;
   let animationFrame: number | null = null;
   let lastRenderTimeMs: number | null = null;

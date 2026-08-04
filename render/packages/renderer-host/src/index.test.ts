@@ -15,10 +15,12 @@ import {
   createRendererSurfaceProjection,
   loadRendererMeshResourceSource,
   loadRendererTextureResourceSource,
+  mountRendererSurface,
   resolveRendererStoredEditorCamera,
   type RendererAnimatedMeshResourceManifest,
   type RendererMeshResourceManifest,
   type RendererTextureResourceManifest,
+  type RendererSurfaceResourceOptions,
 } from './index.js';
 
 const ANIMATED_ASSET = 'mesh-animation/kenney-retro-character-medium';
@@ -254,6 +256,52 @@ void test('texture resource host admits canonical bounded bytes and snapshots re
   assert.throws(
     () => source.acquireResource(manifest.resources[0]!.resource, 'sha256:wrong', expected.byteLength),
     /does not match the admitted resource manifest/u,
+  );
+});
+
+void test('resource-backed game surface admits resources before backend mount', async () => {
+  const expected = new Uint8Array([1, 2, 3, 4]);
+  const digest = createHash('sha256').update(expected).digest('hex');
+  const manifest: RendererTextureResourceManifest = {
+    kind: 'rusty_renderer_texture_resources.v1',
+    resources: [{
+      resource: `texture-resource/${digest}`,
+      contentHash: `sha256:${digest}`,
+      byteLength: expected.byteLength,
+    }],
+  };
+  const options: RendererSurfaceResourceOptions = {
+    textureResourceManifest: manifest,
+    resolveTextureResource: () => Promise.resolve(new Uint8Array([9, 9, 9, 9]).buffer),
+  };
+  await assert.rejects(
+    mountRendererSurface({} as HTMLCanvasElement, options),
+    /expected sha256:/u,
+  );
+});
+
+void test('resource-backed game surface admits mesh resources before backend mount', async () => {
+  const expected = new Uint8Array(16);
+  expected.set([0x52, 0x4d, 0x53, 0x48, 0x4c, 0x45, 0x30, 0x31]);
+  const header = new DataView(expected.buffer);
+  header.setUint32(8, expected.byteLength, true);
+  header.setUint32(12, 1, true);
+  const digest = createHash('sha256').update(expected).digest('hex');
+  const manifest: RendererMeshResourceManifest = {
+    kind: 'rusty_renderer_mesh_resources.v1',
+    resources: [{
+      resource: `mesh-resource/${digest}`,
+      contentHash: `sha256:${digest}`,
+      byteLength: expected.byteLength,
+    }],
+  };
+  const options: RendererSurfaceResourceOptions = {
+    meshResourceManifest: manifest,
+    resolveMeshResource: () => Promise.resolve(new Uint8Array(expected.byteLength - 1).buffer),
+  };
+  await assert.rejects(
+    mountRendererSurface({} as HTMLCanvasElement, options),
+    /expected 16 bytes/u,
   );
 });
 

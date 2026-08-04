@@ -24,6 +24,7 @@ import {
   mountRendererAnimatedMeshSurface,
   mountRendererInspectionSurface,
   mountRendererSurface,
+  mountRendererSurfaceWithResources,
   type RendererSurfaceAutomaticSubmissionPacingSample,
   type RendererSurface,
   type RendererSurfaceStatisticsSample,
@@ -619,15 +620,63 @@ async function main(): Promise<void> {
   staticMeshTextureCanvas.style.cssText =
     'position:fixed;left:-10000px;top:0;width:256px;height:128px';
   document.body.appendChild(staticMeshTextureCanvas);
-  const staticMeshTextureSurface = mountRendererBrowserSurface(staticMeshTextureCanvas, {
+  const staticMeshTextureFrame = staticMeshTextureBrowserFrame();
+  const staticMeshTextureDefinition = staticMeshTextureFrame.ops.find(
+    (operation) => operation.op === 'defineTexture',
+  );
+  const staticMeshTextureSource = staticMeshTextureDefinition?.op === 'defineTexture'
+    ? staticMeshTextureDefinition.texture.payload?.source
+    : undefined;
+  if (
+    staticMeshTextureDefinition === undefined
+    || staticMeshTextureSource?.kind !== 'inline'
+  ) {
+    throw new Error('static mesh texture proof fixture has no inline texture payload');
+  }
+  const staticMeshTexturePayload = staticMeshTextureDefinition.texture.payload;
+  if (staticMeshTexturePayload === undefined) {
+    throw new Error('static mesh texture proof fixture has no texture payload');
+  }
+  const staticMeshTextureResource =
+    `texture-resource/${staticMeshTexturePayload.contentHash.slice('sha256:'.length)}`;
+  const staticMeshTextureResourceFrame: RenderFrameDiff = {
+    ...staticMeshTextureFrame,
+    ops: staticMeshTextureFrame.ops.map((operation) => operation.op === 'defineTexture'
+      ? {
+          ...operation,
+          texture: {
+            ...operation.texture,
+            payload: {
+              ...staticMeshTexturePayload,
+              source: { kind: 'resource', resource: staticMeshTextureResource },
+            },
+          },
+        }
+      : operation),
+  };
+  const staticMeshTextureSurface = await mountRendererSurfaceWithResources(staticMeshTextureCanvas, {
     autoStart: false,
-    camera: {
-      initialPose: { position: [0, 0, 1], pitchDegrees: 0, yawDegrees: 0 },
-      projection: { fovYDegrees: 90, near: 0.1, far: 10 },
+    controls: {
+      enabled: false,
+      initialPosition: [0, 0, 1],
+      initialPitchDegrees: 0,
+      initialYawDegrees: 0,
     },
     clearColor: 0x000000,
-    frame: staticMeshTextureBrowserFrame(),
+    frame: staticMeshTextureResourceFrame,
     pixelRatio: 1,
+    projection: { fovYDegrees: 90, near: 0.1, far: 10 },
+    textureResourceManifest: {
+      kind: 'rusty_renderer_texture_resources.v1',
+      resources: [{
+        resource: staticMeshTextureResource,
+        contentHash: staticMeshTexturePayload.contentHash,
+        byteLength: staticMeshTexturePayload.byteLength,
+      }],
+    },
+    resolveTextureResource: () => Promise.resolve(
+      Uint8Array.from(staticMeshTextureSource.encodedBytes).buffer,
+    ),
   });
   staticMeshTextureSurface.renderOnce(1);
   const staticMeshTextureContext = staticMeshTextureCanvas.getContext('webgl2')
