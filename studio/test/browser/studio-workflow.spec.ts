@@ -21,6 +21,7 @@ test('served Studio exposes the exact running adapter and configured consumer id
   const expectedEngine = process.env['RUSTY_STUDIO_ENGINE_SOURCE_COMMIT'];
   if (expectedEngine === undefined) {
     await expect(identity).toHaveAttribute('data-runtime-mode', 'unmanaged');
+    await expect(identity).toContainText('unmanaged explicit adapter');
     return;
   }
   await expect(identity).toHaveAttribute('data-runtime-mode', 'managed');

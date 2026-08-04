@@ -102,7 +102,11 @@ export class StudioAdapterHost {
       schemaVersion: 1,
       project: 'rusty-engine-studio',
       status: 'ok',
-      mode: this.#managedIdentity === null ? 'unmanaged' : 'managed',
+      mode: this.#managedIdentity !== null
+        ? 'managed'
+        : this.#fixedAdapter
+          ? 'unmanaged'
+          : 'generic',
       engineSourceCommit: this.#managedIdentity?.engineSourceCommit ?? null,
       configuredConsumer: this.#managedIdentity === null ? null : {
         repository: this.#managedIdentity.consumerRepository,

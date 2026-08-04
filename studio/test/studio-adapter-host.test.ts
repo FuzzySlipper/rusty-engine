@@ -35,7 +35,7 @@ test('generic host discovers a root-local adapter and preserves the old session 
     await host.selectProject(firstRoot, 'content/projects/first.project.json');
     const status = host.status();
     assert.ok(status);
-    assert.equal(status.mode, 'unmanaged');
+    assert.equal(status.mode, 'generic');
     assert.equal(status.activeProjectRoot, null);
     assert.equal(status.runningAdapter.adapterId, 'fixture.first');
     assert.match(
@@ -50,6 +50,26 @@ test('generic host discovers a root-local adapter and preserves the old session 
     const preserved = host.status();
     assert.ok(preserved);
     assert.equal(preserved.runningAdapter.adapterId, 'fixture.first');
+  } finally {
+    await host.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('explicit adapter binary remains visibly unmanaged', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rusty-studio-adapter-host-fixed-'));
+  const firstRoot = join(root, 'first');
+  await writeFixtureRoot(firstRoot, 'fixture.explicit');
+  const host = await StudioAdapterHost.create({
+    adapterBinary: join(firstRoot, 'fixture-adapter.mjs'),
+    managedIdentity: null,
+  });
+  try {
+    const status = host.status();
+    assert.ok(status);
+    assert.equal(status.mode, 'unmanaged');
+    assert.equal(status.activeProjectRoot, null);
+    assert.equal(status.runningAdapter.adapterId, 'fixture.explicit');
   } finally {
     await host.close();
     await rm(root, { recursive: true, force: true });

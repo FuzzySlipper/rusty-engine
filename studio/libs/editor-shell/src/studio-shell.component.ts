@@ -114,7 +114,12 @@ export class StudioShellComponent {
     const engine = status.engineSourceCommit?.slice(0, 8) ?? 'unmanaged';
     const consumer = status.configuredConsumer?.commit.slice(0, 8) ?? 'unmanaged';
     const root = status.activeProjectRoot ?? 'no project';
-    return `${status.runningAdapter.adapterId} · protocol ${String(status.runningAdapter.protocolVersion)} · ${root} · Engine ${engine} · consumer ${consumer}`;
+    const mode = status.mode === 'managed'
+      ? 'managed certification'
+      : status.mode === 'generic'
+        ? 'generic interactive'
+        : 'unmanaged explicit adapter';
+    return `${mode} · ${status.runningAdapter.adapterId} · protocol ${String(status.runningAdapter.protocolVersion)} · ${root} · Engine ${engine} · consumer ${consumer}`;
   });
   readonly frameSubmitted = output<StudioViewportFrameSubmitted>();
   readonly entityInspectorContributions =

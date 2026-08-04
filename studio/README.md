@@ -97,8 +97,10 @@ the shell.
 
 For exact pinned-consumer certification, retain the explicit adapter launcher or use
 `pnpm run serve:den`; that path still builds and admits the configured public consumer before
-listening. Generic root-local discovery is a trusted development workflow, not a global registry,
-plugin marketplace, schema loader, or security policy.
+listening. A root-local session is reported as `generic interactive`; an explicit
+`--adapter-binary` launch without managed identity remains `unmanaged explicit adapter`.
+Generic root-local discovery is a trusted development workflow, not a global registry, plugin
+marketplace, schema loader, or security policy.
 
 ### Managed LAN preview
 
@@ -112,7 +114,8 @@ The launcher builds Studio and, by default, builds the adapter from the exact pu
 consumer revision in [`demo-consumer-source.json`](demo-consumer-source.json), cached outside this
 repository. It never discovers or inspects a sibling checkout. The managed path does not accept a
 sibling root or arbitrary prebuilt adapter override: those remain available only through the lower
-level `pnpm run host` development command and are reported as `unmanaged`.
+level `pnpm run host` development command. Root-local discovery is reported as `generic interactive`;
+an explicit prebuilt adapter override is reported as `unmanaged explicit adapter`.
 
 Before listening, the managed host sends the strict current `describe` request, checks the configured
 adapter identity and protocol, and hashes the exact adapter binary. `/health` and

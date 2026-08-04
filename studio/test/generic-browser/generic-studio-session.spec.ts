@@ -78,6 +78,8 @@ async function expectProject(
   await expect(shell).toHaveAttribute('data-studio-operation', 'idle', { timeout: openTimeout });
   await expect(identity).toHaveAttribute('data-active-project-root', root, { timeout: openTimeout });
   await expect(identity).toHaveAttribute('data-active-project-file', /.+/u);
+  await expect(identity).toHaveAttribute('data-runtime-mode', 'generic');
+  await expect(identity).toContainText('generic interactive');
   await expect(identity).toContainText(adapterId);
   await expect(identity).toHaveAttribute('data-protocol-version', '14');
   await expect(page.getByRole('button', { name: 'Open', exact: true })).toBeEnabled();

@@ -37,8 +37,24 @@ test('unmanaged status cannot claim exact managed source identity', () => {
   unmanaged.mode = 'unmanaged';
   assert.throws(
     () => decodeStudioHostStatus(unmanaged),
-    /unmanaged status must not claim managed source identity/u,
+    /generic or unmanaged status must not claim managed source identity/u,
   );
+});
+
+test('decodes generic interactive status without managed identity', () => {
+  const managed = managedStatus();
+  const generic = {
+    ...managed,
+    mode: 'generic' as const,
+    engineSourceCommit: null,
+    configuredConsumer: null,
+    runningAdapter: { ...managed.runningAdapter, buildCommit: null },
+  };
+  const decoded = decodeStudioHostStatus(generic);
+  assert.equal(decoded.mode, 'generic');
+  assert.equal(decoded.engineSourceCommit, null);
+  assert.equal(decoded.configuredConsumer, null);
+  assert.equal(decoded.runningAdapter.buildCommit, null);
 });
 
 function managedStatus() {

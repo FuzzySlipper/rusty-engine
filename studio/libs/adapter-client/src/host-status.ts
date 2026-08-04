@@ -17,7 +17,12 @@ export interface StudioHostStatus {
   readonly schemaVersion: typeof STUDIO_HOST_STATUS_SCHEMA_VERSION;
   readonly project: 'rusty-engine-studio';
   readonly status: 'ok';
-  readonly mode: 'managed' | 'unmanaged';
+  /**
+   * `generic` is the trusted root-local development host. It is distinct from
+   * `unmanaged`, which means an explicit adapter binary was supplied without
+   * managed certification.
+   */
+  readonly mode: 'managed' | 'generic' | 'unmanaged';
   readonly engineSourceCommit: string | null;
   readonly configuredConsumer: StudioConfiguredConsumerIdentity | null;
   readonly activeProjectRoot: string | null;
@@ -48,8 +53,8 @@ export function decodeStudioHostStatus(input: unknown): StudioHostStatus {
     fail('$.project', 'must equal rusty-engine-studio');
   }
   if (value['status'] !== 'ok') fail('$.status', 'must equal ok');
-  if (value['mode'] !== 'managed' && value['mode'] !== 'unmanaged') {
-    fail('$.mode', 'must equal managed or unmanaged');
+  if (value['mode'] !== 'managed' && value['mode'] !== 'generic' && value['mode'] !== 'unmanaged') {
+    fail('$.mode', 'must equal managed, generic, or unmanaged');
   }
   const engineSourceCommit = nullableCommit(value['engineSourceCommit'], '$.engineSourceCommit');
   const configuredConsumer = value['configuredConsumer'] === null
@@ -73,7 +78,7 @@ export function decodeStudioHostStatus(input: unknown): StudioHostStatus {
     || configuredConsumer !== null
     || runningAdapter.buildCommit !== null
   ) {
-    fail('$', 'unmanaged status must not claim managed source identity');
+    fail('$', 'generic or unmanaged status must not claim managed source identity');
   }
   return Object.freeze({
     schemaVersion: STUDIO_HOST_STATUS_SCHEMA_VERSION,
