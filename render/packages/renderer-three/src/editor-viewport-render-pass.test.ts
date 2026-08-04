@@ -19,6 +19,7 @@ void test('editor viewport establishes shared scene depth before grid and clears
     renderer: (channel) => ({
       scene: scenes.get(channel)!,
       advanceAnimation: (deltaSeconds) => events.push(`advance:${channel}:${deltaSeconds}`),
+      prepareSpritesForCamera: (_camera, scene) => events.push(`sprites:${channel}:${scene.name}`),
       prepareStaticInstanceBatches: () => events.push(`prepare:${channel}`),
     }),
   };
@@ -34,13 +35,16 @@ void test('editor viewport establishes shared scene depth before grid and clears
   assert.deepEqual(events, [
     'clear:true:true:true',
     'advance:runtime:0.025',
+    'sprites:runtime:runtime',
     'prepare:runtime',
     'render:runtime',
     'advance:authored:0.025',
+    'sprites:authored:authored',
     'prepare:authored',
     'render:authored',
     'render:grid',
     'advance:overlay:0.025',
+    'sprites:overlay:overlay',
     'prepare:overlay',
     'clearDepth',
     'render:overlay',

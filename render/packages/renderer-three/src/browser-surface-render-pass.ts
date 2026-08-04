@@ -4,6 +4,7 @@ export interface BrowserSurfaceRenderProjection {
   readonly scene: THREE.Scene;
   readonly viewmodelScene: THREE.Scene;
   advanceAnimation(deltaSeconds: number): void;
+  prepareSpritesForCamera(camera: THREE.Camera, scene: THREE.Scene): void;
   prepareStaticInstanceBatches(camera: THREE.Camera): void;
 }
 
@@ -29,8 +30,10 @@ export function renderBrowserSurfaceFrame(
 ): void {
   driver.clear(true, true, true);
   projection.advanceAnimation(deltaSeconds);
+  projection.prepareSpritesForCamera(worldCamera, projection.scene);
   projection.prepareStaticInstanceBatches(worldCamera);
   driver.render(projection.scene, worldCamera);
   driver.clearDepth();
+  projection.prepareSpritesForCamera(viewmodelCamera, projection.viewmodelScene);
   driver.render(projection.viewmodelScene, viewmodelCamera);
 }

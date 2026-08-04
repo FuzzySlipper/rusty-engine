@@ -91,6 +91,12 @@ interface BrowserProof {
   readonly ready: true;
   readonly rendererStatistics: RendererSurfaceStatisticsSample;
   readonly rendererBufferPixelRatio: readonly [number, number];
+  readonly spriteBillboardPixels: {
+    readonly initialSpherical: readonly (readonly [number, number, number, number])[];
+    readonly initialCylindrical: readonly (readonly [number, number, number, number])[];
+    readonly elevatedSpherical: readonly (readonly [number, number, number, number])[];
+    readonly elevatedCylindrical: readonly (readonly [number, number, number, number])[];
+  };
   readonly replacementDisposedWithHistoricalSample: boolean;
   readonly replacementDisposedRenderRejected: boolean;
   readonly replacementRenderSequence: number;
@@ -614,6 +620,37 @@ async function main(): Promise<void> {
     ({ proofSurface }) => proofSurface.renderer.voxelSurfaceMaterialReadout(),
   );
 
+  const billboardSurfaceProofs = (['spherical', 'cylindrical'] as const).map((mode) => {
+    const proofCanvas = document.createElement('canvas');
+    proofCanvas.width = 256;
+    proofCanvas.height = 256;
+    proofCanvas.style.cssText = 'position:fixed;left:-10000px;top:0;width:256px;height:256px';
+    document.body.appendChild(proofCanvas);
+    const frame = billboardBrowserFrame(mode);
+    const proofSurface = mountRendererBrowserSurface(proofCanvas, {
+      autoStart: false,
+      camera: {
+        initialPose: { position: [0, 0, 4], pitchDegrees: 0, yawDegrees: 0 },
+        projection: { fovYDegrees: 60, near: 0.1, far: 20 },
+      },
+      clearColor: 0x000000,
+      frame,
+      pixelRatio: 1,
+    });
+    proofSurface.renderOnce(1);
+    const proofContext = proofCanvas.getContext('webgl2') ?? proofCanvas.getContext('webgl');
+    if (proofContext === null) throw new Error('billboard WebGL context is unavailable');
+    const initialPixels = readBillboardPixels(proofContext);
+    proofSurface.setCameraPose({
+      position: [2, 4, 4],
+      pitchDegrees: -41.810314895,
+      yawDegrees: 26.565051177,
+    });
+    proofSurface.renderOnce(2);
+    const elevatedPixels = readBillboardPixels(proofContext);
+    return { mode, initialPixels, elevatedPixels, proofCanvas, proofSurface };
+  });
+
   const staticMeshTextureCanvas = document.createElement('canvas');
   staticMeshTextureCanvas.width = 256;
   staticMeshTextureCanvas.height = 128;
@@ -827,6 +864,12 @@ async function main(): Promise<void> {
       canvas.height / canvas.clientHeight,
     ],
     rendererStatistics: autoSubmission.statistics,
+    spriteBillboardPixels: {
+      initialSpherical: billboardSurfaceProofs.find(({ mode }) => mode === 'spherical')!.initialPixels,
+      initialCylindrical: billboardSurfaceProofs.find(({ mode }) => mode === 'cylindrical')!.initialPixels,
+      elevatedSpherical: billboardSurfaceProofs.find(({ mode }) => mode === 'spherical')!.elevatedPixels,
+      elevatedCylindrical: billboardSurfaceProofs.find(({ mode }) => mode === 'cylindrical')!.elevatedPixels,
+    },
     replacementDisposedRenderRejected,
     replacementDisposedWithHistoricalSample,
     replacementRenderSequence: replacementSubmission.renderSequence,
@@ -888,6 +931,10 @@ async function main(): Promise<void> {
   };
   audioButton.addEventListener('click', () => void window.__rustyRenderStartAudio?.());
   window.__rustyRenderDispose = async () => {
+    for (const { proofCanvas, proofSurface } of billboardSurfaceProofs) {
+      proofSurface.dispose();
+      proofCanvas.remove();
+    }
     for (const { proofCanvas, proofSurface } of voxelSurfaceProofs) {
       proofSurface.dispose();
       proofCanvas.remove();
@@ -1469,6 +1516,95 @@ function voxelSurfaceBrowserFrame(orientation: 'standard' | 'rotated'): RenderFr
       },
     ],
   };
+}
+
+function billboardBrowserFrame(mode: 'spherical' | 'cylindrical'): RenderFrameDiff {
+  const contentHash = 'sha256:a58d5395a03945e56638dba7ae6158b2fdaf013610a798c059a6d88231a052ae';
+  const suffix = mode === 'spherical' ? 'spherical' : 'cylindrical';
+  const texture = `texture/billboard-proof-${suffix}`;
+  const atlas = `sprite/billboard-proof-${suffix}`;
+  return {
+    schemaVersion: 1,
+    ops: [
+      {
+        op: 'defineTexture',
+        texture: {
+          id: texture,
+          width: 2,
+          height: 1,
+          filter: 'nearest',
+          wrap: 'clamp',
+          contentHash,
+          version: 1,
+          payload: {
+            encoding: 'pngRgba8',
+            colorSpace: 'srgb',
+            contentHash,
+            byteLength: 72,
+            source: {
+              kind: 'inline',
+              encodedBytes: [
+                137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82,
+                0, 0, 0, 2, 0, 0, 0, 1, 8, 6, 0, 0, 0, 244, 34, 127, 138, 0,
+                0, 0, 15, 73, 68, 65, 84, 120, 156, 99, 248, 207, 0, 68, 255,
+                25, 26, 0, 16, 121, 3, 126, 153, 113, 48, 89, 0, 0, 0, 0,
+                73, 69, 78, 68, 174, 66, 96, 130,
+              ],
+            },
+          },
+        },
+      },
+      {
+        op: 'defineSpriteAtlas',
+        atlas: {
+          id: atlas,
+          texture,
+          frames: [{ frame: 0, uvMin: [0, 0], uvMax: [1, 1] }],
+        },
+      },
+      {
+        op: 'createSprite',
+        handle: renderHandle(1),
+        parent: null,
+        sprite: {
+          asset: atlas,
+          frame: 0,
+          pivot: [0.5, 0.5],
+          size: [3.5, 1],
+          sizeMode: 'world',
+          billboard: mode,
+          tint: [1, 1, 1, 1],
+          renderOrder: 0,
+          depth: 'default',
+          shading: 'unlit',
+          visible: true,
+          transform: identity([0, 0, 0], [1, 1, 1]),
+          attachment: { sourceEntity: null, sourceSceneNode: null, attachmentPoint: null },
+          metadata: metadata(`billboard-${suffix}`),
+        },
+      },
+    ],
+  };
+}
+
+function readBillboardPixels(
+  context: WebGLRenderingContext | WebGL2RenderingContext,
+): readonly (readonly [number, number, number, number])[] {
+  return Array.from({ length: 1024 }, (_, index) => {
+    const x = index % 32;
+    const y = Math.floor(index / 32);
+    const pixel = new Uint8Array(4);
+    context.readPixels(
+      Math.floor(context.drawingBufferWidth * (x + 0.5) / 32),
+      Math.floor(context.drawingBufferHeight * (y + 0.5) / 32),
+      1,
+      1,
+      context.RGBA,
+      context.UNSIGNED_BYTE,
+      pixel,
+    );
+    return [...pixel] as [number, number, number, number];
+  });
 }
 
 function staticMeshTextureBrowserFrame(): RenderFrameDiff {

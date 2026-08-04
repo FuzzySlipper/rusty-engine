@@ -3182,6 +3182,154 @@ void test('createSprite builds a plane geometry (not THREE.Sprite) with render o
   assert.equal((mesh.material as THREE.MeshBasicMaterial).depthTest, false);
 });
 
+void test('sprite billboards face the active camera while none preserves the authored rotation', () => {
+  const renderer = new ThreeRenderer();
+  const parentRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0.45, 0));
+  renderer.applyDiff({
+    op: 'create',
+    handle: renderHandle(20),
+    parent: null,
+    node: {
+      geometry: { kind: 'group' },
+      material: { color: [1, 1, 1, 1], wireframe: false },
+      transform: {
+        translation: [0, 0, 0],
+        rotation: [parentRotation.x, parentRotation.y, parentRotation.z, parentRotation.w],
+        scale: [1, 1, 1],
+      },
+      visible: true,
+      layer: 'scene',
+      metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: 'billboard-parent' },
+    },
+  });
+  const authoredRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.2, 0.3, 0.4));
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    {
+      op: 'createSprite',
+      handle: renderHandle(21),
+      parent: renderHandle(20),
+      sprite: sparkSprite({
+        billboard: 'none',
+        transform: {
+          translation: [0, 0, 0],
+          rotation: [authoredRotation.x, authoredRotation.y, authoredRotation.z, authoredRotation.w],
+          scale: [1, 1, 1],
+        },
+      }),
+    },
+    {
+      op: 'createSprite',
+      handle: renderHandle(22),
+      parent: renderHandle(20),
+      sprite: sparkSprite({ billboard: 'spherical' }),
+    },
+    {
+      op: 'createSprite',
+      handle: renderHandle(23),
+      parent: renderHandle(20),
+      sprite: sparkSprite({ billboard: 'cylindrical' }),
+    },
+  ] });
+
+  const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
+  camera.position.set(4, 3, 6);
+  camera.lookAt(0, 0, 0);
+  camera.updateMatrixWorld(true);
+  renderer.prepareSpritesForCamera(camera);
+
+  const none = renderer.objectFor(renderHandle(21)) as THREE.Mesh;
+  const spherical = renderer.objectFor(renderHandle(22)) as THREE.Mesh;
+  const cylindrical = renderer.objectFor(renderHandle(23)) as THREE.Mesh;
+  const noneWorld = none.getWorldQuaternion(new THREE.Quaternion());
+  const authoredWorld = parentRotation.clone().multiply(authoredRotation);
+  assert.ok(noneWorld.angleTo(authoredWorld) < 1e-6, 'none keeps authored world orientation');
+  const cameraWorld = camera.getWorldQuaternion(new THREE.Quaternion());
+  assert.ok(
+    spherical.getWorldQuaternion(new THREE.Quaternion()).angleTo(cameraWorld) < 1e-6,
+    'spherical copies the camera world orientation',
+  );
+
+  const cylindricalWorld = cylindrical.getWorldQuaternion(new THREE.Quaternion());
+  const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(cylindricalWorld).normalize();
+  const toCamera = new THREE.Vector3(4, 0, 6).normalize();
+  assert.ok(normal.distanceTo(toCamera) < 1e-6, 'cylindrical faces the camera around world Y');
+  const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cylindricalWorld).normalize();
+  assert.ok(up.distanceTo(new THREE.Vector3(0, 1, 0)) < 1e-6, 'cylindrical keeps world Y upright');
+});
+
+void test('cylindrical billboards keep a valid orientation when horizontal distance is zero', () => {
+  const renderer = new ThreeRenderer();
+  const authored = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.1, 0.2, 0.3));
+  renderer.applyDiff({
+    op: 'createSprite',
+    handle: renderHandle(1),
+    parent: null,
+    sprite: sparkSprite({
+      billboard: 'cylindrical',
+      transform: {
+        translation: [2, 0, 3],
+        rotation: [authored.x, authored.y, authored.z, authored.w],
+        scale: [1, 1, 1],
+      },
+    }),
+  });
+  const camera = new THREE.PerspectiveCamera();
+  camera.position.set(2, 4, 3);
+  camera.lookAt(2, 0, 3);
+  camera.updateMatrixWorld(true);
+  renderer.prepareSpritesForCamera(camera);
+  const mesh = renderer.objectFor(renderHandle(1)) as THREE.Mesh;
+  assert.ok(mesh.quaternion.toArray().every(Number.isFinite));
+  const expectedYaw = new THREE.Vector3(0, 0, 1).applyQuaternion(authored);
+  expectedYaw.y = 0;
+  expectedYaw.normalize();
+  const realizedNormal = new THREE.Vector3(0, 0, 1)
+    .applyQuaternion(mesh.getWorldQuaternion(new THREE.Quaternion()))
+    .normalize();
+  assert.ok(realizedNormal.distanceTo(expectedYaw) < 1e-6);
+});
+
+void test('billboards recompute for each camera, including orthographic projection', () => {
+  const renderer = new ThreeRenderer();
+  renderer.applyDiff({
+    op: 'createSprite',
+    handle: renderHandle(1),
+    parent: null,
+    sprite: sparkSprite({ billboard: 'cylindrical' }),
+  });
+
+  const perspective = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
+  perspective.position.set(4, 2, 6);
+  perspective.lookAt(0, 0, 0);
+  const alternate = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
+  alternate.position.set(-5, 3, 4);
+  alternate.lookAt(0, 0, 0);
+  renderer.prepareSpritesForCamera(perspective);
+  const first = (renderer.objectFor(renderHandle(1)) as THREE.Mesh)
+    .getWorldQuaternion(new THREE.Quaternion());
+  renderer.prepareSpritesForCamera(alternate);
+  const second = (renderer.objectFor(renderHandle(1)) as THREE.Mesh)
+    .getWorldQuaternion(new THREE.Quaternion());
+  assert.ok(first.angleTo(second) > 0.1, 'camera movement changes the realized heading');
+  renderer.prepareSpritesForCamera(perspective);
+  const restored = (renderer.objectFor(renderHandle(1)) as THREE.Mesh)
+    .getWorldQuaternion(new THREE.Quaternion());
+  assert.ok(first.angleTo(restored) < 1e-6, 'A → B → A restores the first realization');
+
+  const orthographic = new THREE.OrthographicCamera(-2, 2, 2, -2, 0.1, 100);
+  orthographic.position.set(4, 5, 6);
+  orthographic.lookAt(0, 0, 0);
+  renderer.prepareSpritesForCamera(orthographic);
+  const realizedNormal = new THREE.Vector3(0, 0, 1)
+    .applyQuaternion((renderer.objectFor(renderHandle(1)) as THREE.Mesh)
+      .getWorldQuaternion(new THREE.Quaternion()))
+    .normalize();
+  const viewDirection = orthographic.getWorldDirection(new THREE.Vector3()).negate();
+  viewDirection.y = 0;
+  viewDirection.normalize();
+  assert.ok(realizedNormal.distanceTo(viewDirection) < 1e-6, 'orthographic uses view direction');
+});
+
 void test('sprite frame/tint updates are deterministic and projection-driven', () => {
   const r = new ThreeRenderer();
   r.applyDiff({ op: 'createSprite', handle: renderHandle(1), parent: null, sprite: sparkSprite() });

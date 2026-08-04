@@ -23,15 +23,19 @@ void test('browser surface composes world then camera-relative presentation afte
     scene: world,
     viewmodelScene: viewmodel,
     advanceAnimation: (deltaSeconds) => events.push(`advance:${deltaSeconds}`),
+    prepareSpritesForCamera: (camera, scene) =>
+      events.push(`sprites:${scene.name}:${camera.name}`),
     prepareStaticInstanceBatches: (camera) => events.push(`prepare:${camera.name}`),
   }, 0.025);
 
   assert.deepEqual(events, [
     'clear:true:true:true',
     'advance:0.025',
+    'sprites:world:world-camera',
     'prepare:world-camera',
     'render:world:world-camera',
     'clearDepth',
+    'sprites:viewmodel:viewmodel-camera',
     'render:viewmodel:viewmodel-camera',
   ]);
 });

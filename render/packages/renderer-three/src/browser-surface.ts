@@ -892,6 +892,7 @@ export function pickProjectedObject(
     return { diagnostics, hit: null, kind: 'rusty_renderer_browser_surface_pick.v1' };
   }
 
+  renderer.prepareSpritesForCamera(camera, renderer.scene);
   renderer.prepareStaticInstanceBatchesForPicking();
   renderer.scene.updateMatrixWorld(true);
   configurePickRay(raycaster, camera, center, request.ray);

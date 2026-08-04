@@ -285,6 +285,8 @@ export class ThreeRenderer {
   readonly #uiGroup = new THREE.Group();
   readonly #viewmodelGroup = new THREE.Group();
   readonly #handles = new Map<RenderHandle, NodeEntry>();
+  /** Retained sprite handles whose mode requires camera-dependent realization. */
+  readonly #billboardHandles = new Set<RenderHandle>();
   /** Retained static mesh definitions, keyed by asset id. */
   readonly #staticMeshes = new Map<string, StaticMeshDef>();
   readonly #voxelObjects = new Map<string, VoxelObjectDef>();
@@ -845,6 +847,7 @@ export class ThreeRenderer {
         this.#destroy({ op: 'destroy', handle });
       }
     }
+    this.#billboardHandles.clear();
     for (const definition of this.#staticMeshes.values()) {
       definition.geometry.dispose();
       definition.materials.forEach((material) => material.dispose());
@@ -970,6 +973,98 @@ export class ThreeRenderer {
       });
       this.#writeStaticInstanceBatch(batch, visibleHandles);
     }
+  }
+
+  /**
+   * Apply the camera-facing orientation for sprites in one retained scene.
+   *
+   * Billboard orientation is a backend realization concern: the descriptor
+   * remains renderer-neutral and the authored local transform remains the
+   * retained node state. The realized quaternion is recomputed immediately
+   * before each camera pass so one scene can be rendered through multiple
+   * cameras without leaking one camera's orientation into another authority.
+   * `none` sprites are deliberately untouched.
+   */
+  prepareSpritesForCamera(camera: THREE.Camera, scene: THREE.Scene = this.scene): void {
+    if (this.#disposed) {
+      throw new RenderApplyError('renderer is disposed');
+    }
+    camera.updateMatrixWorld(true);
+    scene.updateMatrixWorld(true);
+    const cameraPosition = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
+    const cameraQuaternion = camera.getWorldQuaternion(new THREE.Quaternion());
+    const cameraDirection = new THREE.Vector3();
+    const worldPosition = new THREE.Vector3();
+    const desiredWorldQuaternion = new THREE.Quaternion();
+    const authoredWorldQuaternion = new THREE.Quaternion();
+    const parentWorldQuaternion = new THREE.Quaternion();
+    const localQuaternion = new THREE.Quaternion();
+    const forward = new THREE.Vector3();
+    const right = new THREE.Vector3();
+    const worldUp = new THREE.Vector3(0, 1, 0);
+    const basis = new THREE.Matrix4();
+    const sprites = [...this.#billboardHandles]
+      .map((handle) => this.#handles.get(handle))
+      .filter((entry): entry is NodeEntry => entry !== undefined
+        && entry.kind === 'sprite'
+        && entry.sprite !== undefined
+        && isDescendantOf(entry.object, scene))
+      .sort((left, rightEntry) => objectDepth(left.object) - objectDepth(rightEntry.object));
+
+    // A preparation may follow a different camera in the same submission.
+    // Reacquire every authored local rotation first so A → B → A is exact and
+    // degenerate cylindrical headings never depend on the previous camera.
+    for (const entry of sprites) {
+      const sprite = entry.sprite;
+      if (sprite !== undefined) {
+        entry.object.quaternion.set(...sprite.transform.rotation);
+      }
+    }
+    scene.updateMatrixWorld(true);
+
+    for (const entry of sprites) {
+      const sprite = entry.sprite;
+      if (sprite === undefined || sprite.billboard === 'none') continue;
+      const object = entry.object;
+      object.updateMatrixWorld(true);
+      object.getWorldPosition(worldPosition);
+      if (sprite.billboard === 'spherical') {
+        desiredWorldQuaternion.copy(cameraQuaternion);
+      } else {
+        if (camera instanceof THREE.OrthographicCamera) {
+          camera.getWorldDirection(cameraDirection);
+          forward.copy(cameraDirection).negate();
+        } else {
+          forward.subVectors(cameraPosition, worldPosition);
+        }
+        forward.y = 0;
+        if (forward.lengthSq() <= Number.EPSILON) {
+          // A cylindrical heading is undefined directly above/below or at
+          // the camera. Retain the authored yaw as a deterministic fallback.
+          object.getWorldQuaternion(authoredWorldQuaternion);
+          forward.set(0, 0, 1).applyQuaternion(authoredWorldQuaternion);
+          forward.y = 0;
+          if (forward.lengthSq() <= Number.EPSILON) {
+            forward.set(0, 0, 1);
+          }
+        }
+        forward.normalize();
+        right.crossVectors(worldUp, forward).normalize();
+        basis.makeBasis(right, worldUp, forward);
+        desiredWorldQuaternion.setFromRotationMatrix(basis).normalize();
+      }
+      if (object.parent === null) {
+        object.quaternion.copy(desiredWorldQuaternion);
+      } else {
+        object.parent.getWorldQuaternion(parentWorldQuaternion);
+        localQuaternion.copy(parentWorldQuaternion).invert()
+          .multiply(desiredWorldQuaternion)
+          .normalize();
+        object.quaternion.copy(localQuaternion);
+      }
+      object.updateMatrixWorld(true);
+    }
+    scene.updateMatrixWorld(true);
   }
 
   /**
@@ -1157,6 +1252,7 @@ export class ThreeRenderer {
       disposeObject(entry.object);
     }
     this.#handles.delete(diff.handle);
+    this.#billboardHandles.delete(diff.handle);
     recursivelyDestroyed?.add(diff.handle);
   }
 
@@ -2049,6 +2145,9 @@ export class ThreeRenderer {
       ownsGeometry: true,
       sprite: s,
     });
+    if (s.billboard !== 'none') {
+      this.#billboardHandles.add(diff.handle);
+    }
   }
 
   /**

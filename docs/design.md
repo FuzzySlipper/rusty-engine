@@ -514,7 +514,13 @@ projection inherits the layer through the hierarchy and enforces fixed node, dis
 asset-extent, translation, and scale limits before committing a frame. Retained lights are rejected
 inside this channel; the backend supplies a small neutral light rig.
 
-The Three adapter retains that hierarchy in a separate scene. The browser surface owns one
+The Three adapter retains that hierarchy in a separate scene. Camera-dependent sprite realization
+also remains in this backend: immediately before each world, viewmodel, editor-channel, composed-view,
+or pick pass it restores each sprite's authored local rotation, then realizes `spherical` and
+Y-up `cylindrical` modes against that pass's camera. `none` remains untouched. Parent-before-child
+ordering, orthographic view direction, and deterministic authored-yaw fallback keep nested and
+degenerate billboards stable without changing the renderer-neutral descriptor or retained authority.
+The browser surface owns one
 animation-frame scheduler and coalesces accepted retained mutations, camera changes, and resizes
 into its next backend submission. Active controls, animation, or particles retain continuous
 display-clock advancement; an unchanged static scene does not continuously resubmit work to the

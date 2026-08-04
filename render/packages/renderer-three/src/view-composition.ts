@@ -301,6 +301,7 @@ export class RendererViewCompositionBackend {
     setPhysicalViewport(this.#webgl, area);
     this.#webgl.setScissorTest(true);
     this.#webgl.clear(true, true, true);
+    this.#projection.prepareSpritesForCamera(camera, this.#projection.scene);
     this.#projection.prepareStaticInstanceBatches(camera);
     this.#webgl.render(this.#projection.scene, camera);
     target.lastRefreshedSubmission = submission;
@@ -318,6 +319,7 @@ export class RendererViewCompositionBackend {
     updateCameraAspect(camera, area.width / area.height);
     setPhysicalViewport(this.#webgl, area);
     this.#webgl.clear(true, true, true);
+    this.#projection.prepareSpritesForCamera(camera, this.#projection.scene);
     this.#projection.prepareStaticInstanceBatches(camera);
     this.#webgl.render(this.#projection.scene, camera);
   }

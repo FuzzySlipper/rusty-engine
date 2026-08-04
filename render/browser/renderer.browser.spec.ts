@@ -309,6 +309,22 @@ test('shared host realizes retained, presentation, and inspection families in a 
     'high/low/low',
     'low/high/low',
   ]);
+  expect(proof.spriteBillboardPixels.initialSpherical)
+    .toEqual(proof.spriteBillboardPixels.initialCylindrical);
+  const billboardPixelCount = (pixels: readonly (readonly number[])[]) => pixels
+    .filter(([red = 0, green = 0, blue = 0]) => red + green + blue > 40).length;
+  expect(billboardPixelCount(proof.spriteBillboardPixels.elevatedSpherical)).toBeGreaterThan(0);
+  expect(billboardPixelCount(proof.spriteBillboardPixels.elevatedCylindrical)).toBeGreaterThan(0);
+  for (const pixels of [
+    proof.spriteBillboardPixels.initialSpherical,
+    proof.spriteBillboardPixels.elevatedSpherical,
+    proof.spriteBillboardPixels.elevatedCylindrical,
+  ]) {
+    expect(pixels.some(([red, green]) => red > green * 2)).toBe(true);
+    expect(pixels.some(([red, green]) => green > red * 2)).toBe(true);
+  }
+  expect(proof.spriteBillboardPixels.elevatedSpherical)
+    .not.toEqual(proof.spriteBillboardPixels.elevatedCylindrical);
   expect(proof.telemetryText).toContain('Renderer proof');
   expect(proof.telemetryText).toContain('frameTimeMs:');
   expect(proof.telemetryText).toContain('backendSubmissionDurationMs:');
