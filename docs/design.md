@@ -752,8 +752,12 @@ lifecycle, operation serialization, and canonical acceptance with its independen
 contract and Rust owner. Its panel calls only `readLoadingBayWeapon` and
 `replaceLoadingBayWeapon`; the core protocol sees neither value nor operation. The external panel
 uses the narrow lease for settlement, while built-in Voxel operations already enter the same store
-through named core methods. Exact Git package pins and an explicit cross-repository gate replace
-ambient sibling access. Product-owned typed read/mutation contracts and game panels remain
+through named core methods. Named package carriers and an explicit cross-repository gate replace
+ambient sibling access. During ordinary integration, a consumer may instead use its
+`engine-development.json` `refs/heads/main` intent and report the resolved provider SHA through
+the rolling revision command; that is development state and may expose incompatibility. Exact Git
+package pins and the explicit cross-repository gate remain opt-in certification evidence.
+Product-owned typed read/mutation contracts and game panels remain
 downstream; Engine does not acquire game vocabulary, runtime plugin loading, a generic payload,
 store/service-locator exposure, or a universal component bridge. The implemented contract and
 limits are recorded in

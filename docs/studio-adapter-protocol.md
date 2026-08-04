@@ -293,6 +293,13 @@ commit, configured public consumer repository/commit, adapter build commit, exec
 negotiated protocol. This is operational evidence, not project or gameplay authority. Direct
 `pnpm run host` use remains explicitly `unmanaged` and cannot claim source/build commits.
 
+The generic root-local `den-serve` workflow is the rolling-development path: its
+`engine-development.json` intent follows the canonical Engine `refs/heads/main` line and its
+revision command reports the resolved SHA used for the current build. It is trusted interactive
+development state, not an exact compatibility or certification claim. The managed
+`serve:den`/reverse-integration paths remain exact-certification workflows and continue to require
+their immutable consumer and Engine pins.
+
 The managed supervisor hashes and watches only `studio/demo-consumer-source.json`. Identity drift or
 an unreadable replacement produces a `studioRestartRequired` receipt and bounded process-group
 termination; no branch lookup, downgrade, fallback, or stale adapter remains available on the old

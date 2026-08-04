@@ -56,6 +56,16 @@ if STUDIO_VOXEL_SOURCE="$TASK_TMP/floating-voxel-source.json" \
 fi
 grep -q 'engineCommit must be an exact Git revision' "$TASK_TMP/output"
 
+sed -E 's/"engineCommit": "[0-9a-f]{40}"/"engineCommit": "refs\/heads\/main"/' \
+  "$STUDIO_ROOT/demo-consumer-source.json" > "$TASK_TMP/rolling-demo-engine-source.json"
+if ! STUDIO_DEMO_SOURCE="$TASK_TMP/rolling-demo-engine-source.json" \
+  node "$STUDIO_ROOT/scripts/check-migration-plan.mjs" --mode=development > "$TASK_TMP/output" 2>&1; then
+  cat "$TASK_TMP/output" >&2
+  echo "Studio migration checker rejected the rolling development Engine ref" >&2
+  exit 1
+fi
+grep -q 'Studio migration plan passed in development mode' "$TASK_TMP/output"
+
 sed -E 's/"evidenceEngineCommit": "[0-9a-f]{40}"/"evidenceEngineCommit": "main"/' \
   "$STUDIO_ROOT/voxel-consumer-source.json" > "$TASK_TMP/floating-voxel-evidence-source.json"
 if STUDIO_VOXEL_SOURCE="$TASK_TMP/floating-voxel-evidence-source.json" \

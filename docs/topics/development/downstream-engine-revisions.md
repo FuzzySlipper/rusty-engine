@@ -2,13 +2,13 @@
 
 ## Purpose
 
-This topic defines how an external consumer selects and updates Rusty Engine
-without a sibling checkout, mixed package revisions, or a provider-owned release
-system. It applies when a consumer uses any combination of Engine Rust crates,
-renderer packages, Studio packages, or rules-authoring packages from the public
-repository.
+This topic defines the two revision modes available to an external consumer
+using Rusty Engine Rust crates, renderer packages, Studio packages, or
+rules-authoring packages from the public repository. Rolling development follows
+the current Engine line and reports the resolved commit for diagnostics. Exact
+certification selects one immutable public commit for reproducible review.
 
-The contract is deliberately small:
+The certification contract is deliberately small:
 
 > One consumer owns one exact public Rusty Engine commit for every Engine surface
 > it selects.
@@ -18,6 +18,40 @@ product do not need to use the same Engine commit. Within one consumer, however,
 Rust crates and TypeScript packages from this repository stay on the same commit.
 Keeping separate Rust, renderer, Studio, or rules lanes would make compatibility
 an implicit matrix and recreate the drift this contract is meant to remove.
+
+## Rolling development intent
+
+Consumers that are still integrating against a moving Engine line keep a
+separate `engine-development.json` intent manifest:
+
+```json
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/FuzzySlipper/rusty-engine",
+  "ref": "refs/heads/main"
+}
+```
+
+The consumer-owned command resolves that public ref once, reports the exact SHA
+used for the run, and updates the active Cargo/package carriers as one coherent
+resolution:
+
+```text
+./scripts/engine-revision dev sync --json
+./scripts/engine-revision dev check
+```
+
+`dev sync` may instead inspect an explicitly supplied local Engine worktree with
+`--worktree /absolute/engine-root`; a dirty worktree is report-only until it is
+clean. The ignored `.engine-development/resolution.json` records the resolved
+SHA, source, and dirty state. This is operational development state, not a
+compatibility promise or certification evidence. A moving ref can break a
+consumer; the command should expose the provider SHA and the downstream's real
+compile or protocol diagnostic rather than hiding it behind an old pin.
+
+The development resolver is deliberately narrow: it accepts only the canonical
+public repository and `refs/heads/main` (or an explicit local Engine worktree).
+It does not load arbitrary URLs, mutate another checkout, or create a registry.
 
 ## Source manifest
 
@@ -84,7 +118,13 @@ the repository that owns those manifests:
 ./scripts/engine-revision check
 ./scripts/engine-revision update <40-character-public-sha>
 ./scripts/engine-revision update <40-character-public-sha> --dry-run
+./scripts/engine-revision certify check
+./scripts/engine-revision certify update <40-character-public-sha>
 ```
+
+`check` and `update` remain compatibility aliases for the exact certification
+commands. The explicit `certify` spelling is preferred in new documentation and
+automation so it cannot be confused with rolling development.
 
 The implementation language is consumer-owned. Rusty Engine does not reach into
 another repository, ship a cross-repository mutator, or maintain a registry of
@@ -184,9 +224,10 @@ previously certified consumer commit; it is never part of consumer rollback.
 
 ## Compatibility and integration evidence
 
-A supported current consumer must stay green. `unavailable`, an unexpected
-protocol rejection, a mixed provider commit, or a stale lockfile is an integration
-regression, not an acceptable consequence of exact pinning.
+A supported exact consumer must stay green. `unavailable`, an unexpected protocol rejection, a
+mixed provider commit, or a stale lockfile is an integration regression in certification mode. A
+rolling consumer is intentionally allowed to expose those incompatibilities while Engine and the
+consumer converge; its resolved SHA and diagnostic must remain visible.
 
 An intentionally old protocol belongs in a separately named negative fixture.
 Its expected `protocol.unsupportedVersion` result does not normalize failure in

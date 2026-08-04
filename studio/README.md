@@ -95,9 +95,12 @@ checkout, interpret project content, or acquire gameplay authority. To open on l
 one `root` and one project-relative `project` query parameter; the same controls remain visible in
 the shell.
 
-For exact pinned-consumer certification, retain the explicit adapter launcher or use
-`pnpm run serve:den`; that path still builds and admits the configured public consumer before
-listening. A root-local session is reported as `generic interactive`; an explicit
+For normal rolling development, the consumer may use its root-local
+`engine-development.json` intent and `./scripts/engine-revision dev sync` to resolve the current
+Engine line once and report the resulting SHA. That path is allowed to surface actionable
+compile/protocol incompatibilities and does not claim certification. For exact pinned-consumer
+certification, retain the explicit adapter launcher or use `pnpm run serve:den`; that path still
+builds and admits the configured public consumer before listening. A root-local session is reported as `generic interactive`; an explicit
 `--adapter-binary` launch without managed identity remains `unmanaged explicit adapter`.
 Generic root-local discovery is a trusted development workflow, not a global registry, plugin
 marketplace, schema loader, or security policy.

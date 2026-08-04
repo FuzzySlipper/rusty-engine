@@ -5,6 +5,19 @@ import { fileURLToPath } from 'node:url';
 
 const studioRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
+const modeArgument = process.argv.slice(2).find((argument) => argument.startsWith('--mode='));
+const mode = modeArgument?.slice('--mode='.length) ?? 'certification';
+if (mode !== 'certification' && mode !== 'development') {
+  throw new Error(`unsupported migration-checker mode ${mode}; expected certification or development`);
+}
+
+function requireRevision(value, label, { rolling = false } = {}) {
+  if (rolling && mode === 'development' && value === 'refs/heads/main') return;
+  if (!/^[0-9a-f]{40}$/.test(value)) {
+    throw new Error(`${label} must be an exact Git revision${rolling && mode === 'development' ? ' or refs/heads/main in development mode' : ''}`);
+  }
+}
+
 function readText(relativePath) {
   return readFileSync(resolve(studioRoot, relativePath), 'utf8');
 }
@@ -53,12 +66,8 @@ if (demoSource.repository !== 'FuzzySlipper/rusty-engine-demo') {
 if (demoSource.publicRepository !== 'https://github.com/FuzzySlipper/rusty-engine-demo') {
   throw new Error('Studio integration public repository URL changed without an explicit decision');
 }
-if (!/^[0-9a-f]{40}$/.test(demoSource.commit)) {
-  throw new Error('Studio integration demo commit must be an exact Git revision');
-}
-if (!/^[0-9a-f]{40}$/.test(demoSource.engineCommit)) {
-  throw new Error('Studio integration demo engineCommit must be an exact Git revision');
-}
+requireRevision(demoSource.commit, 'Studio integration demo commit');
+requireRevision(demoSource.engineCommit, 'Studio integration demo engineCommit', { rolling: true });
 if (demoSource.projectFile !== 'content/projects/loading-bay.project.json') {
   throw new Error('Studio integration project changed without an explicit product decision');
 }
@@ -84,11 +93,9 @@ if (voxelSource.repository !== 'FuzzySlipper/rusty-engine-voxels') {
 if (voxelSource.publicRepository !== 'https://github.com/FuzzySlipper/rusty-engine-voxels') {
   throw new Error('Studio voxel integration public repository changed without an explicit decision');
 }
-for (const field of ['commit', 'engineCommit', 'evidenceEngineCommit']) {
-  if (!/^[0-9a-f]{40}$/.test(voxelSource[field])) {
-    throw new Error(`Studio voxel integration ${field} must be an exact Git revision`);
-  }
-}
+requireRevision(voxelSource.commit, 'Studio voxel integration commit');
+requireRevision(voxelSource.engineCommit, 'Studio voxel integration engineCommit', { rolling: true });
+requireRevision(voxelSource.evidenceEngineCommit, 'Studio voxel integration evidenceEngineCommit');
 if (voxelSource.projectFile !== 'content/projects/voxel-lab.project.json') {
   throw new Error('Studio voxel consumer project changed without an explicit product decision');
 }
@@ -198,9 +205,11 @@ const workflowPinMarkers = [
   './scripts/verify-studio-demo-integration.sh',
   'GITHUB_STEP_SUMMARY',
 ];
-for (const marker of workflowPinMarkers) {
-  if (!integrationWorkflow.includes(marker)) {
-    throw new Error(`Studio integration workflow does not use the declared demo pin: ${marker}`);
+if (mode === 'certification') {
+  for (const marker of workflowPinMarkers) {
+    if (!integrationWorkflow.includes(marker)) {
+      throw new Error(`Studio integration workflow does not use the declared demo pin: ${marker}`);
+    }
   }
 }
 
@@ -208,12 +217,14 @@ const demoIntegrationScript = readText(
   process.env.STUDIO_DEMO_INTEGRATION_SCRIPT
     ?? '../scripts/verify-studio-demo-integration.sh',
 );
-for (const marker of [
-  'check-demo-consumer-revision.mjs',
-  './scripts/engine-revision check',
-]) {
-  if (!demoIntegrationScript.includes(marker)) {
-    throw new Error(`Studio demo integration omits consumer revision proof: ${marker}`);
+if (mode === 'certification') {
+  for (const marker of [
+    'check-demo-consumer-revision.mjs',
+    './scripts/engine-revision check',
+  ]) {
+    if (!demoIntegrationScript.includes(marker)) {
+      throw new Error(`Studio demo integration omits consumer revision proof: ${marker}`);
+    }
   }
 }
 
@@ -229,9 +240,11 @@ const voxelWorkflowPinMarkers = [
   './scripts/verify-studio-voxel-integration.sh',
   'GITHUB_STEP_SUMMARY',
 ];
-for (const marker of voxelWorkflowPinMarkers) {
-  if (!voxelIntegrationWorkflow.includes(marker)) {
-    throw new Error(`Studio voxel workflow does not use the declared consumer pin: ${marker}`);
+if (mode === 'certification') {
+  for (const marker of voxelWorkflowPinMarkers) {
+    if (!voxelIntegrationWorkflow.includes(marker)) {
+      throw new Error(`Studio voxel workflow does not use the declared consumer pin: ${marker}`);
+    }
   }
 }
 
@@ -239,8 +252,8 @@ const voxelIntegrationScript = readText(
   process.env.STUDIO_VOXEL_INTEGRATION_SCRIPT
     ?? '../scripts/verify-studio-voxel-integration.sh',
 );
-if (!voxelIntegrationScript.includes('./scripts/engine-revision check')) {
+if (mode === 'certification' && !voxelIntegrationScript.includes('./scripts/engine-revision check')) {
   throw new Error('Studio voxel integration omits consumer revision proof');
 }
 
-console.log(`Studio migration plan passed: ${inventory.length} donor files, ${rules.length} surfaces, ${adoption.length} owners`);
+console.log(`Studio migration plan passed in ${mode} mode: ${inventory.length} donor files, ${rules.length} surfaces, ${adoption.length} owners`);
