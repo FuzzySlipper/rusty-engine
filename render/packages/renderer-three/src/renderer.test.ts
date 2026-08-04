@@ -1339,6 +1339,28 @@ void test('defineStaticMesh resolves draw groups through shuffled material slots
   );
 });
 
+void test('defineStaticMesh rejects wholly unbound draw groups before publication', () => {
+  const renderer = new ThreeRenderer();
+  const asset: StaticMeshAsset = {
+    ...crateAsset(),
+    payload: {
+      ...quadPayload(),
+      provenance: 'staticAsset',
+      groups: [
+        { materialSlot: 999, start: 0, count: 3 },
+        { materialSlot: 1000, start: 3, count: 3 },
+      ],
+    },
+  };
+
+  assert.throws(
+    () => renderer.applyDiff({ op: 'defineStaticMesh', asset }),
+    /defineStaticMesh: unbound material slot 999/u,
+  );
+  assert.equal(renderer.snapshot(), '(empty scene)\n');
+  assert.equal(renderer.instanceCountFor(asset.asset), 0);
+});
+
 function crateInstance(
   asset = 'mesh/crate',
   overrides: StaticMeshInstanceDescriptor['materialOverrides'] = [],
@@ -2224,9 +2246,16 @@ function voxelTextureDescriptor(
 function texturedPlankAsset(): StaticMeshAsset {
   return {
     asset: 'mesh/textured-plank',
-    payload: { ...texturedQuadPayload(), provenance: 'staticAsset' },
+    payload: withMaterialSlot({ ...texturedQuadPayload(), provenance: 'staticAsset' }, 0),
     materialSlots: [{ slot: 0, material: 'material/wood' }],
     collision: { kind: 'visualOnly' },
+  };
+}
+
+function withMaterialSlot(payload: MeshPayloadDescriptor, materialSlot: number): MeshPayloadDescriptor {
+  return {
+    ...payload,
+    groups: payload.groups.map((group) => ({ ...group, materialSlot })),
   };
 }
 
@@ -2340,7 +2369,7 @@ void test('voxel surface specializes one greedy quad for repeat and atlas-safe s
       op: 'defineStaticMesh',
       asset: {
         asset: 'mesh/textured-plank',
-        payload: { ...texturedQuadPayload(), provenance: 'voxelChunk' },
+        payload: withMaterialSlot({ ...texturedQuadPayload(), provenance: 'voxelChunk' }, 0),
         materialSlots: [{ slot: 0, material: material.id }],
         collision: { kind: 'visualOnly' },
       },
@@ -2396,7 +2425,7 @@ void test('voxel texture and material redefine is final-frame atomic without rem
       op: 'defineStaticMesh',
       asset: {
         asset: 'mesh/textured-plank',
-        payload: { ...texturedQuadPayload(), provenance: 'voxelChunk' },
+        payload: withMaterialSlot({ ...texturedQuadPayload(), provenance: 'voxelChunk' }, 0),
         materialSlots: [{ slot: 0, material: 'material/voxel-repeat' }],
         collision: { kind: 'visualOnly' },
       },
@@ -2511,7 +2540,7 @@ void test('defineMaterial maps a static-mesh slot to its defined colour, not a p
     op: 'defineStaticMesh',
     asset: {
       asset: 'mesh/plank',
-      payload: { ...quadPayload(), provenance: 'staticAsset' },
+      payload: withMaterialSlot({ ...quadPayload(), provenance: 'staticAsset' }, 0),
       materialSlots: [{ slot: 0, material: 'material/wood' }],
       collision: { kind: 'visualOnly' },
     },
@@ -2569,7 +2598,7 @@ void test('redefining a material live-replaces instance materials and disposes t
     op: 'defineStaticMesh',
     asset: {
       asset: 'mesh/plank',
-      payload: { ...quadPayload(), provenance: 'staticAsset' },
+      payload: withMaterialSlot({ ...quadPayload(), provenance: 'staticAsset' }, 0),
       materialSlots: [{ slot: 0, material: 'material/wood' }],
       collision: { kind: 'visualOnly' },
     },

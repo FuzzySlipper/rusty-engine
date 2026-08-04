@@ -2882,20 +2882,10 @@ function buildMeshGeometry(
   const slotIndices = materialSlots === undefined
     ? undefined
     : new Map(materialSlots.map((slot, index) => [slot.slot, index]));
-  // Older direct renderer callers sometimes label a payload `staticAsset` while
-  // supplying only the positional material array (the projection path does not
-  // emit those unbound descriptors). Preserve that compatibility case only when
-  // none of the payload slots can be resolved; a partially-bound table still
-  // fails closed instead of silently binding one group to the wrong material.
-  const hasUnresolvedSlot = slotIndices !== undefined
-    && payload.groups.some((group) => !slotIndices.has(group.materialSlot));
-  const hasResolvedSlot = slotIndices !== undefined
-    && payload.groups.some((group) => slotIndices.has(group.materialSlot));
-  const usePositionalGroups = slotIndices !== undefined && hasUnresolvedSlot && !hasResolvedSlot;
   for (let index = 0; index < payload.groups.length; index += 1) {
     const group = payload.groups[index]!;
     const materialIndex = slotIndices?.get(group.materialSlot)
-      ?? (slotIndices === undefined || usePositionalGroups ? index : undefined);
+      ?? (slotIndices === undefined ? index : undefined);
     if (materialIndex === undefined) {
       geometry.dispose();
       throw new RenderApplyError(`${ctx}: unbound material slot ${group.materialSlot}`);
