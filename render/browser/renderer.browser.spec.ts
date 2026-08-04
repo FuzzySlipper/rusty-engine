@@ -21,15 +21,24 @@ function compositionColorClass(pixel: readonly number[]): 'red' | 'green' {
 }
 
 test('shared host realizes retained, presentation, and inspection families in a real browser', async ({ page }) => {
+  // The proof deliberately exercises every retained family, capture path, and
+  // inspection surface before publishing its ready marker. Hosted Chromium can
+  // spend tens of seconds in that synchronous setup under cold WebGL startup;
+  // keep the wait bounded without treating normal runner variance as a failed
+  // renderer assertion.
+  test.setTimeout(90_000);
   const consoleErrors: string[] = [];
   page.on('console', (message) => {
     if (message.type() === 'error') consoleErrors.push(message.text());
   });
   await page.goto('/browser/');
-  await expect.poll(() => page.evaluate(() => ({
-    failure: window.__rustyRenderFailure ?? null,
-    ready: window.__rustyRenderProof?.ready ?? false,
-  }))).toEqual({ failure: null, ready: true });
+  await expect.poll(
+    () => page.evaluate(() => ({
+      failure: window.__rustyRenderFailure ?? null,
+      ready: window.__rustyRenderProof?.ready ?? false,
+    })),
+    { timeout: 60_000 },
+  ).toEqual({ failure: null, ready: true });
 
   const proof = await page.evaluate(() => window.__rustyRenderProof!);
   expect(proof.animatedCapture).toEqual({
