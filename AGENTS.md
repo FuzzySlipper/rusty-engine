@@ -1,5 +1,15 @@
 # Rusty Engine agent guidance
 
+## Den Guidance Bootstrap
+
+- Project ID: `rusty-engine`
+- Resolve live guidance with the Den MCP `get_agent_guidance` tool before
+  substantial work.
+- Treat the resolved Den guidance packet and its referenced Den documents as
+  the source of truth.
+- If Den is unreachable, stop and tell the user which Den tool or command
+  failed and what you were about to do. Do not reconstruct Den state from local files.
+
 ## Project role
 
 This repository is the standalone canonical Rusty Engine provider. It owns
