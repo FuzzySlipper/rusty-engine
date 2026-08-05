@@ -714,13 +714,17 @@ function spriteAtlas(input: unknown, path: string): void {
   const ids = new Set<number>();
   frames.forEach((item, index) => {
     const framePath = `${path}.frames[${String(index)}]`;
-    const frame = record(item, framePath, ['frame', 'uvMin', 'uvMax']);
+    const frame = recordOptional(item, framePath, ['frame', 'uvMin', 'uvMax'], ['size']);
     const id = nonNegativeInteger(frame['frame'], `${framePath}.frame`);
     if (ids.has(id)) fail(`${framePath}.frame`, 'is duplicated');
     ids.add(id);
     const min = rangedTuple(frame['uvMin'], `${framePath}.uvMin`, 2, 0, 1);
     const max = rangedTuple(frame['uvMax'], `${framePath}.uvMax`, 2, 0, 1);
     if (max[0]! <= min[0]! || max[1]! <= min[1]!) fail(framePath, 'UV rectangle is degenerate');
+    if (frame['size'] !== undefined) {
+      const size = tuple(frame['size'], `${framePath}.size`, 2);
+      size.forEach((item, sizeIndex) => positiveFinite(item, `${framePath}.size[${String(sizeIndex)}]`));
+    }
   });
 }
 

@@ -2733,7 +2733,7 @@ function sparkAtlas(): SpriteAtlasDescriptor {
     texture: 'texture/spark',
     frames: [
       { frame: 0, uvMin: [0, 0], uvMax: [0.5, 1] },
-      { frame: 3, uvMin: [0.5, 0], uvMax: [1, 1] },
+      { frame: 3, uvMin: [0.5, 0], uvMax: [1, 1], size: [2, 3] },
     ],
   };
 }
@@ -2774,6 +2774,10 @@ void test('a sprite frame maps to its atlas UV sub-rectangle deterministically',
   // Advancing the frame re-resolves the UV rect deterministically.
   r.applyDiff({ op: 'updateSprite', handle: renderHandle(1), frame: 3, tint: null, renderOrder: null, visible: null });
   assert.deepEqual(spriteUv(r, 1), [0.5, 0, 1, 1], 'frame 3 → right half');
+  const mesh = r.objectFor(renderHandle(1)) as THREE.Mesh;
+  mesh.geometry.computeBoundingBox();
+  assert.deepEqual(mesh.geometry.boundingBox?.getSize(new THREE.Vector3()).toArray(), [2, 3, 0]);
+  assert.equal(r.resourceStatistics().geometryResourceCount, 1, 'replaced frame geometry is disposed');
   assert.equal(r.spriteFallbackCount, 0, 'known frames are not fallbacks');
 });
 

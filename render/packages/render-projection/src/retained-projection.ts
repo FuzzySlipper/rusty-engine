@@ -102,6 +102,7 @@ export interface SpriteProjectionNode extends RenderProjectionNodeBase {
   readonly kind: 'sprite';
   readonly sprite: SpriteInstanceDescriptor;
   readonly frameUv: readonly [number, number, number, number];
+  readonly frameSize: readonly [number, number];
   readonly renderOrder: number;
 }
 
@@ -207,6 +208,7 @@ interface MutableSpriteNode extends MutableNodeBase {
   kind: 'sprite';
   sprite: SpriteInstanceDescriptor;
   frameUv: [number, number, number, number];
+  frameSize: [number, number];
   renderOrder: number;
 }
 
@@ -903,6 +905,7 @@ export class RenderProjection {
       meshPayload: null,
       sprite,
       frameUv: this.#resolveSpriteUv(sprite.asset, sprite.frame),
+      frameSize: this.#resolveSpriteSize(sprite.asset, sprite.frame, sprite.size),
       renderOrder: sprite.renderOrder,
     };
     this.#validateViewmodelInsertion(record, 'createSprite');
@@ -922,6 +925,11 @@ export class RenderProjection {
     if (diff.frame !== null) {
       record.sprite = { ...record.sprite, frame: diff.frame };
       record.frameUv = this.#resolveSpriteUv(record.sprite.asset, diff.frame);
+      record.frameSize = this.#resolveSpriteSize(
+        record.sprite.asset,
+        diff.frame,
+        record.sprite.size,
+      );
     }
     if (diff.tint !== null) {
       record.sprite = { ...record.sprite, tint: clone(diff.tint) };
@@ -944,6 +952,11 @@ export class RenderProjection {
       return [0, 0, 1, 1];
     }
     return [rect.uvMin[0], rect.uvMin[1], rect.uvMax[0], rect.uvMax[1]];
+  }
+
+  #resolveSpriteSize(asset: string, frame: number, fallback: readonly [number, number]): [number, number] {
+    const rect = this.#spriteAtlases.get(asset)?.frames.find((candidate) => candidate.frame === frame);
+    return rect?.size === undefined ? [fallback[0], fallback[1]] : [rect.size[0], rect.size[1]];
   }
 
   #insert(record: NodeRecord): void {
@@ -1281,6 +1294,7 @@ function snapshotNode(record: NodeRecord): RenderProjectionNode {
     kind: 'sprite',
     sprite: clone(record.sprite),
     frameUv: clone(record.frameUv),
+    frameSize: clone(record.frameSize),
     renderOrder: record.renderOrder,
   };
 }

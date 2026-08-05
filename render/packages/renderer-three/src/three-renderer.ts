@@ -2201,6 +2201,22 @@ export class ThreeRenderer {
     return [u0, v0, u1, v1];
   }
 
+  #spriteFrameSize(
+    asset: string,
+    frame: number,
+    fallback: readonly [number, number],
+  ): readonly [number, number] {
+    const rect = this.#atlases.get(asset)?.frames.find((candidate) => candidate.frame === frame);
+    return rect?.size ?? fallback;
+  }
+
+  #spriteGeometry(sprite: SpriteInstanceDescriptor, frame: number): THREE.PlaneGeometry {
+    const size = this.#spriteFrameSize(sprite.asset, frame, sprite.size);
+    const geometry = new THREE.PlaneGeometry(size[0], size[1]);
+    geometry.translate((0.5 - sprite.pivot[0]) * size[0], (0.5 - sprite.pivot[1]) * size[1], 0);
+    return geometry;
+  }
+
   // ── Sprites / billboards (render-asset-05/06) ───────────────────────────────
 
   #createSprite(diff: Extract<RenderDiff, { op: 'createSprite' }>): void {
@@ -2211,8 +2227,7 @@ export class ThreeRenderer {
     // Plane BufferGeometry (NOT THREE.Sprite) so the node fits the retained handle
     // lifecycle and future batching. Pivot shifts the plane so the anchor sits at
     // the node origin.
-    const geometry = new THREE.PlaneGeometry(s.size[0], s.size[1]);
-    geometry.translate((0.5 - s.pivot[0]) * s.size[0], (0.5 - s.pivot[1]) * s.size[1], 0);
+    const geometry = this.#spriteGeometry(s, s.frame);
     const material = this.#spriteMaterialFor(s);
     const mesh = new THREE.Mesh(geometry, material);
     this.#trackObjectResources(mesh);
@@ -2255,8 +2270,13 @@ export class ThreeRenderer {
     if (diff.frame !== null) {
       entry.sprite = { ...entry.sprite, frame: diff.frame };
       mesh.userData['frame'] = diff.frame;
+      const previousGeometry = mesh.geometry;
+      const geometry = this.#spriteGeometry(entry.sprite, diff.frame);
+      mesh.geometry = geometry;
+      this.#trackGeometryResource(geometry);
       // Re-resolve the atlas UV rect for the new frame (deterministic, no anim).
-      mesh.userData['uv'] = this.#applySpriteUv(mesh.geometry, entry.sprite.asset, diff.frame);
+      mesh.userData['uv'] = this.#applySpriteUv(geometry, entry.sprite.asset, diff.frame);
+      previousGeometry.dispose();
     }
     if (diff.tint !== null) {
       entry.sprite = { ...entry.sprite, tint: diff.tint };

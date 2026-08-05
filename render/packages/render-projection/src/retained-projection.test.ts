@@ -888,7 +888,7 @@ void test('resolves sprite atlas frames and sprite pick hints without renderer t
         atlas: {
           id: 'sprite/ui',
           texture: 'texture/ui',
-          frames: [{ frame: 3, uvMin: [0.25, 0.5], uvMax: [0.5, 0.75] }],
+          frames: [{ frame: 3, uvMin: [0.25, 0.5], uvMax: [0.5, 0.75], size: [2, 3] }],
         },
       },
       { op: 'createSprite', handle: renderHandle(2), parent: null, sprite: sprite('sprite/ui', 0) },
@@ -907,6 +907,7 @@ void test('resolves sprite atlas frames and sprite pick hints without renderer t
   assert.equal(node?.kind, 'sprite');
   if (node?.kind === 'sprite') {
     assert.deepEqual(node.frameUv, [0.25, 0.5, 0.5, 0.75]);
+    assert.deepEqual(node.frameSize, [2, 3]);
     assert.deepEqual(node.sprite.tint, [1, 0, 0, 0.5]);
     assert.equal(node.renderOrder, 8);
     assert.equal(node.visible, false);

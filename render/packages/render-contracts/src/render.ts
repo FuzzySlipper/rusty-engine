@@ -252,6 +252,7 @@ export interface SpriteFrameRect {
   readonly frame: number;
   readonly uvMin: Vec2;
   readonly uvMax: Vec2;
+  readonly size?: Vec2;
 }
 
 export interface SpriteAtlasDescriptor {
