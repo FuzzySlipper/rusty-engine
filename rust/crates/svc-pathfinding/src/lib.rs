@@ -96,6 +96,13 @@ pub struct NavPathQuery {
     pub max_visited: usize,
 }
 
+/// Vertical tolerance for horizontal neighbors in walkable-surface navigation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PlanarNavNeighborPolicy {
+    /// Maximum upward or downward cell difference across one X/Z edge.
+    pub max_step_cells: u8,
+}
+
 /// Deterministic path readout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NavPathReadout {
@@ -405,6 +412,19 @@ pub fn find_path(
     projection: &NavProjection,
     query: NavPathQuery,
 ) -> Result<NavPathReadout, NavError> {
+    find_path_with_policy(projection, query, PlanarNavNeighborPolicy::default())
+}
+
+/// Query a deterministic shortest path with explicit vertical step tolerance.
+///
+/// Candidate neighbors retain the canonical planar direction order. Within
+/// each adjacent X/Z column, same-level cells are considered first, followed
+/// by upward then downward cells at increasing distance.
+pub fn find_path_with_policy(
+    projection: &NavProjection,
+    query: NavPathQuery,
+    policy: PlanarNavNeighborPolicy,
+) -> Result<NavPathReadout, NavError> {
     if query.max_visited == 0 {
         return Err(NavError::InvalidQueryBudget);
     }
@@ -434,7 +454,7 @@ pub fn find_path(
         if visited.len() > query.max_visited {
             break;
         }
-        for next in nav_neighbors(current) {
+        for next in planar_nav_neighbors(current, policy) {
             if !projection.is_walkable(next) || visited.contains(&next) {
                 continue;
             }
@@ -670,6 +690,22 @@ fn nav_neighbors(coord: VoxelCoord) -> [VoxelCoord; 4] {
         VoxelCoord::new(coord.x - 1, coord.y, coord.z),
         VoxelCoord::new(coord.x, coord.y, coord.z - 1),
     ]
+}
+
+fn planar_nav_neighbors(
+    coord: VoxelCoord,
+    policy: PlanarNavNeighborPolicy,
+) -> impl Iterator<Item = VoxelCoord> {
+    let horizontal = [(1, 0), (0, 1), (-1, 0), (0, -1)];
+    let mut neighbors = Vec::with_capacity(4 * (1 + usize::from(policy.max_step_cells) * 2));
+    for (dx, dz) in horizontal {
+        neighbors.push(VoxelCoord::new(coord.x + dx, coord.y, coord.z + dz));
+        for step in 1..=i64::from(policy.max_step_cells) {
+            neighbors.push(VoxelCoord::new(coord.x + dx, coord.y + step, coord.z + dz));
+            neighbors.push(VoxelCoord::new(coord.x + dx, coord.y - step, coord.z + dz));
+        }
+    }
+    neighbors.into_iter()
 }
 
 fn volumetric_neighbors(
@@ -952,6 +988,68 @@ mod tests {
                 },
             ),
         );
+    }
+
+    #[test]
+    fn planar_step_policy_connects_a_staircase_in_both_directions() {
+        let cells = [
+            VoxelCoord::new(0, 0, 0),
+            VoxelCoord::new(1, 1, 0),
+            VoxelCoord::new(2, 2, 0),
+            VoxelCoord::new(3, 3, 0),
+        ];
+        let projection = NavProjection::from_walkable_cells(test_grid(), cells);
+        let policy = PlanarNavNeighborPolicy { max_step_cells: 1 };
+
+        for (start, goal, expected) in [
+            (cells[0], cells[3], cells.to_vec()),
+            (cells[3], cells[0], cells.into_iter().rev().collect()),
+        ] {
+            let readout = find_path_with_policy(
+                &projection,
+                NavPathQuery {
+                    start,
+                    goal,
+                    max_visited: 16,
+                },
+                policy,
+            )
+            .expect("stair path");
+            assert_eq!(readout.outcome, NavPathOutcome::Reached);
+            assert_eq!(readout.path, expected);
+            assert_eq!(readout.path_hash, hash_path(&expected));
+        }
+    }
+
+    #[test]
+    fn planar_step_policy_rejects_ledges_above_tolerance() {
+        let start = VoxelCoord::new(0, 3, 0);
+        let goal = VoxelCoord::new(1, 1, 0);
+        let projection = NavProjection::from_walkable_cells(test_grid(), [start, goal]);
+
+        let blocked = find_path_with_policy(
+            &projection,
+            NavPathQuery {
+                start,
+                goal,
+                max_visited: 16,
+            },
+            PlanarNavNeighborPolicy { max_step_cells: 1 },
+        )
+        .expect("bounded drop query");
+        assert_eq!(blocked.outcome, NavPathOutcome::NoPath);
+
+        let allowed = find_path_with_policy(
+            &projection,
+            NavPathQuery {
+                start,
+                goal,
+                max_visited: 16,
+            },
+            PlanarNavNeighborPolicy { max_step_cells: 2 },
+        )
+        .expect("explicit drop query");
+        assert_eq!(allowed.path, vec![start, goal]);
     }
 
     fn tunnel_nav_endpoints() -> (VoxelCoord, VoxelCoord) {
