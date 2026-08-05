@@ -206,7 +206,8 @@ async function install(config: ServiceConfiguration): Promise<void> {
   const rendered = template
     .replaceAll('@ENGINE_ROOT@', config.engineRoot)
     .replaceAll('@RUNTIME_ROOT@', config.runtimeRoot)
-    .replaceAll('@PNPM@', pnpm);
+    .replaceAll('@PNPM@', pnpm)
+    .replaceAll('@PNPM_DIR@', dirname(pnpm));
   const unitRoot = join(process.env['HOME'] ?? '', '.config', 'systemd', 'user');
   if (!unitRoot.startsWith('/')) throw new Error('HOME must resolve an absolute user service root');
   await mkdir(unitRoot, { recursive: true });

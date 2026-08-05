@@ -8,6 +8,7 @@ Type=simple
 WorkingDirectory=@ENGINE_ROOT@
 EnvironmentFile=@RUNTIME_ROOT@/config/service.env
 Environment=RUSTY_STUDIO_PNPM=@PNPM@
+Environment=PATH=@PNPM_DIR@:/usr/local/bin:/usr/bin:/bin
 ExecStartPre=@PNPM@ --dir @ENGINE_ROOT@/studio run service -- prepare
 ExecStart=@PNPM@ --dir @ENGINE_ROOT@/studio run service -- run
 Restart=on-failure
