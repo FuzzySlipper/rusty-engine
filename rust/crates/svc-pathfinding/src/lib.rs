@@ -1,4 +1,5 @@
-//! Deterministic navigation/pathfinding projection over voxel authority.
+//! Deterministic navigation/pathfinding projection over host-derived cells or
+//! voxel authority.
 //!
 //! # Lane
 //!
@@ -41,6 +42,24 @@ pub struct NavProjection {
 }
 
 impl NavProjection {
+    /// Build a projection from walkable cells derived by a host-owned authority.
+    ///
+    /// Input order and duplicate cells do not affect the retained cells or
+    /// projection hash. The caller remains responsible for deriving walkability
+    /// according to its collision and agent policy.
+    pub fn from_walkable_cells(
+        grid: VoxelGridSpec,
+        cells: impl IntoIterator<Item = VoxelCoord>,
+    ) -> Self {
+        let walkable = cells.into_iter().collect::<BTreeSet<_>>();
+        let projection_hash = hash_walkable(&walkable);
+        Self {
+            grid,
+            walkable,
+            projection_hash,
+        }
+    }
+
     pub fn grid(&self) -> VoxelGridSpec {
         self.grid
     }
@@ -354,12 +373,7 @@ pub fn build_nav_projection(
             }
         }
     }
-    let projection_hash = hash_walkable(&walkable);
-    Ok(NavProjection {
-        grid,
-        walkable,
-        projection_hash,
-    })
+    Ok(NavProjection::from_walkable_cells(grid, walkable))
 }
 
 fn is_walkable_cell(world: &VoxelWorld, coord: VoxelCoord, config: NavProjectionConfig) -> bool {
@@ -903,6 +917,41 @@ mod tests {
         let mut world = VoxelWorld::new(grid);
         world.insert(ChunkCoord::ORIGIN, chunk);
         world
+    }
+
+    #[test]
+    fn host_walkable_cells_are_canonical_and_reuse_path_queries() {
+        let voxel_projection = projection();
+        let mut cells = voxel_projection.walkable_cells().collect::<Vec<_>>();
+        cells.reverse();
+        cells.push(cells[0]);
+
+        let host_projection = NavProjection::from_walkable_cells(voxel_projection.grid(), cells);
+        assert_eq!(host_projection, voxel_projection);
+        assert_eq!(
+            host_projection.projection_hash(),
+            voxel_projection.projection_hash()
+        );
+
+        let (start, goal) = tunnel_nav_endpoints();
+        assert_eq!(
+            find_path(
+                &host_projection,
+                NavPathQuery {
+                    start,
+                    goal,
+                    max_visited: 128,
+                },
+            ),
+            find_path(
+                &voxel_projection,
+                NavPathQuery {
+                    start,
+                    goal,
+                    max_visited: 128,
+                },
+            ),
+        );
     }
 
     fn tunnel_nav_endpoints() -> (VoxelCoord, VoxelCoord) {
