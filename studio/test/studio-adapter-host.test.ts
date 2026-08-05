@@ -24,7 +24,11 @@ test('generic host discovers a root-local adapter and preserves the old session 
       adapter: { command: ['./missing-adapter.mjs'], cwd: '.' },
     }))),
   ]);
-  const host = await StudioAdapterHost.create({ adapterBinary: undefined, managedIdentity: null });
+  const host = await StudioAdapterHost.create({
+    adapterBinary: undefined,
+    managedIdentity: null,
+    rollingEngineSourceCommit: '1'.repeat(40),
+  });
   try {
     assert.equal(host.status(), null);
     await assert.rejects(
@@ -36,6 +40,7 @@ test('generic host discovers a root-local adapter and preserves the old session 
     const status = host.status();
     assert.ok(status);
     assert.equal(status.mode, 'generic');
+    assert.equal(status.engineSourceCommit, '1'.repeat(40));
     assert.equal(status.activeProjectRoot, null);
     assert.equal(status.runningAdapter.adapterId, 'fixture.first');
     assert.match(

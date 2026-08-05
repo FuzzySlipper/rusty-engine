@@ -39,6 +39,7 @@ export interface StudioAdapterBootstrapManifest {
 export interface StudioAdapterHostOptions {
   readonly adapterBinary: string | undefined;
   readonly managedIdentity: StudioManagedHostIdentity | null;
+  readonly rollingEngineSourceCommit?: string | null;
 }
 
 export interface StudioSessionOpenResult {
@@ -69,6 +70,7 @@ interface PendingSelection {
  */
 export class StudioAdapterHost {
   readonly #managedIdentity: StudioManagedHostIdentity | null;
+  readonly #rollingEngineSourceCommit: string | null;
   readonly #fixedAdapter: boolean;
   #current: AdapterSlot | null = null;
   #pending: PendingSelection | null = null;
@@ -80,6 +82,7 @@ export class StudioAdapterHost {
 
   private constructor(options: StudioAdapterHostOptions) {
     this.#managedIdentity = options.managedIdentity;
+    this.#rollingEngineSourceCommit = options.rollingEngineSourceCommit ?? null;
     this.#fixedAdapter = options.adapterBinary !== undefined;
   }
 
@@ -107,7 +110,8 @@ export class StudioAdapterHost {
         : this.#fixedAdapter
           ? 'unmanaged'
           : 'generic',
-      engineSourceCommit: this.#managedIdentity?.engineSourceCommit ?? null,
+      engineSourceCommit: this.#managedIdentity?.engineSourceCommit
+        ?? this.#rollingEngineSourceCommit,
       configuredConsumer: this.#managedIdentity === null ? null : {
         repository: this.#managedIdentity.consumerRepository,
         commit: this.#managedIdentity.consumerCommit,

@@ -35,6 +35,7 @@ interface HostOptions {
   readonly port: number;
   readonly settingsRoot: string;
   readonly managedIdentity: ManagedHostIdentity | null;
+  readonly rollingEngineSourceCommit: string | null;
 }
 
 interface ManagedHostIdentity {
@@ -347,6 +348,7 @@ function options(): HostOptions {
   const port = Number(argumentValue('--port', '4300'));
   const settingsRoot = argumentValue('--settings-root', defaultStudioUserSettingsRoot());
   const managedIdentity = managedHostIdentity();
+  const rollingEngineSourceCommit = optionalArgumentValue('--rolling-engine-source-commit') ?? null;
   if (adapterBinary !== undefined && !isAbsolute(adapterBinary)) {
     throw new Error('--adapter-binary must be absolute');
   }
@@ -355,7 +357,21 @@ function options(): HostOptions {
   if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
     throw new Error('--port must be an integer from 1 through 65535');
   }
-  return { adapterBinary, staticRoot, host, port, settingsRoot, managedIdentity };
+  if (rollingEngineSourceCommit !== null && !/^[0-9a-f]{40}$/u.test(rollingEngineSourceCommit)) {
+    throw new Error('--rolling-engine-source-commit must be one exact lowercase commit');
+  }
+  if (managedIdentity !== null && rollingEngineSourceCommit !== null) {
+    throw new Error('rolling and managed Studio identities are mutually exclusive');
+  }
+  return {
+    adapterBinary,
+    staticRoot,
+    host,
+    port,
+    settingsRoot,
+    managedIdentity,
+    rollingEngineSourceCommit,
+  };
 }
 
 function managedHostIdentity(): ManagedHostIdentity | null {
@@ -398,6 +414,7 @@ async function main(): Promise<void> {
   const adapter = await StudioAdapterHost.create({
     adapterBinary: configured.adapterBinary,
     managedIdentity: configured.managedIdentity,
+    rollingEngineSourceCommit: configured.rollingEngineSourceCommit,
   });
   const server = createServer((request, response) => {
     void (async () => {
@@ -408,6 +425,7 @@ async function main(): Promise<void> {
           project: DEN_PROJECT,
           status: 'ready',
           mode: 'generic',
+          engineSourceCommit: configured.rollingEngineSourceCommit,
           adapter: null,
         });
         response.writeHead(200, {
@@ -415,7 +433,9 @@ async function main(): Promise<void> {
           'content-type': 'application/json; charset=utf-8',
           'content-length': String(Buffer.byteLength(body)),
           'x-den-project': DEN_PROJECT,
-          'x-rusty-engine-source': hostStatus?.engineSourceCommit ?? 'unmanaged',
+          'x-rusty-engine-source': hostStatus?.engineSourceCommit
+            ?? configured.rollingEngineSourceCommit
+            ?? 'unmanaged',
           'x-studio-consumer': hostStatus?.configuredConsumer?.commit ?? 'unmanaged',
         });
         response.end(body);

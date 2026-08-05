@@ -18,7 +18,9 @@ export interface StudioHostStatus {
   readonly project: 'rusty-engine-studio';
   readonly status: 'ok';
   /**
-   * `generic` is the trusted root-local development host. It is distinct from
+   * `generic` is the trusted root-local development host. It may report the
+   * exact Engine revision of an immutable rolling-development build, but it
+   * never claims a certified downstream consumer. It is distinct from
    * `unmanaged`, which means an explicit adapter binary was supplied without
    * managed certification.
    */
@@ -73,12 +75,16 @@ export function decodeStudioHostStatus(input: unknown): StudioHostStatus {
     if (runningAdapter.buildCommit !== configuredConsumer.commit) {
       fail('$.runningAdapter.buildCommit', 'must equal the configured consumer commit');
     }
+  } else if (value['mode'] === 'generic') {
+    if (configuredConsumer !== null || runningAdapter.buildCommit !== null) {
+      fail('$', 'generic status must not claim a managed consumer or adapter build');
+    }
   } else if (
     engineSourceCommit !== null
     || configuredConsumer !== null
     || runningAdapter.buildCommit !== null
   ) {
-    fail('$', 'generic or unmanaged status must not claim managed source identity');
+    fail('$', 'unmanaged status must not claim managed source identity');
   }
   return Object.freeze({
     schemaVersion: STUDIO_HOST_STATUS_SCHEMA_VERSION,

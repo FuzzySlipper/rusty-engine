@@ -37,6 +37,7 @@ paths:
 | [rendering-operations.md](rendering-operations.md) | Renderer verification and operational limits |
 | [studio-migration-contract.md](studio-migration-contract.md) | Studio parity and owner-adoption contract |
 | [studio-adapter-protocol.md](studio-adapter-protocol.md) | Closed external-project adapter protocol |
+| [topics/studio-service.md](topics/studio-service.md) | Persistent generic Studio service operations |
 | [studio-downstream-entity-inspector-extensions.md](studio-downstream-entity-inspector-extensions.md) | Proposed typed downstream Entity inspector composition boundary and implementation order |
 
 ## Code maps

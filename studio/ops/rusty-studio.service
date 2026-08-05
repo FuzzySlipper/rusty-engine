@@ -1,0 +1,23 @@
+[Unit]
+Description=Rusty Engine generic Studio rolling-development service
+Documentation=file:@ENGINE_ROOT@/docs/topics/studio-service.md
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=@ENGINE_ROOT@
+EnvironmentFile=@RUNTIME_ROOT@/config/service.env
+Environment=RUSTY_STUDIO_PNPM=@PNPM@
+ExecStartPre=@PNPM@ --dir @ENGINE_ROOT@/studio run service -- prepare
+ExecStart=@PNPM@ --dir @ENGINE_ROOT@/studio run service -- run
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStartSec=15min
+TimeoutStopSec=30s
+SyslogIdentifier=rusty-studio
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
