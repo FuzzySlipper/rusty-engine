@@ -222,6 +222,14 @@ These are navigation and ownership rules, not a new governance layer.
 
 ## TypeScript and Studio style
 
+- Do not add plain JavaScript for application, product, or library code when
+  TypeScript is available. Reserve `.mjs`/`.js` for tool-required configuration
+  or small build/check plumbing, and do not let those files become owners of
+  durable behavior.
+- Prefer Rust for durable semantics, state, and runtime authority. Use
+  TypeScript for typed presentation, host integration, strict boundary code,
+  and expressive authoring or content composition; TypeScript must not become
+  a second gameplay, project, or persistence authority.
 - Keep package-root imports and explicit public exports.
 - Do not deep-import another package's `src/` tree from a consumer.
 - Keep strict decoding at the Rust-to-TypeScript border.
@@ -230,6 +238,16 @@ These are navigation and ownership rules, not a new governance layer.
 - Keep UI state local and observational; it is not project or gameplay truth.
 - Prefer clear named decisions and small typed functions over terse framework
   magic.
+- Treat each web application's HTML document, `main.ts`, bootstrap function,
+  and initial loading shell as a thin composition root. They should do only the
+  minimum needed to load dependencies, mount the application, and present
+  bounded startup/loading/failure state.
+- Do not accumulate feature logic, API clients, state models, sample content,
+  generalized scaffolding, or large inline scripts in the bootstrap surface.
+  Move such behavior into purpose-named external TypeScript modules or packages
+  with an explicit owner, then import and compose those owners at startup. A
+  starter app should remain visibly small enough that its wiring and authority
+  boundaries can be understood at a glance.
 
 ## Test and acceptance posture
 
