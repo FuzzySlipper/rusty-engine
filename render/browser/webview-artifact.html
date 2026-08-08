@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rust-only renderer artifact acceptance</title>
+    <style>
+      html, body, #rusty-renderer-root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+      #rusty-renderer-root { position: relative; }
+      #rusty-renderer-canvas { display: block; width: 100%; height: 100%; }
+      #rusty-renderer-overlays { position: absolute; inset: 0; pointer-events: none; }
+    </style>
+    <script>
+      window.__rustyWebviewMessages = [];
+      window.__rustyEngineRendererConfiguration = {
+        autoStart: false,
+        clearColor: 1056816,
+        pixelRatio: 1,
+        resources: [],
+      };
+      window.ipc = {
+        postMessage(message) {
+          window.__rustyWebviewMessages.push(JSON.parse(message));
+        },
+      };
+    </script>
+  </head>
+  <body>
+    <div id="rusty-renderer-root">
+      <canvas id="rusty-renderer-canvas" width="320" height="240"></canvas>
+      <div id="rusty-renderer-overlays"></div>
+    </div>
+    <script type="module" src="./webview-artifact.ts"></script>
+  </body>
+</html>

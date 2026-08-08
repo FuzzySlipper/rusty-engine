@@ -1,265 +1,106 @@
 # Downstream Engine revision contract
 
-## Purpose
+## Default: one rolling Rust dependency
 
-This topic defines the two revision modes available to an external consumer
-using Rusty Engine Rust crates, renderer packages, Studio packages, or
-rules-authoring packages from the public repository. Rolling development follows
-the current Engine line and reports the resolved commit for diagnostics. Exact
-certification selects one immutable public commit for reproducible review.
+An ordinary downstream game depends on the complete `rusty-engine` Rust facade
+from the canonical public `main` branch:
 
-The certification contract is deliberately small:
-
-> One consumer owns one exact public Rusty Engine commit for every Engine surface
-> it selects.
-
-Consumers may advance independently. A game, a voxel experiment, and another
-product do not need to use the same Engine commit. Within one consumer, however,
-Rust crates and TypeScript packages from this repository stay on the same commit.
-Keeping separate Rust, renderer, Studio, or rules lanes would make compatibility
-an implicit matrix and recreate the drift this contract is meant to remove.
-
-## Rolling development intent
-
-Consumers that are still integrating against a moving Engine line keep a
-separate `engine-development.json` intent manifest:
-
-```json
-{
-  "schemaVersion": 1,
-  "repository": "https://github.com/FuzzySlipper/rusty-engine",
-  "ref": "refs/heads/main"
-}
+```toml
+[dependencies]
+rusty-engine = { git = "https://github.com/FuzzySlipper/rusty-engine", branch = "main" }
 ```
 
-The consumer-owned command resolves that public ref once, reports the exact SHA
-used for the run, and updates the active Cargo/package carriers as one coherent
-resolution:
+The facade preserves every public library as an exact namespace such as
+`rusty_engine::entity_state` or `rusty_engine::render_model`. It has no feature
+flags and downstream must not select individual Engine crates. The complete
+namespace index is [the Rust SDK capability index](../../rust-sdk-capabilities.md).
 
-```text
-./scripts/engine-revision dev sync --json
-./scripts/engine-revision dev check
+The renderer implementation is included behind that Rust surface. A game does
+not add `render/package.json`, pnpm dependencies, TypeScript imports, JavaScript
+commands, or deep package paths. It submits Rust-owned render and presentation
+frames through `rusty_engine::renderer_webview_host` and receives typed Rust
+observations from `rusty_engine::render_host_contracts`. Engine owns the
+compiled TypeScript/Three artifact and its private bridge.
+
+This is intentionally rolling-current during development. `Cargo.lock` records
+the exact Engine commit used by one build, but it is not a request to remain on
+that commit. Engine changes may break downstream compilation. That loud failure
+is preferred to an agent silently retaining an old revision and reimplementing
+a mechanism that has since moved upstream.
+
+## Required freshness check
+
+Downstream CI and the start of ordinary agent work update or check the Engine
+lock before feature work:
+
+```bash
+cargo update -p rusty-engine
+python3 ./scripts/check_downstream_engine_freshness.py --manifest ./Cargo.toml ./Cargo.lock
 ```
 
-`dev sync` may instead inspect an explicitly supplied local Engine worktree with
-`--worktree /absolute/engine-root`; a dirty worktree is report-only until it is
-clean. The ignored `.engine-development/resolution.json` records the resolved
-SHA, source, and dirty state. This is operational development state, not a
-compatibility promise or certification evidence. A moving ref can break a
-consumer; the command should expose the provider SHA and the downstream's real
-compile or protocol diagnostic rather than hiding it behind an old pin.
+Consumers may copy the checked Engine helpers
+`scripts/check_downstream_engine_freshness.py` and
+`scripts/sync-downstream-engine.sh` into their repository. The checker requires:
 
-The development resolver is deliberately narrow: it accepts only the canonical
-public repository and `refs/heads/main` (or an explicit local Engine worktree).
-It does not load arbitrary URLs, mutate another checkout, or create a registry.
+- exactly one locked `rusty-engine` package;
+- exactly one direct dependency from the canonical Engine repository, and it is
+  the complete `rusty-engine` facade rather than an individual crate;
+- the canonical Git repository and `main` branch source;
+- an exact 40-character resolved commit in the lock; and
+- equality with current public `main`, resolved with `git ls-remote`.
 
-## Source manifest
+It fails with both the locked and current revisions when stale. It does not
+silently rewrite source, switch repositories, inspect a sibling checkout, or
+hide a compile/protocol failure. A temporarily unavailable public repository is
+also loud because freshness could not be established.
 
-The consumer keeps `engine-source.json` at its repository root. These fields form
-the common identity:
+The sync helper accepts an explicit downstream `Cargo.toml`, runs `cargo update
+-p rusty-engine`, and then runs the same freshness check. Downstream owns when
+that mutation is appropriate; Engine never reaches into another checkout.
 
-```json
-{
-  "schemaVersion": 1,
-  "publicRepository": "https://github.com/FuzzySlipper/rusty-engine",
-  "commit": "<40 lowercase hexadecimal characters>"
-}
+## Exact revisions are exceptional
+
+Use an exact public revision only for a bounded review packet, release
+reproduction, rollback, or reverse-certification fixture:
+
+```toml
+[dependencies]
+rusty-engine = { git = "https://github.com/FuzzySlipper/rusty-engine", rev = "<40-character-public-sha>" }
 ```
 
-- `schemaVersion` is exactly `1` for this shape.
-- `publicRepository` is the canonical public HTTPS repository. A local path,
-  sibling checkout, private mirror, or alternate remote is not an equivalent
-  source.
-- `commit` is exactly 40 lowercase hexadecimal characters and must be fetchable
-  from the public repository before an update is accepted. Branches, tags,
-  abbreviated hashes, and symbolic refs are rejected.
+The reason and exit condition must accompany the pin. Return to the rolling
+branch after the review, release, or rollback investigation. Do not normalize a
+temporary pin into the development workflow and do not split Engine into
+separate crate or language revision lanes.
 
-A consumer may add narrowly owned fields, such as the directory used by its
-managed Studio launcher. Its decoder still admits an explicit schema and rejects
-unknown fields; extensions do not create another Engine revision.
+Engine-owned reverse-certification fixtures may name exact downstream and
+provider commits. They are immutable evidence, not dependency instructions for
+ordinary downstream work. Historical provenance hashes likewise remain
+historical facts and are never rewritten by the freshness helper.
 
-The manifest is the editable source of truth. Cargo manifests, package manifests,
-package-manager policy, and lockfiles necessarily repeat its commit as checked
-projections because those tools require literal dependency sources.
+## Consumer proof
 
-## Keep the identities separate
+Engine verifies the supported shape with:
 
-An Engine commit is not a protocol version or a certification result:
-
-| Identity | Owner | Meaning |
-|---|---|---|
-| Consumer Engine commit | downstream consumer | Provider tree supplying all selected Engine crates and packages |
-| Studio adapter protocol version | concrete downstream adapter and Studio client | Typed request and response compatibility |
-| Product transport protocol version | concrete product host and client | Product session compatibility |
-| Reverse-certification consumer commit | Rusty Engine integration fixture | Exact downstream commit selected for an Engine-owned integration check |
-| Reverse-certification `engineCommit` | Rusty Engine integration fixture | Engine commit that the selected downstream commit claims to consume |
-| Historical provenance or evidence commit | owner of the record | Commit that produced an earlier transfer, conversion, benchmark, or proof |
-
-Changing `engine-source.json` never mechanically changes a Studio adapter or
-product transport protocol number. A protocol changes only when its typed
-contract changes and its owner deliberately versions it.
-
-Engine owns files such as `studio/demo-consumer-source.json` and
-`studio/voxel-consumer-source.json`. They are reverse-certification targets: each
-names an exact consumer commit and the Engine commit that consumer claims. A
-consumer revision command must never mutate them. Engine updates a reverse pin in
-a later Engine commit after the final reviewed downstream commit exists.
-
-Historical provenance, checked evidence, and arbitrary 40-character test values
-are not live dependency carriers. An update must not rewrite them merely because
-they happen to contain the old commit.
-
-## Consumer-owned command surface
-
-Each consumer provides the same visible modes while keeping carrier knowledge in
-the repository that owns those manifests:
-
-```text
-./scripts/engine-revision check
-./scripts/engine-revision update <40-character-public-sha>
-./scripts/engine-revision update <40-character-public-sha> --dry-run
-./scripts/engine-revision certify check
-./scripts/engine-revision certify update <40-character-public-sha>
+```bash
+./scripts/verify-rust-sdk-consumer.sh
+./scripts/verify-rust-sdk-consumer.sh <40-character-public-sha>
 ```
 
-`check` and `update` remain compatibility aliases for the exact certification
-commands. The explicit `certify` spelling is preferred in new documentation and
-automation so it cannot be confused with rolling development.
+The proof creates a clean Rust binary with exactly one dependency, exercises
+representative entity, retained-frame, presentation, host-contract, and webview
+adapter namespaces, and rejects any package-manager carrier. The optional exact
+revision form is the post-push/review proof.
 
-The implementation language is consumer-owned. Rusty Engine does not reach into
-another repository, ship a cross-repository mutator, or maintain a registry of
-every consumer's files.
+## Ownership and non-goals
 
-### `check`
+Downstream still owns authoritative gameplay state, substantial game logic,
+orchestration, storage policy, window/event-loop policy, semantic input
+mapping, content meaning, and product acceptance. The Rust adapter owns one
+renderer instance and its private webview boundary; renderer picks, physical
+input, readouts, and diagnostics remain observations that downstream
+revalidates or interprets.
 
-`check` is deterministic, read-only, and network-independent. It:
-
-1. strictly decodes `engine-source.json` and validates its repository and commit;
-2. verifies every active Cargo Git dependency uses the manifest commit and the
-   canonical public repository;
-3. verifies every locked Engine Cargo package resolves that same source and
-   commit;
-4. verifies every selected renderer, Studio, or rules package manifest uses the
-   same commit and its declared package path;
-5. verifies package-manager build policy and lock resolution use the same commit;
-6. rejects path, sibling, branch, tag, floating, mixed, missing, unexpected, and
-   stale-lock sources; and
-7. reports the owning file, expected commit, observed value, and repair command.
-
-Local audits and runtime provider readouts derive their expected identity from the
-source manifest instead of adding another manually updated constant. The checker
-knows its consumer's active carriers and can reject newly introduced Engine
-dependencies that were not added to that local accounting.
-
-### `update`
-
-`update` validates a full commit and proves it is fetchable from the canonical
-public repository. It then:
-
-1. refuses changes in active carrier or lockfile paths while preserving unrelated
-   worktree changes;
-2. builds the candidate in a disposable checkout or worktree at the caller's
-   exact `HEAD`;
-3. rewrites only the source manifest and the consumer's declared active
-   projections;
-4. regenerates each Cargo or pnpm lockfile the consumer owns with its
-   repository-pinned tool version;
-5. runs `check` and the focused dependency or boundary checks in the candidate;
-6. captures the exact scoped diff; and
-7. rechecks the caller before applying that validated diff.
-
-Failure cleans the candidate and leaves the caller's active files unchanged. A
-successful command changes files and prints their diff; it does not commit, push,
-edit task state, update an Engine reverse pin, or run unrelated product policy.
-
-`--dry-run` performs the same candidate generation and validation, prints the
-prospective diff, and removes the candidate without changing the caller.
-
-## Active carriers and generated locks
-
-Active carriers are the files a consumer must change to select its current
-provider, commonly:
-
-- Cargo dependency `rev` values and intentional Cargo metadata;
-- root or package-level Engine package dependencies;
-- pnpm `allowBuilds` keys for exact codeload package paths;
-- `Cargo.lock` and `pnpm-lock.yaml`; and
-- runtime or audit readouts that must report the current provider identity.
-
-Lockfiles are generated evidence, not independent revision choices. The update
-command regenerates them and `check` verifies every resolved Engine source; it
-does not hand-edit one convenient occurrence while leaving nested resolutions
-stale.
-
-Do not use repository-wide textual replacement. Source-provenance documents,
-conversion reports, benchmark results, retained evidence, donor commits, and
-synthetic test hashes describe a different fact. Active prose should point to
-`engine-source.json` instead of repeating a value that must move with every
-update.
-
-## Migration and rollback
-
-To adopt the contract in an existing consumer:
-
-1. inventory every active manifest, policy, lock, audit, and runtime copy of the
-   current Engine commit;
-2. classify historical and synthetic occurrences so they are protected from the
-   updater;
-3. add `engine-source.json` and the consumer-owned command;
-4. make avoidable audit and runtime constants derive from the manifest;
-5. run `update` with the currently selected commit to normalize all projections;
-6. run `check`, the consumer's standalone gate, and any real product, browser, or
-   Studio integration that owns affected behavior; and
-7. commit the coherent manifest and generated-lock change together.
-
-Rollback uses the same command with the prior exact public commit:
-
-```text
-./scripts/engine-revision update <prior-provider-sha>
-```
-
-Exercise rollback in a disposable checkout. Reverting an isolated committed pin
-update is also valid. Engine reverse-certification is rolled back separately to a
-previously certified consumer commit; it is never part of consumer rollback.
-
-## Compatibility and integration evidence
-
-A supported exact consumer must stay green. `unavailable`, an unexpected protocol rejection, a
-mixed provider commit, or a stale lockfile is an integration regression in certification mode. A
-rolling consumer is intentionally allowed to expose those incompatibilities while Engine and the
-consumer converge; its resolved SHA and diagnostic must remain visible.
-
-An intentionally old protocol belongs in a separately named negative fixture.
-Its expected `protocol.unsupportedVersion` result does not normalize failure in
-the supported path, and the revision updater does not edit that fixture.
-
-Consumer CI runs `engine-revision check` before compilation. An Engine-owned
-reverse-certification check clones the exact public consumer commit, runs the
-consumer's checker, verifies its manifest agrees with the Engine-owned
-`engineCommit`, and then runs the real integration gate. Ordinary Engine
-verification remains independent of sibling consumer checkouts.
-
-Review evidence records values from the final committed state:
-
-- the exact downstream commit under review;
-- the provider commit read from that commit's `engine-source.json`;
-- the focused and full gates run; and
-- exact-SHA CI results where available.
-
-If review fixes advance either repository, refresh the evidence from final
-`HEAD`; do not reuse an earlier implementation SHA.
-
-## Non-goals
-
-This contract does not introduce:
-
-- a package registry, release train, release manifest, or umbrella crate;
-- a provider-owned list of consumers or their carrier files;
-- a cross-repository update service or sibling-checkout fallback;
-- separate language lanes without a demonstrated compatibility need;
-- automatic protocol versioning; or
-- a broad dependency-governance framework.
-
-If three concrete consumers later expose stable repeated implementation code,
-that evidence may justify a smaller shared helper. The command contract alone is
-not permission to anticipate one.
+This contract does not introduce a registry, release train, universal runtime,
+provider-owned consumer list, cross-repository mutator, generic JavaScript
+escape hatch, or promise that Engine development changes are compatible.

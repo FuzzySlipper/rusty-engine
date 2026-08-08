@@ -1,0 +1,23 @@
+[package]
+name = "renderer-webview-host"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+base64.workspace = true
+render-host-contracts.workspace = true
+render-model.workspace = true
+render-presentation.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+wry.workspace = true
+
+[dev-dependencies]
+winit = "0.30"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gtk = "0.18"
+
+[lints]
+workspace = true

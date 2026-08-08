@@ -76,13 +76,14 @@ tests take precedence when describing implemented behavior.
 | Package a downstream-authored rules candidate without giving Engine its meaning | [Gameplay rules](code-map/gameplay-rules.md) |
 | Audit the completed mechanics/rules campaign and exact consumers | [Gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md) |
 | Audit the completed textured-voxel campaign and exact consumer | [Textured voxel campaign closeout](textured-voxel-campaign-closeout.md) |
-| Update a downstream consumer's exact Engine commit | [Downstream Engine revision contract](topics/development/downstream-engine-revisions.md) |
+| Update or verify a downstream consumer's rolling Engine revision | [Downstream Engine revision contract](topics/development/downstream-engine-revisions.md) |
 | Check active provider limitations and scheduled certification | [Known limitations](known-limitations.md) |
 | Change voxel collision, navigation, motion, or edits | [Spatial mechanisms](code-map/spatial-mechanisms.md) |
 | Change a stored asset, scene, prefab, or import | [Content, assets, and scenes](code-map/content-assets-and-scenes.md) |
 | Change voxel conversion or object playback | [Voxel assets and conversion](code-map/voxel-assets-and-conversion.md) |
 | Change runtime voxel tiles or atlas mapping | [Runtime voxel surface textures](topics/voxel/voxel-surface-textures.md) |
 | Change a retained Rust render frame | [Rust render model and projection](code-map/rust-render-model-and-projection.md) |
+| Change the complete Rust facade or Rust-only renderer boundary | [Rust SDK capability index](rust-sdk-capabilities.md) |
 | Change Three/WebGL or a renderer host | [Renderer workspace and hosts](code-map/renderer-workspace-and-hosts.md) |
 | Change the first-party authoring UI | [Studio](code-map/studio.md) |
 | Plan a downstream typed Entity inspector panel | [Downstream Entity inspector extensions](studio-downstream-entity-inspector-extensions.md) |

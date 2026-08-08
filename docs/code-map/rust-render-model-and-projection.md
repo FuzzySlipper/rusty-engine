@@ -13,6 +13,9 @@ entity, authored-scene, voxel, and presentation facts.
   voxels, lights, materials, previews, and debug facts.
 - `render-presentation`: bounded animation-controller, audio, billboard,
   particle, telemetry, and asset-view projection mechanisms.
+- `render-host-contracts`: Rust-owned webview composition, camera, pick,
+  physical-input, observation, diagnostic, and lifecycle facts.
+- `rusty-engine`: complete unconditional namespace-preserving downstream facade.
 
 ## Does not own
 
@@ -26,6 +29,9 @@ entity, authored-scene, voxel, and presentation facts.
 - [`render-projection/src/lib.rs`](../../rust/crates/render-projection/src/lib.rs)
 - [`render-projection/src/material.rs`](../../rust/crates/render-projection/src/material.rs)
 - [`render-presentation/src/lib.rs`](../../rust/crates/render-presentation/src/lib.rs)
+- [`render-host-contracts/src/lib.rs`](../../rust/crates/render-host-contracts/src/lib.rs)
+- [`rusty-engine/src/lib.rs`](../../rust/crates/rusty-engine/src/lib.rs)
+- [Rust SDK capability index](../rust-sdk-capabilities.md)
 - [`fixtures/render`](../../fixtures/render)
 - [Rendering successor contract](../rendering-successor-contract.md)
 - [Rendering operations](../rendering-operations.md)
@@ -48,7 +54,10 @@ entity, authored-scene, voxel, and presentation facts.
 - Entity projection reads typed `EntityState` component views. Registering a
   new downstream component does not implicitly render it; its owning consumer
   must deliberately project any presentation meaning.
-- Downstream hosts may consume the frame through any conforming backend.
+- Ordinary downstream games import these exact crate namespaces only through
+  `rusty-engine`; the coverage check fails when any public library is omitted.
+- Downstream hosts may consume the frame through any conforming backend. The
+  supported Engine-owned concrete path is `renderer-webview-host`.
 
 ## Private or forbidden paths
 
@@ -64,8 +73,10 @@ entity, authored-scene, voxel, and presentation facts.
 ## Acceptance gates and fixtures
 
 ```bash
-cargo test -p render-model -p render-projection -p render-presentation --locked
-cargo clippy -p render-model -p render-projection -p render-presentation --all-targets --locked -- -D warnings
+cargo test -p render-model -p render-projection -p render-presentation -p render-host-contracts -p rusty-engine --locked
+cargo clippy -p render-model -p render-projection -p render-presentation -p render-host-contracts -p rusty-engine --all-targets --locked -- -D warnings
+python3 ./scripts/check-rust-sdk-coverage.py
+./scripts/verify-rust-sdk-consumer.sh
 ./scripts/verify-render.sh
 ```
 

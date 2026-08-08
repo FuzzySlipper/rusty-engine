@@ -640,10 +640,12 @@ inset pixels, replaces the target across compact resize, and confirms that sessi
 complete Rust minimap projection do not change. The accessible detailed minimap remains a separate
 consumer of Rust-owned discovery and visibility facts.
 
-External consumers pin all four render packages to one exact public Engine commit. Their package
-preparation and peer graph are independently checked in a clean temporary consumer, so the shared
-boundary is not a workspace-only convention. Operational commands, CI ownership, and explicit
-limitations are recorded in [rendering-operations.md](rendering-operations.md).
+Those exact TypeScript-package consumers remain historical certification evidence. Ordinary new
+games instead depend on the complete `rusty-engine` Rust facade and reach rendering only through
+the Rust-owned webview adapter. Engine compiles and embeds the private TypeScript/Three closure;
+downstream neither selects renderer packages nor knows their topology. Operational commands, CI
+ownership, and explicit limitations are recorded in
+[rendering-operations.md](rendering-operations.md).
 
 ## Host and platform boundary
 
@@ -656,22 +658,35 @@ The boundary is layered deliberately:
 
 - ordinary Rust crates own host-neutral state, services, authoring, persistence, and
   renderer-neutral projection;
+- `render-host-contracts` owns typed camera, view, pick, physical-input, readout, diagnostic, and
+  lifecycle facts without browser types or game meaning;
 - `@rusty-engine/render-contracts` and `@rusty-engine/render-projection` own strict data decoding and
   retained projection plus the bounded multi-view descriptor without Three, DOM, browser lifecycle,
   or HTTP loading;
 - `@rusty-engine/renderer-three` owns Three/WebGL realization. Its current browser-surface modules
   are explicit backend adapters, not a renderer-neutral or Engine-wide platform API;
 - `@rusty-engine/renderer-host` owns the current browser/webview lifecycle, DOM overlays, WebAudio,
-  input capture, inspection, and editor-host behavior; and
-- Demo and Studio own their product shells, window/application policy, semantic input mapping,
+  input capture, inspection, and editor-host behavior;
+- `renderer-webview-host` is a platform leaf that embeds the reproducible Engine-private renderer
+  artifact, owns exactly one Wry child webview, admits bounded content-addressed resource bytes,
+  and exposes only named Rust operations plus typed observations; and
+- downstream games and Studio own their product shells, outer window/event-loop policy, semantic input mapping,
   resource locations, and user-facing acceptance.
 
 Assets and project data cross public borders through explicit identities, descriptors, bytes,
 resolvers, and typed file operations. Core capability must not depend on public URLs, `fetch`,
 same-origin behavior, browser storage, an HTTP control route, or Playwright-only mutation hooks.
-Electron or Tauri may reuse the webview-facing adapters while supplying local window, filesystem,
-resource, and lifecycle ports. A headless process or future backend can reuse the authoritative and
+The current concrete adapter supports Wry's platform webview; its downstream supplies the outer
+window and event loop. Commands use the webview's private fixed method table and observations use
+typed IPC. There is no public eval, generic dispatch, module import, URL resource loader, or second
+control transport. A headless process or future backend can reuse the authoritative and
 renderer-neutral layers without emulating a website.
+
+The `rusty-engine` facade is deliberately a complete leaf over every public Rust library. It has no
+features: downstream imports all namespaces, including the platform adapter, so a newly promoted
+Engine mechanism cannot be silently omitted and reimplemented downstream. Internal libraries stay
+independently meaningful and never depend back on the facade. The mechanically checked namespace
+set is [the Rust SDK capability index](rust-sdk-capabilities.md).
 
 The durable decision and placement litmus tests are in Den ADR
 `rusty-engine/host-platform-and-browser-validation-boundary`.
@@ -955,9 +970,9 @@ The current provider deliberately excludes:
   gameplay language (the optional rules envelope carries an opaque
   downstream-owned payload);
 - replay or certification as a prerequisite for ordinary execution;
-- Node, browser, Three, WebAudio, DOM, Studio, or editor dependencies in ordinary Rust-provider
-  work (Node-backed packages remain isolated under `rules/`, `render/`, or
-  `studio/` with their own gates);
+- Node, browser, Three, WebAudio, DOM, Studio, or editor dependencies in ordinary host-neutral Rust
+  mechanism crates (the complete facade may depend on the explicit `renderer-webview-host` platform
+  leaf; Node-backed source remains isolated under `rules/`, `render/`, or `studio/`);
 - HTTP serving, public URLs, browser storage, same-origin behavior, or a browser event loop as an
   Engine capability prerequisite;
 - Asha's former Gameplay Fabric, runtime facade, provider/bundle lifecycle, and bridge topology; and
@@ -974,9 +989,9 @@ checkout and covers locked metadata, standalone path auditing, documentation lin
 workspace/provider fixtures (including renderer-neutral model/projection), Clippy, and
 byte-reproducible conversion. The separately installed `rules/` workspace has
 its own generated-contract and headless TypeScript gate, and `render/` has its
-own frozen TypeScript/browser gate. A post-push gate installs the four render packages from the exact
-public Engine commit into a clean temporary consumer; the external demo retains its own complete
-product gate against an exact Engine revision.
+own frozen TypeScript/browser gate. The renderer gate also proves a byte-reproducible embedded
+artifact and a real Wry/WebKit mount. The provider gate creates a clean Rust-only consumer with
+exactly one dependency; its optional post-push form checks a public exact review revision.
 
 Validation follows ownership: focused Rust/headless tests prove Rust mechanisms;
 headless cross-language tests prove rules artifacts plus renderer-neutral

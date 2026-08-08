@@ -42,8 +42,11 @@ downstream game policy and orchestration
         |                         \--> voxel-object-runtime
         +--> render-model --> render-projection --> render-presentation
                                       |
-                                      +--> render/ packages and hosts
+                                      +--> render-host-contracts
+                                      +--> renderer-webview-host --> private render/ artifact
                                       +--> studio/ viewport and tools
+
+rusty-engine is the complete downstream facade over every public Rust library.
 
 engine-inspector reads these surfaces; runtime libraries do not depend on it.
 ```
@@ -59,8 +62,8 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 | Content manifests, catalogs, imports, prefabs, and authored scenes | [Content, assets, and scenes](code-map/content-assets-and-scenes.md) |
 | Stored voxel artifacts, annotations, GLB conversion, and object playback | [Voxel assets and conversion](code-map/voxel-assets-and-conversion.md) |
 | Recipe planning and materialization into authored scenes | [Environment authoring](code-map/environment-authoring.md) |
-| Versioned Rust render frames and renderer-neutral projection | [Rust render model and projection](code-map/rust-render-model-and-projection.md) |
-| TypeScript retained projection, Three backend, browser and headless hosts | [Renderer workspace and hosts](code-map/renderer-workspace-and-hosts.md) |
+| Versioned Rust render frames, host contracts, projection, and complete facade | [Rust render model and projection](code-map/rust-render-model-and-projection.md) |
+| Engine-private TypeScript retained projection, compiled artifact, Three backend, and webview host | [Renderer workspace and hosts](code-map/renderer-workspace-and-hosts.md) |
 | First-party Angular/Nx authoring product and adapter boundary | [Studio](code-map/studio.md) |
 | Read-only structured inspection and diagnostics | [Inspection and diagnostics](code-map/inspection-and-diagnostics.md) |
 | IDs, math, time, coordinates, voxel values, and focused algorithms | [Core and service foundations](code-map/core-and-service-foundations.md) |

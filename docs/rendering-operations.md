@@ -1,14 +1,18 @@
 # Shared rendering operations
 
-Rusty Engine's renderer is one subsystem with two independently verified halves:
+Rusty Engine's renderer is one subsystem with two independently verified halves
+and one Engine-owned Rust host:
 
 - ordinary Rust crates (`render-model`, `render-projection`, and `render-presentation`) produce and
   validate renderer-neutral retained and presentation frames; and
 - the isolated `render/` pnpm workspace decodes those frames and owns retained projection, Three,
-  WebGL, WebAudio, DOM presentation hosts, inspection, and editor viewport mechanisms.
+  WebGL, WebAudio, DOM presentation hosts, inspection, and editor viewport mechanisms; and
+- `renderer-webview-host` embeds a reproducible compiled renderer artifact and exposes the
+  supported downstream boundary entirely through Rust.
 
-Downstream code owns game/tool meaning and resource policy. It emits typed frames and supplies
-explicit resource resolvers; it does not construct a second retained scene or Three backend.
+Downstream code owns game/tool meaning and resource policy. It emits typed Rust frames, pre-admits
+content-addressed resource bytes, and owns its outer window and event loop. It does not construct a
+second retained scene or Three backend and does not import the renderer's TypeScript packages.
 
 ## Provider verification
 
@@ -30,37 +34,35 @@ That command performs a frozen install under `render/`, checks the four-package 
 typechecks/builds/tests every package, and runs the real Chromium/WebGL/WebAudio/DOM/GLB proof.
 Neither command requires an Asha, demo, or Studio sibling checkout.
 
-## Exact-revision downstream consumption
+## Rust-only downstream consumption
 
-An external pnpm consumer pins all four packages to one public 40-character Engine revision:
+An ordinary external game declares one rolling Rust dependency:
 
-```json
-{
-  "dependencies": {
-    "@rusty-engine/render-contracts": "github:FuzzySlipper/rusty-engine#<sha>&path:render/packages/render-contracts",
-    "@rusty-engine/render-projection": "github:FuzzySlipper/rusty-engine#<sha>&path:render/packages/render-projection",
-    "@rusty-engine/renderer-host": "github:FuzzySlipper/rusty-engine#<sha>&path:render/packages/renderer-host",
-    "@rusty-engine/renderer-three": "github:FuzzySlipper/rusty-engine#<sha>&path:render/packages/renderer-three"
-  }
-}
+```toml
+[dependencies]
+rusty-engine = { git = "https://github.com/FuzzySlipper/rusty-engine", branch = "main" }
 ```
 
-The consumer must allow the corresponding four codeload package keys to run their `prepare`
-scripts. Each package builds its checked `dist/` from the selected commit. Internal layers are
-peer dependencies, which prevents hidden workspace copies from creating divergent contract or
-projection identities.
+`rusty_engine::renderer_webview_host::RendererWebviewAdapter` mounts one Wry child webview in a
+downstream-owned window. Named Rust methods submit retained and presentation frames, configure
+views and camera state, pick, resize, and control lifecycle. Typed observations report readiness,
+operation receipts/failures, renderer readouts, physical input, picks, diagnostics, and disposal.
+No generic JavaScript invocation, eval, module import, or browser object is public.
 
-Run the repository's clean temporary-consumer proof against any public Engine commit with:
+The Engine-private bridge and compiled artifact remain under `render/private` and
+`renderer-webview-host/artifacts`. First-party Engine tools may still use package-root TypeScript
+APIs inside this repository, but those packages are not an ordinary downstream game surface.
+
+Run the clean temporary-consumer proof locally or against a public review revision with:
 
 ```bash
-./scripts/verify-render-consumer.sh <40-character-public-sha>
+./scripts/verify-rust-sdk-consumer.sh
+./scripts/verify-rust-sdk-consumer.sh <40-character-public-sha>
 ```
 
-The script creates a new package outside this checkout, installs all four Git subdirectories,
-rejects local/workspace/file resolutions, checks every lock entry against the requested SHA, then
-decodes and applies one retained frame through contracts, neutral projection, the host fixture, and
-Three. Engine revision `8cb49db6cfe9471faa23ab0661656a2366a83d8c` is the first recorded
-successful public-package baseline.
+The renderer-owning gate additionally rebuilds the closed artifact byte-for-byte, tests the Rust
+contracts and adapter, and mounts it through real Wry/WebKit under X11. The Chromium artifact proof
+verifies the same fixed private contract in a browser engine.
 
 ### Camera-relative retained presentation
 

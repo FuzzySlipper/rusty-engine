@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Route the isolated TypeScript retained projection, Three backend, browser
-surface, and renderer host/resource lifecycle.
+Route the isolated Engine-private TypeScript retained projection, Three backend,
+compiled artifact, and Rust webview host/resource lifecycle.
 
 ## Owns
 
@@ -15,6 +15,9 @@ surface, and renderer host/resource lifecycle.
   inspection surface, immutable submission/resource statistics, timing,
   camera, versioned default-light/shadow policy and readout, and editor viewport integration.
 - `render/browser`: real Chromium/WebGL/WebAudio/DOM acceptance.
+- `render/private/webview`: fixed private bridge and thin composition root.
+- `renderer-webview-host`: embedded artifact, one Wry child webview, bounded
+  resource admission, named Rust operations, typed IPC observations, and disposal.
 
 ## Does not own
 
@@ -47,6 +50,9 @@ surface, and renderer host/resource lifecycle.
     over an already-mounted `RendererSurface`; it does not load assets or own a
     second animation loop.
 - [`render/browser`](../../render/browser)
+- [`render/private/webview`](../../render/private/webview)
+- [`renderer-webview-host/src/lib.rs`](../../rust/crates/renderer-webview-host/src/lib.rs)
+- [`renderer-webview-host/examples/webview_smoke.rs`](../../rust/crates/renderer-webview-host/examples/webview_smoke.rs)
 - [`render/package.json`](../../render/package.json)
 - [Rendering operations](../rendering-operations.md)
 - [Downstream Engine revision contract](../topics/development/downstream-engine-revisions.md)
@@ -56,11 +62,13 @@ surface, and renderer host/resource lifecycle.
 
 ## Public downstream surfaces
 
-- Package-root exports declared in each package's `package.json`.
-- Exact public Git revisions can be tested with
-  [`verify-render-consumer.sh`](../../scripts/verify-render-consumer.sh).
-- Browser, webview, and headless hosts compose over the same explicit retained
-  border without owning game state.
+- Ordinary games use `rusty_engine::renderer_webview_host` and
+  `rusty_engine::render_host_contracts`; TypeScript package topology is private.
+- The downstream owns the outer window/event loop and content/storage policy.
+  The adapter owns one child webview and accepts pre-admitted content-hash-bound
+  bytes without URLs or filesystem access.
+- First-party Engine workspaces may use package-root TypeScript exports. No
+  downstream game may deep-import them or reach the private bridge.
 - `RendererSurface.configureViews` publishes a complete immutable composition;
   `viewCompositionReadout` exposes target freshness and resource counts without
   exposing WebGL, Three textures, or a CPU readback path.
@@ -79,6 +87,8 @@ surface, and renderer host/resource lifecycle.
 ## Private or forbidden paths
 
 - Do not deep-import package `src/` files from downstream consumers.
+- Do not expose generic JavaScript invocation, eval, module imports, browser
+  objects, or a second command/observation transport through the Rust adapter.
 - Do not make DOM state, Three objects, or renderer buffers authoritative.
 - Do not add historical Asha runtime/bridge dependencies.
 - Do not require Node or browser installation for the ordinary Rust gate.
@@ -87,7 +97,8 @@ surface, and renderer host/resource lifecycle.
 
 ```bash
 ./scripts/verify-render.sh
-./scripts/verify-render-consumer.sh <40-character-public-sha>
+./scripts/verify-renderer-webview-host.sh
+./scripts/verify-rust-sdk-consumer.sh
 ```
 
 The render gate includes isolation, exact behavior accounting, package tests,

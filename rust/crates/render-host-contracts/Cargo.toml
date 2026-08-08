@@ -1,0 +1,14 @@
+[package]
+name = "render-host-contracts"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+render-model.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

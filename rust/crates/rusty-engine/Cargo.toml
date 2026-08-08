@@ -1,0 +1,41 @@
+[package]
+name = "rusty-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+asset-catalog.workspace = true
+asset-import.workspace = true
+authored-scene.workspace = true
+content-store.workspace = true
+core-assets.workspace = true
+core-ids.workspace = true
+core-math.workspace = true
+core-space.workspace = true
+core-time.workspace = true
+core-voxel.workspace = true
+engine-inspector.workspace = true
+engine-spatial.workspace = true
+entity-state.workspace = true
+environment-authoring.workspace = true
+gameplay-mechanics.workspace = true
+gameplay-rules.workspace = true
+render-model.workspace = true
+render-host-contracts.workspace = true
+render-presentation.workspace = true
+render-projection.workspace = true
+renderer-webview-host.workspace = true
+state-machine.workspace = true
+svc-collision.workspace = true
+svc-mesh.workspace = true
+svc-pathfinding.workspace = true
+svc-rng.workspace = true
+svc-spatial.workspace = true
+svc-volume.workspace = true
+voxel-annotation.workspace = true
+voxel-asset.workspace = true
+voxel-convert.workspace = true
+voxel-object-runtime.workspace = true
+
+[lints]
+workspace = true
