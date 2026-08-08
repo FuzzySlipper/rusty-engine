@@ -17,10 +17,7 @@ reusable, host-neutral mechanisms for object-centric games. Downstream Rust
 games own live authoritative gameplay state, substantial game logic, product
 orchestration, content meaning, storage policy, and game-specific presentation.
 
-Asha is historical evidence and a donor source, not a compatibility constraint,
-runtime dependency, or architecture to recreate. The loading-bay product is
-owned by the external `rusty-engine-demo` consumer. Ordinary Engine work must
-not depend on, inspect, or mutate a sibling demo checkout.
+Ordinary Engine work must not depend on, inspect, or mutate a sibling demo checkout.
 
 ## Source-of-truth posture
 
@@ -31,20 +28,14 @@ Use each source for the state it owns:
   ownership intent.
 - Current code, manifests, tests, fixtures, and executable gates describe
   implemented behavior.
-- [The agent code atlas](docs/agent-code-atlas.md) routes navigation; it does
-  not overrule an owning contract or test.
+- [The agent code atlas](docs/agent-code-atlas.md) routes navigation; it does not overrule an owning contract or test.
 - Historical migration evidence and prior-agent commentary explain decisions
   but do not define current work.
 
 Repository docs are deliberately self-contained for agents without Den access.
-Den owns current task state and review evidence when work is Den-managed; it is
-not required to understand the committed provider. If design intent and
-implemented behavior conflict, surface the drift instead of silently declaring
-either one correct. Do not infer active work from migration milestones or old
-review reports.
+Den owns current task state and review evidence when work is Den-managed; it is not required to understand the committed provider. If design intent and implemented behavior conflict, surface the drift instead of silently declaring either one correct. Do not infer active work from migration milestones or old review reports.
 
-Keep [docs/design.md](docs/design.md) current when changing authority, execution
-order, persistence, dependency direction, or presentation boundaries.
+Keep [docs/design.md](docs/design.md) current when changing authority, execution order, persistence, dependency direction, or presentation boundaries.
 
 ## Architecture contract
 
@@ -133,35 +124,21 @@ follow-up routes, use [docs/agent-code-atlas.md](docs/agent-code-atlas.md).
 
 Rusty Engine is host neutral, not a web-game engine.
 
-- Ordinary Rust-provider work has no Node, TypeScript, browser, renderer, Studio,
-  or demo dependency.
-- Keep Three/WebGL, DOM/WebAudio, Chromium, Electron/Tauri, and product-shell
-  concerns in explicit backend or host owners.
+- Ordinary Rust-provider work has no Node, TypeScript, browser, renderer, Studio, or demo dependency.
+- Keep Three/WebGL, DOM/WebAudio, Chromium, Electron/Tauri, and product-shell concerns in explicit backend or host owners.
 - Never add HTTP, URL/fetch, browser storage, DOM-event, WebGL, or
-  Playwright-only seams to Rust or renderer-neutral packages merely to simplify
-  browser tests.
+  Playwright-only seams to Rust or renderer-neutral packages merely to simplify browser tests.
 - Browser evidence proves browser-owned behavior. Headless evidence proves
   host-neutral mechanisms. Neither substitutes for the other.
-- Rules, Studio, and renderer packages remain separately isolated workspaces with
-  explicit gates.
+- Rules, Studio, and renderer packages remain separately isolated workspaces with explicit gates.
 
 ## Donor and promotion rules
 
-- Engine owns only reusable mechanisms proved by concrete consumers.
-- Before selecting an Asha donor crate, consult the pinned portability report
-  linked from
-  [docs/migration/donor-provenance.md](docs/migration/donor-provenance.md),
-  then re-audit the concrete dependency closure and current consumer.
 - Internalize only a bounded, audited donor closure. Record every transfer,
-  adaptation, replacement, and exclusion in donor provenance and the relevant
-  machine-readable ledger.
+  adaptation, replacement, and exclusion in donor provenance and the relevant machine-readable ledger.
 - Preserve useful behavior for named consumers, not historical crate topology.
-- The multi-consumer promotion rule does not permit silent loss of proven donor
-  behavior during an owner-approved parity campaign.
-- Do not add a universal gameplay AST, behavior graph, Gameplay Fabric
-  compatibility layer, replay certification system, scheduler, Studio layer, or
-  broad governance framework without concrete consumer evidence and an explicit
-  architecture decision.
+
+- Do not add a compatibility layer, replay certification system, scheduler, or broad governance framework without concrete consumer evidence and an explicit architecture decision.
 - Never persist callbacks or language closures.
 
 ## Local commands
@@ -251,12 +228,10 @@ These are navigation and ownership rules, not a new governance layer.
 
 ## Test and acceptance posture
 
-- Run the narrowest relevant check first, then the gate that owns the changed
-  surface.
+- Run the narrowest relevant check first, then the gate that owns the changed surface.
 - Cross-language contract changes require Rust validation, TypeScript decode
   coverage, and retained-frame fixture/golden updates.
-- Persistence and mutation changes require failure-path and atomicity evidence,
-  not only happy-path serialization.
+- Persistence and mutation changes require failure-path and atomicity evidence, not only happy-path serialization.
 - User-visible browser behavior requires the real browser gate.
 - External-package or external-adapter claims require the exact consumer or
   integration gate.
@@ -277,7 +252,4 @@ These are navigation and ownership rules, not a new governance layer.
 
 ## Success criteria
 
-Success is measured by mechanism locality, explainability, atomicity, focused
-provider evidence, bounded dependencies, standalone operation, and honest
-host/consumer proof. Real product behavior is proved in the downstream consumer
-that owns it.
+Success is measured by mechanism locality, explainability, atomicity, focused provider evidence, bounded dependencies, standalone operation, and honest host/consumer proof.
