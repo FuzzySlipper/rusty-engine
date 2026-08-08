@@ -49,6 +49,11 @@ views and camera state, pick, resize, and control lifecycle. Typed observations 
 operation receipts/failures, renderer readouts, physical input, picks, diagnostics, and disposal.
 No generic JavaScript invocation, eval, module import, or browser object is public.
 
+The adapter uses the operating system webview. Linux builds therefore require GTK 3 and
+WebKitGTK 4.1 development packages; the Engine CI installs `libgtk-3-dev` and
+`libwebkit2gtk-4.1-dev` explicitly. Headless execution of the real Linux host proof additionally
+uses Xvfb. These are native build/runtime prerequisites, not downstream TypeScript dependencies.
+
 The Engine-private bridge and compiled artifact remain under `render/private` and
 `renderer-webview-host/artifacts`. First-party Engine tools may still use package-root TypeScript
 APIs inside this repository, but those packages are not an ordinary downstream game surface.
