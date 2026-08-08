@@ -66,6 +66,8 @@ interface PhysicalInputState {
   wheelDeltaY: number;
 }
 
+type RendererWebviewBridgeState = 'mounting' | 'ready' | 'failed' | 'disposed';
+
 declare global {
   // Both names are Engine-private implementation details injected by the Rust adapter.
   // They are deliberately not exported by any renderer package.
@@ -86,14 +88,22 @@ export function installRendererWebviewBridge(): void {
   let particleSink: RendererDomParticleBillboardSink | null = null;
   let telemetrySink: RendererDomTelemetryOverlaySink | null = null;
   const objectUrls = new Set<string>();
-  let disposed = false;
+  let state: RendererWebviewBridgeState = 'mounting';
+  let terminalFailure: string | null = null;
+  let removeInputListeners: () => void = () => undefined;
+  let inputListenersInstalled = false;
+  let cleanupStarted = false;
 
   const post = (message: Readonly<Record<string, unknown>>): void => {
     const encoded = JSON.stringify({ bridgeVersion: BRIDGE_VERSION, ...message });
     readIpc().postMessage(encoded);
   };
   const requireSurface = (): RendererSurface => {
-    if (disposed) throw new Error('renderer webview bridge is disposed');
+    if (state === 'failed') {
+      throw new Error(`renderer webview bridge mount failed: ${terminalFailure ?? 'unknown failure'}`);
+    }
+    if (state === 'disposed') throw new Error('renderer webview bridge is disposed');
+    if (state === 'mounting') throw new Error('renderer webview bridge is still mounting');
     if (surface === null) throw new Error('renderer webview surface is not ready');
     return surface;
   };
@@ -124,6 +134,45 @@ export function installRendererWebviewBridge(): void {
       (value) => succeed(requestId, operation, value),
       (cause: unknown) => fail(requestId, operation, cause),
     );
+  };
+  const cleanup = async (): Promise<readonly unknown[]> => {
+    if (cleanupStarted) return [];
+    cleanupStarted = true;
+    const failures: unknown[] = [];
+    if (inputListenersInstalled) {
+      try {
+        removeInputListeners();
+      } catch (cause) {
+        failures.push(cause);
+      }
+      inputListenersInstalled = false;
+    }
+    try {
+      await audio?.dispose();
+    } catch (cause) {
+      failures.push(cause);
+    }
+    const attempt = (ownerCleanup: () => void): void => {
+      try {
+        ownerCleanup();
+      } catch (cause) {
+        failures.push(cause);
+      }
+    };
+    attempt(() => billboard?.dispose());
+    attempt(() => particle?.dispose());
+    attempt(() => particleSink?.dispose());
+    attempt(() => telemetrySink?.dispose());
+    attempt(() => surface?.dispose());
+    audio = null;
+    billboard = null;
+    particle = null;
+    particleSink = null;
+    telemetrySink = null;
+    surface = null;
+    for (const url of objectUrls) URL.revokeObjectURL(url);
+    objectUrls.clear();
+    return failures;
   };
 
   const api = Object.freeze<RendererWebviewPrivateApi>({
@@ -159,6 +208,7 @@ export function installRendererWebviewBridge(): void {
       () => requireSurface().renderOnce(timeMs),
     ),
     resumeAudio: (requestId) => runAsync(requestId, 'resumeAudio', async () => {
+      requireSurface();
       if (audio === null) throw new Error('audio host is unavailable');
       return audio.resume();
     }),
@@ -180,35 +230,9 @@ export function installRendererWebviewBridge(): void {
       return current.renderOnce();
     }),
     dispose: (requestId) => runAsync(requestId, 'dispose', async () => {
-      if (disposed) throw new Error('renderer webview bridge is already disposed');
-      disposed = true;
-      removeInputListeners();
-      const failures: unknown[] = [];
-      try {
-        await audio?.dispose();
-      } catch (cause) {
-        failures.push(cause);
-      }
-      const attempt = (cleanup: () => void): void => {
-        try {
-          cleanup();
-        } catch (cause) {
-          failures.push(cause);
-        }
-      };
-      attempt(() => billboard?.dispose());
-      attempt(() => particle?.dispose());
-      attempt(() => particleSink?.dispose());
-      attempt(() => telemetrySink?.dispose());
-      attempt(() => surface?.dispose());
-      audio = null;
-      billboard = null;
-      particle = null;
-      particleSink = null;
-      telemetrySink = null;
-      for (const url of objectUrls) URL.revokeObjectURL(url);
-      objectUrls.clear();
-      surface = null;
+      requireSurface();
+      state = 'disposed';
+      const failures = await cleanup();
       if (failures[0] !== undefined) throw failures[0];
       return { disposed: true };
     }),
@@ -221,7 +245,8 @@ export function installRendererWebviewBridge(): void {
     writable: false,
   });
 
-  const removeInputListeners = installInputListeners(input);
+  removeInputListeners = installInputListeners(input);
+  inputListenersInstalled = true;
   const mount = async (): Promise<void> => {
     const configuration = decodeConfiguration(globalThis.__rustyEngineRendererConfiguration);
     const canvas = requireElement('rusty-renderer-canvas', HTMLCanvasElement);
@@ -313,14 +338,23 @@ export function installRendererWebviewBridge(): void {
       telemetryOverlay: telemetry,
     }));
     if (configuration.autoStart) surface.start();
+    state = 'ready';
     post({ kind: 'ready', value: surfaceReadout(surface) });
   };
 
   const beginMount = (): void => {
-    void mount().catch((cause: unknown) => {
+    void mount().catch(async (cause: unknown) => {
+      terminalFailure = cause instanceof Error ? cause.message : String(cause);
+      state = 'failed';
+      const cleanupFailures = await cleanup();
+      const cleanupMessage = cleanupFailures[0] === undefined
+        ? ''
+        : `; cleanup also failed: ${cleanupFailures[0] instanceof Error
+          ? cleanupFailures[0].message
+          : String(cleanupFailures[0])}`;
       post({
         kind: 'mountFailed',
-        message: cause instanceof Error ? cause.message : String(cause),
+        message: `${terminalFailure}${cleanupMessage}`,
       });
     });
   };

@@ -12,6 +12,27 @@
     </style>
     <script>
       window.__rustyWebviewMessages = [];
+      const trackedListenerTypes = new Set([
+        'blur', 'keydown', 'keyup', 'pointerdown', 'pointermove', 'pointerup', 'wheel',
+      ]);
+      const trackedListeners = new Map();
+      const nativeAddEventListener = window.addEventListener.bind(window);
+      const nativeRemoveEventListener = window.removeEventListener.bind(window);
+      window.addEventListener = (type, listener, options) => {
+        if (trackedListenerTypes.has(type)) {
+          const listeners = trackedListeners.get(type) ?? new Set();
+          listeners.add(listener);
+          trackedListeners.set(type, listeners);
+        }
+        nativeAddEventListener(type, listener, options);
+      };
+      window.removeEventListener = (type, listener, options) => {
+        trackedListeners.get(type)?.delete(listener);
+        nativeRemoveEventListener(type, listener, options);
+      };
+      window.__rustyTrackedListenerCounts = () => Object.fromEntries(
+        [...trackedListenerTypes].map((type) => [type, trackedListeners.get(type)?.size ?? 0]),
+      );
       window.__rustyEngineRendererConfiguration = {
         autoStart: false,
         clearColor: 1056816,
@@ -23,6 +44,16 @@
           window.__rustyWebviewMessages.push(JSON.parse(message));
         },
       };
+      if (new URLSearchParams(window.location.search).get('mountFailure') === 'audio') {
+        Object.defineProperty(window, 'AudioContext', {
+          configurable: true,
+          value: class ForcedAudioContextFailure {
+            constructor() {
+              throw new Error('forced late audio host failure');
+            }
+          },
+        });
+      }
     </script>
   </head>
   <body>
