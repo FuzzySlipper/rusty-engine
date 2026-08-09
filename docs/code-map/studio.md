@@ -90,6 +90,11 @@ viewport, and its closed external-project adapter protocol.
   named upsert/removal requests, a keyboard-accessible Studio surfaces panel,
   and exact content-addressed PNG resolver wiring into the one viewport. The
   downstream adapter remains the catalog, persistence, and assignment owner.
+- Protocol 15 adds a built-in Voxel Object Entity-inspector dropdown for the
+  three Engine surface modes. The shell sends one named mutation and replaces
+  its readout only after the downstream Rust adapter stages admission,
+  projection, and atomic persistence; Studio never reaches into the renderer
+  or treats the selection as local UI authority.
 - `studio/libs/viewport` emits immutable `frameSubmitted` observations only
   after an accepted complete, incremental, or presentation-only frame has been
   submitted through its private shared inspection surface. The event pairs the

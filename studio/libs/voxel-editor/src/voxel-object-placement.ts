@@ -89,6 +89,7 @@ export function buildVoxelObjectPlacementCandidate(
   const instance: StoredVoxelObjectInstance = {
     instanceId,
     voxelObjectAssetId: input.asset.assetId,
+    surfaceMode: 'greedyCubes',
     frame,
     translation,
     rotation,
@@ -125,6 +126,7 @@ export function duplicateVoxelObjectInstance(
   return {
     instanceId: nextVoxelObjectInstanceId(`${instance.instanceId}-copy`, existingInstanceIds),
     voxelObjectAssetId: instance.voxelObjectAssetId,
+    surfaceMode: instance.surfaceMode,
     frame: structuredClone(instance.frame),
     translation: [
       instance.translation[0] + translationStep,

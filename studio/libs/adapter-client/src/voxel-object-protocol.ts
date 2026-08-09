@@ -310,9 +310,15 @@ export interface StoredVoxelObjectMaterialOverride {
   readonly materialAssetId: string;
 }
 
+export type VoxelObjectSurfaceMode =
+  | 'greedyCubes'
+  | 'marchingCubes'
+  | 'dualContouring';
+
 export interface StoredVoxelObjectInstance {
   readonly instanceId: string;
   readonly voxelObjectAssetId: string;
+  readonly surfaceMode: VoxelObjectSurfaceMode;
   readonly frame: VoxelObjectFrameSelection;
   readonly translation: Vector3;
   readonly rotation: Quaternion;
@@ -420,10 +426,13 @@ export function validateVoxelObjectAuthoringReadout(input: unknown, path: string
 
 export function validateStoredVoxelObjectInstance(input: unknown, path: string): void {
   const value = closedObject(input, path, [
-    'instanceId', 'voxelObjectAssetId', 'frame', 'translation', 'rotation', 'scale',
-    'materialOverrides',
+    'instanceId', 'voxelObjectAssetId', 'surfaceMode', 'frame', 'translation', 'rotation',
+    'scale', 'materialOverrides',
   ]);
   strings(value, path, ['instanceId', 'voxelObjectAssetId']);
+  enumValue(value['surfaceMode'], `${path}.surfaceMode`, [
+    'greedyCubes', 'marchingCubes', 'dualContouring',
+  ]);
   validateVoxelObjectFrameSelection(value['frame'], `${path}.frame`);
   vector(value['translation'], `${path}.translation`, 3);
   vector(value['rotation'], `${path}.rotation`, 4);

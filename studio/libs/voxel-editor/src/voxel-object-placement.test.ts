@@ -112,6 +112,7 @@ void test('palette, identities, and duplicate candidates stay bounded and reuse 
     instance: {
       instanceId: 'wall',
       voxelObjectAssetId: 'voxel-object/wall',
+      surfaceMode: 'dualContouring',
       frame: { kind: 'default' },
       translation: [1, 2, 3],
       rotation: [0, 0, 0, 1],
@@ -122,6 +123,7 @@ void test('palette, identities, and duplicate candidates stay bounded and reuse 
   const duplicate = duplicateVoxelObjectInstance(source, new Set(['wall-copy']), 0.25);
   assert.equal(duplicate.instanceId, 'wall-copy-2');
   assert.equal(duplicate.voxelObjectAssetId, source.instance.voxelObjectAssetId);
+  assert.equal(duplicate.surfaceMode, 'dualContouring');
   assert.deepEqual(duplicate.translation, [1.25, 2, 3]);
   assert.deepEqual(duplicate.materialOverrides, source.instance.materialOverrides);
   assert.notStrictEqual(duplicate.materialOverrides, source.instance.materialOverrides);

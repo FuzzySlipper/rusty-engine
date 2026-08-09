@@ -123,10 +123,23 @@ before output resource allocation.
 `VoxelObjectAdmissionOptions` selects the mode. An admitted object's canonical
 asset ID and content hash remain unchanged, while its readout names the derived
 mode. `VoxelObjectRenderProjector` includes that mode in resource-cache and
-instance snapshots, so changing mode at the same canonical identity defines
-the replacement geometry and selects its frame. Three backend tests prove
-replacement, release, reopen, and final disposal return exact geometry and
-material resource counts to zero.
+instance snapshots. A homogeneous projection preserves the canonical render
+asset ID, so changing the only admitted mode defines replacement geometry at
+the same identity. If one frame contains instances of the same canonical voxel
+asset in different modes, the projector assigns mode-qualified renderer
+resource IDs; both derived meshes can therefore coexist without changing the
+canonical asset ID or content hash. Three backend tests prove replacement,
+release, reopen, and final disposal return exact geometry and material resource
+counts to zero.
+
+Studio protocol 15 exposes the mode as a downstream-persisted per-instance
+presentation choice. The selected Voxel Object Entity inspector submits one
+closed Rust operation and accepts only the adapter's canonical project and
+projection readback. The TypeScript shell neither admits a voxel object nor
+reaches into the renderer. Downstream must stage admission and projection
+before atomically publishing the mode, and must reject a reconstructed mode
+when the instance resolves a textured material because those modes have no UV
+contract.
 
 ## Real corpus comparison
 

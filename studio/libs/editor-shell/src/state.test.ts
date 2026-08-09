@@ -556,6 +556,7 @@ test('voxel-object source, shared candidate frames, stale apply, explicit discar
     instance: {
       instanceId: 'character-one',
       voxelObjectAssetId: 'voxel-object/character',
+      surfaceMode: 'greedyCubes',
       frame: { kind: 'clip', clipId: 'clip/walk-1', frameIndex: 1 },
       translation: [4, 0, 2],
       rotation: [0, 0, 0, 1],
@@ -578,6 +579,35 @@ test('voxel-object source, shared candidate frames, stale apply, explicit discar
   assert.equal(reopened.selectedVoxelObjectInstance()?.ownerEntityId, 1);
   assert.equal(reopened.selectedVoxelObjectInstance()?.instance.instanceId, 'character-one');
   assert.equal(reopened.selectedVoxelObjectAsset()?.assetId, 'voxel-object/character');
+
+  await reopened.runVoxelAction({
+    kind: 'setObjectSurfaceMode',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    surfaceMode: 'marchingCubes',
+  });
+  assert.equal(
+    reopened.selectedVoxelObjectInstance()?.instance.surfaceMode,
+    'marchingCubes',
+  );
+  assert.match(
+    reopened.snapshot().voxelWorkspace.message ?? '',
+    /surface changed from greedyCubes to marchingCubes/u,
+  );
+
+  client.rejectObjectSurfaceMode = true;
+  await reopened.runVoxelAction({
+    kind: 'setObjectSurfaceMode',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    surfaceMode: 'dualContouring',
+  });
+  assert.match(reopened.snapshot().lastError ?? '', /surfaceTextureUnsupported/u);
+  assert.equal(
+    reopened.selectedVoxelObjectInstance()?.instance.surfaceMode,
+    'marchingCubes',
+  );
+  client.rejectObjectSurfaceMode = false;
 
   await reopened.runVoxelAction({
     kind: 'previewObjectInstance',
@@ -1533,6 +1563,7 @@ class VoxelObjectFixtureClient {
   applied = false;
   attached = false;
   rejectObjectAttach = false;
+  rejectObjectSurfaceMode = false;
   rejectObjectBatchAtIndex: number | null = null;
   batchAttachRequestCount = 0;
   stalePlacementResource = false;
@@ -1541,6 +1572,7 @@ class VoxelObjectFixtureClient {
     readonly ownerEntityId: number;
     readonly instance: ReturnType<typeof storedObjectInstance>;
   }[] = [];
+  readonly surfaceModes = new Map<string, 'greedyCubes' | 'marchingCubes' | 'dualContouring'>();
   openedProjectId = 'loading-bay';
   previewRequestCount = 0;
   applyRequestCount = 0;
@@ -1766,6 +1798,7 @@ class VoxelObjectFixtureClient {
       ownerEntityId,
       instance: structuredClone(input.instance),
     });
+    this.surfaceModes.set(input.instance.instanceId, input.instance.surfaceMode);
     this.attached = true;
     return Promise.resolve({
       receipt: {
@@ -1801,6 +1834,9 @@ class VoxelObjectFixtureClient {
       instance: structuredClone(placement.instance),
     }));
     this.attachedInstances.push(...staged);
+    for (const placement of staged) {
+      this.surfaceModes.set(placement.instance.instanceId, placement.instance.surfaceMode);
+    }
     this.attached = true;
     return Promise.resolve({
       receipt: {
@@ -1822,7 +1858,8 @@ class VoxelObjectFixtureClient {
       (entry) => entry.ownerEntityId === input.entityId,
     );
     if (index < 0) return Promise.reject(new Error('sceneObject.missing: owner not found'));
-    this.attachedInstances.splice(index, 1);
+    const [removed] = this.attachedInstances.splice(index, 1);
+    if (removed !== undefined) this.surfaceModes.delete(removed.instance.instanceId);
     this.attached = this.attachedInstances.length > 0;
     return Promise.resolve({
       receipt: {
@@ -1830,6 +1867,33 @@ class VoxelObjectFixtureClient {
         sceneId: 'scene/loading-bay',
         entityId: input.entityId,
         removedObjects: 1,
+      },
+      project: this.#project(),
+    } as never);
+  }
+
+  setVoxelObjectInstanceSurfaceMode(input: {
+    readonly sceneId: string;
+    readonly instanceId: string;
+    readonly surfaceMode: 'greedyCubes' | 'marchingCubes' | 'dualContouring';
+  }) {
+    const entry = this.attachedInstances.find(
+      (candidate) => candidate.sceneId === input.sceneId
+        && candidate.instance.instanceId === input.instanceId,
+    );
+    if (entry === undefined) return Promise.reject(new Error('voxelObject.instanceMissing: instance not found'));
+    const before = this.surfaceModes.get(input.instanceId) ?? entry.instance.surfaceMode;
+    if (this.rejectObjectSurfaceMode) {
+      return Promise.reject(new Error('voxelObject.surfaceTextureUnsupported: smooth textured surfaces are unsupported'));
+    }
+    this.surfaceModes.set(input.instanceId, input.surfaceMode);
+    return Promise.resolve({
+      receipt: {
+        kind: 'voxelObjectSurfaceModeSet',
+        sceneId: input.sceneId,
+        instanceId: input.instanceId,
+        before,
+        after: input.surfaceMode,
       },
       project: this.#project(),
     } as never);
@@ -1896,7 +1960,13 @@ class VoxelObjectFixtureClient {
   #project() {
     const project = projectReadout(false, this.openedProjectId);
     const instances = this.attachedInstances.length > 0
-      ? this.attachedInstances
+      ? this.attachedInstances.map((entry) => ({
+          ...entry,
+          instance: {
+            ...entry.instance,
+            surfaceMode: this.surfaceModes.get(entry.instance.instanceId) ?? entry.instance.surfaceMode,
+          },
+        }))
       : this.attached
         ? [{
             sceneId: 'scene/loading-bay',
@@ -2452,6 +2522,7 @@ function storedObjectInstance(
   return {
     instanceId,
     voxelObjectAssetId: 'voxel-object/character',
+    surfaceMode: 'greedyCubes' as const,
     frame: { kind: 'clip' as const, clipId: 'clip/walk-1', frameIndex: 1 },
     translation,
     rotation: [0, 0, 0, 1] as const,

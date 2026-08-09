@@ -17,6 +17,7 @@ import type {
   VoxelObjectConversionSettings,
   VoxelObjectFrameSelection,
   VoxelObjectPlaybackCommand,
+  VoxelObjectSurfaceMode,
   VoxelObjectSourceClipReadout,
   VoxelObjectSourceKind,
   VoxelMaterialBinding,
@@ -129,6 +130,7 @@ export type VoxelEditorAction =
   }
   | { readonly kind: 'undoObjectPlacement'; readonly instanceId: string }
   | { readonly kind: 'reapplyObjectPlacement'; readonly instanceId: string }
+  | { readonly kind: 'setObjectSurfaceMode'; readonly sceneId: string; readonly instanceId: string; readonly surfaceMode: VoxelObjectSurfaceMode }
   | { readonly kind: 'previewObjectInstance'; readonly sceneId: string; readonly instanceId: string; readonly nowMicroseconds: number; readonly command: VoxelObjectPlaybackCommand };
 
 export interface VoxelObjectClipControlInput {

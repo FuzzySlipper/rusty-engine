@@ -1,6 +1,6 @@
 # Studio external-project adapter protocol
 
-Status: protocol 14 implemented in Engine; exact downstream adapter certification required
+Status: protocol 15 implemented in Engine; exact downstream adapter certification required
 
 Rusty Engine Studio talks to one project-owned Rust adapter at a time through a bounded JSON-lines
 process. The adapter is a downstream composition root: it understands that project's layout,
@@ -47,7 +47,7 @@ the admitted executable digest.
 
 ## Closed protocol
 
-Every request carries `protocolVersion: 14` and a caller-selected `requestId`. Version 14 contains
+Every request carries `protocolVersion: 15` and a caller-selected `requestId`. Version 15 contains
 only these tagged request families:
 
 | Request | Purpose | Canonical authority |
@@ -82,6 +82,7 @@ only these tagged request families:
 | `prepareVoxelObjectPlacement` | Resolve one already-authored object's exact content-addressed mesh and renderer definitions for a disposable placement ghost; it creates no entity, instance, retained gameplay state, or project bytes. | downstream object admission/render projection and resource host |
 | `attachVoxelObjectInstance` | Attach a transformed canonical object with one explicit default or clip-frame posture and material overrides. | downstream scene schema plus object admission/render projection |
 | `attachVoxelObjectInstances` | Attach 1–32 ordered transformed canonical objects in one create-only, fail-atomic downstream mutation and return one canonical project readout. | downstream scene schema, owner allocation, complete project admission, persistence, and object render projection |
+| `setVoxelObjectInstanceSurfaceMode` | Replace one applied voxel-object entity's derived surface choice under an expected project hash and return the authoritative persisted project and projection. | downstream project schema, object admission/render projection, and atomic persistence |
 | `previewVoxelObjectInstance` | Scrub, play, pause, sample, or stop one applied instance through explicit caller time while returning its saved pose, disposable playback posture, and a complete renderer-neutral projection. | `voxel-object-runtime`, render projection, downstream project adapter |
 | `closeProject` | Release open-project and retained-projection state. | Project adapter host lifecycle |
 
@@ -105,7 +106,7 @@ The isolated Studio workspace includes the same-repository renderer packages exp
 Studio does not import Three, retain a private scene graph, translate materials/resources, own a
 raycaster, or duplicate renderer disposal.
 
-Protocol 14 also requires one closed `voxelSurfaceAuthoring` readout. Its texture,
+Protocol 14 requires one closed `voxelSurfaceAuthoring` readout. Its texture,
 atlas, material, assignment, version, and hash facts are reconstructed by the
 downstream Rust adapter. Optional `textureResources` identify only admitted
 content-addressed PNG bytes; Studio resolves them through the existing trusted
@@ -178,6 +179,16 @@ pause or stop chosen during an in-flight sample is queued as the next closed com
 user control wins, so stop may supersede a queued pause without racing adapter requests. That queue
 is scoped to the current project and object-operation generations and is discarded by every
 canonical project lifecycle transition or accepted replacement.
+
+Protocol 15 adds one required `surfaceMode` to every stored voxel-object instance and one named
+`setVoxelObjectInstanceSurfaceMode` mutation. The selected Entity inspector offers the three
+Engine-defined choices, but it never changes retained renderer state directly. It submits the
+expected project hash and instance identity, then accepts only the downstream Rust adapter's
+persisted project, receipt, and complete projection. The adapter must stage mode-specific object
+admission and projection before publishing project bytes; unsupported textured reconstructed
+surfaces, quotas, or projection failures therefore leave the previously admitted project and
+renderer readout intact. Surface mode remains presentation configuration: voxel occupancy,
+collision, navigation, animation posture, and gameplay facts are unchanged.
 
 Protocol 9 makes the owning entity explicit for every applied voxel-object instance readout. The
 owner identity is supplied by the downstream Rust project schema, is repeated in hierarchy,

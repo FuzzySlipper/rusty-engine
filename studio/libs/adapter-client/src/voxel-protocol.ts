@@ -492,6 +492,7 @@ export type ProjectMutationReceipt =
   | { readonly kind: 'voxelConversionApplied'; readonly planId: string; readonly planHash: string; readonly assetId: string; readonly outputHash: string; readonly outputVoxels: number }
   | { readonly kind: 'voxelObjectConversionApplied'; readonly planId: string; readonly planHash: string; readonly assetId: string; readonly outputHash: string; readonly storedFrames: number; readonly aggregateVoxels: number }
   | { readonly kind: 'voxelObjectInstanceAttached'; readonly sceneId: string; readonly instanceId: string; readonly assetId: string; readonly frameKind: 'default' | 'clip' }
+  | { readonly kind: 'voxelObjectSurfaceModeSet'; readonly sceneId: string; readonly instanceId: string; readonly before: 'greedyCubes' | 'marchingCubes' | 'dualContouring'; readonly after: 'greedyCubes' | 'marchingCubes' | 'dualContouring' }
   | {
     readonly kind: 'voxelObjectInstancesAttached';
     readonly placements: readonly {
@@ -712,6 +713,17 @@ export function validateProjectMutationReceipt(input: unknown, path: string): vo
       const entry = receipt(['sceneId', 'instanceId', 'assetId', 'frameKind']);
       strings(entry, path, ['sceneId', 'instanceId', 'assetId']);
       enumValue(entry['frameKind'], `${path}.frameKind`, ['default', 'clip']);
+      return;
+    }
+    case 'voxelObjectSurfaceModeSet': {
+      const entry = receipt(['sceneId', 'instanceId', 'before', 'after']);
+      strings(entry, path, ['sceneId', 'instanceId']);
+      enumValue(entry['before'], `${path}.before`, [
+        'greedyCubes', 'marchingCubes', 'dualContouring',
+      ]);
+      enumValue(entry['after'], `${path}.after`, [
+        'greedyCubes', 'marchingCubes', 'dualContouring',
+      ]);
       return;
     }
     case 'voxelObjectInstancesAttached': {

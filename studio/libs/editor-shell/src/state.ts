@@ -1633,6 +1633,30 @@ export class StudioWorkspaceStore {
           this.#acceptVoxelObjectAttachment(response, history.sceneId, history.instance);
           return;
         }
+        case 'setObjectSurfaceMode': {
+          const response = await this.#client.setVoxelObjectInstanceSurfaceMode({
+            expectedProjectHash,
+            sceneId: action.sceneId,
+            instanceId: action.instanceId,
+            surfaceMode: action.surfaceMode,
+          });
+          if (!this.#objectResponseIsCurrent(
+            action,
+            expectedProjectHash,
+            projectScopeGeneration,
+            objectOperationGeneration,
+          )) return;
+          if (
+            response.receipt.kind !== 'voxelObjectSurfaceModeSet'
+            || response.receipt.sceneId !== action.sceneId
+            || response.receipt.instanceId !== action.instanceId
+            || response.receipt.after !== action.surfaceMode
+          ) {
+            throw new Error('Canonical surface-mode receipt diverged from the requested entity.');
+          }
+          this.#acceptVoxelMutation(response);
+          return;
+        }
         case 'previewObjectInstance': {
           const response = await this.#client.previewVoxelObjectInstance({
             expectedProjectHash,
@@ -2680,6 +2704,7 @@ function isVoxelObjectAction(action: VoxelEditorAction): boolean {
     case 'attachObjectInstances':
     case 'undoObjectPlacement':
     case 'reapplyObjectPlacement':
+    case 'setObjectSurfaceMode':
     case 'previewObjectInstance':
       return true;
     default:
@@ -2874,6 +2899,7 @@ function mutationMessage(receipt: ProjectMutationReceipt): string {
     case 'voxelObjectConversionApplied': return `Voxel object ${receipt.assetId} installed with ${String(receipt.storedFrames)} stored frames.`;
     case 'voxelObjectInstanceAttached': return `Voxel object instance ${receipt.instanceId} attached.`;
     case 'voxelObjectInstancesAttached': return `${String(receipt.placements.length)} voxel object instances attached.`;
+    case 'voxelObjectSurfaceModeSet': return `Voxel object ${receipt.instanceId} surface changed from ${receipt.before} to ${receipt.after}.`;
     case 'voxelSurfaceMaterialUpserted': return `Voxel surface ${receipt.materialAssetId} applied to ${receipt.instanceId}.`;
     case 'voxelSurfaceMaterialRemoved': return `Voxel surface ${receipt.materialAssetId} removed.`;
   }

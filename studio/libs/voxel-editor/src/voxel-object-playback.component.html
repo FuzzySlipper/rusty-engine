@@ -6,12 +6,27 @@
     </div>
     <dl class="playback-readout">
       <dt>Saved pose</dt><dd>{{ durableFrameLabel(entry.instance.frame) }}</dd>
+      <dt>Surface</dt><dd>{{ entry.instance.surfaceMode }}</dd>
       <dt>Preview</dt><dd>
         @if (playback()?.instanceId === entry.instance.instanceId) {
           {{ playback()?.status }} · {{ playback()?.clipId ?? 'saved pose' }} · frame {{ playback()?.clipFrame ?? '—' }}{{ playback()?.ended ? ' · ended' : '' }}
         } @else { preparing preview }
       </dd>
     </dl>
+    <label class="surface-mode-control">
+      <span>Surface mode</span>
+      <select
+        aria-label="Entity voxel-object surface mode"
+        [disabled]="busy()"
+        [ngModel]="entry.instance.surfaceMode"
+        (ngModelChange)="chooseSurfaceMode($event)"
+      >
+        <option value="greedyCubes">Greedy cubes</option>
+        <option value="marchingCubes">Marching cubes</option>
+        <option value="dualContouring">Dual contouring</option>
+      </select>
+      <small>Changes the saved derived presentation for this entity. Collision, navigation, and voxel data stay canonical.</small>
+    </label>
     @if (object.clips.length > 0) {
       <div class="playback-fields">
         <label>

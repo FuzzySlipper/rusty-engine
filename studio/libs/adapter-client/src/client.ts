@@ -481,6 +481,12 @@ export class StudioAdapterClient {
     return this.#mutation('attachVoxelObjectInstances', input);
   }
 
+  setVoxelObjectInstanceSurfaceMode(
+    input: RequestInput<'setVoxelObjectInstanceSurfaceMode'>,
+  ): Promise<ProjectMutationAppliedResponse> {
+    return this.#mutation('setVoxelObjectInstanceSurfaceMode', input);
+  }
+
   previewVoxelObjectInstance(
     input: RequestInput<'previewVoxelObjectInstance'>,
   ): Promise<VoxelObjectInstancePreviewedResponse> {
@@ -594,4 +600,5 @@ type MutationRequestType =
   | 'applyVoxelConversion'
   | 'applyVoxelObjectConversion'
   | 'attachVoxelObjectInstance'
-  | 'attachVoxelObjectInstances';
+  | 'attachVoxelObjectInstances'
+  | 'setVoxelObjectInstanceSurfaceMode';

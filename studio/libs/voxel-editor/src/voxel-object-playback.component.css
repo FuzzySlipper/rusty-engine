@@ -6,6 +6,7 @@
 .playback-readout dt { color: #82999d; }
 .playback-readout dd { margin: 0; }
 .playback-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
+.surface-mode-control { margin: 8px 0; }
 label { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 button, input, select { box-sizing: border-box; min-width: 0; width: 100%; font: inherit; color: inherit; background: #182428; border: 1px solid #34484d; border-radius: 3px; }
 button, select { padding: 5px 7px; }

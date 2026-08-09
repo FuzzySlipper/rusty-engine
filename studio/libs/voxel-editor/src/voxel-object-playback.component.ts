@@ -14,6 +14,7 @@ import type {
   VoxelObjectInstanceReadout,
   VoxelObjectLoopMode,
   VoxelObjectPlaybackCommand,
+  VoxelObjectSurfaceMode,
 } from '@rusty-engine/studio-adapter-client';
 
 import type { VoxelEditorAction } from './voxel-editor-model.js';
@@ -107,6 +108,17 @@ export class VoxelObjectPlaybackComponent {
   chooseLoopMode(loopMode: VoxelObjectLoopMode): void {
     this.loopMode = loopMode;
     this.scrub();
+  }
+
+  chooseSurfaceMode(surfaceMode: VoxelObjectSurfaceMode): void {
+    const entry = this.instance();
+    if (entry === null || surfaceMode === entry.instance.surfaceMode) return;
+    this.action.emit({
+      kind: 'setObjectSurfaceMode',
+      sceneId: entry.sceneId,
+      instanceId: entry.instance.instanceId,
+      surfaceMode,
+    });
   }
 
   frameMax(): number {

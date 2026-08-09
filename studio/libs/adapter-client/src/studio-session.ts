@@ -3,6 +3,7 @@ import {
   type StudioHostStatus,
 } from './host-status.js';
 import {
+  STUDIO_ADAPTER_PROTOCOL_VERSION,
   decodeStudioAdapterResponse,
   type AdapterDescription,
   type StudioProjectReadout,
@@ -32,14 +33,14 @@ export function decodeStudioSessionOpenedResponse(input: unknown): StudioSession
   }
   const described = decodeStudioAdapterResponse({
     type: 'described',
-    protocolVersion: 14,
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
     requestId: 'studio-session-describe',
     adapter: value['adapter'],
   });
   if (described.type !== 'described') throw new TypeError('Studio session adapter is invalid');
   const opened = decodeStudioAdapterResponse({
     type: 'projectOpened',
-    protocolVersion: 14,
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
     requestId: 'studio-session-open',
     project: value['project'],
   });

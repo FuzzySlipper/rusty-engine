@@ -571,7 +571,7 @@ test('protocol 7 closes history, file, and texture-policy response families', ()
   );
 });
 
-test('protocol 14 keeps entity-owned voxel objects, applied playback, and durable readouts closed', async () => {
+test('protocol 15 keeps entity-owned voxel objects, applied playback, and durable readouts closed', async () => {
   const inspected = voxelObjectSourceInspected('object-source-1');
   assert.equal(decodeStudioAdapterResponse(inspected).type, 'voxelObjectSourceInspected');
   assert.throws(
@@ -623,6 +623,7 @@ test('protocol 14 keeps entity-owned voxel objects, applied playback, and durabl
     instance: {
       instanceId: 'character-one',
       voxelObjectAssetId: 'voxel-object/character',
+      surfaceMode: 'greedyCubes',
       frame: { kind: 'clip', clipId: 'clip/walk-1', frameIndex: 0 },
       translation: [0, 0, 0],
       rotation: [0, 0, 0, 1],
@@ -741,6 +742,90 @@ test('protocol 14 keeps entity-owned voxel objects, applied playback, and durabl
   });
   assert.deepEqual(transport.requests.map((request) => request.type), [
     'inspectVoxelObjectSource', 'previewVoxelObjectConversion', 'previewVoxelObjectInstance',
+  ]);
+});
+
+test('protocol 15 carries one closed authoritative voxel-object surface-mode mutation', async () => {
+  const project = projectOpened('surface-mode-project');
+  setCanonicalOwners(project, [17]);
+  project.project.voxelObjectAuthoring.assets = [voxelObjectAssetReadout()];
+  project.project.voxelObjectAuthoring.instances = [{
+    sceneId: 'scene/loading-bay',
+    ownerEntityId: 17,
+    instance: {
+      instanceId: 'character-one',
+      voxelObjectAssetId: 'voxel-object/character',
+      surfaceMode: 'marchingCubes',
+      frame: { kind: 'clip', clipId: 'clip/walk-1', frameIndex: 0 },
+      translation: [0, 0, 0],
+      rotation: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+      materialOverrides: [],
+    },
+  }];
+  project.project.entityComponents = [{
+    ownerEntityId: 17,
+    componentTypeId: VOXEL_OBJECT_COMPONENT_TYPE_ID,
+    inspectorContract: {
+      contractId: VOXEL_OBJECT_INSPECTOR_CONTRACT_ID,
+      contractVersion: VOXEL_OBJECT_INSPECTOR_CONTRACT_VERSION,
+    },
+  }];
+  const applied = {
+    type: 'projectMutationApplied' as const,
+    protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
+    requestId: 'surface-mode-1',
+    receipt: {
+      kind: 'voxelObjectSurfaceModeSet' as const,
+      sceneId: 'scene/loading-bay',
+      instanceId: 'character-one',
+      before: 'greedyCubes' as const,
+      after: 'marchingCubes' as const,
+    },
+    project: project.project,
+  };
+  const decoded = decodeStudioAdapterResponse(applied);
+  assert.equal(decoded.type, 'projectMutationApplied');
+  assert.equal(
+    decoded.type === 'projectMutationApplied'
+      && decoded.receipt.kind === 'voxelObjectSurfaceModeSet'
+      ? decoded.receipt.after
+      : null,
+    'marchingCubes',
+  );
+  assert.throws(
+    () => decodeStudioAdapterResponse({
+      ...applied,
+      receipt: { ...applied.receipt, after: 'smoothEnough' },
+    }),
+    /receipt\.after is not a closed value/u,
+  );
+
+  const transport = new RecordingTransport((request) => {
+    if (request.type === 'describe') {
+      return described(request.requestId, [{
+        contractId: VOXEL_OBJECT_INSPECTOR_CONTRACT_ID,
+        contractVersion: VOXEL_OBJECT_INSPECTOR_CONTRACT_VERSION,
+      }]);
+    }
+    assert.equal(request.type, 'setVoxelObjectInstanceSurfaceMode');
+    if (request.type !== 'setVoxelObjectInstanceSurfaceMode') throw new Error('unexpected operation');
+    assert.equal(request.expectedProjectHash, 'project-hash');
+    assert.equal(request.sceneId, 'scene/loading-bay');
+    assert.equal(request.instanceId, 'character-one');
+    assert.equal(request.surfaceMode, 'marchingCubes');
+    return { ...applied, requestId: request.requestId };
+  });
+  const client = new StudioAdapterClient(transport);
+  await client.describe();
+  await client.setVoxelObjectInstanceSurfaceMode({
+    expectedProjectHash: 'project-hash',
+    sceneId: 'scene/loading-bay',
+    instanceId: 'character-one',
+    surfaceMode: 'marchingCubes',
+  });
+  assert.deepEqual(transport.requests.map((request) => request.type), [
+    'describe', 'setVoxelObjectInstanceSurfaceMode',
   ]);
 });
 
@@ -922,6 +1007,7 @@ test('protocol 14 carries one closed bounded voxel-object placement batch and on
       instance: {
         instanceId: placement.instanceId,
         voxelObjectAssetId: placement.assetId,
+        surfaceMode: 'greedyCubes',
         frame: { kind: 'clip', clipId: 'clip/walk-1', frameIndex: 0 },
         translation: [index, 0, 0],
         rotation: [0, 0, 0, 1],

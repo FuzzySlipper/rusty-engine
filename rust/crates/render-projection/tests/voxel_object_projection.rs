@@ -189,6 +189,49 @@ fn surface_mode_redefinition_keeps_handle_and_replaces_live_geometry() {
 }
 
 #[test]
+fn shared_canonical_asset_can_render_distinct_surface_modes_per_instance() {
+    let greedy = admitted();
+    let marching = admitted_with_surface(SurfaceMode::MarchingCubes);
+    let mut projector = VoxelObjectRenderProjector::new();
+
+    let projected = projector
+        .project(
+            &[
+                named_instance(&greedy, 0, "greedy-runner"),
+                named_instance(&marching, 0, "marching-runner"),
+            ],
+            &materials(),
+        )
+        .unwrap();
+
+    assert_eq!(projected.readout.surface_modes.len(), 2);
+    assert_eq!(
+        projected.readout.surface_modes["voxel-object/runner#surface=greedyCubes"],
+        SurfaceMode::GreedyCubes
+    );
+    assert_eq!(
+        projected.readout.surface_modes["voxel-object/runner#surface=marchingCubes"],
+        SurfaceMode::MarchingCubes
+    );
+    let defined = projected
+        .frame
+        .ops
+        .iter()
+        .filter_map(|operation| match operation {
+            RenderDiff::DefineVoxelObject { asset } => Some(asset.asset.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        defined,
+        vec![
+            "voxel-object/runner#surface=greedyCubes",
+            "voxel-object/runner#surface=marchingCubes",
+        ]
+    );
+}
+
+#[test]
 fn reconstructed_meshes_pack_as_uv_free_v1_and_reject_textured_materials() {
     let marching = admitted_with_surface(SurfaceMode::MarchingCubes);
     let instances = [instance(&marching, 0)];

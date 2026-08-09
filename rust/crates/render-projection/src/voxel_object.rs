@@ -113,13 +113,18 @@ impl VoxelObjectRenderProjector {
                 continue;
             }
             let (resource, packed) = match self.mesh_payloads {
-                VoxelObjectMeshPayloads::Inline => {
-                    (voxel_object_render_asset(request.object), Vec::new())
-                }
+                VoxelObjectMeshPayloads::Inline => (
+                    voxel_object_render_asset_as(request.object, asset_id),
+                    Vec::new(),
+                ),
                 VoxelObjectMeshPayloads::PackedResources {
                     maximum_resource_bytes,
-                } => voxel_object_packed_render_asset(request.object, maximum_resource_bytes)
-                    .map_err(VoxelObjectProjectionError::MeshResource)?,
+                } => voxel_object_packed_render_asset_as(
+                    request.object,
+                    asset_id,
+                    maximum_resource_bytes,
+                )
+                .map_err(VoxelObjectProjectionError::MeshResource)?,
             };
             resource
                 .validate()
@@ -267,6 +272,13 @@ fn validate_and_snapshot<'a>(
     instances: &[VoxelObjectProjectionInstance<'a>],
     materials: &BTreeMap<String, RenderMaterialDescriptor>,
 ) -> Result<ValidatedProjection<'a>, VoxelObjectProjectionError> {
+    let mut modes_by_asset = BTreeMap::<&str, BTreeSet<SurfaceMode>>::new();
+    for instance in instances {
+        modes_by_asset
+            .entry(instance.object.asset_id())
+            .or_default()
+            .insert(instance.object.surface_mode());
+    }
     let mut snapshots = BTreeMap::new();
     let mut resources = BTreeMap::<String, RequestedResource<'a>>::new();
     let mut used_materials = BTreeMap::new();
@@ -293,18 +305,18 @@ fn validate_and_snapshot<'a>(
                 frame_count: instance.object.frames().len() as u32,
             });
         }
-        let asset_id = instance.object.asset_id();
-        if let Some(existing) = resources.get(asset_id) {
+        let asset_id = projection_asset_id(instance.object, &modes_by_asset);
+        if let Some(existing) = resources.get(&asset_id) {
             if existing.object.content_hash() != instance.object.content_hash()
                 || existing.object.surface_mode() != instance.object.surface_mode()
             {
                 return Err(VoxelObjectProjectionError::ConflictingResource {
-                    asset: asset_id.to_string(),
+                    asset: asset_id.clone(),
                 });
             }
         } else {
             resources.insert(
-                asset_id.to_string(),
+                asset_id.clone(),
                 RequestedResource {
                     object: instance.object,
                 },
@@ -349,7 +361,7 @@ fn validate_and_snapshot<'a>(
             .insert(
                 instance.instance_id.clone(),
                 InstanceSnapshot {
-                    asset: instance.object.asset_id().to_string(),
+                    asset: asset_id,
                     content_hash: instance.object.content_hash().to_string(),
                     frame: instance.frame,
                     transform: instance.transform,
@@ -416,8 +428,15 @@ fn sorted_instances<'a>(
 }
 
 pub fn voxel_object_render_asset(object: &AdmittedVoxelObject) -> VoxelObjectRenderAsset {
+    voxel_object_render_asset_as(object, object.asset_id())
+}
+
+fn voxel_object_render_asset_as(
+    object: &AdmittedVoxelObject,
+    render_asset_id: &str,
+) -> VoxelObjectRenderAsset {
     VoxelObjectRenderAsset {
-        asset: object.asset_id().to_string(),
+        asset: render_asset_id.to_string(),
         content_hash: object.content_hash().to_string(),
         meshes: object
             .meshes()
@@ -452,7 +471,15 @@ pub fn voxel_object_packed_render_asset(
     object: &AdmittedVoxelObject,
     maximum_resource_bytes: u32,
 ) -> Result<(VoxelObjectRenderAsset, Vec<PackedMeshResource>), MeshResourceError> {
-    let mut asset = voxel_object_render_asset(object);
+    voxel_object_packed_render_asset_as(object, object.asset_id(), maximum_resource_bytes)
+}
+
+fn voxel_object_packed_render_asset_as(
+    object: &AdmittedVoxelObject,
+    render_asset_id: &str,
+    maximum_resource_bytes: u32,
+) -> Result<(VoxelObjectRenderAsset, Vec<PackedMeshResource>), MeshResourceError> {
+    let mut asset = voxel_object_render_asset_as(object, render_asset_id);
     let packed = pack_mesh_resources(
         &asset
             .meshes
@@ -465,6 +492,24 @@ pub fn voxel_object_packed_render_asset(
         mesh.payload = payload;
     }
     Ok((asset, packed.resources))
+}
+
+fn projection_asset_id(
+    object: &AdmittedVoxelObject,
+    modes_by_asset: &BTreeMap<&str, BTreeSet<SurfaceMode>>,
+) -> String {
+    if modes_by_asset
+        .get(object.asset_id())
+        .is_none_or(|modes| modes.len() == 1)
+    {
+        object.asset_id().to_string()
+    } else {
+        format!(
+            "{}#surface={}",
+            object.asset_id(),
+            object.surface_mode().as_str()
+        )
+    }
 }
 
 pub fn voxel_object_mesh_payload(mesh: &svc_mesh::MeshPayload) -> MeshPayloadDescriptor {
