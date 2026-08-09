@@ -9,6 +9,10 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./submission": {
+      "import": "./dist/viewport-submission.js",
+      "types": "./dist/viewport-submission.d.ts"
     }
   },
   "files": ["dist"],

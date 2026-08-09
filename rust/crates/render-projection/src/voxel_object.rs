@@ -10,6 +10,7 @@ use render_model::{
     VoxelObjectRenderAssetError, VoxelObjectRenderFrame, VoxelObjectRenderMesh,
     MAX_MESH_RESOURCE_BYTES,
 };
+use svc_mesh::SurfaceMode;
 use voxel_object_runtime::{AdmittedVoxelObject, VoxelObjectFrameSource, VoxelObjectRuntimeFrame};
 
 use crate::{HandleAllocationError, RenderHandleNamespace, StableHandleRegistry};
@@ -34,6 +35,7 @@ struct InstanceSnapshot {
     visible: bool,
     material_overrides: Vec<MeshMaterialSlot>,
     metadata: RenderMetadata,
+    surface_mode: SurfaceMode,
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +43,7 @@ pub struct VoxelObjectRenderProjector {
     registry: StableHandleRegistry<String>,
     last_instances: BTreeMap<String, InstanceSnapshot>,
     last_resource_hashes: BTreeMap<String, String>,
+    last_resource_surface_modes: BTreeMap<String, SurfaceMode>,
     last_materials: BTreeMap<String, RenderMaterialDescriptor>,
     mesh_payloads: VoxelObjectMeshPayloads,
 }
@@ -63,6 +66,7 @@ impl VoxelObjectRenderProjector {
             registry: StableHandleRegistry::new(RenderHandleNamespace::VOXEL_OBJECT),
             last_instances: BTreeMap::new(),
             last_resource_hashes: BTreeMap::new(),
+            last_resource_surface_modes: BTreeMap::new(),
             last_materials: BTreeMap::new(),
             mesh_payloads: VoxelObjectMeshPayloads::Inline,
         }
@@ -92,13 +96,19 @@ impl VoxelObjectRenderProjector {
             .iter()
             .map(|(asset, request)| (asset.clone(), request.object.content_hash().to_string()))
             .collect::<BTreeMap<_, _>>();
+        let current_resource_surface_modes = requested_resources
+            .iter()
+            .map(|(asset, request)| (asset.clone(), request.object.surface_mode()))
+            .collect::<BTreeMap<_, _>>();
         let mut pending_resources = BTreeMap::new();
         let mut packed_mesh_resources = BTreeMap::new();
         for (asset_id, request) in &requested_resources {
             let is_cached = self
                 .last_resource_hashes
                 .get(asset_id)
-                .is_some_and(|content_hash| content_hash == request.object.content_hash());
+                .is_some_and(|content_hash| content_hash == request.object.content_hash())
+                && self.last_resource_surface_modes.get(asset_id)
+                    == Some(&request.object.surface_mode());
             if is_cached {
                 continue;
             }
@@ -195,7 +205,10 @@ impl VoxelObjectRenderProjector {
                         .then(|| snapshot.metadata.clone()),
                 });
             }
-            if previous.frame != snapshot.frame || previous.content_hash != snapshot.content_hash {
+            if previous.frame != snapshot.frame
+                || previous.content_hash != snapshot.content_hash
+                || previous.surface_mode != snapshot.surface_mode
+            {
                 operations.push(RenderDiff::SetVoxelObjectFrame {
                     handle,
                     frame: snapshot.frame,
@@ -216,6 +229,7 @@ impl VoxelObjectRenderProjector {
         self.registry = registry;
         self.last_instances = current_instances;
         self.last_resource_hashes = current_resource_hashes;
+        self.last_resource_surface_modes = current_resource_surface_modes;
         self.last_materials = used_materials;
 
         Ok(VoxelObjectProjectionResult {
@@ -228,6 +242,7 @@ impl VoxelObjectRenderProjector {
                     .map(|(id, snapshot)| (id.clone(), snapshot.frame))
                     .collect(),
                 resource_hashes: self.last_resource_hashes.clone(),
+                surface_modes: self.last_resource_surface_modes.clone(),
                 materialized_resources,
             },
         })
@@ -280,7 +295,9 @@ fn validate_and_snapshot<'a>(
         }
         let asset_id = instance.object.asset_id();
         if let Some(existing) = resources.get(asset_id) {
-            if existing.object.content_hash() != instance.object.content_hash() {
+            if existing.object.content_hash() != instance.object.content_hash()
+                || existing.object.surface_mode() != instance.object.surface_mode()
+            {
                 return Err(VoxelObjectProjectionError::ConflictingResource {
                     asset: asset_id.to_string(),
                 });
@@ -302,7 +319,12 @@ fn validate_and_snapshot<'a>(
             .map(|binding| binding.material_slot)
             .collect::<BTreeSet<_>>();
         for binding in &instance.object.source().material_palette {
-            collect_material(&binding.material_asset_id, materials, &mut used_materials)?;
+            collect_material(
+                &binding.material_asset_id,
+                materials,
+                &mut used_materials,
+                instance.object.surface_mode(),
+            )?;
         }
         if let Some(slot) = instance
             .material_overrides
@@ -316,7 +338,12 @@ fn validate_and_snapshot<'a>(
             });
         }
         for binding in &instance.material_overrides {
-            collect_material(&binding.material, materials, &mut used_materials)?;
+            collect_material(
+                &binding.material,
+                materials,
+                &mut used_materials,
+                instance.object.surface_mode(),
+            )?;
         }
         if snapshots
             .insert(
@@ -329,6 +356,7 @@ fn validate_and_snapshot<'a>(
                     visible: instance.visible,
                     material_overrides: instance.material_overrides.clone(),
                     metadata: instance.metadata.clone(),
+                    surface_mode: instance.object.surface_mode(),
                 },
             )
             .is_some()
@@ -349,6 +377,7 @@ fn collect_material(
     asset_id: &str,
     materials: &BTreeMap<String, RenderMaterialDescriptor>,
     used_materials: &mut BTreeMap<String, RenderMaterialDescriptor>,
+    surface_mode: SurfaceMode,
 ) -> Result<(), VoxelObjectProjectionError> {
     let material =
         materials
@@ -366,6 +395,12 @@ fn collect_material(
         return Err(VoxelObjectProjectionError::MaterialIdMismatch {
             expected: asset_id.to_string(),
             actual: material.id.clone(),
+        });
+    }
+    if !surface_mode.supports_voxel_tile_coordinates() && material.texture.is_some() {
+        return Err(VoxelObjectProjectionError::TexturedSurfaceUnsupported {
+            material: asset_id.to_string(),
+            surface_mode,
         });
     }
     used_materials.insert(material.id.clone(), material.clone());
@@ -433,28 +468,32 @@ pub fn voxel_object_packed_render_asset(
 }
 
 pub fn voxel_object_mesh_payload(mesh: &svc_mesh::MeshPayload) -> MeshPayloadDescriptor {
+    let mut attributes = vec![
+        MeshAttribute {
+            name: MeshAttributeName::Position,
+            components: 3,
+            kind: MeshAttributeKind::F32,
+        },
+        MeshAttribute {
+            name: MeshAttributeName::Normal,
+            components: 3,
+            kind: MeshAttributeKind::F32,
+        },
+    ];
+    let uvs = (!mesh.tile_coordinates.is_empty()).then(|| {
+        attributes.push(MeshAttribute {
+            name: MeshAttributeName::Uv,
+            components: 2,
+            kind: MeshAttributeKind::F32,
+        });
+        mesh.tile_coordinates.clone()
+    });
     MeshPayloadDescriptor {
         layout: MeshBufferLayout {
             vertex_count: mesh.stats.vertices,
             index_count: mesh.stats.indices,
             index_width: MeshIndexWidth::U32,
-            attributes: vec![
-                MeshAttribute {
-                    name: MeshAttributeName::Position,
-                    components: 3,
-                    kind: MeshAttributeKind::F32,
-                },
-                MeshAttribute {
-                    name: MeshAttributeName::Normal,
-                    components: 3,
-                    kind: MeshAttributeKind::F32,
-                },
-                MeshAttribute {
-                    name: MeshAttributeName::Uv,
-                    components: 2,
-                    kind: MeshAttributeKind::F32,
-                },
-            ],
+            attributes,
         },
         groups: mesh
             .groups
@@ -472,7 +511,7 @@ pub fn voxel_object_mesh_payload(mesh: &svc_mesh::MeshPayload) -> MeshPayloadDes
         source: MeshPayloadSource::Inline {
             positions: mesh.positions.clone(),
             normals: mesh.normals.clone(),
-            uvs: Some(mesh.tile_coordinates.clone()),
+            uvs,
             indices: mesh.indices.clone(),
         },
         provenance: MeshProvenance::VoxelObject,
@@ -499,6 +538,7 @@ pub struct VoxelObjectProjectionResult {
 pub struct VoxelObjectProjectionReadout {
     pub instance_frames: BTreeMap<String, u32>,
     pub resource_hashes: BTreeMap<String, String>,
+    pub surface_modes: BTreeMap<String, SurfaceMode>,
     /// Sorted asset identities whose complete geometry was built for this frame.
     pub materialized_resources: Vec<String>,
 }
@@ -544,6 +584,10 @@ pub enum VoxelObjectProjectionError {
     },
     ChangedMaterialOverrides {
         instance: String,
+    },
+    TexturedSurfaceUnsupported {
+        material: String,
+        surface_mode: SurfaceMode,
     },
     InvalidMesh(MeshDescriptorError),
     Handle(HandleAllocationError),

@@ -36,6 +36,7 @@ from it.
 - [`svc-pathfinding`](../../rust/crates/svc-pathfinding)
 - [`svc-mesh`](../../rust/crates/svc-mesh)
 - [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
+- [Reconstructed voxel surfaces](../topics/voxel/reconstructed-surfaces.md)
 
 ## Public downstream surfaces
 
@@ -52,8 +53,12 @@ from it.
   edits and history reverts guard that independent revision before swapping a
   rebuilt scene.
 - `svc-mesh::texture_mapping` owns the executable six-face tile basis and exact
-  cell-space projection used by the one greedy mesher; it owns no image or GPU
+  cell-space projection used by the default greedy mesher; it owns no image or GPU
   resource.
+- `svc-mesh::SurfaceMode` selects optional derived reconstruction. The shared
+  scalar field, ambiguity/QEF policy, quotas, and chunk-owner seam remain in
+  Rust; canonical world services continue to use greedy output unless a caller
+  explicitly selects another disposable presentation.
 - The caller-driven rigid-body service consumes exact entity component slots
   plus this canonical voxel/static-triangle environment. Rapier caches are
   derived, bounded, and non-durable; complete accepted steps publish atomically

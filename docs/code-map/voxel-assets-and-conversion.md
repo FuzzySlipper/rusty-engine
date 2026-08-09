@@ -36,6 +36,7 @@ selection.
 - [Voxel model conversion](../topics/voxel/voxel-model-conversion.md)
 - [Voxel mesh data plane](../topics/voxel/voxel-mesh-data-plane.md)
 - [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
+- [Reconstructed voxel surfaces](../topics/voxel/reconstructed-surfaces.md)
 - [Textured voxel campaign closeout](../textured-voxel-campaign-closeout.md)
 
 ## Public downstream surfaces
@@ -54,6 +55,9 @@ selection.
   application and game meaning. Capsule facts use the schema's right-handed
   local-Y axis and exclude caps from `halfHeight`; use the public endpoint and
   bounds helpers instead of importing a host API's capsule convention.
+- `VoxelObjectAdmissionOptions` can select a derived surface mode without
+  changing object bytes, hashes, frame facts, anchors, or collision. Runtime
+  aggregate mesh/scalar/material limits still apply across unique frames.
 
 ## Private or forbidden paths
 

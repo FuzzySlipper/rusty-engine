@@ -26,13 +26,20 @@ Inline payloads remain supported for bounded fixtures and consumers that do not
 need a bulk-data channel. `sharedBuffer` remains a separate transient
 borrow-handle seam; it is not a durable resource identity.
 
-Before either inline or packed projection, `svc-mesh` deterministically merges
+By default before either inline or packed projection, `svc-mesh` deterministically merges
 coplanar adjacent visible unit faces only when material slot and outward normal
 also match. This reduces redundant geometry without changing canonical voxel
 bytes, bounds, holes, relief, material boundaries, normals, winding, picking
 identity, or renderer ownership. Runtime admission continues to charge the
 unmerged visible-face count, so greedy compression does not relax its bounded
 work limit.
+
+Optional reconstructed presentations use the same packed data plane but emit
+positions, normals, indices, and material groups without tile coordinates, so
+they remain `packedStreamsLeV1`. Their scalar field, ambiguity/QEF rules,
+material attribution, texture rejection, and corpus evidence are defined in
+[reconstructed voxel surfaces](reconstructed-surfaces.md). They do not change
+canonical voxel-object schema 1 or the greedy default.
 
 Runtime tile-space attributes and atlas-region repetition preserve this exact
 partition. Their orientation, coordinate origin, sampling, and quota contract

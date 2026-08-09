@@ -15,9 +15,12 @@ entity-state	direct	definitions; capabilities; relationships; transforms; static
 environment-authoring	direct	preset and seed authoring; generated voxel scene and markers	typed materialization request and candidate receipts	tiny-enclosed preset seed managed asset instance palette and named player/exit targets implemented	M11F
 gameplay-mechanics	non-studio	reusable downstream gameplay mechanics	no Studio API	no mechanics state or editor authority	GM0-classification
 gameplay-rules	non-studio	optional semantic-neutral packages consumed by downstream compilers	no Studio API	no package payload or downstream semantic editor authority	GR0-classification
+render-host-contracts	non-studio	private native host composition input and readback contracts	no Studio API	no native host bridge or downstream gameplay authority	SDK-renderer-boundary
 render-model	indirect	retained renderer-neutral scene resources including static and animated meshes and operations	shared render frames produced by Rust owners	no canonical copy	M11D/M11E/M11F
 render-presentation	direct	animation audio billboard particle telemetry preview and diagnostics	versioned presentation frame and local controller operations	preview controls and presentation readouts	M11D/M11E
 render-projection	direct	authored entity voxel light static and animated appearance and clip projection	versioned renderer-neutral frame	no scene graph; channel selection only	M11B/M11D/M11E/M11F
+renderer-webview-host	non-studio	private downstream native child-webview realization	no Studio API	no native window event loop or private webview bridge	SDK-renderer-boundary
+rusty-engine	non-studio	downstream Rust SDK facade and feature-complete provider namespace	no Studio API	no alternate Studio transport or product authority	SDK-facade-boundary
 state-machine	downstream-only	project-specific state readout where the external adapter exposes it	project-adapter readout only	formatted observation; no generic editor	M11B/M11C
 svc-collision	indirect	authoritative picking and spatial validation through engine-spatial	engine-spatial operations only	no collision authority	M11E
 svc-mesh	indirect	voxel mesh derivation consumed by shared projection	engine-spatial and render projection output	no mesh cache	M11E

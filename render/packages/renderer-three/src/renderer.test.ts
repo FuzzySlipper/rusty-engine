@@ -1503,6 +1503,66 @@ void test('voxel-object frame failure is atomic and explicit release bounds GPU 
   assert.equal(disposed, 1);
 });
 
+void test('voxel surface redefinition, release, and reopen keep retained resources bounded', () => {
+  const renderer = new ThreeRenderer();
+  const handle = renderHandle(84);
+  const first = voxelObjectAsset({
+    meshes: [{ payload: { ...quadPayload(), provenance: 'voxelObject' } }],
+    frames: [{ id: 'default', mesh: 0 }],
+  });
+  renderer.applyDiff({ op: 'defineVoxelObject', asset: first });
+  renderer.applyDiff({
+    op: 'createVoxelObjectInstance', handle, parent: null, instance: voxelObjectInstance(),
+  });
+  const mesh = renderer.objectFor(handle) as THREE.Mesh;
+  const greedyGeometry = mesh.geometry;
+  const before = renderer.resourceStatistics();
+  let greedyDisposed = false;
+  greedyGeometry.addEventListener('dispose', () => { greedyDisposed = true; });
+
+  const reconstructedPayload = quadPayload();
+  if (reconstructedPayload.source.kind !== 'inline') throw new Error('surface fixture must remain inline');
+  const reconstructed = voxelObjectAsset({
+    contentHash: 'sha256:same-canonical-voxels-dual-contouring',
+    meshes: [{
+      payload: {
+        ...reconstructedPayload,
+        bounds: { min: [-0.1, 0, 0], max: [1.1, 1, 0] },
+        source: {
+          ...reconstructedPayload.source,
+          positions: [-0.1, 0, 0, 1.1, 0, 0, 1, 1, 0, 0, 1, 0],
+        },
+        provenance: 'voxelObject',
+      },
+    }],
+    frames: [{ id: 'default', mesh: 0 }],
+  });
+  renderer.applyDiff({ op: 'defineVoxelObject', asset: reconstructed });
+  assert.equal(renderer.objectFor(handle), mesh, 'surface replacement keeps the retained handle/object');
+  assert.notEqual(mesh.geometry, greedyGeometry);
+  assert.equal(greedyDisposed, true, 'superseded surface geometry is disposed');
+  assert.deepEqual(renderer.resourceStatistics(), before, 'surface replacement has no resource growth');
+
+  renderer.applyDiff({ op: 'destroy', handle });
+  renderer.applyDiff({ op: 'releaseVoxelObject', asset: reconstructed.asset });
+  assert.equal(renderer.resourceStatistics().geometryResourceCount, 0);
+  assert.equal(renderer.resourceStatistics().materialResourceCount, 0);
+
+  renderer.applyDiff({ op: 'defineVoxelObject', asset: first });
+  renderer.applyDiff({
+    op: 'createVoxelObjectInstance', handle, parent: null, instance: voxelObjectInstance(),
+  });
+  assert.deepEqual(renderer.resourceStatistics(), before, 'reopen restores exactly one retained set');
+  renderer.dispose();
+  assert.deepEqual(renderer.resourceStatistics(), {
+    renderHandleCount: 0,
+    geometryResourceCount: 0,
+    materialResourceCount: 0,
+    textureResourceCount: 0,
+    animatedInstanceCount: 0,
+  });
+});
+
 void test('two instances share one BufferGeometry and the asset is reference-counted', () => {
   const r = new ThreeRenderer();
   r.applyDiff({ op: 'defineStaticMesh', asset: crateAsset() });

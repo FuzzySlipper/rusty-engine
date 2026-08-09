@@ -1,3 +1,4 @@
+use svc_mesh::SurfaceMode;
 use voxel_asset::{
     encode_voxel_object, with_computed_voxel_object_hashes, VoxelAssetBounds,
     VoxelAssetMaterialBinding, VoxelAssetMaterialMapping, VoxelCoordinateSystem, VoxelFrame,
@@ -7,10 +8,10 @@ use voxel_asset::{
     VoxelSparseRun, VOXEL_OBJECT_SCHEMA_VERSION,
 };
 use voxel_object_runtime::{
-    admit_voxel_object, admit_voxel_object_json, VoxelObjectAdmissionError,
-    VoxelObjectCollisionPolicy, VoxelObjectCollisionResolution, VoxelObjectLoopMode,
-    VoxelObjectPlaybackRate, VoxelObjectPlaybackStatus, VoxelObjectPlayer, VoxelObjectPlayerError,
-    VoxelObjectRuntimeLimits,
+    admit_voxel_object, admit_voxel_object_json, admit_voxel_object_with_options,
+    VoxelObjectAdmissionError, VoxelObjectAdmissionOptions, VoxelObjectCollisionPolicy,
+    VoxelObjectCollisionResolution, VoxelObjectLoopMode, VoxelObjectPlaybackRate,
+    VoxelObjectPlaybackStatus, VoxelObjectPlayer, VoxelObjectPlayerError, VoxelObjectRuntimeLimits,
 };
 
 #[test]
@@ -114,6 +115,47 @@ fn strict_json_and_runtime_work_limits_fail_closed() {
     assert!(matches!(
         admit_voxel_object(&object(), tiny),
         Err(VoxelObjectAdmissionError::MeshFaceLimit { limit: 5, .. })
+    ));
+}
+
+#[test]
+fn reconstructed_surface_admission_covers_animation_and_aggregate_limits() {
+    for surface_mode in [SurfaceMode::MarchingCubes, SurfaceMode::DualContouring] {
+        let admitted = admit_voxel_object_with_options(
+            &object(),
+            VoxelObjectAdmissionOptions {
+                surface_mode,
+                ..VoxelObjectAdmissionOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(admitted.surface_mode(), surface_mode);
+        assert_eq!(admitted.readout().surface_mode, surface_mode);
+        assert!(admitted
+            .meshes()
+            .iter()
+            .all(|mesh| mesh.surface_mode == surface_mode && mesh.tile_coordinates.is_empty()));
+        assert_ne!(
+            admitted.frames()[2].mesh_index,
+            admitted.frames()[3].mesh_index,
+            "animation-frame replacement retains distinct reconstructed resources"
+        );
+    }
+
+    let error = admit_voxel_object_with_options(
+        &object(),
+        VoxelObjectAdmissionOptions {
+            surface_mode: SurfaceMode::DualContouring,
+            limits: VoxelObjectRuntimeLimits {
+                max_sampled_cells: 1,
+                ..VoxelObjectRuntimeLimits::default()
+            },
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        VoxelObjectAdmissionError::SampledCellLimit { limit: 1, .. }
     ));
 }
 

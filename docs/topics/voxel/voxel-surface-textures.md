@@ -17,9 +17,15 @@ greedy mesh, retained projection, and renderer paths:
    period; and
 3. **atlas tile** repeats only the content rectangle of one named atlas region.
 
+These mappings belong to `greedyCubes`. Optional reconstructed surfaces do not
+emit the exact cell-space tile-coordinate stream and reject textured material
+candidates before projection mutation. See
+[reconstructed voxel surfaces](reconstructed-surfaces.md); a color fallback is
+not an implementation of repeat or atlas mapping.
+
 Voxel cells and voxel-object frames continue to contain material slots, not
 texture facts. Material definitions own the presentation binding. `svc-mesh`
-owns the one greedy rectangle partition and tile-space vertex coordinates.
+owns the default greedy rectangle partition and tile-space vertex coordinates.
 `render-model` and `render-projection` own the renderer-neutral resource and
 material border. The isolated Three backend owns image decode, GPU resources,
 sampling realization, and derived shader/material lifecycle. Studio submits

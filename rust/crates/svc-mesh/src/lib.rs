@@ -33,7 +33,65 @@ use svc_spatial::VoxelWorld;
 use svc_volume::VoxelChunk;
 use texture_mapping::{project_voxel_surface_tile_point, VoxelTextureMappingError};
 
+mod surface;
 pub mod texture_mapping;
+
+/// Renderer-neutral derived presentation selected for canonical voxel facts.
+///
+/// Omission at every public caller remains [`GreedyCubes`](Self::GreedyCubes).
+/// Neither reconstructed mode changes voxel storage, collision, navigation, or
+/// edit semantics.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SurfaceMode {
+    #[default]
+    GreedyCubes,
+    MarchingCubes,
+    DualContouring,
+}
+
+impl SurfaceMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::GreedyCubes => "greedyCubes",
+            Self::MarchingCubes => "marchingCubes",
+            Self::DualContouring => "dualContouring",
+        }
+    }
+
+    pub const fn supports_voxel_tile_coordinates(self) -> bool {
+        matches!(self, Self::GreedyCubes)
+    }
+}
+
+/// Prospective work and retention ceilings for one derived mesh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SurfaceMeshLimits {
+    pub max_source_faces: u64,
+    pub max_sampled_cells: u64,
+    pub max_vertices: u32,
+    pub max_indices: u32,
+    pub max_temporary_field_bytes: u64,
+    pub max_material_partitions: u32,
+}
+
+impl Default for SurfaceMeshLimits {
+    fn default() -> Self {
+        Self {
+            max_source_faces: 2_000_000,
+            max_sampled_cells: 4_000_000,
+            max_vertices: 8_000_000,
+            max_indices: 12_000_000,
+            max_temporary_field_bytes: 256 * 1024 * 1024,
+            max_material_partitions: 4_096,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SurfaceMeshOptions {
+    pub mode: SurfaceMode,
+    pub limits: SurfaceMeshLimits,
+}
 
 /// One contiguous run of indices sharing a material slot — maps 1:1 to a
 /// `THREE.BufferGeometry` group (`addGroup(start, count, materialIndex)`).
@@ -56,8 +114,10 @@ pub struct MeshBounds {
 /// Debug counters for the mesher.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MeshStats {
+    pub surface_mode: SurfaceMode,
     pub vertices: u32,
     pub indices: u32,
+    pub triangles: u32,
     /// Greedy output rectangles.
     pub quads: u32,
     /// Greedy output rectangles, retained as the historical emitted-face name.
@@ -69,12 +129,19 @@ pub struct MeshStats {
     pub source_faces: u32,
     /// Faces culled because the neighbour was opaque (internal or resident border).
     pub faces_culled: u32,
+    /// Scalar cells inspected by reconstructed modes. Greedy cubes report 0.
+    pub sampled_cells: u64,
+    /// Dual-contouring cells whose Hermite system did not have full rank.
+    pub qef_rank_deficient: u32,
+    /// Dual-contouring cells that used the deterministic mass-point fallback.
+    pub qef_fallbacks: u32,
 }
 
 /// A renderable mesh for one chunk: separate `f32` attribute streams, a `u32`
 /// index stream, material-slot groups, bounds, and stats (ADR 0007).
 #[derive(Debug, Clone, PartialEq)]
 pub struct MeshPayload {
+    pub surface_mode: SurfaceMode,
     /// 3 `f32` per vertex (chunk-local).
     pub positions: Vec<f32>,
     /// 3 `f32` per vertex (outward face normal).
@@ -109,8 +176,25 @@ pub enum MeshError {
     },
     TooManyFaces {
         faces: u64,
+        limit: u64,
+    },
+    TooManySampledCells {
+        cells: u64,
+        limit: u64,
+    },
+    TooManyIndices {
+        indices: u64,
         limit: u32,
     },
+    TooManyMaterialPartitions {
+        partitions: u64,
+        limit: u32,
+    },
+    TemporaryFieldTooLarge {
+        bytes: u64,
+        limit: u64,
+    },
+    CoordinateRangeTooLarge,
     InvalidCellSize,
     InvalidPivot,
     DuplicateCell {
@@ -131,6 +215,26 @@ impl core::fmt::Display for MeshError {
             }
             MeshError::TooManyFaces { faces, limit } => {
                 write!(f, "mesh would emit {faces} faces; limit is {limit}")
+            }
+            MeshError::TooManySampledCells { cells, limit } => {
+                write!(
+                    f,
+                    "surface extraction would sample {cells} cells; limit is {limit}"
+                )
+            }
+            MeshError::TooManyIndices { indices, limit } => {
+                write!(f, "mesh would need {indices} indices; limit is {limit}")
+            }
+            MeshError::TooManyMaterialPartitions { partitions, limit } => write!(
+                f,
+                "mesh would need {partitions} material partitions; limit is {limit}"
+            ),
+            MeshError::TemporaryFieldTooLarge { bytes, limit } => write!(
+                f,
+                "surface extraction would retain {bytes} temporary field bytes; limit is {limit}"
+            ),
+            MeshError::CoordinateRangeTooLarge => {
+                write!(f, "surface extraction coordinate range is too large")
             }
             MeshError::InvalidCellSize => write!(f, "cell size must be finite and positive"),
             MeshError::InvalidPivot => write!(f, "pivot components must be finite"),
@@ -316,6 +420,29 @@ pub fn mesh_cells_standalone(
     cells: &[MeshVoxelCell],
     max_faces: u32,
 ) -> Result<MeshPayload, MeshError> {
+    mesh_cells_standalone_with_options(
+        cell_size,
+        pivot,
+        cells,
+        SurfaceMeshOptions {
+            limits: SurfaceMeshLimits {
+                max_source_faces: u64::from(max_faces),
+                ..SurfaceMeshLimits::default()
+            },
+            ..SurfaceMeshOptions::default()
+        },
+    )
+}
+
+/// Mesh a complete local-space cell arrangement with an explicit derived
+/// presentation mode. The sampled field and all reconstructed geometry remain
+/// disposable projections of `cells`.
+pub fn mesh_cells_standalone_with_options(
+    cell_size: f64,
+    pivot: [f64; 3],
+    cells: &[MeshVoxelCell],
+    options: SurfaceMeshOptions,
+) -> Result<MeshPayload, MeshError> {
     if !cell_size.is_finite() || cell_size <= 0.0 {
         return Err(MeshError::InvalidCellSize);
     }
@@ -333,6 +460,10 @@ pub fn mesh_cells_standalone(
                 coordinate: cell.coordinate,
             });
         }
+    }
+
+    if !matches!(options.mode, SurfaceMode::GreedyCubes) {
+        return surface::mesh_reconstructed_cells(cell_size, pivot, &occupied, options);
     }
 
     let mut faces = Vec::new();
@@ -355,10 +486,10 @@ pub fn mesh_cells_standalone(
                 faces_culled = faces_culled.saturating_add(1);
             } else {
                 let face_count = faces.len() as u64 + 1;
-                if face_count > u64::from(max_faces) {
+                if face_count > options.limits.max_source_faces {
                     return Err(MeshError::TooManyFaces {
                         faces: face_count,
-                        limit: max_faces,
+                        limit: options.limits.max_source_faces,
                     });
                 }
                 faces.push(Face {
@@ -372,7 +503,15 @@ pub fn mesh_cells_standalone(
 
     let source_faces = faces.len() as u32;
     let quads = greedy_merge_faces(faces)?;
-    emit_quads(&quads, cell_size, pivot, [0; 3], source_faces, faces_culled)
+    emit_quads(
+        &quads,
+        cell_size,
+        pivot,
+        [0; 3],
+        source_faces,
+        faces_culled,
+        options.limits,
+    )
 }
 
 /// Mesh a resident chunk using its **resident neighbour chunks** for border
@@ -391,6 +530,61 @@ pub fn mesh_chunk_in_world(
             .and_then(|ch| ch.get(l))
             .is_some_and(|x| x.is_opaque())
     }))
+}
+
+/// Mesh one resident chunk with an explicit reconstructed surface mode.
+///
+/// Reconstructed cells sample the complete resident one-chunk halo, then a
+/// primitive is assigned to the chunk containing its lexicographically first
+/// occupied sample (Marching Cubes) or its occupied crossing endpoint (Dual
+/// Contouring). Adjacent chunk calls therefore make identical face decisions
+/// without duplicating a primitive. Returned positions remain local to
+/// `coord`, matching the existing chunk transform contract.
+pub fn mesh_chunk_in_world_with_options(
+    world: &VoxelWorld,
+    coord: ChunkCoord,
+    options: SurfaceMeshOptions,
+) -> Option<Result<MeshPayload, MeshError>> {
+    if matches!(options.mode, SurfaceMode::GreedyCubes) {
+        return mesh_chunk_in_world(world, coord);
+    }
+    world.get(coord)?;
+    let spec = world.grid();
+    let origin = spec.chunk_origin_voxel(coord).to_array();
+    let dimensions = spec.chunk_dims().to_array().map(i64::from);
+    let maximum = match [
+        origin[0].checked_add(dimensions[0]),
+        origin[1].checked_add(dimensions[1]),
+        origin[2].checked_add(dimensions[2]),
+    ] {
+        [Some(x), Some(y), Some(z)] => [x, y, z],
+        _ => return Some(Err(MeshError::CoordinateRangeTooLarge)),
+    };
+    let mut occupied = BTreeMap::new();
+    for (resident_coord, chunk) in world.resident_chunks() {
+        if resident_coord.x.abs_diff(coord.x) > 1
+            || resident_coord.y.abs_diff(coord.y) > 1
+            || resident_coord.z.abs_diff(coord.z) > 1
+        {
+            continue;
+        }
+        for (local, value) in chunk.iter() {
+            let Some(material) = value.material() else {
+                continue;
+            };
+            occupied.insert(
+                spec.chunk_local_to_voxel(resident_coord, local).to_array(),
+                material.raw(),
+            );
+        }
+    }
+    Some(surface::mesh_reconstructed_cells_owned(
+        spec.voxel_size(),
+        origin.map(|value| value as f64),
+        &occupied,
+        options,
+        Some((origin, maximum)),
+    ))
 }
 
 /// Core mesher: `occupied(world_voxel)` answers whether a voxel is opaque (used
@@ -431,6 +625,7 @@ fn mesh_core(
         spec.chunk_origin_voxel(coord).to_array(),
         source_faces,
         faces_culled,
+        SurfaceMeshLimits::default(),
     )
 }
 
@@ -441,11 +636,30 @@ fn emit_quads(
     texture_coordinate_origin: [i64; 3],
     source_faces: u32,
     faces_culled: u32,
+    limits: SurfaceMeshLimits,
 ) -> Result<MeshPayload, MeshError> {
     let vertex_count = quads.len() as u64 * 4;
-    if vertex_count > u32::MAX as u64 {
+    if vertex_count > u64::from(limits.max_vertices) {
         return Err(MeshError::TooManyVertices {
             vertices: vertex_count,
+        });
+    }
+    let index_count = quads.len() as u64 * 6;
+    if index_count > u64::from(limits.max_indices) {
+        return Err(MeshError::TooManyIndices {
+            indices: index_count,
+            limit: limits.max_indices,
+        });
+    }
+    let material_partitions = quads
+        .iter()
+        .map(|quad| quad.slot)
+        .collect::<BTreeSet<_>>()
+        .len() as u64;
+    if material_partitions > u64::from(limits.max_material_partitions) {
+        return Err(MeshError::TooManyMaterialPartitions {
+            partitions: material_partitions,
+            limit: limits.max_material_partitions,
         });
     }
 
@@ -519,14 +733,20 @@ fn emit_quads(
         }
     };
     let stats = MeshStats {
+        surface_mode: SurfaceMode::GreedyCubes,
         vertices: (positions.len() / 3) as u32,
         indices: indices.len() as u32,
+        triangles: (indices.len() / 3) as u32,
         quads: quads.len() as u32,
         faces_emitted: quads.len() as u32,
         source_faces,
         faces_culled,
+        sampled_cells: 0,
+        qef_rank_deficient: 0,
+        qef_fallbacks: 0,
     };
     Ok(MeshPayload {
+        surface_mode: SurfaceMode::GreedyCubes,
         positions,
         normals,
         tile_coordinates,
@@ -773,6 +993,281 @@ mod tests {
             mesh_cells_standalone(1.0, [0.0; 3], &cells, 5),
             Err(MeshError::TooManyFaces { faces: 6, limit: 5 })
         );
+    }
+
+    fn reconstructed(mode: SurfaceMode, cells: &[MeshVoxelCell]) -> MeshPayload {
+        mesh_cells_standalone_with_options(
+            1.0,
+            [0.0; 3],
+            cells,
+            SurfaceMeshOptions {
+                mode,
+                ..SurfaceMeshOptions::default()
+            },
+        )
+        .unwrap()
+    }
+
+    fn assert_valid_reconstructed(mesh: &MeshPayload, mode: SurfaceMode) {
+        assert_eq!(mesh.surface_mode, mode);
+        assert_eq!(mesh.stats.surface_mode, mode);
+        assert!(mesh.tile_coordinates.is_empty());
+        assert_eq!(mesh.positions.len(), mesh.stats.vertices as usize * 3);
+        assert_eq!(mesh.normals.len(), mesh.stats.vertices as usize * 3);
+        assert_eq!(mesh.indices.len(), mesh.stats.indices as usize);
+        assert_eq!(mesh.indices.len() % 3, 0);
+        assert!(mesh.positions.iter().all(|value| value.is_finite()));
+        assert!(mesh.normals.iter().all(|value| value.is_finite()));
+        assert!(mesh
+            .indices
+            .iter()
+            .all(|index| *index < mesh.stats.vertices));
+        assert_eq!(
+            mesh.groups.iter().map(|group| group.count).sum::<u32>(),
+            mesh.stats.indices
+        );
+        for normal in mesh.normals.chunks_exact(3) {
+            let length =
+                (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+            assert!((length - 1.0).abs() < 1.0e-4, "normal={normal:?}");
+        }
+    }
+
+    fn fixture_hash(mesh: &MeshPayload) -> String {
+        // FNV-1a keeps this regression fingerprint dependency-free and makes
+        // the exact checked bytes visible through `to_fixture_string`.
+        let fixture = format!("mode={:?}\n{}", mesh.surface_mode, mesh.to_fixture_string());
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+        for byte in fixture.bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        format!("{hash:016x}")
+    }
+
+    #[test]
+    fn every_surface_mode_matches_its_committed_golden_hash() {
+        let cells = [
+            MeshVoxelCell {
+                coordinate: [-1, 0, 0],
+                material_slot: 2,
+            },
+            MeshVoxelCell {
+                coordinate: [0, 0, 0],
+                material_slot: 1,
+            },
+            MeshVoxelCell {
+                coordinate: [0, 1, 0],
+                material_slot: 1,
+            },
+            MeshVoxelCell {
+                coordinate: [0, 1, 1],
+                material_slot: 3,
+            },
+        ];
+        let actual = [
+            fixture_hash(&reconstructed(SurfaceMode::GreedyCubes, &cells)),
+            fixture_hash(&reconstructed(SurfaceMode::MarchingCubes, &cells)),
+            fixture_hash(&reconstructed(SurfaceMode::DualContouring, &cells)),
+        ];
+        assert_eq!(
+            actual,
+            ["4f5f3ad142b288fb", "9921ac6f9a29b267", "f9323127d86a2e2a",]
+        );
+    }
+
+    #[test]
+    fn reconstructed_modes_are_deterministic_for_adversarial_voxel_topologies() {
+        let fixtures = [
+            vec![MeshVoxelCell {
+                coordinate: [-2, 3, -1],
+                material_slot: 1,
+            }],
+            vec![
+                MeshVoxelCell {
+                    coordinate: [0, 0, 0],
+                    material_slot: 1,
+                },
+                MeshVoxelCell {
+                    coordinate: [1, 1, 1],
+                    material_slot: 2,
+                },
+            ],
+            (0..4)
+                .flat_map(|x| {
+                    (0..4).filter_map(move |z| {
+                        (x != 1 || z != 1).then_some(MeshVoxelCell {
+                            coordinate: [x, 0, z],
+                            material_slot: if x < 2 { 3 } else { 4 },
+                        })
+                    })
+                })
+                .collect(),
+            (0..3)
+                .flat_map(|x| {
+                    (0..3).flat_map(move |y| {
+                        (0..3).filter_map(move |z| {
+                            (x == 0 || x == 2 || y == 0 || y == 2 || z == 0 || z == 2).then_some(
+                                MeshVoxelCell {
+                                    coordinate: [x, y, z],
+                                    material_slot: 5,
+                                },
+                            )
+                        })
+                    })
+                })
+                .collect(),
+            vec![
+                MeshVoxelCell {
+                    coordinate: [-3, 0, 0],
+                    material_slot: 6,
+                },
+                MeshVoxelCell {
+                    coordinate: [3, 0, 0],
+                    material_slot: 7,
+                },
+            ],
+        ];
+        for mode in [SurfaceMode::MarchingCubes, SurfaceMode::DualContouring] {
+            for cells in &fixtures {
+                let first = reconstructed(mode, cells);
+                let mut reversed = cells.clone();
+                reversed.reverse();
+                let second = reconstructed(mode, &reversed);
+                assert_eq!(first, second, "mode={mode:?} cells={cells:?}");
+                assert_valid_reconstructed(&first, mode);
+            }
+        }
+    }
+
+    #[test]
+    fn marching_cubes_exercises_every_binary_cube_case_without_invalid_geometry() {
+        for case in 0_u16..=255 {
+            let cells = (0..8)
+                .filter(|corner| case & (1 << corner) != 0)
+                .map(|corner| MeshVoxelCell {
+                    coordinate: [
+                        i64::from((corner == 1 || corner == 2 || corner == 5 || corner == 6) as u8),
+                        i64::from((corner == 2 || corner == 3 || corner == 6 || corner == 7) as u8),
+                        i64::from((corner >= 4) as u8),
+                    ],
+                    material_slot: 1,
+                })
+                .collect::<Vec<_>>();
+            let mesh = reconstructed(SurfaceMode::MarchingCubes, &cells);
+            assert_valid_reconstructed(&mesh, SurfaceMode::MarchingCubes);
+        }
+    }
+
+    #[test]
+    fn reconstructed_quotas_reject_prospectively() {
+        let cells = [
+            MeshVoxelCell {
+                coordinate: [0, 0, 0],
+                material_slot: 1,
+            },
+            MeshVoxelCell {
+                coordinate: [100, 100, 100],
+                material_slot: 1,
+            },
+        ];
+        let error = mesh_cells_standalone_with_options(
+            1.0,
+            [0.0; 3],
+            &cells,
+            SurfaceMeshOptions {
+                mode: SurfaceMode::DualContouring,
+                limits: SurfaceMeshLimits {
+                    max_sampled_cells: 1_000,
+                    ..SurfaceMeshLimits::default()
+                },
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, MeshError::TooManySampledCells { .. }));
+
+        let error = mesh_cells_standalone_with_options(
+            1.0,
+            [0.0; 3],
+            &cells[..1],
+            SurfaceMeshOptions {
+                mode: SurfaceMode::MarchingCubes,
+                limits: SurfaceMeshLimits {
+                    max_vertices: 1,
+                    ..SurfaceMeshLimits::default()
+                },
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, MeshError::TooManyVertices { .. }));
+    }
+
+    fn triangle_positions(mesh: &MeshPayload, translation: [f32; 3]) -> Vec<Vec<[i32; 3]>> {
+        let mut triangles = mesh
+            .indices
+            .chunks_exact(3)
+            .map(|triangle| {
+                let mut points = triangle
+                    .iter()
+                    .map(|index| {
+                        let offset = *index as usize * 3;
+                        std::array::from_fn(|axis| {
+                            ((mesh.positions[offset + axis] + translation[axis]) * 1_000_000.0)
+                                .round() as i32
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                points.sort_unstable();
+                points
+            })
+            .collect::<Vec<_>>();
+        triangles.sort_unstable();
+        triangles
+    }
+
+    #[test]
+    fn reconstructed_world_chunks_match_one_global_surface_without_seam_cracks() {
+        let mut world = VoxelWorld::new(spec());
+        let mut left = VoxelChunk::from_spec(&spec());
+        left.set(l(3, 1, 1), VoxelValue::solid_raw(1)).unwrap();
+        let mut right = VoxelChunk::from_spec(&spec());
+        right.set(l(0, 1, 1), VoxelValue::solid_raw(1)).unwrap();
+        world.insert(ChunkCoord::new(0, 0, 0), left);
+        world.insert(ChunkCoord::new(1, 0, 0), right);
+        world.drain_dirty();
+
+        let global_cells = [
+            MeshVoxelCell {
+                coordinate: [3, 1, 1],
+                material_slot: 1,
+            },
+            MeshVoxelCell {
+                coordinate: [4, 1, 1],
+                material_slot: 1,
+            },
+        ];
+        for mode in [SurfaceMode::MarchingCubes, SurfaceMode::DualContouring] {
+            let options = SurfaceMeshOptions {
+                mode,
+                ..SurfaceMeshOptions::default()
+            };
+            let global =
+                mesh_cells_standalone_with_options(1.0, [0.0; 3], &global_cells, options).unwrap();
+            let left = mesh_chunk_in_world_with_options(&world, ChunkCoord::new(0, 0, 0), options)
+                .unwrap()
+                .unwrap();
+            let right = mesh_chunk_in_world_with_options(&world, ChunkCoord::new(1, 0, 0), options)
+                .unwrap()
+                .unwrap();
+            let mut partitioned = triangle_positions(&left, [0.0; 3]);
+            partitioned.extend(triangle_positions(&right, [4.0, 0.0, 0.0]));
+            partitioned.sort_unstable();
+            assert_eq!(
+                partitioned,
+                triangle_positions(&global, [0.0; 3]),
+                "mode={mode:?}"
+            );
+        }
     }
 
     #[test]

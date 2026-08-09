@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use svc_mesh::MeshPayload;
+use svc_mesh::{MeshPayload, SurfaceMode};
 use voxel_asset::{
     VoxelFrameCell, VoxelObjectAsset, VoxelObjectFrameAnchor, VoxelObjectFrameCollision,
 };
@@ -13,6 +13,11 @@ pub struct VoxelObjectRuntimeLimits {
     pub max_resolved_voxels: u64,
     /// Aggregate visible unit faces before deterministic greedy compression.
     pub max_unique_mesh_faces: u64,
+    pub max_unique_mesh_vertices: u64,
+    pub max_unique_mesh_indices: u64,
+    pub max_sampled_cells: u64,
+    pub max_temporary_field_bytes: u64,
+    pub max_material_partitions: u32,
 }
 
 impl Default for VoxelObjectRuntimeLimits {
@@ -21,8 +26,19 @@ impl Default for VoxelObjectRuntimeLimits {
             max_frames: 8_193,
             max_resolved_voxels: 16_777_216,
             max_unique_mesh_faces: 2_000_000,
+            max_unique_mesh_vertices: 8_000_000,
+            max_unique_mesh_indices: 12_000_000,
+            max_sampled_cells: 16_000_000,
+            max_temporary_field_bytes: 256 * 1024 * 1024,
+            max_material_partitions: 4_096,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VoxelObjectAdmissionOptions {
+    pub limits: VoxelObjectRuntimeLimits,
+    pub surface_mode: SurfaceMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +82,7 @@ pub struct AdmittedVoxelObject {
     frames: Vec<VoxelObjectRuntimeFrame>,
     clips: Vec<VoxelObjectRuntimeClip>,
     meshes: Vec<Arc<MeshPayload>>,
+    surface_mode: SurfaceMode,
 }
 
 impl AdmittedVoxelObject {
@@ -74,12 +91,14 @@ impl AdmittedVoxelObject {
         frames: Vec<VoxelObjectRuntimeFrame>,
         clips: Vec<VoxelObjectRuntimeClip>,
         meshes: Vec<Arc<MeshPayload>>,
+        surface_mode: SurfaceMode,
     ) -> Self {
         Self {
             source,
             frames,
             clips,
             meshes,
+            surface_mode,
         }
     }
 
@@ -123,6 +142,10 @@ impl AdmittedVoxelObject {
         &self.meshes
     }
 
+    pub fn surface_mode(&self) -> SurfaceMode {
+        self.surface_mode
+    }
+
     pub fn readout(&self) -> VoxelObjectReadout<'_> {
         VoxelObjectReadout {
             asset_id: self.asset_id(),
@@ -131,6 +154,7 @@ impl AdmittedVoxelObject {
             frame_count: self.frames.len() as u32,
             clip_count: self.clips.len() as u32,
             unique_mesh_count: self.meshes.len() as u32,
+            surface_mode: self.surface_mode,
         }
     }
 }
@@ -143,4 +167,5 @@ pub struct VoxelObjectReadout<'a> {
     pub frame_count: u32,
     pub clip_count: u32,
     pub unique_mesh_count: u32,
+    pub surface_mode: SurfaceMode,
 }

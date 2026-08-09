@@ -44,6 +44,7 @@ viewport, and its closed external-project adapter protocol.
 - [Downstream Engine revision contract](../topics/development/downstream-engine-revisions.md)
 - [Voxel mesh data plane](../topics/voxel/voxel-mesh-data-plane.md)
 - [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
+- [Reconstructed voxel surfaces](../topics/voxel/reconstructed-surfaces.md)
 - [Textured voxel campaign closeout](../textured-voxel-campaign-closeout.md)
 
 ## Public downstream surfaces
@@ -108,6 +109,10 @@ viewport, and its closed external-project adapter protocol.
   `setAnimatedMeshPlayback` are the corresponding generic agent/tool seam.
   They remain channel-checked, handle-checked, renderer-owned, and lifecycle
   bounded; Studio exposes no Three scene, mixer, loader, or WebGL object.
+- `studio/test/voxel-surface-comparison` is an explicit evidence harness over
+  the public Studio viewport-submission helper and shared inspection surface.
+  It is not a project setting or a second mesh owner; the caller supplies
+  Rust-projected frames and content-addressed resources.
 
 ## Private or forbidden paths
 

@@ -2607,6 +2607,7 @@ name = "render-projection"
 version = "0.1.0"
 dependencies = [
  "asset-catalog",
+ "base64",
  "core-assets",
  "core-ids",
  "core-math",

@@ -1,6 +1,9 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use svc_mesh::{mesh_cells_standalone, MeshError, MeshVoxelCell};
+use svc_mesh::{
+    mesh_cells_standalone_with_options, MeshError, MeshVoxelCell, SurfaceMeshLimits,
+    SurfaceMeshOptions,
+};
 use voxel_asset::{
     canonicalize_voxel_object, decode_voxel_object, VoxelFrameCell, VoxelObjectAsset,
     VoxelObjectError, VoxelObjectFrameAnchor, VoxelObjectFrameCollision,
@@ -8,8 +11,8 @@ use voxel_asset::{
 };
 
 use crate::{
-    AdmittedVoxelObject, VoxelObjectFrameSource, VoxelObjectRuntimeClip, VoxelObjectRuntimeFrame,
-    VoxelObjectRuntimeLimits,
+    AdmittedVoxelObject, VoxelObjectAdmissionOptions, VoxelObjectFrameSource,
+    VoxelObjectRuntimeClip, VoxelObjectRuntimeFrame, VoxelObjectRuntimeLimits,
 };
 
 #[derive(Debug)]
@@ -20,6 +23,10 @@ pub enum VoxelObjectAdmissionError {
     FrameLimit { count: u64, limit: u32 },
     ResolvedVoxelLimit { count: u64, limit: u64 },
     MeshFaceLimit { count: u64, limit: u64 },
+    MeshVertexLimit { count: u64, limit: u64 },
+    MeshIndexLimit { count: u64, limit: u64 },
+    SampledCellLimit { count: u64, limit: u64 },
+    MaterialPartitionLimit { count: u64, limit: u32 },
     DurationOverflow { clip: String },
 }
 
@@ -42,6 +49,22 @@ impl std::fmt::Display for VoxelObjectAdmissionError {
             Self::MeshFaceLimit { count, limit } => write!(
                 formatter,
                 "voxel object creates {count} unique mesh faces; runtime limit is {limit}"
+            ),
+            Self::MeshVertexLimit { count, limit } => write!(
+                formatter,
+                "voxel object retains {count} unique mesh vertices; runtime limit is {limit}"
+            ),
+            Self::MeshIndexLimit { count, limit } => write!(
+                formatter,
+                "voxel object retains {count} unique mesh indices; runtime limit is {limit}"
+            ),
+            Self::SampledCellLimit { count, limit } => write!(
+                formatter,
+                "voxel object samples {count} aggregate scalar cells; runtime limit is {limit}"
+            ),
+            Self::MaterialPartitionLimit { count, limit } => write!(
+                formatter,
+                "voxel object retains {count} aggregate material partitions; runtime limit is {limit}"
             ),
             Self::DurationOverflow { clip } => {
                 write!(
@@ -67,6 +90,19 @@ pub fn admit_voxel_object(
     object: &VoxelObjectAsset,
     limits: VoxelObjectRuntimeLimits,
 ) -> Result<AdmittedVoxelObject, VoxelObjectAdmissionError> {
+    admit_voxel_object_with_options(
+        object,
+        VoxelObjectAdmissionOptions {
+            limits,
+            ..VoxelObjectAdmissionOptions::default()
+        },
+    )
+}
+
+pub fn admit_voxel_object_with_options(
+    object: &VoxelObjectAsset,
+    options: VoxelObjectAdmissionOptions,
+) -> Result<AdmittedVoxelObject, VoxelObjectAdmissionError> {
     let object = canonicalize_voxel_object(object).map_err(VoxelObjectAdmissionError::Asset)?;
     let frame_count = object
         .clips
@@ -75,14 +111,14 @@ pub fn admit_voxel_object(
             count.checked_add(clip.frames.len() as u64)
         })
         .unwrap_or(u64::MAX);
-    if frame_count > u64::from(limits.max_frames) {
+    if frame_count > u64::from(options.limits.max_frames) {
         return Err(VoxelObjectAdmissionError::FrameLimit {
             count: frame_count,
-            limit: limits.max_frames,
+            limit: options.limits.max_frames,
         });
     }
 
-    let mut builder = AdmissionBuilder::new(&object, limits);
+    let mut builder = AdmissionBuilder::new(&object, options);
     let default_cells = object
         .resolve_default_frame()
         .map_err(VoxelObjectAdmissionError::Frame)?;
@@ -136,7 +172,13 @@ pub fn admit_voxel_object(
     }
 
     let (frames, meshes) = builder.finish();
-    Ok(AdmittedVoxelObject::new(object, frames, clips, meshes))
+    Ok(AdmittedVoxelObject::new(
+        object,
+        frames,
+        clips,
+        meshes,
+        options.surface_mode,
+    ))
 }
 
 fn seconds_to_micros(seconds: f64) -> u64 {
@@ -145,24 +187,32 @@ fn seconds_to_micros(seconds: f64) -> u64 {
 
 struct AdmissionBuilder<'a> {
     object: &'a VoxelObjectAsset,
-    limits: VoxelObjectRuntimeLimits,
+    options: VoxelObjectAdmissionOptions,
     frames: Vec<VoxelObjectRuntimeFrame>,
     meshes: Vec<Arc<svc_mesh::MeshPayload>>,
     meshes_by_hash: BTreeMap<String, u32>,
     resolved_voxels: u64,
     unique_mesh_faces: u64,
+    unique_mesh_vertices: u64,
+    unique_mesh_indices: u64,
+    sampled_cells: u64,
+    material_partitions: u64,
 }
 
 impl<'a> AdmissionBuilder<'a> {
-    fn new(object: &'a VoxelObjectAsset, limits: VoxelObjectRuntimeLimits) -> Self {
+    fn new(object: &'a VoxelObjectAsset, options: VoxelObjectAdmissionOptions) -> Self {
         Self {
             object,
-            limits,
+            options,
             frames: Vec::new(),
             meshes: Vec::new(),
             meshes_by_hash: BTreeMap::new(),
             resolved_voxels: 0,
             unique_mesh_faces: 0,
+            unique_mesh_vertices: 0,
+            unique_mesh_indices: 0,
+            sampled_cells: 0,
+            material_partitions: 0,
         }
     }
 
@@ -175,10 +225,10 @@ impl<'a> AdmissionBuilder<'a> {
         collision: Option<VoxelObjectFrameCollision>,
     ) -> Result<u32, VoxelObjectAdmissionError> {
         self.resolved_voxels = self.resolved_voxels.saturating_add(cells.len() as u64);
-        if self.resolved_voxels > self.limits.max_resolved_voxels {
+        if self.resolved_voxels > self.options.limits.max_resolved_voxels {
             return Err(VoxelObjectAdmissionError::ResolvedVoxelLimit {
                 count: self.resolved_voxels,
-                limit: self.limits.max_resolved_voxels,
+                limit: self.options.limits.max_resolved_voxels,
             });
         }
 
@@ -187,6 +237,7 @@ impl<'a> AdmissionBuilder<'a> {
             *index
         } else {
             let remaining = self
+                .options
                 .limits
                 .max_unique_mesh_faces
                 .saturating_sub(self.unique_mesh_faces)
@@ -198,28 +249,93 @@ impl<'a> AdmissionBuilder<'a> {
                     material_slot: cell.material_slot,
                 })
                 .collect::<Vec<_>>();
-            let mesh = mesh_cells_standalone(
+            let remaining_vertices = self
+                .options
+                .limits
+                .max_unique_mesh_vertices
+                .saturating_sub(self.unique_mesh_vertices)
+                .min(u64::from(u32::MAX)) as u32;
+            let remaining_indices = self
+                .options
+                .limits
+                .max_unique_mesh_indices
+                .saturating_sub(self.unique_mesh_indices)
+                .min(u64::from(u32::MAX)) as u32;
+            let remaining_sampled_cells = self
+                .options
+                .limits
+                .max_sampled_cells
+                .saturating_sub(self.sampled_cells);
+            let remaining_material_partitions =
+                u64::from(self.options.limits.max_material_partitions)
+                    .saturating_sub(self.material_partitions)
+                    .min(u64::from(u32::MAX)) as u32;
+            let mesh = mesh_cells_standalone_with_options(
                 self.object.grid.cell_size,
                 self.object.grid.pivot,
                 &mesh_cells,
-                remaining,
+                SurfaceMeshOptions {
+                    mode: self.options.surface_mode,
+                    limits: SurfaceMeshLimits {
+                        max_source_faces: u64::from(remaining),
+                        max_sampled_cells: remaining_sampled_cells,
+                        max_vertices: remaining_vertices,
+                        max_indices: remaining_indices,
+                        max_temporary_field_bytes: self.options.limits.max_temporary_field_bytes,
+                        max_material_partitions: remaining_material_partitions,
+                    },
+                },
             )
             .map_err(|error| match error {
                 MeshError::TooManyFaces { faces, .. } => VoxelObjectAdmissionError::MeshFaceLimit {
                     count: self.unique_mesh_faces.saturating_add(faces),
-                    limit: self.limits.max_unique_mesh_faces,
+                    limit: self.options.limits.max_unique_mesh_faces,
                 },
+                MeshError::TooManyVertices { vertices } => {
+                    VoxelObjectAdmissionError::MeshVertexLimit {
+                        count: self.unique_mesh_vertices.saturating_add(vertices),
+                        limit: self.options.limits.max_unique_mesh_vertices,
+                    }
+                }
+                MeshError::TooManyIndices { indices, .. } => {
+                    VoxelObjectAdmissionError::MeshIndexLimit {
+                        count: self.unique_mesh_indices.saturating_add(indices),
+                        limit: self.options.limits.max_unique_mesh_indices,
+                    }
+                }
+                MeshError::TooManySampledCells { cells, .. } => {
+                    VoxelObjectAdmissionError::SampledCellLimit {
+                        count: self.sampled_cells.saturating_add(cells),
+                        limit: self.options.limits.max_sampled_cells,
+                    }
+                }
+                MeshError::TooManyMaterialPartitions { partitions, .. } => {
+                    VoxelObjectAdmissionError::MaterialPartitionLimit {
+                        count: self.material_partitions.saturating_add(partitions),
+                        limit: self.options.limits.max_material_partitions,
+                    }
+                }
                 other => VoxelObjectAdmissionError::Mesh(other),
             })?;
             self.unique_mesh_faces = self
                 .unique_mesh_faces
                 .saturating_add(u64::from(mesh.stats.source_faces));
-            if self.unique_mesh_faces > self.limits.max_unique_mesh_faces {
+            if self.unique_mesh_faces > self.options.limits.max_unique_mesh_faces {
                 return Err(VoxelObjectAdmissionError::MeshFaceLimit {
                     count: self.unique_mesh_faces,
-                    limit: self.limits.max_unique_mesh_faces,
+                    limit: self.options.limits.max_unique_mesh_faces,
                 });
             }
+            self.unique_mesh_vertices = self
+                .unique_mesh_vertices
+                .saturating_add(u64::from(mesh.stats.vertices));
+            self.unique_mesh_indices = self
+                .unique_mesh_indices
+                .saturating_add(u64::from(mesh.stats.indices));
+            self.sampled_cells = self.sampled_cells.saturating_add(mesh.stats.sampled_cells);
+            self.material_partitions = self
+                .material_partitions
+                .saturating_add(mesh.groups.len() as u64);
             let index = self.meshes.len() as u32;
             self.meshes.push(Arc::new(mesh));
             self.meshes_by_hash.insert(voxel_data_hash.clone(), index);

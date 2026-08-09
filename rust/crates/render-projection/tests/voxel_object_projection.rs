@@ -6,6 +6,7 @@ use render_model::{
     VoxelSurfaceDescriptor, VoxelSurfaceMappingDescriptor,
 };
 use render_projection::{VoxelObjectProjectionInstance, VoxelObjectRenderProjector};
+use svc_mesh::SurfaceMode;
 use voxel_asset::{
     with_computed_voxel_object_hashes, VoxelAssetBounds, VoxelAssetMaterialBinding,
     VoxelAssetMaterialMapping, VoxelCoordinateSystem, VoxelFrame, VoxelObjectAnimationFrame,
@@ -14,8 +15,8 @@ use voxel_asset::{
     VOXEL_OBJECT_SCHEMA_VERSION,
 };
 use voxel_object_runtime::{
-    admit_voxel_object, VoxelObjectLoopMode, VoxelObjectPlaybackStatus, VoxelObjectPlayer,
-    VoxelObjectRuntimeLimits,
+    admit_voxel_object, admit_voxel_object_with_options, VoxelObjectAdmissionOptions,
+    VoxelObjectLoopMode, VoxelObjectPlaybackStatus, VoxelObjectPlayer, VoxelObjectRuntimeLimits,
 };
 
 #[test]
@@ -153,6 +154,80 @@ fn packed_projection_moves_mesh_streams_out_of_the_control_frame() {
     let unchanged = packed_projector.project(&instances, &materials()).unwrap();
     assert!(unchanged.mesh_resources.is_empty());
     assert!(unchanged.frame.ops.is_empty());
+}
+
+#[test]
+fn surface_mode_redefinition_keeps_handle_and_replaces_live_geometry() {
+    let greedy = admitted();
+    let marching = admitted_with_surface(SurfaceMode::MarchingCubes);
+    let dual = admitted_with_surface(SurfaceMode::DualContouring);
+    let mut projector = VoxelObjectRenderProjector::new();
+    projector
+        .project(&[instance(&greedy, 0)], &materials())
+        .unwrap();
+    let handle = projector.handle("runner").unwrap();
+
+    for (object, mode) in [
+        (&marching, SurfaceMode::MarchingCubes),
+        (&dual, SurfaceMode::DualContouring),
+    ] {
+        let replaced = projector
+            .project(&[instance(object, 0)], &materials())
+            .unwrap();
+        assert_eq!(projector.handle("runner"), Some(handle));
+        assert_eq!(replaced.readout.surface_modes["voxel-object/runner"], mode);
+        assert_eq!(
+            replaced.readout.materialized_resources,
+            vec!["voxel-object/runner"]
+        );
+        assert!(replaced
+            .frame
+            .ops
+            .iter()
+            .any(|operation| matches!(operation, RenderDiff::DefineVoxelObject { .. })));
+    }
+}
+
+#[test]
+fn reconstructed_meshes_pack_as_uv_free_v1_and_reject_textured_materials() {
+    let marching = admitted_with_surface(SurfaceMode::MarchingCubes);
+    let instances = [instance(&marching, 0)];
+    let packed = VoxelObjectRenderProjector::with_packed_mesh_resources()
+        .project(&instances, &materials())
+        .unwrap();
+    let asset = packed
+        .frame
+        .ops
+        .iter()
+        .find_map(|operation| match operation {
+            RenderDiff::DefineVoxelObject { asset } => Some(asset),
+            _ => None,
+        })
+        .unwrap();
+    assert!(asset.meshes.iter().all(|mesh| matches!(
+        mesh.payload.source,
+        MeshPayloadSource::Resource {
+            encoding: render_model::MeshResourceEncoding::PackedStreamsLeV1,
+            uvs_byte_offset: None,
+            ..
+        }
+    )));
+
+    let mut textured = material("material/runner", [0.8, 0.2, 0.1, 1.0]);
+    textured.texture = Some("texture/runner-tile".to_string());
+    let error = VoxelObjectRenderProjector::new()
+        .project(
+            &instances,
+            &BTreeMap::from([(textured.id.clone(), textured)]),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        render_projection::VoxelObjectProjectionError::TexturedSurfaceUnsupported {
+            surface_mode: SurfaceMode::MarchingCubes,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -321,6 +396,17 @@ fn material(id: &str, color: [f32; 4]) -> RenderMaterialDescriptor {
 
 fn admitted() -> voxel_object_runtime::AdmittedVoxelObject {
     admit_voxel_object(&object(), VoxelObjectRuntimeLimits::default()).unwrap()
+}
+
+fn admitted_with_surface(surface_mode: SurfaceMode) -> voxel_object_runtime::AdmittedVoxelObject {
+    admit_voxel_object_with_options(
+        &object(),
+        VoxelObjectAdmissionOptions {
+            surface_mode,
+            ..VoxelObjectAdmissionOptions::default()
+        },
+    )
+    .unwrap()
 }
 
 fn object() -> VoxelObjectAsset {

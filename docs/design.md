@@ -449,8 +449,8 @@ These crates expose mechanism rather than policy. For example, `svc-pathfinding`
 but does not own AI intent; `svc-rng` creates a scoped deterministic stream but does not decide what
 is random; `svc-mesh` emits geometry but owns no renderer.
 
-Runtime voxel surface textures preserve that boundary and the single greedy mesher. The mesher
-projects canonical integer grid points into a deterministic outward-facing tile basis; material
+Runtime voxel surface textures preserve that boundary and the default greedy mesher. The greedy
+path projects canonical integer grid points into a deterministic outward-facing tile basis; material
 definitions own color-only, whole-texture repeat, or atlas-region repeat; renderer-neutral frames
 own bounded content-addressed encoded resources; and the isolated backend owns decode, GPU sampling,
 and disposal. Atlas repetition happens inside the assigned region through a derived sampling
@@ -460,6 +460,15 @@ selected formats, orientation, sampling, quotas, and failure behavior are fixed 
 [the runtime voxel surface texture decision](topics/voxel/voxel-surface-textures.md). The exact
 provider-to-consumer ownership chain, measured geometry/resource costs, and deliberate stopping point
 are recorded in the [textured voxel campaign closeout](textured-voxel-campaign-closeout.md).
+
+Optional `marchingCubes` and `dualContouring` modes are deterministic derived presentations over
+the same canonical facts. They share one explicit binary center-sampled scalar field but retain
+independent contour construction: Marching Cubes owns deterministic face/interior ambiguity rules,
+while Dual Contouring owns Hermite samples and a bounded rank-aware QEF solve. Neither enters
+collision, navigation, persistence, or gameplay queries. Reconstructed modes have no stable
+tile/atlas UV projection and reject textured materials before mutation. Their experimental scope,
+real-corpus measurements, provenance, and limitations are fixed in
+[reconstructed voxel surfaces](topics/voxel/reconstructed-surfaces.md).
 
 ## Shared rendering boundary
 

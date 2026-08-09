@@ -16,6 +16,11 @@ The completed runtime voxel texture/atlas owner chain, exact public Studio
 consumer, measured costs, and deliberate stopping point are indexed in the
 [textured voxel campaign closeout](textured-voxel-campaign-closeout.md).
 
+The optional experimental Marching Cubes and Dual Contouring presentation
+paths, scalar-field/QEF rules, real-corpus comparison, and texture rejection
+boundary are indexed in
+[reconstructed voxel surfaces](topics/voxel/reconstructed-surfaces.md).
+
 ## How to use this atlas
 
 1. Read [design.md](design.md) for the provider boundary.
@@ -75,6 +80,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 - [Canonical design](design.md)
 - [Gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md)
 - [Textured voxel campaign closeout](textured-voxel-campaign-closeout.md)
+- [Reconstructed voxel surfaces](topics/voxel/reconstructed-surfaces.md)
 - [Rust source organization](topics/development/rust-style.md)
 - [Downstream Engine revision contract](topics/development/downstream-engine-revisions.md)
 - [Cargo workspace](../Cargo.toml)

@@ -82,6 +82,34 @@ upgrades or different floating-point environments. See
   mechanism gap.
 - **Last reviewed:** 2026-08-01 / codex
 
+## Reconstructed voxel surfaces are experimental and color-only
+
+- **Status:** accepted-temporary
+- **Affected surface:** `svc-mesh`, `voxel-object-runtime`, voxel-object render
+  projection, shared renderer resources, and the explicit Studio comparison
+  harness
+- **Limitation:** Optional `marchingCubes` and `dualContouring` presentation
+  use one binary center-sampled field with no smoothing control. Their
+  deterministic material attribution is not a multi-material interface solve,
+  and they have no stable repeat/atlas UV projection. Textured reconstructed
+  candidates are rejected; only default greedy cubes retain runtime surface
+  textures. Marching's closed-loop interior rule is certified for the checked
+  binary fixtures, not arbitrary continuous scalar fields.
+- **Impact:** Both reconstructions can soften recognizable silhouettes, but
+  they chamfer intentional hard voxel steps and cost more triangles/build time.
+  They must not be selected as collision, navigation, persistence, or gameplay
+  truth. Callers should not present them as a universally superior smooth mode.
+- **Detection:** Read
+  [reconstructed voxel surfaces](topics/voxel/reconstructed-surfaces.md), run
+  `cargo test -p svc-mesh -p voxel-object-runtime -p render-projection --locked`,
+  and generate the checked Chromium contact sheet with
+  `./scripts/verify-voxel-surface-comparison.sh /home/dev/rusty-engine-voxels`.
+- **Follow-up:** Add smoothing, a stronger continuous-field topology policy,
+  or stable reconstructed-surface UVs only with a concrete consumer, bounded
+  fixtures, and separately reviewed ownership.
+- **Introduced by:** task 6599
+- **Last reviewed:** 2026-08-09 / codex
+
 ## Animated voxel corpus breadth and GPU accounting
 
 - **Status:** accepted-temporary
