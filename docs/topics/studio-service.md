@@ -79,4 +79,6 @@ browser automation, and acceptance tests must start separate hosts on unique loo
 separate settings roots. Concurrent mutation of one project additionally requires separate project
 copies/worktrees or explicit coordination. See the
 [downstream renderer and Studio boundary](development/downstream-renderer-and-studio.md) for the
-complete ownership posture.
+complete ownership posture. The process-level evidence and current no-go threshold for a shared
+multi-session implementation are recorded in the
+[concurrency exploration](../reviews/2026-08-studio-service-concurrency-exploration.md).

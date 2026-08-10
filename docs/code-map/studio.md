@@ -39,6 +39,7 @@ viewport, and its closed external-project adapter protocol.
 - [Studio migration contract](../studio-migration-contract.md)
 - [Studio adapter protocol](../studio-adapter-protocol.md)
 - [Persistent generic Studio service](../topics/studio-service.md)
+- [Persistent Studio concurrency exploration](../reviews/2026-08-studio-service-concurrency-exploration.md)
 - [Downstream renderer and Studio boundary](../topics/development/downstream-renderer-and-studio.md)
 - [Downstream Entity inspector extensions](../studio-downstream-entity-inspector-extensions.md)
 - [Voxel mesh data plane](../topics/voxel/voxel-mesh-data-plane.md)
