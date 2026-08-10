@@ -100,7 +100,7 @@ does not build, select, configure, or deep-import those packages.
 
 `mountRustyApplication` creates one Engine-owned composition root containing
 the canvas and one bounded downstream UI root. It owns renderer startup,
-strict frame admission, whole-frame replacement, the sole render cadence,
+strict frame/resource admission, whole-content replacement, the sole render cadence,
 resize/DPR behavior, pointer/focus arbitration, startup/failure presentation,
 and transactional cleanup. The downstream UI mount receives only:
 
@@ -111,11 +111,21 @@ and transactional cleanup. The downstream UI mount receives only:
   can build the product HUD, menus, forms, and accessibility tree.
 
 It never receives the canvas, Three/WebGL objects, renderer package topology,
-the private bridge, or a generic renderer command/eval path. Incremental frame
-diffs are admitted atomically. Complete frame replacement prepares a fresh
-surface before publishing it and retires the prior surface only after the new
-frame succeeds, so reconnects and static-resource revisions do not replay
-`create` operations into partial retained state.
+the private bridge, or a generic renderer command/eval path. The public
+`RustyApplicationContent` aggregate carries one complete Rust-projected frame
+plus its exact immutable `mesh` and `texture` resource bytes. Engine snapshots
+the caller's bytes before asynchronous work, validates bounded counts and byte
+sizes, requires each identity to match its `sha256` content hash, and admits
+only the media type owned by that resource family. The application host
+privately derives renderer manifests and resolvers; downstream never does.
+
+`initialContent` mounts the first aggregate. `replaceContent(...)` prepares a
+fresh surface, resource catalog, listeners, and complete frame before one
+atomic publication; failure disposes the candidate and leaves the prior
+surface and content revision authoritative. `replaceFrame(...)` is the
+focused complete-frame operation when the immutable resource catalog is
+unchanged. These operations prevent reconnects and static-resource revisions
+from replaying `create` operations into partial retained state.
 
 The same bootstrap runs in an ordinary web application, Tauri, or Electron.
 Only the downstream-owned typed Rust transport adapter varies: HTTP/WebSocket,
@@ -134,12 +144,13 @@ opens a panel. Switching to `interface` or `modal` also releases Engine capture;
 returning to `gameplay` uses the public focus-recovery operation.
 
 Keep the application host at application scope when product routes change.
-Disposing a game route releases its session/input owners and calls the public
-renderer `clear()` operation, which installs Engine's empty frame while
-preserving the one Engine-owned canvas. Full `replaceFrame(...)` is for initial
-publication, reconnect, or a changed immutable static-resource/frame identity;
-ordinary camera and dynamic retained-frame updates use their focused ports and
-must not rebuild the renderer surface on every observation.
+Disposing a game route releases its session/input owners and may call the
+public renderer `clear()` operation, which atomically installs Engine's empty
+frame and empty resource catalog in the same sole surface slot. Complete
+`replaceContent(...)` is for initial publication, reconnect, or a changed
+immutable static-resource/frame identity; ordinary camera and dynamic
+retained-frame updates use their focused ports and must not rebuild the
+renderer surface on every observation.
 
 Downstream UI modules, templates, styles, assets, and local project files are
 trusted application source, just like downstream Rust. This boundary enforces
@@ -185,12 +196,13 @@ index.html -> main.ts -> mountRustyApplication -> mount downstream UI root
 ```
 
 `index.html` supplies one empty root. `main.ts` calls the public mount function,
-mounts the framework root through its callback, and supplies the returned
-bounded context through ordinary dependency injection. Engine reports bounded
-startup failure. Feature components and Rust transport owners live outside the
-bootstrap. It does not own gameplay state, renderer/backend construction,
-frame decoding, resource lifecycle, a second render loop, or another renderer
-control transport.
+loads one Rust-authored content aggregate through a purpose-named transport
+owner, mounts the framework root through its callback, and supplies the
+returned bounded context through ordinary dependency injection. Engine reports
+bounded startup failure. Feature components and Rust transport owners live
+outside the bootstrap. It does not own gameplay state, renderer/backend
+construction, renderer manifest/resolver construction, resource lifecycle, a
+second render loop, or another renderer control transport.
 
 ## Studio is an Engine-hosted product
 

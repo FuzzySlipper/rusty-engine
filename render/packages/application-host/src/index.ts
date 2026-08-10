@@ -3,6 +3,7 @@ export {
   RustyApplicationHostError,
   mountRustyApplication,
 } from './application-host.js';
+export { RustyApplicationContentError } from './application-content.js';
 export type {
   RustyApplicationCameraPose,
   RustyApplicationFrame,
@@ -19,3 +20,9 @@ export type {
   RustyApplicationUiOwner,
   RustyApplicationUiPort,
 } from './application-host.js';
+export type {
+  RustyApplicationContent,
+  RustyApplicationContentDiagnosticCode,
+  RustyApplicationResource,
+  RustyApplicationResourceKind,
+} from './application-content.js';

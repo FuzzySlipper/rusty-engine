@@ -1,3 +1,4 @@
+import { type RustyApplicationContent } from './application-content.js';
 export declare const RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION = "rusty_application_host.v1";
 export type RustyApplicationInteractionMode = 'gameplay' | 'interface' | 'modal';
 /** A Rust-projected Engine render frame. Strict decoding remains Engine-owned. */
@@ -20,6 +21,8 @@ export interface RustyApplicationRendererPort {
     /** Replace product content with the Engine-owned empty/default retained frame. */
     readonly clear: () => Promise<void>;
     readonly renderOnce: (timeMs?: number) => void;
+    /** Atomically replace the immutable resource catalog and complete retained frame. */
+    readonly replaceContent: (content: RustyApplicationContent) => Promise<RustyApplicationFrameReceipt>;
     /** Prepare and atomically publish a complete Rust-projected retained frame. */
     readonly replaceFrame: (frame: RustyApplicationFrame) => Promise<RustyApplicationFrameReceipt>;
     readonly setCameraPose: (pose: RustyApplicationCameraPose) => void;
@@ -50,6 +53,7 @@ export interface RustyApplicationUiOwner {
 export type RustyApplicationUiMount = (root: HTMLElement, context: RustyApplicationUiContext) => void | RustyApplicationUiOwner | Promise<void | RustyApplicationUiOwner>;
 export interface RustyApplicationRendererOptions {
     readonly clearColor?: number;
+    readonly initialContent?: RustyApplicationContent;
     readonly initialFrame?: RustyApplicationFrame;
     readonly pixelRatio?: number;
 }
@@ -63,8 +67,11 @@ export interface RustyApplicationHostOptions {
 }
 export interface RustyApplicationHostReadout {
     readonly compatibilityVersion: typeof RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION;
+    readonly contentRevision: number;
     readonly interactionMode: RustyApplicationInteractionMode;
     readonly pointerLocked: boolean;
+    readonly resourceBytes: number;
+    readonly resourceCount: number;
     readonly state: 'ready' | 'disposed';
 }
 export interface RustyApplicationHost {

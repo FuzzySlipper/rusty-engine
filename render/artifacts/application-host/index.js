@@ -18914,60 +18914,135 @@ new Set([
 	"droppedFeedbackCount"
 ].filter((e) => !S_.has(e)));
 //#endregion
+//#region packages/application-host/src/application-content.ts
+var C_ = class extends Error {
+	code;
+	resource;
+	constructor(e, t, n) {
+		super(n), this.code = e, this.resource = t, this.name = "RustyApplicationContentError";
+	}
+}, w_ = /^(mesh|texture)-resource\/([0-9a-f]{64})$/u;
+function T_(e) {
+	if (typeof e != "object" || !e || typeof e.frame != "object" || e.frame === null) throw k_("content_invalid", null, "application content must include one frame");
+	if (e.resources !== void 0 && !Array.isArray(e.resources)) throw k_("content_invalid", null, "application content resources must be an array");
+	let t = structuredClone(e.frame), n = /* @__PURE__ */ new Set(), r = 0, i = 0, a = 0, o = 0, s = (e.resources ?? []).map((e, t) => {
+		if (typeof e != "object" || !e || typeof e.identity != "string" || typeof e.contentHash != "string" || typeof e.mediaType != "string" || !(e.bytes instanceof Uint8Array)) throw k_("content_invalid", null, `application content resource ${String(t)} is malformed`);
+		let s = w_.exec(e.identity), c = /^sha256:([0-9a-f]{64})$/u.exec(e.contentHash)?.[1];
+		if (s === null || c === void 0 || s[2] !== c) throw k_("resource_identity_invalid", e.identity || null, "application resource identity must match its lowercase SHA-256 content hash");
+		if (n.has(e.identity)) throw k_("resource_duplicate", e.identity, "application resource identity is duplicated");
+		n.add(e.identity);
+		let l = s[1];
+		if (l === "texture") {
+			if (e.mediaType !== "image/png") throw k_("resource_media_type_unsupported", e.identity, "texture resources must use image/png");
+			if (a += 1, o += e.bytes.byteLength, a > 256 || e.bytes.byteLength === 0 || e.bytes.byteLength > 16777216 || o > 134217728) throw k_("resource_limit_exceeded", e.identity, "texture resource count or byte length exceeds the application-host bound");
+		} else {
+			if (e.mediaType !== "application/octet-stream") throw k_("resource_media_type_unsupported", e.identity, "mesh resources must use application/octet-stream");
+			if (r += 1, i += e.bytes.byteLength, r > 1024 || e.bytes.byteLength < 16 || e.bytes.byteLength > 67108864 || i > 268435456) throw k_("resource_limit_exceeded", e.identity, "mesh resource count or byte length exceeds the application-host bound");
+		}
+		return Object.freeze({
+			identity: e.identity,
+			contentHash: e.contentHash,
+			mediaType: e.mediaType,
+			bytes: e.bytes.slice().buffer,
+			kind: l
+		});
+	});
+	return Object.freeze({
+		frame: t,
+		resources: Object.freeze(s),
+		resourceBytes: i + o
+	});
+}
+function E_(e) {
+	let t = new Map(e.resources.map((e) => [e.identity, e])), n = e.resources.filter((e) => e.kind === "mesh"), r = e.resources.filter((e) => e.kind === "texture");
+	return Object.freeze({
+		...n.length === 0 ? {} : {
+			meshResourceManifest: {
+				kind: "rusty_renderer_mesh_resources.v1",
+				resources: Object.freeze(n.map(D_))
+			},
+			resolveMeshResource: (e) => O_(t, e.resource)
+		},
+		...r.length === 0 ? {} : {
+			textureResourceManifest: {
+				kind: "rusty_renderer_texture_resources.v1",
+				resources: Object.freeze(r.map(D_))
+			},
+			resolveTextureResource: (e) => O_(t, e.resource)
+		}
+	});
+}
+function D_(e) {
+	return Object.freeze({
+		resource: e.identity,
+		contentHash: e.contentHash,
+		byteLength: e.bytes.byteLength
+	});
+}
+function O_(e, t) {
+	let n = e.get(t);
+	return n === void 0 ? Promise.reject(/* @__PURE__ */ Error(`resource ${t} is unavailable`)) : Promise.resolve(n.bytes.slice(0));
+}
+function k_(e, t, n) {
+	return new C_(e, t, n);
+}
+//#endregion
 //#region packages/application-host/src/application-host.ts
-var C_ = "rusty_application_host.v1", w_ = class extends Error {
+var A_ = "rusty_application_host.v1", j_ = class extends Error {
 	code;
 	constructor(e, t, n) {
 		super(t, n), this.name = "RustyApplicationHostError", this.code = e;
 	}
-}, T_ = { mountSurface: Jg };
-async function E_(e) {
-	return D_(e, T_);
+}, M_ = { mountSurface: Jg };
+async function N_(e) {
+	return P_(e, M_);
 }
-async function D_(e, t) {
+async function P_(e, t) {
 	let { root: n } = e;
-	if (L_(n), n.childNodes.length > 0) throw new w_("invalid_root", "Rusty Application Host requires an empty downstream mount root");
-	let r = n.ownerDocument, i = k_(r, e.loadingLabel ?? "Starting application…");
+	if (G_(n), n.childNodes.length > 0) throw new j_("invalid_root", "Rusty Application Host requires an empty downstream mount root");
+	let r = n.ownerDocument, i = L_(r, e.loadingLabel ?? "Starting application…");
 	n.append(i.host), n.dataset.rustyApplicationState = "mounting";
-	let a = null, o = null, s = () => void 0, c = !1, l = !1, u = null, d = e.initialInteractionMode ?? "interface", f = i.canvas, p = Promise.resolve(), m = () => {
-		if (l || c || a === null) throw new w_("disposed", "Rusty Application Host is disposed");
+	let a = null, o = null, s = () => void 0, c = !1, l = !1, u = null, d = e.initialInteractionMode ?? "interface", f = i.canvas, p = null, m = 0, h = 0, g = Promise.resolve(), _ = () => {
+		if (l || c || a === null) throw new j_("disposed", "Rusty Application Host is disposed");
 		return a;
-	}, h = () => {
+	}, v = () => {
 		a?.releaseInput();
-	}, g = (e) => {
-		if (c) throw new w_("disposed", "Rusty Application Host is disposed");
-		d = e, i.host.dataset.interactionMode = e, e !== "gameplay" && h();
-	}, _ = () => {
+	}, y = (e) => {
+		if (c) throw new j_("disposed", "Rusty Application Host is disposed");
+		d = e, i.host.dataset.interactionMode = e, e !== "gameplay" && v();
+	}, b = () => {
 		if (d !== "gameplay") return;
-		let e = m();
-		e.canvas.focus({ preventScroll: !0 }), F_(e.canvas);
-	}, v = (n, r) => t.mountSurface(n, {
+		let e = _();
+		e.canvas.focus({ preventScroll: !0 }), U_(e.canvas);
+	}, x = (n, r) => t.mountSurface(n, {
 		autoStart: !0,
 		controls: { enabled: !1 },
-		frame: r,
+		frame: r.frame,
 		...e.renderer?.clearColor === void 0 ? {} : { clearColor: e.renderer.clearColor },
-		...e.renderer?.pixelRatio === void 0 ? {} : { pixelRatio: e.renderer.pixelRatio }
-	}), y = (e) => {
-		m();
+		...e.renderer?.pixelRatio === void 0 ? {} : { pixelRatio: e.renderer.pixelRatio },
+		...E_(r)
+	}), S = (e) => {
+		_(), h += 1;
 		let t = Object.freeze({
 			applied: !1,
 			diagnostics: []
 		});
-		return p = p.then(async () => {
+		return g = g.then(async () => {
 			let n = a;
-			if (n === null || c) {
-				t = O_(new w_("disposed", "Rusty Application Host is disposed"));
+			if (n === null || p === null || c) {
+				t = F_(new j_("disposed", "Rusty Application Host is disposed"));
 				return;
 			}
-			let o = f, l = A_(r);
+			let o = f, l = R_(r);
 			i.host.insertBefore(l, i.ui);
-			let u = null, p = null;
+			let u = null, h = null;
 			try {
-				u = await v(l, e), u.setCameraPose(n.cameraPose()), p = j_(i.host, i.ui, () => u, () => d, _), a = u, f = l;
-				let r = s;
-				s = p, p = null;
+				let r = e();
+				u = await x(l, r), u.setCameraPose(n.cameraPose()), h = z_(i.host, i.ui, () => u, () => d, b), a = u, p = r, m += 1, f = l;
+				let c = s;
+				s = h, h = null;
 				try {
-					r();
+					c();
 				} catch {}
 				try {
 					n.dispose();
@@ -18978,17 +19053,35 @@ async function D_(e, t) {
 				});
 			} catch (e) {
 				try {
-					p?.();
+					h?.();
 				} catch {}
 				try {
 					u?.dispose();
 				} catch {}
-				l.remove(), t = O_(e);
+				l.remove(), t = F_(e);
 			}
-		}), p.then(() => t);
-	}, b = Object.freeze({
+		}), g.then(() => t).finally(() => {
+			--h;
+		});
+	}, C = (e) => {
+		_();
+		let t;
+		try {
+			t = T_(e);
+		} catch (e) {
+			return Promise.resolve(F_(e));
+		}
+		return S(() => t);
+	}, w = Object.freeze({
 		applyFrame: (e) => {
-			let t = m().applyFrame(e);
+			if (h > 0) return Object.freeze({
+				applied: !1,
+				diagnostics: Object.freeze([Object.freeze({
+					code: "content_replacement_in_progress",
+					message: "incremental frames are rejected while complete content replacement is pending"
+				})])
+			});
+			let t = _().applyFrame(e);
 			return Object.freeze({
 				applied: t.applied,
 				diagnostics: Object.freeze(t.diagnostics.map((e) => Object.freeze({
@@ -18998,63 +19091,95 @@ async function D_(e, t) {
 			});
 		},
 		clear: async () => {
-			let e = await y(Gg());
+			let e = await C({
+				frame: Gg(),
+				resources: []
+			});
 			if (!e.applied) throw Error(`Engine default renderer frame was rejected: ${e.diagnostics.map((e) => e.message).join("; ")}`);
 		},
 		renderOnce: (e) => {
-			e === void 0 ? m().renderOnce() : m().renderOnce(e);
+			e === void 0 ? _().renderOnce() : _().renderOnce(e);
 		},
-		replaceFrame: y,
-		setCameraPose: (e) => m().setCameraPose(e)
-	}), x = Object.freeze({
+		replaceContent: C,
+		replaceFrame: (e) => {
+			_();
+			let t;
+			try {
+				t = T_({ frame: e }).frame;
+			} catch (e) {
+				return Promise.resolve(F_(e));
+			}
+			return S(() => {
+				let e = p;
+				if (e === null) throw new j_("disposed", "Rusty Application Host is disposed");
+				return Object.freeze({
+					frame: t,
+					resources: e.resources,
+					resourceBytes: e.resourceBytes
+				});
+			});
+		},
+		setCameraPose: (e) => _().setCameraPose(e)
+	}), T = Object.freeze({
 		active: () => !l && !c,
-		allowsGameplayInput: (e) => !l && !c && !e.defaultPrevented && d === "gameplay" && !M_(e, i.ui),
-		focusGameplay: _,
+		allowsGameplayInput: (e) => !l && !c && !e.defaultPrevented && d === "gameplay" && !B_(e, i.ui),
+		focusGameplay: b,
 		interactionMode: () => d,
-		setInteractionMode: g
+		setInteractionMode: y
 	});
 	try {
-		a = await v(i.canvas, e.renderer?.initialFrame ?? Gg()), s = j_(i.host, i.ui, () => m(), () => d, _), g(d), o = await e.mountUi(i.ui, {
-			renderer: b,
-			ui: x
+		if (e.renderer?.initialContent !== void 0 && e.renderer.initialFrame !== void 0) throw new C_("content_invalid", null, "initialContent and initialFrame are mutually exclusive");
+		let t = T_(e.renderer?.initialContent ?? {
+			frame: e.renderer?.initialFrame ?? Gg(),
+			resources: []
+		});
+		a = await x(i.canvas, t), p = t, m = 1, s = z_(i.host, i.ui, () => _(), () => d, b), y(d), o = await e.mountUi(i.ui, {
+			renderer: w,
+			ui: T
 		}) ?? null, i.loading.remove(), i.host.dataset.state = "ready", n.dataset.rustyApplicationState = "ready";
 	} catch (t) {
 		c = !0;
-		let r = await I_(o, s, a, i.host);
+		let r = await W_(o, s, a, i.host);
 		delete n.dataset.rustyApplicationState;
 		let l = t instanceof Error ? t : Error(String(t));
-		throw R_(n, e.failureLabel ?? "Application failed to start", l.message), new w_("mount_failed", r.length === 0 ? `Rusty Application Host mount failed: ${l.message}` : `Rusty Application Host mount failed: ${l.message}; cleanup also failed`, { cause: l });
+		throw K_(n, e.failureLabel ?? "Application failed to start", l.message), new j_("mount_failed", r.length === 0 ? `Rusty Application Host mount failed: ${l.message}` : `Rusty Application Host mount failed: ${l.message}; cleanup also failed`, { cause: l });
 	}
 	return Object.freeze({
 		kind: "rusty_application_host.v1",
-		renderer: b,
-		ui: x,
+		renderer: w,
+		ui: T,
 		readout: () => Object.freeze({
-			compatibilityVersion: C_,
+			compatibilityVersion: A_,
+			contentRevision: m,
 			interactionMode: d,
 			pointerLocked: a?.pointerLocked() ?? !1,
+			resourceBytes: p?.resourceBytes ?? 0,
+			resourceCount: p?.resources.length ?? 0,
 			state: c ? "disposed" : "ready"
 		}),
 		dispose: async () => u === null ? (l = !0, u = (async () => {
-			await p, c = !0;
-			let e = await I_(o, s, a, i.host);
+			await g, c = !0;
+			let e = await W_(o, s, a, i.host);
 			if (o = null, a = null, delete n.dataset.rustyApplicationState, e.length > 0) throw AggregateError(e, "Rusty Application Host disposal failed");
 		})(), u) : u
 	});
 }
-function O_(e) {
+function F_(e) {
 	return Object.freeze({
 		applied: !1,
 		diagnostics: Object.freeze([Object.freeze({
-			code: "retained_frame_replacement_failed",
+			code: I_(e),
 			message: e instanceof Error ? e.message : String(e)
 		})])
 	});
 }
-function k_(e, t) {
+function I_(e) {
+	return e instanceof C_ ? e.code : typeof e == "object" && e && "code" in e && typeof e.code == "string" && e.code.includes("resource") || e instanceof Error && e.message.toLowerCase().includes("resource") ? "resource_admission_failed" : "retained_frame_replacement_failed";
+}
+function L_(e, t) {
 	let n = e.createElement("div");
-	n.dataset.rustyApplicationHost = C_, n.style.cssText = "isolation:isolate;min-height:100dvh;position:relative;width:100%;";
-	let r = A_(e), i = e.createElement("div");
+	n.dataset.rustyApplicationHost = A_, n.style.cssText = "isolation:isolate;min-height:100dvh;position:relative;width:100%;";
+	let r = R_(e), i = e.createElement("div");
 	i.dataset.rustyApplicationUi = "downstream", i.style.cssText = "min-height:100dvh;position:relative;width:100%;z-index:1;";
 	let a = e.createElement("div");
 	return a.dataset.rustyApplicationLoading = "", a.setAttribute("role", "status"), a.textContent = t, a.style.cssText = "align-items:center;background:#071012;color:#d9eee7;display:flex;font:14px system-ui;inset:0;justify-content:center;position:absolute;z-index:2;", n.append(r, i, a), {
@@ -19064,19 +19189,19 @@ function k_(e, t) {
 		loading: a
 	};
 }
-function A_(e) {
+function R_(e) {
 	let t = e.createElement("canvas");
 	return t.dataset.rustyApplicationRenderer = "engine-owned", t.setAttribute("aria-label", "Engine-rendered game world"), t.style.cssText = "display:block;height:100%;inset:0;position:absolute;width:100%;z-index:0;", t;
 }
-function j_(e, t, n, r, i) {
+function z_(e, t, n, r, i) {
 	let a = e.ownerDocument, o = (e) => {
-		if (M_(e, t)) {
+		if (B_(e, t)) {
 			n().releaseInput();
 			return;
 		}
 		r() === "gameplay" && i();
 	}, s = (e) => {
-		P_(e.target) && n().releaseInput();
+		H_(e.target) && n().releaseInput();
 	}, c = () => {
 		e.dataset.pointerLocked = String(a.pointerLockElement === n().canvas);
 	}, l = () => n().releaseInput();
@@ -19084,21 +19209,21 @@ function j_(e, t, n, r, i) {
 		t.removeEventListener("pointerdown", o, !0), t.removeEventListener("focusin", s, !0), a.removeEventListener("pointerlockchange", c), a.defaultView?.removeEventListener("blur", l);
 	};
 }
-function M_(e, t) {
-	return e.composedPath().some((e) => N_(e, t));
+function B_(e, t) {
+	return e.composedPath().some((e) => V_(e, t));
 }
-function N_(e, t) {
+function V_(e, t) {
 	return !(e instanceof Element) || !t.contains(e) ? !1 : e.closest("a,button,input,select,textarea,summary,[contenteditable=\"true\"],[data-rusty-ui-interactive],[role=\"dialog\"]") !== null;
 }
-function P_(e) {
+function H_(e) {
 	return e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement || e instanceof HTMLSelectElement || e instanceof HTMLElement && e.isContentEditable;
 }
-function F_(e) {
+function U_(e) {
 	try {
 		e.requestPointerLock().catch(() => void 0);
 	} catch {}
 }
-async function I_(e, t, n, r) {
+async function W_(e, t, n, r) {
 	let i = [];
 	try {
 		await e?.dispose();
@@ -19117,10 +19242,10 @@ async function I_(e, t, n, r) {
 	}
 	return r.remove(), i;
 }
-function L_(e) {
+function G_(e) {
 	e.querySelector(":scope > [data-rusty-application-failure]")?.remove();
 }
-function R_(e, t, n) {
+function K_(e, t, n) {
 	let r = e.ownerDocument.createElement("section");
 	r.dataset.rustyApplicationFailure = "", r.setAttribute("role", "alert"), r.style.cssText = "background:#1b0b0d;color:#ffe8e8;font:14px system-ui;margin:0;min-height:100dvh;padding:2rem;";
 	let i = e.ownerDocument.createElement("h1");
@@ -19129,4 +19254,4 @@ function R_(e, t, n) {
 	a.textContent = n, r.append(i, a), e.append(r);
 }
 //#endregion
-export { C_ as RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION, w_ as RustyApplicationHostError, E_ as mountRustyApplication };
+export { A_ as RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION, C_ as RustyApplicationContentError, j_ as RustyApplicationHostError, N_ as mountRustyApplication };

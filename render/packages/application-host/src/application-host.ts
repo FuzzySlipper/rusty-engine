@@ -4,7 +4,15 @@ import {
   mountRendererSurface,
   type RendererSurface,
   type RendererSurfaceOptions,
+  type RendererSurfaceResourceOptions,
 } from '@rusty-engine/renderer-host';
+import {
+  RustyApplicationContentError,
+  prepareRustyApplicationContent,
+  rustyApplicationSurfaceResourceOptions,
+  type PreparedRustyApplicationContent,
+  type RustyApplicationContent,
+} from './application-content.js';
 
 export const RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION =
   'rusty_application_host.v1';
@@ -38,6 +46,10 @@ export interface RustyApplicationRendererPort {
   /** Replace product content with the Engine-owned empty/default retained frame. */
   readonly clear: () => Promise<void>;
   readonly renderOnce: (timeMs?: number) => void;
+  /** Atomically replace the immutable resource catalog and complete retained frame. */
+  readonly replaceContent: (
+    content: RustyApplicationContent,
+  ) => Promise<RustyApplicationFrameReceipt>;
   /** Prepare and atomically publish a complete Rust-projected retained frame. */
   readonly replaceFrame: (
     frame: RustyApplicationFrame,
@@ -78,6 +90,7 @@ export type RustyApplicationUiMount = (
 
 export interface RustyApplicationRendererOptions {
   readonly clearColor?: number;
+  readonly initialContent?: RustyApplicationContent;
   readonly initialFrame?: RustyApplicationFrame;
   readonly pixelRatio?: number;
 }
@@ -93,8 +106,11 @@ export interface RustyApplicationHostOptions {
 
 export interface RustyApplicationHostReadout {
   readonly compatibilityVersion: typeof RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION;
+  readonly contentRevision: number;
   readonly interactionMode: RustyApplicationInteractionMode;
   readonly pointerLocked: boolean;
+  readonly resourceBytes: number;
+  readonly resourceCount: number;
   readonly state: 'ready' | 'disposed';
 }
 
@@ -123,7 +139,7 @@ export class RustyApplicationHostError extends Error {
 interface RustyApplicationHostEnvironment {
   readonly mountSurface: (
     canvas: HTMLCanvasElement,
-    options: RendererSurfaceOptions,
+    options: RendererSurfaceOptions | RendererSurfaceResourceOptions,
   ) => RendererSurface | Promise<RendererSurface>;
 }
 
@@ -163,6 +179,9 @@ async function mountRustyApplicationWithEnvironment(
   let disposal: Promise<void> | null = null;
   let interactionMode = options.initialInteractionMode ?? 'interface';
   let activeCanvas = layout.canvas;
+  let activeContent: PreparedRustyApplicationContent | null = null;
+  let contentRevision = 0;
+  let replacementPending = 0;
   let replacementQueue: Promise<void> = Promise.resolve();
 
   const requireActive = (): RendererSurface => {
@@ -188,28 +207,34 @@ async function mountRustyApplicationWithEnvironment(
     activeSurface.canvas.focus({ preventScroll: true });
     requestPointerLock(activeSurface.canvas);
   };
-  const mountSurface = (canvas: HTMLCanvasElement, frame: RustyApplicationFrame) => {
+  const mountSurface = (
+    canvas: HTMLCanvasElement,
+    content: PreparedRustyApplicationContent,
+  ) => {
     return environment.mountSurface(canvas, {
       autoStart: true,
       controls: { enabled: false },
-      frame: frame as unknown as RenderFrameDiff,
+      frame: content.frame as unknown as RenderFrameDiff,
       ...(options.renderer?.clearColor === undefined
         ? {} : { clearColor: options.renderer.clearColor }),
       ...(options.renderer?.pixelRatio === undefined
         ? {} : { pixelRatio: options.renderer.pixelRatio }),
+      ...rustyApplicationSurfaceResourceOptions(content),
     });
   };
-  const replaceFrame = (
-    frame: RustyApplicationFrame,
+  const enqueueReplacement = (
+    candidate: () => PreparedRustyApplicationContent,
   ): Promise<RustyApplicationFrameReceipt> => {
     requireActive();
+    replacementPending += 1;
     let receipt: RustyApplicationFrameReceipt = Object.freeze({
       applied: false,
       diagnostics: [],
     });
     replacementQueue = replacementQueue.then(async () => {
       const oldSurface = surface;
-      if (oldSurface === null || disposed) {
+      const oldContent = activeContent;
+      if (oldSurface === null || oldContent === null || disposed) {
         receipt = replacementFailure(
           new RustyApplicationHostError('disposed', 'Rusty Application Host is disposed'),
         );
@@ -221,7 +246,8 @@ async function mountRustyApplicationWithEnvironment(
       let candidateSurface: RendererSurface | null = null;
       let candidateRemoveListeners: (() => void) | null = null;
       try {
-        candidateSurface = await mountSurface(candidateCanvas, frame);
+        const candidateContent = candidate();
+        candidateSurface = await mountSurface(candidateCanvas, candidateContent);
         candidateSurface.setCameraPose(oldSurface.cameraPose());
         candidateRemoveListeners = installInputArbitration(
           layout.host,
@@ -231,6 +257,8 @@ async function mountRustyApplicationWithEnvironment(
           focusGameplay,
         );
         surface = candidateSurface;
+        activeContent = candidateContent;
+        contentRevision += 1;
         activeCanvas = candidateCanvas;
         const retiredRemoveListeners = removeListeners;
         removeListeners = candidateRemoveListeners;
@@ -262,11 +290,57 @@ async function mountRustyApplicationWithEnvironment(
         receipt = replacementFailure(cause);
       }
     });
-    return replacementQueue.then(() => receipt);
+    return replacementQueue.then(() => receipt).finally(() => {
+      replacementPending -= 1;
+    });
+  };
+  const replaceContent = (
+    content: RustyApplicationContent,
+  ): Promise<RustyApplicationFrameReceipt> => {
+    requireActive();
+    let prepared: PreparedRustyApplicationContent;
+    try {
+      prepared = prepareRustyApplicationContent(content);
+    } catch (cause) {
+      return Promise.resolve(replacementFailure(cause));
+    }
+    return enqueueReplacement(() => prepared);
+  };
+  const replaceFrame = (
+    frame: RustyApplicationFrame,
+  ): Promise<RustyApplicationFrameReceipt> => {
+    requireActive();
+    let snapshot: RustyApplicationFrame;
+    try {
+      snapshot = prepareRustyApplicationContent({ frame }).frame;
+    } catch (cause) {
+      return Promise.resolve(replacementFailure(cause));
+    }
+    return enqueueReplacement(() => {
+      const current = activeContent;
+      if (current === null) {
+        throw new RustyApplicationHostError('disposed', 'Rusty Application Host is disposed');
+      }
+      return Object.freeze({
+        frame: snapshot,
+        resources: current.resources,
+        resourceBytes: current.resourceBytes,
+      });
+    });
   };
 
   const renderer: RustyApplicationRendererPort = Object.freeze({
     applyFrame: (frame: RustyApplicationFrame) => {
+      if (replacementPending > 0) {
+        return Object.freeze({
+          applied: false,
+          diagnostics: Object.freeze([Object.freeze({
+            code: 'content_replacement_in_progress',
+            message:
+              'incremental frames are rejected while complete content replacement is pending',
+          })]),
+        });
+      }
       const receipt = requireActive().applyFrame(frame as unknown as RenderFrameDiff);
       return Object.freeze({
         applied: receipt.applied,
@@ -277,9 +351,10 @@ async function mountRustyApplicationWithEnvironment(
       });
     },
     clear: async () => {
-      const receipt = await replaceFrame(
-        createRendererDefaultSurfaceFrame() as unknown as RustyApplicationFrame,
-      );
+      const receipt = await replaceContent({
+        frame: createRendererDefaultSurfaceFrame() as unknown as RustyApplicationFrame,
+        resources: [],
+      });
       if (!receipt.applied) {
         throw new Error(
           `Engine default renderer frame was rejected: ${receipt.diagnostics
@@ -292,6 +367,7 @@ async function mountRustyApplicationWithEnvironment(
       if (timeMs === undefined) requireActive().renderOnce();
       else requireActive().renderOnce(timeMs);
     },
+    replaceContent,
     replaceFrame,
     setCameraPose: (pose: RustyApplicationCameraPose) => requireActive().setCameraPose(pose),
   });
@@ -309,11 +385,24 @@ async function mountRustyApplicationWithEnvironment(
   });
 
   try {
-    surface = await mountSurface(
-      layout.canvas,
-      options.renderer?.initialFrame
-        ?? createRendererDefaultSurfaceFrame() as unknown as RustyApplicationFrame,
+    if (options.renderer?.initialContent !== undefined
+      && options.renderer.initialFrame !== undefined) {
+      throw new RustyApplicationContentError(
+        'content_invalid',
+        null,
+        'initialContent and initialFrame are mutually exclusive',
+      );
+    }
+    const initialContent = prepareRustyApplicationContent(
+      options.renderer?.initialContent ?? {
+        frame: options.renderer?.initialFrame
+          ?? createRendererDefaultSurfaceFrame() as unknown as RustyApplicationFrame,
+        resources: [],
+      },
     );
+    surface = await mountSurface(layout.canvas, initialContent);
+    activeContent = initialContent;
+    contentRevision = 1;
     removeListeners = installInputArbitration(
       layout.host,
       layout.ui,
@@ -357,8 +446,11 @@ async function mountRustyApplicationWithEnvironment(
     ui,
     readout: () => Object.freeze({
       compatibilityVersion: RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION,
+      contentRevision,
       interactionMode,
       pointerLocked: surface?.pointerLocked() ?? false,
+      resourceBytes: activeContent?.resourceBytes ?? 0,
+      resourceCount: activeContent?.resources.length ?? 0,
       state: disposed ? 'disposed' as const : 'ready' as const,
     }),
     dispose: async () => {
@@ -389,10 +481,22 @@ function replacementFailure(cause: unknown): RustyApplicationFrameReceipt {
   return Object.freeze({
     applied: false,
     diagnostics: Object.freeze([Object.freeze({
-      code: 'retained_frame_replacement_failed',
+      code: replacementDiagnosticCode(cause),
       message: cause instanceof Error ? cause.message : String(cause),
     })]),
   });
+}
+
+function replacementDiagnosticCode(cause: unknown): string {
+  if (cause instanceof RustyApplicationContentError) return cause.code;
+  if (typeof cause === 'object' && cause !== null && 'code' in cause
+    && typeof cause.code === 'string' && cause.code.includes('resource')) {
+    return 'resource_admission_failed';
+  }
+  if (cause instanceof Error && cause.message.toLowerCase().includes('resource')) {
+    return 'resource_admission_failed';
+  }
+  return 'retained_frame_replacement_failed';
 }
 
 function createLayout(document: Document, loadingLabel: string): {

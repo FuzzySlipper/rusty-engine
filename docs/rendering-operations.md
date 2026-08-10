@@ -53,6 +53,10 @@ The adapter uses the operating system webview. Linux builds therefore require GT
 WebKitGTK 4.1 development packages; the Engine CI installs `libgtk-3-dev` and
 `libwebkit2gtk-4.1-dev` explicitly. Headless execution of the real Linux host proof additionally
 uses Xvfb. These are native build/runtime prerequisites, not downstream TypeScript dependencies.
+The current Wry child-window adapter is an X11 diagnostic/product path on Linux; its child embedding
+does not claim Wayland support. A product needing rich DOM or the same browser composition in a
+web app, Tauri, or Electron uses `@rusty-engine/application-host` instead of building another child
+webview seam downstream.
 
 The Engine-private bridge and compiled artifact remain under `render/private` and
 `renderer-webview-host/artifacts`. First-party Engine tools may still use package-root TypeScript

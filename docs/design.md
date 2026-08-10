@@ -605,8 +605,12 @@ of constructing Three scenes of their own.
 `@rusty-engine/application-host` is the sole downstream web-application entry point above that
 internal host. Engine publishes it as one reproducibly built artifact with its renderer closure
 bundled and no renderer peer dependencies. It creates the canvas and one downstream DOM root,
-owns startup/failure, resize, cadence, pointer/focus modes, whole-frame replacement, and disposal,
-and exposes only bounded frame, camera, interaction, and lifecycle ports. A trusted downstream UI
+owns startup/failure, resize, cadence, pointer/focus modes, whole-content replacement, and disposal,
+and exposes only bounded content, frame, camera, interaction, and lifecycle ports. One public
+content aggregate pairs a complete Rust-projected frame with exact content-addressed mesh/texture
+bytes. Engine snapshots and validates those bytes, derives the private manifests/resolvers, and
+prepares the candidate surface and resources before atomic publication; failed initial mount or
+replacement cleans up the candidate without exposing partial renderer state. A trusted downstream UI
 framework mounts into that root but never receives the canvas, backend, private bridge, or package
 topology. Browser, Tauri, and Electron products reuse the exact composition; only their typed Rust
 transport differs. Trusted downstream source is not treated as hostile plugin content, so this
