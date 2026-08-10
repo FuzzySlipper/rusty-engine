@@ -66,14 +66,14 @@ viewport, and its closed external-project adapter protocol.
   the project. The bootstrap is a bounded trusted development input; it does not transfer project
   schema or semantic authority to Studio. Status reports the active root, adapter, and protocol.
 - Renderer packages are consumed through their package roots.
-- Protocol 14 retains the promoted downstream Entity inspector
-  seam. `studio/libs/editor-shell/src/entity-inspector.ts` owns static
-  contribution admission, exact matching, remount generations, and the narrow
-  mutation-settlement contract. The shell owns the single outlet; the stock app
-  explicitly composes the built-in Voxel Object contribution. The exact-pinned
-  Loading Bay application composes its own Weapon contribution without adding
-  its value or operations to Engine. Do not add another hard-coded game
-  component to the shell.
+- Protocol 14 retains the promoted downstream Entity inspector seam.
+  `studio/libs/editor-shell/src/entity-inspector.ts` owns static contribution
+  admission, exact matching, remount generations, and the narrow
+  mutation-settlement contract. The shell owns the single outlet and the stock
+  Engine-hosted app explicitly composes only the built-in Voxel Object
+  contribution. Ordinary downstream repositories provide project data and a
+  Rust adapter; they do not compose Studio packages or add a game component to
+  the shell.
 - Protocol 11 added only the bounded `prepareVoxelObjectPlacement` presentation
   read needed to preview an unused canonical object. Its resource-only frame is
   merged by `viewport`; authoritative attachment remains downstream.
@@ -134,35 +134,24 @@ viewport, and its closed external-project adapter protocol.
 ./scripts/verify-studio-generic-browser-integration.sh \
   /absolute/path/to/rusty-engine-demo \
   /absolute/path/to/rusty-engine-voxels
-./scripts/verify-studio-package-consumer.sh <40-character-public-sha>
 ./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo
 ./scripts/verify-studio-voxel-integration.sh /absolute/path/to/rusty-engine-voxels
 ```
 
-The first command proves isolated Studio behavior. The package-consumer command proves the public
-static-composition packages install from one exact Git revision without workspace or sibling paths.
-The demo command admits only `studio/demo-consumer-source.json`, proves that the selected public
-consumer's `engine-source.json` agrees with the reverse pin, and runs the consumer-owned revision
-checker before any build. That checker owns the Cargo, renderer-package, Studio-package, build-policy,
-and lock agreement. Its browser workflow also imports a project-local `.gltf` closure with external
-buffer and texture resources, observes external-only drift, reapplies the import, and proves after
-reload that authored `.gltf` provenance still names a content-addressed GLB runtime resource. The gate
-then invokes the focused two-consumer proof in
-`scripts/verify-studio-entity-inspector-integration.sh`. That proof serves the downstream-built
-application in Chromium, covers Voxel Object, unknown read-only fallback, a real Weapon replacement
-and canonical reread, then repeats the read in a fresh adapter process. The final command proves the
-pinned animated-voxel runtime/quality workflow and the checked runtime texture/atlas workflow. It
-renders asymmetric repeat and atlas pixels through the one viewport, replaces material bindings
-without changing greedy geometry, saves and reopens canonical identities, records one retained
-texture, destroys the viewport resources on close, and repeats the reopen/disposal proof in a second
-Studio host and adapter process.
+The first command proves the isolated Studio workspace. The generic browser
+command explicitly selects adjacent downstream checkouts, starts one
+Engine-hosted Studio, and proves root-local adapter discovery and transactional
+project switching. The demo and voxel commands are focused opt-in integration
+proofs over the selected adjacent checkout: they build its project-owned Rust
+adapter, run Engine's Studio host, and exercise the applicable protocol,
+mutation, persistence, resource, and browser behavior.
 
-The local demo command defaults to both proofs and builds Studio plus the project-owned adapter once.
-CI selects its `browser` and `entity-inspector` modes in parallel, then retains
-`verify-studio-demo-integration` as the aggregate exact-revision gate. Documentation-only changes do
-not start this long consumer proof. Provider changes become eligible only by deliberately advancing
-`studio/demo-consumer-source.json`; directly triggering on an arbitrary Rust crate would merely rerun
-the old consumer pin and could not certify the changed provider implementation.
+These integration commands consume each sibling checkout exactly as it stands.
+They do not fetch, pin, checkout, or mutate the Engine or downstream source
+repository, and they are not automatic requirements for unrelated Engine
+changes. Exact commits belong in Den task/review evidence. Ordinary Engine CI
+uses `verify-studio.sh`; run the narrowest explicit downstream proof only when
+the changed surface or review acceptance requires it.
 
 Browser rejection proof uses the same bounded project-mutation readiness budget as successful
 preparation, then requires a visible error diagnostic, a disabled apply action, and an unchanged
