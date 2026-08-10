@@ -8,6 +8,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 "$REPO_ROOT/scripts/test-render-completeness-checker.sh"
 
 pnpm --dir "$REPO_ROOT/render" install --frozen-lockfile
+"$REPO_ROOT/scripts/verify-application-host-artifact.sh"
 "$REPO_ROOT/scripts/verify-renderer-webview-host.sh"
 
 if [[ -z "${PLAYWRIGHT_CHROMIUM_EXECUTABLE:-}" ]] && command -v chromium >/dev/null 2>&1; then

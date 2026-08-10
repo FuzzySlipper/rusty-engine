@@ -602,6 +602,16 @@ the surface-owned animation projection, but the surface does not discover servic
 ambient callbacks. Demo and Studio consumers provide typed frames and resource resolvers instead
 of constructing Three scenes of their own.
 
+`@rusty-engine/application-host` is the sole downstream web-application entry point above that
+internal host. Engine publishes it as one reproducibly built artifact with its renderer closure
+bundled and no renderer peer dependencies. It creates the canvas and one downstream DOM root,
+owns startup/failure, resize, cadence, pointer/focus modes, whole-frame replacement, and disposal,
+and exposes only bounded frame, camera, interaction, and lifecycle ports. A trusted downstream UI
+framework mounts into that root but never receives the canvas, backend, private bridge, or package
+topology. Browser, Tauri, and Electron products reuse the exact composition; only their typed Rust
+transport differs. Trusted downstream source is not treated as hostile plugin content, so this
+boundary adds no sanitizer or sandbox framework.
+
 The surface lighting contract is versioned and observational. Omitted settings retain the compatible
 two-light neutral rig independently in the world and viewmodel scenes; a consumer may disable either
 rig and supply ordinary retained lights instead. The host validates a bounded shadow policy before
@@ -678,6 +688,8 @@ The boundary is layered deliberately:
   are explicit backend adapters, not a renderer-neutral or Engine-wide platform API;
 - `@rusty-engine/renderer-host` owns the current browser/webview lifecycle, DOM overlays, WebAudio,
   input capture, inspection, and editor-host behavior;
+- `@rusty-engine/application-host` bundles those private implementation owners behind one public
+  web-product mount, rich-DOM root, typed runtime ports, and transactional surface lifecycle;
 - `renderer-webview-host` is a platform leaf that embeds the reproducible Engine-private renderer
   artifact, owns exactly one Wry child webview, admits bounded content-addressed resource bytes,
   and exposes only named Rust operations plus typed observations; and

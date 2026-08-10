@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
+    <title>Rusty Application Host acceptance</title>
+    <style>
+      html, body { margin: 0; min-height: 100%; }
+      #application { min-height: 100vh; }
+      #gameplay-zone { height: 320px; }
+      #toolbar { position: absolute; inset: 12px 12px auto auto; }
+    </style>
+  </head>
+  <body>
+    <div id="application"></div>
+    <script type="module" src="./application-host.ts"></script>
+  </body>
+</html>

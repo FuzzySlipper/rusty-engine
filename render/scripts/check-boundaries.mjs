@@ -2,10 +2,12 @@ import { readFileSync, readdirSync } from 'node:fs';
 
 const root = new URL('../', import.meta.url);
 const packages = new Map([
-  ['render-contracts', { dependencies: [], peers: [] }],
+  ['application-host', { dependencies: [], peers: [], preparesGitConsumer: false }],
+  ['render-contracts', { dependencies: [], peers: [], preparesGitConsumer: true }],
   ['render-projection', {
     dependencies: [],
     peers: ['@rusty-engine/render-contracts'],
+    preparesGitConsumer: true,
   }],
   ['renderer-three', {
     dependencies: ['@noble/hashes', '@types/three', 'fflate', 'three'],
@@ -13,6 +15,7 @@ const packages = new Map([
       '@rusty-engine/render-contracts',
       '@rusty-engine/render-projection',
     ],
+    preparesGitConsumer: true,
   }],
   ['renderer-host', {
     dependencies: [],
@@ -21,6 +24,7 @@ const packages = new Map([
       '@rusty-engine/render-projection',
       '@rusty-engine/renderer-three',
     ],
+    preparesGitConsumer: true,
   }],
 ]);
 
@@ -28,7 +32,7 @@ for (const [name, expected] of packages) {
   const manifest = JSON.parse(readFileSync(new URL(`packages/${name}/package.json`, root), 'utf8'));
   assertKeys(name, 'dependencies', manifest.dependencies, expected.dependencies);
   assertKeys(name, 'peerDependencies', manifest.peerDependencies, expected.peers);
-  if (manifest.scripts?.prepare !== 'pnpm run build') {
+  if (expected.preparesGitConsumer && manifest.scripts?.prepare !== 'pnpm run build') {
     throw new Error(`${name} must prepare its distributable output for exact-revision Git consumers`);
   }
 
@@ -39,6 +43,33 @@ for (const [name, expected] of packages) {
     if (manifest.devDependencies?.[peer] !== 'workspace:*') {
       throw new Error(`${name} peer ${peer} must use its workspace package for provider builds`);
     }
+  }
+}
+
+const applicationArtifact = JSON.parse(
+  readFileSync(new URL('artifacts/application-host/package.json', root), 'utf8'),
+);
+assertKeys(
+  'application-host artifact',
+  'dependencies',
+  applicationArtifact.dependencies,
+  [],
+);
+assertKeys(
+  'application-host artifact',
+  'peerDependencies',
+  applicationArtifact.peerDependencies,
+  [],
+);
+if (applicationArtifact.name !== '@rusty-engine/application-host') {
+  throw new Error('application-host artifact must own the sole public downstream package name');
+}
+for (const declaration of ['index.d.ts', 'application-host.d.ts']) {
+  const source = readFileSync(new URL(`artifacts/application-host/${declaration}`, root), 'utf8');
+  if (/@rusty-engine\/(?:render|renderer)|\bthree\b|studio/iu.test(source)) {
+    throw new Error(
+      `application-host artifact declaration ${declaration} leaked an internal package or backend`,
+    );
   }
 }
 

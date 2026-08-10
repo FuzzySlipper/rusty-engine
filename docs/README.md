@@ -35,7 +35,7 @@ paths:
 | [gameplay-rules-contract.md](gameplay-rules-contract.md) | Optional semantic-neutral Rust package and isolated TypeScript authoring, resolution, provenance, and diagnostics contract |
 | [rendering-successor-contract.md](rendering-successor-contract.md) | Shared renderer transfer and ownership contract |
 | [rendering-operations.md](rendering-operations.md) | Renderer verification and operational limits |
-| [topics/development/downstream-renderer-and-studio.md](topics/development/downstream-renderer-and-studio.md) | Central downstream Rust facade, renderer, and Engine-hosted Studio boundary |
+| [topics/development/downstream-renderer-and-studio.md](topics/development/downstream-renderer-and-studio.md) | Central downstream Rust facade, bundled rich-DOM application host, renderer, and Engine-hosted Studio boundary |
 | [studio-migration-contract.md](studio-migration-contract.md) | Studio parity and owner-adoption contract |
 | [studio-adapter-protocol.md](studio-adapter-protocol.md) | Closed external-project adapter protocol |
 | [topics/studio-service.md](topics/studio-service.md) | Persistent generic Studio service operations |

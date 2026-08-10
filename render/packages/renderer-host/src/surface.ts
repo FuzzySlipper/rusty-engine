@@ -430,6 +430,8 @@ export interface RendererSurface {
   readonly pointerLocked: () => boolean;
   readonly projectWorldPoint: (position: RendererSurfaceVec3) => RendererSurfaceWorldProjection;
   readonly projectionSnapshot: () => RenderProjectionSnapshot;
+  /** Release pointer capture and clear transient physical input without disposing the surface. */
+  readonly releaseInput: () => void;
   /** Submit one explicit frame and return its immutable renderer-owned sample. */
   readonly renderOnce: (timeMs?: number) => RendererSurfaceSubmissionSample;
   readonly resetCamera: () => void;
@@ -825,6 +827,7 @@ function mountPreparedRendererSurface(
     pointerLocked: controls.pointerLocked,
     projectWorldPoint: backendSurface.projectWorldPoint,
     projectionSnapshot: () => projection.snapshot(),
+    releaseInput: controls.releaseInput,
     renderOnce,
     resetCamera: () => {
       controls.resetCamera();
@@ -967,6 +970,7 @@ interface RendererSurfaceFirstPersonControls {
   readonly lockPointer: () => void;
   readonly movementState: () => RendererSurfaceMovementState;
   readonly pointerLocked: () => boolean;
+  readonly releaseInput: () => void;
   readonly requiresAnimationFrame: () => boolean;
   readonly resetCamera: () => void;
   readonly setCameraPose: (
@@ -1014,6 +1018,10 @@ function createRendererSurfaceFirstPersonControls(
   const clearInput = (): void => {
     pressedCodes.clear();
     pendingLook = [0, 0];
+  };
+  const releaseInput = (): void => {
+    clearInput();
+    if (pointerLocked()) document.exitPointerLock();
   };
   const onPointerDown = (event: PointerEvent): void => {
     if (!enabled || event.button !== 0) return;
@@ -1143,6 +1151,7 @@ function createRendererSurfaceFirstPersonControls(
     },
     movementState: () => movementState,
     pointerLocked,
+    releaseInput,
     requiresAnimationFrame: () => (
       enabled
       && (
@@ -1155,14 +1164,13 @@ function createRendererSurfaceFirstPersonControls(
     setCameraPose,
     update,
     dispose: () => {
-      clearInput();
+      releaseInput();
       canvas.removeEventListener('pointerdown', onPointerDown);
       document.removeEventListener('pointerlockchange', onPointerLockChange);
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('keyup', onKeyUp);
       document.defaultView?.removeEventListener('blur', clearInput);
-      if (pointerLocked()) document.exitPointerLock();
       canvas.tabIndex = originalTabIndex;
       canvas.style.touchAction = originalTouchAction;
     },

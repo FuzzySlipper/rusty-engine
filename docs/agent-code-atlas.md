@@ -49,6 +49,7 @@ downstream game policy and orchestration
                                       |
                                       +--> render-host-contracts
                                       +--> renderer-webview-host --> private render/ artifact
+                                      +--> application-host --> bundled web product artifact
                                       +--> studio/ viewport and tools
 
 rusty-engine is the complete downstream facade over every public Rust library.

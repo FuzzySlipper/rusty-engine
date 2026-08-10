@@ -80,7 +80,57 @@ bridge, or renderer control transport. If a needed presentation capability is
 absent, request a game-neutral Engine mechanism instead of reaching through the
 boundary.
 
-## DOM presentation without renderer ownership
+## Rich DOM presentation without renderer ownership
+
+Browser-delivered products and webview wrappers use one additional public
+artifact from the adjacent Engine checkout:
+
+```json
+{
+  "dependencies": {
+    "@rusty-engine/application-host": "file:../rusty-engine/render/artifacts/application-host"
+  }
+}
+```
+
+That artifact bundles its complete renderer closure. Its manifest and the
+downstream lock expose no `render-contracts`, `render-projection`,
+`renderer-host`, `renderer-three`, Three, or Studio dependency. Downstream code
+does not build, select, configure, or deep-import those packages.
+
+`mountRustyApplication` creates one Engine-owned composition root containing
+the canvas and one bounded downstream UI root. It owns renderer startup,
+strict frame admission, whole-frame replacement, the sole render cadence,
+resize/DPR behavior, pointer/focus arbitration, startup/failure presentation,
+and transactional cleanup. The downstream UI mount receives only:
+
+- a renderer port for Rust-projected frames and authoritative camera poses;
+- an interaction port with `gameplay`, `interface`, and `modal` modes plus
+  gameplay focus recovery; and
+- its own DOM root, where Angular, another framework, or direct typed DOM code
+  can build the product HUD, menus, forms, and accessibility tree.
+
+It never receives the canvas, Three/WebGL objects, renderer package topology,
+the private bridge, or a generic renderer command/eval path. Incremental frame
+diffs are admitted atomically. Complete frame replacement prepares a fresh
+surface before publishing it and retires the prior surface only after the new
+frame succeeds, so reconnects and static-resource revisions do not replay
+`create` operations into partial retained state.
+
+The same bootstrap runs in an ordinary web application, Tauri, or Electron.
+Only the downstream-owned typed Rust transport adapter varies: HTTP/WebSocket,
+Tauri command/event wiring, or another host-neutral carrier can deliver the
+same Rust frame and semantic intents without changing DOM composition.
+
+Downstream UI modules, templates, styles, assets, and local project files are
+trusted application source, just like downstream Rust. This boundary enforces
+lifecycle, decoding, and authority; it is not a hostile plugin boundary. Do
+not add an HTML sanitizer, executable-module sandbox, CSP framework,
+capability-security layer, or security ceremony to protect Engine from its own
+application. Loading third-party or user-authored executable UI would require
+a separate explicit threat model and task.
+
+### Fixed Rust-only DOM presentation
 
 The native adapter's fixed private document owns both its canvas and one DOM
 presentation region. Downstream Rust can place UI-like presentation in that
@@ -96,39 +146,32 @@ Engine privately realizes those descriptors as DOM where the current host uses
 DOM. Downstream supplies only typed Rust facts and observes typed receipts. It
 does not receive an element, selector, callback, template slot, or raw event.
 
-This is not yet a general embedded application-UI seam. Arbitrary downstream
-HUD markup, menus, forms, Angular components, and accessibility trees cannot
-currently be injected into the fixed `RendererWebviewAdapter` document. Do not
-work around that limit with private bridge calls, document mutation, or direct
-renderer-package imports. Use the existing typed presentation families or a
-separate product-owned UI surface; if repeated products need richer UI inside
-the renderer document, add a bounded typed Engine host contract first.
+This remains the Rust-only path for products that do not have a product DOM.
+Do not inject markup into the fixed `RendererWebviewAdapter` document or use
+private bridge calls. A product that needs arbitrary rich DOM uses the public
+application host instead; both paths retain the same Rust authority posture.
 
 ## Minimal product bootstrap
 
-For the supported native/webview path there is no downstream web bootstrap.
+For the native/webview adapter path there is no downstream web bootstrap.
 Downstream Rust creates its outer window/event loop, mounts one
 `RendererWebviewAdapter`, submits frames and presentation, and handles typed
 observations. Engine generates and owns the child HTML document and private
 renderer startup.
 
-A deliberately browser-delivered product may still own a small outer web
-application for product navigation, accessibility, or other game-specific UI,
-but the current Rust facade does not expose an executable public browser
-renderer host. Such an application must not reach into Engine-private packages
-to manufacture one. When a public Engine-owned browser output exists, its
-canonical bootstrap should remain only:
+A browser/Tauri/Electron product owns one deliberately small composition root:
 
 ```text
-index.html -> main.ts -> mount one Engine-owned renderer host and product shell
+index.html -> main.ts -> mountRustyApplication -> mount downstream UI root
 ```
 
-That bootstrap may select a root component and report bounded startup failure.
-It must not own gameplay state, renderer/backend construction, frame decoding,
-resource lifecycle, a second render loop, or a second renderer control
-transport. Until that browser host is implemented and named, native rendering
-and a browser UI are separate supported product surfaces rather than an implied
-private-package integration.
+`index.html` supplies one empty root. `main.ts` calls the public mount function,
+mounts the framework root through its callback, and supplies the returned
+bounded context through ordinary dependency injection. Engine reports bounded
+startup failure. Feature components and Rust transport owners live outside the
+bootstrap. It does not own gameplay state, renderer/backend construction,
+frame decoding, resource lifecycle, a second render loop, or another renderer
+control transport.
 
 ## Studio is an Engine-hosted product
 
@@ -177,6 +220,7 @@ dedicated session-isolation implementation and probe prove it.
 Before adding a downstream rendering or Studio dependency, verify:
 
 - Is this already reachable through the complete `rusty-engine` Rust facade?
+- For a web UI, is `@rusty-engine/application-host` the only Engine package?
 - Does authoritative meaning stay in downstream Rust?
 - Does renderer interaction use named Rust operations and typed readouts only?
 - Does Studio integration stop at `.rusty-studio.json` plus the Rust adapter?

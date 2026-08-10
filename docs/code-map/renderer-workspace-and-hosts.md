@@ -14,6 +14,11 @@ compiled artifact, and Rust webview host/resource lifecycle.
 - `@rusty-engine/renderer-host`: backend/host composition, presentation hosts,
   inspection surface, immutable submission/resource statistics, timing,
   camera, versioned default-light/shadow policy and readout, and editor viewport integration.
+- `@rusty-engine/application-host`: one bundled downstream browser/wrapper
+  composition root, trusted rich-DOM mount, typed frame/camera/interaction
+  ports, transactional whole-frame replacement, and lifecycle cleanup.
+- `render/artifacts/application-host`: reproducible public artifact with no
+  renderer peer or runtime dependencies in the downstream lock.
 - `render/browser`: real Chromium/WebGL/WebAudio/DOM acceptance.
 - `render/private/webview`: fixed private bridge and thin composition root.
 - `renderer-webview-host`: embedded artifact, one Wry child webview, bounded
@@ -49,6 +54,8 @@ compiled artifact, and Rust webview host/resource lifecycle.
   - `animated-mesh-capture.ts` owns deterministic PNG/contact-sheet encoding
     over an already-mounted `RendererSurface`; it does not load assets or own a
     second animation loop.
+- [`render/packages/application-host/src`](../../render/packages/application-host/src)
+- [`render/artifacts/application-host`](../../render/artifacts/application-host)
 - [`render/browser`](../../render/browser)
 - [`render/private/webview`](../../render/private/webview)
 - [`renderer-webview-host/src/lib.rs`](../../rust/crates/renderer-webview-host/src/lib.rs)
@@ -64,6 +71,9 @@ compiled artifact, and Rust webview host/resource lifecycle.
 
 - Ordinary games use `rusty_engine::renderer_webview_host` and
   `rusty_engine::render_host_contracts`; TypeScript package topology is private.
+- Browser/Tauri/Electron products that need rich DOM import only
+  `@rusty-engine/application-host`; its bundled closure keeps renderer package
+  names and backend types out of downstream manifests, locks, and source.
 - The downstream owns the outer window/event loop and content/storage policy.
   The adapter owns one child webview and accepts pre-admitted content-hash-bound
   bytes without URLs or filesystem access.
