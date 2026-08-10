@@ -37,7 +37,15 @@ the process-wide `StudioAdapterHost` field layout.
 Against two hosts on different loopback ports and settings roots, the same two
 clients retained project A and project B independently. Terminating both hosts
 caused every fixture adapter process group to exit within the bounded cleanup
-window.
+window. Each fixture adapter starts a recorded descendant that shares its OS
+process-group identity. Before every close, the probe confirms that the leader,
+descendant, and negative process-group identity are live. During cleanup, the
+descendant records that its leader has exited and the probe requires the
+descendant and group identity to remain live before it awaits the host result.
+Immediately after a project switch or host shutdown returns, it then requires
+all three identities to be absent. A leader-only cleanup therefore cannot
+satisfy the assertion. The production close path also reports an error if the
+group remains after its final `SIGKILL` wait.
 
 The focused command is:
 
@@ -45,20 +53,22 @@ The focused command is:
 pnpm --dir studio exec tsx --test test/studio-concurrency.test.ts
 ```
 
-On the 2026-08-10 development run, the test completed in 0.83 seconds and
+On the 2026-08-10 descendant-bearing development run, the test completed in
+1.49 seconds and
 reported these Linux `VmRSS` samples:
 
-| Shape | Host RSS | Adapter RSS | Live topology |
+| Shape | Host RSS | Adapter-leader RSS | Live topology |
 |---|---:|---:|---|
-| Shared host after a project switch | 93,696 KiB | 67,228 KiB | 1 host + 1 adapter |
-| Isolated host A | 93,920 KiB | 67,072 KiB | 1 host + 1 adapter |
-| Isolated host B | 93,764 KiB | 67,112 KiB | 1 host + 1 adapter |
+| Shared host after a project switch | 109,684 KiB | 69,880 KiB | 1 host + 1 adapter group |
+| Isolated host A | 95,152 KiB | 69,468 KiB | 1 host + 1 adapter group |
+| Isolated host B | 95,868 KiB | 69,408 KiB | 1 host + 1 adapter group |
 
 These samples bound the tested Node/tsx fixture shape, not every downstream
-Rust adapter. The stable resource conclusion is topological: each concurrently
+Rust adapter. The evidence-only descendant sentinel is excluded from the RSS
+column. The stable resource conclusion is topological: each concurrently
 isolated user adds one host and one adapter process group, while project
-switching on one host returns to one adapter. Startup, switch, host shutdown,
-and adapter cleanup are all exercised by the checked probe.
+switching on one host returns to one group. Startup, switch, host shutdown, and
+group-wide adapter cleanup are all exercised by the checked probe.
 
 ## Options considered
 

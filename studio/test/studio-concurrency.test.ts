@@ -21,9 +21,16 @@ import {
 const STUDIO_ROOT = resolve(import.meta.dirname, '..');
 
 interface LifecycleEvent {
-  readonly event: 'started' | 'stopped';
+  readonly event: 'started' | 'leaderExited' | 'stopped';
   readonly adapterId: string;
-  readonly pid: number;
+  readonly leaderPid: number;
+  readonly descendantPid: number;
+}
+
+interface AdapterProcessGroup {
+  readonly leaderPid: number;
+  readonly descendantPid: number;
+  readonly processGroupId: number;
 }
 
 interface RunningHost {
@@ -121,9 +128,12 @@ test('shared clients redirect one process-wide project while isolated hosts rema
 
     await openProject(sharedFirst, firstRoot, 'content/first.project.json');
     assert.equal((await sharedFirst.get('/api/studio-status'))['activeProjectRoot'], firstRoot);
-    const firstPid = await adapterPid(lifecyclePath, 'fixture.first');
+    const firstGroup = await adapterGroup(lifecyclePath, 'fixture.first');
+    assertProcessGroupLive(firstGroup);
 
-    await openProject(sharedSecond, secondRoot, 'content/second.project.json');
+    const switchProject = openProject(sharedSecond, secondRoot, 'content/second.project.json');
+    await assertLeaderExitedWhileDescendantLives(lifecyclePath, 'fixture.first', firstGroup);
+    await switchProject;
     const redirectedStatus = await sharedFirst.get('/api/studio-status');
     assert.equal(redirectedStatus['activeProjectRoot'], secondRoot);
     assert.equal(runningAdapterId(redirectedStatus), 'fixture.second');
@@ -132,17 +142,25 @@ test('shared clients redirect one process-wide project while isolated hosts rema
       'fixture.second',
       'the first client now exchanges with the second client\'s adapter',
     );
-    await waitForProcessExit(firstPid);
-    const sharedAdapterPid = await adapterPid(lifecyclePath, 'fixture.second');
+    assertProcessGroupExited(firstGroup);
+    const sharedAdapterGroup = await adapterGroup(lifecyclePath, 'fixture.second');
+    assertProcessGroupLive(sharedAdapterGroup);
     const sharedMeasurement = {
       hostRssKiB: await residentMemoryKiB(shared.child.pid),
-      adapterRssKiB: await residentMemoryKiB(sharedAdapterPid),
+      adapterLeaderRssKiB: await residentMemoryKiB(sharedAdapterGroup.leaderPid),
       liveHosts: 1,
-      liveAdapters: 1,
+      liveAdapterGroups: 1,
+      cleanupSentinels: 1,
     };
 
-    await stopHost(shared);
-    await waitForProcessExit(sharedAdapterPid);
+    const stopShared = stopHost(shared);
+    await assertLeaderExitedWhileDescendantLives(
+      lifecyclePath,
+      'fixture.second',
+      sharedAdapterGroup,
+    );
+    await stopShared;
+    assertProcessGroupExited(sharedAdapterGroup);
 
     const isolatedFirst = await startHost(staticRoot, join(root, 'isolated-first-settings'));
     const isolatedSecond = await startHost(staticRoot, join(root, 'isolated-second-settings'));
@@ -161,23 +179,32 @@ test('shared clients redirect one process-wide project while isolated hosts rema
     assert.equal(runningAdapterId(await describe(secondClient)), 'fixture.second');
 
     const events = await lifecycleEvents(lifecyclePath);
-    const liveFirstPid = latestStartedPid(events, 'fixture.first');
-    const liveSecondPid = latestStartedPid(events, 'fixture.second');
+    const liveFirstGroup = await processGroupFor(latestStarted(events, 'fixture.first'));
+    const liveSecondGroup = await processGroupFor(latestStarted(events, 'fixture.second'));
+    assertProcessGroupLive(liveFirstGroup);
+    assertProcessGroupLive(liveSecondGroup);
     const isolatedMeasurement = {
       hostRssKiB: [
         await residentMemoryKiB(isolatedFirst.child.pid),
         await residentMemoryKiB(isolatedSecond.child.pid),
       ],
-      adapterRssKiB: [
-        await residentMemoryKiB(liveFirstPid),
-        await residentMemoryKiB(liveSecondPid),
+      adapterLeaderRssKiB: [
+        await residentMemoryKiB(liveFirstGroup.leaderPid),
+        await residentMemoryKiB(liveSecondGroup.leaderPid),
       ],
       liveHosts: 2,
-      liveAdapters: 2,
+      liveAdapterGroups: 2,
+      cleanupSentinels: 2,
     };
 
-    await Promise.all([stopHost(isolatedFirst), stopHost(isolatedSecond)]);
-    await Promise.all([waitForProcessExit(liveFirstPid), waitForProcessExit(liveSecondPid)]);
+    const stopIsolated = [stopHost(isolatedFirst), stopHost(isolatedSecond)];
+    await Promise.all([
+      assertLeaderExitedWhileDescendantLives(lifecyclePath, 'fixture.first', liveFirstGroup),
+      assertLeaderExitedWhileDescendantLives(lifecyclePath, 'fixture.second', liveSecondGroup),
+    ]);
+    await Promise.all(stopIsolated);
+    assertProcessGroupExited(liveFirstGroup);
+    assertProcessGroupExited(liveSecondGroup);
     process.stdout.write(`STUDIO_CONCURRENCY_PROBE ${JSON.stringify({
       shared: sharedMeasurement,
       isolated: isolatedMeasurement,
@@ -297,17 +324,17 @@ async function residentMemoryKiB(pid: number | undefined): Promise<number> {
   return Number(match[1]);
 }
 
-async function adapterPid(path: string, adapterId: string): Promise<number> {
+async function adapterGroup(path: string, adapterId: string): Promise<AdapterProcessGroup> {
   const deadline = Date.now() + 2_000;
   while (Date.now() < deadline) {
     const events = await lifecycleEvents(path);
     const started = events.filter(
       (event) => event.event === 'started' && event.adapterId === adapterId,
     ).at(-1);
-    if (started !== undefined) return started.pid;
+    if (started !== undefined) return processGroupFor(started);
     await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 10); });
   }
-  throw new Error(`Adapter ${adapterId} did not publish its pid`);
+  throw new Error(`Adapter ${adapterId} did not publish its process group`);
 }
 
 async function lifecycleEvents(path: string): Promise<readonly LifecycleEvent[]> {
@@ -323,25 +350,93 @@ async function lifecycleEvents(path: string): Promise<readonly LifecycleEvent[]>
     : text.trim().split('\n').map((line) => JSON.parse(line) as LifecycleEvent);
 }
 
-function latestStartedPid(events: readonly LifecycleEvent[], adapterId: string): number {
+function latestStarted(events: readonly LifecycleEvent[], adapterId: string): LifecycleEvent {
   const event = events.filter(
     (candidate) => candidate.event === 'started' && candidate.adapterId === adapterId,
   ).at(-1);
   assert.ok(event !== undefined, `missing lifecycle start for ${adapterId}`);
-  return event.pid;
+  return event;
 }
 
-async function waitForProcessExit(pid: number): Promise<void> {
-  const deadline = Date.now() + 5_000;
+async function processGroupFor(event: LifecycleEvent): Promise<AdapterProcessGroup> {
+  const leaderGroup = await processGroupId(event.leaderPid);
+  const descendantGroup = await processGroupId(event.descendantPid);
+  assert.equal(leaderGroup, event.leaderPid, 'detached adapter must lead its process group');
+  assert.equal(descendantGroup, leaderGroup, 'fixture descendant must share the adapter process group');
+  return {
+    leaderPid: event.leaderPid,
+    descendantPid: event.descendantPid,
+    processGroupId: leaderGroup,
+  };
+}
+
+async function processGroupId(pid: number): Promise<number> {
+  const status = await readFile(`/proc/${String(pid)}/stat`, 'utf8');
+  const fields = status.slice(status.lastIndexOf(')') + 2).split(' ');
+  const processGroup = Number(fields[2]);
+  assert.ok(Number.isSafeInteger(processGroup) && processGroup > 0);
+  return processGroup;
+}
+
+function assertProcessGroupLive(group: AdapterProcessGroup): void {
+  assert.equal(processIdentityAlive(group.leaderPid), true, 'adapter leader must be live before cleanup');
+  assert.equal(
+    processIdentityAlive(group.descendantPid),
+    true,
+    'adapter descendant must be live before cleanup',
+  );
+  assert.equal(processIdentityAlive(-group.processGroupId), true, 'adapter process group must be live');
+}
+
+function assertProcessGroupExited(group: AdapterProcessGroup): void {
+  assert.equal(processIdentityAlive(group.leaderPid), false, 'adapter leader survived cleanup');
+  assert.equal(processIdentityAlive(group.descendantPid), false, 'adapter descendant survived cleanup');
+  assert.equal(
+    processIdentityAlive(-group.processGroupId),
+    false,
+    'adapter process group survived cleanup',
+  );
+}
+
+async function assertLeaderExitedWhileDescendantLives(
+  path: string,
+  adapterId: string,
+  group: AdapterProcessGroup,
+): Promise<void> {
+  const deadline = Date.now() + 2_000;
   while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-    } catch {
+    const observed = (await lifecycleEvents(path)).some(
+      (event) => event.event === 'leaderExited'
+        && event.adapterId === adapterId
+        && event.leaderPid === group.leaderPid
+        && event.descendantPid === group.descendantPid,
+    );
+    if (observed) {
+      assert.equal(processIdentityAlive(group.leaderPid), false, 'adapter leader must have exited');
+      assert.equal(
+        processIdentityAlive(group.descendantPid),
+        true,
+        'adapter descendant must outlive its leader during cleanup proof',
+      );
+      assert.equal(
+        processIdentityAlive(-group.processGroupId),
+        true,
+        'adapter group must remain live while its descendant remains',
+      );
       return;
     }
-    await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 25); });
+    await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, 5); });
   }
-  throw new Error(`process ${String(pid)} remained live after bounded cleanup`);
+  throw new Error(`adapter ${adapterId} did not expose the leader-only cleanup interval`);
+}
+
+function processIdentityAlive(pidOrProcessGroup: number): boolean {
+  try {
+    process.kill(pidOrProcessGroup, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function writeFixtureRoot(
@@ -361,15 +456,54 @@ async function writeFixtureRoot(
 }
 
 function fixtureAdapterSource(adapterId: string, projectId: string, lifecyclePath: string): string {
+  const descendantSource = `
+const { appendFileSync } = require('node:fs');
+const parentPid = Number(process.argv[1]);
+const lifecyclePath = process.argv[2];
+const adapterId = process.argv[3];
+const observeParent = setInterval(() => {
+  try {
+    process.kill(parentPid, 0);
+  } catch {
+    clearInterval(observeParent);
+    appendFileSync(lifecyclePath, JSON.stringify({
+      event: 'leaderExited',
+      adapterId,
+      leaderPid: parentPid,
+      descendantPid: process.pid,
+    }) + '\\n');
+    setTimeout(() => process.exit(0), 250);
+  }
+}, 10);
+`;
   return `#!/usr/bin/env node
+import { spawn } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 const adapterId = ${JSON.stringify(adapterId)};
 const projectId = ${JSON.stringify(projectId)};
 const lifecyclePath = ${JSON.stringify(lifecyclePath)};
-appendFileSync(lifecyclePath, JSON.stringify({ event: 'started', adapterId, pid: process.pid }) + '\\n');
+const descendant = spawn(
+  process.execPath,
+  [
+    '-e',
+    ${JSON.stringify(descendantSource)},
+    String(process.pid),
+    lifecyclePath,
+    adapterId,
+  ],
+  { stdio: 'ignore' },
+);
+if (descendant.pid === undefined) throw new Error('fixture descendant did not start');
+descendant.unref();
+const lifecycle = {
+  adapterId,
+  leaderPid: process.pid,
+  descendantPid: descendant.pid,
+};
+appendFileSync(lifecyclePath, JSON.stringify({ event: 'started', ...lifecycle }) + '\\n');
 process.once('exit', () => {
-  appendFileSync(lifecyclePath, JSON.stringify({ event: 'stopped', adapterId, pid: process.pid }) + '\\n');
+  appendFileSync(lifecyclePath, JSON.stringify({ event: 'stopped', ...lifecycle }) + '\\n');
 });
 const lines = createInterface({ input: process.stdin });
 lines.on('line', (line) => {

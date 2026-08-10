@@ -111,7 +111,11 @@ export class AdapterProcess {
     this.#signalProcessGroup('SIGTERM');
     if (await this.#waitForProcessGroup(ADAPTER_CLOSE_GRACE_MILLISECONDS)) return;
     this.#signalProcessGroup('SIGKILL');
-    await this.#waitForProcessGroup(ADAPTER_CLOSE_GRACE_MILLISECONDS);
+    if (!await this.#waitForProcessGroup(ADAPTER_CLOSE_GRACE_MILLISECONDS)) {
+      throw new Error(
+        `studio_adapter_process_group_cleanup_failed: process group ${String(this.#child.pid)} survived SIGKILL`,
+      );
+    }
   }
 
   async #waitForProcessGroup(milliseconds: number): Promise<boolean> {
