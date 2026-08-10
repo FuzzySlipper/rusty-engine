@@ -1,4 +1,125 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+
+declare global {
+  interface Window {
+    __rustyApplicationAdmissionGate?: {
+      readonly arm: () => void;
+      readonly pending: () => boolean;
+      readonly release: () => void;
+    };
+    __rustyApplicationCanvasMutationCount?: number;
+    __rustyApplicationCanvasObserver?: MutationObserver;
+    __rustyApplicationPendingIncremental?: unknown;
+    __rustyApplicationPendingReplacement?: Promise<unknown>;
+  }
+}
+
+async function installResourceAdmissionGate(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    // Delay the exact private application-host resolver boundary without adding
+    // a production test hook or exposing renderer resource implementation.
+    const originalResolve = Promise.resolve.bind(Promise);
+    let armed = false;
+    let pending = false;
+    let release: (() => void) | null = null;
+    const gatedResolve = ((value?: unknown) => {
+      if (armed && value instanceof ArrayBuffer && value.byteLength === 72) {
+        armed = false;
+        pending = true;
+        return new Promise((resolve) => {
+          release = () => {
+            pending = false;
+            resolve(value);
+          };
+        });
+      }
+      return originalResolve(value);
+    }) as typeof Promise.resolve;
+    Object.defineProperty(Promise, 'resolve', {
+      configurable: true,
+      value: gatedResolve,
+      writable: true,
+    });
+    window.__rustyApplicationAdmissionGate = {
+      arm: () => {
+        if (pending) throw new Error('resource admission gate is already pending');
+        armed = true;
+      },
+      pending: () => pending,
+      release: () => {
+        if (release === null) throw new Error('resource admission gate was not reached');
+        const complete = release;
+        release = null;
+        complete();
+      },
+    };
+  });
+}
+
+async function observePublishedCanvasMutations(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    window.__rustyApplicationCanvasObserver?.disconnect();
+    window.__rustyApplicationCanvasMutationCount = 0;
+    const host = document.querySelector('[data-rusty-application-host]');
+    if (host === null) throw new Error('application host is unavailable');
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        const changedCanvas = [...record.addedNodes, ...record.removedNodes]
+          .some((node) => node instanceof HTMLCanvasElement);
+        if (changedCanvas) {
+          window.__rustyApplicationCanvasMutationCount =
+            (window.__rustyApplicationCanvasMutationCount ?? 0) + 1;
+        }
+      }
+    });
+    observer.observe(host, { childList: true });
+    window.__rustyApplicationCanvasObserver = observer;
+  });
+}
+
+async function publishedSurfaceSnapshot(page: Page): Promise<unknown> {
+  return page.evaluate(() => {
+    const canvases = Array.from(document.querySelectorAll<HTMLCanvasElement>(
+      'canvas[data-rusty-application-renderer="engine-owned"]',
+    ));
+    const canvas = canvases[0];
+    let centerPixel: readonly number[] = [];
+    if (canvas !== undefined) {
+      const context = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
+      if (context !== null) {
+        const pixel = new Uint8Array(4);
+        context.readPixels(
+          Math.floor(context.drawingBufferWidth / 2),
+          Math.floor(context.drawingBufferHeight / 2),
+          1,
+          1,
+          context.RGBA,
+          context.UNSIGNED_BYTE,
+          pixel,
+        );
+        centerPixel = Array.from(pixel);
+      }
+    }
+    return {
+      canvasCount: canvases.length,
+      canvasIds: canvases.map((item) => item.id),
+      centerPixel,
+      readout: window.__rustyApplicationHost?.readout(),
+    };
+  });
+}
+
+async function assertPublishedSurfaceRemains(
+  page: Page,
+  expected: unknown,
+): Promise<void> {
+  for (let sample = 0; sample < 8; sample += 1) {
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    }));
+    expect(await publishedSurfaceSnapshot(page)).toEqual(expected);
+  }
+}
 
 test('application host owns composition, input arbitration, and disposal', async ({ page }) => {
   await page.goto('/browser/application-host.html');
@@ -41,15 +162,33 @@ test('application host owns composition, input arbitration, and disposal', async
   expect(visibleResourcePixels).toBeGreaterThan(0);
 
   await page.locator('canvas').evaluate((canvas) => { canvas.id = 'resource-backed-renderer'; });
-  const corruptContent = await page.evaluate(() => {
+  await installResourceAdmissionGate(page);
+  await observePublishedCanvasMutations(page);
+  const publishedBeforeReplacement = await publishedSurfaceSnapshot(page);
+  await page.evaluate(() => {
+    const host = window.__rustyApplicationHost;
     const content = window.__rustyApplicationResourceContent?.(true);
-    if (content === undefined) throw new Error('resource content helper is unavailable');
-    return window.__rustyApplicationHost?.renderer.replaceContent(content);
+    if (host === undefined || content === undefined) {
+      throw new Error('application host or resource content helper is unavailable');
+    }
+    window.__rustyApplicationAdmissionGate?.arm();
+    window.__rustyApplicationPendingReplacement =
+      host.renderer.replaceContent(content);
+  });
+  await expect.poll(() => page.evaluate(() =>
+    window.__rustyApplicationAdmissionGate?.pending() ?? false,
+  )).toBe(true);
+  await assertPublishedSurfaceRemains(page, publishedBeforeReplacement);
+  expect(await page.evaluate(() => window.__rustyApplicationCanvasMutationCount)).toBe(0);
+  const corruptContent = await page.evaluate(async () => {
+    window.__rustyApplicationAdmissionGate?.release();
+    return window.__rustyApplicationPendingReplacement;
   });
   expect(corruptContent).toMatchObject({
     applied: false,
     diagnostics: [{ code: 'resource_admission_failed' }],
   });
+  expect(await page.evaluate(() => window.__rustyApplicationCanvasMutationCount)).toBe(0);
   await expect(page.locator('canvas#resource-backed-renderer')).toHaveCount(1);
   expect(await page.evaluate(() => window.__rustyApplicationHost?.readout().contentRevision)).toBe(1);
 
@@ -67,16 +206,34 @@ test('application host owns composition, input arbitration, and disposal', async
   });
   await expect(page.locator('canvas#resource-backed-renderer')).toHaveCount(1);
 
-  const restoredContent = await page.evaluate(() => {
+  await observePublishedCanvasMutations(page);
+  await page.evaluate(() => {
+    const host = window.__rustyApplicationHost;
     const content = window.__rustyApplicationResourceContent?.();
-    if (content === undefined) throw new Error('resource content helper is unavailable');
-    const replacement = window.__rustyApplicationHost?.renderer.replaceContent(content);
-    const incremental = window.__rustyApplicationHost?.renderer.applyFrame({
+    if (host === undefined || content === undefined) {
+      throw new Error('application host or resource content helper is unavailable');
+    }
+    window.__rustyApplicationAdmissionGate?.arm();
+    window.__rustyApplicationPendingReplacement =
+      host.renderer.replaceContent(content);
+    window.__rustyApplicationPendingIncremental =
+      host.renderer.applyFrame({
       schemaVersion: 1,
       ops: [],
     });
     content.resources?.[0]?.bytes.fill(0);
-    return replacement?.then((receipt) => ({ incremental, replacement: receipt }));
+  });
+  await expect.poll(() => page.evaluate(() =>
+    window.__rustyApplicationAdmissionGate?.pending() ?? false,
+  )).toBe(true);
+  await assertPublishedSurfaceRemains(page, publishedBeforeReplacement);
+  expect(await page.evaluate(() => window.__rustyApplicationCanvasMutationCount)).toBe(0);
+  const restoredContent = await page.evaluate(async () => {
+    window.__rustyApplicationAdmissionGate?.release();
+    return {
+      incremental: window.__rustyApplicationPendingIncremental,
+      replacement: await window.__rustyApplicationPendingReplacement,
+    };
   });
   expect(restoredContent).toEqual({
     incremental: {
@@ -88,6 +245,9 @@ test('application host owns composition, input arbitration, and disposal', async
     },
     replacement: { applied: true, diagnostics: [] },
   });
+  await expect.poll(() => page.evaluate(() =>
+    window.__rustyApplicationCanvasMutationCount,
+  )).toBe(1);
   await expect(page.locator('canvas#resource-backed-renderer')).toHaveCount(0);
   await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
   expect(await page.evaluate(() => window.__rustyApplicationHost?.readout())).toMatchObject({

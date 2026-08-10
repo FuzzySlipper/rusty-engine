@@ -19033,32 +19033,22 @@ async function P_(e, t) {
 				t = F_(new j_("disposed", "Rusty Application Host is disposed"));
 				return;
 			}
-			let o = f, l = R_(r);
-			i.host.insertBefore(l, i.ui);
-			let u = null, h = null;
+			let i = f, o = R_(r), s = null;
 			try {
 				let r = e();
-				u = await x(l, r), u.setCameraPose(n.cameraPose()), h = z_(i.host, i.ui, () => u, () => d, b), a = u, p = r, m += 1, f = l;
-				let c = s;
-				s = h, h = null;
-				try {
-					c();
-				} catch {}
+				s = await x(o, r), s.setCameraPose(n.cameraPose()), s.renderOnce(), i.replaceWith(o), a = s, p = r, m += 1, f = o;
 				try {
 					n.dispose();
 				} catch {}
-				o.remove(), t = Object.freeze({
+				t = Object.freeze({
 					applied: !0,
 					diagnostics: []
 				});
 			} catch (e) {
 				try {
-					h?.();
+					s?.dispose();
 				} catch {}
-				try {
-					u?.dispose();
-				} catch {}
-				l.remove(), t = F_(e);
+				o.remove(), t = F_(e);
 			}
 		}), g.then(() => t).finally(() => {
 			--h;

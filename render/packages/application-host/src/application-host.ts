@@ -242,45 +242,24 @@ async function mountRustyApplicationWithEnvironment(
       }
       const oldCanvas = activeCanvas;
       const candidateCanvas = createRendererCanvas(document);
-      layout.host.insertBefore(candidateCanvas, layout.ui);
       let candidateSurface: RendererSurface | null = null;
-      let candidateRemoveListeners: (() => void) | null = null;
       try {
         const candidateContent = candidate();
         candidateSurface = await mountSurface(candidateCanvas, candidateContent);
         candidateSurface.setCameraPose(oldSurface.cameraPose());
-        candidateRemoveListeners = installInputArbitration(
-          layout.host,
-          layout.ui,
-          () => candidateSurface as RendererSurface,
-          () => interactionMode,
-          focusGameplay,
-        );
+        candidateSurface.renderOnce();
+        oldCanvas.replaceWith(candidateCanvas);
         surface = candidateSurface;
         activeContent = candidateContent;
         contentRevision += 1;
         activeCanvas = candidateCanvas;
-        const retiredRemoveListeners = removeListeners;
-        removeListeners = candidateRemoveListeners;
-        candidateRemoveListeners = null;
-        try {
-          retiredRemoveListeners();
-        } catch {
-          // The newly published owner remains authoritative even if retirement is noisy.
-        }
         try {
           oldSurface.dispose();
         } catch {
           // Disposal is best-effort after the replacement transaction has committed.
         }
-        oldCanvas.remove();
         receipt = Object.freeze({ applied: true, diagnostics: [] });
       } catch (cause) {
-        try {
-          candidateRemoveListeners?.();
-        } catch {
-          // A failed candidate never replaces the prior listener owner.
-        }
         try {
           candidateSurface?.dispose();
         } catch {
