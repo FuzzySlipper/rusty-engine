@@ -1,7 +1,10 @@
 packages:
   - 'apps/*'
   - 'libs/*'
-  - '../render/packages/*'
+  - '../render/packages/render-contracts'
+  - '../render/packages/render-projection'
+  - '../render/packages/renderer-host'
+  - '../render/packages/renderer-three'
 
 allowBuilds:
   '@parcel/watcher': true

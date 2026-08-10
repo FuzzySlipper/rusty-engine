@@ -122,6 +122,23 @@ Only the downstream-owned typed Rust transport adapter varies: HTTP/WebSocket,
 Tauri command/event wiring, or another host-neutral carrier can deliver the
 same Rust frame and semantic intents without changing DOM composition.
 
+The interaction mode controls the Engine-owned renderer/input surface. If a
+downstream transport adapter also listens on `window`, `document`, or another
+outer host target, that adapter must consult `context.ui.interactionMode()`
+before forwarding a semantic gameplay intent. Switching to `interface` or
+`modal` releases Engine gameplay capture, but it cannot disable an independent
+downstream listener. Text fields and modal UI therefore set the appropriate
+mode, while only `gameplay` admits movement/look/fire intents; returning to
+gameplay calls the public focus-recovery operation.
+
+Keep the application host at application scope when product routes change.
+Disposing a game route releases its session/input owners and calls the public
+renderer `clear()` operation, which installs Engine's empty frame while
+preserving the one Engine-owned canvas. Full `replaceFrame(...)` is for initial
+publication, reconnect, or a changed immutable static-resource/frame identity;
+ordinary camera and dynamic retained-frame updates use their focused ports and
+must not rebuild the renderer surface on every observation.
+
 Downstream UI modules, templates, styles, assets, and local project files are
 trusted application source, just like downstream Rust. This boundary enforces
 lifecycle, decoding, and authority; it is not a hostile plugin boundary. Do
