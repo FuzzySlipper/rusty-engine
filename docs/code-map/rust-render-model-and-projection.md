@@ -35,6 +35,7 @@ entity, authored-scene, voxel, and presentation facts.
 - [`fixtures/render`](../../fixtures/render)
 - [Rendering successor contract](../rendering-successor-contract.md)
 - [Rendering operations](../rendering-operations.md)
+- [Downstream renderer and Studio boundary](../topics/development/downstream-renderer-and-studio.md)
 - [Voxel mesh data plane](../topics/voxel/voxel-mesh-data-plane.md)
 - [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
 - [Reconstructed voxel surfaces](../topics/voxel/reconstructed-surfaces.md)

@@ -55,7 +55,7 @@ compiled artifact, and Rust webview host/resource lifecycle.
 - [`renderer-webview-host/examples/webview_smoke.rs`](../../rust/crates/renderer-webview-host/examples/webview_smoke.rs)
 - [`render/package.json`](../../render/package.json)
 - [Rendering operations](../rendering-operations.md)
-- [Downstream Engine revision contract](../topics/development/downstream-engine-revisions.md)
+- [Downstream renderer and Studio boundary](../topics/development/downstream-renderer-and-studio.md)
 - [Voxel mesh data plane](../topics/voxel/voxel-mesh-data-plane.md)
 - [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
 - [Textured voxel campaign closeout](../textured-voxel-campaign-closeout.md)

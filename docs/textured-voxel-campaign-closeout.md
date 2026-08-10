@@ -114,14 +114,16 @@ idempotent and disposes the replacement exactly once, and the geometry resource
 and object handle do not change during material replacement. These are resource
 counts and disposal events, not driver VRAM or GPU-time measurements.
 
-## Exact consumer and regeneration owners
+## Historical consumer and regeneration owners
 
-The reverse consumer identity is stored in
-[`studio/voxel-consumer-source.json`](../studio/voxel-consumer-source.json).
-The provider integration clones or accepts only that clean public revision,
-runs its revision checker, validates its machine report, drives normal Studio
-controls in real Chromium, closes the project to zero resources, and starts a
-fresh Studio host/adapter process against the same persisted project.
+The completed campaign recorded a reverse consumer identity in the now-retired
+`studio/voxel-consumer-source.json` manifest. That exact-revision workflow is
+historical evidence, not the current downstream integration contract. Current
+downstream work follows the
+[downstream renderer and Studio boundary](topics/development/downstream-renderer-and-studio.md).
+The campaign proof drove normal Studio controls in real Chromium, closed the
+project to zero resources, and started a fresh Studio host/adapter process
+against the same persisted project.
 
 The consumer owns these checked inputs and regeneration commands:
 

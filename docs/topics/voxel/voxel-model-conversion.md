@@ -384,9 +384,9 @@ filesystem/project-schema adapters remain downstream; `rusty-engine-voxels` owns
 experiment adapter and its exact pinned Chromium/save/reopen proof. That proof is an explicit
 cross-repository dependency rather than an ordinary sibling-checkout requirement.
 
-## M12H runtime-consumer and quality closeout
+## M12H historical runtime-consumer and quality closeout
 
-[`studio/voxel-consumer-source.json`](../../../studio/voxel-consumer-source.json) pins the public
+The now-retired `studio/voxel-consumer-source.json` manifest pinned the public
 `rusty-engine-voxels` consumer at
 `39a8b5abb37345c5ffead2297f701cbdcea7f4e5`. That consumer in turn pins the public Engine provider at
 `1703f46f1624d32b8324f831107a068d5f66ab30`; six Cargo dependencies, its provider source record,
@@ -396,6 +396,11 @@ accepts only a clean checkout at that consumer revision. It runs the downstream 
 gates, copies content into a disposable project root, drives the normal adapter through current
 Studio and Chromium, and confirms that neither the reviewed checkout nor durable project bytes
 change.
+
+Those pins describe the completed campaign's reproducibility evidence. They are
+not current downstream dependency guidance; use the
+[downstream renderer and Studio boundary](../development/downstream-renderer-and-studio.md)
+for current work.
 
 The checked Kenney retro-character corpus converts `idle`, `run`, and `jump` at 6 Hz. The baseline
 24 × 36 × 24 object stores 15 frames over 14 unique meshes in 656,537 canonical bytes. The

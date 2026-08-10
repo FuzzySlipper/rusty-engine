@@ -654,7 +654,9 @@ games instead depend on the complete `rusty-engine` Rust facade and reach render
 the Rust-owned webview adapter. Engine compiles and embeds the private TypeScript/Three closure;
 downstream neither selects renderer packages nor knows their topology. Operational commands, CI
 ownership, and explicit limitations are recorded in
-[rendering-operations.md](rendering-operations.md).
+[rendering-operations.md](rendering-operations.md). The current downstream integration and
+Engine-hosted Studio posture is centralized in
+[downstream renderer and Studio boundary](topics/development/downstream-renderer-and-studio.md).
 
 ## Host and platform boundary
 
@@ -917,10 +919,15 @@ listening and publishes one operational identity containing the active root, Eng
 configured consumer commit, adapter build commit and binary hash, and negotiated protocol. A change
 to the sole consumer identity manifest terminates the bounded host/adapter process group with an
 explicit restart-required receipt; operational status remains observational and never becomes
-project authority. The host does
-make HTTP/browser behavior an Engine prerequisite. Ordinary Rust verification remains independent
+project authority. The host does not make HTTP/browser behavior an Engine prerequisite. Ordinary Rust verification remains independent
 of Studio, Node, the browser, and any sibling checkout; the cross-repository demo and Chromium proof
 is an explicit integration gate.
+
+The persistent generic service is the preferred interactive Studio entrypoint where installed, but
+its one selected adapter and active project are process-wide. It is a single-active-authoring-session
+service, not a multi-agent isolation boundary. Concurrent automation uses separate host processes,
+ports, settings roots, and—when mutating—separate project copies until session isolation is explicitly
+implemented and proved.
 
 ## Downstream ownership
 
