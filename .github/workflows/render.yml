@@ -13,9 +13,7 @@ on:
       - 'scripts/build-render-behavior-inventory.sh'
       - 'scripts/check-render-completeness.sh'
       - 'scripts/test-render-completeness-checker.sh'
-      - 'scripts/verify-render-consumer.sh'
       - 'scripts/verify-render.sh'
-      - '.github/workflows/render-consumer.yml'
       - '.github/workflows/render.yml'
   pull_request:
     paths:
@@ -28,9 +26,7 @@ on:
       - 'scripts/build-render-behavior-inventory.sh'
       - 'scripts/check-render-completeness.sh'
       - 'scripts/test-render-completeness-checker.sh'
-      - 'scripts/verify-render-consumer.sh'
       - 'scripts/verify-render.sh'
-      - '.github/workflows/render-consumer.yml'
       - '.github/workflows/render.yml'
 
 permissions:

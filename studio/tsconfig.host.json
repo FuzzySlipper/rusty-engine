@@ -8,7 +8,6 @@
     "noEmit": true
   },
   "include": [
-    "scripts/serve-den.ts",
     "scripts/studio-service.ts",
     "scripts/studio-host.ts",
     "scripts/studio-user-settings-service.ts",

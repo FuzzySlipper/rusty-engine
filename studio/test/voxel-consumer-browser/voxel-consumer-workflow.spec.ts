@@ -1,19 +1,20 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
-import { readFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { STUDIO_ADAPTER_PROTOCOL_VERSION } from '@rusty-engine/studio-adapter-client';
 
 const projectRoot = requiredEnvironment('RUSTY_STUDIO_PROJECT_ROOT');
 const projectFile = requiredEnvironment('RUSTY_STUDIO_PROJECT_FILE');
 const runtimeReportFile = requiredEnvironment('RUSTY_STUDIO_RUNTIME_REPORT');
-const engineCommit = requiredEnvironment('RUSTY_STUDIO_ENGINE_COMMIT');
 const TEXTURE_PATH = 'content/textures/directional-atlas.png';
 const TEXTURE_HASH = 'ac1a8a3685fe0b5b42c585f4f5cf8e246721a09497644eacddf36372a377fd99';
 
 test.describe.configure({ mode: 'serial' });
 
-test('exact pinned voxel consumer reopens and visibly plays its Studio-authored flipbook', async ({ page }) => {
+test('selected voxel project reopens and visibly plays its Studio-authored flipbook', async ({ page }) => {
   test.setTimeout(90_000);
   const projectPath = join(projectRoot, projectFile);
   const durableBytes = await readFile(projectPath);
@@ -145,8 +146,6 @@ test('exact pinned voxel consumer reopens and visibly plays its Studio-authored 
 
   process.stdout.write(`${JSON.stringify({
     kind: 'studioVoxelConsumerBrowserEvidence',
-    engineRevision: engineCommit,
-    evidenceEngineRevision: runtimeEvidence.runtime.engineRevision,
     projectFile,
     projectHash,
     savedPose: 'default',
@@ -160,6 +159,76 @@ test('exact pinned voxel consumer reopens and visibly plays its Studio-authored 
     gpuTiming: 'unavailable: renderer does not expose timer queries',
     durableBytesChanged: false,
   })}\n`);
+});
+
+test('voxel-object Entity inspector persists and visibly reprojects its selected surface mode', async ({ page }) => {
+  test.setTimeout(90_000);
+  const isolatedRoot = await mkdtemp(join(tmpdir(), 'rusty-studio-surface-mode-'));
+  try {
+    await cp(join(projectRoot, 'content'), join(isolatedRoot, 'content'), { recursive: true });
+    const isolatedProjectPath = join(isolatedRoot, projectFile);
+    await page.goto(`/?root=${encodeURIComponent(isolatedRoot)}&project=${encodeURIComponent(projectFile)}`);
+
+    const shell = page.locator('[data-visual-id="studio-shell"]');
+    const viewport = page.locator('rusty-studio-viewport');
+    const canvas = page.getByLabel('Shared Rusty renderer viewport');
+    await expect(shell).toHaveAttribute('data-project-hash', /.+/);
+    await expect(viewport).toHaveAttribute('data-renderer-status', 'ready');
+    const initialProjectHash = await requiredAttribute(shell, 'data-project-hash');
+    const initialRendererHash = await rendererHash(viewport);
+    const initialPixels = await canvas.screenshot();
+
+    await page.locator('.entity-row[data-entity-id="1"]').click();
+    await page.getByRole('button', { name: 'Entity', exact: true }).click();
+    const component = page.locator('[data-visual-id="entity-voxel-object-component"]');
+    const surfaceMode = component.getByLabel('Entity voxel-object surface mode');
+    await expect(surfaceMode.locator('option')).toHaveCount(3);
+    await expect(surfaceMode).toHaveValue('greedyCubes');
+    const initialMeshResources = await readMeshResourceIdentity(page);
+
+    await surfaceMode.selectOption('marchingCubes');
+    await expect(shell).not.toHaveAttribute('data-project-hash', initialProjectHash, {
+      timeout: 30_000,
+    });
+    await expect(surfaceMode).toHaveValue('marchingCubes');
+    await expect(component).toContainText('marchingCubes');
+    await expect.poll(() => rendererHash(viewport), { timeout: 30_000 }).not.toBe(initialRendererHash);
+    const marchingRendererHash = await rendererHash(viewport);
+    const marchingMeshResources = await readMeshResourceIdentity(page);
+    expect(marchingMeshResources).not.toEqual(initialMeshResources);
+    const marchingPixels = await canvas.screenshot();
+    expect(marchingPixels.equals(initialPixels)).toBe(false);
+
+    const persisted = JSON.parse(await readFile(isolatedProjectPath, 'utf8')) as {
+      readonly instances: readonly { readonly surfaceMode?: string }[];
+    };
+    expect(persisted.instances[0]?.surfaceMode).toBe('marchingCubes');
+    const marchingProjectHash = await requiredAttribute(shell, 'data-project-hash');
+
+    await page.reload();
+    await expect(shell).toHaveAttribute('data-project-hash', marchingProjectHash);
+    await expect(viewport).toHaveAttribute('data-renderer-status', 'ready');
+    await page.locator('.entity-row[data-entity-id="1"]').click();
+    await page.getByRole('button', { name: 'Entity', exact: true }).click();
+    await expect(surfaceMode).toHaveValue('marchingCubes');
+    await expect(viewport).toHaveAttribute('data-authored-frame-hash', /.+/);
+    expect(await readMeshResourceIdentity(page)).toEqual(marchingMeshResources);
+
+    process.stdout.write(`${JSON.stringify({
+      kind: 'studioVoxelObjectSurfaceModeBrowserEvidence',
+      initialMode: 'greedyCubes',
+      selectedMode: 'marchingCubes',
+      options: ['greedyCubes', 'marchingCubes', 'dualContouring'],
+      initialRendererHash,
+      marchingRendererHash,
+      visiblePixelsChanged: true,
+      persisted: true,
+      reopenMatched: true,
+    })}\n`);
+    await closeProjectThroughFileMenu(page);
+  } finally {
+    await rm(isolatedRoot, { recursive: true, force: true });
+  }
 });
 
 test('runtime voxel surfaces author repeat and atlas mappings through Rust and reopen visibly', async ({ page }) => {
@@ -285,7 +354,6 @@ test('runtime voxel surfaces author repeat and atlas mappings through Rust and r
 
   process.stdout.write(`${JSON.stringify({
     kind: 'studioVoxelSurfaceBrowserEvidence',
-    engineRevision: engineCommit,
     texturePath: TEXTURE_PATH,
     textureSha256: TEXTURE_HASH,
     textureDimensions: [16, 8],
@@ -328,7 +396,6 @@ test('fresh Studio host reopens the persisted atlas surface and disposes it on c
   await expect(viewport).toHaveCount(0);
   process.stdout.write(`${JSON.stringify({
     kind: 'studioVoxelSurfaceFreshHostEvidence',
-    engineRevision: engineCommit,
     textureSha256: TEXTURE_HASH,
     freshHostPixelHash,
     retainedTextureResources: 1,
@@ -368,6 +435,36 @@ async function rendererHash(viewport: Locator): Promise<string> {
   return requiredAttribute(viewport, 'data-authored-frame-hash');
 }
 
+async function readMeshResourceIdentity(page: Page): Promise<readonly string[]> {
+  return page.evaluate(async (protocolVersion) => {
+    const response = await fetch('/api/studio-adapter', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        type: 'readProject',
+        protocolVersion,
+        requestId: `surface-resource-${crypto.randomUUID()}`,
+      }),
+    });
+    const decoded = await response.json() as {
+      readonly type?: string;
+      readonly project?: {
+        readonly meshResources?: readonly {
+          readonly resource?: string;
+          readonly contentHash?: string;
+          readonly byteLength?: number;
+        }[];
+      };
+    };
+    if (!response.ok || decoded.type !== 'projectRead') {
+      throw new Error(`surface resource read failed with HTTP ${String(response.status)}`);
+    }
+    return (decoded.project?.meshResources ?? [])
+      .map((resource) => `${resource.resource ?? ''}|${resource.contentHash ?? ''}|${String(resource.byteLength ?? '')}`)
+      .sort();
+  }, STUDIO_ADAPTER_PROTOCOL_VERSION);
+}
+
 async function requiredAttribute(locator: Locator, name: string): Promise<string> {
   const value = await locator.getAttribute(name);
   if (value === null || value.length === 0) throw new Error(`${name} is unavailable`);
@@ -386,7 +483,6 @@ function sha256(bytes: Uint8Array): string {
 
 interface RuntimeEvidenceReport {
   readonly runtime: {
-    readonly engineRevision: string;
     readonly behavior: {
       readonly onceEnded: boolean;
       readonly repeatWrappedToFirstFrame: boolean;

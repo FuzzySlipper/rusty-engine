@@ -234,6 +234,7 @@ async function verifyStaticObjectWorkflow(binary, root) {
       instance: {
         instanceId: 'integration-wall-object',
         voxelObjectAssetId: asset.assetId,
+        surfaceMode: 'greedyCubes',
         frame: { kind: 'default' },
         translation: [3, 2, 1],
         rotation: [0, 0, 0, 1],
@@ -261,6 +262,7 @@ async function verifyStaticObjectWorkflow(binary, root) {
     const duplicateCandidate = {
       instanceId: 'integration-wall-object-copy',
       voxelObjectAssetId: asset.assetId,
+      surfaceMode: 'greedyCubes',
       frame: { kind: 'default' },
       translation: [5, 2, 1],
       rotation: [0, 0, 0, 1],
@@ -470,6 +472,7 @@ async function verifyAnimatedObjectWorkflow(binary, root) {
       instance: {
         instanceId: 'integration-character-object',
         voxelObjectAssetId: asset.assetId,
+        surfaceMode: 'greedyCubes',
         frame: { kind: 'clip', clipId: outputClipId, frameIndex: 1 },
         translation: [4, 1, 8],
         rotation: [0, 0, 0, 1],

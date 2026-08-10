@@ -10,8 +10,6 @@ required=(
   studio/pnpm-workspace.yaml
   studio/nx.json
   studio/donor-source.json
-  studio/demo-consumer-source.json
-  studio/voxel-consumer-source.json
   studio/donor-inventory.tsv
   studio/donor-surface-disposition.tsv
   studio/owner-adoption.tsv

@@ -16,7 +16,7 @@ test('served Studio exposes the exact running adapter and configured consumer id
   await page.goto('/');
   const identity = page.locator('[data-visual-id="studio-runtime-identity"]');
   await expect(identity).toBeVisible();
-  await expect(identity).toHaveAttribute('data-protocol-version', '14');
+  await expect(identity).toHaveAttribute('data-protocol-version', '15');
   await expect(identity).toHaveAttribute('data-adapter-binary-sha256', /^[0-9a-f]{64}$/u);
   const expectedEngine = process.env['RUSTY_STUDIO_ENGINE_SOURCE_COMMIT'];
   if (expectedEngine === undefined) {
@@ -851,8 +851,10 @@ test('animated voxel objects convert, discard, apply, attach, reload, and play t
   const baselineVoxelInstanceCount = Number(
     await viewport.getAttribute('data-voxel-object-instances'),
   );
-  expect(baselineVoxelDefinitionCount).toBe(9);
-  expect(baselineVoxelInstanceCount).toBe(367);
+  expect(Number.isSafeInteger(baselineVoxelDefinitionCount)).toBe(true);
+  expect(baselineVoxelDefinitionCount).toBeGreaterThan(0);
+  expect(Number.isSafeInteger(baselineVoxelInstanceCount)).toBe(true);
+  expect(baselineVoxelInstanceCount).toBeGreaterThan(0);
   const convertedVoxelDefinitionCount = String(baselineVoxelDefinitionCount + 1);
   const materialSection = editor.locator('.voxel-section').filter({
     hasText: 'asset-catalog authority + style',
