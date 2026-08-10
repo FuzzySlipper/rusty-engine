@@ -80,6 +80,56 @@ bridge, or renderer control transport. If a needed presentation capability is
 absent, request a game-neutral Engine mechanism instead of reaching through the
 boundary.
 
+## DOM presentation without renderer ownership
+
+The native adapter's fixed private document owns both its canvas and one DOM
+presentation region. Downstream Rust can place UI-like presentation in that
+region without owning DOM or renderer code by submitting typed
+`render_presentation` operations through `RendererWebviewAdapter`:
+
+- billboards provide bounded localized text, values, or icons anchored to a
+  world position or entity;
+- particle billboard cues provide disposable visual feedback; and
+- telemetry overlays provide the fixed diagnostic presentation family.
+
+Engine privately realizes those descriptors as DOM where the current host uses
+DOM. Downstream supplies only typed Rust facts and observes typed receipts. It
+does not receive an element, selector, callback, template slot, or raw event.
+
+This is not yet a general embedded application-UI seam. Arbitrary downstream
+HUD markup, menus, forms, Angular components, and accessibility trees cannot
+currently be injected into the fixed `RendererWebviewAdapter` document. Do not
+work around that limit with private bridge calls, document mutation, or direct
+renderer-package imports. Use the existing typed presentation families or a
+separate product-owned UI surface; if repeated products need richer UI inside
+the renderer document, add a bounded typed Engine host contract first.
+
+## Minimal product bootstrap
+
+For the supported native/webview path there is no downstream web bootstrap.
+Downstream Rust creates its outer window/event loop, mounts one
+`RendererWebviewAdapter`, submits frames and presentation, and handles typed
+observations. Engine generates and owns the child HTML document and private
+renderer startup.
+
+A deliberately browser-delivered product may still own a small outer web
+application for product navigation, accessibility, or other game-specific UI,
+but the current Rust facade does not expose an executable public browser
+renderer host. Such an application must not reach into Engine-private packages
+to manufacture one. When a public Engine-owned browser output exists, its
+canonical bootstrap should remain only:
+
+```text
+index.html -> main.ts -> mount one Engine-owned renderer host and product shell
+```
+
+That bootstrap may select a root component and report bounded startup failure.
+It must not own gameplay state, renderer/backend construction, frame decoding,
+resource lifecycle, a second render loop, or a second renderer control
+transport. Until that browser host is implemented and named, native rendering
+and a browser UI are separate supported product surfaces rather than an implied
+private-package integration.
+
 ## Studio is an Engine-hosted product
 
 Rusty Studio runs from Rusty Engine. A downstream repository does not install,
