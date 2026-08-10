@@ -8,6 +8,7 @@ declare global {
     __rustyApplicationHost?: RustyApplicationHost;
     __rustyApplicationMount?: () => Promise<RustyApplicationHost>;
     __rustyApplicationFailureProbe?: () => Promise<string>;
+    __rustyApplicationGameplayInputCount?: number;
     __rustyApplicationUiDisposed?: boolean;
   }
 }
@@ -38,11 +39,20 @@ window.__rustyApplicationMount = () =>
       modal.textContent = 'Modal content';
       toolbar.append(button, input, modal);
       uiRoot.append(gameplay, toolbar);
+      window.__rustyApplicationGameplayInputCount = 0;
+      const onMouseDown = (event: MouseEvent): void => {
+        if (context.ui.allowsGameplayInput(event)) {
+          window.__rustyApplicationGameplayInputCount =
+            (window.__rustyApplicationGameplayInputCount ?? 0) + 1;
+        }
+      };
+      window.addEventListener('mousedown', onMouseDown);
       button.addEventListener('click', () => {
         context.ui.setInteractionMode('interface');
       });
       return {
         dispose: () => {
+          window.removeEventListener('mousedown', onMouseDown);
           window.__rustyApplicationUiDisposed = true;
         },
       };

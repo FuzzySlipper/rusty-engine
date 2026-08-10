@@ -6,6 +6,15 @@ test('application host owns composition, input arbitration, and disposal', async
   await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
   await expect(page.locator('[data-rusty-application-ui="downstream"] #gameplay-zone')).toBeVisible();
 
+  await page.locator('#interface-button').click();
+  expect(await page.evaluate(() => window.__rustyApplicationGameplayInputCount)).toBe(0);
+  await expect.poll(() => page.evaluate(() =>
+    window.__rustyApplicationHost?.ui.interactionMode(),
+  )).toBe('interface');
+  await page.evaluate(() => window.__rustyApplicationHost?.ui.setInteractionMode('gameplay'));
+  await page.locator('#gameplay-zone').click();
+  expect(await page.evaluate(() => window.__rustyApplicationGameplayInputCount)).toBe(1);
+
   const initialBackingSize = await page.locator('canvas').evaluate((element) => {
     const canvas = element as HTMLCanvasElement;
     return [canvas.width, canvas.height] as const;

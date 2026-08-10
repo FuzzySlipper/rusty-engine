@@ -26,6 +26,12 @@ export interface RustyApplicationRendererPort {
 }
 export interface RustyApplicationUiPort {
     readonly active: () => boolean;
+    /**
+     * Classify one original host event before a downstream adapter gives it
+     * gameplay meaning. Interactive UI is rejected synchronously even before a
+     * later click handler changes the coarse interaction mode.
+     */
+    readonly allowsGameplayInput: (event: Event) => boolean;
     readonly focusGameplay: () => void;
     readonly interactionMode: () => RustyApplicationInteractionMode;
     readonly setInteractionMode: (mode: RustyApplicationInteractionMode) => void;

@@ -18926,7 +18926,7 @@ async function E_(e) {
 }
 async function D_(e, t) {
 	let { root: n } = e;
-	if (I_(n), n.childNodes.length > 0) throw new w_("invalid_root", "Rusty Application Host requires an empty downstream mount root");
+	if (L_(n), n.childNodes.length > 0) throw new w_("invalid_root", "Rusty Application Host requires an empty downstream mount root");
 	let r = n.ownerDocument, i = k_(r, e.loadingLabel ?? "Starting application…");
 	n.append(i.host), n.dataset.rustyApplicationState = "mounting";
 	let a = null, o = null, s = () => void 0, c = !1, l = !1, u = null, d = e.initialInteractionMode ?? "interface", f = i.canvas, p = Promise.resolve(), m = () => {
@@ -18940,7 +18940,7 @@ async function D_(e, t) {
 	}, _ = () => {
 		if (d !== "gameplay") return;
 		let e = m();
-		e.canvas.focus({ preventScroll: !0 }), P_(e.canvas);
+		e.canvas.focus({ preventScroll: !0 }), F_(e.canvas);
 	}, v = (n, r) => t.mountSurface(n, {
 		autoStart: !0,
 		controls: { enabled: !1 },
@@ -19008,6 +19008,7 @@ async function D_(e, t) {
 		setCameraPose: (e) => m().setCameraPose(e)
 	}), x = Object.freeze({
 		active: () => !l && !c,
+		allowsGameplayInput: (e) => !l && !c && !e.defaultPrevented && d === "gameplay" && !M_(e, i.ui),
 		focusGameplay: _,
 		interactionMode: () => d,
 		setInteractionMode: g
@@ -19019,10 +19020,10 @@ async function D_(e, t) {
 		}) ?? null, i.loading.remove(), i.host.dataset.state = "ready", n.dataset.rustyApplicationState = "ready";
 	} catch (t) {
 		c = !0;
-		let r = await F_(o, s, a, i.host);
+		let r = await I_(o, s, a, i.host);
 		delete n.dataset.rustyApplicationState;
 		let l = t instanceof Error ? t : Error(String(t));
-		throw L_(n, e.failureLabel ?? "Application failed to start", l.message), new w_("mount_failed", r.length === 0 ? `Rusty Application Host mount failed: ${l.message}` : `Rusty Application Host mount failed: ${l.message}; cleanup also failed`, { cause: l });
+		throw R_(n, e.failureLabel ?? "Application failed to start", l.message), new w_("mount_failed", r.length === 0 ? `Rusty Application Host mount failed: ${l.message}` : `Rusty Application Host mount failed: ${l.message}; cleanup also failed`, { cause: l });
 	}
 	return Object.freeze({
 		kind: "rusty_application_host.v1",
@@ -19036,7 +19037,7 @@ async function D_(e, t) {
 		}),
 		dispose: async () => u === null ? (l = !0, u = (async () => {
 			await p, c = !0;
-			let e = await F_(o, s, a, i.host);
+			let e = await I_(o, s, a, i.host);
 			if (o = null, a = null, delete n.dataset.rustyApplicationState, e.length > 0) throw AggregateError(e, "Rusty Application Host disposal failed");
 		})(), u) : u
 	});
@@ -19069,13 +19070,13 @@ function A_(e) {
 }
 function j_(e, t, n, r, i) {
 	let a = e.ownerDocument, o = (e) => {
-		if (M_(e.target, t)) {
+		if (M_(e, t)) {
 			n().releaseInput();
 			return;
 		}
 		r() === "gameplay" && i();
 	}, s = (e) => {
-		N_(e.target) && n().releaseInput();
+		P_(e.target) && n().releaseInput();
 	}, c = () => {
 		e.dataset.pointerLocked = String(a.pointerLockElement === n().canvas);
 	}, l = () => n().releaseInput();
@@ -19084,17 +19085,20 @@ function j_(e, t, n, r, i) {
 	};
 }
 function M_(e, t) {
+	return e.composedPath().some((e) => N_(e, t));
+}
+function N_(e, t) {
 	return !(e instanceof Element) || !t.contains(e) ? !1 : e.closest("a,button,input,select,textarea,summary,[contenteditable=\"true\"],[data-rusty-ui-interactive],[role=\"dialog\"]") !== null;
 }
-function N_(e) {
+function P_(e) {
 	return e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement || e instanceof HTMLSelectElement || e instanceof HTMLElement && e.isContentEditable;
 }
-function P_(e) {
+function F_(e) {
 	try {
 		e.requestPointerLock().catch(() => void 0);
 	} catch {}
 }
-async function F_(e, t, n, r) {
+async function I_(e, t, n, r) {
 	let i = [];
 	try {
 		await e?.dispose();
@@ -19113,10 +19117,10 @@ async function F_(e, t, n, r) {
 	}
 	return r.remove(), i;
 }
-function I_(e) {
+function L_(e) {
 	e.querySelector(":scope > [data-rusty-application-failure]")?.remove();
 }
-function L_(e, t, n) {
+function R_(e, t, n) {
 	let r = e.ownerDocument.createElement("section");
 	r.dataset.rustyApplicationFailure = "", r.setAttribute("role", "alert"), r.style.cssText = "background:#1b0b0d;color:#ffe8e8;font:14px system-ui;margin:0;min-height:100dvh;padding:2rem;";
 	let i = e.ownerDocument.createElement("h1");

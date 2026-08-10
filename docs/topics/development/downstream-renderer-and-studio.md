@@ -122,14 +122,16 @@ Only the downstream-owned typed Rust transport adapter varies: HTTP/WebSocket,
 Tauri command/event wiring, or another host-neutral carrier can deliver the
 same Rust frame and semantic intents without changing DOM composition.
 
-The interaction mode controls the Engine-owned renderer/input surface. If a
-downstream transport adapter also listens on `window`, `document`, or another
-outer host target, that adapter must consult `context.ui.interactionMode()`
-before forwarding a semantic gameplay intent. Switching to `interface` or
-`modal` releases Engine gameplay capture, but it cannot disable an independent
-downstream listener. Text fields and modal UI therefore set the appropriate
-mode, while only `gameplay` admits movement/look/fire intents; returning to
-gameplay calls the public focus-recovery operation.
+The interaction mode controls the Engine-owned renderer/input surface, while
+`context.ui.allowsGameplayInput(event)` synchronously classifies an original
+DOM event for a downstream global adapter. Every `window`, `document`, or outer
+host listener must pass its event through that operation before assigning
+gameplay meaning. It rejects buttons, links, text entry, dialogs, and explicitly
+interactive UI even if their later click handler has not changed the coarse
+mode yet. Pointer-transparent and background gameplay regions continue to pass
+while the mode is `gameplay`. Do not defer suppression until a click handler
+opens a panel. Switching to `interface` or `modal` also releases Engine capture;
+returning to `gameplay` uses the public focus-recovery operation.
 
 Keep the application host at application scope when product routes change.
 Disposing a game route releases its session/input owners and calls the public

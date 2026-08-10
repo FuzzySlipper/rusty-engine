@@ -47,6 +47,12 @@ export interface RustyApplicationRendererPort {
 
 export interface RustyApplicationUiPort {
   readonly active: () => boolean;
+  /**
+   * Classify one original host event before a downstream adapter gives it
+   * gameplay meaning. Interactive UI is rejected synchronously even before a
+   * later click handler changes the coarse interaction mode.
+   */
+  readonly allowsGameplayInput: (event: Event) => boolean;
   readonly focusGameplay: () => void;
   readonly interactionMode: () => RustyApplicationInteractionMode;
   readonly setInteractionMode: (mode: RustyApplicationInteractionMode) => void;
@@ -291,6 +297,12 @@ async function mountRustyApplicationWithEnvironment(
   });
   const ui: RustyApplicationUiPort = Object.freeze({
     active: () => !closing && !disposed,
+    allowsGameplayInput: (event: Event) =>
+      !closing &&
+      !disposed &&
+      !event.defaultPrevented &&
+      interactionMode === 'gameplay' &&
+      !isInteractiveUiEvent(event, layout.ui),
     focusGameplay,
     interactionMode: () => interactionMode,
     setInteractionMode,
@@ -428,7 +440,7 @@ function installInputArbitration(
 ): () => void {
   const document = host.ownerDocument;
   const onPointerDown = (event: PointerEvent): void => {
-    if (isInteractiveUiTarget(event.target, uiRoot)) {
+    if (isInteractiveUiEvent(event, uiRoot)) {
       surface().releaseInput();
       return;
     }
@@ -453,6 +465,10 @@ function installInputArbitration(
     document.removeEventListener('pointerlockchange', onPointerLockChange);
     document.defaultView?.removeEventListener('blur', onBlur);
   };
+}
+
+function isInteractiveUiEvent(event: Event, uiRoot: HTMLElement): boolean {
+  return event.composedPath().some((target) => isInteractiveUiTarget(target, uiRoot));
 }
 
 function isInteractiveUiTarget(target: EventTarget | null, uiRoot: HTMLElement): boolean {
