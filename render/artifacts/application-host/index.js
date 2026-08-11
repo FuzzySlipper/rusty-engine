@@ -16033,7 +16033,7 @@ var Gp = 31, Kp = 4096, qp = 2, Jp = class {
 	#Ce(e, t) {
 		let n = this.#l.get(`voxel-material/${String(e)}`);
 		if (n !== void 0) {
-			let e = $p(n, void 0, n.texture === null ? void 0 : this.#D.get(n.texture)?.texture);
+			let e = $p(n, void 0, n.texture === null ? void 0 : this.#D.get(n.texture)?.texture, n.texture === null ? void 0 : this.#f.get(n.texture));
 			return e.color.multiply(new X(t.color[0], t.color[1], t.color[2])), e.opacity *= t.color[3], e.transparent = e.opacity < 1, e.wireframe = t.wireframe, this.#z(e), e;
 		}
 		let r = this.#I(e), i = new hs({

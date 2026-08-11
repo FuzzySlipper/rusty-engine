@@ -2472,6 +2472,34 @@ void test('voxel surface specializes one greedy quad for repeat and atlas-safe s
   );
 });
 
+void test('uploaded voxel mesh realizes its retained voxel-surface texture', () => {
+  const bytes = rgbaPng(4, 4, Array.from({ length: 4 * 4 }, () => [80, 160, 60, 255]).flat());
+  const texture = voxelTextureDescriptor(bytes, 4, 4, 1, 'nearest', 'clamp');
+  const material = { ...voxelTexturedMaterial(texture, 'atlas'), id: 'voxel-material/1' };
+  const renderer = new ThreeRenderer();
+  const handle = renderHandle(322);
+
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture },
+    { op: 'defineMaterial', material },
+    { op: 'create', handle, parent: null, node: meshNode() },
+    {
+      op: 'replaceMeshPayload',
+      handle,
+      payload: withMaterialSlot({ ...texturedQuadPayload(), provenance: 'voxelChunk' }, 1),
+    },
+  ] });
+
+  const realized = (renderer.objectFor(handle) as THREE.Mesh).material;
+  const materials = Array.isArray(realized) ? realized : [realized];
+  assert.equal(materials.length, 2);
+  for (const entry of materials as THREE.MeshStandardMaterial[]) {
+    assert.ok(entry.map instanceof THREE.Texture);
+    assert.equal(entry.userData['rustyVoxelSurface']?.material, 'voxel-material/1');
+    assert.equal(entry.userData['rustyVoxelSurface']?.mapping, 'atlas');
+  }
+});
+
 void test('voxel texture and material redefine is final-frame atomic without remeshing', () => {
   const beforeBytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
   const afterBytes = rgbaPng(2, 1, [0, 0, 255, 255, 255, 255, 0, 255]);

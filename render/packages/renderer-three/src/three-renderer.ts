@@ -2419,7 +2419,10 @@ export class ThreeRenderer {
       const texture = descriptor.texture === null
         ? undefined
         : this.#textureResources.get(descriptor.texture)?.texture;
-      const material = standardMaterial(descriptor, undefined, texture);
+      const textureDescriptor = descriptor.texture === null
+        ? undefined
+        : this.#textures.get(descriptor.texture);
+      const material = standardMaterial(descriptor, undefined, texture, textureDescriptor);
       material.color.multiply(new THREE.Color(view.color[0], view.color[1], view.color[2]));
       material.opacity *= view.color[3];
       material.transparent = material.opacity < 1;
