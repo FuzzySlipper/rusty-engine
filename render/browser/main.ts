@@ -645,7 +645,7 @@ async function main(): Promise<void> {
     proofSurface.setCameraPose({
       position: [2, 4, 4],
       pitchDegrees: -41.810314895,
-      yawDegrees: 26.565051177,
+      yawDegrees: -26.565051177,
     });
     proofSurface.renderOnce(2);
     const elevatedPixels = readBillboardPixels(proofContext);
