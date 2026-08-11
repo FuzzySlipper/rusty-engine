@@ -81,6 +81,7 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
             frame: 0,
             uv_min: [0.0, 0.0],
             uv_max: [1.0, 1.0],
+            size: None,
         }],
     };
     let static_mesh = StaticMeshAsset {

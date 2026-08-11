@@ -772,6 +772,8 @@ pub struct SpriteFrameRect {
     pub frame: u32,
     pub uv_min: [f32; 2],
     pub uv_max: [f32; 2],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<[f32; 2]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -807,6 +809,12 @@ impl SpriteAtlasDescriptor {
             if rect.uv_max[0] <= rect.uv_min[0] || rect.uv_max[1] <= rect.uv_min[1] {
                 return Err(SpriteAtlasError::DegenerateRect { frame: rect.frame });
             }
+            if rect.size.is_some_and(|size| {
+                size.into_iter()
+                    .any(|component| !component.is_finite() || component <= 0.0)
+            }) {
+                return Err(SpriteAtlasError::InvalidFrameSize { frame: rect.frame });
+            }
         }
         Ok(())
     }
@@ -824,6 +832,7 @@ pub enum SpriteAtlasError {
     DuplicateFrame { frame: u32 },
     UvOutOfRange { frame: u32 },
     DegenerateRect { frame: u32 },
+    InvalidFrameSize { frame: u32 },
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1028,11 +1037,13 @@ mod tests {
                     frame: 0,
                     uv_min: [0.0, 0.0],
                     uv_max: [0.5, 1.0],
+                    size: None,
                 },
                 SpriteFrameRect {
                     frame: 0,
                     uv_min: [0.5, 0.0],
                     uv_max: [1.0, 1.0],
+                    size: None,
                 },
             ],
         };
@@ -1040,6 +1051,32 @@ mod tests {
             atlas.validate(),
             Err(SpriteAtlasError::DuplicateFrame { frame: 0 })
         );
+    }
+
+    #[test]
+    fn atlas_validation_rejects_non_positive_or_non_finite_frame_sizes() {
+        for invalid_size in [
+            [0.0, 1.0],
+            [-1.0, 1.0],
+            [f32::NAN, 1.0],
+            [f32::INFINITY, 1.0],
+            [1.0, f32::NEG_INFINITY],
+        ] {
+            let atlas = SpriteAtlasDescriptor {
+                id: "sprite-sheet/sparks".to_string(),
+                texture: "texture/sparks".to_string(),
+                frames: vec![SpriteFrameRect {
+                    frame: 7,
+                    uv_min: [0.0, 0.0],
+                    uv_max: [1.0, 1.0],
+                    size: Some(invalid_size),
+                }],
+            };
+            assert_eq!(
+                atlas.validate(),
+                Err(SpriteAtlasError::InvalidFrameSize { frame: 7 })
+            );
+        }
     }
 
     #[test]

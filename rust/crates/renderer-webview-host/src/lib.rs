@@ -391,13 +391,7 @@ try {{
             return Err(RendererWebviewError::RequestIdExhausted);
         }
         let request_id = self.next_request_id;
-        let arguments = serde_json::to_string(arguments)?;
-        let script = format!(
-            "globalThis.__rustyEnginePrivateRenderer.{}({},...{});",
-            method.javascript_name(),
-            request_id,
-            arguments
-        );
+        let script = invocation_script(method, request_id, arguments)?;
         self.webview.evaluate_script(&script)?;
         self.next_request_id += 1;
         Ok(request_id)
@@ -410,6 +404,20 @@ try {{
             Ok(())
         }
     }
+}
+
+fn invocation_script<A: Serialize + ?Sized>(
+    method: PrivateMethod,
+    request_id: u64,
+    arguments: &A,
+) -> Result<String, serde_json::Error> {
+    let arguments = serde_json::to_string(arguments)?;
+    Ok(format!(
+        "globalThis.__rustyEnginePrivateRenderer.{}({},...{});",
+        method.javascript_name(),
+        request_id,
+        arguments
+    ))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -870,6 +878,7 @@ fn escape_inline_script_json(json: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use render_model::{RenderDiff, SpriteAtlasDescriptor, SpriteFrameRect};
 
     #[test]
     fn artifact_is_closed_and_contains_only_the_fixed_bridge() {
@@ -895,6 +904,28 @@ mod tests {
             assert!(RENDERER_ARTIFACT.contains(method.javascript_name()));
         }
         assert!(!RENDERER_ARTIFACT.contains("eval("));
+    }
+
+    #[test]
+    fn submit_frame_invocation_carries_optional_sprite_frame_size() {
+        let frame = RenderFrameDiff::try_from_ops(vec![RenderDiff::DefineSpriteAtlas {
+            atlas: SpriteAtlasDescriptor {
+                id: "sprite/test".to_owned(),
+                texture: "texture/test".to_owned(),
+                frames: vec![SpriteFrameRect {
+                    frame: 0,
+                    uv_min: [0.0, 0.0],
+                    uv_max: [1.0, 1.0],
+                    size: Some([2.0, 3.0]),
+                }],
+            },
+        }])
+        .expect("valid public render frame");
+
+        let script = invocation_script(PrivateMethod::SubmitFrame, 7, &(frame,))
+            .expect("serialize renderer invocation");
+        assert!(script.contains(r#""size":[2.0,3.0]"#));
+        assert!(script.contains(".submitFrame(7,"));
     }
 
     #[test]

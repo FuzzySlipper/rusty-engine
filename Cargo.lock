@@ -2726,6 +2726,7 @@ dependencies = [
  "render-presentation",
  "render-projection",
  "renderer-webview-host",
+ "serde_json",
  "state-machine",
  "svc-collision",
  "svc-mesh",
