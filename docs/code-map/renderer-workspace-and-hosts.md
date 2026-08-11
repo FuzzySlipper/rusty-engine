@@ -16,7 +16,8 @@ compiled artifact, and Rust webview host/resource lifecycle.
   camera, versioned default-light/shadow policy and readout, and editor viewport integration.
 - `@rusty-engine/application-host`: one bundled downstream browser/wrapper
   composition root, trusted rich-DOM mount, typed frame/camera/interaction
-  ports, transactional whole-frame replacement, and lifecycle cleanup.
+  ports, transactional whole-frame replacement, combined static-mesh/texture/
+  animated-GLB resource admission, and lifecycle cleanup.
 - `render/artifacts/application-host`: reproducible public artifact with no
   renderer peer or runtime dependencies in the downstream lock.
 - `render/browser`: real Chromium/WebGL/WebAudio/DOM acceptance.

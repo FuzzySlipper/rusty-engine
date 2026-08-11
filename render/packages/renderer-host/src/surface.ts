@@ -213,7 +213,10 @@ export interface RendererAnimatedMeshSurfaceOptions extends RendererSurfaceOptio
  * host before Three is mounted, so a failed resolver, length, or content-hash
  * check cannot leave a partially mounted surface behind.
  */
-export type RendererSurfaceResourceOptions = RendererSurfaceOptions & (
+export type RendererSurfaceResourceOptions = RendererSurfaceOptions & {
+  readonly animatedMeshManifest?: RendererAnimatedMeshResourceManifest;
+  readonly resolveAnimatedMeshResource?: RendererAnimatedMeshResourceResolver;
+} & (
   | {
       readonly meshResourceManifest?: RendererMeshResourceManifest;
       readonly resolveMeshResource?: RendererMeshResourceResolver;
@@ -223,6 +226,14 @@ export type RendererSurfaceResourceOptions = RendererSurfaceOptions & (
   | {
       readonly meshResourceManifest: RendererMeshResourceManifest;
       readonly resolveMeshResource: RendererMeshResourceResolver;
+      readonly textureResourceManifest?: RendererTextureResourceManifest;
+      readonly resolveTextureResource?: RendererTextureResourceResolver;
+    }
+  | {
+      readonly animatedMeshManifest: RendererAnimatedMeshResourceManifest;
+      readonly resolveAnimatedMeshResource: RendererAnimatedMeshResourceResolver;
+      readonly meshResourceManifest?: RendererMeshResourceManifest;
+      readonly resolveMeshResource?: RendererMeshResourceResolver;
       readonly textureResourceManifest?: RendererTextureResourceManifest;
       readonly resolveTextureResource?: RendererTextureResourceResolver;
     }
@@ -477,12 +488,14 @@ function hasRendererSurfaceResources(
   return candidate.meshResourceManifest !== undefined
     || candidate.resolveMeshResource !== undefined
     || candidate.textureResourceManifest !== undefined
-    || candidate.resolveTextureResource !== undefined;
+    || candidate.resolveTextureResource !== undefined
+    || candidate.animatedMeshManifest !== undefined
+    || candidate.resolveAnimatedMeshResource !== undefined;
 }
 
 async function loadRendererSurfaceResources(
   options: RendererSurfaceResourceOptions,
-): Promise<Pick<RendererPreparedSurfaceResources, 'meshResourceSource' | 'textureResourceSource'>> {
+): Promise<RendererPreparedSurfaceResources> {
   if ((options.meshResourceManifest === undefined)
     !== (options.resolveMeshResource === undefined)) {
     throw new Error('meshResourceManifest requires an explicit resource resolver');
@@ -490,6 +503,10 @@ async function loadRendererSurfaceResources(
   if ((options.textureResourceManifest === undefined)
     !== (options.resolveTextureResource === undefined)) {
     throw new Error('textureResourceManifest requires an explicit resource resolver');
+  }
+  if ((options.animatedMeshManifest === undefined)
+    !== (options.resolveAnimatedMeshResource === undefined)) {
+    throw new Error('animatedMeshManifest requires an explicit resource resolver');
   }
   const meshResourceSource = options.meshResourceManifest === undefined
     ? undefined
@@ -503,7 +520,19 @@ async function loadRendererSurfaceResources(
         options.textureResourceManifest,
         options.resolveTextureResource as RendererTextureResourceResolver,
       );
+  const animatedMeshSource = options.animatedMeshManifest === undefined
+    ? undefined
+    : await loadRendererAnimatedMeshSource(
+        options.animatedMeshManifest,
+        options.resolveAnimatedMeshResource as RendererAnimatedMeshResourceResolver,
+      );
   return {
+    ...(animatedMeshSource === undefined ? {} : {
+      animatedMeshSource,
+      contentHashes: contentHashesByAsset(
+        options.animatedMeshManifest as RendererAnimatedMeshResourceManifest,
+      ),
+    }),
     ...(meshResourceSource === undefined ? {} : { meshResourceSource }),
     ...(textureResourceSource === undefined ? {} : { textureResourceSource }),
   };

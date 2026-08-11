@@ -85,6 +85,14 @@ pub struct RendererResource {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RendererAnimatedMeshResource {
+    pub asset: String,
+    pub content_hash: String,
+    pub clip_ids: Vec<String>,
+}
+
 impl RendererResource {
     pub fn validate(&self) -> Result<(), RendererWebviewError> {
         if self.identity.is_empty()
@@ -192,9 +200,21 @@ impl RendererWebviewAdapter {
         window: &W,
         options: RendererWebviewOptions,
     ) -> Result<Self, RendererWebviewError> {
+        Self::mount_with_animated_meshes(window, options, Vec::new())
+    }
+
+    /// Mount with explicit animated-mesh descriptors whose content hashes
+    /// resolve through `options.resources`. This keeps GLB asset/clip identity
+    /// in the Engine host instead of exposing its private bridge downstream.
+    pub fn mount_with_animated_meshes<W: HasWindowHandle>(
+        window: &W,
+        options: RendererWebviewOptions,
+        animated_meshes: Vec<RendererAnimatedMeshResource>,
+    ) -> Result<Self, RendererWebviewError> {
         options.validate()?;
+        validate_animated_mesh_resources(&options.resources, &animated_meshes)?;
         let bounds = options.bounds;
-        let configuration = RendererWireConfiguration::from(options);
+        let configuration = RendererWireConfiguration::new(options, animated_meshes);
         let configuration_json = escape_inline_script_json(serde_json::to_string(&configuration)?);
         let renderer_document = format!(
             r#"{RENDERER_DOCUMENT_PREFIX}
@@ -632,15 +652,20 @@ impl From<serde_json::Error> for RendererWebviewError {
 #[serde(rename_all = "camelCase")]
 struct RendererWireConfiguration {
     auto_start: bool,
+    animated_meshes: Vec<RendererAnimatedMeshResource>,
     clear_color: Option<u32>,
     pixel_ratio: f64,
     resources: Vec<RendererWireResource>,
 }
 
-impl From<RendererWebviewOptions> for RendererWireConfiguration {
-    fn from(options: RendererWebviewOptions) -> Self {
+impl RendererWireConfiguration {
+    fn new(
+        options: RendererWebviewOptions,
+        animated_meshes: Vec<RendererAnimatedMeshResource>,
+    ) -> Self {
         Self {
             auto_start: options.auto_start,
+            animated_meshes,
             clear_color: options.clear_color,
             pixel_ratio: options.pixel_ratio,
             resources: options
@@ -655,6 +680,49 @@ impl From<RendererWebviewOptions> for RendererWireConfiguration {
                 .collect(),
         }
     }
+}
+
+fn validate_animated_mesh_resources(
+    resources: &[RendererResource],
+    animated_meshes: &[RendererAnimatedMeshResource],
+) -> Result<(), RendererWebviewError> {
+    let resources_by_hash = resources
+        .iter()
+        .map(|resource| (resource.content_hash.as_str(), resource))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut assets = std::collections::BTreeSet::new();
+    for animated in animated_meshes {
+        if animated.asset.is_empty()
+            || animated.asset.len() > 256
+            || animated.asset.chars().any(char::is_control)
+            || !assets.insert(animated.asset.as_str())
+        {
+            return Err(RendererWebviewError::InvalidResource(
+                "animated mesh asset identity is invalid or duplicated",
+            ));
+        }
+        if animated.clip_ids.is_empty()
+            || animated.clip_ids.len() > 256
+            || animated.clip_ids.iter().any(|clip| {
+                clip.is_empty() || clip.len() > 256 || clip.chars().any(char::is_control)
+            })
+        {
+            return Err(RendererWebviewError::InvalidResource(
+                "animated mesh clips are empty, oversized, or invalid",
+            ));
+        }
+        let Some(resource) = resources_by_hash.get(animated.content_hash.as_str()) else {
+            return Err(RendererWebviewError::InvalidResource(
+                "animated mesh content hash has no admitted resource",
+            ));
+        };
+        if resource.media_type != "application/octet-stream" {
+            return Err(RendererWebviewError::InvalidResource(
+                "animated mesh resource must use application/octet-stream",
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -967,6 +1035,31 @@ mod tests {
         invalid.bytes.push(0);
         assert!(matches!(
             invalid.validate(),
+            Err(RendererWebviewError::InvalidResource(_))
+        ));
+    }
+
+    #[test]
+    fn animated_mesh_descriptors_resolve_only_admitted_glb_resources() {
+        let bytes = b"animated mesh glb bytes".to_vec();
+        let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
+        let resources = vec![RendererResource {
+            identity: format!("mesh-resource/{}", &content_hash["sha256:".len()..]),
+            content_hash: content_hash.clone(),
+            media_type: "application/octet-stream".to_owned(),
+            bytes,
+        }];
+        let animated = vec![RendererAnimatedMeshResource {
+            asset: "mesh-animation/test-actor".to_owned(),
+            content_hash,
+            clip_ids: vec!["idle".to_owned(), "run".to_owned()],
+        }];
+        assert!(validate_animated_mesh_resources(&resources, &animated).is_ok());
+
+        let mut missing = animated;
+        missing[0].content_hash = format!("sha256:{}", "0".repeat(64));
+        assert!(matches!(
+            validate_animated_mesh_resources(&resources, &missing),
             Err(RendererWebviewError::InvalidResource(_))
         ));
     }

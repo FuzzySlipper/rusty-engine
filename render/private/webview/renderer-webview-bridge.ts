@@ -36,9 +36,16 @@ interface RendererResourceEntry {
 
 interface RendererWebviewConfiguration {
   readonly autoStart: boolean;
+  readonly animatedMeshes: readonly RendererAnimatedMeshEntry[];
   readonly clearColor: number | null;
   readonly pixelRatio: number;
   readonly resources: readonly RendererResourceEntry[];
+}
+
+interface RendererAnimatedMeshEntry {
+  readonly asset: string;
+  readonly contentHash: string;
+  readonly clipIds: readonly string[];
 }
 
 interface RendererWebviewPrivateApi {
@@ -266,9 +273,18 @@ export function installRendererWebviewBridge(): void {
       ...(configuration.clearColor === null ? {} : { clearColor: configuration.clearColor }),
       pixelRatio: configuration.pixelRatio,
     };
+    const animatedOptions = configuration.animatedMeshes.length === 0 ? {} : {
+      animatedMeshManifest: {
+        kind: 'rusty_renderer_animated_mesh_resources.v1' as const,
+        resources: configuration.animatedMeshes,
+      },
+      resolveAnimatedMeshResource: async (descriptor: RendererAnimatedMeshEntry) =>
+        resourceBytesByHash(bytesByHash, descriptor.contentHash),
+    };
     if (meshResources.length > 0 && textureResources.length > 0) {
       surface = await mountRendererSurfaceWithResources(canvas, {
         ...options,
+        ...animatedOptions,
         meshResourceManifest: meshManifest(meshResources),
         resolveMeshResource: async (descriptor) => resourceBytes(entries, descriptor.resource),
         textureResourceManifest: textureManifest(textureResources),
@@ -277,14 +293,26 @@ export function installRendererWebviewBridge(): void {
     } else if (meshResources.length > 0) {
       surface = await mountRendererSurfaceWithResources(canvas, {
         ...options,
+        ...animatedOptions,
         meshResourceManifest: meshManifest(meshResources),
         resolveMeshResource: async (descriptor) => resourceBytes(entries, descriptor.resource),
       });
     } else if (textureResources.length > 0) {
       surface = await mountRendererSurfaceWithResources(canvas, {
         ...options,
+        ...animatedOptions,
         textureResourceManifest: textureManifest(textureResources),
         resolveTextureResource: async (descriptor) => resourceBytes(entries, descriptor.resource),
+      });
+    } else if (configuration.animatedMeshes.length > 0) {
+      surface = await mountRendererSurfaceWithResources(canvas, {
+        ...options,
+        animatedMeshManifest: {
+          kind: 'rusty_renderer_animated_mesh_resources.v1',
+          resources: configuration.animatedMeshes,
+        },
+        resolveAnimatedMeshResource: async (descriptor) =>
+          resourceBytesByHash(bytesByHash, descriptor.contentHash),
       });
     } else {
       surface = mountRendererSurface(canvas, options);
@@ -390,6 +418,32 @@ function decodeConfiguration(value: unknown): RendererWebviewConfiguration {
     throw new Error('configuration.resources must be a bounded array');
   }
   const identities = new Set<string>();
+  const configuredAnimatedMeshes = candidate.animatedMeshes ?? [];
+  if (!Array.isArray(configuredAnimatedMeshes) || configuredAnimatedMeshes.length > 256) {
+    throw new Error('configuration.animatedMeshes must be a bounded array');
+  }
+  const animatedAssets = new Set<string>();
+  const animatedMeshes = configuredAnimatedMeshes.map((entry, index) => {
+    if (typeof entry !== 'object' || entry === null) {
+      throw new Error(`configuration.animatedMeshes[${String(index)}] must be an object`);
+    }
+    const animated = entry as Partial<RendererAnimatedMeshEntry>;
+    if (typeof animated.asset !== 'string' || animated.asset.length === 0
+      || animatedAssets.has(animated.asset)
+      || typeof animated.contentHash !== 'string'
+      || !/^sha256:[0-9a-f]{64}$/u.test(animated.contentHash)
+      || !Array.isArray(animated.clipIds)
+      || animated.clipIds.length === 0
+      || !animated.clipIds.every((clip) => typeof clip === 'string' && clip.length > 0)) {
+      throw new Error(`configuration.animatedMeshes[${String(index)}] is invalid or duplicated`);
+    }
+    animatedAssets.add(animated.asset);
+    return Object.freeze({
+      asset: animated.asset,
+      contentHash: animated.contentHash,
+      clipIds: Object.freeze([...animated.clipIds]),
+    });
+  });
   const resources = candidate.resources.map((entry, index) => {
     if (typeof entry !== 'object' || entry === null) {
       throw new Error(`configuration.resources[${String(index)}] must be an object`);
@@ -413,6 +467,7 @@ function decodeConfiguration(value: unknown): RendererWebviewConfiguration {
   });
   return Object.freeze({
     autoStart: candidate.autoStart,
+    animatedMeshes: Object.freeze(animatedMeshes),
     clearColor,
     pixelRatio,
     resources: Object.freeze(resources),

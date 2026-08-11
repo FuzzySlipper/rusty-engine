@@ -135,7 +135,8 @@ and transactional cleanup. The downstream UI mount receives only:
 It never receives the canvas, Three/WebGL objects, renderer package topology,
 the private bridge, or a generic renderer command/eval path. The public
 `RustyApplicationContent` aggregate carries one complete Rust-projected frame
-plus its exact immutable `mesh` and `texture` resource bytes. Engine snapshots
+plus its exact immutable packed-mesh, texture, and animated-GLB resource bytes.
+Engine snapshots
 the caller's bytes before asynchronous work, validates bounded counts and byte
 sizes, requires each identity to match its `sha256` content hash, and admits
 only the media type owned by that resource family. The application host

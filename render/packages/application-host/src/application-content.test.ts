@@ -121,3 +121,56 @@ void test('application content admits both closed resource families and enforces
       && error.code === 'resource_limit_exceeded',
   );
 });
+
+void test('application content composes animated GLB, packed mesh, and texture resources', async () => {
+  const animatedBytes = new Uint8Array(16).fill(7);
+  const animatedDigest = createHash('sha256').update(animatedBytes).digest('hex');
+  const meshBytes = new Uint8Array(16).fill(3);
+  const meshDigest = createHash('sha256').update(meshBytes).digest('hex');
+  const prepared = prepareRustyApplicationContent({
+    frame: {
+      schemaVersion: 1,
+      ops: [{
+        op: 'defineAnimatedMesh',
+        asset: {
+          asset: 'mesh-animation/test-actor',
+          runtimeFormat: 'glb',
+          contentHash: `sha256:${animatedDigest}`,
+          clips: [{ id: 'idle', name: 'Idle', durationSeconds: 1 }],
+          defaultClip: 'idle',
+          materialSlots: [],
+          bounds: { min: [0, 0, 0], max: [1, 1, 1] },
+        },
+      }],
+    },
+    resources: [
+      {
+        identity: `mesh-resource/${animatedDigest}`,
+        contentHash: `sha256:${animatedDigest}`,
+        mediaType: 'application/octet-stream',
+        bytes: animatedBytes,
+      },
+      {
+        identity: `mesh-resource/${meshDigest}`,
+        contentHash: `sha256:${meshDigest}`,
+        mediaType: 'application/octet-stream',
+        bytes: meshBytes,
+      },
+      textureContent().resources![0]!,
+    ],
+  });
+  const options = rustyApplicationSurfaceResourceOptions(prepared);
+  assert.equal(options.animatedMeshManifest?.resources.length, 1);
+  assert.equal(options.meshResourceManifest?.resources.length, 2);
+  assert.equal(options.textureResourceManifest?.resources.length, 1);
+  const descriptor = options.animatedMeshManifest?.resources[0];
+  assert.deepEqual(descriptor, {
+    asset: 'mesh-animation/test-actor',
+    contentHash: `sha256:${animatedDigest}`,
+    clipIds: ['idle'],
+  });
+  assert.deepEqual(
+    new Uint8Array(await options.resolveAnimatedMeshResource!(descriptor!)),
+    animatedBytes,
+  );
+});

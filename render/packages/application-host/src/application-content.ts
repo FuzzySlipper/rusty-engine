@@ -7,6 +7,9 @@ import {
   RUSTY_RENDERER_TEXTURE_RESOURCE_MAX_TOTAL_BYTES,
   type RendererMeshResourceDescriptor,
   type RendererMeshResourceManifest,
+  type RendererAnimatedMeshResourceDescriptor,
+  type RendererAnimatedMeshResourceManifest,
+  type RendererAnimatedMeshResourceResolver,
   type RendererTextureResourceDescriptor,
   type RendererTextureResourceManifest,
 } from '@rusty-engine/renderer-host';
@@ -60,6 +63,8 @@ export interface PreparedRustyApplicationContent {
 }
 
 export interface RustyApplicationSurfaceResourceOptions {
+  readonly animatedMeshManifest?: RendererAnimatedMeshResourceManifest;
+  readonly resolveAnimatedMeshResource?: RendererAnimatedMeshResourceResolver;
   readonly meshResourceManifest?: RendererMeshResourceManifest;
   readonly resolveMeshResource?: (
     descriptor: RendererMeshResourceDescriptor,
@@ -178,9 +183,18 @@ export function rustyApplicationSurfaceResourceOptions(
   content: PreparedRustyApplicationContent,
 ): RustyApplicationSurfaceResourceOptions {
   const entries = new Map(content.resources.map((resource) => [resource.identity, resource]));
+  const animated = animatedMeshDescriptors(content.frame);
   const mesh = content.resources.filter((resource) => resource.kind === 'mesh');
   const textures = content.resources.filter((resource) => resource.kind === 'texture');
   return Object.freeze({
+    ...(animated.length === 0 ? {} : {
+      animatedMeshManifest: {
+        kind: 'rusty_renderer_animated_mesh_resources.v1' as const,
+        resources: Object.freeze(animated),
+      },
+      resolveAnimatedMeshResource: (descriptor: RendererAnimatedMeshResourceDescriptor) =>
+        resolveResourceByContentHash(entries, descriptor.contentHash),
+    }),
     ...(mesh.length === 0 ? {} : {
       meshResourceManifest: {
         kind: 'rusty_renderer_mesh_resources.v1' as const,
@@ -197,6 +211,37 @@ export function rustyApplicationSurfaceResourceOptions(
       resolveTextureResource: (descriptor: RendererTextureResourceDescriptor) =>
         resolveResource(entries, descriptor.resource),
     }),
+  });
+}
+
+function animatedMeshDescriptors(
+  frame: RustyApplicationFrame,
+): readonly RendererAnimatedMeshResourceDescriptor[] {
+  if (!Array.isArray(frame['ops'])) return [];
+  return frame['ops'].flatMap((operation): RendererAnimatedMeshResourceDescriptor[] => {
+    if (typeof operation !== 'object' || operation === null
+      || (operation as { readonly op?: unknown }).op !== 'defineAnimatedMesh') return [];
+    const asset = (operation as { readonly asset?: unknown }).asset;
+    if (typeof asset !== 'object' || asset === null) return [];
+    const candidate = asset as {
+      readonly asset?: unknown;
+      readonly contentHash?: unknown;
+      readonly clips?: unknown;
+    };
+    if (typeof candidate.asset !== 'string'
+      || typeof candidate.contentHash !== 'string'
+      || !Array.isArray(candidate.clips)) return [];
+    const clipIds = candidate.clips.map((clip) => (
+      typeof clip === 'object' && clip !== null
+        ? (clip as { readonly id?: unknown }).id
+        : undefined
+    ));
+    if (!clipIds.every((clip): clip is string => typeof clip === 'string')) return [];
+    return [{
+      asset: candidate.asset,
+      contentHash: candidate.contentHash,
+      clipIds: Object.freeze(clipIds),
+    }];
   });
 }
 
@@ -218,6 +263,17 @@ function resolveResource(
 ): Promise<ArrayBuffer> {
   const entry = entries.get(identity);
   if (entry === undefined) return Promise.reject(new Error(`resource ${identity} is unavailable`));
+  return Promise.resolve(entry.bytes.slice(0));
+}
+
+function resolveResourceByContentHash(
+  entries: ReadonlyMap<string, PreparedRustyApplicationResource>,
+  contentHash: string,
+): Promise<ArrayBuffer> {
+  const entry = [...entries.values()].find((candidate) => candidate.contentHash === contentHash);
+  if (entry === undefined) {
+    return Promise.reject(new Error(`resource ${contentHash} is unavailable`));
+  }
   return Promise.resolve(entry.bytes.slice(0));
 }
 
