@@ -47,6 +47,7 @@ import {
 import { classifyGpuSubmissionRendererName } from './gpu-submission-class.js';
 import { automaticSubmissionCapacity } from './gpu-submission-capacity.js';
 import { resolveRendererPixelRatio } from './software-renderer-resolution.js';
+import { applyRendererThreeCameraPose } from './camera-pose.js';
 import {
   RendererViewCompositionBackend,
   RendererViewCompositionPolicyError,
@@ -435,15 +436,11 @@ export function mountRendererBrowserSurface(
   ): void => {
     currentCameraPose = pose;
     currentCameraBasis = basis ?? null;
-    camera.position.set(pose.position[0], pose.position[1], pose.position[2]);
     if (currentCameraBasis === null) {
-      camera.up.set(0, 1, 0);
-      camera.rotation.order = 'YXZ';
-      camera.rotation.x = degreesToRadians(pose.pitchDegrees);
-      camera.rotation.y = degreesToRadians(pose.yawDegrees);
-      camera.rotation.z = 0;
+      applyRendererThreeCameraPose(camera, pose);
       return;
     }
+    camera.position.set(pose.position[0], pose.position[1], pose.position[2]);
     camera.up.set(currentCameraBasis.up[0], currentCameraBasis.up[1], currentCameraBasis.up[2]);
     cameraLookTarget.set(
       camera.position.x + currentCameraBasis.forward[0],

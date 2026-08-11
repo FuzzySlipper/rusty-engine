@@ -2,6 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { resolveRendererStoredEditorCamera } from './stored-editor-camera.js';
 
+function forwardFromPose(yawDegrees: number, pitchDegrees: number): readonly [number, number, number] {
+  const yaw = yawDegrees * Math.PI / 180;
+  const pitch = pitchDegrees * Math.PI / 180;
+  const cosPitch = Math.cos(pitch);
+  return [Math.sin(yaw) * cosPitch, Math.sin(pitch), -Math.cos(yaw) * cosPitch];
+}
+
 void test('stored editor camera resolver owns canonical axis-aligned pose and basis semantics', () => {
   const result = resolveRendererStoredEditorCamera({
     position: [0, 0, 5],
@@ -39,6 +46,10 @@ void test('stored editor camera resolver deterministically normalizes a non-axis
   assert.ok(Math.abs(result.camera.pose.yawDegrees - -26.565_051_177) < 0.000_001);
   assert.ok(Math.abs(result.camera.pose.pitchDegrees - -24.094_842_552) < 0.000_001);
   assertVectorClose(result.camera.basis.forward, [-0.408_248_29, -0.408_248_29, -0.816_496_58]);
+  assertVectorClose(
+    forwardFromPose(result.camera.pose.yawDegrees, result.camera.pose.pitchDegrees),
+    result.camera.basis.forward,
+  );
   assertVectorClose(result.camera.basis.right, [0.894_427_19, 0, -0.447_213_6]);
   assertVectorClose(result.camera.basis.up, [-0.182_574_19, 0.912_870_93, -0.365_148_37]);
 });

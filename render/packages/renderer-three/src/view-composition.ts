@@ -8,6 +8,7 @@ import {
 } from '@rusty-engine/render-contracts';
 
 import type { RendererVisibilityReadout, ThreeRenderer } from './three-renderer.js';
+import { applyRendererThreeCameraPose } from './camera-pose.js';
 
 export type RendererViewCompositionDiagnosticCode =
   | 'invalid_view_composition'
@@ -406,12 +407,7 @@ function createCamera(descriptor: RendererCompositionCamera): THREE.Camera {
         descriptor.projection.far,
       );
   camera.name = descriptor.id;
-  camera.position.set(...descriptor.pose.position);
-  camera.up.set(0, 1, 0);
-  camera.rotation.order = 'YXZ';
-  camera.rotation.x = THREE.MathUtils.degToRad(descriptor.pose.pitchDegrees);
-  camera.rotation.y = THREE.MathUtils.degToRad(descriptor.pose.yawDegrees);
-  camera.rotation.z = 0;
+  applyRendererThreeCameraPose(camera, descriptor.pose);
   camera.updateMatrixWorld(true);
   return camera;
 }

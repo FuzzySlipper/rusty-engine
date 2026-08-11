@@ -67,6 +67,13 @@ Engine owns strict decoding, resource realization and disposal, viewport and
 backend lifecycle, physical input capture, picking, and renderer observations
 at that sensitive boundary.
 
+Camera poses use one renderer-neutral Engine convention: yaw zero faces `-Z`,
+positive yaw turns toward `+X`, and positive pitch turns toward `+Y`. A pose's
+forward vector is
+`[sin(yaw) * cos(pitch), sin(pitch), -cos(yaw) * cos(pitch)]`. Downstream Rust
+may use that convention for authoritative movement and ray queries; the Engine
+backend alone converts it into the current renderer's private camera rules.
+
 Downstream still owns the game: authoritative facts, gameplay semantics,
 orchestration and scheduling, content meaning, storage policy, resource
 admission, the outer window and event loop, semantic input mapping, and
