@@ -1,0 +1,17 @@
+{
+  "scenario": "engine-public-application-host-movement",
+  "mission": "Enter the Engine-hosted WebGL scene, capture pointer input, move through the gateway with ordinary keyboard input, and look toward two differently colored landmarks.",
+  "controls": [
+    "Click the visible product viewport to capture pointer input",
+    "Hold W, A, S, or D to move",
+    "Move the mouse to look around",
+    "Press Escape to release pointer input"
+  ],
+  "viewport": { "width": 1280, "height": 720 },
+  "artifacts": {
+    "screenshots": true,
+    "frameBurst": { "count": 6, "intervalMs": 100 },
+    "trace": true,
+    "video": false
+  }
+}

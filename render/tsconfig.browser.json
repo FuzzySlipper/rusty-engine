@@ -8,6 +8,7 @@
   },
   "include": [
     "browser/**/*.ts",
+    "product-playtest/**/*.ts",
     "private/**/*.ts",
     "playwright.config.ts",
     "vite.config.ts",

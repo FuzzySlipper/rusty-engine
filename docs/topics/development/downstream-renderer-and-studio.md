@@ -87,6 +87,21 @@ bridge, or renderer control transport. If a needed presentation capability is
 absent, request a game-neutral Engine mechanism instead of reaching through the
 boundary.
 
+## Product playtesting uses the same public path
+
+A downstream final-product playtest starts the real product and drives its
+visible output with ordinary public input. It does not deep-import renderer
+packages, add a second canvas or bridge, expose Engine-private handles, or move
+gameplay meaning into browser state for testing. Browser diagnostics can help
+reproduce a defect, but they remain labelled evidence rather than a production
+readback contract or gameplay authority.
+
+Model-driven sessions are completion, review, nightly, or release evidence and
+do not belong in ordinary every-commit CI. Browser and native adapters provide
+separate host evidence even when they share scenario intent. See
+[Product playtesting and evidence authority](product-playtesting.md) for the
+Engine fixture, evidence layers, and minimal downstream manifest/scenario.
+
 ## Rich DOM presentation without renderer ownership
 
 Browser-delivered products and webview wrappers use one additional public

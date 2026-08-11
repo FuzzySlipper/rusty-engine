@@ -1,0 +1,16 @@
+{
+  "project": "rusty-engine-product-playtest",
+  "serve": {
+    "command": "pnpm --dir render exec vite --config vite.config.ts --host {host} --port {port}",
+    "preferredPort": 0,
+    "healthUrl": "/product-playtest/",
+    "readyText": "Rusty Engine public product playtest",
+    "reusePolicy": "broker_owned",
+    "startupTimeout": "60s"
+  },
+  "playtest": {
+    "startPath": "/product-playtest/",
+    "viewport": { "width": 1280, "height": 720 },
+    "recordVideo": false
+  }
+}

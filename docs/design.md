@@ -1034,6 +1034,16 @@ Studio proves user-visible behavior in its supported host. Chromium success does
 browser semantics into Engine requirements, while headless success does not replace real host tests
 for genuinely host-owned behavior.
 
+Black-box product playtesting is a third, separately recorded evidence layer
+above focused Rust mechanisms and renderer/application-host contract tests. It
+uses visible output and ordinary public input to judge a composed product; it
+does not add Engine test authority, a hidden readback, or a second renderer or
+control path. Browser and native playtests remain distinct host evidence.
+Model-driven runs are completion, review, nightly, or release evidence rather
+than an every-commit requirement. A confirmed defect should normally gain the
+smallest deterministic regression at its owning layer. See
+[Product playtesting and evidence authority](topics/development/product-playtesting.md).
+
 Source organization follows [rust-style.md](topics/development/rust-style.md): one primary behavior owner or cohesive
 type family per file, thin crate roots, and no one-type-per-file rule. File size is a review signal,
 not a CI policy.

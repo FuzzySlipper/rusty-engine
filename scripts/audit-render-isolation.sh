@@ -14,6 +14,7 @@ if rg -n -i "$FORBIDDEN" \
   rust/crates/renderer-webview-host \
   render/packages \
   render/browser \
+  render/product-playtest \
   render/private \
   --glob '*.rs' \
   --glob '*.ts' \

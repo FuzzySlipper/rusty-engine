@@ -8,7 +8,7 @@
     "build": "pnpm -r build && pnpm run build:application-host-artifact && pnpm run build:webview-artifact",
     "build:application-host-artifact": "pnpm --filter @rusty-engine/application-host run build && vite build --config vite.application-host.config.ts && node scripts/publish-application-host-artifact.mjs",
     "build:webview-artifact": "vite build --config vite.webview.config.ts",
-    "boundary": "node scripts/check-boundaries.mjs",
+    "boundary": "node scripts/check-boundaries.mjs && node scripts/check-product-playtest-fixture.mjs",
     "typecheck": "tsc --build packages/*/tsconfig.json && tsc --project tsconfig.browser.json --noEmit",
     "test": "pnpm -r test",
     "test:browser": "playwright test --config playwright.config.ts",

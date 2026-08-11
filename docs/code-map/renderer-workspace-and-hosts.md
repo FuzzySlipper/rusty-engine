@@ -20,6 +20,8 @@ compiled artifact, and Rust webview host/resource lifecycle.
 - `render/artifacts/application-host`: reproducible public artifact with no
   renderer peer or runtime dependencies in the downstream lock.
 - `render/browser`: real Chromium/WebGL/WebAudio/DOM acceptance.
+- `render/product-playtest`: bounded public application-host product fixture for
+  on-demand black-box playtesting; it owns no production or test authority.
 - `render/private/webview`: fixed private bridge and thin composition root.
 - `renderer-webview-host`: embedded artifact, one Wry child webview, bounded
   resource admission, named Rust operations, typed IPC observations, and disposal.
@@ -57,12 +59,14 @@ compiled artifact, and Rust webview host/resource lifecycle.
 - [`render/packages/application-host/src`](../../render/packages/application-host/src)
 - [`render/artifacts/application-host`](../../render/artifacts/application-host)
 - [`render/browser`](../../render/browser)
+- [`render/product-playtest`](../../render/product-playtest)
 - [`render/private/webview`](../../render/private/webview)
 - [`renderer-webview-host/src/lib.rs`](../../rust/crates/renderer-webview-host/src/lib.rs)
 - [`renderer-webview-host/examples/webview_smoke.rs`](../../rust/crates/renderer-webview-host/examples/webview_smoke.rs)
 - [`render/package.json`](../../render/package.json)
 - [Rendering operations](../rendering-operations.md)
 - [Downstream renderer and Studio boundary](../topics/development/downstream-renderer-and-studio.md)
+- [Product playtesting and evidence authority](../topics/development/product-playtesting.md)
 - [Voxel mesh data plane](../topics/voxel/voxel-mesh-data-plane.md)
 - [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
 - [Textured voxel campaign closeout](../textured-voxel-campaign-closeout.md)
@@ -113,7 +117,9 @@ compiled artifact, and Rust webview host/resource lifecycle.
 
 The render gate includes isolation, exact behavior accounting, package tests,
 and the real browser path. Retained inputs live under
-[`fixtures/render`](../../fixtures/render).
+[`fixtures/render`](../../fixtures/render). Its deterministic boundary check
+also keeps the public-host playtest fixture on the sole application-host path;
+the model-driven session itself remains on-demand and outside ordinary CI.
 
 ## Common agent mistakes
 
