@@ -126,7 +126,8 @@ strict frame/resource admission, whole-content replacement, the sole render cade
 resize/DPR behavior, pointer/focus arbitration, startup/failure presentation,
 and transactional cleanup. The downstream UI mount receives only:
 
-- a renderer port for Rust-projected frames and authoritative camera poses;
+- a renderer port for Rust-projected retained frames, typed presentation
+  frames, authoritative camera poses, and user-gesture audio resume;
 - an interaction port with `gameplay`, `interface`, and `modal` modes plus
   gameplay focus recovery; and
 - its own DOM root, where Angular, another framework, or direct typed DOM code
@@ -135,12 +136,21 @@ and transactional cleanup. The downstream UI mount receives only:
 It never receives the canvas, Three/WebGL objects, renderer package topology,
 the private bridge, or a generic renderer command/eval path. The public
 `RustyApplicationContent` aggregate carries one complete Rust-projected frame
-plus its exact immutable packed-mesh, texture, and animated-GLB resource bytes.
+plus its exact immutable packed-mesh, texture, animated-GLB, and WAV resource
+bytes.
 Engine snapshots
 the caller's bytes before asynchronous work, validates bounded counts and byte
 sizes, requires each identity to match its `sha256` content hash, and admits
 only the media type owned by that resource family. The application host
 privately derives renderer manifests and resolvers; downstream never does.
+
+Audio remains presentation, not downstream behavior. A product publishes
+content-addressed `audio/wav` bytes, sends Rust-authored audio operations through
+`applyPresentation(...)`, and invokes `resumeAudio()` directly from a physical
+user-gesture handler when browser policy requires it. The application host
+owns the `AudioContext`, typed audio host, hash-checked resolver, replacement,
+and disposal; downstream code never constructs Web Audio nodes or interprets
+gameplay outcomes into sound choices.
 
 `initialContent` mounts the first aggregate. `replaceContent(...)` prepares a
 fresh surface, resource catalog, listeners, and complete frame before one

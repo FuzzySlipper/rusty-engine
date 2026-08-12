@@ -6,6 +6,7 @@ import { RUSTY_RENDERER_TEXTURE_RESOURCE_MAX_COUNT } from '@rusty-engine/rendere
 import {
   RustyApplicationContentError,
   prepareRustyApplicationContent,
+  rustyApplicationAudioResourceResolver,
   rustyApplicationSurfaceResourceOptions,
   type RustyApplicationContent,
 } from './application-content.js';
@@ -117,6 +118,71 @@ void test('application content admits both closed resource families and enforces
         },
       ),
     }),
+    (error: unknown) => error instanceof RustyApplicationContentError
+      && error.code === 'resource_limit_exceeded',
+  );
+});
+
+void test('application content admits bounded WAV resources and resolves immutable audio bytes', async () => {
+  const source = new Uint8Array(44);
+  source.set([82, 73, 70, 70], 0);
+  const digest = createHash('sha256').update(source).digest('hex');
+  const prepared = prepareRustyApplicationContent({
+    frame: { schemaVersion: 1, ops: [] },
+    resources: [{
+      identity: `audio-resource/${digest}`,
+      contentHash: `sha256:${digest}`,
+      mediaType: 'audio/wav',
+      bytes: source,
+    }],
+  });
+  source.fill(0);
+  const resolver = rustyApplicationAudioResourceResolver(prepared);
+  assert.ok(resolver !== null);
+  const resolved = await resolver({ asset: 'audio/test-swing', contentHash: `sha256:${digest}` });
+  assert.deepEqual(new Uint8Array(resolved.bytes).slice(0, 4), new Uint8Array([82, 73, 70, 70]));
+  new Uint8Array(resolved.bytes).fill(0);
+  const resolvedAgain = await resolver({
+    asset: 'audio/test-swing',
+    contentHash: `sha256:${digest}`,
+  });
+  assert.deepEqual(
+    new Uint8Array(resolvedAgain.bytes).slice(0, 4),
+    new Uint8Array([82, 73, 70, 70]),
+  );
+});
+
+void test('application content rejects unsupported and undersized audio resources', () => {
+  const bytes = new Uint8Array(44);
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  const resource = {
+    identity: `audio-resource/${digest}`,
+    contentHash: `sha256:${digest}`,
+    mediaType: 'audio/mpeg',
+    bytes,
+  };
+  assert.throws(
+    () => prepareRustyApplicationContent({
+      frame: { schemaVersion: 1, ops: [] },
+      resources: [resource],
+    }),
+    (error: unknown) => error instanceof RustyApplicationContentError
+      && error.code === 'resource_media_type_unsupported',
+  );
+  assert.throws(
+    () => {
+      const shortBytes = new Uint8Array(43);
+      const shortDigest = createHash('sha256').update(shortBytes).digest('hex');
+      return prepareRustyApplicationContent({
+        frame: { schemaVersion: 1, ops: [] },
+        resources: [{
+          identity: `audio-resource/${shortDigest}`,
+          contentHash: `sha256:${shortDigest}`,
+          mediaType: 'audio/wav',
+          bytes: shortBytes,
+        }],
+      });
+    },
     (error: unknown) => error instanceof RustyApplicationContentError
       && error.code === 'resource_limit_exceeded',
   );

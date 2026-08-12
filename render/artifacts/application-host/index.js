@@ -20839,8 +20839,261 @@ function Xv(e) {
 }
 180 / Math.PI;
 //#endregion
+//#region packages/renderer-host/dist/audio-host.js
+var Zv = class {
+	#e;
+	#t;
+	#n;
+	#r;
+	#i = /* @__PURE__ */ new Map();
+	#a = /* @__PURE__ */ new Map();
+	#o = /* @__PURE__ */ new Set();
+	#s = /* @__PURE__ */ new Set();
+	#c = [];
+	#l = 0;
+	#u = !1;
+	constructor(e) {
+		this.#e = e.createContext?.() ?? $v(), this.#n = e.resolveResource, this.#t = e.resolveEntityPosition ?? (() => null);
+		let t = this.#e.createGain(), n = this.#e.createGain(), r = this.#e.createGain();
+		t.connect(this.#e.destination), n.connect(this.#e.destination), r.connect(this.#e.destination), this.#r = {
+			sfx: t,
+			ambient: n,
+			ui: r
+		};
+	}
+	async resume() {
+		try {
+			return await this.#e.resume(), this.#e.state === "running" ? [] : this.#h("audioContextBlocked", "audio context remained " + this.#e.state);
+		} catch (e) {
+			return this.#h("audioContextBlocked", uy(e, "audio context resume failed"));
+		}
+	}
+	updateListener(e) {
+		if (![
+			...e.position,
+			...e.forward,
+			...e.up
+		].every(Number.isFinite)) return this.#h("invalidDescriptor", "audio listener pose must be finite");
+		let t = this.#e.currentTime;
+		return ny(this.#e.listener, "position", e.position, t), ny(this.#e.listener, "forward", e.forward, t), ny(this.#e.listener, "up", e.up, t), [];
+	}
+	async applyPresentation(e) {
+		if (this.#u) return this.#g(0, this.#h("hostFailure", "audio host is disposed"));
+		let t = [], n = 0;
+		for (let r of e.ops) {
+			if (r.domain !== "audio") continue;
+			let e = await this.#d(r);
+			e === null ? n += 1 : (t.push(e), this.#c.push(e));
+		}
+		return this.#g(n, t);
+	}
+	readout() {
+		return {
+			activeSources: this.#a.size,
+			cachedClips: this.#i.size,
+			emittedSignals: this.#l,
+			diagnostics: [...this.#c]
+		};
+	}
+	refreshLayout() {
+		if (this.#u) return this.#h("hostFailure", "audio host is disposed");
+		let e = [];
+		for (let [t, n] of this.#a) {
+			if (n.descriptor.emitter.kind !== "entityAttached" || n.panner === null) continue;
+			let r = ry(n.descriptor.emitter, this.#t);
+			if (r === null || !r.every(Number.isFinite)) {
+				e.push({
+					code: "hostFailure",
+					sequence: n.sequence,
+					handle: t,
+					message: "entity-attached audio source has no finite projected position"
+				});
+				continue;
+			}
+			ty(n.panner, r, this.#e.currentTime);
+		}
+		return this.#c.push(...e), e;
+	}
+	async dispose() {
+		if (!this.#u) {
+			this.#u = !0;
+			for (let e of [...this.#a.values(), ...this.#o]) ay(e);
+			this.#a.clear(), this.#o.clear(), this.#s.clear();
+			for (let e of Object.values(this.#r)) e.disconnect();
+			await this.#e.close();
+		}
+	}
+	async #d(e) {
+		let { meta: t, op: n } = e;
+		try {
+			if (n.op === "emit") {
+				if (this.#s.has(n.signalId)) return null;
+				let e = await this.#p(n.descriptor, t.sequence);
+				return this.#s.add(n.signalId), this.#o.add(e), e.source.onended = () => {
+					this.#o.delete(e), ay(e);
+				}, e.source.start(), this.#l += 1, null;
+			}
+			if (n.op === "create") {
+				if (this.#a.has(n.handle)) return sy("duplicateHandle", t, n.handle, "audio handle is active");
+				let e = await this.#p(n.descriptor, t.sequence);
+				return this.#a.set(n.handle, e), e.source.start(), null;
+			}
+			if (n.op === "destroy") {
+				let e = this.#a.get(n.handle);
+				return e === void 0 ? sy("unknownHandle", t, n.handle, "audio handle is unknown") : (this.#a.delete(n.handle), ay(e), null);
+			}
+			return await this.#f(t, n.handle, n.patch);
+		} catch (e) {
+			return sy(ly(e), t, oy(n), uy(e, "audio host operation failed"));
+		}
+	}
+	async #f(e, t, n) {
+		let r = this.#a.get(t);
+		if (r === void 0) return sy("unknownHandle", e, t, "audio handle is unknown");
+		let i = iy(r.descriptor, n);
+		if (n.emitter !== null) {
+			let n = await this.#p(i, e.sequence);
+			return ay(r), this.#a.set(t, n), n.source.start(), null;
+		}
+		return r.descriptor = i, r.sequence = e.sequence, ey(this.#e, r, i, this.#t), null;
+	}
+	async #p(e, t) {
+		let n = this.#e.createBufferSource();
+		n.buffer = await this.#m(e.clip);
+		let r = {
+			descriptor: e,
+			sequence: t,
+			source: n,
+			dryGain: this.#e.createGain(),
+			wetGain: this.#e.createGain(),
+			stereoPanner: this.#e.createStereoPanner(),
+			panner: e.emitter.kind === "global2d" ? null : this.#e.createPanner(),
+			disposed: !1
+		};
+		return n.connect(r.stereoPanner), r.stereoPanner.connect(r.dryGain), r.dryGain.connect(this.#r[e.bus]), r.panner !== null && (n.connect(r.panner), r.panner.connect(r.wetGain), r.wetGain.connect(this.#r[e.bus])), ey(this.#e, r, e, this.#t), r;
+	}
+	async #m(e) {
+		let t = this.#i.get(e.contentHash);
+		if (t !== void 0) return t;
+		let n = this.#n(e).then(async (t) => {
+			if (t.contentHash !== e.contentHash) throw new Qv("contentHashMismatch", "resolved audio content hash does not match the requested clip");
+			let n = await N_(t.bytes, e.contentHash).catch((e) => {
+				throw new Qv("contentHashMismatch", e instanceof Error ? e.message : String(e));
+			});
+			if (n !== e.contentHash) throw new Qv("contentHashMismatch", `audio bytes hash ${n} does not match ${e.contentHash}`);
+			try {
+				return await this.#e.decodeAudioData(t.bytes.slice(0));
+			} catch (e) {
+				throw new Qv("decodeFailed", uy(e, "audio clip decoding failed"));
+			}
+		});
+		this.#i.set(e.contentHash, n);
+		try {
+			return await n;
+		} catch (t) {
+			throw this.#i.delete(e.contentHash), t;
+		}
+	}
+	#h(e, t) {
+		let n = cy(e, t);
+		return this.#c.push(n), [n];
+	}
+	#g(e, t) {
+		return {
+			applied: e,
+			diagnostics: t,
+			readout: this.readout()
+		};
+	}
+}, Qv = class extends Error {
+	code;
+	constructor(e, t) {
+		super(t), this.code = e;
+	}
+};
+function $v() {
+	let e = globalThis.AudioContext;
+	if (e === void 0) throw Error("Web Audio AudioContext is unavailable");
+	return new e();
+}
+function ey(e, t, n, r) {
+	let i = e.currentTime;
+	t.source.loop = n.looping, t.source.playbackRate.setValueAtTime(n.pitch, i), t.stereoPanner.pan.setValueAtTime(n.pan, i);
+	let a = n.emitter.kind === "global2d" ? 0 : n.spatialBlend;
+	if (t.dryGain.gain.setValueAtTime(n.volume * (1 - a), i), t.wetGain.gain.setValueAtTime(n.volume * a, i), t.panner === null) return;
+	let o = ry(n.emitter, r);
+	if (o === null) throw Error("entity-attached audio source has no projected position");
+	t.panner.panningModel = "equalpower", t.panner.distanceModel = "inverse", t.panner.refDistance = 1, t.panner.maxDistance = n.attenuation, t.panner.rolloffFactor = 1, ty(t.panner, o, i);
+}
+function ty(e, t, n) {
+	e.positionX.setValueAtTime(t[0], n), e.positionY.setValueAtTime(t[1], n), e.positionZ.setValueAtTime(t[2], n);
+}
+function ny(e, t, n, r) {
+	e[`${t}X`].setValueAtTime(n[0], r), e[`${t}Y`].setValueAtTime(n[1], r), e[`${t}Z`].setValueAtTime(n[2], r);
+}
+function ry(e, t) {
+	if (e.kind === "global2d") return [
+		0,
+		0,
+		0
+	];
+	if (e.kind === "world3d") return e.position;
+	let n = t(e.entity);
+	return n === null ? null : [
+		n[0] + e.offset[0],
+		n[1] + e.offset[1],
+		n[2] + e.offset[2]
+	];
+}
+function iy(e, t) {
+	return {
+		...e,
+		volume: t.volume ?? e.volume,
+		pitch: t.pitch ?? e.pitch,
+		looping: t.looping ?? e.looping,
+		spatialBlend: t.spatialBlend ?? e.spatialBlend,
+		attenuation: t.attenuation ?? e.attenuation,
+		pan: t.pan ?? e.pan,
+		emitter: t.emitter ?? e.emitter
+	};
+}
+function ay(e) {
+	if (!e.disposed) {
+		e.disposed = !0, e.source.onended = null;
+		try {
+			e.source.stop();
+		} catch {}
+		e.source.disconnect(), e.stereoPanner.disconnect(), e.dryGain.disconnect(), e.panner?.disconnect(), e.wetGain.disconnect();
+	}
+}
+function oy(e) {
+	return e.op === "emit" ? null : e.handle;
+}
+function sy(e, t, n, r) {
+	return {
+		code: e,
+		sequence: t.sequence,
+		handle: n,
+		message: r
+	};
+}
+function cy(e, t) {
+	return {
+		code: e,
+		sequence: 0,
+		handle: null,
+		message: t
+	};
+}
+function ly(e) {
+	return e instanceof Qv ? e.code : "hostFailure";
+}
+function uy(e, t) {
+	return e instanceof Error ? e.message : t;
+}
+//#endregion
 //#region packages/renderer-host/dist/telemetry-host.js
-var Zv = /* @__PURE__ */ new Set([
+var dy = /* @__PURE__ */ new Set([
 	"renderHandleCount",
 	"drawCallCount",
 	"geometryResourceCount",
@@ -20866,74 +21119,89 @@ new Set([
 	"activeBillboardCount",
 	"activeParticleCount",
 	"droppedFeedbackCount"
-].filter((e) => !Zv.has(e)));
+].filter((e) => !dy.has(e)));
 //#endregion
 //#region packages/application-host/src/application-content.ts
-var Qv = class extends Error {
+var fy = 8 * 1024 * 1024, py = 64, my = 32 * 1024 * 1024, hy = class extends Error {
 	code;
 	resource;
 	constructor(e, t, n) {
 		super(n), this.code = e, this.resource = t, this.name = "RustyApplicationContentError";
 	}
-}, $v = /^(mesh|texture)-resource\/([0-9a-f]{64})$/u;
-function ey(e) {
-	if (typeof e != "object" || !e || typeof e.frame != "object" || e.frame === null) throw oy("content_invalid", null, "application content must include one frame");
-	if (e.resources !== void 0 && !Array.isArray(e.resources)) throw oy("content_invalid", null, "application content resources must be an array");
-	let t = structuredClone(e.frame), n = /* @__PURE__ */ new Set(), r = 0, i = 0, a = 0, o = 0, s = (e.resources ?? []).map((e, t) => {
-		if (typeof e != "object" || !e || typeof e.identity != "string" || typeof e.contentHash != "string" || typeof e.mediaType != "string" || !(e.bytes instanceof Uint8Array)) throw oy("content_invalid", null, `application content resource ${String(t)} is malformed`);
-		let s = $v.exec(e.identity), c = /^sha256:([0-9a-f]{64})$/u.exec(e.contentHash)?.[1];
-		if (s === null || c === void 0 || s[2] !== c) throw oy("resource_identity_invalid", e.identity || null, "application resource identity must match its lowercase SHA-256 content hash");
-		if (n.has(e.identity)) throw oy("resource_duplicate", e.identity, "application resource identity is duplicated");
+}, gy = /^(audio|mesh|texture)-resource\/([0-9a-f]{64})$/u;
+function _y(e) {
+	if (typeof e != "object" || !e || typeof e.frame != "object" || e.frame === null) throw wy("content_invalid", null, "application content must include one frame");
+	if (e.resources !== void 0 && !Array.isArray(e.resources)) throw wy("content_invalid", null, "application content resources must be an array");
+	let t = structuredClone(e.frame), n = /* @__PURE__ */ new Set(), r = 0, i = 0, a = 0, o = 0, s = 0, c = 0, l = (e.resources ?? []).map((e, t) => {
+		if (typeof e != "object" || !e || typeof e.identity != "string" || typeof e.contentHash != "string" || typeof e.mediaType != "string" || !(e.bytes instanceof Uint8Array)) throw wy("content_invalid", null, `application content resource ${String(t)} is malformed`);
+		let l = gy.exec(e.identity), u = /^sha256:([0-9a-f]{64})$/u.exec(e.contentHash)?.[1];
+		if (l === null || u === void 0 || l[2] !== u) throw wy("resource_identity_invalid", e.identity || null, "application resource identity must match its lowercase SHA-256 content hash");
+		if (n.has(e.identity)) throw wy("resource_duplicate", e.identity, "application resource identity is duplicated");
 		n.add(e.identity);
-		let l = s[1];
-		if (l === "texture") {
-			if (e.mediaType !== "image/png") throw oy("resource_media_type_unsupported", e.identity, "texture resources must use image/png");
-			if (a += 1, o += e.bytes.byteLength, a > 256 || e.bytes.byteLength === 0 || e.bytes.byteLength > 16777216 || o > 134217728) throw oy("resource_limit_exceeded", e.identity, "texture resource count or byte length exceeds the application-host bound");
+		let d = l[1];
+		if (d === "audio") {
+			if (e.mediaType !== "audio/wav") throw wy("resource_media_type_unsupported", e.identity, "audio resources must use audio/wav");
+			if (a += 1, o += e.bytes.byteLength, a > 64 || e.bytes.byteLength < 44 || e.bytes.byteLength > 8388608 || o > 33554432) throw wy("resource_limit_exceeded", e.identity, "audio resource count or byte length exceeds the application-host bound");
+		} else if (d === "texture") {
+			if (e.mediaType !== "image/png") throw wy("resource_media_type_unsupported", e.identity, "texture resources must use image/png");
+			if (s += 1, c += e.bytes.byteLength, s > 256 || e.bytes.byteLength === 0 || e.bytes.byteLength > 16777216 || c > 134217728) throw wy("resource_limit_exceeded", e.identity, "texture resource count or byte length exceeds the application-host bound");
 		} else {
-			if (e.mediaType !== "application/octet-stream") throw oy("resource_media_type_unsupported", e.identity, "mesh resources must use application/octet-stream");
-			if (r += 1, i += e.bytes.byteLength, r > 1024 || e.bytes.byteLength < 16 || e.bytes.byteLength > 67108864 || i > 268435456) throw oy("resource_limit_exceeded", e.identity, "mesh resource count or byte length exceeds the application-host bound");
+			if (e.mediaType !== "application/octet-stream") throw wy("resource_media_type_unsupported", e.identity, "mesh resources must use application/octet-stream");
+			if (r += 1, i += e.bytes.byteLength, r > 1024 || e.bytes.byteLength < 16 || e.bytes.byteLength > 67108864 || i > 268435456) throw wy("resource_limit_exceeded", e.identity, "mesh resource count or byte length exceeds the application-host bound");
 		}
 		return Object.freeze({
 			identity: e.identity,
 			contentHash: e.contentHash,
 			mediaType: e.mediaType,
 			bytes: e.bytes.slice().buffer,
-			kind: l
+			kind: d
 		});
 	});
 	return Object.freeze({
 		frame: t,
-		resources: Object.freeze(s),
-		resourceBytes: i + o
+		resources: Object.freeze(l),
+		resourceBytes: o + i + c
 	});
 }
-function ty(e) {
-	let t = new Map(e.resources.map((e) => [e.identity, e])), n = ny(e.frame), r = e.resources.filter((e) => e.kind === "mesh"), i = e.resources.filter((e) => e.kind === "texture");
+function vy(e) {
+	let t = e.resources.filter((e) => e.kind === "audio");
+	if (t.length === 0) return null;
+	let n = new Map(t.map((e) => [e.contentHash, e]));
+	return (e) => {
+		let t = n.get(e.contentHash);
+		return t === void 0 ? Promise.reject(/* @__PURE__ */ Error(`audio resource ${e.asset} (${e.contentHash}) is unavailable`)) : Promise.resolve({
+			bytes: t.bytes.slice(0),
+			contentHash: t.contentHash
+		});
+	};
+}
+function yy(e) {
+	let t = new Map(e.resources.map((e) => [e.identity, e])), n = by(e.frame), r = e.resources.filter((e) => e.kind === "mesh"), i = e.resources.filter((e) => e.kind === "texture");
 	return Object.freeze({
 		...n.length === 0 ? {} : {
 			animatedMeshManifest: {
 				kind: "rusty_renderer_animated_mesh_resources.v1",
 				resources: Object.freeze(n)
 			},
-			resolveAnimatedMeshResource: (e) => ay(t, e.contentHash)
+			resolveAnimatedMeshResource: (e) => Cy(t, e.contentHash)
 		},
 		...r.length === 0 ? {} : {
 			meshResourceManifest: {
 				kind: "rusty_renderer_mesh_resources.v1",
-				resources: Object.freeze(r.map(ry))
+				resources: Object.freeze(r.map(xy))
 			},
-			resolveMeshResource: (e) => iy(t, e.resource)
+			resolveMeshResource: (e) => Sy(t, e.resource)
 		},
 		...i.length === 0 ? {} : {
 			textureResourceManifest: {
 				kind: "rusty_renderer_texture_resources.v1",
-				resources: Object.freeze(i.map(ry))
+				resources: Object.freeze(i.map(xy))
 			},
-			resolveTextureResource: (e) => iy(t, e.resource)
+			resolveTextureResource: (e) => Sy(t, e.resource)
 		}
 	});
 }
-function ny(e) {
+function by(e) {
 	return Array.isArray(e.ops) ? e.ops.flatMap((e) => {
 		if (typeof e != "object" || !e || e.op !== "defineAnimatedMesh") return [];
 		let t = e.asset;
@@ -20948,77 +21216,95 @@ function ny(e) {
 		}] : [];
 	}) : [];
 }
-function ry(e) {
+function xy(e) {
 	return Object.freeze({
 		resource: e.identity,
 		contentHash: e.contentHash,
 		byteLength: e.bytes.byteLength
 	});
 }
-function iy(e, t) {
+function Sy(e, t) {
 	let n = e.get(t);
 	return n === void 0 ? Promise.reject(/* @__PURE__ */ Error(`resource ${t} is unavailable`)) : Promise.resolve(n.bytes.slice(0));
 }
-function ay(e, t) {
+function Cy(e, t) {
 	let n = [...e.values()].find((e) => e.contentHash === t);
 	return n === void 0 ? Promise.reject(/* @__PURE__ */ Error(`resource ${t} is unavailable`)) : Promise.resolve(n.bytes.slice(0));
 }
-function oy(e, t, n) {
-	return new Qv(e, t, n);
+function wy(e, t, n) {
+	return new hy(e, t, n);
 }
 //#endregion
 //#region packages/application-host/src/application-host.ts
-var sy = "rusty_application_host.v1", cy = class extends Error {
+var Ty = "rusty_application_host.v1", Ey = class extends Error {
 	code;
 	constructor(e, t, n) {
 		super(t, n), this.name = "RustyApplicationHostError", this.code = e;
 	}
-}, ly = { mountSurface: Sv };
-async function uy(e) {
-	return dy(e, ly);
+}, Dy = { mountSurface: Sv };
+async function Oy(e) {
+	return ky(e, Dy);
 }
-async function dy(e, t) {
+async function ky(e, t) {
 	let { root: n } = e;
-	if (Sy(n), n.childNodes.length > 0) throw new cy("invalid_root", "Rusty Application Host requires an empty downstream mount root");
-	let r = n.ownerDocument, i = my(r, e.loadingLabel ?? "Starting application…");
+	if (By(n), n.childNodes.length > 0) throw new Ey("invalid_root", "Rusty Application Host requires an empty downstream mount root");
+	let r = n.ownerDocument, i = My(r, e.loadingLabel ?? "Starting application…");
 	n.append(i.host), n.dataset.rustyApplicationState = "mounting";
-	let a = null, o = null, s = () => void 0, c = !1, l = !1, u = null, d = e.initialInteractionMode ?? "interface", f = i.canvas, p = null, m = 0, h = 0, g = Promise.resolve(), _ = () => {
-		if (l || c || a === null) throw new cy("disposed", "Rusty Application Host is disposed");
+	let a = null, o = null, s = () => void 0, c = !1, l = !1, u = null, d = e.initialInteractionMode ?? "interface", f = i.canvas, p = null, m = null, h = 0, g = 0, _ = Promise.resolve(), v = () => {
+		if (l || c || a === null) throw new Ey("disposed", "Rusty Application Host is disposed");
 		return a;
-	}, v = () => {
+	}, y = () => {
 		a?.releaseInput();
-	}, y = (e) => {
-		if (c) throw new cy("disposed", "Rusty Application Host is disposed");
-		d = e, i.host.dataset.interactionMode = e, e !== "gameplay" && v();
-	}, b = () => {
+	}, b = (e) => {
+		if (c) throw new Ey("disposed", "Rusty Application Host is disposed");
+		d = e, i.host.dataset.interactionMode = e, e !== "gameplay" && y();
+	}, x = () => {
 		if (d !== "gameplay") return;
-		let e = _();
-		e.canvas.focus({ preventScroll: !0 }), by(e.canvas);
-	}, x = (n, r) => t.mountSurface(n, {
-		autoStart: !0,
-		controls: { enabled: !1 },
-		frame: r.frame,
-		...e.renderer?.clearColor === void 0 ? {} : { clearColor: e.renderer.clearColor },
-		...e.renderer?.pixelRatio === void 0 ? {} : { pixelRatio: e.renderer.pixelRatio },
-		...ty(r)
-	}), S = (e) => {
-		_(), h += 1;
+		let e = v();
+		e.canvas.focus({ preventScroll: !0 }), Ry(e.canvas);
+	}, S = async (n, r) => {
+		let i = await t.mountSurface(n, {
+			autoStart: !0,
+			controls: { enabled: !1 },
+			frame: r.frame,
+			...e.renderer?.clearColor === void 0 ? {} : { clearColor: e.renderer.clearColor },
+			...e.renderer?.pixelRatio === void 0 ? {} : { pixelRatio: e.renderer.pixelRatio },
+			...yy(r)
+		}), a = vy(r);
+		if (a === null) return {
+			audio: null,
+			surface: i
+		};
+		try {
+			let e = new Zv({ resolveResource: a });
+			return i.setPresentationHosts(new tv({ audio: e })), {
+				audio: e,
+				surface: i
+			};
+		} catch (e) {
+			throw i.dispose(), e;
+		}
+	}, C = (e) => {
+		v(), g += 1;
 		let t = Object.freeze({
 			applied: !1,
 			diagnostics: []
 		});
-		return g = g.then(async () => {
-			let n = a;
+		return _ = _.then(async () => {
+			let n = a, i = m;
 			if (n === null || p === null || c) {
-				t = fy(new cy("disposed", "Rusty Application Host is disposed"));
+				t = Ay(new Ey("disposed", "Rusty Application Host is disposed"));
 				return;
 			}
-			let i = f, o = hy(r), s = null;
+			let o = f, s = Ny(r), l = null, u = null;
 			try {
-				let r = e();
-				s = await x(o, r), s.setCameraPose(n.cameraPose()), s.renderOnce(), i.replaceWith(o), a = s, p = r, m += 1, f = o;
+				let r = e(), c = await S(s, r);
+				l = c.surface, u = c.audio, l.setCameraPose(n.cameraPose()), l.renderOnce(), o.replaceWith(s), a = l, m = u, p = r, h += 1, f = s;
 				try {
 					n.dispose();
+				} catch {}
+				try {
+					await i?.dispose();
 				} catch {}
 				t = Object.freeze({
 					applied: !0,
@@ -21026,32 +21312,35 @@ async function dy(e, t) {
 				});
 			} catch (e) {
 				try {
-					s?.dispose();
+					l?.dispose();
 				} catch {}
-				o.remove(), t = fy(e);
+				try {
+					await u?.dispose();
+				} catch {}
+				s.remove(), t = Ay(e);
 			}
-		}), g.then(() => t).finally(() => {
-			--h;
+		}), _.then(() => t).finally(() => {
+			--g;
 		});
-	}, C = (e) => {
-		_();
+	}, w = (e) => {
+		v();
 		let t;
 		try {
-			t = ey(e);
+			t = _y(e);
 		} catch (e) {
-			return Promise.resolve(fy(e));
+			return Promise.resolve(Ay(e));
 		}
-		return S(() => t);
-	}, w = Object.freeze({
+		return C(() => t);
+	}, T = Object.freeze({
 		applyFrame: (e) => {
-			if (h > 0) return Object.freeze({
+			if (g > 0) return Object.freeze({
 				applied: !1,
 				diagnostics: Object.freeze([Object.freeze({
 					code: "content_replacement_in_progress",
 					message: "incremental frames are rejected while complete content replacement is pending"
 				})])
 			});
-			let t = _().applyFrame(e);
+			let t = v().applyFrame(e);
 			return Object.freeze({
 				applied: t.applied,
 				diagnostics: Object.freeze(t.diagnostics.map((e) => Object.freeze({
@@ -21060,28 +21349,58 @@ async function dy(e, t) {
 				})))
 			});
 		},
+		applyPresentation: async (e) => {
+			if (g > 0) return Object.freeze({
+				applied: 0,
+				diagnostics: Object.freeze([Object.freeze({
+					code: "content_replacement_in_progress",
+					domain: "application",
+					message: "presentation frames are rejected while complete content replacement is pending"
+				})])
+			});
+			try {
+				let t = await v().applyPresentation(e);
+				return Object.freeze({
+					applied: t.applied,
+					diagnostics: Object.freeze(t.diagnostics.map((e) => Object.freeze({
+						code: e.code,
+						domain: e.domain,
+						message: e.message
+					})))
+				});
+			} catch (e) {
+				return Object.freeze({
+					applied: 0,
+					diagnostics: Object.freeze([Object.freeze({
+						code: "presentation_frame_rejected",
+						domain: "application",
+						message: e instanceof Error ? e.message : String(e)
+					})])
+				});
+			}
+		},
 		clear: async () => {
-			let e = await C({
+			let e = await w({
 				frame: yv(),
 				resources: []
 			});
 			if (!e.applied) throw Error(`Engine default renderer frame was rejected: ${e.diagnostics.map((e) => e.message).join("; ")}`);
 		},
 		renderOnce: (e) => {
-			e === void 0 ? _().renderOnce() : _().renderOnce(e);
+			e === void 0 ? v().renderOnce() : v().renderOnce(e);
 		},
-		replaceContent: C,
+		replaceContent: w,
 		replaceFrame: (e) => {
-			_();
+			v();
 			let t;
 			try {
-				t = ey({ frame: e }).frame;
+				t = _y({ frame: e }).frame;
 			} catch (e) {
-				return Promise.resolve(fy(e));
+				return Promise.resolve(Ay(e));
 			}
-			return S(() => {
+			return C(() => {
 				let e = p;
-				if (e === null) throw new cy("disposed", "Rusty Application Host is disposed");
+				if (e === null) throw new Ey("disposed", "Rusty Application Host is disposed");
 				return Object.freeze({
 					frame: t,
 					resources: e.resources,
@@ -21089,38 +21408,55 @@ async function dy(e, t) {
 				});
 			});
 		},
-		setCameraPose: (e) => _().setCameraPose(e)
-	}), T = Object.freeze({
+		resumeAudio: async () => {
+			if (v(), m === null) return Object.freeze({
+				resumed: !1,
+				diagnostics: Object.freeze([Object.freeze({
+					code: "audio_host_unavailable",
+					message: "application content has no admitted audio resources"
+				})])
+			});
+			let e = await m.resume();
+			return Object.freeze({
+				resumed: e.length === 0,
+				diagnostics: Object.freeze(e.map((e) => Object.freeze({
+					code: e.code,
+					message: e.message
+				})))
+			});
+		},
+		setCameraPose: (e) => v().setCameraPose(e)
+	}), E = Object.freeze({
 		active: () => !l && !c,
-		allowsGameplayInput: (e) => !l && !c && !e.defaultPrevented && d === "gameplay" && !_y(e, i.ui),
-		focusGameplay: b,
+		allowsGameplayInput: (e) => !l && !c && !e.defaultPrevented && d === "gameplay" && !Fy(e, i.ui),
+		focusGameplay: x,
 		interactionMode: () => d,
-		setInteractionMode: y
+		setInteractionMode: b
 	});
 	try {
-		if (e.renderer?.initialContent !== void 0 && e.renderer.initialFrame !== void 0) throw new Qv("content_invalid", null, "initialContent and initialFrame are mutually exclusive");
-		let t = ey(e.renderer?.initialContent ?? {
+		if (e.renderer?.initialContent !== void 0 && e.renderer.initialFrame !== void 0) throw new hy("content_invalid", null, "initialContent and initialFrame are mutually exclusive");
+		let t = _y(e.renderer?.initialContent ?? {
 			frame: e.renderer?.initialFrame ?? yv(),
 			resources: []
-		});
-		a = await x(i.canvas, t), p = t, m = 1, s = gy(i.host, i.ui, () => _(), () => d, b), y(d), o = await e.mountUi(i.ui, {
-			renderer: w,
-			ui: T
+		}), r = await S(i.canvas, t);
+		a = r.surface, m = r.audio, p = t, h = 1, s = Py(i.host, i.ui, () => v(), () => d, x), b(d), o = await e.mountUi(i.ui, {
+			renderer: T,
+			ui: E
 		}) ?? null, i.loading.remove(), i.host.dataset.state = "ready", n.dataset.rustyApplicationState = "ready";
 	} catch (t) {
 		c = !0;
-		let r = await xy(o, s, a, i.host);
+		let r = await zy(o, s, a, m, i.host);
 		delete n.dataset.rustyApplicationState;
 		let l = t instanceof Error ? t : Error(String(t));
-		throw Cy(n, e.failureLabel ?? "Application failed to start", l.message), new cy("mount_failed", r.length === 0 ? `Rusty Application Host mount failed: ${l.message}` : `Rusty Application Host mount failed: ${l.message}; cleanup also failed`, { cause: l });
+		throw Vy(n, e.failureLabel ?? "Application failed to start", l.message), new Ey("mount_failed", r.length === 0 ? `Rusty Application Host mount failed: ${l.message}` : `Rusty Application Host mount failed: ${l.message}; cleanup also failed`, { cause: l });
 	}
 	return Object.freeze({
 		kind: "rusty_application_host.v1",
-		renderer: w,
-		ui: T,
+		renderer: T,
+		ui: E,
 		readout: () => Object.freeze({
-			compatibilityVersion: sy,
-			contentRevision: m,
+			compatibilityVersion: Ty,
+			contentRevision: h,
 			interactionMode: d,
 			pointerLocked: a?.pointerLocked() ?? !1,
 			resourceBytes: p?.resourceBytes ?? 0,
@@ -21128,28 +21464,28 @@ async function dy(e, t) {
 			state: c ? "disposed" : "ready"
 		}),
 		dispose: async () => u === null ? (l = !0, u = (async () => {
-			await g, c = !0;
-			let e = await xy(o, s, a, i.host);
-			if (o = null, a = null, delete n.dataset.rustyApplicationState, e.length > 0) throw AggregateError(e, "Rusty Application Host disposal failed");
+			await _, c = !0;
+			let e = await zy(o, s, a, m, i.host);
+			if (o = null, a = null, m = null, delete n.dataset.rustyApplicationState, e.length > 0) throw AggregateError(e, "Rusty Application Host disposal failed");
 		})(), u) : u
 	});
 }
-function fy(e) {
+function Ay(e) {
 	return Object.freeze({
 		applied: !1,
 		diagnostics: Object.freeze([Object.freeze({
-			code: py(e),
+			code: jy(e),
 			message: e instanceof Error ? e.message : String(e)
 		})])
 	});
 }
-function py(e) {
-	return e instanceof Qv ? e.code : typeof e == "object" && e && "code" in e && typeof e.code == "string" && e.code.includes("resource") || e instanceof Error && e.message.toLowerCase().includes("resource") ? "resource_admission_failed" : "retained_frame_replacement_failed";
+function jy(e) {
+	return e instanceof hy ? e.code : typeof e == "object" && e && "code" in e && typeof e.code == "string" && e.code.includes("resource") || e instanceof Error && e.message.toLowerCase().includes("resource") ? "resource_admission_failed" : "retained_frame_replacement_failed";
 }
-function my(e, t) {
+function My(e, t) {
 	let n = e.createElement("div");
-	n.dataset.rustyApplicationHost = sy, n.style.cssText = "isolation:isolate;min-height:100dvh;position:relative;width:100%;";
-	let r = hy(e), i = e.createElement("div");
+	n.dataset.rustyApplicationHost = Ty, n.style.cssText = "isolation:isolate;min-height:100dvh;position:relative;width:100%;";
+	let r = Ny(e), i = e.createElement("div");
 	i.dataset.rustyApplicationUi = "downstream", i.style.cssText = "min-height:100dvh;position:relative;width:100%;z-index:1;";
 	let a = e.createElement("div");
 	return a.dataset.rustyApplicationLoading = "", a.setAttribute("role", "status"), a.textContent = t, a.style.cssText = "align-items:center;background:#071012;color:#d9eee7;display:flex;font:14px system-ui;inset:0;justify-content:center;position:absolute;z-index:2;", n.append(r, i, a), {
@@ -21159,19 +21495,19 @@ function my(e, t) {
 		loading: a
 	};
 }
-function hy(e) {
+function Ny(e) {
 	let t = e.createElement("canvas");
 	return t.dataset.rustyApplicationRenderer = "engine-owned", t.setAttribute("aria-label", "Engine-rendered game world"), t.style.cssText = "display:block;height:100%;inset:0;position:absolute;width:100%;z-index:0;", t;
 }
-function gy(e, t, n, r, i) {
+function Py(e, t, n, r, i) {
 	let a = e.ownerDocument, o = (e) => {
-		if (_y(e, t)) {
+		if (Fy(e, t)) {
 			n().releaseInput();
 			return;
 		}
 		r() === "gameplay" && i();
 	}, s = (e) => {
-		yy(e.target) && n().releaseInput();
+		Ly(e.target) && n().releaseInput();
 	}, c = () => {
 		e.dataset.pointerLocked = String(a.pointerLockElement === n().canvas);
 	}, l = () => n().releaseInput();
@@ -21179,43 +21515,48 @@ function gy(e, t, n, r, i) {
 		t.removeEventListener("pointerdown", o, !0), t.removeEventListener("focusin", s, !0), a.removeEventListener("pointerlockchange", c), a.defaultView?.removeEventListener("blur", l);
 	};
 }
-function _y(e, t) {
-	return e.composedPath().some((e) => vy(e, t));
+function Fy(e, t) {
+	return e.composedPath().some((e) => Iy(e, t));
 }
-function vy(e, t) {
+function Iy(e, t) {
 	return !(e instanceof Element) || !t.contains(e) ? !1 : e.closest("a,button,input,select,textarea,summary,[contenteditable=\"true\"],[data-rusty-ui-interactive],[role=\"dialog\"]") !== null;
 }
-function yy(e) {
+function Ly(e) {
 	return e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement || e instanceof HTMLSelectElement || e instanceof HTMLElement && e.isContentEditable;
 }
-function by(e) {
+function Ry(e) {
 	try {
 		e.requestPointerLock().catch(() => void 0);
 	} catch {}
 }
-async function xy(e, t, n, r) {
-	let i = [];
+async function zy(e, t, n, r, i) {
+	let a = [];
 	try {
 		await e?.dispose();
 	} catch (e) {
-		i.push(e);
+		a.push(e);
 	}
 	try {
 		t();
 	} catch (e) {
-		i.push(e);
+		a.push(e);
 	}
 	try {
 		n?.dispose();
 	} catch (e) {
-		i.push(e);
+		a.push(e);
 	}
-	return r.remove(), i;
+	try {
+		await r?.dispose();
+	} catch (e) {
+		a.push(e);
+	}
+	return i.remove(), a;
 }
-function Sy(e) {
+function By(e) {
 	e.querySelector(":scope > [data-rusty-application-failure]")?.remove();
 }
-function Cy(e, t, n) {
+function Vy(e, t, n) {
 	let r = e.ownerDocument.createElement("section");
 	r.dataset.rustyApplicationFailure = "", r.setAttribute("role", "alert"), r.style.cssText = "background:#1b0b0d;color:#ffe8e8;font:14px system-ui;margin:0;min-height:100dvh;padding:2rem;";
 	let i = e.ownerDocument.createElement("h1");
@@ -21224,4 +21565,4 @@ function Cy(e, t, n) {
 	a.textContent = n, r.append(i, a), e.append(r);
 }
 //#endregion
-export { sy as RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION, Qv as RustyApplicationContentError, cy as RustyApplicationHostError, uy as mountRustyApplication };
+export { fy as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES, py as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT, my as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES, Ty as RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION, hy as RustyApplicationContentError, Ey as RustyApplicationHostError, Oy as mountRustyApplication };

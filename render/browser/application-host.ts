@@ -11,6 +11,8 @@ declare global {
     __rustyApplicationFailureProbe?: () => Promise<string>;
     __rustyApplicationInitialResourceFailureProbe?: () => Promise<string>;
     __rustyApplicationGameplayInputCount?: number;
+    __rustyApplicationAudioReceipt?: unknown;
+    __rustyApplicationAudioResume?: unknown;
     __rustyApplicationResourceContent?: (corrupt?: boolean) => RustyApplicationContent;
     __rustyApplicationUiDisposed?: boolean;
   }
@@ -25,6 +27,14 @@ const TEXTURE_BYTES = new Uint8Array([
 const TEXTURE_DIGEST = 'a58d5395a03945e56638dba7ae6158b2fdaf013610a798c059a6d88231a052ae';
 const TEXTURE_CONTENT_HASH = `sha256:${TEXTURE_DIGEST}`;
 const TEXTURE_RESOURCE = `texture-resource/${TEXTURE_DIGEST}`;
+const AUDIO_BYTES = new Uint8Array([
+  82,73,70,70,44,0,0,0,87,65,86,69,102,109,116,32,16,0,0,0,1,0,
+  1,0,64,31,0,0,128,62,0,0,2,0,16,0,100,97,116,97,8,0,0,0,0,0,
+  224,46,0,0,32,209,
+]);
+const AUDIO_DIGEST = '642b803f562c2d0e589411a87ad8914cf147799aa196e62c11a7033fdfcf5513';
+const AUDIO_CONTENT_HASH = `sha256:${AUDIO_DIGEST}`;
+const AUDIO_RESOURCE = `audio-resource/${AUDIO_DIGEST}`;
 
 window.__rustyApplicationResourceContent = resourceContent;
 
@@ -33,12 +43,20 @@ function resourceContent(corrupt = false): RustyApplicationContent {
   if (corrupt) bytes[bytes.length - 1] = bytes[bytes.length - 1]! ^ 0xff;
   return {
     frame: resourceBackedFrame(),
-    resources: [{
-      identity: TEXTURE_RESOURCE,
-      contentHash: TEXTURE_CONTENT_HASH,
-      mediaType: 'image/png',
-      bytes,
-    }],
+    resources: [
+      {
+        identity: TEXTURE_RESOURCE,
+        contentHash: TEXTURE_CONTENT_HASH,
+        mediaType: 'image/png',
+        bytes,
+      },
+      {
+        identity: AUDIO_RESOURCE,
+        contentHash: AUDIO_CONTENT_HASH,
+        mediaType: 'audio/wav',
+        bytes: AUDIO_BYTES.slice(),
+      },
+    ],
   };
 }
 
@@ -62,12 +80,15 @@ window.__rustyApplicationMount = () =>
       const input = document.createElement('input');
       input.id = 'text-entry';
       input.setAttribute('aria-label', 'Text entry');
+      const audioButton = document.createElement('button');
+      audioButton.id = 'audio-button';
+      audioButton.textContent = 'Play audio proof';
       const modal = document.createElement('section');
       modal.id = 'modal';
       modal.setAttribute('role', 'dialog');
       modal.hidden = true;
       modal.textContent = 'Modal content';
-      toolbar.append(button, input, modal);
+      toolbar.append(button, audioButton, input, modal);
       uiRoot.append(gameplay, toolbar);
       window.__rustyApplicationGameplayInputCount = 0;
       const onMouseDown = (event: MouseEvent): void => {
@@ -79,6 +100,31 @@ window.__rustyApplicationMount = () =>
       window.addEventListener('mousedown', onMouseDown);
       button.addEventListener('click', () => {
         context.ui.setInteractionMode('interface');
+      });
+      audioButton.addEventListener('click', async () => {
+        window.__rustyApplicationAudioResume = await context.renderer.resumeAudio();
+        window.__rustyApplicationAudioReceipt = await context.renderer.applyPresentation({
+          schemaVersion: 1,
+          ops: [{
+            domain: 'audio',
+            meta: { sequence: 0 },
+            op: {
+              op: 'emit',
+              signalId: 'application-host-browser-proof',
+              descriptor: {
+                clip: { asset: 'audio/application-host-proof', contentHash: AUDIO_CONTENT_HASH },
+                bus: 'sfx',
+                volume: 0.1,
+                pitch: 1,
+                looping: false,
+                spatialBlend: 0,
+                attenuation: 1,
+                pan: 0,
+                emitter: { kind: 'global2d' },
+              },
+            },
+          }],
+        });
       });
       return {
         dispose: () => {

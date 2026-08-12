@@ -3,6 +3,8 @@ export declare const RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION = "rusty_appli
 export type RustyApplicationInteractionMode = 'gameplay' | 'interface' | 'modal';
 /** A Rust-projected Engine render frame. Strict decoding remains Engine-owned. */
 export type RustyApplicationFrame = Readonly<Record<string, unknown>>;
+/** A Rust-projected typed presentation diff. Strict decoding remains Engine-owned. */
+export type RustyApplicationPresentationFrame = Readonly<Record<string, unknown>>;
 export interface RustyApplicationCameraPose {
     readonly position: readonly [number, number, number];
     readonly pitchDegrees: number;
@@ -16,8 +18,22 @@ export interface RustyApplicationFrameReceipt {
     readonly applied: boolean;
     readonly diagnostics: readonly RustyApplicationFrameDiagnostic[];
 }
+export interface RustyApplicationPresentationDiagnostic {
+    readonly code: string;
+    readonly domain: string;
+    readonly message: string;
+}
+export interface RustyApplicationPresentationReceipt {
+    readonly applied: number;
+    readonly diagnostics: readonly RustyApplicationPresentationDiagnostic[];
+}
+export interface RustyApplicationAudioResumeReceipt {
+    readonly resumed: boolean;
+    readonly diagnostics: readonly RustyApplicationFrameDiagnostic[];
+}
 export interface RustyApplicationRendererPort {
     readonly applyFrame: (frame: RustyApplicationFrame) => RustyApplicationFrameReceipt;
+    readonly applyPresentation: (frame: RustyApplicationPresentationFrame) => Promise<RustyApplicationPresentationReceipt>;
     /** Replace product content with the Engine-owned empty/default retained frame. */
     readonly clear: () => Promise<void>;
     readonly renderOnce: (timeMs?: number) => void;
@@ -25,6 +41,8 @@ export interface RustyApplicationRendererPort {
     readonly replaceContent: (content: RustyApplicationContent) => Promise<RustyApplicationFrameReceipt>;
     /** Prepare and atomically publish a complete Rust-projected retained frame. */
     readonly replaceFrame: (frame: RustyApplicationFrame) => Promise<RustyApplicationFrameReceipt>;
+    /** Resume the browser audio context from a downstream user-gesture handler. */
+    readonly resumeAudio: () => Promise<RustyApplicationAudioResumeReceipt>;
     readonly setCameraPose: (pose: RustyApplicationCameraPose) => void;
 }
 export interface RustyApplicationUiPort {

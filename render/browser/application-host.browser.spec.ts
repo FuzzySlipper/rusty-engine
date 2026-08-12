@@ -128,8 +128,8 @@ test('application host owns composition, input arbitration, and disposal', async
   await expect(page.locator('[data-rusty-application-ui="downstream"] #gameplay-zone')).toBeVisible();
   expect(await page.evaluate(() => window.__rustyApplicationHost?.readout())).toMatchObject({
     contentRevision: 1,
-    resourceBytes: 72,
-    resourceCount: 1,
+    resourceBytes: 124,
+    resourceCount: 2,
   });
   await page.evaluate(() => {
     window.__rustyApplicationHost?.renderer.setCameraPose({
@@ -160,6 +160,15 @@ test('application host owns composition, input arbitration, and disposal', async
     return Array.from(pixels).filter((value) => value > 8).length;
   });
   expect(visibleResourcePixels).toBeGreaterThan(0);
+
+  await page.locator('#audio-button').click();
+  await expect.poll(() => page.evaluate(() => ({
+    presentation: window.__rustyApplicationAudioReceipt,
+    resume: window.__rustyApplicationAudioResume,
+  }))).toEqual({
+    presentation: { applied: 1, diagnostics: [] },
+    resume: { resumed: true, diagnostics: [] },
+  });
 
   await page.locator('canvas').evaluate((canvas) => { canvas.id = 'resource-backed-renderer'; });
   await installResourceAdmissionGate(page);
@@ -252,8 +261,8 @@ test('application host owns composition, input arbitration, and disposal', async
   await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
   expect(await page.evaluate(() => window.__rustyApplicationHost?.readout())).toMatchObject({
     contentRevision: 2,
-    resourceBytes: 72,
-    resourceCount: 1,
+    resourceBytes: 124,
+    resourceCount: 2,
   });
 
   await page.locator('#interface-button').click();
@@ -395,8 +404,8 @@ test('queued complete content replacements publish in call order', async ({ page
   ]);
   expect(await page.evaluate(() => window.__rustyApplicationHost?.readout())).toMatchObject({
     contentRevision: 3,
-    resourceCount: 1,
-    resourceBytes: 72,
+    resourceCount: 2,
+    resourceBytes: 124,
   });
   await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
 });

@@ -7,6 +7,7 @@ import {
   RUSTY_RENDERER_TEXTURE_RESOURCE_MAX_TOTAL_BYTES,
   type RendererMeshResourceDescriptor,
   type RendererMeshResourceManifest,
+  type RendererAudioResourceResolver,
   type RendererAnimatedMeshResourceDescriptor,
   type RendererAnimatedMeshResourceManifest,
   type RendererAnimatedMeshResourceResolver,
@@ -16,7 +17,11 @@ import {
 
 import type { RustyApplicationFrame } from './application-host.js';
 
-export type RustyApplicationResourceKind = 'mesh' | 'texture';
+export type RustyApplicationResourceKind = 'audio' | 'mesh' | 'texture';
+
+export const RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES = 8 * 1024 * 1024;
+export const RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT = 64;
+export const RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 
 export interface RustyApplicationResource {
   readonly identity: string;
@@ -75,7 +80,7 @@ export interface RustyApplicationSurfaceResourceOptions {
   ) => Promise<ArrayBuffer>;
 }
 
-const SHA256_IDENTITY = /^(mesh|texture)-resource\/([0-9a-f]{64})$/u;
+const SHA256_IDENTITY = /^(audio|mesh|texture)-resource\/([0-9a-f]{64})$/u;
 
 export function prepareRustyApplicationContent(
   content: RustyApplicationContent,
@@ -91,6 +96,8 @@ export function prepareRustyApplicationContent(
   const identities = new Set<string>();
   let meshCount = 0;
   let meshBytes = 0;
+  let audioCount = 0;
+  let audioBytes = 0;
   let textureCount = 0;
   let textureBytes = 0;
   const resources = (content.resources ?? []).map((resource, index) => {
@@ -123,7 +130,27 @@ export function prepareRustyApplicationContent(
     }
     identities.add(resource.identity);
     const kind = match[1] as RustyApplicationResourceKind;
-    if (kind === 'texture') {
+    if (kind === 'audio') {
+      if (resource.mediaType !== 'audio/wav') {
+        throw contentError(
+          'resource_media_type_unsupported',
+          resource.identity,
+          'audio resources must use audio/wav',
+        );
+      }
+      audioCount += 1;
+      audioBytes += resource.bytes.byteLength;
+      if (audioCount > RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT
+        || resource.bytes.byteLength < 44
+        || resource.bytes.byteLength > RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES
+        || audioBytes > RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES) {
+        throw contentError(
+          'resource_limit_exceeded',
+          resource.identity,
+          'audio resource count or byte length exceeds the application-host bound',
+        );
+      }
+    } else if (kind === 'texture') {
       if (resource.mediaType !== 'image/png') {
         throw contentError(
           'resource_media_type_unsupported',
@@ -175,8 +202,28 @@ export function prepareRustyApplicationContent(
   return Object.freeze({
     frame,
     resources: Object.freeze(resources),
-    resourceBytes: meshBytes + textureBytes,
+    resourceBytes: audioBytes + meshBytes + textureBytes,
   });
+}
+
+export function rustyApplicationAudioResourceResolver(
+  content: PreparedRustyApplicationContent,
+): RendererAudioResourceResolver | null {
+  const audio = content.resources.filter((resource) => resource.kind === 'audio');
+  if (audio.length === 0) return null;
+  const entries = new Map(audio.map((resource) => [resource.contentHash, resource]));
+  return (clip) => {
+    const entry = entries.get(clip.contentHash);
+    if (entry === undefined) {
+      return Promise.reject(new Error(
+        `audio resource ${clip.asset} (${clip.contentHash}) is unavailable`,
+      ));
+    }
+    return Promise.resolve({
+      bytes: entry.bytes.slice(0),
+      contentHash: entry.contentHash,
+    });
+  };
 }
 
 export function rustyApplicationSurfaceResourceOptions(

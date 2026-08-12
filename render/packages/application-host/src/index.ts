@@ -3,8 +3,14 @@ export {
   RustyApplicationHostError,
   mountRustyApplication,
 } from './application-host.js';
-export { RustyApplicationContentError } from './application-content.js';
+export {
+  RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES,
+  RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT,
+  RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES,
+  RustyApplicationContentError,
+} from './application-content.js';
 export type {
+  RustyApplicationAudioResumeReceipt,
   RustyApplicationCameraPose,
   RustyApplicationFrame,
   RustyApplicationFrameDiagnostic,
@@ -13,6 +19,9 @@ export type {
   RustyApplicationHostOptions,
   RustyApplicationHostReadout,
   RustyApplicationInteractionMode,
+  RustyApplicationPresentationDiagnostic,
+  RustyApplicationPresentationFrame,
+  RustyApplicationPresentationReceipt,
   RustyApplicationRendererOptions,
   RustyApplicationRendererPort,
   RustyApplicationUiContext,

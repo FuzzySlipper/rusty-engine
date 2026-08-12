@@ -1,5 +1,7 @@
-import type { RenderFrameDiff } from '@rusty-engine/render-contracts';
+import type { PresentationFrameDiff, RenderFrameDiff } from '@rusty-engine/render-contracts';
 import {
+  RendererAudioHost,
+  RendererPresentationHostSet,
   createRendererDefaultSurfaceFrame,
   mountRendererSurface,
   type RendererSurface,
@@ -9,6 +11,7 @@ import {
 import {
   RustyApplicationContentError,
   prepareRustyApplicationContent,
+  rustyApplicationAudioResourceResolver,
   rustyApplicationSurfaceResourceOptions,
   type PreparedRustyApplicationContent,
   type RustyApplicationContent,
@@ -24,6 +27,8 @@ export type RustyApplicationInteractionMode =
 
 /** A Rust-projected Engine render frame. Strict decoding remains Engine-owned. */
 export type RustyApplicationFrame = Readonly<Record<string, unknown>>;
+/** A Rust-projected typed presentation diff. Strict decoding remains Engine-owned. */
+export type RustyApplicationPresentationFrame = Readonly<Record<string, unknown>>;
 
 export interface RustyApplicationCameraPose {
   readonly position: readonly [number, number, number];
@@ -41,8 +46,27 @@ export interface RustyApplicationFrameReceipt {
   readonly diagnostics: readonly RustyApplicationFrameDiagnostic[];
 }
 
+export interface RustyApplicationPresentationDiagnostic {
+  readonly code: string;
+  readonly domain: string;
+  readonly message: string;
+}
+
+export interface RustyApplicationPresentationReceipt {
+  readonly applied: number;
+  readonly diagnostics: readonly RustyApplicationPresentationDiagnostic[];
+}
+
+export interface RustyApplicationAudioResumeReceipt {
+  readonly resumed: boolean;
+  readonly diagnostics: readonly RustyApplicationFrameDiagnostic[];
+}
+
 export interface RustyApplicationRendererPort {
   readonly applyFrame: (frame: RustyApplicationFrame) => RustyApplicationFrameReceipt;
+  readonly applyPresentation: (
+    frame: RustyApplicationPresentationFrame,
+  ) => Promise<RustyApplicationPresentationReceipt>;
   /** Replace product content with the Engine-owned empty/default retained frame. */
   readonly clear: () => Promise<void>;
   readonly renderOnce: (timeMs?: number) => void;
@@ -54,6 +78,8 @@ export interface RustyApplicationRendererPort {
   readonly replaceFrame: (
     frame: RustyApplicationFrame,
   ) => Promise<RustyApplicationFrameReceipt>;
+  /** Resume the browser audio context from a downstream user-gesture handler. */
+  readonly resumeAudio: () => Promise<RustyApplicationAudioResumeReceipt>;
   readonly setCameraPose: (pose: RustyApplicationCameraPose) => void;
 }
 
@@ -180,6 +206,7 @@ async function mountRustyApplicationWithEnvironment(
   let interactionMode = options.initialInteractionMode ?? 'interface';
   let activeCanvas = layout.canvas;
   let activeContent: PreparedRustyApplicationContent | null = null;
+  let activeAudio: RendererAudioHost | null = null;
   let contentRevision = 0;
   let replacementPending = 0;
   let replacementQueue: Promise<void> = Promise.resolve();
@@ -207,11 +234,11 @@ async function mountRustyApplicationWithEnvironment(
     activeSurface.canvas.focus({ preventScroll: true });
     requestPointerLock(activeSurface.canvas);
   };
-  const mountSurface = (
+  const mountSurface = async (
     canvas: HTMLCanvasElement,
     content: PreparedRustyApplicationContent,
-  ) => {
-    return environment.mountSurface(canvas, {
+  ): Promise<{ readonly audio: RendererAudioHost | null; readonly surface: RendererSurface }> => {
+    const mounted = await environment.mountSurface(canvas, {
       autoStart: true,
       controls: { enabled: false },
       frame: content.frame as unknown as RenderFrameDiff,
@@ -221,6 +248,16 @@ async function mountRustyApplicationWithEnvironment(
         ? {} : { pixelRatio: options.renderer.pixelRatio }),
       ...rustyApplicationSurfaceResourceOptions(content),
     });
+    const resolveAudio = rustyApplicationAudioResourceResolver(content);
+    if (resolveAudio === null) return { audio: null, surface: mounted };
+    try {
+      const audio = new RendererAudioHost({ resolveResource: resolveAudio });
+      mounted.setPresentationHosts(new RendererPresentationHostSet({ audio }));
+      return { audio, surface: mounted };
+    } catch (cause) {
+      mounted.dispose();
+      throw cause;
+    }
   };
   const enqueueReplacement = (
     candidate: () => PreparedRustyApplicationContent,
@@ -233,6 +270,7 @@ async function mountRustyApplicationWithEnvironment(
     });
     replacementQueue = replacementQueue.then(async () => {
       const oldSurface = surface;
+      const oldAudio = activeAudio;
       const oldContent = activeContent;
       if (oldSurface === null || oldContent === null || disposed) {
         receipt = replacementFailure(
@@ -243,13 +281,17 @@ async function mountRustyApplicationWithEnvironment(
       const oldCanvas = activeCanvas;
       const candidateCanvas = createRendererCanvas(document);
       let candidateSurface: RendererSurface | null = null;
+      let candidateAudio: RendererAudioHost | null = null;
       try {
         const candidateContent = candidate();
-        candidateSurface = await mountSurface(candidateCanvas, candidateContent);
+        const mounted = await mountSurface(candidateCanvas, candidateContent);
+        candidateSurface = mounted.surface;
+        candidateAudio = mounted.audio;
         candidateSurface.setCameraPose(oldSurface.cameraPose());
         candidateSurface.renderOnce();
         oldCanvas.replaceWith(candidateCanvas);
         surface = candidateSurface;
+        activeAudio = candidateAudio;
         activeContent = candidateContent;
         contentRevision += 1;
         activeCanvas = candidateCanvas;
@@ -258,12 +300,22 @@ async function mountRustyApplicationWithEnvironment(
         } catch {
           // Disposal is best-effort after the replacement transaction has committed.
         }
+        try {
+          await oldAudio?.dispose();
+        } catch {
+          // Audio disposal is best-effort after the replacement commits.
+        }
         receipt = Object.freeze({ applied: true, diagnostics: [] });
       } catch (cause) {
         try {
           candidateSurface?.dispose();
         } catch {
           // Preserve the authoritative prior surface even if candidate cleanup is noisy.
+        }
+        try {
+          await candidateAudio?.dispose();
+        } catch {
+          // Preserve the authoritative prior surface if candidate cleanup is noisy.
         }
         candidateCanvas.remove();
         receipt = replacementFailure(cause);
@@ -329,6 +381,40 @@ async function mountRustyApplicationWithEnvironment(
         }))),
       });
     },
+    applyPresentation: async (frame: RustyApplicationPresentationFrame) => {
+      if (replacementPending > 0) {
+        return Object.freeze({
+          applied: 0,
+          diagnostics: Object.freeze([Object.freeze({
+            code: 'content_replacement_in_progress',
+            domain: 'application',
+            message: 'presentation frames are rejected while complete content replacement is pending',
+          })]),
+        });
+      }
+      try {
+        const receipt = await requireActive().applyPresentation(
+          frame as unknown as PresentationFrameDiff,
+        );
+        return Object.freeze({
+          applied: receipt.applied,
+          diagnostics: Object.freeze(receipt.diagnostics.map((diagnostic) => Object.freeze({
+            code: diagnostic.code,
+            domain: diagnostic.domain,
+            message: diagnostic.message,
+          }))),
+        });
+      } catch (cause) {
+        return Object.freeze({
+          applied: 0,
+          diagnostics: Object.freeze([Object.freeze({
+            code: 'presentation_frame_rejected',
+            domain: 'application',
+            message: cause instanceof Error ? cause.message : String(cause),
+          })]),
+        });
+      }
+    },
     clear: async () => {
       const receipt = await replaceContent({
         frame: createRendererDefaultSurfaceFrame() as unknown as RustyApplicationFrame,
@@ -348,6 +434,26 @@ async function mountRustyApplicationWithEnvironment(
     },
     replaceContent,
     replaceFrame,
+    resumeAudio: async () => {
+      requireActive();
+      if (activeAudio === null) {
+        return Object.freeze({
+          resumed: false,
+          diagnostics: Object.freeze([Object.freeze({
+            code: 'audio_host_unavailable',
+            message: 'application content has no admitted audio resources',
+          })]),
+        });
+      }
+      const diagnostics = await activeAudio.resume();
+      return Object.freeze({
+        resumed: diagnostics.length === 0,
+        diagnostics: Object.freeze(diagnostics.map((diagnostic) => Object.freeze({
+          code: diagnostic.code,
+          message: diagnostic.message,
+        }))),
+      });
+    },
     setCameraPose: (pose: RustyApplicationCameraPose) => requireActive().setCameraPose(pose),
   });
   const ui: RustyApplicationUiPort = Object.freeze({
@@ -379,7 +485,9 @@ async function mountRustyApplicationWithEnvironment(
         resources: [],
       },
     );
-    surface = await mountSurface(layout.canvas, initialContent);
+    const surfaceMount = await mountSurface(layout.canvas, initialContent);
+    surface = surfaceMount.surface;
+    activeAudio = surfaceMount.audio;
     activeContent = initialContent;
     contentRevision = 1;
     removeListeners = installInputArbitration(
@@ -401,6 +509,7 @@ async function mountRustyApplicationWithEnvironment(
       uiOwner,
       removeListeners,
       surface,
+      activeAudio,
       layout.host,
     );
     delete root.dataset['rustyApplicationState'];
@@ -442,10 +551,12 @@ async function mountRustyApplicationWithEnvironment(
           uiOwner,
           removeListeners,
           surface,
+          activeAudio,
           layout.host,
         );
         uiOwner = null;
         surface = null;
+        activeAudio = null;
         delete root.dataset['rustyApplicationState'];
         if (cleanupFailures.length > 0) {
           throw new AggregateError(cleanupFailures, 'Rusty Application Host disposal failed');
@@ -580,6 +691,7 @@ async function cleanupApplicationOwners(
   uiOwner: RustyApplicationUiOwner | null,
   removeListeners: () => void,
   surface: RendererSurface | null,
+  audio: RendererAudioHost | null,
   host: HTMLElement,
 ): Promise<readonly unknown[]> {
   const failures: unknown[] = [];
@@ -595,6 +707,11 @@ async function cleanupApplicationOwners(
   }
   try {
     surface?.dispose();
+  } catch (cause) {
+    failures.push(cause);
+  }
+  try {
+    await audio?.dispose();
   } catch (cause) {
     failures.push(cause);
   }
