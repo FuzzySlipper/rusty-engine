@@ -1,10 +1,10 @@
 use core_ids::EntityId;
 use core_math::{Vec2, Vec3};
 use engine_spatial::{
-    CharacterBlockKind, CharacterControllerCommand, CharacterControllerConfig,
-    CharacterControllerError, CharacterControllerService, StaticMeshAssetId,
-    StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
-    VoxelCollisionScene, VoxelEdit, VoxelEditService, VoxelEditTransaction,
+    CharacterBlockKind, CharacterContactKind, CharacterControllerCommand,
+    CharacterControllerConfig, CharacterControllerError, CharacterControllerService,
+    StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId,
+    StaticMeshTransform, VoxelCollisionScene, VoxelEdit, VoxelEditService, VoxelEditTransaction,
 };
 use entity_state::{
     CharacterMotionComponent, CharacterStance, EntityDefinition, EntityState, EntityTransform, Quat,
@@ -27,6 +27,26 @@ fn character(y: f32) -> (EntityId, EntityState) {
         .with_character_motion(CharacterMotionComponent::at_rest(y))])
     .unwrap();
     (entity, state)
+}
+
+fn character_at(position: Vec3) -> (EntityId, EntityState) {
+    let entity = EntityId::new(1);
+    let state = EntityState::from_definitions([EntityDefinition::new(entity, "character")
+        .with_transform(position)
+        .with_character_motion(CharacterMotionComponent::at_rest(position.y))])
+    .unwrap();
+    (entity, state)
+}
+
+fn floor_wall_lip_scene() -> VoxelCollisionScene {
+    let mut voxels = Vec::new();
+    for x in -2..=2 {
+        for z in 1..=4 {
+            voxels.push([x, 0, z]);
+        }
+        voxels.push([x, 1, 0]);
+    }
+    VoxelCollisionScene::from_solid_voxels(1.0, 8, voxels).unwrap()
 }
 
 fn command(sequence: u64, intent: Vec2) -> CharacterControllerCommand {
@@ -714,6 +734,73 @@ fn floor_snap_and_open_ledge_have_distinct_support_outcomes() {
     let airborne = airborne.expect("walking beyond finite floor should leave support");
     assert!(airborne.ground.is_none());
     assert!(airborne.motion_after.controlled_velocity.y <= 0.0);
+}
+
+#[test]
+fn floor_wall_lip_retains_stable_support_at_rest_and_under_pressure() {
+    let scene = floor_wall_lip_scene();
+    let (entity, mut state) = character_at(Vec3::new(0.5, 1.9, 1.350_6));
+    let config = CharacterControllerConfig::default();
+    let mut service = CharacterControllerService::default();
+
+    let mut previous_grounded = None;
+    let mut grounded_transitions = 0;
+    let mut saw_rejected_wall_with_accepted_support = false;
+    for sequence in 1..=120 {
+        let receipt = service
+            .step(
+                &mut state,
+                &scene,
+                entity,
+                &config,
+                command(sequence, Vec2::ZERO),
+            )
+            .unwrap();
+        if previous_grounded.is_some_and(|grounded| grounded != receipt.motion_after.grounded) {
+            grounded_transitions += 1;
+        }
+        previous_grounded = Some(receipt.motion_after.grounded);
+        if let Some(probe) = receipt.floor_probe {
+            if let Some(rejected) = probe.rejected_hit {
+                assert_eq!(rejected.kind, CharacterContactKind::Wall);
+                assert!(probe.accepted_support.is_some());
+                saw_rejected_wall_with_accepted_support = true;
+            }
+        }
+        assert!(
+            receipt.motion_after.grounded,
+            "floor support was lost at idle sequence {sequence}: {receipt:?}"
+        );
+        assert!((receipt.transform_after.translation.y - 1.9).abs() < 1.0e-4);
+    }
+    assert_eq!(grounded_transitions, 0);
+    assert!(saw_rejected_wall_with_accepted_support);
+
+    let pressure_start = *state.transform(entity).unwrap();
+    let mut saw_wall = false;
+    for sequence in 121..=240 {
+        let receipt = service
+            .step(
+                &mut state,
+                &scene,
+                entity,
+                &config,
+                command(sequence, Vec2::new(0.0, 1.0)),
+            )
+            .unwrap();
+        saw_wall |= receipt.blocks.contains(&CharacterBlockKind::Wall);
+        assert!(
+            receipt.motion_after.grounded,
+            "floor support was lost under wall pressure at sequence {sequence}: {receipt:?}"
+        );
+        assert!(
+            (receipt.transform_after.translation.y - pressure_start.translation.y).abs() < 1.0e-4
+        );
+        assert!(receipt.motion_after.controlled_velocity.y.abs() < 1.0e-4);
+        assert!(receipt.transform_after.translation.z >= 1.349);
+        assert!(receipt.step.is_none_or(|step| !step.accepted));
+    }
+    assert!(saw_wall);
 }
 
 #[test]

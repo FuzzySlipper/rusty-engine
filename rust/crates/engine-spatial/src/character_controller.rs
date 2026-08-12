@@ -373,6 +373,12 @@ pub struct CharacterGroundFact {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CharacterFloorProbeFact {
+    pub rejected_hit: Option<CharacterContactFact>,
+    pub accepted_support: Option<CharacterGroundFact>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CharacterStanceFact {
     pub requested: CharacterStance,
     pub accepted: CharacterStance,
@@ -424,6 +430,7 @@ pub struct CharacterControllerReceipt {
     pub wish_velocity: Vec3,
     pub displacement: Vec3,
     pub ground: Option<CharacterGroundFact>,
+    pub floor_probe: Option<CharacterFloorProbeFact>,
     pub contacts: Vec<CharacterContactFact>,
     pub blocks: Vec<CharacterBlockKind>,
     pub stance: CharacterStanceFact,
@@ -533,6 +540,7 @@ pub struct PreparedCharacterControllerStep {
     contacts: Vec<CharacterContactFact>,
     blocks: Vec<CharacterBlockKind>,
     ground: Option<CharacterGroundFact>,
+    floor_probe: Option<CharacterFloorProbeFact>,
     stance: CharacterStanceFact,
     step: Option<CharacterStepFact>,
     platform: Option<CharacterPlatformFact>,
@@ -791,6 +799,7 @@ impl CharacterControllerService {
                 normal: contact.normal,
                 snapped_distance: 0.0,
             });
+        let mut floor_probe = None;
         if controlled.y <= 0.0
             && controlled.y.abs() <= config.surface.floor_snap_speed_limit
             && ground.is_none()
@@ -798,26 +807,64 @@ impl CharacterControllerService {
             && cast_count < config.solver.maximum_queries_per_step
         {
             cast_count = cast_count.saturating_add(1);
-            if let Some(hit) = cast_world(
+            let broad_hit = cast_world(
                 &scene.projection,
                 &obstacles,
                 capsule(center),
                 WorldVec::new(0.0, -f64::from(config.surface.floor_snap_distance), 0.0),
                 f64::from(config.shape.contact_skin),
-            )? {
+            )?;
+            let mut rejected_hit = None;
+            let mut accepted_support = None;
+            if let Some(hit) = broad_hit {
                 let normal = vec3_from_world(hit.normal)?;
                 if standable(normal, config) {
                     let snap = config.surface.floor_snap_distance * finite_f32(hit.time_of_impact)?;
                     center.y -= f64::from(snap);
                     controlled.y = 0.0;
-                    ground = Some(CharacterGroundFact {
+                    accepted_support = Some(CharacterGroundFact {
                         source: hit.source,
                         point: vec3_from_pos(hit.point)?,
                         normal,
                         snapped_distance: snap,
                     });
+                } else {
+                    rejected_hit = Some(contact_fact(
+                        hit,
+                        normal,
+                        contact_kind(normal, config.surface.maximum_slope_radians.cos()),
+                    )?);
+                    if cast_count < config.solver.maximum_queries_per_step {
+                        cast_count = cast_count.saturating_add(1);
+                        if let Some(support) = cast_world(
+                            &scene.projection,
+                            &obstacles,
+                            bounded_support_probe(capsule(center), config),
+                            WorldVec::new(0.0, -f64::from(config.surface.floor_snap_distance), 0.0),
+                            0.0,
+                        )? {
+                            let support_normal = vec3_from_world(support.normal)?;
+                            if standable(support_normal, config) {
+                                let snap = config.surface.floor_snap_distance
+                                    * finite_f32(support.time_of_impact)?;
+                                center.y -= f64::from(snap);
+                                controlled.y = 0.0;
+                                accepted_support = Some(CharacterGroundFact {
+                                    source: support.source,
+                                    point: vec3_from_pos(support.point)?,
+                                    normal: support_normal,
+                                    snapped_distance: snap,
+                                });
+                            }
+                        }
+                    }
                 }
             }
+            ground = accepted_support;
+            floor_probe = Some(CharacterFloorProbeFact {
+                rejected_hit,
+                accepted_support,
+            });
         }
         motion.grounded = ground.is_some();
         if motion.grounded {
@@ -858,6 +905,7 @@ impl CharacterControllerService {
             contacts,
             blocks,
             ground,
+            floor_probe,
             stance: CharacterStanceFact {
                 requested: requested_stance,
                 accepted: motion.stance,
@@ -920,6 +968,7 @@ impl CharacterControllerService {
             wish_velocity: prepared.wish_velocity,
             displacement,
             ground: prepared.ground,
+            floor_probe: prepared.floor_probe,
             contacts: prepared.contacts,
             blocks: prepared.blocks,
             stance: prepared.stance,
@@ -1007,15 +1056,7 @@ where
         let toi = finite_f32(hit.time_of_impact)?.clamp(0.0, 1.0);
         center = add_world(center, vec3_world(remaining * toi));
         let normal = vec3_from_world(hit.normal)?;
-        let kind = if normal.y >= slope_cos {
-            CharacterContactKind::Ground
-        } else if normal.y <= -0.5 {
-            CharacterContactKind::Ceiling
-        } else if normal.y > 0.01 {
-            CharacterContactKind::SteepSlope
-        } else {
-            CharacterContactKind::Wall
-        };
+        let kind = contact_kind(normal, slope_cos);
         let solve_normal = if kind == CharacterContactKind::SteepSlope {
             let horizontal = Vec3::new(normal.x, 0.0, normal.z);
             let length = horizontal.length();
@@ -1162,20 +1203,7 @@ fn try_step(
     // The full capsule can first touch a top edge with a diagonal cap normal.
     // Confirm support with a narrow bounded probe at the accepted horizontal
     // endpoint so edge geometry cannot be mistaken for an over-limit slope.
-    let full_capsule = capsule(forward);
-    let support_radius = f64::from(
-        (config.shape.radius * config.surface.ledge_support_fraction.sqrt())
-            .max(config.surface.minimum_step_width),
-    );
-    let support_probe = CharacterCapsule {
-        center: WorldPos::new(
-            forward.x,
-            forward.y - full_capsule.half_height - full_capsule.radius + support_radius,
-            forward.z,
-        ),
-        half_height: 0.0,
-        radius: support_radius,
-    };
+    let support_probe = bounded_support_probe(capsule(forward), config);
     let Some(support) = cast_world(
         projection,
         obstacles,
@@ -1347,6 +1375,38 @@ fn clip_against_planes(mut value: Vec3, planes: &[Vec3]) -> Vec3 {
 
 fn standable(normal: Vec3, config: &CharacterControllerConfig) -> bool {
     normal.y >= config.surface.maximum_slope_radians.cos()
+}
+
+fn contact_kind(normal: Vec3, slope_cos: f32) -> CharacterContactKind {
+    if normal.y >= slope_cos {
+        CharacterContactKind::Ground
+    } else if normal.y <= -0.5 {
+        CharacterContactKind::Ceiling
+    } else if normal.y > 0.01 {
+        CharacterContactKind::SteepSlope
+    } else {
+        CharacterContactKind::Wall
+    }
+}
+
+fn bounded_support_probe(
+    full_capsule: CharacterCapsule,
+    config: &CharacterControllerConfig,
+) -> CharacterCapsule {
+    let support_radius = f64::from(
+        (config.shape.radius * config.surface.ledge_support_fraction.sqrt())
+            .max(config.surface.minimum_step_width)
+            .min(config.shape.radius),
+    );
+    CharacterCapsule {
+        center: WorldPos::new(
+            full_capsule.center.x,
+            full_capsule.center.y - full_capsule.half_height - full_capsule.radius + support_radius,
+            full_capsule.center.z,
+        ),
+        half_height: 0.0,
+        radius: support_radius,
+    }
 }
 
 fn capsule_at(center: WorldPos, total_height: f32, radius: f32) -> CharacterCapsule {
