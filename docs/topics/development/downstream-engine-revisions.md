@@ -65,6 +65,39 @@ The first command proves the complete local Rust facade in a clean temporary
 consumer. The second is an explicit Engine-owned integration proof for a
 selected downstream checkout; neither command changes the sibling checkout.
 
+## Character controller facade and selected consumer
+
+The host-neutral FPS controller is consumed through the complete facade:
+`rusty_engine::engine_spatial` exports `CharacterControllerService`, its
+defaulted non-exhaustive config family, commands, receipts/facts, capsule query
+types, and the separate `FirstPersonLookService`; `rusty_engine::entity_state`
+exports the inert `CharacterMotionComponent` and its exact atomic publication
+types. A controlled entity is authored with Transform plus character motion and
+must not also carry the legacy kinematic or rigid-body component. Downstream
+owns the fixed-step call schedule and semantic command construction.
+
+`./scripts/verify-rust-sdk-consumer.sh` is the current Engine-owned clean facade
+proof. The facade example is a directly runnable composition route:
+
+```bash
+cargo run -p rusty-engine --example character_controller --locked
+```
+
+For task 6847, CraftSurvive at `/home/dev/rusty-craftsurvive` remains the
+explicit selected product consumer. The Engine-owned task-scoped command is:
+
+```bash
+./scripts/verify-character-controller-consumer.sh /home/dev/rusty-craftsurvive
+```
+
+That script checks that the selected checkout declares the adjacent complete
+facade path, then runs its existing `./scripts/verify.sh`. It is an explicit
+integration selection, not dependency freshness policy and not permission to
+mutate the sibling checkout. Its eventual browser route and Luna/max usability
+result must be recorded with exact Engine and consumer revisions. Neither
+browser nor Luna evidence is implied by the Rust facade or focused controller
+tests.
+
 ## Historical evidence
 
 Older migration records may name provider or consumer commits, package

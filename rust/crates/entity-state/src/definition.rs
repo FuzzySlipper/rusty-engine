@@ -5,8 +5,8 @@ use core_ids::{EntityId, TagId};
 use core_math::Vec3;
 
 use crate::components::{
-    AssetBindingComponent, BoundsComponent, CollisionComponent, ControllerComponent,
-    KinematicComponent, RenderableComponent, TransformComponent,
+    AssetBindingComponent, BoundsComponent, CharacterMotionComponent, CollisionComponent,
+    ControllerComponent, KinematicComponent, RenderableComponent, TransformComponent,
 };
 use crate::model::EntitySource;
 use crate::value::EntityTransform;
@@ -25,6 +25,7 @@ pub struct EntityDefinition {
     pub collision: Option<CollisionComponent>,
     pub renderable: Option<RenderableComponent>,
     pub kinematic: Option<KinematicComponent>,
+    pub character_motion: Option<CharacterMotionComponent>,
     pub controller: Option<ControllerComponent>,
     pub asset_binding: Option<AssetBindingComponent>,
     pub transform_parent: Option<EntityId>,
@@ -44,6 +45,7 @@ impl EntityDefinition {
             collision: None,
             renderable: None,
             kinematic: None,
+            character_motion: None,
             controller: None,
             asset_binding: None,
             transform_parent: None,
@@ -111,6 +113,11 @@ impl EntityDefinition {
         self
     }
 
+    pub fn with_character_motion(mut self, motion: CharacterMotionComponent) -> Self {
+        self.character_motion = Some(motion);
+        self
+    }
+
     pub fn with_controller(mut self, controller: ControllerComponent) -> Self {
         self.controller = Some(controller);
         self
@@ -150,6 +157,9 @@ pub enum EntityDefinitionError {
     KinematicMissingTransform { entity: EntityId },
     InvalidKinematicHalfExtents { entity: EntityId },
     InvalidKinematicVelocity { entity: EntityId },
+    CharacterMotionMissingTransform { entity: EntityId },
+    CharacterMotionConflict { entity: EntityId },
+    InvalidCharacterMotion { entity: EntityId },
     InvalidRelationship { entity: EntityId, reason: String },
 }
 
@@ -238,6 +248,23 @@ pub(crate) fn validate_definition(
         }
         if !velocity_is_valid(kinematic.velocity) {
             return Err(EntityDefinitionError::InvalidKinematicVelocity {
+                entity: definition.id,
+            });
+        }
+    }
+    if let Some(motion) = definition.character_motion {
+        if definition.transform.is_none() {
+            return Err(EntityDefinitionError::CharacterMotionMissingTransform {
+                entity: definition.id,
+            });
+        }
+        if definition.kinematic.is_some() {
+            return Err(EntityDefinitionError::CharacterMotionConflict {
+                entity: definition.id,
+            });
+        }
+        if crate::validate_character_motion(&motion).is_err() {
+            return Err(EntityDefinitionError::InvalidCharacterMotion {
                 entity: definition.id,
             });
         }

@@ -11,8 +11,8 @@ use crate::activation::{
 };
 use crate::component::{ComponentRevision, ComponentTypeId, EntityComponent};
 use crate::model::{
-    ControllerComponent, EntityDefinition, EntityDefinitionError, EntityLifecycle, EntityState,
-    KinematicComponent, RigidBodyComponent, TransformComponent,
+    CharacterMotionComponent, ControllerComponent, EntityDefinition, EntityDefinitionError,
+    EntityLifecycle, EntityState, KinematicComponent, RigidBodyComponent, TransformComponent,
 };
 use crate::relationship::{reroot_transform_children, RelationshipError};
 
@@ -575,12 +575,48 @@ fn validate_component<T: EntityComponent>(
             reason: "dynamic rigid-body component conflicts with kinematic motion",
         });
     }
+    if TypeId::of::<T>() == TypeId::of::<KinematicComponent>()
+        && state.character_motion(entity).is_some()
+    {
+        return Err(EntityAuthoringError::ComponentInUse {
+            entity,
+            component: type_id.clone(),
+            reason: "legacy kinematic component conflicts with character motion",
+        });
+    }
+    if TypeId::of::<T>() == TypeId::of::<CharacterMotionComponent>()
+        && state.transform(entity).is_none()
+    {
+        return Err(EntityAuthoringError::InvalidComponent {
+            entity,
+            component: type_id.clone(),
+            reason: "transform component is absent".to_string(),
+        });
+    }
+    if TypeId::of::<T>() == TypeId::of::<CharacterMotionComponent>()
+        && (state.kinematic(entity).is_some() || state.rigid_body(entity).is_some())
+    {
+        return Err(EntityAuthoringError::ComponentInUse {
+            entity,
+            component: type_id.clone(),
+            reason: "character motion conflicts with legacy kinematic or dynamic rigid-body motion",
+        });
+    }
     if TypeId::of::<T>() == TypeId::of::<RigidBodyComponent>() && state.kinematic(entity).is_some()
     {
         return Err(EntityAuthoringError::ComponentInUse {
             entity,
             component: type_id.clone(),
             reason: "kinematic component conflicts with dynamic rigid-body motion",
+        });
+    }
+    if TypeId::of::<T>() == TypeId::of::<RigidBodyComponent>()
+        && state.character_motion(entity).is_some()
+    {
+        return Err(EntityAuthoringError::ComponentInUse {
+            entity,
+            component: type_id.clone(),
+            reason: "dynamic rigid-body component conflicts with character motion",
         });
     }
     if TypeId::of::<T>() == TypeId::of::<TransformComponent>()
@@ -616,6 +652,15 @@ fn validate_detach<T: EntityComponent>(
             entity,
             component: type_id.clone(),
             reason: "kinematic component requires transform",
+        });
+    }
+    if TypeId::of::<T>() == TypeId::of::<TransformComponent>()
+        && state.character_motion(entity).is_some()
+    {
+        return Err(EntityAuthoringError::ComponentInUse {
+            entity,
+            component: type_id.clone(),
+            reason: "character motion component requires transform",
         });
     }
     Ok(())

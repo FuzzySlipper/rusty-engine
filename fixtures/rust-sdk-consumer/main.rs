@@ -1,5 +1,5 @@
 use rusty_engine::{
-    entity_state, render_host_contracts, render_model, render_presentation,
+    engine_spatial, entity_state, render_host_contracts, render_model, render_presentation,
     renderer_webview_host,
 };
 
@@ -15,6 +15,10 @@ fn exact_presentation_frame(
 
 fn main() {
     let _entity_state_type = std::any::TypeId::of::<entity_state::EntityState>();
+    let _controller = engine_spatial::CharacterControllerService::default();
+    let _controller_config = engine_spatial::CharacterControllerConfig::responsive_fps();
+    let _motion = entity_state::CharacterMotionComponent::at_rest(1.9);
+    let _look = engine_spatial::FirstPersonLookService::default();
     let _host_options = renderer_webview_host::RendererWebviewOptions::default();
     let _camera = render_host_contracts::RendererCameraPose {
         position: [0.0, 1.62, 8.0],

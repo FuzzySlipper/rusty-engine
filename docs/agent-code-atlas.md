@@ -65,6 +65,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 | Stats, tracks, sources, effects, items, equipment, damage, restoration | [Gameplay mechanics](code-map/gameplay-mechanics.md) |
 | Optional opaque rules packages, TypeScript authoring, exact dependencies, provenance, canonicalization, and diagnostics | [Gameplay rules](code-map/gameplay-rules.md) |
 | Canonical voxel space, collision, navigation, mesh, motion, triggers, edits | [Spatial mechanisms](code-map/spatial-mechanisms.md) |
+| Kinematic FPS capsule controller, atomic character motion, and host-neutral look math | [FPS controller design](topics/fps-character-controller-proposal.md), [spatial mechanisms](code-map/spatial-mechanisms.md), and [entity state](code-map/entity-state-and-state-machines.md) |
 | Content manifests, catalogs, imports, prefabs, and authored scenes | [Content, assets, and scenes](code-map/content-assets-and-scenes.md) |
 | Stored voxel artifacts, annotations, GLB conversion, and object playback | [Voxel assets and conversion](code-map/voxel-assets-and-conversion.md) |
 | Recipe planning and materialization into authored scenes | [Environment authoring](code-map/environment-authoring.md) |
@@ -82,6 +83,8 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 - [Gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md)
 - [Textured voxel campaign closeout](textured-voxel-campaign-closeout.md)
 - [Reconstructed voxel surfaces](topics/voxel/reconstructed-surfaces.md)
+- [FPS character controller design](topics/fps-character-controller-proposal.md)
+- [FPS character controller survey](topics/fps-character-controller-survey.md)
 - [Rust source organization](topics/development/rust-style.md)
 - [Downstream renderer and Studio boundary](topics/development/downstream-renderer-and-studio.md)
 - [Product playtesting and evidence authority](topics/development/product-playtesting.md)

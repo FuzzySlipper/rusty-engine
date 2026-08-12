@@ -24,6 +24,7 @@ from it.
 
 - [`engine-spatial/src/lib.rs`](../../rust/crates/engine-spatial/src/lib.rs)
 - [`engine-spatial/src/entity_motion.rs`](../../rust/crates/engine-spatial/src/entity_motion.rs)
+- [`engine-spatial/src/character_controller.rs`](../../rust/crates/engine-spatial/src/character_controller.rs)
 - [`engine-spatial/src/rigid_body.rs`](../../rust/crates/engine-spatial/src/rigid_body.rs)
 - [`engine-spatial/src/voxel_edit.rs`](../../rust/crates/engine-spatial/src/voxel_edit.rs)
 - [`engine-spatial/src/trigger.rs`](../../rust/crates/engine-spatial/src/trigger.rs)
@@ -33,6 +34,11 @@ from it.
   - [`static_mesh.rs`](../../rust/crates/svc-collision/src/static_mesh.rs)
   - [`dynamics.rs`](../../rust/crates/svc-collision/src/dynamics.rs)
 - [Rigid-body dynamics](../topics/rigid-body-dynamics.md)
+- [FPS character controller design](../topics/fps-character-controller-proposal.md)
+- [FPS character controller survey](../topics/fps-character-controller-survey.md)
+- [`character_controller` facade example](../../rust/crates/rusty-engine/examples/character_controller.rs)
+- [`measure-character-controller.sh`](../../scripts/measure-character-controller.sh)
+- [`verify-character-controller-consumer.sh`](../../scripts/verify-character-controller-consumer.sh)
 - [`svc-pathfinding`](../../rust/crates/svc-pathfinding)
 - [`svc-mesh`](../../rust/crates/svc-mesh)
 - [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
@@ -63,6 +69,23 @@ from it.
   plus this canonical voxel/static-triangle environment. Rapier caches are
   derived, bounded, and non-durable; complete accepted steps publish atomically
   through entity-state.
+- `CharacterControllerService::{step,prepare,commit}` is the host-neutral
+  kinematic FPS path. It consumes one entity with Transform plus inert
+  `CharacterMotionComponent`, a `CharacterControllerConfig`, and a sequenced
+  fixed-step command. It solves against canonical voxel/static-mesh collision
+  plus active entity obstacles, then returns accepted Transform/motion and
+  bounded ground/contact/block/stance/step/platform/dynamic-impulse facts.
+- `CharacterControllerConfig` and every public nested policy struct are
+  `#[non_exhaustive]`, serde-defaulted, and constructible through `Default` or
+  `responsive_fps()`. Sparse documents and downstream one-field overrides keep
+  receiving defaults when compatible fields are added; `validate()` still
+  rejects invalid values before queries or mutation.
+- `FirstPersonLookService` is a separate pure yaw/pitch and basis service. It
+  shares heading conventions with character movement but does not own a camera,
+  device bindings, entity position, or collision.
+- `svc-collision` exposes local-+Y `CharacterCapsule` cast/overlap facts for
+  voxel chunks, admitted static meshes, and explicit active-entity obstacles
+  without exposing backend handles.
 
 ## Private or forbidden paths
 
@@ -75,6 +98,12 @@ from it.
 
 ```bash
 cargo test -p engine-spatial --locked
+cargo test -p engine-spatial --test character_controller --locked
+cargo test -p entity-state character_motion --locked
+cargo test -p svc-collision character_capsule --locked
+cargo run -p rusty-engine --example character_controller --locked
+./scripts/measure-character-controller.sh
+./scripts/verify-character-controller-consumer.sh /absolute/path/to/rusty-craftsurvive
 cargo test -p svc-volume -p svc-spatial -p svc-collision -p svc-pathfinding -p svc-mesh --locked
 cargo clippy -p engine-spatial --all-targets --locked -- -D warnings
 ./scripts/verify.sh
@@ -83,6 +112,8 @@ cargo clippy -p engine-spatial --all-targets --locked -- -D warnings
 Provider evidence lives under
 [`engine-spatial/tests`](../../rust/crates/engine-spatial/tests) and
 [`fixtures/spatial-grid`](../../fixtures/spatial-grid).
+The focused controller integration tests are in
+[`engine-spatial/tests/character_controller.rs`](../../rust/crates/engine-spatial/tests/character_controller.rs).
 
 ## Common agent mistakes
 

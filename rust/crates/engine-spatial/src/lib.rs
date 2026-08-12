@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 mod active_collision;
+mod character_controller;
 mod entity_motion;
 mod occlusion;
 mod physics;
@@ -23,6 +24,17 @@ mod voxel_picking;
 mod voxel_primitive;
 mod voxel_template;
 
+pub use character_controller::{
+    CharacterAirConfig, CharacterBlockKind, CharacterConfigError, CharacterContactFact,
+    CharacterContactKind, CharacterControllerCommand, CharacterControllerConfig,
+    CharacterControllerError, CharacterControllerReadout, CharacterControllerReceipt,
+    CharacterControllerService, CharacterExternalMotionConfig, CharacterGroundConfig,
+    CharacterGroundFact, CharacterJumpConfig, CharacterPlatformConfig, CharacterPlatformFact,
+    CharacterRecoveryConfig, CharacterShapeConfig, CharacterSolverConfig, CharacterStanceFact,
+    CharacterStepFact, CharacterSurfaceConfig, CharacterVerticalConfig, DynamicImpulseProposal,
+    FirstPersonLookCommand, FirstPersonLookConfig, FirstPersonLookError, FirstPersonLookReceipt,
+    FirstPersonLookService, FirstPersonLookState, PreparedCharacterControllerStep,
+};
 pub use entity_motion::{
     EntityMotionCommand, EntityMotionError, EntityMotionOutcome, EntityMotionReceipt,
     EntityMotionResolution, EntityMotionService, FirstPersonBasis, FirstPersonMotionCommand,
@@ -52,9 +64,11 @@ pub use trigger::{
 pub use trigger_codec::{decode_trigger_snapshot, encode_trigger_snapshot, TriggerVolumeSnapshot};
 
 pub use svc_collision::{
-    StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance,
-    StaticMeshCollisionError, StaticMeshCollisionReceipt, StaticMeshHit, StaticMeshInstanceId,
-    StaticMeshTransform,
+    cast_character_capsule_against_obstacles, character_capsule_overlap_obstacles,
+    CharacterCapsule, CharacterCapsuleCastHit, CharacterCapsuleOverlap,
+    CharacterCollisionQueryError, CharacterCollisionSource, CharacterObstacle, StaticMeshAssetId,
+    StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshCollisionError,
+    StaticMeshCollisionReceipt, StaticMeshHit, StaticMeshInstanceId, StaticMeshTransform,
 };
 pub use voxel_edit::{
     validate_material_voxel, validate_voxel_address, validate_voxel_material_slot,

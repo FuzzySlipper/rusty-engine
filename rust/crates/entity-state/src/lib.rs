@@ -7,6 +7,8 @@
 
 mod activation;
 mod authoring;
+mod character_motion;
+mod character_motion_publication;
 mod command;
 mod component;
 mod components;
@@ -28,6 +30,15 @@ pub use authoring::{
     ComponentReplacement, EntityAuthoringError, EntityAuthoringFact, EntityAuthoringReceipt,
     EntityAuthoringService, MAX_COMPONENT_REPLACEMENTS,
 };
+pub use character_motion::{
+    validate_character_motion, CharacterMotionValidationError, CHARACTER_MOTION_CODEC_ID,
+    CHARACTER_MOTION_CODEC_VERSION, CHARACTER_MOTION_COMPONENT_TYPE_ID,
+    MAX_CHARACTER_TIMER_SECONDS,
+};
+pub use character_motion_publication::{
+    replace_character_motion_state, CharacterMotionPublicationError, CharacterMotionStateReceipt,
+    CharacterMotionStateReplacement,
+};
 pub use component::{
     ComponentAccessError, ComponentCodec, ComponentCodecError, ComponentIdentityError,
     ComponentIter, ComponentKindInspection, ComponentPersistence, ComponentRegistration,
@@ -43,11 +54,12 @@ pub use command::{
     BatchReceipt, BatchRejection, EntityCommand, EntityCommandBatch, EntityCommandError, EntityFact,
 };
 pub use model::{
-    AssetBindingComponent, BoundsComponent, CollisionComponent, ControllerComponent, EntityCore,
-    EntityDefinition, EntityDefinitionError, EntityLifecycle, EntitySource, EntityState,
-    EntityTransform, EntityView, KinematicBodyView, KinematicComponent, ProjectionNode, Quat,
-    RenderableComponent, RigidBodyComponent, RigidBodyInertiaPolicy, RigidBodyMode, RigidBodyShape,
-    TransformComponent, ViewError, MAX_ABS_TRANSLATION, MAX_ABS_VELOCITY,
+    AssetBindingComponent, BoundsComponent, CharacterMotionComponent, CharacterStance,
+    CollisionComponent, ControllerComponent, EntityCore, EntityDefinition, EntityDefinitionError,
+    EntityLifecycle, EntitySource, EntityState, EntityTransform, EntityView, KinematicBodyView,
+    KinematicComponent, ProjectionNode, Quat, RenderableComponent, RigidBodyComponent,
+    RigidBodyInertiaPolicy, RigidBodyMode, RigidBodyShape, TransformComponent, ViewError,
+    MAX_ABS_TRANSLATION, MAX_ABS_VELOCITY,
 };
 pub use relationship::{
     apply_relationship, preview_relationship, RelationshipCommand, RelationshipError,

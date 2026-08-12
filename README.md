@@ -227,6 +227,19 @@ Complete Rust-facade consumption has a clean temporary-consumer proof:
 ./scripts/verify-rust-sdk-consumer.sh
 ```
 
+The host-neutral FPS character controller has a facade example, reproducible
+performance probe, and an explicitly selected downstream integration gate:
+
+```bash
+cargo run -p rusty-engine --example character_controller --locked
+./scripts/measure-character-controller.sh
+./scripts/verify-character-controller-consumer.sh /absolute/path/to/rusty-craftsurvive
+```
+
+The integration gate reads the selected adjacent consumer and runs its owned
+verification without rewriting either checkout. Browser and playtest evidence
+remain explicit product-owned checks.
+
 Studio-to-product integration is explicit and never inferred from a sibling
 checkout:
 

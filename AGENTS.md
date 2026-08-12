@@ -176,6 +176,7 @@ freshness ceremony:
 ```bash
 ./scripts/verify-rust-sdk-consumer.sh
 ./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo
+./scripts/verify-character-controller-consumer.sh /absolute/path/to/rusty-craftsurvive
 ```
 
 The first command proves the complete local Rust facade in a clean temporary

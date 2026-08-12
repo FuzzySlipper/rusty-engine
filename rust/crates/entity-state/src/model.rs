@@ -14,9 +14,9 @@ use crate::component::{
     ComponentTypeId, EntityComponent,
 };
 pub use crate::components::{
-    AssetBindingComponent, BoundsComponent, CollisionComponent, ControllerComponent,
-    KinematicComponent, RenderableComponent, RigidBodyComponent, RigidBodyInertiaPolicy,
-    RigidBodyMode, RigidBodyShape, TransformComponent,
+    AssetBindingComponent, BoundsComponent, CharacterMotionComponent, CharacterStance,
+    CollisionComponent, ControllerComponent, KinematicComponent, RenderableComponent,
+    RigidBodyComponent, RigidBodyInertiaPolicy, RigidBodyMode, RigidBodyShape, TransformComponent,
 };
 pub(crate) use crate::definition::{
     transform_is_valid, translation_is_valid, validate_definition, velocity_is_valid,
@@ -137,6 +137,7 @@ pub struct EntityView {
     pub collision: Option<CollisionComponent>,
     pub renderable: Option<RenderableComponent>,
     pub kinematic: Option<KinematicComponent>,
+    pub character_motion: Option<CharacterMotionComponent>,
     pub rigid_body: Option<RigidBodyComponent>,
     pub controller: Option<ControllerComponent>,
     pub controller_active: bool,
@@ -363,6 +364,18 @@ impl EntityState {
             .expect("built-in rigid-body component is registered")
     }
 
+    pub fn character_motion(&self, entity: EntityId) -> Option<&CharacterMotionComponent> {
+        self.components
+            .get::<CharacterMotionComponent>(entity)
+            .expect("built-in character-motion component is registered")
+    }
+
+    pub fn character_motions(&self) -> ComponentIter<'_, CharacterMotionComponent> {
+        self.components
+            .iter::<CharacterMotionComponent>()
+            .expect("built-in character-motion component is registered")
+    }
+
     pub fn rigid_bodies(&self) -> ComponentIter<'_, RigidBodyComponent> {
         self.components
             .iter::<RigidBodyComponent>()
@@ -446,6 +459,7 @@ impl EntityState {
             collision: self.collision(entity).copied(),
             renderable: self.renderable(entity).cloned(),
             kinematic: self.kinematic(entity).copied(),
+            character_motion: self.character_motion(entity).copied(),
             rigid_body: self.rigid_body(entity).copied(),
             controller: self.controller(entity).copied(),
             controller_active: self.controller(entity).is_some()
@@ -543,6 +557,9 @@ impl EntityState {
             self.components.insert_unchecked(id, value);
         }
         if let Some(value) = definition.kinematic {
+            self.components.insert_unchecked(id, value);
+        }
+        if let Some(value) = definition.character_motion {
             self.components.insert_unchecked(id, value);
         }
         if let Some(value) = definition.controller {

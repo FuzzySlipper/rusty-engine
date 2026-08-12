@@ -68,8 +68,8 @@ explicit read-only provider views; the isolated renderer workspace knows no game
 
 - stable identity, name, lifecycle, labels, and explicit relationships;
 - one instance-owned typed component store with stable authored type identities;
-- built-in transform, bounds, collision, renderable, kinematic, controller, and asset-binding
-  components;
+- built-in transform, bounds, collision, renderable, kinematic,
+  character-motion, controller, rigid-body, and asset-binding components;
 - typed component registration, attach/read/has/replace/remove, deterministic per-type iteration,
   bounded inspection, and destruction cleanup;
 - read-only entity views, projection nodes, and an identity-ordered reverse containment index; and
@@ -393,6 +393,34 @@ consequences, complete saves, and presentation. Kinematic controller motion is
 not redefined as a dynamic body. The backend choice, numeric guarantees, CCD
 limits, and forbidden scheduler/session shapes are specified in
 [Rigid-body dynamics](topics/rigid-body-dynamics.md).
+
+Kinematic FPS character motion is another explicit named mechanism, not an
+ordinary rigid body and not an expansion of the legacy axis-separated motion
+paths. `engine-spatial::CharacterControllerService` combines caller-supplied
+fixed-step commands with bounded local-+Y capsule casts/overlaps over canonical
+voxel, admitted static-mesh, and active entity obstacles. It prepares
+slide/step/snap, stance, jump-timing, support carry, recovery, controlled and
+external velocity, and typed contact/ground/block/platform/impulse-proposal
+facts. It owns no scheduler, device input, camera, gameplay ability, material
+meaning, dynamic-body mutation, or presentation consequence.
+
+The durable schema-1 `entity-state::CharacterMotionComponent` contains only
+inert continuation facts: controlled/external velocity, stance and grounding,
+jump timers, support anchor/pose/point velocity, fall heights, accepted command
+sequence, and collision-world identity. A prepared controller step captures
+the exact Transform and character-motion slot revisions plus the collision
+environment identity. Commit rechecks all three and uses
+`replace_character_motion_state` to publish Transform and motion together or
+change neither. Character motion is mutually exclusive with the legacy
+kinematic and rigid-body components, parented transforms, and non-unit scale.
+
+`engine-spatial::FirstPersonLookService` is a separate optional pure service
+for bounded yaw/pitch integration and forward/right/up basis construction. It
+shares the controller's yaw-zero-is--Z and positive-yaw-toward-+X convention,
+but owns no renderer camera, position/orbit, device normalization, recoil, bob,
+or product smoothing. The adopted design and donor rationale are recorded in
+[FPS character controller design](topics/fps-character-controller-proposal.md)
+and its [survey](topics/fps-character-controller-survey.md).
 
 `KinematicMotionSystem` is a centrally invoked mechanism over explicit body views. It supplies no
 game loop, actor policy, or component-local update callback. A downstream runtime decides when to

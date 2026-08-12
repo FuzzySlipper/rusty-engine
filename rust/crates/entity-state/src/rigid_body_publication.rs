@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 use core_ids::EntityId;
 
 use crate::{
-    validate_rigid_body, ComponentRevision, EntityLifecycle, EntityState, KinematicComponent,
-    RigidBodyComponent, RigidBodyValidationError, TransformComponent,
+    validate_rigid_body, CharacterMotionComponent, ComponentRevision, EntityLifecycle, EntityState,
+    KinematicComponent, RigidBodyComponent, RigidBodyValidationError, TransformComponent,
 };
 
 pub const MAX_RIGID_BODY_STATE_REPLACEMENTS: usize = 1_024;
@@ -50,6 +50,9 @@ pub enum RigidBodyStatePublicationError {
     KinematicConflict {
         entity: EntityId,
     },
+    CharacterMotionConflict {
+        entity: EntityId,
+    },
     NonUnitScale {
         entity: EntityId,
     },
@@ -86,6 +89,7 @@ impl RigidBodyStatePublicationError {
             Self::MissingTransform { .. } => "missing-rigid-body-transform",
             Self::MissingRigidBody { .. } => "missing-rigid-body-component",
             Self::KinematicConflict { .. } => "kinematic-rigid-body-conflict",
+            Self::CharacterMotionConflict { .. } => "character-motion-rigid-body-conflict",
             Self::NonUnitScale { .. } => "scaled-rigid-body-transform",
             Self::InvalidTransform { .. } => "invalid-rigid-body-transform",
             Self::InvalidRigidBody { .. } => "invalid-rigid-body-publication-state",
@@ -153,6 +157,12 @@ pub fn replace_rigid_body_states(
             .expect("built-in kinematic registration")
         {
             return Err(RigidBodyStatePublicationError::KinematicConflict { entity });
+        }
+        if state
+            .has_component::<CharacterMotionComponent>(entity)
+            .expect("built-in character-motion registration")
+        {
+            return Err(RigidBodyStatePublicationError::CharacterMotionConflict { entity });
         }
         if replacement.transform.scale != core_math::Vec3::ONE {
             return Err(RigidBodyStatePublicationError::NonUnitScale { entity });

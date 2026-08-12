@@ -16,6 +16,8 @@ does not require Den access.
 | [agent-code-atlas.md](agent-code-atlas.md) | Agent-oriented navigation across code owners, public surfaces, and gates |
 | [gameplay-mechanics-campaign-closeout.md](gameplay-mechanics-campaign-closeout.md) | Exact GM0-GM7 mechanics/rules consumer evidence, measured limits, donor pins, and stopping point |
 | [textured-voxel-campaign-closeout.md](textured-voxel-campaign-closeout.md) | VTX0-VTX6 ownership, measured geometry/resource costs, exact consumer proof, and stopping point |
+| [topics/fps-character-controller-survey.md](topics/fps-character-controller-survey.md) | Task 6847 source survey, feature matrix, licensing posture, and adopted transfer decisions |
+| [topics/fps-character-controller-proposal.md](topics/fps-character-controller-proposal.md) | Adopted host-neutral controller design, current Rust API, ownership, and remaining proof routes |
 | [README.md](README.md) | This documentation index |
 
 ## Topic directories
@@ -80,6 +82,7 @@ tests take precedence when describing implemented behavior.
 | Use Rusty Engine from a downstream repository or open it in Studio | [Downstream renderer and Studio boundary](topics/development/downstream-renderer-and-studio.md) |
 | Check active provider limitations and scheduled certification | [Known limitations](known-limitations.md) |
 | Change voxel collision, navigation, motion, or edits | [Spatial mechanisms](code-map/spatial-mechanisms.md) |
+| Change the reusable FPS controller, character-motion publication, or look math | [FPS controller design](topics/fps-character-controller-proposal.md), [survey](topics/fps-character-controller-survey.md), and [spatial mechanisms](code-map/spatial-mechanisms.md) |
 | Change a stored asset, scene, prefab, or import | [Content, assets, and scenes](code-map/content-assets-and-scenes.md) |
 | Change voxel conversion or object playback | [Voxel assets and conversion](code-map/voxel-assets-and-conversion.md) |
 | Change runtime voxel tiles or atlas mapping | [Runtime voxel surface textures](topics/voxel/voxel-surface-textures.md) |

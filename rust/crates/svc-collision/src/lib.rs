@@ -63,8 +63,11 @@ use svc_spatial::VoxelWorld;
 use svc_volume::VoxelChunk;
 
 use parry3d_f64::math::{Pose, Real, Vector};
-use parry3d_f64::query::{intersection_test, Ray as ParryRay, RayCast};
-use parry3d_f64::shape::{Compound, Cuboid, SharedShape};
+use parry3d_f64::query::{
+    cast_shapes, contact, intersection_test, Contact, Ray as ParryRay, RayCast, ShapeCastHit,
+    ShapeCastOptions, ShapeCastStatus,
+};
+use parry3d_f64::shape::{Capsule, Compound, Cuboid, SharedShape};
 
 /// How a voxel value participates in collision. Derived from the value/material;
 /// per-material collision kinds (decision 1) are deferred behind this enum.
@@ -225,6 +228,158 @@ pub struct CollisionProjection {
     version: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CharacterCapsule {
+    pub center: WorldPos,
+    /// Half the central line segment, excluding the spherical caps.
+    pub half_height: f64,
+    pub radius: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CharacterObstacle {
+    pub id: u64,
+    pub center: WorldPos,
+    pub half_extents: WorldVec,
+    pub linear_velocity: WorldVec,
+    pub angular_velocity: WorldVec,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CharacterCollisionSource {
+    VoxelChunk(ChunkCoord),
+    StaticMesh {
+        instance: StaticMeshInstanceId,
+        asset: StaticMeshAssetId,
+        geometry_hash: u64,
+    },
+    ActiveEntity(u64),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CharacterCapsuleCastHit {
+    pub source: CharacterCollisionSource,
+    /// Fraction in `[0, 1]` of the requested translation.
+    pub time_of_impact: f64,
+    pub point: WorldPos,
+    /// World-space surface normal pointing away from the obstacle.
+    pub normal: WorldVec,
+    pub start_solid: bool,
+    pub converged: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CharacterCapsuleOverlap {
+    pub source: CharacterCollisionSource,
+    pub point: WorldPos,
+    /// World-space separation direction for the capsule.
+    pub normal: WorldVec,
+    pub penetration_depth: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CharacterCollisionQueryError {
+    InvalidCapsule,
+    InvalidTranslation,
+    InvalidContactSkin,
+    UnsupportedBackendQuery,
+}
+
+impl std::fmt::Display for CharacterCollisionQueryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "character collision query rejected: {self:?}")
+    }
+}
+
+impl std::error::Error for CharacterCollisionQueryError {}
+
+pub fn cast_character_capsule_against_obstacles(
+    capsule: CharacterCapsule,
+    translation: WorldVec,
+    contact_skin: f64,
+    obstacles: &[CharacterObstacle],
+) -> Result<Option<CharacterCapsuleCastHit>, CharacterCollisionQueryError> {
+    validate_character_query(capsule, translation, contact_skin)?;
+    let moving_pose = Pose::translation(capsule.center.x, capsule.center.y, capsule.center.z);
+    let moving_shape = Capsule::new_y(capsule.half_height, capsule.radius);
+    let velocity = Vector::new(translation.x, translation.y, translation.z);
+    let options = ShapeCastOptions {
+        max_time_of_impact: 1.0,
+        target_distance: contact_skin,
+        stop_at_penetration: true,
+        compute_impact_geometry_on_penetration: true,
+    };
+    let mut best = None;
+    for obstacle in obstacles {
+        validate_obstacle(*obstacle)?;
+        let obstacle_pose =
+            Pose::translation(obstacle.center.x, obstacle.center.y, obstacle.center.z);
+        let obstacle_shape = Cuboid::new(Vector::new(
+            obstacle.half_extents.x,
+            obstacle.half_extents.y,
+            obstacle.half_extents.z,
+        ));
+        let hit = cast_shapes(
+            &moving_pose,
+            velocity,
+            &moving_shape,
+            &obstacle_pose,
+            Vector::ZERO,
+            &obstacle_shape,
+            options,
+        )
+        .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)?;
+        let hit = hit.map(|mut hit| {
+            hit.witness2 += Vector::new(obstacle.center.x, obstacle.center.y, obstacle.center.z);
+            hit
+        });
+        keep_nearest_character_hit(
+            &mut best,
+            CharacterCollisionSource::ActiveEntity(obstacle.id),
+            hit,
+        );
+    }
+    Ok(best)
+}
+
+pub fn character_capsule_overlap_obstacles(
+    capsule: CharacterCapsule,
+    obstacles: &[CharacterObstacle],
+) -> Result<Option<CharacterCapsuleOverlap>, CharacterCollisionQueryError> {
+    validate_character_query(capsule, WorldVec::ZERO, 0.0)?;
+    let capsule_pose = Pose::translation(capsule.center.x, capsule.center.y, capsule.center.z);
+    let capsule_shape = Capsule::new_y(capsule.half_height, capsule.radius);
+    let mut best = None;
+    for obstacle in obstacles {
+        validate_obstacle(*obstacle)?;
+        let obstacle_pose =
+            Pose::translation(obstacle.center.x, obstacle.center.y, obstacle.center.z);
+        let obstacle_shape = Cuboid::new(Vector::new(
+            obstacle.half_extents.x,
+            obstacle.half_extents.y,
+            obstacle.half_extents.z,
+        ));
+        let result = contact(
+            &capsule_pose,
+            &capsule_shape,
+            &obstacle_pose,
+            &obstacle_shape,
+            0.0,
+        )
+        .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)?;
+        let result = result.map(|mut contact| {
+            contact.point2 += Vector::new(obstacle.center.x, obstacle.center.y, obstacle.center.z);
+            contact
+        });
+        keep_deepest_character_overlap(
+            &mut best,
+            CharacterCollisionSource::ActiveEntity(obstacle.id),
+            result,
+        );
+    }
+    Ok(best)
+}
+
 /// Stable identity for a collision projection and the voxel authority it was
 /// derived from. Receipts expose these values so separately invoked operations
 /// can prove they queried the same projection substrate.
@@ -303,6 +458,117 @@ impl CollisionProjection {
 
     pub fn static_mesh_instance_count(&self) -> usize {
         self.static_meshes.instance_count()
+    }
+
+    /// Cast a local +Y capsule through the immutable voxel/static-mesh snapshot.
+    /// Exact-distance ties retain deterministic source order: voxel chunks first,
+    /// then static-mesh instance identity.
+    pub fn cast_character_capsule(
+        &self,
+        capsule: CharacterCapsule,
+        translation: WorldVec,
+        contact_skin: f64,
+    ) -> Result<Option<CharacterCapsuleCastHit>, CharacterCollisionQueryError> {
+        validate_character_query(capsule, translation, contact_skin)?;
+        let moving_pose = Pose::translation(capsule.center.x, capsule.center.y, capsule.center.z);
+        let moving_shape = Capsule::new_y(capsule.half_height, capsule.radius);
+        let velocity = Vector::new(translation.x, translation.y, translation.z);
+        let obstacle_pose = identity();
+        let options = ShapeCastOptions {
+            max_time_of_impact: 1.0,
+            target_distance: contact_skin,
+            stop_at_penetration: true,
+            compute_impact_geometry_on_penetration: true,
+        };
+        let mut best = None;
+        for (coord, collider) in &self.chunks {
+            let hit = cast_shapes(
+                &moving_pose,
+                velocity,
+                &moving_shape,
+                &obstacle_pose,
+                Vector::ZERO,
+                &collider.shape,
+                options,
+            )
+            .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)?;
+            keep_nearest_character_hit(
+                &mut best,
+                CharacterCollisionSource::VoxelChunk(*coord),
+                hit,
+            );
+        }
+        for (instance, asset, geometry_hash, shape) in self.static_meshes.character_shapes() {
+            let hit = cast_shapes(
+                &moving_pose,
+                velocity,
+                &moving_shape,
+                &obstacle_pose,
+                Vector::ZERO,
+                shape.as_ref(),
+                options,
+            )
+            .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)?;
+            keep_nearest_character_hit(
+                &mut best,
+                CharacterCollisionSource::StaticMesh {
+                    instance,
+                    asset,
+                    geometry_hash,
+                },
+                hit,
+            );
+        }
+        Ok(best)
+    }
+
+    /// Return the deepest current capsule overlap, with deterministic source
+    /// ordering on equal penetration. Repeated calls after bounded correction
+    /// let the character service recover multiple simultaneous overlaps.
+    pub fn character_capsule_overlap(
+        &self,
+        capsule: CharacterCapsule,
+    ) -> Result<Option<CharacterCapsuleOverlap>, CharacterCollisionQueryError> {
+        validate_character_query(capsule, WorldVec::ZERO, 0.0)?;
+        let capsule_pose = Pose::translation(capsule.center.x, capsule.center.y, capsule.center.z);
+        let capsule_shape = Capsule::new_y(capsule.half_height, capsule.radius);
+        let obstacle_pose = identity();
+        let mut best = None;
+        for (coord, collider) in &self.chunks {
+            let result = contact(
+                &capsule_pose,
+                &capsule_shape,
+                &obstacle_pose,
+                &collider.shape,
+                0.0,
+            )
+            .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)?;
+            keep_deepest_character_overlap(
+                &mut best,
+                CharacterCollisionSource::VoxelChunk(*coord),
+                result,
+            );
+        }
+        for (instance, asset, geometry_hash, shape) in self.static_meshes.character_shapes() {
+            let result = contact(
+                &capsule_pose,
+                &capsule_shape,
+                &obstacle_pose,
+                shape.as_ref(),
+                0.0,
+            )
+            .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)?;
+            keep_deepest_character_overlap(
+                &mut best,
+                CharacterCollisionSource::StaticMesh {
+                    instance,
+                    asset,
+                    geometry_hash,
+                },
+                result,
+            );
+        }
+        Ok(best)
     }
 
     pub fn replace_static_meshes(
@@ -673,6 +939,111 @@ fn build_chunk_shape(
     }
 }
 
+fn validate_character_query(
+    capsule: CharacterCapsule,
+    translation: WorldVec,
+    contact_skin: f64,
+) -> Result<(), CharacterCollisionQueryError> {
+    if ![
+        capsule.center.x,
+        capsule.center.y,
+        capsule.center.z,
+        capsule.half_height,
+        capsule.radius,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+        || capsule.half_height < 0.0
+        || capsule.radius <= 0.0
+    {
+        return Err(CharacterCollisionQueryError::InvalidCapsule);
+    }
+    if ![translation.x, translation.y, translation.z]
+        .into_iter()
+        .all(f64::is_finite)
+    {
+        return Err(CharacterCollisionQueryError::InvalidTranslation);
+    }
+    if !contact_skin.is_finite() || contact_skin < 0.0 {
+        return Err(CharacterCollisionQueryError::InvalidContactSkin);
+    }
+    Ok(())
+}
+
+fn validate_obstacle(obstacle: CharacterObstacle) -> Result<(), CharacterCollisionQueryError> {
+    if ![
+        obstacle.center.x,
+        obstacle.center.y,
+        obstacle.center.z,
+        obstacle.half_extents.x,
+        obstacle.half_extents.y,
+        obstacle.half_extents.z,
+        obstacle.linear_velocity.x,
+        obstacle.linear_velocity.y,
+        obstacle.linear_velocity.z,
+        obstacle.angular_velocity.x,
+        obstacle.angular_velocity.y,
+        obstacle.angular_velocity.z,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+        || obstacle.half_extents.x <= 0.0
+        || obstacle.half_extents.y <= 0.0
+        || obstacle.half_extents.z <= 0.0
+    {
+        Err(CharacterCollisionQueryError::InvalidCapsule)
+    } else {
+        Ok(())
+    }
+}
+
+fn keep_nearest_character_hit(
+    best: &mut Option<CharacterCapsuleCastHit>,
+    source: CharacterCollisionSource,
+    hit: Option<ShapeCastHit>,
+) {
+    let Some(hit) = hit else {
+        return;
+    };
+    if best.as_ref().is_some_and(|current| {
+        current.time_of_impact < hit.time_of_impact
+            || (current.time_of_impact == hit.time_of_impact && current.source <= source)
+    }) {
+        return;
+    }
+    *best = Some(CharacterCapsuleCastHit {
+        source,
+        time_of_impact: hit.time_of_impact.clamp(0.0, 1.0),
+        point: WorldPos::new(hit.witness2.x, hit.witness2.y, hit.witness2.z),
+        normal: WorldVec::new(hit.normal2.x, hit.normal2.y, hit.normal2.z),
+        start_solid: hit.status == ShapeCastStatus::PenetratingOrWithinTargetDist,
+        converged: hit.status == ShapeCastStatus::Converged,
+    });
+}
+
+fn keep_deepest_character_overlap(
+    best: &mut Option<CharacterCapsuleOverlap>,
+    source: CharacterCollisionSource,
+    contact: Option<Contact>,
+) {
+    let Some(contact) = contact.filter(|contact| contact.dist < 0.0) else {
+        return;
+    };
+    let depth = -contact.dist;
+    if best.as_ref().is_some_and(|current| {
+        current.penetration_depth > depth
+            || (current.penetration_depth == depth && current.source <= source)
+    }) {
+        return;
+    }
+    *best = Some(CharacterCapsuleOverlap {
+        source,
+        point: WorldPos::new(contact.point2.x, contact.point2.y, contact.point2.z),
+        normal: WorldVec::new(contact.normal2.x, contact.normal2.y, contact.normal2.z),
+        penetration_depth: depth,
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -700,6 +1071,75 @@ mod tests {
             collision_class(VoxelValue::solid_raw(3)),
             CollisionClass::Solid
         );
+    }
+
+    #[test]
+    fn character_capsule_cast_returns_toi_normal_and_stable_source() {
+        let world = world_with(ChunkCoord::new(0, 0, 0), &[LocalVoxelCoord::new(2, 0, 2)]);
+        let projection = CollisionProjection::build(&world);
+        let hit = projection
+            .cast_character_capsule(
+                CharacterCapsule {
+                    center: WorldPos::new(0.5, 1.0, 2.5),
+                    half_height: 0.5,
+                    radius: 0.4,
+                },
+                WorldVec::new(3.0, 0.0, 0.0),
+                0.0,
+            )
+            .unwrap()
+            .expect("wall hit");
+        assert_eq!(
+            hit.source,
+            CharacterCollisionSource::VoxelChunk(ChunkCoord::new(0, 0, 0))
+        );
+        assert!((hit.time_of_impact - (1.1 / 3.0)).abs() < 1.0e-6);
+        assert!(hit.normal.x < -0.99);
+        assert!(!hit.start_solid);
+    }
+
+    #[test]
+    fn character_capsule_overlap_reports_separation_depth() {
+        let world = world_with(ChunkCoord::new(0, 0, 0), &[LocalVoxelCoord::new(2, 0, 2)]);
+        let projection = CollisionProjection::build(&world);
+        let overlap = projection
+            .character_capsule_overlap(CharacterCapsule {
+                center: WorldPos::new(1.8, 1.0, 2.5),
+                half_height: 0.5,
+                radius: 0.4,
+            })
+            .unwrap()
+            .expect("overlap");
+        assert!((overlap.penetration_depth - 0.2).abs() < 1.0e-6);
+        assert!(overlap.normal.x < -0.99);
+    }
+
+    #[test]
+    fn active_character_obstacle_ties_use_identity_and_report_world_points() {
+        let capsule = CharacterCapsule {
+            center: WorldPos::new(0.0, 1.0, 0.0),
+            half_height: 0.5,
+            radius: 0.4,
+        };
+        let obstacle = |id| CharacterObstacle {
+            id,
+            center: WorldPos::new(2.0, 1.0, 0.0),
+            half_extents: WorldVec::new(0.5, 0.5, 0.5),
+            linear_velocity: WorldVec::ZERO,
+            angular_velocity: WorldVec::ZERO,
+        };
+        for obstacles in [[obstacle(9), obstacle(3)], [obstacle(3), obstacle(9)]] {
+            let hit = cast_character_capsule_against_obstacles(
+                capsule,
+                WorldVec::new(3.0, 0.0, 0.0),
+                0.0,
+                &obstacles,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(hit.source, CharacterCollisionSource::ActiveEntity(3));
+            assert!((hit.point.x - 1.5).abs() < 1.0e-6);
+        }
     }
 
     #[test]

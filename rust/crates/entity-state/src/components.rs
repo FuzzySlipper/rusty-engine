@@ -69,6 +69,62 @@ pub struct KinematicComponent {
 
 impl EntityComponent for KinematicComponent {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CharacterStance {
+    Standing,
+    Crouched,
+}
+
+/// Canonical inert continuation facts for one kinematic character.
+///
+/// Collision contacts and solver caches remain derived readouts. The stable
+/// support anchor and timing facts live here so downstream callers cannot lose
+/// them between direct service calls.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CharacterMotionComponent {
+    pub controlled_velocity: Vec3,
+    pub external_velocity: Vec3,
+    pub stance: CharacterStance,
+    pub grounded: bool,
+    pub jump_buffer_remaining: f32,
+    pub coyote_remaining: f32,
+    pub landing_lockout_remaining: f32,
+    pub support_entity: Option<core_ids::EntityId>,
+    pub support_local_anchor: Vec3,
+    pub support_previous_translation: Vec3,
+    pub support_previous_rotation: Quat,
+    pub support_point_velocity: Vec3,
+    pub fall_origin_y: f32,
+    pub peak_y: f32,
+    pub last_command_sequence: u64,
+    pub collision_world_hash: u64,
+}
+
+impl CharacterMotionComponent {
+    pub const fn at_rest(height: f32) -> Self {
+        Self {
+            controlled_velocity: Vec3::ZERO,
+            external_velocity: Vec3::ZERO,
+            stance: CharacterStance::Standing,
+            grounded: false,
+            jump_buffer_remaining: 0.0,
+            coyote_remaining: 0.0,
+            landing_lockout_remaining: 0.0,
+            support_entity: None,
+            support_local_anchor: Vec3::ZERO,
+            support_previous_translation: Vec3::ZERO,
+            support_previous_rotation: Quat::IDENTITY,
+            support_point_velocity: Vec3::ZERO,
+            fall_origin_y: height,
+            peak_y: height,
+            last_command_sequence: 0,
+            collision_world_hash: 0,
+        }
+    }
+}
+
+impl EntityComponent for CharacterMotionComponent {}
+
 /// The only non-kinematic body mode admitted by the first rigid-body contract.
 ///
 /// Static collision remains owned by canonical voxel/static-mesh projections and

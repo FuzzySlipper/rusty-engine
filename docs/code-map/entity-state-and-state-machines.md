@@ -28,6 +28,8 @@ relationships, activation, snapshots, and explicit state-machine instances.
 - [`entity-state/src/component.rs`](../../rust/crates/entity-state/src/component.rs)
 - [`entity-state/src/component/registration.rs`](../../rust/crates/entity-state/src/component/registration.rs)
 - [`entity-state/src/components.rs`](../../rust/crates/entity-state/src/components.rs)
+- [`entity-state/src/character_motion.rs`](../../rust/crates/entity-state/src/character_motion.rs)
+- [`entity-state/src/character_motion_publication.rs`](../../rust/crates/entity-state/src/character_motion_publication.rs)
 - [`entity-state/src/rigid_body.rs`](../../rust/crates/entity-state/src/rigid_body.rs)
 - [`entity-state/src/rigid_body_publication.rs`](../../rust/crates/entity-state/src/rigid_body_publication.rs)
 - [`entity-state/src/authoring.rs`](../../rust/crates/entity-state/src/authoring.rs)
@@ -72,6 +74,16 @@ relationships, activation, snapshots, and explicit state-machine instances.
   exception: it atomically replaces the exact transform and rigid-body slots
   prepared by the spatial service. It is bounded to 1,024 unique entities and
   validates every candidate and slot guard before writing.
+- `CharacterMotionComponent` is the built-in durable schema-1 inert state for
+  the named spatial character controller. It stores controlled/external
+  velocity, stance/grounding and jump timers, stable support continuation,
+  neutral fall-height facts, command sequence, and collision-world identity;
+  contacts and solver caches remain derived service readouts.
+- `replace_character_motion_state` is the narrow single-character publication
+  seam. It validates the complete candidate, requires exact Transform and
+  character-motion slot revisions, rejects legacy-kinematic/rigid-body,
+  parenting, and non-unit-scale conflicts, and atomically changes both slots
+  with one global revision advance or changes neither.
 
 ## Downstream extension pattern
 
@@ -146,6 +158,7 @@ snapshot restoration because those concurrency guards are instance-local.
 
 ```bash
 cargo test -p entity-state -p state-machine --locked
+cargo test -p entity-state character_motion --locked
 cargo clippy -p entity-state -p state-machine --all-targets --locked -- -D warnings
 ./scripts/verify.sh
 ```

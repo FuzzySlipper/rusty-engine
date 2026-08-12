@@ -647,6 +647,7 @@ fn register_builtin_components(
         )),
     )?;
     registry.register(crate::rigid_body::rigid_body_registration())?;
+    registry.register(crate::character_motion::character_motion_registration())?;
     Ok(())
 }
 
