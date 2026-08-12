@@ -576,7 +576,9 @@ pub enum VoxelProjectionError {
 mod tests {
     use super::*;
     use engine_spatial::{
-        MaterialVoxel, SurfaceMeshOptions, VoxelEdit, VoxelEditService, VoxelEditTransaction,
+        MaterialVoxel, SurfaceMeshOptions, VoxelChunkIdentity, VoxelChunkLeaseRegistry,
+        VoxelChunkPayload, VoxelChunkResidencyOperation, VoxelChunkResidencyService,
+        VoxelChunkResidencyTransaction, VoxelEdit, VoxelEditService, VoxelEditTransaction,
         VoxelSourceRevision,
     };
     use render_model::MaterialUvStrategy;
@@ -837,5 +839,119 @@ mod tests {
                 if *handle == root && value.translation == [2.0, 0.0, -1.0]
         )));
         assert_eq!(projector.root_handle("room"), Some(root));
+    }
+
+    #[test]
+    fn residency_admit_replace_and_evict_keep_exact_retained_handles() {
+        let mut scene = VoxelCollisionScene::from_material_voxels(1.0, 2, []).unwrap();
+        let materials = BTreeMap::from([(1, material(1))]);
+        let leases = VoxelChunkLeaseRegistry::default();
+        let mut projector = VoxelRenderProjector::new();
+        let project = |projector: &mut VoxelRenderProjector, scene: &VoxelCollisionScene| {
+            projector
+                .project(
+                    &[VoxelProjectionInstance {
+                        instance_id: "terrain".to_string(),
+                        asset_id: "voxel-object/terrain".to_string(),
+                        transform: Transform::IDENTITY,
+                        scene,
+                    }],
+                    &materials,
+                )
+                .unwrap()
+        };
+        project(&mut projector, &scene);
+        let chunk = VoxelChunkIdentity::new(0, 0, 0);
+        let untouched = VoxelChunkIdentity::new(2, 0, 0);
+        let payload = |filled_index: usize| {
+            let mut slots = vec![0; 8];
+            slots[filled_index] = 1;
+            VoxelChunkPayload::new([2; 3], slots)
+        };
+        VoxelChunkResidencyService::apply(
+            &mut scene,
+            &leases,
+            VoxelChunkResidencyTransaction {
+                expected_scene_source_revision: VoxelSourceRevision::INITIAL,
+                operations: &[
+                    VoxelChunkResidencyOperation::Admit {
+                        chunk,
+                        payload: payload(0),
+                    },
+                    VoxelChunkResidencyOperation::Admit {
+                        chunk: untouched,
+                        payload: payload(0),
+                    },
+                ],
+            },
+        )
+        .unwrap();
+        project(&mut projector, &scene);
+        let handle = projector.chunk_handle("terrain", chunk.to_array()).unwrap();
+        let untouched_handle = projector
+            .chunk_handle("terrain", untouched.to_array())
+            .unwrap();
+        let expected_content_hash = VoxelChunkResidencyService::resident_chunk(&scene, chunk)
+            .unwrap()
+            .content_hash;
+        let expected_scene_source_revision = scene.source_revision();
+        VoxelChunkResidencyService::apply(
+            &mut scene,
+            &leases,
+            VoxelChunkResidencyTransaction {
+                expected_scene_source_revision,
+                operations: &[VoxelChunkResidencyOperation::Replace {
+                    chunk,
+                    expected_content_hash,
+                    payload: payload(7),
+                }],
+            },
+        )
+        .unwrap();
+        let replaced = project(&mut projector, &scene);
+        assert_eq!(
+            projector.chunk_handle("terrain", chunk.to_array()),
+            Some(handle)
+        );
+        assert_eq!(
+            projector.chunk_handle("terrain", untouched.to_array()),
+            Some(untouched_handle)
+        );
+        assert_eq!(
+            replaced
+                .frame
+                .ops
+                .iter()
+                .filter(|operation| matches!(operation, RenderDiff::ReplaceMeshPayload { .. }))
+                .count(),
+            1
+        );
+
+        let expected_content_hash = VoxelChunkResidencyService::resident_chunk(&scene, chunk)
+            .unwrap()
+            .content_hash;
+        let expected_scene_source_revision = scene.source_revision();
+        VoxelChunkResidencyService::apply(
+            &mut scene,
+            &leases,
+            VoxelChunkResidencyTransaction {
+                expected_scene_source_revision,
+                operations: &[VoxelChunkResidencyOperation::Evict {
+                    chunk,
+                    expected_content_hash,
+                }],
+            },
+        )
+        .unwrap();
+        let evicted = project(&mut projector, &scene);
+        assert!(evicted.frame.ops.iter().any(|operation| matches!(
+            operation,
+            RenderDiff::Destroy { handle: actual } if *actual == handle
+        )));
+        assert_eq!(projector.chunk_handle("terrain", chunk.to_array()), None);
+        assert_eq!(
+            projector.chunk_handle("terrain", untouched.to_array()),
+            Some(untouched_handle)
+        );
     }
 }

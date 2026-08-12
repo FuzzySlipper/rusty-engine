@@ -3,8 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CollisionSceneError, MaterialVoxel, VoxelCollisionScene, VoxelEdit, VoxelEditApplyError,
-    VoxelEditDelta, VoxelEditReceipt, VoxelEditService, VoxelEditTransaction, VoxelSourceRevision,
+    CollisionSceneError, MaterialVoxel, SurfaceMeshOptions, VoxelCollisionScene, VoxelEdit,
+    VoxelEditApplyError, VoxelEditDelta, VoxelEditReceipt, VoxelEditService, VoxelEditTransaction,
+    VoxelSourceRevision,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +102,15 @@ pub struct VoxelEditHistoryRevertReceipt {
     pub revision_after: VoxelSourceRevision,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VoxelEditHistoryResetReceipt {
+    pub cursor_before: VoxelEditHistoryCursor,
+    pub invalidated_entries: usize,
+    pub invalidated_redo_entries: usize,
+    pub authority_hash_after: u64,
+    pub source_revision_after: VoxelSourceRevision,
+}
+
 #[derive(Debug)]
 pub struct PreparedVoxelHistoryRevert {
     expected_revision: VoxelSourceRevision,
@@ -176,6 +186,8 @@ pub struct VoxelEditHistory {
     pub(crate) base_voxel_size: f64,
     pub(crate) base_chunk_size: u32,
     pub(crate) base_voxels: Vec<MaterialVoxel>,
+    pub(crate) base_resident_chunks: Vec<[i64; 3]>,
+    pub(crate) base_mesh_options: SurfaceMeshOptions,
     pub(crate) base_hash: u64,
     pub(crate) entries: Vec<VoxelEditHistoryEntry>,
     pub(crate) cursor_index: usize,
@@ -189,6 +201,8 @@ pub(crate) struct VoxelEditHistoryParts {
     pub base_voxel_size: f64,
     pub base_chunk_size: u32,
     pub base_voxels: Vec<MaterialVoxel>,
+    pub base_resident_chunks: Vec<[i64; 3]>,
+    pub base_mesh_options: SurfaceMeshOptions,
     pub base_hash: u64,
     pub entries: Vec<VoxelEditHistoryEntry>,
     pub cursor_index: usize,
@@ -206,6 +220,8 @@ impl VoxelEditHistory {
             base_voxel_size: scene.voxel_size(),
             base_chunk_size: scene.chunk_size(),
             base_voxels: scene.material_voxels().to_vec(),
+            base_resident_chunks: scene.resident_chunk_coordinates(),
+            base_mesh_options: scene.mesh_options(),
             base_hash: scene.authority_hash(),
             entries: Vec::new(),
             cursor_index: 0,
@@ -225,6 +241,25 @@ impl VoxelEditHistory {
 
     pub fn cursor(&self) -> VoxelEditHistoryCursor {
         self.cursor_at(self.cursor_index)
+    }
+
+    pub fn reset_to_scene(&mut self, scene: &VoxelCollisionScene) -> VoxelEditHistoryResetReceipt {
+        let cursor_before = self.cursor();
+        let invalidated_entries = self.entries.len();
+        let invalidated_redo_entries = self.entries.len().saturating_sub(self.cursor_index);
+        let limits = self.limits;
+        *self = Self::with_limits(scene, limits);
+        VoxelEditHistoryResetReceipt {
+            cursor_before,
+            invalidated_entries,
+            invalidated_redo_entries,
+            authority_hash_after: scene.authority_hash(),
+            source_revision_after: scene.source_revision(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 
     pub fn apply(
@@ -330,11 +365,14 @@ impl VoxelEditHistory {
             .source_revision()
             .checked_next()
             .ok_or(VoxelEditHistoryError::RevisionExhausted)?;
-        let mut candidate = VoxelCollisionScene::from_material_voxels_at_revision(
+        let mut candidate = VoxelCollisionScene::from_material_voxels_at_revision_with_residents(
             self.base_voxel_size,
             self.base_chunk_size,
             material_voxels(&target_map),
+            self.base_resident_chunks.iter().copied(),
             target_revision,
+            self.base_mesh_options,
+            None,
         )
         .map_err(VoxelEditHistoryError::Rebuild)?;
         candidate.preserve_static_mesh_projection_from(scene);
@@ -447,6 +485,8 @@ impl VoxelEditHistory {
             base_voxel_size: parts.base_voxel_size,
             base_chunk_size: parts.base_chunk_size,
             base_voxels: parts.base_voxels,
+            base_resident_chunks: parts.base_resident_chunks,
+            base_mesh_options: parts.base_mesh_options,
             base_hash: parts.base_hash,
             entries: parts.entries,
             cursor_index: parts.cursor_index,
@@ -481,7 +521,7 @@ impl VoxelEditHistory {
         Ok(materials)
     }
 
-    fn ensure_scene_at_cursor(
+    pub(crate) fn ensure_scene_at_cursor(
         &self,
         scene: &VoxelCollisionScene,
     ) -> Result<(), VoxelEditHistoryError> {

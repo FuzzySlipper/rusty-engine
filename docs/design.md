@@ -473,6 +473,20 @@ stale publications reject before retained/backend mutation. The detailed lifecyc
 stopping point are fixed in
 [chunk-granular voxel mesh updates](topics/voxel/chunk-granular-updates.md).
 
+Canonical chunk residency is also caller-driven. `VoxelChunkResidencyService`
+accepts bounded batches of complete dense chunks with stable signed identities,
+exact scene and content-hash preconditions, and explicit admit, replace, or
+evict intent. It prepares canonical voxels and every collision, navigation, and
+mesh derivative away from live state, then rechecks source, static-collision,
+and lease generations before publishing one coherent revision. Instance-owned
+leases provide explicit pin evidence without defining a player radius or I/O
+policy. A nonempty global edit history must either reject residency change or
+be explicitly rebased to the newly published authority; undo never resurrects
+an evicted chunk. Empty resident chunks remain authority, while a last-solid
+ordinary edit does not implicitly evict them. Downstream retains all sourcing,
+streaming, scheduling, retention, and memory-pressure policy. See
+[canonical voxel chunk residency](topics/voxel/chunk-residency.md).
+
 ## Foundation and service crates
 
 The smaller `core-*` and `svc-*` crates are normal workspace packages, not an origin-oriented donor

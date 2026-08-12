@@ -27,6 +27,7 @@ from it.
 - [`engine-spatial/src/character_controller.rs`](../../rust/crates/engine-spatial/src/character_controller.rs)
 - [`engine-spatial/src/rigid_body.rs`](../../rust/crates/engine-spatial/src/rigid_body.rs)
 - [`engine-spatial/src/voxel_edit.rs`](../../rust/crates/engine-spatial/src/voxel_edit.rs)
+- [`engine-spatial/src/voxel_residency.rs`](../../rust/crates/engine-spatial/src/voxel_residency.rs)
 - [`engine-spatial/src/trigger.rs`](../../rust/crates/engine-spatial/src/trigger.rs)
 - [`svc-volume`](../../rust/crates/svc-volume)
 - [`svc-spatial`](../../rust/crates/svc-spatial)
@@ -44,7 +45,9 @@ from it.
 - [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
 - [Reconstructed voxel surfaces](../topics/voxel/reconstructed-surfaces.md)
 - [Chunk-granular voxel mesh updates](../topics/voxel/chunk-granular-updates.md)
+- [Canonical voxel chunk residency](../topics/voxel/chunk-residency.md)
 - [`measure-voxel-chunk-updates.sh`](../../scripts/measure-voxel-chunk-updates.sh)
+- [`measure-voxel-chunk-residency.sh`](../../scripts/measure-voxel-chunk-residency.sh)
 - [`verify-voxel-chunk-consumer.sh`](../../scripts/verify-voxel-chunk-consumer.sh)
 
 ## Public downstream surfaces
@@ -71,6 +74,11 @@ from it.
 - `VoxelEditReceipt` exposes the exact signed dirty mesh set plus rebuilt,
   reused, and removed counts. `VoxelMeshChunk` separates canonical source hash
   provenance from its complete neighbor-sensitive derived payload hash.
+- `VoxelChunkResidencyService::{prepare,commit,apply,apply_with_history}` owns
+  bounded, explicit complete-chunk admission, replacement, and eviction. Exact
+  source/content preconditions, instance-owned leases, and one selected history
+  policy preserve fail-atomic canonical and derived publication; downstream
+  retains sourcing, streaming, radius, scheduling, and memory-pressure policy.
 - The caller-driven rigid-body service consumes exact entity component slots
   plus this canonical voxel/static-triangle environment. Rapier caches are
   derived, bounded, and non-durable; complete accepted steps publish atomically
@@ -111,6 +119,7 @@ cargo run -p rusty-engine --example character_controller --locked
 ./scripts/measure-character-controller.sh
 ./scripts/verify-character-controller-consumer.sh /absolute/path/to/rusty-craftsurvive
 ./scripts/measure-voxel-chunk-updates.sh
+./scripts/measure-voxel-chunk-residency.sh
 ./scripts/verify-voxel-chunk-consumer.sh /absolute/path/to/rusty-craftsurvive
 cargo test -p svc-volume -p svc-spatial -p svc-collision -p svc-pathfinding -p svc-mesh --locked
 cargo clippy -p engine-spatial --all-targets --locked -- -D warnings

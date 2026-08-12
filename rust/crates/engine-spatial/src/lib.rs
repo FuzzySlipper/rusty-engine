@@ -22,6 +22,7 @@ mod voxel_history;
 mod voxel_history_codec;
 mod voxel_picking;
 mod voxel_primitive;
+mod voxel_residency;
 mod voxel_template;
 
 pub use character_controller::{
@@ -82,7 +83,8 @@ pub use voxel_history::{
     PreparedVoxelHistoryRevert, VoxelEditHistory, VoxelEditHistoryAppendReceipt,
     VoxelEditHistoryBounds, VoxelEditHistoryCursor, VoxelEditHistoryDiffOptions,
     VoxelEditHistoryDiffSummary, VoxelEditHistoryEntry, VoxelEditHistoryError,
-    VoxelEditHistoryLimits, VoxelEditHistoryMaterialDelta, VoxelEditHistoryRevertReceipt,
+    VoxelEditHistoryLimits, VoxelEditHistoryMaterialDelta, VoxelEditHistoryResetReceipt,
+    VoxelEditHistoryRevertReceipt,
 };
 pub use voxel_history_codec::{
     decode_voxel_edit_history, encode_voxel_edit_history, VoxelEditHistoryCodecError,
@@ -94,6 +96,15 @@ pub use voxel_picking::{
 pub use voxel_primitive::{
     VoxelBoxFill, VoxelPrimitive, VoxelPrimitiveEditService, VoxelPrimitiveError,
     VoxelPrimitiveMaterial, VoxelPrimitiveRequest, MAX_VOXEL_LINE_RADIUS,
+};
+pub use voxel_residency::{
+    PreparedVoxelChunkResidency, ResidentVoxelChunk, VoxelChunkContentHash, VoxelChunkIdentity,
+    VoxelChunkLeaseError, VoxelChunkLeaseEvidence, VoxelChunkLeaseId, VoxelChunkLeaseRegistry,
+    VoxelChunkPayload, VoxelChunkResidencyApplyError, VoxelChunkResidencyOperation,
+    VoxelChunkResidencyReceipt, VoxelChunkResidencyRejection, VoxelChunkResidencyService,
+    VoxelChunkResidencyTransaction, VoxelResidencyHistoryPolicy, MAX_RESIDENT_VOXEL_CHUNKS,
+    MAX_VOXEL_CHUNKS_PER_RESIDENCY_TRANSACTION, MAX_VOXEL_CHUNK_LEASES,
+    MAX_VOXEL_CHUNK_PAYLOAD_SLOTS_PER_TRANSACTION,
 };
 pub use voxel_template::{
     VoxelTemplate, VoxelTemplateEditService, VoxelTemplateError, VoxelTemplateRequest,
@@ -401,6 +412,43 @@ impl VoxelCollisionScene {
         )
     }
 
+    pub(crate) fn from_material_voxels_at_revision_with_residents(
+        voxel_size: f64,
+        chunk_size: u32,
+        voxels: impl IntoIterator<Item = MaterialVoxel>,
+        resident_chunks: impl IntoIterator<Item = [i64; 3]>,
+        source_revision: VoxelSourceRevision,
+        mesh_options: SurfaceMeshOptions,
+        incremental_mesh: Option<(&[VoxelMeshChunk], &BTreeSet<ChunkCoord>)>,
+    ) -> Result<Self, CollisionSceneError> {
+        let base = Self::build_at_revision(
+            voxel_size,
+            chunk_size,
+            voxels,
+            None,
+            source_revision,
+            mesh_options,
+            None,
+        )?;
+        let mut world = base.voxel_world;
+        let grid = world.grid();
+        for coordinate in resident_chunks {
+            let coordinate = ChunkCoord::new(coordinate[0], coordinate[1], coordinate[2]);
+            if world.get(coordinate).is_none() {
+                world.insert(coordinate, VoxelChunk::from_spec(&grid));
+            }
+        }
+        Self::build_from_voxel_world_at_revision(
+            voxel_size,
+            chunk_size,
+            world,
+            None,
+            source_revision,
+            mesh_options,
+            incremental_mesh,
+        )
+    }
+
     pub fn from_generated_room(config: GeneratedRoomConfig) -> Result<Self, CollisionSceneError> {
         let (voxels, record) = generate_room(config).map_err(CollisionSceneError::Generation)?;
         Self::build(
@@ -470,8 +518,6 @@ impl VoxelCollisionScene {
                 material_slot,
             })
             .collect();
-        let authority_hash = hash_material_voxels(&material_voxels);
-        let solid_voxels: Vec<_> = material_voxels.iter().map(|voxel| voxel.address).collect();
         let mut chunks = BTreeMap::new();
 
         for material_voxel in &material_voxels {
@@ -496,6 +542,52 @@ impl VoxelCollisionScene {
         for (coord, chunk) in chunks {
             voxel_world.insert(coord, chunk);
         }
+        Self::build_from_voxel_world_at_revision(
+            voxel_size,
+            chunk_size,
+            voxel_world,
+            generated_room,
+            source_revision,
+            mesh_options,
+            incremental_mesh,
+        )
+    }
+
+    pub(crate) fn build_from_voxel_world_at_revision(
+        voxel_size: f64,
+        chunk_size: u32,
+        voxel_world: VoxelWorld,
+        generated_room: Option<(GeneratedRoomConfig, GeneratedRoomRecord)>,
+        source_revision: VoxelSourceRevision,
+        mesh_options: SurfaceMeshOptions,
+        incremental_mesh: Option<(&[VoxelMeshChunk], &BTreeSet<ChunkCoord>)>,
+    ) -> Result<Self, CollisionSceneError> {
+        let grid = voxel_world.grid();
+        debug_assert_eq!(grid.voxel_size(), voxel_size);
+        debug_assert_eq!(grid.chunk_dims().to_array(), [chunk_size; 3]);
+        let mut material_voxels = Vec::new();
+        for (coordinate, chunk) in voxel_world.resident_chunks() {
+            for (local, value) in chunk.iter() {
+                let Some(material) = value.material() else {
+                    continue;
+                };
+                let voxel = MaterialVoxel {
+                    address: grid.chunk_local_to_voxel(coordinate, local).to_array(),
+                    material_slot: material.raw(),
+                };
+                validate_material_voxel(voxel)
+                    .map_err(CollisionSceneError::InvalidMaterialVoxel)?;
+                material_voxels.push(voxel);
+                if material_voxels.len() > MAX_SOLID_VOXELS {
+                    return Err(CollisionSceneError::TooManySolidVoxels {
+                        limit: MAX_SOLID_VOXELS,
+                    });
+                }
+            }
+        }
+        material_voxels.sort_unstable();
+        let authority_hash = hash_material_voxels(&material_voxels);
+        let solid_voxels = material_voxels.iter().map(|voxel| voxel.address).collect();
         let (mesh_chunks, rebuilt_chunks, reused_chunks, removed_chunks) =
             if let Some((previous, dirty)) = incremental_mesh {
                 build_mesh_chunks_incremental(&voxel_world, mesh_options, previous, dirty)?
@@ -602,6 +694,13 @@ impl VoxelCollisionScene {
 
     pub fn resident_chunk_count(&self) -> usize {
         self.voxel_world.resident_chunks().count()
+    }
+
+    pub fn resident_chunk_coordinates(&self) -> Vec<[i64; 3]> {
+        self.voxel_world
+            .resident_chunks()
+            .map(|(coordinate, _)| coordinate.to_array())
+            .collect()
     }
 
     pub fn projection_version(&self) -> u64 {
@@ -811,22 +910,26 @@ fn build_mesh_chunks(
         .resident_chunks()
         .map(|(coordinate, _)| coordinate)
         .collect();
-    coordinates
+    let chunks = coordinates
         .into_iter()
         .map(|coordinate| {
             let chunk = world.get(coordinate).expect("resident coordinate");
+            if chunk.is_empty() {
+                return Ok(None);
+            }
             let mesh = mesh_chunk_in_world_with_options(world, coordinate, options)
                 .expect("resident coordinate")
                 .map_err(CollisionSceneError::Mesh)?;
             let origin = grid.voxel_min_world(grid.chunk_origin_voxel(coordinate));
-            Ok(voxel_mesh_chunk(
+            Ok(Some(voxel_mesh_chunk(
                 coordinate,
                 origin,
                 chunk.content_hash().0,
                 mesh,
-            ))
+            )))
         })
-        .collect()
+        .collect::<Result<Vec<_>, CollisionSceneError>>()?;
+    Ok(chunks.into_iter().flatten().collect())
 }
 
 fn build_mesh_chunks_incremental(
@@ -848,6 +951,9 @@ fn build_mesh_chunks_incremental(
     let mut rebuilt = 0usize;
     let mut reused = 0usize;
     for (coordinate, chunk) in world.resident_chunks() {
+        if chunk.is_empty() {
+            continue;
+        }
         if !dirty.contains(&coordinate) {
             if let Some(previous) = previous_by_coord
                 .get(&coordinate)
@@ -872,9 +978,15 @@ fn build_mesh_chunks_incremental(
         ));
         rebuilt += 1;
     }
+    let current_coordinates: BTreeSet<_> = chunks
+        .iter()
+        .map(|chunk| ChunkCoord::new(chunk.chunk[0], chunk.chunk[1], chunk.chunk[2]))
+        .collect();
     let removed = previous_by_coord
         .keys()
-        .filter(|coordinate| dirty.contains(coordinate) && world.get(**coordinate).is_none())
+        .filter(|coordinate| {
+            dirty.contains(coordinate) && !current_coordinates.contains(coordinate)
+        })
         .count();
     Ok((chunks, rebuilt, reused, removed))
 }

@@ -452,10 +452,10 @@ impl VoxelEditService {
             .resident_chunks()
             .map(|(coordinate, _)| coordinate)
             .collect();
-        let new_resident: BTreeSet<_> = materials
-            .keys()
-            .map(|address| grid.voxel_to_chunk(VoxelCoord::new(address[0], address[1], address[2])))
-            .collect();
+        let mut new_resident = old_resident.clone();
+        new_resident.extend(materials.keys().map(|address| {
+            grid.voxel_to_chunk(VoxelCoord::new(address[0], address[1], address[2]))
+        }));
         let dirty_mesh_chunks = derive_dirty_mesh_chunks(
             grid,
             scene.mesh_options.mode,
@@ -469,11 +469,11 @@ impl VoxelEditService {
                 address,
                 material_slot,
             });
-        let mut rebuilt = VoxelCollisionScene::build_at_revision(
+        let mut rebuilt = VoxelCollisionScene::from_material_voxels_at_revision_with_residents(
             scene.voxel_size,
             scene.chunk_size,
             material_voxels,
-            None,
+            new_resident.iter().map(|coordinate| coordinate.to_array()),
             accepted.revision_after,
             scene.mesh_options,
             Some((&scene.mesh_chunks, &dirty_mesh_chunks)),

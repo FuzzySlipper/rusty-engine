@@ -93,6 +93,9 @@ world meaning, edit scheduling, materials, and residency policy. No browser,
 transport, generation, persistence, or streaming policy enters the Rust
 spatial contract.
 
+Explicit admit/replace/evict transactions, leases, and edit-history interaction
+are defined separately in [canonical voxel chunk residency](chunk-residency.md).
+
 ## Representative measurement
 
 Run:
