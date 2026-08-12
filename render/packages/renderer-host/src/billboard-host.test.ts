@@ -144,6 +144,101 @@ void test('billboard host creates updates localizes lays out and destroys multip
   assert.equal(container.elements[0]?.removed, true);
 });
 
+void test('billboard updates validate the merged structured layout before mutation', async () => {
+  const container = new FakeContainer();
+  const host = new RendererBillboardHost({
+    container,
+    createElement: () => new FakeElement(),
+    resolveEntityPosition: () => [0, 0, 0],
+    projectWorld: () => ({
+      xPixels: 100,
+      yPixels: 50,
+      depth: 0.5,
+      distance: 5,
+      insideViewport: true,
+      occluded: false,
+    }),
+  });
+  const legacy: BillboardDescriptor = {
+    ...descriptor(10),
+    content: {
+      kind: 'text',
+      localizationKey: 'indicator.legacy',
+      fallbackText: 'Legacy indicator',
+      arguments: [],
+    },
+  };
+  const structured = (fallbackText: string): BillboardDescriptor['content'] => ({
+    kind: 'structured',
+    indicator: {
+      label: { localizationKey: 'indicator.name', fallbackText },
+      icon: null,
+      accessibleLabel: { localizationKey: 'indicator.status', fallbackText: `${fallbackText} status` },
+      meters: [],
+      statusCues: [],
+      widthPixels: 120,
+      spacingPixels: 4,
+      alignment: 'center',
+      style: {
+        opacity: 1,
+        backing: [0, 0, 0, 0.5],
+        border: [0, 0, 0, 1],
+        radiusPixels: 4,
+      },
+    },
+  });
+  const layout: NonNullable<BillboardDescriptor['layout']> = {
+    priority: 10,
+    sizing: { kind: 'constantPixels' },
+    safeArea: { topPixels: 2, rightPixels: 2, bottomPixels: 2, leftPixels: 2 },
+    edgeBehavior: 'clamp',
+    overlapBehavior: 'stack',
+  };
+
+  const created = await host.applyPresentation(presentation([
+    operation(0, { op: 'create', handle: billboardHandle(1), descriptor: legacy }),
+  ]));
+  const element = container.elements[0];
+  assert.equal(created.applied, 1);
+  assert.equal(element?.textContent, 'Legacy indicator');
+
+  const rejected = await host.applyPresentation(presentation([
+    operation(0, {
+      op: 'update',
+      handle: billboardHandle(1),
+      patch: patch({ content: structured('Structured one') }),
+    }),
+  ]));
+  assert.equal(rejected.applied, 0);
+  assert.equal(rejected.diagnostics[0]?.code, 'invalidDescriptor');
+  assert.equal(rejected.readout.activeBillboards, 1);
+  assert.equal(container.elements[0], element);
+  assert.equal(element?.textContent, 'Legacy indicator');
+  assert.equal(element?.style.display, 'block');
+
+  const retried = await host.applyPresentation(presentation([
+    operation(0, {
+      op: 'update',
+      handle: billboardHandle(1),
+      patch: patch({ content: structured('Structured one'), layout }),
+    }),
+  ]));
+  assert.equal(retried.applied, 1);
+  assert.equal(element?.textContent, 'Structured one');
+  assert.equal(element?.style.display, 'flex');
+
+  const reused = await host.applyPresentation(presentation([
+    operation(0, {
+      op: 'update',
+      handle: billboardHandle(1),
+      patch: patch({ content: structured('Structured two') }),
+    }),
+  ]));
+  assert.equal(reused.applied, 1);
+  assert.equal(element?.textContent, 'Structured two');
+  assert.equal(element?.style.display, 'flex');
+});
+
 void test('billboard layers and distance culling are renderer-owned and do not alter descriptors', async () => {
   const container = new FakeContainer();
   let occluded = true;

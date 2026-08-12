@@ -400,6 +400,7 @@ export class RendererBillboardHost {
         `billboard host accepts at most ${MAX_SUBMITTED_BILLBOARDS} active descriptors`,
       );
     }
+    validateBillboardDescriptorInvariant(op.descriptor);
     const generation = this.#generation;
     await this.#prepareResources(op.descriptor);
     if (generation !== this.#generation) {
@@ -444,6 +445,7 @@ export class RendererBillboardHost {
       );
     }
     const descriptor = applyBillboardPatch(active.descriptor, op.patch);
+    validateBillboardDescriptorInvariant(descriptor);
     const generation = this.#generation;
     await this.#prepareResources(descriptor);
     if (generation !== this.#generation || this.#active.get(op.handle) !== active) {
@@ -669,6 +671,22 @@ function applyBillboardPatch(
     visible: patch.visible ?? descriptor.visible,
     ...(layout === undefined ? {} : { layout }),
   };
+}
+
+function validateBillboardDescriptorInvariant(descriptor: BillboardDescriptor): void {
+  if (descriptor.content.kind === 'structured') {
+    if (descriptor.layout === undefined) {
+      throw new RendererBillboardDescriptorError(
+        'structured billboard content requires a layout policy',
+      );
+    }
+    return;
+  }
+  if (descriptor.layout !== undefined) {
+    throw new RendererBillboardDescriptorError(
+      'billboard layout policy is only valid for structured content',
+    );
+  }
 }
 
 function indicatorHeight(descriptor: BillboardDescriptor): number {
@@ -996,11 +1014,16 @@ class RendererBillboardResourceError extends Error {
   }
 }
 
+class RendererBillboardDescriptorError extends Error {}
+
 function classifyBillboardHostError(
   error: unknown,
 ): BillboardProjectionDiagnostic['code'] {
   if (error instanceof RendererBillboardResourceError) {
     return error.code;
+  }
+  if (error instanceof RendererBillboardDescriptorError) {
+    return 'invalidDescriptor';
   }
   return 'hostFailure';
 }
