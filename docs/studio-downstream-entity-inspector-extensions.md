@@ -1,14 +1,21 @@
 # Typed downstream Entity inspector extensions
 
-Status: **implemented and promoted through two reviewed consumers**
+Status: **historical campaign evidence; superseded by the Engine-hosted Studio boundary**
 
 Decision task: Den `rusty-engine#6300`
 
-The exact revisions and manifest names in the audit below are historical
-certification evidence for this promoted boundary. Current downstream projects
-consume the adjacent Engine facade and use Engine-hosted Studio through
-`.rusty-studio.json`, project data, and a Rust adapter; these records are not
-dependency pin or freshness instructions.
+This document records the reviewed two-consumer extension campaign as history.
+Its downstream Studio application composition root, package pins, integration
+manifest, and external package-consumer gate are not the current architecture
+and must not be reintroduced as implementation or dependency guidance. The
+current boundary is owned by
+[`docs/topics/development/downstream-renderer-and-studio.md`](topics/development/downstream-renderer-and-studio.md): downstream projects use the
+adjacent `rusty-engine` facade and Engine-hosted Studio through
+`.rusty-studio.json`, project data, and a Rust adapter. Exact revisions below
+are reproducibility evidence for that historical campaign only.
+
+The corresponding Den ADR is archived. Do not treat the static downstream
+Studio application model below as a live extension API.
 
 This decision defines the smallest boundary by which a downstream Rust project can put one of its
 own entity components in Rusty Engine Studio's Entity inspector. Protocol 10 introduced the bounded
