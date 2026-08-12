@@ -1160,6 +1160,11 @@ export class RenderProjection {
           `publication ${frame.publication.stream} operationCount does not match frame`,
         );
       }
+      if (frame.publication.revision !== frame.publication.baseRevision + 1) {
+        throw new RenderProjectionError(
+          `publication gap for ${frame.publication.stream}; revision ${String(frame.publication.revision)} must immediately follow base ${String(frame.publication.baseRevision)}`,
+        );
+      }
       const previous = staged.#publishedRevisions.get(frame.publication.stream);
       if (previous !== undefined && frame.publication.revision <= previous) {
         throw new RenderProjectionError(
