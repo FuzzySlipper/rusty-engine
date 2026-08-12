@@ -86,7 +86,8 @@ impl VoxelRenderProjector {
                 continue;
             }
             if next.source_revision < previous.source_revision
-                || (next.source_revision == previous.source_revision && next != previous)
+                || (next.source_revision == previous.source_revision
+                    && (next.asset_id != previous.asset_id || next.chunks != previous.chunks))
             {
                 return Err(VoxelProjectionError::StaleSourceRevision {
                     instance: instance.clone(),
@@ -227,6 +228,7 @@ impl VoxelRenderProjector {
             .ok_or(VoxelProjectionError::PublicationRevisionExhausted)?;
         let frame = RenderFrameDiff::try_from_published_ops(
             stream.clone(),
+            self.publication_revision,
             publication_revision,
             operations,
         )
@@ -806,5 +808,34 @@ mod tests {
             })
         ));
         assert_eq!(projector.chunk_handle("room", [0, 0, 0]), handle);
+    }
+
+    #[test]
+    fn transform_only_update_does_not_require_a_voxel_revision() {
+        let scene = VoxelCollisionScene::from_solid_voxels(1.0, 4, [[0, 0, 0]]).unwrap();
+        let materials = BTreeMap::from([(1, material(1))]);
+        let mut projector = VoxelRenderProjector::new();
+        let instance = |translation| VoxelProjectionInstance {
+            instance_id: "room".to_string(),
+            asset_id: "voxel-object/room".to_string(),
+            transform: Transform {
+                translation,
+                ..Transform::IDENTITY
+            },
+            scene: &scene,
+        };
+        projector
+            .project(&[instance([0.0, 0.0, 0.0])], &materials)
+            .unwrap();
+        let root = projector.root_handle("room").unwrap();
+        let update = projector
+            .project(&[instance([2.0, 0.0, -1.0])], &materials)
+            .unwrap();
+        assert!(update.frame.ops.iter().any(|operation| matches!(
+            operation,
+            RenderDiff::Update { handle, transform: Some(value), .. }
+                if *handle == root && value.translation == [2.0, 0.0, -1.0]
+        )));
+        assert_eq!(projector.root_handle("room"), Some(root));
     }
 }

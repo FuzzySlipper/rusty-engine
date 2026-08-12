@@ -451,6 +451,7 @@ export interface RenderFrameDiff {
 
 export interface RenderFramePublication {
   readonly stream: string;
+  readonly baseRevision: number;
   readonly revision: number;
   readonly operationCount: number;
 }

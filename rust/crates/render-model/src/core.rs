@@ -496,6 +496,7 @@ pub struct RenderFrameDiff {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RenderFramePublication {
     pub stream: String,
+    pub base_revision: u64,
     pub revision: u64,
     pub operation_count: u32,
 }
@@ -527,6 +528,7 @@ impl RenderFrameDiff {
 
     pub fn try_from_published_ops(
         stream: impl Into<String>,
+        base_revision: u64,
         revision: u64,
         ops: Vec<RenderDiff>,
     ) -> Result<Self, RenderFrameError> {
@@ -539,6 +541,7 @@ impl RenderFrameDiff {
             schema_version: RENDER_FRAME_SCHEMA_VERSION,
             publication: Some(RenderFramePublication {
                 stream: stream.into(),
+                base_revision,
                 revision,
                 operation_count,
             }),
@@ -559,8 +562,19 @@ impl RenderFrameDiff {
             if publication.stream.trim().is_empty() || publication.stream.len() > 256 {
                 return Err(RenderFrameError::InvalidPublicationStream);
             }
-            if publication.revision > 9_007_199_254_740_991 {
+            if publication.base_revision > JSON_SAFE_U64_MAX {
                 return Err(RenderFrameError::PublicationRevisionNotJsonSafe {
+                    revision: publication.base_revision,
+                });
+            }
+            if publication.revision > JSON_SAFE_U64_MAX {
+                return Err(RenderFrameError::PublicationRevisionNotJsonSafe {
+                    revision: publication.revision,
+                });
+            }
+            if publication.base_revision.checked_add(1) != Some(publication.revision) {
+                return Err(RenderFrameError::InvalidPublicationRevisionStep {
+                    base_revision: publication.base_revision,
                     revision: publication.revision,
                 });
             }
@@ -617,6 +631,10 @@ pub enum RenderFrameError {
     PublicationRevisionNotJsonSafe {
         revision: u64,
     },
+    InvalidPublicationRevisionStep {
+        base_revision: u64,
+        revision: u64,
+    },
     PublicationOperationCount {
         expected: u32,
         actual: usize,
@@ -653,6 +671,20 @@ mod tests {
         let json = frame.encode_json().unwrap();
         assert!(json.contains("\"schemaVersion\": 1"));
         assert_eq!(RenderFrameDiff::decode_json(&json).unwrap(), frame);
+    }
+
+    #[test]
+    fn published_frame_requires_one_exact_revision_step() {
+        let frame = RenderFrameDiff::try_from_published_ops("voxel:test", 4, 5, Vec::new())
+            .expect("one exact step");
+        assert_eq!(frame.publication.unwrap().base_revision, 4);
+        assert!(matches!(
+            RenderFrameDiff::try_from_published_ops("voxel:test", 4, 6, Vec::new()),
+            Err(RenderFrameError::InvalidPublicationRevisionStep {
+                base_revision: 4,
+                revision: 6,
+            })
+        ));
     }
 
     #[test]

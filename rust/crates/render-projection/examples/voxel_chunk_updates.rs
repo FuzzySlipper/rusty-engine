@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, time::Instant};
+use std::{collections::BTreeMap, path::PathBuf, time::Instant};
 
 use engine_spatial::{
     MaterialVoxel, SurfaceMeshOptions, SurfaceMode, VoxelCollisionScene, VoxelEdit,
@@ -47,9 +47,9 @@ fn measure(mode: SurfaceMode, scenario: &str, edits: &[VoxelEdit]) {
         "benchmark:{}:{scenario}:full",
         mode.as_str()
     ));
-    project(&mut full_projector, &full_scene, "terrain-v1", &materials);
+    let full_base = project(&mut full_projector, &full_scene, "terrain-v1", &materials);
     let full_started = Instant::now();
-    let full_candidate = fixture(options);
+    let full_candidate = edited_fixture(options, edits);
     let full = project(
         &mut full_projector,
         &full_candidate,
@@ -61,16 +61,17 @@ fn measure(mode: SurfaceMode, scenario: &str, edits: &[VoxelEdit]) {
         &format!("{scenario}_whole_replacement"),
         full_started.elapsed().as_micros(),
         &full.frame,
-        full_scene.mesh_chunks().len(),
+        full_candidate.mesh_chunks().len(),
         0,
     );
+    write_frame_pair(mode, scenario, "whole", &full_base.frame, &full.frame);
 
     let mut scene = fixture(options);
     let mut projector = VoxelRenderProjector::with_publication_stream(format!(
         "benchmark:{}:{scenario}:incremental",
         mode.as_str()
     ));
-    project(&mut projector, &scene, "terrain-v1", &materials);
+    let incremental_base = project(&mut projector, &scene, "terrain-v1", &materials);
     let incremental_started = Instant::now();
     let expected_revision = scene.source_revision();
     let receipt = VoxelEditService::apply(
@@ -90,22 +91,87 @@ fn measure(mode: SurfaceMode, scenario: &str, edits: &[VoxelEdit]) {
         receipt.rebuilt_mesh_chunks,
         receipt.reused_mesh_chunks,
     );
+    write_frame_pair(
+        mode,
+        scenario,
+        "incremental",
+        &incremental_base.frame,
+        &incremental.frame,
+    );
+}
+
+fn write_frame_pair(
+    mode: SurfaceMode,
+    scenario: &str,
+    path: &str,
+    base: &render_model::RenderFrameDiff,
+    update: &render_model::RenderFrameDiff,
+) {
+    let Ok(directory) = std::env::var("VOXEL_BENCH_FRAME_DIR") else {
+        return;
+    };
+    let output = PathBuf::from(directory).join(format!("{}-{scenario}-{path}.json", mode.as_str()));
+    let bytes = serde_json::to_vec(&serde_json::json!({
+        "base": base,
+        "update": update,
+    }))
+    .expect("benchmark frame pair JSON");
+    std::fs::write(output, bytes).expect("write benchmark frame pair");
 }
 
 fn fixture(options: SurfaceMeshOptions) -> VoxelCollisionScene {
-    let voxels = (0..64)
+    VoxelCollisionScene::from_material_voxels_with_mesh_options(
+        1.0,
+        16,
+        fixture_voxels()
+            .into_iter()
+            .map(|(address, material_slot)| MaterialVoxel {
+                address,
+                material_slot,
+            }),
+        options,
+    )
+    .expect("representative terrain fixture")
+}
+
+fn fixture_voxels() -> BTreeMap<[i64; 3], u16> {
+    (0..64)
         .flat_map(|x| {
             (0..64).flat_map(move |z| {
                 let height = 3 + ((x * 17 + z * 31 + (x ^ z)) % 5);
-                (0..=height).map(move |y| MaterialVoxel {
-                    address: [x, y, z],
-                    material_slot: 1,
-                })
+                (0..=height).map(move |y| ([x, y, z], 1))
             })
         })
-        .collect::<Vec<_>>();
-    VoxelCollisionScene::from_material_voxels_with_mesh_options(1.0, 16, voxels, options)
-        .expect("representative terrain fixture")
+        .collect()
+}
+
+fn edited_fixture(options: SurfaceMeshOptions, edits: &[VoxelEdit]) -> VoxelCollisionScene {
+    let mut voxels = fixture_voxels();
+    for edit in edits {
+        match *edit {
+            VoxelEdit::Set {
+                address,
+                material_slot,
+            } => {
+                voxels.insert(address, material_slot);
+            }
+            VoxelEdit::Clear { address } => {
+                voxels.remove(&address);
+            }
+        }
+    }
+    VoxelCollisionScene::from_material_voxels_with_mesh_options(
+        1.0,
+        16,
+        voxels
+            .into_iter()
+            .map(|(address, material_slot)| MaterialVoxel {
+                address,
+                material_slot,
+            }),
+        options,
+    )
+    .expect("post-edit whole-scene fixture")
 }
 
 fn project(

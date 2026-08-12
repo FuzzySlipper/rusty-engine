@@ -39,16 +39,19 @@ Whole-chunk replacement is the selected granularity. The representative
 measurements below do not justify buffer-subrange patching.
 
 Voxel frames carry an optional renderer-neutral publication stamp with a stable
-stream, monotonic projector revision, and exact operation count. The retained
+stream, exact base and next projector revisions, and operation count. The retained
 TypeScript projection and Three backend stage the whole frame, reject clipped
-operation counts and stale/duplicate revisions, then commit once. Replaced and
+operation counts, dropped revisions, and stale/duplicate revisions, then commit once. Replaced and
 destroyed Three geometry follows the existing exact disposal path. Unstamped
 legacy/general render frames remain compatible and retain their prior ordering
 contract.
 
-Callers that compose more than one voxel projector into one renderer should
-construct each projector with a distinct stable publication stream. The stream
-orders presentation only; it never authorizes voxel edits or becomes world
+A renderer projection should consume one `VoxelRenderProjector`. Distinct
+projectors currently allocate from the same voxel handle namespace, so a stable
+publication stream does not make their handles composable. One caller-owned
+projector may project multiple voxel instances; a future caller-unique handle
+namespace would be required before independent projectors can share a retained
+renderer. Publication ordering never authorizes voxel edits or becomes world
 authority.
 
 ## Atomicity and ownership
@@ -99,19 +102,33 @@ Run:
 ```
 
 The release probe uses a deterministic 64 by 64 varied-height terrain split
-into sixteen 16-cube chunks. `elapsed_us` covers full scene rebuild plus
-projection for the baseline and edit apply plus projection for the incremental
-path. `encoded_bytes` and operation counts measure the renderer-neutral JSON
+into sixteen 16-cube chunks. Both paths build the same post-edit authority:
+`elapsed_us` covers whole post-edit scene rebuild plus projection for the
+baseline and edit apply plus projection for the incremental path.
+`encoded_bytes` and operation counts measure the renderer-neutral JSON
 control/payload frame. One run on the development host produced:
 
 | Mode | Edit | Whole us / bytes / replacements | Incremental us / bytes / replacements | Rebuilt / reused |
 |---|---|---:|---:|---:|
-| greedyCubes | one cell | 23,451 / 1,482,582 / 16 | 19,149 / 275,170 / 3 | 3 / 13 |
-| greedyCubes | 4x4x4 | 19,101 / 1,482,587 / 16 | 18,378 / 273,115 / 3 | 3 / 13 |
-| marchingCubes | one cell | 51,229 / 5,616,559 / 16 | 29,610 / 661,589 / 2 | 4 / 12 |
-| marchingCubes | 4x4x4 | 52,005 / 5,616,564 / 16 | 25,708 / 988,448 / 3 | 4 / 12 |
-| dualContouring | one cell | 89,281 / 7,080,890 / 16 | 40,292 / 2,437,053 / 4 | 4 / 12 |
-| dualContouring | 4x4x4 | 91,358 / 7,080,895 / 16 | 44,008 / 2,435,970 / 4 | 4 / 12 |
+| greedyCubes | one cell | 25,522 / 1,483,643 / 16 | 21,250 / 275,187 / 3 | 3 / 13 |
+| greedyCubes | 4x4x4 | 20,897 / 1,481,588 / 16 | 16,010 / 273,132 / 3 | 3 / 13 |
+| marchingCubes | one cell | 51,451 / 5,618,487 / 16 | 31,082 / 661,606 / 2 | 4 / 12 |
+| marchingCubes | 4x4x4 | 51,082 / 5,615,530 / 16 | 26,940 / 988,465 / 3 | 4 / 12 |
+| dualContouring | one cell | 111,562 / 7,082,607 / 16 | 55,487 / 2,437,070 / 4 | 4 / 12 |
+| dualContouring | 4x4x4 | 103,031 / 7,079,820 / 16 | 42,852 / 2,435,987 / 4 | 4 / 12 |
+
+The same script decodes and applies each update through the public TypeScript
+retained projection and `ThreeRenderer`. It reports the median of seven fresh
+applications after each base frame is already resident:
+
+| Mode | Edit | Retained whole / incremental us | Three whole / incremental us |
+|---|---|---:|---:|
+| greedyCubes | one cell | 18,135 / 3,055 | 27,263 / 5,050 |
+| greedyCubes | 4x4x4 | 19,511 / 3,084 | 29,633 / 4,966 |
+| marchingCubes | one cell | 113,709 / 12,984 | 176,681 / 19,994 |
+| marchingCubes | 4x4x4 | 107,637 / 19,413 | 171,549 / 29,314 |
+| dualContouring | one cell | 121,799 / 39,427 | 195,226 / 64,246 |
+| dualContouring | 4x4x4 | 146,524 / 41,673 | 216,477 / 67,934 |
 
 Timings are characterization rather than a hardware-independent budget. The
 stable result is the bounded application work: unrelated chunks preserve

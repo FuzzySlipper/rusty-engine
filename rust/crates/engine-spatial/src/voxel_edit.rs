@@ -582,17 +582,20 @@ fn derive_dirty_mesh_chunks(
         let mut z_offsets = vec![0];
         if local.x == 0 {
             x_offsets.push(-1);
-        } else if local.x + 1 == width {
+        }
+        if local.x + 1 == width {
             x_offsets.push(1);
         }
         if local.y == 0 {
             y_offsets.push(-1);
-        } else if local.y + 1 == height {
+        }
+        if local.y + 1 == height {
             y_offsets.push(1);
         }
         if local.z == 0 {
             z_offsets.push(-1);
-        } else if local.z + 1 == depth {
+        }
+        if local.z + 1 == depth {
             z_offsets.push(1);
         }
         if surface_mode == SurfaceMode::GreedyCubes {

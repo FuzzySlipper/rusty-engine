@@ -20,13 +20,21 @@ export function decodeRenderFrameDiff(input: unknown): RenderFrameDiff {
     const publication = record(
       frame['publication'],
       '$.publication',
-      ['stream', 'revision', 'operationCount'],
+      ['stream', 'baseRevision', 'revision', 'operationCount'],
     );
     const stream = text(publication['stream'], '$.publication.stream');
     if (stream.trim().length === 0 || stream.length > 256) {
       fail('$.publication.stream', 'must contain 1..=256 characters');
     }
-    integer(publication['revision'], '$.publication.revision', 0, JSON_SAFE_INTEGER_MAX);
+    const baseRevision = integer(
+      publication['baseRevision'], '$.publication.baseRevision', 0, JSON_SAFE_INTEGER_MAX,
+    );
+    const revision = integer(
+      publication['revision'], '$.publication.revision', 0, JSON_SAFE_INTEGER_MAX,
+    );
+    if (revision !== baseRevision + 1) {
+      fail('$.publication.revision', 'must immediately follow baseRevision');
+    }
     integer(publication['operationCount'], '$.publication.operationCount', 0, 4_294_967_295);
     if (publication['operationCount'] !== ops.length) {
       fail('$.publication.operationCount', `must equal ops length ${String(ops.length)}`);

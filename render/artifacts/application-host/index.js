@@ -15,10 +15,13 @@ function a(e) {
 	if (t.publication !== void 0) {
 		let e = j(t.publication, "$.publication", [
 			"stream",
+			"baseRevision",
 			"revision",
 			"operationCount"
 		]), i = ze(e.stream, "$.publication.stream");
-		(i.trim().length === 0 || i.length > 256) && B("$.publication.stream", "must contain 1..=256 characters"), L(e.revision, "$.publication.revision", 0, r), L(e.operationCount, "$.publication.operationCount", 0, 4294967295), e.operationCount !== n.length && B("$.publication.operationCount", `must equal ops length ${String(n.length)}`);
+		(i.trim().length === 0 || i.length > 256) && B("$.publication.stream", "must contain 1..=256 characters");
+		let a = L(e.baseRevision, "$.publication.baseRevision", 0, r);
+		L(e.revision, "$.publication.revision", 0, r) !== a + 1 && B("$.publication.revision", "must immediately follow baseRevision"), L(e.operationCount, "$.publication.operationCount", 0, 4294967295), e.operationCount !== n.length && B("$.publication.operationCount", `must equal ops length ${String(n.length)}`);
 	}
 	return n.forEach((e, t) => s(e, `$.ops[${String(t)}]`)), e;
 }
@@ -1841,6 +1844,8 @@ var tt, V = class extends Error {
 			if (e.publication.operationCount !== e.ops.length) throw new V(`publication ${e.publication.stream} operationCount does not match frame`);
 			let n = t.#c.get(e.publication.stream);
 			if (n !== void 0 && e.publication.revision <= n) throw new V(`stale publication ${e.publication.stream} revision ${String(e.publication.revision)}; latest is ${String(n)}`);
+			let r = n ?? 0;
+			if (e.publication.baseRevision !== r) throw new V(`publication gap for ${e.publication.stream}; expected base ${String(r)}, received ${String(e.publication.baseRevision)}`);
 			t.#c.set(e.publication.stream, e.publication.revision);
 		}
 		let n = [];

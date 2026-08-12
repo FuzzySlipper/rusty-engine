@@ -1166,6 +1166,12 @@ export class RenderProjection {
           `stale publication ${frame.publication.stream} revision ${String(frame.publication.revision)}; latest is ${String(previous)}`,
         );
       }
+      const expectedBase = previous ?? 0;
+      if (frame.publication.baseRevision !== expectedBase) {
+        throw new RenderProjectionError(
+          `publication gap for ${frame.publication.stream}; expected base ${String(expectedBase)}, received ${String(frame.publication.baseRevision)}`,
+        );
+      }
       staged.#publishedRevisions.set(frame.publication.stream, frame.publication.revision);
     }
     const instructions: RenderProjectionInstruction[] = [];

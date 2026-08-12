@@ -804,7 +804,7 @@ void test('published chunk frame replaces only changed geometry and rejects stal
   const unchanged = renderHandle(92);
   renderer.applyFrame({
     schemaVersion: 1,
-    publication: { stream: 'voxel:terrain', revision: 1, operationCount: 4 },
+    publication: { stream: 'voxel:terrain', baseRevision: 0, revision: 1, operationCount: 4 },
     ops: [
       createDiff(91, cubeNode('changed-chunk')),
       { op: 'replaceMeshPayload', handle: changed, payload: quadPayload() },
@@ -821,7 +821,7 @@ void test('published chunk frame replaces only changed geometry and rejects stal
 
   renderer.applyFrame({
     schemaVersion: 1,
-    publication: { stream: 'voxel:terrain', revision: 2, operationCount: 1 },
+    publication: { stream: 'voxel:terrain', baseRevision: 1, revision: 2, operationCount: 1 },
     ops: [{ op: 'replaceMeshPayload', handle: changed, payload: quadPayload() }],
   });
   assert.notEqual(changedMesh.geometry, changedBefore);
@@ -831,7 +831,7 @@ void test('published chunk frame replaces only changed geometry and rejects stal
   const changedAfter = changedMesh.geometry;
   assert.throws(() => renderer.applyFrame({
     schemaVersion: 1,
-    publication: { stream: 'voxel:terrain', revision: 1, operationCount: 1 },
+    publication: { stream: 'voxel:terrain', baseRevision: 0, revision: 1, operationCount: 1 },
     ops: [{ op: 'replaceMeshPayload', handle: changed, payload: quadPayload() }],
   }), /stale publication/u);
   assert.equal(changedMesh.geometry, changedAfter);

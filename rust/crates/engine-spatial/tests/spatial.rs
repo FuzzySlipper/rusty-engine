@@ -567,6 +567,39 @@ fn greedy_dirty_halo_is_face_only_while_reconstructed_modes_include_edges_and_co
 }
 
 #[test]
+fn unit_chunks_dirty_both_signed_seam_neighbors() {
+    for mode in [
+        SurfaceMode::GreedyCubes,
+        SurfaceMode::MarchingCubes,
+        SurfaceMode::DualContouring,
+    ] {
+        let mut scene = VoxelCollisionScene::from_solid_voxels_with_mesh_options(
+            1.0,
+            1,
+            [[-1, 0, 0], [0, 0, 0], [1, 0, 0]],
+            SurfaceMeshOptions {
+                mode,
+                ..SurfaceMeshOptions::default()
+            },
+        )
+        .unwrap();
+        let receipt = VoxelEditService::apply(
+            &mut scene,
+            VoxelEditTransaction {
+                expected_revision: VoxelSourceRevision::INITIAL,
+                edits: &[VoxelEdit::Clear { address: [0, 0, 0] }],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            receipt.dirty_mesh_chunks,
+            vec![[-1, 0, 0], [0, 0, 0], [1, 0, 0]],
+            "{mode:?}"
+        );
+    }
+}
+
+#[test]
 fn incremental_mesh_build_failure_leaves_authority_and_chunks_unchanged() {
     let limits = SurfaceMeshLimits {
         max_vertices: 8,

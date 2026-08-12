@@ -317,7 +317,7 @@ void test('published frames reject clipping and stale revision without retained 
   const projection = new RenderProjection();
   projection.applyFrame({
     schemaVersion: 1,
-    publication: { stream: 'voxel:terrain', revision: 1, operationCount: 1 },
+    publication: { stream: 'voxel:terrain', baseRevision: 0, revision: 1, operationCount: 1 },
     ops: [createPrimitive(21, 'terrain-chunk')],
   });
   const before = projection.snapshot();
@@ -325,7 +325,7 @@ void test('published frames reject clipping and stale revision without retained 
   assert.throws(
     () => projection.applyFrame({
       schemaVersion: 1,
-      publication: { stream: 'voxel:terrain', revision: 2, operationCount: 2 },
+      publication: { stream: 'voxel:terrain', baseRevision: 1, revision: 2, operationCount: 2 },
       ops: [{
         op: 'update', handle: renderHandle(21), transform: null, material: null,
         visible: false, metadata: null,
@@ -337,13 +337,22 @@ void test('published frames reject clipping and stale revision without retained 
   assert.throws(
     () => projection.applyFrame({
       schemaVersion: 1,
-      publication: { stream: 'voxel:terrain', revision: 1, operationCount: 1 },
+      publication: { stream: 'voxel:terrain', baseRevision: 0, revision: 1, operationCount: 1 },
       ops: [{
         op: 'update', handle: renderHandle(21), transform: null, material: null,
         visible: false, metadata: null,
       }],
     }),
     /stale publication/u,
+  );
+  assert.deepEqual(projection.snapshot(), before);
+  assert.throws(
+    () => projection.applyFrame({
+      schemaVersion: 1,
+      publication: { stream: 'voxel:terrain', baseRevision: 2, revision: 3, operationCount: 0 },
+      ops: [],
+    }),
+    /publication gap/u,
   );
   assert.deepEqual(projection.snapshot(), before);
 });
