@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use engine_spatial::{VoxelCollisionScene, VoxelMeshChunk};
+use engine_spatial::{SurfaceMode, VoxelCollisionScene, VoxelMeshChunk};
 use render_model::{
     Geometry, Material, MaterialDescriptorError, MeshAttribute, MeshAttributeKind,
     MeshAttributeName, MeshBoundsDescriptor, MeshBufferLayout, MeshDescriptorError,
@@ -44,6 +44,8 @@ pub struct VoxelRenderProjector {
     registry: StableHandleRegistry<VoxelRenderKey>,
     last_instances: BTreeMap<String, InstanceSnapshot>,
     last_materials: BTreeMap<u16, RenderMaterialDescriptor>,
+    publication_stream: Option<String>,
+    publication_revision: u64,
 }
 
 impl Default for VoxelRenderProjector {
@@ -58,6 +60,15 @@ impl VoxelRenderProjector {
             registry: StableHandleRegistry::new(RenderHandleNamespace::VOXEL),
             last_instances: BTreeMap::new(),
             last_materials: BTreeMap::new(),
+            publication_stream: None,
+            publication_revision: 0,
+        }
+    }
+
+    pub fn with_publication_stream(stream: impl Into<String>) -> Self {
+        Self {
+            publication_stream: Some(stream.into()),
+            ..Self::new()
         }
     }
 
@@ -67,6 +78,23 @@ impl VoxelRenderProjector {
         materials: &BTreeMap<u16, RenderMaterialDescriptor>,
     ) -> Result<VoxelProjectionResult, VoxelProjectionError> {
         let current = validate_and_snapshot(instances, materials)?;
+        for (instance, next) in &current {
+            let Some(previous) = self.last_instances.get(instance) else {
+                continue;
+            };
+            if next.asset_id != previous.asset_id {
+                continue;
+            }
+            if next.source_revision < previous.source_revision
+                || (next.source_revision == previous.source_revision && next != previous)
+            {
+                return Err(VoxelProjectionError::StaleSourceRevision {
+                    instance: instance.clone(),
+                    previous: previous.source_revision,
+                    candidate: next.source_revision,
+                });
+            }
+        }
         let mut registry = self.registry.clone();
         let mut operations = Vec::new();
 
@@ -189,11 +217,25 @@ impl VoxelRenderProjector {
             }
         }
 
-        let frame =
-            RenderFrameDiff::try_from_ops(operations).map_err(VoxelProjectionError::Frame)?;
+        let stream = self
+            .publication_stream
+            .clone()
+            .unwrap_or_else(|| voxel_publication_stream(current.keys()));
+        let publication_revision = self
+            .publication_revision
+            .checked_add(1)
+            .ok_or(VoxelProjectionError::PublicationRevisionExhausted)?;
+        let frame = RenderFrameDiff::try_from_published_ops(
+            stream.clone(),
+            publication_revision,
+            operations,
+        )
+        .map_err(VoxelProjectionError::Frame)?;
         self.registry = registry;
         self.last_instances = current;
         self.last_materials = materials.clone();
+        self.publication_stream = Some(stream);
+        self.publication_revision = publication_revision;
         let source_revisions = self
             .last_instances
             .iter()
@@ -223,6 +265,23 @@ impl VoxelRenderProjector {
             instance: instance_id.to_string(),
             chunk,
         })
+    }
+}
+
+fn voxel_publication_stream<'a>(instances: impl Iterator<Item = &'a String>) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut empty = true;
+    for instance in instances {
+        empty = false;
+        for byte in instance.as_bytes().iter().copied().chain([0xff]) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    if empty {
+        "voxel:default".to_string()
+    } else {
+        format!("voxel:{hash:016x}")
     }
 }
 
@@ -289,13 +348,30 @@ fn validate_and_snapshot(
                 },
             );
         }
-        if let Some(slot) = used_slots
-            .into_iter()
-            .find(|slot| !materials.contains_key(slot))
-        {
+        if let Some(slot) = used_slots.iter().find(|slot| !materials.contains_key(slot)) {
             return Err(VoxelProjectionError::MissingMaterial {
                 instance: instance.instance_id.clone(),
+                slot: *slot,
+            });
+        }
+        if let Some((chunk, slot)) = instance.scene.mesh_chunks().iter().find_map(|chunk| {
+            if chunk.surface_mode == SurfaceMode::GreedyCubes {
+                return None;
+            }
+            chunk.groups.iter().find_map(|group| {
+                materials
+                    .get(&group.material_slot)
+                    .filter(|material| {
+                        material.texture.is_some() || material.voxel_surface.is_some()
+                    })
+                    .map(|_| (chunk, group.material_slot))
+            })
+        }) {
+            return Err(VoxelProjectionError::TexturedReconstructedSurface {
+                instance: instance.instance_id.clone(),
+                chunk: chunk.chunk,
                 slot,
+                mode: chunk.surface_mode,
             });
         }
         current.insert(
@@ -378,28 +454,31 @@ fn chunk_node(instance_id: &str, chunk: &VoxelMeshChunk) -> RenderNode {
 }
 
 pub fn voxel_mesh_payload(chunk: &VoxelMeshChunk) -> MeshPayloadDescriptor {
+    let mut attributes = vec![
+        MeshAttribute {
+            name: MeshAttributeName::Position,
+            components: 3,
+            kind: MeshAttributeKind::F32,
+        },
+        MeshAttribute {
+            name: MeshAttributeName::Normal,
+            components: 3,
+            kind: MeshAttributeKind::F32,
+        },
+    ];
+    if chunk.surface_mode.supports_voxel_tile_coordinates() {
+        attributes.push(MeshAttribute {
+            name: MeshAttributeName::Uv,
+            components: 2,
+            kind: MeshAttributeKind::F32,
+        });
+    }
     MeshPayloadDescriptor {
         layout: MeshBufferLayout {
             vertex_count: chunk.vertices,
             index_count: chunk.indices.len() as u32,
             index_width: MeshIndexWidth::U32,
-            attributes: vec![
-                MeshAttribute {
-                    name: MeshAttributeName::Position,
-                    components: 3,
-                    kind: MeshAttributeKind::F32,
-                },
-                MeshAttribute {
-                    name: MeshAttributeName::Normal,
-                    components: 3,
-                    kind: MeshAttributeKind::F32,
-                },
-                MeshAttribute {
-                    name: MeshAttributeName::Uv,
-                    components: 2,
-                    kind: MeshAttributeKind::F32,
-                },
-            ],
+            attributes,
         },
         groups: chunk
             .groups
@@ -417,7 +496,10 @@ pub fn voxel_mesh_payload(chunk: &VoxelMeshChunk) -> MeshPayloadDescriptor {
         source: MeshPayloadSource::Inline {
             positions: chunk.positions.clone(),
             normals: chunk.normals.clone(),
-            uvs: Some(chunk.tile_coordinates.clone()),
+            uvs: chunk
+                .surface_mode
+                .supports_voxel_tile_coordinates()
+                .then(|| chunk.tile_coordinates.clone()),
             indices: chunk.indices.clone(),
         },
         provenance: MeshProvenance::VoxelChunk,
@@ -467,11 +549,23 @@ pub enum VoxelProjectionError {
         instance: String,
         slot: u16,
     },
+    TexturedReconstructedSurface {
+        instance: String,
+        chunk: [i64; 3],
+        slot: u16,
+        mode: SurfaceMode,
+    },
     InvalidMesh {
         instance: String,
         chunk: [i64; 3],
         source: MeshDescriptorError,
     },
+    StaleSourceRevision {
+        instance: String,
+        previous: u64,
+        candidate: u64,
+    },
+    PublicationRevisionExhausted,
     Handle(HandleAllocationError),
     Frame(RenderFrameError),
 }
@@ -479,7 +573,10 @@ pub enum VoxelProjectionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engine_spatial::MaterialVoxel;
+    use engine_spatial::{
+        MaterialVoxel, SurfaceMeshOptions, VoxelEdit, VoxelEditService, VoxelEditTransaction,
+        VoxelSourceRevision,
+    };
     use render_model::MaterialUvStrategy;
 
     fn material(slot: u16) -> RenderMaterialDescriptor {
@@ -572,5 +669,142 @@ mod tests {
             Err(VoxelProjectionError::MissingMaterial { slot: 7, .. })
         ));
         assert_eq!(projector.root_handle("room"), None);
+    }
+
+    #[test]
+    fn textured_reconstructed_surface_rejects_without_projector_mutation() {
+        let scene = VoxelCollisionScene::from_material_voxels_with_mesh_options(
+            1.0,
+            16,
+            [MaterialVoxel {
+                address: [0, 0, 0],
+                material_slot: 1,
+            }],
+            SurfaceMeshOptions {
+                mode: SurfaceMode::MarchingCubes,
+                ..SurfaceMeshOptions::default()
+            },
+        )
+        .unwrap();
+        let mut textured = material(1);
+        textured.texture = Some("texture/voxel-atlas".to_string());
+        let mut projector = VoxelRenderProjector::new();
+        assert!(matches!(
+            projector.project(
+                &[VoxelProjectionInstance {
+                    instance_id: "room".to_string(),
+                    asset_id: "voxel-object/room".to_string(),
+                    transform: Transform::IDENTITY,
+                    scene: &scene,
+                }],
+                &BTreeMap::from([(1, textured)]),
+            ),
+            Err(VoxelProjectionError::TexturedReconstructedSurface {
+                chunk: [0, 0, 0],
+                slot: 1,
+                mode: SurfaceMode::MarchingCubes,
+                ..
+            })
+        ));
+        assert_eq!(projector.root_handle("room"), None);
+    }
+
+    #[test]
+    fn boundary_edit_replaces_neighbor_once_and_destroys_emptied_chunk() {
+        let mut scene = VoxelCollisionScene::from_material_voxels(
+            1.0,
+            4,
+            [
+                MaterialVoxel {
+                    address: [-1, 0, 0],
+                    material_slot: 1,
+                },
+                MaterialVoxel {
+                    address: [0, 0, 0],
+                    material_slot: 1,
+                },
+                MaterialVoxel {
+                    address: [8, 0, 0],
+                    material_slot: 1,
+                },
+            ],
+        )
+        .unwrap();
+        let materials = BTreeMap::from([(1, material(1))]);
+        let mut projector = VoxelRenderProjector::new();
+        let project = |projector: &mut VoxelRenderProjector, scene: &VoxelCollisionScene| {
+            projector
+                .project(
+                    &[VoxelProjectionInstance {
+                        instance_id: "room".to_string(),
+                        asset_id: "voxel-object/room".to_string(),
+                        transform: Transform::IDENTITY,
+                        scene,
+                    }],
+                    &materials,
+                )
+                .unwrap()
+        };
+        project(&mut projector, &scene);
+        let left = projector.chunk_handle("room", [-1, 0, 0]).unwrap();
+        let removed = projector.chunk_handle("room", [0, 0, 0]).unwrap();
+        let unchanged = projector.chunk_handle("room", [2, 0, 0]).unwrap();
+        VoxelEditService::apply(
+            &mut scene,
+            VoxelEditTransaction {
+                expected_revision: VoxelSourceRevision::INITIAL,
+                edits: &[VoxelEdit::Clear { address: [0, 0, 0] }],
+            },
+        )
+        .unwrap();
+        let update = project(&mut projector, &scene);
+        assert_eq!(
+            update
+                .frame
+                .ops
+                .iter()
+                .filter(|operation| matches!(operation, RenderDiff::ReplaceMeshPayload { .. }))
+                .count(),
+            1
+        );
+        assert!(update.frame.ops.iter().any(|operation| matches!(
+            operation,
+            RenderDiff::ReplaceMeshPayload { handle, .. } if *handle == left
+        )));
+        assert!(update.frame.ops.iter().any(|operation| matches!(
+            operation,
+            RenderDiff::Destroy { handle } if *handle == removed
+        )));
+        assert!(!update.frame.ops.iter().any(|operation| matches!(
+            operation,
+            RenderDiff::ReplaceMeshPayload { handle, .. } if *handle == unchanged
+        )));
+        assert_eq!(projector.chunk_handle("room", [-1, 0, 0]), Some(left));
+        assert_eq!(projector.chunk_handle("room", [2, 0, 0]), Some(unchanged));
+    }
+
+    #[test]
+    fn stale_or_same_revision_changed_scene_rejects_without_projector_mutation() {
+        let first = VoxelCollisionScene::from_solid_voxels(1.0, 4, [[0, 0, 0]]).unwrap();
+        let conflicting = VoxelCollisionScene::from_solid_voxels(1.0, 4, [[1, 0, 0]]).unwrap();
+        let materials = BTreeMap::from([(1, material(1))]);
+        let mut projector = VoxelRenderProjector::new();
+        let instance = |scene| VoxelProjectionInstance {
+            instance_id: "room".to_string(),
+            asset_id: "voxel-object/room".to_string(),
+            transform: Transform::IDENTITY,
+            scene,
+        };
+        projector.project(&[instance(&first)], &materials).unwrap();
+        let handle = projector.chunk_handle("room", [0, 0, 0]);
+        assert!(matches!(
+            projector.project(&[instance(&conflicting)], &materials),
+            Err(VoxelProjectionError::StaleSourceRevision {
+                previous: 0,
+                candidate: 0,
+                ..
+            })
+        ));
+        assert_eq!(projector.chunk_handle("room", [0, 0, 0]), handle);
     }
 }

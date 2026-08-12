@@ -798,6 +798,46 @@ void test('replaceMeshPayload disposes the previous geometry and material', () =
   assert.ok(secondDisposed);
 });
 
+void test('published chunk frame replaces only changed geometry and rejects stale replay', () => {
+  const renderer = new ThreeRenderer();
+  const changed = renderHandle(91);
+  const unchanged = renderHandle(92);
+  renderer.applyFrame({
+    schemaVersion: 1,
+    publication: { stream: 'voxel:terrain', revision: 1, operationCount: 4 },
+    ops: [
+      createDiff(91, cubeNode('changed-chunk')),
+      { op: 'replaceMeshPayload', handle: changed, payload: quadPayload() },
+      createDiff(92, cubeNode('unchanged-chunk')),
+      { op: 'replaceMeshPayload', handle: unchanged, payload: quadPayload() },
+    ],
+  });
+  const changedMesh = renderer.objectFor(changed) as THREE.Mesh;
+  const unchangedMesh = renderer.objectFor(unchanged) as THREE.Mesh;
+  const changedBefore = changedMesh.geometry;
+  const unchangedBefore = unchangedMesh.geometry;
+  let changedDisposed = 0;
+  changedBefore.addEventListener('dispose', () => { changedDisposed += 1; });
+
+  renderer.applyFrame({
+    schemaVersion: 1,
+    publication: { stream: 'voxel:terrain', revision: 2, operationCount: 1 },
+    ops: [{ op: 'replaceMeshPayload', handle: changed, payload: quadPayload() }],
+  });
+  assert.notEqual(changedMesh.geometry, changedBefore);
+  assert.equal(changedDisposed, 1);
+  assert.equal(unchangedMesh.geometry, unchangedBefore);
+
+  const changedAfter = changedMesh.geometry;
+  assert.throws(() => renderer.applyFrame({
+    schemaVersion: 1,
+    publication: { stream: 'voxel:terrain', revision: 1, operationCount: 1 },
+    ops: [{ op: 'replaceMeshPayload', handle: changed, payload: quadPayload() }],
+  }), /stale publication/u);
+  assert.equal(changedMesh.geometry, changedAfter);
+  assert.equal(unchangedMesh.geometry, unchangedBefore);
+});
+
 void test('uploaded voxel meshes stay lit and preserve wireframe/opacity across updates and remeshes', () => {
   const renderer = new ThreeRenderer();
   renderer.registerSlotColor(1, 1, 0.5, 0.25);

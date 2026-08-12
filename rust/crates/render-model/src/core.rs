@@ -484,13 +484,27 @@ pub enum RenderOperationError {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RenderFrameDiff {
     pub schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication: Option<RenderFramePublication>,
     pub ops: Vec<RenderDiff>,
+}
+
+/// Optional monotonic publication identity for one independently ordered
+/// retained stream. The operation count makes a clipped chunk update reject
+/// before any renderer state changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RenderFramePublication {
+    pub stream: String,
+    pub revision: u64,
+    pub operation_count: u32,
 }
 
 impl Default for RenderFrameDiff {
     fn default() -> Self {
         Self {
             schema_version: RENDER_FRAME_SCHEMA_VERSION,
+            publication: None,
             ops: Vec::new(),
         }
     }
@@ -504,6 +518,30 @@ impl RenderFrameDiff {
     pub fn try_from_ops(ops: Vec<RenderDiff>) -> Result<Self, RenderFrameError> {
         let frame = Self {
             schema_version: RENDER_FRAME_SCHEMA_VERSION,
+            publication: None,
+            ops,
+        };
+        frame.validate()?;
+        Ok(frame)
+    }
+
+    pub fn try_from_published_ops(
+        stream: impl Into<String>,
+        revision: u64,
+        ops: Vec<RenderDiff>,
+    ) -> Result<Self, RenderFrameError> {
+        let operation_count =
+            u32::try_from(ops.len()).map_err(|_| RenderFrameError::PublicationOperationCount {
+                expected: u32::MAX,
+                actual: ops.len(),
+            })?;
+        let frame = Self {
+            schema_version: RENDER_FRAME_SCHEMA_VERSION,
+            publication: Some(RenderFramePublication {
+                stream: stream.into(),
+                revision,
+                operation_count,
+            }),
             ops,
         };
         frame.validate()?;
@@ -516,6 +554,22 @@ impl RenderFrameDiff {
                 expected: RENDER_FRAME_SCHEMA_VERSION,
                 actual: self.schema_version,
             });
+        }
+        if let Some(publication) = &self.publication {
+            if publication.stream.trim().is_empty() || publication.stream.len() > 256 {
+                return Err(RenderFrameError::InvalidPublicationStream);
+            }
+            if publication.revision > 9_007_199_254_740_991 {
+                return Err(RenderFrameError::PublicationRevisionNotJsonSafe {
+                    revision: publication.revision,
+                });
+            }
+            if publication.operation_count as usize != self.ops.len() {
+                return Err(RenderFrameError::PublicationOperationCount {
+                    expected: publication.operation_count,
+                    actual: self.ops.len(),
+                });
+            }
         }
         for (index, operation) in self.ops.iter().enumerate() {
             operation
@@ -558,6 +612,14 @@ pub enum RenderFrameError {
     Operation {
         index: usize,
         source: RenderOperationError,
+    },
+    InvalidPublicationStream,
+    PublicationRevisionNotJsonSafe {
+        revision: u64,
+    },
+    PublicationOperationCount {
+        expected: u32,
+        actual: usize,
     },
 }
 
@@ -613,6 +675,7 @@ mod tests {
     fn invalid_operation_rejects_the_whole_frame() {
         let invalid = RenderFrameDiff {
             schema_version: RENDER_FRAME_SCHEMA_VERSION,
+            publication: None,
             ops: vec![RenderDiff::Create {
                 handle: RenderHandle::new(1),
                 parent: None,
@@ -635,6 +698,7 @@ mod tests {
     fn frame_rejects_handles_that_javascript_cannot_represent_exactly() {
         let invalid = RenderFrameDiff {
             schema_version: RENDER_FRAME_SCHEMA_VERSION,
+            publication: None,
             ops: vec![RenderDiff::Create {
                 handle: RenderHandle::new(JSON_SAFE_U64_MAX + 1),
                 parent: None,

@@ -445,7 +445,14 @@ export type RenderDiff =
 
 export interface RenderFrameDiff {
   readonly schemaVersion: 1;
+  readonly publication?: RenderFramePublication;
   readonly ops: readonly RenderDiff[];
+}
+
+export interface RenderFramePublication {
+  readonly stream: string;
+  readonly revision: number;
+  readonly operationCount: number;
 }
 
 export type RenderAssetKind =

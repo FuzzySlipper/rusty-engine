@@ -464,7 +464,14 @@ maintain a collider index or reproduce the combined ordering.
 
 Collision, navigation, and meshes must not become independent world authorities. Optimization may
 make rebuilding more incremental, but it must retain the same source revision and atomic coherence
-rule.
+rule. Live voxel edits derive a deterministic signed dirty-chunk set, rebuild only resident mesh
+candidates that can own changed seam geometry, and reuse every unrelated immutable mesh payload.
+The retained voxel projector keys replacement by the complete derived payload rather than the
+canonical chunk hash, because neighbor occupancy can change a seam without changing that chunk's
+own voxels. Stable chunk handles cross an optionally stamped monotonic render frame; clipped or
+stale publications reject before retained/backend mutation. The detailed lifecycle and measured
+stopping point are fixed in
+[chunk-granular voxel mesh updates](topics/voxel/chunk-granular-updates.md).
 
 ## Foundation and service crates
 
@@ -523,6 +530,11 @@ handles only when construction succeeds. The TypeScript retained projection stag
 copy-on-write records: unchanged immutable definitions are structurally shared, while every
 record named by a mutation is privately copied before validation or commit. Missing resources are
 classified rather than resolved through an ambient registry.
+
+An independently ordered projection may add a renderer-neutral publication stamp containing its
+stable stream, monotonic revision, and exact operation count. This is transport/application
+coherence, not gameplay authority: retained projection rejects a clipped or stale stamped frame
+before commit, while unstamped general frames retain the original compatibility contract.
 
 The optional catalog-material adapter is another explicit read-only projection: it validates one
 complete `AssetCatalog` candidate, resolves exact version/hash-pinned voxel texture and atlas

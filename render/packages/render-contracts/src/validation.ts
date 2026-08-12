@@ -11,11 +11,27 @@ export class ContractDecodeError extends Error {
 }
 
 export function decodeRenderFrameDiff(input: unknown): RenderFrameDiff {
-  const frame = record(input, '$', ['schemaVersion', 'ops']);
+  const frame = recordOptional(input, '$', ['schemaVersion', 'ops'], ['publication']);
   if (frame['schemaVersion'] !== 1) {
     fail('$.schemaVersion', 'must equal 1');
   }
   const ops = list(frame['ops'], '$.ops');
+  if (frame['publication'] !== undefined) {
+    const publication = record(
+      frame['publication'],
+      '$.publication',
+      ['stream', 'revision', 'operationCount'],
+    );
+    const stream = text(publication['stream'], '$.publication.stream');
+    if (stream.trim().length === 0 || stream.length > 256) {
+      fail('$.publication.stream', 'must contain 1..=256 characters');
+    }
+    integer(publication['revision'], '$.publication.revision', 0, JSON_SAFE_INTEGER_MAX);
+    integer(publication['operationCount'], '$.publication.operationCount', 0, 4_294_967_295);
+    if (publication['operationCount'] !== ops.length) {
+      fail('$.publication.operationCount', `must equal ops length ${String(ops.length)}`);
+    }
+  }
   ops.forEach((operation, index) => renderDiff(operation, `$.ops[${String(index)}]`));
   return input as RenderFrameDiff;
 }

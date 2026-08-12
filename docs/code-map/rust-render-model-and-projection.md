@@ -39,6 +39,7 @@ entity, authored-scene, voxel, and presentation facts.
 - [Voxel mesh data plane](../topics/voxel/voxel-mesh-data-plane.md)
 - [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
 - [Reconstructed voxel surfaces](../topics/voxel/reconstructed-surfaces.md)
+- [Chunk-granular voxel mesh updates](../topics/voxel/chunk-granular-updates.md)
 - [Textured voxel campaign closeout](../textured-voxel-campaign-closeout.md)
 
 ## Public downstream surfaces
@@ -50,6 +51,9 @@ entity, authored-scene, voxel, and presentation facts.
   explicit stream offset. Callers own where those bytes are published.
 - Projection crates translate owner facts into complete frames; they do not
   become a second source of gameplay truth.
+- Independently ordered projections may stamp a frame with one stable stream,
+  monotonic revision, and exact operation count. Neutral and concrete retained
+  application reject stale or clipped stamped frames fail-atomically.
 - Voxel-object projection keys cached resources by canonical content hash and
   derived surface mode. A mode switch redefines geometry at the same canonical
   identity; textured reconstructed materials are rejected fail-atomically.

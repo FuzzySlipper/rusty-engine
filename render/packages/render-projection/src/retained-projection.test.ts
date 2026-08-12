@@ -313,6 +313,41 @@ void test('a rejected later operation rolls back the entire frame', () => {
   assert.equal(projection.has(renderHandle(11)), false);
 });
 
+void test('published frames reject clipping and stale revision without retained mutation', () => {
+  const projection = new RenderProjection();
+  projection.applyFrame({
+    schemaVersion: 1,
+    publication: { stream: 'voxel:terrain', revision: 1, operationCount: 1 },
+    ops: [createPrimitive(21, 'terrain-chunk')],
+  });
+  const before = projection.snapshot();
+
+  assert.throws(
+    () => projection.applyFrame({
+      schemaVersion: 1,
+      publication: { stream: 'voxel:terrain', revision: 2, operationCount: 2 },
+      ops: [{
+        op: 'update', handle: renderHandle(21), transform: null, material: null,
+        visible: false, metadata: null,
+      }],
+    }),
+    /operationCount/u,
+  );
+  assert.deepEqual(projection.snapshot(), before);
+  assert.throws(
+    () => projection.applyFrame({
+      schemaVersion: 1,
+      publication: { stream: 'voxel:terrain', revision: 1, operationCount: 1 },
+      ops: [{
+        op: 'update', handle: renderHandle(21), transform: null, material: null,
+        visible: false, metadata: null,
+      }],
+    }),
+    /stale publication/u,
+  );
+  assert.deepEqual(projection.snapshot(), before);
+});
+
 void test('small atomic frames structurally share unrelated retained definitions', () => {
   const projection = new RenderProjection();
   projection.applyFrame({

@@ -3,10 +3,10 @@ use core_math::Vec3;
 use engine_spatial::{
     CollisionSceneError, GeneratedRoomConfig, KinematicMotionSystem, MaterialVoxel, MotionAxis,
     MotionFact, SpatialCollisionHit, StaticMeshAssetId, StaticMeshColliderAsset,
-    StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
-    VoxelAuthorityValidationError, VoxelCollisionScene, VoxelEdit, VoxelEditApplyError,
-    VoxelEditRejection, VoxelEditService, VoxelEditTransaction, VoxelSourceRevision,
-    MAX_VOXEL_COORDINATE_ABS, MAX_VOXEL_MATERIAL_SLOT,
+    StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform, SurfaceMeshLimits,
+    SurfaceMeshOptions, SurfaceMode, VoxelAuthorityValidationError, VoxelCollisionScene, VoxelEdit,
+    VoxelEditApplyError, VoxelEditRejection, VoxelEditService, VoxelEditTransaction,
+    VoxelSourceRevision, MAX_VOXEL_COORDINATE_ABS, MAX_VOXEL_MATERIAL_SLOT,
 };
 use entity_state::{EntityDefinition, EntityState};
 
@@ -446,6 +446,161 @@ fn accepted_edit_order_does_not_change_authority_receipt_or_projections() {
     assert_eq!(left.authority_hash(), right.authority_hash());
     assert_eq!(left.navigation_hash(), right.navigation_hash());
     assert_eq!(left.mesh_chunks(), right.mesh_chunks());
+}
+
+#[test]
+fn interior_and_boundary_edits_publish_exact_incremental_chunk_sets() {
+    let mut interior =
+        VoxelCollisionScene::from_solid_voxels(1.0, 4, [[1, 0, 0], [2, 0, 0], [8, 0, 0]]).unwrap();
+    let receipt = VoxelEditService::apply(
+        &mut interior,
+        VoxelEditTransaction {
+            expected_revision: VoxelSourceRevision::INITIAL,
+            edits: &[VoxelEdit::Clear { address: [1, 0, 0] }],
+        },
+    )
+    .unwrap();
+    assert_eq!(receipt.dirty_mesh_chunks, vec![[0, 0, 0]]);
+    assert_eq!(receipt.rebuilt_mesh_chunks, 1);
+    assert_eq!(receipt.reused_mesh_chunks, 1);
+    assert_eq!(receipt.removed_mesh_chunks, 0);
+
+    for mode in [
+        SurfaceMode::GreedyCubes,
+        SurfaceMode::MarchingCubes,
+        SurfaceMode::DualContouring,
+    ] {
+        let options = SurfaceMeshOptions {
+            mode,
+            ..SurfaceMeshOptions::default()
+        };
+        let mut scene = VoxelCollisionScene::from_solid_voxels_with_mesh_options(
+            1.0,
+            4,
+            [[-1, 0, 0], [0, 0, 0], [8, 0, 0]],
+            options,
+        )
+        .unwrap();
+        let unaffected_hash = scene
+            .mesh_chunks()
+            .iter()
+            .find(|chunk| chunk.chunk == [2, 0, 0])
+            .unwrap()
+            .content_hash;
+        let receipt = VoxelEditService::apply(
+            &mut scene,
+            VoxelEditTransaction {
+                expected_revision: VoxelSourceRevision::INITIAL,
+                edits: &[VoxelEdit::Clear { address: [0, 0, 0] }],
+            },
+        )
+        .unwrap();
+        assert_eq!(receipt.dirty_mesh_chunks, vec![[-1, 0, 0], [0, 0, 0]]);
+        assert_eq!(receipt.rebuilt_mesh_chunks, 1);
+        assert_eq!(receipt.reused_mesh_chunks, 1);
+        assert_eq!(receipt.removed_mesh_chunks, 1);
+        assert_eq!(
+            scene
+                .mesh_chunks()
+                .iter()
+                .find(|chunk| chunk.chunk == [2, 0, 0])
+                .unwrap()
+                .content_hash,
+            unaffected_hash,
+            "{mode:?} must preserve an unrelated chunk payload"
+        );
+    }
+}
+
+#[test]
+fn greedy_dirty_halo_is_face_only_while_reconstructed_modes_include_edges_and_corners() {
+    let voxels = [
+        [0, 0, 0],
+        [1, 1, 1],
+        [-1, 0, 0],
+        [0, -1, 0],
+        [0, 0, -1],
+        [-1, -1, 0],
+        [-1, 0, -1],
+        [0, -1, -1],
+        [-1, -1, -1],
+    ];
+    for mode in [
+        SurfaceMode::GreedyCubes,
+        SurfaceMode::MarchingCubes,
+        SurfaceMode::DualContouring,
+    ] {
+        let mut scene = VoxelCollisionScene::from_solid_voxels_with_mesh_options(
+            1.0,
+            4,
+            voxels,
+            SurfaceMeshOptions {
+                mode,
+                ..SurfaceMeshOptions::default()
+            },
+        )
+        .unwrap();
+        let receipt = VoxelEditService::apply(
+            &mut scene,
+            VoxelEditTransaction {
+                expected_revision: VoxelSourceRevision::INITIAL,
+                edits: &[VoxelEdit::Clear { address: [0, 0, 0] }],
+            },
+        )
+        .unwrap();
+        let expected = if mode == SurfaceMode::GreedyCubes {
+            vec![[-1, 0, 0], [0, -1, 0], [0, 0, -1], [0, 0, 0]]
+        } else {
+            vec![
+                [-1, -1, -1],
+                [-1, -1, 0],
+                [-1, 0, -1],
+                [-1, 0, 0],
+                [0, -1, -1],
+                [0, -1, 0],
+                [0, 0, -1],
+                [0, 0, 0],
+            ]
+        };
+        assert_eq!(receipt.dirty_mesh_chunks, expected, "{mode:?}");
+    }
+}
+
+#[test]
+fn incremental_mesh_build_failure_leaves_authority_and_chunks_unchanged() {
+    let limits = SurfaceMeshLimits {
+        max_vertices: 8,
+        ..SurfaceMeshLimits::default()
+    };
+    let options = SurfaceMeshOptions {
+        mode: SurfaceMode::DualContouring,
+        limits,
+    };
+    let mut scene =
+        VoxelCollisionScene::from_solid_voxels_with_mesh_options(1.0, 8, [[0, 0, 0]], options)
+            .unwrap();
+    let before_voxels = scene.material_voxels().to_vec();
+    let before_chunks = scene.mesh_chunks().to_vec();
+    let before_revision = scene.source_revision();
+
+    assert!(matches!(
+        VoxelEditService::apply(
+            &mut scene,
+            VoxelEditTransaction {
+                expected_revision: before_revision,
+                edits: &[VoxelEdit::Set {
+                    address: [3, 0, 0],
+                    material_slot: 1,
+                }],
+            },
+        ),
+        Err(VoxelEditApplyError::ProjectionBuild(
+            CollisionSceneError::Mesh(_)
+        ))
+    ));
+    assert_eq!(scene.material_voxels(), before_voxels);
+    assert_eq!(scene.mesh_chunks(), before_chunks);
+    assert_eq!(scene.source_revision(), before_revision);
 }
 
 fn route_across_pillar(scene: &VoxelCollisionScene) -> engine_spatial::NavigationStep {

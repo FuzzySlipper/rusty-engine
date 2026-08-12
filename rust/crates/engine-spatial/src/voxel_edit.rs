@@ -12,9 +12,10 @@
 //! event stream, edit history, or generator recipe is never treated as the saved
 //! state.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{CollisionSceneError, MaterialVoxel, VoxelCollisionScene};
+use crate::{CollisionSceneError, MaterialVoxel, SurfaceMode, VoxelCollisionScene};
+use core_space::{ChunkCoord, VoxelCoord, VoxelGridSpec};
 use serde::{Deserialize, Serialize};
 
 /// One UI or tool transaction cannot silently expand into unbounded work.
@@ -229,8 +230,8 @@ pub struct PreparedVoxelEdit {
 }
 
 impl PreparedVoxelEdit {
-    pub const fn receipt(&self) -> VoxelEditReceipt {
-        self.receipt
+    pub const fn receipt(&self) -> &VoxelEditReceipt {
+        &self.receipt
     }
 
     pub fn deltas(&self) -> &[VoxelEditDelta] {
@@ -239,6 +240,12 @@ impl PreparedVoxelEdit {
 
     pub fn canonical_edits(&self) -> &[VoxelEdit] {
         &self.canonical_edits
+    }
+
+    /// Exact signed chunk coordinates whose retained mesh may create, replace,
+    /// or disappear when this candidate commits.
+    pub fn dirty_mesh_chunks(&self) -> &[[i64; 3]] {
+        &self.receipt.dirty_mesh_chunks
     }
 }
 
@@ -310,7 +317,7 @@ pub struct VoxelEditFact {
 }
 
 /// Compact success evidence; concrete voxel authority remains on the scene.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoxelEditReceipt {
     pub revision_before: VoxelSourceRevision,
     pub accepted_revision: VoxelSourceRevision,
@@ -318,6 +325,10 @@ pub struct VoxelEditReceipt {
     pub authority_hash: u64,
     pub projections: VoxelProjectionRevisions,
     pub fact: VoxelEditFact,
+    pub dirty_mesh_chunks: Vec<[i64; 3]>,
+    pub rebuilt_mesh_chunks: usize,
+    pub reused_mesh_chunks: usize,
+    pub removed_mesh_chunks: usize,
 }
 
 /// The sole owner of live voxel transaction validation and, in the next slice,
@@ -435,6 +446,23 @@ impl VoxelEditService {
             return Err(VoxelEditApplyError::Rejected(VoxelEditRejection::NoChanges));
         }
 
+        let grid = scene.voxel_world.grid();
+        let old_resident: BTreeSet<_> = scene
+            .voxel_world
+            .resident_chunks()
+            .map(|(coordinate, _)| coordinate)
+            .collect();
+        let new_resident: BTreeSet<_> = materials
+            .keys()
+            .map(|address| grid.voxel_to_chunk(VoxelCoord::new(address[0], address[1], address[2])))
+            .collect();
+        let dirty_mesh_chunks = derive_dirty_mesh_chunks(
+            grid,
+            scene.mesh_options.mode,
+            deltas.iter().map(|delta| delta.address),
+            &old_resident,
+            &new_resident,
+        );
         let material_voxels = materials
             .into_iter()
             .map(|(address, material_slot)| MaterialVoxel {
@@ -447,6 +475,8 @@ impl VoxelEditService {
             material_voxels,
             None,
             accepted.revision_after,
+            scene.mesh_options,
+            Some((&scene.mesh_chunks, &dirty_mesh_chunks)),
         )
         .map_err(VoxelEditApplyError::ProjectionBuild)?;
         rebuilt.preserve_static_mesh_projection_from(scene);
@@ -477,6 +507,10 @@ impl VoxelEditService {
             authority_hash: rebuilt.authority_hash(),
             projections: rebuilt.projection_revisions(),
             fact,
+            dirty_mesh_chunks: rebuilt.mesh_update.dirty_chunks.clone(),
+            rebuilt_mesh_chunks: rebuilt.mesh_update.rebuilt_chunks,
+            reused_mesh_chunks: rebuilt.mesh_update.reused_chunks,
+            removed_mesh_chunks: rebuilt.mesh_update.removed_chunks,
         };
         debug_assert!(receipt
             .projections
@@ -515,7 +549,7 @@ impl VoxelEditService {
                 actual_revision: actual_static_collision_revision,
             });
         }
-        let receipt = prepared.receipt;
+        let receipt = prepared.receipt.clone();
         *scene = prepared.candidate;
         Ok(receipt)
     }
@@ -529,6 +563,71 @@ impl VoxelEditService {
         let prepared = Self::preview(scene, transaction)?;
         Self::commit(scene, prepared)
     }
+}
+
+fn derive_dirty_mesh_chunks(
+    grid: VoxelGridSpec,
+    surface_mode: SurfaceMode,
+    addresses: impl IntoIterator<Item = [i64; 3]>,
+    old_resident: &BTreeSet<ChunkCoord>,
+    new_resident: &BTreeSet<ChunkCoord>,
+) -> BTreeSet<ChunkCoord> {
+    let [width, height, depth] = grid.chunk_dims().to_array();
+    let mut dirty = BTreeSet::new();
+    for address in addresses {
+        let (owner, local) =
+            grid.voxel_to_chunk_local(VoxelCoord::new(address[0], address[1], address[2]));
+        let mut x_offsets = vec![0];
+        let mut y_offsets = vec![0];
+        let mut z_offsets = vec![0];
+        if local.x == 0 {
+            x_offsets.push(-1);
+        } else if local.x + 1 == width {
+            x_offsets.push(1);
+        }
+        if local.y == 0 {
+            y_offsets.push(-1);
+        } else if local.y + 1 == height {
+            y_offsets.push(1);
+        }
+        if local.z == 0 {
+            z_offsets.push(-1);
+        } else if local.z + 1 == depth {
+            z_offsets.push(1);
+        }
+        if surface_mode == SurfaceMode::GreedyCubes {
+            dirty.insert(owner);
+            for (x, y, z) in x_offsets
+                .iter()
+                .skip(1)
+                .map(|x| (*x, 0, 0))
+                .chain(y_offsets.iter().skip(1).map(|y| (0, *y, 0)))
+                .chain(z_offsets.iter().skip(1).map(|z| (0, 0, *z)))
+            {
+                let candidate = ChunkCoord::new(owner.x + x, owner.y + y, owner.z + z);
+                if old_resident.contains(&candidate) || new_resident.contains(&candidate) {
+                    dirty.insert(candidate);
+                }
+            }
+        } else {
+            // Reconstructed samples cross face, edge, and corner boundaries,
+            // so every occupied combination in the one-chunk halo is exact.
+            for x in &x_offsets {
+                for y in &y_offsets {
+                    for z in &z_offsets {
+                        let candidate = ChunkCoord::new(owner.x + x, owner.y + y, owner.z + z);
+                        if candidate == owner
+                            || old_resident.contains(&candidate)
+                            || new_resident.contains(&candidate)
+                        {
+                            dirty.insert(candidate);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    dirty
 }
 
 #[cfg(test)]

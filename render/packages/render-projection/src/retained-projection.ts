@@ -243,6 +243,7 @@ export class RenderProjection {
   #staticMeshes = new Map<string, StaticMeshRecord>();
   #animatedMeshes = new Map<string, AnimatedMeshRecord>();
   #voxelObjects = new Map<string, VoxelObjectRecord>();
+  #publishedRevisions = new Map<string, number>();
   #stagingStatistics: MutableStagingStatistics = emptyStagingStatistics();
   #collectStagingStatistics = false;
 
@@ -1119,6 +1120,7 @@ export class RenderProjection {
     projection.#staticMeshes = new Map(this.#staticMeshes);
     projection.#animatedMeshes = new Map(this.#animatedMeshes);
     projection.#voxelObjects = new Map(this.#voxelObjects);
+    projection.#publishedRevisions = new Map(this.#publishedRevisions);
     projection.#stagingStatistics = {
       ...emptyStagingStatistics(),
       sharedDefinitionRecords:
@@ -1142,6 +1144,7 @@ export class RenderProjection {
     this.#staticMeshes = projection.#staticMeshes;
     this.#animatedMeshes = projection.#animatedMeshes;
     this.#voxelObjects = projection.#voxelObjects;
+    this.#publishedRevisions = projection.#publishedRevisions;
     this.#stagingStatistics = projection.#stagingStatistics;
     this.#collectStagingStatistics = false;
   }
@@ -1151,6 +1154,20 @@ export class RenderProjection {
     readonly instructions: readonly RenderProjectionInstruction[];
   } {
     const staged = this.#fork();
+    if (frame.publication !== undefined) {
+      if (frame.publication.operationCount !== frame.ops.length) {
+        throw new RenderProjectionError(
+          `publication ${frame.publication.stream} operationCount does not match frame`,
+        );
+      }
+      const previous = staged.#publishedRevisions.get(frame.publication.stream);
+      if (previous !== undefined && frame.publication.revision <= previous) {
+        throw new RenderProjectionError(
+          `stale publication ${frame.publication.stream} revision ${String(frame.publication.revision)}; latest is ${String(previous)}`,
+        );
+      }
+      staged.#publishedRevisions.set(frame.publication.stream, frame.publication.revision);
+    }
     const instructions: RenderProjectionInstruction[] = [];
     for (const diff of frame.ops) {
       instructions.push(...staged.applyDiff(diff));
