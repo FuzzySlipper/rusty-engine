@@ -878,6 +878,62 @@ fn descending_trench_edge_does_not_manufacture_a_transient_up_step() {
 }
 
 #[test]
+fn character_can_retreat_from_rejected_trench_step() {
+    let scene = craftsurvive_trench_scene();
+    let (entity, mut state) = character_at(Vec3::new(0.5, 3.875, 5.307_7));
+    let mut config = CharacterControllerConfig::default();
+    config.shape.standing_height = 1.75;
+    config.shape.crouched_height = 1.0;
+    config.shape.radius = 0.3;
+    config.shape.contact_skin = 0.015;
+    config.ground.forward_speed = 7.0;
+    config.ground.backward_speed = 7.0;
+    config.ground.strafe_speed = 7.0;
+    config.ground.acceleration = 48.0;
+    config.ground.braking = 58.0;
+    config.ground.friction = 9.0;
+    config.surface.maximum_step_height = 1.05;
+    config.surface.floor_snap_distance = 0.25;
+
+    let mut service = CharacterControllerService::default();
+    for sequence in 1..=120 {
+        service
+            .step(
+                &mut state,
+                &scene,
+                entity,
+                &config,
+                command(sequence, Vec2::new(0.0, 1.0)),
+            )
+            .unwrap();
+    }
+    let pressed = state.transform(entity).unwrap().translation;
+    let mut first_retreat = None;
+    for sequence in 121..=180 {
+        let receipt = service
+            .step(
+                &mut state,
+                &scene,
+                entity,
+                &config,
+                command(sequence, Vec2::new(0.0, -1.0)),
+            )
+            .unwrap();
+        first_retreat.get_or_insert((receipt.displacement, receipt.step));
+    }
+    let retreated = state.transform(entity).unwrap().translation;
+    assert!(
+        retreated.z > pressed.z + 0.25,
+        "character remained trapped at the trench lip: pressed={pressed:?}, retreated={retreated:?}"
+    );
+    let (first_displacement, first_step) = first_retreat.unwrap();
+    assert!(
+        first_displacement.z > 0.0 && first_step.is_none(),
+        "the first separating command must move without retrying the rejected step: displacement={first_displacement:?}, step={first_step:?}"
+    );
+}
+
+#[test]
 fn buffered_jump_fires_after_landing_and_coyote_jump_fires_once() {
     let scene = floor_scene();
     let (entity, mut state) = character(2.25);

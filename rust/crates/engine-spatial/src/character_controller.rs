@@ -1056,6 +1056,18 @@ where
         let toi = finite_f32(hit.time_of_impact)?.clamp(0.0, 1.0);
         center = add_world(center, vec3_world(remaining * toi));
         let normal = vec3_from_world(hit.normal)?;
+        if hit.start_solid && remaining.dot(normal) >= -1.0e-6 {
+            // Skin-width floor/wall contacts are intentionally reported as
+            // start-solid. A contact that the requested displacement is
+            // separating from (or merely tangent to) must not become a slide
+            // plane: doing so clips the escape motion and can trap the
+            // character at a rejected step. Offset only the bounded query and
+            // recast so later obstacles remain visible while authority stays
+            // at the original center until movement is accepted.
+            query_offset =
+                query_offset + normal * (config.shape.contact_skin + config.recovery.normal_nudge);
+            continue;
+        }
         let kind = contact_kind(normal, slope_cos);
         let solve_normal = if kind == CharacterContactKind::SteepSlope {
             let horizontal = Vec3::new(normal.x, 0.0, normal.z);
