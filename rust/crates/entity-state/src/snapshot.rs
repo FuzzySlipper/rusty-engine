@@ -12,9 +12,10 @@ use crate::component::{
     ComponentRegistry, RegisteredComponentSnapshot, RegisteredComponentSnapshotError,
 };
 use crate::model::{
-    AssetBindingComponent, BoundsComponent, CollisionComponent, ControllerComponent,
-    EntityDefinition, EntityLifecycle, EntitySource, EntityState, EntityTransform,
-    KinematicComponent, Quat, RenderableComponent, TransformComponent,
+    AssetBindingComponent, BoundsComponent, CharacterMotionComponent, CollisionComponent,
+    ControllerComponent, EntityDefinition, EntityLifecycle, EntitySource, EntityState,
+    EntityTransform, KinematicComponent, Quat, RenderableComponent, RigidBodyComponent,
+    TransformComponent,
 };
 
 pub const ENTITY_STATE_SNAPSHOT_SCHEMA_VERSION: u32 = 3;
@@ -410,15 +411,42 @@ impl EntityState {
             &tombstoned_entities,
         )?;
         for entity in state.entities.keys().copied() {
-            if state.kinematic(entity).is_some() && state.rigid_body(entity).is_some() {
-                return Err(EntityStateSnapshotError::ConflictingComponents {
-                    entity: entity.raw(),
-                    first: "kinematic",
-                    second: "rigid-body",
-                });
-            }
+            validate_restored_motion_authority(&state, entity)?;
         }
         Ok(state)
+    }
+}
+
+fn validate_restored_motion_authority(
+    state: &EntityState,
+    entity: EntityId,
+) -> Result<(), EntityStateSnapshotError> {
+    let has_kinematic = state
+        .has_component::<KinematicComponent>(entity)
+        .expect("built-in kinematic registration");
+    let has_rigid_body = state
+        .has_component::<RigidBodyComponent>(entity)
+        .expect("built-in rigid-body registration");
+    let has_character_motion = state
+        .has_component::<CharacterMotionComponent>(entity)
+        .expect("built-in character-motion registration");
+    let conflict = if has_kinematic && has_rigid_body {
+        Some(("kinematic", "rigid-body"))
+    } else if has_character_motion && has_kinematic {
+        Some(("character-motion", "kinematic"))
+    } else if has_character_motion && has_rigid_body {
+        Some(("character-motion", "rigid-body"))
+    } else {
+        None
+    };
+    if let Some((first, second)) = conflict {
+        Err(EntityStateSnapshotError::ConflictingComponents {
+            entity: entity.raw(),
+            first,
+            second,
+        })
+    } else {
+        Ok(())
     }
 }
 
