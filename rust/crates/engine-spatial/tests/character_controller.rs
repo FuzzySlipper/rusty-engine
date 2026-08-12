@@ -49,6 +49,27 @@ fn floor_wall_lip_scene() -> VoxelCollisionScene {
     VoxelCollisionScene::from_solid_voxels(1.0, 8, voxels).unwrap()
 }
 
+fn craftsurvive_trench_scene() -> VoxelCollisionScene {
+    let mut voxels = Vec::new();
+    for x in -3..=3 {
+        for z in 2..=10 {
+            for y in 0..=3 {
+                let removed_trench_cell =
+                    (-1..=1).contains(&x) && ((y == 3 && z == 5) || (y == 2 && z == 4));
+                if !removed_trench_cell {
+                    voxels.push([x, y, z]);
+                }
+            }
+        }
+    }
+    for x in -1..=1 {
+        for y in 4..=6 {
+            voxels.push([x, y, 3]);
+        }
+    }
+    VoxelCollisionScene::from_solid_voxels(1.0, 8, voxels).unwrap()
+}
+
 fn command(sequence: u64, intent: Vec2) -> CharacterControllerCommand {
     CharacterControllerCommand {
         planar_intent: intent,
@@ -801,6 +822,59 @@ fn floor_wall_lip_retains_stable_support_at_rest_and_under_pressure() {
         assert!(receipt.step.is_none_or(|step| !step.accepted));
     }
     assert!(saw_wall);
+}
+
+#[test]
+fn descending_trench_edge_does_not_manufacture_a_transient_up_step() {
+    let scene = craftsurvive_trench_scene();
+    let (entity, mut state) = character_at(Vec3::new(0.5, 3.89, 5.331));
+    let mut config = CharacterControllerConfig::default();
+    config.shape.standing_height = 1.75;
+    config.shape.crouched_height = 1.0;
+    config.shape.radius = 0.3;
+    config.shape.contact_skin = 0.015;
+    config.ground.forward_speed = 7.0;
+    config.ground.backward_speed = 7.0;
+    config.ground.strafe_speed = 7.0;
+    config.ground.acceleration = 48.0;
+    config.ground.braking = 58.0;
+    config.ground.friction = 9.0;
+    config.surface.maximum_step_height = 1.05;
+    config.surface.floor_snap_distance = 0.25;
+
+    let mut service = CharacterControllerService::default();
+    let mut minimum_y = f32::INFINITY;
+    let mut maximum_y = f32::NEG_INFINITY;
+    let mut accepted_steps = 0;
+    for sequence in 1..=240 {
+        let receipt = service
+            .step(
+                &mut state,
+                &scene,
+                entity,
+                &config,
+                command(sequence, Vec2::new(0.0, 1.0)),
+            )
+            .unwrap();
+        minimum_y = minimum_y.min(receipt.transform_after.translation.y);
+        maximum_y = maximum_y.max(receipt.transform_after.translation.y);
+        accepted_steps += usize::from(receipt.step.is_some_and(|step| step.accepted));
+    }
+    let final_transform = state.transform(entity).unwrap();
+    assert_eq!(
+        accepted_steps, 0,
+        "descending support must not become an up step"
+    );
+    assert!(
+        maximum_y <= 3.91,
+        "trench traversal bounced to y={maximum_y}"
+    );
+    assert!(
+        minimum_y >= 3.88,
+        "trench pressure dropped to y={minimum_y}"
+    );
+    assert!(final_transform.translation.z >= 5.3);
+    assert!(state.character_motion(entity).unwrap().grounded);
 }
 
 #[test]
