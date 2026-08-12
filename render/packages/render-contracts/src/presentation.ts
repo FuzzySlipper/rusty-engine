@@ -79,10 +79,90 @@ export interface BillboardTextureRef {
   readonly contentHash: string;
 }
 
+/** A renderer-neutral localized string for structured indicator content. */
+export interface BillboardLocalizedText {
+  readonly localizationKey: string;
+  readonly fallbackText: string;
+}
+
+export type BillboardMeterFillDirection =
+  | 'leftToRight'
+  | 'rightToLeft'
+  | 'bottomToTop'
+  | 'topToBottom';
+
+export interface BillboardMeter {
+  readonly id: string;
+  readonly accessibleLabel: BillboardLocalizedText;
+  readonly current: number;
+  readonly min: number;
+  readonly max: number;
+  readonly preview: number | null;
+  readonly fillDirection: BillboardMeterFillDirection;
+  readonly segments: number;
+  readonly fill: Vec4;
+  readonly previewFill: Vec4;
+  readonly back: Vec4;
+  readonly border: Vec4;
+}
+
+/** A compact localized or icon-backed fact owned by the submitting game. */
+export interface BillboardStatusCue {
+  readonly id: string;
+  readonly label: BillboardLocalizedText;
+  readonly icon: BillboardTextureRef | null;
+}
+
+export interface BillboardStyle {
+  readonly opacity: number;
+  readonly backing: Vec4;
+  readonly border: Vec4;
+  readonly radiusPixels: number;
+}
+
+export type BillboardAlignment = 'start' | 'center' | 'end';
+
+export interface BillboardIndicator {
+  readonly label: BillboardLocalizedText | null;
+  readonly icon: BillboardTextureRef | null;
+  readonly accessibleLabel: BillboardLocalizedText;
+  readonly meters: readonly BillboardMeter[];
+  readonly statusCues: readonly BillboardStatusCue[];
+  readonly widthPixels: number;
+  readonly spacingPixels: number;
+  readonly alignment: BillboardAlignment;
+  readonly style: BillboardStyle;
+}
+
+export interface BillboardSafeArea {
+  readonly topPixels: number;
+  readonly rightPixels: number;
+  readonly bottomPixels: number;
+  readonly leftPixels: number;
+}
+
+export type BillboardLayoutSizing =
+  | { readonly kind: 'constantPixels' }
+  | {
+    readonly kind: 'distanceScaled';
+    readonly referenceDistance: number;
+    readonly minScale: number;
+    readonly maxScale: number;
+  };
+
+export interface BillboardLayoutPolicy {
+  readonly priority: number;
+  readonly sizing: BillboardLayoutSizing;
+  readonly safeArea: BillboardSafeArea;
+  readonly edgeBehavior: 'clamp' | 'cull';
+  readonly overlapBehavior: 'stack' | 'suppress';
+}
+
 export type BillboardContent =
   | { readonly kind: 'text'; readonly localizationKey: string; readonly fallbackText: string; readonly arguments: readonly BillboardTemplateArgument[] }
   | { readonly kind: 'value'; readonly labelKey: string; readonly fallbackLabel: string; readonly value: string; readonly unitKey: string | null; readonly fallbackUnit: string | null }
-  | { readonly kind: 'icon'; readonly texture: BillboardTextureRef; readonly altKey: string; readonly fallbackAlt: string };
+  | { readonly kind: 'icon'; readonly texture: BillboardTextureRef; readonly altKey: string; readonly fallbackAlt: string }
+  | { readonly kind: 'structured'; readonly indicator: BillboardIndicator };
 
 export type BillboardFontRef =
   | { readonly kind: 'system'; readonly family: string }
@@ -100,6 +180,8 @@ export interface BillboardDescriptor {
   readonly maxDistance: number;
   readonly layer: BillboardLayer;
   readonly visible: boolean;
+  /** Legacy descriptors omit layout; structured content must provide it. */
+  readonly layout?: BillboardLayoutPolicy;
 }
 
 export interface BillboardPatch {
@@ -112,6 +194,8 @@ export interface BillboardPatch {
   readonly maxDistance: number | null;
   readonly layer: BillboardLayer | null;
   readonly visible: boolean | null;
+  /** Optional for old serialized patches; null is not a serialized value. */
+  readonly layout?: BillboardLayoutPolicy;
 }
 
 export type BillboardProjectionOp =

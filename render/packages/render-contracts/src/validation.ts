@@ -874,50 +874,64 @@ function billboardOperation(op: string, input: unknown, path: string): void {
 }
 
 function billboardDescriptor(input: unknown, path: string): void {
-  const value = record(input, path, [
+  const value = recordOptional(input, path, [
     'anchor', 'content', 'font', 'heightPixels', 'color', 'background', 'maxDistance', 'layer', 'visible',
-  ]);
+  ], ['layout']);
   anchored(value['anchor'], `${path}.anchor`, false);
   billboardContent(value['content'], `${path}.content`);
   billboardFont(value['font'], `${path}.font`);
   range(value['heightPixels'], `${path}.heightPixels`, 8, 256);
   color4(value['color'], `${path}.color`);
   color4(value['background'], `${path}.background`);
-  range(value['maxDistance'], `${path}.maxDistance`, Number.MIN_VALUE, 10_000);
+  range(value['maxDistance'], `${path}.maxDistance`, 1.1920928955078125e-7, 10_000);
   enumeration(value['layer'], `${path}.layer`, ['alwaysOnTop', 'depthTested', 'occluded'] as const);
   booleanValue(value['visible'], `${path}.visible`);
+  if (value['layout'] !== undefined) {
+    billboardLayoutPolicy(value['layout'], `${path}.layout`);
+  }
+  const content = looseRecord(value['content'], `${path}.content`);
+  if (content['kind'] === 'structured') {
+    if (value['layout'] === undefined) {
+      fail(`${path}.layout`, 'is required for structured content');
+    }
+  } else if (value['layout'] !== undefined) {
+    fail(`${path}.layout`, 'is only valid for structured content');
+  }
 }
 
 function billboardPatch(input: unknown, path: string): void {
-  const value = record(input, path, [
+  const value = recordOptional(input, path, [
     'anchor', 'content', 'font', 'heightPixels', 'color', 'background', 'maxDistance', 'layer', 'visible',
-  ]);
+  ], ['layout']);
   nullable(value['anchor'], `${path}.anchor`, (item, itemPath) => anchored(item, itemPath, false));
   nullable(value['content'], `${path}.content`, billboardContent);
   nullable(value['font'], `${path}.font`, billboardFont);
   nullable(value['heightPixels'], `${path}.heightPixels`, (item, itemPath) => range(item, itemPath, 8, 256));
   nullable(value['color'], `${path}.color`, color4);
   nullable(value['background'], `${path}.background`, color4);
-  nullable(value['maxDistance'], `${path}.maxDistance`, (item, itemPath) => range(item, itemPath, Number.MIN_VALUE, 10_000));
+  nullable(value['maxDistance'], `${path}.maxDistance`, (item, itemPath) => range(item, itemPath, 1.1920928955078125e-7, 10_000));
   nullable(value['layer'], `${path}.layer`, (item, itemPath) => enumeration(item, itemPath, ['alwaysOnTop', 'depthTested', 'occluded'] as const));
   nullable(value['visible'], `${path}.visible`, booleanValue);
+  if (value['layout'] !== undefined) {
+    billboardLayoutPolicy(value['layout'], `${path}.layout`);
+  }
 }
 
 function billboardContent(input: unknown, path: string): void {
   const base = looseRecord(input, path);
-  const kind = enumeration(base['kind'], `${path}.kind`, ['text', 'value', 'icon'] as const);
+  const kind = enumeration(base['kind'], `${path}.kind`, ['text', 'value', 'icon', 'structured'] as const);
   if (kind === 'text') {
     const value = record(input, path, ['kind', 'localizationKey', 'fallbackText', 'arguments']);
-    nonEmptyText(value['localizationKey'], `${path}.localizationKey`);
-    nonEmptyText(value['fallbackText'], `${path}.fallbackText`);
+    billboardKey(value['localizationKey'], `${path}.localizationKey`);
+    billboardText(value['fallbackText'], `${path}.fallbackText`);
     const names = new Set<string>();
     const argumentsList = list(value['arguments'], `${path}.arguments`);
     if (argumentsList.length > 8) fail(`${path}.arguments`, 'must contain at most 8 entries');
     argumentsList.forEach((item, index) => {
       const argumentPath = `${path}.arguments[${String(index)}]`;
       const argument = record(item, argumentPath, ['name', 'value']);
-      const name = nonEmptyText(argument['name'], `${argumentPath}.name`);
-      nonEmptyText(argument['value'], `${argumentPath}.value`);
+      const name = billboardKey(argument['name'], `${argumentPath}.name`);
+      billboardText(argument['value'], `${argumentPath}.value`);
       if (names.has(name)) fail(`${argumentPath}.name`, 'is duplicated');
       names.add(name);
     });
@@ -925,18 +939,19 @@ function billboardContent(input: unknown, path: string): void {
     const value = record(input, path, [
       'kind', 'labelKey', 'fallbackLabel', 'value', 'unitKey', 'fallbackUnit',
     ]);
-    nonEmptyText(value['labelKey'], `${path}.labelKey`);
-    nonEmptyText(value['fallbackLabel'], `${path}.fallbackLabel`);
-    nonEmptyText(value['value'], `${path}.value`);
-    nullable(value['unitKey'], `${path}.unitKey`, nonEmptyText);
-    nullable(value['fallbackUnit'], `${path}.fallbackUnit`, nonEmptyText);
-  } else {
+    billboardKey(value['labelKey'], `${path}.labelKey`);
+    billboardText(value['fallbackLabel'], `${path}.fallbackLabel`);
+    billboardText(value['value'], `${path}.value`);
+    nullable(value['unitKey'], `${path}.unitKey`, billboardKey);
+    nullable(value['fallbackUnit'], `${path}.fallbackUnit`, billboardText);
+  } else if (kind === 'icon') {
     const value = record(input, path, ['kind', 'texture', 'altKey', 'fallbackAlt']);
-    const texture = record(value['texture'], `${path}.texture`, ['asset', 'contentHash']);
-    nonEmptyText(texture['asset'], `${path}.texture.asset`);
-    nonEmptyText(texture['contentHash'], `${path}.texture.contentHash`);
-    nonEmptyText(value['altKey'], `${path}.altKey`);
-    nonEmptyText(value['fallbackAlt'], `${path}.fallbackAlt`);
+    billboardTexture(value['texture'], `${path}.texture`);
+    billboardKey(value['altKey'], `${path}.altKey`);
+    billboardText(value['fallbackAlt'], `${path}.fallbackAlt`);
+  } else {
+    const value = record(input, path, ['kind', 'indicator']);
+    billboardIndicator(value['indicator'], `${path}.indicator`);
   }
 }
 
@@ -945,13 +960,156 @@ function billboardFont(input: unknown, path: string): void {
   const kind = enumeration(base['kind'], `${path}.kind`, ['system', 'asset'] as const);
   if (kind === 'system') {
     const value = record(input, path, ['kind', 'family']);
-    nonEmptyText(value['family'], `${path}.family`);
+    billboardText(value['family'], `${path}.family`);
   } else {
     const value = record(input, path, ['kind', 'asset', 'contentHash', 'family']);
-    nonEmptyText(value['asset'], `${path}.asset`);
-    nonEmptyText(value['contentHash'], `${path}.contentHash`);
-    nonEmptyText(value['family'], `${path}.family`);
+    billboardKey(value['asset'], `${path}.asset`);
+    billboardText(value['contentHash'], `${path}.contentHash`);
+    billboardText(value['family'], `${path}.family`);
   }
+}
+
+function billboardLocalizedText(input: unknown, path: string): void {
+  const value = record(input, path, ['localizationKey', 'fallbackText']);
+  billboardKey(value['localizationKey'], `${path}.localizationKey`);
+  billboardText(value['fallbackText'], `${path}.fallbackText`);
+}
+
+function billboardMeter(input: unknown, path: string): void {
+  const value = record(input, path, [
+    'id', 'accessibleLabel', 'current', 'min', 'max', 'preview', 'fillDirection', 'segments',
+    'fill', 'previewFill', 'back', 'border',
+  ]);
+  billboardKey(value['id'], `${path}.id`);
+  billboardLocalizedText(value['accessibleLabel'], `${path}.accessibleLabel`);
+  const current = finite(value['current'], `${path}.current`);
+  const minimum = finite(value['min'], `${path}.min`);
+  const maximum = finite(value['max'], `${path}.max`);
+  const maxMagnitude = 1_000_000_000_000;
+  if (Math.abs(current) > maxMagnitude) fail(`${path}.current`, 'exceeds the meter magnitude bound');
+  if (Math.abs(minimum) > maxMagnitude) fail(`${path}.min`, 'exceeds the meter magnitude bound');
+  if (Math.abs(maximum) > maxMagnitude) fail(`${path}.max`, 'exceeds the meter magnitude bound');
+  if (minimum >= maximum) fail(`${path}.min`, 'must be less than max');
+  if (current < minimum || current > maximum) fail(`${path}.current`, 'must be inside min..=max');
+  nullable(value['preview'], `${path}.preview`, (item, itemPath) => {
+    const preview = finite(item, itemPath);
+    if (Math.abs(preview) > maxMagnitude) fail(itemPath, 'exceeds the meter magnitude bound');
+    if (preview < minimum || preview > maximum) fail(itemPath, 'must be inside min..=max');
+  });
+  enumeration(
+    value['fillDirection'],
+    `${path}.fillDirection`,
+    ['leftToRight', 'rightToLeft', 'bottomToTop', 'topToBottom'] as const,
+  );
+  integer(value['segments'], `${path}.segments`, 1, 32);
+  color4(value['fill'], `${path}.fill`);
+  color4(value['previewFill'], `${path}.previewFill`);
+  color4(value['back'], `${path}.back`);
+  color4(value['border'], `${path}.border`);
+}
+
+function billboardStatusCue(input: unknown, path: string): void {
+  const value = record(input, path, ['id', 'label', 'icon']);
+  billboardKey(value['id'], `${path}.id`);
+  billboardLocalizedText(value['label'], `${path}.label`);
+  nullable(value['icon'], `${path}.icon`, billboardTexture);
+}
+
+function billboardStyle(input: unknown, path: string): void {
+  const value = record(input, path, ['opacity', 'backing', 'border', 'radiusPixels']);
+  range(value['opacity'], `${path}.opacity`, 0, 1);
+  color4(value['backing'], `${path}.backing`);
+  color4(value['border'], `${path}.border`);
+  range(value['radiusPixels'], `${path}.radiusPixels`, 0, 128);
+}
+
+function billboardIndicator(input: unknown, path: string): void {
+  const value = record(input, path, [
+    'label', 'icon', 'accessibleLabel', 'meters', 'statusCues', 'widthPixels', 'spacingPixels',
+    'alignment', 'style',
+  ]);
+  nullable(value['label'], `${path}.label`, billboardLocalizedText);
+  nullable(value['icon'], `${path}.icon`, billboardTexture);
+  billboardLocalizedText(value['accessibleLabel'], `${path}.accessibleLabel`);
+  const meters = list(value['meters'], `${path}.meters`);
+  if (meters.length > 4) fail(`${path}.meters`, 'must contain at most 4 entries');
+  const meterIds = new Set<string>();
+  meters.forEach((item, index) => {
+    const meterPath = `${path}.meters[${String(index)}]`;
+    billboardMeter(item, meterPath);
+    const id = billboardRecordId(item, meterPath);
+    if (meterIds.has(id)) fail(`${meterPath}.id`, 'is duplicated');
+    meterIds.add(id);
+  });
+  const statusCues = list(value['statusCues'], `${path}.statusCues`);
+  if (statusCues.length > 8) fail(`${path}.statusCues`, 'must contain at most 8 entries');
+  const statusIds = new Set<string>();
+  statusCues.forEach((item, index) => {
+    const cuePath = `${path}.statusCues[${String(index)}]`;
+    billboardStatusCue(item, cuePath);
+    const id = billboardRecordId(item, cuePath);
+    if (statusIds.has(id)) fail(`${cuePath}.id`, 'is duplicated');
+    statusIds.add(id);
+  });
+  range(value['widthPixels'], `${path}.widthPixels`, 1, 2_048);
+  range(value['spacingPixels'], `${path}.spacingPixels`, 0, 128);
+  enumeration(value['alignment'], `${path}.alignment`, ['start', 'center', 'end'] as const);
+  billboardStyle(value['style'], `${path}.style`);
+}
+
+function billboardLayoutPolicy(input: unknown, path: string): void {
+  const value = record(input, path, ['priority', 'sizing', 'safeArea', 'edgeBehavior', 'overlapBehavior']);
+  integer(value['priority'], `${path}.priority`, -2_147_483_648, 2_147_483_647);
+  billboardLayoutSizing(value['sizing'], `${path}.sizing`);
+  const safeArea = record(value['safeArea'], `${path}.safeArea`, [
+    'topPixels', 'rightPixels', 'bottomPixels', 'leftPixels',
+  ]);
+  range(safeArea['topPixels'], `${path}.safeArea.topPixels`, 0, 4_096);
+  range(safeArea['rightPixels'], `${path}.safeArea.rightPixels`, 0, 4_096);
+  range(safeArea['bottomPixels'], `${path}.safeArea.bottomPixels`, 0, 4_096);
+  range(safeArea['leftPixels'], `${path}.safeArea.leftPixels`, 0, 4_096);
+  enumeration(value['edgeBehavior'], `${path}.edgeBehavior`, ['clamp', 'cull'] as const);
+  enumeration(value['overlapBehavior'], `${path}.overlapBehavior`, ['stack', 'suppress'] as const);
+}
+
+function billboardLayoutSizing(input: unknown, path: string): void {
+  const base = looseRecord(input, path);
+  const kind = enumeration(base['kind'], `${path}.kind`, ['constantPixels', 'distanceScaled'] as const);
+  if (kind === 'constantPixels') {
+    record(input, path, ['kind']);
+    return;
+  }
+  const value = record(input, path, ['kind', 'referenceDistance', 'minScale', 'maxScale']);
+  range(value['referenceDistance'], `${path}.referenceDistance`, 1.1920928955078125e-7, 10_000);
+  range(value['minScale'], `${path}.minScale`, 1.1920928955078125e-7, 16);
+  const maximum = range(value['maxScale'], `${path}.maxScale`, 1.1920928955078125e-7, 16);
+  if ((value['minScale'] as number) > maximum) fail(`${path}.minScale`, 'must be less than or equal to maxScale');
+}
+
+function billboardTexture(input: unknown, path: string): void {
+  const value = record(input, path, ['asset', 'contentHash']);
+  billboardKey(value['asset'], `${path}.asset`);
+  billboardText(value['contentHash'], `${path}.contentHash`);
+}
+
+function billboardRecordId(input: unknown, path: string): string {
+  return billboardKey(looseRecord(input, path)['id'], `${path}.id`);
+}
+
+function billboardKey(input: unknown, path: string): string {
+  return boundedBillboardText(input, path, 128);
+}
+
+function billboardText(input: unknown, path: string): string {
+  return boundedBillboardText(input, path, 256);
+}
+
+function boundedBillboardText(input: unknown, path: string, maximumBytes: number): string {
+  const value = nonEmptyText(input, path);
+  if (new TextEncoder().encode(value).byteLength > maximumBytes) {
+    fail(path, `must contain at most ${String(maximumBytes)} UTF-8 bytes`);
+  }
+  return value;
 }
 
 function particleOperation(op: string, input: unknown, path: string): void {

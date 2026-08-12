@@ -174,6 +174,78 @@ void test('billboard layers and distance culling are renderer-owned and do not a
   assert.equal(host.readout().culledBillboards, 2);
 });
 
+void test('persistent missing anchors retain a bounded deduplicated diagnostic', async () => {
+  const host = new RendererBillboardHost({
+    container: new FakeContainer(),
+    createElement: () => new FakeElement(),
+    resolveEntityPosition: () => null,
+    projectWorld: () => ({
+      xPixels: 0,
+      yPixels: 0,
+      depth: 0,
+      distance: 0,
+      insideViewport: true,
+      occluded: false,
+    }),
+  });
+  await host.applyPresentation(presentation([
+    operation(0, { op: 'create', handle: billboardHandle(1), descriptor: descriptor(10) }),
+  ]));
+  for (let refresh = 0; refresh < 300; refresh += 1) host.refreshLayout();
+  assert.equal(host.readout().diagnostics.length, 1);
+  assert.equal(host.readout().diagnostics[0]?.code, 'anchorMissing');
+});
+
+void test('pending async resource admission cannot resurrect a billboard after cleanup', async () => {
+  const container = new FakeContainer();
+  const fontBytes = new Uint8Array([1, 2, 3]).buffer;
+  const fontHash = await sha256(fontBytes);
+  let release!: () => void;
+  const resourceGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const host = new RendererBillboardHost({
+    container,
+    createElement: () => new FakeElement(),
+    loadFont: async () => undefined,
+    resolveEntityPosition: () => [0, 0, 0],
+    projectWorld: () => ({
+      xPixels: 0,
+      yPixels: 0,
+      depth: 0,
+      distance: 0,
+      insideViewport: true,
+      occluded: false,
+    }),
+    resolveResource: async () => {
+      await resourceGate;
+      return { bytes: fontBytes };
+    },
+  });
+  const pending = host.applyPresentation(presentation([
+    operation(0, {
+      op: 'create',
+      handle: billboardHandle(1),
+      descriptor: {
+        ...descriptor(10),
+        font: {
+          kind: 'asset',
+          asset: 'font/delayed',
+          contentHash: fontHash,
+          family: 'Delayed',
+        },
+      },
+    }),
+  ]));
+  host.cleanup();
+  release();
+  const receipt = await pending;
+  assert.equal(receipt.applied, 0);
+  assert.equal(receipt.diagnostics[0]?.code, 'hostFailure');
+  assert.equal(host.readout().activeBillboards, 0);
+  assert.equal(container.elements.length, 0);
+});
+
 void test('font and icon resources are SHA-256 validated cached and fail with typed diagnostics', async () => {
   const fontBytes = new Uint8Array([1, 2, 3]).buffer;
   const iconBytes = new Uint8Array([4, 5, 6]).buffer;

@@ -11,6 +11,7 @@ declare global {
     __rustyApplicationCanvasObserver?: MutationObserver;
     __rustyApplicationPendingIncremental?: unknown;
     __rustyApplicationPendingReplacement?: Promise<unknown>;
+    __rustyIndicatorMeterNode?: Element | null;
   }
 }
 
@@ -141,22 +142,18 @@ test('application host owns composition, input arbitration, and disposal', async
     const canvas = element as HTMLCanvasElement;
     const context = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
     if (context === null) return 0;
-    const pixels = new Uint8Array(4 * 9);
-    let populated = 0;
-    for (let y = 1; y <= 3; y += 1) {
-      for (let x = 1; x <= 3; x += 1) {
-        context.readPixels(
-          Math.floor(context.drawingBufferWidth * x / 4),
-          Math.floor(context.drawingBufferHeight * y / 4),
-          1,
-          1,
-          context.RGBA,
-          context.UNSIGNED_BYTE,
-          pixels.subarray(populated * 4, populated * 4 + 4),
-        );
-        populated += 1;
-      }
-    }
+    const pixels = new Uint8Array(
+      context.drawingBufferWidth * context.drawingBufferHeight * 4,
+    );
+    context.readPixels(
+      0,
+      0,
+      context.drawingBufferWidth,
+      context.drawingBufferHeight,
+      context.RGBA,
+      context.UNSIGNED_BYTE,
+      pixels,
+    );
     return Array.from(pixels).filter((value) => value > 8).length;
   });
   expect(visibleResourcePixels).toBeGreaterThan(0);
@@ -340,6 +337,161 @@ test('application host owns composition, input arbitration, and disposal', async
   await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
   await page.evaluate(() => window.__rustyApplicationHost?.dispose());
   await expect(page.locator('canvas')).toHaveCount(0);
+});
+
+test('public application host realizes and refreshes structured world indicators', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  await expect.poll(() => page.evaluate(() => window.__rustyApplicationIndicatorReceipt))
+    .toEqual({ applied: 1, diagnostics: [] });
+
+  const indicator = page.locator('[data-rusty-billboard-handle="41"]');
+  await expect(indicator).toBeVisible();
+  await expect(indicator).toHaveAttribute('aria-label', 'Ranger status; Open');
+  await expect(indicator).toContainText('Ranger');
+  await expect(indicator).toContainText('Open');
+  await expect(indicator.locator('img')).toHaveCount(1);
+  const statusCue = indicator.locator('[data-rusty-indicator-kind="status"]');
+  await expect(statusCue).toHaveCSS('background-image', /blob:/u);
+  const meter = indicator.getByRole('progressbar', { name: 'Health' });
+  await expect(meter).toHaveAttribute('aria-valuenow', '72');
+  await expect(meter).toHaveAttribute('aria-valuemin', '0');
+  await expect(meter).toHaveAttribute('aria-valuemax', '100');
+  await expect(indicator.getByRole('progressbar', { name: 'Stamina' }))
+    .toHaveAttribute('aria-valuenow', '44');
+  expect(await indicator.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe('none');
+
+  const transformBefore = await indicator.evaluate((element) => element.getAttribute('style'));
+  await page.evaluate(() => {
+    window.__rustyIndicatorMeterNode =
+      document.querySelector('[data-rusty-billboard-handle="41"] [role="progressbar"]');
+    window.__rustyApplicationHost?.renderer.setCameraPose({
+      position: [0.5, 0, 3],
+      pitchDegrees: 0,
+      yawDegrees: 0,
+    });
+  });
+  await expect.poll(() => indicator.evaluate((element) => element.getAttribute('style')))
+    .not.toBe(transformBefore);
+
+  const update = await page.evaluate(() =>
+    window.__rustyApplicationHost?.renderer.applyPresentation({
+      schemaVersion: 1,
+      ops: [{
+        domain: 'billboard',
+        meta: { sequence: 0 },
+        op: {
+          op: 'update',
+          handle: 41,
+          patch: {
+            anchor: null,
+            content: {
+              kind: 'structured',
+              indicator: {
+                label: { localizationKey: 'actor.ranger.name', fallbackText: 'Ranger' },
+                icon: null,
+                accessibleLabel: {
+                  localizationKey: 'actor.ranger.indicator',
+                  fallbackText: 'Ranger status',
+                },
+                meters: [{
+                  id: 'health',
+                  accessibleLabel: {
+                    localizationKey: 'resource.health',
+                    fallbackText: 'Health',
+                  },
+                  current: 58,
+                  min: 0,
+                  max: 100,
+                  preview: 52,
+                  fillDirection: 'leftToRight',
+                  segments: 10,
+                  fill: [0.16, 0.72, 0.28, 1],
+                  previewFill: [0.95, 0.72, 0.12, 1],
+                  back: [0.04, 0.04, 0.04, 0.9],
+                  border: [0, 0, 0, 1],
+                }],
+                statusCues: [{
+                  id: 'interact',
+                  label: { localizationKey: 'prompt.open', fallbackText: 'Open' },
+                  icon: null,
+                }],
+                widthPixels: 192,
+                spacingPixels: 6,
+                alignment: 'center',
+                style: {
+                  opacity: 0.96,
+                  backing: [0, 0, 0, 0.58],
+                  border: [0.2, 0.2, 0.2, 1],
+                  radiusPixels: 6,
+                },
+              },
+            },
+            font: null,
+            heightPixels: null,
+            color: null,
+            background: null,
+            maxDistance: null,
+            layer: null,
+            visible: null,
+          },
+        },
+      }],
+    }),
+  );
+  expect(update).toEqual({ applied: 1, diagnostics: [] });
+  await expect(meter).toHaveAttribute('aria-valuenow', '58');
+  expect(await page.evaluate(() =>
+    window.__rustyIndicatorMeterNode ===
+      document.querySelector('[data-rusty-billboard-handle="41"] [role="progressbar"]'),
+  )).toBe(true);
+  await expect(statusCue).toHaveCSS('background-image', 'none');
+
+  await page.setViewportSize({ width: 720, height: 540 });
+  await expect(indicator).toBeVisible();
+  expect(await page.evaluate(() =>
+    window.__rustyApplicationHost?.renderer.applyPresentation({
+      schemaVersion: 1,
+      ops: [{
+        domain: 'billboard',
+        meta: { sequence: 0 },
+        op: {
+          op: 'update',
+          handle: 41,
+          patch: {
+            anchor: null,
+            content: {
+              kind: 'text',
+              localizationKey: 'indicator.legacy',
+              fallbackText: 'Legacy indicator',
+              arguments: [],
+            },
+            font: null,
+            heightPixels: null,
+            color: null,
+            background: null,
+            maxDistance: null,
+            layer: null,
+            visible: null,
+          },
+        },
+      }],
+    }),
+  )).toEqual({ applied: 1, diagnostics: [] });
+  await expect(indicator).toHaveAttribute('role', 'status');
+  await expect(indicator).not.toHaveAttribute('aria-label');
+  await expect(indicator).toHaveText('Legacy indicator');
+  expect(await indicator.evaluate((element) => (element as HTMLElement).style.width)).toBe('');
+  expect(await page.evaluate(() =>
+    window.__rustyApplicationHost?.renderer.applyPresentation({
+      schemaVersion: 1,
+      ops: [{
+        domain: 'billboard',
+        meta: { sequence: 0 },
+        op: { op: 'destroy', handle: 41 },
+      }],
+    }),
+  )).toEqual({ applied: 1, diagnostics: [] });
+  await expect(indicator).toHaveCount(0);
 });
 
 test('late trusted UI failure cleans the renderer transactionally and leaves bounded failure UI', async ({ page }) => {

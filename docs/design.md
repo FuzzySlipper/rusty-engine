@@ -564,6 +564,18 @@ hashes, and provenance envelopes do not exist. Every projector can validate a co
 batch, while `PresentationProjectorSet` provides one fail-atomic mixed-domain frame boundary.
 Resource checks use only immutable kind/content identity supplied by the caller.
 
+World indicators remain in that billboard owner rather than creating a second
+UI protocol. A structured billboard can compose bounded localized label/icon,
+neutral ranged meters, and status cues under one stable handle. Exact finite
+ranges, stable local identities, explicit pixel/distance sizing, priority,
+safe-area, edge, and overlap facts cross the neutral border; deterministic DOM
+layout, semantic accessibility, hash-verified resources, and disposal remain
+host realization. Ordinary indicators are pointer-transparent. Games retain
+health, faction, targeting, interaction, visibility, and camera meaning, and no
+renderer readout mutates those facts. World-sized DOM and interactive diegetic
+panels are deliberately outside the current contract. See
+[structured world indicators](topics/world-indicators.md).
+
 The isolated `render/` workspace realizes the same contract for Three, WebGL, WebAudio, DOM
 overlays, inspection, and editor viewport use. It is installed and verified separately from the
 ordinary Rust provider gate. Renderer picks and host readouts are hints/observations that downstream

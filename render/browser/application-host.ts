@@ -13,6 +13,7 @@ declare global {
     __rustyApplicationGameplayInputCount?: number;
     __rustyApplicationAudioReceipt?: unknown;
     __rustyApplicationAudioResume?: unknown;
+    __rustyApplicationIndicatorReceipt?: unknown;
     __rustyApplicationResourceContent?: (corrupt?: boolean) => RustyApplicationContent;
     __rustyApplicationUiDisposed?: boolean;
   }
@@ -67,7 +68,10 @@ window.__rustyApplicationMount = () =>
   mountRustyApplication({
     root,
     initialInteractionMode: 'gameplay',
-    renderer: { initialContent: resourceContent() },
+    renderer: {
+      initialContent: resourceContent(),
+      resolveIndicatorEntityPosition: (entity) => entity === 42 ? [0, 0, 0] : null,
+    },
     mountUi: (uiRoot, context) => {
       const gameplay = document.createElement('div');
       gameplay.id = 'gameplay-zone';
@@ -141,6 +145,115 @@ window.__rustyApplicationHost.renderer.setCameraPose({
   yawDegrees: 0,
 });
 window.__rustyApplicationHost.renderer.renderOnce();
+window.__rustyApplicationIndicatorReceipt =
+  await window.__rustyApplicationHost.renderer.applyPresentation({
+    schemaVersion: 1,
+    ops: [{
+      domain: 'billboard',
+      meta: { sequence: 0 },
+      op: {
+        op: 'create',
+        handle: 41,
+        descriptor: {
+          anchor: { kind: 'entityAttached', entity: 42, offset: [0, 0.9, 0] },
+          content: {
+            kind: 'structured',
+            indicator: {
+              label: {
+                localizationKey: 'actor.ranger.name',
+                fallbackText: 'Ranger',
+              },
+              icon: {
+                asset: 'texture/application-host-proof',
+                contentHash: TEXTURE_CONTENT_HASH,
+              },
+              accessibleLabel: {
+                localizationKey: 'actor.ranger.indicator',
+                fallbackText: 'Ranger status',
+              },
+              meters: [{
+                id: 'health',
+                accessibleLabel: {
+                  localizationKey: 'resource.health',
+                  fallbackText: 'Health',
+                },
+                current: 72,
+                min: 0,
+                max: 100,
+                preview: 64,
+                fillDirection: 'leftToRight',
+                segments: 10,
+                fill: [0.16, 0.72, 0.28, 1],
+                previewFill: [0.95, 0.72, 0.12, 1],
+                back: [0.04, 0.04, 0.04, 0.9],
+                border: [0, 0, 0, 1],
+              }, {
+                id: 'stamina',
+                accessibleLabel: {
+                  localizationKey: 'resource.stamina',
+                  fallbackText: 'Stamina',
+                },
+                current: 44,
+                min: 0,
+                max: 60,
+                preview: null,
+                fillDirection: 'leftToRight',
+                segments: 6,
+                fill: [0.2, 0.55, 0.95, 1],
+                previewFill: [0.4, 0.7, 1, 1],
+                back: [0.04, 0.04, 0.04, 0.9],
+                border: [0, 0, 0, 1],
+              }],
+              statusCues: [{
+                id: 'interact',
+                label: {
+                  localizationKey: 'prompt.open',
+                  fallbackText: 'Open',
+                },
+                icon: {
+                  asset: 'texture/application-host-proof',
+                  contentHash: TEXTURE_CONTENT_HASH,
+                },
+              }],
+              widthPixels: 192,
+              spacingPixels: 6,
+              alignment: 'center',
+              style: {
+                opacity: 0.96,
+                backing: [0, 0, 0, 0.58],
+                border: [0.2, 0.2, 0.2, 1],
+                radiusPixels: 6,
+              },
+            },
+          },
+          font: { kind: 'system', family: 'sans-serif' },
+          heightPixels: 20,
+          color: [1, 1, 1, 1],
+          background: [0, 0, 0, 0],
+          maxDistance: 80,
+          layer: 'occluded',
+          visible: true,
+          layout: {
+            priority: 100,
+            sizing: {
+              kind: 'distanceScaled',
+              referenceDistance: 12,
+              minScale: 0.75,
+              maxScale: 1.25,
+            },
+            safeArea: {
+              topPixels: 12,
+              rightPixels: 12,
+              bottomPixels: 12,
+              leftPixels: 12,
+            },
+            edgeBehavior: 'clamp',
+            overlapBehavior: 'suppress',
+          },
+        },
+      },
+    }],
+  });
 
 window.__rustyApplicationFailureProbe = async () => {
   await window.__rustyApplicationHost?.dispose();

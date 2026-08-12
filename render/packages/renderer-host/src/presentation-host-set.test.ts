@@ -35,3 +35,24 @@ void test('unknown advancing hosts conservatively retain continuous advancement'
 
   assert.equal(hosts.requiresAnimationFrame(), true);
 });
+
+void test('billboard hosts advance while indicators are active', () => {
+  let billboardActive = true;
+  let advances = 0;
+  const hosts = new RendererPresentationHostSet({
+    billboard: {
+      applyPresentation: (_frame: PresentationFrameDiff) => EMPTY_RECEIPT,
+      advance: () => {
+        advances += 1;
+        return EMPTY_RECEIPT;
+      },
+      requiresAnimationFrame: () => billboardActive,
+    },
+  });
+
+  assert.equal(hosts.requiresAnimationFrame(), true);
+  assert.deepEqual(hosts.advance(1 / 60).advancedDomains, ['billboard']);
+  assert.equal(advances, 1);
+  billboardActive = false;
+  assert.equal(hosts.requiresAnimationFrame(), false);
+});

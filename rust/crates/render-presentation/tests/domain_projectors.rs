@@ -68,6 +68,7 @@ fn billboard_descriptor() -> BillboardDescriptor {
         max_distance: 40.0,
         layer: BillboardLayer::Occluded,
         visible: true,
+        layout: None,
     }
 }
 

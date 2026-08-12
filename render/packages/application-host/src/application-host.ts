@@ -1,6 +1,7 @@
 import type { PresentationFrameDiff, RenderFrameDiff } from '@rusty-engine/render-contracts';
 import {
   RendererAudioHost,
+  RendererBillboardHost,
   RendererPresentationHostSet,
   createRendererDefaultSurfaceFrame,
   mountRendererSurface,
@@ -119,6 +120,10 @@ export interface RustyApplicationRendererOptions {
   readonly initialContent?: RustyApplicationContent;
   readonly initialFrame?: RustyApplicationFrame;
   readonly pixelRatio?: number;
+  /** Gameplay-owned entity positions used only to resolve neutral billboard anchors. */
+  readonly resolveIndicatorEntityPosition?: (
+    entity: number,
+  ) => readonly [number, number, number] | null;
 }
 
 export interface RustyApplicationHostOptions {
@@ -207,6 +212,8 @@ async function mountRustyApplicationWithEnvironment(
   let activeCanvas = layout.canvas;
   let activeContent: PreparedRustyApplicationContent | null = null;
   let activeAudio: RendererAudioHost | null = null;
+  let activeBillboard: RendererBillboardHost | null = null;
+  let activeBillboardUrls = new Set<string>();
   let contentRevision = 0;
   let replacementPending = 0;
   let replacementQueue: Promise<void> = Promise.resolve();
@@ -237,7 +244,12 @@ async function mountRustyApplicationWithEnvironment(
   const mountSurface = async (
     canvas: HTMLCanvasElement,
     content: PreparedRustyApplicationContent,
-  ): Promise<{ readonly audio: RendererAudioHost | null; readonly surface: RendererSurface }> => {
+  ): Promise<{
+    readonly audio: RendererAudioHost | null;
+    readonly billboard: RendererBillboardHost;
+    readonly billboardUrls: Set<string>;
+    readonly surface: RendererSurface;
+  }> => {
     const mounted = await environment.mountSurface(canvas, {
       autoStart: true,
       controls: { enabled: false },
@@ -249,13 +261,42 @@ async function mountRustyApplicationWithEnvironment(
       ...rustyApplicationSurfaceResourceOptions(content),
     });
     const resolveAudio = rustyApplicationAudioResourceResolver(content);
-    if (resolveAudio === null) return { audio: null, surface: mounted };
+    const billboardUrls = new Set<string>();
     try {
-      const audio = new RendererAudioHost({ resolveResource: resolveAudio });
-      mounted.setPresentationHosts(new RendererPresentationHostSet({ audio }));
-      return { audio, surface: mounted };
+      const audio = resolveAudio === null
+        ? null
+        : new RendererAudioHost({ resolveResource: resolveAudio });
+      const resources = new Map(content.resources.map((resource) => [resource.identity, resource]));
+      const resourcesByHash = new Map(
+        content.resources.map((resource) => [resource.contentHash, resource]),
+      );
+      const billboard = new RendererBillboardHost({
+        container: layout.indicators,
+        projectWorld: (position) => ({
+          ...mounted.projectWorldPoint(position),
+          // The ordinary public host exposes CPU projection but no depth-buffer readback.
+          occluded: false,
+        }),
+        resolveEntityPosition: options.renderer?.resolveIndicatorEntityPosition ?? (() => null),
+        resolveResource: async (identity, contentHash) => {
+          const resource = resources.get(identity)
+            ?? (contentHash === undefined ? undefined : resourcesByHash.get(contentHash));
+          if (resource === undefined) return null;
+          const bytes = resource.bytes.slice(0);
+          if (resource.kind !== 'texture') return { bytes };
+          const url = URL.createObjectURL(new Blob([bytes], { type: resource.mediaType }));
+          billboardUrls.add(url);
+          return { bytes, url };
+        },
+      });
+      mounted.setPresentationHosts(new RendererPresentationHostSet({
+        ...(audio === null ? {} : { audio }),
+        billboard,
+      }));
+      return { audio, billboard, billboardUrls, surface: mounted };
     } catch (cause) {
       mounted.dispose();
+      for (const url of billboardUrls) URL.revokeObjectURL(url);
       throw cause;
     }
   };
@@ -271,6 +312,8 @@ async function mountRustyApplicationWithEnvironment(
     replacementQueue = replacementQueue.then(async () => {
       const oldSurface = surface;
       const oldAudio = activeAudio;
+      const oldBillboard = activeBillboard;
+      const oldBillboardUrls = activeBillboardUrls;
       const oldContent = activeContent;
       if (oldSurface === null || oldContent === null || disposed) {
         receipt = replacementFailure(
@@ -282,16 +325,22 @@ async function mountRustyApplicationWithEnvironment(
       const candidateCanvas = createRendererCanvas(document);
       let candidateSurface: RendererSurface | null = null;
       let candidateAudio: RendererAudioHost | null = null;
+      let candidateBillboard: RendererBillboardHost | null = null;
+      let candidateBillboardUrls = new Set<string>();
       try {
         const candidateContent = candidate();
         const mounted = await mountSurface(candidateCanvas, candidateContent);
         candidateSurface = mounted.surface;
         candidateAudio = mounted.audio;
+        candidateBillboard = mounted.billboard;
+        candidateBillboardUrls = mounted.billboardUrls;
         candidateSurface.setCameraPose(oldSurface.cameraPose());
         candidateSurface.renderOnce();
         oldCanvas.replaceWith(candidateCanvas);
         surface = candidateSurface;
         activeAudio = candidateAudio;
+        activeBillboard = candidateBillboard;
+        activeBillboardUrls = candidateBillboardUrls;
         activeContent = candidateContent;
         contentRevision += 1;
         activeCanvas = candidateCanvas;
@@ -305,6 +354,7 @@ async function mountRustyApplicationWithEnvironment(
         } catch {
           // Audio disposal is best-effort after the replacement commits.
         }
+        disposeBillboardOwner(oldBillboard, oldBillboardUrls);
         receipt = Object.freeze({ applied: true, diagnostics: [] });
       } catch (cause) {
         try {
@@ -317,6 +367,7 @@ async function mountRustyApplicationWithEnvironment(
         } catch {
           // Preserve the authoritative prior surface if candidate cleanup is noisy.
         }
+        disposeBillboardOwner(candidateBillboard, candidateBillboardUrls);
         candidateCanvas.remove();
         receipt = replacementFailure(cause);
       }
@@ -488,6 +539,8 @@ async function mountRustyApplicationWithEnvironment(
     const surfaceMount = await mountSurface(layout.canvas, initialContent);
     surface = surfaceMount.surface;
     activeAudio = surfaceMount.audio;
+    activeBillboard = surfaceMount.billboard;
+    activeBillboardUrls = surfaceMount.billboardUrls;
     activeContent = initialContent;
     contentRevision = 1;
     removeListeners = installInputArbitration(
@@ -510,6 +563,8 @@ async function mountRustyApplicationWithEnvironment(
       removeListeners,
       surface,
       activeAudio,
+      activeBillboard,
+      activeBillboardUrls,
       layout.host,
     );
     delete root.dataset['rustyApplicationState'];
@@ -552,11 +607,15 @@ async function mountRustyApplicationWithEnvironment(
           removeListeners,
           surface,
           activeAudio,
+          activeBillboard,
+          activeBillboardUrls,
           layout.host,
         );
         uiOwner = null;
         surface = null;
         activeAudio = null;
+        activeBillboard = null;
+        activeBillboardUrls = new Set();
         delete root.dataset['rustyApplicationState'];
         if (cleanupFailures.length > 0) {
           throw new AggregateError(cleanupFailures, 'Rusty Application Host disposal failed');
@@ -593,6 +652,7 @@ function createLayout(document: Document, loadingLabel: string): {
   readonly host: HTMLDivElement;
   readonly canvas: HTMLCanvasElement;
   readonly ui: HTMLDivElement;
+  readonly indicators: HTMLDivElement;
   readonly loading: HTMLDivElement;
 } {
   const host = document.createElement('div');
@@ -601,9 +661,14 @@ function createLayout(document: Document, loadingLabel: string): {
 
   const canvas = createRendererCanvas(document);
 
+  const indicators = document.createElement('div');
+  indicators.dataset['rustyApplicationIndicators'] = 'engine-owned';
+  indicators.style.cssText =
+    'inset:0;overflow:hidden;pointer-events:none;position:absolute;z-index:1;';
+
   const ui = document.createElement('div');
   ui.dataset['rustyApplicationUi'] = 'downstream';
-  ui.style.cssText = 'min-height:100dvh;position:relative;width:100%;z-index:1;';
+  ui.style.cssText = 'min-height:100dvh;position:relative;width:100%;z-index:2;';
 
   const loading = document.createElement('div');
   loading.dataset['rustyApplicationLoading'] = '';
@@ -612,8 +677,8 @@ function createLayout(document: Document, loadingLabel: string): {
   loading.style.cssText =
     'align-items:center;background:#071012;color:#d9eee7;display:flex;font:14px system-ui;inset:0;justify-content:center;position:absolute;z-index:2;';
 
-  host.append(canvas, ui, loading);
-  return { host, canvas, ui, loading };
+  host.append(canvas, indicators, ui, loading);
+  return { host, canvas, indicators, ui, loading };
 }
 
 function createRendererCanvas(document: Document): HTMLCanvasElement {
@@ -692,6 +757,8 @@ async function cleanupApplicationOwners(
   removeListeners: () => void,
   surface: RendererSurface | null,
   audio: RendererAudioHost | null,
+  billboard: RendererBillboardHost | null,
+  billboardUrls: ReadonlySet<string>,
   host: HTMLElement,
 ): Promise<readonly unknown[]> {
   const failures: unknown[] = [];
@@ -715,8 +782,21 @@ async function cleanupApplicationOwners(
   } catch (cause) {
     failures.push(cause);
   }
+  try {
+    disposeBillboardOwner(billboard, billboardUrls);
+  } catch (cause) {
+    failures.push(cause);
+  }
   host.remove();
   return failures;
+}
+
+function disposeBillboardOwner(
+  billboard: RendererBillboardHost | null,
+  urls: ReadonlySet<string>,
+): void {
+  billboard?.dispose();
+  for (const url of urls) URL.revokeObjectURL(url);
 }
 
 function clearPreviousFailure(root: HTMLElement): void {

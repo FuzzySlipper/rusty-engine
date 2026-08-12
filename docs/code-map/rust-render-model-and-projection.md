@@ -40,6 +40,7 @@ entity, authored-scene, voxel, and presentation facts.
 - [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
 - [Reconstructed voxel surfaces](../topics/voxel/reconstructed-surfaces.md)
 - [Chunk-granular voxel mesh updates](../topics/voxel/chunk-granular-updates.md)
+- [Structured world indicators](../topics/world-indicators.md)
 - [Textured voxel campaign closeout](../textured-voxel-campaign-closeout.md)
 
 ## Public downstream surfaces
@@ -51,6 +52,10 @@ entity, authored-scene, voxel, and presentation facts.
   explicit stream offset. Callers own where those bytes are published.
 - Projection crates translate owner facts into complete frames; they do not
   become a second source of gameplay truth.
+- `render-presentation::BillboardProjector` retains legacy text/value/icon
+  content and adds bounded structured indicators under the same stable handle
+  lifecycle. Exact ranges, assets, local meter/status identities, and optional
+  layout policy validate before fail-atomic domain or mixed-domain publication.
 - Independently ordered projections may stamp a frame with one stable stream,
   monotonic revision, and exact operation count. Neutral and concrete retained
   application reject stale or clipped stamped frames fail-atomically.

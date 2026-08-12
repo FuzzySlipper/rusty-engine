@@ -71,6 +71,7 @@ compiled artifact, and Rust webview host/resource lifecycle.
 - [Voxel mesh data plane](../topics/voxel/voxel-mesh-data-plane.md)
 - [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
 - [Textured voxel campaign closeout](../textured-voxel-campaign-closeout.md)
+- [Structured world indicators](../topics/world-indicators.md)
 
 ## Public downstream surfaces
 
@@ -79,6 +80,10 @@ compiled artifact, and Rust webview host/resource lifecycle.
 - Browser/Tauri/Electron products that need rich DOM import only
   `@rusty-engine/application-host`; its bundled closure keeps renderer package
   names and backend types out of downstream manifests, locks, and source.
+- Structured indicators are realized by the existing billboard host in one
+  Engine-owned pointer-transparent overlay. Stable local meter identities allow
+  value-only updates without rebuilding unrelated DOM; deterministic priority,
+  safe-area, edge, overlap, and suppression policy remains backend-owned.
 - The downstream owns the outer window/event loop and content/storage policy.
   The adapter owns one child webview and accepts pre-admitted content-hash-bound
   bytes without URLs or filesystem access.

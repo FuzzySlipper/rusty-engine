@@ -259,6 +259,9 @@ export function installRendererWebviewBridge(): void {
     const canvas = requireElement('rusty-renderer-canvas', HTMLCanvasElement);
     const overlays = requireElement('rusty-renderer-overlays', HTMLDivElement);
     const entries = new Map(configuration.resources.map((entry) => [entry.identity, entry]));
+    const entriesByHash = new Map(
+      configuration.resources.map((entry) => [entry.contentHash, entry]),
+    );
     const bytesByHash = new Map(
       configuration.resources.map((entry) => [entry.contentHash, decodeBase64(entry.bytesBase64)]),
     );
@@ -328,10 +331,17 @@ export function installRendererWebviewBridge(): void {
       container: overlays,
       projectWorld: (position) => ({ ...requireSurface().projectWorldPoint(position), occluded: false }),
       resolveEntityPosition: () => null,
-      resolveResource: async (identity) => {
-        const entry = entries.get(identity);
+      resolveResource: async (identity, contentHash) => {
+        const entry = entries.get(identity)
+          ?? (contentHash === undefined
+            ? undefined
+            : entriesByHash.get(contentHash));
         if (entry === undefined) return null;
-        return { bytes: decodeBase64(entry.bytesBase64) };
+        const bytes = decodeBase64(entry.bytesBase64);
+        if (!entry.mediaType.startsWith('image/')) return { bytes };
+        const url = URL.createObjectURL(new Blob([bytes.slice(0)], { type: entry.mediaType }));
+        objectUrls.add(url);
+        return { bytes, url };
       },
     });
     particleSink = new RendererDomParticleBillboardSink({

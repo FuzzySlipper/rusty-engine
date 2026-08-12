@@ -1,11 +1,19 @@
-use render_model::JSON_SAFE_U64_MAX;
+use std::collections::BTreeMap;
+
+use render_model::{RenderAssetKind, ResolvedRenderAsset, JSON_SAFE_U64_MAX};
 use serde::{Deserialize, Serialize};
 
+use crate::billboard::{
+    validate_content, validate_descriptor, validate_font, validate_layout_policy,
+    MIN_POSITIVE_BILLBOARD_VALUE,
+};
 use crate::{
     AnimationControllerProjectionState, AnimationProjectionOp, AudioEmitter, AudioProjectionOp,
-    AudioSourceDescriptor, AudioSourcePatch, BillboardAnchor, BillboardDescriptor, BillboardPatch,
-    BillboardProjectionOp, ParticleAnchor, ParticleEmitterDescriptor, ParticleEmitterPatch,
-    ParticleProjectionOp, TelemetryOverlayProjectionOp,
+    AudioSourceDescriptor, AudioSourcePatch, BillboardAnchor, BillboardContent,
+    BillboardDescriptor, BillboardFontRef, BillboardLayoutPolicy, BillboardLayoutSizing,
+    BillboardMeter, BillboardPatch, BillboardProjectionOp, BillboardStyle, BillboardTextureRef,
+    ParticleAnchor, ParticleEmitterDescriptor, ParticleEmitterPatch, ParticleProjectionOp,
+    TelemetryOverlayProjectionOp,
 };
 
 pub const PRESENTATION_FRAME_SCHEMA_VERSION: u32 = 1;
@@ -138,6 +146,14 @@ pub enum PresentationFrameError {
         field: &'static str,
         value: u64,
     },
+    NonFiniteNumber {
+        sequence: u32,
+        field: &'static str,
+    },
+    InvalidDescriptor {
+        sequence: u32,
+        field: &'static str,
+    },
 }
 
 fn validate_json_safe_integers(
@@ -246,17 +262,144 @@ fn validate_billboard(
     descriptor: &BillboardDescriptor,
     sequence: u32,
 ) -> Result<(), PresentationFrameError> {
-    validate_billboard_anchor(&descriptor.anchor, sequence)
+    validate_billboard_anchor(&descriptor.anchor, sequence)?;
+    validate_billboard_numbers(descriptor, sequence)?;
+    let assets = synthetic_billboard_assets(Some(&descriptor.font), Some(&descriptor.content));
+    validate_descriptor(&assets, descriptor).map_err(|_| {
+        PresentationFrameError::InvalidDescriptor {
+            sequence,
+            field: "billboard",
+        }
+    })
 }
 
 fn validate_billboard_patch(
     patch: &BillboardPatch,
     sequence: u32,
 ) -> Result<(), PresentationFrameError> {
-    patch
-        .anchor
-        .as_ref()
-        .map_or(Ok(()), |anchor| validate_billboard_anchor(anchor, sequence))
+    if let Some(anchor) = &patch.anchor {
+        validate_billboard_anchor(anchor, sequence)?;
+    }
+    if let Some(height_pixels) = patch.height_pixels {
+        finite_f32(height_pixels, sequence, "billboard.heightPixels")?;
+        if !(8.0..=256.0).contains(&height_pixels) {
+            return invalid_billboard(sequence, "billboard.heightPixels");
+        }
+    }
+    if let Some(color) = patch.color {
+        finite_color(color, sequence, "billboard.color")?;
+        if !wire_color_is_valid(color) {
+            return invalid_billboard(sequence, "billboard.color");
+        }
+    }
+    if let Some(background) = patch.background {
+        finite_color(background, sequence, "billboard.background")?;
+        if !wire_color_is_valid(background) {
+            return invalid_billboard(sequence, "billboard.background");
+        }
+    }
+    if let Some(max_distance) = patch.max_distance {
+        finite_f32(max_distance, sequence, "billboard.maxDistance")?;
+        if !(MIN_POSITIVE_BILLBOARD_VALUE..=10_000.0).contains(&max_distance) {
+            return invalid_billboard(sequence, "billboard.maxDistance");
+        }
+    }
+    if let Some(content) = &patch.content {
+        validate_billboard_content_numbers(content, sequence)?;
+        let assets = synthetic_billboard_assets(None, Some(content));
+        validate_content(&assets, content).map_err(|_| {
+            PresentationFrameError::InvalidDescriptor {
+                sequence,
+                field: "billboard.content",
+            }
+        })?;
+    }
+    if let Some(font) = &patch.font {
+        let assets = synthetic_billboard_assets(Some(font), None);
+        validate_font(&assets, font).map_err(|_| PresentationFrameError::InvalidDescriptor {
+            sequence,
+            field: "billboard.font",
+        })?;
+    }
+    if let Some(layout) = &patch.layout {
+        validate_layout_numbers(layout, sequence)?;
+        validate_layout_policy(layout).map_err(|_| PresentationFrameError::InvalidDescriptor {
+            sequence,
+            field: "billboard.layout",
+        })?;
+    }
+    Ok(())
+}
+
+fn invalid_billboard(sequence: u32, field: &'static str) -> Result<(), PresentationFrameError> {
+    Err(PresentationFrameError::InvalidDescriptor { sequence, field })
+}
+
+fn wire_color_is_valid(color: [f32; 4]) -> bool {
+    color.into_iter().all(|value| (0.0..=1.0).contains(&value))
+}
+
+fn synthetic_billboard_assets(
+    font: Option<&BillboardFontRef>,
+    content: Option<&BillboardContent>,
+) -> BTreeMap<String, ResolvedRenderAsset> {
+    let mut assets = BTreeMap::new();
+    if let Some(BillboardFontRef::Asset {
+        asset,
+        content_hash,
+        ..
+    }) = font
+    {
+        insert_synthetic_asset(&mut assets, asset, RenderAssetKind::Font, content_hash);
+    }
+    if let Some(content) = content {
+        match content {
+            BillboardContent::Icon { texture, .. } => {
+                insert_synthetic_texture(&mut assets, texture);
+            }
+            BillboardContent::Structured { indicator } => {
+                if let Some(texture) = &indicator.icon {
+                    insert_synthetic_texture(&mut assets, texture);
+                }
+                for cue in &indicator.status_cues {
+                    if let Some(texture) = &cue.icon {
+                        insert_synthetic_texture(&mut assets, texture);
+                    }
+                }
+            }
+            BillboardContent::Text { .. } | BillboardContent::Value { .. } => {}
+        }
+    }
+    assets
+}
+
+fn insert_synthetic_texture(
+    assets: &mut BTreeMap<String, ResolvedRenderAsset>,
+    texture: &BillboardTextureRef,
+) {
+    insert_synthetic_asset(
+        assets,
+        &texture.asset,
+        RenderAssetKind::Texture,
+        &texture.content_hash,
+    );
+}
+
+fn insert_synthetic_asset(
+    assets: &mut BTreeMap<String, ResolvedRenderAsset>,
+    id: &str,
+    kind: RenderAssetKind,
+    content_hash: &str,
+) {
+    assets.insert(
+        id.to_string(),
+        ResolvedRenderAsset {
+            id: id.to_string(),
+            kind,
+            content_hash: Some(content_hash.to_string()),
+            version: 1,
+        },
+    );
 }
 
 fn validate_billboard_anchor(
@@ -264,10 +407,143 @@ fn validate_billboard_anchor(
     sequence: u32,
 ) -> Result<(), PresentationFrameError> {
     match anchor {
-        BillboardAnchor::EntityAttached { entity, .. } => {
-            json_safe(*entity, sequence, "billboard.anchor.entity")
+        BillboardAnchor::EntityAttached { entity, offset, .. } => {
+            json_safe(*entity, sequence, "billboard.anchor.entity")?;
+            finite_values(*offset, sequence, "billboard.anchor.offset")
         }
-        BillboardAnchor::World { .. } => Ok(()),
+        BillboardAnchor::World { position } => {
+            finite_values(*position, sequence, "billboard.anchor.position")
+        }
+    }
+}
+
+fn validate_billboard_numbers(
+    descriptor: &BillboardDescriptor,
+    sequence: u32,
+) -> Result<(), PresentationFrameError> {
+    finite_f32(descriptor.height_pixels, sequence, "billboard.heightPixels")?;
+    finite_color(descriptor.color, sequence, "billboard.color")?;
+    finite_color(descriptor.background, sequence, "billboard.background")?;
+    finite_f32(descriptor.max_distance, sequence, "billboard.maxDistance")?;
+    validate_billboard_content_numbers(&descriptor.content, sequence)?;
+    if let Some(layout) = &descriptor.layout {
+        validate_layout_numbers(layout, sequence)?;
+    }
+    Ok(())
+}
+
+fn validate_billboard_content_numbers(
+    content: &BillboardContent,
+    sequence: u32,
+) -> Result<(), PresentationFrameError> {
+    if let BillboardContent::Structured { indicator } = content {
+        finite_f32(
+            indicator.width_pixels,
+            sequence,
+            "billboard.indicator.widthPixels",
+        )?;
+        finite_f32(
+            indicator.spacing_pixels,
+            sequence,
+            "billboard.indicator.spacingPixels",
+        )?;
+        validate_style_numbers(&indicator.style, sequence)?;
+        for meter in &indicator.meters {
+            validate_meter_numbers(meter, sequence)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_meter_numbers(
+    meter: &BillboardMeter,
+    sequence: u32,
+) -> Result<(), PresentationFrameError> {
+    finite_f32(meter.current, sequence, "billboard.meter.current")?;
+    finite_f32(meter.min, sequence, "billboard.meter.min")?;
+    finite_f32(meter.max, sequence, "billboard.meter.max")?;
+    if let Some(preview) = meter.preview {
+        finite_f32(preview, sequence, "billboard.meter.preview")?;
+    }
+    finite_color(meter.fill, sequence, "billboard.meter.fill")?;
+    finite_color(meter.preview_fill, sequence, "billboard.meter.previewFill")?;
+    finite_color(meter.back, sequence, "billboard.meter.back")?;
+    finite_color(meter.border, sequence, "billboard.meter.border")
+}
+
+fn validate_style_numbers(
+    style: &BillboardStyle,
+    sequence: u32,
+) -> Result<(), PresentationFrameError> {
+    finite_f32(style.opacity, sequence, "billboard.indicator.style.opacity")?;
+    finite_color(style.backing, sequence, "billboard.indicator.style.backing")?;
+    finite_color(style.border, sequence, "billboard.indicator.style.border")?;
+    finite_f32(
+        style.radius_pixels,
+        sequence,
+        "billboard.indicator.style.radiusPixels",
+    )
+}
+
+fn validate_layout_numbers(
+    layout: &BillboardLayoutPolicy,
+    sequence: u32,
+) -> Result<(), PresentationFrameError> {
+    finite_color(
+        [
+            layout.safe_area.top_pixels,
+            layout.safe_area.right_pixels,
+            layout.safe_area.bottom_pixels,
+            layout.safe_area.left_pixels,
+        ],
+        sequence,
+        "billboard.layout.safeArea",
+    )?;
+    if let BillboardLayoutSizing::DistanceScaled {
+        reference_distance,
+        min_scale,
+        max_scale,
+    } = &layout.sizing
+    {
+        finite_f32(
+            *reference_distance,
+            sequence,
+            "billboard.layout.sizing.referenceDistance",
+        )?;
+        finite_f32(*min_scale, sequence, "billboard.layout.sizing.minScale")?;
+        finite_f32(*max_scale, sequence, "billboard.layout.sizing.maxScale")?;
+    }
+    Ok(())
+}
+
+fn finite_color(
+    values: [f32; 4],
+    sequence: u32,
+    field: &'static str,
+) -> Result<(), PresentationFrameError> {
+    finite_values(values, sequence, field)
+}
+
+fn finite_values<const N: usize>(
+    values: [f32; N],
+    sequence: u32,
+    field: &'static str,
+) -> Result<(), PresentationFrameError> {
+    for value in values {
+        finite_f32(value, sequence, field)?;
+    }
+    Ok(())
+}
+
+fn finite_f32(
+    value: f32,
+    sequence: u32,
+    field: &'static str,
+) -> Result<(), PresentationFrameError> {
+    if value.is_finite() {
+        Ok(())
+    } else {
+        Err(PresentationFrameError::NonFiniteNumber { sequence, field })
     }
 }
 

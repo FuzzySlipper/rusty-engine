@@ -152,6 +152,16 @@ owns the `AudioContext`, typed audio host, hash-checked resolver, replacement,
 and disposal; downstream code never constructs Web Audio nodes or interprets
 gameplay outcomes into sound choices.
 
+World indicators follow the same public presentation route. A product submits
+Rust-authored billboard operations for labels, exact-hash icons, ranged meters,
+prompts, and status cues through `applyPresentation(...)`. The application host
+owns one pointer-transparent overlay, camera-to-screen projection,
+deterministic overlap/edge/suppression layout, semantic DOM realization, and
+disposal. A configured entity-position resolver may expose current
+gameplay-owned anchor positions; it does not return DOM or backend handles.
+Downstream code must not create parallel health-bar DOM or import renderer
+packages. See [structured world indicators](../world-indicators.md).
+
 `initialContent` mounts the first aggregate. `replaceContent(...)` prepares a
 fresh surface, resource catalog, listeners, and complete frame before one
 atomic publication; failure disposes the candidate and leaves the prior

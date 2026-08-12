@@ -38,7 +38,7 @@ export interface RendererAdvancingPresentationDomainHost
 export interface RendererPresentationHosts {
   readonly animation?: RendererAdvancingPresentationDomainHost;
   readonly audio?: RendererPresentationDomainHost;
-  readonly billboard?: RendererPresentationDomainHost;
+  readonly billboard?: RendererAdvancingPresentationDomainHost;
   readonly particle?: RendererAdvancingPresentationDomainHost;
   readonly telemetryOverlay?: RendererPresentationDomainHost;
 }
@@ -151,8 +151,8 @@ const PRESENTATION_DOMAIN_ORDER: readonly RendererPresentationDomain[] = [
 ];
 
 const ADVANCING_DOMAIN_ORDER: readonly (
-  'animation' | 'particle'
-)[] = ['animation', 'particle'];
+  'animation' | 'billboard' | 'particle'
+)[] = ['animation', 'billboard', 'particle'];
 
 function unavailableDiagnostic(operation: PresentationOp): PresentationHostDiagnostic {
   return {

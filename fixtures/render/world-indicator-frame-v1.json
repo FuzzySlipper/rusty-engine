@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "ops": [
+    {
+      "domain": "billboard",
+      "meta": {
+        "sequence": 0
+      },
+      "op": {
+        "op": "create",
+        "handle": 41,
+        "descriptor": {
+          "anchor": {
+            "kind": "entityAttached",
+            "entity": 42,
+            "offset": [0.0, 1.9, 0.0]
+          },
+          "content": {
+            "kind": "structured",
+            "indicator": {
+              "label": {
+                "localizationKey": "actor.ranger.name",
+                "fallbackText": "Ranger"
+              },
+              "icon": null,
+              "accessibleLabel": {
+                "localizationKey": "actor.ranger.indicator",
+                "fallbackText": "Ranger status"
+              },
+              "meters": [
+                {
+                  "id": "health",
+                  "accessibleLabel": {
+                    "localizationKey": "resource.health",
+                    "fallbackText": "Health"
+                  },
+                  "current": 72.0,
+                  "min": 0.0,
+                  "max": 100.0,
+                  "preview": 64.0,
+                  "fillDirection": "leftToRight",
+                  "segments": 10,
+                  "fill": [0.16, 0.72, 0.28, 1.0],
+                  "previewFill": [0.95, 0.72, 0.12, 1.0],
+                  "back": [0.04, 0.04, 0.04, 0.9],
+                  "border": [0.0, 0.0, 0.0, 1.0]
+                }
+              ],
+              "statusCues": [
+                {
+                  "id": "interact",
+                  "label": {
+                    "localizationKey": "prompt.open",
+                    "fallbackText": "Open"
+                  },
+                  "icon": null
+                }
+              ],
+              "widthPixels": 192.0,
+              "spacingPixels": 6.0,
+              "alignment": "center",
+              "style": {
+                "opacity": 0.96,
+                "backing": [0.0, 0.0, 0.0, 0.58],
+                "border": [0.2, 0.2, 0.2, 1.0],
+                "radiusPixels": 6.0
+              }
+            }
+          },
+          "font": {
+            "kind": "system",
+            "family": "sans-serif"
+          },
+          "heightPixels": 20.0,
+          "color": [1.0, 1.0, 1.0, 1.0],
+          "background": [0.0, 0.0, 0.0, 0.0],
+          "maxDistance": 80.0,
+          "layer": "occluded",
+          "visible": true,
+          "layout": {
+            "priority": 100,
+            "sizing": {
+              "kind": "distanceScaled",
+              "referenceDistance": 12.0,
+              "minScale": 0.75,
+              "maxScale": 1.25
+            },
+            "safeArea": {
+              "topPixels": 12.0,
+              "rightPixels": 12.0,
+              "bottomPixels": 12.0,
+              "leftPixels": 12.0
+            },
+            "edgeBehavior": "clamp",
+            "overlapBehavior": "suppress"
+          }
+        }
+      }
+    }
+  ]
+}

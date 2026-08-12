@@ -42,6 +42,7 @@ fn billboard() -> BillboardDescriptor {
         max_distance: 50.0,
         layer: BillboardLayer::DepthTested,
         visible: true,
+        layout: None,
     }
 }
 

@@ -43,6 +43,27 @@ void test('strict TypeScript decoders accept the committed Rust render fixtures'
     'destroy',
   ]);
   assert.equal(decodePresentationFrameDiff(fixture('presentation-frame-v1.json')).ops.length, 5);
+  const indicator = decodePresentationFrameDiff(fixture('world-indicator-frame-v1.json'));
+  const billboard = indicator.ops[0];
+  assert.equal(billboard?.domain, 'billboard');
+  if (billboard?.domain !== 'billboard' || billboard.op.op !== 'create') {
+    assert.fail('world indicator fixture must contain a billboard create');
+  }
+  assert.equal(billboard.op.descriptor.content.kind, 'structured');
+});
+
+void test('structured indicator meters reject finite but unbounded magnitudes', () => {
+  const frame = mutableFixture('world-indicator-frame-v1.json');
+  const ops = frame['ops'] as Array<Record<string, unknown>>;
+  const operation = ops[0]!;
+  const op = operation['op'] as Record<string, unknown>;
+  const descriptor = op['descriptor'] as Record<string, unknown>;
+  const content = descriptor['content'] as Record<string, unknown>;
+  const indicator = content['indicator'] as Record<string, unknown>;
+  const meters = indicator['meters'] as Array<Record<string, unknown>>;
+  meters[0]!['current'] = 1_500_000_000_000;
+  meters[0]!['max'] = 2_000_000_000_000;
+  assert.throws(() => decodePresentationFrameDiff(frame), /magnitude bound/u);
 });
 
 void test('static mesh collision decoding admits the Rust-owned trimesh policy', () => {
