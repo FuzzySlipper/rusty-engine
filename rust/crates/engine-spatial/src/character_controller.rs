@@ -1219,17 +1219,22 @@ fn try_step(
     }
     let drop = downward_distance * finite_f32(landing.time_of_impact)?;
     let support_drop = downward_distance * finite_f32(support.time_of_impact)?;
-    // The broad capsule may meet a rounded top edge before the central support probe. A
-    // non-standable edge is the reason for the narrow confirmation above and remains a valid step
-    // candidate. When the broad hit is already standable, however, a large height disagreement
-    // means the probes describe different surfaces; accepting the broad height would manufacture
-    // an up-step toward adjacent terrain while the character's actual support remains below.
+    // The broad capsule may meet a rounded top edge before the central support probe. Permit an
+    // edge normal beyond the ordinary slope limit only by the angle implied by the minimum
+    // accepted tread width over the capsule radius. A more wall-dominant hit combined with a
+    // different support height describes two surfaces; accepting its broad height would
+    // manufacture an up-step toward adjacent terrain while actual support remains below.
     let landing_height_tolerance = config.shape.contact_skin
         + config
             .surface
             .minimum_step_width
             .max(config.recovery.normal_nudge);
-    if standable(vec3_from_world(landing.normal)?, config)
+    let landing_normal = vec3_from_world(landing.normal)?;
+    let edge_angle_allowance = (config.surface.minimum_step_width / config.shape.radius).atan();
+    let minimum_edge_normal_y = (config.surface.maximum_slope_radians + edge_angle_allowance)
+        .min(std::f32::consts::FRAC_PI_2)
+        .cos();
+    if landing_normal.y < minimum_edge_normal_y
         && (drop - support_drop).abs() > landing_height_tolerance
     {
         return Ok(None);

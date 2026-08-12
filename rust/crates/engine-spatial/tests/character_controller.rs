@@ -827,7 +827,7 @@ fn floor_wall_lip_retains_stable_support_at_rest_and_under_pressure() {
 #[test]
 fn descending_trench_edge_does_not_manufacture_a_transient_up_step() {
     let scene = craftsurvive_trench_scene();
-    let (entity, mut state) = character_at(Vec3::new(0.5, 3.89, 5.331));
+    let (entity, mut state) = character_at(Vec3::new(0.5, 3.875, 5.307_7));
     let mut config = CharacterControllerConfig::default();
     config.shape.standing_height = 1.75;
     config.shape.crouched_height = 1.0;
@@ -866,11 +866,11 @@ fn descending_trench_edge_does_not_manufacture_a_transient_up_step() {
         "descending support must not become an up step"
     );
     assert!(
-        maximum_y <= 3.91,
+        maximum_y <= 3.89,
         "trench traversal bounced to y={maximum_y}"
     );
     assert!(
-        minimum_y >= 3.88,
+        minimum_y >= 3.87,
         "trench pressure dropped to y={minimum_y}"
     );
     assert!(final_transform.translation.z >= 5.3);
