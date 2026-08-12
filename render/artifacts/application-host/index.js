@@ -1842,6 +1842,7 @@ var tt, V = class extends Error {
 		let t = this.#K();
 		if (e.publication !== void 0) {
 			if (e.publication.operationCount !== e.ops.length) throw new V(`publication ${e.publication.stream} operationCount does not match frame`);
+			if (e.publication.revision !== e.publication.baseRevision + 1) throw new V(`publication gap for ${e.publication.stream}; revision ${String(e.publication.revision)} must immediately follow base ${String(e.publication.baseRevision)}`);
 			let n = t.#c.get(e.publication.stream);
 			if (n !== void 0 && e.publication.revision <= n) throw new V(`stale publication ${e.publication.stream} revision ${String(e.publication.revision)}; latest is ${String(n)}`);
 			let r = n ?? 0;

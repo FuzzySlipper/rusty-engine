@@ -355,6 +355,28 @@ void test('published frames reject clipping and stale revision without retained 
     /publication gap/u,
   );
   assert.deepEqual(projection.snapshot(), before);
+  assert.throws(
+    () => projection.applyFrame({
+      schemaVersion: 1,
+      publication: { stream: 'voxel:terrain', baseRevision: 1, revision: 3, operationCount: 1 },
+      ops: [{
+        op: 'update', handle: renderHandle(21), transform: null, material: null,
+        visible: false, metadata: null,
+      }],
+    }),
+    /publication gap/u,
+  );
+  assert.deepEqual(projection.snapshot(), before);
+
+  projection.applyFrame({
+    schemaVersion: 1,
+    publication: { stream: 'voxel:terrain', baseRevision: 1, revision: 2, operationCount: 1 },
+    ops: [{
+      op: 'update', handle: renderHandle(21), transform: null, material: null,
+      visible: false, metadata: null,
+    }],
+  });
+  assert.equal(projection.snapshot().nodes[0]?.visible, false);
 });
 
 void test('small atomic frames structurally share unrelated retained definitions', () => {
