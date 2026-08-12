@@ -1,6 +1,6 @@
 # Textured voxel campaign closeout
 
-Status: implemented provider capability with one exact public Studio consumer.
+Status: implemented provider capability with explicit Studio consumer evidence.
 
 This document is the durable entry point for the VTX0–VTX6 campaign. It records
 the completed ownership chain, measurable costs, proof boundaries, and stopping
@@ -132,7 +132,6 @@ node scripts/generate-textured-voxel-fixture.mjs --check
 cargo run --locked --bin textured-voxel-evidence -- --check
 ./scripts/verify.sh
 ./scripts/verify-studio.sh
-./scripts/verify-studio-browser.sh <exact-reverse-provider-commit>
 ```
 
 The Engine-owned reverse proof is:

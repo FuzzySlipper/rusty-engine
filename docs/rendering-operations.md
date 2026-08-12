@@ -36,12 +36,16 @@ Neither command requires an Asha, demo, or Studio sibling checkout.
 
 ## Rust-only downstream consumption
 
-An ordinary external game declares one rolling Rust dependency:
+An ordinary downstream game declares one unconditional local Rust dependency:
 
 ```toml
 [dependencies]
-rusty-engine = { git = "https://github.com/FuzzySlipper/rusty-engine", branch = "main" }
+rusty-engine = { path = "../rusty-engine/rust/crates/rusty-engine" }
 ```
+
+The checkout is consumed as it stands. Downstream does not fetch, pull, reset,
+clean, checkout, pin, or enforce a provider freshness policy; operator update
+policy belongs outside the consumer repository.
 
 `rusty_engine::renderer_webview_host::RendererWebviewAdapter` mounts one Wry child webview in a
 downstream-owned window. Named Rust methods submit retained and presentation frames, configure
@@ -66,8 +70,11 @@ Run the clean temporary-consumer proof locally or against a public review revisi
 
 ```bash
 ./scripts/verify-rust-sdk-consumer.sh
-./scripts/verify-rust-sdk-consumer.sh <40-character-public-sha>
 ```
+
+This is a focused facade/consumer proof. Select a downstream checkout explicitly
+when a cross-repository adapter or browser check is needed, and record exact
+source heads in Den evidence rather than in an Engine dependency manifest.
 
 The renderer-owning gate additionally rebuilds the closed artifact byte-for-byte, tests the Rust
 contracts and adapter, and mounts it through real Wry/WebKit under X11. The Chromium artifact proof
@@ -163,8 +170,13 @@ retains the compatible single-camera behavior.
 
 ## Reference consumer evidence
 
-Rusty Roguelike commit `098b6d6c468711b4c149583996ac5147c9f58941` pins Engine commit
-`8673aaa6d0b811195b3904f34d7729c0d6e92530` for the first exact multi-view consumer. One public
+The exact revisions in this section are historical certification evidence for
+the rendering migration. They are not current downstream dependency pins or
+freshness instructions; current consumers use the adjacent Rust facade and
+Engine-owned renderer/Studio boundaries.
+
+Rusty Roguelike commit `098b6d6c468711b4c149583996ac5147c9f58941` used Engine commit
+`8673aaa6d0b811195b3904f34d7729c0d6e92530` for the first exact multi-view consumer proof. One public
 surface renders the already-admitted retained local scene through a bounded orthographic offscreen
 view and GPU-presents it as a responsive inset. The real desktop/mobile proof inspects distinct
 framebuffer regions, target revision replacement, narrow sizing, save/reopen continuity, and
@@ -185,9 +197,10 @@ scheduling loop. Its real Chromium/WebGL acceptance covers world-camera motion, 
 desktop and narrow resize, death/reset restoration, disposal on return to the main menu, and remount
 on Continue.
 
-Studio is the second intended consumer. It uses the repository-local workspace while being built
-in this repository, but it must import the same four public package surfaces and host/editor APIs;
-it must not create an independent viewport renderer.
+Studio is an Engine-owned workspace and host. Downstream projects provide only
+project data and a Rust adapter through the `.rusty-studio.json` boundary; they
+must not install, import, build, or configure a second Studio or renderer
+package surface.
 
 ## CI topology
 
@@ -195,12 +208,12 @@ it must not create an independent viewport renderer.
 |---|---|
 | `verify / verify` | Every Engine push/PR; Rust-only provider and completeness proof with no Node installation. |
 | `render / verify-render` | Render/Rust-contract paths; frozen isolated workspace plus real browser proof. |
-| `render-consumer / verify-render-consumer` | Public `main` commits changing package/preparation surfaces; fresh exact-SHA Git-subdirectory install and execution. |
-| `rusty-engine-demo / verify` | Every demo push/PR; fresh exact-revision dependency install and complete downstream product proof. |
+| `studio / verify-studio` | Engine-owned Studio workspace and host proof; it does not launch a downstream product. |
+| Downstream integration commands | Explicitly selected affected consumer; narrow adapter/browser proof with exact heads retained in Den evidence. |
 
-The consumer gate is intentionally post-push: an exact public Git dependency cannot prove a commit
-that has not yet been published. Pull requests still receive the local render gate; the public
-package-preparation path is exercised immediately when the commit reaches `main`.
+Cross-repository proof is intentionally explicit. Engine verification validates
+Engine-owned surfaces, while each downstream repository owns its own full suite;
+an Engine change does not automatically launch every downstream product.
 
 ## Surface timing and telemetry
 
@@ -415,8 +428,8 @@ claim. Downstream Den task #6378 and its checked evidence artifact own the produ
 - Shadows remain the ordinary Three shadow-map implementation over retained scene meshes and
   directional/point/spot lights. Ambient requests are explicitly unsupported, and no automatic light
   placement, artistic exposure policy, or gameplay lighting is inferred.
-- Exact downstream lighting certification is owned by Rusty Roguelike commit
-  `e88856aca2b07212e79ca8a9a8cdc904cb49bd61`, which pins Engine
+- Historical downstream lighting certification is owned by Rusty Roguelike commit
+  `e88856aca2b07212e79ca8a9a8cdc904cb49bd61`, which used Engine
   `b1f0415af6266783246371d227a2272de7d9f0d6`. Its clean full gate proves a Rust-projected torch
   count equals the public retained-light readout and a real Chromium framebuffer has localized warm
   falloff; the consumer retains placement and gameplay meaning.

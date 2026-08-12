@@ -52,6 +52,11 @@ floor, and long surfaces retain this greedy partition.
 
 ## Evidence and rejected candidates
 
+The exact provider and consumer revisions in this section are historical
+decision evidence for the format choice. They do not define the current
+downstream dependency contract; current consumers use the adjacent Engine
+facade and reproduce focused evidence against the checkout under test.
+
 The decision uses the checked `rusty-engine-voxels` baseline and 96x144x96
 high-fidelity corpus at commit `6f12c100c362a462dbe39083b589191e9b786feb`.
 Both contain 14 unique flipbook meshes.
@@ -63,7 +68,7 @@ Both contain 14 unique flipbook meshes.
 | Full little-endian binary | 1.81 MB | 34.54 MB | Selected behind resource references |
 | Base plus whole-mesh binary deltas | 0.99 MB | 19.63 MB | Deferred: 64-67% of vertex values change |
 
-The implemented path is certified by `rusty-engine-voxels` revision
+The implemented path was historically certified by `rusty-engine-voxels` revision
 `39a8b5abb37345c5ffead2297f701cbdcea7f4e5` against Engine revision
 `1703f46f1624d32b8324f831107a068d5f66ab30`:
 

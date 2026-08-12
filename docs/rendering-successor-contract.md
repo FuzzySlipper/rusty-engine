@@ -7,7 +7,7 @@ successor-owned border. This is not a promise to retain Asha package names or de
 It is a promise that implemented rendering behavior will not disappear merely because the first
 Rusty Engine demo used only a narrow subset.
 
-## Pinned donor
+## Historical donor
 
 - Repository: `git@github.com:FuzzySlipper/asha-engine.git`
 - Commit: `6462a6de20d48ea1a3b7456826804bd9507860a5`
@@ -146,23 +146,22 @@ render/
 The Rust crates are ordinary provider mechanisms and run in `./scripts/verify.sh`. The `render/`
 workspace owns Node, pnpm, Three, browser, and host dependencies behind `verify:render`. Ordinary
 Engine verification never installs that workspace. Studio uses the repository-local packages;
-external consumers use an exact published or exact-commit artifact rather than a sibling link.
-For an exact-commit pnpm consumer, each package is addressed as a Git subdirectory, for example
-`github:FuzzySlipper/rusty-engine#<40-character-sha>&path:render/packages/renderer-host`. A consumer
-pins all four packages to the same SHA. The packages build their checked distributable during Git
-preparation, and internal renderer layers are peers so a consumer gets one coherent contract and
-projection family rather than hidden workspace-only copies.
+downstream projects do not install, import, build, or configure this workspace. They submit Rust
+retained facts through the Engine-owned renderer/webview or application-host boundary.
+
+When a selected downstream checkout needs focused proof, use the explicit integration gate and keep
+the exact Engine and consumer heads in Den task/review evidence. That evidence does not become a
+package pin or a freshness contract, and ordinary Engine CI does not launch every downstream suite.
 
 The dependency-free root `package.json` and `pnpm-lock.yaml` are package-manager selection metadata
 for that Git preparation path. They do not include the render workspace in ordinary Engine work,
 install browser dependencies, or change the Rust-first root verification gate. All actual Node
 dependencies, scripts, source, and lock state remain under `render/`.
 
-`rusty-engine-demo` is the first migration consumer. At commit
-`42f428b0ee3f47de94d4372f512978f587d729f7` it deleted its private render contracts and Three
-backend after switching to all four packages from exact Engine revision
-`8cb49db6cfe9471faa23ab0661656a2366a83d8c`. Studio is the second consumer and must not implement
-another viewport renderer.
+`rusty-engine-demo` is the first migration consumer. The exact commits in
+the migration record below are historical certification evidence for its
+renderer-boundary transition. Studio is an Engine-owned host, and downstream
+projects must not implement another viewport renderer.
 
 ## Implemented TypeScript border
 

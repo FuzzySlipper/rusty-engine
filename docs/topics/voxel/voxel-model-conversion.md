@@ -381,8 +381,8 @@ component-description schema is involved.
 
 This repository owns the closed client, UI, state model, and standalone evidence. Concrete
 filesystem/project-schema adapters remain downstream; `rusty-engine-voxels` owns the flipbook
-experiment adapter and its exact pinned Chromium/save/reopen proof. That proof is an explicit
-cross-repository dependency rather than an ordinary sibling-checkout requirement.
+experiment adapter and its selected Chromium/save/reopen proof. That proof is an explicit
+cross-repository check, not an ordinary Engine dependency requirement.
 
 ## M12H historical runtime-consumer and quality closeout
 

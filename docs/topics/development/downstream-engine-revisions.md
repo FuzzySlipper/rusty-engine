@@ -1,106 +1,74 @@
-# Downstream Engine revision contract
+# Downstream Engine dependency and Studio boundary
 
-## Default: one rolling Rust dependency
+This path retains its old revision-oriented filename for links from historical
+work, but the revision-pinning contract it once described is retired. Use the
+[downstream renderer and Studio boundary](downstream-renderer-and-studio.md)
+as the current authority.
 
-An ordinary downstream game depends on the complete `rusty-engine` Rust facade
-from the canonical public `main` branch:
+## Current Rust dependency
 
-```toml
-[dependencies]
-rusty-engine = { git = "https://github.com/FuzzySlipper/rusty-engine", branch = "main" }
-```
-
-The facade preserves every public library as an exact namespace such as
-`rusty_engine::entity_state` or `rusty_engine::render_model`. It has no feature
-flags and downstream must not select individual Engine crates. The complete
-namespace index is [the Rust SDK capability index](../../rust-sdk-capabilities.md).
-
-The renderer implementation is included behind that Rust surface. A game does
-not add `render/package.json`, pnpm dependencies, TypeScript imports, JavaScript
-commands, or deep package paths. It submits Rust-owned render and presentation
-frames through `rusty_engine::renderer_webview_host` and receives typed Rust
-observations from `rusty_engine::render_host_contracts`. Engine owns the
-compiled TypeScript/Three artifact and its private bridge.
-
-This is intentionally rolling-current during development. `Cargo.lock` records
-the exact Engine commit used by one build, but it is not a request to remain on
-that commit. Engine changes may break downstream compilation. That loud failure
-is preferred to an agent silently retaining an old revision and reimplementing
-a mechanism that has since moved upstream.
-
-## Required freshness check
-
-Downstream CI and the start of ordinary agent work update or check the Engine
-lock before feature work:
-
-```bash
-cargo update -p rusty-engine
-python3 ./scripts/check_downstream_engine_freshness.py --manifest ./Cargo.toml ./Cargo.lock
-```
-
-Consumers may copy the checked Engine helpers
-`scripts/check_downstream_engine_freshness.py` and
-`scripts/sync-downstream-engine.sh` into their repository. The checker requires:
-
-- exactly one locked `rusty-engine` package;
-- exactly one direct dependency from the canonical Engine repository, and it is
-  the complete `rusty-engine` facade rather than an individual crate;
-- the canonical Git repository and `main` branch source;
-- an exact 40-character resolved commit in the lock; and
-- equality with current public `main`, resolved with `git ls-remote`.
-
-It fails with both the locked and current revisions when stale. It does not
-silently rewrite source, switch repositories, inspect a sibling checkout, or
-hide a compile/protocol failure. A temporarily unavailable public repository is
-also loud because freshness could not be established.
-
-The sync helper accepts an explicit downstream `Cargo.toml`, runs `cargo update
--p rusty-engine`, and then runs the same freshness check. Downstream owns when
-that mutation is appropriate; Engine never reaches into another checkout.
-
-## Exact revisions are exceptional
-
-Use an exact public revision only for a bounded review packet, release
-reproduction, rollback, or reverse-certification fixture:
+Local downstream repositories sit beside the Engine checkout and declare the
+complete Rust facade once:
 
 ```toml
 [dependencies]
-rusty-engine = { git = "https://github.com/FuzzySlipper/rusty-engine", rev = "<40-character-public-sha>" }
+rusty-engine = { path = "../rusty-engine/rust/crates/rusty-engine" }
 ```
 
-The reason and exit condition must accompany the pin. Return to the rolling
-branch after the review, release, or rollback investigation. Do not normalize a
-temporary pin into the development workflow and do not split Engine into
-separate crate or language revision lanes.
+The facade preserves every public Engine library under its existing namespace,
+such as `rusty_engine::entity_state` and
+`rusty_engine::renderer_webview_host`. Downstream does not select individual
+Engine crates or carry a second renderer/package closure.
 
-Engine-owned reverse-certification fixtures may name exact downstream and
-provider commits. They are immutable evidence, not dependency instructions for
-ordinary downstream work. Historical provenance hashes likewise remain
-historical facts and are never rewritten by the freshness helper.
+The sibling checkout is consumed exactly as it stands. Downstream source,
+scripts, and CI must not fetch, pull, reset, clean, checkout, pin, or otherwise
+manage it. Another machine's operator may choose when to update that machine's
+checkout, but that policy is outside downstream source and CI. Interface
+breakage is expected to be loud and fixed forward.
 
-## Consumer proof
+Unrelated Cargo and npm lockfiles continue to manage their ordinary third-party
+dependencies. They are not an Engine revision protocol.
 
-Engine verifies the supported shape with:
+## Renderer and Studio ownership
+
+Native products submit Rust-owned retained facts through the public facade and
+the Engine-owned Rust webview host. Browser, Tauri, and Electron products that
+need rich DOM use the one bundled
+`@rusty-engine/application-host` entry point. Downstream does not install,
+import, build, configure, or deep-import Engine Studio, renderer TypeScript,
+Three, the private bridge, or the renderer package closure.
+
+Engine-hosted Studio is the ordinary authoring product. A downstream Studio
+project contributes only project data, a trusted root-local
+`.rusty-studio.json`, and its project-owned Rust adapter. The persistent
+`rusty-studio.service` is the recommended interactive entrypoint where
+installed; concurrent automation uses isolated hosts, ports, settings roots,
+and project copies as described by the current boundary document.
+
+## Focused verification
+
+When an Engine interface changes, run the narrowest affected downstream
+compile, adapter, or browser proof. An Engine task does not automatically launch
+every downstream repository's full suite. Engine-owned checks remain focused on
+Engine unless a consumer proof is explicitly selected.
+
+Exact source and consumer commits are useful reproducibility and review
+evidence. Record them in Den task or review evidence rather than introducing a
+committed dependency pin, synchronizer, or freshness ceremony.
 
 ```bash
 ./scripts/verify-rust-sdk-consumer.sh
-./scripts/verify-rust-sdk-consumer.sh <40-character-public-sha>
+./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo
 ```
 
-The proof creates a clean Rust binary with exactly one dependency, exercises
-representative entity, retained-frame, presentation, host-contract, and webview
-adapter namespaces, and rejects any package-manager carrier. The optional exact
-revision form is the post-push/review proof.
+The first command proves the complete local Rust facade in a clean temporary
+consumer. The second is an explicit Engine-owned integration proof for a
+selected downstream checkout; neither command changes the sibling checkout.
 
-## Ownership and non-goals
+## Historical evidence
 
-Downstream still owns authoritative gameplay state, substantial game logic,
-orchestration, storage policy, window/event-loop policy, semantic input
-mapping, content meaning, and product acceptance. The Rust adapter owns one
-renderer instance and its private webview boundary; renderer picks, physical
-input, readouts, and diagnostics remain observations that downstream
-revalidates or interprets.
-
-This contract does not introduce a registry, release train, universal runtime,
-provider-owned consumer list, cross-repository mutator, generic JavaScript
-escape hatch, or promise that Engine development changes are compatible.
+Older migration records may name provider or consumer commits, package
+preparation details, and exact certification inputs. Those records explain what
+a past artifact or review used. They are not instructions to restore revision
+pinning, downstream Studio ownership, or automatic cross-repository
+verification.

@@ -4,6 +4,12 @@ Status: **implemented and promoted through two reviewed consumers**
 
 Decision task: Den `rusty-engine#6300`
 
+The exact revisions and manifest names in the audit below are historical
+certification evidence for this promoted boundary. Current downstream projects
+consume the adjacent Engine facade and use Engine-hosted Studio through
+`.rusty-studio.json`, project data, and a Rust adapter; these records are not
+dependency pin or freshness instructions.
+
 This decision defines the smallest boundary by which a downstream Rust project can put one of its
 own entity components in Rusty Engine Studio's Entity inspector. Protocol 10 introduced the bounded
 identity envelope and removed the fixed Loading Bay summary; protocol 13 retains it unchanged.
@@ -35,13 +41,13 @@ outlet while their values, named operations, validation, and Rust authorities re
 
 ## Implemented contract audit
 
-The promoted revisions are exact and intentionally asymmetric:
+The promoted historical revisions are exact and intentionally asymmetric:
 
 | Evidence | Exact revision | What it fixes |
 | --- | --- | --- |
 | Engine public composition packages | `198dccaa3f6b15d776b58d0f60c0f025e4b12171` | Protocol 10, public package preparation, the static outlet and mutation port, and the built-in Voxel Object contribution consumed by Loading Bay |
-| Loading Bay consumer | `cd25485445bfb581c4005b221a23caa21408d327` | Closed Weapon Rust contract, typed panel/client, downstream application composition root, and exact Engine package pins |
-| Engine integration pin | `studio/demo-consumer-source.json` | Names both revisions, the downstream app, and the exact Weapon component/contract identity; CI checks out the demo commit instead of discovering a sibling checkout |
+| Loading Bay consumer | `cd25485445bfb581c4005b221a23caa21408d327` | Closed Weapon Rust contract, typed panel/client, downstream application composition root, and historical package-revision evidence |
+| Historical integration manifest | `studio/demo-consumer-source.json` | Names the historical revisions, downstream app, and Weapon component/contract identity for the reviewed certification run |
 
 The Engine closeout review records its own exact head separately in Den. That review head runs the
 current Engine host and tests against the two immutable revisions above; it does not silently replace
@@ -95,9 +101,10 @@ the package revision compiled into the downstream product.
 - A downstream lease accepts only a before/after project-hash receipt, performs core
   `readProject`, and publishes only the matching canonical result. It never receives the candidate or
   chooses the downstream Rust operation.
-- Public Engine packages and the downstream app are compile-time dependencies pinned to one exact
-  Git revision. Runtime discovery, module loading, filesystem scans, and Angular multi-providers are
-  not compatibility mechanisms.
+- The exact package revisions above describe the reviewed historical
+  certification. They are not current dependency policy. Runtime discovery,
+  module loading, filesystem scans, and Angular multi-providers are not
+  compatibility mechanisms.
 
 ### Deliberate implementation refinements
 
@@ -334,9 +341,10 @@ client is imported and constructed by the downstream application. A mutation lea
 component payload and cannot choose a Rust service; it only prevents a downstream edit from racing a
 core Studio edit and makes the canonical reread visible to the shared shell.
 
-The stock Engine Studio application composes built-in contributions explicitly. A downstream
-product that wants game-specific panels owns a small Studio application composition root which
-imports the Engine shell, the pinned Engine built-ins, and its own panel package:
+The stock Engine Studio application composes built-in contributions explicitly. The
+following composition was the historical reviewed downstream-panel shape; it
+does not authorize a current downstream product to embed Studio or renderer
+packages:
 
 ```ts
 const contributions = [
@@ -347,15 +355,11 @@ const contributions = [
 
 Engine never imports that downstream package. The dependency remains one-way.
 
-The public composition packages use the same exact-Git subdirectory shape as the shared renderer:
-`github:FuzzySlipper/rusty-engine#<sha>&path:studio/libs/<package>`. A product pins
-`adapter-client`, `editor-shell`, `user-settings`, `viewport`, and `voxel-editor` plus the four
-renderer packages to one reviewed public revision. Each package prepares and exposes only its
-`dist` entry points; its installed closure contains versioned peers rather than Engine workspace,
-link, or sibling-checkout paths. Angular-bearing packages publish partial-compiled Angular metadata
-in those entry points. `verify-studio-package-consumer.sh` proves that closure from a clean
-temporary consumer by building an external Angular application that imports the shell, viewport,
-Voxel editor, and playback components before downstream adoption.
+The exact-Git subdirectory package shape, package list, and
+`verify-studio-package-consumer.sh` proof are retained as historical
+certification evidence. Current projects do not install, import, build, or
+configure these Studio or renderer packages; they use the Engine-hosted Studio
+through `.rusty-studio.json`, project data, and a Rust adapter.
 
 `StudioWorkspaceStore.entityInspectorMutationPort` admits at most one active lease. Acquisition
 requires the exact selected owner/component/contract, accepted project hash, adapter identity, and
@@ -371,9 +375,11 @@ narrow port, never the store or a generic command callback.
 
 ### Build-time admission
 
-The downstream application is the admission point. Its explicit contribution list must reject
-duplicate `(componentTypeId, contractId, contractVersion)` keys before bootstrap. The package lock
-and exact Engine pin determine the installed code; adapters cannot request new code at runtime.
+The historical downstream application was the admission point. Its explicit
+contribution list rejected duplicate `(componentTypeId, contractId,
+contractVersion)` keys before bootstrap. That package lock and exact revision
+determined the reviewed installed code; this is not current downstream
+dependency policy.
 
 ### Connection-time compatibility
 
@@ -418,13 +424,15 @@ Evidence follows the owner:
 4. **Downstream Rust contract:** focused Loading Bay read/replace tests, semantic rejection,
    optimistic conflict handling, atomic persistence, and fresh-process reconstruction.
 5. **Downstream panel:** component tests using the real downstream decoder/client contract.
-6. **Product integration:** exact-pinned served Chromium proof that selects a real weapon-owning
+6. **Product integration:** historical served Chromium proof that selects a real weapon-owning
    entity, reads its Rust-owned configuration, commits one change, observes the canonical reread,
    and preserves the change after a fresh adapter process.
 
 Ordinary Engine Rust verification remains free of Node, Angular, browser, renderer, and sibling
-checkout dependencies. Studio's isolated gate proves the generic host seam and built-in panel. The
-explicit pinned cross-repository gate proves Loading Bay adoption.
+checkout dependencies. Studio's isolated gate proves the generic host seam and
+built-in panel. The historical cross-repository gate proved Loading Bay
+adoption; current cross-repository proof is selected explicitly and recorded in
+Den evidence.
 
 ## Concrete second consumer: Loading Bay Weapon authoring
 
@@ -508,10 +516,11 @@ Implementation was deliberately ordered so the generic seam followed the real se
 3. **Add static host composition.** Introduced the explicit contribution input/outlet and mutation
    settlement port, then moved Voxel Object behind it without behavior loss. Implemented by
    `rusty-engine#6303`.
-4. **Adopt from Loading Bay.** Built the downstream application composition root and Weapon panel,
-   pinned the reviewed Engine revision, and proved real mutations through canonical reopen.
+4. **Adopt from Loading Bay.** Built the historical downstream application composition root and
+   Weapon panel, selected the reviewed Engine revision for that proof, and proved real mutations
+   through canonical reopen.
    Implemented by `rusty-engine-demo#6304`.
-5. **Close the promotion.** The isolated and exact-pinned integration gates, implemented-name audit,
+5. **Close the promotion.** The isolated and historical integration gates, implemented-name audit,
    canonical documents, and fresh served two-panel proof are owned by `rusty-engine#6305`.
 
 The Den scheduling chain is:
@@ -538,8 +547,8 @@ to prove durable reconstruction.
 
 The boundary remains deliberately smaller than a plugin platform:
 
-- adding another downstream component still requires a typed package, a closed Rust contract,
-  deliberate application composition, and an exact package-pin update;
+- adding another downstream component still requires a typed package, a closed Rust contract, and
+  deliberate application composition in an explicitly selected host;
 - there is no runtime install, hot reload, arbitrary payload, generic field renderer, reflection
   protocol, store exposure, or service locator;
 - the stock Engine app contains only Engine-owned contributions; game panels remain in their product;

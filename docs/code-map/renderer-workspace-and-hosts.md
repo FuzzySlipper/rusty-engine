@@ -129,8 +129,8 @@ the model-driven session itself remains on-demand and outside ordinary CI.
 - Forgetting disposal, replacement, stale-frame, or partial-failure behavior.
 - Substituting authored entity/resource counts for renderer-owned submission
   statistics, or treating an unavailable counter as zero.
-- Treating an exact-revision consumer install as interchangeable with a local
-  workspace link.
+- Treating an exact-revision consumer install as the ordinary downstream
+  contract; local sibling-facade consumption is the supported path.
 
 ## Follow-up routing
 

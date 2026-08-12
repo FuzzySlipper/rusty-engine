@@ -56,11 +56,13 @@ viewport, and its closed external-project adapter protocol.
   use `asset-import`'s resource-discovery API to load the bounded closure and
   must never delegate URI resolution to Angular or the browser. The published
   runtime resource remains one hash-verified GLB.
-- The external consumer is always selected explicitly by an integration
-  command; ordinary Engine work never scans a sibling checkout.
-- Managed `serve-den` admits the exact configured consumer before listening and exposes one frozen
-  host identity at `/health`, `/api/studio-status`, and the title bar. Manifest drift terminates the
-  complete process group with `studioRestartRequired`; it never silently keeps a stale adapter.
+- A downstream consumer is selected explicitly by an integration command when
+  a focused proof is needed; ordinary Engine work never scans a sibling
+  checkout and does not launch every downstream suite.
+- Managed or persistent Studio hosts expose operational source, adapter, and
+  protocol identity at `/health`, `/api/studio-status`, and the title bar.
+  Those readouts are evidence and stale-session diagnostics, not a downstream
+  dependency pin or freshness contract.
 - Generic `host` starts adapterless and uses one explicit `/api/studio-session/open` transaction to
   read a selected root's `.rusty-studio.json`, start its command, handshake the adapter, and open
   the project. The bootstrap is a bounded trusted development input; it does not transfer project

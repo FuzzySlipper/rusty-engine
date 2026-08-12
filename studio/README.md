@@ -1,7 +1,7 @@
 # Rusty Engine Studio
 
 This is the isolated first-party Studio workspace. It targets full useful feature parity with
-the pinned Asha Studio donor while consuming Rusty Engine's canonical Rust owners and shared
+the historical Asha Studio donor while consuming Rusty Engine's canonical Rust owners and shared
 renderer.
 
 M11A contains the source inventory, dispositions, owner-adoption map, dependency boundary, and
@@ -39,36 +39,23 @@ pnpm run verify:studio
 
 Ordinary `./scripts/verify.sh` does not install or execute this workspace.
 
-## Exact public package consumption
+## Package and host ownership
 
-A downstream Studio composition root pins every Studio and renderer package it imports to the same
-public Engine revision. The supported package spec is:
+Studio and the renderer are isolated Engine-owned workspaces. Verify this workspace with
+`pnpm run verify:studio`; a downstream Rust game does not install, import, build, or configure
+these packages as a second Studio or renderer authority.
 
-```text
-github:FuzzySlipper/rusty-engine#<40-character-sha>&path:<package-path>
-```
+Downstream projects consume the complete Rust facade through one unconditional sibling path
+dependency and submit retained facts through the Engine-owned Rust renderer/webview or
+`@rusty-engine/application-host` boundary. The Engine-hosted Studio discovers a project through its
+root-local `.rusty-studio.json`, project data, and the project's Rust adapter. It does not require a
+downstream copy of the Studio shell, renderer TypeScript, Three/WebGL backend, private bridge, or
+child HTML document.
 
-The Studio package paths are `studio/libs/adapter-client`, `studio/libs/editor-shell`,
-`studio/libs/user-settings`, `studio/libs/viewport`, and `studio/libs/voxel-editor`. The renderer
-paths are `render/packages/render-contracts`, `render/packages/render-projection`,
-`render/packages/renderer-host`, and `render/packages/renderer-three`. A consumer declares all nine
-at one exact SHA; the Studio packages expose only built `dist` entry points and use ordinary
-versioned peers for this transitive closure. They contain no `workspace:`, `link:`, sibling path, or
-private build dependency after installation.
-
-After a candidate revision is public, verify that exact external installation and import surface:
-
-```bash
-./scripts/verify-studio-package-consumer.sh <40-character-public-sha>
-```
-
-This check creates a clean temporary consumer, installs all nine Git subdirectories, rejects any
-local/workspace resolution in its lockfile, builds a minimal external Angular application that
-imports the shell, viewport, Voxel editor, and playback components, and executes the host-neutral
-adapter/settings/renderer entry points. The Angular-bearing packages publish partial-compiled
-metadata so the consuming application's linker—not a source-copy workaround—finishes compilation.
-Real downstream panel/product behavior remains the owning downstream repository's browser
-acceptance.
+When a selected downstream checkout needs focused adapter or browser proof, use the explicit
+integration gate for that checkout. Exact source and consumer commits belong in the Den task or
+review evidence for that run; they are not package pin files or a repository-wide freshness
+contract. The ordinary Engine and isolated Studio gates do not launch every downstream checkout.
 
 ## Launching the editor
 
@@ -95,13 +82,11 @@ checkout, interpret project content, or acquire gameplay authority. To open on l
 one `root` and one project-relative `project` query parameter; the same controls remain visible in
 the shell.
 
-For normal rolling development, the consumer may use its root-local
-`engine-development.json` intent and `./scripts/engine-revision dev sync` to resolve the current
-Engine line once and report the resulting SHA. That path is allowed to surface actionable
-compile/protocol incompatibilities and does not claim certification. For exact pinned-consumer
-certification, retain the explicit adapter launcher or use `pnpm run serve:den`; that path still
-builds and admits the configured public consumer before listening. A root-local session is reported as `generic interactive`; an explicit
-`--adapter-binary` launch without managed identity remains `unmanaged explicit adapter`.
+For normal development, the operator selects the checkout, project root, and adapter explicitly.
+Studio consumes that checkout as it stands; it does not fetch, pull, reset, clean, checkout, pin, or
+enforce a downstream Engine freshness policy. A root-local session is reported as
+`generic interactive`; an explicit `--adapter-binary` launch without managed identity remains
+`unmanaged explicit adapter`.
 Generic root-local discovery is a trusted development workflow, not a global registry, plugin
 marketplace, schema loader, or security policy.
 
@@ -113,29 +98,27 @@ The repository root includes a `den-serve` manifest for the complete built Studi
 den-serve up rusty-engine-studio -repo /absolute/path/to/rusty-engine
 ```
 
-The launcher builds Studio and, by default, builds the adapter from the exact public reference
-consumer revision in [`demo-consumer-source.json`](demo-consumer-source.json), cached outside this
-repository. It never discovers or inspects a sibling checkout. The managed path does not accept a
-sibling root or arbitrary prebuilt adapter override: those remain available only through the lower
-level `pnpm run host` development command. Root-local discovery is reported as `generic interactive`;
-an explicit prebuilt adapter override is reported as `unmanaged explicit adapter`.
+The launcher builds Studio and starts one selected adapter/project session. It does not discover,
+fetch, or mutate a sibling checkout, and it does not turn an operational source identity into a
+dependency pin. Root-local discovery is reported as `generic interactive`; an explicit prebuilt
+adapter override is reported as `unmanaged explicit adapter`.
 
-Before listening, the managed host sends the strict current `describe` request, checks the configured
-adapter identity and protocol, and hashes the exact adapter binary. `/health` and
-`/api/studio-status` expose one frozen readout containing the Engine source commit, configured public
-consumer repository/commit, running adapter build commit and binary SHA-256, and negotiated protocol.
-The same compact identity appears in the title bar. Verify it before trusting a screenshot:
+Before listening, the managed host sends the strict current `describe` request, checks the selected
+adapter identity and protocol, and hashes the running adapter binary. `/health` and
+`/api/studio-status` expose one frozen operational readout containing the selected source/build
+identities, adapter binary SHA-256, and negotiated protocol. The same compact identity appears in the
+title bar. Verify it before trusting a screenshot:
 
 ```bash
 curl -fsS http://127.0.0.1:4300/api/studio-status | jq .
 ```
 
-The supervisor watches only `demo-consumer-source.json`. If its bytes change, it emits a structured
+The supervisor watches the selected session inputs. If they change, it emits a structured
 `studioRestartRequired` receipt, terminates the complete host/adapter process group within a bounded
-grace period, and exits instead of serving the stale process. Run the normal `den-serve up` command
-again to build and admit the new exact consumer. `den-serve` prints the managed LAN URL and owns the
-resulting process group; use `den-serve status`, `logs`, or `stop` with the same project and repository
-arguments for later lifecycle operations.
+grace period, and exits instead of serving stale state. Run the normal `den-serve up` command again
+to admit the selected checkout and project. `den-serve` prints the managed LAN URL and owns the
+resulting process group; use `den-serve status`, `logs`, or `stop` with the same project and
+repository arguments for later lifecycle operations.
 
 The explicit real-consumer proof is separate and mutates only a temporary copy of the demo content
 and conversion fixtures:
@@ -145,27 +128,20 @@ and conversion fixtures:
 ```
 
 It starts fresh adapter processes to prove durable voxel/history/annotation/conversion/environment
-state and trusted host files, then
-runs visible Chromium workflows for Loading Bay and Converted Wall through the shared renderer,
-including project/scene/entity/asset/settings persistence, renderer-observable brush/conversion
-previews, and canonical restoration. CI
-checks out the exact public demo revision declared in
-[`demo-consumer-source.json`](demo-consumer-source.json). Before compilation, the gate checks that
-the selected consumer's own `engine-source.json` agrees with the Engine reverse pin and invokes the
-consumer-owned revision checker across Cargo, renderer, Studio, and lock carriers. Local integration
-remains explicit so the ordinary Engine and isolated Studio gates never acquire a sibling-checkout
-dependency.
+state and trusted host files, then runs visible Chromium workflows for Loading Bay and Converted
+Wall through the shared renderer, including project/scene/entity/asset/settings persistence,
+renderer-observable brush/conversion previews, and canonical restoration. The gate is an explicit,
+selected-consumer proof: it does not make the demo an ordinary Engine dependency or add a
+repository-wide freshness policy. Record the exact Engine, consumer, adapter, and browser-run
+identities in Den evidence for the run.
 
-Animated voxel-object runtime and quality proof uses a separate public consumer and pin:
+Animated voxel-object runtime and quality proof uses a separate explicit consumer checkout:
 
 ```bash
 ./scripts/verify-studio-voxel-integration.sh /absolute/path/to/rusty-engine-voxels
 ```
 
-[`voxel-consumer-source.json`](voxel-consumer-source.json) names the exact consumer and live Engine
-revisions, the separate historical Engine revision that owns the checked evidence, and the baseline
-runtime and high-fidelity quality reports. The gate runs the consumer-owned revision checker before
-compilation, accepts only a clean checkout, copies its content into a disposable project root, and
-drives normal Entity-inspector
-playback through Chromium and the shared renderer. It does not make the voxel experiment an
-ordinary Studio dependency or give Studio ownership of the downstream project schema.
+The gate accepts a selected checkout, copies its content into a disposable project root, and drives
+normal Entity-inspector playback through Chromium and the shared renderer. Exact source heads and
+quality reports are run evidence, not a downstream dependency pin. It does not make the voxel
+experiment an ordinary Studio dependency or give Studio ownership of the downstream project schema.

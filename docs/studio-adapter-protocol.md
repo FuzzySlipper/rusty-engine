@@ -1,6 +1,6 @@
 # Studio external-project adapter protocol
 
-Status: protocol 15 implemented in Engine; exact downstream adapter certification required
+Status: protocol 15 implemented in Engine; downstream adapter proof is explicit and scoped
 
 Rusty Engine Studio talks to one project-owned Rust adapter at a time through a bounded JSON-lines
 process. The adapter is a downstream composition root: it understands that project's layout,
@@ -38,12 +38,14 @@ bootstrap or parses a project schema. `/api/studio-status` reports the active ro
 adapter identity, and protocol once a project is open; an idle generic host reports readiness only
 through `/health` until a root is selected.
 
-The root manifests for `rusty-engine-demo` and `rusty-engine-voxels` are examples of this trusted
-development seam. Exact CI and `serve:den` certification remain explicit managed launch paths and
-continue to pin, build, and verify their named downstream consumer. Generic discovery does not
-replace those consumer-owned gates. In generic mode the existing `runningAdapter.binarySha256`
-field carries the selected bootstrap's content digest as the launch identity; managed mode carries
-the admitted executable digest.
+The root-local `.rusty-studio.json` files for `rusty-engine-demo` and
+`rusty-engine-voxels` are examples of this trusted development seam. Focused
+adapter or browser certification remains an explicit selected-consumer proof;
+it records exact heads in Den evidence without making them a dependency pin or
+freshness contract. Generic discovery does not replace those consumer-owned
+gates. In generic mode the existing `runningAdapter.binarySha256` field carries
+the selected bootstrap's content digest as the launch identity; managed mode
+carries the admitted executable digest.
 
 ## Closed protocol
 
@@ -299,35 +301,30 @@ not the Angular shell, implements the resulting camera movement, boost, pan, orb
 
 The host also owns a separate strict schema-1 runtime-identity readout. Managed `den-serve` starts
 only after a current `describe` handshake succeeds and the configured adapter ID and protocol match.
-`/health`, `/api/studio-status`, and the compact title-bar observation expose the exact Engine source
-commit, configured public consumer repository/commit, adapter build commit, executable SHA-256, and
-negotiated protocol. This is operational evidence, not project or gameplay authority. Direct
-`pnpm run host` use remains explicitly `unmanaged` and cannot claim source/build commits.
+`/health`, `/api/studio-status`, and the compact title-bar observation may expose the Engine source
+commit, selected consumer/build identity, executable SHA-256, and negotiated protocol. This is
+operational evidence, not project or gameplay authority and not a dependency pin. Direct
+`pnpm run host` use remains explicitly `unmanaged` and cannot claim managed source/build evidence.
 
-The generic root-local `den-serve` workflow is the rolling-development path: its
-`engine-development.json` intent follows the canonical Engine `refs/heads/main` line and its
-revision command reports the resolved SHA used for the current build. It is trusted interactive
-development state, not an exact compatibility or certification claim. The managed
-`serve:den`/reverse-integration paths remain exact-certification workflows and continue to require
-their immutable consumer and Engine pins.
+The generic root-local workflow consumes the Engine checkout selected by the operator. It does not
+require a revision intent, freshness command, network update, or sibling-checkout mutation. A
+managed or reverse-integration path may still be selected for a narrow reproducibility proof; its
+exact source identities belong in the Den evidence for that run rather than in downstream source
+configuration.
 
-The managed supervisor hashes and watches only `studio/demo-consumer-source.json`. Identity drift or
-an unreadable replacement produces a `studioRestartRequired` receipt and bounded process-group
-termination; no branch lookup, downgrade, fallback, or stale adapter remains available on the old
-port.
+The managed supervisor hashes and watches the selected session inputs. Identity
+drift or an unreadable replacement produces a `studioRestartRequired` receipt
+and bounded process-group termination; no branch lookup, downgrade, fallback,
+or stale adapter remains available on the old port.
 
 ## Gates
 
 - `./scripts/verify-studio.sh` checks and tests the TypeScript boundary without any demo checkout.
 - The demo's Rust gate tests protocol decoding, owner delegation, path safety, bounds, downstream
   semantic rejection, optimistic replacement, atomicity, and canonical reread.
-- `./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo` is the explicit
-  cross-repository proof. It admits the exact demo and Engine revisions declared by
-  `studio/demo-consumer-source.json`, requires the selected consumer's `engine-source.json` to agree,
-  and runs that consumer's read-only `engine-revision check` before building anything. The consumer
-  checker proves its Cargo resolution, renderer and Studio packages, pnpm build policy, and generated
-  locks all use that one Engine commit. The integration then builds the project-owned adapter, opens
-  Loading Bay, and mutates a temporary Converted Wall copy through
+- `./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo` is the explicit,
+  narrow cross-repository proof. It selects the checkout supplied by the caller, builds the
+  project-owned adapter, opens Loading Bay, and mutates a temporary Converted Wall copy through
   brush/primitive/history-preview/template/host-file/
   annotation/model-query/conversion/environment operations.
   It closes and starts a fresh adapter process to verify reconstruction and byte-preserving stale
@@ -342,19 +339,14 @@ port.
   through the shared outlet, an advertised uninstalled identity degrades to read-only, and owner 88's
   real Weapon damage is replaced, canonically reread, page-reloaded, and reconstructed by a fresh
   host and Rust adapter process. `scripts/verify-studio-entity-inspector-integration.sh` owns this
-  focused sub-proof but is invoked only after the parent gate has admitted the exact clean consumer.
-- `.github/workflows/studio-demo-integration.yml` checks out the public demo at the exact revision
-  declared by `studio/demo-consumer-source.json` and runs the Studio browser and downstream-built
-  Entity-inspector proofs as independent parallel jobs. Each job performs the exact revision and
-  clean-checkout admission before its real Chromium owner; a final `verify-studio-demo-integration`
-  job fails unless both pass. The local parent command still runs both modes while building Studio
-  and the adapter only once. Its summary links both the certified consumer commit and the provider
-  commit read from the reverse pin. Documentation-only changes do not trigger this gate. Provider
-  work triggers it by deliberately advancing the reverse pin, since an arbitrary Rust path trigger
-  would otherwise rerun the old consumer and could not certify the changed implementation.
+  focused sub-proof but is invoked only after the parent gate has selected the affected consumer.
+- `.github/workflows/studio-demo-integration.yml` is an explicit integration workflow, not a
+  default downstream lockstep gate. When selected, it records the exact provider and consumer heads
+  used for that run in its review evidence and executes the real browser owners. Documentation-only
+  Engine changes do not automatically launch every downstream repository suite.
 - `./scripts/verify-studio-voxel-integration.sh /absolute/path/to/rusty-engine-voxels` separately
-  accepts only the exact public revision declared by `studio/voxel-consumer-source.json`. It checks
-  the consumer's exact Engine pin and runtime/quality reports, then drives saved-pose, named-clip,
+  runs the focused voxel consumer proof over the selected checkout. It checks the consumer's
+  runtime/quality reports, then drives saved-pose, named-clip,
   repeat, pause/resume, once, restore, runtime texture/atlas authoring, asymmetric framebuffer
   pixels, replacement, fresh-host reopen, resource counts, and disposal through current Studio and
   the shared renderer in Chromium. The exact measurements and stopping point are recorded in the
@@ -362,9 +354,8 @@ port.
   `.github/workflows/studio-voxel-integration.yml` reproduces the same clean
   checkout; ordinary Studio and provider gates do not inspect a sibling voxel repository.
 
-The demo and voxel reverse-certification lanes are independent. Advancing or proving the demo pin
-does not certify the separately pinned voxel consumer; that consumer remains on its last supported
-Engine and protocol pair until its own public revision and Engine-owned reverse pin advance together.
+The demo and voxel proofs are independent. Passing one focused consumer proof does not certify the
+other downstream product or turn either checkout into an Engine dependency policy.
 
 Ordinary `./scripts/verify.sh` remains Rust/shell-only and does not inspect, build, or require a
 sibling demo checkout.

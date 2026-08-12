@@ -77,7 +77,7 @@ tests take precedence when describing implemented behavior.
 | Package a downstream-authored rules candidate without giving Engine its meaning | [Gameplay rules](code-map/gameplay-rules.md) |
 | Audit the completed mechanics/rules campaign and exact consumers | [Gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md) |
 | Audit the completed textured-voxel campaign and exact consumer | [Textured voxel campaign closeout](textured-voxel-campaign-closeout.md) |
-| Update or verify a downstream consumer's rolling Engine revision | [Downstream Engine revision contract](topics/development/downstream-engine-revisions.md) |
+| Use Rusty Engine from a downstream repository or open it in Studio | [Downstream renderer and Studio boundary](topics/development/downstream-renderer-and-studio.md) |
 | Check active provider limitations and scheduled certification | [Known limitations](known-limitations.md) |
 | Change voxel collision, navigation, motion, or edits | [Spatial mechanisms](code-map/spatial-mechanisms.md) |
 | Change a stored asset, scene, prefab, or import | [Content, assets, and scenes](code-map/content-assets-and-scenes.md) |

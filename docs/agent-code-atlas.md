@@ -83,7 +83,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 - [Textured voxel campaign closeout](textured-voxel-campaign-closeout.md)
 - [Reconstructed voxel surfaces](topics/voxel/reconstructed-surfaces.md)
 - [Rust source organization](topics/development/rust-style.md)
-- [Downstream Engine revision contract](topics/development/downstream-engine-revisions.md)
+- [Downstream renderer and Studio boundary](topics/development/downstream-renderer-and-studio.md)
 - [Product playtesting and evidence authority](topics/development/product-playtesting.md)
 - [Cargo workspace](../Cargo.toml)
 - [Provider gate](../scripts/verify.sh)
@@ -92,7 +92,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 - [Studio gate](../scripts/verify-studio.sh)
 - [Exact demo/Studio integration gate](../scripts/verify-studio-demo-integration.sh)
 
-## Freshness and validation
+## Validation and navigation
 
 This atlas intentionally does not port Asha's generated inventory. Rusty Engine
 has a smaller, coarser owner set, and a generated symbol/file dump would obscure

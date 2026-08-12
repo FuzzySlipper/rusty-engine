@@ -23,8 +23,9 @@ required mental model.
 
 The loading-bay product that first proved the provider boundary lives in
 [`FuzzySlipper/rusty-engine-demo`](https://github.com/FuzzySlipper/rusty-engine-demo).
-That consumer pins an exact public Engine revision. Engine does not inspect or
-depend on a sibling demo checkout during ordinary work.
+Downstream repositories sit beside this checkout and consume the complete
+`../rusty-engine/rust/crates/rusty-engine` facade exactly as it stands. Engine
+does not inspect or mutate a sibling demo checkout during ordinary work.
 
 Repository docs describe committed architecture and implementation surfaces.
 Den may hold current planning, review packets, and decisions when available,
@@ -96,13 +97,15 @@ choices, not ordinary Rust dependencies and not a commitment to web-game
 delivery. Browser evidence proves browser-owned behavior; headless evidence
 proves host-neutral mechanisms.
 
-The first-party Studio can run as one generic adapterless host for trusted local
-development. Opening a project sends its root and project-relative file through
-one `/api/studio-session/open` transaction; the host reads that root's bounded
-`.rusty-studio.json`, starts the declared adapter, and publishes the adapter
-identity plus canonical project readout only after handshake and admission. The
-browser never parses the project schema. Exact `serve:den` and consumer
-integration gates remain explicit pinned certification paths.
+The first-party Studio runs from this Engine repository as one generic
+adapterless host for trusted local development. Opening a project sends its
+root and project-relative file through one `/api/studio-session/open`
+transaction; the host reads that root's bounded `.rusty-studio.json`, starts
+the declared adapter, and publishes the adapter identity plus canonical
+project readout only after handshake and admission. The browser never parses
+the project schema. The persistent `rusty-studio.service` is the recommended
+ordinary interactive entrypoint where installed; downstream repositories
+provide only project data, `.rusty-studio.json`, and their Rust adapter.
 
 ## Repository layout
 
@@ -218,10 +221,10 @@ This adds the isolated gameplay-rules, renderer, and Studio gates.
 ./scripts/verify-studio.sh
 ```
 
-Exact public renderer-package consumption has a clean temporary-consumer proof:
+Complete Rust-facade consumption has a clean temporary-consumer proof:
 
 ```bash
-./scripts/verify-render-consumer.sh <40-character-public-sha>
+./scripts/verify-rust-sdk-consumer.sh
 ```
 
 Studio-to-product integration is explicit and never inferred from a sibling
@@ -272,9 +275,9 @@ The format, limits, provenance, and failure behavior are documented in
 | [Agent code atlas](docs/agent-code-atlas.md) | Owner routing, primary paths, public surfaces, gates, and common mistakes |
 | [Known limitations](docs/known-limitations.md) | Active provider limitations and explicitly scheduled consumer certification |
 | [Rust source organization](docs/topics/development/rust-style.md) | Lightweight module and behavior-owner style |
-| [Downstream Engine revision contract](docs/topics/development/downstream-engine-revisions.md) | Rolling development intent, resolved-SHA reporting, and opt-in exact certification commands |
+| [Downstream Engine and Studio boundary](docs/topics/development/downstream-renderer-and-studio.md) | Sibling facade consumption, Engine-hosted Studio, and renderer ownership |
 | [Rendering successor contract](docs/rendering-successor-contract.md) | Complete shared-rendering scope and adaptation boundary |
-| [Rendering operations](docs/rendering-operations.md) | Verification, exact revision consumption, CI, resources, limitations |
+| [Rendering operations](docs/rendering-operations.md) | Provider verification, Rust host boundary, resources, and limitations |
 | [Studio migration contract](docs/studio-migration-contract.md) | First-party authoring scope, parity, isolation, owner adoption |
 | [Studio adapter protocol](docs/studio-adapter-protocol.md) | Closed external-project operations and optimistic guards |
 | [Voxel asset format](docs/topics/voxel/voxel-asset-format.md) | Durable volume format and bounded converter border |

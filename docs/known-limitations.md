@@ -123,10 +123,10 @@ upgrades or different floating-point environments. See
   unoptimized local observation. It is not an interactive conversion default. End-to-end Chromium
   acknowledgement must not be reported as isolated GPU time, and CPU payload estimates must not be
   reported as exact VRAM.
-- **Detection:** `./scripts/verify-studio-voxel-integration.sh
-  /absolute/path/to/the-exact-rusty-engine-voxels-checkout` validates the pinned reports, stable
-  collision, missing/corrupt rejection, and real Chromium playback. The source pin is
-  `studio/voxel-consumer-source.json`.
+- **Detection:** The explicit Engine-owned voxel integration proof validates the selected checkout's
+  reports, stable collision, missing/corrupt rejection, and real Chromium playback. Exact source and
+  consumer identities in that proof are review evidence recorded in Den, not a downstream source
+  pin or freshness requirement.
 - **Follow-up:** Add materially different licensed corpora and simultaneous-instance measurements
   before choosing delta/reference storage, another cadence default, or renderer GPU instrumentation.
 - **Last reviewed:** 2026-07-27 / codex

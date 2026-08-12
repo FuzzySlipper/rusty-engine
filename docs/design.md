@@ -648,15 +648,16 @@ authority; it describes the current retained state and camera, not a historical 
 GPU depth/occlusion is intentionally reported as `notMeasured`; asynchronous,
 backend-specific occlusion queries remain outside this contract.
 
-Rusty Roguelike is the first exact public consumer of that policy at
+Historical Rusty Roguelike certification was the first exact public consumer
+of that policy at
 `e88856aca2b07212e79ca8a9a8cdc904cb49bd61`, pinning Engine
 `b1f0415af6266783246371d227a2272de7d9f0d6`. Its Rust projection owns authored torch facts; the
 browser selects disabled world defaults, retains the neutral viewmodel default, and proves that the
 retained-light count exactly matches Rust projection while a real framebuffer shows localized warm
 falloff. This is consumer evidence for the generic mechanism, not Engine ownership of torch policy.
 
-Rusty Roguelike exact revision `098b6d6c468711b4c149583996ac5147c9f58941` is the first public
-multi-view consumer and pins Engine `8673aaa6d0b811195b3904f34d7729c0d6e92530`. It uses the
+Historical Rusty Roguelike revision `098b6d6c468711b4c149583996ac5147c9f58941` is the first public
+multi-view consumer record and used Engine `8673aaa6d0b811195b3904f34d7729c0d6e92530`. It uses the
 renderer-neutral contract to GPU-present an orthographic picture-in-picture over the exact
 Rust-admitted retained local scene. Its desktop/mobile Chromium proof inspects distinct primary and
 inset pixels, replaces the target across compact resize, and confirms that session revision and the
@@ -809,10 +810,10 @@ contract and Rust owner. Its panel calls only `readLoadingBayWeapon` and
 `replaceLoadingBayWeapon`; the core protocol sees neither value nor operation. The external panel
 uses the narrow lease for settlement, while built-in Voxel operations already enter the same store
 through named core methods. Named package carriers and an explicit cross-repository gate replace
-ambient sibling access. During ordinary integration, a consumer may instead use its
-`engine-development.json` `refs/heads/main` intent and report the resolved provider SHA through
-the rolling revision command; that is development state and may expose incompatibility. Exact Git
-package pins and the explicit cross-repository gate remain opt-in certification evidence.
+ambient sibling access. Ordinary downstream integration uses the adjacent complete Rust facade and
+the checkout currently present on the machine. A selected downstream compile, adapter, or browser
+proof is run only when that consumer is affected or explicitly requested; its exact source commits
+are review evidence, not a source dependency protocol.
 Product-owned typed read/mutation contracts and game panels remain
 downstream; Engine does not acquire game vocabulary, runtime plugin loading, a generic payload,
 store/service-locator exposure, or a universal component bridge. The implemented contract and
@@ -930,14 +931,14 @@ has passed all stages. The adapter remains the project schema and semantic autho
 by canonical project root, stored outside project bytes and browser storage, guarded by SHA-256
 compare-and-swap and same-directory atomic replacement, and applied to renderer-host camera/input
 configuration and Studio lighting presentation without creating gameplay authority. The host does
-not interpret project content. Its managed serve path handshakes the exact configured adapter before
-listening and publishes one operational identity containing the active root, Engine source commit,
-configured consumer commit, adapter build commit and binary hash, and negotiated protocol. A change
-to the sole consumer identity manifest terminates the bounded host/adapter process group with an
-explicit restart-required receipt; operational status remains observational and never becomes
-project authority. The host does not make HTTP/browser behavior an Engine prerequisite. Ordinary Rust verification remains independent
-of Studio, Node, the browser, and any sibling checkout; the cross-repository demo and Chromium proof
-is an explicit integration gate.
+not interpret project content. Its managed serve path handshakes the selected adapter before
+listening and publishes one operational identity containing the active root, selected source/build
+identities, adapter binary hash, and negotiated protocol. A change to the selected session inputs
+terminates the bounded host/adapter process group with an explicit restart-required receipt;
+operational status remains observational and never becomes project authority. The host does not make
+HTTP/browser behavior an Engine prerequisite. Ordinary Rust verification remains independent of
+Studio, Node, the browser, and any sibling checkout; the cross-repository demo and Chromium proof
+is an explicit narrow integration gate.
 
 The persistent generic service is the preferred interactive Studio entrypoint where installed, but
 its one selected adapter and active project are process-wide. It is a single-active-authoring-session
@@ -958,7 +959,7 @@ A game built on Engine should own its complete behavioral story:
 
 The reference demo owns all of those surfaces, including its `ExtractionBeacon` addition. That
 feature extended the downstream schema, service, snapshot, browser readout, and presentation without
-changing the Engine revision or public vocabulary. Its second authored room composition then reused
+changing the Engine public vocabulary. Its second authored room composition then reused
 the settled meanings with no Rust change. This is the intended dependency direction.
 
 ## Promotion rule

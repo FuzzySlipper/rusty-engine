@@ -170,14 +170,19 @@ cargo test -p <crate-name> --locked
 cargo clippy -p <crate-name> --all-targets --locked -- -D warnings
 ```
 
-External integration is always selected explicitly:
+External integration is always selected explicitly and is never a dependency
+freshness ceremony:
 
 ```bash
-./scripts/verify-render-consumer.sh <40-character-public-sha>
+./scripts/verify-rust-sdk-consumer.sh
 ./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo
 ```
 
-Check the owning code-map page before choosing a focused gate.
+The first command proves the complete local Rust facade in a clean temporary
+consumer. The second is a narrow, explicit Engine-owned browser/adapter proof
+for a selected downstream checkout. Exact source and consumer commits belong
+in Den task or review evidence; they are not committed downstream dependency
+policy. Check the owning code-map page before choosing a focused gate.
 
 ## Rust source style
 
