@@ -208,6 +208,7 @@ impl CollisionHit {
 // ── Projection ─────────────────────────────────────────────────────────────────
 
 /// The collision projection of a single resident chunk.
+#[derive(Clone)]
 struct ChunkCollider {
     /// `content_hash` of the `VoxelChunk` this was built from — the staleness key.
     source_hash: u64,
@@ -216,6 +217,7 @@ struct ChunkCollider {
 }
 
 /// A `parry3d`-backed collision world derived from a [`VoxelWorld`].
+#[derive(Clone)]
 pub struct CollisionProjection {
     grid: VoxelGridSpec,
     /// Translation from canonical voxel coordinates into the runtime coordinate
@@ -587,6 +589,17 @@ impl CollisionProjection {
         self.static_meshes = source.static_meshes.clone();
     }
 
+    /// Copy the immutable static-mesh projection into another local coordinate
+    /// frame while preserving its authored revision and stable identities.
+    pub fn copy_translated_static_meshes_from(
+        &mut self,
+        source: &Self,
+        delta: WorldVec,
+    ) -> Result<(), StaticMeshCollisionError> {
+        self.static_meshes = source.static_meshes.translated(delta)?;
+        Ok(())
+    }
+
     /// Whether `chunk` currently has a collider in the projection.
     pub fn has_collider(&self, chunk: ChunkCoord) -> bool {
         self.chunks.contains_key(&chunk)
@@ -616,7 +629,10 @@ impl CollisionProjection {
             .map(|coord| format!("{},{},{}", coord.x, coord.y, coord.z))
             .collect::<Vec<_>>()
             .join(";");
-        let mut projection_key = if self.world_offset == WorldVec::ZERO {
+        let grid_origin = self.grid.origin_world();
+        let mut projection_key = if self.world_offset == WorldVec::ZERO
+            && grid_origin == WorldPos::ORIGIN
+        {
             format!(
                 "{source_hash:016x}|v{}|n{}|{chunks}",
                 self.version(),
@@ -624,12 +640,15 @@ impl CollisionProjection {
             )
         } else {
             format!(
-                "{source_hash:016x}|v{}|n{}|o{:016x},{:016x},{:016x}|{chunks}",
+                "{source_hash:016x}|v{}|n{}|o{:016x},{:016x},{:016x}|g{:016x},{:016x},{:016x}|{chunks}",
                 self.version(),
                 self.collider_count(),
                 self.world_offset.x.to_bits(),
                 self.world_offset.y.to_bits(),
                 self.world_offset.z.to_bits(),
+                grid_origin.x.to_bits(),
+                grid_origin.y.to_bits(),
+                grid_origin.z.to_bits(),
             )
         };
         if self.static_meshes.revision() != 0 {

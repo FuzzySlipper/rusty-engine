@@ -287,6 +287,10 @@ pub enum EntityProjectionError {
 mod tests {
     use super::*;
     use core_math::Vec3;
+    use engine_spatial::{
+        GlobalPosition, VoxelCollisionScene, WorldOrigin, WorldOriginEntity,
+        WorldOriginRebaseRequest, WorldOriginRebaseService, WorldOriginState,
+    };
     use entity_state::{EntityDefinition, Quat};
 
     #[test]
@@ -336,6 +340,51 @@ mod tests {
                 transform: Some(_),
                 ..
             } if actual == handle
+        ));
+    }
+
+    #[test]
+    fn world_origin_rebase_updates_entity_transform_without_replacing_handle() {
+        let id = EntityId::new(14);
+        let mut state = EntityState::from_definitions([EntityDefinition::new(id, "far actor")
+            .with_transform(Vec3::new(100_000.25, 2.0, 0.0))
+            .with_renderable("mesh/actor", true)])
+        .unwrap();
+        let assets = BTreeMap::from([(
+            "mesh/actor".to_string(),
+            ResolvedRenderAsset {
+                id: "mesh/actor".to_string(),
+                kind: RenderAssetKind::StaticMesh,
+                content_hash: Some("actor".to_string()),
+                version: 1,
+            },
+        )]);
+        let mut projector = EntityRenderProjector::new();
+        projector.project(&state, &assets).unwrap();
+        let handle = projector.handle_of(id).unwrap();
+        let mut scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
+        let mut origin = WorldOriginState::default();
+        let request = WorldOriginRebaseRequest {
+            expected_origin_revision: 0,
+            expected_entity_revision: state.revision(),
+            expected_voxel_source_revision: scene.source_revision().raw(),
+            expected_static_mesh_revision: scene.static_mesh_collision_revision(),
+            target_origin: WorldOrigin::new([100_000, 0, 0]),
+            entities: vec![WorldOriginEntity {
+                entity: id,
+                global_position: GlobalPosition::from_world([100_000.25, 2.0, 0.0]).unwrap(),
+            }],
+        };
+        WorldOriginRebaseService
+            .apply(&mut origin, &mut state, &mut scene, request)
+            .unwrap();
+
+        let update = projector.project(&state, &assets).unwrap();
+        assert_eq!(projector.handle_of(id), Some(handle));
+        assert!(matches!(
+            update.frame.ops.as_slice(),
+            [RenderDiff::Update { handle: actual, transform: Some(transform), .. }]
+                if *actual == handle && transform.translation == [0.25, 2.0, 0.0]
         ));
     }
 

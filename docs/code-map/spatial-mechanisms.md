@@ -37,6 +37,7 @@ from it.
 - [Rigid-body dynamics](../topics/rigid-body-dynamics.md)
 - [FPS character controller design](../topics/fps-character-controller-proposal.md)
 - [FPS character controller survey](../topics/fps-character-controller-survey.md)
+- [World-origin rebasing](../topics/world-origin-rebasing.md)
 - [`character_controller` facade example](../../rust/crates/rusty-engine/examples/character_controller.rs)
 - [`measure-character-controller.sh`](../../scripts/measure-character-controller.sh)
 - [`verify-character-controller-consumer.sh`](../../scripts/verify-character-controller-consumer.sh)
@@ -100,6 +101,13 @@ from it.
 - `svc-collision` exposes local-+Y `CharacterCapsule` cast/overlap facts for
   voxel chunks, admitted static meshes, and explicit active-entity obstacles
   without exposing backend handles.
+- `WorldOriginRebaseService::{prepare,commit,apply}` publishes one guarded local
+  frame across complete root entity transforms, character continuation, voxel
+  collision/navigation/mesh derivatives, and static collision. Exact
+  `GlobalPosition` and `WorldOriginState` codecs are mechanism-level building
+  blocks; downstream owns global-position storage, rebase scheduling, and save
+  policy. Retained entity and voxel projectors preserve handles while updating
+  accepted local transforms.
 
 ## Private or forbidden paths
 
@@ -115,6 +123,8 @@ cargo test -p engine-spatial --locked
 cargo test -p engine-spatial --test character_controller --locked
 cargo test -p entity-state character_motion --locked
 cargo test -p svc-collision character_capsule --locked
+cargo test -p engine-spatial --test world_origin --locked
+cargo test -p render-projection world_origin_rebase --locked
 cargo run -p rusty-engine --example character_controller --locked
 ./scripts/measure-character-controller.sh
 ./scripts/verify-character-controller-consumer.sh /absolute/path/to/rusty-craftsurvive

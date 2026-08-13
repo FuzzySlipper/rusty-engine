@@ -178,6 +178,33 @@ impl StaticMeshCollisionProjection {
         self.revision
     }
 
+    pub(crate) fn translated(&self, delta: WorldVec) -> Result<Self, StaticMeshCollisionError> {
+        if ![delta.x, delta.y, delta.z].into_iter().all(f64::is_finite) {
+            return Err(StaticMeshCollisionError::InvalidTransform);
+        }
+        let assets = self.assets.values().cloned().collect::<Vec<_>>();
+        let instances = self
+            .instances
+            .iter()
+            .map(|(id, instance)| {
+                let mut transform = instance.transform;
+                transform.translation[0] += delta.x;
+                transform.translation[1] += delta.y;
+                transform.translation[2] += delta.z;
+                StaticMeshColliderInstance {
+                    id: *id,
+                    asset: instance.asset,
+                    expected_geometry_hash: instance.geometry_hash,
+                    transform,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut candidate = Self::default();
+        candidate.replace_all(0, assets, instances)?;
+        candidate.revision = self.revision;
+        Ok(candidate)
+    }
+
     pub fn asset_count(&self) -> usize {
         self.assets.len()
     }

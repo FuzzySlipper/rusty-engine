@@ -24,6 +24,7 @@ mod voxel_picking;
 mod voxel_primitive;
 mod voxel_residency;
 mod voxel_template;
+mod world_origin;
 
 pub use character_controller::{
     CharacterAirConfig, CharacterBlockKind, CharacterConfigError, CharacterContactFact,
@@ -36,6 +37,7 @@ pub use character_controller::{
     FirstPersonLookCommand, FirstPersonLookConfig, FirstPersonLookError, FirstPersonLookReceipt,
     FirstPersonLookService, FirstPersonLookState, PreparedCharacterControllerStep,
 };
+pub use core_space::{GlobalPosition, WorldOrigin};
 pub use entity_motion::{
     EntityMotionCommand, EntityMotionError, EntityMotionOutcome, EntityMotionReceipt,
     EntityMotionResolution, EntityMotionService, FirstPersonBasis, FirstPersonMotionCommand,
@@ -109,6 +111,13 @@ pub use voxel_residency::{
 pub use voxel_template::{
     VoxelTemplate, VoxelTemplateEditService, VoxelTemplateError, VoxelTemplateRequest,
     VOXEL_HOUSE_TEMPLATE_BOUNDS,
+};
+pub use world_origin::{
+    decode_world_origin_state, encode_world_origin_state, PreparedWorldOriginRebase,
+    WorldOriginEntity, WorldOriginReadout, WorldOriginRebaseError, WorldOriginRebaseReceipt,
+    WorldOriginRebaseRequest, WorldOriginRebaseService, WorldOriginState,
+    DEFAULT_LOCAL_COORDINATE_ENVELOPE, MAX_WORLD_ORIGIN_ENTITIES,
+    WORLD_ORIGIN_SNAPSHOT_SCHEMA_VERSION,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -228,6 +237,7 @@ pub enum GeneratedRoomError {
 ///
 /// Keeping both layers together preserves the important invariant that the
 /// Parry representation accelerates queries but never becomes canonical state.
+#[derive(Clone)]
 pub struct VoxelCollisionScene {
     voxel_world: VoxelWorld,
     projection: CollisionProjection,
@@ -243,6 +253,25 @@ pub struct VoxelCollisionScene {
     source_revision: VoxelSourceRevision,
     projection_revisions: VoxelProjectionRevisions,
     authority_hash: u64,
+    world_origin: WorldOrigin,
+    rebase_revision: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SceneBuildRevision {
+    pub source: VoxelSourceRevision,
+    pub world_origin: WorldOrigin,
+    pub rebase: u64,
+}
+
+impl SceneBuildRevision {
+    const fn initial(source: VoxelSourceRevision) -> Self {
+        Self {
+            source,
+            world_origin: WorldOrigin::ZERO,
+            rebase: 0,
+        }
+    }
 }
 
 impl std::fmt::Debug for VoxelCollisionScene {
@@ -256,6 +285,8 @@ impl std::fmt::Debug for VoxelCollisionScene {
             .field("generated_room", &self.generated_room)
             .field("source_revision", &self.source_revision)
             .field("authority_hash", &self.authority_hash)
+            .field("world_origin", &self.world_origin)
+            .field("rebase_revision", &self.rebase_revision)
             .field(
                 "resident_chunk_count",
                 &self.voxel_world.resident_chunks().count(),
@@ -287,6 +318,7 @@ pub enum CollisionSceneError {
     Generation(GeneratedRoomError),
     Mesh(MeshError),
     NavigationProjection(NavError),
+    StaticMeshRebase(StaticMeshCollisionError),
 }
 
 impl std::fmt::Display for CollisionSceneError {
@@ -417,7 +449,7 @@ impl VoxelCollisionScene {
         chunk_size: u32,
         voxels: impl IntoIterator<Item = MaterialVoxel>,
         resident_chunks: impl IntoIterator<Item = [i64; 3]>,
-        source_revision: VoxelSourceRevision,
+        revisions: SceneBuildRevision,
         mesh_options: SurfaceMeshOptions,
         incremental_mesh: Option<(&[VoxelMeshChunk], &BTreeSet<ChunkCoord>)>,
     ) -> Result<Self, CollisionSceneError> {
@@ -426,11 +458,16 @@ impl VoxelCollisionScene {
             chunk_size,
             voxels,
             None,
-            source_revision,
+            revisions.source,
             mesh_options,
             None,
         )?;
-        let mut world = base.voxel_world;
+        let target = revisions.world_origin.cell();
+        let mut world = base.voxel_world.with_world_origin(WorldPos::new(
+            -(target[0] as f64),
+            -(target[1] as f64),
+            -(target[2] as f64),
+        ));
         let grid = world.grid();
         for coordinate in resident_chunks {
             let coordinate = ChunkCoord::new(coordinate[0], coordinate[1], coordinate[2]);
@@ -443,7 +480,7 @@ impl VoxelCollisionScene {
             chunk_size,
             world,
             None,
-            source_revision,
+            revisions,
             mesh_options,
             incremental_mesh,
         )
@@ -547,7 +584,7 @@ impl VoxelCollisionScene {
             chunk_size,
             voxel_world,
             generated_room,
-            source_revision,
+            SceneBuildRevision::initial(source_revision),
             mesh_options,
             incremental_mesh,
         )
@@ -558,7 +595,7 @@ impl VoxelCollisionScene {
         chunk_size: u32,
         voxel_world: VoxelWorld,
         generated_room: Option<(GeneratedRoomConfig, GeneratedRoomRecord)>,
-        source_revision: VoxelSourceRevision,
+        revisions: SceneBuildRevision,
         mesh_options: SurfaceMeshOptions,
         incremental_mesh: Option<(&[VoxelMeshChunk], &BTreeSet<ChunkCoord>)>,
     ) -> Result<Self, CollisionSceneError> {
@@ -630,7 +667,7 @@ impl VoxelCollisionScene {
             mesh_chunks,
             mesh_options,
             mesh_update: VoxelChunkMeshUpdate {
-                source_revision,
+                source_revision: revisions.source,
                 surface_mode: mesh_options.mode,
                 dirty_chunks: dirty_mesh_chunks,
                 rebuilt_chunks,
@@ -638,9 +675,11 @@ impl VoxelCollisionScene {
                 removed_chunks,
             },
             generated_room,
-            source_revision,
-            projection_revisions: VoxelProjectionRevisions::coherent(source_revision),
+            source_revision: revisions.source,
+            projection_revisions: VoxelProjectionRevisions::coherent(revisions.source),
             authority_hash,
+            world_origin: revisions.world_origin,
+            rebase_revision: revisions.rebase,
         })
     }
 
@@ -690,6 +729,54 @@ impl VoxelCollisionScene {
 
     pub const fn authority_hash(&self) -> u64 {
         self.authority_hash
+    }
+
+    pub const fn world_origin(&self) -> WorldOrigin {
+        self.world_origin
+    }
+
+    pub const fn rebase_revision(&self) -> u64 {
+        self.rebase_revision
+    }
+
+    fn rebased_candidate(
+        &self,
+        target: WorldOrigin,
+        rebase_revision: u64,
+    ) -> Result<Self, CollisionSceneError> {
+        let target_cell = target.cell();
+        let origin_world = WorldPos::new(
+            -(target_cell[0] as f64),
+            -(target_cell[1] as f64),
+            -(target_cell[2] as f64),
+        );
+        let voxel_world = self.voxel_world.clone().with_world_origin(origin_world);
+        let mut candidate = Self::build_from_voxel_world_at_revision(
+            self.voxel_size,
+            self.chunk_size,
+            voxel_world,
+            self.generated_room,
+            SceneBuildRevision {
+                source: self.source_revision,
+                world_origin: target,
+                rebase: rebase_revision,
+            },
+            self.mesh_options,
+            None,
+        )?;
+        let previous = self.world_origin.cell();
+        let delta = WorldVec::new(
+            (i128::from(previous[0]) - i128::from(target_cell[0])) as f64,
+            (i128::from(previous[1]) - i128::from(target_cell[1])) as f64,
+            (i128::from(previous[2]) - i128::from(target_cell[2])) as f64,
+        );
+        candidate
+            .projection
+            .copy_translated_static_meshes_from(&self.projection, delta)
+            .map_err(CollisionSceneError::StaticMeshRebase)?;
+        candidate.world_origin = target;
+        candidate.rebase_revision = rebase_revision;
+        Ok(candidate)
     }
 
     pub fn resident_chunk_count(&self) -> usize {

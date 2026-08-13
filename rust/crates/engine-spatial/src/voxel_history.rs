@@ -370,7 +370,11 @@ impl VoxelEditHistory {
             self.base_chunk_size,
             material_voxels(&target_map),
             self.base_resident_chunks.iter().copied(),
-            target_revision,
+            crate::SceneBuildRevision {
+                source: target_revision,
+                world_origin: scene.world_origin,
+                rebase: scene.rebase_revision,
+            },
             self.base_mesh_options,
             None,
         )

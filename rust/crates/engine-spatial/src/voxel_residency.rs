@@ -747,7 +747,11 @@ impl VoxelChunkResidencyService {
             scene.chunk_size,
             candidate_world,
             None,
-            accepted_revision,
+            crate::SceneBuildRevision {
+                source: accepted_revision,
+                world_origin: scene.world_origin,
+                rebase: scene.rebase_revision,
+            },
             scene.mesh_options,
             Some((&scene.mesh_chunks, &dirty_coordinates)),
         )

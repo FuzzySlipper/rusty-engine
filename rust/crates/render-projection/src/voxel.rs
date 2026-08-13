@@ -30,6 +30,7 @@ struct InstanceSnapshot {
     asset_id: String,
     transform: Transform,
     source_revision: u64,
+    rebase_revision: u64,
     chunks: BTreeMap<[i64; 3], ChunkSnapshot>,
 }
 
@@ -85,8 +86,16 @@ impl VoxelRenderProjector {
             if next.asset_id != previous.asset_id {
                 continue;
             }
+            if next.rebase_revision < previous.rebase_revision {
+                return Err(VoxelProjectionError::StaleRebaseRevision {
+                    instance: instance.clone(),
+                    previous: previous.rebase_revision,
+                    candidate: next.rebase_revision,
+                });
+            }
             if next.source_revision < previous.source_revision
                 || (next.source_revision == previous.source_revision
+                    && next.rebase_revision == previous.rebase_revision
                     && (next.asset_id != previous.asset_id || next.chunks != previous.chunks))
             {
                 return Err(VoxelProjectionError::StaleSourceRevision {
@@ -382,6 +391,7 @@ fn validate_and_snapshot(
                 asset_id: instance.asset_id.clone(),
                 transform: instance.transform,
                 source_revision: instance.scene.source_revision().raw(),
+                rebase_revision: instance.scene.rebase_revision(),
                 chunks,
             },
         );
@@ -567,6 +577,11 @@ pub enum VoxelProjectionError {
         previous: u64,
         candidate: u64,
     },
+    StaleRebaseRevision {
+        instance: String,
+        previous: u64,
+        candidate: u64,
+    },
     PublicationRevisionExhausted,
     Handle(HandleAllocationError),
     Frame(RenderFrameError),
@@ -579,8 +594,10 @@ mod tests {
         MaterialVoxel, SurfaceMeshOptions, VoxelChunkIdentity, VoxelChunkLeaseRegistry,
         VoxelChunkPayload, VoxelChunkResidencyOperation, VoxelChunkResidencyService,
         VoxelChunkResidencyTransaction, VoxelEdit, VoxelEditService, VoxelEditTransaction,
-        VoxelSourceRevision,
+        VoxelSourceRevision, WorldOrigin, WorldOriginRebaseRequest, WorldOriginRebaseService,
+        WorldOriginState,
     };
+    use entity_state::EntityState;
     use render_model::MaterialUvStrategy;
 
     fn material(slot: u16) -> RenderMaterialDescriptor {
@@ -648,6 +665,64 @@ mod tests {
         let second = projector.project(&instances, &materials).unwrap();
         assert!(second.frame.is_empty());
         assert_eq!(projector.chunk_handle("room", [0, 0, 0]), Some(handle));
+    }
+
+    #[test]
+    fn world_origin_rebase_updates_chunk_transforms_without_replacing_stable_handles() {
+        let mut scene = VoxelCollisionScene::from_material_voxels(
+            1.0,
+            16,
+            [MaterialVoxel {
+                address: [100_000, 0, 0],
+                material_slot: 1,
+            }],
+        )
+        .unwrap();
+        let mut origin = WorldOriginState::default();
+        let mut entities = EntityState::default();
+        let materials = BTreeMap::from([(1, material(1))]);
+        let mut projector = VoxelRenderProjector::new();
+        let project = |projector: &mut VoxelRenderProjector, scene: &VoxelCollisionScene| {
+            projector
+                .project(
+                    &[VoxelProjectionInstance {
+                        instance_id: "world".to_string(),
+                        asset_id: "voxel-object/world".to_string(),
+                        transform: Transform::IDENTITY,
+                        scene,
+                    }],
+                    &materials,
+                )
+                .unwrap()
+        };
+        project(&mut projector, &scene);
+        let root = projector.root_handle("world").unwrap();
+        let chunk = projector.chunk_handle("world", [6_250, 0, 0]).unwrap();
+
+        let request = WorldOriginRebaseRequest {
+            expected_origin_revision: 0,
+            expected_entity_revision: entities.revision(),
+            expected_voxel_source_revision: scene.source_revision().raw(),
+            expected_static_mesh_revision: scene.static_mesh_collision_revision(),
+            target_origin: WorldOrigin::new([100_000, 0, 0]),
+            entities: Vec::new(),
+        };
+        WorldOriginRebaseService
+            .apply(&mut origin, &mut entities, &mut scene, request)
+            .unwrap();
+        let update = project(&mut projector, &scene);
+
+        assert_eq!(projector.root_handle("world"), Some(root));
+        assert_eq!(projector.chunk_handle("world", [6_250, 0, 0]), Some(chunk));
+        assert!(update.frame.ops.iter().any(|operation| matches!(
+            operation,
+            RenderDiff::Update { handle, transform: Some(transform), .. }
+                if *handle == chunk && transform.translation[0].abs() < 0.001
+        )));
+        assert!(!update.frame.ops.iter().any(|operation| matches!(
+            operation,
+            RenderDiff::Destroy { .. } | RenderDiff::ReplaceMeshPayload { .. }
+        )));
     }
 
     #[test]

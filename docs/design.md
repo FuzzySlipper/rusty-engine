@@ -422,6 +422,16 @@ or product smoothing. The adopted design and donor rationale are recorded in
 [FPS character controller design](topics/fps-character-controller-proposal.md)
 and its [survey](topics/fps-character-controller-survey.md).
 
+Large-coordinate products use the explicit
+`engine-spatial::WorldOriginRebaseService` contract documented in
+[world-origin rebasing](topics/world-origin-rebasing.md). Exact signed global
+positions and voxel/chunk identities remain canonical while entity motion,
+collision/navigation projections, voxel chunk transforms, and retained frames
+use one bounded local coordinate frame. Downstream owns threshold and cadence;
+Engine owns guarded candidate preparation and atomic publication. Renderer and
+projection code only observe the accepted local frame and cannot select an
+origin or become global authority.
+
 `KinematicMotionSystem` is a centrally invoked mechanism over explicit body views. It supplies no
 game loop, actor policy, or component-local update callback. A downstream runtime decides when to
 invoke it and what accepted facts mean.

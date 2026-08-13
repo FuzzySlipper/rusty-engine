@@ -174,7 +174,7 @@ pub fn decode_voxel_edit_history(
         history.base_chunk_size,
         material_voxels(&materials),
         history.base_resident_chunks.iter().copied(),
-        history.source_revision,
+        crate::SceneBuildRevision::initial(history.source_revision),
         history.base_mesh_options,
         None,
     )
@@ -190,7 +190,7 @@ fn validate_history(history: &VoxelEditHistory) -> Result<(), VoxelEditHistoryCo
         history.base_chunk_size,
         history.base_voxels.iter().copied(),
         history.base_resident_chunks.iter().copied(),
-        VoxelSourceRevision::INITIAL,
+        crate::SceneBuildRevision::initial(VoxelSourceRevision::INITIAL),
         history.base_mesh_options,
         None,
     )

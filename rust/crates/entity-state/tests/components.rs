@@ -331,6 +331,98 @@ fn homogeneous_component_replacements_validate_all_slots_before_one_publication(
 }
 
 #[test]
+fn local_frame_transform_replacement_is_atomic_and_admits_static_roots_only() {
+    let first = EntityId::new(25);
+    let second = EntityId::new(26);
+    let child = EntityId::new(27);
+    let mut state = EntityState::from_definitions([
+        EntityDefinition::new(first, "static root")
+            .with_transform(Vec3::new(100.0, 1.0, 0.0))
+            .with_collision(true, true),
+        EntityDefinition::new(second, "dynamic root").with_transform(Vec3::new(101.0, 1.0, 0.0)),
+        EntityDefinition::new(child, "child")
+            .with_transform(Vec3::new(1.0, 0.0, 0.0))
+            .with_transform_parent(first),
+    ])
+    .unwrap();
+    let first_revision = state
+        .component_revision::<TransformComponent>(first)
+        .unwrap();
+    let second_revision = state
+        .component_revision::<TransformComponent>(second)
+        .unwrap();
+    let before_revision = state.revision();
+
+    assert!(matches!(
+        EntityAuthoringService.replace_root_transforms_for_local_frame(
+            &mut state,
+            vec![
+                ComponentReplacement {
+                    expected_revision: first_revision.clone(),
+                    entity: first,
+                    component: TransformComponent::from_transform(
+                        entity_state::EntityTransform::at(Vec3::new(0.0, 1.0, 0.0)),
+                    ),
+                },
+                ComponentReplacement {
+                    expected_revision: second_revision.clone(),
+                    entity: second,
+                    component: TransformComponent::from_transform(
+                        entity_state::EntityTransform::at(Vec3::new(f32::INFINITY, 1.0, 0.0)),
+                    ),
+                },
+            ],
+        ),
+        Err(EntityAuthoringError::InvalidComponent { entity, .. }) if entity == second
+    ));
+    assert_eq!(state.revision(), before_revision);
+    assert_eq!(state.transform(first).unwrap().translation.x, 100.0);
+
+    let receipt = EntityAuthoringService
+        .replace_root_transforms_for_local_frame(
+            &mut state,
+            vec![
+                ComponentReplacement {
+                    expected_revision: first_revision,
+                    entity: first,
+                    component: TransformComponent::from_transform(
+                        entity_state::EntityTransform::at(Vec3::new(0.0, 1.0, 0.0)),
+                    ),
+                },
+                ComponentReplacement {
+                    expected_revision: second_revision,
+                    entity: second,
+                    component: TransformComponent::from_transform(
+                        entity_state::EntityTransform::at(Vec3::new(1.0, 1.0, 0.0)),
+                    ),
+                },
+            ],
+        )
+        .unwrap();
+    assert_eq!(receipt.revision_after, before_revision + 1);
+    assert_eq!(state.transform(first).unwrap().translation.x, 0.0);
+    assert_eq!(state.transform(second).unwrap().translation.x, 1.0);
+    assert_eq!(state.transform(child).unwrap().translation.x, 1.0);
+
+    let child_revision = state
+        .component_revision::<TransformComponent>(child)
+        .unwrap();
+    assert!(matches!(
+        EntityAuthoringService.replace_root_transforms_for_local_frame(
+            &mut state,
+            vec![ComponentReplacement {
+                expected_revision: child_revision,
+                entity: child,
+                component: TransformComponent::from_transform(
+                    entity_state::EntityTransform::at(Vec3::ZERO),
+                ),
+            }],
+        ),
+        Err(EntityAuthoringError::ComponentInUse { entity, .. }) if entity == child
+    ));
+}
+
+#[test]
 fn registration_conflicts_fail_before_existing_state_changes() {
     let entity = EntityId::new(20);
     let mut state =

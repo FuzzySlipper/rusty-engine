@@ -557,6 +557,15 @@ pub struct CharacterControllerService {
     last_readout: Option<CharacterControllerReadout>,
 }
 
+pub(crate) fn character_collision_world_hash(
+    entities: &EntityState,
+    scene: &VoxelCollisionScene,
+    entity: EntityId,
+) -> u64 {
+    let obstacles = character_obstacles(entities, entity);
+    hash_environment(character_environment(scene, &obstacles))
+}
+
 impl CharacterControllerService {
     pub fn readout(&self) -> Option<CharacterControllerReadout> {
         self.last_readout

@@ -474,7 +474,11 @@ impl VoxelEditService {
             scene.chunk_size,
             material_voxels,
             new_resident.iter().map(|coordinate| coordinate.to_array()),
-            accepted.revision_after,
+            crate::SceneBuildRevision {
+                source: accepted.revision_after,
+                world_origin: scene.world_origin,
+                rebase: scene.rebase_revision,
+            },
             scene.mesh_options,
             Some((&scene.mesh_chunks, &dirty_mesh_chunks)),
         )

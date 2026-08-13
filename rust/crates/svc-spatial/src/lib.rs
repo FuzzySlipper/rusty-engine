@@ -25,7 +25,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use core_space::{ChunkCoord, ChunkRegion, Direction6, VoxelGridSpec};
+use core_space::{ChunkCoord, ChunkRegion, Direction6, VoxelGridSpec, WorldPos};
 use svc_volume::VoxelChunk;
 
 /// The authoritative lifecycle state of a chunk coordinate.
@@ -107,6 +107,13 @@ impl VoxelWorld {
     /// The grid spec this partition is for.
     pub fn grid(&self) -> VoxelGridSpec {
         self.grid
+    }
+
+    /// Shift the continuous world frame without changing signed chunk/voxel
+    /// identity or resident payloads.
+    pub fn with_world_origin(mut self, origin: WorldPos) -> Self {
+        self.grid = self.grid.with_origin(origin);
+        self
     }
 
     /// Number of tracked chunks (any non-`Absent` state).

@@ -414,6 +414,92 @@ impl EntityAuthoringService {
         })
     }
 
+    /// Replaces root transforms while changing only the simulation's local coordinate frame.
+    ///
+    /// Unlike ordinary transform mutation, this bounded primitive admits active static colliders:
+    /// their global placement is unchanged when the spatial authority and every root transform are
+    /// published together by the owning frame-rebase service. Parented transforms are excluded
+    /// because they inherit the root frame change. Exact slot guards and all candidate values are
+    /// validated before this method mutates the supplied state.
+    pub fn replace_root_transforms_for_local_frame(
+        self,
+        state: &mut EntityState,
+        mut replacements: Vec<ComponentReplacement<TransformComponent>>,
+    ) -> Result<EntityAuthoringReceipt, EntityAuthoringError> {
+        if replacements.len() > MAX_COMPONENT_REPLACEMENTS {
+            return Err(EntityAuthoringError::ComponentReplacementLimitExceeded {
+                actual: replacements.len(),
+                maximum: MAX_COMPONENT_REPLACEMENTS,
+            });
+        }
+        replacements.sort_by_key(|replacement| replacement.entity);
+        let type_id = registered_type_id::<TransformComponent>(state)?;
+        let mut seen = BTreeSet::new();
+        let mut changed = BTreeSet::new();
+        for replacement in &replacements {
+            if !seen.insert(replacement.entity) {
+                return Err(EntityAuthoringError::DuplicateComponentReplacement {
+                    entity: replacement.entity,
+                    component: type_id.clone(),
+                });
+            }
+            ensure_alive(state, replacement.entity)?;
+            if state.transform_parent(replacement.entity).is_some() {
+                return Err(EntityAuthoringError::ComponentInUse {
+                    entity: replacement.entity,
+                    component: type_id.clone(),
+                    reason: "local-frame replacement requires a root transform",
+                });
+            }
+            ensure_component_revision::<TransformComponent>(
+                state,
+                replacement.entity,
+                &replacement.expected_revision,
+            )?;
+            let before = state
+                .components
+                .get::<TransformComponent>(replacement.entity)
+                .expect("registration checked")
+                .ok_or_else(|| EntityAuthoringError::ComponentAbsent {
+                    entity: replacement.entity,
+                    component: type_id.clone(),
+                })?;
+            state
+                .components
+                .validate(&replacement.component)
+                .map_err(|error| EntityAuthoringError::InvalidComponent {
+                    entity: replacement.entity,
+                    component: type_id.clone(),
+                    reason: error.reason,
+                })?;
+            if before != &replacement.component {
+                changed.insert(replacement.entity);
+            }
+        }
+
+        let revision_before = state.revision;
+        let mut facts = Vec::with_capacity(changed.len());
+        for replacement in replacements {
+            if changed.contains(&replacement.entity) {
+                state
+                    .components
+                    .insert_unchecked(replacement.entity, replacement.component);
+                facts.push(EntityAuthoringFact::ComponentReplaced {
+                    entity: replacement.entity,
+                    component: type_id.clone(),
+                });
+            }
+        }
+        if !facts.is_empty() {
+            state.revision = state.revision.saturating_add(1);
+        }
+        Ok(EntityAuthoringReceipt {
+            revision_before,
+            revision_after: state.revision,
+            facts,
+        })
+    }
+
     pub fn detach_component<T: EntityComponent>(
         self,
         state: &mut EntityState,
