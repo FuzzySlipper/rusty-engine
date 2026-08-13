@@ -494,6 +494,73 @@ test('public application host realizes and refreshes structured world indicators
   await expect(indicator).toHaveCount(0);
 });
 
+test('public application host realizes and advances Three particle bursts', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  const receipt = await page.evaluate(() =>
+    window.__rustyApplicationHost?.renderer.applyPresentation({
+      schemaVersion: 1,
+      ops: [{
+        domain: 'particle',
+        meta: { sequence: 0 },
+        op: {
+          op: 'emit',
+          signalId: 'application-host-particle-proof',
+          descriptor: {
+            anchor: { kind: 'world', position: [0, 0, 1.5] },
+            visual: { kind: 'cube' },
+            ratePerSecond: 0,
+            burstCount: 1,
+            lifetimeSeconds: [2, 2],
+            velocityMin: [0, 0, 0],
+            velocityMax: [0, 0, 0],
+            acceleration: [0, 0, 0],
+            sizeCurve: [{ age: 0, value: 1.5 }, { age: 1, value: 1.5 }],
+            colorCurve: [
+              { age: 0, color: [1, 0, 1, 1] },
+              { age: 1, color: [1, 0, 1, 1] },
+            ],
+            flipbookFramesPerSecond: 0,
+            seed: 7,
+            maxParticles: 1,
+            visible: true,
+          },
+        },
+      }],
+    }),
+  );
+  expect(receipt).toEqual({ applied: 1, diagnostics: [] });
+
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+  const magentaPixels = await page.locator('canvas').evaluate((element) => {
+    window.__rustyApplicationHost?.renderer.renderOnce();
+    const canvas = element as HTMLCanvasElement;
+    const context = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
+    if (context === null) return 0;
+    const pixels = new Uint8Array(
+      context.drawingBufferWidth * context.drawingBufferHeight * 4,
+    );
+    context.readPixels(
+      0,
+      0,
+      context.drawingBufferWidth,
+      context.drawingBufferHeight,
+      context.RGBA,
+      context.UNSIGNED_BYTE,
+      pixels,
+    );
+    let count = 0;
+    for (let offset = 0; offset < pixels.length; offset += 4) {
+      if (pixels[offset]! > 120 && pixels[offset + 1]! < 90 && pixels[offset + 2]! > 120) {
+        count += 1;
+      }
+    }
+    return count;
+  });
+  expect(magentaPixels).toBeGreaterThan(100);
+});
+
 test('late trusted UI failure cleans the renderer transactionally and leaves bounded failure UI', async ({ page }) => {
   await page.goto('/browser/application-host.html');
   const message = await page.evaluate(() => window.__rustyApplicationFailureProbe?.());

@@ -22054,8 +22054,476 @@ async function Ob(e, t) {
 	if (n !== t) throw new Tb("contentHashMismatch", `billboard resource hash mismatch: expected ${t}, got ${n}`);
 }
 //#endregion
-//#region packages/renderer-host/dist/telemetry-host.js
-var kb = /* @__PURE__ */ new Set([
+//#region packages/renderer-host/dist/particle-host.js
+var kb = class {
+	#e;
+	#t;
+	#n;
+	#r;
+	#i;
+	#a = /* @__PURE__ */ new Map();
+	#o = /* @__PURE__ */ new Map();
+	#s = /* @__PURE__ */ new Map();
+	#c = /* @__PURE__ */ new Set();
+	#l = /* @__PURE__ */ new Map();
+	#u = [];
+	#d = 1;
+	#f = 0;
+	#p = 0;
+	#m = 0;
+	#h = 0;
+	#g = 0;
+	constructor(e) {
+		this.#e = e.maxActiveEmitters ?? 64, this.#t = e.maxParticles ?? 4096, this.#n = e.resolveEntityPosition, this.#r = e.resolveResource, this.#i = e.sink;
+	}
+	async applyPresentation(e) {
+		let t = [], n = 0;
+		for (let r of e.ops) {
+			if (r.domain !== "particle") continue;
+			let e = await this.#v(r);
+			e === null ? n += 1 : (t.push(e), this.#u.push(e));
+		}
+		return {
+			applied: n,
+			diagnostics: t,
+			readout: this.readout()
+		};
+	}
+	advance(e) {
+		if (!Number.isFinite(e) || e < 0 || e > 1) {
+			let e = ex("invalidDescriptor", "particle frame delta must be finite and between zero and one second");
+			return this.#u.push(e), {
+				applied: 0,
+				diagnostics: [e],
+				readout: this.readout()
+			};
+		}
+		let t = [];
+		for (let n of this.#a.values()) {
+			if (!n.descriptor.visible) continue;
+			n.emissionCarry += n.descriptor.ratePerSecond * e;
+			let r = Math.floor(n.emissionCarry);
+			n.emissionCarry -= r;
+			let i = this.#C(n, r, 0);
+			i !== null && t.push(i);
+		}
+		for (let t of [...this.#s.values()]) {
+			if (t.ageSeconds += e, t.ageSeconds >= t.lifetimeSeconds) {
+				this.#T(t);
+				continue;
+			}
+			if (!t.sleeping && this.#_(t, e)) {
+				this.#T(t);
+				continue;
+			}
+			this.#i.update(Pb(t));
+		}
+		return this.#E(), this.#u.push(...t), {
+			applied: this.#s.size,
+			diagnostics: t,
+			readout: this.readout()
+		};
+	}
+	requiresAnimationFrame() {
+		return this.#s.size > 0 || this.#o.size > 0 || [...this.#a.values()].some((e) => e.descriptor.visible && e.descriptor.ratePerSecond > 0);
+	}
+	readout() {
+		let e = this.#i.readout?.();
+		return {
+			activeEmitters: this.#a.size,
+			activeParticles: this.#s.size,
+			loadedSprites: this.#l.size,
+			emittedBursts: this.#f,
+			droppedParticles: this.#p,
+			collisionTests: this.#m,
+			collisionImpacts: this.#h,
+			highWaterMark: this.#g,
+			activeBatches: e?.activeBatches ?? 0,
+			allocatedSlots: e?.allocatedSlots ?? 0,
+			diagnostics: [...this.#u]
+		};
+	}
+	cleanup() {
+		for (let e of [...this.#s.values()]) this.#T(e);
+		this.#a.clear(), this.#o.clear(), this.#c.clear();
+	}
+	dispose() {
+		this.cleanup(), this.#l.clear(), this.#u.length = 0;
+	}
+	#_(e, t) {
+		let n = e.descriptor.acceleration;
+		e.velocity[0] += n[0] * t, e.velocity[1] += n[1] * t, e.velocity[2] += n[2] * t;
+		let r = e.descriptor.collision;
+		return r === void 0 ? (Ib(e.position, e.velocity, t), !1) : Lb(e, r, t, () => {
+			this.#m += 1;
+		}, () => {
+			this.#h += 1;
+		}) === "kill";
+	}
+	async #v(e) {
+		try {
+			switch (e.op.op) {
+				case "emit": return await this.#y(e.meta, e.op);
+				case "create": return await this.#b(e.meta, e.op);
+				case "update": return await this.#x(e.meta, e.op);
+				case "destroy": return this.#S(e.meta, e.op);
+			}
+		} catch (t) {
+			return $b(t instanceof rx ? t.code : "hostFailure", e.meta, Qb(e.op), t instanceof Error ? t.message : String(t));
+		}
+	}
+	async #y(e, t) {
+		if (this.#c.has(t.signalId)) return null;
+		let n = await this.#O(t.descriptor), r = Ab(`signal:${t.signalId}`, null, t.descriptor, n), i = this.#C(r, t.descriptor.burstCount, e.sequence);
+		return i?.code === "anchorMissing" ? i : (this.#c.add(t.signalId), this.#o.set(r.key, r), this.#f += 1, i);
+	}
+	async #b(e, t) {
+		let n = t.handle;
+		if (this.#a.has(n)) return $b("duplicateHandle", e, t.handle, "particle emitter handle is already active");
+		if (this.#a.size >= this.#e) return $b("budgetExceeded", e, t.handle, "particle emitter budget is exhausted");
+		let r = await this.#O(t.descriptor), i = Ab(`handle:${n}`, t.handle, t.descriptor, r);
+		this.#a.set(n, i);
+		try {
+			return this.#C(i, t.descriptor.burstCount, e.sequence);
+		} catch (e) {
+			throw this.#a.delete(n), e;
+		}
+	}
+	async #x(e, t) {
+		let n = this.#a.get(t.handle);
+		if (n === void 0) return $b("unknownHandle", e, t.handle, "particle emitter handle is not active");
+		let r = Zb(n.descriptor, t.patch);
+		return n.preparedVisual = await this.#O(r), n.descriptor = r, null;
+	}
+	#S(e, t) {
+		let n = this.#a.get(t.handle);
+		if (n === void 0) return $b("unknownHandle", e, t.handle, "particle emitter handle is not active");
+		this.#a.delete(t.handle);
+		for (let e of [...n.particleIds]) {
+			let t = this.#s.get(e);
+			t !== void 0 && this.#T(t);
+		}
+		return null;
+	}
+	#C(e, t, n) {
+		if (t <= 0 || !e.descriptor.visible) return null;
+		let r = Nb(e.descriptor.anchor, this.#n);
+		if (r === null) return $b("anchorMissing", { sequence: n }, e.handle, "particle entity anchor is unavailable");
+		let i = Math.max(0, e.descriptor.maxParticles - e.particleIds.size), a = Math.max(0, this.#t - this.#s.size), o = Math.min(t, i, a), s = t - o, c = [];
+		try {
+			for (let t = 0; t < o; t += 1) {
+				let t = this.#w(e, r);
+				e.particleIds.add(t.id), this.#s.set(t.id, t), c.push(t), this.#i.create(Pb(t));
+			}
+			this.#g = Math.max(this.#g, this.#s.size), this.#p += s;
+		} catch (t) {
+			for (let t of c.reverse()) {
+				this.#s.delete(t.id), e.particleIds.delete(t.id);
+				try {
+					this.#i.destroy(t.id);
+				} catch {}
+			}
+			throw t;
+		}
+		return o < t ? $b("budgetExceeded", { sequence: n }, e.handle, `particle budget dropped ${s} particles`) : null;
+	}
+	#w(e, t) {
+		let n = e.descriptor, r = Mb(e, n.lifetimeSeconds[0], n.lifetimeSeconds[1]), i = [
+			Mb(e, n.velocityMin[0], n.velocityMax[0]),
+			Mb(e, n.velocityMin[1], n.velocityMax[1]),
+			Mb(e, n.velocityMin[2], n.velocityMax[2])
+		];
+		return {
+			id: this.#d++,
+			emitterKey: e.key,
+			descriptor: n,
+			visual: e.preparedVisual,
+			ageSeconds: 0,
+			lifetimeSeconds: r,
+			position: [...t],
+			velocity: i,
+			collisionOrigin: [...t],
+			impactCount: 0,
+			sleeping: !1
+		};
+	}
+	#T(e) {
+		this.#s.delete(e.id), this.#i.destroy(e.id), this.#a.get(Number(e.emitterKey.slice(7)))?.particleIds.delete(e.id), this.#o.get(e.emitterKey)?.particleIds.delete(e.id);
+	}
+	#E() {
+		for (let [e, t] of this.#o) t.particleIds.size === 0 && this.#o.delete(e);
+	}
+	async #D(e) {
+		let t = tx(e), n = this.#l.get(t);
+		if (n !== void 0) return n;
+		let r = this.#r(e).then(async (t) => {
+			if (t === null) throw new rx("spriteLoadFailed", `particle sprite ${e.asset} is unavailable`);
+			return await nx(t.bytes, e.contentHash), t.url;
+		});
+		this.#l.set(t, r);
+		try {
+			return await r;
+		} catch (e) {
+			throw this.#l.delete(t), e;
+		}
+	}
+	async #O(e) {
+		let t = Fb(e);
+		return t.kind === "cube" ? t : {
+			kind: "billboard",
+			frameCount: t.sprite.frameCount,
+			spriteUrl: await this.#D(t.sprite)
+		};
+	}
+};
+function Ab(e, t, n, r) {
+	return {
+		descriptor: n,
+		preparedVisual: r,
+		key: e,
+		handle: t,
+		randomState: jb(n.seed),
+		emissionCarry: 0,
+		particleIds: /* @__PURE__ */ new Set()
+	};
+}
+function jb(e) {
+	let t = Math.trunc(e) >>> 0;
+	return t === 0 ? 2654435769 : t;
+}
+function Mb(e, t, n) {
+	let r = e.randomState;
+	return r ^= r << 13, r ^= r >>> 17, r ^= r << 5, e.randomState = r >>> 0, t + (n - t) * (e.randomState / 4294967296);
+}
+function Nb(e, t) {
+	if (e.kind === "world") return e.position;
+	let n = t(e.entity);
+	return n === null ? null : [
+		n[0] + e.offset[0],
+		n[1] + e.offset[1],
+		n[2] + e.offset[2]
+	];
+}
+function Pb(e) {
+	let t = Math.min(1, e.ageSeconds / e.lifetimeSeconds), n = e.visual.kind === "billboard" ? e.visual.frameCount : 1;
+	return {
+		id: e.id,
+		position: [...e.position],
+		size: qb(e.descriptor.sizeCurve, t),
+		color: Jb(e.descriptor.colorCurve, t),
+		frameIndex: n === 1 ? 0 : Math.floor(e.ageSeconds * e.descriptor.flipbookFramesPerSecond) % n,
+		visual: e.visual
+	};
+}
+function Fb(e) {
+	return "visual" in e && e.visual !== void 0 ? e.visual : {
+		kind: "billboard",
+		sprite: e.sprite
+	};
+}
+function Ib(e, t, n) {
+	e[0] += t[0] * n, e[1] += t[1] * n, e[2] += t[2] * n;
+}
+function Lb(e, t, n, r, i) {
+	let a = n, o = 0;
+	for (; a > 1e-6 && o < 4;) {
+		o += 1;
+		let n = Hb(e.position, e.collisionOrigin), s = [
+			n[0] + e.velocity[0] * a,
+			n[1] + e.velocity[1] * a,
+			n[2] + e.velocity[2] * a
+		], c = null;
+		for (let e of t.volumes) {
+			r();
+			let i = Rb(n, s, t.radius, e);
+			i !== null && (c === null || i.time < c.time) && (c = i);
+		}
+		if (c === null) return Ib(e.position, e.velocity, a), "continue";
+		if (Ib(e.position, e.velocity, Math.max(0, c.time * a)), e.position[0] += c.normal[0] * 1e-4, e.position[1] += c.normal[1] * 1e-4, e.position[2] += c.normal[2] * 1e-4, a *= Math.max(0, 1 - c.time), Vb(e.velocity, c.normal, t), e.impactCount += 1, i(), e.impactCount >= t.maximumImpacts) return t.limitBehavior === "kill" ? "kill" : (e.velocity = [
+			0,
+			0,
+			0
+		], e.sleeping = !0, "continue");
+		if (Wb(e.velocity) <= t.sleepSpeed) return e.velocity = [
+			0,
+			0,
+			0
+		], e.sleeping = !0, "continue";
+	}
+	return Ib(e.position, e.velocity, a), "continue";
+}
+function Rb(e, t, n, r) {
+	if (r.kind === "plane") {
+		let i = Ub(r.normal, e) - r.offset - n, a = Ub(r.normal, t) - r.offset - n;
+		return i < 0 ? {
+			time: 0,
+			normal: r.normal
+		} : a >= 0 || i === a ? null : {
+			time: i / (i - a),
+			normal: r.normal
+		};
+	}
+	return zb(e, t, [
+		r.minimum[0] - n,
+		r.minimum[1] - n,
+		r.minimum[2] - n
+	], [
+		r.maximum[0] + n,
+		r.maximum[1] + n,
+		r.maximum[2] + n
+	]);
+}
+function zb(e, t, n, r) {
+	if (Gb(e, n, r)) return Bb(e, n, r);
+	let i = 0, a = 1, o = [
+		0,
+		0,
+		0
+	];
+	for (let s = 0; s < 3; s += 1) {
+		let c = t[s] - e[s];
+		if (Math.abs(c) < 1e-9) {
+			if (e[s] < n[s] || e[s] > r[s]) return null;
+			continue;
+		}
+		let l = 1 / c, u = (n[s] - e[s]) * l, d = (r[s] - e[s]) * l, f = -Math.sign(c);
+		if (u > d && ([u, d] = [d, u]), u > i && (i = u, o = Kb(s, f)), a = Math.min(a, d), i > a) return null;
+	}
+	return i >= 0 && i <= 1 ? {
+		time: i,
+		normal: o
+	} : null;
+}
+function Bb(e, t, n) {
+	let r = Infinity, i = [
+		0,
+		1,
+		0
+	];
+	for (let a = 0; a < 3; a += 1) {
+		let o = e[a] - t[a];
+		o < r && (r = o, i = Kb(a, -1));
+		let s = n[a] - e[a];
+		s < r && (r = s, i = Kb(a, 1));
+	}
+	return {
+		time: 0,
+		normal: i
+	};
+}
+function Vb(e, t, n) {
+	let r = Ub(e, t);
+	if (r >= 0) return;
+	let i = [
+		t[0] * r,
+		t[1] * r,
+		t[2] * r
+	], a = 1 - n.friction;
+	for (let t = 0; t < 3; t += 1) e[t] = (e[t] - i[t]) * a - i[t] * n.restitution;
+}
+function Hb(e, t) {
+	return [
+		e[0] - t[0],
+		e[1] - t[1],
+		e[2] - t[2]
+	];
+}
+function Ub(e, t) {
+	return e[0] * t[0] + e[1] * t[1] + e[2] * t[2];
+}
+function Wb(e) {
+	return Math.hypot(e[0], e[1], e[2]);
+}
+function Gb(e, t, n) {
+	return e.every((e, r) => e >= t[r] && e <= n[r]);
+}
+function Kb(e, t) {
+	return [
+		e === 0 ? t : 0,
+		e === 1 ? t : 0,
+		e === 2 ? t : 0
+	];
+}
+function qb(e, t) {
+	let [n, r] = Yb(e, t), i = Xb(n.age, r.age, t);
+	return n.value + (r.value - n.value) * i;
+}
+function Jb(e, t) {
+	let [n, r] = Yb(e, t), i = Xb(n.age, r.age, t);
+	return [
+		0,
+		1,
+		2,
+		3
+	].map((e) => n.color[e] + (r.color[e] - n.color[e]) * i);
+}
+function Yb(e, t) {
+	for (let n = 1; n < e.length; n += 1) {
+		let r = e[n];
+		if (t <= r.age) return [e[n - 1], r];
+	}
+	return [e[e.length - 1], e[e.length - 1]];
+}
+function Xb(e, t, n) {
+	return t === e ? 0 : (n - e) / (t - e);
+}
+function Zb(e, t) {
+	let n = t.visual ?? (t.sprite === null ? Fb(e) : {
+		kind: "billboard",
+		sprite: t.sprite
+	}), r = t.collision === void 0 ? e.collision : t.collision ?? void 0;
+	return {
+		anchor: t.anchor ?? e.anchor,
+		visual: n,
+		ratePerSecond: t.ratePerSecond ?? e.ratePerSecond,
+		burstCount: t.burstCount ?? e.burstCount,
+		lifetimeSeconds: t.lifetimeSeconds ?? e.lifetimeSeconds,
+		velocityMin: t.velocityMin ?? e.velocityMin,
+		velocityMax: t.velocityMax ?? e.velocityMax,
+		acceleration: t.acceleration ?? e.acceleration,
+		sizeCurve: t.sizeCurve ?? e.sizeCurve,
+		colorCurve: t.colorCurve ?? e.colorCurve,
+		flipbookFramesPerSecond: t.flipbookFramesPerSecond ?? e.flipbookFramesPerSecond,
+		seed: e.seed,
+		maxParticles: t.maxParticles ?? e.maxParticles,
+		visible: t.visible ?? e.visible,
+		...r === void 0 ? {} : { collision: r }
+	};
+}
+function Qb(e) {
+	return e.op === "emit" ? null : e.handle;
+}
+function $b(e, t, n, r) {
+	return {
+		code: e,
+		sequence: t.sequence,
+		handle: n,
+		message: r
+	};
+}
+function ex(e, t) {
+	return {
+		code: e,
+		sequence: 0,
+		handle: null,
+		message: t
+	};
+}
+function tx(e) {
+	return `${e.asset}:${e.contentHash}`;
+}
+async function nx(e, t) {
+	let n = await fv(e, t).catch((e) => {
+		throw new rx("contentHashMismatch", e instanceof Error ? e.message : String(e));
+	});
+	if (n !== t) throw new rx("contentHashMismatch", `particle sprite hash ${n} does not match ${t}`);
+}
+var rx = class extends Error {
+	code;
+	constructor(e, t) {
+		super(t), this.code = e;
+	}
+}, ix = /* @__PURE__ */ new Set([
 	"renderHandleCount",
 	"drawCallCount",
 	"geometryResourceCount",
@@ -22081,35 +22549,35 @@ new Set([
 	"activeBillboardCount",
 	"activeParticleCount",
 	"droppedFeedbackCount"
-].filter((e) => !kb.has(e)));
+].filter((e) => !ix.has(e)));
 //#endregion
 //#region packages/application-host/src/application-content.ts
-var Ab = 8 * 1024 * 1024, jb = 64, Mb = 32 * 1024 * 1024, Nb = class extends Error {
+var ax = 8 * 1024 * 1024, ox = 64, sx = 32 * 1024 * 1024, cx = class extends Error {
 	code;
 	resource;
 	constructor(e, t, n) {
 		super(n), this.code = e, this.resource = t, this.name = "RustyApplicationContentError";
 	}
-}, Pb = /^(audio|mesh|texture)-resource\/([0-9a-f]{64})$/u;
-function Fb(e) {
-	if (typeof e != "object" || !e || typeof e.frame != "object" || e.frame === null) throw Hb("content_invalid", null, "application content must include one frame");
-	if (e.resources !== void 0 && !Array.isArray(e.resources)) throw Hb("content_invalid", null, "application content resources must be an array");
+}, lx = /^(audio|mesh|texture)-resource\/([0-9a-f]{64})$/u;
+function ux(e) {
+	if (typeof e != "object" || !e || typeof e.frame != "object" || e.frame === null) throw _x("content_invalid", null, "application content must include one frame");
+	if (e.resources !== void 0 && !Array.isArray(e.resources)) throw _x("content_invalid", null, "application content resources must be an array");
 	let t = structuredClone(e.frame), n = /* @__PURE__ */ new Set(), r = 0, i = 0, a = 0, o = 0, s = 0, c = 0, l = (e.resources ?? []).map((e, t) => {
-		if (typeof e != "object" || !e || typeof e.identity != "string" || typeof e.contentHash != "string" || typeof e.mediaType != "string" || !(e.bytes instanceof Uint8Array)) throw Hb("content_invalid", null, `application content resource ${String(t)} is malformed`);
-		let l = Pb.exec(e.identity), u = /^sha256:([0-9a-f]{64})$/u.exec(e.contentHash)?.[1];
-		if (l === null || u === void 0 || l[2] !== u) throw Hb("resource_identity_invalid", e.identity || null, "application resource identity must match its lowercase SHA-256 content hash");
-		if (n.has(e.identity)) throw Hb("resource_duplicate", e.identity, "application resource identity is duplicated");
+		if (typeof e != "object" || !e || typeof e.identity != "string" || typeof e.contentHash != "string" || typeof e.mediaType != "string" || !(e.bytes instanceof Uint8Array)) throw _x("content_invalid", null, `application content resource ${String(t)} is malformed`);
+		let l = lx.exec(e.identity), u = /^sha256:([0-9a-f]{64})$/u.exec(e.contentHash)?.[1];
+		if (l === null || u === void 0 || l[2] !== u) throw _x("resource_identity_invalid", e.identity || null, "application resource identity must match its lowercase SHA-256 content hash");
+		if (n.has(e.identity)) throw _x("resource_duplicate", e.identity, "application resource identity is duplicated");
 		n.add(e.identity);
 		let d = l[1];
 		if (d === "audio") {
-			if (e.mediaType !== "audio/wav") throw Hb("resource_media_type_unsupported", e.identity, "audio resources must use audio/wav");
-			if (a += 1, o += e.bytes.byteLength, a > 64 || e.bytes.byteLength < 44 || e.bytes.byteLength > 8388608 || o > 33554432) throw Hb("resource_limit_exceeded", e.identity, "audio resource count or byte length exceeds the application-host bound");
+			if (e.mediaType !== "audio/wav") throw _x("resource_media_type_unsupported", e.identity, "audio resources must use audio/wav");
+			if (a += 1, o += e.bytes.byteLength, a > 64 || e.bytes.byteLength < 44 || e.bytes.byteLength > 8388608 || o > 33554432) throw _x("resource_limit_exceeded", e.identity, "audio resource count or byte length exceeds the application-host bound");
 		} else if (d === "texture") {
-			if (e.mediaType !== "image/png") throw Hb("resource_media_type_unsupported", e.identity, "texture resources must use image/png");
-			if (s += 1, c += e.bytes.byteLength, s > 256 || e.bytes.byteLength === 0 || e.bytes.byteLength > 16777216 || c > 134217728) throw Hb("resource_limit_exceeded", e.identity, "texture resource count or byte length exceeds the application-host bound");
+			if (e.mediaType !== "image/png") throw _x("resource_media_type_unsupported", e.identity, "texture resources must use image/png");
+			if (s += 1, c += e.bytes.byteLength, s > 256 || e.bytes.byteLength === 0 || e.bytes.byteLength > 16777216 || c > 134217728) throw _x("resource_limit_exceeded", e.identity, "texture resource count or byte length exceeds the application-host bound");
 		} else {
-			if (e.mediaType !== "application/octet-stream") throw Hb("resource_media_type_unsupported", e.identity, "mesh resources must use application/octet-stream");
-			if (r += 1, i += e.bytes.byteLength, r > 1024 || e.bytes.byteLength < 16 || e.bytes.byteLength > 67108864 || i > 268435456) throw Hb("resource_limit_exceeded", e.identity, "mesh resource count or byte length exceeds the application-host bound");
+			if (e.mediaType !== "application/octet-stream") throw _x("resource_media_type_unsupported", e.identity, "mesh resources must use application/octet-stream");
+			if (r += 1, i += e.bytes.byteLength, r > 1024 || e.bytes.byteLength < 16 || e.bytes.byteLength > 67108864 || i > 268435456) throw _x("resource_limit_exceeded", e.identity, "mesh resource count or byte length exceeds the application-host bound");
 		}
 		return Object.freeze({
 			identity: e.identity,
@@ -22125,7 +22593,7 @@ function Fb(e) {
 		resourceBytes: o + i + c
 	});
 }
-function Ib(e) {
+function dx(e) {
 	let t = e.resources.filter((e) => e.kind === "audio");
 	if (t.length === 0) return null;
 	let n = new Map(t.map((e) => [e.contentHash, e]));
@@ -22137,33 +22605,33 @@ function Ib(e) {
 		});
 	};
 }
-function Lb(e) {
-	let t = new Map(e.resources.map((e) => [e.identity, e])), n = Rb(e.frame), r = e.resources.filter((e) => e.kind === "mesh"), i = e.resources.filter((e) => e.kind === "texture");
+function fx(e) {
+	let t = new Map(e.resources.map((e) => [e.identity, e])), n = px(e.frame), r = e.resources.filter((e) => e.kind === "mesh"), i = e.resources.filter((e) => e.kind === "texture");
 	return Object.freeze({
 		...n.length === 0 ? {} : {
 			animatedMeshManifest: {
 				kind: "rusty_renderer_animated_mesh_resources.v1",
 				resources: Object.freeze(n)
 			},
-			resolveAnimatedMeshResource: (e) => Vb(t, e.contentHash)
+			resolveAnimatedMeshResource: (e) => gx(t, e.contentHash)
 		},
 		...r.length === 0 ? {} : {
 			meshResourceManifest: {
 				kind: "rusty_renderer_mesh_resources.v1",
-				resources: Object.freeze(r.map(zb))
+				resources: Object.freeze(r.map(mx))
 			},
-			resolveMeshResource: (e) => Bb(t, e.resource)
+			resolveMeshResource: (e) => hx(t, e.resource)
 		},
 		...i.length === 0 ? {} : {
 			textureResourceManifest: {
 				kind: "rusty_renderer_texture_resources.v1",
-				resources: Object.freeze(i.map(zb))
+				resources: Object.freeze(i.map(mx))
 			},
-			resolveTextureResource: (e) => Bb(t, e.resource)
+			resolveTextureResource: (e) => hx(t, e.resource)
 		}
 	});
 }
-function Rb(e) {
+function px(e) {
 	return Array.isArray(e.ops) ? e.ops.flatMap((e) => {
 		if (typeof e != "object" || !e || e.op !== "defineAnimatedMesh") return [];
 		let t = e.asset;
@@ -22178,63 +22646,63 @@ function Rb(e) {
 		}] : [];
 	}) : [];
 }
-function zb(e) {
+function mx(e) {
 	return Object.freeze({
 		resource: e.identity,
 		contentHash: e.contentHash,
 		byteLength: e.bytes.byteLength
 	});
 }
-function Bb(e, t) {
+function hx(e, t) {
 	let n = e.get(t);
 	return n === void 0 ? Promise.reject(/* @__PURE__ */ Error(`resource ${t} is unavailable`)) : Promise.resolve(n.bytes.slice(0));
 }
-function Vb(e, t) {
+function gx(e, t) {
 	let n = [...e.values()].find((e) => e.contentHash === t);
 	return n === void 0 ? Promise.reject(/* @__PURE__ */ Error(`resource ${t} is unavailable`)) : Promise.resolve(n.bytes.slice(0));
 }
-function Hb(e, t, n) {
-	return new Nb(e, t, n);
+function _x(e, t, n) {
+	return new cx(e, t, n);
 }
 //#endregion
 //#region packages/application-host/src/application-host.ts
-var Ub = "rusty_application_host.v1", Wb = class extends Error {
+var vx = "rusty_application_host.v1", yx = class extends Error {
 	code;
 	constructor(e, t, n) {
 		super(t, n), this.name = "RustyApplicationHostError", this.code = e;
 	}
-}, Gb = { mountSurface: ty };
-async function Kb(e) {
-	return qb(e, Gb);
+}, bx = { mountSurface: ty };
+async function xx(e) {
+	return Sx(e, bx);
 }
-async function qb(e, t) {
+async function Sx(e, t) {
 	let { root: n } = e;
-	if (ax(n), n.childNodes.length > 0) throw new Wb("invalid_root", "Rusty Application Host requires an empty downstream mount root");
-	let r = n.ownerDocument, i = Xb(r, e.loadingLabel ?? "Starting application…");
+	if (Px(n), n.childNodes.length > 0) throw new yx("invalid_root", "Rusty Application Host requires an empty downstream mount root");
+	let r = n.ownerDocument, i = Tx(r, e.loadingLabel ?? "Starting application…");
 	n.append(i.host), n.dataset.rustyApplicationState = "mounting";
-	let a = null, o = null, s = () => void 0, c = !1, l = !1, u = null, d = e.initialInteractionMode ?? "interface", f = i.canvas, p = null, m = null, h = null, g = /* @__PURE__ */ new Set(), _ = 0, v = 0, y = Promise.resolve(), b = () => {
-		if (l || c || a === null) throw new Wb("disposed", "Rusty Application Host is disposed");
+	let a = null, o = null, s = () => void 0, c = !1, l = !1, u = null, d = e.initialInteractionMode ?? "interface", f = i.canvas, p = null, m = null, h = null, g = null, _ = /* @__PURE__ */ new Set(), v = 0, y = 0, b = Promise.resolve(), x = () => {
+		if (l || c || a === null) throw new yx("disposed", "Rusty Application Host is disposed");
 		return a;
-	}, x = () => {
+	}, S = () => {
 		a?.releaseInput();
-	}, S = (e) => {
-		if (c) throw new Wb("disposed", "Rusty Application Host is disposed");
-		d = e, i.host.dataset.interactionMode = e, e !== "gameplay" && x();
-	}, C = () => {
+	}, C = (e) => {
+		if (c) throw new yx("disposed", "Rusty Application Host is disposed");
+		d = e, i.host.dataset.interactionMode = e, e !== "gameplay" && S();
+	}, w = () => {
 		if (d !== "gameplay") return;
-		let e = b();
-		e.canvas.focus({ preventScroll: !0 }), nx(e.canvas);
-	}, w = async (n, r) => {
+		let e = x();
+		e.canvas.focus({ preventScroll: !0 }), jx(e.canvas);
+	}, T = async (n, r) => {
 		let a = await t.mountSurface(n, {
 			autoStart: !0,
 			controls: { enabled: !1 },
 			frame: r.frame,
 			...e.renderer?.clearColor === void 0 ? {} : { clearColor: e.renderer.clearColor },
 			...e.renderer?.pixelRatio === void 0 ? {} : { pixelRatio: e.renderer.pixelRatio },
-			...Lb(r)
-		}), o = Ib(r), s = /* @__PURE__ */ new Set();
+			...fx(r)
+		}), o = dx(r), s = /* @__PURE__ */ new Set(), c = null;
 		try {
-			let t = o === null ? null : new Ay({ resolveResource: o }), n = new Map(r.resources.map((e) => [e.identity, e])), c = new Map(r.resources.map((e) => [e.contentHash, e])), l = new qy({
+			let t = o === null ? null : new Ay({ resolveResource: o }), n = new Map(r.resources.map((e) => [e.identity, e])), l = new Map(r.resources.map((e) => [e.contentHash, e])), u = new qy({
 				container: i.indicators,
 				projectWorld: (e) => ({
 					...a.projectWorldPoint(e),
@@ -22242,7 +22710,7 @@ async function qb(e, t) {
 				}),
 				resolveEntityPosition: e.renderer?.resolveIndicatorEntityPosition ?? (() => null),
 				resolveResource: async (e, t) => {
-					let r = n.get(e) ?? (t === void 0 ? void 0 : c.get(t));
+					let r = n.get(e) ?? (t === void 0 ? void 0 : l.get(t));
 					if (r === void 0) return null;
 					let i = r.bytes.slice(0);
 					if (r.kind !== "texture") return { bytes: i };
@@ -22253,77 +22721,97 @@ async function qb(e, t) {
 					};
 				}
 			});
-			return a.setPresentationHosts(new Pv({
+			return c = new kb({
+				resolveEntityPosition: e.renderer?.resolveParticleEntityPosition ?? (() => null),
+				resolveResource: async (e) => {
+					let t = l.get(e.contentHash);
+					if (t?.kind !== "texture") return null;
+					let n = t.bytes.slice(0), r = URL.createObjectURL(new Blob([n], { type: t.mediaType }));
+					return s.add(r), {
+						bytes: n,
+						url: r
+					};
+				},
+				sink: a.createParticleSink()
+			}), a.setPresentationHosts(new Pv({
 				...t === null ? {} : { audio: t },
-				billboard: l
+				billboard: u,
+				particle: c
 			})), {
 				audio: t,
-				billboard: l,
+				billboard: u,
 				billboardUrls: s,
+				particle: c,
 				surface: a
 			};
 		} catch (e) {
-			a.dispose();
+			c?.dispose(), a.dispose();
 			for (let e of s) URL.revokeObjectURL(e);
 			throw e;
 		}
-	}, T = (e) => {
-		b(), v += 1;
+	}, E = (e) => {
+		x(), y += 1;
 		let t = Object.freeze({
 			applied: !1,
 			diagnostics: []
 		});
-		return y = y.then(async () => {
-			let n = a, i = m, o = h, s = g;
+		return b = b.then(async () => {
+			let n = a, i = m, o = h, s = g, l = _;
 			if (n === null || p === null || c) {
-				t = Jb(new Wb("disposed", "Rusty Application Host is disposed"));
+				t = Cx(new yx("disposed", "Rusty Application Host is disposed"));
 				return;
 			}
-			let l = f, u = Zb(r), d = null, v = null, y = null, b = /* @__PURE__ */ new Set();
+			let u = f, d = Ex(r), y = null, b = null, x = null, S = null, C = /* @__PURE__ */ new Set();
 			try {
-				let r = e(), c = await w(u, r);
-				d = c.surface, v = c.audio, y = c.billboard, b = c.billboardUrls, d.setCameraPose(n.cameraPose()), d.renderOnce(), l.replaceWith(u), a = d, m = v, h = y, g = b, p = r, _ += 1, f = u;
+				let r = e(), c = await T(d, r);
+				y = c.surface, b = c.audio, x = c.billboard, S = c.particle, C = c.billboardUrls, y.setCameraPose(n.cameraPose()), y.renderOnce(), u.replaceWith(d), a = y, m = b, h = x, g = S, _ = C, p = r, v += 1, f = d;
+				try {
+					s?.dispose();
+				} catch {}
 				try {
 					n.dispose();
 				} catch {}
 				try {
 					await i?.dispose();
 				} catch {}
-				ix(o, s), t = Object.freeze({
+				Nx(o, l), t = Object.freeze({
 					applied: !0,
 					diagnostics: []
 				});
 			} catch (e) {
 				try {
-					d?.dispose();
+					S?.dispose();
 				} catch {}
 				try {
-					await v?.dispose();
+					y?.dispose();
 				} catch {}
-				ix(y, b), u.remove(), t = Jb(e);
+				try {
+					await b?.dispose();
+				} catch {}
+				Nx(x, C), d.remove(), t = Cx(e);
 			}
-		}), y.then(() => t).finally(() => {
-			--v;
+		}), b.then(() => t).finally(() => {
+			--y;
 		});
-	}, E = (e) => {
-		b();
+	}, D = (e) => {
+		x();
 		let t;
 		try {
-			t = Fb(e);
+			t = ux(e);
 		} catch (e) {
-			return Promise.resolve(Jb(e));
+			return Promise.resolve(Cx(e));
 		}
-		return T(() => t);
-	}, D = Object.freeze({
+		return E(() => t);
+	}, O = Object.freeze({
 		applyFrame: (e) => {
-			if (v > 0) return Object.freeze({
+			if (y > 0) return Object.freeze({
 				applied: !1,
 				diagnostics: Object.freeze([Object.freeze({
 					code: "content_replacement_in_progress",
 					message: "incremental frames are rejected while complete content replacement is pending"
 				})])
 			});
-			let t = b().applyFrame(e);
+			let t = x().applyFrame(e);
 			return Object.freeze({
 				applied: t.applied,
 				diagnostics: Object.freeze(t.diagnostics.map((e) => Object.freeze({
@@ -22333,7 +22821,7 @@ async function qb(e, t) {
 			});
 		},
 		applyPresentation: async (e) => {
-			if (v > 0) return Object.freeze({
+			if (y > 0) return Object.freeze({
 				applied: 0,
 				diagnostics: Object.freeze([Object.freeze({
 					code: "content_replacement_in_progress",
@@ -22342,7 +22830,7 @@ async function qb(e, t) {
 				})])
 			});
 			try {
-				let t = await b().applyPresentation(e);
+				let t = await x().applyPresentation(e);
 				return Object.freeze({
 					applied: t.applied,
 					diagnostics: Object.freeze(t.diagnostics.map((e) => Object.freeze({
@@ -22363,27 +22851,27 @@ async function qb(e, t) {
 			}
 		},
 		clear: async () => {
-			let e = await E({
+			let e = await D({
 				frame: Qv(),
 				resources: []
 			});
 			if (!e.applied) throw Error(`Engine default renderer frame was rejected: ${e.diagnostics.map((e) => e.message).join("; ")}`);
 		},
 		renderOnce: (e) => {
-			e === void 0 ? b().renderOnce() : b().renderOnce(e);
+			e === void 0 ? x().renderOnce() : x().renderOnce(e);
 		},
-		replaceContent: E,
+		replaceContent: D,
 		replaceFrame: (e) => {
-			b();
+			x();
 			let t;
 			try {
-				t = Fb({ frame: e }).frame;
+				t = ux({ frame: e }).frame;
 			} catch (e) {
-				return Promise.resolve(Jb(e));
+				return Promise.resolve(Cx(e));
 			}
-			return T(() => {
+			return E(() => {
 				let e = p;
-				if (e === null) throw new Wb("disposed", "Rusty Application Host is disposed");
+				if (e === null) throw new yx("disposed", "Rusty Application Host is disposed");
 				return Object.freeze({
 					frame: t,
 					resources: e.resources,
@@ -22392,7 +22880,7 @@ async function qb(e, t) {
 			});
 		},
 		resumeAudio: async () => {
-			if (b(), m === null) return Object.freeze({
+			if (x(), m === null) return Object.freeze({
 				resumed: !1,
 				diagnostics: Object.freeze([Object.freeze({
 					code: "audio_host_unavailable",
@@ -22408,38 +22896,38 @@ async function qb(e, t) {
 				})))
 			});
 		},
-		setCameraPose: (e) => b().setCameraPose(e)
-	}), O = Object.freeze({
+		setCameraPose: (e) => x().setCameraPose(e)
+	}), ee = Object.freeze({
 		active: () => !l && !c,
-		allowsGameplayInput: (e) => !l && !c && !e.defaultPrevented && d === "gameplay" && !$b(e, i.ui),
-		focusGameplay: C,
+		allowsGameplayInput: (e) => !l && !c && !e.defaultPrevented && d === "gameplay" && !Ox(e, i.ui),
+		focusGameplay: w,
 		interactionMode: () => d,
-		setInteractionMode: S
+		setInteractionMode: C
 	});
 	try {
-		if (e.renderer?.initialContent !== void 0 && e.renderer.initialFrame !== void 0) throw new Nb("content_invalid", null, "initialContent and initialFrame are mutually exclusive");
-		let t = Fb(e.renderer?.initialContent ?? {
+		if (e.renderer?.initialContent !== void 0 && e.renderer.initialFrame !== void 0) throw new cx("content_invalid", null, "initialContent and initialFrame are mutually exclusive");
+		let t = ux(e.renderer?.initialContent ?? {
 			frame: e.renderer?.initialFrame ?? Qv(),
 			resources: []
-		}), r = await w(i.canvas, t);
-		a = r.surface, m = r.audio, h = r.billboard, g = r.billboardUrls, p = t, _ = 1, s = Qb(i.host, i.ui, () => b(), () => d, C), S(d), o = await e.mountUi(i.ui, {
-			renderer: D,
-			ui: O
+		}), r = await T(i.canvas, t);
+		a = r.surface, m = r.audio, h = r.billboard, g = r.particle, _ = r.billboardUrls, p = t, v = 1, s = Dx(i.host, i.ui, () => x(), () => d, w), C(d), o = await e.mountUi(i.ui, {
+			renderer: O,
+			ui: ee
 		}) ?? null, i.loading.remove(), i.host.dataset.state = "ready", n.dataset.rustyApplicationState = "ready";
 	} catch (t) {
 		c = !0;
-		let r = await rx(o, s, a, m, h, g, i.host);
+		let r = await Mx(o, s, a, m, h, g, _, i.host);
 		delete n.dataset.rustyApplicationState;
 		let l = t instanceof Error ? t : Error(String(t));
-		throw ox(n, e.failureLabel ?? "Application failed to start", l.message), new Wb("mount_failed", r.length === 0 ? `Rusty Application Host mount failed: ${l.message}` : `Rusty Application Host mount failed: ${l.message}; cleanup also failed`, { cause: l });
+		throw Fx(n, e.failureLabel ?? "Application failed to start", l.message), new yx("mount_failed", r.length === 0 ? `Rusty Application Host mount failed: ${l.message}` : `Rusty Application Host mount failed: ${l.message}; cleanup also failed`, { cause: l });
 	}
 	return Object.freeze({
 		kind: "rusty_application_host.v1",
-		renderer: D,
-		ui: O,
+		renderer: O,
+		ui: ee,
 		readout: () => Object.freeze({
-			compatibilityVersion: Ub,
-			contentRevision: _,
+			compatibilityVersion: vx,
+			contentRevision: v,
 			interactionMode: d,
 			pointerLocked: a?.pointerLocked() ?? !1,
 			resourceBytes: p?.resourceBytes ?? 0,
@@ -22447,28 +22935,28 @@ async function qb(e, t) {
 			state: c ? "disposed" : "ready"
 		}),
 		dispose: async () => u === null ? (l = !0, u = (async () => {
-			await y, c = !0;
-			let e = await rx(o, s, a, m, h, g, i.host);
-			if (o = null, a = null, m = null, h = null, g = /* @__PURE__ */ new Set(), delete n.dataset.rustyApplicationState, e.length > 0) throw AggregateError(e, "Rusty Application Host disposal failed");
+			await b, c = !0;
+			let e = await Mx(o, s, a, m, h, g, _, i.host);
+			if (o = null, a = null, m = null, h = null, g = null, _ = /* @__PURE__ */ new Set(), delete n.dataset.rustyApplicationState, e.length > 0) throw AggregateError(e, "Rusty Application Host disposal failed");
 		})(), u) : u
 	});
 }
-function Jb(e) {
+function Cx(e) {
 	return Object.freeze({
 		applied: !1,
 		diagnostics: Object.freeze([Object.freeze({
-			code: Yb(e),
+			code: wx(e),
 			message: e instanceof Error ? e.message : String(e)
 		})])
 	});
 }
-function Yb(e) {
-	return e instanceof Nb ? e.code : typeof e == "object" && e && "code" in e && typeof e.code == "string" && e.code.includes("resource") || e instanceof Error && e.message.toLowerCase().includes("resource") ? "resource_admission_failed" : "retained_frame_replacement_failed";
+function wx(e) {
+	return e instanceof cx ? e.code : typeof e == "object" && e && "code" in e && typeof e.code == "string" && e.code.includes("resource") || e instanceof Error && e.message.toLowerCase().includes("resource") ? "resource_admission_failed" : "retained_frame_replacement_failed";
 }
-function Xb(e, t) {
+function Tx(e, t) {
 	let n = e.createElement("div");
-	n.dataset.rustyApplicationHost = Ub, n.style.cssText = "isolation:isolate;min-height:100dvh;position:relative;width:100%;";
-	let r = Zb(e), i = e.createElement("div");
+	n.dataset.rustyApplicationHost = vx, n.style.cssText = "isolation:isolate;min-height:100dvh;position:relative;width:100%;";
+	let r = Ex(e), i = e.createElement("div");
 	i.dataset.rustyApplicationIndicators = "engine-owned", i.style.cssText = "inset:0;overflow:hidden;pointer-events:none;position:absolute;z-index:1;";
 	let a = e.createElement("div");
 	a.dataset.rustyApplicationUi = "downstream", a.style.cssText = "min-height:100dvh;position:relative;width:100%;z-index:2;";
@@ -22481,19 +22969,19 @@ function Xb(e, t) {
 		loading: o
 	};
 }
-function Zb(e) {
+function Ex(e) {
 	let t = e.createElement("canvas");
 	return t.dataset.rustyApplicationRenderer = "engine-owned", t.setAttribute("aria-label", "Engine-rendered game world"), t.style.cssText = "display:block;height:100%;inset:0;position:absolute;width:100%;z-index:0;", t;
 }
-function Qb(e, t, n, r, i) {
+function Dx(e, t, n, r, i) {
 	let a = e.ownerDocument, o = (e) => {
-		if ($b(e, t)) {
+		if (Ox(e, t)) {
 			n().releaseInput();
 			return;
 		}
 		r() === "gameplay" && i();
 	}, s = (e) => {
-		tx(e.target) && n().releaseInput();
+		Ax(e.target) && n().releaseInput();
 	}, c = () => {
 		e.dataset.pointerLocked = String(a.pointerLockElement === n().canvas);
 	}, l = () => n().releaseInput();
@@ -22501,57 +22989,62 @@ function Qb(e, t, n, r, i) {
 		t.removeEventListener("pointerdown", o, !0), t.removeEventListener("focusin", s, !0), a.removeEventListener("pointerlockchange", c), a.defaultView?.removeEventListener("blur", l);
 	};
 }
-function $b(e, t) {
-	return e.composedPath().some((e) => ex(e, t));
+function Ox(e, t) {
+	return e.composedPath().some((e) => kx(e, t));
 }
-function ex(e, t) {
+function kx(e, t) {
 	return !(e instanceof Element) || !t.contains(e) ? !1 : e.closest("a,button,input,select,textarea,summary,[contenteditable=\"true\"],[data-rusty-ui-interactive],[role=\"dialog\"]") !== null;
 }
-function tx(e) {
+function Ax(e) {
 	return e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement || e instanceof HTMLSelectElement || e instanceof HTMLElement && e.isContentEditable;
 }
-function nx(e) {
+function jx(e) {
 	try {
 		e.requestPointerLock().catch(() => void 0);
 	} catch {}
 }
-async function rx(e, t, n, r, i, a, o) {
-	let s = [];
+async function Mx(e, t, n, r, i, a, o, s) {
+	let c = [];
 	try {
 		await e?.dispose();
 	} catch (e) {
-		s.push(e);
+		c.push(e);
 	}
 	try {
 		t();
 	} catch (e) {
-		s.push(e);
+		c.push(e);
+	}
+	try {
+		a?.dispose();
+	} catch (e) {
+		c.push(e);
 	}
 	try {
 		n?.dispose();
 	} catch (e) {
-		s.push(e);
+		c.push(e);
 	}
 	try {
 		await r?.dispose();
 	} catch (e) {
-		s.push(e);
+		c.push(e);
 	}
 	try {
-		ix(i, a);
+		Nx(i, o);
 	} catch (e) {
-		s.push(e);
+		c.push(e);
 	}
-	return o.remove(), s;
+	return s.remove(), c;
 }
-function ix(e, t) {
+function Nx(e, t) {
 	e?.dispose();
 	for (let e of t) URL.revokeObjectURL(e);
 }
-function ax(e) {
+function Px(e) {
 	e.querySelector(":scope > [data-rusty-application-failure]")?.remove();
 }
-function ox(e, t, n) {
+function Fx(e, t, n) {
 	let r = e.ownerDocument.createElement("section");
 	r.dataset.rustyApplicationFailure = "", r.setAttribute("role", "alert"), r.style.cssText = "background:#1b0b0d;color:#ffe8e8;font:14px system-ui;margin:0;min-height:100dvh;padding:2rem;";
 	let i = e.ownerDocument.createElement("h1");
@@ -22560,4 +23053,4 @@ function ox(e, t, n) {
 	a.textContent = n, r.append(i, a), e.append(r);
 }
 //#endregion
-export { Ab as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES, jb as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT, Mb as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES, Ub as RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION, Nb as RustyApplicationContentError, Wb as RustyApplicationHostError, Kb as mountRustyApplication };
+export { ax as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES, ox as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT, sx as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES, vx as RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION, cx as RustyApplicationContentError, yx as RustyApplicationHostError, xx as mountRustyApplication };

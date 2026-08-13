@@ -2,6 +2,7 @@ import type { PresentationFrameDiff, RenderFrameDiff } from '@rusty-engine/rende
 import {
   RendererAudioHost,
   RendererBillboardHost,
+  RendererParticleHost,
   RendererPresentationHostSet,
   createRendererDefaultSurfaceFrame,
   mountRendererSurface,
@@ -124,6 +125,10 @@ export interface RustyApplicationRendererOptions {
   readonly resolveIndicatorEntityPosition?: (
     entity: number,
   ) => readonly [number, number, number] | null;
+  /** Gameplay-owned entity positions used only to resolve neutral particle anchors. */
+  readonly resolveParticleEntityPosition?: (
+    entity: number,
+  ) => readonly [number, number, number] | null;
 }
 
 export interface RustyApplicationHostOptions {
@@ -213,6 +218,7 @@ async function mountRustyApplicationWithEnvironment(
   let activeContent: PreparedRustyApplicationContent | null = null;
   let activeAudio: RendererAudioHost | null = null;
   let activeBillboard: RendererBillboardHost | null = null;
+  let activeParticle: RendererParticleHost | null = null;
   let activeBillboardUrls = new Set<string>();
   let contentRevision = 0;
   let replacementPending = 0;
@@ -247,6 +253,7 @@ async function mountRustyApplicationWithEnvironment(
   ): Promise<{
     readonly audio: RendererAudioHost | null;
     readonly billboard: RendererBillboardHost;
+    readonly particle: RendererParticleHost;
     readonly billboardUrls: Set<string>;
     readonly surface: RendererSurface;
   }> => {
@@ -261,7 +268,8 @@ async function mountRustyApplicationWithEnvironment(
       ...rustyApplicationSurfaceResourceOptions(content),
     });
     const resolveAudio = rustyApplicationAudioResourceResolver(content);
-    const billboardUrls = new Set<string>();
+    const presentationUrls = new Set<string>();
+    let particle: RendererParticleHost | null = null;
     try {
       const audio = resolveAudio === null
         ? null
@@ -285,18 +293,38 @@ async function mountRustyApplicationWithEnvironment(
           const bytes = resource.bytes.slice(0);
           if (resource.kind !== 'texture') return { bytes };
           const url = URL.createObjectURL(new Blob([bytes], { type: resource.mediaType }));
-          billboardUrls.add(url);
+          presentationUrls.add(url);
           return { bytes, url };
         },
+      });
+      particle = new RendererParticleHost({
+        resolveEntityPosition: options.renderer?.resolveParticleEntityPosition ?? (() => null),
+        resolveResource: async (sprite) => {
+          const resource = resourcesByHash.get(sprite.contentHash);
+          if (resource?.kind !== 'texture') return null;
+          const bytes = resource.bytes.slice(0);
+          const url = URL.createObjectURL(new Blob([bytes], { type: resource.mediaType }));
+          presentationUrls.add(url);
+          return { bytes, url };
+        },
+        sink: mounted.createParticleSink(),
       });
       mounted.setPresentationHosts(new RendererPresentationHostSet({
         ...(audio === null ? {} : { audio }),
         billboard,
+        particle,
       }));
-      return { audio, billboard, billboardUrls, surface: mounted };
+      return {
+        audio,
+        billboard,
+        billboardUrls: presentationUrls,
+        particle,
+        surface: mounted,
+      };
     } catch (cause) {
+      particle?.dispose();
       mounted.dispose();
-      for (const url of billboardUrls) URL.revokeObjectURL(url);
+      for (const url of presentationUrls) URL.revokeObjectURL(url);
       throw cause;
     }
   };
@@ -313,6 +341,7 @@ async function mountRustyApplicationWithEnvironment(
       const oldSurface = surface;
       const oldAudio = activeAudio;
       const oldBillboard = activeBillboard;
+      const oldParticle = activeParticle;
       const oldBillboardUrls = activeBillboardUrls;
       const oldContent = activeContent;
       if (oldSurface === null || oldContent === null || disposed) {
@@ -326,6 +355,7 @@ async function mountRustyApplicationWithEnvironment(
       let candidateSurface: RendererSurface | null = null;
       let candidateAudio: RendererAudioHost | null = null;
       let candidateBillboard: RendererBillboardHost | null = null;
+      let candidateParticle: RendererParticleHost | null = null;
       let candidateBillboardUrls = new Set<string>();
       try {
         const candidateContent = candidate();
@@ -333,6 +363,7 @@ async function mountRustyApplicationWithEnvironment(
         candidateSurface = mounted.surface;
         candidateAudio = mounted.audio;
         candidateBillboard = mounted.billboard;
+        candidateParticle = mounted.particle;
         candidateBillboardUrls = mounted.billboardUrls;
         candidateSurface.setCameraPose(oldSurface.cameraPose());
         candidateSurface.renderOnce();
@@ -340,14 +371,20 @@ async function mountRustyApplicationWithEnvironment(
         surface = candidateSurface;
         activeAudio = candidateAudio;
         activeBillboard = candidateBillboard;
+        activeParticle = candidateParticle;
         activeBillboardUrls = candidateBillboardUrls;
         activeContent = candidateContent;
         contentRevision += 1;
         activeCanvas = candidateCanvas;
         try {
+          oldParticle?.dispose();
+        } catch {
+          // Particle cleanup is best-effort after the replacement transaction commits.
+        }
+        try {
           oldSurface.dispose();
         } catch {
-          // Disposal is best-effort after the replacement transaction has committed.
+          // Surface disposal is best-effort after the replacement transaction commits.
         }
         try {
           await oldAudio?.dispose();
@@ -357,6 +394,11 @@ async function mountRustyApplicationWithEnvironment(
         disposeBillboardOwner(oldBillboard, oldBillboardUrls);
         receipt = Object.freeze({ applied: true, diagnostics: [] });
       } catch (cause) {
+        try {
+          candidateParticle?.dispose();
+        } catch {
+          // Preserve the authoritative prior surface if candidate cleanup is noisy.
+        }
         try {
           candidateSurface?.dispose();
         } catch {
@@ -540,6 +582,7 @@ async function mountRustyApplicationWithEnvironment(
     surface = surfaceMount.surface;
     activeAudio = surfaceMount.audio;
     activeBillboard = surfaceMount.billboard;
+    activeParticle = surfaceMount.particle;
     activeBillboardUrls = surfaceMount.billboardUrls;
     activeContent = initialContent;
     contentRevision = 1;
@@ -564,6 +607,7 @@ async function mountRustyApplicationWithEnvironment(
       surface,
       activeAudio,
       activeBillboard,
+      activeParticle,
       activeBillboardUrls,
       layout.host,
     );
@@ -608,6 +652,7 @@ async function mountRustyApplicationWithEnvironment(
           surface,
           activeAudio,
           activeBillboard,
+          activeParticle,
           activeBillboardUrls,
           layout.host,
         );
@@ -615,6 +660,7 @@ async function mountRustyApplicationWithEnvironment(
         surface = null;
         activeAudio = null;
         activeBillboard = null;
+        activeParticle = null;
         activeBillboardUrls = new Set();
         delete root.dataset['rustyApplicationState'];
         if (cleanupFailures.length > 0) {
@@ -758,6 +804,7 @@ async function cleanupApplicationOwners(
   surface: RendererSurface | null,
   audio: RendererAudioHost | null,
   billboard: RendererBillboardHost | null,
+  particle: RendererParticleHost | null,
   billboardUrls: ReadonlySet<string>,
   host: HTMLElement,
 ): Promise<readonly unknown[]> {
@@ -769,6 +816,11 @@ async function cleanupApplicationOwners(
   }
   try {
     removeListeners();
+  } catch (cause) {
+    failures.push(cause);
+  }
+  try {
+    particle?.dispose();
   } catch (cause) {
     failures.push(cause);
   }
