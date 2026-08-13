@@ -2239,11 +2239,13 @@ function textureDescriptor(
   bytes: Uint8Array,
   version = 1,
   source: 'inline' | 'resource' = 'inline',
+  id = 'texture/checker',
+  colorSpace: 'srgb' | 'linear' = 'srgb',
 ): import('@rusty-engine/render-contracts').TextureDescriptor {
   const digest = bytesToHex(sha256(bytes));
   const contentHash = `sha256:${digest}`;
   return {
-    id: 'texture/checker',
+    id,
     width: 2,
     height: 1,
     filter: 'nearest',
@@ -2252,7 +2254,7 @@ function textureDescriptor(
     version,
     payload: {
       encoding: 'pngRgba8',
-      colorSpace: 'srgb',
+      colorSpace,
       contentHash,
       byteLength: bytes.byteLength,
       source: source === 'inline'
@@ -2967,6 +2969,70 @@ void test('sprite atlases bind retained PNG textures and refresh live sprites on
   const lateAtlasMesh = lateAtlasRenderer.objectFor(renderHandle(3)) as THREE.Mesh;
   assert.ok((lateAtlasMesh.material as THREE.MeshBasicMaterial).map instanceof THREE.DataTexture);
   assert.deepEqual(spriteUv(lateAtlasRenderer, 3), [0, 0, 0.5, 1]);
+});
+
+void test('retained sprites realize bounded authored normals, alpha, shadows, and linear texture data', () => {
+  const colorBytes = rgbaPng(2, 1, [255, 90, 40, 255, 60, 140, 255, 0]);
+  const normalBytes = rgbaPng(2, 1, [128, 128, 255, 255, 180, 128, 220, 255]);
+  const color = textureDescriptor(colorBytes, 1, 'inline', 'texture/sprite-color', 'srgb');
+  const normal = textureDescriptor(normalBytes, 1, 'inline', 'texture/sprite-normal', 'linear');
+  const atlas: SpriteAtlasDescriptor = {
+    id: 'sprite/lit-test',
+    texture: color.id,
+    frames: [{ frame: 0, uvMin: [0, 0], uvMax: [1, 1] }],
+  };
+  const sprite: SpriteInstanceDescriptor = {
+    ...atlasSprite(),
+    asset: atlas.id,
+    material: {
+      lighting: 'authoredNormal',
+      normalTexture: normal.id,
+      depthTexture: null,
+      normalStrength: 1.25,
+      normalBias: 0,
+      alpha: { kind: 'mask', cutoff: 0.4 },
+      shadow: 'castAndReceive',
+    },
+  };
+  const renderer = new ThreeRenderer({ shadowsEnabled: true });
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture: color },
+    { op: 'defineTexture', texture: normal },
+    { op: 'defineSpriteAtlas', atlas },
+    { op: 'createSprite', handle: renderHandle(31), parent: null, sprite },
+  ] });
+
+  const mesh = renderer.objectFor(renderHandle(31)) as THREE.Mesh;
+  const material = mesh.material as THREE.MeshStandardMaterial;
+  assert.ok(material instanceof THREE.MeshStandardMaterial);
+  assert.equal(material.map?.colorSpace, THREE.SRGBColorSpace);
+  assert.equal(material.normalMap?.colorSpace, THREE.NoColorSpace);
+  assert.equal(material.alphaTest, 0.4);
+  assert.equal(material.transparent, false);
+  assert.equal(mesh.castShadow, true);
+  assert.equal(mesh.receiveShadow, true);
+});
+
+void test('invalid sprite lighting texture rejects a complete frame before retained mutation', () => {
+  const bytes = rgbaPng(2, 1, [128, 128, 255, 255, 128, 128, 255, 255]);
+  const invalidNormal = textureDescriptor(bytes, 1, 'inline', 'texture/sprite-normal', 'srgb');
+  const renderer = new ThreeRenderer();
+  assert.throws(() => renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture: invalidNormal },
+    createDiff(44, cubeNode('must-not-commit')),
+    {
+      op: 'createSprite', handle: renderHandle(45), parent: null,
+      sprite: sparkSprite({
+        material: {
+          lighting: 'authoredNormal', normalTexture: invalidNormal.id, depthTexture: null,
+          normalStrength: 1, normalBias: 0, alpha: { kind: 'blend' }, shadow: 'none',
+        },
+      }),
+    },
+  ] }), /must use linear color space/u);
+  assert.equal(renderer.handleCount, 0);
+  assert.equal(renderer.textureDescriptor(invalidNormal.id), undefined);
+  assert.equal(renderer.resourceStatistics().textureResourceCount, 0);
 });
 
 void test('instance of an undefined asset, and redefine while in use, are classified errors', () => {

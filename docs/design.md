@@ -583,6 +583,16 @@ billboards into `Points` batches and cubes into `InstancedMesh` batches behind `
 The legacy serialized `sprite` descriptor remains readable, but new Rust serialization emits the
 discriminated `visual` form. See [Three scene particles](topics/three-scene-particles.md).
 
+Ordinary retained sprites optionally carry one bounded material descriptor for unlit, authored
+tangent-space normal, authored depth, color-gradient-derived, or synthetic curved lighting. Color
+resources remain sRGB while normal and depth resources are explicitly linear; missing or wrongly
+classified lighting textures fail before retained mutation. Alpha and shadow policy are explicit,
+and omitted material facts preserve the unlit compatibility path. Three realizes these as
+camera-facing mesh quads so the same retained pivot, atlas, hierarchy, picking, billboard, fog, and
+disposal behavior remains available. Asset Pipeline owns source-map authoring and any selection
+policy; Engine owns only admitted runtime facts and realization. See
+[lit sprite shader comparison](topics/lit-sprite-shaders.md).
+
 World indicators remain in that billboard owner rather than creating a second
 UI protocol. A structured billboard can compose bounded localized label/icon,
 neutral ranged meters, and status cues under one stable handle. Exact finite

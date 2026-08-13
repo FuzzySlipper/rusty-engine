@@ -62,6 +62,11 @@ import {
 } from './mesh-presentation.js';
 import { decodeAdmittedPngTexture, PngTextureError } from './png-texture.js';
 import {
+  createSpriteMaterial,
+  resolveSpriteMaterialDescriptor,
+  updateSpriteMaterialTint,
+} from './sprite-material.js';
+import {
   resolveVoxelSurfaceMaterial,
   specializeVoxelSurfaceMaterial,
   VoxelSurfaceMaterialError,
@@ -426,6 +431,12 @@ export class ThreeRenderer {
       throw cause;
     }
     const prepared = this.#prepareFrame(frame);
+    try {
+      this.#preflightSpriteMaterials(frame, prepared);
+    } catch (cause) {
+      disposePreparedFrame(prepared);
+      throw cause;
+    }
     const staticInstanceBatchesChanged = this.#frameChangesStaticInstanceBatches(frame);
     const recursivelyDestroyed = new Set<RenderHandle>();
     const changedMaterialIds = new Set<string>();
@@ -472,11 +483,54 @@ export class ThreeRenderer {
     }
     if (this.#shadowsEnabled) {
       this.#sceneGroup.traverse((object) => {
-        if (object instanceof THREE.Mesh) {
+        if (object instanceof THREE.Mesh && object.userData['rustySpriteShadowManaged'] !== true) {
           object.castShadow = true;
           object.receiveShadow = true;
         }
       });
+    }
+  }
+
+  #preflightSpriteMaterials(frame: RenderFrameDiff, prepared: PreparedFrameResources): void {
+    const textureDescriptors = new Map(this.#textures);
+    const retainedTextures = new Set(this.#textureResources.keys());
+    const sprites = new Map<RenderHandle, SpriteInstanceDescriptor>(
+      [...this.#handles.entries()]
+        .filter((entry): entry is [RenderHandle, NodeEntry & { sprite: SpriteInstanceDescriptor }] =>
+          entry[1].kind === 'sprite' && entry[1].sprite !== undefined)
+        .map(([handle, entry]) => [handle, entry.sprite]),
+    );
+    for (let index = 0; index < frame.ops.length; index += 1) {
+      const op = frame.ops[index]!;
+      if (op.op === 'defineTexture') {
+        textureDescriptors.set(op.texture.id, op.texture);
+        const candidate = prepared.textures.get(index);
+        if (candidate === null || op.texture.payload === undefined) {
+          retainedTextures.delete(op.texture.id);
+        } else if (candidate !== undefined) {
+          retainedTextures.add(op.texture.id);
+        }
+      } else if (op.op === 'createSprite') {
+        sprites.set(op.handle, op.sprite);
+      } else if (op.op === 'destroy') {
+        sprites.delete(op.handle);
+      }
+    }
+    for (const sprite of sprites.values()) {
+      const material = resolveSpriteMaterialDescriptor(sprite);
+      for (const [role, id] of [
+        ['normal', material.normalTexture],
+        ['depth', material.depthTexture],
+      ] as const) {
+        if (id === null) continue;
+        const descriptor = textureDescriptors.get(id);
+        if (descriptor === undefined || !retainedTextures.has(id)) {
+          throw new RenderApplyError(`sprite ${role} texture ${id} is not retained`);
+        }
+        if (descriptor.payload?.colorSpace !== 'linear') {
+          throw new RenderApplyError(`sprite ${role} texture ${id} must use linear color space`);
+        }
+      }
     }
   }
 
@@ -2238,6 +2292,12 @@ export class ThreeRenderer {
     mesh.userData['frame'] = s.frame;
     mesh.userData['billboard'] = s.billboard;
     mesh.userData['uv'] = this.#applySpriteUv(geometry, s.asset, s.frame);
+    mesh.userData['rustySpriteShadowManaged'] = true;
+    const resolvedMaterial = resolveSpriteMaterialDescriptor(s);
+    mesh.castShadow = this.#shadowsEnabled
+      && (resolvedMaterial.shadow === 'cast' || resolvedMaterial.shadow === 'castAndReceive');
+    mesh.receiveShadow = this.#shadowsEnabled
+      && (resolvedMaterial.shadow === 'receive' || resolvedMaterial.shadow === 'castAndReceive');
 
     const parent =
       diff.parent === null ? this.#sceneGroup : this.#require(diff.parent, 'createSprite.parent').object;
@@ -2266,7 +2326,7 @@ export class ThreeRenderer {
       throw new RenderApplyError(`updateSprite: handle ${diff.handle} is not a sprite`);
     }
     const mesh = entry.object as THREE.Mesh;
-    const material = mesh.material as THREE.MeshBasicMaterial;
+    const material = mesh.material as THREE.MeshBasicMaterial | THREE.MeshStandardMaterial;
     if (diff.frame !== null) {
       entry.sprite = { ...entry.sprite, frame: diff.frame };
       mesh.userData['frame'] = diff.frame;
@@ -2280,9 +2340,7 @@ export class ThreeRenderer {
     }
     if (diff.tint !== null) {
       entry.sprite = { ...entry.sprite, tint: diff.tint };
-      material.color.setRGB(diff.tint[0], diff.tint[1], diff.tint[2]);
-      material.opacity = diff.tint[3];
-      material.transparent = diff.tint[3] < 1 || material.map !== null;
+      updateSpriteMaterialTint(material, entry.sprite);
     }
     if (diff.renderOrder !== null) {
       entry.sprite = { ...entry.sprite, renderOrder: diff.renderOrder };
@@ -2295,22 +2353,36 @@ export class ThreeRenderer {
   }
 
   /** Build the presentation material for a sprite, including its atlas texture. */
-  #spriteMaterialFor(sprite: SpriteInstanceDescriptor): THREE.MeshBasicMaterial {
+  #spriteMaterialFor(
+    sprite: SpriteInstanceDescriptor,
+  ): THREE.MeshBasicMaterial | THREE.MeshStandardMaterial {
     const atlas = this.#atlases.get(sprite.asset);
-    const texture = atlas === undefined
+    const color = atlas === undefined
       ? undefined
       : this.#textureResources.get(atlas.texture)?.texture;
-    const material = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(sprite.tint[0], sprite.tint[1], sprite.tint[2]),
-      map: texture ?? null,
-      opacity: sprite.tint[3],
-      // Encoded sprite textures may carry alpha even when the authority tint is opaque.
-      transparent: sprite.tint[3] < 1 || texture !== undefined,
-      depthTest: sprite.depth !== 'depthTestOff',
-      depthWrite: sprite.depth === 'default',
+    const descriptor = resolveSpriteMaterialDescriptor(sprite);
+    const normal = this.#spriteLinearTexture(descriptor.normalTexture, 'normal');
+    const depth = this.#spriteLinearTexture(descriptor.depthTexture, 'depth');
+    const resolved = createSpriteMaterial(sprite, {
+      color: color ?? null,
+      normal,
+      depth,
     });
-    this.#trackMaterialResource(material);
-    return material;
+    this.#trackMaterialResource(resolved.material);
+    return resolved.material;
+  }
+
+  #spriteLinearTexture(id: string | null, role: 'normal' | 'depth'): THREE.Texture | null {
+    if (id === null) return null;
+    const descriptor = this.#textures.get(id);
+    const texture = this.#textureResources.get(id)?.texture;
+    if (descriptor === undefined || texture === undefined) {
+      throw new RenderApplyError(`sprite ${role} texture ${id} is not retained`);
+    }
+    if (descriptor.payload?.colorSpace !== 'linear') {
+      throw new RenderApplyError(`sprite ${role} texture ${id} must use linear color space`);
+    }
+    return texture;
   }
 
   /** Replace only live sprite materials whose atlas texture identity changed. */
@@ -2322,17 +2394,20 @@ export class ThreeRenderer {
     for (const entry of this.#handles.values()) {
       if (entry.kind !== 'sprite' || entry.sprite === undefined) continue;
       const atlas = this.#atlases.get(entry.sprite.asset);
+      const descriptor = resolveSpriteMaterialDescriptor(entry.sprite);
+      const changedLightingTexture = changedTextureIds.has(descriptor.normalTexture ?? '')
+        || changedTextureIds.has(descriptor.depthTexture ?? '');
       if (
-        atlas === undefined
-        || (
+        !changedLightingTexture
+        && (atlas === undefined || (
           !changedSpriteAtlasIds.has(entry.sprite.asset)
           && !changedTextureIds.has(atlas.texture)
-        )
+        ))
       ) {
         continue;
       }
       const mesh = entry.object as THREE.Mesh;
-      const previous = mesh.material as THREE.MeshBasicMaterial;
+      const previous = mesh.material as THREE.MeshBasicMaterial | THREE.MeshStandardMaterial;
       const next = this.#spriteMaterialFor(entry.sprite);
       mesh.material = next;
       if (changedSpriteAtlasIds.has(entry.sprite.asset)) {
@@ -2753,7 +2828,9 @@ function prepareTextureResource(
     THREE.RGBAFormat,
     THREE.UnsignedByteType,
   );
-  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.colorSpace = descriptor.payload?.colorSpace === 'linear'
+    ? THREE.NoColorSpace
+    : THREE.SRGBColorSpace;
   texture.flipY = false;
   texture.generateMipmaps = false;
   texture.magFilter = descriptor.filter === 'nearest' ? THREE.NearestFilter : THREE.LinearFilter;

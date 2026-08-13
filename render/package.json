@@ -21,6 +21,8 @@
     "@rusty-engine/renderer-host": "workspace:*",
     "@rusty-engine/renderer-three": "workspace:*",
     "@types/node": "^25.0.0",
+    "@types/three": "^0.184.1",
+    "three": "^0.184.0",
     "typescript": "^5.9.3",
     "vite": "^8.1.5"
   }

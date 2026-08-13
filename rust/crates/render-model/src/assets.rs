@@ -481,6 +481,7 @@ pub enum TextureEncoding {
 #[serde(rename_all = "camelCase")]
 pub enum TextureColorSpace {
     Srgb,
+    Linear,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -873,8 +874,125 @@ pub enum SpriteShading {
 
 impl SpriteShading {
     pub const fn is_implemented(self) -> bool {
-        matches!(self, Self::Unlit)
+        !matches!(self, Self::Custom)
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SpriteLightingMode {
+    #[default]
+    Unlit,
+    AuthoredNormal,
+    AuthoredDepth,
+    DerivedGradient,
+    Synthetic,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum SpriteAlphaMode {
+    Opaque,
+    Mask {
+        cutoff: f32,
+    },
+    #[default]
+    Blend,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SpriteShadowPolicy {
+    #[default]
+    None,
+    Cast,
+    Receive,
+    CastAndReceive,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SpriteMaterialDescriptor {
+    pub lighting: SpriteLightingMode,
+    pub normal_texture: Option<String>,
+    pub depth_texture: Option<String>,
+    pub normal_strength: f32,
+    pub normal_bias: f32,
+    pub alpha: SpriteAlphaMode,
+    pub shadow: SpriteShadowPolicy,
+}
+
+impl Default for SpriteMaterialDescriptor {
+    fn default() -> Self {
+        Self {
+            lighting: SpriteLightingMode::Unlit,
+            normal_texture: None,
+            depth_texture: None,
+            normal_strength: 1.0,
+            normal_bias: 0.0,
+            alpha: SpriteAlphaMode::Blend,
+            shadow: SpriteShadowPolicy::None,
+        }
+    }
+}
+
+impl SpriteMaterialDescriptor {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    pub fn validate(&self) -> Result<(), SpriteMaterialError> {
+        if !self.normal_strength.is_finite() || !(0.0..=4.0).contains(&self.normal_strength) {
+            return Err(SpriteMaterialError::InvalidNormalStrength);
+        }
+        if !self.normal_bias.is_finite() || !(-1.0..=1.0).contains(&self.normal_bias) {
+            return Err(SpriteMaterialError::InvalidNormalBias);
+        }
+        if let SpriteAlphaMode::Mask { cutoff } = self.alpha {
+            if !cutoff.is_finite() || !(0.0..=1.0).contains(&cutoff) {
+                return Err(SpriteMaterialError::InvalidAlphaCutoff);
+            }
+        }
+        if let Some(texture) = &self.normal_texture {
+            validate_asset_id(texture, RenderAssetKind::Texture)
+                .map_err(SpriteMaterialError::Texture)?;
+        }
+        if let Some(texture) = &self.depth_texture {
+            validate_asset_id(texture, RenderAssetKind::Texture)
+                .map_err(SpriteMaterialError::Texture)?;
+        }
+        let references_match = match self.lighting {
+            SpriteLightingMode::AuthoredNormal => {
+                self.normal_texture.is_some() && self.depth_texture.is_none()
+            }
+            SpriteLightingMode::AuthoredDepth => {
+                self.normal_texture.is_none() && self.depth_texture.is_some()
+            }
+            SpriteLightingMode::Unlit
+            | SpriteLightingMode::DerivedGradient
+            | SpriteLightingMode::Synthetic => {
+                self.normal_texture.is_none() && self.depth_texture.is_none()
+            }
+        };
+        if !references_match {
+            return Err(SpriteMaterialError::TextureModeMismatch);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SpriteMaterialError {
+    Texture(RenderAssetError),
+    TextureModeMismatch,
+    InvalidNormalStrength,
+    InvalidNormalBias,
+    InvalidAlphaCutoff,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -898,6 +1016,8 @@ pub struct SpriteInstanceDescriptor {
     pub render_order: i32,
     pub depth: SpriteDepthPolicy,
     pub shading: SpriteShading,
+    #[serde(default, skip_serializing_if = "SpriteMaterialDescriptor::is_default")]
+    pub material: SpriteMaterialDescriptor,
     pub visible: bool,
     pub transform: Transform,
     pub attachment: SpriteAttachment,
@@ -924,6 +1044,7 @@ impl SpriteInstanceDescriptor {
         if !valid_color(self.tint) {
             return Err(SpriteError::InvalidTint);
         }
+        self.material.validate().map_err(SpriteError::Material)?;
         self.transform.validate().map_err(SpriteError::Transform)?;
         self.metadata.validate().map_err(SpriteError::Metadata)?;
         if self
@@ -953,6 +1074,7 @@ pub enum SpriteError {
     PivotOutOfRange { pivot: [f32; 2] },
     NonPositiveSize { size: [f32; 2] },
     InvalidTint,
+    Material(SpriteMaterialError),
     Transform(crate::TransformError),
     Metadata(crate::NodeError),
     EmptyAttachmentPoint,
@@ -1051,6 +1173,38 @@ mod tests {
             atlas.validate(),
             Err(SpriteAtlasError::DuplicateFrame { frame: 0 })
         );
+    }
+
+    #[test]
+    fn sprite_material_modes_bind_only_their_bounded_texture_roles() {
+        let authored = SpriteMaterialDescriptor {
+            lighting: SpriteLightingMode::AuthoredNormal,
+            normal_texture: Some("texture/sprite-normal".to_string()),
+            depth_texture: None,
+            normal_strength: 1.5,
+            normal_bias: 0.1,
+            alpha: SpriteAlphaMode::Mask { cutoff: 0.45 },
+            shadow: SpriteShadowPolicy::CastAndReceive,
+        };
+        assert_eq!(authored.validate(), Ok(()));
+
+        assert_eq!(
+            SpriteMaterialDescriptor {
+                depth_texture: Some("texture/depth".to_string()),
+                ..authored.clone()
+            }
+            .validate(),
+            Err(SpriteMaterialError::TextureModeMismatch)
+        );
+        assert_eq!(
+            SpriteMaterialDescriptor {
+                normal_strength: 4.1,
+                ..authored
+            }
+            .validate(),
+            Err(SpriteMaterialError::InvalidNormalStrength)
+        );
+        assert!(SpriteMaterialDescriptor::default().is_default());
     }
 
     #[test]

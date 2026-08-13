@@ -745,6 +745,7 @@ fn requires_recreate(previous: &ProjectedNode, next: &ProjectedNode) -> bool {
                 || previous.billboard != next.billboard
                 || previous.depth != next.depth
                 || previous.shading != next.shading
+                || previous.material != next.material
                 || previous.attachment != next.attachment
         }
         _ => true,

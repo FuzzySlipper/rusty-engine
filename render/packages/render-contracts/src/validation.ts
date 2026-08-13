@@ -705,7 +705,7 @@ function texture(input: unknown, path: string): void {
       'encoding', 'colorSpace', 'contentHash', 'byteLength', 'source',
     ]);
     enumeration(payload['encoding'], `${path}.payload.encoding`, ['pngRgba8'] as const);
-    enumeration(payload['colorSpace'], `${path}.payload.colorSpace`, ['srgb'] as const);
+    enumeration(payload['colorSpace'], `${path}.payload.colorSpace`, ['srgb', 'linear'] as const);
     const contentHash = nonEmptyText(payload['contentHash'], `${path}.payload.contentHash`);
     const digest = /^sha256:([0-9a-f]{64})$/u.exec(contentHash)?.[1];
     if (digest === undefined || value['contentHash'] !== contentHash) {
@@ -753,10 +753,10 @@ function spriteAtlas(input: unknown, path: string): void {
 }
 
 function sprite(input: unknown, path: string): void {
-  const value = record(input, path, [
+  const value = recordOptional(input, path, [
     'asset', 'frame', 'pivot', 'size', 'sizeMode', 'billboard', 'tint', 'renderOrder',
     'depth', 'shading', 'visible', 'transform', 'attachment', 'metadata',
-  ]);
+  ], ['material']);
   nonEmptyText(value['asset'], `${path}.asset`);
   nonNegativeInteger(value['frame'], `${path}.frame`);
   rangedTuple(value['pivot'], `${path}.pivot`, 2, 0, 1);
@@ -768,6 +768,7 @@ function sprite(input: unknown, path: string): void {
   integerValue(value['renderOrder'], `${path}.renderOrder`);
   enumeration(value['depth'], `${path}.depth`, ['default', 'depthTestOff', 'depthWriteOff'] as const);
   enumeration(value['shading'], `${path}.shading`, ['unlit', 'lit', 'shadowed', 'custom'] as const);
+  if (value['material'] !== undefined) spriteMaterial(value['material'], `${path}.material`);
   booleanValue(value['visible'], `${path}.visible`);
   transform(value['transform'], `${path}.transform`);
   const attachment = record(value['attachment'], `${path}.attachment`, [
@@ -777,6 +778,37 @@ function sprite(input: unknown, path: string): void {
   nullable(attachment['sourceSceneNode'], `${path}.attachment.sourceSceneNode`, safeInteger);
   nullable(attachment['attachmentPoint'], `${path}.attachment.attachmentPoint`, nonEmptyText);
   metadata(value['metadata'], `${path}.metadata`);
+}
+
+function spriteMaterial(input: unknown, path: string): void {
+  const value = record(input, path, [
+    'lighting', 'normalTexture', 'depthTexture', 'normalStrength', 'normalBias',
+    'alpha', 'shadow',
+  ]);
+  const lighting = enumeration(value['lighting'], `${path}.lighting`, [
+    'unlit', 'authoredNormal', 'authoredDepth', 'derivedGradient', 'synthetic',
+  ] as const);
+  nullable(value['normalTexture'], `${path}.normalTexture`, nonEmptyText);
+  nullable(value['depthTexture'], `${path}.depthTexture`, nonEmptyText);
+  range(value['normalStrength'], `${path}.normalStrength`, 0, 4);
+  range(value['normalBias'], `${path}.normalBias`, -1, 1);
+  const alpha = looseRecord(value['alpha'], `${path}.alpha`);
+  const alphaKind = enumeration(alpha['kind'], `${path}.alpha.kind`, ['opaque', 'mask', 'blend'] as const);
+  if (alphaKind === 'mask') {
+    const mask = record(value['alpha'], `${path}.alpha`, ['kind', 'cutoff']);
+    range(mask['cutoff'], `${path}.alpha.cutoff`, 0, 1);
+  } else {
+    record(value['alpha'], `${path}.alpha`, ['kind']);
+  }
+  enumeration(value['shadow'], `${path}.shadow`, ['none', 'cast', 'receive', 'castAndReceive'] as const);
+  const normalPresent = value['normalTexture'] !== null;
+  const depthPresent = value['depthTexture'] !== null;
+  const referencesMatch = lighting === 'authoredNormal'
+    ? normalPresent && !depthPresent
+    : lighting === 'authoredDepth'
+      ? !normalPresent && depthPresent
+      : !normalPresent && !depthPresent;
+  if (!referencesMatch) fail(path, 'texture references must match the selected lighting mode');
 }
 
 function light(input: unknown, path: string): void {

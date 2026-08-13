@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "pixelSize": 16,
+  "flipbookFrames": 4,
+  "fixtures": [
+    {
+      "id": "opaque-cutout",
+      "kind": "cutout",
+      "alpha": "mask",
+      "description": "Hard-edged opaque diamond with an internal recess"
+    },
+    {
+      "id": "soft-irregular",
+      "kind": "soft",
+      "alpha": "blend",
+      "description": "Irregular soft silhouette used in an overlapping pair"
+    },
+    {
+      "id": "flipbook-orb",
+      "kind": "flipbook",
+      "alpha": "blend",
+      "description": "Four deterministic low-resolution animation frames"
+    },
+    {
+      "id": "foliage-clump",
+      "kind": "foliage",
+      "alpha": "mask",
+      "description": "Branching foliage-like cutout with separated lobes"
+    },
+    {
+      "id": "character-token",
+      "kind": "character",
+      "alpha": "mask",
+      "description": "Head, body, and feet silhouette with asymmetric color regions"
+    }
+  ]
+}

@@ -131,6 +131,7 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
         render_order: 3,
         depth: SpriteDepthPolicy::Default,
         shading: SpriteShading::Unlit,
+        material: SpriteMaterialDescriptor::default(),
         visible: true,
         transform: Transform::IDENTITY,
         attachment: SpriteAttachment {

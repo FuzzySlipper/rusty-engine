@@ -105,6 +105,14 @@ bridge, or renderer control transport. If a needed presentation capability is
 absent, request a game-neutral Engine mechanism instead of reaching through the
 boundary.
 
+Ordinary retained sprites may select Engine's bounded lit-sprite material
+modes through Rust render facts. Downstream does not import Three materials or
+provide shader source. Color textures are sRGB; authored tangent-space normal
+and depth textures are admitted as linear resources. Asset Pipeline owns those
+source maps, while Engine owns strict admission, camera-facing realization,
+alpha/shadow behavior, and disposal. See
+[lit sprite shader comparison](../lit-sprite-shaders.md).
+
 ## Product playtesting uses the same public path
 
 A downstream final-product playtest starts the real product and drives its

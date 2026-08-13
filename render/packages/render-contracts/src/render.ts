@@ -223,7 +223,7 @@ export interface VoxelObjectInstanceDescriptor {
 export type TextureFilter = 'nearest' | 'linear';
 export type TextureWrap = 'clamp' | 'repeat';
 export type TextureEncoding = 'pngRgba8';
-export type TextureColorSpace = 'srgb';
+export type TextureColorSpace = 'srgb' | 'linear';
 
 export type TexturePayloadSource =
   | { readonly kind: 'inline'; readonly encodedBytes: readonly number[] }
@@ -336,6 +336,27 @@ export type SpriteSizeMode = 'world' | 'pixel';
 export type BillboardMode = 'none' | 'spherical' | 'cylindrical';
 export type SpriteDepthPolicy = 'default' | 'depthTestOff' | 'depthWriteOff';
 export type SpriteShading = 'unlit' | 'lit' | 'shadowed' | 'custom';
+export type SpriteLightingMode =
+  | 'unlit'
+  | 'authoredNormal'
+  | 'authoredDepth'
+  | 'derivedGradient'
+  | 'synthetic';
+export type SpriteAlphaMode =
+  | { readonly kind: 'opaque' }
+  | { readonly kind: 'mask'; readonly cutoff: number }
+  | { readonly kind: 'blend' };
+export type SpriteShadowPolicy = 'none' | 'cast' | 'receive' | 'castAndReceive';
+
+export interface SpriteMaterialDescriptor {
+  readonly lighting: SpriteLightingMode;
+  readonly normalTexture: string | null;
+  readonly depthTexture: string | null;
+  readonly normalStrength: number;
+  readonly normalBias: number;
+  readonly alpha: SpriteAlphaMode;
+  readonly shadow: SpriteShadowPolicy;
+}
 
 export interface SpriteAttachment {
   readonly sourceEntity: number | null;
@@ -354,6 +375,8 @@ export interface SpriteInstanceDescriptor {
   readonly renderOrder: number;
   readonly depth: SpriteDepthPolicy;
   readonly shading: SpriteShading;
+  /** Omitted legacy descriptors resolve from `shading`; new writers use this bounded shape. */
+  readonly material?: SpriteMaterialDescriptor;
   readonly visible: boolean;
   readonly transform: Transform;
   readonly attachment: SpriteAttachment;

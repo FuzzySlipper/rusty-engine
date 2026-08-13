@@ -229,6 +229,7 @@ fn create_operation(handle: RenderHandle, entity: &ProjectedEntity) -> RenderDif
                 render_order: 0,
                 depth: SpriteDepthPolicy::Default,
                 shading: SpriteShading::Unlit,
+                material: Default::default(),
                 visible: entity.visible,
                 transform: entity.transform,
                 attachment: SpriteAttachment {

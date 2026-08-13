@@ -95,6 +95,32 @@ void test('particle decoding admits cubes, local collision, and the legacy sprit
   assert.throws(() => decodePresentationFrameDiff(cube), /must be normalized/u);
 });
 
+void test('sprite material decoding keeps legacy omission and validates bounded lighting modes', () => {
+  const frame = mutableFixture('retained-frame-v1.json');
+  const operation = (frame['ops'] as Array<Record<string, unknown>>)
+    .find((candidate) => candidate['op'] === 'createSprite')!;
+  const sprite = operation['sprite'] as Record<string, unknown>;
+  assert.doesNotThrow(() => decodeRenderFrameDiff(frame), 'legacy material omission remains valid');
+
+  sprite['material'] = {
+    lighting: 'authoredNormal',
+    normalTexture: 'texture/sprite-normal',
+    depthTexture: null,
+    normalStrength: 1.5,
+    normalBias: 0.1,
+    alpha: { kind: 'mask', cutoff: 0.45 },
+    shadow: 'castAndReceive',
+  };
+  assert.doesNotThrow(() => decodeRenderFrameDiff(frame));
+
+  const material = sprite['material'] as Record<string, unknown>;
+  material['depthTexture'] = 'texture/depth';
+  assert.throws(() => decodeRenderFrameDiff(frame), /texture references must match/u);
+  material['depthTexture'] = null;
+  material['normalStrength'] = 5;
+  assert.throws(() => decodeRenderFrameDiff(frame), /must be in 0\.\.=4/u);
+});
+
 void test('structured indicator meters reject finite but unbounded magnitudes', () => {
   const frame = mutableFixture('world-indicator-frame-v1.json');
   const ops = frame['ops'] as Array<Record<string, unknown>>;
