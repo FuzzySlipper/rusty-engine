@@ -330,6 +330,79 @@ void test('cube debris sweeps against emitter-local planes without resolving spr
   assert.equal(sink.active.get(1)!.visual.kind, 'cube');
 });
 
+void test('a terminal low-speed impact honors kill before the ordinary sleep threshold', async () => {
+  const sink = new FakeParticleSink();
+  const particles = host(sink);
+  await particles.applyPresentation(frame([
+    operation(0, {
+      op: 'emit',
+      signalId: 'terminal-kill',
+      descriptor: descriptor({
+        visual: { kind: 'cube' },
+        burstCount: 1,
+        lifetimeSeconds: [2, 2],
+        velocityMin: [0, -10, 0],
+        velocityMax: [0, -10, 0],
+        acceleration: [0, 0, 0],
+        flipbookFramesPerSecond: 0,
+        collision: {
+          radius: 0.1,
+          restitution: 0,
+          friction: 0,
+          maximumImpacts: 1,
+          sleepSpeed: 100,
+          limitBehavior: 'kill',
+          volumes: [{ kind: 'plane', normal: [0, 1, 0], offset: 1 }],
+        },
+      }),
+    }),
+  ]));
+
+  particles.advance(0.2);
+
+  assert.equal(particles.readout().collisionImpacts, 1);
+  assert.equal(particles.readout().activeParticles, 0);
+  assert.deepEqual(sink.destroyed, [1]);
+});
+
+void test('a pre-limit low-speed impact may still sleep under kill-at-limit policy', async () => {
+  const sink = new FakeParticleSink();
+  const particles = host(sink);
+  await particles.applyPresentation(frame([
+    operation(0, {
+      op: 'emit',
+      signalId: 'pre-limit-sleep',
+      descriptor: descriptor({
+        visual: { kind: 'cube' },
+        burstCount: 1,
+        lifetimeSeconds: [2, 2],
+        velocityMin: [0, -10, 0],
+        velocityMax: [0, -10, 0],
+        acceleration: [0, 0, 0],
+        flipbookFramesPerSecond: 0,
+        collision: {
+          radius: 0.1,
+          restitution: 0,
+          friction: 0,
+          maximumImpacts: 2,
+          sleepSpeed: 100,
+          limitBehavior: 'kill',
+          volumes: [{ kind: 'plane', normal: [0, 1, 0], offset: 1 }],
+        },
+      }),
+    }),
+  ]));
+
+  particles.advance(0.2);
+  const sleepingPosition = sink.active.get(1)!.position;
+  particles.advance(0.2);
+
+  assert.equal(particles.readout().collisionImpacts, 1);
+  assert.equal(particles.readout().activeParticles, 1);
+  assert.deepEqual(sink.active.get(1)!.position, sleepingPosition);
+  assert.deepEqual(sink.destroyed, []);
+});
+
 void test('retained emitters can explicitly clear optional collision', async () => {
   const sink = new FakeParticleSink();
   const particles = host(sink);

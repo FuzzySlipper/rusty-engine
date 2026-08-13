@@ -629,13 +629,13 @@ function advanceWithCollision(
     reflectVelocity(particle.velocity, earliest.normal, collision);
     particle.impactCount += 1;
     impacted();
-    if (vectorLength(particle.velocity) <= collision.sleepSpeed) {
+    if (particle.impactCount >= collision.maximumImpacts) {
+      if (collision.limitBehavior === 'kill') return 'kill';
       particle.velocity = [0, 0, 0];
       particle.sleeping = true;
       return 'continue';
     }
-    if (particle.impactCount >= collision.maximumImpacts) {
-      if (collision.limitBehavior === 'kill') return 'kill';
+    if (vectorLength(particle.velocity) <= collision.sleepSpeed) {
       particle.velocity = [0, 0, 0];
       particle.sleeping = true;
       return 'continue';
