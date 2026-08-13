@@ -52,6 +52,8 @@ impl<'de> Deserialize<'de> for GlobalPosition {
 }
 
 impl GlobalPosition {
+    const I64_MAX_EXCLUSIVE_AS_F64: f64 = 9_223_372_036_854_775_808.0;
+
     pub const ORIGIN: Self = Self {
         cell: [0; 3],
         offset: [0.0; 3],
@@ -66,7 +68,9 @@ impl GlobalPosition {
                 return Err(GlobalPositionError::NonFiniteOffset { axis });
             }
             let whole = value.floor();
-            if whole < i64::MIN as f64 || whole > i64::MAX as f64 {
+            // `i64::MAX as f64` rounds up to 2^63, so this upper bound must be
+            // exclusive before the saturating float-to-integer cast.
+            if whole < i64::MIN as f64 || whole >= Self::I64_MAX_EXCLUSIVE_AS_F64 {
                 return Err(GlobalPositionError::CellOverflow { axis });
             }
             canonical_cell[axis] = canonical_cell[axis]
@@ -191,5 +195,25 @@ mod tests {
             GlobalPosition::new([i64::MAX, 0, 0], [1.0, 0.0, 0.0]),
             Err(GlobalPositionError::CellOverflow { axis: 0 })
         );
+    }
+
+    #[test]
+    fn floating_integer_boundaries_do_not_saturate_or_reject_valid_cells() {
+        let positive_limit = GlobalPosition::I64_MAX_EXCLUSIVE_AS_F64;
+        assert_eq!(
+            GlobalPosition::from_world([positive_limit, 0.0, 0.0]),
+            Err(GlobalPositionError::CellOverflow { axis: 0 })
+        );
+
+        let largest_below_positive_limit = f64::from_bits(positive_limit.to_bits() - 1);
+        let positive = GlobalPosition::from_world([largest_below_positive_limit, 0.0, 0.0])
+            .expect("the largest f64 below 2^63 fits in i64");
+        assert_eq!(positive.cell()[0], largest_below_positive_limit as i64);
+        assert_eq!(positive.offset()[0], 0.0);
+
+        let negative = GlobalPosition::from_world([i64::MIN as f64, 0.0, 0.0])
+            .expect("the exact i64::MIN boundary remains valid");
+        assert_eq!(negative.cell()[0], i64::MIN);
+        assert_eq!(negative.offset()[0], 0.0);
     }
 }
