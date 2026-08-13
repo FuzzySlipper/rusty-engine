@@ -65,9 +65,12 @@ shader source.
 - `opaque`, bounded alpha `mask`, or `blend` policy; and
 - `none`, `cast`, `receive`, or `castAndReceive` shadow policy.
 
-The descriptor is optional in TypeScript decoding and defaults in Rust. Old
-unlit serialized frames therefore remain unchanged. Legacy `lit` and
-`shadowed` shading decode to the synthetic mode; legacy `custom` remains an
+The descriptor is optional in TypeScript and Rust decoding, so old serialized
+frames remain readable. Omitted legacy sprites preserve their previous
+texture-aware transparency and default depth-write behavior. New Rust writers
+always emit the material block, including its default, so explicit `blend`
+remains distinguishable and intentionally disables depth writes. Legacy `lit`
+and `shadowed` shading decode to the synthetic mode; legacy `custom` remains an
 unlit compatibility fallback and does not admit shader text. New callers
 should use the material descriptor.
 
@@ -149,4 +152,3 @@ pnpm --dir render --filter @rusty-engine/renderer-three test
 PLAYWRIGHT_RENDER_PORT=4191 pnpm --dir render exec playwright test \
   browser/lit-sprite-comparison.browser.spec.ts --config playwright.config.ts
 ```
-

@@ -41,6 +41,29 @@ void test('legacy sprite shading resolves without admitting custom shader source
   assert.equal(resolveSpriteMaterialDescriptor(sprite({ shading: 'custom' })).lighting, 'unlit');
 });
 
+void test('legacy omission preserves depth writes while explicit blend remains depth-write-free', () => {
+  const color = texture();
+  const textureless = createSpriteMaterial(sprite(), { color: null, normal: null, depth: null });
+  assert.equal(textureless.material.transparent, false);
+  assert.equal(textureless.material.depthWrite, true);
+
+  const textured = createSpriteMaterial(sprite(), { color, normal: null, depth: null });
+  assert.equal(textured.material.transparent, true);
+  assert.equal(textured.material.depthWrite, true);
+
+  const explicitBlend = createSpriteMaterial(sprite({
+    material: {
+      lighting: 'unlit', normalTexture: null, depthTexture: null,
+      normalStrength: 1, normalBias: 0, alpha: { kind: 'blend' }, shadow: 'none',
+    },
+  }), { color, normal: null, depth: null });
+  assert.equal(explicitBlend.material.transparent, true);
+  assert.equal(explicitBlend.material.depthWrite, false);
+  assert.notEqual(spriteMaterialVariantKey(sprite()), spriteMaterialVariantKey(sprite({
+    material: explicitBlend.descriptor,
+  })));
+});
+
 void test('bounded sprite modes select stock Three material features and alpha policy', () => {
   const color = texture();
   const normal = texture();

@@ -2940,6 +2940,7 @@ void test('sprite atlases bind retained PNG textures and refresh live sprites on
   const material = mesh.material as THREE.MeshBasicMaterial;
   assert.ok(material.map instanceof THREE.DataTexture);
   assert.equal(material.transparent, true, 'texture alpha must remain observable with an opaque tint');
+  assert.equal(material.depthWrite, true, 'legacy textured sprites preserve default depth writes');
   assert.deepEqual(
     [...((material.map.image as { data: Uint8Array }).data)],
     [255, 0, 0, 255, 0, 255, 0, 128],
@@ -3530,6 +3531,31 @@ void test('createSprite builds a plane geometry (not THREE.Sprite) with render o
   assert.ok(mesh.geometry instanceof THREE.PlaneGeometry);
   assert.equal(mesh.renderOrder, 7);
   assert.equal((mesh.material as THREE.MeshBasicMaterial).depthTest, false);
+});
+
+void test('textureless legacy and explicit blend sprites retain distinct depth policy', () => {
+  const renderer = new ThreeRenderer();
+  renderer.applyDiff({
+    op: 'createSprite', handle: renderHandle(1), parent: null, sprite: sparkSprite(),
+  });
+  renderer.applyDiff({
+    op: 'createSprite',
+    handle: renderHandle(2),
+    parent: null,
+    sprite: sparkSprite({
+      material: {
+        lighting: 'unlit', normalTexture: null, depthTexture: null,
+        normalStrength: 1, normalBias: 0, alpha: { kind: 'blend' }, shadow: 'none',
+      },
+    }),
+  });
+
+  const legacy = (renderer.objectFor(renderHandle(1)) as THREE.Mesh).material as THREE.MeshBasicMaterial;
+  const blend = (renderer.objectFor(renderHandle(2)) as THREE.Mesh).material as THREE.MeshBasicMaterial;
+  assert.equal(legacy.transparent, false);
+  assert.equal(legacy.depthWrite, true);
+  assert.equal(blend.transparent, true);
+  assert.equal(blend.depthWrite, false);
 });
 
 void test('sprite billboards face the active camera while none preserves the authored rotation', () => {

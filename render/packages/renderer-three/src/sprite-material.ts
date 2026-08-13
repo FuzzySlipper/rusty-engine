@@ -48,7 +48,7 @@ export function createSpriteMaterial(
 ): ResolvedSpriteMaterial {
   const descriptor = resolveSpriteMaterialDescriptor(sprite);
   const variantKey = spriteMaterialVariantKey(sprite);
-  const alpha = alphaState(descriptor, sprite);
+  const alpha = alphaState(descriptor, sprite, textures.color !== null);
   const common = {
     color: new THREE.Color(sprite.tint[0], sprite.tint[1], sprite.tint[2]),
     map: textures.color,
@@ -86,7 +86,9 @@ export function createSpriteMaterial(
   material.name = `rusty-sprite:${variantKey}`;
   material.userData['rustySpriteMaterialVariant'] = variantKey;
   material.userData['rustySpriteLighting'] = descriptor.lighting;
-  material.userData['rustySpriteAlpha'] = descriptor.alpha.kind;
+  material.userData['rustySpriteAlpha'] = sprite.material === undefined
+    ? 'legacy'
+    : descriptor.alpha.kind;
   material.userData['rustySpriteNormalStrength'] = descriptor.normalStrength;
   material.userData['rustySpriteNormalBias'] = descriptor.normalBias;
   return {
@@ -107,6 +109,7 @@ export function spriteMaterialVariantKey(
 ): string {
   const descriptor = resolveSpriteMaterialDescriptor(sprite);
   return [
+    sprite.material === undefined ? 'legacy' : 'explicit',
     descriptor.lighting,
     descriptor.alpha.kind,
     sprite.depth,
@@ -122,7 +125,7 @@ export function updateSpriteMaterialTint(
   sprite: SpriteInstanceDescriptor,
 ): void {
   const descriptor = resolveSpriteMaterialDescriptor(sprite);
-  const alpha = alphaState(descriptor, sprite);
+  const alpha = alphaState(descriptor, sprite, material.map !== null);
   material.color.setRGB(sprite.tint[0], sprite.tint[1], sprite.tint[2]);
   material.opacity = sprite.tint[3];
   material.transparent = alpha.transparent;
@@ -133,8 +136,16 @@ export function updateSpriteMaterialTint(
 
 function alphaState(
   descriptor: SpriteMaterialDescriptor,
-  sprite: Pick<SpriteInstanceDescriptor, 'tint'>,
+  sprite: Pick<SpriteInstanceDescriptor, 'depth' | 'material' | 'tint'>,
+  hasColorTexture: boolean,
 ): { readonly transparent: boolean; readonly alphaTest: number; readonly depthWrite: boolean } {
+  if (sprite.material === undefined) {
+    return {
+      transparent: sprite.tint[3] < 1 || hasColorTexture,
+      alphaTest: 0,
+      depthWrite: sprite.depth === 'default',
+    };
+  }
   if (descriptor.alpha.kind === 'opaque') {
     return { transparent: sprite.tint[3] < 1, alphaTest: 0, depthWrite: true };
   }

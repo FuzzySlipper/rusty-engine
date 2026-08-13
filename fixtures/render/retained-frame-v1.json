@@ -519,6 +519,17 @@
         "renderOrder": 3,
         "depth": "default",
         "shading": "unlit",
+        "material": {
+          "lighting": "unlit",
+          "normalTexture": null,
+          "depthTexture": null,
+          "normalStrength": 1.0,
+          "normalBias": 0.0,
+          "alpha": {
+            "kind": "blend"
+          },
+          "shadow": "none"
+        },
         "visible": true,
         "transform": {
           "translation": [

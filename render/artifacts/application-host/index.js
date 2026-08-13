@@ -17261,7 +17261,7 @@ function Hh(e) {
 	} : Vh : e.material;
 }
 function Uh(e, t) {
-	let n = Hh(e), r = Wh(e), i = Kh(n, e), a = {
+	let n = Hh(e), r = Wh(e), i = Kh(n, e, t.color !== null), a = {
 		color: new Y(e.tint[0], e.tint[1], e.tint[2]),
 		map: t.color,
 		opacity: e.tint[3],
@@ -17285,7 +17285,7 @@ function Uh(e, t) {
 			bumpScale: e
 		}), n.lighting === "synthetic" && Jh(o, n.normalStrength, n.normalBias);
 	}
-	return o.name = `rusty-sprite:${r}`, o.userData.rustySpriteMaterialVariant = r, o.userData.rustySpriteLighting = n.lighting, o.userData.rustySpriteAlpha = n.alpha.kind, o.userData.rustySpriteNormalStrength = n.normalStrength, o.userData.rustySpriteNormalBias = n.normalBias, {
+	return o.name = `rusty-sprite:${r}`, o.userData.rustySpriteMaterialVariant = r, o.userData.rustySpriteLighting = n.lighting, o.userData.rustySpriteAlpha = e.material === void 0 ? "legacy" : n.alpha.kind, o.userData.rustySpriteNormalStrength = n.normalStrength, o.userData.rustySpriteNormalBias = n.normalBias, {
 		descriptor: n,
 		material: o,
 		castShadow: n.shadow === "cast" || n.shadow === "castAndReceive",
@@ -17295,6 +17295,7 @@ function Uh(e, t) {
 function Wh(e) {
 	let t = Hh(e);
 	return [
+		e.material === void 0 ? "legacy" : "explicit",
 		t.lighting,
 		t.alpha.kind,
 		e.depth,
@@ -17303,11 +17304,15 @@ function Wh(e) {
 	].join(":");
 }
 function Gh(e, t) {
-	let n = Kh(Hh(t), t);
+	let n = Kh(Hh(t), t, e.map !== null);
 	e.color.setRGB(t.tint[0], t.tint[1], t.tint[2]), e.opacity = t.tint[3], e.transparent = n.transparent, e.alphaTest = n.alphaTest, e.depthWrite = t.depth !== "depthWriteOff" && n.depthWrite, e.needsUpdate = !0;
 }
-function Kh(e, t) {
-	return e.alpha.kind === "opaque" ? {
+function Kh(e, t, n) {
+	return t.material === void 0 ? {
+		transparent: t.tint[3] < 1 || n,
+		alphaTest: 0,
+		depthWrite: t.depth === "default"
+	} : e.alpha.kind === "opaque" ? {
 		transparent: t.tint[3] < 1,
 		alphaTest: 0,
 		depthWrite: !0

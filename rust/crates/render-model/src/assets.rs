@@ -1016,7 +1016,7 @@ pub struct SpriteInstanceDescriptor {
     pub render_order: i32,
     pub depth: SpriteDepthPolicy,
     pub shading: SpriteShading,
-    #[serde(default, skip_serializing_if = "SpriteMaterialDescriptor::is_default")]
+    #[serde(default)]
     pub material: SpriteMaterialDescriptor,
     pub visible: bool,
     pub transform: Transform,

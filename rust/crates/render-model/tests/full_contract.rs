@@ -286,6 +286,10 @@ fn every_retained_operation_survives_the_versioned_json_border() {
     ] {
         assert!(json.contains(&format!("\"op\": \"{operation}\"")));
     }
+    assert!(
+        json.contains("\"normalStrength\": 1.0"),
+        "new Rust writers emit explicit sprite material facts"
+    );
 }
 
 #[test]
