@@ -193,14 +193,18 @@ unfinished Engine edits and intentionally non-compiling intermediate states.
 
 - Create a purpose-named branch and persistent worktree for substantial Engine
   implementation, normally under `/home/dev/worktrees/rusty-engine-<task>`.
-- Develop, commit, push, validate, and review the exact task branch in that
-  worktree. Do not redirect ordinary downstream dependency paths to it.
-- After acceptance, fast-forward the stable checkout to the accepted branch and
-  push `main`. Downstream consumers then adopt the completed Engine code
-  automatically through their unchanged adjacent path dependency.
-- Fix unexpected behavior from completed promoted code forward. This workflow
+- Develop, commit, and validate the exact task branch in that worktree. Do not
+  redirect ordinary downstream dependency paths to it.
+- Once the candidate is coherent, compile-clean, and has passed its owning local
+  checks, fast-forward the stable checkout to the task branch and push `main`.
+  Downstream consumers then adopt the completed candidate automatically through
+  their unchanged adjacent path dependency, and main-branch CI can gate the
+  exact revision used for review.
+- Review may happen after that compile-clean promotion. Keep the Den task in
+  review until it is accepted, and fix requested or unexpected behavior forward
+  through the task worktree and another checked fast-forward. This workflow
   protects downstream build availability; it is not a release train or a
-  promise that every completed Engine change is behaviorally inert.
+  promise that every promoted candidate is already behaviorally accepted.
 - Run downstream product checks after promotion by default. Use a disposable
   candidate adjacency layout before promotion only when a task explicitly
   requires downstream evidence against the candidate Engine revision.

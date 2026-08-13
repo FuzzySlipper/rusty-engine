@@ -29,12 +29,15 @@ not a source dependency protocol.
 
 The ordinary `/home/dev/rusty-engine` sibling is a stable `main` integration
 checkout, not an Engine development scratch tree. Substantial Engine work uses
-a task branch in a separate persistent worktree. Once that work compiles,
-passes its owning checks, and is accepted, it is fast-forwarded into the stable
-checkout; every adjacent consumer then sees the completed code automatically
-without changing its manifest or running an updater. This isolates unfinished
-and intentionally non-compiling intermediate edits while retaining loud,
-fixed-forward adoption of completed API and behavior changes.
+a task branch in a separate persistent worktree. Once that work is coherent,
+compile-clean, and passes its owning local checks, it is fast-forwarded into the
+stable checkout; every adjacent consumer then sees the candidate automatically
+without changing its manifest or running an updater. Main-branch CI and review
+therefore evaluate the same exact revision consumed downstream. Review findings
+are corrected forward through the task worktree and another checked
+fast-forward. This isolates unfinished and intentionally non-compiling
+intermediate edits while retaining loud, fixed-forward adoption of completed
+API and behavior changes.
 
 Downstream product checks normally run after promotion. A task may explicitly
 require pre-promotion consumer evidence; in that exceptional case the test
