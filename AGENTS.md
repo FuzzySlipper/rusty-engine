@@ -185,6 +185,29 @@ for a selected downstream checkout. Exact source and consumer commits belong
 in Den task or review evidence; they are not committed downstream dependency
 policy. Check the owning code-map page before choosing a focused gate.
 
+## Engine task worktrees and stable adjacency
+
+`/home/dev/rusty-engine` is the stable `main` integration checkout consumed by
+adjacent downstream Cargo path dependencies. Keep that checkout free of
+unfinished Engine edits and intentionally non-compiling intermediate states.
+
+- Create a purpose-named branch and persistent worktree for substantial Engine
+  implementation, normally under `/home/dev/worktrees/rusty-engine-<task>`.
+- Develop, commit, push, validate, and review the exact task branch in that
+  worktree. Do not redirect ordinary downstream dependency paths to it.
+- After acceptance, fast-forward the stable checkout to the accepted branch and
+  push `main`. Downstream consumers then adopt the completed Engine code
+  automatically through their unchanged adjacent path dependency.
+- Fix unexpected behavior from completed promoted code forward. This workflow
+  protects downstream build availability; it is not a release train or a
+  promise that every completed Engine change is behaviorally inert.
+- Run downstream product checks after promotion by default. Use a disposable
+  candidate adjacency layout before promotion only when a task explicitly
+  requires downstream evidence against the candidate Engine revision.
+- If current `main` advanced while a task branch was in progress, integrate it
+  into the task branch and rerun the owning checks before requesting promotion.
+  Do not overwrite, reset, clean, or repurpose another task's worktree.
+
 ## Rust source style
 
 Follow

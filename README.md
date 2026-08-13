@@ -240,6 +240,13 @@ The integration gate reads the selected adjacent consumer and runs its owned
 verification without rewriting either checkout. Browser and playtest evidence
 remain explicit product-owned checks.
 
+The ordinary adjacent Engine checkout stays on clean, completed `main` so these
+path dependencies remain buildable during Engine development. Engine tasks use
+separate persistent branch worktrees and promote accepted code back to the
+stable checkout; downstream projects then adopt it automatically. Candidate
+consumer layouts are reserved for tasks that explicitly require downstream
+proof before promotion.
+
 Studio-to-product integration is explicit and never inferred from a sibling
 checkout:
 

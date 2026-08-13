@@ -27,6 +27,21 @@ that policy is outside downstream source and CI. Interface breakage should be
 loud and fixed forward. Exact commits remain useful review evidence; they are
 not a source dependency protocol.
 
+The ordinary `/home/dev/rusty-engine` sibling is a stable `main` integration
+checkout, not an Engine development scratch tree. Substantial Engine work uses
+a task branch in a separate persistent worktree. Once that work compiles,
+passes its owning checks, and is accepted, it is fast-forwarded into the stable
+checkout; every adjacent consumer then sees the completed code automatically
+without changing its manifest or running an updater. This isolates unfinished
+and intentionally non-compiling intermediate edits while retaining loud,
+fixed-forward adoption of completed API and behavior changes.
+
+Downstream product checks normally run after promotion. A task may explicitly
+require pre-promotion consumer evidence; in that exceptional case the test
+orchestrator creates a disposable adjacency layout for the candidate Engine and
+selected consumer rather than changing the consumer's normal dependency path
+or destabilizing the shared integration checkout.
+
 ## The green renderer path
 
 The supported native path keeps the current backend entirely behind an
