@@ -593,6 +593,10 @@ disposal behavior remains available. Asset Pipeline owns source-map authoring an
 policy; Engine owns only admitted runtime facts and realization. See
 [lit sprite shader comparison](topics/lit-sprite-shaders.md).
 
+The low-volume authored `Appearance` candidate keeps the complete sprite descriptor inline. This
+preserves its direct value-composition API and avoids imposing a heap allocation on every default
+unlit authored sprite merely because optional lit-material facts enlarge that variant.
+
 World indicators remain in that billboard owner rather than creating a second
 UI protocol. A structured billboard can compose bounded localized label/icon,
 neutral ranged meters, and status cues under one stable handle. Exact finite
