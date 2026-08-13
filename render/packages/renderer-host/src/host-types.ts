@@ -92,6 +92,11 @@ export interface ParticleProjectionReadout {
   readonly loadedSprites: number;
   readonly emittedBursts: number;
   readonly droppedParticles: number;
+  readonly collisionTests: number;
+  readonly collisionImpacts: number;
+  readonly highWaterMark: number;
+  readonly activeBatches: number;
+  readonly allocatedSlots: number;
   readonly diagnostics: readonly ParticleProjectionDiagnostic[];
 }
 

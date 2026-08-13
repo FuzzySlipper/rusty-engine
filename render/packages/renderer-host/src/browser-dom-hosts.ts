@@ -6,6 +6,7 @@ import type { LiveTelemetrySnapshot } from './host-types.js';
 import type {
   RendererParticleBillboard,
   RendererParticleBillboardSink,
+  RendererParticleSinkReadout,
 } from './particle-host.js';
 import type { RendererTelemetryOverlaySink } from './telemetry-host.js';
 
@@ -31,6 +32,7 @@ export class RendererDomParticleBillboardSink implements RendererParticleBillboa
   readonly #pixelsPerWorldUnit: number;
   readonly #projectWorld: RendererDomParticleSinkOptions['projectWorld'];
   readonly #elements = new Map<number, HTMLDivElement>();
+  #highWaterMark = 0;
 
   constructor(options: RendererDomParticleSinkOptions) {
     if (!Number.isFinite(options.pixelsPerWorldUnit ?? 24) || (options.pixelsPerWorldUnit ?? 24) <= 0) {
@@ -55,6 +57,7 @@ export class RendererDomParticleBillboardSink implements RendererParticleBillboa
     element.style.willChange = 'left, top, width, height, opacity';
     this.#container.appendChild(element);
     this.#elements.set(particle.id, element);
+    this.#highWaterMark = Math.max(this.#highWaterMark, this.#elements.size);
     this.#updateElement(element, particle);
   }
 
@@ -82,13 +85,25 @@ export class RendererDomParticleBillboardSink implements RendererParticleBillboa
     return this.#elements.size;
   }
 
+  readout(): RendererParticleSinkReadout {
+    return {
+      activeParticles: this.#elements.size,
+      activeBatches: this.#elements.size > 0 ? 1 : 0,
+      billboardBatches: this.#elements.size > 0 ? 1 : 0,
+      cubeBatches: 0,
+      allocatedSlots: this.#elements.size,
+      highWaterMark: this.#highWaterMark,
+    };
+  }
+
   #updateElement(element: HTMLDivElement, particle: RendererParticleBillboard): void {
     const projected = this.#projectWorld(particle.position);
     const size = Math.max(1, particle.size * this.#pixelsPerWorldUnit);
-    const boundedFrame = Math.max(0, Math.min(particle.frameCount - 1, particle.frameIndex));
-    const framePosition = particle.frameCount <= 1
+    const frameCount = particle.visual.kind === 'billboard' ? particle.visual.frameCount : 1;
+    const boundedFrame = Math.max(0, Math.min(frameCount - 1, particle.frameIndex));
+    const framePosition = frameCount <= 1
       ? 0
-      : (boundedFrame / (particle.frameCount - 1)) * 100;
+      : (boundedFrame / (frameCount - 1)) * 100;
     element.style.display = projected.insideViewport ? 'block' : 'none';
     element.style.left = `${projected.xPixels}px`;
     element.style.top = `${projected.yPixels}px`;
@@ -96,8 +111,10 @@ export class RendererDomParticleBillboardSink implements RendererParticleBillboa
     element.style.height = `${size}px`;
     element.style.opacity = String(Math.max(0, Math.min(1, particle.color[3])));
     element.style.backgroundColor = rgba(particle.color);
-    element.style.backgroundImage = `url("${cssUrl(particle.spriteUrl)}")`;
-    element.style.backgroundSize = `${String(particle.frameCount * 100)}% 100%`;
+    element.style.backgroundImage = particle.visual.kind === 'billboard'
+      ? `url("${cssUrl(particle.visual.spriteUrl)}")`
+      : 'none';
+    element.style.backgroundSize = `${String(frameCount * 100)}% 100%`;
     element.style.backgroundPosition = `${String(framePosition)}% 0`;
   }
 }

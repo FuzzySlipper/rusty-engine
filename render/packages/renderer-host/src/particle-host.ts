@@ -1,5 +1,7 @@
 import type {
   ParticleAnchor,
+  ParticleCollisionDescriptor,
+  ParticleCollisionVolume,
   ParticleColorKey,
   ParticleEmitterDescriptor,
   ParticleEmitterHandle,
@@ -7,6 +9,7 @@ import type {
   ParticleProjectionOp,
   ParticleScalarKey,
   ParticleSpriteRef,
+  ParticleVisual,
   PresentationFrameDiff,
   PresentationOp,
 } from '@rusty-engine/render-contracts';
@@ -30,28 +33,56 @@ export type RendererParticleResourceResolver = (
 
 export type RendererParticleEntityPositionResolver = (entity: number) => Vec3 | null;
 
-export interface RendererParticleBillboard {
+export type RendererParticlePreparedVisual =
+  | {
+      readonly kind: 'billboard';
+      readonly frameCount: number;
+      readonly spriteUrl: string;
+    }
+  | { readonly kind: 'cube' };
+
+export interface RendererParticleInstance {
   readonly id: number;
   readonly position: Vec3;
   readonly size: number;
   readonly color: readonly [number, number, number, number];
   readonly frameIndex: number;
-  readonly frameCount: number;
-  readonly spriteUrl: string;
+  readonly visual: RendererParticlePreparedVisual;
 }
 
-export interface RendererParticleBillboardSink {
-  create(particle: RendererParticleBillboard): void;
-  update(particle: RendererParticleBillboard): void;
-  destroy(id: number): void;
+export interface RendererParticleSinkReadout {
+  readonly activeParticles: number;
+  readonly activeBatches: number;
+  readonly billboardBatches: number;
+  readonly cubeBatches: number;
+  readonly allocatedSlots: number;
+  readonly highWaterMark: number;
 }
+
+export interface RendererParticleSink {
+  create(particle: RendererParticleInstance): void;
+  update(particle: RendererParticleInstance): void;
+  destroy(id: number): void;
+  readout?(): RendererParticleSinkReadout;
+  dispose?(): void;
+}
+
+export interface RendererParticleSceneSink extends RendererParticleSink {
+  readout(): RendererParticleSinkReadout;
+  dispose(): void;
+}
+
+/** @deprecated Use RendererParticleInstance. */
+export type RendererParticleBillboard = RendererParticleInstance;
+/** @deprecated Use RendererParticleSink. */
+export type RendererParticleBillboardSink = RendererParticleSink;
 
 export interface RendererParticleHostOptions {
   readonly maxActiveEmitters?: number;
   readonly maxParticles?: number;
   readonly resolveEntityPosition: RendererParticleEntityPositionResolver;
   readonly resolveResource: RendererParticleResourceResolver;
-  readonly sink: RendererParticleBillboardSink;
+  readonly sink: RendererParticleSink;
 }
 
 export interface RendererParticleFrameReceipt {
@@ -62,7 +93,7 @@ export interface RendererParticleFrameReceipt {
 
 interface ActiveEmitter {
   descriptor: ParticleEmitterDescriptor;
-  spriteUrl: string;
+  preparedVisual: RendererParticlePreparedVisual;
   readonly key: string;
   readonly handle: ParticleEmitterHandle | null;
   randomState: number;
@@ -74,11 +105,14 @@ interface ActiveParticle {
   readonly id: number;
   readonly emitterKey: string;
   readonly descriptor: ParticleEmitterDescriptor;
-  readonly spriteUrl: string;
+  readonly visual: RendererParticlePreparedVisual;
   ageSeconds: number;
   readonly lifetimeSeconds: number;
   position: [number, number, number];
   velocity: [number, number, number];
+  readonly collisionOrigin: Vec3;
+  impactCount: number;
+  sleeping: boolean;
 }
 
 export class RendererParticleHost {
@@ -86,7 +120,7 @@ export class RendererParticleHost {
   readonly #maxParticles: number;
   readonly #resolveEntityPosition: RendererParticleEntityPositionResolver;
   readonly #resolveResource: RendererParticleResourceResolver;
-  readonly #sink: RendererParticleBillboardSink;
+  readonly #sink: RendererParticleSink;
   readonly #emitters = new Map<number, ActiveEmitter>();
   readonly #burstEmitters = new Map<string, ActiveEmitter>();
   readonly #particles = new Map<number, ActiveParticle>();
@@ -96,6 +130,9 @@ export class RendererParticleHost {
   #nextParticleId = 1;
   #emittedBursts = 0;
   #droppedParticles = 0;
+  #collisionTests = 0;
+  #collisionImpacts = 0;
+  #highWaterMark = 0;
 
   constructor(options: RendererParticleHostOptions) {
     this.#maxActiveEmitters = options.maxActiveEmitters ?? 64;
@@ -151,13 +188,10 @@ export class RendererParticleHost {
         this.#destroyParticle(particle);
         continue;
       }
-      const acceleration = particle.descriptor.acceleration;
-      particle.velocity[0] += acceleration[0] * deltaSeconds;
-      particle.velocity[1] += acceleration[1] * deltaSeconds;
-      particle.velocity[2] += acceleration[2] * deltaSeconds;
-      particle.position[0] += particle.velocity[0] * deltaSeconds;
-      particle.position[1] += particle.velocity[1] * deltaSeconds;
-      particle.position[2] += particle.velocity[2] * deltaSeconds;
+      if (!particle.sleeping && this.#advanceParticle(particle, deltaSeconds)) {
+        this.#destroyParticle(particle);
+        continue;
+      }
       this.#sink.update(projectParticle(particle));
     }
     this.#cleanupFinishedBursts();
@@ -174,12 +208,18 @@ export class RendererParticleHost {
   }
 
   readout(): ParticleProjectionReadout {
+    const sink = this.#sink.readout?.();
     return {
       activeEmitters: this.#emitters.size,
       activeParticles: this.#particles.size,
       loadedSprites: this.#spriteUrls.size,
       emittedBursts: this.#emittedBursts,
       droppedParticles: this.#droppedParticles,
+      collisionTests: this.#collisionTests,
+      collisionImpacts: this.#collisionImpacts,
+      highWaterMark: this.#highWaterMark,
+      activeBatches: sink?.activeBatches ?? 0,
+      allocatedSlots: sink?.allocatedSlots ?? 0,
       diagnostics: [...this.#diagnostics],
     };
   }
@@ -197,6 +237,26 @@ export class RendererParticleHost {
     this.cleanup();
     this.#spriteUrls.clear();
     this.#diagnostics.length = 0;
+  }
+
+  #advanceParticle(particle: ActiveParticle, deltaSeconds: number): boolean {
+    const acceleration = particle.descriptor.acceleration;
+    particle.velocity[0] += acceleration[0] * deltaSeconds;
+    particle.velocity[1] += acceleration[1] * deltaSeconds;
+    particle.velocity[2] += acceleration[2] * deltaSeconds;
+    const collision = particle.descriptor.collision;
+    if (collision === undefined) {
+      addScaled(particle.position, particle.velocity, deltaSeconds);
+      return false;
+    }
+    const remaining = advanceWithCollision(
+      particle,
+      collision,
+      deltaSeconds,
+      () => { this.#collisionTests += 1; },
+      () => { this.#collisionImpacts += 1; },
+    );
+    return remaining === 'kill';
   }
 
   async #applyOperation(
@@ -230,18 +290,17 @@ export class RendererParticleHost {
     if (this.#seenSignals.has(op.signalId)) {
       return null;
     }
-    const spriteUrl = await this.#prepareSprite(op.descriptor.sprite);
+    const preparedVisual = await this.#prepareVisual(op.descriptor);
     const emitter = createEmitter(
       `signal:${op.signalId}`,
       null,
       op.descriptor,
-      spriteUrl,
+      preparedVisual,
     );
     const diagnostic = this.#spawn(
       emitter,
       op.descriptor.burstCount,
       meta.sequence,
-      spriteUrl,
     );
     if (diagnostic?.code === 'anchorMissing') {
       return diagnostic;
@@ -267,15 +326,20 @@ export class RendererParticleHost {
         'budgetExceeded', meta, op.handle, 'particle emitter budget is exhausted',
       );
     }
-    const spriteUrl = await this.#prepareSprite(op.descriptor.sprite);
+    const preparedVisual = await this.#prepareVisual(op.descriptor);
     const emitter = createEmitter(
       `handle:${rawHandle}`,
       op.handle,
       op.descriptor,
-      spriteUrl,
+      preparedVisual,
     );
     this.#emitters.set(rawHandle, emitter);
-    return this.#spawn(emitter, op.descriptor.burstCount, meta.sequence, spriteUrl);
+    try {
+      return this.#spawn(emitter, op.descriptor.burstCount, meta.sequence);
+    } catch (error) {
+      this.#emitters.delete(rawHandle);
+      throw error;
+    }
   }
 
   async #update(
@@ -289,7 +353,7 @@ export class RendererParticleHost {
       );
     }
     const descriptor = applyParticlePatch(emitter.descriptor, op.patch);
-    emitter.spriteUrl = await this.#prepareSprite(descriptor.sprite);
+    emitter.preparedVisual = await this.#prepareVisual(descriptor);
     emitter.descriptor = descriptor;
     return null;
   }
@@ -318,7 +382,6 @@ export class RendererParticleHost {
     emitter: ActiveEmitter,
     requested: number,
     sequence: number,
-    preparedSpriteUrl?: string,
   ): ParticleProjectionDiagnostic | null {
     if (requested <= 0 || !emitter.descriptor.visible) {
       return null;
@@ -335,25 +398,41 @@ export class RendererParticleHost {
     const emitterRemaining = Math.max(0, emitter.descriptor.maxParticles - emitter.particleIds.size);
     const hostRemaining = Math.max(0, this.#maxParticles - this.#particles.size);
     const count = Math.min(requested, emitterRemaining, hostRemaining);
-    this.#droppedParticles += requested - count;
-    const spriteUrl = preparedSpriteUrl ?? emitter.spriteUrl;
-    for (let index = 0; index < count; index += 1) {
-      const particle = this.#newParticle(emitter, anchor, spriteUrl);
-      emitter.particleIds.add(particle.id);
-      this.#particles.set(particle.id, particle);
-      this.#sink.create(projectParticle(particle));
+    const dropped = requested - count;
+    const created: ActiveParticle[] = [];
+    try {
+      for (let index = 0; index < count; index += 1) {
+        const particle = this.#newParticle(emitter, anchor);
+        emitter.particleIds.add(particle.id);
+        this.#particles.set(particle.id, particle);
+        created.push(particle);
+        this.#sink.create(projectParticle(particle));
+      }
+      this.#highWaterMark = Math.max(this.#highWaterMark, this.#particles.size);
+      this.#droppedParticles += dropped;
+    } catch (error) {
+      for (const particle of created.reverse()) {
+        this.#particles.delete(particle.id);
+        emitter.particleIds.delete(particle.id);
+        try {
+          this.#sink.destroy(particle.id);
+        } catch {
+          // Preserve the original sink failure while completing host rollback.
+        }
+      }
+      throw error;
     }
     return count < requested
       ? operationDiagnostic(
           'budgetExceeded',
           { sequence },
           emitter.handle,
-          `particle budget dropped ${requested - count} particles`,
+          `particle budget dropped ${dropped} particles`,
         )
       : null;
   }
 
-  #newParticle(emitter: ActiveEmitter, anchor: Vec3, spriteUrl: string): ActiveParticle {
+  #newParticle(emitter: ActiveEmitter, anchor: Vec3): ActiveParticle {
     const descriptor = emitter.descriptor;
     const lifetime = randomRange(emitter, descriptor.lifetimeSeconds[0], descriptor.lifetimeSeconds[1]);
     const velocity: [number, number, number] = [
@@ -365,11 +444,14 @@ export class RendererParticleHost {
       id: this.#nextParticleId++,
       emitterKey: emitter.key,
       descriptor,
-      spriteUrl,
+      visual: emitter.preparedVisual,
       ageSeconds: 0,
       lifetimeSeconds: lifetime,
       position: [...anchor],
       velocity,
+      collisionOrigin: [...anchor],
+      impactCount: 0,
+      sleeping: false,
     };
   }
 
@@ -412,17 +494,29 @@ export class RendererParticleHost {
     }
   }
 
+  async #prepareVisual(
+    descriptor: ParticleEmitterDescriptor,
+  ): Promise<RendererParticlePreparedVisual> {
+    const visual = descriptorVisual(descriptor);
+    if (visual.kind === 'cube') return visual;
+    return {
+      kind: 'billboard',
+      frameCount: visual.sprite.frameCount,
+      spriteUrl: await this.#prepareSprite(visual.sprite),
+    };
+  }
+
 }
 
 function createEmitter(
   key: string,
   handle: ParticleEmitterHandle | null,
   descriptor: ParticleEmitterDescriptor,
-  spriteUrl: string,
+  preparedVisual: RendererParticlePreparedVisual,
 ): ActiveEmitter {
   return {
     descriptor,
-    spriteUrl,
+    preparedVisual,
     key,
     handle,
     randomState: normalizeSeed(descriptor.seed),
@@ -462,20 +556,208 @@ function resolveAnchor(
       ];
 }
 
-function projectParticle(particle: ActiveParticle): RendererParticleBillboard {
+function projectParticle(particle: ActiveParticle): RendererParticleInstance {
   const age = Math.min(1, particle.ageSeconds / particle.lifetimeSeconds);
+  const frameCount = particle.visual.kind === 'billboard' ? particle.visual.frameCount : 1;
   return {
     id: particle.id,
     position: [...particle.position],
     size: interpolateScalar(particle.descriptor.sizeCurve, age),
     color: interpolateColor(particle.descriptor.colorCurve, age),
-    frameIndex: particle.descriptor.sprite.frameCount === 1
+    frameIndex: frameCount === 1
       ? 0
       : Math.floor(particle.ageSeconds * particle.descriptor.flipbookFramesPerSecond)
-        % particle.descriptor.sprite.frameCount,
-    frameCount: particle.descriptor.sprite.frameCount,
-    spriteUrl: particle.spriteUrl,
+        % frameCount,
+    visual: particle.visual,
   };
+}
+
+function descriptorVisual(descriptor: ParticleEmitterDescriptor): ParticleVisual {
+  if ('visual' in descriptor && descriptor.visual !== undefined) return descriptor.visual;
+  return { kind: 'billboard', sprite: descriptor.sprite };
+}
+
+function addScaled(
+  position: [number, number, number],
+  velocity: Vec3,
+  seconds: number,
+): void {
+  position[0] += velocity[0] * seconds;
+  position[1] += velocity[1] * seconds;
+  position[2] += velocity[2] * seconds;
+}
+
+type CollisionAdvanceResult = 'continue' | 'kill';
+
+interface ParticleCollisionHit {
+  readonly time: number;
+  readonly normal: Vec3;
+}
+
+function advanceWithCollision(
+  particle: ActiveParticle,
+  collision: ParticleCollisionDescriptor,
+  seconds: number,
+  tested: () => void,
+  impacted: () => void,
+): CollisionAdvanceResult {
+  let remaining = seconds;
+  let iterations = 0;
+  while (remaining > 1e-6 && iterations < 4) {
+    iterations += 1;
+    const localStart = subtract(particle.position, particle.collisionOrigin);
+    const localEnd: Vec3 = [
+      localStart[0] + particle.velocity[0] * remaining,
+      localStart[1] + particle.velocity[1] * remaining,
+      localStart[2] + particle.velocity[2] * remaining,
+    ];
+    let earliest: ParticleCollisionHit | null = null;
+    for (const volume of collision.volumes) {
+      tested();
+      const hit = sweepCollisionVolume(localStart, localEnd, collision.radius, volume);
+      if (hit !== null && (earliest === null || hit.time < earliest.time)) earliest = hit;
+    }
+    if (earliest === null) {
+      addScaled(particle.position, particle.velocity, remaining);
+      return 'continue';
+    }
+    addScaled(particle.position, particle.velocity, Math.max(0, earliest.time * remaining));
+    particle.position[0] += earliest.normal[0] * 1e-4;
+    particle.position[1] += earliest.normal[1] * 1e-4;
+    particle.position[2] += earliest.normal[2] * 1e-4;
+    remaining *= Math.max(0, 1 - earliest.time);
+    reflectVelocity(particle.velocity, earliest.normal, collision);
+    particle.impactCount += 1;
+    impacted();
+    if (vectorLength(particle.velocity) <= collision.sleepSpeed) {
+      particle.velocity = [0, 0, 0];
+      particle.sleeping = true;
+      return 'continue';
+    }
+    if (particle.impactCount >= collision.maximumImpacts) {
+      if (collision.limitBehavior === 'kill') return 'kill';
+      particle.velocity = [0, 0, 0];
+      particle.sleeping = true;
+      return 'continue';
+    }
+  }
+  addScaled(particle.position, particle.velocity, remaining);
+  return 'continue';
+}
+
+function sweepCollisionVolume(
+  start: Vec3,
+  end: Vec3,
+  radius: number,
+  volume: ParticleCollisionVolume,
+): ParticleCollisionHit | null {
+  if (volume.kind === 'plane') {
+    const startDistance = dot(volume.normal, start) - volume.offset - radius;
+    const endDistance = dot(volume.normal, end) - volume.offset - radius;
+    if (startDistance < 0) return { time: 0, normal: volume.normal };
+    if (endDistance >= 0 || startDistance === endDistance) return null;
+    return {
+      time: startDistance / (startDistance - endDistance),
+      normal: volume.normal,
+    };
+  }
+  const minimum: Vec3 = [
+    volume.minimum[0] - radius,
+    volume.minimum[1] - radius,
+    volume.minimum[2] - radius,
+  ];
+  const maximum: Vec3 = [
+    volume.maximum[0] + radius,
+    volume.maximum[1] + radius,
+    volume.maximum[2] + radius,
+  ];
+  return sweepAabb(start, end, minimum, maximum);
+}
+
+function sweepAabb(start: Vec3, end: Vec3, minimum: Vec3, maximum: Vec3): ParticleCollisionHit | null {
+  if (insideAabb(start, minimum, maximum)) return nearestAabbExit(start, minimum, maximum);
+  let enter = 0;
+  let exit = 1;
+  let normal: Vec3 = [0, 0, 0];
+  for (let axis = 0; axis < 3; axis += 1) {
+    const delta = end[axis]! - start[axis]!;
+    if (Math.abs(delta) < 1e-9) {
+      if (start[axis]! < minimum[axis]! || start[axis]! > maximum[axis]!) return null;
+      continue;
+    }
+    const inverse = 1 / delta;
+    let first = (minimum[axis]! - start[axis]!) * inverse;
+    let second = (maximum[axis]! - start[axis]!) * inverse;
+    let axisNormal = -Math.sign(delta);
+    if (first > second) {
+      [first, second] = [second, first];
+    }
+    if (first > enter) {
+      enter = first;
+      normal = axisVector(axis, axisNormal);
+    }
+    exit = Math.min(exit, second);
+    if (enter > exit) return null;
+  }
+  return enter >= 0 && enter <= 1 ? { time: enter, normal } : null;
+}
+
+function nearestAabbExit(start: Vec3, minimum: Vec3, maximum: Vec3): ParticleCollisionHit {
+  let distance = Number.POSITIVE_INFINITY;
+  let normal: Vec3 = [0, 1, 0];
+  for (let axis = 0; axis < 3; axis += 1) {
+    const lowDistance = start[axis]! - minimum[axis]!;
+    if (lowDistance < distance) {
+      distance = lowDistance;
+      normal = axisVector(axis, -1);
+    }
+    const highDistance = maximum[axis]! - start[axis]!;
+    if (highDistance < distance) {
+      distance = highDistance;
+      normal = axisVector(axis, 1);
+    }
+  }
+  return { time: 0, normal };
+}
+
+function reflectVelocity(
+  velocity: [number, number, number],
+  normal: Vec3,
+  collision: ParticleCollisionDescriptor,
+): void {
+  const normalSpeed = dot(velocity, normal);
+  if (normalSpeed >= 0) return;
+  const normalComponent: Vec3 = [
+    normal[0] * normalSpeed,
+    normal[1] * normalSpeed,
+    normal[2] * normalSpeed,
+  ];
+  const tangentialScale = 1 - collision.friction;
+  for (let axis = 0; axis < 3; axis += 1) {
+    const tangent = velocity[axis]! - normalComponent[axis]!;
+    velocity[axis] = tangent * tangentialScale
+      - normalComponent[axis]! * collision.restitution;
+  }
+}
+
+function subtract(left: Vec3, right: Vec3): Vec3 {
+  return [left[0] - right[0], left[1] - right[1], left[2] - right[2]];
+}
+
+function dot(left: Vec3, right: Vec3): number {
+  return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
+}
+
+function vectorLength(value: Vec3): number {
+  return Math.hypot(value[0], value[1], value[2]);
+}
+
+function insideAabb(value: Vec3, minimum: Vec3, maximum: Vec3): boolean {
+  return value.every((component, axis) => component >= minimum[axis]! && component <= maximum[axis]!);
+}
+
+function axisVector(axis: number, value: number): Vec3 {
+  return [axis === 0 ? value : 0, axis === 1 ? value : 0, axis === 2 ? value : 0];
 }
 
 function interpolateScalar(keys: readonly ParticleScalarKey[], age: number): number {
@@ -513,9 +795,14 @@ function applyParticlePatch(
   descriptor: ParticleEmitterDescriptor,
   patch: ParticleEmitterPatch,
 ): ParticleEmitterDescriptor {
+  const visual = patch.visual
+    ?? (patch.sprite === null ? descriptorVisual(descriptor) : { kind: 'billboard', sprite: patch.sprite });
+  const collision = patch.collision === undefined
+    ? descriptor.collision
+    : patch.collision ?? undefined;
   return {
     anchor: patch.anchor ?? descriptor.anchor,
-    sprite: patch.sprite ?? descriptor.sprite,
+    visual,
     ratePerSecond: patch.ratePerSecond ?? descriptor.ratePerSecond,
     burstCount: patch.burstCount ?? descriptor.burstCount,
     lifetimeSeconds: patch.lifetimeSeconds ?? descriptor.lifetimeSeconds,
@@ -529,6 +816,7 @@ function applyParticlePatch(
     seed: descriptor.seed,
     maxParticles: patch.maxParticles ?? descriptor.maxParticles,
     visible: patch.visible ?? descriptor.visible,
+    ...(collision === undefined ? {} : { collision }),
   };
 }
 

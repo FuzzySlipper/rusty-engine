@@ -17,6 +17,7 @@ import {
 import {
   createRendererBrowserSurfaceFrame,
   mountRendererBrowserSurface,
+  RendererThreeParticleSink,
   RendererLightingPolicyError,
   type AnimatedMeshAssetSource,
   type RendererBrowserSurface,
@@ -25,6 +26,7 @@ import {
   type MeshResourceSource,
   type TextureResourceSource,
 } from '@rusty-engine/renderer-three/backend';
+import type { RendererParticleSceneSink } from './particle-host.js';
 import {
   animationPlaybackReadout,
   loadRendererAnimatedMeshSource,
@@ -415,6 +417,8 @@ export interface RendererSurface {
   readonly backend: RendererBackendDiagnostics;
   readonly canvas: HTMLCanvasElement;
   readonly animationProjection: RendererAnimatedMeshProjection;
+  /** Create a backend-owned scene particle sink without exposing Three downstream. */
+  readonly createParticleSink: () => RendererParticleSceneSink;
   readonly animatedMeshPlayback: (handle: RenderHandle) => RendererAnimatedMeshPlaybackReadout;
   readonly sampleAnimatedMesh: (
     handle: RenderHandle,
@@ -641,6 +645,7 @@ function mountPreparedRendererSurface(
   const automaticSubmissionAdmission =
     new RendererSurfaceAutomaticSubmissionAdmissionObservation();
   let disposed = false;
+  const particleSinks = new Set<RendererParticleSceneSink>();
   const continuousDemand = () => ({
     controls: controls.requiresAnimationFrame(),
     presentation: presentationHosts?.requiresAnimationFrame() ?? false,
@@ -816,6 +821,23 @@ function mountPreparedRendererSurface(
     backend: THREE_BACKEND_DIAGNOSTICS,
     canvas,
     animationProjection,
+    createParticleSink: () => {
+      if (disposed) throw new Error('renderer surface is disposed');
+      const concrete = new RendererThreeParticleSink({ scene: backendSurface.renderer.scene });
+      let sink: RendererParticleSceneSink;
+      sink = {
+        create: concrete.create.bind(concrete),
+        update: concrete.update.bind(concrete),
+        destroy: concrete.destroy.bind(concrete),
+        readout: concrete.readout.bind(concrete),
+        dispose: () => {
+          concrete.dispose();
+          particleSinks.delete(sink);
+        },
+      };
+      particleSinks.add(sink);
+      return sink;
+    },
     animatedMeshPlayback: (handle) => animationProjection.playback(handle),
     sampleAnimatedMesh: (handle, clipId, normalizedTime) =>
       backendSurface.sampleAnimatedMesh(handle, clipId, normalizedTime),
@@ -889,6 +911,8 @@ function mountPreparedRendererSurface(
       if (disposed) return;
       stop();
       controls.dispose();
+      for (const sink of [...particleSinks]) sink.dispose();
+      particleSinks.clear();
       backendSurface.dispose();
       disposed = true;
     },

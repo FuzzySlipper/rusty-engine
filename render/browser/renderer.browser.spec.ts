@@ -295,7 +295,33 @@ test('shared host realizes retained, presentation, and inspection families in a 
   });
   expect(proof.audioApplied).toBe(1);
   expect(proof.billboardText).toBe('Shared renderer host');
-  expect(proof.particleElementCount).toBe(2);
+  expect(proof.particleReadout.activeParticles).toBe(4);
+  expect(proof.particleReadout.activeBatches).toBe(2);
+  expect(proof.particleReadout.billboardBatches).toBe(1);
+  expect(proof.particleReadout.cubeBatches).toBe(1);
+  expect(proof.particlePerformance).toHaveLength(9);
+  for (const sample of proof.particlePerformance) {
+    expect([64, 512, 4_096]).toContain(sample.count);
+    expect(sample.simulatedFrames).toBe(8);
+    expect(sample.createMs).toBeGreaterThanOrEqual(0);
+    expect(sample.averageUpdateAndRenderMs).toBeGreaterThanOrEqual(0);
+    expect(sample.teardownMs).toBeGreaterThanOrEqual(0);
+    expect(sample.active.activeParticles).toBe(sample.count);
+    expect(sample.active.highWaterMark).toBe(sample.count);
+    expect(sample.afterTeardown.activeParticles).toBe(0);
+    expect(sample.afterTeardown.activeBatches).toBe(0);
+    if (sample.mode === 'domBillboard') {
+      expect(sample.active.activeBatches).toBe(1);
+      expect(sample.active.allocatedSlots).toBe(sample.count);
+      expect(sample.drawCallDelta).toBe(0);
+    } else {
+      const expectedBatches = Math.ceil(sample.count / 256);
+      expect(sample.active.activeBatches).toBe(expectedBatches);
+      expect(sample.active.allocatedSlots).toBe(expectedBatches * 256);
+      expect(sample.drawCallDelta).toBe(expectedBatches);
+    }
+  }
+  console.log(`PARTICLE_PERF ${JSON.stringify(proof.particlePerformance)}`);
   expect(proof.rendererStatistics.renderHandleCount).toEqual({
     scope: 'liveResident', status: 'available', value: 10,
   });

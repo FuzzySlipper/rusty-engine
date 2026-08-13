@@ -1123,13 +1123,19 @@ function particleOperation(op: string, input: unknown, path: string): void {
 }
 
 function particleDescriptor(input: unknown, path: string): void {
-  const value = record(input, path, [
-    'anchor', 'sprite', 'ratePerSecond', 'burstCount', 'lifetimeSeconds', 'velocityMin',
+  const value = recordOptional(input, path, [
+    'anchor', 'ratePerSecond', 'burstCount', 'lifetimeSeconds', 'velocityMin',
     'velocityMax', 'acceleration', 'sizeCurve', 'colorCurve', 'flipbookFramesPerSecond',
     'seed', 'maxParticles', 'visible',
-  ]);
+  ], ['visual', 'sprite', 'collision']);
   anchored(value['anchor'], `${path}.anchor`, false);
-  particleSprite(value['sprite'], `${path}.sprite`);
+  const visual = value['visual'];
+  const sprite = value['sprite'];
+  if ((visual === undefined) === (sprite === undefined)) {
+    fail(path, 'must contain exactly one of visual or legacy sprite');
+  }
+  if (visual !== undefined) particleVisual(visual, `${path}.visual`);
+  if (sprite !== undefined) particleSprite(sprite, `${path}.sprite`);
   range(value['ratePerSecond'], `${path}.ratePerSecond`, 0, 10_000);
   range(value['flipbookFramesPerSecond'], `${path}.flipbookFramesPerSecond`, 0, 120);
   nonNegativeInteger(value['burstCount'], `${path}.burstCount`);
@@ -1142,15 +1148,21 @@ function particleDescriptor(input: unknown, path: string): void {
   safeInteger(value['seed'], `${path}.seed`);
   nonNegativeInteger(value['maxParticles'], `${path}.maxParticles`);
   booleanValue(value['visible'], `${path}.visible`);
+  if (value['collision'] !== undefined) {
+    particleCollision(value['collision'], `${path}.collision`);
+  }
 }
 
 function particlePatch(input: unknown, path: string): void {
-  const value = record(input, path, [
+  const value = recordOptional(input, path, [
     'anchor', 'sprite', 'ratePerSecond', 'burstCount', 'lifetimeSeconds', 'velocityMin',
     'velocityMax', 'acceleration', 'sizeCurve', 'colorCurve', 'flipbookFramesPerSecond',
     'maxParticles', 'visible',
-  ]);
+  ], ['visual', 'collision']);
   nullable(value['anchor'], `${path}.anchor`, (item, itemPath) => anchored(item, itemPath, false));
+  if (value['visual'] !== undefined) {
+    nullable(value['visual'], `${path}.visual`, particleVisual);
+  }
   nullable(value['sprite'], `${path}.sprite`, particleSprite);
   nullable(value['ratePerSecond'], `${path}.ratePerSecond`, nonNegativeFinite);
   nullable(value['burstCount'], `${path}.burstCount`, nonNegativeInteger);
@@ -1163,6 +1175,61 @@ function particlePatch(input: unknown, path: string): void {
   nullable(value['flipbookFramesPerSecond'], `${path}.flipbookFramesPerSecond`, (item, itemPath) => range(item, itemPath, 0, 120));
   nullable(value['maxParticles'], `${path}.maxParticles`, nonNegativeInteger);
   nullable(value['visible'], `${path}.visible`, booleanValue);
+  if (value['collision'] !== undefined) {
+    nullable(value['collision'], `${path}.collision`, particleCollision);
+  }
+}
+
+function particleVisual(input: unknown, path: string): void {
+  const base = looseRecord(input, path);
+  const kind = enumeration(base['kind'], `${path}.kind`, ['billboard', 'cube'] as const);
+  if (kind === 'billboard') {
+    const value = record(input, path, ['kind', 'sprite']);
+    particleSprite(value['sprite'], `${path}.sprite`);
+  } else {
+    record(input, path, ['kind']);
+  }
+}
+
+function particleCollision(input: unknown, path: string): void {
+  const value = record(input, path, [
+    'radius', 'restitution', 'friction', 'maximumImpacts', 'sleepSpeed',
+    'limitBehavior', 'volumes',
+  ]);
+  range(value['radius'], `${path}.radius`, 0, 2);
+  range(value['restitution'], `${path}.restitution`, 0, 1);
+  range(value['friction'], `${path}.friction`, 0, 1);
+  integer(value['maximumImpacts'], `${path}.maximumImpacts`, 1, 32);
+  range(value['sleepSpeed'], `${path}.sleepSpeed`, 0, 100);
+  enumeration(value['limitBehavior'], `${path}.limitBehavior`, ['sleep', 'kill'] as const);
+  const volumes = list(value['volumes'], `${path}.volumes`);
+  if (volumes.length < 1 || volumes.length > 16) {
+    fail(`${path}.volumes`, 'must contain 1..=16 volumes');
+  }
+  volumes.forEach((volume, index) => {
+    particleCollisionVolume(volume, `${path}.volumes[${String(index)}]`);
+  });
+}
+
+function particleCollisionVolume(input: unknown, path: string): void {
+  const base = looseRecord(input, path);
+  const kind = enumeration(base['kind'], `${path}.kind`, ['plane', 'aabb'] as const);
+  if (kind === 'plane') {
+    const value = record(input, path, ['kind', 'normal', 'offset']);
+    const normal = vec3(value['normal'], `${path}.normal`);
+    finite(value['offset'], `${path}.offset`);
+    const lengthSquared = normal.reduce((sum, component) => sum + component * component, 0);
+    if (lengthSquared < 0.999 || lengthSquared > 1.001) {
+      fail(`${path}.normal`, 'must be normalized');
+    }
+    return;
+  }
+  const value = record(input, path, ['kind', 'minimum', 'maximum']);
+  const minimum = vec3(value['minimum'], `${path}.minimum`);
+  const maximum = vec3(value['maximum'], `${path}.maximum`);
+  minimum.forEach((low, index) => {
+    if (low >= maximum[index]!) fail(`${path}.maximum[${String(index)}]`, 'must exceed minimum');
+  });
 }
 
 function particleSprite(input: unknown, path: string): void {

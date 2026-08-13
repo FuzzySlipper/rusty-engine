@@ -213,6 +213,26 @@ export interface ParticleSpriteRef {
   readonly frameCount: number;
 }
 
+export type ParticleVisual =
+  | { readonly kind: 'billboard'; readonly sprite: ParticleSpriteRef }
+  | { readonly kind: 'cube' };
+
+export type ParticleCollisionLimitBehavior = 'sleep' | 'kill';
+
+export type ParticleCollisionVolume =
+  | { readonly kind: 'plane'; readonly normal: Vec3; readonly offset: number }
+  | { readonly kind: 'aabb'; readonly minimum: Vec3; readonly maximum: Vec3 };
+
+export interface ParticleCollisionDescriptor {
+  readonly radius: number;
+  readonly restitution: number;
+  readonly friction: number;
+  readonly maximumImpacts: number;
+  readonly sleepSpeed: number;
+  readonly limitBehavior: ParticleCollisionLimitBehavior;
+  readonly volumes: readonly ParticleCollisionVolume[];
+}
+
 export interface ParticleScalarKey {
   readonly age: number;
   readonly value: number;
@@ -223,9 +243,8 @@ export interface ParticleColorKey {
   readonly color: Vec4;
 }
 
-export interface ParticleEmitterDescriptor {
+interface ParticleEmitterDescriptorCommon {
   readonly anchor: ParticleAnchor;
-  readonly sprite: ParticleSpriteRef;
   readonly ratePerSecond: number;
   readonly burstCount: number;
   readonly lifetimeSeconds: readonly [number, number];
@@ -238,10 +257,23 @@ export interface ParticleEmitterDescriptor {
   readonly seed: number;
   readonly maxParticles: number;
   readonly visible: boolean;
+  /** Omitted by legacy sprite-only v1 frames. */
+  readonly collision?: ParticleCollisionDescriptor;
 }
+
+/**
+ * New frames use `visual`. The `sprite` branch remains decodable so checked
+ * v1 frames and existing downstream serialized content continue to run.
+ */
+export type ParticleEmitterDescriptor = ParticleEmitterDescriptorCommon & (
+  | { readonly visual: ParticleVisual; readonly sprite?: never }
+  | { readonly visual?: never; readonly sprite: ParticleSpriteRef }
+);
 
 export interface ParticleEmitterPatch {
   readonly anchor: ParticleAnchor | null;
+  readonly visual?: ParticleVisual | null;
+  /** Legacy patch form. Prefer `visual`. */
   readonly sprite: ParticleSpriteRef | null;
   readonly ratePerSecond: number | null;
   readonly burstCount: number | null;
@@ -254,6 +286,7 @@ export interface ParticleEmitterPatch {
   readonly flipbookFramesPerSecond: number | null;
   readonly maxParticles: number | null;
   readonly visible: boolean | null;
+  readonly collision?: ParticleCollisionDescriptor | null;
 }
 
 export type ParticleProjectionOp =

@@ -227,11 +227,14 @@ region without owning DOM or renderer code by submitting typed
 
 - billboards provide bounded localized text, values, or icons anchored to a
   world position or entity;
-- particle billboard cues provide disposable visual feedback; and
+- billboard or primitive-cube particle cues provide disposable visual feedback;
+  optional collision is limited to captured emitter-local planes/AABBs; and
 - telemetry overlays provide the fixed diagnostic presentation family.
 
-Engine privately realizes those descriptors as DOM where the current host uses
-DOM. Downstream supplies only typed Rust facts and observes typed receipts. It
+Engine privately realizes particle descriptors in the Three scene and keeps the
+DOM particle sink only as a compatibility/performance reference. Other fixed UI
+descriptors continue to use Engine-owned DOM where appropriate. Downstream
+supplies only typed Rust facts and observes typed receipts. It
 does not receive an element, selector, callback, template slot, or raw event.
 
 This remains the Rust-only path for products that do not have a product DOM.

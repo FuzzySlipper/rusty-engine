@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use render_model::{RenderAssetError, RenderAssetKind, JSON_SAFE_U64_MAX};
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
     verify_asset, PresentationAssetError, PresentationAssetLookup, PresentationOp,
@@ -38,6 +38,47 @@ pub struct ParticleSpriteRef {
     pub frame_count: u16,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ParticleVisual {
+    Billboard { sprite: ParticleSpriteRef },
+    Cube,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ParticleCollisionLimitBehavior {
+    Sleep,
+    Kill,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ParticleCollisionVolume {
+    Plane {
+        normal: [f32; 3],
+        offset: f32,
+    },
+    Aabb {
+        minimum: [f32; 3],
+        maximum: [f32; 3],
+    },
+}
+
+/// Approximate presentation-only collision captured relative to each particle's
+/// spawn anchor. It is deliberately independent of the live collision world.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ParticleCollisionDescriptor {
+    pub radius: f32,
+    pub restitution: f32,
+    pub friction: f32,
+    pub maximum_impacts: u16,
+    pub sleep_speed: f32,
+    pub limit_behavior: ParticleCollisionLimitBehavior,
+    pub volumes: Vec<ParticleCollisionVolume>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ParticleScalarKey {
@@ -52,11 +93,10 @@ pub struct ParticleColorKey {
     pub color: [f32; 4],
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParticleEmitterDescriptor {
     pub anchor: ParticleAnchor,
-    pub sprite: ParticleSpriteRef,
+    pub visual: ParticleVisual,
     pub rate_per_second: f32,
     pub burst_count: u32,
     pub lifetime_seconds: [f32; 2],
@@ -69,12 +109,107 @@ pub struct ParticleEmitterDescriptor {
     pub seed: u64,
     pub max_particles: u32,
     pub visible: bool,
+    pub collision: Option<ParticleCollisionDescriptor>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ParticleEmitterDescriptorWire {
+    anchor: ParticleAnchor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    visual: Option<ParticleVisual>,
+    /// Legacy v1 sprite form. New writers always emit `visual`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sprite: Option<ParticleSpriteRef>,
+    rate_per_second: f32,
+    burst_count: u32,
+    lifetime_seconds: [f32; 2],
+    velocity_min: [f32; 3],
+    velocity_max: [f32; 3],
+    acceleration: [f32; 3],
+    size_curve: Vec<ParticleScalarKey>,
+    color_curve: Vec<ParticleColorKey>,
+    flipbook_frames_per_second: f32,
+    seed: u64,
+    max_particles: u32,
+    visible: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    collision: Option<ParticleCollisionDescriptor>,
+}
+
+impl Serialize for ParticleEmitterDescriptor {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        ParticleEmitterDescriptorWire {
+            anchor: self.anchor.clone(),
+            visual: Some(self.visual.clone()),
+            sprite: None,
+            rate_per_second: self.rate_per_second,
+            burst_count: self.burst_count,
+            lifetime_seconds: self.lifetime_seconds,
+            velocity_min: self.velocity_min,
+            velocity_max: self.velocity_max,
+            acceleration: self.acceleration,
+            size_curve: self.size_curve.clone(),
+            color_curve: self.color_curve.clone(),
+            flipbook_frames_per_second: self.flipbook_frames_per_second,
+            seed: self.seed,
+            max_particles: self.max_particles,
+            visible: self.visible,
+            collision: self.collision.clone(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ParticleEmitterDescriptor {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = ParticleEmitterDescriptorWire::deserialize(deserializer)?;
+        let visual = match (wire.visual, wire.sprite) {
+            (Some(visual), None) => visual,
+            (None, Some(sprite)) => ParticleVisual::Billboard { sprite },
+            (Some(_), Some(_)) => {
+                return Err(D::Error::custom(
+                    "particle descriptor must not contain both visual and legacy sprite",
+                ));
+            }
+            (None, None) => {
+                return Err(D::Error::custom(
+                    "particle descriptor requires visual or legacy sprite",
+                ));
+            }
+        };
+        Ok(Self {
+            anchor: wire.anchor,
+            visual,
+            rate_per_second: wire.rate_per_second,
+            burst_count: wire.burst_count,
+            lifetime_seconds: wire.lifetime_seconds,
+            velocity_min: wire.velocity_min,
+            velocity_max: wire.velocity_max,
+            acceleration: wire.acceleration,
+            size_curve: wire.size_curve,
+            color_curve: wire.color_curve,
+            flipbook_frames_per_second: wire.flipbook_frames_per_second,
+            seed: wire.seed,
+            max_particles: wire.max_particles,
+            visible: wire.visible,
+            collision: wire.collision,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ParticleEmitterPatch {
     pub anchor: Option<ParticleAnchor>,
+    pub visual: Option<ParticleVisual>,
+    /// Legacy source/JSON compatibility. Prefer `visual` for new callers.
     pub sprite: Option<ParticleSpriteRef>,
     pub rate_per_second: Option<f32>,
     pub burst_count: Option<u32>,
@@ -87,6 +222,12 @@ pub struct ParticleEmitterPatch {
     pub flipbook_frames_per_second: Option<f32>,
     pub max_particles: Option<u32>,
     pub visible: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_nullable"
+    )]
+    pub collision: Option<Option<ParticleCollisionDescriptor>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -265,8 +406,7 @@ impl ParticleProjector {
                 if !self.seen_signals.insert(signal_id.clone()) {
                     return Err(ParticleProjectionDiagnosticCode::DuplicateSignal);
                 }
-                self.referenced_sprites
-                    .insert(descriptor.sprite.asset.clone());
+                self.track_visual(&descriptor.visual);
                 self.emitted_bursts = self.emitted_bursts.saturating_add(1);
             }
             ParticleProjectionOp::Create { handle, descriptor } => {
@@ -283,8 +423,7 @@ impl ParticleProjector {
                 {
                     return Err(ParticleProjectionDiagnosticCode::BudgetExceeded);
                 }
-                self.referenced_sprites
-                    .insert(descriptor.sprite.asset.clone());
+                self.track_visual(&descriptor.visual);
                 self.active.insert(*handle, descriptor.clone());
             }
             ParticleProjectionOp::Update { handle, patch } => {
@@ -293,6 +432,9 @@ impl ParticleProjector {
                     .get(handle)
                     .cloned()
                     .ok_or(ParticleProjectionDiagnosticCode::UnknownHandle)?;
+                if patch.visual.is_some() && patch.sprite.is_some() {
+                    return Err(ParticleProjectionDiagnosticCode::InvalidDescriptor);
+                }
                 let updated = apply_patch(current.clone(), patch);
                 self.validate_descriptor(assets, &updated)?;
                 if updated.rate_per_second <= 0.0
@@ -304,7 +446,7 @@ impl ParticleProjector {
                 {
                     return Err(ParticleProjectionDiagnosticCode::BudgetExceeded);
                 }
-                self.referenced_sprites.insert(updated.sprite.asset.clone());
+                self.track_visual(&updated.visual);
                 self.active.insert(*handle, updated);
             }
             ParticleProjectionOp::Destroy { handle } => {
@@ -334,27 +476,35 @@ impl ParticleProjector {
             || descriptor.seed > JSON_SAFE_U64_MAX
             || !validate_scalar_curve(&descriptor.size_curve)
             || !validate_color_curve(&descriptor.color_curve)
-            || descriptor.sprite.content_hash.is_empty()
+            || !validate_collision(descriptor.collision.as_ref())
         {
             return Err(ParticleProjectionDiagnosticCode::InvalidDescriptor);
         }
-        if descriptor.sprite.frame_count == 0
-            || (descriptor.sprite.frame_count > 1 && descriptor.flipbook_frames_per_second <= 0.0)
-        {
-            return Err(ParticleProjectionDiagnosticCode::InvalidDescriptor);
+        match &descriptor.visual {
+            ParticleVisual::Billboard { sprite } => {
+                if sprite.content_hash.is_empty()
+                    || sprite.frame_count == 0
+                    || (sprite.frame_count > 1 && descriptor.flipbook_frames_per_second <= 0.0)
+                {
+                    return Err(ParticleProjectionDiagnosticCode::InvalidDescriptor);
+                }
+                let kind = if sprite.frame_count == 1 {
+                    RenderAssetKind::Sprite
+                } else {
+                    RenderAssetKind::SpriteAtlas
+                };
+                verify_asset(assets, &sprite.asset, kind, Some(&sprite.content_hash))
+                    .map_err(asset_diagnostic)
+            }
+            ParticleVisual::Cube if descriptor.flipbook_frames_per_second == 0.0 => Ok(()),
+            ParticleVisual::Cube => Err(ParticleProjectionDiagnosticCode::InvalidDescriptor),
         }
-        let kind = if descriptor.sprite.frame_count == 1 {
-            RenderAssetKind::Sprite
-        } else {
-            RenderAssetKind::SpriteAtlas
-        };
-        verify_asset(
-            assets,
-            &descriptor.sprite.asset,
-            kind,
-            Some(&descriptor.sprite.content_hash),
-        )
-        .map_err(asset_diagnostic)
+    }
+
+    fn track_visual(&mut self, visual: &ParticleVisual) {
+        if let ParticleVisual::Billboard { sprite } = visual {
+            self.referenced_sprites.insert(sprite.asset.clone());
+        }
     }
 
     fn reserved_particles(&self) -> u32 {
@@ -371,8 +521,13 @@ fn apply_patch(
     if let Some(value) = &patch.anchor {
         descriptor.anchor = value.clone();
     }
+    if let Some(value) = &patch.visual {
+        descriptor.visual = value.clone();
+    }
     if let Some(value) = &patch.sprite {
-        descriptor.sprite = value.clone();
+        descriptor.visual = ParticleVisual::Billboard {
+            sprite: value.clone(),
+        };
     }
     if let Some(value) = patch.rate_per_second {
         descriptor.rate_per_second = value;
@@ -407,7 +562,45 @@ fn apply_patch(
     if let Some(value) = patch.visible {
         descriptor.visible = value;
     }
+    if let Some(value) = &patch.collision {
+        descriptor.collision.clone_from(value);
+    }
     descriptor
+}
+
+fn deserialize_present_nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
+fn validate_collision(collision: Option<&ParticleCollisionDescriptor>) -> bool {
+    let Some(collision) = collision else {
+        return true;
+    };
+    in_range(collision.radius, 0.0, 2.0)
+        && in_range(collision.restitution, 0.0, 1.0)
+        && in_range(collision.friction, 0.0, 1.0)
+        && (1..=32).contains(&collision.maximum_impacts)
+        && in_range(collision.sleep_speed, 0.0, 100.0)
+        && (1..=16).contains(&collision.volumes.len())
+        && collision.volumes.iter().all(validate_collision_volume)
+}
+
+fn validate_collision_volume(volume: &ParticleCollisionVolume) -> bool {
+    match volume {
+        ParticleCollisionVolume::Plane { normal, offset } => {
+            let length_squared = normal.iter().map(|value| value * value).sum::<f32>();
+            finite_vec3(*normal) && offset.is_finite() && (0.999..=1.001).contains(&length_squared)
+        }
+        ParticleCollisionVolume::Aabb { minimum, maximum } => {
+            finite_vec3(*minimum)
+                && finite_vec3(*maximum)
+                && minimum.iter().zip(maximum).all(|(low, high)| low < high)
+        }
+    }
 }
 
 fn validate_scalar_curve(keys: &[ParticleScalarKey]) -> bool {

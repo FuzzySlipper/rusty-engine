@@ -39,15 +39,32 @@ class FakeParticleSink implements RendererParticleBillboardSink {
   }
 }
 
+class FailingParticleSink extends FakeParticleSink {
+  readonly #failAt: number;
+
+  constructor(failAt: number) {
+    super();
+    this.#failAt = failAt;
+  }
+
+  override create(particle: RendererParticleBillboard): void {
+    super.create(particle);
+    if (this.created.length === this.#failAt) throw new Error('injected particle sink failure');
+  }
+}
+
 function descriptor(
   overrides: Partial<ParticleEmitterDescriptor> = {},
 ): ParticleEmitterDescriptor {
-  return {
+  const base: ParticleEmitterDescriptor = {
     anchor: { kind: 'world', position: [1, 2, 3] },
-    sprite: {
-      asset: 'sprite-sheet/fixture-sparks',
-      contentHash: SPRITE_HASH,
-      frameCount: 4,
+    visual: {
+      kind: 'billboard',
+      sprite: {
+        asset: 'sprite-sheet/fixture-sparks',
+        contentHash: SPRITE_HASH,
+        frameCount: 4,
+      },
     },
     ratePerSecond: 8,
     burstCount: 3,
@@ -67,8 +84,8 @@ function descriptor(
     seed: 44,
     maxParticles: 16,
     visible: true,
-    ...overrides,
   };
+  return { ...base, ...overrides } as ParticleEmitterDescriptor;
 }
 
 function operation(
@@ -196,6 +213,48 @@ void test('missing particle resources fail locally without consuming the burst',
   assert.equal(sink.created.length, 0);
 });
 
+void test('a partial sink failure rolls back the whole burst and leaves its signal retryable', async () => {
+  const sink = new FailingParticleSink(2);
+  const particles = host(sink);
+  const presentation = frame([
+    operation(0, {
+      op: 'emit',
+      signalId: 'retry-after-sink-failure',
+      descriptor: descriptor(),
+    }),
+  ]);
+
+  const failed = await particles.applyPresentation(presentation);
+  assert.equal(failed.applied, 0);
+  assert.equal(failed.diagnostics[0]?.code, 'hostFailure');
+  assert.equal(failed.readout.activeParticles, 0);
+  assert.equal(failed.readout.emittedBursts, 0);
+  assert.equal(sink.active.size, 0);
+
+  const retried = await particles.applyPresentation(presentation);
+  assert.equal(retried.applied, 1);
+  assert.equal(retried.readout.activeParticles, 3);
+  assert.equal(sink.active.size, 3);
+});
+
+void test('a retained create does not publish its handle when its sink batch fails', async () => {
+  const sink = new FailingParticleSink(2);
+  const particles = host(sink);
+  const receipt = await particles.applyPresentation(frame([
+    operation(0, {
+      op: 'create',
+      handle: particleEmitterHandle(19),
+      descriptor: descriptor(),
+    }),
+  ]));
+
+  assert.equal(receipt.applied, 0);
+  assert.equal(receipt.diagnostics[0]?.code, 'hostFailure');
+  assert.equal(receipt.readout.activeEmitters, 0);
+  assert.equal(receipt.readout.activeParticles, 0);
+  assert.equal(sink.active.size, 0);
+});
+
 void test('particle host accepts a manifest-native FNV content hash', async () => {
   const sink = new FakeParticleSink();
   const particles = host(sink);
@@ -204,10 +263,13 @@ void test('particle host accepts a manifest-native FNV content hash', async () =
       op: 'emit',
       signalId: 'fnv-particle',
       descriptor: descriptor({
-        sprite: {
-          asset: 'sprite/primary-fire-spark',
-          contentHash: SPRITE_FNV_HASH,
-          frameCount: 1,
+        visual: {
+          kind: 'billboard',
+          sprite: {
+            asset: 'sprite/primary-fire-spark',
+            contentHash: SPRITE_FNV_HASH,
+            frameCount: 1,
+          },
         },
       }),
     }),
@@ -216,6 +278,109 @@ void test('particle host accepts a manifest-native FNV content hash', async () =
   assert.equal(receipt.applied, 1);
   assert.deepEqual(receipt.diagnostics, []);
   assert.equal(sink.created.length, 3);
+});
+
+void test('cube debris sweeps against emitter-local planes without resolving sprite resources', async () => {
+  const sink = new FakeParticleSink();
+  let resourceResolutions = 0;
+  const particles = new RendererParticleHost({
+    resolveEntityPosition: () => null,
+    resolveResource: async () => {
+      resourceResolutions += 1;
+      return null;
+    },
+    sink,
+  });
+  const receipt = await particles.applyPresentation(frame([
+    operation(0, {
+      op: 'emit',
+      signalId: 'cube-bounce',
+      descriptor: descriptor({
+        visual: { kind: 'cube' },
+        burstCount: 1,
+        lifetimeSeconds: [2, 2],
+        velocityMin: [0, -10, 0],
+        velocityMax: [0, -10, 0],
+        acceleration: [0, 0, 0],
+        flipbookFramesPerSecond: 0,
+        collision: {
+          radius: 0.1,
+          restitution: 0.5,
+          friction: 0,
+          maximumImpacts: 4,
+          sleepSpeed: 0,
+          limitBehavior: 'sleep',
+          volumes: [{ kind: 'plane', normal: [0, 1, 0], offset: -1.5 }],
+        },
+      }),
+    }),
+  ]));
+
+  assert.equal(receipt.applied, 1);
+  assert.equal(resourceResolutions, 0);
+  particles.advance(0.2);
+  const afterImpact = sink.active.get(1)!;
+  assert.ok(afterImpact.position[1] >= 0.6, 'swept radius remains above the local ground plane');
+  const firstHeight = afterImpact.position[1];
+  particles.advance(0.1);
+  assert.ok(sink.active.get(1)!.position[1] > firstHeight, 'restitution sends debris upward');
+  assert.equal(particles.readout().collisionImpacts, 1);
+  assert.equal(particles.readout().collisionTests, 3);
+  assert.equal(particles.readout().highWaterMark, 1);
+  assert.equal(sink.active.get(1)!.visual.kind, 'cube');
+});
+
+void test('retained emitters can explicitly clear optional collision', async () => {
+  const sink = new FakeParticleSink();
+  const particles = host(sink);
+  const handle = particleEmitterHandle(6);
+  await particles.applyPresentation(frame([
+    operation(0, {
+      op: 'create',
+      handle,
+      descriptor: descriptor({
+        visual: { kind: 'cube' },
+        burstCount: 0,
+        ratePerSecond: 0,
+        lifetimeSeconds: [2, 2],
+        flipbookFramesPerSecond: 0,
+        collision: {
+          radius: 0.1,
+          restitution: 0.5,
+          friction: 0,
+          maximumImpacts: 4,
+          sleepSpeed: 0,
+          limitBehavior: 'sleep',
+          volumes: [{ kind: 'plane', normal: [0, 1, 0], offset: -1 }],
+        },
+      }),
+    }),
+    operation(1, {
+      op: 'update',
+      handle,
+      patch: {
+        anchor: null,
+        sprite: null,
+        ratePerSecond: 1,
+        burstCount: null,
+        lifetimeSeconds: null,
+        velocityMin: null,
+        velocityMax: null,
+        acceleration: null,
+        sizeCurve: null,
+        colorCurve: null,
+        flipbookFramesPerSecond: null,
+        maxParticles: null,
+        visible: null,
+        collision: null,
+      },
+    }),
+  ]));
+
+  particles.advance(1);
+  particles.advance(0.1);
+  assert.equal(particles.readout().activeParticles, 1);
+  assert.equal(particles.readout().collisionTests, 0);
 });
 
 void test('retained emitter create update destroy owns continuous simulation and cleanup', async () => {

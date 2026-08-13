@@ -41,6 +41,7 @@ entity, authored-scene, voxel, and presentation facts.
 - [Reconstructed voxel surfaces](../topics/voxel/reconstructed-surfaces.md)
 - [Chunk-granular voxel mesh updates](../topics/voxel/chunk-granular-updates.md)
 - [Structured world indicators](../topics/world-indicators.md)
+- [Three scene particles](../topics/three-scene-particles.md)
 - [Textured voxel campaign closeout](../textured-voxel-campaign-closeout.md)
 
 ## Public downstream surfaces
@@ -56,6 +57,10 @@ entity, authored-scene, voxel, and presentation facts.
   content and adds bounded structured indicators under the same stable handle
   lifecycle. Exact ranges, assets, local meter/status identities, and optional
   layout policy validate before fail-atomic domain or mixed-domain publication.
+- `render-presentation::ParticleProjector` validates seeded billboard or cube
+  emitters and optional bounded emitter-local planes/AABBs. Legacy serialized
+  `sprite` descriptors decode into the billboard visual; new output uses the
+  discriminated `visual` field.
 - Independently ordered projections may stamp a frame with one stable stream,
   monotonic revision, and exact operation count. Neutral and concrete retained
   application reject stale or clipped stamped frames fail-atomically.

@@ -52,6 +52,49 @@ void test('strict TypeScript decoders accept the committed Rust render fixtures'
   assert.equal(billboard.op.descriptor.content.kind, 'structured');
 });
 
+void test('particle decoding admits cubes, local collision, and the legacy sprite shape', () => {
+  const cube = mutableFixture('presentation-frame-v1.json');
+  const cubeOps = cube['ops'] as Array<Record<string, unknown>>;
+  const cubeOperation = cubeOps.find((operation) => operation['domain'] === 'particle')!;
+  const cubeOp = cubeOperation['op'] as Record<string, unknown>;
+  const cubeDescriptor = cubeOp['descriptor'] as Record<string, unknown>;
+  cubeDescriptor['visual'] = { kind: 'cube' };
+  cubeDescriptor['flipbookFramesPerSecond'] = 0;
+  cubeDescriptor['collision'] = {
+    radius: 0.1,
+    restitution: 0.45,
+    friction: 0.2,
+    maximumImpacts: 4,
+    sleepSpeed: 0.1,
+    limitBehavior: 'sleep',
+    volumes: [
+      { kind: 'plane', normal: [0, 1, 0], offset: -1 },
+      { kind: 'aabb', minimum: [-1, -1, -1], maximum: [1, 1, 1] },
+    ],
+  };
+  const decodedCube = decodePresentationFrameDiff(cube);
+  assert.equal(decodedCube.ops[2]?.domain, 'particle');
+
+  const legacy = mutableFixture('presentation-frame-v1.json');
+  const legacyOperation = (legacy['ops'] as Array<Record<string, unknown>>)
+    .find((operation) => operation['domain'] === 'particle')!;
+  const legacyOp = legacyOperation['op'] as Record<string, unknown>;
+  const legacyDescriptor = legacyOp['descriptor'] as Record<string, unknown>;
+  const visual = legacyDescriptor['visual'] as Record<string, unknown>;
+  legacyDescriptor['sprite'] = visual['sprite'];
+  delete legacyDescriptor['visual'];
+  assert.equal(decodePresentationFrameDiff(legacy).ops[2]?.domain, 'particle');
+
+  legacyDescriptor['visual'] = { kind: 'cube' };
+  assert.throws(() => decodePresentationFrameDiff(legacy), /exactly one of visual or legacy sprite/u);
+
+  const collision = cubeDescriptor['collision'] as Record<string, unknown>;
+  collision['volumes'] = [];
+  assert.throws(() => decodePresentationFrameDiff(cube), /must contain 1\.\.=16 volumes/u);
+  collision['volumes'] = [{ kind: 'plane', normal: [0, 2, 0], offset: 0 }];
+  assert.throws(() => decodePresentationFrameDiff(cube), /must be normalized/u);
+});
+
 void test('structured indicator meters reject finite but unbounded magnitudes', () => {
   const frame = mutableFixture('world-indicator-frame-v1.json');
   const ops = frame['ops'] as Array<Record<string, unknown>>;

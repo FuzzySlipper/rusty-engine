@@ -8,7 +8,6 @@ import {
   RendererAnimationHost,
   RendererAudioHost,
   RendererBillboardHost,
-  RendererDomParticleBillboardSink,
   RendererDomTelemetryOverlaySink,
   RendererLiveTelemetryCollector,
   RendererParticleHost,
@@ -19,6 +18,7 @@ import {
   type RendererSurface,
   type RendererSurfaceCameraPose,
   type RendererSurfacePickRequest,
+  type RendererParticleSceneSink,
 } from '@rusty-engine/renderer-host';
 
 const BRIDGE_VERSION = 'rusty_renderer_webview_bridge.v1';
@@ -92,7 +92,7 @@ export function installRendererWebviewBridge(): void {
   let audio: RendererAudioHost | null = null;
   let billboard: RendererBillboardHost | null = null;
   let particle: RendererParticleHost | null = null;
-  let particleSink: RendererDomParticleBillboardSink | null = null;
+  let particleSink: RendererParticleSceneSink | null = null;
   let telemetrySink: RendererDomTelemetryOverlaySink | null = null;
   const objectUrls = new Set<string>();
   let state: RendererWebviewBridgeState = 'mounting';
@@ -344,10 +344,7 @@ export function installRendererWebviewBridge(): void {
         return { bytes, url };
       },
     });
-    particleSink = new RendererDomParticleBillboardSink({
-      container: overlays,
-      projectWorld: (position) => requireSurface().projectWorldPoint(position),
-    });
+    particleSink = surface.createParticleSink();
     particle = new RendererParticleHost({
       resolveEntityPosition: () => null,
       resolveResource: async (sprite) => {

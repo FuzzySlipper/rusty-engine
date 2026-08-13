@@ -77,10 +77,12 @@ fn particle_descriptor() -> ParticleEmitterDescriptor {
         anchor: ParticleAnchor::World {
             position: [1.0, 2.0, 3.0],
         },
-        sprite: ParticleSpriteRef {
-            asset: "sprite-sheet/sparks".into(),
-            content_hash: "dd".into(),
-            frame_count: 4,
+        visual: ParticleVisual::Billboard {
+            sprite: ParticleSpriteRef {
+                asset: "sprite-sheet/sparks".into(),
+                content_hash: "dd".into(),
+                frame_count: 4,
+            },
         },
         rate_per_second: 12.0,
         burst_count: 8,
@@ -112,6 +114,7 @@ fn particle_descriptor() -> ParticleEmitterDescriptor {
         seed: 44,
         max_particles: 64,
         visible: true,
+        collision: None,
     }
 }
 
@@ -369,6 +372,56 @@ fn particle_curves_signal_ids_and_reservation_budget_fail_closed() {
     );
     projector.reset();
     assert_eq!(projector.readout().emitted_bursts, 0);
+}
+
+#[test]
+fn cube_particles_validate_local_collision_without_an_asset_reference() {
+    let mut descriptor = particle_descriptor();
+    descriptor.visual = ParticleVisual::Cube;
+    descriptor.flipbook_frames_per_second = 0.0;
+    descriptor.collision = Some(ParticleCollisionDescriptor {
+        radius: 0.1,
+        restitution: 0.5,
+        friction: 0.25,
+        maximum_impacts: 4,
+        sleep_speed: 0.1,
+        limit_behavior: ParticleCollisionLimitBehavior::Sleep,
+        volumes: vec![ParticleCollisionVolume::Plane {
+            normal: [0.0, 1.0, 0.0],
+            offset: -1.0,
+        }],
+    });
+    let mut projector = ParticleProjector::default();
+    projector
+        .project(
+            &BTreeMap::<String, ResolvedRenderAsset>::new(),
+            PresentationOpMeta::new(0),
+            ParticleProjectionOp::Emit {
+                signal_id: "cube:1".into(),
+                descriptor: descriptor.clone(),
+            },
+        )
+        .unwrap();
+    assert_eq!(projector.readout().referenced_sprites, 0);
+
+    descriptor.collision.as_mut().unwrap().volumes[0] = ParticleCollisionVolume::Plane {
+        normal: [0.0, 2.0, 0.0],
+        offset: 0.0,
+    };
+    assert_eq!(
+        projector
+            .project(
+                &BTreeMap::<String, ResolvedRenderAsset>::new(),
+                PresentationOpMeta::new(1),
+                ParticleProjectionOp::Emit {
+                    signal_id: "cube:invalid".into(),
+                    descriptor,
+                },
+            )
+            .unwrap_err()
+            .code,
+        ParticleProjectionDiagnosticCode::InvalidDescriptor
+    );
 }
 
 #[test]

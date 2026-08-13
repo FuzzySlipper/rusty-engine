@@ -95,10 +95,13 @@
               0.0
             ]
           },
-          "sprite": {
-            "asset": "sprite-sheet/sparks",
-            "contentHash": "dd",
-            "frameCount": 4
+          "visual": {
+            "kind": "billboard",
+            "sprite": {
+              "asset": "sprite-sheet/sparks",
+              "contentHash": "dd",
+              "frameCount": 4
+            }
           },
           "ratePerSecond": 8.0,
           "burstCount": 4,

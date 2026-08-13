@@ -51,10 +51,12 @@ fn particle() -> ParticleEmitterDescriptor {
         anchor: ParticleAnchor::World {
             position: [0.0, 1.0, 0.0],
         },
-        sprite: ParticleSpriteRef {
-            asset: "sprite-sheet/sparks".into(),
-            content_hash: "dd".into(),
-            frame_count: 4,
+        visual: ParticleVisual::Billboard {
+            sprite: ParticleSpriteRef {
+                asset: "sprite-sheet/sparks".into(),
+                content_hash: "dd".into(),
+                frame_count: 4,
+            },
         },
         rate_per_second: 8.0,
         burst_count: 4,
@@ -86,6 +88,7 @@ fn particle() -> ParticleEmitterDescriptor {
         seed: 7,
         max_particles: 32,
         visible: true,
+        collision: None,
     }
 }
 
@@ -324,6 +327,24 @@ fn every_presentation_operation_survives_the_json_border() {
 }
 
 #[test]
+fn particle_patch_distinguishes_omitted_collision_from_explicit_clear() {
+    let omitted = ParticleEmitterPatch::default();
+    let omitted_json = serde_json::to_value(&omitted).unwrap();
+    assert!(omitted_json.get("collision").is_none());
+
+    let clear = ParticleEmitterPatch {
+        collision: Some(None),
+        ..ParticleEmitterPatch::default()
+    };
+    let clear_json = serde_json::to_value(&clear).unwrap();
+    assert_eq!(clear_json.get("collision"), Some(&serde_json::Value::Null));
+    assert_eq!(
+        serde_json::from_value::<ParticleEmitterPatch>(clear_json).unwrap(),
+        clear
+    );
+}
+
+#[test]
 fn frame_rejects_sequence_gaps_and_unknown_fields() {
     let error = PresentationFrameDiff::try_from_ops(vec![PresentationOp::Audio {
         meta: PresentationOpMeta::new(1),
@@ -388,6 +409,28 @@ fn checked_in_fixture_is_the_canonical_cross_language_frame() {
     let decoded = PresentationFrameDiff::decode_json(fixture).unwrap();
     assert_eq!(decoded, fixture_frame());
     assert_eq!(decoded.encode_json().unwrap(), fixture.trim_end());
+}
+
+#[test]
+fn legacy_sprite_descriptor_decodes_and_new_writers_emit_visual() {
+    let legacy = r#"{
+      "anchor":{"kind":"world","position":[0.0,1.0,0.0]},
+      "sprite":{"asset":"sprite-sheet/sparks","contentHash":"dd","frameCount":4},
+      "ratePerSecond":8.0,"burstCount":4,"lifetimeSeconds":[0.2,0.6],
+      "velocityMin":[-1.0,1.0,-1.0],"velocityMax":[1.0,2.0,1.0],
+      "acceleration":[0.0,-4.0,0.0],
+      "sizeCurve":[{"age":0.0,"value":0.25},{"age":1.0,"value":0.0}],
+      "colorCurve":[{"age":0.0,"color":[1.0,0.8,0.2,1.0]},{"age":1.0,"color":[1.0,0.2,0.0,0.0]}],
+      "flipbookFramesPerSecond":12.0,"seed":7,"maxParticles":32,"visible":true
+    }"#;
+    let descriptor: ParticleEmitterDescriptor = serde_json::from_str(legacy).unwrap();
+    assert!(matches!(
+        descriptor.visual,
+        ParticleVisual::Billboard { .. }
+    ));
+    let encoded = serde_json::to_value(descriptor).unwrap();
+    assert!(encoded.get("visual").is_some());
+    assert!(encoded.get("sprite").is_none());
 }
 
 #[test]

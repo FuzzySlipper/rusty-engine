@@ -53,6 +53,9 @@ compiled artifact, and Rust webview host/resource lifecycle.
   - `three-renderer.ts` owns the frozen CPU visibility readout: effective retained
     visibility and camera-frustum membership per handle. It explicitly reports
     GPU occlusion as `notMeasured` rather than inventing a depth authority.
+  - `particle-sink.ts` owns pooled `Points` billboard batches and
+    `InstancedMesh` cube batches. `RendererSurface.createParticleSink` hides
+    Three objects from the host and downstream lifecycle.
 - [`render/packages/renderer-host/src`](../../render/packages/renderer-host/src)
   - `animated-mesh-capture.ts` owns deterministic PNG/contact-sheet encoding
     over an already-mounted `RendererSurface`; it does not load assets or own a
@@ -72,6 +75,7 @@ compiled artifact, and Rust webview host/resource lifecycle.
 - [Runtime voxel surface textures](../topics/voxel/voxel-surface-textures.md)
 - [Textured voxel campaign closeout](../textured-voxel-campaign-closeout.md)
 - [Structured world indicators](../topics/world-indicators.md)
+- [Three scene particles](../topics/three-scene-particles.md)
 
 ## Public downstream surfaces
 

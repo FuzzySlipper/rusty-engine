@@ -574,6 +574,15 @@ hashes, and provenance envelopes do not exist. Every projector can validate a co
 batch, while `PresentationProjectorSet` provides one fail-atomic mixed-domain frame boundary.
 Resource checks use only immutable kind/content identity supplied by the caller.
 
+Particle visuals are a closed billboard-or-cube choice. Billboard sprites retain exact content
+identity and flipbook facts; primitive cubes need no asset. Optional collision is a bounded set of
+planes and AABBs captured in emitter-local coordinates at spawn and simulated only as disposable
+presentation. It does not query `engine-spatial`, publish contacts, or feed results back to gameplay.
+The shared host advances seeded particles and swept sphere proxies, while the Three sink pools
+billboards into `Points` batches and cubes into `InstancedMesh` batches behind `RendererSurface`.
+The legacy serialized `sprite` descriptor remains readable, but new Rust serialization emits the
+discriminated `visual` form. See [Three scene particles](topics/three-scene-particles.md).
+
 World indicators remain in that billboard owner rather than creating a second
 UI protocol. A structured billboard can compose bounded localized label/icon,
 neutral ranged meters, and status cues under one stable handle. Exact finite

@@ -12,8 +12,8 @@ use crate::{
     AudioSourceDescriptor, AudioSourcePatch, BillboardAnchor, BillboardContent,
     BillboardDescriptor, BillboardFontRef, BillboardLayoutPolicy, BillboardLayoutSizing,
     BillboardMeter, BillboardPatch, BillboardProjectionOp, BillboardStyle, BillboardTextureRef,
-    ParticleAnchor, ParticleEmitterDescriptor, ParticleEmitterPatch, ParticleProjectionOp,
-    TelemetryOverlayProjectionOp,
+    ParticleAnchor, ParticleCollisionVolume, ParticleEmitterDescriptor, ParticleEmitterPatch,
+    ParticleProjectionOp, TelemetryOverlayProjectionOp,
 };
 
 pub const PRESENTATION_FRAME_SCHEMA_VERSION: u32 = 1;
@@ -552,7 +552,11 @@ fn validate_particle(
     sequence: u32,
 ) -> Result<(), PresentationFrameError> {
     json_safe(descriptor.seed, sequence, "particle.seed")?;
-    validate_particle_anchor(&descriptor.anchor, sequence)
+    validate_particle_anchor(&descriptor.anchor, sequence)?;
+    if let Some(collision) = &descriptor.collision {
+        validate_particle_collision(collision, sequence)?;
+    }
+    Ok(())
 }
 
 fn validate_particle_patch(
@@ -562,7 +566,42 @@ fn validate_particle_patch(
     patch
         .anchor
         .as_ref()
-        .map_or(Ok(()), |anchor| validate_particle_anchor(anchor, sequence))
+        .map_or(Ok(()), |anchor| validate_particle_anchor(anchor, sequence))?;
+    if let Some(Some(collision)) = &patch.collision {
+        validate_particle_collision(collision, sequence)?;
+    }
+    Ok(())
+}
+
+fn validate_particle_collision(
+    collision: &crate::ParticleCollisionDescriptor,
+    sequence: u32,
+) -> Result<(), PresentationFrameError> {
+    finite_f32(collision.radius, sequence, "particle.collision.radius")?;
+    finite_f32(
+        collision.restitution,
+        sequence,
+        "particle.collision.restitution",
+    )?;
+    finite_f32(collision.friction, sequence, "particle.collision.friction")?;
+    finite_f32(
+        collision.sleep_speed,
+        sequence,
+        "particle.collision.sleepSpeed",
+    )?;
+    for volume in &collision.volumes {
+        match volume {
+            ParticleCollisionVolume::Plane { normal, offset } => {
+                finite_values(*normal, sequence, "particle.collision.plane.normal")?;
+                finite_f32(*offset, sequence, "particle.collision.plane.offset")?;
+            }
+            ParticleCollisionVolume::Aabb { minimum, maximum } => {
+                finite_values(*minimum, sequence, "particle.collision.aabb.minimum")?;
+                finite_values(*maximum, sequence, "particle.collision.aabb.maximum")?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_particle_anchor(

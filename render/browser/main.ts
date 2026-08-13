@@ -26,6 +26,8 @@ import {
   mountRendererSurface,
   mountRendererSurfaceWithResources,
   type RendererSurfaceAutomaticSubmissionPacingSample,
+  type RendererParticleSinkReadout,
+  type RendererParticleSink,
   type RendererSurface,
   type RendererSurfaceStatisticsSample,
 } from '@rusty-engine/renderer-host';
@@ -85,7 +87,8 @@ interface BrowserProof {
     readonly tabIndex: number;
     readonly touchAction: string;
   };
-  readonly particleElementCount: number;
+  readonly particleReadout: RendererParticleSinkReadout;
+  readonly particlePerformance: readonly ParticlePerformanceSample[];
   readonly pickHandle: number | null;
   readonly presentationDiagnostics: readonly string[];
   readonly projectionInsideViewport: boolean;
@@ -145,6 +148,18 @@ interface BrowserProof {
   };
 }
 
+interface ParticlePerformanceSample {
+  readonly mode: 'domBillboard' | 'threeBillboard' | 'instancedCube';
+  readonly count: number;
+  readonly simulatedFrames: number;
+  readonly createMs: number;
+  readonly averageUpdateAndRenderMs: number;
+  readonly teardownMs: number;
+  readonly drawCallDelta: number | null;
+  readonly active: RendererParticleSinkReadout;
+  readonly afterTeardown: RendererParticleSinkReadout;
+}
+
 declare global {
   interface Window {
     __rustyRenderDispose?: () => Promise<void>;
@@ -172,6 +187,7 @@ async function main(): Promise<void> {
   );
   const spriteHash = await sha256(spriteBytes.buffer);
   const spriteUrl = URL.createObjectURL(new Blob([spriteBytes], { type: 'image/svg+xml' }));
+  await decodeBrowserImage(spriteUrl);
   const audioBytes = waveFixture();
   const audioHash = await sha256(audioBytes);
 
@@ -296,10 +312,7 @@ async function main(): Promise<void> {
     projectWorld: (position) => ({ ...surface.projectWorldPoint(position), occluded: false }),
     resolveEntityPosition: () => null,
   });
-  const particleSink = new RendererDomParticleBillboardSink({
-    container: overlays,
-    projectWorld: surface.projectWorldPoint,
-  });
+  const particleSink = surface.createParticleSink();
   const particle = new RendererParticleHost({
     resolveEntityPosition: () => null,
     resolveResource: async () => ({ bytes: spriteBytes.buffer.slice(0), url: spriteUrl }),
@@ -805,6 +818,7 @@ async function main(): Promise<void> {
   const projection = surface.projectionSnapshot();
   const visibilityReadout = surface.visibilityReadout();
   const voxelNode = surface.projectionSnapshot().nodes.find((node) => node.handle === renderHandle(108));
+  const particlePerformance = await measureParticlePerformance(surface, overlays, spriteUrl);
   const proof: BrowserProof = {
     animatedCapture: {
       asset: animatedCapture.manifest.asset,
@@ -857,7 +871,8 @@ async function main(): Promise<void> {
       retainedLightCount: lightingSurface.lightingReadout().retainedLights.length,
     },
     rejectedMountCleanup,
-    particleElementCount: particleSink.activeCount,
+    particleReadout: particleSink.readout(),
+    particlePerformance,
     pickHandle: pick.hint?.handle ?? null,
     presentationDiagnostics: presentation.diagnostics.map((diagnostic) => diagnostic.code),
     projectionInsideViewport: projected.insideViewport,
@@ -959,10 +974,111 @@ async function main(): Promise<void> {
   };
 }
 
+async function measureParticlePerformance(
+  surface: RendererSurface,
+  overlays: HTMLElement,
+  spriteUrl: string,
+): Promise<readonly ParticlePerformanceSample[]> {
+  const samples: ParticlePerformanceSample[] = [];
+  const counts = [64, 512, 4_096] as const;
+  const modes = ['domBillboard', 'threeBillboard', 'instancedCube'] as const;
+  let submissionTime = 10_000;
+
+  for (const count of counts) {
+    for (const mode of modes) {
+      const sink: RendererParticleSink & {
+        readout(): RendererParticleSinkReadout;
+        dispose(): void;
+      } = mode === 'domBillboard'
+        ? new RendererDomParticleBillboardSink({
+            container: overlays,
+            projectWorld: (position) => ({
+              depth: position[2],
+              insideViewport: true,
+              xPixels: 320 + position[0],
+              yPixels: 180 - position[1],
+            }),
+          })
+        : surface.createParticleSink();
+      const visual = mode === 'instancedCube'
+        ? { kind: 'cube' as const }
+        : { kind: 'billboard' as const, frameCount: 1, spriteUrl };
+      const baselineDrawCalls = surface.renderOnce(submissionTime += 1)
+        .statistics.drawCallCount.value;
+      const createStarted = performance.now();
+      for (let index = 0; index < count; index += 1) {
+        sink.create({
+          id: index + 1,
+          position: [(index % 64) * 0.05, Math.floor(index / 64) * 0.05, -5],
+          size: 0.08,
+          color: [0.3, 0.8, 1, 1],
+          frameIndex: 0,
+          visual,
+        });
+      }
+      const createMs = performance.now() - createStarted;
+      const active = sink.readout();
+      if (mode === 'threeBillboard') await waitAnimationFrames(2);
+      if (mode === 'domBillboard') void overlays.offsetHeight;
+      let activeDrawCalls = surface.renderOnce(submissionTime += 1)
+        .statistics.drawCallCount.value;
+      const frameStarted = performance.now();
+      const simulatedFrames = 8;
+      for (let frame = 1; frame <= simulatedFrames; frame += 1) {
+        for (let index = 0; index < count; index += 1) {
+          sink.update({
+            id: index + 1,
+            position: [
+              (index % 64) * 0.05,
+              Math.floor(index / 64) * 0.05 - frame * 0.01,
+              -5,
+            ],
+            size: 0.08 - frame * 0.004,
+            color: [0.3, 0.8, 1, 1 - frame / (simulatedFrames + 1)],
+            frameIndex: 0,
+            visual,
+          });
+        }
+        if (mode === 'domBillboard') {
+          void overlays.offsetHeight;
+        }
+        activeDrawCalls = surface.renderOnce(submissionTime += 1).statistics.drawCallCount.value;
+      }
+      const averageUpdateAndRenderMs =
+        (performance.now() - frameStarted) / simulatedFrames;
+      const teardownStarted = performance.now();
+      for (let index = 0; index < count; index += 1) sink.destroy(index + 1);
+      sink.dispose();
+      const teardownMs = performance.now() - teardownStarted;
+      const afterTeardown = sink.readout();
+      samples.push({
+        mode,
+        count,
+        simulatedFrames,
+        createMs,
+        averageUpdateAndRenderMs,
+        teardownMs,
+        drawCallDelta: baselineDrawCalls === null || activeDrawCalls === null
+          ? null
+          : activeDrawCalls - baselineDrawCalls,
+        active,
+        afterTeardown,
+      });
+    }
+  }
+  return samples;
+}
+
 async function waitAnimationFrames(count: number): Promise<void> {
   for (let index = 0; index < count; index += 1) {
     await new Promise<void>((resolve) => globalThis.requestAnimationFrame(() => resolve()));
   }
+}
+
+async function decodeBrowserImage(url: string): Promise<void> {
+  const image = new Image();
+  image.src = url;
+  await image.decode();
 }
 
 async function waitForAnimationFrame(
@@ -1174,8 +1290,44 @@ function browserPresentationFrame(audioHash: string, spriteHash: string): Presen
         },
       },
       {
-        domain: 'telemetryOverlay',
+        domain: 'particle',
         meta: { sequence: 4 },
+        op: {
+          op: 'emit',
+          signalId: 'browser-proof-cubes',
+          descriptor: {
+            anchor: { kind: 'world', position: [1, 1.4, -5] },
+            visual: { kind: 'cube' },
+            ratePerSecond: 0,
+            burstCount: 2,
+            lifetimeSeconds: [2, 2],
+            velocityMin: [-0.5, -8, -0.5],
+            velocityMax: [0.5, -7, 0.5],
+            acceleration: [0, -4, 0],
+            sizeCurve: [{ age: 0, value: 0.18 }, { age: 1, value: 0.05 }],
+            colorCurve: [
+              { age: 0, color: [0.35, 0.8, 1, 1] },
+              { age: 1, color: [0.1, 0.3, 1, 0] },
+            ],
+            flipbookFramesPerSecond: 0,
+            seed: 8,
+            maxParticles: 4,
+            visible: true,
+            collision: {
+              radius: 0.09,
+              restitution: 0.45,
+              friction: 0.2,
+              maximumImpacts: 4,
+              sleepSpeed: 0.15,
+              limitBehavior: 'sleep',
+              volumes: [{ kind: 'plane', normal: [0, 1, 0], offset: -0.35 }],
+            },
+          },
+        },
+      },
+      {
+        domain: 'telemetryOverlay',
+        meta: { sequence: 5 },
         op: {
           op: 'create',
           handle: telemetryOverlayHandle(1),

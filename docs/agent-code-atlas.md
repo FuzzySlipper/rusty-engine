@@ -29,6 +29,10 @@ Structured health/resource bars, nameplates, prompts, status cues, deterministic
 screen layout, and pointer-transparent DOM realization are indexed in
 [structured world indicators](topics/world-indicators.md).
 
+Pooled billboard and cube particles, emitter-local approximate collision,
+compatibility, and measured browser limits are indexed in
+[Three scene particles](topics/three-scene-particles.md).
+
 Bounded canonical chunk admission, replacement, eviction, leases, edit-history
 rebasing, and scale characterization are indexed in
 [canonical voxel chunk residency](topics/voxel/chunk-residency.md).
@@ -86,6 +90,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 | Recipe planning and materialization into authored scenes | [Environment authoring](code-map/environment-authoring.md) |
 | Versioned Rust render frames, host contracts, projection, and complete facade | [Rust render model and projection](code-map/rust-render-model-and-projection.md) |
 | Structured world indicators, deterministic screen layout, and DOM accessibility | [Structured world indicators](topics/world-indicators.md) |
+| Pooled billboard/cube particles and emitter-local approximate collision | [Three scene particles](topics/three-scene-particles.md), [Rust render model and projection](code-map/rust-render-model-and-projection.md), and [Renderer workspace and hosts](code-map/renderer-workspace-and-hosts.md) |
 | Engine-private TypeScript retained projection, compiled artifact, Three backend, and webview host | [Renderer workspace and hosts](code-map/renderer-workspace-and-hosts.md) |
 | First-party Angular/Nx authoring product and adapter boundary | [Studio](code-map/studio.md) |
 | Read-only structured inspection and diagnostics | [Inspection and diagnostics](code-map/inspection-and-diagnostics.md) |
@@ -101,6 +106,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 - [Reconstructed voxel surfaces](topics/voxel/reconstructed-surfaces.md)
 - [Chunk-granular voxel mesh updates](topics/voxel/chunk-granular-updates.md)
 - [Structured world indicators](topics/world-indicators.md)
+- [Three scene particles](topics/three-scene-particles.md)
 - [Canonical voxel chunk residency](topics/voxel/chunk-residency.md)
 - [FPS character controller design](topics/fps-character-controller-proposal.md)
 - [FPS character controller survey](topics/fps-character-controller-survey.md)

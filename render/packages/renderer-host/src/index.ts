@@ -183,8 +183,13 @@ export type {
   RendererParticleEntityPositionResolver,
   RendererParticleFrameReceipt,
   RendererParticleHostOptions,
+  RendererParticleInstance,
+  RendererParticlePreparedVisual,
   RendererParticleResource,
   RendererParticleResourceResolver,
+  RendererParticleSceneSink,
+  RendererParticleSink,
+  RendererParticleSinkReadout,
 } from './particle-host.js';
 
 export {
