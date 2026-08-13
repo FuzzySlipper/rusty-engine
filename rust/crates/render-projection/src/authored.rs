@@ -36,6 +36,10 @@ impl ProjectionAvailability {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+// Appearance values are low-volume authored candidates. Keeping the complete
+// sprite descriptor inline preserves the existing direct composition API and
+// avoids a mandatory heap allocation in every unlit/default sprite.
+#[allow(clippy::large_enum_variant)]
 pub enum Appearance {
     Primitive {
         geometry: Geometry,
