@@ -76,6 +76,8 @@ export interface RustyApplicationRendererOptions {
     readonly pixelRatio?: number;
     /** Gameplay-owned entity positions used only to resolve neutral billboard anchors. */
     readonly resolveIndicatorEntityPosition?: (entity: number) => readonly [number, number, number] | null;
+    /** Gameplay-owned entity positions used only to resolve neutral particle anchors. */
+    readonly resolveParticleEntityPosition?: (entity: number) => readonly [number, number, number] | null;
 }
 export interface RustyApplicationHostOptions {
     readonly root: HTMLElement;
