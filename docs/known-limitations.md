@@ -18,7 +18,11 @@ downstream repositories.
 - **Detection:** Run `./scripts/verify-render.sh`; strict cross-language tests
   cover admission and nullable replacement, backend tests cover refresh and
   disposal, and the Chromium framebuffer proof observes translation stability,
-  rotation change, and clear-color restoration.
+  rotation change, and clear-color restoration. Rusty Engine Demo exact
+  revision `3eb9e05830fd82ba861d8ae9f8c1d578ec90d297` supplies the canonical E1M1
+  consumer proof: downstream Rust publishes the content-addressed original
+  `SKY1` PNG and emits public `DefineTexture` then `SetSkyBackground` operations
+  without renderer reach-through or geometry fallback.
 - **Follow-up:** Extend representation or lighting only with a concrete
   consumer that cannot use the single-panorama contract.
 - **Last reviewed:** 2026-08-14 / codex
