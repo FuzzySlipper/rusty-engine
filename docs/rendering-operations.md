@@ -143,6 +143,26 @@ disposable offsets as ordinary retained diffs. Apply those frames through `Rende
 Camera synchronization, `start`, `stop`, `renderOnce`, resize, reset, picking, and `dispose` stay on
 that one surface. A rejected frame leaves both the neutral projection and backend unchanged.
 
+### Authored sky background
+
+Publish an admitted retained texture before selecting it as the sky:
+
+```ts
+{
+  schemaVersion: 1,
+  ops: [
+    { op: 'defineTexture', texture: admittedPanorama },
+    { op: 'setSkyBackground', background: { texture: admittedPanorama.id } },
+  ],
+}
+```
+
+`admittedPanorama` is one content-hashed PNG payload with a 2:1 aspect ratio,
+`srgb` color space, and `clamp` wrapping. Emit `background: null` to return to
+the configured clear color. The sky is camera-rotation-relative only and is
+excluded from depth, world handles, picks, collision, lighting, and reflection
+state. Texture replacement refreshes it without changing authored identity.
+
 ### Bounded multi-view composition
 
 `RendererSurfaceOptions.viewComposition` and `surface.configureViews(...)` accept schema-1
@@ -419,6 +439,9 @@ claim. Downstream Den task #6378 and its checked evidence artifact own the produ
 
 - Three/WebGL is the only implemented GPU backend. The renderer-neutral frame and projection layers
   leave room for another backend, but no WebGPU implementation is claimed.
+- Authored sky presentation is one equirectangular panorama. Cubemaps, HDR
+  environment lighting, reflections, exposure policy, and post-processing are
+  outside this contract.
 - JavaScript-facing Rust integers are limited to `0..=2^53-1`; both Rust encoding and TypeScript
   decoding reject larger identities rather than silently losing precision.
 - `RendererSurfaceOptions.lighting` schema 1 independently selects `neutral` or `disabled` default

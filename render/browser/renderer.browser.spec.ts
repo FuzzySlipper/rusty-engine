@@ -379,6 +379,12 @@ test('shared host realizes retained, presentation, and inspection families in a 
     'high/low/low',
     'low/high/low',
   ]);
+  expect(proof.skyBackgroundPixels.translated).toEqual(proof.skyBackgroundPixels.initial);
+  expect(proof.skyBackgroundPixels.rotated).not.toEqual(proof.skyBackgroundPixels.initial);
+  expect(proof.skyBackgroundPixels.initial[3]).toBe(255);
+  expect(proof.skyBackgroundPixels.rotated.slice(0, 3))
+    .not.toEqual(proof.skyBackgroundPixels.initial.slice(0, 3));
+  expect(proof.skyBackgroundPixels.cleared).toEqual([18, 52, 86, 255]);
   expect(proof.spriteBillboardPixels.initialSpherical)
     .toEqual(proof.spriteBillboardPixels.initialCylindrical);
   const initialBottomHalf = proof.spriteBillboardPixels.initialSpherical.slice(0, 16 * 32);

@@ -64,15 +64,30 @@ fn metadata(source: u64, label: &str) -> RenderMetadata {
 }
 
 fn every_retained_operation_frame() -> RenderFrameDiff {
+    let texture_bytes = vec![
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 244, 34, 127, 138, 0, 0, 0, 15, 73, 68, 65, 84, 120, 156, 99, 248, 207, 0, 68,
+        255, 25, 26, 0, 16, 121, 3, 126, 153, 113, 48, 89, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96,
+        130,
+    ];
+    let texture_hash = "sha256:a58d5395a03945e56638dba7ae6158b2fdaf013610a798c059a6d88231a052ae";
     let texture = TextureDescriptor {
         id: "texture/checker".to_string(),
         width: 2,
-        height: 2,
+        height: 1,
         filter: TextureFilter::Nearest,
-        wrap: TextureWrap::Repeat,
-        content_hash: Some("cafe".to_string()),
+        wrap: TextureWrap::Clamp,
+        content_hash: Some(texture_hash.to_string()),
         version: 1,
-        payload: None,
+        payload: Some(TexturePayloadDescriptor {
+            encoding: TextureEncoding::PngRgba8,
+            color_space: TextureColorSpace::Srgb,
+            content_hash: texture_hash.to_string(),
+            byte_length: texture_bytes.len() as u32,
+            source: TexturePayloadSource::Inline {
+                encoded_bytes: texture_bytes,
+            },
+        }),
     };
     let atlas = SpriteAtlasDescriptor {
         id: "sprite/sparks".to_string(),
@@ -145,6 +160,11 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
     RenderFrameDiff::try_from_ops(vec![
         RenderDiff::DefineTexture {
             texture: texture.clone(),
+        },
+        RenderDiff::SetSkyBackground {
+            background: Some(SkyBackgroundDescriptor {
+                texture: texture.id.clone(),
+            }),
         },
         RenderDiff::DefineMaterial {
             material: material(),
@@ -267,6 +287,7 @@ fn every_retained_operation_survives_the_versioned_json_border() {
     assert_eq!(decoded, frame);
     for operation in [
         "defineTexture",
+        "setSkyBackground",
         "defineMaterial",
         "defineSpriteAtlas",
         "defineStaticMesh",

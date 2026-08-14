@@ -25,6 +25,7 @@ void test('strict TypeScript decoders accept the committed Rust render fixtures'
   const renderFrame = decodeRenderFrameDiff(fixture('retained-frame-v1.json'));
   assert.deepEqual(renderFrame.ops.map((operation) => operation.op), [
     'defineTexture',
+    'setSkyBackground',
     'defineMaterial',
     'defineSpriteAtlas',
     'defineStaticMesh',
@@ -50,6 +51,24 @@ void test('strict TypeScript decoders accept the committed Rust render fixtures'
     assert.fail('world indicator fixture must contain a billboard create');
   }
   assert.equal(billboard.op.descriptor.content.kind, 'structured');
+});
+
+void test('sky backgrounds decode as a narrow nullable texture reference', () => {
+  const frame = decodeRenderFrameDiff({
+    schemaVersion: 1,
+    ops: [
+      { op: 'setSkyBackground', background: { texture: 'texture/sky/e1m1' } },
+      { op: 'setSkyBackground', background: null },
+    ],
+  });
+  assert.equal(frame.ops[0]?.op, 'setSkyBackground');
+  assert.throws(
+    () => decodeRenderFrameDiff({
+      schemaVersion: 1,
+      ops: [{ op: 'setSkyBackground', background: { texture: 'sprite/not-a-sky' } }],
+    }),
+    /texture\/ asset namespace/u,
+  );
 });
 
 void test('particle decoding admits cubes, local collision, and the legacy sprite shape', () => {

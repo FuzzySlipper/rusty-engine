@@ -112,6 +112,12 @@ interface BrowserProof {
   readonly staticMeshRecreateSnapshot: string;
   readonly staticMeshRecreateStatistics: RendererSurfaceStatisticsSample;
   readonly staticMeshTexturePixels: readonly (readonly [number, number, number, number])[];
+  readonly skyBackgroundPixels: {
+    readonly initial: readonly [number, number, number, number];
+    readonly translated: readonly [number, number, number, number];
+    readonly rotated: readonly [number, number, number, number];
+    readonly cleared: readonly [number, number, number, number];
+  };
   readonly staticDemandApplied: boolean;
   readonly staticDemandCameraPosition: readonly [number, number, number];
   readonly staticDemandCameraRenderCount: number;
@@ -749,6 +755,70 @@ async function main(): Promise<void> {
     return [...pixel] as [number, number, number, number];
   });
 
+  const skyCanvas = document.createElement('canvas');
+  skyCanvas.width = 128;
+  skyCanvas.height = 128;
+  skyCanvas.style.cssText = 'position:fixed;left:-10000px;top:0;width:128px;height:128px';
+  document.body.appendChild(skyCanvas);
+  const skyTexture = {
+    ...staticMeshTextureDefinition.texture,
+    id: 'texture/sky-background-proof',
+  };
+  const skySurface = mountRendererSurface(skyCanvas, {
+    autoStart: false,
+    clearColor: 0x123456,
+    controls: {
+      enabled: false,
+      initialPosition: [0, 0, 0],
+      initialPitchDegrees: 0,
+      initialYawDegrees: 0,
+    },
+    frame: {
+      schemaVersion: 1,
+      ops: [
+        { op: 'defineTexture', texture: skyTexture },
+        { op: 'setSkyBackground', background: { texture: skyTexture.id } },
+      ],
+    },
+    pixelRatio: 1,
+    projection: { fovYDegrees: 90, near: 0.1, far: 10 },
+  });
+  const skyContext = skyCanvas.getContext('webgl2') ?? skyCanvas.getContext('webgl');
+  if (skyContext === null) throw new Error('sky background WebGL context is unavailable');
+  const readSkyPixel = (): [number, number, number, number] => {
+    const pixel = new Uint8Array(4);
+    skyContext.readPixels(
+      Math.floor(skyContext.drawingBufferWidth / 2),
+      Math.floor(skyContext.drawingBufferHeight / 2),
+      1,
+      1,
+      skyContext.RGBA,
+      skyContext.UNSIGNED_BYTE,
+      pixel,
+    );
+    return [...pixel] as [number, number, number, number];
+  };
+  skySurface.renderOnce(1);
+  const skyInitial = readSkyPixel();
+  skySurface.setCameraPose({ position: [37, -12, 91], pitchDegrees: 0, yawDegrees: 0 });
+  skySurface.renderOnce(2);
+  const skyTranslated = readSkyPixel();
+  skySurface.setCameraPose({ position: [37, -12, 91], pitchDegrees: 0, yawDegrees: 180 });
+  skySurface.renderOnce(3);
+  const skyRotated = readSkyPixel();
+  skySurface.applyFrame({
+    schemaVersion: 1,
+    ops: [{ op: 'setSkyBackground', background: null }],
+  });
+  skySurface.renderOnce(4);
+  const skyCleared = readSkyPixel();
+  const skyBackgroundPixels = {
+    initial: skyInitial,
+    translated: skyTranslated,
+    rotated: skyRotated,
+    cleared: skyCleared,
+  };
+
   const compositionCanvas = document.createElement('canvas');
   compositionCanvas.width = 320;
   compositionCanvas.height = 200;
@@ -899,6 +969,7 @@ async function main(): Promise<void> {
     staticMeshRecreateSnapshot,
     staticMeshRecreateStatistics,
     staticMeshTexturePixels,
+    skyBackgroundPixels,
     staticDemandApplied: staticDemandApplied.applied,
     staticDemandCameraPosition,
     staticDemandCameraRenderCount: staticDemandCameraSequence - staticDemandDirtySequence,
@@ -959,6 +1030,8 @@ async function main(): Promise<void> {
     }
     staticMeshTextureSurface.dispose();
     staticMeshTextureCanvas.remove();
+    skySurface.dispose();
+    skyCanvas.remove();
     lightingSurface.dispose();
     lightingCanvas.remove();
     inspection.dispose();

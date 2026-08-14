@@ -64,6 +64,10 @@ entity, authored-scene, voxel, and presentation facts.
 - Independently ordered projections may stamp a frame with one stable stream,
   monotonic revision, and exact operation count. Neutral and concrete retained
   application reject stale or clipped stamped frames fail-atomically.
+- `SkyBackgroundDescriptor` is one renderer-neutral retained texture reference.
+  Its operation validates a previously defined 2:1 sRGB/clamped payload and
+  retains nullable replacement state without acquiring camera or environment
+  lighting authority.
 - Voxel-object projection keys cached resources by canonical content hash and
   derived surface mode. A mode switch redefines geometry at the same canonical
   identity; textured reconstructed materials are rejected fail-atomically.

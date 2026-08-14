@@ -5,6 +5,24 @@ architecture boundaries are stated separately so agents do not “fix” them by
 introducing a second authority. Product-specific limitations belong to their
 downstream repositories.
 
+## Authored sky background
+
+- **Status:** implemented-bounded
+- **Affected surface:** `render-model`, retained TypeScript projection,
+  `renderer-three`, application host, and native webview host
+- **Limitation:** One surface can select one content-addressed 2:1 sRGB PNG as
+  an equirectangular camera-relative background. It follows camera rotation but
+  not translation and contributes no depth, handles, picks, collision,
+  environment lighting, reflections, exposure, or post-processing. Cubemaps,
+  HDR formats, layered skies, and animated weather are not included.
+- **Detection:** Run `./scripts/verify-render.sh`; strict cross-language tests
+  cover admission and nullable replacement, backend tests cover refresh and
+  disposal, and the Chromium framebuffer proof observes translation stability,
+  rotation change, and clear-color restoration.
+- **Follow-up:** Extend representation or lighting only with a concrete
+  consumer that cannot use the single-panorama contract.
+- **Last reviewed:** 2026-08-14 / codex
+
 ## Multi-view render-target composition
 
 - **Status:** implemented-bounded

@@ -24,6 +24,7 @@ import type {
   RenderMaterialDescriptor,
   RenderMetadata,
   RenderNode,
+  SkyBackgroundDescriptor,
   SpriteAtlasDescriptor,
   SpriteInstanceDescriptor,
   SpritePickHit,
@@ -116,6 +117,7 @@ export type RenderProjectionNode =
 export type RenderProjectionInstruction =
   | { readonly op: 'defineMaterial'; readonly material: RenderMaterialDescriptor }
   | { readonly op: 'defineTexture'; readonly texture: TextureDescriptor }
+  | { readonly op: 'setSkyBackground'; readonly background: SkyBackgroundDescriptor | null }
   | { readonly op: 'defineSpriteAtlas'; readonly atlas: SpriteAtlasDescriptor }
   | { readonly op: 'defineStaticMesh'; readonly asset: StaticMeshAsset }
   | { readonly op: 'defineAnimatedMesh'; readonly asset: AnimatedMeshAsset }
@@ -133,6 +135,7 @@ export interface RenderProjectionLight {
 }
 
 export interface RenderProjectionSnapshot {
+  readonly skyBackground: SkyBackgroundDescriptor | null;
   readonly nodes: readonly RenderProjectionNode[];
   readonly lights: readonly RenderProjectionLight[];
   readonly materials: readonly RenderMaterialDescriptor[];
@@ -239,6 +242,7 @@ export class RenderProjection {
   #lights = new Map<RenderHandle, MutableLight>();
   #materials = new Map<string, RenderMaterialDescriptor>();
   #textures = new Map<string, TextureDescriptor>();
+  #skyBackground: SkyBackgroundDescriptor | null = null;
   #spriteAtlases = new Map<string, SpriteAtlasDescriptor>();
   #staticMeshes = new Map<string, StaticMeshRecord>();
   #animatedMeshes = new Map<string, AnimatedMeshRecord>();
@@ -289,6 +293,8 @@ export class RenderProjection {
         return [this.#setMaterialInstanceParameters(diff)];
       case 'defineTexture':
         return [this.#defineTexture(diff.texture)];
+      case 'setSkyBackground':
+        return [this.#setSkyBackground(diff.background)];
       case 'defineSpriteAtlas':
         return [this.#defineSpriteAtlas(diff.atlas)];
       case 'defineStaticMesh':
@@ -380,6 +386,7 @@ export class RenderProjection {
 
   snapshot(): RenderProjectionSnapshot {
     return {
+      skyBackground: clone(this.#skyBackground) ?? null,
       nodes: sortedHandles(this.#nodes).map((handle) => snapshotNode(this.#require(handle, 'snapshot'))),
       lights: sortedHandles(this.#lights).map((handle) => snapshotLight(this.#requireLight(handle, 'snapshot'))),
       materials: sortedValues(this.#materials),
@@ -613,6 +620,31 @@ export class RenderProjection {
   #defineTexture(texture: TextureDescriptor): RenderProjectionInstruction {
     this.#textures.set(texture.id, clone(texture));
     return { op: 'defineTexture', texture: clone(texture) };
+  }
+
+  #setSkyBackground(
+    background: SkyBackgroundDescriptor | null,
+  ): RenderProjectionInstruction {
+    if (background !== null) {
+      const texture = this.#textures.get(background.texture);
+      if (texture === undefined || texture.payload === undefined) {
+        throw new RenderProjectionError(
+          `setSkyBackground: texture ${background.texture} is not a retained payload`,
+        );
+      }
+      if (texture.width !== texture.height * 2) {
+        throw new RenderProjectionError(
+          `setSkyBackground: texture ${background.texture} must have a 2:1 aspect ratio`,
+        );
+      }
+      if (texture.payload.colorSpace !== 'srgb' || texture.wrap !== 'clamp') {
+        throw new RenderProjectionError(
+          `setSkyBackground: texture ${background.texture} must be sRGB with clamp wrapping`,
+        );
+      }
+    }
+    this.#skyBackground = clone(background) ?? null;
+    return { op: 'setSkyBackground', background: clone(background) ?? null };
   }
 
   #defineSpriteAtlas(atlas: SpriteAtlasDescriptor): RenderProjectionInstruction {
@@ -1116,6 +1148,7 @@ export class RenderProjection {
     projection.#lights = new Map(this.#lights);
     projection.#materials = new Map(this.#materials);
     projection.#textures = new Map(this.#textures);
+    projection.#skyBackground = clone(this.#skyBackground) ?? null;
     projection.#spriteAtlases = new Map(this.#spriteAtlases);
     projection.#staticMeshes = new Map(this.#staticMeshes);
     projection.#animatedMeshes = new Map(this.#animatedMeshes);
@@ -1140,6 +1173,7 @@ export class RenderProjection {
     this.#lights = projection.#lights;
     this.#materials = projection.#materials;
     this.#textures = projection.#textures;
+    this.#skyBackground = projection.#skyBackground;
     this.#spriteAtlases = projection.#spriteAtlases;
     this.#staticMeshes = projection.#staticMeshes;
     this.#animatedMeshes = projection.#animatedMeshes;
@@ -1653,6 +1687,7 @@ function validateOperationHandles(diff: RenderDiff): void {
       return;
     case 'defineMaterial':
     case 'defineTexture':
+    case 'setSkyBackground':
     case 'defineSpriteAtlas':
     case 'defineStaticMesh':
     case 'defineAnimatedMesh':

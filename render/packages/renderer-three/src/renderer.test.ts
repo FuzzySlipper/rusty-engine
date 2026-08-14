@@ -2453,6 +2453,86 @@ void test('texture redefine is stale-safe and disposes replaced and final GPU re
   assert.equal(renderer.resourceStatistics().textureResourceCount, 0);
 });
 
+void test('sky background is retained, replaced with its source texture, cleared, and disposed', () => {
+  const before = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
+  const after = rgbaPng(2, 1, [0, 0, 255, 255, 255, 255, 0, 255]);
+  const renderer = new ThreeRenderer();
+  const beforeTexture = { ...textureDescriptor(before), wrap: 'clamp' as const };
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineTexture', texture: beforeTexture },
+    { op: 'setSkyBackground', background: { texture: beforeTexture.id } },
+  ] });
+  const firstBackground = renderer.scene.background;
+  assert.ok(firstBackground instanceof THREE.Texture);
+  assert.equal(firstBackground.mapping, THREE.EquirectangularReflectionMapping);
+  assert.equal(renderer.resourceStatistics().textureResourceCount, 2);
+
+  const afterTexture = { ...textureDescriptor(after, 2), wrap: 'clamp' as const };
+  let firstDisposals = 0;
+  firstBackground.addEventListener('dispose', () => { firstDisposals += 1; });
+  renderer.applyDiff({ op: 'defineTexture', texture: afterTexture });
+  assert.ok(renderer.scene.background instanceof THREE.Texture);
+  assert.notEqual(renderer.scene.background, firstBackground);
+  assert.equal(firstDisposals, 1);
+
+  const finalBackground = renderer.scene.background as THREE.Texture;
+  let finalDisposals = 0;
+  finalBackground.addEventListener('dispose', () => { finalDisposals += 1; });
+  renderer.applyDiff({ op: 'setSkyBackground', background: null });
+  assert.equal(renderer.scene.background, null);
+  assert.equal(finalDisposals, 1);
+  assert.equal(renderer.resourceStatistics().textureResourceCount, 1);
+  renderer.dispose();
+  assert.equal(renderer.resourceStatistics().textureResourceCount, 0);
+});
+
+void test('sky background rejects missing, metadata-only, non-sRGB, repeated, and non-2:1 textures atomically', () => {
+  const renderer = new ThreeRenderer();
+  assert.throws(
+    () => renderer.applyDiff({
+      op: 'setSkyBackground', background: { texture: 'texture/missing' },
+    }),
+    /not a retained payload|is not retained/u,
+  );
+  assert.equal(renderer.scene.background, null);
+
+  const bytes = rgbaPng(2, 1, [255, 0, 0, 255, 0, 255, 0, 255]);
+  const metadataOnly = {
+    id: 'texture/metadata-only-sky',
+    width: 2,
+    height: 1,
+    filter: 'nearest' as const,
+    wrap: 'clamp' as const,
+    contentHash: null,
+    version: 1,
+  };
+  assert.throws(
+    () => renderer.applyFrame({ schemaVersion: 1, ops: [
+      { op: 'defineTexture', texture: metadataOnly },
+      { op: 'setSkyBackground', background: { texture: metadataOnly.id } },
+    ] }),
+    /not a retained payload|is not retained/u,
+  );
+  assert.equal(renderer.textureDescriptor(metadataOnly.id), undefined);
+  const squareBytes = rgbaPng(1, 1, [255, 0, 0, 255]);
+  for (const [texture, error] of [
+    [{ ...textureDescriptor(bytes, 1, 'inline', 'texture/linear', 'linear'), wrap: 'clamp' as const }, /sRGB/u],
+    [{ ...textureDescriptor(bytes, 1, 'inline', 'texture/repeat'), wrap: 'repeat' as const }, /clamp/u],
+    [{ ...textureDescriptor(squareBytes, 1, 'inline', 'texture/square'), width: 1, height: 1 }, /2:1/u],
+  ] as const) {
+    assert.throws(
+      () => renderer.applyFrame({ schemaVersion: 1, ops: [
+        { op: 'defineTexture', texture },
+        { op: 'setSkyBackground', background: { texture: texture.id } },
+      ] }),
+      error,
+    );
+    assert.equal(renderer.textureDescriptor(texture.id), undefined);
+    assert.equal(renderer.scene.background, null);
+  }
+  renderer.dispose();
+});
+
 void test('voxel surface specializes one greedy quad for repeat and atlas-safe sampling', () => {
   const pixels = Array.from({ length: 4 * 4 }, (_, index) => [
     index * 11 % 255,

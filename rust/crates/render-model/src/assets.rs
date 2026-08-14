@@ -485,7 +485,12 @@ pub enum TextureColorSpace {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum TexturePayloadSource {
     Inline { encoded_bytes: Vec<u8> },
     Resource { resource: String },

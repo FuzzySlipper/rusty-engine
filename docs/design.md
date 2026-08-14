@@ -546,6 +546,16 @@ Runtime image bytes and voxel tile-space/atlas mapping use the adjacent
 [voxel surface texture decision](topics/voxel/voxel-surface-textures.md); they do not turn a path,
 URL, browser image, or Three texture into Rust authority.
 
+An authored sky uses that same retained texture owner through one nullable
+`setSkyBackground` operation. The referenced payload must be a bounded 2:1,
+sRGB, clamp-wrapped equirectangular panorama. Three realizes a renderer-owned
+specialization behind the world that observes camera rotation but not
+translation, depth, collision, picking, environment lighting, or reflections.
+Replacement follows retained texture versions, clear returns to the host clear
+color, and both replacement and disposal release the specialized GPU texture.
+This is intentionally not a cubemap, lighting probe, post-processing graph, or
+general renderer plugin seam.
+
 `render-projection` owns deterministic, fail-atomic adapters over explicit read-only inputs. Entity
 projection reads `EntityState`; voxel projection reads `VoxelCollisionScene`; authored projection
 accepts one ordinary appearance/resource aggregate; debug projection accepts typed overlays. Each

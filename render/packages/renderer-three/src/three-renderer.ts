@@ -358,6 +358,8 @@ export class ThreeRenderer {
   readonly #textureResourceReferences = new Map<THREE.Texture, number>();
   readonly #textureResourceObjects = new Set<THREE.Texture>();
   readonly #textureResources = new Map<string, RetainedTextureResource>();
+  #skyBackgroundTextureId: string | null = null;
+  #skyBackgroundTexture: THREE.Texture | null = null;
   /**
    * Renderer-owned submission batches. Logical retained meshes remain the
    * handle/metadata/hierarchy authority; compatible world-static meshes are
@@ -433,6 +435,7 @@ export class ThreeRenderer {
     const prepared = this.#prepareFrame(frame);
     try {
       this.#preflightSpriteMaterials(frame, prepared);
+      this.#preflightSkyBackground(frame, prepared);
     } catch (cause) {
       disposePreparedFrame(prepared);
       throw cause;
@@ -472,6 +475,13 @@ export class ThreeRenderer {
         this.#replaceLiveMaterial(materialId);
       }
       this.#replaceLiveSpriteMaterials(changedTextureIds, changedSpriteAtlasIds);
+      if (
+        frame.ops.some((operation) => operation.op === 'setSkyBackground')
+        || (this.#skyBackgroundTextureId !== null
+          && changedTextureIds.has(this.#skyBackgroundTextureId))
+      ) {
+        this.#syncSkyBackground();
+      }
     } catch (cause) {
       disposePreparedFrame(prepared);
       throw cause;
@@ -531,6 +541,40 @@ export class ThreeRenderer {
           throw new RenderApplyError(`sprite ${role} texture ${id} must use linear color space`);
         }
       }
+    }
+  }
+
+  #preflightSkyBackground(frame: RenderFrameDiff, prepared: PreparedFrameResources): void {
+    const descriptors = new Map(this.#textures);
+    const retained = new Set(this.#textureResources.keys());
+    let background = this.#skyBackgroundTextureId;
+    for (let index = 0; index < frame.ops.length; index += 1) {
+      const operation = frame.ops[index]!;
+      if (operation.op === 'defineTexture') {
+        descriptors.set(operation.texture.id, operation.texture);
+        const candidate = prepared.textures.get(index);
+        if (candidate === null || operation.texture.payload === undefined) {
+          retained.delete(operation.texture.id);
+        } else if (candidate !== undefined) {
+          retained.add(operation.texture.id);
+        }
+      } else if (operation.op === 'setSkyBackground') {
+        background = operation.background?.texture ?? null;
+      }
+    }
+    if (background === null) return;
+    const descriptor = descriptors.get(background);
+    if (descriptor === undefined || !retained.has(background) || descriptor.payload === undefined) {
+      throw new RenderApplyError(`setSkyBackground: texture ${background} is not retained`);
+    }
+    if (descriptor.width !== descriptor.height * 2) {
+      throw new RenderApplyError(`setSkyBackground: texture ${background} must have a 2:1 aspect ratio`);
+    }
+    if (descriptor.payload.colorSpace !== 'srgb') {
+      throw new RenderApplyError(`setSkyBackground: texture ${background} must use sRGB color space`);
+    }
+    if (descriptor.wrap !== 'clamp') {
+      throw new RenderApplyError(`setSkyBackground: texture ${background} must use clamp wrapping`);
     }
   }
 
@@ -607,6 +651,9 @@ export class ThreeRenderer {
         break;
       case 'defineTexture':
         this.#defineTexture(diff.texture, preparedTexture, changedTextureIds);
+        break;
+      case 'setSkyBackground':
+        this.#skyBackgroundTextureId = diff.background?.texture ?? null;
         break;
       case 'defineSpriteAtlas':
         this.#atlases.set(diff.atlas.id, diff.atlas);
@@ -950,6 +997,9 @@ export class ThreeRenderer {
     this.#slotColors.clear();
     this.#materials.clear();
     this.#fallbackMaterials.clear();
+    this.#skyBackgroundTexture?.dispose();
+    this.#skyBackgroundTexture = null;
+    this.#skyBackgroundTextureId = null;
     for (const retained of this.#textureResources.values()) {
       retained.texture.dispose();
     }
@@ -2019,6 +2069,22 @@ export class ThreeRenderer {
       changed.add(descriptor.id);
     }
     previous?.texture.dispose();
+  }
+
+  #syncSkyBackground(): void {
+    const previous = this.#skyBackgroundTexture;
+    const retained = this.#skyBackgroundTextureId === null
+      ? undefined
+      : this.#textureResources.get(this.#skyBackgroundTextureId);
+    const next = retained?.texture.clone() ?? null;
+    if (next !== null) {
+      next.mapping = THREE.EquirectangularReflectionMapping;
+      next.needsUpdate = true;
+      this.#trackTextureResource(next);
+    }
+    this.#skyBackgroundTexture = next;
+    this.scene.background = next;
+    previous?.dispose();
   }
 
   /** Rebuild shared bases and every live instance material bound to `id`. */

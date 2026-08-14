@@ -633,8 +633,31 @@ void test('applies every operation in the committed Rust-authored retained fixtu
   assert.equal(projection.light(renderHandle(2))?.light.kind, 'directional');
   assert.equal(projection.has(renderHandle(5)), false);
   assert.equal(projection.textureDescriptor('texture/checker')?.version, 1);
+  assert.deepEqual(projection.snapshot().skyBackground, { texture: 'texture/checker' });
   assert.equal(projection.staticMeshRefCount('mesh/triangle'), 1);
   assert.equal(projection.animatedMeshRefCount('mesh-animation/character'), 1);
+});
+
+void test('sky background replacement and clear are fail-atomic retained presentation', () => {
+  const projection = new RenderProjection();
+  assert.throws(
+    () => projection.applyDiff({
+      op: 'setSkyBackground', background: { texture: 'texture/missing' },
+    }),
+    /not a retained payload/u,
+  );
+  assert.equal(projection.snapshot().skyBackground, null);
+  const fixtureFrame = decodeRenderFrameDiff(JSON.parse(readFileSync(
+    resolve(repoRoot, 'fixtures/render/retained-frame-v1.json'),
+    'utf8',
+  )) as unknown);
+  const skyOps = fixtureFrame.ops.filter(
+    (operation) => operation.op === 'defineTexture' || operation.op === 'setSkyBackground',
+  );
+  projection.applyFrame({ schemaVersion: 1, ops: skyOps });
+  assert.deepEqual(projection.snapshot().skyBackground, { texture: 'texture/checker' });
+  projection.applyDiff({ op: 'setSkyBackground', background: null });
+  assert.equal(projection.snapshot().skyBackground, null);
 });
 
 void test('keeps stable parent/child ids and removes descendants before parents', () => {

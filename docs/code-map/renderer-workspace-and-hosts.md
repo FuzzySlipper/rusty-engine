@@ -53,6 +53,8 @@ compiled artifact, and Rust webview host/resource lifecycle.
   - `three-renderer.ts` owns the frozen CPU visibility readout: effective retained
     visibility and camera-frustum membership per handle. It explicitly reports
     GPU occlusion as `notMeasured` rather than inventing a depth authority.
+    It also owns the single equirectangular sky specialization, including
+    replacement, clear-color fallback, resource accounting, and disposal.
   - `particle-sink.ts` owns pooled `Points` billboard batches and
     `InstancedMesh` cube batches. `RendererSurface.createParticleSink` hides
     Three objects from the host and downstream lifecycle.
@@ -107,6 +109,9 @@ compiled artifact, and Rust webview host/resource lifecycle.
   `(0, 0)` is top-left, U increases right, and V increases down. The Three
   sprite quad performs that mapping locally; mesh and voxel texture orientation
   is unchanged, and importers must not reverse PNG rows.
+- `setSkyBackground` selects one previously admitted 2:1 sRGB/clamped retained
+  texture as a camera-rotation-relative panorama. It creates no handle, depth,
+  pick, environment-lighting, or reflection state; `null` restores clear color.
 - Textured voxel replacement reuses retained geometry/object handles and the
   reference-counted texture owner. The exact public consumer's lifecycle and
   provider disposal evidence are reconciled in the

@@ -248,6 +248,11 @@ export interface TextureDescriptor {
   readonly payload?: TexturePayloadDescriptor;
 }
 
+/** A single equirectangular panorama used only as camera-relative background presentation. */
+export interface SkyBackgroundDescriptor {
+  readonly texture: string;
+}
+
 export interface SpriteFrameRect {
   readonly frame: number;
   /**
@@ -458,6 +463,7 @@ export type RenderDiff =
   | { readonly op: 'defineMaterial'; readonly material: RenderMaterialDescriptor }
   | { readonly op: 'setMaterialInstanceParameters'; readonly handle: RenderHandle; readonly slot: number; readonly parameters: MaterialInstanceParameters | null }
   | { readonly op: 'defineTexture'; readonly texture: TextureDescriptor }
+  | { readonly op: 'setSkyBackground'; readonly background: SkyBackgroundDescriptor | null }
   | { readonly op: 'defineSpriteAtlas'; readonly atlas: SpriteAtlasDescriptor }
   | { readonly op: 'defineStaticMesh'; readonly asset: StaticMeshAsset }
   | { readonly op: 'defineAnimatedMesh'; readonly asset: AnimatedMeshAsset }

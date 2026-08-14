@@ -131,6 +131,11 @@ function renderDiff(input: unknown, path: string): void {
       texture(value['texture'], `${path}.texture`);
       return;
     }
+    case 'setSkyBackground': {
+      const value = record(input, path, ['op', 'background']);
+      nullable(value['background'], `${path}.background`, skyBackground);
+      return;
+    }
     case 'defineSpriteAtlas': {
       const value = record(input, path, ['op', 'atlas']);
       spriteAtlas(value['atlas'], `${path}.atlas`);
@@ -209,6 +214,14 @@ function renderDiff(input: unknown, path: string): void {
     }
     default:
       fail(`${path}.op`, `unsupported operation ${JSON.stringify(op)}`);
+  }
+}
+
+function skyBackground(input: unknown, path: string): void {
+  const value = record(input, path, ['texture']);
+  const texture = nonEmptyText(value['texture'], `${path}.texture`);
+  if (!texture.startsWith('texture/')) {
+    fail(`${path}.texture`, 'must use the texture/ asset namespace');
   }
 }
 

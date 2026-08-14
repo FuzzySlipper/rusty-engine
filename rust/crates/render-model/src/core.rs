@@ -7,6 +7,22 @@ use crate::{
     VoxelObjectInstanceDescriptor, VoxelObjectRenderAsset,
 };
 
+/// Authored camera-relative sky presentation.
+///
+/// The referenced retained texture is interpreted as one equirectangular
+/// panorama. It contributes no environment lighting, collision, or picking.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SkyBackgroundDescriptor {
+    pub texture: String,
+}
+
+impl SkyBackgroundDescriptor {
+    pub fn validate(&self) -> Result<(), crate::RenderAssetError> {
+        crate::validate_asset_id(&self.texture, crate::RenderAssetKind::Texture)
+    }
+}
+
 pub const RENDER_FRAME_SCHEMA_VERSION: u32 = 1;
 pub const JSON_SAFE_U64_MAX: u64 = (1_u64 << 53) - 1;
 
@@ -280,6 +296,9 @@ pub enum RenderDiff {
     DefineTexture {
         texture: TextureDescriptor,
     },
+    SetSkyBackground {
+        background: Option<SkyBackgroundDescriptor>,
+    },
     DefineSpriteAtlas {
         atlas: SpriteAtlasDescriptor,
     },
@@ -377,6 +396,12 @@ impl RenderDiff {
             Self::DefineTexture { texture } => {
                 texture.validate().map_err(RenderOperationError::Texture)
             }
+            Self::SetSkyBackground {
+                background: Some(background),
+            } => background
+                .validate()
+                .map_err(RenderOperationError::SkyBackground),
+            Self::SetSkyBackground { background: None } => Ok(()),
             Self::DefineSpriteAtlas { atlas } => {
                 atlas.validate().map_err(RenderOperationError::SpriteAtlas)
             }
@@ -441,6 +466,7 @@ impl RenderDiff {
             | Self::UpdateSprite { handle, .. } => handle.validate()?,
             Self::DefineMaterial { .. }
             | Self::DefineTexture { .. }
+            | Self::SetSkyBackground { .. }
             | Self::DefineSpriteAtlas { .. }
             | Self::DefineStaticMesh { .. }
             | Self::DefineAnimatedMesh { .. }
@@ -467,6 +493,7 @@ pub enum RenderOperationError {
     MaterialDescriptor(crate::MaterialDescriptorError),
     MaterialParameters(crate::MaterialParametersError),
     Texture(crate::TextureError),
+    SkyBackground(crate::RenderAssetError),
     SpriteAtlas(crate::SpriteAtlasError),
     StaticMesh(crate::StaticMeshError),
     StaticMeshInstance(crate::StaticMeshInstanceError),
