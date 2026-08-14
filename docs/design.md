@@ -592,6 +592,11 @@ camera-facing mesh quads so the same retained pivot, atlas, hierarchy, picking, 
 disposal behavior remains available. Asset Pipeline owns source-map authoring and any selection
 policy; Engine owns only admitted runtime facts and realization. See
 [lit sprite shader comparison](topics/lit-sprite-shaders.md).
+Sprite atlas rectangles use normalized decoded-image coordinates with the origin at the upright
+PNG's top-left, U increasing right, and V increasing down. Importers retain ordinary upright PNG
+rows; the sprite backend maps that image-space rectangle onto its quad without changing the shared
+texture orientation used by generic meshes or voxel materials. This is the sole retained-sprite
+orientation contract: bottom-up PNG payloads and importer-side row reversal are not supported.
 Legacy frames with no material block retain their prior texture-aware transparency and depth-write
 semantics; current Rust writers emit the block so an explicit blend policy remains distinguishable.
 

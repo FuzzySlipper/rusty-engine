@@ -2245,12 +2245,15 @@ export class ThreeRenderer {
     }
     const [u0, v0] = rect.uvMin;
     const [u1, v1] = rect.uvMax;
-    // PlaneGeometry vertex order: top-left, top-right, bottom-left, bottom-right.
+    // Sprite atlas rectangles use decoded PNG image coordinates: (0, 0) is the
+    // image's top-left. PlaneGeometry vertex order is top-left, top-right,
+    // bottom-left, bottom-right, so preserve ordinary PNG row orientation here
+    // without changing the shared texture realization used by mesh consumers.
     const uv = geometry.getAttribute('uv') as THREE.BufferAttribute;
-    uv.setXY(0, u0, v1);
-    uv.setXY(1, u1, v1);
-    uv.setXY(2, u0, v0);
-    uv.setXY(3, u1, v0);
+    uv.setXY(0, u0, v0);
+    uv.setXY(1, u1, v0);
+    uv.setXY(2, u0, v1);
+    uv.setXY(3, u1, v1);
     uv.needsUpdate = true;
     return [u0, v0, u1, v1];
   }

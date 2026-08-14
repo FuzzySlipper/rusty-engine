@@ -381,6 +381,16 @@ test('shared host realizes retained, presentation, and inspection families in a 
   ]);
   expect(proof.spriteBillboardPixels.initialSpherical)
     .toEqual(proof.spriteBillboardPixels.initialCylindrical);
+  const initialBottomHalf = proof.spriteBillboardPixels.initialSpherical.slice(0, 16 * 32);
+  const initialTopHalf = proof.spriteBillboardPixels.initialSpherical.slice(16 * 32);
+  const stronglyRed = ([red = 0, green = 0, blue = 0]: readonly number[]) =>
+    red > 180 && green < 40 && blue < 40;
+  const stronglyGreen = ([red = 0, green = 0, blue = 0]: readonly number[]) =>
+    green > 180 && red < 40 && blue < 40;
+  expect(initialTopHalf.filter(stronglyRed).length).toBeGreaterThan(64);
+  expect(initialTopHalf.filter(stronglyGreen)).toHaveLength(0);
+  expect(initialBottomHalf.filter(stronglyGreen).length).toBeGreaterThan(64);
+  expect(initialBottomHalf.filter(stronglyRed)).toHaveLength(0);
   const billboardPixelCount = (pixels: readonly (readonly number[])[]) => pixels
     .filter(([red = 0, green = 0, blue = 0]) => red + green + blue > 40).length;
   expect(billboardPixelCount(proof.spriteBillboardPixels.elevatedSpherical)).toBeGreaterThan(0);

@@ -771,7 +771,10 @@ fn png_crc32(bytes: &[u8]) -> u32 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SpriteFrameRect {
     pub frame: u32,
+    /// Inclusive normalized minimum in decoded PNG image space. The image
+    /// origin is its top-left, U increases right, and V increases down.
     pub uv_min: [f32; 2],
+    /// Exclusive normalized maximum in the same top-left image space.
     pub uv_max: [f32; 2],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<[f32; 2]>,

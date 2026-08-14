@@ -2891,6 +2891,12 @@ function spriteUv(r: ThreeRenderer, handle: number): number[] {
   return (r.objectFor(renderHandle(handle))!.userData['uv'] as number[]).map((x) => Number(x.toFixed(4)));
 }
 
+function spriteGeometryUv(r: ThreeRenderer, handle: number): number[][] {
+  const mesh = r.objectFor(renderHandle(handle)) as THREE.Mesh;
+  const uv = mesh.geometry.getAttribute('uv') as THREE.BufferAttribute;
+  return Array.from({ length: uv.count }, (_, index) => [uv.getX(index), uv.getY(index)]);
+}
+
 void test('a sprite frame maps to its atlas UV sub-rectangle deterministically', () => {
   const r = new ThreeRenderer();
   r.applyDiff({ op: 'defineTexture', texture: sparkTexture() });
@@ -2900,6 +2906,9 @@ void test('a sprite frame maps to its atlas UV sub-rectangle deterministically',
 
   r.applyDiff({ op: 'createSprite', handle: renderHandle(1), parent: null, sprite: atlasSprite(0) });
   assert.deepEqual(spriteUv(r, 1), [0, 0, 0.5, 1], 'frame 0 → left half');
+  assert.deepEqual(spriteGeometryUv(r, 1), [
+    [0, 0], [0.5, 0], [0, 1], [0.5, 1],
+  ], 'decoded PNG top maps to the sprite top');
 
   // Advancing the frame re-resolves the UV rect deterministically.
   r.applyDiff({ op: 'updateSprite', handle: renderHandle(1), frame: 3, tint: null, renderOrder: null, visible: null });
@@ -2909,6 +2918,43 @@ void test('a sprite frame maps to its atlas UV sub-rectangle deterministically',
   assert.deepEqual(mesh.geometry.boundingBox?.getSize(new THREE.Vector3()).toArray(), [2, 3, 0]);
   assert.equal(r.resourceStatistics().geometryResourceCount, 1, 'replaced frame geometry is disposed');
   assert.equal(r.spriteFallbackCount, 0, 'known frames are not fallbacks');
+});
+
+void test('multi-row sprite atlases select top-left image-space rows without vertical reversal', () => {
+  const r = new ThreeRenderer();
+  r.applyDiff({ op: 'defineTexture', texture: sparkTexture() });
+  r.applyDiff({
+    op: 'defineSpriteAtlas',
+    atlas: {
+      id: 'sprite/row-sheet',
+      texture: 'texture/spark',
+      frames: [
+        { frame: 0, uvMin: [0, 0], uvMax: [1, 0.5] },
+        { frame: 1, uvMin: [0, 0.5], uvMax: [1, 1] },
+      ],
+    },
+  });
+  r.applyDiff({
+    op: 'createSprite',
+    handle: renderHandle(1),
+    parent: null,
+    sprite: { ...atlasSprite(0), asset: 'sprite/row-sheet' },
+  });
+  assert.deepEqual(spriteGeometryUv(r, 1), [
+    [0, 0], [1, 0], [0, 0.5], [1, 0.5],
+  ], 'frame zero selects the upright top image row');
+
+  r.applyDiff({
+    op: 'updateSprite',
+    handle: renderHandle(1),
+    frame: 1,
+    tint: null,
+    renderOrder: null,
+    visible: null,
+  });
+  assert.deepEqual(spriteGeometryUv(r, 1), [
+    [0, 0.5], [1, 0.5], [0, 1], [1, 1],
+  ], 'frame one selects the upright bottom image row');
 });
 
 void test('a sprite frame with no atlas frame falls back to full UVs and is counted', () => {

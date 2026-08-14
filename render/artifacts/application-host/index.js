@@ -18298,7 +18298,7 @@ var tg = 31, ng = 4096, rg = 2, ig = class {
 			1
 		];
 		let [a, o] = i.uvMin, [s, c] = i.uvMax, l = e.getAttribute("uv");
-		return l.setXY(0, a, c), l.setXY(1, s, c), l.setXY(2, a, o), l.setXY(3, s, o), l.needsUpdate = !0, [
+		return l.setXY(0, a, o), l.setXY(1, s, o), l.setXY(2, a, c), l.setXY(3, s, c), l.needsUpdate = !0, [
 			a,
 			o,
 			s,

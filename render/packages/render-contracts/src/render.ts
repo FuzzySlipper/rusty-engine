@@ -250,7 +250,12 @@ export interface TextureDescriptor {
 
 export interface SpriteFrameRect {
   readonly frame: number;
+  /**
+   * Inclusive normalized minimum in decoded PNG image space. The image origin
+   * is its top-left, U increases right, and V increases down.
+   */
   readonly uvMin: Vec2;
+  /** Exclusive normalized maximum in the same top-left image space. */
   readonly uvMax: Vec2;
   readonly size?: Vec2;
 }

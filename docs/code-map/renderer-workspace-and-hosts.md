@@ -103,6 +103,10 @@ compiled artifact, and Rust webview host/resource lifecycle.
   the resolved material texture. Whole-texture and atlas-region voxel sampling
   remain an explicit voxel-surface specialization; ordinary textured meshes do
   not enter that shader path.
+- Retained sprite atlas rectangles alone use upright decoded-PNG image space:
+  `(0, 0)` is top-left, U increases right, and V increases down. The Three
+  sprite quad performs that mapping locally; mesh and voxel texture orientation
+  is unchanged, and importers must not reverse PNG rows.
 - Textured voxel replacement reuses retained geometry/object handles and the
   reference-counted texture owner. The exact public consumer's lifecycle and
   provider disposal evidence are reconciled in the

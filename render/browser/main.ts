@@ -1674,7 +1674,9 @@ function voxelSurfaceBrowserFrame(orientation: 'standard' | 'rotated'): RenderFr
 }
 
 function billboardBrowserFrame(mode: 'spherical' | 'cylindrical'): RenderFrameDiff {
-  const contentHash = 'sha256:a58d5395a03945e56638dba7ae6158b2fdaf013610a798c059a6d88231a052ae';
+  // Asymmetric upright PNG: red top row, green bottom row. The visible browser
+  // proof catches any recurrence of the former bottom-up sprite convention.
+  const contentHash = 'sha256:51ab9cdbe436375f510ed5b05fd7106c2e6518d6279bb1e043d4bd9e100692f5';
   const suffix = mode === 'spherical' ? 'spherical' : 'cylindrical';
   const texture = `texture/billboard-proof-${suffix}`;
   const atlas = `sprite/billboard-proof-${suffix}`;
@@ -1686,7 +1688,7 @@ function billboardBrowserFrame(mode: 'spherical' | 'cylindrical'): RenderFrameDi
         texture: {
           id: texture,
           width: 2,
-          height: 1,
+          height: 2,
           filter: 'nearest',
           wrap: 'clamp',
           contentHash,
@@ -1695,15 +1697,15 @@ function billboardBrowserFrame(mode: 'spherical' | 'cylindrical'): RenderFrameDi
             encoding: 'pngRgba8',
             colorSpace: 'srgb',
             contentHash,
-            byteLength: 72,
+            byteLength: 74,
             source: {
               kind: 'inline',
               encodedBytes: [
                 137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82,
-                0, 0, 0, 2, 0, 0, 0, 1, 8, 6, 0, 0, 0, 244, 34, 127, 138, 0,
-                0, 0, 15, 73, 68, 65, 84, 120, 156, 99, 248, 207, 0, 68, 255,
-                25, 26, 0, 16, 121, 3, 126, 153, 113, 48, 89, 0, 0, 0, 0,
-                73, 69, 78, 68, 174, 66, 96, 130,
+                0, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0, 0, 0, 114, 182, 13, 36, 0,
+                0, 0, 17, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240, 31,
+                132, 65, 8, 12, 1, 69, 204, 7, 249, 202, 39, 25, 207, 0, 0, 0,
+                0, 73, 69, 78, 68, 174, 66, 96, 130,
               ],
             },
           },
@@ -1725,7 +1727,7 @@ function billboardBrowserFrame(mode: 'spherical' | 'cylindrical'): RenderFrameDi
           asset: atlas,
           frame: 0,
           pivot: [0.5, 0.5],
-          size: [3.5, 1],
+          size: [2, 2],
           sizeMode: 'world',
           billboard: mode,
           tint: [1, 1, 1, 1],
