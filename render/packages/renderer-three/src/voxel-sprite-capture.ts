@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 export const VOXEL_SPRITE_CAPTURE_MIN_RESOLUTION = 8;
-export const VOXEL_SPRITE_CAPTURE_MAX_RESOLUTION = 1024;
+export const VOXEL_SPRITE_CAPTURE_MAX_RESOLUTION = 4096;
 
 export type VoxelSpriteFrameProvenance = 'prepared' | 'runtime-capture';
 

@@ -73,18 +73,26 @@ a successful look.
 
 ## Bounded accounting
 
-The checked active frame has four RGBA8 96 by 96 textures, or 147,456 decoded
+The checked active frame had four RGBA8 96 by 96 textures, or 147,456 decoded
 texture bytes (144 KiB). Sixteen directions would be 2,359,296 decoded bytes
 (2.25 MiB) per actor before mipmaps, driver alignment, or compression. Three
 such actors would be 6.75 MiB of decoded frame textures. CraftSurvive's checked
 fixture is 5,333,416 encoded bytes across 195 resources, including its three
 source GLBs; encoded file bytes are not VRAM.
 
-At the configured 48 by 48 sample grid, relight, depth-parallax, and full-splat
-reported one enhancement draw and 2,304 samples. Sprite-backed splats reported
-two enhancement draws and 4,608 samples. The separately visible baseline adds
-its own presentation draw. These counts describe one selected representation,
-not a production crowd budget.
+That run used one 48 by 48 grid for both the base plane and splats. The
+iteration instrument now separates the base/depth-parallax grid (up to 128 by
+128) from the instanced-splat grid (up to 512 by 512). Depth quantization steps
+change sampled displacement levels; they do not change either grid's spatial
+detail. Sprite-backed splats still add one draw to the base presentation, while
+full splats remain one instanced draw. These counts describe one selected
+representation, not a production crowd budget.
+
+Runtime capture accepts an explicit experimental ceiling of 4,096 by 4,096.
+That size retains four RGBA8 outputs totaling 256 MiB and also needs a temporary
+32-bit hardware depth texture of 64 MiB while capture is in flight, before
+driver alignment and other backend overhead. High resolutions are therefore
+manual stress/quality probes, not defaults or evidence for routine capture.
 
 Credible scope from this campaign is therefore one or a few explicitly captured
 actors at 96 by 96, with capture triggered by product policy. It does not
@@ -99,10 +107,13 @@ preparation, bounded texture validation, and readout separation between capture
 and steady submission. They remain behind the explicitly experimental
 application-host port.
 
-Mode selection, sample rows/columns, depth amplitude, quantization steps, base
-sprite contribution, normal influence, splat overlap, capture elevation,
-resolution, and direction are laboratory controls. None is a production default
-or a renderer-neutral gameplay/content property.
+Mode selection, base sample rows/columns, splat rows/columns, splat opacity and
+blend mode, depth amplitude, quantization steps, base sprite contribution,
+normal influence, splat overlap, capture elevation, resolution, and direction
+are laboratory controls. Alpha-blended splats disable depth writes; additive
+splats also disable depth writes and use additive blending. Instances remain
+unsorted within their single draw, so alpha compositing is approximate. None is
+a production default or a renderer-neutral gameplay/content property.
 
 ## Failure ownership
 

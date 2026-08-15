@@ -616,6 +616,10 @@ test('public application host exposes a fail-atomic voxel-sprite experiment port
       config: {
         sampleColumns: 16,
         sampleRows: 8,
+        splatColumns: 24,
+        splatRows: 12,
+        splatOpacity: 0.4,
+        splatBlendMode: 'alpha-blend',
         depthAmplitude: 0.2,
         lightingMode: 'normal',
         ambientLight: 0.5,
@@ -732,6 +736,11 @@ test('public application host exposes a fail-atomic voxel-sprite experiment port
   expect(result.created.readout.entries[0]?.capture?.lighting?.mode).toBe('isolated');
   expect(result.created.readout.entries[0]?.enhancement.config.lightingMode).toBe('normal');
   expect(result.created.readout.entries[0]?.enhancement.config.outputGain).toBe(1.3);
+  expect(result.created.readout.entries[0]?.enhancement.config.splatColumns).toBe(24);
+  expect(result.created.readout.entries[0]?.enhancement.config.splatOpacity).toBe(0.4);
+  expect(result.created.readout.entries[0]?.enhancement.geometrySampleCount).toBe((16 * 8) + (24 * 12));
+  expect(result.created.readout.entries[0]?.enhancement.composition)
+    .toBe('base-blend-then-alpha-blended-splats');
   expect(result.lightingRecapture.applied).toBe(true);
   expect(result.studioDefaultChecksum).toBeGreaterThan(0);
   expect(result.studioAlternateChecksum).toBeGreaterThan(0);

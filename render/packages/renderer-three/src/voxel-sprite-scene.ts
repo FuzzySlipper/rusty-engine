@@ -2,7 +2,11 @@ import * as THREE from 'three';
 import type { RenderHandle, TextureDescriptor } from '@rusty-engine/render-contracts';
 
 import type { ThreeRenderer } from './three-renderer.js';
-import { VoxelSpriteFrame } from './voxel-sprite-capture.js';
+import {
+  VOXEL_SPRITE_CAPTURE_MAX_RESOLUTION,
+  VOXEL_SPRITE_CAPTURE_MIN_RESOLUTION,
+  VoxelSpriteFrame,
+} from './voxel-sprite-capture.js';
 import {
   VoxelSpriteEnhancement,
   type VoxelSpriteEnhancementConfig,
@@ -492,8 +496,13 @@ function validatedDefinition(input: RendererThreeVoxelSpriteDefinition): Rendere
 }
 
 function validatedCapture(input: RendererThreeVoxelSpriteCaptureSettings): RendererThreeVoxelSpriteCaptureSettings {
-  if (!Number.isInteger(input.resolution) || input.resolution < 8 || input.resolution > 1024) {
-    throw new RangeError('capture resolution must be an integer from 8 to 1024');
+  if (!Number.isInteger(input.resolution)
+    || input.resolution < VOXEL_SPRITE_CAPTURE_MIN_RESOLUTION
+    || input.resolution > VOXEL_SPRITE_CAPTURE_MAX_RESOLUTION) {
+    throw new RangeError(
+      `capture resolution must be an integer from ${String(VOXEL_SPRITE_CAPTURE_MIN_RESOLUTION)}`
+      + ` to ${String(VOXEL_SPRITE_CAPTURE_MAX_RESOLUTION)}`,
+    );
   }
   bounded(input.azimuthDegrees, -360, 360, 'capture azimuth');
   bounded(input.elevationDegrees, -89, 89, 'capture elevation');

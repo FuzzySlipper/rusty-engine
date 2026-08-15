@@ -13,6 +13,7 @@ export const VOXEL_SPRITE_ENHANCEMENT_MODES = Object.freeze([
 export type VoxelSpriteEnhancementMode = typeof VOXEL_SPRITE_ENHANCEMENT_MODES[number];
 export type VoxelSpriteDepthScale = 'normalized' | 'world';
 export type VoxelSpriteLightingMode = 'captured' | 'normal';
+export type VoxelSpriteSplatBlendMode = 'depth-write' | 'alpha-blend' | 'additive';
 
 export interface VoxelSpriteEnhancementConfig {
   readonly mode: VoxelSpriteEnhancementMode;
@@ -20,6 +21,9 @@ export interface VoxelSpriteEnhancementConfig {
   readonly height: number;
   readonly sampleColumns: number;
   readonly sampleRows: number;
+  /** Independent construction-time sampling grid used by instanced splats. */
+  readonly splatColumns: number;
+  readonly splatRows: number;
   readonly depthAmplitude: number;
   /** Maximum normalized depth contribution before scale and amplitude are applied. */
   readonly depthClamp: number;
@@ -30,6 +34,8 @@ export interface VoxelSpriteEnhancementConfig {
   readonly depthConfidenceThreshold: number;
   readonly splatFootprint: number;
   readonly splatOverlap: number;
+  readonly splatOpacity: number;
+  readonly splatBlendMode: VoxelSpriteSplatBlendMode;
   readonly normalInfluence: number;
   readonly normalOrientationBlend: number;
   readonly baseSpriteContribution: number;
@@ -64,13 +70,21 @@ export interface VoxelSpriteEnhancementReadout {
   readonly borrowedTextureCount: number;
   readonly baseSpriteVisible: boolean;
   readonly splatVisible: boolean;
-  readonly composition: 'opaque-depth-writing-base' | 'base-blend-then-depth-writing-splats' | 'depth-writing-splats';
+  readonly composition:
+    | 'opaque-depth-writing-base'
+    | 'base-blend-then-depth-writing-splats'
+    | 'base-blend-then-alpha-blended-splats'
+    | 'base-blend-then-additive-splats'
+    | 'depth-writing-splats'
+    | 'alpha-blended-splats'
+    | 'additive-splats';
   readonly disposed: boolean;
   readonly limitations: readonly [
     'single-capture-view',
     'view-space-normals',
     'rgba8-depth',
     'approximate-splat-orientation',
+    'unsorted-transparent-splats',
     'gpu-time-not-measured',
   ];
 }
@@ -81,6 +95,8 @@ const DEFAULT_CONFIG: VoxelSpriteEnhancementConfig = Object.freeze({
   height: 2,
   sampleColumns: 32,
   sampleRows: 32,
+  splatColumns: 32,
+  splatRows: 32,
   depthAmplitude: 0.35,
   depthClamp: 1,
   depthScale: 'normalized',
@@ -89,6 +105,8 @@ const DEFAULT_CONFIG: VoxelSpriteEnhancementConfig = Object.freeze({
   depthConfidenceThreshold: 0.5,
   splatFootprint: 1,
   splatOverlap: 0.15,
+  splatOpacity: 1,
+  splatBlendMode: 'depth-write',
   normalInfluence: 0.65,
   normalOrientationBlend: 0.35,
   baseSpriteContribution: 0.7,
@@ -107,6 +125,7 @@ const LIMITATIONS = Object.freeze([
   'view-space-normals',
   'rgba8-depth',
   'approximate-splat-orientation',
+  'unsorted-transparent-splats',
   'gpu-time-not-measured',
 ] as const);
 
@@ -129,6 +148,7 @@ interface EnhancementUniforms extends Record<string, THREE.IUniform> {
   readonly depthConfidenceThreshold: THREE.IUniform<number>;
   readonly splatFootprint: THREE.IUniform<number>;
   readonly splatOverlap: THREE.IUniform<number>;
+  readonly splatOpacity: THREE.IUniform<number>;
   readonly normalInfluence: THREE.IUniform<number>;
   readonly normalOrientationBlend: THREE.IUniform<number>;
   readonly baseSpriteContribution: THREE.IUniform<number>;
@@ -176,6 +196,8 @@ export class VoxelSpriteEnhancement {
     this.#config = validatedConfig({
       ...DEFAULT_CONFIG,
       ...config,
+      splatColumns: config.splatColumns ?? config.sampleColumns ?? DEFAULT_CONFIG.splatColumns,
+      splatRows: config.splatRows ?? config.sampleRows ?? DEFAULT_CONFIG.splatRows,
       lightingMode: config.lightingMode
         ?? (config.mode !== undefined && config.mode !== 'sprite' ? 'normal' : 'captured'),
     });
@@ -192,7 +214,7 @@ export class VoxelSpriteEnhancement {
     this.#baseMesh.frustumCulled = false;
     this.#baseMesh.renderOrder = 0;
 
-    this.#splatGeometry = splatGeometry(this.#config.sampleColumns, this.#config.sampleRows);
+    this.#splatGeometry = splatGeometry(this.#config.splatColumns, this.#config.splatRows);
     this.#splatMaterial = splatMaterial(this.#uniforms);
     this.#splatMesh = new THREE.Mesh(this.#splatGeometry, this.#splatMaterial);
     this.#splatMesh.name = 'voxel-sprite-splats';
@@ -263,14 +285,14 @@ export class VoxelSpriteEnhancement {
       expectedDrawCalls: Number(baseVisible) + Number(splatVisible),
       geometrySampleCount:
         (baseVisible ? this.#config.sampleColumns * this.#config.sampleRows : 0)
-        + (splatVisible ? this.#config.sampleColumns * this.#config.sampleRows : 0),
+        + (splatVisible ? this.#config.splatColumns * this.#config.splatRows : 0),
       frameTextureBytes: this.#frame.readout().estimatedTextureBytes,
       geometryResourceCount: this.#disposed ? 0 : 2,
       materialResourceCount: this.#disposed ? 0 : 2,
       borrowedTextureCount: this.#disposed ? 0 : 4,
       baseSpriteVisible: baseVisible,
       splatVisible,
-      composition: composition(mode),
+      composition: composition(mode, this.#config.splatBlendMode),
       disposed: this.#disposed,
       limitations: LIMITATIONS,
     });
@@ -297,6 +319,11 @@ export class VoxelSpriteEnhancement {
       : 1;
     this.#baseMaterial.depthWrite = mode !== 'sprite-splat';
     this.#baseMaterial.transparent = mode === 'sprite-splat';
+    this.#splatMaterial.depthWrite = this.#config.splatBlendMode === 'depth-write';
+    this.#splatMaterial.blending = this.#config.splatBlendMode === 'additive'
+      ? THREE.AdditiveBlending
+      : THREE.NormalBlending;
+    this.#splatMaterial.needsUpdate = true;
   }
 
   #assertLive(): void {
@@ -324,6 +351,8 @@ function validatedConfig(input: VoxelSpriteEnhancementConfig): VoxelSpriteEnhanc
   bounded(input.height, 0.05, 64, 'height');
   integer(input.sampleColumns, 8, 128, 'sampleColumns');
   integer(input.sampleRows, 8, 128, 'sampleRows');
+  integer(input.splatColumns, 8, 512, 'splatColumns');
+  integer(input.splatRows, 8, 512, 'splatRows');
   bounded(input.depthAmplitude, 0, 4, 'depthAmplitude');
   bounded(input.depthClamp, 0, 1, 'depthClamp');
   integer(input.depthQuantizationSteps, 0, 64, 'depthQuantizationSteps');
@@ -331,6 +360,10 @@ function validatedConfig(input: VoxelSpriteEnhancementConfig): VoxelSpriteEnhanc
   bounded(input.depthConfidenceThreshold, 0, 0.99, 'depthConfidenceThreshold');
   bounded(input.splatFootprint, 0.25, 4, 'splatFootprint');
   bounded(input.splatOverlap, 0, 2, 'splatOverlap');
+  bounded(input.splatOpacity, 0, 1, 'splatOpacity');
+  if (!['depth-write', 'alpha-blend', 'additive'].includes(input.splatBlendMode)) {
+    throw new RangeError('splatBlendMode must be depth-write, alpha-blend, or additive');
+  }
   bounded(input.normalInfluence, 0, 1, 'normalInfluence');
   bounded(input.normalOrientationBlend, 0, 1, 'normalOrientationBlend');
   bounded(input.baseSpriteContribution, 0, 1, 'baseSpriteContribution');
@@ -352,8 +385,10 @@ function rejectGridMutation(
   current: VoxelSpriteEnhancementConfig,
 ): void {
   if ((patch.sampleColumns !== undefined && patch.sampleColumns !== current.sampleColumns)
-    || (patch.sampleRows !== undefined && patch.sampleRows !== current.sampleRows)) {
-    throw new Error('sample grid is construction-time geometry and cannot be reconfigured');
+    || (patch.sampleRows !== undefined && patch.sampleRows !== current.sampleRows)
+    || (patch.splatColumns !== undefined && patch.splatColumns !== current.splatColumns)
+    || (patch.splatRows !== undefined && patch.splatRows !== current.splatRows)) {
+    throw new Error('base and splat sample grids are construction-time geometry and cannot be reconfigured');
   }
 }
 
@@ -423,6 +458,7 @@ function createUniforms(
     depthConfidenceThreshold: { value: 0 },
     splatFootprint: { value: 1 },
     splatOverlap: { value: 0 },
+    splatOpacity: { value: 1 },
     normalInfluence: { value: 0 },
     normalOrientationBlend: { value: 0 },
     baseSpriteContribution: { value: 1 },
@@ -455,7 +491,7 @@ function applyUniformConfig(
   config: VoxelSpriteEnhancementConfig,
 ): void {
   uniforms.objectSize.value.set(config.width, config.height);
-  uniforms.sampleGrid.value.set(config.sampleColumns, config.sampleRows);
+  uniforms.sampleGrid.value.set(config.splatColumns, config.splatRows);
   uniforms.depthAmplitude.value = config.depthAmplitude;
   uniforms.depthClamp.value = config.depthClamp;
   uniforms.useWorldDepth.value = config.depthScale === 'world' ? 1 : 0;
@@ -464,6 +500,7 @@ function applyUniformConfig(
   uniforms.depthConfidenceThreshold.value = config.depthConfidenceThreshold;
   uniforms.splatFootprint.value = config.splatFootprint;
   uniforms.splatOverlap.value = config.splatOverlap;
+  uniforms.splatOpacity.value = config.splatOpacity;
   uniforms.normalInfluence.value = config.normalInfluence;
   uniforms.normalOrientationBlend.value = config.normalOrientationBlend;
   uniforms.baseSpriteContribution.value = config.baseSpriteContribution;
@@ -558,7 +595,10 @@ function splatMaterial(uniforms: EnhancementUniforms): THREE.ShaderMaterial {
         if (coverage < 0.01 || color.a < 0.01) discard;
         vec3 normal = decodedNormal(voxelSpriteUv);
         vec3 lighting = lightingFor(normal);
-        gl_FragColor = vec4(color.rgb * lighting * outputGain, color.a * coverage * voxelSpriteViewWeight);
+        gl_FragColor = vec4(
+          color.rgb * lighting * outputGain,
+          color.a * coverage * voxelSpriteViewWeight * splatOpacity
+        );
       }
     `,
     transparent: true,
@@ -623,6 +663,7 @@ const SHARED_FRAGMENT_HEADER = `
   uniform sampler2D coverageTexture;
   uniform float normalInfluence;
   uniform float baseSpriteContribution;
+  uniform float splatOpacity;
   uniform float ambientLight;
   uniform float diffuseLight;
   uniform float outputGain;
@@ -663,8 +704,19 @@ function splatGeometry(columns: number, rows: number): THREE.InstancedBufferGeom
   return geometry;
 }
 
-function composition(mode: VoxelSpriteEnhancementMode): VoxelSpriteEnhancementReadout['composition'] {
-  if (mode === 'sprite-splat') return 'base-blend-then-depth-writing-splats';
-  if (mode === 'full-splat') return 'depth-writing-splats';
+function composition(
+  mode: VoxelSpriteEnhancementMode,
+  blendMode: VoxelSpriteSplatBlendMode,
+): VoxelSpriteEnhancementReadout['composition'] {
+  if (mode === 'sprite-splat') {
+    if (blendMode === 'alpha-blend') return 'base-blend-then-alpha-blended-splats';
+    if (blendMode === 'additive') return 'base-blend-then-additive-splats';
+    return 'base-blend-then-depth-writing-splats';
+  }
+  if (mode === 'full-splat') {
+    if (blendMode === 'alpha-blend') return 'alpha-blended-splats';
+    if (blendMode === 'additive') return 'additive-splats';
+    return 'depth-writing-splats';
+  }
   return 'opaque-depth-writing-base';
 }

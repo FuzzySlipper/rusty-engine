@@ -17,6 +17,12 @@ downstream repositories.
   RGBA8 linear depth, approximate normal-oriented splats, and CPU submission
   observations; they do not provide GPU timing, multi-view reconstruction,
   sorted transparent splats, animation capture, collision, or gameplay state.
+  Splat density is independent from the base/depth-parallax sample grid and
+  depth quantization; alpha and additive modes disable depth writes but do not
+  sort instances within the instanced draw. The explicit 4,096-square capture
+  ceiling retains 256 MiB across four RGBA8 outputs and uses another temporary
+  64 MiB 32-bit hardware depth texture before driver overhead, so it is a
+  manual stress option rather than a suitable default.
   Runtime color is the rendered source, not material albedo. Replacing complete
   application content disposes the attachment and makes its public port
   explicitly stale.

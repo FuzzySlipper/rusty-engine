@@ -15,7 +15,7 @@ void test('all enhancement modes reuse one bounded base and splat resource pair'
   const frame = testFrame(32, 24);
   const enhancement = new VoxelSpriteEnhancement(
     { frame, captureCpuSubmissionMilliseconds: 2.5 },
-    { sampleColumns: 16, sampleRows: 12 },
+    { sampleColumns: 16, sampleRows: 12, splatColumns: 24, splatRows: 20 },
   );
   const [base, splat] = enhancement.object.children as ShaderMesh[];
   const resourceIds = [base!.geometry.uuid, base!.material.uuid, splat!.geometry.uuid, splat!.material.uuid];
@@ -24,8 +24,8 @@ void test('all enhancement modes reuse one bounded base and splat resource pair'
     sprite: [1, 16 * 12],
     relit: [1, 16 * 12],
     'depth-parallax': [1, 16 * 12],
-    'sprite-splat': [2, 16 * 12 * 2],
-    'full-splat': [1, 16 * 12],
+    'sprite-splat': [2, (16 * 12) + (24 * 20)],
+    'full-splat': [1, 24 * 20],
   };
   for (const mode of VOXEL_SPRITE_ENHANCEMENT_MODES) {
     const readout = enhancement.configure({ mode });
@@ -44,6 +44,7 @@ void test('all enhancement modes reuse one bounded base and splat resource pair'
   assert.equal(readout.materialResourceCount, 2);
   assert.equal(readout.borrowedTextureCount, 4);
   assert.equal(readout.composition, 'depth-writing-splats');
+  assert.equal((splat!.geometry as THREE.InstancedBufferGeometry).instanceCount, 24 * 20);
   enhancement.dispose();
   frame.dispose();
 });
@@ -61,6 +62,8 @@ void test('configuration updates are validated, fail-atomic, and avoid recapture
     depthConfidenceThreshold: 0.7,
     splatFootprint: 1.4,
     splatOverlap: 0.4,
+    splatOpacity: 0.55,
+    splatBlendMode: 'alpha-blend',
     normalInfluence: 0.8,
     normalOrientationBlend: 0.6,
     baseSpriteContribution: 0.45,
@@ -78,7 +81,22 @@ void test('configuration updates are validated, fail-atomic, and avoid recapture
   assert.equal(configured.config.depthScale, 'world');
   assert.equal(configured.config.lightingMode, 'normal');
   assert.equal(configured.config.outputGain, 1.5);
+  assert.equal(configured.config.splatOpacity, 0.55);
+  assert.equal(configured.composition, 'base-blend-then-alpha-blended-splats');
+  const splatMaterial = (enhancement.object.children[1] as ShaderMesh).material;
+  assert.equal(splatMaterial.depthWrite, false);
+  assert.equal(splatMaterial.blending, THREE.NormalBlending);
   assert.ok(Math.abs(length(configured.config.lightDirection) - 1) < 1e-6);
+
+  const additive = enhancement.configure({ splatBlendMode: 'additive' });
+  assert.equal(additive.composition, 'base-blend-then-additive-splats');
+  assert.equal(splatMaterial.depthWrite, false);
+  assert.equal(splatMaterial.blending, THREE.AdditiveBlending);
+
+  const depthWriting = enhancement.configure({ splatBlendMode: 'depth-write' });
+  assert.equal(depthWriting.composition, 'base-blend-then-depth-writing-splats');
+  assert.equal(splatMaterial.depthWrite, true);
+  assert.equal(splatMaterial.blending, THREE.NormalBlending);
 
   const plainButRelit = enhancement.configure({ mode: 'sprite', lightingMode: 'normal' });
   assert.equal(plainButRelit.mode, 'sprite');
@@ -94,18 +112,45 @@ void test('configuration updates are validated, fail-atomic, and avoid recapture
   assert.throws(() => enhancement.configure({ depthClamp: 1.01 }), /depthClamp/);
   assert.throws(() => enhancement.configure({ depthConfidenceThreshold: 1 }), /depthConfidence/);
   assert.throws(() => enhancement.configure({ outputGain: 4.01 }), /outputGain/);
+  assert.throws(() => enhancement.configure({ splatOpacity: 1.01 }), /splatOpacity/);
+  assert.throws(
+    () => enhancement.configure({ splatBlendMode: 'multiply' as never }),
+    /splatBlendMode/,
+  );
   assert.throws(() => enhancement.configure({ ambientColor: [1, -0.1, 1] }), /ambientColor/);
   assert.throws(() => enhancement.configure({ sampleColumns: 64 }), /construction-time geometry/);
+  assert.throws(() => enhancement.configure({ splatColumns: 64 }), /construction-time geometry/);
   assert.throws(
     () => enhancement.configure({ surprisingField: 1 } as Partial<never>),
     /unknown enhancement config fields/,
   );
-  assert.equal(enhancement.readout().revision, 4);
+  assert.equal(enhancement.readout().revision, 6);
   assert.equal(enhancement.readout().config.depthAmplitude, 0.8);
 
   enhancement.recordSteadyStateFrame(1.25);
   assert.equal(enhancement.readout().steadyStateCpuSubmissionMilliseconds, 1.25);
   assert.throws(() => enhancement.recordSteadyStateFrame(Number.NaN), /finite and nonnegative/);
+  enhancement.dispose();
+  frame.dispose();
+});
+
+void test('splat density scales independently to the bounded 512 square maximum', () => {
+  const frame = testFrame(16, 16);
+  const enhancement = new VoxelSpriteEnhancement(
+    { frame },
+    {
+      mode: 'full-splat',
+      sampleColumns: 8,
+      sampleRows: 8,
+      splatColumns: 512,
+      splatRows: 512,
+    },
+  );
+  const splat = enhancement.object.children[1] as ShaderMesh;
+
+  assert.equal(enhancement.readout().geometrySampleCount, 512 * 512);
+  assert.equal((splat.geometry as THREE.InstancedBufferGeometry).instanceCount, 512 * 512);
+
   enhancement.dispose();
   frame.dispose();
 });

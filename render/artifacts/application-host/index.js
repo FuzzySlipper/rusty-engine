@@ -19411,7 +19411,7 @@ var L_ = Math.PI / 180;
 function R_(e, t) {
 	e.position.set(...t.position), e.up.set(0, 1, 0), e.rotation.order = "YXZ", e.rotation.x = t.pitchDegrees * L_, e.rotation.y = -t.yawDegrees * L_, e.rotation.z = 0;
 }
-var z_ = 1024, B_ = class e {
+var z_ = 4096, B_ = class e {
 	descriptor;
 	#e;
 	#t = !1;
@@ -19575,7 +19575,7 @@ function K_(e) {
 	};
 }
 function q_(e, t) {
-	if (!Number.isInteger(e) || e < 8 || e > 1024) throw RangeError(`${t} must be an integer from 8 to ${String(z_)}`);
+	if (!Number.isInteger(e) || e < 8 || e > 4096) throw RangeError(`${t} must be an integer from 8 to ${String(z_)}`);
 }
 function J_(e) {
 	for (let t of [
@@ -19746,6 +19746,8 @@ var pv = Object.freeze([
 	height: 2,
 	sampleColumns: 32,
 	sampleRows: 32,
+	splatColumns: 32,
+	splatRows: 32,
 	depthAmplitude: .35,
 	depthClamp: 1,
 	depthScale: "normalized",
@@ -19754,6 +19756,8 @@ var pv = Object.freeze([
 	depthConfidenceThreshold: .5,
 	splatFootprint: 1,
 	splatOverlap: .15,
+	splatOpacity: 1,
+	splatBlendMode: "depth-write",
 	normalInfluence: .65,
 	normalOrientationBlend: .35,
 	baseSpriteContribution: .7,
@@ -19782,6 +19786,7 @@ var pv = Object.freeze([
 	"view-space-normals",
 	"rgba8-depth",
 	"approximate-splat-orientation",
+	"unsorted-transparent-splats",
 	"gpu-time-not-measured"
 ]), gv = new Set(Object.keys(mv)), _v = class {
 	object = new ua();
@@ -19802,8 +19807,10 @@ var pv = Object.freeze([
 		this.#u = vv(e.frame), this.#s = Ev(e.captureCpuSubmissionMilliseconds ?? null, "captureCpuSubmissionMilliseconds"), yv(t), this.#c = bv({
 			...mv,
 			...t,
+			splatColumns: t.splatColumns ?? t.sampleColumns ?? mv.splatColumns,
+			splatRows: t.splatRows ?? t.sampleRows ?? mv.splatRows,
 			lightingMode: t.lightingMode ?? (t.mode !== void 0 && t.mode !== "sprite" ? "normal" : "captured")
-		}), this.#o = Ov(this.#u, this.#c), this.#e = new lc(1, 1, this.#c.sampleColumns - 1, this.#c.sampleRows - 1), this.#t = jv(this.#o), this.#n = new ns(this.#e, this.#t), this.#n.name = "voxel-sprite-base", this.#n.frustumCulled = !1, this.#n.renderOrder = 0, this.#r = Fv(this.#c.sampleColumns, this.#c.sampleRows), this.#i = Mv(this.#o), this.#a = new ns(this.#r, this.#i), this.#a.name = "voxel-sprite-splats", this.#a.frustumCulled = !1, this.#a.renderOrder = 1, this.object.name = "voxel-sprite-enhancement", this.object.add(this.#n, this.#a), this.#p();
+		}), this.#o = Ov(this.#u, this.#c), this.#e = new lc(1, 1, this.#c.sampleColumns - 1, this.#c.sampleRows - 1), this.#t = jv(this.#o), this.#n = new ns(this.#e, this.#t), this.#n.name = "voxel-sprite-base", this.#n.frustumCulled = !1, this.#n.renderOrder = 0, this.#r = Fv(this.#c.splatColumns, this.#c.splatRows), this.#i = Mv(this.#o), this.#a = new ns(this.#r, this.#i), this.#a.name = "voxel-sprite-splats", this.#a.frustumCulled = !1, this.#a.renderOrder = 1, this.object.name = "voxel-sprite-enhancement", this.object.add(this.#n, this.#a), this.#p();
 	}
 	configure(e) {
 		return this.#m(), yv(e), xv(e, this.#c), this.#c = bv({
@@ -19838,14 +19845,14 @@ var pv = Object.freeze([
 			captureCpuSubmissionMilliseconds: this.#s,
 			steadyStateCpuSubmissionMilliseconds: this.#f,
 			expectedDrawCalls: Number(t) + Number(n),
-			geometrySampleCount: (t ? this.#c.sampleColumns * this.#c.sampleRows : 0) + (n ? this.#c.sampleColumns * this.#c.sampleRows : 0),
+			geometrySampleCount: (t ? this.#c.sampleColumns * this.#c.sampleRows : 0) + (n ? this.#c.splatColumns * this.#c.splatRows : 0),
 			frameTextureBytes: this.#u.readout().estimatedTextureBytes,
 			geometryResourceCount: this.#l ? 0 : 2,
 			materialResourceCount: this.#l ? 0 : 2,
 			borrowedTextureCount: this.#l ? 0 : 4,
 			baseSpriteVisible: t,
 			splatVisible: n,
-			composition: Iv(e),
+			composition: Iv(e, this.#c.splatBlendMode),
 			disposed: this.#l,
 			limitations: hv
 		});
@@ -19855,7 +19862,7 @@ var pv = Object.freeze([
 	}
 	#p() {
 		let e = this.#c.mode;
-		this.#n.visible = e !== "full-splat", this.#a.visible = e === "sprite-splat" || e === "full-splat", this.#o.baseDepthDisplacement.value = +(e === "depth-parallax"), this.#o.baseSpriteContribution.value = e === "sprite-splat" ? this.#c.baseSpriteContribution : 1, this.#t.depthWrite = e !== "sprite-splat", this.#t.transparent = e === "sprite-splat";
+		this.#n.visible = e !== "full-splat", this.#a.visible = e === "sprite-splat" || e === "full-splat", this.#o.baseDepthDisplacement.value = +(e === "depth-parallax"), this.#o.baseSpriteContribution.value = e === "sprite-splat" ? this.#c.baseSpriteContribution : 1, this.#t.depthWrite = e !== "sprite-splat", this.#t.transparent = e === "sprite-splat", this.#i.depthWrite = this.#c.splatBlendMode === "depth-write", this.#i.blending = this.#c.splatBlendMode === "additive" ? 2 : 1, this.#i.needsUpdate = !0;
 	}
 	#m() {
 		if (this.#l) throw Error("voxel sprite enhancement is disposed");
@@ -19873,7 +19880,12 @@ function yv(e) {
 function bv(e) {
 	if (!pv.includes(e.mode)) throw RangeError("unknown enhancement mode");
 	if (e.depthScale !== "normalized" && e.depthScale !== "world") throw RangeError("depthScale must be normalized or world");
-	if (Sv(e.width, .05, 64, "width"), Sv(e.height, .05, 64, "height"), Cv(e.sampleColumns, 8, 128, "sampleColumns"), Cv(e.sampleRows, 8, 128, "sampleRows"), Sv(e.depthAmplitude, 0, 4, "depthAmplitude"), Sv(e.depthClamp, 0, 1, "depthClamp"), Cv(e.depthQuantizationSteps, 0, 64, "depthQuantizationSteps"), Sv(e.depthDilationTexels, 0, 4, "depthDilationTexels"), Sv(e.depthConfidenceThreshold, 0, .99, "depthConfidenceThreshold"), Sv(e.splatFootprint, .25, 4, "splatFootprint"), Sv(e.splatOverlap, 0, 2, "splatOverlap"), Sv(e.normalInfluence, 0, 1, "normalInfluence"), Sv(e.normalOrientationBlend, 0, 1, "normalOrientationBlend"), Sv(e.baseSpriteContribution, 0, 1, "baseSpriteContribution"), Sv(e.viewAngleFalloff, 0, 16, "viewAngleFalloff"), e.lightingMode !== "captured" && e.lightingMode !== "normal") throw RangeError("lightingMode must be captured or normal");
+	if (Sv(e.width, .05, 64, "width"), Sv(e.height, .05, 64, "height"), Cv(e.sampleColumns, 8, 128, "sampleColumns"), Cv(e.sampleRows, 8, 128, "sampleRows"), Cv(e.splatColumns, 8, 512, "splatColumns"), Cv(e.splatRows, 8, 512, "splatRows"), Sv(e.depthAmplitude, 0, 4, "depthAmplitude"), Sv(e.depthClamp, 0, 1, "depthClamp"), Cv(e.depthQuantizationSteps, 0, 64, "depthQuantizationSteps"), Sv(e.depthDilationTexels, 0, 4, "depthDilationTexels"), Sv(e.depthConfidenceThreshold, 0, .99, "depthConfidenceThreshold"), Sv(e.splatFootprint, .25, 4, "splatFootprint"), Sv(e.splatOverlap, 0, 2, "splatOverlap"), Sv(e.splatOpacity, 0, 1, "splatOpacity"), ![
+		"depth-write",
+		"alpha-blend",
+		"additive"
+	].includes(e.splatBlendMode)) throw RangeError("splatBlendMode must be depth-write, alpha-blend, or additive");
+	if (Sv(e.normalInfluence, 0, 1, "normalInfluence"), Sv(e.normalOrientationBlend, 0, 1, "normalOrientationBlend"), Sv(e.baseSpriteContribution, 0, 1, "baseSpriteContribution"), Sv(e.viewAngleFalloff, 0, 16, "viewAngleFalloff"), e.lightingMode !== "captured" && e.lightingMode !== "normal") throw RangeError("lightingMode must be captured or normal");
 	Sv(e.ambientLight, 0, 4, "ambientLight"), Sv(e.diffuseLight, 0, 4, "diffuseLight"), Sv(e.outputGain, .1, 4, "outputGain");
 	let t = Tv(e.ambientColor, "ambientColor"), n = Tv(e.lightColor, "lightColor"), r = wv(e.lightDirection, "lightDirection");
 	return Object.freeze({
@@ -19884,7 +19896,7 @@ function bv(e) {
 	});
 }
 function xv(e, t) {
-	if (e.sampleColumns !== void 0 && e.sampleColumns !== t.sampleColumns || e.sampleRows !== void 0 && e.sampleRows !== t.sampleRows) throw Error("sample grid is construction-time geometry and cannot be reconfigured");
+	if (e.sampleColumns !== void 0 && e.sampleColumns !== t.sampleColumns || e.sampleRows !== void 0 && e.sampleRows !== t.sampleRows || e.splatColumns !== void 0 && e.splatColumns !== t.splatColumns || e.splatRows !== void 0 && e.splatRows !== t.splatRows) throw Error("base and splat sample grids are construction-time geometry and cannot be reconfigured");
 }
 function Sv(e, t, n, r) {
 	if (!Number.isFinite(e) || e < t || e > n) throw RangeError(`${r} must be finite from ${String(t)} to ${String(n)}`);
@@ -19931,6 +19943,7 @@ function Ov(e, t) {
 		depthConfidenceThreshold: { value: 0 },
 		splatFootprint: { value: 1 },
 		splatOverlap: { value: 0 },
+		splatOpacity: { value: 1 },
 		normalInfluence: { value: 0 },
 		normalOrientationBlend: { value: 0 },
 		baseSpriteContribution: { value: 1 },
@@ -19950,7 +19963,7 @@ function kv(e, t) {
 	e.colorTexture.value = t.descriptor.textures.color, e.depthTexture.value = t.descriptor.textures.depth, e.normalTexture.value = t.descriptor.textures.normal, e.coverageTexture.value = t.descriptor.textures.coverage, e.textureTexelSize.value.set(1 / t.descriptor.width, 1 / t.descriptor.height), e.depthRange.value = t.descriptor.depth.far - t.descriptor.depth.near;
 }
 function Av(e, t) {
-	e.objectSize.value.set(t.width, t.height), e.sampleGrid.value.set(t.sampleColumns, t.sampleRows), e.depthAmplitude.value = t.depthAmplitude, e.depthClamp.value = t.depthClamp, e.useWorldDepth.value = +(t.depthScale === "world"), e.depthQuantizationSteps.value = t.depthQuantizationSteps, e.depthDilationTexels.value = t.depthDilationTexels, e.depthConfidenceThreshold.value = t.depthConfidenceThreshold, e.splatFootprint.value = t.splatFootprint, e.splatOverlap.value = t.splatOverlap, e.normalInfluence.value = t.normalInfluence, e.normalOrientationBlend.value = t.normalOrientationBlend, e.baseSpriteContribution.value = t.baseSpriteContribution, e.viewAngleFalloff.value = t.viewAngleFalloff, e.ambientLight.value = t.ambientLight, e.diffuseLight.value = t.diffuseLight, e.outputGain.value = t.outputGain, e.ambientColor.value.setRGB(...t.ambientColor), e.lightColor.value.setRGB(...t.lightColor), e.lightDirection.value.set(...t.lightDirection), e.normalLighting.value = +(t.lightingMode === "normal");
+	e.objectSize.value.set(t.width, t.height), e.sampleGrid.value.set(t.splatColumns, t.splatRows), e.depthAmplitude.value = t.depthAmplitude, e.depthClamp.value = t.depthClamp, e.useWorldDepth.value = +(t.depthScale === "world"), e.depthQuantizationSteps.value = t.depthQuantizationSteps, e.depthDilationTexels.value = t.depthDilationTexels, e.depthConfidenceThreshold.value = t.depthConfidenceThreshold, e.splatFootprint.value = t.splatFootprint, e.splatOverlap.value = t.splatOverlap, e.splatOpacity.value = t.splatOpacity, e.normalInfluence.value = t.normalInfluence, e.normalOrientationBlend.value = t.normalOrientationBlend, e.baseSpriteContribution.value = t.baseSpriteContribution, e.viewAngleFalloff.value = t.viewAngleFalloff, e.ambientLight.value = t.ambientLight, e.diffuseLight.value = t.diffuseLight, e.outputGain.value = t.outputGain, e.ambientColor.value.setRGB(...t.ambientColor), e.lightColor.value.setRGB(...t.lightColor), e.lightDirection.value.set(...t.lightDirection), e.normalLighting.value = +(t.lightingMode === "normal");
 }
 function jv(e) {
 	return new yc({
@@ -20032,7 +20045,10 @@ function Mv(e) {
         if (coverage < 0.01 || color.a < 0.01) discard;
         vec3 normal = decodedNormal(voxelSpriteUv);
         vec3 lighting = lightingFor(normal);
-        gl_FragColor = vec4(color.rgb * lighting * outputGain, color.a * coverage * voxelSpriteViewWeight);
+        gl_FragColor = vec4(
+          color.rgb * lighting * outputGain,
+          color.a * coverage * voxelSpriteViewWeight * splatOpacity
+        );
       }
     `,
 		transparent: !0,
@@ -20042,7 +20058,7 @@ function Mv(e) {
 		blending: 1
 	});
 }
-var Nv = "\n  uniform sampler2D depthTexture;\n  uniform sampler2D normalTexture;\n  uniform sampler2D coverageTexture;\n  uniform vec2 textureTexelSize;\n  uniform vec2 objectSize;\n  uniform vec2 sampleGrid;\n  uniform float depthAmplitude;\n  uniform float depthClamp;\n  uniform float depthRange;\n  uniform float useWorldDepth;\n  uniform float depthQuantizationSteps;\n  uniform float depthDilationTexels;\n  uniform float depthConfidenceThreshold;\n  uniform float baseDepthDisplacement;\n  uniform float splatFootprint;\n  uniform float splatOverlap;\n  uniform float normalOrientationBlend;\n  uniform float viewAngleFalloff;\n  vec2 sampleDilatedDepth(vec2 sourceUv) {\n    vec2 offsetUv = textureTexelSize * depthDilationTexels;\n    vec2 best = vec2(texture2D(depthTexture, sourceUv).r, texture2D(coverageTexture, sourceUv).r);\n    vec2 candidate = vec2(texture2D(depthTexture, sourceUv + vec2(offsetUv.x, 0.0)).r, texture2D(coverageTexture, sourceUv + vec2(offsetUv.x, 0.0)).r);\n    if (candidate.y > best.y || (candidate.y == best.y && candidate.x < best.x)) best = candidate;\n    candidate = vec2(texture2D(depthTexture, sourceUv - vec2(offsetUv.x, 0.0)).r, texture2D(coverageTexture, sourceUv - vec2(offsetUv.x, 0.0)).r);\n    if (candidate.y > best.y || (candidate.y == best.y && candidate.x < best.x)) best = candidate;\n    candidate = vec2(texture2D(depthTexture, sourceUv + vec2(0.0, offsetUv.y)).r, texture2D(coverageTexture, sourceUv + vec2(0.0, offsetUv.y)).r);\n    if (candidate.y > best.y || (candidate.y == best.y && candidate.x < best.x)) best = candidate;\n    candidate = vec2(texture2D(depthTexture, sourceUv - vec2(0.0, offsetUv.y)).r, texture2D(coverageTexture, sourceUv - vec2(0.0, offsetUv.y)).r);\n    if (candidate.y > best.y || (candidate.y == best.y && candidate.x < best.x)) best = candidate;\n    return best;\n  }\n  float confidenceFor(float coverage) {\n    return smoothstep(depthConfidenceThreshold, min(depthConfidenceThreshold + 0.01, 1.0), coverage);\n  }\n  float visibleDepthOffset(float depth) {\n    float visibleDepth = 1.0 - depth;\n    if (depthQuantizationSteps > 0.5) {\n      visibleDepth = floor(visibleDepth * depthQuantizationSteps + 0.5) / depthQuantizationSteps;\n    }\n    float scale = mix(1.0, depthRange, useWorldDepth);\n    return min(visibleDepth, depthClamp) * depthAmplitude * scale;\n  }\n  vec3 decodedNormal(vec2 sourceUv) {\n    return normalize(texture2D(normalTexture, sourceUv).xyz * 2.0 - 1.0);\n  }\n", Pv = "\n  uniform sampler2D colorTexture;\n  uniform sampler2D normalTexture;\n  uniform sampler2D coverageTexture;\n  uniform float normalInfluence;\n  uniform float baseSpriteContribution;\n  uniform float ambientLight;\n  uniform float diffuseLight;\n  uniform float outputGain;\n  uniform float normalLighting;\n  uniform vec3 ambientColor;\n  uniform vec3 lightColor;\n  uniform vec3 lightDirection;\n  vec3 decodedNormal(vec2 sourceUv) {\n    return normalize(texture2D(normalTexture, sourceUv).xyz * 2.0 - 1.0);\n  }\n  vec3 lightingFor(vec3 normal) {\n    float diffuse = max(dot(normal, normalize(lightDirection)), 0.0);\n    vec3 relitValue = ambientColor * ambientLight + lightColor * diffuse * diffuseLight;\n    return mix(vec3(1.0), relitValue, normalInfluence * normalLighting);\n  }\n";
+var Nv = "\n  uniform sampler2D depthTexture;\n  uniform sampler2D normalTexture;\n  uniform sampler2D coverageTexture;\n  uniform vec2 textureTexelSize;\n  uniform vec2 objectSize;\n  uniform vec2 sampleGrid;\n  uniform float depthAmplitude;\n  uniform float depthClamp;\n  uniform float depthRange;\n  uniform float useWorldDepth;\n  uniform float depthQuantizationSteps;\n  uniform float depthDilationTexels;\n  uniform float depthConfidenceThreshold;\n  uniform float baseDepthDisplacement;\n  uniform float splatFootprint;\n  uniform float splatOverlap;\n  uniform float normalOrientationBlend;\n  uniform float viewAngleFalloff;\n  vec2 sampleDilatedDepth(vec2 sourceUv) {\n    vec2 offsetUv = textureTexelSize * depthDilationTexels;\n    vec2 best = vec2(texture2D(depthTexture, sourceUv).r, texture2D(coverageTexture, sourceUv).r);\n    vec2 candidate = vec2(texture2D(depthTexture, sourceUv + vec2(offsetUv.x, 0.0)).r, texture2D(coverageTexture, sourceUv + vec2(offsetUv.x, 0.0)).r);\n    if (candidate.y > best.y || (candidate.y == best.y && candidate.x < best.x)) best = candidate;\n    candidate = vec2(texture2D(depthTexture, sourceUv - vec2(offsetUv.x, 0.0)).r, texture2D(coverageTexture, sourceUv - vec2(offsetUv.x, 0.0)).r);\n    if (candidate.y > best.y || (candidate.y == best.y && candidate.x < best.x)) best = candidate;\n    candidate = vec2(texture2D(depthTexture, sourceUv + vec2(0.0, offsetUv.y)).r, texture2D(coverageTexture, sourceUv + vec2(0.0, offsetUv.y)).r);\n    if (candidate.y > best.y || (candidate.y == best.y && candidate.x < best.x)) best = candidate;\n    candidate = vec2(texture2D(depthTexture, sourceUv - vec2(0.0, offsetUv.y)).r, texture2D(coverageTexture, sourceUv - vec2(0.0, offsetUv.y)).r);\n    if (candidate.y > best.y || (candidate.y == best.y && candidate.x < best.x)) best = candidate;\n    return best;\n  }\n  float confidenceFor(float coverage) {\n    return smoothstep(depthConfidenceThreshold, min(depthConfidenceThreshold + 0.01, 1.0), coverage);\n  }\n  float visibleDepthOffset(float depth) {\n    float visibleDepth = 1.0 - depth;\n    if (depthQuantizationSteps > 0.5) {\n      visibleDepth = floor(visibleDepth * depthQuantizationSteps + 0.5) / depthQuantizationSteps;\n    }\n    float scale = mix(1.0, depthRange, useWorldDepth);\n    return min(visibleDepth, depthClamp) * depthAmplitude * scale;\n  }\n  vec3 decodedNormal(vec2 sourceUv) {\n    return normalize(texture2D(normalTexture, sourceUv).xyz * 2.0 - 1.0);\n  }\n", Pv = "\n  uniform sampler2D colorTexture;\n  uniform sampler2D normalTexture;\n  uniform sampler2D coverageTexture;\n  uniform float normalInfluence;\n  uniform float baseSpriteContribution;\n  uniform float splatOpacity;\n  uniform float ambientLight;\n  uniform float diffuseLight;\n  uniform float outputGain;\n  uniform float normalLighting;\n  uniform vec3 ambientColor;\n  uniform vec3 lightColor;\n  uniform vec3 lightDirection;\n  vec3 decodedNormal(vec2 sourceUv) {\n    return normalize(texture2D(normalTexture, sourceUv).xyz * 2.0 - 1.0);\n  }\n  vec3 lightingFor(vec3 normal) {\n    float diffuse = max(dot(normal, normalize(lightDirection)), 0.0);\n    vec3 relitValue = ambientColor * ambientLight + lightColor * diffuse * diffuseLight;\n    return mix(vec3(1.0), relitValue, normalInfluence * normalLighting);\n  }\n";
 function Fv(e, t) {
 	let n = new Tl();
 	n.setAttribute("position", new to([
@@ -20070,8 +20086,8 @@ function Fv(e, t) {
 	for (let n = 0; n < t; n += 1) for (let a = 0; a < e; a += 1) r[i] = (a + .5) / e, r[i + 1] = (n + .5) / t, i += 2;
 	return n.setAttribute("instanceUv", new bs(r, 2)), n.instanceCount = e * t, n;
 }
-function Iv(e) {
-	return e === "sprite-splat" ? "base-blend-then-depth-writing-splats" : e === "full-splat" ? "depth-writing-splats" : "opaque-depth-writing-base";
+function Iv(e, t) {
+	return e === "sprite-splat" ? t === "alpha-blend" ? "base-blend-then-alpha-blended-splats" : t === "additive" ? "base-blend-then-additive-splats" : "base-blend-then-depth-writing-splats" : e === "full-splat" ? t === "alpha-blend" ? "alpha-blended-splats" : t === "additive" ? "additive-splats" : "depth-writing-splats" : "opaque-depth-writing-base";
 }
 //#endregion
 //#region packages/renderer-three/dist/voxel-sprite-scene.js
@@ -20313,7 +20329,7 @@ function Bv(e) {
 	}) : e;
 }
 function Vv(e) {
-	if (!Number.isInteger(e.resolution) || e.resolution < 8 || e.resolution > 1024) throw RangeError("capture resolution must be an integer from 8 to 1024");
+	if (!Number.isInteger(e.resolution) || e.resolution < 8 || e.resolution > 4096) throw RangeError(`capture resolution must be an integer from 8 to ${String(z_)}`);
 	Qv(e.azimuthDegrees, -360, 360, "capture azimuth"), Qv(e.elevationDegrees, -89, 89, "capture elevation"), Qv(e.near, .001, 100, "capture near"), Qv(e.far, e.near + .001, 1e4, "capture far");
 	let t = e.lighting?.mode === "scene" ? Object.freeze({ mode: "scene" }) : Hv(e.lighting);
 	return Object.freeze({

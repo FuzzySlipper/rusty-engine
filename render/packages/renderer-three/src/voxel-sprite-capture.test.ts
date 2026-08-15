@@ -81,6 +81,26 @@ void test('capture rejects invalid requests without rendering or replacing the c
   assert.equal(receipt.readout.rejectedCaptureCount, 1);
 });
 
+void test('capture accepts the 4096 experiment ceiling without allocating CPU pixel arrays', () => {
+  const renderer = new FakeRenderer();
+  const capture = new VoxelSpriteRuntimeCapture(renderer as unknown as THREE.WebGLRenderer);
+  const scene = captureScene();
+  const camera = captureCamera();
+
+  const receipt = capture.capture({ scene, camera, width: 4096, height: 4096 });
+
+  assert.equal(receipt.applied, true);
+  assert.equal(receipt.frame?.readout().estimatedTextureBytes, 4096 * 4096 * 16);
+  assert.equal(renderer.renderCalls, 4);
+  capture.dispose();
+
+  const rejected = new VoxelSpriteRuntimeCapture(
+    new FakeRenderer() as unknown as THREE.WebGLRenderer,
+  ).capture({ scene, camera, width: 4097, height: 4096 });
+  assert.equal(rejected.applied, false);
+  assert.match(rejected.diagnostics[0]?.message ?? '', /4096/);
+});
+
 void test('successful recapture is atomic, restores caller state, and disposes replaced resources', () => {
   const renderer = new FakeRenderer();
   const originalTarget = new THREE.WebGLRenderTarget(2, 2);

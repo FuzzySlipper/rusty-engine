@@ -75,6 +75,8 @@ export interface RustyApplicationVoxelSpriteConfig {
   readonly height: number;
   readonly sampleColumns: number;
   readonly sampleRows: number;
+  readonly splatColumns: number;
+  readonly splatRows: number;
   readonly depthAmplitude: number;
   readonly depthClamp: number;
   readonly depthScale: 'normalized' | 'world';
@@ -83,6 +85,8 @@ export interface RustyApplicationVoxelSpriteConfig {
   readonly depthConfidenceThreshold: number;
   readonly splatFootprint: number;
   readonly splatOverlap: number;
+  readonly splatOpacity: number;
+  readonly splatBlendMode: 'depth-write' | 'alpha-blend' | 'additive';
   readonly normalInfluence: number;
   readonly normalOrientationBlend: number;
   readonly baseSpriteContribution: number;
@@ -170,13 +174,18 @@ export interface RustyApplicationVoxelSpriteEnhancementReadout {
   readonly composition:
     | 'opaque-depth-writing-base'
     | 'base-blend-then-depth-writing-splats'
-    | 'depth-writing-splats';
+    | 'base-blend-then-alpha-blended-splats'
+    | 'base-blend-then-additive-splats'
+    | 'depth-writing-splats'
+    | 'alpha-blended-splats'
+    | 'additive-splats';
   readonly disposed: boolean;
   readonly limitations: readonly [
     'single-capture-view',
     'view-space-normals',
     'rgba8-depth',
     'approximate-splat-orientation',
+    'unsorted-transparent-splats',
     'gpu-time-not-measured',
   ];
 }
