@@ -29,6 +29,17 @@ export type {
   RustyApplicationUiMount,
   RustyApplicationUiOwner,
   RustyApplicationUiPort,
+  RustyApplicationVoxelSpriteCaptureSettings,
+  RustyApplicationVoxelSpriteConfig,
+  RustyApplicationVoxelSpriteDefinition,
+  RustyApplicationVoxelSpriteDiagnostic,
+  RustyApplicationVoxelSpriteEnhancementReadout,
+  RustyApplicationVoxelSpriteExperimentPort,
+  RustyApplicationVoxelSpriteMode,
+  RustyApplicationVoxelSpritePreparedFrame,
+  RustyApplicationVoxelSpriteReadout,
+  RustyApplicationVoxelSpriteReceipt,
+  RustyApplicationVoxelSpriteSource,
 } from './application-host.js';
 export type {
   RustyApplicationContent,

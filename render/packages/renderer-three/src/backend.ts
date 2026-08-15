@@ -9,3 +9,5 @@ export * from './browser-surface-render-pass.js';
 export * from './editor-viewport-backend.js';
 export * from './voxel-surface-material.js';
 export * from './particle-sink.js';
+export * from './voxel-sprite-scene.js';
+export * from './voxel-sprite-enhancement.js';

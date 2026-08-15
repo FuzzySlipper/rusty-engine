@@ -129,8 +129,8 @@ test('application host owns composition, input arbitration, and disposal', async
   await expect(page.locator('[data-rusty-application-ui="downstream"] #gameplay-zone')).toBeVisible();
   expect(await page.evaluate(() => window.__rustyApplicationHost?.readout())).toMatchObject({
     contentRevision: 1,
-    resourceBytes: 124,
-    resourceCount: 2,
+    resourceBytes: 203,
+    resourceCount: 3,
   });
   await page.evaluate(() => {
     window.__rustyApplicationHost?.renderer.setCameraPose({
@@ -282,8 +282,8 @@ test('application host owns composition, input arbitration, and disposal', async
   await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
   expect(await page.evaluate(() => window.__rustyApplicationHost?.readout())).toMatchObject({
     contentRevision: 2,
-    resourceBytes: 124,
-    resourceCount: 2,
+    resourceBytes: 203,
+    resourceCount: 3,
   });
 
   await page.locator('#interface-button').click();
@@ -585,6 +585,145 @@ test('public application host realizes and advances Three particle bursts', asyn
   expect(magentaPixels).toBeGreaterThan(100);
 });
 
+test('public application host exposes a fail-atomic voxel-sprite experiment port', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  const result = await page.evaluate(() => {
+    const host = window.__rustyApplicationHost;
+    if (host === undefined) throw new Error('application host is unavailable');
+    const experiment = host.renderer.createVoxelSpriteExperiment();
+    window.__rustyApplicationVoxelSpriteExperiment = experiment;
+    const created = experiment.create({
+      id: 'runtime-proof',
+      source: {
+        kind: 'retained',
+        handle: 1,
+        capture: {
+          resolution: 64,
+          azimuthDegrees: 0,
+          elevationDegrees: 0,
+          near: 0.1,
+          far: 20,
+        },
+      },
+      transform: { position: [-1.1, 0, 0], width: 1.8, height: 1 },
+      mode: 'sprite-splat',
+      config: { sampleColumns: 16, sampleRows: 8, depthAmplitude: 0.2 },
+    });
+    const prepared = experiment.create({
+      id: 'prepared-proof',
+      source: {
+        kind: 'prepared',
+        frame: {
+          width: 8,
+          height: 8,
+          textures: {
+            color: 'texture/application-host-voxel-color',
+            depth: 'texture/application-host-voxel-depth',
+            normal: 'texture/application-host-voxel-normal',
+            coverage: 'texture/application-host-voxel-coverage',
+          },
+          depth: { near: 0.1, far: 20 },
+          capture: {
+            projection: 'perspective',
+            position: [0, 0, 3],
+            right: [1, 0, 0],
+            up: [0, 1, 0],
+            forward: [0, 0, -1],
+            boundsMinimum: [-1, -0.5, -0.5],
+            boundsMaximum: [1, 0.5, 0.5],
+          },
+        },
+      },
+      transform: { position: [1.1, 0, 0], width: 1.8, height: 1 },
+      mode: 'depth-parallax',
+      config: { sampleColumns: 16, sampleRows: 8, depthAmplitude: 0.2 },
+    });
+    const failedReplacement = experiment.replace({
+      id: 'runtime-proof',
+      source: {
+        kind: 'retained',
+        handle: 999,
+        capture: {
+          resolution: 64,
+          azimuthDegrees: 0,
+          elevationDegrees: 0,
+          near: 0.1,
+          far: 20,
+        },
+      },
+      transform: { position: [0, 0, 0], width: 2, height: 1 },
+      mode: 'full-splat',
+    });
+    const recaptured = experiment.recapture('runtime-proof', {
+      resolution: 32,
+      azimuthDegrees: 20,
+      elevationDegrees: 5,
+      near: 0.1,
+      far: 20,
+    });
+    host.renderer.renderOnce();
+    return {
+      created,
+      prepared,
+      failedReplacement,
+      recaptured,
+      finalReadout: experiment.readout(),
+    };
+  });
+  expect(result.created.applied).toBe(true);
+  expect(result.created.readout.entries[0]?.source).toBe('retained');
+  expect(result.created.readout.entries[0]?.enhancement.captureCpuSubmissionMilliseconds)
+    .not.toBeNull();
+  expect(result.prepared.applied).toBe(true);
+  expect(result.prepared.readout.entries.some((entry) => entry.source === 'prepared')).toBe(true);
+  expect(result.failedReplacement.applied).toBe(false);
+  expect(result.failedReplacement.diagnostics[0]?.code).toBe('missing_source');
+  expect(result.failedReplacement.readout.entries
+    .find((entry) => entry.id === 'runtime-proof')?.enhancement.mode).toBe('sprite-splat');
+  expect(result.recaptured.applied).toBe(true);
+  expect(result.finalReadout.entries.find((entry) => entry.id === 'runtime-proof')?.capture?.resolution)
+    .toBe(32);
+
+  const visiblePixels = await page.locator('canvas').evaluate((element) => {
+    window.__rustyApplicationHost?.renderer.renderOnce();
+    const canvas = element as HTMLCanvasElement;
+    const context = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
+    if (context === null) return 0;
+    const pixels = new Uint8Array(context.drawingBufferWidth * context.drawingBufferHeight * 4);
+    context.readPixels(
+      0,
+      0,
+      context.drawingBufferWidth,
+      context.drawingBufferHeight,
+      context.RGBA,
+      context.UNSIGNED_BYTE,
+      pixels,
+    );
+    let count = 0;
+    for (let offset = 0; offset < pixels.length; offset += 4) {
+      if (pixels[offset]! > 100 && pixels[offset + 1]! < 100) count += 1;
+    }
+    return count;
+  });
+  expect(visiblePixels).toBeGreaterThan(10);
+
+  const replacement = await page.evaluate(async () => {
+    const host = window.__rustyApplicationHost;
+    const content = window.__rustyApplicationResourceContent?.();
+    if (host === undefined || content === undefined) throw new Error('fixture is unavailable');
+    const receipt = await host.renderer.replaceFrame(content.frame);
+    let staleCode = '';
+    try {
+      window.__rustyApplicationVoxelSpriteExperiment?.readout();
+    } catch (cause) {
+      staleCode = cause instanceof Error && 'code' in cause ? String(cause.code) : String(cause);
+    }
+    return { receipt, staleCode };
+  });
+  expect(replacement.receipt).toEqual({ applied: true, diagnostics: [] });
+  expect(replacement.staleCode).toBe('stale_renderer_port');
+});
+
 test('late trusted UI failure cleans the renderer transactionally and leaves bounded failure UI', async ({ page }) => {
   await page.goto('/browser/application-host.html');
   const message = await page.evaluate(() => window.__rustyApplicationFailureProbe?.());
@@ -647,8 +786,8 @@ test('queued complete content replacements publish in call order', async ({ page
   ]);
   expect(await page.evaluate(() => window.__rustyApplicationHost?.readout())).toMatchObject({
     contentRevision: 3,
-    resourceCount: 2,
-    resourceBytes: 124,
+    resourceCount: 3,
+    resourceBytes: 203,
   });
   await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
 });

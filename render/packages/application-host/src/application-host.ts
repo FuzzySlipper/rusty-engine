@@ -38,6 +38,167 @@ export interface RustyApplicationCameraPose {
   readonly yawDegrees: number;
 }
 
+export type RustyApplicationVoxelSpriteMode =
+  | 'sprite'
+  | 'relit'
+  | 'depth-parallax'
+  | 'sprite-splat'
+  | 'full-splat';
+
+export interface RustyApplicationVoxelSpriteCaptureSettings {
+  readonly resolution: number;
+  readonly azimuthDegrees: number;
+  readonly elevationDegrees: number;
+  readonly near: number;
+  readonly far: number;
+}
+
+export interface RustyApplicationVoxelSpriteConfig {
+  readonly mode: RustyApplicationVoxelSpriteMode;
+  readonly width: number;
+  readonly height: number;
+  readonly sampleColumns: number;
+  readonly sampleRows: number;
+  readonly depthAmplitude: number;
+  readonly depthClamp: number;
+  readonly depthScale: 'normalized' | 'world';
+  readonly depthQuantizationSteps: number;
+  readonly depthDilationTexels: number;
+  readonly depthConfidenceThreshold: number;
+  readonly splatFootprint: number;
+  readonly splatOverlap: number;
+  readonly normalInfluence: number;
+  readonly normalOrientationBlend: number;
+  readonly baseSpriteContribution: number;
+  readonly viewAngleFalloff: number;
+  readonly lightDirection: readonly [number, number, number];
+}
+
+export interface RustyApplicationVoxelSpritePreparedFrame {
+  readonly width: number;
+  readonly height: number;
+  readonly textures: {
+    readonly color: string;
+    readonly depth: string;
+    readonly normal: string;
+    readonly coverage: string;
+  };
+  readonly depth: { readonly near: number; readonly far: number };
+  readonly capture: {
+    readonly projection: 'perspective' | 'orthographic';
+    readonly position: readonly [number, number, number];
+    readonly right: readonly [number, number, number];
+    readonly up: readonly [number, number, number];
+    readonly forward: readonly [number, number, number];
+    readonly boundsMinimum: readonly [number, number, number];
+    readonly boundsMaximum: readonly [number, number, number];
+  };
+}
+
+export type RustyApplicationVoxelSpriteSource =
+  | {
+      readonly kind: 'retained';
+      readonly handle: number;
+      readonly capture: RustyApplicationVoxelSpriteCaptureSettings;
+    }
+  | {
+      readonly kind: 'prepared';
+      readonly frame: RustyApplicationVoxelSpritePreparedFrame;
+    };
+
+export interface RustyApplicationVoxelSpriteDefinition {
+  readonly id: string;
+  readonly source: RustyApplicationVoxelSpriteSource;
+  readonly transform: {
+    readonly position: readonly [number, number, number];
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly mode: RustyApplicationVoxelSpriteMode;
+  readonly config?: Partial<Omit<RustyApplicationVoxelSpriteConfig, 'mode' | 'width' | 'height'>>;
+}
+
+export interface RustyApplicationVoxelSpriteDiagnostic {
+  readonly code:
+    | 'disposed'
+    | 'duplicate_id'
+    | 'invalid_definition'
+    | 'missing_source'
+    | 'capture_failed'
+    | 'unknown_id';
+  readonly message: string;
+}
+
+export interface RustyApplicationVoxelSpriteEnhancementReadout {
+  readonly schemaVersion: 1;
+  readonly revision: number;
+  readonly mode: RustyApplicationVoxelSpriteMode;
+  readonly config: RustyApplicationVoxelSpriteConfig;
+  readonly captureCpuSubmissionMilliseconds: number | null;
+  readonly steadyStateCpuSubmissionMilliseconds: number | null;
+  readonly expectedDrawCalls: number;
+  readonly geometrySampleCount: number;
+  readonly frameTextureBytes: number;
+  readonly geometryResourceCount: number;
+  readonly materialResourceCount: number;
+  readonly borrowedTextureCount: number;
+  readonly baseSpriteVisible: boolean;
+  readonly splatVisible: boolean;
+  readonly composition:
+    | 'opaque-depth-writing-base'
+    | 'base-blend-then-depth-writing-splats'
+    | 'depth-writing-splats';
+  readonly disposed: boolean;
+  readonly limitations: readonly [
+    'single-capture-view',
+    'view-space-normals',
+    'rgba8-depth',
+    'approximate-splat-orientation',
+    'gpu-time-not-measured',
+  ];
+}
+
+export interface RustyApplicationVoxelSpriteReadout {
+  readonly schemaVersion: 1;
+  readonly revision: number;
+  readonly entries: readonly {
+    readonly id: string;
+    readonly source: 'retained' | 'prepared';
+    readonly sourceHandle: number | null;
+    readonly capture: RustyApplicationVoxelSpriteCaptureSettings | null;
+    readonly fallbackPreservedCount: number;
+    readonly enhancement: RustyApplicationVoxelSpriteEnhancementReadout;
+  }[];
+  readonly disposed: boolean;
+}
+
+export interface RustyApplicationVoxelSpriteReceipt {
+  readonly applied: boolean;
+  readonly diagnostics: readonly RustyApplicationVoxelSpriteDiagnostic[];
+  readonly readout: RustyApplicationVoxelSpriteReadout;
+}
+
+/** Experimental renderer attachment. It becomes stale when application content is replaced. */
+export interface RustyApplicationVoxelSpriteExperimentPort {
+  readonly create: (
+    definition: RustyApplicationVoxelSpriteDefinition,
+  ) => RustyApplicationVoxelSpriteReceipt;
+  readonly replace: (
+    definition: RustyApplicationVoxelSpriteDefinition,
+  ) => RustyApplicationVoxelSpriteReceipt;
+  readonly configure: (
+    id: string,
+    patch: Partial<RustyApplicationVoxelSpriteConfig>,
+  ) => RustyApplicationVoxelSpriteReceipt;
+  readonly recapture: (
+    id: string,
+    settings?: RustyApplicationVoxelSpriteCaptureSettings,
+  ) => RustyApplicationVoxelSpriteReceipt;
+  readonly destroy: (id: string) => RustyApplicationVoxelSpriteReceipt;
+  readonly readout: () => RustyApplicationVoxelSpriteReadout;
+  readonly dispose: () => void;
+}
+
 export interface RustyApplicationFrameDiagnostic {
   readonly code: string;
   readonly message: string;
@@ -71,6 +232,8 @@ export interface RustyApplicationRendererPort {
   ) => Promise<RustyApplicationPresentationReceipt>;
   /** Replace product content with the Engine-owned empty/default retained frame. */
   readonly clear: () => Promise<void>;
+  /** Create an experimental depth-enhanced sprite attachment on the current renderer surface. */
+  readonly createVoxelSpriteExperiment: () => RustyApplicationVoxelSpriteExperimentPort;
   readonly renderOnce: (timeMs?: number) => void;
   /** Atomically replace the immutable resource catalog and complete retained frame. */
   readonly replaceContent: (
@@ -167,7 +330,7 @@ export interface RustyApplicationHost {
 }
 
 export class RustyApplicationHostError extends Error {
-  readonly code: 'invalid_root' | 'mount_failed' | 'disposed';
+  readonly code: 'invalid_root' | 'mount_failed' | 'disposed' | 'stale_renderer_port';
 
   constructor(
     code: RustyApplicationHostError['code'],
@@ -530,6 +693,47 @@ async function mountRustyApplicationWithEnvironment(
             .join('; ')}`,
         );
       }
+    },
+    createVoxelSpriteExperiment: () => {
+      const owningSurface = requireActive();
+      const concrete = owningSurface.createVoxelSpriteExperiment();
+      let experimentDisposed = false;
+      const requireExperiment = (): typeof concrete => {
+        if (experimentDisposed) {
+          throw new RustyApplicationHostError(
+            'disposed',
+            'Rusty Application voxel sprite experiment is disposed',
+          );
+        }
+        if (requireActive() !== owningSurface) {
+          throw new RustyApplicationHostError(
+            'stale_renderer_port',
+            'Rusty Application voxel sprite experiment belongs to a replaced renderer surface',
+          );
+        }
+        return concrete;
+      };
+      return Object.freeze({
+        create: (definition: RustyApplicationVoxelSpriteDefinition) =>
+          requireExperiment().create(
+            definition as unknown as Parameters<typeof concrete.create>[0],
+          ),
+        replace: (definition: RustyApplicationVoxelSpriteDefinition) =>
+          requireExperiment().replace(
+            definition as unknown as Parameters<typeof concrete.replace>[0],
+          ),
+        configure: (id: string, patch: Partial<RustyApplicationVoxelSpriteConfig>) =>
+          requireExperiment().configure(id, patch),
+        recapture: (id: string, settings?: RustyApplicationVoxelSpriteCaptureSettings) =>
+          requireExperiment().recapture(id, settings),
+        destroy: (id: string) => requireExperiment().destroy(id),
+        readout: () => requireExperiment().readout(),
+        dispose: () => {
+          if (experimentDisposed) return;
+          experimentDisposed = true;
+          if (!closing && !disposed && surface === owningSurface) concrete.dispose();
+        },
+      });
     },
     renderOnce: (timeMs?: number) => {
       if (timeMs === undefined) requireActive().renderOnce();

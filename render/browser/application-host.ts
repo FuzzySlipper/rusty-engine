@@ -2,6 +2,7 @@ import {
   mountRustyApplication,
   type RustyApplicationContent,
   type RustyApplicationHost,
+  type RustyApplicationVoxelSpriteExperimentPort,
 } from '@rusty-engine/application-host';
 
 declare global {
@@ -16,6 +17,7 @@ declare global {
     __rustyApplicationIndicatorReceipt?: unknown;
     __rustyApplicationResourceContent?: (corrupt?: boolean) => RustyApplicationContent;
     __rustyApplicationUiDisposed?: boolean;
+    __rustyApplicationVoxelSpriteExperiment?: RustyApplicationVoxelSpriteExperimentPort;
   }
 }
 
@@ -28,6 +30,15 @@ const TEXTURE_BYTES = new Uint8Array([
 const TEXTURE_DIGEST = 'a58d5395a03945e56638dba7ae6158b2fdaf013610a798c059a6d88231a052ae';
 const TEXTURE_CONTENT_HASH = `sha256:${TEXTURE_DIGEST}`;
 const TEXTURE_RESOURCE = `texture-resource/${TEXTURE_DIGEST}`;
+const VOXEL_FRAME_BYTES = new Uint8Array([
+  137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,8,0,0,0,8,
+  8,6,0,0,0,196,15,190,139,0,0,0,22,73,68,65,84,24,211,99,60,208,
+  224,240,159,1,15,96,98,32,0,134,135,2,0,149,226,2,143,136,199,46,
+  79,0,0,0,0,73,69,78,68,174,66,96,130,
+]);
+const VOXEL_FRAME_DIGEST = 'd934c3fa8b5084fde1409345a36f4e849dc6db4caafeb5976ff9c2a3a116b4f8';
+const VOXEL_FRAME_CONTENT_HASH = `sha256:${VOXEL_FRAME_DIGEST}`;
+const VOXEL_FRAME_RESOURCE = `texture-resource/${VOXEL_FRAME_DIGEST}`;
 const AUDIO_BYTES = new Uint8Array([
   82,73,70,70,44,0,0,0,87,65,86,69,102,109,116,32,16,0,0,0,1,0,
   1,0,64,31,0,0,128,62,0,0,2,0,16,0,100,97,116,97,8,0,0,0,0,0,
@@ -56,6 +67,12 @@ function resourceContent(corrupt = false): RustyApplicationContent {
         contentHash: AUDIO_CONTENT_HASH,
         mediaType: 'audio/wav',
         bytes: AUDIO_BYTES.slice(),
+      },
+      {
+        identity: VOXEL_FRAME_RESOURCE,
+        contentHash: VOXEL_FRAME_CONTENT_HASH,
+        mediaType: 'image/png',
+        bytes: VOXEL_FRAME_BYTES.slice(),
       },
     ],
   };
@@ -310,6 +327,25 @@ function resourceBackedFrame(): RustyApplicationContent['frame'] {
           },
         },
       },
+      ...(['color', 'depth', 'normal', 'coverage'] as const).map((channel) => ({
+        op: 'defineTexture' as const,
+        texture: {
+          id: `texture/application-host-voxel-${channel}`,
+          width: 8,
+          height: 8,
+          filter: 'nearest' as const,
+          wrap: 'clamp' as const,
+          contentHash: VOXEL_FRAME_CONTENT_HASH,
+          version: 1,
+          payload: {
+            encoding: 'pngRgba8' as const,
+            colorSpace: channel === 'color' ? 'srgb' as const : 'linear' as const,
+            contentHash: VOXEL_FRAME_CONTENT_HASH,
+            byteLength: VOXEL_FRAME_BYTES.byteLength,
+            source: { kind: 'resource' as const, resource: VOXEL_FRAME_RESOURCE },
+          },
+        },
+      })),
       {
         op: 'defineMaterial',
         material: {

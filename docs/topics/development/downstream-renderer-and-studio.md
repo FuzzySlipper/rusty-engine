@@ -159,6 +159,16 @@ and transactional cleanup. The downstream UI mount receives only:
 - its own DOM root, where Angular, another framework, or direct typed DOM code
   can build the product HUD, menus, forms, and accessibility tree.
 
+The renderer port also exposes `createVoxelSpriteExperiment()` as a deliberately
+experimental, disposable presentation attachment. It can capture an admitted
+retained handle on explicit request or borrow four admitted prepared textures,
+then compare the bounded sprite/relight/depth/splat modes without exposing
+Three or adding those modes to Rust gameplay contracts. The attachment belongs
+to the current renderer surface: complete-content replacement disposes it, and
+subsequent use of the old port fails with `stale_renderer_port`. See the
+[runtime voxel-sprite limitation](../../known-limitations.md#runtime-voxel-sprite-enhancement-experiment)
+before using it in a downstream experiment.
+
 It never receives the canvas, Three/WebGL objects, renderer package topology,
 the private bridge, or a generic renderer command/eval path. The public
 `RustyApplicationContent` aggregate carries one complete Rust-projected frame

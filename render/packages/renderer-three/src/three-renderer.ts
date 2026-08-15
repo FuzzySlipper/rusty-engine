@@ -2280,6 +2280,11 @@ export class ThreeRenderer {
     return descriptor === undefined ? undefined : structuredClone(descriptor);
   }
 
+  /** Backend-host-only retained texture lookup; never expose the mutable texture downstream. */
+  textureObjectFor(id: string): THREE.Texture | undefined {
+    return this.#textureResources.get(id)?.texture;
+  }
+
   /** Immutable diagnostics for admitted encoded/decoded texture resources. */
   textureResourceReadout(): readonly RendererTextureResourceReadout[] {
     return Object.freeze([...this.#textureResources.values()]

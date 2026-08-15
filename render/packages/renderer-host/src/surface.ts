@@ -23,6 +23,10 @@ import {
   type RendererBrowserSurface,
   type RendererBrowserSurfacePickDiagnostic,
   type RendererBrowserSurfaceSubmissionStatistics,
+  type RendererThreeVoxelSpriteDefinition,
+  type RendererThreeVoxelSpriteReceipt,
+  type RendererThreeVoxelSpriteSceneReadout,
+  type VoxelSpriteEnhancementConfig,
   type MeshResourceSource,
   type TextureResourceSource,
 } from '@rusty-engine/renderer-three/backend';
@@ -73,6 +77,26 @@ import {
 export const RUSTY_RENDERER_HOST_COMPATIBILITY_VERSION = 'renderer-host.v1';
 export const RUSTY_RENDERER_SURFACE_LIGHTING_SCHEMA_VERSION = 1;
 export const RUSTY_RENDERER_SURFACE_MAX_ACTIVE_SHADOW_LIGHTS = 8;
+
+export type RendererVoxelSpriteDefinition = RendererThreeVoxelSpriteDefinition;
+export type RendererVoxelSpriteReceipt = RendererThreeVoxelSpriteReceipt;
+export type RendererVoxelSpriteReadout = RendererThreeVoxelSpriteSceneReadout;
+
+export interface RendererVoxelSpriteExperiment {
+  readonly create: (definition: RendererVoxelSpriteDefinition) => RendererVoxelSpriteReceipt;
+  readonly replace: (definition: RendererVoxelSpriteDefinition) => RendererVoxelSpriteReceipt;
+  readonly configure: (
+    id: string,
+    patch: Partial<VoxelSpriteEnhancementConfig>,
+  ) => RendererVoxelSpriteReceipt;
+  readonly recapture: (
+    id: string,
+    settings?: Extract<RendererVoxelSpriteDefinition['source'], { kind: 'retained' }>['capture'],
+  ) => RendererVoxelSpriteReceipt;
+  readonly destroy: (id: string) => RendererVoxelSpriteReceipt;
+  readonly readout: () => RendererVoxelSpriteReadout;
+  readonly dispose: () => void;
+}
 
 export type RendererSurfaceDefaultLightingMode = 'neutral' | 'disabled';
 
@@ -426,6 +450,8 @@ export interface RendererSurface {
   readonly animationProjection: RendererAnimatedMeshProjection;
   /** Create a backend-owned scene particle sink without exposing Three downstream. */
   readonly createParticleSink: () => RendererParticleSceneSink;
+  /** Create a backend-owned experimental voxel-sprite attachment without exposing Three. */
+  readonly createVoxelSpriteExperiment: () => RendererVoxelSpriteExperiment;
   readonly animatedMeshPlayback: (handle: RenderHandle) => RendererAnimatedMeshPlaybackReadout;
   readonly sampleAnimatedMesh: (
     handle: RenderHandle,
@@ -654,6 +680,7 @@ function mountPreparedRendererSurface(
     new RendererSurfaceAutomaticSubmissionAdmissionObservation();
   let disposed = false;
   const particleSinks = new Set<RendererParticleSceneSink>();
+  const voxelSpriteExperiments = new Set<RendererVoxelSpriteExperiment>();
   const continuousDemand = () => ({
     controls: controls.requiresAnimationFrame(),
     presentation: presentationHosts?.requiresAnimationFrame() ?? false,
@@ -846,6 +873,31 @@ function mountPreparedRendererSurface(
       particleSinks.add(sink);
       return sink;
     },
+    createVoxelSpriteExperiment: () => {
+      if (disposed) throw new Error('renderer surface is disposed');
+      const concrete = backendSurface.createVoxelSpriteScene();
+      let experiment: RendererVoxelSpriteExperiment;
+      const mutate = <T extends RendererVoxelSpriteReceipt>(operation: () => T): T => {
+        const receipt = operation();
+        if (receipt.applied) requestAutomaticSubmission();
+        return receipt;
+      };
+      experiment = {
+        create: (definition) => mutate(() => concrete.create(definition)),
+        replace: (definition) => mutate(() => concrete.replace(definition)),
+        configure: (id, patch) => mutate(() => concrete.configure(id, patch)),
+        recapture: (id, settings) => mutate(() => concrete.recapture(id, settings)),
+        destroy: (id) => mutate(() => concrete.destroy(id)),
+        readout: concrete.readout.bind(concrete),
+        dispose: () => {
+          concrete.dispose();
+          voxelSpriteExperiments.delete(experiment);
+          requestAutomaticSubmission();
+        },
+      };
+      voxelSpriteExperiments.add(experiment);
+      return experiment;
+    },
     animatedMeshPlayback: (handle) => animationProjection.playback(handle),
     sampleAnimatedMesh: (handle, clipId, normalizedTime) =>
       backendSurface.sampleAnimatedMesh(handle, clipId, normalizedTime),
@@ -921,6 +973,8 @@ function mountPreparedRendererSurface(
       controls.dispose();
       for (const sink of [...particleSinks]) sink.dispose();
       particleSinks.clear();
+      for (const experiment of [...voxelSpriteExperiments]) experiment.dispose();
+      voxelSpriteExperiments.clear();
       backendSurface.dispose();
       disposed = true;
     },

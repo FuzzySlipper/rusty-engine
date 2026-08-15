@@ -5,6 +5,32 @@ architecture boundaries are stated separately so agents do not “fix” them by
 introducing a second authority. Product-specific limitations belong to their
 downstream repositories.
 
+## Runtime voxel-sprite enhancement experiment
+
+- **Status:** experimental
+- **Affected surface:** `renderer-three`, `renderer-host`, and the bundled
+  application host
+- **Limitation:** One disposable application-host attachment can replace a
+  retained visual with a triggered single-view color/depth/normal/coverage
+  capture, or consume four admitted prepared textures with matching dimensions
+  and color-space metadata. The five comparison modes use view-space normals,
+  RGBA8 linear depth, approximate normal-oriented splats, and CPU submission
+  observations; they do not provide GPU timing, multi-view reconstruction,
+  sorted transparent splats, animation capture, collision, or gameplay state.
+  Runtime color is the rendered source, not material albedo. Replacing complete
+  application content disposes the attachment and makes its public port
+  explicitly stale.
+- **Detection:** Inspect `createVoxelSpriteExperiment().readout()` and run
+  `./scripts/verify-render.sh`; unit coverage exercises prepared ownership,
+  retained-source isolation, fail-atomic source replacement, failed-recapture
+  fallback, camera-facing preparation, and disposal. A Chromium proof uses
+  both the retained-capture and admitted-prepared-texture producers through the
+  bundled application-host package root.
+- **Follow-up:** Treat the API as an iteration instrument. Promote a format,
+  capture cadence, or renderer-neutral contract only after downstream visual
+  comparison identifies a stable product requirement.
+- **Last reviewed:** 2026-08-15 / codex
+
 ## Authored sky background
 
 - **Status:** implemented-bounded
