@@ -22805,6 +22805,7 @@ async function Ex(e, t) {
 			controls: { enabled: !1 },
 			frame: r.frame,
 			...e.renderer?.clearColor === void 0 ? {} : { clearColor: e.renderer.clearColor },
+			...e.renderer?.fog === void 0 ? {} : { fog: e.renderer.fog },
 			...e.renderer?.pixelRatio === void 0 ? {} : { pixelRatio: e.renderer.pixelRatio },
 			...gx(r)
 		}), o = hx(r), s = /* @__PURE__ */ new Set(), c = null;

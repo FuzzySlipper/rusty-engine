@@ -157,6 +157,30 @@ test('application host owns composition, input arbitration, and disposal', async
     return Array.from(pixels).filter((value) => value > 8).length;
   });
   expect(visibleResourcePixels).toBeGreaterThan(0);
+  const foggedPixels = await page.locator('canvas').evaluate((element) => {
+    window.__rustyApplicationHost?.renderer.renderOnce();
+    const canvas = element as HTMLCanvasElement;
+    const context = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
+    if (context === null) return 0;
+    const pixels = new Uint8Array(
+      context.drawingBufferWidth * context.drawingBufferHeight * 4,
+    );
+    context.readPixels(
+      0,
+      0,
+      context.drawingBufferWidth,
+      context.drawingBufferHeight,
+      context.RGBA,
+      context.UNSIGNED_BYTE,
+      pixels,
+    );
+    let count = 0;
+    for (let index = 0; index < pixels.length; index += 4) {
+      if (pixels[index]! > 220 && pixels[index + 1]! < 35 && pixels[index + 2]! > 220) count += 1;
+    }
+    return count;
+  });
+  expect(foggedPixels).toBeGreaterThan(100);
 
   await page.locator('#audio-button').click();
   await expect.poll(() => page.evaluate(() => ({

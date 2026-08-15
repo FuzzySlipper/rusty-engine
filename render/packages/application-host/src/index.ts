@@ -15,6 +15,7 @@ export type {
   RustyApplicationFrame,
   RustyApplicationFrameDiagnostic,
   RustyApplicationFrameReceipt,
+  RustyApplicationFogOptions,
   RustyApplicationHost,
   RustyApplicationHostOptions,
   RustyApplicationHostReadout,

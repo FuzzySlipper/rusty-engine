@@ -71,6 +71,8 @@ export interface RustyApplicationUiOwner {
 export type RustyApplicationUiMount = (root: HTMLElement, context: RustyApplicationUiContext) => void | RustyApplicationUiOwner | Promise<void | RustyApplicationUiOwner>;
 export interface RustyApplicationRendererOptions {
     readonly clearColor?: number;
+    /** Optional Engine-owned linear fog applied by the mounted renderer surface. */
+    readonly fog?: RustyApplicationFogOptions;
     readonly initialContent?: RustyApplicationContent;
     readonly initialFrame?: RustyApplicationFrame;
     readonly pixelRatio?: number;
@@ -78,6 +80,11 @@ export interface RustyApplicationRendererOptions {
     readonly resolveIndicatorEntityPosition?: (entity: number) => readonly [number, number, number] | null;
     /** Gameplay-owned entity positions used only to resolve neutral particle anchors. */
     readonly resolveParticleEntityPosition?: (entity: number) => readonly [number, number, number] | null;
+}
+export interface RustyApplicationFogOptions {
+    readonly color: number;
+    readonly near: number;
+    readonly far: number;
 }
 export interface RustyApplicationHostOptions {
     readonly root: HTMLElement;

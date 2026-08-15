@@ -70,6 +70,7 @@ window.__rustyApplicationMount = () =>
     initialInteractionMode: 'gameplay',
     renderer: {
       initialContent: resourceContent(),
+      fog: { color: 0xff00ff, near: 0, far: 0.25 },
       resolveIndicatorEntityPosition: (entity) => entity === 42 ? [0, 0, 0] : null,
     },
     mountUi: (uiRoot, context) => {

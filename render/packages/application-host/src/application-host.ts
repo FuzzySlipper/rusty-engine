@@ -118,6 +118,8 @@ export type RustyApplicationUiMount = (
 
 export interface RustyApplicationRendererOptions {
   readonly clearColor?: number;
+  /** Optional Engine-owned linear fog applied by the mounted renderer surface. */
+  readonly fog?: RustyApplicationFogOptions;
   readonly initialContent?: RustyApplicationContent;
   readonly initialFrame?: RustyApplicationFrame;
   readonly pixelRatio?: number;
@@ -129,6 +131,12 @@ export interface RustyApplicationRendererOptions {
   readonly resolveParticleEntityPosition?: (
     entity: number,
   ) => readonly [number, number, number] | null;
+}
+
+export interface RustyApplicationFogOptions {
+  readonly color: number;
+  readonly near: number;
+  readonly far: number;
 }
 
 export interface RustyApplicationHostOptions {
@@ -263,6 +271,8 @@ async function mountRustyApplicationWithEnvironment(
       frame: content.frame as unknown as RenderFrameDiff,
       ...(options.renderer?.clearColor === undefined
         ? {} : { clearColor: options.renderer.clearColor }),
+      ...(options.renderer?.fog === undefined
+        ? {} : { fog: options.renderer.fog }),
       ...(options.renderer?.pixelRatio === undefined
         ? {} : { pixelRatio: options.renderer.pixelRatio }),
       ...rustyApplicationSurfaceResourceOptions(content),
