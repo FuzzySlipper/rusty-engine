@@ -25,10 +25,15 @@ downstream repositories.
   retained-source isolation, fail-atomic source replacement, failed-recapture
   fallback, camera-facing preparation, and disposal. A Chromium proof uses
   both the retained-capture and admitted-prepared-texture producers through the
-  bundled application-host package root.
-- **Follow-up:** Treat the API as an iteration instrument. Promote a format,
-  capture cadence, or renderer-neutral contract only after downstream visual
-  comparison identifies a stable product requirement.
+  bundled application-host package root. The reviewed CraftSurvive task 7006
+  product run and the
+  [campaign evaluation](topics/runtime-voxel-sprite-evaluation.md) found no
+  enhancement mode ready for promotion.
+- **Follow-up:** Treat the API as an iteration instrument. Reopen only with a
+  color-readable controlled corpus and prepared/runtime inputs that agree on
+  view-space normals, depth, basis, pose, and lighting. Do not add offline
+  caching, keyed-animation policy, or another public contract from the current
+  evidence.
 - **Last reviewed:** 2026-08-15 / codex
 
 ## Authored sky background

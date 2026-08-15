@@ -83,6 +83,7 @@ compiled artifact, and Rust webview host/resource lifecycle.
 - [Structured world indicators](../topics/world-indicators.md)
 - [Three scene particles](../topics/three-scene-particles.md)
 - [Offline depth-splat retained-renderer proof](../topics/depth-splat-retained-proof.md)
+- [Runtime voxel-sprite campaign evaluation](../topics/runtime-voxel-sprite-evaluation.md)
 
 ## Public downstream surfaces
 
