@@ -20,14 +20,16 @@ lab mechanisms. Task 7008 exposed the same bounded experiment through the
 application-host boundary at exact Engine revision
 `2dcb3b922b80fa5a29430f1a4e69994dd07ab5fa`; its managed review passed.
 
-CraftSurvive task 7006 supplied the product comparison at exact revision
-`637ee527648119f9edce784af663482c8fe66c69`; its managed review and GitHub
-`verify` gate passed. The Luna/max run
+CraftSurvive task 7006 supplied the product comparison. The Luna/max run
 `rusty-craftsurvive-playtest-20260815T072611.660414615Z-3924910` exercised four
 representative modes, both producers on two subjects, manual direction,
 recapture, fail-atomic fallback, and resumed first-person movement. Its indexed
-screenshots are the visual evidence; deterministic smoke is mechanism evidence,
-not a visual verdict.
+screenshots are the visual evidence. It ran before a final clarity-only change
+to labels and the prepared-normal warning; reconstruction and capture behavior
+did not change. Exact revision
+`637ee527648119f9edce784af663482c8fe66c69` then passed managed review, the
+GitHub `verify` gate, and exact-head smoke. Deterministic smoke is mechanism
+evidence, not a visual verdict.
 
 ## Visual verdict by mode
 
