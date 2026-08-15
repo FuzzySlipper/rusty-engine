@@ -54,6 +54,7 @@ void test('configuration updates are validated, fail-atomic, and avoid recapture
   const configured = enhancement.configure({
     mode: 'sprite-splat',
     depthAmplitude: 0.8,
+    depthClamp: 0.75,
     depthScale: 'world',
     depthQuantizationSteps: 12,
     depthDilationTexels: 1.5,
@@ -72,6 +73,7 @@ void test('configuration updates are validated, fail-atomic, and avoid recapture
   assert.ok(Math.abs(length(configured.config.lightDirection) - 1) < 1e-6);
 
   assert.throws(() => enhancement.configure({ depthAmplitude: 4.01 }), /depthAmplitude/);
+  assert.throws(() => enhancement.configure({ depthClamp: 1.01 }), /depthClamp/);
   assert.throws(() => enhancement.configure({ depthConfidenceThreshold: 1 }), /depthConfidence/);
   assert.throws(() => enhancement.configure({ sampleColumns: 64 }), /construction-time geometry/);
   assert.throws(

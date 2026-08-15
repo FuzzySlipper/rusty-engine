@@ -20,6 +20,8 @@ export interface VoxelSpriteEnhancementConfig {
   readonly sampleColumns: number;
   readonly sampleRows: number;
   readonly depthAmplitude: number;
+  /** Maximum normalized depth contribution before scale and amplitude are applied. */
+  readonly depthClamp: number;
   readonly depthScale: VoxelSpriteDepthScale;
   /** Zero preserves continuous depth; positive values quantize the visible displacement only. */
   readonly depthQuantizationSteps: number;
@@ -72,6 +74,7 @@ const DEFAULT_CONFIG: VoxelSpriteEnhancementConfig = Object.freeze({
   sampleColumns: 32,
   sampleRows: 32,
   depthAmplitude: 0.35,
+  depthClamp: 1,
   depthScale: 'normalized',
   depthQuantizationSteps: 8,
   depthDilationTexels: 0,
@@ -104,6 +107,7 @@ interface EnhancementUniforms extends Record<string, THREE.IUniform> {
   readonly objectSize: THREE.IUniform<THREE.Vector2>;
   readonly sampleGrid: THREE.IUniform<THREE.Vector2>;
   readonly depthAmplitude: THREE.IUniform<number>;
+  readonly depthClamp: THREE.IUniform<number>;
   readonly depthRange: THREE.IUniform<number>;
   readonly useWorldDepth: THREE.IUniform<number>;
   readonly depthQuantizationSteps: THREE.IUniform<number>;
@@ -298,6 +302,7 @@ function validatedConfig(input: VoxelSpriteEnhancementConfig): VoxelSpriteEnhanc
   integer(input.sampleColumns, 8, 128, 'sampleColumns');
   integer(input.sampleRows, 8, 128, 'sampleRows');
   bounded(input.depthAmplitude, 0, 4, 'depthAmplitude');
+  bounded(input.depthClamp, 0, 1, 'depthClamp');
   integer(input.depthQuantizationSteps, 0, 64, 'depthQuantizationSteps');
   bounded(input.depthDilationTexels, 0, 4, 'depthDilationTexels');
   bounded(input.depthConfidenceThreshold, 0, 0.99, 'depthConfidenceThreshold');
@@ -368,6 +373,7 @@ function createUniforms(
     objectSize: { value: new THREE.Vector2() },
     sampleGrid: { value: new THREE.Vector2() },
     depthAmplitude: { value: 0 },
+    depthClamp: { value: 1 },
     depthRange: { value: 1 },
     useWorldDepth: { value: 0 },
     depthQuantizationSteps: { value: 0 },
@@ -404,6 +410,7 @@ function applyUniformConfig(
   uniforms.objectSize.value.set(config.width, config.height);
   uniforms.sampleGrid.value.set(config.sampleColumns, config.sampleRows);
   uniforms.depthAmplitude.value = config.depthAmplitude;
+  uniforms.depthClamp.value = config.depthClamp;
   uniforms.useWorldDepth.value = config.depthScale === 'world' ? 1 : 0;
   uniforms.depthQuantizationSteps.value = config.depthQuantizationSteps;
   uniforms.depthDilationTexels.value = config.depthDilationTexels;
@@ -517,6 +524,7 @@ const SHARED_VERTEX_HEADER = `
   uniform vec2 objectSize;
   uniform vec2 sampleGrid;
   uniform float depthAmplitude;
+  uniform float depthClamp;
   uniform float depthRange;
   uniform float useWorldDepth;
   uniform float depthQuantizationSteps;
@@ -549,7 +557,7 @@ const SHARED_VERTEX_HEADER = `
       visibleDepth = floor(visibleDepth * depthQuantizationSteps + 0.5) / depthQuantizationSteps;
     }
     float scale = mix(1.0, depthRange, useWorldDepth);
-    return visibleDepth * depthAmplitude * scale;
+    return min(visibleDepth, depthClamp) * depthAmplitude * scale;
   }
   vec3 decodedNormal(vec2 sourceUv) {
     return normalize(texture2D(normalTexture, sourceUv).xyz * 2.0 - 1.0);
