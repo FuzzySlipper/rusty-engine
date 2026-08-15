@@ -196,7 +196,8 @@ upgrades or different floating-point environments. See
 - **Affected surface:** `svc-mesh`, `engine-spatial`, `render-model`, and the
   shared renderer border
 - **Limitation:** Engine represents bounded inline data, explicit shared-buffer
-  handles, and content-addressed `packedStreamsLeV1`/`packedStreamsLeV2`
+  handles, and content-addressed `packedStreamsLeV1`/`packedStreamsLeV2`/
+  `packedStreamsLeV3`
   resources, but deliberately
   does not auto-promote every mesh or own a generic cross-process cache broker.
 - **Impact:** A consumer chooses the packed projector when bulk transport is

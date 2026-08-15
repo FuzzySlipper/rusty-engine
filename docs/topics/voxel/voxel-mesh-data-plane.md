@@ -88,7 +88,7 @@ complexity. It also does not use compression: this is a trusted local/LAN
 workflow, and predictable bounded decode and main-thread work matter more than
 internet transfer size.
 
-## `packedStreamsLeV1` and `packedStreamsLeV2`
+## `packedStreamsLeV1`, `packedStreamsLeV2`, and `packedStreamsLeV3`
 
 Each resource is at most 64 MiB and one returned set is at most 256 MiB,
 matching renderer-host admission. `pack_mesh_resources` rejects the aggregate
@@ -116,7 +116,15 @@ and its stream order is positions, normals, tile coordinates, then indices.
 The descriptor carries the fourth aligned offset and the strict Rust and
 TypeScript borders require v2 exactly when that attribute is present. The
 packer partitions when the source shape changes, so a resource never mixes v1
-and v2 payloads. Color-only inputs retain byte-exact v1 serialization; the
+and v2 payloads.
+
+`packedStreamsLeV3` carries an optional normalized four-component RGBA color
+stream. Its header magic is `RMSHLE03`; stream order is positions, normals,
+optional UVs, colors, then indices. The descriptor carries the color offset,
+and V3 is required whenever color is declared. This remains ordinary mesh
+presentation data, not a material or gameplay authority.
+
+Inputs with neither UVs nor colors retain byte-exact v1 serialization; the
 committed one-triangle regression remains
 `sha256:daeca78b7e966826d5311bf7aeb02e11baf414a6fe2fd395d00e9782f21d3659`.
 

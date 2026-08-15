@@ -74,6 +74,8 @@ pub fn project_catalog_material(
             asset_catalog::UvStrategy::Planar => MaterialUvStrategy::Planar,
             asset_catalog::UvStrategy::Atlas => MaterialUvStrategy::Atlas,
         },
+        alpha_mode: Default::default(),
+        double_sided: false,
         voxel_surface,
     };
     descriptor

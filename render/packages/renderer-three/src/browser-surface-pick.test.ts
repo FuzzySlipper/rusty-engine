@@ -136,6 +136,20 @@ void test('projection pick filters are descriptive only and invalid rays fail cl
   assert.equal(renderer.snapshot(), beforeSnapshot);
 });
 
+void test('projection pick ignores retained objects hidden at the object or ancestor boundary', () => {
+  const renderer = new ThreeRenderer();
+  renderer.applyFrame(pickFrame());
+  const object = renderer.objectFor(PICK_HANDLE)!;
+
+  object.visible = false;
+  assert.equal(pickAtCenter(renderer).hit, null);
+
+  object.visible = true;
+  assert.ok(object.parent !== null);
+  object.parent.visible = false;
+  assert.equal(pickAtCenter(renderer).hit, null);
+});
+
 void test('world projection uses the configured Three perspective camera', () => {
   const viewport = { width: 1_000, height: 500 };
   const narrow = new THREE.PerspectiveCamera(58, 2, 0.1, 100);

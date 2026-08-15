@@ -1347,6 +1347,81 @@ function crateAsset(): StaticMeshAsset {
   };
 }
 
+function coloredQuadAsset(): StaticMeshAsset {
+  const base = quadPayload();
+  assert.equal(base.source.kind, 'inline');
+  return {
+    asset: 'mesh/colored-quad',
+    payload: {
+      ...base,
+      layout: {
+        ...base.layout,
+        attributes: [
+          ...base.layout.attributes,
+          { name: 'color', components: 4, kind: 'f32' },
+        ],
+      },
+      source: {
+        ...base.source,
+        colors: [
+          1, 0, 0, 1,
+          0, 1, 0, 1,
+          0, 0, 1, 0,
+          1, 1, 1, 1,
+        ],
+      },
+      provenance: 'staticAsset',
+    },
+    materialSlots: [
+      { slot: 1, material: 'material/colored-mask' },
+      { slot: 2, material: 'material/colored-mask' },
+    ],
+    collision: { kind: 'visualOnly' },
+  };
+}
+
+void test('static meshes retain normalized vertex alpha with generic mask and double-sided material policy', () => {
+  const renderer = new ThreeRenderer();
+  renderer.applyFrame({ schemaVersion: 1, ops: [
+    {
+      op: 'defineMaterial',
+      material: {
+        schemaVersion: 3,
+        id: 'material/colored-mask',
+        color: [1, 1, 1, 1],
+        texture: null,
+        roughness: 1,
+        textureTint: [1, 1, 1, 1],
+        emissionColor: [0, 0, 0],
+        emissionIntensity: 0,
+        uvStrategy: 'flat',
+        alphaMode: { kind: 'mask', cutoff: 0.5 },
+        doubleSided: true,
+      },
+    },
+    { op: 'defineStaticMesh', asset: coloredQuadAsset() },
+    {
+      op: 'createStaticMeshInstance',
+      handle: renderHandle(700),
+      parent: null,
+      instance: crateInstance('mesh/colored-quad'),
+    },
+  ] });
+
+  const mesh = renderer.objectFor(renderHandle(700)) as THREE.Mesh;
+  const color = mesh.geometry.getAttribute('color');
+  const materials = (Array.isArray(mesh.material) ? mesh.material : [mesh.material]) as THREE.MeshStandardMaterial[];
+  assert.equal(color.itemSize, 4);
+  assert.equal(color.count, 4);
+  assert.equal(materials.length, 2);
+  for (const material of materials) {
+    assert.equal(material.vertexColors, true);
+    assert.equal(material.alphaTest, 0.5);
+    assert.equal(material.transparent, false);
+    assert.equal(material.side, THREE.DoubleSide);
+  }
+});
+
 void test('defineStaticMesh resolves draw groups through shuffled material slots', () => {
   const asset: StaticMeshAsset = {
     ...crateAsset(),

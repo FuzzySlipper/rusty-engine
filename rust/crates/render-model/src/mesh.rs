@@ -43,6 +43,7 @@ pub enum MeshIndexWidth {
 pub enum MeshResourceEncoding {
     PackedStreamsLeV1,
     PackedStreamsLeV2,
+    PackedStreamsLeV3,
 }
 
 /// Largest integer-valued tile coordinate that survives an f32 transport
@@ -114,6 +115,8 @@ pub enum MeshPayloadSource {
         normals: Vec<f32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         uvs: Option<Vec<f32>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        colors: Option<Vec<f32>>,
         indices: Vec<u32>,
     },
     /// Shared bytes are resolved through the renderer resource provider. This
@@ -124,6 +127,8 @@ pub enum MeshPayloadSource {
         normals_byte_offset: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         uvs_byte_offset: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        colors_byte_offset: Option<u32>,
         indices_byte_offset: u32,
     },
     /// Durable, content-addressed bytes resolved by an explicit renderer host.
@@ -137,6 +142,8 @@ pub enum MeshPayloadSource {
         normals_byte_offset: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         uvs_byte_offset: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        colors_byte_offset: Option<u32>,
         indices_byte_offset: u32,
     },
 }
@@ -160,12 +167,14 @@ impl MeshPayloadDescriptor {
                 positions,
                 normals,
                 uvs,
+                colors,
                 indices,
             } => {
                 if !positions
                     .iter()
                     .chain(normals)
                     .chain(uvs.iter().flatten())
+                    .chain(colors.iter().flatten())
                     .all(|value| value.is_finite())
                 {
                     return Err(MeshDescriptorError::NonFiniteAttribute);
@@ -186,6 +195,7 @@ impl MeshPayloadDescriptor {
                     });
                 }
                 validate_optional_uv_stream(&self.layout, uvs.as_deref())?;
+                validate_optional_color_stream(&self.layout, colors.as_deref())?;
                 if matches!(
                     self.provenance,
                     MeshProvenance::VoxelChunk | MeshProvenance::VoxelObject
@@ -216,12 +226,14 @@ impl MeshPayloadDescriptor {
             MeshPayloadSource::SharedBuffer {
                 buffer,
                 uvs_byte_offset,
+                colors_byte_offset,
                 ..
             } => {
                 if *buffer > JSON_SAFE_U64_MAX {
                     return Err(MeshDescriptorError::UnsafeSharedBufferId { buffer: *buffer });
                 }
                 validate_optional_uv_offset(&self.layout, *uvs_byte_offset)?;
+                validate_optional_color_offset(&self.layout, *colors_byte_offset)?;
             }
             MeshPayloadSource::Resource {
                 resource,
@@ -231,6 +243,7 @@ impl MeshPayloadDescriptor {
                 positions_byte_offset,
                 normals_byte_offset,
                 uvs_byte_offset,
+                colors_byte_offset,
                 indices_byte_offset,
                 ..
             } => validate_resource_source(
@@ -243,6 +256,7 @@ impl MeshPayloadDescriptor {
                     positions_byte_offset: *positions_byte_offset,
                     normals_byte_offset: *normals_byte_offset,
                     uvs_byte_offset: *uvs_byte_offset,
+                    colors_byte_offset: *colors_byte_offset,
                     indices_byte_offset: *indices_byte_offset,
                 },
             )?,
@@ -288,6 +302,7 @@ struct ResourceStreamSource {
     positions_byte_offset: u32,
     normals_byte_offset: u32,
     uvs_byte_offset: Option<u32>,
+    colors_byte_offset: Option<u32>,
     indices_byte_offset: u32,
 }
 
@@ -303,6 +318,7 @@ fn validate_resource_source(
         positions_byte_offset,
         normals_byte_offset,
         uvs_byte_offset,
+        colors_byte_offset,
         indices_byte_offset,
     } = streams;
     crate::validate_mesh_resource_identity(resource, content_hash)
@@ -312,10 +328,18 @@ fn validate_resource_source(
         return Err(MeshDescriptorError::InvalidResourceByteLength { byte_length });
     }
     validate_optional_uv_offset(layout, uvs_byte_offset)?;
-    if matches!(encoding, MeshResourceEncoding::PackedStreamsLeV1) && uvs_byte_offset.is_some() {
+    validate_optional_color_offset(layout, colors_byte_offset)?;
+    if matches!(encoding, MeshResourceEncoding::PackedStreamsLeV1)
+        && (uvs_byte_offset.is_some() || colors_byte_offset.is_some())
+    {
         return Err(MeshDescriptorError::ResourceEncodingDoesNotMatchAttributes);
     }
-    if matches!(encoding, MeshResourceEncoding::PackedStreamsLeV2) && uvs_byte_offset.is_none() {
+    if matches!(encoding, MeshResourceEncoding::PackedStreamsLeV2)
+        && (uvs_byte_offset.is_none() || colors_byte_offset.is_some())
+    {
+        return Err(MeshDescriptorError::ResourceEncodingDoesNotMatchAttributes);
+    }
+    if matches!(encoding, MeshResourceEncoding::PackedStreamsLeV3) && colors_byte_offset.is_none() {
         return Err(MeshDescriptorError::ResourceEncodingDoesNotMatchAttributes);
     }
     for offset in [
@@ -325,6 +349,7 @@ fn validate_resource_source(
     ]
     .into_iter()
     .chain(uvs_byte_offset)
+    .chain(colors_byte_offset)
     {
         if offset < crate::MESH_RESOURCE_HEADER_BYTES || offset % 4 != 0 {
             return Err(MeshDescriptorError::InvalidResourceOffset { offset });
@@ -334,21 +359,26 @@ fn validate_resource_source(
     let positions_bytes = u64::from(layout.vertex_count) * 3 * 4;
     let normals_bytes = positions_bytes;
     let uvs_bytes = u64::from(layout.vertex_count) * 2 * 4;
+    let colors_bytes = u64::from(layout.vertex_count) * 4 * 4;
     let indices_bytes = u64::from(layout.index_count) * 4;
     let positions_end = u64::from(positions_byte_offset) + positions_bytes;
     let normals_end = u64::from(normals_byte_offset) + normals_bytes;
     let uvs_end = uvs_byte_offset.map(|offset| u64::from(offset) + uvs_bytes);
+    let colors_end = colors_byte_offset.map(|offset| u64::from(offset) + colors_bytes);
     let indices_end = u64::from(indices_byte_offset) + indices_bytes;
     if positions_end > u64::from(byte_length)
         || normals_end > u64::from(byte_length)
         || uvs_end.is_some_and(|end| end > u64::from(byte_length))
+        || colors_end.is_some_and(|end| end > u64::from(byte_length))
         || indices_end > u64::from(byte_length)
     {
         return Err(MeshDescriptorError::ResourceStreamOutOfRange { byte_length });
     }
     if positions_end > u64::from(normals_byte_offset)
         || uvs_byte_offset.is_some_and(|offset| normals_end > u64::from(offset))
-        || uvs_end.map_or(normals_end, |end| end) > u64::from(indices_byte_offset)
+        || colors_byte_offset
+            .is_some_and(|offset| uvs_end.unwrap_or(normals_end) > u64::from(offset))
+        || colors_end.or(uvs_end).unwrap_or(normals_end) > u64::from(indices_byte_offset)
     {
         return Err(MeshDescriptorError::ResourceStreamsOverlap);
     }
@@ -392,6 +422,51 @@ fn validate_optional_uv_offset(
     if declared != offset.is_some() {
         return Err(MeshDescriptorError::OptionalAttributeSourceMismatch {
             name: MeshAttributeName::Uv,
+        });
+    }
+    Ok(())
+}
+
+fn validate_optional_color_stream(
+    layout: &MeshBufferLayout,
+    colors: Option<&[f32]>,
+) -> Result<(), MeshDescriptorError> {
+    let declared = layout
+        .attributes
+        .iter()
+        .any(|attribute| attribute.name == MeshAttributeName::Color);
+    if declared != colors.is_some() {
+        return Err(MeshDescriptorError::OptionalAttributeSourceMismatch {
+            name: MeshAttributeName::Color,
+        });
+    }
+    if let Some(values) = colors {
+        let expected = layout.vertex_count as usize * 4;
+        if values.len() != expected {
+            return Err(MeshDescriptorError::AttributeLengthMismatch {
+                name: MeshAttributeName::Color,
+                expected,
+                actual: values.len(),
+            });
+        }
+        if values.iter().any(|value| !(0.0..=1.0).contains(value)) {
+            return Err(MeshDescriptorError::ColorOutOfRange);
+        }
+    }
+    Ok(())
+}
+
+fn validate_optional_color_offset(
+    layout: &MeshBufferLayout,
+    offset: Option<u32>,
+) -> Result<(), MeshDescriptorError> {
+    let declared = layout
+        .attributes
+        .iter()
+        .any(|attribute| attribute.name == MeshAttributeName::Color);
+    if declared != offset.is_some() {
+        return Err(MeshDescriptorError::OptionalAttributeSourceMismatch {
+            name: MeshAttributeName::Color,
         });
     }
     Ok(())
@@ -470,6 +545,7 @@ pub enum MeshDescriptorError {
     OptionalAttributeSourceMismatch {
         name: MeshAttributeName,
     },
+    ColorOutOfRange,
     VoxelTileCoordinateOutOfRange,
     UnsafeSharedBufferId {
         buffer: u64,
@@ -882,6 +958,7 @@ mod tests {
                 positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
                 normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
                 uvs: None,
+                colors: None,
                 indices: vec![0, 1, 2],
             },
             provenance: MeshProvenance::StaticAsset,
@@ -948,6 +1025,7 @@ mod tests {
             positions_byte_offset: 0,
             normals_byte_offset: 36,
             uvs_byte_offset: None,
+            colors_byte_offset: None,
             indices_byte_offset: 72,
         };
         assert!(matches!(

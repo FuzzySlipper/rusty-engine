@@ -1,0 +1,504 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "project": "asset-pipeline",
+    "task": 6977,
+    "run": "depth-splat-20260815-001",
+    "subject": "spatial-wizard",
+    "direction": "dir-00",
+    "sourceGlbSha256": {
+      "quad": "sha256:7c54b778ecb8d8f8858341e26aa727a7022986a2dda6d03e5d530e083d082d09",
+      "flat": "sha256:16a6bfaf86357c09de6ca7ce5e68831d6572153bf1f6d5c64abede2f6ec731fe",
+      "physical": "sha256:a14445766d4bb692cab39ee3868a782bc748709aad009ee68e571e0412750fcf",
+      "compressed": "sha256:2aed7703d2d77002f8fb9ec7ff502e288909c5748ca84384aa2da976910983c4",
+      "tangent": "sha256:a631ae57b89a236fcefa04a3cd845008690c81a96c72d3baeac80d4b87cdfeb1"
+    }
+  },
+  "meshResourceManifest": {
+    "kind": "rusty_renderer_mesh_resources.v1",
+    "resources": [
+      {
+        "resource": "mesh-resource/137cb73ab461af6cdd156d2d0b5c6dd278af2f7d14b0e47c430f7221d1650bd0",
+        "contentHash": "sha256:137cb73ab461af6cdd156d2d0b5c6dd278af2f7d14b0e47c430f7221d1650bd0",
+        "byteLength": 168
+      },
+      {
+        "resource": "mesh-resource/fdba7521d3d692a0993b6e5fd4da660b1b26f1acad9ca0b1fb3426080c69e394",
+        "contentHash": "sha256:fdba7521d3d692a0993b6e5fd4da660b1b26f1acad9ca0b1fb3426080c69e394",
+        "byteLength": 1120032
+      }
+    ]
+  },
+  "textureResourceManifest": {
+    "kind": "rusty_renderer_texture_resources.v1",
+    "resources": [
+      {
+        "resource": "texture-resource/5f34c8db37048eeb5df2b0eaf29f0098f489025c09f1f3ff0d4308eb6e43c34b",
+        "contentHash": "sha256:5f34c8db37048eeb5df2b0eaf29f0098f489025c09f1f3ff0d4308eb6e43c34b",
+        "byteLength": 8377
+      }
+    ]
+  },
+  "texture": {
+    "id": "texture/depth-splat/spatial-wizard-dir-00",
+    "width": 96,
+    "height": 96,
+    "filter": "nearest",
+    "wrap": "clamp",
+    "contentHash": "sha256:5f34c8db37048eeb5df2b0eaf29f0098f489025c09f1f3ff0d4308eb6e43c34b",
+    "version": 1,
+    "payload": {
+      "encoding": "pngRgba8",
+      "colorSpace": "srgb",
+      "contentHash": "sha256:5f34c8db37048eeb5df2b0eaf29f0098f489025c09f1f3ff0d4308eb6e43c34b",
+      "byteLength": 8377,
+      "source": {
+        "kind": "resource",
+        "resource": "texture-resource/5f34c8db37048eeb5df2b0eaf29f0098f489025c09f1f3ff0d4308eb6e43c34b"
+      }
+    }
+  },
+  "materials": [
+    {
+      "schemaVersion": 3,
+      "id": "material/depth-splat/quad",
+      "color": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "texture": "texture/depth-splat/spatial-wizard-dir-00",
+      "roughness": 1,
+      "textureTint": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "emissionColor": [
+        1,
+        1,
+        1
+      ],
+      "emissionIntensity": 0.08,
+      "uvStrategy": "planar",
+      "alphaMode": {
+        "kind": "mask",
+        "cutoff": 0.1
+      },
+      "doubleSided": true
+    },
+    {
+      "schemaVersion": 3,
+      "id": "material/depth-splat/colors",
+      "color": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "texture": null,
+      "roughness": 1,
+      "textureTint": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "emissionColor": [
+        1,
+        1,
+        1
+      ],
+      "emissionIntensity": 0.08,
+      "uvStrategy": "flat",
+      "alphaMode": {
+        "kind": "mask",
+        "cutoff": 0.1
+      },
+      "doubleSided": true
+    }
+  ],
+  "assets": [
+    {
+      "asset": "mesh/depth-splat/spatial-wizard/quad",
+      "payload": {
+        "layout": {
+          "vertexCount": 4,
+          "indexCount": 6,
+          "indexWidth": "u32",
+          "attributes": [
+            {
+              "name": "position",
+              "components": 3,
+              "kind": "f32"
+            },
+            {
+              "name": "normal",
+              "components": 3,
+              "kind": "f32"
+            },
+            {
+              "name": "uv",
+              "components": 2,
+              "kind": "f32"
+            }
+          ]
+        },
+        "groups": [
+          {
+            "materialSlot": 0,
+            "start": 0,
+            "count": 6
+          }
+        ],
+        "bounds": {
+          "min": [
+            -1.25,
+            -0.1619492769241333,
+            -0.3035704791545868
+          ],
+          "max": [
+            1.25,
+            2.2156920433044434,
+            0.46897193789482117
+          ]
+        },
+        "source": {
+          "kind": "resource",
+          "resource": "mesh-resource/137cb73ab461af6cdd156d2d0b5c6dd278af2f7d14b0e47c430f7221d1650bd0",
+          "contentHash": "sha256:137cb73ab461af6cdd156d2d0b5c6dd278af2f7d14b0e47c430f7221d1650bd0",
+          "byteLength": 168,
+          "encoding": "packedStreamsLeV2",
+          "positionsByteOffset": 16,
+          "normalsByteOffset": 64,
+          "uvsByteOffset": 112,
+          "indicesByteOffset": 144
+        },
+        "provenance": "staticAsset"
+      },
+      "materialSlots": [
+        {
+          "slot": 0,
+          "material": "material/depth-splat/quad"
+        }
+      ],
+      "collision": {
+        "kind": "visualOnly"
+      }
+    },
+    {
+      "asset": "mesh/depth-splat/spatial-wizard/flat",
+      "payload": {
+        "layout": {
+          "vertexCount": 6064,
+          "indexCount": 9096,
+          "indexWidth": "u32",
+          "attributes": [
+            {
+              "name": "position",
+              "components": 3,
+              "kind": "f32"
+            },
+            {
+              "name": "normal",
+              "components": 3,
+              "kind": "f32"
+            },
+            {
+              "name": "color",
+              "components": 4,
+              "kind": "f32"
+            }
+          ]
+        },
+        "groups": [
+          {
+            "materialSlot": 0,
+            "start": 0,
+            "count": 9096
+          }
+        ],
+        "bounds": {
+          "min": [
+            -0.4947916865348816,
+            0.08572164177894592,
+            -0.22309695184230804
+          ],
+          "max": [
+            0.4947916865348816,
+            1.968021273612976,
+            0.3884984254837036
+          ]
+        },
+        "source": {
+          "kind": "resource",
+          "resource": "mesh-resource/fdba7521d3d692a0993b6e5fd4da660b1b26f1acad9ca0b1fb3426080c69e394",
+          "contentHash": "sha256:fdba7521d3d692a0993b6e5fd4da660b1b26f1acad9ca0b1fb3426080c69e394",
+          "byteLength": 1120032,
+          "encoding": "packedStreamsLeV3",
+          "positionsByteOffset": 16,
+          "normalsByteOffset": 72784,
+          "colorsByteOffset": 145552,
+          "indicesByteOffset": 242576
+        },
+        "provenance": "staticAsset"
+      },
+      "materialSlots": [
+        {
+          "slot": 0,
+          "material": "material/depth-splat/colors"
+        }
+      ],
+      "collision": {
+        "kind": "visualOnly"
+      }
+    },
+    {
+      "asset": "mesh/depth-splat/spatial-wizard/physical",
+      "payload": {
+        "layout": {
+          "vertexCount": 6064,
+          "indexCount": 9096,
+          "indexWidth": "u32",
+          "attributes": [
+            {
+              "name": "position",
+              "components": 3,
+              "kind": "f32"
+            },
+            {
+              "name": "normal",
+              "components": 3,
+              "kind": "f32"
+            },
+            {
+              "name": "color",
+              "components": 4,
+              "kind": "f32"
+            }
+          ]
+        },
+        "groups": [
+          {
+            "materialSlot": 0,
+            "start": 0,
+            "count": 9096
+          }
+        ],
+        "bounds": {
+          "min": [
+            -0.4947916865348816,
+            -0.009432164952158928,
+            -0.19573603570461273
+          ],
+          "max": [
+            0.4947916865348816,
+            2.011955499649048,
+            0.24713145196437836
+          ]
+        },
+        "source": {
+          "kind": "resource",
+          "resource": "mesh-resource/fdba7521d3d692a0993b6e5fd4da660b1b26f1acad9ca0b1fb3426080c69e394",
+          "contentHash": "sha256:fdba7521d3d692a0993b6e5fd4da660b1b26f1acad9ca0b1fb3426080c69e394",
+          "byteLength": 1120032,
+          "encoding": "packedStreamsLeV3",
+          "positionsByteOffset": 278960,
+          "normalsByteOffset": 351728,
+          "colorsByteOffset": 424496,
+          "indicesByteOffset": 521520
+        },
+        "provenance": "staticAsset"
+      },
+      "materialSlots": [
+        {
+          "slot": 0,
+          "material": "material/depth-splat/colors"
+        }
+      ],
+      "collision": {
+        "kind": "visualOnly"
+      }
+    },
+    {
+      "asset": "mesh/depth-splat/spatial-wizard/compressed",
+      "payload": {
+        "layout": {
+          "vertexCount": 6064,
+          "indexCount": 9096,
+          "indexWidth": "u32",
+          "attributes": [
+            {
+              "name": "position",
+              "components": 3,
+              "kind": "f32"
+            },
+            {
+              "name": "normal",
+              "components": 3,
+              "kind": "f32"
+            },
+            {
+              "name": "color",
+              "components": 4,
+              "kind": "f32"
+            }
+          ]
+        },
+        "groups": [
+          {
+            "materialSlot": 0,
+            "start": 0,
+            "count": 9096
+          }
+        ],
+        "bounds": {
+          "min": [
+            -0.4947916865348816,
+            0.05857840180397034,
+            -0.20354662835597992
+          ],
+          "max": [
+            0.4947916865348816,
+            1.9833983182907104,
+            0.32281410694122314
+          ]
+        },
+        "source": {
+          "kind": "resource",
+          "resource": "mesh-resource/fdba7521d3d692a0993b6e5fd4da660b1b26f1acad9ca0b1fb3426080c69e394",
+          "contentHash": "sha256:fdba7521d3d692a0993b6e5fd4da660b1b26f1acad9ca0b1fb3426080c69e394",
+          "byteLength": 1120032,
+          "encoding": "packedStreamsLeV3",
+          "positionsByteOffset": 557904,
+          "normalsByteOffset": 630672,
+          "colorsByteOffset": 703440,
+          "indicesByteOffset": 800464
+        },
+        "provenance": "staticAsset"
+      },
+      "materialSlots": [
+        {
+          "slot": 0,
+          "material": "material/depth-splat/colors"
+        }
+      ],
+      "collision": {
+        "kind": "visualOnly"
+      }
+    },
+    {
+      "asset": "mesh/depth-splat/spatial-wizard/tangent",
+      "payload": {
+        "layout": {
+          "vertexCount": 6170,
+          "indexCount": 9096,
+          "indexWidth": "u32",
+          "attributes": [
+            {
+              "name": "position",
+              "components": 3,
+              "kind": "f32"
+            },
+            {
+              "name": "normal",
+              "components": 3,
+              "kind": "f32"
+            },
+            {
+              "name": "color",
+              "components": 4,
+              "kind": "f32"
+            }
+          ]
+        },
+        "groups": [
+          {
+            "materialSlot": 0,
+            "start": 0,
+            "count": 9096
+          }
+        ],
+        "bounds": {
+          "min": [
+            -0.49168145656585693,
+            0.05541769787669182,
+            -0.21255263686180115
+          ],
+          "max": [
+            0.49063345789909363,
+            1.9736919403076172,
+            0.33158114552497864
+          ]
+        },
+        "source": {
+          "kind": "resource",
+          "resource": "mesh-resource/fdba7521d3d692a0993b6e5fd4da660b1b26f1acad9ca0b1fb3426080c69e394",
+          "contentHash": "sha256:fdba7521d3d692a0993b6e5fd4da660b1b26f1acad9ca0b1fb3426080c69e394",
+          "byteLength": 1120032,
+          "encoding": "packedStreamsLeV3",
+          "positionsByteOffset": 836848,
+          "normalsByteOffset": 910888,
+          "colorsByteOffset": 984928,
+          "indicesByteOffset": 1083648
+        },
+        "provenance": "staticAsset"
+      },
+      "materialSlots": [
+        {
+          "slot": 0,
+          "material": "material/depth-splat/colors"
+        }
+      ],
+      "collision": {
+        "kind": "visualOnly"
+      }
+    }
+  ],
+  "metrics": {
+    "sourceGlbBytes": 867788,
+    "packedMeshBytes": 1120200,
+    "encodedTextureBytes": 8377,
+    "decodedTextureBytes": 36864,
+    "uploadedMeshBytes": 1120168,
+    "variants": [
+      {
+        "id": "quad",
+        "vertices": 4,
+        "triangles": 2,
+        "sourceGlbBytes": 10028,
+        "uploadedBytes": 152
+      },
+      {
+        "id": "flat",
+        "vertices": 6064,
+        "triangles": 3032,
+        "sourceGlbBytes": 213564,
+        "uploadedBytes": 278944
+      },
+      {
+        "id": "physical",
+        "vertices": 6064,
+        "triangles": 3032,
+        "sourceGlbBytes": 213588,
+        "uploadedBytes": 278944
+      },
+      {
+        "id": "compressed",
+        "vertices": 6064,
+        "triangles": 3032,
+        "sourceGlbBytes": 213588,
+        "uploadedBytes": 278944
+      },
+      {
+        "id": "tangent",
+        "vertices": 6170,
+        "triangles": 3032,
+        "sourceGlbBytes": 217020,
+        "uploadedBytes": 283184
+      }
+    ]
+  }
+}

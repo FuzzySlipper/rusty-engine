@@ -1482,7 +1482,7 @@ export class ThreeRenderer {
     const slotIndex = new Map<number, number>();
     const materials = asset.materialSlots.map((s, i) => {
       slotIndex.set(s.slot, i);
-      return this.#materialFor(s);
+      return this.#materialFor(s, undefined, geometry.hasAttribute('color'));
     });
     this.#staticMeshes.set(asset.asset, {
       geometry,
@@ -1518,7 +1518,7 @@ export class ThreeRenderer {
           `createStaticMeshInstance: override for unbound slot ${ov.slot} on ${diff.instance.asset}`,
         );
       }
-      const m = this.#materialFor(ov);
+      const m = this.#materialFor(ov, undefined, def.geometry.hasAttribute('color'));
       materials[idx] = m;
       materialIds[idx] = ov.material;
       ownedMaterialIndices.add(idx);
@@ -2097,7 +2097,11 @@ export class ThreeRenderer {
           continue;
         }
         replacedSharedMaterials.add(def.materials[index]!);
-        def.materials[index] = this.#materialFor(slot);
+        def.materials[index] = this.#materialFor(
+          slot,
+          undefined,
+          def.geometry.hasAttribute('color'),
+        );
       }
     }
     for (const def of this.#voxelObjects.values()) {
@@ -2144,7 +2148,12 @@ export class ThreeRenderer {
         const usesSharedBase = parameters === undefined && baseSlot?.material === id;
         const replacement = usesSharedBase
           ? def.materials[i]!
-          : this.#materialFor({ slot: baseSlot?.slot ?? i, material: id }, parameters);
+          : this.#materialFor(
+            { slot: baseSlot?.slot ?? i, material: id },
+            parameters,
+            entry.kind === 'staticMesh'
+              && (entry.object as THREE.Mesh).geometry.hasAttribute('color'),
+          );
         arr[i] = replacement;
         if (usesSharedBase) {
           entry.ownedMaterialIndices?.delete(i);
@@ -2196,7 +2205,11 @@ export class ThreeRenderer {
         materials[index] = def.materials[index]!;
         entry.ownedMaterialIndices?.delete(index);
       } else {
-        materials[index] = this.#materialFor({ slot: diff.slot, material: materialId });
+        materials[index] = this.#materialFor(
+          { slot: diff.slot, material: materialId },
+          undefined,
+          mesh.geometry.hasAttribute('color'),
+        );
         entry.ownedMaterialIndices?.add(index);
       }
     } else {
@@ -2204,6 +2217,7 @@ export class ThreeRenderer {
       materials[index] = this.#materialFor(
         { slot: diff.slot, material: materialId },
         diff.parameters,
+        mesh.geometry.hasAttribute('color'),
       );
       entry.ownedMaterialIndices?.add(index);
     }
@@ -2228,6 +2242,7 @@ export class ThreeRenderer {
   #materialFor(
     slot: MeshMaterialSlot,
     parameters?: MaterialInstanceParameters,
+    vertexColors = false,
   ): THREE.MeshStandardMaterial {
     // Resolve the slot's material id to the retained RenderMaterialDescriptor from
     // defineMaterial. A descriptor drives the real colour; a missing one
@@ -2242,6 +2257,8 @@ export class ThreeRenderer {
         ? undefined
         : this.#textures.get(descriptor.texture);
       const material = standardMaterial(descriptor, parameters, texture, textureDescriptor);
+      material.vertexColors = vertexColors;
+      material.needsUpdate = true;
       this.#trackMaterialResource(material);
       return material;
     }
@@ -2251,6 +2268,7 @@ export class ThreeRenderer {
       color: this.#slotColor(slot.slot),
       roughness: 1,
       metalness: 0,
+      vertexColors,
     });
     this.#trackMaterialResource(material);
     return material;
@@ -2808,6 +2826,7 @@ function standardMaterial(
     descriptor.color[2] * tint[2],
   );
   const opacity = descriptor.color[3] * tint[3];
+  const alpha = descriptor.alphaMode ?? { kind: 'opaque' as const };
   const material = new THREE.MeshStandardMaterial({
     color,
     emissive: new THREE.Color(emissionColor[0], emissionColor[1], emissionColor[2]),
@@ -2816,7 +2835,10 @@ function standardMaterial(
     map: texture ?? null,
     opacity,
     roughness: descriptor.roughness,
-    transparent: opacity < 1,
+    transparent: alpha.kind === 'blend' || opacity < 1,
+    alphaTest: alpha.kind === 'mask' ? alpha.cutoff : 0,
+    depthWrite: alpha.kind !== 'blend',
+    side: descriptor.doubleSided === true ? THREE.DoubleSide : THREE.FrontSide,
   });
   if (descriptor.voxelSurface !== undefined) {
     if (texture === undefined || textureDescriptor === undefined) {
@@ -3042,6 +3064,9 @@ function buildMeshGeometry(
   if (streams.uvs !== undefined) {
     geometry.setAttribute('uv', new THREE.BufferAttribute(streams.uvs, 2));
   }
+  if (streams.colors !== undefined) {
+    geometry.setAttribute('color', new THREE.BufferAttribute(streams.colors, 4));
+  }
   geometry.setIndex(new THREE.BufferAttribute(streams.indices, 1));
   // One draw group per material slot (BufferGeometry.addGroup(start, count, index)).
   // Static meshes carry an independently ordered material table, so the
@@ -3072,6 +3097,7 @@ interface MeshStreams {
   readonly positions: Float32Array;
   readonly normals: Float32Array;
   readonly uvs: Float32Array | undefined;
+  readonly colors: Float32Array | undefined;
   readonly indices: Uint32Array;
 }
 
@@ -3081,6 +3107,7 @@ function inlineStreams(source: Extract<MeshPayloadDescriptor['source'], { kind: 
     positions: new Float32Array(source.positions),
     normals: new Float32Array(source.normals),
     uvs: source.uvs === undefined ? undefined : new Float32Array(source.uvs),
+    colors: source.colors === undefined ? undefined : new Float32Array(source.colors),
     indices: new Uint32Array(source.indices),
   };
 }
@@ -3173,8 +3200,10 @@ function validatePackedResourceHeader(
   source: Extract<MeshPayloadDescriptor['source'], { kind: 'resource' }>,
   ctx: string,
 ): void {
-  const version = source.encoding === 'packedStreamsLeV1' ? 0x31 : 0x32;
-  const versionLabel = source.encoding === 'packedStreamsLeV1' ? 'v1' : 'v2';
+  const version = source.encoding === 'packedStreamsLeV1' ? 0x31
+    : source.encoding === 'packedStreamsLeV2' ? 0x32 : 0x33;
+  const versionLabel = source.encoding === 'packedStreamsLeV1' ? 'v1'
+    : source.encoding === 'packedStreamsLeV2' ? 'v2' : 'v3';
   const magic = [0x52, 0x4d, 0x53, 0x48, 0x4c, 0x45, 0x30, version];
   if (bytes.byteLength !== source.byteLength
     || magic.some((byte, index) => bytes[index] !== byte)
@@ -3225,6 +3254,17 @@ function copyResourceStreams(
       ctx,
     );
   validateTileCoordinateStream(payload, uvs, source.resource, ctx);
+  const colors = source.colorsByteOffset === undefined
+    ? undefined
+    : sliceFloat32(
+      view,
+      source.colorsByteOffset,
+      vertexCount * attributeComponents(payload, 'color'),
+      'colors',
+      source.resource,
+      ctx,
+    );
+  validateColorStream(colors, source.resource, ctx);
   const indices = sliceUint32(
     view,
     source.indicesByteOffset,
@@ -3239,7 +3279,7 @@ function copyResourceStreams(
       );
     }
   }
-  return { positions, normals, uvs, indices };
+  return { positions, normals, uvs, colors, indices };
 }
 
 function classifyResourceError(
@@ -3297,6 +3337,17 @@ function copySharedBufferStreams(
       ctx,
     );
   validateTileCoordinateStream(payload, uvs, `buffer ${source.buffer}`, ctx);
+  const colors = source.colorsByteOffset === undefined
+    ? undefined
+    : sliceFloat32(
+      view,
+      source.colorsByteOffset,
+      vertexCount * attributeComponents(payload, 'color'),
+      'colors',
+      source.buffer,
+      ctx,
+    );
+  validateColorStream(colors, `buffer ${source.buffer}`, ctx);
   const indices = sliceUint32(view, source.indicesByteOffset, indexCount, source.buffer, ctx);
 
   for (let i = 0; i < indices.length; i++) {
@@ -3306,7 +3357,17 @@ function copySharedBufferStreams(
       );
     }
   }
-  return { positions, normals, uvs, indices };
+  return { positions, normals, uvs, colors, indices };
+}
+
+function validateColorStream(
+  colors: Float32Array | undefined,
+  source: string | number,
+  ctx: string,
+): void {
+  if (colors?.some((component) => !Number.isFinite(component) || component < 0 || component > 1)) {
+    throw new RenderApplyError(`${ctx}: color stream outside normalized 0..1 range (${String(source)})`);
+  }
 }
 
 function validateTileCoordinateStream(
@@ -3364,7 +3425,10 @@ function releaseBorrowBestEffort(bufferSource: MeshBufferSource, buffer: number)
 }
 
 /** Components-per-vertex for a declared attribute (defaults to 3 if unspecified). */
-function attributeComponents(payload: MeshPayloadDescriptor, name: 'position' | 'normal' | 'uv'): number {
+function attributeComponents(
+  payload: MeshPayloadDescriptor,
+  name: 'position' | 'normal' | 'uv' | 'color',
+): number {
   const attribute = payload.layout.attributes.find((a) => a.name === name);
   return attribute?.components ?? (name === 'uv' ? 2 : 3);
 }

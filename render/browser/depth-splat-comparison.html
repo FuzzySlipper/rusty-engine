@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rusty Engine retained depth-splat comparison</title>
+    <style>
+      :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #0c1118; color: #dbe8f3; }
+      #stage { position: relative; width: 1280px; height: 720px; overflow: hidden; background: #1b2733; }
+      canvas { display: block; width: 1280px; height: 720px; image-rendering: pixelated; }
+      #labels { position: absolute; inset: 0; pointer-events: none; }
+      .label { position: absolute; top: 18px; width: 180px; padding: 5px 8px; text-align: center; color: #eef8ff; background: #09111bcc; border: 1px solid #6786a2; }
+      #readout { position: absolute; left: 14px; bottom: 14px; width: 520px; max-height: 250px; overflow: auto; margin: 0; padding: 10px; background: #07101bdd; border: 1px solid #4e6a80; font-size: 11px; }
+    </style>
+  </head>
+  <body>
+    <main id="stage">
+      <canvas id="comparison" width="1280" height="720"></canvas>
+      <div id="labels"></div>
+      <pre id="readout">loading retained resources…</pre>
+    </main>
+    <script type="module" src="./depth-splat-comparison.ts"></script>
+  </body>
+</html>

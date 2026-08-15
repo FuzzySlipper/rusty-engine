@@ -52,6 +52,8 @@ fn request() -> ModelMaterialPreviewRequest {
             emission_color: [0.0; 3],
             emission_intensity: 0.0,
             uv_strategy: MaterialUvStrategy::Flat,
+            alpha_mode: Default::default(),
+            double_sided: false,
             voxel_surface: None,
         },
         mesh_asset: StaticMeshAsset {
@@ -87,6 +89,7 @@ fn request() -> ModelMaterialPreviewRequest {
                     positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
                     normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
                     uvs: None,
+                    colors: None,
                     indices: vec![0, 1, 2],
                 },
                 provenance: MeshProvenance::Generated,

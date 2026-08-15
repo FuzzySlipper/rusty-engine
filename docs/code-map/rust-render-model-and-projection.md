@@ -50,7 +50,8 @@ entity, authored-scene, voxel, and presentation facts.
   TypeScript contracts.
 - Its packed-mesh helper creates deterministic bounded resource bytes; UV-free
   payloads retain packed V1 while UV-bearing payloads use packed V2 with an
-  explicit stream offset. Callers own where those bytes are published.
+  explicit stream offset. Normalized RGBA vertex-color payloads use packed V3,
+  with or without UVs. Callers own where those bytes are published.
 - Projection crates translate owner facts into complete frames; they do not
   become a second source of gameplay truth.
 - `render-presentation::BillboardProjector` retains legacy text/value/icon

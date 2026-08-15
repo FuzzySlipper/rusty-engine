@@ -164,6 +164,28 @@ void test('static mesh collision decoding admits the Rust-owned trimesh policy',
   assert.equal(decodeRenderFrameDiff(frame).ops.length, operations.length);
 });
 
+void test('static mesh decoding admits normalized colors and generic alpha-sided material policy', () => {
+  const frame = mutableFixture('retained-frame-v1.json');
+  const operations = frame['ops'] as Array<Record<string, unknown>>;
+  const definition = operations.find((operation) => operation['op'] === 'defineStaticMesh')!;
+  const asset = definition['asset'] as Record<string, unknown>;
+  const payload = asset['payload'] as Record<string, unknown>;
+  const layout = payload['layout'] as Record<string, unknown>;
+  const vertexCount = layout['vertexCount'] as number;
+  (layout['attributes'] as unknown[]).push({ name: 'color', components: 4, kind: 'f32' });
+  const source = payload['source'] as Record<string, unknown>;
+  source['colors'] = Array.from({ length: vertexCount * 4 }, (_, index) => index % 4 === 3 ? 1 : 0.5);
+
+  const materialDefinition = operations.find((operation) => operation['op'] === 'defineMaterial')!;
+  const material = materialDefinition['material'] as Record<string, unknown>;
+  material['alphaMode'] = { kind: 'mask', cutoff: 0.5 };
+  material['doubleSided'] = true;
+  assert.doesNotThrow(() => decodeRenderFrameDiff(frame));
+
+  (source['colors'] as number[])[0] = 1.1;
+  assert.throws(() => decodeRenderFrameDiff(frame), /normalized to 0\.\.1/u);
+});
+
 void test('render decoding rejects unsafe handles and unknown nested fields', () => {
   const unsafe = mutableFixture('retained-frame-v1.json');
   const unsafeOps = unsafe['ops'] as Array<Record<string, unknown>>;
@@ -448,7 +470,7 @@ void test('content-addressed mesh resources validate identity, layout, and bound
 
   const mismatched = structuredClone(textured);
   mismatched.ops[0]!.payload.source['encoding'] = 'packedStreamsLeV1';
-  assert.throws(() => decodeRenderFrameDiff(mismatched), /encoding and uv stream/u);
+  assert.throws(() => decodeRenderFrameDiff(mismatched), /encoding and optional streams/u);
 
   const malformedInline = structuredClone(frame) as unknown as MutableMeshFrame;
   malformedInline.ops[0]!.payload.layout.attributes.push({ name: 'uv', components: 2, kind: 'f32' });

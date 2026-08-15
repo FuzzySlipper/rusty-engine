@@ -433,6 +433,8 @@ fn material(id: &str, color: [f32; 4]) -> RenderMaterialDescriptor {
         emission_color: [0.0; 3],
         emission_intensity: 0.0,
         uv_strategy: MaterialUvStrategy::Flat,
+        alpha_mode: Default::default(),
+        double_sided: false,
         voxel_surface: None,
     }
 }

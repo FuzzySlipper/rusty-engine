@@ -192,12 +192,19 @@ export interface RendererSurfaceOptions {
   readonly clearColor?: number;
   readonly controls?: RendererSurfaceControlsOptions;
   readonly frame?: RenderFrameDiff;
+  readonly fog?: RendererSurfaceFogOptions;
   readonly lighting?: RendererSurfaceLightingOptions;
   readonly meshBufferSource?: RendererSurfaceMeshBufferSource;
   readonly pixelRatio?: number;
   readonly presentationHosts?: RendererPresentationHostSet;
   readonly projection?: PerspectiveProjection;
   readonly viewComposition?: RendererViewComposition;
+}
+
+export interface RendererSurfaceFogOptions {
+  readonly color: number;
+  readonly near: number;
+  readonly far: number;
 }
 
 export interface RendererSurfaceMeshBufferSource {
@@ -622,6 +629,7 @@ function mountPreparedRendererSurface(
         ...(options.projection === undefined ? {} : { projection: options.projection }),
       },
       ...(options.clearColor === undefined ? {} : { clearColor: options.clearColor }),
+      ...(options.fog === undefined ? {} : { fog: options.fog }),
       ...(options.pixelRatio === undefined ? {} : { pixelRatio: options.pixelRatio }),
       lighting,
       frame,

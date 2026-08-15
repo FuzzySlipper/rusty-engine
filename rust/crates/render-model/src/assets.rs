@@ -169,6 +169,23 @@ pub enum MaterialUvStrategy {
     Atlas,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum MaterialAlphaModeDescriptor {
+    #[default]
+    Opaque,
+    Mask {
+        cutoff: f32,
+    },
+    Blend,
+}
+
+impl MaterialAlphaModeDescriptor {
+    fn is_opaque(&self) -> bool {
+        matches!(self, Self::Opaque)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum VoxelSurfaceAlphaModeDescriptor {
@@ -368,8 +385,19 @@ pub struct RenderMaterialDescriptor {
     pub emission_color: [f32; 3],
     pub emission_intensity: f32,
     pub uv_strategy: MaterialUvStrategy,
+    #[serde(
+        default,
+        skip_serializing_if = "MaterialAlphaModeDescriptor::is_opaque"
+    )]
+    pub alpha_mode: MaterialAlphaModeDescriptor,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub double_sided: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voxel_surface: Option<VoxelSurfaceDescriptor>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl RenderMaterialDescriptor {
@@ -398,6 +426,11 @@ impl RenderMaterialDescriptor {
         {
             return Err(MaterialDescriptorError::InvalidEmission);
         }
+        if let MaterialAlphaModeDescriptor::Mask { cutoff } = self.alpha_mode {
+            if !cutoff.is_finite() || !(0.0..=1.0).contains(&cutoff) {
+                return Err(MaterialDescriptorError::InvalidAlphaCutoff);
+            }
+        }
         if let Some(surface) = &self.voxel_surface {
             surface
                 .validate()
@@ -418,6 +451,7 @@ pub enum MaterialDescriptorError {
     InvalidColor,
     InvalidRoughness,
     InvalidEmission,
+    InvalidAlphaCutoff,
     InvalidVoxelSurface(VoxelSurfaceDescriptorError),
     VoxelTextureMismatch,
 }
@@ -1397,6 +1431,8 @@ mod tests {
             emission_color: [0.0; 3],
             emission_intensity: 0.0,
             uv_strategy: MaterialUvStrategy::Atlas,
+            alpha_mode: Default::default(),
+            double_sided: false,
             voxel_surface: Some(surface.clone()),
         };
         assert_eq!(material.validate(), Ok(()));
@@ -1427,6 +1463,35 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<RenderMaterialDescriptor>(&encoded).unwrap(),
             legacy
+        );
+    }
+
+    #[test]
+    fn generic_material_alpha_and_sidedness_are_explicit_and_bounded() {
+        let material = RenderMaterialDescriptor {
+            schema_version: 3,
+            id: "material/depth-splat".to_string(),
+            color: [1.0; 4],
+            texture: None,
+            roughness: 1.0,
+            texture_tint: [1.0; 4],
+            emission_color: [0.0; 3],
+            emission_intensity: 0.0,
+            uv_strategy: MaterialUvStrategy::Flat,
+            alpha_mode: MaterialAlphaModeDescriptor::Mask { cutoff: 0.5 },
+            double_sided: true,
+            voxel_surface: None,
+        };
+        material.validate().unwrap();
+        let encoded = serde_json::to_string(&material).unwrap();
+        assert!(encoded.contains("\"alphaMode\":{\"kind\":\"mask\",\"cutoff\":0.5}"));
+        assert!(encoded.contains("\"doubleSided\":true"));
+
+        let mut invalid = material;
+        invalid.alpha_mode = MaterialAlphaModeDescriptor::Mask { cutoff: 1.5 };
+        assert_eq!(
+            invalid.validate(),
+            Err(MaterialDescriptorError::InvalidAlphaCutoff)
         );
     }
 }

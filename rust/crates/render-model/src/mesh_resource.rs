@@ -12,6 +12,7 @@ pub const MAX_MESH_RESOURCE_AGGREGATE_BYTES: usize = 256 * 1024 * 1024;
 pub const MESH_RESOURCE_HEADER_BYTES: u32 = 16;
 pub const MESH_RESOURCE_MAGIC: [u8; 8] = *b"RMSHLE01";
 pub const MESH_RESOURCE_MAGIC_V2: [u8; 8] = *b"RMSHLE02";
+pub const MESH_RESOURCE_MAGIC_V3: [u8; 8] = *b"RMSHLE03";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackedMeshResource {
@@ -88,13 +89,13 @@ pub fn pack_mesh_resources(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let has_uv = payloads
+    let stream_kinds = payloads
         .iter()
         .map(|payload| {
-            matches!(
-                &payload.source,
-                MeshPayloadSource::Inline { uvs: Some(_), .. }
-            )
+            let MeshPayloadSource::Inline { uvs, colors, .. } = &payload.source else {
+                unreachable!("inline sources were checked before packing")
+            };
+            (uvs.is_some(), colors.is_some())
         })
         .collect::<Vec<_>>();
     let mut ranges = Vec::new();
@@ -111,7 +112,7 @@ pub fn pack_mesh_resources(
         }
         if index > start
             && (current + stream_bytes > maximum_resource_bytes as usize
-                || has_uv[index] != has_uv[start])
+                || stream_kinds[index] != stream_kinds[start])
         {
             ranges.push(start..index);
             start = index;
@@ -128,14 +129,15 @@ pub fn pack_mesh_resources(
     let mut resources_by_id = BTreeMap::new();
     for range in ranges {
         let mut bytes = vec![0; MESH_RESOURCE_HEADER_BYTES as usize];
-        let encoding = if has_uv[range.start] {
-            MeshResourceEncoding::PackedStreamsLeV2
-        } else {
-            MeshResourceEncoding::PackedStreamsLeV1
+        let encoding = match stream_kinds[range.start] {
+            (false, false) => MeshResourceEncoding::PackedStreamsLeV1,
+            (true, false) => MeshResourceEncoding::PackedStreamsLeV2,
+            (_, true) => MeshResourceEncoding::PackedStreamsLeV3,
         };
         let magic = match encoding {
             MeshResourceEncoding::PackedStreamsLeV1 => MESH_RESOURCE_MAGIC,
             MeshResourceEncoding::PackedStreamsLeV2 => MESH_RESOURCE_MAGIC_V2,
+            MeshResourceEncoding::PackedStreamsLeV3 => MESH_RESOURCE_MAGIC_V3,
         };
         bytes[..8].copy_from_slice(&magic);
         bytes[12..16].copy_from_slice(&(range.len() as u32).to_le_bytes());
@@ -145,6 +147,7 @@ pub fn pack_mesh_resources(
                 positions,
                 normals,
                 uvs,
+                colors,
                 indices,
             } = &payload.source
             else {
@@ -164,6 +167,14 @@ pub fn pack_mesh_resources(
             } else {
                 None
             };
+            let colors_byte_offset = if let Some(colors) = colors {
+                let offset = u32::try_from(bytes.len())
+                    .map_err(|_| MeshResourceError::ResourceTooLarge { bytes: bytes.len() })?;
+                push_f32s(&mut bytes, colors);
+                Some(offset)
+            } else {
+                None
+            };
             let indices_byte_offset = u32::try_from(bytes.len())
                 .map_err(|_| MeshResourceError::ResourceTooLarge { bytes: bytes.len() })?;
             push_u32s(&mut bytes, indices);
@@ -171,6 +182,7 @@ pub fn pack_mesh_resources(
                 positions_byte_offset,
                 normals_byte_offset,
                 uvs_byte_offset,
+                colors_byte_offset,
                 indices_byte_offset,
             ));
         }
@@ -181,8 +193,13 @@ pub fn pack_mesh_resources(
         let resource = format!("mesh-resource/{}", &content_hash["sha256:".len()..]);
 
         for (local_index, payload_index) in range.clone().enumerate() {
-            let (positions_byte_offset, normals_byte_offset, uvs_byte_offset, indices_byte_offset) =
-                offsets[local_index];
+            let (
+                positions_byte_offset,
+                normals_byte_offset,
+                uvs_byte_offset,
+                colors_byte_offset,
+                indices_byte_offset,
+            ) = offsets[local_index];
             packed_payloads[payload_index].source = MeshPayloadSource::Resource {
                 resource: resource.clone(),
                 content_hash: content_hash.clone(),
@@ -191,6 +208,7 @@ pub fn pack_mesh_resources(
                 positions_byte_offset,
                 normals_byte_offset,
                 uvs_byte_offset,
+                colors_byte_offset,
                 indices_byte_offset,
             };
             packed_payloads[payload_index]
@@ -243,7 +261,9 @@ pub fn validate_mesh_resource_identity(
 
 pub fn validate_mesh_resource_header(bytes: &[u8]) -> Result<(), MeshResourceError> {
     if bytes.len() < MESH_RESOURCE_HEADER_BYTES as usize
-        || (bytes[..8] != MESH_RESOURCE_MAGIC && bytes[..8] != MESH_RESOURCE_MAGIC_V2)
+        || (bytes[..8] != MESH_RESOURCE_MAGIC
+            && bytes[..8] != MESH_RESOURCE_MAGIC_V2
+            && bytes[..8] != MESH_RESOURCE_MAGIC_V3)
     {
         return Err(MeshResourceError::InvalidHeader);
     }
@@ -274,9 +294,17 @@ fn mesh_stream_bytes(payload: &MeshPayloadDescriptor) -> Option<usize> {
         .checked_mul(2)?
         .checked_add(indices.checked_mul(4)?)?;
     match &payload.source {
-        MeshPayloadSource::Inline { uvs: Some(_), .. } => {
-            base.checked_add(vertices.checked_mul(2)?.checked_mul(4)?)
-        }
+        MeshPayloadSource::Inline { uvs, colors, .. } => base
+            .checked_add(if uvs.is_some() {
+                vertices.checked_mul(2)?.checked_mul(4)?
+            } else {
+                0
+            })?
+            .checked_add(if colors.is_some() {
+                vertices.checked_mul(4)?.checked_mul(4)?
+            } else {
+                0
+            }),
         _ => Some(base),
     }
 }
@@ -399,6 +427,7 @@ mod tests {
                 positions: vec![offset, 0.0, 0.0, offset + 1.0, 0.0, 0.0, offset, 1.0, 0.0],
                 normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
                 uvs: None,
+                colors: None,
                 indices: vec![0, 1, 2],
             },
             provenance: MeshProvenance::VoxelObject,
@@ -416,6 +445,22 @@ mod tests {
             unreachable!()
         };
         *uvs = Some(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
+        payload
+    }
+
+    fn colored_triangle(offset: f32) -> MeshPayloadDescriptor {
+        let mut payload = triangle(offset);
+        payload.layout.attributes.push(MeshAttribute {
+            name: MeshAttributeName::Color,
+            components: 4,
+            kind: MeshAttributeKind::F32,
+        });
+        let MeshPayloadSource::Inline { colors, .. } = &mut payload.source else {
+            unreachable!()
+        };
+        *colors = Some(vec![
+            1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.5, 0.0, 0.0, 1.0, 1.0,
+        ]);
         payload
     }
 
@@ -508,5 +553,22 @@ mod tests {
                 maximum: MAX_MESH_RESOURCE_AGGREGATE_BYTES,
             })
         );
+    }
+
+    #[test]
+    fn normalized_vertex_colors_use_v3_resources_without_changing_legacy_encodings() {
+        let packed = pack_mesh_resources(&[colored_triangle(0.0)], 1024).unwrap();
+        assert_eq!(packed.resources[0].bytes[..8], MESH_RESOURCE_MAGIC_V3);
+        assert!(matches!(
+            packed.payloads[0].source,
+            MeshPayloadSource::Resource {
+                encoding: MeshResourceEncoding::PackedStreamsLeV3,
+                uvs_byte_offset: None,
+                colors_byte_offset: Some(_),
+                ..
+            }
+        ));
+        packed.payloads[0].validate().unwrap();
+        packed.resources[0].validate().unwrap();
     }
 }

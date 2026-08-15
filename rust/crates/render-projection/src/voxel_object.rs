@@ -557,6 +557,7 @@ pub fn voxel_object_mesh_payload(mesh: &svc_mesh::MeshPayload) -> MeshPayloadDes
             positions: mesh.positions.clone(),
             normals: mesh.normals.clone(),
             uvs,
+            colors: None,
             indices: mesh.indices.clone(),
         },
         provenance: MeshProvenance::VoxelObject,

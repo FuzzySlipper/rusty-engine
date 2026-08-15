@@ -984,8 +984,9 @@ bounded project-relative mesh sources and packed mesh-resource bytes, rejects sy
 the admitted SHA-256 before the shared renderer consumes them; the browser has no filesystem
 authority. A textual static-mesh source may omit texture coordinates or provide exactly one finite
 `f32x2` UV per position vertex. `asset-import` validates that cardinality and retains the stream in
-the renderer-neutral payload; deterministic packing uses V2 for UV-bearing meshes while unchanged
-color-only sources retain the V1 shape. The Three backend binds this ordinary geometry UV stream to
+the renderer-neutral payload; deterministic packing uses V2 for UV-bearing meshes and V3 when an
+optional normalized `f32x4` color stream is present, while meshes with neither retain the V1 shape.
+The Three backend binds this ordinary geometry UV stream to
 the exact resolved material texture without acquiring asset authority or entering the voxel-surface
 shader specialization. Animated-mesh import enters through `asset-import`. A GLB remains an exact single-file
 source. A JSON `.gltf` enters as an explicit immutable closure containing its root plus only the

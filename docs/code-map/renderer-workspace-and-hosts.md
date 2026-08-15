@@ -58,6 +58,10 @@ compiled artifact, and Rust webview host/resource lifecycle.
   - `particle-sink.ts` owns pooled `Points` billboard batches and
     `InstancedMesh` cube batches. `RendererSurface.createParticleSink` hides
     Three objects from the host and downstream lifecycle.
+  - Generic retained static meshes carry optional normalized RGBA vertex colors
+    through packed V3 resources. Generic materials own bounded alpha mode and
+    sidedness, while the browser surface may apply validated linear fog without
+    exposing Three scene objects.
 - [`render/packages/renderer-host/src`](../../render/packages/renderer-host/src)
   - `animated-mesh-capture.ts` owns deterministic PNG/contact-sheet encoding
     over an already-mounted `RendererSurface`; it does not load assets or own a
@@ -78,6 +82,7 @@ compiled artifact, and Rust webview host/resource lifecycle.
 - [Textured voxel campaign closeout](../textured-voxel-campaign-closeout.md)
 - [Structured world indicators](../topics/world-indicators.md)
 - [Three scene particles](../topics/three-scene-particles.md)
+- [Offline depth-splat retained-renderer proof](../topics/depth-splat-retained-proof.md)
 
 ## Public downstream surfaces
 

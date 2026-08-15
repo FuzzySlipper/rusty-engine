@@ -67,6 +67,7 @@ export interface RendererBrowserSurfaceOptions {
   readonly autoStart?: boolean;
   readonly camera?: RendererBrowserSurfaceCameraOptions;
   readonly clearColor?: number;
+  readonly fog?: RendererBrowserSurfaceFogOptions;
   readonly frame?: RenderFrameDiff;
   readonly meshBufferSource?: MeshBufferSource;
   readonly meshResourceSource?: MeshResourceSource;
@@ -74,6 +75,12 @@ export interface RendererBrowserSurfaceOptions {
   readonly pixelRatio?: number;
   readonly lighting?: RendererBrowserSurfaceLightingOptions;
   readonly viewComposition?: RendererViewComposition;
+}
+
+export interface RendererBrowserSurfaceFogOptions {
+  readonly color: number;
+  readonly near: number;
+  readonly far: number;
 }
 
 export interface RendererBrowserSurfaceLogicalViewport {
@@ -332,6 +339,16 @@ export function mountRendererBrowserSurface(
       maximumActiveShadowLights: lighting.shadows.maximumActiveLights,
     },
   );
+  if (options.fog !== undefined) {
+    const { color, near, far } = options.fog;
+    if (!Number.isInteger(color) || color < 0 || color > 0xff_ffff
+      || !Number.isFinite(near) || near < 0
+      || !Number.isFinite(far) || far <= near) {
+      renderer.dispose();
+      throw new RangeError('renderer fog requires an RGB integer and finite 0 <= near < far distances');
+    }
+    renderer.scene.fog = new THREE.Fog(color, near, far);
+  }
   // Defined retained materials use MeshStandardMaterial. Keep the browser host responsible
   // for a small neutral light rig; the retained projection carries appearance
   // parameters, never renderer-owned light state or gameplay authority.
@@ -917,7 +934,9 @@ export function pickProjectedObject(
       intersection.object,
       intersection.instanceId,
     );
-    if (identity === undefined || !pickIdentityMatches(identity, request.filter)) {
+    if (identity === undefined
+      || !isEffectivelyVisibleForPick(intersection.object, renderer.scene)
+      || !pickIdentityMatches(identity, request.filter)) {
       continue;
     }
     const worldNormal = intersection.face?.normal.clone() ?? new THREE.Vector3(0, 0, 0);
@@ -947,6 +966,16 @@ export function pickProjectedObject(
     };
   }
   return { diagnostics: [], hit: null, kind: 'rusty_renderer_browser_surface_pick.v1' };
+}
+
+function isEffectivelyVisibleForPick(object: THREE.Object3D, scene: THREE.Scene): boolean {
+  let current: THREE.Object3D | null = object;
+  while (current !== null) {
+    if (!current.visible) return false;
+    if (current === scene) return true;
+    current = current.parent;
+  }
+  return false;
 }
 
 function configurePickRay(

@@ -67,7 +67,10 @@ export interface MeshAttribute {
 }
 
 export type MeshIndexWidth = 'u32';
-export type MeshResourceEncoding = 'packedStreamsLeV1' | 'packedStreamsLeV2';
+export type MeshResourceEncoding =
+  | 'packedStreamsLeV1'
+  | 'packedStreamsLeV2'
+  | 'packedStreamsLeV3';
 
 export interface MeshBufferLayout {
   readonly vertexCount: number;
@@ -95,6 +98,7 @@ export type MeshPayloadSource =
       readonly positions: readonly number[];
       readonly normals: readonly number[];
       readonly uvs?: readonly number[];
+      readonly colors?: readonly number[];
       readonly indices: readonly number[];
     }
   | {
@@ -103,6 +107,7 @@ export type MeshPayloadSource =
       readonly positionsByteOffset: number;
       readonly normalsByteOffset: number;
       readonly uvsByteOffset?: number;
+      readonly colorsByteOffset?: number;
       readonly indicesByteOffset: number;
     }
   | {
@@ -114,6 +119,7 @@ export type MeshPayloadSource =
       readonly positionsByteOffset: number;
       readonly normalsByteOffset: number;
       readonly uvsByteOffset?: number;
+      readonly colorsByteOffset?: number;
       readonly indicesByteOffset: number;
     };
 
@@ -333,6 +339,9 @@ export interface RenderMaterialDescriptor {
   readonly emissionColor: Vec3;
   readonly emissionIntensity: number;
   readonly uvStrategy: MaterialUvStrategy;
+  readonly alphaMode?: { readonly kind: 'opaque' | 'blend' }
+    | { readonly kind: 'mask'; readonly cutoff: number };
+  readonly doubleSided?: boolean;
   readonly voxelSurface?: VoxelSurfaceDescriptor;
 }
 

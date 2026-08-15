@@ -333,7 +333,7 @@ function meshPayload(input: unknown, path: string): void {
   );
   if (sourceKind === 'inline') {
     const source = recordOptional(value['source'], `${path}.source`,
-      ['kind', 'positions', 'normals', 'indices'], ['uvs']);
+      ['kind', 'positions', 'normals', 'indices'], ['uvs', 'colors']);
     numberList(source['positions'], `${path}.source.positions`, vertexCount * 3, false);
     numberList(source['normals'], `${path}.source.normals`, vertexCount * 3, false);
     if (names.has('uv') !== Object.hasOwn(source, 'uvs')) {
@@ -346,6 +346,15 @@ function meshPayload(input: unknown, path: string): void {
         fail(`${path}.source.uvs`, 'voxel tile coordinate exceeds the exact f32 integer range');
       }
     }
+    if (names.has('color') !== Object.hasOwn(source, 'colors')) {
+      fail(`${path}.source.colors`, 'must be present exactly when the color attribute is declared');
+    }
+    if (Object.hasOwn(source, 'colors')) {
+      const colors = numberList(source['colors'], `${path}.source.colors`, vertexCount * 4, false);
+      if (colors.some((component) => component < 0 || component > 1)) {
+        fail(`${path}.source.colors`, 'components must be normalized to 0..1');
+      }
+    }
     const indices = numberList(source['indices'], `${path}.source.indices`, indexCount, true);
     indices.forEach((item, index) => {
       if (item >= vertexCount) {
@@ -355,7 +364,7 @@ function meshPayload(input: unknown, path: string): void {
   } else if (sourceKind === 'sharedBuffer') {
     const source = recordOptional(value['source'], `${path}.source`,
       ['kind', 'buffer', 'positionsByteOffset', 'normalsByteOffset', 'indicesByteOffset'],
-      ['uvsByteOffset']);
+      ['uvsByteOffset', 'colorsByteOffset']);
     safeInteger(source['buffer'], `${path}.source.buffer`);
     nonNegativeInteger(source['positionsByteOffset'], `${path}.source.positionsByteOffset`);
     nonNegativeInteger(source['normalsByteOffset'], `${path}.source.normalsByteOffset`);
@@ -365,12 +374,18 @@ function meshPayload(input: unknown, path: string): void {
     if (Object.hasOwn(source, 'uvsByteOffset')) {
       nonNegativeInteger(source['uvsByteOffset'], `${path}.source.uvsByteOffset`);
     }
+    if (names.has('color') !== Object.hasOwn(source, 'colorsByteOffset')) {
+      fail(`${path}.source.colorsByteOffset`, 'must be present exactly when the color attribute is declared');
+    }
+    if (Object.hasOwn(source, 'colorsByteOffset')) {
+      nonNegativeInteger(source['colorsByteOffset'], `${path}.source.colorsByteOffset`);
+    }
     nonNegativeInteger(source['indicesByteOffset'], `${path}.source.indicesByteOffset`);
   } else {
     const source = recordOptional(value['source'], `${path}.source`, [
       'kind', 'resource', 'contentHash', 'byteLength', 'encoding',
       'positionsByteOffset', 'normalsByteOffset', 'indicesByteOffset',
-    ], ['uvsByteOffset']);
+    ], ['uvsByteOffset', 'colorsByteOffset']);
     const resource = nonEmptyText(source['resource'], `${path}.source.resource`);
     const contentHash = nonEmptyText(source['contentHash'], `${path}.source.contentHash`);
     const digest = /^sha256:([0-9a-f]{64})$/u.exec(contentHash)?.[1];
@@ -382,11 +397,14 @@ function meshPayload(input: unknown, path: string): void {
       source['byteLength'], `${path}.source.byteLength`, 16, 64 * 1024 * 1024,
     );
     const encoding = enumeration(source['encoding'], `${path}.source.encoding`,
-      ['packedStreamsLeV1', 'packedStreamsLeV2'] as const);
-    if (names.has('uv') !== Object.hasOwn(source, 'uvsByteOffset')
-      || (encoding === 'packedStreamsLeV1' && Object.hasOwn(source, 'uvsByteOffset'))
-      || (encoding === 'packedStreamsLeV2' && !Object.hasOwn(source, 'uvsByteOffset'))) {
-      fail(`${path}.source`, 'mesh resource encoding and uv stream must agree');
+      ['packedStreamsLeV1', 'packedStreamsLeV2', 'packedStreamsLeV3'] as const);
+    const hasUv = Object.hasOwn(source, 'uvsByteOffset');
+    const hasColor = Object.hasOwn(source, 'colorsByteOffset');
+    if (names.has('uv') !== hasUv || names.has('color') !== hasColor
+      || (encoding === 'packedStreamsLeV1' && (hasUv || hasColor))
+      || (encoding === 'packedStreamsLeV2' && (!hasUv || hasColor))
+      || (encoding === 'packedStreamsLeV3' && !hasColor)) {
+      fail(`${path}.source`, 'mesh resource encoding and optional streams must agree');
     }
     const positionsByteOffset = integer(
       source['positionsByteOffset'], `${path}.source.positionsByteOffset`, 16, 4_294_967_295,
@@ -397,6 +415,9 @@ function meshPayload(input: unknown, path: string): void {
     const uvsByteOffset = Object.hasOwn(source, 'uvsByteOffset')
       ? integer(source['uvsByteOffset'], `${path}.source.uvsByteOffset`, 16, 4_294_967_295)
       : undefined;
+    const colorsByteOffset = Object.hasOwn(source, 'colorsByteOffset')
+      ? integer(source['colorsByteOffset'], `${path}.source.colorsByteOffset`, 16, 4_294_967_295)
+      : undefined;
     const indicesByteOffset = integer(
       source['indicesByteOffset'], `${path}.source.indicesByteOffset`, 16, 4_294_967_295,
     );
@@ -404,6 +425,7 @@ function meshPayload(input: unknown, path: string): void {
       ['positionsByteOffset', positionsByteOffset],
       ['normalsByteOffset', normalsByteOffset],
       ...(uvsByteOffset === undefined ? [] : [['uvsByteOffset', uvsByteOffset] as const]),
+      ...(colorsByteOffset === undefined ? [] : [['colorsByteOffset', colorsByteOffset] as const]),
       ['indicesByteOffset', indicesByteOffset],
     ] as const) {
       if (offset % 4 !== 0) fail(`${path}.source.${name}`, 'must be four-byte aligned');
@@ -411,14 +433,17 @@ function meshPayload(input: unknown, path: string): void {
     const positionsEnd = positionsByteOffset + vertexCount * 3 * 4;
     const normalsEnd = normalsByteOffset + vertexCount * 3 * 4;
     const uvsEnd = uvsByteOffset === undefined ? normalsEnd : uvsByteOffset + vertexCount * 2 * 4;
+    const colorsEnd = colorsByteOffset === undefined ? uvsEnd : colorsByteOffset + vertexCount * 4 * 4;
     const indicesEnd = indicesByteOffset + indexCount * 4;
     if (positionsEnd > byteLength || normalsEnd > byteLength || uvsEnd > byteLength
+      || colorsEnd > byteLength
       || indicesEnd > byteLength) {
       fail(`${path}.source`, 'declares a mesh stream outside the resource byte length');
     }
     if (positionsEnd > normalsByteOffset
-      || (uvsByteOffset === undefined ? normalsEnd : uvsEnd) > indicesByteOffset
-      || (uvsByteOffset !== undefined && normalsEnd > uvsByteOffset)) {
+      || colorsEnd > indicesByteOffset
+      || (uvsByteOffset !== undefined && normalsEnd > uvsByteOffset)
+      || (colorsByteOffset !== undefined && uvsEnd > colorsByteOffset)) {
       fail(`${path}.source`, 'mesh resource streams must not overlap');
     }
   }
@@ -614,7 +639,7 @@ function renderMaterial(input: unknown, path: string): void {
   const value = recordOptional(input, path, [
     'schemaVersion', 'id', 'color', 'texture', 'roughness', 'textureTint',
     'emissionColor', 'emissionIntensity', 'uvStrategy',
-  ], ['voxelSurface']);
+  ], ['alphaMode', 'doubleSided', 'voxelSurface']);
   integer(value['schemaVersion'], `${path}.schemaVersion`, 1, 4_294_967_295);
   nonEmptyText(value['id'], `${path}.id`);
   color4(value['color'], `${path}.color`);
@@ -624,6 +649,19 @@ function renderMaterial(input: unknown, path: string): void {
   color3(value['emissionColor'], `${path}.emissionColor`);
   nonNegativeFinite(value['emissionIntensity'], `${path}.emissionIntensity`);
   enumeration(value['uvStrategy'], `${path}.uvStrategy`, ['flat', 'planar', 'atlas'] as const);
+  if (Object.hasOwn(value, 'alphaMode')) {
+    const alpha = looseRecord(value['alphaMode'], `${path}.alphaMode`);
+    const kind = enumeration(alpha['kind'], `${path}.alphaMode.kind`, ['opaque', 'mask', 'blend'] as const);
+    if (kind === 'mask') {
+      const mask = record(value['alphaMode'], `${path}.alphaMode`, ['kind', 'cutoff']);
+      range(mask['cutoff'], `${path}.alphaMode.cutoff`, 0, 1);
+    } else {
+      record(value['alphaMode'], `${path}.alphaMode`, ['kind']);
+    }
+  }
+  if (Object.hasOwn(value, 'doubleSided')) {
+    booleanValue(value['doubleSided'], `${path}.doubleSided`);
+  }
   if (Object.hasOwn(value, 'voxelSurface')) {
     voxelSurface(value['voxelSurface'], `${path}.voxelSurface`, value['texture']);
   }

@@ -512,6 +512,7 @@ pub fn voxel_mesh_payload(chunk: &VoxelMeshChunk) -> MeshPayloadDescriptor {
                 .surface_mode
                 .supports_voxel_tile_coordinates()
                 .then(|| chunk.tile_coordinates.clone()),
+            colors: None,
             indices: chunk.indices.clone(),
         },
         provenance: MeshProvenance::VoxelChunk,
@@ -611,6 +612,8 @@ mod tests {
             emission_color: [0.0; 3],
             emission_intensity: 0.0,
             uv_strategy: MaterialUvStrategy::Flat,
+            alpha_mode: Default::default(),
+            double_sided: false,
             voxel_surface: None,
         }
     }

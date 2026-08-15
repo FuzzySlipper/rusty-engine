@@ -306,6 +306,8 @@ fn materials(
                 } else {
                     MaterialUvStrategy::Flat
                 },
+                alpha_mode: Default::default(),
+                double_sided: false,
                 voxel_surface: texture.map(|descriptor| atlas_surface(descriptor, slot)),
             };
             (material.id.clone(), material)

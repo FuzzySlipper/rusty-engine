@@ -241,6 +241,7 @@ pub fn import_with_context(source: &SourceMesh, context: &ImportContext) -> Impo
                 positions,
                 normals: source.normals.clone(),
                 uvs: source.uvs.clone(),
+                colors: None,
                 indices: source.indices.clone(),
             },
             provenance: MeshProvenance::StaticAsset,
