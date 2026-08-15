@@ -65,22 +65,42 @@ void test('configuration updates are validated, fail-atomic, and avoid recapture
     normalOrientationBlend: 0.6,
     baseSpriteContribution: 0.45,
     viewAngleFalloff: 3,
+    lightingMode: 'normal',
+    ambientLight: 0.6,
+    diffuseLight: 1.4,
+    outputGain: 1.5,
+    ambientColor: [0.5, 0.6, 0.7],
+    lightColor: [1, 0.9, 0.8],
     lightDirection: [1, 2, 3],
   });
   assert.equal(configured.revision, 2);
   assert.equal(configured.captureCpuSubmissionMilliseconds, null);
   assert.equal(configured.config.depthScale, 'world');
+  assert.equal(configured.config.lightingMode, 'normal');
+  assert.equal(configured.config.outputGain, 1.5);
   assert.ok(Math.abs(length(configured.config.lightDirection) - 1) < 1e-6);
+
+  const plainButRelit = enhancement.configure({ mode: 'sprite', lightingMode: 'normal' });
+  assert.equal(plainButRelit.mode, 'sprite');
+  assert.equal(plainButRelit.config.lightingMode, 'normal');
+  const enhancedButCaptured = enhancement.configure({
+    mode: 'depth-parallax',
+    lightingMode: 'captured',
+  });
+  assert.equal(enhancedButCaptured.mode, 'depth-parallax');
+  assert.equal(enhancedButCaptured.config.lightingMode, 'captured');
 
   assert.throws(() => enhancement.configure({ depthAmplitude: 4.01 }), /depthAmplitude/);
   assert.throws(() => enhancement.configure({ depthClamp: 1.01 }), /depthClamp/);
   assert.throws(() => enhancement.configure({ depthConfidenceThreshold: 1 }), /depthConfidence/);
+  assert.throws(() => enhancement.configure({ outputGain: 4.01 }), /outputGain/);
+  assert.throws(() => enhancement.configure({ ambientColor: [1, -0.1, 1] }), /ambientColor/);
   assert.throws(() => enhancement.configure({ sampleColumns: 64 }), /construction-time geometry/);
   assert.throws(
     () => enhancement.configure({ surprisingField: 1 } as Partial<never>),
     /unknown enhancement config fields/,
   );
-  assert.equal(enhancement.readout().revision, 2);
+  assert.equal(enhancement.readout().revision, 4);
   assert.equal(enhancement.readout().config.depthAmplitude, 0.8);
 
   enhancement.recordSteadyStateFrame(1.25);

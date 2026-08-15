@@ -603,12 +603,63 @@ test('public application host exposes a fail-atomic voxel-sprite experiment port
           elevationDegrees: 0,
           near: 0.1,
           far: 20,
+          lighting: {
+            mode: 'isolated',
+            ambientIntensity: 1.2,
+            keyIntensity: 2.5,
+            fillIntensity: 0.9,
+          },
         },
       },
       transform: { position: [-1.1, 0, 0], width: 1.8, height: 1 },
       mode: 'sprite-splat',
-      config: { sampleColumns: 16, sampleRows: 8, depthAmplitude: 0.2 },
+      config: {
+        sampleColumns: 16,
+        sampleRows: 8,
+        depthAmplitude: 0.2,
+        lightingMode: 'normal',
+        ambientLight: 0.5,
+        diffuseLight: 1.2,
+        outputGain: 1.3,
+      },
     });
+    const canvasChecksum = (): number => {
+      host.renderer.renderOnce();
+      const canvas = document.querySelector('canvas');
+      const context = canvas?.getContext('webgl2') ?? canvas?.getContext('webgl');
+      if (context === null || context === undefined) return 0;
+      const pixels = new Uint8Array(context.drawingBufferWidth * context.drawingBufferHeight * 4);
+      context.readPixels(
+        0,
+        0,
+        context.drawingBufferWidth,
+        context.drawingBufferHeight,
+        context.RGBA,
+        context.UNSIGNED_BYTE,
+        pixels,
+      );
+      let checksum = 0;
+      for (let index = 0; index < pixels.length; index += 1) {
+        checksum = (checksum + pixels[index]! * ((index % 251) + 1)) % 2_147_483_647;
+      }
+      return checksum;
+    };
+    const studioDefaultChecksum = canvasChecksum();
+    const lightingRecapture = experiment.recapture('runtime-proof', {
+      resolution: 64,
+      azimuthDegrees: 0,
+      elevationDegrees: 0,
+      near: 0.1,
+      far: 20,
+      lighting: {
+        mode: 'isolated',
+        ambientIntensity: 0.15,
+        keyColor: [0.2, 0.4, 1],
+        keyIntensity: 0.35,
+        fillIntensity: 0,
+      },
+    });
+    const studioAlternateChecksum = canvasChecksum();
     const prepared = experiment.create({
       id: 'prepared-proof',
       source: {
@@ -660,10 +711,14 @@ test('public application host exposes a fail-atomic voxel-sprite experiment port
       elevationDegrees: 5,
       near: 0.1,
       far: 20,
+      lighting: { mode: 'scene' },
     });
     host.renderer.renderOnce();
     return {
       created,
+      lightingRecapture,
+      studioDefaultChecksum,
+      studioAlternateChecksum,
       prepared,
       failedReplacement,
       recaptured,
@@ -674,6 +729,13 @@ test('public application host exposes a fail-atomic voxel-sprite experiment port
   expect(result.created.readout.entries[0]?.source).toBe('retained');
   expect(result.created.readout.entries[0]?.enhancement.captureCpuSubmissionMilliseconds)
     .not.toBeNull();
+  expect(result.created.readout.entries[0]?.capture?.lighting?.mode).toBe('isolated');
+  expect(result.created.readout.entries[0]?.enhancement.config.lightingMode).toBe('normal');
+  expect(result.created.readout.entries[0]?.enhancement.config.outputGain).toBe(1.3);
+  expect(result.lightingRecapture.applied).toBe(true);
+  expect(result.studioDefaultChecksum).toBeGreaterThan(0);
+  expect(result.studioAlternateChecksum).toBeGreaterThan(0);
+  expect(result.studioAlternateChecksum).not.toBe(result.studioDefaultChecksum);
   expect(result.prepared.applied).toBe(true);
   expect(result.prepared.readout.entries.some((entry) => entry.source === 'prepared')).toBe(true);
   expect(result.failedReplacement.applied).toBe(false);
@@ -683,6 +745,8 @@ test('public application host exposes a fail-atomic voxel-sprite experiment port
   expect(result.recaptured.applied).toBe(true);
   expect(result.finalReadout.entries.find((entry) => entry.id === 'runtime-proof')?.capture?.resolution)
     .toBe(32);
+  expect(result.finalReadout.entries.find((entry) => entry.id === 'runtime-proof')?.capture?.lighting?.mode)
+    .toBe('scene');
 
   const visiblePixels = await page.locator('canvas').evaluate((element) => {
     window.__rustyApplicationHost?.renderer.renderOnce();

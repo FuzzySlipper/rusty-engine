@@ -12,6 +12,7 @@ export const VOXEL_SPRITE_ENHANCEMENT_MODES = Object.freeze([
 
 export type VoxelSpriteEnhancementMode = typeof VOXEL_SPRITE_ENHANCEMENT_MODES[number];
 export type VoxelSpriteDepthScale = 'normalized' | 'world';
+export type VoxelSpriteLightingMode = 'captured' | 'normal';
 
 export interface VoxelSpriteEnhancementConfig {
   readonly mode: VoxelSpriteEnhancementMode;
@@ -33,6 +34,13 @@ export interface VoxelSpriteEnhancementConfig {
   readonly normalOrientationBlend: number;
   readonly baseSpriteContribution: number;
   readonly viewAngleFalloff: number;
+  /** `captured` preserves capture color; `normal` modulates it with the normal pass. */
+  readonly lightingMode: VoxelSpriteLightingMode;
+  readonly ambientLight: number;
+  readonly diffuseLight: number;
+  readonly outputGain: number;
+  readonly ambientColor: readonly [number, number, number];
+  readonly lightColor: readonly [number, number, number];
   readonly lightDirection: readonly [number, number, number];
 }
 
@@ -85,6 +93,12 @@ const DEFAULT_CONFIG: VoxelSpriteEnhancementConfig = Object.freeze({
   normalOrientationBlend: 0.35,
   baseSpriteContribution: 0.7,
   viewAngleFalloff: 0,
+  lightingMode: 'captured',
+  ambientLight: 0.35,
+  diffuseLight: 0.9,
+  outputGain: 1,
+  ambientColor: Object.freeze([1, 1, 1]) as readonly [number, number, number],
+  lightColor: Object.freeze([1, 1, 1]) as readonly [number, number, number],
   lightDirection: Object.freeze([0.4, 0.7, 1]) as readonly [number, number, number],
 });
 
@@ -120,8 +134,13 @@ interface EnhancementUniforms extends Record<string, THREE.IUniform> {
   readonly baseSpriteContribution: THREE.IUniform<number>;
   readonly baseDepthDisplacement: THREE.IUniform<number>;
   readonly viewAngleFalloff: THREE.IUniform<number>;
+  readonly ambientLight: THREE.IUniform<number>;
+  readonly diffuseLight: THREE.IUniform<number>;
+  readonly outputGain: THREE.IUniform<number>;
+  readonly ambientColor: THREE.IUniform<THREE.Color>;
+  readonly lightColor: THREE.IUniform<THREE.Color>;
   readonly lightDirection: THREE.IUniform<THREE.Vector3>;
-  readonly relight: THREE.IUniform<number>;
+  readonly normalLighting: THREE.IUniform<number>;
 }
 
 /**
@@ -154,7 +173,12 @@ export class VoxelSpriteEnhancement {
       'captureCpuSubmissionMilliseconds',
     );
     rejectUnknownConfig(config);
-    this.#config = validatedConfig({ ...DEFAULT_CONFIG, ...config });
+    this.#config = validatedConfig({
+      ...DEFAULT_CONFIG,
+      ...config,
+      lightingMode: config.lightingMode
+        ?? (config.mode !== undefined && config.mode !== 'sprite' ? 'normal' : 'captured'),
+    });
     this.#uniforms = createUniforms(this.#frame, this.#config);
     this.#baseGeometry = new THREE.PlaneGeometry(
       1,
@@ -267,7 +291,6 @@ export class VoxelSpriteEnhancement {
     const mode = this.#config.mode;
     this.#baseMesh.visible = mode !== 'full-splat';
     this.#splatMesh.visible = mode === 'sprite-splat' || mode === 'full-splat';
-    this.#uniforms.relight.value = mode === 'sprite' ? 0 : 1;
     this.#uniforms.baseDepthDisplacement.value = mode === 'depth-parallax' ? 1 : 0;
     this.#uniforms.baseSpriteContribution.value = mode === 'sprite-splat'
       ? this.#config.baseSpriteContribution
@@ -312,8 +335,16 @@ function validatedConfig(input: VoxelSpriteEnhancementConfig): VoxelSpriteEnhanc
   bounded(input.normalOrientationBlend, 0, 1, 'normalOrientationBlend');
   bounded(input.baseSpriteContribution, 0, 1, 'baseSpriteContribution');
   bounded(input.viewAngleFalloff, 0, 16, 'viewAngleFalloff');
+  if (input.lightingMode !== 'captured' && input.lightingMode !== 'normal') {
+    throw new RangeError('lightingMode must be captured or normal');
+  }
+  bounded(input.ambientLight, 0, 4, 'ambientLight');
+  bounded(input.diffuseLight, 0, 4, 'diffuseLight');
+  bounded(input.outputGain, 0.1, 4, 'outputGain');
+  const ambientColor = colorTuple(input.ambientColor, 'ambientColor');
+  const lightColor = colorTuple(input.lightColor, 'lightColor');
   const lightDirection = normalizedTuple(input.lightDirection, 'lightDirection');
-  return Object.freeze({ ...input, lightDirection });
+  return Object.freeze({ ...input, ambientColor, lightColor, lightDirection });
 }
 
 function rejectGridMutation(
@@ -351,6 +382,17 @@ function normalizedTuple(
   return Object.freeze([vector.x, vector.y, vector.z]);
 }
 
+function colorTuple(
+  value: readonly [number, number, number],
+  name: string,
+): readonly [number, number, number] {
+  if (value.length !== 3 || value.some((component) => !Number.isFinite(component)
+    || component < 0 || component > 1)) {
+    throw new RangeError(`${name} must contain three finite values from 0 to 1`);
+  }
+  return Object.freeze([...value]) as unknown as readonly [number, number, number];
+}
+
 function optionalMilliseconds(value: number | null, name: string): number | null {
   return value === null ? null : requiredMilliseconds(value, name);
 }
@@ -386,8 +428,13 @@ function createUniforms(
     baseSpriteContribution: { value: 1 },
     baseDepthDisplacement: { value: 0 },
     viewAngleFalloff: { value: 0 },
+    ambientLight: { value: 0 },
+    diffuseLight: { value: 0 },
+    outputGain: { value: 1 },
+    ambientColor: { value: new THREE.Color() },
+    lightColor: { value: new THREE.Color() },
     lightDirection: { value: new THREE.Vector3() },
-    relight: { value: 0 },
+    normalLighting: { value: 0 },
   };
   bindFrame(uniforms, frame);
   applyUniformConfig(uniforms, config);
@@ -421,7 +468,13 @@ function applyUniformConfig(
   uniforms.normalOrientationBlend.value = config.normalOrientationBlend;
   uniforms.baseSpriteContribution.value = config.baseSpriteContribution;
   uniforms.viewAngleFalloff.value = config.viewAngleFalloff;
+  uniforms.ambientLight.value = config.ambientLight;
+  uniforms.diffuseLight.value = config.diffuseLight;
+  uniforms.outputGain.value = config.outputGain;
+  uniforms.ambientColor.value.setRGB(...config.ambientColor);
+  uniforms.lightColor.value.setRGB(...config.lightColor);
   uniforms.lightDirection.value.set(...config.lightDirection);
+  uniforms.normalLighting.value = config.lightingMode === 'normal' ? 1 : 0;
 }
 
 function baseMaterial(uniforms: EnhancementUniforms): THREE.ShaderMaterial {
@@ -451,9 +504,9 @@ function baseMaterial(uniforms: EnhancementUniforms): THREE.ShaderMaterial {
         float coverage = texture2D(coverageTexture, voxelSpriteUv).r * voxelSpriteConfidence;
         if (coverage < 0.01 || color.a < 0.01) discard;
         vec3 normal = decodedNormal(voxelSpriteUv);
-        float lighting = lightingFor(normal);
+        vec3 lighting = lightingFor(normal);
         float contribution = baseSpriteContribution;
-        gl_FragColor = vec4(color.rgb * lighting, color.a * coverage * contribution);
+        gl_FragColor = vec4(color.rgb * lighting * outputGain, color.a * coverage * contribution);
       }
     `,
     transparent: false,
@@ -504,8 +557,8 @@ function splatMaterial(uniforms: EnhancementUniforms): THREE.ShaderMaterial {
         float coverage = texture2D(coverageTexture, voxelSpriteUv).r * voxelSpriteConfidence;
         if (coverage < 0.01 || color.a < 0.01) discard;
         vec3 normal = decodedNormal(voxelSpriteUv);
-        float lighting = lightingFor(normal);
-        gl_FragColor = vec4(color.rgb * lighting, color.a * coverage * voxelSpriteViewWeight);
+        vec3 lighting = lightingFor(normal);
+        gl_FragColor = vec4(color.rgb * lighting * outputGain, color.a * coverage * voxelSpriteViewWeight);
       }
     `,
     transparent: true,
@@ -570,15 +623,20 @@ const SHARED_FRAGMENT_HEADER = `
   uniform sampler2D coverageTexture;
   uniform float normalInfluence;
   uniform float baseSpriteContribution;
-  uniform float relight;
+  uniform float ambientLight;
+  uniform float diffuseLight;
+  uniform float outputGain;
+  uniform float normalLighting;
+  uniform vec3 ambientColor;
+  uniform vec3 lightColor;
   uniform vec3 lightDirection;
   vec3 decodedNormal(vec2 sourceUv) {
     return normalize(texture2D(normalTexture, sourceUv).xyz * 2.0 - 1.0);
   }
-  float lightingFor(vec3 normal) {
+  vec3 lightingFor(vec3 normal) {
     float diffuse = max(dot(normal, normalize(lightDirection)), 0.0);
-    float relitValue = mix(0.3, 1.0, diffuse);
-    return mix(1.0, relitValue, normalInfluence * relight);
+    vec3 relitValue = ambientColor * ambientLight + lightColor * diffuse * diffuseLight;
+    return mix(vec3(1.0), relitValue, normalInfluence * normalLighting);
   }
 `;
 

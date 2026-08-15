@@ -51,7 +51,23 @@ export interface RustyApplicationVoxelSpriteCaptureSettings {
   readonly elevationDegrees: number;
   readonly near: number;
   readonly far: number;
+  /** Defaults to an isolated capture-light rig with readable lighting. */
+  readonly lighting?: RustyApplicationVoxelSpriteCaptureLighting;
 }
+
+export type RustyApplicationVoxelSpriteCaptureLighting =
+  | { readonly mode: 'scene' }
+  | {
+      readonly mode: 'isolated';
+      readonly ambientColor?: readonly [number, number, number];
+      readonly ambientIntensity?: number;
+      readonly keyDirection?: readonly [number, number, number];
+      readonly keyColor?: readonly [number, number, number];
+      readonly keyIntensity?: number;
+      readonly fillDirection?: readonly [number, number, number];
+      readonly fillColor?: readonly [number, number, number];
+      readonly fillIntensity?: number;
+    };
 
 export interface RustyApplicationVoxelSpriteConfig {
   readonly mode: RustyApplicationVoxelSpriteMode;
@@ -71,6 +87,13 @@ export interface RustyApplicationVoxelSpriteConfig {
   readonly normalOrientationBlend: number;
   readonly baseSpriteContribution: number;
   readonly viewAngleFalloff: number;
+  /** Preserve captured shading or apply the captured normal pass independently of geometry mode. */
+  readonly lightingMode: 'captured' | 'normal';
+  readonly ambientLight: number;
+  readonly diffuseLight: number;
+  readonly outputGain: number;
+  readonly ambientColor: readonly [number, number, number];
+  readonly lightColor: readonly [number, number, number];
   readonly lightDirection: readonly [number, number, number];
 }
 

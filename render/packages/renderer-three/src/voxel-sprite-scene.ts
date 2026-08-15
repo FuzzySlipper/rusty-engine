@@ -23,7 +23,25 @@ export interface RendererThreeVoxelSpriteCaptureSettings {
   readonly elevationDegrees: number;
   readonly near: number;
   readonly far: number;
+  /** Defaults to an isolated, readable capture-light rig. */
+  readonly lighting?: RendererThreeVoxelSpriteCaptureLighting;
 }
+
+export type RendererThreeVoxelSpriteCaptureLighting =
+  | { readonly mode: 'scene' }
+  | {
+      readonly mode: 'isolated';
+      readonly ambientColor?: readonly [number, number, number];
+      readonly ambientIntensity?: number;
+      /** View-relative direction from the subject toward the key light. */
+      readonly keyDirection?: readonly [number, number, number];
+      readonly keyColor?: readonly [number, number, number];
+      readonly keyIntensity?: number;
+      /** View-relative direction from the subject toward the fill light. */
+      readonly fillDirection?: readonly [number, number, number];
+      readonly fillColor?: readonly [number, number, number];
+      readonly fillIntensity?: number;
+    };
 
 export interface RendererThreeVoxelSpritePreparedFrame {
   readonly width: number;
@@ -387,10 +405,13 @@ export class RendererThreeVoxelSpriteScene {
     settings: RendererThreeVoxelSpriteCaptureSettings,
   ): ReturnType<VoxelSpriteRuntimeCapture['capture']> {
     const visibility = new Map<THREE.Object3D, boolean>();
+    const lightVisibility = new Map<THREE.Light, boolean>();
     this.#backend.scene.traverse((object) => {
       if (isRenderable(object)) visibility.set(object, object.visible);
+      if (object instanceof THREE.Light) lightVisibility.set(object, object.visible);
     });
     const sourceVisibility = source.visible;
+    let disposeStudioRig: () => void = () => undefined;
     try {
       for (const object of visibility.keys()) {
         if (!isDescendantOrSelf(object, source)) object.visible = false;
@@ -402,6 +423,16 @@ export class RendererThreeVoxelSpriteScene {
       const center = bounds.getCenter(new THREE.Vector3());
       const size = bounds.getSize(new THREE.Vector3());
       const camera = captureCamera(settings, center, size);
+      if (settings.lighting?.mode !== 'scene') {
+        for (const light of lightVisibility.keys()) light.visible = false;
+        disposeStudioRig = addStudioRig(
+          this.#backend.scene,
+          camera,
+          center,
+          size,
+          studioLighting(settings.lighting),
+        );
+      }
       return capture.capture({
         scene: this.#backend.scene,
         camera,
@@ -410,6 +441,8 @@ export class RendererThreeVoxelSpriteScene {
         bounds,
       });
     } finally {
+      disposeStudioRig();
+      for (const [light, visible] of lightVisibility) light.visible = visible;
       for (const [object, visible] of visibility) object.visible = visible;
       source.visible = sourceVisibility;
     }
@@ -449,7 +482,12 @@ function validatedDefinition(input: RendererThreeVoxelSpriteDefinition): Rendere
   finiteTuple(input.transform.position, 'transform position');
   bounded(input.transform.width, 0.05, 64, 'transform width');
   bounded(input.transform.height, 0.05, 64, 'transform height');
-  if (input.source.kind === 'retained') validatedCapture(input.source.capture);
+  if (input.source.kind === 'retained') {
+    return Object.freeze({
+      ...input,
+      source: Object.freeze({ ...input.source, capture: validatedCapture(input.source.capture) }),
+    });
+  }
   return input;
 }
 
@@ -461,7 +499,115 @@ function validatedCapture(input: RendererThreeVoxelSpriteCaptureSettings): Rende
   bounded(input.elevationDegrees, -89, 89, 'capture elevation');
   bounded(input.near, 0.001, 100, 'capture near');
   bounded(input.far, input.near + 0.001, 10_000, 'capture far');
-  return Object.freeze({ ...input });
+  const lighting = input.lighting?.mode === 'scene'
+    ? Object.freeze({ mode: 'scene' as const })
+    : studioLighting(input.lighting);
+  return Object.freeze({ ...input, lighting });
+}
+
+interface NormalizedStudioLighting {
+  readonly mode: 'isolated';
+  readonly ambientColor: readonly [number, number, number];
+  readonly ambientIntensity: number;
+  readonly keyDirection: readonly [number, number, number];
+  readonly keyColor: readonly [number, number, number];
+  readonly keyIntensity: number;
+  readonly fillDirection: readonly [number, number, number];
+  readonly fillColor: readonly [number, number, number];
+  readonly fillIntensity: number;
+}
+
+function studioLighting(
+  input: Exclude<RendererThreeVoxelSpriteCaptureLighting, { readonly mode: 'scene' }> | undefined,
+): NormalizedStudioLighting {
+  return Object.freeze({
+    mode: 'isolated',
+    ambientColor: colorTuple(input?.ambientColor ?? [1, 1, 1], 'capture ambientColor'),
+    ambientIntensity: boundedValue(input?.ambientIntensity ?? 1.1, 0, 8, 'capture ambientIntensity'),
+    keyDirection: normalizedTuple(input?.keyDirection ?? [0.55, 0.8, 1], 'capture keyDirection'),
+    keyColor: colorTuple(input?.keyColor ?? [1, 0.95, 0.85], 'capture keyColor'),
+    keyIntensity: boundedValue(input?.keyIntensity ?? 2.4, 0, 8, 'capture keyIntensity'),
+    fillDirection: normalizedTuple(input?.fillDirection ?? [-0.7, 0.25, 0.65], 'capture fillDirection'),
+    fillColor: colorTuple(input?.fillColor ?? [0.55, 0.7, 1], 'capture fillColor'),
+    fillIntensity: boundedValue(input?.fillIntensity ?? 1, 0, 8, 'capture fillIntensity'),
+  });
+}
+
+function addStudioRig(
+  scene: THREE.Scene,
+  camera: THREE.Camera,
+  center: THREE.Vector3,
+  size: THREE.Vector3,
+  lighting: NormalizedStudioLighting,
+): () => void {
+  camera.updateMatrixWorld(true);
+  const distance = Math.max(2, size.length() * 2);
+  const ambient = new THREE.AmbientLight(
+    new THREE.Color().setRGB(...lighting.ambientColor),
+    lighting.ambientIntensity,
+  );
+  const key = studioDirectionalLight(
+    camera,
+    center,
+    distance,
+    lighting.keyDirection,
+    lighting.keyColor,
+    lighting.keyIntensity,
+  );
+  const fill = studioDirectionalLight(
+    camera,
+    center,
+    distance,
+    lighting.fillDirection,
+    lighting.fillColor,
+    lighting.fillIntensity,
+  );
+  scene.add(ambient, key.light, key.target, fill.light, fill.target);
+  return () => scene.remove(ambient, key.light, key.target, fill.light, fill.target);
+}
+
+function studioDirectionalLight(
+  camera: THREE.Camera,
+  center: THREE.Vector3,
+  distance: number,
+  direction: readonly [number, number, number],
+  color: readonly [number, number, number],
+  intensity: number,
+): { readonly light: THREE.DirectionalLight; readonly target: THREE.Object3D } {
+  const towardLight = new THREE.Vector3(...direction).applyQuaternion(camera.quaternion).normalize();
+  const light = new THREE.DirectionalLight(new THREE.Color().setRGB(...color), intensity);
+  const target = new THREE.Object3D();
+  target.position.copy(center);
+  light.position.copy(center).addScaledVector(towardLight, distance);
+  light.target = target;
+  return { light, target };
+}
+
+function boundedValue(value: number, minimum: number, maximum: number, name: string): number {
+  bounded(value, minimum, maximum, name);
+  return value;
+}
+
+function normalizedTuple(
+  value: readonly [number, number, number],
+  name: string,
+): readonly [number, number, number] {
+  finiteTuple(value, name);
+  const vector = new THREE.Vector3(...value);
+  if (vector.lengthSq() < 1e-8) throw new RangeError(`${name} must be nonzero`);
+  vector.normalize();
+  return Object.freeze(vector.toArray()) as unknown as readonly [number, number, number];
+}
+
+function colorTuple(
+  value: readonly [number, number, number],
+  name: string,
+): readonly [number, number, number] {
+  finiteTuple(value, name);
+  if (value.some((component) => component < 0 || component > 1)) {
+    throw new RangeError(`${name} values must be from 0 to 1`);
+  }
+  return Object.freeze([...value]) as unknown as readonly [number, number, number];
 }
 
 function captureCamera(

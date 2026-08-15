@@ -170,6 +170,85 @@ void test('retained capture isolates visibility and preserves the prior represen
   (sibling.material as THREE.Material).dispose();
 });
 
+void test('runtime capture defaults to an isolated studio rig and restores scene lights', () => {
+  const scene = new THREE.Scene();
+  const source = new THREE.Mesh(
+    new THREE.BoxGeometry(1, 2, 1),
+    new THREE.MeshStandardMaterial({ color: 0x6688aa }),
+  );
+  const authoredLight = new THREE.PointLight(0xff0000, 7);
+  scene.add(source, authoredLight);
+  const renderer = new FakeRenderer();
+  const attachment = new RendererThreeVoxelSpriteScene({
+    webgl: renderer as unknown as THREE.WebGLRenderer,
+    backend: {
+      scene,
+      objectFor: (handle) => Number(handle) === 9 ? source : undefined,
+      textureDescriptor: () => undefined,
+      textureObjectFor: () => undefined,
+    },
+  });
+
+  const created = attachment.create({
+    id: 'lit-capture',
+    source: {
+      kind: 'retained',
+      handle: 9 as never,
+      capture: {
+        resolution: 16,
+        azimuthDegrees: 0,
+        elevationDegrees: 10,
+        near: 0.1,
+        far: 20,
+      },
+    },
+    transform: { position: [0, 0, 0], width: 1, height: 2 },
+    mode: 'sprite',
+    config: { lightingMode: 'normal', outputGain: 1.25 },
+  });
+  assert.equal(created.applied, true);
+  assert.equal(created.readout.entries[0]?.capture?.lighting?.mode, 'isolated');
+  assert.deepEqual(renderer.visibleLightSnapshots[0], [
+    'AmbientLight',
+    'DirectionalLight',
+    'DirectionalLight',
+  ]);
+  assert.equal(authoredLight.visible, true);
+  assert.equal(scene.children.includes(authoredLight), true);
+  assert.equal(scene.children.some((child) => child instanceof THREE.AmbientLight), false);
+  assert.equal(created.readout.entries[0]?.enhancement.config.lightingMode, 'normal');
+
+  const nextColorRender = renderer.renderCalls;
+  const recaptured = attachment.recapture('lit-capture', {
+    resolution: 16,
+    azimuthDegrees: 0,
+    elevationDegrees: 10,
+    near: 0.1,
+    far: 20,
+    lighting: { mode: 'scene' },
+  });
+  assert.equal(recaptured.applied, true);
+  assert.deepEqual(renderer.visibleLightSnapshots[nextColorRender], ['PointLight']);
+  assert.equal(recaptured.readout.entries[0]?.capture?.lighting?.mode, 'scene');
+
+  const rejected = attachment.recapture('lit-capture', {
+    resolution: 16,
+    azimuthDegrees: 0,
+    elevationDegrees: 10,
+    near: 0.1,
+    far: 20,
+    lighting: { mode: 'isolated', keyIntensity: 8.01 },
+  });
+  assert.equal(rejected.applied, false);
+  assert.equal(rejected.diagnostics[0]?.code, 'invalid_definition');
+  assert.equal(authoredLight.visible, true);
+  assert.equal(scene.children.some((child) => child instanceof THREE.AmbientLight), false);
+
+  attachment.dispose();
+  source.geometry.dispose();
+  (source.material as THREE.Material).dispose();
+});
+
 class FakeRenderer {
   autoClear = true;
   clearAlpha = 1;
@@ -181,6 +260,7 @@ class FakeRenderer {
   throwOnRender: number | null = null;
   viewport = new THREE.Vector4(0, 0, 1, 1);
   readonly xr = { enabled: false };
+  readonly visibleLightSnapshots: string[][] = [];
 
   clear(): void {}
   getClearAlpha(): number { return this.clearAlpha; }
@@ -189,7 +269,10 @@ class FakeRenderer {
   getScissor(target: THREE.Vector4): THREE.Vector4 { return target.copy(this.scissor); }
   getScissorTest(): boolean { return this.scissorTest; }
   getViewport(target: THREE.Vector4): THREE.Vector4 { return target.copy(this.viewport); }
-  render(): void {
+  render(scene?: THREE.Scene): void {
+    this.visibleLightSnapshots.push(scene === undefined ? [] : scene.children
+      .filter((child) => child instanceof THREE.Light && child.visible)
+      .map((child) => child.type));
     this.renderCalls += 1;
     if (this.renderCalls === this.throwOnRender) throw new Error('synthetic render failure');
   }
