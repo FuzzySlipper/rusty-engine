@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Runtime voxel-sprite enhancement comparison</title>
+    <style>
+      html, body { margin: 0; min-height: 100%; background: #111923; color: #e5eef8; font: 14px sans-serif; }
+      main { width: min(1040px, calc(100vw - 32px)); margin: 20px auto; }
+      canvas { display: block; width: 100%; height: auto; border: 1px solid #60758b; image-rendering: pixelated; }
+      ol { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; padding: 0; list-style: none; text-align: center; }
+      pre { max-height: 240px; overflow: auto; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>One capture, five live enhancement modes</h1>
+      <ol><li>Sprite</li><li>Relit</li><li>Depth parallax</li><li>Sprite + splats</li><li>Full splats</li></ol>
+      <canvas id="proof" width="1000" height="360"></canvas>
+      <pre id="readout">Starting…</pre>
+    </main>
+    <script type="module" src="./voxel-sprite-enhancement.ts"></script>
+  </body>
+</html>
