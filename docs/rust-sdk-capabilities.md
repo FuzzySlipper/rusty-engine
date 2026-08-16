@@ -25,6 +25,7 @@ remain independently meaningful and no owner may depend back on `rusty-engine`.
 | `entity-state` | `rusty_engine::entity_state` |
 | `environment-authoring` | `rusty_engine::environment_authoring` |
 | `gameplay-mechanics` | `rusty_engine::gameplay_mechanics` |
+| `gameplay-resolution` | `rusty_engine::gameplay_resolution` |
 | `gameplay-rules` | `rusty_engine::gameplay_rules` |
 | `render-host-contracts` | `rusty_engine::render_host_contracts` |
 | `render-model` | `rusty_engine::render_model` |

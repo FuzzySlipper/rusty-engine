@@ -355,6 +355,44 @@ game ignores it entirely. The exact schema-1 API, bounds, ordering, failure
 identity, TypeScript isolation, and first-consumer proof are frozen in
 [gameplay-rules-contract.md](gameplay-rules-contract.md).
 
+## Gameplay resolution boundary
+
+The optional `gameplay-resolution` sibling standardizes one bounded lifecycle
+for a downstream-owned gameplay attempt: admit an intent, gather facts, check
+policy, structurally traverse a downstream program, run a frozen ordered set of
+downstream interceptors, stage downstream effects, commit once, and return an
+attributed receipt. Preview follows the same path but aborts the staged
+transaction instead of committing it. Rejection, suspension, provider limits,
+child-resolution failure, staging failure, and commit failure publish no
+authoritative mutation under the transaction contract.
+
+The crate owns only lifecycle structure, deterministic traversal, correlation
+and causation, quotas, and generic receipt/trace containers. Its program nodes
+are limited to sequence, conditional selection, bounded iteration, and an
+opaque downstream operation. Policy supplies every intent, fact, predicate,
+selector, subject, operation, interceptor, effect, event, evidence, rejection,
+fault, suspension, and trace-detail type. A downstream may use the standard
+resolver or replace the complete resolver while retaining the public request,
+transaction, and receipt borders.
+
+`gameplay-resolution` has no dependency on `gameplay-rules`,
+`gameplay-mechanics`, `entity-state`, rendering, TypeScript, Node, or a game.
+Downstream code may compile an opaque `gameplay-rules` payload into its own
+policy/program types, bind planned effects to named `gameplay-mechanics` or
+other capability owners, and expose the returned receipt through its own
+read-only diagnostics. Those relationships do not reverse into the kernel.
+
+This is not a universal gameplay AST, verb catalog, scheduler, event bus,
+plugin registry, replay runtime, save format, or script VM. Engine does not
+define attacks, targets, stats, damage, spells, items, conditions, weapons,
+pickups, turns, or other game meaning. The two-beat acceptance for this seam is
+Rusty Dagger's authored spell/item/rule path followed by the mechanically
+different realtime Doom path; changes forced by the second consumer are
+recorded in the task-7032 overfitting report.
+
+See [Gameplay resolution](code-map/gameplay-resolution.md) for the concrete
+owners, dependency prohibitions, and focused gates.
+
 ## Spatial authority and derived mechanisms
 
 `engine-spatial::VoxelCollisionScene` holds canonical material voxels alongside projections derived

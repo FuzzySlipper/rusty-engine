@@ -31,7 +31,12 @@ ENTITY_SPATIAL_CONTENT_ASSET_VOXEL_OWNERS = frozenset(
         "voxel-object-runtime",
     }
 )
-GAMEPLAY_AUTHORITY = frozenset({"gameplay-mechanics", "gameplay-rules"})
+GAMEPLAY_AUTHORITY = frozenset(
+    {"gameplay-mechanics", "gameplay-resolution", "gameplay-rules"}
+)
+GAMEPLAY_RESOLUTION_FORBIDDEN = frozenset(
+    {"entity-state", "gameplay-mechanics", "gameplay-rules"}
+)
 RENDER_HOST_BACKEND_PACKAGES = frozenset({"renderer-host", "renderer-three"})
 RENDER_MODEL_FORBIDDEN = (
     ENTITY_SPATIAL_CONTENT_ASSET_VOXEL_OWNERS
@@ -157,6 +162,14 @@ def find_violations(metadata: dict[str, Any]) -> list[str]:
                 if not target_name.startswith(("core-", "svc-")):
                     violations.add(
                         "service mechanism reaches an upper-layer workspace owner: "
+                        + render_path(source, target, parents, names)
+                    )
+
+        if source_name == "gameplay-resolution":
+            for target in reachable:
+                if names[target] in GAMEPLAY_RESOLUTION_FORBIDDEN:
+                    violations.add(
+                        "gameplay-resolution reaches a downstream-selected gameplay owner: "
                         + render_path(source, target, parents, names)
                     )
 

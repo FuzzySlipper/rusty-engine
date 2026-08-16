@@ -43,6 +43,7 @@ downstream game policy and orchestration
              |
              +--> entity-state / state-machine
              +--> gameplay-mechanics
+             +--> gameplay-resolution
              +--> gameplay-rules <--> isolated rules/ authoring workspace
              +--> environment-authoring --> authored-scene
              +--> content-store / asset-catalog / asset-import
@@ -81,6 +82,13 @@ build-time canonical authoring without entering the ordinary provider graph.
 Downstream games retain every payload meaning, compiler decision, publication
 target, and runtime operation; mechanics-only games do not depend on it.
 
+`gameplay-resolution` is an independent optional lifecycle kernel. It traverses
+only sequence, conditional, bounded selection, and opaque downstream operation
+nodes; freezes downstream interceptor order; stages downstream effects through
+one fail-atomic transaction; and returns generic events and attributed traces.
+Every intent, fact, policy, effect, event, and authoritative state owner remains
+downstream. It is neither a universal gameplay vocabulary nor a scheduler.
+
 `engine-spatial` composes one canonical voxel authority with derived collision,
 navigation, mesh, motion, trigger, and edit mechanisms. Content and authoring
 crates own strict durable formats, validation, plans, and explicit mutation
@@ -109,7 +117,7 @@ provide only project data, `.rusty-studio.json`, and their Rust adapter.
 
 ## Repository layout
 
-Workspace inventory: **30 Cargo workspace crates, 2 public gameplay-rules
+Workspace inventory: **31 Cargo workspace crates, 2 public gameplay-rules
 packages, 4 public renderer packages, and 1 Studio application plus 5 Studio
 libraries.**
 
@@ -120,6 +128,7 @@ rust/crates/
   entity-state              typed components, relationships, transforms, snapshots, atomic mutation
   state-machine             explicit definitions, instances, and transitions
   gameplay-mechanics        component-backed stats, tracks, sources, items, damage, restoration
+  gameplay-resolution       bounded downstream-owned resolution lifecycle and receipts
   gameplay-rules            optional opaque package admission, provenance, diagnostics, resolution
   engine-spatial            canonical voxel space and synchronized derived mechanisms
   content-store             manifests, source batches, prefabs, load/save plans, write sets
