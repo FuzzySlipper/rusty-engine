@@ -17,11 +17,8 @@ pub type PolicyOutcome<Policy, Value> = PolicyResult<
     <Policy as ResolutionPolicy>::Suspension,
 >;
 
-pub type PolicyProgram<Policy> = Program<
-    <Policy as ResolutionPolicy>::Predicate,
-    <Policy as ResolutionPolicy>::Selector,
-    <Policy as ResolutionPolicy>::Operation,
->;
+pub type PolicyProgram<Policy> =
+    Program<<Policy as ResolutionPolicy>::Predicate, <Policy as ResolutionPolicy>::Operation>;
 
 pub type PolicyPlan<Policy> = ResolutionPlan<
     <Policy as ResolutionPolicy>::Effect,
@@ -135,8 +132,6 @@ pub trait ResolutionPolicy {
     type Intent;
     type Facts;
     type Predicate;
-    type Selector;
-    type Subject;
     type Operation;
     type Effect;
     type Event;
@@ -190,27 +185,15 @@ pub trait ResolutionPolicy {
     fn evaluate_predicate(
         &mut self,
         predicate: &Self::Predicate,
-        subject: Option<&Self::Subject>,
         intent: &Self::Intent,
         facts: &Self::Facts,
         evidence: &[Self::Evidence],
         trace: &mut dyn ResolutionTraceSink<Self::TraceDetail>,
     ) -> PolicyResult<bool, Self::Rejection, Self::Fault, Self::Suspension>;
 
-    fn select(
-        &mut self,
-        selector: &Self::Selector,
-        subject: Option<&Self::Subject>,
-        intent: &Self::Intent,
-        facts: &Self::Facts,
-        evidence: &[Self::Evidence],
-        trace: &mut dyn ResolutionTraceSink<Self::TraceDetail>,
-    ) -> PolicyResult<Vec<Self::Subject>, Self::Rejection, Self::Fault, Self::Suspension>;
-
     fn plan_operation(
         &mut self,
         operation: &Self::Operation,
-        subject: Option<&Self::Subject>,
         intent: &Self::Intent,
         facts: &Self::Facts,
         evidence: &[Self::Evidence],

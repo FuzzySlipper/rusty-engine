@@ -44,16 +44,8 @@ enum Predicate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Selector {
-    Subjects,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Subject(u16);
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 enum Operation {
-    Change,
+    Change(u16),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,14 +84,14 @@ struct Suspension(Vec<u8>);
 
 #[derive(Debug, Default)]
 struct FixturePolicy {
-    subjects: Vec<Subject>,
+    subjects: Vec<u16>,
     hook_order: Vec<&'static str>,
 }
 
 impl FixturePolicy {
     fn with_subjects(subjects: &[u16]) -> Self {
         Self {
-            subjects: subjects.iter().copied().map(Subject).collect(),
+            subjects: subjects.to_vec(),
             hook_order: Vec::new(),
         }
     }
@@ -110,8 +102,6 @@ impl ResolutionPolicy for FixturePolicy {
     type Intent = Intent;
     type Facts = Facts;
     type Predicate = Predicate;
-    type Selector = Selector;
-    type Subject = Subject;
     type Operation = Operation;
     type Effect = Effect;
     type Event = Event;
@@ -174,14 +164,16 @@ impl ResolutionPolicy for FixturePolicy {
         _facts: &Facts,
         _evidence: &[Evidence],
         trace: &mut dyn ResolutionTraceSink<&'static str>,
-    ) -> PolicyResult<Program<Predicate, Selector, Operation>, Rejection, Fault, Suspension> {
+    ) -> PolicyResult<Program<Predicate, Operation>, Rejection, Fault, Suspension> {
         trace.record("program selected");
         Ok(Program::When {
             predicate: Predicate::Positive,
-            then_program: Box::new(Program::ForEach {
-                selector: Selector::Subjects,
-                maximum: 8,
-                body: Box::new(Program::Operation(Operation::Change)),
+            then_program: Box::new(Program::Sequence {
+                steps: self
+                    .subjects
+                    .iter()
+                    .map(|subject| Program::Operation(Operation::Change(*subject)))
+                    .collect(),
             }),
             otherwise_program: None,
         })
@@ -200,7 +192,6 @@ impl ResolutionPolicy for FixturePolicy {
     fn evaluate_predicate(
         &mut self,
         _predicate: &Predicate,
-        _subject: Option<&Subject>,
         intent: &Intent,
         _facts: &Facts,
         _evidence: &[Evidence],
@@ -209,22 +200,9 @@ impl ResolutionPolicy for FixturePolicy {
         Ok(intent.amount > 0)
     }
 
-    fn select(
-        &mut self,
-        _selector: &Selector,
-        _subject: Option<&Subject>,
-        _intent: &Intent,
-        _facts: &Facts,
-        _evidence: &[Evidence],
-        _trace: &mut dyn ResolutionTraceSink<&'static str>,
-    ) -> PolicyResult<Vec<Subject>, Rejection, Fault, Suspension> {
-        Ok(self.subjects.clone())
-    }
-
     fn plan_operation(
         &mut self,
-        _operation: &Operation,
-        subject: Option<&Subject>,
+        operation: &Operation,
         intent: &Intent,
         facts: &Facts,
         _evidence: &[Evidence],
@@ -236,14 +214,14 @@ impl ResolutionPolicy for FixturePolicy {
         Suspension,
     > {
         trace.record("operation planned");
-        let subject = subject.expect("fixture operation is selected per subject");
+        let Operation::Change(subject) = operation;
         let mut plan = ResolutionPlan::new();
         plan.push_effect(Effect {
-            subject: subject.0,
+            subject: *subject,
             amount: intent.amount * facts.multiplier,
         });
-        plan.push_event(Event::Planned(subject.0));
-        if intent.spawn_child && subject.0 == 1 {
+        plan.push_event(Event::Planned(*subject));
+        if intent.spawn_child && *subject == 1 {
             let mut child = RawIntent::ordinary(2);
             child.reject = intent.reject_child;
             plan.push_child(ChildResolution::new(child, vec![Evidence(1)]));
@@ -475,9 +453,9 @@ fn failed_child_and_transaction_failures_never_publish_authority() {
 }
 
 #[test]
-fn selector_and_trace_limits_fail_before_staging() {
+fn program_and_trace_limits_fail_before_staging() {
     let limits = ResolutionLimits {
-        max_selected_subjects: 1,
+        max_program_nodes: 2,
         ..ResolutionLimits::default()
     };
     let resolver = StandardResolver::new(limits).unwrap();

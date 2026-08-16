@@ -16,7 +16,7 @@ faults, suspensions, and trace details remain downstream types.
 
 | Path | Owner |
 |---|---|
-| `src/program.rs` | Structural `Sequence` / `When` / `ForEach` / opaque-operation grammar |
+| `src/program.rs` | Structural `Sequence` / `When` / opaque-operation grammar |
 | `src/policy.rs` | Downstream policy border and planned effects/events/children |
 | `src/resolver.rs` | Standard phase owner, traversal, child planning, quotas, and one transaction commit |
 | `src/transaction.rs` | Fail-atomic downstream staging/commit contract |

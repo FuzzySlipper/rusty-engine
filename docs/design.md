@@ -368,9 +368,9 @@ authoritative mutation under the transaction contract.
 
 The crate owns only lifecycle structure, deterministic traversal, correlation
 and causation, quotas, and generic receipt/trace containers. Its program nodes
-are limited to sequence, conditional selection, bounded iteration, and an
-opaque downstream operation. Policy supplies every intent, fact, predicate,
-selector, subject, operation, interceptor, effect, event, evidence, rejection,
+are limited to sequence, conditional selection, and an opaque downstream
+operation. Policy supplies every intent, fact, predicate, operation,
+interceptor, effect, event, evidence, rejection,
 fault, suspension, and trace-detail type. A downstream may use the standard
 resolver or replace the complete resolver while retaining the public request,
 transaction, and receipt borders.

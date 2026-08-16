@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Program<Predicate, Selector, Operation> {
+pub enum Program<Predicate, Operation> {
     Sequence {
         steps: Vec<Self>,
     },
@@ -7,11 +7,6 @@ pub enum Program<Predicate, Selector, Operation> {
         predicate: Predicate,
         then_program: Box<Self>,
         otherwise_program: Option<Box<Self>>,
-    },
-    ForEach {
-        selector: Selector,
-        maximum: u16,
-        body: Box<Self>,
     },
     Operation(Operation),
 }

@@ -537,7 +537,6 @@ impl StandardResolver {
             policy,
             identity,
             &program,
-            None,
             &admitted,
             &facts,
             &evidence,
@@ -827,8 +826,7 @@ impl StandardResolver {
         &self,
         policy: &mut Policy,
         identity: ResolutionIdentity,
-        program: &Program<Policy::Predicate, Policy::Selector, Policy::Operation>,
-        subject: Option<&Policy::Subject>,
+        program: &Program<Policy::Predicate, Policy::Operation>,
         intent: &Policy::Intent,
         facts: &Policy::Facts,
         evidence: &[Policy::Evidence],
@@ -861,8 +859,8 @@ impl StandardResolver {
                 })?;
                 for step in steps {
                     self.traverse_program(
-                        policy, identity, step, subject, intent, facts, evidence, trace, plan,
-                        counts, next_depth,
+                        policy, identity, step, intent, facts, evidence, trace, plan, counts,
+                        next_depth,
                     )?;
                 }
             }
@@ -873,7 +871,7 @@ impl StandardResolver {
             } => {
                 let result = self
                     .traced_policy_call(trace, identity, ResolutionPhase::Plan, |sink| {
-                        policy.evaluate_predicate(predicate, subject, intent, facts, evidence, sink)
+                        policy.evaluate_predicate(predicate, intent, facts, evidence, sink)
                     })
                     .map_err(TraversalStop::Limit)?
                     .map_err(TraversalStop::Policy)?;
@@ -894,7 +892,6 @@ impl StandardResolver {
                         policy,
                         identity,
                         selected,
-                        subject,
                         intent,
                         facts,
                         evidence,
@@ -909,71 +906,10 @@ impl StandardResolver {
                     )?;
                 }
             }
-            Program::ForEach {
-                selector,
-                maximum,
-                body,
-            } => {
-                let subjects = self
-                    .traced_policy_call(trace, identity, ResolutionPhase::Plan, |sink| {
-                        policy.select(selector, subject, intent, facts, evidence, sink)
-                    })
-                    .map_err(TraversalStop::Limit)?
-                    .map_err(TraversalStop::Policy)?;
-                ResolutionLimits::enforce(
-                    "selector maximum",
-                    subjects.len(),
-                    usize::from(*maximum),
-                )
-                .map_err(TraversalStop::Limit)?;
-                counts.selected_subjects = counts
-                    .selected_subjects
-                    .checked_add(subjects.len())
-                    .ok_or_else(|| {
-                        TraversalStop::Limit(ResolutionLimitError::ArithmeticOverflow {
-                            resource: "selected subjects",
-                        })
-                    })?;
-                ResolutionLimits::enforce(
-                    "selected subjects",
-                    counts.selected_subjects,
-                    self.limits.max_selected_subjects,
-                )
-                .map_err(TraversalStop::Limit)?;
-                self.push_trace(
-                    trace,
-                    identity,
-                    ResolutionPhase::Plan,
-                    ResolutionTraceKind::SubjectsSelected {
-                        count: subjects.len(),
-                    },
-                )
-                .map_err(TraversalStop::Limit)?;
-                let next_depth = depth.checked_add(1).ok_or_else(|| {
-                    TraversalStop::Limit(ResolutionLimitError::ArithmeticOverflow {
-                        resource: "program depth",
-                    })
-                })?;
-                for selected_subject in &subjects {
-                    self.traverse_program(
-                        policy,
-                        identity,
-                        body,
-                        Some(selected_subject),
-                        intent,
-                        facts,
-                        evidence,
-                        trace,
-                        plan,
-                        counts,
-                        next_depth,
-                    )?;
-                }
-            }
             Program::Operation(operation) => {
                 let operation_plan = self
                     .traced_policy_call(trace, identity, ResolutionPhase::Plan, |sink| {
-                        policy.plan_operation(operation, subject, intent, facts, evidence, sink)
+                        policy.plan_operation(operation, intent, facts, evidence, sink)
                     })
                     .map_err(TraversalStop::Limit)?
                     .map_err(TraversalStop::Policy)?;
@@ -1186,7 +1122,6 @@ impl StandardResolver {
 #[derive(Debug, Default)]
 struct TraversalCounts {
     nodes: usize,
-    selected_subjects: usize,
 }
 
 enum TraversalStop<Rejection, Fault, Suspension> {

@@ -17,7 +17,6 @@ pub enum ResolutionTraceKind {
     PhaseCompleted,
     PolicyDetail,
     PredicateEvaluated { passed: bool },
-    SubjectsSelected { count: usize },
     OperationPlanned,
     InterceptorApplied { index: usize },
     ChildStarted { child: crate::ResolutionId },
