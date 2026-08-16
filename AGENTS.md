@@ -138,7 +138,7 @@ Rusty Engine is host neutral, not a web-game engine.
   adaptation, replacement, and exclusion in donor provenance and the relevant machine-readable ledger.
 - Preserve useful behavior for named consumers, not historical crate topology.
 
-- Do not add a compatibility layer, replay certification system, scheduler, or broad governance framework without concrete consumer evidence and an explicit architecture decision.
+- Do not add a compatibility layer, replay certification system, scheduler, or broad governance without concrete consumer evidence and an explicit architecture decision.
 - Never persist callbacks or language closures.
 
 ## Local commands
@@ -225,9 +225,7 @@ These are navigation and ownership rules, not a new governance layer.
 - Use ownership vocabulary consistently: entity/component for data,
   service/system for behavior, projection/readout for derived observation.
 - Keep crates coarse and independently meaningful.
-- Avoid clever abstractions, framework-shaped machinery, hidden mutation,
-  unexplained cloning, and generic wrappers that erase actionable error
-  identity.
+- Avoid clever abstractions, hidden mutation, unexplained cloning, and generic wrappers that erase actionable error identity.
 - File size is a review signal, not a CI rule.
 
 ## TypeScript and Studio style
@@ -246,8 +244,7 @@ These are navigation and ownership rules, not a new governance layer.
 - Make renderer resource creation, replacement, stale-state handling, and
   disposal explicit.
 - Keep UI state local and observational; it is not project or gameplay truth.
-- Prefer clear named decisions and small typed functions over terse framework
-  magic.
+- Prefer clear named decisions and small typed functions over terse clever magic.
 - Treat each web application's HTML document, `main.ts`, bootstrap function,
   and initial loading shell as a thin composition root. They should do only the
   minimum needed to load dependencies, mount the application, and present
