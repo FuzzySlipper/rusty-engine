@@ -12,6 +12,16 @@ randomness policy, persistence, presentation, or authored TypeScript. Concrete
 intents, facts, predicates, operations, effects, events, rejections,
 faults, suspensions, and trace details remain downstream types.
 
+## Primary paths
+
+- [`gameplay-resolution/src/lib.rs`](../../rust/crates/gameplay-resolution/src/lib.rs)
+- [`gameplay-resolution/src/resolver.rs`](../../rust/crates/gameplay-resolution/src/resolver.rs)
+- [`gameplay-resolution/src/policy.rs`](../../rust/crates/gameplay-resolution/src/policy.rs)
+- [`gameplay-resolution/src/transaction.rs`](../../rust/crates/gameplay-resolution/src/transaction.rs)
+- [`gameplay-resolution/tests/contract.rs`](../../rust/crates/gameplay-resolution/tests/contract.rs)
+- [Canonical design](../design.md)
+- [Two-consumer overfitting report](../reviews/gameplay-resolution-two-beat-overfitting.md)
+
 ## Source routes
 
 | Path | Owner |
