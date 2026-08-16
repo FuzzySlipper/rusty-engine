@@ -244,6 +244,15 @@ impl<
         &self.commit
     }
 
+    /// Consume the receipt and return its downstream transaction outcome.
+    ///
+    /// Runtime consumers use this after projecting any effects, events, and
+    /// traces they need so an owned transaction error can re-enter the
+    /// downstream game's existing error path without requiring `Clone`.
+    pub fn into_commit(self) -> CommitStatus<TransactionError> {
+        self.commit
+    }
+
     pub fn succeeded(&self) -> bool {
         self.attempt.is_planned()
             && matches!(self.commit, CommitStatus::Previewed | CommitStatus::Applied)

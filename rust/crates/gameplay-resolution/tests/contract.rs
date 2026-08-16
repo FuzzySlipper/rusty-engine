@@ -466,6 +466,10 @@ fn failed_child_and_transaction_failures_never_publish_authority() {
         request(ResolutionMode::Apply, RawIntent::ordinary(2)),
     );
     assert_eq!(committed.commit(), &CommitStatus::Failed("commit failed"));
+    assert_eq!(
+        committed.into_commit(),
+        CommitStatus::Failed("commit failed")
+    );
     assert!(commit_failure.authority.is_empty());
     assert!(commit_failure.staged.is_empty());
 }
