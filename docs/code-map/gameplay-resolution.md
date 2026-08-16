@@ -9,7 +9,7 @@ staged transaction control, and generic receipts/traces.
 
 It does not own gameplay vocabulary, authoritative game state, scheduling,
 randomness policy, persistence, presentation, or authored TypeScript. Concrete
-intents, facts, predicates, selectors, operations, effects, events, rejections,
+intents, facts, predicates, operations, effects, events, rejections,
 faults, suspensions, and trace details remain downstream types.
 
 ## Source routes
