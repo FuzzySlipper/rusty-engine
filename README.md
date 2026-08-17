@@ -191,13 +191,6 @@ Rust produces complete renderer-neutral retained frames. TypeScript decodes and
 projects them; Three owns backend resources; hosts own DOM, audio, browser, and
 editor integration. None of those projections becomes gameplay authority.
 
-### Promotion
-
-New Engine abstractions need concrete consumer evidence. The multi-consumer
-promotion rule does not authorize silent loss of behavior during an approved
-parity campaign, and it does not justify speculative schedulers, behavior
-graphs, generic gameplay ASTs, or governance frameworks.
-
 ## Common commands
 
 Run from the repository root.

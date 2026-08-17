@@ -25,8 +25,6 @@ in [migration-cluster-ledger.md](migration/migration-cluster-ledger.md).
 - Make mutation owners visible through direct services, systems, or atomic command boundaries.
 - Keep components and value types mostly data; do not add hidden polling, subscriptions, I/O, or
   service location.
-- Add traits, registries, protocols, and compatibility layers only after multiple concrete consumers
-  prove the same seam.
 - Keep host-neutral mechanisms, renderer-neutral projection, backend realization, browser/webview
   lifecycle, and product-shell policy in visibly separate owners.
 - Maintain a one-way dependency: consumers may depend on Engine; Engine never imports or checks out
@@ -1118,35 +1116,6 @@ The reference demo owns all of those surfaces, including its `ExtractionBeacon` 
 feature extended the downstream schema, service, snapshot, browser readout, and presentation without
 changing the Engine public vocabulary. Its second authored room composition then reused
 the settled meanings with no Rust change. This is the intended dependency direction.
-
-## Promotion rule
-
-Do not move a game concept into Engine merely because it could be reusable. Promotion requires at
-least a second concrete consumer and a smaller stable seam that can be stated without importing
-either product's policy. When that evidence exists:
-
-1. compare both real call sites and data lifecycles;
-2. extract only the shared mechanism;
-3. leave game names, orchestration, schemas, and presentation meaning downstream;
-4. add focused provider tests independent of either product; and
-5. keep Engine verification free of downstream checkouts.
-
-Duplication across one early consumer is cheaper than a premature plugin API,
-registry, or universal gameplay abstraction. A first consumer may still earn a
-small representation-neutral support seam when the useful behavior can be
-stated without importing that consumer's vocabulary, the direct alternative
-would duplicate transport/admission infrastructure rather than product
-meaning, and the boundary is reviewed before implementation. The optional
-`gameplay-rules` envelope is this narrow exception; Rusty D20's actual rule
-schema and compiler remain downstream.
-
-This rule governs newly invented abstractions; it is not a deletion filter during an approved
-successor migration. A proven donor capability required by a named first-party consumer may be
-preserved or adapted before two new implementations exist. Demo and Studio already establish
-concrete demand for shared rendering and authoring mechanisms. In a functionality-equivalence
-campaign, preserve useful behavior, remove obsolete topology, name every replacement or exclusion,
-and validate the successor-owned boundary rather than requiring the first consumer to rediscover the
-missing mechanism privately.
 
 ## Architectural exclusions
 

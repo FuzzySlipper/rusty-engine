@@ -132,35 +132,6 @@ Rusty Engine is host neutral, not a web-game engine.
   host-neutral mechanisms. Neither substitutes for the other.
 - Rules, Studio, and renderer packages remain separately isolated workspaces with explicit gates.
 
-## Donor and promotion rules
-
-- Internalize only a bounded, audited donor closure. Record every transfer,
-  adaptation, replacement, and exclusion in donor provenance and the relevant machine-readable ledger.
-- Preserve useful behavior for named consumers, not historical crate topology.
-
-- Do not add a compatibility layer, replay certification system, scheduler, or broad governance without concrete consumer evidence and an explicit architecture decision.
-- Never persist callbacks or language closures.
-
-### Upstream acceptance (two-beat promotion)
-
-"Concrete consumer evidence" above is satisfied by a two-beat promotion, not by
-generic-first scaffolding:
-
-- **Beat 1 — co-develop.** The candidate seam is built in the same effort as its
-  first real consumer. The upstream/downstream line is written before work and
-  held; moving it is a recorded decision, not drift.
-- **Beat 2 — de-overfit.** The candidate is immediately ported to a second,
-  mechanically different consumer (a non-RPG when the first is an RPG, or a
-  different resolution shape). The overfitting report — what moved across the
-  line because the second consumer needed it — is the acceptance evidence. A
-  second consumer that forces the abstraction to shed game-specific assumptions
-  is the success case.
-
-Do not accept the candidate into the stable checkout, or describe it as a
-reusable seam, until beat 2's report exists. This is what turns "no framework
-machinery without consumer evidence" from a warning that is never observed into
-a process with a forcing function.
-
 ## Local commands
 
 Run from the repository root.
@@ -283,8 +254,6 @@ These are navigation and ownership rules, not a new governance layer.
   coverage, and retained-frame fixture/golden updates.
 - Persistence and mutation changes require failure-path and atomicity evidence, not only happy-path serialization.
 - User-visible browser behavior requires the real browser gate.
-- External-package or external-adapter claims require the exact consumer or
-  integration gate.
 - Synthetic tests are evidence for mechanisms, not proof that a downstream
   product works.
 - Report exactly which commands ran and which relevant live checks were
