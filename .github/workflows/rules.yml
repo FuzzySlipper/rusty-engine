@@ -52,6 +52,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/rules.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
