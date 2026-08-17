@@ -44,12 +44,15 @@ rebasing, and scale characterization are indexed in
 ## How to use this atlas
 
 1. Read [design.md](design.md) for the provider boundary.
-2. Choose the coarse owner map below before opening implementation files.
-3. Follow its primary paths and public surfaces rather than searching by a
+2. For a downstream gameplay conversion, start with the
+   [downstream gameplay adoption guide](topics/gameplay/downstream-adoption.md)
+   before deciding which code should survive or move.
+3. Choose the coarse owner map below before opening implementation files.
+4. Follow its primary paths and public surfaces rather than searching by a
    historical Asha concept name.
-4. Run the focused acceptance gate named by the map, then the appropriate
+5. Run the focused acceptance gate named by the map, then the appropriate
    repository gate.
-5. If a map disagrees with source, manifests, or tests, update the map. Do not
+6. If a map disagrees with source, manifests, or tests, update the map. Do not
    force current code to match stale navigation prose.
 
 ## Ownership flow
@@ -84,6 +87,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 |---|---|
 | Entity components, atomic mutation, relationships, snapshots, state machines | [Entity state and state machines](code-map/entity-state-and-state-machines.md) |
 | Stats, tracks, sources, effects, items, equipment, damage, restoration | [Gameplay mechanics](code-map/gameplay-mechanics.md) |
+| Downstream gameplay layout, disposition-first migration, optional TS authoring, mechanics/resolution composition, and AI intents | [Downstream gameplay adoption](topics/gameplay/downstream-adoption.md) |
 | Bounded downstream-owned attempt lifecycle, transactions, receipts, and traces | [Gameplay resolution](code-map/gameplay-resolution.md) |
 | Optional opaque rules packages, TypeScript authoring, exact dependencies, provenance, canonicalization, and diagnostics | [Gameplay rules](code-map/gameplay-rules.md) |
 | Canonical voxel space, collision, navigation, mesh, motion, triggers, edits | [Spatial mechanisms](code-map/spatial-mechanisms.md) |
@@ -108,6 +112,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 - [Repository README](../README.md)
 - [Agent guidance](../AGENTS.md)
 - [Canonical design](design.md)
+- [Downstream gameplay adoption](topics/gameplay/downstream-adoption.md)
 - [Gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md)
 - [Textured voxel campaign closeout](textured-voxel-campaign-closeout.md)
 - [Reconstructed voxel surfaces](topics/voxel/reconstructed-surfaces.md)

@@ -300,6 +300,7 @@ The format, limits, provenance, and failure behavior are documented in
 | [Known limitations](docs/known-limitations.md) | Active provider limitations and explicitly scheduled consumer certification |
 | [Rust source organization](docs/topics/development/rust-style.md) | Lightweight module and behavior-owner style |
 | [Downstream Engine and Studio boundary](docs/topics/development/downstream-renderer-and-studio.md) | Sibling facade consumption, Engine-hosted Studio, and renderer ownership |
+| [Downstream gameplay adoption](docs/topics/gameplay/downstream-adoption.md) | Disposition-first migration into authored packages, downstream Rust authority, and optional gameplay crates |
 | [Rendering successor contract](docs/rendering-successor-contract.md) | Complete shared-rendering scope and adaptation boundary |
 | [Rendering operations](docs/rendering-operations.md) | Provider verification, Rust host boundary, resources, and limitations |
 | [Studio migration contract](docs/studio-migration-contract.md) | First-party authoring scope, parity, isolation, owner adoption |
