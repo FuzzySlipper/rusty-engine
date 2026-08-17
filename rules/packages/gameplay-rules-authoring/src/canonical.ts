@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto';
 
 import {
   RULE_LIMITS,
-  RULE_PACKAGE_SCHEMA_VERSION,
   RuleContractError,
   admitRulePackage,
   parseRuleFingerprint,
@@ -22,7 +21,7 @@ export function canonicalizeRulePackage<Payload extends JsonValue>(
   output.write('{"kind":', '$/kind');
   output.writeString(packageValue.kind, '$/kind');
   output.write(
-    `,"schemaVersion":${String(RULE_PACKAGE_SCHEMA_VERSION)},"domain":`,
+    `,"schemaVersion":${String(packageValue.schemaVersion)},"domain":`,
     '$/domain',
   );
   output.writeString(packageValue.domain, '$/domain');

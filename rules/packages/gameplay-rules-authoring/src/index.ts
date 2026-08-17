@@ -1,5 +1,6 @@
 export {
   authorRulePackage,
+  authorBinary64RulePackage,
   canonicalRuleArtifactBytes,
   type CanonicalRuleArtifact,
   type RulePackageDependencyDraft,

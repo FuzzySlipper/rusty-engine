@@ -64,6 +64,11 @@ pub enum RulePackageError {
         path: String,
         value: String,
     },
+    JsonNumberOutOfRange {
+        path: String,
+        value: String,
+        reason: &'static str,
+    },
     QuotaExceeded {
         path: String,
         actual: usize,

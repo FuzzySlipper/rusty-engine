@@ -5,6 +5,7 @@ import { test } from 'node:test';
 
 import {
   RULE_LIMITS,
+  RULE_PACKAGE_BINARY64_SCHEMA_VERSION,
   RuleContractError,
   decodeRulePackage,
   type JsonValue,
@@ -13,6 +14,7 @@ import {
 
 import {
   authorRulePackage,
+  authorBinary64RulePackage,
   canonicalRuleArtifactBytes,
 } from './index.js';
 
@@ -22,6 +24,10 @@ const fixtureUrl = new URL(
 );
 const unicodeFixtureUrl = new URL(
   '../../../../fixtures/gameplay-rules/package-v1-unicode.canonical.json',
+  import.meta.url,
+);
+const binary64FixtureUrl = new URL(
+  '../../../../fixtures/gameplay-rules/package-v2-binary64.canonical.json',
   import.meta.url,
 );
 const fixtureFingerprint =
@@ -65,6 +71,22 @@ test('ordinary typed authoring emits the exact Rust-decoded golden artifact', as
   assert.deepEqual(decoded, artifact.package);
   assert.ok(Object.isFrozen(artifact.package));
   assert.ok(Object.isFrozen(artifact.package.payload));
+});
+
+test('binary64 authoring emits the exact Rust-owned float fixture', async () => {
+  const artifact = authorBinary64RulePackage({
+    domain: 'fixture',
+    package: 'binary64',
+    version: 1,
+    payload: {
+      values: [-0, 1.0, 1.5, 1e-6, 1e20, 1e21, 5e-324, Number.MAX_VALUE],
+    },
+  });
+  const fixture = await readFile(binary64FixtureUrl);
+  assert.equal(artifact.package.schemaVersion, RULE_PACKAGE_BINARY64_SCHEMA_VERSION);
+  assert.equal(artifact.canonicalJson, fixture.toString('utf8'));
+  assert.deepEqual(Buffer.from(canonicalRuleArtifactBytes(artifact)), fixture);
+  assert.deepEqual(decodeRulePackage(fixture), artifact.package);
 });
 
 test('authoring normalizes all unordered inputs without reordering payload arrays', () => {
@@ -113,7 +135,7 @@ test('authoring persists plain data only', () => {
   expectPayloadError(() => () => 1, 'noncanonical-value');
   expectPayloadError(() => undefined, 'noncanonical-value');
   expectPayloadError(() => 1n, 'noncanonical-value');
-  expectPayloadError(() => Number.NaN, 'json-integer-out-of-range');
+  expectPayloadError(() => Number.NaN, 'json-number-out-of-range');
   expectPayloadError(() => 1.5, 'json-integer-out-of-range');
 
   const cyclic: Record<string, unknown> = {};

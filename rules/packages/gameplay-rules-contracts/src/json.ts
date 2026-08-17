@@ -186,24 +186,56 @@ class StrictJsonParser {
       this.fail(path, 'invalid JSON number');
     }
 
-    if (this.peek() === '.' || this.peek() === 'e' || this.peek() === 'E') {
-      while (isNumberTokenCharacter(this.peek())) this.offset += 1;
-      throw new RuleContractError(
-        'json-integer-out-of-range',
-        path,
-        'fractional and exponent JSON numbers are not supported',
-        { value: boundedToken(this.input.slice(start, this.offset)) },
-      );
+    let binary64 = false;
+    if (this.consume('.')) {
+      binary64 = true;
+      if (!isDigit(this.peek())) {
+        this.fail(path, 'fraction requires at least one digit');
+      }
+      while (isDigit(this.peek())) this.offset += 1;
+    }
+    if (this.peek() === 'e' || this.peek() === 'E') {
+      binary64 = true;
+      this.offset += 1;
+      if (this.peek() === '+' || this.peek() === '-') this.offset += 1;
+      if (!isDigit(this.peek())) {
+        this.fail(path, 'exponent requires at least one digit');
+      }
+      while (isDigit(this.peek())) this.offset += 1;
     }
     const token = this.input.slice(start, this.offset);
+    if (binary64) {
+      const value = Number(token);
+      if (!Number.isFinite(value)) {
+        throw new RuleContractError(
+          'json-number-out-of-range',
+          path,
+          'number overflows finite IEEE-754 binary64',
+          { value: boundedToken(token) },
+        );
+      }
+      if (value === 0 && hasNonZeroCoefficient(token)) {
+        throw new RuleContractError(
+          'json-number-out-of-range',
+          path,
+          'non-zero number underflows IEEE-754 binary64',
+          { value: boundedToken(token) },
+        );
+      }
+      return Object.is(value, -0) ? 0 : value;
+    }
     const magnitude = BigInt(token.startsWith('-') ? token.slice(1) : token);
     if (magnitude > BigInt(RULE_LIMITS.maxSafeJsonInteger)) {
-      throw new RuleContractError(
-        'json-integer-out-of-range',
-        path,
-        'JSON integer exceeds the portable safe range',
-        { value: boundedToken(token) },
-      );
+      const value = Number(token);
+      if (!Number.isFinite(value) || String(value) !== token) {
+        throw new RuleContractError(
+          'json-integer-out-of-range',
+          path,
+          'integer would lose precision when converted to IEEE-754 binary64',
+          { value: boundedToken(token) },
+        );
+      }
+      return value;
     }
     const value = Number(token);
     return Object.is(value, -0) ? 0 : value;
@@ -373,15 +405,9 @@ function isNonzeroDigit(value: string | undefined): boolean {
   return value !== undefined && value >= '1' && value <= '9';
 }
 
-function isNumberTokenCharacter(value: string | undefined): boolean {
-  return (
-    isDigit(value) ||
-    value === '.' ||
-    value === 'e' ||
-    value === 'E' ||
-    value === '+' ||
-    value === '-'
-  );
+function hasNonZeroCoefficient(token: string): boolean {
+  const coefficient = token.replace(/^-/, '').split(/[eE]/, 1)[0] as string;
+  return /[1-9]/.test(coefficient);
 }
 
 function hexDigit(value: string | undefined): number | undefined {

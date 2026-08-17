@@ -1,0 +1,1 @@
+{"kind":"rusty.gameplay-rules.package","schemaVersion":2,"domain":"fixture","package":"binary64","version":1,"dependencies":[],"sources":[],"provenance":[],"payload":{"values":[0,1,1.5,0.000001,100000000000000000000,1e+21,5e-324,1.7976931348623157e+308]}}

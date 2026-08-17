@@ -9,7 +9,7 @@ use crate::{
     MAX_PROVENANCE_PER_RULE_PACKAGE_SET, MAX_RULE_DIAGNOSTICS, MAX_RULE_ID_BYTES,
     MAX_RULE_PACKAGES_PER_SET, MAX_SAFE_JSON_INTEGER, MAX_SOURCES_PER_RULE_PACKAGE,
     MAX_SOURCES_PER_RULE_PACKAGE_SET, MAX_SOURCE_PATH_BYTES, RULE_PACKAGE_ARTIFACT_KIND,
-    RULE_PACKAGE_SCHEMA_VERSION,
+    RULE_PACKAGE_BINARY64_SCHEMA_VERSION, RULE_PACKAGE_SCHEMA_VERSION,
 };
 
 pub fn encode_rule_contract_descriptor() -> String {
@@ -20,9 +20,10 @@ pub fn encode_rule_contract_descriptor() -> String {
 
 fn rule_contract_descriptor() -> Value {
     json!({
-        "contractVersion": 1,
+        "contractVersion": 2,
         "artifactKind": RULE_PACKAGE_ARTIFACT_KIND,
         "schemaVersion": RULE_PACKAGE_SCHEMA_VERSION,
+        "binary64SchemaVersion": RULE_PACKAGE_BINARY64_SCHEMA_VERSION,
         "brands": [
             "RuleDomainId",
             "RulePackageId",
@@ -31,6 +32,13 @@ fn rule_contract_descriptor() -> Value {
             "RuleFingerprint"
         ],
         "unions": [
+            {
+                "name": "RulePackageSchemaVersion",
+                "values": [
+                    RULE_PACKAGE_SCHEMA_VERSION,
+                    RULE_PACKAGE_BINARY64_SCHEMA_VERSION
+                ]
+            },
             {
                 "name": "RuleDiagnosticSeverity",
                 "values": ["error", "warning"]
@@ -67,7 +75,7 @@ fn rule_contract_descriptor() -> Value {
                 "typeParameter": "Payload extends JsonValue = JsonValue",
                 "fields": [
                     {"name": "kind", "type": "typeof RULE_PACKAGE_ARTIFACT_KIND"},
-                    {"name": "schemaVersion", "type": "typeof RULE_PACKAGE_SCHEMA_VERSION"},
+                    {"name": "schemaVersion", "type": "RulePackageSchemaVersion"},
                     {"name": "domain", "type": "RuleDomainId"},
                     {"name": "package", "type": "RulePackageId"},
                     {"name": "version", "type": "number"},
@@ -154,7 +162,7 @@ mod tests {
     #[test]
     fn exported_descriptor_is_versioned_and_derived_from_runtime_limits() {
         let descriptor: Value = serde_json::from_str(&encode_rule_contract_descriptor()).unwrap();
-        assert_eq!(descriptor["contractVersion"], 1);
+        assert_eq!(descriptor["contractVersion"], 2);
         assert_eq!(descriptor["artifactKind"], RULE_PACKAGE_ARTIFACT_KIND);
         assert_eq!(
             descriptor["limits"]["maxEncodedRulePackageBytes"],

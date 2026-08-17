@@ -14,6 +14,7 @@ export type RuleContractErrorCode =
   | 'invalid-source-location'
   | 'invalid-fingerprint'
   | 'json-integer-out-of-range'
+  | 'json-number-out-of-range'
   | 'quota-exceeded'
   | 'json-depth-exceeded'
   | 'json-node-quota-exceeded'

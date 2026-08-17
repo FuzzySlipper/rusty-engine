@@ -50,12 +50,13 @@ if (mode === '--write') {
 }
 
 function validateDescriptor(value) {
-  if (!isRecord(value) || value.contractVersion !== 1) {
+  if (!isRecord(value) || value.contractVersion !== 2) {
     throw new Error('unsupported Rust gameplay-rules contract descriptor');
   }
   for (const key of [
     'artifactKind',
     'schemaVersion',
+    'binary64SchemaVersion',
     'brands',
     'unions',
     'records',
@@ -76,6 +77,7 @@ function renderDescriptor(descriptor) {
     `export const RULE_CONTRACT_DESCRIPTOR_VERSION = ${String(descriptor.contractVersion)} as const;`,
     `export const RULE_PACKAGE_ARTIFACT_KIND = ${JSON.stringify(descriptor.artifactKind)} as const;`,
     `export const RULE_PACKAGE_SCHEMA_VERSION = ${String(descriptor.schemaVersion)} as const;`,
+    `export const RULE_PACKAGE_BINARY64_SCHEMA_VERSION = ${String(descriptor.binary64SchemaVersion)} as const;`,
     '',
     'export const RULE_LIMITS = Object.freeze({',
   ];

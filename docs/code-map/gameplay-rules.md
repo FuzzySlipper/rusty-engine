@@ -11,8 +11,8 @@ and diagnostics without defining what any rule means.
 
 - `gameplay-rules`: stable domain, package, source, and subject identities;
   positive versions; exact dependencies; and immutable admitted packages.
-- Strict schema-1 JSON decoding, deterministic canonical encoding, and
-  lowercase SHA-256 fingerprints.
+- Strict schema-1 safe-integer and schema-2 binary64 JSON decoding,
+  deterministic canonical encoding, and lowercase SHA-256 fingerprints.
 - Complete package-set validation and deterministic topological ordering.
 - Bounded source-correlated diagnostic reports supplied by downstream semantic
   compilers.
@@ -28,7 +28,7 @@ and diagnostics without defining what any rule means.
 - Binding payload values to `entity-state`, `gameplay-mechanics`, or any other
   service.
 - Filesystem layout, loading policy, package publication, project persistence,
-  TypeScript execution, or product UI.
+  TypeScript execution, runtime float precision, or product UI.
 
 ## Primary paths
 
@@ -46,6 +46,7 @@ and diagnostics without defining what any rule means.
 - [`Rust-owned contract generator`](../../rules/scripts/generate-contract.mjs)
 - [`rules workspace boundary audit`](../../rules/scripts/check-boundaries.mjs)
 - [`schema-1 canonical fixture`](../../fixtures/gameplay-rules/package-v1.canonical.json)
+- [`schema-2 binary64 fixture`](../../fixtures/gameplay-rules/package-v2-binary64.canonical.json)
 - [Optional gameplay rules contract](../gameplay-rules-contract.md)
 - [Current downstream facade and Studio boundary](../topics/development/downstream-engine-revisions.md)
 - [Completed first-consumer evidence](../gameplay-mechanics-campaign-closeout.md)
@@ -67,9 +68,9 @@ assert_eq!(decoded, admitted);
 returns its canonical admitted representation.
 `decode_canonical_rule_package` additionally requires byte-for-byte canonical
 input. Admission sorts dependencies, sources, and provenance; recursively
-sorts opaque payload object keys; preserves array order; permits only
-JavaScript-safe integers; and caches the complete canonical bytes and their
-SHA-256 fingerprint.
+sorts opaque payload object keys; preserves array order; applies the selected
+schema's safe-integer or finite-binary64 policy; and caches the complete
+canonical bytes and their SHA-256 fingerprint.
 
 Package admission does not make payload meaning valid. A downstream domain
 compiler must inspect `payload()`, produce its own Rust definitions, and decide
@@ -95,8 +96,8 @@ an oversized canonical intermediate merely to reject it afterward.
 Canonical bytes are suitable content evidence for a downstream cache,
 dependency pin, or durable file. Engine does not choose a path, load a file,
 publish a package, migrate a downstream payload schema, or persist compiled
-definitions. A schema-1 artifact is a package candidate, not a complete game
-save and not proof of semantic admission.
+definitions. A schema-1 or schema-2 artifact is a package candidate, not a
+complete game save and not proof of semantic admission.
 
 ## Acceptance gates and fixtures
 
@@ -129,7 +130,8 @@ surface and add no runtime dependency to this Rust crate.
 - Resolving an implicit latest version instead of the exact dependency.
 - Hashing authored input rather than complete canonical bytes.
 - Reimplementing canonical JSON through ordinary serializer defaults that
-  permit floats, duplicate-key loss, unstable field order, or unbounded output.
+  lose duplicate keys, use unstable field order, accept non-finite/underflowed
+  numbers, or format binary64 differently from the schema-2 contract.
 - Using source paths as filesystem authority.
 - Persisting callbacks, closures, executable values, or compiled runtime state
   in the opaque envelope.

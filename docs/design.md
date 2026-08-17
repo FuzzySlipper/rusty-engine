@@ -346,10 +346,16 @@ definitions and any package files. See
 [Gameplay rules](code-map/gameplay-rules.md) for implementation paths and
 gates.
 
+Schema 1 preserves the original portable safe-integer payload contract.
+Schema 2 is an explicit opt-in for finite IEEE-754 binary64 payload numbers;
+it owns one Rust/TypeScript-identical ECMAScript numeric representation while
+leaving runtime precision, units, formulas, and presentation downstream.
+Existing schema-1 bytes are never silently upgraded.
+
 This is not a universal gameplay IR. Engine defines no formula, predicate,
 operation, action, condition, effect, behavior, evaluator, registry, runtime
 session, scheduler, or d20 vocabulary through this surface. A mechanics-only
-game ignores it entirely. The exact schema-1 API, bounds, ordering, failure
+game ignores it entirely. The exact versioned API, bounds, ordering, failure
 identity, TypeScript isolation, and first-consumer proof are frozen in
 [gameplay-rules-contract.md](gameplay-rules-contract.md).
 

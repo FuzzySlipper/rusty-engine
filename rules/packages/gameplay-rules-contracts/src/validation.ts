@@ -3,9 +3,11 @@ import { Buffer } from 'node:buffer';
 import {
   RULE_LIMITS,
   RULE_PACKAGE_ARTIFACT_KIND,
+  RULE_PACKAGE_BINARY64_SCHEMA_VERSION,
   RULE_PACKAGE_SCHEMA_VERSION,
   type JsonValue,
   type RulePackage,
+  type RulePackageSchemaVersion,
   type RulePackageDependency,
   type RuleProvenance,
   type RuleSource,
@@ -58,7 +60,10 @@ export function admitRulePackageValue<Payload extends JsonValue = JsonValue>(
     required(root, 'schemaVersion', '$'),
     '$/schemaVersion',
   );
-  if (schemaVersion !== RULE_PACKAGE_SCHEMA_VERSION) {
+  if (
+    schemaVersion !== RULE_PACKAGE_SCHEMA_VERSION &&
+    schemaVersion !== RULE_PACKAGE_BINARY64_SCHEMA_VERSION
+  ) {
     throw new RuleContractError(
       'unsupported-schema-version',
       '$/schemaVersion',
@@ -185,6 +190,7 @@ export function admitRulePackageValue<Payload extends JsonValue = JsonValue>(
   addEnvelopeNodes(budget, dependencies, sources, provenance);
   const payload = normalizeJsonValue(
     required(root, 'payload', '$'),
+    schemaVersion,
     2,
     '$/payload',
     budget,
@@ -193,7 +199,7 @@ export function admitRulePackageValue<Payload extends JsonValue = JsonValue>(
 
   return Object.freeze({
     kind: RULE_PACKAGE_ARTIFACT_KIND,
-    schemaVersion: RULE_PACKAGE_SCHEMA_VERSION,
+    schemaVersion,
     domain,
     package: packageId,
     version,
@@ -212,6 +218,7 @@ export function admitRulePackage<Payload extends JsonValue>(
 
 export function normalizeJsonValue(
   value: unknown,
+  schemaVersion: RulePackageSchemaVersion = RULE_PACKAGE_SCHEMA_VERSION,
   depth = 1,
   logicalPath = '$',
   budget = new JsonBudget(),
@@ -232,9 +239,18 @@ export function normalizeJsonValue(
 
   if (value === null || typeof value === 'boolean') return value;
   if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw new RuleContractError(
+        'json-number-out-of-range',
+        logicalPath,
+        'JSON number must be finite IEEE-754 binary64',
+        { value: String(value) },
+      );
+    }
     if (
-      !Number.isSafeInteger(value) ||
-      Math.abs(value) > RULE_LIMITS.maxSafeJsonInteger
+      schemaVersion === RULE_PACKAGE_SCHEMA_VERSION &&
+      (!Number.isSafeInteger(value) ||
+        Math.abs(value) > RULE_LIMITS.maxSafeJsonInteger)
     ) {
       throw new RuleContractError(
         'json-integer-out-of-range',
@@ -281,6 +297,7 @@ export function normalizeJsonValue(
         value.map((entry, index) =>
           normalizeJsonValue(
             entry,
+            schemaVersion,
             depth + 1,
             pointerIndex(logicalPath, index),
             budget,
@@ -335,6 +352,7 @@ export function normalizeJsonValue(
       Object.defineProperty(normalized, key, {
         value: normalizeJsonValue(
           descriptor.value,
+          schemaVersion,
           depth + 1,
           pointerKey(logicalPath, key),
           budget,

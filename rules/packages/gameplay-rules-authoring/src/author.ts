@@ -2,11 +2,13 @@ import { Buffer } from 'node:buffer';
 
 import {
   RULE_PACKAGE_ARTIFACT_KIND,
+  RULE_PACKAGE_BINARY64_SCHEMA_VERSION,
   RULE_PACKAGE_SCHEMA_VERSION,
   admitRulePackageValue,
   type JsonValue,
   type RuleFingerprint,
   type RulePackage,
+  type RulePackageSchemaVersion,
 } from '@rusty-engine/gameplay-rules-contracts';
 
 import {
@@ -34,6 +36,7 @@ export interface RuleProvenanceDraft {
 }
 
 export interface RulePackageDraft<Payload extends JsonValue> {
+  readonly schemaVersion?: RulePackageSchemaVersion;
   readonly domain: string;
   readonly package: string;
   readonly version: number;
@@ -54,7 +57,7 @@ export function authorRulePackage<Payload extends JsonValue>(
 ): CanonicalRuleArtifact<Payload> {
   const packageValue = admitRulePackageValue<Payload>({
     kind: RULE_PACKAGE_ARTIFACT_KIND,
-    schemaVersion: RULE_PACKAGE_SCHEMA_VERSION,
+    schemaVersion: draft.schemaVersion ?? RULE_PACKAGE_SCHEMA_VERSION,
     domain: draft.domain,
     package: draft.package,
     version: draft.version,
@@ -68,6 +71,15 @@ export function authorRulePackage<Payload extends JsonValue>(
     package: packageValue,
     canonicalJson,
     fingerprint: fingerprintCanonicalRulePackage(canonicalJson),
+  });
+}
+
+export function authorBinary64RulePackage<Payload extends JsonValue>(
+  draft: Omit<RulePackageDraft<Payload>, 'schemaVersion'>,
+): CanonicalRuleArtifact<Payload> {
+  return authorRulePackage({
+    ...draft,
+    schemaVersion: RULE_PACKAGE_BINARY64_SCHEMA_VERSION,
   });
 }
 

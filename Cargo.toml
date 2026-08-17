@@ -76,6 +76,7 @@ svc-rng = { path = "rust/crates/svc-rng" }
 svc-mesh = { path = "rust/crates/svc-mesh" }
 svc-spatial = { path = "rust/crates/svc-spatial" }
 svc-volume = { path = "rust/crates/svc-volume" }
+ryu-js = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 serde_path_to_error = "0.1"

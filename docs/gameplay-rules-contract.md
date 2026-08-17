@@ -1,7 +1,7 @@
 # Optional gameplay rules contract
 
-Status: accepted architecture; Rust schema-1 substrate and isolated TypeScript
-authoring support implemented
+Status: accepted architecture; compatible schema-1 integer and schema-2
+binary64 substrates plus isolated TypeScript authoring support implemented
 
 This contract freezes the smallest host-neutral rules-package support justified
 by the first Rusty D20 slice. It is deliberately narrower than an RPG
@@ -132,11 +132,11 @@ invokes a downstream semantic compiler.
 
 ## Envelope and identity
 
-The schema-1 artifact has the following logical fields:
+Both artifact schemas have the following logical fields:
 
 ```text
 kind: "rusty.gameplay-rules.package"
-schemaVersion: 1
+schemaVersion: 1 | 2
 domain: RuleDomainId
 package: RulePackageId
 version: RuleVersion
@@ -184,21 +184,35 @@ Canonical encoding is UTF-8 JSON with:
 - dependencies sorted by domain, package, and version;
 - sources sorted by source identity;
 - provenance sorted by subject identity;
-- the shortest normal JSON representation for safe integers and booleans;
+- the shortest normal JSON representation for each schema's admitted numbers
+  and for booleans;
 - minimal JSON escaping for quotation mark, reverse solidus, and control
   characters while other Unicode scalar values remain UTF-8;
-- no non-finite or floating-point number representation;
+- schema 1 has no non-finite or floating-point number representation;
 - no byte-order mark, duplicate object key, unpaired surrogate, or non-Unicode
   input;
 - no insignificant whitespace; and
 - exactly one trailing line feed.
 
-The shared envelope permits JSON integers only in
+Schema 1 permits JSON integers only in
 `[-9_007_199_254_740_991, 9_007_199_254_740_991]` and rejects fractional
-numbers. A downstream schema that needs wider integers, exact ratios, or
-decimal values must encode and validate them explicitly. This keeps
-canonicalization lossless in both Rust and TypeScript and independent of host
-floating-point behavior.
+numbers. Its bytes and fingerprints remain unchanged.
+
+Schema 2 retains safe-integer metadata but treats every payload number as an
+IEEE-754 binary64 value. Admission performs the one explicit rounding step;
+the canonical writer then emits the ECMAScript/JCS `Number::toString` form.
+Rust uses `ryu-js` and TypeScript uses the native equivalent, locked by the
+shared `package-v2-binary64.canonical.json` fixture. Negative zero canonicalizes
+to `0`; NaN and infinities are rejected; a non-zero literal that underflows to
+zero is rejected; and a bare integer is rejected when conversion would change
+its decimal value. Canonical text round-trips to the same 53-bit binary64 value
+and uses up to 17 significant decimal digits when needed.
+
+Schema 2 is for intentionally approximate rates, multipliers, speeds, ranges,
+cooldowns, curves, and coefficients. Exact decimal quantities, exact ratios,
+and integers whose identity must exceed the JavaScript-safe range remain
+downstream-owned tagged strings with downstream validation. Runtime `f32` or
+`f64` selection and GUI rounding remain downstream concerns.
 
 The package fingerprint is lowercase hexadecimal SHA-256 over the complete
 canonical bytes. It is content evidence for dependency pinning, caches, and
@@ -319,7 +333,7 @@ The optional build-time workspace is rooted at `rules/`, separate from the
 ordinary Rust provider and from `render/` and `studio/`. Its initial packages
 are:
 
-- `@rusty-engine/gameplay-rules-contracts`: generated schema-1 envelope,
+- `@rusty-engine/gameplay-rules-contracts`: generated schema-1/schema-2 envelope,
   identity, bound, and diagnostic DTOs plus strict decoding; and
 - `@rusty-engine/gameplay-rules-authoring`: semantic-neutral helpers that
   normalize an already downstream-shaped JSON payload, canonicalize the
@@ -374,11 +388,15 @@ for the exact review/gate ledger and non-claims.
 
 ## Compatibility posture
 
-Schema 1 is strict. Unknown envelope fields and unsupported schema versions
-fail closed. Downstream payload compatibility belongs to its domain and
-package version. A future Engine envelope schema requires an explicit decoder,
-canonicalization rule, migration posture, and cross-language fixture; it is
-not inferred from unknown fields.
+Schemas 1 and 2 are strict. Unknown envelope fields and unsupported schema
+versions fail closed. Existing packages remain schema 1; float-heavy new or
+migrated packages opt into schema 2 through
+`RulePackageSchemaVersion::Binary64V2` in Rust or
+`authorBinary64RulePackage` in TypeScript. There is no automatic rewrite, so
+schema-1 fingerprints stay stable. Downstream payload compatibility still
+belongs to its domain and package version. Any later Engine envelope schema
+requires its own decoder, canonicalization rule, migration posture, and
+cross-language fixture; it is not inferred from unknown fields.
 
 Rusty D20 may evolve its candidate schema without changing Engine when the
 opaque payload remains within this contract. Mechanics-only consumers incur no

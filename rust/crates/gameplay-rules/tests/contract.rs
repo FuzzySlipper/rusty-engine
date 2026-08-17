@@ -178,6 +178,96 @@ fn strict_decode_rejects_ambiguous_or_nonportable_json_before_admission() {
 }
 
 #[test]
+fn binary64_schema_normalizes_and_canonicalizes_portable_float_values() {
+    let promoted_f32 = f64::from(0.1_f32);
+    let direct = admit_rule_package(RulePackageCandidate::new_with_schema(
+        RulePackageSchemaVersion::Binary64V2,
+        domain("fixture"),
+        package_id("binary64"),
+        version(1),
+        vec![],
+        vec![],
+        vec![],
+        json!({
+            "values": [-0.0, 1.0, 1.5, 1e-6, 1e20, 1e21, 5e-324, f64::MAX]
+        }),
+    ))
+    .unwrap();
+    let expected =
+        include_bytes!("../../../../fixtures/gameplay-rules/package-v2-binary64.canonical.json");
+    assert_eq!(encode_rule_package(&direct), expected);
+    assert_eq!(
+        direct.schema_version(),
+        RulePackageSchemaVersion::Binary64V2
+    );
+    assert_eq!(
+        direct.fingerprint().as_str(),
+        "03a4a6f2c65e10beaa8f689297394dcf6362fcc5c83c2b8920f199ebc0c50670"
+    );
+    assert_eq!(decode_canonical_rule_package(expected).unwrap(), direct);
+
+    let promoted = admit_rule_package(RulePackageCandidate::new_with_schema(
+        RulePackageSchemaVersion::Binary64V2,
+        domain("fixture"),
+        package_id("promoted-f32"),
+        version(1),
+        vec![],
+        vec![],
+        vec![],
+        json!({ "value": promoted_f32 }),
+    ))
+    .unwrap();
+    let round_tripped = decode_canonical_rule_package(&encode_rule_package(&promoted)).unwrap();
+    assert_eq!(
+        round_tripped.payload()["value"].as_f64().unwrap().to_bits(),
+        promoted_f32.to_bits()
+    );
+}
+
+#[test]
+fn binary64_schema_rejects_non_finite_underflow_and_unsafe_bare_integers() {
+    for payload in ["1e400", "1e-400"] {
+        assert!(matches!(
+            decode_rule_package(&valid_v2_artifact_with_payload(payload.as_bytes())),
+            Err(RulePackageError::JsonNumberOutOfRange { path, .. })
+                if path == "$/payload"
+        ));
+    }
+    assert!(matches!(
+        decode_rule_package(&valid_v2_artifact_with_payload(b"9007199254740993")),
+        Err(RulePackageError::JsonIntegerOutOfRange { path, .. })
+            if path == "$/payload"
+    ));
+    assert!(matches!(
+        admit_rule_package(RulePackageCandidate::new_with_schema(
+            RulePackageSchemaVersion::Binary64V2,
+            domain("fixture"),
+            package_id("unsafe-direct-integer"),
+            version(1),
+            vec![],
+            vec![],
+            vec![],
+            Value::Number(serde_json::Number::from(9_007_199_254_740_993_u64)),
+        )),
+        Err(RulePackageError::JsonIntegerOutOfRange { path, .. })
+            if path == "$/payload"
+    ));
+    let zero = decode_rule_package(&valid_v2_artifact_with_payload(b"0e999")).unwrap();
+    assert_eq!(zero.payload().as_f64(), Some(0.0));
+}
+
+#[test]
+fn malformed_binary64_tokens_remain_malformed_json() {
+    for payload in ["1.", "1e", "1e+", "1e-"] {
+        assert!(matches!(
+            decode_rule_package(&valid_v2_artifact_with_payload(payload.as_bytes())),
+            Err(RulePackageError::MalformedJson { path, .. })
+                if path == "$/payload"
+        ));
+    }
+}
+
+#[test]
 fn package_admission_rejects_duplicate_and_malformed_metadata() {
     let duplicated_dependency = dependency("base", 1);
     assert!(matches!(
@@ -1029,6 +1119,13 @@ fn package_with_canonical_bytes(package: &str, target: usize) -> AdmittedRulePac
 
 fn valid_artifact_with_payload(payload: &[u8]) -> Vec<u8> {
     let mut artifact = br#"{"kind":"rusty.gameplay-rules.package","schemaVersion":1,"domain":"test","package":"decode","version":1,"dependencies":[],"sources":[],"provenance":[],"payload":"#.to_vec();
+    artifact.extend_from_slice(payload);
+    artifact.extend_from_slice(b"}");
+    artifact
+}
+
+fn valid_v2_artifact_with_payload(payload: &[u8]) -> Vec<u8> {
+    let mut artifact = br#"{"kind":"rusty.gameplay-rules.package","schemaVersion":2,"domain":"test","package":"decode","version":1,"dependencies":[],"sources":[],"provenance":[],"payload":"#.to_vec();
     artifact.extend_from_slice(payload);
     artifact.extend_from_slice(b"}");
     artifact

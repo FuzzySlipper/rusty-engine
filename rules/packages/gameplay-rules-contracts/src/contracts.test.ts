@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import {
   RULE_LIMITS,
   RULE_PACKAGE_ARTIFACT_KIND,
+  RULE_PACKAGE_BINARY64_SCHEMA_VERSION,
   RULE_PACKAGE_SCHEMA_VERSION,
   RuleContractError,
   admitRuleDiagnostics,
@@ -17,6 +18,10 @@ import {
 
 const fixtureUrl = new URL(
   '../../../../fixtures/gameplay-rules/package-v1.canonical.json',
+  import.meta.url,
+);
+const binary64FixtureUrl = new URL(
+  '../../../../fixtures/gameplay-rules/package-v2-binary64.canonical.json',
   import.meta.url,
 );
 
@@ -79,6 +84,57 @@ test('strict decoding rejects ambiguous, malformed, and nonportable JSON', () =>
   );
 });
 
+test('binary64 schema decodes canonical ECMAScript numbers without precision surprises', async () => {
+  const packageValue = decodeRulePackage(await readFile(binary64FixtureUrl));
+  assert.equal(packageValue.schemaVersion, RULE_PACKAGE_BINARY64_SCHEMA_VERSION);
+  assert.deepEqual(packageValue.payload, {
+    values: [
+      0,
+      1,
+      1.5,
+      0.000001,
+      100000000000000000000,
+      1e21,
+      5e-324,
+      Number.MAX_VALUE,
+    ],
+  });
+  for (const payload of ['1e400', '1e-400']) {
+    expectRuleError(
+      () =>
+        decodeRulePackage(
+          bytes(
+            `{"kind":"rusty.gameplay-rules.package","schemaVersion":2,"domain":"fixture","package":"binary64","version":1,"dependencies":[],"sources":[],"provenance":[],"payload":${payload}}`,
+          ),
+        ),
+      'json-number-out-of-range',
+      '$/payload',
+    );
+  }
+  expectRuleError(
+    () =>
+      decodeRulePackage(
+        bytes(
+          '{"kind":"rusty.gameplay-rules.package","schemaVersion":2,"domain":"fixture","package":"binary64","version":1,"dependencies":[],"sources":[],"provenance":[],"payload":9007199254740993}',
+        ),
+      ),
+    'json-integer-out-of-range',
+    '$/payload',
+  );
+  for (const payload of ['1.', '1e', '1e+', '1e-']) {
+    expectRuleError(
+      () =>
+        decodeRulePackage(
+          bytes(
+            `{"kind":"rusty.gameplay-rules.package","schemaVersion":2,"domain":"fixture","package":"binary64","version":1,"dependencies":[],"sources":[],"provenance":[],"payload":${payload}}`,
+          ),
+        ),
+      'malformed-json',
+      '$/payload',
+    );
+  }
+});
+
 test('identities, source metadata, versions, and schema are exact and bounded', () => {
   const exactIdentity = 'i'.repeat(RULE_LIMITS.maxRuleIdBytes);
   const exactPath = 'p'.repeat(RULE_LIMITS.maxSourcePathBytes);
@@ -114,7 +170,7 @@ test('identities, source metadata, versions, and schema are exact and bounded', 
     '$/version',
   );
   expectRuleError(
-    () => admitRulePackageValue({ ...validPackage(), schemaVersion: 2 }),
+    () => admitRulePackageValue({ ...validPackage(), schemaVersion: 3 }),
     'unsupported-schema-version',
     '$/schemaVersion',
   );

@@ -13,6 +13,7 @@ use crate::{
 
 pub const RULE_PACKAGE_ARTIFACT_KIND: &str = "rusty.gameplay-rules.package";
 pub const RULE_PACKAGE_SCHEMA_VERSION: u64 = 1;
+pub const RULE_PACKAGE_BINARY64_SCHEMA_VERSION: u64 = 2;
 pub const MAX_ENCODED_RULE_PACKAGE_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_DEPENDENCIES_PER_RULE_PACKAGE: usize = 32;
 pub const MAX_SOURCES_PER_RULE_PACKAGE: usize = 64;
@@ -21,6 +22,31 @@ pub const MAX_SOURCE_PATH_BYTES: usize = 512;
 pub const MAX_JSON_NESTING_DEPTH: usize = JSON_MAX_DEPTH;
 pub const MAX_JSON_NODES_PER_RULE_PACKAGE: usize = JSON_MAX_NODES;
 pub const MAX_JSON_STRING_BYTES: usize = JSON_MAX_STRING_BYTES;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RulePackageSchemaVersion {
+    IntegerOnlyV1,
+    Binary64V2,
+}
+
+impl RulePackageSchemaVersion {
+    pub const fn get(self) -> u64 {
+        match self {
+            Self::IntegerOnlyV1 => RULE_PACKAGE_SCHEMA_VERSION,
+            Self::Binary64V2 => RULE_PACKAGE_BINARY64_SCHEMA_VERSION,
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, RulePackageError> {
+        match value {
+            "1" => Ok(Self::IntegerOnlyV1),
+            "2" => Ok(Self::Binary64V2),
+            _ => Err(RulePackageError::UnsupportedSchemaVersion {
+                actual: value.to_string(),
+            }),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleSource {
@@ -105,6 +131,7 @@ impl RuleProvenance {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RulePackageCandidate {
+    schema_version: RulePackageSchemaVersion,
     identity: RulePackageIdentity,
     dependencies: Vec<RulePackageDependency>,
     sources: Vec<RuleSource>,
@@ -122,13 +149,41 @@ impl RulePackageCandidate {
         provenance: Vec<RuleProvenance>,
         payload: Value,
     ) -> Self {
+        Self::new_with_schema(
+            RulePackageSchemaVersion::IntegerOnlyV1,
+            domain,
+            package,
+            version,
+            dependencies,
+            sources,
+            provenance,
+            payload,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_schema(
+        schema_version: RulePackageSchemaVersion,
+        domain: RuleDomainId,
+        package: RulePackageId,
+        version: RuleVersion,
+        dependencies: Vec<RulePackageDependency>,
+        sources: Vec<RuleSource>,
+        provenance: Vec<RuleProvenance>,
+        payload: Value,
+    ) -> Self {
         Self {
+            schema_version,
             identity: RulePackageIdentity::new(domain, package, version),
             dependencies,
             sources,
             provenance,
             payload,
         }
+    }
+
+    pub const fn schema_version(&self) -> RulePackageSchemaVersion {
+        self.schema_version
     }
 
     pub const fn identity(&self) -> &RulePackageIdentity {
@@ -154,6 +209,7 @@ impl RulePackageCandidate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdmittedRulePackage {
+    schema_version: RulePackageSchemaVersion,
     identity: RulePackageIdentity,
     dependencies: Vec<RulePackageDependency>,
     sources: Vec<RuleSource>,
@@ -165,6 +221,10 @@ pub struct AdmittedRulePackage {
 }
 
 impl AdmittedRulePackage {
+    pub const fn schema_version(&self) -> RulePackageSchemaVersion {
+        self.schema_version
+    }
+
     pub const fn identity(&self) -> &RulePackageIdentity {
         &self.identity
     }
@@ -300,10 +360,11 @@ pub fn admit_rule_package(
         });
     }
 
-    let json_nodes = validate_candidate_json(&candidate)?;
+    let json_nodes = validate_candidate_json(&mut candidate)?;
     let canonical_bytes = canonical_bytes(&candidate)?;
     let fingerprint = RuleFingerprint::for_bytes(&canonical_bytes);
     Ok(AdmittedRulePackage {
+        schema_version: candidate.schema_version,
         identity: candidate.identity,
         dependencies: candidate.dependencies,
         sources: candidate.sources,
@@ -355,7 +416,9 @@ pub fn encode_rule_package(package: &AdmittedRulePackage) -> Vec<u8> {
     package.canonical_bytes.clone()
 }
 
-fn validate_candidate_json(candidate: &RulePackageCandidate) -> Result<usize, RulePackageError> {
+fn validate_candidate_json(
+    candidate: &mut RulePackageCandidate,
+) -> Result<usize, RulePackageError> {
     let mut budget = JsonBudget::new();
     budget.add_node("$")?;
     for path in [
@@ -398,7 +461,13 @@ fn validate_candidate_json(candidate: &RulePackageCandidate) -> Result<usize, Ru
             budget.add_node(&format!("{path}/column"))?;
         }
     }
-    validate_json_value(&candidate.payload, 2, "$/payload", &mut budget)?;
+    validate_json_value(
+        &mut candidate.payload,
+        candidate.schema_version,
+        2,
+        "$/payload",
+        &mut budget,
+    )?;
     Ok(budget.nodes())
 }
 
@@ -406,7 +475,12 @@ fn canonical_bytes(candidate: &RulePackageCandidate) -> Result<Vec<u8>, RulePack
     let mut output = BoundedJsonWriter::new(MAX_ENCODED_RULE_PACKAGE_BYTES);
     output.extend(br#"{"kind":"#, "$/kind")?;
     output.write_string(RULE_PACKAGE_ARTIFACT_KIND, "$/kind")?;
-    output.extend(br#","schemaVersion":1,"domain":"#, "$/domain")?;
+    output.extend(br#","schemaVersion":"#, "$/schemaVersion")?;
+    output.extend(
+        candidate.schema_version.get().to_string().as_bytes(),
+        "$/schemaVersion",
+    )?;
+    output.extend(br#","domain":"#, "$/domain")?;
     output.write_string(candidate.identity.domain().as_str(), "$/domain")?;
     output.extend(br#","package":"#, "$/package")?;
     output.write_string(candidate.identity.package().as_str(), "$/package")?;
@@ -499,9 +573,7 @@ fn candidate_from_value(value: Value) -> Result<RulePackageCandidate, RulePackag
         take_required(&mut root, "schemaVersion", "$")?,
         "$/schemaVersion",
     )?;
-    if schema != RULE_PACKAGE_SCHEMA_VERSION.to_string() {
-        return Err(RulePackageError::UnsupportedSchemaVersion { actual: schema });
-    }
+    let schema_version = RulePackageSchemaVersion::parse(&schema)?;
     let domain = RuleDomainId::parse_at(
         into_string(take_required(&mut root, "domain", "$")?, "$/domain")?,
         "$/domain",
@@ -515,7 +587,8 @@ fn candidate_from_value(value: Value) -> Result<RulePackageCandidate, RulePackag
     let sources = parse_sources(take_required(&mut root, "sources", "$")?)?;
     let provenance = parse_provenance(take_required(&mut root, "provenance", "$")?)?;
     let payload = take_required(&mut root, "payload", "$")?;
-    Ok(RulePackageCandidate::new(
+    Ok(RulePackageCandidate::new_with_schema(
+        schema_version,
         domain,
         package,
         version,

@@ -910,6 +910,7 @@ version = "0.1.0"
 name = "gameplay-rules"
 version = "0.1.0"
 dependencies = [
+ "ryu-js",
  "serde_json",
  "sha2",
 ]
@@ -2744,6 +2745,12 @@ dependencies = [
  "voxel-convert",
  "voxel-object-runtime",
 ]
+
+[[package]]
+name = "ryu-js"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04d056b875a9d2e6cb9a61d127afee9ac5999b9f87bcb32079d1318e505be714"
 
 [[package]]
 name = "safe_arch"

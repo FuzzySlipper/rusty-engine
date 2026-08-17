@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{Map, Number, Value};
 
-use crate::{RulePackageError, MAX_SAFE_JSON_INTEGER};
+use crate::{RulePackageError, RulePackageSchemaVersion, MAX_SAFE_JSON_INTEGER};
 
 pub(crate) const JSON_MAX_DEPTH: usize = 64;
 pub(crate) const JSON_MAX_NODES: usize = 100_000;
@@ -59,7 +59,8 @@ pub(crate) fn parse_strict_json(
 }
 
 pub(crate) fn validate_json_value(
-    value: &Value,
+    value: &mut Value,
+    schema_version: RulePackageSchemaVersion,
     depth: usize,
     path: &str,
     budget: &mut JsonBudget,
@@ -74,27 +75,61 @@ pub(crate) fn validate_json_value(
     budget.add_node(path)?;
     match value {
         Value::Null | Value::Bool(_) => Ok(()),
-        Value::Number(number) => validate_number(number, path),
+        Value::Number(number) => {
+            validate_number(number, schema_version, path)?;
+            if schema_version == RulePackageSchemaVersion::Binary64V2 {
+                let value =
+                    number
+                        .as_f64()
+                        .ok_or_else(|| RulePackageError::JsonNumberOutOfRange {
+                            path: path.to_string(),
+                            value: number.to_string(),
+                            reason: "number is not representable as finite IEEE-754 binary64",
+                        })?;
+                *number = Number::from_f64(if value == 0.0 { 0.0 } else { value })
+                    .expect("validated binary64 is finite");
+            }
+            Ok(())
+        }
         Value::String(value) => validate_string(value, path),
         Value::Array(values) => {
-            for (index, value) in values.iter().enumerate() {
-                validate_json_value(value, depth + 1, &pointer_index(path, index), budget)?;
+            for (index, value) in values.iter_mut().enumerate() {
+                validate_json_value(
+                    value,
+                    schema_version,
+                    depth + 1,
+                    &pointer_index(path, index),
+                    budget,
+                )?;
             }
             Ok(())
         }
         Value::Object(values) => {
-            let mut keys = values.keys().collect::<Vec<_>>();
+            let mut keys = values.keys().cloned().collect::<Vec<_>>();
             keys.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
             for key in keys {
-                validate_string(key, &format!("{path}/<key>"))?;
-                validate_json_value(&values[key], depth + 1, &pointer_key(path, key), budget)?;
+                validate_string(&key, &format!("{path}/<key>"))?;
+                let child = values
+                    .get_mut(&key)
+                    .expect("key was collected from this object");
+                validate_json_value(
+                    child,
+                    schema_version,
+                    depth + 1,
+                    &pointer_key(path, &key),
+                    budget,
+                )?;
             }
             Ok(())
         }
     }
 }
 
-fn validate_number(number: &Number, path: &str) -> Result<(), RulePackageError> {
+fn validate_number(
+    number: &Number,
+    schema_version: RulePackageSchemaVersion,
+    path: &str,
+) -> Result<(), RulePackageError> {
     if let Some(value) = number.as_i64() {
         if value.unsigned_abs() <= MAX_SAFE_JSON_INTEGER {
             return Ok(());
@@ -103,6 +138,27 @@ fn validate_number(number: &Number, path: &str) -> Result<(), RulePackageError> 
         if value <= MAX_SAFE_JSON_INTEGER {
             return Ok(());
         }
+    }
+    if schema_version == RulePackageSchemaVersion::Binary64V2 {
+        if number.is_i64() || number.is_u64() {
+            let value = number.as_f64().expect("JSON integer converts to binary64");
+            let mut buffer = ryu_js::Buffer::new();
+            if value.is_finite() && buffer.format_finite(value) == number.to_string() {
+                return Ok(());
+            }
+            return Err(RulePackageError::JsonIntegerOutOfRange {
+                path: path.to_string(),
+                value: number.to_string(),
+            });
+        }
+        if number.as_f64().is_some_and(f64::is_finite) {
+            return Ok(());
+        }
+        return Err(RulePackageError::JsonNumberOutOfRange {
+            path: path.to_string(),
+            value: number.to_string(),
+            reason: "number is not representable as finite IEEE-754 binary64",
+        });
     }
     Err(RulePackageError::JsonIntegerOutOfRange {
         path: path.to_string(),
@@ -167,7 +223,15 @@ impl BoundedJsonWriter {
             Value::Null => self.extend(b"null", path),
             Value::Bool(true) => self.extend(b"true", path),
             Value::Bool(false) => self.extend(b"false", path),
-            Value::Number(number) => self.extend(number.to_string().as_bytes(), path),
+            Value::Number(number) => {
+                if number.is_f64() {
+                    let value = number.as_f64().expect("f64 number remains representable");
+                    let mut buffer = ryu_js::Buffer::new();
+                    self.extend(buffer.format_finite(value).as_bytes(), path)
+                } else {
+                    self.extend(number.to_string().as_bytes(), path)
+                }
+            }
             Value::String(value) => self.write_string(value, path),
             Value::Array(values) => {
                 self.push(b'[', path)?;
@@ -375,32 +439,80 @@ impl Parser<'_> {
             }
             _ => return Err(self.malformed(path, "invalid JSON number")),
         }
-        if matches!(self.peek_byte(), Some(b'.' | b'e' | b'E')) {
-            while self.peek_byte().is_some_and(|byte| {
-                byte.is_ascii_digit() || matches!(byte, b'.' | b'e' | b'E' | b'+' | b'-')
-            }) {
+        let mut binary64 = false;
+        if self.consume_byte(b'.') {
+            binary64 = true;
+            if !self.peek_byte().is_some_and(|byte| byte.is_ascii_digit()) {
+                return Err(self.malformed(path, "fraction requires at least one digit"));
+            }
+            while self.peek_byte().is_some_and(|byte| byte.is_ascii_digit()) {
                 self.offset += 1;
             }
-            return Err(RulePackageError::JsonIntegerOutOfRange {
-                path: path.to_string(),
-                value: bounded_token(&self.input[start..self.offset]),
-            });
+        }
+        if matches!(self.peek_byte(), Some(b'e' | b'E')) {
+            binary64 = true;
+            self.offset += 1;
+            if matches!(self.peek_byte(), Some(b'+' | b'-')) {
+                self.offset += 1;
+            }
+            if !self.peek_byte().is_some_and(|byte| byte.is_ascii_digit()) {
+                return Err(self.malformed(path, "exponent requires at least one digit"));
+            }
+            while self.peek_byte().is_some_and(|byte| byte.is_ascii_digit()) {
+                self.offset += 1;
+            }
         }
         let token = &self.input[start..self.offset];
+        if binary64 {
+            let value =
+                token
+                    .parse::<f64>()
+                    .map_err(|_| RulePackageError::JsonNumberOutOfRange {
+                        path: path.to_string(),
+                        value: bounded_token(token),
+                        reason: "number is not representable as IEEE-754 binary64",
+                    })?;
+            if !value.is_finite() {
+                return Err(RulePackageError::JsonNumberOutOfRange {
+                    path: path.to_string(),
+                    value: bounded_token(token),
+                    reason: "number overflows finite IEEE-754 binary64",
+                });
+            }
+            if value == 0.0 && has_non_zero_coefficient(token) {
+                return Err(RulePackageError::JsonNumberOutOfRange {
+                    path: path.to_string(),
+                    value: bounded_token(token),
+                    reason: "non-zero number underflows IEEE-754 binary64",
+                });
+            }
+            return Ok(Value::Number(
+                Number::from_f64(if value == 0.0 { 0.0 } else { value })
+                    .expect("validated binary64 is finite"),
+            ));
+        }
         let digits = token.trim_start_matches('-');
         let magnitude = digits.parse::<u64>().ok();
-        let Some(magnitude) = magnitude else {
-            return Err(RulePackageError::JsonIntegerOutOfRange {
-                path: path.to_string(),
-                value: bounded_token(token),
-            });
-        };
-        if magnitude > MAX_SAFE_JSON_INTEGER {
-            return Err(RulePackageError::JsonIntegerOutOfRange {
-                path: path.to_string(),
-                value: bounded_token(token),
-            });
+        if magnitude.is_none_or(|magnitude| magnitude > MAX_SAFE_JSON_INTEGER) {
+            let value =
+                token
+                    .parse::<f64>()
+                    .map_err(|_| RulePackageError::JsonIntegerOutOfRange {
+                        path: path.to_string(),
+                        value: bounded_token(token),
+                    })?;
+            let mut buffer = ryu_js::Buffer::new();
+            if !value.is_finite() || buffer.format_finite(value) != token {
+                return Err(RulePackageError::JsonIntegerOutOfRange {
+                    path: path.to_string(),
+                    value: bounded_token(token),
+                });
+            }
+            return Ok(Value::Number(
+                Number::from_f64(value).expect("validated binary64 is finite"),
+            ));
         }
+        let magnitude = magnitude.expect("safe integer magnitude was parsed");
         if negative {
             let value = -(magnitude as i64);
             Ok(Value::Number(Number::from(value)))
@@ -555,4 +667,14 @@ fn bounded_token(value: &str) -> String {
     } else {
         format!("{}...", &value[..LIMIT])
     }
+}
+
+fn has_non_zero_coefficient(token: &str) -> bool {
+    token
+        .trim_start_matches('-')
+        .split(['e', 'E'])
+        .next()
+        .expect("split always yields one coefficient")
+        .bytes()
+        .any(|byte| matches!(byte, b'1'..=b'9'))
 }

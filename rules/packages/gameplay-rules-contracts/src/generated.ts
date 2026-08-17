@@ -1,9 +1,10 @@
 // Generated from the Rust gameplay-rules contract. Do not edit by hand.
 // Run: pnpm --dir rules run generate
 
-export const RULE_CONTRACT_DESCRIPTOR_VERSION = 1 as const;
+export const RULE_CONTRACT_DESCRIPTOR_VERSION = 2 as const;
 export const RULE_PACKAGE_ARTIFACT_KIND = "rusty.gameplay-rules.package" as const;
 export const RULE_PACKAGE_SCHEMA_VERSION = 1 as const;
+export const RULE_PACKAGE_BINARY64_SCHEMA_VERSION = 2 as const;
 
 export const RULE_LIMITS = Object.freeze({
   maxCanonicalRulePackageSetBytes: 16777216,
@@ -53,6 +54,8 @@ export type RuleSubjectId = string & { readonly [RuleSubjectIdBrand]: true };
 declare const RuleFingerprintBrand: unique symbol;
 export type RuleFingerprint = string & { readonly [RuleFingerprintBrand]: true };
 
+export type RulePackageSchemaVersion = 1 | 2;
+
 export type RuleDiagnosticSeverity = "error" | "warning";
 
 export interface RulePackageDependency {
@@ -76,7 +79,7 @@ export interface RuleProvenance {
 
 export interface RulePackage<Payload extends JsonValue = JsonValue> {
   readonly kind: typeof RULE_PACKAGE_ARTIFACT_KIND;
-  readonly schemaVersion: typeof RULE_PACKAGE_SCHEMA_VERSION;
+  readonly schemaVersion: RulePackageSchemaVersion;
   readonly domain: RuleDomainId;
   readonly package: RulePackageId;
   readonly version: number;
