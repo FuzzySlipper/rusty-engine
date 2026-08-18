@@ -163,9 +163,18 @@ Materialization emits immutable JSON with a downstream-owned payload inside a
 `gameplay-rules` envelope. The artifact is committed when the product needs it
 at runtime and checked for drift in development.
 
-The schema-1 shared envelope accepts JavaScript-safe integers, not fractional
-JSON numbers. Encode exact ratios, fixed-point quantities, milliseconds, or
-domain decimal strings explicitly and validate them in downstream Rust.
+Choose the envelope schema deliberately. Schema 1 accepts JavaScript-safe
+integers and remains appropriate for integer or fixed-point payloads. Schema 2
+accepts finite IEEE-754 binary64 payload values with deterministic
+cross-language canonicalization; use it for intentionally approximate tuning
+such as rates, multipliers, speeds, ranges, cooldowns, curves, and
+coefficients. Opt in with `RulePackageSchemaVersion::Binary64V2` in Rust or
+`authorBinary64RulePackage` in TypeScript. Schema 2 does not change runtime
+math or game meaning, and envelope metadata remains safe-integer-only. Keep
+exact decimal quantities, exact ratios, and integers beyond the JavaScript-safe
+range in explicit downstream-owned encodings and validate them in downstream
+Rust. See the [gameplay rules contract](../../gameplay-rules-contract.md) for
+the numeric admission and compatibility rules.
 
 ### 3. Canonical downstream Rust definitions
 
