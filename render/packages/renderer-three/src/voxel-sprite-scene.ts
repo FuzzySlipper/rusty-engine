@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { RenderHandle, TextureDescriptor } from '@rusty-engine/render-contracts';
 
 import type { ThreeRenderer } from './three-renderer.js';
@@ -14,6 +15,30 @@ import {
   type VoxelSpriteEnhancementReadout,
 } from './voxel-sprite-enhancement.js';
 import { VoxelSpriteRuntimeCapture } from './voxel-sprite-capture.js';
+import {
+  GhostPlatePresentation,
+  type GhostPlateConfig,
+  type GhostPlateReadout,
+} from './voxel-sprite-ghost-plate.js';
+
+export type RendererThreeVoxelSpriteMode = VoxelSpriteEnhancementMode | 'ghost-plate';
+export type RendererThreeVoxelSpriteGhostAnchorPolicy = 'bounds-center' | 'bounds-normalized';
+export type RendererThreeVoxelSpriteGhostPlateMapping = 'plate-locked' | 'projective-surface';
+
+export interface RendererThreeVoxelSpriteGhostConfig {
+  /** Fraction of source-view depth retained by the crushed display mesh. */
+  readonly ghostDepthRetention: number;
+  /** Selects the fixed source-view depth around which relief is compressed. */
+  readonly ghostAnchorPolicy: RendererThreeVoxelSpriteGhostAnchorPolicy;
+  /** Front-to-back interpolation used only by `bounds-normalized`. */
+  readonly ghostAnchorValue: number;
+  /** Chooses screen-locked plate coordinates or source-projective coordinates. */
+  readonly ghostPlateMapping: RendererThreeVoxelSpriteGhostPlateMapping;
+}
+
+export type RendererThreeVoxelSpriteConfigPatch = Partial<
+  VoxelSpriteEnhancementConfig & RendererThreeVoxelSpriteGhostConfig
+>;
 
 export interface RendererThreeVoxelSpriteTransform {
   readonly position: readonly [number, number, number];
@@ -27,6 +52,8 @@ export interface RendererThreeVoxelSpriteCaptureSettings {
   readonly elevationDegrees: number;
   readonly near: number;
   readonly far: number;
+  /** Perspective source-view field of view; defaults to the legacy 35 degrees. */
+  readonly fieldOfViewDegrees?: number;
   /** Defaults to an isolated, readable capture-light rig. */
   readonly lighting?: RendererThreeVoxelSpriteCaptureLighting;
 }
@@ -83,8 +110,8 @@ export interface RendererThreeVoxelSpriteDefinition {
   readonly id: string;
   readonly source: RendererThreeVoxelSpriteSource;
   readonly transform: RendererThreeVoxelSpriteTransform;
-  readonly mode: VoxelSpriteEnhancementMode;
-  readonly config?: Partial<Omit<VoxelSpriteEnhancementConfig, 'mode' | 'width' | 'height'>>;
+  readonly mode: RendererThreeVoxelSpriteMode;
+  readonly config?: Omit<RendererThreeVoxelSpriteConfigPatch, 'mode' | 'width' | 'height'>;
 }
 
 export interface RendererThreeVoxelSpriteDiagnostic {
@@ -104,7 +131,9 @@ export interface RendererThreeVoxelSpriteEntryReadout {
   readonly sourceHandle: number | null;
   readonly capture: RendererThreeVoxelSpriteCaptureSettings | null;
   readonly fallbackPreservedCount: number;
-  readonly enhancement: VoxelSpriteEnhancementReadout;
+  readonly presentation: 'enhancement' | 'ghost-plate';
+  readonly enhancement: VoxelSpriteEnhancementReadout | null;
+  readonly ghostPlate: GhostPlateReadout | null;
 }
 
 export interface RendererThreeVoxelSpriteSceneReadout {
@@ -123,12 +152,15 @@ export interface RendererThreeVoxelSpriteBackend {
 
 interface Entry {
   readonly id: string;
-  readonly enhancement: VoxelSpriteEnhancement;
+  readonly enhancement: VoxelSpriteEnhancement | null;
+  readonly ghostPlate: GhostPlatePresentation | null;
   readonly frame: VoxelSpriteFrame;
   readonly source: RendererThreeVoxelSpriteSource;
+  readonly transform: RendererThreeVoxelSpriteTransform;
   readonly runtimeCapture: VoxelSpriteRuntimeCapture | null;
   readonly retainedObject: THREE.Object3D | null;
   readonly retainedOriginalVisibility: boolean | null;
+  releaseCanonicalSuppression: (() => void) | null;
   captureSettings: RendererThreeVoxelSpriteCaptureSettings | null;
   fallbackPreservedCount: number;
 }
@@ -140,6 +172,10 @@ export class RendererThreeVoxelSpriteScene {
   readonly #invalidate: () => void;
   readonly #onDispose: (() => void) | null;
   readonly #entries = new Map<string, Entry>();
+  readonly #canonicalSuppressions = new Map<THREE.Object3D, {
+    count: number;
+    readonly layerZeroEnabled: ReadonlyMap<THREE.Object3D, boolean>;
+  }>();
   #disposed = false;
   #revision = 0;
 
@@ -165,8 +201,11 @@ export class RendererThreeVoxelSpriteScene {
       return this.#rejected(classifyCause(cause), messageFrom(cause));
     }
     this.#entries.set(entry.id, entry);
-    this.#backend.scene.add(entry.enhancement.object);
-    if (entry.retainedObject !== null) entry.retainedObject.visible = false;
+    this.#backend.scene.add(presentationObject(entry));
+    if (entry.ghostPlate !== null && entry.retainedObject !== null) {
+      entry.releaseCanonicalSuppression = this.#acquireCanonicalSuppression(entry.retainedObject);
+    }
+    if (entry.enhancement !== null && entry.retainedObject !== null) entry.retainedObject.visible = false;
     this.#revision += 1;
     this.#invalidate();
     return this.#applied();
@@ -188,8 +227,11 @@ export class RendererThreeVoxelSpriteScene {
 
     this.#disposeEntry(previous);
     this.#entries.set(candidate.id, candidate);
-    this.#backend.scene.add(candidate.enhancement.object);
-    if (candidate.retainedObject !== null) candidate.retainedObject.visible = false;
+    this.#backend.scene.add(presentationObject(candidate));
+    if (candidate.ghostPlate !== null && candidate.retainedObject !== null) {
+      candidate.releaseCanonicalSuppression = this.#acquireCanonicalSuppression(candidate.retainedObject);
+    }
+    if (candidate.enhancement !== null && candidate.retainedObject !== null) candidate.retainedObject.visible = false;
     this.#revision += 1;
     this.#invalidate();
     return this.#applied();
@@ -197,13 +239,14 @@ export class RendererThreeVoxelSpriteScene {
 
   configure(
     id: string,
-    patch: Partial<VoxelSpriteEnhancementConfig>,
+    patch: RendererThreeVoxelSpriteConfigPatch,
   ): RendererThreeVoxelSpriteReceipt {
     if (this.#disposed) return this.#rejected('disposed', 'voxel sprite scene is disposed');
     const entry = this.#entries.get(id);
     if (entry === undefined) return this.#rejected('unknown_id', `unknown voxel sprite id ${id}`);
     try {
-      entry.enhancement.configure(patch);
+      if (entry.ghostPlate !== null) entry.ghostPlate.configure(ghostConfigPatch(patch));
+      else entry.enhancement!.configure(enhancementConfigPatch(patch));
     } catch (cause) {
       return this.#rejected('invalid_definition', messageFrom(cause));
     }
@@ -230,12 +273,41 @@ export class RendererThreeVoxelSpriteScene {
     } catch (cause) {
       return this.#rejected('invalid_definition', messageFrom(cause));
     }
+    if (entry.ghostPlate !== null) {
+      let candidate: Entry;
+      try {
+        const ghost = entry.ghostPlate.readout();
+        candidate = this.#buildEntry({
+          id,
+          source: { ...entry.source, capture: captureSettings },
+          transform: entry.transform,
+          mode: 'ghost-plate',
+          config: {
+            ghostDepthRetention: ghost.depthRetention,
+            ghostAnchorPolicy: ghost.anchorPolicy,
+            ghostAnchorValue: ghost.anchorValue,
+            ghostPlateMapping: ghost.plateMapping,
+          },
+        });
+      } catch (cause) {
+        entry.fallbackPreservedCount += 1;
+        return this.#rejected(classifyCause(cause), messageFrom(cause));
+      }
+      this.#disposeEntry(entry);
+      this.#entries.set(id, candidate);
+      this.#backend.scene.add(presentationObject(candidate));
+      candidate.releaseCanonicalSuppression = this.#acquireCanonicalSuppression(candidate.retainedObject!);
+      this.#revision += 1;
+      this.#invalidate();
+      return this.#applied();
+    }
+
     const receipt = this.#captureRetained(entry.runtimeCapture, entry.retainedObject, captureSettings);
     if (!receipt.applied || receipt.frame === null) {
       entry.fallbackPreservedCount += 1;
       return this.#rejected('capture_failed', receipt.diagnostics[0]?.message ?? 'runtime recapture failed');
     }
-    entry.enhancement.replaceSource({
+    entry.enhancement!.replaceSource({
       frame: receipt.frame,
       captureCpuSubmissionMilliseconds: receipt.readout.cpuSubmissionMilliseconds,
     });
@@ -258,13 +330,16 @@ export class RendererThreeVoxelSpriteScene {
 
   prepare(camera: THREE.Camera): void {
     if (this.#disposed) return;
-    for (const entry of this.#entries.values()) entry.enhancement.prepare(camera);
+    for (const entry of this.#entries.values()) {
+      if (entry.ghostPlate !== null) entry.ghostPlate.prepare(camera);
+      else entry.enhancement!.prepare(camera);
+    }
   }
 
   recordCpuSubmission(milliseconds: number): void {
     if (this.#disposed) return;
     for (const entry of this.#entries.values()) {
-      entry.enhancement.recordSteadyStateFrame(milliseconds);
+      entry.enhancement?.recordSteadyStateFrame(milliseconds);
     }
   }
 
@@ -279,7 +354,9 @@ export class RendererThreeVoxelSpriteScene {
           sourceHandle: entry.source.kind === 'retained' ? entry.source.handle : null,
           capture: entry.captureSettings === null ? null : Object.freeze({ ...entry.captureSettings }),
           fallbackPreservedCount: entry.fallbackPreservedCount,
-          enhancement: entry.enhancement.readout(),
+          presentation: entry.ghostPlate === null ? 'enhancement' as const : 'ghost-plate' as const,
+          enhancement: entry.enhancement?.readout() ?? null,
+          ghostPlate: entry.ghostPlate?.readout() ?? null,
         }))
         .sort((left, right) => left.id.localeCompare(right.id))),
       disposed: this.#disposed,
@@ -297,6 +374,7 @@ export class RendererThreeVoxelSpriteScene {
   }
 
   #buildEntry(definition: RendererThreeVoxelSpriteDefinition): Entry {
+    if (definition.mode === 'ghost-plate') return this.#buildGhostEntry(definition);
     let frame: VoxelSpriteFrame;
     let runtimeCapture: VoxelSpriteRuntimeCapture | null = null;
     let retainedObject: THREE.Object3D | null = null;
@@ -322,7 +400,7 @@ export class RendererThreeVoxelSpriteScene {
       enhancement = new VoxelSpriteEnhancement(
         { frame, captureCpuSubmissionMilliseconds },
         {
-          ...definition.config,
+          ...enhancementConfigPatch(definition.config ?? {}),
           mode: definition.mode,
           width: definition.transform.width,
           height: definition.transform.height,
@@ -337,14 +415,103 @@ export class RendererThreeVoxelSpriteScene {
     return {
       id: definition.id,
       enhancement,
+      ghostPlate: null,
       frame,
       source: definition.source,
+      transform: definition.transform,
       runtimeCapture,
       retainedObject,
       retainedOriginalVisibility,
+      releaseCanonicalSuppression: null,
       captureSettings: definition.source.kind === 'retained' ? definition.source.capture : null,
       fallbackPreservedCount: 0,
     };
+  }
+
+  #buildGhostEntry(definition: RendererThreeVoxelSpriteDefinition): Entry {
+    if (definition.source.kind !== 'retained') {
+      throw new TypeError('ghost-plate requires a retained source; prepared frames remain available to ordinary proxy modes');
+    }
+    const retainedObject = this.#backend.objectFor(definition.source.handle) ?? null;
+    if (retainedObject === null) {
+      throw new MissingSourceError(`retained handle ${String(definition.source.handle)} is unavailable`);
+    }
+    const runtimeCapture = new VoxelSpriteRuntimeCapture(this.#webgl);
+    const appearanceRoot = SkeletonUtils.clone(retainedObject);
+    let presentation: GhostPlatePresentation | null = null;
+    try {
+      retainedObject.updateWorldMatrix(true, true);
+      const clonedLights: THREE.Light[] = [];
+      appearanceRoot.traverse((object) => {
+        if (object instanceof THREE.Light) clonedLights.push(object);
+      });
+      for (const light of clonedLights) light.removeFromParent();
+      appearanceRoot.matrix.copy(retainedObject.matrixWorld);
+      appearanceRoot.matrixAutoUpdate = false;
+      appearanceRoot.visible = true;
+      appearanceRoot.traverse((object) => {
+        if (isRenderable(object)) object.layers.enable(0);
+      });
+      appearanceRoot.updateWorldMatrix(true, true);
+      const captureScene = new THREE.Scene();
+      captureScene.add(appearanceRoot);
+      const bounds = new THREE.Box3().setFromObject(appearanceRoot, true);
+      if (bounds.isEmpty()) throw new CaptureSourceError('retained source bounds are empty');
+      const center = bounds.getCenter(new THREE.Vector3());
+      const size = bounds.getSize(new THREE.Vector3());
+      const camera = captureCamera(definition.source.capture, center, size);
+      const disposeLighting = definition.source.capture.lighting?.mode === 'scene'
+        ? addClonedSceneLights(this.#backend.scene, captureScene)
+        : addStudioRig(
+            captureScene,
+            camera,
+            center,
+            size,
+            studioLighting(definition.source.capture.lighting),
+          );
+      const receipt = runtimeCapture.capture({
+        scene: captureScene,
+        camera,
+        width: definition.source.capture.resolution,
+        height: definition.source.capture.resolution,
+        bounds,
+      });
+      disposeLighting();
+      captureScene.remove(appearanceRoot);
+      if (!receipt.applied || receipt.frame === null) {
+        throw new CaptureSourceError(receipt.diagnostics[0]?.message ?? 'runtime capture failed');
+      }
+      presentation = new GhostPlatePresentation({
+        appearanceRoot,
+        colorTexture: receipt.frame.descriptor.textures.color,
+        coverageTexture: receipt.frame.descriptor.textures.coverage,
+        projectionKind: camera instanceof THREE.PerspectiveCamera ? 'perspective' : 'orthographic',
+        ghostCameraWorld: camera.matrixWorld.clone(),
+        ghostProjection: camera.projectionMatrix.clone(),
+        bounds,
+        transform: definition.transform,
+        config: validatedGhostConfig(definition.config ?? {}),
+      });
+      return {
+        id: definition.id,
+        enhancement: null,
+        ghostPlate: presentation,
+        frame: receipt.frame,
+        source: definition.source,
+        transform: definition.transform,
+        runtimeCapture,
+        retainedObject,
+        retainedOriginalVisibility: null,
+        releaseCanonicalSuppression: null,
+        captureSettings: definition.source.capture,
+        fallbackPreservedCount: 0,
+      };
+    } catch (cause) {
+      presentation?.dispose();
+      if (presentation === null) disposeClonedSkeletons(appearanceRoot);
+      runtimeCapture.dispose();
+      throw cause;
+    }
   }
 
   #preparedFrame(input: RendererThreeVoxelSpritePreparedFrame): VoxelSpriteFrame {
@@ -410,6 +577,7 @@ export class RendererThreeVoxelSpriteScene {
   ): ReturnType<VoxelSpriteRuntimeCapture['capture']> {
     const visibility = new Map<THREE.Object3D, boolean>();
     const lightVisibility = new Map<THREE.Light, boolean>();
+    const sourceLayers = new Map<THREE.Object3D, number>();
     this.#backend.scene.traverse((object) => {
       if (isRenderable(object)) visibility.set(object, object.visible);
       if (object instanceof THREE.Light) lightVisibility.set(object, object.visible);
@@ -420,6 +588,11 @@ export class RendererThreeVoxelSpriteScene {
       for (const object of visibility.keys()) {
         if (!isDescendantOrSelf(object, source)) object.visible = false;
       }
+      source.traverse((object) => {
+        if (!isRenderable(object)) return;
+        sourceLayers.set(object, object.layers.mask);
+        object.layers.enable(0);
+      });
       source.visible = true;
       source.updateWorldMatrix(true, true);
       const bounds = new THREE.Box3().setFromObject(source, true);
@@ -448,18 +621,50 @@ export class RendererThreeVoxelSpriteScene {
       disposeStudioRig();
       for (const [light, visible] of lightVisibility) light.visible = visible;
       for (const [object, visible] of visibility) object.visible = visible;
+      for (const [object, mask] of sourceLayers) object.layers.mask = mask;
       source.visible = sourceVisibility;
     }
   }
 
   #disposeEntry(entry: Entry): void {
-    this.#backend.scene.remove(entry.enhancement.object);
-    entry.enhancement.dispose();
+    this.#backend.scene.remove(presentationObject(entry));
+    entry.enhancement?.dispose();
+    entry.ghostPlate?.dispose();
     entry.runtimeCapture?.dispose();
+    entry.releaseCanonicalSuppression?.();
+    entry.releaseCanonicalSuppression = null;
     if (entry.runtimeCapture === null) entry.frame.dispose();
     if (entry.retainedObject !== null && entry.retainedOriginalVisibility !== null) {
       entry.retainedObject.visible = entry.retainedOriginalVisibility;
     }
+  }
+
+  #acquireCanonicalSuppression(source: THREE.Object3D): () => void {
+    const existing = this.#canonicalSuppressions.get(source);
+    if (existing !== undefined) {
+      existing.count += 1;
+      return () => this.#releaseCanonicalSuppression(source);
+    }
+    const layerZeroEnabled = new Map<THREE.Object3D, boolean>();
+    source.traverse((object) => {
+      if (!isRenderable(object)) return;
+      layerZeroEnabled.set(object, (object.layers.mask & 1) !== 0);
+      object.layers.disable(0);
+    });
+    this.#canonicalSuppressions.set(source, { count: 1, layerZeroEnabled });
+    return () => this.#releaseCanonicalSuppression(source);
+  }
+
+  #releaseCanonicalSuppression(source: THREE.Object3D): void {
+    const suppression = this.#canonicalSuppressions.get(source);
+    if (suppression === undefined) return;
+    suppression.count -= 1;
+    if (suppression.count > 0) return;
+    for (const [object, enabled] of suppression.layerZeroEnabled) {
+      if (enabled) object.layers.enable(0);
+      else object.layers.disable(0);
+    }
+    this.#canonicalSuppressions.delete(source);
   }
 
   #applied(): RendererThreeVoxelSpriteReceipt {
@@ -508,6 +713,7 @@ function validatedCapture(input: RendererThreeVoxelSpriteCaptureSettings): Rende
   bounded(input.elevationDegrees, -89, 89, 'capture elevation');
   bounded(input.near, 0.001, 100, 'capture near');
   bounded(input.far, input.near + 0.001, 10_000, 'capture far');
+  bounded(input.fieldOfViewDegrees ?? 35, 10, 120, 'capture field of view');
   const lighting = input.lighting?.mode === 'scene'
     ? Object.freeze({ mode: 'scene' as const })
     : studioLighting(input.lighting);
@@ -624,7 +830,12 @@ function captureCamera(
   center: THREE.Vector3,
   size: THREE.Vector3,
 ): THREE.PerspectiveCamera {
-  const camera = new THREE.PerspectiveCamera(35, 1, settings.near, settings.far);
+  const camera = new THREE.PerspectiveCamera(
+    settings.fieldOfViewDegrees ?? 35,
+    1,
+    settings.near,
+    settings.far,
+  );
   const azimuth = THREE.MathUtils.degToRad(settings.azimuthDegrees);
   const elevation = THREE.MathUtils.degToRad(settings.elevationDegrees);
   const radius = Math.max(size.length() * 1.7, 1);
@@ -636,6 +847,84 @@ function captureCamera(
   camera.lookAt(center);
   camera.updateMatrixWorld(true);
   return camera;
+}
+
+function presentationObject(entry: Entry): THREE.Object3D {
+  return entry.ghostPlate?.object ?? entry.enhancement!.object;
+}
+
+function enhancementConfigPatch(
+  patch: RendererThreeVoxelSpriteConfigPatch,
+): Partial<VoxelSpriteEnhancementConfig> {
+  const {
+    ghostDepthRetention: _depthRetention,
+    ghostAnchorPolicy: _anchorPolicy,
+    ghostAnchorValue: _anchorValue,
+    ghostPlateMapping: _plateMapping,
+    ...enhancement
+  } = patch;
+  return enhancement;
+}
+
+function ghostConfigPatch(patch: RendererThreeVoxelSpriteConfigPatch): Partial<GhostPlateConfig> {
+  const allowed = new Set([
+    'ghostDepthRetention',
+    'ghostAnchorPolicy',
+    'ghostAnchorValue',
+    'ghostPlateMapping',
+  ]);
+  const unsupported = Object.keys(patch).filter((key) => !allowed.has(key));
+  if (unsupported.length > 0) {
+    throw new TypeError(`ghost-plate configure does not accept ${unsupported.join(', ')}`);
+  }
+  return {
+    ...(patch.ghostDepthRetention === undefined ? {} : { depthRetention: patch.ghostDepthRetention }),
+    ...(patch.ghostAnchorPolicy === undefined ? {} : { anchorPolicy: patch.ghostAnchorPolicy }),
+    ...(patch.ghostAnchorValue === undefined ? {} : { anchorValue: patch.ghostAnchorValue }),
+    ...(patch.ghostPlateMapping === undefined ? {} : { plateMapping: patch.ghostPlateMapping }),
+  };
+}
+
+function validatedGhostConfig(patch: RendererThreeVoxelSpriteConfigPatch): GhostPlateConfig {
+  const config: GhostPlateConfig = {
+    depthRetention: patch.ghostDepthRetention ?? 0.12,
+    anchorPolicy: patch.ghostAnchorPolicy ?? 'bounds-center',
+    anchorValue: patch.ghostAnchorValue ?? 0.5,
+    plateMapping: patch.ghostPlateMapping ?? 'plate-locked',
+  };
+  ghostConfigPatch(patch);
+  return config;
+}
+
+function addClonedSceneLights(source: THREE.Scene, target: THREE.Scene): () => void {
+  const clones: THREE.Object3D[] = [];
+  source.updateWorldMatrix(true, true);
+  source.traverse((object) => {
+    if (!(object instanceof THREE.Light) || !object.visible) return;
+    const clone = object.clone(false) as THREE.Light;
+    object.matrixWorld.decompose(clone.position, clone.quaternion, clone.scale);
+    clone.matrixAutoUpdate = true;
+    target.add(clone);
+    clones.push(clone);
+    if ((object instanceof THREE.DirectionalLight || object instanceof THREE.SpotLight)
+      && (clone instanceof THREE.DirectionalLight || clone instanceof THREE.SpotLight)) {
+      object.target.updateWorldMatrix(true, false);
+      const targetClone = new THREE.Object3D();
+      object.target.matrixWorld.decompose(targetClone.position, targetClone.quaternion, targetClone.scale);
+      clone.target = targetClone;
+      target.add(targetClone);
+      clones.push(targetClone);
+    }
+  });
+  return () => target.remove(...clones);
+}
+
+function disposeClonedSkeletons(root: THREE.Object3D): void {
+  const skeletons = new Set<THREE.Skeleton>();
+  root.traverse((object) => {
+    if (object instanceof THREE.SkinnedMesh) skeletons.add(object.skeleton);
+  });
+  for (const skeleton of skeletons) skeleton.dispose();
 }
 
 function isRenderable(object: THREE.Object3D): boolean {

@@ -38,12 +38,17 @@ export interface RustyApplicationCameraPose {
   readonly yawDegrees: number;
 }
 
-export type RustyApplicationVoxelSpriteMode =
+/** The ordinary five-value proxy enhancement mode set remains stable. */
+export type RustyApplicationVoxelSpriteEnhancementMode =
   | 'sprite'
   | 'relit'
   | 'depth-parallax'
   | 'sprite-splat'
   | 'full-splat';
+
+export type RustyApplicationVoxelSpriteMode =
+  | RustyApplicationVoxelSpriteEnhancementMode
+  | 'ghost-plate';
 
 export interface RustyApplicationVoxelSpriteCaptureSettings {
   readonly resolution: number;
@@ -51,6 +56,7 @@ export interface RustyApplicationVoxelSpriteCaptureSettings {
   readonly elevationDegrees: number;
   readonly near: number;
   readonly far: number;
+  readonly fieldOfViewDegrees?: number;
   /** Defaults to an isolated capture-light rig with readable lighting. */
   readonly lighting?: RustyApplicationVoxelSpriteCaptureLighting;
 }
@@ -109,7 +115,19 @@ export interface RustyApplicationVoxelSpriteConfig {
   readonly ambientColor: readonly [number, number, number];
   readonly lightColor: readonly [number, number, number];
   readonly lightDirection: readonly [number, number, number];
+  readonly ghostDepthRetention: number;
+  readonly ghostAnchorPolicy: 'bounds-center' | 'bounds-normalized';
+  readonly ghostAnchorValue: number;
+  readonly ghostPlateMapping: 'plate-locked' | 'projective-surface';
 }
+
+/** The normalized configuration reported by the ordinary five-mode enhancement. */
+export type RustyApplicationVoxelSpriteEnhancementConfig = Omit<
+  RustyApplicationVoxelSpriteConfig,
+  'mode' | 'ghostDepthRetention' | 'ghostAnchorPolicy' | 'ghostAnchorValue' | 'ghostPlateMapping'
+> & {
+  readonly mode: RustyApplicationVoxelSpriteEnhancementMode;
+};
 
 export interface RustyApplicationVoxelSpritePreparedFrame {
   readonly width: number;
@@ -169,8 +187,8 @@ export interface RustyApplicationVoxelSpriteDiagnostic {
 export interface RustyApplicationVoxelSpriteEnhancementReadout {
   readonly schemaVersion: 1;
   readonly revision: number;
-  readonly mode: RustyApplicationVoxelSpriteMode;
-  readonly config: RustyApplicationVoxelSpriteConfig;
+  readonly mode: RustyApplicationVoxelSpriteEnhancementMode;
+  readonly config: RustyApplicationVoxelSpriteEnhancementConfig;
   readonly captureCpuSubmissionMilliseconds: number | null;
   readonly steadyStateCpuSubmissionMilliseconds: number | null;
   readonly captureBasis: {
@@ -207,6 +225,39 @@ export interface RustyApplicationVoxelSpriteEnhancementReadout {
   ];
 }
 
+export interface RustyApplicationVoxelSpriteGhostPlateReadout {
+  readonly schemaVersion: 1;
+  readonly enabled: boolean;
+  readonly fallbackActive: boolean;
+  readonly fallbackReason: null | 'prepared-source-unsupported';
+  readonly matchedPose: boolean;
+  readonly projection: 'perspective' | 'orthographic';
+  readonly captureBasis: {
+    readonly position: readonly [number, number, number];
+    readonly right: readonly [number, number, number];
+    readonly up: readonly [number, number, number];
+    readonly forward: readonly [number, number, number];
+  };
+  readonly sourceViewBasis: {
+    readonly position: readonly [number, number, number];
+    readonly right: readonly [number, number, number];
+    readonly up: readonly [number, number, number];
+    readonly forward: readonly [number, number, number];
+  };
+  readonly depthRetention: number;
+  readonly anchorPolicy: 'bounds-center' | 'bounds-normalized';
+  readonly anchorValue: number;
+  readonly anchorDepth: number;
+  readonly plateMapping: 'plate-locked' | 'projective-surface';
+  readonly angularOffsetDegrees: number | null;
+  readonly expectedDrawCalls: number;
+  readonly meshCount: number;
+  readonly materialResourceCount: number;
+  readonly borrowedTextureCount: number;
+  readonly disposed: boolean;
+  readonly limitations: readonly string[];
+}
+
 export interface RustyApplicationVoxelSpriteReadout {
   readonly schemaVersion: 1;
   readonly revision: number;
@@ -216,7 +267,9 @@ export interface RustyApplicationVoxelSpriteReadout {
     readonly sourceHandle: number | null;
     readonly capture: RustyApplicationVoxelSpriteCaptureSettings | null;
     readonly fallbackPreservedCount: number;
-    readonly enhancement: RustyApplicationVoxelSpriteEnhancementReadout;
+    readonly presentation: 'enhancement' | 'ghost-plate';
+    readonly enhancement: RustyApplicationVoxelSpriteEnhancementReadout | null;
+    readonly ghostPlate: RustyApplicationVoxelSpriteGhostPlateReadout | null;
   }[];
   readonly disposed: boolean;
 }
@@ -772,7 +825,10 @@ async function mountRustyApplicationWithEnvironment(
             definition as unknown as Parameters<typeof concrete.replace>[0],
           ),
         configure: (id: string, patch: Partial<RustyApplicationVoxelSpriteConfig>) =>
-          requireExperiment().configure(id, patch),
+          requireExperiment().configure(
+            id,
+            patch as Parameters<typeof concrete.configure>[1],
+          ),
         recapture: (id: string, settings?: RustyApplicationVoxelSpriteCaptureSettings) =>
           requireExperiment().recapture(id, settings),
         destroy: (id: string) => requireExperiment().destroy(id),

@@ -24,9 +24,9 @@ import {
   type RendererBrowserSurfacePickDiagnostic,
   type RendererBrowserSurfaceSubmissionStatistics,
   type RendererThreeVoxelSpriteDefinition,
+  type RendererThreeVoxelSpriteConfigPatch,
   type RendererThreeVoxelSpriteReceipt,
   type RendererThreeVoxelSpriteSceneReadout,
-  type VoxelSpriteEnhancementConfig,
   type MeshResourceSource,
   type TextureResourceSource,
 } from '@rusty-engine/renderer-three/backend';
@@ -87,7 +87,7 @@ export interface RendererVoxelSpriteExperiment {
   readonly replace: (definition: RendererVoxelSpriteDefinition) => RendererVoxelSpriteReceipt;
   readonly configure: (
     id: string,
-    patch: Partial<VoxelSpriteEnhancementConfig>,
+    patch: RendererThreeVoxelSpriteConfigPatch,
   ) => RendererVoxelSpriteReceipt;
   readonly recapture: (
     id: string,

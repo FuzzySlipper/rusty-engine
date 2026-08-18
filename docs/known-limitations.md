@@ -30,6 +30,19 @@ downstream repositories.
   Angle-conditioned consumers may align neighboring captures onto one held
   card and assign opaque, complementary-dither, or alpha transition weights.
   These are experimental presentation controls, not multi-view reconstruction.
+  Retained-only `ghost-plate` mode freezes an isolated clone at capture time,
+  projects captured color and coverage onto that same pose, and compresses its
+  source-camera depth while preserving the exact source-view projection.
+  Perspective captures scale ray x/y with compressed depth; orthographic
+  captures compress z only. Plate-locked and source-projective mappings are
+  available. A reference-counted renderer layer lease suppresses the canonical
+  hierarchy from main color without changing its visibility, materials,
+  animation, or transform, and restores the layer on final disposal. Ghost
+  mode rejects prepared frames because their current metadata lacks the exact
+  projection matrix. It requires one complete retained visual hierarchy, holds
+  one pose until explicit recapture, and does not yet provide source-shell
+  rejection, regional depth, sector scheduling, animation cadence,
+  stylization, offline capture, or GPU timing.
   It does not yet add viewer-biased splat axes or custom-material world fog/tint.
   Splat density is independent from the base/depth-parallax sample grid and
   depth quantization; alpha and additive modes disable depth writes but do not
@@ -43,9 +56,13 @@ downstream repositories.
 - **Detection:** Inspect `createVoxelSpriteExperiment().readout()` and run
   `./scripts/verify-render.sh`; unit coverage exercises prepared ownership,
   retained-source isolation, fail-atomic source replacement, failed-recapture
-  fallback, parent-safe capture-held/blended preparation, and disposal. A Chromium proof uses
+  fallback, parent-safe capture-held/blended preparation, frozen multipart
+  ghost poses, canonical-source isolation, exact CPU projection invariants,
+  failed ghost recapture preservation, and disposal. A Chromium proof uses
   both the retained-capture and admitted-prepared-texture producers through the
-  bundled application-host package root. The reviewed CraftSurvive task 7006
+  bundled application-host package root; a real-WebGL ghost proof compiles the
+  mesh-basic skin/morph/fog path and observes a changed off-axis image without
+  a GL error. The reviewed CraftSurvive task 7006
   product run and the
   [campaign evaluation](topics/runtime-voxel-sprite-evaluation.md) found no
   enhancement mode ready for promotion.
@@ -54,7 +71,7 @@ downstream repositories.
   depth-banded splat layers. Do not add offline caching, keyed-animation
   policy, or another public contract before runtime cost or product evidence
   requires it.
-- **Last reviewed:** 2026-08-17 / codex
+- **Last reviewed:** 2026-08-18 / codex
 
 ## Authored sky background
 

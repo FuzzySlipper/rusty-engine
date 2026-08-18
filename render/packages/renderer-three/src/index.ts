@@ -7,4 +7,5 @@ export * from './static-room.js';
 export * from './sprite-material.js';
 export * from './voxel-sprite-capture.js';
 export * from './voxel-sprite-enhancement.js';
+export * from './voxel-sprite-ghost-plate.js';
 export * from './voxel-sprite-scene.js';

@@ -134,6 +134,18 @@ splats also disable depth writes and use additive blending. Instances remain
 unsorted within their single draw, so alpha compositing is approximate. None is
 a production default or a renderer-neutral gameplay/content property.
 
+The next campaign mechanism is a separate retained-only `ghost-plate` mode.
+It captures and displays one isolated frozen clone of the exact retained pose,
+then compresses that mesh along source-camera rays while preserving its
+source-view projection. Captured color remains dominant through plate-locked
+or source-projective mapping while the warped mesh retains ordinary world
+depth, fog, and occlusion. This is a style probe, not recovered geometry:
+prepared frames are rejected, one complete hierarchy and one explicit capture
+view are required, and sectors, held-animation cadence, shell rejection,
+regional depth, stylization, and offline baking remain outside the first
+slice. Technical acceptance does not change the campaign's visual verdict;
+CraftSurvive must still establish whether the haunted-plate look is useful.
+
 ## Failure ownership
 
 - **Source/capture:** dark rendered color, material/lighting dependence, and the

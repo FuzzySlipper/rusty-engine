@@ -11,3 +11,4 @@ export * from './voxel-surface-material.js';
 export * from './particle-sink.js';
 export * from './voxel-sprite-scene.js';
 export * from './voxel-sprite-enhancement.js';
+export * from './voxel-sprite-ghost-plate.js';
