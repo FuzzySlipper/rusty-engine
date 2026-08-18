@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-import { VoxelSpriteFrame } from './voxel-sprite-capture.js';
+import { VoxelSpriteFrame, type VoxelSpriteCaptureBasis } from './voxel-sprite-capture.js';
 
 export const VOXEL_SPRITE_ENHANCEMENT_MODES = Object.freeze([
   'sprite',
@@ -14,6 +14,12 @@ export type VoxelSpriteEnhancementMode = typeof VOXEL_SPRITE_ENHANCEMENT_MODES[n
 export type VoxelSpriteDepthScale = 'normalized' | 'world';
 export type VoxelSpriteLightingMode = 'captured' | 'normal';
 export type VoxelSpriteSplatBlendMode = 'depth-write' | 'alpha-blend' | 'additive';
+export type VoxelSpriteOrientationPolicy =
+  | 'camera-facing'
+  | 'capture-held'
+  | 'capture-camera-blend';
+export type VoxelSpriteOrientationElevationPolicy = 'capture' | 'world-upright';
+export type VoxelSpriteRepresentationTransition = 'opaque' | 'dither' | 'alpha';
 
 export interface VoxelSpriteEnhancementConfig {
   readonly mode: VoxelSpriteEnhancementMode;
@@ -24,12 +30,19 @@ export interface VoxelSpriteEnhancementConfig {
   /** Independent construction-time sampling grid used by instanced splats. */
   readonly splatColumns: number;
   readonly splatRows: number;
+  /** Expands subject-relative front-to-back relief from the rear card plane. */
   readonly depthAmplitude: number;
-  /** Maximum normalized depth contribution before scale and amplitude are applied. */
+  /** Expands captured surface variation around the subject midpoint before amplitude is applied. */
+  readonly depthContrast: number;
+  /** Maximum subject-relative depth contribution before scale and amplitude are applied. */
   readonly depthClamp: number;
   readonly depthScale: VoxelSpriteDepthScale;
   /** Zero preserves continuous depth; positive values quantize the visible displacement only. */
   readonly depthQuantizationSteps: number;
+  /** Maximum UV travel for bounded parallax-occlusion lookup on the connected card. */
+  readonly parallaxOcclusionScale: number;
+  /** Zero disables POM; otherwise the fixed lookup budget is 4 through 32 steps. */
+  readonly parallaxOcclusionSteps: number;
   readonly depthDilationTexels: number;
   readonly depthConfidenceThreshold: number;
   readonly splatFootprint: number;
@@ -38,6 +51,19 @@ export interface VoxelSpriteEnhancementConfig {
   readonly splatBlendMode: VoxelSpriteSplatBlendMode;
   readonly normalInfluence: number;
   readonly normalOrientationBlend: number;
+  /** Controls whether the admitted capture view is held as the viewer moves locally. */
+  readonly orientationPolicy: VoxelSpriteOrientationPolicy;
+  /** Camera-facing contribution used only by `capture-camera-blend`. */
+  readonly orientationBlend: number;
+  /** Preserve the captured elevation or retain only its azimuth. */
+  readonly orientationElevationPolicy: VoxelSpriteOrientationElevationPolicy;
+  /** World-yaw correction for aligning neighboring captures onto one held card. */
+  readonly orientationAzimuthOffsetDegrees: number;
+  /** Per-representation transition used by angle-conditioned multi-view consumers. */
+  readonly representationTransition: VoxelSpriteRepresentationTransition;
+  readonly representationWeight: number;
+  /** Start of this representation's complementary dither interval in [0, 1]. */
+  readonly representationDitherOffset: number;
   readonly baseSpriteContribution: number;
   readonly viewAngleFalloff: number;
   /** `captured` preserves capture color; `normal` modulates it with the normal pass. */
@@ -62,6 +88,10 @@ export interface VoxelSpriteEnhancementReadout {
   readonly config: VoxelSpriteEnhancementConfig;
   readonly captureCpuSubmissionMilliseconds: number | null;
   readonly steadyStateCpuSubmissionMilliseconds: number | null;
+  /** Admitted world-space capture basis; contains no backend objects. */
+  readonly captureBasis: VoxelSpriteCaptureBasis;
+  /** Unsigned angle between the admitted capture view and current object-to-camera direction. */
+  readonly angularOffsetDegrees: number | null;
   readonly expectedDrawCalls: number;
   readonly geometrySampleCount: number;
   readonly frameTextureBytes: number;
@@ -98,9 +128,12 @@ const DEFAULT_CONFIG: VoxelSpriteEnhancementConfig = Object.freeze({
   splatColumns: 32,
   splatRows: 32,
   depthAmplitude: 0.35,
+  depthContrast: 4,
   depthClamp: 1,
   depthScale: 'normalized',
   depthQuantizationSteps: 8,
+  parallaxOcclusionScale: 0.06,
+  parallaxOcclusionSteps: 16,
   depthDilationTexels: 0,
   depthConfidenceThreshold: 0.5,
   splatFootprint: 1,
@@ -109,6 +142,13 @@ const DEFAULT_CONFIG: VoxelSpriteEnhancementConfig = Object.freeze({
   splatBlendMode: 'depth-write',
   normalInfluence: 0.65,
   normalOrientationBlend: 0.35,
+  orientationPolicy: 'camera-facing',
+  orientationBlend: 0.5,
+  orientationElevationPolicy: 'capture',
+  orientationAzimuthOffsetDegrees: 0,
+  representationTransition: 'opaque',
+  representationWeight: 1,
+  representationDitherOffset: 0,
   baseSpriteContribution: 0.7,
   viewAngleFalloff: 0,
   lightingMode: 'captured',
@@ -140,10 +180,18 @@ interface EnhancementUniforms extends Record<string, THREE.IUniform> {
   readonly objectSize: THREE.IUniform<THREE.Vector2>;
   readonly sampleGrid: THREE.IUniform<THREE.Vector2>;
   readonly depthAmplitude: THREE.IUniform<number>;
+  readonly depthContrast: THREE.IUniform<number>;
   readonly depthClamp: THREE.IUniform<number>;
-  readonly depthRange: THREE.IUniform<number>;
+  readonly captureNear: THREE.IUniform<number>;
+  readonly captureDepthRange: THREE.IUniform<number>;
+  readonly reliefRearDepth: THREE.IUniform<number>;
+  readonly reliefDepthRange: THREE.IUniform<number>;
   readonly useWorldDepth: THREE.IUniform<number>;
   readonly depthQuantizationSteps: THREE.IUniform<number>;
+  readonly parallaxOcclusionScale: THREE.IUniform<number>;
+  readonly parallaxOcclusionSteps: THREE.IUniform<number>;
+  readonly parallaxOcclusionEnabled: THREE.IUniform<number>;
+  readonly viewerPositionLocal: THREE.IUniform<THREE.Vector3>;
   readonly depthDilationTexels: THREE.IUniform<number>;
   readonly depthConfidenceThreshold: THREE.IUniform<number>;
   readonly splatFootprint: THREE.IUniform<number>;
@@ -161,6 +209,9 @@ interface EnhancementUniforms extends Record<string, THREE.IUniform> {
   readonly lightColor: THREE.IUniform<THREE.Color>;
   readonly lightDirection: THREE.IUniform<THREE.Vector3>;
   readonly normalLighting: THREE.IUniform<number>;
+  readonly representationTransitionMode: THREE.IUniform<number>;
+  readonly representationWeight: THREE.IUniform<number>;
+  readonly representationDitherOffset: THREE.IUniform<number>;
 }
 
 /**
@@ -177,6 +228,7 @@ export class VoxelSpriteEnhancement {
   readonly #splatMesh: THREE.Mesh;
   readonly #uniforms: EnhancementUniforms;
   #captureCpuSubmissionMilliseconds: number | null;
+  #angularOffsetDegrees: number | null = null;
   #config: VoxelSpriteEnhancementConfig;
   #disposed = false;
   #frame: VoxelSpriteFrame;
@@ -250,16 +302,44 @@ export class VoxelSpriteEnhancement {
     return this.readout();
   }
 
-  /** Keeps the representation camera-facing without taking camera or scene authority. */
-  faceCamera(camera: THREE.Camera): void {
+  /** Resolves the configured representation orientation without taking camera or scene authority. */
+  prepare(camera: THREE.Camera): void {
     this.#assertLive();
     if (!(camera instanceof THREE.Camera)) throw new TypeError('camera must be a Three camera');
-    const target = camera.getWorldQuaternion(new THREE.Quaternion());
+    camera.updateWorldMatrix(true, false);
+    this.object.updateWorldMatrix(true, false);
+    const cameraWorld = camera.getWorldQuaternion(new THREE.Quaternion());
+    let heldWorld = captureHeldQuaternion(
+      this.#frame.descriptor.capture.basis,
+      this.#config.orientationElevationPolicy,
+    );
+    if (heldWorld !== null && this.#config.orientationAzimuthOffsetDegrees !== 0) {
+      heldWorld = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 1, 0),
+        THREE.MathUtils.degToRad(this.#config.orientationAzimuthOffsetDegrees),
+      ).multiply(heldWorld).normalize();
+    }
+    const captureViewerDirection = tupleVector(this.#frame.descriptor.capture.basis.forward)
+      .multiplyScalar(-1);
+    const currentViewerDirection = camera.getWorldPosition(new THREE.Vector3())
+      .sub(this.object.getWorldPosition(new THREE.Vector3()));
+    this.#angularOffsetDegrees = finiteAngleDegrees(captureViewerDirection, currentViewerDirection);
+
+    let target = cameraWorld;
+    if (heldWorld !== null && this.#config.orientationPolicy === 'capture-held') {
+      target = heldWorld;
+    } else if (heldWorld !== null && this.#config.orientationPolicy === 'capture-camera-blend') {
+      target = heldWorld.clone().slerp(cameraWorld, this.#config.orientationBlend).normalize();
+    }
     if (this.object.parent !== null) {
       const parent = this.object.parent.getWorldQuaternion(new THREE.Quaternion()).invert();
-      target.premultiply(parent);
+      target = target.clone().premultiply(parent);
     }
     this.object.quaternion.copy(target);
+    this.object.updateWorldMatrix(true, false);
+    this.#uniforms.viewerPositionLocal.value.copy(
+      this.object.worldToLocal(camera.getWorldPosition(new THREE.Vector3())),
+    );
   }
 
   recordSteadyStateFrame(milliseconds: number): VoxelSpriteEnhancementReadout {
@@ -282,6 +362,8 @@ export class VoxelSpriteEnhancement {
       config: this.#config,
       captureCpuSubmissionMilliseconds: this.#captureCpuSubmissionMilliseconds,
       steadyStateCpuSubmissionMilliseconds: this.#steadyStateCpuSubmissionMilliseconds,
+      captureBasis: this.#frame.descriptor.capture.basis,
+      angularOffsetDegrees: this.#angularOffsetDegrees,
       expectedDrawCalls: Number(baseVisible) + Number(splatVisible),
       geometrySampleCount:
         (baseVisible ? this.#config.sampleColumns * this.#config.sampleRows : 0)
@@ -313,17 +395,22 @@ export class VoxelSpriteEnhancement {
     const mode = this.#config.mode;
     this.#baseMesh.visible = mode !== 'full-splat';
     this.#splatMesh.visible = mode === 'sprite-splat' || mode === 'full-splat';
-    this.#uniforms.baseDepthDisplacement.value = mode === 'depth-parallax' ? 1 : 0;
+    const pomEnabled = mode === 'depth-parallax' && this.#config.parallaxOcclusionSteps > 0;
+    this.#uniforms.baseDepthDisplacement.value = mode === 'depth-parallax' && !pomEnabled ? 1 : 0;
+    this.#uniforms.parallaxOcclusionEnabled.value = pomEnabled ? 1 : 0;
     this.#uniforms.baseSpriteContribution.value = mode === 'sprite-splat'
       ? this.#config.baseSpriteContribution
       : 1;
-    this.#baseMaterial.depthWrite = mode !== 'sprite-splat';
-    this.#baseMaterial.transparent = mode === 'sprite-splat';
-    this.#splatMaterial.depthWrite = this.#config.splatBlendMode === 'depth-write';
+    const alphaTransition = this.#config.representationTransition === 'alpha';
+    this.#baseMaterial.depthWrite = mode !== 'sprite-splat' && !alphaTransition;
+    this.#baseMaterial.transparent = mode === 'sprite-splat' || alphaTransition;
+    this.#splatMaterial.depthWrite = this.#config.splatBlendMode === 'depth-write'
+      && !alphaTransition;
     this.#splatMaterial.blending = this.#config.splatBlendMode === 'additive'
       ? THREE.AdditiveBlending
       : THREE.NormalBlending;
     this.#splatMaterial.needsUpdate = true;
+    this.#baseMaterial.needsUpdate = true;
   }
 
   #assertLive(): void {
@@ -354,8 +441,13 @@ function validatedConfig(input: VoxelSpriteEnhancementConfig): VoxelSpriteEnhanc
   integer(input.splatColumns, 8, 512, 'splatColumns');
   integer(input.splatRows, 8, 512, 'splatRows');
   bounded(input.depthAmplitude, 0, 4, 'depthAmplitude');
+  bounded(input.depthContrast, 1, 16, 'depthContrast');
   bounded(input.depthClamp, 0, 1, 'depthClamp');
   integer(input.depthQuantizationSteps, 0, 64, 'depthQuantizationSteps');
+  bounded(input.parallaxOcclusionScale, 0, 0.25, 'parallaxOcclusionScale');
+  if (input.parallaxOcclusionSteps !== 0) {
+    integer(input.parallaxOcclusionSteps, 4, 32, 'parallaxOcclusionSteps');
+  }
   bounded(input.depthDilationTexels, 0, 4, 'depthDilationTexels');
   bounded(input.depthConfidenceThreshold, 0, 0.99, 'depthConfidenceThreshold');
   bounded(input.splatFootprint, 0.25, 4, 'splatFootprint');
@@ -366,6 +458,19 @@ function validatedConfig(input: VoxelSpriteEnhancementConfig): VoxelSpriteEnhanc
   }
   bounded(input.normalInfluence, 0, 1, 'normalInfluence');
   bounded(input.normalOrientationBlend, 0, 1, 'normalOrientationBlend');
+  if (!['camera-facing', 'capture-held', 'capture-camera-blend'].includes(input.orientationPolicy)) {
+    throw new RangeError('orientationPolicy must be camera-facing, capture-held, or capture-camera-blend');
+  }
+  bounded(input.orientationBlend, 0, 1, 'orientationBlend');
+  if (!['capture', 'world-upright'].includes(input.orientationElevationPolicy)) {
+    throw new RangeError('orientationElevationPolicy must be capture or world-upright');
+  }
+  bounded(input.orientationAzimuthOffsetDegrees, -45, 45, 'orientationAzimuthOffsetDegrees');
+  if (!['opaque', 'dither', 'alpha'].includes(input.representationTransition)) {
+    throw new RangeError('representationTransition must be opaque, dither, or alpha');
+  }
+  bounded(input.representationWeight, 0, 1, 'representationWeight');
+  bounded(input.representationDitherOffset, 0, 1, 'representationDitherOffset');
   bounded(input.baseSpriteContribution, 0, 1, 'baseSpriteContribution');
   bounded(input.viewAngleFalloff, 0, 16, 'viewAngleFalloff');
   if (input.lightingMode !== 'captured' && input.lightingMode !== 'normal') {
@@ -437,6 +542,46 @@ function requiredMilliseconds(value: number, name: string): number {
   return value;
 }
 
+function captureHeldQuaternion(
+  basis: VoxelSpriteCaptureBasis,
+  elevationPolicy: VoxelSpriteOrientationElevationPolicy,
+): THREE.Quaternion | null {
+  const backward = tupleVector(basis.forward).multiplyScalar(-1);
+  if (elevationPolicy === 'world-upright') backward.y = 0;
+  if (backward.lengthSq() < 1e-8) return null;
+  backward.normalize();
+
+  const admittedRight = tupleVector(basis.right);
+  const admittedUp = tupleVector(basis.up);
+  const right = elevationPolicy === 'world-upright'
+    ? new THREE.Vector3(0, 1, 0).cross(backward)
+    : admittedRight.clone().addScaledVector(backward, -admittedRight.dot(backward));
+  if (right.lengthSq() < 1e-8) {
+    right.copy(admittedUp).cross(backward);
+  }
+  if (right.lengthSq() < 1e-8) return null;
+  right.normalize();
+  const up = backward.clone().cross(right).normalize();
+  if (elevationPolicy === 'capture' && up.dot(admittedUp) < 0) {
+    right.multiplyScalar(-1);
+    up.multiplyScalar(-1);
+  }
+  return new THREE.Quaternion().setFromRotationMatrix(
+    new THREE.Matrix4().makeBasis(right, up, backward),
+  ).normalize();
+}
+
+function tupleVector(value: readonly [number, number, number]): THREE.Vector3 {
+  return new THREE.Vector3(value[0], value[1], value[2]);
+}
+
+function finiteAngleDegrees(left: THREE.Vector3, right: THREE.Vector3): number | null {
+  if (left.lengthSq() < 1e-8 || right.lengthSq() < 1e-8) return null;
+  const cosine = THREE.MathUtils.clamp(left.normalize().dot(right.normalize()), -1, 1);
+  const angle = THREE.MathUtils.radToDeg(Math.acos(cosine));
+  return Number.isFinite(angle) ? angle : null;
+}
+
 function createUniforms(
   frame: VoxelSpriteFrame,
   config: VoxelSpriteEnhancementConfig,
@@ -450,10 +595,18 @@ function createUniforms(
     objectSize: { value: new THREE.Vector2() },
     sampleGrid: { value: new THREE.Vector2() },
     depthAmplitude: { value: 0 },
+    depthContrast: { value: 1 },
     depthClamp: { value: 1 },
-    depthRange: { value: 1 },
+    captureNear: { value: 0 },
+    captureDepthRange: { value: 1 },
+    reliefRearDepth: { value: 1 },
+    reliefDepthRange: { value: 1 },
     useWorldDepth: { value: 0 },
     depthQuantizationSteps: { value: 0 },
+    parallaxOcclusionScale: { value: 0 },
+    parallaxOcclusionSteps: { value: 0 },
+    parallaxOcclusionEnabled: { value: 0 },
+    viewerPositionLocal: { value: new THREE.Vector3(0, 0, 1) },
     depthDilationTexels: { value: 0 },
     depthConfidenceThreshold: { value: 0 },
     splatFootprint: { value: 1 },
@@ -471,6 +624,9 @@ function createUniforms(
     lightColor: { value: new THREE.Color() },
     lightDirection: { value: new THREE.Vector3() },
     normalLighting: { value: 0 },
+    representationTransitionMode: { value: 0 },
+    representationWeight: { value: 1 },
+    representationDitherOffset: { value: 0 },
   };
   bindFrame(uniforms, frame);
   applyUniformConfig(uniforms, config);
@@ -483,7 +639,11 @@ function bindFrame(uniforms: EnhancementUniforms, frame: VoxelSpriteFrame): void
   uniforms.normalTexture.value = frame.descriptor.textures.normal;
   uniforms.coverageTexture.value = frame.descriptor.textures.coverage;
   uniforms.textureTexelSize.value.set(1 / frame.descriptor.width, 1 / frame.descriptor.height);
-  uniforms.depthRange.value = frame.descriptor.depth.far - frame.descriptor.depth.near;
+  const relief = captureReliefDepth(frame);
+  uniforms.captureNear.value = frame.descriptor.depth.near;
+  uniforms.captureDepthRange.value = frame.descriptor.depth.far - frame.descriptor.depth.near;
+  uniforms.reliefRearDepth.value = relief.rear;
+  uniforms.reliefDepthRange.value = relief.range;
 }
 
 function applyUniformConfig(
@@ -493,9 +653,12 @@ function applyUniformConfig(
   uniforms.objectSize.value.set(config.width, config.height);
   uniforms.sampleGrid.value.set(config.splatColumns, config.splatRows);
   uniforms.depthAmplitude.value = config.depthAmplitude;
+  uniforms.depthContrast.value = config.depthContrast;
   uniforms.depthClamp.value = config.depthClamp;
   uniforms.useWorldDepth.value = config.depthScale === 'world' ? 1 : 0;
   uniforms.depthQuantizationSteps.value = config.depthQuantizationSteps;
+  uniforms.parallaxOcclusionScale.value = config.parallaxOcclusionScale;
+  uniforms.parallaxOcclusionSteps.value = config.parallaxOcclusionSteps;
   uniforms.depthDilationTexels.value = config.depthDilationTexels;
   uniforms.depthConfidenceThreshold.value = config.depthConfidenceThreshold;
   uniforms.splatFootprint.value = config.splatFootprint;
@@ -512,6 +675,11 @@ function applyUniformConfig(
   uniforms.lightColor.value.setRGB(...config.lightColor);
   uniforms.lightDirection.value.set(...config.lightDirection);
   uniforms.normalLighting.value = config.lightingMode === 'normal' ? 1 : 0;
+  uniforms.representationTransitionMode.value = config.representationTransition === 'opaque'
+    ? 0
+    : config.representationTransition === 'dither' ? 1 : 2;
+  uniforms.representationWeight.value = config.representationWeight;
+  uniforms.representationDitherOffset.value = config.representationDitherOffset;
 }
 
 function baseMaterial(uniforms: EnhancementUniforms): THREE.ShaderMaterial {
@@ -537,13 +705,17 @@ function baseMaterial(uniforms: EnhancementUniforms): THREE.ShaderMaterial {
       varying vec2 voxelSpriteUv;
       varying float voxelSpriteConfidence;
       void main() {
-        vec4 color = texture2D(colorTexture, voxelSpriteUv);
-        float coverage = texture2D(coverageTexture, voxelSpriteUv).r * voxelSpriteConfidence;
+        vec2 presentationUv = parallaxOcclusionUv(voxelSpriteUv);
+        vec4 color = texture2D(colorTexture, presentationUv);
+        float coverage = texture2D(coverageTexture, presentationUv).r * voxelSpriteConfidence;
         if (coverage < 0.01 || color.a < 0.01) discard;
-        vec3 normal = decodedNormal(voxelSpriteUv);
+        vec3 normal = decodedNormal(presentationUv);
         vec3 lighting = lightingFor(normal);
         float contribution = baseSpriteContribution;
-        gl_FragColor = vec4(color.rgb * lighting * outputGain, color.a * coverage * contribution);
+        gl_FragColor = vec4(
+          color.rgb * lighting * outputGain,
+          representationAlpha(color.a * coverage * contribution)
+        );
       }
     `,
     transparent: false,
@@ -597,7 +769,7 @@ function splatMaterial(uniforms: EnhancementUniforms): THREE.ShaderMaterial {
         vec3 lighting = lightingFor(normal);
         gl_FragColor = vec4(
           color.rgb * lighting * outputGain,
-          color.a * coverage * voxelSpriteViewWeight * splatOpacity
+          representationAlpha(color.a * coverage * voxelSpriteViewWeight * splatOpacity)
         );
       }
     `,
@@ -617,8 +789,12 @@ const SHARED_VERTEX_HEADER = `
   uniform vec2 objectSize;
   uniform vec2 sampleGrid;
   uniform float depthAmplitude;
+  uniform float depthContrast;
   uniform float depthClamp;
-  uniform float depthRange;
+  uniform float captureNear;
+  uniform float captureDepthRange;
+  uniform float reliefRearDepth;
+  uniform float reliefDepthRange;
   uniform float useWorldDepth;
   uniform float depthQuantizationSteps;
   uniform float depthDilationTexels;
@@ -645,22 +821,64 @@ const SHARED_VERTEX_HEADER = `
     return smoothstep(depthConfidenceThreshold, min(depthConfidenceThreshold + 0.01, 1.0), coverage);
   }
   float visibleDepthOffset(float depth) {
-    float visibleDepth = 1.0 - depth;
+    float sampledViewDepth = captureNear + depth * captureDepthRange;
+    float subjectDepth = clamp(
+      (reliefRearDepth - sampledViewDepth) / reliefDepthRange,
+      0.0,
+      1.0
+    );
+    float visibleDepth = clamp((subjectDepth - 0.5) * depthContrast + 0.5, 0.0, 1.0);
     if (depthQuantizationSteps > 0.5) {
       visibleDepth = floor(visibleDepth * depthQuantizationSteps + 0.5) / depthQuantizationSteps;
     }
-    float scale = mix(1.0, depthRange, useWorldDepth);
-    return min(visibleDepth, depthClamp) * depthAmplitude * scale;
+    float scale = mix(1.0, reliefDepthRange, useWorldDepth);
+    float centeredDepth = min(visibleDepth, depthClamp) - 0.5;
+    return centeredDepth * depthAmplitude * scale;
   }
   vec3 decodedNormal(vec2 sourceUv) {
     return normalize(texture2D(normalTexture, sourceUv).xyz * 2.0 - 1.0);
   }
 `;
 
+function captureReliefDepth(frame: VoxelSpriteFrame): { readonly rear: number; readonly range: number } {
+  const { basis, bounds } = frame.descriptor.capture;
+  const forward = tupleVector(basis.forward).normalize();
+  const camera = tupleVector(basis.position);
+  const minimum = tupleVector(bounds.minimum);
+  const maximum = tupleVector(bounds.maximum);
+  const center = minimum.clone().add(maximum).multiplyScalar(0.5);
+  const extents = maximum.clone().sub(minimum).multiplyScalar(0.5);
+  const centerDepth = center.sub(camera).dot(forward);
+  const radius = Math.abs(forward.x) * extents.x
+    + Math.abs(forward.y) * extents.y
+    + Math.abs(forward.z) * extents.z;
+  const captureNear = frame.descriptor.depth.near;
+  const captureFar = frame.descriptor.depth.far;
+  const front = THREE.MathUtils.clamp(centerDepth - radius, captureNear, captureFar);
+  const rear = THREE.MathUtils.clamp(centerDepth + radius, front, captureFar);
+  return { rear, range: Math.max(rear - front, 1e-4) };
+}
+
 const SHARED_FRAGMENT_HEADER = `
   uniform sampler2D colorTexture;
+  uniform sampler2D depthTexture;
   uniform sampler2D normalTexture;
   uniform sampler2D coverageTexture;
+  uniform vec2 objectSize;
+  uniform float captureNear;
+  uniform float captureDepthRange;
+  uniform float reliefRearDepth;
+  uniform float reliefDepthRange;
+  uniform float depthContrast;
+  uniform float depthClamp;
+  uniform float depthQuantizationSteps;
+  uniform float parallaxOcclusionScale;
+  uniform float parallaxOcclusionSteps;
+  uniform float parallaxOcclusionEnabled;
+  uniform vec3 viewerPositionLocal;
+  uniform float representationTransitionMode;
+  uniform float representationWeight;
+  uniform float representationDitherOffset;
   uniform float normalInfluence;
   uniform float baseSpriteContribution;
   uniform float splatOpacity;
@@ -671,6 +889,61 @@ const SHARED_FRAGMENT_HEADER = `
   uniform vec3 ambientColor;
   uniform vec3 lightColor;
   uniform vec3 lightDirection;
+  float representationAlpha(float sourceAlpha) {
+    if (representationWeight <= 0.0001) discard;
+    if (representationTransitionMode < 0.5) {
+      if (representationWeight < 0.5) discard;
+      return sourceAlpha;
+    }
+    if (representationTransitionMode < 1.5) {
+      float threshold = fract(52.9829189 * fract(dot(
+        floor(gl_FragCoord.xy),
+        vec2(0.06711056, 0.00583715)
+      )));
+      threshold = fract(threshold - representationDitherOffset + 1.0);
+      if (threshold >= representationWeight) discard;
+      return sourceAlpha;
+    }
+    return sourceAlpha * representationWeight;
+  }
+  float reliefHeight(vec2 sourceUv) {
+    float depth = texture2D(depthTexture, sourceUv).r;
+    float sampledViewDepth = captureNear + depth * captureDepthRange;
+    float subjectDepth = clamp(
+      (reliefRearDepth - sampledViewDepth) / reliefDepthRange,
+      0.0,
+      1.0
+    );
+    float visibleDepth = clamp((subjectDepth - 0.5) * depthContrast + 0.5, 0.0, 1.0);
+    if (depthQuantizationSteps > 0.5) {
+      visibleDepth = floor(visibleDepth * depthQuantizationSteps + 0.5) / depthQuantizationSteps;
+    }
+    return min(visibleDepth, depthClamp);
+  }
+  vec2 parallaxOcclusionUv(vec2 sourceUv) {
+    if (parallaxOcclusionEnabled < 0.5 || parallaxOcclusionSteps < 0.5) return sourceUv;
+    vec3 surfacePosition = vec3((sourceUv - 0.5) * objectSize, 0.0);
+    vec3 viewDirection = normalize(viewerPositionLocal - surfacePosition);
+    float layerDepth = 1.0 / parallaxOcclusionSteps;
+    vec2 uvDelta = (viewDirection.xy / max(abs(viewDirection.z), 0.2))
+      * parallaxOcclusionScale / parallaxOcclusionSteps;
+    vec2 currentUv = sourceUv;
+    float traversedDepth = 0.0;
+    for (int index = 0; index < 32; index += 1) {
+      if (float(index) >= parallaxOcclusionSteps || traversedDepth >= reliefHeight(currentUv)) break;
+      currentUv += uvDelta;
+      traversedDepth += layerDepth;
+    }
+    vec2 previousUv = currentUv - uvDelta;
+    float afterDepth = reliefHeight(currentUv) - traversedDepth;
+    float beforeDepth = reliefHeight(previousUv) - (traversedDepth - layerDepth);
+    float denominator = afterDepth - beforeDepth;
+    float weight = abs(denominator) < 0.0001 ? 0.0 : clamp(afterDepth / denominator, 0.0, 1.0);
+    vec2 resolvedUv = mix(currentUv, previousUv, weight);
+    return any(lessThan(resolvedUv, vec2(0.0))) || any(greaterThan(resolvedUv, vec2(1.0)))
+      ? sourceUv
+      : resolvedUv;
+  }
   vec3 decodedNormal(vec2 sourceUv) {
     return normalize(texture2D(normalTexture, sourceUv).xyz * 2.0 - 1.0);
   }

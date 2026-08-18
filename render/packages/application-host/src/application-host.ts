@@ -78,9 +78,12 @@ export interface RustyApplicationVoxelSpriteConfig {
   readonly splatColumns: number;
   readonly splatRows: number;
   readonly depthAmplitude: number;
+  readonly depthContrast: number;
   readonly depthClamp: number;
   readonly depthScale: 'normalized' | 'world';
   readonly depthQuantizationSteps: number;
+  readonly parallaxOcclusionScale: number;
+  readonly parallaxOcclusionSteps: number;
   readonly depthDilationTexels: number;
   readonly depthConfidenceThreshold: number;
   readonly splatFootprint: number;
@@ -89,6 +92,13 @@ export interface RustyApplicationVoxelSpriteConfig {
   readonly splatBlendMode: 'depth-write' | 'alpha-blend' | 'additive';
   readonly normalInfluence: number;
   readonly normalOrientationBlend: number;
+  readonly orientationPolicy: 'camera-facing' | 'capture-held' | 'capture-camera-blend';
+  readonly orientationBlend: number;
+  readonly orientationElevationPolicy: 'capture' | 'world-upright';
+  readonly orientationAzimuthOffsetDegrees: number;
+  readonly representationTransition: 'opaque' | 'dither' | 'alpha';
+  readonly representationWeight: number;
+  readonly representationDitherOffset: number;
   readonly baseSpriteContribution: number;
   readonly viewAngleFalloff: number;
   /** Preserve captured shading or apply the captured normal pass independently of geometry mode. */
@@ -163,6 +173,13 @@ export interface RustyApplicationVoxelSpriteEnhancementReadout {
   readonly config: RustyApplicationVoxelSpriteConfig;
   readonly captureCpuSubmissionMilliseconds: number | null;
   readonly steadyStateCpuSubmissionMilliseconds: number | null;
+  readonly captureBasis: {
+    readonly position: readonly [number, number, number];
+    readonly right: readonly [number, number, number];
+    readonly up: readonly [number, number, number];
+    readonly forward: readonly [number, number, number];
+  };
+  readonly angularOffsetDegrees: number | null;
   readonly expectedDrawCalls: number;
   readonly geometrySampleCount: number;
   readonly frameTextureBytes: number;

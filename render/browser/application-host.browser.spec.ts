@@ -621,6 +621,9 @@ test('public application host exposes a fail-atomic voxel-sprite experiment port
         splatOpacity: 0.4,
         splatBlendMode: 'alpha-blend',
         depthAmplitude: 0.2,
+        orientationPolicy: 'capture-camera-blend',
+        orientationBlend: 0.25,
+        orientationElevationPolicy: 'world-upright',
         lightingMode: 'normal',
         ambientLight: 0.5,
         diffuseLight: 1.2,
@@ -738,6 +741,8 @@ test('public application host exposes a fail-atomic voxel-sprite experiment port
   expect(result.created.readout.entries[0]?.enhancement.config.outputGain).toBe(1.3);
   expect(result.created.readout.entries[0]?.enhancement.config.splatColumns).toBe(24);
   expect(result.created.readout.entries[0]?.enhancement.config.splatOpacity).toBe(0.4);
+  expect(result.created.readout.entries[0]?.enhancement.config.orientationPolicy)
+    .toBe('capture-camera-blend');
   expect(result.created.readout.entries[0]?.enhancement.geometrySampleCount).toBe((16 * 8) + (24 * 12));
   expect(result.created.readout.entries[0]?.enhancement.composition)
     .toBe('base-blend-then-alpha-blended-splats');
@@ -756,6 +761,10 @@ test('public application host exposes a fail-atomic voxel-sprite experiment port
     .toBe(32);
   expect(result.finalReadout.entries.find((entry) => entry.id === 'runtime-proof')?.capture?.lighting?.mode)
     .toBe('scene');
+  expect(result.finalReadout.entries.find((entry) => entry.id === 'runtime-proof')
+    ?.enhancement.angularOffsetDegrees).not.toBeNull();
+  expect(result.finalReadout.entries.find((entry) => entry.id === 'runtime-proof')
+    ?.enhancement.captureBasis.forward).toHaveLength(3);
 
   const visiblePixels = await page.locator('canvas').evaluate((element) => {
     window.__rustyApplicationHost?.renderer.renderOnce();

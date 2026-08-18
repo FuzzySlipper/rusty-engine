@@ -55,9 +55,12 @@ void test('configuration updates are validated, fail-atomic, and avoid recapture
   const configured = enhancement.configure({
     mode: 'sprite-splat',
     depthAmplitude: 0.8,
+    depthContrast: 6,
     depthClamp: 0.75,
     depthScale: 'world',
     depthQuantizationSteps: 12,
+    parallaxOcclusionScale: 0.08,
+    parallaxOcclusionSteps: 20,
     depthDilationTexels: 1.5,
     depthConfidenceThreshold: 0.7,
     splatFootprint: 1.4,
@@ -79,9 +82,13 @@ void test('configuration updates are validated, fail-atomic, and avoid recapture
   assert.equal(configured.revision, 2);
   assert.equal(configured.captureCpuSubmissionMilliseconds, null);
   assert.equal(configured.config.depthScale, 'world');
+  assert.equal(configured.config.depthContrast, 6);
+  assert.equal(configured.config.parallaxOcclusionSteps, 20);
   assert.equal(configured.config.lightingMode, 'normal');
   assert.equal(configured.config.outputGain, 1.5);
   assert.equal(configured.config.splatOpacity, 0.55);
+  assert.equal(configured.config.orientationPolicy, 'camera-facing');
+  assert.equal(configured.config.orientationBlend, 0.5);
   assert.equal(configured.composition, 'base-blend-then-alpha-blended-splats');
   const splatMaterial = (enhancement.object.children[1] as ShaderMesh).material;
   assert.equal(splatMaterial.depthWrite, false);
@@ -109,10 +116,27 @@ void test('configuration updates are validated, fail-atomic, and avoid recapture
   assert.equal(enhancedButCaptured.config.lightingMode, 'captured');
 
   assert.throws(() => enhancement.configure({ depthAmplitude: 4.01 }), /depthAmplitude/);
+  assert.throws(() => enhancement.configure({ depthContrast: 16.01 }), /depthContrast/);
+  assert.throws(() => enhancement.configure({ parallaxOcclusionScale: 0.251 }), /parallaxOcclusionScale/);
+  assert.throws(() => enhancement.configure({ parallaxOcclusionSteps: 3 }), /parallaxOcclusionSteps/);
+  assert.throws(() => enhancement.configure({ representationWeight: 1.01 }), /representationWeight/);
+  assert.throws(
+    () => enhancement.configure({ representationTransition: 'multiply' as never }),
+    /representationTransition/,
+  );
+  assert.throws(
+    () => enhancement.configure({ orientationAzimuthOffsetDegrees: 45.01 }),
+    /orientationAzimuthOffsetDegrees/,
+  );
   assert.throws(() => enhancement.configure({ depthClamp: 1.01 }), /depthClamp/);
   assert.throws(() => enhancement.configure({ depthConfidenceThreshold: 1 }), /depthConfidence/);
   assert.throws(() => enhancement.configure({ outputGain: 4.01 }), /outputGain/);
   assert.throws(() => enhancement.configure({ splatOpacity: 1.01 }), /splatOpacity/);
+  assert.throws(() => enhancement.configure({ orientationBlend: 1.01 }), /orientationBlend/);
+  assert.throws(
+    () => enhancement.configure({ orientationPolicy: 'tracking' as never }),
+    /orientationPolicy/,
+  );
   assert.throws(
     () => enhancement.configure({ splatBlendMode: 'multiply' as never }),
     /splatBlendMode/,
@@ -130,6 +154,76 @@ void test('configuration updates are validated, fail-atomic, and avoid recapture
   enhancement.recordSteadyStateFrame(1.25);
   assert.equal(enhancement.readout().steadyStateCpuSubmissionMilliseconds, 1.25);
   assert.throws(() => enhancement.recordSteadyStateFrame(Number.NaN), /finite and nonnegative/);
+  enhancement.dispose();
+  frame.dispose();
+});
+
+void test('depth relief is rebased to captured subject bounds instead of the camera clip range', () => {
+  const frame = testFrame(16, 16);
+  const enhancement = new VoxelSpriteEnhancement({ frame });
+  const base = enhancement.object.children[0] as ShaderMesh;
+  const uniforms = base.material.uniforms;
+
+  assert.equal(uniforms['captureNear']!.value, 0.1);
+  assert.equal(uniforms['captureDepthRange']!.value, 9.9);
+  assert.equal(uniforms['reliefRearDepth']!.value, 4);
+  assert.equal(uniforms['reliefDepthRange']!.value, 2);
+  assert.match(base.material.vertexShader, /reliefRearDepth - sampledViewDepth/);
+  assert.match(base.material.vertexShader, /subjectDepth - 0\.5/);
+  assert.match(base.material.vertexShader, /centeredDepth \* depthAmplitude/);
+  assert.match(base.material.vertexShader, /reliefDepthRange/);
+
+  enhancement.dispose();
+  frame.dispose();
+});
+
+void test('depth-parallax uses bounded connected-card POM with vertex fallback when disabled', () => {
+  const frame = testFrame(16, 16);
+  const enhancement = new VoxelSpriteEnhancement(
+    { frame },
+    { mode: 'depth-parallax', parallaxOcclusionScale: 0.1, parallaxOcclusionSteps: 24 },
+  );
+  const base = enhancement.object.children[0] as ShaderMesh;
+
+  assert.equal(base.material.uniforms['parallaxOcclusionEnabled']!.value, 1);
+  assert.equal(base.material.uniforms['baseDepthDisplacement']!.value, 0);
+  assert.match(base.material.fragmentShader, /parallaxOcclusionUv/);
+  assert.match(base.material.fragmentShader, /for \(int index = 0; index < 32/);
+  assert.match(base.material.fragmentShader, /currentUv \+= uvDelta/);
+  assert.match(base.material.fragmentShader, /previousUv = currentUv - uvDelta/);
+
+  enhancement.configure({ parallaxOcclusionSteps: 0 });
+  assert.equal(base.material.uniforms['parallaxOcclusionEnabled']!.value, 0);
+  assert.equal(base.material.uniforms['baseDepthDisplacement']!.value, 1);
+
+  enhancement.dispose();
+  frame.dispose();
+});
+
+void test('neighboring representations support opaque, dithered, and alpha transition weights', () => {
+  const frame = testFrame(16, 16);
+  const enhancement = new VoxelSpriteEnhancement({ frame }, { mode: 'sprite' });
+  const [base, splat] = enhancement.object.children as ShaderMesh[];
+
+  enhancement.configure({
+    representationTransition: 'dither',
+    representationWeight: 0.4,
+    representationDitherOffset: 0.35,
+  });
+  assert.equal(base!.material.uniforms['representationTransitionMode']!.value, 1);
+  assert.equal(base!.material.uniforms['representationWeight']!.value, 0.4);
+  assert.equal(base!.material.uniforms['representationDitherOffset']!.value, 0.35);
+  assert.equal(base!.material.transparent, false);
+  assert.equal(base!.material.depthWrite, true);
+  assert.match(base!.material.fragmentShader, /floor\(gl_FragCoord\.xy\)/);
+  assert.match(base!.material.fragmentShader, /threshold - representationDitherOffset/);
+
+  enhancement.configure({ representationTransition: 'alpha', representationWeight: 0.6 });
+  assert.equal(base!.material.uniforms['representationTransitionMode']!.value, 2);
+  assert.equal(base!.material.transparent, true);
+  assert.equal(base!.material.depthWrite, false);
+  assert.equal(splat!.material.depthWrite, false);
+
   enhancement.dispose();
   frame.dispose();
 });
@@ -157,7 +251,12 @@ void test('splat density scales independently to the bounded 512 square maximum'
 
 void test('source replacement rebinds borrowed textures without disposing either frame', () => {
   const first = testFrame(16, 16);
-  const second = testFrame(64, 32);
+  const second = testFrame(64, 32, {
+    position: [3, 2, 1],
+    right: [0, 0, -1],
+    up: [0, 1, 0],
+    forward: [-1, 0, 0],
+  });
   const enhancement = new VoxelSpriteEnhancement({ frame: first });
 
   const replaced = enhancement.replaceSource({
@@ -167,6 +266,7 @@ void test('source replacement rebinds borrowed textures without disposing either
   assert.equal(replaced.revision, 2);
   assert.equal(replaced.frameTextureBytes, 64 * 32 * 16);
   assert.equal(replaced.captureCpuSubmissionMilliseconds, 4.75);
+  assert.deepEqual(replaced.captureBasis.forward, [-1, 0, 0]);
   enhancement.dispose();
   assert.equal(first.disposed, false);
   assert.equal(second.disposed, false);
@@ -174,7 +274,7 @@ void test('source replacement rebinds borrowed textures without disposing either
   second.dispose();
 });
 
-void test('camera facing respects a transformed parent and disposal releases owned render resources', () => {
+void test('orientation policies respect capture basis, blend endpoints, and transformed parents', () => {
   const frame = testFrame(16, 16);
   const enhancement = new VoxelSpriteEnhancement({ frame });
   const parent = new THREE.Group();
@@ -182,13 +282,33 @@ void test('camera facing respects a transformed parent and disposal releases own
   parent.add(enhancement.object);
   parent.updateMatrixWorld(true);
   const camera = new THREE.PerspectiveCamera();
+  camera.position.set(2, 1, 4);
   camera.rotation.set(0.2, -0.7, 0.1);
   camera.updateMatrixWorld(true);
-  enhancement.faceCamera(camera);
+  assert.equal(enhancement.readout().angularOffsetDegrees, null);
+  enhancement.prepare(camera);
   parent.updateMatrixWorld(true);
   const objectWorld = enhancement.object.getWorldQuaternion(new THREE.Quaternion());
   const cameraWorld = camera.getWorldQuaternion(new THREE.Quaternion());
   assert.ok(1 - Math.abs(objectWorld.dot(cameraWorld)) < 1e-6);
+  assert.ok(enhancement.readout().angularOffsetDegrees! > 0);
+
+  enhancement.configure({ orientationPolicy: 'capture-held' });
+  enhancement.prepare(camera);
+  parent.updateMatrixWorld(true);
+  assert.ok(enhancement.object.getWorldQuaternion(new THREE.Quaternion())
+    .angleTo(new THREE.Quaternion()) < 1e-6);
+
+  enhancement.configure({ orientationPolicy: 'capture-camera-blend', orientationBlend: 0 });
+  enhancement.prepare(camera);
+  parent.updateMatrixWorld(true);
+  assert.ok(enhancement.object.getWorldQuaternion(new THREE.Quaternion())
+    .angleTo(new THREE.Quaternion()) < 1e-6);
+
+  enhancement.configure({ orientationBlend: 1 });
+  enhancement.prepare(camera);
+  parent.updateMatrixWorld(true);
+  assert.ok(1 - Math.abs(enhancement.object.getWorldQuaternion(new THREE.Quaternion()).dot(cameraWorld)) < 1e-6);
 
   let disposeCount = 0;
   for (const child of enhancement.object.children as ShaderMesh[]) {
@@ -206,7 +326,45 @@ void test('camera facing respects a transformed parent and disposal releases own
   frame.dispose();
 });
 
-function testFrame(width: number, height: number): VoxelSpriteFrame {
+void test('world-upright orientation removes capture elevation while preserving azimuth', () => {
+  const tilt = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.35, 0.6, 0));
+  const frame = testFrame(16, 16, {
+    position: [0, 2, 3],
+    right: new THREE.Vector3(1, 0, 0).applyQuaternion(tilt).toArray(),
+    up: new THREE.Vector3(0, 1, 0).applyQuaternion(tilt).toArray(),
+    forward: new THREE.Vector3(0, 0, -1).applyQuaternion(tilt).toArray(),
+  });
+  const enhancement = new VoxelSpriteEnhancement(
+    { frame },
+    { orientationPolicy: 'capture-held', orientationElevationPolicy: 'world-upright' },
+  );
+  const camera = new THREE.PerspectiveCamera();
+  camera.position.set(3, 2, 4);
+  camera.updateMatrixWorld(true);
+  enhancement.prepare(camera);
+  const worldUp = new THREE.Vector3(0, 1, 0).applyQuaternion(
+    enhancement.object.getWorldQuaternion(new THREE.Quaternion()),
+  );
+  assert.ok(worldUp.angleTo(new THREE.Vector3(0, 1, 0)) < 1e-6);
+  enhancement.dispose();
+  frame.dispose();
+});
+
+function testFrame(
+  width: number,
+  height: number,
+  basis: {
+    position: readonly [number, number, number];
+    right: readonly [number, number, number];
+    up: readonly [number, number, number];
+    forward: readonly [number, number, number];
+  } = {
+    position: [0, 0, 3],
+    right: [1, 0, 0],
+    up: [0, 1, 0],
+    forward: [0, 0, -1],
+  },
+): VoxelSpriteFrame {
   return VoxelSpriteFrame.borrowed({
     width,
     height,
@@ -220,12 +378,7 @@ function testFrame(width: number, height: number): VoxelSpriteFrame {
     normalSpace: 'view',
     capture: {
       projection: 'orthographic',
-      basis: {
-        position: [0, 0, 3],
-        right: [1, 0, 0],
-        up: [0, 1, 0],
-        forward: [0, 0, -1],
-      },
+      basis,
       bounds: { minimum: [-1, -1, -1], maximum: [1, 1, 1] },
     },
   });

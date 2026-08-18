@@ -178,7 +178,7 @@ function renderAndMeasure(
   camera: THREE.PerspectiveCamera,
   enhancements: readonly VoxelSpriteEnhancement[],
 ): readonly number[] {
-  for (const enhancement of enhancements) enhancement.faceCamera(camera);
+  for (const enhancement of enhancements) enhancement.prepare(camera);
   const started = performance.now();
   renderer.setRenderTarget(target);
   renderer.setViewport(0, 0, target.width, target.height);

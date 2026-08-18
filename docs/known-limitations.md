@@ -17,6 +17,20 @@ downstream repositories.
   RGBA8 linear depth, approximate normal-oriented splats, and CPU submission
   observations; they do not provide GPU timing, multi-view reconstruction,
   sorted transparent splats, animation capture, collision, or gameplay state.
+  Representation orientation can remain camera-facing, hold the admitted
+  capture basis, or blend between those orientations, with either captured
+  elevation or a world-upright azimuth. This exposes local parallax from the
+  existing displaced geometry. Relief is rebased to the captured subject's
+  projected bounds, expanded by bounded surface contrast, and centered on the
+  card plane. Amplitude therefore changes thickness without translating a
+  near-uniform layer through the capture camera clip range; optional
+  quantization divides that centered shape. The connected-card comparison now
+  performs a bounded 4-to-32-step fragment parallax-occlusion lookup with
+  bounded UV travel; zero steps retains the vertex-displacement fallback.
+  Angle-conditioned consumers may align neighboring captures onto one held
+  card and assign opaque, complementary-dither, or alpha transition weights.
+  These are experimental presentation controls, not multi-view reconstruction.
+  It does not yet add viewer-biased splat axes or custom-material world fog/tint.
   Splat density is independent from the base/depth-parallax sample grid and
   depth quantization; alpha and additive modes disable depth writes but do not
   sort instances within the instanced draw. The explicit 4,096-square capture
@@ -29,18 +43,18 @@ downstream repositories.
 - **Detection:** Inspect `createVoxelSpriteExperiment().readout()` and run
   `./scripts/verify-render.sh`; unit coverage exercises prepared ownership,
   retained-source isolation, fail-atomic source replacement, failed-recapture
-  fallback, camera-facing preparation, and disposal. A Chromium proof uses
+  fallback, parent-safe capture-held/blended preparation, and disposal. A Chromium proof uses
   both the retained-capture and admitted-prepared-texture producers through the
   bundled application-host package root. The reviewed CraftSurvive task 7006
   product run and the
   [campaign evaluation](topics/runtime-voxel-sprite-evaluation.md) found no
   enhancement mode ready for promotion.
-- **Follow-up:** Treat the API as an iteration instrument. Reopen only with a
-  color-readable controlled corpus and prepared/runtime inputs that agree on
-  view-space normals, depth, basis, pose, and lighting. Do not add offline
-  caching, keyed-animation policy, or another public contract from the current
-  evidence.
-- **Last reviewed:** 2026-08-15 / codex
+- **Follow-up:** Treat the API as an iteration instrument. Judge the held-basis
+  result in a real consumer before adding viewer-biased splats, fog/tint, or
+  depth-banded splat layers. Do not add offline caching, keyed-animation
+  policy, or another public contract before runtime cost or product evidence
+  requires it.
+- **Last reviewed:** 2026-08-17 / codex
 
 ## Authored sky background
 

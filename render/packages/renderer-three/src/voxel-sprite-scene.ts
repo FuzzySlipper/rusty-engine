@@ -258,7 +258,7 @@ export class RendererThreeVoxelSpriteScene {
 
   prepare(camera: THREE.Camera): void {
     if (this.#disposed) return;
-    for (const entry of this.#entries.values()) entry.enhancement.faceCamera(camera);
+    for (const entry of this.#entries.values()) entry.enhancement.prepare(camera);
   }
 
   recordCpuSubmission(milliseconds: number): void {

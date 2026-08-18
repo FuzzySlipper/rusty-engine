@@ -83,8 +83,13 @@ source GLBs; encoded file bytes are not VRAM.
 That run used one 48 by 48 grid for both the base plane and splats. The
 iteration instrument now separates the base/depth-parallax grid (up to 128 by
 128) from the instanced-splat grid (up to 512 by 512). Depth quantization steps
-change sampled displacement levels; they do not change either grid's spatial
-detail. Sprite-backed splats still add one draw to the base presentation, while
+divide the captured subject's projected front-to-back relief; they do not
+change either grid's spatial detail. Captured surface depth is centered on the
+card plane before amplitude is applied, so increasing amplitude expands
+thickness instead of translating the whole layer through the capture camera
+clip range. A bounded contrast control expands the often narrow visible-surface
+range before optional quantization; continuous relief is the baseline.
+Sprite-backed splats still add one draw to the base presentation, while
 full splats remain one instanced draw. These counts describe one selected
 representation, not a production crowd budget.
 
@@ -102,14 +107,28 @@ or persistent storage budget.
 ## Mechanism and tuning boundary
 
 The useful mechanisms are the disposable attachment lifecycle, explicit source
-selection, triggered recapture, fail-atomic replacement, camera-facing
-preparation, bounded texture validation, and readout separation between capture
-and steady submission. They remain behind the explicitly experimental
-application-host port.
+selection, triggered recapture, fail-atomic replacement, bounded texture
+validation, and readout separation between capture and steady submission. The
+orientation experiment now also supports a camera-facing baseline, a held
+admitted capture basis, and a bounded held-to-camera blend. Held cards may keep
+captured elevation or retain capture azimuth while remaining world-upright.
+Readout reports the admitted basis and unsigned current angular offset without
+turning camera observation into content revision. These mechanisms remain
+behind the explicitly experimental application-host port.
+
+The connected-card mode now adds bounded parallax-occlusion lookup: UV travel
+and a fixed 4-to-32-step budget are explicit, and zero steps restores the prior
+vertex-displacement fallback. The representation transition seam also accepts
+one bounded weight per retained capture using opaque selection, complementary
+screen-space dither intervals, or alpha blending. CraftSurvive uses that seam
+to retain left, center, and right runtime views and align them onto the center
+held card. This is a software lenticular comparison, not an attempt to recover
+occluded geometry.
 
 Mode selection, base sample rows/columns, splat rows/columns, splat opacity and
-blend mode, depth amplitude, quantization steps, base sprite contribution,
-normal influence, splat overlap, capture elevation, resolution, and direction
+blend mode, depth amplitude, quantization steps, POM travel/steps, neighboring
+view separation and transition, base sprite contribution, normal influence,
+splat overlap, capture elevation, resolution, and direction
 are laboratory controls. Alpha-blended splats disable depth writes; additive
 splats also disable depth writes and use additive blending. Instances remain
 unsorted within their single draw, so alpha compositing is approximate. None is
@@ -130,12 +149,14 @@ a production default or a renderer-neutral gameplay/content property.
 
 ## Reopening criteria
 
-Do not continue by adding more reconstruction modes. A future campaign should
-start only when it has a controlled, color-readable subject set and equivalent
-prepared/runtime inputs: matching view-space normals, depth encoding, capture
-basis, color semantics, resolution, pose, and lighting. It should compare close
-and medium camera routes before considering keyed animation, offline caching,
-GPU timing, or another public contract.
+Continue through visual judgment rather than adding reconstruction modes by
+default. The active comparison holds one capture sector while moving about
+8–12 degrees around a color-readable runtime subject: first compare connected
+POM against the BLUE camera-facing card, then compare discrete, complementary
+dither, and alpha transitions across the three RED angular captures. Add
+viewer-biased splat axes, custom-material fog/tint, or depth-banded splats only
+if that live result identifies a concrete need. Keyed animation, offline
+caching, GPU timing, or another public contract remain later questions.
 
 The deeper follow-on ideas—depth layers, motion vectors, dithered
 rematerialization, and runtime G-buffer capture—remain backlog concepts. They do

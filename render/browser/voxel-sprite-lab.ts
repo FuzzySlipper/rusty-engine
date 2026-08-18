@@ -95,7 +95,7 @@ class VoxelSpriteLab implements VoxelSpriteLabHandle {
   readonly #render = (now: number): void => {
     if (this.#disposed) return;
     for (const enhancement of this.#enhancements) {
-      if (enhancement.object.visible) enhancement.faceCamera(this.#viewerCamera);
+      if (enhancement.object.visible) enhancement.prepare(this.#viewerCamera);
     }
     const started = performance.now();
     this.#renderer.setRenderTarget(null);
