@@ -921,6 +921,23 @@ test('retained ghost-plate compiles in real WebGL and changes coherently off the
       sourceViewPosition[1] + 0.15,
       sourceViewPosition[2],
     ]);
+    const strictConfigured = experiment.configure('ghost-webgl', {
+      ghostShellMode: 'strict-source',
+      ghostShellDepthEpsilon: 0.2,
+    });
+    const strictOffAxis = sample([
+      sourceViewPosition[0] + 0.5,
+      sourceViewPosition[1] + 0.15,
+      sourceViewPosition[2],
+    ]);
+    const repairedConfigured = experiment.configure('ghost-webgl', {
+      ghostShellMode: 'repaired-source',
+    });
+    const repairedOffAxis = sample([
+      sourceViewPosition[0] + 0.5,
+      sourceViewPosition[1] + 0.15,
+      sourceViewPosition[2],
+    ]);
     const preparedRejected = experiment.create({
       id: 'prepared-ghost-webgl',
       source: {
@@ -964,6 +981,10 @@ test('retained ghost-plate compiles in real WebGL and changes coherently off the
       sourceView: { ...sourceView, mask: undefined },
       sourceViewAtFullDepth: { ...sourceViewAtFullDepth, mask: undefined },
       offAxis: { ...offAxis, mask: undefined },
+      strictConfigured,
+      strictOffAxis: { ...strictOffAxis, mask: undefined },
+      repairedConfigured,
+      repairedOffAxis: { ...repairedOffAxis, mask: undefined },
       exactSourceMismatch,
       preparedRejected,
       ordinaryReplacement,
@@ -986,9 +1007,19 @@ test('retained ghost-plate compiles in real WebGL and changes coherently off the
   expect(result.offAxis.error).toBe(0);
   expect(result.offAxis.covered).toBeGreaterThan(10);
   expect(result.offAxis.checksum).not.toBe(result.sourceView.checksum);
+  expect(result.strictConfigured.applied).toBe(true);
+  expect(result.strictOffAxis.error).toBe(0);
+  expect(result.strictOffAxis.covered).toBeGreaterThan(0);
+  expect(result.strictOffAxis.covered).toBeLessThanOrEqual(result.offAxis.covered);
+  expect(result.repairedConfigured.applied).toBe(true);
+  expect(result.repairedOffAxis.error).toBe(0);
+  expect(result.repairedOffAxis.covered).toBeGreaterThanOrEqual(result.strictOffAxis.covered);
   expect(result.readout.entries[0]?.ghostPlate?.angularOffsetDegrees).not.toBeNull();
   expect(result.readout.entries[0]?.ghostPlate?.depthRetention).toBe(0.3);
   expect(result.readout.entries[0]?.ghostPlate?.plateMapping).toBe('projective-surface');
+  expect(result.readout.entries[0]?.ghostPlate?.shellMode).toBe('repaired-source');
+  expect(result.readout.entries[0]?.ghostPlate?.shellDepthQuantizationStep).toBeGreaterThan(0);
+  expect(result.readout.entries[0]?.ghostPlate?.rejectedFragmentRatio.status).toBe('unavailable');
   expect(result.preparedRejected.applied).toBe(false);
   expect(result.preparedRejected.diagnostics[0]?.code).toBe('invalid_definition');
   expect(result.ordinaryReplacement.applied).toBe(true);

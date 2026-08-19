@@ -41,9 +41,15 @@ downstream repositories.
   hierarchy from main color without changing its visibility, materials,
   animation, or transform, and restores the layer on final disposal. Ghost
   mode rejects prepared frames because their current metadata lacks the exact
-  projection matrix. It requires one complete retained visual hierarchy, holds
-  one pose until explicit recapture, and does not yet provide source-shell
-  rejection, regional depth, sector scheduling, animation cadence,
+  projection matrix. It requires one complete retained visual hierarchy and
+  holds one pose until explicit recapture. Whole-mesh remains the default;
+  optional strict source-shell rejection compares the fragment's capture-view
+  depth with the captured linear depth, while repaired-shell mode searches only
+  the four adjacent texels before rejecting. Tolerance is expressed in capture
+  view units and automatically includes half of the RGBA8 depth quantization
+  step. Per-fragment rejection and repair ratios remain explicitly unavailable
+  because the experiment performs no GPU texture readback or statistics pass.
+  It does not yet provide regional depth, sector scheduling, animation cadence,
   stylization, offline capture, or GPU timing.
   It does not yet add viewer-biased splat axes or custom-material world fog/tint.
   Splat density is independent from the base/depth-parallax sample grid and

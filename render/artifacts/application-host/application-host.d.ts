@@ -80,9 +80,11 @@ export interface RustyApplicationVoxelSpriteConfig {
     readonly ghostAnchorPolicy: 'bounds-center' | 'bounds-normalized';
     readonly ghostAnchorValue: number;
     readonly ghostPlateMapping: 'plate-locked' | 'projective-surface';
+    readonly ghostShellMode: 'whole-mesh' | 'strict-source' | 'repaired-source';
+    readonly ghostShellDepthEpsilon: number;
 }
 /** The normalized configuration reported by the ordinary five-mode enhancement. */
-export type RustyApplicationVoxelSpriteEnhancementConfig = Omit<RustyApplicationVoxelSpriteConfig, 'mode' | 'ghostDepthRetention' | 'ghostAnchorPolicy' | 'ghostAnchorValue' | 'ghostPlateMapping'> & {
+export type RustyApplicationVoxelSpriteEnhancementConfig = Omit<RustyApplicationVoxelSpriteConfig, 'mode' | 'ghostDepthRetention' | 'ghostAnchorPolicy' | 'ghostAnchorValue' | 'ghostPlateMapping' | 'ghostShellMode' | 'ghostShellDepthEpsilon'> & {
     readonly mode: RustyApplicationVoxelSpriteEnhancementMode;
 };
 export interface RustyApplicationVoxelSpritePreparedFrame {
@@ -188,6 +190,18 @@ export interface RustyApplicationVoxelSpriteGhostPlateReadout {
     readonly anchorValue: number;
     readonly anchorDepth: number;
     readonly plateMapping: 'plate-locked' | 'projective-surface';
+    readonly shellMode: 'whole-mesh' | 'strict-source' | 'repaired-source';
+    readonly shellDepthEpsilon: number;
+    readonly shellDepthQuantizationStep: number;
+    readonly shellEffectiveDepthEpsilon: number;
+    readonly rejectedFragmentRatio: {
+        readonly status: 'unavailable';
+        readonly value: null;
+    };
+    readonly repairedBoundaryRatio: {
+        readonly status: 'unavailable';
+        readonly value: null;
+    };
     readonly angularOffsetDegrees: number | null;
     readonly expectedDrawCalls: number;
     readonly meshCount: number;

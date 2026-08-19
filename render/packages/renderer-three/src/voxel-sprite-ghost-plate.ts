@@ -2,12 +2,16 @@ import * as THREE from 'three';
 
 export type GhostPlateAnchorPolicy = 'bounds-center' | 'bounds-normalized';
 export type GhostPlateMapping = 'plate-locked' | 'projective-surface';
+export type GhostPlateShellMode = 'whole-mesh' | 'strict-source' | 'repaired-source';
 
 export interface GhostPlateConfig {
   readonly depthRetention: number;
   readonly anchorPolicy: GhostPlateAnchorPolicy;
   readonly anchorValue: number;
   readonly plateMapping: GhostPlateMapping;
+  readonly shellMode: GhostPlateShellMode;
+  /** Requested source-view depth tolerance in capture-view units. */
+  readonly shellDepthEpsilon: number;
 }
 
 export interface GhostPlateCaptureSnapshot {
@@ -15,6 +19,11 @@ export interface GhostPlateCaptureSnapshot {
   readonly ownedGeometries?: readonly THREE.BufferGeometry[];
   readonly colorTexture: THREE.Texture;
   readonly coverageTexture: THREE.Texture;
+  readonly depthTexture: THREE.Texture;
+  readonly textureWidth: number;
+  readonly textureHeight: number;
+  readonly captureNear: number;
+  readonly captureFar: number;
   readonly projectionKind: 'perspective' | 'orthographic';
   readonly ghostCameraWorld: THREE.Matrix4;
   readonly ghostProjection: THREE.Matrix4;
@@ -52,6 +61,12 @@ export interface GhostPlateReadout {
   readonly anchorValue: number;
   readonly anchorDepth: number;
   readonly plateMapping: GhostPlateMapping;
+  readonly shellMode: GhostPlateShellMode;
+  readonly shellDepthEpsilon: number;
+  readonly shellDepthQuantizationStep: number;
+  readonly shellEffectiveDepthEpsilon: number;
+  readonly rejectedFragmentRatio: { readonly status: 'unavailable'; readonly value: null };
+  readonly repairedBoundaryRatio: { readonly status: 'unavailable'; readonly value: null };
   readonly angularOffsetDegrees: number | null;
   readonly expectedDrawCalls: number;
   readonly meshCount: number;
@@ -66,12 +81,52 @@ export interface GhostPlateWarpResult {
   readonly sourceNdc: readonly [number, number];
 }
 
+export interface GhostPlateShellSample {
+  readonly depth: number;
+  readonly coverage: number;
+}
+
+/** CPU reference for the bounded source-shell admission used by deterministic tests. */
+export function evaluateGhostPlateShell(
+  sourceDepth: number,
+  center: GhostPlateShellSample,
+  neighbors: readonly GhostPlateShellSample[],
+  captureNear: number,
+  captureFar: number,
+  mode: GhostPlateShellMode,
+  epsilon: number,
+): { readonly accepted: boolean; readonly repaired: boolean } {
+  positive(sourceDepth, 'ghost source depth');
+  if (!Number.isFinite(captureNear) || !Number.isFinite(captureFar)
+    || captureNear < 0 || captureFar <= captureNear) {
+    throw new RangeError('ghost capture depth range must be finite and increasing');
+  }
+  bounded(epsilon, 0, 2, 'ghost shell depth epsilon');
+  if (mode === 'whole-mesh') return Object.freeze({ accepted: true, repaired: false });
+  if (mode !== 'strict-source' && mode !== 'repaired-source') {
+    throw new TypeError(`unsupported ghost shell mode ${String(mode)}`);
+  }
+  const tolerance = epsilon + (captureFar - captureNear) / 510;
+  const agrees = (sample: GhostPlateShellSample): boolean => {
+    bounded(sample.depth, 0, 1, 'ghost shell sample depth');
+    bounded(sample.coverage, 0, 1, 'ghost shell sample coverage');
+    const sampledDepth = captureNear + sample.depth * (captureFar - captureNear);
+    return sample.coverage >= 0.5 && Math.abs(sourceDepth - sampledDepth) <= tolerance;
+  };
+  if (agrees(center)) return Object.freeze({ accepted: true, repaired: false });
+  if (mode === 'repaired-source' && neighbors.some(agrees)) {
+    return Object.freeze({ accepted: true, repaired: true });
+  }
+  return Object.freeze({ accepted: false, repaired: false });
+}
+
 const LIMITATIONS = Object.freeze([
   'retained-source-only',
   'single-capture-view',
   'frozen-appearance-pose',
   'whole-hierarchy-relief',
-  'no-source-shell-rejection',
+  'rgba8-shell-depth',
+  'fragment-ratios-unavailable-without-readback',
   'gpu-time-not-measured',
 ] as const);
 
@@ -122,6 +177,13 @@ interface GhostUniforms {
   readonly projectionKind: THREE.IUniform<number>;
   readonly plateMapping: THREE.IUniform<number>;
   readonly coverageTexture: THREE.IUniform<THREE.Texture>;
+  readonly depthTexture: THREE.IUniform<THREE.Texture>;
+  readonly textureTexelSize: THREE.IUniform<THREE.Vector2>;
+  readonly captureNear: THREE.IUniform<number>;
+  readonly captureDepthRange: THREE.IUniform<number>;
+  readonly shellMode: THREE.IUniform<number>;
+  readonly shellDepthEpsilon: THREE.IUniform<number>;
+  readonly shellDepthQuantizationHalfStep: THREE.IUniform<number>;
 }
 
 /** Owns one frozen cloned appearance hierarchy and its ghost-only materials. */
@@ -138,6 +200,7 @@ export class GhostPlatePresentation {
   readonly #captureBasis: GhostPlateReadout['captureBasis'];
   readonly #depthMinimum: number;
   readonly #depthMaximum: number;
+  readonly #shellDepthQuantizationStep: number;
   #sourceViewBasis: GhostPlateReadout['sourceViewBasis'];
   #angularOffsetDegrees: number | null = null;
   #config: GhostPlateConfig;
@@ -154,6 +217,12 @@ export class GhostPlatePresentation {
     finiteTuple(snapshot.transform.position, 'ghost transform position');
     positive(snapshot.transform.width, 'ghost transform width');
     positive(snapshot.transform.height, 'ghost transform height');
+    positive(snapshot.textureWidth, 'ghost capture texture width');
+    positive(snapshot.textureHeight, 'ghost capture texture height');
+    if (!Number.isFinite(snapshot.captureNear) || !Number.isFinite(snapshot.captureFar)
+      || snapshot.captureNear < 0 || snapshot.captureFar <= snapshot.captureNear) {
+      throw new RangeError('ghost capture depth range must be finite and increasing');
+    }
     this.#config = validatedConfig(snapshot.config);
     this.#appearanceRoot = snapshot.appearanceRoot;
     this.#ownedGeometries = snapshot.ownedGeometries ?? [];
@@ -161,6 +230,7 @@ export class GhostPlatePresentation {
     this.#captureBasis = captureBasis(snapshot.ghostCameraWorld);
     this.#sourceViewBasis = this.#captureBasis;
     this.#ghostProjection = snapshot.ghostProjection.clone();
+    this.#shellDepthQuantizationStep = (snapshot.captureFar - snapshot.captureNear) / 255;
 
     const ghostView = snapshot.ghostCameraWorld.clone().invert();
     const extents = projectedBounds(snapshot.bounds, ghostView);
@@ -189,6 +259,13 @@ export class GhostPlatePresentation {
       projectionKind: { value: this.#projectionKind === 'perspective' ? 0 : 1 },
       plateMapping: { value: this.#config.plateMapping === 'plate-locked' ? 0 : 1 },
       coverageTexture: { value: snapshot.coverageTexture },
+      depthTexture: { value: snapshot.depthTexture },
+      textureTexelSize: { value: new THREE.Vector2(1 / snapshot.textureWidth, 1 / snapshot.textureHeight) },
+      captureNear: { value: snapshot.captureNear },
+      captureDepthRange: { value: snapshot.captureFar - snapshot.captureNear },
+      shellMode: { value: shellModeUniform(this.#config.shellMode) },
+      shellDepthEpsilon: { value: this.#config.shellDepthEpsilon },
+      shellDepthQuantizationHalfStep: { value: this.#shellDepthQuantizationStep * 0.5 },
     };
 
     validateAppearanceHierarchy(this.#appearanceRoot);
@@ -208,6 +285,8 @@ export class GhostPlatePresentation {
     this.#uniforms.anchorDepth.value = this.#anchorDepth();
     this.#uniforms.depthRetention.value = this.#config.depthRetention;
     this.#uniforms.plateMapping.value = this.#config.plateMapping === 'plate-locked' ? 0 : 1;
+    this.#uniforms.shellMode.value = shellModeUniform(this.#config.shellMode);
+    this.#uniforms.shellDepthEpsilon.value = this.#config.shellDepthEpsilon;
     return this.readout();
   }
 
@@ -245,11 +324,17 @@ export class GhostPlatePresentation {
       anchorValue: this.#config.anchorValue,
       anchorDepth: this.#anchorDepth(),
       plateMapping: this.#config.plateMapping,
+      shellMode: this.#config.shellMode,
+      shellDepthEpsilon: this.#config.shellDepthEpsilon,
+      shellDepthQuantizationStep: this.#shellDepthQuantizationStep,
+      shellEffectiveDepthEpsilon: this.#config.shellDepthEpsilon + this.#shellDepthQuantizationStep * 0.5,
+      rejectedFragmentRatio: Object.freeze({ status: 'unavailable', value: null }),
+      repairedBoundaryRatio: Object.freeze({ status: 'unavailable', value: null }),
       angularOffsetDegrees: this.#angularOffsetDegrees,
       expectedDrawCalls: this.#disposed ? 0 : this.#materials.length,
       meshCount: this.#disposed ? 0 : this.#meshCount,
       materialResourceCount: this.#disposed ? 0 : this.#materials.length,
-      borrowedTextureCount: this.#disposed ? 0 : 2,
+      borrowedTextureCount: this.#disposed ? 0 : 3,
       disposed: this.#disposed,
       limitations: LIMITATIONS,
     });
@@ -297,7 +382,7 @@ export class GhostPlatePresentation {
     material.clipIntersection = source.clipIntersection;
     material.clipShadows = source.clipShadows;
     material.onBeforeCompile = (shader) => patchShader(shader, this.#uniforms);
-    material.customProgramCacheKey = () => 'rusty-engine-ghost-plate-v1';
+    material.customProgramCacheKey = () => 'rusty-engine-ghost-plate-v2-shell';
     this.#materials.push(material);
     return material;
   }
@@ -340,6 +425,7 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
     uniform float projectionKind;
     varying vec3 ghostProjectiveUv;
     varying vec3 ghostPlateLockedUv;
+    varying float ghostOriginalDepth;
   `;
   shader.vertexShader = shader.vertexShader
     .replace('void main() {', `${vertexDeclarations}\nvoid main() {`)
@@ -364,12 +450,30 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
       vec2 ghostSourceUv = ghostSourceClip.xy / ghostSourceClip.w * 0.5 + 0.5;
       ghostProjectiveUv = vec3(ghostSourceClip.xy * 0.5 + ghostSourceClip.w * 0.5, ghostSourceClip.w);
       ghostPlateLockedUv = vec3(ghostSourceUv * gl_Position.w, gl_Position.w);
+      ghostOriginalDepth = ghostDepth;
     `);
   const fragmentDeclarations = `
     uniform sampler2D coverageTexture;
+    uniform sampler2D depthTexture;
     uniform float plateMapping;
+    uniform vec2 textureTexelSize;
+    uniform float captureNear;
+    uniform float captureDepthRange;
+    uniform float shellMode;
+    uniform float shellDepthEpsilon;
+    uniform float shellDepthQuantizationHalfStep;
     varying vec3 ghostProjectiveUv;
     varying vec3 ghostPlateLockedUv;
+    varying float ghostOriginalDepth;
+
+    bool ghostShellSampleAgrees(vec2 uv) {
+      if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return false;
+      float coverage = texture2D(coverageTexture, uv).r;
+      if (coverage < 0.5) return false;
+      float sampledDepth = captureNear + texture2D(depthTexture, uv).r * captureDepthRange;
+      return abs(ghostOriginalDepth - sampledDepth)
+        <= shellDepthEpsilon + shellDepthQuantizationHalfStep;
+    }
   `;
   shader.fragmentShader = shader.fragmentShader
     .replace('void main() {', `${fragmentDeclarations}\nvoid main() {`)
@@ -381,6 +485,16 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
       float ghostCoverage = texture2D(coverageTexture, ghostUv).r;
       vec4 ghostPlateColor = texture2D(map, ghostUv);
       if (ghostCoverage < 0.5 || ghostPlateColor.a < 0.01) discard;
+      if (shellMode > 0.5) {
+        bool ghostShellAccepted = ghostShellSampleAgrees(ghostUv);
+        if (!ghostShellAccepted && shellMode > 1.5) {
+          ghostShellAccepted = ghostShellSampleAgrees(ghostUv + vec2(textureTexelSize.x, 0.0))
+            || ghostShellSampleAgrees(ghostUv - vec2(textureTexelSize.x, 0.0))
+            || ghostShellSampleAgrees(ghostUv + vec2(0.0, textureTexelSize.y))
+            || ghostShellSampleAgrees(ghostUv - vec2(0.0, textureTexelSize.y));
+        }
+        if (!ghostShellAccepted) discard;
+      }
       diffuseColor *= vec4(ghostPlateColor.rgb, 1.0);
     `);
 }
@@ -447,14 +561,26 @@ function validatedConfig(config: GhostPlateConfig): GhostPlateConfig {
   if (config.plateMapping !== 'plate-locked' && config.plateMapping !== 'projective-surface') {
     throw new TypeError(`unsupported ghost plate mapping ${String(config.plateMapping)}`);
   }
+  if (config.shellMode !== 'whole-mesh'
+    && config.shellMode !== 'strict-source'
+    && config.shellMode !== 'repaired-source') {
+    throw new TypeError(`unsupported ghost shell mode ${String(config.shellMode)}`);
+  }
+  bounded(config.shellDepthEpsilon, 0, 2, 'ghost shell depth epsilon');
   return Object.freeze({ ...config });
 }
 
 function rejectUnknownKeys(config: Partial<GhostPlateConfig>): void {
-  const keys = new Set(['depthRetention', 'anchorPolicy', 'anchorValue', 'plateMapping']);
+  const keys = new Set([
+    'depthRetention', 'anchorPolicy', 'anchorValue', 'plateMapping', 'shellMode', 'shellDepthEpsilon',
+  ]);
   for (const key of Object.keys(config)) {
     if (!keys.has(key)) throw new TypeError(`unknown ghost plate config field ${key}`);
   }
+}
+
+function shellModeUniform(mode: GhostPlateShellMode): number {
+  return mode === 'whole-mesh' ? 0 : mode === 'strict-source' ? 1 : 2;
 }
 
 function finiteMatrix(matrix: THREE.Matrix4, name: string): void {

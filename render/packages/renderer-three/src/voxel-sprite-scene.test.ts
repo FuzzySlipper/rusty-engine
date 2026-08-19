@@ -329,11 +329,20 @@ void test('ghost-plate freezes an isolated multipart pose without mutating the c
     ghostAnchorPolicy: 'bounds-normalized',
     ghostAnchorValue: 0,
     ghostPlateMapping: 'projective-surface',
+    ghostShellMode: 'repaired-source',
+    ghostShellDepthEpsilon: 0.25,
   });
   assert.equal(configured.applied, true);
   assert.equal(configured.readout.entries[0]?.ghostPlate?.depthRetention, 1);
   assert.equal(configured.readout.entries[0]?.ghostPlate?.anchorValue, 0);
   assert.equal(configured.readout.entries[0]?.ghostPlate?.plateMapping, 'projective-surface');
+  assert.equal(configured.readout.entries[0]?.ghostPlate?.shellMode, 'repaired-source');
+  assert.equal(configured.readout.entries[0]?.ghostPlate?.shellDepthEpsilon, 0.25);
+  assert.ok((configured.readout.entries[0]?.ghostPlate?.shellDepthQuantizationStep ?? 0) > 0);
+  const rejectedShellConfig = attachment.configure('ghost', { ghostShellDepthEpsilon: 2.01 });
+  assert.equal(rejectedShellConfig.applied, false);
+  assert.equal(rejectedShellConfig.diagnostics[0]?.code, 'invalid_definition');
+  assert.equal(rejectedShellConfig.readout.entries[0]?.ghostPlate?.shellDepthEpsilon, 0.25);
 
   const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
   camera.position.set(10, 3, 8);

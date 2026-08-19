@@ -24,6 +24,7 @@ import {
 export type RendererThreeVoxelSpriteMode = VoxelSpriteEnhancementMode | 'ghost-plate';
 export type RendererThreeVoxelSpriteGhostAnchorPolicy = 'bounds-center' | 'bounds-normalized';
 export type RendererThreeVoxelSpriteGhostPlateMapping = 'plate-locked' | 'projective-surface';
+export type RendererThreeVoxelSpriteGhostShellMode = 'whole-mesh' | 'strict-source' | 'repaired-source';
 
 export interface RendererThreeVoxelSpriteGhostConfig {
   /** Fraction of source-view depth retained by the crushed display mesh. */
@@ -34,6 +35,10 @@ export interface RendererThreeVoxelSpriteGhostConfig {
   readonly ghostAnchorValue: number;
   /** Chooses screen-locked plate coordinates or source-projective coordinates. */
   readonly ghostPlateMapping: RendererThreeVoxelSpriteGhostPlateMapping;
+  /** Optional source-depth visibility policy; whole-mesh preserves the accepted task-7087 control. */
+  readonly ghostShellMode: RendererThreeVoxelSpriteGhostShellMode;
+  /** Capture-view depth tolerance in the same units as capture near/far. */
+  readonly ghostShellDepthEpsilon: number;
 }
 
 export type RendererThreeVoxelSpriteConfigPatch = Partial<
@@ -287,6 +292,8 @@ export class RendererThreeVoxelSpriteScene {
             ghostAnchorPolicy: ghost.anchorPolicy,
             ghostAnchorValue: ghost.anchorValue,
             ghostPlateMapping: ghost.plateMapping,
+            ghostShellMode: ghost.shellMode,
+            ghostShellDepthEpsilon: ghost.shellDepthEpsilon,
           },
         });
       } catch (cause) {
@@ -491,6 +498,11 @@ export class RendererThreeVoxelSpriteScene {
         ownedGeometries: ownedGhostGeometries,
         colorTexture: receipt.frame.descriptor.textures.color,
         coverageTexture: receipt.frame.descriptor.textures.coverage,
+        depthTexture: receipt.frame.descriptor.textures.depth,
+        textureWidth: receipt.frame.descriptor.width,
+        textureHeight: receipt.frame.descriptor.height,
+        captureNear: receipt.frame.descriptor.depth.near,
+        captureFar: receipt.frame.descriptor.depth.far,
         projectionKind: camera instanceof THREE.PerspectiveCamera ? 'perspective' : 'orthographic',
         ghostCameraWorld: camera.matrixWorld.clone(),
         ghostProjection: camera.projectionMatrix.clone(),
@@ -933,6 +945,8 @@ function enhancementConfigPatch(
     ghostAnchorPolicy: _anchorPolicy,
     ghostAnchorValue: _anchorValue,
     ghostPlateMapping: _plateMapping,
+    ghostShellMode: _shellMode,
+    ghostShellDepthEpsilon: _shellDepthEpsilon,
     ...enhancement
   } = patch;
   return enhancement;
@@ -944,6 +958,8 @@ function ghostConfigPatch(patch: RendererThreeVoxelSpriteConfigPatch): Partial<G
     'ghostAnchorPolicy',
     'ghostAnchorValue',
     'ghostPlateMapping',
+    'ghostShellMode',
+    'ghostShellDepthEpsilon',
   ]);
   const unsupported = Object.keys(patch).filter((key) => !allowed.has(key));
   if (unsupported.length > 0) {
@@ -954,6 +970,8 @@ function ghostConfigPatch(patch: RendererThreeVoxelSpriteConfigPatch): Partial<G
     ...(patch.ghostAnchorPolicy === undefined ? {} : { anchorPolicy: patch.ghostAnchorPolicy }),
     ...(patch.ghostAnchorValue === undefined ? {} : { anchorValue: patch.ghostAnchorValue }),
     ...(patch.ghostPlateMapping === undefined ? {} : { plateMapping: patch.ghostPlateMapping }),
+    ...(patch.ghostShellMode === undefined ? {} : { shellMode: patch.ghostShellMode }),
+    ...(patch.ghostShellDepthEpsilon === undefined ? {} : { shellDepthEpsilon: patch.ghostShellDepthEpsilon }),
   };
 }
 
@@ -963,6 +981,8 @@ function validatedGhostConfig(patch: RendererThreeVoxelSpriteConfigPatch): Ghost
     anchorPolicy: patch.ghostAnchorPolicy ?? 'bounds-center',
     anchorValue: patch.ghostAnchorValue ?? 0.5,
     plateMapping: patch.ghostPlateMapping ?? 'plate-locked',
+    shellMode: patch.ghostShellMode ?? 'whole-mesh',
+    shellDepthEpsilon: patch.ghostShellDepthEpsilon ?? 0.12,
   };
   ghostConfigPatch(patch);
   return config;
