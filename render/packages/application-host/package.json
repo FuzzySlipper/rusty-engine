@@ -8,7 +8,8 @@
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --build",
-    "test": "tsc --build && node --test 'dist/**/*.test.js'"
+    "test": "tsc --build && pnpm run test:compiled",
+    "test:compiled": "node --test 'dist/**/*.test.js'"
   },
   "devDependencies": {
     "@rusty-engine/render-contracts": "workspace:*",

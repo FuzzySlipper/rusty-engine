@@ -5,14 +5,18 @@
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "scripts": {
-    "build": "pnpm -r build && pnpm run build:application-host-artifact && pnpm run build:webview-artifact",
+    "build": "pnpm run build:packages && pnpm run bundle:application-host-artifact && pnpm run build:webview-artifact",
+    "build:packages": "pnpm -r build",
     "build:application-host-artifact": "pnpm --filter @rusty-engine/application-host run build && vite build --config vite.application-host.config.ts && node scripts/publish-application-host-artifact.mjs",
+    "bundle:application-host-artifact": "vite build --config vite.application-host.config.ts && node scripts/publish-application-host-artifact.mjs",
     "build:webview-artifact": "vite build --config vite.webview.config.ts",
     "boundary": "node scripts/check-boundaries.mjs && node scripts/check-product-playtest-fixture.mjs",
     "typecheck": "tsc --build packages/*/tsconfig.json && tsc --project tsconfig.browser.json --noEmit",
+    "typecheck:browser": "tsc --project tsconfig.browser.json --noEmit",
     "test": "pnpm -r test",
+    "test:compiled": "pnpm -r test:compiled",
     "test:browser": "playwright test --config playwright.config.ts",
-    "verify": "pnpm run boundary && pnpm run typecheck && pnpm run build && pnpm run test && pnpm run test:browser"
+    "verify": "pnpm run boundary && pnpm run build && pnpm run typecheck:browser && pnpm run test:compiled && pnpm run test:browser"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",

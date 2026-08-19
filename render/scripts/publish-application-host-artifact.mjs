@@ -1,10 +1,18 @@
-import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 const renderRoot = new URL('../', import.meta.url);
 const declarations = new URL('packages/application-host/dist/', renderRoot);
 const artifact = new URL('artifacts/application-host/', renderRoot);
 
 mkdirSync(artifact, { recursive: true });
+const bundle = new URL('index.js', artifact);
+writeFileSync(
+  bundle,
+  readFileSync(bundle, 'utf8').replace(
+    /^\/\/#region .*?node_modules\/\.pnpm\//gm,
+    '//#region node_modules/.pnpm/',
+  ),
+);
 for (const file of ['index.d.ts', 'application-host.d.ts']) {
   copyFileSync(new URL(file, declarations), new URL(file, artifact));
 }

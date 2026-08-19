@@ -40,6 +40,7 @@ paths:
 | [rendering-successor-contract.md](rendering-successor-contract.md) | Shared renderer transfer and ownership contract |
 | [rendering-operations.md](rendering-operations.md) | Renderer verification and operational limits |
 | [topics/development/downstream-renderer-and-studio.md](topics/development/downstream-renderer-and-studio.md) | Central downstream Rust facade, bundled rich-DOM application host, renderer, and Engine-hosted Studio boundary |
+| [topics/development/verification-and-ci.md](topics/development/verification-and-ci.md) | Verification ownership, CI routing, single-pass renderer evidence, and ordinary task workflow |
 | [studio-migration-contract.md](studio-migration-contract.md) | Studio parity and owner-adoption contract |
 | [studio-adapter-protocol.md](studio-adapter-protocol.md) | Closed external-project adapter protocol |
 | [topics/studio-service.md](topics/studio-service.md) | Persistent generic Studio service operations |
@@ -93,6 +94,7 @@ tests take precedence when describing implemented behavior.
 | Change the complete Rust facade or Rust-only renderer boundary | [Rust SDK capability index](rust-sdk-capabilities.md) |
 | Integrate a downstream game with rendering or Studio | [Downstream renderer and Studio boundary](topics/development/downstream-renderer-and-studio.md) |
 | Change Three/WebGL or a renderer host | [Renderer workspace and hosts](code-map/renderer-workspace-and-hosts.md) |
+| Choose the focused or CI verification gate for a change | [Verification and CI ownership](topics/development/verification-and-ci.md) |
 | Change the first-party authoring UI | [Studio](code-map/studio.md) |
 | Plan a downstream typed Entity inspector panel | [Downstream Entity inspector extensions](studio-downstream-entity-inspector-extensions.md) |
 | Add inspection or diagnostics | [Inspection and diagnostics](code-map/inspection-and-diagnostics.md) |

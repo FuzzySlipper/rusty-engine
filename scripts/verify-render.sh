@@ -7,13 +7,19 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 "$REPO_ROOT/scripts/check-render-completeness.sh" --strict
 "$REPO_ROOT/scripts/test-render-completeness-checker.sh"
 
-pnpm --dir "$REPO_ROOT/render" install --frozen-lockfile
-"$REPO_ROOT/scripts/verify-application-host-artifact.sh"
-"$REPO_ROOT/scripts/verify-renderer-webview-host.sh"
+if [[ "${RUSTY_RENDER_DEPS_READY:-0}" != "1" ]]; then
+  pnpm --dir "$REPO_ROOT/render" install --frozen-lockfile --ignore-scripts
+fi
+
+pnpm --dir "$REPO_ROOT/render" run boundary
+"$REPO_ROOT/scripts/verify-render-artifacts.sh"
+pnpm --dir "$REPO_ROOT/render" run typecheck:browser
+"$REPO_ROOT/scripts/verify-renderer-webview-host.sh" --artifacts-ready
+pnpm --dir "$REPO_ROOT/render" run test:compiled
 
 if [[ -z "${PLAYWRIGHT_CHROMIUM_EXECUTABLE:-}" ]] && command -v chromium >/dev/null 2>&1; then
   PLAYWRIGHT_CHROMIUM_EXECUTABLE="$(command -v chromium)"
   export PLAYWRIGHT_CHROMIUM_EXECUTABLE
 fi
 
-pnpm --dir "$REPO_ROOT/render" run verify
+pnpm --dir "$REPO_ROOT/render" run test:browser

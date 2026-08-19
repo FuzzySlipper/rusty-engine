@@ -16,7 +16,8 @@
     "build": "tsc --build",
     "prepare": "pnpm run build",
     "typecheck": "tsc --build",
-    "test": "tsc --build && node --test 'dist/**/*.test.js'"
+    "test": "tsc --build && pnpm run test:compiled",
+    "test:compiled": "node --test 'dist/**/*.test.js'"
   },
   "peerDependencies": {
     "@rusty-engine/render-contracts": "0.1.0"

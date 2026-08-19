@@ -7,14 +7,10 @@ on:
       - 'rules/**'
       - 'fixtures/gameplay-rules/**'
       - 'rust/crates/gameplay-rules/**'
-      - 'README.md'
-      - 'AGENTS.md'
       - 'docs/agent-code-atlas.md'
       - 'docs/code-map/gameplay-rules.md'
       - 'docs/design.md'
       - 'docs/gameplay-rules-contract.md'
-      - 'docs/known-limitations.md'
-      - 'docs/README.md'
       - 'docs/migration/donor-provenance.md'
       - 'docs/migration/migration-cluster-ledger.md'
       - 'migration/gameplay-rules-donor/**'
@@ -32,14 +28,10 @@ on:
       - 'rules/**'
       - 'fixtures/gameplay-rules/**'
       - 'rust/crates/gameplay-rules/**'
-      - 'README.md'
-      - 'AGENTS.md'
       - 'docs/agent-code-atlas.md'
       - 'docs/code-map/gameplay-rules.md'
       - 'docs/design.md'
       - 'docs/gameplay-rules-contract.md'
-      - 'docs/known-limitations.md'
-      - 'docs/README.md'
       - 'docs/migration/donor-provenance.md'
       - 'docs/migration/migration-cluster-ledger.md'
       - 'migration/gameplay-rules-donor/**'
@@ -54,6 +46,10 @@ on:
       - '.github/workflows/rules.yml'
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -66,6 +62,12 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: engine-ci
+          workspaces: . -> target
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4

@@ -25,7 +25,13 @@ on:
       - 'rust/crates/voxel-annotation/**'
       - 'rust/crates/voxel-asset/**'
       - 'rust/crates/voxel-convert/**'
-      - 'render/**'
+      - 'render/package.json'
+      - 'render/pnpm-lock.yaml'
+      - 'render/pnpm-workspace.yaml'
+      - 'render/packages/render-contracts/**'
+      - 'render/packages/render-projection/**'
+      - 'render/packages/renderer-host/**'
+      - 'render/packages/renderer-three/**'
       - 'fixtures/render/**'
       - '.github/workflows/studio.yml'
   pull_request:
@@ -51,10 +57,20 @@ on:
       - 'rust/crates/voxel-annotation/**'
       - 'rust/crates/voxel-asset/**'
       - 'rust/crates/voxel-convert/**'
-      - 'render/**'
+      - 'render/package.json'
+      - 'render/pnpm-lock.yaml'
+      - 'render/pnpm-workspace.yaml'
+      - 'render/packages/render-contracts/**'
+      - 'render/packages/render-projection/**'
+      - 'render/packages/renderer-host/**'
+      - 'render/packages/renderer-three/**'
       - 'fixtures/render/**'
       - '.github/workflows/studio.yml'
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

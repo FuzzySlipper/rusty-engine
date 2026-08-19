@@ -1,0 +1,46 @@
+name: docs
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'docs/**'
+      - 'scripts/check-ci-routing.py'
+      - 'scripts/check-doc-links.sh'
+      - 'scripts/code_map_freshness.py'
+      - 'scripts/test-ci-routing-checker.sh'
+      - 'scripts/test_architecture_checks.py'
+      - 'scripts/verify-docs.sh'
+      - '.github/workflows/**'
+  pull_request:
+    paths:
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'docs/**'
+      - 'scripts/check-ci-routing.py'
+      - 'scripts/check-doc-links.sh'
+      - 'scripts/code_map_freshness.py'
+      - 'scripts/test-ci-routing-checker.sh'
+      - 'scripts/test_architecture_checks.py'
+      - 'scripts/verify-docs.sh'
+      - '.github/workflows/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify-docs-and-routing:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Rusty Engine
+        uses: actions/checkout@v4
+
+      - name: Verify documentation and CI routing
+        run: ./scripts/verify-docs.sh
