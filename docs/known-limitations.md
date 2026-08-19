@@ -30,7 +30,9 @@ downstream repositories.
   Angle-conditioned consumers may align neighboring captures onto one held
   card and assign opaque, complementary-dither, or alpha transition weights.
   These are experimental presentation controls, not multi-view reconstruction.
-  Retained-only `ghost-plate` mode freezes an isolated clone at capture time,
+  Retained-only `ghost-plate` mode freezes an isolated clone at capture time;
+  skinned vertices are baked into private static geometry so later plate-space
+  normalization cannot invalidate the captured bind transforms. It then
   projects captured color and coverage onto that same pose, and compresses its
   source-camera depth while preserving the exact source-view projection.
   Perspective captures scale ray x/y with compressed depth; orthographic

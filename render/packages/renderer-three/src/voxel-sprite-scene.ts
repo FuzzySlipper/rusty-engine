@@ -437,7 +437,8 @@ export class RendererThreeVoxelSpriteScene {
       throw new MissingSourceError(`retained handle ${String(definition.source.handle)} is unavailable`);
     }
     const runtimeCapture = new VoxelSpriteRuntimeCapture(this.#webgl);
-    const appearanceRoot = SkeletonUtils.clone(retainedObject);
+    let appearanceRoot = SkeletonUtils.clone(retainedObject);
+    let ownedGhostGeometries: readonly THREE.BufferGeometry[] = [];
     let presentation: GhostPlatePresentation | null = null;
     try {
       retainedObject.updateWorldMatrix(true, true);
@@ -452,6 +453,10 @@ export class RendererThreeVoxelSpriteScene {
       appearanceRoot.traverse((object) => {
         if (isRenderable(object)) object.layers.enable(0);
       });
+      appearanceRoot.updateWorldMatrix(true, true);
+      const frozenAppearance = freezeSkinnedMeshes(appearanceRoot);
+      appearanceRoot = frozenAppearance.root;
+      ownedGhostGeometries = frozenAppearance.ownedGeometries;
       appearanceRoot.updateWorldMatrix(true, true);
       const captureScene = new THREE.Scene();
       captureScene.add(appearanceRoot);
@@ -483,6 +488,7 @@ export class RendererThreeVoxelSpriteScene {
       }
       presentation = new GhostPlatePresentation({
         appearanceRoot,
+        ownedGeometries: ownedGhostGeometries,
         colorTexture: receipt.frame.descriptor.textures.color,
         coverageTexture: receipt.frame.descriptor.textures.coverage,
         projectionKind: camera instanceof THREE.PerspectiveCamera ? 'perspective' : 'orthographic',
@@ -508,7 +514,10 @@ export class RendererThreeVoxelSpriteScene {
       };
     } catch (cause) {
       presentation?.dispose();
-      if (presentation === null) disposeClonedSkeletons(appearanceRoot);
+      if (presentation === null) {
+        disposeClonedSkeletons(appearanceRoot);
+        for (const geometry of ownedGhostGeometries) geometry.dispose();
+      }
       runtimeCapture.dispose();
       throw cause;
     }
@@ -851,6 +860,69 @@ function captureCamera(
 
 function presentationObject(entry: Entry): THREE.Object3D {
   return entry.ghostPlate?.object ?? entry.enhancement!.object;
+}
+
+/**
+ * Ghost plates own one frozen appearance snapshot. Baking skinned vertices into ordinary meshes
+ * makes that snapshot independent from bind matrices and root transforms that no longer match
+ * after the captured hierarchy is normalized into the plate's display space.
+ */
+function freezeSkinnedMeshes(root: THREE.Object3D): {
+  readonly root: THREE.Object3D;
+  readonly ownedGeometries: readonly THREE.BufferGeometry[];
+} {
+  const skinnedMeshes: THREE.SkinnedMesh[] = [];
+  const clonedSkeletons = new Set<THREE.Skeleton>();
+  const ownedGeometries: THREE.BufferGeometry[] = [];
+  let frozenRoot = root;
+  root.traverse((object) => {
+    if (object instanceof THREE.SkinnedMesh) skinnedMeshes.push(object);
+  });
+  try {
+    for (const skinned of skinnedMeshes) {
+      const parent = skinned.parent;
+      clonedSkeletons.add(skinned.skeleton);
+      skinned.skeleton.update();
+      const geometry = skinned.geometry.clone();
+      ownedGeometries.push(geometry);
+      const sourcePosition = skinned.geometry.getAttribute('position');
+      const frozenPosition = sourcePosition.clone();
+      const vertex = new THREE.Vector3();
+      for (let index = 0; index < sourcePosition.count; index += 1) {
+        skinned.getVertexPosition(index, vertex);
+        frozenPosition.setXYZ(index, vertex.x, vertex.y, vertex.z);
+      }
+      frozenPosition.needsUpdate = true;
+      geometry.setAttribute('position', frozenPosition);
+      geometry.deleteAttribute('skinIndex');
+      geometry.deleteAttribute('skinWeight');
+      geometry.morphAttributes = {};
+      geometry.morphTargetsRelative = false;
+      geometry.computeBoundingBox();
+      geometry.computeBoundingSphere();
+
+      const frozen = new THREE.Mesh(geometry, skinned.material);
+      frozen.copy(skinned, false);
+      frozen.geometry = geometry;
+      frozen.material = skinned.material;
+      for (const child of [...skinned.children]) frozen.add(child);
+      if (parent === null) {
+        frozenRoot = frozen;
+      } else {
+        const childIndex = parent.children.indexOf(skinned);
+        parent.remove(skinned);
+        parent.add(frozen);
+        parent.children.splice(parent.children.indexOf(frozen), 1);
+        parent.children.splice(childIndex, 0, frozen);
+      }
+    }
+  } catch (cause) {
+    for (const geometry of ownedGeometries) geometry.dispose();
+    throw cause;
+  } finally {
+    for (const skeleton of clonedSkeletons) skeleton.dispose();
+  }
+  return { root: frozenRoot, ownedGeometries };
 }
 
 function enhancementConfigPatch(

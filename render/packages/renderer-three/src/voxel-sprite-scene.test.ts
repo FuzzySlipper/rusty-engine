@@ -393,7 +393,7 @@ void test('ghost-plate freezes an isolated multipart pose without mutating the c
   attachmentMaterial.dispose();
 });
 
-void test('ghost-plate clones a frozen skinned pose with an independent skeleton', () => {
+void test('ghost-plate bakes a frozen skinned pose without retaining bind-matrix authority', () => {
   const scene = new THREE.Scene();
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute([
@@ -421,7 +421,11 @@ void test('ghost-plate clones a frozen skinned pose with an independent skeleton
   source.add(bone);
   source.bind(new THREE.Skeleton([bone]));
   scene.add(source);
+  bone.position.x += 0.15;
   source.updateWorldMatrix(true, true);
+  source.skeleton.update();
+  const expectedFrozenPositions = Array.from({ length: geometry.getAttribute('position').count }, (_, index) =>
+    source.getVertexPosition(index, new THREE.Vector3()).toArray());
   const canonicalBoneMatrix = bone.matrixWorld.clone();
   const renderer = new FakeRenderer();
   const attachment = new RendererThreeVoxelSpriteScene({
@@ -450,22 +454,32 @@ void test('ghost-plate clones a frozen skinned pose with an independent skeleton
     mode: 'ghost-plate',
   });
   assert.equal(created.applied, true);
-  const clonedSkinned = scene.children[1]?.getObjectByName(source.name) instanceof THREE.SkinnedMesh
-    ? scene.children[1]?.getObjectByName(source.name) as THREE.SkinnedMesh
+  const frozenMesh = scene.children[1]?.getObjectByName(source.name) instanceof THREE.Mesh
+    ? scene.children[1]?.getObjectByName(source.name) as THREE.Mesh
     : (() => {
-        let found: THREE.SkinnedMesh | null = null;
+        let found: THREE.Mesh | null = null;
         scene.children[1]?.traverse((object) => {
-          if (object instanceof THREE.SkinnedMesh) found = object;
+          if (object instanceof THREE.Mesh) found = object;
         });
         return found;
       })();
-  assert.ok(clonedSkinned instanceof THREE.SkinnedMesh);
-  assert.notEqual(clonedSkinned.skeleton, source.skeleton);
-  assert.notEqual(clonedSkinned.skeleton.bones[0], bone);
-  assert.deepEqual(clonedSkinned.skeleton.bones[0]?.position.toArray(), bone.position.toArray());
+  assert.ok(frozenMesh instanceof THREE.Mesh);
+  assert.equal(frozenMesh instanceof THREE.SkinnedMesh, false);
+  assert.notEqual(frozenMesh.geometry, geometry);
+  const frozenPositions = frozenMesh.geometry.getAttribute('position');
+  assert.equal(frozenMesh.geometry.getAttribute('skinIndex'), undefined);
+  assert.equal(frozenMesh.geometry.getAttribute('skinWeight'), undefined);
+  let frozenGeometryDisposeCount = 0;
+  frozenMesh.geometry.addEventListener('dispose', () => { frozenGeometryDisposeCount += 1; });
+  for (let index = 0; index < frozenPositions.count; index += 1) {
+    const actual = [frozenPositions.getX(index), frozenPositions.getY(index), frozenPositions.getZ(index)];
+    assert.ok(actual.every((value, component) =>
+      Math.abs(value - expectedFrozenPositions[index]![component]!) < 1e-6));
+  }
   assert.ok(bone.matrixWorld.equals(canonicalBoneMatrix));
   assert.equal(source.material, material);
   attachment.dispose();
+  assert.equal(frozenGeometryDisposeCount, 1);
   assert.ok(bone.matrixWorld.equals(canonicalBoneMatrix));
   assert.equal(source.material, material);
   source.skeleton.dispose();

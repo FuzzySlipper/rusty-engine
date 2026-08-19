@@ -12,6 +12,7 @@ export interface GhostPlateConfig {
 
 export interface GhostPlateCaptureSnapshot {
   readonly appearanceRoot: THREE.Object3D;
+  readonly ownedGeometries?: readonly THREE.BufferGeometry[];
   readonly colorTexture: THREE.Texture;
   readonly coverageTexture: THREE.Texture;
   readonly projectionKind: 'perspective' | 'orthographic';
@@ -130,6 +131,7 @@ export class GhostPlatePresentation {
   readonly #ghostCameraLocal = new THREE.Matrix4();
   readonly #ghostProjection: THREE.Matrix4;
   readonly #materials: THREE.MeshBasicMaterial[] = [];
+  readonly #ownedGeometries: readonly THREE.BufferGeometry[];
   readonly #skeletons = new Set<THREE.Skeleton>();
   readonly #uniforms: GhostUniforms;
   readonly #projectionKind: 'perspective' | 'orthographic';
@@ -154,6 +156,7 @@ export class GhostPlatePresentation {
     positive(snapshot.transform.height, 'ghost transform height');
     this.#config = validatedConfig(snapshot.config);
     this.#appearanceRoot = snapshot.appearanceRoot;
+    this.#ownedGeometries = snapshot.ownedGeometries ?? [];
     this.#projectionKind = snapshot.projectionKind;
     this.#captureBasis = captureBasis(snapshot.ghostCameraWorld);
     this.#sourceViewBasis = this.#captureBasis;
@@ -256,6 +259,7 @@ export class GhostPlatePresentation {
     if (this.#disposed) return;
     this.object.remove(this.#appearanceRoot);
     for (const material of this.#materials) material.dispose();
+    for (const geometry of this.#ownedGeometries) geometry.dispose();
     for (const skeleton of this.#skeletons) skeleton.dispose();
     this.#materials.length = 0;
     this.#skeletons.clear();
