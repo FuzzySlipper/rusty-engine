@@ -6,8 +6,18 @@ import * as THREE from 'three';
 import {
   GhostPlatePresentation,
   evaluateGhostPlateShell,
+  selectGhostPlateSector,
   warpGhostCameraPoint,
 } from './voxel-sprite-ghost-plate.js';
+
+void test('sector selection holds through the boundary hysteresis then chooses the nearest sector', () => {
+  assert.equal(selectGhostPlateSector(24, 0, 8, 0, 3), 0);
+  assert.equal(selectGhostPlateSector(26, 0, 8, 0, 3), 1);
+  assert.equal(selectGhostPlateSector(339, 0, 8, 0, 3), 0, 'wraparound remains in sector zero');
+  assert.equal(selectGhostPlateSector(334, 0, 8, 0, 3), 7);
+  assert.equal(selectGhostPlateSector(190, 10, 4, 0, 3), 2, 'large jumps select directly');
+  assert.equal(selectGhostPlateSector(270, 0, 1, 0, 22.5), 0);
+});
 
 for (const fov of [35, 75, 110]) {
   for (const aspect of [0.75, 1]) {
@@ -117,6 +127,10 @@ void test('presentation owns ghost materials but borrows geometry and capture te
       plateMapping: 'plate-locked',
       shellMode: 'whole-mesh',
       shellDepthEpsilon: 0.12,
+      sectorCount: 1,
+      sectorHysteresisDegrees: 3,
+      transitionMode: 'hard-cut',
+      transitionDurationMilliseconds: 180,
     },
   });
   assert.notEqual(mesh.material, sourceMaterial);

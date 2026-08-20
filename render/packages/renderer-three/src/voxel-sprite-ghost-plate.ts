@@ -3,6 +3,8 @@ import * as THREE from 'three';
 export type GhostPlateAnchorPolicy = 'bounds-center' | 'bounds-normalized';
 export type GhostPlateMapping = 'plate-locked' | 'projective-surface';
 export type GhostPlateShellMode = 'whole-mesh' | 'strict-source' | 'repaired-source';
+export type GhostPlateSectorCount = 1 | 4 | 8 | 16;
+export type GhostPlateTransitionMode = 'hard-cut' | 'ordered-dither';
 
 export interface GhostPlateConfig {
   readonly depthRetention: number;
@@ -12,6 +14,10 @@ export interface GhostPlateConfig {
   readonly shellMode: GhostPlateShellMode;
   /** Requested source-view depth tolerance in capture-view units. */
   readonly shellDepthEpsilon: number;
+  readonly sectorCount: GhostPlateSectorCount;
+  readonly sectorHysteresisDegrees: number;
+  readonly transitionMode: GhostPlateTransitionMode;
+  readonly transitionDurationMilliseconds: number;
 }
 
 export interface GhostPlateCaptureSnapshot {
@@ -40,7 +46,7 @@ export interface GhostPlateReadout {
   readonly schemaVersion: 1;
   readonly enabled: boolean;
   readonly fallbackActive: boolean;
-  readonly fallbackReason: null | 'prepared-source-unsupported';
+  readonly fallbackReason: null | 'prepared-source-unsupported' | 'transition-failed';
   readonly matchedPose: boolean;
   readonly projection: 'perspective' | 'orthographic';
   readonly captureBasis: {
@@ -68,6 +74,20 @@ export interface GhostPlateReadout {
   readonly rejectedFragmentRatio: { readonly status: 'unavailable'; readonly value: null };
   readonly repairedBoundaryRatio: { readonly status: 'unavailable'; readonly value: null };
   readonly angularOffsetDegrees: number | null;
+  readonly sectorCount: GhostPlateSectorCount;
+  readonly selectedSector: number;
+  readonly pendingSector: number | null;
+  readonly previousSector: number | null;
+  readonly localAzimuthDegrees: number | null;
+  readonly sectorHysteresisDegrees: number;
+  readonly transitionMode: GhostPlateTransitionMode;
+  readonly transitionProgress: number;
+  readonly transitionDurationMilliseconds: number;
+  readonly residentSectorCount: number;
+  readonly currentResourceResident: boolean;
+  readonly previousResourceResident: boolean;
+  readonly preparationCpuMilliseconds: number | null;
+  readonly invalidationReason: string | null;
   readonly expectedDrawCalls: number;
   readonly meshCount: number;
   readonly materialResourceCount: number;
@@ -184,6 +204,8 @@ interface GhostUniforms {
   readonly shellMode: THREE.IUniform<number>;
   readonly shellDepthEpsilon: THREE.IUniform<number>;
   readonly shellDepthQuantizationHalfStep: THREE.IUniform<number>;
+  readonly transitionRole: THREE.IUniform<number>;
+  readonly transitionProgress: THREE.IUniform<number>;
 }
 
 /** Owns one frozen cloned appearance hierarchy and its ghost-only materials. */
@@ -266,6 +288,8 @@ export class GhostPlatePresentation {
       shellMode: { value: shellModeUniform(this.#config.shellMode) },
       shellDepthEpsilon: { value: this.#config.shellDepthEpsilon },
       shellDepthQuantizationHalfStep: { value: this.#shellDepthQuantizationStep * 0.5 },
+      transitionRole: { value: 0 },
+      transitionProgress: { value: 1 },
     };
 
     validateAppearanceHierarchy(this.#appearanceRoot);
@@ -288,6 +312,26 @@ export class GhostPlatePresentation {
     this.#uniforms.shellMode.value = shellModeUniform(this.#config.shellMode);
     this.#uniforms.shellDepthEpsilon.value = this.#config.shellDepthEpsilon;
     return this.readout();
+  }
+
+  setDepictionState(
+    visible: boolean,
+    role: 'stable' | 'previous' | 'current' = 'stable',
+    progress = 1,
+  ): void {
+    this.#assertLive();
+    bounded(progress, 0, 1, 'ghost transition progress');
+    this.object.visible = visible;
+    this.#uniforms.transitionRole.value = role === 'previous' ? -1 : role === 'current' ? 1 : 0;
+    this.#uniforms.transitionProgress.value = progress;
+    for (const material of this.#materials) {
+      const depthWrite = role === 'stable';
+      if (material.depthWrite !== depthWrite) {
+        material.depthWrite = depthWrite;
+        material.needsUpdate = true;
+      }
+    }
+    this.object.renderOrder = role === 'current' ? 1 : 0;
   }
 
   prepare(realCamera: THREE.Camera): void {
@@ -331,6 +375,20 @@ export class GhostPlatePresentation {
       rejectedFragmentRatio: Object.freeze({ status: 'unavailable', value: null }),
       repairedBoundaryRatio: Object.freeze({ status: 'unavailable', value: null }),
       angularOffsetDegrees: this.#angularOffsetDegrees,
+      sectorCount: 1,
+      selectedSector: 0,
+      pendingSector: null,
+      previousSector: null,
+      localAzimuthDegrees: null,
+      sectorHysteresisDegrees: 0,
+      transitionMode: 'hard-cut',
+      transitionProgress: 1,
+      transitionDurationMilliseconds: 0,
+      residentSectorCount: this.#disposed ? 0 : 1,
+      currentResourceResident: !this.#disposed,
+      previousResourceResident: false,
+      preparationCpuMilliseconds: null,
+      invalidationReason: null,
       expectedDrawCalls: this.#disposed ? 0 : this.#materials.length,
       meshCount: this.#disposed ? 0 : this.#meshCount,
       materialResourceCount: this.#disposed ? 0 : this.#materials.length,
@@ -403,6 +461,228 @@ export class GhostPlatePresentation {
   }
 }
 
+/** Owns one exact-pose plate bank and exposes at most the selected pair while changing sectors. */
+export class GhostPlateDirectionalPresentation {
+  readonly object = new THREE.Group();
+  readonly #plates: readonly GhostPlatePresentation[];
+  readonly #baseAzimuthDegrees: number;
+  readonly #preparationCpuMilliseconds: number | null;
+  #config: GhostPlateConfig;
+  #selectedSector = 0;
+  #previousSector: number | null = null;
+  #transitionStartedMilliseconds: number | null = null;
+  #transitionProgress = 1;
+  #localAzimuthDegrees: number | null = null;
+  #fallbackReason: GhostPlateReadout['fallbackReason'] = null;
+  #invalidationReason: string | null = null;
+  #disposed = false;
+
+  constructor(options: {
+    readonly plates: readonly GhostPlatePresentation[];
+    readonly config: GhostPlateConfig;
+    readonly baseAzimuthDegrees: number;
+    readonly preparationCpuMilliseconds: number | null;
+  }) {
+    this.#config = validatedConfig(options.config);
+    if (options.plates.length !== this.#config.sectorCount) {
+      throw new RangeError('ghost plate bank must match the configured sector count');
+    }
+    if (!Number.isFinite(options.baseAzimuthDegrees)) {
+      throw new TypeError('ghost base azimuth must be finite');
+    }
+    this.#plates = Object.freeze([...options.plates]);
+    this.#baseAzimuthDegrees = normalizeDegrees(options.baseAzimuthDegrees);
+    this.#preparationCpuMilliseconds = options.preparationCpuMilliseconds;
+    this.object.name = 'voxel-sprite-directional-ghost-plate';
+    for (const [index, plate] of this.#plates.entries()) {
+      this.object.add(plate.object);
+      plate.setDepictionState(index === 0);
+    }
+  }
+
+  configure(patch: Partial<GhostPlateConfig>): GhostPlateReadout {
+    this.#assertLive();
+    const next = validatedConfig({ ...this.#config, ...patch });
+    if (next.sectorCount !== this.#plates.length) {
+      throw new RangeError('changing ghost sector count requires an atomic source replacement');
+    }
+    this.#config = next;
+    for (const plate of this.#plates) plate.configure(next);
+    if (next.transitionMode === 'hard-cut' && this.#previousSector !== null) {
+      this.#settle(this.#selectedSector);
+    }
+    return this.readout();
+  }
+
+  prepare(realCamera: THREE.Camera, now = nowMilliseconds()): void {
+    if (this.#disposed) return;
+    try {
+      for (const plate of this.#plates) plate.prepare(realCamera);
+      this.#localAzimuthDegrees = actorRelativeAzimuth(realCamera, this.#plates[this.#selectedSector]!.object);
+      const nextSector = selectGhostPlateSector(
+        this.#localAzimuthDegrees,
+        this.#baseAzimuthDegrees,
+        this.#config.sectorCount,
+        this.#selectedSector,
+        this.#config.sectorHysteresisDegrees,
+      );
+      if (nextSector !== this.#selectedSector) this.#beginTransition(nextSector, now);
+      this.#advanceTransition(now);
+    } catch (cause) {
+      this.#fallbackReason = 'transition-failed';
+      this.#invalidationReason = cause instanceof Error ? cause.message : String(cause);
+      this.#settle(this.#selectedSector);
+    }
+  }
+
+  readout(): GhostPlateReadout {
+    const current = this.#plates[this.#selectedSector]!.readout();
+    const previous = this.#previousSector === null ? null : this.#plates[this.#previousSector]!.readout();
+    return Object.freeze({
+      ...current,
+      fallbackActive: this.#fallbackReason !== null,
+      fallbackReason: this.#fallbackReason,
+      angularOffsetDegrees: this.#localAzimuthDegrees === null
+        ? null
+        : Math.abs(signedAngularDifference(
+            this.#localAzimuthDegrees,
+            this.#baseAzimuthDegrees + this.#selectedSector * 360 / this.#config.sectorCount,
+          )),
+      sectorCount: this.#config.sectorCount,
+      selectedSector: this.#selectedSector,
+      pendingSector: this.#previousSector === null ? null : this.#selectedSector,
+      previousSector: this.#previousSector,
+      localAzimuthDegrees: this.#localAzimuthDegrees,
+      sectorHysteresisDegrees: this.#config.sectorHysteresisDegrees,
+      transitionMode: this.#config.transitionMode,
+      transitionProgress: this.#transitionProgress,
+      transitionDurationMilliseconds: this.#config.transitionDurationMilliseconds,
+      residentSectorCount: this.#disposed ? 0 : this.#plates.length,
+      currentResourceResident: !this.#disposed,
+      previousResourceResident: previous !== null && !this.#disposed,
+      preparationCpuMilliseconds: this.#preparationCpuMilliseconds,
+      invalidationReason: this.#invalidationReason,
+      expectedDrawCalls: current.expectedDrawCalls + (previous?.expectedDrawCalls ?? 0),
+      meshCount: this.#plates.reduce((total, plate) => total + plate.readout().meshCount, 0),
+      materialResourceCount: this.#plates.reduce(
+        (total, plate) => total + plate.readout().materialResourceCount,
+        0,
+      ),
+      borrowedTextureCount: this.#plates.reduce(
+        (total, plate) => total + plate.readout().borrowedTextureCount,
+        0,
+      ),
+      disposed: this.#disposed,
+      limitations: Object.freeze(current.limitations.filter((value) => value !== 'single-capture-view')),
+    });
+  }
+
+  dispose(): void {
+    if (this.#disposed) return;
+    for (const plate of this.#plates) {
+      this.object.remove(plate.object);
+      plate.dispose();
+    }
+    this.#disposed = true;
+    this.#previousSector = null;
+  }
+
+  #beginTransition(nextSector: number, now: number): void {
+    if (this.#config.transitionMode === 'hard-cut'
+      || this.#config.transitionDurationMilliseconds === 0) {
+      this.#selectedSector = nextSector;
+      this.#settle(nextSector);
+      return;
+    }
+    const oldSector = this.#selectedSector;
+    this.#settle(oldSector);
+    this.#selectedSector = nextSector;
+    this.#previousSector = oldSector;
+    this.#transitionStartedMilliseconds = now;
+    this.#transitionProgress = 0;
+    this.#plates[oldSector]!.setDepictionState(true, 'previous', 0);
+    this.#plates[nextSector]!.setDepictionState(true, 'current', 0);
+  }
+
+  #advanceTransition(now: number): void {
+    if (this.#previousSector === null || this.#transitionStartedMilliseconds === null) return;
+    const duration = this.#config.transitionDurationMilliseconds;
+    const progress = duration === 0 ? 1 : THREE.MathUtils.clamp(
+      (now - this.#transitionStartedMilliseconds) / duration,
+      0,
+      1,
+    );
+    this.#transitionProgress = progress;
+    if (progress >= 1) {
+      this.#settle(this.#selectedSector);
+      return;
+    }
+    this.#plates[this.#previousSector]!.setDepictionState(true, 'previous', progress);
+    this.#plates[this.#selectedSector]!.setDepictionState(true, 'current', progress);
+  }
+
+  #settle(sector: number): void {
+    for (const [index, plate] of this.#plates.entries()) {
+      plate.setDepictionState(index === sector, 'stable', 1);
+    }
+    this.#previousSector = null;
+    this.#transitionStartedMilliseconds = null;
+    this.#transitionProgress = 1;
+  }
+
+  #assertLive(): void {
+    if (this.#disposed) throw new Error('directional ghost plate presentation is disposed');
+  }
+}
+
+/** Deterministic nearest-sector selection with a bounded hold zone around the live sector. */
+export function selectGhostPlateSector(
+  localAzimuthDegrees: number,
+  baseAzimuthDegrees: number,
+  sectorCount: GhostPlateSectorCount,
+  currentSector: number,
+  hysteresisDegrees: number,
+): number {
+  if (![1, 4, 8, 16].includes(sectorCount)) throw new RangeError('unsupported ghost sector count');
+  if (!Number.isInteger(currentSector) || currentSector < 0 || currentSector >= sectorCount) {
+    throw new RangeError('current ghost sector is out of range');
+  }
+  bounded(hysteresisDegrees, 0, 22.5, 'ghost sector hysteresis');
+  if (!Number.isFinite(localAzimuthDegrees) || !Number.isFinite(baseAzimuthDegrees)) {
+    throw new TypeError('ghost sector azimuths must be finite');
+  }
+  if (sectorCount === 1) return 0;
+  const width = 360 / sectorCount;
+  const currentCenter = baseAzimuthDegrees + currentSector * width;
+  if (Math.abs(signedAngularDifference(localAzimuthDegrees, currentCenter))
+    <= width * 0.5 + hysteresisDegrees) return currentSector;
+  return ((Math.round(signedAngularDifference(localAzimuthDegrees, baseAzimuthDegrees) / width)
+    % sectorCount) + sectorCount) % sectorCount;
+}
+
+function actorRelativeAzimuth(camera: THREE.Camera, object: THREE.Object3D): number {
+  camera.updateWorldMatrix(true, false);
+  object.updateWorldMatrix(true, false);
+  const center = object.getWorldPosition(new THREE.Vector3());
+  const direction = camera.getWorldPosition(new THREE.Vector3()).sub(center);
+  if (direction.lengthSq() < 1e-10) throw new RangeError('viewer is coincident with ghost plate center');
+  const orientation = object.getWorldQuaternion(new THREE.Quaternion()).invert();
+  direction.applyQuaternion(orientation);
+  return normalizeDegrees(THREE.MathUtils.radToDeg(Math.atan2(direction.x, direction.z)));
+}
+
+function signedAngularDifference(value: number, reference: number): number {
+  return ((value - reference + 540) % 360) - 180;
+}
+
+function normalizeDegrees(value: number): number {
+  return ((value % 360) + 360) % 360;
+}
+
+function nowMilliseconds(): number {
+  return globalThis.performance?.now() ?? Date.now();
+}
+
 function validateAppearanceHierarchy(root: THREE.Object3D): void {
   root.traverse((object) => {
     if (object instanceof THREE.InstancedMesh || object instanceof THREE.BatchedMesh) {
@@ -462,6 +742,8 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
     uniform float shellMode;
     uniform float shellDepthEpsilon;
     uniform float shellDepthQuantizationHalfStep;
+    uniform float transitionRole;
+    uniform float transitionProgress;
     varying vec3 ghostProjectiveUv;
     varying vec3 ghostPlateLockedUv;
     varying float ghostOriginalDepth;
@@ -474,6 +756,17 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
       return abs(ghostOriginalDepth - sampledDepth)
         <= shellDepthEpsilon + shellDepthQuantizationHalfStep;
     }
+
+    float ghostOrderedThreshold(vec2 uv) {
+      vec2 texel = floor(uv / textureTexelSize);
+      vec2 cell = mod(texel, 4.0);
+      float x = cell.x;
+      float y = cell.y;
+      float rank = mod(x, 2.0) * 2.0 + mod(y, 2.0);
+      rank += mod(floor(x / 2.0), 2.0) * 8.0;
+      rank += mod(floor(y / 2.0), 2.0) * 4.0;
+      return (rank + 0.5) / 16.0;
+    }
   `;
   shader.fragmentShader = shader.fragmentShader
     .replace('void main() {', `${fragmentDeclarations}\nvoid main() {`)
@@ -485,6 +778,9 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
       float ghostCoverage = texture2D(coverageTexture, ghostUv).r;
       vec4 ghostPlateColor = texture2D(map, ghostUv);
       if (ghostCoverage < 0.5 || ghostPlateColor.a < 0.01) discard;
+      float ghostTransitionThreshold = ghostOrderedThreshold(ghostUv);
+      if (transitionRole < -0.5 && ghostTransitionThreshold < transitionProgress) discard;
+      if (transitionRole > 0.5 && ghostTransitionThreshold >= transitionProgress) discard;
       if (shellMode > 0.5) {
         bool ghostShellAccepted = ghostShellSampleAgrees(ghostUv);
         if (!ghostShellAccepted && shellMode > 1.5) {
@@ -567,12 +863,21 @@ function validatedConfig(config: GhostPlateConfig): GhostPlateConfig {
     throw new TypeError(`unsupported ghost shell mode ${String(config.shellMode)}`);
   }
   bounded(config.shellDepthEpsilon, 0, 2, 'ghost shell depth epsilon');
+  if (![1, 4, 8, 16].includes(config.sectorCount)) {
+    throw new RangeError('ghost sector count must be 1, 4, 8, or 16');
+  }
+  bounded(config.sectorHysteresisDegrees, 0, 22.5, 'ghost sector hysteresis');
+  if (config.transitionMode !== 'hard-cut' && config.transitionMode !== 'ordered-dither') {
+    throw new TypeError(`unsupported ghost transition mode ${String(config.transitionMode)}`);
+  }
+  bounded(config.transitionDurationMilliseconds, 0, 5_000, 'ghost transition duration');
   return Object.freeze({ ...config });
 }
 
 function rejectUnknownKeys(config: Partial<GhostPlateConfig>): void {
   const keys = new Set([
     'depthRetention', 'anchorPolicy', 'anchorValue', 'plateMapping', 'shellMode', 'shellDepthEpsilon',
+    'sectorCount', 'sectorHysteresisDegrees', 'transitionMode', 'transitionDurationMilliseconds',
   ]);
   for (const key of Object.keys(config)) {
     if (!keys.has(key)) throw new TypeError(`unknown ghost plate config field ${key}`);

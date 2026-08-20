@@ -121,6 +121,10 @@ export interface RustyApplicationVoxelSpriteConfig {
   readonly ghostPlateMapping: 'plate-locked' | 'projective-surface';
   readonly ghostShellMode: 'whole-mesh' | 'strict-source' | 'repaired-source';
   readonly ghostShellDepthEpsilon: number;
+  readonly ghostSectorCount: 1 | 4 | 8 | 16;
+  readonly ghostSectorHysteresisDegrees: number;
+  readonly ghostTransitionMode: 'hard-cut' | 'ordered-dither';
+  readonly ghostTransitionDurationMilliseconds: number;
 }
 
 /** The normalized configuration reported by the ordinary five-mode enhancement. */
@@ -128,6 +132,8 @@ export type RustyApplicationVoxelSpriteEnhancementConfig = Omit<
   RustyApplicationVoxelSpriteConfig,
   'mode' | 'ghostDepthRetention' | 'ghostAnchorPolicy' | 'ghostAnchorValue' | 'ghostPlateMapping'
   | 'ghostShellMode' | 'ghostShellDepthEpsilon'
+  | 'ghostSectorCount' | 'ghostSectorHysteresisDegrees' | 'ghostTransitionMode'
+  | 'ghostTransitionDurationMilliseconds'
 > & {
   readonly mode: RustyApplicationVoxelSpriteEnhancementMode;
 };
@@ -232,7 +238,7 @@ export interface RustyApplicationVoxelSpriteGhostPlateReadout {
   readonly schemaVersion: 1;
   readonly enabled: boolean;
   readonly fallbackActive: boolean;
-  readonly fallbackReason: null | 'prepared-source-unsupported';
+  readonly fallbackReason: null | 'prepared-source-unsupported' | 'transition-failed';
   readonly matchedPose: boolean;
   readonly projection: 'perspective' | 'orthographic';
   readonly captureBasis: {
@@ -259,6 +265,20 @@ export interface RustyApplicationVoxelSpriteGhostPlateReadout {
   readonly rejectedFragmentRatio: { readonly status: 'unavailable'; readonly value: null };
   readonly repairedBoundaryRatio: { readonly status: 'unavailable'; readonly value: null };
   readonly angularOffsetDegrees: number | null;
+  readonly sectorCount: 1 | 4 | 8 | 16;
+  readonly selectedSector: number;
+  readonly pendingSector: number | null;
+  readonly previousSector: number | null;
+  readonly localAzimuthDegrees: number | null;
+  readonly sectorHysteresisDegrees: number;
+  readonly transitionMode: 'hard-cut' | 'ordered-dither';
+  readonly transitionProgress: number;
+  readonly transitionDurationMilliseconds: number;
+  readonly residentSectorCount: number;
+  readonly currentResourceResident: boolean;
+  readonly previousResourceResident: boolean;
+  readonly preparationCpuMilliseconds: number | null;
+  readonly invalidationReason: string | null;
   readonly expectedDrawCalls: number;
   readonly meshCount: number;
   readonly materialResourceCount: number;

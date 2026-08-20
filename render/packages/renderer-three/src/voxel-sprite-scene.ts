@@ -16,9 +16,12 @@ import {
 } from './voxel-sprite-enhancement.js';
 import { VoxelSpriteRuntimeCapture } from './voxel-sprite-capture.js';
 import {
+  GhostPlateDirectionalPresentation,
   GhostPlatePresentation,
   type GhostPlateConfig,
   type GhostPlateReadout,
+  type GhostPlateSectorCount,
+  type GhostPlateTransitionMode,
 } from './voxel-sprite-ghost-plate.js';
 
 export type RendererThreeVoxelSpriteMode = VoxelSpriteEnhancementMode | 'ghost-plate';
@@ -39,6 +42,12 @@ export interface RendererThreeVoxelSpriteGhostConfig {
   readonly ghostShellMode: RendererThreeVoxelSpriteGhostShellMode;
   /** Capture-view depth tolerance in the same units as capture near/far. */
   readonly ghostShellDepthEpsilon: number;
+  /** Number of actor-relative azimuth depictions captured from one frozen pose. */
+  readonly ghostSectorCount: GhostPlateSectorCount;
+  /** Extra angular hold beyond each sector's half-width. */
+  readonly ghostSectorHysteresisDegrees: number;
+  readonly ghostTransitionMode: GhostPlateTransitionMode;
+  readonly ghostTransitionDurationMilliseconds: number;
 }
 
 export type RendererThreeVoxelSpriteConfigPatch = Partial<
@@ -158,11 +167,12 @@ export interface RendererThreeVoxelSpriteBackend {
 interface Entry {
   readonly id: string;
   readonly enhancement: VoxelSpriteEnhancement | null;
-  readonly ghostPlate: GhostPlatePresentation | null;
+  readonly ghostPlate: GhostPlateDirectionalPresentation | null;
   readonly frame: VoxelSpriteFrame;
   readonly source: RendererThreeVoxelSpriteSource;
   readonly transform: RendererThreeVoxelSpriteTransform;
   readonly runtimeCapture: VoxelSpriteRuntimeCapture | null;
+  readonly ghostRuntimeCaptures: readonly VoxelSpriteRuntimeCapture[];
   readonly retainedObject: THREE.Object3D | null;
   readonly retainedOriginalVisibility: boolean | null;
   releaseCanonicalSuppression: (() => void) | null;
@@ -294,6 +304,10 @@ export class RendererThreeVoxelSpriteScene {
             ghostPlateMapping: ghost.plateMapping,
             ghostShellMode: ghost.shellMode,
             ghostShellDepthEpsilon: ghost.shellDepthEpsilon,
+            ghostSectorCount: ghost.sectorCount,
+            ghostSectorHysteresisDegrees: ghost.sectorHysteresisDegrees,
+            ghostTransitionMode: ghost.transitionMode,
+            ghostTransitionDurationMilliseconds: ghost.transitionDurationMilliseconds,
           },
         });
       } catch (cause) {
@@ -427,6 +441,7 @@ export class RendererThreeVoxelSpriteScene {
       source: definition.source,
       transform: definition.transform,
       runtimeCapture,
+      ghostRuntimeCaptures: Object.freeze([]),
       retainedObject,
       retainedOriginalVisibility,
       releaseCanonicalSuppression: null,
@@ -443,10 +458,11 @@ export class RendererThreeVoxelSpriteScene {
     if (retainedObject === null) {
       throw new MissingSourceError(`retained handle ${String(definition.source.handle)} is unavailable`);
     }
-    const runtimeCapture = new VoxelSpriteRuntimeCapture(this.#webgl);
+    const runtimeCaptures: VoxelSpriteRuntimeCapture[] = [];
     let appearanceRoot = SkeletonUtils.clone(retainedObject);
     let ownedGhostGeometries: readonly THREE.BufferGeometry[] = [];
-    let presentation: GhostPlatePresentation | null = null;
+    let presentation: GhostPlateDirectionalPresentation | null = null;
+    const plates: GhostPlatePresentation[] = [];
     try {
       retainedObject.updateWorldMatrix(true, true);
       const clonedLights: THREE.Light[] = [];
@@ -465,59 +481,77 @@ export class RendererThreeVoxelSpriteScene {
       appearanceRoot = frozenAppearance.root;
       ownedGhostGeometries = frozenAppearance.ownedGeometries;
       appearanceRoot.updateWorldMatrix(true, true);
-      const captureScene = new THREE.Scene();
-      captureScene.add(appearanceRoot);
       const bounds = new THREE.Box3().setFromObject(appearanceRoot, true);
       if (bounds.isEmpty()) throw new CaptureSourceError('retained source bounds are empty');
       const center = bounds.getCenter(new THREE.Vector3());
       const size = bounds.getSize(new THREE.Vector3());
-      const camera = captureCamera(definition.source.capture, center, size);
-      const disposeLighting = definition.source.capture.lighting?.mode === 'scene'
-        ? addClonedSceneLights(this.#backend.scene, captureScene)
-        : addStudioRig(
-            captureScene,
-            camera,
-            center,
-            size,
-            studioLighting(definition.source.capture.lighting),
-          );
-      const receipt = runtimeCapture.capture({
-        scene: captureScene,
-        camera,
-        width: definition.source.capture.resolution,
-        height: definition.source.capture.resolution,
-        bounds,
-      });
-      disposeLighting();
-      captureScene.remove(appearanceRoot);
-      if (!receipt.applied || receipt.frame === null) {
-        throw new CaptureSourceError(receipt.diagnostics[0]?.message ?? 'runtime capture failed');
+      const config = validatedGhostConfig(definition.config ?? {});
+      const started = nowMilliseconds();
+      for (let sector = 0; sector < config.sectorCount; sector += 1) {
+        const sectorAppearance = cloneFrozenAppearance(appearanceRoot);
+        const captureScene = new THREE.Scene();
+        captureScene.add(sectorAppearance.root);
+        const captureSettings = {
+          ...definition.source.capture,
+          azimuthDegrees: normalizedCaptureAzimuth(
+            definition.source.capture.azimuthDegrees + sector * 360 / config.sectorCount,
+          ),
+        };
+        const camera = captureCamera(captureSettings, center, size);
+        const disposeLighting = captureSettings.lighting?.mode === 'scene'
+          ? addClonedSceneLights(this.#backend.scene, captureScene)
+          : addStudioRig(captureScene, camera, center, size, studioLighting(captureSettings.lighting));
+        const runtimeCapture = new VoxelSpriteRuntimeCapture(this.#webgl);
+        runtimeCaptures.push(runtimeCapture);
+        const receipt = runtimeCapture.capture({
+          scene: captureScene,
+          camera,
+          width: captureSettings.resolution,
+          height: captureSettings.resolution,
+          bounds,
+        });
+        disposeLighting();
+        captureScene.remove(sectorAppearance.root);
+        if (!receipt.applied || receipt.frame === null) {
+          for (const geometry of sectorAppearance.ownedGeometries) geometry.dispose();
+          throw new CaptureSourceError(receipt.diagnostics[0]?.message ?? 'runtime capture failed');
+        }
+        plates.push(new GhostPlatePresentation({
+          appearanceRoot: sectorAppearance.root,
+          ownedGeometries: sectorAppearance.ownedGeometries,
+          colorTexture: receipt.frame.descriptor.textures.color,
+          coverageTexture: receipt.frame.descriptor.textures.coverage,
+          depthTexture: receipt.frame.descriptor.textures.depth,
+          textureWidth: receipt.frame.descriptor.width,
+          textureHeight: receipt.frame.descriptor.height,
+          captureNear: receipt.frame.descriptor.depth.near,
+          captureFar: receipt.frame.descriptor.depth.far,
+          projectionKind: camera instanceof THREE.PerspectiveCamera ? 'perspective' : 'orthographic',
+          ghostCameraWorld: camera.matrixWorld.clone(),
+          ghostProjection: camera.projectionMatrix.clone(),
+          bounds,
+          transform: definition.transform,
+          config,
+        }));
       }
-      presentation = new GhostPlatePresentation({
-        appearanceRoot,
-        ownedGeometries: ownedGhostGeometries,
-        colorTexture: receipt.frame.descriptor.textures.color,
-        coverageTexture: receipt.frame.descriptor.textures.coverage,
-        depthTexture: receipt.frame.descriptor.textures.depth,
-        textureWidth: receipt.frame.descriptor.width,
-        textureHeight: receipt.frame.descriptor.height,
-        captureNear: receipt.frame.descriptor.depth.near,
-        captureFar: receipt.frame.descriptor.depth.far,
-        projectionKind: camera instanceof THREE.PerspectiveCamera ? 'perspective' : 'orthographic',
-        ghostCameraWorld: camera.matrixWorld.clone(),
-        ghostProjection: camera.projectionMatrix.clone(),
-        bounds,
-        transform: definition.transform,
-        config: validatedGhostConfig(definition.config ?? {}),
+      for (const geometry of ownedGhostGeometries) geometry.dispose();
+      ownedGhostGeometries = [];
+      disposeClonedSkeletons(appearanceRoot);
+      presentation = new GhostPlateDirectionalPresentation({
+        plates,
+        config,
+        baseAzimuthDegrees: definition.source.capture.azimuthDegrees,
+        preparationCpuMilliseconds: nowMilliseconds() - started,
       });
       return {
         id: definition.id,
         enhancement: null,
         ghostPlate: presentation,
-        frame: receipt.frame,
+        frame: runtimeCaptures[0]!.currentFrame()!,
         source: definition.source,
         transform: definition.transform,
-        runtimeCapture,
+        runtimeCapture: runtimeCaptures[0]!,
+        ghostRuntimeCaptures: Object.freeze(runtimeCaptures),
         retainedObject,
         retainedOriginalVisibility: null,
         releaseCanonicalSuppression: null,
@@ -527,10 +561,11 @@ export class RendererThreeVoxelSpriteScene {
     } catch (cause) {
       presentation?.dispose();
       if (presentation === null) {
+        for (const plate of plates) plate.dispose();
         disposeClonedSkeletons(appearanceRoot);
         for (const geometry of ownedGhostGeometries) geometry.dispose();
       }
-      runtimeCapture.dispose();
+      for (const capture of runtimeCaptures) capture.dispose();
       throw cause;
     }
   }
@@ -651,7 +686,11 @@ export class RendererThreeVoxelSpriteScene {
     this.#backend.scene.remove(presentationObject(entry));
     entry.enhancement?.dispose();
     entry.ghostPlate?.dispose();
-    entry.runtimeCapture?.dispose();
+    if (entry.ghostRuntimeCaptures.length > 0) {
+      for (const capture of entry.ghostRuntimeCaptures) capture.dispose();
+    } else {
+      entry.runtimeCapture?.dispose();
+    }
     entry.releaseCanonicalSuppression?.();
     entry.releaseCanonicalSuppression = null;
     if (entry.runtimeCapture === null) entry.frame.dispose();
@@ -937,6 +976,30 @@ function freezeSkinnedMeshes(root: THREE.Object3D): {
   return { root: frozenRoot, ownedGeometries };
 }
 
+function cloneFrozenAppearance(root: THREE.Object3D): {
+  readonly root: THREE.Object3D;
+  readonly ownedGeometries: readonly THREE.BufferGeometry[];
+} {
+  const clone = root.clone(true);
+  const ownedGeometries: THREE.BufferGeometry[] = [];
+  clone.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    object.geometry = object.geometry.clone();
+    ownedGeometries.push(object.geometry);
+  });
+  clone.updateWorldMatrix(true, true);
+  return { root: clone, ownedGeometries };
+}
+
+function normalizedCaptureAzimuth(value: number): number {
+  const normalized = ((value + 180) % 360 + 360) % 360 - 180;
+  return normalized === -180 ? 180 : normalized;
+}
+
+function nowMilliseconds(): number {
+  return globalThis.performance?.now() ?? Date.now();
+}
+
 function enhancementConfigPatch(
   patch: RendererThreeVoxelSpriteConfigPatch,
 ): Partial<VoxelSpriteEnhancementConfig> {
@@ -947,6 +1010,10 @@ function enhancementConfigPatch(
     ghostPlateMapping: _plateMapping,
     ghostShellMode: _shellMode,
     ghostShellDepthEpsilon: _shellDepthEpsilon,
+    ghostSectorCount: _sectorCount,
+    ghostSectorHysteresisDegrees: _sectorHysteresis,
+    ghostTransitionMode: _transitionMode,
+    ghostTransitionDurationMilliseconds: _transitionDuration,
     ...enhancement
   } = patch;
   return enhancement;
@@ -960,6 +1027,10 @@ function ghostConfigPatch(patch: RendererThreeVoxelSpriteConfigPatch): Partial<G
     'ghostPlateMapping',
     'ghostShellMode',
     'ghostShellDepthEpsilon',
+    'ghostSectorCount',
+    'ghostSectorHysteresisDegrees',
+    'ghostTransitionMode',
+    'ghostTransitionDurationMilliseconds',
   ]);
   const unsupported = Object.keys(patch).filter((key) => !allowed.has(key));
   if (unsupported.length > 0) {
@@ -972,6 +1043,10 @@ function ghostConfigPatch(patch: RendererThreeVoxelSpriteConfigPatch): Partial<G
     ...(patch.ghostPlateMapping === undefined ? {} : { plateMapping: patch.ghostPlateMapping }),
     ...(patch.ghostShellMode === undefined ? {} : { shellMode: patch.ghostShellMode }),
     ...(patch.ghostShellDepthEpsilon === undefined ? {} : { shellDepthEpsilon: patch.ghostShellDepthEpsilon }),
+    ...(patch.ghostSectorCount === undefined ? {} : { sectorCount: patch.ghostSectorCount }),
+    ...(patch.ghostSectorHysteresisDegrees === undefined ? {} : { sectorHysteresisDegrees: patch.ghostSectorHysteresisDegrees }),
+    ...(patch.ghostTransitionMode === undefined ? {} : { transitionMode: patch.ghostTransitionMode }),
+    ...(patch.ghostTransitionDurationMilliseconds === undefined ? {} : { transitionDurationMilliseconds: patch.ghostTransitionDurationMilliseconds }),
   };
 }
 
@@ -983,6 +1058,10 @@ function validatedGhostConfig(patch: RendererThreeVoxelSpriteConfigPatch): Ghost
     plateMapping: patch.ghostPlateMapping ?? 'plate-locked',
     shellMode: patch.ghostShellMode ?? 'whole-mesh',
     shellDepthEpsilon: patch.ghostShellDepthEpsilon ?? 0.12,
+    sectorCount: patch.ghostSectorCount ?? 1,
+    sectorHysteresisDegrees: patch.ghostSectorHysteresisDegrees ?? 3,
+    transitionMode: patch.ghostTransitionMode ?? 'hard-cut',
+    transitionDurationMilliseconds: patch.ghostTransitionDurationMilliseconds ?? 180,
   };
   ghostConfigPatch(patch);
   return config;

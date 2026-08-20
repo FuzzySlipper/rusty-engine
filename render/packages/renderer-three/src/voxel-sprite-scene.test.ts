@@ -301,12 +301,19 @@ void test('ghost-plate freezes an isolated multipart pose without mutating the c
       ghostAnchorPolicy: 'bounds-center',
       ghostAnchorValue: 0.5,
       ghostPlateMapping: 'plate-locked',
+      ghostSectorCount: 4,
+      ghostSectorHysteresisDegrees: 3,
+      ghostTransitionMode: 'ordered-dither',
+      ghostTransitionDurationMilliseconds: 180,
     },
   });
   assert.equal(created.applied, true);
   assert.equal(created.readout.entries[0]?.presentation, 'ghost-plate');
   assert.equal(created.readout.entries[0]?.enhancement, null);
-  assert.equal(created.readout.entries[0]?.ghostPlate?.meshCount, 2);
+  assert.equal(created.readout.entries[0]?.ghostPlate?.meshCount, 8);
+  assert.equal(created.readout.entries[0]?.ghostPlate?.sectorCount, 4);
+  assert.equal(created.readout.entries[0]?.ghostPlate?.residentSectorCount, 4);
+  assert.equal(created.readout.entries[0]?.ghostPlate?.transitionMode, 'ordered-dither');
   assert.equal(created.readout.entries[0]?.ghostPlate?.matchedPose, true);
   assert.equal(created.readout.entries[0]?.ghostPlate?.captureBasis.forward.length, 3);
   assert.equal(source.visible, true, 'ghost capture does not acquire canonical visibility');
@@ -343,6 +350,9 @@ void test('ghost-plate freezes an isolated multipart pose without mutating the c
   assert.equal(rejectedShellConfig.applied, false);
   assert.equal(rejectedShellConfig.diagnostics[0]?.code, 'invalid_definition');
   assert.equal(rejectedShellConfig.readout.entries[0]?.ghostPlate?.shellDepthEpsilon, 0.25);
+  const rejectedStructuralConfig = attachment.configure('ghost', { ghostSectorCount: 8 });
+  assert.equal(rejectedStructuralConfig.applied, false);
+  assert.match(rejectedStructuralConfig.diagnostics[0]?.message ?? '', /atomic source replacement/);
 
   const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
   camera.position.set(10, 3, 8);
