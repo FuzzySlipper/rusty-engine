@@ -4,6 +4,7 @@ import test from 'node:test';
 import * as THREE from 'three';
 
 import {
+  GhostPlateDirectionalPresentation,
   GhostPlatePresentation,
   evaluateGhostPlateShell,
   evaluateGhostPlateTransition,
@@ -23,6 +24,87 @@ void test('transition partition admits exactly one depiction at every bounded th
   }
   assert.deepEqual(evaluateGhostPlateTransition(0.25, 0), { previous: true, current: false });
   assert.deepEqual(evaluateGhostPlateTransition(0.25, 1), { previous: false, current: true });
+});
+
+void test('rapid edge-echo reversal settles to one coherent depiction', () => {
+  const borrowedTextures: THREE.Texture[] = [];
+  const sourceMaterials: THREE.Material[] = [];
+  const config = {
+    depthRetention: 0.12,
+    anchorPolicy: 'bounds-center',
+    anchorValue: 0.5,
+    plateMapping: 'plate-locked',
+    shellMode: 'whole-mesh',
+    shellDepthEpsilon: 0.12,
+    sectorCount: 4,
+    sectorHysteresisDegrees: 3,
+    transitionMode: 'edge-echo',
+    transitionDurationMilliseconds: 180,
+  } as const;
+  const plates = Array.from({ length: 4 }, () => {
+    const geometry = new THREE.BoxGeometry(1, 2, 1);
+    const sourceMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    sourceMaterials.push(sourceMaterial);
+    const appearance = new THREE.Group();
+    appearance.add(new THREE.Mesh(geometry, sourceMaterial));
+    appearance.updateMatrixWorld(true);
+    const colorTexture = new THREE.Texture();
+    const coverageTexture = new THREE.Texture();
+    const depthTexture = new THREE.Texture();
+    borrowedTextures.push(colorTexture, coverageTexture, depthTexture);
+    const captureCamera = new THREE.PerspectiveCamera(35, 1, 0.1, 20);
+    captureCamera.position.set(0, 0, 5);
+    captureCamera.updateMatrixWorld(true);
+    return new GhostPlatePresentation({
+      appearanceRoot: appearance,
+      ownedGeometries: [geometry],
+      colorTexture,
+      coverageTexture,
+      depthTexture,
+      textureWidth: 64,
+      textureHeight: 64,
+      captureNear: 0.1,
+      captureFar: 20,
+      projectionKind: 'perspective',
+      ghostCameraWorld: captureCamera.matrixWorld.clone(),
+      ghostProjection: captureCamera.projectionMatrix.clone(),
+      bounds: new THREE.Box3().setFromObject(appearance, true),
+      transform: { position: [0, 0, 0], width: 1, height: 2 },
+      config,
+    });
+  });
+  const directional = new GhostPlateDirectionalPresentation({
+    plates,
+    config,
+    baseAzimuthDegrees: 0,
+    preparationCpuMilliseconds: 1,
+  });
+  const viewer = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
+  const setAzimuth = (degrees: number): void => {
+    const radians = THREE.MathUtils.degToRad(degrees);
+    viewer.position.set(Math.sin(radians) * 5, 0, Math.cos(radians) * 5);
+    viewer.updateMatrixWorld(true);
+  };
+
+  setAzimuth(0);
+  directional.prepare(viewer, 0);
+  setAzimuth(60);
+  directional.prepare(viewer, 10);
+  assert.equal(directional.readout().selectedSector, 1);
+  assert.equal(directional.readout().previousSector, 0);
+  assert.equal(directional.advancing(), true);
+
+  setAzimuth(0);
+  directional.prepare(viewer, 20);
+  assert.equal(directional.readout().selectedSector, 0);
+  assert.equal(directional.readout().previousSector, null);
+  assert.equal(directional.readout().transitionProgress, 1);
+  assert.equal(directional.advancing(), false);
+  assert.equal(plates.filter((plate) => plate.object.visible).length, 1);
+
+  directional.dispose();
+  for (const material of sourceMaterials) material.dispose();
+  for (const texture of borrowedTextures) texture.dispose();
 });
 
 void test('edge echo is a narrow mirrored band that travels fully off the plate', () => {

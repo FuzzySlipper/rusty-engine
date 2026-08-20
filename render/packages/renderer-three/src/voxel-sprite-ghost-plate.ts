@@ -381,7 +381,9 @@ export class GhostPlatePresentation {
         material.needsUpdate = true;
       }
     }
-    this.object.renderOrder = role === 'current' ? 1 : 0;
+    this.object.renderOrder = this.#config.transitionMode === 'edge-echo'
+      ? role === 'previous' ? 2 : role === 'current' ? 1 : 0
+      : role === 'current' ? 1 : 0;
   }
 
   prepare(realCamera: THREE.Camera): void {
@@ -643,8 +645,10 @@ export class GhostPlateDirectionalPresentation {
   }
 
   #beginTransition(nextSector: number, now: number): void {
+    const interrupted = this.#previousSector !== null;
     if (this.#config.transitionMode === 'hard-cut'
-      || this.#config.transitionDurationMilliseconds === 0) {
+      || this.#config.transitionDurationMilliseconds === 0
+      || interrupted) {
       this.#selectedSector = nextSector;
       this.#settle(nextSector);
       return;
@@ -898,7 +902,7 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
         ghostPreviousOwns = ghostTransitionThreshold >= transitionProgress;
       }
       if (transitionRole < -0.5 && !ghostPreviousOwns) discard;
-      if (transitionRole > 0.5 && ghostPreviousOwns) discard;
+      if (transitionPattern < 1.5 && transitionRole > 0.5 && ghostPreviousOwns) discard;
       if (shellMode > 0.5) {
         bool ghostShellAccepted = ghostShellSampleAgrees(ghostUv);
         if (!ghostShellAccepted && shellMode > 1.5) {
