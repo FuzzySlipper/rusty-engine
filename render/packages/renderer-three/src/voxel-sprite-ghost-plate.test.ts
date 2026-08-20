@@ -6,9 +6,23 @@ import * as THREE from 'three';
 import {
   GhostPlatePresentation,
   evaluateGhostPlateShell,
+  evaluateGhostPlateTransition,
   selectGhostPlateSector,
   warpGhostCameraPoint,
 } from './voxel-sprite-ghost-plate.js';
+
+void test('transition partition admits exactly one depiction at every bounded threshold', () => {
+  for (let progressStep = 0; progressStep <= 100; progressStep += 1) {
+    const progress = progressStep / 100;
+    for (let thresholdStep = 0; thresholdStep < 256; thresholdStep += 1) {
+      const threshold = (thresholdStep + 0.5) / 256;
+      const admitted = evaluateGhostPlateTransition(threshold, progress);
+      assert.notEqual(admitted.previous, admitted.current);
+    }
+  }
+  assert.deepEqual(evaluateGhostPlateTransition(0.25, 0), { previous: true, current: false });
+  assert.deepEqual(evaluateGhostPlateTransition(0.25, 1), { previous: false, current: true });
+});
 
 void test('sector selection holds through the boundary hysteresis then chooses the nearest sector', () => {
   assert.equal(selectGhostPlateSector(24, 0, 8, 0, 3), 0);

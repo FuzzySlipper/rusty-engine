@@ -123,7 +123,7 @@ export interface RustyApplicationVoxelSpriteConfig {
   readonly ghostShellDepthEpsilon: number;
   readonly ghostSectorCount: 1 | 4 | 8 | 16;
   readonly ghostSectorHysteresisDegrees: number;
-  readonly ghostTransitionMode: 'hard-cut' | 'ordered-dither';
+  readonly ghostTransitionMode: 'hard-cut' | 'ordered-dither' | 'noise-dissolve';
   readonly ghostTransitionDurationMilliseconds: number;
 }
 
@@ -271,7 +271,7 @@ export interface RustyApplicationVoxelSpriteGhostPlateReadout {
   readonly previousSector: number | null;
   readonly localAzimuthDegrees: number | null;
   readonly sectorHysteresisDegrees: number;
-  readonly transitionMode: 'hard-cut' | 'ordered-dither';
+  readonly transitionMode: 'hard-cut' | 'ordered-dither' | 'noise-dissolve';
   readonly transitionProgress: number;
   readonly transitionDurationMilliseconds: number;
   readonly residentSectorCount: number;

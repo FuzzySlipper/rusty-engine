@@ -4,7 +4,7 @@ export type GhostPlateAnchorPolicy = 'bounds-center' | 'bounds-normalized';
 export type GhostPlateMapping = 'plate-locked' | 'projective-surface';
 export type GhostPlateShellMode = 'whole-mesh' | 'strict-source' | 'repaired-source';
 export type GhostPlateSectorCount = 1 | 4 | 8 | 16;
-export type GhostPlateTransitionMode = 'hard-cut' | 'ordered-dither';
+export type GhostPlateTransitionMode = 'hard-cut' | 'ordered-dither' | 'noise-dissolve';
 
 export interface GhostPlateConfig {
   readonly depthRetention: number;
@@ -104,6 +104,19 @@ export interface GhostPlateWarpResult {
 export interface GhostPlateShellSample {
   readonly depth: number;
   readonly coverage: number;
+}
+
+/** CPU reference for the complementary binary transition partition used by both dissolve modes. */
+export function evaluateGhostPlateTransition(
+  threshold: number,
+  progress: number,
+): { readonly previous: boolean; readonly current: boolean } {
+  bounded(threshold, 0, 1, 'ghost transition threshold');
+  bounded(progress, 0, 1, 'ghost transition progress');
+  return Object.freeze({
+    previous: threshold >= progress,
+    current: threshold < progress,
+  });
 }
 
 /** CPU reference for the bounded source-shell admission used by deterministic tests. */
@@ -206,6 +219,7 @@ interface GhostUniforms {
   readonly shellDepthQuantizationHalfStep: THREE.IUniform<number>;
   readonly transitionRole: THREE.IUniform<number>;
   readonly transitionProgress: THREE.IUniform<number>;
+  readonly transitionPattern: THREE.IUniform<number>;
 }
 
 /** Owns one frozen cloned appearance hierarchy and its ghost-only materials. */
@@ -290,6 +304,7 @@ export class GhostPlatePresentation {
       shellDepthQuantizationHalfStep: { value: this.#shellDepthQuantizationStep * 0.5 },
       transitionRole: { value: 0 },
       transitionProgress: { value: 1 },
+      transitionPattern: { value: transitionPatternUniform(this.#config.transitionMode) },
     };
 
     validateAppearanceHierarchy(this.#appearanceRoot);
@@ -311,6 +326,7 @@ export class GhostPlatePresentation {
     this.#uniforms.plateMapping.value = this.#config.plateMapping === 'plate-locked' ? 0 : 1;
     this.#uniforms.shellMode.value = shellModeUniform(this.#config.shellMode);
     this.#uniforms.shellDepthEpsilon.value = this.#config.shellDepthEpsilon;
+    this.#uniforms.transitionPattern.value = transitionPatternUniform(this.#config.transitionMode);
     return this.readout();
   }
 
@@ -440,7 +456,7 @@ export class GhostPlatePresentation {
     material.clipIntersection = source.clipIntersection;
     material.clipShadows = source.clipShadows;
     material.onBeforeCompile = (shader) => patchShader(shader, this.#uniforms);
-    material.customProgramCacheKey = () => 'rusty-engine-ghost-plate-v2-shell';
+    material.customProgramCacheKey = () => 'rusty-engine-ghost-plate-v3-dissolve';
     this.#materials.push(material);
     return material;
   }
@@ -748,6 +764,7 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
     uniform float shellDepthQuantizationHalfStep;
     uniform float transitionRole;
     uniform float transitionProgress;
+    uniform float transitionPattern;
     varying vec3 ghostProjectiveUv;
     varying vec3 ghostPlateLockedUv;
     varying float ghostOriginalDepth;
@@ -771,6 +788,31 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
       rank += mod(floor(y / 2.0), 2.0) * 4.0;
       return (rank + 0.5) / 16.0;
     }
+
+    float ghostNoiseHash(vec2 cell) {
+      return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453123);
+    }
+
+    float ghostValueNoise(vec2 point) {
+      vec2 cell = floor(point);
+      vec2 local = fract(point);
+      local = local * local * (3.0 - 2.0 * local);
+      float bottom = mix(ghostNoiseHash(cell), ghostNoiseHash(cell + vec2(1.0, 0.0)), local.x);
+      float top = mix(
+        ghostNoiseHash(cell + vec2(0.0, 1.0)),
+        ghostNoiseHash(cell + vec2(1.0, 1.0)),
+        local.x
+      );
+      return mix(bottom, top, local.y);
+    }
+
+    float ghostDissolveThreshold(vec2 uv) {
+      vec2 texel = floor(uv / textureTexelSize);
+      float broad = ghostValueNoise(texel / 13.0);
+      float detail = ghostValueNoise(texel / 4.0 + vec2(19.0, 7.0));
+      float grain = ghostNoiseHash(texel + vec2(43.0, 71.0));
+      return min(broad * 0.55 + detail * 0.30 + grain * 0.15, 0.999999);
+    }
   `;
   shader.fragmentShader = shader.fragmentShader
     .replace('void main() {', `${fragmentDeclarations}\nvoid main() {`)
@@ -782,7 +824,9 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
       float ghostCoverage = texture2D(coverageTexture, ghostUv).r;
       vec4 ghostPlateColor = texture2D(map, ghostUv);
       if (ghostCoverage < 0.5 || ghostPlateColor.a < 0.01) discard;
-      float ghostTransitionThreshold = ghostOrderedThreshold(ghostUv);
+      float ghostTransitionThreshold = transitionPattern < 0.5
+        ? ghostOrderedThreshold(ghostUv)
+        : ghostDissolveThreshold(ghostUv);
       if (transitionRole < -0.5 && ghostTransitionThreshold < transitionProgress) discard;
       if (transitionRole > 0.5 && ghostTransitionThreshold >= transitionProgress) discard;
       if (shellMode > 0.5) {
@@ -871,7 +915,9 @@ function validatedConfig(config: GhostPlateConfig): GhostPlateConfig {
     throw new RangeError('ghost sector count must be 1, 4, 8, or 16');
   }
   bounded(config.sectorHysteresisDegrees, 0, 22.5, 'ghost sector hysteresis');
-  if (config.transitionMode !== 'hard-cut' && config.transitionMode !== 'ordered-dither') {
+  if (config.transitionMode !== 'hard-cut'
+    && config.transitionMode !== 'ordered-dither'
+    && config.transitionMode !== 'noise-dissolve') {
     throw new TypeError(`unsupported ghost transition mode ${String(config.transitionMode)}`);
   }
   bounded(config.transitionDurationMilliseconds, 0, 5_000, 'ghost transition duration');
@@ -890,6 +936,10 @@ function rejectUnknownKeys(config: Partial<GhostPlateConfig>): void {
 
 function shellModeUniform(mode: GhostPlateShellMode): number {
   return mode === 'whole-mesh' ? 0 : mode === 'strict-source' ? 1 : 2;
+}
+
+function transitionPatternUniform(mode: GhostPlateTransitionMode): number {
+  return mode === 'noise-dissolve' ? 1 : 0;
 }
 
 function finiteMatrix(matrix: THREE.Matrix4, name: string): void {
