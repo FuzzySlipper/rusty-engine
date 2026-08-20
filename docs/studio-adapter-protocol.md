@@ -108,6 +108,7 @@ require a revision command, network update, or sibling-checkout mutation.
 ## Verification
 
 Run `./scripts/verify-studio.sh` for the isolated Studio workspace. The
-optional `./scripts/verify-studio-generic-browser-integration.sh` accepts one
-explicit supporting consumer checkout for browser-host discovery evidence.
-Neither check launches or certifies a retired Demo product.
+focused `./scripts/verify-studio-voxel-integration.sh` remains an explicit
+opt-in gate over the selected voxel consumer checkout when that downstream
+render/adapter evidence is needed. Neither check launches or certifies a
+retired Demo product.

@@ -11,7 +11,7 @@ viewport, and its closed external-project adapter protocol.
 - Adapter client protocol, viewport integration, voxel editor, user settings,
   and Studio-owned host services.
 - Studio migration accounting and explicit owner-adoption evidence.
-- Browser and explicit generic-consumer integration gates.
+- Browser and focused consumer integration gates.
 
 ## Does not own
 
@@ -33,8 +33,6 @@ viewport, and its closed external-project adapter protocol.
 - [`studio/scripts/studio-adapter-process.ts`](../../studio/scripts/studio-adapter-process.ts)
 - [`studio/scripts/studio-service.ts`](../../studio/scripts/studio-service.ts)
 - [`studio/ops/rusty-studio.service`](../../studio/ops/rusty-studio.service)
-- [`scripts/verify-studio-generic-browser-integration.sh`](../../scripts/verify-studio-generic-browser-integration.sh)
-- [`studio/test/generic-browser`](../../studio/test/generic-browser)
 - [Studio migration contract](../studio-migration-contract.md)
 - [Studio adapter protocol](../studio-adapter-protocol.md)
 - [Persistent generic Studio service](../topics/studio-service.md)
@@ -132,18 +130,14 @@ viewport, and its closed external-project adapter protocol.
 
 ```bash
 ./scripts/verify-studio.sh
-./scripts/verify-studio-generic-browser-integration.sh \
-  /absolute/path/to/rusty-engine-voxels
 ./scripts/verify-studio-voxel-integration.sh /absolute/path/to/rusty-engine-voxels
 ```
 
-The first command proves the isolated Studio workspace. The generic browser
-command explicitly selects an adjacent downstream checkout, starts one
-Engine-hosted Studio, and proves root-local adapter discovery and transactional
-project handling. The voxel command is a focused opt-in integration proof over
-the selected adjacent checkout: it builds its project-owned Rust adapter, runs
-Engine's Studio host, and exercises the applicable protocol, mutation,
-persistence, resource, and browser behavior.
+The first command proves the isolated Studio workspace. The voxel command is a
+focused opt-in integration proof over the selected adjacent checkout: it
+builds its project-owned Rust adapter, runs the Engine's Studio host, and
+exercises the applicable protocol, mutation, persistence, resource, and
+browser behavior.
 
 These integration commands consume each sibling checkout exactly as it stands.
 They do not fetch, pin, checkout, or mutate the Engine or downstream source
