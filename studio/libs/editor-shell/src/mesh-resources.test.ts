@@ -25,7 +25,7 @@ void test('placement-only packed resources mount and resolve only while admitted
   const packed = packedMeshBytes(placement.byteLength);
   const reads: string[] = [];
   const resolved = await resolveStudioMeshResource(
-    '/projects/loading-bay',
+    '/projects/sample-project',
     active,
     placement,
     (_projectRoot, sourcePath, contentHash) => {
@@ -40,7 +40,7 @@ void test('placement-only packed resources mount and resolve only while admitted
   let readAfterDiscard = false;
   await assert.rejects(
     resolveStudioMeshResource(
-      '/projects/loading-bay',
+      '/projects/sample-project',
       afterDiscard,
       placement,
       () => {
@@ -67,7 +67,7 @@ void test('canonical mesh resources retain collision precedence and exact descri
 
   await assert.rejects(
     resolveStudioMeshResource(
-      '/projects/loading-bay',
+      '/projects/sample-project',
       active,
       placementCollision,
       () => Promise.resolve(new ArrayBuffer(placementCollision.byteLength)),

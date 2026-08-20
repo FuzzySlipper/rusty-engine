@@ -398,7 +398,7 @@ export class StudioShellComponent {
   ] as const;
 
   projectRoot = '';
-  projectFile = 'content/projects/converted-wall.project.json';
+  projectFile = '';
   inspectorMode: 'entity' | 'voxel' = 'voxel';
   pivotGroundingToolActive = false;
   animationInspectionToolActive = false;

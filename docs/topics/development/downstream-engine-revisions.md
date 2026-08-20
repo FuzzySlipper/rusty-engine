@@ -58,12 +58,10 @@ committed dependency pin, synchronizer, or freshness ceremony.
 
 ```bash
 ./scripts/verify-rust-sdk-consumer.sh
-./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo
 ```
 
 The first command proves the complete local Rust facade in a clean temporary
-consumer. The second is an explicit Engine-owned integration proof for a
-selected downstream checkout; neither command changes the sibling checkout.
+consumer and does not change a sibling checkout.
 
 ## Character controller facade and selected consumer
 

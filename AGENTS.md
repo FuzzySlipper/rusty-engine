@@ -166,15 +166,13 @@ freshness ceremony:
 
 ```bash
 ./scripts/verify-rust-sdk-consumer.sh
-./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo
 ./scripts/verify-character-controller-consumer.sh /absolute/path/to/rusty-craftsurvive
 ```
 
 The first command proves the complete local Rust facade in a clean temporary
-consumer. The second is a narrow, explicit Engine-owned browser/adapter proof
-for a selected downstream checkout. Exact source and consumer commits belong
-in Den task or review evidence; they are not committed downstream dependency
-policy. Check the owning code-map page before choosing a focused gate.
+consumer. Exact source and consumer commits for explicitly selected external
+proof belong in Den task or review evidence; they are not committed downstream
+dependency policy. Check the owning code-map page before choosing a focused gate.
 
 ## Engine task worktrees and stable adjacency
 

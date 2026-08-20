@@ -77,7 +77,7 @@ lines.on('line', (line) => {
     protocolVersion: ${String(protocolVersion)},
     requestId: request.requestId,
     adapter: {
-      adapterId: 'rusty-engine-demo.loading-bay',
+      adapterId: 'studio.test-fixture',
       adapterVersion: 1,
       protocolVersion: ${String(protocolVersion)},
       projectKind: 'fixture',
@@ -104,10 +104,10 @@ function hostProcess(
     '--static-root', staticRoot,
     '--port', String(port),
     '--engine-source-commit', ENGINE,
-    '--consumer-repository', 'https://github.com/FuzzySlipper/rusty-engine-demo',
+    '--consumer-repository', 'https://github.com/FuzzySlipper/studio-test-fixture',
     '--consumer-commit', CONSUMER,
     '--adapter-build-commit', CONSUMER,
-    '--expected-adapter-id', 'rusty-engine-demo.loading-bay',
+    '--expected-adapter-id', 'studio.test-fixture',
   ], { cwd: STUDIO_ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
 }
 

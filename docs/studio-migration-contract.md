@@ -70,13 +70,14 @@ reconcile every row before the old Studio can be considered retired.
 | Mesh import and conversion | Bounded GLB import, groups/material slots, source metadata, fit/origin/affine settings, plan, preview, apply/install, surface and closed-solid modes, texture sampling, provenance, model/window readouts, and failure non-mutation | M11E |
 | Projection delivery | Incremental retained frames, coalescing, bounded recovery state, expensive-path metrics, shared renderer contracts, and no Studio-owned scene graph or resource cache | M11D/M11E |
 | Live inspection | Read-only project/runtime identity, entity/scene/voxel/render diagnostics, attachment and disconnect states, and refresh through explicit project-owned adapter operations rather than RuntimeSession | M11B/M11D |
-| Domain panels | Generated-level metadata, encounter tuning, playable-loop inspection, and project-specific actions remain available for the reference demo through its typed adapter; they are not generalized into an Engine behavior AST | M11B/M11C |
+| Domain panels | Historical migration evidence covered generated-level metadata, encounter tuning, playable-loop inspection, and project-specific actions through a product-owned typed adapter. Current Studio retains no reference-product panel requirement and does not generalize those actions into an Engine behavior AST. | M11B/M11C |
 | Typed actions | Accepted/rejected operation results and a visible action timeline remain; the universal command registry and arbitrary command envelope do not | M11B/M11C |
-| Product acceptance | Real visible controls prove scene, entity, lighting, voxel, material, conversion, save/reopen, and external-demo behavior; proof catalogs and hidden browser mutation hooks do not return | M11D/M11E/M11F |
+| Product acceptance | Real visible controls prove upstream-owned scene, entity, lighting, voxel, material, conversion, and save/reopen behavior. Historical external-product proof is not a current Studio gate; proof catalogs and hidden browser mutation hooks do not return. | M11D/M11E/M11F |
 
 ## M11E foundation and M11F parity reconciliation
 
-M11E established protocol 3 against the Converted Wall demo artifact. It includes canonical
+Historical M11E evidence established protocol 3 against a retired external
+demo artifact. It included canonical
 voxel inspection/initialization/duplication, catalog material upsert and palette replacement,
 multiple transformed instances, shared-renderer projection and transformed picking, bounded cube
 paint/erase with disposable preview, durable undo/redo/cursor revert, annotation layer creation,
@@ -97,8 +98,10 @@ Protocol 4 implements the previously explicit M11F voxel work:
 - deterministic preset/seed environment materialization into a managed voxel asset, instance, and
   named downstream player/exit entities.
 
-The actual protocol, editor controls, owner tests, fresh-process integration, and exact demo pin are
-the authority for this completion; no donor TypeScript semantic generator was copied.
+The actual protocol, editor controls, and owner tests are the current authority
+for this completion. Fresh-process external integration and its exact product
+revision are historical evidence only; no donor TypeScript semantic generator
+was copied.
 
 Protocol 5 and 6 close the non-voxel parity set without adding a generic editor command:
 
@@ -108,7 +111,7 @@ Protocol 5 and 6 close the non-voxel parity set without adding a generic editor 
 - a complete catalog browser with dependency, dependent, generated-lock, import provenance, source
   drift, and private prepare/apply/discard import or reimport candidates;
 - real imported static-mesh payloads and materials consumed by the same Rust projection and shared
-  renderer used by Demo and Studio; and
+  renderer used by downstream products and Studio; and
 - versioned per-canonical-project host-user preferences, outside browser storage and project bytes,
   for theme, snapping/grid presentation, movement keys, six-axis speed/boost, and look/pan inversion.
 
@@ -218,7 +221,7 @@ must be expressed through the new owners even when its old transport is excluded
 | Renderer | `./scripts/verify-render.sh` | Shared renderer packages, fixtures, and Rust render owners. Studio consumes the result and does not fork it. |
 | Studio | `./scripts/verify-studio.sh` or `pnpm run verify:studio` | Installs only from `studio/pnpm-lock.yaml`; owns migration/boundary checks now and later lint, typecheck, unit, build, and browser checks. It runs for Studio and deliberately named public owner seams. |
 | All local domains | `./scripts/verify-all.sh` or `pnpm run verify:all` | Explicit opt-in aggregate; never the ordinary Engine default. |
-| Engine-Studio product integration | M11B onward | Manual/scheduled/release and selected public-contract changes; opens an explicit external demo checkout and proves real authoring-to-product behavior. |
+| Selected downstream proof | M11B onward | Optional manual/release evidence selected by an affected downstream owner. It is downstream-neutral, records its exact identities in review evidence, and is never an ordinary Studio or Engine sibling-checkout gate. |
 
 M11A establishes the isolated workspace and static gates only. M11B adds the real adapter before the
 Angular shell is imported. M11C through M11E establish the retained product workflows. M11F adds the

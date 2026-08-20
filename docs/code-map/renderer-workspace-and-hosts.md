@@ -168,4 +168,4 @@ the model-driven session itself remains on-demand and outside ordinary CI.
 - Rust frame changes:
   [Rust render model and projection](rust-render-model-and-projection.md).
 - First-party authoring viewport: [Studio](studio.md).
-- Downstream loading-bay product behavior belongs in `rusty-engine-demo`.
+- Downstream product behavior belongs in its owning repository.

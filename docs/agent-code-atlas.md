@@ -131,7 +131,6 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 - [Gameplay rules gate](../scripts/verify-rules.sh)
 - [Renderer gate](../scripts/verify-render.sh)
 - [Studio gate](../scripts/verify-studio.sh)
-- [Exact demo/Studio integration gate](../scripts/verify-studio-demo-integration.sh)
 
 ## Validation and navigation
 
