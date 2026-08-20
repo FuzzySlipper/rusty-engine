@@ -137,9 +137,10 @@ export function ghostPlateEdgeEchoBand(
   if (direction !== -1 && direction !== 1) {
     throw new RangeError('ghost transition direction must be -1 or 1');
   }
+  const travel = progress * progress;
   const center = direction > 0
-    ? THREE.MathUtils.lerp(0.86, 1.12, progress)
-    : THREE.MathUtils.lerp(0.14, -0.12, progress);
+    ? THREE.MathUtils.lerp(0.86, 1.12, travel)
+    : THREE.MathUtils.lerp(0.14, -0.12, travel);
   return Object.freeze({
     center,
     halfWidth: THREE.MathUtils.lerp(0.11, 0.03, progress),
@@ -493,7 +494,7 @@ export class GhostPlatePresentation {
     material.clipIntersection = source.clipIntersection;
     material.clipShadows = source.clipShadows;
     material.onBeforeCompile = (shader) => patchShader(shader, this.#uniforms);
-    material.customProgramCacheKey = () => 'rusty-engine-ghost-plate-v5-single-edge-cue';
+    material.customProgramCacheKey = () => 'rusty-engine-ghost-plate-v6-visible-edge-cue';
     this.#materials.push(material);
     return material;
   }
@@ -884,15 +885,18 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
 
     float ghostEdgeEchoStrength(vec2 uv) {
       vec2 texel = floor(uv / textureTexelSize);
+      float travel = transitionProgress * transitionProgress;
       float center = transitionDirection > 0.0
-        ? mix(0.86, 1.12, transitionProgress)
-        : mix(0.14, -0.12, transitionProgress);
+        ? mix(0.86, 1.12, travel)
+        : mix(0.14, -0.12, travel);
       float halfWidth = mix(0.11, 0.03, transitionProgress);
       float seamNoise = (
         ghostValueNoise(vec2(texel.y / 9.0, 31.0)) - 0.5
       ) * 0.04;
       float distanceToSeam = abs(uv.x - center - seamNoise);
-      return 1.0 - smoothstep(halfWidth * 0.45, halfWidth, distanceToSeam);
+      float shoulder = 1.0 - smoothstep(halfWidth * 0.35, halfWidth, distanceToSeam);
+      float core = 1.0 - smoothstep(0.0, halfWidth * 0.28, distanceToSeam);
+      return min(shoulder * 0.70 + core * 0.45, 1.0);
     }
   `;
   shader.fragmentShader = shader.fragmentShader
@@ -927,8 +931,13 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
         }
         if (!ghostShellAccepted) discard;
       }
-      vec3 ghostEdgeColor = min(ghostPlateColor.rgb * 1.08 + vec3(0.015), vec3(1.0));
-      ghostPlateColor.rgb = mix(ghostPlateColor.rgb, ghostEdgeColor, ghostEdgeStrength * 0.55);
+      float ghostEdgeLuminance = dot(ghostPlateColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+      vec3 ghostEdgeSoftColor = mix(ghostPlateColor.rgb, vec3(ghostEdgeLuminance), 0.20);
+      vec3 ghostEdgeColor = min(
+        ghostEdgeSoftColor * 1.20 + vec3(0.035, 0.025, 0.012),
+        vec3(1.0)
+      );
+      ghostPlateColor.rgb = mix(ghostPlateColor.rgb, ghostEdgeColor, ghostEdgeStrength * 0.85);
       diffuseColor *= vec4(ghostPlateColor.rgb, 1.0);
     `);
 }

@@ -119,6 +119,12 @@ void test('single-plate edge cue is a narrow mirrored band that travels fully of
   assert.ok(Math.abs(positiveStart.center + negativeStart.center - 1) < 1e-12);
   assert.ok(positiveStart.halfWidth * 2 < 0.25, 'echo affects less than one quarter of the plate');
 
+  const positiveMiddle = ghostPlateEdgeEchoBand(0.5, 1);
+  const negativeMiddle = ghostPlateEdgeEchoBand(0.5, -1);
+  assert.ok(positiveMiddle.center < 1, 'positive echo remains on-plate halfway through');
+  assert.ok(negativeMiddle.center > 0, 'negative echo remains on-plate halfway through');
+  assert.ok(Math.abs(positiveMiddle.center + negativeMiddle.center - 1) < 1e-12);
+
   const positiveEnd = ghostPlateEdgeEchoBand(1, 1);
   const negativeEnd = ghostPlateEdgeEchoBand(1, -1);
   assert.ok(positiveEnd.center - positiveEnd.halfWidth > 1);
