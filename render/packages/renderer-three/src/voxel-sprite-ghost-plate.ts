@@ -375,14 +375,15 @@ export class GhostPlatePresentation {
     this.#uniforms.transitionProgress.value = progress;
     this.#uniforms.transitionDirection.value = direction;
     for (const material of this.#materials) {
-      const depthWrite = role === 'stable';
+      const depthWrite = role === 'stable'
+        || (this.#config.transitionMode === 'edge-echo' && role === 'current');
       if (material.depthWrite !== depthWrite) {
         material.depthWrite = depthWrite;
         material.needsUpdate = true;
       }
     }
     this.object.renderOrder = this.#config.transitionMode === 'edge-echo'
-      ? role === 'previous' ? 2 : role === 'current' ? 1 : 0
+      ? 0
       : role === 'current' ? 1 : 0;
   }
 
@@ -492,7 +493,7 @@ export class GhostPlatePresentation {
     material.clipIntersection = source.clipIntersection;
     material.clipShadows = source.clipShadows;
     material.onBeforeCompile = (shader) => patchShader(shader, this.#uniforms);
-    material.customProgramCacheKey = () => 'rusty-engine-ghost-plate-v4-edge-echo';
+    material.customProgramCacheKey = () => 'rusty-engine-ghost-plate-v5-single-edge-cue';
     this.#materials.push(material);
     return material;
   }
@@ -525,6 +526,7 @@ export class GhostPlateDirectionalPresentation {
   #transitionStartedMilliseconds: number | null = null;
   #transitionProgress = 1;
   #transitionDirection: -1 | 1 = 1;
+  #transitionActive = false;
   #localAzimuthDegrees: number | null = null;
   #fallbackReason: GhostPlateReadout['fallbackReason'] = null;
   #invalidationReason: string | null = null;
@@ -561,7 +563,7 @@ export class GhostPlateDirectionalPresentation {
     }
     this.#config = next;
     for (const plate of this.#plates) plate.configure(next);
-    if (next.transitionMode === 'hard-cut' && this.#previousSector !== null) {
+    if (next.transitionMode === 'hard-cut' && this.#transitionActive) {
       this.#settle(this.#selectedSector);
     }
     return this.readout();
@@ -603,7 +605,7 @@ export class GhostPlateDirectionalPresentation {
           )),
       sectorCount: this.#config.sectorCount,
       selectedSector: this.#selectedSector,
-      pendingSector: this.#previousSector === null ? null : this.#selectedSector,
+      pendingSector: this.#transitionActive ? this.#selectedSector : null,
       previousSector: this.#previousSector,
       localAzimuthDegrees: this.#localAzimuthDegrees,
       sectorHysteresisDegrees: this.#config.sectorHysteresisDegrees,
@@ -631,7 +633,7 @@ export class GhostPlateDirectionalPresentation {
   }
 
   advancing(): boolean {
-    return !this.#disposed && this.#previousSector !== null;
+    return !this.#disposed && this.#transitionActive;
   }
 
   dispose(): void {
@@ -642,10 +644,11 @@ export class GhostPlateDirectionalPresentation {
     }
     this.#disposed = true;
     this.#previousSector = null;
+    this.#transitionActive = false;
   }
 
   #beginTransition(nextSector: number, now: number): void {
-    const interrupted = this.#previousSector !== null;
+    const interrupted = this.#transitionActive;
     if (this.#config.transitionMode === 'hard-cut'
       || this.#config.transitionDurationMilliseconds === 0
       || interrupted) {
@@ -656,21 +659,27 @@ export class GhostPlateDirectionalPresentation {
     const oldSector = this.#selectedSector;
     this.#settle(oldSector);
     this.#selectedSector = nextSector;
-    this.#previousSector = oldSector;
+    this.#previousSector = this.#config.transitionMode === 'edge-echo' ? null : oldSector;
     this.#transitionStartedMilliseconds = now;
     this.#transitionProgress = 0;
+    this.#transitionActive = true;
     const currentCenter = this.#baseAzimuthDegrees
       + oldSector * 360 / this.#config.sectorCount;
     this.#transitionDirection = signedAngularDifference(
       this.#localAzimuthDegrees ?? currentCenter,
       currentCenter,
     ) >= 0 ? 1 : -1;
-    this.#plates[oldSector]!.setDepictionState(true, 'previous', 0, this.#transitionDirection);
+    this.#plates[oldSector]!.setDepictionState(
+      this.#config.transitionMode !== 'edge-echo',
+      'previous',
+      0,
+      this.#transitionDirection,
+    );
     this.#plates[nextSector]!.setDepictionState(true, 'current', 0, this.#transitionDirection);
   }
 
   #advanceTransition(now: number): void {
-    if (this.#previousSector === null || this.#transitionStartedMilliseconds === null) return;
+    if (!this.#transitionActive || this.#transitionStartedMilliseconds === null) return;
     const duration = this.#config.transitionDurationMilliseconds;
     const progress = duration === 0 ? 1 : THREE.MathUtils.clamp(
       (now - this.#transitionStartedMilliseconds) / duration,
@@ -682,12 +691,14 @@ export class GhostPlateDirectionalPresentation {
       this.#settle(this.#selectedSector);
       return;
     }
-    this.#plates[this.#previousSector]!.setDepictionState(
-      true,
-      'previous',
-      progress,
-      this.#transitionDirection,
-    );
+    if (this.#previousSector !== null) {
+      this.#plates[this.#previousSector]!.setDepictionState(
+        true,
+        'previous',
+        progress,
+        this.#transitionDirection,
+      );
+    }
     this.#plates[this.#selectedSector]!.setDepictionState(
       true,
       'current',
@@ -703,6 +714,7 @@ export class GhostPlateDirectionalPresentation {
     this.#previousSector = null;
     this.#transitionStartedMilliseconds = null;
     this.#transitionProgress = 1;
+    this.#transitionActive = false;
   }
 
   #assertLive(): void {
@@ -870,7 +882,7 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
       return min(broad * 0.55 + detail * 0.30 + grain * 0.15, 0.999999);
     }
 
-    bool ghostEdgeEchoOwns(vec2 uv) {
+    float ghostEdgeEchoStrength(vec2 uv) {
       vec2 texel = floor(uv / textureTexelSize);
       float center = transitionDirection > 0.0
         ? mix(0.86, 1.12, transitionProgress)
@@ -879,7 +891,8 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
       float seamNoise = (
         ghostValueNoise(vec2(texel.y / 9.0, 31.0)) - 0.5
       ) * 0.04;
-      return abs(uv.x - center - seamNoise) <= halfWidth;
+      float distanceToSeam = abs(uv.x - center - seamNoise);
+      return 1.0 - smoothstep(halfWidth * 0.45, halfWidth, distanceToSeam);
     }
   `;
   shader.fragmentShader = shader.fragmentShader
@@ -892,17 +905,18 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
       float ghostCoverage = texture2D(coverageTexture, ghostUv).r;
       vec4 ghostPlateColor = texture2D(map, ghostUv);
       if (ghostCoverage < 0.5 || ghostPlateColor.a < 0.01) discard;
-      bool ghostPreviousOwns;
+      float ghostEdgeStrength = 0.0;
       if (transitionPattern > 1.5) {
-        ghostPreviousOwns = ghostEdgeEchoOwns(ghostUv);
+        if (transitionRole < -0.5) discard;
+        if (transitionRole > 0.5) ghostEdgeStrength = ghostEdgeEchoStrength(ghostUv);
       } else {
         float ghostTransitionThreshold = transitionPattern < 0.5
           ? ghostOrderedThreshold(ghostUv)
           : ghostDissolveThreshold(ghostUv);
-        ghostPreviousOwns = ghostTransitionThreshold >= transitionProgress;
+        bool ghostPreviousOwns = ghostTransitionThreshold >= transitionProgress;
+        if (transitionRole < -0.5 && !ghostPreviousOwns) discard;
+        if (transitionRole > 0.5 && ghostPreviousOwns) discard;
       }
-      if (transitionRole < -0.5 && !ghostPreviousOwns) discard;
-      if (transitionPattern < 1.5 && transitionRole > 0.5 && ghostPreviousOwns) discard;
       if (shellMode > 0.5) {
         bool ghostShellAccepted = ghostShellSampleAgrees(ghostUv);
         if (!ghostShellAccepted && shellMode > 1.5) {
@@ -913,6 +927,8 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
         }
         if (!ghostShellAccepted) discard;
       }
+      vec3 ghostEdgeColor = min(ghostPlateColor.rgb * 1.08 + vec3(0.015), vec3(1.0));
+      ghostPlateColor.rgb = mix(ghostPlateColor.rgb, ghostEdgeColor, ghostEdgeStrength * 0.55);
       diffuseColor *= vec4(ghostPlateColor.rgb, 1.0);
     `);
 }

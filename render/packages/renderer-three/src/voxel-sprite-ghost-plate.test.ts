@@ -26,7 +26,7 @@ void test('transition partition admits exactly one depiction at every bounded th
   assert.deepEqual(evaluateGhostPlateTransition(0.25, 1), { previous: false, current: true });
 });
 
-void test('rapid edge-echo reversal settles to one coherent depiction', () => {
+void test('edge cue draws one depiction and rapid reversal settles coherently', () => {
   const borrowedTextures: THREE.Texture[] = [];
   const sourceMaterials: THREE.Material[] = [];
   const config = {
@@ -91,8 +91,12 @@ void test('rapid edge-echo reversal settles to one coherent depiction', () => {
   setAzimuth(60);
   directional.prepare(viewer, 10);
   assert.equal(directional.readout().selectedSector, 1);
-  assert.equal(directional.readout().previousSector, 0);
+  assert.equal(directional.readout().pendingSector, 1);
+  assert.equal(directional.readout().previousSector, null);
+  assert.equal(directional.readout().previousResourceResident, false);
+  assert.equal(directional.readout().expectedDrawCalls, 1);
   assert.equal(directional.advancing(), true);
+  assert.equal(plates.filter((plate) => plate.object.visible).length, 1);
 
   setAzimuth(0);
   directional.prepare(viewer, 20);
@@ -107,7 +111,7 @@ void test('rapid edge-echo reversal settles to one coherent depiction', () => {
   for (const texture of borrowedTextures) texture.dispose();
 });
 
-void test('edge echo is a narrow mirrored band that travels fully off the plate', () => {
+void test('single-plate edge cue is a narrow mirrored band that travels fully off the plate', () => {
   const positiveStart = ghostPlateEdgeEchoBand(0, 1);
   const negativeStart = ghostPlateEdgeEchoBand(0, -1);
   assert.deepEqual(positiveStart, { center: 0.86, halfWidth: 0.11 });
