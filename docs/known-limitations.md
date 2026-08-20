@@ -49,8 +49,12 @@ downstream repositories.
   view units and automatically includes half of the RGBA8 depth quantization
   step. Per-fragment rejection and repair ratios remain explicitly unavailable
   because the experiment performs no GPU texture readback or statistics pass.
-  It does not yet provide regional depth, sector scheduling, animation cadence,
-  stylization, offline capture, or GPU timing.
+  Actor-relative azimuth banks support 1, 4, 8, or 16 exact-pose captures with
+  hysteresis, hard cuts, and plate-coordinate ordered-dither handoffs. Every
+  resident sector retains its capture textures and private frozen geometry;
+  only the previous/current pair may render during a handoff. Elevation
+  sectors, regional depth, animation cadence, stylization, offline capture,
+  capture pooling, and GPU timing remain unavailable.
   It does not yet add viewer-biased splat axes or custom-material world fog/tint.
   Splat density is independent from the base/depth-parallax sample grid and
   depth quantization; alpha and additive modes disable depth writes but do not

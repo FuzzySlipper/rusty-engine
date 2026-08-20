@@ -140,10 +140,15 @@ then compresses that mesh along source-camera rays while preserving its
 source-view projection. Captured color remains dominant through plate-locked
 or source-projective mapping while the warped mesh retains ordinary world
 depth, fog, and occlusion. This is a style probe, not recovered geometry:
-prepared frames are rejected, one complete hierarchy and one explicit capture
-view are required, and sectors, held-animation cadence, shell rejection,
-regional depth, stylization, and offline baking remain outside the first
-slice. Technical acceptance does not change the campaign's visual verdict;
+prepared frames are rejected and one complete retained hierarchy is required.
+The directional follow-on captures 1, 4, 8, or 16 actor-relative azimuth
+sectors from one exact frozen pose and fixed lens/framing/lighting setup.
+Selection uses configurable angular hysteresis. Changes may hard-cut or use a
+brief complementary 4x4 ordered partition in plate texel coordinates; only the
+previous and current depiction render during that handoff and both suppress
+depth writes until the selected plate settles. Held-animation cadence,
+regional depth, stylization, elevation sectors, and offline baking remain
+outside this slice. Technical acceptance does not change the campaign's visual verdict;
 CraftSurvive must still establish whether the haunted-plate look is useful.
 
 ## Failure ownership
@@ -156,8 +161,8 @@ CraftSurvive must still establish whether the haunted-plate look is useful.
   unsorted transparent splats, and absent GPU timer evidence.
 - **Host presentation:** comparison labels and compact controls can obscure the
   scene; CraftSurvive improved side-specific labels after the playtest.
-- **Representation:** one view cannot prove multi-view continuity, keyed
-  animation, occluded geometry, or body-part-specific behavior.
+- **Representation:** a bounded azimuth bank does not prove elevation
+  continuity, keyed animation, occluded geometry, or body-part-specific behavior.
 
 ## Reopening criteria
 
