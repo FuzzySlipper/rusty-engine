@@ -1154,6 +1154,7 @@ mod tests {
                 name: Some("Idle".to_string()),
                 duration_seconds: Some(1.0),
             }],
+            clip_packs: vec![],
             default_clip: Some("idle".to_string()),
             material_slots: vec![MeshMaterialSlot {
                 slot: 0,

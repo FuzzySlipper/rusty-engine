@@ -156,6 +156,7 @@ pub fn import_animated_glb_asset(
         runtime_format: AnimatedMeshRuntimeFormat::Glb,
         content_hash: Some(source_hash.clone()),
         clips,
+        clip_packs: Vec::new(),
         default_clip,
         material_slots: Vec::new(),
         bounds,
