@@ -53,6 +53,23 @@ void test('strict TypeScript decoders accept the committed Rust render fixtures'
   assert.equal(billboard.op.descriptor.content.kind, 'structured');
 });
 
+void test('clip-pack joint identities use decoded Three binding names only', () => {
+  const frame = mutableFixture('retained-frame-v1.json');
+  const operations = frame['ops'] as { op?: string; asset?: Record<string, unknown> }[];
+  const animated = operations.find((operation) => operation.op === 'defineAnimatedMesh');
+  assert.ok(animated?.asset);
+  animated.asset!['clipPacks'] = [{
+    asset: 'animation-clip-pack/test', runtimeFormat: 'glb', contentHash: `sha256:${'a'.repeat(64)}`,
+    rig: {
+      joints: [{ id: 'mixamorig:Hips', parent: null }], bindRestHash: `sha256:${'a'.repeat(64)}`,
+      bindRestConvention: 'localMatrixV1', rootConvention: 'inPlace', rootJointId: 'mixamorig:Hips',
+    },
+    clips: [{ id: 'wave', name: 'wave', durationSeconds: 1 }],
+    provenance: { producer: 'fixture', sourceHash: `sha256:${'a'.repeat(64)}`, targetHash: `sha256:${'a'.repeat(64)}`, license: 'CC0-1.0' },
+  }];
+  assert.throws(() => decodeRenderFrameDiff(frame), ContractDecodeError);
+});
+
 void test('sky backgrounds decode as a narrow nullable texture reference', () => {
   const frame = decodeRenderFrameDiff({
     schemaVersion: 1,

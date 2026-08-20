@@ -166,11 +166,44 @@ export interface AnimationClipDescriptor {
   readonly durationSeconds: number | null;
 }
 
+/** Semantic rig facts required for direct (not retargeted) playback. */
+export interface AnimationRigSignature {
+  readonly joints: readonly AnimationRigJoint[];
+  readonly bindRestHash: string;
+  readonly bindRestConvention: 'localMatrixV1';
+  readonly rootConvention: 'inPlace' | 'authoredRootTranslation';
+  readonly rootJointId: string;
+}
+
+export interface AnimationClipPackProvenance {
+  readonly producer: string;
+  readonly sourceHash: string;
+  readonly targetHash: string;
+  readonly license: string;
+}
+
+export interface AnimationRigJoint {
+  readonly id: string;
+  readonly parent: string | null;
+}
+
+/** A separately-addressed GLB containing clips only, bound to one target rig. */
+export interface AnimationClipPack {
+  readonly asset: string;
+  readonly runtimeFormat: AnimatedMeshRuntimeFormat;
+  readonly contentHash: string;
+  readonly rig: AnimationRigSignature;
+  readonly clips: readonly AnimationClipDescriptor[];
+  readonly provenance: AnimationClipPackProvenance;
+}
+
 export interface AnimatedMeshAsset {
   readonly asset: string;
   readonly runtimeFormat: AnimatedMeshRuntimeFormat;
   readonly contentHash: string | null;
   readonly clips: readonly AnimationClipDescriptor[];
+  /** Omitted by schema-v1 producers that only use embedded clips. */
+  readonly clipPacks?: readonly AnimationClipPack[];
   readonly defaultClip: string | null;
   readonly materialSlots: readonly MeshMaterialSlot[];
   readonly bounds: MeshBoundsDescriptor;

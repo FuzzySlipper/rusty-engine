@@ -9,6 +9,7 @@ import {
   type RendererMeshResourceManifest,
   type RendererAudioResourceResolver,
   type RendererAnimatedMeshResourceDescriptor,
+  type RendererAnimationClipPackResourceDescriptor,
   type RendererAnimatedMeshResourceManifest,
   type RendererAnimatedMeshResourceResolver,
   type RendererTextureResourceDescriptor,
@@ -17,7 +18,7 @@ import {
 
 import type { RustyApplicationFrame } from './application-host.js';
 
-export type RustyApplicationResourceKind = 'audio' | 'mesh' | 'texture';
+export type RustyApplicationResourceKind = 'audio' | 'mesh' | 'clipPack' | 'texture';
 
 export const RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES = 8 * 1024 * 1024;
 export const RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT = 64;
@@ -80,7 +81,7 @@ export interface RustyApplicationSurfaceResourceOptions {
   ) => Promise<ArrayBuffer>;
 }
 
-const SHA256_IDENTITY = /^(audio|mesh|texture)-resource\/([0-9a-f]{64})$/u;
+const SHA256_IDENTITY = /^(audio|mesh|clip-pack|texture)-resource\/([0-9a-f]{64})$/u;
 
 export function prepareRustyApplicationContent(
   content: RustyApplicationContent,
@@ -129,7 +130,7 @@ export function prepareRustyApplicationContent(
       );
     }
     identities.add(resource.identity);
-    const kind = match[1] as RustyApplicationResourceKind;
+    const kind = match[1] === 'clip-pack' ? 'clipPack' : match[1] as RustyApplicationResourceKind;
     if (kind === 'audio') {
       if (resource.mediaType !== 'audio/wav') {
         throw contentError(
@@ -231,6 +232,8 @@ export function rustyApplicationSurfaceResourceOptions(
 ): RustyApplicationSurfaceResourceOptions {
   const entries = new Map(content.resources.map((resource) => [resource.identity, resource]));
   const animated = animatedMeshDescriptors(content.frame);
+  const clipPacks = animationClipPacks(content.frame);
+  const clipPackAssets = new Set(clipPacks.map((pack) => pack.asset));
   const mesh = content.resources.filter((resource) => resource.kind === 'mesh');
   const textures = content.resources.filter((resource) => resource.kind === 'texture');
   return Object.freeze({
@@ -238,9 +241,10 @@ export function rustyApplicationSurfaceResourceOptions(
       animatedMeshManifest: {
         kind: 'rusty_renderer_animated_mesh_resources.v1' as const,
         resources: Object.freeze(animated),
+        ...(clipPacks.length === 0 ? {} : { clipPacks: Object.freeze(clipPacks) }),
       },
       resolveAnimatedMeshResource: (descriptor: RendererAnimatedMeshResourceDescriptor) =>
-        resolveResourceByContentHash(entries, descriptor.contentHash),
+        resolveResource(entries, `${clipPackAssets.has(descriptor.asset) ? 'clip-pack' : 'mesh'}-resource/${descriptor.contentHash.slice('sha256:'.length)}`),
     }),
     ...(mesh.length === 0 ? {} : {
       meshResourceManifest: {
@@ -261,6 +265,35 @@ export function rustyApplicationSurfaceResourceOptions(
   });
 }
 
+function animationClipPacks(frame: RustyApplicationFrame): readonly RendererAnimationClipPackResourceDescriptor[] {
+  if (!Array.isArray(frame['ops'])) return [];
+  const packs: RendererAnimationClipPackResourceDescriptor[] = [];
+  const identities = new Set<string>();
+  frame['ops'].forEach((operation) => {
+    if (typeof operation !== 'object' || operation === null || (operation as { readonly op?: unknown }).op !== 'defineAnimatedMesh') return;
+    const candidate = (operation as { readonly asset?: { readonly clipPacks?: unknown } }).asset;
+    if (!candidate || !Array.isArray(candidate.clipPacks)) return;
+    candidate.clipPacks.forEach((pack) => {
+      if (typeof pack !== 'object' || pack === null) return;
+      const value = pack as { readonly asset?: unknown; readonly contentHash?: unknown; readonly clips?: unknown };
+      if (typeof value.asset !== 'string' || typeof value.contentHash !== 'string' || !Array.isArray(value.clips) || identities.has(value.asset)) return;
+      const clips = value.clips.map((clip) => typeof clip === 'object' && clip !== null
+        ? { id: (clip as { readonly id?: unknown }).id, name: (clip as { readonly name?: unknown }).name }
+        : undefined);
+      if (!clips.every((clip): clip is { readonly id: string; readonly name: string | null } => clip !== undefined
+        && typeof clip.id === 'string' && (typeof clip.name === 'string' || clip.name === null))) return;
+      identities.add(value.asset);
+      packs.push({
+        asset: value.asset,
+        contentHash: value.contentHash,
+        clipIds: Object.freeze(clips.map((clip) => clip.id)),
+        clipSourceNames: Object.freeze(clips.map((clip) => clip.name ?? clip.id)),
+      });
+    });
+  });
+  return packs;
+}
+
 function animatedMeshDescriptors(
   frame: RustyApplicationFrame,
 ): readonly RendererAnimatedMeshResourceDescriptor[] {
@@ -278,16 +311,18 @@ function animatedMeshDescriptors(
     if (typeof candidate.asset !== 'string'
       || typeof candidate.contentHash !== 'string'
       || !Array.isArray(candidate.clips)) return [];
-    const clipIds = candidate.clips.map((clip) => (
+    const clips = candidate.clips.map((clip) => (
       typeof clip === 'object' && clip !== null
-        ? (clip as { readonly id?: unknown }).id
+        ? { id: (clip as { readonly id?: unknown }).id, name: (clip as { readonly name?: unknown }).name }
         : undefined
     ));
-    if (!clipIds.every((clip): clip is string => typeof clip === 'string')) return [];
+    if (!clips.every((clip): clip is { readonly id: string; readonly name: string | null } => clip !== undefined
+      && typeof clip.id === 'string' && (typeof clip.name === 'string' || clip.name === null))) return [];
     return [{
       asset: candidate.asset,
       contentHash: candidate.contentHash,
-      clipIds: Object.freeze(clipIds),
+      clipIds: Object.freeze(clips.map((clip) => clip.id)),
+      clipSourceNames: Object.freeze(clips.map((clip) => clip.name ?? clip.id)),
     }];
   });
 }
@@ -310,17 +345,6 @@ function resolveResource(
 ): Promise<ArrayBuffer> {
   const entry = entries.get(identity);
   if (entry === undefined) return Promise.reject(new Error(`resource ${identity} is unavailable`));
-  return Promise.resolve(entry.bytes.slice(0));
-}
-
-function resolveResourceByContentHash(
-  entries: ReadonlyMap<string, PreparedRustyApplicationResource>,
-  contentHash: string,
-): Promise<ArrayBuffer> {
-  const entry = [...entries.values()].find((candidate) => candidate.contentHash === contentHash);
-  if (entry === undefined) {
-    return Promise.reject(new Error(`resource ${contentHash} is unavailable`));
-  }
   return Promise.resolve(entry.bytes.slice(0));
 }
 

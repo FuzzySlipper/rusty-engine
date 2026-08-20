@@ -127,8 +127,10 @@ export type {
 } from './mesh-resource-host.js';
 export type {
   RendererAnimationControllerClip,
+  RendererAnimationClipPackResourceDescriptor,
   RendererAnimatedMeshFrameReceipt,
   RendererAnimatedMeshPlaybackReadout,
+  RendererAnimatedMeshEffectiveClip,
   RendererAnimatedMeshPoseSample,
   RendererAnimatedMeshProjection,
   RendererAnimatedMeshProjectionOptions,

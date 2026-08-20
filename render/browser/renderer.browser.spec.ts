@@ -57,6 +57,15 @@ test('shared host realizes retained, presentation, and inspection families in a 
     statisticsAvailable: [true, true, true],
     worldBoundsPresent: [true, true, true],
   });
+  expect(proof.clipPack).toEqual({
+    effectiveClips: [
+      { id: 'idle', origin: 'pack' },
+      { id: 'jump', origin: 'embedded' },
+      { id: 'run', origin: 'embedded' },
+    ],
+    normalizedTimes: [0, 0.5, 1],
+    independentInstances: true,
+  });
   expect(['webgl', 'webgl2']).toContain(proof.context);
   expect(proof.snapshot).toContain('shape group');
   expect(proof.snapshot).toContain('shape cube');
@@ -104,8 +113,8 @@ test('shared host realizes retained, presentation, and inspection families in a 
       expect(handle.occlusion).toBe('notMeasured');
     }
   }
-  expect(proof.animationClip).toBe('run');
-  expect(proof.viewmodelAnimationClip).toBe('idle');
+  expect(proof.animationClip).toBe('idle');
+  expect(proof.viewmodelAnimationClip).toBe('run');
   expect(proof.viewmodelNodeCount).toBe(3);
   expect(proof.viewmodelPickExcluded).toBe(true);
   expect(proof.autoStartRenderCount).toBe(4);

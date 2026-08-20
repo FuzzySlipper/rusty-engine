@@ -50,9 +50,9 @@ function animationIntentFrame(clip = 'run'): RenderFrameDiff {
           runtimeFormat: 'glb',
           contentHash: ANIMATED_HASH,
           clips: [
-            { id: 'idle', name: 'Idle', durationSeconds: 1.04166662693024 },
-            { id: 'run', name: 'Run', durationSeconds: 0.666666686534882 },
-            { id: 'jump', name: 'Jump', durationSeconds: 0.5 },
+            { id: 'idle', name: 'idle', durationSeconds: 1.04166662693024 },
+            { id: 'run', name: 'run', durationSeconds: 0.666666686534882 },
+            { id: 'jump', name: 'jump', durationSeconds: 0.5 },
           ],
           defaultClip: 'idle',
           materialSlots: [],

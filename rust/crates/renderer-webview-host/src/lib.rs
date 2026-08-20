@@ -91,6 +91,17 @@ pub struct RendererAnimatedMeshResource {
     pub asset: String,
     pub content_hash: String,
     pub clip_ids: Vec<String>,
+    pub clip_source_names: Vec<String>,
+}
+
+/// Explicit clip-only GLB resource for the fixed renderer webview bridge.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RendererAnimationClipPackResource {
+    pub asset: String,
+    pub content_hash: String,
+    pub clip_ids: Vec<String>,
+    pub clip_source_names: Vec<String>,
 }
 
 impl RendererResource {
@@ -211,10 +222,32 @@ impl RendererWebviewAdapter {
         options: RendererWebviewOptions,
         animated_meshes: Vec<RendererAnimatedMeshResource>,
     ) -> Result<Self, RendererWebviewError> {
+        Self::mount_with_animation_resources(window, options, animated_meshes, Vec::new())
+    }
+
+    /// Mount with explicit mesh and separately-addressed clip-pack resources.
+    /// No resource names or bridge methods are dynamically dispatched.
+    pub fn mount_with_animation_resources<W: HasWindowHandle>(
+        window: &W,
+        options: RendererWebviewOptions,
+        animated_meshes: Vec<RendererAnimatedMeshResource>,
+        animation_clip_packs: Vec<RendererAnimationClipPackResource>,
+    ) -> Result<Self, RendererWebviewError> {
         options.validate()?;
         validate_animated_mesh_resources(&options.resources, &animated_meshes)?;
+        validate_animation_clip_pack_resources(&options.resources, &animation_clip_packs)?;
+        if animated_meshes.iter().any(|mesh| {
+            animation_clip_packs
+                .iter()
+                .any(|pack| pack.asset == mesh.asset)
+        }) {
+            return Err(RendererWebviewError::InvalidResource(
+                "animated mesh and clip-pack identities must not collide",
+            ));
+        }
         let bounds = options.bounds;
-        let configuration = RendererWireConfiguration::new(options, animated_meshes);
+        let configuration =
+            RendererWireConfiguration::new(options, animated_meshes, animation_clip_packs);
         let configuration_json = escape_inline_script_json(serde_json::to_string(&configuration)?);
         let renderer_document = format!(
             r#"{RENDERER_DOCUMENT_PREFIX}
@@ -653,6 +686,7 @@ impl From<serde_json::Error> for RendererWebviewError {
 struct RendererWireConfiguration {
     auto_start: bool,
     animated_meshes: Vec<RendererAnimatedMeshResource>,
+    animation_clip_packs: Vec<RendererAnimationClipPackResource>,
     clear_color: Option<u32>,
     pixel_ratio: f64,
     resources: Vec<RendererWireResource>,
@@ -662,10 +696,12 @@ impl RendererWireConfiguration {
     fn new(
         options: RendererWebviewOptions,
         animated_meshes: Vec<RendererAnimatedMeshResource>,
+        animation_clip_packs: Vec<RendererAnimationClipPackResource>,
     ) -> Self {
         Self {
             auto_start: options.auto_start,
             animated_meshes,
+            animation_clip_packs,
             clear_color: options.clear_color,
             pixel_ratio: options.pixel_ratio,
             resources: options
@@ -682,14 +718,34 @@ impl RendererWireConfiguration {
     }
 }
 
+fn validate_animation_clip_pack_resources(
+    resources: &[RendererResource],
+    packs: &[RendererAnimationClipPackResource],
+) -> Result<(), RendererWebviewError> {
+    let adapted = packs
+        .iter()
+        .map(|pack| RendererAnimatedMeshResource {
+            asset: pack.asset.clone(),
+            content_hash: pack.content_hash.clone(),
+            clip_ids: pack.clip_ids.clone(),
+            clip_source_names: pack.clip_source_names.clone(),
+        })
+        .collect::<Vec<_>>();
+    validate_resource_descriptors(resources, &adapted, "clip-pack-resource")
+}
+
 fn validate_animated_mesh_resources(
     resources: &[RendererResource],
     animated_meshes: &[RendererAnimatedMeshResource],
 ) -> Result<(), RendererWebviewError> {
-    let resources_by_hash = resources
-        .iter()
-        .map(|resource| (resource.content_hash.as_str(), resource))
-        .collect::<std::collections::BTreeMap<_, _>>();
+    validate_resource_descriptors(resources, animated_meshes, "mesh-resource")
+}
+
+fn validate_resource_descriptors(
+    resources: &[RendererResource],
+    animated_meshes: &[RendererAnimatedMeshResource],
+    identity_kind: &str,
+) -> Result<(), RendererWebviewError> {
     let mut assets = std::collections::BTreeSet::new();
     for animated in animated_meshes {
         if animated.asset.is_empty()
@@ -711,9 +767,37 @@ fn validate_animated_mesh_resources(
                 "animated mesh clips are empty, oversized, or invalid",
             ));
         }
-        let Some(resource) = resources_by_hash.get(animated.content_hash.as_str()) else {
+        if animated.clip_source_names.len() != animated.clip_ids.len()
+            || animated.clip_source_names.iter().any(|clip| {
+                clip.is_empty() || clip.len() > 256 || clip.chars().any(char::is_control)
+            })
+            || animated
+                .clip_source_names
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != animated.clip_source_names.len()
+        {
             return Err(RendererWebviewError::InvalidResource(
-                "animated mesh content hash has no admitted resource",
+                "animated mesh source clip names are invalid or duplicated",
+            ));
+        }
+        if !valid_sha256_descriptor(&animated.content_hash) {
+            return Err(RendererWebviewError::InvalidResource(
+                "animated mesh content hash must be a lowercase SHA-256 digest",
+            ));
+        }
+        let expected_identity = format!(
+            "{identity_kind}/{}",
+            &animated.content_hash["sha256:".len()..]
+        );
+        let matching = resources
+            .iter()
+            .filter(|resource| resource.identity == expected_identity)
+            .collect::<Vec<_>>();
+        let [resource] = matching.as_slice() else {
+            return Err(RendererWebviewError::InvalidResource(
+                "animated mesh content hash has no exact admitted resource",
             ));
         };
         if resource.media_type != "application/octet-stream" {
@@ -721,8 +805,21 @@ fn validate_animated_mesh_resources(
                 "animated mesh resource must use application/octet-stream",
             ));
         }
+        if resource.content_hash != animated.content_hash {
+            return Err(RendererWebviewError::InvalidResource(
+                "animated mesh resource content hash does not match its descriptor",
+            ));
+        }
     }
     Ok(())
+}
+
+fn valid_sha256_descriptor(value: &str) -> bool {
+    value.len() == 71
+        && value.starts_with("sha256:")
+        && value["sha256:".len()..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 #[derive(Serialize)]
@@ -1053,14 +1150,98 @@ mod tests {
             asset: "mesh-animation/test-actor".to_owned(),
             content_hash,
             clip_ids: vec!["idle".to_owned(), "run".to_owned()],
+            clip_source_names: vec!["idle".to_owned(), "run".to_owned()],
         }];
         assert!(validate_animated_mesh_resources(&resources, &animated).is_ok());
 
-        let mut missing = animated;
+        let mut missing = animated.clone();
         missing[0].content_hash = format!("sha256:{}", "0".repeat(64));
         assert!(matches!(
             validate_animated_mesh_resources(&resources, &missing),
             Err(RendererWebviewError::InvalidResource(_))
         ));
+        for invalid_hash in [
+            "".to_owned(),
+            "sha256:0".to_owned(),
+            format!("sha512:{}", "0".repeat(64)),
+            format!("sha256:{}", "A".repeat(64)),
+            format!("sha256:{}", "é".repeat(32)),
+        ] {
+            let malformed = vec![RendererAnimatedMeshResource {
+                content_hash: invalid_hash,
+                ..animated[0].clone()
+            }];
+            assert!(matches!(
+                validate_animated_mesh_resources(&resources, &malformed),
+                Err(RendererWebviewError::InvalidResource(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn clip_pack_descriptors_require_one_hash_bound_octet_resource() {
+        let bytes = b"clip pack glb bytes".to_vec();
+        let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
+        let pack = RendererAnimationClipPackResource {
+            asset: "animation-clip-pack/test".to_owned(),
+            content_hash: content_hash.clone(),
+            clip_ids: vec!["wave".to_owned()],
+            clip_source_names: vec!["wave".to_owned()],
+        };
+        let resource = RendererResource {
+            identity: format!("clip-pack-resource/{}", &content_hash["sha256:".len()..]),
+            content_hash: content_hash.clone(),
+            media_type: "application/octet-stream".to_owned(),
+            bytes,
+        };
+        assert!(validate_animation_clip_pack_resources(
+            std::slice::from_ref(&resource),
+            std::slice::from_ref(&pack),
+        )
+        .is_ok());
+        let mesh_alias = RendererResource {
+            identity: format!("mesh-resource/{}", &content_hash["sha256:".len()..]),
+            ..resource.clone()
+        };
+        assert!(validate_animation_clip_pack_resources(
+            &[resource.clone(), mesh_alias],
+            std::slice::from_ref(&pack),
+        )
+        .is_ok());
+        assert!(validate_animation_clip_pack_resources(
+            &[resource.clone(), resource.clone()],
+            std::slice::from_ref(&pack),
+        )
+        .is_err());
+        let missing = RendererAnimationClipPackResource {
+            content_hash: format!("sha256:{}", "0".repeat(64)),
+            ..pack.clone()
+        };
+        assert!(validate_animation_clip_pack_resources(
+            std::slice::from_ref(&resource),
+            std::slice::from_ref(&missing),
+        )
+        .is_err());
+        let wrong_media = RendererResource {
+            media_type: "image/png".to_owned(),
+            ..resource.clone()
+        };
+        assert!(validate_animation_clip_pack_resources(
+            std::slice::from_ref(&wrong_media),
+            std::slice::from_ref(&pack),
+        )
+        .is_err());
+        let wrong_identity = RendererResource {
+            identity: "mesh-resource/not-the-pack".to_owned(),
+            ..resource.clone()
+        };
+        assert!(validate_animation_clip_pack_resources(
+            std::slice::from_ref(&wrong_identity),
+            std::slice::from_ref(&pack),
+        )
+        .is_err());
+        assert!(
+            validate_animation_clip_pack_resources(&[resource], &[pack.clone(), pack]).is_err()
+        );
     }
 }

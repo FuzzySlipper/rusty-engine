@@ -13,6 +13,8 @@ import { zlibSync } from 'fflate';
 import { renderHandle, type AnimatedMeshAsset, type RenderDiff, type RenderNode } from '@rusty-engine/render-contracts';
 import {
   MapAnimatedMeshAssetSource,
+  AnimatedMeshRegistry,
+  animationRigFingerprint,
   RenderApplyError,
   RenderResourceError,
   RUSTY_RENDERER_TEXTURE_MAX_DECODED_BYTES,
@@ -3254,14 +3256,193 @@ function animatedMeshAsset(over: Partial<AnimatedMeshAsset> = {}): AnimatedMeshA
     runtimeFormat: 'glb',
     contentHash: 'sha256:c71255a41c0373f0d2ef52593369d5fd9d2f6220ae548aff8cd6bf5edb403674',
     clips: [
-      { id: 'idle', name: 'Idle', durationSeconds: 1.04166662693024 },
-      { id: 'run', name: 'Run', durationSeconds: 0.666666686534882 },
+      { id: 'idle', name: 'idle', durationSeconds: 1.04166662693024 },
+      { id: 'run', name: 'run', durationSeconds: 0.666666686534882 },
     ],
     defaultClip: 'idle',
     materialSlots: [],
     bounds: { min: [-0.5, 0, -0.5], max: [0.5, 1.8, 0.5] },
     ...over,
   };
+}
+
+void test('one admitted compatible clip pack serves independent instances with origin-qualified clips', () => {
+  const provenanceHash = `sha256:${'a'.repeat(64)}`;
+  const target = rigScene(true);
+  const packScene = rigScene(false);
+  const hash = animationRigFingerprint(target);
+  const rig = {
+    joints: [{ id: 'Root', parent: null }], bindRestHash: hash,
+    bindRestConvention: 'localMatrixV1' as const, rootConvention: 'inPlace' as const, rootJointId: 'Root',
+  };
+  const pack = {
+    asset: 'animation-clip-pack/fixture', runtimeFormat: 'glb' as const, contentHash: hash, rig,
+    clips: [{ id: 'wave', name: 'Wave', durationSeconds: 1 }],
+    provenance: { producer: 'fixture', sourceHash: provenanceHash, targetHash: provenanceHash, license: 'CC0-1.0' },
+  };
+  const asset = animatedMeshAsset({ clips: [], defaultClip: null, clipPacks: [pack] });
+  const source = new MapAnimatedMeshAssetSource(
+    [{ asset: asset.asset, contentHash: asset.contentHash, scene: target, clips: [] }],
+    [{ asset: pack.asset, contentHash: hash, scene: packScene, clips: [
+      new THREE.AnimationClip('Wave', 1, [new THREE.VectorKeyframeTrack('Root.position', [0, 1], [0, 0, 0, 0, 1, 0])]),
+    ] }],
+  );
+  const registry = new AnimatedMeshRegistry(source);
+  registry.define(asset);
+  const instance = { asset: asset.asset, transform: { translation: [0, 0, 0] as const, rotation: [0, 0, 0, 1] as const, scale: [1, 1, 1] as const }, visible: true, materialOverrides: [], playback: null, metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: null } };
+  registry.create(renderHandle(71), instance);
+  registry.create(renderHandle(72), instance);
+  registry.setPlayback(renderHandle(71), { kind: 'play', clip: 'wave', loop: 'repeat', speed: 1, weight: 1, restart: true, fadeSeconds: null });
+  registry.advance(0.5);
+  assert.equal(registry.playback(renderHandle(71))?.effectiveClips[0]?.origin, 'pack');
+  assert.equal(registry.playback(renderHandle(71))?.currentClip, 'wave');
+  assert.equal(registry.playback(renderHandle(72))?.currentClip, null);
+  assert.equal(registry.sample(renderHandle(72), 'wave', 0.25).clip, 'wave');
+  assert.throws(() => registry.create(renderHandle(73), { ...instance, playback: {
+    kind: 'play', clip: 'missing', loop: 'repeat', speed: 1, weight: 1, restart: true, fadeSeconds: null,
+  } }), /missing clip missing/);
+  assert.equal(registry.instanceCount, 2, 'failed initial playback must not publish an instance');
+
+  const inconsistentPackScene = rigScene(true);
+  inconsistentPackScene.traverse((node) => {
+    if (node instanceof THREE.SkinnedMesh) node.skeleton.boneInverses[0]!.elements[12] = 1;
+  });
+  const inconsistentSource = new MapAnimatedMeshAssetSource(
+    [{ asset: asset.asset, contentHash: asset.contentHash, scene: rigScene(true), clips: [] }],
+    [{ asset: pack.asset, contentHash: hash, scene: inconsistentPackScene, clips: [
+      new THREE.AnimationClip('Wave', 1, [new THREE.VectorKeyframeTrack('Root.position', [0, 1], [0, 0, 0, 0, 1, 0])]),
+    ] }],
+  );
+  assert.throws(() => new AnimatedMeshRegistry(inconsistentSource).define(asset), /inverse bind/);
+});
+
+void test('clip descriptors bind one exact decoded source name and duration', () => {
+  const asset = animatedMeshAsset({
+    clips: [{ id: 'idle', name: 'source-idle', durationSeconds: 1 }],
+    defaultClip: 'idle',
+  });
+  const scene = new THREE.Group();
+  const source = (clips: readonly THREE.AnimationClip[]) => new MapAnimatedMeshAssetSource([{
+    asset: asset.asset, contentHash: asset.contentHash, scene, clips,
+  }]);
+  assert.doesNotThrow(() => new AnimatedMeshRegistry(source([new THREE.AnimationClip('source-idle', 1.000001, [])])).define(asset));
+  assert.throws(
+    () => new AnimatedMeshRegistry(source([new THREE.AnimationClip('source-idle', 1.1, [])])).define(asset),
+    /duration does not match/,
+  );
+  assert.throws(
+    () => new AnimatedMeshRegistry(source([
+      new THREE.AnimationClip('source-idle', 1, []), new THREE.AnimationClip('source-idle', 1, []),
+    ])).define(asset),
+    /exactly one clip named source-idle/,
+  );
+  assert.throws(
+    () => new AnimatedMeshRegistry(source([new THREE.AnimationClip('Source-Idle', 1, [])])).define(asset),
+    /exactly one clip named source-idle/,
+  );
+});
+
+void test('mixed-case clip and rig identities use code-unit canonical order', () => {
+  const target = mixedCaseRigScene();
+  const identity = [...new THREE.Matrix4().elements];
+  const canonical = [
+    ['B', null, ...identity, ...identity],
+    ['a', 'B', ...identity, ...identity],
+  ];
+  const expectedFingerprint = `sha256:${bytesToHex(sha256(new TextEncoder().encode(JSON.stringify(canonical))))}`;
+  assert.equal(animationRigFingerprint(target), expectedFingerprint);
+
+  const asset = animatedMeshAsset({
+    clips: [
+      { id: 'a', name: 'a', durationSeconds: 1 },
+      { id: 'B', name: 'B', durationSeconds: 1 },
+    ],
+    defaultClip: null,
+  });
+  const source = new MapAnimatedMeshAssetSource([{
+    asset: asset.asset,
+    contentHash: asset.contentHash,
+    scene: new THREE.Group(),
+    clips: [new THREE.AnimationClip('a', 1, []), new THREE.AnimationClip('B', 1, [])],
+  }]);
+  const registry = new AnimatedMeshRegistry(source);
+  registry.define(asset);
+  registry.create(renderHandle(74), {
+    asset: asset.asset,
+    transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+    visible: true,
+    materialOverrides: [],
+    playback: null,
+    metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: null },
+  });
+  assert.deepEqual(registry.playback(renderHandle(74))?.effectiveClips.map((clip) => clip.id), ['B', 'a']);
+});
+
+void test('clip-pack channels reject malformed decoded keyframes before publication', () => {
+  const target = rigScene(true);
+  const hash = animationRigFingerprint(target);
+  const rig = {
+    joints: [{ id: 'Root', parent: null }], bindRestHash: hash,
+    bindRestConvention: 'localMatrixV1' as const, rootConvention: 'inPlace' as const, rootJointId: 'Root',
+  };
+  const pack = {
+    asset: 'animation-clip-pack/strict', runtimeFormat: 'glb' as const, contentHash: hash, rig,
+    clips: [{ id: 'wave', name: 'Wave', durationSeconds: 1 }],
+    provenance: { producer: 'fixture', sourceHash: `sha256:${'b'.repeat(64)}`, targetHash: `sha256:${'b'.repeat(64)}`, license: 'CC0-1.0' },
+  };
+  const asset = animatedMeshAsset({ clips: [], defaultClip: null, clipPacks: [pack] });
+  const invalidTracks = [
+    new THREE.VectorKeyframeTrack('Root.position', [0, Number.NaN], [0, 0, 0, 0, 0, 0]),
+    new THREE.VectorKeyframeTrack('Root.position', [0, 0], [0, 0, 0, 0, 0, 0]),
+    new THREE.VectorKeyframeTrack('Root.position', [0, 1], [0, 0, 0, 0]),
+    new THREE.VectorKeyframeTrack('Root.position', [0, 1], [0, 0, 0, Number.NaN, 0, 0]),
+    new THREE.VectorKeyframeTrack('Root.position', [0, 1], [0, 0, 0, 0, 0, 0]),
+  ];
+  invalidTracks.forEach((track, index) => {
+    const tracks = index === invalidTracks.length - 1
+      ? [track, new THREE.VectorKeyframeTrack('Root.position', [0, 1], [0, 0, 0, 0, 0, 0])]
+      : [track];
+    const source = new MapAnimatedMeshAssetSource(
+      [{ asset: asset.asset, contentHash: asset.contentHash, scene: rigScene(true), clips: [] }],
+      [{ asset: pack.asset, contentHash: hash, scene: rigScene(false), clips: [new THREE.AnimationClip('Wave', 1, tracks)] }],
+    );
+    assert.throws(() => new AnimatedMeshRegistry(source).define(asset), /malformed or unsupported channels/);
+  });
+});
+
+function rigScene(withSkin = false): THREE.Group {
+  const scene = new THREE.Group();
+  const root = new THREE.Bone();
+  root.name = 'Root';
+  scene.add(root);
+  if (withSkin) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3));
+    geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute([0, 0, 0, 0], 4));
+    geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute([1, 0, 0, 0], 4));
+    const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshBasicMaterial());
+    mesh.bind(new THREE.Skeleton([root], [new THREE.Matrix4()]));
+    scene.add(mesh);
+  }
+  return scene;
+}
+
+function mixedCaseRigScene(): THREE.Group {
+  const scene = new THREE.Group();
+  const root = new THREE.Bone();
+  root.name = 'B';
+  const child = new THREE.Bone();
+  child.name = 'a';
+  root.add(child);
+  scene.add(root);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3));
+  geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute([0, 0, 0, 0], 4));
+  geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute([1, 0, 0, 0], 4));
+  const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshBasicMaterial());
+  mesh.bind(new THREE.Skeleton([root, child], [new THREE.Matrix4(), new THREE.Matrix4()]));
+  scene.add(mesh);
+  return scene;
 }
 
 function testAnimatedMeshSource(asset = animatedMeshAsset()): MapAnimatedMeshAssetSource {
@@ -3271,7 +3452,7 @@ function testAnimatedMeshSource(asset = animatedMeshAsset()): MapAnimatedMeshAss
     const duration = clip.durationSeconds ?? 1;
     const tracks =
       clip.id === 'run' ? [new THREE.VectorKeyframeTrack('.position', [0, duration], [0, 0, 0, 1, 0, 0])] : [];
-    return new THREE.AnimationClip(clip.id, duration, tracks);
+    return new THREE.AnimationClip(clip.name ?? clip.id, duration, tracks);
   });
   return new MapAnimatedMeshAssetSource([{ asset: asset.asset, contentHash: asset.contentHash, scene, clips }]);
 }
@@ -3687,12 +3868,12 @@ void test('animated mesh adapter fails closed for missing resources and clips', 
 
   const wrongClips = new ThreeRenderer({
     animatedMeshSource: new MapAnimatedMeshAssetSource([
-      { asset: asset.asset, scene: new THREE.Group(), clips: [new THREE.AnimationClip('idle', 1, [])] },
+      { asset: asset.asset, scene: new THREE.Group(), clips: [new THREE.AnimationClip('idle', asset.clips[0]!.durationSeconds!, [])] },
     ]),
   });
   assert.throws(
     () => wrongClips.applyDiff({ op: 'defineAnimatedMesh', asset }),
-    /does not contain clip run/,
+    /exactly one clip named run/,
   );
 
   const wrongHash = new ThreeRenderer({ animatedMeshSource: testAnimatedMeshSource(asset) });
@@ -3700,6 +3881,24 @@ void test('animated mesh adapter fails closed for missing resources and clips', 
     () => wrongHash.applyDiff({ op: 'defineAnimatedMesh', asset: animatedMeshAsset({ contentHash: 'sha256:wrong' }) }),
     /content hash mismatch/,
   );
+});
+
+void test('frame rollback does not publish an animated definition or instance after invalid initial playback', () => {
+  const asset = animatedMeshAsset();
+  const renderer = new ThreeRenderer({ animatedMeshSource: testAnimatedMeshSource(asset) });
+  const instance = {
+    asset: asset.asset, transform: { translation: [0, 0, 0] as const, rotation: [0, 0, 0, 1] as const, scale: [1, 1, 1] as const },
+    visible: true, materialOverrides: [],
+    playback: { kind: 'play' as const, clip: 'not-admitted', loop: 'repeat' as const, speed: 1, weight: 1, restart: true, fadeSeconds: null },
+    metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: null },
+  };
+  assert.throws(() => renderer.applyFrame({ schemaVersion: 1, ops: [
+    { op: 'defineAnimatedMesh', asset },
+    { op: 'createAnimatedMeshInstance', handle: renderHandle(991), parent: null, instance },
+  ] }), /not-admitted is not defined/);
+  assert.equal(renderer.animatedMeshPlayback(renderHandle(991)), undefined);
+  assert.equal(renderer.resourceStatistics().animatedInstanceCount, 0);
+  assert.doesNotThrow(() => renderer.applyDiff({ op: 'defineAnimatedMesh', asset }));
 });
 
 // ── Sprites, billboards, and picking ───────────────────────────────────────────

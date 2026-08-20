@@ -524,9 +524,10 @@ function staticMeshInstance(input: unknown, path: string): void {
 }
 
 function animatedMesh(input: unknown, path: string): void {
-  const value = record(input, path, [
-    'asset', 'runtimeFormat', 'contentHash', 'clips', 'defaultClip', 'materialSlots', 'bounds',
-  ]);
+  const value = recordOptional(input, path,
+    ['asset', 'runtimeFormat', 'contentHash', 'clips', 'defaultClip', 'materialSlots', 'bounds'],
+    ['clipPacks'],
+  );
   nonEmptyText(value['asset'], `${path}.asset`);
   enumeration(value['runtimeFormat'], `${path}.runtimeFormat`, ['glb'] as const);
   nullable(value['contentHash'], `${path}.contentHash`, nonEmptyText);
@@ -539,6 +540,65 @@ function animatedMesh(input: unknown, path: string): void {
     clips.add(id);
     nullable(clip['name'], `${clipPath}.name`, nonEmptyText);
     nullable(clip['durationSeconds'], `${clipPath}.durationSeconds`, positiveFinite);
+  });
+  const packAssets = new Set<string>();
+  list(value['clipPacks'] ?? [], `${path}.clipPacks`).forEach((item, index) => {
+    const packPath = `${path}.clipPacks[${String(index)}]`;
+    const pack = record(item, packPath, ['asset', 'runtimeFormat', 'contentHash', 'rig', 'clips', 'provenance']);
+    const asset = nonEmptyText(pack['asset'], `${packPath}.asset`);
+    if (packAssets.has(asset)) fail(`${packPath}.asset`, 'is duplicated');
+    packAssets.add(asset);
+    enumeration(pack['runtimeFormat'], `${packPath}.runtimeFormat`, ['glb'] as const);
+    sha256(pack['contentHash'], `${packPath}.contentHash`);
+    const provenance = record(pack['provenance'], `${packPath}.provenance`, ['producer', 'sourceHash', 'targetHash', 'license']);
+    nonEmptyText(provenance['producer'], `${packPath}.provenance.producer`);
+    sha256(provenance['sourceHash'], `${packPath}.provenance.sourceHash`);
+    sha256(provenance['targetHash'], `${packPath}.provenance.targetHash`);
+    nonEmptyText(provenance['license'], `${packPath}.provenance.license`);
+    const rig = record(pack['rig'], `${packPath}.rig`, ['joints', 'bindRestHash', 'bindRestConvention', 'rootConvention', 'rootJointId']);
+    sha256(rig['bindRestHash'], `${packPath}.rig.bindRestHash`);
+    enumeration(rig['bindRestConvention'], `${packPath}.rig.bindRestConvention`, ['localMatrixV1'] as const);
+    enumeration(rig['rootConvention'], `${packPath}.rig.rootConvention`, ['inPlace', 'authoredRootTranslation'] as const);
+    const rootJointId = jointId(rig['rootJointId'], `${packPath}.rig.rootJointId`);
+    const joints = list(rig['joints'], `${packPath}.rig.joints`);
+    if (joints.length === 0 || joints.length > 256) fail(`${packPath}.rig.joints`, 'must contain 1..=256 entries');
+    const jointIds = new Set<string>();
+    const parentIds: (string | null)[] = [];
+    joints.forEach((jointValue, jointIndex) => {
+      const jointPath = `${packPath}.rig.joints[${String(jointIndex)}]`;
+      const joint = record(jointValue, jointPath, ['id', 'parent']);
+      const id = jointId(joint['id'], `${jointPath}.id`);
+      if (jointIds.has(id)) fail(`${jointPath}.id`, 'is duplicated');
+      jointIds.add(id);
+      parentIds.push(nullableJointId(joint['parent'], `${jointPath}.parent`));
+    });
+    parentIds.forEach((parent, jointIndex) => {
+      if (parent !== null && !jointIds.has(parent)) fail(`${packPath}.rig.joints[${String(jointIndex)}].parent`, 'is not declared');
+      if (parent !== null && parent === (joints[jointIndex] as { id?: unknown }).id) fail(`${packPath}.rig.joints[${String(jointIndex)}].parent`, 'must not reference itself');
+    });
+    if (parentIds.filter((parent) => parent === null).length !== 1) fail(`${packPath}.rig.joints`, 'must declare exactly one root');
+    const parents = new Map([...jointIds].map((id, index) => [id, parentIds[index] ?? null]));
+    if (!jointIds.has(rootJointId) || parents.get(rootJointId) !== null) fail(`${packPath}.rig.rootJointId`, 'must identify the declared root joint');
+    for (const id of jointIds) {
+      const seen = new Set<string>();
+      let current: string | null = id;
+      while (current !== null) {
+        if (seen.has(current)) fail(`${packPath}.rig.joints`, 'must not contain a parent cycle');
+        seen.add(current);
+        current = parents.get(current) ?? null;
+      }
+    }
+    const packClips = list(pack['clips'], `${packPath}.clips`);
+    if (packClips.length === 0 || packClips.length > 256) fail(`${packPath}.clips`, 'must contain 1..=256 entries');
+    packClips.forEach((clipValue, clipIndex) => {
+      const clipPath = `${packPath}.clips[${String(clipIndex)}]`;
+      const clip = record(clipValue, clipPath, ['id', 'name', 'durationSeconds']);
+      const id = nonEmptyText(clip['id'], `${clipPath}.id`);
+      if (clips.has(id)) fail(`${clipPath}.id`, 'collides with an effective clip');
+      clips.add(id);
+      nullable(clip['name'], `${clipPath}.name`, nonEmptyText);
+      nullable(clip['durationSeconds'], `${clipPath}.durationSeconds`, positiveFinite);
+    });
   });
   if (value['defaultClip'] !== null) {
     const defaultClip = nonEmptyText(value['defaultClip'], `${path}.defaultClip`);
@@ -1572,6 +1632,22 @@ function safeInteger(input: unknown, path: string): number {
 
 function nonNegativeInteger(input: unknown, path: string): number {
   return integer(input, path, 0, Number.MAX_SAFE_INTEGER);
+}
+
+function sha256(input: unknown, path: string): string {
+  const value = nonEmptyText(input, path);
+  if (!/^sha256:[0-9a-f]{64}$/u.test(value)) fail(path, 'must be a lowercase SHA-256 digest');
+  return value;
+}
+
+function jointId(input: unknown, path: string): string {
+  const value = nonEmptyText(input, path);
+  if (value.length > 128 || !/^[A-Za-z0-9_-]+$/u.test(value)) fail(path, 'must be a bounded decoded joint identity');
+  return value;
+}
+
+function nullableJointId(input: unknown, path: string): string | null {
+  return input === null ? null : jointId(input, path);
 }
 
 function integerValue(input: unknown, path: string): number {

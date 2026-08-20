@@ -37,6 +37,7 @@ interface RendererResourceEntry {
 interface RendererWebviewConfiguration {
   readonly autoStart: boolean;
   readonly animatedMeshes: readonly RendererAnimatedMeshEntry[];
+  readonly animationClipPacks: readonly RendererAnimatedMeshEntry[];
   readonly clearColor: number | null;
   readonly pixelRatio: number;
   readonly resources: readonly RendererResourceEntry[];
@@ -45,6 +46,7 @@ interface RendererWebviewConfiguration {
 interface RendererAnimatedMeshEntry {
   readonly asset: string;
   readonly contentHash: string;
+  readonly clipSourceNames?: readonly string[];
   readonly clipIds: readonly string[];
 }
 
@@ -259,12 +261,10 @@ export function installRendererWebviewBridge(): void {
     const canvas = requireElement('rusty-renderer-canvas', HTMLCanvasElement);
     const overlays = requireElement('rusty-renderer-overlays', HTMLDivElement);
     const entries = new Map(configuration.resources.map((entry) => [entry.identity, entry]));
-    const entriesByHash = new Map(
-      configuration.resources.map((entry) => [entry.contentHash, entry]),
+    const bytesByIdentity = new Map(
+      configuration.resources.map((entry) => [entry.identity, decodeBase64(entry.bytesBase64)]),
     );
-    const bytesByHash = new Map(
-      configuration.resources.map((entry) => [entry.contentHash, decodeBase64(entry.bytesBase64)]),
-    );
+    const clipPackAssets = new Set(configuration.animationClipPacks.map((entry) => entry.asset));
     const meshResources = configuration.resources.filter(
       (entry) => entry.identity.startsWith('mesh-resource/'),
     );
@@ -280,9 +280,13 @@ export function installRendererWebviewBridge(): void {
       animatedMeshManifest: {
         kind: 'rusty_renderer_animated_mesh_resources.v1' as const,
         resources: configuration.animatedMeshes,
+        ...(configuration.animationClipPacks.length === 0 ? {} : { clipPacks: configuration.animationClipPacks }),
       },
       resolveAnimatedMeshResource: async (descriptor: RendererAnimatedMeshEntry) =>
-        resourceBytesByHash(bytesByHash, descriptor.contentHash),
+        resourceBytesByIdentity(
+          bytesByIdentity,
+          `${clipPackAssets.has(descriptor.asset) ? 'clip-pack' : 'mesh'}-resource/${descriptor.contentHash.slice('sha256:'.length)}`,
+        ),
     };
     if (meshResources.length > 0 && textureResources.length > 0) {
       surface = await mountRendererSurfaceWithResources(canvas, {
@@ -313,9 +317,13 @@ export function installRendererWebviewBridge(): void {
         animatedMeshManifest: {
           kind: 'rusty_renderer_animated_mesh_resources.v1',
           resources: configuration.animatedMeshes,
+          ...(configuration.animationClipPacks.length === 0 ? {} : { clipPacks: configuration.animationClipPacks }),
         },
         resolveAnimatedMeshResource: async (descriptor) =>
-          resourceBytesByHash(bytesByHash, descriptor.contentHash),
+          resourceBytesByIdentity(
+            bytesByIdentity,
+            `${clipPackAssets.has(descriptor.asset) ? 'clip-pack' : 'mesh'}-resource/${descriptor.contentHash.slice('sha256:'.length)}`,
+          ),
       });
     } else {
       surface = mountRendererSurface(canvas, options);
@@ -323,7 +331,7 @@ export function installRendererWebviewBridge(): void {
 
     audio = new RendererAudioHost({
       resolveResource: async (clip) => ({
-        bytes: resourceBytesByHash(bytesByHash, clip.contentHash),
+        bytes: resourceBytesByIdentity(bytesByIdentity, `audio-resource/${clip.contentHash.slice('sha256:'.length)}`),
         contentHash: clip.contentHash,
       }),
     });
@@ -332,10 +340,7 @@ export function installRendererWebviewBridge(): void {
       projectWorld: (position) => ({ ...requireSurface().projectWorldPoint(position), occluded: false }),
       resolveEntityPosition: () => null,
       resolveResource: async (identity, contentHash) => {
-        const entry = entries.get(identity)
-          ?? (contentHash === undefined
-            ? undefined
-            : entriesByHash.get(contentHash));
+        const entry = entries.get(identity);
         if (entry === undefined) return null;
         const bytes = decodeBase64(entry.bytesBase64);
         if (!entry.mediaType.startsWith('image/')) return { bytes };
@@ -348,9 +353,9 @@ export function installRendererWebviewBridge(): void {
     particle = new RendererParticleHost({
       resolveEntityPosition: () => null,
       resolveResource: async (sprite) => {
-        const bytes = bytesByHash.get(sprite.contentHash);
-        if (bytes === undefined) return null;
-        const copy = bytes.slice(0);
+        const entry = entries.get(`texture-resource/${sprite.contentHash.slice('sha256:'.length)}`);
+        if (entry === undefined) return null;
+        const copy = decodeBase64(entry.bytesBase64);
         const url = URL.createObjectURL(new Blob([copy], { type: 'image/png' }));
         objectUrls.add(url);
         return {
@@ -426,6 +431,7 @@ function decodeConfiguration(value: unknown): RendererWebviewConfiguration {
   }
   const identities = new Set<string>();
   const configuredAnimatedMeshes = candidate.animatedMeshes ?? [];
+  const configuredAnimationClipPacks = candidate.animationClipPacks ?? [];
   if (!Array.isArray(configuredAnimatedMeshes) || configuredAnimatedMeshes.length > 256) {
     throw new Error('configuration.animatedMeshes must be a bounded array');
   }
@@ -441,7 +447,11 @@ function decodeConfiguration(value: unknown): RendererWebviewConfiguration {
       || !/^sha256:[0-9a-f]{64}$/u.test(animated.contentHash)
       || !Array.isArray(animated.clipIds)
       || animated.clipIds.length === 0
-      || !animated.clipIds.every((clip) => typeof clip === 'string' && clip.length > 0)) {
+      || !animated.clipIds.every((clip) => typeof clip === 'string' && clip.length > 0)
+      || (animated.clipSourceNames !== undefined && (!Array.isArray(animated.clipSourceNames)
+        || animated.clipSourceNames.length !== animated.clipIds.length
+        || !animated.clipSourceNames.every((clip) => typeof clip === 'string' && clip.length > 0)
+        || new Set(animated.clipSourceNames).size !== animated.clipSourceNames.length))) {
       throw new Error(`configuration.animatedMeshes[${String(index)}] is invalid or duplicated`);
     }
     animatedAssets.add(animated.asset);
@@ -449,8 +459,35 @@ function decodeConfiguration(value: unknown): RendererWebviewConfiguration {
       asset: animated.asset,
       contentHash: animated.contentHash,
       clipIds: Object.freeze([...animated.clipIds]),
+      ...(animated.clipSourceNames === undefined ? {} : { clipSourceNames: Object.freeze([...animated.clipSourceNames]) }),
     });
   });
+  if (!Array.isArray(configuredAnimationClipPacks) || configuredAnimationClipPacks.length > 256) {
+    throw new Error('configuration.animationClipPacks must be a bounded array');
+  }
+  const packAssets = new Set<string>();
+  const animationClipPacks = configuredAnimationClipPacks.map((entry, index) => {
+    if (typeof entry !== 'object' || entry === null) throw new Error(`configuration.animationClipPacks[${String(index)}] must be an object`);
+    const pack = entry as Partial<RendererAnimatedMeshEntry>;
+    if (typeof pack.asset !== 'string' || pack.asset.length === 0 || packAssets.has(pack.asset)
+      || typeof pack.contentHash !== 'string' || !/^sha256:[0-9a-f]{64}$/u.test(pack.contentHash)
+      || !Array.isArray(pack.clipIds) || pack.clipIds.length === 0
+      || !pack.clipIds.every((clip) => typeof clip === 'string' && clip.length > 0)
+      || (pack.clipSourceNames !== undefined && (!Array.isArray(pack.clipSourceNames)
+        || pack.clipSourceNames.length !== pack.clipIds.length
+        || !pack.clipSourceNames.every((clip) => typeof clip === 'string' && clip.length > 0)
+        || new Set(pack.clipSourceNames).size !== pack.clipSourceNames.length))) {
+      throw new Error(`configuration.animationClipPacks[${String(index)}] is invalid or duplicated`);
+    }
+    packAssets.add(pack.asset);
+    return Object.freeze({
+      asset: pack.asset,
+      contentHash: pack.contentHash,
+      clipIds: Object.freeze([...pack.clipIds]),
+      ...(pack.clipSourceNames === undefined ? {} : { clipSourceNames: Object.freeze([...pack.clipSourceNames]) }),
+    });
+  });
+  const resourceKindsByHash = new Map<string, Set<'audio' | 'mesh' | 'clip-pack' | 'texture'>>();
   const resources = candidate.resources.map((entry, index) => {
     if (typeof entry !== 'object' || entry === null) {
       throw new Error(`configuration.resources[${String(index)}] must be an object`);
@@ -469,12 +506,24 @@ function decodeConfiguration(value: unknown): RendererWebviewConfiguration {
     if (typeof resource.mediaType !== 'string' || resource.mediaType.length === 0) {
       throw new Error(`configuration.resources[${String(index)}].mediaType is invalid`);
     }
+    const identity = /^(audio|mesh|clip-pack|texture)-resource\/([0-9a-f]{64})$/u.exec(resource.identity);
+    if (identity === null || resource.contentHash.slice('sha256:'.length) !== identity[2]) {
+      throw new Error(`configuration.resources[${String(index)}].identity must match its content hash`);
+    }
+    const kind = identity[1] as 'audio' | 'mesh' | 'clip-pack' | 'texture';
+    const kinds = resourceKindsByHash.get(resource.contentHash) ?? new Set();
+    kinds.add(kind);
+    if (kinds.size > 1 && !(kinds.size === 2 && kinds.has('mesh') && kinds.has('clip-pack'))) {
+      throw new Error(`configuration.resources[${String(index)}].contentHash has an ambiguous resource alias`);
+    }
+    resourceKindsByHash.set(resource.contentHash, kinds);
     identities.add(resource.identity);
     return resource as RendererResourceEntry;
   });
   return Object.freeze({
     autoStart: candidate.autoStart,
     animatedMeshes: Object.freeze(animatedMeshes),
+    animationClipPacks: Object.freeze(animationClipPacks),
     clearColor,
     pixelRatio,
     resources: Object.freeze(resources),
@@ -516,9 +565,9 @@ function resourceBytes(entries: ReadonlyMap<string, RendererResourceEntry>, iden
   return decodeBase64(entry.bytesBase64);
 }
 
-function resourceBytesByHash(entries: ReadonlyMap<string, ArrayBuffer>, hash: string): ArrayBuffer {
-  const bytes = entries.get(hash);
-  if (bytes === undefined) throw new Error(`resource ${hash} is unavailable`);
+function resourceBytesByIdentity(entries: ReadonlyMap<string, ArrayBuffer>, identity: string): ArrayBuffer {
+  const bytes = entries.get(identity);
+  if (bytes === undefined) throw new Error(`resource ${identity} is unavailable`);
   return bytes.slice(0);
 }
 

@@ -1,8 +1,11 @@
 import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
 import type {
   AnimatedMeshAsset,
+  AnimationClipPack,
   AnimatedMeshInstanceDescriptor,
   AnimatedMeshPlaybackCommand,
   RenderHandle,
@@ -15,7 +18,19 @@ export class AnimatedMeshApplyError extends Error {
   }
 }
 
+/** Locale-independent canonical ordering for serialized and cross-host readouts. */
+function codeUnitCompare(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 export interface AnimatedMeshResource {
+  readonly asset: string;
+  readonly contentHash?: string | null;
+  readonly scene: THREE.Object3D;
+  readonly clips: readonly THREE.AnimationClip[];
+}
+
+export interface AnimationClipPackResource {
   readonly asset: string;
   readonly contentHash?: string | null;
   readonly scene: THREE.Object3D;
@@ -24,6 +39,7 @@ export interface AnimatedMeshResource {
 
 export interface AnimatedMeshAssetSource {
   getAnimatedMeshResource(asset: AnimatedMeshAsset): AnimatedMeshResource | undefined;
+  getAnimationClipPackResource(pack: AnimationClipPack): AnimationClipPackResource | undefined;
 }
 
 export interface AnimatedMeshPlaybackReadout {
@@ -42,6 +58,13 @@ export interface AnimatedMeshPlaybackReadout {
   readonly poseSample: AnimatedMeshPoseSample;
   readonly diagnostics: readonly string[];
   readonly controllerClips: readonly AnimatedMeshControllerClip[];
+  readonly effectiveClips: readonly AnimatedMeshEffectiveClipReadout[];
+}
+
+export interface AnimatedMeshEffectiveClipReadout {
+  readonly id: string;
+  readonly origin: 'embedded' | 'pack';
+  readonly durationSeconds: number;
 }
 
 export type AnimatedMeshSampleDiagnosticCode =
@@ -120,6 +143,7 @@ interface AnimatedMeshAssetRecord {
   readonly asset: AnimatedMeshAsset;
   readonly resource: AnimatedMeshResource;
   readonly scene: THREE.Object3D;
+  readonly packs: readonly AnimationClipPackResource[];
   refCount: number;
 }
 
@@ -129,6 +153,7 @@ interface AnimatedMeshInstanceRecord {
   readonly object: THREE.Object3D;
   readonly mixer: THREE.AnimationMixer;
   readonly actions: ReadonlyMap<string, THREE.AnimationAction>;
+  readonly clipOrigins: ReadonlyMap<string, 'embedded' | 'pack'>;
   currentClip: string | null;
   commandSelected: boolean;
   status: AnimatedMeshPlaybackReadout['status'];
@@ -141,14 +166,25 @@ interface AnimatedMeshInstanceRecord {
 export class MapAnimatedMeshAssetSource implements AnimatedMeshAssetSource {
   readonly #resources = new Map<string, AnimatedMeshResource>();
 
-  constructor(resources: readonly AnimatedMeshResource[]) {
+  readonly #packs = new Map<string, AnimationClipPackResource>();
+
+  constructor(resources: readonly AnimatedMeshResource[], packs: readonly AnimationClipPackResource[] = []) {
     for (const resource of resources) {
+      if (this.#resources.has(resource.asset)) throw new AnimatedMeshApplyError(`duplicate animated mesh resource ${resource.asset}`);
       this.#resources.set(resource.asset, resource);
+    }
+    for (const pack of packs) {
+      if (this.#packs.has(pack.asset)) throw new AnimatedMeshApplyError(`duplicate animation clip pack resource ${pack.asset}`);
+      this.#packs.set(pack.asset, pack);
     }
   }
 
   getAnimatedMeshResource(asset: AnimatedMeshAsset): AnimatedMeshResource | undefined {
     return this.#resources.get(asset.asset);
+  }
+
+  getAnimationClipPackResource(pack: AnimationClipPack): AnimationClipPackResource | undefined {
+    return this.#packs.get(pack.asset);
   }
 }
 
@@ -167,6 +203,13 @@ export async function loadAnimatedMeshGlbResource(
     scene: gltf.scene,
     clips: gltf.animations,
   };
+}
+
+export async function loadAnimationClipPackGlbResource(
+  asset: string, data: ArrayBuffer, contentHash?: string,
+): Promise<AnimationClipPackResource> {
+  const resource = await loadAnimatedMeshGlbResource(asset, data, contentHash);
+  return resource;
 }
 
 export class AnimatedMeshRegistry {
@@ -189,19 +232,19 @@ export class AnimatedMeshRegistry {
         `defineAnimatedMesh: asset ${asset.asset} is in use by ${existing.refCount} instance(s)`,
       );
     }
-    const resource = this.#validatedResource(asset);
+    const { resource, packs } = this.#validatedResource(asset);
     const scene = createAnimatedMeshAssetScene(resource.scene);
     if (existing) {
       disposeAnimatedMeshAssetScene(existing.scene);
     }
-    this.#assets.set(asset.asset, { asset, resource, scene, refCount: 0 });
+    this.#assets.set(asset.asset, { asset, resource, scene, packs, refCount: 0 });
   }
 
   validateDefinition(asset: AnimatedMeshAsset): void {
     this.#validatedResource(asset);
   }
 
-  #validatedResource(asset: AnimatedMeshAsset): AnimatedMeshResource {
+  #validatedResource(asset: AnimatedMeshAsset): { resource: AnimatedMeshResource; packs: readonly AnimationClipPackResource[] } {
     if (asset.runtimeFormat !== 'glb') {
       throw new AnimatedMeshApplyError(`defineAnimatedMesh: unsupported runtime format ${asset.runtimeFormat}`);
     }
@@ -215,7 +258,16 @@ export class AnimatedMeshRegistry {
       );
     }
     assertClipDescriptors(asset, resource);
-    return resource;
+    const packs = (asset.clipPacks ?? []).map((pack) => {
+      const clipPack = this.#assetSource?.getAnimationClipPackResource(pack);
+      if (!clipPack) throw new AnimatedMeshApplyError(`defineAnimatedMesh: missing animation clip pack resource ${pack.asset}`);
+      if (clipPack.contentHash !== undefined && clipPack.contentHash !== pack.contentHash) {
+        throw new AnimatedMeshApplyError(`defineAnimatedMesh: clip pack content hash mismatch for ${pack.asset}`);
+      }
+      assertClipPack(pack, resource.scene, clipPack);
+      return clipPack;
+    });
+    return { resource, packs };
   }
 
   create(handle: RenderHandle, instance: AnimatedMeshInstanceDescriptor): AnimatedMeshInstanceRecord {
@@ -231,8 +283,19 @@ export class AnimatedMeshRegistry {
     const object = SkeletonUtils.clone(record.scene);
     const mixer = new THREE.AnimationMixer(object);
     const actions = new Map<string, THREE.AnimationAction>();
+    const clipOrigins = new Map<string, 'embedded' | 'pack'>();
     for (const clip of record.asset.clips) {
       actions.set(clip.id, mixer.clipAction(requireClip(record.resource, clip.id, clip.name)));
+      clipOrigins.set(clip.id, 'embedded');
+    }
+    for (const pack of record.asset.clipPacks ?? []) {
+      const resource = record.packs.find((candidate) => candidate.asset === pack.asset);
+      if (!resource) throw new AnimatedMeshApplyError(`createAnimatedMeshInstance: missing admitted clip pack ${pack.asset}`);
+      for (const clip of pack.clips) {
+        if (actions.has(clip.id)) throw new AnimatedMeshApplyError(`createAnimatedMeshInstance: effective clip collision ${clip.id}`);
+        actions.set(clip.id, mixer.clipAction(requireClip(resource, clip.id, clip.name)));
+        clipOrigins.set(clip.id, 'pack');
+      }
     }
     const instanceRecord: AnimatedMeshInstanceRecord = {
       handle,
@@ -240,6 +303,7 @@ export class AnimatedMeshRegistry {
       object,
       mixer,
       actions,
+      clipOrigins,
       currentClip: null,
       commandSelected: false,
       status: 'not_started',
@@ -248,11 +312,11 @@ export class AnimatedMeshRegistry {
       weight: null,
       controllerClips: [],
     };
+    // Validate optional initial playback against a detached instance first;
+    // rejected creation must not publish an instance or consume a refcount.
+    if (instance.playback) applyPlaybackCommand(instanceRecord, instance.playback);
     this.#instances.set(handle, instanceRecord);
     record.refCount += 1;
-    if (instance.playback) {
-      this.setPlayback(handle, instance.playback);
-    }
     return instanceRecord;
   }
 
@@ -317,6 +381,9 @@ export class AnimatedMeshRegistry {
       poseSample: poseSample(instance.object),
       diagnostics: playbackDiagnostics(instance, action),
       controllerClips: instance.controllerClips,
+      effectiveClips: [...instance.actions.entries()]
+        .map(([id, action]) => ({ id, origin: instance.clipOrigins.get(id) ?? 'embedded', durationSeconds: action.getClip().duration }))
+        .sort((left, right) => codeUnitCompare(left.id, right.id)),
     };
   }
 
@@ -469,9 +536,237 @@ function disposeAnimatedMeshAssetScene(scene: THREE.Object3D): void {
 }
 
 function assertClipDescriptors(asset: AnimatedMeshAsset, resource: AnimatedMeshResource): void {
-  for (const clip of asset.clips) {
-    requireClip(resource, clip.id, clip.name);
+  requireDescriptorClips(resource, asset.clips);
+}
+
+function assertClipPack(
+  pack: AnimationClipPack,
+  targetScene: THREE.Object3D,
+  resource: AnimationClipPackResource,
+): void {
+  const targetJoints = jointHierarchy(targetScene);
+  for (const expected of pack.rig.joints) {
+    const actual = targetJoints.get(expected.id);
+    if (actual === undefined) throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: missing target joint ${expected.id}`);
+    if (actual !== expected.parent) throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: incompatible rig signature (parent for ${expected.id})`);
   }
+  const packJoints = jointHierarchy(resource.scene);
+  for (const joint of pack.rig.joints) {
+    if (!packJoints.has(joint.id)) throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: missing source joint ${joint.id}`);
+    if (packJoints.get(joint.id) !== joint.parent) throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: incompatible rig signature (source parent for ${joint.id})`);
+  }
+  assertMatchingRestPose(pack, targetScene, resource.scene);
+  const targetFingerprint = animationRigFingerprint(targetScene);
+  if (pack.rig.bindRestHash !== targetFingerprint) {
+    throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: incompatible rig signature (bind/rest fingerprint)`);
+  }
+  const roots = pack.rig.joints.filter((joint) => joint.parent === null);
+  if (roots.length !== 1) throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: incompatible rig signature (root)`);
+  for (const [, clip] of requireDescriptorClips(resource, pack.clips)) {
+    assertClipChannels(pack, clip, new Set(pack.rig.joints.map((joint) => joint.id)));
+  }
+}
+
+function jointHierarchy(scene: THREE.Object3D): Map<string, string | null> {
+  const result = new Map<string, string | null>();
+  scene.traverse((node) => {
+    if (!(node instanceof THREE.Bone)) return;
+    if (node.name.length === 0 || result.has(node.name)) {
+      throw new AnimatedMeshApplyError('animated skeleton has missing or duplicate joint identities');
+    }
+    result.set(node.name, node.parent instanceof THREE.Bone ? node.parent.name : null);
+  });
+  return result;
+}
+
+function assertMatchingRestPose(pack: AnimationClipPack, target: THREE.Object3D, source: THREE.Object3D): void {
+  const targetBones = bonesByName(target);
+  const sourceBones = bonesByName(source);
+  for (const joint of pack.rig.joints) {
+    const targetBone = targetBones.get(joint.id);
+    const sourceBone = sourceBones.get(joint.id);
+    if (!targetBone || !sourceBone) throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: missing target joints for rest comparison`);
+    targetBone.updateMatrix();
+    sourceBone.updateMatrix();
+    if (!targetBone.matrix.elements.every((value, index) => Math.abs(value - sourceBone.matrix.elements[index]!) <= 1e-6)) {
+      throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: incompatible rig signature (bind/rest for ${joint.id})`);
+    }
+  }
+  const targetInverses = inverseBindsByJoint(target, true);
+  const sourceInverses = inverseBindsByJoint(source, false);
+  for (const [joint, sourceInverse] of sourceInverses) {
+    const targetInverse = targetInverses.get(joint);
+    if (!targetInverse || !targetInverse.elements.every((value, index) => Math.abs(value - sourceInverse.elements[index]!) <= 1e-6)) {
+      throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: incompatible rig signature (inverse bind for ${joint})`);
+    }
+  }
+}
+
+/** Stable SHA-256 over a coherent target rig's decoded hierarchy, rest matrices, and inverse binds. */
+export function animationRigFingerprint(scene: THREE.Object3D): string {
+  const bones = bonesByName(scene);
+  const inverseBinds = inverseBindsByJoint(scene, true);
+  const canonical = [...bones.entries()].sort(([left], [right]) => codeUnitCompare(left, right)).map(([name, bone]) => {
+    bone.updateMatrix();
+    const inverse = inverseBinds.get(name);
+    if (!inverse) throw new AnimatedMeshApplyError(`animated skeleton is missing an inverse-bind matrix for ${name}`);
+    return [name, bone.parent instanceof THREE.Bone ? bone.parent.name : null,
+      ...bone.matrix.elements.map((value) => Number(value.toFixed(6))),
+      ...inverse.elements.map((value) => Number(value.toFixed(6)))];
+  });
+  return `sha256:${bytesToHex(sha256(new TextEncoder().encode(JSON.stringify(canonical))))}`;
+}
+
+function inverseBindsByJoint(scene: THREE.Object3D, requireTargetSkin: boolean): Map<string, THREE.Matrix4> {
+  const inverses = new Map<string, THREE.Matrix4>();
+  let skinnedMeshes = 0;
+  scene.traverse((node) => {
+    if (!(node instanceof THREE.SkinnedMesh)) return;
+    skinnedMeshes += 1;
+    node.skeleton.bones.forEach((bone, index) => {
+      const inverse = node.skeleton.boneInverses[index];
+      if (!inverse) {
+        throw new AnimatedMeshApplyError('animated skeleton has missing or inconsistent inverse-bind matrices');
+      }
+      const existing = inverses.get(bone.name);
+      if (existing && !existing.elements.every((value, matrixIndex) => Math.abs(value - inverse.elements[matrixIndex]!) <= 1e-6)) {
+        throw new AnimatedMeshApplyError('animated skeleton has missing or inconsistent inverse-bind matrices');
+      }
+      inverses.set(bone.name, inverse);
+    });
+  });
+  if (requireTargetSkin && skinnedMeshes === 0) {
+    throw new AnimatedMeshApplyError('animated target has no skinned skeleton for bind/rest verification');
+  }
+  return inverses;
+}
+
+function bonesByName(scene: THREE.Object3D): Map<string, THREE.Bone> {
+  const bones = new Map<string, THREE.Bone>();
+  scene.traverse((node) => {
+    if (!(node instanceof THREE.Bone)) return;
+    if (node.name.length === 0 || bones.has(node.name)) {
+      throw new AnimatedMeshApplyError('animated skeleton has missing or duplicate joint identities');
+    }
+    bones.set(node.name, node);
+  });
+  return bones;
+}
+
+const ANIMATION_DURATION_TOLERANCE_SECONDS = 1e-5;
+const MAX_ANIMATION_KEYS_PER_TRACK = 4_096;
+const MAX_ANIMATION_KEYS_PER_CLIP = 65_536;
+
+function assertClipChannels(pack: AnimationClipPack, clip: THREE.AnimationClip, joints: ReadonlySet<string>): void {
+  if (clip.tracks.length === 0 || clip.tracks.length > 1_024) {
+    throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: malformed or unsupported channels for ${clip.name}`);
+  }
+  const translated = new Set<string>();
+  const bindings = new Set<string>();
+  let totalKeys = 0;
+  for (const track of clip.tracks) {
+    const parsed = parsePackTrackName(track.name, joints);
+    if (parsed === null) {
+      throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: malformed or unsupported channels for ${clip.name}`);
+    }
+    const joint = parsed.nodeName;
+    const property = parsed.propertyName;
+    const arity = property === 'position' ? 3 : property === 'quaternion' ? 4 : null;
+    if (arity === null || !joints.has(joint) || track.times.length === 0 || track.values.length === 0
+      || track.times.length > MAX_ANIMATION_KEYS_PER_TRACK || totalKeys + track.times.length > MAX_ANIMATION_KEYS_PER_CLIP
+      || track.values.length !== track.times.length * arity) {
+      throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: malformed or unsupported channels for ${clip.name}`);
+    }
+    for (let index = 0; index < track.times.length; index += 1) {
+      const time = track.times[index]!;
+      if (!Number.isFinite(time) || (index > 0 && time <= track.times[index - 1]!)) {
+        throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: malformed or unsupported channels for ${clip.name}`);
+      }
+    }
+    for (let index = 0; index < track.values.length; index += 1) {
+      if (!Number.isFinite(track.values[index]!)) {
+        throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: malformed or unsupported channels for ${clip.name}`);
+      }
+    }
+    if (property === 'quaternion') {
+      for (let index = 0; index < track.values.length; index += 4) {
+        const squaredLength = track.values[index]! ** 2 + track.values[index + 1]! ** 2
+          + track.values[index + 2]! ** 2 + track.values[index + 3]! ** 2;
+        if (!Number.isFinite(squaredLength) || squaredLength <= 1e-12) {
+          throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: malformed or unsupported channels for ${clip.name}`);
+        }
+      }
+    }
+    const binding = `${joint}.${property}`;
+    if (bindings.has(binding)) {
+      throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: malformed or unsupported channels for ${clip.name}`);
+    }
+    bindings.add(binding);
+    totalKeys += track.times.length;
+    if (property !== 'position' && property !== 'quaternion') {
+      throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: unsupported root-motion declaration or channel for ${clip.name}`);
+    }
+    if (property === 'position') {
+      if (joint !== pack.rig.rootJointId) throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: unsupported root-motion declaration for ${clip.name}`);
+      if (pack.rig.rootConvention === 'inPlace') assertInPlaceHorizontal(track, pack, clip);
+      translated.add(joint);
+    }
+  }
+  if (pack.rig.rootConvention === 'authoredRootTranslation'
+    && (translated.size !== 1 || !translated.has(pack.rig.rootJointId))) {
+    throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: unsupported root-motion declaration for ${clip.name}`);
+  }
+}
+
+function parsePackTrackName(
+  name: string,
+  joints: ReadonlySet<string>,
+): { readonly nodeName: string; readonly propertyName: 'position' | 'quaternion' } | null {
+  for (const propertyName of ['position', 'quaternion'] as const) {
+    const suffix = `.${propertyName}`;
+    if (!name.endsWith(suffix)) continue;
+    const nodeName = name.slice(0, -suffix.length);
+    if (nodeName.length > 0 && joints.has(nodeName)) return { nodeName, propertyName };
+  }
+  return null;
+}
+
+function assertInPlaceHorizontal(track: THREE.KeyframeTrack, pack: AnimationClipPack, clip: THREE.AnimationClip): void {
+  if (track.getValueSize() !== 3) throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: malformed root translation for ${clip.name}`);
+  const x = track.values[0];
+  const z = track.values[2];
+  for (let index = 0; index < track.values.length; index += 3) {
+    if (Math.abs(track.values[index]! - x!) > 1e-6 || Math.abs(track.values[index + 2]! - z!) > 1e-6) {
+      throw new AnimatedMeshApplyError(`clip pack ${pack.asset}: unsupported root-motion declaration for ${clip.name}`);
+    }
+  }
+}
+
+function requireDescriptorClips(
+  resource: AnimatedMeshResource,
+  descriptors: readonly { readonly id: string; readonly name: string | null; readonly durationSeconds: number | null }[],
+): readonly (readonly [{ readonly id: string; readonly name: string | null; readonly durationSeconds: number | null }, THREE.AnimationClip])[] {
+  const boundNames = new Set<string>();
+  return descriptors.map((descriptor) => {
+    const sourceName = descriptor.name ?? descriptor.id;
+    const matches = resource.clips.filter((candidate) => candidate.name === sourceName);
+    if (matches.length !== 1 || boundNames.has(sourceName)) {
+      throw new AnimatedMeshApplyError(`animated mesh ${resource.asset} does not contain exactly one clip named ${sourceName}`);
+    }
+    const clip = matches[0]!;
+    if (!Number.isFinite(clip.duration) || clip.duration <= 0) {
+      throw new AnimatedMeshApplyError(`animated mesh ${resource.asset} clip ${sourceName} has an invalid decoded duration`);
+    }
+    if (descriptor.durationSeconds !== null
+      && Math.abs(clip.duration - descriptor.durationSeconds) > Math.max(
+        ANIMATION_DURATION_TOLERANCE_SECONDS,
+        Math.abs(descriptor.durationSeconds) * ANIMATION_DURATION_TOLERANCE_SECONDS,
+      )) {
+      throw new AnimatedMeshApplyError(`animated mesh ${resource.asset} clip ${sourceName} duration does not match its descriptor`);
+    }
+    boundNames.add(sourceName);
+    return [descriptor, clip] as const;
+  });
 }
 
 function requireClip(
@@ -479,7 +774,8 @@ function requireClip(
   id: string,
   name: string | null,
 ): THREE.AnimationClip {
-  const clip = resource.clips.find((candidate) => candidate.name === id || (name !== null && candidate.name === name));
+  const matches = requireDescriptorClips(resource, [{ id, name, durationSeconds: null }]);
+  const clip = matches[0]?.[1];
   if (!clip) {
     throw new AnimatedMeshApplyError(`animated mesh ${resource.asset} does not contain clip ${id}`);
   }
@@ -893,7 +1189,7 @@ function animatedMeshSkinningFacts(
       case THREE.InterpolateSmooth: return 'smooth' as const;
       default: return 'linear' as const;
     }
-  }))].sort();
+  }))].sort(codeUnitCompare);
   return {
     joints: [...templateBones.values()].map((bone) => ({
       name: bone.name,

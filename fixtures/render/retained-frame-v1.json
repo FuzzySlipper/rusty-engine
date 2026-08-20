@@ -243,10 +243,11 @@
         "clips": [
           {
             "id": "idle",
-            "name": "Idle",
+            "name": "idle",
             "durationSeconds": 1.0
           }
         ],
+        "clipPacks": [],
         "defaultClip": "idle",
         "materialSlots": [
           {

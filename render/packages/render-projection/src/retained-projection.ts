@@ -1379,6 +1379,20 @@ function validateAnimatedMeshAsset(asset: AnimatedMeshAsset, ctx: string): void 
     }
     clips.add(clip.id);
   }
+  for (const pack of asset.clipPacks ?? []) {
+    if (pack.asset.length === 0) {
+      throw new RenderProjectionError(`${ctx}.clipPacks asset must be non-empty`);
+    }
+    for (const clip of pack.clips) {
+      if (clip.id.length === 0) {
+        throw new RenderProjectionError(`${ctx}.clipPacks(${pack.asset}) has an empty clip id`);
+      }
+      if (clips.has(clip.id)) {
+        throw new RenderProjectionError(`${ctx}.clipPacks(${pack.asset}) collides on effective clip ${clip.id}`);
+      }
+      clips.add(clip.id);
+    }
+  }
   if (asset.defaultClip !== null && !clips.has(asset.defaultClip)) {
     throw new RenderProjectionError(`${ctx}.defaultClip ${asset.defaultClip} is not declared`);
   }

@@ -1,6 +1,7 @@
 import type { RenderFrameDiff, RenderHandle } from '@rusty-engine/render-contracts';
 import {
   MapAnimatedMeshAssetSource,
+  loadAnimationClipPackGlbResource,
   ThreeRenderer,
   loadAnimatedMeshGlbResource,
   type AnimatedMeshAssetSource,
@@ -13,6 +14,10 @@ export type RendererHostDiagnosticCode =
   | 'animated_mesh_content_hash_mismatch'
   | 'animated_mesh_clip_unavailable'
   | 'animated_mesh_frame_rejected'
+  | 'animated_mesh_incompatible_rig'
+  | 'animated_mesh_missing_joint'
+  | 'animated_mesh_malformed_channels'
+  | 'animated_mesh_unsupported_root_policy'
   | 'renderer_lighting_policy_rejected'
   | 'animated_mesh_handle_unavailable'
   | 'animation_not_started'
@@ -39,12 +44,23 @@ export class RendererHostError extends Error {
 export interface RendererAnimatedMeshResourceDescriptor {
   readonly asset: string;
   readonly contentHash: string;
+  /** Decoded GLB clip names in the same order as effective clip IDs. */
+  readonly clipSourceNames?: readonly string[];
+  readonly clipIds: readonly string[];
+}
+
+export interface RendererAnimationClipPackResourceDescriptor {
+  readonly asset: string;
+  readonly contentHash: string;
+  /** Decoded GLB clip names in the same order as effective clip IDs. */
+  readonly clipSourceNames?: readonly string[];
   readonly clipIds: readonly string[];
 }
 
 export interface RendererAnimatedMeshResourceManifest {
   readonly kind: 'rusty_renderer_animated_mesh_resources.v1';
   readonly resources: readonly RendererAnimatedMeshResourceDescriptor[];
+  readonly clipPacks?: readonly RendererAnimationClipPackResourceDescriptor[];
 }
 
 export type RendererAnimatedMeshResourceResolver = (
@@ -84,6 +100,13 @@ export interface RendererAnimatedMeshPlaybackReadout {
   readonly diagnostics: readonly RendererHostDiagnostic[];
   readonly projectionOnly: true;
   readonly controllerClips: readonly RendererAnimationControllerClip[];
+  readonly effectiveClips: readonly RendererAnimatedMeshEffectiveClip[];
+}
+
+export interface RendererAnimatedMeshEffectiveClip {
+  readonly id: string;
+  readonly origin: 'embedded' | 'pack';
+  readonly durationSeconds: number;
 }
 
 export interface RendererAnimatedMeshProjection {
@@ -132,7 +155,8 @@ export async function loadRendererAnimatedMeshSource(
     } catch (cause) {
       throw hostError('animated_mesh_resource_unavailable', descriptor.asset, null, cause);
     }
-    const actualHash = await rendererResourceContentHash(data, descriptor.contentHash);
+    const immutableData = data.slice(0);
+    const actualHash = await rendererResourceContentHash(immutableData, descriptor.contentHash);
     if (actualHash !== descriptor.contentHash) {
       throw hostError(
         'animated_mesh_content_hash_mismatch',
@@ -141,17 +165,46 @@ export async function loadRendererAnimatedMeshSource(
         `expected ${descriptor.contentHash}, received ${actualHash}`,
       );
     }
-    const resource = await loadAnimatedMeshGlbResource(descriptor.asset, data, descriptor.contentHash).catch((cause: unknown) => {
+    const resource = await loadAnimatedMeshGlbResource(descriptor.asset, immutableData, descriptor.contentHash).catch((cause: unknown) => {
       throw hostError('animated_mesh_resource_unavailable', descriptor.asset, null, cause);
     });
-    const availableClips = new Set(resource.clips.map((clip) => clip.name.toLowerCase()));
-    const missingClip = descriptor.clipIds.find((clip) => !availableClips.has(clip.toLowerCase()));
+    const missingClip = missingDeclaredSourceClip(resource.clips, descriptor);
     if (missingClip !== undefined) {
       throw hostError('animated_mesh_clip_unavailable', descriptor.asset, null, `missing clip ${missingClip}`);
     }
     return resource;
   }));
-  return new MapAnimatedMeshAssetSource(resources);
+  const packs = await Promise.all((manifest.clipPacks ?? []).map(async (descriptor) => {
+    let data: ArrayBuffer;
+    try { data = await resolver(descriptor); } catch (cause) {
+      throw hostError('animated_mesh_resource_unavailable', descriptor.asset, null, cause);
+    }
+    const immutableData = data.slice(0);
+    const actualHash = await rendererResourceContentHash(immutableData, descriptor.contentHash);
+    if (actualHash !== descriptor.contentHash) {
+      throw hostError('animated_mesh_content_hash_mismatch', descriptor.asset, null, `expected ${descriptor.contentHash}, received ${actualHash}`);
+    }
+    const resource = await loadAnimationClipPackGlbResource(descriptor.asset, immutableData, descriptor.contentHash).catch((cause: unknown) => {
+      throw hostError('animated_mesh_resource_unavailable', descriptor.asset, null, cause);
+    });
+    const missingClip = missingDeclaredSourceClip(resource.clips, descriptor);
+    if (missingClip !== undefined) throw hostError('animated_mesh_clip_unavailable', descriptor.asset, null, `missing clip ${missingClip}`);
+    return resource;
+  }));
+  return new MapAnimatedMeshAssetSource(resources, packs);
+}
+
+function missingDeclaredSourceClip(
+  clips: readonly { readonly name: string }[],
+  descriptor: RendererAnimatedMeshResourceDescriptor | RendererAnimationClipPackResourceDescriptor,
+): string | undefined {
+  const sourceNames = descriptor.clipSourceNames ?? descriptor.clipIds;
+  if (sourceNames.length !== descriptor.clipIds.length || new Set(sourceNames).size !== sourceNames.length) {
+    return 'invalid source clip declaration';
+  }
+  const counts = new Map<string, number>();
+  clips.forEach((clip) => counts.set(clip.name, (counts.get(clip.name) ?? 0) + 1));
+  return sourceNames.find((sourceName) => counts.get(sourceName) !== 1);
 }
 
 export function animationPlaybackReadout(
@@ -178,6 +231,7 @@ export function animationPlaybackReadout(
       diagnostics: [diagnostic('animated_mesh_handle_unavailable', null, handle, `animated mesh handle ${handle} is unavailable`)],
       projectionOnly: true,
       controllerClips: [],
+      effectiveClips: [],
     };
   }
   return {
@@ -198,6 +252,7 @@ export function animationPlaybackReadout(
     diagnostics: readout.diagnostics.map((code) => diagnostic(animationDiagnosticCode(code), readout.asset, handle, code)),
     projectionOnly: true,
     controllerClips: readout.controllerClips,
+    effectiveClips: readout.effectiveClips,
   };
 }
 
@@ -216,6 +271,7 @@ interface BackendAnimatedMeshPlaybackReadout {
   readonly poseSample: RendererAnimatedMeshPoseSample;
   readonly diagnostics: readonly string[];
   readonly controllerClips: readonly RendererAnimationControllerClip[];
+  readonly effectiveClips: readonly RendererAnimatedMeshEffectiveClip[];
 }
 
 function createProjectionController(
@@ -257,11 +313,20 @@ function applyRendererOperation(operation: () => void): RendererAnimatedMeshFram
     operation();
     return { applied: true, diagnostics: [] };
   } catch (cause) {
+    const message = errorMessage(cause);
     return {
       applied: false,
-      diagnostics: [diagnostic('animated_mesh_frame_rejected', null, null, errorMessage(cause))],
+      diagnostics: [diagnostic(animationResourceDiagnosticCode(message), null, null, message)],
     };
   }
+}
+
+function animationResourceDiagnosticCode(message: string): RendererHostDiagnosticCode {
+  if (message.includes('missing target joint') || message.includes('missing source joint')) return 'animated_mesh_missing_joint';
+  if (message.includes('malformed or unsupported channels')) return 'animated_mesh_malformed_channels';
+  if (message.includes('unsupported root-motion declaration')) return 'animated_mesh_unsupported_root_policy';
+  if (message.includes('incompatible rig signature') || message.includes('inverse bind')) return 'animated_mesh_incompatible_rig';
+  return 'animated_mesh_frame_rejected';
 }
 
 function validateManifest(manifest: RendererAnimatedMeshResourceManifest): void {
@@ -271,11 +336,25 @@ function validateManifest(manifest: RendererAnimatedMeshResourceManifest): void 
   const assets = new Set<string>();
   for (const resource of manifest.resources) {
     const validHash = /^(?:sha256:[0-9a-f]{64}|[0-9a-f]{16})$/u.test(resource.contentHash);
-    const validClips = new Set(resource.clipIds).size === resource.clipIds.length;
+    const sourceNames = resource.clipSourceNames ?? resource.clipIds;
+    const validClips = new Set(resource.clipIds).size === resource.clipIds.length
+      && sourceNames.length === resource.clipIds.length && new Set(sourceNames).size === sourceNames.length;
     if (resource.asset.length === 0 || !validHash || !validClips || assets.has(resource.asset)) {
       throw hostError('animated_mesh_manifest_invalid', resource.asset || null, null, 'animated mesh resource descriptor is invalid or duplicated');
     }
     assets.add(resource.asset);
+  }
+  const packs = new Set<string>();
+  for (const resource of manifest.clipPacks ?? []) {
+    const validHash = /^(?:sha256:[0-9a-f]{64}|[0-9a-f]{16})$/u.test(resource.contentHash);
+    const sourceNames = resource.clipSourceNames ?? resource.clipIds;
+    const validClips = resource.clipIds.length > 0 && resource.clipIds.length <= 256
+      && new Set(resource.clipIds).size === resource.clipIds.length
+      && sourceNames.length === resource.clipIds.length && new Set(sourceNames).size === sourceNames.length;
+    if (resource.asset.length === 0 || !validHash || !validClips || packs.has(resource.asset) || assets.has(resource.asset)) {
+      throw hostError('animated_mesh_manifest_invalid', resource.asset || null, null, 'animation clip pack descriptor is invalid or duplicated');
+    }
+    packs.add(resource.asset);
   }
 }
 

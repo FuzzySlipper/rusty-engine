@@ -1054,6 +1054,25 @@ each instance its own hierarchy, skeleton, mixer, actions, and playback state. D
 instance retains the admitted definition for later recreation; definition replacement or renderer
 disposal releases its geometry and materials exactly once without taking ownership of the caller's
 resolved GLB source objects.
+
+An animated mesh may also reference a bounded list of separately hash-addressed GLB clip packs.
+Each pack is an immutable resource definition, so its decoded clips are shared while every target
+instance retains independent actions and mixer state. A pack declares its producer/source/target/license
+provenance and an exact target-rig signature: bounded decoded Three binding identities (not raw GLTF
+names that contain reserved binding characters), parent hierarchy, explicit
+local-matrix bind/rest convention and digest, one named root joint, and either in-place horizontal or
+authored root-translation policy. The Three adapter derives the target and pack skeletons before
+binding, rejects duplicate/missing joints, hierarchy or rest-pose drift, unsupported scale/non-root
+translation channels, and external IDs that collide with embedded or earlier pack clips. In-place clips
+may retain vertical root motion but must keep root horizontal translation constant. This is direct
+target-rig playback, never a runtime retargeter or gameplay root-motion authority. Clip enumeration
+reports an embedded or pack origin, while playback and exact normalized sampling use the existing
+animated-mesh service surface.
+The declared pack joint list may be the rooted subset relevant to its channels; the verified target
+fingerprint nevertheless covers the complete coherent skinned target. Source local rest facts are
+compared for that declared subset, and source inverse binds are compared when the clip pack carries
+them. Source clip names bind exactly and case-sensitively; effective clip IDs remain the caller-facing
+names.
 The mounted `RendererSurface` also owns deterministic animation inspection. A caller can stop its
 automatic loop, pose one retained instance at a bounded normalized clip time through that same
 mixer, submit the fixed frame, and encode individual PNGs, a contact sheet, and a revision-bound

@@ -41,6 +41,11 @@ compiled artifact, and Rust webview host/resource lifecycle.
   - `animated-mesh.ts` owns asset-scoped geometry/material templates, independent
     per-instance skeleton/mixer state, exact normalized sampling, bounded
     deformation diagnostics, and their retained replacement/disposal lifecycle.
+    It admits separate hash-addressed, target-rig-bound clip packs only after
+    comparing decoded hierarchy/rest facts and bounded channel/root policy. Pack joint lists may be
+    a rooted clip-relevant subset while the target fingerprint covers the full skinned target; decoded
+    Three binding identities exclude reserved binding characters;
+    effective clips retain an embedded-or-pack origin without exposing Three.
   - `voxel-surface-material.ts` owns the Three shader specialization for
     Euclidean whole-texture repeat and half-texel-safe atlas-region sampling;
     it observes renderer-neutral material and texture facts and never remeshes.
@@ -63,6 +68,8 @@ compiled artifact, and Rust webview host/resource lifecycle.
     sidedness, while the browser surface may apply validated linear fog without
     exposing Three scene objects.
 - [`render/packages/renderer-host/src`](../../render/packages/renderer-host/src)
+  - `animated-mesh-host.ts` owns immutable pack/mesh byte snapshotting, hash
+    verification, bounded manifest admission, and backend-neutral clip readouts.
   - `animated-mesh-capture.ts` owns deterministic PNG/contact-sheet encoding
     over an already-mounted `RendererSurface`; it does not load assets or own a
     second animation loop.

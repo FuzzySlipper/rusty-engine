@@ -5,6 +5,7 @@ import {
   billboardHandle,
   renderHandle,
   telemetryOverlayHandle,
+  type AnimationRigSignature,
   type MeshPayloadDescriptor,
   type PresentationFrameDiff,
   type RenderFrameDiff,
@@ -32,6 +33,8 @@ import {
   type RendererSurfaceStatisticsSample,
 } from '@rusty-engine/renderer-host';
 import { mountRendererBrowserSurface } from '@rusty-engine/renderer-three';
+import { animationRigFingerprint, loadAnimatedMeshGlbResource } from '@rusty-engine/renderer-three/backend';
+import * as THREE from 'three';
 
 import characterUrl from '../../fixtures/render/assets/kenney-retro-character/character-medium.glb?url';
 
@@ -49,6 +52,11 @@ interface BrowserProof {
     readonly worldBoundsPresent: readonly boolean[];
   };
   readonly animationClip: string | null;
+  readonly clipPack: {
+    readonly effectiveClips: readonly { readonly id: string; readonly origin: 'embedded' | 'pack' }[];
+    readonly normalizedTimes: readonly number[];
+    readonly independentInstances: boolean;
+  };
   readonly audioApplied: number;
   audioResumeDiagnostics: readonly string[] | null;
   readonly automaticSubmissionPacing: RendererSurfaceAutomaticSubmissionPacingSample;
@@ -196,6 +204,19 @@ async function main(): Promise<void> {
   await decodeBrowserImage(spriteUrl);
   const audioBytes = waveFixture();
   const audioHash = await sha256(audioBytes);
+  const animatedFixtureResponse = await fetch(characterUrl);
+  if (!animatedFixtureResponse.ok) {
+    throw new Error(`animated fixture fetch failed: ${String(animatedFixtureResponse.status)}`);
+  }
+  const animatedFixtureBytes = await animatedFixtureResponse.arrayBuffer();
+  const animatedFixtureResource = await loadAnimatedMeshGlbResource(
+    ASSET,
+    animatedFixtureBytes.slice(0),
+    CONTENT_HASH,
+  );
+  const idleClip = animatedFixtureResource.clips.find((clip) => clip.name === 'idle');
+  if (!idleClip) throw new Error('animated fixture is missing idle clip for clip-pack proof');
+  const clipPackRig = rigForFixtureClip(animatedFixtureResource.scene, idleClip);
 
   const surface = await mountRendererAnimatedMeshSurface(canvas, {
     animatedMeshManifest: {
@@ -203,16 +224,17 @@ async function main(): Promise<void> {
       resources: [{
         asset: ASSET,
         contentHash: CONTENT_HASH,
-        clipIds: ['idle', 'run', 'jump'],
+        clipIds: ['run', 'jump'],
+      }],
+      clipPacks: [{
+        asset: 'animation-clip-pack/kenney-retro-character-idle',
+        contentHash: CONTENT_HASH,
+        clipIds: ['idle'],
       }],
     },
-    resolveAnimatedMeshResource: async () => {
-      const response = await fetch(characterUrl);
-      if (!response.ok) throw new Error(`animated fixture fetch failed: ${String(response.status)}`);
-      return response.arrayBuffer();
-    },
+    resolveAnimatedMeshResource: async () => animatedFixtureBytes.slice(0),
     controls: { enabled: true },
-    frame: browserFrame(),
+    frame: browserFrame(clipPackRig),
     pixelRatio: 1,
   });
   const lightingCanvas = document.createElement('canvas');
@@ -374,7 +396,7 @@ async function main(): Promise<void> {
   const automaticSubmissionPacing = surface.automaticSubmissionPacing();
   const animatedCapture = captureRendererAnimatedMesh(surface, {
     handle: renderHandle(105),
-    clip: 'run',
+    clip: 'idle',
     normalizedTimes: [0, 0.5, 1],
     providerRevision: '1111111111111111111111111111111111111111',
     overlaysIncluded: true,
@@ -909,6 +931,14 @@ async function main(): Promise<void> {
       ),
     },
     animationClip: surface.animatedMeshPlayback(renderHandle(105)).selectedClip,
+    clipPack: {
+      effectiveClips: surface.animatedMeshPlayback(renderHandle(105)).effectiveClips.map(({ id, origin }) => ({ id, origin })),
+      normalizedTimes: animatedCapture.manifest.samples.map((sample) => sample.normalizedTime),
+      independentInstances: surface.animatedMeshPlayback(renderHandle(105)).selectedClip === 'idle'
+        && surface.animatedMeshPlayback(renderHandle(111)).selectedClip === 'run'
+        && surface.animatedMeshPlayback(renderHandle(105)).mixerTimeSeconds
+          !== surface.animatedMeshPlayback(renderHandle(111)).mixerTimeSeconds,
+    },
     audioApplied: presentation.domains.find((domain) => domain.domain === 'audio')?.applied ?? 0,
     audioResumeDiagnostics: null,
     automaticSubmissionPacing,
@@ -1417,7 +1447,43 @@ function browserPresentationFrame(audioHash: string, spriteHash: string): Presen
   };
 }
 
-function browserFrame(): RenderFrameDiff {
+function rigForFixtureClip(scene: THREE.Object3D, clip: THREE.AnimationClip): AnimationRigSignature {
+  const bones = new Map<string, THREE.Bone>();
+  scene.traverse((node) => {
+    if (node instanceof THREE.Bone) bones.set(node.name, node);
+  });
+  const required = new Set<string>();
+  for (const track of clip.tracks) {
+    const nodeName = THREE.PropertyBinding.parseTrackName(track.name).nodeName;
+    if (!nodeName || !bones.has(nodeName)) {
+      throw new Error(`fixture clip contains an unresolved joint track ${track.name}`);
+    }
+    let current: THREE.Bone | undefined = bones.get(nodeName);
+    while (current) {
+      required.add(current.name);
+      current = current.parent instanceof THREE.Bone ? current.parent : undefined;
+    }
+  }
+  const joints = [...required].sort().map((id) => {
+    const bone = bones.get(id);
+    if (!bone) throw new Error(`fixture rig lost required joint ${id}`);
+    const parent = bone.parent instanceof THREE.Bone && required.has(bone.parent.name)
+      ? bone.parent.name
+      : null;
+    return { id, parent };
+  });
+  const roots = joints.filter((joint) => joint.parent === null);
+  if (roots.length !== 1) throw new Error('fixture clip must resolve to exactly one root joint');
+  return {
+    joints,
+    bindRestHash: animationRigFingerprint(scene),
+    bindRestConvention: 'localMatrixV1',
+    rootConvention: 'authoredRootTranslation',
+    rootJointId: roots[0]!.id,
+  };
+}
+
+function browserFrame(clipPackRig: AnimationRigSignature): RenderFrameDiff {
   return {
     schemaVersion: 1,
     ops: [
@@ -1498,10 +1564,22 @@ function browserFrame(): RenderFrameDiff {
           runtimeFormat: 'glb',
           contentHash: CONTENT_HASH,
           clips: [
-            { id: 'idle', name: 'idle', durationSeconds: null },
             { id: 'run', name: 'run', durationSeconds: null },
             { id: 'jump', name: 'jump', durationSeconds: null },
           ],
+          clipPacks: [{
+            asset: 'animation-clip-pack/kenney-retro-character-idle',
+            runtimeFormat: 'glb',
+            contentHash: CONTENT_HASH,
+            rig: clipPackRig,
+            clips: [{ id: 'idle', name: 'idle', durationSeconds: null }],
+            provenance: {
+              producer: 'rusty-engine-render-fixture',
+              sourceHash: CONTENT_HASH,
+              targetHash: CONTENT_HASH,
+              license: 'CC0-1.0',
+            },
+          }],
           defaultClip: 'idle',
           materialSlots: [],
           bounds: { min: [-0.02, -0.01, 0], max: [0.02, 0.01, 0.04] },
@@ -1604,7 +1682,7 @@ function browserFrame(): RenderFrameDiff {
           materialOverrides: [],
           playback: {
             kind: 'play',
-            clip: 'idle',
+            clip: 'run',
             loop: 'repeat',
             speed: 1,
             weight: 1,

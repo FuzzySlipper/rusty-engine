@@ -117,9 +117,10 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
         content_hash: Some("f00d".to_string()),
         clips: vec![AnimationClipDescriptor {
             id: "idle".to_string(),
-            name: Some("Idle".to_string()),
+            name: Some("idle".to_string()),
             duration_seconds: Some(1.0),
         }],
+        clip_packs: vec![],
         default_clip: Some("idle".to_string()),
         material_slots: vec![MeshMaterialSlot {
             slot: 0,

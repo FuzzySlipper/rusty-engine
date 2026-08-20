@@ -726,6 +726,171 @@ pub struct AnimationClipDescriptor {
     pub duration_seconds: Option<f32>,
 }
 
+/// A semantic signature for direct clip playback against a particular rig.
+///
+/// This is deliberately a declared, hash-addressable fact rather than a loose
+/// "humanoid" label. Renderer backends must additionally compare it with the
+/// skeleton and channels they actually decode from the GLB before binding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnimationRigSignature {
+    pub joints: Vec<AnimationRigJoint>,
+    pub bind_rest_hash: String,
+    pub bind_rest_convention: AnimationBindRestConvention,
+    pub root_convention: AnimationRootConvention,
+    pub root_joint_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AnimationBindRestConvention {
+    LocalMatrixV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnimationRigJoint {
+    pub id: String,
+    pub parent: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AnimationRootConvention {
+    InPlace,
+    AuthoredRootTranslation,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnimationClipPack {
+    pub asset: String,
+    pub runtime_format: AnimatedMeshRuntimeFormat,
+    pub content_hash: String,
+    pub rig: AnimationRigSignature,
+    pub clips: Vec<AnimationClipDescriptor>,
+    pub provenance: AnimationClipPackProvenance,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnimationClipPackProvenance {
+    pub producer: String,
+    pub source_hash: String,
+    pub target_hash: String,
+    pub license: String,
+}
+
+impl AnimationClipPack {
+    pub fn validate(&self) -> Result<(), AnimationClipPackError> {
+        if self.asset.trim().is_empty() {
+            return Err(AnimationClipPackError::EmptyAsset);
+        }
+        if !valid_sha256(&self.content_hash) {
+            return Err(AnimationClipPackError::EmptyContentHash);
+        }
+        if self.provenance.producer.trim().is_empty()
+            || !valid_sha256(&self.provenance.source_hash)
+            || !valid_sha256(&self.provenance.target_hash)
+            || self.provenance.license.trim().is_empty()
+        {
+            return Err(AnimationClipPackError::EmptyProvenance);
+        }
+        if self.rig.joints.is_empty() || self.rig.joints.len() > 256 {
+            return Err(AnimationClipPackError::InvalidRig);
+        }
+        if !valid_sha256(&self.rig.bind_rest_hash) {
+            return Err(AnimationClipPackError::InvalidRig);
+        }
+        let mut joints = BTreeSet::new();
+        for joint in &self.rig.joints {
+            if !valid_joint_id(&joint.id) || !joints.insert(joint.id.as_str()) {
+                return Err(AnimationClipPackError::InvalidRig);
+            }
+        }
+        for joint in &self.rig.joints {
+            if joint
+                .parent
+                .as_ref()
+                .is_some_and(|parent| parent == &joint.id || !joints.contains(parent.as_str()))
+            {
+                return Err(AnimationClipPackError::InvalidRig);
+            }
+        }
+        if self
+            .rig
+            .joints
+            .iter()
+            .filter(|joint| joint.parent.is_none())
+            .count()
+            != 1
+            || !valid_joint_id(&self.rig.root_joint_id)
+            || !self
+                .rig
+                .joints
+                .iter()
+                .any(|joint| joint.id == self.rig.root_joint_id && joint.parent.is_none())
+        {
+            return Err(AnimationClipPackError::InvalidRig);
+        }
+        for joint in &self.rig.joints {
+            let mut seen = BTreeSet::new();
+            let mut current = Some(joint.id.as_str());
+            while let Some(id) = current {
+                if !seen.insert(id) {
+                    return Err(AnimationClipPackError::InvalidRig);
+                }
+                current = self
+                    .rig
+                    .joints
+                    .iter()
+                    .find(|candidate| candidate.id == id)
+                    .and_then(|candidate| candidate.parent.as_deref());
+            }
+        }
+        if self.clips.is_empty() || self.clips.len() > 256 {
+            return Err(AnimationClipPackError::InvalidClips);
+        }
+        let mut ids = BTreeSet::new();
+        for clip in &self.clips {
+            if clip.id.trim().is_empty()
+                || !ids.insert(clip.id.as_str())
+                || clip
+                    .duration_seconds
+                    .is_some_and(|value| !value.is_finite() || value <= 0.0)
+            {
+                return Err(AnimationClipPackError::InvalidClips);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 71
+        && value.starts_with("sha256:")
+        && value[7..]
+            .chars()
+            .all(|character| character.is_ascii_hexdigit() && !character.is_ascii_uppercase())
+}
+
+fn valid_joint_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnimationClipPackError {
+    EmptyAsset,
+    EmptyContentHash,
+    EmptyProvenance,
+    InvalidRig,
+    InvalidClips,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AnimatedMeshAsset {
@@ -733,6 +898,8 @@ pub struct AnimatedMeshAsset {
     pub runtime_format: AnimatedMeshRuntimeFormat,
     pub content_hash: Option<String>,
     pub clips: Vec<AnimationClipDescriptor>,
+    #[serde(default)]
+    pub clip_packs: Vec<AnimationClipPack>,
     pub default_clip: Option<String>,
     pub material_slots: Vec<MeshMaterialSlot>,
     pub bounds: MeshBoundsDescriptor,
@@ -771,6 +938,23 @@ impl AnimatedMeshAsset {
                 });
             }
         }
+        let mut pack_assets = BTreeSet::new();
+        for pack in &self.clip_packs {
+            pack.validate().map_err(AnimatedMeshAssetError::ClipPack)?;
+            if !pack_assets.insert(pack.asset.as_str()) {
+                return Err(AnimatedMeshAssetError::DuplicateClipPack {
+                    asset: pack.asset.clone(),
+                });
+            }
+            for clip in &pack.clips {
+                if ids.contains(clip.id.as_str()) {
+                    return Err(AnimatedMeshAssetError::EffectiveClipCollision {
+                        clip: clip.id.clone(),
+                    });
+                }
+                ids.insert(clip.id.as_str());
+            }
+        }
         if self
             .default_clip
             .as_ref()
@@ -792,6 +976,9 @@ pub enum AnimatedMeshAssetError {
     EmptyClipId,
     DuplicateClipId { clip: String },
     InvalidClipDuration { clip: String },
+    ClipPack(AnimationClipPackError),
+    DuplicateClipPack { asset: String },
+    EffectiveClipCollision { clip: String },
     DefaultClipMissing { clip: String },
     MaterialSlot(MeshMaterialSlotError),
 }
@@ -1085,5 +1272,42 @@ mod tests {
             *uvs = Some(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
         }
         assert_eq!(payload.validate(), Ok(()));
+    }
+
+    #[test]
+    fn animation_clip_pack_rejects_reserved_three_binding_characters() {
+        let hash = format!("sha256:{}", "a".repeat(64));
+        let mut pack = AnimationClipPack {
+            asset: "animation-clip-pack/test".to_owned(),
+            runtime_format: AnimatedMeshRuntimeFormat::Glb,
+            content_hash: hash.clone(),
+            rig: AnimationRigSignature {
+                joints: vec![AnimationRigJoint {
+                    id: "Root".to_owned(),
+                    parent: None,
+                }],
+                bind_rest_hash: hash.clone(),
+                bind_rest_convention: AnimationBindRestConvention::LocalMatrixV1,
+                root_convention: AnimationRootConvention::InPlace,
+                root_joint_id: "Root".to_owned(),
+            },
+            clips: vec![AnimationClipDescriptor {
+                id: "idle".to_owned(),
+                name: Some("idle".to_owned()),
+                duration_seconds: Some(1.0),
+            }],
+            provenance: AnimationClipPackProvenance {
+                producer: "fixture".to_owned(),
+                source_hash: hash.clone(),
+                target_hash: hash,
+                license: "CC0-1.0".to_owned(),
+            },
+        };
+        assert_eq!(pack.validate(), Ok(()));
+        for invalid in ["mixamorig:Hips", "joint.part", "joint/path", "joint[0]"] {
+            pack.rig.joints[0].id = invalid.to_owned();
+            pack.rig.root_joint_id = invalid.to_owned();
+            assert_eq!(pack.validate(), Err(AnimationClipPackError::InvalidRig));
+        }
     }
 }

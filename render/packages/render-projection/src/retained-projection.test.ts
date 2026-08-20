@@ -218,9 +218,9 @@ function animatedMeshAsset(asset = 'mesh-animation/kenney-retro-character-medium
     runtimeFormat: 'glb',
     contentHash: 'sha256-fixture-pending',
     clips: [
-      { id: 'idle', name: 'Idle', durationSeconds: 1.2 },
-      { id: 'run', name: 'Run', durationSeconds: 0.8 },
-      { id: 'jump', name: 'Jump', durationSeconds: 0.6 },
+      { id: 'idle', name: 'idle', durationSeconds: 1.2 },
+      { id: 'run', name: 'run', durationSeconds: 0.8 },
+      { id: 'jump', name: 'jump', durationSeconds: 0.6 },
     ],
     defaultClip: 'idle',
     materialSlots: [{ slot: 0, material: 'material/kenney-human-male-a' }],

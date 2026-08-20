@@ -202,7 +202,13 @@ void test('application content composes animated GLB, packed mesh, and texture r
           asset: 'mesh-animation/test-actor',
           runtimeFormat: 'glb',
           contentHash: `sha256:${animatedDigest}`,
-          clips: [{ id: 'idle', name: 'Idle', durationSeconds: 1 }],
+          clips: [{ id: 'idle', name: 'idle', durationSeconds: 1 }],
+          clipPacks: [{
+            asset: 'animation-clip-pack/test-actor-idle', runtimeFormat: 'glb', contentHash: `sha256:${animatedDigest}`,
+            rig: { joints: [{ id: 'Root', parent: null }], bindRestHash: `sha256:${animatedDigest}`, bindRestConvention: 'localMatrixV1', rootConvention: 'inPlace', rootJointId: 'Root' },
+            clips: [{ id: 'pack-idle', name: 'idle', durationSeconds: 1 }],
+            provenance: { producer: 'fixture', sourceHash: `sha256:${animatedDigest}`, targetHash: `sha256:${animatedDigest}`, license: 'CC0-1.0' },
+          }],
           defaultClip: 'idle',
           materialSlots: [],
           bounds: { min: [0, 0, 0], max: [1, 1, 1] },
@@ -212,6 +218,12 @@ void test('application content composes animated GLB, packed mesh, and texture r
     resources: [
       {
         identity: `mesh-resource/${animatedDigest}`,
+        contentHash: `sha256:${animatedDigest}`,
+        mediaType: 'application/octet-stream',
+        bytes: animatedBytes,
+      },
+      {
+        identity: `clip-pack-resource/${animatedDigest}`,
         contentHash: `sha256:${animatedDigest}`,
         mediaType: 'application/octet-stream',
         bytes: animatedBytes,
@@ -227,6 +239,7 @@ void test('application content composes animated GLB, packed mesh, and texture r
   });
   const options = rustyApplicationSurfaceResourceOptions(prepared);
   assert.equal(options.animatedMeshManifest?.resources.length, 1);
+  assert.equal(options.animatedMeshManifest?.clipPacks?.length, 1);
   assert.equal(options.meshResourceManifest?.resources.length, 2);
   assert.equal(options.textureResourceManifest?.resources.length, 1);
   const descriptor = options.animatedMeshManifest?.resources[0];
@@ -234,9 +247,14 @@ void test('application content composes animated GLB, packed mesh, and texture r
     asset: 'mesh-animation/test-actor',
     contentHash: `sha256:${animatedDigest}`,
     clipIds: ['idle'],
+    clipSourceNames: ['idle'],
   });
   assert.deepEqual(
     new Uint8Array(await options.resolveAnimatedMeshResource!(descriptor!)),
+    animatedBytes,
+  );
+  assert.deepEqual(
+    new Uint8Array(await options.resolveAnimatedMeshResource!(options.animatedMeshManifest!.clipPacks![0]!)),
     animatedBytes,
   );
 });
