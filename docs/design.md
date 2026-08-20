@@ -1072,7 +1072,8 @@ The declared pack joint list may be the rooted subset relevant to its channels; 
 fingerprint nevertheless covers the complete coherent skinned target. Source local rest facts are
 compared for that declared subset, and source inverse binds are compared when the clip pack carries
 them. Source clip names bind exactly and case-sensitively; effective clip IDs remain the caller-facing
-names.
+names. Rig-fingerprint inputs and effective clip readouts use explicit locale-independent code-unit
+ordering so the same decoded identities produce the same digest and enumeration on every host.
 The Three-local voxel-sprite experiment may additionally build a held-animation
 frame bank from an already-admitted embedded or pack clip. A caller supplies
 exact normalized samples or an explicit 8/12/24 Hz count expansion, capture
