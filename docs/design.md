@@ -1073,6 +1073,30 @@ fingerprint nevertheless covers the complete coherent skinned target. Source loc
 compared for that declared subset, and source inverse binds are compared when the clip pack carries
 them. Source clip names bind exactly and case-sensitively; effective clip IDs remain the caller-facing
 names.
+The Three-local voxel-sprite experiment may additionally build a held-animation
+frame bank from an already-admitted embedded or pack clip. A caller supplies
+exact normalized samples or an explicit 8/12/24 Hz count expansion, capture
+settings, and 1/4/8/16 actor-relative sectors; no Engine clock, gameplay clip
+meaning, or durable cache format is introduced. The backend validates the
+complete candidate against bounded frame, direction, resolution, pixel,
+scene-wide resident-byte, ready-plus-candidate peak, and one-preparation limits before allocating
+capture targets. Accounting conservatively includes each retained color/depth/
+normal/coverage target, its persistent depth attachments, and one temporary
+capture-depth attachment. It poses a disposable clone with a private mixer/skeleton,
+captures each unique pose×direction once, and atomically replaces the prior
+published bank only after every frame and its enhancement presentation is
+ready. The candidate key/snapshot includes the animated handle, admitted asset
+generation/hash, optional pack identity/hash, and the finite instance
+position/quaternion/scale; any later candidate-source drift fails closed.
+Published pixels are immutable snapshots: later live-source changes do not
+invalidate them, and replacement remains explicit. Cancellation, stale-source
+or capture failure, and replacement failure dispose only the candidate;
+selection swaps resident textures through the
+existing enhancement seam and never recaptures. Renderer-host and
+application-host expose this as an explicit manually stepped experiment with
+origin-qualified source/key, counters, CPU submission latency, estimated
+per-bank and scene aggregate resident/peak bytes, switch cost, individual bank
+destruction, and an explicit no-GPU-timing readout.
 The mounted `RendererSurface` also owns deterministic animation inspection. A caller can stop its
 automatic loop, pose one retained instance at a bounded normalized clip time through that same
 mixer, submit the fixed frame, and encode individual PNGs, a contact sheet, and a revision-bound

@@ -16,7 +16,13 @@ downstream repositories.
   and color-space metadata. The five comparison modes use view-space normals,
   RGBA8 linear depth, approximate normal-oriented splats, and CPU submission
   observations; they do not provide GPU timing, multi-view reconstruction,
-  sorted transparent splats, animation capture, collision, or gameplay state.
+  sorted transparent splats, collision, or gameplay state. The retained-only
+  held-animation bank experiment can capture bounded exact/cadenced
+  pose×direction frames from an admitted embedded or external-pack clip using
+  an independent clone and then select resident textures without recapture.
+  It remains an experimental CPU-submission-only facility: no scheduler,
+  gameplay cadence meaning, offline cache, pooling, GPU completion timing, or
+  crowd budget is supplied.
   Representation orientation can remain camera-facing, hold the admitted
   capture basis, or blend between those orientations, with either captured
   elevation or a world-upright azimuth. This exposes local parallax from the

@@ -3294,6 +3294,15 @@ void test('one admitted compatible clip pack serves independent instances with o
   registry.create(renderHandle(72), instance);
   registry.setPlayback(renderHandle(71), { kind: 'play', clip: 'wave', loop: 'repeat', speed: 1, weight: 1, restart: true, fadeSeconds: null });
   registry.advance(0.5);
+  const canonicalBeforeCapture = registry.playback(renderHandle(71))!.poseSample;
+  const capturedAppearance = registry.createCaptureAppearance(renderHandle(71), 'wave', 0.25);
+  assert.equal(capturedAppearance.source.origin, 'pack');
+  assert.equal(capturedAppearance.source.pack?.asset, pack.asset);
+  assert.equal(capturedAppearance.source.normalizedTime, 0.25);
+  assert.notEqual(capturedAppearance.object, source.getAnimatedMeshResource(asset)!.scene);
+  capturedAppearance.dispose();
+  assert.deepEqual(registry.playback(renderHandle(71))!.poseSample, canonicalBeforeCapture,
+    'external-pack capture appearance must not mutate canonical playback pose');
   assert.equal(registry.playback(renderHandle(71))?.effectiveClips[0]?.origin, 'pack');
   assert.equal(registry.playback(renderHandle(71))?.currentClip, 'wave');
   assert.equal(registry.playback(renderHandle(72))?.currentClip, null);

@@ -36,6 +36,7 @@ import {
   AnimatedMeshApplyError,
   AnimatedMeshRegistry,
   type AnimatedMeshAssetSource,
+  type AnimatedMeshCaptureAppearance,
   type AnimatedMeshControllerClip,
   type AnimatedMeshPlaybackReadout,
   type AnimatedMeshSampleReadout,
@@ -1305,6 +1306,19 @@ export class ThreeRenderer {
       const sample = this.#animatedMeshes.sample(handle, clipId, normalizedTime);
       this.#syncAnimatedMeshPlayback(handle, this.#require(handle, 'sampleAnimatedMesh'));
       return sample;
+    } catch (cause) {
+      throw animatedMeshError(cause);
+    }
+  }
+
+  /** Backend-local lease for a separately posed animated appearance capture. */
+  createAnimatedMeshCaptureAppearance(
+    handle: RenderHandle,
+    clipId: string,
+    normalizedTime: number,
+  ): AnimatedMeshCaptureAppearance {
+    try {
+      return this.#animatedMeshes.createCaptureAppearance(handle, clipId, normalizedTime);
     } catch (cause) {
       throw animatedMeshError(cause);
     }

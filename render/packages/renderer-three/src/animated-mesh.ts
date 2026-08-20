@@ -139,11 +139,37 @@ export interface AnimatedMeshPoseSample {
   readonly hierarchyScaleSum: readonly [number, number, number];
 }
 
+/**
+ * A short-lived, independently posed clone for backend-local capture. It never
+ * aliases the live retained instance's mixer, skeleton, or playback state.
+ */
+export interface AnimatedMeshCaptureAppearance {
+  readonly object: THREE.Object3D;
+  readonly source: {
+    readonly asset: string;
+    readonly generation: number;
+    readonly handle: RenderHandle;
+    readonly contentHash: string | null;
+    readonly clip: string;
+    readonly origin: 'embedded' | 'pack';
+    readonly pack: { readonly asset: string; readonly contentHash: string | null } | null;
+    readonly normalizedTime: number;
+    readonly durationSeconds: number;
+    readonly instanceTransform: {
+      readonly position: readonly [number, number, number];
+      readonly quaternion: readonly [number, number, number, number];
+      readonly scale: readonly [number, number, number];
+    };
+  };
+  dispose(): void;
+}
+
 interface AnimatedMeshAssetRecord {
   readonly asset: AnimatedMeshAsset;
   readonly resource: AnimatedMeshResource;
   readonly scene: THREE.Object3D;
   readonly packs: readonly AnimationClipPackResource[];
+  readonly generation: number;
   refCount: number;
 }
 
@@ -216,6 +242,7 @@ export class AnimatedMeshRegistry {
   readonly #assetSource: AnimatedMeshAssetSource | undefined;
   readonly #assets = new Map<string, AnimatedMeshAssetRecord>();
   readonly #instances = new Map<RenderHandle, AnimatedMeshInstanceRecord>();
+  readonly #assetGenerations = new Map<string, number>();
 
   constructor(assetSource: AnimatedMeshAssetSource | undefined) {
     this.#assetSource = assetSource;
@@ -237,7 +264,9 @@ export class AnimatedMeshRegistry {
     if (existing) {
       disposeAnimatedMeshAssetScene(existing.scene);
     }
-    this.#assets.set(asset.asset, { asset, resource, scene, packs, refCount: 0 });
+    const generation = (this.#assetGenerations.get(asset.asset) ?? 0) + 1;
+    this.#assetGenerations.set(asset.asset, generation);
+    this.#assets.set(asset.asset, { asset, resource, scene, packs, generation, refCount: 0 });
   }
 
   validateDefinition(asset: AnimatedMeshAsset): void {
@@ -446,6 +475,96 @@ export class AnimatedMeshRegistry {
       asset.asset.bounds,
       asset.asset.contentHash,
     );
+  }
+
+  /** Pose an independent clone at one exact normalized time for a bounded capture operation. */
+  createCaptureAppearance(
+    handle: RenderHandle,
+    clipId: string,
+    normalizedTime: number,
+  ): AnimatedMeshCaptureAppearance {
+    if (!Number.isFinite(normalizedTime) || normalizedTime < 0 || normalizedTime > 1) {
+      throw new AnimatedMeshApplyError(
+        'createAnimatedMeshCaptureAppearance: normalizedTime must be finite and between 0 and 1',
+      );
+    }
+    const instance = this.#requireInstance(handle, 'createAnimatedMeshCaptureAppearance');
+    if (!finiteTransform(instance.object)) {
+      throw new AnimatedMeshApplyError(
+        'createAnimatedMeshCaptureAppearance: animated instance transform must be finite',
+      );
+    }
+    const record = this.#assets.get(instance.asset);
+    if (record === undefined) {
+      throw new AnimatedMeshApplyError(`createAnimatedMeshCaptureAppearance: missing defined asset ${instance.asset}`);
+    }
+    const liveAction = instance.actions.get(clipId);
+    if (liveAction === undefined) {
+      throw new AnimatedMeshApplyError(`createAnimatedMeshCaptureAppearance: missing clip ${clipId} on ${instance.asset}`);
+    }
+    const clip = liveAction.getClip();
+    if (!Number.isFinite(clip.duration) || clip.duration <= 0) {
+      throw new AnimatedMeshApplyError(`createAnimatedMeshCaptureAppearance: clip ${clipId} has an invalid duration`);
+    }
+    // Clone the concrete retained appearance, not merely the admitted asset
+    // template. This keeps capture material/node realization identical to the
+    // source instance while SkeletonUtils still gives the capture lease an
+    // independent skeleton and mixer.
+    const object = SkeletonUtils.clone(instance.object);
+    object.visible = true;
+    const mixer = new THREE.AnimationMixer(object);
+    const action = mixer.clipAction(clip);
+    action.reset();
+    action.enabled = true;
+    action.paused = false;
+    action.clampWhenFinished = true;
+    action.setLoop(THREE.LoopOnce, 1);
+    action.setEffectiveTimeScale(1);
+    action.setEffectiveWeight(1);
+    action.play();
+    mixer.setTime(clip.duration * normalizedTime);
+    action.paused = true;
+    object.updateMatrixWorld(true);
+    const origin = instance.clipOrigins.get(clipId) ?? 'embedded';
+    const pack = origin === 'pack'
+      ? record.asset.clipPacks?.find((candidate) => candidate.clips.some((candidateClip) => candidateClip.id === clipId))
+      : undefined;
+    let disposed = false;
+    return Object.freeze({
+      object,
+      source: Object.freeze({
+        asset: record.asset.asset,
+        generation: record.generation,
+        handle,
+        contentHash: record.asset.contentHash,
+        clip: clipId,
+        origin,
+        pack: pack === undefined ? null : Object.freeze({ asset: pack.asset, contentHash: pack.contentHash }),
+        normalizedTime,
+        durationSeconds: clip.duration,
+        // This exact finite tuple participates in the held-bank key and is
+        // checked at every stepped capture; JSON canonicalization makes -0
+        // deterministic without rounding away a visible transform change.
+        instanceTransform: Object.freeze({
+          position: Object.freeze([instance.object.position.x, instance.object.position.y, instance.object.position.z] as const),
+          quaternion: Object.freeze([instance.object.quaternion.x, instance.object.quaternion.y, instance.object.quaternion.z, instance.object.quaternion.w] as const),
+          scale: Object.freeze([instance.object.scale.x, instance.object.scale.y, instance.object.scale.z] as const),
+        }),
+      }),
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        mixer.stopAllAction();
+        mixer.uncacheRoot(object);
+        // SkeletonUtils.clone intentionally shares geometry and materials with
+        // the admitted template. A capture lease owns only its cloned skeletons
+        // and mixer; releasing shared render resources here would corrupt the
+        // canonical retained animated instance.
+        object.traverse((node) => {
+          if (node instanceof THREE.SkinnedMesh) node.skeleton.dispose();
+        });
+      },
+    });
   }
 
   release(handle: RenderHandle): void {

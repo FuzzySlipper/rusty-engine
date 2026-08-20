@@ -7,8 +7,10 @@ import {
   RendererThreeVoxelSpriteScene,
   type RendererThreeVoxelSpriteBackend,
   type RendererThreeVoxelSpriteDefinition,
+  type RendererThreeHeldAnimationFrameBankDefinition,
   type RendererThreeVoxelSpritePreparedFrame,
 } from './voxel-sprite-scene.js';
+import type { AnimatedMeshCaptureAppearance } from './animated-mesh.js';
 
 function preparedFrame(textureId: string): RendererThreeVoxelSpritePreparedFrame {
   return {
@@ -42,6 +44,220 @@ function definition(id: string, textureId = 'frame'): RendererThreeVoxelSpriteDe
     config: { sampleColumns: 8, sampleRows: 8 },
   };
 }
+
+function heldBankDefinition(
+  id = 'held-bank',
+  samples: RendererThreeHeldAnimationFrameBankDefinition['samples'] = {
+    kind: 'exact', normalizedTimes: [0, 0.5, 1],
+  },
+): RendererThreeHeldAnimationFrameBankDefinition {
+  return {
+    id,
+    animatedMesh: 71 as never,
+    clip: 'wave',
+    samples,
+    sectorCount: 4,
+    capture: { resolution: 16, azimuthDegrees: 0, elevationDegrees: 5, near: 0.1, far: 20 },
+    transform: { position: [2, 0, 0], width: 2, height: 3 },
+    mode: 'sprite',
+  };
+}
+
+function captureAppearance(
+  normalizedTime: number,
+  origin: 'embedded' | 'pack' = 'embedded',
+  generation = 1,
+  durationSeconds = 1,
+  position: readonly [number, number, number] = [0, 0, 0],
+): AnimatedMeshCaptureAppearance {
+  const object = new THREE.Group();
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1 + normalizedTime, 1), new THREE.MeshBasicMaterial());
+  mesh.position.y = normalizedTime;
+  object.add(mesh);
+  let disposed = false;
+  return {
+    object,
+    source: {
+      asset: 'mesh-animation/fixture', generation, handle: 71 as never, contentHash: 'sha256:fixture', clip: 'wave', origin,
+      pack: origin === 'pack' ? { asset: 'animation-clip-pack/fixture', contentHash: 'sha256:pack' } : null,
+      normalizedTime, durationSeconds,
+      instanceTransform: { position, quaternion: [0, 0, 0, 1], scale: [1, 1, 1] },
+    },
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+    },
+  };
+}
+
+void test('held animation frame banks capture each exact pose-direction once and select without recapture', () => {
+  const scene = new THREE.Scene();
+  const renderer = new FakeRenderer();
+  const canonical = new THREE.Group();
+  canonical.position.set(9, 4, 2);
+  let appearances = 0;
+  const attachment = new RendererThreeVoxelSpriteScene({
+    webgl: renderer as unknown as THREE.WebGLRenderer,
+    backend: {
+      scene,
+      objectFor: () => canonical,
+      textureDescriptor: () => undefined,
+      textureObjectFor: () => undefined,
+      createAnimatedMeshCaptureAppearance: (_handle, clip, time) => {
+        assert.equal(clip, 'wave');
+        appearances += 1;
+        return captureAppearance(time);
+      },
+    },
+  });
+  const initialCanonicalPosition = canonical.position.clone();
+  assert.equal(attachment.beginHeldAnimationFrameBank(heldBankDefinition()).applied, true);
+  assert.equal(attachment.readout().frameBanks.length, 0);
+  assert.equal(attachment.readout().frameBankCandidates[0]?.state, 'preparing');
+  assert.equal(renderer.renderCalls, 0, 'reservation allocates no GPU capture targets');
+  assert.equal(attachment.prepareHeldAnimationFrameBank('held-bank', 8).applied, true);
+  assert.equal(attachment.readout().frameBankCandidates[0]?.capturedFrameCount, 8);
+  assert.equal(attachment.prepareHeldAnimationFrameBank('held-bank', 8).applied, true);
+  const bank = attachment.readout().frameBanks[0]!;
+  assert.equal(bank.state, 'ready');
+  assert.equal(bank.frameCount, 12);
+  assert.equal(bank.captureCount, 12);
+  assert.equal(bank.directionCount, 4);
+  assert.equal(bank.source.origin, 'embedded');
+  assert.equal(renderer.renderCalls, 12 * 4, 'each unique pose-direction has one four-pass capture');
+  assert.equal(appearances, 13, 'one CPU-only source probe plus exactly twelve independent appearances');
+  assert.ok(canonical.position.equals(initialCanonicalPosition), 'capture never changes canonical animated instance state');
+
+  const renderCallsBeforeSelect = renderer.renderCalls;
+  assert.equal(attachment.selectHeldAnimationFrameBank('held-bank', 2, 3).applied, true);
+  assert.equal(attachment.selectHeldAnimationFrameBank('held-bank', 2, 3).applied, true);
+  const selected = attachment.readout().frameBanks[0]!;
+  assert.equal(renderer.renderCalls, renderCallsBeforeSelect, 'resident selection does not recapture');
+  assert.equal(selected.switchCount, 1);
+  assert.equal(selected.cacheHitCount, 1);
+  assert.equal(selected.selectedSampleIndex, 2);
+  assert.equal(selected.selectedDirectionIndex, 3);
+  assert.equal(attachment.beginHeldAnimationFrameBank({
+    ...heldBankDefinition(),
+    transform: { position: [2, 0, 0], width: 2.5, height: 3 },
+  }).applied, true);
+  assert.notEqual(
+    attachment.readout().frameBankCandidates[0]?.key,
+    selected.key,
+    'effective enhancement dimensions participate in reuse identity',
+  );
+  assert.equal(attachment.cancelHeldAnimationFrameBank('held-bank').diagnostics[0]?.code, 'frame_bank_cancelled');
+  assert.equal(attachment.destroyHeldAnimationFrameBank('held-bank').applied, true);
+  assert.equal(attachment.readout().frameBanks.length, 0);
+  assert.equal(attachment.readout().frameBankMemory.readyResidentBytes, 0);
+  assert.equal(attachment.destroyHeldAnimationFrameBank('held-bank').diagnostics[0]?.code, 'unknown_frame_bank');
+  attachment.dispose();
+});
+
+void test('held animation cadence expansion, quotas, cancellation, and failed replacement preserve a live bank', () => {
+  const scene = new THREE.Scene();
+  const renderer = new FakeRenderer();
+  let generation = 1;
+  let failAt: number | null = null;
+  const attachment = new RendererThreeVoxelSpriteScene({
+    webgl: renderer as unknown as THREE.WebGLRenderer,
+    backend: {
+      scene,
+      objectFor: () => undefined,
+      textureDescriptor: () => undefined,
+      textureObjectFor: () => undefined,
+      createAnimatedMeshCaptureAppearance: (_handle, _clip, time) => {
+        if (failAt !== null && time >= failAt) throw new Error('synthetic capture appearance failure');
+        return captureAppearance(time, 'pack', generation);
+      },
+    },
+  });
+  for (const rate of [8, 12, 24] as const) {
+    const id = `cadence-${String(rate)}`;
+    assert.equal(attachment.beginHeldAnimationFrameBank(heldBankDefinition(id, {
+      kind: 'cadence', samplesPerSecond: rate, count: rate,
+    })).applied, true);
+    assert.equal(attachment.prepareHeldAnimationFrameBank(id, 8).applied, true);
+    assert.equal(attachment.cancelHeldAnimationFrameBank(id).diagnostics[0]?.code, 'frame_bank_cancelled');
+  }
+  assert.equal(attachment.beginHeldAnimationFrameBank({
+    ...heldBankDefinition('too-large'), sectorCount: 16,
+    samples: { kind: 'exact', normalizedTimes: Array.from({ length: 24 }, (_, index) => index / 24) },
+    capture: { resolution: 512, azimuthDegrees: 0, elevationDegrees: 0, near: 0.1, far: 20 },
+  }).applied, false, 'quotas reject candidate before capture');
+
+  assert.equal(attachment.beginHeldAnimationFrameBank(heldBankDefinition('stable', { kind: 'exact', normalizedTimes: [0] })).applied, true);
+  assert.equal(attachment.prepareHeldAnimationFrameBank('stable', 4).applied, true);
+  const stableKey = attachment.readout().frameBanks[0]!.key;
+  failAt = 0.5;
+  assert.equal(attachment.beginHeldAnimationFrameBank(heldBankDefinition('stable')).applied, true);
+  const failed = attachment.prepareHeldAnimationFrameBank('stable', 8);
+  assert.equal(failed.applied, false);
+  assert.equal(failed.diagnostics[0]?.code, 'frame_bank_failed');
+  const retained = attachment.readout().frameBanks.find((bank) => bank.id === 'stable')!;
+  assert.equal(retained.state, 'ready');
+  assert.equal(retained.key, stableKey, 'failed candidate does not replace the published bank');
+  assert.equal(retained.source.origin, 'pack', 'external pack origin is observable through the same bank path');
+  generation = 2;
+  failAt = null;
+  assert.equal(attachment.beginHeldAnimationFrameBank(heldBankDefinition('stale', { kind: 'exact', normalizedTimes: [0, 0.5] })).applied, true);
+  generation = 3;
+  assert.equal(attachment.prepareHeldAnimationFrameBank('stale', 4).diagnostics[0]?.code, 'frame_bank_failed');
+  attachment.dispose();
+});
+
+void test('held animation frame-bank admission is scene-wide, exact-union bounded, and source-transform stale-safe', () => {
+  const scene = new THREE.Scene();
+  const renderer = new FakeRenderer();
+  let durationSeconds = 1;
+  let position: [number, number, number] = [0, 0, 0];
+  const attachment = new RendererThreeVoxelSpriteScene({
+    webgl: renderer as unknown as THREE.WebGLRenderer,
+    backend: {
+      scene,
+      objectFor: () => undefined,
+      textureDescriptor: () => undefined,
+      textureObjectFor: () => undefined,
+      createAnimatedMeshCaptureAppearance: (_handle, _clip, time) =>
+        captureAppearance(time, 'embedded', 1, durationSeconds, position),
+    },
+  });
+  assert.equal(attachment.beginHeldAnimationFrameBank({
+    ...heldBankDefinition('bad-sector'), sectorCount: 2 as unknown as 1,
+  }).diagnostics[0]?.code, 'invalid_definition');
+  assert.equal(attachment.beginHeldAnimationFrameBank({
+    ...heldBankDefinition('bad-rate'), samples: { kind: 'cadence', samplesPerSecond: 7 as unknown as 8, count: 1 },
+  }).diagnostics[0]?.code, 'invalid_definition');
+  durationSeconds = Number.MAX_VALUE;
+  assert.equal(attachment.beginHeldAnimationFrameBank({
+    ...heldBankDefinition('duplicate-cadence'), samples: { kind: 'cadence', samplesPerSecond: 8, count: 2 },
+  }).diagnostics[0]?.code, 'invalid_definition');
+  durationSeconds = 1;
+
+  const large = {
+    ...heldBankDefinition('large-a', { kind: 'exact', normalizedTimes: Array.from({ length: 16 }, (_, index) => index / 16) }),
+    sectorCount: 1 as const,
+    capture: { resolution: 512, azimuthDegrees: 0, elevationDegrees: 0, near: 0.1, far: 20 },
+  };
+  assert.equal(attachment.beginHeldAnimationFrameBank(large).applied, true);
+  assert.equal(attachment.prepareHeldAnimationFrameBank('large-a', 8).applied, true);
+  assert.equal(attachment.prepareHeldAnimationFrameBank('large-a', 8).applied, true);
+  const largeReadout = attachment.readout().frameBanks[0]!;
+  assert.equal(largeReadout.estimatedResidentBytes, 96 * 1024 * 1024);
+  assert.equal(attachment.beginHeldAnimationFrameBank({ ...large, id: 'large-b' }).diagnostics[0]?.code, 'invalid_definition');
+  assert.equal(attachment.destroyHeldAnimationFrameBank('large-a').applied, true);
+  assert.equal(attachment.beginHeldAnimationFrameBank({ ...large, id: 'large-b' }).applied, true);
+  assert.equal(attachment.cancelHeldAnimationFrameBank('large-b').diagnostics[0]?.code, 'frame_bank_cancelled');
+  assert.equal(attachment.readout().frameBankOutcomes.find((outcome) => outcome.id === 'large-b')?.cancelledCount, 1);
+
+  position = [0, 0, 0];
+  assert.equal(attachment.beginHeldAnimationFrameBank(heldBankDefinition('transform-stale', { kind: 'exact', normalizedTimes: [0] })).applied, true);
+  position = [1, 0, 0];
+  assert.equal(attachment.prepareHeldAnimationFrameBank('transform-stale').diagnostics[0]?.code, 'frame_bank_failed');
+  attachment.dispose();
+});
 
 void test('prepared voxel-sprite scene owns enhancement resources but borrows retained textures', () => {
   const scene = new THREE.Scene();

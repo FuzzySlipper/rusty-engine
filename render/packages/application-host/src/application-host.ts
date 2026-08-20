@@ -182,6 +182,64 @@ export interface RustyApplicationVoxelSpriteDefinition {
   readonly config?: Partial<Omit<RustyApplicationVoxelSpriteConfig, 'mode' | 'width' | 'height'>>;
 }
 
+/** Explicit caller-controlled cadence; the renderer expands it into immutable normalized samples. */
+export type RustyApplicationHeldAnimationSamplePlan =
+  | { readonly kind: 'exact'; readonly normalizedTimes: readonly number[] }
+  | { readonly kind: 'cadence'; readonly samplesPerSecond: 8 | 12 | 24; readonly count: number };
+
+export interface RustyApplicationHeldAnimationFrameBankDefinition {
+  readonly id: string;
+  readonly animatedMesh: number;
+  readonly clip: string;
+  readonly samples: RustyApplicationHeldAnimationSamplePlan;
+  readonly sectorCount: 1 | 4 | 8 | 16;
+  readonly capture: RustyApplicationVoxelSpriteCaptureSettings;
+  readonly transform: {
+    readonly position: readonly [number, number, number];
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly mode: RustyApplicationVoxelSpriteEnhancementMode;
+  readonly config?: Partial<Omit<RustyApplicationVoxelSpriteEnhancementConfig, 'mode' | 'width' | 'height'>>;
+}
+
+export interface RustyApplicationHeldAnimationFrameBankReadout {
+  readonly id: string;
+  readonly state: 'preparing' | 'ready';
+  readonly key: string;
+  readonly generation: number;
+  readonly source: {
+    readonly asset: string;
+    readonly assetGeneration: number;
+    readonly handle: number;
+    readonly contentHash: string | null;
+    readonly clip: string;
+    readonly origin: 'embedded' | 'pack';
+    readonly pack: { readonly asset: string; readonly contentHash: string | null } | null;
+    readonly instanceTransform: {
+      readonly position: readonly [number, number, number];
+      readonly quaternion: readonly [number, number, number, number];
+      readonly scale: readonly [number, number, number];
+    };
+  };
+  readonly frameCount: number;
+  readonly directionCount: number;
+  readonly capturedFrameCount: number;
+  readonly selectedSampleIndex: number | null;
+  readonly selectedDirectionIndex: number | null;
+  readonly captureCount: number;
+  readonly cacheHitCount: number;
+  readonly switchCount: number;
+  readonly preparationCpuMilliseconds: number | null;
+  readonly captureCpuMilliseconds: number | null;
+  readonly lastSwitchCpuMilliseconds: number | null;
+  readonly estimatedResidentBytes: number;
+  readonly estimatedPeakBytes: number;
+  readonly gpuTiming: 'not-measured';
+  readonly cancelledCount: number;
+  readonly replacementFailureCount: number;
+}
+
 export interface RustyApplicationVoxelSpriteDiagnostic {
   readonly code:
     | 'disposed'
@@ -189,7 +247,11 @@ export interface RustyApplicationVoxelSpriteDiagnostic {
     | 'invalid_definition'
     | 'missing_source'
     | 'capture_failed'
-    | 'unknown_id';
+    | 'unknown_id'
+    | 'frame_bank_busy'
+    | 'frame_bank_cancelled'
+    | 'frame_bank_failed'
+    | 'unknown_frame_bank';
   readonly message: string;
 }
 
@@ -300,6 +362,19 @@ export interface RustyApplicationVoxelSpriteReadout {
     readonly enhancement: RustyApplicationVoxelSpriteEnhancementReadout | null;
     readonly ghostPlate: RustyApplicationVoxelSpriteGhostPlateReadout | null;
   }[];
+  readonly frameBanks: readonly RustyApplicationHeldAnimationFrameBankReadout[];
+  readonly frameBankCandidates: readonly RustyApplicationHeldAnimationFrameBankReadout[];
+  readonly frameBankMemory: {
+    readonly readyResidentBytes: number;
+    readonly candidateResidentBytes: number;
+    readonly candidateReservedBytes: number;
+    readonly peakBytes: number;
+  };
+  readonly frameBankOutcomes: readonly {
+    readonly id: string;
+    readonly cancelledCount: number;
+    readonly replacementFailureCount: number;
+  }[];
   readonly disposed: boolean;
 }
 
@@ -325,6 +400,20 @@ export interface RustyApplicationVoxelSpriteExperimentPort {
     id: string,
     settings?: RustyApplicationVoxelSpriteCaptureSettings,
   ) => RustyApplicationVoxelSpriteReceipt;
+  readonly beginHeldAnimationFrameBank: (
+    definition: RustyApplicationHeldAnimationFrameBankDefinition,
+  ) => RustyApplicationVoxelSpriteReceipt;
+  readonly prepareHeldAnimationFrameBank: (
+    id: string,
+    maximumCaptures?: number,
+  ) => RustyApplicationVoxelSpriteReceipt;
+  readonly cancelHeldAnimationFrameBank: (id: string) => RustyApplicationVoxelSpriteReceipt;
+  readonly selectHeldAnimationFrameBank: (
+    id: string,
+    sampleIndex: number,
+    directionIndex: number,
+  ) => RustyApplicationVoxelSpriteReceipt;
+  readonly destroyHeldAnimationFrameBank: (id: string) => RustyApplicationVoxelSpriteReceipt;
   readonly destroy: (id: string) => RustyApplicationVoxelSpriteReceipt;
   readonly readout: () => RustyApplicationVoxelSpriteReadout;
   readonly dispose: () => void;
@@ -860,6 +949,16 @@ async function mountRustyApplicationWithEnvironment(
           ),
         recapture: (id: string, settings?: RustyApplicationVoxelSpriteCaptureSettings) =>
           requireExperiment().recapture(id, settings),
+        beginHeldAnimationFrameBank: (definition: RustyApplicationHeldAnimationFrameBankDefinition) =>
+          requireExperiment().beginHeldAnimationFrameBank(
+            definition as unknown as Parameters<typeof concrete.beginHeldAnimationFrameBank>[0],
+          ),
+        prepareHeldAnimationFrameBank: (id: string, maximumCaptures?: number) =>
+          requireExperiment().prepareHeldAnimationFrameBank(id, maximumCaptures),
+        cancelHeldAnimationFrameBank: (id: string) => requireExperiment().cancelHeldAnimationFrameBank(id),
+        selectHeldAnimationFrameBank: (id: string, sampleIndex: number, directionIndex: number) =>
+          requireExperiment().selectHeldAnimationFrameBank(id, sampleIndex, directionIndex),
+        destroyHeldAnimationFrameBank: (id: string) => requireExperiment().destroyHeldAnimationFrameBank(id),
         destroy: (id: string) => requireExperiment().destroy(id),
         readout: () => requireExperiment().readout(),
         dispose: () => {

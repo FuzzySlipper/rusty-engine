@@ -54,8 +54,14 @@ they are not visually or semantically equivalent in this corpus.
 ## Capture cadence and caching
 
 Explicit capture is useful for static or dirty-on-change representations and
-for changing a deliberately selected pose. Keyed-animation capture was not
-exercised, and per-frame capture is not supported by the evidence.
+for changing a deliberately selected pose. Task 7029 adds a retained-only
+held-animation bank experiment: embedded and admitted external-pack clips can
+be expanded from exact samples or an explicit 8/12/24 Hz cadence into bounded
+pose×direction captures. It owns no elapsed-time policy; callers manually
+advance preparation and select one already resident frame. This establishes
+capture/disposal correctness and browser evidence, not a visual-quality verdict
+or a production animation policy. Per-render-frame recapture remains outside
+the evidence and is not supported.
 
 Observed 96 by 96 captures ranged from about 0.5 ms for a warm recapture to
 66.7 ms for the rigged wizard and 116.4 ms for an initial sampled capture. These

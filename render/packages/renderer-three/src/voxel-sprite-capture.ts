@@ -332,6 +332,7 @@ export class VoxelSpriteRuntimeCapture {
 
   #resolveCoverage(targets: CaptureTargets, alphaCutoff: number): void {
     this.#coverageResolveMaterial.uniforms['sourceColor']!.value = targets.color.texture;
+    this.#coverageResolveMaterial.uniforms['sourceDepth']!.value = targets.hardwareDepth;
     this.#coverageResolveMaterial.uniforms['alphaCutoff']!.value = alphaCutoff;
     this.#renderer.setRenderTarget(targets.coverage);
     this.#renderer.clear(true, false, false);
@@ -546,6 +547,7 @@ function coverageResolveMaterial(): THREE.ShaderMaterial {
     name: 'voxel-sprite-coverage-resolve',
     uniforms: {
       sourceColor: { value: null },
+      sourceDepth: { value: null },
       alphaCutoff: { value: 0.001 },
     },
     vertexShader: `
@@ -557,11 +559,17 @@ function coverageResolveMaterial(): THREE.ShaderMaterial {
     `,
     fragmentShader: `
       uniform sampler2D sourceColor;
+      uniform sampler2D sourceDepth;
       uniform float alphaCutoff;
       varying vec2 voxelSpriteUv;
       void main() {
         float alpha = texture2D(sourceColor, voxelSpriteUv).a;
-        float covered = step(alphaCutoff, alpha);
+        // Render-target alpha is not a reliable opaque-geometry occupancy
+        // signal for every admitted GLB material. Depth remains at one for a
+        // cleared pixel, while alpha retains cutout coverage where it exists.
+        float alphaCovered = step(alphaCutoff, alpha);
+        float depthCovered = step(texture2D(sourceDepth, voxelSpriteUv).x, 0.999999);
+        float covered = max(alphaCovered, depthCovered);
         gl_FragColor = vec4(covered, covered, covered, covered);
       }
     `,

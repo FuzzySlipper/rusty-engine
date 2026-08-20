@@ -27,6 +27,7 @@ import {
   type RendererThreeVoxelSpriteConfigPatch,
   type RendererThreeVoxelSpriteReceipt,
   type RendererThreeVoxelSpriteSceneReadout,
+  type RendererThreeHeldAnimationFrameBankDefinition,
   type MeshResourceSource,
   type TextureResourceSource,
 } from '@rusty-engine/renderer-three/backend';
@@ -81,6 +82,7 @@ export const RUSTY_RENDERER_SURFACE_MAX_ACTIVE_SHADOW_LIGHTS = 8;
 export type RendererVoxelSpriteDefinition = RendererThreeVoxelSpriteDefinition;
 export type RendererVoxelSpriteReceipt = RendererThreeVoxelSpriteReceipt;
 export type RendererVoxelSpriteReadout = RendererThreeVoxelSpriteSceneReadout;
+export type RendererHeldAnimationFrameBankDefinition = RendererThreeHeldAnimationFrameBankDefinition;
 
 export interface RendererVoxelSpriteExperiment {
   readonly create: (definition: RendererVoxelSpriteDefinition) => RendererVoxelSpriteReceipt;
@@ -93,6 +95,20 @@ export interface RendererVoxelSpriteExperiment {
     id: string,
     settings?: Extract<RendererVoxelSpriteDefinition['source'], { kind: 'retained' }>['capture'],
   ) => RendererVoxelSpriteReceipt;
+  readonly beginHeldAnimationFrameBank: (
+    definition: RendererHeldAnimationFrameBankDefinition,
+  ) => RendererVoxelSpriteReceipt;
+  readonly prepareHeldAnimationFrameBank: (
+    id: string,
+    maximumCaptures?: number,
+  ) => RendererVoxelSpriteReceipt;
+  readonly cancelHeldAnimationFrameBank: (id: string) => RendererVoxelSpriteReceipt;
+  readonly selectHeldAnimationFrameBank: (
+    id: string,
+    sampleIndex: number,
+    directionIndex: number,
+  ) => RendererVoxelSpriteReceipt;
+  readonly destroyHeldAnimationFrameBank: (id: string) => RendererVoxelSpriteReceipt;
   readonly destroy: (id: string) => RendererVoxelSpriteReceipt;
   readonly readout: () => RendererVoxelSpriteReadout;
   readonly dispose: () => void;
@@ -887,6 +903,12 @@ function mountPreparedRendererSurface(
         replace: (definition) => mutate(() => concrete.replace(definition)),
         configure: (id, patch) => mutate(() => concrete.configure(id, patch)),
         recapture: (id, settings) => mutate(() => concrete.recapture(id, settings)),
+        beginHeldAnimationFrameBank: (definition) => mutate(() => concrete.beginHeldAnimationFrameBank(definition)),
+        prepareHeldAnimationFrameBank: (id, maximumCaptures) => mutate(() => concrete.prepareHeldAnimationFrameBank(id, maximumCaptures)),
+        cancelHeldAnimationFrameBank: (id) => mutate(() => concrete.cancelHeldAnimationFrameBank(id)),
+        selectHeldAnimationFrameBank: (id, sampleIndex, directionIndex) => mutate(() =>
+          concrete.selectHeldAnimationFrameBank(id, sampleIndex, directionIndex)),
+        destroyHeldAnimationFrameBank: (id) => mutate(() => concrete.destroyHeldAnimationFrameBank(id)),
         destroy: (id) => mutate(() => concrete.destroy(id)),
         readout: concrete.readout.bind(concrete),
         dispose: () => {

@@ -235,6 +235,19 @@ export class VoxelSpriteEnhancement {
   #revision = 1;
   #steadyStateCpuSubmissionMilliseconds: number | null = null;
 
+  /** CPU-only validation for callers that must reject a capture candidate before allocating targets. */
+  static validateConfig(config: Partial<VoxelSpriteEnhancementConfig>): void {
+    rejectUnknownConfig(config);
+    validatedConfig({
+      ...DEFAULT_CONFIG,
+      ...config,
+      splatColumns: config.splatColumns ?? config.sampleColumns ?? DEFAULT_CONFIG.splatColumns,
+      splatRows: config.splatRows ?? config.sampleRows ?? DEFAULT_CONFIG.splatRows,
+      lightingMode: config.lightingMode
+        ?? (config.mode !== undefined && config.mode !== 'sprite' ? 'normal' : 'captured'),
+    });
+  }
+
   constructor(
     source: VoxelSpriteEnhancementSource,
     config: Partial<VoxelSpriteEnhancementConfig> = {},
@@ -708,13 +721,16 @@ function baseMaterial(uniforms: EnhancementUniforms): THREE.ShaderMaterial {
         vec2 presentationUv = parallaxOcclusionUv(voxelSpriteUv);
         vec4 color = texture2D(colorTexture, presentationUv);
         float coverage = texture2D(coverageTexture, presentationUv).r * voxelSpriteConfidence;
-        if (coverage < 0.01 || color.a < 0.01) discard;
+        // Runtime captures use an explicit coverage target. Some opaque GLB
+        // materials leave the color target alpha at zero, so color alpha is
+        // not an occupancy signal here.
+        if (coverage < 0.01) discard;
         vec3 normal = decodedNormal(presentationUv);
         vec3 lighting = lightingFor(normal);
         float contribution = baseSpriteContribution;
         gl_FragColor = vec4(
           color.rgb * lighting * outputGain,
-          representationAlpha(color.a * coverage * contribution)
+          representationAlpha(coverage * contribution)
         );
       }
     `,
@@ -764,12 +780,12 @@ function splatMaterial(uniforms: EnhancementUniforms): THREE.ShaderMaterial {
       void main() {
         vec4 color = texture2D(colorTexture, voxelSpriteUv);
         float coverage = texture2D(coverageTexture, voxelSpriteUv).r * voxelSpriteConfidence;
-        if (coverage < 0.01 || color.a < 0.01) discard;
+        if (coverage < 0.01) discard;
         vec3 normal = decodedNormal(voxelSpriteUv);
         vec3 lighting = lightingFor(normal);
         gl_FragColor = vec4(
           color.rgb * lighting * outputGain,
-          representationAlpha(color.a * coverage * voxelSpriteViewWeight * splatOpacity)
+          representationAlpha(coverage * voxelSpriteViewWeight * splatOpacity)
         );
       }
     `,

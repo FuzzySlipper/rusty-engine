@@ -8,6 +8,7 @@ import {
   VOXEL_SPRITE_CAPTURE_MIN_RESOLUTION,
   VoxelSpriteFrame,
 } from './voxel-sprite-capture.js';
+import type { AnimatedMeshCaptureAppearance } from './animated-mesh.js';
 import {
   VoxelSpriteEnhancement,
   type VoxelSpriteEnhancementConfig,
@@ -128,8 +129,65 @@ export interface RendererThreeVoxelSpriteDefinition {
   readonly config?: Omit<RendererThreeVoxelSpriteConfigPatch, 'mode' | 'width' | 'height'>;
 }
 
+/** Caller-owned timing policy; the renderer expands it once into exact normalized samples. */
+export type RendererThreeHeldAnimationSamplePlan =
+  | { readonly kind: 'exact'; readonly normalizedTimes: readonly number[] }
+  | { readonly kind: 'cadence'; readonly samplesPerSecond: 8 | 12 | 24; readonly count: number };
+
+/** A backend-local, manually advanced held-pose frame-bank experiment. */
+export interface RendererThreeHeldAnimationFrameBankDefinition {
+  readonly id: string;
+  readonly animatedMesh: RenderHandle;
+  readonly clip: string;
+  readonly samples: RendererThreeHeldAnimationSamplePlan;
+  /** Actor-relative capture directions, built from equal azimuth sectors. */
+  readonly sectorCount: 1 | 4 | 8 | 16;
+  readonly capture: RendererThreeVoxelSpriteCaptureSettings;
+  readonly transform: RendererThreeVoxelSpriteTransform;
+  readonly mode: VoxelSpriteEnhancementMode;
+  readonly config?: Partial<Omit<VoxelSpriteEnhancementConfig, 'mode' | 'width' | 'height'>>;
+}
+
+export interface RendererThreeHeldAnimationFrameBankReadout {
+  readonly id: string;
+  readonly state: 'preparing' | 'ready';
+  readonly key: string;
+  readonly generation: number;
+  readonly source: {
+    readonly asset: string;
+    readonly assetGeneration: number;
+    readonly handle: number;
+    readonly contentHash: string | null;
+    readonly clip: string;
+    readonly origin: 'embedded' | 'pack';
+    readonly pack: { readonly asset: string; readonly contentHash: string | null } | null;
+    readonly instanceTransform: {
+      readonly position: readonly [number, number, number];
+      readonly quaternion: readonly [number, number, number, number];
+      readonly scale: readonly [number, number, number];
+    };
+  };
+  readonly frameCount: number;
+  readonly directionCount: number;
+  readonly capturedFrameCount: number;
+  readonly selectedSampleIndex: number | null;
+  readonly selectedDirectionIndex: number | null;
+  readonly captureCount: number;
+  readonly cacheHitCount: number;
+  readonly switchCount: number;
+  readonly preparationCpuMilliseconds: number | null;
+  readonly captureCpuMilliseconds: number | null;
+  readonly lastSwitchCpuMilliseconds: number | null;
+  readonly estimatedResidentBytes: number;
+  readonly estimatedPeakBytes: number;
+  readonly gpuTiming: 'not-measured';
+  readonly cancelledCount: number;
+  readonly replacementFailureCount: number;
+}
+
 export interface RendererThreeVoxelSpriteDiagnostic {
-  readonly code: 'disposed' | 'duplicate_id' | 'invalid_definition' | 'missing_source' | 'capture_failed' | 'unknown_id';
+  readonly code: 'disposed' | 'duplicate_id' | 'invalid_definition' | 'missing_source' | 'capture_failed' | 'unknown_id'
+    | 'frame_bank_busy' | 'frame_bank_cancelled' | 'frame_bank_failed' | 'unknown_frame_bank';
   readonly message: string;
 }
 
@@ -154,6 +212,21 @@ export interface RendererThreeVoxelSpriteSceneReadout {
   readonly schemaVersion: 1;
   readonly revision: number;
   readonly entries: readonly RendererThreeVoxelSpriteEntryReadout[];
+  readonly frameBanks: readonly RendererThreeHeldAnimationFrameBankReadout[];
+  /** Candidates are separate so a replacement never ambiguously duplicates a ready bank ID. */
+  readonly frameBankCandidates: readonly RendererThreeHeldAnimationFrameBankReadout[];
+  readonly frameBankMemory: {
+    readonly readyResidentBytes: number;
+    readonly candidateResidentBytes: number;
+    readonly candidateReservedBytes: number;
+    readonly peakBytes: number;
+  };
+  /** Outcomes remain observable after their candidate was released. */
+  readonly frameBankOutcomes: readonly {
+    readonly id: string;
+    readonly cancelledCount: number;
+    readonly replacementFailureCount: number;
+  }[];
   readonly disposed: boolean;
 }
 
@@ -162,6 +235,11 @@ export interface RendererThreeVoxelSpriteBackend {
   objectFor(handle: RenderHandle): THREE.Object3D | undefined;
   textureDescriptor(id: string): TextureDescriptor | undefined;
   textureObjectFor(id: string): THREE.Texture | undefined;
+  createAnimatedMeshCaptureAppearance?(
+    handle: RenderHandle,
+    clipId: string,
+    normalizedTime: number,
+  ): AnimatedMeshCaptureAppearance;
 }
 
 interface Entry {
@@ -180,6 +258,63 @@ interface Entry {
   fallbackPreservedCount: number;
 }
 
+interface HeldCaptureFrame {
+  readonly capture: VoxelSpriteRuntimeCapture;
+  readonly frame: VoxelSpriteFrame;
+  readonly sampleIndex: number;
+  readonly directionIndex: number;
+  readonly captureCpuMilliseconds: number | null;
+}
+
+interface HeldFrameBankCandidate {
+  readonly definition: RendererThreeHeldAnimationFrameBankDefinition;
+  readonly key: string;
+  readonly source: AnimatedMeshCaptureAppearance['source'];
+  readonly normalizedTimes: readonly number[];
+  readonly estimatedBytes: number;
+  /** Scene-wide peak reserved when this candidate was admitted. */
+  readonly admissionPeakBytes: number;
+  readonly startedMilliseconds: number;
+  readonly frames: HeldCaptureFrame[];
+  nextIndex: number;
+  cancelledCount: number;
+  replacementFailureCount: number;
+}
+
+interface HeldFrameBank {
+  readonly definition: RendererThreeHeldAnimationFrameBankDefinition;
+  readonly key: string;
+  readonly source: AnimatedMeshCaptureAppearance['source'];
+  readonly normalizedTimes: readonly number[];
+  readonly frames: readonly HeldCaptureFrame[];
+  readonly enhancement: VoxelSpriteEnhancement;
+  readonly estimatedBytes: number;
+  /** Immutable record of the scene-wide peak used to admit this published bank. */
+  readonly admissionPeakBytes: number;
+  readonly preparationCpuMilliseconds: number;
+  captureCpuMilliseconds: number | null;
+  selectedSampleIndex: number;
+  selectedDirectionIndex: number;
+  captureCount: number;
+  cacheHitCount: number;
+  switchCount: number;
+  lastSwitchCpuMilliseconds: number | null;
+  cancelledCount: number;
+  replacementFailureCount: number;
+}
+
+const HELD_ANIMATION_BANK_MAX_SAMPLES = 24;
+const HELD_ANIMATION_BANK_MAX_DIRECTIONS = 16;
+const HELD_ANIMATION_BANK_MAX_RESOLUTION = 512;
+const HELD_ANIMATION_BANK_MAX_FRAMES = 96;
+const HELD_ANIMATION_BANK_MAX_PIXELS = 8_388_608;
+const HELD_ANIMATION_BANK_MAX_RESIDENT_BYTES = 128 * 1024 * 1024;
+const HELD_ANIMATION_BANK_MAX_PEAK_BYTES = 192 * 1024 * 1024;
+const HELD_ANIMATION_BANK_MAX_STEP_CAPTURES = 8;
+const HELD_ANIMATION_BANK_MAX_RECORDS = 128;
+const HELD_ANIMATION_BANK_PERSISTENT_BYTES_PER_PIXEL = 24;
+const HELD_ANIMATION_BANK_TRANSIENT_BYTES_PER_PIXEL = 4;
+
 /** Three-local scene attachment behind renderer-host and application-host ports. */
 export class RendererThreeVoxelSpriteScene {
   readonly #webgl: THREE.WebGLRenderer;
@@ -187,6 +322,9 @@ export class RendererThreeVoxelSpriteScene {
   readonly #invalidate: () => void;
   readonly #onDispose: (() => void) | null;
   readonly #entries = new Map<string, Entry>();
+  readonly #heldFrameBanks = new Map<string, HeldFrameBank>();
+  readonly #heldFrameBankCandidates = new Map<string, HeldFrameBankCandidate>();
+  readonly #heldFrameBankOutcomes = new Map<string, { cancelledCount: number; replacementFailureCount: number }>();
   readonly #canonicalSuppressions = new Map<THREE.Object3D, {
     count: number;
     readonly layerZeroEnabled: ReadonlyMap<THREE.Object3D, boolean>;
@@ -338,6 +476,125 @@ export class RendererThreeVoxelSpriteScene {
     return this.#applied();
   }
 
+  /**
+   * Validate and reserve a manually advanced candidate. This allocates no GPU
+   * capture targets; callers explicitly drive bounded capture steps below.
+   */
+  beginHeldAnimationFrameBank(
+    definition: RendererThreeHeldAnimationFrameBankDefinition,
+  ): RendererThreeVoxelSpriteReceipt {
+    if (this.#disposed) return this.#rejected('disposed', 'voxel sprite scene is disposed');
+    if (this.#heldFrameBankCandidates.size > 0 && !this.#heldFrameBankCandidates.has(definition.id)) {
+      return this.#rejected('frame_bank_busy', 'only one held-animation frame-bank preparation may run at a time');
+    }
+    let candidate: HeldFrameBankCandidate;
+    try {
+      candidate = this.#heldCandidate(validatedHeldFrameBankDefinition(definition));
+    } catch (cause) {
+      return this.#rejected(classifyCause(cause), messageFrom(cause));
+    }
+    const prior = this.#heldFrameBankCandidates.get(candidate.definition.id);
+    if (prior !== undefined) this.#disposeHeldCandidate(prior);
+    this.#heldFrameBankCandidates.set(candidate.definition.id, candidate);
+    this.#revision += 1;
+    this.#invalidate();
+    return this.#applied();
+  }
+
+  /** Capture at most a caller-selected bounded number of unique pose×direction frames. */
+  prepareHeldAnimationFrameBank(
+    id: string,
+    maximumCaptures = 1,
+  ): RendererThreeVoxelSpriteReceipt {
+    if (this.#disposed) return this.#rejected('disposed', 'voxel sprite scene is disposed');
+    const candidate = this.#heldFrameBankCandidates.get(id);
+    if (candidate === undefined) return this.#rejected('unknown_frame_bank', `unknown preparing frame bank ${id}`);
+    if (!Number.isInteger(maximumCaptures) || maximumCaptures < 1 || maximumCaptures > HELD_ANIMATION_BANK_MAX_STEP_CAPTURES) {
+      return this.#rejected('invalid_definition', `frame-bank step captures must be an integer from 1 to ${String(HELD_ANIMATION_BANK_MAX_STEP_CAPTURES)}`);
+    }
+    try {
+      const finalCapture = Math.min(candidate.frames.length + maximumCaptures, candidate.normalizedTimes.length * candidate.definition.sectorCount);
+      while (candidate.frames.length < finalCapture) this.#captureHeldCandidateFrame(candidate);
+      if (candidate.frames.length === candidate.normalizedTimes.length * candidate.definition.sectorCount) {
+        this.#publishHeldCandidate(candidate);
+      }
+    } catch (cause) {
+      candidate.replacementFailureCount += 1;
+      this.#heldOutcome(id).replacementFailureCount += 1;
+      const published = this.#heldFrameBanks.get(id);
+      if (published !== undefined) published.replacementFailureCount += 1;
+      this.#disposeHeldCandidate(candidate);
+      this.#heldFrameBankCandidates.delete(id);
+      this.#revision += 1;
+      this.#invalidate();
+      return this.#rejected('frame_bank_failed', messageFrom(cause));
+    }
+    this.#revision += 1;
+    this.#invalidate();
+    return this.#applied();
+  }
+
+  cancelHeldAnimationFrameBank(id: string): RendererThreeVoxelSpriteReceipt {
+    if (this.#disposed) return this.#rejected('disposed', 'voxel sprite scene is disposed');
+    const candidate = this.#heldFrameBankCandidates.get(id);
+    if (candidate === undefined) return this.#rejected('unknown_frame_bank', `unknown preparing frame bank ${id}`);
+    candidate.cancelledCount += 1;
+    this.#heldOutcome(id).cancelledCount += 1;
+    this.#disposeHeldCandidate(candidate);
+    this.#heldFrameBankCandidates.delete(id);
+    this.#revision += 1;
+    this.#invalidate();
+    return this.#rejected('frame_bank_cancelled', `frame bank ${id} preparation cancelled`);
+  }
+
+  /** Switches only resident source textures through the enhancement seam; it never captures. */
+  selectHeldAnimationFrameBank(
+    id: string,
+    sampleIndex: number,
+    directionIndex: number,
+  ): RendererThreeVoxelSpriteReceipt {
+    if (this.#disposed) return this.#rejected('disposed', 'voxel sprite scene is disposed');
+    const bank = this.#heldFrameBanks.get(id);
+    if (bank === undefined) return this.#rejected('unknown_frame_bank', `unknown ready frame bank ${id}`);
+    if (!Number.isInteger(sampleIndex) || sampleIndex < 0 || sampleIndex >= bank.normalizedTimes.length
+      || !Number.isInteger(directionIndex) || directionIndex < 0 || directionIndex >= bank.definition.sectorCount) {
+      return this.#rejected('invalid_definition', `frame bank ${id} selection is out of range`);
+    }
+    const frame = bank.frames.find((candidate) => candidate.sampleIndex === sampleIndex && candidate.directionIndex === directionIndex);
+    if (frame === undefined) return this.#rejected('frame_bank_failed', `frame bank ${id} has no resident selected frame`);
+    const started = nowMilliseconds();
+    if (bank.selectedSampleIndex === sampleIndex && bank.selectedDirectionIndex === directionIndex) {
+      bank.cacheHitCount += 1;
+    } else {
+      bank.enhancement.replaceSource({ frame: frame.frame, captureCpuSubmissionMilliseconds: frame.captureCpuMilliseconds });
+      bank.selectedSampleIndex = sampleIndex;
+      bank.selectedDirectionIndex = directionIndex;
+      bank.switchCount += 1;
+    }
+    bank.lastSwitchCpuMilliseconds = nowMilliseconds() - started;
+    this.#revision += 1;
+    this.#invalidate();
+    return this.#applied();
+  }
+
+  destroyHeldAnimationFrameBank(id: string): RendererThreeVoxelSpriteReceipt {
+    if (this.#disposed) return this.#rejected('disposed', 'voxel sprite scene is disposed');
+    const candidate = this.#heldFrameBankCandidates.get(id);
+    const bank = this.#heldFrameBanks.get(id);
+    if (candidate === undefined && bank === undefined) return this.#rejected('unknown_frame_bank', `unknown frame bank ${id}`);
+    if (candidate !== undefined) {
+      this.#disposeHeldCandidate(candidate);
+      this.#heldFrameBankCandidates.delete(id);
+    }
+    if (bank !== undefined) {
+      this.#disposeHeldFrameBank(bank);
+      this.#heldFrameBanks.delete(id);
+    }
+    this.#revision += 1;
+    this.#invalidate();
+    return this.#applied();
+  }
+
   destroy(id: string): RendererThreeVoxelSpriteReceipt {
     if (this.#disposed) return this.#rejected('disposed', 'voxel sprite scene is disposed');
     const entry = this.#entries.get(id);
@@ -357,6 +614,7 @@ export class RendererThreeVoxelSpriteScene {
         if (entry.ghostPlate.advancing()) this.#invalidate();
       } else entry.enhancement!.prepare(camera);
     }
+    for (const bank of this.#heldFrameBanks.values()) bank.enhancement.prepare(camera);
   }
 
   recordCpuSubmission(milliseconds: number): void {
@@ -364,6 +622,7 @@ export class RendererThreeVoxelSpriteScene {
     for (const entry of this.#entries.values()) {
       entry.enhancement?.recordSteadyStateFrame(milliseconds);
     }
+    for (const bank of this.#heldFrameBanks.values()) bank.enhancement.recordSteadyStateFrame(milliseconds);
   }
 
   readout(): RendererThreeVoxelSpriteSceneReadout {
@@ -381,7 +640,17 @@ export class RendererThreeVoxelSpriteScene {
           enhancement: entry.enhancement?.readout() ?? null,
           ghostPlate: entry.ghostPlate?.readout() ?? null,
         }))
-        .sort((left, right) => left.id.localeCompare(right.id))),
+        .sort((left, right) => codeUnitCompare(left.id, right.id))),
+      frameBanks: Object.freeze([...this.#heldFrameBanks.values()]
+        .map((bank) => heldFrameBankReadout(bank, 'ready', bank.admissionPeakBytes))
+        .sort((left, right) => codeUnitCompare(left.id, right.id))),
+      frameBankCandidates: Object.freeze([...this.#heldFrameBankCandidates.values()]
+        .map((candidate) => heldCandidateReadout(candidate, candidate.admissionPeakBytes))
+        .sort((left, right) => codeUnitCompare(left.id, right.id))),
+      frameBankMemory: Object.freeze(this.#frameBankMemoryReadout()),
+      frameBankOutcomes: Object.freeze([...this.#heldFrameBankOutcomes.entries()]
+        .map(([id, outcome]) => Object.freeze({ id, ...outcome }))
+        .sort((left, right) => codeUnitCompare(left.id, right.id))),
       disposed: this.#disposed,
     });
   }
@@ -390,10 +659,232 @@ export class RendererThreeVoxelSpriteScene {
     if (this.#disposed) return;
     for (const entry of this.#entries.values()) this.#disposeEntry(entry);
     this.#entries.clear();
+    for (const candidate of this.#heldFrameBankCandidates.values()) this.#disposeHeldCandidate(candidate);
+    this.#heldFrameBankCandidates.clear();
+    for (const bank of this.#heldFrameBanks.values()) this.#disposeHeldFrameBank(bank);
+    this.#heldFrameBanks.clear();
     this.#disposed = true;
     this.#revision += 1;
     this.#invalidate();
     this.#onDispose?.();
+  }
+
+  #heldCandidate(definition: RendererThreeHeldAnimationFrameBankDefinition): HeldFrameBankCandidate {
+    const createAppearance = this.#backend.createAnimatedMeshCaptureAppearance;
+    if (createAppearance === undefined) throw new MissingSourceError('backend does not expose independently posed animated capture appearances');
+    // The probe is CPU-only: it validates the admitted clip and gives cadence
+    // expansion its actual decoded duration before any capture target exists.
+    const probe = createAppearance.call(this.#backend, definition.animatedMesh, definition.clip, 0);
+    let normalizedTimes: readonly number[];
+    try {
+      normalizedTimes = expandHeldAnimationSamples(definition.samples, probe.source.durationSeconds);
+    } finally {
+      probe.dispose();
+    }
+    const frameCount = normalizedTimes.length * definition.sectorCount;
+    const estimatedBytes = frameCount * definition.capture.resolution * definition.capture.resolution
+      * HELD_ANIMATION_BANK_PERSISTENT_BYTES_PER_PIXEL;
+    const readyResidentBytes = this.#readyResidentBytes();
+    const transientBytes = this.#transientBytes(definition);
+    validateHeldBankQuota(
+      definition,
+      normalizedTimes,
+      frameCount,
+      estimatedBytes,
+      readyResidentBytes,
+      transientBytes,
+    );
+    const key = heldFrameBankKey(definition, normalizedTimes, probe.source);
+    return {
+      definition,
+      key,
+      source: probe.source,
+      normalizedTimes,
+      estimatedBytes,
+      admissionPeakBytes: readyResidentBytes + estimatedBytes + transientBytes,
+      startedMilliseconds: nowMilliseconds(),
+      frames: [],
+      nextIndex: 0,
+      cancelledCount: this.#heldOutcome(definition.id).cancelledCount,
+      replacementFailureCount: this.#heldOutcome(definition.id).replacementFailureCount,
+    };
+  }
+
+  #captureHeldCandidateFrame(candidate: HeldFrameBankCandidate): void {
+    const totalDirections = candidate.definition.sectorCount;
+    const sampleIndex = Math.floor(candidate.nextIndex / totalDirections);
+    const directionIndex = candidate.nextIndex % totalDirections;
+    const normalizedTime = candidate.normalizedTimes[sampleIndex];
+    if (normalizedTime === undefined) throw new CaptureSourceError('frame bank capture index is out of range');
+    const createAppearance = this.#backend.createAnimatedMeshCaptureAppearance;
+    if (createAppearance === undefined) throw new MissingSourceError('backend does not expose independently posed animated capture appearances');
+    const appearance = createAppearance.call(this.#backend, candidate.definition.animatedMesh, candidate.definition.clip, normalizedTime);
+    const expected = candidate.source;
+    if (appearance.source.asset !== expected.asset
+      || appearance.source.generation !== expected.generation
+      || appearance.source.handle !== expected.handle
+      || appearance.source.contentHash !== expected.contentHash
+      || appearance.source.clip !== expected.clip
+      || appearance.source.origin !== expected.origin
+      || appearance.source.pack?.asset !== expected.pack?.asset
+      || appearance.source.pack?.contentHash !== expected.pack?.contentHash
+      || !sameTransform(appearance.source.instanceTransform, expected.instanceTransform)) {
+      appearance.dispose();
+      throw new CaptureSourceError('animated source changed while frame-bank preparation was in progress');
+    }
+    const captureScene = new THREE.Scene();
+    const capture = new VoxelSpriteRuntimeCapture(this.#webgl);
+    let disposeLighting: () => void = () => undefined;
+    try {
+      captureScene.add(appearance.object);
+      // The temporary appearance is a renderer-owned capture lease. Ensure
+      // its drawable descendants reach the capture camera's default layer;
+      // this does not alter the canonical instance or its authored layers.
+      appearance.object.traverse((object) => {
+        // The asset template is intentionally detached; retain no inherited
+        // visibility suppression from another instance when this private
+        // appearance is rendered into a held frame.
+        object.visible = true;
+        if (isRenderable(object)) object.layers.enable(0);
+      });
+      appearance.object.updateWorldMatrix(true, true);
+      const bounds = new THREE.Box3().setFromObject(appearance.object, true);
+      if (bounds.isEmpty()) throw new CaptureSourceError('animated capture appearance bounds are empty');
+      const center = bounds.getCenter(new THREE.Vector3());
+      const size = bounds.getSize(new THREE.Vector3());
+      const captureSettings = {
+        ...candidate.definition.capture,
+        azimuthDegrees: normalizedCaptureAzimuth(
+          candidate.definition.capture.azimuthDegrees + directionIndex * 360 / totalDirections,
+        ),
+      };
+      const camera = captureCamera(captureSettings, center, size);
+      disposeLighting = captureSettings.lighting?.mode === 'scene'
+        ? addClonedSceneLights(this.#backend.scene, captureScene)
+        : addStudioRig(captureScene, camera, center, size, studioLighting(captureSettings.lighting));
+      const receipt = capture.capture({
+        scene: captureScene,
+        camera,
+        width: captureSettings.resolution,
+        height: captureSettings.resolution,
+        bounds,
+      });
+      if (!receipt.applied || receipt.frame === null) {
+        throw new CaptureSourceError(receipt.diagnostics[0]?.message ?? 'held frame capture failed');
+      }
+      candidate.frames.push({
+        capture,
+        frame: receipt.frame,
+        sampleIndex,
+        directionIndex,
+        captureCpuMilliseconds: receipt.readout.cpuSubmissionMilliseconds,
+      });
+      candidate.nextIndex += 1;
+    } catch (cause) {
+      capture.dispose();
+      throw cause;
+    } finally {
+      disposeLighting();
+      captureScene.remove(appearance.object);
+      appearance.dispose();
+    }
+  }
+
+  #publishHeldCandidate(candidate: HeldFrameBankCandidate): void {
+    const first = candidate.frames[0];
+    if (first === undefined) throw new CaptureSourceError('frame bank has no captured frames to publish');
+    let enhancement: VoxelSpriteEnhancement;
+    try {
+      enhancement = new VoxelSpriteEnhancement(
+        { frame: first.frame, captureCpuSubmissionMilliseconds: first.captureCpuMilliseconds },
+        {
+          ...candidate.definition.config,
+          mode: candidate.definition.mode,
+          width: candidate.definition.transform.width,
+          height: candidate.definition.transform.height,
+        },
+      );
+    } catch (cause) {
+      throw new CaptureSourceError(messageFrom(cause));
+    }
+    enhancement.object.position.set(...candidate.definition.transform.position);
+    const bank: HeldFrameBank = {
+      definition: candidate.definition,
+      key: candidate.key,
+      source: candidate.source,
+      normalizedTimes: candidate.normalizedTimes,
+      frames: Object.freeze([...candidate.frames]),
+      enhancement,
+      estimatedBytes: candidate.estimatedBytes,
+      admissionPeakBytes: candidate.admissionPeakBytes,
+      preparationCpuMilliseconds: nowMilliseconds() - candidate.startedMilliseconds,
+      captureCpuMilliseconds: sumCaptureMilliseconds(candidate.frames),
+      selectedSampleIndex: 0,
+      selectedDirectionIndex: 0,
+      captureCount: candidate.frames.length,
+      cacheHitCount: 0,
+      switchCount: 0,
+      lastSwitchCpuMilliseconds: null,
+      cancelledCount: candidate.cancelledCount,
+      replacementFailureCount: candidate.replacementFailureCount,
+    };
+    const previous = this.#heldFrameBanks.get(candidate.definition.id);
+    this.#backend.scene.add(enhancement.object);
+    this.#heldFrameBanks.set(candidate.definition.id, bank);
+    this.#heldFrameBankCandidates.delete(candidate.definition.id);
+    this.#disposeHeldFrameBank(previous);
+  }
+
+  #disposeHeldCandidate(candidate: HeldFrameBankCandidate): void {
+    for (const frame of candidate.frames) frame.capture.dispose();
+    candidate.frames.length = 0;
+  }
+
+  #disposeHeldFrameBank(bank: HeldFrameBank | undefined): void {
+    if (bank === undefined) return;
+    this.#backend.scene.remove(bank.enhancement.object);
+    bank.enhancement.dispose();
+    for (const frame of bank.frames) frame.capture.dispose();
+  }
+
+  #heldOutcome(id: string): { cancelledCount: number; replacementFailureCount: number } {
+    let outcome = this.#heldFrameBankOutcomes.get(id);
+    if (outcome === undefined) {
+      if (this.#heldFrameBankOutcomes.size >= HELD_ANIMATION_BANK_MAX_RECORDS) {
+        const disposableOutcome = [...this.#heldFrameBankOutcomes.keys()].find((candidateId) =>
+          !this.#heldFrameBanks.has(candidateId) && !this.#heldFrameBankCandidates.has(candidateId));
+        if (disposableOutcome === undefined) {
+          throw new RangeError(`frame bank records exceed ${String(HELD_ANIMATION_BANK_MAX_RECORDS)}`);
+        }
+        this.#heldFrameBankOutcomes.delete(disposableOutcome);
+      }
+      outcome = { cancelledCount: 0, replacementFailureCount: 0 };
+      this.#heldFrameBankOutcomes.set(id, outcome);
+    }
+    return outcome;
+  }
+
+  #readyResidentBytes(): number {
+    return [...this.#heldFrameBanks.values()].reduce((total, bank) => total + bank.estimatedBytes, 0);
+  }
+
+  #transientBytes(definition: RendererThreeHeldAnimationFrameBankDefinition): number {
+    return definition.capture.resolution * definition.capture.resolution * HELD_ANIMATION_BANK_TRANSIENT_BYTES_PER_PIXEL;
+  }
+
+  #frameBankMemoryReadout(): { readyResidentBytes: number; candidateResidentBytes: number; candidateReservedBytes: number; peakBytes: number } {
+    const candidate = [...this.#heldFrameBankCandidates.values()][0];
+    const readyResidentBytes = this.#readyResidentBytes();
+    const candidateResidentBytes = candidate === undefined ? 0
+      : candidate.frames.length * candidate.definition.capture.resolution * candidate.definition.capture.resolution
+        * HELD_ANIMATION_BANK_PERSISTENT_BYTES_PER_PIXEL;
+    const candidateReservedBytes = candidate?.estimatedBytes ?? 0;
+    return {
+      readyResidentBytes,
+      candidateResidentBytes,
+      candidateReservedBytes,
+      peakBytes: candidate === undefined ? readyResidentBytes : candidate.admissionPeakBytes,
+    };
   }
 
   #buildEntry(definition: RendererThreeVoxelSpriteDefinition): Entry {
@@ -747,6 +1238,202 @@ export class RendererThreeVoxelSpriteScene {
 
 class MissingSourceError extends Error {}
 class CaptureSourceError extends Error {}
+
+function validatedHeldFrameBankDefinition(
+  input: RendererThreeHeldAnimationFrameBankDefinition,
+): RendererThreeHeldAnimationFrameBankDefinition {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(input.id)) throw new TypeError('frame bank id is invalid');
+  if (![1, 4, 8, 16].includes(input.sectorCount)) {
+    throw new RangeError('frame bank sector count must be one of 1, 4, 8, or 16');
+  }
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(input.clip)) throw new TypeError('frame bank clip id is invalid');
+  finiteTuple(input.transform.position, 'frame bank transform position');
+  bounded(input.transform.width, 0.05, 64, 'frame bank transform width');
+  bounded(input.transform.height, 0.05, 64, 'frame bank transform height');
+  const capture = validatedCapture(input.capture);
+  if (capture.resolution > HELD_ANIMATION_BANK_MAX_RESOLUTION) {
+    throw new RangeError(`frame bank capture resolution must not exceed ${String(HELD_ANIMATION_BANK_MAX_RESOLUTION)}`);
+  }
+  if (input.samples.kind === 'exact') {
+    if (input.samples.normalizedTimes.length < 1 || input.samples.normalizedTimes.length > HELD_ANIMATION_BANK_MAX_SAMPLES) {
+      throw new RangeError(`frame bank exact samples must contain 1 to ${String(HELD_ANIMATION_BANK_MAX_SAMPLES)} values`);
+    }
+    for (const time of input.samples.normalizedTimes) {
+      if (!Number.isFinite(time) || time < 0 || time > 1) throw new RangeError('frame bank exact normalized times must be finite and between 0 and 1');
+    }
+    if (new Set(input.samples.normalizedTimes).size !== input.samples.normalizedTimes.length) {
+      throw new TypeError('frame bank exact normalized times must be unique');
+    }
+  } else if (input.samples.kind === 'cadence') {
+    if (![8, 12, 24].includes(input.samples.samplesPerSecond)) {
+      throw new RangeError('frame bank cadence samples per second must be 8, 12, or 24');
+    }
+    if (!Number.isInteger(input.samples.count) || input.samples.count < 1 || input.samples.count > HELD_ANIMATION_BANK_MAX_SAMPLES) {
+      throw new RangeError(`frame bank cadence count must be an integer from 1 to ${String(HELD_ANIMATION_BANK_MAX_SAMPLES)}`);
+    }
+  } else throw new TypeError('frame bank sample plan is invalid');
+  VoxelSpriteEnhancement.validateConfig({
+    ...input.config,
+    mode: input.mode,
+    width: input.transform.width,
+    height: input.transform.height,
+  });
+  return Object.freeze({ ...input, capture });
+}
+
+function expandHeldAnimationSamples(
+  plan: RendererThreeHeldAnimationSamplePlan,
+  durationSeconds: number,
+): readonly number[] {
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) throw new TypeError('frame bank clip duration is invalid');
+  const samples = plan.kind === 'exact'
+    ? [...plan.normalizedTimes]
+    : Array.from({ length: plan.count }, (_, index) => index / (plan.samplesPerSecond * durationSeconds));
+  if (samples.some((time) => !Number.isFinite(time) || time < 0 || time > 1)) {
+    throw new RangeError('frame bank cadence extends beyond the admitted clip duration');
+  }
+  if (new Set(samples).size !== samples.length) throw new RangeError('frame bank cadence expansion produced duplicate normalized times');
+  return Object.freeze(samples);
+}
+
+function validateHeldBankQuota(
+  definition: RendererThreeHeldAnimationFrameBankDefinition,
+  normalizedTimes: readonly number[],
+  frameCount: number,
+  estimatedBytes: number,
+  readyResidentBytes: number,
+  transientBytes: number,
+): void {
+  if (normalizedTimes.length > HELD_ANIMATION_BANK_MAX_SAMPLES || definition.sectorCount > HELD_ANIMATION_BANK_MAX_DIRECTIONS
+    || frameCount > HELD_ANIMATION_BANK_MAX_FRAMES) {
+    throw new RangeError(`frame bank exceeds ${String(HELD_ANIMATION_BANK_MAX_FRAMES)} pose-direction frames`);
+  }
+  const pixels = frameCount * definition.capture.resolution * definition.capture.resolution;
+  if (pixels > HELD_ANIMATION_BANK_MAX_PIXELS) {
+    throw new RangeError(`frame bank exceeds ${String(HELD_ANIMATION_BANK_MAX_PIXELS)} capture pixels`);
+  }
+  if (readyResidentBytes + estimatedBytes > HELD_ANIMATION_BANK_MAX_RESIDENT_BYTES) {
+    throw new RangeError(`frame bank scene exceeds ${String(HELD_ANIMATION_BANK_MAX_RESIDENT_BYTES)} resident bytes`);
+  }
+  if (readyResidentBytes + estimatedBytes + transientBytes > HELD_ANIMATION_BANK_MAX_PEAK_BYTES) {
+    throw new RangeError(`frame bank scene exceeds ${String(HELD_ANIMATION_BANK_MAX_PEAK_BYTES)} peak ready-plus-candidate bytes`);
+  }
+}
+
+function heldFrameBankKey(
+  definition: RendererThreeHeldAnimationFrameBankDefinition,
+  normalizedTimes: readonly number[],
+  source: AnimatedMeshCaptureAppearance['source'],
+): string {
+  return `held-animation-frame-bank.v1:${canonicalJson([
+    ['asset', source.asset, source.generation, source.handle, source.contentHash, source.instanceTransform],
+    ['pack', source.pack?.asset ?? null, source.pack?.contentHash ?? null],
+    ['clip', source.clip, source.origin],
+    ['samples', normalizedTimes],
+    ['sectors', definition.sectorCount],
+    ['capture', definition.capture],
+    ['resolution', definition.capture.resolution],
+    ['dimensions', definition.transform.width, definition.transform.height],
+    ['enhancement', definition.mode, definition.config ?? {}],
+  ])}`;
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort(codeUnitCompare).map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function heldFrameBankReadout(bank: HeldFrameBank, state: 'ready', estimatedPeakBytes: number): RendererThreeHeldAnimationFrameBankReadout {
+  return Object.freeze({
+    id: bank.definition.id,
+    state,
+    key: bank.key,
+    generation: bank.source.generation,
+    source: Object.freeze({
+      asset: bank.source.asset,
+      assetGeneration: bank.source.generation,
+      handle: bank.source.handle,
+      contentHash: bank.source.contentHash,
+      clip: bank.source.clip,
+      origin: bank.source.origin,
+      pack: bank.source.pack,
+      instanceTransform: bank.source.instanceTransform,
+    }),
+    frameCount: bank.frames.length,
+    directionCount: bank.definition.sectorCount,
+    capturedFrameCount: bank.frames.length,
+    selectedSampleIndex: bank.selectedSampleIndex,
+    selectedDirectionIndex: bank.selectedDirectionIndex,
+    captureCount: bank.captureCount,
+    cacheHitCount: bank.cacheHitCount,
+    switchCount: bank.switchCount,
+    preparationCpuMilliseconds: bank.preparationCpuMilliseconds,
+    captureCpuMilliseconds: bank.captureCpuMilliseconds,
+    lastSwitchCpuMilliseconds: bank.lastSwitchCpuMilliseconds,
+    estimatedResidentBytes: bank.estimatedBytes,
+    estimatedPeakBytes,
+    gpuTiming: 'not-measured',
+    cancelledCount: bank.cancelledCount,
+    replacementFailureCount: bank.replacementFailureCount,
+  });
+}
+
+function heldCandidateReadout(candidate: HeldFrameBankCandidate, estimatedPeakBytes: number): RendererThreeHeldAnimationFrameBankReadout {
+  return Object.freeze({
+    id: candidate.definition.id,
+    state: 'preparing',
+    key: candidate.key,
+    generation: candidate.source.generation,
+    source: Object.freeze({
+      asset: candidate.source.asset,
+      assetGeneration: candidate.source.generation,
+      handle: candidate.source.handle,
+      contentHash: candidate.source.contentHash,
+      clip: candidate.source.clip,
+      origin: candidate.source.origin,
+      pack: candidate.source.pack,
+      instanceTransform: candidate.source.instanceTransform,
+    }),
+    frameCount: candidate.normalizedTimes.length * candidate.definition.sectorCount,
+    directionCount: candidate.definition.sectorCount,
+    capturedFrameCount: candidate.frames.length,
+    selectedSampleIndex: null,
+    selectedDirectionIndex: null,
+    captureCount: candidate.frames.length,
+    cacheHitCount: 0,
+    switchCount: 0,
+    preparationCpuMilliseconds: null,
+    captureCpuMilliseconds: sumCaptureMilliseconds(candidate.frames),
+    lastSwitchCpuMilliseconds: null,
+    estimatedResidentBytes: candidate.frames.length * candidate.definition.capture.resolution * candidate.definition.capture.resolution * HELD_ANIMATION_BANK_PERSISTENT_BYTES_PER_PIXEL,
+    estimatedPeakBytes,
+    gpuTiming: 'not-measured',
+    cancelledCount: candidate.cancelledCount,
+    replacementFailureCount: candidate.replacementFailureCount,
+  });
+}
+
+function sumCaptureMilliseconds(frames: readonly HeldCaptureFrame[]): number | null {
+  const durations = frames.map((frame) => frame.captureCpuMilliseconds).filter((value): value is number => value !== null);
+  return durations.length === 0 ? null : durations.reduce((total, value) => total + value, 0);
+}
+
+function sameTransform(
+  left: AnimatedMeshCaptureAppearance['source']['instanceTransform'],
+  right: AnimatedMeshCaptureAppearance['source']['instanceTransform'],
+): boolean {
+  const leftValues = [...left.position, ...left.quaternion, ...left.scale];
+  const rightValues = [...right.position, ...right.quaternion, ...right.scale];
+  return leftValues.every((value, index) => value === rightValues[index]);
+}
+
+function codeUnitCompare(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
 
 function validatedDefinition(input: RendererThreeVoxelSpriteDefinition): RendererThreeVoxelSpriteDefinition {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(input.id)) throw new TypeError('voxel sprite id is invalid');

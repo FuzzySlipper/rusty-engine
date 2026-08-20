@@ -73,6 +73,13 @@ compiled artifact, and Rust webview host/resource lifecycle.
   - `animated-mesh-capture.ts` owns deterministic PNG/contact-sheet encoding
     over an already-mounted `RendererSurface`; it does not load assets or own a
     second animation loop.
+  - The public voxel-sprite experiment port forwards explicit held-animation
+    frame-bank reservation, bounded caller-driven preparation, cancellation,
+    explicit individual disposal, and resident-frame selection without exposing
+    Three objects.
+- [`render/packages/renderer-three/src/voxel-sprite-scene.ts`](../../render/packages/renderer-three/src/voxel-sprite-scene.ts)
+  owns the backend-local held-animation bank candidate/publish/disposal
+  lifecycle, independent animated capture appearances, quotas, and readouts.
 - [`render/packages/application-host/src`](../../render/packages/application-host/src)
 - [`render/artifacts/application-host`](../../render/artifacts/application-host)
 - [`render/browser`](../../render/browser)

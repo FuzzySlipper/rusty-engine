@@ -57,6 +57,24 @@ interface BrowserProof {
     readonly normalizedTimes: readonly number[];
     readonly independentInstances: boolean;
   };
+  readonly heldAnimationFrameBank: {
+    readonly externalBeginApplied: boolean;
+    readonly externalPrepareApplied: boolean;
+    readonly externalOrigin: 'embedded' | 'pack' | null;
+    readonly embeddedBeginApplied: boolean;
+    readonly embeddedPrepareApplied: boolean;
+    readonly selectApplied: boolean;
+    readonly embeddedOrigin: 'embedded' | 'pack' | null;
+    readonly capturedFrameCount: number;
+    readonly switchCount: number;
+    readonly cacheHitCount: number;
+    readonly captureCountBeforeSelection: number;
+    readonly captureCountAfterSelection: number;
+    /** Zero-delta embedded clip renders from the committed fixture. */
+    readonly embeddedPoseChecksums: readonly number[];
+    readonly heldPresentationDrawCalls: readonly (number | null)[];
+    readonly canonicalPlaybackPreserved: boolean;
+  };
   readonly audioApplied: number;
   audioResumeDiagnostics: readonly string[] | null;
   readonly automaticSubmissionPacing: RendererSurfaceAutomaticSubmissionPacingSample;
@@ -401,6 +419,101 @@ async function main(): Promise<void> {
     providerRevision: '1111111111111111111111111111111111111111',
     overlaysIncluded: true,
   });
+  const canonicalPlaybackBeforeHeldBank = surface.animatedMeshPlayback(renderHandle(105));
+  const heldAnimationExperiment = surface.createVoxelSpriteExperiment();
+  const heldExternalBegin = heldAnimationExperiment.beginHeldAnimationFrameBank({
+    id: 'held-animation-external-pack-proof',
+    animatedMesh: renderHandle(105),
+    clip: 'idle',
+    samples: { kind: 'exact', normalizedTimes: [0] },
+    sectorCount: 1,
+    capture: {
+      resolution: 64, azimuthDegrees: 0, elevationDegrees: 0, near: 0.1, far: 10_000,
+      lighting: { mode: 'isolated' },
+    },
+    transform: { position: [0, 2, -4], width: 3, height: 4 },
+    mode: 'sprite',
+    config: { orientationPolicy: 'camera-facing', lightingMode: 'captured', outputGain: 1.5 },
+  });
+  const heldExternalPrepare = heldAnimationExperiment.prepareHeldAnimationFrameBank('held-animation-external-pack-proof', 1);
+  const heldExternalBank = heldAnimationExperiment.readout().frameBanks
+    .find((bank) => bank.id === 'held-animation-external-pack-proof')!;
+  heldAnimationExperiment.destroyHeldAnimationFrameBank('held-animation-external-pack-proof');
+  const heldBankCanvas = document.createElement('canvas');
+  heldBankCanvas.width = 128;
+  heldBankCanvas.height = 128;
+  const heldBankSurface = await mountRendererAnimatedMeshSurface(heldBankCanvas, {
+    animatedMeshManifest: {
+      kind: 'rusty_renderer_animated_mesh_resources.v1',
+      resources: [{ asset: ASSET, contentHash: CONTENT_HASH, clipIds: ['run', 'jump'] }],
+      clipPacks: [{
+        asset: 'animation-clip-pack/kenney-retro-character-idle', contentHash: CONTENT_HASH, clipIds: ['idle'],
+      }],
+    },
+    resolveAnimatedMeshResource: async () => animatedFixtureBytes.slice(0),
+    autoStart: false,
+    clearColor: 0x000000,
+    controls: { enabled: false },
+    frame: browserFrame(clipPackRig),
+    pixelRatio: 1,
+  });
+  // The primary proof scene presents this character at an exaggerated scale.
+  // Use a bounded equivalent source transform in the isolated capture surface
+  // so its perspective framing is a direct held-bank proof rather than an
+  // implausibly large general-scene capture diagnostic.
+  heldBankSurface.applyFrame({
+    schemaVersion: 1,
+    ops: [{
+      op: 'update', handle: renderHandle(105),
+      transform: identity([0, 0, -3], [0.3, 0.3, 0.3]), material: null, visible: null, metadata: null,
+    }],
+  });
+  const heldBankExperiment = heldBankSurface.createVoxelSpriteExperiment();
+  const heldEmbeddedBegin = heldBankExperiment.beginHeldAnimationFrameBank({
+    id: 'held-animation-embedded-motion-proof',
+    animatedMesh: renderHandle(105),
+    clip: 'jump',
+    samples: { kind: 'exact', normalizedTimes: [0, 0.5, 1] },
+    sectorCount: 1,
+    capture: {
+      resolution: 64, azimuthDegrees: 0, elevationDegrees: 0, near: 0.1, far: 10_000,
+      lighting: { mode: 'isolated' },
+    },
+    transform: { position: [0, 0, -1], width: 10, height: 10 },
+    mode: 'sprite',
+    config: { orientationPolicy: 'camera-facing', lightingMode: 'captured', outputGain: 1.5 },
+  });
+  const heldEmbeddedPrepare = heldBankExperiment.prepareHeldAnimationFrameBank('held-animation-embedded-motion-proof', 8);
+  const heldBankBeforeSelection = heldBankExperiment.readout().frameBanks
+    .find((bank) => bank.id === 'held-animation-embedded-motion-proof')!;
+  // Capture first, then remove every canonical drawable in this proof surface.
+  // The bounded canvas below contains only the held enhancement presentation.
+  heldBankSurface.applyFrame({
+    schemaVersion: 1,
+    ops: [100, 104, 105, 106, 108, 109].map((handle) => ({
+      op: 'update' as const, handle: renderHandle(handle), transform: null, material: null, visible: false, metadata: null,
+    })),
+  });
+  heldBankSurface.setCameraPose({ position: [0, 0, 2], pitchDegrees: 0, yawDegrees: 0 });
+  const canonicalPlaybackAfterPreparation = surface.animatedMeshPlayback(renderHandle(105));
+  // Every held-bank proof render has a zero delta and an isolated canvas, so
+  // only the selected resident held presentation can affect these pixels.
+  const heldSubmission0 = heldBankSurface.renderOnce(0);
+  const heldChecksum0 = canvasPixelChecksum(heldBankCanvas);
+  const heldSelect = heldBankExperiment.selectHeldAnimationFrameBank('held-animation-embedded-motion-proof', 1, 0);
+  const heldSubmission1 = heldBankSurface.renderOnce(0);
+  const heldChecksum1 = canvasPixelChecksum(heldBankCanvas);
+  heldBankExperiment.selectHeldAnimationFrameBank('held-animation-embedded-motion-proof', 2, 0);
+  const heldSubmission2 = heldBankSurface.renderOnce(0);
+  const heldChecksum2 = canvasPixelChecksum(heldBankCanvas);
+  heldBankExperiment.selectHeldAnimationFrameBank('held-animation-embedded-motion-proof', 2, 0);
+  const heldBankAfterSelection = heldBankExperiment.readout().frameBanks
+    .find((bank) => bank.id === 'held-animation-embedded-motion-proof')!;
+  heldBankExperiment.destroyHeldAnimationFrameBank('held-animation-embedded-motion-proof');
+  heldBankExperiment.dispose();
+  heldBankSurface.dispose();
+  heldBankCanvas.remove();
+  heldAnimationExperiment.dispose();
   telemetry.sampleSurface({
     sourceTick: 1,
     timing: autoSubmission,
@@ -939,6 +1052,25 @@ async function main(): Promise<void> {
         && surface.animatedMeshPlayback(renderHandle(105)).mixerTimeSeconds
           !== surface.animatedMeshPlayback(renderHandle(111)).mixerTimeSeconds,
     },
+    heldAnimationFrameBank: {
+      externalBeginApplied: heldExternalBegin.applied,
+      externalPrepareApplied: heldExternalPrepare.applied,
+      externalOrigin: heldExternalBank.source.origin,
+      embeddedBeginApplied: heldEmbeddedBegin.applied,
+      embeddedPrepareApplied: heldEmbeddedPrepare.applied,
+      selectApplied: heldSelect.applied,
+      embeddedOrigin: heldBankAfterSelection.source.origin,
+      capturedFrameCount: heldBankAfterSelection.capturedFrameCount,
+      switchCount: heldBankAfterSelection.switchCount,
+      cacheHitCount: heldBankAfterSelection.cacheHitCount,
+      captureCountBeforeSelection: heldBankBeforeSelection.captureCount,
+      captureCountAfterSelection: heldBankAfterSelection.captureCount,
+      embeddedPoseChecksums: [heldChecksum0, heldChecksum1, heldChecksum2],
+      heldPresentationDrawCalls: [heldSubmission0.statistics.drawCallCount.value, heldSubmission1.statistics.drawCallCount.value, heldSubmission2.statistics.drawCallCount.value],
+      canonicalPlaybackPreserved: canonicalPlaybackBeforeHeldBank?.mixerTimeSeconds
+        === canonicalPlaybackAfterPreparation?.mixerTimeSeconds
+        && canonicalPlaybackBeforeHeldBank?.actionTimeSeconds === canonicalPlaybackAfterPreparation?.actionTimeSeconds,
+    },
     audioApplied: presentation.domains.find((domain) => domain.domain === 'audio')?.applied ?? 0,
     audioResumeDiagnostics: null,
     automaticSubmissionPacing,
@@ -1075,6 +1207,18 @@ async function main(): Promise<void> {
     await audio.dispose();
     URL.revokeObjectURL(spriteUrl);
   };
+}
+
+function canvasPixelChecksum(canvas: HTMLCanvasElement): number {
+  const context = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
+  if (context === null) return 0;
+  const pixels = new Uint8Array(context.drawingBufferWidth * context.drawingBufferHeight * 4);
+  context.readPixels(0, 0, context.drawingBufferWidth, context.drawingBufferHeight, context.RGBA, context.UNSIGNED_BYTE, pixels);
+  let checksum = 0;
+  for (let index = 0; index < pixels.length; index += 1) {
+    checksum = (checksum + pixels[index]! * ((index % 251) + 1)) % 2_147_483_647;
+  }
+  return checksum;
 }
 
 async function measureParticlePerformance(
