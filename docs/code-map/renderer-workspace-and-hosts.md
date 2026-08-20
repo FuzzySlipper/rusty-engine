@@ -45,7 +45,8 @@ compiled artifact, and Rust webview host/resource lifecycle.
     comparing decoded hierarchy/rest facts and bounded channel/root policy. Pack joint lists may be
     a rooted clip-relevant subset while the target fingerprint covers the full skinned target; decoded
     Three binding identities exclude reserved binding characters;
-    effective clips retain an embedded-or-pack origin without exposing Three.
+    effective clips retain an embedded-or-pack origin without exposing Three, and their canonical
+    ordering is locale independent.
   - `voxel-surface-material.ts` owns the Three shader specialization for
     Euclidean whole-texture repeat and half-texel-safe atlas-region sampling;
     it observes renderer-neutral material and texture facts and never remeshes.

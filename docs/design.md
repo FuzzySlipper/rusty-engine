@@ -1072,7 +1072,8 @@ The declared pack joint list may be the rooted subset relevant to its channels; 
 fingerprint nevertheless covers the complete coherent skinned target. Source local rest facts are
 compared for that declared subset, and source inverse binds are compared when the clip pack carries
 them. Source clip names bind exactly and case-sensitively; effective clip IDs remain the caller-facing
-names.
+names. Rig-fingerprint inputs and effective clip readouts use explicit locale-independent code-unit
+ordering so the same decoded identities produce the same digest and enumeration on every host.
 The mounted `RendererSurface` also owns deterministic animation inspection. A caller can stop its
 automatic loop, pose one retained instance at a bounded normalized clip time through that same
 mixer, submit the fixed frame, and encode individual PNGs, a contact sheet, and a revision-bound
