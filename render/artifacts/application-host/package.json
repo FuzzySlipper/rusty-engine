@@ -11,6 +11,7 @@
     }
   },
   "files": [
+    "application-content.d.ts",
     "application-host.d.ts",
     "index.d.ts",
     "index.js"

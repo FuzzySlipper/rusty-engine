@@ -13,4 +13,11 @@ if ! diff -ru "$ARTIFACT_COPY" "$ARTIFACT"; then
   exit 1
 fi
 
+pnpm --dir "$REPO_ROOT/render" exec tsc \
+  --noEmit \
+  --module NodeNext \
+  --moduleResolution NodeNext \
+  --target ES2022 \
+  "$ARTIFACT/index.d.ts"
+
 echo "application-host artifact freshness passed"

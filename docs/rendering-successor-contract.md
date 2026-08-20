@@ -73,8 +73,12 @@ Resources enter through explicit frame descriptions and caller-owned byte/resolv
 arbitrary URL fetching, same-origin behavior, HTTP routing, and browser storage are not part of the
 render contract. Chromium is the current real-host acceptance substrate. It proves this adapter,
 including behavior that cannot be established headlessly, but does not make Rusty Engine a
-network-delivered web-game platform. Electron/Tauri webviews may reuse the current host layer, and a
-future backend may reuse the renderer-neutral border without preserving Three internals.
+network-delivered web-game platform. Rich-DOM browser, Tauri, and Electron products use the single
+bundled application host, while Rust-only products without a product DOM use the fixed Rust webview
+adapter. Process topology and transport remain downstream shell choices, and a future backend may
+reuse the renderer-neutral border without preserving Three internals. The current
+in-process-versus-sidecar default is in the
+[downstream renderer and Studio boundary](topics/development/downstream-renderer-and-studio.md).
 
 The repository-wide placement and validation rules are in Den ADR
 `rusty-engine/host-platform-and-browser-validation-boundary`.

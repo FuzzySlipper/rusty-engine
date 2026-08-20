@@ -206,10 +206,43 @@ focused complete-frame operation when the immutable resource catalog is
 unchanged. These operations prevent reconnects and static-resource revisions
 from replaying `create` operations into partial retained state.
 
-The same bootstrap runs in an ordinary web application, Tauri, or Electron.
-Only the downstream-owned typed Rust transport adapter varies: HTTP/WebSocket,
-Tauri command/event wiring, or another host-neutral carrier can deliver the
-same Rust frame and semantic intents without changing DOM composition.
+## Product service and shell topology
+
+The same application-host bootstrap runs in an ordinary web application,
+Tauri, or Electron. A downstream game should keep one named,
+transport-neutral Rust product service behind it. That service owns project
+admission, live authoritative state, fixed-step scheduling, session
+generations, typed semantic commands and consequences, saves, facts, and
+renderer-neutral projection. It is a downstream owner, not an Engine runtime
+facade or universal protocol.
+
+Thin delivery adapters translate into that service:
+
+- a development browser adapter may serve immutable shell/resources and use a
+  bounded typed HTTP/WebSocket session; and
+- a packaged Tauri adapter may host the same shell in one WebView and use
+  typed in-process IPC.
+
+For a product without an independently justified process-isolation
+requirement, the ordinary Tauri topology is one in-process Rust product
+service and one WebView. Do not add a loopback sidecar merely to reuse the
+development browser transport. A sidecar remains a downstream product choice
+when isolation, independent lifecycle, or another measured requirement
+justifies it. Engine does not own either product's Tauri commands, process
+policy, resource root, save locations, or shutdown orchestration.
+
+Package the exact admitted runtime content closure rather than reaching into
+an Engine or authoring checkout at runtime. Keep proof layers distinct:
+
+1. deterministic service and delivery-adapter tests;
+2. browser-visible behavior for the development browser adapter;
+3. source/contract and release-package checks for the selected desktop host;
+4. headed WebView evidence for the real packaged product, including the one
+   Engine-owned canvas, non-empty Rust-authoritative content, packaged
+   resources, typed session state, and clean shutdown.
+
+Browser evidence does not prove packaged-host lifecycle, and build or mocked
+IPC evidence does not prove headed WebView behavior.
 
 The interaction mode controls the Engine-owned renderer/input surface, while
 `context.ui.allowsGameplayInput(event)` synchronously classifies an original

@@ -773,8 +773,13 @@ prepares the candidate surface and resources before atomic publication; failed i
 replacement cleans up the candidate without exposing partial renderer state. A trusted downstream UI
 framework mounts into that root but never receives the canvas, backend, private bridge, or package
 topology. Browser, Tauri, and Electron products reuse the exact composition; only their typed Rust
-transport differs. Trusted downstream source is not treated as hostile plugin content, so this
-boundary adds no sanitizer or sandbox framework.
+transport differs. A development browser adapter may use bounded HTTP/WebSocket transport. A
+packaged Tauri product without an independently justified isolation requirement ordinarily keeps
+one named Rust product service in process with one WebView and typed IPC. A loopback sidecar is a
+downstream product choice only when isolation, an independent lifecycle, or another measured need
+justifies it; neither topology changes the application-host or gameplay-authority boundary. Trusted
+downstream source is not treated as hostile plugin content, so this boundary adds no sanitizer or
+sandbox framework.
 
 The surface lighting contract is versioned and observational. Omitted settings retain the compatible
 two-light neutral rig independently in the world and viewmodel scenes; a consumer may disable either
@@ -825,10 +830,12 @@ complete Rust minimap projection do not change. The accessible detailed minimap 
 consumer of Rust-owned discovery and visibility facts.
 
 Those exact TypeScript-package consumers remain historical certification evidence. Ordinary new
-games instead depend on the complete `rusty-engine` Rust facade and reach rendering only through
-the Rust-owned webview adapter. Engine compiles and embeds the private TypeScript/Three closure;
-downstream neither selects renderer packages nor knows their topology. Operational commands, CI
-ownership, and explicit limitations are recorded in
+games depend on the complete `rusty-engine` Rust facade. Native/Rust-only products without a rich
+product DOM reach rendering through the Rust-owned webview adapter; browser, Tauri, or Electron
+products that need rich DOM use the single bundled application host described above. Engine
+compiles or bundles the private TypeScript/Three closure behind either public boundary; downstream
+neither selects renderer packages nor knows their topology. Operational commands, CI ownership,
+and explicit limitations are recorded in
 [rendering-operations.md](rendering-operations.md). The current downstream integration and
 Engine-hosted Studio posture is centralized in
 [downstream renderer and Studio boundary](topics/development/downstream-renderer-and-studio.md).

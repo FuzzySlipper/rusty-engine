@@ -5,6 +5,11 @@ The `rusty-studio.service` user unit serves one generic Rusty Engine Studio inde
 consumer certification path. Root-local `.rusty-studio.json` files continue to select project-owned
 adapters; the service does not acquire project or gameplay meaning.
 
+This loopback service is Studio-specific authoring infrastructure. It does not prescribe a
+downstream game's browser/Tauri process topology or require a packaged product sidecar. See the
+[downstream renderer and Studio boundary](development/downstream-renderer-and-studio.md) for the
+ordinary application-shell distinction.
+
 Use this as the normal interactive Studio entrypoint on a machine where it is installed. If Studio
 is used regularly on another machine, installing a local persistent service is the recommended
 setup. Downstream repositories still contain only their project data, root-local bootstrap, and
