@@ -4,7 +4,11 @@ export type GhostPlateAnchorPolicy = 'bounds-center' | 'bounds-normalized';
 export type GhostPlateMapping = 'plate-locked' | 'projective-surface';
 export type GhostPlateShellMode = 'whole-mesh' | 'strict-source' | 'repaired-source';
 export type GhostPlateSectorCount = 1 | 4 | 8 | 16;
-export type GhostPlateTransitionMode = 'hard-cut' | 'ordered-dither' | 'noise-dissolve';
+export type GhostPlateTransitionMode =
+  | 'hard-cut'
+  | 'ordered-dither'
+  | 'noise-dissolve'
+  | 'edge-echo';
 
 export interface GhostPlateConfig {
   readonly depthRetention: number;
@@ -119,6 +123,29 @@ export function evaluateGhostPlateTransition(
   });
 }
 
+export interface GhostPlateEdgeEchoBand {
+  readonly center: number;
+  readonly halfWidth: number;
+}
+
+/** CPU reference for the narrow trailing-side band retained by edge-echo transitions. */
+export function ghostPlateEdgeEchoBand(
+  progress: number,
+  direction: -1 | 1,
+): GhostPlateEdgeEchoBand {
+  bounded(progress, 0, 1, 'ghost transition progress');
+  if (direction !== -1 && direction !== 1) {
+    throw new RangeError('ghost transition direction must be -1 or 1');
+  }
+  const center = direction > 0
+    ? THREE.MathUtils.lerp(0.86, 1.12, progress)
+    : THREE.MathUtils.lerp(0.14, -0.12, progress);
+  return Object.freeze({
+    center,
+    halfWidth: THREE.MathUtils.lerp(0.11, 0.03, progress),
+  });
+}
+
 /** CPU reference for the bounded source-shell admission used by deterministic tests. */
 export function evaluateGhostPlateShell(
   sourceDepth: number,
@@ -220,6 +247,7 @@ interface GhostUniforms {
   readonly transitionRole: THREE.IUniform<number>;
   readonly transitionProgress: THREE.IUniform<number>;
   readonly transitionPattern: THREE.IUniform<number>;
+  readonly transitionDirection: THREE.IUniform<number>;
 }
 
 /** Owns one frozen cloned appearance hierarchy and its ghost-only materials. */
@@ -305,6 +333,7 @@ export class GhostPlatePresentation {
       transitionRole: { value: 0 },
       transitionProgress: { value: 1 },
       transitionPattern: { value: transitionPatternUniform(this.#config.transitionMode) },
+      transitionDirection: { value: 1 },
     };
 
     validateAppearanceHierarchy(this.#appearanceRoot);
@@ -334,12 +363,17 @@ export class GhostPlatePresentation {
     visible: boolean,
     role: 'stable' | 'previous' | 'current' = 'stable',
     progress = 1,
+    direction: -1 | 1 = 1,
   ): void {
     this.#assertLive();
     bounded(progress, 0, 1, 'ghost transition progress');
+    if (direction !== -1 && direction !== 1) {
+      throw new RangeError('ghost transition direction must be -1 or 1');
+    }
     this.object.visible = visible;
     this.#uniforms.transitionRole.value = role === 'previous' ? -1 : role === 'current' ? 1 : 0;
     this.#uniforms.transitionProgress.value = progress;
+    this.#uniforms.transitionDirection.value = direction;
     for (const material of this.#materials) {
       const depthWrite = role === 'stable';
       if (material.depthWrite !== depthWrite) {
@@ -456,7 +490,7 @@ export class GhostPlatePresentation {
     material.clipIntersection = source.clipIntersection;
     material.clipShadows = source.clipShadows;
     material.onBeforeCompile = (shader) => patchShader(shader, this.#uniforms);
-    material.customProgramCacheKey = () => 'rusty-engine-ghost-plate-v3-dissolve';
+    material.customProgramCacheKey = () => 'rusty-engine-ghost-plate-v4-edge-echo';
     this.#materials.push(material);
     return material;
   }
@@ -488,6 +522,7 @@ export class GhostPlateDirectionalPresentation {
   #previousSector: number | null = null;
   #transitionStartedMilliseconds: number | null = null;
   #transitionProgress = 1;
+  #transitionDirection: -1 | 1 = 1;
   #localAzimuthDegrees: number | null = null;
   #fallbackReason: GhostPlateReadout['fallbackReason'] = null;
   #invalidationReason: string | null = null;
@@ -620,8 +655,14 @@ export class GhostPlateDirectionalPresentation {
     this.#previousSector = oldSector;
     this.#transitionStartedMilliseconds = now;
     this.#transitionProgress = 0;
-    this.#plates[oldSector]!.setDepictionState(true, 'previous', 0);
-    this.#plates[nextSector]!.setDepictionState(true, 'current', 0);
+    const currentCenter = this.#baseAzimuthDegrees
+      + oldSector * 360 / this.#config.sectorCount;
+    this.#transitionDirection = signedAngularDifference(
+      this.#localAzimuthDegrees ?? currentCenter,
+      currentCenter,
+    ) >= 0 ? 1 : -1;
+    this.#plates[oldSector]!.setDepictionState(true, 'previous', 0, this.#transitionDirection);
+    this.#plates[nextSector]!.setDepictionState(true, 'current', 0, this.#transitionDirection);
   }
 
   #advanceTransition(now: number): void {
@@ -637,8 +678,18 @@ export class GhostPlateDirectionalPresentation {
       this.#settle(this.#selectedSector);
       return;
     }
-    this.#plates[this.#previousSector]!.setDepictionState(true, 'previous', progress);
-    this.#plates[this.#selectedSector]!.setDepictionState(true, 'current', progress);
+    this.#plates[this.#previousSector]!.setDepictionState(
+      true,
+      'previous',
+      progress,
+      this.#transitionDirection,
+    );
+    this.#plates[this.#selectedSector]!.setDepictionState(
+      true,
+      'current',
+      progress,
+      this.#transitionDirection,
+    );
   }
 
   #settle(sector: number): void {
@@ -765,6 +816,7 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
     uniform float transitionRole;
     uniform float transitionProgress;
     uniform float transitionPattern;
+    uniform float transitionDirection;
     varying vec3 ghostProjectiveUv;
     varying vec3 ghostPlateLockedUv;
     varying float ghostOriginalDepth;
@@ -813,6 +865,18 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
       float grain = ghostNoiseHash(texel + vec2(43.0, 71.0));
       return min(broad * 0.55 + detail * 0.30 + grain * 0.15, 0.999999);
     }
+
+    bool ghostEdgeEchoOwns(vec2 uv) {
+      vec2 texel = floor(uv / textureTexelSize);
+      float center = transitionDirection > 0.0
+        ? mix(0.86, 1.12, transitionProgress)
+        : mix(0.14, -0.12, transitionProgress);
+      float halfWidth = mix(0.11, 0.03, transitionProgress);
+      float seamNoise = (
+        ghostValueNoise(vec2(texel.y / 9.0, 31.0)) - 0.5
+      ) * 0.04;
+      return abs(uv.x - center - seamNoise) <= halfWidth;
+    }
   `;
   shader.fragmentShader = shader.fragmentShader
     .replace('void main() {', `${fragmentDeclarations}\nvoid main() {`)
@@ -824,11 +888,17 @@ function patchShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms:
       float ghostCoverage = texture2D(coverageTexture, ghostUv).r;
       vec4 ghostPlateColor = texture2D(map, ghostUv);
       if (ghostCoverage < 0.5 || ghostPlateColor.a < 0.01) discard;
-      float ghostTransitionThreshold = transitionPattern < 0.5
-        ? ghostOrderedThreshold(ghostUv)
-        : ghostDissolveThreshold(ghostUv);
-      if (transitionRole < -0.5 && ghostTransitionThreshold < transitionProgress) discard;
-      if (transitionRole > 0.5 && ghostTransitionThreshold >= transitionProgress) discard;
+      bool ghostPreviousOwns;
+      if (transitionPattern > 1.5) {
+        ghostPreviousOwns = ghostEdgeEchoOwns(ghostUv);
+      } else {
+        float ghostTransitionThreshold = transitionPattern < 0.5
+          ? ghostOrderedThreshold(ghostUv)
+          : ghostDissolveThreshold(ghostUv);
+        ghostPreviousOwns = ghostTransitionThreshold >= transitionProgress;
+      }
+      if (transitionRole < -0.5 && !ghostPreviousOwns) discard;
+      if (transitionRole > 0.5 && ghostPreviousOwns) discard;
       if (shellMode > 0.5) {
         bool ghostShellAccepted = ghostShellSampleAgrees(ghostUv);
         if (!ghostShellAccepted && shellMode > 1.5) {
@@ -917,7 +987,8 @@ function validatedConfig(config: GhostPlateConfig): GhostPlateConfig {
   bounded(config.sectorHysteresisDegrees, 0, 22.5, 'ghost sector hysteresis');
   if (config.transitionMode !== 'hard-cut'
     && config.transitionMode !== 'ordered-dither'
-    && config.transitionMode !== 'noise-dissolve') {
+    && config.transitionMode !== 'noise-dissolve'
+    && config.transitionMode !== 'edge-echo') {
     throw new TypeError(`unsupported ghost transition mode ${String(config.transitionMode)}`);
   }
   bounded(config.transitionDurationMilliseconds, 0, 5_000, 'ghost transition duration');
@@ -939,7 +1010,7 @@ function shellModeUniform(mode: GhostPlateShellMode): number {
 }
 
 function transitionPatternUniform(mode: GhostPlateTransitionMode): number {
-  return mode === 'noise-dissolve' ? 1 : 0;
+  return mode === 'edge-echo' ? 2 : mode === 'noise-dissolve' ? 1 : 0;
 }
 
 function finiteMatrix(matrix: THREE.Matrix4, name: string): void {

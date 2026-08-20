@@ -7,6 +7,7 @@ import {
   GhostPlatePresentation,
   evaluateGhostPlateShell,
   evaluateGhostPlateTransition,
+  ghostPlateEdgeEchoBand,
   selectGhostPlateSector,
   warpGhostCameraPoint,
 } from './voxel-sprite-ghost-plate.js';
@@ -22,6 +23,21 @@ void test('transition partition admits exactly one depiction at every bounded th
   }
   assert.deepEqual(evaluateGhostPlateTransition(0.25, 0), { previous: true, current: false });
   assert.deepEqual(evaluateGhostPlateTransition(0.25, 1), { previous: false, current: true });
+});
+
+void test('edge echo is a narrow mirrored band that travels fully off the plate', () => {
+  const positiveStart = ghostPlateEdgeEchoBand(0, 1);
+  const negativeStart = ghostPlateEdgeEchoBand(0, -1);
+  assert.deepEqual(positiveStart, { center: 0.86, halfWidth: 0.11 });
+  assert.deepEqual(negativeStart, { center: 0.14, halfWidth: 0.11 });
+  assert.ok(Math.abs(positiveStart.center + negativeStart.center - 1) < 1e-12);
+  assert.ok(positiveStart.halfWidth * 2 < 0.25, 'echo affects less than one quarter of the plate');
+
+  const positiveEnd = ghostPlateEdgeEchoBand(1, 1);
+  const negativeEnd = ghostPlateEdgeEchoBand(1, -1);
+  assert.ok(positiveEnd.center - positiveEnd.halfWidth > 1);
+  assert.ok(negativeEnd.center + negativeEnd.halfWidth < 0);
+  assert.throws(() => ghostPlateEdgeEchoBand(0.5, 0 as -1), /direction/);
 });
 
 void test('sector selection holds through the boundary hysteresis then chooses the nearest sector', () => {
@@ -157,9 +173,11 @@ void test('presentation owns ghost materials but borrows geometry and capture te
     plateMapping: 'projective-surface',
     shellMode: 'repaired-source',
     shellDepthEpsilon: 0.2,
+    transitionMode: 'edge-echo',
   });
   assert.equal(presentation.readout().depthRetention, 1);
   assert.equal(presentation.readout().shellMode, 'repaired-source');
+  assert.equal(presentation.readout().transitionMode, 'hard-cut');
   assert.equal(presentation.readout().borrowedTextureCount, 3);
   assert.equal(presentation.readout().rejectedFragmentRatio.status, 'unavailable');
   presentation.dispose();

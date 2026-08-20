@@ -20637,7 +20637,8 @@ var ly = Object.freeze([
 			shellDepthQuantizationHalfStep: { value: this.#d * .5 },
 			transitionRole: { value: 0 },
 			transitionProgress: { value: 1 },
-			transitionPattern: { value: Ty(this.#m.transitionMode) }
+			transitionPattern: { value: Ty(this.#m.transitionMode) },
+			transitionDirection: { value: 1 }
 		}, vy(this.#e), this.#_(e.colorTexture), this.#g === 0) throw RangeError("ghost appearance hierarchy has no mesh");
 		this.object.name = "voxel-sprite-ghost-plate", this.object.position.set(...e.transform.position), this.object.add(this.#e), this.prepare(new Il()), this.#p = null;
 	}
@@ -20647,8 +20648,9 @@ var ly = Object.freeze([
 			...e
 		}), this.#o.anchorDepth.value = this.#y(), this.#o.depthRetention.value = this.#m.depthRetention, this.#o.plateMapping.value = this.#m.plateMapping === "plate-locked" ? 0 : 1, this.#o.shellMode.value = wy(this.#m.shellMode), this.#o.shellDepthEpsilon.value = this.#m.shellDepthEpsilon, this.#o.transitionPattern.value = Ty(this.#m.transitionMode), this.readout();
 	}
-	setDepictionState(e, t = "stable", n = 1) {
-		this.#b(), ky(n, 0, 1, "ghost transition progress"), this.object.visible = e, this.#o.transitionRole.value = t === "previous" ? -1 : +(t === "current"), this.#o.transitionProgress.value = n;
+	setDepictionState(e, t = "stable", n = 1, r = 1) {
+		if (this.#b(), ky(n, 0, 1, "ghost transition progress"), r !== -1 && r !== 1) throw RangeError("ghost transition direction must be -1 or 1");
+		this.object.visible = e, this.#o.transitionRole.value = t === "previous" ? -1 : +(t === "current"), this.#o.transitionProgress.value = n, this.#o.transitionDirection.value = r;
 		for (let e of this.#r) {
 			let n = t === "stable";
 			e.depthWrite !== n && (e.depthWrite = n, e.needsUpdate = !0);
@@ -20741,7 +20743,7 @@ var ly = Object.freeze([
 			fog: !0,
 			toneMapped: t.toneMapped
 		});
-		return n.clippingPlanes = t.clippingPlanes?.map((e) => e.clone()) ?? null, n.clipIntersection = t.clipIntersection, n.clipShadows = t.clipShadows, n.onBeforeCompile = (e) => yy(e, this.#o), n.customProgramCacheKey = () => "rusty-engine-ghost-plate-v3-dissolve", this.#r.push(n), n;
+		return n.clippingPlanes = t.clippingPlanes?.map((e) => e.clone()) ?? null, n.clipIntersection = t.clipIntersection, n.clipShadows = t.clipShadows, n.onBeforeCompile = (e) => yy(e, this.#o), n.customProgramCacheKey = () => "rusty-engine-ghost-plate-v4-edge-echo", this.#r.push(n), n;
 	}
 	#y() {
 		return this.#m.anchorPolicy === "bounds-center" ? (this.#l + this.#u) * .5 : pi.lerp(this.#l, this.#u, this.#m.anchorValue);
@@ -20759,10 +20761,11 @@ var ly = Object.freeze([
 	#a = null;
 	#o = null;
 	#s = 1;
-	#c = null;
+	#c = 1;
 	#l = null;
 	#u = null;
-	#d = !1;
+	#d = null;
+	#f = !1;
 	constructor(e) {
 		if (this.#r = Sy(e.config), e.plates.length !== this.#r.sectorCount) throw RangeError("ghost plate bank must match the configured sector count");
 		if (!Number.isFinite(e.baseAzimuthDegrees)) throw TypeError("ghost base azimuth must be finite");
@@ -20770,7 +20773,7 @@ var ly = Object.freeze([
 		for (let [e, t] of this.#e.entries()) this.object.add(t.object), t.setDepictionState(e === 0);
 	}
 	configure(e) {
-		this.#h();
+		this.#g();
 		let t = Sy({
 			...this.#r,
 			...e
@@ -20778,79 +20781,81 @@ var ly = Object.freeze([
 		if (t.sectorCount !== this.#e.length) throw RangeError("changing ghost sector count requires an atomic source replacement");
 		this.#r = t;
 		for (let e of this.#e) e.configure(t);
-		return t.transitionMode === "hard-cut" && this.#a !== null && this.#m(this.#i), this.readout();
+		return t.transitionMode === "hard-cut" && this.#a !== null && this.#h(this.#i), this.readout();
 	}
 	prepare(e, t = _y()) {
-		if (!this.#d) try {
+		if (!this.#f) try {
 			for (let t of this.#e) t.prepare(e);
-			this.#c = my(e, this.#e[this.#i].object);
-			let n = py(this.#c, this.#t, this.#r.sectorCount, this.#i, this.#r.sectorHysteresisDegrees);
-			n !== this.#i && this.#f(n, t), this.#p(t);
+			this.#l = my(e, this.#e[this.#i].object);
+			let n = py(this.#l, this.#t, this.#r.sectorCount, this.#i, this.#r.sectorHysteresisDegrees);
+			n !== this.#i && this.#p(n, t), this.#m(t);
 		} catch (e) {
-			this.#l = "transition-failed", this.#u = e instanceof Error ? e.message : String(e), this.#m(this.#i);
+			this.#u = "transition-failed", this.#d = e instanceof Error ? e.message : String(e), this.#h(this.#i);
 		}
 	}
 	readout() {
 		let e = this.#e[this.#i].readout(), t = this.#a === null ? null : this.#e[this.#a].readout();
 		return Object.freeze({
 			...e,
-			fallbackActive: this.#l !== null,
-			fallbackReason: this.#l,
-			angularOffsetDegrees: this.#c === null ? null : Math.abs(hy(this.#c, this.#t + this.#i * 360 / this.#r.sectorCount)),
+			fallbackActive: this.#u !== null,
+			fallbackReason: this.#u,
+			angularOffsetDegrees: this.#l === null ? null : Math.abs(hy(this.#l, this.#t + this.#i * 360 / this.#r.sectorCount)),
 			sectorCount: this.#r.sectorCount,
 			selectedSector: this.#i,
 			pendingSector: this.#a === null ? null : this.#i,
 			previousSector: this.#a,
-			localAzimuthDegrees: this.#c,
+			localAzimuthDegrees: this.#l,
 			sectorHysteresisDegrees: this.#r.sectorHysteresisDegrees,
 			transitionMode: this.#r.transitionMode,
 			transitionProgress: this.#s,
 			transitionDurationMilliseconds: this.#r.transitionDurationMilliseconds,
-			residentSectorCount: this.#d ? 0 : this.#e.length,
-			currentResourceResident: !this.#d,
-			previousResourceResident: t !== null && !this.#d,
+			residentSectorCount: this.#f ? 0 : this.#e.length,
+			currentResourceResident: !this.#f,
+			previousResourceResident: t !== null && !this.#f,
 			preparationCpuMilliseconds: this.#n,
-			invalidationReason: this.#u,
+			invalidationReason: this.#d,
 			expectedDrawCalls: e.expectedDrawCalls + (t?.expectedDrawCalls ?? 0),
 			meshCount: this.#e.reduce((e, t) => e + t.readout().meshCount, 0),
 			materialResourceCount: this.#e.reduce((e, t) => e + t.readout().materialResourceCount, 0),
 			borrowedTextureCount: this.#e.reduce((e, t) => e + t.readout().borrowedTextureCount, 0),
-			disposed: this.#d,
+			disposed: this.#f,
 			limitations: Object.freeze(e.limitations.filter((e) => e !== "single-capture-view"))
 		});
 	}
 	advancing() {
-		return !this.#d && this.#a !== null;
+		return !this.#f && this.#a !== null;
 	}
 	dispose() {
-		if (!this.#d) {
+		if (!this.#f) {
 			for (let e of this.#e) this.object.remove(e.object), e.dispose();
-			this.#d = !0, this.#a = null;
+			this.#f = !0, this.#a = null;
 		}
 	}
-	#f(e, t) {
+	#p(e, t) {
 		if (this.#r.transitionMode === "hard-cut" || this.#r.transitionDurationMilliseconds === 0) {
-			this.#i = e, this.#m(e);
+			this.#i = e, this.#h(e);
 			return;
 		}
 		let n = this.#i;
-		this.#m(n), this.#i = e, this.#a = n, this.#o = t, this.#s = 0, this.#e[n].setDepictionState(!0, "previous", 0), this.#e[e].setDepictionState(!0, "current", 0);
+		this.#h(n), this.#i = e, this.#a = n, this.#o = t, this.#s = 0;
+		let r = this.#t + n * 360 / this.#r.sectorCount;
+		this.#c = hy(this.#l ?? r, r) >= 0 ? 1 : -1, this.#e[n].setDepictionState(!0, "previous", 0, this.#c), this.#e[e].setDepictionState(!0, "current", 0, this.#c);
 	}
-	#p(e) {
+	#m(e) {
 		if (this.#a === null || this.#o === null) return;
 		let t = this.#r.transitionDurationMilliseconds, n = t === 0 ? 1 : pi.clamp((e - this.#o) / t, 0, 1);
 		if (this.#s = n, n >= 1) {
-			this.#m(this.#i);
+			this.#h(this.#i);
 			return;
 		}
-		this.#e[this.#a].setDepictionState(!0, "previous", n), this.#e[this.#i].setDepictionState(!0, "current", n);
+		this.#e[this.#a].setDepictionState(!0, "previous", n, this.#c), this.#e[this.#i].setDepictionState(!0, "current", n, this.#c);
 	}
-	#m(e) {
+	#h(e) {
 		for (let [t, n] of this.#e.entries()) n.setDepictionState(t === e, "stable", 1);
 		this.#a = null, this.#o = null, this.#s = 1;
 	}
-	#h() {
-		if (this.#d) throw Error("directional ghost plate presentation is disposed");
+	#g() {
+		if (this.#f) throw Error("directional ghost plate presentation is disposed");
 	}
 };
 function py(e, t, n, r, i) {
@@ -20911,7 +20916,7 @@ function yy(e, t) {
       ghostProjectiveUv = vec3(ghostSourceClip.xy * 0.5 + ghostSourceClip.w * 0.5, ghostSourceClip.w);
       ghostPlateLockedUv = vec3(ghostSourceUv * gl_Position.w, gl_Position.w);
       ghostOriginalDepth = ghostDepth;
-    `), e.fragmentShader = e.fragmentShader.replace("void main() {", "\n    uniform sampler2D coverageTexture;\n    uniform sampler2D depthTexture;\n    uniform float plateMapping;\n    uniform vec2 textureTexelSize;\n    uniform float captureNear;\n    uniform float captureDepthRange;\n    uniform float shellMode;\n    uniform float shellDepthEpsilon;\n    uniform float shellDepthQuantizationHalfStep;\n    uniform float transitionRole;\n    uniform float transitionProgress;\n    uniform float transitionPattern;\n    varying vec3 ghostProjectiveUv;\n    varying vec3 ghostPlateLockedUv;\n    varying float ghostOriginalDepth;\n\n    bool ghostShellSampleAgrees(vec2 uv) {\n      if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return false;\n      float coverage = texture2D(coverageTexture, uv).r;\n      if (coverage < 0.5) return false;\n      float sampledDepth = captureNear + texture2D(depthTexture, uv).r * captureDepthRange;\n      return abs(ghostOriginalDepth - sampledDepth)\n        <= shellDepthEpsilon + shellDepthQuantizationHalfStep;\n    }\n\n    float ghostOrderedThreshold(vec2 uv) {\n      vec2 texel = floor(uv / textureTexelSize);\n      vec2 cell = mod(texel, 4.0);\n      float x = cell.x;\n      float y = cell.y;\n      float rank = mod(x, 2.0) * 2.0 + mod(y, 2.0);\n      rank += mod(floor(x / 2.0), 2.0) * 8.0;\n      rank += mod(floor(y / 2.0), 2.0) * 4.0;\n      return (rank + 0.5) / 16.0;\n    }\n\n    float ghostNoiseHash(vec2 cell) {\n      return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453123);\n    }\n\n    float ghostValueNoise(vec2 point) {\n      vec2 cell = floor(point);\n      vec2 local = fract(point);\n      local = local * local * (3.0 - 2.0 * local);\n      float bottom = mix(ghostNoiseHash(cell), ghostNoiseHash(cell + vec2(1.0, 0.0)), local.x);\n      float top = mix(\n        ghostNoiseHash(cell + vec2(0.0, 1.0)),\n        ghostNoiseHash(cell + vec2(1.0, 1.0)),\n        local.x\n      );\n      return mix(bottom, top, local.y);\n    }\n\n    float ghostDissolveThreshold(vec2 uv) {\n      vec2 texel = floor(uv / textureTexelSize);\n      float broad = ghostValueNoise(texel / 13.0);\n      float detail = ghostValueNoise(texel / 4.0 + vec2(19.0, 7.0));\n      float grain = ghostNoiseHash(texel + vec2(43.0, 71.0));\n      return min(broad * 0.55 + detail * 0.30 + grain * 0.15, 0.999999);\n    }\n  \nvoid main() {").replace("#include <map_fragment>", "\n      vec2 ghostUv = plateMapping < 0.5\n        ? ghostPlateLockedUv.xy / ghostPlateLockedUv.z\n        : ghostProjectiveUv.xy / ghostProjectiveUv.z;\n      if (ghostUv.x < 0.0 || ghostUv.x > 1.0 || ghostUv.y < 0.0 || ghostUv.y > 1.0) discard;\n      float ghostCoverage = texture2D(coverageTexture, ghostUv).r;\n      vec4 ghostPlateColor = texture2D(map, ghostUv);\n      if (ghostCoverage < 0.5 || ghostPlateColor.a < 0.01) discard;\n      float ghostTransitionThreshold = transitionPattern < 0.5\n        ? ghostOrderedThreshold(ghostUv)\n        : ghostDissolveThreshold(ghostUv);\n      if (transitionRole < -0.5 && ghostTransitionThreshold < transitionProgress) discard;\n      if (transitionRole > 0.5 && ghostTransitionThreshold >= transitionProgress) discard;\n      if (shellMode > 0.5) {\n        bool ghostShellAccepted = ghostShellSampleAgrees(ghostUv);\n        if (!ghostShellAccepted && shellMode > 1.5) {\n          ghostShellAccepted = ghostShellSampleAgrees(ghostUv + vec2(textureTexelSize.x, 0.0))\n            || ghostShellSampleAgrees(ghostUv - vec2(textureTexelSize.x, 0.0))\n            || ghostShellSampleAgrees(ghostUv + vec2(0.0, textureTexelSize.y))\n            || ghostShellSampleAgrees(ghostUv - vec2(0.0, textureTexelSize.y));\n        }\n        if (!ghostShellAccepted) discard;\n      }\n      diffuseColor *= vec4(ghostPlateColor.rgb, 1.0);\n    ");
+    `), e.fragmentShader = e.fragmentShader.replace("void main() {", "\n    uniform sampler2D coverageTexture;\n    uniform sampler2D depthTexture;\n    uniform float plateMapping;\n    uniform vec2 textureTexelSize;\n    uniform float captureNear;\n    uniform float captureDepthRange;\n    uniform float shellMode;\n    uniform float shellDepthEpsilon;\n    uniform float shellDepthQuantizationHalfStep;\n    uniform float transitionRole;\n    uniform float transitionProgress;\n    uniform float transitionPattern;\n    uniform float transitionDirection;\n    varying vec3 ghostProjectiveUv;\n    varying vec3 ghostPlateLockedUv;\n    varying float ghostOriginalDepth;\n\n    bool ghostShellSampleAgrees(vec2 uv) {\n      if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return false;\n      float coverage = texture2D(coverageTexture, uv).r;\n      if (coverage < 0.5) return false;\n      float sampledDepth = captureNear + texture2D(depthTexture, uv).r * captureDepthRange;\n      return abs(ghostOriginalDepth - sampledDepth)\n        <= shellDepthEpsilon + shellDepthQuantizationHalfStep;\n    }\n\n    float ghostOrderedThreshold(vec2 uv) {\n      vec2 texel = floor(uv / textureTexelSize);\n      vec2 cell = mod(texel, 4.0);\n      float x = cell.x;\n      float y = cell.y;\n      float rank = mod(x, 2.0) * 2.0 + mod(y, 2.0);\n      rank += mod(floor(x / 2.0), 2.0) * 8.0;\n      rank += mod(floor(y / 2.0), 2.0) * 4.0;\n      return (rank + 0.5) / 16.0;\n    }\n\n    float ghostNoiseHash(vec2 cell) {\n      return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453123);\n    }\n\n    float ghostValueNoise(vec2 point) {\n      vec2 cell = floor(point);\n      vec2 local = fract(point);\n      local = local * local * (3.0 - 2.0 * local);\n      float bottom = mix(ghostNoiseHash(cell), ghostNoiseHash(cell + vec2(1.0, 0.0)), local.x);\n      float top = mix(\n        ghostNoiseHash(cell + vec2(0.0, 1.0)),\n        ghostNoiseHash(cell + vec2(1.0, 1.0)),\n        local.x\n      );\n      return mix(bottom, top, local.y);\n    }\n\n    float ghostDissolveThreshold(vec2 uv) {\n      vec2 texel = floor(uv / textureTexelSize);\n      float broad = ghostValueNoise(texel / 13.0);\n      float detail = ghostValueNoise(texel / 4.0 + vec2(19.0, 7.0));\n      float grain = ghostNoiseHash(texel + vec2(43.0, 71.0));\n      return min(broad * 0.55 + detail * 0.30 + grain * 0.15, 0.999999);\n    }\n\n    bool ghostEdgeEchoOwns(vec2 uv) {\n      vec2 texel = floor(uv / textureTexelSize);\n      float center = transitionDirection > 0.0\n        ? mix(0.86, 1.12, transitionProgress)\n        : mix(0.14, -0.12, transitionProgress);\n      float halfWidth = mix(0.11, 0.03, transitionProgress);\n      float seamNoise = (\n        ghostValueNoise(vec2(texel.y / 9.0, 31.0)) - 0.5\n      ) * 0.04;\n      return abs(uv.x - center - seamNoise) <= halfWidth;\n    }\n  \nvoid main() {").replace("#include <map_fragment>", "\n      vec2 ghostUv = plateMapping < 0.5\n        ? ghostPlateLockedUv.xy / ghostPlateLockedUv.z\n        : ghostProjectiveUv.xy / ghostProjectiveUv.z;\n      if (ghostUv.x < 0.0 || ghostUv.x > 1.0 || ghostUv.y < 0.0 || ghostUv.y > 1.0) discard;\n      float ghostCoverage = texture2D(coverageTexture, ghostUv).r;\n      vec4 ghostPlateColor = texture2D(map, ghostUv);\n      if (ghostCoverage < 0.5 || ghostPlateColor.a < 0.01) discard;\n      bool ghostPreviousOwns;\n      if (transitionPattern > 1.5) {\n        ghostPreviousOwns = ghostEdgeEchoOwns(ghostUv);\n      } else {\n        float ghostTransitionThreshold = transitionPattern < 0.5\n          ? ghostOrderedThreshold(ghostUv)\n          : ghostDissolveThreshold(ghostUv);\n        ghostPreviousOwns = ghostTransitionThreshold >= transitionProgress;\n      }\n      if (transitionRole < -0.5 && !ghostPreviousOwns) discard;\n      if (transitionRole > 0.5 && ghostPreviousOwns) discard;\n      if (shellMode > 0.5) {\n        bool ghostShellAccepted = ghostShellSampleAgrees(ghostUv);\n        if (!ghostShellAccepted && shellMode > 1.5) {\n          ghostShellAccepted = ghostShellSampleAgrees(ghostUv + vec2(textureTexelSize.x, 0.0))\n            || ghostShellSampleAgrees(ghostUv - vec2(textureTexelSize.x, 0.0))\n            || ghostShellSampleAgrees(ghostUv + vec2(0.0, textureTexelSize.y))\n            || ghostShellSampleAgrees(ghostUv - vec2(0.0, textureTexelSize.y));\n        }\n        if (!ghostShellAccepted) discard;\n      }\n      diffuseColor *= vec4(ghostPlateColor.rgb, 1.0);\n    ");
 }
 function by(e, t) {
 	let n = Infinity, r = -Infinity, i = Infinity, a = -Infinity, o = Infinity, s = -Infinity;
@@ -20948,7 +20953,7 @@ function Sy(e) {
 		8,
 		16
 	].includes(e.sectorCount)) throw RangeError("ghost sector count must be 1, 4, 8, or 16");
-	if (ky(e.sectorHysteresisDegrees, 0, 22.5, "ghost sector hysteresis"), e.transitionMode !== "hard-cut" && e.transitionMode !== "ordered-dither" && e.transitionMode !== "noise-dissolve") throw TypeError(`unsupported ghost transition mode ${String(e.transitionMode)}`);
+	if (ky(e.sectorHysteresisDegrees, 0, 22.5, "ghost sector hysteresis"), e.transitionMode !== "hard-cut" && e.transitionMode !== "ordered-dither" && e.transitionMode !== "noise-dissolve" && e.transitionMode !== "edge-echo") throw TypeError(`unsupported ghost transition mode ${String(e.transitionMode)}`);
 	return ky(e.transitionDurationMilliseconds, 0, 5e3, "ghost transition duration"), Object.freeze({ ...e });
 }
 function Cy(e) {
@@ -20970,7 +20975,7 @@ function wy(e) {
 	return e === "whole-mesh" ? 0 : e === "strict-source" ? 1 : 2;
 }
 function Ty(e) {
-	return +(e === "noise-dissolve");
+	return e === "edge-echo" ? 2 : +(e === "noise-dissolve");
 }
 function Ey(e, t) {
 	if (e.elements.some((e) => !Number.isFinite(e))) throw TypeError(`${t} must contain only finite values`);
