@@ -577,6 +577,10 @@ export class GhostPlateDirectionalPresentation {
     });
   }
 
+  advancing(): boolean {
+    return !this.#disposed && this.#previousSector !== null;
+  }
+
   dispose(): void {
     if (this.#disposed) return;
     for (const plate of this.#plates) {

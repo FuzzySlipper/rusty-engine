@@ -352,8 +352,10 @@ export class RendererThreeVoxelSpriteScene {
   prepare(camera: THREE.Camera): void {
     if (this.#disposed) return;
     for (const entry of this.#entries.values()) {
-      if (entry.ghostPlate !== null) entry.ghostPlate.prepare(camera);
-      else entry.enhancement!.prepare(camera);
+      if (entry.ghostPlate !== null) {
+        entry.ghostPlate.prepare(camera);
+        if (entry.ghostPlate.advancing()) this.#invalidate();
+      } else entry.enhancement!.prepare(camera);
     }
   }
 

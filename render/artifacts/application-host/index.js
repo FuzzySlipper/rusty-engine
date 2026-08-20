@@ -20818,6 +20818,9 @@ var ly = Object.freeze([
 			limitations: Object.freeze(e.limitations.filter((e) => e !== "single-capture-view"))
 		});
 	}
+	advancing() {
+		return !this.#d && this.#a !== null;
+	}
 	dispose() {
 		if (!this.#d) {
 			for (let e of this.#e) this.object.remove(e.object), e.dispose();
@@ -21078,7 +21081,7 @@ var ky = class {
 		return t === void 0 ? this.#g("unknown_id", `unknown voxel sprite id ${e}`) : (this.#f(t), this.#i.delete(e), this.#s += 1, this.#n(), this.#h());
 	}
 	prepare(e) {
-		if (!this.#o) for (let t of this.#i.values()) t.ghostPlate === null ? t.enhancement.prepare(e) : t.ghostPlate.prepare(e);
+		if (!this.#o) for (let t of this.#i.values()) t.ghostPlate === null ? t.enhancement.prepare(e) : (t.ghostPlate.prepare(e), t.ghostPlate.advancing() && this.#n());
 	}
 	recordCpuSubmission(e) {
 		if (!this.#o) for (let t of this.#i.values()) t.enhancement?.recordSteadyStateFrame(e);
