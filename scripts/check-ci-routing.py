@@ -99,6 +99,7 @@ def main() -> None:
     )
 
     routing_cases = {
+        "fixtures/render/depth-splat-comparison-v1.json": {"render", "verify"},
         "render/browser/application-host.browser.spec.ts": {"render"},
         "render/packages/renderer-three/src/backend.ts": {"render", "studio"},
         "render/artifacts/application-host/index.js": {"render"},
@@ -135,7 +136,7 @@ def main() -> None:
             "render/packages/renderer-host/**",
             "render/packages/renderer-three/**",
         },
-        {"render/**", "render/browser/**", "render/artifacts/**"},
+        {"render/**", "render/browser/**", "render/artifacts/**", "fixtures/render/**"},
     )
     require_paths(
         "rules",

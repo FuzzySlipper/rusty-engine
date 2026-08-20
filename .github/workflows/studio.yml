@@ -32,7 +32,6 @@ on:
       - 'render/packages/render-projection/**'
       - 'render/packages/renderer-host/**'
       - 'render/packages/renderer-three/**'
-      - 'fixtures/render/**'
       - '.github/workflows/studio.yml'
   pull_request:
     paths:
@@ -64,7 +63,6 @@ on:
       - 'render/packages/render-projection/**'
       - 'render/packages/renderer-host/**'
       - 'render/packages/renderer-three/**'
-      - 'fixtures/render/**'
       - '.github/workflows/studio.yml'
   workflow_dispatch:
 
