@@ -1105,8 +1105,9 @@ identities, adapter binary hash, and negotiated protocol. A change to the select
 terminates the bounded host/adapter process group with an explicit restart-required receipt;
 operational status remains observational and never becomes project authority. The host does not make
 HTTP/browser behavior an Engine prerequisite. Ordinary Rust verification remains independent of
-Studio, Node, the browser, and any sibling checkout; the cross-repository demo and Chromium proof
-is an explicit narrow integration gate.
+Studio, Node, the browser, and every sibling checkout. A downstream browser
+proof is selected only by the affected downstream owner; it is not an ordinary
+Studio gate or a cross-repository dependency.
 
 The persistent generic service is the preferred interactive Studio entrypoint where installed, but
 its one selected adapter and active project are process-wide. It is a single-active-authoring-session
@@ -1125,10 +1126,10 @@ A game built on Engine should own its complete behavioral story:
 5. runtime snapshot, project storage location, and product migration policy; and
 6. input, readout, and typed presentation intents consumed by the shared renderer border.
 
-The reference demo owns all of those surfaces, including its `ExtractionBeacon` addition. That
-feature extended the downstream schema, service, snapshot, browser readout, and presentation without
-changing the Engine public vocabulary. Its second authored room composition then reused
-the settled meanings with no Rust change. This is the intended dependency direction.
+Historical reference-demo evidence exercised those surfaces, including an
+`ExtractionBeacon` addition, without changing Engine public vocabulary. That
+completed example is not a current Studio consumer or proof gate; it records
+the intended one-way dependency direction.
 
 ## Architectural exclusions
 

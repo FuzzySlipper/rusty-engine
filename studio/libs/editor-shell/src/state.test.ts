@@ -2049,7 +2049,7 @@ function described(requestId: string): unknown {
       adapterId: 'studio.fixture',
       adapterVersion: 6,
       protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
-      projectKind: 'loadingBayProject',
+      projectKind: 'sampleProject',
       projectSchemaVersion: 11,
       operations: STUDIO_ADAPTER_OPERATIONS,
       entityInspectorContracts: [{
