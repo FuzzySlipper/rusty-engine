@@ -21,8 +21,6 @@ This repository is the canonical Rusty Engine provider. Asha is historical
 evidence and a donor source, not a compatibility target, runtime dependency, or
 required mental model.
 
-The loading-bay product that first proved the provider boundary lives in
-[`FuzzySlipper/rusty-engine-demo`](https://github.com/FuzzySlipper/rusty-engine-demo).
 Downstream repositories sit beside this checkout and consume the complete
 `../rusty-engine/rust/crates/rusty-engine` facade exactly as it stands. Engine
 does not inspect or mutate a sibling demo checkout during ordinary work.
@@ -251,12 +249,8 @@ Review findings are fixed forward through the task worktree. Candidate consumer
 layouts are reserved for tasks that explicitly require downstream proof before
 promotion.
 
-Studio-to-product integration is explicit and never inferred from a sibling
-checkout:
-
-```bash
-./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo
-```
+Studio is an isolated first-party authoring product. Its ordinary verification
+does not select, launch, or certify a downstream checkout.
 
 ### Focused Rust iteration
 

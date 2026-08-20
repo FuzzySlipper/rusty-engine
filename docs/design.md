@@ -7,10 +7,9 @@ orchestration, game-specific project schemas, product persistence aggregates, in
 meaning of presentation intents belong to concrete downstream products. Reusable scene, entity,
 asset, voxel-authoring, serialization, and persistence mechanisms may live here when they remain
 independent of one game's vocabulary. Shared renderer-neutral projection and renderer host
-mechanisms live here so the demo and Studio cannot drift into independent renderers. The first
-reference consumer is
-[`rusty-engine-demo`](https://github.com/FuzzySlipper/rusty-engine-demo), extracted after it had
-proved the provider boundary in this repository.
+mechanisms live here so downstream products and Studio cannot drift into
+independent renderers. The provider never requires a particular downstream
+product as an integration or verification dependency.
 
 Historical product experiments and measurements live in
 [experiment-results.md](migration/experiment-results.md). Completed migration and extraction decisions live
@@ -971,16 +970,17 @@ identities, and gives panels only owner/project generations plus a single mutati
 lease. Settlement serializes with core edits and accepts a downstream before/after hash receipt only
 after a matching canonical `readProject`; late project, selection, or contract settlements are
 discarded. The stock application explicitly composes the Engine-owned Voxel Object contribution.
-The reviewed Loading Bay application proves the same identity matching, static admission, outlet
-lifecycle, operation serialization, and canonical acceptance with its independently typed Weapon
-contract and Rust owner. Its panel calls only `readLoadingBayWeapon` and
-`replaceLoadingBayWeapon`; the core protocol sees neither value nor operation. The external panel
-uses the narrow lease for settlement, while built-in Voxel operations already enter the same store
-through named core methods. Named package carriers and an explicit cross-repository gate replace
-ambient sibling access. Ordinary downstream integration uses the adjacent complete Rust facade and
-the checkout currently present on the machine. A selected downstream compile, adapter, or browser
-proof is run only when that consumer is affected or explicitly requested; its exact source commits
-are review evidence, not a source dependency protocol.
+Historical downstream-panel evidence validated the same identity matching,
+static admission, outlet lifecycle, operation serialization, and canonical
+acceptance without putting component values or operation names in the core
+protocol. Product panels use the narrow lease for settlement, while built-in
+Voxel operations already enter the same store through named core methods.
+Named package carriers and explicit selected-consumer evidence replace ambient
+sibling access. Ordinary downstream integration uses the adjacent complete Rust
+facade and the checkout currently present on the machine. A selected downstream
+compile, adapter, or browser proof is run only when that consumer is affected
+or explicitly requested; its exact source commits are review evidence, not a
+source dependency protocol.
 Product-owned typed read/mutation contracts and game panels remain
 downstream; Engine does not acquire game vocabulary, runtime plugin loading, a generic payload,
 store/service-locator exposure, or a universal component bridge. The implemented contract and

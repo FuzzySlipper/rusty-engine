@@ -88,7 +88,7 @@ if (!(genericSources.get('apps/studio-app/src/app/app.ts') ?? '').includes(
 for (const ordinaryGate of ['scripts/verify.sh', 'scripts/verify-studio.sh']) {
   const source = readFileSync(join(repoRoot, ordinaryGate), 'utf8');
   if (source.includes('rusty-engine-demo')) {
-    violations.push(`${ordinaryGate}: ordinary verification depends on the demo checkout`);
+    violations.push(`${ordinaryGate}: ordinary verification depends on the retired demo checkout`);
   }
 }
 

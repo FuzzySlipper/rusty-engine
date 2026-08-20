@@ -117,9 +117,9 @@ test('decodes bounded identity-only component references and rejects malformed o
   response.project.entityComponents = [
     {
       ownerEntityId: 17,
-      componentTypeId: 'rusty-engine-demo.loading-bay.weapon',
+      componentTypeId: 'studio.fixture.weapon',
       inspectorContract: {
-        contractId: 'rusty-engine-demo.loading-bay.weapon-authoring',
+        contractId: 'studio.fixture.weapon-authoring',
         contractVersion: 1,
       },
     },
@@ -171,7 +171,7 @@ test('decodes bounded identity-only component references and rejects malformed o
 
 test('validates inspector contract advertisement and version consistency across responses', async () => {
   const contract = {
-    contractId: 'rusty-engine-demo.loading-bay.weapon-authoring',
+    contractId: 'studio.fixture.weapon-authoring',
     contractVersion: 1,
   };
   const transport = new RecordingTransport((request) => {
@@ -183,7 +183,7 @@ test('validates inspector contract advertisement and version consistency across 
     setCanonicalOwners(opened, [17]);
     opened.project.entityComponents = [{
       ownerEntityId: 17,
-      componentTypeId: 'rusty-engine-demo.loading-bay.weapon',
+      componentTypeId: 'studio.fixture.weapon',
       inspectorContract: contract,
     }];
     return opened;
@@ -203,7 +203,7 @@ test('validates inspector contract advertisement and version consistency across 
     setCanonicalOwners(openedResponse, [17]);
     openedResponse.project.entityComponents = [{
       ownerEntityId: 17,
-      componentTypeId: 'rusty-engine-demo.loading-bay.weapon',
+      componentTypeId: 'studio.fixture.weapon',
       inspectorContract: { ...contract, contractVersion: 2 },
     }];
     return openedResponse;
@@ -352,17 +352,17 @@ test('named client methods emit only closed operations and correlate responses',
     assert.equal(request.type, 'openProject');
     if (request.type !== 'openProject') throw new Error('unexpected operation');
     assert.equal(request.root, '/trusted/project');
-    assert.equal(request.projectFile, 'content/projects/loading-bay.project.json');
+    assert.equal(request.projectFile, 'content/projects/sample-project.project.json');
     return projectOpened(request.requestId);
   });
   const client = new StudioAdapterClient(transport);
 
   const opened = await client.openProject(
     '/trusted/project',
-    'content/projects/loading-bay.project.json',
+    'content/projects/sample-project.project.json',
   );
 
-  assert.equal(opened.project.identity.projectId, 'loading-bay');
+  assert.equal(opened.project.identity.projectId, 'sample-project');
   assert.deepEqual(
     transport.requests.map((request) => request.type),
     ['openProject'],
@@ -376,7 +376,7 @@ test('typed rejection becomes an operation error without interpreting Rust seman
     requestId: request.requestId,
     error: {
       code: 'project.staleHash',
-      path: 'content/projects/loading-bay.project.json',
+      path: 'content/projects/sample-project.project.json',
       message: 'source changed',
     },
   }));
@@ -417,7 +417,7 @@ test('voxel response families are closed and named authoring calls preserve guar
     protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
     requestId: 'pick-1',
     anchor: {
-      sceneId: 'scene/converted-wall',
+      sceneId: 'scene/sample-voxel-scene',
       instanceId: 'wall-primary',
       assetId: 'voxel-volume/kenney-wall-a',
       hitVoxel: [0, 0, 0],
@@ -618,7 +618,7 @@ test('protocol 15 keeps entity-owned voxel objects, applied playback, and durabl
   setCanonicalOwners(project, [17]);
   project.project.voxelObjectAuthoring.assets = [voxelObjectAssetReadout()];
   project.project.voxelObjectAuthoring.instances = [{
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     ownerEntityId: 17,
     instance: {
       instanceId: 'character-one',
@@ -730,7 +730,7 @@ test('protocol 15 keeps entity-owned voxel objects, applied playback, and durabl
   });
   await client.previewVoxelObjectInstance({
     expectedProjectHash: 'project-hash',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     nowMicroseconds: 1_000_000,
     command: {
@@ -750,7 +750,7 @@ test('protocol 15 carries one closed authoritative voxel-object surface-mode mut
   setCanonicalOwners(project, [17]);
   project.project.voxelObjectAuthoring.assets = [voxelObjectAssetReadout()];
   project.project.voxelObjectAuthoring.instances = [{
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     ownerEntityId: 17,
     instance: {
       instanceId: 'character-one',
@@ -777,7 +777,7 @@ test('protocol 15 carries one closed authoritative voxel-object surface-mode mut
     requestId: 'surface-mode-1',
     receipt: {
       kind: 'voxelObjectSurfaceModeSet' as const,
-      sceneId: 'scene/loading-bay',
+      sceneId: 'scene/sample-scene',
       instanceId: 'character-one',
       before: 'greedyCubes' as const,
       after: 'marchingCubes' as const,
@@ -811,7 +811,7 @@ test('protocol 15 carries one closed authoritative voxel-object surface-mode mut
     assert.equal(request.type, 'setVoxelObjectInstanceSurfaceMode');
     if (request.type !== 'setVoxelObjectInstanceSurfaceMode') throw new Error('unexpected operation');
     assert.equal(request.expectedProjectHash, 'project-hash');
-    assert.equal(request.sceneId, 'scene/loading-bay');
+    assert.equal(request.sceneId, 'scene/sample-scene');
     assert.equal(request.instanceId, 'character-one');
     assert.equal(request.surfaceMode, 'marchingCubes');
     return { ...applied, requestId: request.requestId };
@@ -820,7 +820,7 @@ test('protocol 15 carries one closed authoritative voxel-object surface-mode mut
   await client.describe();
   await client.setVoxelObjectInstanceSurfaceMode({
     expectedProjectHash: 'project-hash',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     surfaceMode: 'marchingCubes',
   });
@@ -829,7 +829,7 @@ test('protocol 15 carries one closed authoritative voxel-object surface-mode mut
   ]);
 });
 
-test('protocol 14 placement preparation carries one bounded resource-only voxel object', async () => {
+test('protocol 15 placement preparation carries one bounded resource-only voxel object', async () => {
   const conversion = voxelObjectConversionPrepared('placement-source');
   const objectContentHash = `sha256:${'5'.repeat(64)}`;
   const resourceFrame = {
@@ -919,7 +919,7 @@ test('protocol 14 placement preparation carries one bounded resource-only voxel 
   ]);
 });
 
-test('protocol 14 carries one closed bounded voxel-object placement batch and one readout', async () => {
+test('protocol 15 carries one closed bounded voxel-object placement batch and one readout', async () => {
   const project = projectOpened('batch-project');
   const owners = Array.from(
     { length: MAX_VOXEL_OBJECT_INSTANCE_BATCH },
@@ -927,7 +927,7 @@ test('protocol 14 carries one closed bounded voxel-object placement batch and on
   );
   setCanonicalOwners(project, owners);
   const placements = owners.map((ownerEntityId, index) => ({
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: `batch-${String(index + 1)}`,
     assetId: 'voxel-object/character',
     frameKind: 'clip' as const,
@@ -1079,7 +1079,7 @@ test('asset import plans, browser provenance, and named client calls stay closed
   assert.equal(response.plan.hasErrors, false);
 });
 
-test('protocol 14 admits exact Rust-owned voxel surface resources and rejects drift', () => {
+test('protocol 15 admits exact Rust-owned voxel surface resources and rejects drift', () => {
   const opened = projectOpened('surface-project');
   const digest = 'a'.repeat(64);
   opened.project.textureResources = [{
@@ -1133,7 +1133,7 @@ test('protocol 14 admits exact Rust-owned voxel surface resources and rejects dr
         tileScaleCells: [0.5, 2],
         tileOriginCells: [0.25, -0.5],
       },
-      assignments: [{ sceneId: 'scene/loading-bay', instanceId: 'fixture', materialSlot: 1 }],
+      assignments: [{ sceneId: 'scene/sample-scene', instanceId: 'fixture', materialSlot: 1 }],
     }],
   };
   const decoded = decodeStudioAdapterResponse(opened);
@@ -1155,7 +1155,7 @@ test('protocol 14 admits exact Rust-owned voxel surface resources and rejects dr
         atlasAssetId: 'sprite-sheet/voxel/checker',
         atlasContentHash: `sha256:${'b'.repeat(64)}`,
       },
-      sceneId: 'scene/loading-bay',
+      sceneId: 'scene/sample-scene',
       instanceId: 'fixture',
       materialSlot: 1,
     },
@@ -1219,14 +1219,14 @@ function projectOpened(requestId: string): ProjectOpenedFixture {
     requestId,
     project: {
       identity: {
-        projectId: 'loading-bay',
-        name: 'Loading Bay',
-        entryScene: 'scene/loading-bay',
+        projectId: 'sample-project',
+        name: 'Sample Project',
+        entryScene: 'scene/sample-scene',
         sourceSchemaVersion: 11,
         currentSchemaVersion: 11,
         projectHash: '00'.repeat(32),
         sceneRevision: 1,
-        relativeProjectFile: 'content/projects/loading-bay.project.json',
+        relativeProjectFile: 'content/projects/sample-project.project.json',
       },
       canonical: {
         projectJson: '{}',
@@ -1246,7 +1246,7 @@ function projectOpened(requestId: string): ProjectOpenedFixture {
           sceneId: 1,
           revision: 1,
           schemaVersion: 4,
-          name: 'Loading Bay',
+          name: 'Sample Project',
           nodeCount: 0,
           rootCount: 0,
           dependencyCount: 0,
@@ -1278,7 +1278,7 @@ function projectOpened(requestId: string): ProjectOpenedFixture {
       sceneHierarchy: {
         sceneId: 1,
         revision: 1,
-        name: 'Loading Bay',
+        name: 'Sample Project',
         rootNodeIds: [],
         nodes: [],
       },
@@ -1733,7 +1733,7 @@ function voxelObjectInstancePreviewed(requestId: string) {
     protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
     requestId,
     playback: {
-      sceneId: 'scene/loading-bay',
+      sceneId: 'scene/sample-scene',
       instanceId: 'character-one',
       voxelObjectAssetId: 'voxel-object/character',
       projectHash: 'project-hash',

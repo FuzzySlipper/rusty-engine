@@ -31,11 +31,11 @@ test('workspace opens only through the adapter and keeps authority, projection, 
   assert.equal(store.snapshot().connection.kind, 'disconnected');
   assert.equal(store.snapshot().authoringDocument, null);
 
-  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
 
   assert.deepEqual(transport.requests.map((request) => request.type), ['describe', 'openProject']);
   assert.equal(store.snapshot().connection.kind, 'connected');
-  assert.equal(store.snapshot().authoringDocument?.identity.projectId, 'loading-bay');
+  assert.equal(store.snapshot().authoringDocument?.identity.projectId, 'sample-project');
   assert.equal(store.snapshot().liveProjection?.frame.ops.length, 1);
   assert.equal(store.snapshot().preview, null);
   assert.equal(store.snapshot().selection.entityId, null);
@@ -77,7 +77,7 @@ test('workspace opens only through the adapter and keeps authority, projection, 
 test('visual-local mutation stays distinct from entity world authority', async () => {
   const transport = new FixtureTransport();
   const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
-  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
 
   await store.setSceneObjectRenderableTransform(1, transform([0, -1.25, 0]) as Transform);
 
@@ -98,7 +98,7 @@ test('visual-local mutation stays distinct from entity world authority', async (
 
 test('renderer world candidates update the local preview and explicit revert restores owner state', async () => {
   const store = new StudioWorkspaceStore(new StudioAdapterClient(new FixtureTransport()));
-  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
   store.beginTransformPreview(1, 'translate', 'world');
 
   store.applyPreviewWorldTransform({
@@ -117,7 +117,7 @@ test('renderer world candidates update the local preview and explicit revert res
 test('changing selection commits a pending transform before selecting the next owner', async () => {
   const transport = new FixtureTransport();
   const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
-  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
   store.selectHierarchyNode(10);
   store.beginTranslationPreview(1);
   store.setPreviewTranslationAxis(0, 4.5);
@@ -133,7 +133,7 @@ test('changing selection commits a pending transform before selecting the next o
 test('rejected mutation preserves the accepted document and disposable preview', async () => {
   const transport = new FixtureTransport();
   const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
-  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
   store.selectHierarchyNode(10);
   store.beginTranslationPreview(1);
   store.setPreviewTranslationAxis(2, 99);
@@ -149,7 +149,7 @@ test('rejected mutation preserves the accepted document and disposable preview',
 test('selection does not change when automatic transform settlement is rejected', async () => {
   const transport = new FixtureTransport();
   const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
-  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
   store.selectHierarchyNode(10);
   store.beginTranslationPreview(1);
   store.setPreviewTranslationAxis(2, 99);
@@ -166,7 +166,7 @@ test('entity inspector mutation lease serializes edits and accepts only a matchi
   const transport = new FixtureTransport();
   transport.readProjectChanged = true;
   const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
-  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
   const context = await selectFixtureInspector(store);
   const lease = store.entityInspectorMutationPort.acquire(context);
 
@@ -207,7 +207,7 @@ test('entity inspector rejection and hash mismatch preserve the accepted project
   await t.test('typed owner rejection', async () => {
     const transport = new FixtureTransport();
     const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
-    await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+    await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
     const lease = store.entityInspectorMutationPort.acquire(
       await selectFixtureInspector(store),
     );
@@ -225,7 +225,7 @@ test('entity inspector rejection and hash mismatch preserve the accepted project
   await t.test('canonical reread hash mismatch', async () => {
     const transport = new FixtureTransport();
     const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
-    await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+    await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
     const lease = store.entityInspectorMutationPort.acquire(
       await selectFixtureInspector(store),
     );
@@ -249,7 +249,7 @@ test('entity inspector settlement blocks selection remounts and discards replace
   await t.test('selection remains pinned until a delayed mutation is canonically reread', async () => {
     const transport = new FixtureTransport();
     const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
-    await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+    await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
     const lease = store.entityInspectorMutationPort.acquire(
       await selectFixtureInspector(store),
     );
@@ -287,7 +287,7 @@ test('entity inspector settlement blocks selection remounts and discards replace
   await t.test('project and contract generations', async () => {
     const transport = new FixtureTransport();
     const store = new StudioWorkspaceStore(new StudioAdapterClient(transport));
-    await store.openProject('/external/loading-bay-a', 'content/projects/loading-bay.project.json');
+    await store.openProject('/external/sample-project-a', 'content/projects/sample-project.project.json');
     const lease = store.entityInspectorMutationPort.acquire(
       await selectFixtureInspector(store),
     );
@@ -297,12 +297,12 @@ test('entity inspector settlement blocks selection remounts and discards replace
       afterProjectHash: 'hash-after',
     });
 
-    transport.openedProjectId = 'loading-bay-b';
-    await store.openProject('/external/loading-bay-b', 'content/projects/loading-bay.project.json');
+    transport.openedProjectId = 'sample-project-b';
+    await store.openProject('/external/sample-project-b', 'content/projects/sample-project.project.json');
     transport.resolveBlockedProjectRead(true);
 
     assert.deepEqual(await pending, { kind: 'stale' });
-    assert.equal(store.snapshot().authoringDocument?.identity.projectId, 'loading-bay-b');
+    assert.equal(store.snapshot().authoringDocument?.identity.projectId, 'sample-project-b');
     assert.equal(store.snapshot().authoringDocument?.identity.projectHash, 'hash-before');
     assert.equal(store.snapshot().selection.entityId, null);
     assert.equal(store.snapshot().operation, 'idle');
@@ -311,9 +311,9 @@ test('entity inspector settlement blocks selection remounts and discards replace
 
 test('opening a second project clears project-scoped selection, preview, and private object work', async () => {
   const client = new VoxelObjectFixtureClient();
-  client.openedProjectId = 'loading-bay-a';
+  client.openedProjectId = 'sample-project-a';
   const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
-  await store.openProject('/external/loading-bay-a', 'content/projects/loading-bay.project.json');
+  await store.openProject('/external/sample-project-a', 'content/projects/sample-project.project.json');
   store.selectHierarchyNode(10);
   store.beginTranslationPreview(1);
   store.setPreviewTranslationAxis(0, 99);
@@ -330,10 +330,10 @@ test('opening a second project clears project-scoped selection, preview, and pri
   assert.deepEqual(store.snapshot().preview?.translation, [99, 2, 3]);
   assert.equal(firstProjectionLabel(store), 'voxel-object-candidate-0');
 
-  client.openedProjectId = 'loading-bay-b';
-  await store.openProject('/external/loading-bay-b', 'content/projects/loading-bay.project.json');
+  client.openedProjectId = 'sample-project-b';
+  await store.openProject('/external/sample-project-b', 'content/projects/sample-project.project.json');
 
-  assert.equal(store.snapshot().authoringDocument?.identity.projectId, 'loading-bay-b');
+  assert.equal(store.snapshot().authoringDocument?.identity.projectId, 'sample-project-b');
   assert.equal(store.snapshot().selection.entityId, null);
   assert.equal(store.snapshot().selection.sceneNodeId, null);
   assert.equal(store.snapshot().preview, null);
@@ -367,9 +367,9 @@ test('project replacement ignores late object-preview success and failure withou
     for (const settlement of settlements) {
       await t.test(`${replacement} followed by late ${settlement}`, async () => {
         const client = new VoxelObjectFixtureClient();
-        client.openedProjectId = 'loading-bay-a';
+        client.openedProjectId = 'sample-project-a';
         const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
-        await store.openProject('/external/loading-bay-a', 'content/projects/loading-bay.project.json');
+        await store.openProject('/external/sample-project-a', 'content/projects/sample-project.project.json');
         await store.runVoxelAction(objectPrepareAction());
         const conversion = store.snapshot().voxelWorkspace.objectConversion;
         assert.ok(conversion !== null);
@@ -385,32 +385,32 @@ test('project replacement ignores late object-preview success and failure withou
         assert.equal(client.previewRequestCount, 1);
         assert.equal(store.snapshot().operation, 'voxel');
 
-        client.openedProjectId = 'loading-bay-b';
+        client.openedProjectId = 'sample-project-b';
         switch (replacement) {
           case 'open':
-            await store.openProject('/external/loading-bay-b', 'content/projects/loading-bay.project.json');
+            await store.openProject('/external/sample-project-b', 'content/projects/sample-project.project.json');
             break;
           case 'create':
             await store.createProject({
-              root: '/external/loading-bay-b',
-              projectFile: 'content/projects/loading-bay.project.json',
-              projectId: 'loading-bay-b',
-              name: 'Loading Bay B',
-              entryScene: 'scene/loading-bay',
-              entrySceneName: 'Loading Bay',
+              root: '/external/sample-project-b',
+              projectFile: 'content/projects/sample-project.project.json',
+              projectId: 'sample-project-b',
+              name: 'Sample Project B',
+              entryScene: 'scene/sample-scene',
+              entrySceneName: 'Sample Project',
             });
             break;
           case 'saveAs':
             await store.saveProjectAs({
-              root: '/external/loading-bay-b',
-              projectFile: 'content/projects/loading-bay.project.json',
-              projectId: 'loading-bay-b',
-              name: 'Loading Bay B',
+              root: '/external/sample-project-b',
+              projectFile: 'content/projects/sample-project.project.json',
+              projectId: 'sample-project-b',
+              name: 'Sample Project B',
             });
             break;
         }
 
-        assert.equal(store.snapshot().authoringDocument?.identity.projectId, 'loading-bay-b');
+        assert.equal(store.snapshot().authoringDocument?.identity.projectId, 'sample-project-b');
         assert.equal(store.snapshot().operation, 'idle');
         assert.equal(store.snapshot().voxelWorkspace.objectConversion, null);
         assert.equal(firstProjectionLabel(store), 'player');
@@ -433,7 +433,7 @@ test('refresh and a newer object request retain ownership over late object-previ
     await t.test(`late preview ${settlement}`, async () => {
       const client = new VoxelObjectFixtureClient();
       const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
-      await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+      await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
       await store.runVoxelAction(objectPrepareAction());
       const conversion = store.snapshot().voxelWorkspace.objectConversion;
       assert.ok(conversion !== null);
@@ -489,7 +489,7 @@ test('refresh and a newer object request retain ownership over late object-previ
 test('voxel-object source, shared candidate frames, stale apply, explicit discard, apply, and reopen stay distinct', async () => {
   const client = new VoxelObjectFixtureClient();
   const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
-  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
 
   await store.runVoxelAction({
     kind: 'inspectObjectSource',
@@ -552,7 +552,7 @@ test('voxel-object source, shared candidate frames, stale apply, explicit discar
 
   await store.runVoxelAction({
     kind: 'attachObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instance: {
       instanceId: 'character-one',
       voxelObjectAssetId: 'voxel-object/character',
@@ -570,7 +570,7 @@ test('voxel-object source, shared candidate frames, stale apply, explicit discar
   );
 
   const reopened = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
-  await reopened.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await reopened.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
   assert.deepEqual(
     reopened.snapshot().authoringDocument?.voxelObjectAuthoring,
     store.snapshot().authoringDocument?.voxelObjectAuthoring,
@@ -582,7 +582,7 @@ test('voxel-object source, shared candidate frames, stale apply, explicit discar
 
   await reopened.runVoxelAction({
     kind: 'setObjectSurfaceMode',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     surfaceMode: 'marchingCubes',
   });
@@ -598,7 +598,7 @@ test('voxel-object source, shared candidate frames, stale apply, explicit discar
   client.rejectObjectSurfaceMode = true;
   await reopened.runVoxelAction({
     kind: 'setObjectSurfaceMode',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     surfaceMode: 'dualContouring',
   });
@@ -611,7 +611,7 @@ test('voxel-object source, shared candidate frames, stale apply, explicit discar
 
   await reopened.runVoxelAction({
     kind: 'previewObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     nowMicroseconds: 5_000_000,
     command: {
@@ -631,7 +631,7 @@ test('voxel-object source, shared candidate frames, stale apply, explicit discar
 
   await reopened.runVoxelAction({
     kind: 'previewObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     nowMicroseconds: 5_100_000,
     command: { kind: 'play' },
@@ -643,7 +643,7 @@ test('voxel-object source, shared candidate frames, stale apply, explicit discar
 test('voxel-object placement selects canonical owners and keeps one bounded undo/reapply candidate', async () => {
   const client = new VoxelObjectFixtureClient();
   const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
-  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
   await store.runVoxelAction(objectPrepareAction());
   const conversion = store.snapshot().voxelWorkspace.objectConversion;
   assert.ok(conversion !== null);
@@ -657,7 +657,7 @@ test('voxel-object placement selects canonical owners and keeps one bounded undo
   const first = storedObjectInstance('placed-wall-a', [2, 0, 3]);
   await store.runVoxelAction({
     kind: 'attachObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instance: first,
   });
   assert.equal(store.snapshot().selection.entityId, 1);
@@ -666,7 +666,7 @@ test('voxel-object placement selects canonical owners and keeps one bounded undo
   const second = storedObjectInstance('placed-wall-b', [4, 0, 3]);
   await store.runVoxelAction({
     kind: 'attachObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instance: second,
   });
   assert.equal(store.snapshot().authoringDocument?.voxelObjectAuthoring.instances.length, 2);
@@ -680,7 +680,7 @@ test('voxel-object placement selects canonical owners and keeps one bounded undo
   assert.equal(store.snapshot().authoringDocument?.voxelObjectAuthoring.instances.length, 1);
   assert.deepEqual(store.snapshot().voxelWorkspace.objectPlacementHistory, {
     state: 'undone',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     ownerEntityId: null,
     instance: second,
   });
@@ -702,7 +702,7 @@ test('voxel-object placement selects canonical owners and keeps one bounded undo
 test('placement resources are bounded, cancellable, and retained across attach rereads', async () => {
   const client = new VoxelObjectFixtureClient();
   const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
-  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
   await store.runVoxelAction(objectPrepareAction());
   const conversion = store.snapshot().voxelWorkspace.objectConversion;
   assert.ok(conversion !== null);
@@ -743,7 +743,7 @@ test('placement resources are bounded, cancellable, and retained across attach r
 
   await store.runVoxelAction({
     kind: 'attachObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instance: storedObjectInstance('placed-with-resource', [2, 0, 3]),
   });
   assert.strictEqual(store.snapshot().voxelWorkspace.objectPlacementResource, prepared);
@@ -773,7 +773,7 @@ test('mismatched placement resources fail without publishing a preview candidate
   client.stalePlacementResource = true;
   client.applied = true;
   const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
-  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
 
   await store.runVoxelAction({
     kind: 'prepareObjectPlacementResource',
@@ -787,7 +787,7 @@ test('mismatched placement resources fail without publishing a preview candidate
 test('rejected voxel-object placement publishes no candidate and leaves prior history current', async () => {
   const client = new VoxelObjectFixtureClient();
   const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
-  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
   await store.runVoxelAction(objectPrepareAction());
   const conversion = store.snapshot().voxelWorkspace.objectConversion;
   assert.ok(conversion !== null);
@@ -799,14 +799,14 @@ test('rejected voxel-object placement publishes no candidate and leaves prior hi
   });
   await store.runVoxelAction({
     kind: 'attachObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instance: storedObjectInstance('accepted-wall', [1, 0, 1]),
   });
   const accepted = store.snapshot().voxelWorkspace.objectPlacementHistory;
   client.rejectObjectAttach = true;
   await store.runVoxelAction({
     kind: 'attachObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instance: storedObjectInstance('rejected-wall', [9, 0, 9]),
   });
   assert.match(store.snapshot().lastError ?? '', /placement quota exhausted/u);
@@ -817,7 +817,7 @@ test('rejected voxel-object placement publishes no candidate and leaves prior hi
 test('voxel-object batch placement is one bounded mutation with deterministic owner selection', async () => {
   const client = new VoxelObjectFixtureClient();
   const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
-  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
   await store.runVoxelAction(objectPrepareAction());
   const conversion = store.snapshot().voxelWorkspace.objectConversion;
   assert.ok(conversion !== null);
@@ -830,7 +830,7 @@ test('voxel-object batch placement is one bounded mutation with deterministic ow
 
   await store.runVoxelAction({
     kind: 'attachObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instance: storedObjectInstance('prior-single', [0, 0, 0]),
   });
   assert.ok(store.snapshot().voxelWorkspace.objectPlacementHistory !== null);
@@ -838,7 +838,7 @@ test('voxel-object batch placement is one bounded mutation with deterministic ow
   const placements = Array.from(
     { length: MAX_VOXEL_OBJECT_INSTANCE_BATCH },
     (_, index) => ({
-      sceneId: 'scene/loading-bay',
+      sceneId: 'scene/sample-scene',
       instance: storedObjectInstance(
         `batch-${String(index + 1)}`,
         [index + 1, 0, 2],
@@ -870,7 +870,7 @@ test('voxel-object batch placement is one bounded mutation with deterministic ow
 test('voxel-object batch preflight and late rejection preserve project, selection, and history', async () => {
   const client = new VoxelObjectFixtureClient();
   const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
-  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
   await store.runVoxelAction(objectPrepareAction());
   const conversion = store.snapshot().voxelWorkspace.objectConversion;
   assert.ok(conversion !== null);
@@ -882,7 +882,7 @@ test('voxel-object batch preflight and late rejection preserve project, selectio
   });
   await store.runVoxelAction({
     kind: 'attachObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instance: storedObjectInstance('accepted-before-batch', [1, 0, 1]),
   });
   const beforeProject = store.snapshot().authoringDocument;
@@ -892,7 +892,7 @@ test('voxel-object batch preflight and late rejection preserve project, selectio
   const oneOver = Array.from(
     { length: MAX_VOXEL_OBJECT_INSTANCE_BATCH + 1 },
     (_, index) => ({
-      sceneId: 'scene/loading-bay',
+      sceneId: 'scene/sample-scene',
       instance: storedObjectInstance(`one-over-${String(index)}`, [index, 0, 0]),
     }),
   );
@@ -904,7 +904,7 @@ test('voxel-object batch preflight and late rejection preserve project, selectio
   assert.strictEqual(store.snapshot().voxelWorkspace.objectPlacementHistory, beforeHistory);
 
   const duplicate = {
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instance: storedObjectInstance('duplicate-in-batch', [2, 0, 2]),
   };
   await store.runVoxelAction({
@@ -917,7 +917,7 @@ test('voxel-object batch preflight and late rejection preserve project, selectio
   await store.runVoxelAction({
     kind: 'attachObjectInstances',
     placements: [{
-      sceneId: 'scene/loading-bay',
+      sceneId: 'scene/sample-scene',
       instance: storedObjectInstance('accepted-before-batch', [3, 0, 3]),
     }],
   });
@@ -928,7 +928,7 @@ test('voxel-object batch preflight and late rejection preserve project, selectio
   const lateInvalid = Array.from(
     { length: MAX_VOXEL_OBJECT_INSTANCE_BATCH },
     (_, index) => ({
-      sceneId: 'scene/loading-bay',
+      sceneId: 'scene/sample-scene',
       instance: storedObjectInstance(`late-invalid-${String(index)}`, [index, 1, 0]),
     }),
   );
@@ -950,10 +950,10 @@ test('pause and restore queue behind an in-flight applied-object sample', async 
     null,
     timer,
   );
-  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
   await store.runVoxelAction({
     kind: 'previewObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     nowMicroseconds: 5_000_000,
     command: {
@@ -965,7 +965,7 @@ test('pause and restore queue behind an in-flight applied-object sample', async 
   });
   await store.runVoxelAction({
     kind: 'previewObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     nowMicroseconds: 5_100_000,
     command: { kind: 'play' },
@@ -974,14 +974,14 @@ test('pause and restore queue behind an in-flight applied-object sample', async 
   client.blockNextPlayback();
   const sample = store.runVoxelAction({
     kind: 'previewObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     nowMicroseconds: 5_200_000,
     command: { kind: 'sample' },
   });
   await store.runVoxelAction({
     kind: 'previewObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     nowMicroseconds: 5_210_000,
     command: { kind: 'pause' },
@@ -996,7 +996,7 @@ test('pause and restore queue behind an in-flight applied-object sample', async 
 
   await store.runVoxelAction({
     kind: 'previewObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     nowMicroseconds: 5_300_000,
     command: { kind: 'play' },
@@ -1004,21 +1004,21 @@ test('pause and restore queue behind an in-flight applied-object sample', async 
   client.blockNextPlayback();
   const secondSample = store.runVoxelAction({
     kind: 'previewObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     nowMicroseconds: 5_400_000,
     command: { kind: 'sample' },
   });
   await store.runVoxelAction({
     kind: 'previewObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     nowMicroseconds: 5_410_000,
     command: { kind: 'pause' },
   });
   await store.runVoxelAction({
     kind: 'previewObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     nowMicroseconds: 5_420_000,
     command: { kind: 'stop' },
@@ -1040,10 +1040,10 @@ test('applied-object playback advances one virtual frame only after renderer ack
     null,
     timer,
   );
-  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
   await store.runVoxelAction({
     kind: 'previewObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     nowMicroseconds: 5_000_000,
     command: {
@@ -1055,7 +1055,7 @@ test('applied-object playback advances one virtual frame only after renderer ack
   });
   await store.runVoxelAction({
     kind: 'previewObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     nowMicroseconds: 5_100_000,
     command: { kind: 'play' },
@@ -1095,7 +1095,7 @@ test('applied playback restores its canonical entity base before retaining patch
     null,
     timer,
   );
-  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
 
   await store.runVoxelAction(objectPrepareAction());
   const candidate = store.snapshot().liveProjection?.frame.ops.find(
@@ -1108,7 +1108,7 @@ test('applied playback restores its canonical entity base before retaining patch
   store.selectHierarchyNode(10);
   await store.runVoxelAction({
     kind: 'previewObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     nowMicroseconds: 5_000_000,
     command: {
@@ -1146,7 +1146,7 @@ test('applied playback restores its canonical entity base before retaining patch
 
   await store.runVoxelAction({
     kind: 'previewObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     nowMicroseconds: 5_100_000,
     command: { kind: 'play' },
@@ -1177,12 +1177,12 @@ test('applied playback rejects a retained frame patch outside the canonical proj
   client.attached = true;
   client.playbackHandle = 902;
   const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
-  await store.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await store.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
   const canonicalFrame = store.snapshot().liveProjection?.frame;
 
   await store.runVoxelAction({
     kind: 'previewObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     nowMicroseconds: 5_000_000,
     command: {
@@ -1208,25 +1208,25 @@ test('project lifecycle discards queued applied-object controls from the replace
         const client = new VoxelObjectFixtureClient();
         client.applied = true;
         client.attached = true;
-        client.openedProjectId = 'loading-bay-a';
+        client.openedProjectId = 'sample-project-a';
         const store = new StudioWorkspaceStore(client as unknown as StudioAdapterClient);
         await store.openProject(
-          '/external/loading-bay-a',
-          'content/projects/loading-bay.project.json',
+          '/external/sample-project-a',
+          'content/projects/sample-project.project.json',
         );
         await beginAppliedObjectPlayback(store);
 
         client.blockNextPlayback();
         const staleSample = store.runVoxelAction({
           kind: 'previewObjectInstance',
-          sceneId: 'scene/loading-bay',
+          sceneId: 'scene/sample-scene',
           instanceId: 'character-one',
           nowMicroseconds: 5_200_000,
           command: { kind: 'sample' },
         });
         await store.runVoxelAction({
           kind: 'previewObjectInstance',
-          sceneId: 'scene/loading-bay',
+          sceneId: 'scene/sample-scene',
           instanceId: 'character-one',
           nowMicroseconds: 5_210_000,
           command: { kind: control },
@@ -1234,30 +1234,30 @@ test('project lifecycle discards queued applied-object controls from the replace
         assert.equal(store.snapshot().operation, 'voxel');
         assert.equal(client.playbackCommands.at(-1), 'sample');
 
-        client.openedProjectId = 'loading-bay-b';
+        client.openedProjectId = 'sample-project-b';
         switch (replacement) {
           case 'open':
             await store.openProject(
-              '/external/loading-bay-b',
-              'content/projects/loading-bay.project.json',
+              '/external/sample-project-b',
+              'content/projects/sample-project.project.json',
             );
             break;
           case 'create':
             await store.createProject({
-              root: '/external/loading-bay-b',
-              projectFile: 'content/projects/loading-bay.project.json',
-              projectId: 'loading-bay-b',
-              name: 'Loading Bay B',
-              entryScene: 'scene/loading-bay',
-              entrySceneName: 'Loading Bay',
+              root: '/external/sample-project-b',
+              projectFile: 'content/projects/sample-project.project.json',
+              projectId: 'sample-project-b',
+              name: 'Sample Project B',
+              entryScene: 'scene/sample-scene',
+              entrySceneName: 'Sample Project',
             });
             break;
           case 'saveAs':
             await store.saveProjectAs({
-              root: '/external/loading-bay-b',
-              projectFile: 'content/projects/loading-bay.project.json',
-              projectId: 'loading-bay-b',
-              name: 'Loading Bay B',
+              root: '/external/sample-project-b',
+              projectFile: 'content/projects/sample-project.project.json',
+              projectId: 'sample-project-b',
+              name: 'Sample Project B',
             });
             break;
           case 'read':
@@ -1271,7 +1271,7 @@ test('project lifecycle discards queued applied-object controls from the replace
         if (replacement === 'close') {
           assert.equal(store.snapshot().authoringDocument, null);
         } else {
-          assert.equal(store.snapshot().authoringDocument?.identity.projectId, 'loading-bay-b');
+          assert.equal(store.snapshot().authoringDocument?.identity.projectId, 'sample-project-b');
           assert.equal(
             store.snapshot().authoringDocument?.voxelObjectAuthoring.instances[0]?.instance.instanceId,
             'character-one',
@@ -1299,7 +1299,7 @@ test('project lifecycle discards queued applied-object controls from the replace
 async function beginAppliedObjectPlayback(store: StudioWorkspaceStore): Promise<void> {
   await store.runVoxelAction({
     kind: 'previewObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     nowMicroseconds: 5_000_000,
     command: {
@@ -1311,7 +1311,7 @@ async function beginAppliedObjectPlayback(store: StudioWorkspaceStore): Promise<
   });
   await store.runVoxelAction({
     kind: 'previewObjectInstance',
-    sceneId: 'scene/loading-bay',
+    sceneId: 'scene/sample-scene',
     instanceId: 'character-one',
     nowMicroseconds: 5_100_000,
     command: { kind: 'play' },
@@ -1324,7 +1324,7 @@ test('host-user camera and keyboard settings persist outside project authority a
     new StudioAdapterClient(new FixtureTransport()),
     new HttpStudioUserSettingsClient('/api/studio-user-settings', settingsHost.fetch),
   );
-  await first.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await first.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
   assert.equal(first.snapshot().userSettings.status, 'defaulted');
   assert.equal(first.snapshot().settings.cameraMoveSpeed, 6);
   assert.equal(first.snapshot().settings.lightingMode, 'work_light');
@@ -1345,7 +1345,7 @@ test('host-user camera and keyboard settings persist outside project authority a
     new StudioAdapterClient(new FixtureTransport()),
     new HttpStudioUserSettingsClient('/api/studio-user-settings', settingsHost.fetch),
   );
-  await second.openProject('/external/loading-bay', 'content/projects/loading-bay.project.json');
+  await second.openProject('/external/sample-project', 'content/projects/sample-project.project.json');
   assert.equal(second.snapshot().userSettings.status, 'loaded');
   assert.equal(second.snapshot().settings.cameraMoveSpeed, 14);
   assert.equal(second.snapshot().settings.lightingMode, 'authored_lights');
@@ -1369,7 +1369,7 @@ test('HTTP transport bounds both directions and leaves semantic decoding to the 
 
   const response = await client.describe();
 
-  assert.equal(response.adapter.adapterId, 'rusty-engine-demo.loading-bay');
+  assert.equal(response.adapter.adapterId, 'studio.fixture');
   assert.deepEqual(requests, ['/api/studio-adapter:POST']);
 
   let oversizedRequestFetched = false;
@@ -1440,7 +1440,7 @@ async function selectFixtureInspector(store: StudioWorkspaceStore) {
 class FixtureTransport implements StudioAdapterTransport {
   readonly requests: StudioAdapterRequest[] = [];
   rejectMutation = false;
-  openedProjectId = 'loading-bay';
+  openedProjectId = 'sample-project';
   readProjectChanged = false;
   #blockNextProjectRead = false;
   #blockedProjectRead: {
@@ -1573,7 +1573,7 @@ class VoxelObjectFixtureClient {
     readonly instance: ReturnType<typeof storedObjectInstance>;
   }[] = [];
   readonly surfaceModes = new Map<string, 'greedyCubes' | 'marchingCubes' | 'dualContouring'>();
-  openedProjectId = 'loading-bay';
+  openedProjectId = 'sample-project';
   previewRequestCount = 0;
   applyRequestCount = 0;
   playbackStatus: 'stopped' | 'playing' | 'paused' = 'stopped';
@@ -1864,7 +1864,7 @@ class VoxelObjectFixtureClient {
     return Promise.resolve({
       receipt: {
         kind: 'sceneObjectDeleted',
-        sceneId: 'scene/loading-bay',
+        sceneId: 'scene/sample-scene',
         entityId: input.entityId,
         removedObjects: 1,
       },
@@ -1922,7 +1922,7 @@ class VoxelObjectFixtureClient {
     }
     const response = {
       playback: {
-        sceneId: 'scene/loading-bay',
+        sceneId: 'scene/sample-scene',
         instanceId: 'character-one',
         voxelObjectAssetId: 'voxel-object/character',
         projectHash: 'hash-before',
@@ -1969,7 +1969,7 @@ class VoxelObjectFixtureClient {
         }))
       : this.attached
         ? [{
-            sceneId: 'scene/loading-bay',
+            sceneId: 'scene/sample-scene',
             ownerEntityId: 1,
             instance: storedObjectInstance('character-one', [4, 0, 2]),
           }]
@@ -2023,7 +2023,7 @@ class FixtureSettingsHost {
     }
     return response(true, 200, {
       ok: true,
-      canonicalProjectRoot: '/external/loading-bay',
+      canonicalProjectRoot: '/external/sample-project',
       projectKey: this.projectKey,
       path: '/config/rusty-studio/fixture.json',
       text: this.text,
@@ -2046,7 +2046,7 @@ function described(requestId: string): unknown {
     protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
     requestId,
     adapter: {
-      adapterId: 'rusty-engine-demo.loading-bay',
+      adapterId: 'studio.fixture',
       adapterVersion: 6,
       protocolVersion: STUDIO_ADAPTER_PROTOCOL_VERSION,
       projectKind: 'loadingBayProject',
@@ -2064,7 +2064,7 @@ function projectResponse(
   type: 'projectOpened' | 'projectRead',
   requestId: string,
   changed: boolean,
-  projectId = 'loading-bay',
+  projectId = 'sample-project',
 ): unknown {
   return {
     type,
@@ -2084,18 +2084,18 @@ function meshResourceReadout(digestDigit: string, label: string) {
   };
 }
 
-function projectReadout(changed: boolean, projectId = 'loading-bay') {
+function projectReadout(changed: boolean, projectId = 'sample-project') {
   const translation = changed ? [4.5, 2, 3] : [1, 2, 3];
   return {
     identity: {
       projectId,
-      name: 'Loading Bay',
-      entryScene: 'scene/loading-bay',
+      name: 'Sample Project',
+      entryScene: 'scene/sample-scene',
       sourceSchemaVersion: 11,
       currentSchemaVersion: 11,
       projectHash: changed ? 'hash-after' : 'hash-before',
       sceneRevision: changed ? 12 : 11,
-      relativeProjectFile: 'content/projects/loading-bay.project.json',
+      relativeProjectFile: 'content/projects/sample-project.project.json',
     },
     canonical: {
       projectJson: '{}',
@@ -2115,7 +2115,7 @@ function projectReadout(changed: boolean, projectId = 'loading-bay') {
         sceneId: 1,
         revision: changed ? 12 : 11,
         schemaVersion: 4,
-        name: 'Loading Bay',
+        name: 'Sample Project',
         nodeCount: 2,
         rootCount: 2,
         dependencyCount: 1,
@@ -2139,15 +2139,15 @@ function projectReadout(changed: boolean, projectId = 'loading-bay') {
         requiredArtifactCount: 1,
         declaredByteCount: 10,
         classes: [{ name: 'durable', count: 1 }],
-        roles: [{ name: 'resource:loading-bay-project', count: 1 }],
-        loadSteps: [{ stage: 'resources', path: 'content/projects/loading-bay.project.json' }],
+        roles: [{ name: 'resource:sample-project-project', count: 1 }],
+        loadSteps: [{ stage: 'resources', path: 'content/projects/sample-project.project.json' }],
         diagnostics: { diagnostics: [] },
       },
     },
     sceneHierarchy: {
       sceneId: 1,
       revision: changed ? 12 : 11,
-      name: 'Loading Bay',
+      name: 'Sample Project',
       rootNodeIds: [10, 20],
       nodes: [
         hierarchyNode(10, 0, 'staticMesh', 'player', 1, 'mesh/player', translation),

@@ -120,21 +120,6 @@ to admit the selected checkout and project. `den-serve` prints the managed LAN U
 resulting process group; use `den-serve status`, `logs`, or `stop` with the same project and
 repository arguments for later lifecycle operations.
 
-The explicit real-consumer proof is separate and mutates only a temporary copy of the demo content
-and conversion fixtures:
-
-```bash
-./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo
-```
-
-It starts fresh adapter processes to prove durable voxel/history/annotation/conversion/environment
-state and trusted host files, then runs visible Chromium workflows for Loading Bay and Converted
-Wall through the shared renderer, including project/scene/entity/asset/settings persistence,
-renderer-observable brush/conversion previews, and canonical restoration. The gate is an explicit,
-selected-consumer proof: it does not make the demo an ordinary Engine dependency or add a
-repository-wide freshness policy. Record the exact Engine, consumer, adapter, and browser-run
-identities in Den evidence for the run.
-
 Animated voxel-object runtime and quality proof uses a separate explicit consumer checkout:
 
 ```bash

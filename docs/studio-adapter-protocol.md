@@ -1,361 +1,113 @@
 # Studio external-project adapter protocol
 
-Status: protocol 15 implemented in Engine; downstream adapter proof is explicit and scoped
+Status: protocol 15 is an Engine-owned, downstream-neutral boundary.
 
-Rusty Engine Studio talks to one project-owned Rust adapter at a time through a bounded JSON-lines
-process. The adapter is a downstream composition root: it understands that project's layout,
-content schema, compatibility policy, and named domain operations, while it delegates reusable
-admission, mutation, persistence planning, inspection, and renderer projection to Rusty Engine
-owners.
-
-The first implementation is the `rusty-engine-demo` Loading Bay adapter. It proves the boundary
-against a real external checkout without turning that checkout into an ordinary Engine dependency.
+Studio talks to one selected project-owned Rust adapter through a bounded
+JSON-lines process. The adapter owns its project layout, schema, admission,
+persistence policy, and domain operations. It delegates reusable validation,
+mutation planning, inspection, and retained projection to Rusty Engine owners.
+Studio never reads project files or evaluates project semantics directly.
 
 ## Generic host discovery
 
-`pnpm run host` is intentionally generic and starts at one stable address without a product
-adapter. Each trusted development project root may carry a bounded `.rusty-studio.json` bootstrap:
+`pnpm run host` starts adapterless. A trusted selected root may provide a
+bounded `.rusty-studio.json` with an explicit adapter command and working
+directory. The host validates that bootstrap, starts one candidate process,
+performs `describe` and `openProject`, then atomically publishes the session.
+Failed bootstrap, startup, handshake, identity, or admission leaves a prior
+admitted session unchanged.
 
-```json
-{
-  "schemaVersion": 1,
-  "adapter": {
-    "command": ["./scripts/studio-adapter.sh"],
-    "cwd": "."
-  }
-}
-```
+The bootstrap is a development launch description, not a registry, plugin
+system, schema loader, or authority transfer. Downstream certification, when
+needed, is selected and owned by that downstream product; it is not an ordinary
+Studio or Engine gate.
 
-The manifest is a root-local launch description, not a registry, plugin marketplace, schema loader,
-or service locator. Its command is an explicit argv array and its working directory must remain
-inside the selected root. The Node host reads only this bootstrap, applies bounded shape and path
-checks, starts the candidate in a dedicated process group, and performs `describe` followed by
-`openProject` before publishing the new session. A failed read, start, handshake, identity check,
-or project admission terminates only the candidate and preserves the prior admitted session. The
-browser sends one bounded `POST /api/studio-session/open` request and receives the adapter
-description, canonical project readout, and active host identity together; it never reads the
-bootstrap or parses a project schema. `/api/studio-status` reports the active root, project file,
-adapter identity, and protocol once a project is open; an idle generic host reports readiness only
-through `/health` until a root is selected.
+## Protocol posture
 
-The root-local `.rusty-studio.json` files for `rusty-engine-demo` and
-`rusty-engine-voxels` are examples of this trusted development seam. Focused
-adapter or browser certification remains an explicit selected-consumer proof;
-it records exact heads in Den evidence without making them a dependency pin or
-freshness contract. Generic discovery does not replace those consumer-owned
-gates. In generic mode the existing `runningAdapter.binarySha256` field carries
-the selected bootstrap's content digest as the launch identity; managed mode
-carries the admitted executable digest.
-
-## Closed protocol
-
-Every request carries `protocolVersion: 15` and a caller-selected `requestId`. Version 15 contains
-only these tagged request families:
+Every request carries `protocolVersion: 15` and a bounded caller-selected
+`requestId`. The closed request/response schemas in
+[`studio/libs/adapter-client`](../studio/libs/adapter-client) are authoritative
+for exact operation names and validation limits. Version 15 contains only these
+tagged request families:
 
 | Request | Purpose | Canonical authority |
 | --- | --- | --- |
-| `describe` | Identify adapter, project kind, schema, and the closed operation set. | Project adapter |
-| `openProject` | Open an explicit absolute root and safe relative project file; return canonical readouts and initial projection. | Project adapter plus Engine owners |
-| `createProject`, `saveProjectAs` | Create a complete admitted project or atomically publish a renamed copy under explicit path and hash guards. | Project adapter, `content-store`, Engine admission owners |
-| `readProject` | Reread the open source and produce current readouts and one complete replaceable projection. | Project adapter plus Engine owners |
-| `createScene`, `renameScene`, `deleteScene`, `setEntryScene` | Manage the finite stored scene set and active entry scene through project-owned policy. | project adapter, `authored-scene`, `content-store` |
-| `createSceneObject`, `deleteSceneObject`, `renameSceneObject`, `reparentSceneObject` | Mutate canonical hierarchy and lifecycle with expected project and scene identity. | `authored-scene`, `entity-state`, downstream admission, `content-store` |
-| `setSceneObjectTransform`, `setEntityTranslation` | Apply a full or legacy translation-only authored transform with expected project hash and scene revision. | `authored-scene`, downstream admission, `content-store` |
-| `setSceneObjectRenderableTransform` | Apply one presentation-only local TRS after entity/world authority with expected project hash and scene revision. | `authored-scene`, `entity-state`, render projection, downstream admission |
-| `setSceneObjectAppearance` | Replace empty, static-mesh, or typed light appearance and rerun resource/projection admission. | `authored-scene`, `asset-catalog`, render projection, downstream admission |
-| `setEntityCollision`, `setEntityKinematic` | Attach, replace, or remove named entity components atomically. | `entity-state`, downstream spatial admission, `content-store` |
-| `upsertMaterial` | Create or replace one stored material definition. | `asset-catalog`, downstream admission, `content-store` |
-| `upsertVoxelSurfaceMaterial`, `removeVoxelSurfaceMaterial` | Atomically admit or remove one bounded PNG texture, optional atlas, canonical voxel surface material, and exact instance-slot assignment under project and content-hash guards. | `render-model`, `asset-catalog`, render projection, downstream project adapter |
-| `prepareAssetImport`, `prepareAssetReimport`, `applyAssetImport`, `discardAssetImport` | Read bounded project/host textual static-mesh or binary animated-GLB sources into a private deterministic plan, expose diagnostics/dependencies/generated locks, then install the exact candidate atomically or discard it. | `asset-import`, `asset-catalog`, project adapter, `content-store` |
-| `initializeVoxelAsset`, `duplicateVoxelAsset`, `replaceVoxelPalette` | Create or change canonical project-embedded voxel assets under exact asset guards. | `voxel-asset`, `engine-spatial`, project adapter |
-| `attachVoxelInstance`, `setVoxelInstanceTransform`, `removeVoxelInstance` | Manage transformed scene instances without giving Studio scene authority. | downstream scene schema plus `authored-scene`/projection admission |
-| `validateVoxelPick` | Re-cast an untrusted shared-renderer ray against the named transformed instance and compare the claimed cell/face. | `engine-spatial` picking and collision authority |
-| `applyVoxelBrush` | Expand one bounded cube brush into a validated atomic edit transaction. | `engine-spatial` edit/history plus `voxel-asset` |
-| `applyVoxelPrimitive`, `initializeVoxelTemplate` | Generate bounded block/box/shell/edge/line edits or one deterministic house asset without moving semantic generation into TypeScript. | `engine-spatial` primitive/template services plus `voxel-asset` |
-| `importVoxelAssetFile`, `exportVoxelAssetFile` | Open or publish a canonical voxel asset through explicit trusted host paths and exact replacement identity. | `voxel-asset`, downstream host-file adapter |
-| `materializeEnvironment` | Materialize one deterministic preset/seed into a managed asset, scene instance, and named project markers. | `environment-authoring`, downstream scene admission |
-| `undoVoxelEdit`, `redoVoxelEdit`, `revertVoxelHistory` | Move durable committed history under project and asset hash guards. | `engine-spatial` history codec/service |
-| `queryVoxelHistory`, `prepareVoxelHistoryRevert`, `applyVoxelHistoryRevert`, `discardVoxelHistoryRevert` | Return bounded entries/diffs/samples and retain a private non-mutating revert candidate until explicit apply or discard. | `engine-spatial` history codec/service |
-| `createVoxelAnnotationLayer`, `editVoxelAnnotation` | Create or transactionally edit typed semantic regions. | `voxel-annotation` plus target voxel identity |
-| `queryVoxelAnnotation`, `exportVoxelAnnotation`, `queryVoxelModel` | Return bounded owner readouts without sending canonical meaning to TypeScript. | `voxel-annotation`, `voxel-convert` query owners |
-| `prepareVoxelConversion`, `applyVoxelConversion`, `discardVoxelConversion` | Prepare a private bounded project/host GLB plan with primitive, affine, default-material, and typed texture policy; atomically install its exact output or discard it. | `voxel-convert`, `voxel-asset`, project adapter |
-| `inspectVoxelObjectSource` | Import a bounded static or animated GLB snapshot and expose Rust-derived hierarchy, groups, materials, UV sets, clips, channel targets, and classified diagnostics. | `voxel-convert`, project adapter |
-| `prepareVoxelObjectConversion`, `previewVoxelObjectConversion`, `applyVoxelObjectConversion`, `discardVoxelObjectConversion` | Retain one exact static-object or animated-flipbook candidate, select a stored frame for a complete shared-renderer projection, atomically install it, or explicitly discard it. | `voxel-convert`, `voxel-asset`, `voxel-object-runtime`, render projection, project adapter |
-| `prepareVoxelObjectPlacement` | Resolve one already-authored object's exact content-addressed mesh and renderer definitions for a disposable placement ghost; it creates no entity, instance, retained gameplay state, or project bytes. | downstream object admission/render projection and resource host |
-| `attachVoxelObjectInstance` | Attach a transformed canonical object with one explicit default or clip-frame posture and material overrides. | downstream scene schema plus object admission/render projection |
-| `attachVoxelObjectInstances` | Attach 1–32 ordered transformed canonical objects in one create-only, fail-atomic downstream mutation and return one canonical project readout. | downstream scene schema, owner allocation, complete project admission, persistence, and object render projection |
-| `setVoxelObjectInstanceSurfaceMode` | Replace one applied voxel-object entity's derived surface choice under an expected project hash and return the authoritative persisted project and projection. | downstream project schema, object admission/render projection, and atomic persistence |
-| `previewVoxelObjectInstance` | Scrub, play, pause, sample, or stop one applied instance through explicit caller time while returning its saved pose, disposable playback posture, and a complete renderer-neutral projection. | `voxel-object-runtime`, render projection, downstream project adapter |
-| `closeProject` | Release open-project and retained-projection state. | Project adapter host lifecycle |
+| `describe` | Identify an adapter, project kind, schema, and its closed operation set. | Project adapter |
+| `openProject`, `readProject`, `closeProject` | Admit, reread, or release one explicit project and retained projection. | Project adapter plus Engine owners |
+| `createProject`, `saveProjectAs` | Create or atomically publish a complete admitted project under exact path and hash guards. | Project adapter, `content-store`, admission owners |
+| `createScene`, `renameScene`, `deleteScene`, `setEntryScene` | Manage the finite stored scene set through project policy. | Project adapter, `authored-scene`, `content-store` |
+| `createSceneObject`, `deleteSceneObject`, `renameSceneObject`, `reparentSceneObject` | Mutate canonical hierarchy and lifecycle under project/scene guards. | `authored-scene`, `entity-state`, admission, `content-store` |
+| `setSceneObjectTransform`, `setEntityTranslation`, `setSceneObjectRenderableTransform` | Apply authored or presentation-local transforms without transferring authority to Studio. | `authored-scene`, `entity-state`, render projection, admission |
+| `setSceneObjectAppearance`, `setEntityCollision`, `setEntityKinematic` | Replace named entity appearance or components atomically. | `authored-scene`, `entity-state`, `asset-catalog`, admission |
+| `upsertMaterial`, `upsertVoxelSurfaceMaterial`, `removeVoxelSurfaceMaterial` | Admit materials and bounded texture/atlas resources under exact project guards. | `asset-catalog`, `render-model`, render projection, adapter |
+| `prepareAssetImport`, `prepareAssetReimport`, `applyAssetImport`, `discardAssetImport` | Create, retain, apply, or discard a private deterministic import plan. | `asset-import`, `asset-catalog`, adapter, `content-store` |
+| `initializeVoxelAsset`, `duplicateVoxelAsset`, `replaceVoxelPalette` | Change canonical embedded voxel assets. | `voxel-asset`, `engine-spatial`, adapter |
+| `attachVoxelInstance`, `setVoxelInstanceTransform`, `removeVoxelInstance` | Manage transformed scene instances without giving Studio scene authority. | Project schema, `authored-scene`, projection admission |
+| `validateVoxelPick`, `applyVoxelBrush`, `applyVoxelPrimitive`, `initializeVoxelTemplate` | Revalidate untrusted picks and stage bounded atomic voxel edits. | `engine-spatial`, `voxel-asset` |
+| `importVoxelAssetFile`, `exportVoxelAssetFile` | Read or publish canonical voxel assets through explicit trusted host paths. | `voxel-asset`, project host-file adapter |
+| `materializeEnvironment` | Materialize one deterministic environment preset into managed content. | `environment-authoring`, project admission |
+| `undoVoxelEdit`, `redoVoxelEdit`, `revertVoxelHistory` | Move durable history under exact asset/project guards. | `engine-spatial` history codec/service |
+| `queryVoxelHistory`, `prepareVoxelHistoryRevert`, `applyVoxelHistoryRevert`, `discardVoxelHistoryRevert` | Inspect or retain one private non-mutating history candidate. | `engine-spatial` history codec/service |
+| `createVoxelAnnotationLayer`, `editVoxelAnnotation`, `queryVoxelAnnotation`, `exportVoxelAnnotation` | Maintain bounded semantic annotations and owner readouts. | `voxel-annotation` |
+| `queryVoxelModel`, `prepareVoxelConversion`, `applyVoxelConversion`, `discardVoxelConversion` | Query models or stage an exact private GLB conversion candidate. | `voxel-convert`, `voxel-asset`, adapter |
+| `inspectVoxelObjectSource`, `prepareVoxelObjectConversion`, `previewVoxelObjectConversion`, `applyVoxelObjectConversion`, `discardVoxelObjectConversion` | Inspect a bounded object source or retain, preview, publish, or discard an exact candidate. | `voxel-convert`, `voxel-asset`, `voxel-object-runtime`, render projection, adapter |
+| `prepareVoxelObjectPlacement` | Resolve one admitted object's resource-only placement preview; it creates no entity, instance, project bytes, or gameplay state. | Project object admission, render projection, resource host |
+| `attachVoxelObjectInstance`, `attachVoxelObjectInstances` | Create one or 1–32 ordered object instances in a fail-atomic project mutation. | Project schema, owner allocation, complete admission, persistence, object projection |
+| `setVoxelObjectInstanceSurfaceMode`, `previewVoxelObjectInstance` | Persist one derived surface choice or sample disposable playback through explicit caller time. | Project schema, `voxel-object-runtime`, projection, atomic persistence |
 
-Responses are likewise a closed tagged union: `described`, `projectOpened`, `projectRead`,
-`entityTranslationApplied`, `projectMutationApplied`, `voxelPickValidated`, `voxelRead`,
-`voxelConversionPrepared`, `voxelConversionDiscarded`, `voxelObjectSourceInspected`,
+Responses are a closed tagged union: `described`, `projectOpened`,
+`projectRead`, `entityTranslationApplied`, `projectMutationApplied`,
+`voxelPickValidated`, `voxelRead`, `voxelConversionPrepared`,
+`voxelConversionDiscarded`, `voxelObjectSourceInspected`,
 `voxelObjectConversionPrepared`, `voxelObjectConversionPreviewed`,
 `voxelObjectConversionDiscarded`, `voxelObjectPlacementPrepared`,
 `voxelObjectInstancePreviewed`, `voxelHistoryRevertPrepared`,
-`voxelHistoryRevertDiscarded`, `voxelAssetFileExported`, `assetImportPrepared`,
-`assetImportDiscarded`, `projectClosed`, or `rejected`. There is no
-generic method string, command registry, arbitrary payload, provider lookup, RuntimeSession, or
-cross-capability gameplay envelope.
+`voxelHistoryRevertDiscarded`, `voxelAssetFileExported`,
+`assetImportPrepared`, `assetImportDiscarded`, `projectClosed`, or `rejected`.
+There is no generic method string, command registry, arbitrary payload,
+provider lookup, runtime session, or cross-capability gameplay envelope.
 
-The TypeScript owner is [`../studio/libs/adapter-client`](../studio/libs/adapter-client). It performs
-strict structural decoding, request correlation, and named client methods. It deliberately does not
-parse the canonical owner JSON strings or reproduce project, scene, entity, voxel, persistence, or
-game semantics. Shared render frames are decoded by `@rusty-engine/render-contracts`.
-The isolated Studio workspace includes the same-repository renderer packages explicitly. Its
-`viewport` library mounts `renderer-host`, which composes render-projection and renderer-three;
-Studio does not import Three, retain a private scene graph, translate materials/resources, own a
-raycaster, or duplicate renderer disposal.
+The adapter remains the canonical project and persistence authority. TypeScript
+only presents typed readouts and submits named requests; it never acquires a
+project store, generic extension payload, dynamic module loader, renderer
+internals, or gameplay policy.
 
-Protocol 14 requires one closed `voxelSurfaceAuthoring` readout. Its texture,
-atlas, material, assignment, version, and hash facts are reconstructed by the
-downstream Rust adapter. Optional `textureResources` identify only admitted
-content-addressed PNG bytes; Studio resolves them through the existing trusted
-host resource route and never treats a browser-selected path as catalog truth.
+## Safety, private plans, and identity
 
-## Loading Bay owner composition
+The host bounds request and response bytes. Selected roots are absolute;
+project paths are safe and relative. Adapters reject symlinks in existing path
+chains, escapes, non-files, oversized sources, malformed protocol input, and
+unsupported versions. Host replacement uses an exact prior SHA-256 and a
+same-directory candidate with a final target recheck.
 
-Opening `content/projects/loading-bay.project.json` exercises the shipped Engine capabilities:
+Every durable mutation compares its exact project hash and relevant scene or
+asset revision, stages the named owner operation on a candidate, reruns complete
+project admission, builds canonical readouts and projection, atomically
+publishes through `content-store`, then rereads canonical bytes. Rejected,
+invalid, stale, and malformed operations leave original project bytes unchanged.
 
-- `content-store` admits the bounded project source and identity-bearing manifest;
-- `asset-catalog` owns the derived catalog and validation;
-- `authored-scene` owns the canonical entry-scene view, edit service, and admission plan;
-- `entity-state` owns admitted generic entity invariants and the durable snapshot;
-- `engine-inspector` owns catalog, scene, entity, persistence, and voxel readouts;
-- Loading Bay owns its project schema and complete game-specific semantic admission; and
-- `render-projection` and `render-model` own the renderer-neutral retained frame.
+Prepared imports, conversions, object conversions, and history reverts are
+private adapter-process candidates with exact source, settings, project, asset,
+plan, and output identities. Their visible fields are informative; apply accepts
+only the retained candidate under its current optimistic guards. A replacement
+prepare evicts the older candidate. Disposable voxel-object playback is likewise
+private state and clears on open, reread, close, and every durable mutation.
 
-The adapter returns the canonical project, catalog, scene, entity-state, and content-manifest codec
-results alongside inspection DTOs, voxel inspection, bounded entity-component identity references,
-an authored-scene hierarchy readout, and the shared render frame. Hierarchy order, node identity,
-parentage, kind, local/world transform, and renderable-local transform are produced in Rust. Every response carries a complete
-frame, including resource definitions, so Studio can atomically replace the shared renderer channel.
-These are readouts rebuilt from admitted Rust state on every read, not a second content model.
+The adapter returns complete renderer-neutral frames rebuilt from admitted Rust
+state. Studio may select a clip/frame and schedule another named sample, but it
+does not mesh voxels, advance animation, manufacture hashes, perform raycasts,
+or restore browser-owned renderer state. The built-in Voxel Object inspector is
+an explicit static contribution with exact identity matching; it does not create
+a plugin registry, dynamic import, component payload, or service locator.
 
-Protocol 13 keeps grounding observational. Studio derives selected admitted static/animated mesh
-bounds from the complete retained frame, presents an origin triad, bounds, contact plane, and
-numeric clearance on the disposable debug layer, then submits only the named renderable-local
-mutation when the user aligns the lower bound. The adapter validates and publishes through
-`authored-scene`; entity/world, collision, navigation, and gameplay transforms do not change.
+Managed host identity exposes a source/build identity, adapter executable
+SHA-256, and negotiated protocol only as operational evidence. It is neither
+project authority nor a dependency pin. The generic root-local path does not
+require a revision command, network update, or sibling-checkout mutation.
 
-Protocol 9 also admits one optional, independently versioned `meshResources` readout for adapters
-that opt into content-addressed retained mesh sources. The frame carries only renderer-neutral
-identity, hash, length, encoding, and stream offsets; the readout maps those identities to
-downstream-owned project-relative paths. Project readouts and every conversion-candidate,
-discard, or applied-instance response that carries a projection may carry the manifest for that
-exact frame. Studio switches the live manifest and retained frame together, so a private candidate
-cannot accidentally resolve against the canonical project's resources. Studio resolves the
-bounded bytes through its existing resource host before applying the frame. Inline adapters remain
-valid, and the authoritative voxel object remains unchanged. The format and migration contract is
-documented in
-[the voxel mesh data-plane decision](topics/voxel/voxel-mesh-data-plane.md).
+## Verification
 
-The Converted Wall artifact additionally composes canonical `voxel-asset` payloads, catalog material
-definitions, transformed scene instances, `engine-spatial` collision/edit/history state,
-`voxel-annotation` layers, bounded `voxel-convert` model/conversion readouts, and voxel chunk
-projection. The shared frame tags voxel assets and instances for renderer hint routing; Rust still
-revalidates the ray, transformed instance, local cell, and face before an edit can use the result.
-
-Protocol 7 added a required `voxelObjectAuthoring` readout beside the unchanged voxel-volume
-readout. It exposes canonical object grid/pivot, frame identities and timing, clips, palette and
-source-material bindings, provenance, and transformed scene instances after every open, mutation,
-and reread. It is an inspection DTO over project-owned Rust content, not a TypeScript object format.
-
-Prepared object previews return a complete renderer-neutral frame composed by the downstream Rust
-adapter from the canonical project plus one private candidate instance. The frame contains the
-actual `defineVoxelObject` resource and object-instance operations produced through the shared
-runtime/projection path. Angular may select a clip/frame and run a disposable play timer, but every
-scrub or timer tick names a Rust-stored frame and receives another complete owner-produced frame.
-It never meshes sample voxels, deforms animation, computes timing, or manufactures hashes.
-
-Protocol 8 keeps applied-instance playback separate from candidate inspection. Studio sends a
-closed playback command and an explicit monotonic microsecond timestamp. The downstream adapter
-retains one disposable `VoxelObjectPlayer`, while Rust resolves admitted clip durations, playback
-posture, runtime frame identity, and the complete shared-renderer projection. The response reports
-the durable default/clip-frame selection beside the transient sampled frame and exact project/object
-hashes. Scrub, play, pause, and timer samples do not publish the player posture, revise the project,
-or rewrite the voxel-object artifact; `stop` presents the durable pose again. TypeScript schedules
-only the next sampling request and never advances frame indices or interprets clip durations. A
-pause or stop chosen during an in-flight sample is queued as the next closed command; the latest
-user control wins, so stop may supersede a queued pause without racing adapter requests. That queue
-is scoped to the current project and object-operation generations and is discarded by every
-canonical project lifecycle transition or accepted replacement.
-
-Protocol 15 adds one required `surfaceMode` to every stored voxel-object instance and one named
-`setVoxelObjectInstanceSurfaceMode` mutation. The selected Entity inspector offers the three
-Engine-defined choices, but it never changes retained renderer state directly. It submits the
-expected project hash and instance identity, then accepts only the downstream Rust adapter's
-persisted project, receipt, and complete projection. The adapter must stage mode-specific object
-admission and projection before publishing project bytes; unsupported textured reconstructed
-surfaces, quotas, or projection failures therefore leave the previously admitted project and
-renderer readout intact. Surface mode remains presentation configuration: voxel occupancy,
-collision, navigation, animation posture, and gameplay facts are unchanged.
-
-Protocol 9 makes the owning entity explicit for every applied voxel-object instance readout. The
-owner identity is supplied by the downstream Rust project schema, is repeated in hierarchy,
-entity-state inspection, and renderer metadata, and lets Studio locate the typed Voxel Object
-capability without matching labels or assets. Applied playback therefore lives in the selected
-Entity inspector; the conversion panel remains responsible for source inspection, candidates,
-canonical asset publication, and instance attachment. This is one explicit built-in capability,
-not a universal component-description or arbitrary command protocol.
-
-Protocol 10 and the static shell implement the shared downstream component seam documented in
-[`studio-downstream-entity-inspector-extensions.md`](studio-downstream-entity-inspector-extensions.md).
-`AdapterDescription.entityInspectorContracts` advertises bounded exact contract identities, while
-`StudioProjectReadout.entityComponents` attributes stable component and optional contract identity
-to canonical hierarchy/entity-state owners. The decoder bounds identities to 128 ASCII bytes,
-advertisements to 64, total references to 4096, and references per owner to 32. It rejects
-duplicates, orphan owners, malformed identities, non-positive versions, unadvertised contracts,
-and Voxel Object instances missing their exact built-in component reference. Unknown components
-without an inspector contract remain admitted as read-only identity. Component values, schemas,
-revisions, UI metadata, mutation payloads, module locations, and executable handles remain outside
-the core protocol; downstream values and mutations use separately closed product-owned contracts
-composed statically by the downstream Studio host.
-
-The shared `editor-shell` implements that composition as one immutable application-root
-contribution list with exact `(componentTypeId, contractId, contractVersion)` admission and
-deterministic ordering. An exact advertised/reference match mounts the contribution; unsupported
-or contract-free identities stay visible and read-only. Panels receive common owner/project and
-generation context plus a single bounded mutation-settlement port. That port serializes against
-core edits, verifies a downstream before/after hash receipt through canonical `readProject`, and
-discards late settlement after project, selection, or contract replacement. It does not carry
-component values or invoke semantic operations. The stock app explicitly supplies the built-in
-Voxel Object contribution. The reviewed Loading Bay application statically adds its independent
-`rusty-engine-demo.loading-bay.weapon` / `rusty-engine-demo.loading-bay.weapon-authoring` v1
-contribution, whose `readLoadingBayWeapon` and `replaceLoadingBayWeapon` tags remain in a separately
-decoded product-owned union. Unsupported but advertised identities remain visible and read-only.
-There is no dynamic import, extension payload, store/service locator, or runtime contribution
-discovery.
-
-Protocol 11 adds one deliberately narrower presentation read for viewport placement. An unused
-canonical voxel-object asset is absent from a complete project frame because no live retained
-instance references it. `prepareVoxelObjectPlacement` therefore returns a resource-only frame with
-at most bounded material and texture definitions and exactly one `defineVoxelObject` matching the
-requested asset and content hash. The core decoder rejects handles, instance creation, updates,
-release operations, a second object definition, identity mismatch, and unknown fields. Studio may
-retain only one such candidate, merge identical definitions without replacing canonical resources,
-and dispose it on cancel or project replacement. `attachVoxelObjectInstance` remains the only
-placement mutation: the downstream owner allocates the entity, validates the complete instance,
-atomically publishes it, and returns a canonical reread. Keeping the prepared resources through
-that reread avoids a renderer remount between ghost and accepted instance without making the ghost
-project truth.
-
-Protocol 12 retains the single-placement path and adds one bounded batch mutation for authored
-composition. `attachVoxelObjectInstances` carries 1–32 ordered `(sceneId, instance)` entries under
-one expected project hash. The downstream adapter rejects duplicate request identities, collisions
-with existing instances, stale hashes, invalid later entries, exhausted owner or aggregate project
-quotas, and oversized request/readout bytes before publication. It stages every owner allocation,
-typed component, scene entry, complete project admission, renderer projection, and project-store
-write before committing. Success returns one ordered receipt with the stable owner allocated for
-each entry and one canonical project readout. Studio accepts that readout once and selects the last
-request-order owner; it deliberately clears the one-placement undo candidate because pretending
-one member represented the atomic batch would be misleading. Rejection leaves the previous
-project, selection, local one-placement history, and renderer projection unchanged. The operation
-is generic Studio composition and carries no product vocabulary or placement-loop callback.
-
-## Safety and atomicity
-
-The process bounds request and response bytes. The selected root must be absolute and the project
-path must be safe and relative. Explicit host selections must be absolute and lexically normalized.
-The downstream adapter rejects symlinks throughout existing path chains, path escapes, non-files,
-oversized sources, malformed protocol input, and unsupported versions. Host replacement requires
-the exact prior SHA-256 and uses a synced same-directory candidate with a final target recheck.
-
-Every durable mutation is staged before publication:
-
-1. compare exact source hash and derived scene revision;
-2. invoke the one named scene/material/voxel/annotation/history/conversion owner on a candidate;
-3. rerun complete Loading Bay admission;
-4. build and authorize the `content-store` write candidate;
-5. build canonical readouts and renderer projection;
-6. atomically replace the file through the existing project store; and
-7. reread canonical bytes and confirm publication.
-
-Rejected, invalid, stale, and malformed operations leave the original project bytes unchanged.
-Prepared volume conversions, voxel-object conversions, and history reverts are private
-adapter-process values containing exact source/settings/project/asset identity. Visible fields are
-informative; apply succeeds only for the retained candidate and current optimistic guards. Object
-apply additionally pins the exact candidate output hash. Stale project/source/plan/output identity
-and an oversized renderer projection fail before publication. Object discard returns a newly
-composed canonical complete frame rather than asking Studio to restore browser-owned scene state.
-Applied voxel-object playback is private adapter-process state as well. Open, reread, close, or any
-durable project mutation clears it, so a reopened project begins from canonical bytes and may start
-a fresh transient preview without reconstructing hidden browser state.
-The adapter retains at most one prepared candidate of each kind; a successful replacement prepare
-evicts the older candidate, whose identity then rejects without mutation. Voxel history is encoded beside the
-embedded asset and reconstructed by a fresh process before query, undo, redo, or revert.
-
-Asset-import plans use the same pattern. The visible plan contains settings, source hash, generated
-artifact readouts, diagnostics, and a classification, but apply accepts only the retained private
-candidate with its exact plan and project hashes. Reimport replaces only the previously generated
-asset IDs, rejects unrelated collisions, reruns complete project admission, and canonically rereads
-the result. Source drift is observational until a named reimport is prepared and applied.
-
-Host-user settings are intentionally not part of this Rust protocol because they are browser/webview
-host preferences, not gameplay or project semantics. The isolated Node host exposes one bounded
-GET/PUT endpoint backed by the shared versioned `studio-user-settings` artifact. Files are keyed by
-canonical project root outside project content, protected by SHA-256 compare-and-swap, symlink and
-size checks, same-directory atomic replacement, and future-version preservation. Renderer-host,
-not the Angular shell, implements the resulting camera movement, boost, pan, orbit, and input cleanup.
-
-The host also owns a separate strict schema-1 runtime-identity readout. Managed `den-serve` starts
-only after a current `describe` handshake succeeds and the configured adapter ID and protocol match.
-`/health`, `/api/studio-status`, and the compact title-bar observation may expose the Engine source
-commit, selected consumer/build identity, executable SHA-256, and negotiated protocol. This is
-operational evidence, not project or gameplay authority and not a dependency pin. Direct
-`pnpm run host` use remains explicitly `unmanaged` and cannot claim managed source/build evidence.
-
-The generic root-local workflow consumes the Engine checkout selected by the operator. It does not
-require a revision intent, freshness command, network update, or sibling-checkout mutation. A
-managed or reverse-integration path may still be selected for a narrow reproducibility proof; its
-exact source identities belong in the Den evidence for that run rather than in downstream source
-configuration.
-
-The managed supervisor hashes and watches the selected session inputs. Identity
-drift or an unreadable replacement produces a `studioRestartRequired` receipt
-and bounded process-group termination; no branch lookup, downgrade, fallback,
-or stale adapter remains available on the old port.
-
-## Gates
-
-- `./scripts/verify-studio.sh` checks and tests the TypeScript boundary without any demo checkout.
-- The demo's Rust gate tests protocol decoding, owner delegation, path safety, bounds, downstream
-  semantic rejection, optimistic replacement, atomicity, and canonical reread.
-- `./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo` is the explicit,
-  narrow cross-repository proof. It selects the checkout supplied by the caller, builds the
-  project-owned adapter, opens Loading Bay, and mutates a temporary Converted Wall copy through
-  brush/primitive/history-preview/template/host-file/
-  annotation/model-query/conversion/environment operations.
-  It closes and starts a fresh adapter process to verify reconstruction and byte-preserving stale
-  rejection. Real Chromium workflows then cover canonical hierarchy selection, observable
-  shared-renderer selection/full-transform preview/cancel, project/scene/entity/light/component
-  authoring, general asset import/dependency/lock/source-drift/reimport, restart-stable host-user
-  camera/input preferences, transformed voxel picking,
-  shared-renderer brush/conversion preview restoration, brush undo/redo, annotations, private-plan
-  conversion, resource-only voxel-object ghosts, repeated placement, Entity-inspector duplication,
-  placement undo/reapply, reload persistence, and stale non-mutation. It also builds and serves the
-  downstream Loading Bay Studio composition in fresh Chromium processes: the built-in Voxel Object panel runs
-  through the shared outlet, an advertised uninstalled identity degrades to read-only, and owner 88's
-  real Weapon damage is replaced, canonically reread, page-reloaded, and reconstructed by a fresh
-  host and Rust adapter process. `scripts/verify-studio-entity-inspector-integration.sh` owns this
-  focused sub-proof but is invoked only after the parent gate has selected the affected consumer.
-- `.github/workflows/studio-demo-integration.yml` is an explicit integration workflow, not a
-  default downstream lockstep gate. When selected, it records the exact provider and consumer heads
-  used for that run in its review evidence and executes the real browser owners. Documentation-only
-  Engine changes do not automatically launch every downstream repository suite.
-- `./scripts/verify-studio-voxel-integration.sh /absolute/path/to/rusty-engine-voxels` separately
-  runs the focused voxel consumer proof over the selected checkout. It checks the consumer's
-  runtime/quality reports, then drives saved-pose, named-clip,
-  repeat, pause/resume, once, restore, runtime texture/atlas authoring, asymmetric framebuffer
-  pixels, replacement, fresh-host reopen, resource counts, and disposal through current Studio and
-  the shared renderer in Chromium. The exact measurements and stopping point are recorded in the
-  [textured voxel campaign closeout](textured-voxel-campaign-closeout.md).
-  `.github/workflows/studio-voxel-integration.yml` reproduces the same clean
-  checkout; ordinary Studio and provider gates do not inspect a sibling voxel repository.
-
-The demo and voxel proofs are independent. Passing one focused consumer proof does not certify the
-other downstream product or turn either checkout into an Engine dependency policy.
-
-Ordinary `./scripts/verify.sh` remains Rust/shell-only and does not inspect, build, or require a
-sibling demo checkout.
+Run `./scripts/verify-studio.sh` for the isolated Studio workspace. The
+optional `./scripts/verify-studio-generic-browser-integration.sh` accepts one
+explicit supporting consumer checkout for browser-host discovery evidence.
+Neither check launches or certifies a retired Demo product.

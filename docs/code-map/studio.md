@@ -11,12 +11,12 @@ viewport, and its closed external-project adapter protocol.
 - Adapter client protocol, viewport integration, voxel editor, user settings,
   and Studio-owned host services.
 - Studio migration accounting and explicit owner-adoption evidence.
-- Browser and explicit external-demo and voxel-consumer integration gates.
+- Browser and explicit generic-consumer integration gates.
 
 ## Does not own
 
 - Ordinary Rust provider state or game-specific adapter implementations.
-- The loading-bay product, its content, or its current task queue.
+- Any retired downstream product, its content, or its current task queue.
 - A general Engine scheduler, gameplay runtime, or browser dependency for Rust.
 
 ## Primary paths
@@ -35,7 +35,6 @@ viewport, and its closed external-project adapter protocol.
 - [`studio/ops/rusty-studio.service`](../../studio/ops/rusty-studio.service)
 - [`scripts/verify-studio-generic-browser-integration.sh`](../../scripts/verify-studio-generic-browser-integration.sh)
 - [`studio/test/generic-browser`](../../studio/test/generic-browser)
-- [`studio/test/entity-inspector-consumer-browser`](../../studio/test/entity-inspector-consumer-browser)
 - [Studio migration contract](../studio-migration-contract.md)
 - [Studio adapter protocol](../studio-adapter-protocol.md)
 - [Persistent generic Studio service](../topics/studio-service.md)
@@ -123,8 +122,8 @@ viewport, and its closed external-project adapter protocol.
 
 ## Private or forbidden paths
 
-- Do not import or mutate a sibling `rusty-engine-demo` checkout during ordinary
-  Studio or provider work.
+- Do not import or mutate a sibling checkout during ordinary Studio or provider
+  work.
 - Do not move adapter/game policy into Studio UI state.
 - Do not make local browser storage or DOM state the source of project truth.
 - Do not add Studio packages to the ordinary Cargo or root pnpm gate.
@@ -134,19 +133,17 @@ viewport, and its closed external-project adapter protocol.
 ```bash
 ./scripts/verify-studio.sh
 ./scripts/verify-studio-generic-browser-integration.sh \
-  /absolute/path/to/rusty-engine-demo \
   /absolute/path/to/rusty-engine-voxels
-./scripts/verify-studio-demo-integration.sh /absolute/path/to/rusty-engine-demo
 ./scripts/verify-studio-voxel-integration.sh /absolute/path/to/rusty-engine-voxels
 ```
 
 The first command proves the isolated Studio workspace. The generic browser
-command explicitly selects adjacent downstream checkouts, starts one
+command explicitly selects an adjacent downstream checkout, starts one
 Engine-hosted Studio, and proves root-local adapter discovery and transactional
-project switching. The demo and voxel commands are focused opt-in integration
-proofs over the selected adjacent checkout: they build its project-owned Rust
-adapter, run Engine's Studio host, and exercise the applicable protocol,
-mutation, persistence, resource, and browser behavior.
+project handling. The voxel command is a focused opt-in integration proof over
+the selected adjacent checkout: it builds its project-owned Rust adapter, runs
+Engine's Studio host, and exercises the applicable protocol, mutation,
+persistence, resource, and browser behavior.
 
 These integration commands consume each sibling checkout exactly as it stands.
 They do not fetch, pin, checkout, or mutate the Engine or downstream source
@@ -175,7 +172,5 @@ project hash. A short presentation timeout is not an authority or atomicity boun
   [Content, assets, and scenes](content-assets-and-scenes.md).
 - Shared renderer behavior:
   [Renderer workspace and hosts](renderer-workspace-and-hosts.md).
-- Loading-bay product behavior belongs in the external `rusty-engine-demo`
-  repository.
 - Voxel experiment content, quality reports, and adapter policy belong in the external
   `rusty-engine-voxels` repository.

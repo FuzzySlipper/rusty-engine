@@ -19,7 +19,6 @@
     "check:boundaries": "node scripts/check-boundaries.mjs && node scripts/check-entity-inspector-boundary.mjs",
     "check:migration": "node scripts/check-migration-plan.mjs",
     "test:migration": "bash scripts/test-migration-checker.sh",
-    "test:browser-integration": "playwright test --config playwright.config.ts",
     "verify:adapter-client": "pnpm --filter @rusty-engine/studio-adapter-client run typecheck && pnpm --filter @rusty-engine/studio-adapter-client run test",
     "verify": "pnpm run check:boundaries && pnpm run check:migration && pnpm run test:migration && pnpm run check && pnpm run build"
   },

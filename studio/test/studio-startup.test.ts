@@ -10,12 +10,12 @@ test('startup leaves project selection empty when no pair is supplied', () => {
 test('startup accepts exactly one explicit external root and relative project file', () => {
   assert.deepEqual(
     readStudioStartupProject(
-      'http://127.0.0.1:4300/?root=%2Fwork%2Floading-bay&project=content%2Fprojects%2Floading-bay.project.json',
+      'http://127.0.0.1:4300/?root=%2Fwork%2Fstudio-fixture&project=content%2Fprojects%2Fstudio-fixture.project.json',
     ),
     {
       status: 'open',
-      root: '/work/loading-bay',
-      projectFile: 'content/projects/loading-bay.project.json',
+      root: '/work/studio-fixture',
+      projectFile: 'content/projects/studio-fixture.project.json',
     },
   );
 });
