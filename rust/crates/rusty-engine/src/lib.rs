@@ -16,6 +16,7 @@ pub use core_math;
 pub use core_space;
 pub use core_time;
 pub use core_voxel;
+pub use developer_command;
 pub use engine_inspector;
 pub use engine_spatial;
 pub use entity_state;

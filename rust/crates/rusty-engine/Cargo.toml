@@ -8,6 +8,7 @@ asset-catalog.workspace = true
 asset-import.workspace = true
 authored-scene.workspace = true
 content-store.workspace = true
+developer-command.workspace = true
 core-assets.workspace = true
 core-ids.workspace = true
 core-math.workspace = true

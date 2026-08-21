@@ -489,6 +489,34 @@ the outer gameplay-rules schema, so explicit authoring routes can emit either
 schema-1 integer or schema-2 binary64 envelopes without changing the extension
 identity or adding a runtime extension path.
 
+## Developer-command boundary
+
+`developer-command` is an optional host-neutral contract crate for a product's
+explicit developer tooling seam. It owns versioned typed request/reply
+envelopes, stable command/correlation/runtime/profile identities, semantic
+lanes, bounded descriptors, discovery, provenance, and synchronous in-process
+dispatch guards. A product constructs one instance-owned binding set, declares
+the compiled command descriptors it recognizes, binds only the handlers it
+exposes, refreshes observed runtime facts, and invokes dispatch from the
+product's existing queue at a product-selected safe point.
+
+The product retains the command-family vocabulary, owner services, live state,
+queue, safe-point timing, command-specific authorization, transport/client
+adapters, persistence, and ordinary typed owner receipts. Lanes are descriptor
+metadata, not caller-supplied authority. Profiles and explicit bindings select
+availability: discovery reports declared descriptors and the exact bound subset
+so omitted commands are unknown while declared but unbound privileged commands
+are unavailable. Envelope validation rejects stale runtime/profile/revision or
+catalog facts, cancellation, timeout, and correlation errors before a handler
+is called; entered handlers retain their ordinary mutation semantics.
+
+This crate is not a universal command/event bus, scheduler, service locator,
+reflection or method-name bridge, world transaction, generic component write
+API, network server, filesystem API, or UI shell. Reply/provenance/history
+values serialize only as output for a chosen adapter; they are not admitted
+wire input. See [Developer commands](code-map/developer-command.md) for the
+public composition and focused gates.
+
 ## Spatial authority and derived mechanisms
 
 `engine-spatial::VoxelCollisionScene` holds canonical material voxels alongside projections derived
