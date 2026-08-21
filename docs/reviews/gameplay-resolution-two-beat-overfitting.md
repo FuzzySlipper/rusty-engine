@@ -1,6 +1,8 @@
 # Gameplay resolution two-beat overfitting report
 
-Status: accepted provider shape after task 7032's Dagger and Doom consumers.
+Status: historical acceptance evidence after task 7032's Dagger and Doom
+consumers. This report records how the second implementation challenged the
+original surface; it is not a current consumer-count promotion gate.
 
 ## Evaluated revisions
 
@@ -148,6 +150,7 @@ game meaning upstream.
 
 The resulting seam is narrow enough to remain in the public Rusty Engine
 facade. It has two mechanically different production consumers, no game or host
-dependencies, and became smaller under the second consumer. Future work should
-extend it only for host-neutral lifecycle evidence demonstrated by another real
-consumer; otherwise the change belongs downstream.
+dependencies, and became smaller under the second consumer. Future work may
+extend it through an explicit architecture decision when the addition is a
+host-neutral lifecycle mechanism with a clear owner and bounded evidence;
+game vocabulary and policy still belong downstream.

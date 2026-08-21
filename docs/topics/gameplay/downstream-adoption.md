@@ -12,8 +12,8 @@ The central rule is:
 Rusty Engine provides optional mechanisms. It does not prescribe one game
 model, one rules language, or one directory full of inherited sample code.
 Downstream Rust owns game meaning, live authority, orchestration, and
-persistence. Optional build-time TypeScript makes retained definitions easier
-to compose; it does not execute gameplay.
+persistence. An optional build-time TypeScript authoring DSL makes retained
+definitions easier to compose; it does not execute gameplay.
 
 This document composes the canonical boundaries in
 [design](../../design.md), the
@@ -22,6 +22,9 @@ This document composes the canonical boundaries in
 [gameplay resolution](../../code-map/gameplay-resolution.md) code maps, and the
 [gameplay rules contract](../../gameplay-rules-contract.md). Those documents
 remain authoritative for their individual Engine surfaces.
+Use [upstream promotion and authoring DSL](../development/upstream-promotion-and-authoring-dsl.md)
+when deciding whether a missing mechanism belongs in Engine, downstream Rust,
+or the authoring DSL.
 
 ## Start with the product, not the old code
 
@@ -48,7 +51,7 @@ not improve code already marked for deletion.
 For each retained concept, classify its destination:
 
 1. **Authored definition:** immutable configuration or content composed at
-   build time. It may belong in downstream TypeScript.
+   build time. It may belong in a downstream TypeScript authoring DSL.
 2. **Downstream Rust semantics:** decoding, semantic compilation, policy,
    formulas, target meaning, facts, scheduling, and orchestration.
 3. **Reusable Engine mechanism:** stats, tracks, effects, items, damage,
@@ -104,11 +107,12 @@ gameplay/
     mechanics.rs             # MechanicsCatalog and component binding
     resolution.rs            # intents, facts, policy, transactions, receipts
     decision.rs              # optional AI/player decision-to-intent boundary
-  authoring/                 # optional build-time TypeScript workspace
+  authoring/                 # optional build-time TypeScript authoring DSL
     package.json
     tsconfig.json
     src/
-      grammar/               # game-owned types and builders
+      syntax/                # thin constructors for admitted nodes
+      macros/                # pure helpers lowering to existing syntax
       catalogs/              # everyday content/rule editing surface
       packages/              # package composition roots
     scripts/
@@ -122,7 +126,7 @@ product/                     # host, runtime loop, persistence, rendering, UI
 The exact folder names are not an Engine API. The important distinctions are:
 
 - `gameplay/src` above is Rust authority;
-- `gameplay/authoring/src` is optional build-time TypeScript;
+- `gameplay/authoring/src` is an optional build-time TypeScript authoring DSL;
 - `data/gameplay` contains immutable exchanged artifacts; and
 - product UI TypeScript lives elsewhere.
 
@@ -140,10 +144,10 @@ Studio application. Do not make the product shell the semantic compiler.
 A rules-heavy authored path has four distinct forms:
 
 ```text
-TypeScript authoring source
+optional TypeScript authoring DSL
         |
         v
-normalized package artifact
+authored package / wire AST
         |
         v
 canonical downstream Rust definitions
@@ -152,12 +156,17 @@ canonical downstream Rust definitions
 live state, attempts, receipts, and events
 ```
 
-### 1. TypeScript authoring source
+### 1. TypeScript authoring DSL
 
-Downstream builders, functions, loops, and catalogs provide authoring
-ergonomics. This source is not canonical and never runs in the product.
+Downstream builders, pure macros, loops, and catalogs provide authoring
+ergonomics. Keep syntax, macros, and catalogs visibly separate in a
+substantial DSL. The source is not canonical and never runs in the product.
+Authored variation and helpers that lower entirely to existing nodes belong
+here. A new serialized node, unit, target meaning, fact class, sample class,
+operation, or evaluator behavior begins as Rust semantics before gaining an
+optional DSL facade.
 
-### 2. Normalized package artifact
+### 2. Authored package / wire AST
 
 Materialization emits immutable JSON with a downstream-owned payload inside a
 `gameplay-rules` envelope. The artifact is committed when the product needs it
@@ -465,7 +474,7 @@ Authored actions compile into Engine's small structural
 `Operation`. Selectors are part of downstream operations or facts; the second
 consumer deliberately removed an Engine-owned `ForEach`/selector abstraction.
 See the
-[two-beat overfitting report](../../reviews/gameplay-resolution-two-beat-overfitting.md).
+[historical Dagger/Doom overfitting report](../../reviews/gameplay-resolution-two-beat-overfitting.md).
 
 Operations plan typed effects rather than mutating state:
 
@@ -527,8 +536,9 @@ the shared action policy.
 
 Do not introduce a universal GOAP or behavior-tree schema merely to satisfy
 this separation. First make the local fact-to-intent boundary explicit and
-traceable. Promote a smaller decision mechanism only after mechanically
-different consumers reveal the same need.
+traceable. Promote a smaller neutral decision mechanism through an explicit
+architecture decision when its owner and correctness value are clear; a
+cross-repository survey may challenge the shape but is not a prerequisite.
 
 ## Keep scheduling, saves, and presentation downstream
 
@@ -621,13 +631,20 @@ Keep a missing concept downstream when it names or assumes the game. Examples
 include target categories, attacks, spells, weapons, doors, hostile/friendly
 meaning, AI goals, turns, and death consequences.
 
-Consider Engine work only when:
+Consider Engine work when:
 
 1. the missing behavior can be stated without downstream vocabulary;
 2. it is a mechanism rather than a product policy;
-3. the current Engine owner cannot express it without a parallel authority;
-4. two mechanically different consumers exercise it; and
-5. the second consumer is allowed to shrink or reject the proposed abstraction.
+3. it has a clear Engine owner and bounded public surface;
+4. centralization removes parallel authority, prevents likely correctness
+   drift, or creates one canonical route for a risky operation; and
+5. focused provider evidence can prove it independently while downstream
+   behavior checks remain explicit.
+
+One credible implementation, concrete need, or explicit architecture decision
+can be sufficient. Additional consumers and deliberate cross-repository
+surveys are valuable ways to shrink or reject a proposed abstraction, not a
+permission gate.
 
 Do not add a method-name bridge, reflection registry, service locator, universal
 operation enum, or generic script VM as a shortcut.
@@ -708,13 +725,14 @@ its RPG vocabulary and exact directory history are not a template API.
 The realtime Doom hitscan consumer proved that the resolution seam must not
 assume RPG selectors or target collections. The resulting changes and residual
 risks are recorded in the
-[two-beat overfitting report](../../reviews/gameplay-resolution-two-beat-overfitting.md).
+[historical Dagger/Doom overfitting report](../../reviews/gameplay-resolution-two-beat-overfitting.md).
 
 Use these Engine-owned references for exact APIs and limits:
 
 - [Gameplay mechanics](../../code-map/gameplay-mechanics.md)
 - [Gameplay rules](../../code-map/gameplay-rules.md)
 - [Gameplay resolution](../../code-map/gameplay-resolution.md)
+- [Upstream promotion and authoring DSL](../development/upstream-promotion-and-authoring-dsl.md)
 - [Gameplay rules contract](../../gameplay-rules-contract.md)
 - [Gameplay mechanics campaign closeout](../../gameplay-mechanics-campaign-closeout.md)
 - [Inspection and diagnostics](../../inspection-and-diagnostics.md)

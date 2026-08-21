@@ -74,8 +74,8 @@ cargo test -p svc-volume -p svc-spatial -p svc-collision -p svc-pathfinding -p s
 - Moving higher-level policy downward to avoid a dependency edge.
 - Creating a new crate for a type that belongs to an existing cohesive owner.
 - Using renderer or product coordinate conventions as canonical spatial truth.
-- Adding a reusable abstraction before more than one concrete consumer needs
-  it.
+- Adding an abstraction without an observed need, a cohesive owner, a bounded
+  contract, or a concrete correctness benefit.
 
 ## Follow-up routing
 

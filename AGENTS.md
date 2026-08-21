@@ -50,6 +50,12 @@ Keep [docs/design.md](docs/design.md) current when changing authority, execution
 - Downstream Rust calls direct named services. Engine does not own a universal
   game scheduler, gameplay AST, behavior graph, replay runtime, or ambient
   command/event bus.
+- Do not use a consumer count as a promotion gate. One credible downstream
+  proof, concrete need, or explicit architecture decision may justify a
+  neutral Engine mechanism when centralization prevents parallel authority or
+  correctness drift. Cross-repo surveys and later consumers are useful
+  challenges, not prerequisites. See
+  [upstream promotion and authoring DSL](docs/topics/development/upstream-promotion-and-authoring-dsl.md).
 - `entity-state` owns reusable entity invariants and one instance-owned typed
   component store. Registration uses stable authored identities; mutation is
   guarded by the exact entity/component slot revision and does not expose
@@ -227,6 +233,10 @@ These are navigation and ownership rules, not a new governance layer.
   TypeScript for typed presentation, host integration, strict boundary code,
   and expressive authoring or content composition; TypeScript must not become
   a second gameplay, project, or persistence authority.
+- Treat optional gameplay TypeScript as a build-time authoring DSL: authored
+  variation and pure macros may live there, new serialized meaning begins in
+  Rust, and live fact gathering, mutation, scheduling, and persistence remain
+  Rust-owned.
 - Keep package-root imports and explicit public exports.
 - Do not deep-import another package's `src/` tree from a consumer.
 - Keep strict decoding at the Rust-to-TypeScript border.

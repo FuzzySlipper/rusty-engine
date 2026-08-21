@@ -249,14 +249,16 @@ upgrades or different floating-point environments. See
   It does not certify a shipped builder, a second rules-heavy domain, or a
   universal content/mod platform.
 - **Impact:** The initial provider campaign has no known acceptance gap. New
-  shared semantics still require a concrete consumer and must be promoted at
-  their narrow owner rather than inferred from these three compositions.
+  shared semantics require an explicit neutral ownership decision and must be
+  promoted at their narrow owner rather than inferred from these three
+  compositions.
 - **Detection:** See the exact revision and acceptance mapping in the
   [gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md),
   then run the focused mechanics or rules gate for the surface being changed.
 - **Follow-up:** Downstream products own content and UI expansion. Create an
-  Engine task only when another concrete consumer exposes a reusable mechanism
-  gap.
+  Engine task when a concrete need, implementation, or architecture survey
+  exposes a neutral reusable mechanism whose centralization prevents parallel
+  authority or correctness drift; no consumer-count threshold applies.
 - **Last reviewed:** 2026-07-29 / codex
 
 ## Planar navigation footprint and multi-agent planning

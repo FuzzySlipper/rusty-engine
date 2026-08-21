@@ -1,9 +1,10 @@
 # Donor provenance
 
-Rusty Engine internalizes or selectively adapts Asha code only when that code sits below a
-successor-owned boundary and has a concrete consumer. During an owner-approved equivalence campaign,
-a known first-party predecessor and its Demo/Studio consumers satisfy that demand; the
-multiple-consumer promotion rule is not a deletion filter for proven functionality.
+Rusty Engine internalizes or selectively adapts Asha code only when that code
+sits below a successor-owned boundary and has an explicit neutral owner,
+bounded contract, and concrete correctness value. During an owner-approved
+equivalence campaign, predecessor and first-party evidence help bound the
+useful behavior; no consumer-count promotion rule applies.
 
 ## Current repository disposition
 

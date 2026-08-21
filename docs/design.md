@@ -28,6 +28,12 @@ in [migration-cluster-ledger.md](migration/migration-cluster-ledger.md).
   lifecycle, and product-shell policy in visibly separate owners.
 - Maintain a one-way dependency: consumers may depend on Engine; Engine never imports or checks out
   a consumer to verify itself.
+- Promote neutral mechanisms through explicit architecture judgment, not a
+  consumer-count threshold. One credible downstream proof or concrete need can
+  justify Engine ownership when centralization removes parallel authority or
+  correctness risk. Surveys and later adopters may improve the seam; they are
+  not prerequisites. See
+  [upstream promotion and authoring DSL](topics/development/upstream-promotion-and-authoring-dsl.md).
 
 Object-centric does not mean Unity-style component scripts or an ECS scheduler. It means entity
 identity and typed component data remain easy to inspect while behavior is owned by explicit code.
@@ -51,7 +57,7 @@ services:   svc-volume / svc-spatial / svc-collision / svc-pathfinding / svc-rng
 
 offline only: GLB + request --> voxel-convert --> canonical voxel-asset JSON --> downstream admission
 
-isolated rules workspace: downstream TS candidate --> canonical package JSON --> gameplay-rules (Rust)
+isolated rules workspace: optional downstream TS authoring DSL --> package/wire AST --> gameplay-rules (Rust)
 isolated renderer workspace: retained JSON --> render-projection (TS) --> Three backend / host adapters
 ```
 
@@ -327,8 +333,9 @@ deterministic package-set resolution. The payload is opaque JSON.
 
 The downstream game owns the payload schema, every semantic definition and
 compiler rule, mechanics bindings, orchestration, persistence, and execution.
-TypeScript may produce immutable build-time candidates in an isolated
-workspace, while Rust remains the semantic and runtime authority. Direct Rust
+An optional TypeScript authoring DSL may produce immutable build-time
+candidates in an isolated workspace, while Rust remains the semantic and
+runtime authority. Direct Rust
 construction and checked artifact admission require no Node or TypeScript at
 runtime. The implemented `rules/` workspace generates its shared envelope
 types and bounds from a Rust-owned descriptor, emits byte-identical canonical
@@ -351,11 +358,11 @@ it owns one Rust/TypeScript-identical ECMAScript numeric representation while
 leaving runtime precision, units, formulas, and presentation downstream.
 Existing schema-1 bytes are never silently upgraded.
 
-This is not a universal gameplay IR. Engine defines no formula, predicate,
+This semantic-neutral envelope is not a universal gameplay IR. Engine defines no formula, predicate,
 operation, action, condition, effect, behavior, evaluator, registry, runtime
 session, scheduler, or d20 vocabulary through this surface. A mechanics-only
 game ignores it entirely. The exact versioned API, bounds, ordering, failure
-identity, TypeScript isolation, and first-consumer proof are frozen in
+identity, TypeScript isolation, and historical implementation proof are frozen in
 [gameplay-rules-contract.md](gameplay-rules-contract.md).
 
 ## Gameplay resolution boundary
@@ -388,10 +395,10 @@ read-only diagnostics. Those relationships do not reverse into the kernel.
 This is not a universal gameplay AST, verb catalog, scheduler, event bus,
 plugin registry, replay runtime, save format, or script VM. Engine does not
 define attacks, targets, stats, damage, spells, items, conditions, weapons,
-pickups, turns, or other game meaning. The two-beat acceptance for this seam is
-Rusty Dagger's authored spell/item/rule path followed by the mechanically
-different realtime Doom path; changes forced by the second consumer are
-recorded in the task-7032 overfitting report.
+pickups, turns, or other game meaning. Historical Dagger and realtime Doom
+adoption did shrink this seam by removing selector assumptions; that is useful
+overfitting evidence, not a current requirement to wait for another consumer.
+The changes are recorded in the task-7032 report.
 
 See [Gameplay resolution](code-map/gameplay-resolution.md) for the concrete
 owners, dependency prohibitions, and focused gates.

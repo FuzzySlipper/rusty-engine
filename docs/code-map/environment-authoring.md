@@ -37,8 +37,9 @@ materialization into authored scene and voxel mechanisms.
 - Do not embed callbacks, scripts, or renderer resources in recipes.
 - Do not make preview state authoritative.
 - Do not widen a concrete recipe into a universal authored-behavior language.
-- Do not move product-specific generation policy upstream without multiple
-  concrete consumers.
+- Do not move product-specific generation policy upstream. Promote a smaller
+  neutral mechanism only through an explicit ownership decision with a
+  bounded contract and evidence.
 
 ## Acceptance gates and fixtures
 
@@ -53,8 +54,8 @@ cargo clippy -p environment-authoring --all-targets --locked -- -D warnings
 - Combining recipe validation, preview, and committed materialization into one
   implicit mutation path.
 - Hiding scene or voxel ownership behind a generator abstraction.
-- Treating a downstream content recipe as a reusable Engine mechanism before
-  a second consumer exists.
+- Treating a downstream content recipe as a reusable Engine mechanism without
+  separating neutral planning/materialization from product policy.
 
 ## Follow-up routing
 
@@ -62,4 +63,5 @@ cargo clippy -p environment-authoring --all-targets --locked -- -D warnings
   [Content, assets, and scenes](content-assets-and-scenes.md).
 - Spatial materialization: [Spatial mechanisms](spatial-mechanisms.md).
 - Studio presentation of authoring operations: [Studio](studio.md).
-
+- Promotion decisions:
+  [Upstream promotion and authoring DSL](../topics/development/upstream-promotion-and-authoring-dsl.md).

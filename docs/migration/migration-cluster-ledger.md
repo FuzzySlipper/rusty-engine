@@ -279,7 +279,8 @@ that consumer; do not restore Asha's universal protocol, replay, collaboration, 
   source mechanisms. Product-specific item behavior, attacks, checks, turns, conditions, and
   relationship policy remain downstream.
 - A universal rules language, condition/formula AST, scheduler, behavior graph, and RPG authority
-  session remain absent. Future smaller mechanisms still require concrete consumer evidence.
+  session remain absent. Future smaller mechanisms require an explicit neutral
+  owner, bounded contract, and concrete correctness value.
 - Dynamic physics was deliberately deferred until the current kinematic/collision
   path could not express a concrete consumer need. Task #6531 reopens that exact
   gap as a bounded caller-driven rigid-body service; it does not reopen Asha's
@@ -302,10 +303,11 @@ For any future Asha-derived capability:
 6. Close with focused tests, real product evidence when visible, persistence behavior, provenance,
    and the standalone/old-spine audits.
 
-For newly proposed capability, the concrete-consumer rule prevents speculative framework growth.
-For an owner-approved equivalence campaign such as M11R or M11S, the named predecessor and
-first-party consumers already establish the demand; the work must account for useful behavior rather
-than requiring each consumer to reimplement it before promotion.
+For newly proposed capability, explicit ownership, bounded contracts, and
+concrete correctness value prevent speculative framework growth. An
+owner-approved equivalence campaign such as M11R or M11S may use predecessor
+and first-party evidence to scope useful behavior; no consumer-count threshold
+applies.
 
 Do not create speculative tasks merely because the portability report labels something reusable or
 because an Asha feature once existed.

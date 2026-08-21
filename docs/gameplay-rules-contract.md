@@ -1,10 +1,10 @@
 # Optional gameplay rules contract
 
 Status: accepted architecture; compatible schema-1 integer and schema-2
-binary64 substrates plus isolated TypeScript authoring support implemented
+binary64 substrates plus isolated TypeScript authoring DSL support implemented
 
-This contract freezes the smallest host-neutral rules-package support justified
-by the first Rusty D20 slice. It is deliberately narrower than an RPG
+This contract freezes the host-neutral rules-package support established by
+the original Rusty D20 implementation. It is deliberately narrower than an RPG
 intermediate representation. A mechanics-only game can ignore it, and another
 rules-heavy game can use it without importing Rusty D20 or adopting d20
 semantics.
@@ -17,7 +17,7 @@ The owning rule remains:
 ## Dependency direction
 
 ```text
-downstream TypeScript authoring (optional, build time)
+optional downstream TypeScript authoring DSL (build time)
                  |
                  v
 normalized downstream candidate payload
@@ -58,10 +58,10 @@ the caller.
 The transition between authored rules and live gameplay must retain four
 separate, inspectable forms:
 
-1. **TypeScript authoring source.** Downstream builders, functions, loops, and
-   content tables used before runtime. Source may be convenient and
-   non-canonical.
-2. **Normalized downstream candidate artifact.** Immutable JSON data with a
+1. **TypeScript authoring DSL.** Downstream syntax, pure macros, loops, and
+   content catalogs used before runtime. Source may be convenient and
+   non-canonical. New serialized meaning still begins in Rust semantics.
+2. **Authored package / wire AST.** Immutable JSON data with a
    downstream-owned payload schema inside the Engine envelope. Rusty D20 owns
    the d20 candidate schema.
 3. **Canonical downstream Rust definitions.** Domain types produced only after
@@ -323,15 +323,15 @@ The support surface contains no Engine-owned:
   policy.
 
 Ordinary new downstream semantic primitives must not require an Engine enum
-edit. If a later concrete consumer proves a genuinely shared mechanism, it
-gets its own focused design and review rather than being smuggled into the
-opaque envelope.
+edit. A genuinely shared neutral mechanism gets its own focused design and
+review through an explicit promotion decision rather than being smuggled into
+the opaque envelope.
 
-## Isolated TypeScript ownership
+## Isolated TypeScript authoring DSL ownership
 
-The optional build-time workspace is rooted at `rules/`, separate from the
-ordinary Rust provider and from `render/` and `studio/`. Its initial packages
-are:
+The optional build-time authoring DSL workspace is rooted at `rules/`, separate
+from the ordinary Rust provider and from `render/` and `studio/`. Its initial
+packages are:
 
 - `@rusty-engine/gameplay-rules-contracts`: generated schema-1/schema-2 envelope,
   identity, bound, and diagnostic DTOs plus strict decoding; and
@@ -341,8 +341,10 @@ are:
 
 Rust exports the small shared contract and bounds consumed by generation.
 Generated files are checked for drift. TypeScript does not generate domain
-schemas, validate d20 semantics, execute rules, call runtime services, or own
-mutable gameplay state.
+schemas, validate game semantics, execute rules, call runtime services, or own
+mutable gameplay state. Downstream DSLs may add syntax, pure macros, and
+catalogs for their own payload vocabulary; new serialized meaning begins in
+downstream Rust semantics.
 
 `scripts/verify-rules.sh` owns the isolated package installation and tests,
 generated-contract drift, strict decode/canonicalization fixtures, and the
@@ -353,9 +355,9 @@ Node-free boundary audit. CI exposes it as `verify-rules`.
 This workspace needs no browser test. Rusty D20 owns its real browser and
 product proof.
 
-## First-consumer proof
+## Historical implementation proof
 
-Rusty D20 must prove the support surface with a bounded but real slice:
+Rusty D20 originally proved the support surface with a bounded but real slice:
 
 - its own candidate payload schema and Rust semantic compiler;
 - direct Rust construction and canonical artifact admission producing the
@@ -370,11 +372,12 @@ Rusty D20 must prove the support surface with a bounded but real slice:
 - a real durable UI path, authoritative save/reopen, and rendered result in
   the downstream product.
 
-The in-repository infrastructure/builder fixture is a separate falsification
-probe for direct mechanics composition. It is not a second rules consumer and
-does not justify broadening this contract.
+The in-repository infrastructure/builder fixture remains a separate
+falsification probe for direct mechanics composition. It does not by itself
+justify broadening this contract; future promotion follows the neutral
+ownership criteria rather than a consumer count.
 
-That historical first-consumer proof is complete at reviewed Rusty D20 revision
+That historical implementation proof is complete at reviewed Rusty D20 revision
 `793dd6037d99091d958f675c98b35320b9aca307`, using reviewed Engine revision
 `fb608e323a8b44a55195f5720101224ff37fd5db` and exact `rusty-engine-ui` donor
 revision `68ddfa5430ec3bc2cf7ca96963982db9511e79ba`. The downstream proof includes

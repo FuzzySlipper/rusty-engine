@@ -19,6 +19,7 @@ does not require Den access.
 | [topics/fps-character-controller-survey.md](topics/fps-character-controller-survey.md) | Task 6847 source survey, feature matrix, licensing posture, and adopted transfer decisions |
 | [topics/fps-character-controller-proposal.md](topics/fps-character-controller-proposal.md) | Adopted host-neutral controller design, current Rust API, ownership, and remaining proof routes |
 | [topics/gameplay/downstream-adoption.md](topics/gameplay/downstream-adoption.md) | Disposition-first downstream adoption of gameplay rules, TypeScript authoring, mechanics, resolution, intents, and diagnostics |
+| [topics/development/upstream-promotion-and-authoring-dsl.md](topics/development/upstream-promotion-and-authoring-dsl.md) | Proactive Engine promotion criteria and the optional TypeScript gameplay authoring DSL boundary |
 | [README.md](README.md) | This documentation index |
 
 ## Topic directories
@@ -80,6 +81,7 @@ tests take precedence when describing implemented behavior.
 | Change entity components or atomic entity mutation | [Entity state and state machines](code-map/entity-state-and-state-machines.md) |
 | Change stats, tracks, effects, items, equipment, damage, or restoration | [Gameplay mechanics](code-map/gameplay-mechanics.md) |
 | Structure or migrate a downstream game's gameplay code and optional TypeScript authoring | [Downstream gameplay adoption](topics/gameplay/downstream-adoption.md) |
+| Decide whether a mechanism belongs upstream or in a TypeScript authoring DSL | [Upstream promotion and authoring DSL](topics/development/upstream-promotion-and-authoring-dsl.md) |
 | Package a downstream-authored rules candidate without giving Engine its meaning | [Gameplay rules](code-map/gameplay-rules.md) |
 | Audit the completed mechanics/rules campaign and exact consumers | [Gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md) |
 | Audit the completed textured-voxel campaign and exact consumer | [Textured voxel campaign closeout](textured-voxel-campaign-closeout.md) |

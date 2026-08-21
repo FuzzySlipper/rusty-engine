@@ -20,7 +20,7 @@ faults, suspensions, and trace details remain downstream types.
 - [`gameplay-resolution/src/transaction.rs`](../../rust/crates/gameplay-resolution/src/transaction.rs)
 - [`gameplay-resolution/tests/contract.rs`](../../rust/crates/gameplay-resolution/tests/contract.rs)
 - [Canonical design](../design.md)
-- [Two-consumer overfitting report](../reviews/gameplay-resolution-two-beat-overfitting.md)
+- [Historical Dagger/Doom overfitting report](../reviews/gameplay-resolution-two-beat-overfitting.md)
 
 ## Source routes
 

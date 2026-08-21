@@ -51,6 +51,7 @@ restoration, and their bounded receipts.
 - [`engine-inspector/src/mechanics.rs`](../../rust/crates/engine-inspector/src/mechanics.rs)
 - [`gameplay-mechanics donor disposition`](../../migration/gameplay-mechanics-donor/disposition.tsv)
 - [Canonical design](../design.md)
+- [Upstream promotion and authoring DSL](../topics/development/upstream-promotion-and-authoring-dsl.md)
 
 ## Public composition
 
@@ -374,6 +375,9 @@ Studio gate is additional evidence only when a Studio-owned boundary changes.
 
 ## Common agent mistakes
 
+- Reimplementing local vitality, stat, inventory, equipment, damage, or
+  restoration stores because a small game uses only part of the established
+  mechanics surface.
 - Storing final derived stats instead of admitted base values plus sources.
 - Treating tracks as negative stats or calling damage a restoration operation.
 - Reusing a preview after a reaction instead of submitting a fresh apply.
@@ -402,3 +406,5 @@ Studio gate is additional evidence only when a Studio-owned boundary changes.
 - Spatial hit/overlap/occlusion mechanisms:
   [Spatial mechanisms](spatial-mechanisms.md).
 - Product-specific mechanics meaning and orchestration: downstream consumer.
+- Neutral authoring helpers or missing reusable mechanisms:
+  [Upstream promotion and authoring DSL](../topics/development/upstream-promotion-and-authoring-dsl.md).

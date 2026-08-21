@@ -49,7 +49,8 @@ and diagnostics without defining what any rule means.
 - [`schema-2 binary64 fixture`](../../fixtures/gameplay-rules/package-v2-binary64.canonical.json)
 - [Optional gameplay rules contract](../gameplay-rules-contract.md)
 - [Current downstream facade and Studio boundary](../topics/development/downstream-engine-revisions.md)
-- [Completed first-consumer evidence](../gameplay-mechanics-campaign-closeout.md)
+- [Completed implementation evidence](../gameplay-mechanics-campaign-closeout.md)
+- [Upstream promotion and authoring DSL](../topics/development/upstream-promotion-and-authoring-dsl.md)
 - [`gameplay-rules` donor disposition](../../migration/gameplay-rules-donor/disposition.tsv)
 
 ## Public composition
@@ -125,7 +126,8 @@ surface and add no runtime dependency to this Rust crate.
 ## Common agent mistakes
 
 - Treating structural package admission as downstream semantic admission.
-- Adding a shared rule node or d20 enum because one downstream payload uses it.
+- Adding game vocabulary as a shared rule node without a neutral semantic
+  owner and an explicit promotion decision.
 - Publishing admitted packages into a global registry or component store.
 - Resolving an implicit latest version instead of the exact dependency.
 - Hashing authored input rather than complete canonical bytes.

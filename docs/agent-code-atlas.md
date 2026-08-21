@@ -87,7 +87,8 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 |---|---|
 | Entity components, atomic mutation, relationships, snapshots, state machines | [Entity state and state machines](code-map/entity-state-and-state-machines.md) |
 | Stats, tracks, sources, effects, items, equipment, damage, restoration | [Gameplay mechanics](code-map/gameplay-mechanics.md) |
-| Downstream gameplay layout, disposition-first migration, optional TS authoring, mechanics/resolution composition, and AI intents | [Downstream gameplay adoption](topics/gameplay/downstream-adoption.md) |
+| Downstream gameplay layout, disposition-first migration, optional TS authoring DSL, mechanics/resolution composition, and AI intents | [Downstream gameplay adoption](topics/gameplay/downstream-adoption.md) |
+| Upstream promotion decisions and TypeScript authoring DSL placement | [Upstream promotion and authoring DSL](topics/development/upstream-promotion-and-authoring-dsl.md) |
 | Bounded downstream-owned attempt lifecycle, transactions, receipts, and traces | [Gameplay resolution](code-map/gameplay-resolution.md) |
 | Optional opaque rules packages, TypeScript authoring, exact dependencies, provenance, canonicalization, and diagnostics | [Gameplay rules](code-map/gameplay-rules.md) |
 | Canonical voxel space, collision, navigation, mesh, motion, triggers, edits | [Spatial mechanisms](code-map/spatial-mechanisms.md) |
