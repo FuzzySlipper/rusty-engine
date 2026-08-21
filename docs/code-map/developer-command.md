@@ -27,6 +27,9 @@ safe point.
   component poke, transport, network endpoint, filesystem, shell, or UI.
 - Lane authorization policy. Lanes are descriptor metadata; a profile and the
   explicit compiled/bound handler set decide availability.
+- Studio authority. Studio classifies this crate as `non-studio`; it must not
+  acquire a tooling queue, transport, authorization policy, or developer
+  command vocabulary through this neutral provider contract.
 
 ## Primary paths
 
