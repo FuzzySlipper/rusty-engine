@@ -235,7 +235,7 @@ impl StandardPackageContext {
         }
     }
 
-    fn candidate(&self, payload: Value) -> RulePackageCandidate {
+    pub(crate) fn candidate(&self, payload: Value) -> RulePackageCandidate {
         RulePackageCandidate::new_with_schema(
             self.schema_version,
             self.domain.clone(),
@@ -714,10 +714,15 @@ fn decode_continuous_expr(
                     "must be sixteen lowercase hexadecimal binary64 bits",
                 )
             })?;
-            Ok(ContinuousExpr::Literal(
-                crate::ContinuousValue::from_bits(bits)
-                    .map_err(StandardDefinitionError::ContinuousLiteral)?,
-            ))
+            let value = crate::ContinuousValue::from_bits(bits)
+                .map_err(StandardDefinitionError::ContinuousLiteral)?;
+            if value.bits() != bits {
+                return Err(malformed(
+                    &format!("{path}.bits"),
+                    "must use the canonical finite binary64 encoding",
+                ));
+            }
+            Ok(ContinuousExpr::Literal(value))
         }
         "input" => {
             ensure_fields(object, &["op", "input"], path)?;

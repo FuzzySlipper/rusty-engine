@@ -27,6 +27,27 @@ importers:
         specifier: ^24.0.0
         version: 24.13.3
 
+  packages/gameplay-standard-authoring:
+    devDependencies:
+      '@rusty-engine/gameplay-rules-authoring':
+        specifier: workspace:*
+        version: link:../gameplay-rules-authoring
+      '@rusty-engine/gameplay-rules-contracts':
+        specifier: workspace:*
+        version: link:../gameplay-rules-contracts
+      '@rusty-engine/gameplay-standard-contracts':
+        specifier: workspace:*
+        version: link:../gameplay-standard-contracts
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+
+  packages/gameplay-standard-contracts:
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+
 packages:
 
   '@types/node@24.13.3':

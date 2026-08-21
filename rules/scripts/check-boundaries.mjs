@@ -22,6 +22,31 @@ const packages = new Map([
       ],
     },
   ],
+  [
+    'gameplay-standard-contracts',
+    {
+      dependencies: [],
+      peers: [],
+      devDependencies: ['@types/node'],
+    },
+  ],
+  [
+    'gameplay-standard-authoring',
+    {
+      dependencies: [],
+      peers: [
+        '@rusty-engine/gameplay-rules-authoring',
+        '@rusty-engine/gameplay-rules-contracts',
+        '@rusty-engine/gameplay-standard-contracts',
+      ],
+      devDependencies: [
+        '@rusty-engine/gameplay-rules-authoring',
+        '@rusty-engine/gameplay-rules-contracts',
+        '@rusty-engine/gameplay-standard-contracts',
+        '@types/node',
+      ],
+    },
+  ],
 ]);
 
 for (const [name, expected] of packages) {
@@ -70,14 +95,14 @@ for (const name of packages.keys()) {
       );
     }
     for (const match of source.matchAll(
-      /@rusty-engine\/gameplay-rules-contracts\/[^'"]+/g,
+      /@rusty-engine\/[^'"]+\/[^'"]+/g,
     )) {
       violations.push(
         `${url.pathname}:${String(lineAt(source, match.index ?? 0))}:deep package import ${match[0]}`,
       );
     }
     if (
-      name === 'gameplay-rules-contracts' &&
+      (name === 'gameplay-rules-contracts' || name === 'gameplay-standard-contracts') &&
       source.includes('@rusty-engine/')
     ) {
       violations.push(`${url.pathname}:contracts package depends on another Engine package`);
@@ -112,6 +137,16 @@ const generated = readFileSync(
 );
 if (!generated.startsWith('// Generated from the Rust gameplay-rules contract.')) {
   throw new Error('generated contract lost its Rust ownership marker');
+}
+const standardGenerated = readFileSync(
+  new URL(
+    'packages/gameplay-standard-contracts/src/generated.ts',
+    root,
+  ),
+  'utf8',
+);
+if (!standardGenerated.startsWith('// Generated from the Rust gameplay-standard contract.')) {
+  throw new Error('generated gameplay-standard contract lost its Rust ownership marker');
 }
 
 console.log('gameplay-rules package boundaries passed');

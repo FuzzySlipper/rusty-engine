@@ -1,0 +1,11 @@
+{
+  "name": "@rusty-engine/gameplay-standard-authoring",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "import": "./dist/index.js", "types": "./dist/index.d.ts" } },
+  "scripts": { "build": "tsc --build", "prepare": "pnpm run build", "typecheck": "tsc --build", "test": "tsc --build && node --test dist/*.test.js" },
+  "peerDependencies": { "@rusty-engine/gameplay-rules-authoring": "0.1.0", "@rusty-engine/gameplay-rules-contracts": "0.1.0", "@rusty-engine/gameplay-standard-contracts": "0.1.0" },
+  "devDependencies": { "@rusty-engine/gameplay-rules-authoring": "workspace:*", "@rusty-engine/gameplay-rules-contracts": "workspace:*", "@rusty-engine/gameplay-standard-contracts": "workspace:*", "@types/node": "^24.0.0" }
+}

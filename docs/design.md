@@ -472,11 +472,22 @@ to a closed Rust expression before admission, not through a runtime callback,
 registry, or JSON extension path.
 
 Family-specific definitions are admitted as versioned payloads through the
-existing `gameplay-rules` package route. Schema 1 remains the exact
-safe-integer route and schema 2 is selected only for a continuous definition.
-The Rust contract, canonical payload, fixtures, and runtime evaluator belong
-here; #7180 owns generated TypeScript contracts and build-time authoring
-convergence, not a TypeScript evaluator.
+existing `gameplay-rules` package route. Definitions use schema 1 for exact
+safe-integers and schema 2 for continuous binary64 values.
+Rust owns the descriptor and runtime evaluator; it generates the strict
+TypeScript contract surface. Checked exact and continuous fixtures are authored
+through that TypeScript surface, then Rust decodes, re-admits, fingerprints,
+and rehydrates them. This is deterministic build-time convergence, not a
+TypeScript evaluator or a Node dependency of ordinary Rust verification.
+
+Product extension data remains a separate, source-correlated, bounded
+`gameplay-rules` artifact. It is admitted exchange data and is compiled by a
+caller-selected downstream Rust compiler to a closed product enum; it is never
+a standard expression node, a registry entry, runtime JSON dispatch, or Engine
+evaluation authority. Its declared extension schema version is independent of
+the outer gameplay-rules schema, so explicit authoring routes can emit either
+schema-1 integer or schema-2 binary64 envelopes without changing the extension
+identity or adding a runtime extension path.
 
 ## Spatial authority and derived mechanisms
 

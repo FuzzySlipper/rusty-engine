@@ -8,11 +8,11 @@ use gameplay_rules::{
     RuleSourceId, RuleSubjectId, RuleVersion,
 };
 use gameplay_standard::{
-    attempt_quantize_continuous_to_mechanics, quantize_continuous_to_mechanics, CapabilityRoleId,
-    ContinuousEvaluationError, ContinuousEvaluator, ContinuousExpr, ContinuousExprLimits,
-    ContinuousQuantizationMode, ContinuousQuantizationSource, ContinuousValue,
-    ContinuousValueError, ExactEvaluator, ExactExpr, ExactExprLimits, ExactInputBundle,
-    ExactInputReference, InputId, RoleRequirement,
+    attempt_quantize_continuous_to_mechanics, quantize_continuous_to_mechanics,
+    CapabilityRequirementId, CapabilityRoleId, ContinuousEvaluationError, ContinuousEvaluator,
+    ContinuousExpr, ContinuousExprLimits, ContinuousQuantizationMode, ContinuousQuantizationSource,
+    ContinuousValue, ContinuousValueError, ExactEvaluator, ExactExpr, ExactExprLimits,
+    ExactInputBundle, ExactInputReference, InputId, RoleRequirement,
 };
 
 fn scalar(value: i64) -> MechanicsScalar {
@@ -735,29 +735,43 @@ fn direct_exact_definition_uses_the_existing_canonical_package_path() {
         subject,
         source,
         ExactExpr::Add(
-            Box::new(ExactExpr::Literal(scalar(3))),
-            Box::new(ExactExpr::Literal(scalar(4))),
+            Box::new(ExactExpr::Input(
+                gameplay_standard::ExactInputReference::StandardFact(
+                    gameplay_standard::StandardExactFactReference::Stat {
+                        role: role("self"),
+                        stat: gameplay_mechanics::StatId::parse("health").unwrap(),
+                    },
+                ),
+            )),
+            Box::new(ExactExpr::Max(vec![
+                ExactExpr::Literal(scalar(3)),
+                ExactExpr::Multiply(
+                    Box::new(ExactExpr::Literal(scalar(2))),
+                    Box::new(ExactExpr::Input(parameter("self", "bonus"))),
+                ),
+            ])),
         ),
-        vec![],
+        vec![RoleRequirement::new(
+            role("self"),
+            vec![CapabilityRequirementId::parse("read.stat").unwrap()],
+        )
+        .unwrap()],
     )
     .unwrap();
-    let admitted = gameplay_standard::admit_exact_definition(&context, definition).unwrap();
+    let admitted = gameplay_standard::admit_exact_definition(&context, definition.clone()).unwrap();
     assert_eq!(
         admitted.package().canonical_bytes(),
         include_bytes!("../../../../fixtures/gameplay-standard/exact-schema-1.canonical.json")
     );
     assert_eq!(
         admitted.package().fingerprint().as_str(),
-        "461c19c831aad26107f4866dcf7ecf62f3d57ff2d3f85b2985deec424966626c"
+        "ceef579d35d5eef87d68f2f47c44b068a13433b20155d7344ec222b31d10a9c6"
     );
     assert!(admitted.package().canonical_bytes().ends_with(b"\n"));
-    assert_eq!(
-        gameplay_standard::decode_exact_definition(admitted.package())
-            .unwrap()
-            .identity
-            .family(),
-        "exact"
-    );
+    let decoded = gameplay_standard::decode_exact_definition(admitted.package()).unwrap();
+    assert_eq!(decoded.identity.family(), "exact");
+    assert_eq!(decoded.identity.subject().as_str(), "health_formula");
+    assert_eq!(decoded.definition, definition);
 }
 
 #[test]
@@ -778,10 +792,22 @@ fn continuous_definition_uses_schema_two_and_rehydrates_ordered_binary64_tree() 
         subject,
         source,
         ContinuousExpr::Subtract(
-            Box::new(ContinuousExpr::Literal(continuous(-0.0))),
+            Box::new(ContinuousExpr::Add(
+                Box::new(ContinuousExpr::Literal(continuous(-0.0))),
+                Box::new(ContinuousExpr::Input(
+                    gameplay_standard::ContinuousInputReference::Parameter {
+                        role: role.clone(),
+                        id: InputId::parse("wind").unwrap(),
+                    },
+                )),
+            )),
             Box::new(ContinuousExpr::Literal(continuous(f64::from_bits(1)))),
         ),
-        vec![],
+        vec![RoleRequirement::new(
+            role.clone(),
+            vec![CapabilityRequirementId::parse("read.wind").unwrap()],
+        )
+        .unwrap()],
     )
     .unwrap();
     let admitted =
@@ -792,14 +818,12 @@ fn continuous_definition_uses_schema_two_and_rehydrates_ordered_binary64_tree() 
     );
     assert_eq!(
         admitted.package().fingerprint().as_str(),
-        "d7cc707cd8b85845e5a1bdbe3a66d1281c6b0f1915a599f76070288fdad3e986"
+        "11ccb782820a3409e78d644855be751dfdccdf354f33dc2b71c40769024b5034"
     );
-    assert_eq!(
-        gameplay_standard::decode_continuous_definition(admitted.package())
-            .unwrap()
-            .definition,
-        definition
-    );
+    let decoded = gameplay_standard::decode_continuous_definition(admitted.package()).unwrap();
+    assert_eq!(decoded.identity.family(), "continuous");
+    assert_eq!(decoded.identity.subject().as_str(), "wind_formula");
+    assert_eq!(decoded.definition, definition);
     assert_eq!(role.as_str(), "caster");
 }
 
@@ -827,6 +851,166 @@ fn committed_goldens_are_the_cross_language_definition_surface() {
             .family(),
         "continuous"
     );
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ExtensionOutput {
+    Guard,
+}
+#[derive(Debug, PartialEq, Eq)]
+enum ExtensionCompileFailure {
+    WeightIsProductDefined,
+}
+impl std::fmt::Display for ExtensionCompileFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("weight is product-defined")
+    }
+}
+impl std::error::Error for ExtensionCompileFailure {}
+struct GuardExtensionCompiler {
+    schema: gameplay_standard::StandardExtensionSchema,
+    reject: bool,
+}
+impl gameplay_standard::CompileStandardExtension for GuardExtensionCompiler {
+    type Output = ExtensionOutput;
+    type Error = ExtensionCompileFailure;
+
+    fn schema(&self) -> &gameplay_standard::StandardExtensionSchema {
+        &self.schema
+    }
+    fn compile(
+        &self,
+        artifact: &gameplay_standard::StandardExtensionArtifact,
+    ) -> Result<Self::Output, Self::Error> {
+        if self.reject || artifact.kind().as_str() != "combat.option" {
+            return Err(ExtensionCompileFailure::WeightIsProductDefined);
+        }
+        Ok(ExtensionOutput::Guard)
+    }
+}
+
+#[test]
+fn typescript_extension_goldens_rehydrate_and_compile_without_a_runtime_registry() {
+    assert!(matches!(
+        gameplay_standard::StandardExtensionSchema::new(
+            CapabilityRequirementId::parse("example_combat").unwrap(),
+            1,
+        ),
+        Err(gameplay_standard::StandardExtensionError::InvalidNamespace { .. })
+    ));
+    let too_large_version = admit_rule_package(RulePackageCandidate::new_with_schema(
+        RulePackageSchemaVersion::Binary64V2,
+        RuleDomainId::parse("game").unwrap(),
+        RulePackageId::parse("combat-extension").unwrap(),
+        RuleVersion::new(9).unwrap(),
+        vec![],
+        vec![RuleSource::new(RuleSourceId::parse("rules").unwrap(), "rules.json").unwrap()],
+        vec![RuleProvenance::new(
+            RuleSubjectId::parse("guard").unwrap(),
+            RuleSourceId::parse("rules").unwrap(),
+            None,
+            None,
+        )
+        .unwrap()],
+        serde_json::json!({"family":"standardExtension","namespace":"example.combat","schemaVersion":4_294_967_296.0,"kind":"combat.option","subject":"guard","source":"rules","payload":null}),
+    ))
+    .unwrap();
+    assert!(matches!(
+        gameplay_standard::decode_standard_extension(&too_large_version),
+        Err(gameplay_standard::StandardExtensionError::Malformed(
+            "schemaVersion exceeds u32"
+        ))
+    ));
+    let schema = gameplay_standard::StandardExtensionSchema::new(
+        CapabilityRequirementId::parse("example.combat").unwrap(),
+        1,
+    )
+    .unwrap();
+    let schema_one = decode_canonical_rule_package(include_bytes!(
+        "../../../../fixtures/gameplay-standard/extension-schema-1.canonical.json"
+    ))
+    .unwrap();
+    let schema_two = decode_canonical_rule_package(include_bytes!(
+        "../../../../fixtures/gameplay-standard/extension-schema-2.canonical.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        schema_one.fingerprint().as_str(),
+        "c7a52b632668beec257686fb913b396f1890ebdba0170c2dd1603c3fb50947df"
+    );
+    assert_eq!(
+        schema_two.fingerprint().as_str(),
+        "084f6b21150093408bf9b8d2690a6a68bd084b87eccfb8098c97988d7cdae7a8"
+    );
+    let extension_one = gameplay_standard::decode_standard_extension(&schema_one).unwrap();
+    let extension_two = gameplay_standard::decode_standard_extension(&schema_two).unwrap();
+    assert_eq!(extension_one.schema(), &schema);
+    assert_eq!(extension_two.schema(), &schema);
+    assert_eq!(extension_one.kind().as_str(), "combat.option");
+    assert_eq!(extension_two.kind().as_str(), "combat.weight");
+    assert_eq!(extension_two.payload(), &serde_json::json!({"weight":1.5}));
+
+    let context = gameplay_standard::StandardPackageContext::new(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        RuleDomainId::parse("game").unwrap(),
+        RulePackageId::parse("combat-extension").unwrap(),
+        RuleVersion::new(1).unwrap(),
+        vec![],
+        vec![RuleSource::new(RuleSourceId::parse("rules").unwrap(), "rules.json").unwrap()],
+        vec![RuleProvenance::new(
+            RuleSubjectId::parse("guard").unwrap(),
+            RuleSourceId::parse("rules").unwrap(),
+            None,
+            None,
+        )
+        .unwrap()],
+    );
+    let admitted = gameplay_standard::admit_standard_extension(&context, extension_one).unwrap();
+    assert_eq!(
+        admitted.package().canonical_bytes(),
+        include_bytes!("../../../../fixtures/gameplay-standard/extension-schema-1.canonical.json")
+    );
+    let binary_context = gameplay_standard::StandardPackageContext::new(
+        RulePackageSchemaVersion::Binary64V2,
+        RuleDomainId::parse("game").unwrap(),
+        RulePackageId::parse("combat-extension").unwrap(),
+        RuleVersion::new(2).unwrap(),
+        vec![],
+        vec![RuleSource::new(RuleSourceId::parse("rules").unwrap(), "rules.json").unwrap()],
+        vec![RuleProvenance::new(
+            RuleSubjectId::parse("guard-weight").unwrap(),
+            RuleSourceId::parse("rules").unwrap(),
+            None,
+            None,
+        )
+        .unwrap()],
+    );
+    let admitted_binary =
+        gameplay_standard::admit_standard_extension(&binary_context, extension_two).unwrap();
+    assert_eq!(
+        admitted_binary.package().canonical_bytes(),
+        include_bytes!("../../../../fixtures/gameplay-standard/extension-schema-2.canonical.json")
+    );
+    let compiler = GuardExtensionCompiler {
+        schema: schema.clone(),
+        reject: false,
+    };
+    let compiled = gameplay_standard::compile_standard_extension(&admitted, &compiler).unwrap();
+    assert_eq!(compiled.output(), &ExtensionOutput::Guard);
+    assert_eq!(
+        compiled.admitted().package().fingerprint(),
+        admitted.package().fingerprint()
+    );
+    let rejecting = GuardExtensionCompiler {
+        schema,
+        reject: true,
+    };
+    assert!(matches!(
+        gameplay_standard::compile_standard_extension(&admitted, &rejecting),
+        Err(gameplay_standard::StandardExtensionCompileError::Product(
+            ExtensionCompileFailure::WeightIsProductDefined
+        ))
+    ));
 }
 
 #[test]
@@ -878,4 +1062,30 @@ fn package_decoder_rejects_wrong_schema_family_version_and_lexical_underflow() {
         "\"family\":\"continuous\",\"probe\":1e-5000",
     );
     assert!(decode_rule_package(underflow.as_bytes()).is_err());
+
+    for (version, bits) in [
+        (5, "8000000000000000"),
+        (6, "fff0000000000000"),
+        (7, "fff8000000000000"),
+    ] {
+        let source = RuleSourceId::parse("rules").unwrap();
+        let rejected = admit_rule_package(RulePackageCandidate::new_with_schema(
+            RulePackageSchemaVersion::Binary64V2,
+            RuleDomainId::parse("game").unwrap(),
+            RulePackageId::parse("standard").unwrap(),
+            RuleVersion::new(version).unwrap(),
+            vec![],
+            vec![RuleSource::new(source.clone(), "rules.json").unwrap()],
+            vec![RuleProvenance::new(
+                RuleSubjectId::parse("wind_formula").unwrap(),
+                source.clone(),
+                None,
+                None,
+            )
+            .unwrap()],
+            serde_json::json!({"family":"continuous","semanticsVersion":1,"subject":"wind_formula","source":source.as_str(),"roles":[],"tree":{"op":"literal","bits":bits}}),
+        ))
+        .unwrap();
+        assert!(gameplay_standard::decode_continuous_definition(&rejected).is_err());
+    }
 }

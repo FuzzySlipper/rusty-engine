@@ -7,3 +7,4 @@ cd "$REPO_ROOT"
 pnpm --dir rules install --frozen-lockfile
 pnpm --dir rules run verify
 cargo test -p gameplay-rules --locked
+cargo test -p gameplay-standard --locked

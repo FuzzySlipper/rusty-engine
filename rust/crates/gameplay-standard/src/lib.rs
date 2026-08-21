@@ -9,7 +9,9 @@
 use std::fmt;
 
 mod continuous;
+mod contract;
 mod exact;
+mod extension;
 mod input;
 mod package;
 mod quantization;
@@ -21,10 +23,17 @@ pub use continuous::{
     ContinuousExprRequirements, ContinuousInputBundle, ContinuousInputReference, ContinuousValue,
     ContinuousValueError, CONTINUOUS_EVALUATOR_SEMANTICS_VERSION,
 };
+pub use contract::encode_standard_contract_descriptor;
 pub use exact::{
     compile_exact_expr, CompileExactExpr, ExactComparison, ExactCompileError, ExactEvaluationError,
     ExactEvaluator, ExactExpr, ExactExprLimits, ExactExprRequirements, ExactInputBundle,
     ExactInputReference, StandardExactFactReference, EXACT_EVALUATOR_SEMANTICS_VERSION,
+};
+pub use extension::{
+    admit_standard_extension, compile_standard_extension, decode_standard_extension,
+    AdmittedStandardExtension, CompileStandardExtension, StandardExtensionArtifact,
+    StandardExtensionCompilation, StandardExtensionCompileError, StandardExtensionError,
+    StandardExtensionSchema, MAX_STANDARD_EXTENSION_PAYLOAD_BYTES,
 };
 pub use input::{
     CapabilityRequirementId, CapabilityRoleId, InputId, InputKind, RoleRequirement,

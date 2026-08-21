@@ -82,11 +82,9 @@ impl RoleRequirement {
                 maximum: MAX_CAPABILITY_REQUIREMENTS_PER_ROLE,
             });
         }
-        let capabilities = capabilities
-            .into_iter()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
+        if capabilities.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(RoleRequirementError::NonCanonicalCapabilities);
+        }
         Ok(Self { role, capabilities })
     }
 
@@ -147,6 +145,7 @@ pub enum RoleRequirementError {
     InvalidCapabilityId { value: String, reason: &'static str },
     InvalidInputId { value: String, reason: &'static str },
     CapabilityQuotaExceeded { actual: usize, maximum: usize },
+    NonCanonicalCapabilities,
 }
 
 impl fmt::Display for RoleRequirementError {
@@ -158,3 +157,29 @@ impl fmt::Display for RoleRequirementError {
     }
 }
 impl std::error::Error for RoleRequirementError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn capability(value: &str) -> CapabilityRequirementId {
+        CapabilityRequirementId::parse(value).unwrap()
+    }
+
+    #[test]
+    fn role_requirements_reject_unsorted_and_duplicate_capabilities() {
+        let role = CapabilityRoleId::parse("self").unwrap();
+        for capabilities in [
+            vec![capability("read.z"), capability("read.a")],
+            vec![capability("read.a"), capability("read.a")],
+        ] {
+            assert!(matches!(
+                RoleRequirement::new(role.clone(), capabilities),
+                Err(RoleRequirementError::NonCanonicalCapabilities)
+            ));
+        }
+        assert!(
+            RoleRequirement::new(role, vec![capability("read.a"), capability("read.z")]).is_ok()
+        );
+    }
+}

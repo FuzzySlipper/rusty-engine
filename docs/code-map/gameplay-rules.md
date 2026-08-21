@@ -43,10 +43,18 @@ and diagnostics without defining what any rule means.
 - [`gameplay-rules/tests/contract.rs`](../../rust/crates/gameplay-rules/tests/contract.rs)
 - [`gameplay-rules-contracts`](../../rules/packages/gameplay-rules-contracts/src/index.ts)
 - [`gameplay-rules-authoring`](../../rules/packages/gameplay-rules-authoring/src/index.ts)
+- [`gameplay-standard-contracts`](../../rules/packages/gameplay-standard-contracts/src/index.ts)
+- [`gameplay-standard-authoring`](../../rules/packages/gameplay-standard-authoring/src/index.ts)
 - [`Rust-owned contract generator`](../../rules/scripts/generate-contract.mjs)
+- [`Rust-owned standard contract generator`](../../rules/scripts/generate-standard-contract.mjs)
+- [`standard convergence fixture generator`](../../rules/scripts/generate-standard-fixtures.mjs)
 - [`rules workspace boundary audit`](../../rules/scripts/check-boundaries.mjs)
 - [`schema-1 canonical fixture`](../../fixtures/gameplay-rules/package-v1.canonical.json)
 - [`schema-2 binary64 fixture`](../../fixtures/gameplay-rules/package-v2-binary64.canonical.json)
+- [`standard exact fixture`](../../fixtures/gameplay-standard/exact-schema-1.canonical.json)
+- [`standard continuous fixture`](../../fixtures/gameplay-standard/continuous-schema-2.canonical.json)
+- [`standard extension schema-1 fixture`](../../fixtures/gameplay-standard/extension-schema-1.canonical.json)
+- [`standard extension schema-2 fixture`](../../fixtures/gameplay-standard/extension-schema-2.canonical.json)
 - [Optional gameplay rules contract](../gameplay-rules-contract.md)
 - [Current downstream facade and Studio boundary](../topics/development/downstream-engine-revisions.md)
 - [Completed implementation evidence](../gameplay-mechanics-campaign-closeout.md)
@@ -118,6 +126,10 @@ fingerprinting, duplicate JSON keys, malformed UTF-8 and Unicode, unsafe
 numbers, unknown fields, duplicate metadata, malformed provenance, exact
 dependency failures, deterministic cycles and diagnostics, plain-data-only
 authoring, and every per-package and aggregate exact/one-over bound.
+The standard authoring packages add four checked convergence vectors: typed
+exact and continuous definitions plus schema-1 and schema-2 extension
+artifacts. They use this same envelope admission route; their typed expression
+meaning remains in `gameplay-standard`, not in this semantic-neutral crate.
 
 Ordinary provider verification remains Node-free. The optional isolated
 TypeScript authoring workspace and its `verify-rules` gate are a separate
