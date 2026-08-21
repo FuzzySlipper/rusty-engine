@@ -6,6 +6,8 @@
 
 #![forbid(unsafe_code)]
 
+use std::fmt;
+
 /// Maximum number of ASCII bytes in a capability identity.
 pub const MAX_CAPABILITY_IDENTITY_BYTES: usize = 64;
 
@@ -58,6 +60,21 @@ pub enum CapabilityIdentityError {
     InvalidCharacter,
 }
 
+impl fmt::Display for CapabilityIdentityError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let reason = match self {
+            Self::Empty => "identity is empty",
+            Self::TooLong => "identity exceeds the byte limit",
+            Self::InvalidStart => "identity must start with a lowercase ASCII letter",
+            Self::InvalidEnd => "identity must end with a lowercase ASCII letter or digit",
+            Self::InvalidCharacter => "identity contains an unsupported character",
+        };
+        formatter.write_str(reason)
+    }
+}
+
+impl std::error::Error for CapabilityIdentityError {}
+
 /// A positive capability schema/API version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CapabilityVersion(u32);
@@ -82,6 +99,14 @@ impl CapabilityVersion {
 pub enum CapabilityVersionError {
     Zero,
 }
+
+impl fmt::Display for CapabilityVersionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("capability version must be positive")
+    }
+}
+
+impl std::error::Error for CapabilityVersionError {}
 
 /// The current contract maturity of a capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

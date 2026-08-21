@@ -56,6 +56,14 @@ fn identities_and_versions_validate_their_boundaries() {
         CapabilityVersion::new(1).expect("positive version").get(),
         1
     );
+    assert_eq!(
+        CapabilityIdentity::new("").unwrap_err().to_string(),
+        "identity is empty"
+    );
+    assert_eq!(
+        CapabilityVersion::new(0).unwrap_err().to_string(),
+        "capability version must be positive"
+    );
 }
 
 #[test]
