@@ -16,6 +16,7 @@ environment-authoring	direct	preset and seed authoring; generated voxel scene an
 gameplay-mechanics	non-studio	reusable downstream gameplay mechanics	no Studio API	no mechanics state or editor authority	GM0-classification
 gameplay-resolution	non-studio	bounded downstream-owned attempt resolution	no Studio API	no gameplay attempt or transaction authority	gameplay-resolution-boundary
 gameplay-rules	non-studio	optional semantic-neutral packages consumed by downstream compilers	no Studio API	no package payload or downstream semantic editor authority	GR0-classification
+gameplay-standard	non-studio	optional gameplay capability metadata and direct downstream Rust composition	no Studio API	no gameplay definitions runtime state or editor authority	gameplay-standard-boundary
 render-host-contracts	non-studio	private native host composition input and readback contracts	no Studio API	no native host bridge or downstream gameplay authority	SDK-renderer-boundary
 render-model	indirect	retained renderer-neutral scene resources including static and animated meshes and operations	shared render frames produced by Rust owners	no canonical copy	M11D/M11E/M11F
 render-presentation	direct	animation audio billboard particle telemetry preview and diagnostics	versioned presentation frame and local controller operations	preview controls and presentation readouts	M11D/M11E

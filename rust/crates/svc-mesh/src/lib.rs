@@ -780,11 +780,11 @@ impl MeshPayload {
                 g.material_slot, g.start, g.count
             );
         }
-        for (i, p) in self.positions.chunks_exact(3).enumerate() {
+        for (i, p) in self.positions.as_chunks::<3>().0.iter().enumerate() {
             let n = &self.normals[i * 3..i * 3 + 3];
             let _ = writeln!(s, "v{i} pos={:?} nrm={:?}", p, n);
         }
-        for (t, tri) in self.indices.chunks_exact(3).enumerate() {
+        for (t, tri) in self.indices.as_chunks::<3>().0.iter().enumerate() {
             let _ = writeln!(s, "t{t} {} {} {}", tri[0], tri[1], tri[2]);
         }
         s
