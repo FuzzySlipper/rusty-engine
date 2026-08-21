@@ -162,10 +162,15 @@ every Engine decision and the exact component revisions read.
 ## Immutable inspection
 
 `MechanicsEntityView` exposes borrowed raw component views. The
-`engine-inspector` leaf adds `inspect_mechanics_entity`, which joins those facts
-with evaluated stat stages and attributed decisions, resolved track bounds,
-expanded effect activations, indexed unique inventory, capacity, and equipment.
-It accepts only immutable `EntityState` and catalog references. The companion
+`engine-inspector` leaf adds `inspect_mechanics_entity_structural`, which reads stored facts
+without evaluating, activating sources, or joining inventory. A product that already owns those
+derived readouts may pass them to `inspect_mechanics_entity_from_evidence` to assemble the
+compatible enriched shape; inspection never invokes the owner services itself. This preserves
+the evidence boundary while keeping the old diagnostic fields available from explicit receipts.
+Snapshot callers choose `inspect_mechanics_snapshot_structural_json_v2` for the explicit
+`storedStats`/`storedTracks` report or `inspect_mechanics_snapshot_json_v1_from_evidence` for
+the former enriched wire shape with caller-supplied evidence.
+The companion
 `inspect_damage_receipt` projects every bounded part, decision, track change,
 fact, and source-cost field from the operation-local receipt.
 

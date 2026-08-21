@@ -53,7 +53,9 @@ downstream game policy and orchestration
                                       +--> isolated render/ workspace
                                       +--> isolated studio/ workspace
 
-engine-inspector reads owner facts; runtime libraries do not depend on it.
+engine-inspector reads owner facts; runtime libraries do not depend on it. Ordinary mechanics
+inspection is structural-only; products pass already-produced evaluation, activation, inventory,
+or receipt evidence explicitly when they need an enriched diagnostic report.
 ```
 
 `entity-state` owns reusable entity invariants and an instance-owned typed
@@ -67,9 +69,12 @@ without an Engine enum, global registry, or ECS scheduler.
 inventory, unique-item, and equipment data in that same store, then exposes
 direct attributed stat, track, damage, and item/equipment services without
 owning product orchestration. The `engine-inspector` leaf can strictly reopen a
-mechanics snapshot with its admitted catalog and project component presence,
-evaluated stats, tracks, sources, effects, inventory, equipment, and receipt
-detail without mutable access.
+mechanics snapshot with its admitted catalog and project structural component
+presence and stored facts without mutable access. Evaluated stats, effect
+activations, joined inventory, and enriched compatibility details are projected
+only from explicit caller-supplied owner evidence or receipts. Snapshot JSON
+uses the explicit structural-v2 route; the old enriched JSON shape is available
+only through its versioned, caller-evidence route.
 
 `gameplay-rules` is an independent optional package boundary for rules-heavy
 consumers. It admits opaque schema-1 JSON or direct Rust candidates into the

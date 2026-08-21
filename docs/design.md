@@ -315,12 +315,13 @@ and unresolved definitions before returning a candidate. The downstream catalog 
 the compatibility and migration authority. The canonical definition fingerprint remains
 diagnostic/cache/receipt evidence and deliberately does not lock ordinary balance changes.
 
-`engine-inspector` is the read-only cross-owner leaf for the admitted result. Its mechanics report
-projects the fixed seven-kind presence table, evaluated stat stages and attributed decisions,
-resolved tracks, intrinsic/effect activations, joined indexed inventory, unique item identities,
-equipment assignments, and bounded traversal evidence. Its damage-receipt projection preserves
-the complete bounded stage/decision/change/fact detail. Inspection neither mutates components nor
-becomes a renderer, product schema, save owner, event journal, or replay authority.
+`engine-inspector` is the read-only cross-owner leaf for the admitted result. Its ordinary
+mechanics report projects fixed seven-kind presence plus stored component facts and structural
+catalog declarations; it does not re-evaluate stats, activate effects, or join inventory. A caller
+may separately supply an owner-produced evaluation readout or receipt, which inspection copies
+without recomputation. Its damage-receipt projection preserves the complete bounded
+stage/decision/change/fact detail. Inspection neither mutates components nor becomes a renderer,
+product schema, save owner, event journal, or replay authority.
 
 The direct consumer example under `gameplay-mechanics/examples` covers realtime shooter,
 infrastructure, and d20-shaped downstream composition with named services only. The GM5
@@ -457,6 +458,14 @@ timing, orchestration, or persistence contracts.
 
 See [Gameplay standard](code-map/gameplay-standard.md) for the exact readouts,
 selection example, and focused verification.
+
+Its borrowed projection helpers are inspection/adoption views, not a second evaluator: they
+retain supplied definitions, requirements, gathered values, planning evidence, mechanics receipts,
+generic resolution receipts/traces, and package provenance exactly as their owners produced them.
+Small action-actor and destructible/resource presets emit only ordinary catalog fragments,
+components, and named service inputs. These **Incubating** helpers are optional beside both typed
+downstream extension composition and direct low-level owner APIs; none creates an aggregate
+runtime or product session.
 
 `gameplay-standard` also provides separate opt-in exact and continuous value
 families. Exact expressions use the unchanged bounded `MechanicsScalar` and

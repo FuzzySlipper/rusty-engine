@@ -5,8 +5,8 @@ use asset_import::ImportContext;
 use engine_inspector::{
     entity_ids_in_category, inspect_catalog_json, inspect_content_manifest_json, inspect_entity,
     inspect_entity_state_json, inspect_import_manifest_json, inspect_import_source,
-    inspect_mechanics_snapshot_json, inspect_scene_json, inspect_voxel_asset_json, DiagnosticSet,
-    EntityCategory,
+    inspect_mechanics_snapshot_structural_json_v2, inspect_scene_json, inspect_voxel_asset_json,
+    DiagnosticSet, EntityCategory,
 };
 
 const MAX_CATALOG_BYTES: usize = 16 * 1024 * 1024;
@@ -88,7 +88,7 @@ fn command_mechanics<O: Write, E: Write>(args: &[String], out: &mut O, err: &mut
     let Some(catalog) = read_text(catalog_path, MAX_CATALOG_BYTES, err) else {
         return 2;
     };
-    match inspect_mechanics_snapshot_json(&snapshot, &catalog, entity) {
+    match inspect_mechanics_snapshot_structural_json_v2(&snapshot, &catalog, entity) {
         Ok(report) => {
             let _ = write!(out, "{}", report.to_text());
             0

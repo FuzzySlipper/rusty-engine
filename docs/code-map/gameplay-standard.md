@@ -30,6 +30,8 @@ changed global runtime facade.
 - [`gameplay-standard/src/lib.rs`](../../rust/crates/gameplay-standard/src/lib.rs)
 - [`gameplay-standard/src/contract.rs`](../../rust/crates/gameplay-standard/src/contract.rs)
 - [`gameplay-standard/src/extension.rs`](../../rust/crates/gameplay-standard/src/extension.rs)
+- [`gameplay-standard/src/projection.rs`](../../rust/crates/gameplay-standard/src/projection.rs)
+- [`gameplay-standard/src/presets.rs`](../../rust/crates/gameplay-standard/src/presets.rs)
 - [`gameplay-standard/src/resolution.rs`](../../rust/crates/gameplay-standard/src/resolution.rs)
 - [`gameplay-standard/tests/contract.rs`](../../rust/crates/gameplay-standard/tests/contract.rs)
 - [`gameplay-standard/tests/numeric_contract.rs`](../../rust/crates/gameplay-standard/tests/numeric_contract.rs)
@@ -98,6 +100,30 @@ compiler that checks that schema and returns its own closed product enum; this
 is build/admission exchange, not a runtime JSON extension path. The extension
 schema identity is independent from the outer gameplay-rules schema: explicit
 authoring routes select schema 1 or binary64 schema 2 for the package envelope.
+
+## Read-only projection and presets
+
+Borrowed projection values expose already-owned exact/continuous definitions,
+admitted package provenance, supplied exact evaluations, staged operations and
+plans, mechanics receipts, and generic resolution receipts/traces. Constructing
+a projection does not evaluate an expression, gather world facts, activate
+sources, or mutate state. Generic receipt projection preserves downstream
+intent, facts, effects, events, errors, and trace-detail types rather than
+inventing a standard product explanation.
+
+`ActionActorPreset` and `DestructibleResourcePreset` are small optional
+recommendations. Each independently emits an ordinary `MechanicsCatalogDefinition`
+fragment, inert `StatsComponent`/`TracksComponent` facts, and named existing
+service request inputs. They do not create an entity store, registry, runtime,
+or aggregate session. A caller can use expressions without a preset, or use a
+catalog, component, or request fragment separately; stat-derived and fixed
+track maxima stay structural declarations until their owner explicitly evaluates
+them.
+
+These adoption helpers are **Incubating**. Choose standard projections and presets for the
+small shared capability column, keep product explanations as typed downstream extension values,
+or use the underlying mechanics/resolution/rules owners directly when that is the clearer fit.
+No route implies an aggregate runtime or product policy.
 
 ## Standard resolution leaves
 

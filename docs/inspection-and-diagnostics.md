@@ -42,7 +42,7 @@ runtime calls continue to use `decode_scene` and `decode_manifest`, which valida
 | --- | --- | --- | --- |
 | Catalog | `inspect_catalog` | `catalog` | kinds, dependency counts, validation, optional lock drift |
 | Entity state | `inspect_entity_state` | `entity-state` | lifecycle, source, registered component identities/counts, per-entity presence, relationships, focused queries |
-| Gameplay mechanics | `inspect_mechanics_entity`, `inspect_damage_receipt` | `mechanics` | exact codec/presence metadata, evaluated stats and attributed decisions, tracks, effects, indexed inventory, equipment, bounded receipt stages and costs |
+| Gameplay mechanics | `inspect_mechanics_entity_structural`, `inspect_mechanics_entity_from_evidence`, `inspect_damage_receipt` | `mechanics` | structural codec/presence and stored facts; separately supplied stat/effect/inventory evidence can assemble the compatible enriched report; bounded receipt stages and costs |
 | Scene | `inspect_scene` | `scene` | hierarchy/kind counts, validation, optional catalog cross-check |
 | Voxel state | `inspect_voxel_asset`, `inspect_voxel_state` | `voxel` | occupancy, materials, chunks, mesh/collision/navigation coherence |
 | Persistence | `inspect_content_manifest` | `content` | artifact roles/classes and dependency-ordered load plan |
@@ -55,10 +55,14 @@ same projections gameplay queries use rather than a diagnostic-only model.
 The mechanics command takes an entity-state snapshot, a strict
 `MechanicsCatalogDefinition`, and an entity ID. It admits the caller-supplied
 catalog and uses the canonical gameplay registry for reconstruction before
-projecting state. The catalog version remains downstream compatibility
-authority; the fingerprint is diagnostic evidence only. Component revisions in
-the report are live instance-local evidence and therefore restart at restored
-slot revisions rather than pretending to be durable history.
+projecting stored state through `inspect_mechanics_snapshot_structural_json_v2`.
+The legacy enriched JSON wire shape is available only through
+`inspect_mechanics_snapshot_json_v1_from_evidence`, which requires the caller's
+already-produced evaluations, effect activations, and inventory view. The catalog
+version remains downstream compatibility authority; the fingerprint is diagnostic
+evidence only. Component revisions in the report are live instance-local evidence
+and therefore restart at restored slot revisions rather than pretending to be durable
+history.
 
 Run `cargo run -p engine-inspector --bin rusty-inspect -- --help` for command syntax. Exit status is
 zero for a clean inspection, one for an empty focused query, two for read/decode/validation/import

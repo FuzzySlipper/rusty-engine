@@ -14,6 +14,8 @@ mod exact;
 mod extension;
 mod input;
 mod package;
+mod presets;
+mod projection;
 mod quantization;
 mod resolution;
 
@@ -45,6 +47,16 @@ pub use package::{
     ContinuousDefinition, ContinuousDefinitionRequirements, DecodedContinuousDefinition,
     DecodedExactDefinition, ExactDefinition, ExactDefinitionRequirements, StandardDefinitionError,
     StandardDefinitionIdentity, StandardPackageContext, CONTINUOUS_FAMILY_ID, EXACT_FAMILY_ID,
+};
+pub use presets::{
+    ActionActorPreset, ActionActorPresetComponents, DestructibleResourcePreset,
+    DestructibleResourcePresetComponents,
+};
+pub use projection::{
+    AdmittedDefinitionProjection, PackageProvenanceProjection, ResolutionReceiptProjection,
+    StandardDefinitionProjection, StandardExactEvaluationProjection,
+    StandardMechanicsReceiptProjection, StandardOperationPlanProjection,
+    StandardOperationProjection,
 };
 pub use quantization::{
     approximate_exact_ratio_to_continuous, attempt_quantize_continuous_to_mechanics,

@@ -1,13 +1,13 @@
-use std::collections::BTreeMap;
-use std::fmt::Write;
+use std::{collections::BTreeMap, fmt::Write};
 
 use core_ids::EntityId;
 use entity_state::EntityState;
 use gameplay_mechanics::{
-    decode_snapshot_with_catalog, DamageFact, DamageReceipt, DecisionOutcome, InventoryReadCost,
-    InventoryService, MechanicsCatalog, MechanicsCatalogDefinition, MechanicsComponentKind,
-    MechanicsEntityView, MechanicsError, OperationId, ResponseDecisionKind, RoundingPolicy,
-    SourceCollectionCost, SourceInstanceIdentity, StackingPolicy, StatService, TrackMaximum,
+    decode_snapshot_with_catalog, DamageFact, DamageReceipt, DecisionOutcome,
+    EffectSourceActivation, InventoryReadCost, InventoryView, MechanicsCatalog,
+    MechanicsCatalogDefinition, MechanicsComponentKind, MechanicsEntityView, MechanicsError,
+    ObservedComponentRevision, ResponseDecisionKind, RoundingPolicy, SourceCollectionCost,
+    SourceInstanceIdentity, StackingPolicy, StatEvaluation, TrackMaximum,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -72,28 +72,26 @@ pub struct MechanicsStatDecisionInspection {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MechanicsStatInspection {
+pub struct MechanicsStoredStatInspection {
     pub id: String,
     pub base: i64,
-    pub after_additions: i64,
-    pub combined_scale_numerator: u128,
-    pub combined_scale_denominator: u128,
-    pub after_scaling: i64,
-    pub minimum: i64,
-    pub maximum: i64,
-    pub value: i64,
-    pub decisions: Vec<MechanicsStatDecisionInspection>,
-    pub source_cost: MechanicsSourceCostInspection,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MechanicsTrackInspection {
+pub struct MechanicsStoredTrackInspection {
     pub id: String,
     pub current: i64,
-    pub minimum: i64,
-    pub maximum: i64,
-    pub maximum_source: String,
+    pub declared_minimum: i64,
+    pub declared_maximum: MechanicsTrackMaximumInspection,
+}
+
+/// The catalog declaration, not a recomputed current bound.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum MechanicsTrackMaximumInspection {
+    Fixed { value: i64 },
+    Stat { stat: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -160,11 +158,8 @@ impl From<InventoryReadCost> for MechanicsInventoryCostInspection {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MechanicsInventoryInspection {
-    pub relationship_revision: u64,
     pub stacks: Vec<gameplay_mechanics::ItemStack>,
-    pub unique_items: Vec<MechanicsInventoryItemInspection>,
-    pub capacity: Vec<MechanicsCapacityInspection>,
-    pub read_cost: MechanicsInventoryCostInspection,
+    pub capacity_limits: Vec<gameplay_mechanics::InventoryCapacityLimit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -182,6 +177,28 @@ pub struct MechanicsEquipmentAssignmentInspection {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MechanicsStructuralEntityInspection {
+    pub entity: u64,
+    pub catalog_version: String,
+    pub catalog_fingerprint: String,
+    pub components: Vec<MechanicsComponentInspection>,
+    #[serde(rename = "storedStats")]
+    pub stats: Vec<MechanicsStoredStatInspection>,
+    #[serde(rename = "storedTracks")]
+    pub tracks: Vec<MechanicsStoredTrackInspection>,
+    pub intrinsic_sources: Vec<MechanicsSourceBindingInspection>,
+    pub effects: Vec<MechanicsEffectInspection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inventory: Option<MechanicsInventoryInspection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item: Option<MechanicsItemInspection>,
+    pub equipment: Vec<MechanicsEquipmentAssignmentInspection>,
+}
+
+/// Compatibility inspection shape for callers that already gathered all derived owner facts.
+/// Unlike the structural report, this retains the pre-existing enriched JSON field meanings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MechanicsEntityInspection {
     pub entity: u64,
     pub catalog_version: String,
@@ -193,13 +210,306 @@ pub struct MechanicsEntityInspection {
     pub effects: Vec<MechanicsEffectInspection>,
     pub effect_source_activations: Vec<MechanicsSourceActivationInspection>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub inventory: Option<MechanicsInventoryInspection>,
+    pub inventory: Option<MechanicsEnrichedInventoryInspection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item: Option<MechanicsItemInspection>,
     pub equipment: Vec<MechanicsEquipmentAssignmentInspection>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MechanicsStatInspection {
+    pub id: String,
+    pub base: i64,
+    pub after_additions: i64,
+    pub combined_scale_numerator: u128,
+    pub combined_scale_denominator: u128,
+    pub after_scaling: i64,
+    pub unconstrained: i64,
+    pub minimum: i64,
+    pub maximum: i64,
+    pub value: i64,
+    pub decisions: Vec<MechanicsStatDecisionInspection>,
+    pub source_cost: MechanicsSourceCostInspection,
+    pub observed_revisions: Vec<MechanicsObservedComponentRevisionInspection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MechanicsTrackInspection {
+    pub id: String,
+    pub current: i64,
+    pub minimum: i64,
+    pub maximum: i64,
+    pub maximum_source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MechanicsEnrichedInventoryInspection {
+    pub relationship_revision: u64,
+    pub stacks: Vec<gameplay_mechanics::ItemStack>,
+    pub unique_items: Vec<MechanicsInventoryItemInspection>,
+    pub capacity: Vec<MechanicsCapacityInspection>,
+    pub read_cost: MechanicsInventoryCostInspection,
+}
+
+/// Derived owner evidence explicitly gathered before inspection. The inspector only copies it.
+#[derive(Debug, Clone, Copy)]
+pub struct MechanicsInspectionEvidence<'a> {
+    pub stat_evaluations: &'a [StatEvaluation],
+    pub effect_source_activations: &'a [EffectSourceActivation],
+    pub inventory: Option<&'a InventoryView>,
+}
+
 impl MechanicsEntityInspection {
+    pub fn to_text(&self) -> String {
+        let mut output = format!(
+            "gameplay-mechanics entity={} catalogVersion={} fingerprint={} enrichedFromOwnerEvidence=true\n",
+            self.entity, self.catalog_version, self.catalog_fingerprint
+        );
+        for stat in &self.stats {
+            let _ = writeln!(
+                output,
+                "evaluated stat {} base={} value={} bounds={}..{} decisions={}",
+                stat.id,
+                stat.base,
+                stat.value,
+                stat.minimum,
+                stat.maximum,
+                stat.decisions.len()
+            );
+        }
+        let _ = writeln!(
+            output,
+            "sources intrinsic={} suppliedEffectActivations={}",
+            self.intrinsic_sources.len(),
+            self.effect_source_activations.len()
+        );
+        output
+    }
+}
+
+impl<'a> MechanicsInspectionEvidence<'a> {
+    pub const fn empty() -> Self {
+        Self {
+            stat_evaluations: &[],
+            effect_source_activations: &[],
+            inventory: None,
+        }
+    }
+}
+
+/// Assemble the compatibility report from a structural snapshot and caller-supplied owner facts.
+/// This never evaluates stats, activates effects, joins inventory, or mutates state.
+pub fn inspect_mechanics_entity_from_evidence(
+    structural: &MechanicsStructuralEntityInspection,
+    evidence: MechanicsInspectionEvidence<'_>,
+) -> Result<MechanicsEntityInspection, MechanicsError> {
+    let evaluations: BTreeMap<_, _> = evidence
+        .stat_evaluations
+        .iter()
+        .map(|evaluation| (evaluation.stat.as_str(), evaluation))
+        .collect();
+    let stats = evidence
+        .stat_evaluations
+        .iter()
+        .map(|evaluation| {
+            let evaluation = inspect_stat_evaluation(evaluation);
+            MechanicsStatInspection {
+                id: evaluation.id,
+                base: evaluation.base,
+                after_additions: evaluation.after_additions,
+                combined_scale_numerator: evaluation.combined_scale_numerator,
+                combined_scale_denominator: evaluation.combined_scale_denominator,
+                after_scaling: evaluation.after_scaling,
+                unconstrained: evaluation.unconstrained,
+                minimum: evaluation.minimum,
+                maximum: evaluation.maximum,
+                value: evaluation.value,
+                decisions: evaluation.decisions,
+                source_cost: evaluation.source_cost,
+                observed_revisions: evaluation.observed_revisions,
+            }
+        })
+        .collect();
+    let tracks = structural
+        .tracks
+        .iter()
+        .map(|track| {
+            let (maximum, maximum_source) = match &track.declared_maximum {
+                MechanicsTrackMaximumInspection::Fixed { value } => (*value, "fixed".to_string()),
+                MechanicsTrackMaximumInspection::Stat { stat } => {
+                    let evaluation = evaluations.get(stat.as_str()).ok_or_else(|| {
+                        MechanicsError::MissingStat {
+                            entity: EntityId::new(structural.entity),
+                            stat: gameplay_mechanics::StatId::parse(stat)
+                                .expect("stored catalog stat identity is valid"),
+                        }
+                    })?;
+                    (evaluation.value.get(), format!("stat:{stat}"))
+                }
+            };
+            Ok(MechanicsTrackInspection {
+                id: track.id.clone(),
+                current: track.current,
+                minimum: track.declared_minimum,
+                maximum,
+                maximum_source,
+            })
+        })
+        .collect::<Result<Vec<_>, MechanicsError>>()?;
+    let inventory = evidence
+        .inventory
+        .map(|inventory| MechanicsEnrichedInventoryInspection {
+            relationship_revision: inventory.relationship_revision(),
+            stacks: inventory.stacks().to_vec(),
+            unique_items: inventory
+                .unique_items()
+                .iter()
+                .map(|item| MechanicsInventoryItemInspection {
+                    entity: item.entity.raw(),
+                    definition: item.definition.to_string(),
+                })
+                .collect(),
+            capacity: inventory
+                .capacity()
+                .iter()
+                .map(|capacity| MechanicsCapacityInspection {
+                    metric: capacity.metric.to_string(),
+                    used: capacity.used,
+                    maximum: capacity.maximum,
+                })
+                .collect(),
+            read_cost: inventory.read_cost().into(),
+        });
+    Ok(MechanicsEntityInspection {
+        entity: structural.entity,
+        catalog_version: structural.catalog_version.clone(),
+        catalog_fingerprint: structural.catalog_fingerprint.clone(),
+        components: structural.components.clone(),
+        stats,
+        tracks,
+        intrinsic_sources: structural.intrinsic_sources.clone(),
+        effects: structural.effects.clone(),
+        effect_source_activations: evidence
+            .effect_source_activations
+            .iter()
+            .map(|activation| MechanicsSourceActivationInspection {
+                source: source_identity_value(&activation.identity),
+                definition: activation.definition.to_string(),
+            })
+            .collect(),
+        inventory,
+        item: structural.item.clone(),
+        equipment: structural.equipment.clone(),
+    })
+}
+
+/// Owner-supplied evaluated facts. The inspector only copies these receipts/readouts; callers
+/// decide when evaluation is valid and which request sources/timing they represent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MechanicsEvaluationReadoutInspection {
+    #[serde(rename = "evaluatedStats")]
+    pub stats: Vec<MechanicsEvaluatedStatInspection>,
+}
+
+impl MechanicsEvaluationReadoutInspection {
+    pub fn to_text(&self) -> String {
+        self.stats
+            .iter()
+            .map(|stat| {
+                format!(
+                    "evaluated stat {} value={} bounds={}..{} decisions={}\n",
+                    stat.id,
+                    stat.value,
+                    stat.minimum,
+                    stat.maximum,
+                    stat.decisions.len()
+                )
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MechanicsEvaluatedStatInspection {
+    pub catalog_version: String,
+    pub catalog_fingerprint: String,
+    pub entity: u64,
+    pub id: String,
+    pub base: i64,
+    pub after_additions: i64,
+    pub combined_scale_numerator: u128,
+    pub combined_scale_denominator: u128,
+    pub after_scaling: i64,
+    pub unconstrained: i64,
+    pub value: i64,
+    pub minimum: i64,
+    pub maximum: i64,
+    pub decisions: Vec<MechanicsStatDecisionInspection>,
+    pub source_cost: MechanicsSourceCostInspection,
+    pub observed_revisions: Vec<MechanicsObservedComponentRevisionInspection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MechanicsObservedComponentRevisionInspection {
+    pub entity: u64,
+    pub component: String,
+    pub revision: u64,
+}
+
+fn inspect_stat_evaluation(evaluation: &StatEvaluation) -> MechanicsEvaluatedStatInspection {
+    MechanicsEvaluatedStatInspection {
+        catalog_version: evaluation.catalog_version.to_string(),
+        catalog_fingerprint: evaluation.catalog_fingerprint.clone(),
+        entity: evaluation.entity.raw(),
+        id: evaluation.stat.to_string(),
+        base: evaluation.base.get(),
+        after_additions: evaluation.after_additions.get(),
+        combined_scale_numerator: evaluation.combined_scale_numerator,
+        combined_scale_denominator: evaluation.combined_scale_denominator,
+        after_scaling: evaluation.after_scaling.get(),
+        unconstrained: evaluation.unconstrained.get(),
+        value: evaluation.value.get(),
+        minimum: evaluation.minimum.get(),
+        maximum: evaluation.maximum.get(),
+        decisions: evaluation
+            .decisions
+            .iter()
+            .map(inspect_stat_decision)
+            .collect(),
+        source_cost: evaluation.source_cost.into(),
+        observed_revisions: evaluation
+            .observed_revisions
+            .iter()
+            .map(inspect_observed_revision)
+            .collect(),
+    }
+}
+
+fn inspect_observed_revision(
+    revision: &ObservedComponentRevision,
+) -> MechanicsObservedComponentRevisionInspection {
+    MechanicsObservedComponentRevisionInspection {
+        entity: revision.entity.raw(),
+        component: revision.component.label().to_string(),
+        revision: revision.revision,
+    }
+}
+
+pub fn inspect_stat_evaluations(
+    evaluations: &[StatEvaluation],
+) -> MechanicsEvaluationReadoutInspection {
+    MechanicsEvaluationReadoutInspection {
+        stats: evaluations.iter().map(inspect_stat_evaluation).collect(),
+    }
+}
+
+impl MechanicsStructuralEntityInspection {
     pub fn to_text(&self) -> String {
         let mut output = format!(
             "gameplay-mechanics entity={} catalogVersion={} fingerprint={}\n",
@@ -222,39 +532,27 @@ impl MechanicsEntityInspection {
             );
         }
         for stat in &self.stats {
-            let _ = writeln!(
-                output,
-                "stat {} base={} value={} bounds={}..{} decisions={}",
-                stat.id,
-                stat.base,
-                stat.value,
-                stat.minimum,
-                stat.maximum,
-                stat.decisions.len()
-            );
+            let _ = writeln!(output, "stored stat {} base={}", stat.id, stat.base);
         }
         for track in &self.tracks {
             let _ = writeln!(
                 output,
-                "track {} current={} bounds={}..{} maximumSource={}",
-                track.id, track.current, track.minimum, track.maximum, track.maximum_source
+                "stored track {} current={} declaredMinimum={} declaredMaximum={:?}",
+                track.id, track.current, track.declared_minimum, track.declared_maximum
             );
         }
         let _ = writeln!(
             output,
-            "sources intrinsic={} effectActivations={}",
-            self.intrinsic_sources.len(),
-            self.effect_source_activations.len()
+            "stored sources intrinsic={}",
+            self.intrinsic_sources.len()
         );
         let _ = writeln!(output, "effects {}", self.effects.len());
         if let Some(inventory) = &self.inventory {
             let _ = writeln!(
                 output,
-                "inventory stacks={} uniqueItems={} capacityMetrics={} containmentVisited={}",
+                "stored inventory stacks={} capacityLimits={}",
                 inventory.stacks.len(),
-                inventory.unique_items.len(),
-                inventory.capacity.len(),
-                inventory.read_cost.containment_entries_visited
+                inventory.capacity_limits.len(),
             );
         }
         if let Some(item) = &self.item {
@@ -265,39 +563,19 @@ impl MechanicsEntityInspection {
     }
 }
 
-pub fn inspect_mechanics_entity(
+pub fn inspect_mechanics_entity_structural(
     state: &EntityState,
     catalog: &MechanicsCatalog,
     entity: EntityId,
-) -> Result<MechanicsEntityInspection, MechanicsError> {
+) -> Result<MechanicsStructuralEntityInspection, MechanicsError> {
     let view = MechanicsEntityView::read(state, entity)?;
     let components = component_inspections(&view);
-    let operation =
-        OperationId::parse("engine_inspector").expect("fixed inspector operation identity");
-
-    let mut evaluated_values = BTreeMap::new();
     let mut stats = Vec::new();
     if let Some(stat_view) = view.stats() {
         for stored in stat_view.values() {
-            let evaluation =
-                StatService::evaluate(state, catalog, entity, stored.stat(), &operation, &[])?;
-            evaluated_values.insert(evaluation.stat.to_string(), evaluation.value.get());
-            stats.push(MechanicsStatInspection {
-                id: evaluation.stat.to_string(),
-                base: evaluation.base.get(),
-                after_additions: evaluation.after_additions.get(),
-                combined_scale_numerator: evaluation.combined_scale_numerator,
-                combined_scale_denominator: evaluation.combined_scale_denominator,
-                after_scaling: evaluation.after_scaling.get(),
-                minimum: evaluation.minimum.get(),
-                maximum: evaluation.maximum.get(),
-                value: evaluation.value.get(),
-                decisions: evaluation
-                    .decisions
-                    .iter()
-                    .map(inspect_stat_decision)
-                    .collect(),
-                source_cost: evaluation.source_cost.into(),
+            stats.push(MechanicsStoredStatInspection {
+                id: stored.stat().to_string(),
+                base: stored.base().get(),
             });
         }
     }
@@ -311,24 +589,19 @@ pub fn inspect_mechanics_entity(
                     .ok_or_else(|| MechanicsError::UnknownTrack {
                         track: stored.track().clone(),
                     })?;
-            let (maximum, maximum_source) = match &definition.maximum {
-                TrackMaximum::Fixed { value } => (value.get(), "fixed".to_string()),
-                TrackMaximum::Stat { stat } => (
-                    *evaluated_values.get(stat.as_str()).ok_or_else(|| {
-                        MechanicsError::MissingStat {
-                            entity,
-                            stat: stat.clone(),
-                        }
-                    })?,
-                    format!("stat:{}", stat.as_str()),
-                ),
+            let declared_maximum = match &definition.maximum {
+                TrackMaximum::Fixed { value } => {
+                    MechanicsTrackMaximumInspection::Fixed { value: value.get() }
+                }
+                TrackMaximum::Stat { stat } => MechanicsTrackMaximumInspection::Stat {
+                    stat: stat.to_string(),
+                },
             };
-            tracks.push(MechanicsTrackInspection {
+            tracks.push(MechanicsStoredTrackInspection {
                 id: stored.track().to_string(),
                 current: stored.current().get(),
-                minimum: definition.minimum.get(),
-                maximum,
-                maximum_source,
+                declared_minimum: definition.minimum.get(),
+                declared_maximum,
             });
         }
     }
@@ -354,46 +627,12 @@ pub fn inspect_mechanics_entity(
             stacks: effect.stacks(),
         })
         .collect();
-    let effect_source_activations = match view.active_effects() {
-        Some(active) => active
-            .activated_sources(catalog)?
-            .into_iter()
-            .map(|activation| MechanicsSourceActivationInspection {
-                source: source_identity_value(&activation.identity),
-                definition: activation.definition.to_string(),
-            })
-            .collect(),
-        None => Vec::new(),
-    };
-
-    let inventory = match view.inventory() {
-        Some(_) => {
-            let inventory = InventoryService::view(state, catalog, entity)?;
-            Some(MechanicsInventoryInspection {
-                relationship_revision: inventory.relationship_revision(),
-                stacks: inventory.stacks().to_vec(),
-                unique_items: inventory
-                    .unique_items()
-                    .iter()
-                    .map(|item| MechanicsInventoryItemInspection {
-                        entity: item.entity.raw(),
-                        definition: item.definition.to_string(),
-                    })
-                    .collect(),
-                capacity: inventory
-                    .capacity()
-                    .iter()
-                    .map(|capacity| MechanicsCapacityInspection {
-                        metric: capacity.metric.to_string(),
-                        used: capacity.used,
-                        maximum: capacity.maximum,
-                    })
-                    .collect(),
-                read_cost: inventory.read_cost().into(),
-            })
-        }
-        None => None,
-    };
+    let inventory = view
+        .inventory()
+        .map(|inventory| MechanicsInventoryInspection {
+            stacks: inventory.stacks().to_vec(),
+            capacity_limits: inventory.capacity_limits().to_vec(),
+        });
     let item = view.item().map(|item| MechanicsItemInspection {
         definition: item.definition().to_string(),
     });
@@ -407,7 +646,7 @@ pub fn inspect_mechanics_entity(
         })
         .collect();
 
-    Ok(MechanicsEntityInspection {
+    Ok(MechanicsStructuralEntityInspection {
         entity: entity.raw(),
         catalog_version: catalog.version().to_string(),
         catalog_fingerprint: catalog.fingerprint().to_string(),
@@ -416,18 +655,79 @@ pub fn inspect_mechanics_entity(
         tracks,
         intrinsic_sources,
         effects,
-        effect_source_activations,
         inventory,
         item,
         equipment,
     })
 }
 
-pub fn inspect_mechanics_snapshot_json(
+/// Reopen a snapshot into the structural JSON-v2 report.
+///
+/// The `storedStats` and `storedTracks` fields intentionally distinguish component facts from
+/// evaluated owner readouts. No mechanics service is called while reopening the snapshot.
+pub fn inspect_mechanics_snapshot_structural_json_v2(
     snapshot: &str,
     catalog_definition: &str,
     entity: u64,
+) -> Result<MechanicsStructuralEntityInspection, DiagnosticSet> {
+    let (state, catalog) = decode_mechanics_snapshot_for_inspection(snapshot, catalog_definition)?;
+    inspect_mechanics_entity_structural(&state, &catalog, EntityId::new(entity)).map_err(|error| {
+        mechanics_failure(
+            "entity.inspection",
+            DiagnosticLocation::path("$").with_entity(entity),
+            error.to_string(),
+            "inspect the reported component or catalog reference",
+        )
+    })
+}
+
+/// Reopen a snapshot into the legacy enriched JSON shape using owner-supplied evidence.
+///
+/// This is the explicit compatibility route for consumers of the historical `stats` and
+/// `tracks` fields. The caller gathers evaluations, activated sources, and inventory before
+/// calling this function; the inspector only copies that evidence.
+pub fn inspect_mechanics_snapshot_json_v1_from_evidence(
+    snapshot: &str,
+    catalog_definition: &str,
+    entity: u64,
+    evidence: MechanicsInspectionEvidence<'_>,
 ) -> Result<MechanicsEntityInspection, DiagnosticSet> {
+    let (state, catalog) = decode_mechanics_snapshot_for_inspection(snapshot, catalog_definition)?;
+    let structural = inspect_mechanics_entity_structural(&state, &catalog, EntityId::new(entity))
+        .map_err(|error| {
+        mechanics_failure(
+            "entity.inspection",
+            DiagnosticLocation::path("$").with_entity(entity),
+            error.to_string(),
+            "inspect the reported component or catalog reference",
+        )
+    })?;
+    inspect_mechanics_entity_from_evidence(&structural, evidence).map_err(|error| {
+        mechanics_failure(
+            "entity.inspection",
+            DiagnosticLocation::path("$").with_entity(entity),
+            error.to_string(),
+            "inspect the supplied owner evidence",
+        )
+    })
+}
+
+/// Reopen a snapshot into the legacy enriched shape from explicit owner evidence.
+///
+/// Alias retained for callers that prefer the unversioned evidence-oriented spelling.
+pub fn inspect_mechanics_snapshot_json_with_evidence(
+    snapshot: &str,
+    catalog_definition: &str,
+    entity: u64,
+    evidence: MechanicsInspectionEvidence<'_>,
+) -> Result<MechanicsEntityInspection, DiagnosticSet> {
+    inspect_mechanics_snapshot_json_v1_from_evidence(snapshot, catalog_definition, entity, evidence)
+}
+
+fn decode_mechanics_snapshot_for_inspection(
+    snapshot: &str,
+    catalog_definition: &str,
+) -> Result<(EntityState, MechanicsCatalog), DiagnosticSet> {
     let definition: MechanicsCatalogDefinition =
         serde_json::from_str(catalog_definition).map_err(|error| {
             mechanics_failure(
@@ -453,14 +753,7 @@ pub fn inspect_mechanics_snapshot_json(
             "restore or migrate the snapshot with its matching catalog",
         )
     })?;
-    inspect_mechanics_entity(&state, &catalog, EntityId::new(entity)).map_err(|error| {
-        mechanics_failure(
-            "entity.inspection",
-            DiagnosticLocation::path("$").with_entity(entity),
-            error.to_string(),
-            "inspect the reported component or catalog reference",
-        )
-    })
+    Ok((state, catalog))
 }
 
 fn component_inspections(view: &MechanicsEntityView<'_>) -> Vec<MechanicsComponentInspection> {
@@ -753,12 +1046,12 @@ mod tests {
         DamageService, EffectDefinition, EffectDefinitionId, EffectInstanceId,
         EffectStackingPolicy, EquipmentAssignment, EquipmentComponent, EquipmentSlotDefinition,
         EquipmentSlotId, IntrinsicSourceBinding, IntrinsicSourcesComponent, InventoryCapacityLimit,
-        InventoryComponent, ItemCapacityCost, ItemClassificationId, ItemComponent, ItemDefinition,
-        ItemDefinitionId, ItemEquipmentPolicy, ItemKind, MechanicsCatalogDefinition,
-        MechanicsScalar, SourceDefinition, SourceDefinitionId, SourceInstanceId, StackingGroupId,
-        StackingPolicy, StatContribution, StatContributionDefinition, StatDefinition, StatId,
-        StatValue, StatsComponent, TrackDefinition, TrackId, TrackMaximum, TrackValue,
-        TracksComponent,
+        InventoryComponent, InventoryService, ItemCapacityCost, ItemClassificationId,
+        ItemComponent, ItemDefinition, ItemDefinitionId, ItemEquipmentPolicy, ItemKind,
+        MechanicsCatalogDefinition, MechanicsScalar, OperationId, SourceDefinition,
+        SourceDefinitionId, SourceInstanceId, StackingGroupId, StackingPolicy, StatContribution,
+        StatContributionDefinition, StatDefinition, StatId, StatService, StatValue, StatsComponent,
+        TrackDefinition, TrackId, TrackMaximum, TrackValue, TracksComponent,
     };
 
     use super::*;
@@ -946,21 +1239,30 @@ mod tests {
     }
 
     #[test]
-    fn entity_and_receipt_projection_are_bounded_attributed_and_read_only() {
+    fn entity_and_receipt_projection_are_structural_and_read_only() {
         let (catalog, mut state) = fixture();
         let before = encode_snapshot(&state).unwrap();
-        let report = inspect_mechanics_entity(&state, &catalog, OWNER).unwrap();
+        let report = inspect_mechanics_entity_structural(&state, &catalog, OWNER).unwrap();
         assert_eq!(report.components.len(), MechanicsComponentKind::ALL.len());
         assert_eq!(report.stats.len(), 1);
-        assert_eq!(report.stats[0].decisions.len(), 3);
-        assert_eq!(report.tracks[0].maximum, 85);
+        assert_eq!(report.stats[0].base, 80);
+        assert!(matches!(
+            report.tracks[0].declared_maximum,
+            MechanicsTrackMaximumInspection::Stat { .. }
+        ));
         assert_eq!(report.effects.len(), 1);
-        assert_eq!(report.effect_source_activations.len(), 1);
-        assert_eq!(report.inventory.as_ref().unwrap().unique_items.len(), 1);
+        assert_eq!(report.inventory.as_ref().unwrap().capacity_limits.len(), 1);
         assert_eq!(report.equipment.len(), 1);
+        let text = report.to_text();
+        assert!(text.contains("stored stat power base=80"));
+        assert!(text.contains("declaredMaximum=Stat"));
+        assert!(!text.contains("effectActivations="));
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("storedStats"));
+        assert!(json.contains("storedTracks"));
         assert_eq!(encode_snapshot(&state).unwrap(), before);
 
-        let from_json = inspect_mechanics_snapshot_json(
+        let from_json = inspect_mechanics_snapshot_structural_json_v2(
             &before,
             &serde_json::to_string(&definition()).unwrap(),
             OWNER.raw(),
@@ -970,10 +1272,6 @@ mod tests {
         assert_eq!(from_json.tracks, report.tracks);
         assert_eq!(from_json.intrinsic_sources, report.intrinsic_sources);
         assert_eq!(from_json.effects, report.effects);
-        assert_eq!(
-            from_json.effect_source_activations,
-            report.effect_source_activations
-        );
         assert_eq!(from_json.inventory, report.inventory);
         assert_eq!(from_json.equipment, report.equipment);
         for (restored, live) in from_json.components.iter().zip(&report.components) {
@@ -1011,5 +1309,79 @@ mod tests {
             .decisions
             .iter()
             .all(|decision| !decision.source.is_null()));
+    }
+
+    #[test]
+    fn supplied_evidence_preserves_complete_stat_evaluation_and_compatibility_shape() {
+        let (catalog, state) = fixture();
+        let structural = inspect_mechanics_entity_structural(&state, &catalog, OWNER).unwrap();
+        let operation = OperationId::parse("owner_readout").unwrap();
+        let evaluation = StatService::evaluate(
+            &state,
+            &catalog,
+            OWNER,
+            &StatId::parse("power").unwrap(),
+            &operation,
+            &[],
+        )
+        .unwrap();
+        let view = MechanicsEntityView::read(&state, OWNER).unwrap();
+        let activations = view
+            .active_effects()
+            .unwrap()
+            .activated_sources(&catalog)
+            .unwrap();
+        let inventory = InventoryService::view(&state, &catalog, OWNER).unwrap();
+
+        let copied = &inspect_stat_evaluations(std::slice::from_ref(&evaluation)).stats[0];
+        assert_eq!(
+            copied.catalog_version,
+            evaluation.catalog_version.to_string()
+        );
+        assert_eq!(copied.catalog_fingerprint, evaluation.catalog_fingerprint);
+        assert_eq!(copied.entity, evaluation.entity.raw());
+        assert_eq!(copied.base, evaluation.base.get());
+        assert_eq!(copied.after_additions, evaluation.after_additions.get());
+        assert_eq!(copied.after_scaling, evaluation.after_scaling.get());
+        assert_eq!(copied.unconstrained, evaluation.unconstrained.get());
+        assert_eq!(
+            copied.combined_scale_numerator,
+            evaluation.combined_scale_numerator
+        );
+        assert_eq!(
+            copied.observed_revisions.len(),
+            evaluation.observed_revisions.len()
+        );
+
+        let compatibility = inspect_mechanics_entity_from_evidence(
+            &structural,
+            MechanicsInspectionEvidence {
+                stat_evaluations: std::slice::from_ref(&evaluation),
+                effect_source_activations: &activations,
+                inventory: Some(&inventory),
+            },
+        )
+        .unwrap();
+        assert_eq!(compatibility.stats[0].value, evaluation.value.get());
+        assert_eq!(compatibility.tracks[0].maximum, evaluation.value.get());
+        assert_eq!(
+            compatibility.effect_source_activations.len(),
+            activations.len()
+        );
+        assert_eq!(compatibility.inventory.unwrap().unique_items.len(), 1);
+
+        let snapshot_compatibility = inspect_mechanics_snapshot_json_v1_from_evidence(
+            &encode_snapshot(&state).unwrap(),
+            &serde_json::to_string(&definition()).unwrap(),
+            OWNER.raw(),
+            MechanicsInspectionEvidence {
+                stat_evaluations: std::slice::from_ref(&evaluation),
+                effect_source_activations: &activations,
+                inventory: Some(&inventory),
+            },
+        )
+        .unwrap();
+        assert_eq!(snapshot_compatibility.stats, compatibility.stats);
+        assert_eq!(snapshot_compatibility.tracks, compatibility.tracks);
     }
 }
