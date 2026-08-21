@@ -277,8 +277,10 @@ impl ContinuousEvaluator {
             ContinuousComparison::GreaterThan(a, b) => (a, b, 3),
             ContinuousComparison::GreaterOrEqual(a, b) => (a, b, 4),
         };
-        let left = Self::evaluate(left, inputs, limits)?;
-        let right = Self::evaluate(right, inputs, limits)?;
+        validate_predicate(left, right, limits)?;
+        let mut work = 0;
+        let left = eval(left, inputs, limits, &mut work)?;
+        let right = eval(right, inputs, limits, &mut work)?;
         Ok(match comparison {
             0 => left == right,
             1 => left < right,
@@ -286,6 +288,62 @@ impl ContinuousEvaluator {
             3 => left > right,
             _ => left >= right,
         })
+    }
+}
+fn validate_predicate(
+    left: &ContinuousExpr,
+    right: &ContinuousExpr,
+    limits: ContinuousExprLimits,
+) -> Result<(), ContinuousEvaluationError> {
+    validate(left, limits)?;
+    validate(right, limits)?;
+    let nodes = node_count(left) + node_count(right);
+    if nodes > limits.maximum_nodes {
+        return Err(ContinuousEvaluationError::NodeQuotaExceeded {
+            actual: nodes,
+            maximum: limits.maximum_nodes,
+        });
+    }
+    let depth = expression_depth(left).max(expression_depth(right));
+    if depth > limits.maximum_depth {
+        return Err(ContinuousEvaluationError::DepthExceeded {
+            actual: depth,
+            maximum: limits.maximum_depth,
+        });
+    }
+    let mut inputs = BTreeSet::new();
+    collect_inputs(left, &mut inputs);
+    collect_inputs(right, &mut inputs);
+    if inputs.len() > limits.maximum_inputs {
+        return Err(ContinuousEvaluationError::InputQuotaExceeded {
+            actual: inputs.len(),
+            maximum: limits.maximum_inputs,
+        });
+    }
+    Ok(())
+}
+fn node_count(expr: &ContinuousExpr) -> usize {
+    match expr {
+        ContinuousExpr::Literal(_) | ContinuousExpr::Input(_) => 1,
+        ContinuousExpr::Add(a, b)
+        | ContinuousExpr::Subtract(a, b)
+        | ContinuousExpr::Multiply(a, b)
+        | ContinuousExpr::Divide(a, b) => 1 + node_count(a) + node_count(b),
+        ContinuousExpr::Min(values) | ContinuousExpr::Max(values) => {
+            1 + values.iter().map(node_count).sum::<usize>()
+        }
+    }
+}
+fn expression_depth(expr: &ContinuousExpr) -> usize {
+    match expr {
+        ContinuousExpr::Literal(_) | ContinuousExpr::Input(_) => 1,
+        ContinuousExpr::Add(a, b)
+        | ContinuousExpr::Subtract(a, b)
+        | ContinuousExpr::Multiply(a, b)
+        | ContinuousExpr::Divide(a, b) => 1 + expression_depth(a).max(expression_depth(b)),
+        ContinuousExpr::Min(values) | ContinuousExpr::Max(values) => {
+            1 + values.iter().map(expression_depth).max().unwrap_or(0)
+        }
     }
 }
 

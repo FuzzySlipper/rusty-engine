@@ -24,7 +24,10 @@ fn continuous(value: f64) -> ContinuousValue {
 }
 fn direct_input() -> ContinuousQuantizationSource {
     ContinuousQuantizationSource::DirectInput {
-        input: InputId::parse("quantized-value").unwrap(),
+        input: gameplay_standard::ContinuousInputReference::Parameter {
+            role: role("quantizer"),
+            id: InputId::parse("quantized-value").unwrap(),
+        },
     }
 }
 fn role(value: &str) -> CapabilityRoleId {
@@ -275,6 +278,132 @@ fn continuous_quota_matrix_accepts_each_limit_and_rejects_one_over() {
 }
 
 #[test]
+fn exact_predicates_use_one_aggregate_budget_for_both_operands() {
+    let operand = ExactExpr::Add(
+        Box::new(ExactExpr::Literal(scalar(1))),
+        Box::new(ExactExpr::Literal(scalar(1))),
+    );
+    let predicate = gameplay_standard::ExactComparison::Equal(operand.clone(), operand.clone());
+    let each = ExactExprLimits {
+        maximum_depth: 2,
+        maximum_nodes: 3,
+        maximum_inputs: 0,
+        maximum_arity: 0,
+        maximum_work: 3,
+    };
+    assert!(ExactEvaluator::evaluate(&operand, &ExactInputBundle::new(vec![]), each).is_ok());
+    let node_limited = ExactExprLimits {
+        maximum_depth: 2,
+        maximum_nodes: 5,
+        maximum_inputs: 0,
+        maximum_arity: 0,
+        maximum_work: 6,
+    };
+    assert!(matches!(
+        ExactEvaluator::evaluate_predicate(
+            &predicate,
+            &ExactInputBundle::new(vec![]),
+            node_limited
+        ),
+        Err(gameplay_standard::ExactEvaluationError::NodeQuotaExceeded { .. })
+    ));
+    let work_limited = ExactExprLimits {
+        maximum_depth: 2,
+        maximum_nodes: 6,
+        maximum_inputs: 0,
+        maximum_arity: 0,
+        maximum_work: 5,
+    };
+    assert!(matches!(
+        ExactEvaluator::evaluate_predicate(
+            &predicate,
+            &ExactInputBundle::new(vec![]),
+            work_limited
+        ),
+        Err(gameplay_standard::ExactEvaluationError::WorkQuotaExceeded { .. })
+    ));
+    let accepted = ExactExprLimits {
+        maximum_depth: 2,
+        maximum_nodes: 6,
+        maximum_inputs: 0,
+        maximum_arity: 0,
+        maximum_work: 6,
+    };
+    assert!(ExactEvaluator::evaluate_predicate(
+        &predicate,
+        &ExactInputBundle::new(vec![]),
+        accepted
+    )
+    .unwrap());
+}
+
+#[test]
+fn continuous_predicates_use_one_aggregate_budget_for_both_operands() {
+    let operand = ContinuousExpr::Add(
+        Box::new(ContinuousExpr::Literal(continuous(1.0))),
+        Box::new(ContinuousExpr::Literal(continuous(1.0))),
+    );
+    let predicate =
+        gameplay_standard::ContinuousComparison::Equal(operand.clone(), operand.clone());
+    let each = ContinuousExprLimits {
+        maximum_depth: 2,
+        maximum_nodes: 3,
+        maximum_inputs: 0,
+        maximum_arity: 0,
+        maximum_work: 3,
+    };
+    assert!(ContinuousEvaluator::evaluate(
+        &operand,
+        &gameplay_standard::ContinuousInputBundle::new(vec![]),
+        each
+    )
+    .is_ok());
+    let node_limited = ContinuousExprLimits {
+        maximum_depth: 2,
+        maximum_nodes: 5,
+        maximum_inputs: 0,
+        maximum_arity: 0,
+        maximum_work: 6,
+    };
+    assert!(matches!(
+        ContinuousEvaluator::evaluate_predicate(
+            &predicate,
+            &gameplay_standard::ContinuousInputBundle::new(vec![]),
+            node_limited
+        ),
+        Err(gameplay_standard::ContinuousEvaluationError::NodeQuotaExceeded { .. })
+    ));
+    let work_limited = ContinuousExprLimits {
+        maximum_depth: 2,
+        maximum_nodes: 6,
+        maximum_inputs: 0,
+        maximum_arity: 0,
+        maximum_work: 5,
+    };
+    assert!(matches!(
+        ContinuousEvaluator::evaluate_predicate(
+            &predicate,
+            &gameplay_standard::ContinuousInputBundle::new(vec![]),
+            work_limited
+        ),
+        Err(gameplay_standard::ContinuousEvaluationError::WorkQuotaExceeded { .. })
+    ));
+    let accepted = ContinuousExprLimits {
+        maximum_depth: 2,
+        maximum_nodes: 6,
+        maximum_inputs: 0,
+        maximum_arity: 0,
+        maximum_work: 6,
+    };
+    assert!(ContinuousEvaluator::evaluate_predicate(
+        &predicate,
+        &gameplay_standard::ContinuousInputBundle::new(vec![]),
+        accepted
+    )
+    .unwrap());
+}
+
+#[test]
 fn continuous_values_normalize_zero_accept_finite_edges_and_order_by_bits() {
     let negative_zero = continuous(-0.0);
     assert_eq!(negative_zero.bits(), 0.0_f64.to_bits());
@@ -511,6 +640,39 @@ fn quantization_remainders_stay_in_the_named_mode_intervals() {
         .get();
         assert!((-0.5..=0.5).contains(&nearest));
     }
+}
+
+#[test]
+fn quantization_direct_input_evidence_keeps_role_and_kind() {
+    let id = InputId::parse("same-local-id").unwrap();
+    let parameter = ContinuousQuantizationSource::DirectInput {
+        input: gameplay_standard::ContinuousInputReference::Parameter {
+            role: role("caster"),
+            id: id.clone(),
+        },
+    };
+    let fact = ContinuousQuantizationSource::DirectInput {
+        input: gameplay_standard::ContinuousInputReference::Fact {
+            role: role("target"),
+            id,
+        },
+    };
+    assert_ne!(parameter, fact);
+    let receipt = quantize_continuous_to_mechanics(
+        continuous(4.25),
+        ContinuousQuantizationMode::TowardZero,
+        parameter.clone(),
+    )
+    .unwrap();
+    assert_eq!(receipt.source(), &parameter);
+    assert!(matches!(
+        attempt_quantize_continuous_to_mechanics(
+            continuous(1_000_000_000_001.0),
+            ContinuousQuantizationMode::TowardZero,
+            fact.clone()
+        ),
+        gameplay_standard::ContinuousQuantizationAttempt::Rejected { source, .. } if source == fact
+    ));
 }
 
 #[test]

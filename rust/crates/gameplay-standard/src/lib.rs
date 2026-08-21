@@ -13,6 +13,7 @@ mod exact;
 mod input;
 mod package;
 mod quantization;
+mod resolution;
 
 pub use continuous::{
     compile_continuous_expr, CompileContinuousExpr, ContinuousComparison, ContinuousCompileError,
@@ -42,6 +43,15 @@ pub use quantization::{
     ContinuousQuantizationAttempt, ContinuousQuantizationCatalogProvenance,
     ContinuousQuantizationError, ContinuousQuantizationMode, ContinuousQuantizationReceipt,
     ContinuousQuantizationSource, CONTINUOUS_QUANTIZATION_POLICY_VERSION,
+};
+pub use resolution::{
+    CapabilityRoleBinding, CapabilityRoleBindings, ComposedOperation, ComposedPredicate,
+    StandardCatalogProvenance, StandardExactEvaluation, StandardExactOperand,
+    StandardMechanicsEffect, StandardMechanicsReceipt, StandardObservedComponentRevision,
+    StandardOperation, StandardOperationContext, StandardOperationContextError,
+    StandardOperationPlan, StandardPlanValidationError, StandardPlanningError, StandardPredicate,
+    StandardRoleAdmissionError, StandardRoleBindingsError, MAX_CAPABILITY_ROLE_BINDINGS,
+    STANDARD_DAMAGE_CAPABILITY, STANDARD_EFFECT_CAPABILITY, STANDARD_TRACK_CAPABILITY,
 };
 
 /// Maximum number of ASCII bytes in a capability identity.

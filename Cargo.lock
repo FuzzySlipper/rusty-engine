@@ -919,6 +919,7 @@ dependencies = [
 name = "gameplay-standard"
 version = "0.1.0"
 dependencies = [
+ "core-ids",
  "entity-state",
  "gameplay-mechanics",
  "gameplay-resolution",

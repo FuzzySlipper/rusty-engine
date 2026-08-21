@@ -212,6 +212,24 @@ instance identity after load. Effect receipts expose the exact effect revision, 
 revisions, source expansion cost, removed/current instances, and activated source identities; they
 are operation evidence rather than an ambient event journal.
 
+The optional `gameplay-standard` vocabulary adds no resolution kernel. Its
+standard predicate is an exact expression comparison used by the existing
+`Program::When`; its first operations are typed plans for track spend/restore,
+damage submission, and effect apply/remove. A product passes explicit
+capability-role-to-`EntityId` bindings and input values, while planning obtains
+a conservative source snapshot of every mechanics slot on participating
+entities (including absent slots and currently equipped item slots) and
+produces the existing mechanics request unchanged. This intentionally avoids
+executing mutations while planning, so sequential private-candidate programs
+remain admissible. A downstream product transaction validates that snapshot and catalog before cloning a
+private candidate; only then does it rebase the request guard to candidate
+state, retain the typed mechanics receipt, and guard and swap its full
+candidate exactly once. A
+preview follows that same traversal and private staging path before aborting.
+This remains product transaction policy: Engine does not construct a
+heterogeneous world transaction or infer targets, attack meaning, timing,
+consequences, effect expiry, or persistence.
+
 GM3 promotes damage, healing, and repair through the existing direct service boundaries.
 `DamageService::preview` is a pure full-pipeline evaluation; `DamageService::apply` recomputes that
 evaluation against current components and atomically publishes the staged `TracksComponent`.
@@ -433,8 +451,9 @@ aggregate world/session owner.
 Product-specific extensions stay downstream as ordinary typed Rust values,
 services, and composition. They may use standard capability nodes together
 with downstream-specific nodes, but they are not JSON or dynamic extensions to
-this crate. The layer does not define numeric-expression semantics, gameplay
-vocabulary, policy, timing, execution, or persistence contracts.
+this crate. Beyond the explicitly named numeric families and standard mechanics
+leaves below, the layer does not define gameplay vocabulary, product policy,
+timing, orchestration, or persistence contracts.
 
 See [Gameplay standard](code-map/gameplay-standard.md) for the exact readouts,
 selection example, and focused verification.

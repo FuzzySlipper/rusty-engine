@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::{
-    ContinuousValue, ContinuousValueError, InputId, StandardDefinitionIdentity,
+    ContinuousInputReference, ContinuousValue, ContinuousValueError, StandardDefinitionIdentity,
     CONTINUOUS_EVALUATOR_SEMANTICS_VERSION,
 };
 use gameplay_mechanics::{
@@ -20,7 +20,7 @@ pub enum ContinuousQuantizationMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContinuousQuantizationSource {
     /// An explicit immutable evaluator input, never an ambient fact lookup.
-    DirectInput { input: InputId },
+    DirectInput { input: ContinuousInputReference },
     /// A value evaluated from a previously admitted standard definition.
     AdmittedDefinition {
         definition: StandardDefinitionIdentity,

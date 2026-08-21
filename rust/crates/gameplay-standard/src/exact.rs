@@ -223,8 +223,10 @@ impl ExactEvaluator {
             ExactComparison::GreaterThan(a, b) => (a, b, 3),
             ExactComparison::GreaterOrEqual(a, b) => (a, b, 4),
         };
-        let a = Self::evaluate(a, inputs, limits)?;
-        let b = Self::evaluate(b, inputs, limits)?;
+        validate_predicate(a, b, limits)?;
+        let mut work = 0;
+        let a = eval(a, inputs, limits, &mut work)?;
+        let b = eval(b, inputs, limits, &mut work)?;
         Ok(match k {
             0 => a == b,
             1 => a < b,
@@ -232,6 +234,64 @@ impl ExactEvaluator {
             3 => a > b,
             _ => a >= b,
         })
+    }
+}
+fn validate_predicate(
+    left: &ExactExpr,
+    right: &ExactExpr,
+    limits: ExactExprLimits,
+) -> Result<(), ExactEvaluationError> {
+    validate(left, limits)?;
+    validate(right, limits)?;
+    let nodes = node_count(left) + node_count(right);
+    if nodes > limits.maximum_nodes {
+        return Err(ExactEvaluationError::NodeQuotaExceeded {
+            actual: nodes,
+            maximum: limits.maximum_nodes,
+        });
+    }
+    let depth = expression_depth(left).max(expression_depth(right));
+    if depth > limits.maximum_depth {
+        return Err(ExactEvaluationError::DepthExceeded {
+            actual: depth,
+            maximum: limits.maximum_depth,
+        });
+    }
+    let mut inputs = BTreeSet::new();
+    collect_inputs(left, &mut inputs);
+    collect_inputs(right, &mut inputs);
+    if inputs.len() > limits.maximum_inputs {
+        return Err(ExactEvaluationError::InputQuotaExceeded {
+            actual: inputs.len(),
+            maximum: limits.maximum_inputs,
+        });
+    }
+    Ok(())
+}
+fn node_count(expr: &ExactExpr) -> usize {
+    match expr {
+        ExactExpr::Literal(_) | ExactExpr::Input(_) => 1,
+        ExactExpr::Add(a, b)
+        | ExactExpr::Subtract(a, b)
+        | ExactExpr::Multiply(a, b)
+        | ExactExpr::FloorDivide(a, b)
+        | ExactExpr::TruncatingDivide(a, b) => 1 + node_count(a) + node_count(b),
+        ExactExpr::Min(values) | ExactExpr::Max(values) => {
+            1 + values.iter().map(node_count).sum::<usize>()
+        }
+    }
+}
+fn expression_depth(expr: &ExactExpr) -> usize {
+    match expr {
+        ExactExpr::Literal(_) | ExactExpr::Input(_) => 1,
+        ExactExpr::Add(a, b)
+        | ExactExpr::Subtract(a, b)
+        | ExactExpr::Multiply(a, b)
+        | ExactExpr::FloorDivide(a, b)
+        | ExactExpr::TruncatingDivide(a, b) => 1 + expression_depth(a).max(expression_depth(b)),
+        ExactExpr::Min(values) | ExactExpr::Max(values) => {
+            1 + values.iter().map(expression_depth).max().unwrap_or(0)
+        }
     }
 }
 fn validate(expr: &ExactExpr, limits: ExactExprLimits) -> Result<(), ExactEvaluationError> {
