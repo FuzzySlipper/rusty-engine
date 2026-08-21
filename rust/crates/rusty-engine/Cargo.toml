@@ -21,6 +21,7 @@ environment-authoring.workspace = true
 gameplay-mechanics.workspace = true
 gameplay-resolution.workspace = true
 gameplay-rules.workspace = true
+gameplay-standard.workspace = true
 render-model.workspace = true
 render-host-contracts.workspace = true
 render-presentation.workspace = true

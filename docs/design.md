@@ -403,6 +403,42 @@ The changes are recorded in the task-7032 report.
 See [Gameplay resolution](code-map/gameplay-resolution.md) for the concrete
 owners, dependency prohibitions, and focused gates.
 
+## Incubating gameplay-standard capability layer
+
+`gameplay-standard` is an optional, host-neutral metadata layer over four
+already independent owners: `entity-state`, `gameplay-mechanics`,
+`gameplay-resolution`, and `gameplay-rules`. It exposes one static readout in
+each named module namespace (`modules::entity_state`, `modules::mechanics`,
+`modules::resolution`, and `modules::rules`). A readout has a bounded stable
+identity, positive version, and current maturity. All four are **Incubating**
+at version 1: the adoption route is available now, while compatible additive
+growth remains expected.
+
+Each module re-exports the exact public API of its owning crate next to its
+readout. It does not wrap or re-own entity facts, mechanics, attempt
+resolution, rules packages, or their errors. The low-level crates remain
+first-class direct dependencies and facade namespaces. A downstream product
+may select any subset (for example, mechanics plus resolution) or opt out of
+the layer entirely and construct owner services directly.
+
+Availability is broader than a downstream product's chosen defaults. A product
+may adopt a small preset or no preset while every exposed capability remains
+available for explicit selection; this crate does not declare mandatory
+modules, bootstrap a session, or discover capabilities at runtime. It has no
+`StandardGameplay` aggregate, registry, trait-object collection, scheduler,
+persistence, runtime facade, or global module list. A later neutral capability
+is added as another named module and static readout, without changing an
+aggregate world/session owner.
+
+Product-specific extensions stay downstream as ordinary typed Rust values,
+services, and composition. They may use standard capability nodes together
+with downstream-specific nodes, but they are not JSON or dynamic extensions to
+this crate. The layer does not define numeric-expression semantics, gameplay
+vocabulary, policy, timing, execution, or persistence contracts.
+
+See [Gameplay standard](code-map/gameplay-standard.md) for the exact readouts,
+selection example, and focused verification.
+
 ## Spatial authority and derived mechanisms
 
 `engine-spatial::VoxelCollisionScene` holds canonical material voxels alongside projections derived

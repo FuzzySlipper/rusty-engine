@@ -916,6 +916,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gameplay-standard"
+version = "0.1.0"
+dependencies = [
+ "entity-state",
+ "gameplay-mechanics",
+ "gameplay-resolution",
+ "gameplay-rules",
+]
+
+[[package]]
 name = "gdk"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2727,6 +2737,7 @@ dependencies = [
  "gameplay-mechanics",
  "gameplay-resolution",
  "gameplay-rules",
+ "gameplay-standard",
  "render-host-contracts",
  "render-model",
  "render-presentation",

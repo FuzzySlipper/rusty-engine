@@ -13,6 +13,7 @@ members = [
     "rust/crates/gameplay-mechanics",
     "rust/crates/gameplay-resolution",
     "rust/crates/gameplay-rules",
+    "rust/crates/gameplay-standard",
     "rust/crates/render-model",
     "rust/crates/render-presentation",
     "rust/crates/render-projection",
@@ -56,6 +57,7 @@ engine-spatial = { path = "rust/crates/engine-spatial" }
 gameplay-mechanics = { path = "rust/crates/gameplay-mechanics" }
 gameplay-resolution = { path = "rust/crates/gameplay-resolution" }
 gameplay-rules = { path = "rust/crates/gameplay-rules" }
+gameplay-standard = { path = "rust/crates/gameplay-standard" }
 render-model = { path = "rust/crates/render-model" }
 render-presentation = { path = "rust/crates/render-presentation" }
 render-projection = { path = "rust/crates/render-projection" }

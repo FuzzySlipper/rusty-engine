@@ -1,0 +1,13 @@
+[package]
+name = "gameplay-standard"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+entity-state.workspace = true
+gameplay-mechanics.workspace = true
+gameplay-resolution.workspace = true
+gameplay-rules.workspace = true
+
+[lints]
+workspace = true
