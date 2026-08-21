@@ -68,6 +68,15 @@ fn mechanics_and_resolution_are_selected_independently() {
 }
 
 #[test]
+fn expression_values_are_an_additive_independent_readout() {
+    assert_eq!(
+        modules::expression_values::READOUT.identity().as_str(),
+        "expression-values"
+    );
+    assert_eq!(modules::expression_values::READOUT.version().get(), 1);
+}
+
+#[test]
 fn module_namespaces_reach_exact_owner_apis() {
     assert!(modules::entity_state::EntityLifecycle::Active.is_alive());
     assert_eq!(

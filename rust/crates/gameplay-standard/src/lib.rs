@@ -6,6 +6,42 @@
 
 #![forbid(unsafe_code)]
 
+mod continuous;
+mod exact;
+mod input;
+mod package;
+mod quantization;
+
+pub use continuous::{
+    compile_continuous_expr, CompileContinuousExpr, ContinuousComparison, ContinuousCompileError,
+    ContinuousEvaluationError, ContinuousEvaluator, ContinuousExpr, ContinuousExprLimits,
+    ContinuousExprRequirements, ContinuousInputBundle, ContinuousInputReference, ContinuousValue,
+    ContinuousValueError, CONTINUOUS_EVALUATOR_SEMANTICS_VERSION,
+};
+pub use exact::{
+    compile_exact_expr, CompileExactExpr, ExactComparison, ExactCompileError, ExactEvaluationError,
+    ExactEvaluator, ExactExpr, ExactExprLimits, ExactExprRequirements, ExactInputBundle,
+    ExactInputReference, StandardExactFactReference, EXACT_EVALUATOR_SEMANTICS_VERSION,
+};
+pub use input::{
+    CapabilityRequirementId, CapabilityRoleId, InputId, InputKind, RoleRequirement,
+    RoleRequirementError, MAX_CAPABILITY_REQUIREMENTS_PER_ROLE, MAX_ROLE_ID_BYTES,
+};
+pub use package::{
+    admit_continuous_definition, admit_exact_definition, decode_continuous_definition,
+    decode_exact_definition, AdmittedContinuousDefinition, AdmittedExactDefinition,
+    ContinuousDefinition, ContinuousDefinitionRequirements, DecodedContinuousDefinition,
+    DecodedExactDefinition, ExactDefinition, ExactDefinitionRequirements, StandardDefinitionError,
+    StandardDefinitionIdentity, StandardPackageContext, CONTINUOUS_FAMILY_ID, EXACT_FAMILY_ID,
+};
+pub use quantization::{
+    approximate_exact_ratio_to_continuous, attempt_quantize_continuous_to_mechanics,
+    quantize_continuous_to_mechanics, widen_mechanics_scalar_to_continuous,
+    ContinuousQuantizationAttempt, ContinuousQuantizationCatalogProvenance,
+    ContinuousQuantizationError, ContinuousQuantizationMode, ContinuousQuantizationReceipt,
+    ContinuousQuantizationSource, CONTINUOUS_QUANTIZATION_POLICY_VERSION,
+};
+
 /// Maximum number of ASCII bytes in a capability identity.
 pub const MAX_CAPABILITY_IDENTITY_BYTES: usize = 64;
 
@@ -163,6 +199,18 @@ pub mod modules {
         /// Incubating metadata for the entity-state capability.
         pub static READOUT: CapabilityReadout = CapabilityReadout::new(
             identity("entity-state"),
+            version(1),
+            CapabilityMaturity::Incubating,
+        );
+    }
+
+    /// Exact and continuous value expressions remain explicit opt-in capabilities.
+    pub mod expression_values {
+        use super::{identity, version, CapabilityMaturity, CapabilityReadout};
+
+        /// Incubating metadata for the additive expression/value capability.
+        pub static READOUT: CapabilityReadout = CapabilityReadout::new(
+            identity("expression-values"),
             version(1),
             CapabilityMaturity::Incubating,
         );

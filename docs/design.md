@@ -439,6 +439,26 @@ vocabulary, policy, timing, execution, or persistence contracts.
 See [Gameplay standard](code-map/gameplay-standard.md) for the exact readouts,
 selection example, and focused verification.
 
+`gameplay-standard` also provides separate opt-in exact and continuous value
+families. Exact expressions use the unchanged bounded `MechanicsScalar` and
+`ExactRatio` owners; continuous expressions use finite normalized binary64
+values. Neither family coerces into the other: mechanics widening and
+continuous quantization are named boundaries with receipts. Expressions accept
+only explicit immutable input bundles and typed declared roles; they perform no
+world lookup, callback, scheduling, persistence, or product-unit work.
+Their family-specific requirement artifacts expose sorted, deduplicated typed
+inputs and canonical declared roles; an input cannot reference an undeclared
+role. Downstream product leaves compile through a matching static family trait
+to a closed Rust expression before admission, not through a runtime callback,
+registry, or JSON extension path.
+
+Family-specific definitions are admitted as versioned payloads through the
+existing `gameplay-rules` package route. Schema 1 remains the exact
+safe-integer route and schema 2 is selected only for a continuous definition.
+The Rust contract, canonical payload, fixtures, and runtime evaluator belong
+here; #7180 owns generated TypeScript contracts and build-time authoring
+convergence, not a TypeScript evaluator.
+
 ## Spatial authority and derived mechanisms
 
 `engine-spatial::VoxelCollisionScene` holds canonical material voxels alongside projections derived

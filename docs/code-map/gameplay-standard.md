@@ -52,6 +52,28 @@ The readouts describe availability and maturity only. The selected owners still
 perform their own construction and named service calls, while the downstream
 product owns meaning, defaults, timing, state, and persistence.
 
+## Numeric families and authoring handoff
+
+`exact` keeps `MechanicsScalar` and `ExactRatio` intact while exposing an
+ordered, bounded exact expression tree. `continuous` owns only finite
+normalized-binary64 values and its independently bounded expression tree.
+They have separate evaluators, input bundles, comparisons, errors, and
+conversion names; no universal numeric value, callback, scheduler, continuous
+stat/track, or coercion matrix exists.
+
+Each family exposes an inspectable requirement artifact: typed inputs are
+sorted and deduplicated, and every input role must occur in the definition's
+canonical capability-role requirements. A downstream exact or continuous leaf
+may implement the matching static compile trait to produce a closed Rust tree
+before admission. This is typed composition, not a runtime callback, registry,
+or opaque-payload route.
+
+Definitions carry a family, evaluator-semantics version, subject/source
+correlation, ordered tree, and canonical role requirements through the
+`gameplay-rules` schema-1/schema-2 package path. Rust owns evaluation and the
+canonical fixture source. Task #7180 consumes that surface to generate strict
+TypeScript authoring/contracts; it must not add a TypeScript runtime evaluator.
+
 ## Focused verification
 
 ```bash

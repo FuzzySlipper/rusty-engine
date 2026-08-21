@@ -923,6 +923,7 @@ dependencies = [
  "gameplay-mechanics",
  "gameplay-resolution",
  "gameplay-rules",
+ "serde_json",
 ]
 
 [[package]]
