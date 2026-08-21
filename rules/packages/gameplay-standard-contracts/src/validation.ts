@@ -200,11 +200,45 @@ function string(value: unknown, code: StandardContractErrorCode, message: string
   return value;
 }
 function includes(values: readonly string[], value: string): boolean { return values.includes(value); }
-function isJson(value: unknown): value is JsonValue {
+function isJson(value: unknown, active = new WeakSet<object>()): value is JsonValue {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
   if (typeof value === 'number') return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every(isJson);
-  return typeof value === 'object' && value !== null && Object.values(value).every(isJson);
+  if (typeof value !== 'object') return false;
+  if (active.has(value)) return false;
+  active.add(value);
+  try {
+    if (Array.isArray(value)) return isPlainJsonArray(value, active);
+    return isPlainJsonRecord(value, active);
+  } finally {
+    active.delete(value);
+  }
+}
+function isPlainJsonArray(value: readonly unknown[], active: WeakSet<object>): boolean {
+  if (Object.getPrototypeOf(value) !== Array.prototype || 'toJSON' in value) return false;
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const keys = Reflect.ownKeys(descriptors);
+  if (keys.length !== value.length + 1) return false;
+  return keys.every((key) => {
+    if (key === 'length') return true;
+    if (typeof key !== 'string' || !isCanonicalArrayIndex(key, value.length)) return false;
+    const descriptor = descriptors[key];
+    return descriptor !== undefined && descriptor.enumerable && 'value' in descriptor && isJson(descriptor.value, active);
+  });
+}
+function isPlainJsonRecord(value: object, active: WeakSet<object>): boolean {
+  const prototype = Object.getPrototypeOf(value);
+  if ((prototype !== Object.prototype && prototype !== null) || 'toJSON' in value) return false;
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  return Reflect.ownKeys(descriptors).every((key) => {
+    if (typeof key !== 'string') return false;
+    const descriptor = descriptors[key];
+    return descriptor !== undefined && descriptor.enumerable && 'value' in descriptor && isJson(descriptor.value, active);
+  });
+}
+function isCanonicalArrayIndex(key: string, length: number): boolean {
+  if (!/^(?:0|[1-9][0-9]*)$/.test(key)) return false;
+  const index = Number(key);
+  return Number.isSafeInteger(index) && index >= 0 && index < length && String(index) === key;
 }
 function fail(code: StandardContractErrorCode, message: string): never { throw new StandardContractError(code, message); }
 

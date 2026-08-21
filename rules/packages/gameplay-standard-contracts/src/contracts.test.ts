@@ -60,6 +60,18 @@ test('generated extension artifact grammar remains separate and bounded', () => 
   expectCode(() => decodeStandardExtensionArtifact({ ...artifact, schemaVersion: 4_294_967_296 }), 'extension-schema-mismatch');
 });
 
+test('extension payloads accept only stable plain JSON data', () => {
+  const artifact = { family: 'standardExtension', kind: 'combat.option', namespace: 'example.combat', payload: { nested: [{ option: 'guard' }, { values: [1, true, null] }] }, schemaVersion: 1, source: 'rules', subject: 'guard' } as const;
+  assert.deepEqual(decodeStandardExtensionArtifact(artifact), artifact);
+  expectCode(() => decodeStandardExtensionArtifact({ ...artifact, payload: new Date() }), 'invalid-node');
+  expectCode(() => decodeStandardExtensionArtifact({ ...artifact, payload: new Map([['option', 'guard']]) }), 'invalid-node');
+  expectCode(() => decodeStandardExtensionArtifact({ ...artifact, payload: Object.create({ inherited: true }) }), 'invalid-node');
+  expectCode(() => decodeStandardExtensionArtifact({ ...artifact, payload: { toJSON: () => ({ option: 'guard' }) } }), 'invalid-node');
+  const accessor: Record<string, unknown> = {};
+  Object.defineProperty(accessor, 'option', { enumerable: true, get: () => 'guard' });
+  expectCode(() => decodeStandardExtensionArtifact({ ...artifact, payload: accessor }), 'invalid-node');
+});
+
 function expectCode(action: () => unknown, code: string): void {
   assert.throws(action, (error: unknown) => error instanceof StandardContractError && error.code === code);
 }
