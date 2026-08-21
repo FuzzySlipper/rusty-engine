@@ -391,7 +391,7 @@ pub fn import_with_context(source: &SourceMesh, context: &ImportContext) -> Impo
 fn bounds_of(positions: &[f32]) -> MeshBoundsDescriptor {
     let mut min = [f32::INFINITY; 3];
     let mut max = [f32::NEG_INFINITY; 3];
-    for vertex in positions.chunks_exact(3) {
+    for vertex in positions.as_chunks::<3>().0.iter() {
         for axis in 0..3 {
             min[axis] = min[axis].min(vertex[axis]);
             max[axis] = max[axis].max(vertex[axis]);

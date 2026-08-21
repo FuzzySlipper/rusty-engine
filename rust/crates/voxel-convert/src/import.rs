@@ -263,19 +263,16 @@ pub(crate) fn flatten_model_scene(
                     "primitive triangle start exceeds u32",
                 )
             })?;
-            triangles.extend(
-                primitive
-                    .indices
-                    .chunks_exact(3)
-                    .map(|triangle| ImportedTriangle {
-                        indices: [
-                            triangle[0] + vertex_offset,
-                            triangle[1] + vertex_offset,
-                            triangle[2] + vertex_offset,
-                        ],
-                        source_material_slot: primitive.source_material_slot,
-                    }),
-            );
+            triangles.extend(primitive.indices.as_chunks::<3>().0.iter().map(|triangle| {
+                ImportedTriangle {
+                    indices: [
+                        triangle[0] + vertex_offset,
+                        triangle[1] + vertex_offset,
+                        triangle[2] + vertex_offset,
+                    ],
+                    source_material_slot: primitive.source_material_slot,
+                }
+            }));
             primitive_groups.push(ImportedPrimitiveGroup {
                 source_node_index: node.source_node_index,
                 source_mesh_index: mesh.source_mesh_index,

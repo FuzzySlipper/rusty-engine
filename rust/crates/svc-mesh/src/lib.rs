@@ -839,7 +839,7 @@ mod tests {
     fn emitted_winding_matches_emitted_normal() {
         let c = chunk_with(&[(l(1, 1, 1), 1), (l(2, 1, 1), 1)]);
         let m = mesh_chunk_standalone(&spec(), ChunkCoord::ORIGIN, &c).unwrap();
-        for tri in m.indices.chunks_exact(3) {
+        for tri in m.indices.as_chunks::<3>().0.iter() {
             let p: Vec<[f32; 3]> = tri
                 .iter()
                 .map(|&i| {
@@ -1026,7 +1026,7 @@ mod tests {
             mesh.groups.iter().map(|group| group.count).sum::<u32>(),
             mesh.stats.indices
         );
-        for normal in mesh.normals.chunks_exact(3) {
+        for normal in mesh.normals.as_chunks::<3>().0.iter() {
             let length =
                 (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
             assert!((length - 1.0).abs() < 1.0e-4, "normal={normal:?}");
@@ -1205,7 +1205,9 @@ mod tests {
     fn triangle_positions(mesh: &MeshPayload, translation: [f32; 3]) -> Vec<Vec<[i32; 3]>> {
         let mut triangles = mesh
             .indices
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|triangle| {
                 let mut points = triangle
                     .iter()

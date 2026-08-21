@@ -166,11 +166,15 @@ fn golden_static_ramp_imports_into_the_shared_trimesh_query_service() {
     let asset = StaticMeshColliderAsset::new(
         StaticMeshAssetId(1),
         positions
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|point| [point[0] as f64, point[1] as f64, point[2] as f64])
             .collect(),
         indices
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|triangle| [triangle[0], triangle[1], triangle[2]])
             .collect(),
     )
