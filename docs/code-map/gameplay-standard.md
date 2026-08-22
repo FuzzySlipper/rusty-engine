@@ -163,6 +163,18 @@ catalog, component, or request fragment separately; stat-derived and fixed
 track maxima stay structural declarations until their owner explicitly evaluates
 them.
 
+Their `*PresetConfig` values use the existing bounded exact `MechanicsScalar`
+type for maxima and initials. Construction rejects negative values and initials
+above their corresponding maximum; the emitted definitions and component facts
+retain those values for ordinary mechanics inspection and snapshot validation.
+The original fixed constructors retain their default-compatible values. When a
+product needs both standard fragments beside its own catalog definitions, use
+`compose_action_actor_and_destructible_resource_catalog`: it preserves the
+caller-selected catalog version and identities, canonicalizes only its known
+top-level fragments, returns typed version/duplicate conflicts, and delegates
+the remaining validation to `MechanicsCatalog`. It is deliberately not a
+general-purpose catalog merge surface.
+
 These adoption helpers are **Incubating**. Choose standard projections and presets for the
 small shared capability column, keep product explanations as typed downstream extension values,
 or use the underlying mechanics/resolution/rules owners directly when that is the clearer fit.
