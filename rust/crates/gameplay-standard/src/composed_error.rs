@@ -1,6 +1,8 @@
 use std::fmt;
 
-use gameplay_rules::{RulePackageError, RuleSourceId, RuleSubjectId};
+use gameplay_rules::{
+    RuleFingerprint, RulePackageError, RulePackageIdentity, RuleSourceId, RuleSubjectId,
+};
 
 use crate::composed::ComposedExactLeafKindId;
 use crate::{
@@ -98,6 +100,66 @@ pub enum ComposedExactError<E> {
     Standard(ExactEvaluationError),
     NonConvergentPayload,
 }
+
+/// Parent-package evidence retained with every embedded composed definition failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedComposedExactContext {
+    parent_identity: RulePackageIdentity,
+    parent_fingerprint: RuleFingerprint,
+    path: String,
+}
+
+impl EmbeddedComposedExactContext {
+    pub(crate) fn new(
+        parent_identity: RulePackageIdentity,
+        parent_fingerprint: RuleFingerprint,
+        path: String,
+    ) -> Self {
+        Self {
+            parent_identity,
+            parent_fingerprint,
+            path,
+        }
+    }
+    pub fn parent_identity(&self) -> &RulePackageIdentity {
+        &self.parent_identity
+    }
+    pub fn parent_fingerprint(&self) -> &RuleFingerprint {
+        &self.parent_fingerprint
+    }
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+}
+
+/// An embedded-route failure always retains its selected parent identity and canonical path.
+#[derive(Debug)]
+pub struct EmbeddedComposedExactError<E> {
+    context: EmbeddedComposedExactContext,
+    error: ComposedExactError<E>,
+}
+
+impl<E> EmbeddedComposedExactError<E> {
+    pub(crate) fn new(context: EmbeddedComposedExactContext, error: ComposedExactError<E>) -> Self {
+        Self { context, error }
+    }
+    pub fn context(&self) -> &EmbeddedComposedExactContext {
+        &self.context
+    }
+    pub fn error(&self) -> &ComposedExactError<E> {
+        &self.error
+    }
+}
+impl<E: fmt::Display> fmt::Display for EmbeddedComposedExactError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "embedded composed exact at {} rejected: {}",
+            self.context.path, self.error
+        )
+    }
+}
+impl<E: std::error::Error + 'static> std::error::Error for EmbeddedComposedExactError<E> {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComposedExactProductContext {

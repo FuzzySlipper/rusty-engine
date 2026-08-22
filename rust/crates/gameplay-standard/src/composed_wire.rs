@@ -54,7 +54,8 @@ pub(crate) fn encode_expr<C: ComposedExactLeafCodec>(
                     error: Box::new(error),
                 }
             })?;
-            canonical_payload_len(&payload).map_err(ComposedExactError::Wire)?;
+            canonical_payload_len(&payload, RulePackageSchemaVersion::IntegerOnlyV1)
+                .map_err(ComposedExactError::Wire)?;
             json!({"op":"product","kind":leaf.kind().as_str(),"subject":leaf.subject().as_str(),"source":leaf.source().as_str(),"payload":payload})
         }
     })
@@ -82,9 +83,10 @@ pub(crate) fn decode_expr<C: ComposedExactLeafCodec>(
     match op {
         "literal" => {
             fields(object, &["op", "value"], path)?;
-            let value = required(object, "value", path)?.as_i64().ok_or_else(|| {
-                malformed(&format!("{path}.value"), "must be an exact signed integer")
-            })?;
+            let value =
+                exact_signed_integer(required(object, "value", path)?).ok_or_else(|| {
+                    malformed(&format!("{path}.value"), "must be an exact signed integer")
+                })?;
             Ok(ComposedExactExpr::Literal(
                 MechanicsScalar::new(value).map_err(|error| {
                     ComposedExactError::Wire(ComposedExactDefinitionError::ExactLiteral {
@@ -126,7 +128,7 @@ pub(crate) fn decode_expr<C: ComposedExactLeafCodec>(
                 .map_err(ComposedExactError::Package)?;
             validate_correlation(package, &subject, &source)?;
             let payload = required(object, "payload", path)?;
-            let wire_bytes = canonical_payload_bytes(payload)?;
+            let wire_bytes = canonical_payload_bytes(payload, package.schema_version())?;
             let leaf = C::decode_leaf(&kind, payload).map_err(|error| {
                 ComposedExactError::ProductDecode {
                     context: Box::new(ComposedExactProductContext::new(
@@ -151,7 +153,7 @@ pub(crate) fn decode_expr<C: ComposedExactLeafCodec>(
                     error: Box::new(error),
                 }
             })?;
-            let encoded_bytes = canonical_payload_bytes(&encoded)?;
+            let encoded_bytes = canonical_payload_bytes(&encoded, package.schema_version())?;
             if encoded_bytes != wire_bytes {
                 return Err(ComposedExactError::ProductNonConvergentPayload {
                     context: Box::new(ComposedExactProductContext::new(
@@ -206,9 +208,10 @@ pub(crate) fn preflight_wire_tree(
     match op {
         "literal" => {
             fields(object, &["op", "value"], path)?;
-            let value = required(object, "value", path)?.as_i64().ok_or_else(|| {
-                malformed(&format!("{path}.value"), "must be an exact signed integer")
-            })?;
+            let value =
+                exact_signed_integer(required(object, "value", path)?).ok_or_else(|| {
+                    malformed(&format!("{path}.value"), "must be an exact signed integer")
+                })?;
             MechanicsScalar::new(value).map_err(|error| {
                 ComposedExactDefinitionError::ExactLiteral {
                     path: path.to_owned(),
@@ -285,7 +288,10 @@ pub(crate) fn preflight_wire_tree(
             let source = RuleSourceId::parse(string(object, "source", path)?)
                 .map_err(ComposedExactDefinitionError::Package)?;
             validate_correlation(package, &subject, &source)?;
-            let bytes = canonical_payload_len(required(object, "payload", path)?)?;
+            let bytes = canonical_payload_len(
+                required(object, "payload", path)?,
+                package.schema_version(),
+            )?;
             preflight.product_bytes = preflight.product_bytes.checked_add(bytes).ok_or(
                 ComposedExactDefinitionError::PayloadQuotaExceeded {
                     actual: usize::MAX,
@@ -405,19 +411,19 @@ pub(crate) fn validate_wire_node<Leaf>(
         }
     }
 }
-pub(crate) fn decode_schema(
+pub(crate) fn decode_schema_at(
     value: &Value,
+    path: &str,
 ) -> Result<StandardExtensionSchema, ComposedExactDefinitionError> {
     let object = value
         .as_object()
-        .ok_or_else(|| malformed("payload.extension", "must be an object"))?;
-    fields(object, &["namespace", "schemaVersion"], "payload.extension")?;
-    let namespace =
-        crate::CapabilityRequirementId::parse(string(object, "namespace", "payload.extension")?)
-            .map_err(ComposedExactDefinitionError::Role)?;
-    let version = integer(object, "schemaVersion", "payload.extension")?;
+        .ok_or_else(|| malformed(path, "must be an object"))?;
+    fields(object, &["namespace", "schemaVersion"], path)?;
+    let namespace = crate::CapabilityRequirementId::parse(string(object, "namespace", path)?)
+        .map_err(ComposedExactDefinitionError::Role)?;
+    let version = integer(object, "schemaVersion", path)?;
     let version = u32::try_from(version)
-        .map_err(|_| malformed("payload.extension.schemaVersion", "exceeds u32"))?;
+        .map_err(|_| malformed(&child_path(path, ".schemaVersion"), "exceeds u32"))?;
     StandardExtensionSchema::new(namespace, version)
         .map_err(ComposedExactDefinitionError::Extension)
 }
@@ -427,15 +433,16 @@ pub(crate) fn schema_payload(schema: &StandardExtensionSchema) -> Value {
 pub(crate) fn roles_payload(roles: &[RoleRequirement]) -> Value {
     Value::Array(roles.iter().map(|role|json!({"role":role.role().as_str(),"capabilities":role.capabilities().iter().map(|cap|Value::String(cap.as_str().to_owned())).collect::<Vec<_>>() })).collect())
 }
-pub(crate) fn decode_roles(
+pub(crate) fn decode_roles_at(
     value: &Value,
+    path: &str,
 ) -> Result<Vec<RoleRequirement>, ComposedExactDefinitionError> {
     let values = value
         .as_array()
-        .ok_or_else(|| malformed("payload.roles", "must be an array"))?;
+        .ok_or_else(|| malformed(path, "must be an array"))?;
     let mut roles = Vec::new();
     for (index, value) in values.iter().enumerate() {
-        let path = format!("payload.roles[{index}]");
+        let path = child_path(path, &format!("[{index}]"));
         let object = value
             .as_object()
             .ok_or_else(|| malformed(&path, "must be an object"))?;
@@ -459,7 +466,7 @@ pub(crate) fn decode_roles(
     let canonical = canonicalize_roles(roles.clone())?;
     if canonical != roles {
         return Err(malformed(
-            "payload.roles",
+            path,
             "must be sorted, deduplicated, and merged by role",
         ));
     }
@@ -556,16 +563,20 @@ pub(crate) fn validate_correlation(
 }
 pub(crate) fn canonical_payload_bytes(
     value: &Value,
+    schema_version: RulePackageSchemaVersion,
 ) -> Result<Vec<u8>, ComposedExactDefinitionError> {
     gameplay_rules::canonical_rule_json_value_bytes(
         value,
-        RulePackageSchemaVersion::IntegerOnlyV1,
+        schema_version,
         crate::MAX_STANDARD_EXTENSION_PAYLOAD_BYTES,
     )
     .map_err(ComposedExactDefinitionError::Package)
 }
-pub(crate) fn canonical_payload_len(value: &Value) -> Result<usize, ComposedExactDefinitionError> {
-    canonical_payload_bytes(value).map(|bytes| bytes.len())
+pub(crate) fn canonical_payload_len(
+    value: &Value,
+    schema_version: RulePackageSchemaVersion,
+) -> Result<usize, ComposedExactDefinitionError> {
+    canonical_payload_bytes(value, schema_version).map(|bytes| bytes.len())
 }
 const MAX_COMPOSED_ERROR_PATH_BYTES: usize = 512;
 
@@ -606,9 +617,39 @@ pub(crate) fn integer(
     name: &str,
     path: &str,
 ) -> Result<u64, ComposedExactDefinitionError> {
-    required(object, name, path)?
-        .as_u64()
+    let value = required(object, name, path)?;
+    exact_unsigned_integer(value)
         .ok_or_else(|| malformed(&format!("{path}.{name}"), "must be an integer"))
+}
+
+/// Schema-2 package admission canonicalizes all finite numbers to binary64.  The exact grammar
+/// therefore admits only values that remain mathematically integral *and* exactly representable
+/// in the shared JSON-safe integer interval; it never turns an unsafe binary64 magnitude into an
+/// exact scalar merely because Rust can cast it.
+fn exact_signed_integer(value: &Value) -> Option<i64> {
+    if let Some(value) = value.as_i64() {
+        return Some(value);
+    }
+    let value = value.as_f64()?;
+    let maximum = gameplay_rules::MAX_SAFE_JSON_INTEGER as f64;
+    if value.is_finite() && value.fract() == 0.0 && value >= -maximum && value <= maximum {
+        Some(value as i64)
+    } else {
+        None
+    }
+}
+
+fn exact_unsigned_integer(value: &Value) -> Option<u64> {
+    if let Some(value) = value.as_u64() {
+        return Some(value);
+    }
+    let value = value.as_f64()?;
+    let maximum = gameplay_rules::MAX_SAFE_JSON_INTEGER as f64;
+    if value.is_finite() && value.fract() == 0.0 && value >= 0.0 && value <= maximum {
+        Some(value as u64)
+    } else {
+        None
+    }
 }
 pub(crate) fn fields(
     object: &serde_json::Map<String, Value>,

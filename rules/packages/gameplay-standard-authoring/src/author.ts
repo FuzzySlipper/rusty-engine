@@ -29,11 +29,17 @@ export function declareComposedExactProductCodec<Payload extends StandardJsonVal
   return Object.freeze(codec);
 }
 export type ComposedExactDefinitionDraft<Payload extends StandardJsonValue> = Omit<RulePackageDraft<JsonValue>, 'schemaVersion' | 'payload'> & { readonly codec: StrictComposedExactProductCodec<Payload>; readonly definition: ComposedExactDefinitionPayload<Payload> };
-/** Authors a canonical schema-1 composedExact package. Product payload validation is owned by the explicit strict codec; generic arithmetic stays Rust Standard grammar. */
-export function authorComposedExactDefinition<Payload extends StandardJsonValue>(draft: ComposedExactDefinitionDraft<Payload>): CanonicalRuleArtifact<JsonValue> {
-  const definition = decodeComposedExactPayload(draft.definition, draft.codec);
+export type EmbeddedComposedExactDefinitionDraft<Payload extends StandardJsonValue> = Pick<ComposedExactDefinitionDraft<Payload>, 'codec' | 'definition' | 'provenance'> & { readonly parentSchemaVersion: 1 | 2 };
+/** Validates an immutable generated subtree under the explicit aggregate numeric policy. */
+export function composeEmbeddedComposedExactDefinition<Payload extends StandardJsonValue>(draft: EmbeddedComposedExactDefinitionDraft<Payload>): ComposedExactDefinitionPayload<Payload> {
+  const definition = decodeComposedExactPayload(draft.definition, draft.codec, draft.parentSchemaVersion === 1 ? 'integer' : 'binary64');
   assertCorrelation(definition.subject, definition.source, draft.provenance);
   collectLeafProvenance(definition.tree, draft.provenance);
+  return deepFreeze(JSON.parse(JSON.stringify(definition)) as ComposedExactDefinitionPayload<Payload>);
+}
+/** Authors a canonical schema-1 composedExact package. Product payload validation is owned by the explicit strict codec; generic arithmetic stays Rust Standard grammar. */
+export function authorComposedExactDefinition<Payload extends StandardJsonValue>(draft: ComposedExactDefinitionDraft<Payload>): CanonicalRuleArtifact<JsonValue> {
+  const definition = composeEmbeddedComposedExactDefinition({ ...draft, parentSchemaVersion: 1 });
   const { codec: _codec, definition: _definition, ...envelope } = draft;
   return authorRulePackage({ ...envelope, schemaVersion: 1, payload: definition as unknown as JsonValue });
 }
@@ -52,4 +58,11 @@ function authorExtension<Payload extends JsonValue>(draft: StandardExtensionDraf
 function envelope<P extends ExactDefinitionPayload | ContinuousDefinitionPayload>(draft: StandardDefinitionDraft<P>): Omit<RulePackageDraft<JsonValue>, 'schemaVersion' | 'payload'> { const { definition: _definition, ...value } = draft; return value; }
 function assertCorrelation(subject: string, source: string, provenance: RulePackageDraft<JsonValue>['provenance']): void {
   if (!provenance?.some((entry) => entry.subject === subject && entry.source === source)) throw new StandardContractError('source-correlation-mismatch', `standard artifact ${subject} must correlate to provenance source ${source}`);
+}
+function deepFreeze<Value>(value: Value): Value {
+  if (value && typeof value === 'object') {
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
 }

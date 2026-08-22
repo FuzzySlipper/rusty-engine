@@ -107,11 +107,14 @@ export interface StrictComposedExactProductCodec<Payload extends JsonValue> {
   decode(payload: unknown): Payload;
   encode(payload: Payload): JsonValue;
 }
+/** Numeric admission policy of the aggregate package carrying a composed subtree. */
+export type ComposedExactNumericPolicy = 'integer' | 'binary64';
 
 /** Validates the generated mixed-tree wire grammar and invokes the explicitly supplied strict product codec only at product leaves. */
 export function decodeComposedExactPayload<Payload extends JsonValue>(
   value: unknown,
   codec: StrictComposedExactProductCodec<Payload>,
+  numericPolicy: ComposedExactNumericPolicy = 'integer',
 ): ComposedExactDefinitionPayload<Payload> {
   const payload = record(value, 'invalid-node', 'composed exact definition must be an object');
   fields(payload, [...STANDARD_COMPOSED_EXACT.definitionFieldOrder], 'composed definition');
@@ -132,11 +135,11 @@ export function decodeComposedExactPayload<Payload extends JsonValue>(
   // Complete wire preflight deliberately occurs before the first product codec call.
   // A later malformed node must never make an earlier product decoder observable.
   const preflight: Metrics = { nodes: 0, work: 0, inputs: new Set(), productBytes: 0 };
-  preflightComposedTree(payload.tree, declared, preflight, 1);
+  preflightComposedTree(payload.tree, declared, preflight, 1, numericPolicy);
   if (preflight.inputs.size > STANDARD_LIMITS.exact.maximumInputs) fail('input-quota-exceeded', 'composed exact input quota exceeded');
   if (preflight.work > STANDARD_LIMITS.exact.maximumWork) fail('work-quota-exceeded', 'composed exact wire work quota exceeded');
   const metrics: Metrics = { nodes: 0, work: 0, inputs: new Set(), productBytes: 0 };
-  const tree = decodeComposedTree(payload.tree, declared, metrics, 1, codec);
+  const tree = decodeComposedTree(payload.tree, declared, metrics, 1, codec, numericPolicy);
   return { family: STANDARD_COMPOSED_EXACT.family, extension: { namespace, schemaVersion: schemaVersion as number }, roles, semanticsVersion: STANDARD_COMPOSED_EXACT.semanticsVersion, source, subject, tree };
 }
 
@@ -144,7 +147,7 @@ export function assertComposedExactPayload<Payload extends JsonValue>(value: Com
   decodeComposedExactPayload(value, codec);
 }
 
-function preflightComposedTree(value: unknown, roles: ReadonlySet<string>, metrics: Metrics, depth: number): void {
+function preflightComposedTree(value: unknown, roles: ReadonlySet<string>, metrics: Metrics, depth: number, numericPolicy: ComposedExactNumericPolicy): void {
   if (depth > STANDARD_LIMITS.exact.maximumDepth) fail('depth-quota-exceeded', 'composed exact wire depth quota exceeded');
   metrics.nodes += 1; metrics.work += 1;
   if (metrics.nodes > STANDARD_LIMITS.exact.maximumNodes) fail('node-quota-exceeded', 'composed exact wire node quota exceeded');
@@ -156,20 +159,20 @@ function preflightComposedTree(value: unknown, roles: ReadonlySet<string>, metri
     identity(string(tree.subject, 'invalid-identity', 'composed product subject must be a string'), 'subject');
     identity(string(tree.source, 'invalid-identity', 'composed product source must be a string'), 'source');
     if (!isJson(tree.payload)) fail('invalid-node', 'composed product payload must be strict JSON');
-    metrics.productBytes += Buffer.byteLength(canonicalProductJson(tree.payload), 'utf8');
+    metrics.productBytes += Buffer.byteLength(canonicalProductJson(tree.payload, numericPolicy), 'utf8');
     if (metrics.productBytes > STANDARD_LIMITS.maxExtensionBytes) fail('extension-payload-too-large', 'composed product payloads exceed the Rust aggregate byte limit');
     return;
   }
   if (!includes(STANDARD_FAMILIES.exact.operations, op)) fail('invalid-node', 'unsupported composed exact standard operation');
   if (op === 'literal') { fields(tree, [...STANDARD_FIELD_ORDER.Literal], 'composed literal'); if (!Number.isSafeInteger(tree.value) || Object.is(tree.value, -0) || (tree.value as number) < STANDARD_LIMITS.exact.minimumScalar || (tree.value as number) > STANDARD_LIMITS.exact.maximumScalar) fail('invalid-literal', 'composed exact literal is invalid'); return; }
   if (op === 'input') { fields(tree, [...STANDARD_FIELD_ORDER.Input], 'composed input'); const input = decodeInput(tree.input, 'exact', roles); metrics.inputs.add(inputIdentity(input)); return; }
-  if (op === 'min' || op === 'max') { fields(tree, [...STANDARD_FIELD_ORDER.Aggregate], 'composed aggregate'); if (!Array.isArray(tree.values) || tree.values.length === 0) fail('invalid-node', 'composed aggregate must be nonempty'); if (tree.values.length > STANDARD_LIMITS.exact.maximumArity) fail('arity-quota-exceeded', 'composed aggregate arity quota exceeded'); tree.values.forEach((child) => preflightComposedTree(child, roles, metrics, depth + 1)); return; }
+  if (op === 'min' || op === 'max') { fields(tree, [...STANDARD_FIELD_ORDER.Aggregate], 'composed aggregate'); if (!Array.isArray(tree.values) || tree.values.length === 0) fail('invalid-node', 'composed aggregate must be nonempty'); if (tree.values.length > STANDARD_LIMITS.exact.maximumArity) fail('arity-quota-exceeded', 'composed aggregate arity quota exceeded'); tree.values.forEach((child) => preflightComposedTree(child, roles, metrics, depth + 1, numericPolicy)); return; }
   fields(tree, [...STANDARD_FIELD_ORDER.Binary], 'composed binary');
-  preflightComposedTree(tree.left, roles, metrics, depth + 1);
-  preflightComposedTree(tree.right, roles, metrics, depth + 1);
+  preflightComposedTree(tree.left, roles, metrics, depth + 1, numericPolicy);
+  preflightComposedTree(tree.right, roles, metrics, depth + 1, numericPolicy);
 }
 
-function decodeComposedTree<Payload extends JsonValue>(value: unknown, roles: ReadonlySet<string>, metrics: Metrics, depth: number, codec: StrictComposedExactProductCodec<Payload>): ComposedExactTree<Payload> {
+function decodeComposedTree<Payload extends JsonValue>(value: unknown, roles: ReadonlySet<string>, metrics: Metrics, depth: number, codec: StrictComposedExactProductCodec<Payload>, numericPolicy: ComposedExactNumericPolicy): ComposedExactTree<Payload> {
   if (depth > STANDARD_LIMITS.exact.maximumDepth) fail('depth-quota-exceeded', 'composed exact wire depth quota exceeded');
   metrics.nodes += 1; metrics.work += 1;
   if (metrics.nodes > STANDARD_LIMITS.exact.maximumNodes) fail('node-quota-exceeded', 'composed exact wire node quota exceeded');
@@ -181,20 +184,20 @@ function decodeComposedTree<Payload extends JsonValue>(value: unknown, roles: Re
     const subject = string(tree.subject, 'invalid-identity', 'composed product subject must be a string'); identity(subject, 'subject');
     const source = string(tree.source, 'invalid-identity', 'composed product source must be a string'); identity(source, 'source');
     if (!isJson(tree.payload)) fail('invalid-node', 'composed product payload must be strict JSON');
-    const wirePayload = canonicalProductJson(tree.payload);
+    const wirePayload = canonicalProductJson(tree.payload, numericPolicy);
     metrics.productBytes += Buffer.byteLength(wirePayload, 'utf8');
     if (metrics.productBytes > STANDARD_LIMITS.maxExtensionBytes) fail('extension-payload-too-large', 'composed product payloads exceed the Rust aggregate byte limit');
     const decoded = codec.decode(tree.payload);
     const canonical = codec.encode(decoded);
-    if (!isJson(canonical) || canonicalProductJson(canonical) !== wirePayload) fail('invalid-node', 'composed product payload does not converge through its strict codec');
+    if (!isJson(canonical) || canonicalProductJson(canonical, numericPolicy) !== wirePayload) fail('invalid-node', 'composed product payload does not converge through its strict codec');
     return { op: STANDARD_COMPOSED_EXACT.productOp, kind, payload: decoded, source, subject };
   }
   if (!includes(STANDARD_FAMILIES.exact.operations, op)) fail('invalid-node', 'unsupported composed exact standard operation');
   if (op === 'literal') { fields(tree, [...STANDARD_FIELD_ORDER.Literal], 'composed literal'); if (!Number.isSafeInteger(tree.value) || Object.is(tree.value, -0) || (tree.value as number) < STANDARD_LIMITS.exact.minimumScalar || (tree.value as number) > STANDARD_LIMITS.exact.maximumScalar) fail('invalid-literal', 'composed exact literal is invalid'); return { op, value: tree.value as number }; }
   if (op === 'input') { fields(tree, [...STANDARD_FIELD_ORDER.Input], 'composed input'); return { op, input: decodeInput(tree.input, 'exact', roles) }; }
-  if (op === 'min' || op === 'max') { fields(tree, [...STANDARD_FIELD_ORDER.Aggregate], 'composed aggregate'); if (!Array.isArray(tree.values) || tree.values.length === 0) fail('invalid-node', 'composed aggregate must be nonempty'); if (tree.values.length > STANDARD_LIMITS.exact.maximumArity) fail('arity-quota-exceeded', 'composed aggregate arity quota exceeded'); return { op, values: tree.values.map((child) => decodeComposedTree(child, roles, metrics, depth + 1, codec)) }; }
+  if (op === 'min' || op === 'max') { fields(tree, [...STANDARD_FIELD_ORDER.Aggregate], 'composed aggregate'); if (!Array.isArray(tree.values) || tree.values.length === 0) fail('invalid-node', 'composed aggregate must be nonempty'); if (tree.values.length > STANDARD_LIMITS.exact.maximumArity) fail('arity-quota-exceeded', 'composed aggregate arity quota exceeded'); return { op, values: tree.values.map((child) => decodeComposedTree(child, roles, metrics, depth + 1, codec, numericPolicy)) }; }
   fields(tree, [...STANDARD_FIELD_ORDER.Binary], 'composed binary');
-  return { op: op as 'add' | 'subtract' | 'multiply' | 'floorDivide' | 'truncatingDivide', left: decodeComposedTree(tree.left, roles, metrics, depth + 1, codec), right: decodeComposedTree(tree.right, roles, metrics, depth + 1, codec) };
+  return { op: op as 'add' | 'subtract' | 'multiply' | 'floorDivide' | 'truncatingDivide', left: decodeComposedTree(tree.left, roles, metrics, depth + 1, codec, numericPolicy), right: decodeComposedTree(tree.right, roles, metrics, depth + 1, codec, numericPolicy) };
 }
 
 function decodeRoles(value: unknown): readonly StandardRole[] {
@@ -345,11 +348,11 @@ function isCanonicalArrayIndex(key: string, length: number): boolean {
   return Number.isSafeInteger(index) && index >= 0 && index < length && String(index) === key;
 }
 /** Mirrors Rust BoundedJsonWriter for schema-1 product payload accounting. */
-function canonicalProductJson(value: JsonValue): string {
+function canonicalProductJson(value: JsonValue, numericPolicy: ComposedExactNumericPolicy): string {
   const chunks: string[] = []; let bytes = 0;
   const write = (part: string): void => { const next = bytes + Buffer.byteLength(part, 'utf8'); if (!Number.isSafeInteger(next) || next > STANDARD_LIMITS.maxExtensionBytes) fail('extension-payload-too-large', 'composed product payload exceeds Rust byte limit'); bytes = next; chunks.push(part); };
   const quote = (text: string): void => write(`"${text.replace(/["\\\u0000-\u001f]/g, (character) => { switch (character) { case '"': return '\\"'; case '\\': return '\\\\'; case '\b': return '\\b'; case '\f': return '\\f'; case '\n': return '\\n'; case '\r': return '\\r'; case '\t': return '\\t'; default: return `\\u${(character.codePointAt(0) as number).toString(16).padStart(4, '0')}`; } })}"`);
-  const encode = (entry: JsonValue): void => { if (entry === null) write('null'); else if (typeof entry === 'boolean') write(String(entry)); else if (typeof entry === 'number') { if (!Number.isSafeInteger(entry) || Object.is(entry, -0)) fail('invalid-node', 'composed product payload numbers must use Rust schema-1 safe integers'); write(String(entry)); } else if (typeof entry === 'string') quote(entry); else if (Array.isArray(entry)) { write('['); entry.forEach((child, index) => { if (index) write(','); encode(child); }); write(']'); } else { write('{'); Object.entries(entry).sort(([a], [b]) => Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'))).forEach(([key, child], index) => { if (index) write(','); quote(key); write(':'); encode(child); }); write('}'); } };
+  const encode = (entry: JsonValue): void => { if (entry === null) write('null'); else if (typeof entry === 'boolean') write(String(entry)); else if (typeof entry === 'number') { if (numericPolicy === 'integer' && (!Number.isSafeInteger(entry) || Object.is(entry, -0))) fail('invalid-node', 'composed product payload numbers must use Rust schema-1 safe integers'); if (numericPolicy === 'binary64' && !Number.isFinite(entry)) fail('invalid-node', 'composed product payload numbers must be finite binary64'); write(numericPolicy === 'binary64' ? JSON.stringify(Object.is(entry, -0) ? 0 : entry) : String(entry)); } else if (typeof entry === 'string') quote(entry); else if (Array.isArray(entry)) { write('['); entry.forEach((child, index) => { if (index) write(','); encode(child); }); write(']'); } else { write('{'); Object.entries(entry).sort(([a], [b]) => Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'))).forEach(([key, child], index) => { if (index) write(','); quote(key); write(':'); encode(child); }); write('}'); } };
   encode(value); return chunks.join('');
 }
 function fail(code: StandardContractErrorCode, message: string): never { throw new StandardContractError(code, message); }

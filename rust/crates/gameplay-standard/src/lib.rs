@@ -34,11 +34,12 @@ pub use cadence::{
 };
 pub use composed::{
     admit_composed_exact_definition, compile_composed_exact_comparison,
-    compile_composed_exact_package, AdmittedComposedExactDefinition,
-    CompiledComposedExactComparison, CompiledComposedExactLeaf, ComposedExactComparison,
-    ComposedExactDefinition, ComposedExactDefinitionError, ComposedExactError, ComposedExactExpr,
-    ComposedExactLeafCodec, ComposedExactLeafEvidence, ComposedExactLeafKindId,
-    ComposedExactProductContext, ComposedExactProductLeaf, COMPOSED_EXACT_FAMILY_ID,
+    compile_composed_exact_embedded, compile_composed_exact_package,
+    AdmittedComposedExactDefinition, CompiledComposedExactComparison, CompiledComposedExactLeaf,
+    ComposedExactComparison, ComposedExactDefinition, ComposedExactDefinitionError,
+    ComposedExactError, ComposedExactExpr, ComposedExactLeafCodec, ComposedExactLeafEvidence,
+    ComposedExactLeafKindId, ComposedExactProductContext, ComposedExactProductLeaf,
+    EmbeddedComposedExactContext, EmbeddedComposedExactError, COMPOSED_EXACT_FAMILY_ID,
     COMPOSED_EXACT_SEMANTICS_VERSION,
 };
 pub use continuous::{

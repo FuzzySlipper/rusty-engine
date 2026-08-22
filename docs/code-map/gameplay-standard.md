@@ -119,12 +119,22 @@ authoring routes select schema 1 or binary64 schema 2 for the package envelope.
 
 ## Typed composed exact leaves
 
-`ComposedExactExpr<ProductLeaf>` is the additive `composedExact` schema-1 route
+`ComposedExactExpr<ProductLeaf>` is the additive `composedExact` route
 for a product that needs its own closed values within Standard exact arithmetic.
 The Standard arms remain literal/input/add/subtract/multiply/divide/min/max;
 only `Product(ComposedExactProductLeaf<ProductLeaf>)` is product-specific.
 `ComposedExactLeafKindId` is intentionally not an `InputId`, so a product leaf
 cannot be mistaken for an undocumented fact lookup.
+
+The standalone schema-1 package route remains compatible. A product aggregate
+may instead select one explicit `RulePayloadPath` from its already-admitted
+schema-1 or schema-2 parent and pass its `SelectedRulePayloadSubtree` to
+`compile_composed_exact_embedded`. The compiled definition retains parent
+identity/fingerprint, canonical subtree path, and subtree bytes for inspection;
+embedded failures retain the same parent/path context. Parent schema numeric
+admission governs opaque product payloads; TypeScript embedded authoring takes
+that parent schema explicitly and returns a deep-frozen admitted copy. Standard accepts exact grammar
+integers only when they remain safe exact integers after binary64 canonicalization.
 
 A downstream supplies one concrete, static `ComposedExactLeafCodec` type. Its
 schema/version, strict wire decoder/encoder, and compiler are associated
@@ -138,8 +148,9 @@ budget. `CompiledComposedExactComparison` retains exact requirements, product
 capabilities, and schema/kind/source/subject evidence for both sides.
 
 The TypeScript helper requires a `StrictComposedExactProductCodec` with an
-explicit schema and convergent decode/encode pair. It authors canonical bytes
-and validates leaf provenance, but it is never a gameplay evaluator. Product
+explicit schema and convergent decode/encode pair. It can validate an embedded
+generated subtree without learning its aggregate layout, or author the
+compatible standalone package; it is never a gameplay evaluator. Product
 freshness, target facts, transaction guards, and publication stay in the
 downstream product transaction; do not widen `StandardOperationPlan` merely to
 carry product leaf meaning.

@@ -14,6 +14,7 @@ mod identity;
 mod json;
 mod package;
 mod resolve;
+mod selection;
 
 pub use contract::encode_rule_contract_descriptor;
 pub use diagnostic::{
@@ -40,4 +41,9 @@ pub use resolve::{
     MAX_DEPENDENCIES_PER_RULE_PACKAGE_SET, MAX_JSON_NODES_PER_RULE_PACKAGE_SET,
     MAX_PROVENANCE_PER_RULE_PACKAGE_SET, MAX_RULE_PACKAGES_PER_SET,
     MAX_SOURCES_PER_RULE_PACKAGE_SET,
+};
+pub use selection::{
+    select_rule_payload_subtree, RulePayloadPath, RulePayloadPathError, RulePayloadPathSegment,
+    RuleSubtreeSelectionError, SelectedRulePayloadSubtree, MAX_RULE_PAYLOAD_PATH_DISPLAY_BYTES,
+    MAX_RULE_PAYLOAD_PATH_FIELD_BYTES, MAX_RULE_PAYLOAD_PATH_INDEX, MAX_RULE_PAYLOAD_PATH_SEGMENTS,
 };
