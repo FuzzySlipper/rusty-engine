@@ -240,6 +240,18 @@ impl<'a> StandardMechanicsReceiptProjection<'a> {
             _ => None,
         }
     }
+    pub fn unique_item_transfer(self) -> Option<&'a gameplay_mechanics::ItemTransferReceipt> {
+        match self.0 {
+            StandardMechanicsReceipt::UniqueItemTransfer(value) => Some(value),
+            _ => None,
+        }
+    }
+    pub fn equipment(self) -> Option<&'a gameplay_mechanics::EquipmentMutationReceipt> {
+        match self.0 {
+            StandardMechanicsReceipt::Equipment(value) => Some(value),
+            _ => None,
+        }
+    }
 }
 
 /// A generic borrowed resolution receipt. It preserves typed product intent, facts, effects,

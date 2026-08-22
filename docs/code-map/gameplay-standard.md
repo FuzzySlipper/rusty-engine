@@ -201,15 +201,21 @@ and grant/consume/transfer a bounded fungible inventory stack. Inventory leaves
 are direct typed adapters over `InventoryService`: they retain catalog item,
 quantity, operation, and provenance identities, reject unique items, and leave
 allocation, loot, equipment selection, consequences, scheduling, and
-publication downstream. Each leaf uses an explicit capability role binding to one
-`EntityId`, checks the operation's named capability, evaluates its exact
-amount, and captures a deliberately conservative standard mechanics entity
+publication downstream. Unique transfer uses `mechanics.inventory`; equip,
+unequip, and swap use `mechanics.equipment`. They retain caller-supplied entity
+and slot identities, then delegate all classification, capacity, containment,
+exclusivity, and track-validity checks to the named low-level owner on the
+private candidate. Each leaf uses explicit capability role bindings, checks
+the operation's named capability, and captures a deliberately conservative
+standard mechanics entity
 snapshot in `StandardOperationPlan`: every mechanics component slot on each
 participating entity is guarded whether present or absent, plus Item slots for
 currently equipped items. Inventory plans additionally capture the relationship
 revision and the Item slots of directly contained unique items, because capacity
-evaluation reads those facts. This is intentionally broader than an individual
-service's current reads so planning remains sequence-safe. Each
+evaluation reads those facts. Unique transfer and equipment plans also capture
+their caller-supplied Item slots and the relationship revision, which guards
+containment and assignment changes. This is intentionally broader than an
+individual service's current reads so planning remains sequence-safe. Each
 evaluated exact operand retains its
 evaluator semantics version, optional admitted-definition identity, canonical
 input requirements, supplied referenced values, and exact result; the plan

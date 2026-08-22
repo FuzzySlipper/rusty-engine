@@ -17,12 +17,15 @@ use entity_state::{ComponentAccessError, ComponentRevision, EntityState};
 use gameplay_mechanics::{
     ActiveEffectsComponent, DamagePart, DamageReceipt, DamageRequest, DamageService,
     EffectApplyRequest, EffectInstanceId, EffectMutationReceipt, EffectRemovalRequest,
-    EffectService, EquipmentComponent, IntrinsicSourcesComponent, InventoryComponent,
-    InventoryMutationReceipt, InventoryMutationRequest, InventoryService, InventoryTransferReceipt,
-    InventoryTransferRequest, ItemComponent, ItemDefinitionId, ItemKind, MechanicsCatalog,
-    MechanicsComponentKind, MechanicsError, OperationId, RequestSource, SourceInstanceIdentity,
-    StatsComponent, TrackId, TrackMutationReceipt, TrackMutationRequest, TrackService,
-    TracksComponent, MAX_DAMAGE_PARTS, MAX_DAMAGE_REQUEST_SOURCES,
+    EffectService, EquipmentComponent, EquipmentEquipRequest, EquipmentMutationReceipt,
+    EquipmentService, EquipmentSlotId, EquipmentSwapRequest, EquipmentUnequipRequest,
+    IntrinsicSourcesComponent, InventoryComponent, InventoryMutationReceipt,
+    InventoryMutationRequest, InventoryService, InventoryTransferReceipt, InventoryTransferRequest,
+    ItemComponent, ItemDefinitionId, ItemKind, ItemTransferReceipt, ItemTransferRequest,
+    MechanicsCatalog, MechanicsComponentKind, MechanicsError, OperationId, RequestSource,
+    SourceInstanceIdentity, StatsComponent, TrackId, TrackMutationReceipt, TrackMutationRequest,
+    TrackService, TracksComponent, MAX_DAMAGE_PARTS, MAX_DAMAGE_REQUEST_SOURCES,
+    MAX_EQUIPMENT_ASSIGNMENTS,
 };
 
 use crate::{
@@ -40,6 +43,8 @@ pub const STANDARD_DAMAGE_CAPABILITY: &str = "mechanics.damage";
 pub const STANDARD_EFFECT_CAPABILITY: &str = "mechanics.effect";
 /// Capability required to mutate a fungible inventory stack through `InventoryService`.
 pub const STANDARD_INVENTORY_CAPABILITY: &str = "mechanics.inventory";
+/// Capability required to change a caller-supplied unique item's equipment assignment.
+pub const STANDARD_EQUIPMENT_CAPABILITY: &str = "mechanics.equipment";
 /// Maximum independently bound roles admitted for one standard program execution.
 pub const MAX_CAPABILITY_ROLE_BINDINGS: usize = 16;
 
@@ -263,6 +268,30 @@ pub enum StandardOperation {
         item: ItemDefinitionId,
         quantity: u64,
     },
+    /// Transfer one caller-supplied unique item between distinct bound inventory owners.
+    TransferUniqueItem {
+        from: CapabilityRoleId,
+        to: CapabilityRoleId,
+        item: EntityId,
+    },
+    /// Assign one caller-supplied unique item to caller-supplied equipment slots.
+    EquipUniqueItem {
+        role: CapabilityRoleId,
+        item: EntityId,
+        slots: Vec<gameplay_mechanics::EquipmentSlotId>,
+    },
+    /// Remove one caller-supplied unique item from all of its current equipment slots.
+    UnequipUniqueItem {
+        role: CapabilityRoleId,
+        item: EntityId,
+    },
+    /// Replace one caller-supplied equipped item with another in caller-supplied slots.
+    SwapUniqueItem {
+        role: CapabilityRoleId,
+        outgoing_item: EntityId,
+        incoming_item: EntityId,
+        incoming_slots: Vec<gameplay_mechanics::EquipmentSlotId>,
+    },
 }
 
 /// Caller-owned correlation and provenance supplied for one selected standard leaf.
@@ -413,6 +442,10 @@ pub enum StandardMechanicsEffect {
     GrantStack(InventoryMutationRequest),
     ConsumeStack(InventoryMutationRequest),
     TransferStack(InventoryTransferRequest),
+    TransferUniqueItem(ItemTransferRequest),
+    EquipUniqueItem(EquipmentEquipRequest),
+    UnequipUniqueItem(EquipmentUnequipRequest),
+    SwapUniqueItem(EquipmentSwapRequest),
 }
 
 /// Result returned by explicit candidate execution, preserving the mechanics receipt unchanged.
@@ -423,6 +456,8 @@ pub enum StandardMechanicsReceipt {
     Effect(EffectMutationReceipt),
     Inventory(InventoryMutationReceipt),
     InventoryTransfer(InventoryTransferReceipt),
+    UniqueItemTransfer(ItemTransferReceipt),
+    Equipment(EquipmentMutationReceipt),
 }
 
 impl StandardMechanicsEffect {
@@ -490,6 +525,40 @@ impl StandardMechanicsEffect {
                     Some(candidate.component_revision::<InventoryComponent>(request.to_owner)?);
                 InventoryService::transfer(candidate, catalog, request)
                     .map(StandardMechanicsReceipt::InventoryTransfer)
+            }
+            Self::TransferUniqueItem(request) => {
+                let mut request = request.clone();
+                request.expected_relationship_revision = candidate.revision();
+                request.expected_from_inventory_revision =
+                    Some(candidate.component_revision::<InventoryComponent>(request.from_owner)?);
+                request.expected_to_inventory_revision =
+                    Some(candidate.component_revision::<InventoryComponent>(request.to_owner)?);
+                EquipmentService::transfer_unique_item(candidate, catalog, request)
+                    .map(StandardMechanicsReceipt::UniqueItemTransfer)
+            }
+            Self::EquipUniqueItem(request) => {
+                let mut request = request.clone();
+                request.expected_state_revision = candidate.revision();
+                request.expected_equipment_revision =
+                    Some(candidate.component_revision::<EquipmentComponent>(request.owner)?);
+                EquipmentService::equip(candidate, catalog, request)
+                    .map(StandardMechanicsReceipt::Equipment)
+            }
+            Self::UnequipUniqueItem(request) => {
+                let mut request = request.clone();
+                request.expected_state_revision = candidate.revision();
+                request.expected_equipment_revision =
+                    Some(candidate.component_revision::<EquipmentComponent>(request.owner)?);
+                EquipmentService::unequip(candidate, catalog, request)
+                    .map(StandardMechanicsReceipt::Equipment)
+            }
+            Self::SwapUniqueItem(request) => {
+                let mut request = request.clone();
+                request.expected_state_revision = candidate.revision();
+                request.expected_equipment_revision =
+                    Some(candidate.component_revision::<EquipmentComponent>(request.owner)?);
+                EquipmentService::swap(candidate, catalog, request)
+                    .map(StandardMechanicsReceipt::Equipment)
             }
         }
     }
@@ -570,9 +639,9 @@ impl StandardOperationPlan {
     pub fn exact_evaluations(&self) -> &[StandardExactEvaluation] {
         &self.exact_evaluations
     }
-    /// The relationship/index revision observed by stack operations whose capacity read-set
-    /// includes contained unique items. Other mechanics leaves intentionally do not take this
-    /// global relationship guard.
+    /// The relationship/index revision observed by inventory and equipment operations whose
+    /// semantics read containment or equipment relationships. Mechanics leaves that do not read
+    /// those relationships intentionally omit this global guard.
     pub const fn observed_state_revision(&self) -> Option<u64> {
         self.observed_state_revision
     }
@@ -623,6 +692,7 @@ fn conservative_source_read_set(
     // to inventory operations rather than every standard mechanics leaf.
     let mut entities = BTreeSet::new();
     let mut inventory_owners = BTreeSet::new();
+    let mut explicit_items = BTreeSet::new();
     match effect {
         StandardMechanicsEffect::SpendTrack(request)
         | StandardMechanicsEffect::RestoreTrack(request) => {
@@ -651,6 +721,26 @@ fn conservative_source_read_set(
             inventory_owners.insert(request.from_owner);
             inventory_owners.insert(request.to_owner);
         }
+        StandardMechanicsEffect::TransferUniqueItem(request) => {
+            entities.insert(request.from_owner);
+            entities.insert(request.to_owner);
+            inventory_owners.insert(request.from_owner);
+            inventory_owners.insert(request.to_owner);
+            explicit_items.insert(request.item);
+        }
+        StandardMechanicsEffect::EquipUniqueItem(request) => {
+            entities.insert(request.owner);
+            explicit_items.insert(request.item);
+        }
+        StandardMechanicsEffect::UnequipUniqueItem(request) => {
+            entities.insert(request.owner);
+            explicit_items.insert(request.item);
+        }
+        StandardMechanicsEffect::SwapUniqueItem(request) => {
+            entities.insert(request.owner);
+            explicit_items.insert(request.outgoing_item);
+            explicit_items.insert(request.incoming_item);
+        }
     }
 
     let mut read_set = Vec::new();
@@ -674,6 +764,9 @@ fn conservative_source_read_set(
         }
     }
     for item in equipped_items {
+        read_set.push(snapshot_slot(state, item, MechanicsComponentKind::Item)?);
+    }
+    for item in explicit_items {
         read_set.push(snapshot_slot(state, item, MechanicsComponentKind::Item)?);
     }
     read_set.sort();
@@ -740,6 +833,13 @@ impl StandardOperation {
                 add(from, STANDARD_INVENTORY_CAPABILITY);
                 add(to, STANDARD_INVENTORY_CAPABILITY);
             }
+            Self::TransferUniqueItem { from, to, .. } => {
+                add(from, STANDARD_INVENTORY_CAPABILITY);
+                add(to, STANDARD_INVENTORY_CAPABILITY);
+            }
+            Self::EquipUniqueItem { role, .. }
+            | Self::UnequipUniqueItem { role, .. }
+            | Self::SwapUniqueItem { role, .. } => add(role, STANDARD_EQUIPMENT_CAPABILITY),
         }
         roles
             .into_iter()
@@ -1030,12 +1130,116 @@ impl StandardOperation {
                     vec![from_revision, to_revision],
                 )
             }
+            Self::TransferUniqueItem { from, to, item } => {
+                let from_owner = roles
+                    .require(from, capability(STANDARD_INVENTORY_CAPABILITY))
+                    .map_err(StandardPlanningError::Roles)?;
+                let to_owner = roles
+                    .require(to, capability(STANDARD_INVENTORY_CAPABILITY))
+                    .map_err(StandardPlanningError::Roles)?;
+                if from_owner == to_owner {
+                    return Err(StandardPlanningError::InventoryOwnerConflict {
+                        owner: from_owner,
+                    });
+                }
+                let from_revision = inventory_revision(from_owner)?;
+                let to_revision = inventory_revision(to_owner)?;
+                (
+                    StandardMechanicsEffect::TransferUniqueItem(ItemTransferRequest {
+                        operation: context.operation().clone(),
+                        source: context.source().clone(),
+                        item: *item,
+                        from_owner,
+                        to_owner,
+                        expected_relationship_revision: state.revision(),
+                        expected_from_inventory_revision: Some(from_revision.clone()),
+                        expected_to_inventory_revision: Some(to_revision.clone()),
+                    }),
+                    vec![from_revision, to_revision],
+                )
+            }
+            Self::EquipUniqueItem { role, item, slots } => {
+                validate_equipment_slots(slots)?;
+                let owner = roles
+                    .require(role, capability(STANDARD_EQUIPMENT_CAPABILITY))
+                    .map_err(StandardPlanningError::Roles)?;
+                let revision = state
+                    .component_revision::<EquipmentComponent>(owner)
+                    .map_err(StandardPlanningError::Component)?;
+                (
+                    StandardMechanicsEffect::EquipUniqueItem(EquipmentEquipRequest {
+                        operation: context.operation().clone(),
+                        source: context.source().clone(),
+                        owner,
+                        item: *item,
+                        slots: slots.clone(),
+                        expected_equipment_revision: Some(revision.clone()),
+                        expected_state_revision: state.revision(),
+                    }),
+                    vec![revision],
+                )
+            }
+            Self::UnequipUniqueItem { role, item } => {
+                let owner = roles
+                    .require(role, capability(STANDARD_EQUIPMENT_CAPABILITY))
+                    .map_err(StandardPlanningError::Roles)?;
+                let revision = state
+                    .component_revision::<EquipmentComponent>(owner)
+                    .map_err(StandardPlanningError::Component)?;
+                (
+                    StandardMechanicsEffect::UnequipUniqueItem(EquipmentUnequipRequest {
+                        operation: context.operation().clone(),
+                        source: context.source().clone(),
+                        owner,
+                        item: *item,
+                        expected_equipment_revision: Some(revision.clone()),
+                        expected_state_revision: state.revision(),
+                    }),
+                    vec![revision],
+                )
+            }
+            Self::SwapUniqueItem {
+                role,
+                outgoing_item,
+                incoming_item,
+                incoming_slots,
+            } => {
+                if outgoing_item == incoming_item {
+                    return Err(StandardPlanningError::EquipmentSwapSameItem {
+                        item: *incoming_item,
+                    });
+                }
+                validate_equipment_slots(incoming_slots)?;
+                let owner = roles
+                    .require(role, capability(STANDARD_EQUIPMENT_CAPABILITY))
+                    .map_err(StandardPlanningError::Roles)?;
+                let revision = state
+                    .component_revision::<EquipmentComponent>(owner)
+                    .map_err(StandardPlanningError::Component)?;
+                (
+                    StandardMechanicsEffect::SwapUniqueItem(EquipmentSwapRequest {
+                        operation: context.operation().clone(),
+                        source: context.source().clone(),
+                        owner,
+                        outgoing_item: *outgoing_item,
+                        incoming_item: *incoming_item,
+                        incoming_slots: incoming_slots.clone(),
+                        expected_equipment_revision: Some(revision.clone()),
+                        expected_state_revision: state.revision(),
+                    }),
+                    vec![revision],
+                )
+            }
         };
         let observes_relationships = matches!(
             &planned.0,
             StandardMechanicsEffect::GrantStack(_)
                 | StandardMechanicsEffect::ConsumeStack(_)
                 | StandardMechanicsEffect::TransferStack(_)
+                | StandardMechanicsEffect::TransferUniqueItem(_)
+                | StandardMechanicsEffect::EquipUniqueItem(_)
+                | StandardMechanicsEffect::UnequipUniqueItem(_)
+                | StandardMechanicsEffect::SwapUniqueItem(_)
         );
         let observed_revisions = conservative_source_read_set(&planned.0, state)
             .map_err(StandardPlanningError::Component)?;
@@ -1069,6 +1273,22 @@ fn validate_fungible_stack(
             quantity,
             maximum: definition.maximum_quantity,
         });
+    }
+    Ok(())
+}
+
+fn validate_equipment_slots(slots: &[EquipmentSlotId]) -> Result<(), StandardPlanningError> {
+    if slots.len() > MAX_EQUIPMENT_ASSIGNMENTS {
+        return Err(StandardPlanningError::EquipmentSlots {
+            actual: slots.len(),
+            maximum: MAX_EQUIPMENT_ASSIGNMENTS,
+        });
+    }
+    let mut unique = BTreeSet::new();
+    for slot in slots {
+        if !unique.insert(slot) {
+            return Err(StandardPlanningError::DuplicateEquipmentSlot { slot: slot.clone() });
+        }
     }
     Ok(())
 }
@@ -1107,6 +1327,16 @@ pub enum StandardPlanningError {
     },
     InventoryOwnerConflict {
         owner: EntityId,
+    },
+    EquipmentSlots {
+        actual: usize,
+        maximum: usize,
+    },
+    DuplicateEquipmentSlot {
+        slot: EquipmentSlotId,
+    },
+    EquipmentSwapSameItem {
+        item: EntityId,
     },
 }
 impl fmt::Display for StandardPlanningError {

@@ -216,13 +216,17 @@ are operation evidence rather than an ambient event journal.
 The optional `gameplay-standard` vocabulary adds no resolution kernel. Its
 standard predicate is an exact expression comparison used by the existing
 `Program::When`; its typed operations plan track spend/restore, damage
-submission, effect apply/remove, and fungible inventory grant/consume/transfer.
+submission, effect apply/remove, fungible inventory grant/consume/transfer, and
+caller-supplied unique-item transfer/equip/unequip/swap.
 A product passes explicit
 capability-role-to-`EntityId` bindings and input values, while planning obtains
 a conservative source snapshot of every mechanics slot on participating
 entities (including absent slots, currently equipped item slots, and the item
-slots of directly contained unique items consulted by inventory capacity) and
-produces the existing mechanics request unchanged. This intentionally avoids
+slots of directly contained unique items consulted by inventory capacity).
+Unique-item transfer and equipment leaves additionally guard their explicit
+caller-supplied item slots and the relationship/state revision because
+containment and assignment validity are world facts. Planning produces the
+existing mechanics request unchanged. This intentionally avoids
 executing mutations while planning, so sequential private-candidate programs
 remain admissible. A downstream product transaction validates that snapshot and catalog before cloning a
 private candidate; only then does it rebase the request guard to candidate
