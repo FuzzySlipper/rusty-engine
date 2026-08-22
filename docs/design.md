@@ -531,13 +531,17 @@ through that TypeScript surface, then Rust decodes, re-admits, fingerprints,
 and rehydrates them. This is deterministic build-time convergence, not a
 TypeScript evaluator or a Node dependency of ordinary Rust verification.
 
-Product extension data remains a separate, source-correlated, bounded
-`gameplay-rules` artifact. It is admitted exchange data and is compiled by a
-caller-selected downstream Rust compiler to a closed product enum; it is never
-a standard expression node, a registry entry, runtime JSON dispatch, or Engine
-evaluation authority. Its declared extension schema version is independent of
-the outer gameplay-rules schema, so explicit authoring routes can emit either
-schema-1 integer or schema-2 binary64 envelopes without changing the extension
+Product extension data remains source-correlated bounded `gameplay-rules`
+exchange data. A `composedExact` package may place one closed typed product
+leaf arm inside Standard exact syntax; after strict wire preflight, a static
+downstream codec immediately rehydrates it to a product type and compiles it
+to `ExactExpr`. Engine then uses the one existing evaluator and aggregate
+quota, never a registry, runtime JSON dispatch, or product evaluation hook.
+Schema/kind/source/subject evidence and declared product capabilities remain
+typed compilation evidence; downstream owns freshness and transaction guards.
+Its declared extension schema version is independent of the outer
+gameplay-rules schema, so explicit authoring routes can emit either schema-1
+integer or schema-2 binary64 envelopes without changing the extension
 identity or adding a runtime extension path.
 
 ## Developer-command boundary

@@ -117,6 +117,33 @@ is build/admission exchange, not a runtime JSON extension path. The extension
 schema identity is independent from the outer gameplay-rules schema: explicit
 authoring routes select schema 1 or binary64 schema 2 for the package envelope.
 
+## Typed composed exact leaves
+
+`ComposedExactExpr<ProductLeaf>` is the additive `composedExact` schema-1 route
+for a product that needs its own closed values within Standard exact arithmetic.
+The Standard arms remain literal/input/add/subtract/multiply/divide/min/max;
+only `Product(ComposedExactProductLeaf<ProductLeaf>)` is product-specific.
+`ComposedExactLeafKindId` is intentionally not an `InputId`, so a product leaf
+cannot be mistaken for an undocumented fact lookup.
+
+A downstream supplies one concrete, static `ComposedExactLeafCodec` type. Its
+schema/version, strict wire decoder/encoder, and compiler are associated
+functions, not instance callbacks or a runtime registry. The wire package is
+preflighted for closed fields, provenance, node/depth/arity and payload budgets
+before that codec runs; it is then immediately decoded to typed leaves. The
+codec produces an `ExactExpr`, complete input requirements, and explicit role
+capabilities. Engine verifies those declarations, expands all leaves, and uses
+the existing one `ExactEvaluator` for the aggregate structure and evaluation
+budget. `CompiledComposedExactComparison` retains exact requirements, product
+capabilities, and schema/kind/source/subject evidence for both sides.
+
+The TypeScript helper requires a `StrictComposedExactProductCodec` with an
+explicit schema and convergent decode/encode pair. It authors canonical bytes
+and validates leaf provenance, but it is never a gameplay evaluator. Product
+freshness, target facts, transaction guards, and publication stay in the
+downstream product transaction; do not widen `StandardOperationPlan` merely to
+carry product leaf meaning.
+
 ## Read-only projection and presets
 
 Borrowed projection values expose already-owned exact/continuous definitions,

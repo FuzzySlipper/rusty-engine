@@ -9,6 +9,9 @@
 use std::fmt;
 
 mod cadence;
+mod composed;
+mod composed_error;
+mod composed_wire;
 mod continuous;
 mod contract;
 mod exact;
@@ -28,6 +31,15 @@ pub use cadence::{
     ContinuousCadenceError, ExactDeadlineAccumulator, ExactDeadlineAccumulatorSnapshot,
     ResidualCarry, ResidualCarrySnapshot, MAX_CADENCE_IDENTITY_BYTES,
     RESIDUAL_CARRY_SCHEMA_VERSION,
+};
+pub use composed::{
+    admit_composed_exact_definition, compile_composed_exact_comparison,
+    compile_composed_exact_package, AdmittedComposedExactDefinition,
+    CompiledComposedExactComparison, CompiledComposedExactLeaf, ComposedExactComparison,
+    ComposedExactDefinition, ComposedExactDefinitionError, ComposedExactError, ComposedExactExpr,
+    ComposedExactLeafCodec, ComposedExactLeafEvidence, ComposedExactLeafKindId,
+    ComposedExactProductContext, ComposedExactProductLeaf, COMPOSED_EXACT_FAMILY_ID,
+    COMPOSED_EXACT_SEMANTICS_VERSION,
 };
 pub use continuous::{
     compile_continuous_expr, CompileContinuousExpr, ContinuousComparison, ContinuousCompileError,

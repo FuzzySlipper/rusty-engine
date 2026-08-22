@@ -471,6 +471,34 @@ fn validate_candidate_json(
     Ok(budget.nodes())
 }
 
+/// Encodes one JSON value with the exact canonical writer used by rule packages.
+///
+/// This is intentionally a value-level helper for bounded sub-artifacts such as a
+/// typed extension leaf. It validates a cloned value under the selected package
+/// schema before writing, so callers cannot accidentally measure a representation
+/// that a full package would reject or normalize differently.
+pub fn canonical_rule_json_value_bytes(
+    value: &Value,
+    schema_version: RulePackageSchemaVersion,
+    maximum_bytes: usize,
+) -> Result<Vec<u8>, RulePackageError> {
+    let mut value = value.clone();
+    let mut budget = JsonBudget::new();
+    validate_json_value(&mut value, schema_version, 1, "$", &mut budget)?;
+    let mut output = BoundedJsonWriter::new(maximum_bytes);
+    output.write_value(&value, "$")?;
+    Ok(output.into_bytes())
+}
+
+/// Returns the byte length of one canonical JSON value using package semantics.
+pub fn canonical_rule_json_value_len(
+    value: &Value,
+    schema_version: RulePackageSchemaVersion,
+    maximum_bytes: usize,
+) -> Result<usize, RulePackageError> {
+    canonical_rule_json_value_bytes(value, schema_version, maximum_bytes).map(|bytes| bytes.len())
+}
+
 fn canonical_bytes(candidate: &RulePackageCandidate) -> Result<Vec<u8>, RulePackageError> {
     let mut output = BoundedJsonWriter::new(MAX_ENCODED_RULE_PACKAGE_BYTES);
     output.extend(br#"{"kind":"#, "$/kind")?;

@@ -11,6 +11,7 @@ const paths = Object.freeze({
   continuous: 'fixtures/gameplay-standard/continuous-schema-2.canonical.json',
   extensionSchema1: 'fixtures/gameplay-standard/extension-schema-1.canonical.json',
   extensionSchema2: 'fixtures/gameplay-standard/extension-schema-2.canonical.json',
+  composedExact: 'fixtures/gameplay-standard/composed-exact-schema-1.canonical.json',
 });
 for (const [name, path] of Object.entries(paths)) {
   const artifact = fixtures[name];

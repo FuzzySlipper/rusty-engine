@@ -27,12 +27,13 @@ pub use identity::{
     RuleSourceId, RuleSubjectId, RuleVersion, MAX_RULE_ID_BYTES, MAX_SAFE_JSON_INTEGER,
 };
 pub use package::{
-    admit_rule_package, decode_canonical_rule_package, decode_rule_package, encode_rule_package,
-    AdmittedRulePackage, RulePackageCandidate, RulePackageSchemaVersion, RuleProvenance,
-    RuleSource, MAX_DEPENDENCIES_PER_RULE_PACKAGE, MAX_ENCODED_RULE_PACKAGE_BYTES,
-    MAX_JSON_NESTING_DEPTH, MAX_JSON_NODES_PER_RULE_PACKAGE, MAX_JSON_STRING_BYTES,
-    MAX_PROVENANCE_PER_RULE_PACKAGE, MAX_SOURCES_PER_RULE_PACKAGE, MAX_SOURCE_PATH_BYTES,
-    RULE_PACKAGE_ARTIFACT_KIND, RULE_PACKAGE_BINARY64_SCHEMA_VERSION, RULE_PACKAGE_SCHEMA_VERSION,
+    admit_rule_package, canonical_rule_json_value_bytes, canonical_rule_json_value_len,
+    decode_canonical_rule_package, decode_rule_package, encode_rule_package, AdmittedRulePackage,
+    RulePackageCandidate, RulePackageSchemaVersion, RuleProvenance, RuleSource,
+    MAX_DEPENDENCIES_PER_RULE_PACKAGE, MAX_ENCODED_RULE_PACKAGE_BYTES, MAX_JSON_NESTING_DEPTH,
+    MAX_JSON_NODES_PER_RULE_PACKAGE, MAX_JSON_STRING_BYTES, MAX_PROVENANCE_PER_RULE_PACKAGE,
+    MAX_SOURCES_PER_RULE_PACKAGE, MAX_SOURCE_PATH_BYTES, RULE_PACKAGE_ARTIFACT_KIND,
+    RULE_PACKAGE_BINARY64_SCHEMA_VERSION, RULE_PACKAGE_SCHEMA_VERSION,
 };
 pub use resolve::{
     resolve_rule_packages, ResolvedRulePackages, MAX_CANONICAL_RULE_PACKAGE_SET_BYTES,

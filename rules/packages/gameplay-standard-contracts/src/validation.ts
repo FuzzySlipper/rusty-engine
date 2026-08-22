@@ -1,5 +1,6 @@
 import {
   STANDARD_EXTENSION,
+  STANDARD_COMPOSED_EXACT,
   STANDARD_FAILURE_CODES,
   STANDARD_FIELD_ORDER,
   STANDARD_FAMILIES,
@@ -16,8 +17,12 @@ import {
   type StandardContractErrorCode,
   type StandardDefinitionPayload,
   type StandardExtensionArtifact,
+  type ComposedExactDefinitionPayload,
+  type ComposedExactExtensionSchema,
+  type ComposedExactTree,
   type StandardRole,
 } from './generated.js';
+import { Buffer } from 'node:buffer';
 
 export {
   type ContinuousDefinitionPayload,
@@ -29,13 +34,16 @@ export {
   type JsonValue,
   type StandardDefinitionPayload,
   type StandardExtensionArtifact,
+  type ComposedExactDefinitionPayload,
+  type ComposedExactExtensionSchema,
+  type ComposedExactTree,
   type StandardRole,
 };
 
 type Family = 'exact' | 'continuous';
 type Tree = ExactTree | ContinuousTree;
 type Input = ExactInput | ContinuousInput;
-type Metrics = { nodes: number; work: number; inputs: Set<string> };
+type Metrics = { nodes: number; work: number; inputs: Set<string>; productBytes: number };
 type WireObject = Record<string, unknown> & {
   family?: unknown; roles?: unknown; semanticsVersion?: unknown; source?: unknown; subject?: unknown; tree?: unknown;
   namespace?: unknown; schemaVersion?: unknown; kind?: unknown; payload?: unknown; role?: unknown; capabilities?: unknown;
@@ -54,7 +62,7 @@ export function decodeStandardPayload(value: unknown): StandardDefinitionPayload
   identity(string(payload.source, 'invalid-identity', 'definition.source must be a string'), 'source');
   const roles = decodeRoles(payload.roles);
   const declared = new Set(roles.map((role) => role.role));
-  const metrics: Metrics = { nodes: 0, work: 0, inputs: new Set() };
+  const metrics: Metrics = { nodes: 0, work: 0, inputs: new Set(), productBytes: 0 };
   const tree = decodeTree(payload.tree, family, declared, metrics, 1);
   const limits = STANDARD_LIMITS[family];
   if (metrics.inputs.size > limits.maximumInputs) fail('input-quota-exceeded', `${family} expression has too many distinct inputs`);
@@ -91,6 +99,102 @@ export function decodeStandardExtensionArtifact(value: unknown): StandardExtensi
 
 export function assertStandardExtensionArtifact(value: StandardExtensionArtifact): void {
   decodeStandardExtensionArtifact(value);
+}
+
+/** A product must supply a concrete, strict codec; this is not a runtime evaluator hook. */
+export interface StrictComposedExactProductCodec<Payload extends JsonValue> {
+  readonly schema: ComposedExactExtensionSchema;
+  decode(payload: unknown): Payload;
+  encode(payload: Payload): JsonValue;
+}
+
+/** Validates the generated mixed-tree wire grammar and invokes the explicitly supplied strict product codec only at product leaves. */
+export function decodeComposedExactPayload<Payload extends JsonValue>(
+  value: unknown,
+  codec: StrictComposedExactProductCodec<Payload>,
+): ComposedExactDefinitionPayload<Payload> {
+  const payload = record(value, 'invalid-node', 'composed exact definition must be an object');
+  fields(payload, [...STANDARD_COMPOSED_EXACT.definitionFieldOrder], 'composed definition');
+  if (payload.family !== STANDARD_COMPOSED_EXACT.family) fail('wrong-family', 'composed definition family is invalid');
+  if (payload.semanticsVersion !== STANDARD_COMPOSED_EXACT.semanticsVersion) fail('unsupported-semantics-version', 'composed semantics version is invalid');
+  const subject = string(payload.subject, 'invalid-identity', 'composed subject must be a string');
+  const source = string(payload.source, 'invalid-identity', 'composed source must be a string');
+  identity(subject, 'subject'); identity(source, 'source');
+  const extension = record(payload['extension'], 'extension-schema-mismatch', 'composed extension must be an object');
+  fields(extension, [...STANDARD_COMPOSED_EXACT.extensionFieldOrder], 'composed extension');
+  const namespace = string(extension.namespace, 'invalid-identity', 'composed extension namespace must be a string');
+  if (new TextEncoder().encode(namespace).byteLength > STANDARD_EXTENSION.namespaceMaximumBytes || !new RegExp(STANDARD_EXTENSION.namespacePattern).test(namespace)) fail('invalid-identity', 'composed extension namespace is not canonical');
+  const schemaVersion = extension.schemaVersion;
+  if (!Number.isSafeInteger(schemaVersion) || (schemaVersion as number) < 1 || (schemaVersion as number) > STANDARD_EXTENSION.schemaVersionMaximum) fail('extension-schema-mismatch', 'composed extension version is invalid');
+  if (namespace !== codec.schema.namespace || schemaVersion !== codec.schema.schemaVersion) fail('extension-schema-mismatch', 'composed extension does not match the supplied strict product codec');
+  const roles = decodeRoles(payload.roles);
+  const declared = new Set(roles.map((role) => role.role));
+  // Complete wire preflight deliberately occurs before the first product codec call.
+  // A later malformed node must never make an earlier product decoder observable.
+  const preflight: Metrics = { nodes: 0, work: 0, inputs: new Set(), productBytes: 0 };
+  preflightComposedTree(payload.tree, declared, preflight, 1);
+  if (preflight.inputs.size > STANDARD_LIMITS.exact.maximumInputs) fail('input-quota-exceeded', 'composed exact input quota exceeded');
+  if (preflight.work > STANDARD_LIMITS.exact.maximumWork) fail('work-quota-exceeded', 'composed exact wire work quota exceeded');
+  const metrics: Metrics = { nodes: 0, work: 0, inputs: new Set(), productBytes: 0 };
+  const tree = decodeComposedTree(payload.tree, declared, metrics, 1, codec);
+  return { family: STANDARD_COMPOSED_EXACT.family, extension: { namespace, schemaVersion: schemaVersion as number }, roles, semanticsVersion: STANDARD_COMPOSED_EXACT.semanticsVersion, source, subject, tree };
+}
+
+export function assertComposedExactPayload<Payload extends JsonValue>(value: ComposedExactDefinitionPayload<Payload>, codec: StrictComposedExactProductCodec<Payload>): void {
+  decodeComposedExactPayload(value, codec);
+}
+
+function preflightComposedTree(value: unknown, roles: ReadonlySet<string>, metrics: Metrics, depth: number): void {
+  if (depth > STANDARD_LIMITS.exact.maximumDepth) fail('depth-quota-exceeded', 'composed exact wire depth quota exceeded');
+  metrics.nodes += 1; metrics.work += 1;
+  if (metrics.nodes > STANDARD_LIMITS.exact.maximumNodes) fail('node-quota-exceeded', 'composed exact wire node quota exceeded');
+  const tree = record(value, 'invalid-node', 'composed exact node must be an object');
+  const op = string(tree.op, 'invalid-node', 'composed exact op must be a string');
+  if (op === STANDARD_COMPOSED_EXACT.productOp) {
+    fields(tree, [...STANDARD_COMPOSED_EXACT.productFieldOrder], 'composed product leaf');
+    identity(string(tree.kind, 'invalid-identity', 'composed product kind must be a string'), 'extensionKind');
+    identity(string(tree.subject, 'invalid-identity', 'composed product subject must be a string'), 'subject');
+    identity(string(tree.source, 'invalid-identity', 'composed product source must be a string'), 'source');
+    if (!isJson(tree.payload)) fail('invalid-node', 'composed product payload must be strict JSON');
+    metrics.productBytes += Buffer.byteLength(canonicalProductJson(tree.payload), 'utf8');
+    if (metrics.productBytes > STANDARD_LIMITS.maxExtensionBytes) fail('extension-payload-too-large', 'composed product payloads exceed the Rust aggregate byte limit');
+    return;
+  }
+  if (!includes(STANDARD_FAMILIES.exact.operations, op)) fail('invalid-node', 'unsupported composed exact standard operation');
+  if (op === 'literal') { fields(tree, [...STANDARD_FIELD_ORDER.Literal], 'composed literal'); if (!Number.isSafeInteger(tree.value) || Object.is(tree.value, -0) || (tree.value as number) < STANDARD_LIMITS.exact.minimumScalar || (tree.value as number) > STANDARD_LIMITS.exact.maximumScalar) fail('invalid-literal', 'composed exact literal is invalid'); return; }
+  if (op === 'input') { fields(tree, [...STANDARD_FIELD_ORDER.Input], 'composed input'); const input = decodeInput(tree.input, 'exact', roles); metrics.inputs.add(inputIdentity(input)); return; }
+  if (op === 'min' || op === 'max') { fields(tree, [...STANDARD_FIELD_ORDER.Aggregate], 'composed aggregate'); if (!Array.isArray(tree.values) || tree.values.length === 0) fail('invalid-node', 'composed aggregate must be nonempty'); if (tree.values.length > STANDARD_LIMITS.exact.maximumArity) fail('arity-quota-exceeded', 'composed aggregate arity quota exceeded'); tree.values.forEach((child) => preflightComposedTree(child, roles, metrics, depth + 1)); return; }
+  fields(tree, [...STANDARD_FIELD_ORDER.Binary], 'composed binary');
+  preflightComposedTree(tree.left, roles, metrics, depth + 1);
+  preflightComposedTree(tree.right, roles, metrics, depth + 1);
+}
+
+function decodeComposedTree<Payload extends JsonValue>(value: unknown, roles: ReadonlySet<string>, metrics: Metrics, depth: number, codec: StrictComposedExactProductCodec<Payload>): ComposedExactTree<Payload> {
+  if (depth > STANDARD_LIMITS.exact.maximumDepth) fail('depth-quota-exceeded', 'composed exact wire depth quota exceeded');
+  metrics.nodes += 1; metrics.work += 1;
+  if (metrics.nodes > STANDARD_LIMITS.exact.maximumNodes) fail('node-quota-exceeded', 'composed exact wire node quota exceeded');
+  const tree = record(value, 'invalid-node', 'composed exact node must be an object');
+  const op = string(tree.op, 'invalid-node', 'composed exact op must be a string');
+  if (op === STANDARD_COMPOSED_EXACT.productOp) {
+    fields(tree, [...STANDARD_COMPOSED_EXACT.productFieldOrder], 'composed product leaf');
+    const kind = string(tree.kind, 'invalid-identity', 'composed product kind must be a string'); identity(kind, 'extensionKind');
+    const subject = string(tree.subject, 'invalid-identity', 'composed product subject must be a string'); identity(subject, 'subject');
+    const source = string(tree.source, 'invalid-identity', 'composed product source must be a string'); identity(source, 'source');
+    if (!isJson(tree.payload)) fail('invalid-node', 'composed product payload must be strict JSON');
+    const wirePayload = canonicalProductJson(tree.payload);
+    metrics.productBytes += Buffer.byteLength(wirePayload, 'utf8');
+    if (metrics.productBytes > STANDARD_LIMITS.maxExtensionBytes) fail('extension-payload-too-large', 'composed product payloads exceed the Rust aggregate byte limit');
+    const decoded = codec.decode(tree.payload);
+    const canonical = codec.encode(decoded);
+    if (!isJson(canonical) || canonicalProductJson(canonical) !== wirePayload) fail('invalid-node', 'composed product payload does not converge through its strict codec');
+    return { op: STANDARD_COMPOSED_EXACT.productOp, kind, payload: decoded, source, subject };
+  }
+  if (!includes(STANDARD_FAMILIES.exact.operations, op)) fail('invalid-node', 'unsupported composed exact standard operation');
+  if (op === 'literal') { fields(tree, [...STANDARD_FIELD_ORDER.Literal], 'composed literal'); if (!Number.isSafeInteger(tree.value) || Object.is(tree.value, -0) || (tree.value as number) < STANDARD_LIMITS.exact.minimumScalar || (tree.value as number) > STANDARD_LIMITS.exact.maximumScalar) fail('invalid-literal', 'composed exact literal is invalid'); return { op, value: tree.value as number }; }
+  if (op === 'input') { fields(tree, [...STANDARD_FIELD_ORDER.Input], 'composed input'); return { op, input: decodeInput(tree.input, 'exact', roles) }; }
+  if (op === 'min' || op === 'max') { fields(tree, [...STANDARD_FIELD_ORDER.Aggregate], 'composed aggregate'); if (!Array.isArray(tree.values) || tree.values.length === 0) fail('invalid-node', 'composed aggregate must be nonempty'); if (tree.values.length > STANDARD_LIMITS.exact.maximumArity) fail('arity-quota-exceeded', 'composed aggregate arity quota exceeded'); return { op, values: tree.values.map((child) => decodeComposedTree(child, roles, metrics, depth + 1, codec)) }; }
+  fields(tree, [...STANDARD_FIELD_ORDER.Binary], 'composed binary');
+  return { op: op as 'add' | 'subtract' | 'multiply' | 'floorDivide' | 'truncatingDivide', left: decodeComposedTree(tree.left, roles, metrics, depth + 1, codec), right: decodeComposedTree(tree.right, roles, metrics, depth + 1, codec) };
 }
 
 function decodeRoles(value: unknown): readonly StandardRole[] {
@@ -239,6 +343,14 @@ function isCanonicalArrayIndex(key: string, length: number): boolean {
   if (!/^(?:0|[1-9][0-9]*)$/.test(key)) return false;
   const index = Number(key);
   return Number.isSafeInteger(index) && index >= 0 && index < length && String(index) === key;
+}
+/** Mirrors Rust BoundedJsonWriter for schema-1 product payload accounting. */
+function canonicalProductJson(value: JsonValue): string {
+  const chunks: string[] = []; let bytes = 0;
+  const write = (part: string): void => { const next = bytes + Buffer.byteLength(part, 'utf8'); if (!Number.isSafeInteger(next) || next > STANDARD_LIMITS.maxExtensionBytes) fail('extension-payload-too-large', 'composed product payload exceeds Rust byte limit'); bytes = next; chunks.push(part); };
+  const quote = (text: string): void => write(`"${text.replace(/["\\\u0000-\u001f]/g, (character) => { switch (character) { case '"': return '\\"'; case '\\': return '\\\\'; case '\b': return '\\b'; case '\f': return '\\f'; case '\n': return '\\n'; case '\r': return '\\r'; case '\t': return '\\t'; default: return `\\u${(character.codePointAt(0) as number).toString(16).padStart(4, '0')}`; } })}"`);
+  const encode = (entry: JsonValue): void => { if (entry === null) write('null'); else if (typeof entry === 'boolean') write(String(entry)); else if (typeof entry === 'number') { if (!Number.isSafeInteger(entry) || Object.is(entry, -0)) fail('invalid-node', 'composed product payload numbers must use Rust schema-1 safe integers'); write(String(entry)); } else if (typeof entry === 'string') quote(entry); else if (Array.isArray(entry)) { write('['); entry.forEach((child, index) => { if (index) write(','); encode(child); }); write(']'); } else { write('{'); Object.entries(entry).sort(([a], [b]) => Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'))).forEach(([key, child], index) => { if (index) write(','); quote(key); write(':'); encode(child); }); write('}'); } };
+  encode(value); return chunks.join('');
 }
 function fail(code: StandardContractErrorCode, message: string): never { throw new StandardContractError(code, message); }
 

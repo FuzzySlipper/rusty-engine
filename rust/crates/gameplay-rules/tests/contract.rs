@@ -1117,6 +1117,45 @@ fn package_with_canonical_bytes(package: &str, target: usize) -> AdmittedRulePac
     package
 }
 
+#[test]
+fn canonical_json_value_helper_matches_rule_writer_order_escaping_and_bounds() {
+    let left = json!({"z":"line\n\u{001f}","a":"\"\\","edge":9_007_199_254_740_991_i64});
+    let right = json!({"edge":9_007_199_254_740_991_i64,"a":"\"\\","z":"line\n\u{001f}"});
+    let bytes =
+        canonical_rule_json_value_bytes(&left, RulePackageSchemaVersion::IntegerOnlyV1, 1024)
+            .unwrap();
+    assert_eq!(
+        bytes,
+        br#"{"a":"\"\\","edge":9007199254740991,"z":"line\n\u001f"}"#
+    );
+    assert_eq!(
+        bytes,
+        canonical_rule_json_value_bytes(&right, RulePackageSchemaVersion::IntegerOnlyV1, 1024)
+            .unwrap()
+    );
+    assert_eq!(
+        canonical_rule_json_value_len(&left, RulePackageSchemaVersion::IntegerOnlyV1, bytes.len())
+            .unwrap(),
+        bytes.len()
+    );
+    assert!(matches!(
+        canonical_rule_json_value_bytes(
+            &left,
+            RulePackageSchemaVersion::IntegerOnlyV1,
+            bytes.len() - 1
+        ),
+        Err(RulePackageError::ArtifactQuotaExceeded { .. })
+    ));
+    assert!(matches!(
+        canonical_rule_json_value_bytes(
+            &json!(9_007_199_254_740_992_u64),
+            RulePackageSchemaVersion::IntegerOnlyV1,
+            1024
+        ),
+        Err(RulePackageError::JsonIntegerOutOfRange { .. })
+    ));
+}
+
 fn valid_artifact_with_payload(payload: &[u8]) -> Vec<u8> {
     let mut artifact = br#"{"kind":"rusty.gameplay-rules.package","schemaVersion":1,"domain":"test","package":"decode","version":1,"dependencies":[],"sources":[],"provenance":[],"payload":"#.to_vec();
     artifact.extend_from_slice(payload);
