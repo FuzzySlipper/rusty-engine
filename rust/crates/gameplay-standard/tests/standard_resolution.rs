@@ -3,13 +3,14 @@ use entity_state::{EntityAuthoringService, EntityComponent, EntityDefinition, En
 use gameplay_mechanics::{
     ActiveEffectInstance, ActiveEffectsComponent, CapacityMetricDefinition, CapacityMetricId,
     CatalogVersion, DamageKindDefinition, DamageKindId, EffectDefinition, EffectDefinitionId,
-    EffectStackingPolicy, IntrinsicSourceBinding, IntrinsicSourcesComponent,
+    EffectMutationKind, EffectStackingPolicy, IntrinsicSourceBinding, IntrinsicSourcesComponent,
     InventoryCapacityLimit, InventoryComponent, InventoryService, ItemCapacityCost, ItemComponent,
     ItemDefinition, ItemDefinitionId, ItemKind, ItemStack, MechanicsCatalog,
-    MechanicsCatalogDefinition, MechanicsScalar, OperationId, RequestSource, SourceDefinition,
-    SourceDefinitionId, SourceInstanceId, SourceInstanceIdentity, StackingGroupId, StatsComponent,
-    TrackDefinition, TrackId, TrackMaximum, TrackValue, TracksComponent, MAX_DAMAGE_PARTS,
-    MAX_DAMAGE_REQUEST_SOURCES,
+    MechanicsCatalogDefinition, MechanicsError, MechanicsScalar, OperationId, RequestSource,
+    SourceDefinition, SourceDefinitionId, SourceInstanceId, SourceInstanceIdentity,
+    StackingGroupId, StackingPolicy, StatContribution, StatContributionDefinition, StatDefinition,
+    StatId, StatValue, StatsComponent, TrackDefinition, TrackId, TrackMaximum, TrackValue,
+    TracksComponent, MAX_DAMAGE_PARTS, MAX_DAMAGE_REQUEST_SOURCES,
 };
 use gameplay_resolution::{
     AttemptStatus, CommitStatus, CorrelationId, PolicyFailure, PolicyResult, Program, ResolutionId,
@@ -23,9 +24,10 @@ use gameplay_rules::{
 use gameplay_standard::{
     CapabilityRequirementId, CapabilityRoleBinding, CapabilityRoleBindings, CapabilityRoleId,
     ComposedOperation, ComposedPredicate, ExactComparison, ExactExpr, ExactInputBundle,
-    ExactInputReference, InputId, StandardOperation, StandardOperationContext,
-    StandardPlanningError, StandardPredicate, MAX_CAPABILITY_ROLE_BINDINGS,
-    STANDARD_DAMAGE_CAPABILITY, STANDARD_EFFECT_CAPABILITY, STANDARD_TRACK_CAPABILITY,
+    ExactInputReference, InputId, StandardMechanicsReceiptProjection, StandardOperation,
+    StandardOperationContext, StandardPlanningError, StandardPredicate,
+    MAX_CAPABILITY_ROLE_BINDINGS, STANDARD_DAMAGE_CAPABILITY, STANDARD_EFFECT_CAPABILITY,
+    STANDARD_TRACK_CAPABILITY,
 };
 
 const CASTER: EntityId = EntityId::new(7);
@@ -92,6 +94,87 @@ fn catalog_with_version(version: &str) -> MechanicsCatalog {
     .unwrap()
 }
 
+fn effect_catalog() -> MechanicsCatalog {
+    MechanicsCatalog::admit(MechanicsCatalogDefinition {
+        version: CatalogVersion::parse("standard.v1").unwrap(),
+        stats: vec![StatDefinition {
+            id: StatId::parse("maximum").unwrap(),
+            minimum: scalar(1),
+            maximum: scalar(100),
+        }],
+        tracks: vec![TrackDefinition {
+            id: track("vitality"),
+            minimum: scalar(0),
+            maximum: TrackMaximum::Stat {
+                stat: StatId::parse("maximum").unwrap(),
+            },
+        }],
+        sources: vec![
+            SourceDefinition {
+                id: SourceDefinitionId::parse("boost_source").unwrap(),
+                priority: 0,
+                stat_contributions: vec![StatContributionDefinition {
+                    stat: StatId::parse("maximum").unwrap(),
+                    contribution: StatContribution::Add { amount: scalar(10) },
+                    stacking_group: StackingGroupId::parse("boost").unwrap(),
+                    stacking: StackingPolicy::Sum,
+                }],
+                damage_responses: vec![],
+            },
+            SourceDefinition {
+                id: SourceDefinitionId::parse("empty_source").unwrap(),
+                priority: 0,
+                stat_contributions: vec![],
+                damage_responses: vec![],
+            },
+        ],
+        damage_kinds: vec![],
+        effects: vec![
+            EffectDefinition {
+                id: EffectDefinitionId::parse("refreshing").unwrap(),
+                stacking_group: StackingGroupId::parse("refresh").unwrap(),
+                stacking: EffectStackingPolicy::Refresh,
+                maximum_stacks: 2,
+                sources: vec![SourceDefinitionId::parse("empty_source").unwrap()],
+            },
+            EffectDefinition {
+                id: EffectDefinitionId::parse("armored").unwrap(),
+                stacking_group: StackingGroupId::parse("armor").unwrap(),
+                stacking: EffectStackingPolicy::Replace,
+                maximum_stacks: 1,
+                sources: vec![SourceDefinitionId::parse("boost_source").unwrap()],
+            },
+            EffectDefinition {
+                id: EffectDefinitionId::parse("unarmored").unwrap(),
+                stacking_group: StackingGroupId::parse("armor").unwrap(),
+                stacking: EffectStackingPolicy::Replace,
+                maximum_stacks: 1,
+                sources: vec![SourceDefinitionId::parse("empty_source").unwrap()],
+            },
+            EffectDefinition {
+                id: EffectDefinitionId::parse("other").unwrap(),
+                stacking_group: StackingGroupId::parse("other").unwrap(),
+                stacking: EffectStackingPolicy::Replace,
+                maximum_stacks: 1,
+                sources: vec![SourceDefinitionId::parse("empty_source").unwrap()],
+            },
+            EffectDefinition {
+                id: EffectDefinitionId::parse("independent").unwrap(),
+                stacking_group: StackingGroupId::parse("independent").unwrap(),
+                stacking: EffectStackingPolicy::IndependentByProvenance {
+                    maximum_instances: 2,
+                },
+                maximum_stacks: 1,
+                sources: vec![SourceDefinitionId::parse("empty_source").unwrap()],
+            },
+        ],
+        capacity_metrics: vec![],
+        items: vec![],
+        equipment_slots: vec![],
+    })
+    .unwrap()
+}
+
 fn attach<T: EntityComponent>(state: &mut EntityState, entity: EntityId, value: T) {
     let revision = state.component_revision::<T>(entity).unwrap();
     EntityAuthoringService
@@ -126,6 +209,63 @@ fn state() -> EntityState {
         );
     }
     state
+}
+
+fn effect_state(effects: Vec<ActiveEffectInstance>, vitality: i64) -> EntityState {
+    let mut state = state();
+    for entity in [CASTER, TARGET] {
+        attach(
+            &mut state,
+            entity,
+            StatsComponent::new(
+                CatalogVersion::parse("standard.v1").unwrap(),
+                vec![StatValue::new(
+                    StatId::parse("maximum").unwrap(),
+                    scalar(10),
+                )],
+            )
+            .unwrap(),
+        );
+    }
+    let tracks_revision = state.component_revision::<TracksComponent>(CASTER).unwrap();
+    EntityAuthoringService
+        .replace_component(
+            &mut state,
+            tracks_revision,
+            CASTER,
+            TracksComponent::new(
+                CatalogVersion::parse("standard.v1").unwrap(),
+                vec![TrackValue::new(track("vitality"), scalar(vitality))],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let effects_revision = state
+        .component_revision::<ActiveEffectsComponent>(CASTER)
+        .unwrap();
+    EntityAuthoringService
+        .replace_component(
+            &mut state,
+            effects_revision,
+            CASTER,
+            ActiveEffectsComponent::new(CatalogVersion::parse("standard.v1").unwrap(), effects)
+                .unwrap(),
+        )
+        .unwrap();
+    state
+}
+
+fn effect_bindings(operation: &StandardOperation) -> CapabilityRoleBindings {
+    CapabilityRoleBindings::admit(
+        &operation.requirements(),
+        vec![CapabilityRoleBinding::new(
+            role("caster"),
+            CASTER,
+            vec![capability(STANDARD_EFFECT_CAPABILITY)],
+        )
+        .unwrap()],
+    )
+    .unwrap()
 }
 
 fn context() -> StandardOperationContext {
@@ -559,6 +699,452 @@ fn remove_existing_then_apply_same_effect_plans_and_executes_on_one_candidate() 
             .effects()
             .len(),
         1
+    );
+}
+
+#[test]
+fn refresh_and_replace_effect_leaves_keep_policy_context_and_typed_receipts() {
+    let catalog = effect_catalog();
+    let refresh_instance = gameplay_mechanics::EffectInstanceId::parse("refresh_one").unwrap();
+    let refresh = StandardOperation::RefreshEffect {
+        role: role("caster"),
+        instance: refresh_instance.clone(),
+        stacks: 2,
+    };
+    let authoritative = effect_state(
+        vec![ActiveEffectInstance::new(
+            refresh_instance.clone(),
+            EffectDefinitionId::parse("refreshing").unwrap(),
+            SourceInstanceIdentity::Request {
+                operation: operation("before_refresh"),
+                instance: SourceInstanceId::parse("before_refresh_source").unwrap(),
+            },
+            1,
+        )
+        .unwrap()],
+        10,
+    );
+    let plan = refresh
+        .plan(
+            &effect_bindings(&refresh),
+            &ExactInputBundle::new(vec![]),
+            &authoritative,
+            &catalog,
+            &context(),
+        )
+        .unwrap();
+    assert!(plan.observed_revisions().iter().any(|observed| {
+        observed.entity() == CASTER
+            && observed.component() == gameplay_mechanics::MechanicsComponentKind::ActiveEffects
+    }));
+    let mut candidate = gameplay_mechanics::decode_snapshot_with_catalog(
+        &entity_state::encode_snapshot(&authoritative).unwrap(),
+        &catalog,
+    )
+    .unwrap();
+    let receipt = plan
+        .effect()
+        .apply_to_candidate(&mut candidate, &catalog)
+        .unwrap();
+    assert_eq!(
+        StandardMechanicsReceiptProjection(&receipt)
+            .effect()
+            .unwrap()
+            .kind,
+        EffectMutationKind::Refresh,
+        "the existing borrowed receipt projection exposes refresh evidence without a DTO"
+    );
+    let gameplay_standard::StandardMechanicsReceipt::Effect(receipt) = receipt else {
+        panic!("refresh preserves the native typed effect receipt");
+    };
+    assert_eq!(receipt.kind, EffectMutationKind::Refresh);
+    assert_eq!(receipt.operation, *context().operation());
+    assert_eq!(
+        receipt.current.as_ref().unwrap().provenance(),
+        context().source()
+    );
+    assert_eq!(receipt.current.as_ref().unwrap().stacks(), 2);
+    assert_eq!(
+        authoritative
+            .component::<ActiveEffectsComponent>(CASTER)
+            .unwrap()
+            .unwrap()
+            .effects()[0]
+            .stacks(),
+        1,
+        "planning and candidate execution never publish to the authority source"
+    );
+    let stale_revision = authoritative
+        .component_revision::<ActiveEffectsComponent>(CASTER)
+        .unwrap();
+    let stale_component = ActiveEffectsComponent::new(
+        CatalogVersion::parse("standard.v1").unwrap(),
+        vec![ActiveEffectInstance::new(
+            refresh_instance,
+            EffectDefinitionId::parse("refreshing").unwrap(),
+            context().source().clone(),
+            2,
+        )
+        .unwrap()],
+    )
+    .unwrap();
+    let mut stale_source = authoritative;
+    EntityAuthoringService
+        .replace_component(&mut stale_source, stale_revision, CASTER, stale_component)
+        .unwrap();
+    assert!(matches!(
+        plan.validate_source_state(&stale_source, &catalog),
+        Err(gameplay_standard::StandardPlanValidationError::StaleComponentRevision { .. })
+    ));
+    assert!(matches!(
+        plan.validate_source_state(&stale_source, &catalog_with_version("standard.v2")),
+        Err(gameplay_standard::StandardPlanValidationError::CatalogChanged { .. })
+    ));
+
+    let replacement_instance = gameplay_mechanics::EffectInstanceId::parse("armor").unwrap();
+    let replace = StandardOperation::ReplaceEffect {
+        role: role("caster"),
+        instance: replacement_instance.clone(),
+        definition: EffectDefinitionId::parse("unarmored").unwrap(),
+        stacks: 1,
+    };
+    let authoritative = effect_state(
+        vec![ActiveEffectInstance::new(
+            replacement_instance.clone(),
+            EffectDefinitionId::parse("armored").unwrap(),
+            context().source().clone(),
+            1,
+        )
+        .unwrap()],
+        10,
+    );
+    let plan = replace
+        .plan(
+            &effect_bindings(&replace),
+            &ExactInputBundle::new(vec![]),
+            &authoritative,
+            &catalog,
+            &context(),
+        )
+        .unwrap();
+    let mut candidate = gameplay_mechanics::decode_snapshot_with_catalog(
+        &entity_state::encode_snapshot(&authoritative).unwrap(),
+        &catalog,
+    )
+    .unwrap();
+    let receipt = plan
+        .effect()
+        .apply_to_candidate(&mut candidate, &catalog)
+        .unwrap();
+    let gameplay_standard::StandardMechanicsReceipt::Effect(receipt) = receipt else {
+        panic!("replace preserves the native typed effect receipt");
+    };
+    assert_eq!(receipt.kind, EffectMutationKind::Replace);
+    assert_eq!(receipt.removed.len(), 1);
+    assert_eq!(
+        receipt.removed[0].definition(),
+        &EffectDefinitionId::parse("armored").unwrap()
+    );
+    assert_eq!(
+        receipt.current.as_ref().unwrap().instance(),
+        &replacement_instance
+    );
+    assert_eq!(
+        receipt.current.as_ref().unwrap().definition(),
+        &EffectDefinitionId::parse("unarmored").unwrap()
+    );
+}
+
+#[test]
+fn effect_leaf_planning_rejects_missing_policy_stack_and_unrelated_identity_conflicts() {
+    let catalog = effect_catalog();
+    let state = effect_state(vec![], 10);
+    let missing = StandardOperation::RefreshEffect {
+        role: role("caster"),
+        instance: gameplay_mechanics::EffectInstanceId::parse("missing").unwrap(),
+        stacks: 1,
+    };
+    assert!(matches!(
+        missing.plan(
+            &effect_bindings(&missing),
+            &ExactInputBundle::new(vec![]),
+            &state,
+            &catalog,
+            &context(),
+        ),
+        Err(StandardPlanningError::MissingEffectInstance { .. })
+    ));
+
+    let independent_instance = gameplay_mechanics::EffectInstanceId::parse("independent").unwrap();
+    let independent_state = effect_state(
+        vec![ActiveEffectInstance::new(
+            independent_instance.clone(),
+            EffectDefinitionId::parse("independent").unwrap(),
+            context().source().clone(),
+            1,
+        )
+        .unwrap()],
+        10,
+    );
+    let wrong_policy = StandardOperation::RefreshEffect {
+        role: role("caster"),
+        instance: independent_instance,
+        stacks: 1,
+    };
+    assert!(matches!(
+        wrong_policy.plan(
+            &effect_bindings(&wrong_policy),
+            &ExactInputBundle::new(vec![]),
+            &independent_state,
+            &catalog,
+            &context(),
+        ),
+        Err(StandardPlanningError::EffectPolicyMismatch {
+            expected: "refresh",
+            ..
+        })
+    ));
+
+    let invalid_stacks = StandardOperation::ReplaceEffect {
+        role: role("caster"),
+        instance: gameplay_mechanics::EffectInstanceId::parse("armor").unwrap(),
+        definition: EffectDefinitionId::parse("unarmored").unwrap(),
+        stacks: 0,
+    };
+    assert!(matches!(
+        invalid_stacks.plan(
+            &effect_bindings(&invalid_stacks),
+            &ExactInputBundle::new(vec![]),
+            &state,
+            &catalog,
+            &context(),
+        ),
+        Err(StandardPlanningError::EffectStacks { actual: 0, .. })
+    ));
+    let over_stacks = StandardOperation::ReplaceEffect {
+        role: role("caster"),
+        instance: gameplay_mechanics::EffectInstanceId::parse("armor").unwrap(),
+        definition: EffectDefinitionId::parse("unarmored").unwrap(),
+        stacks: 2,
+    };
+    assert!(matches!(
+        over_stacks.plan(
+            &effect_bindings(&over_stacks),
+            &ExactInputBundle::new(vec![]),
+            &state,
+            &catalog,
+            &context(),
+        ),
+        Err(StandardPlanningError::EffectStacks {
+            actual: 2,
+            maximum: 1,
+        })
+    ));
+
+    let conflicting_instance = gameplay_mechanics::EffectInstanceId::parse("shared").unwrap();
+    let conflict_state = effect_state(
+        vec![ActiveEffectInstance::new(
+            conflicting_instance.clone(),
+            EffectDefinitionId::parse("other").unwrap(),
+            context().source().clone(),
+            1,
+        )
+        .unwrap()],
+        10,
+    );
+    let conflict = StandardOperation::ReplaceEffect {
+        role: role("caster"),
+        instance: conflicting_instance,
+        definition: EffectDefinitionId::parse("unarmored").unwrap(),
+        stacks: 1,
+    };
+    assert!(matches!(
+        conflict.plan(
+            &effect_bindings(&conflict),
+            &ExactInputBundle::new(vec![]),
+            &conflict_state,
+            &catalog,
+            &context(),
+        ),
+        Err(StandardPlanningError::EffectInstanceConflict { .. })
+    ));
+}
+
+#[test]
+fn effect_leaves_rebase_sequential_candidate_revisions_without_publishing() {
+    let catalog = effect_catalog();
+    let refresh_instance = gameplay_mechanics::EffectInstanceId::parse("refresh_one").unwrap();
+    let armor_instance = gameplay_mechanics::EffectInstanceId::parse("armor").unwrap();
+    let authoritative = effect_state(
+        vec![
+            ActiveEffectInstance::new(
+                refresh_instance.clone(),
+                EffectDefinitionId::parse("refreshing").unwrap(),
+                context().source().clone(),
+                1,
+            )
+            .unwrap(),
+            ActiveEffectInstance::new(
+                armor_instance.clone(),
+                EffectDefinitionId::parse("armored").unwrap(),
+                context().source().clone(),
+                1,
+            )
+            .unwrap(),
+        ],
+        10,
+    );
+    let refresh = StandardOperation::RefreshEffect {
+        role: role("caster"),
+        instance: refresh_instance,
+        stacks: 2,
+    };
+    let replace = StandardOperation::ReplaceEffect {
+        role: role("caster"),
+        instance: armor_instance,
+        definition: EffectDefinitionId::parse("unarmored").unwrap(),
+        stacks: 1,
+    };
+    let refresh_plan = refresh
+        .plan(
+            &effect_bindings(&refresh),
+            &ExactInputBundle::new(vec![]),
+            &authoritative,
+            &catalog,
+            &context(),
+        )
+        .unwrap();
+    let replace_plan = replace
+        .plan(
+            &effect_bindings(&replace),
+            &ExactInputBundle::new(vec![]),
+            &authoritative,
+            &catalog,
+            &context(),
+        )
+        .unwrap();
+    let mut candidate = gameplay_mechanics::decode_snapshot_with_catalog(
+        &entity_state::encode_snapshot(&authoritative).unwrap(),
+        &catalog,
+    )
+    .unwrap();
+    refresh_plan
+        .effect()
+        .apply_to_candidate(&mut candidate, &catalog)
+        .unwrap();
+    replace_plan
+        .effect()
+        .apply_to_candidate(&mut candidate, &catalog)
+        .unwrap();
+    let effects = candidate
+        .component::<ActiveEffectsComponent>(CASTER)
+        .unwrap()
+        .unwrap()
+        .effects();
+    assert_eq!(effects.len(), 2);
+    assert_eq!(
+        effects
+            .iter()
+            .find(|effect| effect.definition() == &EffectDefinitionId::parse("refreshing").unwrap())
+            .unwrap()
+            .stacks(),
+        2
+    );
+    assert!(effects
+        .iter()
+        .any(|effect| effect.definition() == &EffectDefinitionId::parse("unarmored").unwrap()));
+    assert!(authoritative
+        .component::<ActiveEffectsComponent>(CASTER)
+        .unwrap()
+        .unwrap()
+        .effects()
+        .iter()
+        .any(|effect| effect.definition() == &EffectDefinitionId::parse("armored").unwrap()));
+}
+
+#[test]
+fn effect_replace_rebases_private_candidate_and_is_atomic_when_it_would_strand_a_track() {
+    let catalog = effect_catalog();
+    let instance = gameplay_mechanics::EffectInstanceId::parse("armor").unwrap();
+    let authoritative = effect_state(
+        vec![ActiveEffectInstance::new(
+            instance.clone(),
+            EffectDefinitionId::parse("armored").unwrap(),
+            context().source().clone(),
+            1,
+        )
+        .unwrap()],
+        20,
+    );
+    let replace = StandardOperation::ReplaceEffect {
+        role: role("caster"),
+        instance,
+        definition: EffectDefinitionId::parse("unarmored").unwrap(),
+        stacks: 1,
+    };
+    let plan = replace
+        .plan(
+            &effect_bindings(&replace),
+            &ExactInputBundle::new(vec![]),
+            &authoritative,
+            &catalog,
+            &context(),
+        )
+        .unwrap();
+    let mut candidate = gameplay_mechanics::decode_snapshot_with_catalog(
+        &entity_state::encode_snapshot(&authoritative).unwrap(),
+        &catalog,
+    )
+    .unwrap();
+    let candidate_effects_before = candidate
+        .component::<ActiveEffectsComponent>(CASTER)
+        .unwrap()
+        .unwrap()
+        .clone();
+    let candidate_effects_revision_before = candidate
+        .component_revision::<ActiveEffectsComponent>(CASTER)
+        .unwrap();
+    let candidate_tracks_revision_before = candidate
+        .component_revision::<TracksComponent>(CASTER)
+        .unwrap();
+    let candidate_state_revision_before = candidate.revision();
+    assert!(matches!(
+        plan.effect().apply_to_candidate(&mut candidate, &catalog),
+        Err(MechanicsError::EffectWouldInvalidateTrack {
+            current: 20,
+            prospective_maximum: 10,
+            ..
+        })
+    ));
+    assert_eq!(
+        candidate
+            .component::<ActiveEffectsComponent>(CASTER)
+            .unwrap()
+            .unwrap(),
+        &candidate_effects_before
+    );
+    assert_eq!(
+        candidate
+            .component_revision::<ActiveEffectsComponent>(CASTER)
+            .unwrap(),
+        candidate_effects_revision_before
+    );
+    assert_eq!(
+        candidate
+            .component_revision::<TracksComponent>(CASTER)
+            .unwrap(),
+        candidate_tracks_revision_before
+    );
+    assert_eq!(candidate.revision(), candidate_state_revision_before);
+    assert_eq!(
+        authoritative
+            .component::<ActiveEffectsComponent>(CASTER)
+            .unwrap()
+            .unwrap()
+            .effects()[0]
+            .definition(),
+        &EffectDefinitionId::parse("armored").unwrap(),
+        "candidate failure never reaches the authority source"
     );
 }
 

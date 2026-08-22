@@ -16,16 +16,16 @@ use core_ids::EntityId;
 use entity_state::{ComponentAccessError, ComponentRevision, EntityState};
 use gameplay_mechanics::{
     ActiveEffectsComponent, DamagePart, DamageReceipt, DamageRequest, DamageService,
-    EffectApplyRequest, EffectInstanceId, EffectMutationReceipt, EffectRemovalRequest,
-    EffectService, EquipmentComponent, EquipmentEquipRequest, EquipmentMutationReceipt,
-    EquipmentService, EquipmentSlotId, EquipmentSwapRequest, EquipmentUnequipRequest,
-    IntrinsicSourcesComponent, InventoryComponent, InventoryMutationReceipt,
-    InventoryMutationRequest, InventoryService, InventoryTransferReceipt, InventoryTransferRequest,
-    ItemComponent, ItemDefinitionId, ItemKind, ItemTransferReceipt, ItemTransferRequest,
-    MechanicsCatalog, MechanicsComponentKind, MechanicsError, OperationId, RequestSource,
-    SourceInstanceIdentity, StatsComponent, TrackId, TrackMutationReceipt, TrackMutationRequest,
-    TrackService, TracksComponent, MAX_DAMAGE_PARTS, MAX_DAMAGE_REQUEST_SOURCES,
-    MAX_EQUIPMENT_ASSIGNMENTS,
+    EffectApplyRequest, EffectInstanceId, EffectMutationReceipt, EffectRefreshRequest,
+    EffectRemovalRequest, EffectReplaceRequest, EffectService, EffectStackingPolicy,
+    EquipmentComponent, EquipmentEquipRequest, EquipmentMutationReceipt, EquipmentService,
+    EquipmentSlotId, EquipmentSwapRequest, EquipmentUnequipRequest, IntrinsicSourcesComponent,
+    InventoryComponent, InventoryMutationReceipt, InventoryMutationRequest, InventoryService,
+    InventoryTransferReceipt, InventoryTransferRequest, ItemComponent, ItemDefinitionId, ItemKind,
+    ItemTransferReceipt, ItemTransferRequest, MechanicsCatalog, MechanicsComponentKind,
+    MechanicsError, OperationId, RequestSource, SourceInstanceIdentity, StatsComponent, TrackId,
+    TrackMutationReceipt, TrackMutationRequest, TrackService, TracksComponent, MAX_DAMAGE_PARTS,
+    MAX_DAMAGE_REQUEST_SOURCES, MAX_EQUIPMENT_ASSIGNMENTS,
 };
 
 use crate::{
@@ -39,7 +39,7 @@ use crate::{
 pub const STANDARD_TRACK_CAPABILITY: &str = "mechanics.track";
 /// Capability required to submit a typed mechanics damage request.
 pub const STANDARD_DAMAGE_CAPABILITY: &str = "mechanics.damage";
-/// Capability required to apply or remove an admitted mechanics effect.
+/// Capability required to apply, remove, refresh, or replace an admitted mechanics effect.
 pub const STANDARD_EFFECT_CAPABILITY: &str = "mechanics.effect";
 /// Capability required to mutate a fungible inventory stack through `InventoryService`.
 pub const STANDARD_INVENTORY_CAPABILITY: &str = "mechanics.inventory";
@@ -245,6 +245,25 @@ pub enum StandardOperation {
         definition: gameplay_mechanics::EffectDefinitionId,
         stacks: u16,
     },
+    /// Refresh an existing effect instance selected by a downstream policy.
+    ///
+    /// The existing instance retains its admitted definition; only Refresh-policy definitions
+    /// are eligible. The operation context supplies the new provenance and correlation.
+    RefreshEffect {
+        role: CapabilityRoleId,
+        instance: EffectInstanceId,
+        stacks: u16,
+    },
+    /// Replace every active effect in the selected definition's stacking group.
+    ///
+    /// A requested instance identity may be reused when its old instance is in that removed
+    /// group, but not when an unrelated group still owns it.
+    ReplaceEffect {
+        role: CapabilityRoleId,
+        instance: EffectInstanceId,
+        definition: gameplay_mechanics::EffectDefinitionId,
+        stacks: u16,
+    },
     RemoveEffect {
         role: CapabilityRoleId,
         instance: EffectInstanceId,
@@ -438,6 +457,8 @@ pub enum StandardMechanicsEffect {
     RestoreTrack(TrackMutationRequest),
     SubmitDamage(DamageRequest),
     ApplyEffect(EffectApplyRequest),
+    RefreshEffect(EffectRefreshRequest),
+    ReplaceEffect(EffectReplaceRequest),
     RemoveEffect(EffectRemovalRequest),
     GrantStack(InventoryMutationRequest),
     ConsumeStack(InventoryMutationRequest),
@@ -494,6 +515,20 @@ impl StandardMechanicsEffect {
                 request.expected_revision =
                     Some(candidate.component_revision::<ActiveEffectsComponent>(request.entity)?);
                 EffectService::apply(candidate, catalog, request)
+                    .map(StandardMechanicsReceipt::Effect)
+            }
+            Self::RefreshEffect(request) => {
+                let mut request = request.clone();
+                request.expected_revision =
+                    Some(candidate.component_revision::<ActiveEffectsComponent>(request.entity)?);
+                EffectService::refresh(candidate, catalog, request)
+                    .map(StandardMechanicsReceipt::Effect)
+            }
+            Self::ReplaceEffect(request) => {
+                let mut request = request.clone();
+                request.expected_revision =
+                    Some(candidate.component_revision::<ActiveEffectsComponent>(request.entity)?);
+                EffectService::replace(candidate, catalog, request)
                     .map(StandardMechanicsReceipt::Effect)
             }
             Self::RemoveEffect(request) => {
@@ -707,6 +742,12 @@ fn conservative_source_read_set(
         StandardMechanicsEffect::ApplyEffect(request) => {
             entities.insert(request.entity);
         }
+        StandardMechanicsEffect::RefreshEffect(request) => {
+            entities.insert(request.entity);
+        }
+        StandardMechanicsEffect::ReplaceEffect(request) => {
+            entities.insert(request.entity);
+        }
         StandardMechanicsEffect::RemoveEffect(request) => {
             entities.insert(request.entity);
         }
@@ -823,9 +864,10 @@ impl StandardOperation {
                 }
                 add(target, STANDARD_DAMAGE_CAPABILITY);
             }
-            Self::ApplyEffect { role, .. } | Self::RemoveEffect { role, .. } => {
-                add(role, STANDARD_EFFECT_CAPABILITY)
-            }
+            Self::ApplyEffect { role, .. }
+            | Self::RefreshEffect { role, .. }
+            | Self::ReplaceEffect { role, .. }
+            | Self::RemoveEffect { role, .. } => add(role, STANDARD_EFFECT_CAPABILITY),
             Self::GrantStack { role, .. } | Self::ConsumeStack { role, .. } => {
                 add(role, STANDARD_INVENTORY_CAPABILITY)
             }
@@ -1026,6 +1068,70 @@ impl StandardOperation {
                 let revision = effect_revision(entity)?;
                 (
                     StandardMechanicsEffect::ApplyEffect(EffectApplyRequest {
+                        operation: context.operation().clone(),
+                        entity,
+                        instance: instance.clone(),
+                        definition: definition.clone(),
+                        provenance: context.source().clone(),
+                        stacks: *stacks,
+                        expected_revision: Some(revision.clone()),
+                    }),
+                    vec![revision],
+                )
+            }
+            Self::RefreshEffect {
+                role,
+                instance,
+                stacks,
+            } => {
+                let entity = roles
+                    .require(role, capability(STANDARD_EFFECT_CAPABILITY))
+                    .map_err(StandardPlanningError::Roles)?;
+                let revision = effect_revision(entity)?;
+                let existing = active_effect(state, entity, instance)?;
+                let definition = standard_effect_definition(catalog, existing.definition())?;
+                ensure_effect_policy(definition, "refresh", EffectStackingPolicy::Refresh)?;
+                validate_effect_stacks(definition, *stacks)?;
+                (
+                    StandardMechanicsEffect::RefreshEffect(EffectRefreshRequest {
+                        operation: context.operation().clone(),
+                        entity,
+                        instance: instance.clone(),
+                        provenance: context.source().clone(),
+                        stacks: *stacks,
+                        expected_revision: Some(revision.clone()),
+                    }),
+                    vec![revision],
+                )
+            }
+            Self::ReplaceEffect {
+                role,
+                instance,
+                definition,
+                stacks,
+            } => {
+                let entity = roles
+                    .require(role, capability(STANDARD_EFFECT_CAPABILITY))
+                    .map_err(StandardPlanningError::Roles)?;
+                let revision = effect_revision(entity)?;
+                let replacement = standard_effect_definition(catalog, definition)?;
+                ensure_effect_policy(replacement, "replace", EffectStackingPolicy::Replace)?;
+                validate_effect_stacks(replacement, *stacks)?;
+                let active = active_effects(state, entity)?;
+                for existing in active.effects() {
+                    let active_definition =
+                        standard_effect_definition(catalog, existing.definition())?;
+                    if existing.instance() == instance
+                        && active_definition.stacking_group != replacement.stacking_group
+                    {
+                        return Err(StandardPlanningError::EffectInstanceConflict {
+                            entity,
+                            instance: instance.clone(),
+                        });
+                    }
+                }
+                (
+                    StandardMechanicsEffect::ReplaceEffect(EffectReplaceRequest {
                         operation: context.operation().clone(),
                         entity,
                         instance: instance.clone(),
@@ -1277,6 +1383,70 @@ fn validate_fungible_stack(
     Ok(())
 }
 
+fn active_effects(
+    state: &EntityState,
+    entity: EntityId,
+) -> Result<&ActiveEffectsComponent, StandardPlanningError> {
+    state
+        .component::<ActiveEffectsComponent>(entity)
+        .map_err(StandardPlanningError::Component)?
+        .ok_or(StandardPlanningError::MissingActiveEffects { entity })
+}
+
+fn active_effect<'a>(
+    state: &'a EntityState,
+    entity: EntityId,
+    instance: &EffectInstanceId,
+) -> Result<&'a gameplay_mechanics::ActiveEffectInstance, StandardPlanningError> {
+    active_effects(state, entity)?
+        .effects()
+        .iter()
+        .find(|effect| effect.instance() == instance)
+        .ok_or_else(|| StandardPlanningError::MissingEffectInstance {
+            entity,
+            instance: instance.clone(),
+        })
+}
+
+fn standard_effect_definition<'a>(
+    catalog: &'a MechanicsCatalog,
+    definition: &gameplay_mechanics::EffectDefinitionId,
+) -> Result<&'a gameplay_mechanics::EffectDefinition, StandardPlanningError> {
+    catalog
+        .effect(definition)
+        .ok_or_else(|| StandardPlanningError::UnknownEffect {
+            definition: definition.clone(),
+        })
+}
+
+fn ensure_effect_policy(
+    definition: &gameplay_mechanics::EffectDefinition,
+    expected: &'static str,
+    policy: EffectStackingPolicy,
+) -> Result<(), StandardPlanningError> {
+    if definition.stacking != policy {
+        return Err(StandardPlanningError::EffectPolicyMismatch {
+            effect: definition.id.clone(),
+            expected,
+            actual: definition.stacking,
+        });
+    }
+    Ok(())
+}
+
+fn validate_effect_stacks(
+    definition: &gameplay_mechanics::EffectDefinition,
+    stacks: u16,
+) -> Result<(), StandardPlanningError> {
+    if stacks == 0 || stacks > definition.maximum_stacks {
+        return Err(StandardPlanningError::EffectStacks {
+            actual: stacks,
+            maximum: definition.maximum_stacks,
+        });
+    }
+    Ok(())
+}
+
 fn validate_equipment_slots(slots: &[EquipmentSlotId]) -> Result<(), StandardPlanningError> {
     if slots.len() > MAX_EQUIPMENT_ASSIGNMENTS {
         return Err(StandardPlanningError::EquipmentSlots {
@@ -1308,6 +1478,22 @@ pub enum StandardPlanningError {
     },
     UnknownEffect {
         definition: gameplay_mechanics::EffectDefinitionId,
+    },
+    MissingActiveEffects {
+        entity: EntityId,
+    },
+    MissingEffectInstance {
+        entity: EntityId,
+        instance: EffectInstanceId,
+    },
+    EffectPolicyMismatch {
+        effect: gameplay_mechanics::EffectDefinitionId,
+        expected: &'static str,
+        actual: EffectStackingPolicy,
+    },
+    EffectInstanceConflict {
+        entity: EntityId,
+        instance: EffectInstanceId,
     },
     EffectStacks {
         actual: u16,

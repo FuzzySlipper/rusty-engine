@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use core_ids::EntityId;
 use entity_state::{
-    ComponentReplacement, ComponentRevision, EntityAuthoringService, EntityState,
+    ComponentReplacement, ComponentRevision, EntityAuthoringService, EntityDefinition, EntityState,
     RelationshipCommand, RelationshipError,
 };
 
@@ -877,10 +877,131 @@ pub struct ItemDestroyReceipt {
     pub revision_after: u64,
 }
 
+/// Caller-authored identity and placement for one new unique item entity.
+///
+/// The caller retains ID allocation, naming, source/label choice, and all gameplay policy. The
+/// supplied definition must not declare containment: `container` is the one explicit ownership
+/// relationship this operation establishes.
+#[derive(Debug, Clone)]
+pub struct UniqueItemMaterializationRequest {
+    pub entity: EntityDefinition,
+    pub item: ItemDefinitionId,
+    pub container: EntityId,
+    pub expected_state_revision: u64,
+}
+
+/// Evidence for one atomic unique-item admission, attachment, and containment publication.
+///
+/// The intermediate revisions are retained deliberately. The entity authoring, component
+/// attachment, and relationship owners each advance their candidate state separately before the
+/// completed candidate replaces the live state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UniqueItemMaterializationReceipt {
+    pub catalog_version: CatalogVersion,
+    pub catalog_fingerprint: String,
+    pub entity: EntityId,
+    pub item: ItemDefinitionId,
+    pub container: EntityId,
+    pub observed_state_revision: u64,
+    pub admitted_state_revision: u64,
+    pub attached_state_revision: u64,
+    pub committed_state_revision: u64,
+    pub observed_item_revision: u64,
+    pub committed_item_revision: u64,
+    pub containment_before: Option<EntityId>,
+    pub containment_after: Option<EntityId>,
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ItemService;
 
 impl ItemService {
+    /// Atomically materializes one caller-identified unique item under explicit containment.
+    ///
+    /// A cloned candidate performs ordinary entity admission, `ItemComponent` attachment, and
+    /// containment mutation. The live state is replaced only after all three owners accept their
+    /// respective step, so an error after candidate admission or attachment leaves live state
+    /// untouched. This is intentionally not an allocator, spawn/loadout helper, inventory
+    /// policy, equip operation, or generic transaction surface.
+    pub fn materialize_unique(
+        state: &mut EntityState,
+        catalog: &MechanicsCatalog,
+        request: UniqueItemMaterializationRequest,
+    ) -> Result<UniqueItemMaterializationReceipt, MechanicsError> {
+        ensure_state_revision(state, request.expected_state_revision)?;
+        let item_definition =
+            catalog
+                .item(&request.item)
+                .ok_or_else(|| MechanicsError::UnknownItem {
+                    item: request.item.clone(),
+                })?;
+        if item_definition.kind != ItemKind::Unique {
+            return Err(MechanicsError::MaterializationItemKindMismatch {
+                item: request.item,
+                actual: item_definition.kind,
+            });
+        }
+        if let Some(container) = request.entity.contained_in {
+            return Err(
+                MechanicsError::MaterializationDefinitionContainsContainment {
+                    entity: request.entity.id,
+                    container,
+                },
+            );
+        }
+        if let Some(inventory) = state.component::<InventoryComponent>(request.container)? {
+            validate_inventory_catalog_compatibility(catalog, request.container, inventory)?;
+        }
+
+        let entity = request.entity.id;
+        let observed_state_revision = state.revision();
+        let observed_item_revision = state
+            .component_revision::<ItemComponent>(entity)?
+            .revision();
+        let containment_before = state.contained_in(entity);
+
+        let mut candidate = state.clone();
+        let admission_revision = candidate.revision();
+        let admitted =
+            EntityAuthoringService.admit(&mut candidate, admission_revision, [request.entity])?;
+        let item_slot = candidate.component_revision::<ItemComponent>(entity)?;
+        let attached = EntityAuthoringService.attach_component(
+            &mut candidate,
+            item_slot,
+            entity,
+            ItemComponent::new(catalog.version().clone(), request.item.clone()),
+        )?;
+        let containment_revision = candidate.revision();
+        let containment = candidate.apply_relationship(
+            containment_revision,
+            RelationshipCommand::SetContainment {
+                child: entity,
+                container: request.container,
+            },
+        )?;
+        let committed_item_revision = candidate
+            .component_revision::<ItemComponent>(entity)?
+            .revision();
+        let containment_after = candidate.contained_in(entity);
+
+        *state = candidate;
+        Ok(UniqueItemMaterializationReceipt {
+            catalog_version: catalog.version().clone(),
+            catalog_fingerprint: catalog.fingerprint().to_string(),
+            entity,
+            item: request.item,
+            container: request.container,
+            observed_state_revision,
+            admitted_state_revision: admitted.revision_after,
+            attached_state_revision: attached.revision_after,
+            committed_state_revision: containment.revision_after,
+            observed_item_revision,
+            committed_item_revision,
+            containment_before,
+            containment_after,
+        })
+    }
+
     pub fn destroy_unique(
         state: &mut EntityState,
         catalog: &MechanicsCatalog,
@@ -944,6 +1065,53 @@ pub(crate) fn validate_inventory_state(
         component.catalog_version(),
     )?;
     evaluate_inventory(state, catalog, owner, component.stacks(), None, None)?;
+    Ok(())
+}
+
+/// Validates only the catalog identity and catalog references carried by an inventory component.
+///
+/// This deliberately does not evaluate capacity, containment quotas, or the inventory's current
+/// contents as an ownership policy. It is shared by snapshot admission and operations that must
+/// avoid publishing a new catalog-bound item under a container from an incompatible catalog.
+pub(crate) fn validate_inventory_catalog_compatibility(
+    catalog: &MechanicsCatalog,
+    owner: EntityId,
+    component: &InventoryComponent,
+) -> Result<(), MechanicsError> {
+    crate::source::ensure_catalog_version(
+        catalog,
+        owner,
+        InventoryComponent::LABEL,
+        component.catalog_version(),
+    )?;
+    for limit in component.capacity_limits() {
+        if catalog.capacity_metric(limit.metric()).is_none() {
+            return Err(MechanicsError::InvalidCatalogReference {
+                entity: owner,
+                component: InventoryComponent::LABEL,
+                namespace: "capacity metric",
+                reference: limit.metric().to_string(),
+            });
+        }
+    }
+    for stack in component.stacks() {
+        let definition = catalog.item(&stack.definition).ok_or_else(|| {
+            MechanicsError::InvalidCatalogReference {
+                entity: owner,
+                component: InventoryComponent::LABEL,
+                namespace: "item",
+                reference: stack.definition.to_string(),
+            }
+        })?;
+        if definition.kind != ItemKind::Fungible {
+            return Err(MechanicsError::InvalidCatalogReference {
+                entity: owner,
+                component: InventoryComponent::LABEL,
+                namespace: "fungible item",
+                reference: stack.definition.to_string(),
+            });
+        }
+    }
     Ok(())
 }
 

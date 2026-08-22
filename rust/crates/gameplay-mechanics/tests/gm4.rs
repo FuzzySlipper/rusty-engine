@@ -19,8 +19,8 @@ use gameplay_mechanics::{
     StatContributionDefinition, StatDefinition, StatId, StatService, StatValue, StatsComponent,
     TrackAdjustmentKind, TrackDefinition, TrackId, TrackMaximum, TrackMutationRequest,
     TrackReconciliationPolicy, TrackReconciliationRequest, TrackService, TrackValue,
-    TracksComponent, INVENTORY_COMPONENT_TYPE_ID, MAX_CONTAINED_ENTITIES_PER_INVENTORY,
-    MAX_EQUIPMENT_SOURCE_ACTIVATIONS,
+    TracksComponent, UniqueItemMaterializationRequest, INVENTORY_COMPONENT_TYPE_ID,
+    MAX_CONTAINED_ENTITIES_PER_INVENTORY, MAX_EQUIPMENT_SOURCE_ACTIVATIONS,
 };
 
 const PLAYER: EntityId = EntityId::new(1_001);
@@ -1394,6 +1394,308 @@ fn unique_transfer_preflights_the_direct_containment_quota_without_scanning_or_m
     ));
     assert_eq!(state.revision(), before_revision);
     assert_eq!(state.contained_in(PISTOL), Some(PLAYER));
+}
+
+#[test]
+fn unique_item_materialization_is_atomic_reopenable_and_composes_with_fresh_equipment() {
+    let catalog = catalog();
+    let mut state = state();
+    let materialized = EntityId::new(9_001);
+    let observed_state_revision = state.revision();
+    let receipt = ItemService::materialize_unique(
+        &mut state,
+        &catalog,
+        UniqueItemMaterializationRequest {
+            entity: EntityDefinition::new(materialized, "caller-named-spare-rifle"),
+            item: item("rifle"),
+            container: PLAYER,
+            expected_state_revision: observed_state_revision,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(receipt.catalog_version, version());
+    assert_eq!(receipt.catalog_fingerprint, catalog.fingerprint());
+    assert_eq!(receipt.entity, materialized);
+    assert_eq!(receipt.item, item("rifle"));
+    assert_eq!(receipt.container, PLAYER);
+    assert_eq!(receipt.observed_state_revision, observed_state_revision);
+    assert_eq!(receipt.admitted_state_revision, observed_state_revision + 1);
+    assert_eq!(receipt.attached_state_revision, observed_state_revision + 2);
+    assert_eq!(
+        receipt.committed_state_revision,
+        observed_state_revision + 3
+    );
+    assert_eq!(receipt.observed_item_revision, 0);
+    assert_eq!(receipt.committed_item_revision, 1);
+    assert_eq!(receipt.containment_before, None);
+    assert_eq!(receipt.containment_after, Some(PLAYER));
+    assert_eq!(state.revision(), receipt.committed_state_revision);
+    assert_eq!(state.contained_in(materialized), Some(PLAYER));
+    assert_eq!(
+        state
+            .component::<ItemComponent>(materialized)
+            .unwrap()
+            .unwrap()
+            .definition(),
+        &item("rifle")
+    );
+
+    // Materialization does not equip. A later caller-owned equipment choice captures fresh
+    // guards and composes through the existing #7205 service.
+    let equipment_state_revision = state.revision();
+    let equipment = EquipmentService::equip(
+        &mut state,
+        &catalog,
+        EquipmentEquipRequest {
+            operation: operation("equip_materialized_rifle"),
+            source: request_identity(&operation("equip_materialized_rifle"), "loadout"),
+            owner: PLAYER,
+            item: materialized,
+            slots: vec![slot("hand_left"), slot("hand_right")],
+            expected_equipment_revision: None,
+            expected_state_revision: equipment_state_revision,
+        },
+    )
+    .unwrap();
+    assert_eq!(equipment.item, materialized);
+
+    let encoded = encode_snapshot(&state).unwrap();
+    let reopened = decode_snapshot_with_catalog(&encoded, &catalog).unwrap();
+    assert_eq!(encode_snapshot(&reopened).unwrap(), encoded);
+    assert_eq!(reopened.contained_in(materialized), Some(PLAYER));
+    assert_eq!(
+        reopened
+            .component::<ItemComponent>(materialized)
+            .unwrap()
+            .unwrap()
+            .definition(),
+        &item("rifle")
+    );
+}
+
+#[test]
+fn unique_item_materialization_rejections_never_publish_a_partial_candidate() {
+    let catalog = catalog();
+    let mut state = state();
+    let before = encode_snapshot(&state).unwrap();
+    let expected_state_revision = state.revision();
+
+    assert!(matches!(
+        ItemService::materialize_unique(
+            &mut state,
+            &catalog,
+            UniqueItemMaterializationRequest {
+                entity: EntityDefinition::new(EntityId::new(9_009), "unknown-definition"),
+                item: item("not_admitted"),
+                container: PLAYER,
+                expected_state_revision,
+            },
+        ),
+        Err(MechanicsError::UnknownItem { .. })
+    ));
+    assert_eq!(encode_snapshot(&state).unwrap(), before);
+
+    assert!(matches!(
+        ItemService::materialize_unique(
+            &mut state,
+            &catalog,
+            UniqueItemMaterializationRequest {
+                entity: EntityDefinition::new(EntityId::new(9_010), "fungible-shape"),
+                item: item("material"),
+                container: PLAYER,
+                expected_state_revision,
+            },
+        ),
+        Err(MechanicsError::MaterializationItemKindMismatch { .. })
+    ));
+    assert_eq!(encode_snapshot(&state).unwrap(), before);
+
+    assert!(matches!(
+        ItemService::materialize_unique(
+            &mut state,
+            &catalog,
+            UniqueItemMaterializationRequest {
+                entity: EntityDefinition::new(RIFLE, "live-id-collision"),
+                item: item("rifle"),
+                container: PLAYER,
+                expected_state_revision,
+            },
+        ),
+        Err(MechanicsError::ComponentMutation(
+            entity_state::EntityAuthoringError::DuplicateEntity { entity: RIFLE }
+        ))
+    ));
+    assert_eq!(encode_snapshot(&state).unwrap(), before);
+
+    assert!(matches!(
+        ItemService::materialize_unique(
+            &mut state,
+            &catalog,
+            UniqueItemMaterializationRequest {
+                entity: EntityDefinition::new(EntityId::new(9_016), ""),
+                item: item("rifle"),
+                container: PLAYER,
+                expected_state_revision,
+            },
+        ),
+        Err(MechanicsError::ComponentMutation(
+            entity_state::EntityAuthoringError::InvalidDefinition(
+                entity_state::EntityDefinitionError::EmptyName { .. }
+            )
+        ))
+    ));
+    assert_eq!(encode_snapshot(&state).unwrap(), before);
+
+    let mut mismatched_definition = catalog_definition();
+    mismatched_definition.version = CatalogVersion::parse("gm4.v2").unwrap();
+    let mismatched_catalog = MechanicsCatalog::admit(mismatched_definition).unwrap();
+    let inventory_revision_before = state
+        .component_revision::<InventoryComponent>(PLAYER)
+        .unwrap();
+    assert!(matches!(
+        ItemService::materialize_unique(
+            &mut state,
+            &mismatched_catalog,
+            UniqueItemMaterializationRequest {
+                entity: EntityDefinition::new(EntityId::new(9_017), "mixed-catalog-item"),
+                item: item("rifle"),
+                container: PLAYER,
+                expected_state_revision,
+            },
+        ),
+        Err(MechanicsError::CatalogVersionMismatch {
+            entity: PLAYER,
+            component: InventoryComponent::LABEL,
+            ..
+        })
+    ));
+    assert_eq!(state.revision(), expected_state_revision);
+    assert_eq!(
+        state
+            .component_revision::<InventoryComponent>(PLAYER)
+            .unwrap(),
+        inventory_revision_before
+    );
+    assert_eq!(encode_snapshot(&state).unwrap(), before);
+
+    // The relationship failure happens only after candidate admission and component attachment.
+    // The live snapshot nevertheless remains byte-identical.
+    assert!(matches!(
+        ItemService::materialize_unique(
+            &mut state,
+            &catalog,
+            UniqueItemMaterializationRequest {
+                entity: EntityDefinition::new(EntityId::new(9_011), "missing-owner"),
+                item: item("rifle"),
+                container: EntityId::new(99_999),
+                expected_state_revision,
+            },
+        ),
+        Err(MechanicsError::Relationship(
+            entity_state::RelationshipError::UnknownEntity { .. }
+        ))
+    ));
+    assert_eq!(encode_snapshot(&state).unwrap(), before);
+
+    assert!(matches!(
+        ItemService::materialize_unique(
+            &mut state,
+            &catalog,
+            UniqueItemMaterializationRequest {
+                entity: EntityDefinition::new(EntityId::new(9_012), "self-contained"),
+                item: item("rifle"),
+                container: EntityId::new(9_012),
+                expected_state_revision,
+            },
+        ),
+        Err(MechanicsError::Relationship(
+            entity_state::RelationshipError::SelfRelationship { .. }
+        ))
+    ));
+    assert_eq!(encode_snapshot(&state).unwrap(), before);
+
+    assert!(matches!(
+        ItemService::materialize_unique(
+            &mut state,
+            &catalog,
+            UniqueItemMaterializationRequest {
+                entity: EntityDefinition::new(EntityId::new(9_013), "hidden-containment")
+                    .with_containment(PLAYER),
+                item: item("rifle"),
+                container: PLAYER,
+                expected_state_revision,
+            },
+        ),
+        Err(MechanicsError::MaterializationDefinitionContainsContainment { .. })
+    ));
+    assert_eq!(encode_snapshot(&state).unwrap(), before);
+
+    assert!(matches!(
+        ItemService::materialize_unique(
+            &mut state,
+            &catalog,
+            UniqueItemMaterializationRequest {
+                entity: EntityDefinition::new(EntityId::new(9_014), "stale-request"),
+                item: item("rifle"),
+                container: PLAYER,
+                expected_state_revision: expected_state_revision.saturating_sub(1),
+            },
+        ),
+        Err(MechanicsError::Relationship(
+            entity_state::RelationshipError::StaleRevision { .. }
+        ))
+    ));
+    assert_eq!(encode_snapshot(&state).unwrap(), before);
+
+    let tombstoned = EntityId::new(9_015);
+    let admit_tombstone_revision = state.revision();
+    EntityAuthoringService
+        .admit(
+            &mut state,
+            admit_tombstone_revision,
+            [EntityDefinition::new(tombstoned, "retired-item-identity")],
+        )
+        .unwrap();
+    let destroy_tombstone_revision = state.revision();
+    EntityAuthoringService
+        .destroy(&mut state, destroy_tombstone_revision, tombstoned)
+        .unwrap();
+    let before_tombstone_collision = encode_snapshot(&state).unwrap();
+    let expected_tombstone_revision = state.revision();
+    assert!(matches!(
+        ItemService::materialize_unique(
+            &mut state,
+            &catalog,
+            UniqueItemMaterializationRequest {
+                entity: EntityDefinition::new(EntityId::new(9_018), "tombstoned-owner"),
+                item: item("rifle"),
+                container: tombstoned,
+                expected_state_revision: expected_tombstone_revision,
+            },
+        ),
+        Err(MechanicsError::Relationship(
+            entity_state::RelationshipError::TombstonedEntity { entity }
+        )) if entity == tombstoned
+    ));
+    assert_eq!(encode_snapshot(&state).unwrap(), before_tombstone_collision);
+
+    assert!(matches!(
+        ItemService::materialize_unique(
+            &mut state,
+            &catalog,
+            UniqueItemMaterializationRequest {
+                entity: EntityDefinition::new(tombstoned, "resurrected-item"),
+                item: item("rifle"),
+                container: PLAYER,
+                expected_state_revision: expected_tombstone_revision,
+            },
+        ),
+        Err(MechanicsError::ComponentMutation(
+            entity_state::EntityAuthoringError::DuplicateEntity { entity }
+        )) if entity == tombstoned
+    ));
+    assert_eq!(encode_snapshot(&state).unwrap(), before_tombstone_collision);
 }
 
 #[test]

@@ -182,6 +182,14 @@ pub enum MechanicsError {
         expected: ItemKind,
         actual: ItemKind,
     },
+    MaterializationItemKindMismatch {
+        item: ItemDefinitionId,
+        actual: ItemKind,
+    },
+    MaterializationDefinitionContainsContainment {
+        entity: EntityId,
+        container: EntityId,
+    },
     InvalidInventoryQuantity {
         item: ItemDefinitionId,
         quantity: u64,

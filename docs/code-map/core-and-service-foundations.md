@@ -40,11 +40,16 @@ volume, spatial-index, collision, pathfinding, RNG, and mesh mechanisms.
     see [Rigid-body dynamics](../topics/rigid-body-dynamics.md).
 - [`svc-pathfinding`](../../rust/crates/svc-pathfinding)
 - [`svc-rng`](../../rust/crates/svc-rng)
+  - `ScopedRng` owns the established stateful deterministic stream.
+  - `KeyedRngV1` owns the separately versioned stateless keyed inclusive `i64`
+    draw, with explicit seed/scope/key inputs and bounded typed failures.
 - [`svc-mesh`](../../rust/crates/svc-mesh)
 
 ## Public downstream surfaces
 
 - Crate roots expose small, directly callable mechanisms.
+- `KeyedRngV1` is a caller-selected decision mechanism, not an ambient RNG,
+  loot table, scheduler, replay owner, or gameplay-policy API.
 - `engine-spatial` is the preferred cohesive owner when several spatial
   services must share canonical mutable state.
 - New downstream use should depend only on the narrow foundations it actually
