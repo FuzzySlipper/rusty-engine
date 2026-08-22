@@ -287,7 +287,7 @@ fn typed_roles_predicates_and_mechanics_plans_remain_explicit() {
     let plan = spend
         .plan(
             &roles,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &state,
             &catalog(),
             &context(),
@@ -313,7 +313,7 @@ fn typed_roles_predicates_and_mechanics_plans_remain_explicit() {
         ExactExpr::Literal(scalar(2)),
         ExactExpr::Literal(scalar(1))
     ))
-    .evaluate(&ExactInputBundle::new(vec![]))
+    .evaluate(&ExactInputBundle::empty())
     .unwrap());
     assert!(CapabilityRoleBindings::admit(
         &requirements,
@@ -386,7 +386,7 @@ fn candidate_execution_rebases_private_revisions_and_never_mutates_the_planning_
     let spend = spend
         .plan(
             &roles,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &authoritative,
             &catalog,
             &context(),
@@ -395,7 +395,7 @@ fn candidate_execution_rebases_private_revisions_and_never_mutates_the_planning_
     let restore = restore
         .plan(
             &roles,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &authoritative,
             &catalog,
             &context(),
@@ -409,7 +409,7 @@ fn candidate_execution_rebases_private_revisions_and_never_mutates_the_planning_
     }
     .plan(
         &roles,
-        &ExactInputBundle::new(vec![]),
+        &ExactInputBundle::empty(),
         &authoritative,
         &catalog,
         &context(),
@@ -421,7 +421,7 @@ fn candidate_execution_rebases_private_revisions_and_never_mutates_the_planning_
     }
     .plan(
         &roles,
-        &ExactInputBundle::new(vec![]),
+        &ExactInputBundle::empty(),
         &authoritative,
         &catalog,
         &context(),
@@ -523,7 +523,7 @@ fn remove_existing_then_apply_same_effect_plans_and_executes_on_one_candidate() 
     let remove = remove
         .plan(
             &roles,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &authoritative,
             &catalog,
             &context(),
@@ -532,7 +532,7 @@ fn remove_existing_then_apply_same_effect_plans_and_executes_on_one_candidate() 
     let apply = apply
         .plan(
             &roles,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &authoritative,
             &catalog,
             &context(),
@@ -587,7 +587,7 @@ fn planning_rejects_oversized_requests_and_role_capability_retention() {
     assert!(matches!(
         damage.plan(
             &bindings,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &state,
             &catalog,
             &context()
@@ -618,7 +618,7 @@ fn planning_rejects_oversized_requests_and_role_capability_retention() {
     assert!(matches!(
         invalid_effect.plan(
             &effect_bindings,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &state,
             &catalog,
             &context()
@@ -664,7 +664,7 @@ fn damage_planning_accepts_exact_quotas_and_rejects_one_over_before_expression_e
     let exact_parts_plan = exact_parts
         .plan(
             &bindings,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &state,
             &catalog,
             &context(),
@@ -684,7 +684,7 @@ fn damage_planning_accepts_exact_quotas_and_rejects_one_over_before_expression_e
     exact_sources
         .plan(
             &bindings,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &state,
             &catalog,
             &context(),
@@ -705,7 +705,7 @@ fn damage_planning_accepts_exact_quotas_and_rejects_one_over_before_expression_e
     assert!(matches!(
         too_many_parts.plan(
             &bindings,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &state,
             &catalog,
             &context(),
@@ -726,7 +726,7 @@ fn damage_planning_accepts_exact_quotas_and_rejects_one_over_before_expression_e
     assert!(matches!(
         too_many_sources.plan(
             &bindings,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &state,
             &catalog,
             &context(),
@@ -758,7 +758,7 @@ fn plan_source_validation_rejects_a_changed_authoritative_component() {
     let plan = operation
         .plan(
             &bindings,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -821,7 +821,7 @@ fn damage_plan_rejects_stale_secondary_effect_source_even_when_tracks_are_unchan
     let plan = operation
         .plan(
             &bindings,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -907,7 +907,7 @@ fn damage_plan_rejects_stale_intrinsic_source_even_when_target_tracks_are_unchan
     let plan = operation
         .plan(
             &bindings,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -967,7 +967,7 @@ fn conservative_slot_guards_reject_absent_to_present_and_present_to_absent_chang
     let absent_plan = operation
         .plan(
             &bindings,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &absent_to_present,
             &catalog,
             &context(),
@@ -990,7 +990,7 @@ fn conservative_slot_guards_reject_absent_to_present_and_present_to_absent_chang
     let present_plan = operation
         .plan(
             &bindings,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &present_to_absent,
             &catalog,
             &context(),
@@ -1073,7 +1073,8 @@ fn admitted_operands_require_their_canonical_role_capabilities() {
     assert!(matches!(
         operation.plan(
             &bindings,
-            &ExactInputBundle::new(vec![(input, scalar(1))]),
+            &ExactInputBundle::new(vec![(input, scalar(1))])
+                .expect("single input evidence is valid"),
             &state(),
             &catalog(),
             &context(),
@@ -1144,7 +1145,7 @@ fn fungible_inventory_leaves_are_typed_candidate_operations() {
     let grant_plan = grant
         .plan(
             &bindings,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -1153,7 +1154,7 @@ fn fungible_inventory_leaves_are_typed_candidate_operations() {
     let consume_plan = consume
         .plan(
             &bindings,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -1162,7 +1163,7 @@ fn fungible_inventory_leaves_are_typed_candidate_operations() {
     let transfer_plan = transfer
         .plan(
             &bindings,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -1214,7 +1215,7 @@ fn inventory_planning_rejects_invalid_authoring_and_guards_source_facts() {
     assert!(matches!(
         zero.plan(
             &inventory_bindings(&zero),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -1229,7 +1230,7 @@ fn inventory_planning_rejects_invalid_authoring_and_guards_source_facts() {
     assert!(matches!(
         above_maximum.plan(
             &inventory_bindings(&above_maximum),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -1244,7 +1245,7 @@ fn inventory_planning_rejects_invalid_authoring_and_guards_source_facts() {
     assert!(matches!(
         unique.plan(
             &inventory_bindings(&unique),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -1260,7 +1261,7 @@ fn inventory_planning_rejects_invalid_authoring_and_guards_source_facts() {
     assert!(matches!(
         same_owner.plan(
             &inventory_bindings(&same_owner),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -1276,7 +1277,7 @@ fn inventory_planning_rejects_invalid_authoring_and_guards_source_facts() {
     let plan = operation
         .plan(
             &inventory_bindings(&operation),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -1320,7 +1321,7 @@ fn contained_item_slots_guard_only_inventory_capacity_plans() {
     let non_inventory_plan = spend
         .plan(
             &bindings,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &non_inventory_source,
             &catalog,
             &context(),
@@ -1354,7 +1355,7 @@ fn contained_item_slots_guard_only_inventory_capacity_plans() {
     let inventory_plan = consume
         .plan(
             &inventory_bindings(&consume),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &inventory_source,
             &inventory_catalog,
             &context(),
@@ -1388,7 +1389,7 @@ fn inventory_candidate_reports_underflow_and_capacity_without_mutating_the_plan_
     let underflow_plan = underflow
         .plan(
             &inventory_bindings(&underflow),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &inventory_state(3, 0),
             &catalog,
             &context(),
@@ -1409,7 +1410,7 @@ fn inventory_candidate_reports_underflow_and_capacity_without_mutating_the_plan_
     let full_plan = grant
         .plan(
             &inventory_bindings(&grant),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &full,
             &catalog,
             &context(),
@@ -1431,7 +1432,7 @@ fn inventory_candidate_reports_underflow_and_capacity_without_mutating_the_plan_
     let capacity_plan = capacity
         .plan(
             &inventory_bindings(&capacity),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &capacity_source,
             &catalog,
             &context(),
@@ -1573,7 +1574,7 @@ impl ResolutionPolicy for ProductPolicy<'_> {
         _: &[()],
         _: &mut dyn ResolutionTraceSink<()>,
     ) -> PolicyResult<Self::Facts, Self::Rejection, Self::Fault, Self::Suspension> {
-        Ok(ExactInputBundle::new(vec![]))
+        Ok(ExactInputBundle::empty())
     }
     fn check(
         &mut self,
@@ -1750,7 +1751,7 @@ fn inventory_product_session_rebases_sequential_candidates_and_publishes_once() 
     let grant_plan = grant
         .plan(
             &bindings,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -1759,7 +1760,7 @@ fn inventory_product_session_rebases_sequential_candidates_and_publishes_once() 
     let transfer_plan = transfer
         .plan(
             &bindings,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -1796,7 +1797,7 @@ fn inventory_product_session_rebases_sequential_candidates_and_publishes_once() 
     let grant_plan = grant
         .plan(
             &bindings,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -1805,7 +1806,7 @@ fn inventory_product_session_rebases_sequential_candidates_and_publishes_once() 
     let late_plan = late_consume
         .plan(
             &inventory_bindings(&late_consume),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -1884,7 +1885,7 @@ impl ResolutionPolicy for ExecutablePolicy<'_> {
         _: &[()],
         _: &mut dyn ResolutionTraceSink<()>,
     ) -> PolicyResult<Self::Facts, Self::Rejection, Self::Fault, Self::Suspension> {
-        Ok(ExactInputBundle::new(vec![]))
+        Ok(ExactInputBundle::empty())
     }
     fn check(
         &mut self,
@@ -2240,7 +2241,7 @@ impl ResolutionPolicy for OutcomePolicy {
         _: &[Self::Evidence],
         _: &mut dyn ResolutionTraceSink<Self::TraceDetail>,
     ) -> PolicyResult<Self::Facts, Self::Rejection, Self::Fault, Self::Suspension> {
-        Ok(ExactInputBundle::new(vec![]))
+        Ok(ExactInputBundle::empty())
     }
 
     fn check(

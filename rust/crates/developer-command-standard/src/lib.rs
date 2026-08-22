@@ -464,7 +464,7 @@ mod tests {
         let plan = operation
             .plan(
                 &bindings,
-                &ExactInputBundle::new(vec![]),
+                &ExactInputBundle::empty(),
                 &state,
                 &catalog,
                 &context,
@@ -542,7 +542,7 @@ mod tests {
         let plan = operation
             .plan(
                 &bindings,
-                &ExactInputBundle::new(vec![]),
+                &ExactInputBundle::empty(),
                 &state,
                 &catalog,
                 &context,

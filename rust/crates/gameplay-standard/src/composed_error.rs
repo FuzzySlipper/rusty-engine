@@ -20,6 +20,19 @@ pub enum ComposedExactDefinitionError {
         path: String,
         error: gameplay_mechanics::MechanicsArithmeticError,
     },
+    FixedPowerScaleOutOfRange {
+        actual: gameplay_mechanics::MechanicsScalar,
+    },
+    InvalidBoundedRollDescriptor {
+        path: String,
+        input: crate::ExactInputReference,
+    },
+    ConflictingInputDescriptor {
+        path: String,
+        identity: crate::ExactInputIdentity,
+        first: Box<crate::ExactInputReference>,
+        second: Box<crate::ExactInputReference>,
+    },
     MalformedPayload {
         path: String,
         reason: String,

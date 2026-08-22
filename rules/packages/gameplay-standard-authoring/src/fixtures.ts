@@ -44,6 +44,20 @@ export function standardFixtureArtifacts(): Readonly<Record<string, CanonicalRul
       },
     },
   });
+  const fixedPowerBoundedRoll = authorExactDefinition({
+    domain: 'game', package: 'numeric', version: 1,
+    sources: [{ id: 'rules', path: 'rules.json' }],
+    provenance: [{ subject: 'numeric_formula', source: 'rules' }],
+    definition: {
+      family: 'exact', roles: [{ role: 'self', capabilities: [] }], semanticsVersion: 1,
+      source: 'rules', subject: 'numeric_formula',
+      tree: {
+        op: 'fixedPower', scale: 1000,
+        base: { op: 'input', input: { kind: 'boundedRoll', role: 'self', id: 'attack', minimum: 1, maximum: 20 } },
+        exponent: { op: 'literal', value: 2 },
+      },
+    },
+  });
   const schema = declareStandardExtensionSchema<{ readonly option: string }>('example.combat', 1);
   const extensionSchema1 = authorStandardExtension({
     domain: 'game', package: 'combat-extension', version: 1,
@@ -82,5 +96,5 @@ export function standardFixtureArtifacts(): Readonly<Record<string, CanonicalRul
       ] },
     },
   });
-  return Object.freeze({ exact, continuous, extensionSchema1, extensionSchema2, composedExact });
+  return Object.freeze({ exact, continuous, fixedPowerBoundedRoll, extensionSchema1, extensionSchema2, composedExact });
 }

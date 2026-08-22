@@ -43,6 +43,20 @@ fn parameter(role_name: &str, id: &str) -> gameplay_standard::ExactInputReferenc
     }
 }
 
+fn bounded_roll(
+    role_name: &str,
+    id: &str,
+    minimum: i64,
+    maximum: i64,
+) -> gameplay_standard::ExactInputReference {
+    gameplay_standard::ExactInputReference::bounded_roll(
+        role(role_name),
+        InputId::parse(id).unwrap(),
+        scalar(minimum),
+        scalar(maximum),
+    )
+}
+
 #[test]
 fn definition_requirements_are_canonical_and_reject_undeclared_input_roles() {
     let subject = RuleSubjectId::parse("requirement_formula").unwrap();
@@ -75,6 +89,194 @@ fn definition_requirements_are_canonical_and_reject_undeclared_input_roles() {
         gameplay_standard::InputKind::Parameter
     );
     assert_eq!(requirements.roles().len(), 1);
+}
+
+#[test]
+fn fixed_power_and_bounded_roll_have_exact_identity_and_runtime_semantics() {
+    let fixed = |exponent| {
+        ExactExpr::fixed_power(
+            ExactExpr::Literal(scalar(1_040)),
+            ExactExpr::Literal(scalar(exponent)),
+            scalar(1_000),
+        )
+    };
+    for (exponent, expected) in [
+        (0, 1_000),
+        (1, 1_040),
+        (2, 1_081),
+        (3, 1_124),
+        (4, 1_168),
+        (8, 1_364),
+        (16, 1_861),
+        (32, 3_474),
+        (64, 12_153),
+    ] {
+        assert_eq!(
+            ExactEvaluator::evaluate(
+                &fixed(exponent),
+                &ExactInputBundle::empty(),
+                ExactExprLimits::default(),
+            )
+            .unwrap()
+            .get(),
+            expected,
+        );
+    }
+    assert_eq!(
+        ExactEvaluator::evaluate(
+            &ExactExpr::fixed_power(
+                ExactExpr::Literal(scalar(0)),
+                ExactExpr::Literal(scalar(0)),
+                scalar(7),
+            ),
+            &ExactInputBundle::empty(),
+            ExactExprLimits::default(),
+        )
+        .unwrap()
+        .get(),
+        7,
+    );
+    let zero_exponent_inputs = ExactExpr::fixed_power(
+        ExactExpr::Input(parameter("self", "base")),
+        ExactExpr::Input(parameter("self", "exponent")),
+        scalar(1),
+    );
+    assert!(matches!(
+        ExactEvaluator::evaluate(&zero_exponent_inputs, &ExactInputBundle::new(vec![(parameter("self", "base"), scalar(0))]).unwrap(), ExactExprLimits::default()),
+        Err(gameplay_standard::ExactEvaluationError::MissingInput { input }) if input == parameter("self", "exponent")
+    ));
+    for expression in [
+        ExactExpr::fixed_power(
+            ExactExpr::Literal(scalar(1)),
+            ExactExpr::Literal(scalar(1)),
+            scalar(0),
+        ),
+        ExactExpr::fixed_power(
+            ExactExpr::Literal(scalar(1)),
+            ExactExpr::Literal(scalar(1)),
+            scalar(-1),
+        ),
+        ExactExpr::fixed_power(
+            ExactExpr::Literal(scalar(1)),
+            ExactExpr::Literal(scalar(1)),
+            scalar(1_000_001),
+        ),
+    ] {
+        assert!(matches!(
+            ExactEvaluator::evaluate(
+                &expression,
+                &ExactInputBundle::empty(),
+                ExactExprLimits::default()
+            ),
+            Err(gameplay_standard::ExactEvaluationError::FixedPowerScaleOutOfRange { .. })
+        ));
+    }
+    assert!(matches!(
+        ExactEvaluator::evaluate(
+            &ExactExpr::fixed_power(
+                ExactExpr::Literal(scalar(-1)),
+                ExactExpr::Literal(scalar(1)),
+                scalar(1),
+            ),
+            &ExactInputBundle::empty(),
+            ExactExprLimits::default()
+        ),
+        Err(gameplay_standard::ExactEvaluationError::FixedPowerNegativeBase { .. })
+    ));
+    assert!(matches!(
+        ExactEvaluator::evaluate(
+            &fixed(65),
+            &ExactInputBundle::empty(),
+            ExactExprLimits::default()
+        ),
+        Err(gameplay_standard::ExactEvaluationError::FixedPowerExponentOutOfRange { .. })
+    ));
+    assert!(matches!(
+        ExactEvaluator::evaluate(
+            &fixed(1),
+            &ExactInputBundle::empty(),
+            ExactExprLimits {
+                maximum_depth: 32,
+                maximum_nodes: 256,
+                maximum_inputs: 64,
+                maximum_arity: 16,
+                maximum_work: 3
+            }
+        ),
+        Err(gameplay_standard::ExactEvaluationError::WorkQuotaExceeded { .. })
+    ));
+    assert!(matches!(
+        ExactEvaluator::evaluate(
+            &ExactExpr::fixed_power(
+                ExactExpr::Literal(scalar(1_000_000_000_000)),
+                ExactExpr::Literal(scalar(2)),
+                scalar(1),
+            ),
+            &ExactInputBundle::empty(),
+            ExactExprLimits::default(),
+        ),
+        Err(gameplay_standard::ExactEvaluationError::FixedPowerScalarRange { .. })
+    ));
+
+    let roll = bounded_roll("self", "attack", 1, 20);
+    let expression = ExactExpr::Input(roll.clone());
+    assert!(matches!(
+        ExactEvaluator::evaluate(
+            &expression,
+            &ExactInputBundle::empty(),
+            ExactExprLimits::default()
+        ),
+        Err(gameplay_standard::ExactEvaluationError::MissingBoundedRoll { .. })
+    ));
+    assert_eq!(
+        ExactEvaluator::evaluate(
+            &expression,
+            &ExactInputBundle::new(vec![(roll.clone(), scalar(20))]).unwrap(),
+            ExactExprLimits::default()
+        )
+        .unwrap()
+        .get(),
+        20,
+    );
+    assert!(matches!(
+        ExactEvaluator::evaluate(
+            &expression,
+            &ExactInputBundle::new(vec![(roll.clone(), scalar(21))]).unwrap(),
+            ExactExprLimits::default()
+        ),
+        Err(gameplay_standard::ExactEvaluationError::BoundedRollOutOfRange { .. })
+    ));
+    assert!(matches!(
+        ExactInputBundle::new(vec![(roll.clone(), scalar(1)), (roll.clone(), scalar(2))]),
+        Err(gameplay_standard::ExactInputBundleError::ConflictingValue { .. })
+    ));
+    assert!(matches!(
+        ExactInputBundle::new(vec![
+            (roll.clone(), scalar(1)),
+            (bounded_roll("self", "attack", 0, 20), scalar(1))
+        ]),
+        Err(gameplay_standard::ExactInputBundleError::ConflictingDescriptor { .. })
+    ));
+    assert!(ExactInputBundle::new(vec![(roll.clone(), scalar(1)), (roll, scalar(1))]).is_ok());
+    assert!(ExactInputBundle::new(vec![
+        (bounded_roll("self", "attack", 1, 20), scalar(1)),
+        (bounded_roll("other", "attack", 1, 20), scalar(1)),
+        (
+            gameplay_standard::ExactInputReference::Roll {
+                role: role("self"),
+                id: InputId::parse("attack").unwrap()
+            },
+            scalar(1)
+        ),
+    ])
+    .is_ok());
+    assert!(matches!(
+        ExactEvaluator::validate_structure(
+            &ExactExpr::Input(bounded_roll("self", "bad", 2, 1)),
+            ExactExprLimits::default(),
+        ),
+        Err(gameplay_standard::ExactEvaluationError::BoundedRollInvalidBounds { .. })
+    ));
 }
 
 struct ExactLeaf;
@@ -1007,6 +1209,92 @@ fn composed_wire_preflights_literals_and_inputs_before_product_decode() {
 }
 
 #[test]
+fn composed_wire_preflights_bounded_descriptors_before_product_decode() {
+    let sources = vec![source("rules")];
+    let roles = serde_json::json!([{"role":"self","capabilities":[]}]);
+    let schema = counting_extension_payload();
+    let product = counting_product("preflight-leaf", serde_json::json!({"blob":"x"}));
+    let provenance = vec![
+        provenance("formula", "rules"),
+        provenance("preflight-leaf", "rules"),
+    ];
+
+    COUNTING_DECODE_CALLS.store(0, Ordering::SeqCst);
+    COUNTING_COMPILE_CALLS.store(0, Ordering::SeqCst);
+    let invalid_range = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            schema.clone(),
+            serde_json::json!({
+                "op":"add",
+                "left":product.clone(),
+                "right":{"op":"input","input":{
+                    "kind":"boundedRoll","role":"self","id":"attack","minimum":20,"maximum":1
+                }}
+            }),
+            roles.clone(),
+            "formula",
+            "rules",
+        ),
+        sources.clone(),
+        provenance.clone(),
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<CountingProductCodec>(&invalid_range),
+        Err(gameplay_standard::ComposedExactError::Wire(
+            gameplay_standard::ComposedExactDefinitionError::InvalidBoundedRollDescriptor { path, .. }
+        )) if path == "payload.tree.right.input"
+    ));
+    assert_eq!(COUNTING_DECODE_CALLS.load(Ordering::SeqCst), 0);
+    assert_eq!(COUNTING_COMPILE_CALLS.load(Ordering::SeqCst), 0);
+
+    COUNTING_DECODE_CALLS.store(0, Ordering::SeqCst);
+    COUNTING_COMPILE_CALLS.store(0, Ordering::SeqCst);
+    let conflicting_range = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            schema,
+            serde_json::json!({
+                "op":"min",
+                "values":[
+                    product,
+                    {"op":"input","input":{
+                        "kind":"boundedRoll","role":"self","id":"attack","minimum":1,"maximum":20
+                    }},
+                    {"op":"input","input":{
+                        "kind":"boundedRoll","role":"self","id":"attack","minimum":2,"maximum":20
+                    }}
+                ]
+            }),
+            roles,
+            "formula",
+            "rules",
+        ),
+        sources,
+        provenance,
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<CountingProductCodec>(
+            &conflicting_range
+        ),
+        Err(gameplay_standard::ComposedExactError::Wire(
+            gameplay_standard::ComposedExactDefinitionError::ConflictingInputDescriptor {
+                path,
+                identity: gameplay_standard::ExactInputIdentity::Ordinary {
+                    kind: gameplay_standard::InputKind::BoundedRoll,
+                    ..
+                },
+                ..
+            }
+        )) if path == "payload.tree.values[2].input"
+    ));
+    assert_eq!(COUNTING_DECODE_CALLS.load(Ordering::SeqCst), 0);
+    assert_eq!(COUNTING_COMPILE_CALLS.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn composed_product_expansion_uses_global_exact_node_input_and_work_quotas() {
     let source_id = RuleSourceId::parse("rules").unwrap();
     let formula = RuleSubjectId::parse("formula").unwrap();
@@ -1107,11 +1395,7 @@ fn composed_product_expansion_uses_global_exact_node_input_and_work_quotas() {
         ..ExactExprLimits::default()
     };
     assert!(matches!(
-        ExactEvaluator::evaluate(
-            admitted.compiled(),
-            &ExactInputBundle::new(vec![]),
-            low_work,
-        ),
+        ExactEvaluator::evaluate(admitted.compiled(), &ExactInputBundle::empty(), low_work,),
         Err(gameplay_standard::ExactEvaluationError::WorkQuotaExceeded {
             actual: 3,
             maximum: 2,
@@ -1320,7 +1604,7 @@ fn embedded_composed_exact_selects_one_binary64_aggregate_subtree_with_parent_ev
         gameplay_standard::compile_composed_exact_embedded::<MatrixProductCodec>(&selected)
             .unwrap();
     assert_eq!(
-        compiled.evaluate(&ExactInputBundle::new(vec![])).unwrap(),
+        compiled.evaluate(&ExactInputBundle::empty()).unwrap(),
         scalar(8)
     );
     assert_eq!(compiled.package(), &package);
@@ -1345,6 +1629,88 @@ fn embedded_composed_exact_selects_one_binary64_aggregate_subtree_with_parent_ev
             RulePayloadPath::new(vec![RulePayloadPathSegment::field("actions").unwrap()]).unwrap(),
         ),
         Err(gameplay_rules::RuleSubtreeSelectionError::ParentFingerprintMismatch { .. })
+    ));
+}
+
+#[test]
+fn fixed_power_converges_through_standalone_and_embedded_composed_routes() {
+    let tree = serde_json::json!({
+        "op":"fixedPower",
+        "base":{"op":"literal","value":1040},
+        "exponent":{"op":"literal","value":2},
+        "scale":1000,
+    });
+    let standalone = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            matrix_extension_payload(),
+            tree.clone(),
+            serde_json::json!([]),
+            "formula",
+            "rules",
+        ),
+        vec![source("rules")],
+        vec![provenance("formula", "rules")],
+    );
+    let compiled =
+        gameplay_standard::compile_composed_exact_package::<MatrixProductCodec>(&standalone)
+            .unwrap();
+    assert_eq!(
+        compiled.evaluate(&ExactInputBundle::empty()).unwrap().get(),
+        1081
+    );
+
+    let aggregate = raw_package(
+        RulePackageSchemaVersion::Binary64V2,
+        serde_json::json!({"formula":raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            matrix_extension_payload(),
+            tree,
+            serde_json::json!([]),
+            "formula",
+            "rules",
+        )}),
+        vec![source("rules")],
+        vec![provenance("formula", "rules")],
+    );
+    let selected = select_rule_payload_subtree(
+        &aggregate,
+        aggregate.fingerprint(),
+        RulePayloadPath::new(vec![RulePayloadPathSegment::field("formula").unwrap()]).unwrap(),
+    )
+    .unwrap();
+    let embedded =
+        gameplay_standard::compile_composed_exact_embedded::<MatrixProductCodec>(&selected)
+            .unwrap();
+    assert_eq!(
+        embedded.evaluate(&ExactInputBundle::empty()).unwrap().get(),
+        1081
+    );
+
+    let invalid_scale = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            matrix_extension_payload(),
+            serde_json::json!({
+                "op":"fixedPower",
+                "base":{"op":"literal","value":1040},
+                "exponent":{"op":"literal","value":2},
+                "scale":0,
+            }),
+            serde_json::json!([]),
+            "formula",
+            "rules",
+        ),
+        vec![source("rules")],
+        vec![provenance("formula", "rules")],
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<MatrixProductCodec>(&invalid_scale),
+        Err(gameplay_standard::ComposedExactError::Wire(
+            gameplay_standard::ComposedExactDefinitionError::FixedPowerScaleOutOfRange { .. }
+        ))
     ));
 }
 
@@ -1704,7 +2070,8 @@ fn composed_comparisons_merge_both_product_sides_into_canonical_inputs_capabilit
         &ExactInputBundle::new(vec![
             (parameter("attacker", "equipped-tool"), scalar(9)),
             (parameter("defender", "protection"), scalar(2)),
-        ]),
+        ])
+        .expect("distinct input evidence is valid"),
         ExactExprLimits::default(),
     )
     .unwrap());
@@ -1767,7 +2134,7 @@ fn composed_comparison_accepts_max_depth_on_each_operand() {
     assert!(compiled.leaves().is_empty());
     assert!(ExactEvaluator::evaluate_predicate(
         compiled.comparison(),
-        &ExactInputBundle::new(vec![]),
+        &ExactInputBundle::empty(),
         limits,
     )
     .unwrap());
@@ -1869,10 +2236,13 @@ fn composed_typed_leaves_expand_before_the_one_standard_evaluator() {
     );
     assert_eq!(
         admitted
-            .evaluate(&ExactInputBundle::new(vec![
-                (parameter("attacker", "equipped-tool"), scalar(9)),
-                (parameter("defender", "protection"), scalar(2)),
-            ]))
+            .evaluate(
+                &ExactInputBundle::new(vec![
+                    (parameter("attacker", "equipped-tool"), scalar(9)),
+                    (parameter("defender", "protection"), scalar(2)),
+                ])
+                .expect("distinct input evidence is valid")
+            )
             .unwrap()
             .get(),
         6,
@@ -1937,7 +2307,8 @@ fn exact_quota_matrix_accepts_each_limit_and_rejects_one_over() {
             },
             scalar(2),
         ),
-    ]);
+    ])
+    .expect("distinct input evidence is valid");
     let aggregate = ExactExpr::Min(vec![literal.clone(), literal.clone()]);
     let mut limits = ExactExprLimits {
         maximum_depth: 2,
@@ -1946,16 +2317,16 @@ fn exact_quota_matrix_accepts_each_limit_and_rejects_one_over() {
         maximum_arity: 2,
         maximum_work: 3,
     };
-    assert!(ExactEvaluator::evaluate(&nested, &ExactInputBundle::new(vec![]), limits).is_ok());
+    assert!(ExactEvaluator::evaluate(&nested, &ExactInputBundle::empty(), limits).is_ok());
     limits.maximum_depth = 1;
     assert!(matches!(
-        ExactEvaluator::evaluate(&nested, &ExactInputBundle::new(vec![]), limits),
+        ExactEvaluator::evaluate(&nested, &ExactInputBundle::empty(), limits),
         Err(gameplay_standard::ExactEvaluationError::DepthExceeded { .. })
     ));
     limits.maximum_depth = 2;
     limits.maximum_nodes = 2;
     assert!(matches!(
-        ExactEvaluator::evaluate(&nested, &ExactInputBundle::new(vec![]), limits),
+        ExactEvaluator::evaluate(&nested, &ExactInputBundle::empty(), limits),
         Err(gameplay_standard::ExactEvaluationError::NodeQuotaExceeded { .. })
     ));
     limits.maximum_nodes = 3;
@@ -1967,13 +2338,13 @@ fn exact_quota_matrix_accepts_each_limit_and_rejects_one_over() {
     limits.maximum_inputs = 2;
     limits.maximum_arity = 1;
     assert!(matches!(
-        ExactEvaluator::evaluate(&aggregate, &ExactInputBundle::new(vec![]), limits),
+        ExactEvaluator::evaluate(&aggregate, &ExactInputBundle::empty(), limits),
         Err(gameplay_standard::ExactEvaluationError::ArityExceeded { .. })
     ));
     limits.maximum_arity = 2;
     limits.maximum_work = 2;
     assert!(matches!(
-        ExactEvaluator::evaluate(&nested, &ExactInputBundle::new(vec![]), limits),
+        ExactEvaluator::evaluate(&nested, &ExactInputBundle::empty(), limits),
         Err(gameplay_standard::ExactEvaluationError::WorkQuotaExceeded { .. })
     ));
 }
@@ -2073,7 +2444,7 @@ fn exact_predicates_use_one_aggregate_budget_for_both_operands() {
         maximum_arity: 0,
         maximum_work: 3,
     };
-    assert!(ExactEvaluator::evaluate(&operand, &ExactInputBundle::new(vec![]), each).is_ok());
+    assert!(ExactEvaluator::evaluate(&operand, &ExactInputBundle::empty(), each).is_ok());
     let node_limited = ExactExprLimits {
         maximum_depth: 2,
         maximum_nodes: 5,
@@ -2082,11 +2453,7 @@ fn exact_predicates_use_one_aggregate_budget_for_both_operands() {
         maximum_work: 6,
     };
     assert!(matches!(
-        ExactEvaluator::evaluate_predicate(
-            &predicate,
-            &ExactInputBundle::new(vec![]),
-            node_limited
-        ),
+        ExactEvaluator::evaluate_predicate(&predicate, &ExactInputBundle::empty(), node_limited),
         Err(gameplay_standard::ExactEvaluationError::NodeQuotaExceeded { .. })
     ));
     let work_limited = ExactExprLimits {
@@ -2097,11 +2464,7 @@ fn exact_predicates_use_one_aggregate_budget_for_both_operands() {
         maximum_work: 5,
     };
     assert!(matches!(
-        ExactEvaluator::evaluate_predicate(
-            &predicate,
-            &ExactInputBundle::new(vec![]),
-            work_limited
-        ),
+        ExactEvaluator::evaluate_predicate(&predicate, &ExactInputBundle::empty(), work_limited),
         Err(gameplay_standard::ExactEvaluationError::WorkQuotaExceeded { .. })
     ));
     let accepted = ExactExprLimits {
@@ -2111,12 +2474,10 @@ fn exact_predicates_use_one_aggregate_budget_for_both_operands() {
         maximum_arity: 0,
         maximum_work: 6,
     };
-    assert!(ExactEvaluator::evaluate_predicate(
-        &predicate,
-        &ExactInputBundle::new(vec![]),
-        accepted
-    )
-    .unwrap());
+    assert!(
+        ExactEvaluator::evaluate_predicate(&predicate, &ExactInputBundle::empty(), accepted)
+            .unwrap()
+    );
 }
 
 #[test]
@@ -2317,7 +2678,7 @@ fn exact_floor_and_truncating_division_remain_distinct() {
     assert_eq!(
         ExactEvaluator::evaluate(
             &floor,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             ExactExprLimits::default()
         )
         .unwrap()
@@ -2327,7 +2688,7 @@ fn exact_floor_and_truncating_division_remain_distinct() {
     assert_eq!(
         ExactEvaluator::evaluate(
             &truncating,
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             ExactExprLimits::default()
         )
         .unwrap()
@@ -2619,6 +2980,10 @@ fn committed_goldens_are_the_cross_language_definition_surface() {
         "../../../../fixtures/gameplay-standard/continuous-schema-2.canonical.json"
     ))
     .unwrap();
+    let numeric = decode_canonical_rule_package(include_bytes!(
+        "../../../../fixtures/gameplay-standard/fixed-power-bounded-roll-schema-1.canonical.json"
+    ))
+    .unwrap();
     assert_eq!(
         gameplay_standard::decode_exact_definition(&exact)
             .unwrap()
@@ -2633,6 +2998,11 @@ fn committed_goldens_are_the_cross_language_definition_surface() {
             .family(),
         "continuous"
     );
+    let numeric = gameplay_standard::decode_exact_definition(&numeric).unwrap();
+    assert!(matches!(
+        numeric.definition.expression(),
+        ExactExpr::FixedPower(_)
+    ));
 }
 
 #[derive(Debug, PartialEq, Eq)]

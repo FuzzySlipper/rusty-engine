@@ -198,7 +198,7 @@ fn unique_operations_are_explicit_candidate_leaves_with_complete_guards() {
     let transfer_plan = transfer
         .plan(
             &bindings(&transfer),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -207,7 +207,7 @@ fn unique_operations_are_explicit_candidate_leaves_with_complete_guards() {
     let equip_plan = equip
         .plan(
             &bindings(&equip),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -216,7 +216,7 @@ fn unique_operations_are_explicit_candidate_leaves_with_complete_guards() {
     let unequip_plan = unequip
         .plan(
             &bindings(&unequip),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -225,7 +225,7 @@ fn unique_operations_are_explicit_candidate_leaves_with_complete_guards() {
     let swap_plan = swap
         .plan(
             &bindings(&swap),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -282,7 +282,7 @@ fn unique_plans_reject_stale_item_and_containment_without_publication() {
     let plan = equip
         .plan(
             &bindings(&equip),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -301,7 +301,7 @@ fn unique_plans_reject_stale_item_and_containment_without_publication() {
     let containment_plan = equip
         .plan(
             &bindings(&equip),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &containment_source,
             &catalog,
             &context(),
@@ -341,7 +341,7 @@ fn unique_equipment_authoring_rejects_structural_slots_before_candidate_executio
     assert!(exact_limit
         .plan(
             &bindings(&exact_limit),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -358,7 +358,7 @@ fn unique_equipment_authoring_rejects_structural_slots_before_candidate_executio
     assert!(matches!(
         limit_plus_one.plan(
             &bindings(&limit_plus_one),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -377,7 +377,7 @@ fn unique_equipment_authoring_rejects_structural_slots_before_candidate_executio
     assert!(matches!(
         duplicate.plan(
             &bindings(&duplicate),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -394,7 +394,7 @@ fn unique_equipment_authoring_rejects_structural_slots_before_candidate_executio
     assert!(matches!(
         self_swap.plan(
             &bindings(&self_swap),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &source,
             &catalog,
             &context(),
@@ -422,7 +422,7 @@ fn unique_sequence_keeps_authority_unchanged_until_one_candidate_publication() {
     let equip_plan = equip
         .plan(
             &bindings(&equip),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &authority,
             &catalog,
             &context(),
@@ -431,7 +431,7 @@ fn unique_sequence_keeps_authority_unchanged_until_one_candidate_publication() {
     let transfer_plan = transfer
         .plan(
             &bindings(&transfer),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &authority,
             &catalog,
             &context(),
@@ -469,7 +469,7 @@ fn unique_sequence_keeps_authority_unchanged_until_one_candidate_publication() {
     let swap_plan = swap
         .plan(
             &bindings(&swap),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &authority,
             &catalog,
             &context(),

@@ -27,11 +27,12 @@ fn standard_contract_descriptor() -> Value {
             {
                 "id": "exact", "schemaVersion": 1,
                 "evaluatorSemanticsVersion": EXACT_EVALUATOR_SEMANTICS_VERSION,
-                "operations": ["literal", "input", "add", "subtract", "multiply", "floorDivide", "truncatingDivide", "min", "max"],
+                "operations": ["literal", "input", "add", "subtract", "multiply", "floorDivide", "truncatingDivide", "fixedPower", "min", "max"],
                 "inputKinds": [
                     {"tag":"parameter","fields":["kind","role","id"]},
                     {"tag":"fact","fields":["kind","role","id"]},
                     {"tag":"roll","fields":["kind","role","id"]},
+                    {"tag":"boundedRoll","fields":["kind","role","id","minimum","maximum"]},
                     {"tag":"choice","fields":["kind","role","id"]},
                     {"tag":"standardStat","fields":["kind","role","stat"]},
                     {"tag":"standardTrackCurrent","fields":["kind","role","track"]},

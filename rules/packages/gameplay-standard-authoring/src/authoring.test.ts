@@ -34,6 +34,7 @@ test('typed authoring converges exactly on the Rust-owned exact, continuous, and
   const artifacts = standardFixtureArtifacts();
   const fixtures = {
     exact: '../../../../fixtures/gameplay-standard/exact-schema-1.canonical.json',
+    fixedPowerBoundedRoll: '../../../../fixtures/gameplay-standard/fixed-power-bounded-roll-schema-1.canonical.json',
     continuous: '../../../../fixtures/gameplay-standard/continuous-schema-2.canonical.json',
     extensionSchema1: '../../../../fixtures/gameplay-standard/extension-schema-1.canonical.json',
     extensionSchema2: '../../../../fixtures/gameplay-standard/extension-schema-2.canonical.json',

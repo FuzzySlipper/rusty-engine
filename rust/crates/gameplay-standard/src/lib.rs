@@ -50,9 +50,11 @@ pub use continuous::{
 };
 pub use contract::encode_standard_contract_descriptor;
 pub use exact::{
-    compile_exact_expr, CompileExactExpr, ExactComparison, ExactCompileError, ExactEvaluationError,
-    ExactEvaluator, ExactExpr, ExactExprLimits, ExactExprRequirements, ExactInputBundle,
-    ExactInputReference, StandardExactFactReference, EXACT_EVALUATOR_SEMANTICS_VERSION,
+    compile_exact_expr, BoundedRollDescriptor, CompileExactExpr, ExactComparison,
+    ExactCompileError, ExactEvaluationError, ExactEvaluator, ExactExpr, ExactExprLimits,
+    ExactExprRequirements, ExactInputBundle, ExactInputBundleError, ExactInputIdentity,
+    ExactInputReference, FixedPowerExpr, StandardExactFactReference,
+    EXACT_EVALUATOR_SEMANTICS_VERSION,
 };
 pub use extension::{
     admit_standard_extension, compile_standard_extension, decode_standard_extension,

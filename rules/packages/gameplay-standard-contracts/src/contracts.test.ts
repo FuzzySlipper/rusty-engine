@@ -31,6 +31,22 @@ test('generated exact shapes validate closed fields, roles, mechanics IDs, and s
   expectCode(() => decodeStandardPayload({ ...exact, roles: [{ role: 'self', capabilities: ['z', 'a'] }] }), 'non-canonical-roles');
 });
 
+test('generated exact grammar admits bounded caller evidence and fixed-point power only at their exact boundaries', () => {
+  const numeric = {
+    family: 'exact', roles: [{ role: 'self', capabilities: [] }], semanticsVersion: 1,
+    source: 'rules', subject: 'numeric_formula',
+    tree: {
+      op: 'fixedPower', scale: 1000,
+      base: { op: 'input', input: { kind: 'boundedRoll', role: 'self', id: 'attack', minimum: 1, maximum: 20 } },
+      exponent: { op: 'literal', value: 2 },
+    },
+  } as const;
+  assert.deepEqual(decodeStandardPayload(numeric), numeric);
+  expectCode(() => decodeStandardPayload({ ...numeric, tree: { ...numeric.tree, scale: 0 } }), 'invalid-node');
+  expectCode(() => decodeStandardPayload({ ...numeric, tree: { ...numeric.tree, base: { op: 'input', input: { kind: 'boundedRoll', role: 'self', id: 'attack', minimum: 21, maximum: 20 } } } }), 'invalid-node');
+  expectCode(() => decodeStandardPayload({ ...numeric, tree: { ...numeric.tree, base: { op: 'input', input: { kind: 'boundedRoll', role: 'self', id: 'attack', minimum: 1, maximum: 20, ignored: true } } } }), 'unknown-field');
+});
+
 test('generated continuous grammar rejects negative zero and non-finite binary64 encodings', () => {
   const continuous = {
     family: 'continuous', roles: [], semanticsVersion: 1, source: 'rules', subject: 'speed_formula',
@@ -98,6 +114,20 @@ test('composed exact product leaves require a strict codec and preflight their c
   assert.equal(decodeCalls, 1);
   expectCode(() => decodeComposedExactPayload({ ...definition, tree: product({ label: 1.5 }) }, codec), 'invalid-node');
   assert.equal(decodeCalls, 1);
+});
+
+test('composed exact retains the fixed-power grammar before downstream product compilation', () => {
+  const codec = {
+    schema: { namespace: 'example.numeric', schemaVersion: 1 },
+    decode(payload: unknown) { return payload as { readonly unused: boolean }; },
+    encode(payload: { readonly unused: boolean }) { return payload; },
+  } as const;
+  const definition = {
+    family: 'composedExact', semanticsVersion: 1, subject: 'formula', source: 'rules', extension: codec.schema, roles: [],
+    tree: { op: 'fixedPower', base: { op: 'literal', value: 1040 }, exponent: { op: 'literal', value: 2 }, scale: 1000 },
+  } as const;
+  assert.deepEqual(decodeComposedExactPayload(definition, codec), definition);
+  expectCode(() => decodeComposedExactPayload({ ...definition, tree: { ...definition.tree, scale: 1_000_001 } }, codec), 'invalid-node');
 });
 
 function expectCode(action: () => unknown, code: string): void {

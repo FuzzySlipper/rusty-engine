@@ -592,6 +592,23 @@ fn decode_exact_expr(value: &Value, path: &str) -> Result<ExactExpr, StandardDef
         "multiply" => binary_exact(object, path, ExactExpr::Multiply),
         "floorDivide" => binary_exact(object, path, ExactExpr::FloorDivide),
         "truncatingDivide" => binary_exact(object, path, ExactExpr::TruncatingDivide),
+        "fixedPower" => {
+            ensure_fields(object, &["op", "base", "exponent", "scale"], path)?;
+            let scale_path = format!("{path}.scale");
+            let scale = required(object, "scale")?
+                .as_i64()
+                .ok_or_else(|| malformed(&scale_path, "must be an exact signed integer"))?;
+            Ok(ExactExpr::fixed_power(
+                decode_exact_expr(required(object, "base")?, &format!("{path}.base"))?,
+                decode_exact_expr(required(object, "exponent")?, &format!("{path}.exponent"))?,
+                gameplay_mechanics::MechanicsScalar::new(scale).map_err(|error| {
+                    StandardDefinitionError::ExactLiteral {
+                        path: scale_path,
+                        error,
+                    }
+                })?,
+            ))
+        }
         "min" => aggregate_exact(object, path, ExactExpr::Min),
         "max" => aggregate_exact(object, path, ExactExpr::Max),
         _ => Err(malformed(
@@ -655,6 +672,34 @@ fn decode_exact_input(
         "parameter" => ordinary(|role, id| Input::Parameter { role, id }),
         "fact" => ordinary(|role, id| Input::Fact { role, id }),
         "roll" => ordinary(|role, id| Input::Roll { role, id }),
+        "boundedRoll" => {
+            ensure_fields(object, &["kind", "role", "id", "minimum", "maximum"], path)?;
+            let scalar = |field: &str| {
+                required(object, field)?
+                    .as_i64()
+                    .ok_or_else(|| {
+                        malformed(
+                            &format!("{path}.{field}"),
+                            "must be an exact signed integer",
+                        )
+                    })
+                    .and_then(|value| {
+                        gameplay_mechanics::MechanicsScalar::new(value).map_err(|error| {
+                            StandardDefinitionError::ExactLiteral {
+                                path: format!("{path}.{field}"),
+                                error,
+                            }
+                        })
+                    })
+            };
+            Ok(Input::bounded_roll(
+                role()?,
+                crate::InputId::parse(string(required(object, "id")?, &format!("{path}.id"))?)
+                    .map_err(StandardDefinitionError::Role)?,
+                scalar("minimum")?,
+                scalar("maximum")?,
+            ))
+        }
         "choice" => ordinary(|role, id| Input::Choice { role, id }),
         "standardStat" => {
             ensure_fields(object, &["kind", "role", "stat"], path)?;
@@ -861,6 +906,9 @@ fn exact_expr_payload(expression: &ExactExpr) -> Value {
             exact_expr_payload(a),
             exact_expr_payload(b),
         ),
+        FixedPower(power) => {
+            json!({"op":"fixedPower","base":exact_expr_payload(&power.base),"exponent":exact_expr_payload(&power.exponent),"scale":power.scale.get()})
+        }
         Min(values) => aggregate("min", values, exact_expr_payload),
         Max(values) => aggregate("max", values, exact_expr_payload),
     }
@@ -903,6 +951,9 @@ fn exact_input_payload(input: &crate::ExactInputReference) -> Value {
         }
         Input::Fact { role, id } => json!({"kind":"fact","role":role.as_str(),"id":id.as_str()}),
         Input::Roll { role, id } => json!({"kind":"roll","role":role.as_str(),"id":id.as_str()}),
+        Input::BoundedRoll { descriptor } => {
+            json!({"kind":"boundedRoll","role":descriptor.role().as_str(),"id":descriptor.id().as_str(),"minimum":descriptor.minimum().get(),"maximum":descriptor.maximum().get()})
+        }
         Input::Choice { role, id } => {
             json!({"kind":"choice","role":role.as_str(),"id":id.as_str()})
         }

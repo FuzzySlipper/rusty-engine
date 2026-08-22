@@ -94,9 +94,24 @@ pub enum ComposedExactExpr<Leaf> {
     Multiply(Box<Self>, Box<Self>),
     FloorDivide(Box<Self>, Box<Self>),
     TruncatingDivide(Box<Self>, Box<Self>),
+    FixedPower {
+        base: Box<Self>,
+        exponent: Box<Self>,
+        scale: Box<MechanicsScalar>,
+    },
     Min(Vec<Self>),
     Max(Vec<Self>),
     Product(ComposedExactProductLeaf<Leaf>),
+}
+impl<Leaf> ComposedExactExpr<Leaf> {
+    /// Builds a fixed-point standard node while retaining product leaf typing.
+    pub fn fixed_power(base: Self, exponent: Self, scale: MechanicsScalar) -> Self {
+        Self::FixedPower {
+            base: Box::new(base),
+            exponent: Box::new(exponent),
+            scale: Box::new(scale),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -548,6 +563,10 @@ fn collect_leaf_evidence<Leaf>(
             collect_leaf_evidence(left, schema, into);
             collect_leaf_evidence(right, schema, into);
         }
+        ComposedExactExpr::FixedPower { base, exponent, .. } => {
+            collect_leaf_evidence(base, schema, into);
+            collect_leaf_evidence(exponent, schema, into);
+        }
         ComposedExactExpr::Min(values) | ComposedExactExpr::Max(values) => {
             for value in values {
                 collect_leaf_evidence(value, schema, into);
@@ -571,6 +590,21 @@ fn compile_expression<C: ComposedExactLeafCodec>(
         ComposedExactExpr::FloorDivide(a, b) => binary::<C>(a, b, ExactExpr::FloorDivide, path)?,
         ComposedExactExpr::TruncatingDivide(a, b) => {
             binary::<C>(a, b, ExactExpr::TruncatingDivide, path)?
+        }
+        ComposedExactExpr::FixedPower {
+            base,
+            exponent,
+            scale,
+        } => {
+            let (base, _, mut capabilities) =
+                compile_expression::<C>(base, &child_path(path, ".base"))?;
+            let (exponent, _, more) =
+                compile_expression::<C>(exponent, &child_path(path, ".exponent"))?;
+            capabilities.extend(more);
+            (
+                ExactExpr::fixed_power(base, exponent, **scale),
+                capabilities,
+            )
         }
         ComposedExactExpr::Min(values) => aggregate_compile::<C>(values, ExactExpr::Min, path)?,
         ComposedExactExpr::Max(values) => aggregate_compile::<C>(values, ExactExpr::Max, path)?,

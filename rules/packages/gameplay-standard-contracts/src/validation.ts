@@ -43,11 +43,12 @@ export {
 type Family = 'exact' | 'continuous';
 type Tree = ExactTree | ContinuousTree;
 type Input = ExactInput | ContinuousInput;
-type Metrics = { nodes: number; work: number; inputs: Set<string>; productBytes: number };
+type Metrics = { nodes: number; work: number; inputs: Set<string>; inputDescriptors: Map<string, string>; productBytes: number };
 type WireObject = Record<string, unknown> & {
   family?: unknown; roles?: unknown; semanticsVersion?: unknown; source?: unknown; subject?: unknown; tree?: unknown;
   namespace?: unknown; schemaVersion?: unknown; kind?: unknown; payload?: unknown; role?: unknown; capabilities?: unknown;
   op?: unknown; value?: unknown; bits?: unknown; input?: unknown; values?: unknown; left?: unknown; right?: unknown;
+  base?: unknown; exponent?: unknown; scale?: unknown; minimum?: unknown; maximum?: unknown;
 };
 
 /** Decodes a closed standard payload using only Rust-generated grammar and limits. */
@@ -62,7 +63,7 @@ export function decodeStandardPayload(value: unknown): StandardDefinitionPayload
   identity(string(payload.source, 'invalid-identity', 'definition.source must be a string'), 'source');
   const roles = decodeRoles(payload.roles);
   const declared = new Set(roles.map((role) => role.role));
-  const metrics: Metrics = { nodes: 0, work: 0, inputs: new Set(), productBytes: 0 };
+  const metrics: Metrics = { nodes: 0, work: 0, inputs: new Set(), inputDescriptors: new Map(), productBytes: 0 };
   const tree = decodeTree(payload.tree, family, declared, metrics, 1);
   const limits = STANDARD_LIMITS[family];
   if (metrics.inputs.size > limits.maximumInputs) fail('input-quota-exceeded', `${family} expression has too many distinct inputs`);
@@ -134,11 +135,11 @@ export function decodeComposedExactPayload<Payload extends JsonValue>(
   const declared = new Set(roles.map((role) => role.role));
   // Complete wire preflight deliberately occurs before the first product codec call.
   // A later malformed node must never make an earlier product decoder observable.
-  const preflight: Metrics = { nodes: 0, work: 0, inputs: new Set(), productBytes: 0 };
+  const preflight: Metrics = { nodes: 0, work: 0, inputs: new Set(), inputDescriptors: new Map(), productBytes: 0 };
   preflightComposedTree(payload.tree, declared, preflight, 1, numericPolicy);
   if (preflight.inputs.size > STANDARD_LIMITS.exact.maximumInputs) fail('input-quota-exceeded', 'composed exact input quota exceeded');
   if (preflight.work > STANDARD_LIMITS.exact.maximumWork) fail('work-quota-exceeded', 'composed exact wire work quota exceeded');
-  const metrics: Metrics = { nodes: 0, work: 0, inputs: new Set(), productBytes: 0 };
+  const metrics: Metrics = { nodes: 0, work: 0, inputs: new Set(), inputDescriptors: new Map(), productBytes: 0 };
   const tree = decodeComposedTree(payload.tree, declared, metrics, 1, codec, numericPolicy);
   return { family: STANDARD_COMPOSED_EXACT.family, extension: { namespace, schemaVersion: schemaVersion as number }, roles, semanticsVersion: STANDARD_COMPOSED_EXACT.semanticsVersion, source, subject, tree };
 }
@@ -165,7 +166,8 @@ function preflightComposedTree(value: unknown, roles: ReadonlySet<string>, metri
   }
   if (!includes(STANDARD_FAMILIES.exact.operations, op)) fail('invalid-node', 'unsupported composed exact standard operation');
   if (op === 'literal') { fields(tree, [...STANDARD_FIELD_ORDER.Literal], 'composed literal'); if (!Number.isSafeInteger(tree.value) || Object.is(tree.value, -0) || (tree.value as number) < STANDARD_LIMITS.exact.minimumScalar || (tree.value as number) > STANDARD_LIMITS.exact.maximumScalar) fail('invalid-literal', 'composed exact literal is invalid'); return; }
-  if (op === 'input') { fields(tree, [...STANDARD_FIELD_ORDER.Input], 'composed input'); const input = decodeInput(tree.input, 'exact', roles); metrics.inputs.add(inputIdentity(input)); return; }
+  if (op === 'input') { fields(tree, [...STANDARD_FIELD_ORDER.Input], 'composed input'); registerInput(metrics, decodeInput(tree.input, 'exact', roles)); return; }
+  if (op === 'fixedPower') { fields(tree, ['op', 'base', 'exponent', 'scale'], 'composed fixedPower'); const scale = exactScalar(tree.scale, 'composed fixedPower.scale'); if (scale < 1 || scale > 1_000_000) fail('invalid-node', 'composed fixedPower.scale must be in 1..=1000000'); preflightComposedTree(tree.base, roles, metrics, depth + 1, numericPolicy); preflightComposedTree(tree.exponent, roles, metrics, depth + 1, numericPolicy); return; }
   if (op === 'min' || op === 'max') { fields(tree, [...STANDARD_FIELD_ORDER.Aggregate], 'composed aggregate'); if (!Array.isArray(tree.values) || tree.values.length === 0) fail('invalid-node', 'composed aggregate must be nonempty'); if (tree.values.length > STANDARD_LIMITS.exact.maximumArity) fail('arity-quota-exceeded', 'composed aggregate arity quota exceeded'); tree.values.forEach((child) => preflightComposedTree(child, roles, metrics, depth + 1, numericPolicy)); return; }
   fields(tree, [...STANDARD_FIELD_ORDER.Binary], 'composed binary');
   preflightComposedTree(tree.left, roles, metrics, depth + 1, numericPolicy);
@@ -195,6 +197,7 @@ function decodeComposedTree<Payload extends JsonValue>(value: unknown, roles: Re
   if (!includes(STANDARD_FAMILIES.exact.operations, op)) fail('invalid-node', 'unsupported composed exact standard operation');
   if (op === 'literal') { fields(tree, [...STANDARD_FIELD_ORDER.Literal], 'composed literal'); if (!Number.isSafeInteger(tree.value) || Object.is(tree.value, -0) || (tree.value as number) < STANDARD_LIMITS.exact.minimumScalar || (tree.value as number) > STANDARD_LIMITS.exact.maximumScalar) fail('invalid-literal', 'composed exact literal is invalid'); return { op, value: tree.value as number }; }
   if (op === 'input') { fields(tree, [...STANDARD_FIELD_ORDER.Input], 'composed input'); return { op, input: decodeInput(tree.input, 'exact', roles) }; }
+  if (op === 'fixedPower') { fields(tree, ['op', 'base', 'exponent', 'scale'], 'composed fixedPower'); const scale = exactScalar(tree.scale, 'composed fixedPower.scale'); if (scale < 1 || scale > 1_000_000) fail('invalid-node', 'composed fixedPower.scale must be in 1..=1000000'); return { op, base: decodeComposedTree(tree.base, roles, metrics, depth + 1, codec, numericPolicy), exponent: decodeComposedTree(tree.exponent, roles, metrics, depth + 1, codec, numericPolicy), scale }; }
   if (op === 'min' || op === 'max') { fields(tree, [...STANDARD_FIELD_ORDER.Aggregate], 'composed aggregate'); if (!Array.isArray(tree.values) || tree.values.length === 0) fail('invalid-node', 'composed aggregate must be nonempty'); if (tree.values.length > STANDARD_LIMITS.exact.maximumArity) fail('arity-quota-exceeded', 'composed aggregate arity quota exceeded'); return { op, values: tree.values.map((child) => decodeComposedTree(child, roles, metrics, depth + 1, codec, numericPolicy)) }; }
   fields(tree, [...STANDARD_FIELD_ORDER.Binary], 'composed binary');
   return { op: op as 'add' | 'subtract' | 'multiply' | 'floorDivide' | 'truncatingDivide', left: decodeComposedTree(tree.left, roles, metrics, depth + 1, codec, numericPolicy), right: decodeComposedTree(tree.right, roles, metrics, depth + 1, codec, numericPolicy) };
@@ -251,8 +254,14 @@ function decodeTree(value: unknown, family: Family, roles: ReadonlySet<string>, 
   if (op === 'input') {
     fields(tree, [...STANDARD_FIELD_ORDER.Input], 'input');
     const input = decodeInput(tree.input, family, roles);
-    metrics.inputs.add(inputIdentity(input));
+    registerInput(metrics, input);
     return { op, input } as Tree;
+  }
+  if (family === 'exact' && op === 'fixedPower') {
+    fields(tree, ['op', 'base', 'exponent', 'scale'], 'fixedPower');
+    const scale = exactScalar(tree.scale, 'fixedPower.scale');
+    if (scale < 1 || scale > 1_000_000) fail('invalid-node', 'fixedPower.scale must be in 1..=1000000');
+    return { op, base: decodeTree(tree.base, family, roles, metrics, depth + 1), exponent: decodeTree(tree.exponent, family, roles, metrics, depth + 1), scale } as Tree;
   }
   if (op === 'min' || op === 'max') {
     fields(tree, [...STANDARD_FIELD_ORDER.Aggregate], 'aggregate');
@@ -273,18 +282,37 @@ function decodeInput(value: unknown, family: Family, roles: ReadonlySet<string>)
   const role = string(input.role, 'invalid-identity', 'input.role must be a string');
   identity(role, 'role');
   if (!roles.has(role)) fail('undeclared-input-role', `input role ${role} is not declared`);
-  const result: Record<string, string> = { kind, role };
+  const result: Record<string, string | number> = { kind, role };
   for (const field of descriptor.fields.slice(2)) {
+    if (field === 'minimum' || field === 'maximum') {
+      result[field] = exactScalar(input[field], `input.${field}`);
+      continue;
+    }
     const identityType = field === 'id' ? 'input' : field === 'stat' ? 'mechanicsStat' : 'mechanicsTrack';
     const item = string(input[field], 'invalid-identity', `input.${field} must be a string`);
     identity(item, identityType);
     result[field] = item;
   }
+  if (kind === 'boundedRoll' && (result['minimum'] as number) > (result['maximum'] as number)) fail('invalid-node', 'boundedRoll.minimum must not exceed boundedRoll.maximum');
   return result as Input;
+}
+
+function exactScalar(value: unknown, path: string): number {
+  if (!Number.isSafeInteger(value) || Object.is(value, -0) || (value as number) < STANDARD_LIMITS.exact.minimumScalar || (value as number) > STANDARD_LIMITS.exact.maximumScalar) fail('invalid-literal', `${path} must be a Rust exact scalar`);
+  return value as number;
 }
 
 function inputIdentity(input: Input): string {
   return 'id' in input ? `${input.kind}:${input.role}:${input.id}` : 'stat' in input ? `${input.kind}:${input.role}:${input.stat}` : `${input.kind}:${input.role}:${input.track}`;
+}
+
+function registerInput(metrics: Metrics, input: Input): void {
+  const identity = inputIdentity(input);
+  const descriptor = JSON.stringify(input);
+  const existing = metrics.inputDescriptors.get(identity);
+  if (existing !== undefined && existing !== descriptor) fail('invalid-node', `conflicting descriptors for exact input ${identity}`);
+  metrics.inputDescriptors.set(identity, descriptor);
+  metrics.inputs.add(identity);
 }
 
 function identity(value: string, kind: keyof typeof STANDARD_IDENTITIES): void {

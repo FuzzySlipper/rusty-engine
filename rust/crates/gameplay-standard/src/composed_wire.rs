@@ -1,5 +1,7 @@
 //! Strict JSON transport for composed exact definitions.
 
+use std::collections::BTreeMap;
+
 use gameplay_mechanics::MechanicsScalar;
 use gameplay_rules::{AdmittedRulePackage, RulePackageSchemaVersion, RuleSourceId, RuleSubjectId};
 use serde_json::{json, Value};
@@ -12,7 +14,11 @@ use crate::composed::{
 use crate::composed_error::{
     ComposedExactDefinitionError, ComposedExactError, ComposedExactProductContext,
 };
-use crate::{CapabilityRoleId, ExactInputReference, RoleRequirement, StandardExtensionSchema};
+use crate::exact::MAX_FIXED_POWER_SCALE;
+use crate::{
+    CapabilityRoleId, ExactInputIdentity, ExactInputReference, RoleRequirement,
+    StandardExtensionSchema,
+};
 
 pub(crate) fn encode_definition<C: ComposedExactLeafCodec>(
     definition: &ComposedExactDefinition<C::Leaf>,
@@ -34,6 +40,13 @@ pub(crate) fn encode_expr<C: ComposedExactLeafCodec>(
         ComposedExactExpr::FloorDivide(a, b) => wire_binary::<C>("floorDivide", a, b, path)?,
         ComposedExactExpr::TruncatingDivide(a, b) => {
             wire_binary::<C>("truncatingDivide", a, b, path)?
+        }
+        ComposedExactExpr::FixedPower {
+            base,
+            exponent,
+            scale,
+        } => {
+            json!({"op":"fixedPower","base":encode_expr::<C>(base, &child_path(path, ".base"))?,"exponent":encode_expr::<C>(exponent, &child_path(path, ".exponent"))?,"scale":scale.get()})
         }
         ComposedExactExpr::Min(values) => {
             json!({"op":"min","values":values.iter().enumerate().map(|(index, value)| encode_expr::<C>(value, &child_path(path, &format!(".values[{index}]")))).collect::<Result<Vec<_>,_>>()?})
@@ -110,6 +123,31 @@ pub(crate) fn decode_expr<C: ComposedExactLeafCodec>(
         "truncatingDivide" => {
             decode_binary::<C>(object, path, package, ComposedExactExpr::TruncatingDivide)
         }
+        "fixedPower" => {
+            fields(object, &["op", "base", "exponent", "scale"], path)?;
+            let scale =
+                exact_signed_integer(required(object, "scale", path)?).ok_or_else(|| {
+                    malformed(&format!("{path}.scale"), "must be an exact signed integer")
+                })?;
+            Ok(ComposedExactExpr::fixed_power(
+                decode_expr::<C>(
+                    required(object, "base", path)?,
+                    &format!("{path}.base"),
+                    package,
+                )?,
+                decode_expr::<C>(
+                    required(object, "exponent", path)?,
+                    &format!("{path}.exponent"),
+                    package,
+                )?,
+                MechanicsScalar::new(scale).map_err(|error| {
+                    ComposedExactError::Wire(ComposedExactDefinitionError::ExactLiteral {
+                        path: format!("{path}.scale"),
+                        error,
+                    })
+                })?,
+            ))
+        }
         "min" => decode_aggregate::<C>(object, path, package, ComposedExactExpr::Min),
         "max" => decode_aggregate::<C>(object, path, package, ComposedExactExpr::Max),
         "product" => {
@@ -179,6 +217,37 @@ pub(crate) fn decode_expr<C: ComposedExactLeafCodec>(
 pub(crate) struct WirePreflight {
     nodes: usize,
     product_bytes: usize,
+    input_descriptors: BTreeMap<ExactInputIdentity, ExactInputReference>,
+}
+impl WirePreflight {
+    fn register_input(
+        &mut self,
+        input: &ExactInputReference,
+        path: &str,
+    ) -> Result<(), ComposedExactDefinitionError> {
+        if let ExactInputReference::BoundedRoll { descriptor } = input {
+            if descriptor.minimum() > descriptor.maximum() {
+                return Err(ComposedExactDefinitionError::InvalidBoundedRollDescriptor {
+                    path: path.to_owned(),
+                    input: input.clone(),
+                });
+            }
+        }
+        let identity = input.identity();
+        if let Some(existing) = self.input_descriptors.get(&identity) {
+            if existing != input {
+                return Err(ComposedExactDefinitionError::ConflictingInputDescriptor {
+                    path: path.to_owned(),
+                    identity,
+                    first: Box::new(existing.clone()),
+                    second: Box::new(input.clone()),
+                });
+            }
+        } else {
+            self.input_descriptors.insert(identity, input.clone());
+        }
+        Ok(())
+    }
 }
 pub(crate) fn preflight_wire_tree(
     value: &Value,
@@ -230,6 +299,7 @@ pub(crate) fn preflight_wire_tree(
                     role: input.role().clone(),
                 });
             }
+            preflight.register_input(&input, &format!("{path}.input"))?;
         }
         "add" | "subtract" | "multiply" | "floorDivide" | "truncatingDivide" => {
             fields(object, &["op", "left", "right"], path)?;
@@ -244,6 +314,36 @@ pub(crate) fn preflight_wire_tree(
             preflight_wire_tree(
                 required(object, "right", path)?,
                 &format!("{path}.right"),
+                package,
+                depth + 1,
+                preflight,
+                roles,
+            )?;
+        }
+        "fixedPower" => {
+            fields(object, &["op", "base", "exponent", "scale"], path)?;
+            let scale =
+                exact_signed_integer(required(object, "scale", path)?).ok_or_else(|| {
+                    malformed(&format!("{path}.scale"), "must be an exact signed integer")
+                })?;
+            let scale = MechanicsScalar::new(scale).map_err(|error| {
+                ComposedExactDefinitionError::ExactLiteral {
+                    path: format!("{path}.scale"),
+                    error,
+                }
+            })?;
+            validate_fixed_power_scale(scale)?;
+            preflight_wire_tree(
+                required(object, "base", path)?,
+                &format!("{path}.base"),
+                package,
+                depth + 1,
+                preflight,
+                roles,
+            )?;
+            preflight_wire_tree(
+                required(object, "exponent", path)?,
+                &format!("{path}.exponent"),
                 package,
                 depth + 1,
                 preflight,
@@ -394,6 +494,15 @@ pub(crate) fn validate_wire_node<Leaf>(
             validate_wire_node(a, depth + 1, limits, nodes)?;
             validate_wire_node(b, depth + 1, limits, nodes)
         }
+        ComposedExactExpr::FixedPower {
+            base,
+            exponent,
+            scale,
+        } => {
+            validate_fixed_power_scale(**scale)?;
+            validate_wire_node(base, depth + 1, limits, nodes)?;
+            validate_wire_node(exponent, depth + 1, limits, nodes)
+        }
         ComposedExactExpr::Min(values) | ComposedExactExpr::Max(values) => {
             if values.is_empty() {
                 return Err(ComposedExactDefinitionError::EmptyAggregate);
@@ -410,6 +519,12 @@ pub(crate) fn validate_wire_node<Leaf>(
             Ok(())
         }
     }
+}
+fn validate_fixed_power_scale(scale: MechanicsScalar) -> Result<(), ComposedExactDefinitionError> {
+    if !(1..=MAX_FIXED_POWER_SCALE).contains(&scale.get()) {
+        return Err(ComposedExactDefinitionError::FixedPowerScaleOutOfRange { actual: scale });
+    }
+    Ok(())
 }
 pub(crate) fn decode_schema_at(
     value: &Value,
@@ -490,6 +605,33 @@ pub(crate) fn decode_input(
         "parameter" => ordinary(|r, i| Input::Parameter { role: r, id: i }),
         "fact" => ordinary(|r, i| Input::Fact { role: r, id: i }),
         "roll" => ordinary(|r, i| Input::Roll { role: r, id: i }),
+        "boundedRoll" => {
+            fields(object, &["kind", "role", "id", "minimum", "maximum"], path)?;
+            let scalar = |field: &str| {
+                exact_signed_integer(required(object, field, path)?)
+                    .ok_or_else(|| {
+                        malformed(
+                            &format!("{path}.{field}"),
+                            "must be an exact signed integer",
+                        )
+                    })
+                    .and_then(|value| {
+                        MechanicsScalar::new(value).map_err(|error| {
+                            ComposedExactDefinitionError::ExactLiteral {
+                                path: format!("{path}.{field}"),
+                                error,
+                            }
+                        })
+                    })
+            };
+            Ok(Input::bounded_roll(
+                role()?,
+                crate::InputId::parse(string(object, "id", path)?)
+                    .map_err(ComposedExactDefinitionError::Role)?,
+                scalar("minimum")?,
+                scalar("maximum")?,
+            ))
+        }
         "choice" => ordinary(|r, i| Input::Choice { role: r, id: i }),
         "standardStat" => {
             fields(object, &["kind", "role", "stat"], path)?;
@@ -529,6 +671,9 @@ pub(crate) fn input_payload(input: &ExactInputReference) -> Value {
         }
         Input::Fact { role, id } => json!({"kind":"fact","role":role.as_str(),"id":id.as_str()}),
         Input::Roll { role, id } => json!({"kind":"roll","role":role.as_str(),"id":id.as_str()}),
+        Input::BoundedRoll { descriptor } => {
+            json!({"kind":"boundedRoll","role":descriptor.role().as_str(),"id":descriptor.id().as_str(),"minimum":descriptor.minimum().get(),"maximum":descriptor.maximum().get()})
+        }
         Input::Choice { role, id } => {
             json!({"kind":"choice","role":role.as_str(),"id":id.as_str()})
         }

@@ -62,6 +62,7 @@ pub enum InputKind {
     Parameter,
     Fact,
     Roll,
+    BoundedRoll,
     Choice,
 }
 

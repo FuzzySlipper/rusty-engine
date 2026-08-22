@@ -527,6 +527,20 @@ role. Downstream product leaves compile through a matching static family trait
 to a closed Rust expression before admission, not through a runtime callback,
 registry, or JSON extension path.
 
+Exact syntax additionally admits `boundedRoll` as a caller-supplied, inclusive
+`MechanicsScalar` observation with a stable `(kind, role, id)` identity and
+authored minimum/maximum. It never samples or schedules RNG. Duplicate input
+observations must agree, and contradictory bounded descriptors for one
+identity are rejected rather than overwriting evidence. `fixedPower` evaluates
+its base and exponent first, requires a positive scale in `1..=1_000_000`, a
+nonnegative integer exponent in `0..=64`, and iterates
+`acc = floor((acc * base) / scale)` from `acc = scale` using checked wider
+intermediates. Each iteration consumes exact evaluation work; negative bases,
+invalid scales/exponents, scalar-range failures, and absent/out-of-range
+bounded observations remain typed rejections. These are additive exact v1
+grammar arms: pre-existing exact payload bytes and their interpretation remain
+unchanged.
+
 The bounded [continuous cadence and residual experiment](topics/gameplay/continuous-cadence-experiment.md)
 compares caller-declared partitions without adding an Engine clock, scheduler,
 continuous stat, or persistence aggregate. Its current evidence keeps residual

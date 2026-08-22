@@ -15,11 +15,13 @@ const continuous = descriptor.families.find((family) => family.id === 'continuou
 const composed = descriptor.composedExact;
 if (!exact || !continuous || !descriptor.fieldOrder || !descriptor.identities || !descriptor.failures || !descriptor.extensions || !composed) throw new Error('Rust gameplay-standard descriptor is incomplete');
 
+const inputFieldType = (field) => field === 'minimum' || field === 'maximum' ? 'number' : 'string';
 const inputUnion = (kinds) => kinds.map(({ tag, fields }) => {
   if (!Array.isArray(fields) || fields[0] !== 'kind') throw new Error(`invalid Rust input table for ${tag}`);
-  return `{ readonly kind: ${JSON.stringify(tag)}; ${fields.slice(1).map((field) => `readonly ${field}: string;`).join(' ')} }`;
+  return `{ readonly kind: ${JSON.stringify(tag)}; ${fields.slice(1).map((field) => `readonly ${field}: ${inputFieldType(field)};`).join(' ')} }`;
 }).join('\n  | ');
-const binaryOps = (family) => family.operations.filter((op) => !['literal', 'input', 'min', 'max'].includes(op));
+const binaryOps = (family) => family.operations.filter((op) => !['literal', 'input', 'min', 'max', 'fixedPower'].includes(op));
+const fixedPowerArm = (treeName) => `| { readonly op: 'fixedPower'; readonly base: ${treeName}; readonly exponent: ${treeName}; readonly scale: number }`;
 const literalFields = (family) => family.literal.field;
 const familySource = (family) => `Object.freeze({ schemaVersion: ${family.schemaVersion}, evaluatorSemanticsVersion: ${family.evaluatorSemanticsVersion}, operations: Object.freeze(${JSON.stringify(family.operations)} as const), inputKinds: Object.freeze(${JSON.stringify(family.inputKinds)} as const), literal: Object.freeze(${JSON.stringify(family.literal)} as const) })`;
 const generated = `// Generated from the Rust gameplay-standard contract. Do not edit by hand.
@@ -54,6 +56,7 @@ export type ExactTree =
   | { readonly op: 'literal'; readonly ${literalFields(exact)}: number }
   | { readonly op: 'input'; readonly input: ExactInput }
   | { readonly op: ${binaryOps(exact).map(JSON.stringify).join(' | ')}; readonly left: ExactTree; readonly right: ExactTree }
+  ${fixedPowerArm('ExactTree')}
   | { readonly op: 'min' | 'max'; readonly values: readonly ExactTree[] };
 export type ContinuousTree =
   | { readonly op: 'literal'; readonly ${literalFields(continuous)}: string }
@@ -71,6 +74,7 @@ export type ComposedExactTree<Payload extends JsonValue> =
   | { readonly op: 'literal'; readonly ${literalFields(exact)}: number }
   | { readonly op: 'input'; readonly input: ExactInput }
   | { readonly op: ${binaryOps(exact).map(JSON.stringify).join(' | ')}; readonly left: ComposedExactTree<Payload>; readonly right: ComposedExactTree<Payload> }
+  ${fixedPowerArm('ComposedExactTree<Payload>')}
   | { readonly op: 'min' | 'max'; readonly values: readonly ComposedExactTree<Payload>[] }
   | ComposedExactProductLeaf<Payload>;
 export interface ComposedExactDefinitionPayload<Payload extends JsonValue> { readonly family: typeof STANDARD_COMPOSED_EXACT.family; readonly extension: ComposedExactExtensionSchema; readonly roles: readonly StandardRole[]; readonly semanticsVersion: typeof STANDARD_COMPOSED_EXACT.semanticsVersion; readonly source: string; readonly subject: string; readonly tree: ComposedExactTree<Payload> }
