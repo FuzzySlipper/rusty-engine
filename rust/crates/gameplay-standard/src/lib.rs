@@ -95,7 +95,8 @@ pub use resolution::{
     StandardOperation, StandardOperationContext, StandardOperationContextError,
     StandardOperationPlan, StandardPlanValidationError, StandardPlanningError, StandardPredicate,
     StandardRoleAdmissionError, StandardRoleBindingsError, MAX_CAPABILITY_ROLE_BINDINGS,
-    STANDARD_DAMAGE_CAPABILITY, STANDARD_EFFECT_CAPABILITY, STANDARD_TRACK_CAPABILITY,
+    STANDARD_DAMAGE_CAPABILITY, STANDARD_EFFECT_CAPABILITY, STANDARD_INVENTORY_CAPABILITY,
+    STANDARD_TRACK_CAPABILITY,
 };
 
 /// Maximum number of ASCII bytes in a capability identity.

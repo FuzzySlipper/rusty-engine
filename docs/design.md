@@ -215,11 +215,13 @@ are operation evidence rather than an ambient event journal.
 
 The optional `gameplay-standard` vocabulary adds no resolution kernel. Its
 standard predicate is an exact expression comparison used by the existing
-`Program::When`; its first operations are typed plans for track spend/restore,
-damage submission, and effect apply/remove. A product passes explicit
+`Program::When`; its typed operations plan track spend/restore, damage
+submission, effect apply/remove, and fungible inventory grant/consume/transfer.
+A product passes explicit
 capability-role-to-`EntityId` bindings and input values, while planning obtains
 a conservative source snapshot of every mechanics slot on participating
-entities (including absent slots and currently equipped item slots) and
+entities (including absent slots, currently equipped item slots, and the item
+slots of directly contained unique items consulted by inventory capacity) and
 produces the existing mechanics request unchanged. This intentionally avoids
 executing mutations while planning, so sequential private-candidate programs
 remain admissible. A downstream product transaction validates that snapshot and catalog before cloning a

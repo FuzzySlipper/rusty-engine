@@ -17,7 +17,9 @@ use entity_state::{ComponentAccessError, ComponentRevision, EntityState};
 use gameplay_mechanics::{
     ActiveEffectsComponent, DamagePart, DamageReceipt, DamageRequest, DamageService,
     EffectApplyRequest, EffectInstanceId, EffectMutationReceipt, EffectRemovalRequest,
-    EffectService, EquipmentComponent, IntrinsicSourcesComponent, ItemComponent, MechanicsCatalog,
+    EffectService, EquipmentComponent, IntrinsicSourcesComponent, InventoryComponent,
+    InventoryMutationReceipt, InventoryMutationRequest, InventoryService, InventoryTransferReceipt,
+    InventoryTransferRequest, ItemComponent, ItemDefinitionId, ItemKind, MechanicsCatalog,
     MechanicsComponentKind, MechanicsError, OperationId, RequestSource, SourceInstanceIdentity,
     StatsComponent, TrackId, TrackMutationReceipt, TrackMutationRequest, TrackService,
     TracksComponent, MAX_DAMAGE_PARTS, MAX_DAMAGE_REQUEST_SOURCES,
@@ -36,6 +38,8 @@ pub const STANDARD_TRACK_CAPABILITY: &str = "mechanics.track";
 pub const STANDARD_DAMAGE_CAPABILITY: &str = "mechanics.damage";
 /// Capability required to apply or remove an admitted mechanics effect.
 pub const STANDARD_EFFECT_CAPABILITY: &str = "mechanics.effect";
+/// Capability required to mutate a fungible inventory stack through `InventoryService`.
+pub const STANDARD_INVENTORY_CAPABILITY: &str = "mechanics.inventory";
 /// Maximum independently bound roles admitted for one standard program execution.
 pub const MAX_CAPABILITY_ROLE_BINDINGS: usize = 16;
 
@@ -240,6 +244,25 @@ pub enum StandardOperation {
         role: CapabilityRoleId,
         instance: EffectInstanceId,
     },
+    /// Grant a bounded quantity of one admitted fungible item to a bound inventory owner.
+    GrantStack {
+        role: CapabilityRoleId,
+        item: ItemDefinitionId,
+        quantity: u64,
+    },
+    /// Consume a bounded quantity of one admitted fungible item from a bound inventory owner.
+    ConsumeStack {
+        role: CapabilityRoleId,
+        item: ItemDefinitionId,
+        quantity: u64,
+    },
+    /// Transfer a bounded quantity of one admitted fungible item between distinct bound owners.
+    TransferStack {
+        from: CapabilityRoleId,
+        to: CapabilityRoleId,
+        item: ItemDefinitionId,
+        quantity: u64,
+    },
 }
 
 /// Caller-owned correlation and provenance supplied for one selected standard leaf.
@@ -387,6 +410,9 @@ pub enum StandardMechanicsEffect {
     SubmitDamage(DamageRequest),
     ApplyEffect(EffectApplyRequest),
     RemoveEffect(EffectRemovalRequest),
+    GrantStack(InventoryMutationRequest),
+    ConsumeStack(InventoryMutationRequest),
+    TransferStack(InventoryTransferRequest),
 }
 
 /// Result returned by explicit candidate execution, preserving the mechanics receipt unchanged.
@@ -395,6 +421,8 @@ pub enum StandardMechanicsReceipt {
     Track(TrackMutationReceipt),
     Damage(DamageReceipt),
     Effect(EffectMutationReceipt),
+    Inventory(InventoryMutationReceipt),
+    InventoryTransfer(InventoryTransferReceipt),
 }
 
 impl StandardMechanicsEffect {
@@ -439,6 +467,29 @@ impl StandardMechanicsEffect {
                     Some(candidate.component_revision::<ActiveEffectsComponent>(request.entity)?);
                 EffectService::remove(candidate, catalog, request)
                     .map(StandardMechanicsReceipt::Effect)
+            }
+            Self::GrantStack(request) => {
+                let mut request = request.clone();
+                request.expected_revision =
+                    Some(candidate.component_revision::<InventoryComponent>(request.owner)?);
+                InventoryService::grant(candidate, catalog, request)
+                    .map(StandardMechanicsReceipt::Inventory)
+            }
+            Self::ConsumeStack(request) => {
+                let mut request = request.clone();
+                request.expected_revision =
+                    Some(candidate.component_revision::<InventoryComponent>(request.owner)?);
+                InventoryService::consume(candidate, catalog, request)
+                    .map(StandardMechanicsReceipt::Inventory)
+            }
+            Self::TransferStack(request) => {
+                let mut request = request.clone();
+                request.expected_from_revision =
+                    Some(candidate.component_revision::<InventoryComponent>(request.from_owner)?);
+                request.expected_to_revision =
+                    Some(candidate.component_revision::<InventoryComponent>(request.to_owner)?);
+                InventoryService::transfer(candidate, catalog, request)
+                    .map(StandardMechanicsReceipt::InventoryTransfer)
             }
         }
     }
@@ -501,6 +552,7 @@ pub struct StandardOperationPlan {
     observed_revisions: Vec<StandardObservedComponentRevision>,
     catalog: StandardCatalogProvenance,
     exact_evaluations: Vec<StandardExactEvaluation>,
+    observed_state_revision: Option<u64>,
 }
 impl StandardOperationPlan {
     pub fn effect(&self) -> &StandardMechanicsEffect {
@@ -518,6 +570,12 @@ impl StandardOperationPlan {
     pub fn exact_evaluations(&self) -> &[StandardExactEvaluation] {
         &self.exact_evaluations
     }
+    /// The relationship/index revision observed by stack operations whose capacity read-set
+    /// includes contained unique items. Other mechanics leaves intentionally do not take this
+    /// global relationship guard.
+    pub const fn observed_state_revision(&self) -> Option<u64> {
+        self.observed_state_revision
+    }
     pub fn validate_source_state(
         &self,
         state: &EntityState,
@@ -530,6 +588,12 @@ impl StandardOperationPlan {
                 expected: self.catalog.clone(),
                 actual: StandardCatalogProvenance::capture(catalog),
             });
+        }
+        if let Some(expected) = self.observed_state_revision {
+            let actual = state.revision();
+            if actual != expected {
+                return Err(StandardPlanValidationError::StaleStateRevision { expected, actual });
+            }
         }
         for expected in &self.observed_revisions {
             let actual = expected
@@ -554,8 +618,11 @@ fn conservative_source_read_set(
     // candidate-state feasibility, and valid sequential private-candidate programs must plan.
     // Standard leaves instead take a deliberately conservative source snapshot. Every mechanics
     // slot on each participating entity is guarded whether it is presently occupied or absent;
-    // currently equipped item entities contribute their Item slots as well.
+    // currently equipped item entities contribute their Item slots as well. Inventory capacity
+    // additionally reads directly contained unique-item slots, but that expansion belongs only
+    // to inventory operations rather than every standard mechanics leaf.
     let mut entities = BTreeSet::new();
+    let mut inventory_owners = BTreeSet::new();
     match effect {
         StandardMechanicsEffect::SpendTrack(request)
         | StandardMechanicsEffect::RestoreTrack(request) => {
@@ -573,6 +640,17 @@ fn conservative_source_read_set(
         StandardMechanicsEffect::RemoveEffect(request) => {
             entities.insert(request.entity);
         }
+        StandardMechanicsEffect::GrantStack(request)
+        | StandardMechanicsEffect::ConsumeStack(request) => {
+            entities.insert(request.owner);
+            inventory_owners.insert(request.owner);
+        }
+        StandardMechanicsEffect::TransferStack(request) => {
+            entities.insert(request.from_owner);
+            entities.insert(request.to_owner);
+            inventory_owners.insert(request.from_owner);
+            inventory_owners.insert(request.to_owner);
+        }
     }
 
     let mut read_set = Vec::new();
@@ -588,6 +666,11 @@ fn conservative_source_read_set(
                     .iter()
                     .map(|assignment| assignment.item),
             );
+        }
+        if inventory_owners.contains(&entity) {
+            // Inventory capacity reads the Item slots of every directly contained unique item.
+            // Capture absent slots too: attaching or removing one changes capacity semantics.
+            equipped_items.extend(state.contained_entities(entity));
         }
     }
     for item in equipped_items {
@@ -649,6 +732,13 @@ impl StandardOperation {
             }
             Self::ApplyEffect { role, .. } | Self::RemoveEffect { role, .. } => {
                 add(role, STANDARD_EFFECT_CAPABILITY)
+            }
+            Self::GrantStack { role, .. } | Self::ConsumeStack { role, .. } => {
+                add(role, STANDARD_INVENTORY_CAPABILITY)
+            }
+            Self::TransferStack { from, to, .. } => {
+                add(from, STANDARD_INVENTORY_CAPABILITY);
+                add(to, STANDARD_INVENTORY_CAPABILITY);
             }
         }
         roles
@@ -712,6 +802,11 @@ impl StandardOperation {
         let effect_revision = |entity| {
             state
                 .component_revision::<ActiveEffectsComponent>(entity)
+                .map_err(StandardPlanningError::Component)
+        };
+        let inventory_revision = |entity| {
+            state
+                .component_revision::<InventoryComponent>(entity)
                 .map_err(StandardPlanningError::Component)
         };
         let planned = match self {
@@ -857,7 +952,91 @@ impl StandardOperation {
                     vec![revision],
                 )
             }
+            Self::GrantStack {
+                role,
+                item,
+                quantity,
+            } => {
+                validate_fungible_stack(catalog, item, *quantity)?;
+                let entity = roles
+                    .require(role, capability(STANDARD_INVENTORY_CAPABILITY))
+                    .map_err(StandardPlanningError::Roles)?;
+                let revision = inventory_revision(entity)?;
+                (
+                    StandardMechanicsEffect::GrantStack(InventoryMutationRequest {
+                        operation: context.operation().clone(),
+                        source: context.source().clone(),
+                        owner: entity,
+                        item: item.clone(),
+                        quantity: *quantity,
+                        expected_revision: Some(revision.clone()),
+                    }),
+                    vec![revision],
+                )
+            }
+            Self::ConsumeStack {
+                role,
+                item,
+                quantity,
+            } => {
+                validate_fungible_stack(catalog, item, *quantity)?;
+                let entity = roles
+                    .require(role, capability(STANDARD_INVENTORY_CAPABILITY))
+                    .map_err(StandardPlanningError::Roles)?;
+                let revision = inventory_revision(entity)?;
+                (
+                    StandardMechanicsEffect::ConsumeStack(InventoryMutationRequest {
+                        operation: context.operation().clone(),
+                        source: context.source().clone(),
+                        owner: entity,
+                        item: item.clone(),
+                        quantity: *quantity,
+                        expected_revision: Some(revision.clone()),
+                    }),
+                    vec![revision],
+                )
+            }
+            Self::TransferStack {
+                from,
+                to,
+                item,
+                quantity,
+            } => {
+                validate_fungible_stack(catalog, item, *quantity)?;
+                let from_owner = roles
+                    .require(from, capability(STANDARD_INVENTORY_CAPABILITY))
+                    .map_err(StandardPlanningError::Roles)?;
+                let to_owner = roles
+                    .require(to, capability(STANDARD_INVENTORY_CAPABILITY))
+                    .map_err(StandardPlanningError::Roles)?;
+                if from_owner == to_owner {
+                    return Err(StandardPlanningError::InventoryOwnerConflict {
+                        owner: from_owner,
+                    });
+                }
+                let from_revision = inventory_revision(from_owner)?;
+                let to_revision = inventory_revision(to_owner)?;
+                (
+                    StandardMechanicsEffect::TransferStack(InventoryTransferRequest {
+                        operation: context.operation().clone(),
+                        source: context.source().clone(),
+                        from_owner,
+                        to_owner,
+                        item: item.clone(),
+                        quantity: *quantity,
+                        expected_from_revision: Some(from_revision.clone()),
+                        expected_to_revision: Some(to_revision.clone()),
+                    }),
+                    vec![from_revision, to_revision],
+                )
+            }
         };
+        let observes_relationships = matches!(
+            &planned.0,
+            StandardMechanicsEffect::GrantStack(_)
+                | StandardMechanicsEffect::ConsumeStack(_)
+                | StandardMechanicsEffect::TransferStack(_)
+        );
         let observed_revisions = conservative_source_read_set(&planned.0, state)
             .map_err(StandardPlanningError::Component)?;
         Ok(StandardOperationPlan {
@@ -865,8 +1044,33 @@ impl StandardOperation {
             observed_revisions,
             catalog: StandardCatalogProvenance::capture(catalog),
             exact_evaluations: evaluations,
+            observed_state_revision: observes_relationships.then(|| state.revision()),
         })
     }
+}
+
+fn validate_fungible_stack(
+    catalog: &MechanicsCatalog,
+    item: &ItemDefinitionId,
+    quantity: u64,
+) -> Result<(), StandardPlanningError> {
+    let definition = catalog
+        .item(item)
+        .ok_or_else(|| StandardPlanningError::UnknownItem { item: item.clone() })?;
+    if definition.kind != ItemKind::Fungible {
+        return Err(StandardPlanningError::InventoryItemKind {
+            item: item.clone(),
+            actual: definition.kind,
+        });
+    }
+    if quantity == 0 || quantity > definition.maximum_quantity {
+        return Err(StandardPlanningError::InventoryQuantity {
+            item: item.clone(),
+            quantity,
+            maximum: definition.maximum_quantity,
+        });
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -889,6 +1093,21 @@ pub enum StandardPlanningError {
         actual: u16,
         maximum: u16,
     },
+    UnknownItem {
+        item: ItemDefinitionId,
+    },
+    InventoryItemKind {
+        item: ItemDefinitionId,
+        actual: ItemKind,
+    },
+    InventoryQuantity {
+        item: ItemDefinitionId,
+        quantity: u64,
+        maximum: u64,
+    },
+    InventoryOwnerConflict {
+        owner: EntityId,
+    },
 }
 impl fmt::Display for StandardPlanningError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -906,6 +1125,10 @@ pub enum StandardPlanValidationError {
     StaleComponentRevision {
         expected: StandardObservedComponentRevision,
         actual: ComponentRevision,
+    },
+    StaleStateRevision {
+        expected: u64,
+        actual: u64,
     },
     Component(ComponentAccessError),
 }

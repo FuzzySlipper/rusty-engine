@@ -183,14 +183,20 @@ No route implies an aggregate runtime or product policy.
 
 `StandardPredicate` is only an exact expression comparison. Branching stays in
 the existing `gameplay_resolution::Program::When`; no Boolean program node or
-second traversal is introduced. `StandardOperation` supplies a first typed
-mechanics column: spend/restore a track, submit bounded damage, and apply or
-remove an effect. Each leaf uses an explicit capability role binding to one
+second traversal is introduced. `StandardOperation` supplies a typed mechanics
+column: spend/restore a track, submit bounded damage, apply/remove an effect,
+and grant/consume/transfer a bounded fungible inventory stack. Inventory leaves
+are direct typed adapters over `InventoryService`: they retain catalog item,
+quantity, operation, and provenance identities, reject unique items, and leave
+allocation, loot, equipment selection, consequences, scheduling, and
+publication downstream. Each leaf uses an explicit capability role binding to one
 `EntityId`, checks the operation's named capability, evaluates its exact
 amount, and captures a deliberately conservative standard mechanics entity
 snapshot in `StandardOperationPlan`: every mechanics component slot on each
 participating entity is guarded whether present or absent, plus Item slots for
-currently equipped items. This is intentionally broader than an individual
+currently equipped items. Inventory plans additionally capture the relationship
+revision and the Item slots of directly contained unique items, because capacity
+evaluation reads those facts. This is intentionally broader than an individual
 service's current reads so planning remains sequence-safe. Each
 evaluated exact operand retains its
 evaluator semantics version, optional admitted-definition identity, canonical

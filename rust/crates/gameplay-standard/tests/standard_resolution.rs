@@ -1,9 +1,11 @@
 use core_ids::EntityId;
 use entity_state::{EntityAuthoringService, EntityComponent, EntityDefinition, EntityState};
 use gameplay_mechanics::{
-    ActiveEffectInstance, ActiveEffectsComponent, CatalogVersion, DamageKindDefinition,
-    DamageKindId, EffectDefinition, EffectDefinitionId, EffectStackingPolicy,
-    IntrinsicSourceBinding, IntrinsicSourcesComponent, MechanicsCatalog,
+    ActiveEffectInstance, ActiveEffectsComponent, CapacityMetricDefinition, CapacityMetricId,
+    CatalogVersion, DamageKindDefinition, DamageKindId, EffectDefinition, EffectDefinitionId,
+    EffectStackingPolicy, IntrinsicSourceBinding, IntrinsicSourcesComponent,
+    InventoryCapacityLimit, InventoryComponent, InventoryService, ItemCapacityCost, ItemComponent,
+    ItemDefinition, ItemDefinitionId, ItemKind, ItemStack, MechanicsCatalog,
     MechanicsCatalogDefinition, MechanicsScalar, OperationId, RequestSource, SourceDefinition,
     SourceDefinitionId, SourceInstanceId, SourceInstanceIdentity, StackingGroupId, StatsComponent,
     TrackDefinition, TrackId, TrackMaximum, TrackValue, TracksComponent, MAX_DAMAGE_PARTS,
@@ -136,6 +138,131 @@ fn context() -> StandardOperationContext {
         },
     )
     .unwrap()
+}
+
+fn item(value: &str) -> ItemDefinitionId {
+    ItemDefinitionId::parse(value).unwrap()
+}
+
+fn inventory_catalog() -> MechanicsCatalog {
+    MechanicsCatalog::admit(MechanicsCatalogDefinition {
+        version: CatalogVersion::parse("standard.v1").unwrap(),
+        stats: vec![],
+        tracks: vec![TrackDefinition {
+            id: track("vitality"),
+            minimum: scalar(0),
+            maximum: TrackMaximum::Fixed { value: scalar(20) },
+        }],
+        sources: vec![],
+        damage_kinds: vec![],
+        effects: vec![],
+        capacity_metrics: vec![CapacityMetricDefinition {
+            id: CapacityMetricId::parse("weight").unwrap(),
+        }],
+        items: vec![
+            ItemDefinition {
+                id: item("cells"),
+                kind: ItemKind::Fungible,
+                maximum_quantity: 10,
+                classifications: vec![],
+                capacity_costs: vec![ItemCapacityCost {
+                    metric: CapacityMetricId::parse("weight").unwrap(),
+                    units: 2,
+                }],
+                equipment: None,
+                sources: vec![],
+            },
+            ItemDefinition {
+                id: item("unique-key"),
+                kind: ItemKind::Unique,
+                maximum_quantity: 1,
+                classifications: vec![],
+                capacity_costs: vec![],
+                equipment: None,
+                sources: vec![],
+            },
+        ],
+        equipment_slots: vec![],
+    })
+    .unwrap()
+}
+
+fn inventory_state(caster_quantity: u64, target_quantity: u64) -> EntityState {
+    let mut state = state();
+    for (owner, quantity) in [(CASTER, caster_quantity), (TARGET, target_quantity)] {
+        let stacks = (quantity != 0)
+            .then(|| ItemStack {
+                definition: item("cells"),
+                quantity,
+            })
+            .into_iter()
+            .collect();
+        attach(
+            &mut state,
+            owner,
+            InventoryComponent::with_capacity_limits(
+                CatalogVersion::parse("standard.v1").unwrap(),
+                stacks,
+                vec![InventoryCapacityLimit::new(
+                    CapacityMetricId::parse("weight").unwrap(),
+                    10,
+                )],
+            )
+            .unwrap(),
+        );
+    }
+    state
+}
+
+const CONTAINED_ITEM: EntityId = EntityId::new(9);
+
+fn attach_contained_unique_item(state: &mut EntityState) {
+    let revision = state.revision();
+    EntityAuthoringService
+        .admit(
+            state,
+            revision,
+            [EntityDefinition::new(CONTAINED_ITEM, "contained-item").with_containment(CASTER)],
+        )
+        .unwrap();
+    attach(
+        state,
+        CONTAINED_ITEM,
+        ItemComponent::new(
+            CatalogVersion::parse("standard.v1").unwrap(),
+            item("unique-key"),
+        ),
+    );
+}
+
+fn inventory_bindings(operation: &StandardOperation) -> CapabilityRoleBindings {
+    CapabilityRoleBindings::admit(
+        &operation.requirements(),
+        vec![
+            CapabilityRoleBinding::new(
+                role("from"),
+                CASTER,
+                vec![capability(gameplay_standard::STANDARD_INVENTORY_CAPABILITY)],
+            )
+            .unwrap(),
+            CapabilityRoleBinding::new(
+                role("to"),
+                TARGET,
+                vec![capability(gameplay_standard::STANDARD_INVENTORY_CAPABILITY)],
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap()
+}
+
+fn stack_quantity(state: &EntityState, catalog: &MechanicsCatalog, owner: EntityId) -> u64 {
+    InventoryService::view(state, catalog, owner)
+        .unwrap()
+        .stacks()
+        .iter()
+        .find(|stack| stack.definition == item("cells"))
+        .map_or(0, |stack| stack.quantity)
 }
 
 #[test]
@@ -972,6 +1099,354 @@ fn request_source_must_match_the_context_operation() {
 }
 
 #[test]
+fn fungible_inventory_leaves_are_typed_candidate_operations() {
+    let grant = StandardOperation::GrantStack {
+        role: role("to"),
+        item: item("cells"),
+        quantity: 2,
+    };
+    let consume = StandardOperation::ConsumeStack {
+        role: role("from"),
+        item: item("cells"),
+        quantity: 2,
+    };
+    let transfer = StandardOperation::TransferStack {
+        from: role("from"),
+        to: role("to"),
+        item: item("cells"),
+        quantity: 1,
+    };
+    assert!(matches!(
+        CapabilityRoleBindings::admit(&grant.requirements(), vec![]),
+        Err(gameplay_standard::StandardRoleAdmissionError::MissingRole { .. })
+    ));
+    assert!(matches!(
+        CapabilityRoleBindings::admit(
+            &grant.requirements(),
+            vec![CapabilityRoleBinding::new(role("to"), TARGET, vec![]).unwrap()],
+        ),
+        Err(gameplay_standard::StandardRoleAdmissionError::MissingCapability { .. })
+    ));
+    for operation in [&grant, &consume, &transfer] {
+        assert!(operation
+            .requirements()
+            .iter()
+            .all(
+                |requirement| requirement.capabilities().contains(&capability(
+                    gameplay_standard::STANDARD_INVENTORY_CAPABILITY
+                ))
+            ));
+    }
+
+    let source = inventory_state(3, 0);
+    let catalog = inventory_catalog();
+    let bindings = inventory_bindings(&transfer);
+    let grant_plan = grant
+        .plan(
+            &bindings,
+            &ExactInputBundle::new(vec![]),
+            &source,
+            &catalog,
+            &context(),
+        )
+        .unwrap();
+    let consume_plan = consume
+        .plan(
+            &bindings,
+            &ExactInputBundle::new(vec![]),
+            &source,
+            &catalog,
+            &context(),
+        )
+        .unwrap();
+    let transfer_plan = transfer
+        .plan(
+            &bindings,
+            &ExactInputBundle::new(vec![]),
+            &source,
+            &catalog,
+            &context(),
+        )
+        .unwrap();
+    assert_eq!(
+        grant_plan.observed_state_revision(),
+        Some(source.revision())
+    );
+    assert!(grant_plan.observed_revisions().iter().any(|observed| {
+        observed.entity() == TARGET
+            && observed.component() == gameplay_mechanics::MechanicsComponentKind::Inventory
+    }));
+
+    let mut candidate = gameplay_mechanics::decode_snapshot_with_catalog(
+        &entity_state::encode_snapshot(&source).unwrap(),
+        &catalog,
+    )
+    .unwrap();
+    assert!(matches!(
+        grant_plan.effect().apply_to_candidate(&mut candidate, &catalog),
+        Ok(gameplay_standard::StandardMechanicsReceipt::Inventory(receipt))
+            if receipt.kind == gameplay_mechanics::InventoryMutationKind::Grant
+    ));
+    assert!(matches!(
+        consume_plan.effect().apply_to_candidate(&mut candidate, &catalog),
+        Ok(gameplay_standard::StandardMechanicsReceipt::Inventory(receipt))
+            if receipt.kind == gameplay_mechanics::InventoryMutationKind::Consume
+    ));
+    assert!(matches!(
+        transfer_plan.effect().apply_to_candidate(&mut candidate, &catalog),
+        Ok(gameplay_standard::StandardMechanicsReceipt::InventoryTransfer(receipt))
+            if receipt.from_owner == CASTER && receipt.to_owner == TARGET
+    ));
+    assert_eq!(stack_quantity(&candidate, &catalog, CASTER), 0);
+    assert_eq!(stack_quantity(&candidate, &catalog, TARGET), 3);
+    assert_eq!(stack_quantity(&source, &catalog, CASTER), 3);
+}
+
+#[test]
+fn inventory_planning_rejects_invalid_authoring_and_guards_source_facts() {
+    let source = inventory_state(3, 0);
+    let catalog = inventory_catalog();
+    let zero = StandardOperation::GrantStack {
+        role: role("to"),
+        item: item("cells"),
+        quantity: 0,
+    };
+    assert!(matches!(
+        zero.plan(
+            &inventory_bindings(&zero),
+            &ExactInputBundle::new(vec![]),
+            &source,
+            &catalog,
+            &context(),
+        ),
+        Err(StandardPlanningError::InventoryQuantity { .. })
+    ));
+    let above_maximum = StandardOperation::GrantStack {
+        role: role("to"),
+        item: item("cells"),
+        quantity: 11,
+    };
+    assert!(matches!(
+        above_maximum.plan(
+            &inventory_bindings(&above_maximum),
+            &ExactInputBundle::new(vec![]),
+            &source,
+            &catalog,
+            &context(),
+        ),
+        Err(StandardPlanningError::InventoryQuantity { .. })
+    ));
+    let unique = StandardOperation::GrantStack {
+        role: role("to"),
+        item: item("unique-key"),
+        quantity: 1,
+    };
+    assert!(matches!(
+        unique.plan(
+            &inventory_bindings(&unique),
+            &ExactInputBundle::new(vec![]),
+            &source,
+            &catalog,
+            &context(),
+        ),
+        Err(StandardPlanningError::InventoryItemKind { .. })
+    ));
+    let same_owner = StandardOperation::TransferStack {
+        from: role("from"),
+        to: role("from"),
+        item: item("cells"),
+        quantity: 1,
+    };
+    assert!(matches!(
+        same_owner.plan(
+            &inventory_bindings(&same_owner),
+            &ExactInputBundle::new(vec![]),
+            &source,
+            &catalog,
+            &context(),
+        ),
+        Err(StandardPlanningError::InventoryOwnerConflict { .. })
+    ));
+
+    let operation = StandardOperation::ConsumeStack {
+        role: role("from"),
+        item: item("cells"),
+        quantity: 1,
+    };
+    let plan = operation
+        .plan(
+            &inventory_bindings(&operation),
+            &ExactInputBundle::new(vec![]),
+            &source,
+            &catalog,
+            &context(),
+        )
+        .unwrap();
+    let mut changed = source;
+    attach(
+        &mut changed,
+        CASTER,
+        ItemComponent::new(
+            CatalogVersion::parse("standard.v1").unwrap(),
+            item("unique-key"),
+        ),
+    );
+    assert!(matches!(
+        plan.validate_source_state(&changed, &catalog),
+        Err(gameplay_standard::StandardPlanValidationError::StaleStateRevision { .. })
+    ));
+}
+
+#[test]
+fn contained_item_slots_guard_only_inventory_capacity_plans() {
+    let mut non_inventory_source = state();
+    attach_contained_unique_item(&mut non_inventory_source);
+    let catalog = catalog();
+    let spend = StandardOperation::SpendTrack {
+        role: role("caster"),
+        track: track("vitality"),
+        amount: ExactExpr::Literal(scalar(1)).into(),
+    };
+    let bindings = CapabilityRoleBindings::admit(
+        &spend.requirements(),
+        vec![CapabilityRoleBinding::new(
+            role("caster"),
+            CASTER,
+            vec![capability(STANDARD_TRACK_CAPABILITY)],
+        )
+        .unwrap()],
+    )
+    .unwrap();
+    let non_inventory_plan = spend
+        .plan(
+            &bindings,
+            &ExactInputBundle::new(vec![]),
+            &non_inventory_source,
+            &catalog,
+            &context(),
+        )
+        .unwrap();
+    assert!(!non_inventory_plan
+        .observed_revisions()
+        .iter()
+        .any(|observed| {
+            observed.entity() == CONTAINED_ITEM
+                && observed.component() == gameplay_mechanics::MechanicsComponentKind::Item
+        }));
+    let item_revision = non_inventory_source
+        .component_revision::<ItemComponent>(CONTAINED_ITEM)
+        .unwrap();
+    EntityAuthoringService
+        .detach_component::<ItemComponent>(&mut non_inventory_source, item_revision, CONTAINED_ITEM)
+        .unwrap();
+    assert!(non_inventory_plan
+        .validate_source_state(&non_inventory_source, &catalog)
+        .is_ok());
+
+    let mut inventory_source = inventory_state(3, 0);
+    attach_contained_unique_item(&mut inventory_source);
+    let inventory_catalog = inventory_catalog();
+    let consume = StandardOperation::ConsumeStack {
+        role: role("from"),
+        item: item("cells"),
+        quantity: 1,
+    };
+    let inventory_plan = consume
+        .plan(
+            &inventory_bindings(&consume),
+            &ExactInputBundle::new(vec![]),
+            &inventory_source,
+            &inventory_catalog,
+            &context(),
+        )
+        .unwrap();
+    assert!(inventory_plan.observed_revisions().iter().any(|observed| {
+        observed.entity() == CONTAINED_ITEM
+            && observed.component() == gameplay_mechanics::MechanicsComponentKind::Item
+    }));
+    let item_revision = inventory_source
+        .component_revision::<ItemComponent>(CONTAINED_ITEM)
+        .unwrap();
+    EntityAuthoringService
+        .detach_component::<ItemComponent>(&mut inventory_source, item_revision, CONTAINED_ITEM)
+        .unwrap();
+    assert!(matches!(
+        inventory_plan.validate_source_state(&inventory_source, &inventory_catalog),
+        Err(gameplay_standard::StandardPlanValidationError::StaleStateRevision { .. })
+    ));
+}
+
+#[test]
+fn inventory_candidate_reports_underflow_and_capacity_without_mutating_the_plan_source() {
+    let underflow = StandardOperation::ConsumeStack {
+        role: role("from"),
+        item: item("cells"),
+        quantity: 4,
+    };
+    let full = inventory_state(5, 0);
+    let catalog = inventory_catalog();
+    let underflow_plan = underflow
+        .plan(
+            &inventory_bindings(&underflow),
+            &ExactInputBundle::new(vec![]),
+            &inventory_state(3, 0),
+            &catalog,
+            &context(),
+        )
+        .unwrap();
+    let mut underflow_candidate = inventory_state(3, 0);
+    assert!(matches!(
+        underflow_plan
+            .effect()
+            .apply_to_candidate(&mut underflow_candidate, &catalog),
+        Err(gameplay_mechanics::MechanicsError::InventoryInsufficientQuantity { .. })
+    ));
+    let grant = StandardOperation::GrantStack {
+        role: role("from"),
+        item: item("cells"),
+        quantity: 6,
+    };
+    let full_plan = grant
+        .plan(
+            &inventory_bindings(&grant),
+            &ExactInputBundle::new(vec![]),
+            &full,
+            &catalog,
+            &context(),
+        )
+        .unwrap();
+    let mut full_candidate = full;
+    assert!(matches!(
+        full_plan
+            .effect()
+            .apply_to_candidate(&mut full_candidate, &catalog),
+        Err(gameplay_mechanics::MechanicsError::InventoryQuantityLimitExceeded { .. })
+    ));
+    let capacity = StandardOperation::GrantStack {
+        role: role("from"),
+        item: item("cells"),
+        quantity: 3,
+    };
+    let capacity_source = inventory_state(3, 0);
+    let capacity_plan = capacity
+        .plan(
+            &inventory_bindings(&capacity),
+            &ExactInputBundle::new(vec![]),
+            &capacity_source,
+            &catalog,
+            &context(),
+        )
+        .unwrap();
+    let mut capacity_candidate = capacity_source;
+    assert!(matches!(
+        capacity_plan
+            .effect()
+            .apply_to_candidate(&mut capacity_candidate, &catalog),
+        Err(gameplay_mechanics::MechanicsError::InventoryCapacityExceeded { .. })
+    ));
+}
+
+#[test]
 fn dagger_and_demo_shapes_remain_typed_and_product_meaning_stays_outside_standard() {
     let dagger_damage = StandardOperation::SubmitDamage {
         actor: Some(role("weapon-user")),
@@ -994,6 +1469,26 @@ fn dagger_and_demo_shapes_remain_typed_and_product_meaning_stays_outside_standar
         track: track("vitality"),
         amount: ExactExpr::Literal(scalar(1)).into(),
     };
+    // Downstream policy selects this ordinary fungible loot result; standard neither allocates
+    // an item entity nor learns Dagger's material/progression rules.
+    let dagger_loot = StandardOperation::GrantStack {
+        role: role("loot-recipient"),
+        item: item("cells"),
+        quantity: 2,
+    };
+    // A Demo pickup policy chooses participants and quantity before using the same closed leaf.
+    let demo_pickup = StandardOperation::TransferStack {
+        from: role("pickup-source"),
+        to: role("player"),
+        item: item("cells"),
+        quantity: 1,
+    };
+    assert!(dagger_loot.requirements()[0]
+        .capabilities()
+        .contains(&capability(
+            gameplay_standard::STANDARD_INVENTORY_CAPABILITY
+        )));
+    assert_eq!(demo_pickup.requirements().len(), 2);
     let dagger_program: Program<StandardPredicate, StandardOperation> = Program::Sequence {
         steps: vec![
             Program::Operation(dagger_spend),
@@ -1234,6 +1729,106 @@ impl ResolutionTransaction for ProductSession {
         self.candidate = None;
         self.mechanics_receipts.clear();
     }
+}
+
+#[test]
+fn inventory_product_session_rebases_sequential_candidates_and_publishes_once() {
+    let source = inventory_state(3, 0);
+    let catalog = inventory_catalog();
+    let grant = StandardOperation::GrantStack {
+        role: role("to"),
+        item: item("cells"),
+        quantity: 2,
+    };
+    let transfer = StandardOperation::TransferStack {
+        from: role("from"),
+        to: role("to"),
+        item: item("cells"),
+        quantity: 1,
+    };
+    let bindings = inventory_bindings(&transfer);
+    let grant_plan = grant
+        .plan(
+            &bindings,
+            &ExactInputBundle::new(vec![]),
+            &source,
+            &catalog,
+            &context(),
+        )
+        .unwrap();
+    let transfer_plan = transfer
+        .plan(
+            &bindings,
+            &ExactInputBundle::new(vec![]),
+            &source,
+            &catalog,
+            &context(),
+        )
+        .unwrap();
+    let mut session = ProductSession::new(source, catalog);
+    session.stage(&grant_plan).unwrap();
+    session.stage(&transfer_plan).unwrap();
+    session.commit().unwrap();
+    assert_eq!(session.commits, 1);
+    assert_eq!(
+        stack_quantity(&session.authority, &session.catalog, CASTER),
+        2
+    );
+    assert_eq!(
+        stack_quantity(&session.authority, &session.catalog, TARGET),
+        3
+    );
+    assert!(matches!(
+        session.mechanics_receipts.as_slice(),
+        [
+            gameplay_standard::StandardMechanicsReceipt::Inventory(_),
+            gameplay_standard::StandardMechanicsReceipt::InventoryTransfer(_)
+        ]
+    ));
+
+    let source = inventory_state(3, 0);
+    let catalog = inventory_catalog();
+    let late_consume = StandardOperation::ConsumeStack {
+        role: role("from"),
+        item: item("cells"),
+        quantity: 4,
+    };
+    let grant_plan = grant
+        .plan(
+            &bindings,
+            &ExactInputBundle::new(vec![]),
+            &source,
+            &catalog,
+            &context(),
+        )
+        .unwrap();
+    let late_plan = late_consume
+        .plan(
+            &inventory_bindings(&late_consume),
+            &ExactInputBundle::new(vec![]),
+            &source,
+            &catalog,
+            &context(),
+        )
+        .unwrap();
+    let mut failed = ProductSession::new(source, catalog);
+    failed.stage(&grant_plan).unwrap();
+    assert!(matches!(
+        failed.stage(&late_plan),
+        Err(ProductSessionError::Mechanics(
+            gameplay_mechanics::MechanicsError::InventoryInsufficientQuantity { .. }
+        ))
+    ));
+    failed.abort();
+    assert_eq!(failed.commits, 0);
+    assert_eq!(
+        stack_quantity(&failed.authority, &failed.catalog, CASTER),
+        3
+    );
+    assert_eq!(
+        stack_quantity(&failed.authority, &failed.catalog, TARGET),
+        0
+    );
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

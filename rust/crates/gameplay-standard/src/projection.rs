@@ -199,6 +199,9 @@ impl<'a> StandardOperationPlanProjection<'a> {
             .iter()
             .map(StandardExactEvaluationProjection)
     }
+    pub const fn observed_state_revision(self) -> Option<u64> {
+        self.0.observed_state_revision()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -222,6 +225,18 @@ impl<'a> StandardMechanicsReceiptProjection<'a> {
     pub fn effect(self) -> Option<&'a gameplay_mechanics::EffectMutationReceipt> {
         match self.0 {
             StandardMechanicsReceipt::Effect(value) => Some(value),
+            _ => None,
+        }
+    }
+    pub fn inventory(self) -> Option<&'a gameplay_mechanics::InventoryMutationReceipt> {
+        match self.0 {
+            StandardMechanicsReceipt::Inventory(value) => Some(value),
+            _ => None,
+        }
+    }
+    pub fn inventory_transfer(self) -> Option<&'a gameplay_mechanics::InventoryTransferReceipt> {
+        match self.0 {
+            StandardMechanicsReceipt::InventoryTransfer(value) => Some(value),
             _ => None,
         }
     }
