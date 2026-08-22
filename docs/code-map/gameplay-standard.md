@@ -196,8 +196,13 @@ No route implies an aggregate runtime or product policy.
 `StandardPredicate` is only an exact expression comparison. Branching stays in
 the existing `gameplay_resolution::Program::When`; no Boolean program node or
 second traversal is introduced. `StandardOperation` supplies a typed mechanics
-column: spend/restore a track, submit bounded damage, apply/remove an effect,
-and grant/consume/transfer a bounded fungible inventory stack. Inventory leaves
+column: spend/restore a track, submit bounded damage, apply/refresh/replace/remove an effect,
+and grant/consume/transfer a bounded fungible inventory stack. Refresh retains an active
+instance's definition and requires the catalog's `Refresh` policy. Replace supplies a `Replace`
+definition, removes that stacking group, and may reuse an instance identity only when the old
+instance belongs to that removed group; an unrelated live identity collision is rejected before
+candidate execution. Both retain the context operation and source provenance in the existing
+`EffectService` request and receipt; expiration remains a downstream timing decision. Inventory leaves
 are direct typed adapters over `InventoryService`: they retain catalog item,
 quantity, operation, and provenance identities, reject unique items, and leave
 allocation, loot, equipment selection, consequences, scheduling, and

@@ -216,7 +216,7 @@ are operation evidence rather than an ambient event journal.
 The optional `gameplay-standard` vocabulary adds no resolution kernel. Its
 standard predicate is an exact expression comparison used by the existing
 `Program::When`; its typed operations plan track spend/restore, damage
-submission, effect apply/remove, fungible inventory grant/consume/transfer, and
+submission, effect apply/refresh/replace/remove, fungible inventory grant/consume/transfer, and
 caller-supplied unique-item transfer/equip/unequip/swap.
 A product passes explicit
 capability-role-to-`EntityId` bindings and input values, while planning obtains
