@@ -555,6 +555,19 @@ bounded observations remain typed rejections. These are additive exact v1
 grammar arms: pre-existing exact payload bytes and their interpretation remain
 unchanged.
 
+Separately, `gameplay-standard` offers a typed runtime-only bounded sample
+plan for products that need to validate caller-supplied `i64` evidence without
+admitting it into an exact expression bundle. A non-empty plan retains its
+canonical identity, positive caller-owned version, and declared requirement
+order. It rejects duplicate keys, invalid bounds, and quota overflow before it
+can be used; validation rejects duplicate, unknown, missing, and out-of-range
+samples, then returns one receipt retaining the plan identity/version,
+requirements, and accepted values in requirement order. It uses direct
+inclusive comparisons, so `i64::MIN` and `i64::MAX` remain valid endpoints.
+It does not generate values, choose loot, branch, schedule, persist, or change
+`ExactInputBundle` semantics; products may omit the plan when no evidence is
+needed or select an explicit bounded superset.
+
 The bounded [continuous cadence and residual experiment](topics/gameplay/continuous-cadence-experiment.md)
 compares caller-declared partitions without adding an Engine clock, scheduler,
 continuous stat, or persistence aggregate. Its current evidence keeps residual

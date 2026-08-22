@@ -8,6 +8,7 @@
 
 use std::fmt;
 
+mod bounded_evidence;
 mod cadence;
 mod composed;
 mod composed_error;
@@ -23,6 +24,12 @@ mod projection;
 mod quantization;
 mod resolution;
 
+pub use bounded_evidence::{
+    BoundedSample, BoundedSampleKey, BoundedSamplePlan, BoundedSamplePlanError,
+    BoundedSamplePlanIdentity, BoundedSamplePlanVersion, BoundedSampleReceipt,
+    BoundedSampleRequirement, BOUNDED_SAMPLE_PLAN_SCHEMA_VERSION, MAX_BOUNDED_SAMPLE_KEY_BYTES,
+    MAX_BOUNDED_SAMPLE_PLAN_IDENTITY_BYTES, MAX_BOUNDED_SAMPLE_REQUIREMENTS,
+};
 pub use cadence::{
     accumulate_rate_binary64, attempt_quantize_rate_with_caller_residual,
     quantize_rate_with_caller_residual, Binary64AccumulatorSnapshot, CadenceIdentity,

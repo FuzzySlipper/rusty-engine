@@ -28,6 +28,7 @@ changed global runtime facade.
 
 - [`gameplay-standard/Cargo.toml`](../../rust/crates/gameplay-standard/Cargo.toml)
 - [`gameplay-standard/src/lib.rs`](../../rust/crates/gameplay-standard/src/lib.rs)
+- [`gameplay-standard/src/bounded_evidence.rs`](../../rust/crates/gameplay-standard/src/bounded_evidence.rs)
 - [`gameplay-standard/src/contract.rs`](../../rust/crates/gameplay-standard/src/contract.rs)
 - [`gameplay-standard/src/extension.rs`](../../rust/crates/gameplay-standard/src/extension.rs)
 - [`gameplay-standard/src/projection.rs`](../../rust/crates/gameplay-standard/src/projection.rs)
@@ -47,6 +48,18 @@ changed global runtime facade.
 - [`gameplay-standard/examples/select_capabilities.rs`](../../rust/crates/gameplay-standard/examples/select_capabilities.rs)
 - [Canonical design](../design.md)
 - [Rust SDK capability index](../rust-sdk-capabilities.md)
+
+## Bounded caller evidence
+
+[`bounded_evidence.rs`](../../rust/crates/gameplay-standard/src/bounded_evidence.rs)
+is a typed Rust-only plan for caller-supplied inclusive `i64` samples. A plan
+has a canonical identity, positive caller-owned version, and non-empty ordered
+requirements; it rejects invalid keys/bounds, duplicates, and quota overflow.
+Validation rejects duplicate, unknown, missing, and out-of-range samples and
+returns a receipt that retains identity, version, requirements, and accepted
+values in requirement order. It neither generates RNG values nor selects,
+branches, schedules, persists, or defines product meaning; it is also separate
+from `ExactInputBundle` and does not change exact-expression semantics.
 
 ## Public selection
 
