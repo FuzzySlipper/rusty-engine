@@ -1,18 +1,19 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use gameplay_mechanics::MechanicsScalar;
 use gameplay_rules::{
-    admit_rule_package, decode_canonical_rule_package, decode_rule_package, RuleDomainId,
-    RulePackageCandidate, RulePackageId, RulePackageSchemaVersion, RuleProvenance, RuleSource,
-    RuleSourceId, RuleSubjectId, RuleVersion,
+    admit_rule_package, canonical_rule_json_value_len, decode_canonical_rule_package,
+    decode_rule_package, AdmittedRulePackage, RuleDomainId, RulePackageCandidate, RulePackageId,
+    RulePackageSchemaVersion, RuleProvenance, RuleSource, RuleSourceId, RuleSubjectId, RuleVersion,
 };
 use gameplay_standard::{
     attempt_quantize_continuous_to_mechanics, quantize_continuous_to_mechanics,
-    CapabilityRequirementId, CapabilityRoleId, ContinuousEvaluationError, ContinuousEvaluator,
-    ContinuousExpr, ContinuousExprLimits, ContinuousQuantizationMode, ContinuousQuantizationSource,
-    ContinuousValue, ContinuousValueError, ExactEvaluator, ExactExpr, ExactExprLimits,
-    ExactInputBundle, ExactInputReference, InputId, RoleRequirement,
+    CapabilityRequirementId, CapabilityRoleId, ComposedExactLeafCodec, ContinuousEvaluationError,
+    ContinuousEvaluator, ContinuousExpr, ContinuousExprLimits, ContinuousQuantizationMode,
+    ContinuousQuantizationSource, ContinuousValue, ContinuousValueError, ExactEvaluator, ExactExpr,
+    ExactExprLimits, ExactInputBundle, ExactInputReference, InputId, RoleRequirement,
 };
 
 fn scalar(value: i64) -> MechanicsScalar {
@@ -107,6 +108,1649 @@ impl gameplay_standard::CompileExactExpr for FailingExactLeaf {
     fn compile_exact_expr(&self) -> Result<ExactExpr, Self::Error> {
         Err(LeafError::MissingCoefficient)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NeutralProductLeaf {
+    EquippedTool,
+    Protection,
+}
+struct NeutralProductCodec;
+impl gameplay_standard::ComposedExactLeafCodec for NeutralProductCodec {
+    type Leaf = NeutralProductLeaf;
+    type Error = LeafError;
+
+    fn schema() -> gameplay_standard::StandardExtensionSchema {
+        gameplay_standard::StandardExtensionSchema::new(
+            CapabilityRequirementId::parse("example.combat").unwrap(),
+            1,
+        )
+        .unwrap()
+    }
+    fn decode_leaf(
+        kind: &gameplay_standard::ComposedExactLeafKindId,
+        payload: &serde_json::Value,
+    ) -> Result<Self::Leaf, Self::Error> {
+        let object = payload.as_object().ok_or(LeafError::MissingCoefficient)?;
+        if object.len() != 1
+            || object.get("slot") != Some(&serde_json::Value::String(kind.as_str().to_owned()))
+        {
+            return Err(LeafError::MissingCoefficient);
+        }
+        match kind.as_str() {
+            "combat.equipped-tool" => Ok(NeutralProductLeaf::EquippedTool),
+            "combat.protection" => Ok(NeutralProductLeaf::Protection),
+            _ => Err(LeafError::MissingCoefficient),
+        }
+    }
+    fn encode_leaf(
+        kind: &gameplay_standard::ComposedExactLeafKindId,
+        leaf: &Self::Leaf,
+    ) -> Result<serde_json::Value, Self::Error> {
+        let expected = match leaf {
+            NeutralProductLeaf::EquippedTool => "combat.equipped-tool",
+            NeutralProductLeaf::Protection => "combat.protection",
+        };
+        if kind.as_str() != expected {
+            return Err(LeafError::MissingCoefficient);
+        }
+        Ok(serde_json::json!({"slot":expected}))
+    }
+    fn compile_leaf(
+        leaf: &Self::Leaf,
+    ) -> Result<gameplay_standard::CompiledComposedExactLeaf, Self::Error> {
+        let (role_name, input, capability) = match leaf {
+            NeutralProductLeaf::EquippedTool => ("attacker", "equipped-tool", "read.equipped-tool"),
+            NeutralProductLeaf::Protection => ("defender", "protection", "read.protection"),
+        };
+        let expression = ExactExpr::Input(parameter(role_name, input));
+        let requirements = gameplay_standard::ExactExprRequirements::inspect(&expression).unwrap();
+        Ok(gameplay_standard::CompiledComposedExactLeaf::new(
+            expression,
+            requirements,
+            vec![RoleRequirement::new(
+                role(role_name),
+                vec![CapabilityRequirementId::parse(capability).unwrap()],
+            )
+            .unwrap()],
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SharedCapabilityLeaf {
+    Z,
+    A,
+}
+
+struct SharedCapabilityCodec;
+impl gameplay_standard::ComposedExactLeafCodec for SharedCapabilityCodec {
+    type Leaf = SharedCapabilityLeaf;
+    type Error = LeafError;
+
+    fn schema() -> gameplay_standard::StandardExtensionSchema {
+        gameplay_standard::StandardExtensionSchema::new(
+            CapabilityRequirementId::parse("example.shared").unwrap(),
+            1,
+        )
+        .unwrap()
+    }
+    fn decode_leaf(
+        _kind: &gameplay_standard::ComposedExactLeafKindId,
+        payload: &serde_json::Value,
+    ) -> Result<Self::Leaf, Self::Error> {
+        match payload.get("mode").and_then(serde_json::Value::as_str) {
+            Some("z") => Ok(SharedCapabilityLeaf::Z),
+            Some("a") => Ok(SharedCapabilityLeaf::A),
+            _ => Err(LeafError::MissingCoefficient),
+        }
+    }
+    fn encode_leaf(
+        _kind: &gameplay_standard::ComposedExactLeafKindId,
+        leaf: &Self::Leaf,
+    ) -> Result<serde_json::Value, Self::Error> {
+        Ok(serde_json::json!({
+            "mode": match leaf {
+                SharedCapabilityLeaf::Z => "z",
+                SharedCapabilityLeaf::A => "a",
+            }
+        }))
+    }
+    fn compile_leaf(
+        leaf: &Self::Leaf,
+    ) -> Result<gameplay_standard::CompiledComposedExactLeaf, Self::Error> {
+        let capability = match leaf {
+            SharedCapabilityLeaf::Z => "read.z",
+            SharedCapabilityLeaf::A => "read.a",
+        };
+        let expression = ExactExpr::Literal(scalar(1));
+        let requirements = gameplay_standard::ExactExprRequirements::inspect(&expression).unwrap();
+        Ok(gameplay_standard::CompiledComposedExactLeaf::new(
+            expression,
+            requirements,
+            vec![RoleRequirement::new(
+                role("shared"),
+                vec![CapabilityRequirementId::parse(capability).unwrap()],
+            )
+            .unwrap()],
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CountingProductLeaf(usize);
+
+static COUNTING_DECODE_CALLS: AtomicUsize = AtomicUsize::new(0);
+static COUNTING_COMPILE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+struct CountingProductCodec;
+impl gameplay_standard::ComposedExactLeafCodec for CountingProductCodec {
+    type Leaf = CountingProductLeaf;
+    type Error = LeafError;
+
+    fn schema() -> gameplay_standard::StandardExtensionSchema {
+        gameplay_standard::StandardExtensionSchema::new(
+            CapabilityRequirementId::parse("example.counting").unwrap(),
+            1,
+        )
+        .unwrap()
+    }
+    fn decode_leaf(
+        _kind: &gameplay_standard::ComposedExactLeafKindId,
+        payload: &serde_json::Value,
+    ) -> Result<Self::Leaf, Self::Error> {
+        COUNTING_DECODE_CALLS.fetch_add(1, Ordering::SeqCst);
+        let length = payload
+            .get("blob")
+            .and_then(serde_json::Value::as_str)
+            .ok_or(LeafError::MissingCoefficient)?
+            .len();
+        Ok(CountingProductLeaf(length))
+    }
+    fn encode_leaf(
+        _kind: &gameplay_standard::ComposedExactLeafKindId,
+        leaf: &Self::Leaf,
+    ) -> Result<serde_json::Value, Self::Error> {
+        Ok(serde_json::json!({"blob":"x".repeat(leaf.0)}))
+    }
+    fn compile_leaf(
+        _leaf: &Self::Leaf,
+    ) -> Result<gameplay_standard::CompiledComposedExactLeaf, Self::Error> {
+        COUNTING_COMPILE_CALLS.fetch_add(1, Ordering::SeqCst);
+        let expression = ExactExpr::Literal(scalar(1));
+        let requirements = gameplay_standard::ExactExprRequirements::inspect(&expression).unwrap();
+        Ok(gameplay_standard::CompiledComposedExactLeaf::new(
+            expression,
+            requirements,
+            vec![],
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MatrixProductLeaf {
+    Valid,
+    CompileFailure,
+    RequirementMismatch,
+    NonConvergent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MatrixLeafError {
+    Decode,
+    Compile,
+}
+impl std::fmt::Display for MatrixLeafError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Decode => "matrix decode failed",
+            Self::Compile => "matrix compile failed",
+        })
+    }
+}
+impl std::error::Error for MatrixLeafError {}
+
+struct MatrixProductCodec;
+impl gameplay_standard::ComposedExactLeafCodec for MatrixProductCodec {
+    type Leaf = MatrixProductLeaf;
+    type Error = MatrixLeafError;
+
+    fn schema() -> gameplay_standard::StandardExtensionSchema {
+        gameplay_standard::StandardExtensionSchema::new(
+            CapabilityRequirementId::parse("example.matrix").unwrap(),
+            1,
+        )
+        .unwrap()
+    }
+    fn decode_leaf(
+        _kind: &gameplay_standard::ComposedExactLeafKindId,
+        payload: &serde_json::Value,
+    ) -> Result<Self::Leaf, Self::Error> {
+        match payload.get("mode").and_then(serde_json::Value::as_str) {
+            Some("decode") => Err(MatrixLeafError::Decode),
+            Some("compile") => Ok(MatrixProductLeaf::CompileFailure),
+            Some("requirements") => Ok(MatrixProductLeaf::RequirementMismatch),
+            Some("nonconvergent") => Ok(MatrixProductLeaf::NonConvergent),
+            _ => Ok(MatrixProductLeaf::Valid),
+        }
+    }
+    fn encode_leaf(
+        _kind: &gameplay_standard::ComposedExactLeafKindId,
+        leaf: &Self::Leaf,
+    ) -> Result<serde_json::Value, Self::Error> {
+        let mode = match leaf {
+            MatrixProductLeaf::Valid => "valid",
+            MatrixProductLeaf::CompileFailure => "compile",
+            MatrixProductLeaf::RequirementMismatch => "requirements",
+            MatrixProductLeaf::NonConvergent => "valid",
+        };
+        Ok(serde_json::json!({"mode":mode}))
+    }
+    fn compile_leaf(
+        leaf: &Self::Leaf,
+    ) -> Result<gameplay_standard::CompiledComposedExactLeaf, Self::Error> {
+        match leaf {
+            MatrixProductLeaf::Valid | MatrixProductLeaf::NonConvergent => {
+                let expression = ExactExpr::Literal(scalar(7));
+                let requirements =
+                    gameplay_standard::ExactExprRequirements::inspect(&expression).unwrap();
+                Ok(gameplay_standard::CompiledComposedExactLeaf::new(
+                    expression,
+                    requirements,
+                    vec![],
+                ))
+            }
+            MatrixProductLeaf::CompileFailure => Err(MatrixLeafError::Compile),
+            MatrixProductLeaf::RequirementMismatch => {
+                let expression = ExactExpr::Input(parameter("matrix", "value"));
+                let declared = ExactExpr::Literal(scalar(0));
+                let requirements =
+                    gameplay_standard::ExactExprRequirements::inspect(&declared).unwrap();
+                Ok(gameplay_standard::CompiledComposedExactLeaf::new(
+                    expression,
+                    requirements,
+                    vec![],
+                ))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuotaProductLeaf {
+    LargeNodeTree,
+    ManyInputs(u8),
+    WorkTree,
+}
+
+struct QuotaProductCodec;
+impl gameplay_standard::ComposedExactLeafCodec for QuotaProductCodec {
+    type Leaf = QuotaProductLeaf;
+    type Error = LeafError;
+
+    fn schema() -> gameplay_standard::StandardExtensionSchema {
+        gameplay_standard::StandardExtensionSchema::new(
+            CapabilityRequirementId::parse("example.quotas").unwrap(),
+            1,
+        )
+        .unwrap()
+    }
+    fn decode_leaf(
+        _kind: &gameplay_standard::ComposedExactLeafKindId,
+        payload: &serde_json::Value,
+    ) -> Result<Self::Leaf, Self::Error> {
+        match payload.get("mode").and_then(serde_json::Value::as_str) {
+            Some("nodes") => Ok(QuotaProductLeaf::LargeNodeTree),
+            Some("inputs-a") => Ok(QuotaProductLeaf::ManyInputs(0)),
+            Some("inputs-b") => Ok(QuotaProductLeaf::ManyInputs(1)),
+            Some("work") => Ok(QuotaProductLeaf::WorkTree),
+            _ => Err(LeafError::MissingCoefficient),
+        }
+    }
+    fn encode_leaf(
+        _kind: &gameplay_standard::ComposedExactLeafKindId,
+        leaf: &Self::Leaf,
+    ) -> Result<serde_json::Value, Self::Error> {
+        let mode = match leaf {
+            QuotaProductLeaf::LargeNodeTree => "nodes",
+            QuotaProductLeaf::ManyInputs(0) => "inputs-a",
+            QuotaProductLeaf::ManyInputs(1) => "inputs-b",
+            QuotaProductLeaf::ManyInputs(_) => return Err(LeafError::MissingCoefficient),
+            QuotaProductLeaf::WorkTree => "work",
+        };
+        Ok(serde_json::json!({"mode":mode}))
+    }
+    fn compile_leaf(
+        leaf: &Self::Leaf,
+    ) -> Result<gameplay_standard::CompiledComposedExactLeaf, Self::Error> {
+        let expression = match leaf {
+            QuotaProductLeaf::LargeNodeTree => exact_full_binary_tree(7),
+            QuotaProductLeaf::ManyInputs(group) => {
+                let inputs = (0..64)
+                    .map(|index| parameter("quota", &format!("input-{group}-{index}")))
+                    .collect::<Vec<_>>();
+                exact_sum_tree(&inputs)
+            }
+            QuotaProductLeaf::WorkTree => ExactExpr::Add(
+                Box::new(ExactExpr::Literal(scalar(1))),
+                Box::new(ExactExpr::Literal(scalar(2))),
+            ),
+        };
+        let requirements = gameplay_standard::ExactExprRequirements::inspect(&expression)
+            .map_err(|_| LeafError::MissingCoefficient)?;
+        Ok(gameplay_standard::CompiledComposedExactLeaf::new(
+            expression,
+            requirements,
+            vec![],
+        ))
+    }
+}
+
+fn raw_composed_payload(
+    family: &str,
+    extension: serde_json::Value,
+    tree: serde_json::Value,
+    roles: serde_json::Value,
+    subject: &str,
+    source: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "family": family,
+        "semanticsVersion": 1,
+        "subject": subject,
+        "source": source,
+        "roles": roles,
+        "extension": extension,
+        "tree": tree,
+    })
+}
+
+fn raw_product_tree(
+    kind: &str,
+    subject: &str,
+    source: &str,
+    payload: serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({
+        "op":"product",
+        "kind":kind,
+        "subject":subject,
+        "source":source,
+        "payload":payload,
+    })
+}
+
+fn raw_package(
+    schema_version: RulePackageSchemaVersion,
+    payload: serde_json::Value,
+    sources: Vec<RuleSource>,
+    provenance: Vec<RuleProvenance>,
+) -> AdmittedRulePackage {
+    admit_rule_package(RulePackageCandidate::new_with_schema(
+        schema_version,
+        RuleDomainId::parse("game").unwrap(),
+        RulePackageId::parse("composed-matrix").unwrap(),
+        RuleVersion::new(1).unwrap(),
+        vec![],
+        sources,
+        provenance,
+        payload,
+    ))
+    .unwrap()
+}
+
+fn matrix_extension_payload() -> serde_json::Value {
+    serde_json::json!({"namespace":"example.matrix","schemaVersion":1})
+}
+
+fn counting_extension_payload() -> serde_json::Value {
+    serde_json::json!({"namespace":"example.counting","schemaVersion":1})
+}
+
+fn source(id: &str) -> RuleSource {
+    RuleSource::new(RuleSourceId::parse(id).unwrap(), format!("{id}.json")).unwrap()
+}
+
+fn provenance(subject: &str, source: &str) -> RuleProvenance {
+    RuleProvenance::new(
+        RuleSubjectId::parse(subject).unwrap(),
+        RuleSourceId::parse(source).unwrap(),
+        None,
+        None,
+    )
+    .unwrap()
+}
+
+fn literal_wire() -> serde_json::Value {
+    serde_json::json!({"op":"literal","value":1})
+}
+
+fn left_deep_wire_tree(depth: usize, leaf: serde_json::Value) -> serde_json::Value {
+    let mut tree = leaf;
+    for _ in 1..depth {
+        tree = serde_json::json!({"op":"add","left":tree,"right":{"op":"literal","value":1}});
+    }
+    tree
+}
+
+fn full_binary_wire_tree(levels: usize, product: serde_json::Value) -> serde_json::Value {
+    if levels == 0 {
+        return product;
+    }
+    let left = if levels == 1 {
+        product
+    } else {
+        full_binary_wire_tree(levels - 1, product)
+    };
+    let right = full_binary_wire_tree(levels - 1, literal_wire());
+    serde_json::json!({"op":"add","left":left,"right":right})
+}
+
+fn exact_full_binary_tree(levels: usize) -> ExactExpr {
+    if levels == 0 {
+        return ExactExpr::Literal(scalar(1));
+    }
+    ExactExpr::Add(
+        Box::new(exact_full_binary_tree(levels - 1)),
+        Box::new(exact_full_binary_tree(levels - 1)),
+    )
+}
+
+fn composed_full_binary_tree(
+    levels: usize,
+) -> gameplay_standard::ComposedExactExpr<CountingProductLeaf> {
+    if levels == 0 {
+        return gameplay_standard::ComposedExactExpr::Literal(scalar(1));
+    }
+    gameplay_standard::ComposedExactExpr::Add(
+        Box::new(composed_full_binary_tree(levels - 1)),
+        Box::new(composed_full_binary_tree(levels - 1)),
+    )
+}
+
+fn exact_sum_tree(inputs: &[ExactInputReference]) -> ExactExpr {
+    match inputs {
+        [input] => ExactExpr::Input(input.clone()),
+        _ => {
+            let midpoint = inputs.len() / 2;
+            ExactExpr::Add(
+                Box::new(exact_sum_tree(&inputs[..midpoint])),
+                Box::new(exact_sum_tree(&inputs[midpoint..])),
+            )
+        }
+    }
+}
+
+fn payload_with_canonical_len(target: usize) -> serde_json::Value {
+    let empty = serde_json::json!({"blob":""});
+    let base =
+        canonical_rule_json_value_len(&empty, RulePackageSchemaVersion::IntegerOnlyV1, target + 1)
+            .unwrap();
+    let payload = serde_json::json!({"blob":"x".repeat(target - base)});
+    assert_eq!(
+        canonical_rule_json_value_len(
+            &payload,
+            RulePackageSchemaVersion::IntegerOnlyV1,
+            target + 1,
+        )
+        .unwrap(),
+        target
+    );
+    payload
+}
+
+fn counting_product(subject: &str, payload: serde_json::Value) -> serde_json::Value {
+    raw_product_tree("counting.leaf", subject, "rules", payload)
+}
+
+fn matrix_product(kind: &str, subject: &str, payload: serde_json::Value) -> serde_json::Value {
+    raw_product_tree(kind, subject, "rules", payload)
+}
+
+fn standard_context(
+    subjects: &[&str],
+    source_ids: &[&str],
+) -> gameplay_standard::StandardPackageContext {
+    let sources = source_ids.iter().map(|id| source(id)).collect::<Vec<_>>();
+    let provenance = subjects
+        .iter()
+        .map(|subject| provenance(subject, source_ids[0]))
+        .collect::<Vec<_>>();
+    gameplay_standard::StandardPackageContext::new(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        RuleDomainId::parse("game").unwrap(),
+        RulePackageId::parse("composed-matrix").unwrap(),
+        RuleVersion::new(1).unwrap(),
+        vec![],
+        sources,
+        provenance,
+    )
+}
+
+#[test]
+fn composed_wire_quotas_and_payload_bytes_reject_before_product_decode() {
+    let limits = ExactExprLimits::default();
+    let direct_definition = |expression| {
+        gameplay_standard::ComposedExactDefinition::new(
+            CountingProductCodec::schema(),
+            RuleSubjectId::parse("direct").unwrap(),
+            RuleSourceId::parse("rules").unwrap(),
+            expression,
+            vec![],
+        )
+    };
+
+    let mut too_deep = gameplay_standard::ComposedExactExpr::Literal(scalar(1));
+    for _ in 1..=limits.maximum_depth {
+        too_deep = gameplay_standard::ComposedExactExpr::Add(
+            Box::new(too_deep),
+            Box::new(gameplay_standard::ComposedExactExpr::Literal(scalar(1))),
+        );
+    }
+    assert!(matches!(
+        direct_definition(too_deep),
+        Err(gameplay_standard::ComposedExactDefinitionError::DepthQuotaExceeded {
+            actual,
+            maximum
+        }) if actual == limits.maximum_depth + 1 && maximum == limits.maximum_depth
+    ));
+    let too_many_nodes = gameplay_standard::ComposedExactExpr::Add(
+        Box::new(composed_full_binary_tree(7)),
+        Box::new(gameplay_standard::ComposedExactExpr::Literal(scalar(1))),
+    );
+    assert!(matches!(
+        direct_definition(too_many_nodes),
+        Err(gameplay_standard::ComposedExactDefinitionError::NodeQuotaExceeded {
+            actual,
+            maximum
+        }) if actual == limits.maximum_nodes + 1 && maximum == limits.maximum_nodes
+    ));
+    let too_many_aggregate_children = gameplay_standard::ComposedExactExpr::Min(
+        (0..=limits.maximum_arity)
+            .map(|_| gameplay_standard::ComposedExactExpr::Literal(scalar(1)))
+            .collect(),
+    );
+    assert!(matches!(
+        direct_definition(too_many_aggregate_children),
+        Err(gameplay_standard::ComposedExactDefinitionError::ArityQuotaExceeded {
+            actual,
+            maximum
+        }) if actual == limits.maximum_arity + 1 && maximum == limits.maximum_arity
+    ));
+
+    COUNTING_DECODE_CALLS.store(0, Ordering::SeqCst);
+    COUNTING_COMPILE_CALLS.store(0, Ordering::SeqCst);
+    let sources = vec![source("rules")];
+    let schema = counting_extension_payload();
+    let roleless = serde_json::json!([]);
+    let deep_tree = left_deep_wire_tree(
+        limits.maximum_depth + 1,
+        counting_product("deep-leaf", serde_json::json!({"blob":"x"})),
+    );
+    let deep_package = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            schema.clone(),
+            deep_tree,
+            roleless.clone(),
+            "formula",
+            "rules",
+        ),
+        sources.clone(),
+        vec![
+            provenance("formula", "rules"),
+            provenance("deep-leaf", "rules"),
+        ],
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<CountingProductCodec>(&deep_package),
+        Err(gameplay_standard::ComposedExactError::Wire(
+            gameplay_standard::ComposedExactDefinitionError::DepthQuotaExceeded {
+                actual,
+                maximum
+            }
+        )) if actual == limits.maximum_depth + 1 && maximum == limits.maximum_depth
+    ));
+    assert_eq!(COUNTING_DECODE_CALLS.load(Ordering::SeqCst), 0);
+
+    let node_tree = serde_json::json!({
+        "op":"add",
+        "left":full_binary_wire_tree(7, counting_product("node-leaf", serde_json::json!({"blob":"x"}))),
+        "right":{"op":"literal","value":1}
+    });
+    let node_package = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            schema.clone(),
+            node_tree,
+            roleless.clone(),
+            "formula",
+            "rules",
+        ),
+        sources.clone(),
+        vec![
+            provenance("formula", "rules"),
+            provenance("node-leaf", "rules"),
+        ],
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<CountingProductCodec>(&node_package),
+        Err(gameplay_standard::ComposedExactError::Wire(
+            gameplay_standard::ComposedExactDefinitionError::NodeQuotaExceeded {
+                actual,
+                maximum
+            }
+        )) if actual == limits.maximum_nodes + 1 && maximum == limits.maximum_nodes
+    ));
+    assert_eq!(COUNTING_DECODE_CALLS.load(Ordering::SeqCst), 0);
+
+    let arity_tree = serde_json::json!({
+        "op":"min",
+        "values":std::iter::once(counting_product("arity-leaf", serde_json::json!({"blob":"x"})))
+            .chain((0..limits.maximum_arity).map(|_| literal_wire()))
+            .collect::<Vec<_>>()
+    });
+    let arity_package = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            schema.clone(),
+            arity_tree,
+            roleless.clone(),
+            "formula",
+            "rules",
+        ),
+        sources.clone(),
+        vec![
+            provenance("formula", "rules"),
+            provenance("arity-leaf", "rules"),
+        ],
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<CountingProductCodec>(&arity_package),
+        Err(gameplay_standard::ComposedExactError::Wire(
+            gameplay_standard::ComposedExactDefinitionError::ArityQuotaExceeded {
+                actual,
+                maximum
+            }
+        )) if actual == limits.maximum_arity + 1 && maximum == limits.maximum_arity
+    ));
+    assert_eq!(COUNTING_DECODE_CALLS.load(Ordering::SeqCst), 0);
+
+    let maximum = gameplay_standard::MAX_STANDARD_EXTENSION_PAYLOAD_BYTES;
+    let exact_package = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            schema.clone(),
+            counting_product("exact-leaf", payload_with_canonical_len(maximum)),
+            roleless.clone(),
+            "formula",
+            "rules",
+        ),
+        sources.clone(),
+        vec![
+            provenance("formula", "rules"),
+            provenance("exact-leaf", "rules"),
+        ],
+    );
+    assert!(
+        gameplay_standard::compile_composed_exact_package::<CountingProductCodec>(&exact_package)
+            .is_ok()
+    );
+    assert_eq!(COUNTING_DECODE_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(COUNTING_COMPILE_CALLS.load(Ordering::SeqCst), 1);
+
+    let over_maximum_package = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            schema.clone(),
+            counting_product("over-leaf", payload_with_canonical_len(maximum + 1)),
+            roleless.clone(),
+            "formula",
+            "rules",
+        ),
+        sources.clone(),
+        vec![
+            provenance("formula", "rules"),
+            provenance("over-leaf", "rules"),
+        ],
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<CountingProductCodec>(
+            &over_maximum_package
+        ),
+        Err(gameplay_standard::ComposedExactError::Wire(
+            gameplay_standard::ComposedExactDefinitionError::Package(_)
+        ))
+    ));
+    assert_eq!(COUNTING_DECODE_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(COUNTING_COMPILE_CALLS.load(Ordering::SeqCst), 1);
+
+    let half = maximum / 2;
+    let aggregate_exact_package = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            schema.clone(),
+            serde_json::json!({
+                "op":"add",
+                "left":counting_product("aggregate-a", payload_with_canonical_len(half)),
+                "right":counting_product("aggregate-b", payload_with_canonical_len(maximum - half))
+            }),
+            roleless.clone(),
+            "formula",
+            "rules",
+        ),
+        sources.clone(),
+        vec![
+            provenance("formula", "rules"),
+            provenance("aggregate-a", "rules"),
+            provenance("aggregate-b", "rules"),
+        ],
+    );
+    assert!(
+        gameplay_standard::compile_composed_exact_package::<CountingProductCodec>(
+            &aggregate_exact_package
+        )
+        .is_ok()
+    );
+    assert_eq!(COUNTING_DECODE_CALLS.load(Ordering::SeqCst), 3);
+    assert_eq!(COUNTING_COMPILE_CALLS.load(Ordering::SeqCst), 3);
+
+    let aggregate_over_package = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            schema,
+            serde_json::json!({
+                "op":"add",
+                "left":counting_product("aggregate-c", payload_with_canonical_len(half)),
+                "right":counting_product("aggregate-d", payload_with_canonical_len(maximum - half + 1))
+            }),
+            roleless,
+            "formula",
+            "rules",
+        ),
+        sources,
+        vec![
+            provenance("formula", "rules"),
+            provenance("aggregate-c", "rules"),
+            provenance("aggregate-d", "rules"),
+        ],
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<CountingProductCodec>(
+            &aggregate_over_package
+        ),
+        Err(gameplay_standard::ComposedExactError::Wire(
+            gameplay_standard::ComposedExactDefinitionError::PayloadQuotaExceeded {
+                actual,
+                maximum: max,
+            }
+        )) if actual == maximum + 1 && max == maximum
+    ));
+    assert_eq!(COUNTING_DECODE_CALLS.load(Ordering::SeqCst), 3);
+    assert_eq!(COUNTING_COMPILE_CALLS.load(Ordering::SeqCst), 3);
+}
+
+#[test]
+fn composed_wire_preflights_literals_and_inputs_before_product_decode() {
+    let sources = vec![source("rules")];
+    let roles = serde_json::json!([]);
+    let schema = counting_extension_payload();
+    let product = counting_product("preflight-leaf", serde_json::json!({"blob":"x"}));
+
+    COUNTING_DECODE_CALLS.store(0, Ordering::SeqCst);
+    COUNTING_COMPILE_CALLS.store(0, Ordering::SeqCst);
+    let invalid_literal = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            schema.clone(),
+            serde_json::json!({
+                "op":"add",
+                "left":product.clone(),
+                "right":{"op":"literal","value":1_000_000_000_001_i64}
+            }),
+            roles.clone(),
+            "formula",
+            "rules",
+        ),
+        sources.clone(),
+        vec![
+            provenance("formula", "rules"),
+            provenance("preflight-leaf", "rules"),
+        ],
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<CountingProductCodec>(
+            &invalid_literal
+        ),
+        Err(gameplay_standard::ComposedExactError::Wire(
+            gameplay_standard::ComposedExactDefinitionError::ExactLiteral { path, .. }
+        )) if path == "payload.tree.right"
+    ));
+    assert_eq!(COUNTING_DECODE_CALLS.load(Ordering::SeqCst), 0);
+    assert_eq!(COUNTING_COMPILE_CALLS.load(Ordering::SeqCst), 0);
+
+    COUNTING_DECODE_CALLS.store(0, Ordering::SeqCst);
+    COUNTING_COMPILE_CALLS.store(0, Ordering::SeqCst);
+    let undeclared_input = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            schema.clone(),
+            serde_json::json!({
+                "op":"add",
+                "left":product.clone(),
+                "right":{"op":"input","input":{"kind":"parameter","role":"rogue","id":"value"}}
+            }),
+            roles,
+            "formula",
+            "rules",
+        ),
+        sources.clone(),
+        vec![
+            provenance("formula", "rules"),
+            provenance("preflight-leaf", "rules"),
+        ],
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<CountingProductCodec>(
+            &undeclared_input
+        ),
+        Err(gameplay_standard::ComposedExactError::Wire(
+            gameplay_standard::ComposedExactDefinitionError::UndeclaredInputRole { role }
+        )) if role.as_str() == "rogue"
+    ));
+    assert_eq!(COUNTING_DECODE_CALLS.load(Ordering::SeqCst), 0);
+    assert_eq!(COUNTING_COMPILE_CALLS.load(Ordering::SeqCst), 0);
+
+    COUNTING_DECODE_CALLS.store(0, Ordering::SeqCst);
+    COUNTING_COMPILE_CALLS.store(0, Ordering::SeqCst);
+    let invalid_reference = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            schema,
+            serde_json::json!({
+                "op":"add",
+                "left":product,
+                "right":{"op":"input","input":{"kind":"parameter","role":"self","id":"not valid"}}
+            }),
+            serde_json::json!([{"role":"self","capabilities":[]}]),
+            "formula",
+            "rules",
+        ),
+        sources,
+        vec![
+            provenance("formula", "rules"),
+            provenance("preflight-leaf", "rules"),
+        ],
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<CountingProductCodec>(
+            &invalid_reference
+        ),
+        Err(gameplay_standard::ComposedExactError::Wire(
+            gameplay_standard::ComposedExactDefinitionError::Role(_)
+        ))
+    ));
+    assert_eq!(COUNTING_DECODE_CALLS.load(Ordering::SeqCst), 0);
+    assert_eq!(COUNTING_COMPILE_CALLS.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn composed_product_expansion_uses_global_exact_node_input_and_work_quotas() {
+    let source_id = RuleSourceId::parse("rules").unwrap();
+    let formula = RuleSubjectId::parse("formula").unwrap();
+    let node_leaf = RuleSubjectId::parse("node-leaf").unwrap();
+    let node_expression = gameplay_standard::ComposedExactExpr::Add(
+        Box::new(gameplay_standard::ComposedExactExpr::Product(
+            gameplay_standard::ComposedExactProductLeaf::new(
+                gameplay_standard::ComposedExactLeafKindId::parse("quota.nodes").unwrap(),
+                node_leaf.clone(),
+                source_id.clone(),
+                QuotaProductLeaf::LargeNodeTree,
+            ),
+        )),
+        Box::new(gameplay_standard::ComposedExactExpr::Literal(scalar(1))),
+    );
+    let node_definition = gameplay_standard::ComposedExactDefinition::new(
+        QuotaProductCodec::schema(),
+        formula.clone(),
+        source_id.clone(),
+        node_expression,
+        vec![],
+    )
+    .unwrap();
+    assert!(matches!(
+        gameplay_standard::admit_composed_exact_definition::<QuotaProductCodec>(
+            &standard_context(&["formula", "node-leaf"], &["rules"]),
+            node_definition,
+        ),
+        Err(gameplay_standard::ComposedExactError::Standard(
+            gameplay_standard::ExactEvaluationError::NodeQuotaExceeded {
+                actual,
+                maximum,
+            }
+        )) if actual == ExactExprLimits::default().maximum_nodes + 1
+            && maximum == ExactExprLimits::default().maximum_nodes
+    ));
+
+    let input_a = RuleSubjectId::parse("input-a").unwrap();
+    let input_b = RuleSubjectId::parse("input-b").unwrap();
+    let input_leaf = |subject: RuleSubjectId, group| {
+        gameplay_standard::ComposedExactExpr::Product(
+            gameplay_standard::ComposedExactProductLeaf::new(
+                gameplay_standard::ComposedExactLeafKindId::parse("quota.inputs").unwrap(),
+                subject,
+                source_id.clone(),
+                QuotaProductLeaf::ManyInputs(group),
+            ),
+        )
+    };
+    let input_expression = gameplay_standard::ComposedExactExpr::Add(
+        Box::new(input_leaf(input_a.clone(), 0)),
+        Box::new(input_leaf(input_b.clone(), 1)),
+    );
+    let input_definition = gameplay_standard::ComposedExactDefinition::new(
+        QuotaProductCodec::schema(),
+        formula.clone(),
+        source_id.clone(),
+        input_expression,
+        vec![RoleRequirement::new(role("quota"), vec![]).unwrap()],
+    )
+    .unwrap();
+    assert!(matches!(
+        gameplay_standard::admit_composed_exact_definition::<QuotaProductCodec>(
+            &standard_context(&["formula", "input-a", "input-b"], &["rules"]),
+            input_definition,
+        ),
+        Err(gameplay_standard::ComposedExactError::Standard(
+            gameplay_standard::ExactEvaluationError::InputQuotaExceeded {
+                actual,
+                maximum,
+            }
+        )) if actual == 128 && maximum == ExactExprLimits::default().maximum_inputs
+    ));
+
+    let work_leaf = RuleSubjectId::parse("work-leaf").unwrap();
+    let work_definition = gameplay_standard::ComposedExactDefinition::new(
+        QuotaProductCodec::schema(),
+        formula,
+        source_id,
+        gameplay_standard::ComposedExactExpr::Product(
+            gameplay_standard::ComposedExactProductLeaf::new(
+                gameplay_standard::ComposedExactLeafKindId::parse("quota.work").unwrap(),
+                work_leaf,
+                RuleSourceId::parse("rules").unwrap(),
+                QuotaProductLeaf::WorkTree,
+            ),
+        ),
+        vec![],
+    )
+    .unwrap();
+    let admitted = gameplay_standard::admit_composed_exact_definition::<QuotaProductCodec>(
+        &standard_context(&["formula", "work-leaf"], &["rules"]),
+        work_definition,
+    )
+    .unwrap();
+    let low_work = ExactExprLimits {
+        maximum_work: 2,
+        ..ExactExprLimits::default()
+    };
+    assert!(matches!(
+        ExactEvaluator::evaluate(
+            admitted.compiled(),
+            &ExactInputBundle::new(vec![]),
+            low_work,
+        ),
+        Err(gameplay_standard::ExactEvaluationError::WorkQuotaExceeded {
+            actual: 3,
+            maximum: 2,
+        })
+    ));
+}
+
+#[test]
+fn composed_product_errors_keep_distinct_identity_and_bounded_wire_paths() {
+    let malformed_package = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            matrix_extension_payload(),
+            serde_json::json!({
+                "op":"add",
+                "left":{"op":"not-an-operation"},
+                "right":{"op":"literal","value":1}
+            }),
+            serde_json::json!([]),
+            "formula",
+            "rules",
+        ),
+        vec![source("rules")],
+        vec![provenance("formula", "rules")],
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<MatrixProductCodec>(
+            &malformed_package
+        ),
+        Err(gameplay_standard::ComposedExactError::Wire(
+            gameplay_standard::ComposedExactDefinitionError::MalformedPayload { path, .. }
+        )) if path == "payload.tree.left.op"
+    ));
+
+    let decode_subject = RuleSubjectId::parse("decode-leaf").unwrap();
+    let decode_package = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            matrix_extension_payload(),
+            matrix_product(
+                "matrix.decode",
+                "decode-leaf",
+                serde_json::json!({"mode":"decode"}),
+            ),
+            serde_json::json!([]),
+            "formula",
+            "rules",
+        ),
+        vec![source("rules")],
+        vec![
+            provenance("formula", "rules"),
+            provenance("decode-leaf", "rules"),
+        ],
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<MatrixProductCodec>(&decode_package),
+        Err(gameplay_standard::ComposedExactError::ProductDecode {
+            context,
+            error,
+        }) if context.path() == "payload.tree"
+            && context.schema() == &MatrixProductCodec::schema()
+            && context.kind().as_str() == "matrix.decode"
+            && context.subject() == &decode_subject
+            && context.source().as_str() == "rules"
+            && *error == MatrixLeafError::Decode
+    ));
+
+    let source_id = RuleSourceId::parse("rules").unwrap();
+    let compile_subject = RuleSubjectId::parse("compile-leaf").unwrap();
+    let compile_definition = gameplay_standard::ComposedExactDefinition::new(
+        MatrixProductCodec::schema(),
+        RuleSubjectId::parse("formula").unwrap(),
+        source_id.clone(),
+        gameplay_standard::ComposedExactExpr::Product(
+            gameplay_standard::ComposedExactProductLeaf::new(
+                gameplay_standard::ComposedExactLeafKindId::parse("matrix.compile").unwrap(),
+                compile_subject.clone(),
+                source_id.clone(),
+                MatrixProductLeaf::CompileFailure,
+            ),
+        ),
+        vec![],
+    )
+    .unwrap();
+    assert!(matches!(
+        gameplay_standard::admit_composed_exact_definition::<MatrixProductCodec>(
+            &standard_context(&["formula", "compile-leaf"], &["rules"]),
+            compile_definition,
+        ),
+        Err(gameplay_standard::ComposedExactError::ProductCompile {
+            context,
+            error,
+        }) if context.path() == "payload.tree"
+            && context.schema() == &MatrixProductCodec::schema()
+            && context.kind().as_str() == "matrix.compile"
+            && context.subject() == &compile_subject
+            && context.source().as_str() == "rules"
+            && *error == MatrixLeafError::Compile
+    ));
+
+    let requirements_subject = RuleSubjectId::parse("requirements-leaf").unwrap();
+    let requirements_definition = gameplay_standard::ComposedExactDefinition::new(
+        MatrixProductCodec::schema(),
+        RuleSubjectId::parse("formula").unwrap(),
+        source_id.clone(),
+        gameplay_standard::ComposedExactExpr::Product(
+            gameplay_standard::ComposedExactProductLeaf::new(
+                gameplay_standard::ComposedExactLeafKindId::parse("matrix.requirements").unwrap(),
+                requirements_subject.clone(),
+                source_id,
+                MatrixProductLeaf::RequirementMismatch,
+            ),
+        ),
+        vec![],
+    )
+    .unwrap();
+    assert!(matches!(
+        gameplay_standard::admit_composed_exact_definition::<MatrixProductCodec>(
+            &standard_context(&["formula", "requirements-leaf"], &["rules"]),
+            requirements_definition,
+        ),
+        Err(gameplay_standard::ComposedExactError::ProductRequirementMismatch {
+            context,
+        }) if context.path() == "payload.tree"
+            && context.schema() == &MatrixProductCodec::schema()
+            && context.kind().as_str() == "matrix.requirements"
+            && context.subject() == &requirements_subject
+            && context.source().as_str() == "rules"
+    ));
+}
+
+#[test]
+fn composed_wire_requires_product_payloads_to_converge_through_the_codec() {
+    let package = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            matrix_extension_payload(),
+            matrix_product(
+                "matrix.nonconvergent",
+                "nonconvergent-leaf",
+                serde_json::json!({"mode":"nonconvergent"}),
+            ),
+            serde_json::json!([]),
+            "formula",
+            "rules",
+        ),
+        vec![source("rules")],
+        vec![
+            provenance("formula", "rules"),
+            provenance("nonconvergent-leaf", "rules"),
+        ],
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<MatrixProductCodec>(&package),
+        Err(gameplay_standard::ComposedExactError::ProductNonConvergentPayload {
+            context,
+        }) if context.path() == "payload.tree"
+            && context.schema() == &MatrixProductCodec::schema()
+            && context.kind().as_str() == "matrix.nonconvergent"
+            && context.subject().as_str() == "nonconvergent-leaf"
+            && context.source().as_str() == "rules"
+    ));
+}
+
+#[test]
+fn composed_wire_rejects_wrong_family_schema_and_leaf_provenance() {
+    let valid_tree = matrix_product(
+        "matrix.valid",
+        "valid-leaf",
+        serde_json::json!({"mode":"valid"}),
+    );
+    let valid_roles = serde_json::json!([]);
+    let valid_sources = vec![source("rules")];
+    let valid_provenance = vec![
+        provenance("formula", "rules"),
+        provenance("valid-leaf", "rules"),
+    ];
+
+    let wrong_family = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            "exact",
+            matrix_extension_payload(),
+            valid_tree.clone(),
+            valid_roles.clone(),
+            "formula",
+            "rules",
+        ),
+        valid_sources.clone(),
+        valid_provenance.clone(),
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<MatrixProductCodec>(&wrong_family),
+        Err(gameplay_standard::ComposedExactError::Wire(
+            gameplay_standard::ComposedExactDefinitionError::WrongFamily
+        ))
+    ));
+
+    let wrong_package_schema = raw_package(
+        RulePackageSchemaVersion::Binary64V2,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            matrix_extension_payload(),
+            valid_tree.clone(),
+            valid_roles.clone(),
+            "formula",
+            "rules",
+        ),
+        valid_sources.clone(),
+        valid_provenance.clone(),
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<MatrixProductCodec>(
+            &wrong_package_schema
+        ),
+        Err(gameplay_standard::ComposedExactError::Wire(
+            gameplay_standard::ComposedExactDefinitionError::WrongSchema {
+                expected: 1,
+                actual: 2,
+            }
+        ))
+    ));
+
+    let wrong_extension_schema = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            serde_json::json!({"namespace":"example.other","schemaVersion":2}),
+            valid_tree.clone(),
+            valid_roles.clone(),
+            "formula",
+            "rules",
+        ),
+        valid_sources.clone(),
+        valid_provenance.clone(),
+    );
+    let actual_schema = gameplay_standard::StandardExtensionSchema::new(
+        CapabilityRequirementId::parse("example.other").unwrap(),
+        2,
+    )
+    .unwrap();
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<MatrixProductCodec>(
+            &wrong_extension_schema
+        ),
+        Err(gameplay_standard::ComposedExactError::SchemaMismatch { expected, actual })
+            if expected == MatrixProductCodec::schema() && actual == actual_schema
+    ));
+
+    let missing_provenance = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            matrix_extension_payload(),
+            valid_tree.clone(),
+            valid_roles.clone(),
+            "formula",
+            "rules",
+        ),
+        valid_sources.clone(),
+        vec![provenance("formula", "rules")],
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<MatrixProductCodec>(
+            &missing_provenance
+        ),
+        Err(gameplay_standard::ComposedExactError::Wire(
+            gameplay_standard::ComposedExactDefinitionError::MissingCorrelation {
+                subject,
+                source,
+            }
+        )) if subject.as_str() == "valid-leaf" && source.as_str() == "rules"
+    ));
+
+    let mismatched_provenance = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            matrix_extension_payload(),
+            raw_product_tree(
+                "matrix.valid",
+                "valid-leaf",
+                "other",
+                serde_json::json!({"mode":"valid"}),
+            ),
+            valid_roles,
+            "formula",
+            "rules",
+        ),
+        vec![source("rules"), source("other")],
+        vec![
+            provenance("formula", "rules"),
+            provenance("valid-leaf", "rules"),
+        ],
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<MatrixProductCodec>(
+            &mismatched_provenance
+        ),
+        Err(gameplay_standard::ComposedExactError::Wire(
+            gameplay_standard::ComposedExactDefinitionError::SourceMismatch {
+                subject,
+                expected,
+                actual,
+            }
+        )) if subject.as_str() == "valid-leaf"
+            && expected.as_str() == "other"
+            && actual.as_str() == "rules"
+    ));
+}
+
+#[test]
+fn composed_wire_distinguishes_undeclared_roles_from_missing_product_capabilities() {
+    let undeclared_role = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            matrix_extension_payload(),
+            serde_json::json!({
+                "op":"input",
+                "input":{"kind":"parameter","role":"rogue","id":"value"}
+            }),
+            serde_json::json!([]),
+            "formula",
+            "rules",
+        ),
+        vec![source("rules")],
+        vec![provenance("formula", "rules")],
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<MatrixProductCodec>(
+            &undeclared_role
+        ),
+        Err(gameplay_standard::ComposedExactError::Wire(
+            gameplay_standard::ComposedExactDefinitionError::UndeclaredInputRole { role }
+        )) if role.as_str() == "rogue"
+    ));
+
+    let missing_capability = raw_package(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            serde_json::json!({"namespace":"example.combat","schemaVersion":1}),
+            raw_product_tree(
+                "combat.equipped-tool",
+                "capability-leaf",
+                "rules",
+                serde_json::json!({"slot":"combat.equipped-tool"}),
+            ),
+            serde_json::json!([{"role":"attacker","capabilities":[]}]),
+            "formula",
+            "rules",
+        ),
+        vec![source("rules")],
+        vec![
+            provenance("formula", "rules"),
+            provenance("capability-leaf", "rules"),
+        ],
+    );
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_package::<NeutralProductCodec>(
+            &missing_capability
+        ),
+        Err(gameplay_standard::ComposedExactError::Wire(
+            gameplay_standard::ComposedExactDefinitionError::MissingProductCapability {
+                role,
+                capability,
+            }
+        )) if role.as_str() == "attacker" && capability.as_str() == "read.equipped-tool"
+    ));
+}
+
+#[test]
+fn composed_comparisons_merge_both_product_sides_into_canonical_inputs_capabilities_and_evidence() {
+    let source_id = RuleSourceId::parse("rules").unwrap();
+    let tool_subject = RuleSubjectId::parse("tool-leaf").unwrap();
+    let protection_subject = RuleSubjectId::parse("protection-leaf").unwrap();
+    let product = |kind: &str,
+                   subject: RuleSubjectId,
+                   leaf: NeutralProductLeaf|
+     -> gameplay_standard::ComposedExactExpr<NeutralProductLeaf> {
+        gameplay_standard::ComposedExactExpr::Product(
+            gameplay_standard::ComposedExactProductLeaf::new(
+                gameplay_standard::ComposedExactLeafKindId::parse(kind).unwrap(),
+                subject,
+                source_id.clone(),
+                leaf,
+            ),
+        )
+    };
+    let comparison = gameplay_standard::ComposedExactComparison::GreaterThan(
+        gameplay_standard::ComposedExactExpr::Multiply(
+            Box::new(product(
+                "combat.equipped-tool",
+                tool_subject.clone(),
+                NeutralProductLeaf::EquippedTool,
+            )),
+            Box::new(gameplay_standard::ComposedExactExpr::Literal(scalar(2))),
+        ),
+        gameplay_standard::ComposedExactExpr::Add(
+            Box::new(product(
+                "combat.protection",
+                protection_subject.clone(),
+                NeutralProductLeaf::Protection,
+            )),
+            Box::new(gameplay_standard::ComposedExactExpr::Literal(scalar(1))),
+        ),
+    );
+    let compiled =
+        gameplay_standard::compile_composed_exact_comparison::<NeutralProductCodec>(&comparison)
+            .unwrap();
+    assert_eq!(
+        compiled.requirements().inputs(),
+        &vec![
+            parameter("attacker", "equipped-tool"),
+            parameter("defender", "protection"),
+        ]
+    );
+    assert_eq!(
+        compiled.product_capabilities(),
+        &[
+            RoleRequirement::new(
+                role("attacker"),
+                vec![CapabilityRequirementId::parse("read.equipped-tool").unwrap()],
+            )
+            .unwrap(),
+            RoleRequirement::new(
+                role("defender"),
+                vec![CapabilityRequirementId::parse("read.protection").unwrap()],
+            )
+            .unwrap(),
+        ]
+    );
+    assert_eq!(compiled.leaves().len(), 2);
+    assert_eq!(
+        compiled.leaves()[0].schema(),
+        &NeutralProductCodec::schema()
+    );
+    assert_eq!(compiled.leaves()[0].kind().as_str(), "combat.equipped-tool");
+    assert_eq!(compiled.leaves()[0].subject(), &tool_subject);
+    assert_eq!(compiled.leaves()[0].source(), &source_id);
+    assert_eq!(
+        compiled.leaves()[1].schema(),
+        &NeutralProductCodec::schema()
+    );
+    assert_eq!(compiled.leaves()[1].kind().as_str(), "combat.protection");
+    assert_eq!(compiled.leaves()[1].subject(), &protection_subject);
+    assert_eq!(compiled.leaves()[1].source(), &source_id);
+    assert!(ExactEvaluator::evaluate_predicate(
+        compiled.comparison(),
+        &ExactInputBundle::new(vec![
+            (parameter("attacker", "equipped-tool"), scalar(9)),
+            (parameter("defender", "protection"), scalar(2)),
+        ]),
+        ExactExprLimits::default(),
+    )
+    .unwrap());
+}
+
+#[test]
+fn composed_comparison_merges_same_role_capabilities_independent_of_operand_order() {
+    let product = |kind: &str,
+                   subject: &str,
+                   leaf: SharedCapabilityLeaf|
+     -> gameplay_standard::ComposedExactExpr<SharedCapabilityLeaf> {
+        gameplay_standard::ComposedExactExpr::Product(
+            gameplay_standard::ComposedExactProductLeaf::new(
+                gameplay_standard::ComposedExactLeafKindId::parse(kind).unwrap(),
+                RuleSubjectId::parse(subject).unwrap(),
+                RuleSourceId::parse("rules").unwrap(),
+                leaf,
+            ),
+        )
+    };
+    let comparison = gameplay_standard::ComposedExactComparison::Equal(
+        product("shared.z", "z-leaf", SharedCapabilityLeaf::Z),
+        product("shared.a", "a-leaf", SharedCapabilityLeaf::A),
+    );
+    let compiled =
+        gameplay_standard::compile_composed_exact_comparison::<SharedCapabilityCodec>(&comparison)
+            .unwrap();
+    assert_eq!(compiled.product_capabilities().len(), 1);
+    assert_eq!(
+        compiled.product_capabilities()[0],
+        RoleRequirement::new(
+            role("shared"),
+            vec![
+                CapabilityRequirementId::parse("read.a").unwrap(),
+                CapabilityRequirementId::parse("read.z").unwrap(),
+            ],
+        )
+        .unwrap()
+    );
+}
+
+#[test]
+fn composed_comparison_accepts_max_depth_on_each_operand() {
+    let limits = ExactExprLimits::default();
+    let deep_literal = || {
+        let mut expression = gameplay_standard::ComposedExactExpr::Literal(scalar(1));
+        for _ in 1..limits.maximum_depth {
+            expression = gameplay_standard::ComposedExactExpr::Add(
+                Box::new(expression),
+                Box::new(gameplay_standard::ComposedExactExpr::Literal(scalar(0))),
+            );
+        }
+        expression
+    };
+    let comparison =
+        gameplay_standard::ComposedExactComparison::Equal(deep_literal(), deep_literal());
+    let compiled =
+        gameplay_standard::compile_composed_exact_comparison::<NeutralProductCodec>(&comparison)
+            .unwrap();
+    assert!(compiled.leaves().is_empty());
+    assert!(ExactEvaluator::evaluate_predicate(
+        compiled.comparison(),
+        &ExactInputBundle::new(vec![]),
+        limits,
+    )
+    .unwrap());
+}
+
+#[test]
+fn composed_typed_leaves_expand_before_the_one_standard_evaluator() {
+    let schema = NeutralProductCodec::schema();
+    let source = RuleSourceId::parse("rules").unwrap();
+    let subject = RuleSubjectId::parse("damage_check").unwrap();
+    let tool_subject = RuleSubjectId::parse("tool_leaf").unwrap();
+    let protection_subject = RuleSubjectId::parse("protection_leaf").unwrap();
+    let leaf = |kind: &str, subject: RuleSubjectId, value| {
+        gameplay_standard::ComposedExactExpr::Product(
+            gameplay_standard::ComposedExactProductLeaf::new(
+                gameplay_standard::ComposedExactLeafKindId::parse(kind).unwrap(),
+                subject,
+                source.clone(),
+                value,
+            ),
+        )
+    };
+    let expression = gameplay_standard::ComposedExactExpr::Max(vec![
+        gameplay_standard::ComposedExactExpr::Literal(scalar(1)),
+        gameplay_standard::ComposedExactExpr::Min(vec![
+            gameplay_standard::ComposedExactExpr::FloorDivide(
+                Box::new(gameplay_standard::ComposedExactExpr::Multiply(
+                    Box::new(leaf(
+                        "combat.equipped-tool",
+                        tool_subject.clone(),
+                        NeutralProductLeaf::EquippedTool,
+                    )),
+                    Box::new(gameplay_standard::ComposedExactExpr::Literal(scalar(2))),
+                )),
+                Box::new(gameplay_standard::ComposedExactExpr::Add(
+                    Box::new(leaf(
+                        "combat.protection",
+                        protection_subject.clone(),
+                        NeutralProductLeaf::Protection,
+                    )),
+                    Box::new(gameplay_standard::ComposedExactExpr::Literal(scalar(1))),
+                )),
+            ),
+            gameplay_standard::ComposedExactExpr::Literal(scalar(7)),
+        ]),
+    ]);
+    let roles = vec![
+        RoleRequirement::new(
+            role("attacker"),
+            vec![CapabilityRequirementId::parse("read.equipped-tool").unwrap()],
+        )
+        .unwrap(),
+        RoleRequirement::new(
+            role("defender"),
+            vec![CapabilityRequirementId::parse("read.protection").unwrap()],
+        )
+        .unwrap(),
+    ];
+    let definition = gameplay_standard::ComposedExactDefinition::new(
+        schema,
+        subject.clone(),
+        source.clone(),
+        expression,
+        roles,
+    )
+    .unwrap();
+    let context = gameplay_standard::StandardPackageContext::new(
+        RulePackageSchemaVersion::IntegerOnlyV1,
+        RuleDomainId::parse("game").unwrap(),
+        RulePackageId::parse("composed").unwrap(),
+        RuleVersion::new(1).unwrap(),
+        vec![],
+        vec![RuleSource::new(source.clone(), "rules.json").unwrap()],
+        vec![
+            RuleProvenance::new(subject, source.clone(), None, None).unwrap(),
+            RuleProvenance::new(tool_subject, source.clone(), None, None).unwrap(),
+            RuleProvenance::new(protection_subject, source.clone(), None, None).unwrap(),
+        ],
+    );
+    let admitted = gameplay_standard::admit_composed_exact_definition::<NeutralProductCodec>(
+        &context,
+        definition.clone(),
+    )
+    .unwrap();
+    let reopened = gameplay_standard::compile_composed_exact_package::<NeutralProductCodec>(
+        admitted.package(),
+    )
+    .unwrap();
+    assert_eq!(reopened.definition(), &definition);
+    assert_eq!(
+        reopened.package().canonical_bytes(),
+        admitted.package().canonical_bytes()
+    );
+    assert_eq!(
+        admitted.package().canonical_bytes(),
+        include_bytes!(
+            "../../../../fixtures/gameplay-standard/composed-exact-schema-1.canonical.json"
+        ),
+    );
+    assert_eq!(
+        admitted
+            .evaluate(&ExactInputBundle::new(vec![
+                (parameter("attacker", "equipped-tool"), scalar(9)),
+                (parameter("defender", "protection"), scalar(2)),
+            ]))
+            .unwrap()
+            .get(),
+        6,
+    );
+    let comparison = gameplay_standard::ComposedExactComparison::GreaterThan(
+        definition.expression().clone(),
+        gameplay_standard::ComposedExactExpr::Literal(scalar(5)),
+    );
+    let comparison =
+        gameplay_standard::compile_composed_exact_comparison::<NeutralProductCodec>(&comparison)
+            .unwrap();
+    assert!(matches!(
+        comparison.comparison(),
+        gameplay_standard::ExactComparison::GreaterThan(_, _)
+    ));
+    assert_eq!(comparison.leaves().len(), 2);
 }
 #[test]
 fn typed_product_leaves_compile_to_closed_family_trees() {

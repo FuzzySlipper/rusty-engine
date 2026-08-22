@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  STANDARD_LIMITS,
   StandardContractError,
+  decodeComposedExactPayload,
   decodeStandardExtensionArtifact,
   decodeStandardPayload,
 } from './index.js';
@@ -70,6 +72,32 @@ test('extension payloads accept only stable plain JSON data', () => {
   const accessor: Record<string, unknown> = {};
   Object.defineProperty(accessor, 'option', { enumerable: true, get: () => 'guard' });
   expectCode(() => decodeStandardExtensionArtifact({ ...artifact, payload: accessor }), 'invalid-node');
+});
+
+test('composed exact product leaves require a strict codec and preflight their canonical payload bytes', () => {
+  let decodeCalls = 0;
+  const codec = {
+    schema: { namespace: 'example.combat', schemaVersion: 1 },
+    decode(payload: unknown) { decodeCalls += 1; return payload as { readonly label: string }; },
+    encode(payload: { readonly label: string }) { return payload; },
+  } as const;
+  const product = (payload: unknown) => ({ op: 'product', kind: 'combat.option', subject: 'option', source: 'rules', payload });
+  const definition = {
+    family: 'composedExact', semanticsVersion: 1, subject: 'formula', source: 'rules',
+    extension: codec.schema, roles: [], tree: product({ label: 'caf\u00e9\n' }),
+  } as const;
+  assert.deepEqual(decodeComposedExactPayload(definition, codec), definition);
+  expectCode(() => decodeComposedExactPayload({ ...definition, tree: { ...definition.tree, ignored: true } }, codec), 'unknown-field');
+  assert.equal(decodeCalls, 1);
+  expectCode(() => decodeComposedExactPayload({ ...definition, tree: product({ label: 'x'.repeat(STANDARD_LIMITS.maxExtensionBytes) }) }, codec), 'extension-payload-too-large');
+  assert.equal(decodeCalls, 1);
+  expectCode(() => decodeComposedExactPayload({
+    ...definition,
+    tree: { op: 'add', left: product({ label: 'early' }), right: product({ label: 'x'.repeat(STANDARD_LIMITS.maxExtensionBytes) }) },
+  }, codec), 'extension-payload-too-large');
+  assert.equal(decodeCalls, 1);
+  expectCode(() => decodeComposedExactPayload({ ...definition, tree: product({ label: 1.5 }) }, codec), 'invalid-node');
+  assert.equal(decodeCalls, 1);
 });
 
 function expectCode(action: () => unknown, code: string): void {

@@ -1,6 +1,6 @@
 import { authorBinary64RulePackage, authorRulePackage, type CanonicalRuleArtifact, type RulePackageDraft } from '@rusty-engine/gameplay-rules-authoring';
 import type { JsonValue } from '@rusty-engine/gameplay-rules-contracts';
-import { StandardContractError, assertStandardExtensionArtifact, assertStandardPayload, type ContinuousDefinitionPayload, type ExactDefinitionPayload, type StandardExtensionArtifact } from '@rusty-engine/gameplay-standard-contracts';
+import { StandardContractError, assertStandardExtensionArtifact, assertStandardPayload, decodeComposedExactPayload, type ComposedExactDefinitionPayload, type ComposedExactTree, type ContinuousDefinitionPayload, type ExactDefinitionPayload, type JsonValue as StandardJsonValue, type StandardExtensionArtifact, type StrictComposedExactProductCodec } from '@rusty-engine/gameplay-standard-contracts';
 
 export type StandardDefinitionDraft<P extends ExactDefinitionPayload | ContinuousDefinitionPayload> = Omit<RulePackageDraft<JsonValue>, 'schemaVersion' | 'payload'> & { readonly definition: P };
 export function authorExactDefinition(draft: StandardDefinitionDraft<ExactDefinitionPayload>): CanonicalRuleArtifact<JsonValue> {
@@ -22,6 +22,25 @@ export function authorStandardExtension<Payload extends JsonValue>(draft: Standa
 /** Authors a schema-2 extension package when its opaque product payload needs binary64 JSON values. */
 export function authorBinary64StandardExtension<Payload extends JsonValue>(draft: StandardExtensionDraft<Payload>): CanonicalRuleArtifact<JsonValue> {
   return authorExtension(draft, authorBinary64RulePackage);
+}
+/** Declares the product-owned, strict authoring codec required for one composed exact schema. */
+export function declareComposedExactProductCodec<Payload extends StandardJsonValue>(codec: StrictComposedExactProductCodec<Payload>): StrictComposedExactProductCodec<Payload> {
+  if (!codec || typeof codec.decode !== 'function' || typeof codec.encode !== 'function') throw new StandardContractError('extension-schema-mismatch', 'composed exact authoring requires a strict product codec');
+  return Object.freeze(codec);
+}
+export type ComposedExactDefinitionDraft<Payload extends StandardJsonValue> = Omit<RulePackageDraft<JsonValue>, 'schemaVersion' | 'payload'> & { readonly codec: StrictComposedExactProductCodec<Payload>; readonly definition: ComposedExactDefinitionPayload<Payload> };
+/** Authors a canonical schema-1 composedExact package. Product payload validation is owned by the explicit strict codec; generic arithmetic stays Rust Standard grammar. */
+export function authorComposedExactDefinition<Payload extends StandardJsonValue>(draft: ComposedExactDefinitionDraft<Payload>): CanonicalRuleArtifact<JsonValue> {
+  const definition = decodeComposedExactPayload(draft.definition, draft.codec);
+  assertCorrelation(definition.subject, definition.source, draft.provenance);
+  collectLeafProvenance(definition.tree, draft.provenance);
+  const { codec: _codec, definition: _definition, ...envelope } = draft;
+  return authorRulePackage({ ...envelope, schemaVersion: 1, payload: definition as unknown as JsonValue });
+}
+function collectLeafProvenance<Payload extends StandardJsonValue>(tree: ComposedExactTree<Payload>, provenance: RulePackageDraft<JsonValue>['provenance']): void {
+  if (tree.op === 'product') { assertCorrelation(tree.subject, tree.source, provenance); return; }
+  if (tree.op === 'min' || tree.op === 'max') { for (const child of tree.values) collectLeafProvenance(child, provenance); return; }
+  if (tree.op === 'add' || tree.op === 'subtract' || tree.op === 'multiply' || tree.op === 'floorDivide' || tree.op === 'truncatingDivide') { collectLeafProvenance(tree.left, provenance); collectLeafProvenance(tree.right, provenance); }
 }
 function authorExtension<Payload extends JsonValue>(draft: StandardExtensionDraft<Payload>, emit: (draft: Omit<RulePackageDraft<JsonValue>, 'schemaVersion'>) => CanonicalRuleArtifact<JsonValue>): CanonicalRuleArtifact<JsonValue> {
   const payload: StandardExtensionArtifact = { family: 'standardExtension', namespace: draft.schema.namespace, schemaVersion: draft.schema.version, kind: draft.kind, subject: draft.subject, source: draft.source, payload: draft.payload };

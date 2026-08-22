@@ -12,7 +12,8 @@ const descriptor = JSON.parse(result.stdout);
 if (descriptor.contractVersion !== 1 || !Array.isArray(descriptor.families) || descriptor.families.length !== 2) throw new Error('unsupported Rust gameplay-standard descriptor');
 const exact = descriptor.families.find((family) => family.id === 'exact');
 const continuous = descriptor.families.find((family) => family.id === 'continuous');
-if (!exact || !continuous || !descriptor.fieldOrder || !descriptor.identities || !descriptor.failures || !descriptor.extensions) throw new Error('Rust gameplay-standard descriptor is incomplete');
+const composed = descriptor.composedExact;
+if (!exact || !continuous || !descriptor.fieldOrder || !descriptor.identities || !descriptor.failures || !descriptor.extensions || !composed) throw new Error('Rust gameplay-standard descriptor is incomplete');
 
 const inputUnion = (kinds) => kinds.map(({ tag, fields }) => {
   if (!Array.isArray(fields) || fields[0] !== 'kind') throw new Error(`invalid Rust input table for ${tag}`);
@@ -40,6 +41,7 @@ export const STANDARD_LIMITS = Object.freeze({
   maxExtensionBytes: ${descriptor.extensions.maximumBytes},
 } as const);
 export const STANDARD_EXTENSION = Object.freeze(${JSON.stringify(descriptor.extensions)} as const);
+export const STANDARD_COMPOSED_EXACT = Object.freeze(${JSON.stringify(composed)} as const);
 
 export type StandardFamily = keyof typeof STANDARD_FAMILIES;
 export type ExactOperation = (typeof STANDARD_FAMILIES.exact.operations)[number];
@@ -63,6 +65,15 @@ export interface ExactDefinitionPayload { readonly family: 'exact'; readonly rol
 export interface ContinuousDefinitionPayload { readonly family: 'continuous'; readonly roles: readonly StandardRole[]; readonly semanticsVersion: typeof STANDARD_FAMILIES.continuous.evaluatorSemanticsVersion; readonly source: string; readonly subject: string; readonly tree: ContinuousTree }
 export type StandardDefinitionPayload = ExactDefinitionPayload | ContinuousDefinitionPayload;
 export interface StandardExtensionArtifact { readonly family: typeof STANDARD_EXTENSION.family; readonly kind: string; readonly namespace: string; readonly payload: JsonValue; readonly schemaVersion: number; readonly source: string; readonly subject: string }
+export interface ComposedExactExtensionSchema { readonly namespace: string; readonly schemaVersion: number }
+export type ComposedExactProductLeaf<Payload extends JsonValue> = { readonly op: typeof STANDARD_COMPOSED_EXACT.productOp; readonly kind: string; readonly payload: Payload; readonly source: string; readonly subject: string };
+export type ComposedExactTree<Payload extends JsonValue> =
+  | { readonly op: 'literal'; readonly ${literalFields(exact)}: number }
+  | { readonly op: 'input'; readonly input: ExactInput }
+  | { readonly op: ${binaryOps(exact).map(JSON.stringify).join(' | ')}; readonly left: ComposedExactTree<Payload>; readonly right: ComposedExactTree<Payload> }
+  | { readonly op: 'min' | 'max'; readonly values: readonly ComposedExactTree<Payload>[] }
+  | ComposedExactProductLeaf<Payload>;
+export interface ComposedExactDefinitionPayload<Payload extends JsonValue> { readonly family: typeof STANDARD_COMPOSED_EXACT.family; readonly extension: ComposedExactExtensionSchema; readonly roles: readonly StandardRole[]; readonly semanticsVersion: typeof STANDARD_COMPOSED_EXACT.semanticsVersion; readonly source: string; readonly subject: string; readonly tree: ComposedExactTree<Payload> }
 export class StandardContractError extends Error {
   public constructor(public readonly code: StandardContractErrorCode, message: string) { super(message); this.name = 'StandardContractError'; }
 }

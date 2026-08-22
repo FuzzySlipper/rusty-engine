@@ -24,6 +24,19 @@ pub struct StandardDefinitionIdentity {
     semantics_version: u32,
 }
 impl StandardDefinitionIdentity {
+    pub(crate) fn new(
+        package_fingerprint: RuleFingerprint,
+        subject: RuleSubjectId,
+        family: &'static str,
+        semantics_version: u32,
+    ) -> Self {
+        Self {
+            package_fingerprint,
+            subject,
+            family,
+            semantics_version,
+        }
+    }
     pub fn package_fingerprint(&self) -> &RuleFingerprint {
         &self.package_fingerprint
     }
@@ -389,12 +402,12 @@ fn identity(
     family: &'static str,
     semantics_version: u32,
 ) -> StandardDefinitionIdentity {
-    StandardDefinitionIdentity {
-        package_fingerprint: package.fingerprint().clone(),
+    StandardDefinitionIdentity::new(
+        package.fingerprint().clone(),
         subject,
         family,
         semantics_version,
-    }
+    )
 }
 fn payload_object<'a>(
     package: &'a AdmittedRulePackage,

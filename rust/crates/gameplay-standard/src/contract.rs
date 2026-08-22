@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 
+use crate::composed::{COMPOSED_EXACT_FAMILY_ID, COMPOSED_EXACT_SEMANTICS_VERSION};
 use crate::continuous::{
     CONTINUOUS_EVALUATOR_SEMANTICS_VERSION, MAX_CONTINUOUS_EVALUATION_WORK,
     MAX_CONTINUOUS_EXPRESSION_DEPTH, MAX_CONTINUOUS_EXPRESSION_INPUTS,
@@ -81,6 +82,7 @@ fn standard_contract_descriptor() -> Value {
             "non-canonical-roles", "undeclared-input-role", "invalid-literal", "invalid-node",
             "depth-quota-exceeded", "node-quota-exceeded", "input-quota-exceeded", "arity-quota-exceeded",
             "work-quota-exceeded", "source-correlation-mismatch", "extension-schema-mismatch", "extension-payload-too-large"
+            ,"missing-product-capability"
         ],
         "extensions": {
             "family":"standardExtension",
@@ -90,6 +92,16 @@ fn standard_contract_descriptor() -> Value {
             "schemaVersionMaximum":u32::MAX,
             "maximumBytes":65536,
             "runtime":"downstream-rust-closed-enum"
+        },
+        "composedExact": {
+            "family":COMPOSED_EXACT_FAMILY_ID,
+            "schemaVersion":1,
+            "semanticsVersion":COMPOSED_EXACT_SEMANTICS_VERSION,
+            "definitionFieldOrder":["family","roles","semanticsVersion","source","subject","extension","tree"],
+            "extensionFieldOrder":["namespace","schemaVersion"],
+            "productFieldOrder":["op","kind","payload","source","subject"],
+            "productOp":"product",
+            "runtime":"downstream-rust-static-codec"
         }
     })
 }
@@ -99,10 +111,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exported_descriptor_has_both_rust_owned_families() {
+    fn exported_descriptor_has_standard_and_composed_exact_contracts() {
         let value: Value = serde_json::from_str(&encode_standard_contract_descriptor()).unwrap();
         assert_eq!(value["contractVersion"], 1);
         assert_eq!(value["families"][0]["schemaVersion"], 1);
         assert_eq!(value["families"][1]["schemaVersion"], 2);
+        assert_eq!(value["composedExact"]["family"], COMPOSED_EXACT_FAMILY_ID);
     }
 }

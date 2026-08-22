@@ -18,6 +18,41 @@ export interface StrictJsonResult {
   readonly nodes: number;
 }
 
+/**
+ * Canonically encodes one already-admitted JSON value with the same key ordering
+ * and escaping rules as the Rust rule-package writer. This is intentionally a
+ * value helper, not a second package codec.
+ */
+export function canonicalRuleJsonValue(value: JsonValue, maximumBytes: number): string {
+  const chunks: string[] = [];
+  let bytes = 0;
+  const write = (part: string): void => {
+    const next = bytes + Buffer.byteLength(part, 'utf8');
+    if (!Number.isSafeInteger(next) || next > maximumBytes) {
+      throw new RuleContractError('artifact-quota-exceeded', '$', 'canonical JSON value exceeds its byte limit', { actual: next, maximum: maximumBytes });
+    }
+    bytes = next; chunks.push(part);
+  };
+  const writeString = (text: string): void => {
+    write(`"${text.replace(/["\\\u0000-\u001f]/g, (character) => {
+      switch (character) {
+        case '"': return '\\"'; case '\\': return '\\\\'; case '\b': return '\\b';
+        case '\f': return '\\f'; case '\n': return '\\n'; case '\r': return '\\r'; case '\t': return '\\t';
+        default: return `\\u${(character.codePointAt(0) as number).toString(16).padStart(4, '0')}`;
+      }
+    })}"`);
+  };
+  const writeValue = (entry: JsonValue): void => {
+    if (entry === null) write('null');
+    else if (typeof entry === 'boolean' || typeof entry === 'number') write(String(entry));
+    else if (typeof entry === 'string') writeString(entry);
+    else if (Array.isArray(entry)) { write('['); entry.forEach((item, index) => { if (index) write(','); writeValue(item); }); write(']'); }
+    else { write('{'); Object.entries(entry).sort(([a], [b]) => Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'))).forEach(([key, item], index) => { if (index) write(','); writeString(key); write(':'); writeValue(item); }); write('}'); }
+  };
+  writeValue(value);
+  return chunks.join('');
+}
+
 export function parseStrictJson(input: Uint8Array): StrictJsonResult {
   if (
     input.length >= 3 &&

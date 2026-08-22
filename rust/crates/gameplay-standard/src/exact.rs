@@ -110,6 +110,21 @@ impl ExactExprRequirements {
     pub fn inputs(&self) -> &[ExactInputReference] {
         &self.inputs
     }
+
+    /// Inspects both operands with comparison semantics. Unlike wrapping the
+    /// operands in an artificial arithmetic node, this preserves the exact
+    /// comparison depth rule while still enforcing combined node and input
+    /// quotas.
+    pub fn inspect_comparison(comparison: &ExactComparison) -> Result<Self, ExactEvaluationError> {
+        ExactEvaluator::validate_comparison_structure(comparison, ExactExprLimits::default())?;
+        let (left, right) = comparison_operands(comparison);
+        let mut inputs = BTreeSet::new();
+        collect_inputs(left, &mut inputs);
+        collect_inputs(right, &mut inputs);
+        Ok(Self {
+            inputs: inputs.into_iter().collect(),
+        })
+    }
 }
 /// The closed, static compilation seam for a downstream exact product leaf.
 pub trait CompileExactExpr {
@@ -234,6 +249,23 @@ impl ExactEvaluator {
             3 => a > b,
             _ => a >= b,
         })
+    }
+    /// Checks the combined structural quota of both predicate operands without evaluating.
+    pub fn validate_comparison_structure(
+        predicate: &ExactComparison,
+        limits: ExactExprLimits,
+    ) -> Result<(), ExactEvaluationError> {
+        let (left, right) = comparison_operands(predicate);
+        validate_predicate(left, right, limits)
+    }
+}
+fn comparison_operands(comparison: &ExactComparison) -> (&ExactExpr, &ExactExpr) {
+    match comparison {
+        ExactComparison::Equal(left, right)
+        | ExactComparison::LessThan(left, right)
+        | ExactComparison::LessOrEqual(left, right)
+        | ExactComparison::GreaterThan(left, right)
+        | ExactComparison::GreaterOrEqual(left, right) => (left, right),
     }
 }
 fn validate_predicate(
