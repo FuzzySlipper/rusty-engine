@@ -32,6 +32,34 @@ pub trait CommandHandler<C: DeveloperCommand>: Send + 'static {
     ) -> Result<C::Reply, C::Error>;
 }
 
+/// A command owner borrowed only for one product-selected safe point.
+///
+/// Unlike [`CommandHandler`], this port deliberately has no `Send + 'static`
+/// bound and is never stored by [`CommandBindings`]. Products use it when the
+/// live owner already exists beside their queue and can be borrowed directly
+/// at invocation time.
+pub trait BorrowedCommandHandler<C: DeveloperCommand> {
+    fn handle(
+        &mut self,
+        context: CommandContext,
+        request: C::Request,
+    ) -> Result<C::Reply, C::Error>;
+}
+
+impl<C, F> BorrowedCommandHandler<C> for F
+where
+    C: DeveloperCommand,
+    F: FnMut(CommandContext, C::Request) -> Result<C::Reply, C::Error>,
+{
+    fn handle(
+        &mut self,
+        context: CommandContext,
+        request: C::Request,
+    ) -> Result<C::Reply, C::Error> {
+        self(context, request)
+    }
+}
+
 impl<C, F> CommandHandler<C> for F
 where
     C: DeveloperCommand,
@@ -229,6 +257,8 @@ pub struct CommandBindings {
     descriptors: BTreeMap<CommandId, CommandDescriptor>,
     aliases: BTreeMap<crate::CommandAlias, CommandId>,
     bindings: BTreeMap<CommandId, Box<dyn ErasedBinding>>,
+    borrowed: BTreeSet<CommandId>,
+    borrowed_types: BTreeMap<CommandId, TypeId>,
     correlations: BTreeMap<CorrelationId, CommandId>,
     sequence: u64,
 }
@@ -266,6 +296,8 @@ impl CommandBindings {
             descriptors: BTreeMap::new(),
             aliases: BTreeMap::new(),
             bindings: BTreeMap::new(),
+            borrowed: BTreeSet::new(),
+            borrowed_types: BTreeMap::new(),
             correlations: BTreeMap::new(),
             sequence: 0,
         })
@@ -365,6 +397,30 @@ impl CommandBindings {
         Ok(())
     }
 
+    /// Explicitly exposes a command for a caller-borrowed safe-point owner.
+    ///
+    /// The descriptor is declared in the same table as stored commands, but
+    /// only this method makes the borrowed invocation surface executable. No
+    /// owner or closure is retained.
+    pub fn expose_borrowed<C: DeveloperCommand>(&mut self) -> Result<(), CommandBindingsError> {
+        let descriptor = C::descriptor();
+        let id = descriptor.id().clone();
+        if let Some(existing) = self.descriptors.get(&id) {
+            if existing != &descriptor {
+                return Err(CommandBindingsError::DescriptorMismatch { command: id });
+            }
+        } else {
+            self.declare_descriptor(descriptor)?;
+        }
+        let lane = self.descriptors[&id].lane();
+        if !self.profile.permits(lane) {
+            return Err(CommandBindingsError::ProfileExcludesCommand { command: id, lane });
+        }
+        self.borrowed.insert(id.clone());
+        self.borrowed_types.insert(id, TypeId::of::<C>());
+        Ok(())
+    }
+
     /// Returns every declared command. `bound` is the exact current exposed
     /// surface; declared-but-unbound entries make omitted privileged handlers
     /// visible rather than being mistaken for unknown commands.
@@ -374,7 +430,12 @@ impl CommandBindings {
             .iter()
             .map(|(id, descriptor)| DiscoveryEntry {
                 descriptor: descriptor.clone(),
-                bound: self.bindings.contains_key(id) && self.profile.permits(descriptor.lane()),
+                bound: (self.bindings.contains_key(id) || self.borrowed.contains(id))
+                    && self.profile.permits(descriptor.lane()),
+                stored_bound: self.bindings.contains_key(id)
+                    && self.profile.permits(descriptor.lane()),
+                borrowed_bound: self.borrowed.contains(id)
+                    && self.profile.permits(descriptor.lane()),
             })
             .collect();
         DiscoverySnapshot {
@@ -396,56 +457,126 @@ impl CommandBindings {
         &mut self,
         request: CommandRequest<C::Request>,
     ) -> CommandResponse<C::Reply, C::Error> {
-        let expected_descriptor = C::descriptor();
-        let expected_id = expected_descriptor.id().clone();
-        let facts = self.facts.clone();
-        let rejection = |error| CommandResponse {
-            protocol_version: CURRENT_PROTOCOL_VERSION,
-            provenance: None,
-            facts: facts.clone(),
-            result: HandlerResult::Rejected(DispatchError::Envelope(error)),
+        let prepared = match self.preflight::<C>(&request, DispatchTarget::Stored) {
+            Ok(prepared) => prepared,
+            Err(error) => return self.rejection(error),
         };
+        let invocation = self.reserve(prepared);
+        let result = {
+            let binding = self
+                .bindings
+                .get_mut(&request.command)
+                .expect("stored binding was checked during preflight");
+            match binding.dispatch(Box::new(request.payload), invocation.context.clone()) {
+                Ok(reply) => match reply.downcast::<C::Reply>() {
+                    Ok(reply) => HandlerResult::Success(*reply),
+                    Err(_) => HandlerResult::Rejected(DispatchError::Envelope(
+                        EnvelopeError::BindingInvariant,
+                    )),
+                },
+                Err(error) => match error.downcast::<C::Error>() {
+                    Ok(error) => HandlerResult::Rejected(DispatchError::Command(*error)),
+                    Err(_) => HandlerResult::Rejected(DispatchError::Envelope(
+                        EnvelopeError::BindingInvariant,
+                    )),
+                },
+            }
+        };
+        self.finalize(invocation, result)
+    }
 
+    /// Dispatches through an owner borrowed only for this invocation.
+    ///
+    /// The command must first be exposed with [`Self::expose_borrowed`]. This
+    /// method performs the same envelope preflight, correlation reservation,
+    /// provenance construction, and history finalization as [`Self::dispatch`]
+    /// while retaining no handler or owner.
+    pub fn dispatch_borrowed<C, H>(
+        &mut self,
+        request: CommandRequest<C::Request>,
+        handler: &mut H,
+    ) -> CommandResponse<C::Reply, C::Error>
+    where
+        C: DeveloperCommand,
+        H: BorrowedCommandHandler<C>,
+    {
+        let prepared = match self.preflight::<C>(&request, DispatchTarget::Borrowed) {
+            Ok(prepared) => prepared,
+            Err(error) => return self.rejection(error),
+        };
+        let invocation = self.reserve(prepared);
+        let result = match handler.handle(invocation.context.clone(), request.payload) {
+            Ok(reply) => HandlerResult::Success(reply),
+            Err(error) => HandlerResult::Rejected(DispatchError::Command(error)),
+        };
+        self.finalize(invocation, result)
+    }
+
+    fn preflight<C: DeveloperCommand>(
+        &self,
+        request: &CommandRequest<C::Request>,
+        target: DispatchTarget,
+    ) -> Result<PreparedDispatch, EnvelopeError> {
+        let expected_id = C::descriptor().id().clone();
         if request.protocol_version != CURRENT_PROTOCOL_VERSION {
-            return rejection(EnvelopeError::UnsupportedProtocol {
+            return Err(EnvelopeError::UnsupportedProtocol {
                 provided: request.protocol_version,
                 supported: CURRENT_PROTOCOL_VERSION,
             });
         }
         if request.cancelled {
-            return rejection(EnvelopeError::Cancelled);
+            return Err(EnvelopeError::Cancelled);
         }
         if request.timed_out {
-            return rejection(EnvelopeError::TimedOut);
+            return Err(EnvelopeError::TimedOut);
         }
         if request.command != expected_id {
-            return rejection(EnvelopeError::CommandMismatch {
+            return Err(EnvelopeError::CommandMismatch {
                 expected: expected_id,
                 received: request.command.clone(),
             });
         }
-        if !self.descriptors.contains_key(&request.command) {
-            return rejection(EnvelopeError::UnknownCommand {
-                command: request.command.clone(),
-            });
-        }
-        let Some(binding) = self.bindings.get(&request.command) else {
-            return rejection(EnvelopeError::CommandUnavailable {
+        let Some(descriptor) = self.descriptors.get(&request.command) else {
+            return Err(EnvelopeError::UnknownCommand {
                 command: request.command.clone(),
             });
         };
-        if binding.command_type() != TypeId::of::<C>() {
-            return rejection(EnvelopeError::BindingInvariant);
+        if !self.profile.permits(descriptor.lane()) {
+            return Err(EnvelopeError::CommandUnavailable {
+                command: request.command.clone(),
+            });
+        }
+        match target {
+            DispatchTarget::Stored => {
+                let Some(binding) = self.bindings.get(&request.command) else {
+                    return Err(EnvelopeError::CommandUnavailable {
+                        command: request.command.clone(),
+                    });
+                };
+                if binding.command_type() != TypeId::of::<C>() {
+                    return Err(EnvelopeError::BindingInvariant);
+                }
+            }
+            DispatchTarget::Borrowed => {
+                if !self.borrowed.contains(&request.command) {
+                    return Err(EnvelopeError::CommandUnavailable {
+                        command: request.command.clone(),
+                    });
+                }
+                if self.borrowed_types.get(&request.command) != Some(&TypeId::of::<C>()) {
+                    return Err(EnvelopeError::BindingInvariant);
+                }
+            }
         }
         if request.runtime != self.facts.runtime {
-            return rejection(EnvelopeError::RuntimeMismatch {
+            return Err(EnvelopeError::RuntimeMismatch {
                 expected: self.facts.runtime.clone(),
                 received: request.runtime.clone(),
             });
         }
         if let Some(expected) = &request.expected.profile {
             if expected != self.profile.id() {
-                return rejection(EnvelopeError::StaleProfile {
+                return Err(EnvelopeError::StaleProfile {
                     expected: expected.clone(),
                     actual: self.profile.id().clone(),
                 });
@@ -453,7 +584,7 @@ impl CommandBindings {
         }
         if let Some(expected) = request.expected.revision {
             if expected != self.facts.revision {
-                return rejection(EnvelopeError::StaleRevision {
+                return Err(EnvelopeError::StaleRevision {
                     expected,
                     actual: self.facts.revision,
                 });
@@ -461,7 +592,7 @@ impl CommandBindings {
         }
         if let Some(expected) = request.expected.catalog_epoch {
             if expected != self.facts.catalog_epoch {
-                return rejection(EnvelopeError::StaleCatalogEpoch {
+                return Err(EnvelopeError::StaleCatalogEpoch {
                     expected,
                     actual: self.facts.catalog_epoch,
                 });
@@ -469,12 +600,12 @@ impl CommandBindings {
         }
         if let Some(previous_command) = self.correlations.get(&request.correlation) {
             return if previous_command == &request.command {
-                rejection(EnvelopeError::DuplicateCorrelation {
+                Err(EnvelopeError::DuplicateCorrelation {
                     correlation: request.correlation.clone(),
                     command: request.command.clone(),
                 })
             } else {
-                rejection(EnvelopeError::CorrelationMismatch {
+                Err(EnvelopeError::CorrelationMismatch {
                     correlation: request.correlation.clone(),
                     previous_command: previous_command.clone(),
                     requested_command: request.command.clone(),
@@ -482,61 +613,65 @@ impl CommandBindings {
             };
         }
         if self.correlations.len() >= MAX_TRACKED_CORRELATIONS {
-            return rejection(EnvelopeError::CorrelationCapacityExceeded {
+            return Err(EnvelopeError::CorrelationCapacityExceeded {
                 maximum: MAX_TRACKED_CORRELATIONS,
             });
         }
-
-        // Correlation and history state are committed only after all envelope
-        // checks pass, immediately before the owner handler receives the payload.
         let Some(sequence) = self.sequence.checked_add(1) else {
-            return rejection(EnvelopeError::SequenceExhausted);
+            return Err(EnvelopeError::SequenceExhausted);
         };
-        self.sequence = sequence;
-        let provenance = CommandProvenance {
+        Ok(PreparedDispatch {
             command: request.command.clone(),
-            lane: self.descriptors[&request.command].lane(),
             correlation: request.correlation.clone(),
-            runtime: self.facts.runtime.clone(),
+            lane: descriptor.lane(),
+            facts: self.facts.clone(),
             profile: self.profile.id().clone(),
-            sequence: self.sequence,
-        };
+            sequence,
+        })
+    }
+
+    fn reserve(&mut self, prepared: PreparedDispatch) -> Invocation {
+        self.sequence = prepared.sequence;
         self.correlations
-            .insert(request.correlation.clone(), request.command.clone());
-        let context = CommandContext {
-            provenance: provenance.clone(),
-            facts: facts.clone(),
+            .insert(prepared.correlation.clone(), prepared.command.clone());
+        let provenance = CommandProvenance {
+            command: prepared.command,
+            lane: prepared.lane,
+            correlation: prepared.correlation,
+            runtime: prepared.facts.runtime.clone(),
+            profile: prepared.profile,
+            sequence: prepared.sequence,
         };
-        let binding = self
-            .bindings
-            .get_mut(&request.command)
-            .expect("checked binding exists");
-        let boxed = binding.dispatch(Box::new(request.payload), context);
-        let result = match boxed {
-            Ok(reply) => match reply.downcast::<C::Reply>() {
-                Ok(reply) => HandlerResult::Success(*reply),
-                Err(_) => HandlerResult::Rejected(DispatchError::Envelope(
-                    EnvelopeError::BindingInvariant,
-                )),
+        Invocation {
+            context: CommandContext {
+                provenance: provenance.clone(),
+                facts: prepared.facts.clone(),
             },
-            Err(error) => match error.downcast::<C::Error>() {
-                Ok(error) => HandlerResult::Rejected(DispatchError::Command(*error)),
-                Err(_) => HandlerResult::Rejected(DispatchError::Envelope(
-                    EnvelopeError::BindingInvariant,
-                )),
-            },
-        };
+            provenance,
+            facts: prepared.facts,
+        }
+    }
+
+    fn rejection<R, E>(&self, error: EnvelopeError) -> CommandResponse<R, E> {
+        CommandResponse {
+            protocol_version: CURRENT_PROTOCOL_VERSION,
+            provenance: None,
+            facts: self.facts.clone(),
+            result: HandlerResult::Rejected(DispatchError::Envelope(error)),
+        }
+    }
+
+    fn finalize<R, E>(
+        &mut self,
+        invocation: Invocation,
+        result: HandlerResult<R, E>,
+    ) -> CommandResponse<R, E> {
         let outcome = match &result {
             HandlerResult::Success(_) => CommandHistoryOutcome::Succeeded,
-            HandlerResult::Rejected(DispatchError::Command(_)) => {
-                CommandHistoryOutcome::CommandRejected
-            }
-            HandlerResult::Rejected(DispatchError::Envelope(_)) => {
-                CommandHistoryOutcome::CommandRejected
-            }
+            HandlerResult::Rejected(_) => CommandHistoryOutcome::CommandRejected,
         };
         self.history.push_back(CommandHistoryEntry {
-            provenance: provenance.clone(),
+            provenance: invocation.provenance.clone(),
             outcome,
         });
         if self.history.len() > self.history_capacity {
@@ -544,11 +679,32 @@ impl CommandBindings {
         }
         CommandResponse {
             protocol_version: CURRENT_PROTOCOL_VERSION,
-            provenance: Some(provenance),
-            facts,
+            provenance: Some(invocation.provenance),
+            facts: invocation.facts,
             result,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DispatchTarget {
+    Stored,
+    Borrowed,
+}
+
+struct PreparedDispatch {
+    command: CommandId,
+    correlation: CorrelationId,
+    lane: CommandLane,
+    facts: DispatchFacts,
+    profile: ProfileId,
+    sequence: u64,
+}
+
+struct Invocation {
+    context: CommandContext,
+    provenance: CommandProvenance,
+    facts: DispatchFacts,
 }
 
 trait ErasedBinding: Send {

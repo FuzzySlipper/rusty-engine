@@ -547,26 +547,37 @@ explicit developer tooling seam. It owns versioned typed request/reply
 envelopes, stable command/correlation/runtime/profile identities, semantic
 lanes, bounded descriptors, discovery, provenance, and synchronous in-process
 dispatch guards. A product constructs one instance-owned binding set, declares
-the compiled command descriptors it recognizes, binds only the handlers it
-exposes, refreshes observed runtime facts, and invokes dispatch from the
-product's existing queue at a product-selected safe point.
+the compiled command descriptors it recognizes, and either binds a retained
+`Send + 'static` handler or explicitly exposes a command for a caller-borrowed
+owner. The latter is borrowed only at invocation and is never stored by Engine.
+The product refreshes observed runtime facts and invokes either path from its
+existing queue at a product-selected safe point.
 
 The product retains the command-family vocabulary, owner services, live state,
 queue, safe-point timing, command-specific authorization, transport/client
 adapters, persistence, and ordinary typed owner receipts. Lanes are descriptor
 metadata, not caller-supplied authority. Profiles and explicit bindings select
-availability: discovery reports declared descriptors and the exact bound subset
-so omitted commands are unknown while declared but unbound privileged commands
-are unavailable. Envelope validation rejects stale runtime/profile/revision or
-catalog facts, cancellation, timeout, and correlation errors before a handler
-is called; entered handlers retain their ordinary mutation semantics.
+availability: in-process discovery reports declared descriptors plus separate
+stored-bound and borrowed-bound flags, so omitted commands are unknown while
+declared but unbound commands are unavailable. Host discovery emits only
+executable descriptors in the generated camelCase v1 shape. Envelope
+validation rejects stale runtime/profile/revision or catalog facts,
+cancellation, timeout, and correlation errors before an owner is called;
+entered handlers retain their ordinary mutation semantics. Stored and borrowed
+dispatch share the same preflight, correlation/provenance, and bounded-history
+finalization authority. Rejected preflight never reserves a correlation,
+advances sequence, records history, or enters an owner.
 
 This crate is not a universal command/event bus, scheduler, service locator,
 reflection or method-name bridge, world transaction, generic component write
 API, network server, filesystem API, or UI shell. Reply/provenance/history
 values serialize only as output for a chosen adapter; they are not admitted
-wire input. See [Developer commands](code-map/developer-command.md) for the
-public composition and focused gates.
+wire input. The strict Rust host adapters map decimal-string revision/catalog
+facts and product payloads into the typed request, and map typed replies/errors
+into the generated six-field response while retaining provenance and
+pre-dispatch versus owner error phase in a Rust-side metadata sidecar. See
+[Developer commands](code-map/developer-command.md) for the public composition
+and focused gates.
 
 `developer-command-standard` is a separate optional tooling leaf for the
 Engine-owned standard gameplay route. It leaves `developer-command` generic

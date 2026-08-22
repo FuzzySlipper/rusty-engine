@@ -314,7 +314,15 @@ impl TypeDescriptor {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DiscoveryEntry {
     pub descriptor: CommandDescriptor,
+    /// `bound` remains the compact compatibility flag: either execution path
+    /// is currently available for this descriptor.
     pub bound: bool,
+    /// The descriptor has a retained `Send + 'static` handler in the
+    /// `CommandBindings` instance.
+    pub stored_bound: bool,
+    /// The product has explicitly exposed this descriptor for a caller-borrowed
+    /// safe-point invocation. The owner itself is never retained by Engine.
+    pub borrowed_bound: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

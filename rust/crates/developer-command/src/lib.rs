@@ -10,6 +10,7 @@
 
 mod descriptor;
 mod dispatch;
+mod host_wire;
 mod identity;
 mod wire;
 
@@ -21,10 +22,16 @@ pub use descriptor::{
     MAX_PARAMETERS_PER_COMMAND,
 };
 pub use dispatch::{
-    CommandBindings, CommandBindingsError, CommandContext, CommandHandler, CommandHistoryEntry,
-    CommandHistoryOutcome, CommandProvenance, CommandRequest, CommandResponse, DeveloperCommand,
-    DispatchError, DispatchFacts, EnvelopeError, ExpectedFacts, HandlerResult, MAX_COMMAND_HISTORY,
-    MAX_TRACKED_CORRELATIONS,
+    BorrowedCommandHandler, CommandBindings, CommandBindingsError, CommandContext, CommandHandler,
+    CommandHistoryEntry, CommandHistoryOutcome, CommandProvenance, CommandRequest, CommandResponse,
+    DeveloperCommand, DispatchError, DispatchFacts, EnvelopeError, ExpectedFacts, HandlerResult,
+    MAX_COMMAND_HISTORY, MAX_TRACKED_CORRELATIONS,
+};
+pub use host_wire::{
+    map_command_response, HostCommandDescriptor, HostCommandDiscovery, HostCommandOutcome,
+    HostCommandRequest, HostCommandResponse, HostDecimalU64, HostErrorBody, HostErrorPhase,
+    HostExpectedFacts, HostReceiptRef, HostResponseMetadata, HostWireError,
+    MappedHostCommandResponse, MAX_HOST_ERROR_MESSAGE_BYTES, MAX_HOST_RECEIPT_REFS,
 };
 pub use identity::{
     CommandAlias, CommandId, CommandIdentityError, CorrelationId, ProfileId, ProtocolVersion,

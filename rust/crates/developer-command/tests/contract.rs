@@ -4,11 +4,12 @@ use std::sync::{
 };
 
 use developer_command::{
-    CommandAlias, CommandBindings, CommandDescriptor, CommandId, CommandLane, CommandProfile,
-    CommandRequest, CorrelationId, DeveloperCommand, DispatchError, DispatchFacts, EnvelopeError,
-    ExpectedFacts, HandlerResult, ParameterDescriptor, ProfileId, RuntimeInstanceId,
-    TypeDescriptor, CURRENT_PROTOCOL_VERSION, MAX_COMMAND_ALIASES, MAX_DESCRIPTOR_COLLECTION_ITEMS,
-    MAX_DESCRIPTOR_STRING_BYTES,
+    map_command_response, CommandAlias, CommandBindings, CommandDescriptor, CommandId, CommandLane,
+    CommandProfile, CommandRequest, CorrelationId, DeveloperCommand, DispatchError, DispatchFacts,
+    EnvelopeError, ExpectedFacts, HandlerResult, HostCommandDiscovery, HostCommandRequest,
+    HostDecimalU64, HostErrorBody, HostErrorPhase, HostReceiptRef, ParameterDescriptor, ProfileId,
+    RuntimeInstanceId, TypeDescriptor, CURRENT_PROTOCOL_VERSION, MAX_COMMAND_ALIASES,
+    MAX_DESCRIPTOR_COLLECTION_ITEMS, MAX_DESCRIPTOR_STRING_BYTES,
 };
 
 struct Inspect;
@@ -17,7 +18,7 @@ struct Admin;
 struct Unbound;
 struct ConflictingInspect;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum OwnerError {
     Rejected,
 }
@@ -496,4 +497,322 @@ fn wire_decoding_revalidates_identities_and_public_contract_values() {
         }"#
     )
     .is_err());
+}
+
+#[test]
+fn borrowed_dispatch_requires_explicit_exposure_and_shares_preflight_state() {
+    let mut port = bindings();
+    port.expose_borrowed::<Inspect>().unwrap();
+    port.declare::<Play>().unwrap();
+    let discovery = port.discover();
+    let inspect = discovery
+        .commands
+        .iter()
+        .find(|entry| entry.descriptor.id().as_str() == "dev.inspect.entity")
+        .unwrap();
+    assert!(inspect.bound);
+    assert!(!inspect.stored_bound);
+    assert!(inspect.borrowed_bound);
+
+    let calls = std::cell::Cell::new(0);
+    let mut owner = |context: developer_command::CommandContext, value| {
+        assert_eq!(context.provenance().sequence, 1);
+        calls.set(calls.get() + 1);
+        Ok::<_, OwnerError>(value + 10)
+    };
+    let response = port.dispatch_borrowed::<Inspect, _>(
+        request::<Inspect>("dev.inspect.entity", "borrowed.1", 2),
+        &mut owner,
+    );
+    assert_eq!(response.result, HandlerResult::Success(12));
+    assert_eq!(calls.get(), 1);
+    assert_eq!(port.history().len(), 1);
+
+    // Stale and cancelled requests are rejected before the borrowed owner is
+    // entered, and preserve the same no-correlation/no-history rule as stored
+    // dispatch.
+    let stale = request::<Inspect>("dev.inspect.entity", "borrowed.stale", 2).with_expected(
+        ExpectedFacts {
+            profile: None,
+            revision: Some(8),
+            catalog_epoch: None,
+        },
+    );
+    let rejected = port.dispatch_borrowed::<Inspect, _>(stale, &mut owner);
+    assert!(matches!(
+        rejected.result,
+        HandlerResult::Rejected(DispatchError::Envelope(EnvelopeError::StaleRevision { .. }))
+    ));
+    assert!(rejected.provenance.is_none());
+    assert_eq!(calls.get(), 1);
+    assert_eq!(port.history().len(), 1);
+
+    let unavailable = port.dispatch_borrowed::<Play, _>(
+        request::<Play>("dev.play.action", "borrowed.unexposed", 2),
+        &mut owner,
+    );
+    assert!(matches!(
+        unavailable.result,
+        HandlerResult::Rejected(DispatchError::Envelope(
+            EnvelopeError::CommandUnavailable { .. }
+        ))
+    ));
+    assert_eq!(calls.get(), 1);
+    assert_eq!(port.history().len(), 1);
+}
+
+#[test]
+fn borrowed_dispatch_preserves_exact_owner_error_and_history_provenance() {
+    let mut port = bindings();
+    port.expose_borrowed::<Admin>().unwrap();
+    let mut owner =
+        |_context: developer_command::CommandContext, _value| Err::<u32, _>(OwnerError::Rejected);
+    let response = port.dispatch_borrowed::<Admin, _>(
+        request::<Admin>("dev.admin.reset", "borrowed.error", 4),
+        &mut owner,
+    );
+    assert_eq!(
+        response.result,
+        HandlerResult::Rejected(DispatchError::Command(OwnerError::Rejected))
+    );
+    assert_eq!(response.provenance.as_ref().unwrap().sequence, 1);
+    assert_eq!(port.history().len(), 1);
+}
+
+#[test]
+fn stored_and_borrowed_exposures_coexist_without_crossing_type_or_preflight_state() {
+    let mut port = bindings();
+    port.bind::<Inspect, _>(|_, value| Ok(value + 1)).unwrap();
+    port.expose_borrowed::<Admin>().unwrap();
+    let discovery = port.discover();
+    let stored = discovery
+        .commands
+        .iter()
+        .find(|entry| entry.descriptor.id().as_str() == "dev.inspect.entity")
+        .unwrap();
+    let borrowed = discovery
+        .commands
+        .iter()
+        .find(|entry| entry.descriptor.id().as_str() == "dev.admin.reset")
+        .unwrap();
+    assert_eq!(
+        (stored.bound, stored.stored_bound, stored.borrowed_bound),
+        (true, true, false)
+    );
+    assert_eq!(
+        (
+            borrowed.bound,
+            borrowed.stored_bound,
+            borrowed.borrowed_bound
+        ),
+        (true, false, true)
+    );
+
+    let stored_response = port.dispatch::<Inspect>(request::<Inspect>(
+        "dev.inspect.entity",
+        "coexist.stored",
+        2,
+    ));
+    assert_eq!(stored_response.result, HandlerResult::Success(3));
+    let mut owner = |_context: developer_command::CommandContext, _value| Ok::<_, OwnerError>(9);
+    let borrowed_response = port.dispatch_borrowed::<Admin, _>(
+        request::<Admin>("dev.admin.reset", "coexist.borrowed", 2),
+        &mut owner,
+    );
+    assert_eq!(borrowed_response.result, HandlerResult::Success(9));
+    assert_eq!(borrowed_response.provenance.as_ref().unwrap().sequence, 2);
+
+    // A marker with a conflicting type for the same command identity cannot
+    // enter the borrowed owner even though its request ID matches.
+    let mut wrong_port = bindings();
+    wrong_port.expose_borrowed::<Inspect>().unwrap();
+    let mut calls = 0;
+    let mut wrong_owner = |_context: developer_command::CommandContext, _value| {
+        calls += 1;
+        Ok::<_, OwnerError>(9)
+    };
+    let wrong = wrong_port.dispatch_borrowed::<ConflictingInspect, _>(
+        request::<ConflictingInspect>("dev.inspect.entity", "coexist.wrong-type", 2),
+        &mut wrong_owner,
+    );
+    assert!(matches!(
+        wrong.result,
+        HandlerResult::Rejected(DispatchError::Envelope(EnvelopeError::BindingInvariant))
+    ));
+    assert!(wrong.provenance.is_none());
+    assert_eq!(calls, 0);
+    assert_eq!(port.history().len(), 2);
+    assert_eq!(wrong_port.history().len(), 0);
+}
+
+#[test]
+fn host_wire_request_is_strict_camel_case_and_decimal_u64() {
+    let request = serde_json::from_str::<HostCommandRequest<u32>>(
+        r#"{
+            "protocolVersion":1,
+            "command":"dev.inspect.entity",
+            "correlation":"wire.1",
+            "runtime":"runtime.test",
+            "expected":{"profile":"profile.test","revision":"18446744073709551615","catalogEpoch":"3"},
+            "payload":7
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(request.expected.revision, HostDecimalU64::new(u64::MAX));
+    let mapped = request.into_command_request().unwrap();
+    assert_eq!(mapped.expected.revision, Some(u64::MAX));
+    assert_eq!(mapped.expected.catalog_epoch, Some(3));
+
+    assert!(serde_json::from_str::<HostCommandRequest<u32>>(
+        r#"{
+            "protocolVersion":1,"command":"dev.inspect.entity","correlation":"wire.2",
+            "runtime":"runtime.test","expected":{"profile":"profile.test","revision":1,"catalogEpoch":"3"},"payload":7
+        }"#
+    )
+    .is_err());
+    assert!(serde_json::from_str::<HostCommandRequest<u32>>(
+        r#"{
+            "protocolVersion":1,"command":"dev.inspect.entity","correlation":"wire.3",
+            "runtime":"runtime.test","expected":{"profile":"profile.test","revision":"01","catalogEpoch":"3"},"payload":7
+        }"#
+    )
+    .is_err());
+    assert!(serde_json::from_str::<HostCommandRequest<u32>>(
+        r#"{
+            "protocolVersion":1,"command":"dev.inspect.entity","correlation":"wire.4",
+            "runtime":"runtime.test","expected":{"profile":"profile.test","revision":"1","catalogEpoch":"3"},"payload":7,"extra":true
+        }"#
+    )
+    .is_err());
+}
+
+#[test]
+fn host_wire_response_preserves_facts_and_internal_provenance_sidecar() {
+    let mut port = bindings();
+    port.expose_borrowed::<Admin>().unwrap();
+    let mut owner =
+        |_context: developer_command::CommandContext, _value| Err::<u32, _>(OwnerError::Rejected);
+    let response = port.dispatch_borrowed::<Admin, _>(
+        request::<Admin>("dev.admin.reset", "wire.error", 4),
+        &mut owner,
+    );
+    let mapped = map_command_response(
+        response,
+        CorrelationId::parse("wire.error").unwrap(),
+        ProfileId::parse("profile.test").unwrap(),
+        vec![HostReceiptRef::parse("receipt.1").unwrap()],
+        |error| HostErrorBody {
+            code: "owner_rejected".to_owned(),
+            message: format!("owner rejected: {error:?}"),
+            details: Some(error),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        mapped.metadata.error_phase,
+        Some(HostErrorPhase::EnteredOwner)
+    );
+    assert_eq!(mapped.metadata.provenance.unwrap().sequence, 1);
+    let json = serde_json::to_value(mapped.wire).unwrap();
+    assert_eq!(json["correlation"], "wire.error");
+    assert_eq!(json["revision"], "7");
+    assert_eq!(json["catalogEpoch"], "3");
+    assert_eq!(json["outcome"]["kind"], "error");
+    assert_eq!(json["outcome"]["code"], "owner_rejected");
+    assert!(json["outcome"].get("phase").is_none());
+    assert!(json["outcome"].get("provenance").is_none());
+    let keys = json
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        keys,
+        vec![
+            "catalogEpoch".to_owned(),
+            "correlation".to_owned(),
+            "outcome".to_owned(),
+            "profile".to_owned(),
+            "revision".to_owned(),
+            "runtime".to_owned(),
+        ]
+    );
+    let decoded = serde_json::from_value::<
+        developer_command::HostCommandResponse<u32, serde_json::Value>,
+    >(json.clone())
+    .unwrap();
+    assert!(matches!(
+        decoded.outcome,
+        developer_command::HostCommandOutcome::Error { .. }
+    ));
+
+    let too_many = vec!["receipt.1".to_owned(); 33];
+    let too_many_json = serde_json::json!({
+        "correlation":"wire.too-many",
+        "runtime":"runtime.test",
+        "profile":"profile.test",
+        "revision":"7",
+        "catalogEpoch":"3",
+        "outcome":{"kind":"success","value":1,"receiptRefs":too_many}
+    });
+    assert!(
+        serde_json::from_value::<developer_command::HostCommandResponse<u32, serde_json::Value>>(
+            too_many_json
+        )
+        .is_err()
+    );
+
+    let mut port = bindings();
+    port.expose_borrowed::<Admin>().unwrap();
+    let mut owner =
+        |_context: developer_command::CommandContext, _value| Err::<u32, _>(OwnerError::Rejected);
+    let response = port.dispatch_borrowed::<Admin, _>(
+        request::<Admin>("dev.admin.reset", "wire.mismatch", 4),
+        &mut owner,
+    );
+    assert!(matches!(
+        map_command_response(
+            response,
+            CorrelationId::parse("wire.other").unwrap(),
+            ProfileId::parse("profile.test").unwrap(),
+            Vec::new(),
+            |_error| HostErrorBody::<serde_json::Value> {
+                code: "owner_rejected".to_owned(),
+                message: "owner rejected".to_owned(),
+                details: None,
+            },
+        ),
+        Err(developer_command::HostWireError::ResponseContextMismatch {
+            field: "correlation"
+        })
+    ));
+}
+
+#[test]
+fn host_wire_discovery_exposes_only_executable_commands_with_lowercase_lanes() {
+    let mut port = bindings();
+    port.expose_borrowed::<Inspect>().unwrap();
+    port.declare::<Play>().unwrap();
+    let discovery =
+        HostCommandDiscovery::from_bindings(&port, CommandId::parse("contract.v1").unwrap());
+    assert_eq!(discovery.protocol_version, CURRENT_PROTOCOL_VERSION);
+    assert_eq!(
+        discovery.permitted_lanes,
+        vec![
+            "inspect".to_owned(),
+            "preview".to_owned(),
+            "play".to_owned(),
+            "admin".to_owned(),
+            "session".to_owned(),
+            "author".to_owned(),
+            "fault".to_owned(),
+        ]
+    );
+    assert_eq!(discovery.commands.len(), 1);
+    assert_eq!(discovery.commands[0].id.as_str(), "dev.inspect.entity");
+    assert_eq!(discovery.commands[0].lane, "inspect");
+    let json = serde_json::to_value(discovery).unwrap();
+    assert!(json["commands"][0].get("helpOnly").is_none());
+    assert_eq!(json["revision"], "7");
 }
