@@ -783,8 +783,8 @@ pathfinding, deterministic RNG, and meshing. Their exact donor sources and adapt
 in [donor-provenance.md](migration/donor-provenance.md).
 
 These crates expose mechanism rather than policy. For example, `svc-pathfinding` can propose a path
-but does not own AI intent; `svc-rng` creates a scoped deterministic stream but does not decide what
-is random; `svc-mesh` emits geometry but owns no renderer.
+but does not own AI intent; `svc-rng` creates scoped deterministic streams and versioned stateless
+keyed draws but does not decide what is random; `svc-mesh` emits geometry but owns no renderer.
 
 Runtime voxel surface textures preserve that boundary and the default greedy mesher. The greedy
 path projects canonical integer grid points into a deterministic outward-facing tile basis; material
