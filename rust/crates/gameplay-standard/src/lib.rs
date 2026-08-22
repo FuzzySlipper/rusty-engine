@@ -8,6 +8,7 @@
 
 use std::fmt;
 
+mod cadence;
 mod continuous;
 mod contract;
 mod exact;
@@ -19,6 +20,15 @@ mod projection;
 mod quantization;
 mod resolution;
 
+pub use cadence::{
+    accumulate_rate_binary64, attempt_quantize_rate_with_caller_residual,
+    quantize_rate_with_caller_residual, Binary64AccumulatorSnapshot, CadenceIdentity,
+    CadenceInterval, CadenceQuantizationPolicy, CadenceTransition, CadencedQuantizationAttempt,
+    CadencedQuantizationReceipt, CadencedQuantizationRejection, CadencedQuantizationStep,
+    ContinuousCadenceError, ExactDeadlineAccumulator, ExactDeadlineAccumulatorSnapshot,
+    ResidualCarry, ResidualCarrySnapshot, MAX_CADENCE_IDENTITY_BYTES,
+    RESIDUAL_CARRY_SCHEMA_VERSION,
+};
 pub use continuous::{
     compile_continuous_expr, CompileContinuousExpr, ContinuousComparison, ContinuousCompileError,
     ContinuousEvaluationError, ContinuousEvaluator, ContinuousExpr, ContinuousExprLimits,

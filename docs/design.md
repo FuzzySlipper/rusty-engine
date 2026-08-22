@@ -480,6 +480,13 @@ role. Downstream product leaves compile through a matching static family trait
 to a closed Rust expression before admission, not through a runtime callback,
 registry, or JSON extension path.
 
+The bounded [continuous cadence and residual experiment](topics/gameplay/continuous-cadence-experiment.md)
+compares caller-declared partitions without adding an Engine clock, scheduler,
+continuous stat, or persistence aggregate. Its current evidence keeps residual
+integration and persistence caller-owned until a concrete neutral resource
+mechanism can own value, residual, cadence, cap, and migration semantics
+together.
+
 Family-specific definitions are admitted as versioned payloads through the
 existing `gameplay-rules` package route. Definitions use schema 1 for exact
 safe-integers and schema 2 for continuous binary64 values.

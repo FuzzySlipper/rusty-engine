@@ -92,6 +92,22 @@ decoded, re-admitted, fingerprinted, and rehydrated by Rust; the isolated rules
 gate fails if either direction drifts. This is build-time convergence, never a
 TypeScript runtime evaluator.
 
+## Continuous cadence experiment
+
+[`cadence.rs`](../../rust/crates/gameplay-standard/src/cadence.rs) is a narrow,
+host-neutral evidence seam for comparing declared rate partitions. It makes a
+caller retain `ResidualCarry` and choose its save transport; it owns no stat,
+track, scheduler, clock, cadence loop, cap policy, or persistence backend.
+Each accepted step returns a receipt carrying the normal quantization evidence
+plus canonical interval identity, its binary64 readout bits, cadence identity,
+and any explicit caller-authorized cadence transition. Carries bind schema,
+evaluator, policy, mode, typed source, and prior cadence context; changed
+cadence is recorded rather than silently accepted. Direct binary64, residual,
+and exact-deadline snapshot shapes are untrusted caller transport records, not
+an Engine save format. Its focused results and recommendation for later
+continuous mechanics are recorded in
+[Continuous cadence and residual experiment](../topics/gameplay/continuous-cadence-experiment.md).
+
 Product extension exchange is separate from a standard definition: one bounded,
 source-correlated extension package carries a declared namespace/schema version,
 kind, and opaque payload through `gameplay-rules` provenance. Engine neither
