@@ -727,7 +727,7 @@ fn refresh_and_replace_effect_leaves_keep_policy_context_and_typed_receipts() {
     let plan = refresh
         .plan(
             &effect_bindings(&refresh),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &authoritative,
             &catalog,
             &context(),
@@ -821,7 +821,7 @@ fn refresh_and_replace_effect_leaves_keep_policy_context_and_typed_receipts() {
     let plan = replace
         .plan(
             &effect_bindings(&replace),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &authoritative,
             &catalog,
             &context(),
@@ -867,7 +867,7 @@ fn effect_leaf_planning_rejects_missing_policy_stack_and_unrelated_identity_conf
     assert!(matches!(
         missing.plan(
             &effect_bindings(&missing),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &state,
             &catalog,
             &context(),
@@ -894,7 +894,7 @@ fn effect_leaf_planning_rejects_missing_policy_stack_and_unrelated_identity_conf
     assert!(matches!(
         wrong_policy.plan(
             &effect_bindings(&wrong_policy),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &independent_state,
             &catalog,
             &context(),
@@ -914,7 +914,7 @@ fn effect_leaf_planning_rejects_missing_policy_stack_and_unrelated_identity_conf
     assert!(matches!(
         invalid_stacks.plan(
             &effect_bindings(&invalid_stacks),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &state,
             &catalog,
             &context(),
@@ -930,7 +930,7 @@ fn effect_leaf_planning_rejects_missing_policy_stack_and_unrelated_identity_conf
     assert!(matches!(
         over_stacks.plan(
             &effect_bindings(&over_stacks),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &state,
             &catalog,
             &context(),
@@ -961,7 +961,7 @@ fn effect_leaf_planning_rejects_missing_policy_stack_and_unrelated_identity_conf
     assert!(matches!(
         conflict.plan(
             &effect_bindings(&conflict),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &conflict_state,
             &catalog,
             &context(),
@@ -1008,7 +1008,7 @@ fn effect_leaves_rebase_sequential_candidate_revisions_without_publishing() {
     let refresh_plan = refresh
         .plan(
             &effect_bindings(&refresh),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &authoritative,
             &catalog,
             &context(),
@@ -1017,7 +1017,7 @@ fn effect_leaves_rebase_sequential_candidate_revisions_without_publishing() {
     let replace_plan = replace
         .plan(
             &effect_bindings(&replace),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &authoritative,
             &catalog,
             &context(),
@@ -1085,7 +1085,7 @@ fn effect_replace_rebases_private_candidate_and_is_atomic_when_it_would_strand_a
     let plan = replace
         .plan(
             &effect_bindings(&replace),
-            &ExactInputBundle::new(vec![]),
+            &ExactInputBundle::empty(),
             &authoritative,
             &catalog,
             &context(),
