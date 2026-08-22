@@ -92,6 +92,8 @@ def main() -> None:
             "render/**",
             "rust/crates/render-host-contracts/**",
             "rust/crates/renderer-webview-host/**",
+            "rust/crates/developer-command/**",
+            "rust/crates/developer-command-standard/**",
             "scripts/verify-render-artifacts.sh",
             "scripts/verify-renderer-webview-host.sh",
         },
@@ -103,6 +105,11 @@ def main() -> None:
         "render/browser/application-host.browser.spec.ts": {"render"},
         "render/packages/renderer-three/src/backend.ts": {"render", "studio"},
         "render/artifacts/application-host/index.js": {"render"},
+        "render/artifacts/developer-command-client/index.js": {"render"},
+        "render/packages/developer-command-client/src/index.ts": {"render"},
+        "render/contracts/developer-command-standard-host-wire.json": {"render"},
+        "rust/crates/developer-command/src/wire.rs": {"render", "verify"},
+        "rust/crates/developer-command-standard/src/wire.rs": {"render", "verify"},
         "rust/crates/renderer-webview-host/artifacts/renderer-webview.js": {"render"},
         "rust/crates/renderer-webview-host/src/lib.rs": {"render", "verify"},
         "rust/crates/entity-state/src/lib.rs": {"studio", "verify"},
@@ -175,7 +182,7 @@ def main() -> None:
     artifact_gate = read(root, "scripts/verify-render-artifacts.sh")
     if artifact_gate.count('run build\n') != 1:
         fail("combined artifact gate must perform exactly one renderer build")
-    for artifact in ("application-host", "renderer-webview.js"):
+    for artifact in ("application-host", "developer-command-client", "renderer-webview.js"):
         if artifact not in artifact_gate:
             fail(f"combined artifact gate does not check {artifact}")
 
@@ -185,6 +192,7 @@ def main() -> None:
         fail("renderer root does not expose compiled-test and browser-typecheck phases")
     for package in (
         "application-host",
+        "developer-command-client",
         "render-contracts",
         "render-projection",
         "renderer-host",

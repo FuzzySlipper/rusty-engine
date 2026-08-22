@@ -11,6 +11,7 @@
 mod descriptor;
 mod dispatch;
 mod identity;
+mod wire;
 
 pub use descriptor::{
     CommandDescriptor, CommandDescriptorError, CommandLane, CommandProfile, DiscoveryEntry,
@@ -29,4 +30,8 @@ pub use identity::{
     CommandAlias, CommandId, CommandIdentityError, CorrelationId, ProfileId, ProtocolVersion,
     RuntimeInstanceId, CURRENT_PROTOCOL_VERSION, MAX_COMMAND_ID_BYTES, MAX_CORRELATION_ID_BYTES,
     MAX_PROFILE_ID_BYTES, MAX_RUNTIME_INSTANCE_ID_BYTES,
+};
+pub use wire::{
+    developer_command_wire_contract, developer_command_wire_contract_json,
+    DeveloperCommandWireContract, WireIdentityBounds, WireLimits, WireSequenceContract,
 };

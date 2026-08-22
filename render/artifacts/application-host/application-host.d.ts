@@ -1,4 +1,5 @@
 import { type RustyApplicationContent } from './application-content.js';
+import { type RustyDeveloperCommandShellOptions } from './developer-command-shell.js';
 export declare const RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION = "rusty_application_host.v1";
 export type RustyApplicationInteractionMode = 'gameplay' | 'interface' | 'modal';
 /** A Rust-projected Engine render frame. Strict decoding remains Engine-owned. */
@@ -420,6 +421,8 @@ export interface RustyApplicationFogOptions {
 export interface RustyApplicationHostOptions {
     readonly root: HTMLElement;
     readonly mountUi: RustyApplicationUiMount;
+    /** Optional Engine-owned console UI over a product-supplied command adapter. */
+    readonly developerCommands?: RustyDeveloperCommandShellOptions;
     readonly renderer?: RustyApplicationRendererOptions;
     readonly loadingLabel?: string;
     readonly failureLabel?: string;

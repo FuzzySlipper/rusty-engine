@@ -1,5 +1,9 @@
 import {
+  createRustyDeveloperCommandClient,
+  RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS,
   mountRustyApplication,
+  type RustyDeveloperCommandAdapter,
+  type RustyDeveloperCommandRequest,
   type RustyApplicationContent,
   type RustyApplicationHost,
   type RustyApplicationVoxelSpriteExperimentPort,
@@ -18,6 +22,8 @@ declare global {
     __rustyApplicationResourceContent?: (corrupt?: boolean) => RustyApplicationContent;
     __rustyApplicationUiDisposed?: boolean;
     __rustyApplicationVoxelSpriteExperiment?: RustyApplicationVoxelSpriteExperimentPort;
+    /** Browser-fixture-only gate for proving a late console discovery is inert after disposal. */
+    __rustyDeveloperCommandDiscoveryGate?: Promise<void>;
   }
 }
 
@@ -81,9 +87,58 @@ function resourceContent(corrupt = false): RustyApplicationContent {
 const root = document.querySelector<HTMLElement>('#application');
 if (root === null) throw new Error('application root is missing');
 
+const developerCommandAdapter: RustyDeveloperCommandAdapter = {
+  discover: async () => {
+    await window.__rustyDeveloperCommandDiscoveryGate;
+    return {
+    protocolVersion: 1, runtime: 'browser-proof', profile: 'developer',
+    permittedLanes: ['inspect', 'play', 'admin'], revision: '4', catalogEpoch: '9',
+    contractFingerprint: 'browser-proof-contract',
+    commands: [
+      { id: 'standard.inspect.entity', aliases: ['inspect.entity'], lane: 'inspect', summary: 'Inspect an entity.' },
+      { id: 'standard.inspect.help-only', aliases: ['inspect.help'], lane: 'inspect', summary: 'Help-only descriptor with no supplied codec.' },
+      { id: 'product.play.probe', aliases: ['play.probe'], lane: 'play', summary: 'Run a product play probe.' },
+      { id: 'standard.admin.stat.set-base', aliases: ['admin.stat'], lane: 'admin', summary: 'Set a standard stat base.' },
+      { id: 'standard.admin.effect.remove', aliases: ['admin.remove'], lane: 'admin', summary: 'Run an Engine standard admin probe.' },
+    ],
+    };
+  },
+  execute: async (request: Readonly<RustyDeveloperCommandRequest>) => {
+    window.__rustyDeveloperCommandExecuteCount =
+      (window.__rustyDeveloperCommandExecuteCount ?? 0) + 1;
+    window.__rustyDeveloperCommandLastPayload = request.payload;
+    if (request.command === 'standard.admin.effect.remove' && (request.payload as { readonly instance?: string }).instance !== 'effect') {
+      return { correlation: request.correlation, runtime: request.runtime, profile: request.expected.profile,
+        revision: '4', catalogEpoch: '9', outcome: { kind: 'error', code: 'product_rejected', message: 'Admin probe requires instance=effect.' } };
+    }
+    return { correlation: request.correlation, runtime: request.runtime, profile: request.expected.profile,
+      revision: '4', catalogEpoch: '9', outcome: { kind: 'success', value: request.payload, receiptRefs: ['browser-proof-receipt'] } };
+  },
+};
+
+function developerCommandClient() {
+  return createRustyDeveloperCommandClient({
+    adapter: developerCommandAdapter,
+    schemas: {
+      ...RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS,
+      'standard.inspect.entity': {
+        request: { kind: 'object', fields: { entity: { required: true, value: { kind: 'integer', minimum: 0 } } } },
+        result: { kind: 'opaqueJson', maximumBytes: 16_384, maximumNodes: 256 },
+        error: { kind: 'opaqueJson', maximumBytes: 8_192, maximumNodes: 128 },
+      },
+      'product.play.probe': {
+        request: { kind: 'object', fields: { target: { required: true, value: { kind: 'string', maximumBytes: 32, pattern: 'identifier' } } } },
+        result: { kind: 'opaqueJson', maximumBytes: 16_384, maximumNodes: 256 },
+        error: { kind: 'opaqueJson', maximumBytes: 8_192, maximumNodes: 128 },
+      },
+    },
+  });
+}
+
 window.__rustyApplicationMount = () =>
   mountRustyApplication({
     root,
+    developerCommands: { client: developerCommandClient() },
     initialInteractionMode: 'gameplay',
     renderer: {
       initialContent: resourceContent(),

@@ -37,6 +37,8 @@ safe point.
 - [`developer-command/src/identity.rs`](../../rust/crates/developer-command/src/identity.rs)
 - [`developer-command/src/descriptor.rs`](../../rust/crates/developer-command/src/descriptor.rs)
 - [`developer-command/src/dispatch.rs`](../../rust/crates/developer-command/src/dispatch.rs)
+- [`developer-command/src/wire.rs`](../../rust/crates/developer-command/src/wire.rs) and
+  [`developer-command/src/bin/export-wire-contract.rs`](../../rust/crates/developer-command/src/bin/export-wire-contract.rs)
 - [`developer-command/tests/contract.rs`](../../rust/crates/developer-command/tests/contract.rs)
 - [Canonical design](../design.md)
 
@@ -81,6 +83,8 @@ cargo clippy -p developer-command --all-targets --locked -- -D warnings
 
 - Product command modules and safe-point orchestration belong downstream.
 - Client, shell, TypeScript, and transport adapters belong to their explicit
-  host owner.
+  host owner. The generated generic transport contract is intentionally limited
+  to envelope, discovery, error, history, and sequence facts; descriptors stay
+  help metadata and never become inferred owner DTO codecs.
 - Read-only diagnostics remain in `engine-inspector`; it does not own this
   contract or runtime binding.

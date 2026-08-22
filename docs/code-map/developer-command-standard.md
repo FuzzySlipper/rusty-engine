@@ -38,6 +38,14 @@ admin mutation form; it must not decode a partial descriptor record as an
 commands explicitly advertise a product schema placeholder rather than claiming
 Engine ownership of their payload/result/error shape.
 
+The additive `wire` module is the different, explicit host DTO seam for the
+four Engine standard admin requests. It uses decimal strings for entity and
+revision identities, strictly decodes a tagged source/provenance union, obtains
+the live opaque component revision immediately before mapping, and then hands
+the exact request to the existing named service. Its generated schemas are
+truthful preflight/form metadata, not serde-derived owner types. Product play
+and product extension codecs remain product-supplied.
+
 ## Primary paths
 
 - [`developer-command-standard/src/lib.rs`](../../rust/crates/developer-command-standard/src/lib.rs)
@@ -45,6 +53,8 @@ Engine ownership of their payload/result/error shape.
 - [`developer-command-standard/src/inspect.rs`](../../rust/crates/developer-command-standard/src/inspect.rs)
 - [`developer-command-standard/src/resolution.rs`](../../rust/crates/developer-command-standard/src/resolution.rs)
 - [`developer-command-standard/src/admin.rs`](../../rust/crates/developer-command-standard/src/admin.rs)
+- [`developer-command-standard/src/wire.rs`](../../rust/crates/developer-command-standard/src/wire.rs) and
+  [`developer-command-standard/src/bin/export-host-wire-schemas.rs`](../../rust/crates/developer-command-standard/src/bin/export-host-wire-schemas.rs)
 - [Developer commands](developer-command.md)
 - [Gameplay standard](gameplay-standard.md)
 

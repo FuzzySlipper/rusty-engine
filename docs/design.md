@@ -537,6 +537,15 @@ transaction, queue, safe point, command authorization, and all product-typed
 attempt payloads. The preview helper never creates a publication path; the
 product transaction is the sole apply owner.
 
+For a browser, Node, or agent-tool client, the DOM-free public
+`@rusty-engine/developer-command-client` package decodes the generated generic
+wire contract and optional standard host DTO schemas. It owns no transport or
+authority. `@rusty-engine/application-host` may mount an optional pull-down
+console over that injected client; the console is presentation only, and its
+open state enters ordinary interface input mode. Standard admin host DTOs use
+decimal wire identities, reacquire opaque live component revisions immediately
+before the named owner service, and never serialize those revision guards.
+
 ## Spatial authority and derived mechanisms
 
 `engine-spatial::VoxelCollisionScene` holds canonical material voxels alongside projections derived

@@ -15,11 +15,20 @@ compiled artifact, and Rust webview host/resource lifecycle.
   inspection surface, immutable submission/resource statistics, timing,
   camera, versioned default-light/shadow policy and readout, and editor viewport integration.
 - `@rusty-engine/application-host`: one bundled downstream browser/wrapper
-  composition root, trusted rich-DOM mount, typed frame/camera/interaction
-  ports, transactional whole-frame replacement, combined static-mesh/texture/
-  animated-GLB resource admission, and lifecycle cleanup.
+  surface; its optional pull-down console mounts only a product-supplied,
+  transport-neutral developer-command client. It owns the composition root,
+  trusted rich-DOM mount, typed frame/camera/interaction ports, transactional
+  whole-frame replacement, combined static-mesh/texture/animated-GLB resource
+  admission, and lifecycle cleanup.
+- `@rusty-engine/developer-command-client`: DOM-free public TypeScript client
+  for Node, agent tooling, and selected application-host adapters. It owns
+  strict generated wire decoding, correlation and local history only; products
+  still own transport, authorization, safe points, and mutation.
 - `render/artifacts/application-host`: reproducible public artifact with no
   renderer peer or runtime dependencies in the downstream lock.
+- `render/artifacts/developer-command-client`: reproducible DOM-free artifact
+  and declarations for Node or agent consumers; artifact verification imports
+  and typechecks both public packages from a clean temporary consumer.
 - `render/browser`: real Chromium/WebGL/WebAudio/DOM acceptance.
 - `render/product-playtest`: bounded public application-host product fixture for
   on-demand black-box playtesting; it owns no production or test authority.

@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 
 const root = new URL('../', import.meta.url);
 const packages = new Map([
+  ['developer-command-client', { dependencies: [], peers: [], preparesGitConsumer: true }],
   ['application-host', { dependencies: [], peers: [], preparesGitConsumer: false }],
   ['render-contracts', { dependencies: [], peers: [], preparesGitConsumer: true }],
   ['render-projection', {
@@ -49,6 +50,21 @@ for (const [name, expected] of packages) {
 const applicationArtifact = JSON.parse(
   readFileSync(new URL('artifacts/application-host/package.json', root), 'utf8'),
 );
+const developerCommandArtifact = JSON.parse(
+  readFileSync(new URL('artifacts/developer-command-client/package.json', root), 'utf8'),
+);
+if (developerCommandArtifact.name !== '@rusty-engine/developer-command-client') {
+  throw new Error('developer-command client artifact must keep its public package identity');
+}
+for (const file of developerCommandArtifact.files) {
+  readFileSync(new URL(`artifacts/developer-command-client/${file}`, root), 'utf8');
+}
+for (const file of ['index.js', 'index.d.ts', 'developer-command-client.d.ts', 'developer-command-client.js', 'developer-command-shell.d.ts', 'generated-developer-command-contract.js', 'generated-standard-host-wire.js']) {
+  const source = readFileSync(new URL(`artifacts/application-host/${file}`, root), 'utf8');
+  if (source.includes('@rusty-engine/developer-command-client')) {
+    throw new Error(`application-host artifact ${file} leaked external developer-command client dependency`);
+  }
+}
 assertKeys(
   'application-host artifact',
   'dependencies',

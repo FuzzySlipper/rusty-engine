@@ -6,10 +6,5 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
   },
-  "include": ["src/**/*.ts"],
-  "references": [
-    { "path": "../developer-command-client" },
-    { "path": "../render-contracts" },
-    { "path": "../renderer-host" }
-  ]
+  "include": ["src/**/*.ts"]
 }

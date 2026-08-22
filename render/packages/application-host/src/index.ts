@@ -9,6 +9,37 @@ export {
   RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES,
   RustyApplicationContentError,
 } from './application-content.js';
+export {
+  mountRustyDeveloperCommandShell,
+} from './developer-command-shell.js';
+export {
+  RUSTY_DEVELOPER_COMMAND_PROTOCOL_VERSION,
+  RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS,
+  RustyDeveloperCommandClientError,
+  createRustyDeveloperCommandClient,
+  validateRustyDeveloperCommandWireValue,
+} from '@rusty-engine/developer-command-client';
+export type {
+  RustyDeveloperCommandAdapter,
+  RustyDeveloperCommandClient,
+  RustyDeveloperCommandClientOptions,
+  RustyDeveloperCommandDescriptor,
+  RustyDeveloperCommandDiscovery,
+  RustyDeveloperCommandExtension,
+  RustyDeveloperCommandHistoryEntry,
+  RustyDeveloperCommandLane,
+  RustyDeveloperCommandOutcome,
+  RustyDeveloperCommandRequest,
+  RustyDeveloperCommandResponse,
+  RustyDeveloperCommandSequence,
+  RustyDeveloperCommandValueSchema,
+  RustyDeveloperCommandWireField,
+  RustyDeveloperCommandWireSchema,
+} from '@rusty-engine/developer-command-client';
+export type {
+  RustyDeveloperCommandShell,
+  RustyDeveloperCommandShellOptions,
+} from './developer-command-shell.js';
 export type {
   RustyApplicationAudioResumeReceipt,
   RustyApplicationCameraPose,

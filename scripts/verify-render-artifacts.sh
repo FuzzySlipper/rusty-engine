@@ -3,11 +3,13 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APPLICATION_ARTIFACT="$REPO_ROOT/render/artifacts/application-host"
+DEVELOPER_COMMAND_ARTIFACT="$REPO_ROOT/render/artifacts/developer-command-client"
 WEBVIEW_ARTIFACT="$REPO_ROOT/rust/crates/renderer-webview-host/artifacts/renderer-webview.js"
 ARTIFACT_SNAPSHOT="$(mktemp -d -t rusty-render-artifacts.XXXXXX)"
 trap 'rm -rf "$ARTIFACT_SNAPSHOT"' EXIT
 
 cp -a "$APPLICATION_ARTIFACT" "$ARTIFACT_SNAPSHOT/application-host"
+cp -a "$DEVELOPER_COMMAND_ARTIFACT" "$ARTIFACT_SNAPSHOT/developer-command-client"
 cp "$WEBVIEW_ARTIFACT" "$ARTIFACT_SNAPSHOT/renderer-webview.js"
 
 pnpm --dir "$REPO_ROOT/render" run build
@@ -15,6 +17,10 @@ pnpm --dir "$REPO_ROOT/render" run build
 ARTIFACT_DRIFT=0
 if ! diff -ru "$ARTIFACT_SNAPSHOT/application-host" "$APPLICATION_ARTIFACT"; then
   echo "checked application-host artifact does not match its reproducible build" >&2
+  ARTIFACT_DRIFT=1
+fi
+if ! diff -ru "$ARTIFACT_SNAPSHOT/developer-command-client" "$DEVELOPER_COMMAND_ARTIFACT"; then
+  echo "checked developer-command-client artifact does not match its reproducible build" >&2
   ARTIFACT_DRIFT=1
 fi
 if ! cmp -s "$ARTIFACT_SNAPSHOT/renderer-webview.js" "$WEBVIEW_ARTIFACT"; then

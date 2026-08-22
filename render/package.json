@@ -10,7 +10,7 @@
     "build:application-host-artifact": "pnpm --filter @rusty-engine/application-host run build && vite build --config vite.application-host.config.ts && node scripts/publish-application-host-artifact.mjs",
     "bundle:application-host-artifact": "vite build --config vite.application-host.config.ts && node scripts/publish-application-host-artifact.mjs",
     "build:webview-artifact": "vite build --config vite.webview.config.ts",
-    "boundary": "node scripts/check-boundaries.mjs && node scripts/check-product-playtest-fixture.mjs",
+    "boundary": "node scripts/check-boundaries.mjs && node scripts/check-product-playtest-fixture.mjs && node scripts/generate-developer-command-contract.mjs --check && node scripts/verify-developer-command-artifacts.mjs",
     "typecheck": "tsc --build packages/*/tsconfig.json && tsc --project tsconfig.browser.json --noEmit",
     "typecheck:browser": "tsc --project tsconfig.browser.json --noEmit",
     "test": "pnpm -r test",

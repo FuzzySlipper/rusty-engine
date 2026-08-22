@@ -12,6 +12,7 @@ mod admin;
 mod commands;
 mod inspect;
 mod resolution;
+mod wire;
 
 pub use admin::{admin_apply_effect, admin_remove_effect, admin_set_stat_base, admin_set_track};
 pub use commands::{
@@ -24,6 +25,11 @@ pub use inspect::{
 };
 pub use resolution::{
     execute_standard_attempt, preview_standard_attempt, validate_standard_plan, StandardAttempt,
+};
+pub use wire::{
+    standard_host_wire_schemas_json, HostEffectApplyRequest, HostEffectRemovalRequest,
+    HostSourceIdentity, HostStatBaseRequest, HostTrackSetPolicy, HostTrackSetRequest,
+    HostWireError,
 };
 
 #[cfg(test)]
