@@ -136,6 +136,14 @@ component with the maintained direct-child containment index and reports
 capacity/traversal evidence without scanning unrelated entities. An item is an
 ordinary entity and may carry tracks, effects, or downstream components.
 
+When a product has already selected an exact entity definition/ID, admitted
+unique definition, and owner, `ItemService::materialize_unique` stages entity
+admission, catalog-derived `ItemComponent` attachment, and that explicit
+containment on a cloned candidate. It publishes all three or none and reports
+the actual intermediate revisions. It deliberately does not allocate IDs,
+choose names, enforce inventory policy, equip, or become a spawn/loadout
+factory; those remain downstream choices.
+
 Equipment assignments are slot references, not ownership. A multi-slot item
 appears once per required slot, but its sources activate once with
 `EquippedItem` provenance. Classification, exact slot count, containment,

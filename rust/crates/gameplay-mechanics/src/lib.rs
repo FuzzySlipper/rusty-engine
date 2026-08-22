@@ -77,7 +77,8 @@ pub use item::{
     InventoryMutationKind, InventoryMutationReceipt, InventoryMutationRequest, InventoryReadCost,
     InventoryService, InventoryTransferReceipt, InventoryTransferRequest, InventoryView,
     ItemDestroyReceipt, ItemDestroyRequest, ItemService, ItemTransferReceipt, ItemTransferRequest,
-    UniqueInventoryItem, MAX_CONTAINED_ENTITIES_PER_INVENTORY, MAX_EQUIPMENT_SOURCE_ACTIVATIONS,
+    UniqueInventoryItem, UniqueItemMaterializationReceipt, UniqueItemMaterializationRequest,
+    MAX_CONTAINED_ENTITIES_PER_INVENTORY, MAX_EQUIPMENT_SOURCE_ACTIVATIONS,
 };
 pub use scalar::{
     CombinedRatio, ExactRatio, MechanicsArithmeticError, MechanicsScalar, RoundingPolicy,
