@@ -12,7 +12,17 @@ use gameplay_mechanics::{
     SourceInstanceIdentity, StatBaseMutationRequest, StatId, StatsComponent, TrackId,
     TrackSetPolicy, TrackSetRequest, TracksComponent,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+/// Strict JSON-safe input for the exact `InspectEntity` owner request.
+///
+/// This DTO exists at the host edge only: the standard command and inspection
+/// service continue to receive the exact `EntityId` value.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct HostEntityRequest {
+    pub entity: String,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -36,7 +46,7 @@ pub struct HostTrackSetRequest {
     pub policy: HostTrackSetPolicy,
     pub expected_revision: Option<String>,
 }
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum HostTrackSetPolicy {
     RejectOutOfBounds,
@@ -62,7 +72,7 @@ pub struct HostEffectRemovalRequest {
     pub expected_revision: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum HostSourceIdentity {
     Intrinsic {
@@ -84,6 +94,65 @@ pub enum HostSourceIdentity {
         operation: OperationId,
         instance: SourceInstanceId,
     },
+}
+
+/// Bounded host projection of the authoritative track-set receipt.
+///
+/// The gameplay receipt remains the non-Serde owner evidence. This DTO makes
+/// the useful result facts available across the host boundary without turning
+/// the owner receipt into a transport type.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HostTrackSetReceipt {
+    pub catalog_version: String,
+    pub catalog_fingerprint: String,
+    pub operation: String,
+    pub source: HostSourceIdentity,
+    pub entity: String,
+    pub track: String,
+    pub policy: HostTrackSetPolicy,
+    pub decision: HostTrackSetDecision,
+    pub requested: i64,
+    pub before: i64,
+    pub after: i64,
+    pub minimum: i64,
+    pub maximum: i64,
+    pub observed_tracks_revision: String,
+    pub committed_tracks_revision: String,
+    pub observed_revisions: Vec<HostObservedComponentRevision>,
+    pub source_cost: HostSourceCollectionCost,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum HostTrackSetDecision {
+    Applied,
+    ClampedToBounds,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HostObservedComponentRevision {
+    pub entity: String,
+    pub component: String,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HostSourceCollectionCost {
+    pub intrinsic_entries_visited: usize,
+    pub effect_entries_visited: usize,
+    pub effect_source_activations_visited: usize,
+    pub equipment_entries_visited: usize,
+    pub item_components_read: usize,
+    pub request_entries_visited: usize,
+}
+
+impl HostEntityRequest {
+    pub fn into_entity(self) -> Result<EntityId, HostWireError> {
+        decimal_entity(&self.entity, "entity")
+    }
 }
 
 impl HostStatBaseRequest {
@@ -134,6 +203,103 @@ impl HostTrackSetRequest {
             },
             expected_revision: Some(actual),
         })
+    }
+}
+
+impl HostTrackSetReceipt {
+    pub fn from_owner(receipt: gameplay_mechanics::TrackSetReceipt) -> Self {
+        let decision = if receipt.requested == receipt.after {
+            HostTrackSetDecision::Applied
+        } else {
+            HostTrackSetDecision::ClampedToBounds
+        };
+        Self {
+            catalog_version: receipt.catalog_version.as_str().to_owned(),
+            catalog_fingerprint: receipt.catalog_fingerprint,
+            operation: receipt.operation.as_str().to_owned(),
+            source: HostSourceIdentity::from_owner(receipt.source),
+            entity: receipt.entity.raw().to_string(),
+            track: receipt.track.as_str().to_owned(),
+            policy: receipt.policy.into(),
+            decision,
+            requested: receipt.requested.get(),
+            before: receipt.before.get(),
+            after: receipt.after.get(),
+            minimum: receipt.minimum.get(),
+            maximum: receipt.maximum.get(),
+            observed_tracks_revision: receipt.observed_tracks_revision.to_string(),
+            committed_tracks_revision: receipt.committed_tracks_revision.to_string(),
+            observed_revisions: receipt
+                .observed_revisions
+                .into_iter()
+                .map(|revision| HostObservedComponentRevision {
+                    entity: revision.entity.raw().to_string(),
+                    component: revision.component.type_id().to_owned(),
+                    revision: revision.revision.to_string(),
+                })
+                .collect(),
+            source_cost: HostSourceCollectionCost::from_owner(receipt.source_cost),
+        }
+    }
+}
+
+impl From<TrackSetPolicy> for HostTrackSetPolicy {
+    fn from(value: TrackSetPolicy) -> Self {
+        match value {
+            TrackSetPolicy::RejectOutOfBounds => Self::RejectOutOfBounds,
+            TrackSetPolicy::ClampToBounds => Self::ClampToBounds,
+        }
+    }
+}
+
+impl HostSourceIdentity {
+    fn from_owner(value: SourceInstanceIdentity) -> Self {
+        match value {
+            SourceInstanceIdentity::Intrinsic { entity, instance } => Self::Intrinsic {
+                entity: entity.raw().to_string(),
+                instance,
+            },
+            SourceInstanceIdentity::Effect {
+                entity,
+                effect,
+                stack,
+                source,
+            } => Self::Effect {
+                entity: entity.raw().to_string(),
+                effect,
+                stack,
+                source,
+            },
+            SourceInstanceIdentity::EquippedItem {
+                owner,
+                item,
+                source,
+            } => Self::EquippedItem {
+                owner: owner.raw().to_string(),
+                item: item.raw().to_string(),
+                source,
+            },
+            SourceInstanceIdentity::Request {
+                operation,
+                instance,
+            } => Self::Request {
+                operation,
+                instance,
+            },
+        }
+    }
+}
+
+impl HostSourceCollectionCost {
+    fn from_owner(value: gameplay_mechanics::SourceCollectionCost) -> Self {
+        Self {
+            intrinsic_entries_visited: value.intrinsic_entries_visited,
+            effect_entries_visited: value.effect_entries_visited,
+            effect_source_activations_visited: value.effect_source_activations_visited,
+            equipment_entries_visited: value.equipment_entries_visited,
+            item_components_read: value.item_components_read,
+            request_entries_visited: value.request_entries_visited,
+        }
     }
 }
 impl HostEffectApplyRequest {
@@ -281,6 +447,7 @@ pub fn standard_host_wire_schemas_json() -> String {
     let mut contract = serde_json::json!({
       "kind":"rusty-developer-command-standard-host-wire.v1",
       "commands": {
+        "standard.inspect.entity": {"request":{"kind":"object","fields":{"entity":{"required":true,"value":{"kind":"decimalU64"}}}},"result":{"kind":"opaqueJson","maximumBytes":65536,"maximumNodes":2048},"error":{"kind":"object","fields":{}}},
         "standard.admin.stat.set-base": {"request":{"kind":"object","fields":{"operation":{"required":true,"value":{"kind":"string","maximumBytes":96,"pattern":"identifier"}},"source":{"required":true,"value":{"kind":"opaqueJson","maximumBytes":1024,"maximumNodes":32}},"entity":{"required":true,"value":{"kind":"decimalU64"}},"stat":{"required":true,"value":{"kind":"string","maximumBytes":96,"pattern":"identifier"}},"base":{"required":true,"value":{"kind":"integer","minimum":-1000000000000i64,"maximum":1000000000000i64}},"expectedRevision":{"required":false,"value":{"kind":"decimalU64"}}}},"result":{"kind":"opaqueJson","maximumBytes":16384,"maximumNodes":256},"error":{"kind":"opaqueJson","maximumBytes":8192,"maximumNodes":128}},
         "standard.admin.track.set": {"request":{"kind":"object","fields":{"operation":{"required":true,"value":{"kind":"string","maximumBytes":96,"pattern":"identifier"}},"source":{"required":true,"value":{"kind":"opaqueJson","maximumBytes":1024,"maximumNodes":32}},"entity":{"required":true,"value":{"kind":"decimalU64"}},"track":{"required":true,"value":{"kind":"string","maximumBytes":96,"pattern":"identifier"}},"value":{"required":true,"value":{"kind":"integer","minimum":-1000000000000i64,"maximum":1000000000000i64}},"policy":{"required":true,"value":{"kind":"string","maximumBytes":32,"pattern":"identifier"}},"expectedRevision":{"required":false,"value":{"kind":"decimalU64"}}}},"result":{"kind":"opaqueJson","maximumBytes":16384,"maximumNodes":256},"error":{"kind":"opaqueJson","maximumBytes":8192,"maximumNodes":128}},
         "standard.admin.effect.apply": {"request":{"kind":"object","fields":{"operation":{"required":true,"value":{"kind":"string","maximumBytes":96,"pattern":"identifier"}},"entity":{"required":true,"value":{"kind":"decimalU64"}},"instance":{"required":true,"value":{"kind":"string","maximumBytes":96,"pattern":"identifier"}},"definition":{"required":true,"value":{"kind":"string","maximumBytes":96,"pattern":"identifier"}},"provenance":{"required":true,"value":{"kind":"opaqueJson","maximumBytes":1024,"maximumNodes":32}},"stacks":{"required":true,"value":{"kind":"integer","minimum":1,"maximum":65535}},"expectedRevision":{"required":false,"value":{"kind":"decimalU64"}}}},"result":{"kind":"opaqueJson","maximumBytes":16384,"maximumNodes":256},"error":{"kind":"opaqueJson","maximumBytes":8192,"maximumNodes":128}},
@@ -299,7 +466,48 @@ pub fn standard_host_wire_schemas_json() -> String {
     }
     commands["standard.admin.track.set"]["request"]["fields"]["policy"]["value"] =
         serde_json::json!({"kind":"enum","values":["rejectOutOfBounds","clampToBounds"]});
+    commands["standard.admin.track.set"]["result"] = host_track_set_receipt_schema();
     serde_json::to_string_pretty(&contract).expect("standard host wire schemas serialize") + "\n"
+}
+
+fn host_track_set_receipt_schema() -> serde_json::Value {
+    let identity = |maximum_bytes| serde_json::json!({"kind":"string","maximumBytes":maximum_bytes,"pattern":"identifier"});
+    let decimal = || serde_json::json!({"kind":"decimalU64"});
+    let integer = || serde_json::json!({"kind":"integer","minimum":-1000000000000i64,"maximum":1000000000000i64});
+    let object = |fields| serde_json::json!({"kind":"object","fields":fields});
+    let required = |value| serde_json::json!({"required":true,"value":value});
+    let observed_revision = object(serde_json::json!({
+        "entity": required(decimal()),
+        "component": required(identity(128)),
+        "revision": required(decimal()),
+    }));
+    let source_cost = object(serde_json::json!({
+        "intrinsicEntriesVisited": required(serde_json::json!({"kind":"integer","minimum":0})),
+        "effectEntriesVisited": required(serde_json::json!({"kind":"integer","minimum":0})),
+        "effectSourceActivationsVisited": required(serde_json::json!({"kind":"integer","minimum":0})),
+        "equipmentEntriesVisited": required(serde_json::json!({"kind":"integer","minimum":0})),
+        "itemComponentsRead": required(serde_json::json!({"kind":"integer","minimum":0})),
+        "requestEntriesVisited": required(serde_json::json!({"kind":"integer","minimum":0})),
+    }));
+    object(serde_json::json!({
+        "catalogVersion": required(identity(96)),
+        "catalogFingerprint": required(identity(256)),
+        "operation": required(identity(96)),
+        "source": required(host_source_schema()),
+        "entity": required(decimal()),
+        "track": required(identity(96)),
+        "policy": required(serde_json::json!({"kind":"enum","values":["rejectOutOfBounds","clampToBounds"]})),
+        "decision": required(serde_json::json!({"kind":"enum","values":["applied","clampedToBounds"]})),
+        "requested": required(integer()),
+        "before": required(integer()),
+        "after": required(integer()),
+        "minimum": required(integer()),
+        "maximum": required(integer()),
+        "observedTracksRevision": required(decimal()),
+        "committedTracksRevision": required(decimal()),
+        "observedRevisions": required(serde_json::json!({"kind":"array","maximumItems":32,"items":observed_revision})),
+        "sourceCost": required(source_cost),
+    }))
 }
 
 fn host_source_schema() -> serde_json::Value {
@@ -470,6 +678,71 @@ mod tests {
             r#"{"kind":"intrinsic","entity":"1","instance":"source","extra":true}"#
         )
         .is_err());
+    }
+
+    #[test]
+    fn inspect_entity_host_dto_requires_canonical_decimal_and_maps_the_exact_owner_id() {
+        for value in ["0", "70", "18446744073709551615"] {
+            let request: HostEntityRequest =
+                serde_json::from_str(&format!(r#"{{"entity":"{value}"}}"#)).unwrap();
+            assert_eq!(request.into_entity().unwrap().raw().to_string(), value);
+        }
+        for value in ["", "00", "070", "-1", "+1", "18446744073709551616"] {
+            let request: HostEntityRequest =
+                serde_json::from_str(&format!(r#"{{"entity":"{value}"}}"#)).unwrap();
+            assert!(matches!(
+                request.into_entity(),
+                Err(HostWireError::InvalidDecimal { field: "entity" })
+            ));
+        }
+        assert!(
+            serde_json::from_str::<HostEntityRequest>(r#"{"entity":"70","extra":true}"#).is_err()
+        );
+    }
+
+    #[test]
+    fn track_set_receipt_projection_keeps_owner_facts_without_making_owner_receipt_serde() {
+        let receipt = gameplay_mechanics::TrackSetReceipt {
+            catalog_version: gameplay_mechanics::CatalogVersion::parse("host-wire.v1").unwrap(),
+            catalog_fingerprint: "catalog-fingerprint".to_owned(),
+            operation: OperationId::parse("host-track").unwrap(),
+            source: SourceInstanceIdentity::Request {
+                operation: OperationId::parse("host-track").unwrap(),
+                instance: SourceInstanceId::parse("admin").unwrap(),
+            },
+            entity: ENTITY,
+            track: TrackId::parse("health").unwrap(),
+            policy: TrackSetPolicy::ClampToBounds,
+            requested: MechanicsScalar::new(99).unwrap(),
+            before: MechanicsScalar::new(10).unwrap(),
+            after: MechanicsScalar::new(20).unwrap(),
+            minimum: MechanicsScalar::new(0).unwrap(),
+            maximum: MechanicsScalar::new(20).unwrap(),
+            observed_tracks_revision: 4,
+            committed_tracks_revision: 5,
+            observed_revisions: vec![gameplay_mechanics::ObservedComponentRevision {
+                entity: ENTITY,
+                component: gameplay_mechanics::MechanicsComponentKind::Tracks,
+                revision: 4,
+            }],
+            source_cost: gameplay_mechanics::SourceCollectionCost {
+                request_entries_visited: 1,
+                ..Default::default()
+            },
+        };
+        let projected = HostTrackSetReceipt::from_owner(receipt);
+        assert_eq!(projected.decision, HostTrackSetDecision::ClampedToBounds);
+        assert_eq!(projected.entity, "70");
+        assert_eq!(projected.observed_tracks_revision, "4");
+        assert_eq!(projected.committed_tracks_revision, "5");
+        assert_eq!(
+            projected.observed_revisions[0].component,
+            "rusty.mechanics.tracks"
+        );
+        let json = serde_json::to_value(projected).unwrap();
+        assert_eq!(json["decision"], "clampedToBounds");
+        assert_eq!(json["source"]["kind"], "request");
+        assert_eq!(json["sourceCost"]["requestEntriesVisited"], 1);
     }
 
     #[test]

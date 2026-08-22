@@ -27179,24 +27179,347 @@ var wT = Object.freeze({
 				kind: "object"
 			},
 			result: {
+				fields: {
+					after: {
+						required: !0,
+						value: {
+							kind: "integer",
+							maximum: 0xe8d4a51000,
+							minimum: -0xe8d4a51000
+						}
+					},
+					before: {
+						required: !0,
+						value: {
+							kind: "integer",
+							maximum: 0xe8d4a51000,
+							minimum: -0xe8d4a51000
+						}
+					},
+					catalogFingerprint: {
+						required: !0,
+						value: {
+							kind: "string",
+							maximumBytes: 256,
+							pattern: "identifier"
+						}
+					},
+					catalogVersion: {
+						required: !0,
+						value: {
+							kind: "string",
+							maximumBytes: 96,
+							pattern: "identifier"
+						}
+					},
+					committedTracksRevision: {
+						required: !0,
+						value: { kind: "decimalU64" }
+					},
+					decision: {
+						required: !0,
+						value: {
+							kind: "enum",
+							values: ["applied", "clampedToBounds"]
+						}
+					},
+					entity: {
+						required: !0,
+						value: { kind: "decimalU64" }
+					},
+					maximum: {
+						required: !0,
+						value: {
+							kind: "integer",
+							maximum: 0xe8d4a51000,
+							minimum: -0xe8d4a51000
+						}
+					},
+					minimum: {
+						required: !0,
+						value: {
+							kind: "integer",
+							maximum: 0xe8d4a51000,
+							minimum: -0xe8d4a51000
+						}
+					},
+					observedRevisions: {
+						required: !0,
+						value: {
+							items: {
+								fields: {
+									component: {
+										required: !0,
+										value: {
+											kind: "string",
+											maximumBytes: 128,
+											pattern: "identifier"
+										}
+									},
+									entity: {
+										required: !0,
+										value: { kind: "decimalU64" }
+									},
+									revision: {
+										required: !0,
+										value: { kind: "decimalU64" }
+									}
+								},
+								kind: "object"
+							},
+							kind: "array",
+							maximumItems: 32
+						}
+					},
+					observedTracksRevision: {
+						required: !0,
+						value: { kind: "decimalU64" }
+					},
+					operation: {
+						required: !0,
+						value: {
+							kind: "string",
+							maximumBytes: 96,
+							pattern: "identifier"
+						}
+					},
+					policy: {
+						required: !0,
+						value: {
+							kind: "enum",
+							values: ["rejectOutOfBounds", "clampToBounds"]
+						}
+					},
+					requested: {
+						required: !0,
+						value: {
+							kind: "integer",
+							maximum: 0xe8d4a51000,
+							minimum: -0xe8d4a51000
+						}
+					},
+					source: {
+						required: !0,
+						value: {
+							kind: "taggedUnion",
+							tag: "kind",
+							variants: {
+								effect: {
+									fields: {
+										effect: {
+											required: !0,
+											value: {
+												kind: "string",
+												maximumBytes: 96,
+												pattern: "identifier"
+											}
+										},
+										entity: {
+											required: !0,
+											value: { kind: "decimalU64" }
+										},
+										kind: {
+											required: !0,
+											value: {
+												kind: "enum",
+												values: ["effect"]
+											}
+										},
+										source: {
+											required: !0,
+											value: {
+												kind: "string",
+												maximumBytes: 96,
+												pattern: "identifier"
+											}
+										},
+										stack: {
+											required: !0,
+											value: {
+												kind: "integer",
+												maximum: 65535,
+												minimum: 0
+											}
+										}
+									},
+									kind: "object"
+								},
+								equippedItem: {
+									fields: {
+										item: {
+											required: !0,
+											value: { kind: "decimalU64" }
+										},
+										kind: {
+											required: !0,
+											value: {
+												kind: "enum",
+												values: ["equippedItem"]
+											}
+										},
+										owner: {
+											required: !0,
+											value: { kind: "decimalU64" }
+										},
+										source: {
+											required: !0,
+											value: {
+												kind: "string",
+												maximumBytes: 96,
+												pattern: "identifier"
+											}
+										}
+									},
+									kind: "object"
+								},
+								intrinsic: {
+									fields: {
+										entity: {
+											required: !0,
+											value: { kind: "decimalU64" }
+										},
+										instance: {
+											required: !0,
+											value: {
+												kind: "string",
+												maximumBytes: 96,
+												pattern: "identifier"
+											}
+										},
+										kind: {
+											required: !0,
+											value: {
+												kind: "enum",
+												values: ["intrinsic"]
+											}
+										}
+									},
+									kind: "object"
+								},
+								request: {
+									fields: {
+										instance: {
+											required: !0,
+											value: {
+												kind: "string",
+												maximumBytes: 96,
+												pattern: "identifier"
+											}
+										},
+										kind: {
+											required: !0,
+											value: {
+												kind: "enum",
+												values: ["request"]
+											}
+										},
+										operation: {
+											required: !0,
+											value: {
+												kind: "string",
+												maximumBytes: 96,
+												pattern: "identifier"
+											}
+										}
+									},
+									kind: "object"
+								}
+							}
+						}
+					},
+					sourceCost: {
+						required: !0,
+						value: {
+							fields: {
+								effectEntriesVisited: {
+									required: !0,
+									value: {
+										kind: "integer",
+										minimum: 0
+									}
+								},
+								effectSourceActivationsVisited: {
+									required: !0,
+									value: {
+										kind: "integer",
+										minimum: 0
+									}
+								},
+								equipmentEntriesVisited: {
+									required: !0,
+									value: {
+										kind: "integer",
+										minimum: 0
+									}
+								},
+								intrinsicEntriesVisited: {
+									required: !0,
+									value: {
+										kind: "integer",
+										minimum: 0
+									}
+								},
+								itemComponentsRead: {
+									required: !0,
+									value: {
+										kind: "integer",
+										minimum: 0
+									}
+								},
+								requestEntriesVisited: {
+									required: !0,
+									value: {
+										kind: "integer",
+										minimum: 0
+									}
+								}
+							},
+							kind: "object"
+						}
+					},
+					track: {
+						required: !0,
+						value: {
+							kind: "string",
+							maximumBytes: 96,
+							pattern: "identifier"
+						}
+					}
+				},
+				kind: "object"
+			}
+		},
+		"standard.inspect.entity": {
+			error: {
+				fields: {},
+				kind: "object"
+			},
+			request: {
+				fields: { entity: {
+					required: !0,
+					value: { kind: "decimalU64" }
+				} },
+				kind: "object"
+			},
+			result: {
 				kind: "opaqueJson",
-				maximumBytes: 16384,
-				maximumNodes: 256
+				maximumBytes: 65536,
+				maximumNodes: 2048
 			}
 		}
 	},
 	kind: "rusty-developer-command-standard-host-wire.v1"
-}, ET = wT.protocolVersion, DT = TT.commands, OT = wT.limits.historyEntries, kT = 256, AT = 16, jT = 256, MT = 256, NT = class extends Error {
+}, ET = wT.protocolVersion, DT = TT.commands, OT = DT, kT = wT.limits.historyEntries, AT = 256, jT = 16, MT = 256, NT = 256, PT = class extends Error {
 	code;
 	constructor(e, t, n) {
 		super(t, n), this.name = "RustyDeveloperCommandClientError", this.code = e;
 	}
 };
-function PT(e) {
-	let t = nE(e.extensions ?? []), n = LT(e.schemas ?? {}, e.extensions ?? []), r = /* @__PURE__ */ new Set(), i = [], a = e.createCorrelation ?? (() => `command-${cE()}`), o = e.now ?? Date.now, s = null, c = null, l = !1, u = () => {
-		if (l) throw new NT("disposed", "Developer command client is disposed");
+function FT(e) {
+	let t = RT(e.schemas ?? {}, e.extensions ?? []), n = t.schemas, r = /* @__PURE__ */ new Set(), i = [], a = e.createCorrelation ?? (() => `command-${cE()}`), o = e.now ?? Date.now, s = null, c = null, l = !1, u = () => {
+		if (l) throw new PT("disposed", "Developer command client is disposed");
 	}, d = () => {
-		i.length > OT && i.splice(0, i.length - OT);
+		i.length > kT && i.splice(0, i.length - kT);
 	}, f = (e, t, n, r) => {
 		let a = n.message.slice(0, 1024), s = Object.freeze(r === void 0 ? {
 			phase: e,
@@ -27227,14 +27550,20 @@ function PT(e) {
 			throw uE(e);
 		}
 		u(), lE(n);
-		let i = rE(r, t), a = s, o = c, l = o !== null && i.runtime === o.runtime && i.profile === o.profile && i.catalogEpoch === o.catalogEpoch;
-		if (o !== null && (i.runtime !== o.runtime || i.profile !== o.profile || CE(i.revision, o.revision) || CE(i.catalogEpoch, o.catalogEpoch) || l && o.contractFingerprint !== void 0 && i.contractFingerprint !== o.contractFingerprint) || a !== null && (i.runtime !== a.runtime || i.profile !== a.profile || CE(i.revision, a.revision) || CE(i.catalogEpoch, a.catalogEpoch))) throw new NT("stale_context", "Developer command discovery regressed or changed its selected runtime/profile context");
-		return s = i, c = FT(i), i;
+		let i;
+		try {
+			i = rE(r, t);
+		} catch (e) {
+			throw e instanceof PT && (e.code === "malformed" || e.code === "invalid_extension") && (s = null), e;
+		}
+		let a = s, o = c, l = o !== null && i.runtime === o.runtime && i.profile === o.profile && i.catalogEpoch === o.catalogEpoch;
+		if (o !== null && (i.runtime !== o.runtime || i.profile !== o.profile || CE(i.revision, o.revision) || CE(i.catalogEpoch, o.catalogEpoch) || l && o.contractFingerprint !== void 0 && i.contractFingerprint !== o.contractFingerprint) || a !== null && (i.runtime !== a.runtime || i.profile !== a.profile || CE(i.revision, a.revision) || CE(i.catalogEpoch, a.catalogEpoch))) throw new PT("stale_context", "Developer command discovery regressed or changed its selected runtime/profile context");
+		return s = i, c = IT(i), i;
 	};
 	return Object.freeze({
 		discover: m,
 		descriptor: (e) => p(e),
-		schema: (e) => pE(n, e) ? n[e] : null,
+		schema: (e) => p(e)?.id === e && pE(n, e) ? n[e] : null,
 		history: () => Object.freeze(i.slice()),
 		exportSequence: () => Object.freeze({
 			kind: "rusty_developer_command.sequence.v1",
@@ -27244,34 +27573,34 @@ function PT(e) {
 		execute: async (t, l, p) => {
 			u(), lE(p);
 			let h = s ?? await m(p), g = h.commands.find((e) => e.id === t || e.aliases.includes(t)) ?? null;
-			if (g === null) throw new NT("unknown_command", `Unknown developer command ${t}`);
+			if (g === null) throw new PT("unknown_command", `Unknown developer command ${t}`);
 			let _ = n[g.id];
 			if (_ === void 0) {
-				let e = new NT("codec_unavailable", `${g.id} has help only; its product has not supplied an exact wire codec`);
+				let e = new PT("codec_unavailable", `${g.id} has help only; its product has not supplied an exact wire codec`);
 				throw f("pre-dispatch", g.lane, e), e;
 			}
 			let v;
 			try {
 				sE(l, _.request, "$"), v = wE(l);
 			} catch (e) {
-				let t = e instanceof NT && e.code === "malformed" ? new NT("invalid_payload", e.message, { cause: e }) : uE(e);
+				let t = e instanceof PT && e.code === "malformed" ? new PT("invalid_payload", e.message, { cause: e }) : uE(e);
 				throw f("pre-dispatch", g.lane, t), t;
 			}
 			let y;
 			try {
 				y = a(), yE(y, "correlation");
 			} catch (e) {
-				let t = e instanceof NT ? e : new NT("malformed", "Correlation factory returned an invalid identity", { cause: e instanceof Error ? e : void 0 });
+				let t = e instanceof PT ? e : new PT("malformed", "Correlation factory returned an invalid identity", { cause: e instanceof Error ? e : void 0 });
 				throw f("pre-dispatch", g.lane, t), t;
 			}
 			if (r.has(y)) {
-				let e = new NT("correlation_reused", `Correlation ${y} was already issued`);
+				let e = new PT("correlation_reused", `Correlation ${y} was already issued`);
 				throw f("pre-dispatch", g.lane, e), e;
 			}
 			try {
 				u(), lE(p);
 			} catch (e) {
-				let t = e instanceof NT ? e : new NT("cancelled", "Developer command was cancelled", { cause: e instanceof Error ? e : void 0 });
+				let t = e instanceof PT ? e : new PT("cancelled", "Developer command was cancelled", { cause: e instanceof Error ? e : void 0 });
 				throw f("pre-dispatch", g.lane, t), t;
 			}
 			r.add(y);
@@ -27296,7 +27625,7 @@ function PT(e) {
 			try {
 				u(), lE(p);
 				let e = aE(x, b, _), t = s, n = c, r = n !== null && t !== null && t.runtime === n.runtime && t.profile === n.profile && t.catalogEpoch === n.catalogEpoch;
-				if (t === null || t.runtime !== h.runtime || t.profile !== h.profile || t.revision === h.revision && t.catalogEpoch === h.catalogEpoch && r && n?.contractFingerprint !== void 0 && n.contractFingerprint !== h.contractFingerprint || e.runtime !== t.runtime || e.profile !== t.profile || CE(e.revision, t.revision) || CE(e.catalogEpoch, t.catalogEpoch)) throw new NT("stale_context", "Developer command response did not preserve the selected runtime/profile/epoch context");
+				if (t === null || t.runtime !== h.runtime || t.profile !== h.profile || t.revision === h.revision && t.catalogEpoch === h.catalogEpoch && r && n?.contractFingerprint !== void 0 && n.contractFingerprint !== h.contractFingerprint || e.runtime !== t.runtime || e.profile !== t.profile || CE(e.revision, t.revision) || CE(e.catalogEpoch, t.catalogEpoch)) throw new PT("stale_context", "Developer command response did not preserve the selected runtime/profile/epoch context");
 				u(), lE(p);
 				let a = Object.freeze({
 					phase: "completed",
@@ -27310,13 +27639,13 @@ function PT(e) {
 					catalogEpoch: e.catalogEpoch,
 					at: o()
 				});
-				return i.push(a), d(), CE(t.catalogEpoch, e.catalogEpoch) ? (s = null, c = IT(e)) : (s = Object.freeze({
+				return i.push(a), d(), CE(t.catalogEpoch, e.catalogEpoch) ? (s = null, c = LT(e)) : (s = Object.freeze({
 					...t,
 					revision: e.revision,
 					catalogEpoch: e.catalogEpoch
-				}), c = IT(e, r && e.catalogEpoch === t.catalogEpoch ? n?.contractFingerprint : void 0)), e;
+				}), c = LT(e, r && e.catalogEpoch === t.catalogEpoch ? n?.contractFingerprint : void 0)), e;
 			} catch (e) {
-				let t = e instanceof NT ? e : new NT("malformed", "Developer command response was not valid", { cause: e instanceof Error ? e : void 0 }), n = t.code === "cancelled" || t.code === "disposed" || t.code === "unavailable" ? "transport" : "post-dispatch";
+				let t = e instanceof PT ? e : new PT("malformed", "Developer command response was not valid", { cause: e instanceof Error ? e : void 0 }), n = t.code === "cancelled" || t.code === "disposed" || t.code === "unavailable" ? "transport" : "post-dispatch";
 				throw f(n, g.lane, t, b), t;
 			}
 		},
@@ -27325,7 +27654,7 @@ function PT(e) {
 		}
 	});
 }
-function FT(e) {
+function IT(e) {
 	return Object.freeze({
 		runtime: e.runtime,
 		profile: e.profile,
@@ -27334,7 +27663,7 @@ function FT(e) {
 		contractFingerprint: e.contractFingerprint
 	});
 }
-function IT(e, t) {
+function LT(e, t) {
 	return Object.freeze({
 		runtime: e.runtime,
 		profile: e.profile,
@@ -27343,52 +27672,65 @@ function IT(e, t) {
 		...t === void 0 ? {} : { contractFingerprint: t }
 	});
 }
-function LT(e, t) {
-	let n = Object.create(null);
-	for (let [t, r] of Object.entries(e)) qT(t, `schema.${t}`), n[t] = RT(r, `schema.${t}`);
+function RT(e, t) {
+	let n = Object.create(null), r = [];
+	for (let [t, r] of Object.entries(e)) JT(t, `schema.${t}`), n[t] = zT(r, `schema.${t}`);
 	for (let e of t) {
-		let t = YT(e, "extension");
-		XT(t, [
-			"namespace",
-			"descriptors",
-			"schemas"
-		], "extension");
-		let r = eE(t.namespace), i = YT(t.schemas, `extension ${r}.schemas`);
-		for (let [e, t] of Object.entries(i)) {
-			let i = $T(e, `extension schema ${e}`);
-			i.startsWith(`${r}.`) || JT(`Extension schema ${e} escapes ${r}`), pE(n, i) && JT(`Duplicate wire schema ${i}`), n[i] = RT(t, `extension schema ${i}`);
+		let t = XT(e, "extension");
+		ZT(t, ["namespace", "schemas"], "extension");
+		let i = tE(t.namespace), a = QT(t.schemas, `extension ${i}.schemas`);
+		for (let [e, t] of a.entries()) {
+			let a = `extension ${i}.schemas[${e}]`, o = XT(t, a);
+			ZT(o, [
+				"command",
+				"lane",
+				"profile",
+				"schema"
+			], a);
+			let s = eE(o.command, `${a}.command`);
+			s.startsWith(`${i}.`) || YT(`${a}.command escapes ${i}`), pE(n, s) && YT(`Duplicate wire schema ${s}`);
+			let c = nE(o.lane, `${a}.lane`), l = eE(o.profile, `${a}.profile`);
+			n[s] = zT(o.schema, `${a}.schema`), r.push(Object.freeze({
+				command: s,
+				lane: c,
+				profile: l,
+				schema: n[s]
+			}));
 		}
 	}
-	return Object.freeze(n);
+	return Object.freeze({
+		schemas: Object.freeze(n),
+		extensionBindings: Object.freeze(r)
+	});
 }
-function RT(e, t) {
+function zT(e, t) {
 	let n = {
 		active: /* @__PURE__ */ new Set(),
 		seen: /* @__PURE__ */ new Set(),
 		nodes: 0
-	}, r = BT(e, t);
-	return VT(r, [
+	}, r = VT(e, t);
+	return HT(r, [
 		"request",
 		"result",
 		"error"
 	], t), Object.freeze({
-		request: zT(r.request, `${t}.request`, n, 0),
-		result: zT(r.result, `${t}.result`, n, 0),
-		error: zT(r.error, `${t}.error`, n, 0)
+		request: BT(r.request, `${t}.request`, n, 0),
+		result: BT(r.result, `${t}.result`, n, 0),
+		error: BT(r.error, `${t}.error`, n, 0)
 	});
 }
-function zT(e, t, n, r) {
-	r > AT && fE(`${t} exceeds wire schema depth`);
-	let i = BT(e, t);
-	n.active.has(i) && fE(`${t} contains a cyclic schema`), n.seen.has(i) || (n.seen.add(i), n.nodes += 1, n.nodes > jT && fE(`${t} exceeds the ${jT}-node schema limit`)), n.active.add(i);
+function BT(e, t, n, r) {
+	r > jT && fE(`${t} exceeds wire schema depth`);
+	let i = VT(e, t);
+	n.active.has(i) && fE(`${t} contains a cyclic schema`), n.seen.has(i) || (n.seen.add(i), n.nodes += 1, n.nodes > MT && fE(`${t} exceeds the ${MT}-node schema limit`)), n.active.add(i);
 	try {
-		let e = HT(i.kind, `${t}.kind`);
+		let e = UT(i.kind, `${t}.kind`);
 		switch (e) {
-			case "boolean": return VT(i, ["kind"], t), Object.freeze({ kind: e });
-			case "decimalU64": return VT(i, ["kind"], t), Object.freeze({ kind: e });
+			case "boolean": return HT(i, ["kind"], t), Object.freeze({ kind: e });
+			case "decimalU64": return HT(i, ["kind"], t), Object.freeze({ kind: e });
 			case "integer": {
-				VT(i, ["kind"], t, ["minimum", "maximum"]);
-				let n = GT(i.minimum, `${t}.minimum`), r = GT(i.maximum, `${t}.maximum`);
+				HT(i, ["kind"], t, ["minimum", "maximum"]);
+				let n = KT(i.minimum, `${t}.minimum`), r = KT(i.maximum, `${t}.maximum`);
 				return n !== void 0 && r !== void 0 && n > r && fE(`${t} minimum exceeds maximum`), Object.freeze({
 					kind: e,
 					...n === void 0 ? {} : { minimum: n },
@@ -27396,8 +27738,8 @@ function zT(e, t, n, r) {
 				});
 			}
 			case "string": {
-				VT(i, ["kind", "maximumBytes"], t, ["pattern"]);
-				let n = WT(i.maximumBytes, `${t}.maximumBytes`, 0, 1048576), r = i.pattern;
+				HT(i, ["kind", "maximumBytes"], t, ["pattern"]);
+				let n = GT(i.maximumBytes, `${t}.maximumBytes`, 0, 1048576), r = i.pattern;
 				return r !== void 0 && r !== "identifier" && fE(`${t}.pattern is not supported`), Object.freeze({
 					kind: e,
 					maximumBytes: n,
@@ -27405,30 +27747,30 @@ function zT(e, t, n, r) {
 				});
 			}
 			case "array": {
-				VT(i, [
+				HT(i, [
 					"kind",
 					"items",
 					"maximumItems"
 				], t);
-				let a = WT(i.maximumItems, `${t}.maximumItems`, 0, 65536);
+				let a = GT(i.maximumItems, `${t}.maximumItems`, 0, 65536);
 				return Object.freeze({
 					kind: e,
-					items: zT(i.items, `${t}.items`, n, r + 1),
+					items: BT(i.items, `${t}.items`, n, r + 1),
 					maximumItems: a
 				});
 			}
 			case "object": {
-				VT(i, ["kind", "fields"], t);
-				let a = BT(i.fields, `${t}.fields`), o = Object.entries(a);
-				o.length > MT && fE(`${t}.fields exceeds the ${MT}-field limit`);
+				HT(i, ["kind", "fields"], t);
+				let a = VT(i.fields, `${t}.fields`), o = Object.entries(a);
+				o.length > NT && fE(`${t}.fields exceeds the ${NT}-field limit`);
 				let s = Object.create(null);
 				for (let [e, i] of o) {
 					let a = `${t}.fields.${e}`;
-					KT(e, a);
-					let o = BT(i, a);
-					VT(o, ["required", "value"], a), typeof o.required != "boolean" && fE(`${a}.required must be boolean`), s[e] = Object.freeze({
+					qT(e, a);
+					let o = VT(i, a);
+					HT(o, ["required", "value"], a), typeof o.required != "boolean" && fE(`${a}.required must be boolean`), s[e] = Object.freeze({
 						required: o.required,
-						value: zT(o.value, `${a}.value`, n, r + 1)
+						value: BT(o.value, `${a}.value`, n, r + 1)
 					});
 				}
 				return Object.freeze({
@@ -27437,25 +27779,25 @@ function zT(e, t, n, r) {
 				});
 			}
 			case "enum": {
-				VT(i, ["kind", "values"], t);
+				HT(i, ["kind", "values"], t);
 				let n = i.values;
-				(!Array.isArray(n) || n.length === 0 || n.length > MT) && fE(`${t}.values must be a bounded nonempty array`);
-				let r = n.map((e, n) => UT(e, `${t}.values[${n}]`, 256));
+				(!Array.isArray(n) || n.length === 0 || n.length > NT) && fE(`${t}.values must be a bounded nonempty array`);
+				let r = n.map((e, n) => WT(e, `${t}.values[${n}]`, 256));
 				return new Set(r).size !== r.length && fE(`${t}.values contains duplicates`), Object.freeze({
 					kind: e,
 					values: Object.freeze(r)
 				});
 			}
 			case "taggedUnion": {
-				VT(i, [
+				HT(i, [
 					"kind",
 					"tag",
 					"variants"
 				], t);
-				let a = UT(i.tag, `${t}.tag`, 128), o = BT(i.variants, `${t}.variants`), s = Object.entries(o);
-				(s.length === 0 || s.length > MT) && fE(`${t}.variants must be a bounded nonempty object`);
+				let a = WT(i.tag, `${t}.tag`, 128), o = VT(i.variants, `${t}.variants`), s = Object.entries(o);
+				(s.length === 0 || s.length > NT) && fE(`${t}.variants must be a bounded nonempty object`);
 				let c = Object.create(null);
-				for (let [e, i] of s) KT(e, `${t}.variants.${e}`), c[e] = zT(i, `${t}.variants.${e}`, n, r + 1);
+				for (let [e, i] of s) qT(e, `${t}.variants.${e}`), c[e] = BT(i, `${t}.variants.${e}`, n, r + 1);
 				return Object.freeze({
 					kind: e,
 					tag: a,
@@ -27463,12 +27805,12 @@ function zT(e, t, n, r) {
 				});
 			}
 			case "opaqueJson": {
-				VT(i, [
+				HT(i, [
 					"kind",
 					"maximumBytes",
 					"maximumNodes"
 				], t);
-				let n = WT(i.maximumBytes, `${t}.maximumBytes`, 0, 1048576), r = WT(i.maximumNodes, `${t}.maximumNodes`, 1, 65536);
+				let n = GT(i.maximumBytes, `${t}.maximumBytes`, 0, 1048576), r = GT(i.maximumNodes, `${t}.maximumNodes`, 1, 65536);
 				return Object.freeze({
 					kind: e,
 					maximumBytes: n,
@@ -27480,18 +27822,18 @@ function zT(e, t, n, r) {
 		n.active.delete(i);
 	}
 }
-function BT(e, t) {
+function VT(e, t) {
 	(typeof e != "object" || !e || Array.isArray(e)) && fE(`${t} must be an object`);
 	let n = e, r = Object.getPrototypeOf(n);
 	r !== Object.prototype && r !== null && fE(`${t} must be a plain object`), Object.getOwnPropertySymbols(n).length > 0 && fE(`${t} may not contain symbol properties`);
 	let i = Object.getOwnPropertyDescriptors(n);
 	return Object.values(i).some((e) => !e.enumerable || !("value" in e)) && fE(`${t} may not contain accessors or hidden properties`), n;
 }
-function VT(e, t, n, r = []) {
+function HT(e, t, n, r = []) {
 	let i = /* @__PURE__ */ new Set([...t, ...r]);
 	(Object.keys(e).some((e) => !i.has(e)) || t.some((t) => !pE(e, t))) && fE(`${n} has unexpected or missing fields`);
 }
-function HT(e, t) {
+function UT(e, t) {
 	return (typeof e != "string" || ![
 		"boolean",
 		"decimalU64",
@@ -27504,93 +27846,54 @@ function HT(e, t) {
 		"opaqueJson"
 	].includes(e)) && fE(`${t} is not a supported schema kind`), e;
 }
-function UT(e, t, n) {
+function WT(e, t, n) {
 	return (typeof e != "string" || new TextEncoder().encode(e).byteLength > n) && fE(`${t} must be a bounded string`), e;
 }
-function WT(e, t, n, r) {
+function GT(e, t, n, r) {
 	return (typeof e != "number" || !Number.isSafeInteger(e) || e < n || e > r) && fE(`${t} must be a bounded nonnegative integer`), e;
 }
-function GT(e, t) {
+function KT(e, t) {
 	if (e !== void 0) return (typeof e != "number" || !Number.isSafeInteger(e)) && fE(`${t} must be a safe integer`), e;
 }
-function KT(e, t) {
-	(e.length === 0 || e === "__proto__" || e === "constructor" || e === "prototype") && fE(`${t} is not a usable field name`), UT(e, t, 128);
-}
 function qT(e, t) {
-	if (!/^[a-z0-9._:-]+$/u.test(e) || new TextEncoder().encode(e).byteLength > wT.identity.commandBytes) throw new NT("invalid_schema", `${t} is not a valid command identity`);
+	(e.length === 0 || e === "__proto__" || e === "constructor" || e === "prototype") && fE(`${t} is not a usable field name`), WT(e, t, 128);
 }
-function JT(e) {
-	throw new NT("invalid_extension", e);
+function JT(e, t) {
+	if (!/^[a-z0-9._:-]+$/u.test(e) || new TextEncoder().encode(e).byteLength > wT.identity.commandBytes) throw new PT("invalid_schema", `${t} is not a valid command identity`);
 }
-function YT(e, t) {
-	(typeof e != "object" || !e || Array.isArray(e)) && JT(`${t} must be an object`);
+function YT(e) {
+	throw new PT("invalid_extension", e);
+}
+function XT(e, t) {
+	(typeof e != "object" || !e || Array.isArray(e)) && YT(`${t} must be an object`);
 	let n = e, r = Object.getPrototypeOf(n);
-	r !== Object.prototype && r !== null && JT(`${t} must be a plain object`), Object.getOwnPropertySymbols(n).length > 0 && JT(`${t} may not contain symbol properties`);
+	r !== Object.prototype && r !== null && YT(`${t} must be a plain object`), Object.getOwnPropertySymbols(n).length > 0 && YT(`${t} may not contain symbol properties`);
 	let i = Object.getOwnPropertyDescriptors(n);
-	return Object.values(i).some((e) => !e.enumerable || !("value" in e)) && JT(`${t} may not contain accessors or hidden properties`), n;
+	return Object.values(i).some((e) => !e.enumerable || !("value" in e)) && YT(`${t} may not contain accessors or hidden properties`), n;
 }
-function XT(e, t, n, r = []) {
+function ZT(e, t, n, r = []) {
 	let i = /* @__PURE__ */ new Set([...t, ...r]);
-	(Object.keys(e).some((e) => !i.has(e)) || t.some((t) => !pE(e, t))) && JT(`${n} has unexpected or missing fields`);
+	(Object.keys(e).some((e) => !i.has(e)) || t.some((t) => !pE(e, t))) && YT(`${n} has unexpected or missing fields`);
 }
-function ZT(e, t) {
-	(!Array.isArray(e) || Object.getPrototypeOf(e) !== Array.prototype || Object.keys(e).length !== e.length || Object.getOwnPropertySymbols(e).length > 0) && JT(`${t} must be a dense ordinary array`);
+function QT(e, t) {
+	(!Array.isArray(e) || Object.getPrototypeOf(e) !== Array.prototype || Object.keys(e).length !== e.length || Object.getOwnPropertySymbols(e).length > 0) && YT(`${t} must be a dense ordinary array`);
 	let n = Object.getOwnPropertyDescriptors(e);
-	return Object.entries(n).some(([e, t]) => e !== "length" && (!t.enumerable || !("value" in t))) && JT(`${t} may not contain accessors or hidden properties`), e;
+	return Object.entries(n).some(([e, t]) => e !== "length" && (!t.enumerable || !("value" in t))) && YT(`${t} may not contain accessors or hidden properties`), e;
 }
-function QT(e, t, n) {
-	return (typeof e != "string" || new TextEncoder().encode(e).byteLength > n) && JT(`${t} must be a bounded string`), e;
+function $T(e, t, n) {
+	return (typeof e != "string" || new TextEncoder().encode(e).byteLength > n) && YT(`${t} must be a bounded string`), e;
 }
-function $T(e, t) {
-	let n = QT(e, t, wT.identity.commandBytes);
-	return /^[a-z0-9._:-]+$/u.test(n) || JT(`${t} must use lower-case command identity characters`), n;
+function eE(e, t) {
+	let n = $T(e, t, wT.identity.commandBytes);
+	return /^[a-z0-9._:-]+$/u.test(n) || YT(`${t} must use lower-case command identity characters`), n;
 }
-function eE(e) {
-	let t = $T(e, "extension namespace");
-	return t.includes(":") && JT("extension namespace may not contain colon"), t;
+function tE(e) {
+	let t = eE(e, "extension namespace");
+	return t.includes(":") && YT("extension namespace may not contain colon"), t;
 }
-function tE(e, t) {
-	let n = QT(e, t, wT.identity.commandBytes);
-	return wT.lanes.includes(n) || JT(`${t} is invalid`), n;
-}
-function nE(e) {
-	let t = [], n = /* @__PURE__ */ new Set();
-	for (let r of e) {
-		let e = YT(r, "extension");
-		XT(e, [
-			"namespace",
-			"descriptors",
-			"schemas"
-		], "extension");
-		let i = eE(e.namespace), a = ZT(e.descriptors, `extension ${i}.descriptors`);
-		t.length + a.length > kT && JT(`extensions exceed the ${kT}-command limit`), a.forEach((e, r) => {
-			let a = `extension ${i}.descriptors[${r}]`, o = YT(e, a);
-			XT(o, [
-				"id",
-				"aliases",
-				"lane",
-				"summary"
-			], a, ["helpOnly"]);
-			let s = $T(o.id, `${a}.id`);
-			s.startsWith(`${i}.`) || JT(`${a}.id escapes ${i}`);
-			let c = ZT(o.aliases, `${a}.aliases`);
-			c.length > wT.limits.commandAliases && JT(`${a}.aliases exceeds the alias limit`);
-			let l = c.map((e, t) => {
-				let n = $T(e, `${a}.aliases[${t}]`);
-				return n.startsWith(`${i}.`) || JT(`${a}.aliases[${t}] escapes ${i}`), n;
-			}), u = tE(o.lane, `${a}.lane`), d = QT(o.summary, `${a}.summary`, wT.limits.summaryBytes), f = o.helpOnly;
-			f !== void 0 && typeof f != "boolean" && JT(`${a}.helpOnly must be boolean`);
-			for (let e of [s, ...l]) n.has(e) && JT(`duplicate command or alias ${e}`), n.add(e);
-			t.push(Object.freeze({
-				id: s,
-				aliases: Object.freeze(l),
-				lane: u,
-				summary: d,
-				...f === void 0 ? {} : { helpOnly: f }
-			}));
-		});
-	}
-	return Object.freeze(t);
+function nE(e, t) {
+	let n = $T(e, t, wT.identity.commandBytes);
+	return wT.lanes.includes(n) || YT(`${t} is invalid`), n;
 }
 function rE(e, t) {
 	let n = mE(e, "discovery");
@@ -27604,12 +27907,16 @@ function rE(e, t) {
 	let c = SE(n.revision, "discovery.revision"), l = SE(n.catalogEpoch, "discovery.catalogEpoch"), u = vE(n.contractFingerprint, "discovery.contractFingerprint");
 	Array.isArray(n.commands) || $("discovery.commands must be a dense ordinary array");
 	let d = EE(n.commands, "discovery.commands");
-	d.length > kT && $("discovery.commands must be a bounded array");
-	let f = [...d.map((e, t) => iE(e, `discovery.commands[${t}]`)), ...t];
-	f.length > kT && $(`discovery.commands exceeds the ${kT}-command aggregate limit`);
-	let p = /* @__PURE__ */ new Set();
+	d.length > AT && $("discovery.commands must be a bounded array");
+	let f = d.map((e, t) => iE(e, `discovery.commands[${t}]`)), p = /* @__PURE__ */ new Set();
 	for (let e of f) for (let t of [e.id, ...e.aliases]) p.has(t) && $(`duplicate command or alias ${t}`), p.add(t);
-	return f.some((e) => !s.includes(e.lane)) && $("discovery command lane is not permitted by its selected profile"), Object.freeze({
+	f.some((e) => !s.includes(e.lane)) && $("discovery command lane is not permitted by its selected profile");
+	let m = new Map(f.map((e) => [e.id, e]));
+	for (let e of t.extensionBindings) {
+		let t = m.get(e.command);
+		t === void 0 && YT(`Schema binding ${e.command} has no available discovered command`), e.profile !== a && YT(`Schema binding ${e.command} expects profile ${e.profile}, not ${a}`), e.lane !== t.lane && YT(`Schema binding ${e.command} expects lane ${e.lane}, not ${t.lane}`);
+	}
+	return Object.freeze({
 		protocolVersion: r,
 		runtime: i,
 		profile: a,
@@ -27688,7 +27995,7 @@ function oE(e, t) {
 	sE(e, t, "$");
 }
 function sE(e, t, n, r = 0) {
-	switch (r > AT && $(`${n} exceeds wire depth`), t.kind) {
+	switch (r > jT && $(`${n} exceeds wire depth`), t.kind) {
 		case "boolean":
 			typeof e != "boolean" && $(`${n} must be boolean`);
 			return;
@@ -27739,19 +28046,19 @@ function cE() {
 	return typeof crypto < "u" && "randomUUID" in crypto ? crypto.randomUUID().toLowerCase() : `${Date.now()}-${Math.random()}`.replace(/[^a-z0-9.-]/gu, "-");
 }
 function lE(e) {
-	if (e?.aborted) throw new NT("cancelled", "Developer command was cancelled");
+	if (e?.aborted) throw new PT("cancelled", "Developer command was cancelled");
 }
 function uE(e) {
-	return e instanceof NT ? e : e instanceof DOMException && e.name === "AbortError" ? new NT("cancelled", "Developer command was cancelled", { cause: e }) : new NT("unavailable", `Developer command adapter is unavailable: ${dE(e)}`, { cause: e instanceof Error ? e : void 0 });
+	return e instanceof PT ? e : e instanceof DOMException && e.name === "AbortError" ? new PT("cancelled", "Developer command was cancelled", { cause: e }) : new PT("unavailable", `Developer command adapter is unavailable: ${dE(e)}`, { cause: e instanceof Error ? e : void 0 });
 }
 function dE(e) {
 	return e instanceof Error ? e.message : String(e);
 }
 function $(e) {
-	throw new NT("malformed", e);
+	throw new PT("malformed", e);
 }
 function fE(e) {
-	throw new NT("invalid_schema", e);
+	throw new PT("invalid_schema", e);
 }
 function pE(e, t) {
 	return Object.prototype.hasOwnProperty.call(e, t);
@@ -27794,7 +28101,7 @@ function wE(e) {
 	try {
 		return JSON.parse(JSON.stringify(e));
 	} catch (e) {
-		throw new NT("malformed", "Developer command values must be JSON-compatible", { cause: e instanceof Error ? e : void 0 });
+		throw new PT("malformed", "Developer command values must be JSON-compatible", { cause: e instanceof Error ? e : void 0 });
 	}
 }
 function TE(e, t) {
@@ -27814,7 +28121,7 @@ function EE(e, t) {
 }
 function DE(e, t, n, r) {
 	let i = /* @__PURE__ */ new Set(), a = 0, o = (e, t) => {
-		if ((t > AT || ++a > n) && $(`${r} exceeds opaque JSON bounds`), !(e === null || typeof e == "string" || typeof e == "boolean")) {
+		if ((t > jT || ++a > n) && $(`${r} exceeds opaque JSON bounds`), !(e === null || typeof e == "string" || typeof e == "boolean")) {
 			if (typeof e == "number") {
 				(!Number.isFinite(e) || Object.is(e, -0)) && $(`${r} has noncanonical number`);
 				return;
@@ -27829,4 +28136,4 @@ function DE(e, t, n, r) {
 	o(e, 0), new TextEncoder().encode(JSON.stringify(e)).byteLength > t && $(`${r} exceeds opaque JSON bytes`);
 }
 //#endregion
-export { Nw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES, Pw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT, Fw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES, eT as RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION, ET as RUSTY_DEVELOPER_COMMAND_PROTOCOL_VERSION, DT as RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS, Iw as RustyApplicationContentError, tT as RustyApplicationHostError, NT as RustyDeveloperCommandClientError, PT as createRustyDeveloperCommandClient, iT as mountRustyApplication, Kw as mountRustyDeveloperCommandShell, oE as validateRustyDeveloperCommandWireValue };
+export { Nw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES, Pw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT, Fw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES, eT as RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION, ET as RUSTY_DEVELOPER_COMMAND_PROTOCOL_VERSION, OT as RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS, DT as RUSTY_STANDARD_HOST_WIRE_SCHEMAS, Iw as RustyApplicationContentError, tT as RustyApplicationHostError, PT as RustyDeveloperCommandClientError, FT as createRustyDeveloperCommandClient, iT as mountRustyApplication, Kw as mountRustyDeveloperCommandShell, oE as validateRustyDeveloperCommandWireValue };

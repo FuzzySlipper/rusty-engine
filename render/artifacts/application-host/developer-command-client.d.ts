@@ -7,6 +7,8 @@ import { GENERATED_DEVELOPER_COMMAND_CONTRACT } from './generated-developer-comm
  */
 export declare const RUSTY_DEVELOPER_COMMAND_PROTOCOL_VERSION: 1;
 /** Exact schemas generated from developer-command-standard host DTOs. */
+export declare const RUSTY_STANDARD_HOST_WIRE_SCHEMAS: Readonly<Record<string, RustyDeveloperCommandWireSchema>>;
+/** @deprecated Use `RUSTY_STANDARD_HOST_WIRE_SCHEMAS`; the host wire also includes inspect. */
 export declare const RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS: Readonly<Record<string, RustyDeveloperCommandWireSchema>>;
 export type RustyDeveloperCommandLane = typeof GENERATED_DEVELOPER_COMMAND_CONTRACT.lanes[number];
 export type RustyDeveloperCommandValueSchema = {
@@ -107,10 +109,20 @@ export interface RustyDeveloperCommandAdapter {
     readonly discover: (signal?: AbortSignal) => Promise<unknown>;
     readonly execute: (request: Readonly<RustyDeveloperCommandRequest>, signal?: AbortSignal) => Promise<unknown>;
 }
+/** A product-owned codec attachment for a command the host already discovers. */
+export interface RustyDeveloperCommandSchemaBinding {
+    readonly command: string;
+    readonly lane: RustyDeveloperCommandLane;
+    readonly profile: string;
+    readonly schema: RustyDeveloperCommandWireSchema;
+}
+/**
+ * Schema-only product extension. Discovery remains the sole executable
+ * catalog; bindings are reconciled against every accepted discovery snapshot.
+ */
 export interface RustyDeveloperCommandExtension {
     readonly namespace: string;
-    readonly descriptors: readonly RustyDeveloperCommandDescriptor[];
-    readonly schemas: Readonly<Record<string, RustyDeveloperCommandWireSchema>>;
+    readonly schemas: readonly RustyDeveloperCommandSchemaBinding[];
 }
 export interface RustyDeveloperCommandHistoryEntry {
     readonly phase: 'completed';

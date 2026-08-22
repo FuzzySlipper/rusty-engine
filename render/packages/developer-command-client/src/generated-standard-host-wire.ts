@@ -653,9 +653,368 @@ export const GENERATED_STANDARD_HOST_WIRE = {
         "kind": "object"
       },
       "result": {
+        "fields": {
+          "after": {
+            "required": true,
+            "value": {
+              "kind": "integer",
+              "maximum": 1000000000000,
+              "minimum": -1000000000000
+            }
+          },
+          "before": {
+            "required": true,
+            "value": {
+              "kind": "integer",
+              "maximum": 1000000000000,
+              "minimum": -1000000000000
+            }
+          },
+          "catalogFingerprint": {
+            "required": true,
+            "value": {
+              "kind": "string",
+              "maximumBytes": 256,
+              "pattern": "identifier"
+            }
+          },
+          "catalogVersion": {
+            "required": true,
+            "value": {
+              "kind": "string",
+              "maximumBytes": 96,
+              "pattern": "identifier"
+            }
+          },
+          "committedTracksRevision": {
+            "required": true,
+            "value": {
+              "kind": "decimalU64"
+            }
+          },
+          "decision": {
+            "required": true,
+            "value": {
+              "kind": "enum",
+              "values": [
+                "applied",
+                "clampedToBounds"
+              ]
+            }
+          },
+          "entity": {
+            "required": true,
+            "value": {
+              "kind": "decimalU64"
+            }
+          },
+          "maximum": {
+            "required": true,
+            "value": {
+              "kind": "integer",
+              "maximum": 1000000000000,
+              "minimum": -1000000000000
+            }
+          },
+          "minimum": {
+            "required": true,
+            "value": {
+              "kind": "integer",
+              "maximum": 1000000000000,
+              "minimum": -1000000000000
+            }
+          },
+          "observedRevisions": {
+            "required": true,
+            "value": {
+              "items": {
+                "fields": {
+                  "component": {
+                    "required": true,
+                    "value": {
+                      "kind": "string",
+                      "maximumBytes": 128,
+                      "pattern": "identifier"
+                    }
+                  },
+                  "entity": {
+                    "required": true,
+                    "value": {
+                      "kind": "decimalU64"
+                    }
+                  },
+                  "revision": {
+                    "required": true,
+                    "value": {
+                      "kind": "decimalU64"
+                    }
+                  }
+                },
+                "kind": "object"
+              },
+              "kind": "array",
+              "maximumItems": 32
+            }
+          },
+          "observedTracksRevision": {
+            "required": true,
+            "value": {
+              "kind": "decimalU64"
+            }
+          },
+          "operation": {
+            "required": true,
+            "value": {
+              "kind": "string",
+              "maximumBytes": 96,
+              "pattern": "identifier"
+            }
+          },
+          "policy": {
+            "required": true,
+            "value": {
+              "kind": "enum",
+              "values": [
+                "rejectOutOfBounds",
+                "clampToBounds"
+              ]
+            }
+          },
+          "requested": {
+            "required": true,
+            "value": {
+              "kind": "integer",
+              "maximum": 1000000000000,
+              "minimum": -1000000000000
+            }
+          },
+          "source": {
+            "required": true,
+            "value": {
+              "kind": "taggedUnion",
+              "tag": "kind",
+              "variants": {
+                "effect": {
+                  "fields": {
+                    "effect": {
+                      "required": true,
+                      "value": {
+                        "kind": "string",
+                        "maximumBytes": 96,
+                        "pattern": "identifier"
+                      }
+                    },
+                    "entity": {
+                      "required": true,
+                      "value": {
+                        "kind": "decimalU64"
+                      }
+                    },
+                    "kind": {
+                      "required": true,
+                      "value": {
+                        "kind": "enum",
+                        "values": [
+                          "effect"
+                        ]
+                      }
+                    },
+                    "source": {
+                      "required": true,
+                      "value": {
+                        "kind": "string",
+                        "maximumBytes": 96,
+                        "pattern": "identifier"
+                      }
+                    },
+                    "stack": {
+                      "required": true,
+                      "value": {
+                        "kind": "integer",
+                        "maximum": 65535,
+                        "minimum": 0
+                      }
+                    }
+                  },
+                  "kind": "object"
+                },
+                "equippedItem": {
+                  "fields": {
+                    "item": {
+                      "required": true,
+                      "value": {
+                        "kind": "decimalU64"
+                      }
+                    },
+                    "kind": {
+                      "required": true,
+                      "value": {
+                        "kind": "enum",
+                        "values": [
+                          "equippedItem"
+                        ]
+                      }
+                    },
+                    "owner": {
+                      "required": true,
+                      "value": {
+                        "kind": "decimalU64"
+                      }
+                    },
+                    "source": {
+                      "required": true,
+                      "value": {
+                        "kind": "string",
+                        "maximumBytes": 96,
+                        "pattern": "identifier"
+                      }
+                    }
+                  },
+                  "kind": "object"
+                },
+                "intrinsic": {
+                  "fields": {
+                    "entity": {
+                      "required": true,
+                      "value": {
+                        "kind": "decimalU64"
+                      }
+                    },
+                    "instance": {
+                      "required": true,
+                      "value": {
+                        "kind": "string",
+                        "maximumBytes": 96,
+                        "pattern": "identifier"
+                      }
+                    },
+                    "kind": {
+                      "required": true,
+                      "value": {
+                        "kind": "enum",
+                        "values": [
+                          "intrinsic"
+                        ]
+                      }
+                    }
+                  },
+                  "kind": "object"
+                },
+                "request": {
+                  "fields": {
+                    "instance": {
+                      "required": true,
+                      "value": {
+                        "kind": "string",
+                        "maximumBytes": 96,
+                        "pattern": "identifier"
+                      }
+                    },
+                    "kind": {
+                      "required": true,
+                      "value": {
+                        "kind": "enum",
+                        "values": [
+                          "request"
+                        ]
+                      }
+                    },
+                    "operation": {
+                      "required": true,
+                      "value": {
+                        "kind": "string",
+                        "maximumBytes": 96,
+                        "pattern": "identifier"
+                      }
+                    }
+                  },
+                  "kind": "object"
+                }
+              }
+            }
+          },
+          "sourceCost": {
+            "required": true,
+            "value": {
+              "fields": {
+                "effectEntriesVisited": {
+                  "required": true,
+                  "value": {
+                    "kind": "integer",
+                    "minimum": 0
+                  }
+                },
+                "effectSourceActivationsVisited": {
+                  "required": true,
+                  "value": {
+                    "kind": "integer",
+                    "minimum": 0
+                  }
+                },
+                "equipmentEntriesVisited": {
+                  "required": true,
+                  "value": {
+                    "kind": "integer",
+                    "minimum": 0
+                  }
+                },
+                "intrinsicEntriesVisited": {
+                  "required": true,
+                  "value": {
+                    "kind": "integer",
+                    "minimum": 0
+                  }
+                },
+                "itemComponentsRead": {
+                  "required": true,
+                  "value": {
+                    "kind": "integer",
+                    "minimum": 0
+                  }
+                },
+                "requestEntriesVisited": {
+                  "required": true,
+                  "value": {
+                    "kind": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "kind": "object"
+            }
+          },
+          "track": {
+            "required": true,
+            "value": {
+              "kind": "string",
+              "maximumBytes": 96,
+              "pattern": "identifier"
+            }
+          }
+        },
+        "kind": "object"
+      }
+    },
+    "standard.inspect.entity": {
+      "error": {
+        "fields": {},
+        "kind": "object"
+      },
+      "request": {
+        "fields": {
+          "entity": {
+            "required": true,
+            "value": {
+              "kind": "decimalU64"
+            }
+          }
+        },
+        "kind": "object"
+      },
+      "result": {
         "kind": "opaqueJson",
-        "maximumBytes": 16384,
-        "maximumNodes": 256
+        "maximumBytes": 65536,
+        "maximumNodes": 2048
       }
     }
   },

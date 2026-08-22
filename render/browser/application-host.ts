@@ -1,6 +1,6 @@
 import {
   createRustyDeveloperCommandClient,
-  RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS,
+  RUSTY_STANDARD_HOST_WIRE_SCHEMAS,
   mountRustyApplication,
   type RustyDeveloperCommandAdapter,
   type RustyDeveloperCommandRequest,
@@ -130,18 +130,19 @@ function developerCommandClient() {
   return createRustyDeveloperCommandClient({
     adapter: developerCommandAdapter,
     schemas: {
-      ...RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS,
-      'standard.inspect.entity': {
-        request: { kind: 'object', fields: { entity: { required: true, value: { kind: 'integer', minimum: 0 } } } },
-        result: { kind: 'opaqueJson', maximumBytes: 16_384, maximumNodes: 256 },
-        error: { kind: 'opaqueJson', maximumBytes: 8_192, maximumNodes: 128 },
-      },
-      'product.play.probe': {
-        request: { kind: 'object', fields: { target: { required: true, value: { kind: 'string', maximumBytes: 32, pattern: 'identifier' } } } },
-        result: { kind: 'opaqueJson', maximumBytes: 16_384, maximumNodes: 256 },
-        error: { kind: 'opaqueJson', maximumBytes: 8_192, maximumNodes: 128 },
-      },
+      ...RUSTY_STANDARD_HOST_WIRE_SCHEMAS,
     },
+    extensions: [{
+      namespace: 'product',
+      schemas: [{
+        command: 'product.play.probe', lane: 'play', profile: 'developer',
+        schema: {
+          request: { kind: 'object', fields: { target: { required: true, value: { kind: 'string', maximumBytes: 32, pattern: 'identifier' } } } },
+          result: { kind: 'opaqueJson', maximumBytes: 16_384, maximumNodes: 256 },
+          error: { kind: 'opaqueJson', maximumBytes: 8_192, maximumNodes: 128 },
+        },
+      }],
+    }],
   });
 }
 

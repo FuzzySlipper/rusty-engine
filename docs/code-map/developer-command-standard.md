@@ -41,12 +41,17 @@ commands explicitly advertise a product schema placeholder rather than claiming
 Engine ownership of their payload/result/error shape.
 
 The additive `wire` module is the different, explicit host DTO seam for the
-four Engine standard admin requests. It uses decimal strings for entity and
+standard inspect request and four Engine standard admin requests. It uses decimal strings for entity and
 revision identities, strictly decodes a tagged source/provenance union, obtains
 the live opaque component revision immediately before mapping, and then hands
 the exact request to the existing named service. Its generated schemas are
 truthful preflight/form metadata, not serde-derived owner types. Product play
 and product extension codecs remain product-supplied.
+
+`HostTrackSetReceipt::from_owner` is the inverse presentation edge for the
+non-Serde mechanics receipt. It preserves the operation/source provenance,
+clamp decision and bounds, component revisions, and bounded cost evidence; it
+does not make the owner receipt or mechanics service transport-owned.
 
 ## Primary paths
 
