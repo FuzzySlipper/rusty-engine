@@ -72,8 +72,10 @@ pub use package::{
     StandardDefinitionIdentity, StandardPackageContext, CONTINUOUS_FAMILY_ID, EXACT_FAMILY_ID,
 };
 pub use presets::{
-    ActionActorPreset, ActionActorPresetComponents, DestructibleResourcePreset,
-    DestructibleResourcePresetComponents,
+    compose_action_actor_and_destructible_resource_catalog, ActionActorPreset,
+    ActionActorPresetComponents, ActionActorPresetConfig, DestructibleResourcePreset,
+    DestructibleResourcePresetComponents, DestructibleResourcePresetConfig, PresetCompositionError,
+    PresetDefinitionNamespace, PresetValueError,
 };
 pub use projection::{
     AdmittedDefinitionProjection, PackageProvenanceProjection, ResolutionReceiptProjection,

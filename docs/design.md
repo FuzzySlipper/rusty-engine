@@ -500,9 +500,15 @@ Its borrowed projection helpers are inspection/adoption views, not a second eval
 retain supplied definitions, requirements, gathered values, planning evidence, mechanics receipts,
 generic resolution receipts/traces, and package provenance exactly as their owners produced them.
 Small action-actor and destructible/resource presets emit only ordinary catalog fragments,
-components, and named service inputs. These **Incubating** helpers are optional beside both typed
-downstream extension composition and direct low-level owner APIs; none creates an aggregate
-runtime or product session.
+components, and named service inputs. Their capacity and initial-value configs accept the existing
+bounded exact `MechanicsScalar`, reject negative or initial-over-maximum values, and surface the
+configured values directly through normal `StatDefinition`, `TrackDefinition`, `StatsComponent`,
+and `TracksComponent` readouts. The fixed constructors remain default-compatible convenience
+paths. One explicitly named actor-plus-destructible composition helper preserves the caller's
+catalog version and authored identities, sorts its known fragments deterministically, and returns
+typed version/duplicate conflicts before ordinary catalog admission; it is not a general catalog
+merge facility. These **Incubating** helpers are optional beside both typed downstream extension
+composition and direct low-level owner APIs; none creates an aggregate runtime or product session.
 
 `gameplay-standard` also provides separate opt-in exact and continuous value
 families. Exact expressions use the unchanged bounded `MechanicsScalar` and
