@@ -9,16 +9,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use gameplay_mechanics::MechanicsScalar;
 use gameplay_rules::{
     admit_rule_package, AdmittedRulePackage, RulePackageSchemaVersion, RuleSourceId, RuleSubjectId,
+    SelectedRulePayloadSubtree,
 };
 use serde_json::Value;
 
 pub use crate::composed_error::{
     ComposedExactDefinitionError, ComposedExactError, ComposedExactProductContext,
+    EmbeddedComposedExactContext, EmbeddedComposedExactError,
 };
 use crate::composed_wire::{
-    bounded_path, child_path, decode_expr, decode_roles, decode_schema, encode_definition, fields,
-    integer, malformed, preflight_wire_tree, required, string, validate_composed_wire_structure,
-    validate_correlation, WirePreflight,
+    bounded_path, child_path, decode_expr, decode_roles_at, decode_schema_at, encode_definition,
+    fields, integer, malformed, preflight_wire_tree, required, string,
+    validate_composed_wire_structure, validate_correlation, WirePreflight,
 };
 
 use crate::{
@@ -253,6 +255,7 @@ pub struct AdmittedComposedExactDefinition<Leaf> {
     compiled: ExactExpr,
     requirements: ExactExprRequirements,
     product_capabilities: Vec<RoleRequirement>,
+    embedded_selection: Option<SelectedRulePayloadSubtree>,
     identity: StandardDefinitionIdentity,
 }
 impl<Leaf> AdmittedComposedExactDefinition<Leaf> {
@@ -273,6 +276,11 @@ impl<Leaf> AdmittedComposedExactDefinition<Leaf> {
     }
     pub fn identity(&self) -> &StandardDefinitionIdentity {
         &self.identity
+    }
+    /// The immutable aggregate proof for the embedded route, if this was selected from a parent
+    /// product package. Standalone composed packages deliberately return `None`.
+    pub fn embedded_selection(&self) -> Option<&SelectedRulePayloadSubtree> {
+        self.embedded_selection.as_ref()
     }
     pub fn evaluate(
         &self,
@@ -316,10 +324,38 @@ pub fn compile_composed_exact_package<C: ComposedExactLeafCodec>(
             },
         ));
     }
-    let root = package
-        .payload()
+    compile_composed_exact_root::<C>(package, package.payload(), "payload", None)
+}
+
+/// Compiles a `composedExact` definition selected from one already-admitted product aggregate.
+/// The parent schema remains in force for opaque leaf payloads; exact grammar nodes still require
+/// exact integer literals and never silently coerce binary64 values.
+pub fn compile_composed_exact_embedded<C: ComposedExactLeafCodec>(
+    selection: &SelectedRulePayloadSubtree,
+) -> Result<AdmittedComposedExactDefinition<C::Leaf>, Box<EmbeddedComposedExactError<C::Error>>> {
+    let context = EmbeddedComposedExactContext::new(
+        selection.parent_identity().clone(),
+        selection.parent_fingerprint().clone(),
+        selection.path().display().to_owned(),
+    );
+    compile_composed_exact_root::<C>(
+        selection.parent(),
+        selection.value(),
+        selection.path().display(),
+        Some(selection.clone()),
+    )
+    .map_err(|error| Box::new(EmbeddedComposedExactError::new(context, error)))
+}
+
+fn compile_composed_exact_root<C: ComposedExactLeafCodec>(
+    package: &AdmittedRulePackage,
+    root_value: &Value,
+    root_path: &str,
+    embedded_selection: Option<SelectedRulePayloadSubtree>,
+) -> Result<AdmittedComposedExactDefinition<C::Leaf>, ComposedExactError<C::Error>> {
+    let root = root_value
         .as_object()
-        .ok_or_else(|| malformed("payload", "must be an object"))?;
+        .ok_or_else(|| malformed(root_path, "must be an object"))?;
     fields(
         root,
         &[
@@ -331,25 +367,28 @@ pub fn compile_composed_exact_package<C: ComposedExactLeafCodec>(
             "extension",
             "tree",
         ],
-        "payload",
+        root_path,
     )?;
-    if string(root, "family", "payload")? != COMPOSED_EXACT_FAMILY_ID {
+    if string(root, "family", root_path)? != COMPOSED_EXACT_FAMILY_ID {
         return Err(ComposedExactError::Wire(
             ComposedExactDefinitionError::WrongFamily,
         ));
     }
-    if integer(root, "semanticsVersion", "payload")? != u64::from(COMPOSED_EXACT_SEMANTICS_VERSION)
+    if integer(root, "semanticsVersion", root_path)? != u64::from(COMPOSED_EXACT_SEMANTICS_VERSION)
     {
         return Err(ComposedExactError::Wire(
             ComposedExactDefinitionError::UnsupportedSemanticsVersion,
         ));
     }
-    let subject = RuleSubjectId::parse(string(root, "subject", "payload")?)
+    let subject = RuleSubjectId::parse(string(root, "subject", root_path)?)
         .map_err(ComposedExactError::Package)?;
-    let source = RuleSourceId::parse(string(root, "source", "payload")?)
+    let source = RuleSourceId::parse(string(root, "source", root_path)?)
         .map_err(ComposedExactError::Package)?;
     validate_correlation(package, &subject, &source)?;
-    let schema = decode_schema(required(root, "extension", "payload")?)?;
+    let schema = decode_schema_at(
+        required(root, "extension", root_path)?,
+        &child_path(root_path, ".extension"),
+    )?;
     let codec_schema = C::schema();
     if schema != codec_schema {
         return Err(ComposedExactError::SchemaMismatch {
@@ -357,22 +396,29 @@ pub fn compile_composed_exact_package<C: ComposedExactLeafCodec>(
             actual: schema,
         });
     }
-    let roles = decode_roles(required(root, "roles", "payload")?)?;
+    let roles = decode_roles_at(
+        required(root, "roles", root_path)?,
+        &child_path(root_path, ".roles"),
+    )?;
     // Reject malformed, over-budget raw transport before a product decoder can observe it.
     let mut preflight = WirePreflight::default();
     preflight_wire_tree(
-        required(root, "tree", "payload")?,
-        "payload.tree",
+        required(root, "tree", root_path)?,
+        &child_path(root_path, ".tree"),
         package,
         1,
         &mut preflight,
         &roles,
     )?;
-    let expression = decode_expr::<C>(required(root, "tree", "payload")?, "payload.tree", package)?;
+    let expression = decode_expr::<C>(
+        required(root, "tree", root_path)?,
+        &child_path(root_path, ".tree"),
+        package,
+    )?;
     let definition =
         ComposedExactDefinition::new(C::schema(), subject.clone(), source, expression, roles)?;
     let (compiled, requirements, product_capabilities) =
-        compile_expression::<C>(definition.expression(), "payload.tree")?;
+        compile_expression::<C>(definition.expression(), &child_path(root_path, ".tree"))?;
     validate_roles(&requirements, definition.roles())?;
     validate_product_capabilities(&product_capabilities, definition.roles())?;
     Ok(AdmittedComposedExactDefinition {
@@ -387,6 +433,7 @@ pub fn compile_composed_exact_package<C: ComposedExactLeafCodec>(
         compiled,
         requirements,
         product_capabilities,
+        embedded_selection,
     })
 }
 

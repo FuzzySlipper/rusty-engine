@@ -5,8 +5,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use gameplay_mechanics::MechanicsScalar;
 use gameplay_rules::{
     admit_rule_package, canonical_rule_json_value_len, decode_canonical_rule_package,
-    decode_rule_package, AdmittedRulePackage, RuleDomainId, RulePackageCandidate, RulePackageId,
-    RulePackageSchemaVersion, RuleProvenance, RuleSource, RuleSourceId, RuleSubjectId, RuleVersion,
+    decode_rule_package, select_rule_payload_subtree, AdmittedRulePackage, RuleDomainId,
+    RuleFingerprint, RulePackageCandidate, RulePackageId, RulePackageSchemaVersion,
+    RulePayloadPath, RulePayloadPathSegment, RuleProvenance, RuleSource, RuleSourceId,
+    RuleSubjectId, RuleVersion,
 };
 use gameplay_standard::{
     attempt_quantize_continuous_to_mechanics, quantize_continuous_to_mechanics,
@@ -1274,6 +1276,142 @@ fn composed_wire_requires_product_payloads_to_converge_through_the_codec() {
             && context.kind().as_str() == "matrix.nonconvergent"
             && context.subject().as_str() == "nonconvergent-leaf"
             && context.source().as_str() == "rules"
+    ));
+}
+
+#[test]
+fn embedded_composed_exact_selects_one_binary64_aggregate_subtree_with_parent_evidence() {
+    let formula = raw_composed_payload(
+        gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+        matrix_extension_payload(),
+        serde_json::json!({
+            "op":"add",
+            "left": literal_wire(),
+            "right": matrix_product("matrix.valid", "formula-leaf", serde_json::json!({"mode":"valid"})),
+        }),
+        serde_json::json!([]),
+        "formula",
+        "rules",
+    );
+    let package = raw_package(
+        RulePackageSchemaVersion::Binary64V2,
+        serde_json::json!({"actions":[{"formula":formula,"weight":0.5}]}),
+        vec![source("rules")],
+        vec![
+            provenance("formula", "rules"),
+            provenance("formula-leaf", "rules"),
+        ],
+    );
+    let path = RulePayloadPath::new(vec![
+        RulePayloadPathSegment::field("actions").unwrap(),
+        RulePayloadPathSegment::index(0).unwrap(),
+        RulePayloadPathSegment::field("formula").unwrap(),
+    ])
+    .unwrap();
+    let selected = select_rule_payload_subtree(&package, package.fingerprint(), path).unwrap();
+    assert_eq!(selected.path().display(), "payload.actions[0].formula");
+    assert_eq!(selected.parent_fingerprint(), package.fingerprint());
+    assert_eq!(selected.parent_identity(), package.identity());
+    assert_eq!(
+        selected.canonical_bytes(),
+        br#"{"extension":{"namespace":"example.matrix","schemaVersion":1},"family":"composedExact","roles":[],"semanticsVersion":1,"source":"rules","subject":"formula","tree":{"left":{"op":"literal","value":1},"op":"add","right":{"kind":"matrix.valid","op":"product","payload":{"mode":"valid"},"source":"rules","subject":"formula-leaf"}}}"#,
+    );
+    let compiled =
+        gameplay_standard::compile_composed_exact_embedded::<MatrixProductCodec>(&selected)
+            .unwrap();
+    assert_eq!(
+        compiled.evaluate(&ExactInputBundle::new(vec![])).unwrap(),
+        scalar(8)
+    );
+    assert_eq!(compiled.package(), &package);
+    assert_eq!(
+        compiled.embedded_selection().unwrap().canonical_bytes(),
+        selected.canonical_bytes()
+    );
+
+    let wrong_path =
+        RulePayloadPath::new(vec![RulePayloadPathSegment::field("missing").unwrap()]).unwrap();
+    assert!(matches!(
+        select_rule_payload_subtree(&package, package.fingerprint(), wrong_path),
+        Err(gameplay_rules::RuleSubtreeSelectionError::MissingField { path }) if path == "payload.missing"
+    ));
+    let wrong_fingerprint =
+        RuleFingerprint::parse("0000000000000000000000000000000000000000000000000000000000000000")
+            .unwrap();
+    assert!(matches!(
+        select_rule_payload_subtree(
+            &package,
+            &wrong_fingerprint,
+            RulePayloadPath::new(vec![RulePayloadPathSegment::field("actions").unwrap()]).unwrap(),
+        ),
+        Err(gameplay_rules::RuleSubtreeSelectionError::ParentFingerprintMismatch { .. })
+    ));
+}
+
+#[test]
+fn embedded_composed_exact_retains_parent_and_path_on_unsafe_binary64_exact_node_failure() {
+    let package = raw_package(
+        RulePackageSchemaVersion::Binary64V2,
+        serde_json::json!({"items":[{"formula":raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            matrix_extension_payload(),
+            serde_json::json!({"op":"literal","value":9007199254740992.0}),
+            serde_json::json!([]), "formula", "rules") }]}),
+        vec![source("rules")],
+        vec![provenance("formula", "rules")],
+    );
+    let selected = select_rule_payload_subtree(
+        &package,
+        package.fingerprint(),
+        RulePayloadPath::new(vec![
+            RulePayloadPathSegment::field("items").unwrap(),
+            RulePayloadPathSegment::index(0).unwrap(),
+            RulePayloadPathSegment::field("formula").unwrap(),
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_embedded::<MatrixProductCodec>(&selected),
+        Err(error) if error.context().parent_identity() == package.identity()
+            && error.context().parent_fingerprint() == package.fingerprint()
+            && error.context().path() == "payload.items[0].formula"
+            && matches!(error.error(), gameplay_standard::ComposedExactError::Wire(
+                gameplay_standard::ComposedExactDefinitionError::MalformedPayload { path, .. }
+            ) if path == "payload.items[0].formula.tree.value")
+    ));
+}
+
+#[test]
+fn embedded_composed_exact_product_compile_failure_uses_the_selected_root_path() {
+    let package = raw_package(
+        RulePackageSchemaVersion::Binary64V2,
+        serde_json::json!({"actions":[{"formula":raw_composed_payload(
+            gameplay_standard::COMPOSED_EXACT_FAMILY_ID,
+            matrix_extension_payload(),
+            matrix_product("matrix.compile", "formula-leaf", serde_json::json!({"mode":"compile"})),
+            serde_json::json!([]), "formula", "rules") }]}),
+        vec![source("rules")],
+        vec![
+            provenance("formula", "rules"),
+            provenance("formula-leaf", "rules"),
+        ],
+    );
+    let selected = select_rule_payload_subtree(
+        &package,
+        package.fingerprint(),
+        RulePayloadPath::new(vec![
+            RulePayloadPathSegment::field("actions").unwrap(),
+            RulePayloadPathSegment::index(0).unwrap(),
+            RulePayloadPathSegment::field("formula").unwrap(),
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(
+        gameplay_standard::compile_composed_exact_embedded::<MatrixProductCodec>(&selected),
+        Err(error) if matches!(error.error(), gameplay_standard::ComposedExactError::ProductCompile { context, .. }
+            if context.path() == "payload.actions[0].formula.tree")
     ));
 }
 

@@ -87,6 +87,14 @@ whether and where to publish them. `RuleDiagnosticReport` gives that compiler
 bounded codes, paths, messages, package identity, and optional subject/source
 correlation without giving Engine ownership of its codes.
 
+For one bounded child of an already-admitted aggregate, use `RulePayloadPath`
+plus `select_rule_payload_subtree`. The caller supplies typed field/index
+segments and the expected parent fingerprint; the result retains parent
+provenance, canonical path, selected value, and selected canonical bytes. It
+rejects the empty payload root and bounds field bytes, segment count, and array
+index before traversal. It is not a JSON-pointer interpreter, aggregate schema, registry, or path-based
+service lookup. Product layout and selection choices remain downstream-owned.
+
 Multiple admitted packages may be passed to `resolve_rule_packages`. The
 resolver preflights all aggregate costs, exact identities, logical-version
 conflicts, dependencies, optional fingerprint pins, and cycles before

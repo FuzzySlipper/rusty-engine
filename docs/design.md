@@ -538,7 +538,11 @@ and rehydrates them. This is deterministic build-time convergence, not a
 TypeScript evaluator or a Node dependency of ordinary Rust verification.
 
 Product extension data remains source-correlated bounded `gameplay-rules`
-exchange data. A `composedExact` package may place one closed typed product
+exchange data. A `composedExact` definition may stand alone or be selected by
+a caller-owned strict typed field/index path from one already-admitted product
+aggregate; selection binds canonical subtree bytes, path, and parent
+fingerprint/provenance without making Engine own an aggregate schema. A
+`composedExact` definition may place one closed typed product
 leaf arm inside Standard exact syntax; after strict wire preflight, a static
 downstream codec immediately rehydrates it to a product type and compiles it
 to `ExactExpr`. Engine then uses the one existing evaluator and aggregate
