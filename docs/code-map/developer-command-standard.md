@@ -3,7 +3,9 @@
 ## Purpose
 
 Route work involving the optional standard-gameplay command modules. This is a
-tooling composition leaf, not a runtime or a replacement gameplay owner.
+tooling composition leaf, not a runtime or a replacement gameplay owner. It is
+the standard-command portion of the optional [runtime developer console /
+developer console / debug console](../topics/development/runtime-developer-console.md).
 
 ## Owns
 
@@ -80,3 +82,7 @@ unchanged. Preview/play helpers do not construct a policy or transaction.
 cargo test -p developer-command-standard --locked
 cargo clippy -p developer-command-standard --all-targets --locked -- -D warnings
 ```
+
+For the complete Rust-to-host flow, browser/Tauri adoption recipe, and
+console-specific anti-patterns, see the [runtime developer console
+guide](../topics/development/runtime-developer-console.md).

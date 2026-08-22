@@ -159,6 +159,18 @@ and transactional cleanup. The downstream UI mount receives only:
 - its own DOM root, where Angular, another framework, or direct typed DOM code
   can build the product HUD, menus, forms, and accessibility tree.
 
+The optional `presentationAspectBounds: { minimum, maximum }` selects a finite positive inclusive
+numeric interval for the whole application presentation, not just the canvas. The supplied mount
+root remains the available browser/WebView area. Inside the interval the shared frame fills that
+area; outside it, the host centers the largest frame at the nearest aspect bound. Canvas, indicators,
+the downstream UI root, and loading/failure presentation occupy that one clipped frame, and its
+resize drives the renderer viewport. The host validates bounds before it changes mount DOM. Omit
+the option to retain existing full-host behavior. Downstream UI must stay frame-local: it may put an
+intentional scroll region inside its own panel, but it must not calculate frame geometry, create a
+second canvas, or rely on oversized descendants to expand the document. Rusty Dagger is the recorded
+first adoption target for this neutral interval; its game-specific art and supported interval remain
+downstream policy, not an Engine dependency or proof checkout.
+
 The renderer port also exposes `createVoxelSpriteExperiment()` as a deliberately
 experimental, disposable presentation attachment. It can capture an admitted
 retained handle on explicit request or borrow four admitted prepared textures,

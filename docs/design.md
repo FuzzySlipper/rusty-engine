@@ -987,6 +987,17 @@ justifies it; neither topology changes the application-host or gameplay-authorit
 downstream source is not treated as hostile plugin content, so this boundary adds no sanitizer or
 sandbox framework.
 
+An optional finite positive `presentationAspectBounds` interval makes that composition one centered,
+clipped presentation viewport relative to the supplied mount root, rather than to browser `vw` or
+`vh`. The canvas, Engine indicators, downstream UI root, and startup or failure presentation share
+that frame; below the minimum or above the maximum aspect it clamps to the nearest bound and leaves
+inactive gutters. The omitted option preserves the full-host legacy layout. The downstream chooses
+its numeric interval and frame-local UI design, but does not copy geometry from the canvas or let
+ordinary descendants expand the frame or document; intentional scrolling belongs in a frame-local
+panel. Bounds are validated before mount publication, and resize observation is disposed with the
+same host lifecycle, so a later browser, Tauri, or Electron wrapper sees the identical container
+policy without acquiring a window manager, responsive UI framework, or gameplay authority.
+
 The surface lighting contract is versioned and observational. Omitted settings retain the compatible
 two-light neutral rig independently in the world and viewmodel scenes; a consumer may disable either
 rig and supply ordinary retained lights instead. The host validates a bounded shadow policy before

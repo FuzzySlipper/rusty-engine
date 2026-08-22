@@ -134,6 +134,7 @@ rust/crates/
   gameplay-resolution       bounded downstream-owned resolution lifecycle and receipts
   gameplay-rules            optional opaque package admission, provenance, diagnostics, resolution
   gameplay-standard         incubating metadata readouts beside exact gameplay-owner APIs
+  developer-command         optional typed runtime developer-console binding contract
   developer-command-standard optional standard gameplay command descriptors and owner adapters
   engine-spatial            canonical voxel space and synchronized derived mechanisms
   content-store             manifests, source batches, prefabs, load/save plans, write sets
@@ -298,6 +299,7 @@ The format, limits, provenance, and failure behavior are documented in
 | [Documentation index](docs/README.md) | Organized entry point for all repository docs |
 | [Canonical design](docs/design.md) | Provider ownership, host/platform boundaries, dependency direction, promotion |
 | [Agent code atlas](docs/agent-code-atlas.md) | Owner routing, primary paths, public surfaces, gates, and common mistakes |
+| [Runtime developer console](docs/topics/development/runtime-developer-console.md) | End-to-end developer console / debug console flow, ownership, adapters, and focused checks |
 | [Known limitations](docs/known-limitations.md) | Active provider limitations and explicitly scheduled consumer certification |
 | [Rust source organization](docs/topics/development/rust-style.md) | Lightweight module and behavior-owner style |
 | [Downstream Engine and Studio boundary](docs/topics/development/downstream-renderer-and-studio.md) | Sibling facade consumption, Engine-hosted Studio, and renderer ownership |

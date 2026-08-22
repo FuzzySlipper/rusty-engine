@@ -23,6 +23,11 @@ import {
   type RustyDeveloperCommandShell,
   type RustyDeveloperCommandShellOptions,
 } from './developer-command-shell.js';
+import {
+  resolvePresentationFrameGeometry,
+  validatePresentationAspectBounds,
+  type RustyApplicationPresentationAspectBounds,
+} from './presentation-frame.js';
 
 export const RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION =
   'rusty_application_host.v1';
@@ -530,6 +535,8 @@ export interface RustyApplicationFogOptions {
 export interface RustyApplicationHostOptions {
   readonly root: HTMLElement;
   readonly mountUi: RustyApplicationUiMount;
+  /** Optional finite inclusive aspect interval for one shared, clipped presentation frame. */
+  readonly presentationAspectBounds?: RustyApplicationPresentationAspectBounds;
   /** Optional Engine-owned console UI over a product-supplied command adapter. */
   readonly developerCommands?: RustyDeveloperCommandShellOptions;
   readonly renderer?: RustyApplicationRendererOptions;
@@ -557,7 +564,7 @@ export interface RustyApplicationHost {
 }
 
 export class RustyApplicationHostError extends Error {
-  readonly code: 'invalid_root' | 'mount_failed' | 'disposed' | 'stale_renderer_port';
+  readonly code: 'invalid_presentation_aspect_bounds' | 'invalid_root' | 'mount_failed' | 'disposed' | 'stale_renderer_port';
 
   constructor(
     code: RustyApplicationHostError['code'],
@@ -581,6 +588,8 @@ const BROWSER_ENVIRONMENT: RustyApplicationHostEnvironment = {
   mountSurface: mountRendererSurface,
 };
 
+const failureFrameResizeCleanups = new WeakMap<HTMLElement, () => void>();
+
 export async function mountRustyApplication(
   options: RustyApplicationHostOptions,
 ): Promise<RustyApplicationHost> {
@@ -592,6 +601,16 @@ async function mountRustyApplicationWithEnvironment(
   environment: RustyApplicationHostEnvironment,
 ): Promise<RustyApplicationHost> {
   const { root } = options;
+  let presentationAspectBounds: RustyApplicationPresentationAspectBounds | undefined;
+  try {
+    presentationAspectBounds = validatePresentationAspectBounds(options.presentationAspectBounds);
+  } catch (cause) {
+    throw new RustyApplicationHostError(
+      'invalid_presentation_aspect_bounds',
+      cause instanceof Error ? cause.message : String(cause),
+      { cause },
+    );
+  }
   clearPreviousFailure(root);
   if (root.childNodes.length > 0) {
     throw new RustyApplicationHostError(
@@ -601,7 +620,11 @@ async function mountRustyApplicationWithEnvironment(
   }
 
   const document = root.ownerDocument;
-  const layout = createLayout(document, options.loadingLabel ?? 'Starting application…');
+  const layout = createLayout(
+    document,
+    options.loadingLabel ?? 'Starting application…',
+    presentationAspectBounds,
+  );
   root.append(layout.host);
   root.dataset['rustyApplicationState'] = 'mounting';
 
@@ -622,6 +645,15 @@ async function mountRustyApplicationWithEnvironment(
   let contentRevision = 0;
   let replacementPending = 0;
   let replacementQueue: Promise<void> = Promise.resolve();
+  const removePresentationResizeListener = installPresentationFrameSizing(
+    root,
+    layout.host,
+    layout.frame,
+    presentationAspectBounds,
+    () => {
+      if (!disposed && surface !== null) surface.renderOnce();
+    },
+  );
 
   const requireActive = (): RendererSurface => {
     if (closing || disposed || surface === null) {
@@ -1011,6 +1043,7 @@ async function mountRustyApplicationWithEnvironment(
       !disposed &&
       !event.defaultPrevented &&
       interactionMode === 'gameplay' &&
+      isEventWithinPresentationFrame(event, layout.frame) &&
       !isInteractiveUiEvent(event, layout.ui),
     focusGameplay,
     interactionMode: () => interactionMode,
@@ -1076,6 +1109,7 @@ async function mountRustyApplicationWithEnvironment(
       activeParticle,
       activeBillboardUrls,
       layout.host,
+      removePresentationResizeListener,
     );
     delete root.dataset['rustyApplicationState'];
     const failure = cause instanceof Error ? cause : new Error(String(cause));
@@ -1083,6 +1117,7 @@ async function mountRustyApplicationWithEnvironment(
       root,
       options.failureLabel ?? 'Application failed to start',
       failure.message,
+      presentationAspectBounds,
     );
     throw new RustyApplicationHostError(
       'mount_failed',
@@ -1122,6 +1157,7 @@ async function mountRustyApplicationWithEnvironment(
           activeParticle,
           activeBillboardUrls,
           layout.host,
+          removePresentationResizeListener,
         );
         uiOwner = null;
         developerCommandShell = null;
@@ -1162,16 +1198,23 @@ function replacementDiagnosticCode(cause: unknown): string {
   return 'retained_frame_replacement_failed';
 }
 
-function createLayout(document: Document, loadingLabel: string): {
+function createLayout(
+  document: Document,
+  loadingLabel: string,
+  presentationAspectBounds: RustyApplicationPresentationAspectBounds | undefined,
+): {
   readonly host: HTMLDivElement;
   readonly canvas: HTMLCanvasElement;
   readonly ui: HTMLDivElement;
   readonly indicators: HTMLDivElement;
   readonly loading: HTMLDivElement;
+  readonly frame: HTMLDivElement | null;
 } {
   const host = document.createElement('div');
   host.dataset['rustyApplicationHost'] = RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION;
-  host.style.cssText = 'isolation:isolate;min-height:100dvh;position:relative;width:100%;';
+  host.style.cssText = presentationAspectBounds === undefined
+    ? 'isolation:isolate;min-height:100dvh;position:relative;width:100%;'
+    : 'height:100%;isolation:isolate;min-height:0;overflow:hidden;position:relative;width:100%;';
 
   const canvas = createRendererCanvas(document);
 
@@ -1182,7 +1225,9 @@ function createLayout(document: Document, loadingLabel: string): {
 
   const ui = document.createElement('div');
   ui.dataset['rustyApplicationUi'] = 'downstream';
-  ui.style.cssText = 'min-height:100dvh;position:relative;width:100%;z-index:2;';
+  ui.style.cssText = presentationAspectBounds === undefined
+    ? 'min-height:100dvh;position:relative;width:100%;z-index:2;'
+    : 'height:100%;min-height:0;overflow:hidden;position:relative;width:100%;z-index:2;';
 
   const loading = document.createElement('div');
   loading.dataset['rustyApplicationLoading'] = '';
@@ -1191,8 +1236,61 @@ function createLayout(document: Document, loadingLabel: string): {
   loading.style.cssText =
     'align-items:center;background:#071012;color:#d9eee7;display:flex;font:14px system-ui;inset:0;justify-content:center;position:absolute;z-index:2;';
 
-  host.append(canvas, indicators, ui, loading);
-  return { host, canvas, indicators, ui, loading };
+  if (presentationAspectBounds === undefined) {
+    host.append(canvas, indicators, ui, loading);
+    return { host, canvas, indicators, ui, loading, frame: null };
+  }
+
+  const frame = document.createElement('div');
+  frame.dataset['rustyApplicationPresentationFrame'] = 'bounded';
+  frame.style.cssText =
+    'contain:layout paint;flex:none;height:0;overflow:hidden;position:relative;width:0;';
+  host.style.display = 'flex';
+  host.style.alignItems = 'center';
+  host.style.justifyContent = 'center';
+  frame.append(canvas, indicators, ui, loading);
+  host.append(frame);
+  return { host, canvas, indicators, ui, loading, frame };
+}
+
+function installPresentationFrameSizing(
+  root: HTMLElement,
+  container: HTMLElement,
+  frame: HTMLElement | null,
+  presentationAspectBounds: RustyApplicationPresentationAspectBounds | undefined,
+  requestRendererResize: () => void,
+): () => void {
+  if (presentationAspectBounds === undefined || frame === null) return () => undefined;
+  let active = true;
+  const update = (): void => {
+    if (!active) return;
+    const geometry = resolvePresentationFrameGeometry(
+      container.clientWidth,
+      container.clientHeight,
+      presentationAspectBounds,
+    );
+    frame.style.width = `${String(geometry.width)}px`;
+    frame.style.height = `${String(geometry.height)}px`;
+    requestRendererResize();
+  };
+  const ResizeObserverConstructor = root.ownerDocument.defaultView?.ResizeObserver;
+  if (ResizeObserverConstructor !== undefined) {
+    const observer = new ResizeObserverConstructor(update);
+    observer.observe(root);
+    update();
+    return () => {
+      active = false;
+      observer.disconnect();
+    };
+  }
+  const window = root.ownerDocument.defaultView;
+  const onResize = (): void => update();
+  window?.addEventListener('resize', onResize);
+  update();
+  return () => {
+    active = false;
+    window?.removeEventListener('resize', onResize);
+  };
 }
 
 function createRendererCanvas(document: Document): HTMLCanvasElement {
@@ -1244,6 +1342,59 @@ function isInteractiveUiEvent(event: Event, uiRoot: HTMLElement): boolean {
   return event.composedPath().some((target) => isInteractiveUiTarget(target, uiRoot));
 }
 
+/**
+ * Coordinate-bearing physical events must land inside the bounded shared frame.
+ * Keyboard and other non-coordinate events keep their existing host behavior.
+ */
+function isEventWithinPresentationFrame(event: Event, frame: HTMLElement | null): boolean {
+  if (frame === null) return true;
+  const point = eventClientPoint(event);
+  if (point === null) return true;
+  if (point === 'malformed') return false;
+  const bounds = frame.getBoundingClientRect();
+  return point.x >= bounds.left && point.x < bounds.right
+    && point.y >= bounds.top && point.y < bounds.bottom;
+}
+
+type EventClientPoint = { readonly x: number; readonly y: number } | 'malformed' | null;
+
+function eventClientPoint(event: Event): EventClientPoint {
+  const direct = coordinatePoint(event);
+  if (direct !== null) return direct;
+  const candidate = event as Event & Record<string, unknown>;
+  const touches = firstCoordinatePoint(candidate['touches']);
+  if (touches !== null) return touches;
+  return firstCoordinatePoint(candidate['changedTouches']);
+}
+
+function firstCoordinatePoint(value: unknown): EventClientPoint {
+  if (typeof value !== 'object' || value === null) return null;
+  const list = value as Record<string, unknown>;
+  const indexed = coordinatePoint(list['0']);
+  if (indexed !== null) return indexed;
+  const item = list['item'];
+  if (typeof item !== 'function') return null;
+  try {
+    return coordinatePoint(item.call(value, 0));
+  } catch {
+    return null;
+  }
+}
+
+function coordinatePoint(value: unknown): EventClientPoint {
+  if (typeof value !== 'object' || value === null) return null;
+  const candidate = value as Record<string, unknown>;
+  const hasClientX = 'clientX' in candidate;
+  const hasClientY = 'clientY' in candidate;
+  if (!hasClientX && !hasClientY) return null;
+  const x = candidate['clientX'];
+  const y = candidate['clientY'];
+  if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) {
+    return 'malformed';
+  }
+  return { x, y };
+}
+
 function isInteractiveUiTarget(target: EventTarget | null, uiRoot: HTMLElement): boolean {
   if (!(target instanceof Element) || !uiRoot.contains(target)) return false;
   return target.closest(
@@ -1276,6 +1427,7 @@ async function cleanupApplicationOwners(
   particle: RendererParticleHost | null,
   billboardUrls: ReadonlySet<string>,
   host: HTMLElement,
+  removePresentationResizeListener: () => void,
 ): Promise<readonly unknown[]> {
   const failures: unknown[] = [];
   try {
@@ -1313,6 +1465,11 @@ async function cleanupApplicationOwners(
   } catch (cause) {
     failures.push(cause);
   }
+  try {
+    removePresentationResizeListener();
+  } catch (cause) {
+    failures.push(cause);
+  }
   host.remove();
   return failures;
 }
@@ -1326,20 +1483,51 @@ function disposeBillboardOwner(
 }
 
 function clearPreviousFailure(root: HTMLElement): void {
-  const failure = root.querySelector(':scope > [data-rusty-application-failure]');
-  failure?.remove();
+  const failureLayout = root.querySelector<HTMLElement>(
+    ':scope > [data-rusty-application-failure-layout]',
+  );
+  if (failureLayout !== null) {
+    failureFrameResizeCleanups.get(failureLayout)?.();
+    failureFrameResizeCleanups.delete(failureLayout);
+    failureLayout.remove();
+    return;
+  }
+  root.querySelector(':scope > [data-rusty-application-failure]')?.remove();
 }
 
-function renderFailure(root: HTMLElement, label: string, message: string): void {
+function renderFailure(
+  root: HTMLElement,
+  label: string,
+  message: string,
+  presentationAspectBounds: RustyApplicationPresentationAspectBounds | undefined,
+): void {
   const failure = root.ownerDocument.createElement('section');
   failure.dataset['rustyApplicationFailure'] = '';
   failure.setAttribute('role', 'alert');
-  failure.style.cssText =
-    'background:#1b0b0d;color:#ffe8e8;font:14px system-ui;margin:0;min-height:100dvh;padding:2rem;';
+  failure.style.cssText = presentationAspectBounds === undefined
+    ? 'background:#1b0b0d;color:#ffe8e8;font:14px system-ui;margin:0;min-height:100dvh;padding:2rem;'
+    : 'background:#1b0b0d;box-sizing:border-box;color:#ffe8e8;font:14px system-ui;height:100%;margin:0;overflow:auto;padding:2rem;width:100%;';
   const heading = root.ownerDocument.createElement('h1');
   heading.textContent = label;
   const detail = root.ownerDocument.createElement('p');
   detail.textContent = message;
   failure.append(heading, detail);
-  root.append(failure);
+  if (presentationAspectBounds === undefined) {
+    root.append(failure);
+    return;
+  }
+  const failureLayout = root.ownerDocument.createElement('div');
+  failureLayout.dataset['rustyApplicationFailureLayout'] = '';
+  failureLayout.style.cssText =
+    'align-items:center;display:flex;height:100%;isolation:isolate;justify-content:center;min-height:0;overflow:hidden;position:relative;width:100%;';
+  const frame = root.ownerDocument.createElement('div');
+  frame.dataset['rustyApplicationPresentationFrame'] = 'bounded';
+  frame.style.cssText = 'contain:layout paint;flex:none;overflow:hidden;position:relative;';
+  frame.append(failure);
+  failureLayout.append(frame);
+  root.append(failureLayout);
+  failureFrameResizeCleanups.set(
+    failureLayout,
+    installPresentationFrameSizing(root, failureLayout, frame, presentationAspectBounds, () => undefined),
+  );
 }

@@ -4,7 +4,8 @@
 
 Route work involving host-neutral, typed developer-command envelopes and the
 explicit in-process binding port that a downstream product invokes at its own
-safe point.
+safe point. This is the contract half of the optional [runtime developer
+console / developer console / debug console](../topics/development/runtime-developer-console.md).
 
 ## Owns
 
@@ -102,3 +103,5 @@ cargo clippy -p developer-command --all-targets --locked -- -D warnings
   help metadata and never become inferred owner DTO codecs.
 - Read-only diagnostics remain in `engine-inspector`; it does not own this
   contract or runtime binding.
+- For the complete Rust-to-host adoption flow and anti-patterns, start with the
+  [runtime developer console guide](../topics/development/runtime-developer-console.md).

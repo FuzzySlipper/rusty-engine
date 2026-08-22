@@ -1,5 +1,6 @@
 import { type RustyApplicationContent } from './application-content.js';
 import { type RustyDeveloperCommandShellOptions } from './developer-command-shell.js';
+import { type RustyApplicationPresentationAspectBounds } from './presentation-frame.js';
 export declare const RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION = "rusty_application_host.v1";
 export type RustyApplicationInteractionMode = 'gameplay' | 'interface' | 'modal';
 /** A Rust-projected Engine render frame. Strict decoding remains Engine-owned. */
@@ -421,6 +422,8 @@ export interface RustyApplicationFogOptions {
 export interface RustyApplicationHostOptions {
     readonly root: HTMLElement;
     readonly mountUi: RustyApplicationUiMount;
+    /** Optional finite inclusive aspect interval for one shared, clipped presentation frame. */
+    readonly presentationAspectBounds?: RustyApplicationPresentationAspectBounds;
     /** Optional Engine-owned console UI over a product-supplied command adapter. */
     readonly developerCommands?: RustyDeveloperCommandShellOptions;
     readonly renderer?: RustyApplicationRendererOptions;
@@ -445,7 +448,7 @@ export interface RustyApplicationHost {
     readonly dispose: () => Promise<void>;
 }
 export declare class RustyApplicationHostError extends Error {
-    readonly code: 'invalid_root' | 'mount_failed' | 'disposed' | 'stale_renderer_port';
+    readonly code: 'invalid_presentation_aspect_bounds' | 'invalid_root' | 'mount_failed' | 'disposed' | 'stale_renderer_port';
     constructor(code: RustyApplicationHostError['code'], message: string, options?: ErrorOptions);
 }
 export declare function mountRustyApplication(options: RustyApplicationHostOptions): Promise<RustyApplicationHost>;

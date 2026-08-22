@@ -19,7 +19,8 @@ compiled artifact, and Rust webview host/resource lifecycle.
   transport-neutral developer-command client. It owns the composition root,
   trusted rich-DOM mount, typed frame/camera/interaction ports, transactional
   whole-frame replacement, combined static-mesh/texture/animated-GLB resource
-  admission, and lifecycle cleanup.
+  admission, lifecycle cleanup, and the optional numeric bounded presentation
+  frame that keeps canvas, indicators, UI, and startup/failure geometry together.
 - `@rusty-engine/developer-command-client`: DOM-free public TypeScript client
   for Node, agent tooling, and selected application-host adapters. It owns
   strict generated wire decoding, correlation and local history only; products
@@ -116,6 +117,12 @@ compiled artifact, and Rust webview host/resource lifecycle.
 - Browser/Tauri/Electron products that need rich DOM import only
   `@rusty-engine/application-host`; its bundled closure keeps renderer package
   names and backend types out of downstream manifests, locks, and source.
+- `RustyApplicationHostOptions.presentationAspectBounds` is the application-host
+  container-relative `{ minimum, maximum }` policy. When present, it clips and
+  centers one shared frame for all visual layers; the mount root remains the
+  platform area and the downstream UI fills the frame without copying canvas
+  sizing. Rusty Dagger is its recorded adoption target, not a provider checkout
+  dependency or a universal product window policy.
 - Structured indicators are realized by the existing billboard host in one
   Engine-owned pointer-transparent overlay. Stable local meter identities allow
   value-only updates without rebuilding unrelated DOM; deterministic priority,

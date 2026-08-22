@@ -1190,3 +1190,312 @@ test('queued complete content replacements publish in call order', async ({ page
   });
   await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
 });
+
+test('bounded presentation frame contains every layer, survives replacement and transient zero size, and clips oversized UI', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  const snapshots = await page.evaluate(async () => {
+    const host = window.__rustyApplicationHost;
+    const mount = window.__rustyApplicationMount;
+    const root = document.querySelector<HTMLElement>('#application');
+    if (host === undefined || mount === undefined || root === null) {
+      throw new Error('application host fixture is unavailable');
+    }
+    await host.dispose();
+    root.style.cssText = 'height:600px;min-height:0;overflow:hidden;width:600px;';
+    const bounded = await mount({ minimum: 4 / 3, maximum: 16 / 9 });
+    window.__rustyApplicationHost = bounded;
+    const snapshot = () => {
+      const rect = (selector: string) => {
+        const element = document.querySelector<HTMLElement>(selector);
+        if (element === null) throw new Error(`missing ${selector}`);
+        const bounds = element.getBoundingClientRect();
+        return { height: bounds.height, left: bounds.left, top: bounds.top, width: bounds.width };
+      };
+      const canvas = document.querySelector<HTMLCanvasElement>(
+        'canvas[data-rusty-application-renderer="engine-owned"]',
+      );
+      if (canvas === null) throw new Error('renderer canvas is unavailable');
+      bounded.renderer.renderOnce();
+      return {
+        canvas: rect('canvas[data-rusty-application-renderer="engine-owned"]'),
+        canvasCount: document.querySelectorAll('canvas[data-rusty-application-renderer="engine-owned"]').length,
+        frame: rect('[data-rusty-application-presentation-frame="bounded"]'),
+        indicators: rect('[data-rusty-application-indicators="engine-owned"]'),
+        ui: rect('[data-rusty-application-ui="downstream"]'),
+        viewport: { bufferHeight: canvas.height, bufferWidth: canvas.width },
+      };
+    };
+    const waitForLayout = async (): Promise<void> => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    };
+    const narrow = snapshot();
+    const content = window.__rustyApplicationResourceContent?.();
+    if (content === undefined) throw new Error('application content fixture is unavailable');
+    const replacement = await bounded.renderer.replaceContent(content);
+    const afterReplacement = snapshot();
+    root.style.width = '0px';
+    root.style.height = '0px';
+    await waitForLayout();
+    const zeroSized = snapshot();
+    root.style.width = '800px';
+    root.style.height = '500px';
+    await waitForLayout();
+    const inside = snapshot();
+    root.style.width = '900px';
+    root.style.height = '400px';
+    await waitForLayout();
+    const wide = snapshot();
+    const scrollBeforeOversizedUi = {
+      height: document.documentElement.scrollHeight,
+      width: document.documentElement.scrollWidth,
+    };
+    const oversized = document.createElement('div');
+    oversized.style.cssText = 'height:1600px;width:2400px;';
+    document.querySelector('[data-rusty-application-ui="downstream"]')?.append(oversized);
+    await waitForLayout();
+    const afterOversizedUi = snapshot();
+    return {
+      afterOversizedUi,
+      afterReplacement,
+      inside,
+      narrow,
+      replacement,
+      scrollAfterOversizedUi: {
+        height: document.documentElement.scrollHeight,
+        width: document.documentElement.scrollWidth,
+      },
+      scrollBeforeOversizedUi,
+      wide,
+      zeroSized,
+    };
+  });
+
+  expect(snapshots.replacement).toEqual({ applied: true, diagnostics: [] });
+  for (const state of [
+    snapshots.narrow,
+    snapshots.afterReplacement,
+    snapshots.inside,
+    snapshots.wide,
+    snapshots.afterOversizedUi,
+  ]) {
+    expect(state.canvas).toEqual(state.frame);
+    expect(state.indicators).toEqual(state.frame);
+    expect(state.ui).toEqual(state.frame);
+    expect(state.viewport.bufferWidth).toBeGreaterThan(0);
+    expect(state.viewport.bufferHeight).toBeGreaterThan(0);
+    expect(state.canvasCount).toBe(1);
+  }
+  expect(snapshots.zeroSized.frame).toEqual({ height: 0, left: 0, top: 0, width: 0 });
+  expect(snapshots.zeroSized.canvas).toEqual(snapshots.zeroSized.frame);
+  expect(snapshots.narrow.frame.width).toBeCloseTo(600);
+  expect(snapshots.narrow.frame.height).toBeCloseTo(450);
+  expect(snapshots.narrow.frame.top).toBeCloseTo(75);
+  expect(snapshots.inside.frame).toEqual({ height: 500, left: 0, top: 0, width: 800 });
+  expect(snapshots.wide.frame.width).toBeCloseTo(400 * (16 / 9));
+  expect(snapshots.wide.frame.height).toBeCloseTo(400);
+  expect(Math.abs(snapshots.wide.frame.left - (900 - 400 * (16 / 9)) / 2)).toBeLessThan(0.02);
+  expect(snapshots.afterOversizedUi.frame).toEqual(snapshots.wide.frame);
+  expect(snapshots.scrollAfterOversizedUi).toEqual(snapshots.scrollBeforeOversizedUi);
+});
+
+test('bounded gameplay input rejects gutters and accepts frame-local non-interactive input after resize', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  await page.evaluate(async () => {
+    const host = window.__rustyApplicationHost;
+    const mount = window.__rustyApplicationMount;
+    const root = document.querySelector<HTMLElement>('#application');
+    if (host === undefined || mount === undefined || root === null) {
+      throw new Error('application host fixture is unavailable');
+    }
+    await host.dispose();
+    root.style.cssText = 'height:600px;min-height:0;overflow:hidden;width:600px;';
+    window.__rustyApplicationHost = await mount({ minimum: 4 / 3, maximum: 16 / 9 });
+  });
+  const coordinateContract = await page.evaluate(() => {
+    const host = window.__rustyApplicationHost;
+    const frame = document.querySelector<HTMLElement>('[data-rusty-application-presentation-frame="bounded"]');
+    if (host === undefined || frame === null) throw new Error('bounded frame is unavailable');
+    const bounds = frame.getBoundingClientRect();
+    return {
+      bottom: host.ui.allowsGameplayInput(new MouseEvent('mousedown', {
+        clientX: bounds.left + 1,
+        clientY: bounds.bottom,
+      })),
+      keyboard: host.ui.allowsGameplayInput(new KeyboardEvent('keydown', { code: 'KeyW' })),
+      right: host.ui.allowsGameplayInput(new MouseEvent('mousedown', {
+        clientX: bounds.right,
+        clientY: bounds.top + 1,
+      })),
+    };
+  });
+  expect(coordinateContract).toEqual({ bottom: false, keyboard: true, right: false });
+  await page.mouse.click(300, 10);
+  expect(await page.evaluate(() => window.__rustyApplicationGameplayInputCount)).toBe(0);
+
+  await page.evaluate(async () => {
+    const root = document.querySelector<HTMLElement>('#application');
+    if (root === null) throw new Error('application root is unavailable');
+    root.style.width = '900px';
+    root.style.height = '400px';
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    root.style.width = '600px';
+    root.style.height = '600px';
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  });
+  await page.locator('#gameplay-zone').click();
+  expect(await page.evaluate(() => window.__rustyApplicationGameplayInputCount)).toBe(1);
+  await expect.poll(() => page.evaluate(() => document.pointerLockElement?.tagName ?? null))
+    .toBe('CANVAS');
+
+  await page.evaluate(() => {
+    const gameplay = document.querySelector<HTMLElement>('#gameplay-zone');
+    const button = document.querySelector<HTMLButtonElement>('#interface-button');
+    if (gameplay === null || button === null) throw new Error('input fixture is unavailable');
+    const buttonBounds = button.getBoundingClientRect();
+    button.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true,
+      clientX: buttonBounds.left + 1,
+      clientY: buttonBounds.top + 1,
+    }));
+    const malformed = new Event('mousedown', { bubbles: true });
+    Object.defineProperties(malformed, {
+      clientX: { value: Number.NaN },
+      clientY: { value: Number.NaN },
+    });
+    gameplay.dispatchEvent(malformed);
+    button.click();
+  });
+  expect(await page.evaluate(() => window.__rustyApplicationGameplayInputCount)).toBe(1);
+  await expect.poll(() => page.evaluate(() => window.__rustyApplicationHost?.ui.interactionMode()))
+    .toBe('interface');
+});
+
+test('invalid bounds do not publish partial DOM and bounded mount failure retains the clipped frame', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  const invalid = await page.evaluate(async () => {
+    const root = document.querySelector<HTMLElement>('#application');
+    const mount = window.__rustyApplicationMount;
+    if (root === null || mount === undefined) throw new Error('application host fixture is unavailable');
+    const before = root.innerHTML;
+    let code: string | null = null;
+    try {
+      await mount({ minimum: 0, maximum: 16 / 9 });
+    } catch (error) {
+      code = typeof error === 'object' && error !== null && 'code' in error
+        ? String(error.code)
+        : null;
+    }
+    return { code, unchanged: root.innerHTML === before };
+  });
+  expect(invalid).toEqual({ code: 'invalid_presentation_aspect_bounds', unchanged: true });
+
+  const failure = await page.evaluate(async () => {
+    const root = document.querySelector<HTMLElement>('#application');
+    if (root === null) throw new Error('application root is unavailable');
+    root.style.cssText = 'height:600px;min-height:0;overflow:hidden;width:600px;';
+    const message = await window.__rustyApplicationBoundedFailureProbe?.();
+    const frame = document.querySelector<HTMLElement>('[data-rusty-application-presentation-frame="bounded"]');
+    const failureElement = document.querySelector<HTMLElement>('[data-rusty-application-failure]');
+    if (frame === null || failureElement === null) throw new Error('bounded failure frame is unavailable');
+    const frameBounds = frame.getBoundingClientRect();
+    const failureBounds = failureElement.getBoundingClientRect();
+    const initialCanvasCount = document.querySelectorAll('canvas').length;
+    const initialUiCount = document.querySelectorAll('[data-rusty-application-ui]').length;
+    root.style.width = '900px';
+    root.style.height = '400px';
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const resizedFrame = document.querySelector<HTMLElement>('[data-rusty-application-presentation-frame="bounded"]');
+    if (resizedFrame === null) throw new Error('resized bounded failure frame is unavailable');
+    const resizedBounds = resizedFrame.getBoundingClientRect();
+    const remounted = await window.__rustyApplicationMount?.({ minimum: 1, maximum: 1 });
+    if (remounted === undefined) throw new Error('application remount is unavailable');
+    window.__rustyApplicationHost = remounted;
+    root.style.width = '600px';
+    root.style.height = '400px';
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const remountedFrame = document.querySelector<HTMLElement>('[data-rusty-application-presentation-frame="bounded"]');
+    if (remountedFrame === null) throw new Error('remounted frame is unavailable');
+    const remountedBounds = remountedFrame.getBoundingClientRect();
+    return {
+      canvasCount: initialCanvasCount,
+      failure: { height: failureBounds.height, left: failureBounds.left, top: failureBounds.top, width: failureBounds.width },
+      frame: { height: frameBounds.height, left: frameBounds.left, top: frameBounds.top, width: frameBounds.width },
+      message,
+      remounted: {
+        canvasCount: document.querySelectorAll('canvas[data-rusty-application-renderer="engine-owned"]').length,
+        failureCount: document.querySelectorAll('[data-rusty-application-failure]').length,
+        frameCount: document.querySelectorAll('[data-rusty-application-presentation-frame="bounded"]').length,
+        height: remountedBounds.height,
+        left: remountedBounds.left,
+        top: remountedBounds.top,
+        width: remountedBounds.width,
+      },
+      resizedFrame: { height: resizedBounds.height, left: resizedBounds.left, top: resizedBounds.top, width: resizedBounds.width },
+      uiCount: initialUiCount,
+    };
+  });
+  expect(failure.message).toContain('bounded trusted UI mount rejected');
+  expect(failure.canvasCount).toBe(0);
+  expect(failure.uiCount).toBe(0);
+  expect(failure.failure).toEqual(failure.frame);
+  expect(failure.frame).toEqual({ height: 450, left: 0, top: 75, width: 600 });
+  expect(failure.resizedFrame.height).toBeCloseTo(400);
+  expect(failure.resizedFrame.width).toBeCloseTo(400 * (16 / 9));
+  expect(Math.abs(failure.resizedFrame.left - (900 - 400 * (16 / 9)) / 2)).toBeLessThan(0.02);
+  expect(failure.remounted).toEqual({
+    canvasCount: 1,
+    failureCount: 0,
+    frameCount: 1,
+    height: 400,
+    left: 100,
+    top: 0,
+    width: 400,
+  });
+});
+
+test('bounded loading presentation shares the live frame while unbounded mounting keeps its legacy direct layout', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  const unbounded = await page.evaluate(() => ({
+    frameCount: document.querySelectorAll('[data-rusty-application-presentation-frame]').length,
+    hostChildren: document.querySelector('[data-rusty-application-host]')?.children.length,
+  }));
+  expect(unbounded).toEqual({ frameCount: 0, hostChildren: 3 });
+
+  await page.evaluate(async () => {
+    await window.__rustyApplicationHost?.dispose();
+    const root = document.querySelector<HTMLElement>('#application');
+    const gate = window.__rustyApplicationLoadingGate;
+    if (root === null || gate === undefined) throw new Error('bounded loading fixture is unavailable');
+    root.style.cssText = 'height:600px;min-height:0;overflow:hidden;width:600px;';
+    void gate.mount().then((host) => { window.__rustyApplicationHost = host; });
+  });
+  await expect(page.locator('[data-rusty-application-loading]')).toBeVisible();
+  const loading = await page.evaluate(() => {
+    const rect = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (element === null) throw new Error(`missing ${selector}`);
+      const bounds = element.getBoundingClientRect();
+      return { height: bounds.height, left: bounds.left, top: bounds.top, width: bounds.width };
+    };
+    return {
+      canvas: rect('canvas[data-rusty-application-renderer="engine-owned"]'),
+      frame: rect('[data-rusty-application-presentation-frame="bounded"]'),
+      indicators: rect('[data-rusty-application-indicators="engine-owned"]'),
+      loading: rect('[data-rusty-application-loading]'),
+      ui: rect('[data-rusty-application-ui="downstream"]'),
+    };
+  });
+  expect(loading.frame).toEqual({ height: 450, left: 0, top: 75, width: 600 });
+  expect(loading.canvas).toEqual(loading.frame);
+  expect(loading.indicators).toEqual(loading.frame);
+  expect(loading.ui).toEqual(loading.frame);
+  expect(loading.loading).toEqual(loading.frame);
+  await page.evaluate(() => window.__rustyApplicationLoadingGate?.release());
+  await expect(page.locator('[data-rusty-application-host]')).toHaveAttribute('data-state', 'ready');
+  await expect(page.locator('[data-rusty-application-loading]')).toHaveCount(0);
+});

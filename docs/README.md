@@ -100,4 +100,5 @@ tests take precedence when describing implemented behavior.
 | Change the first-party authoring UI | [Studio](code-map/studio.md) |
 | Plan a downstream typed Entity inspector panel | [Downstream Entity inspector extensions](studio-downstream-entity-inspector-extensions.md) |
 | Add inspection or diagnostics | [Inspection and diagnostics](code-map/inspection-and-diagnostics.md) |
+| Find the runtime developer console, developer console, or debug console flow | [Runtime developer console](topics/development/runtime-developer-console.md) |
 | Select or adapt donor behavior | [Migration cluster ledger](migration/migration-cluster-ledger.md) |

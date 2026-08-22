@@ -21,6 +21,7 @@
     "generated-standard-host-wire.d.ts",
     "generated-standard-host-wire.js",
     "index.d.ts",
-    "index.js"
+    "index.js",
+    "presentation-frame.d.ts"
   ]
 }

@@ -78,6 +78,9 @@ export type {
   RustyApplicationVoxelSpriteSource,
 } from './application-host.js';
 export type {
+  RustyApplicationPresentationAspectBounds,
+} from './presentation-frame.js';
+export type {
   RustyApplicationContent,
   RustyApplicationContentDiagnosticCode,
   RustyApplicationResource,

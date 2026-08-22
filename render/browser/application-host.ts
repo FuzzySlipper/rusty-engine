@@ -6,14 +6,24 @@ import {
   type RustyDeveloperCommandRequest,
   type RustyApplicationContent,
   type RustyApplicationHost,
+  type RustyApplicationPresentationAspectBounds,
   type RustyApplicationVoxelSpriteExperimentPort,
 } from '@rusty-engine/application-host';
 
 declare global {
   interface Window {
     __rustyApplicationHost?: RustyApplicationHost;
-    __rustyApplicationMount?: () => Promise<RustyApplicationHost>;
+    __rustyApplicationMount?: (
+      presentationAspectBounds?: RustyApplicationPresentationAspectBounds,
+    ) => Promise<RustyApplicationHost>;
     __rustyApplicationFailureProbe?: () => Promise<string>;
+    __rustyApplicationBoundedFailureProbe?: () => Promise<string>;
+    /** Browser-fixture-only gate for observing the normal bounded loading layer before UI mount. */
+    __rustyApplicationLoadingGate?: {
+      readonly mount: () => Promise<RustyApplicationHost>;
+      readonly pending: () => boolean;
+      readonly release: () => void;
+    };
     __rustyApplicationInitialResourceFailureProbe?: () => Promise<string>;
     __rustyApplicationGameplayInputCount?: number;
     __rustyApplicationAudioReceipt?: unknown;
@@ -135,9 +145,10 @@ function developerCommandClient() {
   });
 }
 
-window.__rustyApplicationMount = () =>
+window.__rustyApplicationMount = (presentationAspectBounds) =>
   mountRustyApplication({
     root,
+    ...(presentationAspectBounds === undefined ? {} : { presentationAspectBounds }),
     developerCommands: { client: developerCommandClient() },
     initialInteractionMode: 'gameplay',
     renderer: {
@@ -151,6 +162,7 @@ window.__rustyApplicationMount = () =>
       gameplay.textContent = 'Gameplay surface';
       const toolbar = document.createElement('div');
       toolbar.id = 'toolbar';
+      toolbar.style.zIndex = '1';
       const button = document.createElement('button');
       button.id = 'interface-button';
       button.textContent = 'Interface action';
@@ -341,6 +353,59 @@ window.__rustyApplicationFailureProbe = async () => {
     return error instanceof Error ? error.message : String(error);
   }
   return 'unexpected success';
+};
+
+window.__rustyApplicationBoundedFailureProbe = async () => {
+  await window.__rustyApplicationHost?.dispose();
+  try {
+    await mountRustyApplication({
+      root,
+      presentationAspectBounds: { minimum: 4 / 3, maximum: 16 / 9 },
+      mountUi: () => {
+        throw new Error('bounded trusted UI mount rejected');
+      },
+    });
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  return 'unexpected success';
+};
+
+let releaseLoadingGate: (() => void) | null = null;
+let loadingGatePending = false;
+window.__rustyApplicationLoadingGate = {
+  mount: async () => {
+    if (releaseLoadingGate !== null || loadingGatePending) {
+      throw new Error('bounded loading gate is already active');
+    }
+    loadingGatePending = true;
+    const gate = new Promise<void>((resolve) => {
+      releaseLoadingGate = resolve;
+    });
+    try {
+      return await mountRustyApplication({
+        root,
+        presentationAspectBounds: { minimum: 4 / 3, maximum: 16 / 9 },
+        renderer: { initialContent: resourceContent() },
+        mountUi: async (uiRoot) => {
+          await gate;
+          const content = document.createElement('div');
+          content.textContent = 'Bounded loading gate released';
+          uiRoot.append(content);
+        },
+      });
+    } finally {
+      loadingGatePending = false;
+      releaseLoadingGate = null;
+    }
+  },
+  pending: () => loadingGatePending,
+  release: () => {
+    if (releaseLoadingGate === null) throw new Error('bounded loading gate is not active');
+    const release = releaseLoadingGate;
+    releaseLoadingGate = null;
+    release();
+  },
 };
 
 window.__rustyApplicationInitialResourceFailureProbe = async () => {
