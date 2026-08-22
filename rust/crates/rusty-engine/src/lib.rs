@@ -22,6 +22,7 @@ pub use engine_inspector;
 pub use engine_spatial;
 pub use entity_state;
 pub use environment_authoring;
+pub use gameplay_continuous_mechanics;
 pub use gameplay_mechanics;
 pub use gameplay_resolution;
 pub use gameplay_rules;

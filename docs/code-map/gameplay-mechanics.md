@@ -35,6 +35,7 @@ restoration, and their bounded receipts.
 - [`gameplay-mechanics/src/stat.rs`](../../rust/crates/gameplay-mechanics/src/stat.rs)
 - [`gameplay-mechanics/src/track.rs`](../../rust/crates/gameplay-mechanics/src/track.rs)
 - [`gameplay-mechanics/src/view.rs`](../../rust/crates/gameplay-mechanics/src/view.rs)
+- [`gameplay-continuous-mechanics`](../../rust/crates/gameplay-continuous-mechanics/src/lib.rs)
 - [`gameplay-mechanics/src/damage.rs`](../../rust/crates/gameplay-mechanics/src/damage.rs)
 - [`gameplay-mechanics/src/item.rs`](../../rust/crates/gameplay-mechanics/src/item.rs)
 - [`gameplay-mechanics/src/snapshot.rs`](../../rust/crates/gameplay-mechanics/src/snapshot.rs)
@@ -87,6 +88,21 @@ let health = mechanics
             .find(|value| value.track().as_str() == "health")
     });
 ```
+
+## Continuous companion
+
+[`gameplay-continuous-mechanics`](../../rust/crates/gameplay-continuous-mechanics/src/lib.rs)
+is an optional, separately typed companion above `gameplay-standard` and the exact mechanics
+crate. It owns finite-normalized-binary64 stat/track/source/effect facts, its independent catalog
+and fingerprint, bit codecs, direct services, receipts, and opt-in combined registry/snapshot
+helpers. It does not mutate the seven-kind exact component table, exact catalog, existing codecs,
+or exact service behavior. Its rate, residual, cadence, interval, cap ordering, clock, and unit
+semantics remain caller-owned as established by the continuous cadence experiment.
+
+Use `combined_gameplay_component_registry` only when one `EntityState` deliberately carries both
+families; each catalog validates independently. `engine-inspector` reports its continuous fields
+under a separate `continuous-binary64` numeric family with normalized bits, never approximate
+numeric identity.
 
 Effect ownership is also a direct call boundary. A downstream realtime tick,
 city phase, or tabletop turn owner decides when an effect expires and submits

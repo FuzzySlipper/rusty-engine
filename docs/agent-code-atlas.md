@@ -90,6 +90,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 |---|---|
 | Entity components, atomic mutation, relationships, snapshots, state machines | [Entity state and state machines](code-map/entity-state-and-state-machines.md) |
 | Stats, tracks, sources, effects, items, equipment, damage, restoration | [Gameplay mechanics](code-map/gameplay-mechanics.md) |
+| Optional finite-binary64 stat/track/source/effect facts and direct services | [Continuous gameplay mechanics](code-map/gameplay-continuous-mechanics.md) |
 | Downstream gameplay layout, disposition-first migration, optional TS authoring DSL, mechanics/resolution composition, and AI intents | [Downstream gameplay adoption](topics/gameplay/downstream-adoption.md) |
 | Upstream promotion decisions and TypeScript authoring DSL placement | [Upstream promotion and authoring DSL](topics/development/upstream-promotion-and-authoring-dsl.md) |
 | Bounded downstream-owned attempt lifecycle, transactions, receipts, and traces | [Gameplay resolution](code-map/gameplay-resolution.md) |

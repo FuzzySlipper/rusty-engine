@@ -45,7 +45,8 @@ downstream game
   entities / game components / services / scheduling / persistence / presentation intent
                      |
                      +--> entity-state
-                     +--> gameplay-mechanics (optional)
+                    +--> gameplay-mechanics (optional)
+                    +--> gameplay-continuous-mechanics (optional)
                      +--> gameplay-rules (optional package support)
                      +--> engine-spatial -------------------+
                      +--> voxel-asset                       |
@@ -341,6 +342,40 @@ direction, and stopping point are recorded in
 
 See [Gameplay mechanics](code-map/gameplay-mechanics.md) for entry points, frozen quotas, and focused
 gates.
+
+## Optional continuous mechanics support
+
+`gameplay-continuous-mechanics` is a separately named opt-in owner for persisted continuous
+gameplay facts. It depends on `gameplay-standard` only for the accepted finite,
+normalized-binary64 `ContinuousValue` semantics; `gameplay-standard` remains the value,
+expression, and explicit conversion owner, not a live mechanics authority. The continuous crate
+owns its own typed stat, track, source, effect, catalog-version, and operation identities; its own
+catalog fingerprint; four durable component identities/codecs; and direct stat, track, and effect
+services. The exact `MechanicsCatalog`, `MechanicsComponentKind::ALL`, seven exact codecs, exact
+snapshots, and exact services remain unchanged.
+
+Continuous component codecs persist normalized binary64 bits, never public raw `f64` state or
+decimal spellings. Public definitions and component values store `ContinuousValue` directly; a
+crate-owned strict serde adapter accepts only a 16-digit lowercase hexadecimal bit string.
+Catalog admission and codec validation reject non-finite and negative-zero bit
+patterns, preserve subnormal bits, sort identities and contributions canonically, and bound
+definitions, source contributions, effects, and entity components. Continuous stat resolution has
+explicit sum/highest/lowest/unique selection followed by explicit minimum/maximum constraints;
+all comparisons use exact normalized-bit value identity, never approximate equality. Services
+guard their exact component slot revision, prepare and validate their one-component candidate,
+and publish only after success. Their receipts retain catalog provenance, values, and revisions.
+
+The continuous registry is opt-in. `combined_gameplay_component_registry` composes the frozen
+exact registrations and continuous registrations into one `EntityState`; it is not a second
+entity authority. `decode_snapshot_with_catalogs` validates each catalog independently after one
+strict reconstruction. Exact-only registry and snapshot entry points continue to decode the
+historical exact family unchanged. `engine-inspector` exposes a separate family-labelled
+continuous projection with normalized-bit values rather than widening the fixed exact report.
+
+Continuous mechanics owns no residual carry, integration rate, cadence, interval, cap ordering,
+scheduler, clock, unit ontology, damage reinterpretation, or persistence aggregate. A downstream
+caller that integrates a rate retains the #7188 carry/cadence contract and explicitly submits a
+resulting continuous value through the named service.
 
 ## Optional gameplay rules support
 

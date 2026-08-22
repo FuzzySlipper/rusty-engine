@@ -718,6 +718,7 @@ dependencies = [
  "core-math",
  "engine-spatial",
  "entity-state",
+ "gameplay-continuous-mechanics",
  "gameplay-mechanics",
  "gameplay-resolution",
  "gameplay-rules",
@@ -914,6 +915,19 @@ dependencies = [
  "futures-task",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "gameplay-continuous-mechanics"
+version = "0.1.0"
+dependencies = [
+ "core-ids",
+ "entity-state",
+ "gameplay-mechanics",
+ "gameplay-standard",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -2764,6 +2778,7 @@ dependencies = [
  "engine-spatial",
  "entity-state",
  "environment-authoring",
+ "gameplay-continuous-mechanics",
  "gameplay-mechanics",
  "gameplay-resolution",
  "gameplay-rules",

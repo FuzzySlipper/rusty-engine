@@ -1,0 +1,16 @@
+[package]
+name = "gameplay-continuous-mechanics"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+core-ids.workspace = true
+entity-state.workspace = true
+gameplay-mechanics.workspace = true
+gameplay-standard.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true

@@ -26,6 +26,7 @@ remain independently meaningful and no owner may depend back on `rusty-engine`.
 | `engine-spatial` | `rusty_engine::engine_spatial` |
 | `entity-state` | `rusty_engine::entity_state` |
 | `environment-authoring` | `rusty_engine::environment_authoring` |
+| `gameplay-continuous-mechanics` | `rusty_engine::gameplay_continuous_mechanics` |
 | `gameplay-mechanics` | `rusty_engine::gameplay_mechanics` |
 | `gameplay-resolution` | `rusty_engine::gameplay_resolution` |
 | `gameplay-rules` | `rusty_engine::gameplay_rules` |

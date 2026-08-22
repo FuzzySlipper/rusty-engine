@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod catalog;
+mod continuous_mechanics;
 mod diagnostic;
 mod entity;
 mod imports;
@@ -19,6 +20,11 @@ mod voxel;
 
 pub use catalog::{
     inspect_catalog, inspect_catalog_json, CatalogInspection, CatalogLockInspection, NamedCount,
+};
+pub use continuous_mechanics::{
+    inspect_continuous_mechanics_entity_structural, ContinuousMechanicsComponentInspection,
+    ContinuousMechanicsEntityInspection, ContinuousMechanicsStoredStatInspection,
+    ContinuousMechanicsStoredTrackInspection, ContinuousMechanicsTrackMaximumInspection,
 };
 pub use diagnostic::{
     Diagnostic, DiagnosticDomain, DiagnosticLocation, DiagnosticSet, DiagnosticSeverity, Remedy,
