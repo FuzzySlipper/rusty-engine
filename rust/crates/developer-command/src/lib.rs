@@ -29,9 +29,10 @@ pub use dispatch::{
 };
 pub use host_wire::{
     map_command_response, HostCommandDescriptor, HostCommandDiscovery, HostCommandOutcome,
-    HostCommandRequest, HostCommandResponse, HostDecimalU64, HostErrorBody, HostErrorPhase,
-    HostExpectedFacts, HostReceiptRef, HostResponseMetadata, HostWireError,
-    MappedHostCommandResponse, MAX_HOST_ERROR_MESSAGE_BYTES, MAX_HOST_RECEIPT_REFS,
+    HostCommandRequest, HostCommandResponse, HostDecimalU64, HostErrorBody, HostErrorCode,
+    HostErrorMessage, HostErrorPhase, HostExpectedFacts, HostReceiptRef, HostReceiptRefs,
+    HostResponseContext, HostResponseMetadata, HostWireError, MappedHostCommandResponse,
+    MAX_HOST_ERROR_MESSAGE_BYTES, MAX_HOST_RECEIPT_REFS,
 };
 pub use identity::{
     CommandAlias, CommandId, CommandIdentityError, CorrelationId, ProfileId, ProtocolVersion,

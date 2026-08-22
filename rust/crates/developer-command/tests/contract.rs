@@ -7,9 +7,10 @@ use developer_command::{
     map_command_response, CommandAlias, CommandBindings, CommandDescriptor, CommandId, CommandLane,
     CommandProfile, CommandRequest, CorrelationId, DeveloperCommand, DispatchError, DispatchFacts,
     EnvelopeError, ExpectedFacts, HandlerResult, HostCommandDiscovery, HostCommandRequest,
-    HostDecimalU64, HostErrorBody, HostErrorPhase, HostReceiptRef, ParameterDescriptor, ProfileId,
-    RuntimeInstanceId, TypeDescriptor, CURRENT_PROTOCOL_VERSION, MAX_COMMAND_ALIASES,
-    MAX_DESCRIPTOR_COLLECTION_ITEMS, MAX_DESCRIPTOR_STRING_BYTES,
+    HostDecimalU64, HostErrorBody, HostErrorCode, HostErrorMessage, HostErrorPhase, HostReceiptRef,
+    HostReceiptRefs, HostResponseContext, ParameterDescriptor, ProfileId, RuntimeInstanceId,
+    TypeDescriptor, CURRENT_PROTOCOL_VERSION, MAX_COMMAND_ALIASES, MAX_DESCRIPTOR_COLLECTION_ITEMS,
+    MAX_DESCRIPTOR_STRING_BYTES, MAX_HOST_ERROR_MESSAGE_BYTES, MAX_HOST_RECEIPT_REFS,
 };
 
 struct Inspect;
@@ -659,9 +660,11 @@ fn host_wire_request_is_strict_camel_case_and_decimal_u64() {
     )
     .unwrap();
     assert_eq!(request.expected.revision, HostDecimalU64::new(u64::MAX));
-    let mapped = request.into_command_request().unwrap();
+    let (mapped, response_context) = request.into_command_parts().unwrap();
     assert_eq!(mapped.expected.revision, Some(u64::MAX));
     assert_eq!(mapped.expected.catalog_epoch, Some(3));
+    assert_eq!(response_context.correlation().as_str(), "wire.1");
+    assert_eq!(response_context.profile().as_str(), "profile.test");
 
     assert!(serde_json::from_str::<HostCommandRequest<u32>>(
         r#"{
@@ -698,16 +701,17 @@ fn host_wire_response_preserves_facts_and_internal_provenance_sidecar() {
     );
     let mapped = map_command_response(
         response,
-        CorrelationId::parse("wire.error").unwrap(),
-        ProfileId::parse("profile.test").unwrap(),
-        vec![HostReceiptRef::parse("receipt.1").unwrap()],
+        HostResponseContext::new(
+            CorrelationId::parse("wire.wrong-context").unwrap(),
+            ProfileId::parse("profile.wrong-context").unwrap(),
+        ),
+        HostReceiptRefs::new(vec![HostReceiptRef::parse("receipt.1").unwrap()]).unwrap(),
         |error| HostErrorBody {
-            code: "owner_rejected".to_owned(),
-            message: format!("owner rejected: {error:?}"),
+            code: HostErrorCode::parse("owner_rejected").unwrap(),
+            message: HostErrorMessage::new(format!("owner rejected: {error:?}")).unwrap(),
             details: Some(error),
         },
-    )
-    .unwrap();
+    );
     assert_eq!(
         mapped.metadata.error_phase,
         Some(HostErrorPhase::EnteredOwner)
@@ -738,30 +742,24 @@ fn host_wire_response_preserves_facts_and_internal_provenance_sidecar() {
             "runtime".to_owned(),
         ]
     );
-    let decoded = serde_json::from_value::<
-        developer_command::HostCommandResponse<u32, serde_json::Value>,
-    >(json.clone())
-    .unwrap();
-    assert!(matches!(
-        decoded.outcome,
-        developer_command::HostCommandOutcome::Error { .. }
-    ));
-
-    let too_many = vec!["receipt.1".to_owned(); 33];
-    let too_many_json = serde_json::json!({
-        "correlation":"wire.too-many",
-        "runtime":"runtime.test",
-        "profile":"profile.test",
-        "revision":"7",
-        "catalogEpoch":"3",
-        "outcome":{"kind":"success","value":1,"receiptRefs":too_many}
-    });
-    assert!(
-        serde_json::from_value::<developer_command::HostCommandResponse<u32, serde_json::Value>>(
-            too_many_json
-        )
-        .is_err()
+    let receipts = (0..MAX_HOST_RECEIPT_REFS)
+        .map(|index| HostReceiptRef::parse(format!("receipt.{index}")))
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        HostReceiptRefs::new(receipts.clone()).unwrap().as_slice(),
+        receipts
     );
+    assert!(HostReceiptRefs::new(
+        (0..=MAX_HOST_RECEIPT_REFS)
+            .map(|index| HostReceiptRef::parse(format!("receipt.over.{index}")))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    )
+    .is_err());
+    assert!(HostErrorCode::parse("not a code").is_err());
+    assert!(HostErrorMessage::new("x".repeat(MAX_HOST_ERROR_MESSAGE_BYTES)).is_ok());
+    assert!(HostErrorMessage::new("x".repeat(MAX_HOST_ERROR_MESSAGE_BYTES + 1)).is_err());
 
     let mut port = bindings();
     port.expose_borrowed::<Admin>().unwrap();
@@ -771,22 +769,50 @@ fn host_wire_response_preserves_facts_and_internal_provenance_sidecar() {
         request::<Admin>("dev.admin.reset", "wire.mismatch", 4),
         &mut owner,
     );
-    assert!(matches!(
-        map_command_response(
-            response,
+    let mapped = map_command_response(
+        response,
+        HostResponseContext::new(
             CorrelationId::parse("wire.other").unwrap(),
-            ProfileId::parse("profile.test").unwrap(),
-            Vec::new(),
-            |_error| HostErrorBody::<serde_json::Value> {
-                code: "owner_rejected".to_owned(),
-                message: "owner rejected".to_owned(),
-                details: None,
-            },
+            ProfileId::parse("profile.other").unwrap(),
         ),
-        Err(developer_command::HostWireError::ResponseContextMismatch {
-            field: "correlation"
-        })
-    ));
+        HostReceiptRefs::empty(),
+        |_error| HostErrorBody::<serde_json::Value> {
+            code: HostErrorCode::parse("owner_rejected").unwrap(),
+            message: HostErrorMessage::new("owner rejected").unwrap(),
+            details: None,
+        },
+    );
+    assert_eq!(mapped.wire.correlation.as_str(), "wire.mismatch");
+    assert_eq!(mapped.wire.profile.as_str(), "profile.test");
+
+    let mut owner_calls = 0;
+    let response = port.dispatch_borrowed::<Admin, _>(
+        request::<Admin>("dev.inspect.entity", "wire.pre-dispatch", 4),
+        &mut |_context, _value| {
+            owner_calls += 1;
+            Err::<u32, _>(OwnerError::Rejected)
+        },
+    );
+    let mapped = map_command_response(
+        response,
+        HostResponseContext::new(
+            CorrelationId::parse("wire.pre-dispatch").unwrap(),
+            ProfileId::parse("profile.requested").unwrap(),
+        ),
+        HostReceiptRefs::empty(),
+        |_error| HostErrorBody::<serde_json::Value> {
+            code: HostErrorCode::parse("owner_rejected").unwrap(),
+            message: HostErrorMessage::new("owner rejected").unwrap(),
+            details: None,
+        },
+    );
+    assert_eq!(owner_calls, 0);
+    assert_eq!(mapped.wire.correlation.as_str(), "wire.pre-dispatch");
+    assert_eq!(mapped.wire.profile.as_str(), "profile.requested");
+    assert_eq!(
+        mapped.metadata.error_phase,
+        Some(HostErrorPhase::PreDispatch)
+    );
 }
 
 #[test]

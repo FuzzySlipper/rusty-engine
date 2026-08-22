@@ -74,6 +74,14 @@ impl<P> HostCommandRequest<P> {
     /// host contract has no cancellation or timeout fields; a product may set
     /// those flags on the returned request from its own queue state.
     pub fn into_command_request(self) -> Result<CommandRequest<P>, HostWireError> {
+        self.into_command_parts().map(|(request, _context)| request)
+    }
+
+    /// Maps the strict host envelope and retains the response-only context
+    /// needed when dispatch rejects before an owner is entered.
+    pub fn into_command_parts(
+        self,
+    ) -> Result<(CommandRequest<P>, HostResponseContext), HostWireError> {
         if self.protocol_version != CURRENT_PROTOCOL_VERSION {
             return Err(HostWireError::UnsupportedProtocol {
                 provided: self.protocol_version,
@@ -85,25 +93,32 @@ impl<P> HostCommandRequest<P> {
                 field: "expected.profile",
             });
         }
-        Ok(CommandRequest {
-            protocol_version: self.protocol_version,
-            command: self.command,
-            correlation: self.correlation,
-            runtime: self.runtime,
-            expected: ExpectedFacts {
-                profile: Some(self.expected.profile),
-                revision: Some(self.expected.revision.get()),
-                catalog_epoch: Some(self.expected.catalog_epoch.get()),
+        let response_context = HostResponseContext {
+            correlation: self.correlation.clone(),
+            profile: self.expected.profile.clone(),
+        };
+        Ok((
+            CommandRequest {
+                protocol_version: self.protocol_version,
+                command: self.command,
+                correlation: self.correlation,
+                runtime: self.runtime,
+                expected: ExpectedFacts {
+                    profile: Some(self.expected.profile),
+                    revision: Some(self.expected.revision.get()),
+                    catalog_epoch: Some(self.expected.catalog_epoch.get()),
+                },
+                cancelled: false,
+                timed_out: false,
+                payload: self.payload,
             },
-            cancelled: false,
-            timed_out: false,
-            payload: self.payload,
-        })
+            response_context,
+        ))
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HostCommandResponse<R, E> {
     pub correlation: crate::CorrelationId,
     pub runtime: RuntimeInstanceId,
@@ -113,21 +128,18 @@ pub struct HostCommandResponse<R, E> {
     pub outcome: HostCommandOutcome<R, E>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum HostCommandOutcome<R, E> {
     Success {
         value: R,
         #[serde(rename = "receiptRefs")]
-        #[serde(deserialize_with = "deserialize_receipt_refs")]
-        receipt_refs: Vec<HostReceiptRef>,
+        receipt_refs: HostReceiptRefs,
     },
     Error {
-        #[serde(deserialize_with = "deserialize_error_code")]
-        code: String,
-        #[serde(deserialize_with = "deserialize_error_message")]
-        message: String,
-        #[serde(default = "none", skip_serializing_if = "Option::is_none")]
+        code: HostErrorCode,
+        message: HostErrorMessage,
+        #[serde(skip_serializing_if = "Option::is_none")]
         details: Option<E>,
     },
 }
@@ -158,10 +170,91 @@ impl Serialize for HostReceiptRef {
     }
 }
 
-impl<'de> Deserialize<'de> for HostReceiptRef {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = String::deserialize(deserializer)?;
-        Self::parse(value).map_err(serde::de::Error::custom)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct HostReceiptRefs(Vec<HostReceiptRef>);
+
+impl HostReceiptRefs {
+    pub fn new(values: Vec<HostReceiptRef>) -> Result<Self, HostWireError> {
+        if values.len() > MAX_HOST_RECEIPT_REFS {
+            return Err(HostWireError::TooManyReceiptRefs {
+                maximum: MAX_HOST_RECEIPT_REFS,
+                actual: values.len(),
+            });
+        }
+        Ok(Self(values))
+    }
+
+    pub const fn empty() -> Self {
+        Self(Vec::new())
+    }
+
+    pub fn as_slice(&self) -> &[HostReceiptRef] {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
+pub struct HostErrorCode(String);
+
+impl HostErrorCode {
+    pub fn parse(value: impl Into<String>) -> Result<Self, HostWireError> {
+        let value = value.into();
+        CommandId::parse(value.clone())
+            .map(|_| Self(value))
+            .map_err(|_| HostWireError::InvalidIdentity {
+                field: "outcome.code",
+            })
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct HostErrorMessage(String);
+
+impl HostErrorMessage {
+    pub fn new(message: impl Into<String>) -> Result<Self, HostWireError> {
+        let message = message.into();
+        let actual = message.len();
+        if actual > MAX_HOST_ERROR_MESSAGE_BYTES {
+            return Err(HostWireError::MessageTooLong {
+                maximum: MAX_HOST_ERROR_MESSAGE_BYTES,
+                actual,
+            });
+        }
+        Ok(Self(message))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostResponseContext {
+    correlation: crate::CorrelationId,
+    profile: ProfileId,
+}
+
+impl HostResponseContext {
+    pub fn new(correlation: crate::CorrelationId, profile: ProfileId) -> Self {
+        Self {
+            correlation,
+            profile,
+        }
+    }
+
+    pub fn correlation(&self) -> &crate::CorrelationId {
+        &self.correlation
+    }
+
+    pub fn profile(&self) -> &ProfileId {
+        &self.profile
     }
 }
 
@@ -188,48 +281,32 @@ pub struct MappedHostCommandResponse<R, E> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostErrorBody<E> {
-    pub code: String,
-    pub message: String,
+    pub code: HostErrorCode,
+    pub message: HostErrorMessage,
     pub details: Option<E>,
 }
 
 /// Maps an in-process response into the generated v1 host response while
 /// retaining provenance and the error phase as a Rust-side sidecar.
 ///
-/// The request correlation and selected profile are supplied by the product
-/// because pre-dispatch rejection intentionally has no provenance and the
-/// internal `CommandResponse` therefore cannot echo the rejected request's
-/// correlation or profile on its own.
+/// The request context is used only when pre-dispatch rejection intentionally
+/// has no provenance. Once an owner is entered, the reserved provenance is the
+/// response authority. All fallible host values are admitted before this
+/// function so mapping cannot lose an already-completed owner result.
 pub fn map_command_response<R, E, M, D>(
     response: CommandResponse<R, E>,
-    correlation: crate::CorrelationId,
-    profile: ProfileId,
-    receipt_refs: Vec<HostReceiptRef>,
+    request_context: HostResponseContext,
+    receipt_refs: HostReceiptRefs,
     map_error: M,
-) -> Result<MappedHostCommandResponse<R, D>, HostWireError>
+) -> MappedHostCommandResponse<R, D>
 where
     M: FnOnce(E) -> HostErrorBody<D>,
 {
-    if receipt_refs.len() > MAX_HOST_RECEIPT_REFS {
-        return Err(HostWireError::TooManyReceiptRefs {
-            maximum: MAX_HOST_RECEIPT_REFS,
-            actual: receipt_refs.len(),
-        });
-    }
     let provenance = response.provenance.clone();
-    if let Some(provenance) = provenance.as_ref() {
-        if provenance.correlation != correlation {
-            return Err(HostWireError::ResponseContextMismatch {
-                field: "correlation",
-            });
-        }
-        if provenance.profile != profile {
-            return Err(HostWireError::ResponseContextMismatch { field: "profile" });
-        }
-        if provenance.runtime != response.facts.runtime {
-            return Err(HostWireError::ResponseContextMismatch { field: "runtime" });
-        }
-    }
+    let (correlation, profile) = provenance
+        .as_ref()
+        .map(|entered| (entered.correlation.clone(), entered.profile.clone()))
+        .unwrap_or((request_context.correlation, request_context.profile));
     let (outcome, error_phase) = match response.result {
         HandlerResult::Success(value) => (
             HostCommandOutcome::Success {
@@ -242,8 +319,8 @@ where
             let mapped = map_error(error);
             (
                 HostCommandOutcome::Error {
-                    code: validate_error_code(mapped.code)?,
-                    message: bounded_message(mapped.message)?,
+                    code: mapped.code,
+                    message: mapped.message,
                     details: mapped.details,
                 },
                 Some(HostErrorPhase::EnteredOwner),
@@ -261,15 +338,17 @@ where
             };
             (
                 HostCommandOutcome::Error {
-                    code: envelope_code(&error).to_owned(),
-                    message: bounded_message(envelope_message(&error).to_owned())?,
+                    code: HostErrorCode::parse(envelope_code(&error))
+                        .expect("static envelope code must be a valid command identity"),
+                    message: HostErrorMessage::new(envelope_message(&error))
+                        .expect("static envelope message must fit the host bound"),
                     details: None,
                 },
                 Some(phase),
             )
         }
     };
-    Ok(MappedHostCommandResponse {
+    MappedHostCommandResponse {
         wire: HostCommandResponse {
             correlation,
             runtime: response.facts.runtime,
@@ -282,7 +361,7 @@ where
             provenance,
             error_phase,
         },
-    })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -393,9 +472,6 @@ pub enum HostWireError {
         maximum: usize,
         actual: usize,
     },
-    ResponseContextMismatch {
-        field: &'static str,
-    },
 }
 
 impl std::fmt::Display for HostWireError {
@@ -426,9 +502,6 @@ impl std::fmt::Display for HostWireError {
                     "host error message is {actual} bytes; maximum is {maximum}"
                 )
             }
-            Self::ResponseContextMismatch { field } => {
-                write!(formatter, "host response context does not match {field}")
-            }
         }
     }
 }
@@ -448,58 +521,6 @@ fn parse_decimal_u64(value: &str) -> Result<u64, HostWireError> {
     value.parse().map_err(|_| HostWireError::InvalidDecimal {
         field: "revision/catalogEpoch",
     })
-}
-
-fn validate_error_code(value: String) -> Result<String, HostWireError> {
-    crate::CommandId::parse(value.clone())
-        .map(|_| value)
-        .map_err(|_| HostWireError::InvalidIdentity {
-            field: "outcome.code",
-        })
-}
-
-fn deserialize_receipt_refs<'de, D>(deserializer: D) -> Result<Vec<HostReceiptRef>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let values = Vec::<HostReceiptRef>::deserialize(deserializer)?;
-    if values.len() > MAX_HOST_RECEIPT_REFS {
-        return Err(serde::de::Error::custom(format!(
-            "receiptRefs exceeds maximum of {MAX_HOST_RECEIPT_REFS}"
-        )));
-    }
-    Ok(values)
-}
-
-fn deserialize_error_code<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = String::deserialize(deserializer)?;
-    validate_error_code(value).map_err(serde::de::Error::custom)
-}
-
-fn deserialize_error_message<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = String::deserialize(deserializer)?;
-    bounded_message(value).map_err(serde::de::Error::custom)
-}
-
-fn none<T>() -> Option<T> {
-    None
-}
-
-fn bounded_message(message: String) -> Result<String, HostWireError> {
-    let actual = message.len();
-    if actual > MAX_HOST_ERROR_MESSAGE_BYTES {
-        return Err(HostWireError::MessageTooLong {
-            maximum: MAX_HOST_ERROR_MESSAGE_BYTES,
-            actual,
-        });
-    }
-    Ok(message)
 }
 
 fn descriptor_wire(descriptor: CommandDescriptor) -> HostCommandDescriptor {
