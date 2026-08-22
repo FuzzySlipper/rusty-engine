@@ -602,6 +602,11 @@ test('concurrent discovery rejects older or mismatched late snapshots without re
   pending[3]!(snapshot('2', '8', 'developer', 'different-contract'));
   await assert.rejects(mismatchedFingerprint, (cause: unknown) =>
     cause instanceof RustyDeveloperCommandClientError && cause.code === 'stale_context');
+  const higherRevisionMismatchedFingerprint = client.discover();
+  assert.equal(pending.length, 5);
+  pending[4]!(snapshot('3', '8', 'different-contract'));
+  await assert.rejects(higherRevisionMismatchedFingerprint, (cause: unknown) =>
+    cause instanceof RustyDeveloperCommandClientError && cause.code === 'stale_context');
   const response = await client.execute('standard.inspect.entity', { entity: 1 });
   assert.equal(response.revision, '2');
   assert.equal(response.catalogEpoch, '8');
@@ -653,9 +658,44 @@ test('delayed responses use the current discovery and preserve its context', asy
   assert.equal(client.history()[0]?.phase, 'post-dispatch');
 });
 
-test('accepted delayed responses advance facts without replacing a newer discovery catalog', async () => {
-  const pending: Array<(value: unknown) => void> = [];
+test('same-epoch response revision advances retain the discovered catalog fingerprint', async () => {
   let discoverCount = 0;
+  const client = createRustyDeveloperCommandClient({
+    adapter: {
+      discover: async () => {
+        discoverCount += 1;
+        return {
+          protocolVersion: 1, runtime: 'test-runtime', profile: 'developer', permittedLanes: ['inspect'],
+          revision: discoverCount === 1 ? '4' : '5', catalogEpoch: '7',
+          contractFingerprint: discoverCount === 1 ? 'catalog-contract' : 'changed-contract',
+          commands: [{ id: 'standard.inspect.entity', aliases: [], lane: 'inspect', summary: 'Inspect one entity.' }],
+        };
+      },
+      execute: async (request) => ({
+        correlation: request.correlation, runtime: 'test-runtime', profile: request.expected.profile,
+        revision: '5', catalogEpoch: '7',
+        outcome: { kind: 'success', value: request.payload, receiptRefs: [] },
+      }),
+    },
+    schemas: { 'standard.inspect.entity': inspectSchema },
+    createCorrelation: () => 'same-epoch-revision',
+  });
+
+  await client.discover();
+  const response = await client.execute('standard.inspect.entity', { entity: 1 });
+  assert.equal(response.revision, '5');
+  assert.equal(response.catalogEpoch, '7');
+  await assert.rejects(client.discover(), (cause: unknown) =>
+    cause instanceof RustyDeveloperCommandClientError && cause.code === 'stale_context');
+  assert.equal(discoverCount, 2);
+  assert.equal(client.descriptor('standard.inspect.entity')?.summary, 'Inspect one entity.');
+});
+
+test('accepted delayed epoch advances invalidate the cached catalog before the next execute', async () => {
+  const pending: Array<(value: unknown) => void> = [];
+  const requests: RustyDeveloperCommandRequest[] = [];
+  let discoverCount = 0;
+  let correlationCount = 0;
   const snapshot = (revision: string, catalogEpoch: string, contractFingerprint: string) => ({
     protocolVersion: 1, runtime: 'test-runtime', profile: 'developer', permittedLanes: ['inspect'],
     revision, catalogEpoch, contractFingerprint,
@@ -674,10 +714,17 @@ test('accepted delayed responses advance facts without replacing a newer discove
             ? snapshot('5', '8', 'new-contract')
             : snapshot('6', '9', 'new-contract');
       },
-      execute: async () => new Promise((resolve) => pending.push(resolve)),
+      execute: async (request) => {
+        requests.push(request);
+        if (requests.length === 1) return new Promise((resolve) => pending.push(resolve));
+        return {
+          correlation: request.correlation, runtime: 'test-runtime', profile: request.expected.profile,
+          revision: '6', catalogEpoch: '9', outcome: { kind: 'success', value: request.payload, receiptRefs: [] },
+        };
+      },
     },
     schemas: { 'standard.inspect.entity': inspectSchema },
-    createCorrelation: () => 'delayed-advance',
+    createCorrelation: () => `delayed-advance-${++correlationCount}`,
   });
 
   await client.discover();
@@ -685,13 +732,98 @@ test('accepted delayed responses advance facts without replacing a newer discove
   assert.equal(pending.length, 1);
   await client.discover();
   pending[0]!({
-    correlation: 'delayed-advance', runtime: 'test-runtime', profile: 'developer',
+    correlation: 'delayed-advance-1', runtime: 'test-runtime', profile: 'developer',
     revision: '6', catalogEpoch: '9', outcome: { kind: 'success', value: { entity: 1 }, receiptRefs: [] },
   });
   await result;
-  const current = await client.discover();
-  assert.equal(current.revision, '6');
-  assert.equal(current.catalogEpoch, '9');
-  assert.equal(current.contractFingerprint, 'new-contract');
+  assert.equal(client.descriptor('standard.inspect.new'), null);
+  const second = await client.execute('standard.inspect.entity', { entity: 2 });
+  assert.equal(discoverCount, 3, 'the second command must refresh after the epoch-advancing response');
+  assert.deepEqual(requests[1]?.expected, { profile: 'developer', revision: '6', catalogEpoch: '9' });
+  assert.equal(second.revision, '6');
+  assert.equal(second.catalogEpoch, '9');
   assert.equal(client.descriptor('standard.inspect.new')?.summary, 'Inspect another entity.');
+});
+
+test('late discovery cannot repopulate descriptors below an epoch-advanced response floor', async () => {
+  const pendingDiscover: Array<(value: unknown) => void> = [];
+  const pendingExecute: Array<(value: unknown) => void> = [];
+  const requests: RustyDeveloperCommandRequest[] = [];
+  let discoverCount = 0;
+  let correlationCount = 0;
+  const snapshot = (
+    revision: string,
+    catalogEpoch: string,
+    contractFingerprint: string,
+    commands: readonly { id: string; aliases: readonly string[]; lane: 'inspect'; summary: string }[],
+  ) => ({
+    protocolVersion: 1, runtime: 'test-runtime', profile: 'developer', permittedLanes: ['inspect'],
+    revision, catalogEpoch, contractFingerprint, commands,
+  });
+  const oldCommands = [
+    { id: 'standard.inspect.old', aliases: [], lane: 'inspect' as const, summary: 'Old catalog command.' },
+  ];
+  const newCommands = [
+    { id: 'standard.inspect.new', aliases: [], lane: 'inspect' as const, summary: 'New catalog command.' },
+  ];
+  const client = createRustyDeveloperCommandClient({
+    adapter: {
+      discover: async () => {
+        discoverCount += 1;
+        if (discoverCount === 1) return snapshot('4', '7', 'old-contract', oldCommands);
+        if (discoverCount === 2 || discoverCount === 3) {
+          return new Promise((resolve) => pendingDiscover.push(resolve));
+        }
+        return snapshot('6', '9', 'new-contract', newCommands);
+      },
+      execute: async (request) => {
+        requests.push(request);
+        if (requests.length === 1) return new Promise((resolve) => pendingExecute.push(resolve));
+        return {
+          correlation: request.correlation, runtime: request.runtime, profile: request.expected.profile,
+          revision: '6', catalogEpoch: '9',
+          outcome: { kind: 'success', value: request.payload, receiptRefs: [] },
+        };
+      },
+    },
+    schemas: {
+      'standard.inspect.old': inspectSchema,
+      'standard.inspect.new': inspectSchema,
+    },
+    createCorrelation: () => `late-floor-${++correlationCount}`,
+  });
+
+  // 1. Cache the old catalog.
+  await client.discover();
+  // 2. Start a command using its facts.
+  const result = client.execute('standard.inspect.old', { entity: 1 });
+  assert.deepEqual(requests[0]?.expected, { profile: 'developer', revision: '4', catalogEpoch: '7' });
+  // 3. Start an older discovery that will resolve after the response.
+  const staleDiscovery = client.discover();
+  // 4. Discover and install the newer catalog while the command is pending.
+  const newerDiscovery = client.discover();
+  assert.equal(pendingDiscover.length, 2);
+  pendingDiscover[1]!(snapshot('5', '8', 'new-contract', newCommands));
+  await newerDiscovery;
+  assert.equal(client.descriptor('standard.inspect.new')?.summary, 'New catalog command.');
+  // 5. Accept a response that advances the catalog epoch and invalidates descriptors.
+  pendingExecute[0]!({
+    correlation: 'late-floor-1', runtime: 'test-runtime', profile: 'developer',
+    revision: '6', catalogEpoch: '9', outcome: { kind: 'success', value: { entity: 1 }, receiptRefs: [] },
+  });
+  await result;
+  assert.equal(client.descriptor('standard.inspect.new'), null);
+  // 6. Resolve the older discovery; it must not repopulate the invalidated cache.
+  pendingDiscover[0]!(snapshot('4', '7', 'old-contract', oldCommands));
+  await assert.rejects(staleDiscovery, (cause: unknown) =>
+    cause instanceof RustyDeveloperCommandClientError && cause.code === 'stale_context');
+  assert.equal(client.descriptor('standard.inspect.old'), null);
+  // 7. The next execute must refresh before dispatching the new command facts.
+  const refreshed = await client.execute('standard.inspect.new', { entity: 2 });
+  assert.equal(discoverCount, 4);
+  assert.deepEqual(requests[1]?.expected, { profile: 'developer', revision: '6', catalogEpoch: '9' });
+  assert.equal(requests[1]?.command, 'standard.inspect.new');
+  assert.equal(refreshed.revision, '6');
+  assert.equal(refreshed.catalogEpoch, '9');
+  assert.equal(client.descriptor('standard.inspect.new')?.summary, 'New catalog command.');
 });

@@ -165,6 +165,19 @@ export interface RustyDeveloperCommandClientOptions {
   readonly now?: () => number;
 }
 
+interface DiscoveryFloor {
+  readonly runtime: string;
+  readonly profile: string;
+  readonly revision: string;
+  readonly catalogEpoch: string;
+  /**
+   * A fingerprint is present only when this runtime/profile/catalog epoch
+   * came from an accepted discovery snapshot.  Live revision is independent
+   * of the catalog fingerprint and may advance without clearing it.
+   */
+  readonly contractFingerprint?: string;
+}
+
 export function createRustyDeveloperCommandClient(
   options: RustyDeveloperCommandClientOptions,
 ): RustyDeveloperCommandClient {
@@ -175,6 +188,7 @@ export function createRustyDeveloperCommandClient(
   const correlation = options.createCorrelation ?? (() => `command-${cryptoRandom()}`);
   const now = options.now ?? Date.now;
   let discovery: RustyDeveloperCommandDiscovery | null = null;
+  let discoveryFloor: DiscoveryFloor | null = null;
   let disposed = false;
   const requireActive = (): void => {
     if (disposed) throw new RustyDeveloperCommandClientError('disposed', 'Developer command client is disposed');
@@ -214,18 +228,32 @@ export function createRustyDeveloperCommandClient(
     throwIfAborted(signal);
     const candidate = decodeDiscovery(raw, extensionDescriptors);
     const current = discovery;
+    const floor = discoveryFloor;
+    const candidateMatchesCatalogFloor = floor !== null
+      && candidate.runtime === floor.runtime
+      && candidate.profile === floor.profile
+      && candidate.catalogEpoch === floor.catalogEpoch;
+    if (floor !== null && (candidate.runtime !== floor.runtime || candidate.profile !== floor.profile
+      || decimalLessThan(candidate.revision, floor.revision)
+      || decimalLessThan(candidate.catalogEpoch, floor.catalogEpoch)
+      || (candidateMatchesCatalogFloor
+        && floor.contractFingerprint !== undefined
+        && candidate.contractFingerprint !== floor.contractFingerprint))) {
+      throw new RustyDeveloperCommandClientError(
+        'stale_context',
+        'Developer command discovery regressed or changed its selected runtime/profile context',
+      );
+    }
     if (current !== null && (candidate.runtime !== current.runtime || candidate.profile !== current.profile
       || decimalLessThan(candidate.revision, current.revision)
-      || decimalLessThan(candidate.catalogEpoch, current.catalogEpoch)
-      || (candidate.revision === current.revision
-        && candidate.catalogEpoch === current.catalogEpoch
-        && candidate.contractFingerprint !== current.contractFingerprint))) {
+      || decimalLessThan(candidate.catalogEpoch, current.catalogEpoch))) {
       throw new RustyDeveloperCommandClientError(
         'stale_context',
         'Developer command discovery regressed or changed its selected runtime/profile context',
       );
     }
     discovery = candidate;
+    discoveryFloor = discoveryFloorFrom(candidate);
     return candidate;
   };
   return Object.freeze({
@@ -320,12 +348,20 @@ export function createRustyDeveloperCommandClient(
         throwIfAborted(signal);
         const response = decodeResponse(raw, request, schema);
         const current = discovery;
+        const floor = discoveryFloor;
+        const currentCatalogMatchFloor = floor !== null
+          && current !== null
+          && current.runtime === floor.runtime
+          && current.profile === floor.profile
+          && current.catalogEpoch === floor.catalogEpoch;
         if (current === null
           || current.runtime !== snapshot.runtime
           || current.profile !== snapshot.profile
           || (current.revision === snapshot.revision
             && current.catalogEpoch === snapshot.catalogEpoch
-            && current.contractFingerprint !== snapshot.contractFingerprint)
+            && currentCatalogMatchFloor
+            && floor?.contractFingerprint !== undefined
+            && floor.contractFingerprint !== snapshot.contractFingerprint)
           || response.runtime !== current.runtime
           || response.profile !== current.profile
           || decimalLessThan(response.revision, current.revision)
@@ -348,7 +384,22 @@ export function createRustyDeveloperCommandClient(
         });
         entries.push(entry);
         trimHistory();
-        discovery = Object.freeze({ ...current, revision: response.revision, catalogEpoch: response.catalogEpoch });
+        if (decimalLessThan(current.catalogEpoch, response.catalogEpoch)) {
+          // The response establishes a newer monotonic floor, but it carries
+          // no catalog fingerprint.  Keep descriptors invalidated until a
+          // fresh accepted discovery supplies one for these exact facts.
+          discovery = null;
+          discoveryFloor = discoveryFloorFromResponse(response);
+        } else {
+          discovery = Object.freeze({ ...current, revision: response.revision, catalogEpoch: response.catalogEpoch });
+          discoveryFloor = discoveryFloorFromResponse(
+            response,
+            currentCatalogMatchFloor
+              && response.catalogEpoch === current.catalogEpoch
+              ? floor?.contractFingerprint
+              : undefined,
+          );
+        }
         return response;
       } catch (cause) {
         const failure = cause instanceof RustyDeveloperCommandClientError
@@ -360,7 +411,30 @@ export function createRustyDeveloperCommandClient(
         throw failure;
       }
     },
-    dispose: () => { disposed = true; discovery = null; },
+    dispose: () => { disposed = true; discovery = null; discoveryFloor = null; },
+  });
+}
+
+function discoveryFloorFrom(snapshot: RustyDeveloperCommandDiscovery): DiscoveryFloor {
+  return Object.freeze({
+    runtime: snapshot.runtime,
+    profile: snapshot.profile,
+    revision: snapshot.revision,
+    catalogEpoch: snapshot.catalogEpoch,
+    contractFingerprint: snapshot.contractFingerprint,
+  });
+}
+
+function discoveryFloorFromResponse(
+  response: RustyDeveloperCommandResponse,
+  contractFingerprint?: string,
+): DiscoveryFloor {
+  return Object.freeze({
+    runtime: response.runtime,
+    profile: response.profile,
+    revision: response.revision,
+    catalogEpoch: response.catalogEpoch,
+    ...(contractFingerprint === undefined ? {} : { contractFingerprint }),
   });
 }
 

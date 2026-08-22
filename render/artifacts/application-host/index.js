@@ -27077,11 +27077,11 @@ var gT = Object.freeze({
 	}
 };
 function ET(e) {
-	let t = KT(e.extensions ?? []), n = DT(e.schemas ?? {}, e.extensions ?? []), r = /* @__PURE__ */ new Set(), i = [], a = e.createCorrelation ?? (() => `command-${QT()}`), o = e.now ?? Date.now, s = null, c = !1, l = () => {
-		if (c) throw new TT("disposed", "Developer command client is disposed");
-	}, u = () => {
+	let t = JT(e.extensions ?? []), n = kT(e.schemas ?? {}, e.extensions ?? []), r = /* @__PURE__ */ new Set(), i = [], a = e.createCorrelation ?? (() => `command-${eE()}`), o = e.now ?? Date.now, s = null, c = null, l = !1, u = () => {
+		if (l) throw new TT("disposed", "Developer command client is disposed");
+	}, d = () => {
 		i.length > bT && i.splice(0, i.length - bT);
-	}, d = (e, t, n, r) => {
+	}, f = (e, t, n, r) => {
 		let a = n.message.slice(0, 1024), s = Object.freeze(r === void 0 ? {
 			phase: e,
 			lane: t,
@@ -27098,94 +27098,94 @@ function ET(e) {
 			receiptRefs: [],
 			at: o()
 		});
-		i.push(s), u();
-	}, f = (e) => {
+		i.push(s), d();
+	}, p = (e) => {
 		let t = s;
 		return t === null ? null : t.commands.find((t) => t.id === e || t.aliases.includes(e)) ?? null;
-	}, p = async (n) => {
-		l(), $T(n);
+	}, m = async (n) => {
+		u(), tE(n);
 		let r;
 		try {
 			r = await e.adapter.discover(n);
 		} catch (e) {
-			throw eE(e);
+			throw nE(e);
 		}
-		l(), $T(n);
-		let i = qT(r, t), a = s;
-		if (a !== null && (i.runtime !== a.runtime || i.profile !== a.profile || pE(i.revision, a.revision) || pE(i.catalogEpoch, a.catalogEpoch) || i.revision === a.revision && i.catalogEpoch === a.catalogEpoch && i.contractFingerprint !== a.contractFingerprint)) throw new TT("stale_context", "Developer command discovery regressed or changed its selected runtime/profile context");
-		return s = i, i;
+		u(), tE(n);
+		let i = YT(r, t), a = s, o = c, l = o !== null && i.runtime === o.runtime && i.profile === o.profile && i.catalogEpoch === o.catalogEpoch;
+		if (o !== null && (i.runtime !== o.runtime || i.profile !== o.profile || hE(i.revision, o.revision) || hE(i.catalogEpoch, o.catalogEpoch) || l && o.contractFingerprint !== void 0 && i.contractFingerprint !== o.contractFingerprint) || a !== null && (i.runtime !== a.runtime || i.profile !== a.profile || hE(i.revision, a.revision) || hE(i.catalogEpoch, a.catalogEpoch))) throw new TT("stale_context", "Developer command discovery regressed or changed its selected runtime/profile context");
+		return s = i, c = DT(i), i;
 	};
 	return Object.freeze({
-		discover: p,
-		descriptor: (e) => f(e),
-		schema: (e) => rE(n, e) ? n[e] : null,
+		discover: m,
+		descriptor: (e) => p(e),
+		schema: (e) => aE(n, e) ? n[e] : null,
 		history: () => Object.freeze(i.slice()),
 		exportSequence: () => Object.freeze({
 			kind: "rusty_developer_command.sequence.v1",
 			note: "portable command intent/history; not deterministic replay",
 			entries: Object.freeze(i.filter((e) => e.phase === "completed").slice(-128))
 		}),
-		execute: async (t, c, f) => {
-			l(), $T(f);
-			let m = s ?? await p(f), h = m.commands.find((e) => e.id === t || e.aliases.includes(t)) ?? null;
-			if (h === null) throw new TT("unknown_command", `Unknown developer command ${t}`);
-			let g = n[h.id];
-			if (g === void 0) {
-				let e = new TT("codec_unavailable", `${h.id} has help only; its product has not supplied an exact wire codec`);
-				throw d("pre-dispatch", h.lane, e), e;
-			}
-			let _;
-			try {
-				ZT(c, g.request, "$"), _ = mE(c);
-			} catch (e) {
-				let t = e instanceof TT && e.code === "malformed" ? new TT("invalid_payload", e.message, { cause: e }) : eE(e);
-				throw d("pre-dispatch", h.lane, t), t;
+		execute: async (t, l, p) => {
+			u(), tE(p);
+			let h = s ?? await m(p), g = h.commands.find((e) => e.id === t || e.aliases.includes(t)) ?? null;
+			if (g === null) throw new TT("unknown_command", `Unknown developer command ${t}`);
+			let _ = n[g.id];
+			if (_ === void 0) {
+				let e = new TT("codec_unavailable", `${g.id} has help only; its product has not supplied an exact wire codec`);
+				throw f("pre-dispatch", g.lane, e), e;
 			}
 			let v;
 			try {
-				v = a(), lE(v, "correlation");
+				$T(l, _.request, "$"), v = gE(l);
+			} catch (e) {
+				let t = e instanceof TT && e.code === "malformed" ? new TT("invalid_payload", e.message, { cause: e }) : nE(e);
+				throw f("pre-dispatch", g.lane, t), t;
+			}
+			let y;
+			try {
+				y = a(), dE(y, "correlation");
 			} catch (e) {
 				let t = e instanceof TT ? e : new TT("malformed", "Correlation factory returned an invalid identity", { cause: e instanceof Error ? e : void 0 });
-				throw d("pre-dispatch", h.lane, t), t;
+				throw f("pre-dispatch", g.lane, t), t;
 			}
-			if (r.has(v)) {
-				let e = new TT("correlation_reused", `Correlation ${v} was already issued`);
-				throw d("pre-dispatch", h.lane, e), e;
+			if (r.has(y)) {
+				let e = new TT("correlation_reused", `Correlation ${y} was already issued`);
+				throw f("pre-dispatch", g.lane, e), e;
 			}
 			try {
-				l(), $T(f);
+				u(), tE(p);
 			} catch (e) {
 				let t = e instanceof TT ? e : new TT("cancelled", "Developer command was cancelled", { cause: e instanceof Error ? e : void 0 });
-				throw d("pre-dispatch", h.lane, t), t;
+				throw f("pre-dispatch", g.lane, t), t;
 			}
-			r.add(v);
-			let y = Object.freeze({
+			r.add(y);
+			let b = Object.freeze({
 				protocolVersion: vT,
-				command: h.id,
-				correlation: v,
-				runtime: m.runtime,
+				command: g.id,
+				correlation: y,
+				runtime: h.runtime,
 				expected: Object.freeze({
-					profile: m.profile,
-					revision: m.revision,
-					catalogEpoch: m.catalogEpoch
+					profile: h.profile,
+					revision: h.revision,
+					catalogEpoch: h.catalogEpoch
 				}),
-				payload: _
-			}), b;
+				payload: v
+			}), x;
 			try {
-				b = await e.adapter.execute(y, f);
+				x = await e.adapter.execute(b, p);
 			} catch (e) {
-				let t = eE(e);
-				throw d("transport", h.lane, t, y), t;
+				let t = nE(e);
+				throw f("transport", g.lane, t, b), t;
 			}
 			try {
-				l(), $T(f);
-				let e = YT(b, y, g), t = s;
-				if (t === null || t.runtime !== m.runtime || t.profile !== m.profile || t.revision === m.revision && t.catalogEpoch === m.catalogEpoch && t.contractFingerprint !== m.contractFingerprint || e.runtime !== t.runtime || e.profile !== t.profile || pE(e.revision, t.revision) || pE(e.catalogEpoch, t.catalogEpoch)) throw new TT("stale_context", "Developer command response did not preserve the selected runtime/profile/epoch context");
-				l(), $T(f);
-				let n = Object.freeze({
+				u(), tE(p);
+				let e = ZT(x, b, _), t = s, n = c, r = n !== null && t !== null && t.runtime === n.runtime && t.profile === n.profile && t.catalogEpoch === n.catalogEpoch;
+				if (t === null || t.runtime !== h.runtime || t.profile !== h.profile || t.revision === h.revision && t.catalogEpoch === h.catalogEpoch && r && n?.contractFingerprint !== void 0 && n.contractFingerprint !== h.contractFingerprint || e.runtime !== t.runtime || e.profile !== t.profile || hE(e.revision, t.revision) || hE(e.catalogEpoch, t.catalogEpoch)) throw new TT("stale_context", "Developer command response did not preserve the selected runtime/profile/epoch context");
+				u(), tE(p);
+				let a = Object.freeze({
 					phase: "completed",
-					request: y,
-					lane: h.lane,
+					request: b,
+					lane: g.lane,
 					outcome: e.outcome,
 					receiptRefs: e.outcome.kind === "success" ? e.outcome.receiptRefs : Object.freeze([]),
 					runtime: e.runtime,
@@ -27194,107 +27194,125 @@ function ET(e) {
 					catalogEpoch: e.catalogEpoch,
 					at: o()
 				});
-				return i.push(n), u(), s = Object.freeze({
+				return i.push(a), d(), hE(t.catalogEpoch, e.catalogEpoch) ? (s = null, c = OT(e)) : (s = Object.freeze({
 					...t,
 					revision: e.revision,
 					catalogEpoch: e.catalogEpoch
-				}), e;
+				}), c = OT(e, r && e.catalogEpoch === t.catalogEpoch ? n?.contractFingerprint : void 0)), e;
 			} catch (e) {
 				let t = e instanceof TT ? e : new TT("malformed", "Developer command response was not valid", { cause: e instanceof Error ? e : void 0 }), n = t.code === "cancelled" || t.code === "disposed" || t.code === "unavailable" ? "transport" : "post-dispatch";
-				throw d(n, h.lane, t, y), t;
+				throw f(n, g.lane, t, b), t;
 			}
 		},
 		dispose: () => {
-			c = !0, s = null;
+			l = !0, s = null, c = null;
 		}
 	});
 }
-function DT(e, t) {
+function DT(e) {
+	return Object.freeze({
+		runtime: e.runtime,
+		profile: e.profile,
+		revision: e.revision,
+		catalogEpoch: e.catalogEpoch,
+		contractFingerprint: e.contractFingerprint
+	});
+}
+function OT(e, t) {
+	return Object.freeze({
+		runtime: e.runtime,
+		profile: e.profile,
+		revision: e.revision,
+		catalogEpoch: e.catalogEpoch,
+		...t === void 0 ? {} : { contractFingerprint: t }
+	});
+}
+function kT(e, t) {
 	let n = Object.create(null);
-	for (let [t, r] of Object.entries(e)) LT(t, `schema.${t}`), n[t] = OT(r, `schema.${t}`);
+	for (let [t, r] of Object.entries(e)) zT(t, `schema.${t}`), n[t] = AT(r, `schema.${t}`);
 	for (let e of t) {
-		let t = zT(e, "extension");
-		BT(t, [
+		let t = VT(e, "extension");
+		HT(t, [
 			"namespace",
 			"descriptors",
 			"schemas"
 		], "extension");
-		let r = WT(t.namespace), i = zT(t.schemas, `extension ${r}.schemas`);
+		let r = KT(t.namespace), i = VT(t.schemas, `extension ${r}.schemas`);
 		for (let [e, t] of Object.entries(i)) {
-			let i = UT(e, `extension schema ${e}`);
-			i.startsWith(`${r}.`) || RT(`Extension schema ${e} escapes ${r}`), rE(n, i) && RT(`Duplicate wire schema ${i}`), n[i] = OT(t, `extension schema ${i}`);
+			let i = GT(e, `extension schema ${e}`);
+			i.startsWith(`${r}.`) || BT(`Extension schema ${e} escapes ${r}`), aE(n, i) && BT(`Duplicate wire schema ${i}`), n[i] = AT(t, `extension schema ${i}`);
 		}
 	}
 	return Object.freeze(n);
 }
-function OT(e, t) {
+function AT(e, t) {
 	let n = {
 		active: /* @__PURE__ */ new Set(),
 		seen: /* @__PURE__ */ new Set(),
 		nodes: 0
-	}, r = AT(e, t);
-	return jT(r, [
+	}, r = MT(e, t);
+	return NT(r, [
 		"request",
 		"result",
 		"error"
 	], t), Object.freeze({
-		request: kT(r.request, `${t}.request`, n, 0),
-		result: kT(r.result, `${t}.result`, n, 0),
-		error: kT(r.error, `${t}.error`, n, 0)
+		request: jT(r.request, `${t}.request`, n, 0),
+		result: jT(r.result, `${t}.result`, n, 0),
+		error: jT(r.error, `${t}.error`, n, 0)
 	});
 }
-function kT(e, t, n, r) {
-	r > ST && nE(`${t} exceeds wire schema depth`);
-	let i = AT(e, t);
-	n.active.has(i) && nE(`${t} contains a cyclic schema`), n.seen.has(i) || (n.seen.add(i), n.nodes += 1, n.nodes > CT && nE(`${t} exceeds the ${CT}-node schema limit`)), n.active.add(i);
+function jT(e, t, n, r) {
+	r > ST && iE(`${t} exceeds wire schema depth`);
+	let i = MT(e, t);
+	n.active.has(i) && iE(`${t} contains a cyclic schema`), n.seen.has(i) || (n.seen.add(i), n.nodes += 1, n.nodes > CT && iE(`${t} exceeds the ${CT}-node schema limit`)), n.active.add(i);
 	try {
-		let e = MT(i.kind, `${t}.kind`);
+		let e = PT(i.kind, `${t}.kind`);
 		switch (e) {
-			case "boolean": return jT(i, ["kind"], t), Object.freeze({ kind: e });
-			case "decimalU64": return jT(i, ["kind"], t), Object.freeze({ kind: e });
+			case "boolean": return NT(i, ["kind"], t), Object.freeze({ kind: e });
+			case "decimalU64": return NT(i, ["kind"], t), Object.freeze({ kind: e });
 			case "integer": {
-				jT(i, ["kind"], t, ["minimum", "maximum"]);
-				let n = FT(i.minimum, `${t}.minimum`), r = FT(i.maximum, `${t}.maximum`);
-				return n !== void 0 && r !== void 0 && n > r && nE(`${t} minimum exceeds maximum`), Object.freeze({
+				NT(i, ["kind"], t, ["minimum", "maximum"]);
+				let n = LT(i.minimum, `${t}.minimum`), r = LT(i.maximum, `${t}.maximum`);
+				return n !== void 0 && r !== void 0 && n > r && iE(`${t} minimum exceeds maximum`), Object.freeze({
 					kind: e,
 					...n === void 0 ? {} : { minimum: n },
 					...r === void 0 ? {} : { maximum: r }
 				});
 			}
 			case "string": {
-				jT(i, ["kind", "maximumBytes"], t, ["pattern"]);
-				let n = PT(i.maximumBytes, `${t}.maximumBytes`, 0, 1048576), r = i.pattern;
-				return r !== void 0 && r !== "identifier" && nE(`${t}.pattern is not supported`), Object.freeze({
+				NT(i, ["kind", "maximumBytes"], t, ["pattern"]);
+				let n = IT(i.maximumBytes, `${t}.maximumBytes`, 0, 1048576), r = i.pattern;
+				return r !== void 0 && r !== "identifier" && iE(`${t}.pattern is not supported`), Object.freeze({
 					kind: e,
 					maximumBytes: n,
 					...r === void 0 ? {} : { pattern: r }
 				});
 			}
 			case "array": {
-				jT(i, [
+				NT(i, [
 					"kind",
 					"items",
 					"maximumItems"
 				], t);
-				let a = PT(i.maximumItems, `${t}.maximumItems`, 0, 65536);
+				let a = IT(i.maximumItems, `${t}.maximumItems`, 0, 65536);
 				return Object.freeze({
 					kind: e,
-					items: kT(i.items, `${t}.items`, n, r + 1),
+					items: jT(i.items, `${t}.items`, n, r + 1),
 					maximumItems: a
 				});
 			}
 			case "object": {
-				jT(i, ["kind", "fields"], t);
-				let a = AT(i.fields, `${t}.fields`), o = Object.entries(a);
-				o.length > wT && nE(`${t}.fields exceeds the ${wT}-field limit`);
+				NT(i, ["kind", "fields"], t);
+				let a = MT(i.fields, `${t}.fields`), o = Object.entries(a);
+				o.length > wT && iE(`${t}.fields exceeds the ${wT}-field limit`);
 				let s = Object.create(null);
 				for (let [e, i] of o) {
 					let a = `${t}.fields.${e}`;
-					IT(e, a);
-					let o = AT(i, a);
-					jT(o, ["required", "value"], a), typeof o.required != "boolean" && nE(`${a}.required must be boolean`), s[e] = Object.freeze({
+					RT(e, a);
+					let o = MT(i, a);
+					NT(o, ["required", "value"], a), typeof o.required != "boolean" && iE(`${a}.required must be boolean`), s[e] = Object.freeze({
 						required: o.required,
-						value: kT(o.value, `${a}.value`, n, r + 1)
+						value: jT(o.value, `${a}.value`, n, r + 1)
 					});
 				}
 				return Object.freeze({
@@ -27303,25 +27321,25 @@ function kT(e, t, n, r) {
 				});
 			}
 			case "enum": {
-				jT(i, ["kind", "values"], t);
+				NT(i, ["kind", "values"], t);
 				let n = i.values;
-				(!Array.isArray(n) || n.length === 0 || n.length > wT) && nE(`${t}.values must be a bounded nonempty array`);
-				let r = n.map((e, n) => NT(e, `${t}.values[${n}]`, 256));
-				return new Set(r).size !== r.length && nE(`${t}.values contains duplicates`), Object.freeze({
+				(!Array.isArray(n) || n.length === 0 || n.length > wT) && iE(`${t}.values must be a bounded nonempty array`);
+				let r = n.map((e, n) => FT(e, `${t}.values[${n}]`, 256));
+				return new Set(r).size !== r.length && iE(`${t}.values contains duplicates`), Object.freeze({
 					kind: e,
 					values: Object.freeze(r)
 				});
 			}
 			case "taggedUnion": {
-				jT(i, [
+				NT(i, [
 					"kind",
 					"tag",
 					"variants"
 				], t);
-				let a = NT(i.tag, `${t}.tag`, 128), o = AT(i.variants, `${t}.variants`), s = Object.entries(o);
-				(s.length === 0 || s.length > wT) && nE(`${t}.variants must be a bounded nonempty object`);
+				let a = FT(i.tag, `${t}.tag`, 128), o = MT(i.variants, `${t}.variants`), s = Object.entries(o);
+				(s.length === 0 || s.length > wT) && iE(`${t}.variants must be a bounded nonempty object`);
 				let c = Object.create(null);
-				for (let [e, i] of s) IT(e, `${t}.variants.${e}`), c[e] = kT(i, `${t}.variants.${e}`, n, r + 1);
+				for (let [e, i] of s) RT(e, `${t}.variants.${e}`), c[e] = jT(i, `${t}.variants.${e}`, n, r + 1);
 				return Object.freeze({
 					kind: e,
 					tag: a,
@@ -27329,12 +27347,12 @@ function kT(e, t, n, r) {
 				});
 			}
 			case "opaqueJson": {
-				jT(i, [
+				NT(i, [
 					"kind",
 					"maximumBytes",
 					"maximumNodes"
 				], t);
-				let n = PT(i.maximumBytes, `${t}.maximumBytes`, 0, 1048576), r = PT(i.maximumNodes, `${t}.maximumNodes`, 1, 65536);
+				let n = IT(i.maximumBytes, `${t}.maximumBytes`, 0, 1048576), r = IT(i.maximumNodes, `${t}.maximumNodes`, 1, 65536);
 				return Object.freeze({
 					kind: e,
 					maximumBytes: n,
@@ -27346,18 +27364,18 @@ function kT(e, t, n, r) {
 		n.active.delete(i);
 	}
 }
-function AT(e, t) {
-	(typeof e != "object" || !e || Array.isArray(e)) && nE(`${t} must be an object`);
-	let n = e, r = Object.getPrototypeOf(n);
-	r !== Object.prototype && r !== null && nE(`${t} must be a plain object`), Object.getOwnPropertySymbols(n).length > 0 && nE(`${t} may not contain symbol properties`);
-	let i = Object.getOwnPropertyDescriptors(n);
-	return Object.values(i).some((e) => !e.enumerable || !("value" in e)) && nE(`${t} may not contain accessors or hidden properties`), n;
-}
-function jT(e, t, n, r = []) {
-	let i = /* @__PURE__ */ new Set([...t, ...r]);
-	(Object.keys(e).some((e) => !i.has(e)) || t.some((t) => !rE(e, t))) && nE(`${n} has unexpected or missing fields`);
-}
 function MT(e, t) {
+	(typeof e != "object" || !e || Array.isArray(e)) && iE(`${t} must be an object`);
+	let n = e, r = Object.getPrototypeOf(n);
+	r !== Object.prototype && r !== null && iE(`${t} must be a plain object`), Object.getOwnPropertySymbols(n).length > 0 && iE(`${t} may not contain symbol properties`);
+	let i = Object.getOwnPropertyDescriptors(n);
+	return Object.values(i).some((e) => !e.enumerable || !("value" in e)) && iE(`${t} may not contain accessors or hidden properties`), n;
+}
+function NT(e, t, n, r = []) {
+	let i = /* @__PURE__ */ new Set([...t, ...r]);
+	(Object.keys(e).some((e) => !i.has(e)) || t.some((t) => !aE(e, t))) && iE(`${n} has unexpected or missing fields`);
+}
+function PT(e, t) {
 	return (typeof e != "string" || ![
 		"boolean",
 		"decimalU64",
@@ -27368,85 +27386,85 @@ function MT(e, t) {
 		"enum",
 		"taggedUnion",
 		"opaqueJson"
-	].includes(e)) && nE(`${t} is not a supported schema kind`), e;
+	].includes(e)) && iE(`${t} is not a supported schema kind`), e;
 }
-function NT(e, t, n) {
-	return (typeof e != "string" || new TextEncoder().encode(e).byteLength > n) && nE(`${t} must be a bounded string`), e;
+function FT(e, t, n) {
+	return (typeof e != "string" || new TextEncoder().encode(e).byteLength > n) && iE(`${t} must be a bounded string`), e;
 }
-function PT(e, t, n, r) {
-	return (typeof e != "number" || !Number.isSafeInteger(e) || e < n || e > r) && nE(`${t} must be a bounded nonnegative integer`), e;
-}
-function FT(e, t) {
-	if (e !== void 0) return (typeof e != "number" || !Number.isSafeInteger(e)) && nE(`${t} must be a safe integer`), e;
-}
-function IT(e, t) {
-	(e.length === 0 || e === "__proto__" || e === "constructor" || e === "prototype") && nE(`${t} is not a usable field name`), NT(e, t, 128);
+function IT(e, t, n, r) {
+	return (typeof e != "number" || !Number.isSafeInteger(e) || e < n || e > r) && iE(`${t} must be a bounded nonnegative integer`), e;
 }
 function LT(e, t) {
-	if (!/^[a-z0-9._:-]+$/u.test(e) || new TextEncoder().encode(e).byteLength > gT.identity.commandBytes) throw new TT("invalid_schema", `${t} is not a valid command identity`);
+	if (e !== void 0) return (typeof e != "number" || !Number.isSafeInteger(e)) && iE(`${t} must be a safe integer`), e;
 }
-function RT(e) {
-	throw new TT("invalid_extension", e);
+function RT(e, t) {
+	(e.length === 0 || e === "__proto__" || e === "constructor" || e === "prototype") && iE(`${t} is not a usable field name`), FT(e, t, 128);
 }
 function zT(e, t) {
-	(typeof e != "object" || !e || Array.isArray(e)) && RT(`${t} must be an object`);
-	let n = e, r = Object.getPrototypeOf(n);
-	r !== Object.prototype && r !== null && RT(`${t} must be a plain object`), Object.getOwnPropertySymbols(n).length > 0 && RT(`${t} may not contain symbol properties`);
-	let i = Object.getOwnPropertyDescriptors(n);
-	return Object.values(i).some((e) => !e.enumerable || !("value" in e)) && RT(`${t} may not contain accessors or hidden properties`), n;
+	if (!/^[a-z0-9._:-]+$/u.test(e) || new TextEncoder().encode(e).byteLength > gT.identity.commandBytes) throw new TT("invalid_schema", `${t} is not a valid command identity`);
 }
-function BT(e, t, n, r = []) {
-	let i = /* @__PURE__ */ new Set([...t, ...r]);
-	(Object.keys(e).some((e) => !i.has(e)) || t.some((t) => !rE(e, t))) && RT(`${n} has unexpected or missing fields`);
+function BT(e) {
+	throw new TT("invalid_extension", e);
 }
 function VT(e, t) {
-	(!Array.isArray(e) || Object.getPrototypeOf(e) !== Array.prototype || Object.keys(e).length !== e.length || Object.getOwnPropertySymbols(e).length > 0) && RT(`${t} must be a dense ordinary array`);
-	let n = Object.getOwnPropertyDescriptors(e);
-	return Object.entries(n).some(([e, t]) => e !== "length" && (!t.enumerable || !("value" in t))) && RT(`${t} may not contain accessors or hidden properties`), e;
+	(typeof e != "object" || !e || Array.isArray(e)) && BT(`${t} must be an object`);
+	let n = e, r = Object.getPrototypeOf(n);
+	r !== Object.prototype && r !== null && BT(`${t} must be a plain object`), Object.getOwnPropertySymbols(n).length > 0 && BT(`${t} may not contain symbol properties`);
+	let i = Object.getOwnPropertyDescriptors(n);
+	return Object.values(i).some((e) => !e.enumerable || !("value" in e)) && BT(`${t} may not contain accessors or hidden properties`), n;
 }
-function HT(e, t, n) {
-	return (typeof e != "string" || new TextEncoder().encode(e).byteLength > n) && RT(`${t} must be a bounded string`), e;
+function HT(e, t, n, r = []) {
+	let i = /* @__PURE__ */ new Set([...t, ...r]);
+	(Object.keys(e).some((e) => !i.has(e)) || t.some((t) => !aE(e, t))) && BT(`${n} has unexpected or missing fields`);
 }
 function UT(e, t) {
-	let n = HT(e, t, gT.identity.commandBytes);
-	return /^[a-z0-9._:-]+$/u.test(n) || RT(`${t} must use lower-case command identity characters`), n;
+	(!Array.isArray(e) || Object.getPrototypeOf(e) !== Array.prototype || Object.keys(e).length !== e.length || Object.getOwnPropertySymbols(e).length > 0) && BT(`${t} must be a dense ordinary array`);
+	let n = Object.getOwnPropertyDescriptors(e);
+	return Object.entries(n).some(([e, t]) => e !== "length" && (!t.enumerable || !("value" in t))) && BT(`${t} may not contain accessors or hidden properties`), e;
 }
-function WT(e) {
-	let t = UT(e, "extension namespace");
-	return t.includes(":") && RT("extension namespace may not contain colon"), t;
+function WT(e, t, n) {
+	return (typeof e != "string" || new TextEncoder().encode(e).byteLength > n) && BT(`${t} must be a bounded string`), e;
 }
 function GT(e, t) {
-	let n = HT(e, t, gT.identity.commandBytes);
-	return gT.lanes.includes(n) || RT(`${t} is invalid`), n;
+	let n = WT(e, t, gT.identity.commandBytes);
+	return /^[a-z0-9._:-]+$/u.test(n) || BT(`${t} must use lower-case command identity characters`), n;
 }
 function KT(e) {
+	let t = GT(e, "extension namespace");
+	return t.includes(":") && BT("extension namespace may not contain colon"), t;
+}
+function qT(e, t) {
+	let n = WT(e, t, gT.identity.commandBytes);
+	return gT.lanes.includes(n) || BT(`${t} is invalid`), n;
+}
+function JT(e) {
 	let t = [], n = /* @__PURE__ */ new Set();
 	for (let r of e) {
-		let e = zT(r, "extension");
-		BT(e, [
+		let e = VT(r, "extension");
+		HT(e, [
 			"namespace",
 			"descriptors",
 			"schemas"
 		], "extension");
-		let i = WT(e.namespace), a = VT(e.descriptors, `extension ${i}.descriptors`);
-		t.length + a.length > xT && RT(`extensions exceed the ${xT}-command limit`), a.forEach((e, r) => {
-			let a = `extension ${i}.descriptors[${r}]`, o = zT(e, a);
-			BT(o, [
+		let i = KT(e.namespace), a = UT(e.descriptors, `extension ${i}.descriptors`);
+		t.length + a.length > xT && BT(`extensions exceed the ${xT}-command limit`), a.forEach((e, r) => {
+			let a = `extension ${i}.descriptors[${r}]`, o = VT(e, a);
+			HT(o, [
 				"id",
 				"aliases",
 				"lane",
 				"summary"
 			], a, ["helpOnly"]);
-			let s = UT(o.id, `${a}.id`);
-			s.startsWith(`${i}.`) || RT(`${a}.id escapes ${i}`);
-			let c = VT(o.aliases, `${a}.aliases`);
-			c.length > gT.limits.commandAliases && RT(`${a}.aliases exceeds the alias limit`);
+			let s = GT(o.id, `${a}.id`);
+			s.startsWith(`${i}.`) || BT(`${a}.id escapes ${i}`);
+			let c = UT(o.aliases, `${a}.aliases`);
+			c.length > gT.limits.commandAliases && BT(`${a}.aliases exceeds the alias limit`);
 			let l = c.map((e, t) => {
-				let n = UT(e, `${a}.aliases[${t}]`);
-				return n.startsWith(`${i}.`) || RT(`${a}.aliases[${t}] escapes ${i}`), n;
-			}), u = GT(o.lane, `${a}.lane`), d = HT(o.summary, `${a}.summary`, gT.limits.summaryBytes), f = o.helpOnly;
-			f !== void 0 && typeof f != "boolean" && RT(`${a}.helpOnly must be boolean`);
-			for (let e of [s, ...l]) n.has(e) && RT(`duplicate command or alias ${e}`), n.add(e);
+				let n = GT(e, `${a}.aliases[${t}]`);
+				return n.startsWith(`${i}.`) || BT(`${a}.aliases[${t}] escapes ${i}`), n;
+			}), u = qT(o.lane, `${a}.lane`), d = WT(o.summary, `${a}.summary`, gT.limits.summaryBytes), f = o.helpOnly;
+			f !== void 0 && typeof f != "boolean" && BT(`${a}.helpOnly must be boolean`);
+			for (let e of [s, ...l]) n.has(e) && BT(`duplicate command or alias ${e}`), n.add(e);
 			t.push(Object.freeze({
 				id: s,
 				aliases: Object.freeze(l),
@@ -27458,20 +27476,20 @@ function KT(e) {
 	}
 	return Object.freeze(t);
 }
-function qT(e, t) {
-	let n = iE(e, "discovery");
-	aE(n, gT.discoveryFields, "discovery");
-	let r = uE(n.protocolVersion, "discovery.protocolVersion"), i = cE(n.runtime, "runtime"), a = cE(n.profile, "profile");
+function YT(e, t) {
+	let n = oE(e, "discovery");
+	sE(n, gT.discoveryFields, "discovery");
+	let r = fE(n.protocolVersion, "discovery.protocolVersion"), i = uE(n.runtime, "runtime"), a = uE(n.profile, "profile");
 	Array.isArray(n.permittedLanes) || $("discovery.permittedLanes must be a dense ordinary array");
-	let o = gE(n.permittedLanes, "discovery.permittedLanes");
+	let o = vE(n.permittedLanes, "discovery.permittedLanes");
 	(o.length === 0 || o.length > gT.lanes.length) && $(`discovery.permittedLanes must contain 1-${gT.lanes.length} lanes`);
-	let s = o.map((e, t) => dE(e, `discovery.permittedLanes[${t}]`));
+	let s = o.map((e, t) => pE(e, `discovery.permittedLanes[${t}]`));
 	new Set(s).size !== s.length && $("discovery.permittedLanes must not contain duplicates");
-	let c = fE(n.revision, "discovery.revision"), l = fE(n.catalogEpoch, "discovery.catalogEpoch"), u = cE(n.contractFingerprint, "discovery.contractFingerprint");
+	let c = mE(n.revision, "discovery.revision"), l = mE(n.catalogEpoch, "discovery.catalogEpoch"), u = uE(n.contractFingerprint, "discovery.contractFingerprint");
 	Array.isArray(n.commands) || $("discovery.commands must be a dense ordinary array");
-	let d = gE(n.commands, "discovery.commands");
+	let d = vE(n.commands, "discovery.commands");
 	d.length > xT && $("discovery.commands must be a bounded array");
-	let f = [...d.map((e, t) => JT(e, `discovery.commands[${t}]`)), ...t];
+	let f = [...d.map((e, t) => XT(e, `discovery.commands[${t}]`)), ...t];
 	f.length > xT && $(`discovery.commands exceeds the ${xT}-command aggregate limit`);
 	let p = /* @__PURE__ */ new Set();
 	for (let e of f) for (let t of [e.id, ...e.aliases]) p.has(t) && $(`duplicate command or alias ${t}`), p.add(t);
@@ -27486,17 +27504,17 @@ function qT(e, t) {
 		commands: Object.freeze(f)
 	});
 }
-function JT(e, t) {
-	let n = iE(e, t);
-	aE(n, [
+function XT(e, t) {
+	let n = oE(e, t);
+	sE(n, [
 		"id",
 		"aliases",
 		"lane",
 		"summary"
 	], t);
-	let r = cE(n.id, `${t}.id`);
+	let r = uE(n.id, `${t}.id`);
 	(!Array.isArray(n.aliases) || n.aliases.length > gT.limits.commandAliases) && $(`${t}.aliases must be bounded`);
-	let i = n.aliases.map((e, n) => cE(e, `${t}.aliases[${n}]`)), a = dE(n.lane, `${t}.lane`), o = sE(n.summary, gT.limits.summaryBytes, `${t}.summary`);
+	let i = n.aliases.map((e, n) => uE(e, `${t}.aliases[${n}]`)), a = pE(n.lane, `${t}.lane`), o = lE(n.summary, gT.limits.summaryBytes, `${t}.summary`);
 	return Object.freeze({
 		id: r,
 		aliases: Object.freeze(i),
@@ -27505,9 +27523,9 @@ function JT(e, t) {
 		helpOnly: !0
 	});
 }
-function YT(e, t, n) {
-	let r = iE(e, "response");
-	aE(r, [
+function ZT(e, t, n) {
+	let r = oE(e, "response");
+	sE(r, [
 		"correlation",
 		"runtime",
 		"profile",
@@ -27515,19 +27533,19 @@ function YT(e, t, n) {
 		"catalogEpoch",
 		"outcome"
 	], "response");
-	let i = cE(r.correlation, "response.correlation");
+	let i = uE(r.correlation, "response.correlation");
 	i !== t.correlation && $("response correlation does not match request");
-	let a = cE(r.runtime, "response.runtime"), o = cE(r.profile, "response.profile"), s = fE(r.revision, "response.revision"), c = fE(r.catalogEpoch, "response.catalogEpoch"), l = iE(r.outcome, "response.outcome"), u = oE(l.kind, "response.outcome.kind"), d;
+	let a = uE(r.runtime, "response.runtime"), o = uE(r.profile, "response.profile"), s = mE(r.revision, "response.revision"), c = mE(r.catalogEpoch, "response.catalogEpoch"), l = oE(r.outcome, "response.outcome"), u = cE(l.kind, "response.outcome.kind"), d;
 	if (u === "success") {
-		aE(l, [
+		sE(l, [
 			"kind",
 			"value",
 			"receiptRefs"
 		], "response.outcome"), (!Array.isArray(l.receiptRefs) || l.receiptRefs.length > 32) && $("response receipt refs must be bounded");
-		let e = l.receiptRefs.map((e, t) => cE(e, `response.receiptRefs[${t}]`));
-		n !== void 0 && ZT(l.value, n.result, "$result"), d = Object.freeze({
+		let e = l.receiptRefs.map((e, t) => uE(e, `response.receiptRefs[${t}]`));
+		n !== void 0 && $T(l.value, n.result, "$result"), d = Object.freeze({
 			kind: "success",
-			value: mE(l.value),
+			value: gE(l.value),
 			receiptRefs: Object.freeze(e)
 		});
 	} else u === "error" ? ((!Object.keys(l).every((e) => [
@@ -27535,11 +27553,11 @@ function YT(e, t, n) {
 		"code",
 		"message",
 		"details"
-	].includes(e)) || !rE(l, "code") || !rE(l, "message")) && $("response error has invalid fields"), n !== void 0 && rE(l, "details") && ZT(l.details, n.error, "$error"), d = Object.freeze({
+	].includes(e)) || !aE(l, "code") || !aE(l, "message")) && $("response error has invalid fields"), n !== void 0 && aE(l, "details") && $T(l.details, n.error, "$error"), d = Object.freeze({
 		kind: "error",
-		code: cE(l.code, "response.outcome.code"),
-		message: sE(l.message, 1024, "response.outcome.message"),
-		...rE(l, "details") ? { details: mE(l.details) } : {}
+		code: uE(l.code, "response.outcome.code"),
+		message: lE(l.message, 1024, "response.outcome.message"),
+		...aE(l, "details") ? { details: gE(l.details) } : {}
 	})) : $("response outcome kind is invalid");
 	return Object.freeze({
 		correlation: i,
@@ -27550,135 +27568,135 @@ function YT(e, t, n) {
 		outcome: d
 	});
 }
-function XT(e, t) {
-	ZT(e, t, "$");
+function QT(e, t) {
+	$T(e, t, "$");
 }
-function ZT(e, t, n, r = 0) {
+function $T(e, t, n, r = 0) {
 	switch (r > ST && $(`${n} exceeds wire depth`), t.kind) {
 		case "boolean":
 			typeof e != "boolean" && $(`${n} must be boolean`);
 			return;
 		case "decimalU64":
-			fE(e, n);
+			mE(e, n);
 			return;
 		case "integer":
 			(typeof e != "number" || !Number.isSafeInteger(e) || t.minimum !== void 0 && e < t.minimum || t.maximum !== void 0 && e > t.maximum) && $(`${n} must be a bounded integer`);
 			return;
 		case "string": {
-			let r = sE(e, t.maximumBytes, n);
-			t.pattern === "identifier" && lE(r, n);
+			let r = lE(e, t.maximumBytes, n);
+			t.pattern === "identifier" && dE(r, n);
 			return;
 		}
 		case "array":
-			(!Array.isArray(e) || e.length > t.maximumItems) && $(`${n} must be a bounded array`), gE(e, n).forEach((e, i) => ZT(e, t.items, `${n}[${i}]`, r + 1));
+			(!Array.isArray(e) || e.length > t.maximumItems) && $(`${n} must be a bounded array`), vE(e, n).forEach((e, i) => $T(e, t.items, `${n}[${i}]`, r + 1));
 			return;
 		case "enum":
 			(typeof e != "string" || !t.values.includes(e)) && $(`${n} must be an admitted enum value`);
 			return;
 		case "taggedUnion": {
-			let i = hE(e, n);
-			rE(i, t.tag) || $(`${n}.${t.tag} is required`);
-			let a = oE(i[t.tag], `${n}.${t.tag}`);
-			rE(t.variants, a) || $(`${n}.${t.tag} is invalid`);
+			let i = _E(e, n);
+			aE(i, t.tag) || $(`${n}.${t.tag} is required`);
+			let a = cE(i[t.tag], `${n}.${t.tag}`);
+			aE(t.variants, a) || $(`${n}.${t.tag} is invalid`);
 			let o = t.variants[a];
-			ZT(e, o, n, r + 1);
+			$T(e, o, n, r + 1);
 			return;
 		}
 		case "opaqueJson":
-			_E(e, t.maximumBytes, t.maximumNodes, n);
+			yE(e, t.maximumBytes, t.maximumNodes, n);
 			return;
 		case "object": {
-			let i = hE(e, n), a = t.fields;
-			for (let e of Object.keys(i)) rE(a, e) || $(`${n}.${e} is not allowed`);
+			let i = _E(e, n), a = t.fields;
+			for (let e of Object.keys(i)) aE(a, e) || $(`${n}.${e} is not allowed`);
 			for (let [e, t] of Object.entries(a)) {
-				if (!rE(i, e)) {
+				if (!aE(i, e)) {
 					t.required && $(`${n}.${e} is required`);
 					continue;
 				}
-				ZT(i[e], t.value, `${n}.${e}`, r + 1);
+				$T(i[e], t.value, `${n}.${e}`, r + 1);
 			}
 			return;
 		}
 	}
 }
-function QT() {
+function eE() {
 	return typeof crypto < "u" && "randomUUID" in crypto ? crypto.randomUUID().toLowerCase() : `${Date.now()}-${Math.random()}`.replace(/[^a-z0-9.-]/gu, "-");
 }
-function $T(e) {
+function tE(e) {
 	if (e?.aborted) throw new TT("cancelled", "Developer command was cancelled");
 }
-function eE(e) {
-	return e instanceof TT ? e : e instanceof DOMException && e.name === "AbortError" ? new TT("cancelled", "Developer command was cancelled", { cause: e }) : new TT("unavailable", `Developer command adapter is unavailable: ${tE(e)}`, { cause: e instanceof Error ? e : void 0 });
+function nE(e) {
+	return e instanceof TT ? e : e instanceof DOMException && e.name === "AbortError" ? new TT("cancelled", "Developer command was cancelled", { cause: e }) : new TT("unavailable", `Developer command adapter is unavailable: ${rE(e)}`, { cause: e instanceof Error ? e : void 0 });
 }
-function tE(e) {
+function rE(e) {
 	return e instanceof Error ? e.message : String(e);
 }
 function $(e) {
 	throw new TT("malformed", e);
 }
-function nE(e) {
+function iE(e) {
 	throw new TT("invalid_schema", e);
 }
-function rE(e, t) {
+function aE(e, t) {
 	return Object.prototype.hasOwnProperty.call(e, t);
 }
-function iE(e, t) {
-	return hE(e, t);
-}
-function aE(e, t, n) {
-	(Object.keys(e).some((e) => !t.includes(e)) || t.some((t) => !rE(e, t))) && $(`${n} has unexpected or missing fields`);
-}
 function oE(e, t) {
-	return typeof e != "string" && $(`${t} must be string`), e;
+	return _E(e, t);
 }
 function sE(e, t, n) {
-	let r = oE(e, n);
-	return new TextEncoder().encode(r).byteLength > t && $(`${n} exceeds ${t} bytes`), r;
+	(Object.keys(e).some((e) => !t.includes(e)) || t.some((t) => !aE(e, t))) && $(`${n} has unexpected or missing fields`);
 }
 function cE(e, t) {
-	let n = sE(e, gT.identity.commandBytes, t);
-	return lE(n, t), n;
+	return typeof e != "string" && $(`${t} must be string`), e;
 }
-function lE(e, t) {
-	/^[a-z0-9._:-]+$/u.test(e) || $(`${t} must use lower-case command identity characters`);
+function lE(e, t, n) {
+	let r = cE(e, n);
+	return new TextEncoder().encode(r).byteLength > t && $(`${n} exceeds ${t} bytes`), r;
 }
 function uE(e, t) {
-	return e !== vT && $(`${t} is unsupported`), vT;
+	let n = lE(e, gT.identity.commandBytes, t);
+	return dE(n, t), n;
 }
 function dE(e, t) {
-	let n = oE(e, t);
-	return gT.lanes.includes(n) || $(`${t} is invalid`), n;
+	/^[a-z0-9._:-]+$/u.test(e) || $(`${t} must use lower-case command identity characters`);
 }
 function fE(e, t) {
-	let n = sE(e, 20, t);
-	return (!/^(?:0|[1-9][0-9]*)$/u.test(n) || BigInt(n) > 18446744073709551615n) && $(`${t} must be an unsigned 64-bit decimal string`), n;
+	return e !== vT && $(`${t} is unsupported`), vT;
 }
 function pE(e, t) {
+	let n = cE(e, t);
+	return gT.lanes.includes(n) || $(`${t} is invalid`), n;
+}
+function mE(e, t) {
+	let n = lE(e, 20, t);
+	return (!/^(?:0|[1-9][0-9]*)$/u.test(n) || BigInt(n) > 18446744073709551615n) && $(`${t} must be an unsigned 64-bit decimal string`), n;
+}
+function hE(e, t) {
 	return BigInt(e) < BigInt(t);
 }
-function mE(e) {
+function gE(e) {
 	try {
 		return JSON.parse(JSON.stringify(e));
 	} catch (e) {
 		throw new TT("malformed", "Developer command values must be JSON-compatible", { cause: e instanceof Error ? e : void 0 });
 	}
 }
-function hE(e, t) {
+function _E(e, t) {
 	(typeof e != "object" || !e || Array.isArray(e)) && $(`${t} must be an object`);
 	let n = e;
 	Object.getPrototypeOf(n) !== Object.prototype && $(`${t} must use the ordinary object prototype`), ("toJSON" in n || Object.getOwnPropertySymbols(n).length > 0) && $(`${t} has non-JSON hooks`);
 	let r = Object.getOwnPropertyDescriptors(n);
 	return Object.values(r).some((e) => !e.enumerable || !("value" in e)) && $(`${t} has accessor or hidden property`), n;
 }
-function gE(e, t) {
+function vE(e, t) {
 	Array.isArray(e) || $(`${t} must be an array`), Object.getPrototypeOf(e) !== Array.prototype && $(`${t} must use the ordinary array prototype`), ("toJSON" in e || Object.getOwnPropertySymbols(e).length > 0) && $(`${t} has non-JSON hooks`);
 	let n = Object.getOwnPropertyDescriptors(e);
 	for (let [e, r] of Object.entries(n)) e === "length" ? (r.enumerable || !("value" in r)) && $(`${t} has an invalid length property`) : (!r.enumerable || !("value" in r)) && $(`${t} has accessor or hidden property`);
 	Object.keys(e).length !== e.length && $(`${t} must be a dense ordinary array`);
-	for (let n = 0; n < e.length; n += 1) rE(e, n) || $(`${t} must be a dense ordinary array`);
+	for (let n = 0; n < e.length; n += 1) aE(e, n) || $(`${t} must be a dense ordinary array`);
 	return e;
 }
-function _E(e, t, n, r) {
+function yE(e, t, n, r) {
 	let i = /* @__PURE__ */ new Set(), a = 0, o = (e, t) => {
 		if ((t > ST || ++a > n) && $(`${r} exceeds opaque JSON bounds`), !(e === null || typeof e == "string" || typeof e == "boolean")) {
 			if (typeof e == "number") {
@@ -27686,13 +27704,13 @@ function _E(e, t, n, r) {
 				return;
 			}
 			if ((typeof e != "object" || i.has(e)) && $(`${r} is not acyclic JSON`), i.add(e), Array.isArray(e)) {
-				gE(e, r), e.forEach((e) => o(e, t + 1));
+				vE(e, r), e.forEach((e) => o(e, t + 1));
 				return;
 			}
-			hE(e, r), Object.values(e).forEach((e) => o(e, t + 1));
+			_E(e, r), Object.values(e).forEach((e) => o(e, t + 1));
 		}
 	};
 	o(e, 0), new TextEncoder().encode(JSON.stringify(e)).byteLength > t && $(`${r} exceeds opaque JSON bytes`);
 }
 //#endregion
-export { Nw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES, Pw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT, Fw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES, Qw as RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION, vT as RUSTY_DEVELOPER_COMMAND_PROTOCOL_VERSION, yT as RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS, Iw as RustyApplicationContentError, $w as RustyApplicationHostError, TT as RustyDeveloperCommandClientError, ET as createRustyDeveloperCommandClient, tT as mountRustyApplication, Kw as mountRustyDeveloperCommandShell, XT as validateRustyDeveloperCommandWireValue };
+export { Nw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES, Pw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT, Fw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES, Qw as RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION, vT as RUSTY_DEVELOPER_COMMAND_PROTOCOL_VERSION, yT as RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS, Iw as RustyApplicationContentError, $w as RustyApplicationHostError, TT as RustyDeveloperCommandClientError, ET as createRustyDeveloperCommandClient, tT as mountRustyApplication, Kw as mountRustyDeveloperCommandShell, QT as validateRustyDeveloperCommandWireValue };
