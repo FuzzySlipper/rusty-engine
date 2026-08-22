@@ -119,38 +119,7 @@ pub fn validate_state_against_catalog(
         )?;
     }
     for (entity, component) in state.components::<InventoryComponent>()? {
-        ensure_catalog_version(
-            catalog,
-            entity,
-            InventoryComponent::LABEL,
-            component.catalog_version(),
-        )?;
-        for limit in component.capacity_limits() {
-            ensure_reference(
-                catalog.capacity_metric(limit.metric()).is_some(),
-                entity,
-                InventoryComponent::LABEL,
-                "capacity metric",
-                limit.metric().to_string(),
-            )?;
-        }
-        for stack in component.stacks() {
-            let definition = catalog.item(&stack.definition).ok_or_else(|| {
-                MechanicsError::InvalidCatalogReference {
-                    entity,
-                    component: InventoryComponent::LABEL,
-                    namespace: "item",
-                    reference: stack.definition.to_string(),
-                }
-            })?;
-            ensure_reference(
-                definition.kind == ItemKind::Fungible,
-                entity,
-                InventoryComponent::LABEL,
-                "fungible item",
-                stack.definition.to_string(),
-            )?;
-        }
+        crate::item::validate_inventory_catalog_compatibility(catalog, entity, component)?;
         crate::item::validate_inventory_state(state, catalog, entity, component)?;
     }
     for (owner, component) in state.components::<EquipmentComponent>()? {

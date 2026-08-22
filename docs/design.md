@@ -108,10 +108,14 @@ snapshot restoration.
 A service-specific prepared operation captures the revisions of exactly the component slots and
 relationship facts it reads, validates its complete candidate before publishing, and reports one
 typed service receipt. Ordinary operations stage only the exact component values they own; they do
-not clone the complete `EntityState`. A true cross-slot invariant must either use an explicit
-valid-state precondition/operation split or first earn the smallest reusable atomic publication seam
-at `entity-state`. It must not replace narrow guards with the global revision merely because every
-component shares one store, nor turn the store into a generic callback transaction language.
+not clone the complete `EntityState`. `ItemService::materialize_unique` is the narrow exception:
+it composes established entity admission, one catalog-derived item-component attachment, and one
+containment relation on a cloned candidate because the three existing owners have no smaller shared
+publication primitive. It does not generalize that exception into a transaction language. A true
+cross-slot invariant must otherwise use an explicit valid-state precondition/operation split or
+first earn the smallest reusable atomic publication seam at `entity-state`. It must not replace
+narrow guards with the global revision merely because every component shares one store, nor turn the
+store into a generic callback transaction language.
 Transform parenting, containment, and source ancestry remain explicit relationship maps rather than
 components.
 
@@ -273,6 +277,16 @@ fact, while a joined `InventoryView` reads the owner's stack component and only 
 direct containment children. Non-item children do not become inventory entries, and unrelated
 entities are never scanned. Because an item is an ordinary entity, it may also carry normal tracks,
 active effects, or downstream components without creating a second item-state system.
+
+`ItemService::materialize_unique` is the narrow atomic admission path when a downstream product
+has already chosen one exact entity identity, definition, and containment owner. It derives the
+`ItemComponent` from the admitted unique catalog definition, then stages ordinary entity admission,
+component attachment, and containment on a cloned candidate before publishing it. Its receipt
+preserves catalog identity plus the actual admission, attachment, and containment revisions; it
+does not misrepresent those distinct owner steps as one entity-state mutation. The caller retains
+ID allocation, names, source/label choice, lifecycle, loot/loadout policy, inventory capacity
+policy, and any later transfer or equipment decision. The supplied entity definition must not carry
+containment: the request's explicit owner is the one ownership relation materialized.
 
 `EquipmentComponent` stores canonical slot-to-item references, never ownership. Multi-slot
 equipment repeats the same item entity across its required slots, while classification,
