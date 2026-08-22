@@ -13,8 +13,11 @@ asset-catalog  authored-scene  entity-state  gameplay-mechanics  engine-spatial 
                                 rusty-inspect CLI
 ```
 
-No runtime crate depends on `engine-inspector`. The leaf may combine immutable views because that
-dependency direction cannot give it authority over the owners it observes.
+No runtime crate depends on `engine-inspector`. The optional
+`developer-command-standard` tooling composition leaf and the complete
+`rusty-engine` facade may consume it; neither is a runtime owner and no owner
+depends back. The inspector may combine immutable views because that dependency
+direction cannot give it authority over the owners it observes.
 
 ## Structured diagnostic contract
 

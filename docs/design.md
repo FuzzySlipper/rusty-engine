@@ -526,6 +526,17 @@ values serialize only as output for a chosen adapter; they are not admitted
 wire input. See [Developer commands](code-map/developer-command.md) for the
 public composition and focused gates.
 
+`developer-command-standard` is a separate optional tooling leaf for the
+Engine-owned standard gameplay route. It leaves `developer-command` generic
+and binds no world itself. Its inspect commands call the existing
+`engine-inspector` projections, its guarded admin commands retain the exact
+`gameplay-mechanics` request, receipt, and error types, and its preview/play
+helpers select `ResolutionMode::Preview` or `ResolutionMode::Apply` on the
+existing `StandardResolver`. A downstream product still owns the policy,
+transaction, queue, safe point, command authorization, and all product-typed
+attempt payloads. The preview helper never creates a publication path; the
+product transaction is the sole apply owner.
+
 ## Spatial authority and derived mechanisms
 
 `engine-spatial::VoxelCollisionScene` holds canonical material voxels alongside projections derived

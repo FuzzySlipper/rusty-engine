@@ -66,6 +66,7 @@ downstream game policy and orchestration
         +--> gameplay-rules <--> rules/ (optional build-time authoring)
         +--> gameplay-standard (optional static readouts beside exact owner APIs)
         +--> developer-command (optional typed developer-command envelopes and binding port)
+        +--> developer-command-standard (optional standard gameplay command descriptors and owner adapters)
         +--> environment-authoring --> authored-scene
         +--> content-store / asset-catalog / asset-import
         +--> engine-spatial --> core-* / svc-*
@@ -95,6 +96,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 | Optional opaque rules packages, TypeScript authoring, exact dependencies, provenance, canonicalization, and diagnostics | [Gameplay rules](code-map/gameplay-rules.md) |
 | Incubating static gameplay-capability readouts and explicit module selection | [Gameplay standard](code-map/gameplay-standard.md) |
 | Typed developer-command envelopes, profiles, discovery, provenance, and explicit sync safe-point binding | [Developer commands](code-map/developer-command.md) |
+| Standard gameplay command descriptors, inspection adapters, standard resolver-mode helpers, and typed mechanics admin adapters | [Standard developer commands](code-map/developer-command-standard.md) |
 | Canonical voxel space, collision, navigation, mesh, motion, triggers, edits | [Spatial mechanisms](code-map/spatial-mechanisms.md) |
 | Incremental voxel mesh dirty sets and stable retained chunk lifecycle | [Chunk-granular voxel mesh updates](topics/voxel/chunk-granular-updates.md) |
 | Canonical voxel chunk admit/replace/evict transactions and leases | [Canonical voxel chunk residency](topics/voxel/chunk-residency.md) |

@@ -173,7 +173,14 @@ def find_violations(metadata: dict[str, Any]) -> list[str]:
                         + render_path(source, target, parents, names)
                     )
 
-        if source_name not in {"engine-inspector", "rusty-engine"}:
+        # `developer-command-standard` is the explicit tooling composition leaf
+        # for Engine-owned inspection command modules. Like the facade, it may
+        # depend on the read-only inspector but no owner may depend back.
+        if source_name not in {
+            "engine-inspector",
+            "developer-command-standard",
+            "rusty-engine",
+        }:
             for target in reachable:
                 if names[target] == "engine-inspector":
                     violations.add(

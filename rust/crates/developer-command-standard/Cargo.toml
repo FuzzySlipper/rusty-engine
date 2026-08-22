@@ -1,0 +1,16 @@
+[package]
+name = "developer-command-standard"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+core-ids.workspace = true
+developer-command.workspace = true
+engine-inspector.workspace = true
+entity-state.workspace = true
+gameplay-mechanics.workspace = true
+gameplay-resolution.workspace = true
+gameplay-standard.workspace = true
+
+[lints]
+workspace = true

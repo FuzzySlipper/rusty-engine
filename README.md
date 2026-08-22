@@ -120,7 +120,7 @@ provide only project data, `.rusty-studio.json`, and their Rust adapter.
 
 ## Repository layout
 
-Workspace inventory: **35 Cargo workspace crates, 2 public gameplay-rules
+Workspace inventory: **37 Cargo workspace crates, 2 public gameplay-rules
 packages, 4 public renderer packages, and 1 Studio application plus 5 Studio
 libraries.**
 
@@ -134,6 +134,7 @@ rust/crates/
   gameplay-resolution       bounded downstream-owned resolution lifecycle and receipts
   gameplay-rules            optional opaque package admission, provenance, diagnostics, resolution
   gameplay-standard         incubating metadata readouts beside exact gameplay-owner APIs
+  developer-command-standard optional standard gameplay command descriptors and owner adapters
   engine-spatial            canonical voxel space and synchronized derived mechanisms
   content-store             manifests, source batches, prefabs, load/save plans, write sets
   asset-catalog             asset versions, locks, dependencies, materials, fallbacks

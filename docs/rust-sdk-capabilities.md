@@ -21,6 +21,7 @@ remain independently meaningful and no owner may depend back on `rusty-engine`.
 | `core-time` | `rusty_engine::core_time` |
 | `core-voxel` | `rusty_engine::core_voxel` |
 | `developer-command` | `rusty_engine::developer_command` |
+| `developer-command-standard` | `rusty_engine::developer_command_standard` |
 | `engine-inspector` | `rusty_engine::engine_inspector` |
 | `engine-spatial` | `rusty_engine::engine_spatial` |
 | `entity-state` | `rusty_engine::entity_state` |

@@ -555,6 +555,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "developer-command-standard"
+version = "0.1.0"
+dependencies = [
+ "core-ids",
+ "developer-command",
+ "engine-inspector",
+ "entity-state",
+ "gameplay-mechanics",
+ "gameplay-resolution",
+ "gameplay-standard",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2744,6 +2757,7 @@ dependencies = [
  "core-time",
  "core-voxel",
  "developer-command",
+ "developer-command-standard",
  "engine-inspector",
  "engine-spatial",
  "entity-state",
