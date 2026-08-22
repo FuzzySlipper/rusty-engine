@@ -9,7 +9,7 @@ import {
   type RustyDeveloperCommandRequest,
   type RustyDeveloperCommandValueSchema,
   type RustyDeveloperCommandWireSchema,
-  RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS,
+  RUSTY_STANDARD_HOST_WIRE_SCHEMAS,
   validateRustyDeveloperCommandWireValue,
 } from './index.js';
 
@@ -157,26 +157,29 @@ test('discovery rejects sparse and inherited envelope arrays', async () => {
   }
 });
 
-test('product extensions must be namespaced and may provide their own real codec', async () => {
+test('schema-only extensions attach codecs to authoritative discovered product commands', async () => {
   const client = createRustyDeveloperCommandClient({
-    adapter: adapter(),
+    adapter: {
+      ...adapter(),
+      discover: async () => ({
+        protocolVersion: 1, runtime: 'test-runtime', profile: 'developer', permittedLanes: ['inspect', 'play'],
+        revision: '4', catalogEpoch: '7', contractFingerprint: 'test-contract', commands: [
+          { id: 'standard.inspect.entity', aliases: ['inspect.entity'], lane: 'inspect', summary: 'Inspect one entity.' },
+          { id: 'product.play.attack', aliases: ['product.attack'], lane: 'play', summary: 'Product play command.' },
+        ],
+      }),
+    },
     extensions: [{
       namespace: 'product',
-      descriptors: [{ id: 'product.play.attack', aliases: ['product.attack'], lane: 'play', summary: 'Product play command.' }],
-      schemas: { 'product.play.attack': inspectSchema },
+      schemas: [{ command: 'product.play.attack', lane: 'play', profile: 'developer', schema: inspectSchema }],
     }],
   });
   await client.discover();
   assert.equal(client.descriptor('product.attack')?.id, 'product.play.attack');
-  assert.throws(() => createRustyDeveloperCommandClient({ adapter: adapter(), extensions: [{
-    namespace: 'product', descriptors: [{ id: 'wrong.command', aliases: [], lane: 'play', summary: 'Wrong.' }], schemas: {},
-  }] }), RustyDeveloperCommandClientError);
-});
-
-test('discovery rejects aliases colliding across base and extension commands', async () => {
+  assert.notEqual(client.schema('product.play.attack'), null);
   assert.throws(() => createRustyDeveloperCommandClient({
     adapter: adapter(),
-    extensions: [{ namespace: 'product', descriptors: [{ id: 'product.play.attack', aliases: ['inspect.entity'], lane: 'play', summary: 'Conflict.' }], schemas: {} }],
+    extensions: [{ namespace: 'product', descriptors: [], schemas: [] } as unknown as RustyDeveloperCommandExtension],
   }), (cause: unknown) => cause instanceof RustyDeveloperCommandClientError && cause.code === 'invalid_extension');
 });
 
@@ -193,15 +196,25 @@ test('help-only commands and unavailable adapters cannot fabricate an invocation
 });
 
 test('generated standard schemas admit every source variant and reject bad policy and opaque values', () => {
-  const stat = RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS['standard.admin.stat.set-base']!;
+  const stat = RUSTY_STANDARD_HOST_WIRE_SCHEMAS['standard.admin.stat.set-base']!;
   for (const source of [
     { kind: 'intrinsic', entity: '1', instance: 'source' },
     { kind: 'effect', entity: '1', effect: 'effect', stack: 1, source: 'source' },
     { kind: 'equippedItem', owner: '1', item: '2', source: 'source' },
     { kind: 'request', operation: 'operation', instance: 'source' },
   ]) validateRustyDeveloperCommandWireValue({ operation: 'operation', source, entity: '1', stat: 'stat', base: 1 }, stat.request);
-  const track = RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS['standard.admin.track.set']!;
+  const track = RUSTY_STANDARD_HOST_WIRE_SCHEMAS['standard.admin.track.set']!;
   assert.throws(() => validateRustyDeveloperCommandWireValue({ operation: 'operation', source: { kind: 'request', operation: 'operation', instance: 'source' }, entity: '1', track: 'track', value: 1, policy: 'freestyle' }, track.request));
+  const trackReceipt = {
+    catalogVersion: 'catalog', catalogFingerprint: 'fingerprint', operation: 'operation',
+    source: { kind: 'request', operation: 'operation', instance: 'source' }, entity: '1', track: 'track',
+    policy: 'clampToBounds', decision: 'clampedToBounds', requested: 99, before: 10, after: 20,
+    minimum: 0, maximum: 20, observedTracksRevision: '4', committedTracksRevision: '5',
+    observedRevisions: [{ entity: '1', component: 'rusty.mechanics.tracks', revision: '4' }],
+    sourceCost: { intrinsicEntriesVisited: 0, effectEntriesVisited: 0, effectSourceActivationsVisited: 0, equipmentEntriesVisited: 0, itemComponentsRead: 0, requestEntriesVisited: 1 },
+  };
+  validateRustyDeveloperCommandWireValue(trackReceipt, track.result);
+  assert.throws(() => validateRustyDeveloperCommandWireValue({ ...trackReceipt, unexpected: true }, track.result));
   const circular: { self?: unknown } = {}; circular.self = circular;
   assert.throws(() => validateRustyDeveloperCommandWireValue(circular, { kind: 'opaqueJson', maximumBytes: 32, maximumNodes: 4 }));
 });
@@ -444,8 +457,7 @@ test('schema catalog admission rejects cyclic, over-depth, over-node, and invali
       adapter: adapter(),
       extensions: [{
         namespace: 'product',
-        descriptors: [{ id: 'product.play.attack', aliases: [], lane: 'play', summary: 'Attack.' }],
-        schemas: { 'product.play.attack': extensionSchema },
+        schemas: [{ command: 'product.play.attack', lane: 'play', profile: 'developer', schema: extensionSchema }],
       }],
     }),
     (cause: unknown) => cause instanceof RustyDeveloperCommandClientError && cause.code === 'invalid_schema',
@@ -520,49 +532,64 @@ test('schema field and tagged-union lookups cannot use inherited constructor nam
   );
 });
 
-test('extension descriptors are fully admitted and aggregate with discovered commands', async () => {
-  const extension = (descriptor: Record<string, unknown> = {
-    id: 'product.play.attack', aliases: ['product.attack'], lane: 'play', summary: 'Attack.',
-  }): RustyDeveloperCommandExtension => ({
-    namespace: 'product', descriptors: [descriptor], schemas: {},
-  } as unknown as RustyDeveloperCommandExtension);
-  const invalid = [
-    { id: 'Product.play.attack', aliases: [], lane: 'play', summary: 'Bad identity.' },
-    { id: `product.${'x'.repeat(130)}`, aliases: [], lane: 'play', summary: 'Too long.' },
-    { id: 'product.play.attack', aliases: Array.from({ length: 9 }, (_, index) => `product.alias${index}`), lane: 'play', summary: 'Too many aliases.' },
-    { id: 'product.play.attack', aliases: ['Product.alias'], lane: 'play', summary: 'Bad alias.' },
-    { id: 'product.play.attack', aliases: [], lane: 'not-a-lane', summary: 'Bad lane.' },
-    { id: 'product.play.attack', aliases: [], lane: 'play', summary: 'x'.repeat(257) },
-    { id: 'product.play.attack', aliases: ['product.play.attack'], lane: 'play', summary: 'Self collision.' },
-  ];
-  for (const descriptor of invalid) {
-    assert.throws(
-      () => createRustyDeveloperCommandClient({ adapter: adapter(), extensions: [extension(descriptor)] }),
-      (cause: unknown) => cause instanceof RustyDeveloperCommandClientError && cause.code === 'invalid_extension',
-    );
-  }
+test('schema-only extensions reject duplicate, unavailable, lane, and profile drift', async () => {
+  const binding = { command: 'product.play.attack', lane: 'play' as const, profile: 'developer', schema: inspectSchema };
   assert.throws(
     () => createRustyDeveloperCommandClient({ adapter: adapter(), extensions: [
-      extension(), extension({ id: 'product.play.other', aliases: ['product.attack'], lane: 'play', summary: 'Alias collision.' }),
+      { namespace: 'product', schemas: [binding, binding] },
     ] }),
     (cause: unknown) => cause instanceof RustyDeveloperCommandClientError && cause.code === 'invalid_extension',
   );
+  const discovery = (command = 'product.play.attack', lane = 'play', profile = 'developer') => ({
+    protocolVersion: 1, runtime: 'test-runtime', profile, permittedLanes: ['inspect', 'play'],
+    revision: '4', catalogEpoch: '7', contractFingerprint: 'test-contract', commands: [
+      { id: 'standard.inspect.entity', aliases: [], lane: 'inspect', summary: 'Inspect.' },
+      { id: command, aliases: [], lane, summary: 'Product.' },
+    ],
+  });
+  for (const snapshot of [discovery('product.play.other'), discovery('product.play.attack', 'inspect'), discovery('product.play.attack', 'play', 'other')]) {
+    const client = createRustyDeveloperCommandClient({
+      adapter: { ...adapter(), discover: async () => snapshot },
+      extensions: [{ namespace: 'product', schemas: [binding] }],
+    });
+    await assert.rejects(client.discover(), (cause: unknown) =>
+      cause instanceof RustyDeveloperCommandClientError && cause.code === 'invalid_extension');
+  }
+});
 
-  const commands = Array.from({ length: 256 }, (_, index) => ({
-    id: `standard.inspect.entity${index}`, aliases: [], lane: 'inspect', summary: 'Entity.',
-  }));
-  const aggregate = createRustyDeveloperCommandClient({
+test('schema reconciliation removal revokes cached descriptor and codec before any execute', async () => {
+  let includeProduct = true;
+  let executeCount = 0;
+  const client = createRustyDeveloperCommandClient({
     adapter: {
-      ...adapter(),
       discover: async () => ({
         protocolVersion: 1, runtime: 'test-runtime', profile: 'developer', permittedLanes: ['inspect', 'play'],
-        revision: '4', catalogEpoch: '7', contractFingerprint: 'test-contract', commands,
+        revision: includeProduct ? '4' : '5', catalogEpoch: includeProduct ? '7' : '8', contractFingerprint: includeProduct ? 'with-product' : 'without-product',
+        commands: [
+          { id: 'standard.inspect.entity', aliases: [], lane: 'inspect', summary: 'Inspect.' },
+          ...(includeProduct ? [{ id: 'product.play.attack', aliases: ['product.attack'], lane: 'play', summary: 'Attack.' }] : []),
+        ],
       }),
+      execute: async (request) => {
+        executeCount += 1;
+        return { correlation: request.correlation, runtime: request.runtime, profile: request.expected.profile,
+          revision: request.expected.revision, catalogEpoch: request.expected.catalogEpoch,
+          outcome: { kind: 'success', value: request.payload, receiptRefs: [] } };
+      },
     },
-    extensions: [extension()],
+    extensions: [{ namespace: 'product', schemas: [{ command: 'product.play.attack', lane: 'play', profile: 'developer', schema: inspectSchema }] }],
   });
-  await assert.rejects(aggregate.discover(), (cause: unknown) =>
-    cause instanceof RustyDeveloperCommandClientError && cause.code === 'malformed');
+  await client.discover();
+  assert.equal(client.descriptor('product.attack')?.id, 'product.play.attack');
+  assert.notEqual(client.schema('product.play.attack'), null);
+  includeProduct = false;
+  await assert.rejects(client.discover(), (cause: unknown) =>
+    cause instanceof RustyDeveloperCommandClientError && cause.code === 'invalid_extension');
+  assert.equal(client.descriptor('product.attack'), null);
+  assert.equal(client.schema('product.play.attack'), null);
+  await assert.rejects(client.execute('product.play.attack', { entity: 1 }), (cause: unknown) =>
+    cause instanceof RustyDeveloperCommandClientError && cause.code === 'invalid_extension');
+  assert.equal(executeCount, 0);
 });
 
 test('concurrent discovery rejects older or mismatched late snapshots without regressing context', async () => {

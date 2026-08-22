@@ -28,8 +28,9 @@ pub use resolution::{
 };
 pub use wire::{
     standard_host_wire_schemas_json, HostEffectApplyRequest, HostEffectRemovalRequest,
-    HostSourceIdentity, HostStatBaseRequest, HostTrackSetPolicy, HostTrackSetRequest,
-    HostWireError,
+    HostEntityRequest, HostObservedComponentRevision, HostSourceCollectionCost, HostSourceIdentity,
+    HostStatBaseRequest, HostTrackSetDecision, HostTrackSetPolicy, HostTrackSetReceipt,
+    HostTrackSetRequest, HostWireError,
 };
 
 #[cfg(test)]

@@ -388,11 +388,16 @@ test('public application-host console invokes inspect, play, and admin without i
 
   await command.selectOption('standard.inspect.entity');
   await expect(parameters).toBeHidden();
+  const inspectEntity = shell.locator('[data-developer-command-fields] input[data-command-field="entity"]');
+  const dispatchesBeforeNoncanonicalInspect = await page.evaluate(() => window.__rustyDeveloperCommandExecuteCount);
+  await inspectEntity.fill('00');
   await shell.getByRole('button', { name: 'Run' }).click();
-  await expect(shell.locator('[data-developer-command-status]')).toContainText('required');
+  await expect(shell.locator('[data-developer-command-status]')).toContainText('Failed');
+  expect(await page.evaluate(() => window.__rustyDeveloperCommandExecuteCount))
+    .toBe(dispatchesBeforeNoncanonicalInspect);
   await assertPublishedSurfaceRemains(page, before);
 
-  await shell.locator('[data-developer-command-fields] input[data-command-field="entity"]').fill('7');
+  await inspectEntity.fill('7');
   await shell.getByRole('button', { name: 'Run' }).click();
   await expect(shell.locator('[data-developer-command-status]')).toContainText('Success');
 

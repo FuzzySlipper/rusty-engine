@@ -14,6 +14,7 @@ export {
 } from './developer-command-shell.js';
 export {
   RUSTY_DEVELOPER_COMMAND_PROTOCOL_VERSION,
+  RUSTY_STANDARD_HOST_WIRE_SCHEMAS,
   RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS,
   RustyDeveloperCommandClientError,
   createRustyDeveloperCommandClient,
@@ -32,6 +33,7 @@ export type {
   RustyDeveloperCommandRequest,
   RustyDeveloperCommandResponse,
   RustyDeveloperCommandSequence,
+  RustyDeveloperCommandSchemaBinding,
   RustyDeveloperCommandValueSchema,
   RustyDeveloperCommandWireField,
   RustyDeveloperCommandWireSchema,

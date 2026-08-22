@@ -8,7 +8,9 @@ import { GENERATED_STANDARD_HOST_WIRE } from './generated-standard-host-wire.js'
  */
 export const RUSTY_DEVELOPER_COMMAND_PROTOCOL_VERSION = GENERATED_DEVELOPER_COMMAND_CONTRACT.protocolVersion;
 /** Exact schemas generated from developer-command-standard host DTOs. */
-export const RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS = GENERATED_STANDARD_HOST_WIRE.commands;
+export const RUSTY_STANDARD_HOST_WIRE_SCHEMAS = GENERATED_STANDARD_HOST_WIRE.commands;
+/** @deprecated Use `RUSTY_STANDARD_HOST_WIRE_SCHEMAS`; the host wire also includes inspect. */
+export const RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS = RUSTY_STANDARD_HOST_WIRE_SCHEMAS;
 const MAX_HISTORY = GENERATED_DEVELOPER_COMMAND_CONTRACT.limits.historyEntries;
 const MAX_SEQUENCE = 128;
 const MAX_COMMANDS = 256;
@@ -24,8 +26,8 @@ export class RustyDeveloperCommandClientError extends Error {
     }
 }
 export function createRustyDeveloperCommandClient(options) {
-    const extensionDescriptors = composeDescriptors(options.extensions ?? []);
-    const schemas = composeSchemas(options.schemas ?? {}, options.extensions ?? []);
+    const schemaAttachments = composeSchemas(options.schemas ?? {}, options.extensions ?? []);
+    const schemas = schemaAttachments.schemas;
     const issued = new Set();
     const entries = [];
     const correlation = options.createCorrelation ?? (() => `command-${cryptoRandom()}`);
@@ -68,7 +70,21 @@ export function createRustyDeveloperCommandClient(options) {
         }
         requireActive();
         throwIfAborted(signal);
-        const candidate = decodeDiscovery(raw, extensionDescriptors);
+        let candidate;
+        try {
+            candidate = decodeDiscovery(raw, schemaAttachments);
+        }
+        catch (cause) {
+            // A malformed or unreconciled discovery has revoked the only current
+            // executable catalog. Keep the monotonic floor so a late stale snapshot
+            // is still rejected, but never retain descriptors/codecs from the last
+            // successful catalog after authority has denied their binding.
+            if (cause instanceof RustyDeveloperCommandClientError
+                && (cause.code === 'malformed' || cause.code === 'invalid_extension')) {
+                discovery = null;
+            }
+            throw cause;
+        }
         const current = discovery;
         const floor = discoveryFloor;
         const candidateMatchesCatalogFloor = floor !== null
@@ -95,7 +111,10 @@ export function createRustyDeveloperCommandClient(options) {
     return Object.freeze({
         discover: refresh,
         descriptor: (commandOrAlias) => resolveDescriptor(commandOrAlias),
-        schema: (command) => hasOwn(schemas, command) ? schemas[command] : null,
+        schema: (command) => {
+            const descriptor = resolveDescriptor(command);
+            return descriptor?.id === command && hasOwn(schemas, command) ? schemas[command] : null;
+        },
         history: () => Object.freeze(entries.slice()),
         exportSequence: () => Object.freeze({
             kind: 'rusty_developer_command.sequence.v1',
@@ -272,26 +291,33 @@ function discoveryFloorFromResponse(response, contractFingerprint) {
 }
 function composeSchemas(base, extensions) {
     const result = Object.create(null);
+    const extensionBindings = [];
     for (const [id, schema] of Object.entries(base)) {
         validateSchemaIdentity(id, `schema.${id}`);
         result[id] = admitWireSchema(schema, `schema.${id}`);
     }
     for (const extension of extensions) {
         const extensionRecord = extensionObject(extension, 'extension');
-        extensionExactKeys(extensionRecord, ['namespace', 'descriptors', 'schemas'], 'extension');
+        extensionExactKeys(extensionRecord, ['namespace', 'schemas'], 'extension');
         const namespace = validateExtensionNamespace(extensionRecord['namespace']);
-        const schemaRecord = extensionObject(extensionRecord['schemas'], `extension ${namespace}.schemas`);
-        for (const [id, schema] of Object.entries(schemaRecord)) {
-            const normalizedId = extensionIdentity(id, `extension schema ${id}`);
-            if (!normalizedId.startsWith(`${namespace}.`)) {
-                invalidExtension(`Extension schema ${id} escapes ${namespace}`);
+        const bindings = extensionArray(extensionRecord['schemas'], `extension ${namespace}.schemas`);
+        for (const [index, value] of bindings.entries()) {
+            const where = `extension ${namespace}.schemas[${index}]`;
+            const binding = extensionObject(value, where);
+            extensionExactKeys(binding, ['command', 'lane', 'profile', 'schema'], where);
+            const command = extensionIdentity(binding['command'], `${where}.command`);
+            if (!command.startsWith(`${namespace}.`)) {
+                invalidExtension(`${where}.command escapes ${namespace}`);
             }
-            if (hasOwn(result, normalizedId))
-                invalidExtension(`Duplicate wire schema ${normalizedId}`);
-            result[normalizedId] = admitWireSchema(schema, `extension schema ${normalizedId}`);
+            if (hasOwn(result, command))
+                invalidExtension(`Duplicate wire schema ${command}`);
+            const lane = extensionLane(binding['lane'], `${where}.lane`);
+            const profile = extensionIdentity(binding['profile'], `${where}.profile`);
+            result[command] = admitWireSchema(binding['schema'], `${where}.schema`);
+            extensionBindings.push(Object.freeze({ command, lane, profile, schema: result[command] }));
         }
     }
-    return Object.freeze(result);
+    return Object.freeze({ schemas: Object.freeze(result), extensionBindings: Object.freeze(extensionBindings) });
 }
 function admitWireSchema(value, where) {
     const context = { active: new Set(), seen: new Set(), nodes: 0 };
@@ -521,56 +547,7 @@ function extensionLane(value, where) {
         invalidExtension(`${where} is invalid`);
     return lane;
 }
-function composeDescriptors(extensions) {
-    const result = [];
-    const identities = new Set();
-    for (const extension of extensions) {
-        const extensionRecord = extensionObject(extension, 'extension');
-        extensionExactKeys(extensionRecord, ['namespace', 'descriptors', 'schemas'], 'extension');
-        const namespace = validateExtensionNamespace(extensionRecord['namespace']);
-        const descriptors = extensionArray(extensionRecord['descriptors'], `extension ${namespace}.descriptors`);
-        if (result.length + descriptors.length > MAX_COMMANDS) {
-            invalidExtension(`extensions exceed the ${MAX_COMMANDS}-command limit`);
-        }
-        descriptors.forEach((value, index) => {
-            const where = `extension ${namespace}.descriptors[${index}]`;
-            const record = extensionObject(value, where);
-            extensionExactKeys(record, ['id', 'aliases', 'lane', 'summary'], where, ['helpOnly']);
-            const id = extensionIdentity(record['id'], `${where}.id`);
-            if (!id.startsWith(`${namespace}.`))
-                invalidExtension(`${where}.id escapes ${namespace}`);
-            const aliases = extensionArray(record['aliases'], `${where}.aliases`);
-            if (aliases.length > GENERATED_DEVELOPER_COMMAND_CONTRACT.limits.commandAliases) {
-                invalidExtension(`${where}.aliases exceeds the alias limit`);
-            }
-            const normalizedAliases = aliases.map((alias, aliasIndex) => {
-                const normalized = extensionIdentity(alias, `${where}.aliases[${aliasIndex}]`);
-                if (!normalized.startsWith(`${namespace}.`))
-                    invalidExtension(`${where}.aliases[${aliasIndex}] escapes ${namespace}`);
-                return normalized;
-            });
-            const lane = extensionLane(record['lane'], `${where}.lane`);
-            const summary = extensionText(record['summary'], `${where}.summary`, GENERATED_DEVELOPER_COMMAND_CONTRACT.limits.summaryBytes);
-            const helpOnly = record['helpOnly'];
-            if (helpOnly !== undefined && typeof helpOnly !== 'boolean')
-                invalidExtension(`${where}.helpOnly must be boolean`);
-            for (const identityValue of [id, ...normalizedAliases]) {
-                if (identities.has(identityValue))
-                    invalidExtension(`duplicate command or alias ${identityValue}`);
-                identities.add(identityValue);
-            }
-            result.push(Object.freeze({
-                id,
-                aliases: Object.freeze(normalizedAliases),
-                lane,
-                summary,
-                ...(helpOnly === undefined ? {} : { helpOnly }),
-            }));
-        });
-    }
-    return Object.freeze(result);
-}
-function decodeDiscovery(value, extensionDescriptors) {
+function decodeDiscovery(value, attachments) {
     const record = object(value, 'discovery');
     exactKeys(record, GENERATED_DEVELOPER_COMMAND_CONTRACT.discoveryFields, 'discovery');
     const protocolVersion = decodeProtocolVersion(record['protocolVersion'], 'discovery.protocolVersion');
@@ -596,20 +573,27 @@ function decodeDiscovery(value, extensionDescriptors) {
     if (commandValues.length > MAX_COMMANDS)
         malformed('discovery.commands must be a bounded array');
     const commands = commandValues.map((item, index) => decodeDescriptor(item, `discovery.commands[${index}]`));
-    const combined = [...commands, ...extensionDescriptors];
-    if (combined.length > MAX_COMMANDS)
-        malformed(`discovery.commands exceeds the ${MAX_COMMANDS}-command aggregate limit`);
     const identities = new Set();
-    for (const descriptor of combined) {
+    for (const descriptor of commands) {
         for (const identityValue of [descriptor.id, ...descriptor.aliases]) {
             if (identities.has(identityValue))
                 malformed(`duplicate command or alias ${identityValue}`);
             identities.add(identityValue);
         }
     }
-    if (combined.some((command) => !permittedLanes.includes(command.lane)))
+    if (commands.some((command) => !permittedLanes.includes(command.lane)))
         malformed('discovery command lane is not permitted by its selected profile');
-    return Object.freeze({ protocolVersion, runtime, profile, permittedLanes: Object.freeze(permittedLanes), revision, catalogEpoch, contractFingerprint, commands: Object.freeze(combined) });
+    const discoveredById = new Map(commands.map((command) => [command.id, command]));
+    for (const binding of attachments.extensionBindings) {
+        const descriptor = discoveredById.get(binding.command);
+        if (descriptor === undefined)
+            invalidExtension(`Schema binding ${binding.command} has no available discovered command`);
+        if (binding.profile !== profile)
+            invalidExtension(`Schema binding ${binding.command} expects profile ${binding.profile}, not ${profile}`);
+        if (binding.lane !== descriptor.lane)
+            invalidExtension(`Schema binding ${binding.command} expects lane ${binding.lane}, not ${descriptor.lane}`);
+    }
+    return Object.freeze({ protocolVersion, runtime, profile, permittedLanes: Object.freeze(permittedLanes), revision, catalogEpoch, contractFingerprint, commands: Object.freeze(commands) });
 }
 function decodeDescriptor(value, where) {
     const record = object(value, where);
