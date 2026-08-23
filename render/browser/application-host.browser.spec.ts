@@ -16,6 +16,7 @@ declare global {
     __rustyDeveloperCommandExecuteCount?: number;
     __rustyDeveloperCommandDiscoveryGate?: Promise<void>;
     __rustyDeveloperCommandReleaseDiscovery?: () => void;
+    __rustyApplicationRiggedFixtureUrl?: string;
   }
 }
 
@@ -365,6 +366,86 @@ test('application host owns composition, input arbitration, and disposal', async
   await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
   await page.evaluate(() => window.__rustyApplicationHost?.dispose());
   await expect(page.locator('canvas')).toHaveCount(0);
+});
+
+test('application-host public frames hold an admitted skinned mesh at exact normalized samples', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  await expect(page.locator('[data-rusty-application-host]')).toHaveAttribute('data-state', 'ready');
+  const admitted = await page.evaluate(async () => {
+    const host = window.__rustyApplicationHost;
+    if (host === undefined) throw new Error('application host is unavailable');
+    const fixtureUrl = window.__rustyApplicationRiggedFixtureUrl;
+    if (fixtureUrl === undefined) throw new Error('animated fixture URL is unavailable');
+    const response = await fetch(fixtureUrl);
+    if (!response.ok) throw new Error(`animated fixture fetch failed: ${String(response.status)}`);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const contentHash = 'sha256:c71255a41c0373f0d2ef52593369d5fd9d2f6220ae548aff8cd6bf5edb403674';
+    return host.renderer.replaceContent({
+      frame: {
+        schemaVersion: 1,
+        ops: [
+          {
+            op: 'defineAnimatedMesh',
+            asset: {
+              asset: 'mesh-animation/application-host-sample-proof', runtimeFormat: 'glb', contentHash,
+              clips: [{ id: 'run', name: 'run', durationSeconds: 0.666666686534882 }],
+              defaultClip: 'run', materialSlots: [],
+              bounds: { min: [-0.5, 0, -0.5], max: [0.5, 1.8, 0.5] },
+            },
+          },
+          {
+            op: 'createAnimatedMeshInstance', handle: 701, parent: null,
+            instance: {
+              asset: 'mesh-animation/application-host-sample-proof',
+              transform: { translation: [0, 0, -2], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+              visible: true, materialOverrides: [],
+              playback: { kind: 'sample', clip: 'run', normalizedTime: 0 },
+              metadata: { sourceEntity: null, sourceSceneNode: null, tags: ['browser-proof'], label: 'held-sample' },
+            },
+          },
+        ],
+      },
+      resources: [{
+        identity: `mesh-resource/${contentHash.slice('sha256:'.length)}`,
+        contentHash, mediaType: 'application/octet-stream', bytes,
+      }],
+    } as never);
+  });
+  expect(admitted).toEqual({ applied: true, diagnostics: [] });
+
+  const samples = await page.evaluate(async () => {
+    const host = window.__rustyApplicationHost;
+    if (host === undefined) throw new Error('application host is unavailable');
+    host.renderer.setCameraPose({ position: [0, 0.9, 3], pitchDegrees: 0, yawDegrees: 0 });
+    const signature = (): number => {
+      const canvas = document.querySelector<HTMLCanvasElement>('canvas[data-rusty-application-renderer="engine-owned"]');
+      const context = canvas?.getContext('webgl2') ?? canvas?.getContext('webgl');
+      if (context === null || context === undefined) throw new Error('WebGL surface is unavailable');
+      const pixels = new Uint8Array(context.drawingBufferWidth * context.drawingBufferHeight * 4);
+      context.readPixels(0, 0, context.drawingBufferWidth, context.drawingBufferHeight, context.RGBA, context.UNSIGNED_BYTE, pixels);
+      let hash = 2_166_136_261;
+      for (let index = 0; index < pixels.length; index += 17) hash = Math.imul(hash ^ pixels[index]!, 16_777_619);
+      return hash >>> 0;
+    };
+    const sample = (normalizedTime: number): number => {
+      const receipt = host.renderer.applyFrame({
+        schemaVersion: 1,
+        ops: [{ op: 'setAnimatedMeshPlayback', handle: 701, playback: { kind: 'sample', clip: 'run', normalizedTime } }],
+      });
+      if (!receipt.applied) throw new Error(`sample rejected: ${JSON.stringify(receipt.diagnostics)}`);
+      host.renderer.renderOnce(100 + normalizedTime * 1000);
+      return signature();
+    };
+    const atStart = sample(0);
+    const atMiddle = sample(0.5);
+    const atEnd = sample(1);
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 80));
+    host.renderer.renderOnce(2_000);
+    return { atStart, atMiddle, atEnd, heldAfterAdvance: signature() };
+  });
+  expect(samples.atStart).not.toBe(samples.atMiddle);
+  expect(samples.atMiddle).not.toBe(samples.atEnd);
+  expect(samples.heldAfterAdvance).toBe(samples.atEnd);
 });
 
 test('public application-host console invokes inspect, play, and admin without interrupting rendering', async ({ page }) => {

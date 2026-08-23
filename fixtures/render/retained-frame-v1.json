@@ -552,13 +552,9 @@
         "visible": true,
         "materialOverrides": [],
         "playback": {
-          "kind": "play",
+          "kind": "sample",
           "clip": "idle",
-          "loop": "repeat",
-          "speed": 1.0,
-          "weight": 1.0,
-          "restart": true,
-          "fadeSeconds": 0.2
+          "normalizedTime": 0.5
         },
         "metadata": {
           "sourceEntity": 4,
@@ -574,13 +570,9 @@
       "op": "setAnimatedMeshPlayback",
       "handle": 4,
       "playback": {
-        "kind": "play",
+        "kind": "sample",
         "clip": "idle",
-        "loop": "repeat",
-        "speed": 1.0,
-        "weight": 1.0,
-        "restart": true,
-        "fadeSeconds": 0.2
+        "normalizedTime": 0.5
       }
     },
     {

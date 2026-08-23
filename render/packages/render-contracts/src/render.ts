@@ -220,6 +220,7 @@ export type AnimatedMeshPlaybackCommand =
       readonly fadeSeconds: number | null;
     }
   | { readonly kind: 'stop'; readonly fadeSeconds: number | null }
+  | { readonly kind: 'sample'; readonly clip: string; readonly normalizedTime: number }
   | { readonly kind: 'pause' }
   | { readonly kind: 'resume' };
 

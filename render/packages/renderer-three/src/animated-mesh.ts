@@ -45,8 +45,10 @@ export interface AnimatedMeshAssetSource {
 export interface AnimatedMeshPlaybackReadout {
   readonly handle: RenderHandle;
   readonly asset: string;
-  readonly status: 'not_started' | 'playing' | 'paused' | 'stopped';
+  readonly status: 'not_started' | 'playing' | 'paused' | 'sampled' | 'stopped';
   readonly currentClip: string | null;
+  /** Exact held sample, distinct from a resumable playback pause. */
+  readonly heldSample: { readonly clip: string; readonly normalizedTime: number } | null;
   readonly mixerTimeSeconds: number;
   readonly actionTimeSeconds: number | null;
   readonly running: boolean;
@@ -181,6 +183,7 @@ interface AnimatedMeshInstanceRecord {
   readonly actions: ReadonlyMap<string, THREE.AnimationAction>;
   readonly clipOrigins: ReadonlyMap<string, 'embedded' | 'pack'>;
   currentClip: string | null;
+  heldSample: { readonly clip: string; readonly normalizedTime: number } | null;
   commandSelected: boolean;
   status: AnimatedMeshPlaybackReadout['status'];
   loop: AnimatedMeshPlaybackReadout['loop'];
@@ -334,6 +337,7 @@ export class AnimatedMeshRegistry {
       actions,
       clipOrigins,
       currentClip: null,
+      heldSample: null,
       commandSelected: false,
       status: 'not_started',
       loop: null,
@@ -343,7 +347,11 @@ export class AnimatedMeshRegistry {
     };
     // Validate optional initial playback against a detached instance first;
     // rejected creation must not publish an instance or consume a refcount.
-    if (instance.playback) applyPlaybackCommand(instanceRecord, instance.playback);
+    if (instance.playback?.kind === 'sample') {
+      holdSample(instanceRecord, record, instance.playback.clip, instance.playback.normalizedTime);
+    } else if (instance.playback) {
+      applyPlaybackCommand(instanceRecord, instance.playback);
+    }
     this.#instances.set(handle, instanceRecord);
     record.refCount += 1;
     return instanceRecord;
@@ -351,6 +359,14 @@ export class AnimatedMeshRegistry {
 
   setPlayback(handle: RenderHandle, command: AnimatedMeshPlaybackCommand): void {
     const instance = this.#requireInstance(handle, 'setAnimatedMeshPlayback');
+    if (command.kind === 'sample') {
+      const asset = this.#assets.get(instance.asset);
+      if (asset === undefined) {
+        throw new AnimatedMeshApplyError(`setAnimatedMeshPlayback: missing defined asset ${instance.asset}`);
+      }
+      holdSample(instance, asset, command.clip, command.normalizedTime);
+      return;
+    }
     applyPlaybackCommand(instance, command);
   }
 
@@ -371,6 +387,7 @@ export class AnimatedMeshRegistry {
     const instance = this.#requireInstance(handle, 'clearAnimationControllerWeights');
     instance.mixer.stopAllAction();
     instance.currentClip = null;
+    instance.heldSample = null;
     instance.controllerClips = [];
     instance.commandSelected = false;
     instance.status = 'stopped';
@@ -399,6 +416,7 @@ export class AnimatedMeshRegistry {
       asset: instance.asset,
       status: instance.status,
       currentClip: instance.currentClip,
+      heldSample: instance.heldSample === null ? null : { ...instance.heldSample },
       mixerTimeSeconds: instance.mixer.time,
       actionTimeSeconds: action?.time ?? null,
       running: action?.isRunning() ?? false,
@@ -417,64 +435,14 @@ export class AnimatedMeshRegistry {
   }
 
   sample(handle: RenderHandle, clipId: string, normalizedTime: number): AnimatedMeshSampleReadout {
-    if (!Number.isFinite(normalizedTime) || normalizedTime < 0 || normalizedTime > 1) {
-      throw new AnimatedMeshApplyError(
-        'sampleAnimatedMesh: normalizedTime must be finite and between 0 and 1',
-      );
-    }
     const instance = this.#requireInstance(handle, 'sampleAnimatedMesh');
-    const action = instance.actions.get(clipId);
-    if (action === undefined) {
-      throw new AnimatedMeshApplyError(
-        `sampleAnimatedMesh: missing clip ${clipId} on ${instance.asset}`,
-      );
-    }
-    const durationSeconds = action.getClip().duration;
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
-      throw new AnimatedMeshApplyError(
-        `sampleAnimatedMesh: clip ${clipId} has an invalid duration`,
-      );
-    }
     const asset = this.#assets.get(instance.asset);
     if (asset === undefined) {
       throw new AnimatedMeshApplyError(
         `sampleAnimatedMesh: missing defined asset ${instance.asset}`,
       );
     }
-    // Skinning inspection is a bounded preflight. It must complete before the
-    // disposable mixer or playback record changes so rejection is fail-atomic.
-    const skinningFacts = animatedMeshSkinningFacts(
-      instance.object,
-      asset.scene,
-      action.getClip(),
-    );
-    instance.mixer.stopAllAction();
-    action.reset();
-    action.enabled = true;
-    action.paused = false;
-    action.clampWhenFinished = true;
-    action.setLoop(THREE.LoopOnce, 1);
-    action.setEffectiveTimeScale(1);
-    action.setEffectiveWeight(1);
-    action.play();
-    instance.mixer.setTime(durationSeconds * normalizedTime);
-    action.paused = true;
-    instance.currentClip = clipId;
-    instance.commandSelected = true;
-    instance.status = 'paused';
-    instance.loop = 'once';
-    instance.speed = 1;
-    instance.weight = 1;
-    instance.controllerClips = [];
-    return diagnoseAnimatedMeshSample(
-      instance,
-      skinningFacts,
-      clipId,
-      normalizedTime,
-      durationSeconds,
-      asset.asset.bounds,
-      asset.asset.contentHash,
-    );
+    return holdSample(instance, asset, clipId, normalizedTime);
   }
 
   /** Pose an independent clone at one exact normalized time for a bounded capture operation. */
@@ -917,11 +885,15 @@ function applyPlaybackCommand(
       instance.loop = null;
       instance.speed = null;
       instance.weight = null;
+      instance.heldSample = null;
       return;
+    case 'sample':
+      throw new AnimatedMeshApplyError('sample playback must be applied through the animated mesh registry');
     case 'pause':
       currentAction(instance, 'pause').paused = true;
       instance.commandSelected = true;
       instance.status = 'paused';
+      instance.heldSample = null;
       return;
     case 'resume': {
       const action = currentAction(instance, 'resume');
@@ -929,9 +901,66 @@ function applyPlaybackCommand(
       action.play();
       instance.commandSelected = true;
       instance.status = 'playing';
+      instance.heldSample = null;
       return;
     }
   }
+}
+
+/**
+ * Hold an instance at an exact normalized clip time. All validation and
+ * skinning preflight completes before the mixer or playback readout changes.
+ */
+function holdSample(
+  instance: AnimatedMeshInstanceRecord,
+  asset: AnimatedMeshAssetRecord,
+  clipId: string,
+  normalizedTime: number,
+): AnimatedMeshSampleReadout {
+  if (!Number.isFinite(normalizedTime) || normalizedTime < 0 || normalizedTime > 1) {
+    throw new AnimatedMeshApplyError(
+      'sampleAnimatedMesh: normalizedTime must be finite and between 0 and 1',
+    );
+  }
+  const action = instance.actions.get(clipId);
+  if (action === undefined) {
+    throw new AnimatedMeshApplyError(`sampleAnimatedMesh: missing clip ${clipId} on ${instance.asset}`);
+  }
+  const durationSeconds = action.getClip().duration;
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    throw new AnimatedMeshApplyError(`sampleAnimatedMesh: clip ${clipId} has an invalid duration`);
+  }
+  // Skinning inspection is a bounded preflight. It must complete before the
+  // disposable mixer or playback record changes so rejection is fail-atomic.
+  const skinningFacts = animatedMeshSkinningFacts(instance.object, asset.scene, action.getClip());
+  instance.mixer.stopAllAction();
+  action.reset();
+  action.enabled = true;
+  action.paused = false;
+  action.clampWhenFinished = true;
+  action.setLoop(THREE.LoopOnce, 1);
+  action.setEffectiveTimeScale(1);
+  action.setEffectiveWeight(1);
+  action.play();
+  instance.mixer.setTime(durationSeconds * normalizedTime);
+  action.paused = true;
+  instance.currentClip = clipId;
+  instance.heldSample = { clip: clipId, normalizedTime };
+  instance.commandSelected = true;
+  instance.status = 'sampled';
+  instance.loop = 'once';
+  instance.speed = 1;
+  instance.weight = 1;
+  instance.controllerClips = [];
+  return diagnoseAnimatedMeshSample(
+    instance,
+    skinningFacts,
+    clipId,
+    normalizedTime,
+    durationSeconds,
+    asset.asset.bounds,
+    asset.asset.contentHash,
+  );
 }
 
 function applyControllerWeights(
@@ -983,6 +1012,7 @@ function applyControllerWeights(
   instance.currentClip = clips.reduce((selected, clip) =>
     selected === null || clip.weight > selected.weight ? clip : selected, null as AnimatedMeshControllerClip | null)?.clip ?? null;
   instance.commandSelected = false;
+  instance.heldSample = null;
   instance.status = 'playing';
   instance.loop = 'repeat';
   instance.speed = null;
@@ -1017,6 +1047,7 @@ function playClip(
   }
   action.play();
   instance.currentClip = command.clip;
+  instance.heldSample = null;
   instance.controllerClips = [];
   instance.commandSelected = true;
   instance.status = 'playing';
@@ -1094,6 +1125,9 @@ function playbackDiagnostics(
   }
   if (instance.status === 'stopped') {
     return ['animation_stopped'];
+  }
+  if (instance.status === 'sampled') {
+    return ['animation_sampled'];
   }
   if (action?.paused || instance.status === 'paused') {
     return ['animation_paused'];

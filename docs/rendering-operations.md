@@ -143,6 +143,33 @@ disposable offsets as ordinary retained diffs. Apply those frames through `Rende
 Camera synchronization, `start`, `stop`, `renderOnce`, resize, reset, picking, and `dispose` stay on
 that one surface. A rejected frame leaves both the neutral projection and backend unchanged.
 
+### Exact held animated-mesh samples
+
+`setAnimatedMeshPlayback` accepts the ordinary playback commands plus a neutral held sample:
+
+```ts
+{
+  op: 'setAnimatedMeshPlayback',
+  handle: renderHandle(901),
+  playback: { kind: 'sample', clip: 'run', normalizedTime: 0.5 },
+}
+```
+
+`normalizedTime` is finite and inclusive from `0` to `1`; the named clip must be
+declared on the admitted animated-mesh asset. The command evaluates that instance
+at the exact clip position and holds it across subsequent renderer advances.
+Another instance remains independent. A later `sample`, `play`, or `stop` replaces
+the held state through the same retained operation; `play` returns to advancing
+playback. Invalid clip/time input rejects before retained projection or backend
+playback changes. Renderer-host playback readout reports `status: 'sampled'` and
+the exact `{ clip, normalizedTime }` `heldSample`, rather than presenting it as a
+resumable pause.
+
+This is presentation control for inspection, authored previews, and explicitly
+projected visual moments. It does not define gameplay animation states, cues,
+scheduling, root motion, or consequence policy; downstream Rust remains the
+authority that decides whether and when to emit the retained command.
+
 ### Authored sky background
 
 Publish an admitted retained texture before selecting it as the sky:

@@ -9,6 +9,7 @@ import {
   type RustyApplicationPresentationAspectBounds,
   type RustyApplicationVoxelSpriteExperimentPort,
 } from '@rusty-engine/application-host';
+import characterUrl from '../../fixtures/render/assets/kenney-retro-character/character-medium.glb?url';
 
 declare global {
   interface Window {
@@ -32,6 +33,8 @@ declare global {
     __rustyApplicationResourceContent?: (corrupt?: boolean) => RustyApplicationContent;
     __rustyApplicationUiDisposed?: boolean;
     __rustyApplicationVoxelSpriteExperiment?: RustyApplicationVoxelSpriteExperimentPort;
+    /** Browser-fixture resource URL for application-host retained animation proof. */
+    __rustyApplicationRiggedFixtureUrl?: string;
     /** Browser-fixture-only gate for proving a late console discovery is inert after disposal. */
     __rustyDeveloperCommandDiscoveryGate?: Promise<void>;
   }
@@ -65,6 +68,7 @@ const AUDIO_CONTENT_HASH = `sha256:${AUDIO_DIGEST}`;
 const AUDIO_RESOURCE = `audio-resource/${AUDIO_DIGEST}`;
 
 window.__rustyApplicationResourceContent = resourceContent;
+window.__rustyApplicationRiggedFixtureUrl = characterUrl;
 
 function resourceContent(corrupt = false): RustyApplicationContent {
   const bytes = TEXTURE_BYTES.slice();

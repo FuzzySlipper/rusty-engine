@@ -53,6 +53,35 @@ void test('strict TypeScript decoders accept the committed Rust render fixtures'
   assert.equal(billboard.op.descriptor.content.kind, 'structured');
 });
 
+void test('held animated samples accept inclusive boundaries and reject malformed normalized times', () => {
+  const sample = (normalizedTime: unknown) => ({
+    schemaVersion: 1,
+    ops: [{
+      op: 'setAnimatedMeshPlayback',
+      handle: 4,
+      playback: { kind: 'sample', clip: 'idle', normalizedTime },
+    }],
+  });
+  assert.equal(
+    (decodeRenderFrameDiff(sample(0)).ops[0] as { playback: { normalizedTime: number } }).playback.normalizedTime,
+    0,
+  );
+  assert.equal(
+    (decodeRenderFrameDiff(sample(1)).ops[0] as { playback: { normalizedTime: number } }).playback.normalizedTime,
+    1,
+  );
+  for (const normalizedTime of [Number.NaN, Number.POSITIVE_INFINITY, -0.01, 1.01]) {
+    assert.throws(() => decodeRenderFrameDiff(sample(normalizedTime)), ContractDecodeError);
+  }
+  assert.throws(
+    () => decodeRenderFrameDiff({
+      schemaVersion: 1,
+      ops: [{ op: 'setAnimatedMeshPlayback', handle: 4, playback: { kind: 'sample', clip: 'idle' } }],
+    }),
+    ContractDecodeError,
+  );
+});
+
 void test('clip-pack joint identities use decoded Three binding names only', () => {
   const frame = mutableFixture('retained-frame-v1.json');
   const operations = frame['ops'] as { op?: string; asset?: Record<string, unknown> }[];

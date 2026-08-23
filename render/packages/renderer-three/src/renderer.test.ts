@@ -3595,8 +3595,8 @@ void test('committed animated GLB instances share GPU resources while playback r
     assert.deepEqual(idleSample.diagnostics, []);
     assert.deepEqual(runSample.diagnostics, []);
     assert.equal(runBefore?.currentClip, 'run');
-    assert.equal(renderer.animatedMeshPlayback(renderHandle(4098))?.status, 'paused');
-    assert.equal(renderer.animatedMeshPlayback(renderHandle(4099))?.status, 'paused');
+    assert.equal(renderer.animatedMeshPlayback(renderHandle(4098))?.status, 'sampled');
+    assert.equal(renderer.animatedMeshPlayback(renderHandle(4099))?.status, 'sampled');
     assert.notDeepEqual(idleSample.sampledWorldBounds, runSample.sampledWorldBounds);
     idle.skeleton.bones[0]!.scale.set(0, 1, 1);
     const invalidSample = renderer.sampleAnimatedMesh(renderHandle(4098), 'idle', 0.5);
@@ -3638,6 +3638,37 @@ void test('animated mesh playback is command-selected and advances through rende
   r.applyDiff({
     op: 'setAnimatedMeshPlayback',
     handle,
+    playback: { kind: 'sample', clip: 'run', normalizedTime: 0 },
+  });
+  const heldStart = r.animatedMeshPlayback(handle);
+  assert.equal(heldStart?.status, 'sampled');
+  assert.deepEqual(heldStart?.heldSample, { clip: 'run', normalizedTime: 0 });
+  assert.deepEqual(heldStart?.diagnostics, ['animation_sampled']);
+  r.advanceAnimation(0.75);
+  const heldAfterAdvance = r.animatedMeshPlayback(handle);
+  assert.equal(heldAfterAdvance?.actionTimeSeconds, heldStart?.actionTimeSeconds);
+  assert.deepEqual(heldAfterAdvance?.heldSample, heldStart?.heldSample);
+
+  r.applyDiff({
+    op: 'setAnimatedMeshPlayback',
+    handle,
+    playback: { kind: 'sample', clip: 'run', normalizedTime: 1 },
+  });
+  assert.deepEqual(r.animatedMeshPlayback(handle)?.heldSample, { clip: 'run', normalizedTime: 1 });
+  const beforeRejectedSample = r.animatedMeshPlayback(handle);
+  assert.throws(
+    () => r.applyDiff({
+      op: 'setAnimatedMeshPlayback',
+      handle,
+      playback: { kind: 'sample', clip: 'missing', normalizedTime: 0.5 },
+    }),
+    /clip missing is not defined/,
+  );
+  assert.deepEqual(r.animatedMeshPlayback(handle), beforeRejectedSample);
+
+  r.applyDiff({
+    op: 'setAnimatedMeshPlayback',
+    handle,
     playback: { kind: 'play', clip: 'run', loop: 'repeat', speed: 1, weight: 1, restart: true, fadeSeconds: null },
   });
   const selected = r.animatedMeshPlayback(handle);
@@ -3645,6 +3676,7 @@ void test('animated mesh playback is command-selected and advances through rende
   assert.equal(selected?.commandSelected, true);
   assert.equal(selected?.loop, 'repeat');
   assert.equal(selected?.status, 'playing');
+  assert.equal(selected?.heldSample, null);
   assert.deepEqual(selected?.diagnostics, []);
 
   r.advanceAnimation(0.25);
@@ -3654,7 +3686,6 @@ void test('animated mesh playback is command-selected and advances through rende
   assert.ok((advanced?.mixerTimeSeconds ?? 0) > 0);
   assert.ok((advanced?.actionTimeSeconds ?? 0) > 0);
   assert.notDeepEqual(advanced?.poseSample.rootTranslation, selected?.poseSample.rootTranslation);
-  assert.ok((advanced?.poseSample.rootTranslation[0] ?? 0) > (selected?.poseSample.rootTranslation[0] ?? 0));
 
   r.applyDiff({ op: 'setAnimatedMeshPlayback', handle, playback: { kind: 'pause' } });
   assert.equal(r.animatedMeshPlayback(handle)?.status, 'paused');

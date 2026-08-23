@@ -86,8 +86,10 @@ export interface RendererAnimatedMeshPlaybackReadout {
   readonly handle: RenderHandle;
   readonly asset: string | null;
   readonly contentHash: string | null;
-  readonly status: 'unavailable' | 'not_started' | 'playing' | 'paused' | 'stopped';
+  readonly status: 'unavailable' | 'not_started' | 'playing' | 'paused' | 'sampled' | 'stopped';
   readonly selectedClip: string | null;
+  /** Exact presentation sample held by the current retained frame, if any. */
+  readonly heldSample: { readonly clip: string; readonly normalizedTime: number } | null;
   readonly mixerTimeSeconds: number;
   readonly actionTimeSeconds: number | null;
   readonly commandSelected: boolean;
@@ -219,6 +221,7 @@ export function animationPlaybackReadout(
       contentHash: null,
       status: 'unavailable',
       selectedClip: null,
+      heldSample: null,
       mixerTimeSeconds: 0,
       actionTimeSeconds: null,
       commandSelected: false,
@@ -240,6 +243,7 @@ export function animationPlaybackReadout(
     contentHash,
     status: readout.status,
     selectedClip: readout.currentClip,
+    heldSample: readout.heldSample,
     mixerTimeSeconds: readout.mixerTimeSeconds,
     actionTimeSeconds: readout.actionTimeSeconds,
     commandSelected: readout.commandSelected,
@@ -258,8 +262,9 @@ export function animationPlaybackReadout(
 
 interface BackendAnimatedMeshPlaybackReadout {
   readonly asset: string;
-  readonly status: 'not_started' | 'playing' | 'paused' | 'stopped';
+  readonly status: 'not_started' | 'playing' | 'paused' | 'sampled' | 'stopped';
   readonly currentClip: string | null;
+  readonly heldSample: { readonly clip: string; readonly normalizedTime: number } | null;
   readonly mixerTimeSeconds: number;
   readonly actionTimeSeconds: number | null;
   readonly commandSelected: boolean;

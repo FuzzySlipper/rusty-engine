@@ -338,6 +338,24 @@ void test('animated mesh projection loads the committed GLB and advances selecte
       advanced.poseSample?.hierarchyRotationSum,
       selected.poseSample?.hierarchyRotationSum,
     );
+
+    assert.equal(projection.applyFrame({
+      schemaVersion: 1,
+      ops: [{
+        op: 'setAnimatedMeshPlayback',
+        handle: renderHandle(4100),
+        playback: { kind: 'sample', clip: 'run', normalizedTime: 0.5 },
+      }],
+    }).applied, true);
+    const held = projection.playback(renderHandle(4100));
+    assert.equal(held.status, 'sampled');
+    assert.deepEqual(held.heldSample, { clip: 'run', normalizedTime: 0.5 });
+    assert.equal(projection.advance(0.25).applied, true);
+    assert.deepEqual(projection.playback(renderHandle(4100)).heldSample, held.heldSample);
+    assert.equal(
+      projection.playback(renderHandle(4100)).actionTimeSeconds,
+      held.actionTimeSeconds,
+    );
   } finally {
     restore();
   }

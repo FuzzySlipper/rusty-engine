@@ -131,13 +131,9 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
             max: [0.5, 2.0, 0.5],
         },
     };
-    let playback = AnimatedMeshPlaybackCommand::Play {
+    let playback = AnimatedMeshPlaybackCommand::Sample {
         clip: "idle".to_string(),
-        r#loop: AnimationLoopMode::Repeat,
-        speed: 1.0,
-        weight: 1.0,
-        restart: true,
-        fade_seconds: Some(0.2),
+        normalized_time: 0.5,
     };
     let sprite = SpriteInstanceDescriptor {
         asset: atlas.id.clone(),

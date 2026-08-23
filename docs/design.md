@@ -936,7 +936,7 @@ panels are deliberately outside the current contract. See
 The isolated `render/` workspace realizes the same contract for Three, WebGL, WebAudio, DOM
 overlays, inspection, and editor viewport use. It is installed and verified separately from the
 ordinary Rust provider gate. Renderer picks and host readouts are hints/observations that downstream
-authority must revalidate; animation sampling, audio completion, particles, cameras, and editor
+authority must revalidate; exact held animation sampling, audio completion, particles, cameras, and editor
 previews never mutate gameplay.
 
 Camera-relative retained presentation is one explicit `viewmodel` render layer, not a downstream

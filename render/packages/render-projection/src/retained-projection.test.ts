@@ -907,6 +907,28 @@ void test('tracks animated mesh definitions and command-selected named clip play
     }
   }
 
+  const sampled = projection.applyDiff({
+    op: 'setAnimatedMeshPlayback',
+    handle: renderHandle(12),
+    playback: { kind: 'sample', clip: 'idle', normalizedTime: 0.5 },
+  });
+  assert.equal(sampled[0]?.op, 'upsertNode');
+  const sampledNode = projection.node(renderHandle(12));
+  assert.equal(sampledNode?.kind, 'animatedMesh');
+  if (sampledNode?.kind === 'animatedMesh') {
+    assert.deepEqual(sampledNode.playback, { kind: 'sample', clip: 'idle', normalizedTime: 0.5 });
+  }
+  const beforeRejectedSample = projection.snapshot();
+  assert.throws(
+    () => projection.applyDiff({
+      op: 'setAnimatedMeshPlayback',
+      handle: renderHandle(12),
+      playback: { kind: 'sample', clip: 'missing', normalizedTime: 0.5 },
+    }),
+    RenderProjectionError,
+  );
+  assert.deepEqual(projection.snapshot(), beforeRejectedSample);
+
   assert.throws(
     () =>
       projection.applyDiff({

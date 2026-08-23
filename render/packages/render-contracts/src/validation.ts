@@ -678,7 +678,7 @@ function voxelObjectInstance(input: unknown, path: string): void {
 
 function playback(input: unknown, path: string): void {
   const base = looseRecord(input, path);
-  const kind = enumeration(base['kind'], `${path}.kind`, ['play', 'stop', 'pause', 'resume'] as const);
+  const kind = enumeration(base['kind'], `${path}.kind`, ['play', 'stop', 'sample', 'pause', 'resume'] as const);
   if (kind === 'play') {
     const value = record(input, path, ['kind', 'clip', 'loop', 'speed', 'weight', 'restart', 'fadeSeconds']);
     nonEmptyText(value['clip'], `${path}.clip`);
@@ -690,6 +690,10 @@ function playback(input: unknown, path: string): void {
   } else if (kind === 'stop') {
     const value = record(input, path, ['kind', 'fadeSeconds']);
     nullable(value['fadeSeconds'], `${path}.fadeSeconds`, nonNegativeFinite);
+  } else if (kind === 'sample') {
+    const value = record(input, path, ['kind', 'clip', 'normalizedTime']);
+    nonEmptyText(value['clip'], `${path}.clip`);
+    range(value['normalizedTime'], `${path}.normalizedTime`, 0, 1);
   } else {
     record(input, path, ['kind']);
   }

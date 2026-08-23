@@ -49,7 +49,8 @@ compiled artifact, and Rust webview host/resource lifecycle.
 - [`render/packages/render-projection/src`](../../render/packages/render-projection/src)
 - [`render/packages/renderer-three/src`](../../render/packages/renderer-three/src)
   - `animated-mesh.ts` owns asset-scoped geometry/material templates, independent
-    per-instance skeleton/mixer state, exact normalized sampling, bounded
+    per-instance skeleton/mixer state, exact normalized sampling through the
+    public retained `setAnimatedMeshPlayback { kind: 'sample' }` command, bounded
     deformation diagnostics, and their retained replacement/disposal lifecycle.
     It admits separate hash-addressed, target-rig-bound clip packs only after
     comparing decoded hierarchy/rest facts and bounded channel/root policy. Pack joint lists may be

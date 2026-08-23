@@ -1042,6 +1042,12 @@ pub enum AnimatedMeshPlaybackCommand {
     Stop {
         fade_seconds: Option<f32>,
     },
+    /// Hold this instance at one exact point in a named clip. This is
+    /// presentation playback only: callers retain all animation policy.
+    Sample {
+        clip: String,
+        normalized_time: f32,
+    },
     Pause,
     Resume,
 }
@@ -1068,6 +1074,18 @@ impl AnimatedMeshPlaybackCommand {
                 validate_fade(*fade_seconds)
             }
             Self::Stop { fade_seconds } => validate_fade(*fade_seconds),
+            Self::Sample {
+                clip,
+                normalized_time,
+            } => {
+                if clip.trim().is_empty() {
+                    return Err(AnimatedMeshPlaybackError::EmptyClip);
+                }
+                if !normalized_time.is_finite() || !(0.0..=1.0).contains(normalized_time) {
+                    return Err(AnimatedMeshPlaybackError::InvalidNormalizedTime);
+                }
+                Ok(())
+            }
             Self::Pause | Self::Resume => Ok(()),
         }
     }
@@ -1086,6 +1104,7 @@ pub enum AnimatedMeshPlaybackError {
     InvalidSpeed,
     InvalidWeight,
     InvalidFade,
+    InvalidNormalizedTime,
 }
 
 pub(crate) fn validate_slots(slots: &[MeshMaterialSlot]) -> Result<(), MeshMaterialSlotError> {
@@ -1309,5 +1328,40 @@ mod tests {
             pack.rig.root_joint_id = invalid.to_owned();
             assert_eq!(pack.validate(), Err(AnimationClipPackError::InvalidRig));
         }
+    }
+
+    #[test]
+    fn exact_held_sample_requires_a_named_finite_unit_time() {
+        let valid = AnimatedMeshPlaybackCommand::Sample {
+            clip: "idle".to_owned(),
+            normalized_time: 0.0,
+        };
+        assert_eq!(valid.validate(), Ok(()));
+        assert_eq!(
+            AnimatedMeshPlaybackCommand::Sample {
+                clip: "idle".to_owned(),
+                normalized_time: 1.0,
+            }
+            .validate(),
+            Ok(())
+        );
+        for normalized_time in [f32::NAN, f32::INFINITY, -0.01, 1.01] {
+            assert_eq!(
+                AnimatedMeshPlaybackCommand::Sample {
+                    clip: "idle".to_owned(),
+                    normalized_time,
+                }
+                .validate(),
+                Err(AnimatedMeshPlaybackError::InvalidNormalizedTime)
+            );
+        }
+        assert_eq!(
+            AnimatedMeshPlaybackCommand::Sample {
+                clip: "  ".to_owned(),
+                normalized_time: 0.5,
+            }
+            .validate(),
+            Err(AnimatedMeshPlaybackError::EmptyClip)
+        );
     }
 }

@@ -1484,11 +1484,17 @@ function validatePlaybackCommand(
   command: AnimatedMeshPlaybackCommand,
   ctx: string,
 ): void {
-  if (command.kind !== 'play') {
+  if (command.kind !== 'play' && command.kind !== 'sample') {
     return;
   }
   if (!asset.clips.some((clip) => clip.id === command.clip)) {
     throw new RenderProjectionError(`${ctx}.clip ${command.clip} is not defined on ${asset.asset}`);
+  }
+  if (command.kind === 'sample') {
+    if (!Number.isFinite(command.normalizedTime) || command.normalizedTime < 0 || command.normalizedTime > 1) {
+      throw new RenderProjectionError(`${ctx}.normalizedTime must be finite and in 0..=1`);
+    }
+    return;
   }
   if (command.speed <= 0) {
     throw new RenderProjectionError(`${ctx}.speed must be positive`);

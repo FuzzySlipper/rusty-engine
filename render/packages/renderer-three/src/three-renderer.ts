@@ -796,7 +796,7 @@ export class ThreeRenderer {
           }
           selectedAnimatedClips.set(
             operation.handle,
-            playback?.kind === 'play' ? playback.clip : null,
+            playback?.kind === 'play' || playback?.kind === 'sample' ? playback.clip : null,
           );
         } else if (operation.op === 'setAnimatedMeshPlayback') {
           const currentClip = selectedAnimatedClips.has(operation.handle)
@@ -810,7 +810,7 @@ export class ThreeRenderer {
               `setAnimatedMeshPlayback.${operation.playback.kind}: no current clip`,
             );
           }
-          if (operation.playback.kind === 'play') {
+          if (operation.playback.kind === 'play' || operation.playback.kind === 'sample') {
             selectedAnimatedClips.set(operation.handle, operation.playback.clip);
           } else if (operation.playback.kind === 'stop') {
             selectedAnimatedClips.set(operation.handle, null);
