@@ -581,6 +581,156 @@ fn snapshot_reopen_continues_with_rebuilt_derived_world_deterministically() {
 }
 
 #[test]
+fn product_owned_loop_recomputes_force_and_torque_for_each_single_substep() {
+    let entity = EntityId::new(45);
+    let body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 1.0);
+    let mut state = body_state([(entity, Vec3::ZERO, body)]);
+    let scene = empty_scene();
+    let mut service = RigidBodyService::default();
+    let mut applied = Vec::new();
+    let mut receipts = Vec::new();
+
+    for tick in 0..60u32 {
+        let current = *state.rigid_body(entity).expect("authoritative body exists");
+        let force = Vec3::new(
+            0.8 + tick as f32 * 0.01 - current.linear_velocity.x * 0.2,
+            0.0,
+            0.15 + current.linear_velocity.z * 0.1,
+        );
+        let torque = Vec3::new(
+            0.0,
+            0.3 + tick as f32 * 0.002 - current.angular_velocity.y * 0.15,
+            0.0,
+        );
+        let receipt = service
+            .step(
+                &mut state,
+                &scene,
+                RigidBodyStepRequest {
+                    step_seconds: 1.0 / 60.0,
+                    steps: 1,
+                    gravity: Vec3::ZERO,
+                    actions: vec![RigidBodyAction {
+                        entity,
+                        force,
+                        torque,
+                        impulse: Vec3::ZERO,
+                        torque_impulse: Vec3::ZERO,
+                        wake: true,
+                    }],
+                },
+            )
+            .expect("one caller-owned fixed tick is admitted");
+        assert_eq!(receipt.steps, 1);
+        assert_eq!(receipt.bodies_considered, 1);
+        assert_eq!(receipt.facts.len(), 1);
+        assert_eq!(receipt.revision_after, receipt.revision_before + 1);
+        let fact = receipt.facts[0];
+        let expected_linear_delta = force.x / 60.0;
+        let actual_linear_delta = fact.linear_velocity_after.x - current.linear_velocity.x;
+        assert!(
+            (actual_linear_delta - expected_linear_delta).abs() < 1.0e-4,
+            "tick {tick} did not apply its fresh force: expected {expected_linear_delta}, got {actual_linear_delta}"
+        );
+        // A radius-0.5, mass-1 sphere has I = 2/5 mr² = 0.1 around every
+        // axis, so its current Y torque yields this direct angular delta.
+        let expected_angular_delta = torque.y * 10.0 / 60.0;
+        let actual_angular_delta = fact.angular_velocity_after.y - current.angular_velocity.y;
+        assert!(
+            (actual_angular_delta - expected_angular_delta).abs() < 1.0e-4,
+            "tick {tick} did not apply its fresh torque: expected {expected_angular_delta}, got {actual_angular_delta}"
+        );
+        applied.push((force, torque));
+        receipts.push(receipt);
+    }
+
+    assert!(applied.windows(2).all(|pair| pair[0] != pair[1]));
+    assert!(receipts.windows(2).all(|pair| {
+        pair[1].revision_before == pair[0].revision_after
+            && pair[1].generation == pair[0].generation + 1
+    }));
+    let final_body = state.rigid_body(entity).expect("published body exists");
+    assert!(final_body.linear_velocity.x > 0.0);
+    assert!(final_body.angular_velocity.y > 0.0);
+    assert_ne!(
+        state
+            .transform(entity)
+            .expect("published transform exists")
+            .rotation,
+        receipts[0].facts[0].transform_before.rotation
+    );
+}
+
+#[test]
+#[ignore = "release characterization; run with scripts/measure-rigid-body.sh"]
+fn rigid_body_per_tick_release_characterization() {
+    const WARMUP_ITERATIONS: usize = 250;
+    const SAMPLE_COUNT: usize = 15;
+    const ITERATIONS_PER_SAMPLE: usize = 2_000;
+    const SIXTY_HZ_BUDGET_NS: f64 = 16_666_667.0;
+
+    let measure = |label: &str, scene: &VoxelCollisionScene| {
+        let entity = EntityId::new(46);
+        let body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 1.0);
+        let mut state = body_state([(entity, Vec3::ZERO, body)]);
+        let mut service = RigidBodyService::default();
+        let request = RigidBodyStepRequest {
+            step_seconds: 1.0 / 60.0,
+            steps: 1,
+            gravity: Vec3::ZERO,
+            actions: vec![RigidBodyAction {
+                entity,
+                force: Vec3::ZERO,
+                torque: Vec3::ZERO,
+                impulse: Vec3::ZERO,
+                torque_impulse: Vec3::ZERO,
+                wake: true,
+            }],
+        };
+        for _ in 0..WARMUP_ITERATIONS {
+            service
+                .step(&mut state, scene, request.clone())
+                .expect("warm-up public step succeeds");
+        }
+
+        let mut samples = Vec::with_capacity(SAMPLE_COUNT);
+        let mut publication_checksum = 0u64;
+        for _ in 0..SAMPLE_COUNT {
+            let started = std::time::Instant::now();
+            for _ in 0..ITERATIONS_PER_SAMPLE {
+                let receipt = service
+                    .step(&mut state, scene, request.clone())
+                    .expect("characterization public step succeeds");
+                publication_checksum = publication_checksum.wrapping_add(receipt.revision_after);
+                std::hint::black_box(receipt);
+            }
+            samples.push(started.elapsed().as_nanos() / ITERATIONS_PER_SAMPLE as u128);
+        }
+        assert_ne!(
+            publication_checksum, 0,
+            "publications must remain observable"
+        );
+        samples.sort_unstable();
+        let median_ns = samples[SAMPLE_COUNT / 2];
+        let p95_ns = samples[(SAMPLE_COUNT * 95).div_ceil(100) - 1];
+        println!(
+            "rigid_body_characterization scenario={label} warmup_iterations={WARMUP_ITERATIONS} samples={SAMPLE_COUNT} iterations_per_sample={ITERATIONS_PER_SAMPLE} median_ns={median_ns} p95_ns={p95_ns} median_60hz_percent={:.4} p95_60hz_percent={:.4}",
+            median_ns as f64 / SIXTY_HZ_BUDGET_NS * 100.0,
+            p95_ns as f64 / SIXTY_HZ_BUDGET_NS * 100.0,
+        );
+    };
+
+    measure("free", &empty_scene());
+    let sparse_scene = VoxelCollisionScene::from_solid_voxels(
+        1.0,
+        8,
+        [[-8, -3, -8], [8, -3, -8], [-8, -3, 8], [8, -3, 8]],
+    )
+    .expect("sparse fixed obstacle scene");
+    measure("sparse_voxel", &sparse_scene);
+}
+
+#[test]
 fn bounded_step_and_motion_admission_reject_before_mutation() {
     let entity = EntityId::new(50);
     let mut body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 1.0);

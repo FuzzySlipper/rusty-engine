@@ -97,6 +97,79 @@ transform/body pairs. It validates all candidates and both exact component slot
 revisions before the first write, advances the entity-state revision once, and
 does not generalize into a heterogeneous transaction language.
 
+## Product-owned per-tick control
+
+The existing `RigidBodyService::step` is the per-tick seam. A downstream fixed
+60 Hz loop reads the current authoritative facts, derives its own force and
+torque from gameplay state, submits one `steps: 1` request, consumes the
+receipt, then repeats. Engine owns no controller clock, accumulator, or force
+policy:
+
+```rust
+let current = *state.rigid_body(entity).expect("admitted body");
+let force = gameplay_force(current.linear_velocity, local_field, tick);
+let torque = gameplay_torque(current.angular_velocity, steering, tick);
+let receipt = service.step(
+    &mut state,
+    &scene,
+    RigidBodyStepRequest {
+        step_seconds: 1.0 / 60.0,
+        steps: 1,
+        gravity: game_gravity,
+        actions: vec![RigidBodyAction {
+            entity,
+            force,
+            torque,
+            impulse: Vec3::ZERO,
+            torque_impulse: Vec3::ZERO,
+            wake: true,
+        }],
+    },
+)?;
+consume_gameplay_receipt(receipt);
+```
+
+`steps > 1` is intentionally different: one aggregated action is applied over
+all requested substeps. It is useful when that action is deliberately constant,
+but it is not the right request shape when force or torque depends on facts that
+evolve after each tick. A downstream product owns its catch-up and accumulator
+policy and invokes another one-substep request whenever it needs a fresh
+control decision. The executable product-shaped proof is
+`product_owned_loop_recomputes_force_and_torque_for_each_single_substep` in
+`engine-spatial/tests/rigid_body.rs`.
+
+## Release characterization
+
+Run the non-gating, release-mode full-public-path probe with:
+
+```bash
+./scripts/measure-rigid-body.sh
+```
+
+The probe warms up 250 calls, then records 15 samples of 2,000 one-body
+`RigidBodyService::step` calls. Each call rebuilds the derived Rapier world from
+the current entity and fixed environment facts and atomically publishes the
+Transform/rigid-body pair. A zero wrench with `wake: true` keeps the body at a
+stable position and prevents it from sleeping, so it cannot drift into the
+sparse fixed voxel obstacles while samples are collected. It reports median and
+p95 nanoseconds per call plus each as a fraction of a 16.667 ms 60 Hz budget;
+there is deliberately no performance assertion or CI threshold.
+
+On 2026-08-23, the release probe ran through the command above on an AMD Ryzen
+7 8845HS with Radeon 780M Graphics using `rustc 1.96.0 (ac68faa20 2026-05-25)`
+on Arch Linux:
+
+| Scenario | Median | p95 | p95 of 60 Hz budget |
+| --- | ---: | ---: | ---: |
+| Free one body | 5,964 ns | 6,440 ns | 0.0386% |
+| One body + four sparse fixed voxels | 10,322 ns | 10,470 ns | 0.0628% |
+
+This is a characterization rather than a cross-host guarantee. For this exact
+one-body, static-environment shape, the measured p95 leaves more than 99.9% of
+the 60 Hz tick budget free and is therefore acceptable at 60 Hz with substantial
+headroom. It does not establish a budget for larger body counts, contacts,
+moving environments, different CPUs, or a product's complete tick.
+
 ## Dependency audit
 
 The intended normal dependency closure is:

@@ -26,6 +26,7 @@ from it.
 - [`engine-spatial/src/entity_motion.rs`](../../rust/crates/engine-spatial/src/entity_motion.rs)
 - [`engine-spatial/src/character_controller.rs`](../../rust/crates/engine-spatial/src/character_controller.rs)
 - [`engine-spatial/src/rigid_body.rs`](../../rust/crates/engine-spatial/src/rigid_body.rs)
+- [`engine-spatial/tests/rigid_body.rs`](../../rust/crates/engine-spatial/tests/rigid_body.rs)
 - [`engine-spatial/src/voxel_edit.rs`](../../rust/crates/engine-spatial/src/voxel_edit.rs)
 - [`engine-spatial/src/voxel_residency.rs`](../../rust/crates/engine-spatial/src/voxel_residency.rs)
 - [`engine-spatial/src/trigger.rs`](../../rust/crates/engine-spatial/src/trigger.rs)
@@ -40,6 +41,7 @@ from it.
 - [World-origin rebasing](../topics/world-origin-rebasing.md)
 - [`character_controller` facade example](../../rust/crates/rusty-engine/examples/character_controller.rs)
 - [`measure-character-controller.sh`](../../scripts/measure-character-controller.sh)
+- [`measure-rigid-body.sh`](../../scripts/measure-rigid-body.sh)
 - [`verify-character-controller-consumer.sh`](../../scripts/verify-character-controller-consumer.sh)
 - [`svc-pathfinding`](../../rust/crates/svc-pathfinding)
 - [`svc-mesh`](../../rust/crates/svc-mesh)
@@ -86,6 +88,11 @@ from it.
   through entity-state. It projects durable per-axis locks into the canonical
   solver and motion-limit preflight rather than asking downstream to correct
   velocities after a step.
+- A product that recomputes gameplay force or torque from evolving facts calls
+  `RigidBodyService::step` with a fresh `RigidBodyStepRequest { steps: 1, .. }`
+  each fixed tick. The ignored release characterization at
+  `engine-spatial/tests/rigid_body.rs` and `measure-rigid-body.sh` measures that
+  complete public path; it does not become a scheduler or CI performance gate.
 - `CharacterControllerService::{step,prepare,commit}` is the host-neutral
   kinematic FPS path. It consumes one entity with Transform plus inert
   `CharacterMotionComponent`, a `CharacterControllerConfig`, and a sequenced
@@ -129,6 +136,7 @@ cargo test -p engine-spatial --test world_origin --locked
 cargo test -p render-projection world_origin_rebase --locked
 cargo run -p rusty-engine --example character_controller --locked
 ./scripts/measure-character-controller.sh
+./scripts/measure-rigid-body.sh
 ./scripts/verify-character-controller-consumer.sh /absolute/path/to/rusty-craftsurvive
 ./scripts/measure-voxel-chunk-updates.sh
 ./scripts/measure-voxel-chunk-residency.sh
