@@ -228,6 +228,31 @@ function animatedMeshAsset(asset = 'mesh-animation/kenney-retro-character-medium
   };
 }
 
+function animatedMeshAssetWithClipPackOnlyClip(): AnimatedMeshAsset {
+  return {
+    ...animatedMeshAsset(),
+    clipPacks: [{
+      asset: 'animation-clip-pack/character-gestures',
+      runtimeFormat: 'glb',
+      contentHash: `sha256:${'a'.repeat(64)}`,
+      rig: {
+        joints: [{ id: 'mixamorig:Hips', parent: null }],
+        bindRestHash: `sha256:${'a'.repeat(64)}`,
+        bindRestConvention: 'localMatrixV1',
+        rootConvention: 'inPlace',
+        rootJointId: 'mixamorig:Hips',
+      },
+      clips: [{ id: 'gesture', name: 'gesture', durationSeconds: 0.75 }],
+      provenance: {
+        producer: 'fixture',
+        sourceHash: `sha256:${'a'.repeat(64)}`,
+        targetHash: `sha256:${'a'.repeat(64)}`,
+        license: 'CC0-1.0',
+      },
+    }],
+  };
+}
+
 function voxelObjectAsset(): VoxelObjectRenderAsset {
   return {
     asset: 'voxel-object/runner',
@@ -953,6 +978,43 @@ void test('tracks animated mesh definitions and command-selected named clip play
   );
   projection.applyDiff({ op: 'destroy', handle: renderHandle(12) });
   assert.equal(projection.animatedMeshRefCount('mesh-animation/kenney-retro-character-medium'), 0);
+});
+
+void test('effective clip-pack clips admit both play and held sample playback', () => {
+  const projection = new RenderProjection();
+  projection.applyDiff({ op: 'defineAnimatedMesh', asset: animatedMeshAssetWithClipPackOnlyClip() });
+  projection.applyDiff({
+    op: 'createAnimatedMeshInstance',
+    handle: renderHandle(13),
+    parent: null,
+    instance: {
+      asset: 'mesh-animation/kenney-retro-character-medium',
+      transform: { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] },
+      materialOverrides: [],
+      playback: {
+        kind: 'play',
+        clip: 'gesture',
+        loop: 'once',
+        speed: 1,
+        weight: 1,
+        restart: true,
+        fadeSeconds: null,
+      },
+      visible: true,
+      metadata: { sourceEntity: 13, sourceSceneNode: null, tags: [], label: 'clip-pack-proof' },
+    },
+  });
+
+  projection.applyDiff({
+    op: 'setAnimatedMeshPlayback',
+    handle: renderHandle(13),
+    playback: { kind: 'sample', clip: 'gesture', normalizedTime: 0.5 },
+  });
+  const node = projection.node(renderHandle(13));
+  assert.equal(node?.kind, 'animatedMesh');
+  if (node?.kind === 'animatedMesh') {
+    assert.deepEqual(node.playback, { kind: 'sample', clip: 'gesture', normalizedTime: 0.5 });
+  }
 });
 
 void test('public retained projection re-adds one shared animated-mesh instance without redefining its live asset', () => {

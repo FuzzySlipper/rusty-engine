@@ -1487,7 +1487,7 @@ function validatePlaybackCommand(
   if (command.kind !== 'play' && command.kind !== 'sample') {
     return;
   }
-  if (!asset.clips.some((clip) => clip.id === command.clip)) {
+  if (!hasEffectiveAnimationClip(asset, command.clip)) {
     throw new RenderProjectionError(`${ctx}.clip ${command.clip} is not defined on ${asset.asset}`);
   }
   if (command.kind === 'sample') {
@@ -1502,6 +1502,12 @@ function validatePlaybackCommand(
   if (command.weight < 0 || command.weight > 1) {
     throw new RenderProjectionError(`${ctx}.weight must be in 0..=1`);
   }
+}
+
+/** Embedded and admitted clip-pack clips form one effective playback namespace. */
+function hasEffectiveAnimationClip(asset: AnimatedMeshAsset, clipId: string): boolean {
+  return asset.clips.some((clip) => clip.id === clipId)
+    || asset.clipPacks?.some((pack) => pack.clips.some((clip) => clip.id === clipId)) === true;
 }
 
 function validateLight(light: LightDescriptor, ctx: string): void {
