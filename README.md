@@ -29,7 +29,11 @@ Repository docs describe committed architecture and implementation surfaces.
 Den may hold current planning, review packets, and decisions when available,
 but the repository is intentionally navigable without Den access. Start with
 [the canonical design](docs/design.md) and the
-[agent code atlas](docs/agent-code-atlas.md). The exact reviewed realtime,
+[agent code atlas](docs/agent-code-atlas.md). A brand-new game starts with the
+[greenfield downstream product path](docs/topics/development/greenfield-downstream-product.md);
+an existing product being simplified uses the
+[migration-oriented adoption guide](docs/topics/gameplay/downstream-adoption.md).
+The exact reviewed realtime,
 builder, and Rusty D20 evidence for the completed gameplay-mechanics campaign
 is indexed in the
 [campaign closeout](docs/gameplay-mechanics-campaign-closeout.md).
@@ -43,6 +47,8 @@ downstream game policy and orchestration
              +--> gameplay-mechanics
              +--> gameplay-resolution
              +--> gameplay-rules <--> isolated rules/ authoring workspace
+             +--> gameplay-standard (optional exact/continuous DSL, composed leaves, operation plans)
+             +--> developer-command / developer-command-standard (optional tooling path)
              +--> environment-authoring --> authored-scene
              +--> content-store / asset-catalog / asset-import
              +--> engine-spatial --> core-* / svc-*
@@ -133,7 +139,7 @@ rust/crates/
   gameplay-mechanics        component-backed stats, tracks, sources, items, damage, restoration
   gameplay-resolution       bounded downstream-owned resolution lifecycle and receipts
   gameplay-rules            optional opaque package admission, provenance, diagnostics, resolution
-  gameplay-standard         incubating metadata readouts beside exact gameplay-owner APIs
+  gameplay-standard         opt-in exact/continuous DSL, composed leaves, presets, operation plans
   developer-command         optional typed runtime developer-console binding contract
   developer-command-standard optional standard gameplay command descriptors and owner adapters
   engine-spatial            canonical voxel space and synchronized derived mechanisms

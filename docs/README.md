@@ -18,7 +18,8 @@ does not require Den access.
 | [textured-voxel-campaign-closeout.md](textured-voxel-campaign-closeout.md) | VTX0-VTX6 ownership, measured geometry/resource costs, exact consumer proof, and stopping point |
 | [topics/fps-character-controller-survey.md](topics/fps-character-controller-survey.md) | Task 6847 source survey, feature matrix, licensing posture, and adopted transfer decisions |
 | [topics/fps-character-controller-proposal.md](topics/fps-character-controller-proposal.md) | Adopted host-neutral controller design, current Rust API, ownership, and remaining proof routes |
-| [topics/gameplay/downstream-adoption.md](topics/gameplay/downstream-adoption.md) | Disposition-first downstream adoption of gameplay rules, TypeScript authoring, mechanics, resolution, intents, and diagnostics |
+| [topics/development/greenfield-downstream-product.md](topics/development/greenfield-downstream-product.md) | Greenfield Rust product, optional TypeScript authoring, bounded presentation viewport, and host topology |
+| [topics/gameplay/downstream-adoption.md](topics/gameplay/downstream-adoption.md) | Disposition-first migration and simplification of existing downstream gameplay, authoring, mechanics, resolution, intents, and diagnostics |
 | [topics/development/upstream-promotion-and-authoring-dsl.md](topics/development/upstream-promotion-and-authoring-dsl.md) | Proactive Engine promotion criteria and the optional TypeScript gameplay authoring DSL boundary |
 | [README.md](README.md) | This documentation index |
 
@@ -80,7 +81,8 @@ tests take precedence when describing implemented behavior.
 | Find the crate or package that owns a behavior | [agent-code-atlas.md](agent-code-atlas.md) |
 | Change entity components or atomic entity mutation | [Entity state and state machines](code-map/entity-state-and-state-machines.md) |
 | Change stats, tracks, effects, items, equipment, damage, or restoration | [Gameplay mechanics](code-map/gameplay-mechanics.md) |
-| Structure or migrate a downstream game's gameplay code and optional TypeScript authoring | [Downstream gameplay adoption](topics/gameplay/downstream-adoption.md) |
+| Start a brand-new downstream Rust product with optional TypeScript authoring and bounded DOM UI | [Greenfield downstream product path](topics/development/greenfield-downstream-product.md) |
+| Migrate or simplify an existing downstream game's gameplay code and optional TypeScript authoring | [Downstream gameplay adoption](topics/gameplay/downstream-adoption.md) |
 | Decide whether a mechanism belongs upstream or in a TypeScript authoring DSL | [Upstream promotion and authoring DSL](topics/development/upstream-promotion-and-authoring-dsl.md) |
 | Package a downstream-authored rules candidate without giving Engine its meaning | [Gameplay rules](code-map/gameplay-rules.md) |
 | Audit the completed mechanics/rules campaign and exact consumers | [Gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md) |

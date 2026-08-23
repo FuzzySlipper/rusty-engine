@@ -44,7 +44,9 @@ rebasing, and scale characterization are indexed in
 ## How to use this atlas
 
 1. Read [design.md](design.md) for the provider boundary.
-2. For a downstream gameplay conversion, start with the
+2. For a new downstream product, start with the
+   [greenfield downstream product path](topics/development/greenfield-downstream-product.md).
+   For an existing gameplay conversion, use the
    [downstream gameplay adoption guide](topics/gameplay/downstream-adoption.md)
    before deciding which code should survive or move.
 3. Choose the coarse owner map below before opening implementation files.
@@ -64,7 +66,7 @@ downstream game policy and orchestration
         +--> gameplay-mechanics
         +--> gameplay-resolution
         +--> gameplay-rules <--> rules/ (optional build-time authoring)
-        +--> gameplay-standard (optional static readouts beside exact owner APIs)
+        +--> gameplay-standard (optional exact/continuous DSL, composed leaves, presets, operation plans)
         +--> developer-command (optional runtime developer console / debug console envelopes and binding port)
         +--> developer-command-standard (optional standard gameplay command descriptors and owner adapters)
         +--> environment-authoring --> authored-scene
@@ -76,7 +78,7 @@ downstream game policy and orchestration
                                       |
                                       +--> render-host-contracts
                                       +--> renderer-webview-host --> private render/ artifact
-                                      +--> application-host --> bundled web product artifact
+                                      +--> application-host --> bundled rich-DOM product artifact
                                       +--> studio/ viewport and tools
 
 rusty-engine is the complete downstream facade over every public Rust library.
@@ -91,11 +93,12 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 | Entity components, atomic mutation, relationships, snapshots, state machines | [Entity state and state machines](code-map/entity-state-and-state-machines.md) |
 | Stats, tracks, sources, effects, items, equipment, damage, restoration | [Gameplay mechanics](code-map/gameplay-mechanics.md) |
 | Optional finite-binary64 stat/track/source/effect facts and direct services | [Continuous gameplay mechanics](code-map/gameplay-continuous-mechanics.md) |
-| Downstream gameplay layout, disposition-first migration, optional TS authoring DSL, mechanics/resolution composition, and AI intents | [Downstream gameplay adoption](topics/gameplay/downstream-adoption.md) |
+| Brand-new downstream Rust product layout, optional TS authoring, bounded DOM UI, transaction boundary, and host evidence | [Greenfield downstream product path](topics/development/greenfield-downstream-product.md) |
+| Existing downstream gameplay disposition-first migration, mechanics/resolution composition, and AI intents | [Downstream gameplay adoption](topics/gameplay/downstream-adoption.md) |
 | Upstream promotion decisions and TypeScript authoring DSL placement | [Upstream promotion and authoring DSL](topics/development/upstream-promotion-and-authoring-dsl.md) |
 | Bounded downstream-owned attempt lifecycle, transactions, receipts, and traces | [Gameplay resolution](code-map/gameplay-resolution.md) |
 | Optional opaque rules packages, TypeScript authoring, exact dependencies, provenance, canonicalization, and diagnostics | [Gameplay rules](code-map/gameplay-rules.md) |
-| Incubating static gameplay-capability readouts and explicit module selection | [Gameplay standard](code-map/gameplay-standard.md) |
+| Opt-in exact/continuous DSL, composed leaves, projections, presets, standard operation plans, and capability readouts | [Gameplay standard](code-map/gameplay-standard.md) |
 | Runtime developer console / developer console / debug console end-to-end flow | [Runtime developer console](topics/development/runtime-developer-console.md) |
 | Typed developer-command envelopes, profiles, discovery, provenance, and explicit sync safe-point binding | [Developer commands](code-map/developer-command.md) |
 | Standard gameplay command descriptors, inspection adapters, standard resolver-mode helpers, and typed mechanics admin adapters | [Standard developer commands](code-map/developer-command-standard.md) |
@@ -133,6 +136,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 - [FPS character controller design](topics/fps-character-controller-proposal.md)
 - [FPS character controller survey](topics/fps-character-controller-survey.md)
 - [Rust source organization](topics/development/rust-style.md)
+- [Greenfield downstream product path](topics/development/greenfield-downstream-product.md)
 - [Downstream renderer and Studio boundary](topics/development/downstream-renderer-and-studio.md)
 - [Product playtesting and evidence authority](topics/development/product-playtesting.md)
 - [Cargo workspace](../Cargo.toml)

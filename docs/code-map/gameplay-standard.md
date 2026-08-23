@@ -2,18 +2,21 @@
 
 ## Ownership
 
-`rust/crates/gameplay-standard` owns only static capability metadata and named
-module namespaces for opt-in gameplay adoption. It has four current modules:
-`entity_state`, `mechanics`, `resolution`, and `rules`. Each exports a
-`READOUT` with a bounded stable identity, a positive version, and
-`CapabilityMaturity::Incubating`, then re-exports the exact API of its focused
-owner.
+`rust/crates/gameplay-standard` owns opt-in static capability metadata, named
+module namespaces, and the bounded standard exact/continuous, extension,
+projection, preset, and mechanics-operation mechanisms documented below. Its
+capability namespaces are `entity_state`, `mechanics`, `resolution`, and
+`rules`; each exports a `READOUT` with a bounded stable identity, a positive
+version, and `CapabilityMaturity::Incubating`, then re-exports the exact API of
+its focused owner. The crate is not merely metadata, but it is still not a
+gameplay runtime or aggregate product layer.
 
 The crate is not a gameplay runtime or a layer above those owners. It owns no
 registry, discovery API, aggregate world/session object, scheduler,
 persistence, bootstrap, service location, trait-object collection, global
-module enumeration, game vocabulary, numeric-expression semantics, or dynamic
-extension format. `entity-state`, `gameplay-mechanics`,
+module enumeration, product game vocabulary, or dynamic runtime extension
+format. Its named numeric and composed-expression semantics remain the bounded
+opt-in mechanisms described below. `entity-state`, `gameplay-mechanics`,
 `gameplay-resolution`, and `gameplay-rules` remain directly usable with or
 without this convenience layer.
 

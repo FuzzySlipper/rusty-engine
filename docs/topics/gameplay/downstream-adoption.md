@@ -1,8 +1,11 @@
 # Downstream gameplay adoption
 
-This guide is the practical starting point for a downstream game that wants to
-use Rusty Engine's gameplay capabilities. It covers new games and existing
-repositories that are being simplified or migrated.
+This is a **migration and simplification guide** for an existing downstream
+game. For a brand-new product repository, start with the
+[greenfield downstream product path](../development/greenfield-downstream-product.md)
+instead. That guide reflects the current Standard composed-exact/product-leaf
+route and the bounded application-host topology before an existing codebase's
+disposition work is relevant.
 
 The central rule is:
 
@@ -91,10 +94,10 @@ Common choices are:
 `gameplay_resolution` does not call either sibling. Downstream Rust composes
 them.
 
-## Recommended downstream layout
+## Recommended migration layout
 
-For a new repository, use one visibly bounded gameplay home with unambiguous
-Rust and authoring subtrees:
+When a migration benefits from making its destinations visible, use one bounded
+gameplay home with unambiguous Rust and authoring subtrees:
 
 ```text
 gameplay/
@@ -204,94 +207,24 @@ Never skip directly from TypeScript objects to mutable runtime state. Never
 make the normalized JSON payload the live object model merely to avoid writing
 the semantic compiler.
 
-## Author a small downstream grammar
+## Reclassify local grammars before carrying them forward
 
-The authoring grammar should contain only shapes earned by the game. Catalogs
-may use the grammar but may not invent new node kinds privately.
+Earlier migrations used illustrative downstream-local expression, predicate,
+and program grammars. They are not the default starting shape after the
+Standard campaign: first use current Engine exact/continuous structures and
+standard mechanics operations where they fit; for game-specific exact values,
+use the closed `ComposedExactExpr<ProductLeaf>` route with a static downstream
+Rust codec. Keep product operations, policy, aggregate, and transaction typed
+and downstream-owned. See the [greenfield downstream product path](../development/greenfield-downstream-product.md#a-small-dagger-like-extension-without-a-local-universal-grammar).
 
-An illustrative action-game grammar might look like this:
+Retain a local grammar only when the surviving product actually needs its
+meaning. Its Rust semantic compiler must be the authority, and an optional
+TypeScript facade can only lower to that Rust-owned vocabulary. Do not recreate
+a universal local evaluator merely because the old source had one.
 
-```ts
-export type Subject = "actor" | "intentTarget";
-
-export type Expression =
-  | Readonly<{ kind: "constant"; value: number }>
-  | Readonly<{ kind: "stat"; subject: Subject; stat: string }>
-  | Readonly<{ kind: "evidence"; id: string }>;
-
-export type Predicate = Readonly<{
-  kind: "lessThanOrEqual";
-  left: Expression;
-  right: Expression;
-}>;
-
-export type Operation =
-  | Readonly<{ kind: "spendTrack"; track: string; amount: Expression }>
-  | Readonly<{
-      kind: "damage";
-      target: Readonly<{ kind: "intentTarget" }>;
-      amount: Expression;
-    }>;
-
-export type Program =
-  | Readonly<{ kind: "sequence"; steps: readonly Program[] }>
-  | Readonly<{
-      kind: "when";
-      predicate: Predicate;
-      thenProgram: Program;
-      otherwiseProgram?: Program;
-    }>
-  | Readonly<{ kind: "operation"; operation: Operation }>;
-
-export type ActionDefinition = Readonly<{
-  id: string;
-  tags: readonly string[];
-  program: Program;
-}>;
-```
-
-Catalog source should read primarily as data:
-
-```ts
-export const actions = [
-  action(
-    "arc-bolt",
-    ["spell", "ranged"],
-    sequence(
-      operation(spendTrack("mana", constant(4))),
-      when(
-        lessThanOrEqual(evidence("arc-bolt.hit.d100"), stat("actor", "focus")),
-        operation(damage(intentTarget(), evidence("arc-bolt.damage"))),
-      ),
-    ),
-  ),
-] as const satisfies readonly ActionDefinition[];
-```
-
-One package composition root combines catalogs and source records:
-
-```ts
-export const corePackage = composePackage({
-  packageId: "core",
-  version: 1,
-  sources: {
-    stats: "gameplay/authoring/src/catalogs/stats.ts",
-    actions: "gameplay/authoring/src/catalogs/actions.ts",
-  },
-  payload: {
-    schemaVersion: 1,
-    stats,
-    actions,
-    actors,
-    items,
-  },
-});
-```
-
-`composePackage` and the grammar above are downstream code. Engine owns only
-the semantic-neutral envelope contract. A new game operation therefore changes
-the downstream TypeScript grammar and downstream Rust compiler together; it
-does not require an Engine enum edit.
+One package composition root should combine only the retained catalogs and
+source records. `gameplay-rules` owns the semantic-neutral envelope, while the
+downstream Rust compiler owns the payload vocabulary and admission.
 
 Materialization should:
 

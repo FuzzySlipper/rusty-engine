@@ -479,7 +479,7 @@ owners, dependency prohibitions, and focused gates.
 
 ## Incubating gameplay-standard capability layer
 
-`gameplay-standard` is an optional, host-neutral metadata layer over four
+`gameplay-standard` is an optional, host-neutral capability layer beside four
 already independent owners: `entity-state`, `gameplay-mechanics`,
 `gameplay-resolution`, and `gameplay-rules`. It exposes one static readout in
 each named module namespace (`modules::entity_state`, `modules::mechanics`,
@@ -1025,7 +1025,7 @@ the surface-owned animation projection, but the surface does not discover servic
 ambient callbacks. Demo and Studio consumers provide typed frames and resource resolvers instead
 of constructing Three scenes of their own.
 
-`@rusty-engine/application-host` is the sole downstream web-application entry point above that
+`@rusty-engine/application-host` is the sole downstream rich-DOM application entry point above that
 internal host. Engine publishes it as one reproducibly built artifact with its renderer closure
 bundled and no renderer peer dependencies. It creates the canvas and one downstream DOM root,
 owns startup/failure, resize, cadence, pointer/focus modes, whole-content replacement, and disposal,
