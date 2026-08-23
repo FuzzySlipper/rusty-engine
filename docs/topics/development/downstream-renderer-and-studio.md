@@ -4,6 +4,10 @@ This document is the central authority for how an ordinary downstream game uses
 Rusty Engine rendering and Studio. It describes the supported current path, not
 historical package-consumer or exact-revision migration evidence.
 
+For the initial shared-root clone layout and a compiling minimum downstream,
+use the [downstream repository bootstrap](downstream-repository-bootstrap.md)
+and [Rusty Template](https://github.com/FuzzySlipper/rusty-template).
+
 ## One Rust dependency
 
 Local downstream repositories are expected to sit beside the Engine checkout

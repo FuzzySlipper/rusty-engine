@@ -19,6 +19,7 @@ does not require Den access.
 | [topics/fps-character-controller-survey.md](topics/fps-character-controller-survey.md) | Task 6847 source survey, feature matrix, licensing posture, and adopted transfer decisions |
 | [topics/fps-character-controller-proposal.md](topics/fps-character-controller-proposal.md) | Adopted host-neutral controller design, current Rust API, ownership, and remaining proof routes |
 | [topics/development/greenfield-downstream-product.md](topics/development/greenfield-downstream-product.md) | Greenfield Rust product, optional TypeScript authoring, bounded presentation viewport, and host topology |
+| [topics/development/downstream-repository-bootstrap.md](topics/development/downstream-repository-bootstrap.md) | Shared-root Engine/product setup, Rusty Template, outside-agent orientation, and first verification |
 | [topics/gameplay/downstream-adoption.md](topics/gameplay/downstream-adoption.md) | Disposition-first migration and simplification of existing downstream gameplay, authoring, mechanics, resolution, intents, and diagnostics |
 | [topics/development/upstream-promotion-and-authoring-dsl.md](topics/development/upstream-promotion-and-authoring-dsl.md) | Proactive Engine promotion criteria and the optional TypeScript gameplay authoring DSL boundary |
 | [README.md](README.md) | This documentation index |
@@ -82,6 +83,7 @@ tests take precedence when describing implemented behavior.
 | Change entity components or atomic entity mutation | [Entity state and state machines](code-map/entity-state-and-state-machines.md) |
 | Change stats, tracks, effects, items, equipment, damage, or restoration | [Gameplay mechanics](code-map/gameplay-mechanics.md) |
 | Start a brand-new downstream Rust product with optional TypeScript authoring and bounded DOM UI | [Greenfield downstream product path](topics/development/greenfield-downstream-product.md) |
+| Clone the Engine and a compiling minimum product under one shared root | [Downstream repository bootstrap](topics/development/downstream-repository-bootstrap.md) and [Rusty Template](https://github.com/FuzzySlipper/rusty-template) |
 | Migrate or simplify an existing downstream game's gameplay code and optional TypeScript authoring | [Downstream gameplay adoption](topics/gameplay/downstream-adoption.md) |
 | Decide whether a mechanism belongs upstream or in a TypeScript authoring DSL | [Upstream promotion and authoring DSL](topics/development/upstream-promotion-and-authoring-dsl.md) |
 | Package a downstream-authored rules candidate without giving Engine its meaning | [Gameplay rules](code-map/gameplay-rules.md) |

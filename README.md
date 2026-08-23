@@ -30,6 +30,9 @@ Den may hold current planning, review packets, and decisions when available,
 but the repository is intentionally navigable without Den access. Start with
 [the canonical design](docs/design.md) and the
 [agent code atlas](docs/agent-code-atlas.md). A brand-new game starts with the
+[downstream repository bootstrap](docs/topics/development/downstream-repository-bootstrap.md)
+and its executable [Rusty Template](https://github.com/FuzzySlipper/rusty-template),
+then uses the
 [greenfield downstream product path](docs/topics/development/greenfield-downstream-product.md);
 an existing product being simplified uses the
 [migration-oriented adoption guide](docs/topics/gameplay/downstream-adoption.md).
@@ -308,6 +311,8 @@ The format, limits, provenance, and failure behavior are documented in
 | [Runtime developer console](docs/topics/development/runtime-developer-console.md) | End-to-end developer console / debug console flow, ownership, adapters, and focused checks |
 | [Known limitations](docs/known-limitations.md) | Active provider limitations and explicitly scheduled consumer certification |
 | [Rust source organization](docs/topics/development/rust-style.md) | Lightweight module and behavior-owner style |
+| [Downstream repository bootstrap](docs/topics/development/downstream-repository-bootstrap.md) | Shared-root clone layout, executable template, outside-agent orientation, and first verification |
+| [Rusty Template](https://github.com/FuzzySlipper/rusty-template) | Minimal compiling Rust-first downstream with TypeScript authoring and one bounded application viewport |
 | [Downstream Engine and Studio boundary](docs/topics/development/downstream-renderer-and-studio.md) | Sibling facade consumption, Engine-hosted Studio, and renderer ownership |
 | [Downstream gameplay adoption](docs/topics/gameplay/downstream-adoption.md) | Disposition-first migration into authored packages, downstream Rust authority, and optional gameplay crates |
 | [Rendering successor contract](docs/rendering-successor-contract.md) | Complete shared-rendering scope and adaptation boundary |
@@ -321,8 +326,11 @@ The format, limits, provenance, and failure behavior are documented in
 
 ## Notes for outside agents
 
-- Read `AGENTS.md`, `docs/design.md`, and `docs/agent-code-atlas.md` before
-  substantial work.
+- For a new downstream checkout, begin with the
+  [repository bootstrap](docs/topics/development/downstream-repository-bootstrap.md)
+  and [Rusty Template](https://github.com/FuzzySlipper/rusty-template).
+- For Engine work, read `AGENTS.md`, `docs/design.md`, and
+  `docs/agent-code-atlas.md` before substantial changes.
 - Treat code, manifests, tests, and repository gates as implementation truth.
 - Use Den for live task state when a Den task is supplied; do not require Den
   merely to understand the checked-out provider.

@@ -4,6 +4,12 @@ This is the starting point for a **new downstream product repository**. It is
 not a migration plan and it is not a recipe for making a web app. Rusty Engine
 provides host-neutral mechanisms; the product owns the game it makes with them.
 
+For the shared-root clone order and a compiling minimum implementation, start
+with the [downstream repository bootstrap](downstream-repository-bootstrap.md)
+and [Rusty Template](https://github.com/FuzzySlipper/rusty-template). This page
+then explains how to grow that minimum without moving product authority into
+the browser or Engine.
+
 The shortest useful rule is:
 
 > Rust owns live meaning. TypeScript may author or present it, but does not
