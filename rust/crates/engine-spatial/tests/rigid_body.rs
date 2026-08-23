@@ -99,6 +99,126 @@ fn caller_driven_step_integrates_gravity_impulse_and_rotation() {
 }
 
 #[test]
+fn canonical_solver_enforces_planar_axis_locks_without_rejecting_locked_influences() {
+    let entity = EntityId::new(2);
+    let mut body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 1.0);
+    body.locked_translation_axes = [false, true, false];
+    body.locked_rotation_axes = [true, false, true];
+    let mut state = body_state([(entity, Vec3::ZERO, body)]);
+    let scene = empty_scene();
+    let mut service = RigidBodyService::default();
+
+    let receipt = service
+        .step(
+            &mut state,
+            &scene,
+            RigidBodyStepRequest {
+                step_seconds: 1.0 / 60.0,
+                steps: 1,
+                // This would exceed the discrete motion limit if the locked Y
+                // contribution were still included by preflight.
+                gravity: Vec3::new(0.0, -50_000.0, 0.0),
+                actions: vec![RigidBodyAction {
+                    entity,
+                    force: Vec3::new(2.0, 1_000_000.0, 3.0),
+                    torque: Vec3::new(100.0, 4.0, 100.0),
+                    impulse: Vec3::new(1.0, 1_000_000.0, 1.5),
+                    torque_impulse: Vec3::new(100.0, 2.0, 100.0),
+                    wake: true,
+                }],
+            },
+        )
+        .expect("solver, not downstream correction, suppresses locked axes");
+    let fact = receipt.facts[0];
+
+    assert!(fact.transform_after.translation.x > 0.0);
+    assert!(fact.transform_after.translation.z > 0.0);
+    assert_eq!(fact.transform_after.translation.y, 0.0);
+    assert_eq!(fact.linear_velocity_after.y, 0.0);
+    assert!(fact.angular_velocity_after.y > 0.0);
+    assert_eq!(fact.angular_velocity_after.x, 0.0);
+    assert_eq!(fact.angular_velocity_after.z, 0.0);
+
+    // Assert the solved orientation, not merely the angular-velocity fact.
+    let orientation = fact.transform_after.rotation;
+    assert!(
+        orientation.y.abs() > 1.0e-4,
+        "yaw did not integrate: {orientation:?}"
+    );
+    assert!(
+        orientation.x.abs() < 1.0e-6,
+        "pitch leaked: {orientation:?}"
+    );
+    assert!(orientation.z.abs() < 1.0e-6, "roll leaked: {orientation:?}");
+}
+
+#[test]
+fn all_axis_locks_are_valid_and_stationary() {
+    let entity = EntityId::new(3);
+    let mut body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 1.0);
+    body.locked_translation_axes = [true; 3];
+    body.locked_rotation_axes = [true; 3];
+    let mut state = body_state([(entity, Vec3::new(1.0, 2.0, 3.0), body)]);
+    let scene = empty_scene();
+    let mut service = RigidBodyService::default();
+
+    let receipt = service
+        .step(
+            &mut state,
+            &scene,
+            RigidBodyStepRequest {
+                step_seconds: 1.0 / 60.0,
+                steps: 1,
+                gravity: Vec3::new(0.0, -9.81, 0.0),
+                actions: vec![RigidBodyAction {
+                    entity,
+                    force: Vec3::splat(1_000_000.0),
+                    torque: Vec3::splat(1_000_000.0),
+                    impulse: Vec3::splat(1_000_000.0),
+                    torque_impulse: Vec3::splat(1_000_000.0),
+                    wake: true,
+                }],
+            },
+        )
+        .expect("all locked axes are a valid canonical body");
+    let fact = receipt.facts[0];
+    assert_eq!(fact.transform_before, fact.transform_after);
+    assert_eq!(fact.linear_velocity_after, Vec3::ZERO);
+    assert_eq!(fact.angular_velocity_after, Vec3::ZERO);
+}
+
+#[test]
+fn axis_locks_do_not_change_disabled_body_behavior() {
+    let entity = EntityId::new(4);
+    let mut body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 1.0);
+    body.enabled = false;
+    body.locked_translation_axes = [false, true, false];
+    body.locked_rotation_axes = [true, false, true];
+    let mut state = body_state([(entity, Vec3::new(1.0, 2.0, 3.0), body)]);
+    let scene = empty_scene();
+    let mut service = RigidBodyService::default();
+
+    let receipt = service
+        .step(
+            &mut state,
+            &scene,
+            RigidBodyStepRequest {
+                step_seconds: 1.0 / 60.0,
+                steps: 1,
+                gravity: Vec3::new(0.0, -9.81, 0.0),
+                actions: vec![RigidBodyAction::impulse(entity, Vec3::new(0.5, 0.5, 0.5))],
+            },
+        )
+        .expect("disabled bodies remain admissible with lock facts");
+    let fact = receipt.facts[0];
+    assert_eq!(fact.transform_before, fact.transform_after);
+    assert!(fact.linear_velocity_after.x > 0.0);
+    assert_eq!(fact.linear_velocity_after.y, 0.0);
+    assert!(fact.linear_velocity_after.z > 0.0);
+    assert_eq!(fact.angular_velocity_after, Vec3::ZERO);
+}
+
+#[test]
 fn dynamic_bodies_contact_voxel_and_static_mesh_environment() {
     let body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.45 }, 1.0);
     let voxel_entity = EntityId::new(10);
@@ -270,6 +390,36 @@ fn prepared_steps_reject_stale_slots_without_publishing_derived_state() {
 }
 
 #[test]
+fn prepared_steps_reject_changed_lock_facts_without_publishing_derived_state() {
+    let entity = EntityId::new(31);
+    let body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 1.0);
+    let mut state = body_state([(entity, Vec3::new(0.0, 2.0, 0.0), body)]);
+    let scene = empty_scene();
+    let mut service = RigidBodyService::default();
+    let prepared = service
+        .prepare(&state, &scene, RigidBodyStepRequest::single(1.0 / 60.0))
+        .unwrap();
+    let slot = state
+        .component_revision::<RigidBodyComponent>(entity)
+        .unwrap();
+    let mut changed = *state.rigid_body(entity).unwrap();
+    changed.locked_translation_axes = [false, true, false];
+    EntityAuthoringService
+        .replace_component(&mut state, slot, entity, changed)
+        .unwrap();
+    let bytes_before = encode_snapshot(&state).unwrap();
+
+    assert!(matches!(
+        service.commit(&mut state, &scene, prepared),
+        Err(RigidBodyStepError::Publication(
+            RigidBodyStatePublicationError::StaleRigidBody { entity: stale, .. }
+        )) if stale == entity
+    ));
+    assert_eq!(encode_snapshot(&state).unwrap(), bytes_before);
+    assert!(service.readout().is_none());
+}
+
+#[test]
 fn prepared_steps_bind_relationship_and_body_set_authority() {
     let body_entity = EntityId::new(32);
     let parent_entity = EntityId::new(33);
@@ -390,6 +540,8 @@ fn snapshot_reopen_continues_with_rebuilt_derived_world_deterministically() {
         2.0,
     );
     body.linear_velocity = Vec3::new(0.5, 0.0, 0.25);
+    body.locked_translation_axes = [false, true, false];
+    body.locked_rotation_axes = [true, false, true];
     let mut original = body_state([(entity, Vec3::new(0.0, 4.0, 0.0), body)]);
     let scene = empty_scene();
     let mut first_service = RigidBodyService::default();

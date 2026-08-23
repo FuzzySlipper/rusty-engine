@@ -38,6 +38,10 @@ pub struct DynamicsBodyInput {
     pub mass: f64,
     pub linear_velocity: [f64; 3],
     pub angular_velocity: [f64; 3],
+    /// `true` locks the corresponding world-space X/Y/Z translation axis.
+    pub locked_translation_axes: [bool; 3],
+    /// `true` locks the corresponding world-space X/Y/Z rotation axis.
+    pub locked_rotation_axes: [bool; 3],
     pub linear_damping: f64,
     pub angular_damping: f64,
     pub gravity_scale: f64,
@@ -135,6 +139,12 @@ pub enum DynamicsError {
     InvalidBody {
         body: DynamicsBodyId,
     },
+    LockedTranslationAxisVelocity {
+        body: DynamicsBodyId,
+    },
+    LockedRotationAxisVelocity {
+        body: DynamicsBodyId,
+    },
     InvalidAction {
         body: DynamicsBodyId,
     },
@@ -160,6 +170,10 @@ impl DynamicsError {
             Self::DuplicateBody { .. } => "duplicate-dynamics-body",
             Self::UnknownActionBody { .. } => "unknown-dynamics-action-body",
             Self::InvalidBody { .. } => "invalid-dynamics-body",
+            Self::LockedTranslationAxisVelocity { .. } => {
+                "locked-dynamics-translation-axis-velocity"
+            }
+            Self::LockedRotationAxisVelocity { .. } => "locked-dynamics-rotation-axis-velocity",
             Self::InvalidAction { .. } => "invalid-dynamics-action",
             Self::MotionLimitExceeded { .. } => "dynamics-motion-limit-exceeded",
             Self::OutputNotFinite { .. } => "non-finite-dynamics-output",
@@ -184,6 +198,12 @@ struct AggregatedAction {
     wake: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct AxisLocks {
+    translation: [bool; 3],
+    rotation: [bool; 3],
+}
+
 /// Run one bounded candidate simulation from canonical inputs.
 ///
 /// The Rapier world is rebuilt off-side for every call. It is a derived cache,
@@ -196,13 +216,21 @@ pub fn simulate_dynamics(
     validate_header(&input)?;
     input.bodies.sort_by_key(|body| body.id);
     let mut seen = BTreeSet::new();
+    let mut body_locks = BTreeMap::new();
     for body in &input.bodies {
         if !seen.insert(body.id) {
             return Err(DynamicsError::DuplicateBody { body: body.id });
         }
         validate_body(body)?;
+        body_locks.insert(
+            body.id,
+            AxisLocks {
+                translation: body.locked_translation_axes,
+                rotation: body.locked_rotation_axes,
+            },
+        );
     }
-    let actions = aggregate_actions(&input.actions, &seen)?;
+    let actions = aggregate_actions(&input.actions, &body_locks)?;
     validate_motion(&input, &actions)?;
 
     let mut world = PhysicsWorld {
@@ -222,6 +250,16 @@ pub fn simulate_dynamics(
             .rotation(vector3(body.rotation))
             .linvel(vector(body.linear_velocity))
             .angvel(vector(body.angular_velocity))
+            .enabled_translations(
+                !body.locked_translation_axes[0],
+                !body.locked_translation_axes[1],
+                !body.locked_translation_axes[2],
+            )
+            .enabled_rotations(
+                !body.locked_rotation_axes[0],
+                !body.locked_rotation_axes[1],
+                !body.locked_rotation_axes[2],
+            )
             .linear_damping(body.linear_damping)
             .angular_damping(body.angular_damping)
             .gravity_scale(body.gravity_scale)
@@ -386,18 +424,31 @@ fn validate_body(body: &DynamicsBodyInput) -> Result<(), DynamicsError> {
     {
         return Err(DynamicsError::InvalidBody { body: body.id });
     }
+    if has_velocity_on_locked_axis(body.linear_velocity, body.locked_translation_axes) {
+        return Err(DynamicsError::LockedTranslationAxisVelocity { body: body.id });
+    }
+    if has_velocity_on_locked_axis(body.angular_velocity, body.locked_rotation_axes) {
+        return Err(DynamicsError::LockedRotationAxisVelocity { body: body.id });
+    }
     Ok(())
+}
+
+fn has_velocity_on_locked_axis(velocity: [f64; 3], locked_axes: [bool; 3]) -> bool {
+    locked_axes
+        .into_iter()
+        .zip(velocity)
+        .any(|(locked, component)| locked && component != 0.0)
 }
 
 fn aggregate_actions(
     actions: &[DynamicsAction],
-    bodies: &BTreeSet<DynamicsBodyId>,
+    bodies: &BTreeMap<DynamicsBodyId, AxisLocks>,
 ) -> Result<BTreeMap<DynamicsBodyId, AggregatedAction>, DynamicsError> {
     let mut aggregated = BTreeMap::<DynamicsBodyId, AggregatedAction>::new();
     for action in actions {
-        if !bodies.contains(&action.body) {
+        let Some(locks) = bodies.get(&action.body) else {
             return Err(DynamicsError::UnknownActionBody { body: action.body });
-        }
+        };
         if !action
             .force
             .into_iter()
@@ -409,10 +460,10 @@ fn aggregate_actions(
             return Err(DynamicsError::InvalidAction { body: action.body });
         }
         let entry = aggregated.entry(action.body).or_default();
-        entry.force += vector(action.force);
-        entry.torque += vector(action.torque);
-        entry.impulse += vector(action.impulse);
-        entry.torque_impulse += vector(action.torque_impulse);
+        entry.force += mask_locked_axes(vector(action.force), locks.translation);
+        entry.torque += mask_locked_axes(vector(action.torque), locks.rotation);
+        entry.impulse += mask_locked_axes(vector(action.impulse), locks.translation);
+        entry.torque_impulse += mask_locked_axes(vector(action.torque_impulse), locks.rotation);
         entry.wake |= action.wake;
         if !entry
             .force
@@ -436,10 +487,14 @@ fn validate_motion(
     let gravity = vector(input.gravity);
     for body in &input.bodies {
         let action = actions.get(&body.id).copied().unwrap_or_default();
-        let acceleration = action.force / body.mass + gravity * body.gravity_scale;
-        let estimated_velocity = vector(body.linear_velocity)
-            + action.impulse / body.mass
-            + acceleration * input.step_seconds * f64::from(input.steps);
+        let acceleration = mask_locked_axes(
+            action.force / body.mass + gravity * body.gravity_scale,
+            body.locked_translation_axes,
+        );
+        let estimated_velocity = mask_locked_axes(
+            vector(body.linear_velocity) + action.impulse / body.mass,
+            body.locked_translation_axes,
+        ) + acceleration * input.step_seconds * f64::from(input.steps);
         let estimated_translation = estimated_velocity.length() * input.step_seconds;
         let maximum = if body.continuous_collision {
             MAX_CCD_TRANSLATION_PER_STEP
@@ -456,6 +511,14 @@ fn validate_motion(
         }
     }
     Ok(())
+}
+
+fn mask_locked_axes(value: Vector, locked_axes: [bool; 3]) -> Vector {
+    Vector::new(
+        if locked_axes[0] { 0.0 } else { value.x },
+        if locked_axes[1] { 0.0 } else { value.y },
+        if locked_axes[2] { 0.0 } else { value.z },
+    )
 }
 
 fn insert_static_environment(world: &mut PhysicsWorld, projection: &CollisionProjection) {
@@ -510,5 +573,152 @@ impl CollisionProjection {
         );
         shapes.extend(self.static_meshes.dynamics_shapes());
         shapes
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core_space::{ChunkDims, GridId, VoxelGridSpec};
+    use svc_spatial::VoxelWorld;
+
+    use super::*;
+
+    fn empty_projection() -> CollisionProjection {
+        let grid = VoxelGridSpec::new(GridId::new(0), 1.0, ChunkDims::cubic(8).unwrap())
+            .expect("valid empty test grid");
+        CollisionProjection::build(&VoxelWorld::new(grid))
+    }
+
+    fn body() -> DynamicsBodyInput {
+        DynamicsBodyInput {
+            id: DynamicsBodyId(1),
+            translation: [0.0; 3],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            shape: DynamicsShape::Sphere { radius: 0.5 },
+            mass: 1.0,
+            linear_velocity: [0.0; 3],
+            angular_velocity: [0.0; 3],
+            locked_translation_axes: [false; 3],
+            locked_rotation_axes: [false; 3],
+            linear_damping: 0.0,
+            angular_damping: 0.0,
+            gravity_scale: 0.0,
+            friction: 0.5,
+            restitution: 0.0,
+            collision_groups: u32::MAX,
+            collision_mask: u32::MAX,
+            enabled: true,
+            sleeping: false,
+            continuous_collision: false,
+        }
+    }
+
+    fn input(body: DynamicsBodyInput) -> DynamicsStepInput {
+        DynamicsStepInput {
+            step_seconds: 1.0 / 60.0,
+            steps: 1,
+            gravity: [0.0; 3],
+            bodies: vec![body],
+            actions: Vec::new(),
+        }
+    }
+
+    fn action(body: DynamicsBodyId, value: f64) -> DynamicsAction {
+        DynamicsAction {
+            body,
+            force: [value; 3],
+            torque: [value; 3],
+            impulse: [value; 3],
+            torque_impulse: [value; 3],
+            wake: true,
+        }
+    }
+
+    #[test]
+    fn locked_translation_velocity_is_rejected_before_solver_construction() {
+        let mut body = body();
+        body.locked_translation_axes = [false, true, false];
+        body.linear_velocity = [0.0, 1.0, 0.0];
+
+        assert_eq!(
+            simulate_dynamics(&empty_projection(), input(body)),
+            Err(DynamicsError::LockedTranslationAxisVelocity {
+                body: DynamicsBodyId(1)
+            })
+        );
+    }
+
+    #[test]
+    fn locked_rotation_velocity_is_rejected_before_solver_construction() {
+        let mut body = body();
+        body.locked_rotation_axes = [true, false, true];
+        body.angular_velocity = [1.0, 0.0, 0.0];
+
+        assert_eq!(
+            simulate_dynamics(&empty_projection(), input(body)),
+            Err(DynamicsError::LockedRotationAxisVelocity {
+                body: DynamicsBodyId(1)
+            })
+        );
+    }
+
+    #[test]
+    fn all_locked_axes_admit_zero_initial_velocities() {
+        let mut body = body();
+        body.locked_translation_axes = [true; 3];
+        body.locked_rotation_axes = [true; 3];
+
+        let output = simulate_dynamics(&empty_projection(), input(body))
+            .expect("zero velocity is compatible with every locked axis");
+        assert_eq!(output.bodies.len(), 1);
+        assert_eq!(output.bodies[0].translation, [0.0; 3]);
+        assert_eq!(output.bodies[0].linear_velocity, [0.0; 3]);
+        assert_eq!(output.bodies[0].angular_velocity, [0.0; 3]);
+    }
+
+    #[test]
+    fn finite_locked_influences_are_masked_before_aggregation() {
+        let mut body = body();
+        body.locked_translation_axes = [true; 3];
+        body.locked_rotation_axes = [true; 3];
+        let mut step = input(body);
+        step.actions = vec![action(DynamicsBodyId(1), f64::MAX); 2];
+
+        let output = simulate_dynamics(&empty_projection(), step)
+            .expect("suppressed locked axes never overflow the action accumulator");
+        assert_eq!(output.bodies[0].translation, [0.0; 3]);
+        assert_eq!(output.bodies[0].linear_velocity, [0.0; 3]);
+        assert_eq!(output.bodies[0].angular_velocity, [0.0; 3]);
+    }
+
+    #[test]
+    fn finite_unlocked_influence_overflow_still_rejects() {
+        let mut step = input(body());
+        step.actions = vec![action(DynamicsBodyId(1), f64::MAX); 2];
+
+        assert_eq!(
+            simulate_dynamics(&empty_projection(), step),
+            Err(DynamicsError::InvalidAction {
+                body: DynamicsBodyId(1)
+            })
+        );
+    }
+
+    #[test]
+    fn nonfinite_locked_influence_still_rejects_before_masking() {
+        let mut body = body();
+        body.locked_translation_axes = [true; 3];
+        body.locked_rotation_axes = [true; 3];
+        let mut step = input(body);
+        let mut invalid = action(DynamicsBodyId(1), 0.0);
+        invalid.force[0] = f64::NAN;
+        step.actions.push(invalid);
+
+        assert_eq!(
+            simulate_dynamics(&empty_projection(), step),
+            Err(DynamicsError::InvalidAction {
+                body: DynamicsBodyId(1)
+            })
+        );
     }
 }

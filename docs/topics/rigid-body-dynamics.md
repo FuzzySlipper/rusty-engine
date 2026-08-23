@@ -65,6 +65,16 @@ larger explicit limit; exceeding either is a typed rejection before mutation.
 Dynamic triangle meshes are unsupported. Schema 1 admits spheres, cuboids, and
 local +Y capsules with solver-derived inertia from a positive authored mass.
 
+`RigidBodyComponent` additionally carries two generic `[bool; 3]` facts:
+`locked_translation_axes` and `locked_rotation_axes`. A `true` entry locks the
+corresponding world-space X/Y/Z degree of freedom in the canonical solver. The
+facts are neutral constraints, not product movement policy: downstream chooses
+which force, impulse, gravity, or torque to request, while `svc-collision`
+suppresses their effect on locked degrees of freedom. All subsets, including
+all six locked axes, are valid. Initial linear or angular velocity on a locked
+axis is a typed entity-state validation error. Old schema-1 snapshots omit the
+new defaulted fields and therefore reopen with every axis unlocked.
+
 ## Bounded service contract
 
 One request admits at most 1,024 bodies, 4,096 actions, 4,096 returned active

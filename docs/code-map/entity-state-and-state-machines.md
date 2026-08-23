@@ -68,8 +68,10 @@ relationships, activation, snapshots, and explicit state-machine instances.
   to the same presentation.
 - `RigidBodyComponent` is the built-in durable registered exception: its stable
   schema-1 codec stores inert non-kinematic body facts, while the named spatial
-  service owns all solver behavior and exact-slot publication. No backend
-  handles or callbacks are components.
+  service owns all solver behavior and exact-slot publication. Its
+  `locked_translation_axes` and `locked_rotation_axes` facts use `true` for a
+  solver-locked X/Y/Z degree of freedom; old snapshots default those facts to
+  unlocked. No backend handles or callbacks are components.
 - `replace_rigid_body_states` is a second deliberately narrow publication
   exception: it atomically replaces the exact transform and rigid-body slots
   prepared by the spatial service. It is bounded to 1,024 unique entities and

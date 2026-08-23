@@ -163,6 +163,12 @@ pub struct RigidBodyComponent {
     pub inertia: RigidBodyInertiaPolicy,
     pub linear_velocity: Vec3,
     pub angular_velocity: Vec3,
+    /// Axes whose world-space translation is constrained by the canonical
+    /// rigid-body solver. `true` means the corresponding X/Y/Z axis is locked.
+    pub locked_translation_axes: [bool; 3],
+    /// Axes whose world-space rotation is constrained by the canonical
+    /// rigid-body solver. `true` means the corresponding X/Y/Z axis is locked.
+    pub locked_rotation_axes: [bool; 3],
     pub linear_damping: f32,
     pub angular_damping: f32,
     pub gravity_scale: f32,
@@ -184,6 +190,8 @@ impl RigidBodyComponent {
             inertia: RigidBodyInertiaPolicy::DeriveFromShapeAndMass,
             linear_velocity: Vec3::ZERO,
             angular_velocity: Vec3::ZERO,
+            locked_translation_axes: [false; 3],
+            locked_rotation_axes: [false; 3],
             linear_damping: 0.0,
             angular_damping: 0.0,
             gravity_scale: 1.0,

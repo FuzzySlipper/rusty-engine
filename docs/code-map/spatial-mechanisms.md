@@ -83,7 +83,9 @@ from it.
 - The caller-driven rigid-body service consumes exact entity component slots
   plus this canonical voxel/static-triangle environment. Rapier caches are
   derived, bounded, and non-durable; complete accepted steps publish atomically
-  through entity-state.
+  through entity-state. It projects durable per-axis locks into the canonical
+  solver and motion-limit preflight rather than asking downstream to correct
+  velocities after a step.
 - `CharacterControllerService::{step,prepare,commit}` is the host-neutral
   kinematic FPS path. It consumes one entity with Transform plus inert
   `CharacterMotionComponent`, a `CharacterControllerConfig`, and a sequenced

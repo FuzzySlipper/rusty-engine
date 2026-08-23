@@ -25,6 +25,8 @@ pub enum RigidBodyValidationError {
     UnsupportedInertiaPolicy,
     InvalidLinearVelocity,
     InvalidAngularVelocity,
+    LockedTranslationAxisVelocity,
+    LockedRotationAxisVelocity,
     InvalidLinearDamping,
     InvalidAngularDamping,
     InvalidGravityScale,
@@ -42,6 +44,8 @@ impl RigidBodyValidationError {
             Self::UnsupportedInertiaPolicy => "unsupported-rigid-body-inertia-policy",
             Self::InvalidLinearVelocity => "invalid-rigid-body-linear-velocity",
             Self::InvalidAngularVelocity => "invalid-rigid-body-angular-velocity",
+            Self::LockedTranslationAxisVelocity => "locked-rigid-body-translation-axis-velocity",
+            Self::LockedRotationAxisVelocity => "locked-rigid-body-rotation-axis-velocity",
             Self::InvalidLinearDamping => "invalid-rigid-body-linear-damping",
             Self::InvalidAngularDamping => "invalid-rigid-body-angular-damping",
             Self::InvalidGravityScale => "invalid-rigid-body-gravity-scale",
@@ -78,6 +82,12 @@ pub fn validate_rigid_body(value: &RigidBodyComponent) -> Result<(), RigidBodyVa
     }
     if !bounded_vector(value.angular_velocity, MAX_RIGID_BODY_SPEED) {
         return Err(RigidBodyValidationError::InvalidAngularVelocity);
+    }
+    if has_velocity_on_locked_axis(value.linear_velocity, value.locked_translation_axes) {
+        return Err(RigidBodyValidationError::LockedTranslationAxisVelocity);
+    }
+    if has_velocity_on_locked_axis(value.angular_velocity, value.locked_rotation_axes) {
+        return Err(RigidBodyValidationError::LockedRotationAxisVelocity);
     }
     if !bounded_nonnegative(value.linear_damping, MAX_RIGID_BODY_DAMPING) {
         return Err(RigidBodyValidationError::InvalidLinearDamping);
@@ -130,6 +140,13 @@ fn bounded_vector(value: Vec3, maximum: f32) -> bool {
         .all(|component| component.is_finite() && component.abs() <= maximum)
 }
 
+fn has_velocity_on_locked_axis(velocity: Vec3, locked_axes: [bool; 3]) -> bool {
+    locked_axes
+        .into_iter()
+        .zip(velocity.to_array())
+        .any(|(locked, component)| locked && component != 0.0)
+}
+
 pub(crate) fn rigid_body_registration() -> ComponentRegistration<RigidBodyComponent> {
     let type_id = ComponentTypeId::parse(RIGID_BODY_COMPONENT_TYPE_ID)
         .expect("built-in rigid-body component identity is valid");
@@ -164,6 +181,10 @@ struct RigidBodySnapshotV1 {
     enabled: bool,
     sleeping: bool,
     continuous_collision: bool,
+    #[serde(default)]
+    locked_translation_axes: [bool; 3],
+    #[serde(default)]
+    locked_rotation_axes: [bool; 3],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -228,6 +249,8 @@ impl From<RigidBodyComponent> for RigidBodySnapshotV1 {
             enabled: value.enabled,
             sleeping: value.sleeping,
             continuous_collision: value.continuous_collision,
+            locked_translation_axes: value.locked_translation_axes,
+            locked_rotation_axes: value.locked_rotation_axes,
         }
     }
 }
@@ -271,6 +294,8 @@ impl From<RigidBodySnapshotV1> for RigidBodyComponent {
             enabled: value.enabled,
             sleeping: value.sleeping,
             continuous_collision: value.continuous_collision,
+            locked_translation_axes: value.locked_translation_axes,
+            locked_rotation_axes: value.locked_rotation_axes,
         }
     }
 }
@@ -318,5 +343,30 @@ mod tests {
             validate_rigid_body(&body),
             Err(RigidBodyValidationError::EmptyCollisionGroups)
         );
+        body.collision_groups = u32::MAX;
+        body.locked_translation_axes = [false, true, false];
+        body.linear_velocity = Vec3::new(0.0, 1.0, 0.0);
+        assert_eq!(
+            validate_rigid_body(&body),
+            Err(RigidBodyValidationError::LockedTranslationAxisVelocity)
+        );
+        body.linear_velocity = Vec3::ZERO;
+        body.locked_rotation_axes = [true, false, true];
+        body.angular_velocity = Vec3::new(1.0, 0.0, 0.0);
+        assert_eq!(
+            validate_rigid_body(&body),
+            Err(RigidBodyValidationError::LockedRotationAxisVelocity)
+        );
+    }
+
+    #[test]
+    fn old_schema_one_snapshot_defaults_axis_locks_to_unlocked() {
+        let body = RigidBodyComponent::dynamic(RigidBodyShape::Sphere { radius: 0.5 }, 1.0);
+        let mut old = encode(&body);
+        let object = old.as_object_mut().expect("rigid-body object");
+        object.remove("lockedTranslationAxes");
+        object.remove("lockedRotationAxes");
+
+        assert_eq!(decode(old), Ok(body));
     }
 }

@@ -458,6 +458,8 @@ fn body_input(body: &CanonicalBody) -> DynamicsBodyInput {
         mass: f64::from(body.body.mass),
         linear_velocity: vec3_f64(body.body.linear_velocity),
         angular_velocity: vec3_f64(body.body.angular_velocity),
+        locked_translation_axes: body.body.locked_translation_axes,
+        locked_rotation_axes: body.body.locked_rotation_axes,
         linear_damping: f64::from(body.body.linear_damping),
         angular_damping: f64::from(body.body.angular_damping),
         gravity_scale: f64::from(body.body.gravity_scale),

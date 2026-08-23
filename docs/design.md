@@ -695,7 +695,9 @@ schema-1 rigid-body component facts remain in `entity-state`, while
 state and `engine-spatial` owns bounded fixed-step preparation plus atomic exact-
 slot publication. Downstream owns step timing, gameplay-selected impulses,
 consequences, complete saves, and presentation. Kinematic controller motion is
-not redefined as a dynamic body. The backend choice, numeric guarantees, CCD
+not redefined as a dynamic body. Durable per-axis lock facts are projected into
+the canonical solver and its motion-limit preflight, so downstream never owns a
+post-step velocity correction. The backend choice, numeric guarantees, CCD
 limits, and forbidden scheduler/session shapes are specified in
 [Rigid-body dynamics](topics/rigid-body-dynamics.md).
 
