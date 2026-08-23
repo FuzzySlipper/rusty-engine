@@ -85,12 +85,10 @@ communicates ownership better.
 
 ## Spend abstractions only when proved necessary
 
-Prefer concrete types and direct calls. Add a trait when there is a real boundary that must be
-substituted or more than one meaningful implementation. Add a generic only when it removes repeated
-logic without hiding gameplay ownership.
+Prefer concrete types and direct calls. Add a trait when there is a real boundary that must be substituted or more than one meaningful implementation. 
 
 Do not introduce a service locator, dependency-injection container, plugin registry, universal
-handler, prelude, gameplay AST, behavior graph, or macro-generated routing as a default convenience.
+handler, prelude, behavior graph, or macro-generated routing as a default convenience.
 Names such as `Manager`, `Handler`, and `Util` need a more precise responsibility before they enter
 the source tree.
 
