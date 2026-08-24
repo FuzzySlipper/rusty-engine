@@ -79,6 +79,31 @@ export type {
   RustyApplicationVoxelSpriteReceipt,
   RustyApplicationVoxelSpriteSource,
 } from './application-host.js';
+export {
+  RUSTY_APPLICATION_INPUT_POINTER_DELTA_MAXIMUM,
+  RUSTY_APPLICATION_INPUT_QUEUE_MAXIMUM,
+  RUSTY_APPLICATION_INPUT_SELECTED_CONTROLLER_MAXIMUM,
+  RUSTY_APPLICATION_INPUT_U64_MAXIMUM,
+  RUSTY_APPLICATION_INPUT_WHEEL_DELTA_MAXIMUM,
+} from './input-ingress.js';
+export type {
+  RustyApplicationControllerAxis,
+  RustyApplicationControllerButton,
+  RustyApplicationInputClearReason,
+  RustyApplicationInputEdge,
+  RustyApplicationInputPort,
+  RustyApplicationKeyboardControl,
+  RustyApplicationPointerButton,
+  RustyApplicationRuntimeDirectIntentClaim,
+  RustyApplicationRuntimeIdentity,
+  RustyApplicationRuntimeInputBinding,
+  RustyApplicationRuntimeInputEnvelope,
+  RustyApplicationRuntimeInputFact,
+  RustyApplicationRuntimeInputIngress,
+  RustyApplicationRuntimeInputOptions,
+  RustyApplicationRuntimeIntentValue,
+  RustyApplicationSelectedControllerOptions,
+} from './input-ingress.js';
 export type {
   RustyApplicationPresentationAspectBounds,
 } from './presentation-frame.js';

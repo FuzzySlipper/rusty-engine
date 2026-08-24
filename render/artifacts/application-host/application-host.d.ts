@@ -1,6 +1,7 @@
 import { type RustyApplicationContent } from './application-content.js';
 import { type RustyDeveloperCommandShellOptions } from './developer-command-shell.js';
 import { type RustyApplicationPresentationAspectBounds } from './presentation-frame.js';
+import { type RustyApplicationInputPort, type RustyApplicationRuntimeInputOptions } from './input-ingress.js';
 export declare const RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION = "rusty_application_host.v1";
 export type RustyApplicationInteractionMode = 'gameplay' | 'interface' | 'modal';
 /** A Rust-projected Engine render frame. Strict decoding remains Engine-owned. */
@@ -393,6 +394,8 @@ export interface RustyApplicationUiPort {
 export interface RustyApplicationUiContext {
     readonly renderer: RustyApplicationRendererPort;
     readonly ui: RustyApplicationUiPort;
+    /** Present only when the downstream explicitly opted into ordered Runtime Composition input. */
+    readonly input?: RustyApplicationInputPort;
 }
 export interface RustyApplicationUiOwner {
     readonly dispose: () => void | Promise<void>;
@@ -430,6 +433,8 @@ export interface RustyApplicationHostOptions {
     readonly loadingLabel?: string;
     readonly failureLabel?: string;
     readonly initialInteractionMode?: RustyApplicationInteractionMode;
+    /** Optional browser input ingress. Omission leaves renderer controls and DOM capture disabled. */
+    readonly runtimeInput?: RustyApplicationRuntimeInputOptions;
 }
 export interface RustyApplicationHostReadout {
     readonly compatibilityVersion: typeof RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION;
@@ -444,6 +449,8 @@ export interface RustyApplicationHost {
     readonly kind: 'rusty_application_host.v1';
     readonly renderer: RustyApplicationRendererPort;
     readonly ui: RustyApplicationUiPort;
+    /** Optional ordered physical-input and direct-UI-claim transport lane. */
+    readonly input?: RustyApplicationInputPort;
     readonly readout: () => RustyApplicationHostReadout;
     readonly dispose: () => Promise<void>;
 }

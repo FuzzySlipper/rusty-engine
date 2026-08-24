@@ -1,0 +1,100 @@
+[
+  {
+    "runtime": { "instanceId": "7", "generation": "3", "controlRevision": "11" },
+    "sequence": "0",
+    "context": "gameplay.default",
+    "fact": { "kind": "key", "code": "key-w", "edge": "pressed" }
+  },
+  {
+    "runtime": { "instanceId": "7", "generation": "3", "controlRevision": "11" },
+    "sequence": "1",
+    "context": "gameplay.default",
+    "fact": { "kind": "pointer-button", "button": "secondary", "edge": "released" }
+  },
+  {
+    "runtime": { "instanceId": "7", "generation": "3", "controlRevision": "11" },
+    "sequence": "2",
+    "context": "gameplay.default",
+    "fact": { "kind": "pointer-delta", "x": 12.5, "y": -2.25 }
+  },
+  {
+    "runtime": { "instanceId": "7", "generation": "3", "controlRevision": "11" },
+    "sequence": "3",
+    "context": "gameplay.default",
+    "fact": { "kind": "wheel", "x": 0, "y": 1 }
+  },
+  {
+    "runtime": { "instanceId": "7", "generation": "3", "controlRevision": "11" },
+    "sequence": "4",
+    "context": "gameplay.default",
+    "fact": { "kind": "controller-button", "button": "button-15", "edge": "pressed" }
+  },
+  {
+    "runtime": { "instanceId": "7", "generation": "3", "controlRevision": "11" },
+    "sequence": "5",
+    "context": "gameplay.default",
+    "fact": { "kind": "controller-axis", "axis": "axis-3", "value": 0 }
+  },
+  {
+    "runtime": { "instanceId": "7", "generation": "3", "controlRevision": "11" },
+    "sequence": "6",
+    "context": "gameplay.default",
+    "fact": { "kind": "clear", "reason": "focus-loss" }
+  },
+  {
+    "runtime": { "instanceId": "7", "generation": "3", "controlRevision": "11" },
+    "sequence": "7",
+    "context": "interface.menu",
+    "fact": { "kind": "clear", "reason": "interaction-mode-loss" }
+  },
+  {
+    "runtime": { "instanceId": "7", "generation": "3", "controlRevision": "11" },
+    "sequence": "8",
+    "context": "interface.menu",
+    "fact": { "kind": "clear", "reason": "pointer-lock-loss" }
+  },
+  {
+    "runtime": { "instanceId": "8", "generation": "0", "controlRevision": "0" },
+    "sequence": "0",
+    "context": "gameplay.default",
+    "fact": { "kind": "clear", "reason": "restart" }
+  },
+  {
+    "runtime": { "instanceId": "8", "generation": "0", "controlRevision": "1" },
+    "sequence": "0",
+    "context": "gameplay.default",
+    "fact": { "kind": "clear", "reason": "control-revision-change" }
+  },
+  {
+    "runtime": { "instanceId": "8", "generation": "0", "controlRevision": "1" },
+    "sequence": "1",
+    "context": "gameplay.default",
+    "fact": { "kind": "clear", "reason": "dispose" }
+  },
+  {
+    "runtime": { "instanceId": "8", "generation": "0", "controlRevision": "1" },
+    "sequence": "2",
+    "context": "gameplay.default",
+    "fact": { "kind": "clear", "reason": "ingress-overflow" }
+  },
+  {
+    "runtime": { "instanceId": "8", "generation": "0", "controlRevision": "1" },
+    "sequence": "3",
+    "context": "gameplay.default",
+    "intent": "move.forward",
+    "value": { "kind": "digital", "active": true }
+  },
+  {
+    "runtime": { "instanceId": "8", "generation": "0", "controlRevision": "1" },
+    "sequence": "4",
+    "context": "gameplay.default",
+    "intent": "look.horizontal",
+    "value": { "kind": "axis", "value": 0 }
+  },
+  {
+    "runtime": { "instanceId": "18446744073709551615", "generation": "18446744073709551615", "controlRevision": "18446744073709551615" },
+    "sequence": "18446744073709551615",
+    "context": "gameplay.default",
+    "fact": { "kind": "clear", "reason": "ingress-overflow" }
+  }
+]

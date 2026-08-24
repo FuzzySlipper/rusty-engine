@@ -62,6 +62,12 @@ for a different handoff.
 The complete downstream facade re-exports this crate as
 `rusty_engine::runtime_lifecycle`.
 
+`runtime-input` consumes an `InputSnapshot` phase token together with the
+explicit lifecycle instance and validates it before forming a frame. A product
+still owns when it asks for a snapshot and every later consequence; lifecycle
+validation only prevents paused, faulted, shutdown, stale, or wrong-phase
+input data from being attached to an admitted step.
+
 ## Public data flow
 
 ```text

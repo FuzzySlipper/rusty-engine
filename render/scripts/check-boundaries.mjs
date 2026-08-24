@@ -80,7 +80,12 @@ assertKeys(
 if (applicationArtifact.name !== '@rusty-engine/application-host') {
   throw new Error('application-host artifact must own the sole public downstream package name');
 }
-for (const declaration of ['index.d.ts', 'application-host.d.ts', 'application-content.d.ts']) {
+for (const declaration of [
+  'index.d.ts',
+  'application-host.d.ts',
+  'application-content.d.ts',
+  'input-ingress.d.ts',
+]) {
   const source = readFileSync(new URL(`artifacts/application-host/${declaration}`, root), 'utf8');
   if (/@rusty-engine\/(?:render|renderer)|\bthree\b|studio/iu.test(source)) {
     throw new Error(

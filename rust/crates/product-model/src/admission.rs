@@ -11,7 +11,8 @@ use serde_json::Value;
 
 use crate::{
     diagnostic::failure, validate_compiled_composition, CompiledComposition,
-    CompiledCompositionCandidate, LifecycleMode, ProductManifest, ProductModelError, RealtimeClock,
+    CompiledCompositionCandidate, InputTrigger, IntentValueKind, LifecycleMode, ProductManifest,
+    ProductModelError, RealtimeClock,
 };
 
 const SOURCE: &str = "product-composition-admission";
@@ -100,13 +101,60 @@ impl AdmittedDefinitionReference {
     }
 }
 
-/// One ordered input declaration with a resolved capability reference.
+/// One descriptor for a semantic product intent with a resolved capability.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdmittedIntentDescriptor {
+    index: usize,
+    id: String,
+    value_kind: IntentValueKind,
+    capability: AdmittedCapabilityReference,
+    payload: Value,
+}
+
+impl AdmittedIntentDescriptor {
+    pub const fn index(&self) -> usize {
+        self.index
+    }
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    pub const fn value_kind(&self) -> IntentValueKind {
+        self.value_kind
+    }
+    pub fn capability(&self) -> &AdmittedCapabilityReference {
+        &self.capability
+    }
+    pub fn payload(&self) -> &Value {
+        &self.payload
+    }
+}
+
+/// A checked reference to a product intent descriptor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdmittedIntentReference {
+    descriptor_index: usize,
+    id: String,
+    value_kind: IntentValueKind,
+}
+
+impl AdmittedIntentReference {
+    pub const fn descriptor_index(&self) -> usize {
+        self.descriptor_index
+    }
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    pub const fn value_kind(&self) -> IntentValueKind {
+        self.value_kind
+    }
+}
+
+/// One ordered physical mapping into a resolved product intent descriptor.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AdmittedInputMapEntry {
     id: String,
-    intent: String,
-    capability: AdmittedCapabilityReference,
-    payload: Value,
+    intent: AdmittedIntentReference,
+    trigger: InputTrigger,
 }
 
 impl AdmittedInputMapEntry {
@@ -115,15 +163,15 @@ impl AdmittedInputMapEntry {
     }
 
     pub fn intent(&self) -> &str {
+        self.intent.id()
+    }
+
+    pub fn intent_descriptor(&self) -> &AdmittedIntentReference {
         &self.intent
     }
 
-    pub fn capability(&self) -> &AdmittedCapabilityReference {
-        &self.capability
-    }
-
-    pub fn payload(&self) -> &Value {
-        &self.payload
+    pub fn trigger(&self) -> &InputTrigger {
+        &self.trigger
     }
 }
 
@@ -217,6 +265,7 @@ pub struct AdmittedProductComposition {
     lifecycle: LifecycleMode,
     realtime: Option<RealtimeClock>,
     composition: CompiledComposition,
+    intent_descriptors: Vec<AdmittedIntentDescriptor>,
     input_map: Vec<AdmittedInputMapEntry>,
     schedule: Vec<AdmittedScheduleFragment>,
     gameplay_definitions: Vec<AdmittedGameplayDefinition>,
@@ -249,6 +298,10 @@ impl AdmittedProductComposition {
 
     pub fn input_map(&self) -> &[AdmittedInputMapEntry] {
         &self.input_map
+    }
+
+    pub fn intent_descriptors(&self) -> &[AdmittedIntentDescriptor] {
+        &self.intent_descriptors
     }
 
     pub fn schedule(&self) -> &[AdmittedScheduleFragment] {
@@ -328,6 +381,30 @@ pub fn admit_checked_product_composition(
         .map(|definition| (definition.id.clone(), definition.index))
         .collect::<BTreeMap<_, _>>();
 
+    let intent_descriptors = candidate
+        .intent_descriptors
+        .iter()
+        .enumerate()
+        .map(|(index, descriptor)| {
+            Ok(AdmittedIntentDescriptor {
+                index,
+                id: descriptor.id.clone(),
+                value_kind: descriptor.value_kind,
+                capability: resolve_capability(
+                    &descriptor.capability,
+                    &capability_indices,
+                    &capability_bindings,
+                    &format!("intentDescriptors[{index}].capability"),
+                )?,
+                payload: descriptor.payload.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, ProductModelError>>()?;
+    let intent_indices = intent_descriptors
+        .iter()
+        .map(|intent| (intent.id.clone(), intent.index))
+        .collect::<BTreeMap<_, _>>();
+
     let input_map = candidate
         .input_map
         .iter()
@@ -335,14 +412,13 @@ pub fn admit_checked_product_composition(
         .map(|(index, entry)| {
             Ok(AdmittedInputMapEntry {
                 id: entry.id.clone(),
-                intent: entry.intent.clone(),
-                capability: resolve_capability(
-                    &entry.capability,
-                    &capability_indices,
-                    &capability_bindings,
-                    &format!("inputMap[{index}].capability"),
+                intent: resolve_intent(
+                    &entry.intent,
+                    &intent_indices,
+                    &intent_descriptors,
+                    &format!("inputMap[{index}].intent"),
                 )?,
-                payload: entry.payload.clone(),
+                trigger: entry.trigger.clone(),
             })
         })
         .collect::<Result<Vec<_>, ProductModelError>>()?;
@@ -414,11 +490,41 @@ pub fn admit_checked_product_composition(
         lifecycle: manifest.lifecycle(),
         realtime: manifest.realtime(),
         composition,
+        intent_descriptors,
         input_map,
         schedule,
         gameplay_definitions,
         timelines,
         capability_bindings,
+    })
+}
+
+fn resolve_intent(
+    id: &str,
+    indices: &BTreeMap<String, usize>,
+    descriptors: &[AdmittedIntentDescriptor],
+    path: &str,
+) -> Result<AdmittedIntentReference, ProductModelError> {
+    let index = indices.get(id).ok_or_else(|| {
+        failure(
+            "PRODUCT_COMPOSITION_UNRESOLVED_INTENT",
+            SOURCE,
+            path,
+            format!("checked composition intent `{id}` was not available for admission"),
+        )
+    })?;
+    let descriptor = descriptors.get(*index).ok_or_else(|| {
+        failure(
+            "PRODUCT_COMPOSITION_INTENT_INDEX",
+            SOURCE,
+            path,
+            format!("checked composition intent `{id}` had an invalid admitted index {index}"),
+        )
+    })?;
+    Ok(AdmittedIntentReference {
+        descriptor_index: descriptor.index,
+        id: descriptor.id.clone(),
+        value_kind: descriptor.value_kind,
     })
 }
 

@@ -16,7 +16,13 @@ writeFileSync(
     '//#region node_modules/.pnpm/',
   ),
 );
-for (const file of ['index.d.ts', 'application-host.d.ts', 'application-content.d.ts', 'presentation-frame.d.ts']) {
+for (const file of [
+  'index.d.ts',
+  'application-host.d.ts',
+  'application-content.d.ts',
+  'input-ingress.d.ts',
+  'presentation-frame.d.ts',
+]) {
   copyFileSync(new URL(file, declarations), new URL(file, artifact));
 }
 const clientFiles = ['index.js', 'index.d.ts', 'generated-developer-command-contract.js', 'generated-developer-command-contract.d.ts', 'generated-standard-host-wire.js', 'generated-standard-host-wire.d.ts'];
@@ -61,7 +67,7 @@ writeFileSync(
         types: './index.d.ts',
       },
     },
-    files: ['application-content.d.ts', 'application-host.d.ts', 'developer-command-client.d.ts', 'developer-command-client.js', 'developer-command-shell.d.ts', 'generated-developer-command-contract.d.ts', 'generated-developer-command-contract.js', 'generated-standard-host-wire.d.ts', 'generated-standard-host-wire.js', 'index.d.ts', 'index.js', 'presentation-frame.d.ts'],
+    files: ['application-content.d.ts', 'application-host.d.ts', 'developer-command-client.d.ts', 'developer-command-client.js', 'developer-command-shell.d.ts', 'generated-developer-command-contract.d.ts', 'generated-developer-command-contract.js', 'generated-standard-host-wire.d.ts', 'generated-standard-host-wire.js', 'index.d.ts', 'index.js', 'input-ingress.d.ts', 'presentation-frame.d.ts'],
   }, null, 2)}\n`,
 );
 writeFileSync(new URL('package.json', clientArtifact), `${JSON.stringify({ name: '@rusty-engine/developer-command-client', version: '0.1.0', type: 'module', main: './index.js', types: './index.d.ts', exports: { '.': { import: './index.js', types: './index.d.ts' } }, files: ['index.js', 'index.d.ts', 'generated-developer-command-contract.js', 'generated-developer-command-contract.d.ts', 'generated-standard-host-wire.js', 'generated-standard-host-wire.d.ts'] }, null, 2)}\n`);

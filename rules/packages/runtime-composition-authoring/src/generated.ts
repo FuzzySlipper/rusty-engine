@@ -52,6 +52,7 @@ export const PRODUCT_MODEL_FIELDS = {
   ],
   "compiledComposition": [
     "product",
+    "intentDescriptors",
     "inputMap",
     "schedule",
     "gameplayDefinitions",
@@ -65,6 +66,11 @@ export const PRODUCT_MODEL_FIELDS = {
   "inputMap": [
     "id",
     "intent",
+    "trigger"
+  ],
+  "intentDescriptor": [
+    "id",
+    "valueKind",
     "capability",
     "payload"
   ],
@@ -93,11 +99,112 @@ export const PRODUCT_MODEL_IDENTITY = {
   "maximumBytes": 128,
   "startsAndEndsAlphanumeric": true
 } as const;
+export const PRODUCT_MODEL_INPUT = {
+  "axes": [
+    "x",
+    "y"
+  ],
+  "controllerAxes": [
+    "axis-0",
+    "axis-1",
+    "axis-2",
+    "axis-3"
+  ],
+  "controllerButtons": [
+    "button-0",
+    "button-1",
+    "button-2",
+    "button-3",
+    "button-4",
+    "button-5",
+    "button-6",
+    "button-7",
+    "button-8",
+    "button-9",
+    "button-10",
+    "button-11",
+    "button-12",
+    "button-13",
+    "button-14",
+    "button-15"
+  ],
+  "edges": [
+    "held",
+    "pressed",
+    "released"
+  ],
+  "intentValueKinds": [
+    "digital",
+    "axis"
+  ],
+  "keyboardControls": [
+    "key-a",
+    "key-b",
+    "key-c",
+    "key-d",
+    "key-e",
+    "key-f",
+    "key-g",
+    "key-h",
+    "key-i",
+    "key-j",
+    "key-k",
+    "key-l",
+    "key-m",
+    "key-n",
+    "key-o",
+    "key-p",
+    "key-q",
+    "key-r",
+    "key-s",
+    "key-t",
+    "key-u",
+    "key-v",
+    "key-w",
+    "key-x",
+    "key-y",
+    "key-z",
+    "digit-0",
+    "digit-1",
+    "digit-2",
+    "digit-3",
+    "digit-4",
+    "digit-5",
+    "digit-6",
+    "digit-7",
+    "digit-8",
+    "digit-9",
+    "space",
+    "enter",
+    "escape",
+    "shift-left",
+    "shift-right",
+    "control-left",
+    "control-right",
+    "alt-left",
+    "alt-right"
+  ],
+  "pointerButtons": [
+    "primary",
+    "secondary",
+    "middle"
+  ],
+  "triggerKinds": [
+    "key",
+    "pointer-button",
+    "pointer-axis",
+    "wheel",
+    "controller-button",
+    "controller-axis"
+  ]
+} as const;
 export const PRODUCT_MODEL_LIMITS = {
   "maximumCapabilityBindings": 512,
   "maximumEncodedBytes": 1048576,
   "maximumGameplayDefinitions": 512,
+  "maximumInputChordControls": 8,
   "maximumInputMapEntries": 256,
+  "maximumIntentDescriptors": 256,
   "maximumOpaqueJsonArrayEntries": 1024,
   "maximumOpaqueJsonDepth": 32,
   "maximumOpaqueJsonNodes": 4096,
@@ -123,6 +230,7 @@ export const PRODUCT_MODEL_ORDERING = {
   "capabilityBindings": "authored",
   "gameplayDefinitions": "authored",
   "inputMap": "authored",
+  "intentDescriptors": "authored",
   "opaqueArrays": "authored",
   "opaqueObjectKeys": "canonical-bytewise",
   "schedule": "authored",

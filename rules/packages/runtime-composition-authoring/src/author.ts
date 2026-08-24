@@ -11,6 +11,7 @@ import {
   PRODUCT_MODEL_CAPABILITY_TARGETS,
   PRODUCT_MODEL_FIELDS,
   PRODUCT_MODEL_IDENTITY,
+  PRODUCT_MODEL_INPUT,
   PRODUCT_MODEL_LIMITS,
 } from './generated.js';
 import type { EngineCapabilityName } from './generated.js';
@@ -21,8 +22,13 @@ import type {
   CompositionReplacement,
   GameplayDefinition,
   InputActionDraft,
+  InputEdge,
   InputMapEntry,
+  InputTrigger,
   JsonValue,
+  KeyboardControl,
+  ProductIntentDescriptor,
+  ProductIntentDescriptorDraft,
   RuntimeCompositionArtifact,
   RuntimeCompositionDraft,
   ScheduleActionDraft,
@@ -35,6 +41,8 @@ import type {
 
 export const MAX_COMPILED_COMPOSITION_BYTES = PRODUCT_MODEL_LIMITS.maximumEncodedBytes;
 export const MAX_INPUT_MAP_ENTRIES = PRODUCT_MODEL_LIMITS.maximumInputMapEntries;
+export const MAX_INTENT_DESCRIPTORS = PRODUCT_MODEL_LIMITS.maximumIntentDescriptors;
+export const MAX_INPUT_CHORD_CONTROLS = PRODUCT_MODEL_LIMITS.maximumInputChordControls;
 export const MAX_SCHEDULE_ENTRIES = PRODUCT_MODEL_LIMITS.maximumScheduleEntries;
 export const MAX_GAMEPLAY_DEFINITIONS = PRODUCT_MODEL_LIMITS.maximumGameplayDefinitions;
 export const MAX_TIMELINES = PRODUCT_MODEL_LIMITS.maximumTimelines;
@@ -52,6 +60,7 @@ export function authorRuntimeComposition(draft: unknown): RuntimeCompositionArti
   const source = admitDraft(draft, '$');
   const composition = admitCompiledComposition({
     product: source.product,
+    intentDescriptors: source.intentDescriptors ?? [],
     inputMap: source.inputMap ?? [],
     schedule: source.schedule ?? [],
     gameplayDefinitions: source.gameplayDefinitions ?? [],
@@ -82,12 +91,14 @@ export function admitCompiledComposition(value: unknown): CompiledComposition {
   const capabilityBindings = admitCapabilities(requiredArray(root, 'capabilityBindings', '$'), '$.capabilityBindings');
   const capabilityIds = new Set(capabilityBindings.map((entry) => entry.id));
   const budget = { nodes: 0 };
+  const intentDescriptors = admitIntentDescriptors(requiredArray(root, 'intentDescriptors', '$'), '$.intentDescriptors', capabilityIds, budget);
+  const intentKinds = new Map(intentDescriptors.map((entry) => [entry.id, entry.valueKind]));
   const definitions = admitDefinitions(requiredArray(root, 'gameplayDefinitions', '$'), '$.gameplayDefinitions', budget);
   const definitionIds = new Set(definitions.map((entry) => entry.id));
-  const inputMap = admitInputMap(requiredArray(root, 'inputMap', '$'), '$.inputMap', capabilityIds, budget);
+  const inputMap = admitInputMap(requiredArray(root, 'inputMap', '$'), '$.inputMap', intentKinds);
   const schedule = admitSchedule(requiredArray(root, 'schedule', '$'), '$.schedule', capabilityIds, definitionIds, budget);
   const timelines = admitTimelines(requiredArray(root, 'timelines', '$'), '$.timelines', capabilityIds, budget);
-  return freezeComposition({ product, inputMap, schedule, gameplayDefinitions: definitions, timelines, capabilityBindings });
+  return freezeComposition({ product, intentDescriptors, inputMap, schedule, gameplayDefinitions: definitions, timelines, capabilityBindings });
 }
 
 /** Creates an engine-owned capability reference without inventing a runtime registry. */
@@ -107,15 +118,19 @@ export function kernelCapability(id: string, target: string): CapabilityBinding 
 /** Names an intent; it is a schema-checked identity, not an event bus route. */
 export function intent(id: string): string { return identity(id, '$.intent'); }
 
-/** Builds one input action/map entry from an authored intent and a named capability. */
+/** Describes one typed intent and its one admitted capability target. */
+export function productIntent(draft: ProductIntentDescriptorDraft): ProductIntentDescriptor {
+  return admitIntentDescriptor(draft, '$.productIntent', undefined, { nodes: 0 });
+}
+
+/** Builds one physical mapping into a previously described product intent. */
 export function inputAction(draft: InputActionDraft): InputMapEntry {
   const source = record(draft, '$.inputAction');
-  known(source, ['id', 'intent', 'capability', 'payload'], '$.inputAction');
+  known(source, ['id', 'intent', 'trigger'], '$.inputAction');
   return freezeInput({
     id: identity(requiredString(source, 'id', '$.inputAction'), '$.inputAction.id'),
     intent: identity(requiredString(source, 'intent', '$.inputAction'), '$.inputAction.intent'),
-    capability: identity(requiredString(source, 'capability', '$.inputAction'), '$.inputAction.capability'),
-    payload: normalizeOpaqueJson(required(source, 'payload', '$.inputAction'), '$.inputAction.payload'),
+    trigger: admitInputTrigger(required(source, 'trigger', '$.inputAction'), '$.inputAction.trigger'),
   });
 }
 
@@ -174,9 +189,10 @@ export function cadence(_value: unknown): never {
 /** Produces a normalized partial collection set for later composition. */
 export function fragment(value: Partial<CompositionFragment>): CompositionFragment {
   const source = record(value, '$.fragment');
-  known(source, ['inputMap', 'schedule', 'gameplayDefinitions', 'timelines', 'capabilityBindings'], '$.fragment');
+  known(source, ['intentDescriptors', 'inputMap', 'schedule', 'gameplayDefinitions', 'timelines', 'capabilityBindings'], '$.fragment');
   return Object.freeze({
-    inputMap: freezeList(optionalArray(source, 'inputMap', '$.fragment').map((entry, index) => admitInputMapEntry(entry, `$.fragment.inputMap[${String(index)}]`, undefined, { nodes: 0 }))),
+    intentDescriptors: freezeList(optionalArray(source, 'intentDescriptors', '$.fragment').map((entry, index) => admitIntentDescriptor(entry, `$.fragment.intentDescriptors[${String(index)}]`, undefined, { nodes: 0 }))),
+    inputMap: freezeList(optionalArray(source, 'inputMap', '$.fragment').map((entry, index) => admitInputMapEntry(entry, `$.fragment.inputMap[${String(index)}]`, undefined))),
     schedule: freezeList(optionalArray(source, 'schedule', '$.fragment').map((entry, index) => admitScheduleEntry(entry, `$.fragment.schedule[${String(index)}]`, undefined, undefined, { nodes: 0 }))),
     gameplayDefinitions: freezeList(optionalArray(source, 'gameplayDefinitions', '$.fragment').map((entry, index) => admitDefinition(entry, `$.fragment.gameplayDefinitions[${String(index)}]`, { nodes: 0 }))),
     timelines: freezeList(optionalArray(source, 'timelines', '$.fragment').map((entry, index) => admitTimeline(entry, `$.fragment.timelines[${String(index)}]`, undefined, { nodes: 0 }))),
@@ -202,10 +218,11 @@ export function extend(base: CompiledComposition, ...fragments: readonly Composi
 /** Replaces exactly the named whole collections. It cannot change the product identity. */
 export function replace(base: CompiledComposition, replacement: CompositionReplacement): CompiledComposition {
   const source = record(replacement, '$.replacement');
-  known(source, ['inputMap', 'schedule', 'gameplayDefinitions', 'timelines', 'capabilityBindings'], '$.replacement');
+  known(source, ['intentDescriptors', 'inputMap', 'schedule', 'gameplayDefinitions', 'timelines', 'capabilityBindings'], '$.replacement');
   if (Object.keys(source).length === 0) fail('invalid-operation', '$.replacement', 'replace requires at least one collection');
   return admitCompiledComposition({
     product: base.product,
+    intentDescriptors: source['intentDescriptors'] === undefined ? base.intentDescriptors : source['intentDescriptors'],
     inputMap: source['inputMap'] === undefined ? base.inputMap : source['inputMap'],
     schedule: source['schedule'] === undefined ? base.schedule : source['schedule'],
     gameplayDefinitions: source['gameplayDefinitions'] === undefined ? base.gameplayDefinitions : source['gameplayDefinitions'],
@@ -218,6 +235,7 @@ function composeFragments(base: CompiledComposition, fragments: readonly Composi
   const normalizedBase = admitCompiledComposition(base);
   const normalized = fragments.map((entry, index) => fragment(entry));
   if (requireNew) {
+    assertNewIdentities('intentDescriptors', normalizedBase.intentDescriptors, normalized.flatMap((entry) => entry.intentDescriptors));
     assertNewIdentities('inputMap', normalizedBase.inputMap, normalized.flatMap((entry) => entry.inputMap));
     assertNewIdentities('schedule', normalizedBase.schedule, normalized.flatMap((entry) => entry.schedule));
     assertNewIdentities('gameplayDefinitions', normalizedBase.gameplayDefinitions, normalized.flatMap((entry) => entry.gameplayDefinitions));
@@ -228,6 +246,7 @@ function composeFragments(base: CompiledComposition, fragments: readonly Composi
     prependFragments ? [...additions, ...existing] : [...existing, ...additions];
   return admitCompiledComposition({
     product: normalizedBase.product,
+    intentDescriptors: merge(normalizedBase.intentDescriptors, normalized.flatMap((entry) => entry.intentDescriptors)),
     inputMap: merge(normalizedBase.inputMap, normalized.flatMap((entry) => entry.inputMap)),
     schedule: merge(normalizedBase.schedule, normalized.flatMap((entry) => entry.schedule)),
     gameplayDefinitions: merge(normalizedBase.gameplayDefinitions, normalized.flatMap((entry) => entry.gameplayDefinitions)),
@@ -238,11 +257,12 @@ function composeFragments(base: CompiledComposition, fragments: readonly Composi
 
 function admitDraft(value: unknown, path: string): RuntimeCompositionDraft {
   const source = record(value, path);
-  known(source, ['product', 'capabilities', 'inputMap', 'schedule', 'gameplayDefinitions', 'timelines'], path);
+  known(source, ['product', 'capabilities', 'intentDescriptors', 'inputMap', 'schedule', 'gameplayDefinitions', 'timelines'], path);
   return Object.freeze({
     product: identity(requiredString(source, 'product', path), `${path}.product`),
     capabilities: freezeList(requiredArray(source, 'capabilities', path).map((entry, index) => admitCapability(entry, `${path}.capabilities[${String(index)}]`))),
-    ...(source['inputMap'] === undefined ? {} : { inputMap: freezeList(requiredArray(source, 'inputMap', path).map((entry, index) => admitInputMapEntry(entry, `${path}.inputMap[${String(index)}]`, undefined, { nodes: 0 }))) }),
+    ...(source['intentDescriptors'] === undefined ? {} : { intentDescriptors: freezeList(requiredArray(source, 'intentDescriptors', path).map((entry, index) => admitIntentDescriptor(entry, `${path}.intentDescriptors[${String(index)}]`, undefined, { nodes: 0 }))) }),
+    ...(source['inputMap'] === undefined ? {} : { inputMap: freezeList(requiredArray(source, 'inputMap', path).map((entry, index) => admitInputMapEntry(entry, `${path}.inputMap[${String(index)}]`, undefined))) }),
     ...(source['schedule'] === undefined ? {} : { schedule: freezeList(requiredArray(source, 'schedule', path).map((entry, index) => admitScheduleEntry(entry, `${path}.schedule[${String(index)}]`, undefined, undefined, { nodes: 0 }))) }),
     ...(source['gameplayDefinitions'] === undefined ? {} : { gameplayDefinitions: freezeList(requiredArray(source, 'gameplayDefinitions', path).map((entry, index) => admitDefinition(entry, `${path}.gameplayDefinitions[${String(index)}]`, { nodes: 0 }))) }),
     ...(source['timelines'] === undefined ? {} : { timelines: freezeList(requiredArray(source, 'timelines', path).map((entry, index) => admitTimeline(entry, `${path}.timelines[${String(index)}]`, undefined, { nodes: 0 }))) }),
@@ -277,24 +297,94 @@ function capability(id: string, target: string): CapabilityBinding {
   return Object.freeze({ id: identity(id, '$.capability.id'), target });
 }
 
-function admitInputMap(values: readonly unknown[], path: string, capabilities: ReadonlySet<string>, budget: JsonState): readonly InputMapEntry[] {
-  quota(values.length, MAX_INPUT_MAP_ENTRIES, path);
-  const output = values.map((entry, index) => admitInputMapEntry(entry, `${path}[${String(index)}]`, capabilities, budget));
+function admitIntentDescriptors(values: readonly unknown[], path: string, capabilities: ReadonlySet<string> | undefined, budget: JsonState): readonly ProductIntentDescriptor[] {
+  quota(values.length, MAX_INTENT_DESCRIPTORS, path);
+  const output = values.map((entry, index) => admitIntentDescriptor(entry, `${path}[${String(index)}]`, capabilities, budget));
   unique(output, path);
   return freezeList(output);
 }
 
-function admitInputMapEntry(value: unknown, path: string, capabilities: ReadonlySet<string> | undefined, budget: JsonState): InputMapEntry {
+function admitIntentDescriptor(value: unknown, path: string, capabilities: ReadonlySet<string> | undefined, budget: JsonState): ProductIntentDescriptor {
   const source = record(value, path);
-  known(source, PRODUCT_MODEL_FIELDS.inputMap, path);
-  const capabilityId = identity(requiredString(source, 'capability', path), `${path}.capability`);
-  if (capabilities !== undefined && !capabilities.has(capabilityId)) fail('unknown-capability', `${path}.capability`, `capability ${capabilityId} is not declared`);
-  return freezeInput({
+  known(source, PRODUCT_MODEL_FIELDS.intentDescriptor, path);
+  const capability = identity(requiredString(source, 'capability', path), `${path}.capability`);
+  if (capabilities !== undefined && !capabilities.has(capability)) fail('unknown-capability', `${path}.capability`, `capability ${capability} is not declared`);
+  const valueKind = requiredString(source, 'valueKind', path);
+  if (!(PRODUCT_MODEL_INPUT.intentValueKinds as readonly string[]).includes(valueKind)) fail('invalid-input-value-kind', `${path}.valueKind`, 'intent valueKind must be digital or axis');
+  return Object.freeze({
     id: identity(requiredString(source, 'id', path), `${path}.id`),
-    intent: identity(requiredString(source, 'intent', path), `${path}.intent`),
-    capability: capabilityId,
+    valueKind: valueKind as ProductIntentDescriptor['valueKind'],
+    capability,
     payload: normalizeWithBudget(required(source, 'payload', path), `${path}.payload`, budget),
   });
+}
+
+function admitInputMap(values: readonly unknown[], path: string, intents: ReadonlyMap<string, ProductIntentDescriptor['valueKind']>): readonly InputMapEntry[] {
+  quota(values.length, MAX_INPUT_MAP_ENTRIES, path);
+  const output = values.map((entry, index) => admitInputMapEntry(entry, `${path}[${String(index)}]`, intents));
+  unique(output, path);
+  return freezeList(output);
+}
+
+function admitInputMapEntry(value: unknown, path: string, intents: ReadonlyMap<string, ProductIntentDescriptor['valueKind']> | undefined): InputMapEntry {
+  const source = record(value, path);
+  known(source, PRODUCT_MODEL_FIELDS.inputMap, path);
+  const intent = identity(requiredString(source, 'intent', path), `${path}.intent`);
+  const trigger = admitInputTrigger(required(source, 'trigger', path), `${path}.trigger`);
+  const expected = intents?.get(intent);
+  if (intents !== undefined && expected === undefined) fail('unknown-intent-descriptor', `${path}.intent`, `input mapping intent ${intent} is not declared`);
+  if (expected !== undefined && expected !== triggerValueKind(trigger)) fail('input-trigger-value-kind', `${path}.trigger`, `input trigger produces ${triggerValueKind(trigger)} but intent ${intent} requires ${expected}`);
+  return freezeInput({
+    id: identity(requiredString(source, 'id', path), `${path}.id`),
+    intent,
+    trigger,
+  });
+}
+
+function admitInputTrigger(value: unknown, path: string): InputTrigger {
+  const source = record(value, path);
+  const kind = requiredString(source, 'kind', path);
+  const context = source['context'] === undefined ? undefined : identity(requiredString(source, 'context', path), `${path}.context`);
+  const copyContext = context === undefined ? {} : { context };
+  if (kind === 'key') {
+    known(source, ['kind', 'code', 'edge', 'chord', 'context'], path);
+    const code = listedString(source, 'code', path, PRODUCT_MODEL_INPUT.keyboardControls);
+    const edge = listedString(source, 'edge', path, PRODUCT_MODEL_INPUT.edges);
+    const chord = source['chord'] === undefined ? [] : requiredArray(source, 'chord', path).map((entry, index) => listed(entry, `${path}.chord[${String(index)}]`, PRODUCT_MODEL_INPUT.keyboardControls));
+    if (chord.length > MAX_INPUT_CHORD_CONTROLS) fail('input-chord-quota-exceeded', `${path}.chord`, `input chords contain at most ${String(MAX_INPUT_CHORD_CONTROLS)} controls`);
+    if (new Set(chord).size !== chord.length) fail('duplicate-input-chord-control', `${path}.chord`, 'input chord controls must be unique');
+    return Object.freeze({ kind: 'key' as const, code: code as KeyboardControl, edge: edge as InputEdge, ...(chord.length === 0 ? {} : { chord: freezeList(chord as KeyboardControl[]) }), ...copyContext }) as InputTrigger;
+  }
+  if (kind === 'pointer-button') {
+    known(source, ['kind', 'button', 'edge', 'context'], path);
+    return Object.freeze({ kind, button: listedString(source, 'button', path, PRODUCT_MODEL_INPUT.pointerButtons) as never, edge: listedString(source, 'edge', path, PRODUCT_MODEL_INPUT.edges) as never, ...copyContext }) as InputTrigger;
+  }
+  if (kind === 'pointer-axis' || kind === 'wheel') {
+    known(source, ['kind', 'axis', 'context'], path);
+    return Object.freeze({ kind, axis: listedString(source, 'axis', path, PRODUCT_MODEL_INPUT.axes) as never, ...copyContext }) as InputTrigger;
+  }
+  if (kind === 'controller-button') {
+    known(source, ['kind', 'button', 'edge', 'context'], path);
+    return Object.freeze({ kind, button: listedString(source, 'button', path, PRODUCT_MODEL_INPUT.controllerButtons) as never, edge: listedString(source, 'edge', path, PRODUCT_MODEL_INPUT.edges) as never, ...copyContext }) as InputTrigger;
+  }
+  if (kind === 'controller-axis') {
+    known(source, ['kind', 'axis', 'context'], path);
+    return Object.freeze({ kind, axis: listedString(source, 'axis', path, PRODUCT_MODEL_INPUT.controllerAxes) as never, ...copyContext }) as InputTrigger;
+  }
+  fail('invalid-input-trigger', `${path}.kind`, 'input trigger kind is not in the generated closed grammar');
+}
+
+function listedString(source: Readonly<Record<string, unknown>>, name: string, path: string, values: readonly string[]): string {
+  return listed(requiredString(source, name, path), `${path}.${name}`, values);
+}
+
+function listed(value: unknown, path: string, values: readonly string[]): string {
+  if (typeof value !== 'string' || !values.includes(value)) fail('invalid-input-trigger', path, 'value is not in the generated closed input grammar');
+  return value;
+}
+
+function triggerValueKind(trigger: InputTrigger): ProductIntentDescriptor['valueKind'] {
+  return trigger.kind === 'key' || trigger.kind === 'pointer-button' || trigger.kind === 'controller-button' ? 'digital' : 'axis';
 }
 
 function admitSchedule(values: readonly unknown[], path: string, capabilities: ReadonlySet<string>, definitions: ReadonlySet<string>, budget: JsonState): readonly ScheduleEntry[] {
@@ -426,6 +516,7 @@ function assertNewIdentities<T extends { readonly id: string }>(name: string, ex
 function freezeComposition(value: CompiledComposition): CompiledComposition {
   return Object.freeze({
     product: value.product,
+    intentDescriptors: freezeList(value.intentDescriptors),
     inputMap: freezeList(value.inputMap), schedule: freezeList(value.schedule),
     gameplayDefinitions: freezeList(value.gameplayDefinitions), timelines: freezeList(value.timelines),
     capabilityBindings: freezeList(value.capabilityBindings),
@@ -439,10 +530,13 @@ function freezeTimelineStep(value: TimelineStep): TimelineStep { return Object.f
 function freezeList<T>(value: readonly T[]): readonly T[] { return Object.freeze(Array.from(value)); }
 
 function writeCompiledComposition(value: CompiledComposition): string {
-  return `{"product":${JSON.stringify(value.product)},"inputMap":[${value.inputMap.map(writeInputMapEntry).join(',')}],"schedule":[${value.schedule.map(writeScheduleEntry).join(',')}],"gameplayDefinitions":[${value.gameplayDefinitions.map(writeGameplayDefinition).join(',')}],"timelines":[${value.timelines.map(writeTimeline).join(',')}],"capabilityBindings":[${value.capabilityBindings.map(writeCapabilityBinding).join(',')}]}`;
+  return `{"product":${JSON.stringify(value.product)},"intentDescriptors":[${value.intentDescriptors.map(writeIntentDescriptor).join(',')}],"inputMap":[${value.inputMap.map(writeInputMapEntry).join(',')}],"schedule":[${value.schedule.map(writeScheduleEntry).join(',')}],"gameplayDefinitions":[${value.gameplayDefinitions.map(writeGameplayDefinition).join(',')}],"timelines":[${value.timelines.map(writeTimeline).join(',')}],"capabilityBindings":[${value.capabilityBindings.map(writeCapabilityBinding).join(',')}]}`;
+}
+function writeIntentDescriptor(value: ProductIntentDescriptor): string {
+  return `{"id":${JSON.stringify(value.id)},"valueKind":${JSON.stringify(value.valueKind)},"capability":${JSON.stringify(value.capability)},"payload":${writeCanonicalJson(value.payload)}}`;
 }
 function writeInputMapEntry(value: InputMapEntry): string {
-  return `{"id":${JSON.stringify(value.id)},"intent":${JSON.stringify(value.intent)},"capability":${JSON.stringify(value.capability)},"payload":${writeCanonicalJson(value.payload)}}`;
+  return `{"id":${JSON.stringify(value.id)},"intent":${JSON.stringify(value.intent)},"trigger":${writeCanonicalJson(value.trigger as unknown as JsonValue)}}`;
 }
 function writeScheduleEntry(value: ScheduleEntry): string {
   return `{"id":${JSON.stringify(value.id)},"phase":${JSON.stringify(value.phase)},"capability":${JSON.stringify(value.capability)}${value.definition === undefined ? '' : `,"definition":${JSON.stringify(value.definition)}`},"reads":[${value.reads.map((entry) => JSON.stringify(entry)).join(',')}],"writes":[${value.writes.map((entry) => JSON.stringify(entry)).join(',')}],"payload":${writeCanonicalJson(value.payload)}}`;

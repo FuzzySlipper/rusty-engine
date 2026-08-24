@@ -25,15 +25,16 @@ if (mode === '--write') {
 }
 
 function validateDescriptor(value) {
-  exactKeys(value, ['artifact', 'capabilityCatalog', 'capabilityTargets', 'failures', 'fields', 'identity', 'limits', 'numberEncoding', 'optionalFields', 'ordering'], '$');
+  exactKeys(value, ['artifact', 'capabilityCatalog', 'capabilityTargets', 'failures', 'fields', 'identity', 'input', 'limits', 'numberEncoding', 'optionalFields', 'ordering'], '$');
   if (value.artifact !== 'compiled-composition') throw new Error('unexpected product-model descriptor artifact');
   exactKeys(value.capabilityTargets, ['namespaces', 'separator'], '$.capabilityTargets');
   if (!Array.isArray(value.capabilityTargets.namespaces) || value.capabilityTargets.namespaces.join(',') !== 'engine,kernel' || value.capabilityTargets.separator !== '.') throw new Error('unexpected capability target contract');
   validateCapabilityCatalog(value.capabilityCatalog);
-  exactKeys(value.fields, ['capabilityBinding', 'compiledComposition', 'gameplayDefinition', 'inputMap', 'schedule', 'timeline', 'timelineStep'], '$.fields');
+  exactKeys(value.fields, ['capabilityBinding', 'compiledComposition', 'gameplayDefinition', 'inputMap', 'intentDescriptor', 'schedule', 'timeline', 'timelineStep'], '$.fields');
   const fields = value.fields;
-  assertArray(fields.compiledComposition, ['product', 'inputMap', 'schedule', 'gameplayDefinitions', 'timelines', 'capabilityBindings'], '$.fields.compiledComposition');
-  assertArray(fields.inputMap, ['id', 'intent', 'capability', 'payload'], '$.fields.inputMap');
+  assertArray(fields.compiledComposition, ['product', 'intentDescriptors', 'inputMap', 'schedule', 'gameplayDefinitions', 'timelines', 'capabilityBindings'], '$.fields.compiledComposition');
+  assertArray(fields.intentDescriptor, ['id', 'valueKind', 'capability', 'payload'], '$.fields.intentDescriptor');
+  assertArray(fields.inputMap, ['id', 'intent', 'trigger'], '$.fields.inputMap');
   assertArray(fields.schedule, ['id', 'phase', 'capability', 'definition', 'reads', 'writes', 'payload'], '$.fields.schedule');
   assertArray(fields.gameplayDefinition, ['id', 'payload'], '$.fields.gameplayDefinition');
   assertArray(fields.timeline, ['id', 'steps'], '$.fields.timeline');
@@ -41,15 +42,20 @@ function validateDescriptor(value) {
   assertArray(fields.capabilityBinding, ['id', 'target'], '$.fields.capabilityBinding');
   exactKeys(value.identity, ['alphabet', 'forbidAdjacentSeparators', 'maximumBytes', 'startsAndEndsAlphanumeric'], '$.identity');
   if (value.identity.alphabet !== 'lowercase-ascii-alphanumeric-dot-underscore-hyphen' || value.identity.forbidAdjacentSeparators !== true || value.identity.maximumBytes !== 128 || value.identity.startsAndEndsAlphanumeric !== true) throw new Error('unexpected identity contract');
-  exactKeys(value.limits, ['maximumCapabilityBindings', 'maximumEncodedBytes', 'maximumGameplayDefinitions', 'maximumInputMapEntries', 'maximumOpaqueJsonArrayEntries', 'maximumOpaqueJsonDepth', 'maximumOpaqueJsonNodes', 'maximumOpaqueJsonObjectEntries', 'maximumOpaqueJsonStringBytes', 'maximumSafeJsonInteger', 'maximumScheduleAccessDeclarations', 'maximumScheduleEntries', 'maximumTimelineSteps', 'maximumTimelines'], '$.limits');
+  exactKeys(value.limits, ['maximumCapabilityBindings', 'maximumEncodedBytes', 'maximumGameplayDefinitions', 'maximumInputChordControls', 'maximumInputMapEntries', 'maximumIntentDescriptors', 'maximumOpaqueJsonArrayEntries', 'maximumOpaqueJsonDepth', 'maximumOpaqueJsonNodes', 'maximumOpaqueJsonObjectEntries', 'maximumOpaqueJsonStringBytes', 'maximumSafeJsonInteger', 'maximumScheduleAccessDeclarations', 'maximumScheduleEntries', 'maximumTimelineSteps', 'maximumTimelines'], '$.limits');
   for (const [key, entry] of Object.entries(value.limits)) if (!Number.isSafeInteger(entry) || entry <= 0) throw new Error(`invalid numeric limit ${key}`);
   exactKeys(value.numberEncoding, ['finiteBinary64', 'integer', 'negativeZero'], '$.numberEncoding');
   if (value.numberEncoding.finiteBinary64 !== 'ecmascript-number-to-string' || value.numberEncoding.negativeZero !== '0' || value.numberEncoding.integer !== 'base10') throw new Error('unexpected canonical number contract');
   exactKeys(value.optionalFields, ['schedule'], '$.optionalFields');
   assertArray(value.optionalFields.schedule, ['definition'], '$.optionalFields.schedule');
-  exactKeys(value.ordering, ['capabilityBindings', 'gameplayDefinitions', 'inputMap', 'opaqueArrays', 'opaqueObjectKeys', 'schedule', 'scheduleReads', 'scheduleWrites', 'timelineSteps', 'timelines'], '$.ordering');
+  exactKeys(value.ordering, ['capabilityBindings', 'gameplayDefinitions', 'inputMap', 'intentDescriptors', 'opaqueArrays', 'opaqueObjectKeys', 'schedule', 'scheduleReads', 'scheduleWrites', 'timelineSteps', 'timelines'], '$.ordering');
   if (Object.values(value.ordering).some((entry) => entry !== 'authored' && entry !== 'canonical-bytewise')) throw new Error('unexpected ordering contract');
   if (!Array.isArray(value.failures) || value.failures.some((entry) => typeof entry !== 'string')) throw new Error('invalid failure vocabulary');
+  exactKeys(value.input, ['axes', 'controllerAxes', 'controllerButtons', 'edges', 'intentValueKinds', 'keyboardControls', 'pointerButtons', 'triggerKinds'], '$.input');
+  assertArray(value.input.intentValueKinds, ['digital', 'axis'], '$.input.intentValueKinds');
+  assertArray(value.input.edges, ['held', 'pressed', 'released'], '$.input.edges');
+  assertArray(value.input.triggerKinds, ['key', 'pointer-button', 'pointer-axis', 'wheel', 'controller-button', 'controller-axis'], '$.input.triggerKinds');
+  if ([value.input.axes, value.input.keyboardControls, value.input.pointerButtons, value.input.controllerButtons, value.input.controllerAxes].some((list) => !Array.isArray(list) || list.some((entry) => typeof entry !== 'string'))) throw new Error('invalid input vocabulary');
   if (JSON.stringify(value).includes('version')) throw new Error('Product Model descriptor must not introduce version fields');
 }
 
@@ -88,5 +94,5 @@ function assertArray(actual, expected, path) {
 }
 
 function render(value) {
-  return `// Generated from Rust product-model contract descriptor. Do not edit.\n\nexport const PRODUCT_MODEL_ARTIFACT = ${JSON.stringify(value.artifact)} as const;\nexport const PRODUCT_MODEL_CAPABILITY_TARGETS = ${JSON.stringify(value.capabilityTargets, null, 2)} as const;\nexport const PRODUCT_MODEL_CAPABILITY_CATALOG = ${JSON.stringify(value.capabilityCatalog, null, 2)} as const;\nexport type EngineCapabilityTarget = typeof PRODUCT_MODEL_CAPABILITY_CATALOG.engine[number]['target'];\nexport type EngineCapabilityName = EngineCapabilityTarget extends \`engine.\${infer Name}\` ? Name : never;\nexport const PRODUCT_MODEL_FIELDS = ${JSON.stringify(value.fields, null, 2)} as const;\nexport const PRODUCT_MODEL_IDENTITY = ${JSON.stringify(value.identity, null, 2)} as const;\nexport const PRODUCT_MODEL_LIMITS = ${JSON.stringify(value.limits, null, 2)} as const;\nexport const PRODUCT_MODEL_NUMBER_ENCODING = ${JSON.stringify(value.numberEncoding, null, 2)} as const;\nexport const PRODUCT_MODEL_OPTIONAL_FIELDS = ${JSON.stringify(value.optionalFields, null, 2)} as const;\nexport const PRODUCT_MODEL_ORDERING = ${JSON.stringify(value.ordering, null, 2)} as const;\nexport const PRODUCT_MODEL_FAILURES = ${JSON.stringify(value.failures, null, 2)} as const;\n`;
+  return `// Generated from Rust product-model contract descriptor. Do not edit.\n\nexport const PRODUCT_MODEL_ARTIFACT = ${JSON.stringify(value.artifact)} as const;\nexport const PRODUCT_MODEL_CAPABILITY_TARGETS = ${JSON.stringify(value.capabilityTargets, null, 2)} as const;\nexport const PRODUCT_MODEL_CAPABILITY_CATALOG = ${JSON.stringify(value.capabilityCatalog, null, 2)} as const;\nexport type EngineCapabilityTarget = typeof PRODUCT_MODEL_CAPABILITY_CATALOG.engine[number]['target'];\nexport type EngineCapabilityName = EngineCapabilityTarget extends \`engine.\${infer Name}\` ? Name : never;\nexport const PRODUCT_MODEL_FIELDS = ${JSON.stringify(value.fields, null, 2)} as const;\nexport const PRODUCT_MODEL_IDENTITY = ${JSON.stringify(value.identity, null, 2)} as const;\nexport const PRODUCT_MODEL_INPUT = ${JSON.stringify(value.input, null, 2)} as const;\nexport const PRODUCT_MODEL_LIMITS = ${JSON.stringify(value.limits, null, 2)} as const;\nexport const PRODUCT_MODEL_NUMBER_ENCODING = ${JSON.stringify(value.numberEncoding, null, 2)} as const;\nexport const PRODUCT_MODEL_OPTIONAL_FIELDS = ${JSON.stringify(value.optionalFields, null, 2)} as const;\nexport const PRODUCT_MODEL_ORDERING = ${JSON.stringify(value.ordering, null, 2)} as const;\nexport const PRODUCT_MODEL_FAILURES = ${JSON.stringify(value.failures, null, 2)} as const;\n`;
 }

@@ -6,6 +6,7 @@ members = [
     "rust/crates/rusty-engine",
     "rust/crates/product-model",
     "rust/crates/runtime-lifecycle",
+    "rust/crates/runtime-input",
     "rust/crates/rusty-cli",
     "rust/crates/asset-import",
     "rust/crates/authored-scene",
@@ -52,6 +53,7 @@ edition = "2021"
 rusty-engine = { path = "rust/crates/rusty-engine" }
 product-model = { path = "rust/crates/product-model" }
 runtime-lifecycle = { path = "rust/crates/runtime-lifecycle" }
+runtime-input = { path = "rust/crates/runtime-input" }
 render-host-contracts = { path = "rust/crates/render-host-contracts" }
 renderer-webview-host = { path = "rust/crates/renderer-webview-host" }
 asset-import = { path = "rust/crates/asset-import" }

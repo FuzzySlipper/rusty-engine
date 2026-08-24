@@ -791,21 +791,21 @@ fn validate_input_map_uses(
     admitted: &AdmittedProductComposition,
     bindings: &[LinkedCapabilityBinding],
 ) -> Result<(), ProductModelError> {
-    for (index, entry) in admitted.input_map().iter().enumerate() {
+    for (index, descriptor) in admitted.intent_descriptors().iter().enumerate() {
         let binding = linked_reference(
             bindings,
-            entry.capability(),
-            &format!("inputMap[{index}].capability"),
+            descriptor.capability(),
+            &format!("intentDescriptors[{index}].capability"),
         )?;
         require_use(
             binding,
             CapabilityUse::InputMap,
-            &format!("inputMap[{index}].capability"),
+            &format!("intentDescriptors[{index}].capability"),
         )?;
         require_payload_budget(
             binding,
-            entry.payload(),
-            &format!("inputMap[{index}].payload"),
+            descriptor.payload(),
+            &format!("intentDescriptors[{index}].payload"),
         )?;
     }
     Ok(())

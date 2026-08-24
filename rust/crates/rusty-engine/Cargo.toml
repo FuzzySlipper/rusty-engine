@@ -32,6 +32,7 @@ render-projection.workspace = true
 renderer-webview-host.workspace = true
 product-model.workspace = true
 runtime-lifecycle.workspace = true
+runtime-input.workspace = true
 state-machine.workspace = true
 svc-collision.workspace = true
 svc-mesh.workspace = true

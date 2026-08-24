@@ -2,10 +2,11 @@ use serde_json::{json, Value};
 
 use crate::{
     engine_capability_descriptors, MAX_CAPABILITY_BINDINGS, MAX_COMPILED_COMPOSITION_BYTES,
-    MAX_GAMEPLAY_DEFINITIONS, MAX_IDENTITY_BYTES, MAX_INPUT_MAP_ENTRIES,
-    MAX_OPAQUE_JSON_ARRAY_ENTRIES, MAX_OPAQUE_JSON_DEPTH, MAX_OPAQUE_JSON_NODES,
-    MAX_OPAQUE_JSON_OBJECT_ENTRIES, MAX_OPAQUE_JSON_STRING_BYTES, MAX_SAFE_JSON_INTEGER,
-    MAX_SCHEDULE_ACCESS_DECLARATIONS, MAX_SCHEDULE_ENTRIES, MAX_TIMELINES, MAX_TIMELINE_STEPS,
+    MAX_GAMEPLAY_DEFINITIONS, MAX_IDENTITY_BYTES, MAX_INPUT_CHORD_CONTROLS, MAX_INPUT_MAP_ENTRIES,
+    MAX_INTENT_DESCRIPTORS, MAX_OPAQUE_JSON_ARRAY_ENTRIES, MAX_OPAQUE_JSON_DEPTH,
+    MAX_OPAQUE_JSON_NODES, MAX_OPAQUE_JSON_OBJECT_ENTRIES, MAX_OPAQUE_JSON_STRING_BYTES,
+    MAX_SAFE_JSON_INTEGER, MAX_SCHEDULE_ACCESS_DECLARATIONS, MAX_SCHEDULE_ENTRIES, MAX_TIMELINES,
+    MAX_TIMELINE_STEPS,
 };
 
 /// Encodes the current Rust-owned Compiled Composition descriptor consumed by
@@ -27,8 +28,9 @@ fn product_model_contract_descriptor() -> Value {
             "forbidAdjacentSeparators": true
         },
         "fields": {
-            "compiledComposition": ["product", "inputMap", "schedule", "gameplayDefinitions", "timelines", "capabilityBindings"],
-            "inputMap": ["id", "intent", "capability", "payload"],
+            "compiledComposition": ["product", "intentDescriptors", "inputMap", "schedule", "gameplayDefinitions", "timelines", "capabilityBindings"],
+            "intentDescriptor": ["id", "valueKind", "capability", "payload"],
+            "inputMap": ["id", "intent", "trigger"],
             "schedule": ["id", "phase", "capability", "definition", "reads", "writes", "payload"],
             "gameplayDefinition": ["id", "payload"],
             "timeline": ["id", "steps"],
@@ -41,6 +43,8 @@ fn product_model_contract_descriptor() -> Value {
         "limits": {
             "maximumEncodedBytes": MAX_COMPILED_COMPOSITION_BYTES,
             "maximumInputMapEntries": MAX_INPUT_MAP_ENTRIES,
+            "maximumIntentDescriptors": MAX_INTENT_DESCRIPTORS,
+            "maximumInputChordControls": MAX_INPUT_CHORD_CONTROLS,
             "maximumScheduleEntries": MAX_SCHEDULE_ENTRIES,
             "maximumScheduleAccessDeclarations": MAX_SCHEDULE_ACCESS_DECLARATIONS,
             "maximumGameplayDefinitions": MAX_GAMEPLAY_DEFINITIONS,
@@ -65,6 +69,7 @@ fn product_model_contract_descriptor() -> Value {
         },
         "capabilityCatalog": capability_catalog_descriptor(),
         "ordering": {
+            "intentDescriptors": "authored",
             "inputMap": "authored",
             "schedule": "authored",
             "gameplayDefinitions": "authored",
@@ -81,6 +86,16 @@ fn product_model_contract_descriptor() -> Value {
             "unknown-capability", "unknown-definition", "invalid-capability-target",
             "invalid-identity", "access-declaration-limit", "opaque-json-limit"
         ]
+        ,"input": {
+            "intentValueKinds": ["digital", "axis"],
+            "edges": ["held", "pressed", "released"],
+            "triggerKinds": ["key", "pointer-button", "pointer-axis", "wheel", "controller-button", "controller-axis"],
+            "keyboardControls": ["key-a", "key-b", "key-c", "key-d", "key-e", "key-f", "key-g", "key-h", "key-i", "key-j", "key-k", "key-l", "key-m", "key-n", "key-o", "key-p", "key-q", "key-r", "key-s", "key-t", "key-u", "key-v", "key-w", "key-x", "key-y", "key-z", "digit-0", "digit-1", "digit-2", "digit-3", "digit-4", "digit-5", "digit-6", "digit-7", "digit-8", "digit-9", "space", "enter", "escape", "shift-left", "shift-right", "control-left", "control-right", "alt-left", "alt-right"],
+            "pointerButtons": ["primary", "secondary", "middle"],
+            "axes": ["x", "y"],
+            "controllerButtons": ["button-0", "button-1", "button-2", "button-3", "button-4", "button-5", "button-6", "button-7", "button-8", "button-9", "button-10", "button-11", "button-12", "button-13", "button-14", "button-15"],
+            "controllerAxes": ["axis-0", "axis-1", "axis-2", "axis-3"]
+        }
     })
 }
 

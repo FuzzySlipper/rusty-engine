@@ -156,6 +156,15 @@ window.__rustyApplicationMount = (presentationAspectBounds) =>
     ...(presentationAspectBounds === undefined ? {} : { presentationAspectBounds }),
     developerCommands: { client: developerCommandClient() },
     initialInteractionMode: 'gameplay',
+    runtimeInput: {
+      binding: {
+        runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
+        context: 'gameplay.default',
+      },
+      maximumPointerDelta: 32,
+      maximumWheelDelta: 64,
+      selectedController: { index: 0 },
+    },
     renderer: {
       initialContent: resourceContent(),
       fog: { color: 0xff00ff, near: 0, far: 0.25 },
@@ -177,12 +186,15 @@ window.__rustyApplicationMount = (presentationAspectBounds) =>
       const audioButton = document.createElement('button');
       audioButton.id = 'audio-button';
       audioButton.textContent = 'Play audio proof';
+      const inputClaimButton = document.createElement('button');
+      inputClaimButton.id = 'input-claim-button';
+      inputClaimButton.textContent = 'Claim UI intent';
       const modal = document.createElement('section');
       modal.id = 'modal';
       modal.setAttribute('role', 'dialog');
       modal.hidden = true;
       modal.textContent = 'Modal content';
-      toolbar.append(button, audioButton, input, modal);
+      toolbar.append(button, audioButton, inputClaimButton, input, modal);
       uiRoot.append(gameplay, toolbar);
       window.__rustyApplicationGameplayInputCount = 0;
       const onMouseDown = (event: MouseEvent): void => {
@@ -219,6 +231,9 @@ window.__rustyApplicationMount = (presentationAspectBounds) =>
             },
           }],
         });
+      });
+      inputClaimButton.addEventListener('click', () => {
+        context.input?.claim('ui.confirm', { kind: 'digital', active: true });
       });
       return {
         dispose: () => {

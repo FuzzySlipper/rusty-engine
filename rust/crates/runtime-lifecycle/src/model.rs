@@ -82,6 +82,12 @@ pub struct RuntimeControlRevision(pub(crate) u64);
 impl RuntimeControlRevision {
     pub const ZERO: Self = Self(0);
 
+    /// Reconstitutes a correlation revision from a lossless host wire value.
+    /// Lifecycle transitions remain the only mechanism that advances it.
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
     pub const fn value(self) -> u64 {
         self.0
     }

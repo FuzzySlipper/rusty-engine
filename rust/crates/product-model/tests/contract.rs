@@ -5,10 +5,12 @@ use product_model::{
     validate_engine_capability_descriptors, validate_product_manifest, CapabilityAccess,
     CapabilityAvailability, CapabilityBinding, CapabilityBudget, CapabilityKind,
     CapabilityMetadata, CapabilityProvenance, CapabilityUses, CompiledCompositionCandidate,
-    EngineCapability, GameplayDefinition, InputMapEntry, LifecycleMode, LinkedCapabilityTarget,
-    ProductKernelCapabilityDescriptor, ProductManifestCandidate, ProductPath, RealtimeClock,
-    ReleaseChannel, ScheduleEntry, Timeline, TimelineStep, MAX_COMPILED_COMPOSITION_BYTES,
-    MAX_PRODUCT_KERNEL_CAPABILITIES, MAX_PRODUCT_MANIFEST_BYTES, MAX_SCHEDULE_ACCESS_DECLARATIONS,
+    EngineCapability, GameplayDefinition, InputAxis, InputEdge, InputMapEntry, InputTrigger,
+    IntentValueKind, KeyboardControl, LifecycleMode, LinkedCapabilityTarget,
+    ProductIntentDescriptor, ProductKernelCapabilityDescriptor, ProductManifestCandidate,
+    ProductPath, RealtimeClock, ReleaseChannel, ScheduleEntry, Timeline, TimelineStep,
+    MAX_COMPILED_COMPOSITION_BYTES, MAX_PRODUCT_KERNEL_CAPABILITIES, MAX_PRODUCT_MANIFEST_BYTES,
+    MAX_SCHEDULE_ACCESS_DECLARATIONS,
 };
 use serde_json::{json, Value};
 
@@ -341,7 +343,7 @@ fn canonical_numbers_follow_ecmascript_policy_and_sort_numeric_looking_keys_byte
     assert_eq!(composition.canonical_bytes(), CANONICAL_NUMBERS_EXPECTED);
     assert_eq!(
         composition.canonical_bytes(),
-        b"{\"product\":\"example.product\",\"inputMap\":[],\"schedule\":[],\"gameplayDefinitions\":[{\"id\":\"numeric\",\"payload\":{\"1\":\"one\",\"10\":\"ten\",\"2\":\"two\",\"negativeZero\":0,\"small\":0.000001,\"tiny\":0.0000012}}],\"timelines\":[],\"capabilityBindings\":[]}\n"
+        b"{\"product\":\"example.product\",\"intentDescriptors\":[],\"inputMap\":[],\"schedule\":[],\"gameplayDefinitions\":[{\"id\":\"numeric\",\"payload\":{\"1\":\"one\",\"10\":\"ten\",\"2\":\"two\",\"negativeZero\":0,\"small\":0.000001,\"tiny\":0.0000012}}],\"timelines\":[],\"capabilityBindings\":[]}\n"
     );
 }
 
@@ -517,9 +519,14 @@ fn product_composition_admission_links_checked_artifact_to_layout_immutably() {
     assert_eq!(from_checked.realtime(), Some(RealtimeClock::new(60, 4)));
     assert_eq!(from_checked.canonical_bytes(), COMPOSITION);
     assert_eq!(from_checked.input_map()[0].id(), "look");
-    assert_eq!(from_checked.input_map()[0].capability().binding_index(), 0);
     assert_eq!(
-        from_checked.input_map()[0].capability().target(),
+        from_checked.input_map()[0]
+            .intent_descriptor()
+            .descriptor_index(),
+        0
+    );
+    assert_eq!(
+        from_checked.intent_descriptors()[0].capability().target(),
         "kernel.camera-look"
     );
     assert_eq!(from_checked.schedule()[0].id(), "movement");
@@ -551,6 +558,49 @@ fn product_composition_admission_links_checked_artifact_to_layout_immutably() {
     assert_eq!(from_checked.capability_bindings()[0].id(), "camera.look");
     assert_eq!(from_checked.capability_bindings()[0].index(), 0);
     assert_eq!(from_checked.composition().canonical_bytes(), COMPOSITION);
+}
+
+#[test]
+fn input_mappings_are_descriptor_first_and_have_only_typed_trigger_meaning() {
+    let mut missing_intent = minimum_candidate();
+    missing_intent.input_map[0].intent = "missing.intent".into();
+    assert_eq!(
+        validate_compiled_composition(missing_intent)
+            .unwrap_err()
+            .diagnostic()
+            .code(),
+        "COMPOSITION_UNKNOWN_INTENT_DESCRIPTOR"
+    );
+
+    let mut wrong_value_kind = minimum_candidate();
+    wrong_value_kind.input_map[0].trigger = InputTrigger::Key {
+        code: KeyboardControl::KeyW,
+        edge: InputEdge::Pressed,
+        chord: vec![],
+        context: Some("gameplay".into()),
+    };
+    assert_eq!(
+        validate_compiled_composition(wrong_value_kind)
+            .unwrap_err()
+            .diagnostic()
+            .code(),
+        "COMPOSITION_INPUT_TRIGGER_VALUE_KIND"
+    );
+
+    let mut duplicate_chord = minimum_candidate();
+    duplicate_chord.input_map[0].trigger = InputTrigger::Key {
+        code: KeyboardControl::KeyW,
+        edge: InputEdge::Held,
+        chord: vec![KeyboardControl::ShiftLeft, KeyboardControl::ShiftLeft],
+        context: Some("gameplay".into()),
+    };
+    assert_eq!(
+        validate_compiled_composition(duplicate_chord)
+            .unwrap_err()
+            .diagnostic()
+            .code(),
+        "COMPOSITION_DUPLICATE_INPUT_CHORD_CONTROL"
+    );
 }
 
 #[test]
@@ -681,7 +731,7 @@ fn closed_catalog_rejects_unknown_unavailable_incompatible_and_duplicate_binding
         error.diagnostic().code(),
         "RUNTIME_CAPABILITY_INCOMPATIBLE_USE"
     );
-    assert_eq!(error.diagnostic().path(), "inputMap[0].capability");
+    assert_eq!(error.diagnostic().path(), "intentDescriptors[0].capability");
 
     let mut duplicate = decode_compiled_composition(COMPOSITION)
         .unwrap()
@@ -846,8 +896,8 @@ fn composition_rejects_wrong_capability_kind_and_unsafe_payloads() {
     }
 
     for raw in [
-        br#"{"product":"example.product","inputMap":[],"schedule":[],"gameplayDefinitions":[{"id":"definition","payload":9007199254740992.0}],"timelines":[],"capabilityBindings":[]}"# as &[u8],
-        br#"{"product":"example.product","inputMap":[],"schedule":[],"gameplayDefinitions":[{"id":"definition","payload":-9007199254740992.0}],"timelines":[],"capabilityBindings":[]}"# as &[u8],
+        br#"{"product":"example.product","intentDescriptors":[],"inputMap":[],"schedule":[],"gameplayDefinitions":[{"id":"definition","payload":9007199254740992.0}],"timelines":[],"capabilityBindings":[]}"# as &[u8],
+        br#"{"product":"example.product","intentDescriptors":[],"inputMap":[],"schedule":[],"gameplayDefinitions":[{"id":"definition","payload":-9007199254740992.0}],"timelines":[],"capabilityBindings":[]}"# as &[u8],
     ] {
         assert_eq!(
             decode_compiled_composition(raw)
@@ -900,14 +950,14 @@ fn composition_rejects_wrong_capability_kind_and_unsafe_payloads() {
 #[test]
 fn diagnostics_preserve_source_path_code_and_action() {
     let mut candidate = minimum_candidate();
-    candidate.input_map[0].capability = "missing".into();
+    candidate.intent_descriptors[0].capability = "missing".into();
     let diagnostic = validate_compiled_composition(candidate)
         .unwrap_err()
         .diagnostic()
         .clone();
     assert_eq!(diagnostic.code(), "COMPOSITION_UNKNOWN_CAPABILITY");
     assert_eq!(diagnostic.source(), "compiled-composition.json");
-    assert_eq!(diagnostic.path(), "inputMap[0].capability");
+    assert_eq!(diagnostic.path(), "intentDescriptors[0].capability");
     assert!(diagnostic.message().contains("undeclared capability"));
     assert!(serde_json::to_string(&diagnostic)
         .unwrap()
@@ -917,11 +967,19 @@ fn diagnostics_preserve_source_path_code_and_action() {
 fn minimum_candidate() -> CompiledCompositionCandidate {
     CompiledCompositionCandidate {
         product: "example.product".into(),
+        intent_descriptors: vec![ProductIntentDescriptor {
+            id: "look".into(),
+            value_kind: IntentValueKind::Axis,
+            capability: "camera.look".into(),
+            payload: json!({"axis": "x"}),
+        }],
         input_map: vec![InputMapEntry {
             id: "look".into(),
             intent: "look".into(),
-            capability: "camera.look".into(),
-            payload: json!({"axis": "x"}),
+            trigger: InputTrigger::PointerAxis {
+                axis: InputAxis::X,
+                context: None,
+            },
         }],
         schedule: vec![ScheduleEntry {
             id: "movement".into(),

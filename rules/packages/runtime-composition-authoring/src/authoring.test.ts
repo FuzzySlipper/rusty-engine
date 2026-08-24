@@ -18,6 +18,7 @@ import {
   kernelCapability,
   phase,
   prepend,
+  productIntent,
   replace,
   timeline,
   timelineStep,
@@ -44,6 +45,35 @@ test('typed Runtime Composition authoring emits the exact Rust-owned current fix
   assert.deepEqual(artifact.composition.schedule[1]?.writes, ['render-frame.diff']);
 });
 
+test('typed W mapping resolves to one admitted move.forward descriptor', () => {
+  const artifact = authorRuntimeComposition({
+    product: 'example.product',
+    capabilities: [kernelCapability('move.forward', 'move-forward')],
+    intentDescriptors: [productIntent({
+      id: 'move.forward', valueKind: 'digital', capability: 'move.forward', payload: { semantic: 'move-forward' },
+    })],
+    inputMap: [inputAction({
+      id: 'w-forward', intent: 'move.forward',
+      trigger: { kind: 'key', code: 'key-w', edge: 'held', context: 'gameplay' },
+    })],
+    schedule: [],
+    gameplayDefinitions: [],
+    timelines: [],
+  });
+  const wire = JSON.parse(artifact.canonicalJson) as { intentDescriptors: unknown; inputMap: unknown };
+  assert.deepEqual(wire.intentDescriptors, [{
+    id: 'move.forward', valueKind: 'digital', capability: 'move.forward', payload: { semantic: 'move-forward' },
+  }]);
+  assert.deepEqual(wire.inputMap, [{
+    id: 'w-forward', intent: 'move.forward',
+    trigger: { kind: 'key', code: 'key-w', edge: 'held', context: 'gameplay' },
+  }]);
+  expectError(() => admitCompiledComposition({
+    ...artifact.composition,
+    inputMap: [{ id: 'wrong-kind', intent: 'move.forward', trigger: { kind: 'pointer-axis', axis: 'x' } }],
+  }), 'input-trigger-value-kind');
+});
+
 test('authoring materializes only detached plain data', () => {
   const artifact = minimumArtifact();
   const left = compiledCompositionBytes(artifact);
@@ -61,7 +91,7 @@ test('authoring materializes only detached plain data', () => {
     Number.POSITIVE_INFINITY,
     9_007_199_254_740_992,
   ]) {
-    expectError(() => inputAction({ id: 'bad', intent: 'bad', capability: 'camera.look', payload: value }), 'invalid-json-value');
+    expectError(() => productIntent({ id: 'bad', valueKind: 'digital', capability: 'camera.look', payload: value }), 'invalid-json-value');
   }
   const cyclic: Record<string, unknown> = {};
   cyclic['self'] = cyclic;
@@ -74,6 +104,7 @@ test('canonical writer preserves the Rust number policy and bytewise opaque obje
   const artifact = authorRuntimeComposition({
     product: 'example.product',
     capabilities: [],
+    intentDescriptors: [],
     inputMap: [],
     gameplayDefinitions: [gameplayDefinition('numeric', {
       '2': 'two', '10': 'ten', '1': 'one', small: 1e-6, tiny: 1.2e-6, negativeZero: -0,
@@ -137,7 +168,7 @@ test('composition admission rejects unknown fields, unsafe references, and missi
     'unknown-field',
   );
   const unknownCapability = structuredClone(minimumArtifact().composition) as unknown as Record<string, unknown>;
-  ((unknownCapability['inputMap'] as { capability: string }[])[0] as { capability: string }).capability = 'missing.capability';
+  ((unknownCapability['intentDescriptors'] as { capability: string }[])[0] as { capability: string }).capability = 'missing.capability';
   expectError(() => admitCompiledComposition(unknownCapability), 'unknown-capability');
   const missingReads = structuredClone(minimumArtifact().composition) as unknown as Record<string, unknown>;
   delete ((missingReads['schedule'] as Record<string, unknown>[])[0] as Record<string, unknown>)['reads'];
@@ -181,7 +212,7 @@ test('engine capability helper accepts only the generated closed Engine names', 
 test('append and prepend have distinct ordered semantics while extend rejects accidental replacement', () => {
   const base = minimumArtifact().composition;
   const additions = fragment({
-    inputMap: [inputAction({ id: 'fire', intent: 'fire', capability: 'movement.apply', payload: null })],
+    inputMap: [inputAction({ id: 'fire', intent: 'look', trigger: { kind: 'pointer-axis', axis: 'x' } })],
     schedule: phase('simulation', [{
       id: 'after-movement', capability: 'movement.apply', reads: ['state.transform'], writes: [], payload: { order: 2 },
     }]).schedule,
@@ -192,7 +223,7 @@ test('append and prepend have distinct ordered semantics while extend rejects ac
   assert.deepEqual(prepended.inputMap.map((entry) => entry.id), ['fire', 'look']);
   assert.deepEqual(appended.schedule.map((entry) => entry.id), ['movement', 'render-projection', 'after-movement']);
   assert.deepEqual(prepended.schedule.map((entry) => entry.id), ['after-movement', 'movement', 'render-projection']);
-  expectError(() => extend(base, fragment({ inputMap: [inputAction({ id: 'look', intent: 'look', capability: 'camera.look', payload: null })] })), 'duplicate-entry');
+  expectError(() => extend(base, fragment({ inputMap: [inputAction({ id: 'look', intent: 'look', trigger: { kind: 'pointer-axis', axis: 'x' } })] })), 'duplicate-entry');
 });
 
 test('replace changes only explicitly named whole collections and cadence does not fabricate an absent wire field', () => {
@@ -218,8 +249,11 @@ function minimumDraft() {
       engineCapability('projection.refresh', 'render.entity-project'),
       kernelCapability('timeline.start', 'start-timeline'),
     ],
+    intentDescriptors: [
+      productIntent({ id: 'look', valueKind: 'axis', capability: 'camera.look', payload: { axes: ['x', 'y'] } }),
+    ],
     inputMap: [
-      inputAction({ id: 'look', intent: 'look', capability: 'camera.look', payload: { axes: ['x', 'y'] } }),
+      inputAction({ id: 'look', intent: 'look', trigger: { kind: 'pointer-axis', axis: 'x' } }),
     ],
     schedule: [
       ...phase('simulation', [{

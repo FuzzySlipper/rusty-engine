@@ -17,8 +17,8 @@ mod path;
 pub use admission::{
     admit_checked_product_composition, admit_product_composition, AdmittedCapabilityBinding,
     AdmittedCapabilityReference, AdmittedDefinitionReference, AdmittedGameplayDefinition,
-    AdmittedInputMapEntry, AdmittedProductComposition, AdmittedScheduleFragment, AdmittedTimeline,
-    AdmittedTimelineStep,
+    AdmittedInputMapEntry, AdmittedIntentDescriptor, AdmittedIntentReference,
+    AdmittedProductComposition, AdmittedScheduleFragment, AdmittedTimeline, AdmittedTimelineStep,
 };
 pub use capability_catalog::{
     engine_capability_descriptors, link_admitted_product_composition,
@@ -30,12 +30,15 @@ pub use capability_catalog::{
 };
 pub use composition::{
     decode_compiled_composition, encode_compiled_composition, validate_compiled_composition,
-    CapabilityBinding, CompiledComposition, CompiledCompositionCandidate, GameplayDefinition,
-    InputMapEntry, ScheduleEntry, Timeline, TimelineStep, MAX_CAPABILITY_BINDINGS,
-    MAX_COMPILED_COMPOSITION_BYTES, MAX_GAMEPLAY_DEFINITIONS, MAX_INPUT_MAP_ENTRIES,
-    MAX_OPAQUE_JSON_ARRAY_ENTRIES, MAX_OPAQUE_JSON_DEPTH, MAX_OPAQUE_JSON_NODES,
-    MAX_OPAQUE_JSON_OBJECT_ENTRIES, MAX_OPAQUE_JSON_STRING_BYTES, MAX_SAFE_JSON_INTEGER,
-    MAX_SCHEDULE_ACCESS_DECLARATIONS, MAX_SCHEDULE_ENTRIES, MAX_TIMELINES, MAX_TIMELINE_STEPS,
+    CapabilityBinding, CompiledComposition, CompiledCompositionCandidate, ControllerAxis,
+    ControllerButton, GameplayDefinition, InputAxis, InputEdge, InputMapEntry, InputTrigger,
+    IntentValueKind, KeyboardControl, PointerButton, ProductIntentDescriptor, ScheduleEntry,
+    Timeline, TimelineStep, MAX_CAPABILITY_BINDINGS, MAX_COMPILED_COMPOSITION_BYTES,
+    MAX_GAMEPLAY_DEFINITIONS, MAX_INPUT_CHORD_CONTROLS, MAX_INPUT_MAP_ENTRIES,
+    MAX_INTENT_DESCRIPTORS, MAX_OPAQUE_JSON_ARRAY_ENTRIES, MAX_OPAQUE_JSON_DEPTH,
+    MAX_OPAQUE_JSON_NODES, MAX_OPAQUE_JSON_OBJECT_ENTRIES, MAX_OPAQUE_JSON_STRING_BYTES,
+    MAX_SAFE_JSON_INTEGER, MAX_SCHEDULE_ACCESS_DECLARATIONS, MAX_SCHEDULE_ENTRIES, MAX_TIMELINES,
+    MAX_TIMELINE_STEPS,
 };
 pub use contract::encode_product_model_contract_descriptor;
 pub use diagnostic::{ProductModelDiagnostic, ProductModelError, MAX_DIAGNOSTIC_MESSAGE_BYTES};

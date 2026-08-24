@@ -62,6 +62,28 @@ isolated rules workspace: optional downstream TS authoring DSL --> package/wire 
 isolated renderer workspace: retained JSON --> render-projection (TS) --> Three backend / host adapters
 ```
 
+## Product input boundary
+
+`product-model` admits a closed mapping grammar before runtime: an intent
+descriptor owns its typed value kind, one resolved capability binding, and
+capability payload; each physical mapping owns only an id, descriptor
+reference, and typed trigger. This keeps direct product UI claims unambiguous:
+UI claims and physical observations resolve to the same descriptor rather than
+choosing an arbitrary control mapping.
+
+`runtime-input` is one non-cloneable lane per explicit runtime instance. A host
+normalizes bounded keyboard, pointer, wheel, and one selected-controller fact
+or a direct product UI claim into one gap-free sequence carrying instance,
+generation, control revision, and Product context. The lane admits only the
+active epoch, fails closed on malformed/order/bound errors, and snapshots only
+against a lifecycle-validated `InputSnapshot` token. It emits immutable typed
+intent envelopes in ingress order (then authored map order for one fact);
+per-step held readouts follow real same-sequence facts. Focus, interaction-mode
+or pointer-lock loss, restart/control revision change, ingress overflow, and
+disposal clear held/transient/pending state. It owns no DOM, controller polling
+cadence, capability invocation, movement, collision, scheduler, callback,
+global bus, or game consequence.
+
 No Engine crate knows the downstream game's component families, event vocabulary, game-specific
 stored-project schema, or browser API. The Rust render crates know only renderer-neutral values and
 explicit read-only provider views; the isolated renderer workspace knows no gameplay authority.

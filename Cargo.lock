@@ -2798,6 +2798,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "runtime-input"
+version = "0.1.0"
+dependencies = [
+ "product-model",
+ "runtime-lifecycle",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "runtime-lifecycle"
 version = "0.1.0"
 dependencies = [
@@ -2902,6 +2912,7 @@ dependencies = [
  "render-presentation",
  "render-projection",
  "renderer-webview-host",
+ "runtime-input",
  "runtime-lifecycle",
  "serde_json",
  "state-machine",

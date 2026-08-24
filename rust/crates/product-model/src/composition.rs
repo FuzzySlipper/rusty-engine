@@ -11,6 +11,8 @@ use crate::{diagnostic::failure, manifest::validate_identity, ProductModelError}
 const SOURCE: &str = "compiled-composition.json";
 pub const MAX_COMPILED_COMPOSITION_BYTES: usize = 1_048_576;
 pub const MAX_INPUT_MAP_ENTRIES: usize = 256;
+pub const MAX_INTENT_DESCRIPTORS: usize = 256;
+pub const MAX_INPUT_CHORD_CONTROLS: usize = 8;
 pub const MAX_SCHEDULE_ENTRIES: usize = 512;
 pub const MAX_SCHEDULE_ACCESS_DECLARATIONS: usize = 64;
 pub const MAX_GAMEPLAY_DEFINITIONS: usize = 512;
@@ -48,6 +50,7 @@ impl CompiledComposition {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompiledCompositionCandidate {
     pub product: String,
+    pub intent_descriptors: Vec<ProductIntentDescriptor>,
     pub input_map: Vec<InputMapEntry>,
     pub schedule: Vec<ScheduleEntry>,
     pub gameplay_definitions: Vec<GameplayDefinition>,
@@ -60,8 +63,218 @@ pub struct CompiledCompositionCandidate {
 pub struct InputMapEntry {
     pub id: String,
     pub intent: String,
+    pub trigger: InputTrigger,
+}
+
+/// One typed product intent. The descriptor, rather than a particular physical
+/// mapping, owns the closed capability linkage and capability-specific data so
+/// direct UI claims and physical controls always converge on one target.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProductIntentDescriptor {
+    pub id: String,
+    pub value_kind: IntentValueKind,
     pub capability: String,
     pub payload: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IntentValueKind {
+    Digital,
+    Axis,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InputEdge {
+    Held,
+    Pressed,
+    Released,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KeyboardControl {
+    KeyA,
+    KeyB,
+    KeyC,
+    KeyD,
+    KeyE,
+    KeyF,
+    KeyG,
+    KeyH,
+    KeyI,
+    KeyJ,
+    KeyK,
+    KeyL,
+    KeyM,
+    KeyN,
+    KeyO,
+    KeyP,
+    KeyQ,
+    KeyR,
+    KeyS,
+    KeyT,
+    KeyU,
+    KeyV,
+    KeyW,
+    KeyX,
+    KeyY,
+    KeyZ,
+    Digit0,
+    Digit1,
+    Digit2,
+    Digit3,
+    Digit4,
+    Digit5,
+    Digit6,
+    Digit7,
+    Digit8,
+    Digit9,
+    Space,
+    Enter,
+    Escape,
+    ShiftLeft,
+    ShiftRight,
+    ControlLeft,
+    ControlRight,
+    AltLeft,
+    AltRight,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PointerButton {
+    Primary,
+    Secondary,
+    Middle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InputAxis {
+    X,
+    Y,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ControllerButton {
+    #[serde(rename = "button-0")]
+    Button0,
+    #[serde(rename = "button-1")]
+    Button1,
+    #[serde(rename = "button-2")]
+    Button2,
+    #[serde(rename = "button-3")]
+    Button3,
+    #[serde(rename = "button-4")]
+    Button4,
+    #[serde(rename = "button-5")]
+    Button5,
+    #[serde(rename = "button-6")]
+    Button6,
+    #[serde(rename = "button-7")]
+    Button7,
+    #[serde(rename = "button-8")]
+    Button8,
+    #[serde(rename = "button-9")]
+    Button9,
+    #[serde(rename = "button-10")]
+    Button10,
+    #[serde(rename = "button-11")]
+    Button11,
+    #[serde(rename = "button-12")]
+    Button12,
+    #[serde(rename = "button-13")]
+    Button13,
+    #[serde(rename = "button-14")]
+    Button14,
+    #[serde(rename = "button-15")]
+    Button15,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ControllerAxis {
+    #[serde(rename = "axis-0")]
+    Axis0,
+    #[serde(rename = "axis-1")]
+    Axis1,
+    #[serde(rename = "axis-2")]
+    Axis2,
+    #[serde(rename = "axis-3")]
+    Axis3,
+}
+
+/// Explicit trigger grammar for host-neutral normalized observations. It
+/// intentionally contains no opaque object that could hide newly invented
+/// physical-control meaning.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum InputTrigger {
+    Key {
+        code: KeyboardControl,
+        edge: InputEdge,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        chord: Vec<KeyboardControl>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<String>,
+    },
+    PointerButton {
+        button: PointerButton,
+        edge: InputEdge,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<String>,
+    },
+    PointerAxis {
+        axis: InputAxis,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<String>,
+    },
+    Wheel {
+        axis: InputAxis,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<String>,
+    },
+    ControllerButton {
+        button: ControllerButton,
+        edge: InputEdge,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<String>,
+    },
+    ControllerAxis {
+        axis: ControllerAxis,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<String>,
+    },
+}
+
+impl InputTrigger {
+    pub const fn value_kind(&self) -> IntentValueKind {
+        match self {
+            Self::Key { .. } | Self::PointerButton { .. } | Self::ControllerButton { .. } => {
+                IntentValueKind::Digital
+            }
+            Self::PointerAxis { .. } | Self::Wheel { .. } | Self::ControllerAxis { .. } => {
+                IntentValueKind::Axis
+            }
+        }
+    }
+
+    fn validate(&self, path: &str) -> Result<(), ProductModelError> {
+        match self {
+            Self::Key { chord, context, .. } => {
+                validate_chord_and_context(chord, context.as_deref(), path)
+            }
+            Self::PointerButton { context, .. }
+            | Self::PointerAxis { context, .. }
+            | Self::Wheel { context, .. }
+            | Self::ControllerButton { context, .. }
+            | Self::ControllerAxis { context, .. } => validate_context(context.as_deref(), path),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -155,6 +368,12 @@ pub fn validate_compiled_composition(
         "COMPOSITION_INPUT_MAP_COUNT",
     )?;
     validate_bounded_count(
+        candidate.intent_descriptors.len(),
+        MAX_INTENT_DESCRIPTORS,
+        "intentDescriptors",
+        "COMPOSITION_INTENT_DESCRIPTOR_COUNT",
+    )?;
+    validate_bounded_count(
         candidate.schedule.len(),
         MAX_SCHEDULE_ENTRIES,
         "schedule",
@@ -181,9 +400,14 @@ pub fn validate_compiled_composition(
 
     let capabilities = validate_capability_bindings(&candidate.capability_bindings)?;
     let mut json_nodes = 0usize;
+    let intents = validate_intent_descriptors(
+        &candidate.intent_descriptors,
+        &capabilities,
+        &mut json_nodes,
+    )?;
     let definitions =
         validate_gameplay_definitions(&candidate.gameplay_definitions, &mut json_nodes)?;
-    validate_input_map(&candidate.input_map, &capabilities, &mut json_nodes)?;
+    validate_input_map(&candidate.input_map, &intents)?;
     validate_schedule(
         &candidate.schedule,
         &capabilities,
@@ -264,22 +488,77 @@ fn validate_gameplay_definitions(
     Ok(ids)
 }
 
-fn validate_input_map(
-    entries: &[InputMapEntry],
+fn validate_intent_descriptors(
+    descriptors: &[ProductIntentDescriptor],
     capabilities: &BTreeSet<String>,
     json_nodes: &mut usize,
+) -> Result<std::collections::BTreeMap<String, IntentValueKind>, ProductModelError> {
+    let mut intents = std::collections::BTreeMap::new();
+    for (index, descriptor) in descriptors.iter().enumerate() {
+        let prefix = format!("intentDescriptors[{index}]");
+        validate_identity(&descriptor.id, SOURCE, &format!("{prefix}.id"))?;
+        require_capability(
+            &descriptor.capability,
+            capabilities,
+            &format!("{prefix}.capability"),
+        )?;
+        validate_opaque_json(
+            &descriptor.payload,
+            &format!("{prefix}.payload"),
+            json_nodes,
+        )?;
+        if intents
+            .insert(descriptor.id.clone(), descriptor.value_kind)
+            .is_some()
+        {
+            return Err(failure(
+                "COMPOSITION_DUPLICATE_INTENT_DESCRIPTOR",
+                SOURCE,
+                format!("{prefix}.id"),
+                format!(
+                    "intent descriptor `{}` is declared more than once",
+                    descriptor.id
+                ),
+            ));
+        }
+    }
+    Ok(intents)
+}
+
+fn validate_input_map(
+    entries: &[InputMapEntry],
+    intents: &std::collections::BTreeMap<String, IntentValueKind>,
 ) -> Result<(), ProductModelError> {
     let mut ids = BTreeSet::new();
     for (index, entry) in entries.iter().enumerate() {
         let prefix = format!("inputMap[{index}]");
         validate_identity(&entry.id, SOURCE, &format!("{prefix}.id"))?;
         validate_identity(&entry.intent, SOURCE, &format!("{prefix}.intent"))?;
-        require_capability(
-            &entry.capability,
-            capabilities,
-            &format!("{prefix}.capability"),
-        )?;
-        validate_opaque_json(&entry.payload, &format!("{prefix}.payload"), json_nodes)?;
+        let value_kind = intents.get(&entry.intent).ok_or_else(|| {
+            failure(
+                "COMPOSITION_UNKNOWN_INTENT_DESCRIPTOR",
+                SOURCE,
+                format!("{prefix}.intent"),
+                format!(
+                    "input mapping references undeclared intent `{}`",
+                    entry.intent
+                ),
+            )
+        })?;
+        entry.trigger.validate(&format!("{prefix}.trigger"))?;
+        if entry.trigger.value_kind() != *value_kind {
+            return Err(failure(
+                "COMPOSITION_INPUT_TRIGGER_VALUE_KIND",
+                SOURCE,
+                format!("{prefix}.trigger"),
+                format!(
+                    "input trigger produces {:?}, but intent `{}` requires {:?}",
+                    entry.trigger.value_kind(),
+                    entry.intent,
+                    value_kind
+                ),
+            ));
+        }
         if !ids.insert(entry.id.clone()) {
             return Err(failure(
                 "COMPOSITION_DUPLICATE_INPUT",
@@ -288,6 +567,40 @@ fn validate_input_map(
                 format!("input entry `{}` is declared more than once", entry.id),
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_chord_and_context(
+    chord: &[KeyboardControl],
+    context: Option<&str>,
+    path: &str,
+) -> Result<(), ProductModelError> {
+    if chord.len() > MAX_INPUT_CHORD_CONTROLS {
+        return Err(failure(
+            "COMPOSITION_INPUT_CHORD_COUNT",
+            SOURCE,
+            format!("{path}.chord"),
+            format!("input chords contain at most {MAX_INPUT_CHORD_CONTROLS} controls"),
+        ));
+    }
+    let mut controls = BTreeSet::new();
+    for (index, control) in chord.iter().enumerate() {
+        if !controls.insert(*control) {
+            return Err(failure(
+                "COMPOSITION_DUPLICATE_INPUT_CHORD_CONTROL",
+                SOURCE,
+                format!("{path}.chord[{index}]"),
+                "an input chord cannot repeat a control",
+            ));
+        }
+    }
+    validate_context(context, path)
+}
+
+fn validate_context(context: Option<&str>, path: &str) -> Result<(), ProductModelError> {
+    if let Some(context) = context {
+        validate_identity(context, SOURCE, &format!("{path}.context"))?;
     }
     Ok(())
 }
@@ -609,8 +922,8 @@ fn canonicalize_composition(
     candidate: &CompiledCompositionCandidate,
 ) -> CompiledCompositionCandidate {
     let mut canonical = candidate.clone();
-    for entry in &mut canonical.input_map {
-        entry.payload = canonicalize_json_value(&entry.payload);
+    for descriptor in &mut canonical.intent_descriptors {
+        descriptor.payload = canonicalize_json_value(&descriptor.payload);
     }
     for entry in &mut canonical.schedule {
         entry.payload = canonicalize_json_value(&entry.payload);
@@ -655,6 +968,31 @@ fn encode_canonical_composition(candidate: &CompiledCompositionCandidate) -> Vec
     let mut first = true;
     write_field_name(&mut output, &mut first, "product");
     write_json_string(&mut output, &candidate.product);
+    write_field_name(&mut output, &mut first, "intentDescriptors");
+    output.push(b'[');
+    for (index, descriptor) in candidate.intent_descriptors.iter().enumerate() {
+        if index != 0 {
+            output.push(b',');
+        }
+        output.push(b'{');
+        let mut descriptor_first = true;
+        write_field_name(&mut output, &mut descriptor_first, "id");
+        write_json_string(&mut output, &descriptor.id);
+        write_field_name(&mut output, &mut descriptor_first, "valueKind");
+        write_json_string(
+            &mut output,
+            match descriptor.value_kind {
+                IntentValueKind::Digital => "digital",
+                IntentValueKind::Axis => "axis",
+            },
+        );
+        write_field_name(&mut output, &mut descriptor_first, "capability");
+        write_json_string(&mut output, &descriptor.capability);
+        write_field_name(&mut output, &mut descriptor_first, "payload");
+        write_canonical_json(&mut output, &descriptor.payload);
+        output.push(b'}');
+    }
+    output.push(b']');
     write_field_name(&mut output, &mut first, "inputMap");
     output.push(b'[');
     for (index, entry) in candidate.input_map.iter().enumerate() {
@@ -667,10 +1005,8 @@ fn encode_canonical_composition(candidate: &CompiledCompositionCandidate) -> Vec
         write_json_string(&mut output, &entry.id);
         write_field_name(&mut output, &mut entry_first, "intent");
         write_json_string(&mut output, &entry.intent);
-        write_field_name(&mut output, &mut entry_first, "capability");
-        write_json_string(&mut output, &entry.capability);
-        write_field_name(&mut output, &mut entry_first, "payload");
-        write_canonical_json(&mut output, &entry.payload);
+        write_field_name(&mut output, &mut entry_first, "trigger");
+        write_input_trigger(&mut output, &entry.trigger);
         output.push(b'}');
     }
     output.push(b']');
@@ -763,6 +1099,12 @@ fn encode_canonical_composition(candidate: &CompiledCompositionCandidate) -> Vec
     output.push(b']');
     output.push(b'}');
     output
+}
+
+fn write_input_trigger(output: &mut Vec<u8>, trigger: &InputTrigger) {
+    let value = serde_json::to_value(trigger)
+        .expect("the closed input trigger schema is always serializable");
+    write_canonical_json(output, &value);
 }
 
 fn write_field_name(output: &mut Vec<u8>, first: &mut bool, name: &str) {

@@ -26051,41 +26051,437 @@ function tT(e, t, n) {
 	});
 }
 //#endregion
-//#region packages/application-host/src/application-host.ts
-var nT = "rusty_application_host.v1", rT = class extends Error {
+//#region packages/application-host/src/input-ingress.ts
+var nT = 1024, rT = 256, iT = 256, aT = 3, oT = 18446744073709551615n;
+function sT(e, t) {
+	let n = fT(e), r = lT(n.maximumQueue), i = /* @__PURE__ */ new Set(), a = /* @__PURE__ */ new Set(), o = /* @__PURE__ */ new Map(), s = /* @__PURE__ */ new Set(), c = t.canvas(), l = !1, u = () => t.document.pointerLockElement === t.canvas(), d = () => u() || t.document.activeElement === t.canvas(), f = () => {
+		i.clear(), a.clear(), s.clear(), o.clear();
+	}, p = (e) => {
+		f(), r.clear(e);
+	}, m = (e) => {
+		let t = r.enqueueFact(e);
+		return t && f(), t;
+	}, h = (e, n) => t.allowsGameplayInput(e) ? n && !d() ? (p("focus-loss"), !1) : !0 : (p("interaction-mode-loss"), !1), g = (e) => {
+		if (!h(e, !1)) return;
+		let n = CT(e.button);
+		n !== null && (a.has(n) || (a.add(n), m(Object.freeze({
+			kind: "pointer-button",
+			button: n,
+			edge: "pressed"
+		}))), n === "primary" && t.focusGameplay());
+	}, _ = (e) => {
+		if (!h(e, !0)) return;
+		let t = CT(e.button);
+		t === null || !a.delete(t) || m(Object.freeze({
+			kind: "pointer-button",
+			button: t,
+			edge: "released"
+		}));
+	}, v = (e) => {
+		t.allowsGameplayInput(e), p("interaction-mode-loss");
+	}, y = (e) => {
+		if (!h(e, !1) || !u()) return;
+		let t = AT(e.movementX, n.maximumPointerDelta), r = AT(e.movementY, n.maximumPointerDelta);
+		t === 0 && r === 0 || m(Object.freeze({
+			kind: "pointer-delta",
+			x: t,
+			y: r
+		}));
+	}, b = (e) => {
+		if (!h(e, !0)) return;
+		let t = AT(e.deltaX, n.maximumWheelDelta), r = AT(e.deltaY, n.maximumWheelDelta);
+		t === 0 && r === 0 || m(Object.freeze({
+			kind: "wheel",
+			x: t,
+			y: r
+		}));
+	}, x = (e) => {
+		if (!h(e, !0)) return;
+		let t = cT(e.code);
+		t === null || i.has(t) || (i.add(t), m(Object.freeze({
+			kind: "key",
+			code: t,
+			edge: "pressed"
+		})));
+	}, S = (e) => {
+		if (!h(e, !0)) return;
+		let t = cT(e.code);
+		t === null || !i.delete(t) || m(Object.freeze({
+			kind: "key",
+			code: t,
+			edge: "released"
+		}));
+	}, C = (e) => {
+		t.allowsGameplayInput(e), u() || p("pointer-lock-loss");
+	}, w = (e) => {
+		t.allowsGameplayInput(e), p("focus-loss");
+	}, T = (e) => {
+		t.allowsGameplayInput(e);
+	}, E = (e) => {
+		t.allowsGameplayInput(e), n.selectedController === e.gamepad.index && p("interaction-mode-loss");
+	}, D = () => {
+		t.eventTarget.addEventListener("pointerdown", g), t.document.addEventListener("pointerup", _), t.document.addEventListener("pointercancel", v), t.document.addEventListener("wheel", b, { passive: !0 });
+	}, O = () => {
+		t.eventTarget.removeEventListener("pointerdown", g), t.document.removeEventListener("pointerup", _), t.document.removeEventListener("pointercancel", v), t.document.removeEventListener("wheel", b);
+	};
+	return D(), t.document.addEventListener("pointermove", y), t.document.addEventListener("keydown", x), t.document.addEventListener("keyup", S), t.document.addEventListener("pointerlockchange", C), t.document.defaultView?.addEventListener("blur", w), t.document.defaultView?.addEventListener("gamepadconnected", T), t.document.defaultView?.addEventListener("gamepaddisconnected", E), n.initialBinding !== null && r.bindRuntime(n.initialBinding), Object.freeze({
+		bindRuntime: (e) => {
+			l || r.bindRuntime(e) && f();
+		},
+		synchronizeRuntime: (e) => {
+			l || r.bindRuntime(e) && f();
+		},
+		setContext: (e) => {
+			l || r.setContext(e) && f();
+		},
+		clear: (e) => {
+			l || p(e);
+		},
+		drain: () => r.drain(),
+		claim: (e, t) => {
+			!l && r.claim(e, t) && f();
+		},
+		sampleController: () => {
+			if (l || n.selectedController === null) return 0;
+			if (!t.active() || t.interactionMode() !== "gameplay" || !d()) return p("interaction-mode-loss"), 0;
+			let e = t.gamepads()[n.selectedController];
+			if (e == null || !e.connected) return (s.size > 0 || o.size > 0) && p("interaction-mode-loss"), 0;
+			let r = 0;
+			for (let t = 0; t < 4; t += 1) {
+				let n = kT(t), i = AT(e.axes[t] ?? 0, 1);
+				if (i !== (o.get(n) ?? 0)) {
+					if (o.set(n, i), m(Object.freeze({
+						kind: "controller-axis",
+						axis: n,
+						value: i
+					}))) return r;
+					r += 1;
+				}
+			}
+			for (let t = 0; t < 16; t += 1) {
+				let n = OT(t), i = e.buttons[t]?.pressed === !0;
+				if (i !== s.has(n)) {
+					if (i ? s.add(n) : s.delete(n), m(Object.freeze({
+						kind: "controller-button",
+						button: n,
+						edge: i ? "pressed" : "released"
+					}))) return r;
+					r += 1;
+				}
+			}
+			return r;
+		},
+		rebindCanvas: (e) => {
+			l || e === c || (c = e, p("pointer-lock-loss"));
+		},
+		dispose: () => {
+			l || (p("dispose"), l = !0, O(), t.document.removeEventListener("pointermove", y), t.document.removeEventListener("keydown", x), t.document.removeEventListener("keyup", S), t.document.removeEventListener("pointerlockchange", C), t.document.defaultView?.removeEventListener("blur", w), t.document.defaultView?.removeEventListener("gamepadconnected", T), t.document.defaultView?.removeEventListener("gamepaddisconnected", E));
+		}
+	});
+}
+function cT(e) {
+	let t = /^Key([A-Z])$/u.exec(e);
+	if (t !== null) return `key-${t[1].toLowerCase()}`;
+	let n = /^Digit([0-9])$/u.exec(e);
+	return n === null ? NT.get(e) ?? null : `digit-${n[1]}`;
+}
+function lT(e, t = 0n) {
+	if (t < 0n || t > 18446744073709551615n) throw RangeError("initial input sequence must fit u64");
+	let n = null, r = t, i = !0, a = !1, o = [], s = () => {
+		if (a || r >= 18446744073709551615n) return null;
+		let e = r.toString(10);
+		return r += 1n, e;
+	}, c = () => {
+		if (n === null || a) return;
+		a = !0;
+		let e = o[0], t = e?.sequence ?? 18446744073709551615n.toString(10);
+		e !== void 0 && (r = BigInt(t) + 1n), o = [uT(n, t, Object.freeze({
+			kind: "clear",
+			reason: "ingress-overflow"
+		}))];
+	}, l = (e) => {
+		if (n === null || a) return;
+		let t = o[0], i = t === void 0 ? s() : t.sequence;
+		if (i === null) {
+			c();
+			return;
+		}
+		t !== void 0 && (r = BigInt(i) + 1n), o = [uT(n, i, Object.freeze({
+			kind: "clear",
+			reason: e
+		}))];
+	}, u = (t) => {
+		if (n === null) return !1;
+		if (a) return !0;
+		if (o.length >= e) return l("ingress-overflow"), !0;
+		let r = s();
+		return r === null ? (c(), !0) : (o.push(uT(n, r, t)), !1);
+	}, d = (t, r) => {
+		if (n === null) return !1;
+		if (a) return !0;
+		if (o.length >= e) return l("ingress-overflow"), !0;
+		let i = s();
+		return i === null ? (c(), !0) : (o.push(dT(n, i, t, r)), !1);
+	};
+	return {
+		bindRuntime: (e) => {
+			let s = pT(e), c = n;
+			if (c !== null && xT(c, s) || a && c !== null && ST(c.runtime, s.runtime)) return !1;
+			if (c !== null && c.runtime.instanceId === s.runtime.instanceId) {
+				let e = BigInt(c.runtime.generation), t = BigInt(s.runtime.generation);
+				if (t < e) throw RangeError("runtime generation cannot move backward within one instance");
+				if (t > e && BigInt(s.runtime.controlRevision) <= BigInt(c.runtime.controlRevision)) throw RangeError("runtime control revision must advance with generation");
+				if (t === e && BigInt(s.runtime.controlRevision) < BigInt(c.runtime.controlRevision)) throw RangeError("runtime control revision cannot move backward within one generation");
+			}
+			if (c === null) return n = s, r = i ? t : 0n, i = !1, a = !1, !0;
+			if (ST(c.runtime, s.runtime)) return c.context === s.context ? !1 : (n = s, l("interaction-mode-loss"), !0);
+			let u = c.runtime.instanceId !== s.runtime.instanceId || c.runtime.generation !== s.runtime.generation ? "restart" : "control-revision-change";
+			return n = s, r = 0n, a = !1, o = [], l(u), !0;
+		},
+		setContext: (e) => {
+			let t = hT(e);
+			return n === null || a || n.context === t ? !1 : (n = Object.freeze({
+				runtime: n.runtime,
+				context: t
+			}), l("interaction-mode-loss"), !0);
+		},
+		clear: (e) => {
+			l(bT(e));
+		},
+		enqueueFact: (e) => u(yT(e)),
+		claim: (e, t) => {
+			if (n === null) return !1;
+			let r = gT(e), i = vT(t);
+			return d(r, i);
+		},
+		drain: () => {
+			let e = o;
+			return o = [], Object.freeze(e);
+		}
+	};
+}
+function uT(e, t, n) {
+	return Object.freeze({
+		runtime: e.runtime,
+		sequence: t,
+		context: e.context,
+		fact: Object.freeze({ ...n })
+	});
+}
+function dT(e, t, n, r) {
+	let i = gT(n), a = vT(r);
+	return Object.freeze({
+		runtime: e.runtime,
+		sequence: t,
+		context: e.context,
+		intent: i,
+		value: a
+	});
+}
+function fT(e) {
+	return Object.freeze({
+		initialBinding: e.binding === void 0 ? null : pT(e.binding),
+		maximumPointerDelta: jT(e.maximumPointerDelta ?? 256, "maximumPointerDelta", 4096),
+		maximumQueue: jT(e.maximumQueue ?? 1024, "maximumQueue", nT),
+		maximumWheelDelta: jT(e.maximumWheelDelta ?? 256, "maximumWheelDelta", 4096),
+		selectedController: e.selectedController === void 0 ? null : MT(e.selectedController.index, "selectedController.index", 0, 3)
+	});
+}
+function pT(e) {
+	if (typeof e != "object" || !e || typeof e.runtime != "object" || e.runtime === null) throw TypeError("runtime input binding must include one runtime identity");
+	return Object.freeze({
+		runtime: Object.freeze({
+			instanceId: mT(e.runtime.instanceId, "runtime.instanceId"),
+			generation: mT(e.runtime.generation, "runtime.generation"),
+			controlRevision: mT(e.runtime.controlRevision, "runtime.controlRevision")
+		}),
+		context: hT(e.context)
+	});
+}
+function mT(e, t) {
+	if (typeof e != "string" || !/^(?:0|[1-9][0-9]*)$/u.test(e)) throw TypeError(`${t} must be canonical unsigned decimal text`);
+	if (BigInt(e) > 18446744073709551615n) throw RangeError(`${t} exceeds u64`);
+	return e;
+}
+function hT(e) {
+	return _T(e, "input context");
+}
+function gT(e) {
+	return _T(e, "direct UI intent");
+}
+function _T(e, t) {
+	if (typeof e != "string" || new TextEncoder().encode(e).byteLength > 128 || !/^[a-z0-9](?:[a-z0-9]|[._-](?=[a-z0-9]))*$/u.test(e)) throw TypeError(`${t} must be a 1..128 byte lowercase product identity`);
+	return e;
+}
+function vT(e) {
+	if (e.kind === "digital") {
+		if (typeof e.active != "boolean") throw TypeError("digital intent claim requires boolean active");
+		return Object.freeze({
+			kind: "digital",
+			active: e.active
+		});
+	}
+	if (e.kind === "axis") {
+		if (!Number.isFinite(e.value) || e.value < -1 || e.value > 1) throw RangeError("axis intent claim value must be finite and within [-1, 1]");
+		return Object.freeze({
+			kind: "axis",
+			value: e.value
+		});
+	}
+	throw TypeError("direct UI intent claim has an unknown value kind");
+}
+function yT(e) {
+	if (typeof e != "object" || !e) throw TypeError("runtime input fact must be an object");
+	switch (e.kind) {
+		case "key":
+			if (!PT.has(e.code) || !wT(e.edge)) throw TypeError("key input fact must use one closed keyboard control and edge");
+			return Object.freeze({
+				kind: "key",
+				code: e.code,
+				edge: e.edge
+			});
+		case "pointer-button":
+			if (!TT(e.button) || !wT(e.edge)) throw TypeError("pointer button input fact must use one closed button and edge");
+			return Object.freeze({
+				kind: "pointer-button",
+				button: e.button,
+				edge: e.edge
+			});
+		case "pointer-delta":
+		case "wheel":
+			if (!Number.isFinite(e.x) || !Number.isFinite(e.y)) throw TypeError(`${e.kind} input fact requires finite x and y`);
+			return Object.freeze({
+				kind: e.kind,
+				x: e.x,
+				y: e.y
+			});
+		case "controller-button":
+			if (!ET(e.button) || !wT(e.edge)) throw TypeError("controller button input fact must use one closed button and edge");
+			return Object.freeze({
+				kind: "controller-button",
+				button: e.button,
+				edge: e.edge
+			});
+		case "controller-axis":
+			if (!DT(e.axis) || !Number.isFinite(e.value) || e.value < -1 || e.value > 1) throw TypeError("controller axis input fact requires one closed axis within [-1, 1]");
+			return Object.freeze({
+				kind: "controller-axis",
+				axis: e.axis,
+				value: e.value
+			});
+		case "clear": return Object.freeze({
+			kind: "clear",
+			reason: bT(e.reason)
+		});
+		default: throw TypeError("runtime input fact has an unknown kind");
+	}
+}
+function bT(e) {
+	if (FT.has(e)) return e;
+	throw TypeError("runtime input clear must use one closed reason");
+}
+function xT(e, t) {
+	return e.context === t.context && ST(e.runtime, t.runtime);
+}
+function ST(e, t) {
+	return e.instanceId === t.instanceId && e.generation === t.generation && e.controlRevision === t.controlRevision;
+}
+function CT(e) {
+	return e === 0 ? "primary" : e === 1 ? "middle" : e === 2 ? "secondary" : null;
+}
+function wT(e) {
+	return e === "pressed" || e === "released";
+}
+function TT(e) {
+	return e === "primary" || e === "secondary" || e === "middle";
+}
+function ET(e) {
+	return typeof e == "string" && /^button-(?:[0-9]|1[0-5])$/u.test(e);
+}
+function DT(e) {
+	return typeof e == "string" && /^axis-[0-3]$/u.test(e);
+}
+function OT(e) {
+	return `button-${String(e)}`;
+}
+function kT(e) {
+	return `axis-${String(e)}`;
+}
+function AT(e, t) {
+	return Number.isFinite(e) ? Math.max(-t, Math.min(t, e)) : 0;
+}
+function jT(e, t, n) {
+	return MT(e, t, 1, n);
+}
+function MT(e, t, n, r) {
+	if (!Number.isSafeInteger(e) || e < n || e > r) throw RangeError(`${t} must be a safe integer within [${String(n)}, ${String(r)}]`);
+	return e;
+}
+var NT = /* @__PURE__ */ new Map([
+	["Space", "space"],
+	["Enter", "enter"],
+	["Escape", "escape"],
+	["ShiftLeft", "shift-left"],
+	["ShiftRight", "shift-right"],
+	["ControlLeft", "control-left"],
+	["ControlRight", "control-right"],
+	["AltLeft", "alt-left"],
+	["AltRight", "alt-right"]
+]), PT = /* @__PURE__ */ new Set([
+	...Array.from({ length: 26 }, (e, t) => `key-${String.fromCharCode(97 + t)}`),
+	...Array.from({ length: 10 }, (e, t) => `digit-${String(t)}`),
+	"space",
+	"enter",
+	"escape",
+	"shift-left",
+	"shift-right",
+	"control-left",
+	"control-right",
+	"alt-left",
+	"alt-right"
+]), FT = /* @__PURE__ */ new Set([
+	"focus-loss",
+	"ingress-overflow",
+	"interaction-mode-loss",
+	"pointer-lock-loss",
+	"restart",
+	"control-revision-change",
+	"dispose"
+]), IT = "rusty_application_host.v1", LT = class extends Error {
 	code;
 	constructor(e, t, n) {
 		super(t, n), this.name = "RustyApplicationHostError", this.code = e;
 	}
-}, iT = { mountSurface: jS }, aT = /* @__PURE__ */ new WeakMap();
-async function oT(e) {
-	return sT(e, iT);
+}, RT = { mountSurface: jS }, zT = /* @__PURE__ */ new WeakMap();
+async function BT(e) {
+	return VT(e, RT);
 }
-async function sT(e, t) {
+async function VT(e, t) {
 	let { root: n } = e, r;
 	try {
 		r = eT(e.presentationAspectBounds);
 	} catch (e) {
-		throw new rT("invalid_presentation_aspect_bounds", e instanceof Error ? e.message : String(e), { cause: e });
+		throw new LT("invalid_presentation_aspect_bounds", e instanceof Error ? e.message : String(e), { cause: e });
 	}
-	if (wT(n), n.childNodes.length > 0) throw new rT("invalid_root", "Rusty Application Host requires an empty downstream mount root");
-	let i = n.ownerDocument, a = uT(i, e.loadingLabel ?? "Starting application…", r);
+	if (iE(n), n.childNodes.length > 0) throw new LT("invalid_root", "Rusty Application Host requires an empty downstream mount root");
+	let i = n.ownerDocument, a = WT(i, e.loadingLabel ?? "Starting application…", r);
 	n.append(a.host), n.dataset.rustyApplicationState = "mounting";
-	let o = null, s = null, c = null, l = () => void 0, u = !1, d = !1, f = null, p = e.initialInteractionMode ?? "interface", m = a.canvas, h = null, g = null, _ = null, v = null, y = /* @__PURE__ */ new Set(), b = 0, x = 0, S = Promise.resolve(), C = dT(n, a.host, a.frame, r, () => {
-		!u && o !== null && o.renderOnce();
-	}), w = () => {
-		if (d || u || o === null) throw new rT("disposed", "Rusty Application Host is disposed");
+	let o = null, s = null, c = null, l = null, u = () => void 0, d = !1, f = !1, p = null, m = e.initialInteractionMode ?? "interface", h = a.canvas, g = null, _ = null, v = null, y = null, b = /* @__PURE__ */ new Set(), x = 0, S = 0, C = Promise.resolve(), w = GT(n, a.host, a.frame, r, () => {
+		!d && o !== null && o.renderOnce();
+	}), T = () => {
+		if (f || d || o === null) throw new LT("disposed", "Rusty Application Host is disposed");
 		return o;
-	}, T = () => {
+	}, E = () => {
 		o?.releaseInput();
-	}, E = (e) => {
-		if (u) throw new rT("disposed", "Rusty Application Host is disposed");
-		p = e, a.host.dataset.interactionMode = e, e !== "gameplay" && T();
-	}, D = () => {
-		if (p !== "gameplay") return;
-		let e = w();
-		e.canvas.focus({ preventScroll: !0 }), xT(e.canvas);
-	}, O = async (n, r) => {
+	}, D = (e) => {
+		if (d) throw new LT("disposed", "Rusty Application Host is disposed");
+		let t = m !== e;
+		m = e, a.host.dataset.interactionMode = e, e !== "gameplay" && (E(), t && s?.clear("interaction-mode-loss"));
+	}, O = () => {
+		if (m !== "gameplay") return;
+		let e = T();
+		e.canvas.focus({ preventScroll: !0 }), tE(e.canvas);
+	}, ee = async (n, r) => {
 		let i = await t.mountSurface(n, {
 			autoStart: !0,
 			controls: { enabled: !1 },
@@ -26143,24 +26539,24 @@ async function sT(e, t) {
 			for (let e of s) URL.revokeObjectURL(e);
 			throw e;
 		}
-	}, ee = (e) => {
-		w(), x += 1;
+	}, k = (e) => {
+		T(), S += 1;
 		let t = Object.freeze({
 			applied: !1,
 			diagnostics: []
 		});
-		return S = S.then(async () => {
-			let n = o, r = g, a = _, s = v, c = y;
-			if (n === null || h === null || u) {
-				t = cT(new rT("disposed", "Rusty Application Host is disposed"));
+		return C = C.then(async () => {
+			let n = o, r = _, a = v, c = y, l = b;
+			if (n === null || g === null || d) {
+				t = HT(new LT("disposed", "Rusty Application Host is disposed"));
 				return;
 			}
-			let l = m, d = fT(i), f = null, p = null, x = null, S = null, C = /* @__PURE__ */ new Set();
+			let u = h, f = KT(i), p = null, m = null, S = null, C = null, w = /* @__PURE__ */ new Set();
 			try {
-				let i = e(), u = await O(d, i);
-				f = u.surface, p = u.audio, x = u.billboard, S = u.particle, C = u.billboardUrls, f.setCameraPose(n.cameraPose()), f.renderOnce(), l.replaceWith(d), o = f, g = p, _ = x, v = S, y = C, h = i, b += 1, m = d;
+				let i = e(), d = await ee(f, i);
+				p = d.surface, m = d.audio, S = d.billboard, C = d.particle, w = d.billboardUrls, p.setCameraPose(n.cameraPose()), p.renderOnce(), u.replaceWith(f), o = p, _ = m, v = S, y = C, b = w, g = i, x += 1, h = f, s?.rebindCanvas(f);
 				try {
-					s?.dispose();
+					c?.dispose();
 				} catch {}
 				try {
 					n.dispose();
@@ -26168,44 +26564,44 @@ async function sT(e, t) {
 				try {
 					await r?.dispose();
 				} catch {}
-				CT(a, c), t = Object.freeze({
+				rE(a, l), t = Object.freeze({
 					applied: !0,
 					diagnostics: []
 				});
 			} catch (e) {
 				try {
-					S?.dispose();
+					C?.dispose();
 				} catch {}
 				try {
-					f?.dispose();
+					p?.dispose();
 				} catch {}
 				try {
-					await p?.dispose();
+					await m?.dispose();
 				} catch {}
-				CT(x, C), d.remove(), t = cT(e);
+				rE(S, w), f.remove(), t = HT(e);
 			}
-		}), S.then(() => t).finally(() => {
-			--x;
+		}), C.then(() => t).finally(() => {
+			--S;
 		});
-	}, k = (e) => {
-		w();
+	}, te = (e) => {
+		T();
 		let t;
 		try {
 			t = Bw(e);
 		} catch (e) {
-			return Promise.resolve(cT(e));
+			return Promise.resolve(HT(e));
 		}
-		return ee(() => t);
-	}, te = Object.freeze({
+		return k(() => t);
+	}, ne = Object.freeze({
 		applyFrame: (e) => {
-			if (x > 0) return Object.freeze({
+			if (S > 0) return Object.freeze({
 				applied: !1,
 				diagnostics: Object.freeze([Object.freeze({
 					code: "content_replacement_in_progress",
 					message: "incremental frames are rejected while complete content replacement is pending"
 				})])
 			});
-			let t = w().applyFrame(e);
+			let t = T().applyFrame(e);
 			return Object.freeze({
 				applied: t.applied,
 				diagnostics: Object.freeze(t.diagnostics.map((e) => Object.freeze({
@@ -26215,7 +26611,7 @@ async function sT(e, t) {
 			});
 		},
 		applyPresentation: async (e) => {
-			if (x > 0) return Object.freeze({
+			if (S > 0) return Object.freeze({
 				applied: 0,
 				diagnostics: Object.freeze([Object.freeze({
 					code: "content_replacement_in_progress",
@@ -26224,7 +26620,7 @@ async function sT(e, t) {
 				})])
 			});
 			try {
-				let t = await w().applyPresentation(e);
+				let t = await T().applyPresentation(e);
 				return Object.freeze({
 					applied: t.applied,
 					diagnostics: Object.freeze(t.diagnostics.map((e) => Object.freeze({
@@ -26245,16 +26641,16 @@ async function sT(e, t) {
 			}
 		},
 		clear: async () => {
-			let e = await k({
+			let e = await te({
 				frame: OS(),
 				resources: []
 			});
 			if (!e.applied) throw Error(`Engine default renderer frame was rejected: ${e.diagnostics.map((e) => e.message).join("; ")}`);
 		},
 		createVoxelSpriteExperiment: () => {
-			let e = w(), t = e.createVoxelSpriteExperiment(), n = !1, r = () => {
-				if (n) throw new rT("disposed", "Rusty Application voxel sprite experiment is disposed");
-				if (w() !== e) throw new rT("stale_renderer_port", "Rusty Application voxel sprite experiment belongs to a replaced renderer surface");
+			let e = T(), t = e.createVoxelSpriteExperiment(), n = !1, r = () => {
+				if (n) throw new LT("disposed", "Rusty Application voxel sprite experiment is disposed");
+				if (T() !== e) throw new LT("stale_renderer_port", "Rusty Application voxel sprite experiment belongs to a replaced renderer surface");
 				return t;
 			};
 			return Object.freeze({
@@ -26270,25 +26666,25 @@ async function sT(e, t) {
 				destroy: (e) => r().destroy(e),
 				readout: () => r().readout(),
 				dispose: () => {
-					n || (n = !0, !d && !u && o === e && t.dispose());
+					n || (n = !0, !f && !d && o === e && t.dispose());
 				}
 			});
 		},
 		renderOnce: (e) => {
-			e === void 0 ? w().renderOnce() : w().renderOnce(e);
+			e === void 0 ? T().renderOnce() : T().renderOnce(e);
 		},
-		replaceContent: k,
+		replaceContent: te,
 		replaceFrame: (e) => {
-			w();
+			T();
 			let t;
 			try {
 				t = Bw({ frame: e }).frame;
 			} catch (e) {
-				return Promise.resolve(cT(e));
+				return Promise.resolve(HT(e));
 			}
-			return ee(() => {
-				let e = h;
-				if (e === null) throw new rT("disposed", "Rusty Application Host is disposed");
+			return k(() => {
+				let e = g;
+				if (e === null) throw new LT("disposed", "Rusty Application Host is disposed");
 				return Object.freeze({
 					frame: t,
 					resources: e.resources,
@@ -26297,14 +26693,14 @@ async function sT(e, t) {
 			});
 		},
 		resumeAudio: async () => {
-			if (w(), g === null) return Object.freeze({
+			if (T(), _ === null) return Object.freeze({
 				resumed: !1,
 				diagnostics: Object.freeze([Object.freeze({
 					code: "audio_host_unavailable",
 					message: "application content has no admitted audio resources"
 				})])
 			});
-			let e = await g.resume();
+			let e = await _.resume();
 			return Object.freeze({
 				resumed: e.length === 0,
 				diagnostics: Object.freeze(e.map((e) => Object.freeze({
@@ -26313,75 +26709,88 @@ async function sT(e, t) {
 				})))
 			});
 		},
-		setCameraPose: (e) => w().setCameraPose(e)
-	}), ne = Object.freeze({
-		active: () => !d && !u,
-		allowsGameplayInput: (e) => !d && !u && !e.defaultPrevented && p === "gameplay" && hT(e, a.frame) && !mT(e, a.ui),
-		focusGameplay: D,
-		interactionMode: () => p,
-		setInteractionMode: E
+		setCameraPose: (e) => T().setCameraPose(e)
+	}), re = Object.freeze({
+		active: () => !f && !d,
+		allowsGameplayInput: (e) => !f && !d && !e.defaultPrevented && m === "gameplay" && YT(e, a.frame) && !JT(e, a.ui),
+		focusGameplay: O,
+		interactionMode: () => m,
+		setInteractionMode: D
 	});
 	try {
 		if (e.renderer?.initialContent !== void 0 && e.renderer.initialFrame !== void 0) throw new Rw("content_invalid", null, "initialContent and initialFrame are mutually exclusive");
 		let t = Bw(e.renderer?.initialContent ?? {
 			frame: e.renderer?.initialFrame ?? OS(),
 			resources: []
-		}), r = await O(a.canvas, t);
-		o = r.surface, g = r.audio, _ = r.billboard, v = r.particle, y = r.billboardUrls, h = t, b = 1, l = pT(a.host, a.ui, () => w(), () => p, D), E(p), s = await e.mountUi(a.ui, {
-			renderer: te,
-			ui: ne
-		}) ?? null, e.developerCommands !== void 0 && (c = Jw(a.ui, {
+		}), r = await ee(a.canvas, t);
+		o = r.surface, _ = r.audio, v = r.billboard, y = r.particle, b = r.billboardUrls, g = t, x = 1, e.runtimeInput !== void 0 && (s = sT(e.runtimeInput, {
+			active: () => !f && !d,
+			allowsGameplayInput: (e) => re.allowsGameplayInput(e),
+			canvas: () => T().canvas,
+			document: i,
+			eventTarget: a.host,
+			focusGameplay: O,
+			gamepads: () => i.defaultView?.navigator.getGamepads?.() ?? [],
+			interactionMode: () => m
+		})), u = qT(a.host, a.ui, () => T(), () => m, O, (e) => {
+			re.allowsGameplayInput(e), s?.clear("focus-loss");
+		}), D(m), c = await e.mountUi(a.ui, {
+			renderer: ne,
+			ui: re,
+			...s === null ? {} : { input: s }
+		}) ?? null, e.developerCommands !== void 0 && (l = Jw(a.ui, {
 			...e.developerCommands,
 			enterInterface: () => {
-				let e = p;
-				return E("interface"), () => {
-					u || E(e);
+				let e = m;
+				return D("interface"), () => {
+					d || D(e);
 				};
 			}
 		})), a.loading.remove(), a.host.dataset.state = "ready", n.dataset.rustyApplicationState = "ready";
 	} catch (t) {
-		u = !0;
-		let i = await ST(s, c, l, o, g, _, v, y, a.host, C);
+		d = !0;
+		let i = await nE(c, l, s, u, o, _, v, y, b, a.host, w);
 		delete n.dataset.rustyApplicationState;
-		let d = t instanceof Error ? t : Error(String(t));
-		throw TT(n, e.failureLabel ?? "Application failed to start", d.message, r), new rT("mount_failed", i.length === 0 ? `Rusty Application Host mount failed: ${d.message}` : `Rusty Application Host mount failed: ${d.message}; cleanup also failed`, { cause: d });
+		let f = t instanceof Error ? t : Error(String(t));
+		throw aE(n, e.failureLabel ?? "Application failed to start", f.message, r), new LT("mount_failed", i.length === 0 ? `Rusty Application Host mount failed: ${f.message}` : `Rusty Application Host mount failed: ${f.message}; cleanup also failed`, { cause: f });
 	}
 	return Object.freeze({
 		kind: "rusty_application_host.v1",
-		renderer: te,
-		ui: ne,
+		renderer: ne,
+		ui: re,
+		...s === null ? {} : { input: s },
 		readout: () => Object.freeze({
-			compatibilityVersion: nT,
-			contentRevision: b,
-			interactionMode: p,
+			compatibilityVersion: IT,
+			contentRevision: x,
+			interactionMode: m,
 			pointerLocked: o?.pointerLocked() ?? !1,
-			resourceBytes: h?.resourceBytes ?? 0,
-			resourceCount: h?.resources.length ?? 0,
-			state: u ? "disposed" : "ready"
+			resourceBytes: g?.resourceBytes ?? 0,
+			resourceCount: g?.resources.length ?? 0,
+			state: d ? "disposed" : "ready"
 		}),
-		dispose: async () => f === null ? (d = !0, f = (async () => {
-			await S, u = !0;
-			let e = await ST(s, c, l, o, g, _, v, y, a.host, C);
-			if (s = null, c = null, o = null, g = null, _ = null, v = null, y = /* @__PURE__ */ new Set(), delete n.dataset.rustyApplicationState, e.length > 0) throw AggregateError(e, "Rusty Application Host disposal failed");
-		})(), f) : f
+		dispose: async () => p === null ? (f = !0, p = (async () => {
+			await C, d = !0;
+			let e = await nE(c, l, s, u, o, _, v, y, b, a.host, w);
+			if (c = null, l = null, s = null, o = null, _ = null, v = null, y = null, b = /* @__PURE__ */ new Set(), delete n.dataset.rustyApplicationState, e.length > 0) throw AggregateError(e, "Rusty Application Host disposal failed");
+		})(), p) : p
 	});
 }
-function cT(e) {
+function HT(e) {
 	return Object.freeze({
 		applied: !1,
 		diagnostics: Object.freeze([Object.freeze({
-			code: lT(e),
+			code: UT(e),
 			message: e instanceof Error ? e.message : String(e)
 		})])
 	});
 }
-function lT(e) {
+function UT(e) {
 	return e instanceof Rw ? e.code : typeof e == "object" && e && "code" in e && typeof e.code == "string" && e.code.includes("resource") || e instanceof Error && e.message.toLowerCase().includes("resource") ? "resource_admission_failed" : "retained_frame_replacement_failed";
 }
-function uT(e, t, n) {
+function WT(e, t, n) {
 	let r = e.createElement("div");
-	r.dataset.rustyApplicationHost = nT, r.style.cssText = n === void 0 ? "isolation:isolate;min-height:100dvh;position:relative;width:100%;" : "height:100%;isolation:isolate;min-height:0;overflow:hidden;position:relative;width:100%;";
-	let i = fT(e), a = e.createElement("div");
+	r.dataset.rustyApplicationHost = IT, r.style.cssText = n === void 0 ? "isolation:isolate;min-height:100dvh;position:relative;width:100%;" : "height:100%;isolation:isolate;min-height:0;overflow:hidden;position:relative;width:100%;";
+	let i = KT(e), a = e.createElement("div");
 	a.dataset.rustyApplicationIndicators = "engine-owned", a.style.cssText = "inset:0;overflow:hidden;pointer-events:none;position:absolute;z-index:1;";
 	let o = e.createElement("div");
 	o.dataset.rustyApplicationUi = "downstream", o.style.cssText = n === void 0 ? "min-height:100dvh;position:relative;width:100%;z-index:2;" : "height:100%;min-height:0;overflow:hidden;position:relative;width:100%;z-index:2;";
@@ -26404,7 +26813,7 @@ function uT(e, t, n) {
 		frame: c
 	};
 }
-function dT(e, t, n, r, i) {
+function GT(e, t, n, r, i) {
 	if (r === void 0 || n === null) return () => void 0;
 	let a = !0, o = () => {
 		if (!a) return;
@@ -26422,56 +26831,56 @@ function dT(e, t, n, r, i) {
 		a = !1, c?.removeEventListener("resize", l);
 	};
 }
-function fT(e) {
+function KT(e) {
 	let t = e.createElement("canvas");
 	return t.dataset.rustyApplicationRenderer = "engine-owned", t.setAttribute("aria-label", "Engine-rendered game world"), t.style.cssText = "display:block;height:100%;inset:0;position:absolute;width:100%;z-index:0;", t;
 }
-function pT(e, t, n, r, i) {
-	let a = e.ownerDocument, o = (e) => {
-		if (mT(e, t)) {
+function qT(e, t, n, r, i, a) {
+	let o = e.ownerDocument, s = (e) => {
+		if (JT(e, t)) {
 			n().releaseInput();
 			return;
 		}
 		r() === "gameplay" && i();
-	}, s = (e) => {
-		bT(e.target) && n().releaseInput();
-	}, c = () => {
-		e.dataset.pointerLocked = String(a.pointerLockElement === n().canvas);
-	}, l = () => n().releaseInput();
-	return t.addEventListener("pointerdown", o, !0), t.addEventListener("focusin", s, !0), a.addEventListener("pointerlockchange", c), a.defaultView?.addEventListener("blur", l), c(), () => {
-		t.removeEventListener("pointerdown", o, !0), t.removeEventListener("focusin", s, !0), a.removeEventListener("pointerlockchange", c), a.defaultView?.removeEventListener("blur", l);
+	}, c = (e) => {
+		eE(e.target) && (n().releaseInput(), a(e));
+	}, l = () => {
+		e.dataset.pointerLocked = String(o.pointerLockElement === n().canvas);
+	}, u = () => n().releaseInput();
+	return t.addEventListener("pointerdown", s, !0), t.addEventListener("focusin", c, !0), o.addEventListener("pointerlockchange", l), o.defaultView?.addEventListener("blur", u), l(), () => {
+		t.removeEventListener("pointerdown", s, !0), t.removeEventListener("focusin", c, !0), o.removeEventListener("pointerlockchange", l), o.defaultView?.removeEventListener("blur", u);
 	};
 }
-function mT(e, t) {
-	return e.composedPath().some((e) => yT(e, t));
+function JT(e, t) {
+	return e.composedPath().some((e) => $T(e, t));
 }
-function hT(e, t) {
+function YT(e, t) {
 	if (t === null) return !0;
-	let n = gT(e);
+	let n = XT(e);
 	if (n === null) return !0;
 	if (n === "malformed") return !1;
 	let r = t.getBoundingClientRect();
 	return n.x >= r.left && n.x < r.right && n.y >= r.top && n.y < r.bottom;
 }
-function gT(e) {
-	let t = vT(e);
+function XT(e) {
+	let t = QT(e);
 	if (t !== null) return t;
-	let n = e, r = _T(n.touches);
-	return r === null ? _T(n.changedTouches) : r;
+	let n = e, r = ZT(n.touches);
+	return r === null ? ZT(n.changedTouches) : r;
 }
-function _T(e) {
+function ZT(e) {
 	if (typeof e != "object" || !e) return null;
-	let t = e, n = vT(t[0]);
+	let t = e, n = QT(t[0]);
 	if (n !== null) return n;
 	let r = t.item;
 	if (typeof r != "function") return null;
 	try {
-		return vT(r.call(e, 0));
+		return QT(r.call(e, 0));
 	} catch {
 		return null;
 	}
 }
-function vT(e) {
+function QT(e) {
 	if (typeof e != "object" || !e) return null;
 	let t = e, n = "clientX" in t, r = "clientY" in t;
 	if (!n && !r) return null;
@@ -26481,74 +26890,79 @@ function vT(e) {
 		y: a
 	};
 }
-function yT(e, t) {
+function $T(e, t) {
 	return !(e instanceof Element) || !t.contains(e) ? !1 : e.closest("a,button,input,select,textarea,summary,[contenteditable=\"true\"],[data-rusty-ui-interactive],[role=\"dialog\"]") !== null;
 }
-function bT(e) {
+function eE(e) {
 	return e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement || e instanceof HTMLSelectElement || e instanceof HTMLElement && e.isContentEditable;
 }
-function xT(e) {
+function tE(e) {
 	try {
 		e.requestPointerLock().catch(() => void 0);
 	} catch {}
 }
-async function ST(e, t, n, r, i, a, o, s, c, l) {
-	let u = [];
+async function nE(e, t, n, r, i, a, o, s, c, l, u) {
+	let d = [];
 	try {
 		await e?.dispose();
 	} catch (e) {
-		u.push(e);
+		d.push(e);
 	}
 	try {
 		t?.dispose();
 	} catch (e) {
-		u.push(e);
+		d.push(e);
 	}
 	try {
-		n();
+		n?.dispose();
 	} catch (e) {
-		u.push(e);
+		d.push(e);
 	}
 	try {
-		o?.dispose();
+		r();
 	} catch (e) {
-		u.push(e);
+		d.push(e);
 	}
 	try {
-		r?.dispose();
+		s?.dispose();
 	} catch (e) {
-		u.push(e);
+		d.push(e);
 	}
 	try {
-		await i?.dispose();
+		i?.dispose();
 	} catch (e) {
-		u.push(e);
+		d.push(e);
 	}
 	try {
-		CT(a, s);
+		await a?.dispose();
 	} catch (e) {
-		u.push(e);
+		d.push(e);
 	}
 	try {
-		l();
+		rE(o, c);
 	} catch (e) {
-		u.push(e);
+		d.push(e);
 	}
-	return c.remove(), u;
+	try {
+		u();
+	} catch (e) {
+		d.push(e);
+	}
+	return l.remove(), d;
 }
-function CT(e, t) {
+function rE(e, t) {
 	e?.dispose();
 	for (let e of t) URL.revokeObjectURL(e);
 }
-function wT(e) {
+function iE(e) {
 	let t = e.querySelector(":scope > [data-rusty-application-failure-layout]");
 	if (t !== null) {
-		aT.get(t)?.(), aT.delete(t), t.remove();
+		zT.get(t)?.(), zT.delete(t), t.remove();
 		return;
 	}
 	e.querySelector(":scope > [data-rusty-application-failure]")?.remove();
 }
-function TT(e, t, n, r) {
+function aE(e, t, n, r) {
 	let i = e.ownerDocument.createElement("section");
 	i.dataset.rustyApplicationFailure = "", i.setAttribute("role", "alert"), i.style.cssText = r === void 0 ? "background:#1b0b0d;color:#ffe8e8;font:14px system-ui;margin:0;min-height:100dvh;padding:2rem;" : "background:#1b0b0d;box-sizing:border-box;color:#ffe8e8;font:14px system-ui;height:100%;margin:0;overflow:auto;padding:2rem;width:100%;";
 	let a = e.ownerDocument.createElement("h1");
@@ -26561,9 +26975,9 @@ function TT(e, t, n, r) {
 	let s = e.ownerDocument.createElement("div");
 	s.dataset.rustyApplicationFailureLayout = "", s.style.cssText = "align-items:center;display:flex;height:100%;isolation:isolate;justify-content:center;min-height:0;overflow:hidden;position:relative;width:100%;";
 	let c = e.ownerDocument.createElement("div");
-	c.dataset.rustyApplicationPresentationFrame = "bounded", c.style.cssText = "contain:layout paint;flex:none;overflow:hidden;position:relative;", c.append(i), s.append(c), e.append(s), aT.set(s, dT(e, s, c, r, () => void 0));
+	c.dataset.rustyApplicationPresentationFrame = "bounded", c.style.cssText = "contain:layout paint;flex:none;overflow:hidden;position:relative;", c.append(i), s.append(c), e.append(s), zT.set(s, GT(e, s, c, r, () => void 0));
 }
-var ET = Object.freeze({
+var oE = Object.freeze({
 	kind: "rusty-developer-command.v1",
 	protocolVersion: 1,
 	identity: {
@@ -26626,7 +27040,7 @@ var ET = Object.freeze({
 			"receiptRefs"
 		]
 	}
-}), DT = {
+}), sE = {
 	commands: {
 		"standard.admin.effect.apply": {
 			error: {
@@ -27543,17 +27957,17 @@ var ET = Object.freeze({
 		}
 	},
 	kind: "rusty-developer-command-standard-host-wire.v1"
-}, OT = ET.protocolVersion, kT = DT.commands, AT = kT, jT = ET.limits.historyEntries, MT = 256, NT = 16, PT = 256, FT = 256, IT = class extends Error {
+}, cE = oE.protocolVersion, lE = sE.commands, uE = lE, dE = oE.limits.historyEntries, fE = 256, pE = 16, mE = 256, hE = 256, gE = class extends Error {
 	code;
 	constructor(e, t, n) {
 		super(t, n), this.name = "RustyDeveloperCommandClientError", this.code = e;
 	}
 };
-function LT(e) {
-	let t = BT(e.schemas ?? {}, e.extensions ?? []), n = t.schemas, r = /* @__PURE__ */ new Set(), i = [], a = e.createCorrelation ?? (() => `command-${uE()}`), o = e.now ?? Date.now, s = null, c = null, l = !1, u = () => {
-		if (l) throw new IT("disposed", "Developer command client is disposed");
+function _E(e) {
+	let t = bE(e.schemas ?? {}, e.extensions ?? []), n = t.schemas, r = /* @__PURE__ */ new Set(), i = [], a = e.createCorrelation ?? (() => `command-${WE()}`), o = e.now ?? Date.now, s = null, c = null, l = !1, u = () => {
+		if (l) throw new gE("disposed", "Developer command client is disposed");
 	}, d = () => {
-		i.length > jT && i.splice(0, i.length - jT);
+		i.length > dE && i.splice(0, i.length - dE);
 	}, f = (e, t, n, r) => {
 		let a = n.message.slice(0, 1024), s = Object.freeze(r === void 0 ? {
 			phase: e,
@@ -27576,28 +27990,28 @@ function LT(e) {
 		let t = s;
 		return t === null ? null : t.commands.find((t) => t.id === e || t.aliases.includes(e)) ?? null;
 	}, m = async (n) => {
-		u(), dE(n);
+		u(), GE(n);
 		let r;
 		try {
 			r = await e.adapter.discover(n);
 		} catch (e) {
-			throw fE(e);
+			throw KE(e);
 		}
-		u(), dE(n);
+		u(), GE(n);
 		let i;
 		try {
-			i = aE(r, t);
+			i = zE(r, t);
 		} catch (e) {
-			throw e instanceof IT && (e.code === "malformed" || e.code === "invalid_extension") && (s = null), e;
+			throw e instanceof gE && (e.code === "malformed" || e.code === "invalid_extension") && (s = null), e;
 		}
 		let a = s, o = c, l = o !== null && i.runtime === o.runtime && i.profile === o.profile && i.catalogEpoch === o.catalogEpoch;
-		if (o !== null && (i.runtime !== o.runtime || i.profile !== o.profile || TE(i.revision, o.revision) || TE(i.catalogEpoch, o.catalogEpoch) || l && o.contractFingerprint !== void 0 && i.contractFingerprint !== o.contractFingerprint) || a !== null && (i.runtime !== a.runtime || i.profile !== a.profile || TE(i.revision, a.revision) || TE(i.catalogEpoch, a.catalogEpoch))) throw new IT("stale_context", "Developer command discovery regressed or changed its selected runtime/profile context");
-		return s = i, c = RT(i), i;
+		if (o !== null && (i.runtime !== o.runtime || i.profile !== o.profile || aD(i.revision, o.revision) || aD(i.catalogEpoch, o.catalogEpoch) || l && o.contractFingerprint !== void 0 && i.contractFingerprint !== o.contractFingerprint) || a !== null && (i.runtime !== a.runtime || i.profile !== a.profile || aD(i.revision, a.revision) || aD(i.catalogEpoch, a.catalogEpoch))) throw new gE("stale_context", "Developer command discovery regressed or changed its selected runtime/profile context");
+		return s = i, c = vE(i), i;
 	};
 	return Object.freeze({
 		discover: m,
 		descriptor: (e) => p(e),
-		schema: (e) => p(e)?.id === e && hE(n, e) ? n[e] : null,
+		schema: (e) => p(e)?.id === e && YE(n, e) ? n[e] : null,
 		history: () => Object.freeze(i.slice()),
 		exportSequence: () => Object.freeze({
 			kind: "rusty_developer_command.sequence.v1",
@@ -27605,41 +28019,41 @@ function LT(e) {
 			entries: Object.freeze(i.filter((e) => e.phase === "completed").slice(-128))
 		}),
 		execute: async (t, l, p) => {
-			u(), dE(p);
+			u(), GE(p);
 			let h = s ?? await m(p), g = h.commands.find((e) => e.id === t || e.aliases.includes(t)) ?? null;
-			if (g === null) throw new IT("unknown_command", `Unknown developer command ${t}`);
+			if (g === null) throw new gE("unknown_command", `Unknown developer command ${t}`);
 			let _ = n[g.id];
 			if (_ === void 0) {
-				let e = new IT("codec_unavailable", `${g.id} has help only; its product has not supplied an exact wire codec`);
+				let e = new gE("codec_unavailable", `${g.id} has help only; its product has not supplied an exact wire codec`);
 				throw f("pre-dispatch", g.lane, e), e;
 			}
 			let v;
 			try {
-				lE(l, _.request, "$"), v = EE(l);
+				UE(l, _.request, "$"), v = oD(l);
 			} catch (e) {
-				let t = e instanceof IT && e.code === "malformed" ? new IT("invalid_payload", e.message, { cause: e }) : fE(e);
+				let t = e instanceof gE && e.code === "malformed" ? new gE("invalid_payload", e.message, { cause: e }) : KE(e);
 				throw f("pre-dispatch", g.lane, t), t;
 			}
 			let y;
 			try {
-				y = a(), xE(y, "correlation");
+				y = a(), tD(y, "correlation");
 			} catch (e) {
-				let t = e instanceof IT ? e : new IT("malformed", "Correlation factory returned an invalid identity", { cause: e instanceof Error ? e : void 0 });
+				let t = e instanceof gE ? e : new gE("malformed", "Correlation factory returned an invalid identity", { cause: e instanceof Error ? e : void 0 });
 				throw f("pre-dispatch", g.lane, t), t;
 			}
 			if (r.has(y)) {
-				let e = new IT("correlation_reused", `Correlation ${y} was already issued`);
+				let e = new gE("correlation_reused", `Correlation ${y} was already issued`);
 				throw f("pre-dispatch", g.lane, e), e;
 			}
 			try {
-				u(), dE(p);
+				u(), GE(p);
 			} catch (e) {
-				let t = e instanceof IT ? e : new IT("cancelled", "Developer command was cancelled", { cause: e instanceof Error ? e : void 0 });
+				let t = e instanceof gE ? e : new gE("cancelled", "Developer command was cancelled", { cause: e instanceof Error ? e : void 0 });
 				throw f("pre-dispatch", g.lane, t), t;
 			}
 			r.add(y);
 			let b = Object.freeze({
-				protocolVersion: OT,
+				protocolVersion: cE,
 				command: g.id,
 				correlation: y,
 				runtime: h.runtime,
@@ -27653,14 +28067,14 @@ function LT(e) {
 			try {
 				x = await e.adapter.execute(b, p);
 			} catch (e) {
-				let t = fE(e);
+				let t = KE(e);
 				throw f("transport", g.lane, t, b), t;
 			}
 			try {
-				u(), dE(p);
-				let e = sE(x, b, _), t = s, n = c, r = n !== null && t !== null && t.runtime === n.runtime && t.profile === n.profile && t.catalogEpoch === n.catalogEpoch;
-				if (t === null || t.runtime !== h.runtime || t.profile !== h.profile || t.revision === h.revision && t.catalogEpoch === h.catalogEpoch && r && n?.contractFingerprint !== void 0 && n.contractFingerprint !== h.contractFingerprint || e.runtime !== t.runtime || e.profile !== t.profile || TE(e.revision, t.revision) || TE(e.catalogEpoch, t.catalogEpoch)) throw new IT("stale_context", "Developer command response did not preserve the selected runtime/profile/epoch context");
-				u(), dE(p);
+				u(), GE(p);
+				let e = VE(x, b, _), t = s, n = c, r = n !== null && t !== null && t.runtime === n.runtime && t.profile === n.profile && t.catalogEpoch === n.catalogEpoch;
+				if (t === null || t.runtime !== h.runtime || t.profile !== h.profile || t.revision === h.revision && t.catalogEpoch === h.catalogEpoch && r && n?.contractFingerprint !== void 0 && n.contractFingerprint !== h.contractFingerprint || e.runtime !== t.runtime || e.profile !== t.profile || aD(e.revision, t.revision) || aD(e.catalogEpoch, t.catalogEpoch)) throw new gE("stale_context", "Developer command response did not preserve the selected runtime/profile/epoch context");
+				u(), GE(p);
 				let a = Object.freeze({
 					phase: "completed",
 					request: b,
@@ -27673,13 +28087,13 @@ function LT(e) {
 					catalogEpoch: e.catalogEpoch,
 					at: o()
 				});
-				return i.push(a), d(), TE(t.catalogEpoch, e.catalogEpoch) ? (s = null, c = zT(e)) : (s = Object.freeze({
+				return i.push(a), d(), aD(t.catalogEpoch, e.catalogEpoch) ? (s = null, c = yE(e)) : (s = Object.freeze({
 					...t,
 					revision: e.revision,
 					catalogEpoch: e.catalogEpoch
-				}), c = zT(e, r && e.catalogEpoch === t.catalogEpoch ? n?.contractFingerprint : void 0)), e;
+				}), c = yE(e, r && e.catalogEpoch === t.catalogEpoch ? n?.contractFingerprint : void 0)), e;
 			} catch (e) {
-				let t = e instanceof IT ? e : new IT("malformed", "Developer command response was not valid", { cause: e instanceof Error ? e : void 0 }), n = t.code === "cancelled" || t.code === "disposed" || t.code === "unavailable" ? "transport" : "post-dispatch";
+				let t = e instanceof gE ? e : new gE("malformed", "Developer command response was not valid", { cause: e instanceof Error ? e : void 0 }), n = t.code === "cancelled" || t.code === "disposed" || t.code === "unavailable" ? "transport" : "post-dispatch";
 				throw f(n, g.lane, t, b), t;
 			}
 		},
@@ -27688,7 +28102,7 @@ function LT(e) {
 		}
 	});
 }
-function RT(e) {
+function vE(e) {
 	return Object.freeze({
 		runtime: e.runtime,
 		profile: e.profile,
@@ -27697,7 +28111,7 @@ function RT(e) {
 		contractFingerprint: e.contractFingerprint
 	});
 }
-function zT(e, t) {
+function yE(e, t) {
 	return Object.freeze({
 		runtime: e.runtime,
 		profile: e.profile,
@@ -27706,25 +28120,25 @@ function zT(e, t) {
 		...t === void 0 ? {} : { contractFingerprint: t }
 	});
 }
-function BT(e, t) {
+function bE(e, t) {
 	let n = Object.create(null), r = [];
-	for (let [t, r] of Object.entries(e)) XT(t, `schema.${t}`), n[t] = VT(r, `schema.${t}`);
+	for (let [t, r] of Object.entries(e)) AE(t, `schema.${t}`), n[t] = xE(r, `schema.${t}`);
 	for (let e of t) {
-		let t = QT(e, "extension");
-		$T(t, ["namespace", "schemas"], "extension");
-		let i = rE(t.namespace), a = eE(t.schemas, `extension ${i}.schemas`);
+		let t = ME(e, "extension");
+		NE(t, ["namespace", "schemas"], "extension");
+		let i = LE(t.namespace), a = PE(t.schemas, `extension ${i}.schemas`);
 		for (let [e, t] of a.entries()) {
-			let a = `extension ${i}.schemas[${e}]`, o = QT(t, a);
-			$T(o, [
+			let a = `extension ${i}.schemas[${e}]`, o = ME(t, a);
+			NE(o, [
 				"command",
 				"lane",
 				"profile",
 				"schema"
 			], a);
-			let s = nE(o.command, `${a}.command`);
-			s.startsWith(`${i}.`) || ZT(`${a}.command escapes ${i}`), hE(n, s) && ZT(`Duplicate wire schema ${s}`);
-			let c = iE(o.lane, `${a}.lane`), l = nE(o.profile, `${a}.profile`);
-			n[s] = VT(o.schema, `${a}.schema`), r.push(Object.freeze({
+			let s = IE(o.command, `${a}.command`);
+			s.startsWith(`${i}.`) || jE(`${a}.command escapes ${i}`), YE(n, s) && jE(`Duplicate wire schema ${s}`);
+			let c = RE(o.lane, `${a}.lane`), l = IE(o.profile, `${a}.profile`);
+			n[s] = xE(o.schema, `${a}.schema`), r.push(Object.freeze({
 				command: s,
 				lane: c,
 				profile: l,
@@ -27737,74 +28151,74 @@ function BT(e, t) {
 		extensionBindings: Object.freeze(r)
 	});
 }
-function VT(e, t) {
+function xE(e, t) {
 	let n = {
 		active: /* @__PURE__ */ new Set(),
 		seen: /* @__PURE__ */ new Set(),
 		nodes: 0
-	}, r = UT(e, t);
-	return WT(r, [
+	}, r = CE(e, t);
+	return wE(r, [
 		"request",
 		"result",
 		"error"
 	], t), Object.freeze({
-		request: HT(r.request, `${t}.request`, n, 0),
-		result: HT(r.result, `${t}.result`, n, 0),
-		error: HT(r.error, `${t}.error`, n, 0)
+		request: SE(r.request, `${t}.request`, n, 0),
+		result: SE(r.result, `${t}.result`, n, 0),
+		error: SE(r.error, `${t}.error`, n, 0)
 	});
 }
-function HT(e, t, n, r) {
-	r > NT && mE(`${t} exceeds wire schema depth`);
-	let i = UT(e, t);
-	n.active.has(i) && mE(`${t} contains a cyclic schema`), n.seen.has(i) || (n.seen.add(i), n.nodes += 1, n.nodes > PT && mE(`${t} exceeds the ${PT}-node schema limit`)), n.active.add(i);
+function SE(e, t, n, r) {
+	r > pE && JE(`${t} exceeds wire schema depth`);
+	let i = CE(e, t);
+	n.active.has(i) && JE(`${t} contains a cyclic schema`), n.seen.has(i) || (n.seen.add(i), n.nodes += 1, n.nodes > mE && JE(`${t} exceeds the ${mE}-node schema limit`)), n.active.add(i);
 	try {
-		let e = GT(i.kind, `${t}.kind`);
+		let e = TE(i.kind, `${t}.kind`);
 		switch (e) {
-			case "boolean": return WT(i, ["kind"], t), Object.freeze({ kind: e });
-			case "decimalU64": return WT(i, ["kind"], t), Object.freeze({ kind: e });
+			case "boolean": return wE(i, ["kind"], t), Object.freeze({ kind: e });
+			case "decimalU64": return wE(i, ["kind"], t), Object.freeze({ kind: e });
 			case "integer": {
-				WT(i, ["kind"], t, ["minimum", "maximum"]);
-				let n = JT(i.minimum, `${t}.minimum`), r = JT(i.maximum, `${t}.maximum`);
-				return n !== void 0 && r !== void 0 && n > r && mE(`${t} minimum exceeds maximum`), Object.freeze({
+				wE(i, ["kind"], t, ["minimum", "maximum"]);
+				let n = OE(i.minimum, `${t}.minimum`), r = OE(i.maximum, `${t}.maximum`);
+				return n !== void 0 && r !== void 0 && n > r && JE(`${t} minimum exceeds maximum`), Object.freeze({
 					kind: e,
 					...n === void 0 ? {} : { minimum: n },
 					...r === void 0 ? {} : { maximum: r }
 				});
 			}
 			case "string": {
-				WT(i, ["kind", "maximumBytes"], t, ["pattern"]);
-				let n = qT(i.maximumBytes, `${t}.maximumBytes`, 0, 1048576), r = i.pattern;
-				return r !== void 0 && r !== "identifier" && mE(`${t}.pattern is not supported`), Object.freeze({
+				wE(i, ["kind", "maximumBytes"], t, ["pattern"]);
+				let n = DE(i.maximumBytes, `${t}.maximumBytes`, 0, 1048576), r = i.pattern;
+				return r !== void 0 && r !== "identifier" && JE(`${t}.pattern is not supported`), Object.freeze({
 					kind: e,
 					maximumBytes: n,
 					...r === void 0 ? {} : { pattern: r }
 				});
 			}
 			case "array": {
-				WT(i, [
+				wE(i, [
 					"kind",
 					"items",
 					"maximumItems"
 				], t);
-				let a = qT(i.maximumItems, `${t}.maximumItems`, 0, 65536);
+				let a = DE(i.maximumItems, `${t}.maximumItems`, 0, 65536);
 				return Object.freeze({
 					kind: e,
-					items: HT(i.items, `${t}.items`, n, r + 1),
+					items: SE(i.items, `${t}.items`, n, r + 1),
 					maximumItems: a
 				});
 			}
 			case "object": {
-				WT(i, ["kind", "fields"], t);
-				let a = UT(i.fields, `${t}.fields`), o = Object.entries(a);
-				o.length > FT && mE(`${t}.fields exceeds the ${FT}-field limit`);
+				wE(i, ["kind", "fields"], t);
+				let a = CE(i.fields, `${t}.fields`), o = Object.entries(a);
+				o.length > hE && JE(`${t}.fields exceeds the ${hE}-field limit`);
 				let s = Object.create(null);
 				for (let [e, i] of o) {
 					let a = `${t}.fields.${e}`;
-					YT(e, a);
-					let o = UT(i, a);
-					WT(o, ["required", "value"], a), typeof o.required != "boolean" && mE(`${a}.required must be boolean`), s[e] = Object.freeze({
+					kE(e, a);
+					let o = CE(i, a);
+					wE(o, ["required", "value"], a), typeof o.required != "boolean" && JE(`${a}.required must be boolean`), s[e] = Object.freeze({
 						required: o.required,
-						value: HT(o.value, `${a}.value`, n, r + 1)
+						value: SE(o.value, `${a}.value`, n, r + 1)
 					});
 				}
 				return Object.freeze({
@@ -27813,25 +28227,25 @@ function HT(e, t, n, r) {
 				});
 			}
 			case "enum": {
-				WT(i, ["kind", "values"], t);
+				wE(i, ["kind", "values"], t);
 				let n = i.values;
-				(!Array.isArray(n) || n.length === 0 || n.length > FT) && mE(`${t}.values must be a bounded nonempty array`);
-				let r = n.map((e, n) => KT(e, `${t}.values[${n}]`, 256));
-				return new Set(r).size !== r.length && mE(`${t}.values contains duplicates`), Object.freeze({
+				(!Array.isArray(n) || n.length === 0 || n.length > hE) && JE(`${t}.values must be a bounded nonempty array`);
+				let r = n.map((e, n) => EE(e, `${t}.values[${n}]`, 256));
+				return new Set(r).size !== r.length && JE(`${t}.values contains duplicates`), Object.freeze({
 					kind: e,
 					values: Object.freeze(r)
 				});
 			}
 			case "taggedUnion": {
-				WT(i, [
+				wE(i, [
 					"kind",
 					"tag",
 					"variants"
 				], t);
-				let a = KT(i.tag, `${t}.tag`, 128), o = UT(i.variants, `${t}.variants`), s = Object.entries(o);
-				(s.length === 0 || s.length > FT) && mE(`${t}.variants must be a bounded nonempty object`);
+				let a = EE(i.tag, `${t}.tag`, 128), o = CE(i.variants, `${t}.variants`), s = Object.entries(o);
+				(s.length === 0 || s.length > hE) && JE(`${t}.variants must be a bounded nonempty object`);
 				let c = Object.create(null);
-				for (let [e, i] of s) YT(e, `${t}.variants.${e}`), c[e] = HT(i, `${t}.variants.${e}`, n, r + 1);
+				for (let [e, i] of s) kE(e, `${t}.variants.${e}`), c[e] = SE(i, `${t}.variants.${e}`, n, r + 1);
 				return Object.freeze({
 					kind: e,
 					tag: a,
@@ -27839,12 +28253,12 @@ function HT(e, t, n, r) {
 				});
 			}
 			case "opaqueJson": {
-				WT(i, [
+				wE(i, [
 					"kind",
 					"maximumBytes",
 					"maximumNodes"
 				], t);
-				let n = qT(i.maximumBytes, `${t}.maximumBytes`, 0, 1048576), r = qT(i.maximumNodes, `${t}.maximumNodes`, 1, 65536);
+				let n = DE(i.maximumBytes, `${t}.maximumBytes`, 0, 1048576), r = DE(i.maximumNodes, `${t}.maximumNodes`, 1, 65536);
 				return Object.freeze({
 					kind: e,
 					maximumBytes: n,
@@ -27856,18 +28270,18 @@ function HT(e, t, n, r) {
 		n.active.delete(i);
 	}
 }
-function UT(e, t) {
-	(typeof e != "object" || !e || Array.isArray(e)) && mE(`${t} must be an object`);
+function CE(e, t) {
+	(typeof e != "object" || !e || Array.isArray(e)) && JE(`${t} must be an object`);
 	let n = e, r = Object.getPrototypeOf(n);
-	r !== Object.prototype && r !== null && mE(`${t} must be a plain object`), Object.getOwnPropertySymbols(n).length > 0 && mE(`${t} may not contain symbol properties`);
+	r !== Object.prototype && r !== null && JE(`${t} must be a plain object`), Object.getOwnPropertySymbols(n).length > 0 && JE(`${t} may not contain symbol properties`);
 	let i = Object.getOwnPropertyDescriptors(n);
-	return Object.values(i).some((e) => !e.enumerable || !("value" in e)) && mE(`${t} may not contain accessors or hidden properties`), n;
+	return Object.values(i).some((e) => !e.enumerable || !("value" in e)) && JE(`${t} may not contain accessors or hidden properties`), n;
 }
-function WT(e, t, n, r = []) {
+function wE(e, t, n, r = []) {
 	let i = /* @__PURE__ */ new Set([...t, ...r]);
-	(Object.keys(e).some((e) => !i.has(e)) || t.some((t) => !hE(e, t))) && mE(`${n} has unexpected or missing fields`);
+	(Object.keys(e).some((e) => !i.has(e)) || t.some((t) => !YE(e, t))) && JE(`${n} has unexpected or missing fields`);
 }
-function GT(e, t) {
+function TE(e, t) {
 	return (typeof e != "string" || ![
 		"boolean",
 		"decimalU64",
@@ -27878,77 +28292,77 @@ function GT(e, t) {
 		"enum",
 		"taggedUnion",
 		"opaqueJson"
-	].includes(e)) && mE(`${t} is not a supported schema kind`), e;
+	].includes(e)) && JE(`${t} is not a supported schema kind`), e;
 }
-function KT(e, t, n) {
-	return (typeof e != "string" || new TextEncoder().encode(e).byteLength > n) && mE(`${t} must be a bounded string`), e;
+function EE(e, t, n) {
+	return (typeof e != "string" || new TextEncoder().encode(e).byteLength > n) && JE(`${t} must be a bounded string`), e;
 }
-function qT(e, t, n, r) {
-	return (typeof e != "number" || !Number.isSafeInteger(e) || e < n || e > r) && mE(`${t} must be a bounded nonnegative integer`), e;
+function DE(e, t, n, r) {
+	return (typeof e != "number" || !Number.isSafeInteger(e) || e < n || e > r) && JE(`${t} must be a bounded nonnegative integer`), e;
 }
-function JT(e, t) {
-	if (e !== void 0) return (typeof e != "number" || !Number.isSafeInteger(e)) && mE(`${t} must be a safe integer`), e;
+function OE(e, t) {
+	if (e !== void 0) return (typeof e != "number" || !Number.isSafeInteger(e)) && JE(`${t} must be a safe integer`), e;
 }
-function YT(e, t) {
-	(e.length === 0 || e === "__proto__" || e === "constructor" || e === "prototype") && mE(`${t} is not a usable field name`), KT(e, t, 128);
+function kE(e, t) {
+	(e.length === 0 || e === "__proto__" || e === "constructor" || e === "prototype") && JE(`${t} is not a usable field name`), EE(e, t, 128);
 }
-function XT(e, t) {
-	if (!/^[a-z0-9._:-]+$/u.test(e) || new TextEncoder().encode(e).byteLength > ET.identity.commandBytes) throw new IT("invalid_schema", `${t} is not a valid command identity`);
+function AE(e, t) {
+	if (!/^[a-z0-9._:-]+$/u.test(e) || new TextEncoder().encode(e).byteLength > oE.identity.commandBytes) throw new gE("invalid_schema", `${t} is not a valid command identity`);
 }
-function ZT(e) {
-	throw new IT("invalid_extension", e);
+function jE(e) {
+	throw new gE("invalid_extension", e);
 }
-function QT(e, t) {
-	(typeof e != "object" || !e || Array.isArray(e)) && ZT(`${t} must be an object`);
+function ME(e, t) {
+	(typeof e != "object" || !e || Array.isArray(e)) && jE(`${t} must be an object`);
 	let n = e, r = Object.getPrototypeOf(n);
-	r !== Object.prototype && r !== null && ZT(`${t} must be a plain object`), Object.getOwnPropertySymbols(n).length > 0 && ZT(`${t} may not contain symbol properties`);
+	r !== Object.prototype && r !== null && jE(`${t} must be a plain object`), Object.getOwnPropertySymbols(n).length > 0 && jE(`${t} may not contain symbol properties`);
 	let i = Object.getOwnPropertyDescriptors(n);
-	return Object.values(i).some((e) => !e.enumerable || !("value" in e)) && ZT(`${t} may not contain accessors or hidden properties`), n;
+	return Object.values(i).some((e) => !e.enumerable || !("value" in e)) && jE(`${t} may not contain accessors or hidden properties`), n;
 }
-function $T(e, t, n, r = []) {
+function NE(e, t, n, r = []) {
 	let i = /* @__PURE__ */ new Set([...t, ...r]);
-	(Object.keys(e).some((e) => !i.has(e)) || t.some((t) => !hE(e, t))) && ZT(`${n} has unexpected or missing fields`);
+	(Object.keys(e).some((e) => !i.has(e)) || t.some((t) => !YE(e, t))) && jE(`${n} has unexpected or missing fields`);
 }
-function eE(e, t) {
-	(!Array.isArray(e) || Object.getPrototypeOf(e) !== Array.prototype || Object.keys(e).length !== e.length || Object.getOwnPropertySymbols(e).length > 0) && ZT(`${t} must be a dense ordinary array`);
+function PE(e, t) {
+	(!Array.isArray(e) || Object.getPrototypeOf(e) !== Array.prototype || Object.keys(e).length !== e.length || Object.getOwnPropertySymbols(e).length > 0) && jE(`${t} must be a dense ordinary array`);
 	let n = Object.getOwnPropertyDescriptors(e);
-	return Object.entries(n).some(([e, t]) => e !== "length" && (!t.enumerable || !("value" in t))) && ZT(`${t} may not contain accessors or hidden properties`), e;
+	return Object.entries(n).some(([e, t]) => e !== "length" && (!t.enumerable || !("value" in t))) && jE(`${t} may not contain accessors or hidden properties`), e;
 }
-function tE(e, t, n) {
-	return (typeof e != "string" || new TextEncoder().encode(e).byteLength > n) && ZT(`${t} must be a bounded string`), e;
+function FE(e, t, n) {
+	return (typeof e != "string" || new TextEncoder().encode(e).byteLength > n) && jE(`${t} must be a bounded string`), e;
 }
-function nE(e, t) {
-	let n = tE(e, t, ET.identity.commandBytes);
-	return /^[a-z0-9._:-]+$/u.test(n) || ZT(`${t} must use lower-case command identity characters`), n;
+function IE(e, t) {
+	let n = FE(e, t, oE.identity.commandBytes);
+	return /^[a-z0-9._:-]+$/u.test(n) || jE(`${t} must use lower-case command identity characters`), n;
 }
-function rE(e) {
-	let t = nE(e, "extension namespace");
-	return t.includes(":") && ZT("extension namespace may not contain colon"), t;
+function LE(e) {
+	let t = IE(e, "extension namespace");
+	return t.includes(":") && jE("extension namespace may not contain colon"), t;
 }
-function iE(e, t) {
-	let n = tE(e, t, ET.identity.commandBytes);
-	return ET.lanes.includes(n) || ZT(`${t} is invalid`), n;
+function RE(e, t) {
+	let n = FE(e, t, oE.identity.commandBytes);
+	return oE.lanes.includes(n) || jE(`${t} is invalid`), n;
 }
-function aE(e, t) {
-	let n = gE(e, "discovery");
-	_E(n, ET.discoveryFields, "discovery");
-	let r = SE(n.protocolVersion, "discovery.protocolVersion"), i = bE(n.runtime, "runtime"), a = bE(n.profile, "profile");
+function zE(e, t) {
+	let n = XE(e, "discovery");
+	ZE(n, oE.discoveryFields, "discovery");
+	let r = nD(n.protocolVersion, "discovery.protocolVersion"), i = eD(n.runtime, "runtime"), a = eD(n.profile, "profile");
 	Array.isArray(n.permittedLanes) || $("discovery.permittedLanes must be a dense ordinary array");
-	let o = OE(n.permittedLanes, "discovery.permittedLanes");
-	(o.length === 0 || o.length > ET.lanes.length) && $(`discovery.permittedLanes must contain 1-${ET.lanes.length} lanes`);
-	let s = o.map((e, t) => CE(e, `discovery.permittedLanes[${t}]`));
+	let o = cD(n.permittedLanes, "discovery.permittedLanes");
+	(o.length === 0 || o.length > oE.lanes.length) && $(`discovery.permittedLanes must contain 1-${oE.lanes.length} lanes`);
+	let s = o.map((e, t) => rD(e, `discovery.permittedLanes[${t}]`));
 	new Set(s).size !== s.length && $("discovery.permittedLanes must not contain duplicates");
-	let c = wE(n.revision, "discovery.revision"), l = wE(n.catalogEpoch, "discovery.catalogEpoch"), u = bE(n.contractFingerprint, "discovery.contractFingerprint");
+	let c = iD(n.revision, "discovery.revision"), l = iD(n.catalogEpoch, "discovery.catalogEpoch"), u = eD(n.contractFingerprint, "discovery.contractFingerprint");
 	Array.isArray(n.commands) || $("discovery.commands must be a dense ordinary array");
-	let d = OE(n.commands, "discovery.commands");
-	d.length > MT && $("discovery.commands must be a bounded array");
-	let f = d.map((e, t) => oE(e, `discovery.commands[${t}]`)), p = /* @__PURE__ */ new Set();
+	let d = cD(n.commands, "discovery.commands");
+	d.length > fE && $("discovery.commands must be a bounded array");
+	let f = d.map((e, t) => BE(e, `discovery.commands[${t}]`)), p = /* @__PURE__ */ new Set();
 	for (let e of f) for (let t of [e.id, ...e.aliases]) p.has(t) && $(`duplicate command or alias ${t}`), p.add(t);
 	f.some((e) => !s.includes(e.lane)) && $("discovery command lane is not permitted by its selected profile");
 	let m = new Map(f.map((e) => [e.id, e]));
 	for (let e of t.extensionBindings) {
 		let t = m.get(e.command);
-		t === void 0 && ZT(`Schema binding ${e.command} has no available discovered command`), e.profile !== a && ZT(`Schema binding ${e.command} expects profile ${e.profile}, not ${a}`), e.lane !== t.lane && ZT(`Schema binding ${e.command} expects lane ${e.lane}, not ${t.lane}`);
+		t === void 0 && jE(`Schema binding ${e.command} has no available discovered command`), e.profile !== a && jE(`Schema binding ${e.command} expects profile ${e.profile}, not ${a}`), e.lane !== t.lane && jE(`Schema binding ${e.command} expects lane ${e.lane}, not ${t.lane}`);
 	}
 	return Object.freeze({
 		protocolVersion: r,
@@ -27961,17 +28375,17 @@ function aE(e, t) {
 		commands: Object.freeze(f)
 	});
 }
-function oE(e, t) {
-	let n = gE(e, t);
-	_E(n, [
+function BE(e, t) {
+	let n = XE(e, t);
+	ZE(n, [
 		"id",
 		"aliases",
 		"lane",
 		"summary"
 	], t);
-	let r = bE(n.id, `${t}.id`);
-	(!Array.isArray(n.aliases) || n.aliases.length > ET.limits.commandAliases) && $(`${t}.aliases must be bounded`);
-	let i = n.aliases.map((e, n) => bE(e, `${t}.aliases[${n}]`)), a = CE(n.lane, `${t}.lane`), o = yE(n.summary, ET.limits.summaryBytes, `${t}.summary`);
+	let r = eD(n.id, `${t}.id`);
+	(!Array.isArray(n.aliases) || n.aliases.length > oE.limits.commandAliases) && $(`${t}.aliases must be bounded`);
+	let i = n.aliases.map((e, n) => eD(e, `${t}.aliases[${n}]`)), a = rD(n.lane, `${t}.lane`), o = $E(n.summary, oE.limits.summaryBytes, `${t}.summary`);
 	return Object.freeze({
 		id: r,
 		aliases: Object.freeze(i),
@@ -27980,9 +28394,9 @@ function oE(e, t) {
 		helpOnly: !0
 	});
 }
-function sE(e, t, n) {
-	let r = gE(e, "response");
-	_E(r, [
+function VE(e, t, n) {
+	let r = XE(e, "response");
+	ZE(r, [
 		"correlation",
 		"runtime",
 		"profile",
@@ -27990,19 +28404,19 @@ function sE(e, t, n) {
 		"catalogEpoch",
 		"outcome"
 	], "response");
-	let i = bE(r.correlation, "response.correlation");
+	let i = eD(r.correlation, "response.correlation");
 	i !== t.correlation && $("response correlation does not match request");
-	let a = bE(r.runtime, "response.runtime"), o = bE(r.profile, "response.profile"), s = wE(r.revision, "response.revision"), c = wE(r.catalogEpoch, "response.catalogEpoch"), l = gE(r.outcome, "response.outcome"), u = vE(l.kind, "response.outcome.kind"), d;
+	let a = eD(r.runtime, "response.runtime"), o = eD(r.profile, "response.profile"), s = iD(r.revision, "response.revision"), c = iD(r.catalogEpoch, "response.catalogEpoch"), l = XE(r.outcome, "response.outcome"), u = QE(l.kind, "response.outcome.kind"), d;
 	if (u === "success") {
-		_E(l, [
+		ZE(l, [
 			"kind",
 			"value",
 			"receiptRefs"
 		], "response.outcome"), (!Array.isArray(l.receiptRefs) || l.receiptRefs.length > 32) && $("response receipt refs must be bounded");
-		let e = l.receiptRefs.map((e, t) => bE(e, `response.receiptRefs[${t}]`));
-		n !== void 0 && lE(l.value, n.result, "$result"), d = Object.freeze({
+		let e = l.receiptRefs.map((e, t) => eD(e, `response.receiptRefs[${t}]`));
+		n !== void 0 && UE(l.value, n.result, "$result"), d = Object.freeze({
 			kind: "success",
-			value: EE(l.value),
+			value: oD(l.value),
 			receiptRefs: Object.freeze(e)
 		});
 	} else u === "error" ? ((!Object.keys(l).every((e) => [
@@ -28010,11 +28424,11 @@ function sE(e, t, n) {
 		"code",
 		"message",
 		"details"
-	].includes(e)) || !hE(l, "code") || !hE(l, "message")) && $("response error has invalid fields"), n !== void 0 && hE(l, "details") && lE(l.details, n.error, "$error"), d = Object.freeze({
+	].includes(e)) || !YE(l, "code") || !YE(l, "message")) && $("response error has invalid fields"), n !== void 0 && YE(l, "details") && UE(l.details, n.error, "$error"), d = Object.freeze({
 		kind: "error",
-		code: bE(l.code, "response.outcome.code"),
-		message: yE(l.message, 1024, "response.outcome.message"),
-		...hE(l, "details") ? { details: EE(l.details) } : {}
+		code: eD(l.code, "response.outcome.code"),
+		message: $E(l.message, 1024, "response.outcome.message"),
+		...YE(l, "details") ? { details: oD(l.details) } : {}
 	})) : $("response outcome kind is invalid");
 	return Object.freeze({
 		correlation: i,
@@ -28025,149 +28439,149 @@ function sE(e, t, n) {
 		outcome: d
 	});
 }
-function cE(e, t) {
-	lE(e, t, "$");
+function HE(e, t) {
+	UE(e, t, "$");
 }
-function lE(e, t, n, r = 0) {
-	switch (r > NT && $(`${n} exceeds wire depth`), t.kind) {
+function UE(e, t, n, r = 0) {
+	switch (r > pE && $(`${n} exceeds wire depth`), t.kind) {
 		case "boolean":
 			typeof e != "boolean" && $(`${n} must be boolean`);
 			return;
 		case "decimalU64":
-			wE(e, n);
+			iD(e, n);
 			return;
 		case "integer":
 			(typeof e != "number" || !Number.isSafeInteger(e) || t.minimum !== void 0 && e < t.minimum || t.maximum !== void 0 && e > t.maximum) && $(`${n} must be a bounded integer`);
 			return;
 		case "string": {
-			let r = yE(e, t.maximumBytes, n);
-			t.pattern === "identifier" && xE(r, n);
+			let r = $E(e, t.maximumBytes, n);
+			t.pattern === "identifier" && tD(r, n);
 			return;
 		}
 		case "array":
-			(!Array.isArray(e) || e.length > t.maximumItems) && $(`${n} must be a bounded array`), OE(e, n).forEach((e, i) => lE(e, t.items, `${n}[${i}]`, r + 1));
+			(!Array.isArray(e) || e.length > t.maximumItems) && $(`${n} must be a bounded array`), cD(e, n).forEach((e, i) => UE(e, t.items, `${n}[${i}]`, r + 1));
 			return;
 		case "enum":
 			(typeof e != "string" || !t.values.includes(e)) && $(`${n} must be an admitted enum value`);
 			return;
 		case "taggedUnion": {
-			let i = DE(e, n);
-			hE(i, t.tag) || $(`${n}.${t.tag} is required`);
-			let a = vE(i[t.tag], `${n}.${t.tag}`);
-			hE(t.variants, a) || $(`${n}.${t.tag} is invalid`);
+			let i = sD(e, n);
+			YE(i, t.tag) || $(`${n}.${t.tag} is required`);
+			let a = QE(i[t.tag], `${n}.${t.tag}`);
+			YE(t.variants, a) || $(`${n}.${t.tag} is invalid`);
 			let o = t.variants[a];
-			lE(e, o, n, r + 1);
+			UE(e, o, n, r + 1);
 			return;
 		}
 		case "opaqueJson":
-			kE(e, t.maximumBytes, t.maximumNodes, n);
+			lD(e, t.maximumBytes, t.maximumNodes, n);
 			return;
 		case "object": {
-			let i = DE(e, n), a = t.fields;
-			for (let e of Object.keys(i)) hE(a, e) || $(`${n}.${e} is not allowed`);
+			let i = sD(e, n), a = t.fields;
+			for (let e of Object.keys(i)) YE(a, e) || $(`${n}.${e} is not allowed`);
 			for (let [e, t] of Object.entries(a)) {
-				if (!hE(i, e)) {
+				if (!YE(i, e)) {
 					t.required && $(`${n}.${e} is required`);
 					continue;
 				}
-				lE(i[e], t.value, `${n}.${e}`, r + 1);
+				UE(i[e], t.value, `${n}.${e}`, r + 1);
 			}
 			return;
 		}
 	}
 }
-function uE() {
+function WE() {
 	return typeof crypto < "u" && "randomUUID" in crypto ? crypto.randomUUID().toLowerCase() : `${Date.now()}-${Math.random()}`.replace(/[^a-z0-9.-]/gu, "-");
 }
-function dE(e) {
-	if (e?.aborted) throw new IT("cancelled", "Developer command was cancelled");
+function GE(e) {
+	if (e?.aborted) throw new gE("cancelled", "Developer command was cancelled");
 }
-function fE(e) {
-	return e instanceof IT ? e : e instanceof DOMException && e.name === "AbortError" ? new IT("cancelled", "Developer command was cancelled", { cause: e }) : new IT("unavailable", `Developer command adapter is unavailable: ${pE(e)}`, { cause: e instanceof Error ? e : void 0 });
+function KE(e) {
+	return e instanceof gE ? e : e instanceof DOMException && e.name === "AbortError" ? new gE("cancelled", "Developer command was cancelled", { cause: e }) : new gE("unavailable", `Developer command adapter is unavailable: ${qE(e)}`, { cause: e instanceof Error ? e : void 0 });
 }
-function pE(e) {
+function qE(e) {
 	return e instanceof Error ? e.message : String(e);
 }
 function $(e) {
-	throw new IT("malformed", e);
+	throw new gE("malformed", e);
 }
-function mE(e) {
-	throw new IT("invalid_schema", e);
+function JE(e) {
+	throw new gE("invalid_schema", e);
 }
-function hE(e, t) {
+function YE(e, t) {
 	return Object.prototype.hasOwnProperty.call(e, t);
 }
-function gE(e, t) {
-	return DE(e, t);
+function XE(e, t) {
+	return sD(e, t);
 }
-function _E(e, t, n) {
-	(Object.keys(e).some((e) => !t.includes(e)) || t.some((t) => !hE(e, t))) && $(`${n} has unexpected or missing fields`);
+function ZE(e, t, n) {
+	(Object.keys(e).some((e) => !t.includes(e)) || t.some((t) => !YE(e, t))) && $(`${n} has unexpected or missing fields`);
 }
-function vE(e, t) {
+function QE(e, t) {
 	return typeof e != "string" && $(`${t} must be string`), e;
 }
-function yE(e, t, n) {
-	let r = vE(e, n);
+function $E(e, t, n) {
+	let r = QE(e, n);
 	return new TextEncoder().encode(r).byteLength > t && $(`${n} exceeds ${t} bytes`), r;
 }
-function bE(e, t) {
-	let n = yE(e, ET.identity.commandBytes, t);
-	return xE(n, t), n;
+function eD(e, t) {
+	let n = $E(e, oE.identity.commandBytes, t);
+	return tD(n, t), n;
 }
-function xE(e, t) {
+function tD(e, t) {
 	/^[a-z0-9._:-]+$/u.test(e) || $(`${t} must use lower-case command identity characters`);
 }
-function SE(e, t) {
-	return e !== OT && $(`${t} is unsupported`), OT;
+function nD(e, t) {
+	return e !== cE && $(`${t} is unsupported`), cE;
 }
-function CE(e, t) {
-	let n = vE(e, t);
-	return ET.lanes.includes(n) || $(`${t} is invalid`), n;
+function rD(e, t) {
+	let n = QE(e, t);
+	return oE.lanes.includes(n) || $(`${t} is invalid`), n;
 }
-function wE(e, t) {
-	let n = yE(e, 20, t);
+function iD(e, t) {
+	let n = $E(e, 20, t);
 	return (!/^(?:0|[1-9][0-9]*)$/u.test(n) || BigInt(n) > 18446744073709551615n) && $(`${t} must be an unsigned 64-bit decimal string`), n;
 }
-function TE(e, t) {
+function aD(e, t) {
 	return BigInt(e) < BigInt(t);
 }
-function EE(e) {
+function oD(e) {
 	try {
 		return JSON.parse(JSON.stringify(e));
 	} catch (e) {
-		throw new IT("malformed", "Developer command values must be JSON-compatible", { cause: e instanceof Error ? e : void 0 });
+		throw new gE("malformed", "Developer command values must be JSON-compatible", { cause: e instanceof Error ? e : void 0 });
 	}
 }
-function DE(e, t) {
+function sD(e, t) {
 	(typeof e != "object" || !e || Array.isArray(e)) && $(`${t} must be an object`);
 	let n = e;
 	Object.getPrototypeOf(n) !== Object.prototype && $(`${t} must use the ordinary object prototype`), ("toJSON" in n || Object.getOwnPropertySymbols(n).length > 0) && $(`${t} has non-JSON hooks`);
 	let r = Object.getOwnPropertyDescriptors(n);
 	return Object.values(r).some((e) => !e.enumerable || !("value" in e)) && $(`${t} has accessor or hidden property`), n;
 }
-function OE(e, t) {
+function cD(e, t) {
 	Array.isArray(e) || $(`${t} must be an array`), Object.getPrototypeOf(e) !== Array.prototype && $(`${t} must use the ordinary array prototype`), ("toJSON" in e || Object.getOwnPropertySymbols(e).length > 0) && $(`${t} has non-JSON hooks`);
 	let n = Object.getOwnPropertyDescriptors(e);
 	for (let [e, r] of Object.entries(n)) e === "length" ? (r.enumerable || !("value" in r)) && $(`${t} has an invalid length property`) : (!r.enumerable || !("value" in r)) && $(`${t} has accessor or hidden property`);
 	Object.keys(e).length !== e.length && $(`${t} must be a dense ordinary array`);
-	for (let n = 0; n < e.length; n += 1) hE(e, n) || $(`${t} must be a dense ordinary array`);
+	for (let n = 0; n < e.length; n += 1) YE(e, n) || $(`${t} must be a dense ordinary array`);
 	return e;
 }
-function kE(e, t, n, r) {
+function lD(e, t, n, r) {
 	let i = /* @__PURE__ */ new Set(), a = 0, o = (e, t) => {
-		if ((t > NT || ++a > n) && $(`${r} exceeds opaque JSON bounds`), !(e === null || typeof e == "string" || typeof e == "boolean")) {
+		if ((t > pE || ++a > n) && $(`${r} exceeds opaque JSON bounds`), !(e === null || typeof e == "string" || typeof e == "boolean")) {
 			if (typeof e == "number") {
 				(!Number.isFinite(e) || Object.is(e, -0)) && $(`${r} has noncanonical number`);
 				return;
 			}
 			if ((typeof e != "object" || i.has(e)) && $(`${r} is not acyclic JSON`), i.add(e), Array.isArray(e)) {
-				OE(e, r), e.forEach((e) => o(e, t + 1));
+				cD(e, r), e.forEach((e) => o(e, t + 1));
 				return;
 			}
-			DE(e, r), Object.values(e).forEach((e) => o(e, t + 1));
+			sD(e, r), Object.values(e).forEach((e) => o(e, t + 1));
 		}
 	};
 	o(e, 0), new TextEncoder().encode(JSON.stringify(e)).byteLength > t && $(`${r} exceeds opaque JSON bytes`);
 }
 //#endregion
-export { Fw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES, Iw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT, Lw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES, nT as RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION, OT as RUSTY_DEVELOPER_COMMAND_PROTOCOL_VERSION, AT as RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS, kT as RUSTY_STANDARD_HOST_WIRE_SCHEMAS, Rw as RustyApplicationContentError, rT as RustyApplicationHostError, IT as RustyDeveloperCommandClientError, LT as createRustyDeveloperCommandClient, oT as mountRustyApplication, Jw as mountRustyDeveloperCommandShell, cE as validateRustyDeveloperCommandWireValue };
+export { Fw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_BYTES, Iw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_COUNT, Lw as RUSTY_APPLICATION_AUDIO_RESOURCE_MAX_TOTAL_BYTES, IT as RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION, rT as RUSTY_APPLICATION_INPUT_POINTER_DELTA_MAXIMUM, nT as RUSTY_APPLICATION_INPUT_QUEUE_MAXIMUM, aT as RUSTY_APPLICATION_INPUT_SELECTED_CONTROLLER_MAXIMUM, oT as RUSTY_APPLICATION_INPUT_U64_MAXIMUM, iT as RUSTY_APPLICATION_INPUT_WHEEL_DELTA_MAXIMUM, cE as RUSTY_DEVELOPER_COMMAND_PROTOCOL_VERSION, uE as RUSTY_STANDARD_ADMIN_WIRE_SCHEMAS, lE as RUSTY_STANDARD_HOST_WIRE_SCHEMAS, Rw as RustyApplicationContentError, LT as RustyApplicationHostError, gE as RustyDeveloperCommandClientError, _E as createRustyDeveloperCommandClient, BT as mountRustyApplication, Jw as mountRustyDeveloperCommandShell, HE as validateRustyDeveloperCommandWireValue };

@@ -47,6 +47,29 @@ compatibility-version family.
 The complete downstream facade re-exports the crate as
 `rusty_engine::product_model` without wrappers.
 
+## Input descriptor admission
+
+`intentDescriptors` are the one closed semantic target for input. Each owns
+its stable intent id, digital/axis value kind, one admitted capability binding,
+and that capability's bounded payload. `inputMap` is deliberately narrower:
+an authored mapping id, one intent reference, and one explicit typed physical
+trigger. It cannot carry another capability or opaque trigger meaning.
+
+The trigger grammar is closed and generated into Runtime Composition: keyboard
+press/hold/release (including a bounded keyboard chord), pointer buttons and
+axes, wheel axes, and bounded selected-controller buttons/axes. The keyboard
+catalog is exactly A–Z, 0–9, space/enter/escape, and left/right
+shift/control/alt; hosts must not emit un-authorable controls. Context is a
+bounded Product identity, not browser focus. Admission resolves every mapping
+to its descriptor and rejects missing references, a digital/axis mismatch,
+invalid chord, or an unavailable input-map capability before the runtime lane
+is constructed.
+
+Direct product UI claims name the descriptor id rather than a mapping. This
+lets direct UI and multiple physical triggers converge on precisely the same
+immutable capability/payload readout without selecting an arbitrary mapping.
+See [runtime input](runtime-input.md) for the post-admission lane.
+
 ## Forbidden dependencies and shortcuts
 
 - no filesystem, process, network, browser, renderer, TypeScript, Studio, or
