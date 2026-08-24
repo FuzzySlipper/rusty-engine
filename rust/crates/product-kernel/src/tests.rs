@@ -991,11 +991,22 @@ fn contexts_validate_their_own_phase_tokens_and_keep_closed_types() {
     let operation = ProductOperationContext::new(&lifecycle, token.mutation(), &snapshot, &request)
         .expect("mutation context");
     assert_eq!(operation.step().value(), 0);
+    let projection = ProductProjectionContext::new(&lifecycle, token.projection(), &snapshot)
+        .expect("projection context");
+    assert_eq!(projection.snapshot().value, 3);
+    assert_eq!(projection.step().value(), 0);
     assert!(matches!(
         ProductOperationContext::new(&lifecycle, token.schedule(), &snapshot, &request),
         Err(ProductKernelContextError::WrongPhase {
             expected: RuntimePhase::Mutation,
             received: RuntimePhase::Schedule
+        })
+    ));
+    assert!(matches!(
+        ProductProjectionContext::new(&lifecycle, token.mutation(), &snapshot),
+        Err(ProductKernelContextError::WrongPhase {
+            expected: RuntimePhase::Projection,
+            received: RuntimePhase::Mutation
         })
     ));
 }

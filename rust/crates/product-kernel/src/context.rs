@@ -56,6 +56,51 @@ pub struct ProductOperationContext<'a, Snapshot, Request> {
     request: &'a Request,
 }
 
+/// A projection-phase context for one downstream typed projection function.
+///
+/// A projection function receives this context only after the exact
+/// `RuntimePhase::Projection` token has been validated against the live
+/// lifecycle. The context exposes an immutable product-owned snapshot and the
+/// admitted simulation step; it carries no renderer, host, clock, scheduler,
+/// callback, or mutation authority. Projection functions return their own
+/// owned DTOs to the caller that chooses a transport or renderer path.
+#[derive(Debug)]
+pub struct ProductProjectionContext<'a, Snapshot> {
+    token: RuntimePhaseToken,
+    snapshot: &'a Snapshot,
+}
+
+impl<'a, Snapshot> Copy for ProductProjectionContext<'a, Snapshot> {}
+
+impl<'a, Snapshot> Clone for ProductProjectionContext<'a, Snapshot> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'a, Snapshot> ProductProjectionContext<'a, Snapshot> {
+    pub fn new(
+        lifecycle: &RuntimeLifecycle,
+        token: RuntimePhaseToken,
+        snapshot: &'a Snapshot,
+    ) -> Result<Self, ProductKernelContextError> {
+        validate_phase(lifecycle, token, RuntimePhase::Projection)?;
+        Ok(Self { token, snapshot })
+    }
+
+    pub const fn token(self) -> RuntimePhaseToken {
+        self.token
+    }
+
+    pub const fn step(self) -> SimulationStep {
+        self.token.simulation().step()
+    }
+
+    pub fn snapshot(&self) -> &Snapshot {
+        self.snapshot
+    }
+}
+
 impl<'a, Snapshot, Request> ProductOperationContext<'a, Snapshot, Request> {
     pub fn new(
         lifecycle: &RuntimeLifecycle,

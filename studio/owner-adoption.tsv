@@ -20,11 +20,21 @@ gameplay-mechanics	non-studio	reusable downstream gameplay mechanics	no Studio A
 gameplay-resolution	non-studio	bounded downstream-owned attempt resolution	no Studio API	no gameplay attempt or transaction authority	gameplay-resolution-boundary
 gameplay-rules	non-studio	optional semantic-neutral packages consumed by downstream compilers	no Studio API	no package payload or downstream semantic editor authority	GR0-classification
 gameplay-standard	non-studio	optional gameplay capability metadata and direct downstream Rust composition	no Studio API	no gameplay definitions runtime state or editor authority	gameplay-standard-boundary
+product-kernel	non-studio	source-linked downstream Rust capability and schema declarations	no Studio API	no Product Kernel execution registry or downstream product authority	product-kernel-boundary
+product-model	non-studio	compiled downstream Product Model admission and immutable linkage	no Studio API	no Runtime Composition authoring or product orchestration authority	product-model-boundary
 render-host-contracts	non-studio	private native host composition input and readback contracts	no Studio API	no native host bridge or downstream gameplay authority	SDK-renderer-boundary
 render-model	indirect	retained renderer-neutral scene resources including static and animated meshes and operations	shared render frames produced by Rust owners	no canonical copy	M11D/M11E/M11F
 render-presentation	direct	animation audio billboard particle telemetry preview and diagnostics	versioned presentation frame and local controller operations	preview controls and presentation readouts	M11D/M11E
 render-projection	direct	authored entity voxel light static and animated appearance and clip projection	versioned renderer-neutral frame	no scene graph; channel selection only	M11B/M11D/M11E/M11F
 renderer-webview-host	non-studio	private downstream native child-webview realization	no Studio API	no native window event loop or private webview bridge	SDK-renderer-boundary
+runtime-input	non-studio	lifecycle-bound typed physical facts and direct intent snapshots	no Studio API	no browser listener mapping or downstream gameplay consequence authority	runtime-input-boundary
+runtime-lifecycle	non-studio	host-neutral runtime lifecycle and phase admission	no Studio API	no clock source scheduler executor or product state authority	runtime-lifecycle-boundary
+runtime-mutation	non-studio	phase-gated Product Kernel mutation publication	no Studio API	no product operation planning or generic mutation registry	runtime-mutation-boundary
+runtime-schedule	non-studio	linked five-phase Runtime Composition ordering and cadence	no Studio API	no callbacks clock source or downstream orchestration authority	runtime-schedule-boundary
+runtime-standard-capabilities	non-studio	closed reusable runtime capability implementations	no Studio API	no open evaluator registry or product meaning authority	runtime-standard-capabilities-boundary
+runtime-timeline	non-studio	linked static timeline operation and completion queues	no Studio API	no downstream cinematic meaning or renderer authority	runtime-timeline-boundary
+runtime-ui	non-studio	projection-phase product DTO envelopes for optional rich DOM hosts	no Studio API	no DOM renderer scheduler or product state authority	runtime-ui-boundary
+rusty-cli	non-studio	product layout initialization and structural conformance checks	no Studio API	no Studio project storage or host bootstrap authority	rusty-cli-boundary
 rusty-engine	non-studio	downstream Rust SDK facade and feature-complete provider namespace	no Studio API	no alternate Studio transport or product authority	SDK-facade-boundary
 state-machine	downstream-only	project-specific state readout where the external adapter exposes it	project-adapter readout only	formatted observation; no generic editor	M11B/M11C
 svc-collision	indirect	authoritative picking and spatial validation through engine-spatial	engine-spatial operations only	no collision authority	M11E

@@ -70,6 +70,7 @@ downstream game policy and orchestration
         +--> runtime-schedule
         +--> runtime-timeline
         +--> runtime-mutation
+        +--> runtime-ui --> application-host (isolated host realization)
         +--> gameplay-rules <--> rules/ (optional build-time authoring)
         +--> gameplay-standard (optional exact/continuous DSL, composed leaves, presets, operation plans)
         +--> developer-command (optional runtime developer console / debug console envelopes and binding port)
@@ -108,6 +109,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 | Linked five-phase schedule composition, deterministic execution order, cadence, lifecycle-token validation, and bounded inspection | [Runtime schedule](code-map/runtime-schedule.md) |
 | Linked static timeline templates, bounded deterministic operation/completion queues, lifecycle rebind, and immutable release records | [Runtime timeline](code-map/runtime-timeline.md) |
 | Closed Product Assembly mutation selections, owned candidate staging, exact guards, and fail-atomic publication receipts | [Runtime mutation](code-map/runtime-mutation.md) |
+| Projection-phase Product Kernel contexts, bounded typed UI DTO envelopes, lifecycle rebind, and strict transport decoding | [Runtime UI projection](code-map/runtime-ui.md) |
 | Closed typed observer/target selection, center-ray visibility, deterministic evidence reductions, and one Product Kernel operation emission | [Runtime standard capabilities](code-map/runtime-standard-capabilities.md) |
 | Product discovery, safe minimum initialization, structural checks, and foundational doctor diagnostics | [Rusty CLI foundation](code-map/rusty-cli.md) |
 | Bounded downstream-owned attempt lifecycle, transactions, receipts, and traces | [Gameplay resolution](code-map/gameplay-resolution.md) |

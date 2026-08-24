@@ -59,6 +59,7 @@ export type {
   RustyApplicationRendererOptions,
   RustyApplicationRendererPort,
   RustyApplicationUiContext,
+  RustyApplicationUiIntentsPort,
   RustyApplicationUiMount,
   RustyApplicationUiOwner,
   RustyApplicationUiPort,
@@ -79,6 +80,29 @@ export type {
   RustyApplicationVoxelSpriteReceipt,
   RustyApplicationVoxelSpriteSource,
 } from './application-host.js';
+export {
+  RUSTY_APPLICATION_UI_PROJECTION_ARTIFACT,
+  RUSTY_APPLICATION_UI_PROJECTION_DEFAULT_STREAM,
+  RUSTY_APPLICATION_UI_PROJECTION_MAX_ARRAY_LENGTH,
+  RUSTY_APPLICATION_UI_PROJECTION_MAX_BYTES,
+  RUSTY_APPLICATION_UI_PROJECTION_MAX_DEPTH,
+  RUSTY_APPLICATION_UI_PROJECTION_MAX_NODES,
+  RUSTY_APPLICATION_UI_PROJECTION_MAX_OBJECT_KEYS,
+  RUSTY_APPLICATION_UI_PROJECTION_MAX_STRING_BYTES,
+  RUSTY_APPLICATION_UI_PROJECTION_MAX_SUBSCRIBERS,
+  RUSTY_APPLICATION_UI_PROJECTION_MAX_WIRE_BYTES,
+  RustyApplicationUiProjectionError,
+  createRustyApplicationUiProjection,
+} from './ui-projection.js';
+export type {
+  RustyApplicationUiProjectionEnvelope,
+  RustyApplicationUiProjectionErrorCode,
+  RustyApplicationUiProjectionJson,
+  RustyApplicationUiProjectionOptions,
+  RustyApplicationUiProjectionPort,
+  RustyApplicationUiProjectionReadout,
+  RustyApplicationUiProjectionView,
+} from './ui-projection.js';
 export {
   RUSTY_APPLICATION_INPUT_POINTER_DELTA_MAXIMUM,
   RUSTY_APPLICATION_INPUT_QUEUE_MAXIMUM,

@@ -1,7 +1,8 @@
 import { type RustyApplicationContent } from './application-content.js';
 import { type RustyDeveloperCommandShellOptions } from './developer-command-shell.js';
 import { type RustyApplicationPresentationAspectBounds } from './presentation-frame.js';
-import { type RustyApplicationInputPort, type RustyApplicationRuntimeInputOptions } from './input-ingress.js';
+import { type RustyApplicationInputPort, type RustyApplicationRuntimeInputOptions, type RustyApplicationRuntimeIntentValue } from './input-ingress.js';
+import { type RustyApplicationUiProjectionOptions, type RustyApplicationUiProjectionPort, type RustyApplicationUiProjectionReadout, type RustyApplicationUiProjectionView } from './ui-projection.js';
 export declare const RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION = "rusty_application_host.v1";
 export type RustyApplicationInteractionMode = 'gameplay' | 'interface' | 'modal';
 /** A Rust-projected Engine render frame. Strict decoding remains Engine-owned. */
@@ -391,11 +392,16 @@ export interface RustyApplicationUiPort {
     readonly interactionMode: () => RustyApplicationInteractionMode;
     readonly setInteractionMode: (mode: RustyApplicationInteractionMode) => void;
 }
+/** Mounted DOM UI can emit a claim, but cannot drain or bind the input lane. */
+export interface RustyApplicationUiIntentsPort {
+    readonly claim: (intent: string, value: RustyApplicationRuntimeIntentValue) => void;
+}
 export interface RustyApplicationUiContext {
-    readonly renderer: RustyApplicationRendererPort;
     readonly ui: RustyApplicationUiPort;
-    /** Present only when the downstream explicitly opted into ordered Runtime Composition input. */
-    readonly input?: RustyApplicationInputPort;
+    /** Read-only current Product UI projection and subscription view. */
+    readonly projection?: RustyApplicationUiProjectionView;
+    /** Claim-only adapter for the shared ordered Runtime Composition input lane. */
+    readonly intents?: RustyApplicationUiIntentsPort;
 }
 export interface RustyApplicationUiOwner {
     readonly dispose: () => void | Promise<void>;
@@ -435,6 +441,8 @@ export interface RustyApplicationHostOptions {
     readonly initialInteractionMode?: RustyApplicationInteractionMode;
     /** Optional browser input ingress. Omission leaves renderer controls and DOM capture disabled. */
     readonly runtimeInput?: RustyApplicationRuntimeInputOptions;
+    /** Optional strict Product UI projection channel. */
+    readonly uiProjection?: RustyApplicationUiProjectionOptions;
 }
 export interface RustyApplicationHostReadout {
     readonly compatibilityVersion: typeof RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION;
@@ -443,6 +451,7 @@ export interface RustyApplicationHostReadout {
     readonly pointerLocked: boolean;
     readonly resourceBytes: number;
     readonly resourceCount: number;
+    readonly uiProjection?: RustyApplicationUiProjectionReadout;
     readonly state: 'ready' | 'disposed';
 }
 export interface RustyApplicationHost {
@@ -451,6 +460,8 @@ export interface RustyApplicationHost {
     readonly ui: RustyApplicationUiPort;
     /** Optional ordered physical-input and direct-UI-claim transport lane. */
     readonly input?: RustyApplicationInputPort;
+    /** Trusted host/composition-root ingress for Rust Product UI projections. */
+    readonly uiProjection?: RustyApplicationUiProjectionPort;
     readonly readout: () => RustyApplicationHostReadout;
     readonly dispose: () => Promise<void>;
 }

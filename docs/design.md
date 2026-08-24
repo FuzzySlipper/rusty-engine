@@ -225,6 +225,34 @@ Downstream retains snapshot/request/result/error meaning and calls ordinary
 typed functions; authoritative publication remains in the named
 `runtime-mutation` lane.
 
+`ProductProjectionContext` is the matching read-only context for a typed
+downstream projection function. It can only be constructed with a live,
+validated `RuntimePhase::Projection` token and exposes the immutable
+product-owned snapshot plus its admitted simulation step. A projection returns
+an owned product DTO; it receives no renderer, DOM, host, clock, scheduler,
+callback, or mutation authority.
+
+The host-neutral `runtime-ui` lane is the optional rich-DOM transport boundary
+for those DTOs. It validates the projection context and lane epoch before
+running a typed function, copies the result into bounded JSON, and emits the
+strict current envelope `rusty.product.ui-projection` with canonical decimal
+runtime/sequence strings and Product Model stream/contract identities. One
+envelope is allowed per stream per simulation step; duplicate/regressed,
+foreign/stale, wrong-phase, malformed, over-limit, or disposed work fails
+closed. Explicit rebind clears per-epoch stream/contract progress, while an
+exact binding is a no-op and an older same-instance binding is rejected. The
+current Rust-side bounds are 256 streams, 65,536 compact value bytes, 2,048
+JSON nodes, depth 16, 8,192-byte strings, 512 array entries, 256 object keys,
+integer-valued numbers within JavaScript's exact safe range, and 262,144
+encoded envelope bytes.
+
+`runtime-ui` remains transport only: the isolated application host owns the
+DOM-facing read-only view, detachment/deep-freeze, subscriber lifecycle, and
+host realization. This optional rich-DOM projection path does not replace the
+Rust-only `render-model` / `render-projection` / `render-presentation` retained
+frame path, whose renderer-neutral contracts and authority boundaries remain
+unchanged.
+
 The same sorted declaration exposes checked `Result` paths for versionless
 contract JSON and a product-local TypeScript module. Both validate the complete
 declaration before emitting, so stale concrete target/kind metadata or malformed

@@ -21,6 +21,16 @@ try {
       initialContent: content,
       pixelRatio: 1,
     },
+    runtimeInput: {
+      binding: {
+        runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
+        context: 'gameplay.default',
+      },
+    },
+    uiProjection: {
+      expectedStream: 'product.vignette',
+      expectedContract: 'product.vignette.v1',
+    },
     mountUi: mountVignetteProduct,
   });
   window.addEventListener('pagehide', () => {

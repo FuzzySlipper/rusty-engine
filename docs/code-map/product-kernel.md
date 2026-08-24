@@ -56,6 +56,10 @@ failures are pre-start failures.
 `ProductOperationContext` accepts only `RuntimePhase::Mutation`. Both carry
 borrowed product-owned snapshot/request values and no scheduler or mutation
 authority. Downstream functions keep their closed return and error types.
+`ProductProjectionContext` accepts only a validated `RuntimePhase::Projection`
+token and carries an immutable product snapshot plus the admitted simulation
+step. It is the typed input boundary for an owned downstream UI DTO; it carries
+no renderer, host, callback, clock, scheduler, or mutation authority.
 
 ## TypeScript generation
 

@@ -23,6 +23,7 @@
     "index.d.ts",
     "index.js",
     "input-ingress.d.ts",
-    "presentation-frame.d.ts"
+    "presentation-frame.d.ts",
+    "ui-projection.d.ts"
   ]
 }

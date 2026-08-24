@@ -17,6 +17,11 @@ declare global {
     __rustyDeveloperCommandDiscoveryGate?: Promise<void>;
     __rustyDeveloperCommandReleaseDiscovery?: () => void;
     __rustyApplicationRiggedFixtureUrl?: string;
+    __rustyApplicationUiContextShape?: {
+      readonly keys: readonly string[];
+      readonly projectionKeys: readonly string[] | null;
+      readonly intentsKeys: readonly string[] | null;
+    };
   }
 }
 
@@ -298,6 +303,22 @@ test('application host owns composition, input arbitration, and disposal', async
   )).toBe('interface');
   await page.evaluate(() => window.__rustyApplicationHost?.ui.setInteractionMode('gameplay'));
   await page.locator('#gameplay-zone').click();
+  expect(await page.evaluate(() => window.__rustyApplicationGameplayInputCount)).toBe(1);
+  await page.evaluate(() => {
+    const nativeModal = document.querySelector<HTMLElement>('#native-modal');
+    const ariaModal = document.querySelector<HTMLElement>('#aria-modal-section');
+    if (nativeModal === null || ariaModal === null) throw new Error('modal fixtures are unavailable');
+    nativeModal.hidden = false;
+    nativeModal.setAttribute('open', '');
+    ariaModal.hidden = false;
+  });
+  await page.evaluate(() => {
+    for (const id of ['native-modal', 'aria-modal-section']) {
+      const modal = document.querySelector<HTMLElement>(`#${id}`);
+      if (modal === null) throw new Error(`${id} is unavailable`);
+      modal.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    }
+  });
   expect(await page.evaluate(() => window.__rustyApplicationGameplayInputCount)).toBe(1);
 
   const initialBackingSize = await page.locator('canvas').evaluate((element) => {
@@ -1323,6 +1344,62 @@ test('public application-host input ingress observes bounded physical facts and 
     return host?.input?.drain();
   });
   expect(disposalInput).toMatchObject([{ fact: { kind: 'clear', reason: 'dispose' } }]);
+});
+
+test('public application-host UI projection is read-only in the mounted DOM lane and rebinds cleanly', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  const result = await page.evaluate(() => {
+    const host = window.__rustyApplicationHost;
+    const projection = host?.uiProjection;
+    if (host === undefined || projection === undefined) {
+      throw new Error('UI projection ingress is unavailable');
+    }
+    const events: Array<string | null> = [];
+    const unsubscribe = projection.subscribe((value) => events.push(value?.sequence ?? null));
+    const source = {
+      artifact: 'rusty.product.ui-projection' as const,
+      runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
+      sequence: '0',
+      stream: 'product.hud',
+      contract: 'product.hud.v1',
+      value: { alerts: 2, selected: 'target-1' },
+    };
+    const accepted = projection.ingest(source);
+    source.value.alerts = 99;
+    const current = projection.current();
+    let mutationError: string | null = null;
+    try {
+      if (current === null) throw new Error('projection snapshot is missing');
+      Object.defineProperty(current.value, 'alerts', { value: 100 });
+    } catch (error) {
+      mutationError = error instanceof Error ? error.name : String(error);
+    }
+    const rebound = projection.bindRuntime({
+      instanceId: '7', generation: '4', controlRevision: '12',
+    });
+    const afterRebind = projection.readout();
+    unsubscribe();
+    return {
+      accepted,
+      afterRebind,
+      context: window.__rustyApplicationUiContextShape,
+      current,
+      events,
+      mutationError,
+      rebound,
+    };
+  });
+  expect(result.accepted).toBe(true);
+  expect(result.current?.value).toEqual({ alerts: 2, selected: 'target-1' });
+  expect(result.mutationError).toBe('TypeError');
+  expect(result.events).toEqual([null, '0', null]);
+  expect(result.rebound).toBe(true);
+  expect(result.afterRebind).toMatchObject({ hasCurrent: false, sequence: null, subscriberCount: 1 });
+  expect(result.context).toEqual({
+    keys: ['intents', 'projection', 'ui'],
+    projectionKeys: ['current', 'subscribe'],
+    intentsKeys: ['claim'],
+  });
 });
 
 test('application-host input ingress treats pointer cancellation as a fail-closed loss', async ({ page }) => {

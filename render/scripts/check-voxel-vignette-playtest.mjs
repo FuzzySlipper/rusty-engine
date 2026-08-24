@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 
 const root = new URL('../voxel-vignette-playtest/', import.meta.url);
 const sources = ['main.ts', 'scene.ts', 'product.ts'];
-const forbidden = /(?:@rusty-engine\/(?:renderer-|render-(?:contracts|projection))|three(?:\/|['"])|private\/)/u;
+const forbidden = /(?:@rusty-engine\/(?:renderer-|render-(?:contracts|projection))|three(?:\/|['"])|private\/|requestAnimationFrame|cancelAnimationFrame|context\.(?:renderer|input)\b|(?:setCameraPose|renderOnce|RustyApplicationCameraPose|pointerLockElement)|(?:window|document)\.addEventListener\s*\(\s*['"](?:keydown|keyup|mousemove|mousedown|mouseup|wheel|blur|pointerlockchange|gamepadconnected|gamepaddisconnected)['"])/u;
 
 for (const file of sources) {
   const source = readFileSync(new URL(file, root), 'utf8');

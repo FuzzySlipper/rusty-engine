@@ -24,7 +24,10 @@ pub use assembly::{
     validate_declaration, DeclarationError, LinkedProductKernelSelection, ProductAssembly,
     ProductAssemblyError,
 };
-pub use context::{ProductKernelContextError, ProductOperationContext, ProductSystemContext};
+pub use context::{
+    ProductKernelContextError, ProductOperationContext, ProductProjectionContext,
+    ProductSystemContext,
+};
 pub use declaration::{
     ProductKernelCapabilityContract, ProductKernelCapabilityEntry, ProductKernelDeclaration,
     ProductKernelMigrationContract, ProductKernelMigrationDescriptor, ProductKernelOwner,

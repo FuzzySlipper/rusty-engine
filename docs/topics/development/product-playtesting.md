@@ -59,10 +59,13 @@ The bounded fixture is rooted at:
 - [`render/product-playtest/scenario.json`](../../../render/product-playtest/scenario.json).
 
 Its composition root imports only `@rusty-engine/application-host`. The
-fixture supplies one renderer-neutral product frame and ordinary downstream
-WASD/mouse semantics through the public renderer and interaction ports. It
-does not expose a global host object, test hook, canvas handle, WebGL/Three
-object, alternate control channel, application readback, or sibling checkout.
+fixture supplies one renderer-neutral product frame, one typed UI intent
+claim, a read-only Product UI projection subscription, and Engine-owned
+physical-input capture. It deliberately supplies no downstream animation
+frame, global gameplay listener, camera integration, or renderer mutation from
+mounted UI. It does not expose a global host object, test hook, canvas handle,
+WebGL/Three object, alternate control channel, application readback, or sibling
+checkout.
 
 The fixture proves that the generic playtest substrate can operate an
 Engine-hosted product. It does not certify a downstream game. The manifest and

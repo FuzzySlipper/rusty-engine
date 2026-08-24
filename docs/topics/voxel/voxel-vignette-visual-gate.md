@@ -22,7 +22,7 @@ used. It demonstrates ordinary voxel-authored GLB meshes only.
 | Palette-unlit ordinary GLB mesh | Visually passed; canonical neutral admission route | #6920 admits a bounded zero-clip GLB through the existing exact-byte GLB mesh lifecycle. It does not add a visual-voxel profile. |
 | Accepted run-003 VOX/reference JSON as runtime voxel object | Unavailable | The accepted `.vox`/`-voxel.json` inputs are not canonical Engine packed voxel-object data, and `application-host` has no resource route for them. Terrain has no paired `-voxel.json`. |
 | Styled conventional mesh comparator | Absent negative evidence | No accepted styled conventional comparator artifact was supplied; this gate does not fabricate one. |
-| Collision/walkability | Unavailable | No collision proxy was supplied or admitted. The controls are deliberately free-flight. |
+| Collision/walkability | Unavailable | No collision proxy was supplied or admitted. The current fixture exposes no UI-owned locomotion. |
 
 The focused successor (#6920) established the neutral static-GLB admission
 decision: zero clips are reported as `staticGlb` while retaining the public
@@ -80,7 +80,7 @@ shrine `x[-0.3984,0.3906], y[0,1.0078125], z[-0.28125,0.2891]`, tree
 `x[-4.4141,-3.5938], y[0,0.796875], z[4.5,5.5078]`, and door
 `x[3.6016,4.3984], y[0,1.0078125], z[5.8281,6.1797]`.
 
-The evidence run used Chromium `148.0.7778.215` on Arch Linux in its broker
+The historical evidence run used Chromium `148.0.7778.215` on Arch Linux in its broker
 virtual display, via Vite `8.1.5` / Node `v26.2.0`. Navigation returned HTTP
 200 with approximately 197 ms navigation, DOMContentLoaded, and load timing.
 One click captured the Engine canvas; a two-second `W` hold and pointer-look
@@ -99,10 +99,13 @@ numeric frame-time claim. The accepted composition has no repeated instance;
 public host readouts do not establish resource sharing, so no sharing claim is
 made.
 
-The product calls the public host `dispose()` once on `pagehide`; its UI owner
-cancels its animation frame and removes input listeners. The evidence browser,
-driver, and virtual display were then cleanly stopped. That establishes bounded
-host/UI teardown only, not a renderer-residency metric.
+At that recorded revision, the product called the public host `dispose()` once
+on `pagehide`; its UI owner cancelled its animation frame and removed input
+listeners. The evidence browser, driver, and virtual display were then cleanly
+stopped. The current fixture no longer owns either mechanism: Engine owns
+cadence and physical-input capture, while the UI owner only unsubscribes its
+read-only projection view. Both establish bounded host/UI teardown only, not a
+renderer-residency metric.
 
 ## Reproduction and provenance
 
@@ -130,8 +133,11 @@ its task worktree. The final check passed through the stable default above
 after the producer tool was promoted and its ignored local evidence copied to
 the stable Asset Pipeline checkout.
 
-The live comparison URL is
-`http://192.168.1.22:37100/voxel-vignette-playtest/`. Controls are click canvas,
-WASD free-flight, pointer-look, and Escape to release. The viewport HUD keeps
-the route, caveats, run identity, controls, ready state, and bounded failures
-inside the canvas presentation area.
+The recorded comparison URL was
+`http://192.168.1.22:37100/voxel-vignette-playtest/`. Its historical controls
+were click canvas, WASD free-flight, pointer-look, and Escape to release. The
+current fixture instead keeps the viewport static, routes physical input only
+through the Engine-owned lane, offers one typed visual-gate acknowledgement,
+and observes an optional read-only Product UI projection. The viewport HUD
+keeps the route, caveats, run identity, controls, ready state, and bounded
+failures inside the canvas presentation area.
