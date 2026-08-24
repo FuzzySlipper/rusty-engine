@@ -1,10 +1,14 @@
 use product_model::{
     admit_checked_product_composition, admit_product_composition, decode_compiled_composition,
-    decode_product_manifest, encode_compiled_composition, validate_compiled_composition,
-    validate_product_manifest, CapabilityBinding, CompiledCompositionCandidate, GameplayDefinition,
-    InputMapEntry, LifecycleMode, ProductManifestCandidate, ProductPath, RealtimeClock,
-    ReleaseChannel, ScheduleEntry, Timeline, TimelineStep, MAX_PRODUCT_MANIFEST_BYTES,
-    MAX_SCHEDULE_ACCESS_DECLARATIONS,
+    decode_product_manifest, encode_compiled_composition, engine_capability_descriptors,
+    link_admitted_product_composition, validate_compiled_composition,
+    validate_engine_capability_descriptors, validate_product_manifest, CapabilityAccess,
+    CapabilityAvailability, CapabilityBinding, CapabilityBudget, CapabilityKind,
+    CapabilityMetadata, CapabilityProvenance, CapabilityUses, CompiledCompositionCandidate,
+    EngineCapability, GameplayDefinition, InputMapEntry, LifecycleMode, LinkedCapabilityTarget,
+    ProductKernelCapabilityDescriptor, ProductManifestCandidate, ProductPath, RealtimeClock,
+    ReleaseChannel, ScheduleEntry, Timeline, TimelineStep, MAX_COMPILED_COMPOSITION_BYTES,
+    MAX_PRODUCT_KERNEL_CAPABILITIES, MAX_PRODUCT_MANIFEST_BYTES, MAX_SCHEDULE_ACCESS_DECLARATIONS,
 };
 use serde_json::{json, Value};
 
@@ -22,6 +26,70 @@ const CANONICAL_NUMBERS: &[u8] = include_bytes!(
 const CANONICAL_NUMBERS_EXPECTED: &[u8] = include_bytes!(
     "../../../../fixtures/product-model/canonical-numbers.expected.compiled-composition.json"
 );
+
+const KERNEL_CAPABILITIES: [ProductKernelCapabilityDescriptor; 3] = [
+    ProductKernelCapabilityDescriptor::new(
+        "camera-look",
+        CapabilityMetadata::new(
+            CapabilityKind::System,
+            CapabilityUses::INPUT_MAP,
+            CapabilityAvailability::Linkable,
+            CapabilityAccess::new(&[], &[]),
+            CapabilityBudget::new(1_024),
+            CapabilityProvenance::new(
+                "example.product.kernel",
+                "kernel/src/input.rs",
+                "camera_look",
+            ),
+        ),
+    ),
+    ProductKernelCapabilityDescriptor::new(
+        "apply-movement",
+        CapabilityMetadata::new(
+            CapabilityKind::System,
+            CapabilityUses::SCHEDULE,
+            CapabilityAvailability::Linkable,
+            CapabilityAccess::new(&["input.motion", "state.transform"], &["state.transform"]),
+            CapabilityBudget::new(1_024),
+            CapabilityProvenance::new(
+                "example.product.kernel",
+                "kernel/src/movement.rs",
+                "apply_movement",
+            ),
+        ),
+    ),
+    ProductKernelCapabilityDescriptor::new(
+        "start-timeline",
+        CapabilityMetadata::new(
+            CapabilityKind::Operation,
+            CapabilityUses::TIMELINE,
+            CapabilityAvailability::Linkable,
+            CapabilityAccess::new(&[], &[]),
+            CapabilityBudget::new(1_024),
+            CapabilityProvenance::new(
+                "example.product.kernel",
+                "kernel/src/timeline.rs",
+                "start_timeline",
+            ),
+        ),
+    ),
+];
+
+#[test]
+fn engine_binding_enum_and_descriptor_export_share_one_generated_closure() {
+    let capabilities = EngineCapability::all();
+    let descriptors = engine_capability_descriptors();
+
+    assert_eq!(capabilities.len(), descriptors.len());
+    for (capability, descriptor) in capabilities
+        .iter()
+        .copied()
+        .zip(descriptors.iter().copied())
+    {
+        assert_eq!(descriptor.capability(), capability);
+        assert_eq!(descriptor.target(), capability.target());
+    }
+}
 
 #[test]
 fn checked_minimum_product_layout_is_valid_and_fixed() {
@@ -452,7 +520,7 @@ fn product_composition_admission_links_checked_artifact_to_layout_immutably() {
     assert_eq!(from_checked.input_map()[0].capability().binding_index(), 0);
     assert_eq!(
         from_checked.input_map()[0].capability().target(),
-        "engine.camera-look"
+        "kernel.camera-look"
     );
     assert_eq!(from_checked.schedule()[0].id(), "movement");
     assert_eq!(from_checked.schedule()[0].capability().binding_index(), 1);
@@ -483,6 +551,226 @@ fn product_composition_admission_links_checked_artifact_to_layout_immutably() {
     assert_eq!(from_checked.capability_bindings()[0].id(), "camera.look");
     assert_eq!(from_checked.capability_bindings()[0].index(), 0);
     assert_eq!(from_checked.composition().canonical_bytes(), COMPOSITION);
+}
+
+#[test]
+fn closed_catalog_links_every_declared_binding_to_static_engine_or_kernel_data() {
+    validate_engine_capability_descriptors().unwrap();
+    let manifest = decode_product_manifest(MANIFEST).unwrap();
+    let admitted = admit_checked_product_composition(
+        &manifest,
+        decode_compiled_composition(COMPOSITION).unwrap(),
+    )
+    .unwrap();
+    let linked = link_admitted_product_composition(admitted, &KERNEL_CAPABILITIES).unwrap();
+
+    assert_eq!(linked.capability_bindings().len(), 4);
+    assert_eq!(linked.admitted().canonical_bytes(), COMPOSITION);
+    assert!(matches!(
+        linked.capability_bindings()[0].resolved_target(),
+        LinkedCapabilityTarget::ProductKernel(index) if index.index() == 1
+    ));
+    assert!(matches!(
+        linked.capability_bindings()[1].resolved_target(),
+        LinkedCapabilityTarget::ProductKernel(index) if index.index() == 0
+    ));
+    assert!(matches!(
+        linked.capability_bindings()[2].resolved_target(),
+        LinkedCapabilityTarget::Engine(EngineCapability::EntityRenderProject)
+    ));
+    assert_eq!(
+        linked.capability_bindings()[2]
+            .metadata()
+            .provenance()
+            .logical_path(),
+        "EntityRenderProjector::project"
+    );
+    assert!(matches!(
+        linked.capability_bindings()[3].resolved_target(),
+        LinkedCapabilityTarget::ProductKernel(index) if index.index() == 2
+    ));
+
+    let reordered = [
+        KERNEL_CAPABILITIES[2],
+        KERNEL_CAPABILITIES[0],
+        KERNEL_CAPABILITIES[1],
+    ];
+    let re_admitted = admit_checked_product_composition(
+        &manifest,
+        decode_compiled_composition(COMPOSITION).unwrap(),
+    )
+    .unwrap();
+    let relinked = link_admitted_product_composition(re_admitted, &reordered).unwrap();
+    assert_eq!(
+        linked
+            .capability_bindings()
+            .iter()
+            .map(|binding| binding.resolved_target())
+            .collect::<Vec<_>>(),
+        relinked
+            .capability_bindings()
+            .iter()
+            .map(|binding| binding.resolved_target())
+            .collect::<Vec<_>>(),
+        "Kernel linkage ordinals are stable authored identities, not declaration positions",
+    );
+}
+
+#[test]
+fn closed_catalog_rejects_unknown_unavailable_incompatible_and_duplicate_bindings_with_paths() {
+    let manifest = decode_product_manifest(MANIFEST).unwrap();
+
+    let mut unknown = decode_compiled_composition(COMPOSITION)
+        .unwrap()
+        .candidate()
+        .clone();
+    unknown.capability_bindings.push(CapabilityBinding {
+        id: "stale".into(),
+        target: "kernel.stale-capability".into(),
+    });
+    let error = link_admitted_product_composition(
+        admit_product_composition(&manifest, unknown).unwrap(),
+        &KERNEL_CAPABILITIES,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.diagnostic().code(),
+        "RUNTIME_CAPABILITY_UNKNOWN_KERNEL_TARGET"
+    );
+    assert_eq!(error.diagnostic().source(), "compiled-composition.json");
+    assert_eq!(error.diagnostic().path(), "capabilityBindings[4].target");
+
+    let unavailable = [
+        KERNEL_CAPABILITIES[0],
+        KERNEL_CAPABILITIES[1],
+        ProductKernelCapabilityDescriptor::new(
+            "start-timeline",
+            CapabilityMetadata::new(
+                CapabilityKind::Operation,
+                CapabilityUses::TIMELINE,
+                CapabilityAvailability::Unavailable {
+                    reason: "the generated Product Assembly did not select the timeline operation",
+                },
+                CapabilityAccess::new(&[], &[]),
+                CapabilityBudget::new(1_024),
+                KERNEL_CAPABILITIES[2].metadata().provenance(),
+            ),
+        ),
+    ];
+    let error = link_fixture(&manifest, &unavailable).unwrap_err();
+    assert_eq!(error.diagnostic().code(), "RUNTIME_CAPABILITY_UNAVAILABLE");
+    assert_eq!(error.diagnostic().path(), "capabilityBindings[3].target");
+
+    let incompatible = [
+        ProductKernelCapabilityDescriptor::new(
+            "camera-look",
+            CapabilityMetadata::new(
+                CapabilityKind::System,
+                CapabilityUses::SCHEDULE,
+                CapabilityAvailability::Linkable,
+                CapabilityAccess::new(&[], &[]),
+                CapabilityBudget::new(1_024),
+                KERNEL_CAPABILITIES[0].metadata().provenance(),
+            ),
+        ),
+        KERNEL_CAPABILITIES[1],
+        KERNEL_CAPABILITIES[2],
+    ];
+    let error = link_fixture(&manifest, &incompatible).unwrap_err();
+    assert_eq!(
+        error.diagnostic().code(),
+        "RUNTIME_CAPABILITY_INCOMPATIBLE_USE"
+    );
+    assert_eq!(error.diagnostic().path(), "inputMap[0].capability");
+
+    let mut duplicate = decode_compiled_composition(COMPOSITION)
+        .unwrap()
+        .candidate()
+        .clone();
+    duplicate.capability_bindings.push(CapabilityBinding {
+        id: "projection-alias".into(),
+        target: "engine.render.entity-project".into(),
+    });
+    let error = link_admitted_product_composition(
+        admit_product_composition(&manifest, duplicate).unwrap(),
+        &KERNEL_CAPABILITIES,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.diagnostic().code(),
+        "RUNTIME_CAPABILITY_DUPLICATE_TARGET"
+    );
+    assert_eq!(error.diagnostic().path(), "capabilityBindings[4].target");
+}
+
+#[test]
+fn closed_catalog_rejects_schedule_contract_and_kernel_descriptor_bounds() {
+    let manifest = decode_product_manifest(MANIFEST).unwrap();
+    let mut mismatched = decode_compiled_composition(COMPOSITION)
+        .unwrap()
+        .candidate()
+        .clone();
+    mismatched.schedule[0].reads = vec!["state.transform".into()];
+    let error = link_admitted_product_composition(
+        admit_product_composition(&manifest, mismatched).unwrap(),
+        &KERNEL_CAPABILITIES,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.diagnostic().code(),
+        "RUNTIME_CAPABILITY_ACCESS_MISMATCH"
+    );
+    assert_eq!(error.diagnostic().path(), "schedule[0].reads");
+
+    let oversized = vec![KERNEL_CAPABILITIES[0]; MAX_PRODUCT_KERNEL_CAPABILITIES + 1];
+    let error = link_fixture(&manifest, &oversized).unwrap_err();
+    assert_eq!(
+        error.diagnostic().code(),
+        "RUNTIME_CAPABILITY_KERNEL_DESCRIPTOR_COUNT"
+    );
+    assert_eq!(error.diagnostic().source(), "product-kernel-capabilities");
+
+    let duplicate = [KERNEL_CAPABILITIES[0], KERNEL_CAPABILITIES[0]];
+    let error = link_fixture(&manifest, &duplicate).unwrap_err();
+    assert_eq!(
+        error.diagnostic().code(),
+        "RUNTIME_CAPABILITY_DUPLICATE_KERNEL_DESCRIPTOR"
+    );
+
+    let over_budget = [
+        ProductKernelCapabilityDescriptor::new(
+            "camera-look",
+            CapabilityMetadata::new(
+                CapabilityKind::System,
+                CapabilityUses::INPUT_MAP,
+                CapabilityAvailability::Linkable,
+                CapabilityAccess::new(&[], &[]),
+                CapabilityBudget::new(MAX_COMPILED_COMPOSITION_BYTES + 1),
+                KERNEL_CAPABILITIES[0].metadata().provenance(),
+            ),
+        ),
+        KERNEL_CAPABILITIES[1],
+        KERNEL_CAPABILITIES[2],
+    ];
+    let error = link_fixture(&manifest, &over_budget).unwrap_err();
+    assert_eq!(
+        error.diagnostic().code(),
+        "RUNTIME_CAPABILITY_PAYLOAD_BUDGET_BOUNDS"
+    );
+}
+
+fn link_fixture(
+    manifest: &product_model::ProductManifest,
+    kernel_capabilities: &[ProductKernelCapabilityDescriptor],
+) -> Result<product_model::LinkedProductComposition, product_model::ProductModelError> {
+    link_admitted_product_composition(
+        admit_checked_product_composition(
+            manifest,
+            decode_compiled_composition(COMPOSITION).unwrap(),
+        )
+        .unwrap(),
+        kernel_capabilities,
+    )
 }
 
 #[test]

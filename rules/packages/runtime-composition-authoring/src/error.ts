@@ -4,6 +4,7 @@ export type RuntimeCompositionAuthoringErrorCode =
   | 'invalid-field-type'
   | 'invalid-identity'
   | 'invalid-capability-target'
+  | 'unknown-engine-capability'
   | 'unknown-capability'
   | 'unknown-definition'
   | 'duplicate-entry'

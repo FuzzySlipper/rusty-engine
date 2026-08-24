@@ -28,6 +28,7 @@ export {
   MAX_SCHEDULE_RESOURCE_DECLARATIONS,
 } from './author.js';
 export { RuntimeCompositionAuthoringError, type RuntimeCompositionAuthoringErrorCode } from './error.js';
+export type { EngineCapabilityName, EngineCapabilityTarget } from './generated.js';
 export type {
   CapabilityBinding,
   CompiledComposition,

@@ -7,11 +7,13 @@ import {
   writeCanonicalJson,
 } from './json.js';
 import {
+  PRODUCT_MODEL_CAPABILITY_CATALOG,
   PRODUCT_MODEL_CAPABILITY_TARGETS,
   PRODUCT_MODEL_FIELDS,
   PRODUCT_MODEL_IDENTITY,
   PRODUCT_MODEL_LIMITS,
 } from './generated.js';
+import type { EngineCapabilityName } from './generated.js';
 import type {
   CapabilityBinding,
   CompiledComposition,
@@ -89,7 +91,11 @@ export function admitCompiledComposition(value: unknown): CompiledComposition {
 }
 
 /** Creates an engine-owned capability reference without inventing a runtime registry. */
-export function engineCapability(id: string, target: string): CapabilityBinding {
+export function engineCapability(id: string, target: EngineCapabilityName): CapabilityBinding {
+  const fullTarget = `engine.${target}`;
+  if (!PRODUCT_MODEL_CAPABILITY_CATALOG.engine.some((descriptor) => descriptor.target === fullTarget)) {
+    fail('unknown-engine-capability', '$.target', `Engine capability ${fullTarget} is not in the generated closed catalog`);
+  }
   return capability(id, `engine.${identity(target, '$.target')}`);
 }
 

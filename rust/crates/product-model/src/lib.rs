@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod admission;
+mod capability_catalog;
 mod composition;
 mod contract;
 mod diagnostic;
@@ -18,6 +19,14 @@ pub use admission::{
     AdmittedCapabilityReference, AdmittedDefinitionReference, AdmittedGameplayDefinition,
     AdmittedInputMapEntry, AdmittedProductComposition, AdmittedScheduleFragment, AdmittedTimeline,
     AdmittedTimelineStep,
+};
+pub use capability_catalog::{
+    engine_capability_descriptors, link_admitted_product_composition,
+    validate_engine_capability_descriptors, CapabilityAccess, CapabilityAvailability,
+    CapabilityBudget, CapabilityKind, CapabilityMetadata, CapabilityProvenance, CapabilityUse,
+    CapabilityUses, EngineCapability, EngineCapabilityDescriptor, LinkedCapabilityBinding,
+    LinkedCapabilityTarget, LinkedProductComposition, ProductKernelCapabilityDescriptor,
+    ProductKernelCapabilityIndex, MAX_CAPABILITY_PROVENANCE_BYTES, MAX_PRODUCT_KERNEL_CAPABILITIES,
 };
 pub use composition::{
     decode_compiled_composition, encode_compiled_composition, validate_compiled_composition,

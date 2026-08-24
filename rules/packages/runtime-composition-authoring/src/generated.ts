@@ -8,6 +8,43 @@ export const PRODUCT_MODEL_CAPABILITY_TARGETS = {
   ],
   "separator": "."
 } as const;
+export const PRODUCT_MODEL_CAPABILITY_CATALOG = {
+  "engine": [
+    {
+      "access": {
+        "reads": [
+          "entity-state.projection"
+        ],
+        "writes": [
+          "render-frame.diff"
+        ]
+      },
+      "availability": "linkable",
+      "budget": {
+        "maximumCompactJsonPayloadBytes": 1024
+      },
+      "kind": "projection",
+      "provenance": {
+        "logicalPath": "EntityRenderProjector::project",
+        "owner": "rusty-engine.render-projection",
+        "source": "rust/crates/render-projection/src/entity.rs"
+      },
+      "target": "engine.render.entity-project",
+      "uses": [
+        "schedule"
+      ]
+    }
+  ],
+  "kinds": [
+    "system",
+    "operation",
+    "query",
+    "projection",
+    "migration"
+  ]
+} as const;
+export type EngineCapabilityTarget = typeof PRODUCT_MODEL_CAPABILITY_CATALOG.engine[number]['target'];
+export type EngineCapabilityName = EngineCapabilityTarget extends `engine.${infer Name}` ? Name : never;
 export const PRODUCT_MODEL_FIELDS = {
   "capabilityBinding": [
     "id",

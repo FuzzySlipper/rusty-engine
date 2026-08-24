@@ -41,7 +41,7 @@ test('typed Runtime Composition authoring emits the exact Rust-owned current fix
   assert.ok(Object.isFrozen(artifact.composition));
   assert.ok(Object.isFrozen(artifact.composition.schedule));
   assert.equal(artifact.composition.schedule[0]?.reads[0], 'input.motion');
-  assert.equal(artifact.composition.schedule[1]?.writes.length, 0);
+  assert.deepEqual(artifact.composition.schedule[1]?.writes, ['render-frame.diff']);
 });
 
 test('authoring materializes only detached plain data', () => {
@@ -167,6 +167,17 @@ test('capability targets split only at the Rust-owned namespace separator', () =
   }
 });
 
+test('engine capability helper accepts only the generated closed Engine names', () => {
+  assert.equal(
+    engineCapability('projection', 'render.entity-project').target,
+    'engine.render.entity-project',
+  );
+  expectError(
+    () => engineCapability('stale', 'render.stale-project' as never),
+    'unknown-engine-capability',
+  );
+});
+
 test('append and prepend have distinct ordered semantics while extend rejects accidental replacement', () => {
   const base = minimumArtifact().composition;
   const additions = fragment({
@@ -202,9 +213,9 @@ function minimumDraft() {
   return {
     product: 'example.product',
     capabilities: [
-      engineCapability('camera.look', 'camera-look'),
+      kernelCapability('camera.look', 'camera-look'),
       kernelCapability('movement.apply', 'apply-movement'),
-      engineCapability('projection.refresh', 'refresh-projection'),
+      engineCapability('projection.refresh', 'render.entity-project'),
       kernelCapability('timeline.start', 'start-timeline'),
     ],
     inputMap: [
@@ -217,7 +228,7 @@ function minimumDraft() {
       }]).schedule,
       ...phase('projection', [{
         id: 'render-projection', capability: 'projection.refresh',
-        reads: ['state.transform'], writes: [], payload: null,
+        reads: ['entity-state.projection'], writes: ['render-frame.diff'], payload: null,
       }]).schedule,
     ],
     gameplayDefinitions: [

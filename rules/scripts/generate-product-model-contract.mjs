@@ -25,10 +25,11 @@ if (mode === '--write') {
 }
 
 function validateDescriptor(value) {
-  exactKeys(value, ['artifact', 'capabilityTargets', 'failures', 'fields', 'identity', 'limits', 'numberEncoding', 'optionalFields', 'ordering'], '$');
+  exactKeys(value, ['artifact', 'capabilityCatalog', 'capabilityTargets', 'failures', 'fields', 'identity', 'limits', 'numberEncoding', 'optionalFields', 'ordering'], '$');
   if (value.artifact !== 'compiled-composition') throw new Error('unexpected product-model descriptor artifact');
   exactKeys(value.capabilityTargets, ['namespaces', 'separator'], '$.capabilityTargets');
   if (!Array.isArray(value.capabilityTargets.namespaces) || value.capabilityTargets.namespaces.join(',') !== 'engine,kernel' || value.capabilityTargets.separator !== '.') throw new Error('unexpected capability target contract');
+  validateCapabilityCatalog(value.capabilityCatalog);
   exactKeys(value.fields, ['capabilityBinding', 'compiledComposition', 'gameplayDefinition', 'inputMap', 'schedule', 'timeline', 'timelineStep'], '$.fields');
   const fields = value.fields;
   assertArray(fields.compiledComposition, ['product', 'inputMap', 'schedule', 'gameplayDefinitions', 'timelines', 'capabilityBindings'], '$.fields.compiledComposition');
@@ -52,6 +53,29 @@ function validateDescriptor(value) {
   if (JSON.stringify(value).includes('version')) throw new Error('Product Model descriptor must not introduce version fields');
 }
 
+function validateCapabilityCatalog(value) {
+  exactKeys(value, ['engine', 'kinds'], '$.capabilityCatalog');
+  assertArray(value.kinds, ['system', 'operation', 'query', 'projection', 'migration'], '$.capabilityCatalog.kinds');
+  if (!Array.isArray(value.engine)) throw new Error('$.capabilityCatalog.engine must be an array');
+  const targets = value.engine.map((entry, index) => {
+    const path = `$.capabilityCatalog.engine[${String(index)}]`;
+    exactKeys(entry, ['access', 'availability', 'budget', 'kind', 'provenance', 'target', 'uses'], path);
+    if (typeof entry.target !== 'string' || !entry.target.startsWith('engine.')) throw new Error(`${path}.target must be an Engine target`);
+    if (!value.kinds.includes(entry.kind)) throw new Error(`${path}.kind is not a closed capability kind`);
+    if (entry.availability !== 'linkable' && entry.availability !== 'unavailable') throw new Error(`${path}.availability is invalid`);
+    if (!Array.isArray(entry.uses) || entry.uses.some((use) => !['input-map', 'schedule', 'timeline'].includes(use))) throw new Error(`${path}.uses is invalid`);
+    exactKeys(entry.access, ['reads', 'writes'], `${path}.access`);
+    if (!Array.isArray(entry.access.reads) || !Array.isArray(entry.access.writes) || [...entry.access.reads, ...entry.access.writes].some((item) => typeof item !== 'string')) throw new Error(`${path}.access must contain string declarations`);
+    exactKeys(entry.budget, ['maximumCompactJsonPayloadBytes'], `${path}.budget`);
+    if (!Number.isSafeInteger(entry.budget.maximumCompactJsonPayloadBytes) || entry.budget.maximumCompactJsonPayloadBytes <= 0) throw new Error(`${path}.budget.maximumCompactJsonPayloadBytes is invalid`);
+    exactKeys(entry.provenance, ['logicalPath', 'owner', 'source'], `${path}.provenance`);
+    if (Object.values(entry.provenance).some((item) => typeof item !== 'string' || item.length === 0)) throw new Error(`${path}.provenance must be complete`);
+    return entry.target;
+  });
+  if (new Set(targets).size !== targets.length) throw new Error('$.capabilityCatalog.engine contains duplicate targets');
+  if (JSON.stringify(targets) !== JSON.stringify([...targets].sort())) throw new Error('$.capabilityCatalog.engine targets must be deterministic bytewise order');
+}
+
 function exactKeys(value, expected, path) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${path} must be an object`);
   const actual = Object.keys(value).sort();
@@ -64,5 +88,5 @@ function assertArray(actual, expected, path) {
 }
 
 function render(value) {
-  return `// Generated from Rust product-model contract descriptor. Do not edit.\n\nexport const PRODUCT_MODEL_ARTIFACT = ${JSON.stringify(value.artifact)} as const;\nexport const PRODUCT_MODEL_CAPABILITY_TARGETS = ${JSON.stringify(value.capabilityTargets, null, 2)} as const;\nexport const PRODUCT_MODEL_FIELDS = ${JSON.stringify(value.fields, null, 2)} as const;\nexport const PRODUCT_MODEL_IDENTITY = ${JSON.stringify(value.identity, null, 2)} as const;\nexport const PRODUCT_MODEL_LIMITS = ${JSON.stringify(value.limits, null, 2)} as const;\nexport const PRODUCT_MODEL_NUMBER_ENCODING = ${JSON.stringify(value.numberEncoding, null, 2)} as const;\nexport const PRODUCT_MODEL_OPTIONAL_FIELDS = ${JSON.stringify(value.optionalFields, null, 2)} as const;\nexport const PRODUCT_MODEL_ORDERING = ${JSON.stringify(value.ordering, null, 2)} as const;\nexport const PRODUCT_MODEL_FAILURES = ${JSON.stringify(value.failures, null, 2)} as const;\n`;
+  return `// Generated from Rust product-model contract descriptor. Do not edit.\n\nexport const PRODUCT_MODEL_ARTIFACT = ${JSON.stringify(value.artifact)} as const;\nexport const PRODUCT_MODEL_CAPABILITY_TARGETS = ${JSON.stringify(value.capabilityTargets, null, 2)} as const;\nexport const PRODUCT_MODEL_CAPABILITY_CATALOG = ${JSON.stringify(value.capabilityCatalog, null, 2)} as const;\nexport type EngineCapabilityTarget = typeof PRODUCT_MODEL_CAPABILITY_CATALOG.engine[number]['target'];\nexport type EngineCapabilityName = EngineCapabilityTarget extends \`engine.\${infer Name}\` ? Name : never;\nexport const PRODUCT_MODEL_FIELDS = ${JSON.stringify(value.fields, null, 2)} as const;\nexport const PRODUCT_MODEL_IDENTITY = ${JSON.stringify(value.identity, null, 2)} as const;\nexport const PRODUCT_MODEL_LIMITS = ${JSON.stringify(value.limits, null, 2)} as const;\nexport const PRODUCT_MODEL_NUMBER_ENCODING = ${JSON.stringify(value.numberEncoding, null, 2)} as const;\nexport const PRODUCT_MODEL_OPTIONAL_FIELDS = ${JSON.stringify(value.optionalFields, null, 2)} as const;\nexport const PRODUCT_MODEL_ORDERING = ${JSON.stringify(value.ordering, null, 2)} as const;\nexport const PRODUCT_MODEL_FAILURES = ${JSON.stringify(value.failures, null, 2)} as const;\n`;
 }

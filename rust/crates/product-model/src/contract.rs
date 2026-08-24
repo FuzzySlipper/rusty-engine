@@ -1,11 +1,11 @@
 use serde_json::{json, Value};
 
 use crate::{
-    MAX_CAPABILITY_BINDINGS, MAX_COMPILED_COMPOSITION_BYTES, MAX_GAMEPLAY_DEFINITIONS,
-    MAX_IDENTITY_BYTES, MAX_INPUT_MAP_ENTRIES, MAX_OPAQUE_JSON_ARRAY_ENTRIES,
-    MAX_OPAQUE_JSON_DEPTH, MAX_OPAQUE_JSON_NODES, MAX_OPAQUE_JSON_OBJECT_ENTRIES,
-    MAX_OPAQUE_JSON_STRING_BYTES, MAX_SAFE_JSON_INTEGER, MAX_SCHEDULE_ACCESS_DECLARATIONS,
-    MAX_SCHEDULE_ENTRIES, MAX_TIMELINES, MAX_TIMELINE_STEPS,
+    engine_capability_descriptors, MAX_CAPABILITY_BINDINGS, MAX_COMPILED_COMPOSITION_BYTES,
+    MAX_GAMEPLAY_DEFINITIONS, MAX_IDENTITY_BYTES, MAX_INPUT_MAP_ENTRIES,
+    MAX_OPAQUE_JSON_ARRAY_ENTRIES, MAX_OPAQUE_JSON_DEPTH, MAX_OPAQUE_JSON_NODES,
+    MAX_OPAQUE_JSON_OBJECT_ENTRIES, MAX_OPAQUE_JSON_STRING_BYTES, MAX_SAFE_JSON_INTEGER,
+    MAX_SCHEDULE_ACCESS_DECLARATIONS, MAX_SCHEDULE_ENTRIES, MAX_TIMELINES, MAX_TIMELINE_STEPS,
 };
 
 /// Encodes the current Rust-owned Compiled Composition descriptor consumed by
@@ -63,6 +63,7 @@ fn product_model_contract_descriptor() -> Value {
             "namespaces": ["engine", "kernel"],
             "separator": "."
         },
+        "capabilityCatalog": capability_catalog_descriptor(),
         "ordering": {
             "inputMap": "authored",
             "schedule": "authored",
@@ -80,6 +81,48 @@ fn product_model_contract_descriptor() -> Value {
             "unknown-capability", "unknown-definition", "invalid-capability-target",
             "invalid-identity", "access-declaration-limit", "opaque-json-limit"
         ]
+    })
+}
+
+fn capability_catalog_descriptor() -> Value {
+    crate::validate_engine_capability_descriptors()
+        .expect("the static Engine capability catalog is valid");
+    let mut engine = engine_capability_descriptors()
+        .iter()
+        .map(|descriptor| {
+            let metadata = descriptor.metadata();
+            let uses = [
+                (crate::CapabilityUse::InputMap, "input-map"),
+                (crate::CapabilityUse::Schedule, "schedule"),
+                (crate::CapabilityUse::Timeline, "timeline"),
+            ]
+            .into_iter()
+            .filter_map(|(usage, name)| metadata.uses().contains(usage).then_some(name))
+            .collect::<Vec<_>>();
+            json!({
+                "target": descriptor.target(),
+                "kind": metadata.kind().as_str(),
+                "uses": uses,
+                "availability": metadata.availability().as_str(),
+                "access": {
+                    "reads": metadata.access().reads(),
+                    "writes": metadata.access().writes()
+                },
+                "budget": {
+                    "maximumCompactJsonPayloadBytes": metadata.budget().maximum_compact_json_payload_bytes()
+                },
+                "provenance": {
+                    "owner": metadata.provenance().owner(),
+                    "source": metadata.provenance().source(),
+                    "logicalPath": metadata.provenance().logical_path()
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    engine.sort_by(|left, right| left["target"].as_str().cmp(&right["target"].as_str()));
+    json!({
+        "kinds": ["system", "operation", "query", "projection", "migration"],
+        "engine": engine
     })
 }
 
@@ -117,6 +160,14 @@ mod tests {
                 "writes",
                 "payload"
             ])
+        );
+        assert_eq!(
+            descriptor["capabilityCatalog"]["engine"][0]["target"],
+            "engine.render.entity-project"
+        );
+        assert_eq!(
+            descriptor["capabilityCatalog"]["engine"][0]["provenance"]["logicalPath"],
+            "EntityRenderProjector::project"
         );
     }
 }
