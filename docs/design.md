@@ -1303,9 +1303,14 @@ Rust player. Conversion-candidate playback remains in the Voxel conversion workf
 capability does not make Renderer Appearance a component registry and does not define a generic
 downstream component AST or editor-operation tunnel.
 
-Static and animated mesh appearance follows the same authority path. The downstream Rust adapter
-validates the selected asset and animation clip, then projects typed resource descriptors,
-`defineAnimatedMesh`, instance creation, and named playback. Studio's trusted Node host only resolves
+Static and animated mesh appearance follows the same authority path. A bounded single-file GLB with
+zero clips is a static GLB; one with named clips is animated. `asset-import` admits both through the
+same exact-byte GLB artifact, `AnimatedMeshAsset` descriptor, catalog identity, and public
+`defineAnimatedMesh`/instance lifecycle. The import receipt and plan report the static-versus-animated
+classification, while the retained wire remains compatible: a static GLB has an empty clip list and
+no default clip. The downstream Rust adapter validates the selected asset and, only when one exists,
+an animation clip, then projects typed resource descriptors, `defineAnimatedMesh`, instance creation,
+and named playback. Studio's trusted Node host only resolves
 bounded project-relative mesh sources and packed mesh-resource bytes, rejects symbolic links, and verifies
 the admitted SHA-256 before the shared renderer consumes them; the browser has no filesystem
 authority. A textual static-mesh source may omit texture coordinates or provide exactly one finite
@@ -1314,7 +1319,8 @@ the renderer-neutral payload; deterministic packing uses V2 for UV-bearing meshe
 optional normalized `f32x4` color stream is present, while meshes with neither retain the V1 shape.
 The Three backend binds this ordinary geometry UV stream to
 the exact resolved material texture without acquiring asset authority or entering the voxel-surface
-shader specialization. Animated-mesh import enters through `asset-import`. A GLB remains an exact single-file
+shader specialization. GLB import enters through `asset-import`; accepted `KHR_materials_unlit` remains
+GLB-owned material semantics, not a voxel or universal material policy. A GLB remains an exact single-file
 source. A JSON `.gltf` enters as an explicit immutable closure containing its root plus only the
 bounded project-relative or data-URI buffers and PNG/JPEG images named by that root. The library
 rejects network, absolute, traversal, ambiguous, missing, extra, unsupported, and over-quota
@@ -1331,6 +1337,10 @@ each instance its own hierarchy, skeleton, mixer, actions, and playback state. D
 instance retains the admitted definition for later recreation; definition replacement or renderer
 disposal releases its geometry and materials exactly once without taking ownership of the caller's
 resolved GLB source objects.
+
+This mesh admission adds neither a profile sidecar nor LOD selection, clustering/residency, collision
+generation, voxel-object/cell data, visual-cell units, or renderer shading policy. Those mechanisms need
+their own accepted inputs and owner; zero clips alone establish only an ordinary static GLB resource.
 
 An animated mesh may also reference a bounded list of separately hash-addressed GLB clip packs.
 Each pack is an immutable resource definition, so its decoded clips are shared while every target

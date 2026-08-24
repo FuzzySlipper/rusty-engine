@@ -19,7 +19,7 @@ mod source;
 
 pub use animated_glb::{
     import_animated_glb_asset, AnimatedGlbImportOutcome, AnimatedGlbImportReceipt,
-    ImportedAnimatedGlb, MAX_ANIMATED_GLB_EMBEDDED_IMAGE_BYTES,
+    GlbAnimationKind, ImportedAnimatedGlb, MAX_ANIMATED_GLB_EMBEDDED_IMAGE_BYTES,
     MAX_ANIMATED_GLB_EMBEDDED_IMAGE_TOTAL_BYTES, MAX_ANIMATED_GLB_IMAGES, MAX_ANIMATED_GLB_JOINTS,
     MAX_ANIMATED_GLB_MATERIALS, MAX_ANIMATED_GLB_TEXTURES, SUPPORTED_ANIMATED_GLB_VERSION,
 };

@@ -7,9 +7,10 @@ use gltf::image::Source as ImageSource;
 use render_model::{
     AnimatedMeshAsset, AnimatedMeshRuntimeFormat, AnimationClipDescriptor, MeshBoundsDescriptor,
 };
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use voxel_convert::{
-    import_animated_mesh_source, MeshSourceFormat, MeshSourceImportRequest,
+    import_animated_mesh_source, import_mesh_source, MeshSourceFormat, MeshSourceImportRequest,
     MAX_CONVERSION_SOURCE_BYTES,
 };
 
@@ -23,8 +24,29 @@ pub const MAX_ANIMATED_GLB_JOINTS: usize = 4_096;
 pub const MAX_ANIMATED_GLB_EMBEDDED_IMAGE_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_ANIMATED_GLB_EMBEDDED_IMAGE_TOTAL_BYTES: usize = 32 * 1024 * 1024;
 
+/// The admitted GLB's embedded animation classification. Both variants retain
+/// the existing GLB mesh resource and `AnimatedMeshAsset` wire lifecycle; this
+/// readout avoids describing a zero-clip resource as animated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GlbAnimationKind {
+    Static,
+    Animated,
+}
+
+impl GlbAnimationKind {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Static => "staticGlb",
+            Self::Animated => "animatedGlb",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnimatedGlbImportReceipt {
+    /// `Static` means the admitted GLB has zero embedded clips.
+    pub animation_kind: GlbAnimationKind,
     pub source_hash: String,
     pub source_byte_count: u64,
     pub node_count: u32,
@@ -94,7 +116,7 @@ pub fn import_animated_glb_asset(
     };
     let source_hash_hex = sha256_hex(source);
     let source_hash = format!("sha256:{source_hash_hex}");
-    let request = MeshSourceImportRequest {
+    let animated_request = MeshSourceImportRequest {
         source_asset_id: asset_id.as_str().to_owned(),
         asset_version: 1,
         source_path: source_uri.value().to_owned(),
@@ -103,49 +125,94 @@ pub fn import_animated_glb_asset(
         expected_source_sha256: Some(source_hash.clone()),
         mesh_primitive: None,
     };
-    let imported = match import_animated_mesh_source(&request) {
-        Ok(imported) => imported,
-        Err(error) => {
-            diagnostics.extend(error.diagnostics().iter().map(|item| {
-                ImportDiagnostic::error(
-                    map_conversion_code(item.code),
-                    item.path.clone(),
-                    item.message.clone(),
-                    conversion_remedy(item.code),
-                )
-            }));
-            return failed(diagnostics);
-        }
-    };
-    if imported.model.clips.is_empty() {
-        diagnostics.push(ImportDiagnostic::error(
-            ImportCode::InvalidAnimation,
-            "source.animations",
-            "animated GLB source contains no named animation clips",
-            "export at least one uniquely named animation clip",
-        ));
-        return failed(diagnostics);
-    }
-    let bounds = match render_bounds(imported.source.receipt.metadata.source_bounds) {
+    let (animation_kind, source_bounds, clips, channel_count, keyframe_count) =
+        if parsed.document.animations().next().is_some() {
+            let imported = match import_animated_mesh_source(&animated_request) {
+                Ok(imported) => imported,
+                Err(error) => {
+                    diagnostics.extend(error.diagnostics().iter().map(|item| {
+                        ImportDiagnostic::error(
+                            map_conversion_code(item.code, &item.message),
+                            item.path.clone(),
+                            item.message.clone(),
+                            conversion_remedy(item.code),
+                        )
+                    }));
+                    return failed(diagnostics);
+                }
+            };
+            let clips = imported
+                .model
+                .clips
+                .iter()
+                .map(|clip| AnimationClipDescriptor {
+                    id: clip.name.clone(),
+                    name: Some(clip.name.clone()),
+                    duration_seconds: Some(
+                        clip.duration_microseconds as f32
+                            / voxel_convert::ANIMATION_TIMESTAMP_TICKS_PER_SECOND as f32,
+                    ),
+                })
+                .collect::<Vec<_>>();
+            let channel_count = imported
+                .model
+                .clips
+                .iter()
+                .map(|clip| clip.channels.len())
+                .sum::<usize>();
+            let keyframe_count = imported
+                .model
+                .clips
+                .iter()
+                .flat_map(|clip| &clip.channels)
+                .map(|channel| channel.timestamps_microseconds.len() as u64)
+                .sum::<u64>();
+            (
+                GlbAnimationKind::Animated,
+                imported.source.receipt.metadata.source_bounds,
+                clips,
+                channel_count,
+                keyframe_count,
+            )
+        } else {
+            // `voxel-convert` retains separate static and animated source parsers.
+            // This uses the existing bounded static scene parser only to validate
+            // and measure a zero-clip GLB; publication remains the same GLB mesh
+            // descriptor/resource lifecycle below.
+            let static_request = MeshSourceImportRequest {
+                source_asset_id: format!("mesh/{name}"),
+                ..animated_request
+            };
+            let imported = match import_mesh_source(&static_request) {
+                Ok(imported) => imported,
+                Err(error) => {
+                    diagnostics.extend(error.diagnostics().iter().map(|item| {
+                        ImportDiagnostic::error(
+                            map_conversion_code(item.code, &item.message),
+                            item.path.clone(),
+                            item.message.clone(),
+                            conversion_remedy(item.code),
+                        )
+                    }));
+                    return failed(diagnostics);
+                }
+            };
+            (
+                GlbAnimationKind::Static,
+                imported.receipt.metadata.source_bounds,
+                Vec::new(),
+                0,
+                0,
+            )
+        };
+    let bounds = match render_bounds(source_bounds) {
         Ok(bounds) => bounds,
         Err(diagnostic) => {
             diagnostics.push(diagnostic);
             return failed(diagnostics);
         }
     };
-    let clips = imported
-        .model
-        .clips
-        .iter()
-        .map(|clip| AnimationClipDescriptor {
-            id: clip.name.clone(),
-            name: Some(clip.name.clone()),
-            duration_seconds: Some(
-                clip.duration_microseconds as f32
-                    / voxel_convert::ANIMATION_TIMESTAMP_TICKS_PER_SECOND as f32,
-            ),
-        })
-        .collect::<Vec<_>>();
+    let clip_count = clips.len();
     let default_clip = clips
         .iter()
         .find(|clip| clip.id == "idle")
@@ -198,19 +265,6 @@ pub fn import_animated_glb_asset(
         .skins()
         .map(|skin| skin.joints().count())
         .sum::<usize>();
-    let channel_count = imported
-        .model
-        .clips
-        .iter()
-        .map(|clip| clip.channels.len())
-        .sum::<usize>();
-    let keyframe_count = imported
-        .model
-        .clips
-        .iter()
-        .flat_map(|clip| &clip.channels)
-        .map(|channel| channel.timestamps_microseconds.len() as u64)
-        .sum::<u64>();
     AnimatedGlbImportOutcome {
         assets: Some(ImportedAnimatedGlb {
             animated_mesh,
@@ -218,6 +272,7 @@ pub fn import_animated_glb_asset(
             runtime_resource_path,
             runtime_resource_bytes: source.to_vec(),
             receipt: AnimatedGlbImportReceipt {
+                animation_kind,
                 source_hash,
                 source_byte_count: source.len() as u64,
                 node_count: count_u32(parsed.document.nodes().count()),
@@ -228,7 +283,7 @@ pub fn import_animated_glb_asset(
                 image_count: count_u32(parsed.document.images().count()),
                 skin_count: count_u32(parsed.document.skins().count()),
                 joint_count: count_u32(joint_count),
-                clip_count: count_u32(imported.model.clips.len()),
+                clip_count: count_u32(clip_count),
                 channel_count: count_u32(channel_count),
                 keyframe_count,
             },
@@ -379,14 +434,6 @@ fn parse_and_preflight(source: &[u8], locus: &str) -> Result<gltf::Gltf, ImportD
             &format!(
                 "embedded image bytes {embedded_image_bytes} exceed {MAX_ANIMATED_GLB_EMBEDDED_IMAGE_TOTAL_BYTES}"
             ),
-        ));
-    }
-    if document.animations().next().is_none() {
-        return Err(ImportDiagnostic::error(
-            ImportCode::InvalidAnimation,
-            "source.animations",
-            "animated GLB source contains no animation clips",
-            "export at least one uniquely named animation clip",
         ));
     }
     Ok(parsed)
@@ -543,7 +590,7 @@ fn resource_limit(path: &str, message: &str) -> ImportDiagnostic {
     )
 }
 
-fn map_conversion_code(code: &str) -> ImportCode {
+fn map_conversion_code(code: &str, message: &str) -> ImportCode {
     match code {
         "conversion.resourceLimit" => ImportCode::ResourceLimit,
         "conversion.unsupportedFeature" | "conversion.unsupportedSource" => {
@@ -553,6 +600,7 @@ fn map_conversion_code(code: &str) -> ImportCode {
         | "conversion.invalidSkin"
         | "conversion.invalidMorphTarget"
         | "conversion.invalidDeformation" => ImportCode::InvalidAnimation,
+        "conversion.invalidGeometry" if message.contains("finite") => ImportCode::NonFiniteValue,
         "conversion.invalidSource" => ImportCode::InvalidContainer,
         _ => ImportCode::MalformedSource,
     }

@@ -51,10 +51,13 @@ imports, prefab resolution, and authored scene admission and editing.
   bounds, and proxy policies. The resulting `StaticMeshAsset` retains the exact
   validated payload for an explicit collision adapter; `asset-import` does not
   build or schedule live colliders.
-- `plan_animated_glb_import` emits exact retained GLB bytes, a validated
-  `AnimatedMeshAsset`, catalog entry, and provenance manifest. It consumes the
-  canonical bounded GLB scene/skin/clip parser without sampling or voxelizing
-  the source.
+- `plan_animated_glb_import` preserves its established API while admitting one
+  canonical mesh-GLB route: zero-clip static GLBs and named-clip animated
+  GLBs both emit exact retained bytes, a validated `AnimatedMeshAsset`, catalog
+  entry, and provenance manifest. Its receipt/plan names `staticGlb` versus
+  `animatedGlb`; the public retained lifecycle remains one GLB resource family
+  with an empty clip list for static input. It validates the bounded source
+  without sampling or voxelizing it.
 - `admit_gltf_source` accepts root JSON plus an immutable set of canonical
   resource identities and bytes. `gltf_relative_resource_uris` tells an
   explicit filesystem-owning adapter what to load; neither function performs

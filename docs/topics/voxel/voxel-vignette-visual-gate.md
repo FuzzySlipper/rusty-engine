@@ -19,16 +19,18 @@ used. It demonstrates ordinary voxel-authored GLB meshes only.
 
 | Candidate route | Disposition | Exact missing or temporary boundary |
 | --- | --- | --- |
-| Palette-unlit ordinary GLB mesh | Visually passed, temporary | Uses zero-clip animated-mesh admission; no canonical public static-GLB profile exists. |
+| Palette-unlit ordinary GLB mesh | Visually passed; canonical neutral admission route | #6920 admits a bounded zero-clip GLB through the existing exact-byte GLB mesh lifecycle. It does not add a visual-voxel profile. |
 | Accepted run-003 VOX/reference JSON as runtime voxel object | Unavailable | The accepted `.vox`/`-voxel.json` inputs are not canonical Engine packed voxel-object data, and `application-host` has no resource route for them. Terrain has no paired `-voxel.json`. |
 | Styled conventional mesh comparator | Absent negative evidence | No accepted styled conventional comparator artifact was supplied; this gate does not fabricate one. |
 | Collision/walkability | Unavailable | No collision proxy was supplied or admitted. The controls are deliberately free-flight. |
 
-The focused successor should be a neutral public static-GLB admission/profile
-decision (including the producer's `KHR_materials_unlit` presentation
-requirement), rather than extending this comparison product. Runtime voxel
-admission and a conventional comparator each need their own accepted inputs and
-owner-bound task.
+The focused successor (#6920) established the neutral static-GLB admission
+decision: zero clips are reported as `staticGlb` while retaining the public
+GLB mesh lifecycle, and accepted `KHR_materials_unlit` stays GLB-owned material
+semantics. It deliberately adds no profile sidecar, LOD selection, clustering,
+collision, voxel/cell data, visual-cell units, or renderer shading experiment.
+Runtime voxel admission and a conventional comparator each still need their own
+accepted inputs and owner-bound task.
 
 ## Exact inputs and staging
 

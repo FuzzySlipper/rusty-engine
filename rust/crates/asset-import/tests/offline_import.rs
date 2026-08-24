@@ -48,6 +48,11 @@ const ANIMATED_GLB: &[u8] = include_bytes!(concat!(
     "/../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
 ));
 
+const STATIC_UNLIT_GLB_BASE64: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../fixtures/render/assets/static-unlit-triangle.glb.base64"
+));
+
 const STATIC_RAMP: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../../fixtures/collision/static-ramp.mesh.json"
@@ -286,9 +291,57 @@ fn animated_glb_produces_deterministic_runtime_resource_descriptor_and_provenanc
     assert_eq!(imported.receipt.material_count, 1);
     assert_eq!(imported.receipt.texture_count, 1);
     assert_eq!(imported.receipt.image_count, 1);
+    assert_eq!(imported.receipt.animation_kind, GlbAnimationKind::Animated);
     assert_eq!(imported.receipt.clip_count, 3);
     assert_eq!(imported.receipt.channel_count, 56);
     assert_eq!(imported.receipt.keyframe_count, 1048);
+}
+
+#[test]
+fn zero_clip_unlit_glb_uses_the_existing_mesh_resource_lifecycle() {
+    let uri = SourceUri::RelativePath("content/environment/static-unlit-triangle.glb".to_owned());
+    let source = static_unlit_glb();
+    let first = plan_animated_glb_import(
+        &uri,
+        &source,
+        &ImportContext::default(),
+        ImportMode::DryRun,
+        None,
+        None,
+    );
+    let second = plan_animated_glb_import(
+        &uri,
+        &source,
+        &ImportContext::default(),
+        ImportMode::DryRun,
+        None,
+        None,
+    );
+    assert!(!first.has_errors, "{:?}", first.diagnostics);
+    assert_eq!(first.files, second.files);
+    assert_eq!(first.manifest, second.manifest);
+    assert!(first.report.contains("kind: staticGlb"));
+
+    let resource = artifact(&first, "static-unlit-triangle.glb");
+    assert_eq!(resource.bytes, source);
+    let descriptor: AnimatedMeshAsset =
+        serde_json::from_slice(&artifact(&first, "static-unlit-triangle.animated-mesh.json").bytes)
+            .unwrap();
+    descriptor.validate().unwrap();
+    assert_eq!(descriptor.asset, "mesh-animation/static-unlit-triangle");
+    assert!(descriptor.clips.is_empty());
+    assert_eq!(descriptor.default_clip, None);
+    assert!(descriptor.material_slots.is_empty());
+
+    let imported = import_animated_glb_asset(&uri, &source, &ImportContext::default())
+        .assets
+        .unwrap();
+    assert_eq!(imported.receipt.animation_kind, GlbAnimationKind::Static);
+    assert_eq!(imported.receipt.clip_count, 0);
+    assert_eq!(imported.receipt.channel_count, 0);
+    assert_eq!(imported.receipt.keyframe_count, 0);
+    assert_eq!(imported.receipt.material_count, 1);
+    assert_eq!(imported.receipt.primitive_count, 1);
 }
 
 #[test]
@@ -516,28 +569,7 @@ fn animated_glb_reimport_and_settings_are_closed_and_structural() {
 }
 
 #[test]
-fn animated_glb_rejects_static_external_and_over_quota_sources_without_artifacts() {
-    let static_uri = SourceUri::RelativePath("content/actors/static-triangle.glb".to_owned());
-    let static_glb = static_triangle_glb();
-    let static_plan = plan_animated_glb_import(
-        &static_uri,
-        &static_glb,
-        &ImportContext::default(),
-        ImportMode::DryRun,
-        None,
-        None,
-    );
-    assert!(static_plan.has_errors);
-    assert!(static_plan.files.is_empty());
-    assert!(
-        static_plan
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == ImportCode::InvalidAnimation),
-        "{:?}",
-        static_plan.diagnostics
-    );
-
+fn animated_glb_rejects_external_over_quota_and_non_finite_sources_without_artifacts() {
     let external = test_glb(
         r#"{"asset":{"version":"2.0"},"buffers":[{"byteLength":4}],"images":[{"uri":"actor.png"}]}"#,
         &[0; 4],
@@ -643,6 +675,31 @@ fn animated_glb_rejects_static_external_and_over_quota_sources_without_artifacts
         .diagnostics
         .iter()
         .any(|diagnostic| diagnostic.code == ImportCode::UnsupportedFeature));
+
+    let mut non_finite = static_unlit_glb();
+    let bin = non_finite
+        .windows(4)
+        .rposition(|window| window == b"BIN\0")
+        .expect("fixture contains a BIN chunk");
+    non_finite[bin + 4..bin + 8].copy_from_slice(&f32::INFINITY.to_le_bytes());
+    let non_finite_plan = plan_animated_glb_import(
+        &SourceUri::RelativePath("content/actors/non-finite-static.glb".to_owned()),
+        &non_finite,
+        &ImportContext::default(),
+        ImportMode::DryRun,
+        None,
+        None,
+    );
+    assert!(non_finite_plan.has_errors);
+    assert!(non_finite_plan.files.is_empty());
+    assert!(
+        non_finite_plan
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == ImportCode::NonFiniteValue),
+        "{:?}",
+        non_finite_plan.diagnostics
+    );
 
     let mut duplicate_clip = ANIMATED_GLB.to_vec();
     let jump = duplicate_clip
@@ -1166,6 +1223,10 @@ fn static_triangle_glb() -> Vec<u8> {
         }"#,
         &bin,
     )
+}
+
+fn static_unlit_glb() -> Vec<u8> {
+    BASE64.decode(STATIC_UNLIT_GLB_BASE64.trim()).unwrap()
 }
 
 fn external_gltf(glb: &[u8], buffer_uri: &str, image_uri: Option<&str>) -> GltfSourceClosure {

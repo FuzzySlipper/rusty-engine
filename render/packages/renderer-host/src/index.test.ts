@@ -29,6 +29,10 @@ const ANIMATED_FIXTURE = resolve(
   import.meta.dirname,
   '../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb',
 );
+const STATIC_UNLIT_FIXTURE = resolve(
+  import.meta.dirname,
+  '../../../../fixtures/render/assets/static-unlit-triangle.glb.base64',
+);
 
 const ANIMATED_MANIFEST: RendererAnimatedMeshResourceManifest = {
   kind: 'rusty_renderer_animated_mesh_resources.v1',
@@ -100,6 +104,11 @@ function animationIntentFrame(clip = 'run'): RenderFrameDiff {
 
 function fixtureResolver(): Promise<ArrayBuffer> {
   const bytes = readFileSync(ANIMATED_FIXTURE);
+  return Promise.resolve(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+}
+
+function staticUnlitFixtureResolver(): Promise<ArrayBuffer> {
+  const bytes = Buffer.from(readFileSync(STATIC_UNLIT_FIXTURE, 'utf8').trim(), 'base64');
   return Promise.resolve(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
 }
 
@@ -392,6 +401,59 @@ void test('animated mesh projection permits a static GLTF resource with no requi
       manifest,
       resolveResource: fixtureResolver,
     }));
+  } finally {
+    restore();
+  }
+});
+
+void test('renderer-host realizes a checked zero-clip unlit GLB through the established mesh lifecycle', async () => {
+  const restore = installGltfNodeGlobals();
+  try {
+    const data = await staticUnlitFixtureResolver();
+    const bytes = new Uint8Array(data);
+    const contentHash = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+    const asset = 'mesh-animation/static-unlit-triangle';
+    const projection = await createRendererAnimatedMeshProjection({
+      manifest: {
+        kind: 'rusty_renderer_animated_mesh_resources.v1',
+        resources: [{ asset, contentHash, clipIds: [] }],
+      },
+      resolveResource: () => Promise.resolve(data),
+    });
+    const receipt = projection.applyFrame({
+      schemaVersion: 1,
+      ops: [
+        {
+          op: 'defineAnimatedMesh',
+          asset: {
+            asset,
+            runtimeFormat: 'glb',
+            contentHash,
+            clips: [],
+            defaultClip: null,
+            materialSlots: [],
+            bounds: { min: [0, 0, 0], max: [1, 1, 0] },
+          },
+        },
+        {
+          op: 'createAnimatedMeshInstance',
+          handle: renderHandle(4999),
+          parent: null,
+          instance: {
+            asset,
+            transform: {
+              translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1],
+            },
+            materialOverrides: [],
+            playback: null,
+            visible: true,
+            metadata: { sourceEntity: null, sourceSceneNode: null, tags: [], label: 'static unlit triangle' },
+          },
+        },
+      ],
+    });
+    assert.deepEqual(receipt, { applied: true, diagnostics: [] });
+    assert.deepEqual(projection.playback(renderHandle(4999)).effectiveClips, []);
   } finally {
     restore();
   }

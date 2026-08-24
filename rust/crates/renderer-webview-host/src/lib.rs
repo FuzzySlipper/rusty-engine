@@ -85,6 +85,8 @@ pub struct RendererResource {
     pub bytes: Vec<u8>,
 }
 
+/// A GLB mesh resource. An empty clip list identifies a static GLB while
+/// retaining the established animated-mesh resource wire family.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RendererAnimatedMeshResource {
@@ -757,14 +759,13 @@ fn validate_resource_descriptors(
                 "animated mesh asset identity is invalid or duplicated",
             ));
         }
-        if animated.clip_ids.is_empty()
-            || animated.clip_ids.len() > 256
+        if animated.clip_ids.len() > 256
             || animated.clip_ids.iter().any(|clip| {
                 clip.is_empty() || clip.len() > 256 || clip.chars().any(char::is_control)
             })
         {
             return Err(RendererWebviewError::InvalidResource(
-                "animated mesh clips are empty, oversized, or invalid",
+                "mesh GLB clips are oversized or invalid",
             ));
         }
         if animated.clip_source_names.len() != animated.clip_ids.len()
@@ -1153,6 +1154,14 @@ mod tests {
             clip_source_names: vec!["idle".to_owned(), "run".to_owned()],
         }];
         assert!(validate_animated_mesh_resources(&resources, &animated).is_ok());
+
+        let static_glb = vec![RendererAnimatedMeshResource {
+            asset: "mesh-animation/static-prop".to_owned(),
+            content_hash: animated[0].content_hash.clone(),
+            clip_ids: Vec::new(),
+            clip_source_names: Vec::new(),
+        }];
+        assert!(validate_animated_mesh_resources(&resources, &static_glb).is_ok());
 
         let mut missing = animated.clone();
         missing[0].content_hash = format!("sha256:{}", "0".repeat(64));

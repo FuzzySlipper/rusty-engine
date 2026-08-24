@@ -157,8 +157,13 @@ pub fn plan_animated_glb_import(
 ) -> ImportPlan {
     let outcome = import_animated_glb_asset(source_uri, source_bytes, context);
     let mut report = format!(
-        "rusty-asset-import: {}\nkind: animatedGlb\nmode: {}\ndiagnostics: {}\n",
+        "rusty-asset-import: {}\nkind: {}\nmode: {}\ndiagnostics: {}\n",
         source_uri.value(),
+        outcome
+            .assets
+            .as_ref()
+            .map(|assets| assets.receipt.animation_kind.label())
+            .unwrap_or("meshGlb"),
         mode.label(),
         outcome.diagnostics.len()
     );
