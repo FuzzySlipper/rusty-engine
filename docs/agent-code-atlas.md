@@ -102,6 +102,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 | Existing downstream gameplay disposition-first migration, mechanics/resolution composition, and AI intents | [Downstream gameplay adoption](topics/gameplay/downstream-adoption.md) |
 | Upstream promotion decisions and TypeScript authoring DSL placement | [Upstream promotion and authoring DSL](topics/development/upstream-promotion-and-authoring-dsl.md) |
 | Current Product Layout and immutable Compiled Composition schema | [Product model schema](code-map/product-model.md) |
+| Source-linked downstream Product Kernel declarations, schemas/migrations, pre-start Product Assembly linkage, and typed contexts | [Product Kernel source-linked assembly](code-map/product-kernel.md) |
 | Instance-owned host-neutral runtime generations, fixed-step/demand/external admission, and separate presentation admission | [Runtime lifecycle](code-map/runtime-lifecycle.md) |
 | Strict admitted input descriptors/mappings, host-neutral ingress decoding, snapshots, and typed intent envelopes | [Runtime input](code-map/runtime-input.md) |
 | Linked five-phase schedule composition, deterministic execution order, cadence, lifecycle-token validation, and bounded inspection | [Runtime schedule](code-map/runtime-schedule.md) |

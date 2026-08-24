@@ -203,6 +203,37 @@ No Engine crate knows the downstream game's component families, event vocabulary
 stored-project schema, or browser API. The Rust render crates know only renderer-neutral values and
 explicit read-only provider views; the isolated renderer workspace knows no gameplay authority.
 
+## Product Kernel source-linked assembly boundary
+
+The `product-kernel` crate is the explicit downstream extension lane for
+product-specific systems and operations. A single `product_kernel_declaration!`
+source declaration binds each concrete downstream contract type to a closed
+owner enum, immutable `ProductKernelCapabilityDescriptor` catalog, schema
+identities, and offline migration identities. The generated owner is suitable
+for ordinary closed `match` expressions; it is not a registry key, handler
+table, dynamic discovery mechanism, or invocation API. Product schemas and
+migrations participate in deterministic offline contract export but are never
+live `kernel.*` schedule targets; live `Migration` entries are rejected.
+
+`ProductAssembly::<D>::link` validates the declaration and wraps the existing
+Product Model linker before a lifecycle starts. It requires every selected
+Product Kernel binding to prove exact target, kind, and concrete contract type
+agreement, while Engine bindings remain resolved by the existing closed Engine
+catalog. `ProductSystemContext` and `ProductOperationContext` are separate,
+lifecycle-token-gated borrowed contexts for schedule and mutation phases.
+Downstream retains snapshot/request/result/error meaning and calls ordinary
+typed functions; authoritative publication remains in the named
+`runtime-mutation` lane.
+
+The same sorted declaration exposes checked `Result` paths for versionless
+contract JSON and a product-local TypeScript module. Both validate the complete
+declaration before emitting, so stale concrete target/kind metadata or malformed
+identity/text cannot become an apparently valid artifact. The TypeScript module
+binds `bindProductKernelCatalog`, exports the immutable catalog and closed
+target type, and is byte-compared by a downstream `generate:check` workflow.
+Compatibility follows actual source contract changes as they land; there is no
+independent schema-version family or release protocol here.
+
 ## Entity component boundary
 
 `entity-state::EntityState` owns reusable entity invariants:

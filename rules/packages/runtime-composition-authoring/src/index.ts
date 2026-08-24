@@ -40,6 +40,30 @@ export {
 } from './author.js';
 export { observePairs } from './observe-pairs.js';
 export type { ObservePairsDraft, ObservePairsQuotas } from './observe-pairs.js';
+export {
+  PRODUCT_KERNEL_ARTIFACT,
+  createProductKernelCatalog,
+  bindProductKernelCatalog,
+  capability,
+  productKernelCapability,
+  admitProductKernelComposition,
+  authorProductKernelComposition,
+} from './product-kernel.js';
+export type {
+  ProductKernelCapabilityAccess,
+  ProductKernelCapabilityBudget,
+  ProductKernelCapabilityDescriptor,
+  ProductKernelCapabilityKind,
+  ProductKernelCapabilityProvenance,
+  ProductKernelCapabilityTarget,
+  ProductKernelCapabilityUse,
+  ProductKernelCatalogBinding,
+  ProductKernelCatalogWire,
+  FrozenProductKernelCatalog,
+  ProductKernelTarget,
+  ProductKernelSchemaDescriptor,
+  ProductKernelMigrationDescriptor,
+} from './product-kernel.js';
 export { RuntimeCompositionAuthoringError, type RuntimeCompositionAuthoringErrorCode } from './error.js';
 export type { EngineCapabilityName, EngineCapabilityTarget } from './generated.js';
 export type {

@@ -27,7 +27,11 @@ export type RuntimeCompositionAuthoringErrorCode =
   | 'schedule-cross-phase-dependency'
   | 'schedule-placement-dependency'
   | 'schedule-dependency-cycle'
-  | 'schedule-access-ambiguity';
+  | 'schedule-access-ambiguity'
+  | 'product-kernel-catalog-invalid'
+  | 'product-kernel-catalog-stale'
+  | 'product-kernel-catalog-unsorted'
+  | 'unknown-product-kernel-capability';
 
 /** A bounded, source-free diagnostic for build-time Runtime Composition authoring. */
 export class RuntimeCompositionAuthoringError extends Error {

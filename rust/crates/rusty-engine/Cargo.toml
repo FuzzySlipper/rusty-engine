@@ -31,6 +31,7 @@ render-presentation.workspace = true
 render-projection.workspace = true
 renderer-webview-host.workspace = true
 product-model.workspace = true
+product-kernel.workspace = true
 runtime-lifecycle.workspace = true
 runtime-input.workspace = true
 runtime-schedule.workspace = true

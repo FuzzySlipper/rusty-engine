@@ -2589,6 +2589,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "product-kernel"
+version = "0.1.0"
+dependencies = [
+ "product-model",
+ "runtime-lifecycle",
+ "runtime-mutation",
+ "runtime-schedule",
+ "runtime-standard-capabilities",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "product-model"
 version = "0.1.0"
 dependencies = [
@@ -2953,6 +2966,7 @@ dependencies = [
  "gameplay-resolution",
  "gameplay-rules",
  "gameplay-standard",
+ "product-kernel",
  "product-model",
  "render-host-contracts",
  "render-model",
