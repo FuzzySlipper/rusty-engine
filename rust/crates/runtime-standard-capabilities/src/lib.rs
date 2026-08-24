@@ -283,19 +283,18 @@ impl ObservePairsPlan {
                 .checked_add(entry_visible)
                 .ok_or(ObservePairsError::InvalidReadout)?;
         }
+        let maximum_comparisons = readout
+            .selected_observers
+            .checked_mul(readout.selected_targets)
+            .ok_or(ObservePairsError::InvalidReadout)?;
         if visible_pairs != readout.visible_pairs
-            || readout.selection_comparisons
-                != readout
-                    .distance_rejects
-                    .saturating_add(readout.pairs_examined)
-            || readout.pairs_examined
-                != readout
-                    .facing_rejects
-                    .saturating_add(readout.visibility_casts)
-            || readout.visibility_casts
-                != readout
-                    .occlusion_rejects
-                    .saturating_add(readout.visible_pairs)
+            || readout.selection_comparisons > maximum_comparisons
+            || readout.distance_rejects.checked_add(readout.pairs_examined)
+                != Some(readout.selection_comparisons)
+            || readout.facing_rejects.checked_add(readout.visibility_casts)
+                != Some(readout.pairs_examined)
+            || readout.occlusion_rejects.checked_add(readout.visible_pairs)
+                != Some(readout.visibility_casts)
         {
             return Err(ObservePairsError::InvalidReadout);
         }
@@ -731,24 +730,25 @@ mod tests {
 
     #[test]
     fn readout_becomes_exactly_one_kernel_operation() {
+        let readout = ObservePairsReadout {
+            selected_observers: 1,
+            selected_targets: 1,
+            selection_comparisons: 1,
+            pairs_examined: 1,
+            distance_rejects: 0,
+            facing_rejects: 0,
+            visibility_casts: 1,
+            occlusion_rejects: 0,
+            visible_pairs: 1,
+            aggregates: vec![ObservePairsAggregate {
+                target: EntityId::new(9),
+                visible_observer_count: 1,
+                evidence_total: 0.25,
+            }],
+        };
         let batch = plan()
             .mutation_batch(
-                &ObservePairsReadout {
-                    selected_observers: 1,
-                    selected_targets: 1,
-                    selection_comparisons: 1,
-                    pairs_examined: 1,
-                    distance_rejects: 0,
-                    facing_rejects: 0,
-                    visibility_casts: 1,
-                    occlusion_rejects: 0,
-                    visible_pairs: 1,
-                    aggregates: vec![ObservePairsAggregate {
-                        target: EntityId::new(9),
-                        visible_observer_count: 1,
-                        evidence_total: 0.25,
-                    }],
-                },
+                &readout,
                 MutationBatchId::new("observe-step-6").expect("batch id"),
                 MutationCausation::new("runtime-schedule").expect("causation"),
                 MutationProvenance::new("product.kernel").expect("provenance"),
@@ -759,6 +759,20 @@ mod tests {
         assert_eq!(batch.operations()[0].binding_id(), "kernel.alert");
         assert_eq!(batch.operations()[0].target(), "kernel.alert-state");
         assert_eq!(batch.operations()[0].payload()["results"][0]["target"], 9);
+
+        let mut impossible = readout;
+        impossible.selection_comparisons = usize::MAX;
+        impossible.distance_rejects = usize::MAX;
+        assert!(matches!(
+            plan().mutation_batch(
+                &impossible,
+                MutationBatchId::new("impossible").expect("batch id"),
+                MutationCausation::new("runtime-schedule").expect("causation"),
+                MutationProvenance::new("product.kernel").expect("provenance"),
+                MutationOperationId::new(7),
+            ),
+            Err(ObservePairsError::InvalidReadout)
+        ));
     }
 
     #[test]
