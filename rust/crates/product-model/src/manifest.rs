@@ -10,8 +10,10 @@ pub const MAX_IDENTITY_BYTES: usize = 128;
 pub const MAX_COMPOSITION_ENTRYPOINTS: usize = 32;
 pub const MAX_WRAPPERS: usize = 8;
 pub const MAX_WRAPPER_PERMISSIONS: usize = 64;
-const MAX_REALTIME_HZ: u32 = 240;
-const MAX_REALTIME_CATCH_UP_STEPS: u32 = 16;
+/// Highest fixed-step rate admitted by the current Product Manifest.
+pub const MAX_REALTIME_HZ: u32 = 240;
+/// Highest bounded realtime catch-up batch admitted by the current Product Manifest.
+pub const MAX_REALTIME_CATCH_UP_STEPS: u32 = 16;
 const MIN_WINDOW_DIMENSION: u32 = 320;
 const MAX_WINDOW_DIMENSION: u32 = 8_192;
 const MAX_WRAPPER_TITLE_BYTES: usize = 128;

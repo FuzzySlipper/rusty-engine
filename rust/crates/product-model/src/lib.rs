@@ -43,6 +43,6 @@ pub use manifest::{
     decode_product_manifest, validate_product_manifest, LifecycleMode, ProductManifest,
     ProductManifestCandidate, RealtimeClock, ReleaseChannel, WrapperCandidate, WrapperDeclaration,
     WrapperKind, MAX_COMPOSITION_ENTRYPOINTS, MAX_IDENTITY_BYTES, MAX_PRODUCT_MANIFEST_BYTES,
-    MAX_WRAPPERS, MAX_WRAPPER_PERMISSIONS,
+    MAX_REALTIME_CATCH_UP_STEPS, MAX_REALTIME_HZ, MAX_WRAPPERS, MAX_WRAPPER_PERMISSIONS,
 };
 pub use path::ProductPath;

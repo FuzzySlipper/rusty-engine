@@ -1,0 +1,10 @@
+[package]
+name = "runtime-lifecycle"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+product-model.workspace = true
+
+[lints]
+workspace = true

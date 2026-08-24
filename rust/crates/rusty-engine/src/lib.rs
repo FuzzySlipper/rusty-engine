@@ -33,6 +33,7 @@ pub use render_model;
 pub use render_presentation;
 pub use render_projection;
 pub use renderer_webview_host;
+pub use runtime_lifecycle;
 pub use state_machine;
 pub use svc_collision;
 pub use svc_mesh;

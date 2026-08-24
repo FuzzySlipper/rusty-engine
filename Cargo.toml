@@ -5,6 +5,7 @@ members = [
     "rust/crates/renderer-webview-host",
     "rust/crates/rusty-engine",
     "rust/crates/product-model",
+    "rust/crates/runtime-lifecycle",
     "rust/crates/rusty-cli",
     "rust/crates/asset-import",
     "rust/crates/authored-scene",
@@ -50,6 +51,7 @@ edition = "2021"
 [workspace.dependencies]
 rusty-engine = { path = "rust/crates/rusty-engine" }
 product-model = { path = "rust/crates/product-model" }
+runtime-lifecycle = { path = "rust/crates/runtime-lifecycle" }
 render-host-contracts = { path = "rust/crates/render-host-contracts" }
 renderer-webview-host = { path = "rust/crates/renderer-webview-host" }
 asset-import = { path = "rust/crates/asset-import" }
