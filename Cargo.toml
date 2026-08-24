@@ -5,6 +5,7 @@ members = [
     "rust/crates/renderer-webview-host",
     "rust/crates/rusty-engine",
     "rust/crates/product-model",
+    "rust/crates/rusty-cli",
     "rust/crates/asset-import",
     "rust/crates/authored-scene",
     "rust/crates/asset-catalog",
@@ -96,6 +97,7 @@ base64 = "0.22"
 wry = "0.56"
 stats_alloc = "0.1.10"
 gltf = { version = "1.4", default-features = false, features = ["utils", "names", "KHR_materials_unlit"] }
+cap-std = "3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

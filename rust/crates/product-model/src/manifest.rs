@@ -6,6 +6,7 @@ use crate::{diagnostic::failure, ProductModelError, ProductPath};
 
 const SOURCE: &str = "rusty.toml";
 pub const MAX_PRODUCT_MANIFEST_BYTES: usize = 65_536;
+pub const MAX_IDENTITY_BYTES: usize = 128;
 pub const MAX_COMPOSITION_ENTRYPOINTS: usize = 32;
 pub const MAX_WRAPPERS: usize = 8;
 pub const MAX_WRAPPER_PERMISSIONS: usize = 64;
@@ -582,7 +583,7 @@ pub(crate) fn validate_identity(
     source: &str,
     path: &str,
 ) -> Result<(), ProductModelError> {
-    let valid = value.len() <= 128
+    let valid = value.len() <= MAX_IDENTITY_BYTES
         && value.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
         })
@@ -602,7 +603,9 @@ pub(crate) fn validate_identity(
             "PRODUCT_INVALID_ID",
             source,
             path,
-            "identities must be 1..=128 lowercase ASCII segments that start and end alphanumeric; dots, underscores, and hyphens may occur singly between segments",
+            format!(
+                "identities must be 1..={MAX_IDENTITY_BYTES} lowercase ASCII segments that start and end alphanumeric; dots, underscores, and hyphens may occur singly between segments"
+            ),
         ));
     }
     Ok(())

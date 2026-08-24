@@ -1,0 +1,17 @@
+[package]
+name = "rusty-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "rusty"
+path = "src/main.rs"
+
+[dependencies]
+product-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+cap-std.workspace = true
+
+[lints]
+workspace = true

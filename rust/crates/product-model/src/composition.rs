@@ -12,6 +12,7 @@ const SOURCE: &str = "compiled-composition.json";
 pub const MAX_COMPILED_COMPOSITION_BYTES: usize = 1_048_576;
 pub const MAX_INPUT_MAP_ENTRIES: usize = 256;
 pub const MAX_SCHEDULE_ENTRIES: usize = 512;
+pub const MAX_SCHEDULE_ACCESS_DECLARATIONS: usize = 64;
 pub const MAX_GAMEPLAY_DEFINITIONS: usize = 512;
 pub const MAX_TIMELINES: usize = 256;
 pub const MAX_TIMELINE_STEPS: usize = 256;
@@ -71,6 +72,8 @@ pub struct ScheduleEntry {
     pub capability: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definition: Option<String>,
+    pub reads: Vec<String>,
+    pub writes: Vec<String>,
     pub payload: Value,
 }
 
@@ -190,14 +193,7 @@ pub fn validate_compiled_composition(
     validate_timelines(&candidate.timelines, &capabilities, &mut json_nodes)?;
 
     let canonical_candidate = canonicalize_composition(&candidate);
-    let mut canonical_bytes = serde_json::to_vec(&canonical_candidate).map_err(|error| {
-        failure(
-            "COMPOSITION_ENCODE",
-            SOURCE,
-            "$",
-            format!("failed to encode a validated composition: {error}"),
-        )
-    })?;
+    let mut canonical_bytes = encode_canonical_composition(&canonical_candidate);
     canonical_bytes.push(b'\n');
     if canonical_bytes.len() > MAX_COMPILED_COMPOSITION_BYTES {
         return Err(failure(
@@ -323,6 +319,18 @@ fn validate_schedule(
                 ));
             }
         }
+        validate_schedule_accesses(
+            &entry.reads,
+            &format!("{prefix}.reads"),
+            "COMPOSITION_SCHEDULE_READ_COUNT",
+            "COMPOSITION_DUPLICATE_SCHEDULE_READ",
+        )?;
+        validate_schedule_accesses(
+            &entry.writes,
+            &format!("{prefix}.writes"),
+            "COMPOSITION_SCHEDULE_WRITE_COUNT",
+            "COMPOSITION_DUPLICATE_SCHEDULE_WRITE",
+        )?;
         validate_opaque_json(&entry.payload, &format!("{prefix}.payload"), json_nodes)?;
         if !ids.insert(entry.id.clone()) {
             return Err(failure(
@@ -330,6 +338,37 @@ fn validate_schedule(
                 SOURCE,
                 format!("{prefix}.id"),
                 format!("schedule entry `{}` is declared more than once", entry.id),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validates declarative schedule access names without assigning any execution
+/// or conflict semantics. A name present in both lists is intentionally valid:
+/// read/modify/write behavior is a later scheduler concern.
+fn validate_schedule_accesses(
+    declarations: &[String],
+    path: &str,
+    count_code: &str,
+    duplicate_code: &str,
+) -> Result<(), ProductModelError> {
+    validate_bounded_count(
+        declarations.len(),
+        MAX_SCHEDULE_ACCESS_DECLARATIONS,
+        path,
+        count_code,
+    )?;
+    let mut known = BTreeSet::new();
+    for (index, declaration) in declarations.iter().enumerate() {
+        let declaration_path = format!("{path}[{index}]");
+        validate_identity(declaration, SOURCE, &declaration_path)?;
+        if !known.insert(declaration) {
+            return Err(failure(
+                duplicate_code,
+                SOURCE,
+                declaration_path,
+                format!("schedule access `{declaration}` is declared more than once"),
             ));
         }
     }
@@ -456,23 +495,7 @@ fn visit_json(
     }
     match value {
         Value::Null | Value::Bool(_) => Ok(()),
-        Value::Number(number) => match (number.as_i64(), number.as_u64()) {
-            (Some(value), _) if value.unsigned_abs() <= MAX_SAFE_JSON_INTEGER => Ok(()),
-            (_, Some(value)) if value <= MAX_SAFE_JSON_INTEGER => Ok(()),
-            (Some(_), _) | (_, Some(_)) => Err(failure(
-                "COMPOSITION_OPAQUE_JSON_NUMBER",
-                SOURCE,
-                path,
-                "opaque payload integer values must remain within the IEEE-754 safe integer range",
-            )),
-            (None, None) if number.as_f64().is_some_and(f64::is_finite) => Ok(()),
-            (None, None) => Err(failure(
-                "COMPOSITION_OPAQUE_JSON_NUMBER",
-                SOURCE,
-                path,
-                "opaque payload numbers must be finite JSON numbers",
-            )),
-        },
+        Value::Number(number) => validate_json_number(number, path),
         Value::String(value) => validate_json_string(value, path),
         Value::Array(values) => {
             if values.len() > MAX_OPAQUE_JSON_ARRAY_ENTRIES {
@@ -502,6 +525,46 @@ fn visit_json(
             for (key, child) in values {
                 validate_json_string(key, &format!("{path}.<key>"))?;
                 visit_json(child, &format!("{path}.{key}"), depth + 1, nodes)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_json_number(number: &serde_json::Number, path: &str) -> Result<(), ProductModelError> {
+    match (number.as_i64(), number.as_u64()) {
+        (Some(value), _) if value.unsigned_abs() <= MAX_SAFE_JSON_INTEGER => Ok(()),
+        (_, Some(value)) if value <= MAX_SAFE_JSON_INTEGER => Ok(()),
+        (Some(_), _) | (_, Some(_)) => Err(failure(
+            "COMPOSITION_OPAQUE_JSON_NUMBER",
+            SOURCE,
+            path,
+            "opaque payload integer values must remain within the IEEE-754 safe integer range",
+        )),
+        (None, None) => {
+            let value = number.as_f64().ok_or_else(|| {
+                failure(
+                    "COMPOSITION_OPAQUE_JSON_NUMBER",
+                    SOURCE,
+                    path,
+                    "opaque payload numbers must be finite JSON numbers",
+                )
+            })?;
+            if !value.is_finite() {
+                return Err(failure(
+                    "COMPOSITION_OPAQUE_JSON_NUMBER",
+                    SOURCE,
+                    path,
+                    "opaque payload numbers must be finite JSON numbers",
+                ));
+            }
+            if value.fract() == 0.0 && value.abs() > MAX_SAFE_JSON_INTEGER as f64 {
+                return Err(failure(
+                    "COMPOSITION_OPAQUE_JSON_NUMBER",
+                    SOURCE,
+                    path,
+                    "opaque payload integer values must remain within the IEEE-754 safe integer range",
+                ));
             }
             Ok(())
         }
@@ -579,6 +642,204 @@ fn canonicalize_json_value(value: &Value) -> Value {
         }
         _ => value.clone(),
     }
+}
+
+/// Writes the exact Compiled Composition canonical bytes. Typed object fields
+/// retain their declared current-schema order; opaque object keys sort by raw
+/// UTF-8 bytes. Numbers use ECMAScript Number::toString through `ryu-js`, with
+/// negative zero normalized to `0`, so TypeScript and Rust have one explicit
+/// cross-language policy rather than serializer-dependent output.
+fn encode_canonical_composition(candidate: &CompiledCompositionCandidate) -> Vec<u8> {
+    let mut output = Vec::new();
+    output.push(b'{');
+    let mut first = true;
+    write_field_name(&mut output, &mut first, "product");
+    write_json_string(&mut output, &candidate.product);
+    write_field_name(&mut output, &mut first, "inputMap");
+    output.push(b'[');
+    for (index, entry) in candidate.input_map.iter().enumerate() {
+        if index != 0 {
+            output.push(b',');
+        }
+        output.push(b'{');
+        let mut entry_first = true;
+        write_field_name(&mut output, &mut entry_first, "id");
+        write_json_string(&mut output, &entry.id);
+        write_field_name(&mut output, &mut entry_first, "intent");
+        write_json_string(&mut output, &entry.intent);
+        write_field_name(&mut output, &mut entry_first, "capability");
+        write_json_string(&mut output, &entry.capability);
+        write_field_name(&mut output, &mut entry_first, "payload");
+        write_canonical_json(&mut output, &entry.payload);
+        output.push(b'}');
+    }
+    output.push(b']');
+    write_field_name(&mut output, &mut first, "schedule");
+    output.push(b'[');
+    for (index, entry) in candidate.schedule.iter().enumerate() {
+        if index != 0 {
+            output.push(b',');
+        }
+        output.push(b'{');
+        let mut entry_first = true;
+        write_field_name(&mut output, &mut entry_first, "id");
+        write_json_string(&mut output, &entry.id);
+        write_field_name(&mut output, &mut entry_first, "phase");
+        write_json_string(&mut output, &entry.phase);
+        write_field_name(&mut output, &mut entry_first, "capability");
+        write_json_string(&mut output, &entry.capability);
+        if let Some(definition) = &entry.definition {
+            write_field_name(&mut output, &mut entry_first, "definition");
+            write_json_string(&mut output, definition);
+        }
+        write_field_name(&mut output, &mut entry_first, "reads");
+        write_json_string_array(&mut output, &entry.reads);
+        write_field_name(&mut output, &mut entry_first, "writes");
+        write_json_string_array(&mut output, &entry.writes);
+        write_field_name(&mut output, &mut entry_first, "payload");
+        write_canonical_json(&mut output, &entry.payload);
+        output.push(b'}');
+    }
+    output.push(b']');
+    write_field_name(&mut output, &mut first, "gameplayDefinitions");
+    output.push(b'[');
+    for (index, definition) in candidate.gameplay_definitions.iter().enumerate() {
+        if index != 0 {
+            output.push(b',');
+        }
+        output.push(b'{');
+        let mut definition_first = true;
+        write_field_name(&mut output, &mut definition_first, "id");
+        write_json_string(&mut output, &definition.id);
+        write_field_name(&mut output, &mut definition_first, "payload");
+        write_canonical_json(&mut output, &definition.payload);
+        output.push(b'}');
+    }
+    output.push(b']');
+    write_field_name(&mut output, &mut first, "timelines");
+    output.push(b'[');
+    for (timeline_index, timeline) in candidate.timelines.iter().enumerate() {
+        if timeline_index != 0 {
+            output.push(b',');
+        }
+        output.push(b'{');
+        let mut timeline_first = true;
+        write_field_name(&mut output, &mut timeline_first, "id");
+        write_json_string(&mut output, &timeline.id);
+        write_field_name(&mut output, &mut timeline_first, "steps");
+        output.push(b'[');
+        for (step_index, step) in timeline.steps.iter().enumerate() {
+            if step_index != 0 {
+                output.push(b',');
+            }
+            output.push(b'{');
+            let mut step_first = true;
+            write_field_name(&mut output, &mut step_first, "id");
+            write_json_string(&mut output, &step.id);
+            write_field_name(&mut output, &mut step_first, "capability");
+            write_json_string(&mut output, &step.capability);
+            write_field_name(&mut output, &mut step_first, "payload");
+            write_canonical_json(&mut output, &step.payload);
+            output.push(b'}');
+        }
+        output.push(b']');
+        output.push(b'}');
+    }
+    output.push(b']');
+    write_field_name(&mut output, &mut first, "capabilityBindings");
+    output.push(b'[');
+    for (index, binding) in candidate.capability_bindings.iter().enumerate() {
+        if index != 0 {
+            output.push(b',');
+        }
+        output.push(b'{');
+        let mut binding_first = true;
+        write_field_name(&mut output, &mut binding_first, "id");
+        write_json_string(&mut output, &binding.id);
+        write_field_name(&mut output, &mut binding_first, "target");
+        write_json_string(&mut output, &binding.target);
+        output.push(b'}');
+    }
+    output.push(b']');
+    output.push(b'}');
+    output
+}
+
+fn write_field_name(output: &mut Vec<u8>, first: &mut bool, name: &str) {
+    if !*first {
+        output.push(b',');
+    }
+    *first = false;
+    write_json_string(output, name);
+    output.push(b':');
+}
+
+fn write_json_string(output: &mut Vec<u8>, value: &str) {
+    serde_json::to_writer(output, value).expect("writing JSON to an in-memory buffer cannot fail");
+}
+
+fn write_json_string_array(output: &mut Vec<u8>, values: &[String]) {
+    output.push(b'[');
+    for (index, value) in values.iter().enumerate() {
+        if index != 0 {
+            output.push(b',');
+        }
+        write_json_string(output, value);
+    }
+    output.push(b']');
+}
+
+fn write_canonical_json(output: &mut Vec<u8>, value: &Value) {
+    match value {
+        Value::Null => output.extend_from_slice(b"null"),
+        Value::Bool(value) => output.extend_from_slice(if *value { b"true" } else { b"false" }),
+        Value::Number(value) => write_canonical_number(output, value),
+        Value::String(value) => write_json_string(output, value),
+        Value::Array(values) => {
+            output.push(b'[');
+            for (index, value) in values.iter().enumerate() {
+                if index != 0 {
+                    output.push(b',');
+                }
+                write_canonical_json(output, value);
+            }
+            output.push(b']');
+        }
+        Value::Object(values) => {
+            output.push(b'{');
+            let mut keys = values.keys().collect::<Vec<_>>();
+            keys.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+            for (index, key) in keys.into_iter().enumerate() {
+                if index != 0 {
+                    output.push(b',');
+                }
+                write_json_string(output, key);
+                output.push(b':');
+                write_canonical_json(output, &values[key]);
+            }
+            output.push(b'}');
+        }
+    }
+}
+
+fn write_canonical_number(output: &mut Vec<u8>, value: &serde_json::Number) {
+    if let Some(value) = value.as_i64() {
+        output.extend_from_slice(value.to_string().as_bytes());
+        return;
+    }
+    if let Some(value) = value.as_u64() {
+        output.extend_from_slice(value.to_string().as_bytes());
+        return;
+    }
+    let value = value
+        .as_f64()
+        .expect("validated JSON numbers are finite binary64 values");
+    if value == 0.0 {
+        output.push(b'0');
+        return;
+    }
+    let mut buffer = ryu_js::Buffer::new();
+    output.extend_from_slice(buffer.format(value).as_bytes());
 }
 
 /// Parses the raw JSON once before typed decoding so opaque payload objects

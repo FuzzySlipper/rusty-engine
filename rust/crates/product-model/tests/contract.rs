@@ -1,9 +1,10 @@
 use product_model::{
-    decode_compiled_composition, decode_product_manifest, encode_compiled_composition,
-    validate_compiled_composition, validate_product_manifest, CapabilityBinding,
-    CompiledCompositionCandidate, GameplayDefinition, InputMapEntry, LifecycleMode,
-    ProductManifestCandidate, ProductPath, RealtimeClock, ReleaseChannel, ScheduleEntry, Timeline,
-    TimelineStep, MAX_PRODUCT_MANIFEST_BYTES,
+    admit_checked_product_composition, admit_product_composition, decode_compiled_composition,
+    decode_product_manifest, encode_compiled_composition, validate_compiled_composition,
+    validate_product_manifest, CapabilityBinding, CompiledCompositionCandidate, GameplayDefinition,
+    InputMapEntry, LifecycleMode, ProductManifestCandidate, ProductPath, RealtimeClock,
+    ReleaseChannel, ScheduleEntry, Timeline, TimelineStep, MAX_PRODUCT_MANIFEST_BYTES,
+    MAX_SCHEDULE_ACCESS_DECLARATIONS,
 };
 use serde_json::{json, Value};
 
@@ -14,6 +15,12 @@ const INVALID_MANIFEST: &str =
     include_str!("../../../../fixtures/product-model/invalid-path.rusty.toml");
 const DUPLICATE_OPAQUE_KEY: &[u8] = include_bytes!(
     "../../../../fixtures/product-model/duplicate-opaque-key.compiled-composition.json"
+);
+const CANONICAL_NUMBERS: &[u8] = include_bytes!(
+    "../../../../fixtures/product-model/canonical-numbers.compiled-composition.json"
+);
+const CANONICAL_NUMBERS_EXPECTED: &[u8] = include_bytes!(
+    "../../../../fixtures/product-model/canonical-numbers.expected.compiled-composition.json"
 );
 
 #[test]
@@ -261,6 +268,16 @@ fn opaque_object_key_order_does_not_change_canonical_composition_bytes() {
 }
 
 #[test]
+fn canonical_numbers_follow_ecmascript_policy_and_sort_numeric_looking_keys_bytewise() {
+    let composition = decode_compiled_composition(CANONICAL_NUMBERS).unwrap();
+    assert_eq!(composition.canonical_bytes(), CANONICAL_NUMBERS_EXPECTED);
+    assert_eq!(
+        composition.canonical_bytes(),
+        b"{\"product\":\"example.product\",\"inputMap\":[],\"schedule\":[],\"gameplayDefinitions\":[{\"id\":\"numeric\",\"payload\":{\"1\":\"one\",\"10\":\"ten\",\"2\":\"two\",\"negativeZero\":0,\"small\":0.000001,\"tiny\":0.0000012}}],\"timelines\":[],\"capabilityBindings\":[]}\n"
+    );
+}
+
+#[test]
 fn composition_rejects_unknown_missing_duplicate_and_unknown_references() {
     let unknown = br#"{"product":"example.product","schemaVersion":1,"inputMap":[],"schedule":[],"gameplayDefinitions":[],"timelines":[],"capabilityBindings":[]}"#;
     assert_eq!(
@@ -341,6 +358,172 @@ fn composition_rejects_unknown_missing_duplicate_and_unknown_references() {
 }
 
 #[test]
+fn schedule_access_declarations_are_required_bounded_and_nonduplicating() {
+    let missing = br#"{"product":"example.product","inputMap":[],"schedule":[{"id":"entry","phase":"simulation","capability":"movement.apply","payload":null}],"gameplayDefinitions":[],"timelines":[],"capabilityBindings":[{"id":"movement.apply","target":"kernel.apply-movement"}]}"#;
+    assert_eq!(
+        decode_compiled_composition(missing)
+            .unwrap_err()
+            .diagnostic()
+            .code(),
+        "COMPOSITION_DECODE"
+    );
+
+    let mut duplicate_read = minimum_candidate();
+    duplicate_read.schedule[0].reads = vec!["state.transform".into(), "state.transform".into()];
+    assert_eq!(
+        validate_compiled_composition(duplicate_read)
+            .unwrap_err()
+            .diagnostic()
+            .code(),
+        "COMPOSITION_DUPLICATE_SCHEDULE_READ"
+    );
+
+    let mut duplicate_write = minimum_candidate();
+    duplicate_write.schedule[0].writes = vec!["state.transform".into(), "state.transform".into()];
+    assert_eq!(
+        validate_compiled_composition(duplicate_write)
+            .unwrap_err()
+            .diagnostic()
+            .code(),
+        "COMPOSITION_DUPLICATE_SCHEDULE_WRITE"
+    );
+
+    let mut malformed_write = minimum_candidate();
+    malformed_write.schedule[0].writes = vec!["Wrong identity".into()];
+    assert_eq!(
+        validate_compiled_composition(malformed_write)
+            .unwrap_err()
+            .diagnostic()
+            .code(),
+        "PRODUCT_INVALID_ID"
+    );
+
+    let mut over_bound = minimum_candidate();
+    over_bound.schedule[0].reads = (0..=MAX_SCHEDULE_ACCESS_DECLARATIONS)
+        .map(|index| format!("state.value-{index}"))
+        .collect();
+    assert_eq!(
+        validate_compiled_composition(over_bound)
+            .unwrap_err()
+            .diagnostic()
+            .code(),
+        "COMPOSITION_SCHEDULE_READ_COUNT"
+    );
+
+    let mut writes_over_bound = minimum_candidate();
+    writes_over_bound.schedule[0].writes = (0..=MAX_SCHEDULE_ACCESS_DECLARATIONS)
+        .map(|index| format!("state.value-{index}"))
+        .collect();
+    assert_eq!(
+        validate_compiled_composition(writes_over_bound)
+            .unwrap_err()
+            .diagnostic()
+            .code(),
+        "COMPOSITION_SCHEDULE_WRITE_COUNT"
+    );
+
+    let mut read_modify_write = minimum_candidate();
+    read_modify_write.schedule[0].reads = vec!["state.first".into(), "state.second".into()];
+    read_modify_write.schedule[0].writes = vec!["state.second".into(), "state.first".into()];
+    let checked = validate_compiled_composition(read_modify_write).unwrap();
+    assert_eq!(
+        checked.candidate().schedule[0].reads,
+        ["state.first", "state.second"]
+    );
+    assert_eq!(
+        checked.candidate().schedule[0].writes,
+        ["state.second", "state.first"]
+    );
+}
+
+#[test]
+fn product_composition_admission_links_checked_artifact_to_layout_immutably() {
+    let manifest = decode_product_manifest(MANIFEST).unwrap();
+    let checked = decode_compiled_composition(COMPOSITION).unwrap();
+    let from_checked = admit_checked_product_composition(&manifest, checked.clone()).unwrap();
+    let from_direct = admit_product_composition(&manifest, checked.candidate().clone()).unwrap();
+
+    assert_eq!(from_checked, from_direct);
+    assert_eq!(from_checked.product_id(), "example.product");
+    assert_eq!(from_checked.lifecycle(), LifecycleMode::Realtime);
+    assert_eq!(from_checked.realtime(), Some(RealtimeClock::new(60, 4)));
+    assert_eq!(from_checked.canonical_bytes(), COMPOSITION);
+    assert_eq!(from_checked.input_map()[0].id(), "look");
+    assert_eq!(from_checked.input_map()[0].capability().binding_index(), 0);
+    assert_eq!(
+        from_checked.input_map()[0].capability().target(),
+        "engine.camera-look"
+    );
+    assert_eq!(from_checked.schedule()[0].id(), "movement");
+    assert_eq!(from_checked.schedule()[0].capability().binding_index(), 1);
+    assert_eq!(
+        from_checked.schedule()[0].capability().target(),
+        "kernel.apply-movement"
+    );
+    assert_eq!(
+        from_checked.schedule()[0]
+            .definition()
+            .unwrap()
+            .definition_index(),
+        0
+    );
+    assert_eq!(
+        from_checked.schedule()[0].reads(),
+        ["input.motion", "state.transform"]
+    );
+    assert_eq!(from_checked.gameplay_definitions()[0].id(), "player");
+    assert_eq!(from_checked.gameplay_definitions()[0].index(), 0);
+    assert_eq!(from_checked.timelines()[0].id(), "intro");
+    assert_eq!(
+        from_checked.timelines()[0].steps()[0]
+            .capability()
+            .binding_index(),
+        3
+    );
+    assert_eq!(from_checked.capability_bindings()[0].id(), "camera.look");
+    assert_eq!(from_checked.capability_bindings()[0].index(), 0);
+    assert_eq!(from_checked.composition().canonical_bytes(), COMPOSITION);
+}
+
+#[test]
+fn product_composition_admission_rejects_layout_product_mismatch_after_checked_validation() {
+    let manifest = decode_product_manifest(MANIFEST).unwrap();
+    let mut candidate = minimum_candidate();
+    candidate.product = "another.product".into();
+    let checked = validate_compiled_composition(candidate.clone()).unwrap();
+
+    assert_eq!(
+        admit_checked_product_composition(&manifest, checked)
+            .unwrap_err()
+            .diagnostic()
+            .code(),
+        "PRODUCT_COMPOSITION_PRODUCT_MISMATCH"
+    );
+    assert_eq!(
+        admit_product_composition(&manifest, candidate)
+            .unwrap_err()
+            .diagnostic()
+            .code(),
+        "PRODUCT_COMPOSITION_PRODUCT_MISMATCH"
+    );
+}
+
+#[test]
+fn direct_product_admission_returns_no_readout_for_incomplete_references() {
+    let manifest = decode_product_manifest(MANIFEST).unwrap();
+    let mut candidate = minimum_candidate();
+    candidate.schedule[0].definition = Some("missing-definition".into());
+
+    assert_eq!(
+        admit_product_composition(&manifest, candidate)
+            .unwrap_err()
+            .diagnostic()
+            .code(),
+        "COMPOSITION_UNKNOWN_DEFINITION"
+    );
+}
+
+#[test]
 fn composition_rejects_wrong_capability_kind_and_unsafe_payloads() {
     let mut target = minimum_candidate();
     target.capability_bindings[0].target = "browser.event".into();
@@ -361,6 +544,31 @@ fn composition_rejects_wrong_capability_kind_and_unsafe_payloads() {
             .code(),
         "COMPOSITION_OPAQUE_JSON_NUMBER"
     );
+
+    for value in [9_007_199_254_740_992.0_f64, -9_007_199_254_740_992.0_f64] {
+        let mut unsafe_float_integer = minimum_candidate();
+        unsafe_float_integer.gameplay_definitions[0].payload = json!({"count": value});
+        assert_eq!(
+            validate_compiled_composition(unsafe_float_integer)
+                .unwrap_err()
+                .diagnostic()
+                .code(),
+            "COMPOSITION_OPAQUE_JSON_NUMBER"
+        );
+    }
+
+    for raw in [
+        br#"{"product":"example.product","inputMap":[],"schedule":[],"gameplayDefinitions":[{"id":"definition","payload":9007199254740992.0}],"timelines":[],"capabilityBindings":[]}"# as &[u8],
+        br#"{"product":"example.product","inputMap":[],"schedule":[],"gameplayDefinitions":[{"id":"definition","payload":-9007199254740992.0}],"timelines":[],"capabilityBindings":[]}"# as &[u8],
+    ] {
+        assert_eq!(
+            decode_compiled_composition(raw)
+                .unwrap_err()
+                .diagnostic()
+                .code(),
+            "COMPOSITION_OPAQUE_JSON_NUMBER"
+        );
+    }
 
     let mut large_array = minimum_candidate();
     large_array.gameplay_definitions[0].payload = Value::Array(vec![Value::Null; 1_025]);
@@ -432,6 +640,8 @@ fn minimum_candidate() -> CompiledCompositionCandidate {
             phase: "simulation".into(),
             capability: "movement.apply".into(),
             definition: Some("player".into()),
+            reads: vec!["state.transform".into()],
+            writes: vec!["state.transform".into()],
             payload: Value::Null,
         }],
         gameplay_definitions: vec![GameplayDefinition {

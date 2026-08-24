@@ -1,0 +1,29 @@
+export type RuntimeCompositionAuthoringErrorCode =
+  | 'missing-field'
+  | 'unknown-field'
+  | 'invalid-field-type'
+  | 'invalid-identity'
+  | 'invalid-capability-target'
+  | 'unknown-capability'
+  | 'unknown-definition'
+  | 'duplicate-entry'
+  | 'quota-exceeded'
+  | 'json-depth-exceeded'
+  | 'json-node-quota-exceeded'
+  | 'invalid-json-value'
+  | 'artifact-quota-exceeded'
+  | 'invalid-operation'
+  | 'unrepresentable-cadence';
+
+/** A bounded, source-free diagnostic for build-time Runtime Composition authoring. */
+export class RuntimeCompositionAuthoringError extends Error {
+  public constructor(
+    public readonly code: RuntimeCompositionAuthoringErrorCode,
+    public readonly logicalPath: string,
+    message: string,
+    public readonly details: Readonly<Record<string, string | number>> = {},
+  ) {
+    super(message);
+    this.name = 'RuntimeCompositionAuthoringError';
+  }
+}
