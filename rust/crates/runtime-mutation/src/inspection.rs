@@ -12,6 +12,7 @@ pub struct MutationCapabilityInspection {
     target: String,
     resolved_target: String,
     kind: String,
+    operation_type: String,
     publication_domain: String,
     owner: String,
     provenance_source: String,
@@ -27,6 +28,7 @@ impl MutationCapabilityInspection {
             target: capability.target().to_owned(),
             resolved_target: capability.resolved_target().to_owned(),
             kind: capability.kind().to_owned(),
+            operation_type: capability.operation_type().to_owned(),
             publication_domain: capability.publication_domain().to_owned(),
             owner: capability.owner().to_owned(),
             provenance_source: capability.provenance_source().to_owned(),
@@ -53,6 +55,10 @@ impl MutationCapabilityInspection {
 
     pub fn kind(&self) -> &str {
         &self.kind
+    }
+
+    pub fn operation_type(&self) -> &str {
+        &self.operation_type
     }
 
     pub fn publication_domain(&self) -> &str {

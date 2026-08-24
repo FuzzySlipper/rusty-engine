@@ -16,8 +16,14 @@ const descriptor = JSON.parse(execFileSync(
   ['run', '--quiet', '-p', 'product-model', '--bin', 'export-product-model-contract', '--locked'],
   { cwd: repositoryRoot, encoding: 'utf8' },
 ));
+const standardCapabilities = JSON.parse(execFileSync(
+  'cargo',
+  ['run', '--quiet', '-p', 'runtime-standard-capabilities', '--bin', 'export-runtime-standard-capabilities-contract', '--locked'],
+  { cwd: repositoryRoot, encoding: 'utf8' },
+));
 validateDescriptor(descriptor);
-const output = render(descriptor);
+validateStandardCapabilities(standardCapabilities);
+const output = render(descriptor, standardCapabilities);
 if (mode === '--write') {
   writeFileSync(outputUrl, output);
 } else if (readFileSync(outputUrl, 'utf8') !== output) {
@@ -90,6 +96,24 @@ function validateCapabilityCatalog(value) {
   if (JSON.stringify(targets) !== JSON.stringify([...targets].sort())) throw new Error('$.capabilityCatalog.engine targets must be deterministic bytewise order');
 }
 
+function validateStandardCapabilities(value) {
+  exactKeys(value, ['artifact', 'observePairs'], '$runtimeStandardCapabilities');
+  if (value.artifact !== 'runtime-standard-capabilities') throw new Error('unexpected runtime-standard-capabilities descriptor artifact');
+  const observePairs = value.observePairs;
+  exactKeys(observePairs, ['access', 'kind', 'maximumCompactJsonPayloadBytes', 'payload', 'quotas', 'target'], '$runtimeStandardCapabilities.observePairs');
+  if (observePairs.target !== 'engine.runtime.observe-pairs' || observePairs.kind !== 'system') throw new Error('unexpected observe-pairs capability target');
+  if (!Number.isSafeInteger(observePairs.maximumCompactJsonPayloadBytes) || observePairs.maximumCompactJsonPayloadBytes <= 0) throw new Error('invalid observe-pairs payload limit');
+  exactKeys(observePairs.access, ['reads', 'writes'], '$runtimeStandardCapabilities.observePairs.access');
+  assertArray(observePairs.access.reads, ['entity-state.components', 'entity-state.transforms', 'engine-spatial.occlusion'], '$runtimeStandardCapabilities.observePairs.access.reads');
+  assertArray(observePairs.access.writes, ['runtime-mutation.operations'], '$runtimeStandardCapabilities.observePairs.access.writes');
+  exactKeys(observePairs.payload, ['fields', 'kind', 'quotaFields', 'resultKind', 'visibility'], '$runtimeStandardCapabilities.observePairs.payload');
+  assertArray(observePairs.payload.fields, ['kind', 'observerRole', 'targetRole', 'operationBinding', 'operationType', 'quotas'], '$runtimeStandardCapabilities.observePairs.payload.fields');
+  assertArray(observePairs.payload.quotaFields, ['observers', 'targets', 'pairs', 'aggregates'], '$runtimeStandardCapabilities.observePairs.payload.quotaFields');
+  if (observePairs.payload.kind !== 'engine.runtime.observe-pairs.v1' || observePairs.payload.resultKind !== 'engine.runtime.observe-pairs.result.v1' || observePairs.payload.visibility !== 'center-ray') throw new Error('unexpected observe-pairs closed payload contract');
+  exactKeys(observePairs.quotas, ['aggregates', 'observers', 'pairs', 'targets'], '$runtimeStandardCapabilities.observePairs.quotas');
+  for (const [name, limit] of Object.entries(observePairs.quotas)) if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error(`invalid observe-pairs quota ${name}`);
+}
+
 function exactKeys(value, expected, path) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${path} must be an object`);
   const actual = Object.keys(value).sort();
@@ -101,6 +125,6 @@ function assertArray(actual, expected, path) {
   if (!Array.isArray(actual) || JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(`${path} drifted`);
 }
 
-function render(value) {
-  return `// Generated from Rust product-model contract descriptor. Do not edit.\n\nexport const PRODUCT_MODEL_ARTIFACT = ${JSON.stringify(value.artifact)} as const;\nexport const PRODUCT_MODEL_CAPABILITY_TARGETS = ${JSON.stringify(value.capabilityTargets, null, 2)} as const;\nexport const PRODUCT_MODEL_CAPABILITY_CATALOG = ${JSON.stringify(value.capabilityCatalog, null, 2)} as const;\nexport type EngineCapabilityTarget = typeof PRODUCT_MODEL_CAPABILITY_CATALOG.engine[number]['target'];\nexport type EngineCapabilityName = EngineCapabilityTarget extends \`engine.\${infer Name}\` ? Name : never;\nexport const PRODUCT_MODEL_FIELDS = ${JSON.stringify(value.fields, null, 2)} as const;\nexport const PRODUCT_MODEL_IDENTITY = ${JSON.stringify(value.identity, null, 2)} as const;\nexport const PRODUCT_MODEL_INPUT = ${JSON.stringify(value.input, null, 2)} as const;\nexport const PRODUCT_MODEL_LIMITS = ${JSON.stringify(value.limits, null, 2)} as const;\nexport const PRODUCT_MODEL_NUMBER_ENCODING = ${JSON.stringify(value.numberEncoding, null, 2)} as const;\nexport const PRODUCT_MODEL_OPTIONAL_FIELDS = ${JSON.stringify(value.optionalFields, null, 2)} as const;\nexport const PRODUCT_MODEL_ORDERING = ${JSON.stringify(value.ordering, null, 2)} as const;\nexport const PRODUCT_MODEL_SCHEDULE = ${JSON.stringify(value.schedule, null, 2)} as const;\nexport const PRODUCT_MODEL_FAILURES = ${JSON.stringify(value.failures, null, 2)} as const;\n`;
+function render(value, standardCapabilities) {
+  return `// Generated from Rust product-model contract descriptor. Do not edit.\n// Runtime standard capability constants are generated from their Rust descriptor.\n\nexport const PRODUCT_MODEL_ARTIFACT = ${JSON.stringify(value.artifact)} as const;\nexport const PRODUCT_MODEL_CAPABILITY_TARGETS = ${JSON.stringify(value.capabilityTargets, null, 2)} as const;\nexport const PRODUCT_MODEL_CAPABILITY_CATALOG = ${JSON.stringify(value.capabilityCatalog, null, 2)} as const;\nexport type EngineCapabilityTarget = typeof PRODUCT_MODEL_CAPABILITY_CATALOG.engine[number]['target'];\nexport type EngineCapabilityName = EngineCapabilityTarget extends \`engine.\${infer Name}\` ? Name : never;\nexport const RUNTIME_STANDARD_CAPABILITIES = ${JSON.stringify(standardCapabilities, null, 2)} as const;\nexport const PRODUCT_MODEL_FIELDS = ${JSON.stringify(value.fields, null, 2)} as const;\nexport const PRODUCT_MODEL_IDENTITY = ${JSON.stringify(value.identity, null, 2)} as const;\nexport const PRODUCT_MODEL_INPUT = ${JSON.stringify(value.input, null, 2)} as const;\nexport const PRODUCT_MODEL_LIMITS = ${JSON.stringify(value.limits, null, 2)} as const;\nexport const PRODUCT_MODEL_NUMBER_ENCODING = ${JSON.stringify(value.numberEncoding, null, 2)} as const;\nexport const PRODUCT_MODEL_OPTIONAL_FIELDS = ${JSON.stringify(value.optionalFields, null, 2)} as const;\nexport const PRODUCT_MODEL_ORDERING = ${JSON.stringify(value.ordering, null, 2)} as const;\nexport const PRODUCT_MODEL_SCHEDULE = ${JSON.stringify(value.schedule, null, 2)} as const;\nexport const PRODUCT_MODEL_FAILURES = ${JSON.stringify(value.failures, null, 2)} as const;\n`;
 }

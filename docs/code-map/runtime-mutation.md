@@ -25,7 +25,8 @@ The complete downstream facade re-exports this crate as
 ## Static assembly and resolved batches
 
 `MutationCapabilityDescriptor` is data-only: it names an authored binding id,
-exact target, stable publication domain, and named owner. Compilation matches
+exact target, stable publication domain, named owner, and exact operation wire
+type. Compilation matches
 each descriptor against a linked binding, requires linkable `Operation` kind,
 retains the resolved target/provenance and capability payload budget, and
 rejects duplicates, missing bindings, target drift, invalid identities, and
@@ -97,6 +98,14 @@ readback, while a new generation resets progress and history. Older admitted
 tokens remain eligible only in monotonic lane order, which permits deliberate
 catch-up after multiple lifecycle admissions. Foreign, stale, wrong-phase,
 paused, faulted, shutdown, disposed, or lane-out-of-order tokens cannot publish.
+
+Sparse schedule cadence still requires every admitted Mutation token to be
+accounted for. `complete_empty_step` validates that exact token and advances
+the same cursor without receiving authority, a planner, or a batch. Retained
+exact retries return the prior empty-completion receipt; a batch and an empty
+completion conflict for the same step. Empty evidence is bounded, survives a
+same-generation rebind, resets on a new generation, and an evicted old step
+remains ineligible because the monotonic cursor has advanced.
 
 Receipts retain binding, step, batch/causation/provenance, ordered resolved
 operations with binding index, target, kind, resolved target, publication

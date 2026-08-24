@@ -38,6 +38,8 @@ export {
   MAX_SCHEDULE_RESOURCE_DECLARATIONS,
   MAX_SCHEDULE_DEPENDENCIES,
 } from './author.js';
+export { observePairs } from './observe-pairs.js';
+export type { ObservePairsDraft, ObservePairsQuotas } from './observe-pairs.js';
 export { RuntimeCompositionAuthoringError, type RuntimeCompositionAuthoringErrorCode } from './error.js';
 export type { EngineCapabilityName, EngineCapabilityTarget } from './generated.js';
 export type {

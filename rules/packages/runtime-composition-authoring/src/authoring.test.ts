@@ -18,6 +18,7 @@ import {
   gameplayDefinition,
   inputAction,
   kernelCapability,
+  observePairs,
   phase,
   prepend,
   prependComposition,
@@ -38,6 +39,10 @@ const fixtureUrl = new URL(
 );
 const canonicalNumbersFixtureUrl = new URL(
   '../../../../fixtures/product-model/canonical-numbers.expected.compiled-composition.json',
+  import.meta.url,
+);
+const observePairsFixtureUrl = new URL(
+  '../../../../fixtures/runtime-standard-capabilities/stealth.observe-pairs.compiled-composition.json',
   import.meta.url,
 );
 
@@ -93,6 +98,63 @@ test('typed Runtime Composition authoring emits the exact Rust-owned current fix
   if (projection?.mode === 'append') {
     assert.deepEqual(projection.systems[0]?.writes, ['render-frame.diff']);
   }
+});
+
+test('observe-pairs authors the closed stealth pressure system with generated access and result contracts', async () => {
+  const observe = engineCapability('observe-pairs', 'runtime.observe-pairs');
+  const advanceAlert = kernelCapability('stealth.advance-alert', 'advance-alert');
+  const artifact = authorRuntimeComposition({
+    product: 'stealth.pressure',
+    capabilities: [observe, advanceAlert],
+    schedule: schedule({
+      simulation: append(Standard.simulation, observePairs({
+        id: 'stealth.detect',
+        engineBinding: observe,
+        operationBinding: advanceAlert,
+        observerRole: 'stealth.vision',
+        targetRole: 'stealth.target',
+        quotas: { observers: 64, targets: 256, pairs: 1024, aggregates: 256 },
+        cadence: { everySteps: 6, offsetSteps: 0 },
+      })),
+    }),
+  });
+  const fixture = await readFile(observePairsFixtureUrl, 'utf8');
+  assert.equal(artifact.canonicalJson, fixture);
+  const system = artifact.composition.schedule[1];
+  assert.equal(system?.phase, 'simulation');
+  if (system?.mode === 'append') {
+    assert.deepEqual(system.systems[0]?.reads, ['entity-state.components', 'entity-state.transforms', 'engine-spatial.occlusion']);
+    assert.deepEqual(system.systems[0]?.writes, ['runtime-mutation.operations']);
+    assert.deepEqual(JSON.parse(JSON.stringify(system.systems[0]?.payload)), {
+      kind: 'engine.runtime.observe-pairs.v1',
+      observerRole: 'stealth.vision',
+      targetRole: 'stealth.target',
+      operationBinding: 'stealth.advance-alert',
+      operationType: 'engine.runtime.observe-pairs.result.v1',
+      quotas: { observers: 64, targets: 256, pairs: 1024, aggregates: 256 },
+    });
+  }
+});
+
+test('observe-pairs refuses unread expression, callback, visibility, reducer, and quota extensions', () => {
+  const observe = engineCapability('observe-pairs', 'runtime.observe-pairs');
+  const advanceAlert = kernelCapability('stealth.advance-alert', 'advance-alert');
+  const safe = {
+    id: 'stealth.detect', engineBinding: observe, operationBinding: advanceAlert,
+    observerRole: 'stealth.vision', targetRole: 'stealth.target',
+    quotas: { observers: 1, targets: 1, pairs: 1, aggregates: 1 }, cadence: 6,
+  };
+  let expressionRead = false;
+  const expression = { ...safe } as Record<string, unknown>;
+  Object.defineProperty(expression, 'expression', { enumerable: true, get: () => { expressionRead = true; return 'must-not-read'; } });
+  expectError(() => observePairs(expression as unknown as Parameters<typeof observePairs>[0]), 'invalid-json-value');
+  assert.equal(expressionRead, false);
+  expectError(() => observePairs({ ...safe, visibility: 'thick-line' } as unknown as Parameters<typeof observePairs>[0]), 'unknown-field');
+  expectError(() => observePairs({ ...safe, reducer: 'sum-by-field' } as unknown as Parameters<typeof observePairs>[0]), 'unknown-field');
+  expectError(() => observePairs({ ...safe, observerRole: (() => 'stealth.vision') as unknown as string }), 'invalid-field-type');
+  expectError(() => observePairs({ ...safe, targetRole: 'stealth.vision' }), 'duplicate-entry');
+  expectError(() => observePairs({ ...safe, quotas: { observers: 65, targets: 1, pairs: 1, aggregates: 1 } }), 'quota-exceeded');
+  expectError(() => observePairs({ ...safe, operationBinding: engineCapability('wrong', 'runtime.observe-pairs') }), 'invalid-capability-target');
 });
 
 test('typed W mapping resolves to one admitted move.forward descriptor', () => {

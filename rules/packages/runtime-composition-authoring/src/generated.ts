@@ -1,4 +1,5 @@
 // Generated from Rust product-model contract descriptor. Do not edit.
+// Runtime standard capability constants are generated from their Rust descriptor.
 
 export const PRODUCT_MODEL_ARTIFACT = "compiled-composition" as const;
 export const PRODUCT_MODEL_CAPABILITY_TARGETS = {
@@ -33,6 +34,32 @@ export const PRODUCT_MODEL_CAPABILITY_CATALOG = {
       "uses": [
         "schedule"
       ]
+    },
+    {
+      "access": {
+        "reads": [
+          "entity-state.components",
+          "entity-state.transforms",
+          "engine-spatial.occlusion"
+        ],
+        "writes": [
+          "runtime-mutation.operations"
+        ]
+      },
+      "availability": "linkable",
+      "budget": {
+        "maximumCompactJsonPayloadBytes": 16384
+      },
+      "kind": "system",
+      "provenance": {
+        "logicalPath": "ObservePairsPlan::compile",
+        "owner": "rusty-engine.runtime-standard-capabilities",
+        "source": "rust/crates/runtime-standard-capabilities/src/lib.rs"
+      },
+      "target": "engine.runtime.observe-pairs",
+      "uses": [
+        "schedule"
+      ]
     }
   ],
   "kinds": [
@@ -45,6 +72,49 @@ export const PRODUCT_MODEL_CAPABILITY_CATALOG = {
 } as const;
 export type EngineCapabilityTarget = typeof PRODUCT_MODEL_CAPABILITY_CATALOG.engine[number]['target'];
 export type EngineCapabilityName = EngineCapabilityTarget extends `engine.${infer Name}` ? Name : never;
+export const RUNTIME_STANDARD_CAPABILITIES = {
+  "artifact": "runtime-standard-capabilities",
+  "observePairs": {
+    "access": {
+      "reads": [
+        "entity-state.components",
+        "entity-state.transforms",
+        "engine-spatial.occlusion"
+      ],
+      "writes": [
+        "runtime-mutation.operations"
+      ]
+    },
+    "kind": "system",
+    "maximumCompactJsonPayloadBytes": 16384,
+    "payload": {
+      "fields": [
+        "kind",
+        "observerRole",
+        "targetRole",
+        "operationBinding",
+        "operationType",
+        "quotas"
+      ],
+      "kind": "engine.runtime.observe-pairs.v1",
+      "quotaFields": [
+        "observers",
+        "targets",
+        "pairs",
+        "aggregates"
+      ],
+      "resultKind": "engine.runtime.observe-pairs.result.v1",
+      "visibility": "center-ray"
+    },
+    "quotas": {
+      "aggregates": 256,
+      "observers": 64,
+      "pairs": 1024,
+      "targets": 256
+    },
+    "target": "engine.runtime.observe-pairs"
+  }
+} as const;
 export const PRODUCT_MODEL_FIELDS = {
   "capabilityBinding": [
     "id",

@@ -94,6 +94,16 @@ pub enum RuntimeMutationError<E> {
         expected: Option<u64>,
         received: SimulationStep,
     },
+    /// A nonempty batch was attempted after an explicit sparse-cadence empty
+    /// completion consumed this exact step.
+    StepCompletedEmpty {
+        step: SimulationStep,
+    },
+    /// An empty completion was attempted after a nonempty batch published at
+    /// this exact step.
+    StepAlreadyCompletedWithBatch {
+        step: SimulationStep,
+    },
     BatchIdentityConflict {
         step: SimulationStep,
         batch_id: String,

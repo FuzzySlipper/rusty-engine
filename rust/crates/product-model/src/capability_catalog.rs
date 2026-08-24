@@ -338,6 +338,18 @@ macro_rules! define_engine_capability_catalog {
 }
 
 define_engine_capability_catalog! {
+    RuntimeObservePairs {
+        target: "engine.runtime.observe-pairs",
+        kind: CapabilityKind::System,
+        uses: CapabilityUses::SCHEDULE,
+        availability: CapabilityAvailability::Linkable,
+        reads: &["entity-state.components", "entity-state.transforms", "engine-spatial.occlusion"],
+        writes: &["runtime-mutation.operations"],
+        maximum_compact_json_payload_bytes: 16_384,
+        owner: "rusty-engine.runtime-standard-capabilities",
+        source: "rust/crates/runtime-standard-capabilities/src/lib.rs",
+        logical_path: "ObservePairsPlan::compile",
+    }
     EntityRenderProject {
         target: "engine.render.entity-project",
         kind: CapabilityKind::Projection,

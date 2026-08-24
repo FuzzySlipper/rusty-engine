@@ -188,6 +188,17 @@ republishing; failed pre-publication staging remains retryable. Same-generation
 rebind retains receipt readback and counts admitted-but-uncommitted steps as
 invalidated without claiming completion; a new generation resets both.
 
+`runtime-standard-capabilities` currently admits one closed schedule system,
+`engine.runtime.observe-pairs`. Static Rust component adapters expose typed
+observer eye/forward/range/FOV/evidence facts and target body-center facts;
+the Engine transforms them, evaluates bounded distance/facing and center-ray
+occlusion against canonical spatial authority, then reduces in entity order.
+It is not a query language, ECS framework, callback runtime, or gameplay VM.
+The compiled schedule remains the cadence owner. The resulting single Product
+Kernel operation carries neutral evidence only; alert state, thresholds,
+disguise, and consequences remain Product Kernel planner meaning and publish
+through `runtime-mutation`.
+
 No Engine crate knows the downstream game's component families, event vocabulary, game-specific
 stored-project schema, or browser API. The Rust render crates know only renderer-neutral values and
 explicit read-only provider views; the isolated renderer workspace knows no gameplay authority.

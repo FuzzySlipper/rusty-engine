@@ -2836,6 +2836,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "runtime-standard-capabilities"
+version = "0.1.0"
+dependencies = [
+ "core-ids",
+ "core-math",
+ "engine-spatial",
+ "entity-state",
+ "product-model",
+ "runtime-lifecycle",
+ "runtime-mutation",
+ "runtime-schedule",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "runtime-timeline"
 version = "0.1.0"
 dependencies = [
@@ -2947,6 +2963,7 @@ dependencies = [
  "runtime-lifecycle",
  "runtime-mutation",
  "runtime-schedule",
+ "runtime-standard-capabilities",
  "runtime-timeline",
  "serde_json",
  "state-machine",

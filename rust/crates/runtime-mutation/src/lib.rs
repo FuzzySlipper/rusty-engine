@@ -38,6 +38,6 @@ pub use model::{
     MAX_MUTATION_PAYLOAD_BYTES, MAX_MUTATION_PROVENANCE_BYTES, MAX_MUTATION_RECEIPTS,
 };
 pub use runtime::{
-    MutationAuthority, MutationPlanner, MutationReceipt, RuntimeMutation, RuntimeMutationBinding,
-    RuntimeMutationReadout,
+    EmptyMutationStepReceipt, MutationAuthority, MutationPlanner, MutationReceipt, RuntimeMutation,
+    RuntimeMutationBinding, RuntimeMutationReadout,
 };

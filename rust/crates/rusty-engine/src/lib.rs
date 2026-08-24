@@ -37,6 +37,7 @@ pub use runtime_input;
 pub use runtime_lifecycle;
 pub use runtime_mutation;
 pub use runtime_schedule;
+pub use runtime_standard_capabilities;
 pub use runtime_timeline;
 pub use state_machine;
 pub use svc_collision;

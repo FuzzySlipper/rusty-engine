@@ -36,6 +36,7 @@ runtime-input.workspace = true
 runtime-schedule.workspace = true
 runtime-timeline.workspace = true
 runtime-mutation.workspace = true
+runtime-standard-capabilities.workspace = true
 state-machine.workspace = true
 svc-collision.workspace = true
 svc-mesh.workspace = true

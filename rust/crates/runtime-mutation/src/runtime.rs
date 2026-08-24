@@ -187,6 +187,7 @@ pub struct RuntimeMutationReadout {
     binding: RuntimeMutationBinding,
     next_expected_step: Option<u64>,
     last_applied_step: Option<SimulationStep>,
+    last_completed_step: Option<SimulationStep>,
     invalidated_admission_count: u64,
     evicted_receipt_count: u64,
     disposed: bool,
@@ -203,6 +204,12 @@ impl RuntimeMutationReadout {
 
     pub const fn last_applied_step(self) -> Option<SimulationStep> {
         self.last_applied_step
+    }
+
+    /// Last step completed by either an applied batch or an explicit empty
+    /// completion. Empty completion advances only lane progression.
+    pub const fn last_completed_step(self) -> Option<SimulationStep> {
+        self.last_completed_step
     }
 
     pub const fn invalidated_admission_count(self) -> u64 {
@@ -223,6 +230,27 @@ struct AppliedMutationRecord<G, E> {
     receipt: MutationReceipt<G, E>,
 }
 
+/// Retained evidence that one admitted Mutation step deliberately had no
+/// operation. It never owns authority, a planner, or publication evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmptyMutationStepReceipt {
+    binding: RuntimeMutationBinding,
+    step: SimulationStep,
+}
+
+impl EmptyMutationStepReceipt {
+    const fn new(binding: RuntimeMutationBinding, step: SimulationStep) -> Self {
+        Self { binding, step }
+    }
+
+    pub const fn binding(self) -> RuntimeMutationBinding {
+        self.binding
+    }
+    pub const fn step(self) -> SimulationStep {
+        self.step
+    }
+}
+
 /// One instance-owned mutation lane. It stores static catalog and progression,
 /// never a planner or any product service.
 #[derive(Debug)]
@@ -236,9 +264,11 @@ where
     binding: RuntimeMutationBinding,
     next_expected_step: Option<u64>,
     last_applied_step: Option<SimulationStep>,
+    last_completed_step: Option<SimulationStep>,
     invalidated_admission_count: u64,
     evicted_receipt_count: u64,
     receipt_history: VecDeque<AppliedMutationRecord<A::Guard, E>>,
+    empty_step_history: VecDeque<EmptyMutationStepReceipt>,
     disposed: bool,
     authority: PhantomData<A>,
 }
@@ -272,9 +302,11 @@ where
             ),
             next_expected_step: Some(0),
             last_applied_step: None,
+            last_completed_step: None,
             invalidated_admission_count: 0,
             evicted_receipt_count: 0,
             receipt_history: VecDeque::with_capacity(MAX_MUTATION_RECEIPTS),
+            empty_step_history: VecDeque::with_capacity(MAX_MUTATION_RECEIPTS),
             disposed: false,
             authority: PhantomData,
         })
@@ -297,6 +329,7 @@ where
             binding: self.binding,
             next_expected_step: self.next_expected_step,
             last_applied_step: self.last_applied_step,
+            last_completed_step: self.last_completed_step,
             invalidated_admission_count: self.invalidated_admission_count,
             evicted_receipt_count: self.evicted_receipt_count,
             disposed: self.disposed,
@@ -315,6 +348,61 @@ where
             .iter()
             .find(|record| record.receipt.step() == step)
             .map(|record| &record.receipt)
+    }
+
+    /// Reads retained explicit empty-completion evidence. Eviction does not
+    /// make the old step eligible again because the monotonic cursor remains
+    /// ahead of it.
+    pub fn empty_completion_for_step(
+        &self,
+        step: SimulationStep,
+    ) -> Option<EmptyMutationStepReceipt> {
+        self.empty_step_history
+            .iter()
+            .copied()
+            .find(|receipt| receipt.step() == step)
+    }
+
+    /// Completes one exact Mutation token without invoking a planner or
+    /// touching authority. This is the explicit sparse-cadence path: callers
+    /// must account for every admitted Mutation step, even when no standard
+    /// capability is due. Exact retained retries are idempotent; a later
+    /// nonempty batch for this step is rejected.
+    pub fn complete_empty_step(
+        &mut self,
+        lifecycle: &RuntimeLifecycle,
+        token: RuntimePhaseToken,
+    ) -> Result<EmptyMutationStepReceipt, RuntimeMutationError<()>> {
+        self.validate_token(lifecycle, token)?;
+        let step = token.simulation().step();
+        if let Some(receipt) = self.empty_completion_for_step(step) {
+            return Ok(receipt);
+        }
+        if self.receipt_for_step(step).is_some() {
+            return Err(RuntimeMutationError::StepAlreadyCompletedWithBatch { step });
+        }
+        if self.next_expected_step != Some(step.value()) {
+            return Err(RuntimeMutationError::StepOutOfOrder {
+                expected: self.next_expected_step,
+                received: step,
+            });
+        }
+        let receipt = EmptyMutationStepReceipt::new(self.binding, step);
+        let next_evicted_receipt_count = if self.empty_step_history.len() == MAX_MUTATION_RECEIPTS {
+            self.evicted_receipt_count
+                .checked_add(1)
+                .ok_or(RuntimeMutationError::ReceiptEvictionOverflow)?
+        } else {
+            self.evicted_receipt_count
+        };
+        if self.empty_step_history.len() == MAX_MUTATION_RECEIPTS {
+            self.empty_step_history.pop_front();
+        }
+        self.empty_step_history.push_back(receipt);
+        self.next_expected_step = next_step_after(step.value());
+        self.last_completed_step = Some(step);
+        self.evicted_receipt_count = next_evicted_receipt_count;
+        Ok(receipt)
     }
 
     /// Applies one nonempty batch for the exact lifecycle Mutation token.
@@ -360,6 +448,9 @@ where
                 fingerprint: batch.fingerprint(),
                 catalog_identity: self.catalog.catalog_identity(),
             });
+        }
+        if self.empty_completion_for_step(step).is_some() {
+            return Err(RuntimeMutationError::StepCompletedEmpty { step });
         }
         if let Some(record) = self
             .receipt_history
@@ -421,6 +512,7 @@ where
         }
         self.receipt_history.push_back(record);
         self.last_applied_step = Some(step);
+        self.last_completed_step = Some(step);
         self.next_expected_step = next_expected_step;
         self.evicted_receipt_count = next_evicted_receipt_count;
         // This is the sole publication assignment. Do not add fallible work
@@ -467,8 +559,10 @@ where
         self.invalidated_admission_count = invalidated_admission_count;
         if newer_generation {
             self.receipt_history.clear();
+            self.empty_step_history.clear();
             self.evicted_receipt_count = 0;
             self.last_applied_step = None;
+            self.last_completed_step = None;
         }
         Ok(())
     }
@@ -482,7 +576,9 @@ where
 
     pub fn dispose(&mut self) {
         self.receipt_history.clear();
+        self.empty_step_history.clear();
         self.last_applied_step = None;
+        self.last_completed_step = None;
         self.next_expected_step = None;
         self.disposed = true;
     }

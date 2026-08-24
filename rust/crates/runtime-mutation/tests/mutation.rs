@@ -70,6 +70,7 @@ fn catalog() -> CompiledMutationCatalog {
             "kernel.start-timeline",
             "world",
             "product.timeline",
+            "product.timeline.start.v1",
         )],
     )
     .expect("mutation catalog")
@@ -268,6 +269,96 @@ fn exact_retry_returns_prior_receipt_without_republishing() {
             .unwrap(),
         &first
     );
+}
+
+#[test]
+fn empty_steps_allow_sparse_cadence_without_authority_publication() {
+    let (mut lifecycle, mut lane, admission, mut world) = setup();
+    let mut planner = Planner::default();
+    lane.apply_batch(
+        &lifecycle,
+        admission.phases().mutation(),
+        &mut world,
+        &mut planner,
+        batch("step-0", vec![operation(1)]),
+    )
+    .unwrap();
+
+    let mut first_empty = None;
+    for step in 1..=5 {
+        let admission = lifecycle.admit_demand_step().unwrap().step_at(0).unwrap();
+        let token = admission.phases().mutation();
+        let receipt = lane.complete_empty_step(&lifecycle, token).unwrap();
+        assert_eq!(receipt.step().value(), step);
+        assert_eq!(world.value, 1);
+        if step == 1 {
+            first_empty = Some((token, receipt));
+        }
+    }
+    let (first_token, first_receipt) = first_empty.unwrap();
+    assert_eq!(
+        lane.complete_empty_step(&lifecycle, first_token).unwrap(),
+        first_receipt
+    );
+    assert!(matches!(
+        lane.apply_batch(
+            &lifecycle,
+            first_token,
+            &mut world,
+            &mut planner,
+            batch("conflicts-with-empty", vec![operation(2)]),
+        ),
+        Err(RuntimeMutationError::StepCompletedEmpty { .. })
+    ));
+
+    let sixth = lifecycle.admit_demand_step().unwrap().step_at(0).unwrap();
+    lane.apply_batch(
+        &lifecycle,
+        sixth.phases().mutation(),
+        &mut world,
+        &mut planner,
+        batch("step-6", vec![operation(6)]),
+    )
+    .unwrap();
+    assert_eq!(world.value, 2);
+    assert_eq!(lane.readout().last_completed_step().unwrap().value(), 6);
+
+    lifecycle.pause().unwrap();
+    lifecycle.resume().unwrap();
+    lane.rebind(&lifecycle).unwrap();
+    assert_eq!(
+        lane.empty_completion_for_step(first_receipt.step()),
+        Some(first_receipt)
+    );
+}
+
+#[test]
+fn empty_completion_rejects_wrong_phase_stale_and_batch_completed_steps() {
+    let (mut lifecycle, mut lane, admission, mut world) = setup();
+    let mut planner = Planner::default();
+    assert!(matches!(
+        lane.complete_empty_step(&lifecycle, admission.phases().timeline()),
+        Err(RuntimeMutationError::WrongPhase { .. })
+    ));
+    lane.apply_batch(
+        &lifecycle,
+        admission.phases().mutation(),
+        &mut world,
+        &mut planner,
+        batch("step-0", vec![operation(1)]),
+    )
+    .unwrap();
+    assert!(matches!(
+        lane.complete_empty_step(&lifecycle, admission.phases().mutation()),
+        Err(RuntimeMutationError::StepAlreadyCompletedWithBatch { .. })
+    ));
+    lifecycle.pause().unwrap();
+    lifecycle.resume().unwrap();
+    lane.rebind(&lifecycle).unwrap();
+    assert!(matches!(
+        lane.complete_empty_step(&lifecycle, admission.phases().mutation()),
+        Err(RuntimeMutationError::StaleBinding { .. })
+    ));
 }
 
 #[test]
@@ -662,6 +753,7 @@ fn assembly_catalog_rejects_unknown_target_target_drift_and_non_operation_kind()
             "kernel.missing",
             "world",
             "owner",
+            "test.operation.v1",
         )],
     )
     .unwrap_err();
@@ -674,6 +766,7 @@ fn assembly_catalog_rejects_unknown_target_target_drift_and_non_operation_kind()
             "kernel.other",
             "world",
             "owner",
+            "test.operation.v1",
         )],
     )
     .unwrap_err();
@@ -689,6 +782,7 @@ fn assembly_catalog_rejects_unknown_target_target_drift_and_non_operation_kind()
             "kernel.apply-movement",
             "world",
             "owner",
+            "test.operation.v1",
         )],
     )
     .unwrap_err();

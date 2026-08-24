@@ -25,6 +25,7 @@ pub struct MutationCapabilityDescriptor {
     target: &'static str,
     publication_domain: &'static str,
     owner: &'static str,
+    operation_type: &'static str,
 }
 
 impl MutationCapabilityDescriptor {
@@ -33,12 +34,14 @@ impl MutationCapabilityDescriptor {
         target: &'static str,
         publication_domain: &'static str,
         owner: &'static str,
+        operation_type: &'static str,
     ) -> Self {
         Self {
             binding_id,
             target,
             publication_domain,
             owner,
+            operation_type,
         }
     }
 
@@ -57,6 +60,14 @@ impl MutationCapabilityDescriptor {
     pub const fn owner(self) -> &'static str {
         self.owner
     }
+
+    /// Static Product Kernel operation/result wire identity expected by this
+    /// binding. The mutation lane does not interpret payload meaning, but it
+    /// retains this identity so standard Engine producers cannot accidentally
+    /// feed a different operation contract into the selected binding.
+    pub const fn operation_type(self) -> &'static str {
+        self.operation_type
+    }
 }
 
 /// One closed operation binding selected by the Product Assembly.
@@ -71,6 +82,7 @@ pub struct CompiledMutationCapability {
     provenance_source: String,
     provenance_path: String,
     kind: String,
+    operation_type: String,
     maximum_payload_bytes: usize,
 }
 
@@ -97,6 +109,7 @@ impl CompiledMutationCapability {
             provenance_source: provenance.source().to_owned(),
             provenance_path: provenance.logical_path().to_owned(),
             kind: metadata.kind().as_str().to_owned(),
+            operation_type: descriptor.operation_type().to_owned(),
             maximum_payload_bytes: metadata.budget().maximum_compact_json_payload_bytes(),
         }
     }
@@ -135,6 +148,10 @@ impl CompiledMutationCapability {
 
     pub fn kind(&self) -> &str {
         &self.kind
+    }
+
+    pub fn operation_type(&self) -> &str {
+        &self.operation_type
     }
 
     pub const fn maximum_payload_bytes(&self) -> usize {
@@ -285,6 +302,7 @@ struct CatalogIdentityCapability<'a> {
     provenance_source: &'a str,
     provenance_path: &'a str,
     kind: &'a str,
+    operation_type: &'a str,
     maximum_payload_bytes: usize,
 }
 
@@ -304,6 +322,7 @@ fn catalog_identity(
                 provenance_source: capability.provenance_source(),
                 provenance_path: capability.provenance_path(),
                 kind: capability.kind(),
+                operation_type: capability.operation_type(),
                 maximum_payload_bytes: capability.maximum_payload_bytes(),
             })
             .collect(),
@@ -324,6 +343,7 @@ fn validate_descriptor(
         ("target", descriptor.target()),
         ("publication domain", descriptor.publication_domain()),
         ("owner", descriptor.owner()),
+        ("operation type", descriptor.operation_type()),
     ] {
         validate_identity(value, product_model::MAX_IDENTITY_BYTES, field)
             .map_err(|_| RuntimeMutationError::InvalidDescriptor { index, field })?;
