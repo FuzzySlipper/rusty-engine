@@ -1,0 +1,51 @@
+:root {
+  background: #111513;
+  color: #f0e6c7;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body, #application { height: 100%; margin: 0; overflow: hidden; }
+
+.vignette-loading {
+  align-items: center;
+  background: #111513;
+  color: #e4d6ad;
+  display: flex;
+  height: 100%;
+  justify-content: center;
+  margin: 0;
+  padding: 1rem;
+  text-align: center;
+}
+
+.vignette-failure { color: #ffb6a9; }
+
+.vignette-surface {
+  cursor: crosshair;
+  height: 100dvh;
+  position: relative;
+  width: 100%;
+}
+
+.vignette-hud {
+  background: linear-gradient(90deg, rgba(17, 21, 19, 0.94), rgba(17, 21, 19, 0.5));
+  border-left: 3px solid #c5a25e;
+  left: clamp(0.6rem, 1.5vw, 1.25rem);
+  max-width: min(34rem, calc(100vw - 1.2rem));
+  padding: 0.6rem 0.8rem;
+  pointer-events: none;
+  position: absolute;
+  top: clamp(0.6rem, 1.5vw, 1.25rem);
+}
+
+.vignette-hud h1 {
+  font-size: 0.9rem;
+  letter-spacing: 0.1em;
+  margin: 0 0 0.3rem;
+  text-transform: uppercase;
+}
+
+.vignette-hud p { color: #d9cfb8; font-size: 0.72rem; line-height: 1.35; margin: 0.18rem 0; }
+.vignette-hud .vignette-status { color: #f6d586; font-weight: 700; }
+.vignette-hud .vignette-caveat { color: #bcb59f; }

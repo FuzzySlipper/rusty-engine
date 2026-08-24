@@ -128,6 +128,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 - [Gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md)
 - [Textured voxel campaign closeout](textured-voxel-campaign-closeout.md)
 - [Reconstructed voxel surfaces](topics/voxel/reconstructed-surfaces.md)
+- [Voxel vignette visual gate](topics/voxel/voxel-vignette-visual-gate.md)
 - [Chunk-granular voxel mesh updates](topics/voxel/chunk-granular-updates.md)
 - [Structured world indicators](topics/world-indicators.md)
 - [Three scene particles](topics/three-scene-particles.md)

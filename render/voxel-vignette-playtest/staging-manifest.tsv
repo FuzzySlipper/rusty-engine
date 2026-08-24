@@ -1,0 +1,9 @@
+# Local experimental palette-unlit producer derivatives. Do not commit staged binaries.
+# run identity: voxel-vignette-128-20260823-003
+# derivative receipt set: palette-unlit-6925-20260824-001
+# source layout vignetteId is stale 002; this manifest's run identity is authoritative for this gate.
+# filename	sha256	bytes
+terrain-128-palette-unlit.glb	254c7ed1d5376d3fbeaff1239a9125b769dbf3d1182e349956c69d7584c30c1a	1067908
+shrine-nano-128-palette-unlit.glb	9f97e2700962191ea015f87bb1f63670919581e3cf9f32807a72ca585ad563f5	14260896
+gpt-tree-128-palette-unlit.glb	cc5b1f15c31dbf114717c5f078637ef84752224f9f32734da7abc0794c595460	13374324
+door-t3-128-palette-unlit.glb	f3c8c66bc7b97bfbccdf19452b8042589b13209614c3e8a53098a4f5c32e03b5	5856864

@@ -9,6 +9,7 @@
   "include": [
     "browser/**/*.ts",
     "product-playtest/**/*.ts",
+    "voxel-vignette-playtest/**/*.ts",
     "private/**/*.ts",
     "playwright.config.ts",
     "vite.config.ts",

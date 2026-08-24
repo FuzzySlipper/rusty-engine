@@ -1,0 +1,20 @@
+{
+  "project": "rusty-engine-voxel-vignette",
+  "serve": {
+    "command": "pnpm --dir .. exec vite --config vite.config.ts --host {host} --port {port}",
+    "preferredPort": 37100,
+    "healthUrl": "/voxel-vignette-playtest/",
+    "readyText": "Rusty Engine voxel vignette visual gate",
+    "reusePolicy": "broker_owned",
+    "fingerprintPaths": [
+      "assets",
+      "index.html",
+      "main.ts",
+      "product.ts",
+      "scene.ts",
+      "styles.css",
+      "staging-manifest.tsv"
+    ],
+    "startupTimeout": "60s"
+  }
+}
