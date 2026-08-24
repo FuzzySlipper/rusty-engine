@@ -36,6 +36,7 @@ pub use renderer_webview_host;
 pub use runtime_input;
 pub use runtime_lifecycle;
 pub use runtime_schedule;
+pub use runtime_timeline;
 pub use state_machine;
 pub use svc_collision;
 pub use svc_mesh;

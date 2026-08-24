@@ -46,9 +46,10 @@ pub use composition::{
 pub use contract::encode_product_model_contract_descriptor;
 pub use diagnostic::{ProductModelDiagnostic, ProductModelError, MAX_DIAGNOSTIC_MESSAGE_BYTES};
 pub use manifest::{
-    decode_product_manifest, validate_product_manifest, LifecycleMode, ProductManifest,
-    ProductManifestCandidate, RealtimeClock, ReleaseChannel, WrapperCandidate, WrapperDeclaration,
-    WrapperKind, MAX_COMPOSITION_ENTRYPOINTS, MAX_IDENTITY_BYTES, MAX_PRODUCT_MANIFEST_BYTES,
-    MAX_REALTIME_CATCH_UP_STEPS, MAX_REALTIME_HZ, MAX_WRAPPERS, MAX_WRAPPER_PERMISSIONS,
+    decode_product_manifest, validate_product_identity, validate_product_manifest, LifecycleMode,
+    ProductManifest, ProductManifestCandidate, RealtimeClock, ReleaseChannel, WrapperCandidate,
+    WrapperDeclaration, WrapperKind, MAX_COMPOSITION_ENTRYPOINTS, MAX_IDENTITY_BYTES,
+    MAX_PRODUCT_MANIFEST_BYTES, MAX_REALTIME_CATCH_UP_STEPS, MAX_REALTIME_HZ, MAX_WRAPPERS,
+    MAX_WRAPPER_PERMISSIONS,
 };
 pub use path::ProductPath;

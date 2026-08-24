@@ -292,6 +292,13 @@ pub enum RuntimeFault {
 pub struct SimulationStep(pub(crate) u64);
 
 impl SimulationStep {
+    /// Reconstitutes a deterministic step from a validated typed snapshot or
+    /// another bounded runtime owner. Lifecycle admission remains the source
+    /// of new live steps; this constructor does not admit work.
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
     pub const fn value(self) -> u64 {
         self.0
     }

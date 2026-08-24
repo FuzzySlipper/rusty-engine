@@ -613,6 +613,13 @@ pub(crate) fn validate_identity(
     Ok(())
 }
 
+/// Validates one runtime caller identity with the same bounded grammar used by
+/// current Product Model declarations. This is a pure validation helper; it
+/// does not admit a manifest or mutate product state.
+pub fn validate_product_identity(value: &str) -> Result<(), ProductModelError> {
+    validate_identity(value, SOURCE, "$")
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawManifest {

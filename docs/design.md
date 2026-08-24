@@ -118,6 +118,38 @@ admitting new work under the resumed revision. A revision change during an activ
 restarting/new-generation and binding a fresh lane, or by disposing and
 reconstructing the existing lane.
 
+The implemented `runtime-timeline` lane consumes the same linked composition's
+static `Timeline`/`TimelineStep` templates. Compilation retains each step's
+resolved operation capability target/kind, owner/provenance, and payload. One
+explicit runtime instance can then admit bounded operations and completion
+tickets without introducing a scheduler callback or capability registry.
+Schedule/cancel/replace/ticket registration and ticket cancellation are
+Timeline-token gated; an external completion may use the queue-only
+`admit_completion` path with a Running lifecycle and exact lane binding.
+Operations release as immutable data at the `Timeline` phase in
+`(due step, insertion sequence, caller operation identity)` order. Finite
+recurrence releases one occurrence per admitted step; overdue entries use a
+bounded deterministic backlog (`due <= current admitted step`) and never
+fabricate a dropped realtime step.
+
+Completion tickets are issued before external work and bind the compiled step,
+capability target/kind, caller operation revision, closed source kind,
+correlation, and product-owned result-contract identity. Envelopes carry only
+that exact ticket binding and bounded success/failure opaque data. Completion
+arrival order cannot bypass an earlier unresolved ticket; cancellation or
+failure closes the issue-order gap, and completion is admitted exactly once.
+Cancel, replace, and recurrence advancement cancel Pending tickets bound to
+the invalidated operation revision while preserving already Completed outcomes
+as releasable facts, so later completions cannot leave a permanent gap.
+Same-generation control-revision rebind retains scheduled operations but
+invalidates old completion tickets and advances the next-step cursor past
+admitted-but-unreleased lifecycle steps. The bounded invalidated-admission
+count is exposed in the rebind receipt, readout, and snapshot without treating
+those steps as released; a new generation clears queue, tickets, cursors, and
+counters. Typed mechanism snapshots validate into a temporary candidate before
+replacing live state. Products retain ownership of mutation,
+persistence, external I/O, and the meaning of every released record.
+
 No Engine crate knows the downstream game's component families, event vocabulary, game-specific
 stored-project schema, or browser API. The Rust render crates know only renderer-neutral values and
 explicit read-only provider views; the isolated renderer workspace knows no gameplay authority.
