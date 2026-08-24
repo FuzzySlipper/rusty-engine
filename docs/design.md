@@ -35,8 +35,11 @@ in [migration-cluster-ledger.md](migration/migration-cluster-ledger.md).
   not prerequisites. See
   [upstream promotion and authoring DSL](topics/development/upstream-promotion-and-authoring-dsl.md).
 
-Object-centric does not mean Unity-style component scripts or an ECS scheduler. It means entity
-identity and typed component data remain easy to inspect while behavior is owned by explicit code.
+Object-centric does not imply hidden component scripts, callbacks, or an ambient ECS scheduler. It
+means entity identity and typed component data remain easy to inspect while behavior is owned by
+explicit code. The current Product Model runtime schedule below is a separate closed, explicit
+composition mechanism; it does not turn components into behavior owners or introduce a global
+registry.
 
 ## System at a glance
 
@@ -83,6 +86,37 @@ or pointer-lock loss, restart/control revision change, ingress overflow, and
 disposal clear held/transient/pending state. It owns no DOM, controller polling
 cadence, capability invocation, movement, collision, scheduler, callback,
 global bus, or game consequence.
+
+## Product Model runtime schedule boundary
+
+The implemented `runtime-schedule` lane realizes a linked Product Model
+composition as five closed phases in this order: `input`, `simulation`,
+`consequences`, `commit`, and `projection`. Each phase retains its explicit
+append/prepend/extend/replace operation and a structural `Standard.<phase>`
+anchor; the current standard catalog may contribute no systems yet. Runtime
+compilation validates same-phase dependency order, placement partitions,
+read/write ambiguity, closed capability kind/use, payload budgets, and integer
+step cadence before binding to one running lifecycle instance.
+
+The bound lane is non-cloneable and validates the lifecycle token on every
+phase. It maps phases to `InputSnapshot`, `Schedule`, `Timeline`, `Mutation`,
+and `Projection` respectively. A caller supplies a dispatcher and read-only
+context for each phase; the lane presents immutable system invocation data and
+stages typed dispatcher outputs without storing callbacks, service registries,
+clocks, component references, or gameplay state. A dispatcher failure leaves
+the lane's phase progression unchanged, but effects inside that caller-owned
+dispatcher are outside the lane's rollback boundary. Initial binding is only
+valid before the lifecycle admits its first simulation step. Pause/resume or
+restart stales a bound lane; explicit `rebind`/`synchronize` is required at a
+phase boundary, retaining same-generation progress and resetting on a newer
+generation. Same-generation rebind reconciles the next-step cursor to the
+lifecycle's admitted-step count and exposes a bounded invalidated-admission
+count for unstarted admissions not represented by the cursor; those
+admissions are not reported as completed. Rebind should happen before
+admitting new work under the resumed revision. A revision change during an active phase is rejected as
+`RebindActiveStep`; the incomplete phase chain must be abandoned by
+restarting/new-generation and binding a fresh lane, or by disposing and
+reconstructing the existing lane.
 
 No Engine crate knows the downstream game's component families, event vocabulary, game-specific
 stored-project schema, or browser API. The Rust render crates know only renderer-neutral values and

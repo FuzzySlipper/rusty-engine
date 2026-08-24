@@ -5,8 +5,8 @@ use crate::{
     MAX_GAMEPLAY_DEFINITIONS, MAX_IDENTITY_BYTES, MAX_INPUT_CHORD_CONTROLS, MAX_INPUT_MAP_ENTRIES,
     MAX_INTENT_DESCRIPTORS, MAX_OPAQUE_JSON_ARRAY_ENTRIES, MAX_OPAQUE_JSON_DEPTH,
     MAX_OPAQUE_JSON_NODES, MAX_OPAQUE_JSON_OBJECT_ENTRIES, MAX_OPAQUE_JSON_STRING_BYTES,
-    MAX_SAFE_JSON_INTEGER, MAX_SCHEDULE_ACCESS_DECLARATIONS, MAX_SCHEDULE_ENTRIES, MAX_TIMELINES,
-    MAX_TIMELINE_STEPS,
+    MAX_SAFE_JSON_INTEGER, MAX_SCHEDULE_ACCESS_DECLARATIONS, MAX_SCHEDULE_DEPENDENCIES,
+    MAX_SCHEDULE_ENTRIES, MAX_TIMELINES, MAX_TIMELINE_STEPS, SCHEDULE_PHASE_COUNT,
 };
 
 /// Encodes the current Rust-owned Compiled Composition descriptor consumed by
@@ -31,14 +31,16 @@ fn product_model_contract_descriptor() -> Value {
             "compiledComposition": ["product", "intentDescriptors", "inputMap", "schedule", "gameplayDefinitions", "timelines", "capabilityBindings"],
             "intentDescriptor": ["id", "valueKind", "capability", "payload"],
             "inputMap": ["id", "intent", "trigger"],
-            "schedule": ["id", "phase", "capability", "definition", "reads", "writes", "payload"],
+            "schedule": ["phase", "mode", "systems", "before", "after"],
+            "scheduleSystem": ["id", "capability", "definition", "after", "reads", "writes", "cadence", "payload"],
+            "scheduleCadence": ["everySteps", "offsetSteps"],
             "gameplayDefinition": ["id", "payload"],
             "timeline": ["id", "steps"],
             "timelineStep": ["id", "capability", "payload"],
             "capabilityBinding": ["id", "target"]
         },
         "optionalFields": {
-            "schedule": ["definition"]
+            "scheduleSystem": ["definition"]
         },
         "limits": {
             "maximumEncodedBytes": MAX_COMPILED_COMPOSITION_BYTES,
@@ -46,6 +48,8 @@ fn product_model_contract_descriptor() -> Value {
             "maximumIntentDescriptors": MAX_INTENT_DESCRIPTORS,
             "maximumInputChordControls": MAX_INPUT_CHORD_CONTROLS,
             "maximumScheduleEntries": MAX_SCHEDULE_ENTRIES,
+            "maximumScheduleDependencies": MAX_SCHEDULE_DEPENDENCIES,
+            "schedulePhaseCount": SCHEDULE_PHASE_COUNT,
             "maximumScheduleAccessDeclarations": MAX_SCHEDULE_ACCESS_DECLARATIONS,
             "maximumGameplayDefinitions": MAX_GAMEPLAY_DEFINITIONS,
             "maximumTimelines": MAX_TIMELINES,
@@ -67,11 +71,19 @@ fn product_model_contract_descriptor() -> Value {
             "namespaces": ["engine", "kernel"],
             "separator": "."
         },
+        "schedule": {
+            "phases": ["input", "simulation", "consequences", "commit", "projection"],
+            "modes": ["append", "prepend", "extend", "replace"],
+            "placements": ["append", "prepend", "extend-before", "extend-after", "replace"],
+            "defaultCadence": {"everySteps": 1, "offsetSteps": 0}
+        },
         "capabilityCatalog": capability_catalog_descriptor(),
         "ordering": {
             "intentDescriptors": "authored",
             "inputMap": "authored",
-            "schedule": "authored",
+            "schedule": "canonical-phases",
+            "scheduleSystems": "authored",
+            "scheduleAfter": "authored",
             "gameplayDefinitions": "authored",
             "timelines": "authored",
             "timelineSteps": "authored",
@@ -166,15 +178,7 @@ mod tests {
         );
         assert_eq!(
             descriptor["fields"]["schedule"],
-            serde_json::json!([
-                "id",
-                "phase",
-                "capability",
-                "definition",
-                "reads",
-                "writes",
-                "payload"
-            ])
+            serde_json::json!(["phase", "mode", "systems", "before", "after"])
         );
         assert_eq!(
             descriptor["capabilityCatalog"]["engine"][0]["target"],

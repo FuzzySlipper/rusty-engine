@@ -12,7 +12,8 @@ use serde_json::Value;
 use crate::{
     diagnostic::failure, validate_compiled_composition, CompiledComposition,
     CompiledCompositionCandidate, InputTrigger, IntentValueKind, LifecycleMode, ProductManifest,
-    ProductModelError, RealtimeClock,
+    ProductModelError, RealtimeClock, ScheduleCadence, ScheduleComposition,
+    ScheduleCompositionMode, SchedulePhase, SchedulePlacement,
 };
 
 const SOURCE: &str = "product-composition-admission";
@@ -175,26 +176,26 @@ impl AdmittedInputMapEntry {
     }
 }
 
-/// One ordered schedule declaration. Read/write declarations remain data only;
-/// this type deliberately assigns neither conflict nor execution semantics.
+/// One admitted schedule system. Placement is derived from the authored phase
+/// composition so runtime inspection can explain where the system entered the
+/// final schedule without adding a second wire-level provenance field.
 #[derive(Debug, Clone, PartialEq)]
-pub struct AdmittedScheduleFragment {
+pub struct AdmittedScheduleSystem {
     id: String,
-    phase: String,
     capability: AdmittedCapabilityReference,
     definition: Option<AdmittedDefinitionReference>,
+    placement: SchedulePlacement,
+    source_index: usize,
+    after: Vec<String>,
     reads: Vec<String>,
     writes: Vec<String>,
+    cadence: ScheduleCadence,
     payload: Value,
 }
 
-impl AdmittedScheduleFragment {
+impl AdmittedScheduleSystem {
     pub fn id(&self) -> &str {
         &self.id
-    }
-
-    pub fn phase(&self) -> &str {
-        &self.phase
     }
 
     pub fn capability(&self) -> &AdmittedCapabilityReference {
@@ -205,6 +206,18 @@ impl AdmittedScheduleFragment {
         self.definition.as_ref()
     }
 
+    pub const fn placement(&self) -> SchedulePlacement {
+        self.placement
+    }
+
+    pub const fn source_index(&self) -> usize {
+        self.source_index
+    }
+
+    pub fn after(&self) -> &[String] {
+        &self.after
+    }
+
     pub fn reads(&self) -> &[String] {
         &self.reads
     }
@@ -213,9 +226,47 @@ impl AdmittedScheduleFragment {
         &self.writes
     }
 
+    pub const fn cadence(&self) -> ScheduleCadence {
+        self.cadence
+    }
+
     pub fn payload(&self) -> &Value {
         &self.payload
     }
+}
+
+/// One admitted Runtime Composition phase with the explicit composition operation and
+/// ordered product systems retained for inspection and runtime resolution.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdmittedSchedulePhase {
+    phase: SchedulePhase,
+    mode: ScheduleCompositionMode,
+    systems: Vec<AdmittedScheduleSystem>,
+}
+
+impl AdmittedSchedulePhase {
+    pub const fn phase(&self) -> SchedulePhase {
+        self.phase
+    }
+
+    pub const fn mode(&self) -> ScheduleCompositionMode {
+        self.mode
+    }
+
+    pub fn systems(&self) -> &[AdmittedScheduleSystem] {
+        &self.systems
+    }
+}
+
+/// Compatibility alias for callers that used the pre-7256 flat readout name.
+/// The admitted value is now a system rather than a free-form schedule entry.
+pub type AdmittedScheduleFragment = AdmittedScheduleSystem;
+
+struct ScheduleAdmissionContext<'a> {
+    capability_indices: &'a BTreeMap<String, usize>,
+    capability_bindings: &'a [AdmittedCapabilityBinding],
+    definition_indices: &'a BTreeMap<String, usize>,
+    gameplay_definitions: &'a [AdmittedGameplayDefinition],
 }
 
 /// One ordered timeline declaration with already checked capability references.
@@ -267,7 +318,7 @@ pub struct AdmittedProductComposition {
     composition: CompiledComposition,
     intent_descriptors: Vec<AdmittedIntentDescriptor>,
     input_map: Vec<AdmittedInputMapEntry>,
-    schedule: Vec<AdmittedScheduleFragment>,
+    schedule: Vec<AdmittedSchedulePhase>,
     gameplay_definitions: Vec<AdmittedGameplayDefinition>,
     timelines: Vec<AdmittedTimeline>,
     capability_bindings: Vec<AdmittedCapabilityBinding>,
@@ -304,7 +355,7 @@ impl AdmittedProductComposition {
         &self.intent_descriptors
     }
 
-    pub fn schedule(&self) -> &[AdmittedScheduleFragment] {
+    pub fn schedule(&self) -> &[AdmittedSchedulePhase] {
         &self.schedule
     }
 
@@ -423,35 +474,33 @@ pub fn admit_checked_product_composition(
         })
         .collect::<Result<Vec<_>, ProductModelError>>()?;
 
+    let schedule_context = ScheduleAdmissionContext {
+        capability_indices: &capability_indices,
+        capability_bindings: &capability_bindings,
+        definition_indices: &definition_indices,
+        gameplay_definitions: &gameplay_definitions,
+    };
     let schedule = candidate
         .schedule
         .iter()
         .enumerate()
-        .map(|(index, entry)| {
-            Ok(AdmittedScheduleFragment {
-                id: entry.id.clone(),
-                phase: entry.phase.clone(),
-                capability: resolve_capability(
-                    &entry.capability,
-                    &capability_indices,
-                    &capability_bindings,
-                    &format!("schedule[{index}].capability"),
-                )?,
-                definition: entry
-                    .definition
-                    .as_deref()
-                    .map(|id| {
-                        resolve_definition(
-                            id,
-                            &definition_indices,
-                            &gameplay_definitions,
-                            &format!("schedule[{index}].definition"),
-                        )
-                    })
-                    .transpose()?,
-                reads: entry.reads.clone(),
-                writes: entry.writes.clone(),
-                payload: entry.payload.clone(),
+        .map(|(phase_index, phase)| {
+            let systems = admitted_schedule_systems(&phase.composition)
+                .into_iter()
+                .map(|(system_index, system, placement)| {
+                    admit_schedule_system(
+                        system,
+                        placement,
+                        system_index,
+                        &schedule_context,
+                        &format!("schedule[{phase_index}].system[{system_index}]"),
+                    )
+                })
+                .collect::<Result<Vec<_>, ProductModelError>>()?;
+            Ok(AdmittedSchedulePhase {
+                phase: phase.phase,
+                mode: phase.composition.mode(),
+                systems,
             })
         })
         .collect::<Result<Vec<_>, ProductModelError>>()?;
@@ -496,6 +545,76 @@ pub fn admit_checked_product_composition(
         gameplay_definitions,
         timelines,
         capability_bindings,
+    })
+}
+
+fn admitted_schedule_systems(
+    composition: &ScheduleComposition,
+) -> Vec<(usize, &crate::ScheduleSystem, SchedulePlacement)> {
+    match composition {
+        ScheduleComposition::Append { systems } => systems
+            .iter()
+            .enumerate()
+            .map(|(index, system)| (index, system, SchedulePlacement::Append))
+            .collect(),
+        ScheduleComposition::Prepend { systems } => systems
+            .iter()
+            .enumerate()
+            .map(|(index, system)| (index, system, SchedulePlacement::Prepend))
+            .collect(),
+        ScheduleComposition::Extend { before, after } => before
+            .iter()
+            .enumerate()
+            .map(|(index, system)| (index, system, SchedulePlacement::ExtendBefore))
+            .chain(
+                after
+                    .iter()
+                    .enumerate()
+                    .map(|(index, system)| (index, system, SchedulePlacement::ExtendAfter)),
+            )
+            .collect(),
+        ScheduleComposition::Replace { systems } => systems
+            .iter()
+            .enumerate()
+            .map(|(index, system)| (index, system, SchedulePlacement::Replace))
+            .collect(),
+    }
+}
+
+fn admit_schedule_system(
+    system: &crate::ScheduleSystem,
+    placement: SchedulePlacement,
+    source_index: usize,
+    context: &ScheduleAdmissionContext<'_>,
+    path: &str,
+) -> Result<AdmittedScheduleSystem, ProductModelError> {
+    Ok(AdmittedScheduleSystem {
+        id: system.id.clone(),
+        capability: resolve_capability(
+            &system.capability,
+            context.capability_indices,
+            context.capability_bindings,
+            &format!("{path}.capability"),
+        )?,
+        definition: system
+            .definition
+            .as_deref()
+            .map(|id| {
+                resolve_definition(
+                    id,
+                    context.definition_indices,
+                    context.gameplay_definitions,
+                    &format!("{path}.definition"),
+                )
+            })
+            .transpose()?,
+        placement,
+        source_index,
+        after: system.after.clone(),
+        reads: system.reads.clone(),
+        writes: system.writes.clone(),
+        cadence: system.cadence,
+        payload: system.payload.clone(),
     })
 }
 

@@ -75,12 +75,24 @@ export const PRODUCT_MODEL_FIELDS = {
     "payload"
   ],
   "schedule": [
-    "id",
     "phase",
+    "mode",
+    "systems",
+    "before",
+    "after"
+  ],
+  "scheduleCadence": [
+    "everySteps",
+    "offsetSteps"
+  ],
+  "scheduleSystem": [
+    "id",
     "capability",
     "definition",
+    "after",
     "reads",
     "writes",
+    "cadence",
     "payload"
   ],
   "timeline": [
@@ -212,9 +224,11 @@ export const PRODUCT_MODEL_LIMITS = {
   "maximumOpaqueJsonStringBytes": 16384,
   "maximumSafeJsonInteger": 9007199254740991,
   "maximumScheduleAccessDeclarations": 64,
+  "maximumScheduleDependencies": 64,
   "maximumScheduleEntries": 512,
   "maximumTimelineSteps": 256,
-  "maximumTimelines": 256
+  "maximumTimelines": 256,
+  "schedulePhaseCount": 5
 } as const;
 export const PRODUCT_MODEL_NUMBER_ENCODING = {
   "finiteBinary64": "ecmascript-number-to-string",
@@ -222,7 +236,7 @@ export const PRODUCT_MODEL_NUMBER_ENCODING = {
   "negativeZero": "0"
 } as const;
 export const PRODUCT_MODEL_OPTIONAL_FIELDS = {
-  "schedule": [
+  "scheduleSystem": [
     "definition"
   ]
 } as const;
@@ -233,11 +247,39 @@ export const PRODUCT_MODEL_ORDERING = {
   "intentDescriptors": "authored",
   "opaqueArrays": "authored",
   "opaqueObjectKeys": "canonical-bytewise",
-  "schedule": "authored",
+  "schedule": "canonical-phases",
+  "scheduleAfter": "authored",
   "scheduleReads": "authored",
+  "scheduleSystems": "authored",
   "scheduleWrites": "authored",
   "timelineSteps": "authored",
   "timelines": "authored"
+} as const;
+export const PRODUCT_MODEL_SCHEDULE = {
+  "defaultCadence": {
+    "everySteps": 1,
+    "offsetSteps": 0
+  },
+  "modes": [
+    "append",
+    "prepend",
+    "extend",
+    "replace"
+  ],
+  "phases": [
+    "input",
+    "simulation",
+    "consequences",
+    "commit",
+    "projection"
+  ],
+  "placements": [
+    "append",
+    "prepend",
+    "extend-before",
+    "extend-after",
+    "replace"
+  ]
 } as const;
 export const PRODUCT_MODEL_FAILURES = [
   "unknown-field",

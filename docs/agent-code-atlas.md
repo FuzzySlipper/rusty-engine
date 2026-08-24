@@ -67,6 +67,7 @@ downstream game policy and orchestration
         +--> gameplay-resolution
         +--> runtime-lifecycle
         +--> runtime-input
+        +--> runtime-schedule
         +--> gameplay-rules <--> rules/ (optional build-time authoring)
         +--> gameplay-standard (optional exact/continuous DSL, composed leaves, presets, operation plans)
         +--> developer-command (optional runtime developer console / debug console envelopes and binding port)
@@ -101,6 +102,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 | Current Product Layout and immutable Compiled Composition schema | [Product model schema](code-map/product-model.md) |
 | Instance-owned host-neutral runtime generations, fixed-step/demand/external admission, and separate presentation admission | [Runtime lifecycle](code-map/runtime-lifecycle.md) |
 | Strict admitted input descriptors/mappings, host-neutral ingress decoding, snapshots, and typed intent envelopes | [Runtime input](code-map/runtime-input.md) |
+| Linked five-phase schedule composition, deterministic execution order, cadence, lifecycle-token validation, and bounded inspection | [Runtime schedule](code-map/runtime-schedule.md) |
 | Product discovery, safe minimum initialization, structural checks, and foundational doctor diagnostics | [Rusty CLI foundation](code-map/rusty-cli.md) |
 | Bounded downstream-owned attempt lifecycle, transactions, receipts, and traces | [Gameplay resolution](code-map/gameplay-resolution.md) |
 | Optional opaque rules packages, TypeScript authoring, exact dependencies, provenance, canonicalization, and diagnostics | [Gameplay rules](code-map/gameplay-rules.md) |

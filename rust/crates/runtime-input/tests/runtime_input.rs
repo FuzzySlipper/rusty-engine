@@ -4,7 +4,7 @@ use product_model::{
     CapabilityMetadata, CapabilityProvenance, CapabilityUses, CompiledCompositionCandidate,
     ControllerAxis, InputAxis, InputEdge, InputMapEntry, InputTrigger, IntentValueKind,
     KeyboardControl, LifecycleMode, ProductIntentDescriptor, ProductKernelCapabilityDescriptor,
-    ProductManifestCandidate,
+    ProductManifestCandidate, ScheduleComposition, SchedulePhase, SchedulePhaseDeclaration,
 };
 use runtime_input::{
     AxisValue, CompiledInputMappings, InputClearReason, InputContext, IntentPhase,
@@ -819,7 +819,15 @@ fn compiled_mappings() -> CompiledInputMappings {
                     },
                 },
             ],
-            schedule: vec![],
+            schedule: SchedulePhase::ALL
+                .into_iter()
+                .map(|phase| SchedulePhaseDeclaration {
+                    phase,
+                    composition: ScheduleComposition::Append {
+                        systems: Vec::new(),
+                    },
+                })
+                .collect(),
             gameplay_definitions: vec![],
             timelines: vec![],
             capability_bindings: vec![

@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::{
     diagnostic::failure, manifest::validate_identity, AdmittedCapabilityBinding,
-    AdmittedCapabilityReference, AdmittedProductComposition, ProductModelError,
+    AdmittedCapabilityReference, AdmittedProductComposition, ProductModelError, SchedulePhase,
     MAX_CAPABILITY_BINDINGS, MAX_COMPILED_COMPOSITION_BYTES, MAX_SCHEDULE_ACCESS_DECLARATIONS,
 };
 
@@ -815,25 +815,63 @@ fn validate_schedule_uses(
     admitted: &AdmittedProductComposition,
     bindings: &[LinkedCapabilityBinding],
 ) -> Result<(), ProductModelError> {
-    for (index, entry) in admitted.schedule().iter().enumerate() {
-        let binding = linked_reference(
-            bindings,
-            entry.capability(),
-            &format!("schedule[{index}].capability"),
-        )?;
-        require_use(
-            binding,
-            CapabilityUse::Schedule,
-            &format!("schedule[{index}].capability"),
-        )?;
-        require_access(binding, entry.reads(), entry.writes(), index)?;
-        require_payload_budget(
-            binding,
-            entry.payload(),
-            &format!("schedule[{index}].payload"),
-        )?;
+    for (phase_index, phase) in admitted.schedule().iter().enumerate() {
+        let expected_kind = match phase.phase() {
+            SchedulePhase::Projection => CapabilityKind::Projection,
+            SchedulePhase::Input
+            | SchedulePhase::Simulation
+            | SchedulePhase::Consequences
+            | SchedulePhase::Commit => CapabilityKind::System,
+        };
+        for entry in phase.systems() {
+            let prefix = schedule_system_path(phase_index, entry);
+            let binding = linked_reference(
+                bindings,
+                entry.capability(),
+                &format!("{prefix}.capability"),
+            )?;
+            require_use(
+                binding,
+                CapabilityUse::Schedule,
+                &format!("{prefix}.capability"),
+            )?;
+            require_schedule_kind(binding, expected_kind, &format!("{prefix}.capability"))?;
+            require_access(binding, entry.reads(), entry.writes(), &prefix)?;
+            require_payload_budget(binding, entry.payload(), &format!("{prefix}.payload"))?;
+        }
     }
     Ok(())
+}
+
+fn schedule_system_path(phase_index: usize, entry: &crate::AdmittedScheduleSystem) -> String {
+    let bucket = match entry.placement() {
+        crate::SchedulePlacement::Append
+        | crate::SchedulePlacement::Prepend
+        | crate::SchedulePlacement::Replace => "systems",
+        crate::SchedulePlacement::ExtendBefore => "before",
+        crate::SchedulePlacement::ExtendAfter => "after",
+    };
+    format!("schedule[{phase_index}].{bucket}[{}]", entry.source_index())
+}
+
+fn require_schedule_kind(
+    binding: &LinkedCapabilityBinding,
+    expected: CapabilityKind,
+    path: &str,
+) -> Result<(), ProductModelError> {
+    if binding.metadata().kind() == expected {
+        return Ok(());
+    }
+    Err(composition_failure(
+        "RUNTIME_CAPABILITY_SCHEDULE_KIND",
+        path,
+        format!(
+            "capability `{}` is a {} but this schedule phase requires a {}",
+            binding.target(),
+            binding.metadata().kind().as_str(),
+            expected.as_str(),
+        ),
+    ))
 }
 
 fn validate_timeline_uses(
@@ -902,7 +940,7 @@ fn require_access(
     binding: &LinkedCapabilityBinding,
     reads: &[String],
     writes: &[String],
-    schedule_index: usize,
+    schedule_path: &str,
 ) -> Result<(), ProductModelError> {
     let expected = binding.metadata().access();
     if reads
@@ -919,14 +957,14 @@ fn require_access(
         }
         return Err(access_failure(
             binding,
-            schedule_index,
+            schedule_path,
             "writes",
             expected.writes(),
         ));
     }
     Err(access_failure(
         binding,
-        schedule_index,
+        schedule_path,
         "reads",
         expected.reads(),
     ))
@@ -934,13 +972,13 @@ fn require_access(
 
 fn access_failure(
     binding: &LinkedCapabilityBinding,
-    schedule_index: usize,
+    schedule_path: &str,
     field: &str,
     expected: &[&str],
 ) -> ProductModelError {
     composition_failure(
         "RUNTIME_CAPABILITY_ACCESS_MISMATCH",
-        format!("schedule[{schedule_index}].{field}"),
+        format!("{schedule_path}.{field}"),
         format!(
             "capability `{}` requires declared {field} {:?}; its closed descriptor is {} at `{}`",
             binding.target(),

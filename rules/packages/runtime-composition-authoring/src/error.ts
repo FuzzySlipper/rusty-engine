@@ -20,7 +20,14 @@ export type RuntimeCompositionAuthoringErrorCode =
   | 'invalid-json-value'
   | 'artifact-quota-exceeded'
   | 'invalid-operation'
-  | 'unrepresentable-cadence';
+  | 'invalid-schedule-phase'
+  | 'invalid-schedule-mode'
+  | 'invalid-schedule-cadence'
+  | 'unknown-schedule-dependency'
+  | 'schedule-cross-phase-dependency'
+  | 'schedule-placement-dependency'
+  | 'schedule-dependency-cycle'
+  | 'schedule-access-ambiguity';
 
 /** A bounded, source-free diagnostic for build-time Runtime Composition authoring. */
 export class RuntimeCompositionAuthoringError extends Error {

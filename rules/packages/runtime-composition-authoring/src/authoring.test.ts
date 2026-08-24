@@ -6,11 +6,13 @@ import {
   RuntimeCompositionAuthoringError,
   admitCompiledComposition,
   append,
+  appendComposition,
   authorRuntimeComposition,
   cadence,
   compiledCompositionBytes,
   engineCapability,
   extend,
+  extendComposition,
   fragment,
   gameplayCatalog,
   gameplayDefinition,
@@ -18,11 +20,17 @@ import {
   kernelCapability,
   phase,
   prepend,
+  prependComposition,
   productIntent,
   replace,
+  replaceComposition,
+  schedule,
+  Standard,
+  system,
   timeline,
   timelineStep,
 } from './index.js';
+import type { SchedulePhaseDeclaration } from './types.js';
 
 const fixtureUrl = new URL(
   '../../../../fixtures/product-model/minimum.compiled-composition.json',
@@ -33,6 +41,41 @@ const canonicalNumbersFixtureUrl = new URL(
   import.meta.url,
 );
 
+function expectError(action: () => unknown, code: RuntimeCompositionAuthoringError['code']): void {
+  assert.throws(action, (error: unknown) => error instanceof RuntimeCompositionAuthoringError && error.code === code);
+}
+
+function declarations(): readonly SchedulePhaseDeclaration[] {
+  return schedule({
+    input: append(Standard.input),
+    simulation: append(Standard.simulation, system('movement', {
+      capability: 'movement.apply',
+      reads: ['input.motion'],
+      writes: ['state.transform'],
+      payload: { kind: 'movement' },
+    })),
+    consequences: append(Standard.consequences),
+    commit: append(Standard.commit),
+    projection: append(Standard.projection, system('render-projection', {
+      capability: 'projection.refresh',
+      reads: ['entity-state.projection'],
+      writes: ['render-frame.diff'],
+      payload: null,
+    })),
+  });
+}
+
+function root(scheduleValue: readonly SchedulePhaseDeclaration[] = declarations()): Record<string, unknown> {
+  return {
+    product: 'example.product',
+    capabilities: [
+      kernelCapability('movement.apply', 'apply-movement'),
+      engineCapability('projection.refresh', 'render.entity-project'),
+    ],
+    schedule: scheduleValue,
+  };
+}
+
 test('typed Runtime Composition authoring emits the exact Rust-owned current fixture', async () => {
   const artifact = minimumArtifact();
   const fixture = await readFile(fixtureUrl, 'utf8');
@@ -41,8 +84,15 @@ test('typed Runtime Composition authoring emits the exact Rust-owned current fix
   assert.ok(Object.isFrozen(artifact));
   assert.ok(Object.isFrozen(artifact.composition));
   assert.ok(Object.isFrozen(artifact.composition.schedule));
-  assert.equal(artifact.composition.schedule[0]?.reads[0], 'input.motion');
-  assert.deepEqual(artifact.composition.schedule[1]?.writes, ['render-frame.diff']);
+  const simulation = artifact.composition.schedule[1];
+  assert.equal(simulation?.phase, 'simulation');
+  if (simulation?.mode === 'append') {
+    assert.equal(simulation.systems[0]?.reads[0], 'input.motion');
+  }
+  const projection = artifact.composition.schedule[4];
+  if (projection?.mode === 'append') {
+    assert.deepEqual(projection.systems[0]?.writes, ['render-frame.diff']);
+  }
 });
 
 test('typed W mapping resolves to one admitted move.forward descriptor', () => {
@@ -56,7 +106,7 @@ test('typed W mapping resolves to one admitted move.forward descriptor', () => {
       id: 'w-forward', intent: 'move.forward',
       trigger: { kind: 'key', code: 'key-w', edge: 'held', context: 'gameplay' },
     })],
-    schedule: [],
+    schedule: schedule({}),
     gameplayDefinitions: [],
     timelines: [],
   });
@@ -80,7 +130,8 @@ test('authoring materializes only detached plain data', () => {
   left[0] = 0;
   const right = compiledCompositionBytes(artifact);
   assert.notEqual(right[0], 0);
-  assert.equal(JSON.parse(artifact.canonicalJson).schedule[0].phase, 'simulation');
+  const parsed = JSON.parse(artifact.canonicalJson) as { schedule: readonly { phase: string }[] };
+  assert.equal(parsed.schedule[1]?.phase, 'simulation');
 
   for (const value of [
     () => 1,
@@ -109,7 +160,7 @@ test('canonical writer preserves the Rust number policy and bytewise opaque obje
     gameplayDefinitions: [gameplayDefinition('numeric', {
       '2': 'two', '10': 'ten', '1': 'one', small: 1e-6, tiny: 1.2e-6, negativeZero: -0,
     })],
-    schedule: [],
+    schedule: schedule({}),
     timelines: [],
   });
   const fixture = await readFile(canonicalNumbersFixtureUrl, 'utf8');
@@ -168,13 +219,15 @@ test('composition admission rejects unknown fields, unsafe references, and missi
     'unknown-field',
   );
   const unknownCapability = structuredClone(minimumArtifact().composition) as unknown as Record<string, unknown>;
-  ((unknownCapability['intentDescriptors'] as { capability: string }[])[0] as { capability: string }).capability = 'missing.capability';
+  ((unknownCapability['intentDescriptors'] as { capability: string }[])[0] as { capability: string })['capability'] = 'missing.capability';
   expectError(() => admitCompiledComposition(unknownCapability), 'unknown-capability');
   const missingReads = structuredClone(minimumArtifact().composition) as unknown as Record<string, unknown>;
-  delete ((missingReads['schedule'] as Record<string, unknown>[])[0] as Record<string, unknown>)['reads'];
+  const missingReadsPhase = (missingReads['schedule'] as Record<string, unknown>[])[1]!;
+  const missingReadsSystem = (missingReadsPhase['systems'] as Record<string, unknown>[])[0]!;
+  delete missingReadsSystem['reads'];
   expectError(() => admitCompiledComposition(missingReads), 'missing-field');
   const duplicateAccess = structuredClone(minimumArtifact().composition) as unknown as Record<string, unknown>;
-  ((duplicateAccess['schedule'] as Record<string, unknown>[])[0] as Record<string, unknown>)['reads'] = ['state.transform', 'state.transform'];
+  ((((duplicateAccess['schedule'] as Record<string, unknown>[])[1] as Record<string, unknown>)['systems'] as Record<string, unknown>[])[0] as Record<string, unknown>)['reads'] = ['state.transform', 'state.transform'];
   expectError(() => admitCompiledComposition(duplicateAccess), 'duplicate-entry');
 });
 
@@ -193,7 +246,7 @@ test('capability targets split only at the Rust-owned namespace separator', () =
   assert.equal(admitted.capabilityBindings[1]?.target, 'kernel.movement.apply');
   for (const target of ['browser.camera.look', 'engine', 'engine.', '.camera.look', 'engine..camera']) {
     const malformed = structuredClone(direct) as unknown as Record<string, unknown>;
-    ((malformed['capabilityBindings'] as Record<string, unknown>[])[0] as Record<string, unknown>)['target'] = target;
+    (malformed['capabilityBindings'] as Record<string, unknown>[])[0]!['target'] = target;
     expectError(() => admitCompiledComposition(malformed), target.startsWith('engine.') ? 'invalid-identity' : 'invalid-capability-target');
   }
 });
@@ -209,31 +262,91 @@ test('engine capability helper accepts only the generated closed Engine names', 
   );
 });
 
-test('append and prepend have distinct ordered semantics while extend rejects accidental replacement', () => {
+test('whole-composition append and prepend preserve ordered collections while fragments stay schedule-free', () => {
   const base = minimumArtifact().composition;
   const additions = fragment({
     inputMap: [inputAction({ id: 'fire', intent: 'look', trigger: { kind: 'pointer-axis', axis: 'x' } })],
-    schedule: phase('simulation', [{
-      id: 'after-movement', capability: 'movement.apply', reads: ['state.transform'], writes: [], payload: { order: 2 },
-    }]).schedule,
   });
-  const appended = append(base, additions);
-  const prepended = prepend(base, additions);
+  const appended = appendComposition(base, additions);
+  const prepended = prependComposition(base, additions);
   assert.deepEqual(appended.inputMap.map((entry) => entry.id), ['look', 'fire']);
   assert.deepEqual(prepended.inputMap.map((entry) => entry.id), ['fire', 'look']);
-  assert.deepEqual(appended.schedule.map((entry) => entry.id), ['movement', 'render-projection', 'after-movement']);
-  assert.deepEqual(prepended.schedule.map((entry) => entry.id), ['after-movement', 'movement', 'render-projection']);
-  expectError(() => extend(base, fragment({ inputMap: [inputAction({ id: 'look', intent: 'look', trigger: { kind: 'pointer-axis', axis: 'x' } })] })), 'duplicate-entry');
+  assert.deepEqual(appended.schedule, base.schedule);
+  assert.deepEqual(prepended.schedule, base.schedule);
+  expectError(() => extendComposition(base, fragment({ inputMap: [inputAction({ id: 'look', intent: 'look', trigger: { kind: 'pointer-axis', axis: 'x' } })] })), 'duplicate-entry');
 });
 
-test('replace changes only explicitly named whole collections and cadence does not fabricate an absent wire field', () => {
+test('whole-composition replace changes only explicitly named collections and cadence is representable', () => {
   const base = minimumArtifact().composition;
-  const replaced = replace(base, {
+  const replaced = replaceComposition(base, {
     timelines: [timeline('outro', [timelineStep({ id: 'finish', capability: 'timeline.start', payload: { scene: 'ending' } })])],
   });
   assert.deepEqual(replaced.timelines.map((entry) => entry.id), ['outro']);
   assert.deepEqual(replaced.schedule, base.schedule);
-  expectError(() => cadence({ every: 60 }), 'unrepresentable-cadence');
+  assert.deepEqual(cadence({ everySteps: 60, offsetSteps: 0 }), { everySteps: 60, offsetSteps: 0 });
+});
+
+test('schedule DSL exposes closed Standard anchors, explicit composition, and step cadence', () => {
+  assert.deepEqual(declarations().map((entry) => entry.phase), ['input', 'simulation', 'consequences', 'commit', 'projection']);
+  const simulation = declarations()[1];
+  assert.equal(simulation?.mode, 'append');
+  if (simulation?.mode === 'append') assert.equal(simulation.systems[0]?.id, 'movement');
+  assert.deepEqual(cadence(3), { everySteps: 3, offsetSteps: 0 });
+  assert.deepEqual(cadence({ everySteps: 4, offsetSteps: 2 }), { everySteps: 4, offsetSteps: 2 });
+  assert.ok(Object.isFrozen(Standard.input));
+  expectError(() => cadence(0), 'invalid-schedule-cadence');
+  expectError(() => cadence({ everySteps: 2, offsetSteps: 2 }), 'invalid-schedule-cadence');
+});
+
+test('authoring lowers to the exact five-phase wire and canonical bytes', () => {
+  const artifact = authorRuntimeComposition(root());
+  assert.ok(Object.isFrozen(artifact.composition.schedule));
+  assert.equal(artifact.composition.schedule.length, 5);
+  const wire = JSON.parse(artifact.canonicalJson) as Record<string, unknown>;
+  assert.equal((wire['schedule'] as Record<string, unknown>[])[1]?.['mode'], 'append');
+  assert.match(artifact.canonicalJson, /"cadence":\{"everySteps":1,"offsetSteps":0\}/);
+  assert.equal(wire['schemaVersion'], undefined);
+});
+
+test('direct current-schema admission is strict about phase set and system fields', () => {
+  const artifact = authorRuntimeComposition(root());
+  const malformed = JSON.parse(artifact.canonicalJson) as Record<string, unknown>;
+  malformed['schedule'] = (malformed['schedule'] as unknown[]).slice(0, 4);
+  expectError(() => admitCompiledComposition(malformed), 'invalid-schedule-phase');
+  const unknown = JSON.parse(artifact.canonicalJson) as Record<string, unknown>;
+  (unknown['schedule'] as Record<string, unknown>[])[1]!['unexpected'] = true;
+  expectError(() => admitCompiledComposition(unknown), 'unknown-field');
+  expectError(() => authorRuntimeComposition({ ...root(), schedule: { input: append(Standard.simulation) } }), 'invalid-schedule-phase');
+  class ScheduleArray extends Array<SchedulePhaseDeclaration> {}
+  expectError(() => authorRuntimeComposition({ ...root(), schedule: new ScheduleArray(...declarations()) }), 'invalid-json-value');
+  const getterArray = declarations().slice();
+  Object.defineProperty(getterArray, 0, { enumerable: true, get: () => declarations()[0] });
+  expectError(() => authorRuntimeComposition({ ...root(), schedule: getterArray }), 'invalid-json-value');
+});
+
+test('composition operations preserve explicit phase provenance', () => {
+  const before = prepend(Standard.input, system('before-input'));
+  const extended = extend(Standard.simulation, { before: [system('before-simulation')], after: [system('after-simulation')] });
+  const replaced = replace(Standard.projection, system('projection-only'));
+  assert.equal(before.mode, 'prepend');
+  if (extended.mode === 'extend') {
+    assert.deepEqual(extended.before.map((entry) => entry.id), ['before-simulation']);
+    assert.deepEqual(extended.after.map((entry) => entry.id), ['after-simulation']);
+  }
+  if (replaced.mode === 'replace') assert.deepEqual(replaced.systems.map((entry) => entry.id), ['projection-only']);
+});
+
+test('capability and identity checks remain build-time and payloads are immutable', () => {
+  const artifact = authorRuntimeComposition(root());
+  const simulation = artifact.composition.schedule[1];
+  const movement = simulation?.mode === 'extend' ? undefined : simulation?.systems[0];
+  assert.ok(movement);
+  assert.ok(Object.isFrozen(movement));
+  assert.ok(Object.isFrozen(movement.reads));
+  expectError(() => authorRuntimeComposition({ ...root(), capabilities: [] }), 'unknown-capability');
+  const bad = JSON.parse(artifact.canonicalJson) as Record<string, unknown>;
+  ((((bad['schedule'] as Record<string, unknown>[])[1]!['systems'] as Record<string, unknown>[])[0]!))['after'] = ['missing'];
+  expectError(() => admitCompiledComposition(bad), 'unknown-schedule-dependency');
 });
 
 function minimumArtifact() {
@@ -255,16 +368,16 @@ function minimumDraft() {
     inputMap: [
       inputAction({ id: 'look', intent: 'look', trigger: { kind: 'pointer-axis', axis: 'x' } }),
     ],
-    schedule: [
-      ...phase('simulation', [{
+    schedule: schedule({
+      simulation: phase('simulation', [{
         id: 'movement', capability: 'movement.apply', definition: 'player',
         reads: ['input.motion', 'state.transform'], writes: ['state.transform'], payload: { order: 1 },
-      }]).schedule,
-      ...phase('projection', [{
+      }]),
+      projection: phase('projection', [{
         id: 'render-projection', capability: 'projection.refresh',
         reads: ['entity-state.projection'], writes: ['render-frame.diff'], payload: null,
-      }]).schedule,
-    ],
+      }]),
+    }),
     gameplayDefinitions: [
       gameplayDefinition('player', gameplayCatalog({ kind: 'opaque-product-definition', stats: { health: 100 } })),
     ],
@@ -272,8 +385,4 @@ function minimumDraft() {
       timeline('intro', [timelineStep({ id: 'start', capability: 'timeline.start', payload: { scene: 'opening' } })]),
     ],
   };
-}
-
-function expectError(action: () => unknown, code: RuntimeCompositionAuthoringError['code']): void {
-  assert.throws(action, (error: unknown) => error instanceof RuntimeCompositionAuthoringError && error.code === code);
 }

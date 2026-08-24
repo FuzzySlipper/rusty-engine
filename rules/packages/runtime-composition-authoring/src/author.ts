@@ -13,6 +13,7 @@ import {
   PRODUCT_MODEL_IDENTITY,
   PRODUCT_MODEL_INPUT,
   PRODUCT_MODEL_LIMITS,
+  PRODUCT_MODEL_SCHEDULE,
 } from './generated.js';
 import type { EngineCapabilityName } from './generated.js';
 import type {
@@ -32,8 +33,15 @@ import type {
   RuntimeCompositionArtifact,
   RuntimeCompositionDraft,
   ScheduleActionDraft,
-  ScheduleEntry,
+  ScheduleCadence,
+  ScheduleCompositionMode,
+  ScheduleDraft,
+  SchedulePhase,
+  SchedulePhaseDeclaration,
+  SchedulePlacement,
+  ScheduleSystem,
   ScheduleEntryDraft,
+  StandardPhase,
   Timeline,
   TimelineStep,
   TimelineStepDraft,
@@ -49,6 +57,7 @@ export const MAX_TIMELINES = PRODUCT_MODEL_LIMITS.maximumTimelines;
 export const MAX_TIMELINE_STEPS = PRODUCT_MODEL_LIMITS.maximumTimelineSteps;
 export const MAX_CAPABILITY_BINDINGS = PRODUCT_MODEL_LIMITS.maximumCapabilityBindings;
 export const MAX_SCHEDULE_RESOURCE_DECLARATIONS = PRODUCT_MODEL_LIMITS.maximumScheduleAccessDeclarations;
+export const MAX_SCHEDULE_DEPENDENCIES = PRODUCT_MODEL_LIMITS.maximumScheduleDependencies;
 
 const IDENTITY = /^[a-z0-9](?:[a-z0-9]|[._-](?=[a-z0-9]))*$/;
 
@@ -62,7 +71,7 @@ export function authorRuntimeComposition(draft: unknown): RuntimeCompositionArti
     product: source.product,
     intentDescriptors: source.intentDescriptors ?? [],
     inputMap: source.inputMap ?? [],
-    schedule: source.schedule ?? [],
+    schedule: source.schedule ?? schedule({}),
     gameplayDefinitions: source.gameplayDefinitions ?? [],
     timelines: source.timelines ?? [],
     capabilityBindings: source.capabilities,
@@ -134,16 +143,90 @@ export function inputAction(draft: InputActionDraft): InputMapEntry {
   });
 }
 
-/** Builds a phase-local schedule fragment; array order is intentionally retained. */
-export function phase(phaseId: string, actions: readonly ScheduleActionDraft[]): CompositionFragment {
-  const phaseName = identity(phaseId, '$.phase');
-  const values = arrayData(actions, '$.phase.actions');
-  return fragment({ schedule: values.map((action, index) => scheduleEntryForPhase(action, phaseName, `$.phase.actions[${String(index)}]`)) });
+const SCHEDULE_PHASES: readonly SchedulePhase[] = PRODUCT_MODEL_SCHEDULE.phases;
+
+/** The implicit engine-owned anchors that products compose explicitly. */
+export const Standard: Readonly<{ readonly [P in SchedulePhase]: StandardPhase }> = Object.freeze({
+  input: Object.freeze({ kind: 'standard', phase: 'input' }),
+  simulation: Object.freeze({ kind: 'standard', phase: 'simulation' }),
+  consequences: Object.freeze({ kind: 'standard', phase: 'consequences' }),
+  commit: Object.freeze({ kind: 'standard', phase: 'commit' }),
+  projection: Object.freeze({ kind: 'standard', phase: 'projection' }),
+});
+
+/** Creates one build-time schedule system declaration. */
+export function system(id: string, options: Omit<ScheduleActionDraft, 'id'> = {}): ScheduleSystem {
+  const source = record(options, '$.system');
+  known(source, ['capability', 'definition', 'after', 'reads', 'writes', 'cadence', 'payload'], '$.system');
+  return freezeScheduleSystem({
+    id: identity(id, '$.system.id'),
+    capability: identity(source['capability'] === undefined ? id : requiredString(source, 'capability', '$.system'), '$.system.capability'),
+    ...(source['definition'] === undefined ? {} : { definition: identity(requiredString(source, 'definition', '$.system'), '$.system.definition') }),
+    after: identities(source['after'] === undefined ? [] : requiredArray(source, 'after', '$.system'), '$.system.after', MAX_SCHEDULE_DEPENDENCIES),
+    reads: identities(source['reads'] === undefined ? [] : requiredArray(source, 'reads', '$.system'), '$.system.reads'),
+    writes: identities(source['writes'] === undefined ? [] : requiredArray(source, 'writes', '$.system'), '$.system.writes'),
+    cadence: admitCadence(source['cadence'] === undefined ? { everySteps: 1, offsetSteps: 0 } : required(source, 'cadence', '$.system'), '$.system.cadence'),
+    payload: normalizeOpaqueJson(source['payload'] === undefined ? null : required(source, 'payload', '$.system'), '$.system.payload'),
+  });
 }
 
-/** Builds one schedule entry when the caller needs to interleave multiple phases manually. */
-export function scheduleAction(draft: ScheduleEntryDraft): ScheduleEntry {
-  return scheduleEntry(draft, '$.scheduleAction');
+/** Creates an exact step cadence. No wall-clock or frequency conversion is admitted. */
+export function cadence(value: number | ScheduleCadence | { readonly everySteps: number; readonly offsetSteps?: number }, offsetSteps = 0): ScheduleCadence {
+  const source = typeof value === 'number' ? { everySteps: value, offsetSteps } : value;
+  return admitCadence(source, '$.cadence');
+}
+
+/** Builds a phase-local append/prepend/extend/replace declaration. */
+export function append(anchor: StandardPhase, ...systems: readonly ScheduleSystem[]): SchedulePhaseDeclaration {
+  return composeSchedule(anchor, 'append', systems, '$.append.anchor');
+}
+export function prepend(anchor: StandardPhase, ...systems: readonly ScheduleSystem[]): SchedulePhaseDeclaration {
+  return composeSchedule(anchor, 'prepend', systems, '$.prepend.anchor');
+}
+export function extend(anchor: StandardPhase, value: { readonly before: readonly ScheduleSystem[]; readonly after: readonly ScheduleSystem[] }): SchedulePhaseDeclaration {
+  if (value === null || typeof value !== 'object') fail('invalid-schedule-mode', '$.extend', 'extend requires before and after system arrays');
+  const source = record(value, '$.extend');
+  known(source, ['before', 'after'], '$.extend');
+  const phase = standardAnchor(anchor, '$.extend.anchor');
+  return Object.freeze({
+    phase,
+    mode: 'extend' as const,
+    before: freezeList(requiredArray(source, 'before', '$.extend').map((entry, index) => admitScheduleSystem(entry, `$.extend.before[${String(index)}]`))),
+    after: freezeList(requiredArray(source, 'after', '$.extend').map((entry, index) => admitScheduleSystem(entry, `$.extend.after[${String(index)}]`))),
+  });
+}
+export function replace(anchor: StandardPhase, ...systems: readonly ScheduleSystem[]): SchedulePhaseDeclaration {
+  return composeSchedule(anchor, 'replace', systems, '$.replace.anchor');
+}
+
+/** Lowers a named phase map into the exact five-phase wire array. */
+export function schedule(value: ScheduleDraft): readonly SchedulePhaseDeclaration[] {
+  const source = record(value, '$.schedule');
+  known(source, SCHEDULE_PHASES, '$.schedule');
+  return freezeList(SCHEDULE_PHASES.map((phaseName) => {
+    const declaration = source[phaseName];
+    if (declaration === undefined) return composeSchedule(Standard[phaseName], 'append', [], `$.schedule.${phaseName}.anchor`);
+    const normalized = admitSchedulePhase(declaration, `$.schedule.${phaseName}`);
+    if (normalized.phase !== phaseName) fail('invalid-schedule-phase', `$.schedule.${phaseName}.phase`, `schedule map key ${phaseName} does not match declaration phase ${normalized.phase}`);
+    return normalized;
+  }));
+}
+
+/** Convenience alias for one system declaration during source migration. */
+export function scheduleAction(draft: ScheduleEntryDraft): ScheduleSystem {
+  return system(draft.id, draft);
+}
+
+/** Builds an append declaration for one named phase. */
+export function phase(phaseId: SchedulePhase, actions: readonly ScheduleActionDraft[]): SchedulePhaseDeclaration {
+  if (!SCHEDULE_PHASES.includes(phaseId)) fail('invalid-schedule-phase', '$.phase', `unknown schedule phase ${phaseId}`);
+  const values = arrayData(actions, '$.phase.actions');
+  return append(Standard[phaseId], ...values.map((entry, index) => {
+    const action = record(entry, `$.phase.actions[${String(index)}]`);
+    const id = requiredString(action, 'id', `$.phase.actions[${String(index)}]`);
+    const { id: _ignoredId, ...options } = action;
+    return system(id, options);
+  }));
 }
 
 /** Declares opaque product data under one gameplay-definition identity. */
@@ -175,25 +258,13 @@ export function timelineStep(draft: TimelineStepDraft): TimelineStep {
   });
 }
 
-/**
- * Current Compiled Composition has no cadence field. Refuse rather than
- * inventing a timing contract; #7256 owns schedule ordering/conflict policy.
- */
-export function cadence(_value: unknown): never {
-  throw new RuntimeCompositionAuthoringError(
-    'unrepresentable-cadence', '$.cadence',
-    'the current Compiled Composition schema has no cadence field; keep timing policy downstream until an admitted schema exists',
-  );
-}
-
 /** Produces a normalized partial collection set for later composition. */
 export function fragment(value: Partial<CompositionFragment>): CompositionFragment {
   const source = record(value, '$.fragment');
-  known(source, ['intentDescriptors', 'inputMap', 'schedule', 'gameplayDefinitions', 'timelines', 'capabilityBindings'], '$.fragment');
+  known(source, ['intentDescriptors', 'inputMap', 'gameplayDefinitions', 'timelines', 'capabilityBindings'], '$.fragment');
   return Object.freeze({
     intentDescriptors: freezeList(optionalArray(source, 'intentDescriptors', '$.fragment').map((entry, index) => admitIntentDescriptor(entry, `$.fragment.intentDescriptors[${String(index)}]`, undefined, { nodes: 0 }))),
     inputMap: freezeList(optionalArray(source, 'inputMap', '$.fragment').map((entry, index) => admitInputMapEntry(entry, `$.fragment.inputMap[${String(index)}]`, undefined))),
-    schedule: freezeList(optionalArray(source, 'schedule', '$.fragment').map((entry, index) => admitScheduleEntry(entry, `$.fragment.schedule[${String(index)}]`, undefined, undefined, { nodes: 0 }))),
     gameplayDefinitions: freezeList(optionalArray(source, 'gameplayDefinitions', '$.fragment').map((entry, index) => admitDefinition(entry, `$.fragment.gameplayDefinitions[${String(index)}]`, { nodes: 0 }))),
     timelines: freezeList(optionalArray(source, 'timelines', '$.fragment').map((entry, index) => admitTimeline(entry, `$.fragment.timelines[${String(index)}]`, undefined, { nodes: 0 }))),
     capabilityBindings: freezeList(optionalArray(source, 'capabilityBindings', '$.fragment').map((entry, index) => admitCapability(entry, `$.fragment.capabilityBindings[${String(index)}]`))),
@@ -201,22 +272,22 @@ export function fragment(value: Partial<CompositionFragment>): CompositionFragme
 }
 
 /** Appends each supplied fragment in argument order, preserving every collection order. */
-export function append(base: CompiledComposition, ...fragments: readonly CompositionFragment[]): CompiledComposition {
+export function appendComposition(base: CompiledComposition, ...fragments: readonly CompositionFragment[]): CompiledComposition {
   return composeFragments(base, fragments, false, false);
 }
 
 /** Prepends fragments in argument order; the first fragment becomes the earliest declaration. */
-export function prepend(base: CompiledComposition, ...fragments: readonly CompositionFragment[]): CompiledComposition {
+export function prependComposition(base: CompiledComposition, ...fragments: readonly CompositionFragment[]): CompiledComposition {
   return composeFragments(base, fragments, true, false);
 }
 
 /** Adds only new identities. It rejects collision rather than silently replacing authored data. */
-export function extend(base: CompiledComposition, ...fragments: readonly CompositionFragment[]): CompiledComposition {
+export function extendComposition(base: CompiledComposition, ...fragments: readonly CompositionFragment[]): CompiledComposition {
   return composeFragments(base, fragments, false, true);
 }
 
 /** Replaces exactly the named whole collections. It cannot change the product identity. */
-export function replace(base: CompiledComposition, replacement: CompositionReplacement): CompiledComposition {
+export function replaceComposition(base: CompiledComposition, replacement: CompositionReplacement): CompiledComposition {
   const source = record(replacement, '$.replacement');
   known(source, ['intentDescriptors', 'inputMap', 'schedule', 'gameplayDefinitions', 'timelines', 'capabilityBindings'], '$.replacement');
   if (Object.keys(source).length === 0) fail('invalid-operation', '$.replacement', 'replace requires at least one collection');
@@ -237,7 +308,6 @@ function composeFragments(base: CompiledComposition, fragments: readonly Composi
   if (requireNew) {
     assertNewIdentities('intentDescriptors', normalizedBase.intentDescriptors, normalized.flatMap((entry) => entry.intentDescriptors));
     assertNewIdentities('inputMap', normalizedBase.inputMap, normalized.flatMap((entry) => entry.inputMap));
-    assertNewIdentities('schedule', normalizedBase.schedule, normalized.flatMap((entry) => entry.schedule));
     assertNewIdentities('gameplayDefinitions', normalizedBase.gameplayDefinitions, normalized.flatMap((entry) => entry.gameplayDefinitions));
     assertNewIdentities('timelines', normalizedBase.timelines, normalized.flatMap((entry) => entry.timelines));
     assertNewIdentities('capabilityBindings', normalizedBase.capabilityBindings, normalized.flatMap((entry) => entry.capabilityBindings));
@@ -248,7 +318,7 @@ function composeFragments(base: CompiledComposition, fragments: readonly Composi
     product: normalizedBase.product,
     intentDescriptors: merge(normalizedBase.intentDescriptors, normalized.flatMap((entry) => entry.intentDescriptors)),
     inputMap: merge(normalizedBase.inputMap, normalized.flatMap((entry) => entry.inputMap)),
-    schedule: merge(normalizedBase.schedule, normalized.flatMap((entry) => entry.schedule)),
+    schedule: normalizedBase.schedule,
     gameplayDefinitions: merge(normalizedBase.gameplayDefinitions, normalized.flatMap((entry) => entry.gameplayDefinitions)),
     timelines: merge(normalizedBase.timelines, normalized.flatMap((entry) => entry.timelines)),
     capabilityBindings: merge(normalizedBase.capabilityBindings, normalized.flatMap((entry) => entry.capabilityBindings)),
@@ -263,7 +333,7 @@ function admitDraft(value: unknown, path: string): RuntimeCompositionDraft {
     capabilities: freezeList(requiredArray(source, 'capabilities', path).map((entry, index) => admitCapability(entry, `${path}.capabilities[${String(index)}]`))),
     ...(source['intentDescriptors'] === undefined ? {} : { intentDescriptors: freezeList(requiredArray(source, 'intentDescriptors', path).map((entry, index) => admitIntentDescriptor(entry, `${path}.intentDescriptors[${String(index)}]`, undefined, { nodes: 0 }))) }),
     ...(source['inputMap'] === undefined ? {} : { inputMap: freezeList(requiredArray(source, 'inputMap', path).map((entry, index) => admitInputMapEntry(entry, `${path}.inputMap[${String(index)}]`, undefined))) }),
-    ...(source['schedule'] === undefined ? {} : { schedule: freezeList(requiredArray(source, 'schedule', path).map((entry, index) => admitScheduleEntry(entry, `${path}.schedule[${String(index)}]`, undefined, undefined, { nodes: 0 }))) }),
+    ...(source['schedule'] === undefined ? {} : { schedule: normalizeScheduleDraft(required(source, 'schedule', path), `${path}.schedule`) }),
     ...(source['gameplayDefinitions'] === undefined ? {} : { gameplayDefinitions: freezeList(requiredArray(source, 'gameplayDefinitions', path).map((entry, index) => admitDefinition(entry, `${path}.gameplayDefinitions[${String(index)}]`, { nodes: 0 }))) }),
     ...(source['timelines'] === undefined ? {} : { timelines: freezeList(requiredArray(source, 'timelines', path).map((entry, index) => admitTimeline(entry, `${path}.timelines[${String(index)}]`, undefined, { nodes: 0 }))) }),
   });
@@ -387,47 +457,178 @@ function triggerValueKind(trigger: InputTrigger): ProductIntentDescriptor['value
   return trigger.kind === 'key' || trigger.kind === 'pointer-button' || trigger.kind === 'controller-button' ? 'digital' : 'axis';
 }
 
-function admitSchedule(values: readonly unknown[], path: string, capabilities: ReadonlySet<string>, definitions: ReadonlySet<string>, budget: JsonState): readonly ScheduleEntry[] {
-  quota(values.length, MAX_SCHEDULE_ENTRIES, path);
-  const output = values.map((entry, index) => admitScheduleEntry(entry, `${path}[${String(index)}]`, capabilities, definitions, budget));
-  unique(output, path);
+function normalizeScheduleDraft(value: unknown, path: string): readonly SchedulePhaseDeclaration[] {
+  if (Array.isArray(value)) {
+    return admitSchedule(arrayData(value, path), path, undefined, undefined, { nodes: 0 });
+  }
+  return schedule(value as ScheduleDraft);
+}
+
+function admitSchedule(values: readonly unknown[], path: string, capabilities: ReadonlySet<string> | undefined, definitions: ReadonlySet<string> | undefined, budget: JsonState): readonly SchedulePhaseDeclaration[] {
+  if (values.length !== PRODUCT_MODEL_SCHEDULE.phases.length) fail('invalid-schedule-phase', path, `schedule must declare exactly ${String(PRODUCT_MODEL_SCHEDULE.phases.length)} phases`);
+  const output = values.map((entry, index) => admitSchedulePhase(entry, `${path}[${String(index)}]`, capabilities, definitions, budget));
+  const totalSystems = output.reduce((total, phase) => total + schedulePhaseSystems(phase).length, 0);
+  quota(totalSystems, MAX_SCHEDULE_ENTRIES, path);
+  for (const [index, entry] of output.entries()) {
+    if (entry.phase !== PRODUCT_MODEL_SCHEDULE.phases[index]) fail('invalid-schedule-phase', `${path}[${String(index)}].phase`, `schedule phases must use canonical order; expected ${PRODUCT_MODEL_SCHEDULE.phases[index]}`);
+  }
+  const locations = new Map<string, { readonly phase: number; readonly placement: SchedulePlacement; readonly system: ScheduleSystem }>();
+  const allSystems = output.flatMap((entry, phase) => schedulePhaseSystems(entry).map(({ system, placement }) => {
+    if (locations.has(system.id)) fail('duplicate-entry', `${path}[${String(phase)}].${placementPath(placement, system.id)}.id`, `duplicate identity ${system.id}`);
+    const location = { phase, placement, system };
+    locations.set(system.id, location);
+    return location;
+  }));
+  for (const location of allSystems) {
+    for (const [dependencyIndex, dependency] of location.system.after.entries()) {
+      const dependencyLocation = locations.get(dependency);
+      const dependencyPath = `${path}[${String(location.phase)}].${placementPath(location.placement, location.system.id)}.after[${String(dependencyIndex)}]`;
+      if (dependency === location.system.id) fail('schedule-dependency-cycle', dependencyPath, `system ${location.system.id} cannot depend on itself`);
+      if (dependencyLocation === undefined) fail('unknown-schedule-dependency', dependencyPath, `system ${location.system.id} depends on undeclared system ${dependency}`);
+      if (dependencyLocation.phase !== location.phase) fail('schedule-cross-phase-dependency', dependencyPath, 'schedule dependencies must remain within one phase');
+      if (dependencyLocation.placement !== location.placement) fail('schedule-placement-dependency', dependencyPath, 'schedule dependencies cannot cross a composition placement partition');
+    }
+  }
+  validateScheduleCycles(allSystems, path);
+  validateScheduleAccessAmbiguity(allSystems, path);
   return freezeList(output);
 }
 
-function admitScheduleEntry(value: unknown, path: string, capabilities: ReadonlySet<string> | undefined, definitions: ReadonlySet<string> | undefined, budget: JsonState): ScheduleEntry {
+function schedulePhaseSystems(phase: SchedulePhaseDeclaration): readonly { readonly system: ScheduleSystem; readonly placement: SchedulePlacement }[] {
+  if (phase.mode === 'extend') {
+    return [
+      ...phase.before.map((system) => ({ system, placement: 'extend-before' as const })),
+      ...phase.after.map((system) => ({ system, placement: 'extend-after' as const })),
+    ];
+  }
+  return phase.systems.map((system) => ({ system, placement: phase.mode as SchedulePlacement }));
+}
+
+function placementPath(placement: SchedulePlacement, id: string): string {
+  return placement === 'extend-before' ? `before[${id}]` : placement === 'extend-after' ? `after[${id}]` : `systems[${id}]`;
+}
+
+function validateScheduleCycles(
+  systems: readonly { readonly system: ScheduleSystem; readonly placement: SchedulePlacement }[],
+  path: string,
+): void {
+  const byId = new Map(systems.map((entry) => [entry.system.id, entry.system]));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (id: string): void => {
+    if (visited.has(id)) return;
+    if (!visiting.add(id)) fail('schedule-dependency-cycle', path, `schedule dependency graph contains a cycle involving ${id}`);
+    const systemValue = byId.get(id);
+    if (systemValue !== undefined) for (const dependency of systemValue.after) visit(dependency);
+    visiting.delete(id);
+    visited.add(id);
+  };
+  for (const entry of systems) visit(entry.system.id);
+}
+
+function validateScheduleAccessAmbiguity(
+  systems: readonly { readonly system: ScheduleSystem; readonly placement: SchedulePlacement }[],
+  path: string,
+): void {
+  const byId = new Map(systems.map((entry) => [entry.system.id, entry]));
+  const reaches = (before: string, target: string): boolean => {
+    const seen = new Set<string>();
+    const pending = [target];
+    while (pending.length > 0) {
+      const current = pending.pop() as string;
+      if (!seen.add(current)) continue;
+      const entry = byId.get(current);
+      if (entry?.system.after.includes(before)) return true;
+      if (entry !== undefined) pending.push(...entry.system.after);
+    }
+    return false;
+  };
+  for (let leftIndex = 0; leftIndex < systems.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < systems.length; rightIndex += 1) {
+      const left = systems[leftIndex]!;
+      const right = systems[rightIndex]!;
+      if (left.placement !== right.placement) continue;
+      const conflict = left.system.writes.some((write) => right.system.writes.includes(write) || right.system.reads.includes(write))
+        || right.system.writes.some((write) => left.system.reads.includes(write));
+      if (conflict && !reaches(left.system.id, right.system.id) && !reaches(right.system.id, left.system.id)) {
+        fail('schedule-access-ambiguity', path, `systems ${left.system.id} and ${right.system.id} conflict without an explicit dependency`);
+      }
+    }
+  }
+}
+
+function admitSchedulePhase(value: unknown, path: string, capabilities?: ReadonlySet<string>, definitions?: ReadonlySet<string>, budget: JsonState = { nodes: 0 }): SchedulePhaseDeclaration {
   const source = record(value, path);
   known(source, PRODUCT_MODEL_FIELDS.schedule, path);
+  const phase = listedString(source, 'phase', path, PRODUCT_MODEL_SCHEDULE.phases);
+  const mode = listedString(source, 'mode', path, PRODUCT_MODEL_SCHEDULE.modes) as ScheduleCompositionMode;
+  if (mode === 'extend') {
+    known(source, ['phase', 'mode', 'before', 'after'], path);
+    return Object.freeze({
+      phase: phase as SchedulePhase,
+      mode,
+      before: freezeList(requiredArray(source, 'before', path).map((entry, index) => admitScheduleSystem(entry, `${path}.before[${String(index)}]`, capabilities, definitions, budget))),
+      after: freezeList(requiredArray(source, 'after', path).map((entry, index) => admitScheduleSystem(entry, `${path}.after[${String(index)}]`, capabilities, definitions, budget))),
+    });
+  }
+  known(source, ['phase', 'mode', 'systems'], path);
+  return Object.freeze({
+    phase: phase as SchedulePhase,
+    mode,
+    systems: freezeList(requiredArray(source, 'systems', path).map((entry, index) => admitScheduleSystem(entry, `${path}.systems[${String(index)}]`, capabilities, definitions, budget))),
+  }) as SchedulePhaseDeclaration;
+}
+
+function admitScheduleSystem(value: unknown, path: string, capabilities?: ReadonlySet<string>, definitions?: ReadonlySet<string>, budget: JsonState = { nodes: 0 }): ScheduleSystem {
+  const source = record(value, path);
+  known(source, PRODUCT_MODEL_FIELDS.scheduleSystem, path);
   const capabilityId = identity(requiredString(source, 'capability', path), `${path}.capability`);
   if (capabilities !== undefined && !capabilities.has(capabilityId)) fail('unknown-capability', `${path}.capability`, `capability ${capabilityId} is not declared`);
   const definition = source['definition'] === undefined ? undefined : identity(requiredString(source, 'definition', path), `${path}.definition`);
   if (definition !== undefined && definitions !== undefined && !definitions.has(definition)) fail('unknown-definition', `${path}.definition`, `gameplay definition ${definition} is not declared`);
-  return freezeSchedule({
+  return freezeScheduleSystem({
     id: identity(requiredString(source, 'id', path), `${path}.id`),
-    phase: identity(requiredString(source, 'phase', path), `${path}.phase`),
     capability: capabilityId,
     ...(definition === undefined ? {} : { definition }),
+    after: identities(requiredArray(source, 'after', path), `${path}.after`, MAX_SCHEDULE_DEPENDENCIES),
     reads: identities(requiredArray(source, 'reads', path), `${path}.reads`),
     writes: identities(requiredArray(source, 'writes', path), `${path}.writes`),
+    cadence: admitCadence(required(source, 'cadence', path), `${path}.cadence`),
     payload: normalizeWithBudget(required(source, 'payload', path), `${path}.payload`, budget),
   });
 }
 
-function scheduleEntry(draft: ScheduleEntryDraft, path: string): ScheduleEntry {
-  return admitScheduleEntry(draft, path, undefined, undefined, { nodes: 0 });
+function admitCadence(value: unknown, path: string): ScheduleCadence {
+  const source = record(value, path);
+  known(source, PRODUCT_MODEL_FIELDS.scheduleCadence, path);
+  const everySteps = integer(required(source, 'everySteps', path), `${path}.everySteps`);
+  const offsetSteps = integer(required(source, 'offsetSteps', path), `${path}.offsetSteps`);
+  if (everySteps <= 0 || offsetSteps < 0 || offsetSteps >= everySteps) fail('invalid-schedule-cadence', path, 'cadence requires everySteps > 0 and 0 <= offsetSteps < everySteps');
+  return Object.freeze({ everySteps, offsetSteps });
 }
 
-function scheduleEntryForPhase(value: unknown, phaseName: string, path: string): ScheduleEntry {
+function integer(value: unknown, path: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > 4_294_967_295) fail('invalid-schedule-cadence', path, 'cadence steps must be an unsigned 32-bit integer');
+  return value as number;
+}
+
+function composeSchedule(anchor: StandardPhase, mode: ScheduleCompositionMode, values: readonly ScheduleSystem[], anchorPath: string): SchedulePhaseDeclaration {
+  const phase = standardAnchor(anchor, anchorPath);
+  const systems = values.map((entry, index) => admitScheduleSystem(entry, `$.${mode}.systems[${String(index)}]`));
+  if (mode === 'append') return Object.freeze({ phase, mode: 'append' as const, systems: freezeList(systems) });
+  if (mode === 'prepend') return Object.freeze({ phase, mode: 'prepend' as const, systems: freezeList(systems) });
+  if (mode === 'replace') return Object.freeze({ phase, mode: 'replace' as const, systems: freezeList(systems) });
+  throw new Error('extend uses its before/after overload');
+}
+
+function standardAnchor(value: StandardPhase, path: string): SchedulePhase {
   const source = record(value, path);
-  known(source, ['id', 'capability', 'definition', 'reads', 'writes', 'payload'], path);
-  return admitScheduleEntry({
-    id: required(source, 'id', path),
-    phase: phaseName,
-    capability: required(source, 'capability', path),
-    ...(Object.hasOwn(source, 'definition') ? { definition: source['definition'] } : {}),
-    reads: required(source, 'reads', path),
-    writes: required(source, 'writes', path),
-    payload: required(source, 'payload', path),
-  }, path, undefined, undefined, { nodes: 0 });
+  if (!Object.isFrozen(value)) fail('invalid-schedule-phase', path, 'schedule composition anchors must be frozen Standard.<phase> values');
+  known(source, ['kind', 'phase'], path);
+  if (source['kind'] !== 'standard') fail('invalid-schedule-phase', `${path}.kind`, 'schedule composition anchors must be Standard.<phase> values');
+  const phase = source['phase'];
+  if (typeof phase !== 'string' || !SCHEDULE_PHASES.includes(phase as SchedulePhase)) fail('invalid-schedule-phase', `${path}.phase`, 'schedule composition anchor phase is not in the closed phase catalog');
+  return phase as SchedulePhase;
 }
 
 function admitDefinitions(values: readonly unknown[], path: string, budget?: JsonState): readonly GameplayDefinition[] {
@@ -490,8 +691,8 @@ function countJsonNodes(value: JsonValue): number {
   return 1;
 }
 
-function identities(values: readonly unknown[], path: string): readonly string[] {
-  quota(values.length, MAX_SCHEDULE_RESOURCE_DECLARATIONS, path);
+function identities(values: readonly unknown[], path: string, maximum = MAX_SCHEDULE_RESOURCE_DECLARATIONS): readonly string[] {
+  quota(values.length, maximum, path);
   const output = values.map((value, index) => identity(string(value, `${path}[${String(index)}]`), `${path}[${String(index)}]`));
   unique(output.map((id) => ({ id })), path);
   return freezeList(output);
@@ -523,14 +724,22 @@ function freezeComposition(value: CompiledComposition): CompiledComposition {
   });
 }
 function freezeInput(value: InputMapEntry): InputMapEntry { return Object.freeze({ ...value }); }
-function freezeSchedule(value: ScheduleEntry): ScheduleEntry { return Object.freeze({ ...value, reads: freezeList(value.reads), writes: freezeList(value.writes) }); }
+function freezeScheduleSystem(value: ScheduleSystem): ScheduleSystem {
+  return Object.freeze({
+    ...value,
+    after: freezeList(value.after),
+    reads: freezeList(value.reads),
+    writes: freezeList(value.writes),
+    cadence: Object.freeze({ ...value.cadence }),
+  });
+}
 function freezeDefinition(value: GameplayDefinition): GameplayDefinition { return Object.freeze({ ...value }); }
 function freezeTimeline(value: Timeline): Timeline { return Object.freeze({ id: value.id, steps: freezeList(value.steps) }); }
 function freezeTimelineStep(value: TimelineStep): TimelineStep { return Object.freeze({ ...value }); }
 function freezeList<T>(value: readonly T[]): readonly T[] { return Object.freeze(Array.from(value)); }
 
 function writeCompiledComposition(value: CompiledComposition): string {
-  return `{"product":${JSON.stringify(value.product)},"intentDescriptors":[${value.intentDescriptors.map(writeIntentDescriptor).join(',')}],"inputMap":[${value.inputMap.map(writeInputMapEntry).join(',')}],"schedule":[${value.schedule.map(writeScheduleEntry).join(',')}],"gameplayDefinitions":[${value.gameplayDefinitions.map(writeGameplayDefinition).join(',')}],"timelines":[${value.timelines.map(writeTimeline).join(',')}],"capabilityBindings":[${value.capabilityBindings.map(writeCapabilityBinding).join(',')}]}`;
+  return `{"product":${JSON.stringify(value.product)},"intentDescriptors":[${value.intentDescriptors.map(writeIntentDescriptor).join(',')}],"inputMap":[${value.inputMap.map(writeInputMapEntry).join(',')}],"schedule":[${value.schedule.map(writeSchedulePhase).join(',')}],"gameplayDefinitions":[${value.gameplayDefinitions.map(writeGameplayDefinition).join(',')}],"timelines":[${value.timelines.map(writeTimeline).join(',')}],"capabilityBindings":[${value.capabilityBindings.map(writeCapabilityBinding).join(',')}]}`;
 }
 function writeIntentDescriptor(value: ProductIntentDescriptor): string {
   return `{"id":${JSON.stringify(value.id)},"valueKind":${JSON.stringify(value.valueKind)},"capability":${JSON.stringify(value.capability)},"payload":${writeCanonicalJson(value.payload)}}`;
@@ -538,8 +747,14 @@ function writeIntentDescriptor(value: ProductIntentDescriptor): string {
 function writeInputMapEntry(value: InputMapEntry): string {
   return `{"id":${JSON.stringify(value.id)},"intent":${JSON.stringify(value.intent)},"trigger":${writeCanonicalJson(value.trigger as unknown as JsonValue)}}`;
 }
-function writeScheduleEntry(value: ScheduleEntry): string {
-  return `{"id":${JSON.stringify(value.id)},"phase":${JSON.stringify(value.phase)},"capability":${JSON.stringify(value.capability)}${value.definition === undefined ? '' : `,"definition":${JSON.stringify(value.definition)}`},"reads":[${value.reads.map((entry) => JSON.stringify(entry)).join(',')}],"writes":[${value.writes.map((entry) => JSON.stringify(entry)).join(',')}],"payload":${writeCanonicalJson(value.payload)}}`;
+function writeSchedulePhase(value: SchedulePhaseDeclaration): string {
+  if (value.mode === 'extend') {
+    return `{"phase":${JSON.stringify(value.phase)},"mode":"extend","before":[${value.before.map(writeScheduleSystem).join(',')}],"after":[${value.after.map(writeScheduleSystem).join(',')}]}`;
+  }
+  return `{"phase":${JSON.stringify(value.phase)},"mode":${JSON.stringify(value.mode)},"systems":[${value.systems.map(writeScheduleSystem).join(',')}]}`;
+}
+function writeScheduleSystem(value: ScheduleSystem): string {
+  return `{"id":${JSON.stringify(value.id)},"capability":${JSON.stringify(value.capability)}${value.definition === undefined ? '' : `,"definition":${JSON.stringify(value.definition)}`},"after":[${value.after.map((entry) => JSON.stringify(entry)).join(',')}],"reads":[${value.reads.map((entry) => JSON.stringify(entry)).join(',')}],"writes":[${value.writes.map((entry) => JSON.stringify(entry)).join(',')}],"cadence":{"everySteps":${String(value.cadence.everySteps)},"offsetSteps":${String(value.cadence.offsetSteps)}},"payload":${writeCanonicalJson(value.payload)}}`;
 }
 function writeGameplayDefinition(value: GameplayDefinition): string {
   return `{"id":${JSON.stringify(value.id)},"payload":${writeCanonicalJson(value.payload)}}`;

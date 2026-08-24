@@ -8,7 +8,8 @@ use product_model::{
     EngineCapability, GameplayDefinition, InputAxis, InputEdge, InputMapEntry, InputTrigger,
     IntentValueKind, KeyboardControl, LifecycleMode, LinkedCapabilityTarget,
     ProductIntentDescriptor, ProductKernelCapabilityDescriptor, ProductManifestCandidate,
-    ProductPath, RealtimeClock, ReleaseChannel, ScheduleEntry, Timeline, TimelineStep,
+    ProductPath, RealtimeClock, ReleaseChannel, ScheduleCadence, ScheduleComposition,
+    SchedulePhase, SchedulePhaseDeclaration, ScheduleSystem, Timeline, TimelineStep,
     MAX_COMPILED_COMPOSITION_BYTES, MAX_PRODUCT_KERNEL_CAPABILITIES, MAX_PRODUCT_MANIFEST_BYTES,
     MAX_SCHEDULE_ACCESS_DECLARATIONS,
 };
@@ -320,8 +321,15 @@ fn composition_direct_and_decoded_paths_converge_on_canonical_bytes() {
     let direct = validate_compiled_composition(decoded.candidate().clone()).unwrap();
     assert_eq!(decoded, direct);
     assert_eq!(encode_compiled_composition(&decoded), COMPOSITION);
-    assert_eq!(decoded.candidate().schedule[0].id, "movement");
-    assert_eq!(decoded.candidate().schedule[1].id, "render-projection");
+    assert_eq!(decoded.candidate().schedule[0].phase, SchedulePhase::Input);
+    assert_eq!(
+        decoded.candidate().schedule[1].phase,
+        SchedulePhase::Simulation
+    );
+    assert_eq!(
+        decoded.candidate().schedule[4].phase,
+        SchedulePhase::Projection
+    );
 }
 
 #[test]
@@ -341,10 +349,6 @@ fn opaque_object_key_order_does_not_change_canonical_composition_bytes() {
 fn canonical_numbers_follow_ecmascript_policy_and_sort_numeric_looking_keys_bytewise() {
     let composition = decode_compiled_composition(CANONICAL_NUMBERS).unwrap();
     assert_eq!(composition.canonical_bytes(), CANONICAL_NUMBERS_EXPECTED);
-    assert_eq!(
-        composition.canonical_bytes(),
-        b"{\"product\":\"example.product\",\"intentDescriptors\":[],\"inputMap\":[],\"schedule\":[],\"gameplayDefinitions\":[{\"id\":\"numeric\",\"payload\":{\"1\":\"one\",\"10\":\"ten\",\"2\":\"two\",\"negativeZero\":0,\"small\":0.000001,\"tiny\":0.0000012}}],\"timelines\":[],\"capabilityBindings\":[]}\n"
-    );
 }
 
 #[test]
@@ -407,7 +411,7 @@ fn composition_rejects_unknown_missing_duplicate_and_unknown_references() {
     );
 
     let mut unknown_ref = minimum_candidate();
-    unknown_ref.schedule[0].capability = "missing.capability".into();
+    simulation_system_mut(&mut unknown_ref).capability = "missing.capability".into();
     assert_eq!(
         validate_compiled_composition(unknown_ref)
             .unwrap_err()
@@ -417,7 +421,7 @@ fn composition_rejects_unknown_missing_duplicate_and_unknown_references() {
     );
 
     let mut unknown_definition = minimum_candidate();
-    unknown_definition.schedule[0].definition = Some("missing-definition".into());
+    simulation_system_mut(&mut unknown_definition).definition = Some("missing-definition".into());
     assert_eq!(
         validate_compiled_composition(unknown_definition)
             .unwrap_err()
@@ -439,7 +443,8 @@ fn schedule_access_declarations_are_required_bounded_and_nonduplicating() {
     );
 
     let mut duplicate_read = minimum_candidate();
-    duplicate_read.schedule[0].reads = vec!["state.transform".into(), "state.transform".into()];
+    simulation_system_mut(&mut duplicate_read).reads =
+        vec!["state.transform".into(), "state.transform".into()];
     assert_eq!(
         validate_compiled_composition(duplicate_read)
             .unwrap_err()
@@ -449,7 +454,8 @@ fn schedule_access_declarations_are_required_bounded_and_nonduplicating() {
     );
 
     let mut duplicate_write = minimum_candidate();
-    duplicate_write.schedule[0].writes = vec!["state.transform".into(), "state.transform".into()];
+    simulation_system_mut(&mut duplicate_write).writes =
+        vec!["state.transform".into(), "state.transform".into()];
     assert_eq!(
         validate_compiled_composition(duplicate_write)
             .unwrap_err()
@@ -459,7 +465,7 @@ fn schedule_access_declarations_are_required_bounded_and_nonduplicating() {
     );
 
     let mut malformed_write = minimum_candidate();
-    malformed_write.schedule[0].writes = vec!["Wrong identity".into()];
+    simulation_system_mut(&mut malformed_write).writes = vec!["Wrong identity".into()];
     assert_eq!(
         validate_compiled_composition(malformed_write)
             .unwrap_err()
@@ -469,7 +475,7 @@ fn schedule_access_declarations_are_required_bounded_and_nonduplicating() {
     );
 
     let mut over_bound = minimum_candidate();
-    over_bound.schedule[0].reads = (0..=MAX_SCHEDULE_ACCESS_DECLARATIONS)
+    simulation_system_mut(&mut over_bound).reads = (0..=MAX_SCHEDULE_ACCESS_DECLARATIONS)
         .map(|index| format!("state.value-{index}"))
         .collect();
     assert_eq!(
@@ -481,7 +487,7 @@ fn schedule_access_declarations_are_required_bounded_and_nonduplicating() {
     );
 
     let mut writes_over_bound = minimum_candidate();
-    writes_over_bound.schedule[0].writes = (0..=MAX_SCHEDULE_ACCESS_DECLARATIONS)
+    simulation_system_mut(&mut writes_over_bound).writes = (0..=MAX_SCHEDULE_ACCESS_DECLARATIONS)
         .map(|index| format!("state.value-{index}"))
         .collect();
     assert_eq!(
@@ -493,15 +499,17 @@ fn schedule_access_declarations_are_required_bounded_and_nonduplicating() {
     );
 
     let mut read_modify_write = minimum_candidate();
-    read_modify_write.schedule[0].reads = vec!["state.first".into(), "state.second".into()];
-    read_modify_write.schedule[0].writes = vec!["state.second".into(), "state.first".into()];
+    simulation_system_mut(&mut read_modify_write).reads =
+        vec!["state.first".into(), "state.second".into()];
+    simulation_system_mut(&mut read_modify_write).writes =
+        vec!["state.second".into(), "state.first".into()];
     let checked = validate_compiled_composition(read_modify_write).unwrap();
     assert_eq!(
-        checked.candidate().schedule[0].reads,
+        simulation_system(&checked.candidate().schedule[1]).reads,
         ["state.first", "state.second"]
     );
     assert_eq!(
-        checked.candidate().schedule[0].writes,
+        simulation_system(&checked.candidate().schedule[1]).writes,
         ["state.second", "state.first"]
     );
 }
@@ -529,21 +537,28 @@ fn product_composition_admission_links_checked_artifact_to_layout_immutably() {
         from_checked.intent_descriptors()[0].capability().target(),
         "kernel.camera-look"
     );
-    assert_eq!(from_checked.schedule()[0].id(), "movement");
-    assert_eq!(from_checked.schedule()[0].capability().binding_index(), 1);
+    assert_eq!(from_checked.schedule()[1].systems()[0].id(), "movement");
     assert_eq!(
-        from_checked.schedule()[0].capability().target(),
+        from_checked.schedule()[1].systems()[0]
+            .capability()
+            .binding_index(),
+        1
+    );
+    assert_eq!(
+        from_checked.schedule()[1].systems()[0]
+            .capability()
+            .target(),
         "kernel.apply-movement"
     );
     assert_eq!(
-        from_checked.schedule()[0]
+        from_checked.schedule()[1].systems()[0]
             .definition()
             .unwrap()
             .definition_index(),
         0
     );
     assert_eq!(
-        from_checked.schedule()[0].reads(),
+        from_checked.schedule()[1].systems()[0].reads(),
         ["input.motion", "state.transform"]
     );
     assert_eq!(from_checked.gameplay_definitions()[0].id(), "player");
@@ -760,7 +775,7 @@ fn closed_catalog_rejects_schedule_contract_and_kernel_descriptor_bounds() {
         .unwrap()
         .candidate()
         .clone();
-    mismatched.schedule[0].reads = vec!["state.transform".into()];
+    simulation_system_mut(&mut mismatched).reads = vec!["state.transform".into()];
     let error = link_admitted_product_composition(
         admit_product_composition(&manifest, mismatched).unwrap(),
         &KERNEL_CAPABILITIES,
@@ -770,7 +785,7 @@ fn closed_catalog_rejects_schedule_contract_and_kernel_descriptor_bounds() {
         error.diagnostic().code(),
         "RUNTIME_CAPABILITY_ACCESS_MISMATCH"
     );
-    assert_eq!(error.diagnostic().path(), "schedule[0].reads");
+    assert_eq!(error.diagnostic().path(), "schedule[1].systems[0].reads");
 
     let oversized = vec![KERNEL_CAPABILITIES[0]; MAX_PRODUCT_KERNEL_CAPABILITIES + 1];
     let error = link_fixture(&manifest, &oversized).unwrap_err();
@@ -850,7 +865,7 @@ fn product_composition_admission_rejects_layout_product_mismatch_after_checked_v
 fn direct_product_admission_returns_no_readout_for_incomplete_references() {
     let manifest = decode_product_manifest(MANIFEST).unwrap();
     let mut candidate = minimum_candidate();
-    candidate.schedule[0].definition = Some("missing-definition".into());
+    simulation_system_mut(&mut candidate).definition = Some("missing-definition".into());
 
     assert_eq!(
         admit_product_composition(&manifest, candidate)
@@ -981,15 +996,39 @@ fn minimum_candidate() -> CompiledCompositionCandidate {
                 context: None,
             },
         }],
-        schedule: vec![ScheduleEntry {
-            id: "movement".into(),
-            phase: "simulation".into(),
-            capability: "movement.apply".into(),
-            definition: Some("player".into()),
-            reads: vec!["state.transform".into()],
-            writes: vec!["state.transform".into()],
-            payload: Value::Null,
-        }],
+        schedule: vec![
+            SchedulePhaseDeclaration {
+                phase: SchedulePhase::Input,
+                composition: ScheduleComposition::Append { systems: vec![] },
+            },
+            SchedulePhaseDeclaration {
+                phase: SchedulePhase::Simulation,
+                composition: ScheduleComposition::Append {
+                    systems: vec![ScheduleSystem {
+                        id: "movement".into(),
+                        capability: "movement.apply".into(),
+                        definition: Some("player".into()),
+                        after: vec![],
+                        reads: vec!["state.transform".into()],
+                        writes: vec!["state.transform".into()],
+                        cadence: ScheduleCadence::new(1, 0),
+                        payload: Value::Null,
+                    }],
+                },
+            },
+            SchedulePhaseDeclaration {
+                phase: SchedulePhase::Consequences,
+                composition: ScheduleComposition::Append { systems: vec![] },
+            },
+            SchedulePhaseDeclaration {
+                phase: SchedulePhase::Commit,
+                composition: ScheduleComposition::Append { systems: vec![] },
+            },
+            SchedulePhaseDeclaration {
+                phase: SchedulePhase::Projection,
+                composition: ScheduleComposition::Append { systems: vec![] },
+            },
+        ],
         gameplay_definitions: vec![GameplayDefinition {
             id: "player".into(),
             payload: json!({"opaque": true}),
@@ -1016,5 +1055,19 @@ fn minimum_candidate() -> CompiledCompositionCandidate {
                 target: "kernel.start-timeline".into(),
             },
         ],
+    }
+}
+
+fn simulation_system_mut(candidate: &mut CompiledCompositionCandidate) -> &mut ScheduleSystem {
+    match &mut candidate.schedule[1].composition {
+        ScheduleComposition::Append { systems } => &mut systems[0],
+        _ => panic!("minimum candidate simulation phase must use append"),
+    }
+}
+
+fn simulation_system(phase: &SchedulePhaseDeclaration) -> &ScheduleSystem {
+    match &phase.composition {
+        ScheduleComposition::Append { systems } => &systems[0],
+        _ => panic!("minimum candidate simulation phase must use append"),
     }
 }

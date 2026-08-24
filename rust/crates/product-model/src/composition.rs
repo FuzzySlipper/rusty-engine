@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{
     de::{Error as DeError, MapAccess, SeqAccess, Visitor},
@@ -15,6 +15,8 @@ pub const MAX_INTENT_DESCRIPTORS: usize = 256;
 pub const MAX_INPUT_CHORD_CONTROLS: usize = 8;
 pub const MAX_SCHEDULE_ENTRIES: usize = 512;
 pub const MAX_SCHEDULE_ACCESS_DECLARATIONS: usize = 64;
+pub const MAX_SCHEDULE_DEPENDENCIES: usize = 64;
+pub const SCHEDULE_PHASE_COUNT: usize = 5;
 pub const MAX_GAMEPLAY_DEFINITIONS: usize = 512;
 pub const MAX_TIMELINES: usize = 256;
 pub const MAX_TIMELINE_STEPS: usize = 256;
@@ -52,7 +54,7 @@ pub struct CompiledCompositionCandidate {
     pub product: String,
     pub intent_descriptors: Vec<ProductIntentDescriptor>,
     pub input_map: Vec<InputMapEntry>,
-    pub schedule: Vec<ScheduleEntry>,
+    pub schedule: Vec<SchedulePhaseDeclaration>,
     pub gameplay_definitions: Vec<GameplayDefinition>,
     pub timelines: Vec<Timeline>,
     pub capability_bindings: Vec<CapabilityBinding>,
@@ -277,16 +279,272 @@ impl InputTrigger {
     }
 }
 
+/// The five closed Runtime Composition schedule phases. Their order is part of
+/// the wire contract and is later mapped to runtime lifecycle tokens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SchedulePhase {
+    Input,
+    Simulation,
+    Consequences,
+    Commit,
+    Projection,
+}
+
+impl SchedulePhase {
+    pub const ALL: [Self; SCHEDULE_PHASE_COUNT] = [
+        Self::Input,
+        Self::Simulation,
+        Self::Consequences,
+        Self::Commit,
+        Self::Projection,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Input => "input",
+            Self::Simulation => "simulation",
+            Self::Consequences => "consequences",
+            Self::Commit => "commit",
+            Self::Projection => "projection",
+        }
+    }
+
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Input => 0,
+            Self::Simulation => 1,
+            Self::Consequences => 2,
+            Self::Commit => 3,
+            Self::Projection => 4,
+        }
+    }
+}
+
+/// The explicit operation used to compose a phase around its implicit
+/// `Standard.<phase>` anchor. Standard systems are owned by the runtime
+/// catalog and are therefore not repeated in the compiled product artifact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum ScheduleComposition {
+    Append {
+        systems: Vec<ScheduleSystem>,
+    },
+    Prepend {
+        systems: Vec<ScheduleSystem>,
+    },
+    Extend {
+        before: Vec<ScheduleSystem>,
+        after: Vec<ScheduleSystem>,
+    },
+    Replace {
+        systems: Vec<ScheduleSystem>,
+    },
+}
+
+impl ScheduleComposition {
+    pub const fn mode(&self) -> ScheduleCompositionMode {
+        match self {
+            Self::Append { .. } => ScheduleCompositionMode::Append,
+            Self::Prepend { .. } => ScheduleCompositionMode::Prepend,
+            Self::Extend { .. } => ScheduleCompositionMode::Extend,
+            Self::Replace { .. } => ScheduleCompositionMode::Replace,
+        }
+    }
+
+    pub fn systems(&self) -> impl Iterator<Item = (&ScheduleSystem, SchedulePlacement)> {
+        let iter = match self {
+            Self::Append { systems } => systems
+                .iter()
+                .map(|system| (system, SchedulePlacement::Append))
+                .collect::<Vec<_>>(),
+            Self::Prepend { systems } => systems
+                .iter()
+                .map(|system| (system, SchedulePlacement::Prepend))
+                .collect::<Vec<_>>(),
+            Self::Extend { before, after } => before
+                .iter()
+                .map(|system| (system, SchedulePlacement::ExtendBefore))
+                .chain(
+                    after
+                        .iter()
+                        .map(|system| (system, SchedulePlacement::ExtendAfter)),
+                )
+                .collect::<Vec<_>>(),
+            Self::Replace { systems } => systems
+                .iter()
+                .map(|system| (system, SchedulePlacement::Replace))
+                .collect::<Vec<_>>(),
+        };
+        iter.into_iter()
+    }
+
+    pub fn systems_mut(
+        &mut self,
+    ) -> impl Iterator<Item = (&mut ScheduleSystem, SchedulePlacement)> {
+        let iter = match self {
+            Self::Append { systems } => systems
+                .iter_mut()
+                .map(|system| (system, SchedulePlacement::Append))
+                .collect::<Vec<_>>(),
+            Self::Prepend { systems } => systems
+                .iter_mut()
+                .map(|system| (system, SchedulePlacement::Prepend))
+                .collect::<Vec<_>>(),
+            Self::Extend { before, after } => before
+                .iter_mut()
+                .map(|system| (system, SchedulePlacement::ExtendBefore))
+                .chain(
+                    after
+                        .iter_mut()
+                        .map(|system| (system, SchedulePlacement::ExtendAfter)),
+                )
+                .collect::<Vec<_>>(),
+            Self::Replace { systems } => systems
+                .iter_mut()
+                .map(|system| (system, SchedulePlacement::Replace))
+                .collect::<Vec<_>>(),
+        };
+        iter.into_iter()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScheduleCompositionMode {
+    Append,
+    Prepend,
+    Extend,
+    Replace,
+}
+
+impl ScheduleCompositionMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Append => "append",
+            Self::Prepend => "prepend",
+            Self::Extend => "extend",
+            Self::Replace => "replace",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchedulePlacement {
+    Append,
+    Prepend,
+    ExtendBefore,
+    ExtendAfter,
+    Replace,
+}
+
+impl SchedulePlacement {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Append => "append",
+            Self::Prepend => "prepend",
+            Self::ExtendBefore => "extend-before",
+            Self::ExtendAfter => "extend-after",
+            Self::Replace => "replace",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchedulePhaseDeclaration {
+    pub phase: SchedulePhase,
+    #[serde(flatten)]
+    pub composition: ScheduleComposition,
+}
+
+impl<'de> Deserialize<'de> for SchedulePhaseDeclaration {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let mut object = value
+            .as_object()
+            .cloned()
+            .ok_or_else(|| D::Error::custom("schedule phase must be an object"))?;
+        let phase_value = object
+            .remove("phase")
+            .ok_or_else(|| D::Error::missing_field("phase"))?;
+        let phase = serde_json::from_value::<SchedulePhase>(phase_value)
+            .map_err(|error| D::Error::custom(error.to_string()))?;
+        let mode_value = object
+            .remove("mode")
+            .ok_or_else(|| D::Error::missing_field("mode"))?;
+        let mode = mode_value
+            .as_str()
+            .ok_or_else(|| D::Error::custom("schedule phase mode must be a string"))?;
+        let composition = match mode {
+            "append" => ScheduleComposition::Append {
+                systems: take_systems(&mut object, "systems").map_err(D::Error::custom)?,
+            },
+            "prepend" => ScheduleComposition::Prepend {
+                systems: take_systems(&mut object, "systems").map_err(D::Error::custom)?,
+            },
+            "replace" => ScheduleComposition::Replace {
+                systems: take_systems(&mut object, "systems").map_err(D::Error::custom)?,
+            },
+            "extend" => {
+                let before = take_systems(&mut object, "before").map_err(D::Error::custom)?;
+                let after = take_systems(&mut object, "after").map_err(D::Error::custom)?;
+                ScheduleComposition::Extend { before, after }
+            }
+            _ => {
+                return Err(D::Error::custom(format!(
+                    "unknown schedule phase mode `{mode}`"
+                )))
+            }
+        };
+        if let Some(unknown) = object.keys().next() {
+            return Err(D::Error::custom(format!(
+                "unknown field `{unknown}` in schedule phase"
+            )));
+        }
+        Ok(Self { phase, composition })
+    }
+}
+
+fn take_systems(
+    object: &mut serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<Vec<ScheduleSystem>, String> {
+    let value = object
+        .remove(field)
+        .ok_or_else(|| format!("missing field `{field}` in schedule phase"))?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ScheduleCadence {
+    pub every_steps: u32,
+    pub offset_steps: u32,
+}
+
+impl ScheduleCadence {
+    pub const fn new(every_steps: u32, offset_steps: u32) -> Self {
+        Self {
+            every_steps,
+            offset_steps,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ScheduleEntry {
+pub struct ScheduleSystem {
     pub id: String,
-    pub phase: String,
     pub capability: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definition: Option<String>,
+    pub after: Vec<String>,
     pub reads: Vec<String>,
     pub writes: Vec<String>,
+    pub cadence: ScheduleCadence,
     pub payload: Value,
 }
 
@@ -375,9 +633,9 @@ pub fn validate_compiled_composition(
     )?;
     validate_bounded_count(
         candidate.schedule.len(),
-        MAX_SCHEDULE_ENTRIES,
+        SCHEDULE_PHASE_COUNT,
         "schedule",
-        "COMPOSITION_SCHEDULE_COUNT",
+        "COMPOSITION_SCHEDULE_PHASE_COUNT",
     )?;
     validate_bounded_count(
         candidate.gameplay_definitions.len(),
@@ -606,72 +864,318 @@ fn validate_context(context: Option<&str>, path: &str) -> Result<(), ProductMode
 }
 
 fn validate_schedule(
-    entries: &[ScheduleEntry],
+    phases: &[SchedulePhaseDeclaration],
     capabilities: &BTreeSet<String>,
     definitions: &BTreeSet<String>,
     json_nodes: &mut usize,
 ) -> Result<(), ProductModelError> {
+    if phases.len() != SCHEDULE_PHASE_COUNT {
+        return Err(failure(
+            "COMPOSITION_SCHEDULE_PHASE_COUNT",
+            SOURCE,
+            "schedule",
+            format!(
+                "schedule must declare exactly {SCHEDULE_PHASE_COUNT} closed phases in canonical order"
+            ),
+        ));
+    }
+    for (index, declaration) in phases.iter().enumerate() {
+        let expected = SchedulePhase::ALL[index];
+        if declaration.phase != expected {
+            return Err(failure(
+                "COMPOSITION_SCHEDULE_PHASE_ORDER",
+                SOURCE,
+                format!("schedule[{index}].phase"),
+                format!(
+                    "schedule phase `{}` is out of order; expected `{}` at position {index}",
+                    declaration.phase.as_str(),
+                    expected.as_str(),
+                ),
+            ));
+        }
+    }
+
+    let total_systems = phases
+        .iter()
+        .map(|phase| phase.composition.systems().count())
+        .sum();
+    validate_bounded_count(
+        total_systems,
+        MAX_SCHEDULE_ENTRIES,
+        "schedule",
+        "COMPOSITION_SCHEDULE_COUNT",
+    )?;
+
     let mut ids = BTreeSet::new();
-    for (index, entry) in entries.iter().enumerate() {
-        let prefix = format!("schedule[{index}]");
-        validate_identity(&entry.id, SOURCE, &format!("{prefix}.id"))?;
-        validate_identity(&entry.phase, SOURCE, &format!("{prefix}.phase"))?;
-        require_capability(
-            &entry.capability,
-            capabilities,
-            &format!("{prefix}.capability"),
-        )?;
-        if let Some(definition) = &entry.definition {
-            validate_identity(definition, SOURCE, &format!("{prefix}.definition"))?;
-            if !definitions.contains(definition) {
+    let mut locations = BTreeMap::new();
+    for (phase_index, declaration) in phases.iter().enumerate() {
+        for (system_index, (system, placement)) in declaration.composition.systems().enumerate() {
+            let prefix = format!(
+                "schedule[{phase_index}].{}",
+                placement_path(placement, system_index)
+            );
+            validate_schedule_system(system, &prefix, capabilities, definitions, json_nodes)?;
+            if !ids.insert(system.id.clone()) {
                 return Err(failure(
-                    "COMPOSITION_UNKNOWN_DEFINITION",
+                    "COMPOSITION_DUPLICATE_SCHEDULE_ENTRY",
                     SOURCE,
-                    format!("{prefix}.definition"),
-                    format!("schedule entry references unknown gameplay definition `{definition}`"),
+                    format!("{prefix}.id"),
+                    format!("schedule system `{}` is declared more than once", system.id),
                 ));
             }
+            locations.insert(system.id.clone(), (phase_index, placement));
         }
-        validate_schedule_accesses(
-            &entry.reads,
-            &format!("{prefix}.reads"),
-            "COMPOSITION_SCHEDULE_READ_COUNT",
-            "COMPOSITION_DUPLICATE_SCHEDULE_READ",
-        )?;
-        validate_schedule_accesses(
-            &entry.writes,
-            &format!("{prefix}.writes"),
-            "COMPOSITION_SCHEDULE_WRITE_COUNT",
-            "COMPOSITION_DUPLICATE_SCHEDULE_WRITE",
-        )?;
-        validate_opaque_json(&entry.payload, &format!("{prefix}.payload"), json_nodes)?;
-        if !ids.insert(entry.id.clone()) {
+    }
+
+    validate_schedule_dependencies(phases, &locations)?;
+    validate_schedule_conflicts(phases, &locations)?;
+    Ok(())
+}
+
+fn validate_schedule_system(
+    system: &ScheduleSystem,
+    prefix: &str,
+    capabilities: &BTreeSet<String>,
+    definitions: &BTreeSet<String>,
+    json_nodes: &mut usize,
+) -> Result<(), ProductModelError> {
+    validate_identity(&system.id, SOURCE, &format!("{prefix}.id"))?;
+    require_capability(
+        &system.capability,
+        capabilities,
+        &format!("{prefix}.capability"),
+    )?;
+    if let Some(definition) = &system.definition {
+        validate_identity(definition, SOURCE, &format!("{prefix}.definition"))?;
+        if !definitions.contains(definition) {
             return Err(failure(
-                "COMPOSITION_DUPLICATE_SCHEDULE_ENTRY",
+                "COMPOSITION_UNKNOWN_DEFINITION",
                 SOURCE,
-                format!("{prefix}.id"),
-                format!("schedule entry `{}` is declared more than once", entry.id),
+                format!("{prefix}.definition"),
+                format!("schedule system references unknown gameplay definition `{definition}`"),
             ));
+        }
+    }
+    validate_schedule_accesses(
+        &system.after,
+        &format!("{prefix}.after"),
+        MAX_SCHEDULE_DEPENDENCIES,
+        "COMPOSITION_SCHEDULE_DEPENDENCY_COUNT",
+        "COMPOSITION_DUPLICATE_SCHEDULE_DEPENDENCY",
+    )?;
+    validate_schedule_accesses(
+        &system.reads,
+        &format!("{prefix}.reads"),
+        MAX_SCHEDULE_ACCESS_DECLARATIONS,
+        "COMPOSITION_SCHEDULE_READ_COUNT",
+        "COMPOSITION_DUPLICATE_SCHEDULE_READ",
+    )?;
+    validate_schedule_accesses(
+        &system.writes,
+        &format!("{prefix}.writes"),
+        MAX_SCHEDULE_ACCESS_DECLARATIONS,
+        "COMPOSITION_SCHEDULE_WRITE_COUNT",
+        "COMPOSITION_DUPLICATE_SCHEDULE_WRITE",
+    )?;
+    if system.cadence.every_steps == 0 {
+        return Err(failure(
+            "COMPOSITION_INVALID_SCHEDULE_CADENCE",
+            SOURCE,
+            format!("{prefix}.cadence.everySteps"),
+            "schedule cadence everySteps must be greater than zero",
+        ));
+    }
+    if system.cadence.offset_steps >= system.cadence.every_steps {
+        return Err(failure(
+            "COMPOSITION_INVALID_SCHEDULE_CADENCE",
+            SOURCE,
+            format!("{prefix}.cadence.offsetSteps"),
+            "schedule cadence offsetSteps must be less than everySteps",
+        ));
+    }
+    validate_opaque_json(&system.payload, &format!("{prefix}.payload"), json_nodes)?;
+    Ok(())
+}
+
+fn placement_path(placement: SchedulePlacement, index: usize) -> String {
+    match placement {
+        SchedulePlacement::Append => format!("systems[{index}]"),
+        SchedulePlacement::Prepend => format!("systems[{index}]"),
+        SchedulePlacement::ExtendBefore => format!("before[{index}]"),
+        SchedulePlacement::ExtendAfter => format!("after[{index}]"),
+        SchedulePlacement::Replace => format!("systems[{index}]"),
+    }
+}
+
+fn validate_schedule_dependencies(
+    phases: &[SchedulePhaseDeclaration],
+    locations: &BTreeMap<String, (usize, SchedulePlacement)>,
+) -> Result<(), ProductModelError> {
+    for (phase_index, declaration) in phases.iter().enumerate() {
+        for (system_index, (system, placement)) in declaration.composition.systems().enumerate() {
+            let prefix = format!(
+                "schedule[{phase_index}].{}.after",
+                placement_path(placement, system_index)
+            );
+            for (dependency_index, dependency) in system.after.iter().enumerate() {
+                if dependency == &system.id {
+                    return Err(failure(
+                        "COMPOSITION_SCHEDULE_SELF_DEPENDENCY",
+                        SOURCE,
+                        format!("{prefix}[{dependency_index}]"),
+                        format!("schedule system `{}` cannot depend on itself", system.id),
+                    ));
+                }
+                let Some((dependency_phase, dependency_placement)) = locations.get(dependency)
+                else {
+                    return Err(failure(
+                        "COMPOSITION_UNKNOWN_SCHEDULE_DEPENDENCY",
+                        SOURCE,
+                        format!("{prefix}[{dependency_index}]"),
+                        format!(
+                            "schedule system `{}` depends on undeclared system `{dependency}`",
+                            system.id
+                        ),
+                    ));
+                };
+                if *dependency_phase != phase_index {
+                    return Err(failure(
+                        "COMPOSITION_SCHEDULE_CROSS_PHASE_DEPENDENCY",
+                        SOURCE,
+                        format!("{prefix}[{dependency_index}]"),
+                        format!(
+                            "schedule dependency `{dependency}` must remain within phase `{}`",
+                            declaration.phase.as_str()
+                        ),
+                    ));
+                }
+                if *dependency_placement != placement {
+                    return Err(failure(
+                        "COMPOSITION_SCHEDULE_PLACEMENT_DEPENDENCY",
+                        SOURCE,
+                        format!("{prefix}[{dependency_index}]"),
+                        format!("schedule dependency `{dependency}` crosses the `{}` composition placement partition", declaration.phase.as_str()),
+                    ));
+                }
+            }
+        }
+    }
+
+    for (phase_index, declaration) in phases.iter().enumerate() {
+        let systems = declaration.composition.systems().collect::<Vec<_>>();
+        let ids = systems
+            .iter()
+            .map(|(system, _)| system.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let mut visiting = BTreeSet::new();
+        let mut visited = BTreeSet::new();
+        for id in ids {
+            detect_schedule_cycle(id, &systems, &mut visiting, &mut visited, phase_index)?;
         }
     }
     Ok(())
 }
 
-/// Validates declarative schedule access names without assigning any execution
-/// or conflict semantics. A name present in both lists is intentionally valid:
-/// read/modify/write behavior is a later scheduler concern.
+fn detect_schedule_cycle(
+    id: &str,
+    systems: &[(&ScheduleSystem, SchedulePlacement)],
+    visiting: &mut BTreeSet<String>,
+    visited: &mut BTreeSet<String>,
+    phase_index: usize,
+) -> Result<(), ProductModelError> {
+    if visited.contains(id) {
+        return Ok(());
+    }
+    if !visiting.insert(id.to_owned()) {
+        return Err(failure(
+            "COMPOSITION_SCHEDULE_DEPENDENCY_CYCLE",
+            SOURCE,
+            format!("schedule[{phase_index}]"),
+            format!("schedule dependency graph contains a cycle involving `{id}`"),
+        ));
+    }
+    let Some((system, _)) = systems.iter().find(|(system, _)| system.id == id) else {
+        return Ok(());
+    };
+    for dependency in &system.after {
+        detect_schedule_cycle(dependency, systems, visiting, visited, phase_index)?;
+    }
+    visiting.remove(id);
+    visited.insert(id.to_owned());
+    Ok(())
+}
+
+fn validate_schedule_conflicts(
+    phases: &[SchedulePhaseDeclaration],
+    _locations: &BTreeMap<String, (usize, SchedulePlacement)>,
+) -> Result<(), ProductModelError> {
+    for (phase_index, declaration) in phases.iter().enumerate() {
+        let systems = declaration.composition.systems().collect::<Vec<_>>();
+        for left_index in 0..systems.len() {
+            for right_index in left_index + 1..systems.len() {
+                let (left, left_placement) = systems[left_index];
+                let (right, right_placement) = systems[right_index];
+                if left_placement != right_placement {
+                    continue;
+                }
+                let conflict = left.writes.iter().any(|write| {
+                    right.writes.iter().any(|other| other == write)
+                        || right.reads.iter().any(|read| read == write)
+                }) || right
+                    .writes
+                    .iter()
+                    .any(|write| left.reads.iter().any(|read| read == write));
+                if !conflict {
+                    continue;
+                }
+                let ordered = reaches(left.id.as_str(), right.id.as_str(), &systems)
+                    || reaches(right.id.as_str(), left.id.as_str(), &systems);
+                if !ordered {
+                    return Err(failure(
+                        "COMPOSITION_SCHEDULE_ACCESS_AMBIGUITY",
+                        SOURCE,
+                        format!("schedule[{phase_index}]"),
+                        format!(
+                            "schedule systems `{}` and `{}` have conflicting read/write access without an explicit dependency",
+                            left.id, right.id
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn reaches(before: &str, target: &str, systems: &[(&ScheduleSystem, SchedulePlacement)]) -> bool {
+    let mut pending = vec![target];
+    let mut seen = BTreeSet::new();
+    while let Some(current) = pending.pop() {
+        if !seen.insert(current) {
+            continue;
+        }
+        let Some((system, _)) = systems.iter().find(|(system, _)| system.id == current) else {
+            continue;
+        };
+        if system.after.iter().any(|dependency| dependency == before) {
+            return true;
+        }
+        pending.extend(system.after.iter().map(String::as_str));
+    }
+    false
+}
+
+/// Validates declarative schedule access names before execution. A name present
+/// in both lists is intentionally valid: it denotes read/modify/write behavior
+/// within one explicitly ordered system.
 fn validate_schedule_accesses(
     declarations: &[String],
     path: &str,
+    maximum: usize,
     count_code: &str,
     duplicate_code: &str,
 ) -> Result<(), ProductModelError> {
-    validate_bounded_count(
-        declarations.len(),
-        MAX_SCHEDULE_ACCESS_DECLARATIONS,
-        path,
-        count_code,
-    )?;
+    validate_bounded_count(declarations.len(), maximum, path, count_code)?;
     let mut known = BTreeSet::new();
     for (index, declaration) in declarations.iter().enumerate() {
         let declaration_path = format!("{path}[{index}]");
@@ -925,8 +1429,10 @@ fn canonicalize_composition(
     for descriptor in &mut canonical.intent_descriptors {
         descriptor.payload = canonicalize_json_value(&descriptor.payload);
     }
-    for entry in &mut canonical.schedule {
-        entry.payload = canonicalize_json_value(&entry.payload);
+    for phase in &mut canonical.schedule {
+        for (system, _) in phase.composition.systems_mut() {
+            system.payload = canonicalize_json_value(&system.payload);
+        }
     }
     for definition in &mut canonical.gameplay_definitions {
         definition.payload = canonicalize_json_value(&definition.payload);
@@ -1012,28 +1518,42 @@ fn encode_canonical_composition(candidate: &CompiledCompositionCandidate) -> Vec
     output.push(b']');
     write_field_name(&mut output, &mut first, "schedule");
     output.push(b'[');
-    for (index, entry) in candidate.schedule.iter().enumerate() {
+    for (index, phase) in candidate.schedule.iter().enumerate() {
         if index != 0 {
             output.push(b',');
         }
         output.push(b'{');
-        let mut entry_first = true;
-        write_field_name(&mut output, &mut entry_first, "id");
-        write_json_string(&mut output, &entry.id);
-        write_field_name(&mut output, &mut entry_first, "phase");
-        write_json_string(&mut output, &entry.phase);
-        write_field_name(&mut output, &mut entry_first, "capability");
-        write_json_string(&mut output, &entry.capability);
-        if let Some(definition) = &entry.definition {
-            write_field_name(&mut output, &mut entry_first, "definition");
-            write_json_string(&mut output, definition);
+        let mut phase_first = true;
+        write_field_name(&mut output, &mut phase_first, "phase");
+        write_json_string(&mut output, phase.phase.as_str());
+        match &phase.composition {
+            ScheduleComposition::Append { systems } => {
+                write_field_name(&mut output, &mut phase_first, "mode");
+                write_json_string(&mut output, "append");
+                write_field_name(&mut output, &mut phase_first, "systems");
+                write_schedule_system_array(&mut output, systems);
+            }
+            ScheduleComposition::Prepend { systems } => {
+                write_field_name(&mut output, &mut phase_first, "mode");
+                write_json_string(&mut output, "prepend");
+                write_field_name(&mut output, &mut phase_first, "systems");
+                write_schedule_system_array(&mut output, systems);
+            }
+            ScheduleComposition::Extend { before, after } => {
+                write_field_name(&mut output, &mut phase_first, "mode");
+                write_json_string(&mut output, "extend");
+                write_field_name(&mut output, &mut phase_first, "before");
+                write_schedule_system_array(&mut output, before);
+                write_field_name(&mut output, &mut phase_first, "after");
+                write_schedule_system_array(&mut output, after);
+            }
+            ScheduleComposition::Replace { systems } => {
+                write_field_name(&mut output, &mut phase_first, "mode");
+                write_json_string(&mut output, "replace");
+                write_field_name(&mut output, &mut phase_first, "systems");
+                write_schedule_system_array(&mut output, systems);
+            }
         }
-        write_field_name(&mut output, &mut entry_first, "reads");
-        write_json_string_array(&mut output, &entry.reads);
-        write_field_name(&mut output, &mut entry_first, "writes");
-        write_json_string_array(&mut output, &entry.writes);
-        write_field_name(&mut output, &mut entry_first, "payload");
-        write_canonical_json(&mut output, &entry.payload);
         output.push(b'}');
     }
     output.push(b']');
@@ -1105,6 +1625,47 @@ fn write_input_trigger(output: &mut Vec<u8>, trigger: &InputTrigger) {
     let value = serde_json::to_value(trigger)
         .expect("the closed input trigger schema is always serializable");
     write_canonical_json(output, &value);
+}
+
+fn write_schedule_system_array(output: &mut Vec<u8>, systems: &[ScheduleSystem]) {
+    output.push(b'[');
+    for (index, system) in systems.iter().enumerate() {
+        if index != 0 {
+            output.push(b',');
+        }
+        write_schedule_system(output, system);
+    }
+    output.push(b']');
+}
+
+fn write_schedule_system(output: &mut Vec<u8>, system: &ScheduleSystem) {
+    output.push(b'{');
+    let mut first = true;
+    write_field_name(output, &mut first, "id");
+    write_json_string(output, &system.id);
+    write_field_name(output, &mut first, "capability");
+    write_json_string(output, &system.capability);
+    if let Some(definition) = &system.definition {
+        write_field_name(output, &mut first, "definition");
+        write_json_string(output, definition);
+    }
+    write_field_name(output, &mut first, "after");
+    write_json_string_array(output, &system.after);
+    write_field_name(output, &mut first, "reads");
+    write_json_string_array(output, &system.reads);
+    write_field_name(output, &mut first, "writes");
+    write_json_string_array(output, &system.writes);
+    write_field_name(output, &mut first, "cadence");
+    output.push(b'{');
+    let mut cadence_first = true;
+    write_field_name(output, &mut cadence_first, "everySteps");
+    output.extend_from_slice(system.cadence.every_steps.to_string().as_bytes());
+    write_field_name(output, &mut cadence_first, "offsetSteps");
+    output.extend_from_slice(system.cadence.offset_steps.to_string().as_bytes());
+    output.push(b'}');
+    write_field_name(output, &mut first, "payload");
+    write_canonical_json(output, &system.payload);
+    output.push(b'}');
 }
 
 fn write_field_name(output: &mut Vec<u8>, first: &mut bool, name: &str) {

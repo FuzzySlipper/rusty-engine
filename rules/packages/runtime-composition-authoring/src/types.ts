@@ -49,15 +49,64 @@ export type InputTrigger =
   | { readonly kind: 'controller-button'; readonly button: ControllerButton; readonly edge: InputEdge; readonly context?: string }
   | { readonly kind: 'controller-axis'; readonly axis: ControllerAxis; readonly context?: string };
 
-export interface ScheduleEntry {
+export type SchedulePhase = 'input' | 'simulation' | 'consequences' | 'commit' | 'projection';
+export type ScheduleCompositionMode = 'append' | 'prepend' | 'extend' | 'replace';
+export type SchedulePlacement = 'append' | 'prepend' | 'extend-before' | 'extend-after' | 'replace';
+
+export interface ScheduleCadence {
+  readonly everySteps: number;
+  readonly offsetSteps: number;
+}
+
+export interface ScheduleSystem {
   readonly id: string;
-  readonly phase: string;
   readonly capability: string;
   readonly definition?: string;
+  readonly after: readonly string[];
   readonly reads: readonly string[];
   readonly writes: readonly string[];
+  readonly cadence: ScheduleCadence;
   readonly payload: JsonValue;
 }
+
+export interface ScheduleAppend {
+  readonly phase: SchedulePhase;
+  readonly mode: 'append';
+  readonly systems: readonly ScheduleSystem[];
+}
+
+export interface SchedulePrepend {
+  readonly phase: SchedulePhase;
+  readonly mode: 'prepend';
+  readonly systems: readonly ScheduleSystem[];
+}
+
+export interface ScheduleExtend {
+  readonly phase: SchedulePhase;
+  readonly mode: 'extend';
+  readonly before: readonly ScheduleSystem[];
+  readonly after: readonly ScheduleSystem[];
+}
+
+export interface ScheduleReplace {
+  readonly phase: SchedulePhase;
+  readonly mode: 'replace';
+  readonly systems: readonly ScheduleSystem[];
+}
+
+export type SchedulePhaseDeclaration = ScheduleAppend | SchedulePrepend | ScheduleExtend | ScheduleReplace;
+
+/** A named implicit Standard.<phase> anchor used by the schedule DSL. */
+export interface StandardPhase {
+  readonly kind: 'standard';
+  readonly phase: SchedulePhase;
+}
+
+/** A source-level schedule map. `schedule()` lowers it to five declarations. */
+export type ScheduleDraft = Partial<Record<SchedulePhase, SchedulePhaseDeclaration>>;
+
+/** Legacy name retained only as a type alias for source migration diagnostics. */
+export type ScheduleEntry = ScheduleSystem;
 
 export interface GameplayDefinition {
   readonly id: string;
@@ -80,7 +129,7 @@ export interface CompiledComposition {
   readonly product: string;
   readonly intentDescriptors: readonly ProductIntentDescriptor[];
   readonly inputMap: readonly InputMapEntry[];
-  readonly schedule: readonly ScheduleEntry[];
+  readonly schedule: readonly SchedulePhaseDeclaration[];
   readonly gameplayDefinitions: readonly GameplayDefinition[];
   readonly timelines: readonly Timeline[];
   readonly capabilityBindings: readonly CapabilityBinding[];
@@ -92,7 +141,7 @@ export interface RuntimeCompositionDraft {
   readonly capabilities: readonly CapabilityBinding[];
   readonly intentDescriptors?: readonly ProductIntentDescriptor[];
   readonly inputMap?: readonly InputMapEntry[];
-  readonly schedule?: readonly ScheduleEntry[];
+  readonly schedule?: readonly SchedulePhaseDeclaration[] | ScheduleDraft;
   readonly gameplayDefinitions?: readonly GameplayDefinition[];
   readonly timelines?: readonly Timeline[];
 }
@@ -101,7 +150,6 @@ export interface RuntimeCompositionDraft {
 export interface CompositionFragment {
   readonly intentDescriptors: readonly ProductIntentDescriptor[];
   readonly inputMap: readonly InputMapEntry[];
-  readonly schedule: readonly ScheduleEntry[];
   readonly gameplayDefinitions: readonly GameplayDefinition[];
   readonly timelines: readonly Timeline[];
   readonly capabilityBindings: readonly CapabilityBinding[];
@@ -111,7 +159,7 @@ export interface CompositionFragment {
 export interface CompositionReplacement {
   readonly intentDescriptors?: readonly ProductIntentDescriptor[];
   readonly inputMap?: readonly InputMapEntry[];
-  readonly schedule?: readonly ScheduleEntry[];
+  readonly schedule?: readonly SchedulePhaseDeclaration[];
   readonly gameplayDefinitions?: readonly GameplayDefinition[];
   readonly timelines?: readonly Timeline[];
   readonly capabilityBindings?: readonly CapabilityBinding[];
@@ -137,15 +185,17 @@ export interface ProductIntentDescriptorDraft {
 
 export interface ScheduleActionDraft {
   readonly id: string;
-  readonly capability: string;
+  readonly capability?: string;
   readonly definition?: string;
-  readonly reads: readonly string[];
-  readonly writes: readonly string[];
-  readonly payload: unknown;
+  readonly after?: readonly string[];
+  readonly reads?: readonly string[];
+  readonly writes?: readonly string[];
+  readonly cadence?: ScheduleCadence;
+  readonly payload?: unknown;
 }
 
 export interface ScheduleEntryDraft extends ScheduleActionDraft {
-  readonly phase: string;
+  readonly phase?: SchedulePhase;
 }
 
 export interface TimelineStepDraft {
