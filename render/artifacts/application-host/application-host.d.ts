@@ -422,6 +422,8 @@ export interface RustyApplicationRendererOptions {
     readonly resolveIndicatorEntityPosition?: (entity: number) => readonly [number, number, number] | null;
     /** Gameplay-owned entity positions used only to resolve neutral particle anchors. */
     readonly resolveParticleEntityPosition?: (entity: number) => readonly [number, number, number] | null;
+    /** Observe the one Engine-owned renderer cadence without creating another RAF. */
+    readonly onCadence?: (timeMs: number) => void;
 }
 export interface RustyApplicationFogOptions {
     readonly color: number;

@@ -791,3 +791,22 @@ fn assembly_catalog_rejects_unknown_target_target_drift_and_non_operation_kind()
         RuntimeMutationError::CapabilityKindMismatch { .. }
     ));
 }
+
+#[test]
+fn empty_catalog_keeps_empty_mutation_phase_explicit() {
+    let catalog = CompiledMutationCatalog::empty();
+    assert!(catalog.capabilities().is_empty());
+    assert_eq!(catalog.publication_domain(), None);
+
+    let mut lifecycle =
+        RuntimeLifecycle::new(RuntimeInstanceId::new(99), RuntimeLifecycleConfig::Demand);
+    lifecycle.start().expect("start");
+    let mut lane =
+        RuntimeMutation::<World, u32>::bind(catalog, &lifecycle).expect("bind empty catalog");
+    let admission = lifecycle.admit_demand_step().expect("admit");
+    let step = admission.step_at(0).expect("step");
+    let receipt = lane
+        .complete_empty_step(&lifecycle, step.phases().mutation())
+        .expect("complete empty mutation phase");
+    assert_eq!(receipt.step().value(), 0);
+}

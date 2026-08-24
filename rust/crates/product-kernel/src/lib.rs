@@ -18,6 +18,7 @@
 mod assembly;
 mod context;
 mod declaration;
+mod execution;
 mod render;
 
 pub use assembly::{
@@ -31,8 +32,16 @@ pub use context::{
 pub use declaration::{
     ProductKernelCapabilityContract, ProductKernelCapabilityEntry, ProductKernelDeclaration,
     ProductKernelMigrationContract, ProductKernelMigrationDescriptor, ProductKernelOwner,
-    ProductKernelSchemaContract, ProductKernelSchemaDescriptor, ProductKernelSelection,
+    ProductKernelRuntimeDefinition, ProductKernelRuntimeMutationDescriptor,
+    ProductKernelRuntimeSelection, ProductKernelSchemaContract, ProductKernelSchemaDescriptor,
+    ProductKernelSelection, ProductRuntimeResource, ProductRuntimeResources,
     MAX_PRODUCT_KERNEL_CONTRACT_TEXT_BYTES, MAX_PRODUCT_KERNEL_IDENTITY_BYTES,
+};
+pub use execution::{
+    render_product_kernel_execution_arms, validate_product_kernel_execution,
+    validate_product_kernel_execution_declaration, ProductKernelExecutionError,
+    ProductKernelExecutionLink, ProductKernelOperationExecutor, ProductKernelProjectionExecutor,
+    ProductKernelRuntimeAdapter, ProductKernelSystemExecutor,
 };
 pub use product_model;
 pub use product_model::{

@@ -2589,6 +2589,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "product-assembly"
+version = "0.1.0"
+dependencies = [
+ "cap-primitives",
+ "cap-std",
+ "content-store",
+ "product-model",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "product-dev-host"
+version = "0.1.0"
+dependencies = [
+ "render-model",
+ "render-presentation",
+ "runtime-input",
+ "runtime-lifecycle",
+ "runtime-timeline",
+ "runtime-ui",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "product-kernel"
 version = "0.1.0"
 dependencies = [
@@ -2599,6 +2626,20 @@ dependencies = [
  "runtime-standard-capabilities",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "product-materializer"
+version = "0.1.0"
+dependencies = [
+ "cap-primitives",
+ "cap-std",
+ "product-assembly",
+ "product-model",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
@@ -2811,6 +2852,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "runtime-composition"
+version = "0.1.0"
+dependencies = [
+ "product-kernel",
+ "product-model",
+ "render-model",
+ "render-presentation",
+ "runtime-input",
+ "runtime-lifecycle",
+ "runtime-mutation",
+ "runtime-schedule",
+ "runtime-timeline",
+ "runtime-ui",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "runtime-input"
 version = "0.1.0"
 dependencies = [
@@ -2977,13 +3036,17 @@ dependencies = [
  "gameplay-resolution",
  "gameplay-rules",
  "gameplay-standard",
+ "product-assembly",
+ "product-dev-host",
  "product-kernel",
+ "product-materializer",
  "product-model",
  "render-host-contracts",
  "render-model",
  "render-presentation",
  "render-projection",
  "renderer-webview-host",
+ "runtime-composition",
  "runtime-input",
  "runtime-lifecycle",
  "runtime-mutation",
@@ -3469,6 +3532,19 @@ name = "target-lexicon"
 version = "0.12.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
+
+[[package]]
+name = "tempfile"
+version = "3.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
+dependencies = [
+ "fastrand",
+ "getrandom 0.4.3",
+ "once_cell",
+ "rustix 1.1.4",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "tendril"

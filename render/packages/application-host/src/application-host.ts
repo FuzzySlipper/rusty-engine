@@ -550,6 +550,8 @@ export interface RustyApplicationRendererOptions {
   readonly resolveParticleEntityPosition?: (
     entity: number,
   ) => readonly [number, number, number] | null;
+  /** Observe the one Engine-owned renderer cadence without creating another RAF. */
+  readonly onCadence?: (timeMs: number) => void;
 }
 
 export interface RustyApplicationFogOptions {
@@ -756,6 +758,9 @@ async function mountRustyApplicationWithEnvironment(
       ...(options.renderer?.pixelRatio === undefined
         ? {} : { pixelRatio: options.renderer.pixelRatio }),
       ...rustyApplicationSurfaceResourceOptions(content),
+      ...(options.renderer?.onCadence === undefined
+        ? {}
+        : { onAnimationFrame: options.renderer.onCadence }),
     });
     const resolveAudio = rustyApplicationAudioResourceResolver(content);
     const presentationUrls = new Set<string>();

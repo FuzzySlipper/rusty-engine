@@ -123,6 +123,8 @@ fn direct_and_decoded_manifest_validation_converge() {
         realtime: Some(RealtimeClock::new(60, 4)),
         kernel_entry: Some("kernel/lib.rs".into()),
         ui_entry: "ui/main.ts".into(),
+        ui_projection_stream: None,
+        ui_projection_contract: None,
         content_root: "content".into(),
         compiled_composition_output: "generated/compiled-composition.json".into(),
         admitted_runtime_content_output: "generated/runtime-content".into(),
@@ -179,6 +181,38 @@ fn manifest_rejects_unknown_fields_and_lifecycle_misuse() {
             .diagnostic()
             .code(),
         "PRODUCT_REALTIME_SETTINGS_REQUIRED"
+    );
+}
+
+#[test]
+fn manifest_ui_projection_contract_is_paired_and_identity_checked() {
+    let projected = MANIFEST.replace(
+        "[ui]\nentry = \"ui/main.ts\"",
+        "[ui]\nentry = \"ui/main.ts\"\nprojection_stream = \"counter\"\nprojection_contract = \"counter.v1\"",
+    );
+    let manifest = decode_product_manifest(&projected).unwrap();
+    assert_eq!(manifest.ui_projection_stream(), Some("counter"));
+    assert_eq!(manifest.ui_projection_contract(), Some("counter.v1"));
+
+    let missing_contract = MANIFEST.replace(
+        "[ui]\nentry = \"ui/main.ts\"",
+        "[ui]\nentry = \"ui/main.ts\"\nprojection_stream = \"counter\"",
+    );
+    assert_eq!(
+        decode_product_manifest(&missing_contract)
+            .unwrap_err()
+            .diagnostic()
+            .code(),
+        "PRODUCT_UI_PROJECTION_PAIR"
+    );
+
+    let malformed_contract = projected.replace("counter.v1", "Counter contract");
+    assert_eq!(
+        decode_product_manifest(&malformed_contract)
+            .unwrap_err()
+            .diagnostic()
+            .code(),
+        "PRODUCT_INVALID_ID"
     );
 }
 

@@ -25,6 +25,16 @@ target-ordered reduction and converts it into exactly one bounded mutation
 operation. The caller supplies batch identity and uses `runtime-mutation` to
 stage and publish the product candidate.
 
+Generated Product Assembly adapters use
+`ObservePairsPlan::compile_system(&CompiledSystem, &CompiledMutationCatalog)`
+against the exact immutable artifacts retained by `runtime-composition`.
+Their fixed `ProductKernelRuntimeDefinition` supplies concrete observer and
+target component types plus product-owned entity/spatial facts. A direct
+`evaluate_and_batch::<Observer, Target>(...)` call returns one
+`ObservePairsEmission` for the adapter's existing `prepare_mutation` path.
+No runtime type erasure, callback, registry, or string method dispatch is
+involved; Product Assembly never synthesizes product facts.
+
 The static schedule owns due-step cadence. This crate retains compiled cadence
 as inspection data but owns no clock, scheduler, dispatcher callback,
 registry, mutation authority, host, renderer, or product alert semantics.

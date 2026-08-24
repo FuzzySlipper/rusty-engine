@@ -5,6 +5,10 @@ members = [
     "rust/crates/renderer-webview-host",
     "rust/crates/rusty-engine",
     "rust/crates/product-model",
+    "rust/crates/product-materializer",
+    "rust/crates/product-assembly",
+    "rust/crates/product-dev-host",
+    "rust/crates/runtime-composition",
     "rust/crates/runtime-lifecycle",
     "rust/crates/runtime-input",
     "rust/crates/runtime-schedule",
@@ -58,6 +62,11 @@ edition = "2021"
 [workspace.dependencies]
 rusty-engine = { path = "rust/crates/rusty-engine" }
 product-model = { path = "rust/crates/product-model" }
+product-materializer = { path = "rust/crates/product-materializer" }
+product-assembly = { path = "rust/crates/product-assembly" }
+product-dev-host = { path = "rust/crates/product-dev-host" }
+runtime-composition = { path = "rust/crates/runtime-composition" }
+cap-primitives = "3"
 runtime-lifecycle = { path = "rust/crates/runtime-lifecycle" }
 runtime-input = { path = "rust/crates/runtime-input" }
 runtime-schedule = { path = "rust/crates/runtime-schedule" }
@@ -114,6 +123,7 @@ wry = "0.56"
 stats_alloc = "0.1.10"
 gltf = { version = "1.4", default-features = false, features = ["utils", "names", "KHR_materials_unlit"] }
 cap-std = "3"
+tempfile = "3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

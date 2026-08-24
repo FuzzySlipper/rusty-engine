@@ -15,12 +15,89 @@ use runtime_mutation::{
 use runtime_schedule::CompiledRuntimeSchedule;
 use runtime_standard_capabilities::{ObservePairsPlan, OBSERVE_PAIRS_RESULT_KIND};
 use serde_json::{json, Value};
+use std::cell::Cell;
 
 struct StealthSystem;
 struct StealthOperation;
 struct StealthSchemaV1;
 struct StealthSchemaV2;
 struct StealthMigrationV1ToV2;
+
+pub struct MixedSystem;
+pub struct MixedOperation;
+pub struct MixedProjection;
+
+#[derive(Debug)]
+pub struct ExecutionSnapshot {
+    value: Cell<u32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ExecutionRequest {
+    value: u32,
+}
+
+impl ProductKernelCapabilityContract for MixedSystem {
+    type Snapshot = ExecutionSnapshot;
+    type Request = ExecutionRequest;
+    type Result = u16;
+    type Error = &'static str;
+    const TYPE_ID: &'static str = "mixed.system.v1";
+    const TARGET: &'static str = "kernel.mixed.system";
+    const KIND: CapabilityKind = CapabilityKind::System;
+}
+
+impl ProductKernelCapabilityContract for MixedOperation {
+    type Snapshot = ExecutionSnapshot;
+    type Request = ExecutionRequest;
+    type Result = String;
+    type Error = &'static str;
+    const TYPE_ID: &'static str = "mixed.operation.v1";
+    const TARGET: &'static str = "kernel.mixed.operation";
+    const KIND: CapabilityKind = CapabilityKind::Operation;
+}
+
+impl ProductKernelCapabilityContract for MixedProjection {
+    type Snapshot = ExecutionSnapshot;
+    type Request = ();
+    type Result = bool;
+    type Error = &'static str;
+    const TYPE_ID: &'static str = "mixed.projection.v1";
+    const TARGET: &'static str = "kernel.mixed.projection";
+    const KIND: CapabilityKind = CapabilityKind::Projection;
+}
+
+fn mixed_system(
+    context: ProductSystemContext<'_, ExecutionSnapshot, ExecutionRequest>,
+) -> Result<u16, &'static str> {
+    let next = context
+        .snapshot()
+        .value
+        .get()
+        .checked_add(context.request().value)
+        .ok_or("system overflow")?;
+    context.snapshot().value.set(next);
+    u16::try_from(next).map_err(|_| "system result overflow")
+}
+
+fn mixed_operation(
+    context: ProductOperationContext<'_, ExecutionSnapshot, ExecutionRequest>,
+) -> Result<String, &'static str> {
+    let next = context
+        .snapshot()
+        .value
+        .get()
+        .checked_mul(context.request().value)
+        .ok_or("operation overflow")?;
+    context.snapshot().value.set(next);
+    Ok(format!("alert:{next}"))
+}
+
+fn mixed_projection(
+    context: ProductProjectionContext<'_, ExecutionSnapshot>,
+) -> Result<bool, &'static str> {
+    Ok(context.snapshot().value.get() > 0)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Snapshot {
@@ -201,6 +278,129 @@ product_kernel_declaration! {
         Duplicate => StealthSchemaV1 { identity: "stealth.schema.v1" }
     ],
     migrations: []
+}
+
+struct BadExecutionDeclaration;
+
+static BAD_TYPE_LINKS: &[ProductKernelExecutionLink<StealthOwner>] =
+    &[ProductKernelExecutionLink::new(
+        StealthOwner::System,
+        "stealth.detect",
+        "kernel.stealth.detect",
+        "wrong.contract.v1",
+        "StealthSystem",
+        "stealth_system",
+        CapabilityKind::System,
+    )];
+
+static BAD_TARGET_LINKS: &[ProductKernelExecutionLink<StealthOwner>] =
+    &[ProductKernelExecutionLink::new(
+        StealthOwner::System,
+        "stealth.detect",
+        "kernel.wrong-target",
+        "stealth.system.v1",
+        "StealthSystem",
+        "stealth_system",
+        CapabilityKind::System,
+    )];
+
+static BAD_SOURCE_LINKS: &[ProductKernelExecutionLink<StealthOwner>] =
+    &[ProductKernelExecutionLink::new(
+        StealthOwner::System,
+        "stealth.detect",
+        "kernel.stealth.detect",
+        "stealth.system.v1",
+        "crate::StealthSystem",
+        "crate::stealth_system",
+        CapabilityKind::System,
+    )];
+
+impl ProductKernelDeclaration for BadExecutionDeclaration {
+    type Owner = StealthOwner;
+
+    fn entries() -> &'static [ProductKernelCapabilityEntry<Self::Owner>] {
+        StealthDeclaration::entries()
+    }
+
+    fn descriptors() -> &'static [ProductKernelCapabilityDescriptor] {
+        StealthDeclaration::descriptors()
+    }
+
+    fn schemas() -> &'static [ProductKernelSchemaDescriptor] {
+        StealthDeclaration::schemas()
+    }
+
+    fn migrations() -> &'static [ProductKernelMigrationDescriptor] {
+        StealthDeclaration::migrations()
+    }
+
+    fn execution_links() -> &'static [ProductKernelExecutionLink<Self::Owner>] {
+        BAD_TYPE_LINKS
+    }
+
+    fn contract_json() -> Result<String, ProductAssemblyError> {
+        StealthDeclaration::contract_json()
+    }
+}
+
+struct BadTargetExecutionDeclaration;
+
+impl ProductKernelDeclaration for BadTargetExecutionDeclaration {
+    type Owner = StealthOwner;
+
+    fn entries() -> &'static [ProductKernelCapabilityEntry<Self::Owner>] {
+        StealthDeclaration::entries()
+    }
+
+    fn descriptors() -> &'static [ProductKernelCapabilityDescriptor] {
+        StealthDeclaration::descriptors()
+    }
+
+    fn schemas() -> &'static [ProductKernelSchemaDescriptor] {
+        StealthDeclaration::schemas()
+    }
+
+    fn migrations() -> &'static [ProductKernelMigrationDescriptor] {
+        StealthDeclaration::migrations()
+    }
+
+    fn execution_links() -> &'static [ProductKernelExecutionLink<Self::Owner>] {
+        BAD_TARGET_LINKS
+    }
+
+    fn contract_json() -> Result<String, ProductAssemblyError> {
+        StealthDeclaration::contract_json()
+    }
+}
+
+struct BadSourceExecutionDeclaration;
+
+impl ProductKernelDeclaration for BadSourceExecutionDeclaration {
+    type Owner = StealthOwner;
+
+    fn entries() -> &'static [ProductKernelCapabilityEntry<Self::Owner>] {
+        StealthDeclaration::entries()
+    }
+
+    fn descriptors() -> &'static [ProductKernelCapabilityDescriptor] {
+        StealthDeclaration::descriptors()
+    }
+
+    fn schemas() -> &'static [ProductKernelSchemaDescriptor] {
+        StealthDeclaration::schemas()
+    }
+
+    fn migrations() -> &'static [ProductKernelMigrationDescriptor] {
+        StealthDeclaration::migrations()
+    }
+
+    fn execution_links() -> &'static [ProductKernelExecutionLink<Self::Owner>] {
+        BAD_SOURCE_LINKS
+    }
+
+    fn contract_json() -> Result<String, ProductAssemblyError> {
+        StealthDeclaration::contract_json()
+    }
 }
 
 product_kernel_declaration! {
@@ -429,7 +629,8 @@ product_kernel_declaration! {
             maximum_compact_json_payload_bytes: 4096,
             owner: "stealth.product.detection",
             source: "src/detection.ts",
-            logical_path: "detect"
+            logical_path: "detect",
+            execution: system => stealth_system
         },
         Operation => StealthOperation {
             identity: "stealth.advance-alert",
@@ -441,7 +642,8 @@ product_kernel_declaration! {
             maximum_compact_json_payload_bytes: 4096,
             owner: "stealth.product.alerts",
             source: "src/alerts.ts",
-            logical_path: "advanceAlert"
+            logical_path: "advanceAlert",
+            execution: operation => stealth_operation
         },
     ],
     schemas: [
@@ -455,6 +657,160 @@ product_kernel_declaration! {
             to: "stealth.schema.v2"
         }
     ]
+}
+
+product_kernel_declaration! {
+    declaration: MixedExecutionDeclaration,
+    owner: MixedExecutionOwner,
+    capabilities: [
+        System => MixedSystem {
+            identity: "mixed.system",
+            kind: CapabilityKind::System,
+            uses: CapabilityUses::SCHEDULE,
+            availability: CapabilityAvailability::Linkable,
+            reads: &[], writes: &[], maximum_compact_json_payload_bytes: 4096,
+            owner: "tests.mixed", source: "tests/product-kernel.rs", logical_path: "system",
+            execution: system => mixed_system
+        },
+        Operation => MixedOperation {
+            identity: "mixed.operation",
+            kind: CapabilityKind::Operation,
+            uses: CapabilityUses::TIMELINE,
+            availability: CapabilityAvailability::Linkable,
+            reads: &[], writes: &[], maximum_compact_json_payload_bytes: 4096,
+            owner: "tests.mixed", source: "tests/product-kernel.rs", logical_path: "operation",
+            execution: operation => mixed_operation
+        },
+        Projection => MixedProjection {
+            identity: "mixed.projection",
+            kind: CapabilityKind::Projection,
+            uses: CapabilityUses::SCHEDULE,
+            availability: CapabilityAvailability::Linkable,
+            reads: &[], writes: &[], maximum_compact_json_payload_bytes: 4096,
+            owner: "tests.mixed", source: "tests/product-kernel.rs", logical_path: "projection",
+            execution: projection => mixed_projection
+        }
+    ],
+    schemas: [],
+    migrations: []
+}
+
+product_kernel_execution_facade! {
+    declaration: MixedExecutionDeclaration,
+    owner: MixedExecutionOwner,
+    context: MixedExecutionContext,
+    result: MixedExecutionResult,
+    error: MixedExecutionError,
+    capabilities: [
+        System => MixedSystem {
+            execution: system,
+            context: System,
+            result: System,
+            error: System
+        },
+        Operation => MixedOperation {
+            execution: operation,
+            context: Operation,
+            result: Operation,
+            error: Operation
+        },
+        Projection => MixedProjection {
+            execution: projection,
+            context: Projection,
+            result: Projection,
+            error: Projection
+        }
+    ]
+}
+
+#[allow(dead_code)]
+enum MixedAdapterError {
+    Context(ProductKernelContextError),
+    Execution(MixedExecutionError),
+}
+
+struct MixedRuntimeAdapter {
+    snapshot: ExecutionSnapshot,
+    request: ExecutionRequest,
+}
+
+impl MixedRuntimeAdapter {
+    fn new(snapshot: u32, request: u32) -> Self {
+        Self {
+            snapshot: ExecutionSnapshot {
+                value: Cell::new(snapshot),
+            },
+            request: ExecutionRequest { value: request },
+        }
+    }
+}
+
+impl ProductKernelRuntimeAdapter for MixedRuntimeAdapter {
+    type Owner = MixedExecutionOwner;
+    type Output = MixedExecutionResult;
+    type Error = MixedAdapterError;
+
+    fn dispatch_system(
+        &mut self,
+        owner: Self::Owner,
+        lifecycle: &RuntimeLifecycle,
+        token: RuntimePhaseToken,
+    ) -> Result<Self::Output, Self::Error> {
+        let context = ProductSystemContext::new(lifecycle, token, &self.snapshot, &self.request)
+            .map_err(MixedAdapterError::Context)?;
+        execute_system(owner, MixedExecutionContext::System(context))
+            .map_err(MixedAdapterError::Execution)
+    }
+
+    fn dispatch_operation(
+        &mut self,
+        owner: Self::Owner,
+        lifecycle: &RuntimeLifecycle,
+        token: RuntimePhaseToken,
+    ) -> Result<Self::Output, Self::Error> {
+        let context = ProductOperationContext::new(lifecycle, token, &self.snapshot, &self.request)
+            .map_err(MixedAdapterError::Context)?;
+        execute_operation(owner, MixedExecutionContext::Operation(context))
+            .map_err(MixedAdapterError::Execution)
+    }
+
+    fn dispatch_projection(
+        &mut self,
+        owner: Self::Owner,
+        lifecycle: &RuntimeLifecycle,
+        token: RuntimePhaseToken,
+    ) -> Result<Self::Output, Self::Error> {
+        let context = ProductProjectionContext::new(lifecycle, token, &self.snapshot)
+            .map_err(MixedAdapterError::Context)?;
+        execute_projection(owner, MixedExecutionContext::Projection(context))
+            .map_err(MixedAdapterError::Execution)
+    }
+}
+
+/// This is the shape a generated composition root can call: one concrete
+/// adapter owns state and receives only closed owners plus lifecycle tokens.
+fn generated_mixed_composition_root(
+    adapter: &mut MixedRuntimeAdapter,
+    lifecycle: &RuntimeLifecycle,
+    phases: runtime_lifecycle::RuntimePhasePlan,
+) -> Result<
+    (
+        MixedExecutionResult,
+        MixedExecutionResult,
+        MixedExecutionResult,
+    ),
+    MixedAdapterError,
+> {
+    let system =
+        adapter.dispatch_system(MixedExecutionOwner::System, lifecycle, phases.schedule())?;
+    let operation =
+        adapter.dispatch_operation(MixedExecutionOwner::Operation, lifecycle, phases.mutation())?;
+    let projection = adapter.dispatch_projection(
+        MixedExecutionOwner::Projection,
+        lifecycle,
+        phases.projection(),
+    )?;
+    Ok((system, operation, projection))
 }
 
 fn manifest() -> product_model::ProductManifest {
@@ -522,6 +878,50 @@ fn composition(system_kind: CapabilityKind) -> product_model::CompiledCompositio
     }
     decode_compiled_composition(serde_json::to_vec(&value).unwrap().as_slice())
         .expect("composition")
+}
+
+fn mixed_linked() -> product_model::LinkedProductComposition {
+    mixed_linked_at(product_model::SchedulePhase::Simulation)
+}
+
+fn mixed_linked_at(
+    system_phase: product_model::SchedulePhase,
+) -> product_model::LinkedProductComposition {
+    let mut value = json!({
+        "product": "stealth",
+        "intentDescriptors": [],
+        "inputMap": [],
+        "schedule": [
+            {"phase": "input", "mode": "append", "systems": []},
+            {"phase": "simulation", "mode": "append", "systems": []},
+            {"phase": "consequences", "mode": "append", "systems": []},
+            {"phase": "commit", "mode": "append", "systems": []},
+            {"phase": "projection", "mode": "append", "systems": [
+                {"id": "mixed-projection", "capability": "mixed-projection", "after": [], "reads": [], "writes": [], "cadence": {"everySteps": 1, "offsetSteps": 0}, "payload": null}
+            ]}
+        ],
+        "gameplayDefinitions": [],
+        "timelines": [{"id": "mixed-timeline", "steps": [
+            {"id": "mixed-operation", "capability": "mixed-operation", "payload": null}
+        ]}],
+        "capabilityBindings": [
+            {"id": "mixed-system", "target": "kernel.mixed.system"},
+            {"id": "mixed-operation", "target": "kernel.mixed.operation"},
+            {"id": "mixed-projection", "target": "kernel.mixed.projection"}
+        ]
+    });
+    value["schedule"][system_phase.index()]["systems"] = json!([
+        {"id": "mixed-system", "capability": "mixed-system", "after": [], "reads": [], "writes": [], "cadence": {"everySteps": 1, "offsetSteps": 0}, "payload": null}
+    ]);
+    let composition =
+        decode_compiled_composition(&serde_json::to_vec(&value).expect("mixed composition JSON"))
+            .expect("mixed composition");
+    let admitted = admit_checked_product_composition(&manifest(), composition).expect("admit");
+    product_model::link_admitted_product_composition(
+        admitted,
+        MixedExecutionDeclaration::descriptors(),
+    )
+    .expect("mixed Product Kernel linkage")
 }
 
 fn assembly(
@@ -1007,6 +1407,224 @@ fn contexts_validate_their_own_phase_tokens_and_keep_closed_types() {
         Err(ProductKernelContextError::WrongPhase {
             expected: RuntimePhase::Projection,
             received: RuntimePhase::Mutation
+        })
+    ));
+}
+
+#[test]
+fn mixed_execution_links_call_concrete_functions_with_typed_contexts() {
+    validate_product_kernel_execution_declaration::<MixedExecutionDeclaration>()
+        .expect("mixed declaration has one typed link per executable kind");
+    assert_eq!(MixedExecutionDeclaration::execution_links().len(), 3);
+    assert_eq!(
+        MixedExecutionDeclaration::execution_links()[1].function_path(),
+        "mixed_operation"
+    );
+
+    let mut lifecycle =
+        RuntimeLifecycle::new(RuntimeInstanceId::new(44), RuntimeLifecycleConfig::Demand);
+    lifecycle.start().expect("start");
+    let admission = lifecycle.admit_demand_step().expect("step");
+    let phases = admission.step_at(0).expect("phase").phases();
+    let snapshot = ExecutionSnapshot {
+        value: Cell::new(3),
+    };
+    let request = ExecutionRequest { value: 4 };
+
+    let system = <MixedSystem as ProductKernelSystemExecutor>::execute_system(
+        ProductSystemContext::new(&lifecycle, phases.schedule(), &snapshot, &request)
+            .expect("typed system context"),
+    )
+    .expect("system result");
+    assert_eq!(system, 7);
+    assert_eq!(snapshot.value.get(), 7);
+
+    let operation = <MixedOperation as ProductKernelOperationExecutor>::execute_operation(
+        ProductOperationContext::new(&lifecycle, phases.mutation(), &snapshot, &request)
+            .expect("typed operation context"),
+    )
+    .expect("operation result");
+    assert_eq!(operation, "alert:28");
+    assert_eq!(snapshot.value.get(), 28);
+
+    let projection = <MixedProjection as ProductKernelProjectionExecutor>::execute_projection(
+        ProductProjectionContext::new(&lifecycle, phases.projection(), &snapshot)
+            .expect("typed projection context"),
+    )
+    .expect("projection result");
+    assert!(projection);
+}
+
+#[test]
+fn generated_execution_facade_routes_mixed_contexts_results_and_effects() {
+    validate().expect("generated facade is backed by validated static links");
+
+    let mut lifecycle =
+        RuntimeLifecycle::new(RuntimeInstanceId::new(45), RuntimeLifecycleConfig::Demand);
+    lifecycle.start().expect("start");
+    let admission = lifecycle.admit_demand_step().expect("step");
+    let phases = admission.step_at(0).expect("phase").phases();
+    let snapshot = ExecutionSnapshot {
+        value: Cell::new(2),
+    };
+    let request = ExecutionRequest { value: 5 };
+
+    let system = execute_system(
+        MixedExecutionOwner::System,
+        MixedExecutionContext::System(
+            ProductSystemContext::new(&lifecycle, phases.schedule(), &snapshot, &request)
+                .expect("system context"),
+        ),
+    )
+    .unwrap_or_else(|_| panic!("system route"));
+    assert!(matches!(system, MixedExecutionResult::System(7)));
+    assert_eq!(snapshot.value.get(), 7);
+
+    let operation = execute_operation(
+        MixedExecutionOwner::Operation,
+        MixedExecutionContext::Operation(
+            ProductOperationContext::new(&lifecycle, phases.mutation(), &snapshot, &request)
+                .expect("operation context"),
+        ),
+    )
+    .unwrap_or_else(|_| panic!("operation route"));
+    assert!(matches!(operation, MixedExecutionResult::Operation(value) if value == "alert:35"));
+    assert_eq!(snapshot.value.get(), 35);
+
+    let projection = execute_projection(
+        MixedExecutionOwner::Projection,
+        MixedExecutionContext::Projection(
+            ProductProjectionContext::new(&lifecycle, phases.projection(), &snapshot)
+                .expect("projection context"),
+        ),
+    )
+    .unwrap_or_else(|_| panic!("projection route"));
+    assert!(matches!(projection, MixedExecutionResult::Projection(true)));
+
+    let wrong_context = execute_system(
+        MixedExecutionOwner::System,
+        MixedExecutionContext::Operation(
+            ProductOperationContext::new(&lifecycle, phases.mutation(), &snapshot, &request)
+                .expect("operation context"),
+        ),
+    );
+    assert!(matches!(
+        wrong_context,
+        Err(MixedExecutionError::WrongContextKind {
+            expected: CapabilityKind::System,
+            received: CapabilityKind::Operation
+        })
+    ));
+
+    let wrong_owner = execute_system(
+        MixedExecutionOwner::Operation,
+        MixedExecutionContext::System(
+            ProductSystemContext::new(&lifecycle, phases.schedule(), &snapshot, &request)
+                .expect("system context"),
+        ),
+    );
+    assert!(matches!(
+        wrong_owner,
+        Err(MixedExecutionError::WrongOwnerKind {
+            expected: CapabilityKind::System,
+            received: CapabilityKind::Operation
+        })
+    ));
+}
+
+#[test]
+fn generated_composition_root_calls_one_concrete_runtime_adapter() {
+    let mut lifecycle =
+        RuntimeLifecycle::new(RuntimeInstanceId::new(46), RuntimeLifecycleConfig::Demand);
+    lifecycle.start().expect("start");
+    let admission = lifecycle.admit_demand_step().expect("step");
+    let phases = admission.step_at(0).expect("phase").phases();
+    let mut adapter = MixedRuntimeAdapter::new(2, 5);
+
+    let (system, operation, projection) =
+        generated_mixed_composition_root(&mut adapter, &lifecycle, phases)
+            .unwrap_or_else(|_| panic!("generated adapter dispatch"));
+    assert!(matches!(system, MixedExecutionResult::System(7)));
+    assert!(matches!(
+        operation,
+        MixedExecutionResult::Operation(value) if value == "alert:35"
+    ));
+    assert!(matches!(projection, MixedExecutionResult::Projection(true)));
+    assert_eq!(adapter.snapshot.value.get(), 35);
+
+    let wrong_phase =
+        adapter.dispatch_system(MixedExecutionOwner::System, &lifecycle, phases.mutation());
+    assert!(matches!(
+        wrong_phase,
+        Err(MixedAdapterError::Context(
+            ProductKernelContextError::WrongPhase {
+                expected: RuntimePhase::Schedule,
+                received: RuntimePhase::Mutation
+            }
+        ))
+    ));
+}
+
+#[test]
+fn execution_validation_covers_live_schedule_and_renders_direct_arms() {
+    let linked = mixed_linked();
+    validate_product_kernel_execution::<MixedExecutionDeclaration>(&linked)
+        .expect("every live mixed capability has a matching executor");
+    let arms = render_product_kernel_execution_arms::<MixedExecutionDeclaration>(&linked)
+        .expect("closed direct source arms");
+    assert!(
+        arms.contains("\"kernel.mixed.system\" => product_kernel::mixed_system(system_context)")
+    );
+    assert!(arms.contains(
+        "\"kernel.mixed.operation\" => product_kernel::mixed_operation(operation_context)"
+    ));
+    assert!(arms.contains(
+        "\"kernel.mixed.projection\" => product_kernel::mixed_projection(projection_context)"
+    ));
+}
+
+#[test]
+fn execution_validation_rejects_systems_without_a_typed_schedule_context() {
+    let linked = mixed_linked_at(product_model::SchedulePhase::Input);
+    assert!(matches!(
+        validate_product_kernel_execution::<MixedExecutionDeclaration>(&linked),
+        Err(ProductKernelExecutionError::UnsupportedSystemPhase {
+            target,
+            phase: product_model::SchedulePhase::Input,
+            path
+        }) if target == "kernel.mixed.system" && path == "schedule[0].systems[0]"
+    ));
+}
+
+#[test]
+fn execution_validation_rejects_missing_type_and_target_links() {
+    let stealth_admitted =
+        admit_checked_product_composition(&manifest(), composition(CapabilityKind::System))
+            .expect("admit stealth composition");
+    let stealth_linked = product_model::link_admitted_product_composition(
+        stealth_admitted,
+        StealthDeclaration::descriptors(),
+    )
+    .expect("link stealth composition");
+    assert!(matches!(
+        validate_product_kernel_execution::<MissingSchemaDeclaration>(&stealth_linked),
+        Err(ProductKernelExecutionError::MissingExecutableLink { target, .. })
+            if target == "kernel.stealth.detect"
+    ));
+    assert!(matches!(
+        validate_product_kernel_execution_declaration::<BadExecutionDeclaration>(),
+        Err(ProductKernelExecutionError::ContractTypeMismatch { target, .. })
+            if target == "kernel.stealth.detect"
+    ));
+    assert!(matches!(
+        validate_product_kernel_execution_declaration::<BadTargetExecutionDeclaration>(),
+        Err(ProductKernelExecutionError::InvalidTarget { target })
+            if target == "kernel.wrong-target"
+    ));
+    assert!(matches!(
+        validate_product_kernel_execution_declaration::<BadSourceExecutionDeclaration>(),
+        Err(ProductKernelExecutionError::InvalidSourceFragment {
+            field: "function_path"
         })
     ));
 }

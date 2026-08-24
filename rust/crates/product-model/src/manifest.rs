@@ -135,6 +135,8 @@ pub struct ProductManifestCandidate {
     pub realtime: Option<RealtimeClock>,
     pub kernel_entry: Option<String>,
     pub ui_entry: String,
+    pub ui_projection_stream: Option<String>,
+    pub ui_projection_contract: Option<String>,
     pub content_root: String,
     pub compiled_composition_output: String,
     pub admitted_runtime_content_output: String,
@@ -167,6 +169,8 @@ pub struct ProductManifest {
     realtime: Option<RealtimeClock>,
     kernel_entry: Option<ProductPath>,
     ui_entry: ProductPath,
+    ui_projection_stream: Option<String>,
+    ui_projection_contract: Option<String>,
     content_root: ProductPath,
     compiled_composition_output: ProductPath,
     admitted_runtime_content_output: ProductPath,
@@ -198,6 +202,14 @@ impl ProductManifest {
 
     pub fn ui_entry(&self) -> &ProductPath {
         &self.ui_entry
+    }
+
+    pub fn ui_projection_stream(&self) -> Option<&str> {
+        self.ui_projection_stream.as_deref()
+    }
+
+    pub fn ui_projection_contract(&self) -> Option<&str> {
+        self.ui_projection_contract.as_deref()
     }
 
     pub fn content_root(&self) -> &ProductPath {
@@ -302,6 +314,20 @@ pub fn validate_product_manifest(
     let ui_entry = ProductPath::parse_at(candidate.ui_entry, SOURCE, "ui.entry")?;
     require_lane(&ui_entry, "ui", "ui.entry")?;
     source_paths.push(("ui.entry".to_string(), ui_entry.clone()));
+    if candidate.ui_projection_stream.is_some() != candidate.ui_projection_contract.is_some() {
+        return Err(failure(
+            "PRODUCT_UI_PROJECTION_PAIR",
+            SOURCE,
+            "ui",
+            "ui.projection_stream and ui.projection_contract must be declared together",
+        ));
+    }
+    if let Some(stream) = &candidate.ui_projection_stream {
+        validate_identity(stream, SOURCE, "ui.projection_stream")?;
+    }
+    if let Some(contract) = &candidate.ui_projection_contract {
+        validate_identity(contract, SOURCE, "ui.projection_contract")?;
+    }
 
     let content_root = ProductPath::parse_at(candidate.content_root, SOURCE, "content.root")?;
     if content_root.as_str() != "content" {
@@ -430,6 +456,8 @@ pub fn validate_product_manifest(
         realtime: candidate.realtime,
         kernel_entry,
         ui_entry,
+        ui_projection_stream: candidate.ui_projection_stream,
+        ui_projection_contract: candidate.ui_projection_contract,
         content_root,
         compiled_composition_output: outputs[0].1.clone(),
         admitted_runtime_content_output: outputs[1].1.clone(),
@@ -643,6 +671,8 @@ impl RawManifest {
             realtime: self.lifecycle.realtime,
             kernel_entry: self.kernel.map(|kernel| kernel.entry),
             ui_entry: self.ui.entry,
+            ui_projection_stream: self.ui.projection_stream,
+            ui_projection_contract: self.ui.projection_contract,
             content_root: self.content.root,
             compiled_composition_output: self.outputs.compiled_composition,
             admitted_runtime_content_output: self.outputs.admitted_runtime_content,
@@ -697,6 +727,8 @@ struct RawKernel {
 #[serde(deny_unknown_fields)]
 struct RawUi {
     entry: String,
+    projection_stream: Option<String>,
+    projection_contract: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

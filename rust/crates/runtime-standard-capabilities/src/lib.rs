@@ -119,6 +119,9 @@ pub struct ObservePairsInspection {
 }
 
 impl ObservePairsPlan {
+    /// Compiles with the complete linked composition when it is available at
+    /// assembly time, additionally proving the selected operation resolves to
+    /// a Product Kernel owner.
     pub fn compile(
         linked: &LinkedProductComposition,
         system: &CompiledSystem,
@@ -130,6 +133,32 @@ impl ObservePairsPlan {
         if binding.target() != OBSERVE_PAIRS_TARGET
             || system.capability().target() != OBSERVE_PAIRS_TARGET
         {
+            return Err(ObservePairsError::WrongSystemTarget);
+        }
+        let plan = Self::compile_system(system, mutations)?;
+        let operation_binding = linked
+            .capability_bindings()
+            .iter()
+            .find(|binding| binding.id() == plan.operation_binding())
+            .ok_or(ObservePairsError::UnknownOperationBinding)?;
+        if !matches!(
+            operation_binding.resolved_target(),
+            LinkedCapabilityTarget::ProductKernel(_)
+        ) {
+            return Err(ObservePairsError::OperationNotProductKernel);
+        }
+        Ok(plan)
+    }
+
+    /// Compiles from the immutable schedule and mutation artifacts retained by
+    /// `runtime-composition`. This is the generated Product Assembly seam: no
+    /// linked composition, registry, or dynamic owner lookup is required once
+    /// both owning compilers have retained exact binding metadata.
+    pub fn compile_system(
+        system: &CompiledSystem,
+        mutations: &CompiledMutationCatalog,
+    ) -> Result<Self, ObservePairsError> {
+        if system.capability().target() != OBSERVE_PAIRS_TARGET {
             return Err(ObservePairsError::WrongSystemTarget);
         }
         if system.phase() != SchedulePhase::Simulation {
@@ -155,15 +184,7 @@ impl ObservePairsPlan {
         let operation = mutations
             .capability(&wire.operation_binding)
             .ok_or(ObservePairsError::UnknownOperationBinding)?;
-        let operation_binding = linked
-            .capability_bindings()
-            .iter()
-            .find(|binding| binding.id() == wire.operation_binding)
-            .ok_or(ObservePairsError::UnknownOperationBinding)?;
-        if !matches!(
-            operation_binding.resolved_target(),
-            LinkedCapabilityTarget::ProductKernel(_)
-        ) {
+        if !operation.is_product_kernel_target() {
             return Err(ObservePairsError::OperationNotProductKernel);
         }
         if operation.operation_type() != wire.operation_type {
@@ -325,6 +346,25 @@ pub struct ObservePairsAggregate {
     pub evidence_total: f64,
 }
 
+/// Product-owned correlation facts for one standard-capability publication.
+/// The generated concrete adapter constructs this value directly; Engine does
+/// not derive product causation or provenance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservePairsBatchIdentity {
+    pub batch_id: MutationBatchId,
+    pub causation: MutationCausation,
+    pub provenance: MutationProvenance,
+    pub operation_id: MutationOperationId,
+}
+
+/// One fully evaluated standard system result ready for the existing
+/// `ProductRuntimeAdapter::prepare_mutation` path.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObservePairsEmission {
+    pub readout: ObservePairsReadout,
+    pub batch: MutationBatch,
+}
+
 impl ObservePairsPlan {
     /// Evaluates a fully typed, compile-time selected observation plan. It
     /// produces no mutation and has no callbacks; its caller publishes an
@@ -458,6 +498,26 @@ impl ObservePairsPlan {
                 .sum(),
             aggregates,
         })
+    }
+
+    /// Closed end-to-end standard schedule adapter. Concrete product source
+    /// selects `O` and `T` at compile time and retains the returned batch for
+    /// the composition root's one mutation publication call.
+    pub fn evaluate_and_batch<O: ObservePairsObserver, T: ObservePairsTarget>(
+        &self,
+        entities: &EntityState,
+        scene: &VoxelCollisionScene,
+        identity: ObservePairsBatchIdentity,
+    ) -> Result<ObservePairsEmission, ObservePairsError> {
+        let readout = self.evaluate::<O, T>(entities, scene)?;
+        let batch = self.mutation_batch(
+            &readout,
+            identity.batch_id,
+            identity.causation,
+            identity.provenance,
+            identity.operation_id,
+        )?;
+        Ok(ObservePairsEmission { readout, batch })
     }
 }
 

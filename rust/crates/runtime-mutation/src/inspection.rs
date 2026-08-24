@@ -11,6 +11,7 @@ pub struct MutationCapabilityInspection {
     binding_id: String,
     target: String,
     resolved_target: String,
+    product_kernel_target: bool,
     kind: String,
     operation_type: String,
     publication_domain: String,
@@ -27,6 +28,7 @@ impl MutationCapabilityInspection {
             binding_id: capability.binding_id().to_owned(),
             target: capability.target().to_owned(),
             resolved_target: capability.resolved_target().to_owned(),
+            product_kernel_target: capability.is_product_kernel_target(),
             kind: capability.kind().to_owned(),
             operation_type: capability.operation_type().to_owned(),
             publication_domain: capability.publication_domain().to_owned(),
@@ -51,6 +53,10 @@ impl MutationCapabilityInspection {
 
     pub fn resolved_target(&self) -> &str {
         &self.resolved_target
+    }
+
+    pub const fn is_product_kernel_target(&self) -> bool {
+        self.product_kernel_target
     }
 
     pub fn kind(&self) -> &str {

@@ -228,12 +228,210 @@ pub trait ProductKernelDeclaration {
     fn migrations() -> &'static [ProductKernelMigrationDescriptor];
     fn contract_json() -> Result<String, crate::ProductAssemblyError>;
 
+    /// Source-only executable links emitted by a declaration macro. The
+    /// default is intentionally empty so metadata-only declarations remain
+    /// useful to authoring and migration tooling; a generated assembly must
+    /// call the execution validator before publishing a live schedule.
+    fn execution_links() -> &'static [crate::ProductKernelExecutionLink<Self::Owner>] {
+        &[]
+    }
+
     fn contract_typescript() -> Result<String, crate::ProductAssemblyError>
     where
         Self: Sized,
     {
         crate::render_contract_typescript::<Self>()
     }
+}
+
+/// One immutable byte resource made available to a source-linked Product
+/// Runtime definition.  The generated Product Assembly constructs these
+/// values from `include_bytes!`; a definition may inspect them while it
+/// creates its concrete adapter, but it never receives a product-root path or
+/// a filesystem handle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProductRuntimeResource<'a> {
+    path: &'static str,
+    bytes: &'a [u8],
+}
+
+impl<'a> ProductRuntimeResource<'a> {
+    pub const fn new(path: &'static str, bytes: &'a [u8]) -> Self {
+        Self { path, bytes }
+    }
+
+    pub const fn path(self) -> &'static str {
+        self.path
+    }
+
+    pub const fn bytes(self) -> &'a [u8] {
+        self.bytes
+    }
+}
+
+/// Immutable resources supplied to the fixed source-linked runtime
+/// definition.  The composition bytes and bundle resources are deliberately
+/// separate from authored source and are the only generated product inputs a
+/// runtime definition can inspect at construction time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProductRuntimeResources<'a> {
+    compiled_composition: &'a [u8],
+    resources: &'a [ProductRuntimeResource<'a>],
+}
+
+impl<'a> ProductRuntimeResources<'a> {
+    pub const fn new(
+        compiled_composition: &'a [u8],
+        resources: &'a [ProductRuntimeResource<'a>],
+    ) -> Self {
+        Self {
+            compiled_composition,
+            resources,
+        }
+    }
+
+    pub const fn compiled_composition(self) -> &'a [u8] {
+        self.compiled_composition
+    }
+
+    pub const fn resources(self) -> &'a [ProductRuntimeResource<'a>] {
+        self.resources
+    }
+
+    pub fn resource(self, path: &str) -> Option<&'a [u8]> {
+        self.resources
+            .iter()
+            .find(|resource| resource.path() == path)
+            .map(|resource| resource.bytes())
+    }
+}
+
+/// One static owner selection exposed by the fixed Product Runtime
+/// definition.  It is source-linked metadata, not a runtime dispatch key.
+/// The generated adapter still matches its concrete owner enum or target
+/// strings directly in ordinary Rust code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProductKernelRuntimeSelection {
+    identity: &'static str,
+    target: &'static str,
+    contract_type: &'static str,
+    kind: CapabilityKind,
+}
+
+impl ProductKernelRuntimeSelection {
+    pub const fn new(
+        identity: &'static str,
+        target: &'static str,
+        contract_type: &'static str,
+        kind: CapabilityKind,
+    ) -> Self {
+        Self {
+            identity,
+            target,
+            contract_type,
+            kind,
+        }
+    }
+
+    pub const fn identity(self) -> &'static str {
+        self.identity
+    }
+
+    pub const fn target(self) -> &'static str {
+        self.target
+    }
+
+    pub const fn contract_type(self) -> &'static str {
+        self.contract_type
+    }
+
+    pub const fn kind(self) -> CapabilityKind {
+        self.kind
+    }
+}
+
+/// One static mutation publication descriptor exposed by the fixed Product
+/// Runtime definition.  It may name a Product Kernel or Engine operation;
+/// the generated root passes the closed descriptor through the ordinary
+/// `runtime-mutation` compiler before a live composition exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProductKernelRuntimeMutationDescriptor {
+    binding_id: &'static str,
+    target: &'static str,
+    publication_domain: &'static str,
+    owner: &'static str,
+    operation_type: &'static str,
+}
+
+impl ProductKernelRuntimeMutationDescriptor {
+    pub const fn new(
+        binding_id: &'static str,
+        target: &'static str,
+        publication_domain: &'static str,
+        owner: &'static str,
+        operation_type: &'static str,
+    ) -> Self {
+        Self {
+            binding_id,
+            target,
+            publication_domain,
+            owner,
+            operation_type,
+        }
+    }
+
+    pub const fn binding_id(self) -> &'static str {
+        self.binding_id
+    }
+
+    pub const fn target(self) -> &'static str {
+        self.target
+    }
+
+    pub const fn publication_domain(self) -> &'static str {
+        self.publication_domain
+    }
+
+    pub const fn owner(self) -> &'static str {
+        self.owner
+    }
+
+    pub const fn operation_type(self) -> &'static str {
+        self.operation_type
+    }
+}
+
+/// Fixed source-linked runtime definition convention consumed by generated
+/// Product Assembly.
+///
+/// A product's `kernel/entry.rs` must expose the concrete type
+/// `RustyProductRuntime` implementing this trait.  The associated adapter and
+/// product fact types remain downstream-owned concrete types.  Engine never
+/// stores this definition, calls a function pointer, performs a registry
+/// lookup, or erases one of the associated types; generated source invokes
+/// `build` directly and places the returned adapter into
+/// `runtime_composition::RuntimeComposition`.
+pub trait ProductKernelRuntimeDefinition {
+    type Adapter;
+    type Error;
+    type ProductState;
+    type ObserverComponent;
+    type TargetComponent;
+
+    /// Static descriptor aggregate corresponding to the Product Assembly
+    /// capability slice.
+    fn capabilities() -> &'static [ProductKernelCapabilityDescriptor];
+
+    /// Static concrete owner selections used by the product adapter.
+    fn selections() -> &'static [ProductKernelRuntimeSelection];
+
+    /// Static mutation publication descriptors used to compile the
+    /// instance-owned mutation catalog.  The descriptors contain no handler
+    /// or mutable state and may name Engine or Product Kernel targets.
+    fn mutation_descriptors() -> &'static [ProductKernelRuntimeMutationDescriptor];
+
+    /// Builds one concrete product adapter from immutable generated bytes.
+    fn build(resources: ProductRuntimeResources<'_>) -> Result<Self::Adapter, Self::Error>;
 }
 
 /// A downstream-selected binding and its expected closed owner type identity.
@@ -292,6 +490,7 @@ macro_rules! product_kernel_declaration {
                     owner: $provenance_owner:literal,
                     source: $source:literal,
                     logical_path: $logical_path:literal
+                    $(, execution: $execution_kind:ident => $execute:path)?
                 }
             ),+ $(,)?
         ],
@@ -388,7 +587,28 @@ macro_rules! product_kernel_declaration {
                 ),
             )*
         ];
+
+        const EXECUTION_LINKS: &[$crate::ProductKernelExecutionLink<$owner>] = &[
+            $(
+                $(
+                    $crate::__rusty_product_kernel_execution_link!(
+                        owner: $owner::$variant,
+                        identity: $identity,
+                        target: concat!("kernel.", $identity),
+                        contract: $contract,
+                        kind: $kind,
+                        execution: $execution_kind => $execute
+                    ),
+                )?
+            )+
+        ];
         }
+
+        $(
+            $crate::__rusty_product_kernel_execution_impl!(
+                $($execution_kind => $contract, $execute)?
+            );
+        )+
 
         impl $crate::ProductKernelOwner for $owner {
             fn identity(self) -> &'static str {
@@ -490,8 +710,115 @@ macro_rules! product_kernel_declaration {
                 $declaration::MIGRATIONS
             }
 
+            fn execution_links() -> &'static [$crate::ProductKernelExecutionLink<Self::Owner>] {
+                $declaration::EXECUTION_LINKS
+            }
+
             fn contract_json() -> Result<String, $crate::ProductAssemblyError> {
                 $crate::render_contract_json::<$declaration>()
+            }
+        }
+    };
+}
+
+/// Internal expansion helper for one optional executable capability link.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __rusty_product_kernel_execution_link {
+    (
+        owner: $owner:expr,
+        identity: $identity:expr,
+        target: $target:expr,
+        contract: $contract:ty,
+        kind: $declared_kind:expr,
+        execution: system => $execute:path
+    ) => {
+        $crate::ProductKernelExecutionLink::new(
+            $owner,
+            $identity,
+            $target,
+            <$contract as $crate::ProductKernelCapabilityContract>::TYPE_ID,
+            stringify!($contract),
+            stringify!($execute),
+            $crate::product_model::CapabilityKind::System,
+        )
+    };
+    (
+        owner: $owner:expr,
+        identity: $identity:expr,
+        target: $target:expr,
+        contract: $contract:ty,
+        kind: $declared_kind:expr,
+        execution: operation => $execute:path
+    ) => {
+        $crate::ProductKernelExecutionLink::new(
+            $owner,
+            $identity,
+            $target,
+            <$contract as $crate::ProductKernelCapabilityContract>::TYPE_ID,
+            stringify!($contract),
+            stringify!($execute),
+            $crate::product_model::CapabilityKind::Operation,
+        )
+    };
+    (
+        owner: $owner:expr,
+        identity: $identity:expr,
+        target: $target:expr,
+        contract: $contract:ty,
+        kind: $declared_kind:expr,
+        execution: projection => $execute:path
+    ) => {
+        $crate::ProductKernelExecutionLink::new(
+            $owner,
+            $identity,
+            $target,
+            <$contract as $crate::ProductKernelCapabilityContract>::TYPE_ID,
+            stringify!($contract),
+            stringify!($execute),
+            $crate::product_model::CapabilityKind::Projection,
+        )
+    };
+    (
+        owner: $owner:expr,
+        identity: $identity:expr,
+        target: $target:expr,
+        contract: $contract:ty,
+        kind: $declared_kind:expr
+    ) => {};
+}
+
+/// Internal expansion helper for the typed executor implementation. The
+/// explicit lane token keeps a declaration's lifecycle phase visible and
+/// prevents an operation function from being silently treated as a system.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __rusty_product_kernel_execution_impl {
+    () => {};
+    (system => $contract:ty, $execute:path) => {
+        impl $crate::ProductKernelSystemExecutor for $contract {
+            fn execute_system(
+                context: $crate::ProductSystemContext<'_, Self::Snapshot, Self::Request>,
+            ) -> Result<Self::Result, Self::Error> {
+                $execute(context)
+            }
+        }
+    };
+    (operation => $contract:ty, $execute:path) => {
+        impl $crate::ProductKernelOperationExecutor for $contract {
+            fn execute_operation(
+                context: $crate::ProductOperationContext<'_, Self::Snapshot, Self::Request>,
+            ) -> Result<Self::Result, Self::Error> {
+                $execute(context)
+            }
+        }
+    };
+    (projection => $contract:ty, $execute:path) => {
+        impl $crate::ProductKernelProjectionExecutor for $contract {
+            fn execute_projection(
+                context: $crate::ProductProjectionContext<'_, Self::Snapshot>,
+            ) -> Result<Self::Result, Self::Error> {
+                $execute(context)
             }
         }
     };

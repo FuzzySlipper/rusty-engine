@@ -24145,19 +24145,21 @@ function PS(e, t, n = {}) {
 			presentationAdvancedAtMs: u,
 			backendSubmittedAtMs: v
 		};
-	}, S = (e = globalThis.performance?.now() ?? 0) => x(e, "explicit").submission, C = (t) => {
-		let n = IS();
+	}, S = (e = globalThis.performance?.now() ?? 0) => x(e, "explicit").submission, C = (n) => {
+		let r = IS();
 		u = globalThis.requestAnimationFrame(C);
-		let r = IS(), i = m.consumeDecision(HS(e), y()), a = IS();
-		if (i.shouldSubmit) {
-			let e = s.automaticSubmissionReady(t), o = IS(), c = s.automaticSubmissionPacing();
+		let i = IS();
+		t.onAnimationFrame?.(n);
+		let a = m.consumeDecision(HS(e), y()), o = IS();
+		if (a.shouldSubmit) {
+			let e = s.automaticSubmissionReady(n), t = IS(), c = s.automaticSubmissionPacing();
 			if (e) {
-				let e = x(t, "animationFrame"), s = IS();
-				h.record(t, "admitted", i, c, LS({
-					callbackStartedAtMs: n,
-					successorQueuedAtMs: r,
-					demandObservedAtMs: a,
-					backendReadinessObservedAtMs: o,
+				let e = x(n, "animationFrame"), s = IS();
+				h.record(n, "admitted", a, c, LS({
+					callbackStartedAtMs: r,
+					successorQueuedAtMs: i,
+					demandObservedAtMs: o,
+					backendReadinessObservedAtMs: t,
 					controlsUpdatedAtMs: e.controlsUpdatedAtMs,
 					cameraUpdatedAtMs: e.cameraUpdatedAtMs,
 					presentationAdvancedAtMs: e.presentationAdvancedAtMs,
@@ -24166,20 +24168,20 @@ function PS(e, t, n = {}) {
 				}));
 			} else {
 				let e = IS();
-				h.record(t, "backendBlocked", i, c, LS({
-					callbackStartedAtMs: n,
-					successorQueuedAtMs: r,
-					demandObservedAtMs: a,
-					backendReadinessObservedAtMs: o,
+				h.record(n, "backendBlocked", a, c, LS({
+					callbackStartedAtMs: r,
+					successorQueuedAtMs: i,
+					demandObservedAtMs: o,
+					backendReadinessObservedAtMs: t,
 					callbackEndedAtMs: e
 				})), b();
 			}
 		} else {
 			let e = IS();
-			h.record(t, "noDemand", i, s.automaticSubmissionPacing(), LS({
-				callbackStartedAtMs: n,
-				successorQueuedAtMs: r,
-				demandObservedAtMs: a,
+			h.record(n, "noDemand", a, s.automaticSubmissionPacing(), LS({
+				callbackStartedAtMs: r,
+				successorQueuedAtMs: i,
+				demandObservedAtMs: o,
 				callbackEndedAtMs: e
 			}));
 		}
@@ -26737,7 +26739,8 @@ async function dE(e, t) {
 			...e.renderer?.clearColor === void 0 ? {} : { clearColor: e.renderer.clearColor },
 			...e.renderer?.fog === void 0 ? {} : { fog: e.renderer.fog },
 			...e.renderer?.pixelRatio === void 0 ? {} : { pixelRatio: e.renderer.pixelRatio },
-			...Uw(r)
+			...Uw(r),
+			...e.renderer?.onCadence === void 0 ? {} : { onAnimationFrame: e.renderer.onCadence }
 		}), a = Hw(r), o = /* @__PURE__ */ new Set(), s = null;
 		try {
 			let t = a === null ? null : new sC({ resolveResource: a }), n = new Map(r.resources.map((e) => [e.identity, e])), l = new Map(r.resources.map((e) => [e.contentHash, e])), u = new wC({

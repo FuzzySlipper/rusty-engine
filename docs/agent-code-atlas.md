@@ -71,6 +71,7 @@ downstream game policy and orchestration
         +--> runtime-timeline
         +--> runtime-mutation
         +--> runtime-ui --> application-host (isolated host realization)
+        +--> product-dev-host --> loopback-only generated browser host
         +--> gameplay-rules <--> rules/ (optional build-time authoring)
         +--> gameplay-standard (optional exact/continuous DSL, composed leaves, presets, operation plans)
         +--> developer-command (optional runtime developer console / debug console envelopes and binding port)
@@ -103,12 +104,16 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 | Existing downstream gameplay disposition-first migration, mechanics/resolution composition, and AI intents | [Downstream gameplay adoption](topics/gameplay/downstream-adoption.md) |
 | Upstream promotion decisions and TypeScript authoring DSL placement | [Upstream promotion and authoring DSL](topics/development/upstream-promotion-and-authoring-dsl.md) |
 | Current Product Layout and immutable Compiled Composition schema | [Product model schema](code-map/product-model.md) |
+| Deterministic generated Product Assembly planning, exact closure receipts, capability-relative publication, and rollback | [Product Assembly planning and publication](code-map/product-assembly.md) |
+| Permission-bounded TypeScript materialization, canonical composition admission, fixed browser bundle production, and authored-source closure checks | [Product materialization](code-map/product-materializer.md) |
 | Source-linked downstream Product Kernel declarations, schemas/migrations, pre-start Product Assembly linkage, and typed contexts | [Product Kernel source-linked assembly](code-map/product-kernel.md) |
+| Immutable generated bundle serving, closed local browser routes, serialized runtime calls, and bounded SSE receipt output | [Product development browser host](code-map/product-dev-host.md) |
 | Instance-owned host-neutral runtime generations, fixed-step/demand/external admission, and separate presentation admission | [Runtime lifecycle](code-map/runtime-lifecycle.md) |
 | Strict admitted input descriptors/mappings, host-neutral ingress decoding, snapshots, and typed intent envelopes | [Runtime input](code-map/runtime-input.md) |
 | Linked five-phase schedule composition, deterministic execution order, cadence, lifecycle-token validation, and bounded inspection | [Runtime schedule](code-map/runtime-schedule.md) |
 | Linked static timeline templates, bounded deterministic operation/completion queues, lifecycle rebind, and immutable release records | [Runtime timeline](code-map/runtime-timeline.md) |
 | Closed Product Assembly mutation selections, owned candidate staging, exact guards, and fail-atomic publication receipts | [Runtime mutation](code-map/runtime-mutation.md) |
+| Instance-owned composition of lifecycle, input, schedule, timeline, mutation, presentation, and UI projection through one concrete product adapter | [Runtime composition](code-map/runtime-composition.md) |
 | Projection-phase Product Kernel contexts, bounded typed UI DTO envelopes, lifecycle rebind, and strict transport decoding | [Runtime UI projection](code-map/runtime-ui.md) |
 | Closed typed observer/target selection, center-ray visibility, deterministic evidence reductions, and one Product Kernel operation emission | [Runtime standard capabilities](code-map/runtime-standard-capabilities.md) |
 | Product discovery, safe minimum initialization, structural checks, and foundational doctor diagnostics | [Rusty CLI foundation](code-map/rusty-cli.md) |

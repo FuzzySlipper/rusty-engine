@@ -8,6 +8,7 @@ use crate::declaration::{
     ProductKernelDeclaration, ProductKernelOwner, ProductKernelSelection,
     MAX_PRODUCT_KERNEL_CONTRACT_TEXT_BYTES,
 };
+use crate::execution::validate_product_kernel_execution;
 
 /// A selected binding after source-linked Product Assembly validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +67,7 @@ impl<D: ProductKernelDeclaration> ProductAssembly<D> {
         validate_declaration::<D>()?;
         let linked = product_model::link_admitted_product_composition(admitted, D::descriptors())
             .map_err(ProductAssemblyError::ProductModel)?;
+        validate_product_kernel_execution::<D>(&linked).map_err(ProductAssemblyError::Execution)?;
         let linked_selections = validate_selections::<D>(&linked, selections)?;
         Ok(Self {
             linked,
@@ -96,6 +98,7 @@ impl<D: ProductKernelDeclaration> ProductAssembly<D> {
 pub enum ProductAssemblyError {
     Declaration(DeclarationError),
     ProductModel(ProductModelError),
+    Execution(crate::ProductKernelExecutionError),
     DuplicateSelection {
         binding_id: String,
     },

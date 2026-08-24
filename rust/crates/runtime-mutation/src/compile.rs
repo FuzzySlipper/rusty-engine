@@ -77,6 +77,7 @@ pub struct CompiledMutationCapability {
     binding_id: String,
     target: String,
     resolved_target: String,
+    product_kernel_target: bool,
     publication_domain: String,
     owner: String,
     provenance_source: String,
@@ -93,10 +94,10 @@ impl CompiledMutationCapability {
     ) -> Self {
         let metadata = binding.metadata();
         let provenance = metadata.provenance();
-        let resolved_target = match binding.resolved_target() {
-            LinkedCapabilityTarget::Engine(capability) => capability.target().to_owned(),
+        let (resolved_target, product_kernel_target) = match binding.resolved_target() {
+            LinkedCapabilityTarget::Engine(capability) => (capability.target().to_owned(), false),
             LinkedCapabilityTarget::ProductKernel(index) => {
-                format!("product-kernel[{}]", index.index())
+                (format!("product-kernel[{}]", index.index()), true)
             }
         };
         Self {
@@ -104,6 +105,7 @@ impl CompiledMutationCapability {
             binding_id: binding.id().to_owned(),
             target: binding.target().to_owned(),
             resolved_target,
+            product_kernel_target,
             publication_domain: descriptor.publication_domain().to_owned(),
             owner: descriptor.owner().to_owned(),
             provenance_source: provenance.source().to_owned(),
@@ -128,6 +130,10 @@ impl CompiledMutationCapability {
 
     pub fn resolved_target(&self) -> &str {
         &self.resolved_target
+    }
+
+    pub const fn is_product_kernel_target(&self) -> bool {
+        self.product_kernel_target
     }
 
     pub fn publication_domain(&self) -> &str {
@@ -170,6 +176,23 @@ pub struct CompiledMutationCatalog {
 }
 
 impl CompiledMutationCatalog {
+    /// Returns an inert catalog for a product that has no mutation
+    /// capabilities.  The runtime lane still owns its step cursor and can
+    /// account for empty mutation phases; attempts to resolve a non-empty
+    /// batch against this catalog fail closed as an unknown binding.
+    pub fn empty() -> Self {
+        let capabilities = Vec::new();
+        let catalog_identity = catalog_identity(&capabilities)
+            .expect("the empty mutation catalog has a deterministic identity");
+        let inspection = RuntimeMutationInspection::from_capabilities(&capabilities, None);
+        Self {
+            capabilities,
+            publication_domain: None,
+            catalog_identity,
+            inspection,
+        }
+    }
+
     pub fn compile(
         linked: &LinkedProductComposition,
         descriptors: &[MutationCapabilityDescriptor],
@@ -297,6 +320,7 @@ struct CatalogIdentityCapability<'a> {
     binding_id: &'a str,
     target: &'a str,
     resolved_target: &'a str,
+    product_kernel_target: bool,
     publication_domain: &'a str,
     owner: &'a str,
     provenance_source: &'a str,
@@ -317,6 +341,7 @@ fn catalog_identity(
                 binding_id: capability.binding_id(),
                 target: capability.target(),
                 resolved_target: capability.resolved_target(),
+                product_kernel_target: capability.is_product_kernel_target(),
                 publication_domain: capability.publication_domain(),
                 owner: capability.owner(),
                 provenance_source: capability.provenance_source(),

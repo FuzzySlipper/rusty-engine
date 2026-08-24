@@ -119,7 +119,7 @@ impl RuntimeInputLane {
             return Err(RuntimeInputError::Disposed);
         }
         if event.runtime() != self.binding {
-            return self.rebind(event);
+            return self.rebind_event(event);
         }
         let expected = match expected_sequence(self.last_sequence) {
             Ok(value) => value,
@@ -157,6 +157,24 @@ impl RuntimeInputLane {
             self.clear_state();
         }
         result
+    }
+
+    /// Explicitly moves this lane to a newer lifecycle binding and clears
+    /// every held, pending, and transient fact. Composition roots call this
+    /// after pause/resume or restart; it is the same strict sequence-zero
+    /// clear path used by a host-provided rebind ingress.
+    pub fn rebind(
+        &mut self,
+        binding: RuntimeInputBinding,
+        context: InputContext,
+        reason: InputClearReason,
+    ) -> Result<(), RuntimeInputError> {
+        self.rebind_event(RuntimeInputEvent::Physical(RuntimeInputIngress::new(
+            binding,
+            0,
+            context,
+            RuntimeInputFact::Clear { reason },
+        )))
     }
 
     /// Terminally disposes this instance-owned lane. No queued, held, edge,
@@ -238,7 +256,7 @@ impl RuntimeInputLane {
         Ok((frame, envelopes))
     }
 
-    fn rebind(&mut self, event: RuntimeInputEvent) -> Result<(), RuntimeInputError> {
+    fn rebind_event(&mut self, event: RuntimeInputEvent) -> Result<(), RuntimeInputError> {
         let RuntimeInputEvent::Physical(ingress) = event else {
             self.clear_state();
             return Err(RuntimeInputError::BindingMismatch);

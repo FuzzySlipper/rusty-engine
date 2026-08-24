@@ -732,6 +732,8 @@ fn compiled_mappings() -> CompiledInputMappings {
         realtime: None,
         kernel_entry: Some("kernel/lib.rs".into()),
         ui_entry: "ui/main.ts".into(),
+        ui_projection_stream: None,
+        ui_projection_contract: None,
         content_root: "content".into(),
         compiled_composition_output: "generated/compiled-composition.json".into(),
         admitted_runtime_content_output: "generated/runtime-content".into(),
