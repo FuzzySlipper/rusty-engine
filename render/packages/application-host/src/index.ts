@@ -53,6 +53,7 @@ export type {
   RustyApplicationHostOptions,
   RustyApplicationHostReadout,
   RustyApplicationInteractionMode,
+  RustyApplicationLightingOptions,
   RustyApplicationPresentationDiagnostic,
   RustyApplicationPresentationFrame,
   RustyApplicationPresentationReceipt,

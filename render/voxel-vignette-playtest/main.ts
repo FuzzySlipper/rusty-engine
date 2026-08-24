@@ -7,7 +7,7 @@ const root = document.querySelector<HTMLElement>('#application');
 if (root === null) throw new Error('voxel vignette application root is missing');
 
 try {
-  const content = await loadVignetteContent();
+  const content = await loadVignetteContent('occupancy-axis-control');
   root.replaceChildren();
   const host = await mountRustyApplication({
     root,
@@ -19,6 +19,10 @@ try {
       clearColor: 0x89a8b8,
       fog: { color: 0x89a8b8, near: 30, far: 70 },
       initialContent: content,
+      lighting: {
+        defaultLights: { world: 'disabled', viewmodel: 'disabled' },
+        shadows: { enabled: true, maximumActiveLights: 1 },
+      },
       pixelRatio: 1,
     },
     mountUi: mountVignetteProduct,

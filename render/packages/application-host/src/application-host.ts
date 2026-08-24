@@ -513,6 +513,8 @@ export interface RustyApplicationRendererOptions {
   readonly clearColor?: number;
   /** Optional Engine-owned linear fog applied by the mounted renderer surface. */
   readonly fog?: RustyApplicationFogOptions;
+  /** Optional retained-light policy for the mounted world and shadow backend. */
+  readonly lighting?: RustyApplicationLightingOptions;
   readonly initialContent?: RustyApplicationContent;
   readonly initialFrame?: RustyApplicationFrame;
   readonly pixelRatio?: number;
@@ -524,6 +526,17 @@ export interface RustyApplicationRendererOptions {
   readonly resolveParticleEntityPosition?: (
     entity: number,
   ) => readonly [number, number, number] | null;
+}
+
+export interface RustyApplicationLightingOptions {
+  readonly defaultLights?: {
+    readonly world?: 'neutral' | 'disabled';
+    readonly viewmodel?: 'neutral' | 'disabled';
+  };
+  readonly shadows?: {
+    readonly enabled?: boolean;
+    readonly maximumActiveLights?: number;
+  };
 }
 
 export interface RustyApplicationFogOptions {
@@ -696,6 +709,16 @@ async function mountRustyApplicationWithEnvironment(
         ? {} : { clearColor: options.renderer.clearColor }),
       ...(options.renderer?.fog === undefined
         ? {} : { fog: options.renderer.fog }),
+      ...(options.renderer?.lighting === undefined
+        ? {} : {
+            lighting: {
+              schemaVersion: 1 as const,
+              ...(options.renderer.lighting.defaultLights === undefined
+                ? {} : { defaultLights: options.renderer.lighting.defaultLights }),
+              ...(options.renderer.lighting.shadows === undefined
+                ? {} : { shadows: options.renderer.lighting.shadows }),
+            },
+          }),
       ...(options.renderer?.pixelRatio === undefined
         ? {} : { pixelRatio: options.renderer.pixelRatio }),
       ...rustyApplicationSurfaceResourceOptions(content),

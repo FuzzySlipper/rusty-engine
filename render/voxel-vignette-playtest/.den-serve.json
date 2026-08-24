@@ -1,5 +1,5 @@
 {
-  "project": "rusty-engine-voxel-vignette",
+  "project": "rusty-engine-voxel-vignette-comparison",
   "serve": {
     "command": "pnpm --dir .. exec vite --config vite.config.ts --host {host} --port {port}",
     "preferredPort": 37100,
@@ -13,7 +13,7 @@
       "product.ts",
       "scene.ts",
       "styles.css",
-      "staging-manifest.tsv"
+      "comparison-staging-manifest.tsv"
     ],
     "startupTimeout": "60s"
   }

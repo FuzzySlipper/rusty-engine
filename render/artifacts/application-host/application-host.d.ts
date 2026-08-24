@@ -406,6 +406,8 @@ export interface RustyApplicationRendererOptions {
     readonly clearColor?: number;
     /** Optional Engine-owned linear fog applied by the mounted renderer surface. */
     readonly fog?: RustyApplicationFogOptions;
+    /** Optional retained-light policy for the mounted world and shadow backend. */
+    readonly lighting?: RustyApplicationLightingOptions;
     readonly initialContent?: RustyApplicationContent;
     readonly initialFrame?: RustyApplicationFrame;
     readonly pixelRatio?: number;
@@ -413,6 +415,16 @@ export interface RustyApplicationRendererOptions {
     readonly resolveIndicatorEntityPosition?: (entity: number) => readonly [number, number, number] | null;
     /** Gameplay-owned entity positions used only to resolve neutral particle anchors. */
     readonly resolveParticleEntityPosition?: (entity: number) => readonly [number, number, number] | null;
+}
+export interface RustyApplicationLightingOptions {
+    readonly defaultLights?: {
+        readonly world?: 'neutral' | 'disabled';
+        readonly viewmodel?: 'neutral' | 'disabled';
+    };
+    readonly shadows?: {
+        readonly enabled?: boolean;
+        readonly maximumActiveLights?: number;
+    };
 }
 export interface RustyApplicationFogOptions {
     readonly color: number;

@@ -11,10 +11,25 @@ for (const file of sources) {
   }
 }
 
-const manifest = readFileSync(new URL('staging-manifest.tsv', root), 'utf8');
+const manifest = readFileSync(new URL('comparison-staging-manifest.tsv', root), 'utf8');
 const entries = manifest.split('\n').filter((line) => line && !line.startsWith('#'));
-if (entries.length !== 4 || entries.some((line) => line.split('\t').length !== 3)) {
-  throw new Error('voxel vignette staging manifest must retain exactly four checked GLB inputs');
+const variantCounts = new Map();
+for (const entry of entries) {
+  const fields = entry.split('\t');
+  if (fields.length !== 6) throw new Error('comparison staging manifest must retain receipt/provenance columns');
+  variantCounts.set(fields[0], (variantCounts.get(fields[0]) ?? 0) + 1);
+}
+const expectedVariants = [
+  'original-pbr',
+  'producer-normals',
+  'producer-normals-matte-pbr',
+  'palette-unlit',
+  'occupancy-axis-control',
+  'occupancy-adjacency-normals',
+];
+if (entries.length !== 24 || variantCounts.size !== expectedVariants.length
+  || expectedVariants.some((variant) => variantCounts.get(variant) !== 4)) {
+  throw new Error('comparison staging manifest must retain exactly six variants with four checked GLBs each');
 }
 
 console.log('voxel vignette public-boundary check passed');

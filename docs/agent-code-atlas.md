@@ -109,6 +109,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 | Exact-global and bounded-local world-origin rebasing | [World-origin rebasing](topics/world-origin-rebasing.md), [spatial mechanisms](code-map/spatial-mechanisms.md), and [core foundations](code-map/core-and-service-foundations.md) |
 | Content manifests, catalogs, imports, prefabs, and authored scenes | [Content, assets, and scenes](code-map/content-assets-and-scenes.md) |
 | Stored voxel artifacts, annotations, GLB conversion, and object playback | [Voxel assets and conversion](code-map/voxel-assets-and-conversion.md) |
+| High-density voxel and pixel-art runtime representation decisions | [High-density voxel runtime decision](topics/voxel/high-density-voxel-runtime-6911.md) |
 | Recipe planning and materialization into authored scenes | [Environment authoring](code-map/environment-authoring.md) |
 | Versioned Rust render frames, host contracts, projection, and complete facade | [Rust render model and projection](code-map/rust-render-model-and-projection.md) |
 | Structured world indicators, deterministic screen layout, and DOM accessibility | [Structured world indicators](topics/world-indicators.md) |
@@ -129,6 +130,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 - [Textured voxel campaign closeout](textured-voxel-campaign-closeout.md)
 - [Reconstructed voxel surfaces](topics/voxel/reconstructed-surfaces.md)
 - [Voxel vignette visual gate](topics/voxel/voxel-vignette-visual-gate.md)
+- [High-density voxel runtime decision](topics/voxel/high-density-voxel-runtime-6911.md)
 - [Chunk-granular voxel mesh updates](topics/voxel/chunk-granular-updates.md)
 - [Structured world indicators](topics/world-indicators.md)
 - [Three scene particles](topics/three-scene-particles.md)

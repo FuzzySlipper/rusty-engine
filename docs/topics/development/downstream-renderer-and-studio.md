@@ -163,6 +163,13 @@ and transactional cleanup. The downstream UI mount receives only:
 - its own DOM root, where Angular, another framework, or direct typed DOM code
   can build the product HUD, menus, forms, and accessibility tree.
 
+The optional `renderer.lighting` policy forwards the public renderer-host
+default-light and bounded-shadow configuration without exposing Three. A
+downstream may independently retain or disable the neutral world/viewmodel
+rigs and enable a finite retained-light shadow budget. Omission preserves the
+compatible neutral rigs with shadows disabled; authored `shadowIntent` alone
+does not enable the backend shadow map.
+
 The optional `presentationAspectBounds: { minimum, maximum }` selects a finite positive inclusive
 numeric interval for the whole application presentation, not just the canvas. The supplied mount
 root remains the available browser/WebView area. Inside the interval the shared frame fills that

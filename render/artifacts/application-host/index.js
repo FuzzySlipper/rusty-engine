@@ -26092,6 +26092,11 @@ async function sT(e, t) {
 			frame: r.frame,
 			...e.renderer?.clearColor === void 0 ? {} : { clearColor: e.renderer.clearColor },
 			...e.renderer?.fog === void 0 ? {} : { fog: e.renderer.fog },
+			...e.renderer?.lighting === void 0 ? {} : { lighting: {
+				schemaVersion: 1,
+				...e.renderer.lighting.defaultLights === void 0 ? {} : { defaultLights: e.renderer.lighting.defaultLights },
+				...e.renderer.lighting.shadows === void 0 ? {} : { shadows: e.renderer.lighting.shadows }
+			} },
 			...e.renderer?.pixelRatio === void 0 ? {} : { pixelRatio: e.renderer.pixelRatio },
 			...Hw(r)
 		}), o = Vw(r), s = /* @__PURE__ */ new Set(), c = null;

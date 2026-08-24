@@ -137,9 +137,12 @@ downstream repositories.
 ## Browser lighting and shadows
 
 - **Status:** implemented-bounded
-- **Affected surface:** retained light descriptors, `renderer-three`, and `renderer-host`
+- **Affected surface:** retained light descriptors, `renderer-three`, `renderer-host`, and the
+  optional Application Host renderer lighting policy
 - **Limitation:** The public browser surface can preserve or disable the neutral world/viewmodel rigs
   and can enable a bounded Three shadow map for retained directional, point, and spot requests.
+  `mountRustyApplication` forwards this policy only when a downstream explicitly supplies
+  `renderer.lighting`; omission retains the compatible neutral-rig, shadows-disabled default.
   Ambient shadow requests remain unsupported. This is not an environment-lighting system,
   post-processing pipeline, automatic light-density policy, or cross-backend shadow guarantee.
 - **Detection:** Inspect `RendererSurface.lightingReadout()` and run `./scripts/verify-render.sh`;
@@ -149,7 +152,7 @@ downstream repositories.
   authored torch facts, retained-count equality, and visible localized warm falloff.
 - **Follow-up:** Add another backend or richer light/shadow resources only with a concrete consumer
   and a bounded renderer-neutral contract.
-- **Last reviewed:** 2026-08-02 / codex
+- **Last reviewed:** 2026-08-24 / codex
 
 ## Non-kinematic rigid bodies
 
