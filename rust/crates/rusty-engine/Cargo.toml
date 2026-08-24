@@ -35,6 +35,7 @@ runtime-lifecycle.workspace = true
 runtime-input.workspace = true
 runtime-schedule.workspace = true
 runtime-timeline.workspace = true
+runtime-mutation.workspace = true
 state-machine.workspace = true
 svc-collision.workspace = true
 svc-mesh.workspace = true

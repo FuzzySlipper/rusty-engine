@@ -9,6 +9,7 @@ members = [
     "rust/crates/runtime-input",
     "rust/crates/runtime-schedule",
     "rust/crates/runtime-timeline",
+    "rust/crates/runtime-mutation",
     "rust/crates/rusty-cli",
     "rust/crates/asset-import",
     "rust/crates/authored-scene",
@@ -58,6 +59,7 @@ runtime-lifecycle = { path = "rust/crates/runtime-lifecycle" }
 runtime-input = { path = "rust/crates/runtime-input" }
 runtime-schedule = { path = "rust/crates/runtime-schedule" }
 runtime-timeline = { path = "rust/crates/runtime-timeline" }
+runtime-mutation = { path = "rust/crates/runtime-mutation" }
 render-host-contracts = { path = "rust/crates/render-host-contracts" }
 renderer-webview-host = { path = "rust/crates/renderer-webview-host" }
 asset-import = { path = "rust/crates/asset-import" }

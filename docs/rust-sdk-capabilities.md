@@ -40,6 +40,7 @@ remain independently meaningful and no owner may depend back on `rusty-engine`.
 | `runtime-input` | `rusty_engine::runtime_input` |
 | `runtime-schedule` | `rusty_engine::runtime_schedule` |
 | `runtime-timeline` | `rusty_engine::runtime_timeline` |
+| `runtime-mutation` | `rusty_engine::runtime_mutation` |
 | `runtime-lifecycle` | `rusty_engine::runtime_lifecycle` |
 | `state-machine` | `rusty_engine::state_machine` |
 | `svc-collision` | `rusty_engine::svc_collision` |

@@ -105,7 +105,10 @@ context for each phase; the lane presents immutable system invocation data and
 stages typed dispatcher outputs without storing callbacks, service registries,
 clocks, component references, or gameplay state. A dispatcher failure leaves
 the lane's phase progression unchanged, but effects inside that caller-owned
-dispatcher are outside the lane's rollback boundary. Initial binding is only
+dispatcher are outside the lane's rollback boundary. The dispatcher is a
+planning/data-emission contract; the lane cannot police arbitrary interior
+side effects, and downstream authoritative writes route through the named
+`runtime-mutation` planner/publication boundary. Initial binding is only
 valid before the lifecycle admits its first simulation step. Pause/resume or
 restart stales a bound lane; explicit `rebind`/`synchronize` is required at a
 phase boundary, retaining same-generation progress and resetting on a newer
@@ -149,6 +152,41 @@ those steps as released; a new generation clears queue, tickets, cursors, and
 counters. Typed mechanism snapshots validate into a temporary candidate before
 replacing live state. Products retain ownership of mutation,
 persistence, external I/O, and the meaning of every released record.
+
+The implemented `runtime-mutation` lane is the sole admitted Runtime
+Composition Mutation publication boundary. Mutation selection is not a new
+authored `CapabilityUse`: an immutable Product Assembly descriptor slice
+selects already-linked `Operation` bindings by exact binding id and target and
+names one publication domain plus named owners. A bound lane validates one
+nonempty ordered batch against the exact `Mutation` lifecycle token, operation
+linkage, payload budgets, causation, and provenance before invoking a
+caller-supplied closed Rust planner. Deterministic batch fingerprints and a
+catalog identity support bounded exact readback without creating a schema
+version protocol.
+
+`MutationAuthority` exposes an exact guard and the authority bundle's stable
+publication domain. The planner receives `&A` plus resolved operation data and
+returns an owned complete candidate with one named-owner evidence item per
+operation. The lane validates that evidence, computes the candidate guard and
+receipt, revalidates the live guard/domain and lifecycle, prepares bounded lane
+bookkeeping, then performs one candidate assignment. It retains no callback,
+registry, service locator, UI/TypeScript entrypoint, or raw mutable component
+access. Receipts preserve linked binding index/kind/target/resolved target,
+Product Assembly domain and owner, linked provenance source/path, payload,
+causation, batch/catalog fingerprints, guards, and ordered owner evidence.
+
+This is conditional Result-failure atomicity under a trusted closed Product
+Assembly: one in-memory authority bundle and one admitted batch, not
+whole-world/tick/durable/external atomicity. Rust cannot prove candidate
+derivation, guard completeness, or freedom from interior side effects. Panic,
+allocation failure, and ordinary Rust replacement/drop behavior are outside
+the guarantee, so authority, guard, planner error, and evidence destruction
+must remain inert and non-panicking. Projection, persistence, rendering, and
+outbox/external work remain after-commit product-owned status. Exact retries
+within the bounded receipt window return the prior receipt without
+republishing; failed pre-publication staging remains retryable. Same-generation
+rebind retains receipt readback and counts admitted-but-uncommitted steps as
+invalidated without claiming completion; a new generation resets both.
 
 No Engine crate knows the downstream game's component families, event vocabulary, game-specific
 stored-project schema, or browser API. The Rust render crates know only renderer-neutral values and

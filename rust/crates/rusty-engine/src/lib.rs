@@ -35,6 +35,7 @@ pub use render_projection;
 pub use renderer_webview_host;
 pub use runtime_input;
 pub use runtime_lifecycle;
+pub use runtime_mutation;
 pub use runtime_schedule;
 pub use runtime_timeline;
 pub use state_machine;

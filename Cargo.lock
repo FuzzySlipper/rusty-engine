@@ -2815,6 +2815,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "runtime-mutation"
+version = "0.1.0"
+dependencies = [
+ "product-model",
+ "runtime-lifecycle",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "runtime-schedule"
 version = "0.1.0"
 dependencies = [
@@ -2934,6 +2945,7 @@ dependencies = [
  "renderer-webview-host",
  "runtime-input",
  "runtime-lifecycle",
+ "runtime-mutation",
  "runtime-schedule",
  "runtime-timeline",
  "serde_json",
