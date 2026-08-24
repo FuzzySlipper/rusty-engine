@@ -1,0 +1,20 @@
+[product]
+id = "example.product"
+
+[runtime_composition]
+entrypoints = ["rules/../main.ts"]
+
+[lifecycle]
+mode = "demand"
+
+[ui]
+entry = "ui/main.ts"
+
+[content]
+root = "content"
+
+[outputs]
+compiled_composition = "generated/compiled-composition.json"
+admitted_runtime_content = "generated/runtime-content"
+product_assembly = "generated/product-assembly"
+product_bundle = "generated/product-bundle"

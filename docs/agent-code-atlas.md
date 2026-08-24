@@ -96,6 +96,7 @@ engine-inspector reads these surfaces; runtime libraries do not depend on it.
 | Brand-new downstream Rust product layout, optional TS authoring, bounded DOM UI, transaction boundary, and host evidence | [Greenfield downstream product path](topics/development/greenfield-downstream-product.md) |
 | Existing downstream gameplay disposition-first migration, mechanics/resolution composition, and AI intents | [Downstream gameplay adoption](topics/gameplay/downstream-adoption.md) |
 | Upstream promotion decisions and TypeScript authoring DSL placement | [Upstream promotion and authoring DSL](topics/development/upstream-promotion-and-authoring-dsl.md) |
+| Current Product Layout and immutable Compiled Composition schema | [Product model schema](code-map/product-model.md) |
 | Bounded downstream-owned attempt lifecycle, transactions, receipts, and traces | [Gameplay resolution](code-map/gameplay-resolution.md) |
 | Optional opaque rules packages, TypeScript authoring, exact dependencies, provenance, canonicalization, and diagnostics | [Gameplay rules](code-map/gameplay-rules.md) |
 | Opt-in exact/continuous DSL, composed leaves, projections, presets, standard operation plans, and capability readouts | [Gameplay standard](code-map/gameplay-standard.md) |

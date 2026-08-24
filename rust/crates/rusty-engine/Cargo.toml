@@ -30,6 +30,7 @@ render-host-contracts.workspace = true
 render-presentation.workspace = true
 render-projection.workspace = true
 renderer-webview-host.workspace = true
+product-model.workspace = true
 state-machine.workspace = true
 svc-collision.workspace = true
 svc-mesh.workspace = true

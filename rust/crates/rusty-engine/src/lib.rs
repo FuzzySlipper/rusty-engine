@@ -27,6 +27,7 @@ pub use gameplay_mechanics;
 pub use gameplay_resolution;
 pub use gameplay_rules;
 pub use gameplay_standard;
+pub use product_model;
 pub use render_host_contracts;
 pub use render_model;
 pub use render_presentation;

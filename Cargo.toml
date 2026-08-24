@@ -4,6 +4,7 @@ members = [
     "rust/crates/render-host-contracts",
     "rust/crates/renderer-webview-host",
     "rust/crates/rusty-engine",
+    "rust/crates/product-model",
     "rust/crates/asset-import",
     "rust/crates/authored-scene",
     "rust/crates/asset-catalog",
@@ -47,6 +48,7 @@ edition = "2021"
 
 [workspace.dependencies]
 rusty-engine = { path = "rust/crates/rusty-engine" }
+product-model = { path = "rust/crates/product-model" }
 render-host-contracts = { path = "rust/crates/render-host-contracts" }
 renderer-webview-host = { path = "rust/crates/renderer-webview-host" }
 asset-import = { path = "rust/crates/asset-import" }
@@ -88,6 +90,7 @@ ryu-js = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 serde_path_to_error = "0.1"
+toml = "0.8"
 sha2 = "0.10"
 base64 = "0.22"
 wry = "0.56"

@@ -31,6 +31,7 @@ remain independently meaningful and no owner may depend back on `rusty-engine`.
 | `gameplay-resolution` | `rusty_engine::gameplay_resolution` |
 | `gameplay-rules` | `rusty_engine::gameplay_rules` |
 | `gameplay-standard` | `rusty_engine::gameplay_standard` |
+| `product-model` | `rusty_engine::product_model` |
 | `render-host-contracts` | `rusty_engine::render_host_contracts` |
 | `render-model` | `rusty_engine::render_model` |
 | `render-presentation` | `rusty_engine::render_presentation` |
