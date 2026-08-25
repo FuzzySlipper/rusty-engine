@@ -1076,6 +1076,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires prepared Rules and renderer artifacts; scripts/verify-product-conformance.sh owns this integration proof"]
     fn conformance_product_admits_through_compiled_kernel_probe_without_generation() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../..")
@@ -1085,10 +1086,19 @@ mod tests {
             admitted.manifest().product_id(),
             "rusty.product.conformance"
         );
-        assert_eq!(admitted.kernel_capabilities().len(), 1);
         assert_eq!(
-            admitted.kernel_capabilities()[0].identity(),
-            "counter-increment"
+            admitted
+                .kernel_capabilities()
+                .iter()
+                .map(|capability| capability.identity())
+                .collect::<Vec<_>>(),
+            [
+                "counter-increment",
+                "counter-observe",
+                "counter-recurring",
+                "counter-recurring-result",
+                "counter-timeline",
+            ]
         );
     }
 }

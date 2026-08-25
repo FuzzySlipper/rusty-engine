@@ -8,4 +8,5 @@ cd "$REPO_ROOT"
 ./scripts/verify-rules.sh
 ./scripts/verify-render.sh
 ./scripts/verify-product-materializer.sh
+./scripts/verify-product-conformance.sh
 ./scripts/verify-studio.sh

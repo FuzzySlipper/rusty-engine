@@ -1,0 +1,164 @@
+name: product-materializer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust/crates/product-assembly/**'
+      - 'rust/crates/product-dev-host/**'
+      - 'rust/crates/product-kernel/**'
+      - 'rust/crates/product-materializer/**'
+      - 'rust/crates/product-model/**'
+      - 'rust/crates/rusty-engine/**'
+      - 'rust/crates/runtime-composition/**'
+      - 'rust/crates/runtime-input/**'
+      - 'rust/crates/runtime-lifecycle/**'
+      - 'rust/crates/runtime-mutation/**'
+      - 'rust/crates/runtime-schedule/**'
+      - 'rust/crates/runtime-standard-capabilities/**'
+      - 'rust/crates/runtime-timeline/**'
+      - 'rust/crates/runtime-ui/**'
+      - 'fixtures/product-assembly/**'
+      - 'rules/package.json'
+      - 'rules/pnpm-lock.yaml'
+      - 'rules/pnpm-workspace.yaml'
+      - 'rules/tsconfig.base.json'
+      - 'rules/packages/runtime-composition-authoring/**'
+      - 'rules/scripts/generate-product-model-contract.mjs'
+      - 'render/package.json'
+      - 'render/pnpm-lock.yaml'
+      - 'render/pnpm-workspace.yaml'
+      - 'render/tsconfig.base.json'
+      - 'render/packages/application-host/**'
+      - 'render/packages/developer-command-client/**'
+      - 'render/packages/product-browser-host/**'
+      - 'render/packages/render-contracts/**'
+      - 'render/packages/render-projection/**'
+      - 'render/packages/renderer-host/**'
+      - 'render/packages/renderer-three/**'
+      - 'render/artifacts/application-host/**'
+      - 'render/artifacts/product-browser-host/**'
+      - 'render/playwright.product-assembly.config.ts'
+      - 'render/scripts/publish-application-host-artifact.mjs'
+      - 'render/scripts/publish-product-browser-host-artifact.mjs'
+      - 'render/vite.application-host.config.ts'
+      - 'render/vite.product-browser-host.config.ts'
+      - 'scripts/verify-product-materializer.sh'
+      - '.github/workflows/product-materializer.yml'
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust/crates/product-assembly/**'
+      - 'rust/crates/product-dev-host/**'
+      - 'rust/crates/product-kernel/**'
+      - 'rust/crates/product-materializer/**'
+      - 'rust/crates/product-model/**'
+      - 'rust/crates/rusty-engine/**'
+      - 'rust/crates/runtime-composition/**'
+      - 'rust/crates/runtime-input/**'
+      - 'rust/crates/runtime-lifecycle/**'
+      - 'rust/crates/runtime-mutation/**'
+      - 'rust/crates/runtime-schedule/**'
+      - 'rust/crates/runtime-standard-capabilities/**'
+      - 'rust/crates/runtime-timeline/**'
+      - 'rust/crates/runtime-ui/**'
+      - 'fixtures/product-assembly/**'
+      - 'rules/package.json'
+      - 'rules/pnpm-lock.yaml'
+      - 'rules/pnpm-workspace.yaml'
+      - 'rules/tsconfig.base.json'
+      - 'rules/packages/runtime-composition-authoring/**'
+      - 'rules/scripts/generate-product-model-contract.mjs'
+      - 'render/package.json'
+      - 'render/pnpm-lock.yaml'
+      - 'render/pnpm-workspace.yaml'
+      - 'render/tsconfig.base.json'
+      - 'render/packages/application-host/**'
+      - 'render/packages/developer-command-client/**'
+      - 'render/packages/product-browser-host/**'
+      - 'render/packages/render-contracts/**'
+      - 'render/packages/render-projection/**'
+      - 'render/packages/renderer-host/**'
+      - 'render/packages/renderer-three/**'
+      - 'render/artifacts/application-host/**'
+      - 'render/artifacts/product-browser-host/**'
+      - 'render/playwright.product-assembly.config.ts'
+      - 'render/scripts/publish-application-host-artifact.mjs'
+      - 'render/scripts/publish-product-browser-host-artifact.mjs'
+      - 'render/vite.application-host.config.ts'
+      - 'render/vite.product-browser-host.config.ts'
+      - 'scripts/verify-product-materializer.sh'
+      - '.github/workflows/product-materializer.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify-product-materializer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Rusty Engine
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            rules/pnpm-lock.yaml
+            render/pnpm-lock.yaml
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: engine-ci
+          workspaces: . -> target
+
+      - name: Install Linux generated-host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libxkbcommon-x11-0
+
+      - name: Build Rust Engine facade for generated assembly
+        run: cargo build --locked -p rusty-engine
+
+      - name: Install Rules dependencies
+        run: pnpm --dir rules install --frozen-lockfile --ignore-scripts
+
+      - name: Build Rules authoring artifact
+        run: pnpm --dir rules run build
+
+      - name: Install renderer dependencies
+        run: pnpm --dir render install --frozen-lockfile --ignore-scripts
+
+      - name: Build renderer packages
+        run: pnpm --dir render run build:packages
+
+      - name: Build application-host artifact
+        run: pnpm --dir render run bundle:application-host-artifact
+
+      - name: Build product browser-host artifact
+        run: pnpm --dir render run bundle:product-browser-host-artifact
+
+      - name: Verify Product Materializer integration
+        run: ./scripts/verify-product-materializer.sh

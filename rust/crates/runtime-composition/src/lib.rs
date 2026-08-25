@@ -15,7 +15,7 @@ mod root;
 
 pub use adapter::{
     ProductRuntimeAdapter, ProductRuntimeOutputError, ProductRuntimeOutputs, ProductRuntimeUi,
-    MAX_PRODUCT_RUNTIME_UI_OUTPUTS,
+    MAX_PRODUCT_RUNTIME_TIMELINE_REQUESTS, MAX_PRODUCT_RUNTIME_UI_OUTPUTS,
 };
 pub use error::{RuntimeCompositionBindError, RuntimeCompositionError};
 pub use root::{

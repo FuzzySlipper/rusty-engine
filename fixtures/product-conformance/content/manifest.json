@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "artifacts": [
+    {
+      "path": "counter.json",
+      "class": "durable",
+      "role": "resource:counter",
+      "contentHash": "f0531053eecb67aaa78044940b21f259939662642f74808766ea83e283077150",
+      "byteLen": 131
+    }
+  ]
+}

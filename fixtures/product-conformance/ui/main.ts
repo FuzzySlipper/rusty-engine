@@ -10,14 +10,31 @@ export function mountProductUi(
   root: HTMLElement,
   context: RustyApplicationUiContext,
 ): RustyApplicationUiOwner {
+  const increment = document.createElement('button');
+  increment.id = 'product-conformance-increment';
+  increment.type = 'button';
+  increment.textContent = 'Increment';
+
   const label = document.createElement('output');
   label.id = 'product-conformance-counter';
   label.textContent = '0';
-  root.append(label);
+  root.append(increment, label);
+
+  // This is a semantic claim on the same host-owned ingress lane as the
+  // physical W mapping. It never mutates the product projection directly.
+  const onIncrement = (): void => {
+    context.intents?.claim('increment', { kind: 'digital', active: true });
+  };
+  increment.addEventListener('click', onIncrement);
 
   const unsubscribe = context.projection?.subscribe((envelope) => {
     label.textContent = envelope === null ? '0' : String(envelope.value);
   }) ?? (() => {});
 
-  return { dispose: unsubscribe };
+  return {
+    dispose: () => {
+      increment.removeEventListener('click', onIncrement);
+      unsubscribe();
+    },
+  };
 }

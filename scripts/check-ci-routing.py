@@ -63,7 +63,14 @@ def main() -> None:
 
     workflows = {
         name: read(root, f".github/workflows/{name}.yml")
-        for name in ("verify", "render", "studio", "rules", "docs")
+        for name in (
+            "verify",
+            "render",
+            "studio",
+            "rules",
+            "docs",
+            "product-materializer",
+        )
     }
     concurrency = "group: ${{ github.workflow }}-${{ github.ref }}\n  cancel-in-progress: true"
     for name, workflow in workflows.items():
@@ -103,10 +110,16 @@ def main() -> None:
     routing_cases = {
         "fixtures/render/depth-splat-comparison-v1.json": {"render", "verify"},
         "render/browser/application-host.browser.spec.ts": {"render"},
-        "render/packages/renderer-three/src/backend.ts": {"render", "studio"},
-        "render/artifacts/application-host/index.js": {"render"},
+        "render/packages/renderer-three/src/backend.ts": {
+            "product-materializer",
+            "render",
+            "studio",
+        },
         "render/artifacts/developer-command-client/index.js": {"render"},
-        "render/packages/developer-command-client/src/index.ts": {"render"},
+        "render/packages/developer-command-client/src/index.ts": {
+            "product-materializer",
+            "render",
+        },
         "render/contracts/developer-command-standard-host-wire.json": {"render"},
         "rust/crates/developer-command/src/wire.rs": {"render", "verify"},
         "rust/crates/developer-command-standard/src/wire.rs": {"render", "verify"},
@@ -118,6 +131,31 @@ def main() -> None:
         "rules/packages/gameplay-rules-authoring/src/index.ts": {"rules"},
         "studio/apps/studio-app/src/main.ts": {"studio"},
         ".github/workflows/render.yml": {"docs", "render"},
+        "rust/crates/product-materializer/src/lib.rs": {
+            "product-materializer",
+            "verify",
+        },
+        "fixtures/product-assembly/counter-kernel.rs": {
+            "product-materializer",
+            "verify",
+        },
+        "rules/packages/runtime-composition-authoring/src/index.ts": {
+            "product-materializer",
+            "rules",
+        },
+        "render/artifacts/application-host/index.js": {
+            "product-materializer",
+            "render",
+        },
+        "render/artifacts/product-browser-host/product-browser-host.js": {
+            "product-materializer",
+            "render",
+        },
+        "scripts/verify-product-materializer.sh": {"product-materializer"},
+        ".github/workflows/product-materializer.yml": {
+            "docs",
+            "product-materializer",
+        },
     }
     for path, expected in routing_cases.items():
         actual = {
@@ -132,6 +170,22 @@ def main() -> None:
         fail("render CI dependency admission must not compile workspace packages")
     if "RUSTY_RENDER_DEPS_READY=1 ./scripts/verify-render.sh" not in workflows["render"]:
         fail("render CI must reuse its one admitted dependency installation")
+
+    materializer = workflows["product-materializer"]
+    for required in (
+        "cargo build --locked -p rusty-engine",
+        "pnpm --dir rules install --frozen-lockfile --ignore-scripts",
+        "pnpm --dir rules run build",
+        "pnpm --dir render install --frozen-lockfile --ignore-scripts",
+        "pnpm --dir render run build:packages",
+        "pnpm --dir render run bundle:application-host-artifact",
+        "pnpm --dir render run bundle:product-browser-host-artifact",
+        "./scripts/verify-product-materializer.sh",
+    ):
+        if required not in materializer:
+            fail(f"product-materializer CI is missing {required}")
+    if "./scripts/verify-render.sh" in materializer:
+        fail("product-materializer CI must not repeat the full renderer browser gate")
 
     require_paths(
         "studio",
@@ -157,8 +211,26 @@ def main() -> None:
         {"README.md", "AGENTS.md", "docs/**", ".github/workflows/**"},
         set(),
     )
+    require_paths(
+        "product-materializer",
+        workflows["product-materializer"],
+        {
+            "Cargo.toml",
+            "Cargo.lock",
+            "rust/crates/product-materializer/**",
+            "fixtures/product-assembly/**",
+            "rules/packages/runtime-composition-authoring/**",
+            "rules/tsconfig.base.json",
+            "render/packages/application-host/**",
+            "render/tsconfig.base.json",
+            "render/artifacts/application-host/**",
+            "scripts/verify-product-materializer.sh",
+            ".github/workflows/product-materializer.yml",
+        },
+        {"rust/**", "rules/**", "render/**", "fixtures/**"},
+    )
 
-    for name in ("verify", "render", "rules"):
+    for name in ("verify", "render", "rules", "product-materializer"):
         workflow = workflows[name]
         if "uses: Swatinem/rust-cache@v2" not in workflow or "shared-key: engine-ci" not in workflow:
             fail(f"{name} does not participate in the bounded shared Rust cache")

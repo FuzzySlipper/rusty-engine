@@ -114,6 +114,7 @@ fn init_rejects_a_symlinked_intermediate_parent_before_publication() {
 }
 
 #[test]
+#[ignore = "requires prepared Rules and renderer artifacts; scripts/verify-product-conformance.sh owns this integration proof"]
 fn check_discovers_nested_product_and_reports_missing_root() {
     let parent = TempDir::new("discovery");
     let product = parent.path().join("product");
@@ -337,6 +338,7 @@ fn discovery_rejects_a_symlinked_manifest_before_accepting_the_root() {
 }
 
 #[test]
+#[ignore = "requires prepared Rules and renderer artifacts; scripts/verify-product-conformance.sh owns this integration proof"]
 fn doctor_reports_the_complete_product_workflow_without_a_wrapper_claim() {
     let parent = TempDir::new("doctor");
     let product = parent.path().join("product");

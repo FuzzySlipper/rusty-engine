@@ -18,7 +18,7 @@ use runtime_mutation::{
     CompiledMutationCatalog, MutationBatch, MutationBatchId, MutationCausation, MutationDataError,
     MutationOperation, MutationOperationId, MutationProvenance,
 };
-use runtime_schedule::CompiledSystem;
+use runtime_schedule::{CompiledRuntimeSchedule, CompiledSystem, MAX_RUNTIME_SCHEDULE_SYSTEMS};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -29,6 +29,63 @@ pub const MAX_OBSERVERS: usize = 64;
 pub const MAX_TARGETS: usize = 256;
 pub const MAX_CANDIDATE_PAIRS: usize = 1_024;
 pub const MAX_AGGREGATE_ENTRIES: usize = 256;
+
+/// The fixed, bounded Engine capability plans retained by one generated
+/// Product Assembly. This is intentionally an aggregate of the named current
+/// mechanisms, not a registry or product-dispatch table.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoundStandardCapabilities {
+    observe_pairs: Vec<ObservePairsPlan>,
+}
+
+impl BoundStandardCapabilities {
+    /// Compiles every admitted Engine-owned schedule system once from the
+    /// immutable linked/schedule/mutation artifacts owned by Assembly. An
+    /// Engine target without a retained closed plan is rejected rather than
+    /// silently falling through to product dispatch. The compiled schedule
+    /// already bounds its total system count, and this aggregate applies the
+    /// same bound to the fixed-plan subset.
+    pub fn compile(
+        linked: &LinkedProductComposition,
+        schedule: &CompiledRuntimeSchedule,
+        mutations: &CompiledMutationCatalog,
+    ) -> Result<Self, ObservePairsError> {
+        let mut observe_pairs = Vec::new();
+        for phase in schedule.phases() {
+            for system in phase.systems() {
+                let binding = linked
+                    .capability_binding(system.capability().binding_index())
+                    .ok_or(ObservePairsError::UnknownSystemBinding)?;
+                if !matches!(binding.resolved_target(), LinkedCapabilityTarget::Engine(_)) {
+                    continue;
+                }
+                if system.capability().target() != OBSERVE_PAIRS_TARGET {
+                    return Err(ObservePairsError::UnsupportedEngineScheduleTarget {
+                        system_id: system.id().to_owned(),
+                        target: system.capability().target().to_owned(),
+                    });
+                }
+                if observe_pairs.len() >= MAX_RUNTIME_SCHEDULE_SYSTEMS {
+                    return Err(ObservePairsError::TooManyBoundPlans);
+                }
+                observe_pairs.push(ObservePairsPlan::compile(linked, system, mutations)?);
+            }
+        }
+        Ok(Self { observe_pairs })
+    }
+
+    pub fn observe_pairs(&self) -> &[ObservePairsPlan] {
+        &self.observe_pairs
+    }
+
+    pub fn into_observe_pairs(self) -> Vec<ObservePairsPlan> {
+        self.observe_pairs
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.observe_pairs.is_empty()
+    }
+}
 
 /// Rust-owned cross-language descriptor for the one currently admitted
 /// standard capability. It is intentionally a current contract, not a
@@ -80,6 +137,7 @@ pub struct ObservePairsObserverFacts {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObservePairsPlan {
+    system_id: String,
     observer_role: String,
     target_role: String,
     operation_binding: String,
@@ -191,6 +249,7 @@ impl ObservePairsPlan {
             return Err(ObservePairsError::OperationTypeMismatch);
         }
         Ok(Self {
+            system_id: system.id().to_owned(),
             observer_role: wire.observer_role,
             target_role: wire.target_role,
             operation_binding: wire.operation_binding.clone(),
@@ -227,6 +286,15 @@ impl ObservePairsPlan {
 
     pub fn operation_binding(&self) -> &str {
         &self.operation_binding
+    }
+
+    /// Confirms that an Assembly-retained plan is executing exactly the
+    /// compiled system that produced it; product adapters cannot reuse a plan
+    /// for another same-target schedule entry.
+    pub fn matches_system(&self, system: &CompiledSystem) -> bool {
+        self.system_id == system.id()
+            && system.capability().target() == OBSERVE_PAIRS_TARGET
+            && self.inspection.system_binding == system.capability().id()
     }
     pub fn operation_type(&self) -> &str {
         &self.operation_type
@@ -588,7 +656,12 @@ fn enforce(name: &'static str, received: usize, maximum: usize) -> Result<(), Ob
 
 #[derive(Debug)]
 pub enum ObservePairsError {
+    TooManyBoundPlans,
     UnknownSystemBinding,
+    UnsupportedEngineScheduleTarget {
+        system_id: String,
+        target: String,
+    },
     WrongSystemTarget,
     WrongSchedulePhase,
     WrongPlanKind,
@@ -676,6 +749,7 @@ mod tests {
 
     fn plan() -> ObservePairsPlan {
         ObservePairsPlan {
+            system_id: "observe-pairs".into(),
             observer_role: "product.observer".into(),
             target_role: "product.target".into(),
             operation_binding: "kernel.alert".into(),
@@ -786,6 +860,46 @@ mod tests {
             compiled.inspection().operation_owner,
             "stealth.product.kernel"
         );
+    }
+
+    #[test]
+    fn bound_capabilities_reject_an_engine_schedule_target_without_a_closed_plan() {
+        let composition = product_model::decode_compiled_composition(
+            br#"{
+              "product":"unsupported.engine",
+              "intentDescriptors":[],
+              "inputMap":[],
+              "schedule":[
+                {"phase":"input","mode":"append","systems":[]},
+                {"phase":"simulation","mode":"append","systems":[]},
+                {"phase":"consequences","mode":"append","systems":[]},
+                {"phase":"commit","mode":"append","systems":[]},
+                {"phase":"projection","mode":"append","systems":[{
+                  "id":"render-project","capability":"render.project","after":[],
+                  "reads":["entity-state.projection"],"writes":["render-frame.diff"],
+                  "cadence":{"everySteps":1,"offsetSteps":0},"payload":null
+                }]}
+              ],
+              "gameplayDefinitions":[],
+              "timelines":[],
+              "capabilityBindings":[{"id":"render.project","target":"engine.render.entity-project"}]
+            }"#,
+        )
+        .expect("composition");
+        let manifest_source = include_str!("../../../../fixtures/product-model/minimum.rusty.toml")
+            .replace("example.product", "unsupported.engine");
+        let manifest = product_model::decode_product_manifest(&manifest_source).expect("manifest");
+        let admitted = product_model::admit_checked_product_composition(&manifest, composition)
+            .expect("admission");
+        let linked =
+            product_model::link_admitted_product_composition(admitted, &[]).expect("linkage");
+        let schedule = CompiledRuntimeSchedule::compile(&linked).expect("schedule");
+
+        assert!(matches!(
+            BoundStandardCapabilities::compile(&linked, &schedule, &CompiledMutationCatalog::empty()),
+            Err(ObservePairsError::UnsupportedEngineScheduleTarget { system_id, target })
+                if system_id == "render-project" && target == "engine.render.entity-project"
+        ));
     }
 
     #[test]

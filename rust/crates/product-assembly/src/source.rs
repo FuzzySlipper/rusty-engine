@@ -1052,9 +1052,14 @@ fn render_runtime_product_source(
             ADMITTED_COMPILED_COMPOSITION,
             PRODUCT_RUNTIME_RESOURCES,
         );
-        let adapter =
+        let mut adapter =
             <crate::product_kernel_source::RustyProductRuntime as product_kernel::ProductKernelRuntimeDefinition>::build(resources)
                 .map_err(|error| format!("Product Runtime definition build: {error:?}"))?;
+        <crate::product_kernel_source::RustyProductRuntime as product_kernel::ProductKernelRuntimeDefinition>::bind_standard_capabilities(
+            &mut adapter,
+            standard_capabilities,
+        )
+        .map_err(|error| format!("Product Runtime definition standard capability binding: {error}"))?;
 "#
     } else {
         "        let adapter = EmptyProductAdapter::new();\n"
@@ -1151,6 +1156,19 @@ fn render_runtime_product_source(
 "#
     } else {
         "        let mutation = runtime_mutation::CompiledMutationCatalog::empty();\n"
+    };
+    let standard_capabilities = if has_kernel {
+        r#"        let schedule = runtime_schedule::CompiledRuntimeSchedule::compile(&linked)
+            .map_err(|error| format!("schedule compilation: {error}"))?;
+        let standard_capabilities = product_kernel::runtime_standard_capabilities::BoundStandardCapabilities::compile(
+            &linked,
+            &schedule,
+            &mutation,
+        )
+        .map_err(|error| format!("standard capability compilation: {error}"))?;
+"#
+    } else {
+        "        let schedule = runtime_schedule::CompiledRuntimeSchedule::compile(&linked)\n            .map_err(|error| format!(\"schedule compilation: {error}\"))?;\n"
     };
     let mut source = r#"use std::fmt::Debug;
 
@@ -1302,11 +1320,11 @@ impl GeneratedProductDevRuntime {
         )
         .map_err(|error| format!("composition linkage: {error}"))?;
 __MUTATION_CATALOG__
+__STANDARD_CAPABILITIES__
         let inputs = RuntimeCompositionInputs::new(
             runtime_input::CompiledInputMappings::compile(&linked)
                 .map_err(|error| format!("input compilation: {error}"))?,
-            runtime_schedule::CompiledRuntimeSchedule::compile(&linked)
-                .map_err(|error| format!("schedule compilation: {error}"))?,
+            schedule,
             runtime_timeline::CompiledTimelineCatalog::compile(&linked)
                 .map_err(|error| format!("timeline compilation: {error}"))?,
             mutation,
@@ -1593,6 +1611,7 @@ pub fn run(port: u16) {
     .replace("__KERNEL_VALIDATION__", kernel_validation)
     .replace("__ADAPTER_CONSTRUCTION__", adapter_construction)
     .replace("__MUTATION_CATALOG__", mutation_catalog)
+    .replace("__STANDARD_CAPABILITIES__", standard_capabilities)
     .replace("__BUNDLE_ENTRIES__", bundle_entries);
     let start_marker = "__EMPTY_ADAPTER_START__";
     let end_marker = "__EMPTY_ADAPTER_END__";

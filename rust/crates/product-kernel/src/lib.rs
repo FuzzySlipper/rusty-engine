@@ -34,8 +34,9 @@ pub use declaration::{
     ProductKernelMigrationContract, ProductKernelMigrationDescriptor, ProductKernelOwner,
     ProductKernelRuntimeDefinition, ProductKernelRuntimeMutationDescriptor,
     ProductKernelRuntimeSelection, ProductKernelSchemaContract, ProductKernelSchemaDescriptor,
-    ProductKernelSelection, ProductRuntimeResource, ProductRuntimeResources,
-    MAX_PRODUCT_KERNEL_CONTRACT_TEXT_BYTES, MAX_PRODUCT_KERNEL_IDENTITY_BYTES,
+    ProductKernelSelection, ProductKernelStandardCapabilityBindError, ProductRuntimeResource,
+    ProductRuntimeResources, MAX_PRODUCT_KERNEL_CONTRACT_TEXT_BYTES,
+    MAX_PRODUCT_KERNEL_IDENTITY_BYTES,
 };
 pub use execution::{
     render_product_kernel_execution_arms, validate_product_kernel_execution,
@@ -51,6 +52,7 @@ pub use product_model::{
 pub use render::{render_contract_json, render_contract_typescript};
 #[cfg(test)]
 pub(crate) use render::{render_contract_json_unchecked, render_contract_typescript_unchecked};
+pub use runtime_standard_capabilities;
 
 #[cfg(test)]
 mod tests;

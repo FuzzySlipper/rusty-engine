@@ -21,7 +21,7 @@ use runtime_ui::{RuntimeUiProjection, RuntimeUiProjectionEnvelope};
 use serde::Serialize;
 
 use crate::{
-    adapter::{ProductRuntimeAdapter, ProductRuntimeUi},
+    adapter::{ProductRuntimeAdapter, ProductRuntimeUi, MAX_PRODUCT_RUNTIME_TIMELINE_REQUESTS},
     error::{RuntimeCompositionBindError, RuntimeCompositionError},
 };
 
@@ -662,6 +662,21 @@ where
         let mut schedule_outputs = Vec::new();
         schedule_outputs.extend(self.execute_phase(phases.input_snapshot())?);
         schedule_outputs.extend(self.execute_phase(phases.schedule())?);
+
+        let timeline_requests = self
+            .adapter
+            .prepare_timeline(admission.token().step())
+            .map_err(RuntimeCompositionError::Adapter)?;
+        if timeline_requests.len() > MAX_PRODUCT_RUNTIME_TIMELINE_REQUESTS {
+            return Err(RuntimeCompositionError::Timeline(
+                runtime_timeline::RuntimeTimelineError::BoundsExceeded("product timeline requests"),
+            ));
+        }
+        self.timeline
+            .as_mut()
+            .ok_or(RuntimeCompositionError::NotStarted)?
+            .schedule_batch(&self.lifecycle, phases.timeline(), timeline_requests)
+            .map_err(RuntimeCompositionError::Timeline)?;
 
         let releases = self
             .timeline

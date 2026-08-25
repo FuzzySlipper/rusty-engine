@@ -157,6 +157,41 @@ fn equal_deadlines_release_by_lane_insertion_then_operation_identity() {
 }
 
 #[test]
+fn schedule_batch_rejects_live_and_candidate_duplicates_without_changing_lane_state() {
+    let (lifecycle, mut timeline, token) = setup();
+    let before = timeline.readout();
+    assert!(matches!(
+        timeline.schedule_batch(
+            &lifecycle,
+            token,
+            vec![
+                operation(7, 0, TimelineRecurrence::Once),
+                operation(7, 0, TimelineRecurrence::Once),
+            ],
+        ),
+        Err(RuntimeTimelineError::OperationIdentityInUse(identity)) if identity.value() == 7
+    ));
+    assert_eq!(timeline.readout(), before);
+
+    timeline
+        .schedule(&lifecycle, token, operation(9, 0, TimelineRecurrence::Once))
+        .expect("live operation");
+    let before_live_duplicate = timeline.readout();
+    assert!(matches!(
+        timeline.schedule_batch(
+            &lifecycle,
+            token,
+            vec![
+                operation(10, 0, TimelineRecurrence::Once),
+                operation(9, 0, TimelineRecurrence::Once),
+            ],
+        ),
+        Err(RuntimeTimelineError::OperationIdentityInUse(identity)) if identity.value() == 9
+    ));
+    assert_eq!(timeline.readout(), before_live_duplicate);
+}
+
+#[test]
 fn finite_recurrence_uses_admitted_steps_and_one_bounded_backlog_occurrence() {
     let (mut lifecycle, mut timeline, token) = setup();
     timeline

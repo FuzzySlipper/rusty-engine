@@ -526,6 +526,40 @@ impl RuntimeTimeline {
         self.schedule_inert(spec)
     }
 
+    /// Atomically enqueues one bounded product-owned request batch at the
+    /// current Timeline boundary. Existing state and every readout counter
+    /// remain unchanged if a request duplicates a live/candidate identity or
+    /// fails any static-template, due-step, or capacity validation.
+    pub fn schedule_batch(
+        &mut self,
+        lifecycle: &RuntimeLifecycle,
+        token: RuntimePhaseToken,
+        specs: Vec<TimelineOperationSpec>,
+    ) -> Result<Vec<TimelineOperationReceipt>, RuntimeTimelineError> {
+        let current = self.validate_token(lifecycle, token)?;
+        self.require_not_disposed()?;
+        if specs.len() > MAX_TIMELINE_RELEASE_PREFIX {
+            return Err(RuntimeTimelineError::BoundsExceeded("schedule batch"));
+        }
+        let original = self.state.clone();
+        let result = specs
+            .into_iter()
+            .map(|spec| {
+                if spec.due_step() < current {
+                    return Err(RuntimeTimelineError::DueStepBeforeCurrent {
+                        current,
+                        due: spec.due_step(),
+                    });
+                }
+                self.schedule_inert(spec)
+            })
+            .collect::<Result<Vec<_>, _>>();
+        if result.is_err() {
+            self.state = original;
+        }
+        result
+    }
+
     /// Admits queue data without re-entering a lifecycle phase. The operation
     /// remains inert until [`Self::release_due`] validates an exact current
     /// Timeline token.

@@ -4,11 +4,17 @@ use runtime_input::{InputFrame, RuntimeIntentEnvelope};
 use runtime_lifecycle::{RuntimeLifecycle, RuntimePhaseToken, SimulationStep};
 use runtime_mutation::{MutationAuthority, MutationBatch, MutationPlanner};
 use runtime_schedule::ScheduleSystemInvocation;
-use runtime_timeline::TimelineRelease;
+use runtime_timeline::{TimelineOperationSpec, TimelineRelease};
 use serde::Serialize;
 
 /// Maximum UI streams a product can publish in one simulation step.
 pub const MAX_PRODUCT_RUNTIME_UI_OUTPUTS: usize = 64;
+
+/// Maximum product-owned timeline requests admitted at one Timeline boundary.
+/// It is deliberately the same existing release-prefix bound so an adapter
+/// cannot create an unbounded per-step staging surface.
+pub const MAX_PRODUCT_RUNTIME_TIMELINE_REQUESTS: usize =
+    runtime_timeline::MAX_TIMELINE_RELEASE_PREFIX;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProductRuntimeOutputError {
@@ -144,6 +150,17 @@ pub trait ProductRuntimeAdapter {
         lifecycle: &RuntimeLifecycle,
         token: RuntimePhaseToken,
     ) -> Result<Self::ScheduleOutput, Self::Error>;
+
+    /// Returns inert, bounded timeline operation requests for the current
+    /// admitted step. Runtime Composition validates and atomically enqueues
+    /// them with the exact Timeline phase token before release; the adapter
+    /// cannot reach into the timeline lane or install a callback.
+    fn prepare_timeline(
+        &mut self,
+        _step: SimulationStep,
+    ) -> Result<Vec<TimelineOperationSpec>, Self::Error> {
+        Ok(Vec::new())
+    }
 
     /// Receives immutable timeline releases before consequence/commit systems.
     fn on_timeline_releases(&mut self, releases: &TimelineRelease) -> Result<(), Self::Error>;
