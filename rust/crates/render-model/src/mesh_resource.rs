@@ -285,6 +285,246 @@ pub fn mesh_resource_content_hash(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
+/// Identifies one of the streams in a packed mesh resource for decode
+/// diagnostics. The stream order itself is fixed by the resource encoding;
+/// offsets in the admitted descriptor select the exact byte range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeshResourceStreamKind {
+    Positions,
+    Normals,
+    Uvs,
+    Colors,
+    Indices,
+}
+
+/// Decodes one admitted resource-backed payload into an owned inline payload.
+///
+/// The resource descriptor is validated again before any stream is read. The
+/// supplied bytes must be the complete content-addressed resource named by
+/// the descriptor, including its 16-byte header. No host, filesystem, or
+/// resolver is involved here; callers decide where admitted bytes come from.
+/// All decoded vectors remain local until the complete inline descriptor also
+/// validates, so malformed input cannot produce a partially usable payload.
+pub fn decode_mesh_resource_payload(
+    payload: &MeshPayloadDescriptor,
+    bytes: &[u8],
+) -> Result<MeshPayloadDescriptor, MeshResourceError> {
+    payload
+        .validate()
+        .map_err(|source| MeshResourceError::InvalidResourcePayload { source })?;
+
+    let MeshPayloadSource::Resource {
+        resource,
+        content_hash,
+        byte_length,
+        encoding,
+        positions_byte_offset,
+        normals_byte_offset,
+        uvs_byte_offset,
+        colors_byte_offset,
+        indices_byte_offset,
+    } = &payload.source
+    else {
+        return Err(MeshResourceError::PayloadNotResource);
+    };
+
+    let actual_byte_length = u32::try_from(bytes.len())
+        .map_err(|_| MeshResourceError::ResourceTooLarge { bytes: bytes.len() })?;
+    if actual_byte_length != *byte_length {
+        return Err(MeshResourceError::ResourceByteLengthMismatch {
+            expected: *byte_length,
+            actual: bytes.len(),
+        });
+    }
+
+    // Repeat the identity check here rather than relying only on descriptor
+    // validation so this function remains safe if its admission ordering is
+    // changed later.
+    validate_mesh_resource_identity(resource, content_hash)?;
+    validate_mesh_resource_header(bytes)?;
+    let actual_hash = mesh_resource_content_hash(bytes);
+    if actual_hash != *content_hash {
+        return Err(MeshResourceError::ContentHashMismatch {
+            expected: content_hash.clone(),
+            actual: actual_hash,
+        });
+    }
+
+    let header_encoding =
+        encoding_for_magic(&bytes[..8]).ok_or(MeshResourceError::InvalidHeader)?;
+    if header_encoding != *encoding {
+        return Err(MeshResourceError::ResourceEncodingMismatch {
+            descriptor: *encoding,
+            header: header_encoding,
+        });
+    }
+
+    let vertex_count = payload.layout.vertex_count;
+    let index_count = payload.layout.index_count;
+    let positions = decode_f32_stream(
+        bytes,
+        *positions_byte_offset,
+        vertex_count,
+        3,
+        MeshResourceStreamKind::Positions,
+        *byte_length,
+    )?;
+    let normals = decode_f32_stream(
+        bytes,
+        *normals_byte_offset,
+        vertex_count,
+        3,
+        MeshResourceStreamKind::Normals,
+        *byte_length,
+    )?;
+    let uvs = uvs_byte_offset
+        .map(|offset| {
+            decode_f32_stream(
+                bytes,
+                offset,
+                vertex_count,
+                2,
+                MeshResourceStreamKind::Uvs,
+                *byte_length,
+            )
+        })
+        .transpose()?;
+    let colors = colors_byte_offset
+        .map(|offset| {
+            decode_f32_stream(
+                bytes,
+                offset,
+                vertex_count,
+                4,
+                MeshResourceStreamKind::Colors,
+                *byte_length,
+            )
+        })
+        .transpose()?;
+    let indices = decode_u32_stream(
+        bytes,
+        *indices_byte_offset,
+        index_count,
+        MeshResourceStreamKind::Indices,
+        *byte_length,
+    )?;
+
+    let decoded = MeshPayloadDescriptor {
+        layout: payload.layout.clone(),
+        groups: payload.groups.clone(),
+        bounds: payload.bounds,
+        source: MeshPayloadSource::Inline {
+            positions,
+            normals,
+            uvs,
+            colors,
+            indices,
+        },
+        provenance: payload.provenance,
+    };
+    decoded
+        .validate()
+        .map_err(|source| MeshResourceError::DecodedPayloadInvalid { source })?;
+    Ok(decoded)
+}
+
+fn encoding_for_magic(magic: &[u8]) -> Option<MeshResourceEncoding> {
+    match magic {
+        value if value == MESH_RESOURCE_MAGIC => Some(MeshResourceEncoding::PackedStreamsLeV1),
+        value if value == MESH_RESOURCE_MAGIC_V2 => Some(MeshResourceEncoding::PackedStreamsLeV2),
+        value if value == MESH_RESOURCE_MAGIC_V3 => Some(MeshResourceEncoding::PackedStreamsLeV3),
+        _ => None,
+    }
+}
+
+fn decode_f32_stream(
+    bytes: &[u8],
+    offset: u32,
+    vertex_count: u32,
+    components: usize,
+    stream: MeshResourceStreamKind,
+    byte_length: u32,
+) -> Result<Vec<f32>, MeshResourceError> {
+    let value_count = usize::try_from(vertex_count)
+        .ok()
+        .and_then(|count| count.checked_mul(components))
+        .ok_or(MeshResourceError::DecodeStreamOutOfRange {
+            stream,
+            offset,
+            byte_length,
+        })?;
+    let range = decode_stream_range(bytes, offset, value_count, stream, byte_length)?;
+    let mut values = Vec::with_capacity(value_count);
+    for (index, chunk) in bytes[range].chunks_exact(4).enumerate() {
+        let value = f32::from_le_bytes(chunk.try_into().expect("chunks_exact guarantees width"));
+        if !value.is_finite() {
+            return Err(MeshResourceError::NonFiniteStreamValue { stream, index });
+        }
+        values.push(value);
+    }
+    Ok(values)
+}
+
+fn decode_u32_stream(
+    bytes: &[u8],
+    offset: u32,
+    index_count: u32,
+    stream: MeshResourceStreamKind,
+    byte_length: u32,
+) -> Result<Vec<u32>, MeshResourceError> {
+    let value_count =
+        usize::try_from(index_count).map_err(|_| MeshResourceError::DecodeStreamOutOfRange {
+            stream,
+            offset,
+            byte_length,
+        })?;
+    let range = decode_stream_range(bytes, offset, value_count, stream, byte_length)?;
+    let mut values = Vec::with_capacity(value_count);
+    for chunk in bytes[range].chunks_exact(4) {
+        values.push(u32::from_le_bytes(
+            chunk.try_into().expect("chunks_exact guarantees width"),
+        ));
+    }
+    Ok(values)
+}
+
+fn decode_stream_range(
+    bytes: &[u8],
+    offset: u32,
+    value_count: usize,
+    stream: MeshResourceStreamKind,
+    byte_length: u32,
+) -> Result<std::ops::Range<usize>, MeshResourceError> {
+    let start = usize::try_from(offset).map_err(|_| MeshResourceError::DecodeStreamOutOfRange {
+        stream,
+        offset,
+        byte_length,
+    })?;
+    let byte_count =
+        value_count
+            .checked_mul(4)
+            .ok_or(MeshResourceError::DecodeStreamOutOfRange {
+                stream,
+                offset,
+                byte_length,
+            })?;
+    let end = start
+        .checked_add(byte_count)
+        .ok_or(MeshResourceError::DecodeStreamOutOfRange {
+            stream,
+            offset,
+            byte_length,
+        })?;
+    if end > bytes.len() {
+        return Err(MeshResourceError::DecodeStreamOutOfRange {
+            stream,
+            offset,
+            byte_length,
+        });
+    }
+    Ok(start..end)
+}
+
 fn mesh_stream_bytes(payload: &MeshPayloadDescriptor) -> Option<usize> {
     let vertices = usize::try_from(payload.layout.vertex_count).ok()?;
     let indices = usize::try_from(payload.layout.index_count).ok()?;
@@ -373,6 +613,10 @@ pub enum MeshResourceError {
         index: usize,
         source: MeshDescriptorError,
     },
+    InvalidResourcePayload {
+        source: MeshDescriptorError,
+    },
+    PayloadNotResource,
     InvalidContentHash,
     InvalidResourceIdentity,
     InvalidHeader,
@@ -384,6 +628,26 @@ pub enum MeshResourceError {
     ContentHashMismatch {
         expected: String,
         actual: String,
+    },
+    ResourceByteLengthMismatch {
+        expected: u32,
+        actual: usize,
+    },
+    ResourceEncodingMismatch {
+        descriptor: MeshResourceEncoding,
+        header: MeshResourceEncoding,
+    },
+    DecodeStreamOutOfRange {
+        stream: MeshResourceStreamKind,
+        offset: u32,
+        byte_length: u32,
+    },
+    NonFiniteStreamValue {
+        stream: MeshResourceStreamKind,
+        index: usize,
+    },
+    DecodedPayloadInvalid {
+        source: MeshDescriptorError,
     },
 }
 
@@ -570,5 +834,145 @@ mod tests {
         ));
         packed.payloads[0].validate().unwrap();
         packed.resources[0].validate().unwrap();
+    }
+
+    fn assert_decode_round_trip(original: MeshPayloadDescriptor) {
+        let packed = pack_mesh_resources(std::slice::from_ref(&original), 1024).unwrap();
+        let decoded =
+            decode_mesh_resource_payload(&packed.payloads[0], &packed.resources[0].bytes).unwrap();
+        assert_eq!(decoded, original);
+
+        let repacked = pack_mesh_resources(std::slice::from_ref(&decoded), 1024).unwrap();
+        assert_eq!(repacked.resources, packed.resources);
+    }
+
+    fn refresh_resource_identity(payload: &mut MeshPayloadDescriptor, bytes: &[u8]) {
+        let MeshPayloadSource::Resource {
+            resource,
+            content_hash,
+            byte_length,
+            ..
+        } = &mut payload.source
+        else {
+            unreachable!("test payload is resource-backed")
+        };
+        *content_hash = mesh_resource_content_hash(bytes);
+        *resource = format!("mesh-resource/{}", &content_hash["sha256:".len()..]);
+        *byte_length = u32::try_from(bytes.len()).unwrap();
+    }
+
+    #[test]
+    fn resource_decode_round_trips_v1_v2_and_v3_streams() {
+        assert_decode_round_trip(triangle(0.0));
+        assert_decode_round_trip(textured_triangle(2.0));
+        assert_decode_round_trip(colored_triangle(4.0));
+    }
+
+    #[test]
+    fn resource_decode_rejects_descriptor_hash_header_and_length_drift() {
+        let packed = pack_mesh_resources(&[triangle(0.0)], 1024).unwrap();
+
+        let mut hash_drift = packed.payloads[0].clone();
+        let mut tampered = packed.resources[0].bytes.clone();
+        tampered[16] ^= 1;
+        assert!(matches!(
+            decode_mesh_resource_payload(&hash_drift, &tampered),
+            Err(MeshResourceError::ContentHashMismatch { .. })
+        ));
+
+        let mut header_drift = packed.payloads[0].clone();
+        let mut wrong_header = packed.resources[0].bytes.clone();
+        wrong_header[..8].copy_from_slice(&MESH_RESOURCE_MAGIC_V2);
+        refresh_resource_identity(&mut header_drift, &wrong_header);
+        assert!(matches!(
+            decode_mesh_resource_payload(&header_drift, &wrong_header),
+            Err(MeshResourceError::ResourceEncodingMismatch {
+                descriptor: MeshResourceEncoding::PackedStreamsLeV1,
+                header: MeshResourceEncoding::PackedStreamsLeV2,
+            })
+        ));
+
+        let mut truncated = packed.resources[0].bytes.clone();
+        truncated.pop();
+        assert!(matches!(
+            decode_mesh_resource_payload(&packed.payloads[0], &truncated),
+            Err(MeshResourceError::ResourceByteLengthMismatch { .. })
+        ));
+
+        let mut invalid_header = packed.resources[0].bytes.clone();
+        invalid_header[..8].copy_from_slice(b"NOTMESH!");
+        refresh_resource_identity(&mut hash_drift, &invalid_header);
+        assert!(matches!(
+            decode_mesh_resource_payload(&hash_drift, &invalid_header),
+            Err(MeshResourceError::InvalidHeader)
+        ));
+    }
+
+    #[test]
+    fn resource_decode_rejects_offset_misalignment_and_stream_bounds() {
+        let packed = pack_mesh_resources(&[triangle(0.0)], 1024).unwrap();
+
+        let mut misaligned = packed.payloads[0].clone();
+        let MeshPayloadSource::Resource {
+            positions_byte_offset,
+            ..
+        } = &mut misaligned.source
+        else {
+            unreachable!()
+        };
+        *positions_byte_offset += 1;
+        assert!(matches!(
+            decode_mesh_resource_payload(&misaligned, &packed.resources[0].bytes),
+            Err(MeshResourceError::InvalidResourcePayload {
+                source: MeshDescriptorError::InvalidResourceOffset { .. },
+            })
+        ));
+
+        let mut out_of_bounds = packed.payloads[0].clone();
+        let byte_length = match &out_of_bounds.source {
+            MeshPayloadSource::Resource { byte_length, .. } => *byte_length,
+            _ => unreachable!(),
+        };
+        let MeshPayloadSource::Resource {
+            positions_byte_offset,
+            ..
+        } = &mut out_of_bounds.source
+        else {
+            unreachable!()
+        };
+        *positions_byte_offset = byte_length;
+        assert!(matches!(
+            decode_mesh_resource_payload(&out_of_bounds, &packed.resources[0].bytes),
+            Err(MeshResourceError::InvalidResourcePayload {
+                source: MeshDescriptorError::ResourceStreamOutOfRange { .. },
+            })
+        ));
+    }
+
+    #[test]
+    fn resource_decode_rejects_decoded_indices_outside_the_declared_vertex_range() {
+        let packed = pack_mesh_resources(&[triangle(0.0)], 1024).unwrap();
+        let mut bytes = packed.resources[0].bytes.clone();
+        let MeshPayloadSource::Resource {
+            indices_byte_offset,
+            ..
+        } = &packed.payloads[0].source
+        else {
+            unreachable!()
+        };
+        let offset = usize::try_from(*indices_byte_offset).unwrap();
+        bytes[offset..offset + 4].copy_from_slice(&99_u32.to_le_bytes());
+
+        let mut descriptor = packed.payloads[0].clone();
+        refresh_resource_identity(&mut descriptor, &bytes);
+        assert!(matches!(
+            decode_mesh_resource_payload(&descriptor, &bytes),
+            Err(MeshResourceError::DecodedPayloadInvalid {
+                source: MeshDescriptorError::IndexOutOfRange {
+                    index: 99,
+                    vertex_count: 3,
+                },
+            })
+        ));
     }
 }
