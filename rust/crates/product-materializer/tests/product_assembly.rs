@@ -529,11 +529,20 @@ fn test_assets() -> EngineAssets {
 fn toolchain() -> MaterializationToolchain {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     MaterializationToolchain::new(
-        "/usr/bin/node",
+        node_from_path(),
         workspace.join("rules/node_modules/typescript/lib/typescript.js"),
         workspace.join("render/node_modules/vite/bin/vite.js"),
     )
     .with_temporary_parent(workspace.join("render"))
+}
+
+fn node_from_path() -> PathBuf {
+    let path = std::env::var_os("PATH").expect("PATH");
+    let executable = if cfg!(windows) { "node.exe" } else { "node" };
+    std::env::split_paths(&path)
+        .map(|directory| directory.join(executable))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| panic!("{executable} executable must be available on PATH"))
 }
 
 fn counter_capabilities() -> [ProductKernelCapabilityDescriptor; 1] {

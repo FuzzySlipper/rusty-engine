@@ -1935,6 +1935,7 @@ mod tests {
     #[test]
     fn permissioned_runner_denies_outside_reads_and_kills_output_overflow() {
         let temporary = tempfile::tempdir().expect("temporary");
+        let node = node_from_path();
         let denial = temporary.path().join("denial.mjs");
         fs::write(
             &denial,
@@ -1942,7 +1943,7 @@ mod tests {
         )
         .expect("denial script");
         let output = run_node(
-            Path::new("/usr/bin/node"),
+            &node,
             &denial,
             &[],
             temporary.path(),
@@ -1957,7 +1958,7 @@ mod tests {
         )
         .expect("flood script");
         let error = run_node(
-            Path::new("/usr/bin/node"),
+            &node,
             &flood,
             &[],
             temporary.path(),
@@ -1965,6 +1966,15 @@ mod tests {
         )
         .expect_err("output flood must fail");
         assert_eq!(error.diagnostic().code(), "MATERIALIZER_TOOL_OUTPUT_BOUNDS");
+    }
+
+    fn node_from_path() -> PathBuf {
+        let path = std::env::var_os("PATH").expect("PATH");
+        let executable = if cfg!(windows) { "node.exe" } else { "node" };
+        std::env::split_paths(&path)
+            .map(|directory| directory.join(executable))
+            .find(|candidate| candidate.is_file())
+            .unwrap_or_else(|| panic!("{executable} executable must be available on PATH"))
     }
 
     fn file_bytes(files: &[PublicationFile]) -> BTreeMap<String, Vec<u8>> {
@@ -2098,7 +2108,7 @@ product_bundle = "generated/product-bundle"
     fn toolchain() -> MaterializationToolchain {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
         MaterializationToolchain::new(
-            "/usr/bin/node",
+            node_from_path(),
             workspace.join("rules/node_modules/typescript/lib/typescript.js"),
             workspace.join("render/node_modules/vite/bin/vite.js"),
         )
@@ -2107,7 +2117,7 @@ product_bundle = "generated/product-bundle"
     fn plain_toolchain() -> MaterializationToolchain {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
         MaterializationToolchain::new(
-            "/usr/bin/node",
+            node_from_path(),
             workspace.join("rules/node_modules/typescript/lib/typescript.js"),
             workspace.join("render/node_modules/vite/bin/vite.js"),
         )
