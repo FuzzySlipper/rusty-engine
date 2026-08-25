@@ -2548,7 +2548,141 @@ fn patch_assembly_dependency_paths(assembly: &Path) -> Result<(), DesktopError> 
     }
     // The generated Assembly is itself a detached Cargo root. It is a source
     // input to this workspace, never a member of the Tauri workspace.
-    replace_regular_file_atomic(&path, output.as_bytes(), "RUSTY_DESKTOP_ASSEMBLY_CARGO")
+    replace_regular_file_atomic(&path, output.as_bytes(), "RUSTY_DESKTOP_ASSEMBLY_CARGO")?;
+    patch_kernel_package_dependency_paths(assembly, &engine)
+}
+
+/// The Product Assembly package is copied into a persistent desktop build
+/// workspace, so its admitted Product Kernel package closure moves with it.
+/// Assembly has already made that closure explicit; this second relocation
+/// only replaces the fixed Engine facade path for each copied package. Local
+/// Product Kernel paths remain exactly as Assembly admitted them.
+fn patch_kernel_package_dependency_paths(
+    assembly: &Path,
+    engine: &Path,
+) -> Result<(), DesktopError> {
+    let kernel = assembly.join("kernel");
+    match fs::symlink_metadata(&kernel) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(DesktopError::new(
+                "RUSTY_DESKTOP_KERNEL_CARGO",
+                kernel.display().to_string(),
+                "copied Product Kernel lane must be one regular directory",
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(io_error(
+                "RUSTY_DESKTOP_KERNEL_CARGO",
+                kernel.display().to_string(),
+                error,
+            ));
+        }
+    }
+
+    // `collect_tree` supplies the owned, bounded, no-symlink copied closure.
+    // Do not walk directories independently here: Cargo manifests outside
+    // that closure are not desktop build inputs.
+    let files = collect_tree(&kernel, "RUSTY_DESKTOP_KERNEL_CARGO")?;
+    for relative in files
+        .keys()
+        .filter(|relative| relative.as_str() == "Cargo.toml" || relative.ends_with("/Cargo.toml"))
+    {
+        patch_kernel_manifest_dependency_path(&kernel, relative, engine)?;
+    }
+    Ok(())
+}
+
+fn patch_kernel_manifest_dependency_path(
+    kernel: &Path,
+    relative: &str,
+    engine: &Path,
+) -> Result<(), DesktopError> {
+    let path = kernel.join(relative);
+    let text = String::from_utf8(read_regular_file(
+        &path,
+        "RUSTY_DESKTOP_KERNEL_CARGO",
+        MAX_DESKTOP_TEXT_BYTES,
+    )?)
+    .map_err(|error| {
+        DesktopError::new(
+            "RUSTY_DESKTOP_KERNEL_CARGO",
+            path.display().to_string(),
+            error.to_string(),
+        )
+    })?;
+    let document: toml::Value = toml::from_str(&text).map_err(|error| {
+        DesktopError::new(
+            "RUSTY_DESKTOP_KERNEL_CARGO",
+            path.display().to_string(),
+            format!("invalid admitted Product Kernel Cargo manifest: {error}"),
+        )
+    })?;
+    let package_directory = path.parent().ok_or_else(|| {
+        DesktopError::new(
+            "RUSTY_DESKTOP_KERNEL_CARGO",
+            path.display().to_string(),
+            "copied Product Kernel Cargo manifest must have a package directory",
+        )
+    })?;
+    let engine_dependency = document
+        .get("dependencies")
+        .and_then(toml::Value::as_table)
+        .and_then(|dependencies| dependencies.get("rusty-engine"))
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| {
+            DesktopError::new(
+                "RUSTY_DESKTOP_KERNEL_CARGO",
+                path.display().to_string(),
+                "copied Product Kernel Cargo manifest must retain [dependencies.rusty-engine]",
+            )
+        })?;
+    if engine_dependency.len() != 1
+        || engine_dependency
+            .get("path")
+            .and_then(toml::Value::as_str)
+            .is_none()
+    {
+        return Err(DesktopError::new(
+            "RUSTY_DESKTOP_KERNEL_CARGO",
+            path.display().to_string(),
+            "[dependencies.rusty-engine] must remain the exact fixed path dependency",
+        ));
+    }
+    let engine_path = relative_path(package_directory, &engine.join("rust/crates/rusty-engine"))?;
+    let rewritten = rewrite_fixed_engine_dependency_path(&text, &engine_path).ok_or_else(|| {
+        DesktopError::new(
+            "RUSTY_DESKTOP_KERNEL_CARGO",
+            path.display().to_string(),
+            "[dependencies.rusty-engine].path must remain one standalone path assignment",
+        )
+    })?;
+    replace_regular_file_atomic(&path, rewritten.as_bytes(), "RUSTY_DESKTOP_KERNEL_CARGO")
+}
+
+fn rewrite_fixed_engine_dependency_path(source: &str, engine_path: &str) -> Option<String> {
+    let mut output = String::with_capacity(source.len() + engine_path.len());
+    let mut in_engine_dependency = false;
+    let mut replaced = false;
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_engine_dependency = trimmed == "[dependencies.rusty-engine]";
+        }
+        if in_engine_dependency && !replaced && trimmed.starts_with("path =") {
+            let indentation = line.len() - line.trim_start().len();
+            output.push_str(&line[..indentation]);
+            output.push_str("path = ");
+            output.push_str(&rust_string(engine_path));
+            output.push('\n');
+            replaced = true;
+        } else {
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+    replaced.then_some(output)
 }
 
 fn engine_checkout_root() -> PathBuf {
@@ -3340,6 +3474,70 @@ mod tests {
         assert!(!patched.contains("stale-kernel"));
         assert!(patched.contains("rusty-engine = { path = \""));
         assert!(patched.contains("product-kernel = { path = \""));
+    }
+
+    #[test]
+    fn assembly_dependency_patch_relocates_nested_kernel_engine_paths_without_touching_local_paths()
+    {
+        let directory = tempfile::tempdir().unwrap();
+        let assembly = directory.path().join("product-assembly");
+        let kernel = assembly.join("kernel");
+        let local = kernel.join("runtime");
+        fs::create_dir_all(&local).unwrap();
+        fs::write(
+            assembly.join("Cargo.toml"),
+            "[dependencies]\nrusty-engine = { path = \"stale-engine\" }\nproduct-kernel = { path = \"stale-kernel\" }\n",
+        )
+        .unwrap();
+        fs::write(
+            kernel.join("Cargo.toml"),
+            "[package]\nname = \"kernel-root\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies.runtime]\npath = \"runtime\"\n\n[dependencies.rusty-engine]\npath = \"../../../../rusty-engine/rust/crates/rusty-engine\"\n",
+        )
+        .unwrap();
+        fs::write(
+            local.join("Cargo.toml"),
+            "[package]\nname = \"kernel-runtime\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies.rusty-engine]\npath = \"../../../../../rusty-engine/rust/crates/rusty-engine\"\n",
+        )
+        .unwrap();
+
+        patch_assembly_dependency_paths(&assembly).unwrap();
+
+        let root: toml::Value =
+            toml::from_str(&fs::read_to_string(kernel.join("Cargo.toml")).unwrap()).unwrap();
+        let root_dependencies = root
+            .get("dependencies")
+            .and_then(toml::Value::as_table)
+            .unwrap();
+        assert_eq!(
+            root_dependencies
+                .get("runtime")
+                .and_then(toml::Value::as_table)
+                .and_then(|value| value.get("path"))
+                .and_then(toml::Value::as_str),
+            Some("runtime")
+        );
+        let engine_root = engine_checkout_root().join("rust/crates/rusty-engine");
+        assert_eq!(
+            root_dependencies
+                .get("rusty-engine")
+                .and_then(toml::Value::as_table)
+                .and_then(|value| value.get("path"))
+                .and_then(toml::Value::as_str),
+            Some(relative_path(&kernel, &engine_root).unwrap().as_str())
+        );
+
+        let nested: toml::Value =
+            toml::from_str(&fs::read_to_string(local.join("Cargo.toml")).unwrap()).unwrap();
+        assert_eq!(
+            nested
+                .get("dependencies")
+                .and_then(toml::Value::as_table)
+                .and_then(|dependencies| dependencies.get("rusty-engine"))
+                .and_then(toml::Value::as_table)
+                .and_then(|value| value.get("path"))
+                .and_then(toml::Value::as_str),
+            Some(relative_path(&local, &engine_root).unwrap().as_str())
+        );
     }
 
     #[test]
