@@ -4,6 +4,11 @@ const root = new URL('../', import.meta.url);
 const packages = new Map([
   ['developer-command-client', { dependencies: [], peers: [], preparesGitConsumer: true }],
   ['application-host', { dependencies: [], peers: [], preparesGitConsumer: false }],
+  ['product-browser-host', {
+    dependencies: [],
+    peers: ['@rusty-engine/application-host'],
+    preparesGitConsumer: true,
+  }],
   ['render-contracts', { dependencies: [], peers: [], preparesGitConsumer: true }],
   ['render-projection', {
     dependencies: [],
@@ -59,6 +64,23 @@ if (developerCommandArtifact.name !== '@rusty-engine/developer-command-client') 
 for (const file of developerCommandArtifact.files) {
   readFileSync(new URL(`artifacts/developer-command-client/${file}`, root), 'utf8');
 }
+const productBrowserArtifact = JSON.parse(
+  readFileSync(new URL('artifacts/product-browser-host/package.json', root), 'utf8'),
+);
+if (productBrowserArtifact.name !== '@rusty-engine/product-browser-host') {
+  throw new Error('product browser host artifact must keep its public package identity');
+}
+for (const file of productBrowserArtifact.files) {
+  readFileSync(new URL(`artifacts/product-browser-host/${file}`, root), 'utf8');
+}
+const productBrowserRuntime = readFileSync(
+  new URL('artifacts/product-browser-host/product-browser-host.js', root),
+  'utf8',
+);
+if (productBrowserRuntime.split(/\r?\n/u).some((line) => /^\s*(?:import|export)\b/u.test(line)
+  && /['"]@rusty-engine\//u.test(line))) {
+  throw new Error('product browser host artifact leaked a bare Engine package import');
+}
 for (const file of ['index.js', 'index.d.ts', 'developer-command-client.d.ts', 'developer-command-client.js', 'developer-command-shell.d.ts', 'generated-developer-command-contract.js', 'generated-standard-host-wire.js']) {
   const source = readFileSync(new URL(`artifacts/application-host/${file}`, root), 'utf8');
   if (source.includes('@rusty-engine/developer-command-client')) {
@@ -80,7 +102,13 @@ assertKeys(
 if (applicationArtifact.name !== '@rusty-engine/application-host') {
   throw new Error('application-host artifact must own the sole public downstream package name');
 }
-for (const declaration of ['index.d.ts', 'application-host.d.ts', 'application-content.d.ts']) {
+for (const declaration of [
+  'index.d.ts',
+  'application-host.d.ts',
+  'application-content.d.ts',
+  'input-ingress.d.ts',
+  'ui-projection.d.ts',
+]) {
   const source = readFileSync(new URL(`artifacts/application-host/${declaration}`, root), 'utf8');
   if (/@rusty-engine\/(?:render|renderer)|\bthree\b|studio/iu.test(source)) {
     throw new Error(

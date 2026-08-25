@@ -31,6 +31,11 @@ const forbidden = [
   /getContext\s*\(/u,
   /querySelector[^\n]*canvas/iu,
   /test[-_ ]?hook/iu,
+  /requestAnimationFrame/iu,
+  /cancelAnimationFrame/iu,
+  /(?:window|document)\.addEventListener\s*\(\s*['"](?:keydown|keyup|mousemove|mousedown|mouseup|wheel|blur|pointerlockchange|gamepadconnected|gamepaddisconnected)['"]/iu,
+  /context\.(?:renderer|input)\b/iu,
+  /(?:setCameraPose|renderOnce|RustyApplicationCameraPose|pointerLockElement)/u,
 ];
 for (const pattern of forbidden) {
   assert(!pattern.test(typescript), `product playtest fixture crossed public boundary: ${String(pattern)}`);

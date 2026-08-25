@@ -28,6 +28,21 @@ import {
   validatePresentationAspectBounds,
   type RustyApplicationPresentationAspectBounds,
 } from './presentation-frame.js';
+import {
+  createRustyApplicationInputIngress,
+  type RustyApplicationInputPort,
+  type RustyApplicationManagedInputIngress,
+  type RustyApplicationRuntimeInputOptions,
+  type RustyApplicationRuntimeIdentity,
+  type RustyApplicationRuntimeIntentValue,
+} from './input-ingress.js';
+import {
+  createRustyApplicationUiProjection,
+  type RustyApplicationUiProjectionOptions,
+  type RustyApplicationUiProjectionPort,
+  type RustyApplicationUiProjectionReadout,
+  type RustyApplicationUiProjectionView,
+} from './ui-projection.js';
 
 export const RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION =
   'rusty_application_host.v1';
@@ -491,9 +506,20 @@ export interface RustyApplicationUiPort {
   readonly setInteractionMode: (mode: RustyApplicationInteractionMode) => void;
 }
 
+/** Mounted DOM UI can emit a claim, but cannot drain or bind the input lane. */
+export interface RustyApplicationUiIntentsPort {
+  readonly claim: (
+    intent: string,
+    value: RustyApplicationRuntimeIntentValue,
+  ) => void;
+}
+
 export interface RustyApplicationUiContext {
-  readonly renderer: RustyApplicationRendererPort;
   readonly ui: RustyApplicationUiPort;
+  /** Read-only current Product UI projection and subscription view. */
+  readonly projection?: RustyApplicationUiProjectionView;
+  /** Claim-only adapter for the shared ordered Runtime Composition input lane. */
+  readonly intents?: RustyApplicationUiIntentsPort;
 }
 
 export interface RustyApplicationUiOwner {
@@ -526,6 +552,8 @@ export interface RustyApplicationRendererOptions {
   readonly resolveParticleEntityPosition?: (
     entity: number,
   ) => readonly [number, number, number] | null;
+  /** Observe the one Engine-owned renderer cadence without creating another RAF. */
+  readonly onCadence?: (timeMs: number) => void;
 }
 
 export interface RustyApplicationLightingOptions {
@@ -556,6 +584,10 @@ export interface RustyApplicationHostOptions {
   readonly loadingLabel?: string;
   readonly failureLabel?: string;
   readonly initialInteractionMode?: RustyApplicationInteractionMode;
+  /** Optional browser input ingress. Omission leaves renderer controls and DOM capture disabled. */
+  readonly runtimeInput?: RustyApplicationRuntimeInputOptions;
+  /** Optional strict Product UI projection channel. */
+  readonly uiProjection?: RustyApplicationUiProjectionOptions;
 }
 
 export interface RustyApplicationHostReadout {
@@ -565,6 +597,7 @@ export interface RustyApplicationHostReadout {
   readonly pointerLocked: boolean;
   readonly resourceBytes: number;
   readonly resourceCount: number;
+  readonly uiProjection?: RustyApplicationUiProjectionReadout;
   readonly state: 'ready' | 'disposed';
 }
 
@@ -572,6 +605,10 @@ export interface RustyApplicationHost {
   readonly kind: 'rusty_application_host.v1';
   readonly renderer: RustyApplicationRendererPort;
   readonly ui: RustyApplicationUiPort;
+  /** Optional ordered physical-input and direct-UI-claim transport lane. */
+  readonly input?: RustyApplicationInputPort;
+  /** Trusted host/composition-root ingress for Rust Product UI projections. */
+  readonly uiProjection?: RustyApplicationUiProjectionPort;
   readonly readout: () => RustyApplicationHostReadout;
   readonly dispose: () => Promise<void>;
 }
@@ -632,6 +669,22 @@ async function mountRustyApplicationWithEnvironment(
     );
   }
 
+  const projectionBinding = options.uiProjection?.binding
+    ?? (options.uiProjection === undefined ? undefined : options.runtimeInput?.binding?.runtime);
+  const uiProjection = options.uiProjection === undefined
+    ? null
+    : createRustyApplicationUiProjection(
+      options.uiProjection.binding === undefined && projectionBinding !== undefined
+        ? { ...options.uiProjection, binding: projectionBinding }
+        : options.uiProjection,
+    );
+  const projectionView: RustyApplicationUiProjectionView | null = uiProjection === null
+    ? null
+    : Object.freeze({
+      current: uiProjection.current,
+      subscribe: uiProjection.subscribe,
+    });
+
   const document = root.ownerDocument;
   const layout = createLayout(
     document,
@@ -642,6 +695,7 @@ async function mountRustyApplicationWithEnvironment(
   root.dataset['rustyApplicationState'] = 'mounting';
 
   let surface: RendererSurface | null = null;
+  let input: RustyApplicationManagedInputIngress | null = null;
   let uiOwner: RustyApplicationUiOwner | null = null;
   let developerCommandShell: RustyDeveloperCommandShell | null = null;
   let removeListeners = (): void => undefined;
@@ -658,6 +712,7 @@ async function mountRustyApplicationWithEnvironment(
   let contentRevision = 0;
   let replacementPending = 0;
   let replacementQueue: Promise<void> = Promise.resolve();
+  let intents: RustyApplicationUiIntentsPort | null = null;
   const removePresentationResizeListener = installPresentationFrameSizing(
     root,
     layout.host,
@@ -681,9 +736,13 @@ async function mountRustyApplicationWithEnvironment(
     if (disposed) {
       throw new RustyApplicationHostError('disposed', 'Rusty Application Host is disposed');
     }
+    const changed = interactionMode !== mode;
     interactionMode = mode;
     layout.host.dataset['interactionMode'] = mode;
-    if (mode !== 'gameplay') releaseInput();
+    if (mode !== 'gameplay') {
+      releaseInput();
+      if (changed) input?.clear('interaction-mode-loss');
+    }
   };
   const focusGameplay = (): void => {
     if (interactionMode !== 'gameplay') return;
@@ -722,6 +781,9 @@ async function mountRustyApplicationWithEnvironment(
       ...(options.renderer?.pixelRatio === undefined
         ? {} : { pixelRatio: options.renderer.pixelRatio }),
       ...rustyApplicationSurfaceResourceOptions(content),
+      ...(options.renderer?.onCadence === undefined
+        ? {}
+        : { onAnimationFrame: options.renderer.onCadence }),
     });
     const resolveAudio = rustyApplicationAudioResourceResolver(content);
     const presentationUrls = new Set<string>();
@@ -832,6 +894,7 @@ async function mountRustyApplicationWithEnvironment(
         activeContent = candidateContent;
         contentRevision += 1;
         activeCanvas = candidateCanvas;
+        input?.rebindCanvas(candidateCanvas);
         try {
           oldParticle?.dispose();
         } catch {
@@ -1097,15 +1160,41 @@ async function mountRustyApplicationWithEnvironment(
     activeBillboardUrls = surfaceMount.billboardUrls;
     activeContent = initialContent;
     contentRevision = 1;
+    if (options.runtimeInput !== undefined) {
+      input = createRustyApplicationInputIngress(options.runtimeInput, {
+        active: () => !closing && !disposed,
+        allowsGameplayInput: (event) => ui.allowsGameplayInput(event),
+        canvas: () => requireActive().canvas,
+        document,
+        eventTarget: layout.host,
+        focusGameplay,
+        gamepads: () => document.defaultView?.navigator.getGamepads?.() ?? [],
+        interactionMode: () => interactionMode,
+      });
+      intents = Object.freeze({
+        claim: (intent: string, value: RustyApplicationRuntimeIntentValue): void => {
+          input?.claim(intent, value);
+        },
+      });
+    }
     removeListeners = installInputArbitration(
       layout.host,
       layout.ui,
       () => requireActive(),
       () => interactionMode,
       focusGameplay,
+      (event) => {
+        ui.allowsGameplayInput(event);
+        input?.clear('focus-loss');
+      },
     );
     setInteractionMode(interactionMode);
-    const mounted = await options.mountUi(layout.ui, { renderer, ui });
+    const uiContext: RustyApplicationUiContext = Object.freeze({
+      ui,
+      ...(projectionView === null ? {} : { projection: projectionView }),
+      ...(intents === null ? {} : { intents }),
+    });
+    const mounted = await options.mountUi(layout.ui, uiContext);
     uiOwner = mounted ?? null;
     if (options.developerCommands !== undefined) {
       developerCommandShell = mountRustyDeveloperCommandShell(layout.ui, {
@@ -1125,6 +1214,8 @@ async function mountRustyApplicationWithEnvironment(
     const cleanupFailures = await cleanupApplicationOwners(
       uiOwner,
       developerCommandShell,
+      input,
+      uiProjection,
       removeListeners,
       surface,
       activeAudio,
@@ -1155,6 +1246,8 @@ async function mountRustyApplicationWithEnvironment(
     kind: 'rusty_application_host.v1' as const,
     renderer,
     ui,
+    ...(input === null ? {} : { input: input as RustyApplicationInputPort }),
+    ...(uiProjection === null ? {} : { uiProjection }),
     readout: () => Object.freeze({
       compatibilityVersion: RUSTY_APPLICATION_HOST_COMPATIBILITY_VERSION,
       contentRevision,
@@ -1162,6 +1255,7 @@ async function mountRustyApplicationWithEnvironment(
       pointerLocked: surface?.pointerLocked() ?? false,
       resourceBytes: activeContent?.resourceBytes ?? 0,
       resourceCount: activeContent?.resources.length ?? 0,
+      ...(uiProjection === null ? {} : { uiProjection: uiProjection.readout() }),
       state: disposed ? 'disposed' as const : 'ready' as const,
     }),
     dispose: async () => {
@@ -1173,6 +1267,8 @@ async function mountRustyApplicationWithEnvironment(
         const cleanupFailures = await cleanupApplicationOwners(
           uiOwner,
           developerCommandShell,
+          input,
+          uiProjection,
           removeListeners,
           surface,
           activeAudio,
@@ -1184,6 +1280,7 @@ async function mountRustyApplicationWithEnvironment(
         );
         uiOwner = null;
         developerCommandShell = null;
+        input = null;
         surface = null;
         activeAudio = null;
         activeBillboard = null;
@@ -1320,6 +1417,7 @@ function createRendererCanvas(document: Document): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.dataset['rustyApplicationRenderer'] = 'engine-owned';
   canvas.setAttribute('aria-label', 'Engine-rendered game world');
+  canvas.tabIndex = 0;
   canvas.style.cssText =
     'display:block;height:100%;inset:0;position:absolute;width:100%;z-index:0;';
   return canvas;
@@ -1331,6 +1429,7 @@ function installInputArbitration(
   surface: () => RendererSurface,
   interactionMode: () => RustyApplicationInteractionMode,
   focusGameplay: () => void,
+  clearRuntimeInputForFocus: (event: FocusEvent) => void,
 ): () => void {
   const document = host.ownerDocument;
   const onPointerDown = (event: PointerEvent): void => {
@@ -1341,7 +1440,9 @@ function installInputArbitration(
     if (interactionMode() === 'gameplay') focusGameplay();
   };
   const onFocusIn = (event: FocusEvent): void => {
-    if (isTextEntry(event.target)) surface().releaseInput();
+    if (!isTextEntry(event.target)) return;
+    surface().releaseInput();
+    clearRuntimeInputForFocus(event);
   };
   const onPointerLockChange = (): void => {
     host.dataset['pointerLocked'] = String(document.pointerLockElement === surface().canvas);
@@ -1421,7 +1522,7 @@ function coordinatePoint(value: unknown): EventClientPoint {
 function isInteractiveUiTarget(target: EventTarget | null, uiRoot: HTMLElement): boolean {
   if (!(target instanceof Element) || !uiRoot.contains(target)) return false;
   return target.closest(
-    'a,button,input,select,textarea,summary,[contenteditable="true"],[data-rusty-ui-interactive],[role="dialog"]',
+    'a,button,input,select,textarea,summary,dialog,[contenteditable="true"],[data-rusty-ui-interactive],[role="dialog"],[aria-modal="true"]',
   ) !== null;
 }
 
@@ -1443,6 +1544,8 @@ function requestPointerLock(canvas: HTMLCanvasElement): void {
 async function cleanupApplicationOwners(
   uiOwner: RustyApplicationUiOwner | null,
   developerCommandShell: RustyDeveloperCommandShell | null,
+  input: RustyApplicationManagedInputIngress | null,
+  uiProjection: RustyApplicationUiProjectionPort | null,
   removeListeners: () => void,
   surface: RendererSurface | null,
   audio: RendererAudioHost | null,
@@ -1460,6 +1563,16 @@ async function cleanupApplicationOwners(
   }
   try {
     developerCommandShell?.dispose();
+  } catch (cause) {
+    failures.push(cause);
+  }
+  try {
+    input?.dispose();
+  } catch (cause) {
+    failures.push(cause);
+  }
+  try {
+    uiProjection?.dispose();
   } catch (cause) {
     failures.push(cause);
   }

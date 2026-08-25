@@ -16,5 +16,15 @@ await mountRustyApplication({
     initialFrame: productPlaytestFrame(),
     pixelRatio: 1,
   },
+  runtimeInput: {
+    binding: {
+      runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
+      context: 'gameplay.default',
+    },
+  },
+  uiProjection: {
+    expectedStream: 'product.hud',
+    expectedContract: 'product.hud.v1',
+  },
   mountUi: mountPlaytestProduct,
 });

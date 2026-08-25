@@ -5,14 +5,14 @@
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "scripts": {
-    "build": "tsc --build packages/gameplay-rules-contracts/tsconfig.json packages/gameplay-rules-authoring/tsconfig.json packages/gameplay-standard-contracts/tsconfig.json packages/gameplay-standard-authoring/tsconfig.json",
+    "build": "tsc --build packages/gameplay-rules-contracts/tsconfig.json packages/gameplay-rules-authoring/tsconfig.json packages/gameplay-standard-contracts/tsconfig.json packages/gameplay-standard-authoring/tsconfig.json packages/runtime-composition-authoring/tsconfig.json",
     "boundary": "node scripts/check-boundaries.mjs",
-    "generate": "node scripts/generate-contract.mjs --write && node scripts/generate-standard-contract.mjs --write && pnpm run generate-standard-fixtures",
-    "generate:check": "node scripts/generate-contract.mjs --check && node scripts/generate-standard-contract.mjs --check && pnpm run check-standard-fixtures",
+    "generate": "node scripts/generate-contract.mjs --write && node scripts/generate-standard-contract.mjs --write && node scripts/generate-product-model-contract.mjs --write && pnpm run generate-standard-fixtures",
+    "generate:check": "node scripts/generate-contract.mjs --check && node scripts/generate-standard-contract.mjs --check && node scripts/generate-product-model-contract.mjs --check && pnpm run check-standard-fixtures",
     "generate-standard-fixtures": "pnpm run build && node scripts/generate-standard-fixtures.mjs --write",
     "check-standard-fixtures": "pnpm run build && node scripts/generate-standard-fixtures.mjs --check",
     "test": "pnpm -r test",
-    "typecheck": "tsc --build packages/gameplay-rules-contracts/tsconfig.json packages/gameplay-rules-authoring/tsconfig.json packages/gameplay-standard-contracts/tsconfig.json packages/gameplay-standard-authoring/tsconfig.json",
+    "typecheck": "tsc --build packages/gameplay-rules-contracts/tsconfig.json packages/gameplay-rules-authoring/tsconfig.json packages/gameplay-standard-contracts/tsconfig.json packages/gameplay-standard-authoring/tsconfig.json packages/runtime-composition-authoring/tsconfig.json",
     "verify": "pnpm run generate:check && pnpm run boundary && pnpm run typecheck && pnpm run test"
   },
   "devDependencies": {

@@ -94,6 +94,13 @@ impl EntityTransform {
         self.translation + self.rotation.rotate(scaled)
     }
 
+    /// Rotate a local-space direction into world space without applying
+    /// translation or scale. Read-only spatial consumers use this for named
+    /// direction facts; it does not expose component storage or mutation.
+    pub fn transform_direction(self, local: Vec3) -> Vec3 {
+        self.rotation.rotate(local)
+    }
+
     pub(crate) fn relative_to(self, world: Self) -> Self {
         let inverse_rotation = self.rotation.inverse();
         let offset = inverse_rotation.rotate(world.translation - self.translation);

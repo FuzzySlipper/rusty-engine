@@ -21,6 +21,26 @@ compiled artifact, and Rust webview host/resource lifecycle.
   whole-frame replacement, combined static-mesh/texture/animated-GLB resource
   admission, lifecycle cleanup, and the optional numeric bounded presentation
   frame that keeps canvas, indicators, UI, and startup/failure geometry together.
+- `@rusty-engine/product-browser-host`: the fixed generated Product Bundle
+  composition root over the public application-host. It owns the closed local
+  lifecycle/input/timeline transport adapter, one-cadence realtime advancement,
+  typed retained-frame/presentation/UI-projection delivery, bounded startup and
+  disposal, and deterministic `index.html`/`main.js`/`bridge.js` composition
+  assets.
+  `productBrowserBundleAssets` also requires the exact built Engine closure at
+  the fixed `engine/product-browser-host.js` path; the copied closure bundles
+  its public application-host dependency so a plain HTTP bundle has no runtime
+  Vite, package-manager, node_modules, or bare-specifier requirement. Its
+  descriptor records those actual bytes and paths for Product Assembly receipt
+  hashing rather than introducing a compatibility-version counter.
+  Its local adapter speaks only the same-origin `/__rusty/product/runtime/`
+  operation routes and the bounded `outputs` SSE stream; generated
+  `runtime-adapter.js` supplies that path and no product state. A named
+  `rusty-output-lag` SSE event carrying `{ "code": "DEV_HOST_OUTPUT_LAG" }`
+  closes the stream and fails the host terminally because retained output
+  diffs cannot be resumed without a fresh snapshot.
+  It owns no product state, runtime evaluator, renderer implementation, or
+  editable downstream shell.
 - `@rusty-engine/developer-command-client`: DOM-free public TypeScript client
   for Node, agent tooling, and selected application-host adapters. It owns
   strict generated wire decoding, correlation and local history only; products
@@ -93,6 +113,14 @@ compiled artifact, and Rust webview host/resource lifecycle.
   owns the backend-local held-animation bank candidate/publish/disposal
   lifecycle, independent animated capture appearances, quotas, and readouts.
 - [`render/packages/application-host/src`](../../render/packages/application-host/src)
+- [`render/packages/product-browser-host/src`](../../render/packages/product-browser-host/src)
+  - `local-transport.ts` owns the fixed same-origin HTTP/SSE wire and strict
+    bounded decoding for lifecycle, input, cadence, demand/external admission,
+    timeline completion, and retained/presentation/UI/readout outputs.
+  - `product-browser-host.ts` owns the fixed bundle templates and closure asset
+    admission; `render/browser/product-browser-bundle.browser.spec.ts` proves
+    the copied assets start over a plain Node HTTP server without bare package
+    imports.
 - [`render/artifacts/application-host`](../../render/artifacts/application-host)
 - [`render/browser`](../../render/browser)
 - [`render/product-playtest`](../../render/product-playtest)

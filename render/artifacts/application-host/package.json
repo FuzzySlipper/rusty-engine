@@ -22,6 +22,8 @@
     "generated-standard-host-wire.js",
     "index.d.ts",
     "index.js",
-    "presentation-frame.d.ts"
+    "input-ingress.d.ts",
+    "presentation-frame.d.ts",
+    "ui-projection.d.ts"
   ]
 }

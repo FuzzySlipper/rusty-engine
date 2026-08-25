@@ -1,6 +1,6 @@
 use rusty_engine::{
     engine_spatial, entity_state, render_host_contracts, render_model, render_presentation,
-    renderer_webview_host,
+    renderer_webview_host, runtime_input,
 };
 
 fn exact_render_frame(frame: render_model::RenderFrameDiff) -> render_model::RenderFrameDiff {
@@ -19,6 +19,7 @@ fn main() {
     let _controller_config = engine_spatial::CharacterControllerConfig::responsive_fps();
     let _motion = entity_state::CharacterMotionComponent::at_rest(1.9);
     let _look = engine_spatial::FirstPersonLookService::default();
+    let _input_lane_type = std::any::TypeId::of::<runtime_input::RuntimeInputLane>();
     let _host_options = renderer_webview_host::RendererWebviewOptions::default();
     let _camera = render_host_contracts::RendererCameraPose {
         position: [0.0, 1.62, 8.0],

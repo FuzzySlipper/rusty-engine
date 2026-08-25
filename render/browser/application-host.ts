@@ -33,6 +33,11 @@ declare global {
     __rustyApplicationResourceContent?: (corrupt?: boolean) => RustyApplicationContent;
     __rustyApplicationUiDisposed?: boolean;
     __rustyApplicationVoxelSpriteExperiment?: RustyApplicationVoxelSpriteExperimentPort;
+    __rustyApplicationUiContextShape?: {
+      readonly keys: readonly string[];
+      readonly projectionKeys: readonly string[] | null;
+      readonly intentsKeys: readonly string[] | null;
+    };
     /** Browser-fixture resource URL for application-host retained animation proof. */
     __rustyApplicationRiggedFixtureUrl?: string;
     /** Browser-fixture-only gate for proving a late console discovery is inert after disposal. */
@@ -156,12 +161,30 @@ window.__rustyApplicationMount = (presentationAspectBounds) =>
     ...(presentationAspectBounds === undefined ? {} : { presentationAspectBounds }),
     developerCommands: { client: developerCommandClient() },
     initialInteractionMode: 'gameplay',
+    runtimeInput: {
+      binding: {
+        runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
+        context: 'gameplay.default',
+      },
+      maximumPointerDelta: 32,
+      maximumWheelDelta: 64,
+      selectedController: { index: 0 },
+    },
+    uiProjection: {
+      expectedStream: 'product.hud',
+      expectedContract: 'product.hud.v1',
+    },
     renderer: {
       initialContent: resourceContent(),
       fog: { color: 0xff00ff, near: 0, far: 0.25 },
       resolveIndicatorEntityPosition: (entity) => entity === 42 ? [0, 0, 0] : null,
     },
     mountUi: (uiRoot, context) => {
+      window.__rustyApplicationUiContextShape = {
+        keys: Object.keys(context).sort(),
+        projectionKeys: context.projection === undefined ? null : Object.keys(context.projection).sort(),
+        intentsKeys: context.intents === undefined ? null : Object.keys(context.intents).sort(),
+      };
       const gameplay = document.createElement('div');
       gameplay.id = 'gameplay-zone';
       gameplay.textContent = 'Gameplay surface';
@@ -177,12 +200,25 @@ window.__rustyApplicationMount = (presentationAspectBounds) =>
       const audioButton = document.createElement('button');
       audioButton.id = 'audio-button';
       audioButton.textContent = 'Play audio proof';
+      const inputClaimButton = document.createElement('button');
+      inputClaimButton.id = 'input-claim-button';
+      inputClaimButton.textContent = 'Claim UI intent';
       const modal = document.createElement('section');
       modal.id = 'modal';
       modal.setAttribute('role', 'dialog');
       modal.hidden = true;
       modal.textContent = 'Modal content';
-      toolbar.append(button, audioButton, input, modal);
+      const nativeModal = document.createElement('dialog');
+      nativeModal.id = 'native-modal';
+      nativeModal.setAttribute('aria-modal', 'true');
+      nativeModal.hidden = true;
+      nativeModal.textContent = 'Native dialog content';
+      const ariaModal = document.createElement('section');
+      ariaModal.id = 'aria-modal-section';
+      ariaModal.setAttribute('aria-modal', 'true');
+      ariaModal.hidden = true;
+      ariaModal.textContent = 'ARIA modal content';
+      toolbar.append(button, audioButton, inputClaimButton, input, modal, nativeModal, ariaModal);
       uiRoot.append(gameplay, toolbar);
       window.__rustyApplicationGameplayInputCount = 0;
       const onMouseDown = (event: MouseEvent): void => {
@@ -196,8 +232,10 @@ window.__rustyApplicationMount = (presentationAspectBounds) =>
         context.ui.setInteractionMode('interface');
       });
       audioButton.addEventListener('click', async () => {
-        window.__rustyApplicationAudioResume = await context.renderer.resumeAudio();
-        window.__rustyApplicationAudioReceipt = await context.renderer.applyPresentation({
+        const renderer = window.__rustyApplicationHost?.renderer;
+        if (renderer === undefined) throw new Error('application host is not ready for audio proof');
+        window.__rustyApplicationAudioResume = await renderer.resumeAudio();
+        window.__rustyApplicationAudioReceipt = await renderer.applyPresentation({
           schemaVersion: 1,
           ops: [{
             domain: 'audio',
@@ -219,6 +257,9 @@ window.__rustyApplicationMount = (presentationAspectBounds) =>
             },
           }],
         });
+      });
+      inputClaimButton.addEventListener('click', () => {
+        context.intents?.claim('ui.confirm', { kind: 'digital', active: true });
       });
       return {
         dispose: () => {

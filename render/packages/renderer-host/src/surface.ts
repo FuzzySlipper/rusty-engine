@@ -229,6 +229,8 @@ export interface RendererSurfaceAutomaticSubmissionPacingSample {
 
 export interface RendererSurfaceOptions {
   readonly autoStart?: boolean;
+  /** Optional observer on the one Engine-owned animation cadence. */
+  readonly onAnimationFrame?: (timeMs: number) => void;
   readonly clearColor?: number;
   readonly controls?: RendererSurfaceControlsOptions;
   readonly frame?: RenderFrameDiff;
@@ -762,6 +764,7 @@ function mountPreparedRendererSurface(
     // callback requests its successor only after submitting the current frame.
     animationFrame = globalThis.requestAnimationFrame(tick);
     const successorQueuedAtMs = surfaceTimingNow();
+    options.onAnimationFrame?.(timeMs);
     const demand = submissionDemand.consumeDecision(
       surfaceViewport(canvas),
       continuousDemand(),

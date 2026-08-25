@@ -1,14 +1,20 @@
 import { readFileSync } from 'node:fs';
 
 const root = new URL('../voxel-vignette-playtest/', import.meta.url);
-const sources = ['main.ts', 'scene.ts', 'product.ts'];
-const forbidden = /(?:@rusty-engine\/(?:renderer-|render-(?:contracts|projection))|three(?:\/|['"])|private\/)/u;
+const sources = ['main.ts', 'scene.ts', 'product.ts', 'presentation-controller.ts'];
+const forbidden = /(?:@rusty-engine\/(?:renderer-|render-(?:contracts|projection))|three(?:\/|['"])|private\/|requestAnimationFrame|cancelAnimationFrame|context\.(?:renderer|input)\b|pointerLockElement|(?:window|document)\.addEventListener\s*\(\s*['"](?:keydown|keyup|mousemove|mousedown|mouseup|wheel|blur|pointerlockchange|gamepadconnected|gamepaddisconnected)['"])/u;
 
 for (const file of sources) {
   const source = readFileSync(new URL(file, root), 'utf8');
   if (forbidden.test(source)) {
     throw new Error(`voxel vignette ${file} crossed the public application-host boundary`);
   }
+}
+
+const productSource = readFileSync(new URL('product.ts', root), 'utf8');
+const uiRendererBypass = /(?:RustyApplicationRendererPort|\.setCameraPose\s*\(|\.renderOnce\s*\(|\.replaceContent\s*\(|\.applyFrame\s*\()/u;
+if (uiRendererBypass.test(productSource)) {
+  throw new Error('voxel vignette product UI bypassed its named presentation actions');
 }
 
 const manifest = readFileSync(new URL('comparison-staging-manifest.tsv', root), 'utf8');

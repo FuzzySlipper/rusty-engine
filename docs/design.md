@@ -35,8 +35,11 @@ in [migration-cluster-ledger.md](migration/migration-cluster-ledger.md).
   not prerequisites. See
   [upstream promotion and authoring DSL](topics/development/upstream-promotion-and-authoring-dsl.md).
 
-Object-centric does not mean Unity-style component scripts or an ECS scheduler. It means entity
-identity and typed component data remain easy to inspect while behavior is owned by explicit code.
+Object-centric does not imply hidden component scripts, callbacks, or an ambient ECS scheduler. It
+means entity identity and typed component data remain easy to inspect while behavior is owned by
+explicit code. The current Product Model runtime schedule below is a separate closed, explicit
+composition mechanism; it does not turn components into behavior owners or introduce a global
+registry.
 
 ## System at a glance
 
@@ -62,9 +65,202 @@ isolated rules workspace: optional downstream TS authoring DSL --> package/wire 
 isolated renderer workspace: retained JSON --> render-projection (TS) --> Three backend / host adapters
 ```
 
+## Product input boundary
+
+`product-model` admits a closed mapping grammar before runtime: an intent
+descriptor owns its typed value kind, one resolved capability binding, and
+capability payload; each physical mapping owns only an id, descriptor
+reference, and typed trigger. This keeps direct product UI claims unambiguous:
+UI claims and physical observations resolve to the same descriptor rather than
+choosing an arbitrary control mapping.
+
+`runtime-input` is one non-cloneable lane per explicit runtime instance. A host
+normalizes bounded keyboard, pointer, wheel, and one selected-controller fact
+or a direct product UI claim into one gap-free sequence carrying instance,
+generation, control revision, and Product context. The lane admits only the
+active epoch, fails closed on malformed/order/bound errors, and snapshots only
+against a lifecycle-validated `InputSnapshot` token. It emits immutable typed
+intent envelopes in ingress order (then authored map order for one fact);
+per-step held readouts follow real same-sequence facts. Focus, interaction-mode
+or pointer-lock loss, restart/control revision change, ingress overflow, and
+disposal clear held/transient/pending state. It owns no DOM, controller polling
+cadence, capability invocation, movement, collision, scheduler, callback,
+global bus, or game consequence.
+
+## Product Model runtime schedule boundary
+
+The implemented `runtime-schedule` lane realizes a linked Product Model
+composition as five closed phases in this order: `input`, `simulation`,
+`consequences`, `commit`, and `projection`. Each phase retains its explicit
+append/prepend/extend/replace operation and a structural `Standard.<phase>`
+anchor; the current standard catalog may contribute no systems yet. Runtime
+compilation validates same-phase dependency order, placement partitions,
+read/write ambiguity, closed capability kind/use, payload budgets, and integer
+step cadence before binding to one running lifecycle instance.
+
+The bound lane is non-cloneable and validates the lifecycle token on every
+phase. It maps phases to `InputSnapshot`, `Schedule`, `Timeline`, `Mutation`,
+and `Projection` respectively. A caller supplies a dispatcher and read-only
+context for each phase; the lane presents immutable system invocation data and
+stages typed dispatcher outputs without storing callbacks, service registries,
+clocks, component references, or gameplay state. A dispatcher failure leaves
+the lane's phase progression unchanged, but effects inside that caller-owned
+dispatcher are outside the lane's rollback boundary. The dispatcher is a
+planning/data-emission contract; the lane cannot police arbitrary interior
+side effects, and downstream authoritative writes route through the named
+`runtime-mutation` planner/publication boundary. Initial binding is only
+valid before the lifecycle admits its first simulation step. Pause/resume or
+restart stales a bound lane; explicit `rebind`/`synchronize` is required at a
+phase boundary, retaining same-generation progress and resetting on a newer
+generation. Same-generation rebind reconciles the next-step cursor to the
+lifecycle's admitted-step count and exposes a bounded invalidated-admission
+count for unstarted admissions not represented by the cursor; those
+admissions are not reported as completed. Rebind should happen before
+admitting new work under the resumed revision. A revision change during an active phase is rejected as
+`RebindActiveStep`; the incomplete phase chain must be abandoned by
+restarting/new-generation and binding a fresh lane, or by disposing and
+reconstructing the existing lane.
+
+The implemented `runtime-timeline` lane consumes the same linked composition's
+static `Timeline`/`TimelineStep` templates. Compilation retains each step's
+resolved operation capability target/kind, owner/provenance, and payload. One
+explicit runtime instance can then admit bounded operations and completion
+tickets without introducing a scheduler callback or capability registry.
+Schedule/cancel/replace/ticket registration and ticket cancellation are
+Timeline-token gated; an external completion may use the queue-only
+`admit_completion` path with a Running lifecycle and exact lane binding.
+Operations release as immutable data at the `Timeline` phase in
+`(due step, insertion sequence, caller operation identity)` order. Finite
+recurrence releases one occurrence per admitted step; overdue entries use a
+bounded deterministic backlog (`due <= current admitted step`) and never
+fabricate a dropped realtime step.
+
+Completion tickets are issued before external work and bind the compiled step,
+capability target/kind, caller operation revision, closed source kind,
+correlation, and product-owned result-contract identity. Envelopes carry only
+that exact ticket binding and bounded success/failure opaque data. Completion
+arrival order cannot bypass an earlier unresolved ticket; cancellation or
+failure closes the issue-order gap, and completion is admitted exactly once.
+Cancel, replace, and recurrence advancement cancel Pending tickets bound to
+the invalidated operation revision while preserving already Completed outcomes
+as releasable facts, so later completions cannot leave a permanent gap.
+Same-generation control-revision rebind retains scheduled operations but
+invalidates old completion tickets and advances the next-step cursor past
+admitted-but-unreleased lifecycle steps. The bounded invalidated-admission
+count is exposed in the rebind receipt, readout, and snapshot without treating
+those steps as released; a new generation clears queue, tickets, cursors, and
+counters. Typed mechanism snapshots validate into a temporary candidate before
+replacing live state. Products retain ownership of mutation,
+persistence, external I/O, and the meaning of every released record.
+
+The implemented `runtime-mutation` lane is the sole admitted Runtime
+Composition Mutation publication boundary. Mutation selection is not a new
+authored `CapabilityUse`: an immutable Product Assembly descriptor slice
+selects already-linked `Operation` bindings by exact binding id and target and
+names one publication domain plus named owners. A bound lane validates one
+nonempty ordered batch against the exact `Mutation` lifecycle token, operation
+linkage, payload budgets, causation, and provenance before invoking a
+caller-supplied closed Rust planner. Deterministic batch fingerprints and a
+catalog identity support bounded exact readback without creating a schema
+version protocol.
+
+`MutationAuthority` exposes an exact guard and the authority bundle's stable
+publication domain. The planner receives `&A` plus resolved operation data and
+returns an owned complete candidate with one named-owner evidence item per
+operation. The lane validates that evidence, computes the candidate guard and
+receipt, revalidates the live guard/domain and lifecycle, prepares bounded lane
+bookkeeping, then performs one candidate assignment. It retains no callback,
+registry, service locator, UI/TypeScript entrypoint, or raw mutable component
+access. Receipts preserve linked binding index/kind/target/resolved target,
+Product Assembly domain and owner, linked provenance source/path, payload,
+causation, batch/catalog fingerprints, guards, and ordered owner evidence.
+
+This is conditional Result-failure atomicity under a trusted closed Product
+Assembly: one in-memory authority bundle and one admitted batch, not
+whole-world/tick/durable/external atomicity. Rust cannot prove candidate
+derivation, guard completeness, or freedom from interior side effects. Panic,
+allocation failure, and ordinary Rust replacement/drop behavior are outside
+the guarantee, so authority, guard, planner error, and evidence destruction
+must remain inert and non-panicking. Projection, persistence, rendering, and
+outbox/external work remain after-commit product-owned status. Exact retries
+within the bounded receipt window return the prior receipt without
+republishing; failed pre-publication staging remains retryable. Same-generation
+rebind retains receipt readback and counts admitted-but-uncommitted steps as
+invalidated without claiming completion; a new generation resets both.
+
+`runtime-standard-capabilities` currently admits one closed schedule system,
+`engine.runtime.observe-pairs`. Static Rust component adapters expose typed
+observer eye/forward/range/FOV/evidence facts and target body-center facts;
+the Engine transforms them, evaluates bounded distance/facing and center-ray
+occlusion against canonical spatial authority, then reduces in entity order.
+It is not a query language, ECS framework, callback runtime, or gameplay VM.
+The compiled schedule remains the cadence owner. The resulting single Product
+Kernel operation carries neutral evidence only; alert state, thresholds,
+disguise, and consequences remain Product Kernel planner meaning and publish
+through `runtime-mutation`.
+
 No Engine crate knows the downstream game's component families, event vocabulary, game-specific
 stored-project schema, or browser API. The Rust render crates know only renderer-neutral values and
 explicit read-only provider views; the isolated renderer workspace knows no gameplay authority.
+
+## Product Kernel source-linked assembly boundary
+
+The `product-kernel` crate is the explicit downstream extension lane for
+product-specific systems and operations. A single `product_kernel_declaration!`
+source declaration binds each concrete downstream contract type to a closed
+owner enum, immutable `ProductKernelCapabilityDescriptor` catalog, schema
+identities, and offline migration identities. The generated owner is suitable
+for ordinary closed `match` expressions; it is not a registry key, handler
+table, dynamic discovery mechanism, or invocation API. Product schemas and
+migrations participate in deterministic offline contract export but are never
+live `kernel.*` schedule targets; live `Migration` entries are rejected.
+
+`ProductAssembly::<D>::link` validates the declaration and wraps the existing
+Product Model linker before a lifecycle starts. It requires every selected
+Product Kernel binding to prove exact target, kind, and concrete contract type
+agreement, while Engine bindings remain resolved by the existing closed Engine
+catalog. `ProductSystemContext` and `ProductOperationContext` are separate,
+lifecycle-token-gated borrowed contexts for schedule and mutation phases.
+Downstream retains snapshot/request/result/error meaning and calls ordinary
+typed functions; authoritative publication remains in the named
+`runtime-mutation` lane.
+
+`ProductProjectionContext` is the matching read-only context for a typed
+downstream projection function. It can only be constructed with a live,
+validated `RuntimePhase::Projection` token and exposes the immutable
+product-owned snapshot plus its admitted simulation step. A projection returns
+an owned product DTO; it receives no renderer, DOM, host, clock, scheduler,
+callback, or mutation authority.
+
+The host-neutral `runtime-ui` lane is the optional rich-DOM transport boundary
+for those DTOs. It validates the projection context and lane epoch before
+running a typed function, copies the result into bounded JSON, and emits the
+strict current envelope `rusty.product.ui-projection` with canonical decimal
+runtime/sequence strings and Product Model stream/contract identities. One
+envelope is allowed per stream per simulation step; duplicate/regressed,
+foreign/stale, wrong-phase, malformed, over-limit, or disposed work fails
+closed. Explicit rebind clears per-epoch stream/contract progress, while an
+exact binding is a no-op and an older same-instance binding is rejected. The
+current Rust-side bounds are 256 streams, 65,536 compact value bytes, 2,048
+JSON nodes, depth 16, 8,192-byte strings, 512 array entries, 256 object keys,
+integer-valued numbers within JavaScript's exact safe range, and 262,144
+encoded envelope bytes.
+
+`runtime-ui` remains transport only: the isolated application host owns the
+DOM-facing read-only view, detachment/deep-freeze, subscriber lifecycle, and
+host realization. This optional rich-DOM projection path does not replace the
+Rust-only `render-model` / `render-projection` / `render-presentation` retained
+frame path, whose renderer-neutral contracts and authority boundaries remain
+unchanged.
+
+The same sorted declaration exposes checked `Result` paths for versionless
+contract JSON and a product-local TypeScript module. Both validate the complete
+declaration before emitting, so stale concrete target/kind metadata or malformed
+identity/text cannot become an apparently valid artifact. The TypeScript module
+binds `bindProductKernelCatalog`, exports the immutable catalog and closed
+target type, and is byte-compared by a downstream `generate:check` workflow.
+Compatibility follows actual source contract changes as they land; there is no
+independent schema-version family or release protocol here.
 
 ## Entity component boundary
 

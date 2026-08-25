@@ -1,0 +1,14 @@
+[package]
+name = "product-model"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ryu-js.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+toml.workspace = true

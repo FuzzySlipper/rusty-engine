@@ -1,0 +1,14 @@
+[package]
+name = "runtime-ui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+product-kernel.workspace = true
+product-model.workspace = true
+runtime-lifecycle.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

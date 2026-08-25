@@ -1,17 +1,16 @@
 import type {
-  RustyApplicationCameraPose,
+  RustyApplicationRuntimeInputEnvelope,
   RustyApplicationUiContext,
   RustyApplicationUiOwner,
 } from '@rusty-engine/application-host';
 
 import {
   INITIAL_VIGNETTE_LIGHTING,
-  loadVignetteContent,
-  vignetteLightingFrame,
   VIGNETTE_VARIANTS,
   type VignetteLighting,
   type VignetteVariantId,
 } from './scene.js';
+import type { VignettePresentationActions } from './presentation-controller.js';
 
 const MOVEMENT_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD']);
 const MOVE_SPEED = 4.5;
@@ -20,7 +19,20 @@ const INITIAL_VARIANT: VignetteVariantId = 'occupancy-axis-control';
 
 interface MutablePose { position: [number, number, number]; pitchDegrees: number; yawDegrees: number; }
 
-export function mountVignetteProduct(root: HTMLElement, context: RustyApplicationUiContext): RustyApplicationUiOwner {
+export interface VignetteProductController extends RustyApplicationUiOwner {
+  readonly start: () => void;
+  readonly advance: (
+    timeMs: number,
+    input: readonly RustyApplicationRuntimeInputEnvelope[],
+  ) => void;
+}
+
+/** Presentation-only visual gate driven by host-neutral input and the Engine cadence. */
+export function mountVignetteProduct(
+  root: HTMLElement,
+  _context: RustyApplicationUiContext,
+  presentation: VignettePresentationActions,
+): VignetteProductController {
   const surface = document.createElement('main');
   surface.className = 'vignette-surface';
   surface.setAttribute('aria-label', 'Voxel shading comparison viewport');
@@ -59,19 +71,17 @@ export function mountVignetteProduct(root: HTMLElement, context: RustyApplicatio
   const buttons = new Map<VignetteVariantId, HTMLButtonElement>();
   let activeVariant = INITIAL_VARIANT;
   let switching = false;
-  let animationFrame = 0;
-  let previousTime = performance.now();
+  let previousTime: number | null = null;
   let disposed = false;
   const publishLighting = (): void => {
-    const receipt = context.renderer.applyFrame(vignetteLightingFrame(lighting));
+    const receipt = presentation.applyLighting(lighting);
     if (!receipt.applied) {
-      status.textContent = `Lighting update failed: ${receipt.diagnostics.map((diagnostic) => diagnostic.message).join('; ')}`;
+      status.textContent = `Lighting update failed: ${receipt.message}`;
       return;
     }
-    context.renderer.renderOnce();
   };
   const publishPose = (): void => {
-    context.renderer.setCameraPose({ position: pose.position, pitchDegrees: pose.pitchDegrees, yawDegrees: pose.yawDegrees });
+    presentation.publishPose(pose);
     if (lighting.pointEnabled) {
       lighting = { ...lighting, pointPosition: [pose.position[0], pose.position[1] + 0.25, pose.position[2]] };
       publishLighting();
@@ -90,8 +100,8 @@ export function mountVignetteProduct(root: HTMLElement, context: RustyApplicatio
     for (const button of buttons.values()) button.disabled = true;
     status.textContent = `Switching to ${VIGNETTE_VARIANTS.find((variant) => variant.id === id)?.label ?? id}…`;
     try {
-      const receipt = await context.renderer.replaceContent(await loadVignetteContent(id));
-      if (!receipt.applied) throw new Error(receipt.diagnostics.map((diagnostic) => diagnostic.message).join('; ') || 'application host rejected replacement');
+      const receipt = await presentation.replaceVariant(id);
+      if (!receipt.applied) throw new Error(receipt.message);
       activeVariant = id;
       publishPose();
       publishLighting();
@@ -161,15 +171,66 @@ export function mountVignetteProduct(root: HTMLElement, context: RustyApplicatio
   lightingControls.append(pointToggle);
   addRange('Point intensity', 0, 200, 5, lighting.pointIntensity, (value) => { lighting = { ...lighting, pointIntensity: value }; });
   addRange('Point range', 1, 12, 0.5, lighting.pointRange, (value) => { lighting = { ...lighting, pointRange: value }; });
-  const onKeyDown = (event: KeyboardEvent): void => { if (!MOVEMENT_KEYS.has(event.code) || !context.ui.allowsGameplayInput(event)) return; pressed.add(event.code); event.preventDefault(); };
-  const onKeyUp = (event: KeyboardEvent): void => { pressed.delete(event.code); };
-  const onMouseMove = (event: MouseEvent): void => { if (document.pointerLockElement === null || !context.ui.allowsGameplayInput(event)) return; pose.yawDegrees = normalizeDegrees(pose.yawDegrees + event.movementX * LOOK_SENSITIVITY); pose.pitchDegrees = clamp(pose.pitchDegrees - event.movementY * LOOK_SENSITIVITY, -80, 80); publishPose(); };
-  const onPointerLockChange = (): void => { if (document.pointerLockElement === null) pressed.clear(); };
-  const onWindowBlur = (): void => { pressed.clear(); };
-  const tick = (time: number): void => { if (disposed) return; const elapsed = Math.min((time - previousTime) / 1_000, 0.1); previousTime = time; if (moveCamera(pose, pressed, elapsed)) publishPose(); animationFrame = requestAnimationFrame(tick); };
-  window.addEventListener('keydown', onKeyDown); window.addEventListener('keyup', onKeyUp); window.addEventListener('mousemove', onMouseMove); window.addEventListener('blur', onWindowBlur); document.addEventListener('pointerlockchange', onPointerLockChange);
-  publishPose(); context.renderer.renderOnce(); updateVariantReadout(); animationFrame = requestAnimationFrame(tick);
-  return { dispose: () => { disposed = true; cancelAnimationFrame(animationFrame); window.removeEventListener('keydown', onKeyDown); window.removeEventListener('keyup', onKeyUp); window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('blur', onWindowBlur); document.removeEventListener('pointerlockchange', onPointerLockChange); surface.remove(); } };
+  return {
+    start: () => {
+      if (disposed) return;
+      publishPose();
+      presentation.render();
+      updateVariantReadout();
+    },
+    advance: (timeMs, input) => {
+      if (disposed) return;
+      let poseChanged = applyInput(pose, pressed, input);
+      const elapsed = previousTime === null ? 0 : Math.min((timeMs - previousTime) / 1_000, 0.1);
+      previousTime = timeMs;
+      poseChanged = moveCamera(pose, pressed, elapsed) || poseChanged;
+      if (poseChanged) publishPose();
+    },
+    dispose: () => {
+      disposed = true;
+      pressed.clear();
+      surface.remove();
+    },
+  };
+}
+
+function applyInput(
+  pose: MutablePose,
+  pressed: Set<string>,
+  input: readonly RustyApplicationRuntimeInputEnvelope[],
+): boolean {
+  let changed = false;
+  for (const envelope of input) {
+    if (!('fact' in envelope)) continue;
+    const fact = envelope.fact;
+    if (fact.kind === 'clear') {
+      pressed.clear();
+      continue;
+    }
+    if (fact.kind === 'key') {
+      const code = keyboardCode(fact.code);
+      if (code === null) continue;
+      if (fact.edge === 'pressed') pressed.add(code);
+      else pressed.delete(code);
+      continue;
+    }
+    if (fact.kind === 'pointer-delta') {
+      pose.yawDegrees = normalizeDegrees(pose.yawDegrees + fact.x * LOOK_SENSITIVITY);
+      pose.pitchDegrees = clamp(pose.pitchDegrees - fact.y * LOOK_SENSITIVITY, -80, 80);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function keyboardCode(control: string): string | null {
+  switch (control) {
+    case 'key-w': return 'KeyW';
+    case 'key-a': return 'KeyA';
+    case 'key-s': return 'KeyS';
+    case 'key-d': return 'KeyD';
+    default: return null;
+  }
 }
 
 function moveCamera(pose: MutablePose, pressed: ReadonlySet<string>, elapsed: number): boolean {

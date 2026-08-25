@@ -1,6 +1,13 @@
-import { mountRustyApplication } from '@rusty-engine/application-host';
+import {
+  mountRustyApplication,
+  type RustyApplicationHost,
+} from '@rusty-engine/application-host';
 
-import { mountVignetteProduct } from './product.js';
+import {
+  mountVignetteProduct,
+  type VignetteProductController,
+} from './product.js';
+import { createVignettePresentationActions } from './presentation-controller.js';
 import { loadVignetteContent } from './scene.js';
 
 const root = document.querySelector<HTMLElement>('#application');
@@ -9,6 +16,13 @@ if (root === null) throw new Error('voxel vignette application root is missing')
 try {
   const content = await loadVignetteContent('occupancy-axis-control');
   root.replaceChildren();
+  const mounted: {
+    host?: RustyApplicationHost;
+    product?: VignetteProductController;
+  } = {};
+  const presentation = createVignettePresentationActions(
+    () => mounted.host?.renderer ?? null,
+  );
   const host = await mountRustyApplication({
     root,
     initialInteractionMode: 'gameplay',
@@ -24,9 +38,27 @@ try {
         shadows: { enabled: true, maximumActiveLights: 1 },
       },
       pixelRatio: 1,
+      onCadence: (timeMs) => {
+        mounted.product?.advance(timeMs, mounted.host?.input?.drain() ?? []);
+      },
     },
-    mountUi: mountVignetteProduct,
+    runtimeInput: {
+      binding: {
+        runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
+        context: 'gameplay.default',
+      },
+    },
+    uiProjection: {
+      expectedStream: 'product.vignette',
+      expectedContract: 'product.vignette.v1',
+    },
+    mountUi: (uiRoot, context) => {
+      mounted.product = mountVignetteProduct(uiRoot, context, presentation);
+      return mounted.product;
+    },
   });
+  mounted.host = host;
+  mounted.product?.start();
   window.addEventListener('pagehide', () => {
     void host.dispose();
   }, { once: true });

@@ -17,6 +17,11 @@ declare global {
     __rustyDeveloperCommandDiscoveryGate?: Promise<void>;
     __rustyDeveloperCommandReleaseDiscovery?: () => void;
     __rustyApplicationRiggedFixtureUrl?: string;
+    __rustyApplicationUiContextShape?: {
+      readonly keys: readonly string[];
+      readonly projectionKeys: readonly string[] | null;
+      readonly intentsKeys: readonly string[] | null;
+    };
   }
 }
 
@@ -298,6 +303,22 @@ test('application host owns composition, input arbitration, and disposal', async
   )).toBe('interface');
   await page.evaluate(() => window.__rustyApplicationHost?.ui.setInteractionMode('gameplay'));
   await page.locator('#gameplay-zone').click();
+  expect(await page.evaluate(() => window.__rustyApplicationGameplayInputCount)).toBe(1);
+  await page.evaluate(() => {
+    const nativeModal = document.querySelector<HTMLElement>('#native-modal');
+    const ariaModal = document.querySelector<HTMLElement>('#aria-modal-section');
+    if (nativeModal === null || ariaModal === null) throw new Error('modal fixtures are unavailable');
+    nativeModal.hidden = false;
+    nativeModal.setAttribute('open', '');
+    ariaModal.hidden = false;
+  });
+  await page.evaluate(() => {
+    for (const id of ['native-modal', 'aria-modal-section']) {
+      const modal = document.querySelector<HTMLElement>(`#${id}`);
+      if (modal === null) throw new Error(`${id} is unavailable`);
+      modal.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    }
+  });
   expect(await page.evaluate(() => window.__rustyApplicationGameplayInputCount)).toBe(1);
 
   const initialBackingSize = await page.locator('canvas').evaluate((element) => {
@@ -1275,6 +1296,229 @@ test('queued complete content replacements publish in call order', async ({ page
     resourceBytes: 203,
   });
   await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
+});
+
+test('public application-host input ingress observes bounded physical facts and ordered UI claims', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  await page.locator('#gameplay-zone').click({ position: { x: 40, y: 40 } });
+  await expect.poll(() => page.evaluate(() => document.pointerLockElement instanceof HTMLCanvasElement)).toBe(true);
+  await page.mouse.move(120, 120);
+  await page.mouse.move(156, 108);
+  await page.keyboard.down('w');
+  await page.keyboard.down('w');
+  await page.keyboard.up('w');
+  await page.evaluate(() => document.dispatchEvent(new WheelEvent('wheel', { deltaY: 180 })));
+  const physical = await page.evaluate(() => window.__rustyApplicationHost?.input?.drain());
+  expect(physical).toBeDefined();
+  const facts = (physical ?? []).map((entry) => 'fact' in entry ? entry.fact : null);
+  expect(facts).toContainEqual({ kind: 'key', code: 'key-w', edge: 'pressed' });
+  expect(facts).toContainEqual({ kind: 'key', code: 'key-w', edge: 'released' });
+  expect(facts).toContainEqual({ kind: 'wheel', x: 0, y: 64 });
+  expect(facts).toContainEqual({ kind: 'pointer-delta', x: 32, y: 32 });
+  expect(physical?.every((entry, index) => entry.sequence === String(index))).toBe(true);
+  expect(physical?.every((entry) => entry.runtime.instanceId === '7'
+    && entry.runtime.generation === '3' && entry.runtime.controlRevision === '11')).toBe(true);
+
+  await page.evaluate(() => document.exitPointerLock());
+  await expect.poll(() => page.evaluate(() => document.pointerLockElement === null)).toBe(true);
+  await page.locator('#input-claim-button').click();
+  const afterUiClaim = await page.evaluate(() => window.__rustyApplicationHost?.input?.drain());
+  expect(afterUiClaim).toHaveLength(2);
+  expect(afterUiClaim?.[0]).toMatchObject({
+    context: 'gameplay.default',
+    fact: { kind: 'clear', reason: 'interaction-mode-loss' },
+  });
+  expect(afterUiClaim?.[1]).toMatchObject({
+    context: 'gameplay.default',
+    intent: 'ui.confirm',
+    value: { kind: 'digital', active: true },
+  });
+
+  await page.evaluate(() => window.__rustyApplicationHost?.ui.setInteractionMode('interface'));
+  expect(await page.evaluate(() => window.__rustyApplicationHost?.input?.drain())).toMatchObject([{
+    fact: { kind: 'clear', reason: 'interaction-mode-loss' },
+  }]);
+  const disposalInput = await page.evaluate(async () => {
+    const host = window.__rustyApplicationHost;
+    await host?.dispose();
+    return host?.input?.drain();
+  });
+  expect(disposalInput).toMatchObject([{ fact: { kind: 'clear', reason: 'dispose' } }]);
+});
+
+test('public application-host UI projection is read-only in the mounted DOM lane and rebinds cleanly', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  const result = await page.evaluate(() => {
+    const host = window.__rustyApplicationHost;
+    const projection = host?.uiProjection;
+    if (host === undefined || projection === undefined) {
+      throw new Error('UI projection ingress is unavailable');
+    }
+    const events: Array<string | null> = [];
+    const unsubscribe = projection.subscribe((value) => events.push(value?.sequence ?? null));
+    const source = {
+      artifact: 'rusty.product.ui-projection' as const,
+      runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
+      sequence: '0',
+      stream: 'product.hud',
+      contract: 'product.hud.v1',
+      value: { alerts: 2, selected: 'target-1' },
+    };
+    const accepted = projection.ingest(source);
+    source.value.alerts = 99;
+    const current = projection.current();
+    let mutationError: string | null = null;
+    try {
+      if (current === null) throw new Error('projection snapshot is missing');
+      Object.defineProperty(current.value, 'alerts', { value: 100 });
+    } catch (error) {
+      mutationError = error instanceof Error ? error.name : String(error);
+    }
+    const rebound = projection.bindRuntime({
+      instanceId: '7', generation: '4', controlRevision: '12',
+    });
+    const afterRebind = projection.readout();
+    unsubscribe();
+    return {
+      accepted,
+      afterRebind,
+      context: window.__rustyApplicationUiContextShape,
+      current,
+      events,
+      mutationError,
+      rebound,
+    };
+  });
+  expect(result.accepted).toBe(true);
+  expect(result.current?.value).toEqual({ alerts: 2, selected: 'target-1' });
+  expect(result.mutationError).toBe('TypeError');
+  expect(result.events).toEqual([null, '0', null]);
+  expect(result.rebound).toBe(true);
+  expect(result.afterRebind).toMatchObject({ hasCurrent: false, sequence: null, subscriberCount: 1 });
+  expect(result.context).toEqual({
+    keys: ['intents', 'projection', 'ui'],
+    projectionKeys: ['current', 'subscribe'],
+    intentsKeys: ['claim'],
+  });
+});
+
+test('application-host input ingress treats pointer cancellation as a fail-closed loss', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  await page.evaluate(() => {
+    const gameplay = document.querySelector<HTMLElement>('#gameplay-zone');
+    if (gameplay === null) throw new Error('gameplay zone is unavailable');
+    gameplay.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }));
+    document.dispatchEvent(new PointerEvent('pointercancel'));
+  });
+  expect(await page.evaluate(() => window.__rustyApplicationHost?.input?.drain())).toEqual([{
+    runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
+    sequence: '0',
+    context: 'gameplay.default',
+    fact: { kind: 'clear', reason: 'interaction-mode-loss' },
+  }]);
+});
+
+test('application-host input ingress clears held gameplay keys when a text entry receives focus', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  await page.locator('canvas[data-rusty-application-renderer="engine-owned"]').evaluate((canvas) => {
+    (canvas as HTMLCanvasElement).focus();
+  });
+  await page.keyboard.down('w');
+  await page.locator('#text-entry').focus();
+  expect(await page.evaluate(() => window.__rustyApplicationHost?.input?.drain())).toEqual([{
+    runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
+    sequence: '0',
+    context: 'gameplay.default',
+    fact: { kind: 'clear', reason: 'focus-loss' },
+  }]);
+  await page.keyboard.up('w');
+});
+
+test('public application-host samples only the selected controller on caller demand', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  await page.locator('#gameplay-zone').click({ position: { x: 40, y: 40 } });
+  await expect.poll(() => page.evaluate(() => document.pointerLockElement instanceof HTMLCanvasElement)).toBe(true);
+  const controller = await page.evaluate(() => {
+    window.__rustyApplicationHost?.input?.drain();
+    Object.defineProperty(navigator, 'getGamepads', {
+      configurable: true,
+      value: () => [{
+        connected: true,
+        axes: [0.5, -0.25, 2, 0],
+        buttons: Array.from({ length: 16 }, (_, index) => ({ pressed: index === 0 || index === 15 })),
+      }],
+    });
+    const sampled = window.__rustyApplicationHost?.input?.sampleController();
+    return { sampled, entries: window.__rustyApplicationHost?.input?.drain() };
+  });
+  expect(controller.sampled).toBe(5);
+  expect(controller.entries).toMatchObject([
+    { fact: { kind: 'controller-axis', axis: 'axis-0', value: 0.5 } },
+    { fact: { kind: 'controller-axis', axis: 'axis-1', value: -0.25 } },
+    { fact: { kind: 'controller-axis', axis: 'axis-2', value: 1 } },
+    { fact: { kind: 'controller-button', button: 'button-0', edge: 'pressed' } },
+    { fact: { kind: 'controller-button', button: 'button-15', edge: 'pressed' } },
+  ]);
+});
+
+test('application-host input ingress clears against the replacement canvas without changing renderer controls', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  const result = await page.evaluate(async () => {
+    const host = window.__rustyApplicationHost;
+    if (host?.input === undefined) throw new Error('runtime input ingress is unavailable');
+    const replacement = await host.renderer.replaceFrame({ schemaVersion: 1, ops: [] });
+    return { replacement, entries: host.input.drain() };
+  });
+  expect(result.replacement).toEqual({ applied: true, diagnostics: [] });
+  expect(result.entries).toEqual([{
+    runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
+    sequence: '0',
+    context: 'gameplay.default',
+    fact: { kind: 'clear', reason: 'pointer-lock-loss' },
+  }]);
+  await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
+});
+
+test('application-host input ingress detaches browser listeners after the owning host disposes', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  const result = await page.evaluate(async () => {
+    const host = window.__rustyApplicationHost;
+    if (host?.input === undefined) throw new Error('runtime input ingress is unavailable');
+    await host.dispose();
+    const disposal = host.input.drain();
+    document.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' }));
+    document.dispatchEvent(new PointerEvent('pointercancel'));
+    window.dispatchEvent(new Event('blur'));
+    return { disposal, afterEvents: host.input.drain() };
+  });
+  expect(result.disposal).toMatchObject([{ fact: { kind: 'clear', reason: 'dispose' } }]);
+  expect(result.afterEvents).toEqual([]);
+});
+
+test('application-host input ingress clears a pressed pointer when its release lands in a presentation gutter', async ({ page }) => {
+  await page.goto('/browser/application-host.html');
+  await page.evaluate(async () => {
+    await window.__rustyApplicationHost?.dispose();
+    const root = document.querySelector<HTMLElement>('#application');
+    if (root === null) throw new Error('application root is unavailable');
+    root.style.cssText = 'height:400px;min-height:0;overflow:hidden;width:600px;';
+    const host = await window.__rustyApplicationMount?.({ minimum: 1, maximum: 1 });
+    if (host === undefined) throw new Error('bounded application host did not mount');
+    window.__rustyApplicationHost = host;
+  });
+  await page.mouse.move(300, 200);
+  await page.mouse.down();
+  await expect.poll(() => page.evaluate(() => document.pointerLockElement instanceof HTMLCanvasElement)).toBe(true);
+  await page.evaluate(() => document.exitPointerLock());
+  await expect.poll(() => page.evaluate(() => document.pointerLockElement === null)).toBe(true);
+  await page.mouse.move(20, 20);
+  await page.mouse.up();
+  expect(await page.evaluate(() => window.__rustyApplicationHost?.input?.drain())).toEqual([{
+    runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
+    sequence: '0',
+    context: 'gameplay.default',
+    fact: { kind: 'clear', reason: 'interaction-mode-loss' },
+  }]);
 });
 
 test('bounded presentation frame contains every layer, survives replacement and transient zero size, and clips oversized UI', async ({ page }) => {

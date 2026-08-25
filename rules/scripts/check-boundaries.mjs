@@ -47,6 +47,14 @@ const packages = new Map([
       ],
     },
   ],
+  [
+    'runtime-composition-authoring',
+    {
+      dependencies: [],
+      peers: [],
+      devDependencies: ['@types/node'],
+    },
+  ],
 ]);
 
 for (const [name, expected] of packages) {
@@ -147,6 +155,16 @@ const standardGenerated = readFileSync(
 );
 if (!standardGenerated.startsWith('// Generated from the Rust gameplay-standard contract.')) {
   throw new Error('generated gameplay-standard contract lost its Rust ownership marker');
+}
+const productModelGenerated = readFileSync(
+  new URL(
+    'packages/runtime-composition-authoring/src/generated.ts',
+    root,
+  ),
+  'utf8',
+);
+if (!productModelGenerated.startsWith('// Generated from Rust product-model contract descriptor.')) {
+  throw new Error('generated Product Model contract lost its Rust ownership marker');
 }
 
 console.log('gameplay-rules package boundaries passed');
