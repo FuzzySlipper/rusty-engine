@@ -527,6 +527,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "csharp-product-runtime"
+version = "0.1.0"
+dependencies = [
+ "libloading",
+ "product-dev-host",
+ "render-model",
+ "runtime-input",
+ "runtime-ui",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cssparser"
 version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

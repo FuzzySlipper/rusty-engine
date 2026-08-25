@@ -8,6 +8,7 @@ members = [
     "rust/crates/product-materializer",
     "rust/crates/product-assembly",
     "rust/crates/product-dev-host",
+    "rust/crates/csharp-product-runtime",
     "rust/crates/runtime-composition",
     "rust/crates/runtime-vm",
     "rust/crates/runtime-lifecycle",
