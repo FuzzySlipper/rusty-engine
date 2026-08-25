@@ -20,13 +20,13 @@ try {
   await page.waitForSelector('canvas', { state: 'attached', timeout: 30_000 });
   const canvasCount = await page.locator('canvas').count();
   if (canvasCount !== 1) throw new Error(`expected exactly one Engine canvas, found ${canvasCount}`);
-  const counter = page.locator('#product-conformance-counter');
-  const increment = page.locator('#product-conformance-increment');
+  const counter = page.locator('[data-rusty-test-counter]');
+  const increment = page.locator('[data-rusty-test-increment]');
   if (await counter.count() !== 1 || await increment.count() !== 1) {
     throw new Error('expected the conformance product UI counter and semantic increment control');
   }
   await page.waitForFunction(() => {
-    const value = document.querySelector('#product-conformance-counter')?.textContent ?? '';
+    const value = document.querySelector('[data-rusty-test-counter]')?.textContent ?? '';
     return value.includes('observed=1') && value.includes('recurring=1');
   }, undefined, { timeout: 30_000 });
   const counterValue = async () => {
@@ -42,7 +42,7 @@ try {
   // it does not receive a test-only mutation route.
   await increment.click();
   await page.waitForFunction((before) => {
-    const text = document.querySelector('#product-conformance-counter')?.textContent ?? '';
+    const text = document.querySelector('[data-rusty-test-counter]')?.textContent ?? '';
     const match = /^value=(\d+);/.exec(text);
     return match !== null && Number(match[1]) > before;
   }, initialValue, { timeout: 30_000 });
@@ -54,7 +54,7 @@ try {
   await page.locator('canvas').focus();
   await page.keyboard.press('KeyW');
   await page.waitForFunction((before) => {
-    const text = document.querySelector('#product-conformance-counter')?.textContent ?? '';
+    const text = document.querySelector('[data-rusty-test-counter]')?.textContent ?? '';
     const match = /^value=(\d+);/.exec(text);
     return match !== null && Number(match[1]) > before;
   }, afterUi, { timeout: 30_000 });
@@ -114,7 +114,7 @@ try {
   // exact evidence of the one accepted `increment`; both rejected stale
   // claims report zero accepted events and cannot contribute a mutation.
   await page.waitForFunction((beforeParity) => {
-    const text = document.querySelector('#product-conformance-counter')?.textContent ?? '';
+    const text = document.querySelector('[data-rusty-test-counter]')?.textContent ?? '';
     const match = /^value=(\d+);/.exec(text);
     return match !== null && Number(match[1]) % 2 !== beforeParity;
   }, afterPhysical % 2, { timeout: 30_000 });

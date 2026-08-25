@@ -12,11 +12,13 @@ export function mountProductUi(
 ): RustyApplicationUiOwner {
   const increment = document.createElement('button');
   increment.id = 'product-conformance-increment';
+  increment.dataset.rustyTestIncrement = 'true';
   increment.type = 'button';
   increment.textContent = 'Increment';
 
   const label = document.createElement('output');
   label.id = 'product-conformance-counter';
+  label.dataset.rustyTestCounter = 'true';
   label.textContent = '0';
   root.append(increment, label);
 
