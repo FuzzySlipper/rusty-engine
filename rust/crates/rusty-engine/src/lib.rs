@@ -45,11 +45,6 @@ pub use runtime_schedule;
 pub use runtime_standard_capabilities;
 pub use runtime_timeline;
 pub use runtime_ui;
-/// Fixed serialization tools intentionally re-exported for closed Product
-/// Kernel packages. This avoids an ambient registry dependency graph in the
-/// generated Assembly while keeping product-owned DTO serialization explicit.
-pub use serde;
-pub use serde_json;
 pub use state_machine;
 pub use svc_collision;
 pub use svc_mesh;
