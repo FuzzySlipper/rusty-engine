@@ -1404,13 +1404,14 @@ test('public application-host UI projection is read-only in the mounted DOM lane
 
 test('application-host input ingress treats pointer cancellation as a fail-closed loss', async ({ page }) => {
   await page.goto('/browser/application-host.html');
-  await page.evaluate(() => {
+  const entries = await page.evaluate(() => {
     const gameplay = document.querySelector<HTMLElement>('#gameplay-zone');
     if (gameplay === null) throw new Error('gameplay zone is unavailable');
     gameplay.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }));
     document.dispatchEvent(new PointerEvent('pointercancel'));
+    return window.__rustyApplicationHost?.input?.drain();
   });
-  expect(await page.evaluate(() => window.__rustyApplicationHost?.input?.drain())).toEqual([{
+  expect(entries).toEqual([{
     runtime: { instanceId: '7', generation: '3', controlRevision: '11' },
     sequence: '0',
     context: 'gameplay.default',
