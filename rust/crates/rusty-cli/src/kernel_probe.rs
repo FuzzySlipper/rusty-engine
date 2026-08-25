@@ -28,6 +28,7 @@ use serde::Deserialize;
 
 const MAX_PROBE_OUTPUT_BYTES: usize = 64 * 1024;
 const MAX_PROBE_TIMEOUT: Duration = Duration::from_secs(120);
+const MAX_PROCESS_TIMEOUT: Duration = Duration::from_secs(600);
 const MAX_PROBE_STRING_BYTES: usize = 512;
 const PROBE_SCHEMA: &str = "rusty.product-kernel-capability-probe.v1";
 
@@ -96,11 +97,11 @@ pub(crate) fn run_bounded(
     mut command: Command,
     timeout: Duration,
 ) -> Result<Output, KernelProbeError> {
-    if timeout.is_zero() || timeout > MAX_PROBE_TIMEOUT {
+    if timeout.is_zero() || timeout > MAX_PROCESS_TIMEOUT {
         return Err(fail(
             "RUSTY_PROCESS_TIMEOUT_BOUNDS",
             "process",
-            "subprocess timeout must be within 1ms..=120s",
+            "subprocess timeout must be within 1ms..=600s",
         ));
     }
     #[cfg(unix)]
@@ -170,7 +171,10 @@ pub(crate) fn run_bounded(
                 return Err(fail(
                     "RUSTY_PROCESS_TIMEOUT",
                     "process",
-                    "subprocess exceeded its fixed 120 second timeout",
+                    format!(
+                        "subprocess exceeded its fixed {}ms timeout",
+                        timeout.as_millis()
+                    ),
                 ));
             }
             None => thread::sleep(Duration::from_millis(10)),

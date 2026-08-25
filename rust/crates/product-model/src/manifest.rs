@@ -17,6 +17,8 @@ pub const MAX_REALTIME_CATCH_UP_STEPS: u32 = 16;
 const MIN_WINDOW_DIMENSION: u32 = 320;
 const MAX_WINDOW_DIMENSION: u32 = 8_192;
 const MAX_WRAPPER_TITLE_BYTES: usize = 128;
+/// Maximum UTF-8 byte length admitted for a wrapper's semantic version.
+pub const MAX_WRAPPER_VERSION_BYTES: usize = 64;
 
 /// The only lifecycle selections admitted by the current product model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -74,6 +76,7 @@ pub enum ReleaseChannel {
 pub struct WrapperDeclaration {
     id: String,
     kind: WrapperKind,
+    version: String,
     application_id: String,
     title: String,
     window_width: u32,
@@ -82,6 +85,7 @@ pub struct WrapperDeclaration {
     permissions: Vec<String>,
     storage_namespace: String,
     release_channel: ReleaseChannel,
+    singleton: bool,
 }
 
 impl WrapperDeclaration {
@@ -91,6 +95,10 @@ impl WrapperDeclaration {
 
     pub const fn kind(&self) -> WrapperKind {
         self.kind
+    }
+
+    pub fn version(&self) -> &str {
+        &self.version
     }
 
     pub fn application_id(&self) -> &str {
@@ -124,6 +132,10 @@ impl WrapperDeclaration {
     pub const fn release_channel(&self) -> ReleaseChannel {
         self.release_channel
     }
+
+    pub const fn singleton(&self) -> bool {
+        self.singleton
+    }
 }
 
 /// Raw, current-schema product manifest input. It is validated atomically.
@@ -149,6 +161,7 @@ pub struct ProductManifestCandidate {
 pub struct WrapperCandidate {
     pub id: String,
     pub kind: WrapperKind,
+    pub version: String,
     pub application_id: String,
     pub title: String,
     pub window_width: u32,
@@ -157,6 +170,7 @@ pub struct WrapperCandidate {
     pub permissions: Vec<String>,
     pub storage_namespace: String,
     pub release_channel: ReleaseChannel,
+    pub singleton: bool,
 }
 
 /// Validated Product Layout. Authored lanes and generated destinations are
@@ -365,6 +379,7 @@ pub fn validate_product_manifest(
             SOURCE,
             &format!("wrappers[{index}].application_id"),
         )?;
+        validate_semantic_version(&wrapper.version, &format!("wrappers[{index}].version"))?;
         validate_title(&wrapper.title, &format!("wrappers[{index}].title"))?;
         validate_window_dimension(
             wrapper.window_width,
@@ -402,6 +417,7 @@ pub fn validate_product_manifest(
         wrappers.push(WrapperDeclaration {
             id: wrapper.id,
             kind: wrapper.kind,
+            version: wrapper.version,
             application_id: wrapper.application_id,
             title: wrapper.title,
             window_width: wrapper.window_width,
@@ -410,6 +426,7 @@ pub fn validate_product_manifest(
             permissions: wrapper.permissions,
             storage_namespace: wrapper.storage_namespace,
             release_channel: wrapper.release_channel,
+            singleton: wrapper.singleton,
         });
     }
 
@@ -608,6 +625,80 @@ fn validate_window_dimension(value: u32, path: &str) -> Result<(), ProductModelE
     Ok(())
 }
 
+fn validate_semantic_version(value: &str, path: &str) -> Result<(), ProductModelError> {
+    let invalid = || {
+        failure(
+            "PRODUCT_INVALID_WRAPPER_VERSION",
+            SOURCE,
+            path,
+            format!(
+                "wrapper versions must be strict semantic versions (MAJOR.MINOR.PATCH with optional prerelease/build identifiers) and at most {MAX_WRAPPER_VERSION_BYTES} UTF-8 bytes"
+            ),
+        )
+    };
+
+    if value.is_empty() || value.len() > MAX_WRAPPER_VERSION_BYTES || !value.is_ascii() {
+        return Err(invalid());
+    }
+
+    let (without_build, build) = match value.split_once('+') {
+        Some((core, build)) if !build.is_empty() && !build.contains('+') => (core, Some(build)),
+        Some(_) => return Err(invalid()),
+        None => (value, None),
+    };
+    let (core, prerelease) = match without_build.split_once('-') {
+        Some((core, prerelease)) if !prerelease.is_empty() => (core, Some(prerelease)),
+        Some(_) => return Err(invalid()),
+        None => (without_build, None),
+    };
+
+    let core_parts: Vec<_> = core.split('.').collect();
+    if core_parts.len() != 3
+        || core_parts
+            .iter()
+            .any(|part| !valid_numeric_version_identifier(part))
+    {
+        return Err(invalid());
+    }
+    if let Some(prerelease) = prerelease {
+        if prerelease
+            .split('.')
+            .any(|part| !valid_prerelease_identifier(part))
+        {
+            return Err(invalid());
+        }
+    }
+    if let Some(build) = build {
+        if build.split('.').any(|part| !valid_build_identifier(part)) {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
+fn valid_numeric_version_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && (value == "0" || !value.starts_with('0'))
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && value.parse::<u64>().is_ok()
+}
+
+fn valid_prerelease_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        && (!value.bytes().all(|byte| byte.is_ascii_digit())
+            || (value == "0" || !value.starts_with('0')))
+}
+
+fn valid_build_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
 pub(crate) fn validate_identity(
     value: &str,
     source: &str,
@@ -684,6 +775,7 @@ impl RawManifest {
                 .map(|wrapper| WrapperCandidate {
                     id: wrapper.id,
                     kind: wrapper.kind,
+                    version: wrapper.version,
                     application_id: wrapper.application_id,
                     title: wrapper.title,
                     window_width: wrapper.window_width,
@@ -692,6 +784,7 @@ impl RawManifest {
                     permissions: wrapper.permissions,
                     storage_namespace: wrapper.storage_namespace,
                     release_channel: wrapper.release_channel,
+                    singleton: wrapper.singleton,
                 })
                 .collect(),
         }
@@ -751,6 +844,7 @@ struct RawOutputs {
 struct RawWrapper {
     id: String,
     kind: WrapperKind,
+    version: String,
     application_id: String,
     title: String,
     window_width: u32,
@@ -759,4 +853,5 @@ struct RawWrapper {
     permissions: Vec<String>,
     storage_namespace: String,
     release_channel: ReleaseChannel,
+    singleton: bool,
 }

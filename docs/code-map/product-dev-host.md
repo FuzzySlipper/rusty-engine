@@ -18,6 +18,7 @@ cookies, or non-loopback binding option.
 - [`product-dev-host/src/lib.rs`](../../rust/crates/product-dev-host/src/lib.rs)
 - [`product-dev-host/src/bundle.rs`](../../rust/crates/product-dev-host/src/bundle.rs)
 - [`product-dev-host/src/model.rs`](../../rust/crates/product-dev-host/src/model.rs)
+- [`product-dev-host/src/session.rs`](../../rust/crates/product-dev-host/src/session.rs)
 - [`product-dev-host/src/host.rs`](../../rust/crates/product-dev-host/src/host.rs)
 - [`product-dev-host/tests/loopback_host.rs`](../../rust/crates/product-dev-host/tests/loopback_host.rs)
 
@@ -42,6 +43,16 @@ completion is reconstructed as the existing bounded `runtime-timeline`
 completion envelope. Render/presentation/UI outputs are only constructible from
 their owning validated Rust frame/envelope types before their exact wire bytes
 are emitted.
+
+`ProductDevOperationOwner` is the transport-neutral in-process operation seam.
+It serializes one generated `ProductDevRuntime` behind a mutex and exposes
+only the fixed lifecycle, input, realtime, demand, external-step, and timeline
+completion methods. Its JSON adapters use `CanonicalU64`,
+`ProductDevInputBatch`, and `ProductDevTimelineCompletion` strict bounded
+admission directly; they return the runtime owner's existing result-plus-output
+receipts and do not create callbacks, subscriptions, dynamic dispatch, or
+another runtime authority. A packaged host may compose these methods into its
+own typed delivery adapter without depending on the loopback HTTP transport.
 
 The deliberately bounded HTTP/1.1 implementation supports only the needed
 request/response subset: fixed `Content-Length`, read/write timeouts,

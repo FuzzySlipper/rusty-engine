@@ -1394,6 +1394,7 @@ function createRendererCanvas(document: Document): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.dataset['rustyApplicationRenderer'] = 'engine-owned';
   canvas.setAttribute('aria-label', 'Engine-rendered game world');
+  canvas.tabIndex = 0;
   canvas.style.cssText =
     'display:block;height:100%;inset:0;position:absolute;width:100%;z-index:0;';
   return canvas;

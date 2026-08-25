@@ -9,6 +9,7 @@ import {
 } from './product-browser-host.js';
 import type { ProductBrowserRuntimeAdapter } from './product-browser-host.js';
 import type { RustyApplicationRuntimeInputEnvelope } from '@rusty-engine/application-host';
+import { createProductBrowserCadence } from './realtime-cadence.js';
 
 const adapter: ProductBrowserRuntimeAdapter = {
   lifecycle: async (operation) => ({
@@ -27,6 +28,77 @@ test('fixed runtime transport preserves only named operations', async () => {
   assert.equal((await transport.input([])).count, 0);
   assert.equal((await transport.advanceRealtime('1000000')).operation, 'advance-realtime');
   assert.equal('call' in transport, false);
+});
+
+test('realtime owner controls advancement without dropping typed cadence input', async () => {
+  const input: RustyApplicationRuntimeInputEnvelope = {
+    runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
+    sequence: '1',
+    context: 'gameplay.default',
+    fact: { kind: 'key', code: 'key-w', edge: 'pressed' },
+  };
+
+  const run = async (realtimeAdvanceOwner: 'browser' | 'rust-host') => {
+    const inputBatches: Array<readonly RustyApplicationRuntimeInputEnvelope[]> = [];
+    const observedTimes: string[] = [];
+    const failures: unknown[] = [];
+    const cadence = createProductBrowserCadence({
+      lifecycleMode: 'realtime',
+      realtimeAdvanceOwner,
+      isReady: () => true,
+      enqueueOperation: (operation) => operation(),
+      sampleInput: () => [input],
+      sendInput: async (batch) => {
+        inputBatches.push(batch);
+      },
+      advanceRealtime: async (observedTimeNs) => {
+        observedTimes.push(observedTimeNs);
+      },
+      onFailure: (cause) => {
+        failures.push(cause);
+      },
+    });
+    cadence.enqueue(16.5);
+    await cadence.settle();
+    cadence.dispose();
+    return { inputBatches, observedTimes, failures };
+  };
+
+  const browser = await run('browser');
+  assert.deepEqual(browser.inputBatches, [[input]]);
+  assert.deepEqual(browser.observedTimes, ['16500000']);
+  assert.deepEqual(browser.failures, []);
+
+  const rustHost = await run('rust-host');
+  assert.deepEqual(rustHost.inputBatches, [[input]]);
+  assert.deepEqual(rustHost.observedTimes, []);
+  assert.deepEqual(rustHost.failures, []);
+});
+
+test('Rust-host output pulse drains typed input without browser advancement', async () => {
+  const input: RustyApplicationRuntimeInputEnvelope = {
+    runtime: { instanceId: '1', generation: '1', controlRevision: '1' },
+    sequence: '1',
+    context: 'gameplay.default',
+    fact: { kind: 'key', code: 'key-w', edge: 'pressed' },
+  };
+  const batches: Array<readonly RustyApplicationRuntimeInputEnvelope[]> = [];
+  const advances: string[] = [];
+  const cadence = createProductBrowserCadence({
+    lifecycleMode: 'realtime',
+    realtimeAdvanceOwner: 'rust-host',
+    isReady: () => true,
+    enqueueOperation: (operation) => operation(),
+    sampleInput: () => [input],
+    sendInput: async (batch) => { batches.push(batch); },
+    advanceRealtime: async (time) => { advances.push(time); },
+    onFailure: (cause) => { assert.fail(String(cause)); },
+  });
+  cadence.pulseRustHost();
+  await cadence.settle();
+  cadence.dispose();
+  assert.deepEqual(batches, [[input]]);
+  assert.deepEqual(advances, []);
 });
 
 test('transport rejects an adapter with an arbitrary or missing operation surface', () => {
@@ -79,9 +151,11 @@ test('bundle assets are fixed JS composition roots and descriptor bytes are repr
   assert.match(first[0]!.content, /main\.js/u);
   assert.match(first[1]!.content, /\.\/engine\/product-browser-host\.js/u);
   assert.match(first[1]!.content, /initialInteractionMode: 'gameplay'/u);
+  assert.match(first[1]!.content, /realtimeAdvanceOwner: bridge\.realtimeAdvanceOwner/u);
   assert.match(first[2]!.content, /\.\/engine\/product-browser-host\.js/u);
   assert.equal(first[3]!.content, options.engineHostModule);
   assert.match(first[2]!.content, /lifecycleMode: "demand"/u);
+  assert.match(first[2]!.content, /realtimeAdvanceOwner: "browser"/u);
   assert.match(first[2]!.content, /createProductBrowserLocalHttpAdapter/u);
   assert.match(first[2]!.content, /PRODUCT_RUNTIME_HTTP_BASE_PATH/u);
   const descriptor = productBrowserBundleDescriptor(options);
@@ -121,5 +195,37 @@ test('bundle path and identity admission is fail-closed', () => {
     }),
     /bare Engine package imports/u,
   );
+  assert.throws(
+    () => productBrowserBundleAssets({
+      engineHostModule: 'export const engineHost = true;\n',
+      uiModule: './ui/main.js',
+      runtimeAdapterModule: './runtime-adapter.js',
+      lifecycleMode: 'demand',
+      realtimeAdvanceOwner: 'rust-host',
+    }),
+    /requires realtime lifecycle mode/u,
+  );
+  assert.throws(
+    () => productBrowserBundleAssets({
+      engineHostModule: 'export const engineHost = true;\n',
+      uiModule: './ui/main.js',
+      runtimeAdapterModule: './runtime-adapter.js',
+      lifecycleMode: 'realtime',
+      realtimeAdvanceOwner: 'unknown' as never,
+    }),
+    /realtimeAdvanceOwner must be browser or rust-host/u,
+  );
   assert.equal(ProductBrowserHostError.prototype.name, 'Error');
+});
+
+test('packaged Rust-host realtime ownership propagates through the generated bridge', () => {
+  const assets = productBrowserBundleAssets({
+    engineHostModule: 'export const engineHost = true;\n',
+    uiModule: './ui/main.js',
+    runtimeAdapterModule: './runtime-adapter.js',
+    lifecycleMode: 'realtime',
+    realtimeAdvanceOwner: 'rust-host',
+  });
+  assert.match(assets[1]!.content, /realtimeAdvanceOwner: bridge\.realtimeAdvanceOwner/u);
+  assert.match(assets[2]!.content, /realtimeAdvanceOwner: "rust-host"/u);
 });

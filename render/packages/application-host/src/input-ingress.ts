@@ -123,6 +123,8 @@ export interface RustyApplicationRuntimeInputOptions {
   readonly maximumWheelDelta?: number;
   /** Opt-in selected-controller observation; sampling remains caller-driven. */
   readonly selectedController?: RustyApplicationSelectedControllerOptions;
+  /** Host-owned notification that queued input is available to drain. */
+  readonly onAvailable?: () => void;
 }
 
 export interface RustyApplicationInputPort {
@@ -177,6 +179,7 @@ interface NormalizedInputOptions {
   readonly maximumPointerDelta: number;
   readonly maximumQueue: number;
   readonly maximumWheelDelta: number;
+  readonly onAvailable: (() => void) | null;
   readonly selectedController: number | null;
 }
 
@@ -209,10 +212,12 @@ export function createRustyApplicationInputIngress(
   const clear = (reason: RustyApplicationInputClearReason): void => {
     clearLocal();
     queue.clear(reason);
+    normalized.onAvailable?.();
   };
   const enqueueFact = (fact: RustyApplicationRuntimeInputFact): boolean => {
     const overflowed = queue.enqueueFact(fact);
     if (overflowed) clearLocal();
+    normalized.onAvailable?.();
     return overflowed;
   };
   const admit = (event: Event, requiresFocus: boolean): boolean => {
@@ -371,7 +376,10 @@ export function createRustyApplicationInputIngress(
     },
     drain: () => queue.drain(),
     claim: (intent: string, value: RustyApplicationRuntimeIntentValue) => {
-      if (!disposed && queue.claim(intent, value)) clearLocal();
+      if (!disposed) {
+        if (queue.claim(intent, value)) clearLocal();
+        normalized.onAvailable?.();
+      }
     },
     sampleController,
     rebindCanvas: (canvas: HTMLCanvasElement) => {
@@ -608,6 +616,9 @@ function normalizeOptions(options: RustyApplicationRuntimeInputOptions): Normali
       'maximumWheelDelta',
       4_096,
     ),
+    onAvailable: options.onAvailable === undefined
+      ? null
+      : requireInputAvailabilityCallback(options.onAvailable),
     selectedController: options.selectedController === undefined
       ? null
       : boundedInteger(
@@ -617,6 +628,13 @@ function normalizeOptions(options: RustyApplicationRuntimeInputOptions): Normali
         RUSTY_APPLICATION_INPUT_SELECTED_CONTROLLER_MAXIMUM,
       ),
   });
+}
+
+function requireInputAvailabilityCallback(value: unknown): () => void {
+  if (typeof value !== 'function') {
+    throw new TypeError('onAvailable must be a function');
+  }
+  return value as () => void;
 }
 
 function validateBinding(binding: RustyApplicationRuntimeInputBinding): RustyApplicationRuntimeInputBinding {

@@ -13,5 +13,6 @@
 /rules/packages/*/node_modules/
 /rules/packages/*/dist/
 /rules/**/*.tsbuildinfo
+/fixtures/product-conformance/generated/
 *.log
 .DS_Store

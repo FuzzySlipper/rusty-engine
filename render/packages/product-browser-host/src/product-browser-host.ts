@@ -13,11 +13,23 @@ import {
   type RustyApplicationUiProjectionOptions,
   type RustyApplicationPresentationAspectBounds,
 } from '@rusty-engine/application-host';
+import { createProductBrowserCadence } from './realtime-cadence.js';
 
 /** Fixed current artifact identity; compatibility follows actual code changes. */
 export const PRODUCT_BROWSER_HOST_ARTIFACT = 'rusty.product.browser-host' as const;
 
 export type ProductBrowserRuntimeMode = 'realtime' | 'demand' | 'external';
+
+/**
+ * Selects the owner that admits fixed-step realtime work.
+ *
+ * Browser products use the Engine renderer cadence by default. A packaged
+ * product with an in-process Rust service can select `rust-host`; the
+ * WebView still drains typed input on each animation frame and receives
+ * retained outputs through the runtime subscription, but it never asks the
+ * runtime to advance from its presentation clock.
+ */
+export type ProductBrowserRealtimeAdvanceOwner = 'browser' | 'rust-host';
 
 /**
  * The fixed lifecycle operation vocabulary carried by the local bridge. The
@@ -209,8 +221,14 @@ export interface ProductBrowserHostOptions {
   readonly root: HTMLElement;
   readonly transport: ProductBrowserRuntimeTransport;
   readonly lifecycleMode: ProductBrowserRuntimeMode;
+  /**
+   * Owner of realtime simulation admission. Defaults to `browser`; use
+   * `rust-host` only when a packaged in-process Rust host advances the runtime
+   * and publishes outputs through `transport.subscribeOutputs`.
+   */
+  readonly realtimeAdvanceOwner?: ProductBrowserRealtimeAdvanceOwner;
   readonly mountUi: RustyApplicationUiMount;
-  readonly runtimeInput?: Omit<RustyApplicationRuntimeInputOptions, 'binding'> & {
+  readonly runtimeInput?: Omit<RustyApplicationRuntimeInputOptions, 'binding' | 'onAvailable'> & {
     readonly binding?: RustyApplicationRuntimeIdentity;
   };
   readonly uiProjection?: Omit<ProductBrowserUiProjectionOptions, 'binding'> & {
@@ -243,6 +261,7 @@ export interface ProductBrowserHostReadout {
   readonly artifact: typeof PRODUCT_BROWSER_HOST_ARTIFACT;
   readonly state: 'starting' | 'ready' | 'failed' | 'disposed';
   readonly mode: ProductBrowserRuntimeMode;
+  readonly realtimeAdvanceOwner: ProductBrowserRealtimeAdvanceOwner;
   readonly host: RustyApplicationHostReadout | null;
   readonly runtime: ProductBrowserRuntimeReadout | null;
   readonly lastFailure: string | null;
@@ -299,13 +318,17 @@ interface ProductBrowserOperationQueue {
 /**
  * Mounts the one Engine-owned application composition root. The browser host
  * has no renderer implementation, product state, evaluator, or own cadence;
- * it drains the public input port and advances the supplied runtime only from
- * the application-host's existing renderer cadence callback.
+ * it drains the public input port from the application-host's existing
+ * renderer cadence callback. Browser-owned realtime products also advance
+ * from that callback; `realtimeAdvanceOwner: 'rust-host'` leaves advancement
+ * to the packaged Rust host while subscribed outputs continue to drive the
+ * retained presentation.
  */
 export async function mountProductBrowserHost(
   options: ProductBrowserHostOptions,
 ): Promise<ProductBrowserHost> {
   validateOptions(options);
+  const realtimeAdvanceOwner = options.realtimeAdvanceOwner ?? 'browser';
   const transport = options.transport;
   const queue = createOperationQueue();
   let state: ProductBrowserHostReadout['state'] = 'starting';
@@ -315,8 +338,6 @@ export async function mountProductBrowserHost(
   let unsubscribeTerminalFailures: (() => void) | null = null;
   let disposal: Promise<void> | null = null;
   let started = false;
-  let cadenceInFlight = false;
-  let pendingCadenceTimeMs: number | null = null;
   let failure: ProductBrowserHostError | null = null;
   const pendingOutputs: ProductBrowserRuntimeOutput[] = [];
   const maximumPendingOutputs = 64;
@@ -410,6 +431,7 @@ export async function mountProductBrowserHost(
           return;
         case 'runtime-readout':
           runtimeReadout = output.readout;
+          cadence.pulseRustHost();
           return;
         default:
           assertNever(output);
@@ -457,47 +479,35 @@ export async function mountProductBrowserHost(
     if (result.readout !== undefined) applyOutput({ kind: 'runtime-readout', readout: result.readout });
   };
 
-  const enqueueCadence = (timeMs: number): void => {
-    if (!started || state !== 'ready') return;
-    if (cadenceInFlight) {
-      // Keep only the newest observed host time while the Rust operation is
-      // outstanding. Input remains in application-host's bounded ingress
-      // queue; one slow local request must not create one promise per RAF.
-      pendingCadenceTimeMs = timeMs;
-      return;
-    }
-    cadenceInFlight = true;
-    const operation = queue.enqueue(async () => {
+  const cadence = createProductBrowserCadence({
+    lifecycleMode: options.lifecycleMode,
+    realtimeAdvanceOwner,
+    isReady: () => started && state === 'ready',
+    enqueueOperation: queue.enqueue,
+    sampleInput: () => {
       const host = requireApplication();
       host.input?.sampleController();
-      const batch = host.input?.drain() ?? [];
-      if (batch.length > 0) applyInputResult(await transport.input(batch));
-      if (options.lifecycleMode === 'realtime') {
-        const result = await transport.advanceRealtime(toNanoseconds(timeMs));
-        applyOperationResult(result);
-      }
-    });
-    void operation.then(
-      () => finishCadence(),
-      (cause: unknown) => {
-        reportFailure(cause, 'transport_failed');
-        finishCadence();
-      },
-    );
-  };
-
-  const finishCadence = (): void => {
-    cadenceInFlight = false;
-    const nextTimeMs = pendingCadenceTimeMs;
-    pendingCadenceTimeMs = null;
-    if (nextTimeMs !== null && started && state === 'ready') enqueueCadence(nextTimeMs);
-  };
+      return host.input?.drain() ?? [];
+    },
+    sendInput: async (batch) => {
+      applyInputResult(await transport.input(batch));
+    },
+    advanceRealtime: async (observedTimeNs) => {
+      applyOperationResult(await transport.advanceRealtime(observedTimeNs));
+    },
+    onFailure: (cause) => {
+      reportFailure(cause, 'transport_failed');
+    },
+  });
 
   let runtimeInput: RustyApplicationRuntimeInputOptions | undefined;
   if (options.runtimeInput !== undefined) {
     const { binding, ...runtimeInputOptions } = options.runtimeInput;
     runtimeInput = {
       ...runtimeInputOptions,
+      ...(realtimeAdvanceOwner === 'rust-host'
+        ? { onAvailable: cadence.pulseRustHost }
+        : {}),
       ...(binding === undefined
         ? {}
         : {
@@ -531,15 +541,15 @@ export async function mountProductBrowserHost(
       ...(options.renderer === undefined
         ? {
             renderer: {
-              onCadence: enqueueCadence,
+              onCadence: cadence.enqueue,
             },
           }
         : {
             renderer: {
               ...options.renderer,
-              onCadence: enqueueCadence,
+              onCadence: cadence.enqueue,
             },
-      }),
+          }),
     });
     const bufferedOutputs = pendingOutputs.splice(0, pendingOutputs.length);
     for (const output of bufferedOutputs) applyOutput(output);
@@ -580,6 +590,7 @@ export async function mountProductBrowserHost(
     artifact: PRODUCT_BROWSER_HOST_ARTIFACT,
     state,
     mode: options.lifecycleMode,
+    realtimeAdvanceOwner,
     host: application?.readout() ?? null,
     runtime: runtimeReadout,
     lastFailure: failure?.message ?? null,
@@ -671,7 +682,7 @@ export async function mountProductBrowserHost(
       if (state === 'disposed') return;
       state = 'disposed';
       started = false;
-      pendingCadenceTimeMs = null;
+      cadence.dispose();
       unsubscribeTerminalFailures?.();
       unsubscribeTerminalFailures = null;
       unsubscribeOutputs?.();
@@ -722,6 +733,17 @@ function validateOptions(options: ProductBrowserHostOptions): void {
     && options.lifecycleMode !== 'external') {
     throw new ProductBrowserHostError('invalid_options', 'Product Browser Host lifecycle mode is invalid');
   }
+  if (options.realtimeAdvanceOwner !== undefined
+    && options.realtimeAdvanceOwner !== 'browser'
+    && options.realtimeAdvanceOwner !== 'rust-host') {
+    throw new ProductBrowserHostError('invalid_options', 'Product Browser Host realtime advance owner is invalid');
+  }
+  if (options.realtimeAdvanceOwner === 'rust-host' && options.lifecycleMode !== 'realtime') {
+    throw new ProductBrowserHostError(
+      'invalid_options',
+      'Product Browser Host rust-host realtime advance ownership requires realtime lifecycle mode',
+    );
+  }
   if (typeof options.mountUi !== 'function') {
     throw new ProductBrowserHostError('invalid_options', 'Product Browser Host mountUi must be a function');
   }
@@ -732,12 +754,6 @@ function validateOptions(options: ProductBrowserHostOptions): void {
 
 function requireFunction(value: unknown, name: string): void {
   if (typeof value !== 'function') throw new TypeError(`Product Browser Host adapter ${name} must be a function`);
-}
-
-function toNanoseconds(timeMs: number): string {
-  if (!Number.isFinite(timeMs) || timeMs < 0) return '0';
-  const nanoseconds = BigInt(Math.round(timeMs * 1_000_000));
-  return nanoseconds.toString(10);
 }
 
 function assertNever(value: never): never {
@@ -795,6 +811,8 @@ export interface ProductBrowserBundleTemplateOptions {
    */
   readonly runtimeAdapterModule: string;
   readonly lifecycleMode: ProductBrowserRuntimeMode;
+  /** Defaults to `browser`; `rust-host` leaves realtime advancement to the packaged Rust host. */
+  readonly realtimeAdvanceOwner?: ProductBrowserRealtimeAdvanceOwner;
   readonly uiProjection?: {
     readonly expectedStream: string;
     readonly expectedContract: string;
@@ -816,6 +834,14 @@ export function productBrowserBundleAssets(
     && options.lifecycleMode !== 'demand'
     && options.lifecycleMode !== 'external') {
     throw new RangeError('lifecycleMode must be realtime, demand, or external');
+  }
+  if (options.realtimeAdvanceOwner !== undefined
+    && options.realtimeAdvanceOwner !== 'browser'
+    && options.realtimeAdvanceOwner !== 'rust-host') {
+    throw new RangeError('realtimeAdvanceOwner must be browser or rust-host');
+  }
+  if (options.realtimeAdvanceOwner === 'rust-host' && options.lifecycleMode !== 'realtime') {
+    throw new RangeError('rust-host realtimeAdvanceOwner requires realtime lifecycle mode');
   }
   if (options.uiProjection !== undefined && options.uiProjection !== null) {
     validateBundleIdentity(options.uiProjection.expectedStream, 'expectedStream');
@@ -840,6 +866,7 @@ export function productBrowserBundleAssets(
         '  root,',
         '  transport: bridge.transport,',
         '  lifecycleMode: bridge.lifecycleMode,',
+        '  realtimeAdvanceOwner: bridge.realtimeAdvanceOwner,',
         "  initialInteractionMode: 'gameplay',",
         '  mountUi: mountProductUi,',
         '  uiProjection: bridge.uiProjection,',
@@ -862,6 +889,7 @@ export function productBrowserBundleAssets(
         '  return {',
         '    transport: createProductBrowserRuntimeTransport(adapter),',
         `    lifecycleMode: ${JSON.stringify(options.lifecycleMode)},`,
+        `    realtimeAdvanceOwner: ${JSON.stringify(options.realtimeAdvanceOwner ?? 'browser')},`,
         ...(options.uiProjection === undefined || options.uiProjection === null
           ? ['    uiProjection: undefined,']
           : [`    uiProjection: ${JSON.stringify(options.uiProjection)},`]),

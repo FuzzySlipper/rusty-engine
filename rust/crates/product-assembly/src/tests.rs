@@ -444,6 +444,20 @@ fn empty_assembly_is_deterministic_and_verifiable() {
         .product_rs()
         .windows(b"diagnostic.truncate(end)".len())
         .any(|window| window == b"diagnostic.truncate(end)"));
+    assert!(std::str::from_utf8(plan.source_plan().cargo_toml())
+        .expect("generated Cargo")
+        .contains("name = \"rusty_product\""));
+    assert_eq!(
+        std::str::from_utf8(plan.source_plan().lib_rs()).expect("generated library"),
+        "#![forbid(unsafe_code)]\n\npub mod product;\n"
+    );
+    assert!(std::str::from_utf8(plan.source_plan().main_rs())
+        .expect("generated binary")
+        .contains("rusty_product::product::run(port)"));
+    assert!(plan.receipt().entries().iter().any(|entry| {
+        entry.kind() == AssemblyEntryKind::ExecutableWorkspace
+            && entry.path() == "generated/product-assembly/src/lib.rs"
+    }));
     let receipt_bytes = plan.receipt_bytes().expect("receipt");
     plan.publish(&fixture.root).expect("publish");
     let verified =
@@ -503,6 +517,37 @@ fn generated_package_compiles_with_direct_relocatable_engine_path() {
         .status()
         .expect("run generated cargo check");
     assert!(status.success(), "generated Cargo check failed: {status}");
+
+    let consumer = fixture.root.join("generated/library-consumer");
+    fs::create_dir_all(consumer.join("src")).expect("consumer source directory");
+    fs::write(
+        consumer.join("Cargo.toml"),
+        "[package]\nname = \"library-consumer\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\nrusty-product = { package = \"rusty-product-rusty-test\", path = \"../product-assembly\" }\n\n[workspace]\n",
+    )
+    .expect("consumer manifest");
+    fs::write(
+        consumer.join("src/main.rs"),
+        "fn main() { let _runtime = rusty_product::product::GeneratedProductDevRuntime::new().expect(\"runtime constructor\"); }\n",
+    )
+    .expect("consumer source");
+    let consumer_status = std::process::Command::new("cargo")
+        .args([
+            "check",
+            "--quiet",
+            "--manifest-path",
+            consumer
+                .join("Cargo.toml")
+                .to_str()
+                .expect("consumer manifest path"),
+            "--offline",
+        ])
+        .env("CARGO_TARGET_DIR", &target)
+        .status()
+        .expect("run generated library consumer check");
+    assert!(
+        consumer_status.success(),
+        "generated library consumer check failed: {consumer_status}"
+    );
     fixture.cleanup();
 }
 
@@ -785,6 +830,12 @@ fn generated_counter_host_publishes_mutation_and_ui_projection() {
         &capabilities,
     )
     .expect("counter plan");
+    assert!(std::str::from_utf8(plan.source_plan().lib_rs())
+        .expect("generated kernel library")
+        .contains("mod product_kernel_source;"));
+    assert!(!std::str::from_utf8(plan.source_plan().main_rs())
+        .expect("generated kernel binary")
+        .contains("product_kernel_source"));
     assert!(!std::str::from_utf8(plan.source_plan().product_rs())
         .expect("generated source")
         .contains("struct EmptyProductAdapter"));

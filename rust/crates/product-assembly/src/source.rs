@@ -32,6 +32,7 @@ const BROWSER_RUNTIME_ADAPTER_PATH: &str = "runtime-adapter.js";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssemblySourcePlan {
     cargo_toml: Vec<u8>,
+    lib_rs: Vec<u8>,
     main_rs: Vec<u8>,
     product_rs: Vec<u8>,
     kernel_entry: Option<String>,
@@ -232,6 +233,10 @@ impl AssemblyGenerationInputs {
 impl AssemblySourcePlan {
     pub fn cargo_toml(&self) -> &[u8] {
         &self.cargo_toml
+    }
+
+    pub fn lib_rs(&self) -> &[u8] {
+        &self.lib_rs
     }
 
     pub fn main_rs(&self) -> &[u8] {
@@ -455,6 +460,7 @@ pub fn plan_product_assembly_with_kernel_capabilities(
 
     let mut assembly_files = vec![
         PublicationFile::new("Cargo.toml", source_plan.cargo_toml.clone())?,
+        PublicationFile::new("src/lib.rs", source_plan.lib_rs.clone())?,
         PublicationFile::new("src/main.rs", source_plan.main_rs.clone())?,
         PublicationFile::new("src/product.rs", source_plan.product_rs.clone())?,
         PublicationFile::new(
@@ -888,7 +894,7 @@ fn generate_source_plan(
         format!("\nproduct-kernel = {{ path = {} }}", rust_string(path))
     });
     let cargo = format!(
-        "[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\n{engine_dependency}{kernel_dependency}\nserde_json = \"1\"\n\n# Dependencies are product-relative paths supplied by the assembly caller; no absolute path is embedded.\n\n# This generated package is a detached build root even when its product lives below an Engine checkout.\n[workspace]\n",
+        "[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[lib]\nname = \"rusty_product\"\npath = \"src/lib.rs\"\n\n[dependencies]\n{engine_dependency}{kernel_dependency}\nserde_json = \"1\"\n\n# Dependencies are product-relative paths supplied by the assembly caller; no absolute path is embedded.\n\n# This generated package is a detached build root even when its product lives below an Engine checkout.\n[workspace]\n",
     )
     .into_bytes();
     let kernel = manifest.kernel_entry().map(|path| path.as_str().to_owned());
@@ -905,14 +911,14 @@ fn generate_source_plan(
             ));
         }
     }
-    let mut main = String::from(
-        "#![forbid(unsafe_code)]\n\nmod product;\n\nfn main() {\n    let mut port = 0_u16;\n    let mut arguments = std::env::args().skip(1);\n    while let Some(argument) = arguments.next() {\n        if argument != \"--port\" {\n            eprintln!(\"unsupported generated Product option: {argument}\");\n            std::process::exit(2);\n        }\n        let Some(value) = arguments.next() else {\n            eprintln!(\"--port requires a bounded u16 value\");\n            std::process::exit(2);\n        };\n        port = value.parse().unwrap_or_else(|_| {\n            eprintln!(\"--port requires a bounded u16 value\");\n            std::process::exit(2);\n        });\n    }\n    product::run(port);\n}\n",
-    );
-    if let Some(path) = &kernel {
-        main = format!(
-            "#![forbid(unsafe_code)]\n\n#[allow(dead_code)]\n#[path = \"../source/{path}\"]\nmod product_kernel_source;\n\nmod product;\n\nfn main() {{\n    let mut port = 0_u16;\n    let mut arguments = std::env::args().skip(1);\n    while let Some(argument) = arguments.next() {{\n        if argument != \"--port\" {{\n            eprintln!(\"unsupported generated Product option: {{argument}}\");\n            std::process::exit(2);\n        }}\n        let Some(value) = arguments.next() else {{\n            eprintln!(\"--port requires a bounded u16 value\");\n            std::process::exit(2);\n        }};\n        port = value.parse().unwrap_or_else(|_| {{\n            eprintln!(\"--port requires a bounded u16 value\");\n            std::process::exit(2);\n        }});\n    }}\n    product::run(port);\n}}\n"
-        );
-    }
+    let main = "#![forbid(unsafe_code)]\n\nfn main() {\n    let mut port = 0_u16;\n    let mut arguments = std::env::args().skip(1);\n    while let Some(argument) = arguments.next() {\n        if argument != \"--port\" {\n            eprintln!(\"unsupported generated Product option: {argument}\");\n            std::process::exit(2);\n        }\n        let Some(value) = arguments.next() else {\n            eprintln!(\"--port requires a bounded u16 value\");\n            std::process::exit(2);\n        };\n        port = value.parse().unwrap_or_else(|_| {\n            eprintln!(\"--port requires a bounded u16 value\");\n            std::process::exit(2);\n        });\n    }\n    rusty_product::product::run(port);\n}\n";
+    let lib = if let Some(path) = &kernel {
+        format!(
+            "#![forbid(unsafe_code)]\n\n#[allow(dead_code)]\n#[path = \"../source/{path}\"]\nmod product_kernel_source;\n\npub mod product;\n"
+        )
+    } else {
+        "#![forbid(unsafe_code)]\n\npub mod product;\n".to_owned()
+    };
     let kernel_descriptors = render_kernel_descriptors(kernel_capabilities);
     let bundle_entries = render_bundle_entries(browser_files)?;
     let runtime_resources = render_runtime_resources(browser_files, runtime_files)?;
@@ -922,9 +928,10 @@ fn generate_source_plan(
         &runtime_resources,
         kernel.is_some(),
     );
-    let main_bytes = main.into_bytes();
+    let lib_bytes = lib.into_bytes();
+    let main_bytes = main.as_bytes().to_vec();
     let product_bytes = product.into_bytes();
-    let generated = [&cargo, &main_bytes, &product_bytes];
+    let generated = [&cargo, &lib_bytes, &main_bytes, &product_bytes];
     if generated
         .iter()
         .any(|bytes| bytes.len() > MAX_GENERATED_SOURCE_BYTES)
@@ -938,6 +945,7 @@ fn generate_source_plan(
     let _ = canonical_composition;
     Ok(AssemblySourcePlan {
         cargo_toml: cargo,
+        lib_rs: lib_bytes,
         main_rs: main_bytes,
         product_rs: product_bytes,
         kernel_entry: kernel,
@@ -1281,7 +1289,7 @@ pub struct GeneratedProductDevRuntime {
 }
 
 impl GeneratedProductDevRuntime {
-    fn new() -> Result<Self, String> {
+    pub fn new() -> Result<Self, String> {
         let manifest = product_model::decode_product_manifest(include_str!("../source/rusty.toml"))
             .map_err(|error| format!("manifest admission: {error}"))?;
         let composition = product_model::decode_compiled_composition(ADMITTED_COMPILED_COMPOSITION)

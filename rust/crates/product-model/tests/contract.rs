@@ -109,8 +109,10 @@ fn checked_minimum_product_layout_is_valid_and_fixed() {
         manifest.wrappers()[0].application_id(),
         "com.example.product"
     );
+    assert_eq!(manifest.wrappers()[0].version(), "0.1.0");
     assert_eq!(manifest.wrappers()[0].window_width(), 1280);
     assert_eq!(manifest.wrappers()[0].permissions(), ["window", "storage"]);
+    assert!(manifest.wrappers()[0].singleton());
 }
 
 #[test]
@@ -133,6 +135,7 @@ fn direct_and_decoded_manifest_validation_converge() {
         wrappers: vec![product_model::WrapperCandidate {
             id: "desktop".into(),
             kind: product_model::WrapperKind::Tauri,
+            version: "0.1.0".into(),
             application_id: "com.example.product".into(),
             title: "Example Product".into(),
             window_width: 1280,
@@ -141,6 +144,7 @@ fn direct_and_decoded_manifest_validation_converge() {
             permissions: vec!["window".into(), "storage".into()],
             storage_namespace: "example.product".into(),
             release_channel: ReleaseChannel::Development,
+            singleton: true,
         }],
     })
     .unwrap();
@@ -245,6 +249,36 @@ fn manifest_rejects_oversized_input_and_invalid_wrapper_policy() {
             .diagnostic()
             .code(),
         "PRODUCT_WRAPPER_WINDOW_BOUNDS"
+    );
+
+    for invalid in ["01.0.0", "1.0", "1.0.0-01", "1.0.0+build+extra"] {
+        let invalid_version =
+            MANIFEST.replace("version = \"0.1.0\"", &format!("version = \"{invalid}\""));
+        assert_eq!(
+            decode_product_manifest(&invalid_version)
+                .unwrap_err()
+                .diagnostic()
+                .code(),
+            "PRODUCT_INVALID_WRAPPER_VERSION"
+        );
+    }
+    let decorated_version =
+        MANIFEST.replace("version = \"0.1.0\"", "version = \"1.2.3-rc.1+build.7\"");
+    assert_eq!(
+        decode_product_manifest(&decorated_version)
+            .unwrap()
+            .wrappers()[0]
+            .version(),
+        "1.2.3-rc.1+build.7"
+    );
+
+    let missing_singleton = MANIFEST.replace("singleton = true\n", "");
+    assert_eq!(
+        decode_product_manifest(&missing_singleton)
+            .unwrap_err()
+            .diagnostic()
+            .code(),
+        "PRODUCT_MANIFEST_DECODE"
     );
 }
 

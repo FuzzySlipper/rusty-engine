@@ -8,7 +8,12 @@ lanes into a deterministic generated Product Assembly. It admits the current
 Compiled Composition from caller-supplied bytes, closes authored `rules/`,
 `ui/`, and optional `kernel/` source lanes, materializes only the
 `ContentManifest`-required runtime bodies, generates a product-specific Rust
-workspace, and records exact hashes in a versionless receipt.
+workspace, and records exact hashes in a versionless receipt. The generated
+workspace has a product-specific package and executable, plus the fixed
+`rusty_product` library crate. Its public `product` module exposes the same
+`GeneratedProductDevRuntime` used by the development host, including its
+constructor, so a separately generated desktop wrapper can source-link the
+runtime instead of copying it.
 
 Publication stages the complete `generated/` tree, reads every staged output
 back, and swaps the tree as one transaction. Existing output is retained as a
@@ -45,12 +50,12 @@ callbacks, erased registrations, or silent no-ops.
 
 | Path | Owner |
 |---|---|
-| `src/source.rs` | Fresh-input admission, authored/content closure, generated Rust source, receipt assembly, and plan/verify APIs |
+| `src/source.rs` | Fresh-input admission, authored/content closure, generated Rust library/binary source, receipt assembly, and plan/verify APIs |
 | `src/filesystem.rs` | Open-directory capability traversal, no-follow reads, UTF-8 relative paths, and aggregate bounds |
 | `src/receipt.rs` | Strict versionless receipt schema, exact hashes, ordering, role/path rules, and bounded readback decode |
 | `src/publish.rs` | Complete generated-tree stage, exact readback, swap, rollback, and recoverable cleanup diagnostics |
 | `src/error.rs` | Bounded machine-readable diagnostics |
-| `src/tests.rs` | Determinism, relocation, stale/tampered output, content cache rejection, symlink rejection, receipt strictness, rollback, generated Kernel compilation, and nonempty intent-to-mutation-to-UI proof |
+| `src/tests.rs` | Determinism, relocation, stale/tampered output, content cache rejection, symlink rejection, receipt strictness, rollback, generated library/binary and Kernel compilation, external library consumption, and nonempty intent-to-mutation-to-UI proof |
 
 ## Public workflow
 
@@ -58,7 +63,11 @@ callbacks, erased registrations, or silent no-ops.
    materialized Compiled Composition bytes and the browser host asset map.
 2. `plan_product_assembly` or its capability-descriptor variant reads the
    authored root and returns an immutable `AssemblyPlan`; no generated output
-   is used as a generation input.
+   is used as a generation input. The plan publishes `src/lib.rs` with
+   `pub mod product;`, a thin `src/main.rs` that invokes
+   `rusty_product::product::run`, and the generated `src/product.rs` runtime
+   implementation. Kernel source is linked from the library root so both the
+   development binary and external wrappers use the exact same runtime type.
 3. The caller invokes `AssemblyPlan::publish`, then may use
    `verify_product_assembly` with the same fresh inputs for strict stale and
    tamper verification. `verify_existing_product_assembly` is a diagnostic

@@ -3,6 +3,16 @@ import { type RustyApplicationFrame, type RustyApplicationHost, type RustyApplic
 export declare const PRODUCT_BROWSER_HOST_ARTIFACT: "rusty.product.browser-host";
 export type ProductBrowserRuntimeMode = 'realtime' | 'demand' | 'external';
 /**
+ * Selects the owner that admits fixed-step realtime work.
+ *
+ * Browser products use the Engine renderer cadence by default. A packaged
+ * product with an in-process Rust service can select `rust-host`; the
+ * WebView still drains typed input on each animation frame and receives
+ * retained outputs through the runtime subscription, but it never asks the
+ * runtime to advance from its presentation clock.
+ */
+export type ProductBrowserRealtimeAdvanceOwner = 'browser' | 'rust-host';
+/**
  * The fixed lifecycle operation vocabulary carried by the local bridge. The
  * operation union is deliberately closed: product code cannot turn the
  * bridge into a method-name RPC or invoke an arbitrary runtime operation.
@@ -136,8 +146,14 @@ export interface ProductBrowserHostOptions {
     readonly root: HTMLElement;
     readonly transport: ProductBrowserRuntimeTransport;
     readonly lifecycleMode: ProductBrowserRuntimeMode;
+    /**
+     * Owner of realtime simulation admission. Defaults to `browser`; use
+     * `rust-host` only when a packaged in-process Rust host advances the runtime
+     * and publishes outputs through `transport.subscribeOutputs`.
+     */
+    readonly realtimeAdvanceOwner?: ProductBrowserRealtimeAdvanceOwner;
     readonly mountUi: RustyApplicationUiMount;
-    readonly runtimeInput?: Omit<RustyApplicationRuntimeInputOptions, 'binding'> & {
+    readonly runtimeInput?: Omit<RustyApplicationRuntimeInputOptions, 'binding' | 'onAvailable'> & {
         readonly binding?: RustyApplicationRuntimeIdentity;
     };
     readonly uiProjection?: Omit<ProductBrowserUiProjectionOptions, 'binding'> & {
@@ -168,6 +184,7 @@ export interface ProductBrowserHostReadout {
     readonly artifact: typeof PRODUCT_BROWSER_HOST_ARTIFACT;
     readonly state: 'starting' | 'ready' | 'failed' | 'disposed';
     readonly mode: ProductBrowserRuntimeMode;
+    readonly realtimeAdvanceOwner: ProductBrowserRealtimeAdvanceOwner;
     readonly host: RustyApplicationHostReadout | null;
     readonly runtime: ProductBrowserRuntimeReadout | null;
     readonly lastFailure: string | null;
@@ -192,8 +209,11 @@ type ProductBrowserJson = null | boolean | number | string | readonly ProductBro
 /**
  * Mounts the one Engine-owned application composition root. The browser host
  * has no renderer implementation, product state, evaluator, or own cadence;
- * it drains the public input port and advances the supplied runtime only from
- * the application-host's existing renderer cadence callback.
+ * it drains the public input port from the application-host's existing
+ * renderer cadence callback. Browser-owned realtime products also advance
+ * from that callback; `realtimeAdvanceOwner: 'rust-host'` leaves advancement
+ * to the packaged Rust host while subscribed outputs continue to drive the
+ * retained presentation.
  */
 export declare function mountProductBrowserHost(options: ProductBrowserHostOptions): Promise<ProductBrowserHost>;
 /** Fixed relative location of the complete Engine runtime closure. */
@@ -227,6 +247,8 @@ export interface ProductBrowserBundleTemplateOptions {
      */
     readonly runtimeAdapterModule: string;
     readonly lifecycleMode: ProductBrowserRuntimeMode;
+    /** Defaults to `browser`; `rust-host` leaves realtime advancement to the packaged Rust host. */
+    readonly realtimeAdvanceOwner?: ProductBrowserRealtimeAdvanceOwner;
     readonly uiProjection?: {
         readonly expectedStream: string;
         readonly expectedContract: string;

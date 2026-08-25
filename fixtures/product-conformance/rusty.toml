@@ -34,6 +34,7 @@ product_bundle = "generated/product-bundle"
 [[wrappers]]
 id = "desktop"
 kind = "tauri"
+version = "0.1.0"
 application_id = "org.rusty.product.conformance"
 title = "Rusty Product Conformance"
 window_width = 1280
@@ -42,3 +43,4 @@ resizable = true
 permissions = ["window", "storage"]
 storage_namespace = "rusty.product.conformance"
 release_channel = "development"
+singleton = true

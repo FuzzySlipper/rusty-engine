@@ -125,6 +125,7 @@ struct PackageEntry {
 struct WrapperPolicy {
     id: String,
     kind: String,
+    version: String,
     application_id: String,
     title: String,
     window_width: u32,
@@ -133,6 +134,7 @@ struct WrapperPolicy {
     permissions: Vec<String>,
     storage_namespace: String,
     release_channel: String,
+    singleton: bool,
 }
 
 /// Seals the exact admitted Product Assembly closure plus one already-built
@@ -449,6 +451,7 @@ fn wrapper_policy(manifest: &ProductManifest) -> Vec<WrapperPolicy> {
                 WrapperKind::Tauri => "tauri".to_owned(),
                 WrapperKind::Electron => "electron".to_owned(),
             },
+            version: wrapper.version().to_owned(),
             application_id: wrapper.application_id().to_owned(),
             title: wrapper.title().to_owned(),
             window_width: wrapper.window_width(),
@@ -461,6 +464,7 @@ fn wrapper_policy(manifest: &ProductManifest) -> Vec<WrapperPolicy> {
                 product_model::ReleaseChannel::Preview => "preview".to_owned(),
                 product_model::ReleaseChannel::Stable => "stable".to_owned(),
             },
+            singleton: wrapper.singleton(),
         })
         .collect::<Vec<_>>();
     policy.sort_by(|left, right| left.id.cmp(&right.id));
@@ -862,13 +866,21 @@ mod tests {
         fs::write(root.join("rules/main.ts"), "export {};\n").expect("rules");
         fs::write(root.join("ui/main.ts"), "export {};\n").expect("ui");
         fs::write(root.join("generated/runtime.bin"), b"binary").expect("binary");
-        let manifest_text = "[product]\nid = \"rusty.package-test\"\n\n[runtime_composition]\nentrypoints = [\"rules/main.ts\"]\n\n[lifecycle]\nmode = \"demand\"\n\n[ui]\nentry = \"ui/main.ts\"\n\n[content]\nroot = \"content\"\n\n[outputs]\ncompiled_composition = \"generated/compiled-composition.json\"\nadmitted_runtime_content = \"generated/runtime-content\"\nproduct_assembly = \"generated/product-assembly\"\nproduct_bundle = \"generated/product-bundle\"\n";
+        let manifest_text = "[product]\nid = \"rusty.package-test\"\n\n[runtime_composition]\nentrypoints = [\"rules/main.ts\"]\n\n[lifecycle]\nmode = \"demand\"\n\n[ui]\nentry = \"ui/main.ts\"\n\n[content]\nroot = \"content\"\n\n[outputs]\ncompiled_composition = \"generated/compiled-composition.json\"\nadmitted_runtime_content = \"generated/runtime-content\"\nproduct_assembly = \"generated/product-assembly\"\nproduct_bundle = \"generated/product-bundle\"\n\n[[wrappers]]\nid = \"desktop\"\nkind = \"tauri\"\nversion = \"0.1.0\"\napplication_id = \"com.example.package\"\ntitle = \"Package Test\"\nwindow_width = 1280\nwindow_height = 720\nresizable = true\npermissions = [\"window\"]\nstorage_namespace = \"rusty.package-test\"\nrelease_channel = \"development\"\nsingleton = true\n";
         fs::write(root.join("rusty.toml"), manifest_text).expect("manifest");
         let manifest = decode_product_manifest(manifest_text).expect("manifest");
         let source = b"export {};\n";
         let receipt = decode_assembly_receipt(format!("{{\n  \"artifact\": \"rusty.product.assembly\",\n  \"product\": \"rusty.package-test\",\n  \"entries\": [{{\n    \"kind\": \"authored-source\",\n    \"path\": \"rules/main.ts\",\n    \"bytes\": {},\n    \"sha256\": \"{}\"\n  }}, {{\n    \"kind\": \"authored-source\",\n    \"path\": \"rusty.toml\",\n    \"bytes\": {},\n    \"sha256\": \"{}\"\n  }}]\n}}\n", source.len(), sha256_hex(source), manifest_text.len(), sha256_hex(manifest_text.as_bytes())).as_bytes()).expect("receipt");
         let binary = root.join("generated/runtime.bin");
         let first = package_product(&root, &manifest, &binary, &receipt).expect("first package");
+        let package_receipt: PackageReceipt = serde_json::from_slice(
+            &fs::read(root.join(PRODUCT_PACKAGE_DIRECTORY).join(PACKAGE_RECEIPT))
+                .expect("package receipt"),
+        )
+        .expect("decode package receipt");
+        assert_eq!(package_receipt.wrapper_policy.len(), 1);
+        assert_eq!(package_receipt.wrapper_policy[0].version, "0.1.0");
+        assert!(package_receipt.wrapper_policy[0].singleton);
         let relocated = root.join("relocated-package");
         fs::rename(root.join(PRODUCT_PACKAGE_DIRECTORY), &relocated).expect("relocate package");
         assert_eq!(

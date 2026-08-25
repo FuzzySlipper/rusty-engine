@@ -19,6 +19,7 @@ mod bundle;
 mod error;
 mod host;
 mod model;
+mod session;
 
 pub use bundle::{ProductDevBundle, ProductDevBundleEntry, PRODUCT_DEV_INDEX_PATH};
 pub use error::{ProductDevHostError, ProductDevRuntimeError};
@@ -31,6 +32,7 @@ pub use model::{
     ProductDevRuntimeState, ProductDevTimelineCompletion, ProductDevTimelineCompletionResult,
     PRODUCT_DEV_HOST_ARTIFACT, PRODUCT_DEV_RUNTIME_BASE_PATH,
 };
+pub use session::ProductDevOperationOwner;
 
 /// Upper bound for one HTTP request header block, including its terminator.
 pub const MAX_REQUEST_HEADER_BYTES: usize = 16 * 1024;

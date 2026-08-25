@@ -26,6 +26,7 @@ pub(crate) enum Command {
     },
     Test {
         start: PathBuf,
+        wrapper: Option<String>,
     },
     Inspect {
         start: PathBuf,
@@ -36,6 +37,7 @@ pub(crate) enum Command {
     },
     Package {
         start: PathBuf,
+        wrapper: Option<String>,
     },
 }
 
@@ -54,6 +56,7 @@ impl Invocation {
         let mut product_id = None;
         let mut port = 0_u16;
         let mut subject = None;
+        let mut wrapper = None;
         let mut index = 1;
         if command == "inspect" {
             subject = arguments.get(index).cloned();
@@ -82,6 +85,10 @@ impl Invocation {
                         .parse()
                         .map_err(|_| usage())?;
                 }
+                "--wrapper" if matches!(command, "test" | "package") => {
+                    index += 1;
+                    wrapper = Some(arguments.get(index).ok_or_else(usage)?.clone());
+                }
                 _ => return Err(usage()),
             }
             index += 1;
@@ -95,13 +102,19 @@ impl Invocation {
             "check" => Command::Check { start: path },
             "doctor" => Command::Doctor { start: path },
             "dev" => Command::Dev { start: path, port },
-            "test" => Command::Test { start: path },
+            "test" => Command::Test {
+                start: path,
+                wrapper,
+            },
             "inspect" => Command::Inspect {
                 start: path,
                 subject: subject.expect("inspect subject was required above"),
             },
             "build" => Command::Build { start: path },
-            "package" => Command::Package { start: path },
+            "package" => Command::Package {
+                start: path,
+                wrapper,
+            },
             _ => return Err(usage()),
         };
         Ok(Self { command, format })
@@ -112,7 +125,7 @@ fn usage() -> Diagnostic {
     Diagnostic::error(
         "RUSTY_USAGE",
         "$",
-        "usage: rusty <init|dev|check|test|inspect|build|package|doctor> [subject] [--path <path>] [--json]; init also accepts --id <product-id>, dev accepts --port <u16>",
+        "usage: rusty <init|dev|check|test|inspect|build|package|doctor> [subject] [--path <path>] [--json]; init also accepts --id <product-id>, dev accepts --port <u16>, test/package accept --wrapper <id>",
     )
 }
 
@@ -146,9 +159,26 @@ mod tests {
             Command::Inspect { ref subject, .. } if subject == "capability-bindings"
         ));
 
+        let package = Invocation::parse([
+            "package".to_owned(),
+            "--wrapper".to_owned(),
+            "desktop".to_owned(),
+        ])
+        .expect("package invocation");
+        assert!(matches!(
+            package.command,
+            Command::Package { ref wrapper, .. } if wrapper.as_deref() == Some("desktop")
+        ));
+
         assert!(
             Invocation::parse(["build".to_owned(), "--port".to_owned(), "1".to_owned()]).is_err()
         );
+        assert!(Invocation::parse([
+            "build".to_owned(),
+            "--wrapper".to_owned(),
+            "desktop".to_owned(),
+        ])
+        .is_err());
         assert!(Invocation::parse(["inspect".to_owned()]).is_err());
     }
 }

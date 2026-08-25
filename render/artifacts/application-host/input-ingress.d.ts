@@ -96,6 +96,8 @@ export interface RustyApplicationRuntimeInputOptions {
     readonly maximumWheelDelta?: number;
     /** Opt-in selected-controller observation; sampling remains caller-driven. */
     readonly selectedController?: RustyApplicationSelectedControllerOptions;
+    /** Host-owned notification that queued input is available to drain. */
+    readonly onAvailable?: () => void;
 }
 export interface RustyApplicationInputPort {
     /** Bind a runtime epoch. Rebinds clear under the new epoch before any later fact. */

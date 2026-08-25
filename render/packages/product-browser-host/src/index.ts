@@ -26,6 +26,7 @@ export type {
   ProductBrowserRuntimeBindingOutput,
   ProductBrowserRuntimeInputResult,
   ProductBrowserRuntimeMode,
+  ProductBrowserRealtimeAdvanceOwner,
   ProductBrowserRuntimeOperationResult,
   ProductBrowserRuntimeOperationKind,
   ProductBrowserRuntimeOutput,

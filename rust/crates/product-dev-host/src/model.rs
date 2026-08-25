@@ -30,6 +30,18 @@ impl CanonicalU64 {
     pub const fn get(self) -> u64 {
         self.0
     }
+
+    /// Strictly decodes one canonical decimal JSON string from a host-owned
+    /// payload. Keeping this admission on the typed value lets an in-process
+    /// WebView adapter use the same u64 rule as the loopback host without
+    /// exposing an unchecked string-to-u64 conversion.
+    pub fn decode_json(bytes: &[u8]) -> Result<Self, ProductDevHostError> {
+        decode_strict_json(
+            bytes,
+            "DEV_HOST_CANONICAL_U64",
+            "canonical u64 JSON is invalid",
+        )
+    }
 }
 
 impl fmt::Display for CanonicalU64 {
@@ -279,6 +291,26 @@ impl ProductDevInputBatch {
     pub fn events(&self) -> &[RuntimeInputEvent] {
         &self.events
     }
+
+    /// Strictly decodes the ordered runtime-input wire array used by host
+    /// adapters. The runtime-input crate owns event semantics and its exact
+    /// event/count limits; this method only maps its bounded decoder error to
+    /// the product development host error surface.
+    pub fn decode_json(bytes: &[u8]) -> Result<Self, ProductDevHostError> {
+        if bytes.len() > crate::MAX_REQUEST_BODY_BYTES {
+            return Err(ProductDevHostError::new(
+                "DEV_HOST_BODY_BOUNDS",
+                "input batch exceeds the host JSON body bound",
+            ));
+        }
+        let events = runtime_input::decode_runtime_input_wire_events_json(bytes).map_err(|_| {
+            ProductDevHostError::new(
+                "DEV_HOST_INPUT_DECODE",
+                "input batch is not a strict runtime-input wire batch",
+            )
+        })?;
+        Ok(Self::new(events))
+    }
 }
 
 /// Typed input result supplied by the generated runtime.
@@ -340,6 +372,18 @@ pub struct ProductDevTimelineCompletion {
 }
 
 impl ProductDevTimelineCompletion {
+    /// Strictly decodes the timeline completion wire object accepted by the
+    /// host. The private wire DTO remains private; a packaged adapter receives
+    /// only this validated, transport-neutral completion value.
+    pub fn decode_json(bytes: &[u8]) -> Result<Self, ProductDevHostError> {
+        let value: ProductDevTimelineCompletionWire = decode_strict_json(
+            bytes,
+            "DEV_HOST_TIMELINE_DECODE",
+            "timeline completion JSON is malformed or has unknown fields",
+        )?;
+        Self::from_wire(value)
+    }
+
     pub(crate) fn from_wire(
         value: ProductDevTimelineCompletionWire,
     ) -> Result<Self, ProductDevHostError> {
@@ -586,6 +630,28 @@ fn encode_validated_wire(value: String) -> Result<Value, ProductDevHostError> {
             "typed render frame could not be converted to wire JSON",
         )
     })
+}
+
+fn decode_strict_json<T>(
+    bytes: &[u8],
+    code: &'static str,
+    detail: &'static str,
+) -> Result<T, ProductDevHostError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    if bytes.len() > crate::MAX_REQUEST_BODY_BYTES {
+        return Err(ProductDevHostError::new(
+            "DEV_HOST_BODY_BOUNDS",
+            "JSON payload exceeds the host body bound",
+        ));
+    }
+    let mut decoder = serde_json::Deserializer::from_slice(bytes);
+    let value = T::deserialize(&mut decoder).map_err(|_| ProductDevHostError::new(code, detail))?;
+    decoder
+        .end()
+        .map_err(|_| ProductDevHostError::new(code, detail))?;
+    Ok(value)
 }
 
 fn bounded_diagnostic(value: String) -> Result<String, ProductDevHostError> {

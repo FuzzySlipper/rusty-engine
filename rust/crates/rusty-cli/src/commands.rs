@@ -18,6 +18,7 @@ use product_model::{
 use crate::{
     args::OutputFormat,
     check as layout,
+    desktop::{self, DesktopOptions, InstallOptions},
     inspect::{self as inspection, InspectSubject, InspectionRequest},
     kernel_probe::run_bounded,
     package as packaging,
@@ -29,6 +30,7 @@ use crate::{
 const PRODUCT_START_TIMEOUT: Duration = Duration::from_secs(30);
 const PRODUCT_STOP_TIMEOUT: Duration = Duration::from_secs(10);
 const BROWSER_TIMEOUT: Duration = Duration::from_secs(60);
+const DESKTOP_TIMEOUT: Duration = Duration::from_secs(180);
 const MAX_HOST_DIAGNOSTIC_BYTES: usize = 64 * 1024;
 
 pub(crate) fn check(start: PathBuf) -> Execution {
@@ -187,7 +189,7 @@ pub(crate) fn build(start: PathBuf) -> Execution {
     }
 }
 
-pub(crate) fn package(start: PathBuf) -> Execution {
+pub(crate) fn package(start: PathBuf, wrapper: Option<String>) -> Execution {
     let prepared = match workflow::prepare_product(start) {
         Ok(prepared) => prepared,
         Err(diagnostic) => return failed(diagnostic),
@@ -209,17 +211,46 @@ pub(crate) fn package(start: PathBuf) -> Execution {
     if let Err(error) = packaging::verify_product_package(&package_root) {
         return package_failed(error);
     }
-    Execution {
-        report: Report::success().with_facts(vec![
-            Fact::new("package.product", packaged.product()),
-            Fact::new("package.directory", packaged.package_directory()),
-            Fact::new("package.files", packaged.files().to_string()),
-            Fact::new("package.sha256", packaged.package_sha256()),
+    let desktop = if prepared.manifest().wrappers().is_empty() {
+        None
+    } else {
+        match desktop::build_and_publish(
+            prepared.root(),
+            &DesktopOptions {
+                wrapper_id: wrapper,
+                output_directory: None,
+            },
+            prepared.kernel_capabilities(),
+        ) {
+            Ok(desktop) => Some(desktop),
+            Err(error) => return desktop_failed(error),
+        }
+    };
+    let mut facts = vec![
+        Fact::new("package.product", packaged.product()),
+        Fact::new("package.directory", packaged.package_directory()),
+        Fact::new("package.files", packaged.files().to_string()),
+        Fact::new("package.sha256", packaged.package_sha256()),
+    ];
+    if let Some(desktop) = desktop {
+        facts.extend([
+            Fact::new("package.desktopHost", "tauri; realized and read back"),
+            Fact::new("package.desktopWrapper", desktop.wrapper_id()),
+            Fact::new("package.desktopVersion", desktop.wrapper_version()),
+            Fact::new("package.desktopApplicationId", desktop.application_id()),
             Fact::new(
-                "package.desktopHost",
-                "not-realized; selected wrapper generation and headed proof are owned by the desktop-wrapper workflow",
+                "package.desktopDirectory",
+                desktop.root().display().to_string(),
             ),
-        ]),
+            Fact::new("package.desktopFiles", desktop.files().to_string()),
+            Fact::new("package.desktopSha256", desktop.release_sha256()),
+            Fact::new("package.desktopPolicySha256", desktop.policy_sha256()),
+        ]);
+    } else {
+        facts.push(Fact::new("package.desktopHost", "not-selected"));
+    }
+    Execution {
+        report: Report::success().with_facts(facts),
         exit_code: 0,
     }
 }
@@ -286,7 +317,7 @@ fn dev_captured(binary: &GeneratedBinary, port: u16) -> Execution {
     }
 }
 
-pub(crate) fn test(start: PathBuf) -> Execution {
+pub(crate) fn test(start: PathBuf, wrapper: Option<String>) -> Execution {
     let prepared = match workflow::prepare_product(start) {
         Ok(prepared) => prepared,
         Err(diagnostic) => return failed(diagnostic),
@@ -306,24 +337,98 @@ pub(crate) fn test(start: PathBuf) -> Execution {
     if let Err(diagnostic) = stop_test_host(origin, "RUSTY_TEST") {
         return failed(diagnostic);
     }
-    let wrapper = if prepared.manifest().wrappers().is_empty() {
-        "not-selected"
+    let desktop_evidence = if prepared.manifest().wrappers().is_empty() {
+        None
     } else {
-        "selected-policy-present; packaged desktop host proof is a distinct layer"
+        let release_binary =
+            match workflow::build_prepared_product(&prepared, BuildProfile::Release) {
+                Ok(binary) => binary,
+                Err(diagnostic) => return failed(diagnostic),
+            };
+        let packaged = match packaging::package_product(
+            prepared.root(),
+            prepared.manifest(),
+            release_binary.path(),
+            prepared.receipt(),
+        ) {
+            Ok(packaged) => packaged,
+            Err(error) => return package_failed(error),
+        };
+        if let Err(error) =
+            packaging::verify_product_package(&prepared.root().join(packaged.package_directory()))
+        {
+            return package_failed(error);
+        }
+        let desktop = match desktop::build_and_publish(
+            prepared.root(),
+            &DesktopOptions {
+                wrapper_id: wrapper,
+                output_directory: None,
+            },
+            prepared.kernel_capabilities(),
+        ) {
+            Ok(desktop) => desktop,
+            Err(error) => return desktop_failed(error),
+        };
+        let install_root = match tempfile::Builder::new()
+            .prefix("rusty-desktop-install-")
+            .tempdir()
+        {
+            Ok(root) => root,
+            Err(error) => {
+                return failed(Diagnostic::error(
+                    "RUSTY_TEST_DESKTOP_INSTALL_ROOT",
+                    "$temporary",
+                    format!("Desktop proof owner could not create a disposable relocation root: {error}. Remedy: verify temporary-directory permissions."),
+                ));
+            }
+        };
+        let installed = match desktop::install(
+            desktop.root(),
+            install_root.path(),
+            &InstallOptions {
+                launcher_name: desktop.wrapper_id().to_owned(),
+                desktop_entry_name: format!("{}.desktop", desktop.application_id()),
+            },
+        ) {
+            Ok(installed) => installed,
+            Err(error) => return desktop_failed(error),
+        };
+        let evidence = prepared
+            .root()
+            .join("generated/product-desktop-evidence")
+            .join(desktop.wrapper_id());
+        if let Err(diagnostic) = desktop_test(&installed, &evidence) {
+            return failed(diagnostic);
+        }
+        Some((desktop, evidence))
     };
+    let mut facts = vec![
+        Fact::new("test.authoring", "pass; materialized and admitted"),
+        Fact::new(
+            "test.hostNeutral",
+            "pass; generated runtime served its admitted bundle",
+        ),
+        Fact::new(
+            "test.browser",
+            "pass; real Chromium mounted exactly one Engine canvas",
+        ),
+    ];
+    if let Some((desktop, evidence)) = desktop_evidence {
+        facts.extend([
+            Fact::new(
+                "test.packagedHost",
+                "pass; installed relocated Tauri WebView used one in-process Rust runtime",
+            ),
+            Fact::new("test.desktopWrapper", desktop.wrapper_id()),
+            Fact::new("test.desktopSha256", desktop.release_sha256()),
+            Fact::new("test.desktopEvidence", evidence.display().to_string()),
+        ]);
+    } else {
+        facts.push(Fact::new("test.packagedHost", "not-selected"));
+    }
     Execution {
-        report: Report::success().with_facts(vec![
-            Fact::new("test.authoring", "pass; materialized and admitted"),
-            Fact::new(
-                "test.hostNeutral",
-                "pass; generated runtime served its admitted bundle",
-            ),
-            Fact::new(
-                "test.browser",
-                "pass; real Chromium mounted exactly one Engine canvas",
-            ),
-            Fact::new("test.packagedHost", wrapper),
-        ]),
+        report: Report::success().with_facts(facts),
         exit_code: 0,
     }
 }
@@ -373,6 +478,17 @@ fn package_failed(error: packaging::PackageError) -> Execution {
         error.path(),
         format!(
             "Product Package owner rejected the exact runtime closure: {}. Remedy: remove only a conflicting generated/product-package after preserving any needed evidence, then rerun `rusty package`.",
+            error.detail()
+        ),
+    ))
+}
+
+fn desktop_failed(error: desktop::DesktopError) -> Execution {
+    failed(Diagnostic::error(
+        error.code(),
+        error.path(),
+        format!(
+            "Desktop Package owner rejected the selected wrapper: {}. Remedy: preserve any generated evidence, remove only the conflicting generated/product-desktop closure if appropriate, and rerun the selected package or test command.",
             error.detail()
         ),
     ))
@@ -562,6 +678,98 @@ fn browser_test(origin: &str) -> Result<(), Diagnostic> {
         ));
     }
     Ok(())
+}
+
+fn desktop_test(
+    installed: &desktop::InstalledDesktop,
+    evidence_directory: &Path,
+) -> Result<(), Diagnostic> {
+    let driver = find_tauri_driver()?;
+    let script = engine_root().join("render/scripts/rusty-cli-tauri-test.mjs");
+    let mut command = Command::new("xvfb-run");
+    command
+        .env("GDK_BACKEND", "x11")
+        .env("LIBGL_ALWAYS_SOFTWARE", "1")
+        .env("WEBKIT_DISABLE_COMPOSITING_MODE", "1")
+        .arg("-a")
+        .arg("node")
+        .arg(&script)
+        .arg("--driver")
+        .arg(&driver)
+        .arg("--application")
+        .arg(installed.binary())
+        .arg("--desktop-entry")
+        .arg(installed.application_id())
+        .arg("--xdg-data-home")
+        .arg(installed.root().join("share"))
+        .arg("--storage-namespace")
+        .arg(installed.storage_namespace())
+        .arg("--activation-receipt")
+        .arg(installed.activation_receipt())
+        .arg("--evidence-dir")
+        .arg(evidence_directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_bounded(command, DESKTOP_TIMEOUT).map_err(|error| {
+        Diagnostic::error(
+            "RUSTY_TEST_DESKTOP_PROCESS",
+            script.display().to_string(),
+            format!("Tauri proof owner could not run the bounded native WebDriver evidence: {error}. Remedy: install xvfb-run, tauri-driver, and WebKitWebDriver, or set RUSTY_TAURI_DRIVER to the absolute driver path."),
+        )
+    })?;
+    if !output.status.success() {
+        return Err(Diagnostic::error(
+            "RUSTY_TEST_DESKTOP",
+            script.display().to_string(),
+            format!(
+                "Tauri proof owner rejected the installed product: {}. Remedy: inspect generated/product-desktop-evidence and correct native packaging, singleton activation, lifecycle shutdown, or WebView input integration.",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ));
+    }
+    let evidence: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|error| {
+        Diagnostic::error(
+            "RUSTY_TEST_DESKTOP_EVIDENCE",
+            script.display().to_string(),
+            format!("Tauri proof owner emitted malformed evidence JSON: {error}. Remedy: rerun the checked Engine proof script directly."),
+        )
+    })?;
+    if evidence.get("status").and_then(serde_json::Value::as_str) != Some("passed") {
+        return Err(Diagnostic::error(
+            "RUSTY_TEST_DESKTOP_EVIDENCE",
+            script.display().to_string(),
+            "Tauri proof owner did not emit a passing evidence receipt. Remedy: inspect its bounded failure receipt.",
+        ));
+    }
+    Ok(())
+}
+
+fn find_tauri_driver() -> Result<PathBuf, Diagnostic> {
+    if let Some(configured) = std::env::var_os("RUSTY_TAURI_DRIVER") {
+        let path = PathBuf::from(configured);
+        if path.is_absolute() && path.is_file() {
+            return Ok(path);
+        }
+        return Err(Diagnostic::error(
+            "RUSTY_TEST_TAURI_DRIVER",
+            "$RUSTY_TAURI_DRIVER",
+            "RUSTY_TAURI_DRIVER must name an absolute regular tauri-driver executable. Remedy: correct or unset the environment override.",
+        ));
+    }
+    if let Some(paths) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&paths) {
+            let candidate = directory.join("tauri-driver");
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+    Err(Diagnostic::error(
+        "RUSTY_TEST_TAURI_DRIVER",
+        "$PATH",
+        "Tauri proof requires tauri-driver on PATH. Remedy: install tauri-driver or set RUSTY_TAURI_DRIVER to its absolute path.",
+    ))
 }
 
 fn stop_test_host(mut host: TestHost, code_prefix: &str) -> Result<(), Diagnostic> {

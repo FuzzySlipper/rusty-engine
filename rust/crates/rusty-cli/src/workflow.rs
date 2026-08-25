@@ -119,6 +119,10 @@ impl PreparedProduct {
     pub(crate) fn receipt(&self) -> &AssemblyReceipt {
         &self.receipt
     }
+
+    pub(crate) fn kernel_capabilities(&self) -> &[ProductKernelCapabilityDescriptor] {
+        self.admitted.kernel_capabilities()
+    }
 }
 
 /// Exact generated executable resolved after a successful Cargo build.

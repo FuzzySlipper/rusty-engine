@@ -5,6 +5,7 @@
 mod args;
 mod check;
 mod commands;
+mod desktop;
 mod init;
 mod inspect;
 mod kernel_probe;
@@ -57,12 +58,14 @@ pub(crate) fn execute(invocation: Invocation, cwd: &Path) -> Execution {
         Command::Check { start } => commands::check(resolve_from(cwd, &start)),
         Command::Doctor { start } => commands::doctor(resolve_from(cwd, &start)),
         Command::Dev { start, port } => commands::dev(resolve_from(cwd, &start), port, format),
-        Command::Test { start } => commands::test(resolve_from(cwd, &start)),
+        Command::Test { start, wrapper } => commands::test(resolve_from(cwd, &start), wrapper),
         Command::Inspect { start, subject } => {
             commands::inspect(resolve_from(cwd, &start), &subject)
         }
         Command::Build { start } => commands::build(resolve_from(cwd, &start)),
-        Command::Package { start } => commands::package(resolve_from(cwd, &start)),
+        Command::Package { start, wrapper } => {
+            commands::package(resolve_from(cwd, &start), wrapper)
+        }
     }
 }
 

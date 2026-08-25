@@ -50,6 +50,6 @@ pub use manifest::{
     ProductManifest, ProductManifestCandidate, RealtimeClock, ReleaseChannel, WrapperCandidate,
     WrapperDeclaration, WrapperKind, MAX_COMPOSITION_ENTRYPOINTS, MAX_IDENTITY_BYTES,
     MAX_PRODUCT_MANIFEST_BYTES, MAX_REALTIME_CATCH_UP_STEPS, MAX_REALTIME_HZ, MAX_WRAPPERS,
-    MAX_WRAPPER_PERMISSIONS,
+    MAX_WRAPPER_PERMISSIONS, MAX_WRAPPER_VERSION_BYTES,
 };
 pub use path::ProductPath;
