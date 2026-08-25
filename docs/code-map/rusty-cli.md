@@ -26,6 +26,7 @@ runtime closure; wrapper realization and headed proof remain a separate owner.
 - [`rusty-cli/src/report.rs`](../../rust/crates/rusty-cli/src/report.rs)
 - [`rusty-cli/src/tests.rs`](../../rust/crates/rusty-cli/src/tests.rs)
 - [`render/scripts/rusty-cli-browser-test.mjs`](../../render/scripts/rusty-cli-browser-test.mjs)
+- [`render/scripts/rusty-cli-tauri-test.mjs`](../../render/scripts/rusty-cli-tauri-test.mjs)
 
 ## Source routes
 
@@ -43,6 +44,7 @@ runtime closure; wrapper realization and headed proof remain a separate owner.
 | `src/report.rs` | Ordered, field-bounded and aggregate-bounded human/JSON diagnostics |
 | `src/tests.rs` | Discovery, initialization, non-mutation, symlink, host-shape, output-kind, and reporting proof |
 | `render/scripts/rusty-cli-browser-test.mjs` | Real Chromium loopback-root and stable one-canvas proof for `rusty test`; optional conformance hooks add fixture-only semantics |
+| `render/scripts/rusty-cli-tauri-test.mjs` | Installed Tauri/WebDriver proof: one native WebView/canvas, accepted runtime lifecycle, input, resize, singleton activation, relocation, and clean shutdown; optional paired hooks add counter semantics |
 
 The package is deliberately binary-only. It does not add a library namespace
 to the complete `rusty-engine` facade.

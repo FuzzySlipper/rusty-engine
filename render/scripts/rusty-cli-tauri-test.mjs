@@ -27,6 +27,7 @@ const DEFAULT_PORT = 4454;
 const DEFAULT_NATIVE_PORT = 4455;
 const DEFAULT_NATIVE_DRIVER = "/usr/bin/WebKitWebDriver";
 const DEFAULT_COUNTER_SELECTOR = "#product-conformance-counter";
+const DEFAULT_INCREMENT_SELECTOR = "#product-conformance-increment";
 const DEFAULT_STARTUP_TIMEOUT_MS = 45_000;
 const DEFAULT_STEP_TIMEOUT_MS = 15_000;
 const DEFAULT_LAUNCH_TIMEOUT_MS = 8_000;
@@ -50,7 +51,7 @@ function usage() {
     --evidence-dir /absolute/path/to/evidence
 
 Optional: --port N --native-port N --native-driver PATH --native-host HOST
-          --counter-selector CSS --startup-timeout-ms N
+          --counter-selector CSS --increment-selector CSS --startup-timeout-ms N
           --step-timeout-ms N --launch-timeout-ms N --resize-width N
           --resize-height N --screenshot-name FILE --self-test
 `;
@@ -134,6 +135,7 @@ function parseArgs(argv) {
     nativeDriver: resolve(values.get("native-driver") ?? DEFAULT_NATIVE_DRIVER),
     nativeHost: values.get("native-host")?.trim() || null,
     counterSelector: values.get("counter-selector") ?? DEFAULT_COUNTER_SELECTOR,
+    incrementSelector: values.get("increment-selector") ?? DEFAULT_INCREMENT_SELECTOR,
     startupTimeoutMs: parsePositiveInteger(
       "--startup-timeout-ms",
       values.get("startup-timeout-ms") ?? String(DEFAULT_STARTUP_TIMEOUT_MS),
@@ -432,7 +434,7 @@ async function execute(baseUrl, sessionId, script, args = []) {
   });
 }
 
-async function domSnapshot(baseUrl, sessionId, selector) {
+async function domSnapshot(baseUrl, sessionId, selectors) {
   return execute(
     baseUrl,
     sessionId,
@@ -470,6 +472,8 @@ async function domSnapshot(baseUrl, sessionId, selector) {
        activeElementIsCurrentCanvas: document.activeElement === document.querySelector('canvas'),
        activeElementTag: document.activeElement?.tagName ?? null,
        activeElementId: document.activeElement?.id ?? null,
+       counterCount: document.querySelectorAll(arguments[0]).length,
+       incrementCount: document.querySelectorAll(arguments[1]).length,
        counter: label?.textContent?.trim() ?? null,
        counterTag: label?.tagName ?? null,
        href: location.href,
@@ -489,7 +493,7 @@ async function domSnapshot(baseUrl, sessionId, selector) {
          null
        )?.toString().slice(0, 1024) ?? null,
      };`,
-    [selector],
+    [selectors.counter, selectors.increment],
   );
 }
 
@@ -502,13 +506,48 @@ function compactFocusSnapshot(snapshot) {
     activeElementIsCurrentCanvas: snapshot.activeElementIsCurrentCanvas,
     activeElementTag: snapshot.activeElementTag,
     activeElementId: snapshot.activeElementId,
+    counterCount: snapshot.counterCount,
+    incrementCount: snapshot.incrementCount,
     counter: snapshot.counter,
     startupError: snapshot.startupError,
     bodyText: boundedText(snapshot.bodyText, 1024),
   };
 }
 
-async function focusCanvas(baseUrl, sessionId, counterSelector, timeoutMs) {
+function selectConformanceProof(snapshot) {
+  const counterCount = snapshot.counterCount;
+  const incrementCount = snapshot.incrementCount;
+  if (counterCount === 0 && incrementCount === 0) {
+    return { kind: "generic", counterCount, incrementCount };
+  }
+  if (counterCount === 1 && incrementCount === 1) {
+    return { kind: "counter-conformance", counterCount, incrementCount };
+  }
+  throw new Error(
+    `expected either no conformance hooks or exactly one counter and increment hook; found counter=${counterCount}, increment=${incrementCount}`,
+  );
+}
+
+function genericHostReadinessMismatches(snapshot) {
+  const mismatches = [];
+  if (snapshot.readyState !== "complete") mismatches.push(`readyState=${snapshot.readyState}`);
+  if (snapshot.body !== true) mismatches.push("body-missing");
+  if (snapshot.productReady !== true) mismatches.push("productReady=false");
+  if (snapshot.viewportWidth <= 0) mismatches.push(`viewportWidth=${snapshot.viewportWidth}`);
+  if (snapshot.viewportHeight <= 0) mismatches.push(`viewportHeight=${snapshot.viewportHeight}`);
+  if (snapshot.canvasCount !== 1) mismatches.push(`canvasCount=${snapshot.canvasCount}`);
+  if (snapshot.startupError !== null) mismatches.push(`startupError=${JSON.stringify(snapshot.startupError)}`);
+  if (snapshot.lastRuntimeAccepted !== "true") {
+    mismatches.push(`lastRuntimeAccepted=${JSON.stringify(snapshot.lastRuntimeAccepted)}`);
+  }
+  return mismatches;
+}
+
+function genericHostIsReady(snapshot) {
+  return genericHostReadinessMismatches(snapshot).length === 0;
+}
+
+async function focusCanvas(baseUrl, sessionId, selectors, timeoutMs) {
   const started = Date.now();
   const deadline = started + timeoutMs;
   const attempts = [];
@@ -521,7 +560,7 @@ async function focusCanvas(baseUrl, sessionId, counterSelector, timeoutMs) {
     const attemptStarted = Date.now();
     const attempt = { attempt: attemptNumber, method: "w3c-tab" };
     try {
-      const before = await domSnapshot(baseUrl, sessionId, counterSelector);
+      const before = await domSnapshot(baseUrl, sessionId, selectors);
       lastSnapshot = before;
       firstActiveElement ??= {
         tag: before.activeElementTag,
@@ -566,7 +605,7 @@ async function focusCanvas(baseUrl, sessionId, counterSelector, timeoutMs) {
           ],
         },
       });
-      const after = await domSnapshot(baseUrl, sessionId, counterSelector);
+      const after = await domSnapshot(baseUrl, sessionId, selectors);
       lastSnapshot = after;
       attempt.after = compactFocusSnapshot(after);
       if (after.canvasCount === 1 && after.activeElementIsCurrentCanvas === true) {
@@ -655,29 +694,63 @@ async function sendWKeyAction(baseUrl, sessionId, type) {
   });
 }
 
-async function observePhysicalKeys(baseUrl, sessionId) {
+async function beginPhysicalKeyObservation(baseUrl, sessionId) {
   return execute(
     baseUrl,
     sessionId,
-    `globalThis.__rustyAcceptanceKeys ??= [];
+    `globalThis.__rustyAcceptanceKeys = [];
+     globalThis.__rustyAcceptanceKeySequence = 0;
      if (globalThis.__rustyAcceptanceKeyListenerInstalled !== true) {
        globalThis.__rustyAcceptanceKeyListenerInstalled = true;
-       const observe = (phase) => (event) => globalThis.__rustyAcceptanceKeys.push({
-         phase,
-         type: event.type,
-         key: event.key,
-         code: event.code,
-         repeat: event.repeat,
-         defaultPrevented: event.defaultPrevented,
-         target: event.target?.tagName ?? null,
-       });
+       const observe = (phase) => (event) => {
+         const canvas = document.querySelector('canvas');
+         globalThis.__rustyAcceptanceKeys.push({
+           sequence: ++globalThis.__rustyAcceptanceKeySequence,
+           phase,
+           type: event.type,
+           key: event.key,
+           code: event.code,
+           repeat: event.repeat,
+           isTrusted: event.isTrusted,
+           defaultPrevented: event.defaultPrevented,
+           target: event.target?.tagName ?? null,
+           targetIsCurrentCanvas: event.target === canvas,
+           activeElementIsCurrentCanvas: document.activeElement === canvas,
+         });
+       };
        document.addEventListener('keydown', observe('capture'), true);
        document.addEventListener('keyup', observe('capture'), true);
        document.addEventListener('keydown', observe('bubble'));
        document.addEventListener('keyup', observe('bubble'));
      }
-     return globalThis.__rustyAcceptanceKeys.slice(-16);`,
+     return { baselineSequence: globalThis.__rustyAcceptanceKeySequence };`,
   );
+}
+
+async function observePhysicalKeys(baseUrl, sessionId) {
+  return execute(
+    baseUrl,
+    sessionId,
+    `return (globalThis.__rustyAcceptanceKeys ?? []).slice(-16);`,
+  );
+}
+
+function freshCanvasWKeyPair(events, baselineSequence) {
+  const fresh = events.filter(
+    (event) => Number.isSafeInteger(event?.sequence) && event.sequence > baselineSequence,
+  );
+  const matching = (event, type) =>
+    event.type === type &&
+    event.isTrusted === true &&
+    event.targetIsCurrentCanvas === true &&
+    event.activeElementIsCurrentCanvas === true &&
+    (event.code === "KeyW" || event.key === "w" || event.key === "W");
+  const keyDown = fresh.find((event) => matching(event, "keydown"));
+  if (!keyDown) return null;
+  const keyUp = fresh.find(
+    (event) => event.sequence > keyDown.sequence && matching(event, "keyup"),
+  );
+  return keyUp ? { keyDown, keyUp } : null;
 }
 
 async function resizeWindow(baseUrl, sessionId, width, height) {
@@ -832,11 +905,44 @@ async function selfTest() {
   if (!receiptIsFresh(receiptBaseline, receiptFresh) || receiptIsFresh(receiptBaseline, receiptBaseline)) {
     throw new Error("activation receipt freshness self-test failed");
   }
+  if (selectConformanceProof({ counterCount: 0, incrementCount: 0 }).kind !== "generic") {
+    throw new Error("generic conformance-hook selection self-test failed");
+  }
+  if (selectConformanceProof({ counterCount: 1, incrementCount: 1 }).kind !== "counter-conformance") {
+    throw new Error("counter conformance-hook selection self-test failed");
+  }
+  for (const snapshot of [{ counterCount: 1, incrementCount: 0 }, { counterCount: 2, incrementCount: 1 }]) {
+    try {
+      selectConformanceProof(snapshot);
+      throw new Error("partial conformance-hook selection unexpectedly passed");
+    } catch (error) {
+      if (!String(error?.message ?? error).includes("expected either no conformance hooks")) throw error;
+    }
+  }
+  const freshKeys = [
+    { sequence: 4, type: "keydown", code: "KeyW", isTrusted: true, targetIsCurrentCanvas: true, activeElementIsCurrentCanvas: true },
+    { sequence: 5, type: "keyup", code: "KeyW", isTrusted: true, targetIsCurrentCanvas: true, activeElementIsCurrentCanvas: true },
+  ];
+  if (freshCanvasWKeyPair(freshKeys, 3) === null || freshCanvasWKeyPair(freshKeys, 5) !== null) {
+    throw new Error("fresh canvas W-key correlation self-test failed");
+  }
+  if (freshCanvasWKeyPair([
+    { sequence: 6, type: "keydown", code: "KeyW", isTrusted: true, targetIsCurrentCanvas: false, activeElementIsCurrentCanvas: true },
+    { sequence: 7, type: "keyup", code: "KeyW", isTrusted: true, targetIsCurrentCanvas: false, activeElementIsCurrentCanvas: true },
+  ], 5) !== null) {
+    throw new Error("non-canvas W-key correlation self-test failed");
+  }
+  if (freshCanvasWKeyPair([
+    { sequence: 8, type: "keydown", code: "KeyW", isTrusted: false, targetIsCurrentCanvas: true, activeElementIsCurrentCanvas: true },
+    { sequence: 9, type: "keyup", code: "KeyW", isTrusted: false, targetIsCurrentCanvas: true, activeElementIsCurrentCanvas: true },
+  ], 7) !== null) {
+    throw new Error("synthetic W-key correlation self-test failed");
+  }
   return {
     schemaVersion: 1,
     status: "self-test-passed",
     durationMs: Date.now() - start,
-    checks: ["bounded-process-reap", "bounded-output-capture", "bounded-timeout", "activation-receipt-freshness", "argument-parser"],
+    checks: ["bounded-process-reap", "bounded-output-capture", "bounded-timeout", "activation-receipt-freshness", "conformance-hook-selection", "fresh-canvas-input-correlation", "argument-parser"],
   };
 }
 
@@ -861,6 +967,10 @@ async function main(options) {
     screenshot: join(options.evidenceDir, options.screenshotName),
     inheritedDisplay: process.env.DISPLAY ?? null,
     steps: {},
+  };
+  const selectors = {
+    counter: options.counterSelector,
+    increment: options.incrementSelector,
   };
   const desktopEntryFile = join(options.xdgDataHome, "applications", `${options.desktopEntry}.desktop`);
   const desktopEntryBytes = readFileSync(desktopEntryFile);
@@ -918,17 +1028,10 @@ async function main(options) {
     evidence.sessionId = sessionId;
     const readinessStarted = Date.now();
     const initial = await waitFor(
-      "native window readiness, one Engine canvas, and counter zero",
+      "native window readiness, one Engine canvas, and accepted runtime lifecycle",
       async () => {
-        const snapshot = await domSnapshot(baseUrl, sessionId, options.counterSelector);
-        const mismatches = [];
-        if (snapshot.readyState !== "complete") mismatches.push(`readyState=${snapshot.readyState}`);
-        if (snapshot.body !== true) mismatches.push("body-missing");
-        if (snapshot.productReady !== true) mismatches.push("productReady=false");
-        if (snapshot.viewportWidth <= 0) mismatches.push(`viewportWidth=${snapshot.viewportWidth}`);
-        if (snapshot.viewportHeight <= 0) mismatches.push(`viewportHeight=${snapshot.viewportHeight}`);
-        if (snapshot.canvasCount !== 1) mismatches.push(`canvasCount=${snapshot.canvasCount}`);
-        if (snapshot.counter !== "0") mismatches.push(`counter=${JSON.stringify(snapshot.counter)}`);
+        const snapshot = await domSnapshot(baseUrl, sessionId, selectors);
+        const mismatches = genericHostReadinessMismatches(snapshot);
         if (mismatches.length > 0) {
           evidence.steps.nativeWindowReady = {
             status: "waiting",
@@ -942,11 +1045,20 @@ async function main(options) {
       },
       options.startupTimeoutMs,
     );
-    evidence.steps.nativeWindowReady = { status: "passed", durationMs: Date.now() - readinessStarted, snapshot: initial };
+    const conformanceProof = selectConformanceProof(initial);
+    if (conformanceProof.kind === "counter-conformance" && initial.counter !== "0") {
+      throw new Error(`counter conformance proof expected zero before input, found ${JSON.stringify(initial.counter)}`);
+    }
+    evidence.steps.nativeWindowReady = {
+      status: "passed",
+      durationMs: Date.now() - readinessStarted,
+      conformanceProof,
+      snapshot: initial,
+    };
 
     const focusStarted = Date.now();
     try {
-      const focus = await focusCanvas(baseUrl, sessionId, options.counterSelector, options.stepTimeoutMs);
+      const focus = await focusCanvas(baseUrl, sessionId, selectors, options.stepTimeoutMs);
       evidence.steps.canvasFocus = { ...focus, durationMs: Date.now() - focusStarted };
     } catch (error) {
       evidence.steps.canvasFocus = error.focusEvidence ?? {
@@ -957,30 +1069,66 @@ async function main(options) {
       throw error;
     }
     const inputStarted = Date.now();
-    await observePhysicalKeys(baseUrl, sessionId);
+    const keyObservation = await beginPhysicalKeyObservation(baseUrl, sessionId);
     await sendWKeyAction(baseUrl, sessionId, "keyDown");
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
     evidence.steps.wKeyInput = {
-      status: "observed",
+      status: "observing",
+      baselineSequence: keyObservation.baselineSequence,
       events: await observePhysicalKeys(baseUrl, sessionId),
-      snapshot: await domSnapshot(baseUrl, sessionId, options.counterSelector),
+      snapshot: await domSnapshot(baseUrl, sessionId, selectors),
     };
-    const afterW = await waitFor(
-      "Rust-authoritative counter projection to become one while W is held",
-      async () => {
-        const snapshot = await domSnapshot(baseUrl, sessionId, options.counterSelector);
-        return snapshot.counter === "1" && snapshot.canvasCount === 1 ? snapshot : null;
-      },
-      options.stepTimeoutMs,
-    );
+    const conformanceAfterW = conformanceProof.kind === "counter-conformance"
+      ? await waitFor(
+        "Rust-authoritative counter projection to become one while W is held",
+        async () => {
+          const snapshot = await domSnapshot(baseUrl, sessionId, selectors);
+          return snapshot.counter === "1" && genericHostIsReady(snapshot) ? snapshot : null;
+        },
+        options.stepTimeoutMs,
+      )
+      : null;
     await sendWKeyAction(baseUrl, sessionId, "keyUp");
     evidence.steps.wKeyInput.events = await observePhysicalKeys(baseUrl, sessionId);
-    evidence.steps.wKeyProjection = {
-      status: "passed",
-      durationMs: Date.now() - inputStarted,
-      action: "WebDriver W keyDown, authoritative projection, then keyUp",
-      snapshot: afterW,
-    };
+    evidence.steps.wKeyInput.snapshot = await domSnapshot(baseUrl, sessionId, selectors);
+    const freshKeyPair = freshCanvasWKeyPair(
+      evidence.steps.wKeyInput.events,
+      keyObservation.baselineSequence,
+    );
+    if (!freshKeyPair) {
+      throw new Error("WebDriver W action did not produce a fresh keyDown/keyUp pair on the focused current canvas");
+    }
+    if (
+      evidence.steps.wKeyInput.snapshot.canvasCount !== 1 ||
+      evidence.steps.wKeyInput.snapshot.activeElementIsCurrentCanvas !== true
+    ) {
+      throw new Error("current sole canvas lost focus during the native WebDriver W action");
+    }
+    evidence.steps.wKeyInput.status = "passed";
+    evidence.steps.wKeyInput.freshKeyPair = freshKeyPair;
+    if (conformanceProof.kind === "counter-conformance") {
+      evidence.steps.wKeyProjection = {
+        status: "passed",
+        durationMs: Date.now() - inputStarted,
+        action: "WebDriver W keyDown, authoritative counter projection, then keyUp",
+        snapshot: conformanceAfterW,
+      };
+    } else {
+      const afterW = await waitFor(
+        "native host to remain ready after generic physical input",
+        async () => {
+          const snapshot = await domSnapshot(baseUrl, sessionId, selectors);
+          return genericHostIsReady(snapshot) ? snapshot : null;
+        },
+        options.stepTimeoutMs,
+      );
+      evidence.steps.wKeyProjection = {
+        status: "passed",
+        durationMs: Date.now() - inputStarted,
+        action: "WebDriver W keyDown/keyUp reached the native DOM input path; product-specific intent meaning is not prescribed",
+        snapshot: afterW,
+      };
+    }
 
     const resizeStarted = Date.now();
     const resize = await resizeWindow(baseUrl, sessionId, options.resizeWidth, options.resizeHeight);
@@ -988,8 +1136,8 @@ async function main(options) {
     const resized = await waitFor(
       "one Engine canvas after native window resize",
       async () => {
-        const snapshot = await domSnapshot(baseUrl, sessionId, options.counterSelector);
-        return snapshot.canvasCount === 1 ? snapshot : null;
+        const snapshot = await domSnapshot(baseUrl, sessionId, selectors);
+        return genericHostIsReady(snapshot) ? snapshot : null;
       },
       options.stepTimeoutMs,
     );
@@ -1021,8 +1169,11 @@ async function main(options) {
       const responsive = await waitFor(
         `${label} primary responsiveness`,
         async () => {
-          const snapshot = await domSnapshot(baseUrl, sessionId, options.counterSelector);
-          return snapshot.canvasCount === 1 && snapshot.counter === "1" ? snapshot : null;
+          const snapshot = await domSnapshot(baseUrl, sessionId, selectors);
+          if (!genericHostIsReady(snapshot)) return null;
+          return conformanceProof.kind !== "counter-conformance" || snapshot.counter === "1"
+            ? snapshot
+            : null;
         },
         options.stepTimeoutMs,
       );
