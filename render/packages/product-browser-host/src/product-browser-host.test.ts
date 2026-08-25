@@ -154,6 +154,9 @@ test('bundle assets are fixed JS composition roots and descriptor bytes are repr
   assert.match(first[1]!.content, /renderer-preload\.json/u);
   assert.match(first[1]!.content, /renderer: \{ initialContent: rendererInitialContent \}/u);
   assert.match(first[1]!.content, /crypto\.subtle\.digest\('SHA-256'/u);
+  assert.match(first[1]!.content, /PRODUCT_RENDERER_PRELOAD_TEXTURE_MAX_COUNT/u);
+  assert.match(first[1]!.content, /PRODUCT_RENDERER_PRELOAD_AUDIO_MAX_TOTAL_BYTES/u);
+  assert.match(first[1]!.content, /new TextEncoder\(\)\.encode\(path\)\.byteLength <= 512/u);
   assert.match(first[1]!.content, /realtimeAdvanceOwner: bridge\.realtimeAdvanceOwner/u);
   assert.match(first[2]!.content, /\.\/engine\/product-browser-host\.js/u);
   assert.equal(first[3]!.content, options.engineHostModule);

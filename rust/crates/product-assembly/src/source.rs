@@ -377,6 +377,14 @@ fn admit_kernel_package(
                     "only the root Product Kernel package may use an exact empty [workspace] to opt out of an outer workspace",
                 ));
             }
+            // An exact empty root workspace is an authored opt-out from the
+            // product's enclosing workspace. The generated Assembly is
+            // already detached, so retaining it here would create a forbidden
+            // nested Cargo workspace root.
+            document
+                .as_table_mut()
+                .expect("Cargo manifest is a TOML table")
+                .remove("workspace");
         }
         if document
             .get("package")
@@ -2537,6 +2545,31 @@ mod kernel_package_tests {
         .unwrap();
         assert!(root.contains("path = \"../../rusty-engine\""));
         assert_eq!(package.cargo_rewrites.len(), 2);
+    }
+
+    #[test]
+    fn package_mode_strips_only_the_admitted_empty_root_workspace_when_copying() {
+        let files = BTreeMap::from([(
+            "kernel/Cargo.toml".to_owned(),
+            file(
+                "kernel/Cargo.toml",
+                "[package]\nname = \"example-kernel\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n\n[dependencies]\nrusty-engine = { path = \"../../wrong\" }\n",
+            ),
+        )]);
+        let package = admit_kernel_package(
+            &ProductPath::parse("kernel/Cargo.toml".to_owned()).unwrap(),
+            &files,
+            "../rusty-engine",
+        )
+        .expect("empty workspace is an authored opt-out");
+        let copied = std::str::from_utf8(
+            package
+                .cargo_rewrites
+                .get(&ProductPath::parse("kernel/Cargo.toml".to_owned()).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(!copied.contains("[workspace]"));
     }
 
     #[test]

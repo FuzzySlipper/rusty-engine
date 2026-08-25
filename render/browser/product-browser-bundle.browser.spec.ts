@@ -49,13 +49,14 @@ test('relocatable generated bundle starts over plain HTTP without bare package i
   page.on('pageerror', (error) => pageErrors.push(error.message));
   try {
     await page.goto(`http://127.0.0.1:${String(address.port)}/index.html`);
+    await expect.poll(() => pageErrors).toEqual([]);
     await expect(page.locator('#bundle-state')).toHaveText('projection: product.local.current');
     await expect(page.locator('canvas[data-rusty-application-renderer="engine-owned"]')).toHaveCount(1);
     await expect.poll(() => requests.some((request) => request === 'GET /__rusty/product/runtime/outputs')).toBe(true);
     await expect.poll(() => requests.some((request) => request === 'POST /__rusty/product/runtime/lifecycle/start')).toBe(true);
     await expect.poll(() => requests.some((request) => request.startsWith('POST /__rusty/product/runtime/advance-realtime'))).toBe(true);
     await expect.poll(() => requests.some((request) => request === 'GET /renderer-preload.json')).toBe(true);
-    await expect.poll(() => requests.some((request) => request === 'GET /content/renderer/sky.png')).toBe(true);
+    await expect.poll(() => requests.some((request) => request === 'GET /content/renderer/%C3%A9.png')).toBe(true);
     await expect.poll(() => requests.some((request) => request === 'GET /content/renderer/theme.wav')).toBe(true);
     expect(pageErrors).toEqual([]);
   } finally {
@@ -168,7 +169,7 @@ async function handleRequest(
     });
     return;
   }
-  const asset = assets.get(pathname);
+  const asset = assets.get(decodeURIComponent(pathname));
   if (asset === undefined) {
     response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
     response.end('not found');
@@ -196,7 +197,7 @@ function rendererPreloadResources(): readonly RendererPreloadResource[] {
   wav.set([82, 73, 70, 70], 0);
   wav.set([87, 65, 86, 69], 8);
   return Object.freeze([
-    preloadResource('texture', 'image/png', 'content/renderer/sky.png', png),
+    preloadResource('texture', 'image/png', 'content/renderer/é.png', png),
     preloadResource('audio', 'audio/wav', 'content/renderer/theme.wav', wav),
   ]);
 }

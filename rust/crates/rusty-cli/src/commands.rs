@@ -411,7 +411,7 @@ pub(crate) fn test(start: PathBuf, wrapper: Option<String>) -> Execution {
         ),
         Fact::new(
             "test.browser",
-            "pass; real Chromium mounted exactly one Engine canvas",
+            "pass; real Chromium retained one Engine canvas without browser errors",
         ),
     ];
     if let Some((desktop, evidence)) = desktop_evidence {

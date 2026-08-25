@@ -40,7 +40,11 @@ dependency must resolve within `kernel/`; the fixed `rusty-engine` dependency
 is rewritten to the explicit generated Assembly facade path. The Engine facade
 re-exports `serde` and `serde_json` for product DTO serialization, avoiding a
 second package registry graph. Symlinks, lane escapes, malformed identities,
-and a missing fixed runtime export fail before product publication.
+and a missing fixed runtime export fail before product publication. For closed
+package DTOs, the `product-kernel` namespace re-exports `serde` and
+`serde_json`; package code uses `rusty_engine::product_kernel::{serde,
+serde_json}` and `#[serde(crate = "rusty_engine::product_kernel::serde")]`.
+The broad Engine facade does not re-export either crate.
 
 `product_kernel_declaration!` is one source declaration for a product's closed
 capabilities, schema identities, and offline migrations. Each capability names

@@ -84,7 +84,7 @@ rusty build --path "$PRODUCT_ROOT"
 echo "[package] verify the generated package closure (no installed desktop action)"
 rusty package --path "$PRODUCT_ROOT" --wrapper desktop
 
-echo "[browser] run one canvas plus UI-click and physical-W intent convergence"
+echo "[browser] prove the neutral one-canvas host; fixture hooks add UI/physical/lifecycle coverage"
 sed -i '/^\[\[wrappers\]\]/,$d' "$PRODUCT_ROOT/rusty.toml"
 rusty test --path "$PRODUCT_ROOT"
 

@@ -42,7 +42,7 @@ runtime closure; wrapper realization and headed proof remain a separate owner.
 | `src/package.rs` | Exact staged pre-wrapper runtime package, deterministic receipt, relocation readback |
 | `src/report.rs` | Ordered, field-bounded and aggregate-bounded human/JSON diagnostics |
 | `src/tests.rs` | Discovery, initialization, non-mutation, symlink, host-shape, output-kind, and reporting proof |
-| `render/scripts/rusty-cli-browser-test.mjs` | Real Chromium mount proof for `rusty test`; no product semantics |
+| `render/scripts/rusty-cli-browser-test.mjs` | Real Chromium loopback-root and stable one-canvas proof for `rusty test`; optional conformance hooks add fixture-only semantics |
 
 The package is deliberately binary-only. It does not add a library namespace
 to the complete `rusty-engine` facade.
