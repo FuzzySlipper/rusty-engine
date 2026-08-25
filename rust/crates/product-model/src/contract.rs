@@ -2,11 +2,12 @@ use serde_json::{json, Value};
 
 use crate::{
     engine_capability_descriptors, MAX_CAPABILITY_BINDINGS, MAX_COMPILED_COMPOSITION_BYTES,
-    MAX_GAMEPLAY_DEFINITIONS, MAX_IDENTITY_BYTES, MAX_INPUT_CHORD_CONTROLS, MAX_INPUT_MAP_ENTRIES,
-    MAX_INTENT_DESCRIPTORS, MAX_OPAQUE_JSON_ARRAY_ENTRIES, MAX_OPAQUE_JSON_DEPTH,
-    MAX_OPAQUE_JSON_NODES, MAX_OPAQUE_JSON_OBJECT_ENTRIES, MAX_OPAQUE_JSON_STRING_BYTES,
-    MAX_SAFE_JSON_INTEGER, MAX_SCHEDULE_ACCESS_DECLARATIONS, MAX_SCHEDULE_DEPENDENCIES,
-    MAX_SCHEDULE_ENTRIES, MAX_TIMELINES, MAX_TIMELINE_STEPS, SCHEDULE_PHASE_COUNT,
+    MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_BYTES, MAX_GAMEPLAY_DEFINITIONS, MAX_IDENTITY_BYTES,
+    MAX_INPUT_CHORD_CONTROLS, MAX_INPUT_MAP_ENTRIES, MAX_INTENT_DESCRIPTORS,
+    MAX_OPAQUE_JSON_ARRAY_ENTRIES, MAX_OPAQUE_JSON_DEPTH, MAX_OPAQUE_JSON_NODES,
+    MAX_OPAQUE_JSON_OBJECT_ENTRIES, MAX_OPAQUE_JSON_STRING_BYTES, MAX_SAFE_JSON_INTEGER,
+    MAX_SCHEDULE_ACCESS_DECLARATIONS, MAX_SCHEDULE_DEPENDENCIES, MAX_SCHEDULE_ENTRIES,
+    MAX_TIMELINES, MAX_TIMELINE_STEPS, SCHEDULE_PHASE_COUNT,
 };
 
 /// Encodes the current Rust-owned Compiled Composition descriptor consumed by
@@ -29,7 +30,7 @@ fn product_model_contract_descriptor() -> Value {
         },
         "fields": {
             "compiledComposition": ["product", "intentDescriptors", "inputMap", "schedule", "gameplayDefinitions", "timelines", "capabilityBindings"],
-            "intentDescriptor": ["id", "valueKind", "capability", "payload"],
+            "intentDescriptor": ["id", "valueKind", "payloadContract", "capability", "payload"],
             "inputMap": ["id", "intent", "trigger"],
             "schedule": ["phase", "mode", "systems", "before", "after"],
             "scheduleSystem": ["id", "capability", "definition", "after", "reads", "writes", "cadence", "payload"],
@@ -40,7 +41,8 @@ fn product_model_contract_descriptor() -> Value {
             "capabilityBinding": ["id", "target"]
         },
         "optionalFields": {
-            "scheduleSystem": ["definition"]
+            "scheduleSystem": ["definition"],
+            "intentDescriptor": ["payloadContract"]
         },
         "limits": {
             "maximumEncodedBytes": MAX_COMPILED_COMPOSITION_BYTES,
@@ -61,6 +63,7 @@ fn product_model_contract_descriptor() -> Value {
             "maximumOpaqueJsonArrayEntries": MAX_OPAQUE_JSON_ARRAY_ENTRIES,
             "maximumOpaqueJsonObjectEntries": MAX_OPAQUE_JSON_OBJECT_ENTRIES,
             "maximumSafeJsonInteger": MAX_SAFE_JSON_INTEGER
+            ,"maximumDirectIntentProductPayloadBytes": MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_BYTES
         },
         "numberEncoding": {
             "finiteBinary64": "ecmascript-number-to-string",
@@ -99,7 +102,7 @@ fn product_model_contract_descriptor() -> Value {
             "invalid-identity", "access-declaration-limit", "opaque-json-limit"
         ]
         ,"input": {
-            "intentValueKinds": ["digital", "axis"],
+            "intentValueKinds": ["digital", "axis", "product-payload"],
             "edges": ["held", "pressed", "released"],
             "triggerKinds": ["key", "pointer-button", "pointer-axis", "wheel", "controller-button", "controller-axis"],
             "keyboardControls": ["key-a", "key-b", "key-c", "key-d", "key-e", "key-f", "key-g", "key-h", "key-i", "key-j", "key-k", "key-l", "key-m", "key-n", "key-o", "key-p", "key-q", "key-r", "key-s", "key-t", "key-u", "key-v", "key-w", "key-x", "key-y", "key-z", "digit-0", "digit-1", "digit-2", "digit-3", "digit-4", "digit-5", "digit-6", "digit-7", "digit-8", "digit-9", "space", "enter", "escape", "shift-left", "shift-right", "control-left", "control-right", "alt-left", "alt-right"],

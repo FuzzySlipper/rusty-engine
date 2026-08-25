@@ -27,6 +27,10 @@ pub const MAX_OPAQUE_JSON_STRING_BYTES: usize = 16_384;
 pub const MAX_OPAQUE_JSON_ARRAY_ENTRIES: usize = 1_024;
 pub const MAX_OPAQUE_JSON_OBJECT_ENTRIES: usize = 1_024;
 pub const MAX_SAFE_JSON_INTEGER: u64 = 9_007_199_254_740_991;
+/// Maximum canonical JSON bytes one direct product-payload intent may carry.
+/// This is intentionally smaller than an entire compiled composition and is
+/// shared with host adapters through the generated contract descriptor.
+pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_BYTES: usize = 65_536;
 
 /// A validated, immutable current Compiled Composition.
 #[derive(Debug, Clone, PartialEq)]
@@ -76,6 +80,10 @@ pub struct InputMapEntry {
 pub struct ProductIntentDescriptor {
     pub id: String,
     pub value_kind: IntentValueKind,
+    /// Stable downstream-owned schema identity required only for a direct UI
+    /// product-payload intent. It is not a capability target or dispatch key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload_contract: Option<String>,
     pub capability: String,
     pub payload: Value,
 }
@@ -85,6 +93,7 @@ pub struct ProductIntentDescriptor {
 pub enum IntentValueKind {
     Digital,
     Axis,
+    ProductPayload,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -755,6 +764,28 @@ fn validate_intent_descriptors(
     for (index, descriptor) in descriptors.iter().enumerate() {
         let prefix = format!("intentDescriptors[{index}]");
         validate_identity(&descriptor.id, SOURCE, &format!("{prefix}.id"))?;
+        match (descriptor.value_kind, &descriptor.payload_contract) {
+            (IntentValueKind::ProductPayload, Some(contract)) => {
+                validate_identity(contract, SOURCE, &format!("{prefix}.payloadContract"))?;
+            }
+            (IntentValueKind::ProductPayload, None) => {
+                return Err(failure(
+                    "COMPOSITION_PRODUCT_PAYLOAD_CONTRACT_REQUIRED",
+                    SOURCE,
+                    format!("{prefix}.payloadContract"),
+                    "product-payload intents require one stable payloadContract identity",
+                ));
+            }
+            (_, Some(_)) => {
+                return Err(failure(
+                    "COMPOSITION_PRODUCT_PAYLOAD_CONTRACT_UNEXPECTED",
+                    SOURCE,
+                    format!("{prefix}.payloadContract"),
+                    "payloadContract is valid only for product-payload intents",
+                ));
+            }
+            (_, None) => {}
+        }
         require_capability(
             &descriptor.capability,
             capabilities,
@@ -803,6 +834,17 @@ fn validate_input_map(
                 ),
             )
         })?;
+        if *value_kind == IntentValueKind::ProductPayload {
+            return Err(failure(
+                "COMPOSITION_PHYSICAL_INPUT_PRODUCT_PAYLOAD",
+                SOURCE,
+                format!("{prefix}.intent"),
+                format!(
+                    "input mapping cannot target direct-UI-only product-payload intent `{}`",
+                    entry.intent
+                ),
+            ));
+        }
         entry.trigger.validate(&format!("{prefix}.trigger"))?;
         if entry.trigger.value_kind() != *value_kind {
             return Err(failure(
@@ -1490,8 +1532,13 @@ fn encode_canonical_composition(candidate: &CompiledCompositionCandidate) -> Vec
             match descriptor.value_kind {
                 IntentValueKind::Digital => "digital",
                 IntentValueKind::Axis => "axis",
+                IntentValueKind::ProductPayload => "product-payload",
             },
         );
+        if let Some(contract) = &descriptor.payload_contract {
+            write_field_name(&mut output, &mut descriptor_first, "payloadContract");
+            write_json_string(&mut output, contract);
+        }
         write_field_name(&mut output, &mut descriptor_first, "capability");
         write_json_string(&mut output, &descriptor.capability);
         write_field_name(&mut output, &mut descriptor_first, "payload");

@@ -9,6 +9,13 @@ export const RUSTY_APPLICATION_INPUT_POINTER_DELTA_MAXIMUM = 256;
 export const RUSTY_APPLICATION_INPUT_WHEEL_DELTA_MAXIMUM = 256;
 export const RUSTY_APPLICATION_INPUT_SELECTED_CONTROLLER_MAXIMUM = 3;
 export const RUSTY_APPLICATION_INPUT_U64_MAXIMUM = 18_446_744_073_709_551_615n;
+/** Mirrors the Rust-owned Product Model direct product-payload bound. */
+export const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_BYTES_MAXIMUM = 65_536;
+export const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_DEPTH_MAXIMUM = 32;
+export const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_NODES_MAXIMUM = 4_096;
+export const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_STRING_BYTES_MAXIMUM = 16_384;
+export const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_COLLECTION_MAXIMUM = 1_024;
+export const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_SAFE_INTEGER_MAXIMUM = 9_007_199_254_740_991;
 
 export interface RustyApplicationRuntimeIdentity {
   /** Canonical unsigned 64-bit decimal text; never a lossy JavaScript number. */
@@ -91,7 +98,26 @@ export interface RustyApplicationRuntimeInputIngress {
 
 export type RustyApplicationRuntimeIntentValue =
   | { readonly kind: 'digital'; readonly active: boolean }
-  | { readonly kind: 'axis'; readonly value: number };
+  | { readonly kind: 'axis'; readonly value: number }
+  | {
+      readonly kind: 'product-payload';
+      /** Stable product schema identity; Rust matches it to the descriptor. */
+      readonly contract: string;
+      /** Bounded plain JSON only; never a callback, DOM object, or command route. */
+      readonly data: RustyApplicationProductPayloadJson;
+    };
+
+export type RustyApplicationProductPayloadJson =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly RustyApplicationProductPayloadJson[]
+  | RustyApplicationProductPayloadJsonObject;
+
+export interface RustyApplicationProductPayloadJsonObject {
+  readonly [key: string]: RustyApplicationProductPayloadJson;
+}
 
 /** Structural mirror of a trusted product UI intent claim for the same ordered lane. */
 export interface RustyApplicationRuntimeDirectIntentClaim {
@@ -692,7 +718,149 @@ function validateIntentValue(
     }
     return Object.freeze({ kind: 'axis', value: value.value });
   }
+  if (value.kind === 'product-payload') {
+    return Object.freeze({
+      kind: 'product-payload',
+      contract: validateProductIdentity(value.contract, 'product payload contract'),
+      data: normalizeProductPayloadJson(value.data),
+    });
+  }
   throw new TypeError('direct UI intent claim has an unknown value kind');
+}
+
+interface ProductPayloadJsonBudget {
+  nodes: number;
+  readonly active: WeakSet<object>;
+}
+
+/**
+ * Clones only bounded plain JSON into an immutable data value. This lives at
+ * the browser ingress boundary because `claim` is a public trusted-UI API;
+ * Rust validates the same shape and budget again before adapter delivery.
+ */
+function normalizeProductPayloadJson(value: unknown): RustyApplicationProductPayloadJson {
+  const normalized = normalizeProductPayloadJsonValue(value, '$.data', 1, {
+    nodes: 0,
+    active: new WeakSet<object>(),
+  });
+  const bytes = new TextEncoder().encode(JSON.stringify(normalized)).byteLength;
+  if (bytes > RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_BYTES_MAXIMUM) {
+    throw new RangeError('product payload JSON exceeds its Rust-owned byte limit');
+  }
+  return normalized;
+}
+
+function normalizeProductPayloadJsonValue(
+  value: unknown,
+  path: string,
+  depth: number,
+  budget: ProductPayloadJsonBudget,
+): RustyApplicationProductPayloadJson {
+  if (depth > RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_DEPTH_MAXIMUM) {
+    throw new RangeError(`product payload JSON depth exceeds its limit at ${path}`);
+  }
+  budget.nodes += 1;
+  if (budget.nodes > RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_NODES_MAXIMUM) {
+    throw new RangeError('product payload JSON exceeds its Rust-owned node limit');
+  }
+  if (value === null || typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    validateProductPayloadString(value, path);
+    return value;
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || (Number.isInteger(value)
+      && Math.abs(value) > RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_SAFE_INTEGER_MAXIMUM)) {
+      throw new TypeError(`product payload JSON number is invalid at ${path}`);
+    }
+    return Object.is(value, -0) ? 0 : value;
+  }
+  if (typeof value !== 'object') {
+    throw new TypeError(`product payload JSON cannot contain ${typeof value} at ${path}`);
+  }
+  if (budget.active.has(value)) {
+    throw new TypeError(`product payload JSON cannot contain a cycle at ${path}`);
+  }
+  budget.active.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype
+        || value.length > RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_COLLECTION_MAXIMUM) {
+        throw new TypeError(`product payload JSON array is invalid at ${path}`);
+      }
+      const output: RustyApplicationProductPayloadJson[] = [];
+      for (let index = 0; index < value.length; index += 1) {
+        if (!Object.hasOwn(value, index)) {
+          throw new TypeError(`product payload JSON arrays cannot contain holes at ${path}`);
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
+          throw new TypeError(`product payload JSON arrays cannot contain accessors at ${path}`);
+        }
+        output.push(normalizeProductPayloadJsonValue(value[index], `${path}[${String(index)}]`, depth + 1, budget));
+      }
+      if (Reflect.ownKeys(value).some((key) => key !== 'length'
+        && (typeof key !== 'string' || !isProductPayloadArrayIndex(key, value.length)))) {
+        throw new TypeError(`product payload JSON arrays cannot contain extra properties at ${path}`);
+      }
+      return Object.freeze(output);
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError(`product payload JSON objects must be plain data at ${path}`);
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = Object.keys(value).sort(compareProductPayloadUtf8);
+    if (keys.length > RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_COLLECTION_MAXIMUM
+      || Reflect.ownKeys(descriptors).some((key) => typeof key !== 'string'
+        || descriptors[key] === undefined || !descriptors[key]!.enumerable
+        || !('value' in descriptors[key]!))) {
+      throw new TypeError(`product payload JSON objects cannot contain accessors or hidden fields at ${path}`);
+    }
+    const output: Record<string, RustyApplicationProductPayloadJson> = Object.create(null) as Record<string, RustyApplicationProductPayloadJson>;
+    for (const key of keys) {
+      validateProductPayloadString(key, `${path}.<key>`);
+      Object.defineProperty(output, key, {
+        value: normalizeProductPayloadJsonValue((value as Record<string, unknown>)[key], `${path}.${key}`, depth + 1, budget),
+        enumerable: true, configurable: false, writable: false,
+      });
+    }
+    return Object.freeze(output);
+  } finally {
+    budget.active.delete(value);
+  }
+}
+
+function isProductPayloadArrayIndex(key: string, length: number): boolean {
+  if (key !== '0' && !/^[1-9][0-9]*$/u.test(key)) return false;
+  const index = Number(key);
+  return Number.isSafeInteger(index)
+    && index < 4_294_967_295
+    && index < length
+    && String(index) === key;
+}
+
+function validateProductPayloadString(value: string, path: string): void {
+  if (new TextEncoder().encode(value).byteLength > RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_STRING_BYTES_MAXIMUM) {
+    throw new RangeError(`product payload JSON string exceeds its limit at ${path}`);
+  }
+  for (const scalar of value) {
+    const code = scalar.codePointAt(0) as number;
+    if (code >= 0xd800 && code <= 0xdfff) {
+      throw new TypeError(`product payload JSON string is not scalar data at ${path}`);
+    }
+  }
+}
+
+function compareProductPayloadUtf8(left: string, right: string): number {
+  const leftBytes = new TextEncoder().encode(left);
+  const rightBytes = new TextEncoder().encode(right);
+  const length = Math.min(leftBytes.length, rightBytes.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = (leftBytes[index] as number) - (rightBytes[index] as number);
+    if (difference !== 0) return difference;
+  }
+  return leftBytes.length - rightBytes.length;
 }
 
 function validateInputFact(

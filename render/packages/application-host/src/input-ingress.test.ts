@@ -50,6 +50,47 @@ void test('input ingress preserves physical and direct UI observation order with
   ]);
 });
 
+void test('direct product payload claims are deeply plain, bounded, and immutable', () => {
+  const queue = createRustyApplicationInputQueue(8);
+  queue.bindRuntime(INITIAL);
+  queue.claim('inventory.drop', {
+    kind: 'product-payload',
+    contract: 'example.inventory.drop.v1',
+    data: { sourceSlot: 3, targetSlot: 5, selected: true },
+  });
+  const [entry] = queue.drain();
+  assert.ok(entry !== undefined && 'value' in entry);
+  assert.equal(entry.value.kind, 'product-payload');
+  if (entry.value.kind === 'product-payload') {
+    assert.equal(entry.value.contract, 'example.inventory.drop.v1');
+    assert.deepEqual({ ...(entry.value.data as Record<string, unknown>) }, {
+      selected: true, sourceSlot: 3, targetSlot: 5,
+    });
+    assert.ok(Object.isFrozen(entry.value.data));
+  }
+  assert.throws(() => queue.claim('inventory.drop', {
+    kind: 'product-payload',
+    contract: 'example.inventory.drop.v1',
+    data: Object.create({ inherited: true }) as never,
+  }));
+  const accessor: Record<string, unknown> = {};
+  Object.defineProperty(accessor, 'slot', { enumerable: true, get: () => 3 });
+  assert.throws(() => queue.claim('inventory.drop', {
+    kind: 'product-payload', contract: 'example.inventory.drop.v1', data: accessor as never,
+  }));
+  const executableArray: unknown[] = [3];
+  Object.defineProperty(executableArray, '4294967295', {
+    enumerable: true,
+    get: () => { throw new Error('must not read extra array property'); },
+  });
+  assert.throws(() => queue.claim('inventory.drop', {
+    kind: 'product-payload', contract: 'example.inventory.drop.v1', data: executableArray as never,
+  }));
+  assert.throws(() => queue.claim('inventory.drop', {
+    kind: 'product-payload', contract: 'example.inventory.drop.v1', data: { slot: 9_007_199_254_740_992 },
+  }));
+});
+
 void test('input ingress rebinding and context changes clear with the exact epoch ordering', () => {
   const queue = createRustyApplicationInputQueue(8);
   queue.bindRuntime(INITIAL);
@@ -220,7 +261,7 @@ void test('input ingress rejects malformed runtime, context, and intent wire val
 void test('shared host-neutral input envelope fixture has the exact public application-host wire shape', async () => {
   const values: unknown = JSON.parse(await readFile(HOST_NEUTRAL_WIRE_FIXTURE, 'utf8'));
   assert.ok(Array.isArray(values));
-  assert.equal(values.length, 16);
+  assert.equal(values.length, 17);
   for (const entry of values) {
     assertRecord(entry);
   }
@@ -253,11 +294,31 @@ function assertRecord(entry: unknown): asserts entry is Record<string, unknown> 
     assert.equal(typeof entry['value']['active'], 'boolean');
     return;
   }
+  if (entry['value']['kind'] === 'product-payload') {
+    assert.deepEqual(Object.keys(entry['value']).sort(), ['contract', 'data', 'kind']);
+    assertIdentity(entry['value']['contract']);
+    assertPlainProductPayload(entry['value']['data']);
+    return;
+  }
   assert.equal(entry['value']['kind'], 'axis');
   assert.deepEqual(Object.keys(entry['value']).sort(), ['kind', 'value']);
   assert.ok(typeof entry['value']['value'] === 'number'
     && Number.isFinite(entry['value']['value'])
     && entry['value']['value'] >= -1 && entry['value']['value'] <= 1);
+}
+
+function assertPlainProductPayload(value: unknown): void {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return;
+  if (typeof value === 'number') {
+    assert.ok(Number.isFinite(value) && (!Number.isInteger(value) || Math.abs(value) <= 9_007_199_254_740_991));
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach(assertPlainProductPayload);
+    return;
+  }
+  assert.ok(isRecord(value));
+  Object.values(value).forEach(assertPlainProductPayload);
 }
 
 function assertFact(value: unknown): void {

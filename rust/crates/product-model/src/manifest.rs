@@ -146,6 +146,10 @@ pub struct ProductManifestCandidate {
     pub lifecycle: LifecycleMode,
     pub realtime: Option<RealtimeClock>,
     pub kernel_entry: Option<String>,
+    /// Current-schema packaged Product Kernel manifest.  This is deliberately
+    /// separate from `kernel_entry` so a legacy source-linked module cannot
+    /// silently become a Cargo package with a different dependency closure.
+    pub kernel_package: Option<String>,
     pub ui_entry: String,
     pub ui_projection_stream: Option<String>,
     pub ui_projection_contract: Option<String>,
@@ -182,6 +186,7 @@ pub struct ProductManifest {
     lifecycle: LifecycleMode,
     realtime: Option<RealtimeClock>,
     kernel_entry: Option<ProductPath>,
+    kernel_package: Option<ProductPath>,
     ui_entry: ProductPath,
     ui_projection_stream: Option<String>,
     ui_projection_contract: Option<String>,
@@ -212,6 +217,17 @@ impl ProductManifest {
 
     pub fn kernel_entry(&self) -> Option<&ProductPath> {
         self.kernel_entry.as_ref()
+    }
+
+    /// The explicit Cargo manifest for a closed Product Kernel package.
+    /// Package admission and closure copying belong to Product Assembly; this
+    /// schema owner only validates its bounded product-relative declaration.
+    pub fn kernel_package(&self) -> Option<&ProductPath> {
+        self.kernel_package.as_ref()
+    }
+
+    pub const fn has_kernel(&self) -> bool {
+        self.kernel_entry.is_some() || self.kernel_package.is_some()
     }
 
     pub fn ui_entry(&self) -> &ProductPath {
@@ -323,6 +339,30 @@ pub fn validate_product_manifest(
     if let Some(path) = &kernel_entry {
         require_lane(path, "kernel", "kernel.entry")?;
         source_paths.push(("kernel.entry".to_string(), path.clone()));
+    }
+    let kernel_package = candidate
+        .kernel_package
+        .map(|value| ProductPath::parse_at(value, SOURCE, "kernel.package"))
+        .transpose()?;
+    if let Some(path) = &kernel_package {
+        require_lane(path, "kernel", "kernel.package")?;
+        if !path.as_str().ends_with("/Cargo.toml") {
+            return Err(failure(
+                "PRODUCT_KERNEL_PACKAGE_MANIFEST",
+                SOURCE,
+                "kernel.package",
+                "kernel.package must name a Cargo.toml manifest inside the kernel lane",
+            ));
+        }
+        source_paths.push(("kernel.package".to_string(), path.clone()));
+    }
+    if kernel_entry.is_some() && kernel_package.is_some() {
+        return Err(failure(
+            "PRODUCT_KERNEL_MODE_CONFLICT",
+            SOURCE,
+            "kernel",
+            "declare exactly one of kernel.entry or kernel.package",
+        ));
     }
 
     let ui_entry = ProductPath::parse_at(candidate.ui_entry, SOURCE, "ui.entry")?;
@@ -472,6 +512,7 @@ pub fn validate_product_manifest(
         lifecycle: candidate.lifecycle,
         realtime: candidate.realtime,
         kernel_entry,
+        kernel_package,
         ui_entry,
         ui_projection_stream: candidate.ui_projection_stream,
         ui_projection_contract: candidate.ui_projection_contract,
@@ -760,7 +801,8 @@ impl RawManifest {
             composition_entrypoints: self.runtime_composition.entrypoints,
             lifecycle: self.lifecycle.mode,
             realtime: self.lifecycle.realtime,
-            kernel_entry: self.kernel.map(|kernel| kernel.entry),
+            kernel_entry: self.kernel.as_ref().and_then(|kernel| kernel.entry.clone()),
+            kernel_package: self.kernel.and_then(|kernel| kernel.package),
             ui_entry: self.ui.entry,
             ui_projection_stream: self.ui.projection_stream,
             ui_projection_contract: self.ui.projection_contract,
@@ -813,7 +855,8 @@ struct RawLifecycle {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawKernel {
-    entry: String,
+    entry: Option<String>,
+    package: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

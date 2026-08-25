@@ -17,8 +17,9 @@ pub use model::{
     parse_canonical_u64, AxisValue, ButtonSnapshot, InputClearReason, InputContext, InputFrame,
     IntentPhase, IntentProvenance, PhysicalEdge, RuntimeDirectIntentClaim, RuntimeInputBinding,
     RuntimeInputError, RuntimeInputEvent, RuntimeInputFact, RuntimeInputIngress,
-    RuntimeIntentEnvelope, RuntimeIntentValue, MAX_AXIS_MAGNITUDE, MAX_CONTROLLER_AXIS_MAGNITUDE,
-    MAX_DIRECT_INTENT_AXIS_MAGNITUDE, MAX_PENDING_INGRESS,
+    RuntimeIntentEnvelope, RuntimeIntentValue, RuntimeProductPayload, MAX_AXIS_MAGNITUDE,
+    MAX_CONTROLLER_AXIS_MAGNITUDE, MAX_DIRECT_INTENT_AXIS_MAGNITUDE,
+    MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_JSON_BYTES, MAX_PENDING_INGRESS,
 };
 pub use wire::{
     decode_runtime_input_wire_event_json, decode_runtime_input_wire_events_json,

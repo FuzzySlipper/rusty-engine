@@ -141,6 +141,7 @@ export const PRODUCT_MODEL_FIELDS = {
   "intentDescriptor": [
     "id",
     "valueKind",
+    "payloadContract",
     "capability",
     "payload"
   ],
@@ -217,7 +218,8 @@ export const PRODUCT_MODEL_INPUT = {
   ],
   "intentValueKinds": [
     "digital",
-    "axis"
+    "axis",
+    "product-payload"
   ],
   "keyboardControls": [
     "key-a",
@@ -282,6 +284,7 @@ export const PRODUCT_MODEL_INPUT = {
 } as const;
 export const PRODUCT_MODEL_LIMITS = {
   "maximumCapabilityBindings": 512,
+  "maximumDirectIntentProductPayloadBytes": 65536,
   "maximumEncodedBytes": 1048576,
   "maximumGameplayDefinitions": 512,
   "maximumInputChordControls": 8,
@@ -306,6 +309,9 @@ export const PRODUCT_MODEL_NUMBER_ENCODING = {
   "negativeZero": "0"
 } as const;
 export const PRODUCT_MODEL_OPTIONAL_FIELDS = {
+  "intentDescriptor": [
+    "payloadContract"
+  ],
   "scheduleSystem": [
     "definition"
   ]

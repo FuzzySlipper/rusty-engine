@@ -92,6 +92,17 @@
     "value": { "kind": "axis", "value": 0 }
   },
   {
+    "runtime": { "instanceId": "8", "generation": "0", "controlRevision": "1" },
+    "sequence": "5",
+    "context": "gameplay.default",
+    "intent": "inventory.drop",
+    "value": {
+      "kind": "product-payload",
+      "contract": "example.inventory.drop.v1",
+      "data": { "sourceSlot": 3, "targetSlot": 5 }
+    }
+  },
+  {
     "runtime": { "instanceId": "18446744073709551615", "generation": "18446744073709551615", "controlRevision": "18446744073709551615" },
     "sequence": "18446744073709551615",
     "context": "gameplay.default",

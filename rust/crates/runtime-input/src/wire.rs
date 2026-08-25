@@ -6,6 +6,7 @@ use crate::{
     model::validate_controller_axis, parse_canonical_u64, AxisValue, InputClearReason,
     InputContext, PhysicalEdge, RuntimeDirectIntentClaim, RuntimeInputBinding, RuntimeInputError,
     RuntimeInputEvent, RuntimeInputFact, RuntimeInputIngress, RuntimeIntentValue,
+    RuntimeProductPayload,
 };
 
 /// Maximum bytes accepted from one host wire decode operation.
@@ -240,8 +241,16 @@ impl WireClearReason {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 enum WireIntentValue {
-    Digital { active: bool },
-    Axis { value: f32 },
+    Digital {
+        active: bool,
+    },
+    Axis {
+        value: f32,
+    },
+    ProductPayload {
+        contract: String,
+        data: serde_json::Value,
+    },
 }
 
 impl WireIntentValue {
@@ -250,6 +259,9 @@ impl WireIntentValue {
             Self::Digital { active } => RuntimeIntentValue::Digital { active },
             Self::Axis { value } => RuntimeIntentValue::Axis {
                 value: AxisValue::new(value)?,
+            },
+            Self::ProductPayload { contract, data } => RuntimeIntentValue::ProductPayload {
+                payload: RuntimeProductPayload::new(contract, data)?,
             },
         })
     }

@@ -3195,6 +3195,7 @@ mod tests {
             lifecycle: LifecycleMode::Realtime,
             realtime: Some(product_model::RealtimeClock::new(60, 4)),
             kernel_entry: None,
+            kernel_package: None,
             ui_entry: "ui/main.ts".to_owned(),
             ui_projection_stream: None,
             ui_projection_contract: None,

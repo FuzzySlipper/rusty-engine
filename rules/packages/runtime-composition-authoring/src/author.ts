@@ -136,10 +136,11 @@ export function productIntent(draft: ProductIntentDescriptorDraft): ProductInten
 export function inputAction(draft: InputActionDraft): InputMapEntry {
   const source = record(draft, '$.inputAction');
   known(source, ['id', 'intent', 'trigger'], '$.inputAction');
+  const trigger = admitInputTrigger(required(source, 'trigger', '$.inputAction'), '$.inputAction.trigger');
   return freezeInput({
     id: identity(requiredString(source, 'id', '$.inputAction'), '$.inputAction.id'),
     intent: identity(requiredString(source, 'intent', '$.inputAction'), '$.inputAction.intent'),
-    trigger: admitInputTrigger(required(source, 'trigger', '$.inputAction'), '$.inputAction.trigger'),
+    trigger,
   });
 }
 
@@ -380,10 +381,17 @@ function admitIntentDescriptor(value: unknown, path: string, capabilities: Reado
   const capability = identity(requiredString(source, 'capability', path), `${path}.capability`);
   if (capabilities !== undefined && !capabilities.has(capability)) fail('unknown-capability', `${path}.capability`, `capability ${capability} is not declared`);
   const valueKind = requiredString(source, 'valueKind', path);
-  if (!(PRODUCT_MODEL_INPUT.intentValueKinds as readonly string[]).includes(valueKind)) fail('invalid-input-value-kind', `${path}.valueKind`, 'intent valueKind must be digital or axis');
+  if (!(PRODUCT_MODEL_INPUT.intentValueKinds as readonly string[]).includes(valueKind)) fail('invalid-input-value-kind', `${path}.valueKind`, 'intent valueKind must be digital, axis, or product-payload');
+  const payloadContract = source['payloadContract'];
+  if (valueKind === 'product-payload') {
+    if (payloadContract === undefined) fail('product-payload-contract-required', `${path}.payloadContract`, 'product-payload intents require one stable payloadContract identity');
+  } else if (payloadContract !== undefined) {
+    fail('product-payload-contract-unexpected', `${path}.payloadContract`, 'payloadContract is valid only for product-payload intents');
+  }
   return Object.freeze({
     id: identity(requiredString(source, 'id', path), `${path}.id`),
     valueKind: valueKind as ProductIntentDescriptor['valueKind'],
+    ...(payloadContract === undefined ? {} : { payloadContract: identity(requiredString(source, 'payloadContract', path), `${path}.payloadContract`) }),
     capability,
     payload: normalizeWithBudget(required(source, 'payload', path), `${path}.payload`, budget),
   });
@@ -403,6 +411,7 @@ function admitInputMapEntry(value: unknown, path: string, intents: ReadonlyMap<s
   const trigger = admitInputTrigger(required(source, 'trigger', path), `${path}.trigger`);
   const expected = intents?.get(intent);
   if (intents !== undefined && expected === undefined) fail('unknown-intent-descriptor', `${path}.intent`, `input mapping intent ${intent} is not declared`);
+  if (expected === 'product-payload') fail('physical-product-payload-forbidden', `${path}.intent`, `input mapping cannot target direct-UI-only product-payload intent ${intent}`);
   if (expected !== undefined && expected !== triggerValueKind(trigger)) fail('input-trigger-value-kind', `${path}.trigger`, `input trigger produces ${triggerValueKind(trigger)} but intent ${intent} requires ${expected}`);
   return freezeInput({
     id: identity(requiredString(source, 'id', path), `${path}.id`),
@@ -742,7 +751,10 @@ function writeCompiledComposition(value: CompiledComposition): string {
   return `{"product":${JSON.stringify(value.product)},"intentDescriptors":[${value.intentDescriptors.map(writeIntentDescriptor).join(',')}],"inputMap":[${value.inputMap.map(writeInputMapEntry).join(',')}],"schedule":[${value.schedule.map(writeSchedulePhase).join(',')}],"gameplayDefinitions":[${value.gameplayDefinitions.map(writeGameplayDefinition).join(',')}],"timelines":[${value.timelines.map(writeTimeline).join(',')}],"capabilityBindings":[${value.capabilityBindings.map(writeCapabilityBinding).join(',')}]}`;
 }
 function writeIntentDescriptor(value: ProductIntentDescriptor): string {
-  return `{"id":${JSON.stringify(value.id)},"valueKind":${JSON.stringify(value.valueKind)},"capability":${JSON.stringify(value.capability)},"payload":${writeCanonicalJson(value.payload)}}`;
+  const payloadContract = value.payloadContract === undefined
+    ? ''
+    : `,"payloadContract":${JSON.stringify(value.payloadContract)}`;
+  return `{"id":${JSON.stringify(value.id)},"valueKind":${JSON.stringify(value.valueKind)}${payloadContract},"capability":${JSON.stringify(value.capability)},"payload":${writeCanonicalJson(value.payload)}}`;
 }
 function writeInputMapEntry(value: InputMapEntry): string {
   return `{"id":${JSON.stringify(value.id)},"intent":${JSON.stringify(value.intent)},"trigger":${writeCanonicalJson(value.trigger as unknown as JsonValue)}}`;

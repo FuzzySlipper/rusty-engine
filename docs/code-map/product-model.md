@@ -47,10 +47,19 @@ compatibility-version family.
 The complete downstream facade re-exports the crate as
 `rusty_engine::product_model` without wrappers.
 
+## Product Kernel modes
+
+`kernel.entry` remains the compatible source-linked single-module mode. The
+current-schema `kernel.package` mode instead names a `Cargo.toml` below the
+fixed `kernel/` lane. They are mutually exclusive. Product Model only admits
+the bounded declaration; Product Assembly owns package identity, local
+dependency-closure validation, copy/rewrite, and compilation. No manifest
+field discovers a workspace or a runtime plugin.
+
 ## Input descriptor admission
 
 `intentDescriptors` are the one closed semantic target for input. Each owns
-its stable intent id, digital/axis value kind, one admitted capability binding,
+its stable intent id, digital/axis/direct-UI-only `product-payload` value kind, one admitted capability binding,
 and that capability's bounded payload. `inputMap` is deliberately narrower:
 an authored mapping id, one intent reference, and one explicit typed physical
 trigger. It cannot carry another capability or opaque trigger meaning.
@@ -64,6 +73,12 @@ bounded Product identity, not browser focus. Admission resolves every mapping
 to its descriptor and rejects missing references, a digital/axis mismatch,
 invalid chord, or an unavailable input-map capability before the runtime lane
 is constructed.
+
+`product-payload` descriptors additionally require a stable `payloadContract`
+identity. They are deliberately ineligible for `inputMap`: physical triggers
+cannot manufacture product JSON. A direct claim carries that contract label
+plus bounded plain JSON data, and runtime ingress matches the claimed label to
+the immutable descriptor before adapter delivery.
 
 Direct product UI claims name the descriptor id rather than a mapping. This
 lets direct UI and multiple physical triggers converge on precisely the same

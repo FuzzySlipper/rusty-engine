@@ -10,7 +10,7 @@ use runtime_input::{
     AxisValue, CompiledInputMappings, InputClearReason, InputContext, IntentPhase,
     IntentProvenance, PhysicalEdge, RuntimeDirectIntentClaim, RuntimeInputBinding,
     RuntimeInputError, RuntimeInputEvent, RuntimeInputFact, RuntimeInputIngress, RuntimeInputLane,
-    RuntimeIntentValue,
+    RuntimeIntentValue, RuntimeProductPayload,
 };
 use runtime_lifecycle::{
     RuntimeControlRevision, RuntimeFault, RuntimeGeneration, RuntimeInstanceId, RuntimeLifecycle,
@@ -81,6 +81,61 @@ fn physical_edges_and_direct_claims_keep_one_ingress_order() {
         envelopes[0].descriptor().capability_payload(),
         &serde_json::json!({ "semantic": "move-forward" })
     );
+}
+
+#[test]
+fn direct_product_payload_is_contract_matched_and_keeps_immutable_json_data() {
+    let (mut lifecycle, binding) = lifecycle_and_binding();
+    let mut lane = RuntimeInputLane::new(compiled_mappings(), binding, context());
+    let payload = RuntimeProductPayload::new(
+        "example.inventory.drop.v1",
+        serde_json::json!({"sourceSlot": 3, "targetSlot": 5}),
+    )
+    .unwrap();
+    lane.ingest(RuntimeInputEvent::DirectIntent(
+        RuntimeDirectIntentClaim::new(
+            binding,
+            0,
+            context(),
+            "inventory.drop",
+            RuntimeIntentValue::ProductPayload { payload },
+        )
+        .unwrap(),
+    ))
+    .unwrap();
+    let (_, envelopes) = snapshot(&mut lane, &mut lifecycle).unwrap();
+    assert_eq!(envelopes.len(), 1);
+    assert_eq!(
+        envelopes[0].descriptor().payload_contract(),
+        Some("example.inventory.drop.v1")
+    );
+    let RuntimeIntentValue::ProductPayload { payload } = envelopes[0].value() else {
+        panic!("expected product payload");
+    };
+    assert_eq!(payload.contract(), "example.inventory.drop.v1");
+    assert_eq!(
+        payload.data(),
+        &serde_json::json!({"sourceSlot": 3, "targetSlot": 5})
+    );
+
+    let mismatch = RuntimeDirectIntentClaim::new(
+        binding,
+        1,
+        context(),
+        "inventory.drop",
+        RuntimeIntentValue::ProductPayload {
+            payload: RuntimeProductPayload::new(
+                "example.inventory.equip.v1",
+                serde_json::json!({}),
+            )
+            .unwrap(),
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        lane.ingest(RuntimeInputEvent::DirectIntent(mismatch)),
+        Err(RuntimeInputError::ProductPayloadContractMismatch)
+    ));
 }
 
 #[test]
@@ -639,14 +694,15 @@ fn wire_fixture_is_strict_bounded_and_host_parity_complete() {
         "/../../../fixtures/runtime-input/host-neutral-input-envelope.json"
     )))
     .unwrap();
-    assert_eq!(events.len(), 16);
+    assert_eq!(events.len(), 17);
     assert_eq!(events[0].sequence(), 0);
-    assert_eq!(events[15].sequence(), u64::MAX);
-    assert_eq!(events[15].runtime().instance_id().value(), u64::MAX);
+    assert_eq!(events[16].sequence(), u64::MAX);
+    assert_eq!(events[16].runtime().instance_id().value(), u64::MAX);
     for invalid in [
         br#"{"runtime":{"instanceId":"7","generation":"3","controlRevision":"11"},"sequence":"0","context":"gameplay","fact":{"kind":"clear","reason":"focus-loss"},"intent":null,"value":null}"# as &[u8],
         br#"{"runtime":{"instanceId":"7","generation":"3","controlRevision":"11"},"sequence":"01","context":"gameplay","fact":{"kind":"clear","reason":"focus-loss"}}"#,
         br#"{"runtime":{"instanceId":"7","generation":"3","controlRevision":"11"},"sequence":"0","context":"gameplay","intent":"look.horizontal","value":{"kind":"axis","value":1.1}}"#,
+        br#"{"runtime":{"instanceId":"7","generation":"3","controlRevision":"11"},"sequence":"0","context":"gameplay","intent":"inventory.drop","value":{"kind":"product-payload","contract":"bad","data":{"value":9007199254740992}}}"#,
         br#"{"runtime":{"instanceId":"7","generation":"3","controlRevision":"11"},"sequence":"0","context":"gameplay","fact":{"kind":"controller-axis","axis":"axis-0","value":1.1}}"#,
         br#"{"runtime":{"instanceId":"7","generation":"3","controlRevision":"11"},"sequence":"0","context":"gameplay","fact":{"kind":"clear","reason":"focus-loss","extra":true}}"#,
     ] {
@@ -731,6 +787,7 @@ fn compiled_mappings() -> CompiledInputMappings {
         lifecycle: LifecycleMode::Demand,
         realtime: None,
         kernel_entry: Some("kernel/lib.rs".into()),
+        kernel_package: None,
         ui_entry: "ui/main.ts".into(),
         ui_projection_stream: None,
         ui_projection_contract: None,
@@ -750,12 +807,21 @@ fn compiled_mappings() -> CompiledInputMappings {
                 ProductIntentDescriptor {
                     id: "move.forward".into(),
                     value_kind: IntentValueKind::Digital,
+                    payload_contract: None,
                     capability: "move.forward".into(),
                     payload: serde_json::json!({ "semantic": "move-forward" }),
                 },
                 ProductIntentDescriptor {
+                    id: "inventory.drop".into(),
+                    value_kind: IntentValueKind::ProductPayload,
+                    payload_contract: Some("example.inventory.drop.v1".into()),
+                    capability: "inventory.drop".into(),
+                    payload: serde_json::json!({ "semantic": "inventory-drop" }),
+                },
+                ProductIntentDescriptor {
                     id: "look.horizontal".into(),
                     value_kind: IntentValueKind::Axis,
+                    payload_contract: None,
                     capability: "look.horizontal".into(),
                     payload: serde_json::json!({ "semantic": "look-horizontal" }),
                 },
@@ -841,6 +907,10 @@ fn compiled_mappings() -> CompiledInputMappings {
                     id: "look.horizontal".into(),
                     target: "kernel.look-horizontal".into(),
                 },
+                CapabilityBinding {
+                    id: "inventory.drop".into(),
+                    target: "kernel.inventory-drop".into(),
+                },
             ],
         },
     )
@@ -871,6 +941,21 @@ fn compiled_mappings() -> CompiledInputMappings {
                         "example.product",
                         "kernel/input.rs",
                         "look_horizontal",
+                    ),
+                ),
+            ),
+            ProductKernelCapabilityDescriptor::new(
+                "inventory-drop",
+                CapabilityMetadata::new(
+                    CapabilityKind::System,
+                    CapabilityUses::INPUT_MAP,
+                    CapabilityAvailability::Linkable,
+                    CapabilityAccess::new(&[], &[]),
+                    CapabilityBudget::new(1_024),
+                    CapabilityProvenance::new(
+                        "example.product",
+                        "kernel/input.rs",
+                        "inventory_drop",
                     ),
                 ),
             ),

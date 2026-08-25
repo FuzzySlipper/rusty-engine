@@ -233,7 +233,7 @@ impl RuntimeInputLane {
                     simulation_step,
                     pending.sequence,
                     pending.descriptor.clone(),
-                    pending.value,
+                    pending.value.clone(),
                     pending.phase,
                     pending.provenance.clone(),
                 ),
@@ -324,9 +324,15 @@ impl RuntimeInputLane {
         let actual = match claim.value() {
             RuntimeIntentValue::Digital { .. } => IntentValueKind::Digital,
             RuntimeIntentValue::Axis { .. } => IntentValueKind::Axis,
+            RuntimeIntentValue::ProductPayload { .. } => IntentValueKind::ProductPayload,
         };
         if descriptor.value_kind() != actual {
             return Err(RuntimeInputError::IntentValueKindMismatch);
+        }
+        if let RuntimeIntentValue::ProductPayload { payload } = claim.value() {
+            if descriptor.payload_contract() != Some(payload.contract()) {
+                return Err(RuntimeInputError::ProductPayloadContractMismatch);
+            }
         }
         if self.pending_intents.len() >= MAX_PENDING_INGRESS {
             self.clear_state();
@@ -336,7 +342,7 @@ impl RuntimeInputLane {
             sequence: claim.sequence(),
             order: usize::MAX,
             descriptor: descriptor.clone(),
-            value: claim.value(),
+            value: claim.value().clone(),
             phase: IntentPhase::DirectUi,
             provenance: IntentProvenance::DirectUi,
         });

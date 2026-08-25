@@ -1,4 +1,4 @@
-# Product Kernel source-linked assembly
+# Product Kernel assembly
 
 `rust/crates/product-kernel` owns the narrow downstream Rust extension lane for
 product-specific systems and operations. It links a closed Product Kernel
@@ -24,6 +24,23 @@ live descriptor catalog cannot enter a schedule.
 - [`product-kernel/src/tests.rs`](../../rust/crates/product-kernel/src/tests.rs)
 
 ## Source-linked declaration
+
+The legacy Product Layout form, `kernel.entry`, links one explicit Rust source
+module. The current package form, `kernel.package = "kernel/Cargo.toml"`, is
+for an ordinary downstream library crate (including its internal modules and
+bounded local kernel crates). It must export the same fixed
+`RustyProductRuntime` type at the crate root. Product Assembly copies the
+complete admitted `kernel/` lane and generated code depends on the copied
+package as a normal Cargo dependency; it never reduces package mode to a
+`#[path]` import.
+
+Package Cargo manifests are admitted without an ambient workspace, registry,
+build-script, or target-specific dependency graph. Every non-Engine local
+dependency must resolve within `kernel/`; the fixed `rusty-engine` dependency
+is rewritten to the explicit generated Assembly facade path. The Engine facade
+re-exports `serde` and `serde_json` for product DTO serialization, avoiding a
+second package registry graph. Symlinks, lane escapes, malformed identities,
+and a missing fixed runtime export fail before product publication.
 
 `product_kernel_declaration!` is one source declaration for a product's closed
 capabilities, schema identities, and offline migrations. Each capability names

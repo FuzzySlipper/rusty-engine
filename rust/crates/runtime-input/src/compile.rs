@@ -13,6 +13,7 @@ pub struct CompiledInputIntent {
     descriptor_index: usize,
     id: String,
     value_kind: IntentValueKind,
+    payload_contract: Option<String>,
     capability_id: String,
     capability_target: String,
     capability_binding_index: usize,
@@ -28,6 +29,10 @@ impl CompiledInputIntent {
     }
     pub const fn value_kind(&self) -> IntentValueKind {
         self.value_kind
+    }
+    /// Descriptor-owned stable contract for a direct product payload intent.
+    pub fn payload_contract(&self) -> Option<&str> {
+        self.payload_contract.as_deref()
     }
     pub fn capability_id(&self) -> &str {
         &self.capability_id
@@ -91,6 +96,7 @@ impl CompiledInputMappings {
                     descriptor_index: descriptor.index(),
                     id: descriptor.id().to_owned(),
                     value_kind: descriptor.value_kind(),
+                    payload_contract: descriptor.payload_contract().map(str::to_owned),
                     capability_id: descriptor.capability().id().to_owned(),
                     capability_target: descriptor.capability().target().to_owned(),
                     capability_binding_index: descriptor.capability().binding_index(),

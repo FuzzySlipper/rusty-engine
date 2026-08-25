@@ -39,7 +39,7 @@ function validateDescriptor(value) {
   exactKeys(value.fields, ['capabilityBinding', 'compiledComposition', 'gameplayDefinition', 'inputMap', 'intentDescriptor', 'schedule', 'scheduleCadence', 'scheduleSystem', 'timeline', 'timelineStep'], '$.fields');
   const fields = value.fields;
   assertArray(fields.compiledComposition, ['product', 'intentDescriptors', 'inputMap', 'schedule', 'gameplayDefinitions', 'timelines', 'capabilityBindings'], '$.fields.compiledComposition');
-  assertArray(fields.intentDescriptor, ['id', 'valueKind', 'capability', 'payload'], '$.fields.intentDescriptor');
+  assertArray(fields.intentDescriptor, ['id', 'valueKind', 'payloadContract', 'capability', 'payload'], '$.fields.intentDescriptor');
   assertArray(fields.inputMap, ['id', 'intent', 'trigger'], '$.fields.inputMap');
   assertArray(fields.schedule, ['phase', 'mode', 'systems', 'before', 'after'], '$.fields.schedule');
   assertArray(fields.scheduleSystem, ['id', 'capability', 'definition', 'after', 'reads', 'writes', 'cadence', 'payload'], '$.fields.scheduleSystem');
@@ -50,11 +50,12 @@ function validateDescriptor(value) {
   assertArray(fields.capabilityBinding, ['id', 'target'], '$.fields.capabilityBinding');
   exactKeys(value.identity, ['alphabet', 'forbidAdjacentSeparators', 'maximumBytes', 'startsAndEndsAlphanumeric'], '$.identity');
   if (value.identity.alphabet !== 'lowercase-ascii-alphanumeric-dot-underscore-hyphen' || value.identity.forbidAdjacentSeparators !== true || value.identity.maximumBytes !== 128 || value.identity.startsAndEndsAlphanumeric !== true) throw new Error('unexpected identity contract');
-  exactKeys(value.limits, ['maximumCapabilityBindings', 'maximumEncodedBytes', 'maximumGameplayDefinitions', 'maximumInputChordControls', 'maximumInputMapEntries', 'maximumIntentDescriptors', 'maximumOpaqueJsonArrayEntries', 'maximumOpaqueJsonDepth', 'maximumOpaqueJsonNodes', 'maximumOpaqueJsonObjectEntries', 'maximumOpaqueJsonStringBytes', 'maximumSafeJsonInteger', 'maximumScheduleAccessDeclarations', 'maximumScheduleDependencies', 'maximumScheduleEntries', 'maximumTimelineSteps', 'maximumTimelines', 'schedulePhaseCount'], '$.limits');
+  exactKeys(value.limits, ['maximumCapabilityBindings', 'maximumDirectIntentProductPayloadBytes', 'maximumEncodedBytes', 'maximumGameplayDefinitions', 'maximumInputChordControls', 'maximumInputMapEntries', 'maximumIntentDescriptors', 'maximumOpaqueJsonArrayEntries', 'maximumOpaqueJsonDepth', 'maximumOpaqueJsonNodes', 'maximumOpaqueJsonObjectEntries', 'maximumOpaqueJsonStringBytes', 'maximumSafeJsonInteger', 'maximumScheduleAccessDeclarations', 'maximumScheduleDependencies', 'maximumScheduleEntries', 'maximumTimelineSteps', 'maximumTimelines', 'schedulePhaseCount'], '$.limits');
   for (const [key, entry] of Object.entries(value.limits)) if (!Number.isSafeInteger(entry) || entry <= 0) throw new Error(`invalid numeric limit ${key}`);
   exactKeys(value.numberEncoding, ['finiteBinary64', 'integer', 'negativeZero'], '$.numberEncoding');
   if (value.numberEncoding.finiteBinary64 !== 'ecmascript-number-to-string' || value.numberEncoding.negativeZero !== '0' || value.numberEncoding.integer !== 'base10') throw new Error('unexpected canonical number contract');
-  exactKeys(value.optionalFields, ['scheduleSystem'], '$.optionalFields');
+  exactKeys(value.optionalFields, ['intentDescriptor', 'scheduleSystem'], '$.optionalFields');
+  assertArray(value.optionalFields.intentDescriptor, ['payloadContract'], '$.optionalFields.intentDescriptor');
   assertArray(value.optionalFields.scheduleSystem, ['definition'], '$.optionalFields.scheduleSystem');
   exactKeys(value.schedule, ['defaultCadence', 'modes', 'phases', 'placements'], '$.schedule');
   assertArray(value.schedule.phases, ['input', 'simulation', 'consequences', 'commit', 'projection'], '$.schedule.phases');
@@ -66,7 +67,7 @@ function validateDescriptor(value) {
   if (Object.values(value.ordering).some((entry) => entry !== 'authored' && entry !== 'canonical-bytewise' && entry !== 'canonical-phases')) throw new Error('unexpected ordering contract');
   if (!Array.isArray(value.failures) || value.failures.some((entry) => typeof entry !== 'string')) throw new Error('invalid failure vocabulary');
   exactKeys(value.input, ['axes', 'controllerAxes', 'controllerButtons', 'edges', 'intentValueKinds', 'keyboardControls', 'pointerButtons', 'triggerKinds'], '$.input');
-  assertArray(value.input.intentValueKinds, ['digital', 'axis'], '$.input.intentValueKinds');
+  assertArray(value.input.intentValueKinds, ['digital', 'axis', 'product-payload'], '$.input.intentValueKinds');
   assertArray(value.input.edges, ['held', 'pressed', 'released'], '$.input.edges');
   assertArray(value.input.triggerKinds, ['key', 'pointer-button', 'pointer-axis', 'wheel', 'controller-button', 'controller-axis'], '$.input.triggerKinds');
   if ([value.input.axes, value.input.keyboardControls, value.input.pointerButtons, value.input.controllerButtons, value.input.controllerAxes].some((list) => !Array.isArray(list) || list.some((entry) => typeof entry !== 'string'))) throw new Error('invalid input vocabulary');

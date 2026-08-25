@@ -259,9 +259,10 @@ fn inspect_input(builder: &mut InspectionBuilder, request: &InspectionRequest<'_
             "runtime-input",
             "compiled-composition.json",
             format!(
-                "id={}; valueKind={}; capability={}; payload=omitted",
+                "id={}; valueKind={}; payloadContract={}; capability={}; payload=omitted",
                 descriptor.id(),
                 intent_value_kind(descriptor.value_kind()),
+                descriptor.payload_contract().unwrap_or("none"),
                 capability,
             ),
         );
@@ -526,6 +527,7 @@ fn intent_value_kind(value: product_model::IntentValueKind) -> &'static str {
     match value {
         product_model::IntentValueKind::Digital => "digital",
         product_model::IntentValueKind::Axis => "axis",
+        product_model::IntentValueKind::ProductPayload => "product-payload",
     }
 }
 

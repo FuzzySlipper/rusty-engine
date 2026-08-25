@@ -2599,6 +2599,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "toml",
 ]
 
 [[package]]
@@ -3013,6 +3014,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "toml",
 ]
 
 [[package]]
@@ -3058,6 +3060,7 @@ dependencies = [
  "runtime-standard-capabilities",
  "runtime-timeline",
  "runtime-ui",
+ "serde",
  "serde_json",
  "state-machine",
  "svc-collision",

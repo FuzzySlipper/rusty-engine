@@ -74,6 +74,15 @@ reference, and typed trigger. This keeps direct product UI claims unambiguous:
 UI claims and physical observations resolve to the same descriptor rather than
 choosing an arbitrary control mapping.
 
+An intent with value kind `product-payload` is direct-UI-only. Its descriptor
+owns one stable payload contract; a UI claim carries that contract label and
+bounded immutable plain JSON data on the same ordered lane. Rust repeats the
+data validation and matches the label to the descriptor before the immutable
+intent envelope reaches the Product Runtime Adapter, which remains subject to
+the ordinary named mutation authority. Physical mappings cannot target this
+kind, and it introduces no callback, generic command route, or direct state
+mutation.
+
 `runtime-input` is one non-cloneable lane per explicit runtime instance. A host
 normalizes bounded keyboard, pointer, wheel, and one selected-controller fact
 or a direct product UI claim into one gap-free sequence carrying instance,

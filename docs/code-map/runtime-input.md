@@ -68,7 +68,15 @@ zero controller fact emits the neutral axis intent.
 union. The only wire integers are canonical decimal u64 strings; all object
 variants deny unknown fields, reject null cross-variant fields, bound bytes and
 batch length, and validate finite bounded axes. Direct UI axis claims are
-limited to `[-1, 1]`; physical accumulation remains separately bounded.
+limited to `[-1, 1]`; physical accumulation remains separately bounded. A
+direct-UI-only `product-payload` claim carries one stable contract identity and
+strict plain JSON `data`. Rust bounds it to 65,536 encoded bytes, depth 32,
+4,096 nodes, 1,024 array/object entries, 16,384-byte strings, and safe integer
+numbers; its contract must equal the linked descriptor's `payloadContract`
+before its immutable envelope reaches the Product Runtime Adapter. Physical
+input mappings cannot target this kind. Browser ingress independently rejects
+functions, DOM values, custom prototypes, accessors, symbols, holes, and
+non-finite or unsafe numeric data before Rust repeats the data check.
 `AxisValue` normalizes negative zero to positive zero for deterministic
 readout. The shared fixture is consumed by Rust and the application-host
 TypeScript tests.

@@ -1,6 +1,11 @@
 use std::{collections::BTreeMap, fmt};
 
-use product_model::{ControllerAxis, ControllerButton, KeyboardControl, PointerButton};
+use product_model::{
+    ControllerAxis, ControllerButton, KeyboardControl, PointerButton,
+    MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_BYTES, MAX_OPAQUE_JSON_ARRAY_ENTRIES, MAX_OPAQUE_JSON_DEPTH,
+    MAX_OPAQUE_JSON_NODES, MAX_OPAQUE_JSON_OBJECT_ENTRIES, MAX_OPAQUE_JSON_STRING_BYTES,
+    MAX_SAFE_JSON_INTEGER,
+};
 use runtime_lifecycle::{
     RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId, SimulationStep,
 };
@@ -11,6 +16,8 @@ pub const MAX_PENDING_INGRESS: usize = 1_024;
 pub const MAX_AXIS_MAGNITUDE: f32 = 8_192.0;
 pub const MAX_DIRECT_INTENT_AXIS_MAGNITUDE: f32 = 1.0;
 pub const MAX_CONTROLLER_AXIS_MAGNITUDE: f32 = 1.0;
+pub const MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_JSON_BYTES: usize =
+    MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_BYTES;
 
 /// Instance/generation/control correlation supplied by the explicit product
 /// runtime. It has no global registry or generated identity.
@@ -195,10 +202,44 @@ impl RuntimeInputIngress {
 
 /// The only direct UI claim vocabulary. It is admitted against the same
 /// product intent descriptors as physical mappings before it enters the lane.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Bounded plain JSON provided by a direct product UI claim. Its contract is
+/// later matched with the descriptor-owned contract before it can reach a
+/// Product Runtime Adapter.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuntimeProductPayload {
+    contract: String,
+    data: serde_json::Value,
+}
+
+impl RuntimeProductPayload {
+    pub fn new(
+        contract: impl Into<String>,
+        data: serde_json::Value,
+    ) -> Result<Self, RuntimeInputError> {
+        let contract = contract.into();
+        if !is_identity(&contract) {
+            return Err(RuntimeInputError::InvalidProductPayloadContract);
+        }
+        validate_product_payload_json(&data)?;
+        Ok(Self { contract, data })
+    }
+
+    pub fn contract(&self) -> &str {
+        &self.contract
+    }
+    pub fn data(&self) -> &serde_json::Value {
+        &self.data
+    }
+}
+
+/// The closed direct UI claim value vocabulary. Product payloads are data only:
+/// no callback, command route, host handle, timer, or mutable reference enters
+/// this host-neutral lane.
+#[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeIntentValue {
     Digital { active: bool },
     Axis { value: AxisValue },
+    ProductPayload { payload: RuntimeProductPayload },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -222,7 +263,7 @@ impl RuntimeDirectIntentClaim {
         if !is_identity(&intent) {
             return Err(RuntimeInputError::InvalidIntent);
         }
-        if let RuntimeIntentValue::Axis { value } = value {
+        if let RuntimeIntentValue::Axis { value } = &value {
             if value.value().abs() > MAX_DIRECT_INTENT_AXIS_MAGNITUDE {
                 return Err(RuntimeInputError::InvalidDirectIntentAxisValue);
             }
@@ -247,8 +288,8 @@ impl RuntimeDirectIntentClaim {
     pub fn intent(&self) -> &str {
         &self.intent
     }
-    pub const fn value(&self) -> RuntimeIntentValue {
-        self.value
+    pub fn value(&self) -> RuntimeIntentValue {
+        self.value.clone()
     }
 }
 
@@ -448,8 +489,8 @@ impl RuntimeIntentEnvelope {
     pub fn descriptor(&self) -> &CompiledInputIntent {
         &self.descriptor
     }
-    pub const fn value(&self) -> RuntimeIntentValue {
-        self.value
+    pub fn value(&self) -> RuntimeIntentValue {
+        self.value.clone()
     }
     pub const fn phase(&self) -> IntentPhase {
         self.phase
@@ -465,6 +506,10 @@ pub enum RuntimeInputError {
     InvalidIntent,
     InvalidAxisValue,
     InvalidDirectIntentAxisValue,
+    InvalidProductPayloadContract,
+    ProductPayloadTooLarge { actual: usize, maximum: usize },
+    ProductPayloadStructureOutOfBounds(&'static str),
+    ProductPayloadContractMismatch,
     InvalidControllerAxisValue,
     NonCanonicalWireInteger,
     WireMalformed,
@@ -481,6 +526,94 @@ pub enum RuntimeInputError {
     WrongSnapshotPhase,
     LifecycleValidation,
     SnapshotOutOfOrder,
+}
+
+fn validate_product_payload_json(value: &serde_json::Value) -> Result<(), RuntimeInputError> {
+    let bytes = serde_json::to_vec(value).map_err(|_| RuntimeInputError::WireMalformed)?;
+    if bytes.len() > MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_JSON_BYTES {
+        return Err(RuntimeInputError::ProductPayloadTooLarge {
+            actual: bytes.len(),
+            maximum: MAX_DIRECT_INTENT_PRODUCT_PAYLOAD_JSON_BYTES,
+        });
+    }
+    let mut nodes = 0usize;
+    validate_product_payload_value(value, 1, &mut nodes)
+}
+
+fn validate_product_payload_value(
+    value: &serde_json::Value,
+    depth: usize,
+    nodes: &mut usize,
+) -> Result<(), RuntimeInputError> {
+    if depth > MAX_OPAQUE_JSON_DEPTH {
+        return Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
+            "depth",
+        ));
+    }
+    *nodes = nodes
+        .checked_add(1)
+        .ok_or(RuntimeInputError::ProductPayloadStructureOutOfBounds(
+            "nodes",
+        ))?;
+    if *nodes > MAX_OPAQUE_JSON_NODES {
+        return Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
+            "nodes",
+        ));
+    }
+    match value {
+        serde_json::Value::Null | serde_json::Value::Bool(_) => Ok(()),
+        serde_json::Value::String(value) => {
+            if value.len() > MAX_OPAQUE_JSON_STRING_BYTES {
+                Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
+                    "string",
+                ))
+            } else {
+                Ok(())
+            }
+        }
+        serde_json::Value::Number(value) => {
+            let Some(number) = value.as_f64() else {
+                return Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
+                    "number",
+                ));
+            };
+            if !number.is_finite()
+                || (number.fract() == 0.0 && number.abs() > MAX_SAFE_JSON_INTEGER as f64)
+            {
+                Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
+                    "integer",
+                ))
+            } else {
+                Ok(())
+            }
+        }
+        serde_json::Value::Array(values) => {
+            if values.len() > MAX_OPAQUE_JSON_ARRAY_ENTRIES {
+                return Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
+                    "array",
+                ));
+            }
+            values
+                .iter()
+                .try_for_each(|value| validate_product_payload_value(value, depth + 1, nodes))
+        }
+        serde_json::Value::Object(values) => {
+            if values.len() > MAX_OPAQUE_JSON_OBJECT_ENTRIES {
+                return Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
+                    "object",
+                ));
+            }
+            for (key, value) in values {
+                if key.len() > MAX_OPAQUE_JSON_STRING_BYTES {
+                    return Err(RuntimeInputError::ProductPayloadStructureOutOfBounds(
+                        "object-key",
+                    ));
+                }
+                validate_product_payload_value(value, depth + 1, nodes)?;
+            }
+            Ok(())
+        }
+    }
 }
 
 impl fmt::Display for RuntimeInputError {

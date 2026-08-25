@@ -108,6 +108,7 @@ pub struct AdmittedIntentDescriptor {
     index: usize,
     id: String,
     value_kind: IntentValueKind,
+    payload_contract: Option<String>,
     capability: AdmittedCapabilityReference,
     payload: Value,
 }
@@ -121,6 +122,12 @@ impl AdmittedIntentDescriptor {
     }
     pub const fn value_kind(&self) -> IntentValueKind {
         self.value_kind
+    }
+    /// Stable contract selected by the descriptor for direct product payloads.
+    /// The UI-provided wire label is checked against this value before a
+    /// runtime envelope is emitted.
+    pub fn payload_contract(&self) -> Option<&str> {
+        self.payload_contract.as_deref()
     }
     pub fn capability(&self) -> &AdmittedCapabilityReference {
         &self.capability
@@ -441,6 +448,7 @@ pub fn admit_checked_product_composition(
                 index,
                 id: descriptor.id.clone(),
                 value_kind: descriptor.value_kind,
+                payload_contract: descriptor.payload_contract.clone(),
                 capability: resolve_capability(
                     &descriptor.capability,
                     &capability_indices,

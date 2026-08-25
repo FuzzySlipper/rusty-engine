@@ -116,6 +116,32 @@ fn checked_minimum_product_layout_is_valid_and_fixed() {
 }
 
 #[test]
+fn packaged_kernel_layout_is_explicit_and_disjoint_from_legacy_source_linking() {
+    let package = MANIFEST.replace(
+        "entry = \"kernel/lib.rs\"",
+        "package = \"kernel/Cargo.toml\"",
+    );
+    let manifest = decode_product_manifest(&package).expect("packaged kernel manifest");
+    assert!(manifest.kernel_entry().is_none());
+    assert_eq!(
+        manifest.kernel_package().expect("kernel package").as_str(),
+        "kernel/Cargo.toml"
+    );
+    assert!(manifest.has_kernel());
+
+    let conflicting = package.replace(
+        "package = \"kernel/Cargo.toml\"",
+        "entry = \"kernel/lib.rs\"\npackage = \"kernel/Cargo.toml\"",
+    );
+    let error = decode_product_manifest(&conflicting).expect_err("ambiguous kernel mode");
+    assert_eq!(error.diagnostic().code(), "PRODUCT_KERNEL_MODE_CONFLICT");
+
+    let outside = package.replace("kernel/Cargo.toml", "rules/Cargo.toml");
+    let error = decode_product_manifest(&outside).expect_err("package outside kernel lane");
+    assert_eq!(error.diagnostic().code(), "PRODUCT_FIXED_LANE");
+}
+
+#[test]
 fn direct_and_decoded_manifest_validation_converge() {
     let decoded = decode_product_manifest(MANIFEST).unwrap();
     let direct = validate_product_manifest(ProductManifestCandidate {
@@ -124,6 +150,7 @@ fn direct_and_decoded_manifest_validation_converge() {
         lifecycle: LifecycleMode::Realtime,
         realtime: Some(RealtimeClock::new(60, 4)),
         kernel_entry: Some("kernel/lib.rs".into()),
+        kernel_package: None,
         ui_entry: "ui/main.ts".into(),
         ui_projection_stream: None,
         ui_projection_contract: None,
@@ -684,6 +711,28 @@ fn input_mappings_are_descriptor_first_and_have_only_typed_trigger_meaning() {
             .code(),
         "COMPOSITION_DUPLICATE_INPUT_CHORD_CONTROL"
     );
+
+    let mut product_payload = minimum_candidate();
+    product_payload.intent_descriptors[0].value_kind = IntentValueKind::ProductPayload;
+    product_payload.intent_descriptors[0].payload_contract =
+        Some("example.camera.payload.v1".into());
+    assert_eq!(
+        validate_compiled_composition(product_payload)
+            .unwrap_err()
+            .diagnostic()
+            .code(),
+        "COMPOSITION_PHYSICAL_INPUT_PRODUCT_PAYLOAD"
+    );
+
+    let mut missing_contract = minimum_candidate();
+    missing_contract.intent_descriptors[0].value_kind = IntentValueKind::ProductPayload;
+    assert_eq!(
+        validate_compiled_composition(missing_contract)
+            .unwrap_err()
+            .diagnostic()
+            .code(),
+        "COMPOSITION_PRODUCT_PAYLOAD_CONTRACT_REQUIRED"
+    );
 }
 
 #[test]
@@ -1053,6 +1102,7 @@ fn minimum_candidate() -> CompiledCompositionCandidate {
         intent_descriptors: vec![ProductIntentDescriptor {
             id: "look".into(),
             value_kind: IntentValueKind::Axis,
+            payload_contract: None,
             capability: "camera.look".into(),
             payload: json!({"axis": "x"}),
         }],

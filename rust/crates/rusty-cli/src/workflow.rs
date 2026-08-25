@@ -161,11 +161,16 @@ pub(crate) fn admit_product(start: impl AsRef<Path>) -> Result<AdmittedProduct, 
     )
     .map_err(materializer_diagnostic)?;
 
-    let kernel_capabilities = match manifest.kernel_entry() {
-        Some(entry) => {
-            probe_capabilities(&root, entry, &engine.facade).map_err(probe_diagnostic)?
-        }
-        None => Vec::new(),
+    let kernel_capabilities = if manifest.has_kernel() {
+        probe_capabilities(
+            &root,
+            manifest.kernel_entry(),
+            manifest.kernel_package(),
+            &engine.facade,
+        )
+        .map_err(probe_diagnostic)?
+    } else {
+        Vec::new()
     };
     let assembly_root = root.join(manifest.product_assembly_output().as_str());
     let engine_path = cargo_relative_path(&assembly_root, &engine.facade)?;
@@ -174,7 +179,7 @@ pub(crate) fn admit_product(start: impl AsRef<Path>) -> Result<AdmittedProduct, 
         .map_err(assembly_diagnostic)?
         .with_engine_dependency_path(engine_path)
         .map_err(assembly_diagnostic)?;
-    if manifest.kernel_entry().is_some() {
+    if manifest.has_kernel() {
         let kernel_path = cargo_relative_path(&assembly_root, &engine.product_kernel)?;
         inputs = inputs
             .with_kernel_dependency_path(kernel_path)

@@ -235,6 +235,21 @@ fn check_required_layout(
         );
         require_contained_file(root, entrypoint, "RUSTY_LAYOUT_ENTRYPOINT", diagnostics);
     }
+    if let Some(package) = manifest.kernel_package() {
+        require_extension(
+            package,
+            "/Cargo.toml",
+            "RUSTY_LAYOUT_KERNEL_PACKAGE_MANIFEST",
+            diagnostics,
+        );
+        require_contained_file(root, package, "RUSTY_LAYOUT_KERNEL_PACKAGE", diagnostics);
+        require_contained_directory(
+            root,
+            &ProductPath::parse("kernel".to_owned()).expect("fixed kernel lane"),
+            "RUSTY_LAYOUT_KERNEL_PACKAGE",
+            diagnostics,
+        );
+    }
     require_extension(
         manifest.ui_entry(),
         ".ts",

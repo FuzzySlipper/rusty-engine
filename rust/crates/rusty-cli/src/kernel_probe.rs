@@ -214,10 +214,21 @@ fn read_bounded_stream(stream: &mut impl Read, overflow: mpsc::Sender<()>) -> Ve
 /// operation, never a generated-product runtime dependency.
 pub(crate) fn probe_capabilities(
     product_root: &Path,
-    kernel_entry: &ProductPath,
+    kernel_entry: Option<&ProductPath>,
+    kernel_package: Option<&ProductPath>,
     engine_facade: &Path,
 ) -> Result<Vec<ProductKernelCapabilityDescriptor>, KernelProbeError> {
-    let kernel_path = checked_kernel_entry(product_root, kernel_entry)?;
+    let kernel = match (kernel_entry, kernel_package) {
+        (Some(entry), None) => KernelProbeTarget::Entry(checked_kernel_entry(product_root, entry)?),
+        (None, Some(package)) => checked_kernel_package(product_root, package)?,
+        (None, None) | (Some(_), Some(_)) => {
+            return Err(fail(
+                "RUSTY_KERNEL_PROBE_MODE",
+                "kernel",
+                "declare exactly one of kernel.entry or kernel.package before probing",
+            ))
+        }
+    };
     let facade = fs::canonicalize(engine_facade).map_err(|error| {
         fail(
             "RUSTY_KERNEL_PROBE_ENGINE",
@@ -243,7 +254,7 @@ pub(crate) fn probe_capabilities(
                 format!("cannot create isolated Product Kernel probe: {error}"),
             )
         })?;
-    let result = probe_in(temporary.path(), &kernel_path, &facade);
+    let result = probe_in(temporary.path(), &kernel, &facade);
     let cleanup = temporary.close();
     match (result, cleanup) {
         (Ok(value), Ok(())) => Ok(value),
@@ -259,6 +270,14 @@ pub(crate) fn probe_capabilities(
             format!("{error}; temporary probe cleanup also failed: {cleanup}"),
         )),
     }
+}
+
+enum KernelProbeTarget {
+    Entry(PathBuf),
+    Package {
+        manifest: PathBuf,
+        package_name: String,
+    },
 }
 
 fn checked_kernel_entry(
@@ -304,9 +323,97 @@ fn checked_kernel_entry(
     Ok(canonical)
 }
 
+fn checked_kernel_package(
+    product_root: &Path,
+    kernel_package: &ProductPath,
+) -> Result<KernelProbeTarget, KernelProbeError> {
+    let root = fs::canonicalize(product_root).map_err(|error| {
+        fail(
+            "RUSTY_KERNEL_PROBE_ROOT",
+            product_root.display().to_string(),
+            format!("cannot resolve product root for Product Kernel probing: {error}"),
+        )
+    })?;
+    let path = product_root.join(kernel_package.as_str());
+    let metadata = fs::symlink_metadata(&path).map_err(|error| {
+        fail(
+            "RUSTY_KERNEL_PROBE_PACKAGE",
+            kernel_package.as_str(),
+            format!("cannot inspect declared Product Kernel package: {error}"),
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(fail(
+            "RUSTY_KERNEL_PROBE_PACKAGE",
+            kernel_package.as_str(),
+            "Product Kernel package manifest must be a regular non-symlink Cargo.toml file",
+        ));
+    }
+    let canonical = fs::canonicalize(&path).map_err(|error| {
+        fail(
+            "RUSTY_KERNEL_PROBE_PACKAGE",
+            kernel_package.as_str(),
+            format!("cannot resolve declared Product Kernel package: {error}"),
+        )
+    })?;
+    if !canonical.starts_with(&root) || !canonical.ends_with("Cargo.toml") {
+        return Err(fail(
+            "RUSTY_KERNEL_PROBE_PACKAGE",
+            kernel_package.as_str(),
+            "Product Kernel package must resolve to Cargo.toml inside the explicit product root",
+        ));
+    }
+    let text = fs::read_to_string(&canonical).map_err(|error| {
+        fail(
+            "RUSTY_KERNEL_PROBE_PACKAGE",
+            kernel_package.as_str(),
+            format!("cannot read Product Kernel package manifest: {error}"),
+        )
+    })?;
+    let value: toml::Value = toml::from_str(&text).map_err(|error| {
+        fail(
+            "RUSTY_KERNEL_PROBE_PACKAGE",
+            kernel_package.as_str(),
+            format!("invalid Product Kernel package manifest: {error}"),
+        )
+    })?;
+    let empty_root_workspace = value
+        .get("workspace")
+        .is_some_and(|workspace| workspace.as_table().is_some_and(toml::map::Map::is_empty));
+    if value.get("workspace").is_some() && !empty_root_workspace {
+        return Err(fail(
+            "RUSTY_KERNEL_PROBE_PACKAGE",
+            kernel_package.as_str(),
+            "Product Kernel package may only use an exact empty [workspace] to opt out of an outer workspace",
+        ));
+    }
+    let package_name = value
+        .get("package")
+        .and_then(toml::Value::as_table)
+        .and_then(|package| package.get("name"))
+        .and_then(toml::Value::as_str)
+        .filter(|name| {
+            !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+        .ok_or_else(|| {
+            fail(
+                "RUSTY_KERNEL_PROBE_PACKAGE",
+                kernel_package.as_str(),
+                "Product Kernel package requires a bounded ASCII package.name",
+            )
+        })?;
+    Ok(KernelProbeTarget::Package {
+        manifest: canonical,
+        package_name: package_name.to_owned(),
+    })
+}
+
 fn probe_in(
     temporary: &Path,
-    kernel_entry: &Path,
+    kernel: &KernelProbeTarget,
     engine_facade: &Path,
 ) -> Result<Vec<ProductKernelCapabilityDescriptor>, KernelProbeError> {
     let source = temporary.join("src");
@@ -317,14 +424,18 @@ fn probe_in(
             format!("cannot create Product Kernel probe source: {error}"),
         )
     })?;
-    fs::write(temporary.join("Cargo.toml"), probe_manifest(engine_facade)?).map_err(|error| {
+    fs::write(
+        temporary.join("Cargo.toml"),
+        probe_manifest(engine_facade, kernel)?,
+    )
+    .map_err(|error| {
         fail(
             "RUSTY_KERNEL_PROBE_WRITE",
             "kernel.entry",
             format!("cannot write Product Kernel probe manifest: {error}"),
         )
     })?;
-    fs::write(source.join("main.rs"), probe_source(kernel_entry)?).map_err(|error| {
+    fs::write(source.join("main.rs"), probe_source(kernel)?).map_err(|error| {
         fail(
             "RUSTY_KERNEL_PROBE_WRITE",
             "kernel.entry",
@@ -384,7 +495,10 @@ fn engine_target_directory(engine_facade: &Path) -> Result<PathBuf, KernelProbeE
     Ok(target)
 }
 
-fn probe_manifest(engine_facade: &Path) -> Result<String, KernelProbeError> {
+fn probe_manifest(
+    engine_facade: &Path,
+    kernel: &KernelProbeTarget,
+) -> Result<String, KernelProbeError> {
     let facade = engine_facade.to_str().ok_or_else(|| {
         fail(
             "RUSTY_KERNEL_PROBE_ENGINE",
@@ -392,25 +506,56 @@ fn probe_manifest(engine_facade: &Path) -> Result<String, KernelProbeError> {
             "current Rusty Engine facade path must be UTF-8 for the bounded probe manifest",
         )
     })?;
+    let dependency = match kernel {
+        KernelProbeTarget::Entry(_) => String::new(),
+        KernelProbeTarget::Package {
+            manifest,
+            package_name,
+        } => format!(
+            "product-runtime = {{ package = {}, path = {} }}\n",
+            rust_string(package_name),
+            rust_string(
+                manifest
+                    .parent()
+                    .expect("Cargo manifest has parent")
+                    .to_str()
+                    .ok_or_else(|| fail(
+                        "RUSTY_KERNEL_PROBE_PACKAGE",
+                        manifest.display().to_string(),
+                        "Product Kernel package path must be UTF-8"
+                    ))?
+            ),
+        ),
+    };
     Ok(format!(
-        "[package]\nname = \"rusty-product-kernel-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\nrusty-engine = {{ path = {} }}\nserde_json = \"1\"\n",
+        "[package]\nname = \"rusty-product-kernel-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\nrusty-engine = {{ path = {} }}\nserde_json = \"1\"\n{dependency}",
         rust_string(facade)
     ))
 }
 
-fn probe_source(kernel_entry: &Path) -> Result<String, KernelProbeError> {
-    let kernel = kernel_entry.to_str().ok_or_else(|| {
-        fail(
-            "RUSTY_KERNEL_PROBE_ENTRY",
-            kernel_entry.display().to_string(),
-            "Product Kernel entry path must be UTF-8 for the bounded probe source",
-        )
-    })?;
+fn probe_source(kernel: &KernelProbeTarget) -> Result<String, KernelProbeError> {
+    let module = match kernel {
+        KernelProbeTarget::Entry(kernel_entry) => {
+            let kernel = kernel_entry.to_str().ok_or_else(|| {
+                fail(
+                    "RUSTY_KERNEL_PROBE_ENTRY",
+                    kernel_entry.display().to_string(),
+                    "Product Kernel entry path must be UTF-8 for the bounded probe source",
+                )
+            })?;
+            format!(
+                "#[path = {}]\nmod product_kernel_source;",
+                rust_string(kernel)
+            )
+        }
+        KernelProbeTarget::Package { .. } => {
+            "use product_runtime as product_kernel_source;".to_owned()
+        }
+    };
     Ok(format!(
         r#"#![forbid(unsafe_code)]
 
-#[path = {kernel}]
-mod product_kernel_source;
+{module}
 
 use rusty_engine::{{
     product_kernel::ProductKernelRuntimeDefinition,
@@ -447,7 +592,7 @@ fn main() {{
     }}));
 }}
 "#,
-        kernel = rust_string(kernel),
+        module = module,
         schema = PROBE_SCHEMA,
     ))
 }

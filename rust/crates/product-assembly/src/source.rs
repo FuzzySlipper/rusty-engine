@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::Path,
+    path::{Component, Path, PathBuf},
 };
 
 use content_store::{decode_manifest, encode_manifest, ArtifactClass, ContentManifest};
@@ -36,6 +36,7 @@ pub struct AssemblySourcePlan {
     main_rs: Vec<u8>,
     product_rs: Vec<u8>,
     kernel_entry: Option<String>,
+    kernel_package: Option<String>,
     compiled_composition_path: String,
 }
 
@@ -251,6 +252,10 @@ impl AssemblySourcePlan {
         self.kernel_entry.as_deref()
     }
 
+    pub fn kernel_package(&self) -> Option<&str> {
+        self.kernel_package.as_deref()
+    }
+
     pub fn compiled_composition_path(&self) -> &str {
         &self.compiled_composition_path
     }
@@ -264,6 +269,351 @@ pub struct AssemblyPlan {
     receipt: AssemblyReceipt,
     source_plan: AssemblySourcePlan,
     publication: AssemblyPublication,
+}
+
+/// The two deliberately non-interchangeable Product Kernel authoring modes.
+/// A package is a Cargo dependency in the generated closure; it is never
+/// reduced to one `#[path]` source module.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum KernelSource {
+    Entry(ProductPath),
+    Package(KernelPackage),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct KernelPackage {
+    manifest_path: ProductPath,
+    package_name: String,
+    cargo_rewrites: BTreeMap<ProductPath, Vec<u8>>,
+}
+
+impl KernelSource {
+    fn from_manifest(
+        manifest: &ProductManifest,
+        files: &BTreeMap<String, ProductFile>,
+        engine_dependency_path: &str,
+    ) -> Result<Option<Self>, ProductAssemblyError> {
+        match (manifest.kernel_entry(), manifest.kernel_package()) {
+            (Some(entry), None) => Ok(Some(Self::Entry(entry.clone()))),
+            (None, Some(package)) => Ok(Some(Self::Package(admit_kernel_package(
+                package,
+                files,
+                engine_dependency_path,
+            )?))),
+            (None, None) => Ok(None),
+            // Product Model rejects this before Assembly, but retain the
+            // boundary here so constructed values cannot select ambiguity.
+            (Some(_), Some(_)) => Err(ProductAssemblyError::new(
+                "ASSEMBLY_KERNEL_MODE_CONFLICT",
+                "kernel",
+                "declare exactly one of kernel.entry or kernel.package",
+            )),
+        }
+    }
+}
+
+/// Admits the complete Cargo package closure without using Cargo metadata or
+/// an ambient workspace. Every local path dependency must resolve beneath the
+/// `kernel/` lane and every admitted package receives the same explicit Engine
+/// facade path when copied into the generated Assembly.
+fn admit_kernel_package(
+    root_manifest: &ProductPath,
+    files: &BTreeMap<String, ProductFile>,
+    engine_dependency_path: &str,
+) -> Result<KernelPackage, ProductAssemblyError> {
+    if !root_manifest.as_str().starts_with("kernel/") {
+        return Err(ProductAssemblyError::new(
+            "ASSEMBLY_KERNEL_PACKAGE_LANE",
+            root_manifest.as_str(),
+            "kernel.package must stay inside the fixed kernel/ lane",
+        ));
+    }
+    let mut pending = vec![root_manifest.clone()];
+    let mut visited = BTreeSet::new();
+    let mut rewrites = BTreeMap::new();
+    let mut root_name = None;
+    while let Some(manifest_path) = pending.pop() {
+        if !visited.insert(manifest_path.clone()) {
+            continue;
+        }
+        let file = files.get(manifest_path.as_str()).ok_or_else(|| {
+            ProductAssemblyError::new(
+                "ASSEMBLY_KERNEL_PACKAGE_MISSING",
+                manifest_path.as_str(),
+                "declared Product Kernel Cargo manifest is absent from the admitted kernel lane",
+            )
+        })?;
+        let text = std::str::from_utf8(&file.bytes).map_err(|error| {
+            ProductAssemblyError::new(
+                "ASSEMBLY_KERNEL_PACKAGE_UTF8",
+                manifest_path.as_str(),
+                format!("Product Kernel Cargo manifest must be UTF-8: {error}"),
+            )
+        })?;
+        let mut document: toml::Value = toml::from_str(text).map_err(|error| {
+            ProductAssemblyError::new(
+                "ASSEMBLY_KERNEL_PACKAGE_TOML",
+                manifest_path.as_str(),
+                format!("invalid Product Kernel Cargo manifest: {error}"),
+            )
+        })?;
+        if let Some(workspace) = document.get("workspace") {
+            let empty_root_workspace = manifest_path == *root_manifest
+                && workspace.as_table().is_some_and(toml::map::Map::is_empty);
+            if !empty_root_workspace {
+                return Err(ProductAssemblyError::new(
+                    "ASSEMBLY_KERNEL_PACKAGE_WORKSPACE",
+                    manifest_path.as_str(),
+                    "only the root Product Kernel package may use an exact empty [workspace] to opt out of an outer workspace",
+                ));
+            }
+        }
+        if document
+            .get("package")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|package| package.get("build").is_some())
+            || document.get("build-dependencies").is_some()
+            || document.get("dev-dependencies").is_some()
+            || document.get("target").is_some()
+        {
+            return Err(ProductAssemblyError::new(
+                "ASSEMBLY_KERNEL_PACKAGE_UNBOUNDED_BUILD",
+                manifest_path.as_str(),
+                "Product Kernel packages may not use build, dev, or target-specific dependency closures",
+            ));
+        }
+        let package = document
+            .get("package")
+            .and_then(toml::Value::as_table)
+            .ok_or_else(|| {
+                ProductAssemblyError::new(
+                    "ASSEMBLY_KERNEL_PACKAGE_IDENTITY",
+                    manifest_path.as_str(),
+                    "Product Kernel Cargo manifest requires a [package] table",
+                )
+            })?;
+        let name = package
+            .get("name")
+            .and_then(toml::Value::as_str)
+            .ok_or_else(|| {
+                ProductAssemblyError::new(
+                    "ASSEMBLY_KERNEL_PACKAGE_IDENTITY",
+                    manifest_path.as_str(),
+                    "Product Kernel Cargo package requires a string package.name",
+                )
+            })?;
+        validate_cargo_package_name(name, manifest_path.as_str())?;
+        if manifest_path == *root_manifest {
+            root_name = Some(name.to_owned());
+        }
+        let package_dir = manifest_path_parent(&manifest_path)?;
+        let Some(dependencies) = document.get_mut("dependencies") else {
+            return Err(ProductAssemblyError::new(
+                "ASSEMBLY_KERNEL_PACKAGE_ENGINE_DEPENDENCY",
+                manifest_path.as_str(),
+                "Product Kernel package must declare the fixed rusty-engine facade dependency",
+            ));
+        };
+        let dependencies = dependencies.as_table_mut().ok_or_else(|| {
+            ProductAssemblyError::new(
+                "ASSEMBLY_KERNEL_PACKAGE_DEPENDENCIES",
+                manifest_path.as_str(),
+                "Product Kernel dependencies must be a TOML table",
+            )
+        })?;
+        let mut has_engine = false;
+        for (dependency_name, dependency) in dependencies.iter_mut() {
+            if dependency_name == "rusty-engine" {
+                if !dependency.is_table() {
+                    return Err(ProductAssemblyError::new(
+                        "ASSEMBLY_KERNEL_PACKAGE_ENGINE_DEPENDENCY",
+                        manifest_path.as_str(),
+                        "rusty-engine must be an explicit table dependency so Assembly can bind the exact facade",
+                    ));
+                }
+                *dependency = toml::Value::Table(toml::map::Map::from_iter([(
+                    "path".to_owned(),
+                    toml::Value::String(copied_engine_path(&package_dir, engine_dependency_path)),
+                )]));
+                has_engine = true;
+                continue;
+            }
+            let table = dependency.as_table().ok_or_else(|| ProductAssemblyError::new(
+                "ASSEMBLY_KERNEL_PACKAGE_REGISTRY_DEPENDENCY",
+                manifest_path.as_str(),
+                format!("dependency `{dependency_name}` must be a local path dependency; registry versions are not admitted"),
+            ))?;
+            let path =
+                table
+                    .get("path")
+                    .and_then(toml::Value::as_str)
+                    .ok_or_else(|| {
+                        ProductAssemblyError::new(
+                    "ASSEMBLY_KERNEL_PACKAGE_REGISTRY_DEPENDENCY",
+                    manifest_path.as_str(),
+                    format!("dependency `{dependency_name}` must name a local path inside kernel/"),
+                )
+                    })?;
+            let dependency_manifest =
+                local_dependency_manifest(&package_dir, path, manifest_path.as_str())?;
+            if !files.contains_key(dependency_manifest.as_str()) {
+                return Err(ProductAssemblyError::new(
+                    "ASSEMBLY_KERNEL_PACKAGE_LOCAL_DEPENDENCY",
+                    manifest_path.as_str(),
+                    format!("dependency `{dependency_name}` does not resolve to an admitted kernel Cargo.toml"),
+                ));
+            }
+            pending.push(dependency_manifest);
+        }
+        if !has_engine {
+            return Err(ProductAssemblyError::new(
+                "ASSEMBLY_KERNEL_PACKAGE_ENGINE_DEPENDENCY",
+                manifest_path.as_str(),
+                "Product Kernel package must declare the fixed rusty-engine facade dependency",
+            ));
+        }
+        let rewritten = toml::to_string(&document).map_err(|error| {
+            ProductAssemblyError::new(
+                "ASSEMBLY_KERNEL_PACKAGE_TOML",
+                manifest_path.as_str(),
+                format!("cannot canonicalize admitted Product Kernel Cargo manifest: {error}"),
+            )
+        })?;
+        rewrites.insert(manifest_path, rewritten.into_bytes());
+    }
+    Ok(KernelPackage {
+        manifest_path: root_manifest.clone(),
+        package_name: root_name.expect("root kernel manifest always visited"),
+        cargo_rewrites: rewrites,
+    })
+}
+
+fn validate_cargo_package_name(name: &str, path: &str) -> Result<(), ProductAssemblyError> {
+    if name.is_empty()
+        || name.len() > 128
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(ProductAssemblyError::new(
+            "ASSEMBLY_KERNEL_PACKAGE_IDENTITY",
+            path,
+            "Product Kernel package.name must be a bounded ASCII Cargo package identity",
+        ));
+    }
+    Ok(())
+}
+
+fn manifest_path_parent(path: &ProductPath) -> Result<ProductPath, ProductAssemblyError> {
+    let parent = path
+        .as_str()
+        .rsplit_once('/')
+        .map(|(parent, _)| parent)
+        .ok_or_else(|| {
+            ProductAssemblyError::new(
+                "ASSEMBLY_KERNEL_PACKAGE_PATH",
+                path.as_str(),
+                "Cargo manifest has no package directory",
+            )
+        })?;
+    ProductPath::parse(parent.to_owned()).map_err(|error| {
+        ProductAssemblyError::new(
+            "ASSEMBLY_KERNEL_PACKAGE_PATH",
+            path.as_str(),
+            error.to_string(),
+        )
+    })
+}
+
+fn local_dependency_manifest(
+    package_dir: &ProductPath,
+    path: &str,
+    logical_path: &str,
+) -> Result<ProductPath, ProductAssemblyError> {
+    let joined = Path::new(package_dir.as_str())
+        .join(path)
+        .join("Cargo.toml");
+    let mut normalized = PathBuf::new();
+    for component in joined.components() {
+        match component {
+            Component::Normal(component) => normalized.push(component),
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(ProductAssemblyError::new(
+                        "ASSEMBLY_KERNEL_PACKAGE_ESCAPE",
+                        logical_path,
+                        "a Product Kernel local dependency escapes the kernel/ lane",
+                    ));
+                }
+            }
+            Component::CurDir => {}
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(ProductAssemblyError::new(
+                    "ASSEMBLY_KERNEL_PACKAGE_ESCAPE",
+                    logical_path,
+                    "a Product Kernel local dependency must be relative and remain inside kernel/",
+                ))
+            }
+        }
+    }
+    let value = normalized
+        .to_str()
+        .ok_or_else(|| {
+            ProductAssemblyError::new(
+                "ASSEMBLY_KERNEL_PACKAGE_PATH",
+                logical_path,
+                "Product Kernel dependency path must be UTF-8",
+            )
+        })?
+        .replace('\\', "/");
+    let manifest = ProductPath::parse(value).map_err(|error| {
+        ProductAssemblyError::new(
+            "ASSEMBLY_KERNEL_PACKAGE_PATH",
+            logical_path,
+            error.to_string(),
+        )
+    })?;
+    if !manifest.as_str().starts_with("kernel/") {
+        return Err(ProductAssemblyError::new(
+            "ASSEMBLY_KERNEL_PACKAGE_ESCAPE",
+            logical_path,
+            "a Product Kernel local dependency escapes the kernel/ lane",
+        ));
+    }
+    Ok(manifest)
+}
+
+fn copied_engine_path(package_dir: &ProductPath, root_engine_path: &str) -> String {
+    let depth = package_dir.as_str().split('/').count();
+    format!("{}{}", "../".repeat(depth), root_engine_path)
+}
+
+/// Package mode copies an authored source closure, never Cargo build output,
+/// lock snapshots, VCS state, or per-machine caches. Reject rather than skip
+/// those paths so receipt identity cannot hide product-local build residue.
+fn validate_kernel_package_source_closure(
+    files: &BTreeMap<String, ProductFile>,
+) -> Result<(), ProductAssemblyError> {
+    for file in files.values() {
+        let path = file.relative_path.as_str();
+        let Some(kernel_relative) = path.strip_prefix("kernel/") else {
+            continue;
+        };
+        let rejected_component = kernel_relative.split('/').find(|component| {
+            matches!(
+                *component,
+                "target" | ".git" | ".cargo" | ".cache" | "cache"
+            )
+        });
+        if rejected_component.is_some() || kernel_relative == "Cargo.lock" {
+            return Err(ProductAssemblyError::new(
+                "ASSEMBLY_KERNEL_PACKAGE_NON_SOURCE",
+                path,
+                "Product Kernel package closure may contain authored source only; remove Cargo.lock, target, VCS, or cache output and direct Cargo target output outside kernel/",
+            ));
+        }
+    }
+    Ok(())
 }
 
 impl AssemblyPlan {
@@ -325,18 +675,18 @@ pub fn plan_product_assembly_with_kernel_capabilities(
             "fresh Product Assembly generation requires a product-relative Engine dependency path",
         )
     })?;
-    if manifest.kernel_entry().is_some() && inputs.kernel_dependency_path().is_none() {
+    if manifest.has_kernel() && inputs.kernel_dependency_path().is_none() {
         return Err(ProductAssemblyError::new(
             "ASSEMBLY_KERNEL_DEPENDENCY_REQUIRED",
             "Cargo.toml",
             "a source-linked Product Kernel requires a product-relative kernel dependency path",
         ));
     }
-    if manifest.kernel_entry().is_none() && !kernel_capabilities.is_empty() {
+    if !manifest.has_kernel() && !kernel_capabilities.is_empty() {
         return Err(ProductAssemblyError::new(
             "ASSEMBLY_KERNEL_ENTRY_REQUIRED",
             "rusty.toml",
-            "Product Kernel descriptors require a source-linked kernel.entry runtime definition",
+            "Product Kernel descriptors require a declared kernel.entry or kernel.package runtime definition",
         ));
     }
     let root = crate::filesystem::checked_product_root(product_root)?;
@@ -370,7 +720,7 @@ pub fn plan_product_assembly_with_kernel_capabilities(
         ProductPath::parse("rules".to_owned()).expect("fixed source lane"),
         ProductPath::parse("ui".to_owned()).expect("fixed source lane"),
     ]);
-    if manifest.kernel_entry().is_some() {
+    if manifest.has_kernel() {
         source_lanes.insert(ProductPath::parse("kernel".to_owned()).expect("fixed source lane"));
     }
     for lane in source_lanes {
@@ -381,6 +731,9 @@ pub fn plan_product_assembly_with_kernel_capabilities(
     }
     let mut required_sources = source_paths;
     if let Some(kernel) = manifest.kernel_entry() {
+        required_sources.push(kernel.clone());
+    }
+    if let Some(kernel) = manifest.kernel_package() {
         required_sources.push(kernel.clone());
     }
     required_sources.push(manifest.ui_entry().clone());
@@ -398,6 +751,11 @@ pub fn plan_product_assembly_with_kernel_capabilities(
     if let Some(file) = content.manifest_source {
         insert_file(&mut source_files, file)?;
     }
+    if manifest.kernel_package().is_some() {
+        validate_kernel_package_source_closure(&source_files)?;
+    }
+    let kernel_source =
+        KernelSource::from_manifest(manifest, &source_files, engine_dependency_path)?;
     let source_values = source_files.into_values().collect::<Vec<_>>();
     total_bytes(source_values.iter())?;
 
@@ -427,15 +785,16 @@ pub fn plan_product_assembly_with_kernel_capabilities(
                 error.to_string(),
             )
         })?;
-    if !linked.capability_bindings().is_empty() && manifest.kernel_entry().is_none() {
+    if !linked.capability_bindings().is_empty() && kernel_source.is_none() {
         return Err(ProductAssemblyError::new(
             "ASSEMBLY_RUNTIME_LINKAGE_REQUIRES_KERNEL",
             &compiled_logical,
-            "Engine or Product Kernel capability bindings require the fixed source-linked RustyProductRuntime definition; the no-kernel empty runtime cannot silently dispatch them",
+            "Engine or Product Kernel capability bindings require the fixed RustyProductRuntime definition; the no-kernel empty runtime cannot silently dispatch them",
         ));
     }
     let source_plan = generate_source_plan(
         manifest,
+        kernel_source.as_ref(),
         &canonical_composition,
         kernel_capabilities,
         engine_dependency_path,
@@ -473,6 +832,19 @@ pub fn plan_product_assembly_with_kernel_capabilities(
             format!("source/{}", file.relative_path),
             file.bytes.clone(),
         )?);
+    }
+    if let Some(KernelSource::Package(package)) = &kernel_source {
+        for file in &source_values {
+            let Some(relative) = file.relative_path.as_str().strip_prefix("kernel/") else {
+                continue;
+            };
+            let bytes = package
+                .cargo_rewrites
+                .get(&file.relative_path)
+                .cloned()
+                .unwrap_or_else(|| file.bytes.clone());
+            assembly_files.push(PublicationFile::new(format!("kernel/{relative}"), bytes)?);
+        }
     }
     for file in &runtime_files {
         assembly_files.push(PublicationFile::new(
@@ -865,8 +1237,10 @@ fn collect_content(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn generate_source_plan(
     manifest: &ProductManifest,
+    kernel_source: Option<&KernelSource>,
     canonical_composition: &[u8],
     kernel_capabilities: &[ProductKernelCapabilityDescriptor],
     engine_dependency_path: &str,
@@ -893,11 +1267,21 @@ fn generate_source_plan(
     let kernel_dependency = kernel_dependency_path.map_or_else(String::new, |path| {
         format!("\nproduct-kernel = {{ path = {} }}", rust_string(path))
     });
+    let package_dependency = match kernel_source {
+        Some(KernelSource::Package(package)) => format!(
+            "\nproduct-runtime = {{ package = {}, path = \"kernel\" }}",
+            rust_string(&package.package_name),
+        ),
+        _ => String::new(),
+    };
     let cargo = format!(
-        "[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[lib]\nname = \"rusty_product\"\npath = \"src/lib.rs\"\n\n[dependencies]\n{engine_dependency}{kernel_dependency}\nserde_json = \"1\"\n\n# Dependencies are product-relative paths supplied by the assembly caller; no absolute path is embedded.\n\n# This generated package is a detached build root even when its product lives below an Engine checkout.\n[workspace]\n",
+        "[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[lib]\nname = \"rusty_product\"\npath = \"src/lib.rs\"\n\n[dependencies]\n{engine_dependency}{kernel_dependency}{package_dependency}\nserde_json = \"1\"\n\n# Dependencies are product-relative paths supplied by the assembly caller; no absolute path is embedded.\n\n# This generated package is a detached build root even when its product lives below an Engine checkout.\n[workspace]\n",
     )
     .into_bytes();
-    let kernel = manifest.kernel_entry().map(|path| path.as_str().to_owned());
+    let kernel = match kernel_source {
+        Some(KernelSource::Entry(path)) => Some(path.as_str().to_owned()),
+        _ => None,
+    };
     if let Some(path) = &kernel {
         if !path.ends_with(".rs")
             || !path.bytes().all(|byte| {
@@ -916,6 +1300,8 @@ fn generate_source_plan(
         format!(
             "#![forbid(unsafe_code)]\n\n#[allow(dead_code)]\n#[path = \"../source/{path}\"]\nmod product_kernel_source;\n\npub mod product;\n"
         )
+    } else if matches!(kernel_source, Some(KernelSource::Package(_))) {
+        "#![forbid(unsafe_code)]\n\npub use product_runtime as product_kernel_package;\n\npub mod product;\n".to_owned()
     } else {
         "#![forbid(unsafe_code)]\n\npub mod product;\n".to_owned()
     };
@@ -926,7 +1312,8 @@ fn generate_source_plan(
         &bundle_entries,
         &kernel_descriptors,
         &runtime_resources,
-        kernel.is_some(),
+        kernel_source.is_some(),
+        matches!(kernel_source, Some(KernelSource::Package(_))),
     );
     let lib_bytes = lib.into_bytes();
     let main_bytes = main.as_bytes().to_vec();
@@ -949,6 +1336,10 @@ fn generate_source_plan(
         main_rs: main_bytes,
         product_rs: product_bytes,
         kernel_entry: kernel,
+        kernel_package: kernel_source.and_then(|source| match source {
+            KernelSource::Package(package) => Some(package.manifest_path.to_string()),
+            KernelSource::Entry(_) => None,
+        }),
         compiled_composition_path: "artifacts/compiled-composition.json".to_owned(),
     })
 }
@@ -1040,11 +1431,17 @@ fn render_runtime_product_source(
     kernel_descriptors: &str,
     runtime_resources: &str,
     has_kernel: bool,
+    package_kernel: bool,
 ) -> String {
-    let adapter_type = if has_kernel {
-        "<crate::product_kernel_source::RustyProductRuntime as product_kernel::ProductKernelRuntimeDefinition>::Adapter"
+    let runtime_definition = if package_kernel {
+        "product_runtime::RustyProductRuntime"
     } else {
-        "EmptyProductAdapter"
+        "crate::product_kernel_source::RustyProductRuntime"
+    };
+    let adapter_type = if has_kernel {
+        format!("<{runtime_definition} as product_kernel::ProductKernelRuntimeDefinition>::Adapter")
+    } else {
+        "EmptyProductAdapter".to_owned()
     };
     let adapter_construction = if has_kernel {
         r#"        validate_kernel_definition()?;
@@ -1053,26 +1450,27 @@ fn render_runtime_product_source(
             PRODUCT_RUNTIME_RESOURCES,
         );
         let mut adapter =
-            <crate::product_kernel_source::RustyProductRuntime as product_kernel::ProductKernelRuntimeDefinition>::build(resources)
+            <__RUNTIME_DEFINITION__ as product_kernel::ProductKernelRuntimeDefinition>::build(resources)
                 .map_err(|error| format!("Product Runtime definition build: {error:?}"))?;
-        <crate::product_kernel_source::RustyProductRuntime as product_kernel::ProductKernelRuntimeDefinition>::bind_standard_capabilities(
+        <__RUNTIME_DEFINITION__ as product_kernel::ProductKernelRuntimeDefinition>::bind_standard_capabilities(
             &mut adapter,
             standard_capabilities,
         )
         .map_err(|error| format!("Product Runtime definition standard capability binding: {error}"))?;
 "#
+        .replace("__RUNTIME_DEFINITION__", runtime_definition)
     } else {
-        "        let adapter = EmptyProductAdapter::new();\n"
+        "        let adapter = EmptyProductAdapter::new();\n".to_owned()
     };
     let kernel_validation = if has_kernel {
         r#"fn validate_kernel_definition() -> Result<(), String> {
     let capabilities =
-        <crate::product_kernel_source::RustyProductRuntime as product_kernel::ProductKernelRuntimeDefinition>::capabilities();
+        <__RUNTIME_DEFINITION__ as product_kernel::ProductKernelRuntimeDefinition>::capabilities();
     if capabilities != PRODUCT_KERNEL_CAPABILITIES {
         return Err("Product Runtime definition capabilities differ from the admitted Product Model slice".to_owned());
     }
     let selections =
-        <crate::product_kernel_source::RustyProductRuntime as product_kernel::ProductKernelRuntimeDefinition>::selections();
+        <__RUNTIME_DEFINITION__ as product_kernel::ProductKernelRuntimeDefinition>::selections();
     if selections.len() != capabilities.len() {
         return Err("Product Runtime definition selections do not cover every Product Kernel capability".to_owned());
     }
@@ -1125,8 +1523,9 @@ fn render_runtime_product_source(
 }
 
 "#
+        .replace("__RUNTIME_DEFINITION__", runtime_definition)
     } else {
-        ""
+        String::new()
     };
     let runtime_resource_declaration = if has_kernel {
         "const PRODUCT_RUNTIME_RESOURCES: &[product_kernel::ProductRuntimeResource<'static>] =\n    &[__RUNTIME_RESOURCES__];\n"
@@ -1135,7 +1534,7 @@ fn render_runtime_product_source(
     };
     let kernel_import = if has_kernel { "product_kernel, " } else { "" };
     let mutation_catalog = if has_kernel {
-        r#"        let mutation_descriptors = <crate::product_kernel_source::RustyProductRuntime as product_kernel::ProductKernelRuntimeDefinition>::mutation_descriptors()
+        r#"        let mutation_descriptors = <__RUNTIME_DEFINITION__ as product_kernel::ProductKernelRuntimeDefinition>::mutation_descriptors()
             .iter()
             .map(|descriptor| {
                 runtime_mutation::MutationCapabilityDescriptor::new(
@@ -1154,8 +1553,9 @@ fn render_runtime_product_source(
                 .map_err(|error| format!("mutation catalog admission: {error:?}"))?
         };
 "#
+        .replace("__RUNTIME_DEFINITION__", runtime_definition)
     } else {
-        "        let mutation = runtime_mutation::CompiledMutationCatalog::empty();\n"
+        "        let mutation = runtime_mutation::CompiledMutationCatalog::empty();\n".to_owned()
     };
     let standard_capabilities = if has_kernel {
         r#"        let schedule = runtime_schedule::CompiledRuntimeSchedule::compile(&linked)
@@ -1601,16 +2001,16 @@ pub fn run(port: u16) {
     host.shutdown().expect("generated Product Dev Host shuts down");
 }
 "#
-    .replace("__ADAPTER_TYPE__", adapter_type)
+    .replace("__ADAPTER_TYPE__", &adapter_type)
     .replace("__KERNEL_DESCRIPTORS__", kernel_descriptors)
     .replace("__KERNEL_IMPORT__", kernel_import)
     .replace(
         "__RUNTIME_RESOURCE_DECLARATION__",
         &runtime_resource_declaration.replace("__RUNTIME_RESOURCES__", runtime_resources),
     )
-    .replace("__KERNEL_VALIDATION__", kernel_validation)
-    .replace("__ADAPTER_CONSTRUCTION__", adapter_construction)
-    .replace("__MUTATION_CATALOG__", mutation_catalog)
+    .replace("__KERNEL_VALIDATION__", &kernel_validation)
+    .replace("__ADAPTER_CONSTRUCTION__", &adapter_construction)
+    .replace("__MUTATION_CATALOG__", &mutation_catalog)
     .replace("__STANDARD_CAPABILITIES__", standard_capabilities)
     .replace("__BUNDLE_ENTRIES__", bundle_entries);
     let start_marker = "__EMPTY_ADAPTER_START__";
@@ -1936,4 +2336,104 @@ fn validate_total_receipt_bytes(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod kernel_package_tests {
+    use super::*;
+
+    fn file(path: &str, bytes: &str) -> ProductFile {
+        ProductFile {
+            relative_path: ProductPath::parse(path.to_owned()).expect("test path"),
+            bytes: bytes.as_bytes().to_vec(),
+        }
+    }
+
+    #[test]
+    fn package_mode_rewrites_the_fixed_engine_and_closes_local_crates() {
+        let files = BTreeMap::from([
+            (
+                "kernel/Cargo.toml".to_owned(),
+                file(
+                    "kernel/Cargo.toml",
+                    "[package]\nname = \"example-kernel\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nrusty-engine = { path = \"../../wrong\" }\nhelper = { path = \"support/helper\" }\n",
+                ),
+            ),
+            (
+                "kernel/support/helper/Cargo.toml".to_owned(),
+                file(
+                    "kernel/support/helper/Cargo.toml",
+                    "[package]\nname = \"example-helper\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nrusty-engine = { path = \"../../../../wrong\" }\n",
+                ),
+            ),
+        ]);
+        let package = admit_kernel_package(
+            &ProductPath::parse("kernel/Cargo.toml".to_owned()).expect("package path"),
+            &files,
+            "../rusty-engine",
+        )
+        .expect("admitted package");
+        assert_eq!(package.package_name, "example-kernel");
+        let root = std::str::from_utf8(
+            package
+                .cargo_rewrites
+                .get(&ProductPath::parse("kernel/Cargo.toml".to_owned()).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(root.contains("path = \"../../rusty-engine\""));
+        assert_eq!(package.cargo_rewrites.len(), 2);
+    }
+
+    #[test]
+    fn package_mode_rejects_local_dependency_escape_and_registry_dependency() {
+        for (dependency, expected) in [
+            (
+                "helper = { path = \"../../outside\" }",
+                "ASSEMBLY_KERNEL_PACKAGE_ESCAPE",
+            ),
+            (
+                "helper = \"1\"",
+                "ASSEMBLY_KERNEL_PACKAGE_REGISTRY_DEPENDENCY",
+            ),
+        ] {
+            let files = BTreeMap::from([(
+                "kernel/Cargo.toml".to_owned(),
+                file(
+                    "kernel/Cargo.toml",
+                    &format!(
+                        "[package]\nname = \"example-kernel\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nrusty-engine = {{ path = \"../../engine\" }}\n{dependency}\n"
+                    ),
+                ),
+            )]);
+            let error = admit_kernel_package(
+                &ProductPath::parse("kernel/Cargo.toml".to_owned()).unwrap(),
+                &files,
+                "../rusty-engine",
+            )
+            .expect_err("unsafe dependency rejected");
+            assert_eq!(error.diagnostic().code(), expected);
+        }
+    }
+
+    #[test]
+    fn package_mode_rejects_build_residue_instead_of_hashing_it_as_source() {
+        for path in [
+            "kernel/Cargo.lock",
+            "kernel/target/debug/kernel",
+            "kernel/.cargo/config.toml",
+        ] {
+            let files = BTreeMap::from([(
+                path.to_owned(),
+                file(path, "generated residue must not be admitted"),
+            )]);
+            let error = validate_kernel_package_source_closure(&files)
+                .expect_err("kernel build residue rejected");
+            assert_eq!(
+                error.diagnostic().code(),
+                "ASSEMBLY_KERNEL_PACKAGE_NON_SOURCE"
+            );
+            assert_eq!(error.diagnostic().path(), path);
+        }
+    }
 }

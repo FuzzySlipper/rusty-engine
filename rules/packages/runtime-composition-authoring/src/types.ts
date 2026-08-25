@@ -25,11 +25,13 @@ export interface InputMapEntry {
 export interface ProductIntentDescriptor {
   readonly id: string;
   readonly valueKind: IntentValueKind;
+  /** Required exactly for a direct-UI-only product-payload intent. */
+  readonly payloadContract?: string;
   readonly capability: string;
   readonly payload: JsonValue;
 }
 
-export type IntentValueKind = 'digital' | 'axis';
+export type IntentValueKind = 'digital' | 'axis' | 'product-payload';
 export type InputEdge = 'held' | 'pressed' | 'released';
 export type KeyboardControl =
   | 'key-a' | 'key-b' | 'key-c' | 'key-d' | 'key-e' | 'key-f' | 'key-g' | 'key-h' | 'key-i'
@@ -179,6 +181,7 @@ export interface InputActionDraft {
 export interface ProductIntentDescriptorDraft {
   readonly id: string;
   readonly valueKind: IntentValueKind;
+  readonly payloadContract?: string;
   readonly capability: string;
   readonly payload: unknown;
 }
