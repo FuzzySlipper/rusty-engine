@@ -35,6 +35,7 @@ product-assembly.workspace = true
 product-dev-host.workspace = true
 product-materializer.workspace = true
 runtime-composition.workspace = true
+runtime-vm.workspace = true
 product-kernel.workspace = true
 runtime-lifecycle.workspace = true
 runtime-input.workspace = true

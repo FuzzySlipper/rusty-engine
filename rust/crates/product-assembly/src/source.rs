@@ -29,6 +29,7 @@ const BROWSER_BRIDGE_PATH: &str = "bridge.js";
 const BROWSER_ENGINE_PATH: &str = "engine/product-browser-host.js";
 const BROWSER_RUNTIME_ADAPTER_PATH: &str = "runtime-adapter.js";
 const BROWSER_RENDERER_PRELOAD_PATH: &str = "renderer-preload.json";
+const VM_RUNTIME_PROGRAM_PATH: &str = "runtime/main.js";
 const RENDERER_TEXTURE_ROLE: &str = "resource:renderer-texture";
 const RENDERER_AUDIO_ROLE: &str = "resource:renderer-audio";
 const RENDERER_MESH_ROLE: &str = "resource:renderer-mesh";
@@ -51,6 +52,7 @@ pub struct AssemblySourcePlan {
     product_rs: Vec<u8>,
     kernel_entry: Option<String>,
     kernel_package: Option<String>,
+    runtime_program_path: Option<String>,
     compiled_composition_path: String,
 }
 
@@ -173,6 +175,7 @@ pub struct AssemblyGenerationInputs {
     browser_bundle: Option<BrowserBundleInputs>,
     engine_dependency_path: Option<String>,
     kernel_dependency_path: Option<String>,
+    runtime_program: Option<Vec<u8>>,
 }
 
 impl AssemblyGenerationInputs {
@@ -189,6 +192,7 @@ impl AssemblyGenerationInputs {
             browser_bundle: None,
             engine_dependency_path: None,
             kernel_dependency_path: None,
+            runtime_program: None,
         })
     }
 
@@ -228,6 +232,27 @@ impl AssemblyGenerationInputs {
         Ok(self)
     }
 
+    /// Supplies the one already-bundled JavaScript program admitted for a
+    /// manifest selecting the Engine-owned VM runtime lane.
+    pub fn with_runtime_program(mut self, program: Vec<u8>) -> Result<Self, ProductAssemblyError> {
+        if program.is_empty() || program.len() > crate::MAX_ASSEMBLY_FILE_BYTES {
+            return Err(ProductAssemblyError::new(
+                "ASSEMBLY_RUNTIME_PROGRAM_BYTES",
+                VM_RUNTIME_PROGRAM_PATH,
+                "runtime program must be non-empty and fit within one admitted assembly file",
+            ));
+        }
+        std::str::from_utf8(&program).map_err(|error| {
+            ProductAssemblyError::new(
+                "ASSEMBLY_RUNTIME_PROGRAM_UTF8",
+                VM_RUNTIME_PROGRAM_PATH,
+                format!("runtime program must be UTF-8 JavaScript: {error}"),
+            )
+        })?;
+        self.runtime_program = Some(program);
+        Ok(self)
+    }
+
     pub fn compiled_composition(&self) -> &[u8] {
         &self.compiled_composition
     }
@@ -242,6 +267,10 @@ impl AssemblyGenerationInputs {
 
     pub fn kernel_dependency_path(&self) -> Option<&str> {
         self.kernel_dependency_path.as_deref()
+    }
+
+    pub fn runtime_program(&self) -> Option<&[u8]> {
+        self.runtime_program.as_deref()
     }
 }
 
@@ -268,6 +297,11 @@ impl AssemblySourcePlan {
 
     pub fn kernel_package(&self) -> Option<&str> {
         self.kernel_package.as_deref()
+    }
+
+    /// Fixed generated location of the Engine-owned VM bundle, when selected.
+    pub fn runtime_program_path(&self) -> Option<&str> {
+        self.runtime_program_path.as_deref()
     }
 
     pub fn compiled_composition_path(&self) -> &str {
@@ -714,6 +748,29 @@ pub fn plan_product_assembly_with_kernel_capabilities(
             "fresh Product Assembly generation requires a product-relative Engine dependency path",
         )
     })?;
+    let vm_runtime_entry = manifest.runtime_entry();
+    let vm_runtime_program = inputs.runtime_program();
+    if vm_runtime_entry.is_some() && vm_runtime_program.is_none() {
+        return Err(ProductAssemblyError::new(
+            "ASSEMBLY_RUNTIME_PROGRAM_REQUIRED",
+            VM_RUNTIME_PROGRAM_PATH,
+            "a manifest runtime.entry requires one bundled VM runtime program",
+        ));
+    }
+    if vm_runtime_entry.is_none() && vm_runtime_program.is_some() {
+        return Err(ProductAssemblyError::new(
+            "ASSEMBLY_RUNTIME_ENTRY_REQUIRED",
+            VM_RUNTIME_PROGRAM_PATH,
+            "a bundled VM runtime program requires manifest runtime.entry",
+        ));
+    }
+    if vm_runtime_entry.is_some() && manifest.has_kernel() {
+        return Err(ProductAssemblyError::new(
+            "ASSEMBLY_RUNTIME_MODE_CONFLICT",
+            "rusty.toml",
+            "runtime.entry cannot be combined with a Product Kernel runtime mode",
+        ));
+    }
     if manifest.has_kernel() && inputs.kernel_dependency_path().is_none() {
         return Err(ProductAssemblyError::new(
             "ASSEMBLY_KERNEL_DEPENDENCY_REQUIRED",
@@ -762,6 +819,9 @@ pub fn plan_product_assembly_with_kernel_capabilities(
     if manifest.has_kernel() {
         source_lanes.insert(ProductPath::parse("kernel".to_owned()).expect("fixed source lane"));
     }
+    if vm_runtime_entry.is_some() {
+        source_lanes.insert(ProductPath::parse("runtime".to_owned()).expect("fixed runtime lane"));
+    }
     for lane in source_lanes {
         let logical = lane.to_string();
         for file in read_product_tree(&root, &lane, &logical)? {
@@ -774,6 +834,9 @@ pub fn plan_product_assembly_with_kernel_capabilities(
     }
     if let Some(kernel) = manifest.kernel_package() {
         required_sources.push(kernel.clone());
+    }
+    if let Some(runtime) = vm_runtime_entry {
+        required_sources.push(runtime.clone());
     }
     required_sources.push(manifest.ui_entry().clone());
     for path in required_sources {
@@ -824,6 +887,13 @@ pub fn plan_product_assembly_with_kernel_capabilities(
                 error.to_string(),
             )
         })?;
+    if vm_runtime_entry.is_some() && !linked.capability_bindings().is_empty() {
+        return Err(ProductAssemblyError::new(
+            "ASSEMBLY_VM_CAPABILITY_BINDINGS",
+            &compiled_logical,
+            "the initial VM runtime lane does not admit Engine or Product Kernel capability bindings",
+        ));
+    }
     if !linked.capability_bindings().is_empty() && kernel_source.is_none() {
         return Err(ProductAssemblyError::new(
             "ASSEMBLY_RUNTIME_LINKAGE_REQUIRES_KERNEL",
@@ -848,6 +918,7 @@ pub fn plan_product_assembly_with_kernel_capabilities(
         &generated_browser_files,
         &content.runtime_files,
         &content.renderer_preload,
+        vm_runtime_program,
     )?;
 
     let runtime_files = content.runtime_files;
@@ -874,6 +945,12 @@ pub fn plan_product_assembly_with_kernel_capabilities(
             canonical_composition.clone(),
         )?,
     ];
+    if let Some(program) = vm_runtime_program {
+        assembly_files.push(PublicationFile::new(
+            VM_RUNTIME_PROGRAM_PATH,
+            program.to_vec(),
+        )?);
+    }
     for file in &source_values {
         assembly_files.push(PublicationFile::new(
             format!("source/{}", file.relative_path),
@@ -1482,6 +1559,7 @@ fn generate_source_plan(
     browser_files: &[PublicationFile],
     runtime_files: &[ProductFile],
     renderer_preload: &[RendererPreloadResource],
+    runtime_program: Option<&[u8]>,
 ) -> Result<AssemblySourcePlan, ProductAssemblyError> {
     let name = format!(
         "rusty-product-{}",
@@ -1543,13 +1621,23 @@ fn generate_source_plan(
     let kernel_descriptors = render_kernel_descriptors(kernel_capabilities);
     let bundle_entries = render_bundle_entries(browser_files, runtime_files, renderer_preload)?;
     let runtime_resources = render_runtime_resources(browser_files, runtime_files)?;
-    let product = render_runtime_product_source(
-        &bundle_entries,
-        &kernel_descriptors,
-        &runtime_resources,
-        kernel_source.is_some(),
-        matches!(kernel_source, Some(KernelSource::Package(_))),
-    );
+    let product = if runtime_program.is_some() {
+        render_vm_runtime_product_source(
+            &bundle_entries,
+            manifest.ui_projection_stream().unwrap_or("product.runtime"),
+            manifest
+                .ui_projection_contract()
+                .unwrap_or("rusty.product.runtime-projection.v1"),
+        )
+    } else {
+        render_runtime_product_source(
+            &bundle_entries,
+            &kernel_descriptors,
+            &runtime_resources,
+            kernel_source.is_some(),
+            matches!(kernel_source, Some(KernelSource::Package(_))),
+        )
+    };
     let lib_bytes = lib.into_bytes();
     let main_bytes = main.as_bytes().to_vec();
     let product_bytes = product.into_bytes();
@@ -1575,6 +1663,7 @@ fn generate_source_plan(
             KernelSource::Package(package) => Some(package.manifest_path.to_string()),
             KernelSource::Entry(_) => None,
         }),
+        runtime_program_path: runtime_program.map(|_| VM_RUNTIME_PROGRAM_PATH.to_owned()),
         compiled_composition_path: "artifacts/compiled-composition.json".to_owned(),
     })
 }
@@ -1692,6 +1781,410 @@ fn render_runtime_resources(
         ));
     }
     Ok(entries.concat())
+}
+
+/// Emits the generated runtime owner for the Engine-owned JavaScript VM lane.
+/// It deliberately bypasses the legacy Product Kernel adapter/composition
+/// path: lifecycle admission, input snapshots, VM state, and UI publication
+/// remain visible, direct named owners in the generated product.
+fn render_vm_runtime_product_source(
+    bundle_entries: &str,
+    projection_stream: &str,
+    projection_contract: &str,
+) -> String {
+    r#"use std::fmt::Debug;
+
+use rusty_engine::{
+    product_dev_host, product_model, render_model, runtime_input, runtime_lifecycle, runtime_ui,
+    runtime_vm,
+};
+
+const ADMITTED_COMPILED_COMPOSITION: &[u8] =
+    include_bytes!("../artifacts/compiled-composition.json");
+const RUNTIME_PROGRAM: &str = include_str!("../runtime/main.js");
+const VM_PROJECTION_STREAM: &str = __VM_PROJECTION_STREAM__;
+const VM_PROJECTION_CONTRACT: &str = __VM_PROJECTION_CONTRACT__;
+
+/// The generated VM runtime owns only its lifecycle, input lane, VM root, and
+/// UI projection channel. It does not instantiate ProductRuntimeAdapter or
+/// RuntimeComposition, and it has no schedule/mutation/kernel dispatch path.
+pub struct GeneratedProductDevRuntime {
+    lifecycle: runtime_lifecycle::RuntimeLifecycle,
+    mappings: runtime_input::CompiledInputMappings,
+    input: Option<runtime_input::RuntimeInputLane>,
+    projection: Option<runtime_ui::RuntimeUiProjection>,
+    vm: Option<runtime_vm::RuntimeVm>,
+}
+
+impl GeneratedProductDevRuntime {
+    pub fn new() -> Result<Self, String> {
+        let manifest = product_model::decode_product_manifest(include_str!("../source/rusty.toml"))
+            .map_err(|error| format!("manifest admission: {error}"))?;
+        let composition = product_model::decode_compiled_composition(ADMITTED_COMPILED_COMPOSITION)
+            .map_err(|error| format!("compiled composition admission: {error}"))?;
+        let admitted = product_model::admit_checked_product_composition(&manifest, composition)
+            .map_err(|error| format!("composition admission: {error}"))?;
+        let linked = product_model::link_admitted_product_composition(admitted, &[])
+            .map_err(|error| format!("composition linkage: {error}"))?;
+        let mappings = runtime_input::CompiledInputMappings::compile(&linked)
+            .map_err(|error| format!("input compilation: {error}"))?;
+        let config = runtime_lifecycle::RuntimeLifecycleConfig::from_product_manifest(&manifest)
+            .map_err(|error| format!("lifecycle configuration: {error}"))?;
+        Ok(Self {
+            lifecycle: runtime_lifecycle::RuntimeLifecycle::new(
+                runtime_lifecycle::RuntimeInstanceId::new(1),
+                config,
+            ),
+            mappings,
+            input: None,
+            projection: None,
+            vm: None,
+        })
+    }
+
+    fn initialize_vm(&mut self) -> Result<(), String> {
+        let mut vm = runtime_vm::RuntimeVm::new(RUNTIME_PROGRAM, runtime_vm::RuntimeVmConfig::default())
+            .map_err(|error| format!("VM configuration: {error}"))?;
+        vm.initialize(serde_json::json!({}))
+            .map_err(|error| format!("VM initialization: {error}"))?;
+        self.vm = Some(vm);
+        Ok(())
+    }
+
+    fn bind_epoch(&mut self) -> Result<(), String> {
+        let binding = runtime_input::RuntimeInputBinding::new(
+            self.lifecycle.instance_id(),
+            self.lifecycle.generation(),
+            self.lifecycle.control_revision(),
+        );
+        let context = runtime_input::InputContext::new("gameplay.default")
+            .map_err(|error| format!("input context: {error:?}"))?;
+        let input = runtime_input::RuntimeInputLane::new(self.mappings.clone(), binding, context);
+        // Recreating on each control epoch makes pending host facts incapable
+        // of crossing pause/resume/restart ownership boundaries.
+        if let Some(previous) = self.input.take() {
+            let mut previous = previous;
+            previous.dispose();
+        }
+        self.input = Some(input);
+        self.projection = Some(
+            runtime_ui::RuntimeUiProjection::bind(&self.lifecycle)
+                .map_err(|error| format!("UI projection bind: {error}"))?,
+        );
+        Ok(())
+    }
+
+    fn binding(&self) -> product_dev_host::ProductDevRuntimeBinding {
+        let readout = self.lifecycle.readout();
+        product_dev_host::ProductDevRuntimeBinding {
+            instance_id: product_dev_host::CanonicalU64::new(readout.instance_id().value()),
+            generation: product_dev_host::CanonicalU64::new(readout.generation().value()),
+            control_revision: product_dev_host::CanonicalU64::new(readout.control_revision().value()),
+        }
+    }
+
+    fn readout(&self) -> product_dev_host::ProductDevRuntimeReadout {
+        let value = self.lifecycle.readout();
+        let mode = match value.mode() {
+            runtime_lifecycle::RuntimeMode::Realtime => product_dev_host::ProductDevRuntimeMode::Realtime,
+            runtime_lifecycle::RuntimeMode::Demand => product_dev_host::ProductDevRuntimeMode::Demand,
+            runtime_lifecycle::RuntimeMode::External => product_dev_host::ProductDevRuntimeMode::External,
+        };
+        let state = match value.state() {
+            runtime_lifecycle::RuntimeState::Created => product_dev_host::ProductDevRuntimeState::Created,
+            runtime_lifecycle::RuntimeState::Running => product_dev_host::ProductDevRuntimeState::Running,
+            runtime_lifecycle::RuntimeState::Paused => product_dev_host::ProductDevRuntimeState::Paused,
+            runtime_lifecycle::RuntimeState::Faulted => product_dev_host::ProductDevRuntimeState::Faulted,
+            runtime_lifecycle::RuntimeState::Shutdown => product_dev_host::ProductDevRuntimeState::Shutdown,
+        };
+        let mut readout = product_dev_host::ProductDevRuntimeReadout::new(self.binding(), mode, state)
+            .with_counters(
+                value.admitted_simulation_steps(),
+                value.admitted_presentations(),
+                value.dropped_realtime_steps().min(u64::MAX as u128) as u64,
+                value.clock_regressions(),
+            )
+            .with_clock(value.scaled_remainder(), value.last_observed_time().map(|time| time.nanoseconds()));
+        if let Some(fault) = value.fault() {
+            readout = readout.with_fault(match fault {
+                runtime_lifecycle::RuntimeFault::OwnerReported => product_dev_host::ProductDevRuntimeFault::OwnerReported,
+                runtime_lifecycle::RuntimeFault::CounterExhausted => product_dev_host::ProductDevRuntimeFault::CounterExhausted,
+            });
+        }
+        readout
+    }
+
+    fn runtime_error(&self, code: &str, detail: impl Debug) -> product_dev_host::ProductDevRuntimeError {
+        let mut diagnostic = format!("{detail:?}");
+        if diagnostic.len() > 1_024 {
+            let mut end = 1_024;
+            while !diagnostic.is_char_boundary(end) { end -= 1; }
+            diagnostic.truncate(end);
+        }
+        product_dev_host::ProductDevRuntimeError::new(code, diagnostic)
+            .unwrap_or_else(|_| product_dev_host::ProductDevRuntimeError::new("GENERATED_RUNTIME_ERROR", "generated runtime diagnostic rejected").expect("fixed diagnostic"))
+    }
+
+    fn receipt<T>(
+        &self,
+        result: T,
+        ui: Vec<runtime_ui::RuntimeUiProjectionEnvelope>,
+        render: Vec<render_model::RenderFrameDiff>,
+    ) -> Result<product_dev_host::ProductDevRuntimeReceipt<T>, product_dev_host::ProductDevRuntimeError> {
+        let mut outputs = Vec::with_capacity(2 + ui.len() + render.len());
+        outputs.push(product_dev_host::ProductDevRuntimeOutput::binding(self.binding()));
+        for envelope in &ui {
+            outputs.push(product_dev_host::ProductDevRuntimeOutput::ui_projection(envelope)
+                .map_err(|error| self.runtime_error("VM_UI_OUTPUT", error))?);
+        }
+        for frame in &render {
+            outputs.push(product_dev_host::ProductDevRuntimeOutput::frame(frame)
+                .map_err(|error| self.runtime_error("VM_RENDER_OUTPUT", error))?);
+        }
+        outputs.push(product_dev_host::ProductDevRuntimeOutput::runtime_readout(self.readout()));
+        product_dev_host::ProductDevRuntimeReceipt::new(result, outputs)
+            .map_err(|error| self.runtime_error("VM_RECEIPT", error))
+    }
+
+    fn accepted_operation(
+        &self,
+        operation: product_dev_host::ProductDevOperationKind,
+    ) -> Result<product_dev_host::ProductDevOperationResult, product_dev_host::ProductDevRuntimeError> {
+        product_dev_host::ProductDevOperationResult::accepted(operation, self.binding(), self.readout())
+            .map_err(|error| self.runtime_error("VM_OPERATION_RESULT", error))
+    }
+
+    fn rejected_operation(
+        &self,
+        operation: product_dev_host::ProductDevOperationKind,
+        error: impl Debug,
+    ) -> Result<product_dev_host::ProductDevOperationResult, product_dev_host::ProductDevRuntimeError> {
+        product_dev_host::ProductDevOperationResult::rejected(operation, format!("{error:?}"))
+            .map_err(|host_error| self.runtime_error("VM_OPERATION_RESULT", host_error))
+    }
+
+    fn run_admission(
+        &mut self,
+        admission: runtime_lifecycle::SimulationAdmission,
+    ) -> Result<(Vec<runtime_ui::RuntimeUiProjectionEnvelope>, Vec<render_model::RenderFrameDiff>), String> {
+        let mut emitted = Vec::new();
+        let mut render = Vec::new();
+        for offset in 0..admission.step_count() {
+            let step = admission.step_at(offset).ok_or("admitted simulation step disappeared")?;
+            let phases = step.phases();
+            let (_, intents) = self.input.as_mut().ok_or("input lane is not active")?
+                .snapshot_for_step(&self.lifecycle, phases.input_snapshot())
+                .map_err(|error| format!("input snapshot: {error:?}"))?;
+            let input = serde_json::json!({
+                "intents": intents.iter().map(encode_intent).collect::<Vec<_>>(),
+            });
+            let candidate = self.vm.as_ref().ok_or("VM is not active")?
+                .prepare_turn(runtime_vm::RuntimeTurn {
+                    step: serde_json::json!({ "sequence": step.token().step().value() }),
+                    input,
+                })
+                .map_err(|error| format!("VM turn: {error}"))?;
+            let prepared_ui = self.projection.as_ref().ok_or("UI projection lane is not active")?
+                .prepare_value(
+                    &self.lifecycle,
+                    phases.projection(),
+                    VM_PROJECTION_STREAM,
+                    VM_PROJECTION_CONTRACT,
+                    candidate.receipt().projection().ui().clone(),
+                )
+                .map_err(|error| format!("UI projection: {error}"))?;
+            let frame = if let Some(value) = candidate.receipt().projection().render() {
+                let encoded = serde_json::to_string(value)
+                    .map_err(|error| format!("VM render encoding: {error}"))?;
+                Some(render_model::RenderFrameDiff::decode_json(&encoded)
+                    .map_err(|error| format!("VM render decode: {error}"))?)
+            } else {
+                None
+            };
+            let envelope = self.projection.as_mut().ok_or("UI projection lane is not active")?
+                .commit_prepared(&self.lifecycle, prepared_ui)
+                .map_err(|error| format!("UI projection: {error}"))?;
+            self.vm.as_mut().ok_or("VM is not active")?
+                .commit_prepared(candidate)
+                .map_err(|error| format!("VM commit: {error}"))?;
+            emitted.push(envelope);
+            if let Some(frame) = frame { render.push(frame); }
+        }
+        Ok((emitted, render))
+    }
+
+    fn bundle() -> Result<product_dev_host::ProductDevBundle, String> {
+        product_dev_host::ProductDevBundle::new(vec![__BUNDLE_ENTRIES__])
+            .map_err(|error| error.to_string())
+    }
+}
+
+fn encode_intent(intent: &runtime_input::RuntimeIntentEnvelope) -> serde_json::Value {
+    let value = match intent.value() {
+        runtime_input::RuntimeIntentValue::Digital { active } => serde_json::json!({ "kind": "digital", "active": active }),
+        runtime_input::RuntimeIntentValue::Axis { value } => serde_json::json!({ "kind": "axis", "value": value.value() }),
+        runtime_input::RuntimeIntentValue::ProductPayload { payload } => serde_json::json!({ "kind": "product-payload", "contract": payload.contract(), "data": payload.data() }),
+    };
+    let phase = match intent.phase() {
+        runtime_input::IntentPhase::Held => "held",
+        runtime_input::IntentPhase::Pressed => "pressed",
+        runtime_input::IntentPhase::Released => "released",
+        runtime_input::IntentPhase::Axis => "axis",
+        runtime_input::IntentPhase::DirectUi => "direct-ui",
+    };
+    serde_json::json!({
+        "id": intent.intent(),
+        "sequence": intent.sequence(),
+        "phase": phase,
+        "value": value,
+    })
+}
+
+impl product_dev_host::ProductDevRuntime for GeneratedProductDevRuntime {
+    fn lifecycle(
+        &mut self,
+        operation: product_dev_host::ProductDevLifecycleOperation,
+    ) -> Result<product_dev_host::ProductDevRuntimeReceipt<product_dev_host::ProductDevOperationResult>, product_dev_host::ProductDevRuntimeError> {
+        let transition = match operation {
+            product_dev_host::ProductDevLifecycleOperation::Start => self.lifecycle.start().map(|_| ()),
+            product_dev_host::ProductDevLifecycleOperation::Pause => self.lifecycle.pause().map(|_| ()),
+            product_dev_host::ProductDevLifecycleOperation::Resume => self.lifecycle.resume().map(|_| ()),
+            product_dev_host::ProductDevLifecycleOperation::Restart => self.lifecycle.restart().map(|_| ()),
+            product_dev_host::ProductDevLifecycleOperation::Shutdown => self.lifecycle.shutdown().map(|_| ()),
+            product_dev_host::ProductDevLifecycleOperation::ReportFault => self.lifecycle.report_fault(runtime_lifecycle::RuntimeFault::OwnerReported).map(|_| ()),
+        };
+        match transition {
+            Ok(()) => {},
+            Err(error) => return self.receipt(self.rejected_operation(operation.operation_kind(), error)?, Vec::new(), Vec::new()),
+        }
+        match operation {
+            product_dev_host::ProductDevLifecycleOperation::Start
+            | product_dev_host::ProductDevLifecycleOperation::Restart => {
+                if let Err(error) = self.initialize_vm().and_then(|_| self.bind_epoch()) {
+                    let _ = self.lifecycle.report_fault(runtime_lifecycle::RuntimeFault::OwnerReported);
+                    return self.receipt(self.rejected_operation(operation.operation_kind(), error)?, Vec::new(), Vec::new());
+                }
+            }
+            product_dev_host::ProductDevLifecycleOperation::Resume => {
+                if let Err(error) = self.bind_epoch() {
+                    let _ = self.lifecycle.report_fault(runtime_lifecycle::RuntimeFault::OwnerReported);
+                    return self.receipt(self.rejected_operation(operation.operation_kind(), error)?, Vec::new(), Vec::new());
+                }
+            }
+            product_dev_host::ProductDevLifecycleOperation::Pause => {
+                if let Some(input) = self.input.as_mut() { input.dispose(); }
+                self.input = None;
+                self.projection = None;
+            }
+            product_dev_host::ProductDevLifecycleOperation::Shutdown
+            | product_dev_host::ProductDevLifecycleOperation::ReportFault => {
+                if let Some(input) = self.input.as_mut() { input.dispose(); }
+                self.input = None;
+                self.projection = None;
+                self.vm = None;
+            }
+        }
+        self.receipt(self.accepted_operation(operation.operation_kind())?, Vec::new(), Vec::new())
+    }
+
+    fn input(
+        &mut self,
+        batch: product_dev_host::ProductDevInputBatch,
+    ) -> Result<product_dev_host::ProductDevRuntimeReceipt<product_dev_host::ProductDevInputResult>, product_dev_host::ProductDevRuntimeError> {
+        let count = batch.events().len();
+        let result = match self.input.as_mut() {
+            Some(lane) => batch.events().iter().cloned().try_for_each(|event| {
+                lane.ingest(event).map_err(|error| format!("{error:?}"))
+            }),
+            None => Err("input lane is not active".to_owned()),
+        };
+        let result = match result {
+            Ok(()) => product_dev_host::ProductDevInputResult::accepted(count, self.binding(), self.readout()),
+            Err(error) => product_dev_host::ProductDevInputResult::rejected(error),
+        }.map_err(|error| self.runtime_error("VM_INPUT_RESULT", error))?;
+        self.receipt(result, Vec::new(), Vec::new())
+    }
+
+    fn advance_realtime(
+        &mut self,
+        observed_time_ns: product_dev_host::CanonicalU64,
+    ) -> Result<product_dev_host::ProductDevRuntimeReceipt<product_dev_host::ProductDevOperationResult>, product_dev_host::ProductDevRuntimeError> {
+        let admission = self.lifecycle.advance_realtime(runtime_lifecycle::HostMonotonicTime::from_nanoseconds(observed_time_ns.get()));
+        let admission = match admission {
+            Ok(value) => value,
+            Err(error) => return self.receipt(self.rejected_operation(product_dev_host::ProductDevOperationKind::AdvanceRealtime, error)?, Vec::new(), Vec::new()),
+        };
+        let (ui, render) = match admission.simulation().map(|value| self.run_admission(value)).transpose() {
+            Ok(Some(value)) => value,
+            Ok(None) => (Vec::new(), Vec::new()),
+            Err(error) => return self.receipt(self.rejected_operation(product_dev_host::ProductDevOperationKind::AdvanceRealtime, error)?, Vec::new(), Vec::new()),
+        };
+        self.receipt(self.accepted_operation(product_dev_host::ProductDevOperationKind::AdvanceRealtime)?, ui, render)
+    }
+
+    fn admit_demand_step(
+        &mut self,
+    ) -> Result<product_dev_host::ProductDevRuntimeReceipt<product_dev_host::ProductDevOperationResult>, product_dev_host::ProductDevRuntimeError> {
+        let admission = match self.lifecycle.admit_demand_step() {
+            Ok(value) => value,
+            Err(error) => return self.receipt(self.rejected_operation(product_dev_host::ProductDevOperationKind::AdmitDemandStep, error)?, Vec::new(), Vec::new()),
+        };
+        let (ui, render) = match self.run_admission(admission) {
+            Ok(value) => value,
+            Err(error) => return self.receipt(self.rejected_operation(product_dev_host::ProductDevOperationKind::AdmitDemandStep, error)?, Vec::new(), Vec::new()),
+        };
+        self.receipt(self.accepted_operation(product_dev_host::ProductDevOperationKind::AdmitDemandStep)?, ui, render)
+    }
+
+    fn admit_external_step(
+        &mut self,
+        step: product_dev_host::CanonicalU64,
+    ) -> Result<product_dev_host::ProductDevRuntimeReceipt<product_dev_host::ProductDevOperationResult>, product_dev_host::ProductDevRuntimeError> {
+        let admission = match self.lifecycle.admit_external_step(runtime_lifecycle::ExternalStep::new(step.get())) {
+            Ok(value) => value,
+            Err(error) => return self.receipt(self.rejected_operation(product_dev_host::ProductDevOperationKind::AdmitExternalStep, error)?, Vec::new(), Vec::new()),
+        };
+        let (ui, render) = match self.run_admission(admission) {
+            Ok(value) => value,
+            Err(error) => return self.receipt(self.rejected_operation(product_dev_host::ProductDevOperationKind::AdmitExternalStep, error)?, Vec::new(), Vec::new()),
+        };
+        self.receipt(self.accepted_operation(product_dev_host::ProductDevOperationKind::AdmitExternalStep)?, ui, render)
+    }
+
+    fn complete_timeline(
+        &mut self,
+        completion: product_dev_host::ProductDevTimelineCompletion,
+    ) -> Result<product_dev_host::ProductDevRuntimeReceipt<product_dev_host::ProductDevTimelineCompletionResult>, product_dev_host::ProductDevRuntimeError> {
+        let result = product_dev_host::ProductDevTimelineCompletionResult::rejected(
+            product_dev_host::CanonicalU64::new(completion.envelope().ticket().value()),
+            "the VM runtime does not admit timeline completion",
+        ).map_err(|error| self.runtime_error("VM_TIMELINE_RESULT", error))?;
+        self.receipt(result, Vec::new(), Vec::new())
+    }
+}
+
+pub fn product_bundle() -> Result<product_dev_host::ProductDevBundle, String> {
+    GeneratedProductDevRuntime::bundle()
+}
+
+pub fn start_host(port: u16) -> Result<product_dev_host::RunningProductDevHost, String> {
+    let runtime = GeneratedProductDevRuntime::new()?;
+    let bundle = product_bundle()?;
+    product_dev_host::ProductDevHost::start(runtime, product_dev_host::ProductDevHostConfig::new(port, bundle))
+        .map_err(|error| error.to_string())
+}
+
+pub fn run(port: u16) {
+    let host = start_host(port).expect("generated Product Dev Host starts");
+    println!("{}", host.origin());
+    let mut line = String::new();
+    let _ = std::io::stdin().read_line(&mut line);
+    host.shutdown().expect("generated Product Dev Host shuts down");
+}
+"#
+    .replace("__BUNDLE_ENTRIES__", bundle_entries)
+    .replace("__VM_PROJECTION_STREAM__", &rust_string(projection_stream))
+    .replace("__VM_PROJECTION_CONTRACT__", &rust_string(projection_contract))
 }
 
 /// Emits the Product Assembly executable and its fixed local host bridge. The

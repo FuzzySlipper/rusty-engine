@@ -74,13 +74,48 @@ fn physical_edges_and_direct_claims_keep_one_ingress_order() {
         .iter()
         .all(|entry| entry.intent() == "move.forward"));
     assert_eq!(
-        envelopes[0].descriptor().capability_target(),
+        envelopes[0]
+            .descriptor()
+            .capability()
+            .expect("linked kernel capability")
+            .target(),
         "kernel.move-forward"
     );
     assert_eq!(
-        envelopes[0].descriptor().capability_payload(),
+        envelopes[0].descriptor().payload(),
         &serde_json::json!({ "semantic": "move-forward" })
     );
+}
+
+#[test]
+fn vm_local_intent_compiles_and_snapshots_without_a_capability_binding() {
+    let (mut lifecycle, binding) = lifecycle_and_binding();
+    let mut lane = RuntimeInputLane::new(compiled_vm_mappings(), binding, context());
+    lane.ingest(physical(
+        binding,
+        0,
+        RuntimeInputFact::Key {
+            code: KeyboardControl::KeyW,
+            edge: PhysicalEdge::Pressed,
+        },
+    ))
+    .unwrap();
+
+    let (_, envelopes) = snapshot(&mut lane, &mut lifecycle).unwrap();
+    assert_eq!(envelopes.len(), 1);
+    assert_eq!(envelopes[0].intent(), "move.forward");
+    assert_eq!(
+        envelopes[0].value(),
+        RuntimeIntentValue::Digital { active: true }
+    );
+    assert_eq!(envelopes[0].phase(), IntentPhase::Pressed);
+    assert_eq!(
+        envelopes[0].provenance(),
+        &IntentProvenance::Physical {
+            mapping_id: "w-forward".into(),
+        }
+    );
+    assert!(envelopes[0].descriptor().capability().is_none());
 }
 
 #[test]
@@ -782,6 +817,7 @@ fn snapshot(
 
 fn compiled_mappings() -> CompiledInputMappings {
     let manifest = validate_product_manifest(ProductManifestCandidate {
+        runtime_entry: None,
         product_id: "example.product".into(),
         composition_entrypoints: vec!["rules/main.ts".into()],
         lifecycle: LifecycleMode::Demand,
@@ -808,21 +844,21 @@ fn compiled_mappings() -> CompiledInputMappings {
                     id: "move.forward".into(),
                     value_kind: IntentValueKind::Digital,
                     payload_contract: None,
-                    capability: "move.forward".into(),
+                    capability: Some("move.forward".into()),
                     payload: serde_json::json!({ "semantic": "move-forward" }),
                 },
                 ProductIntentDescriptor {
                     id: "inventory.drop".into(),
                     value_kind: IntentValueKind::ProductPayload,
                     payload_contract: Some("example.inventory.drop.v1".into()),
-                    capability: "inventory.drop".into(),
+                    capability: Some("inventory.drop".into()),
                     payload: serde_json::json!({ "semantic": "inventory-drop" }),
                 },
                 ProductIntentDescriptor {
                     id: "look.horizontal".into(),
                     value_kind: IntentValueKind::Axis,
                     payload_contract: None,
-                    capability: "look.horizontal".into(),
+                    capability: Some("look.horizontal".into()),
                     payload: serde_json::json!({ "semantic": "look-horizontal" }),
                 },
             ],
@@ -962,6 +998,66 @@ fn compiled_mappings() -> CompiledInputMappings {
         ],
     )
     .unwrap();
+    CompiledInputMappings::compile(&linked).unwrap()
+}
+
+fn compiled_vm_mappings() -> CompiledInputMappings {
+    let manifest = validate_product_manifest(ProductManifestCandidate {
+        runtime_entry: Some("runtime/main.ts".into()),
+        product_id: "example.product".into(),
+        composition_entrypoints: vec!["rules/main.ts".into()],
+        lifecycle: LifecycleMode::Demand,
+        realtime: None,
+        kernel_entry: None,
+        kernel_package: None,
+        ui_entry: "ui/main.ts".into(),
+        ui_projection_stream: None,
+        ui_projection_contract: None,
+        content_root: "content".into(),
+        compiled_composition_output: "generated/compiled-composition.json".into(),
+        admitted_runtime_content_output: "generated/runtime-content".into(),
+        product_assembly_output: "generated/product-assembly".into(),
+        product_bundle_output: "generated/product-bundle".into(),
+        wrappers: vec![],
+    })
+    .unwrap();
+    let admitted = admit_product_composition(
+        &manifest,
+        CompiledCompositionCandidate {
+            product: "example.product".into(),
+            intent_descriptors: vec![ProductIntentDescriptor {
+                id: "move.forward".into(),
+                value_kind: IntentValueKind::Digital,
+                payload_contract: None,
+                capability: None,
+                payload: serde_json::json!({ "semantic": "move-forward" }),
+            }],
+            input_map: vec![InputMapEntry {
+                id: "w-forward".into(),
+                intent: "move.forward".into(),
+                trigger: InputTrigger::Key {
+                    code: KeyboardControl::KeyW,
+                    edge: InputEdge::Pressed,
+                    chord: vec![],
+                    context: Some("gameplay".into()),
+                },
+            }],
+            schedule: SchedulePhase::ALL
+                .into_iter()
+                .map(|phase| SchedulePhaseDeclaration {
+                    phase,
+                    composition: ScheduleComposition::Append {
+                        systems: Vec::new(),
+                    },
+                })
+                .collect(),
+            gameplay_definitions: vec![],
+            timelines: vec![],
+            capability_bindings: vec![],
+        },
+    )
+    .unwrap();
+    let linked = link_admitted_product_composition(admitted, &[]).unwrap();
     CompiledInputMappings::compile(&linked).unwrap()
 }
 

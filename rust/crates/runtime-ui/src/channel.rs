@@ -24,6 +24,17 @@ pub struct RuntimeUiProjection {
     disposed: bool,
 }
 
+/// One validated UI envelope that has not yet advanced its stream evidence.
+///
+/// This lets a product runtime stage its UI output beside other Engine-owned
+/// projections before publishing the complete admitted turn.
+#[derive(Debug)]
+pub struct PreparedRuntimeUiProjection {
+    token: RuntimePhaseToken,
+    emission: PreparedEmission,
+    envelope: RuntimeUiProjectionEnvelope,
+}
+
 impl RuntimeUiProjection {
     /// Binds a fresh lane to a running lifecycle. A host/product may bind this
     /// lane at any point in a running generation; projection tokens still have
@@ -169,6 +180,79 @@ impl RuntimeUiProjection {
         self.finish(lifecycle, context, prepared, value)
     }
 
+    /// Publishes an already-owned projection value from an Engine runtime
+    /// owner. Unlike [`Self::emit`], this path has no Product Kernel context:
+    /// the caller supplies the exact lifecycle projection token directly.
+    ///
+    /// This keeps VM-backed product runtimes out of the legacy kernel
+    /// projection contract while retaining the same lifecycle, epoch, stream,
+    /// sequence, identity, and bounded-value checks as typed projections.
+    pub fn emit_value(
+        &mut self,
+        lifecycle: &RuntimeLifecycle,
+        token: RuntimePhaseToken,
+        stream: impl Into<String>,
+        contract: impl Into<String>,
+        value: Value,
+    ) -> Result<RuntimeUiProjectionEnvelope, RuntimeUiProjectionError> {
+        let prepared = self.prepare_value(lifecycle, token, stream, contract, value)?;
+        self.commit_prepared(lifecycle, prepared)
+    }
+
+    /// Validates an Engine-owned projection value without advancing stream
+    /// sequence evidence or publishing an envelope.
+    pub fn prepare_value(
+        &self,
+        lifecycle: &RuntimeLifecycle,
+        token: RuntimePhaseToken,
+        stream: impl Into<String>,
+        contract: impl Into<String>,
+        value: Value,
+    ) -> Result<PreparedRuntimeUiProjection, RuntimeUiProjectionError> {
+        let prepared = self.prepare_token(lifecycle, token, stream.into(), contract.into())?;
+        validate_value(&value)?;
+        let envelope = RuntimeUiProjectionEnvelope::new(
+            prepared.runtime,
+            prepared.sequence,
+            prepared.stream.clone(),
+            prepared.contract.clone(),
+            value,
+        )?;
+        Ok(PreparedRuntimeUiProjection {
+            token,
+            emission: prepared,
+            envelope,
+        })
+    }
+
+    /// Advances stream evidence for a previously validated envelope.
+    pub fn commit_prepared(
+        &mut self,
+        lifecycle: &RuntimeLifecycle,
+        prepared: PreparedRuntimeUiProjection,
+    ) -> Result<RuntimeUiProjectionEnvelope, RuntimeUiProjectionError> {
+        let current = self.prepare_token(
+            lifecycle,
+            prepared.token,
+            prepared.emission.stream.clone(),
+            prepared.emission.contract.clone(),
+        )?;
+        if current.sequence != prepared.emission.sequence
+            || current.runtime != prepared.emission.runtime
+        {
+            return Err(RuntimeUiProjectionError::LifecycleBindingChanged);
+        }
+        self.last_sequence_by_stream.insert(
+            prepared.envelope.stream().to_owned(),
+            prepared.envelope.sequence(),
+        );
+        self.last_contract_by_stream.insert(
+            prepared.envelope.stream().to_owned(),
+            prepared.envelope.contract().to_owned(),
+        );
+        Ok(prepared.envelope)
+    }
+
     fn prepare<Snapshot>(
         &self,
         lifecycle: &RuntimeLifecycle,
@@ -182,7 +266,29 @@ impl RuntimeUiProjection {
         let token = context.token();
         let context = ProductProjectionContext::new(lifecycle, token, context.snapshot())
             .map_err(map_context_error)?;
+        self.prepare_token(lifecycle, context.token(), stream, contract)
+    }
+
+    fn prepare_token(
+        &self,
+        lifecycle: &RuntimeLifecycle,
+        token: RuntimePhaseToken,
+        stream: String,
+        contract: String,
+    ) -> Result<PreparedEmission, RuntimeUiProjectionError> {
         let runtime = RuntimeUiRuntimeBinding::from(lifecycle);
+        if self.disposed {
+            return Err(RuntimeUiProjectionError::Disposed);
+        }
+        if token.phase() != runtime_lifecycle::RuntimePhase::Projection {
+            return Err(RuntimeUiProjectionError::WrongPhase {
+                expected: runtime_lifecycle::RuntimePhase::Projection,
+                received: token.phase(),
+            });
+        }
+        lifecycle
+            .validate_phase_token(token, runtime_lifecycle::RuntimePhase::Projection)
+            .map_err(RuntimeUiProjectionError::Lifecycle)?;
         if runtime != self.runtime {
             return Err(RuntimeUiProjectionError::RebindRequired {
                 expected: self.runtime,
@@ -200,7 +306,7 @@ impl RuntimeUiProjection {
                 });
             }
         }
-        let sequence = context.step().value();
+        let sequence = token.simulation().step().value();
         match self.last_sequence_by_stream.get(&stream) {
             Some(previous) if sequence == *previous => {
                 return Err(RuntimeUiProjectionError::DuplicateSequence { stream, sequence });
@@ -236,13 +342,21 @@ impl RuntimeUiProjection {
         prepared: PreparedEmission,
         value: Value,
     ) -> Result<RuntimeUiProjectionEnvelope, RuntimeUiProjectionError> {
-        // A product closure cannot normally mutate the lifecycle through this
-        // API, but revalidation makes the publication boundary explicit if it
-        // captures other mutable state or if the API is composed in a larger
-        // owner.
-        let current = self.prepare(
+        self.finish_token(lifecycle, context.token(), prepared, value)
+    }
+
+    fn finish_token(
+        &mut self,
+        lifecycle: &RuntimeLifecycle,
+        token: RuntimePhaseToken,
+        prepared: PreparedEmission,
+        value: Value,
+    ) -> Result<RuntimeUiProjectionEnvelope, RuntimeUiProjectionError> {
+        // A projection producer cannot normally mutate the lifecycle through
+        // this API, but revalidation keeps the publication boundary explicit.
+        let current = self.prepare_token(
             lifecycle,
-            context,
+            token,
             prepared.stream.clone(),
             prepared.contract.clone(),
         )?;

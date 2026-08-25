@@ -145,6 +145,9 @@ pub struct ProductManifestCandidate {
     pub composition_entrypoints: Vec<String>,
     pub lifecycle: LifecycleMode,
     pub realtime: Option<RealtimeClock>,
+    /// Optional Engine-owned live runtime entry. This lane is deliberately
+    /// distinct from legacy Product Kernel source/package declarations.
+    pub runtime_entry: Option<String>,
     pub kernel_entry: Option<String>,
     /// Current-schema packaged Product Kernel manifest.  This is deliberately
     /// separate from `kernel_entry` so a legacy source-linked module cannot
@@ -185,6 +188,7 @@ pub struct ProductManifest {
     composition_entrypoints: Vec<ProductPath>,
     lifecycle: LifecycleMode,
     realtime: Option<RealtimeClock>,
+    runtime_entry: Option<ProductPath>,
     kernel_entry: Option<ProductPath>,
     kernel_package: Option<ProductPath>,
     ui_entry: ProductPath,
@@ -213,6 +217,11 @@ impl ProductManifest {
 
     pub const fn realtime(&self) -> Option<RealtimeClock> {
         self.realtime
+    }
+
+    /// The optional Engine-owned TypeScript runtime entry.
+    pub fn runtime_entry(&self) -> Option<&ProductPath> {
+        self.runtime_entry.as_ref()
     }
 
     pub fn kernel_entry(&self) -> Option<&ProductPath> {
@@ -332,6 +341,15 @@ pub fn validate_product_manifest(
         composition_entrypoints.push(path);
     }
 
+    let runtime_entry = candidate
+        .runtime_entry
+        .map(|value| ProductPath::parse_at(value, SOURCE, "runtime.entry"))
+        .transpose()?;
+    if let Some(path) = &runtime_entry {
+        require_lane(path, "runtime", "runtime.entry")?;
+        source_paths.push(("runtime.entry".to_string(), path.clone()));
+    }
+
     let kernel_entry = candidate
         .kernel_entry
         .map(|value| ProductPath::parse_at(value, SOURCE, "kernel.entry"))
@@ -362,6 +380,14 @@ pub fn validate_product_manifest(
             SOURCE,
             "kernel",
             "declare exactly one of kernel.entry or kernel.package",
+        ));
+    }
+    if runtime_entry.is_some() && (kernel_entry.is_some() || kernel_package.is_some()) {
+        return Err(failure(
+            "PRODUCT_RUNTIME_KERNEL_CONFLICT",
+            SOURCE,
+            "runtime",
+            "runtime.entry cannot be declared with kernel.entry or kernel.package",
         ));
     }
 
@@ -511,6 +537,7 @@ pub fn validate_product_manifest(
         composition_entrypoints,
         lifecycle: candidate.lifecycle,
         realtime: candidate.realtime,
+        runtime_entry,
         kernel_entry,
         kernel_package,
         ui_entry,
@@ -786,6 +813,7 @@ struct RawManifest {
     product: RawProduct,
     runtime_composition: RawRuntimeComposition,
     lifecycle: RawLifecycle,
+    runtime: Option<RawRuntime>,
     kernel: Option<RawKernel>,
     ui: RawUi,
     content: RawContent,
@@ -801,6 +829,7 @@ impl RawManifest {
             composition_entrypoints: self.runtime_composition.entrypoints,
             lifecycle: self.lifecycle.mode,
             realtime: self.lifecycle.realtime,
+            runtime_entry: self.runtime.map(|runtime| runtime.entry),
             kernel_entry: self.kernel.as_ref().and_then(|kernel| kernel.entry.clone()),
             kernel_package: self.kernel.and_then(|kernel| kernel.package),
             ui_entry: self.ui.entry,
@@ -850,6 +879,12 @@ struct RawRuntimeComposition {
 struct RawLifecycle {
     mode: LifecycleMode,
     realtime: Option<RealtimeClock>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRuntime {
+    entry: String,
 }
 
 #[derive(Debug, Deserialize)]

@@ -804,9 +804,12 @@ fn validate_input_map_uses(
     bindings: &[LinkedCapabilityBinding],
 ) -> Result<(), ProductModelError> {
     for (index, descriptor) in admitted.intent_descriptors().iter().enumerate() {
+        let Some(reference) = descriptor.capability() else {
+            continue;
+        };
         let binding = linked_reference(
             bindings,
-            descriptor.capability(),
+            reference,
             &format!("intentDescriptors[{index}].capability"),
         )?;
         require_use(

@@ -299,6 +299,35 @@ fn check_enforces_entrypoint_extensions_and_generated_output_kinds() {
 }
 
 #[test]
+fn layout_check_admits_a_runtime_only_product_and_scans_its_source_lane() {
+    let parent = TempDir::new("runtime-layout");
+    let product = parent.path().join("product");
+    init(&product);
+    let manifest = fs::read_to_string(product.join("rusty.toml"))
+        .unwrap()
+        .replace("[ui]", "[runtime]\nentry = \"runtime/main.ts\"\n\n[ui]");
+    fs::write(product.join("rusty.toml"), manifest).unwrap();
+    fs::create_dir(product.join("runtime")).unwrap();
+    fs::write(
+        product.join("runtime/main.ts"),
+        "export default { initialize() {}, turn() {}, project() {} };\n",
+    )
+    .unwrap();
+
+    let checked = crate::check::check(product.clone());
+    assert_eq!(checked.exit_code, 0);
+
+    fs::write(product.join("runtime/vite.config.mts"), "export {};\n").unwrap();
+    let checked = crate::check::check(product);
+    assert_eq!(checked.exit_code, EXIT_CONFORMANCE);
+    assert!(checked
+        .report
+        .diagnostics
+        .iter()
+        .any(|item| item.code == "RUSTY_PROHIBITED_HOST_PATH"));
+}
+
+#[test]
 fn check_rejects_a_malformed_manifest_without_reimplementing_schema_validation() {
     let parent = TempDir::new("manifest");
     let product = parent.path().join("product");

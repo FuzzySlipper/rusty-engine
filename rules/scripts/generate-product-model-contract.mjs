@@ -55,7 +55,7 @@ function validateDescriptor(value) {
   exactKeys(value.numberEncoding, ['finiteBinary64', 'integer', 'negativeZero'], '$.numberEncoding');
   if (value.numberEncoding.finiteBinary64 !== 'ecmascript-number-to-string' || value.numberEncoding.negativeZero !== '0' || value.numberEncoding.integer !== 'base10') throw new Error('unexpected canonical number contract');
   exactKeys(value.optionalFields, ['intentDescriptor', 'scheduleSystem'], '$.optionalFields');
-  assertArray(value.optionalFields.intentDescriptor, ['payloadContract'], '$.optionalFields.intentDescriptor');
+  assertArray(value.optionalFields.intentDescriptor, ['payloadContract', 'capability'], '$.optionalFields.intentDescriptor');
   assertArray(value.optionalFields.scheduleSystem, ['definition'], '$.optionalFields.scheduleSystem');
   exactKeys(value.schedule, ['defaultCadence', 'modes', 'phases', 'placements'], '$.schedule');
   assertArray(value.schedule.phases, ['input', 'simulation', 'consequences', 'commit', 'projection'], '$.schedule.phases');

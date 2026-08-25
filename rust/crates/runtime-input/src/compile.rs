@@ -1,23 +1,42 @@
 use std::collections::BTreeMap;
 
+use crate::RuntimeInputError;
 use product_model::{InputTrigger, IntentValueKind, LinkedProductComposition};
 use serde_json::Value;
 
-use crate::RuntimeInputError;
-
 /// One linked product intent available to both physical mappings and direct UI
-/// claims. Capability linkage was completed by Product Model before this
-/// compiler accepts it; this crate retains only descriptive readouts.
+/// claims. It retains one optional capability linkage for legacy Product
+/// Kernel execution; VM-local intent descriptors omit it entirely.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledInputIntent {
     descriptor_index: usize,
     id: String,
     value_kind: IntentValueKind,
     payload_contract: Option<String>,
-    capability_id: String,
-    capability_target: String,
-    capability_binding_index: usize,
-    capability_payload: Value,
+    capability: Option<CompiledInputCapabilityLink>,
+    payload: Value,
+}
+
+/// The one optional static capability linkage retained by a compiled input
+/// intent. It is descriptive only: Runtime Input neither invokes it nor turns
+/// it into a service route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledInputCapabilityLink {
+    id: String,
+    target: String,
+    binding_index: usize,
+}
+
+impl CompiledInputCapabilityLink {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    pub fn target(&self) -> &str {
+        &self.target
+    }
+    pub const fn binding_index(&self) -> usize {
+        self.binding_index
+    }
 }
 
 impl CompiledInputIntent {
@@ -34,19 +53,15 @@ impl CompiledInputIntent {
     pub fn payload_contract(&self) -> Option<&str> {
         self.payload_contract.as_deref()
     }
-    pub fn capability_id(&self) -> &str {
-        &self.capability_id
+    pub fn capability(&self) -> Option<&CompiledInputCapabilityLink> {
+        self.capability.as_ref()
     }
-    pub fn capability_target(&self) -> &str {
-        &self.capability_target
-    }
-    pub const fn capability_binding_index(&self) -> usize {
-        self.capability_binding_index
-    }
-    /// Immutable intent-specific capability data admitted with the descriptor.
-    /// It is descriptive readout only; the input lane never interprets it.
-    pub fn capability_payload(&self) -> &Value {
-        &self.capability_payload
+    /// Immutable descriptor payload. It remains data only whether or not this
+    /// intent retains a legacy capability link.
+    pub fn payload(&self) -> &Value {
+        // Product Model already admitted this opaque value before input
+        // compilation. Runtime Input never interprets it.
+        &self.payload
     }
 }
 
@@ -82,14 +97,24 @@ impl CompiledInputMappings {
     pub fn compile(linked: &LinkedProductComposition) -> Result<Self, RuntimeInputError> {
         let mut intents = BTreeMap::new();
         for descriptor in linked.admitted().intent_descriptors() {
-            let capability = linked
-                .capability_binding(descriptor.capability().binding_index())
-                .ok_or(RuntimeInputError::BindingMismatch)?;
-            if capability.id() != descriptor.capability().id()
-                || capability.target() != descriptor.capability().target()
-            {
-                return Err(RuntimeInputError::BindingMismatch);
-            }
+            let capability = descriptor
+                .capability()
+                .map(|reference| {
+                    let capability = linked
+                        .capability_binding(reference.binding_index())
+                        .ok_or(RuntimeInputError::BindingMismatch)?;
+                    if capability.id() != reference.id()
+                        || capability.target() != reference.target()
+                    {
+                        return Err(RuntimeInputError::BindingMismatch);
+                    }
+                    Ok(CompiledInputCapabilityLink {
+                        id: reference.id().to_owned(),
+                        target: reference.target().to_owned(),
+                        binding_index: reference.binding_index(),
+                    })
+                })
+                .transpose()?;
             intents.insert(
                 descriptor.id().to_owned(),
                 CompiledInputIntent {
@@ -97,10 +122,8 @@ impl CompiledInputMappings {
                     id: descriptor.id().to_owned(),
                     value_kind: descriptor.value_kind(),
                     payload_contract: descriptor.payload_contract().map(str::to_owned),
-                    capability_id: descriptor.capability().id().to_owned(),
-                    capability_target: descriptor.capability().target().to_owned(),
-                    capability_binding_index: descriptor.capability().binding_index(),
-                    capability_payload: descriptor.payload().clone(),
+                    capability,
+                    payload: descriptor.payload().clone(),
                 },
             );
         }

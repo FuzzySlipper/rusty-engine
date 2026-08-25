@@ -54,11 +54,35 @@ pub(crate) fn check(start: PathBuf) -> Execution {
         report: Report::success().with_facts(vec![
             Fact::new("check.product", admitted.manifest().product_id()),
             Fact::new("check.authoring", "admitted"),
-            Fact::new("check.capabilities", "compiled and linked"),
+            Fact::new(
+                "check.capabilities",
+                check_capabilities_fact(admitted.manifest()),
+            ),
+            Fact::new("check.runtime", check_runtime_fact(admitted.manifest())),
             Fact::new("check.content", "admitted"),
             Fact::new("check.generatedAssembly", generated),
         ]),
         exit_code: 0,
+    }
+}
+
+fn check_capabilities_fact(manifest: &product_model::ProductManifest) -> &'static str {
+    if manifest.runtime_entry().is_some() {
+        "not required for engine-vm runtime"
+    } else if manifest.has_kernel() {
+        "compiled and linked"
+    } else {
+        "not declared"
+    }
+}
+
+fn check_runtime_fact(manifest: &product_model::ProductManifest) -> &'static str {
+    if manifest.runtime_entry().is_some() {
+        "engine-vm; admitted"
+    } else if manifest.has_kernel() {
+        "product-kernel; capabilities compiled and linked"
+    } else {
+        "not declared"
     }
 }
 
@@ -977,6 +1001,51 @@ fn usage_failed(diagnostic: Diagnostic) -> Execution {
     Execution {
         report: Report::failure("error", diagnostic),
         exit_code: crate::EXIT_USAGE,
+    }
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use product_model::decode_product_manifest;
+
+    use super::{check_capabilities_fact, check_runtime_fact};
+
+    #[test]
+    fn check_facts_identify_the_engine_vm_without_a_kernel_probe() {
+        let manifest = decode_product_manifest(
+            r#"
+[product]
+id = "rusty.runtime.test"
+
+[runtime_composition]
+entrypoints = ["rules/main.ts"]
+
+[lifecycle]
+mode = "demand"
+
+[runtime]
+entry = "runtime/main.ts"
+
+[ui]
+entry = "ui/main.ts"
+
+[content]
+root = "content"
+
+[outputs]
+compiled_composition = "generated/compiled-composition.json"
+admitted_runtime_content = "generated/runtime-content"
+product_assembly = "generated/product-assembly"
+product_bundle = "generated/product-bundle"
+"#,
+        )
+        .expect("runtime-only manifest");
+
+        assert_eq!(check_runtime_fact(&manifest), "engine-vm; admitted");
+        assert_eq!(
+            check_capabilities_fact(&manifest),
+            "not required for engine-vm runtime"
+        );
     }
 }
 

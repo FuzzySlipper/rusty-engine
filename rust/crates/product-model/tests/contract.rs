@@ -103,6 +103,7 @@ fn checked_minimum_product_layout_is_valid_and_fixed() {
         "rules/main.ts"
     );
     assert_eq!(manifest.kernel_entry().unwrap().as_str(), "kernel/lib.rs");
+    assert!(manifest.runtime_entry().is_none());
     assert_eq!(manifest.ui_entry().as_str(), "ui/main.ts");
     assert_eq!(manifest.content_root().as_str(), "content");
     assert_eq!(
@@ -149,6 +150,7 @@ fn direct_and_decoded_manifest_validation_converge() {
         composition_entrypoints: vec!["rules/main.ts".into()],
         lifecycle: LifecycleMode::Realtime,
         realtime: Some(RealtimeClock::new(60, 4)),
+        runtime_entry: None,
         kernel_entry: Some("kernel/lib.rs".into()),
         kernel_package: None,
         ui_entry: "ui/main.ts".into(),
@@ -176,6 +178,44 @@ fn direct_and_decoded_manifest_validation_converge() {
     })
     .unwrap();
     assert_eq!(decoded, direct);
+}
+
+#[test]
+fn runtime_layout_is_optional_disjoint_from_kernel_and_protects_generated_outputs() {
+    let runtime = MANIFEST.replace(
+        "[kernel]\nentry = \"kernel/lib.rs\"\n",
+        "[runtime]\nentry = \"runtime/main.ts\"\n",
+    );
+    let manifest = decode_product_manifest(&runtime).expect("runtime manifest");
+    assert_eq!(
+        manifest.runtime_entry().expect("runtime entry").as_str(),
+        "runtime/main.ts"
+    );
+    assert!(!manifest.has_kernel());
+
+    let conflict = runtime.replace(
+        "[runtime]\nentry = \"runtime/main.ts\"\n",
+        "[runtime]\nentry = \"runtime/main.ts\"\n\n[kernel]\nentry = \"kernel/lib.rs\"\n",
+    );
+    assert_eq!(
+        decode_product_manifest(&conflict)
+            .expect_err("runtime and kernel conflict")
+            .diagnostic()
+            .code(),
+        "PRODUCT_RUNTIME_KERNEL_CONFLICT"
+    );
+
+    let invalid_output_lane = runtime.replace(
+        "product_bundle = \"generated/product-bundle\"",
+        "product_bundle = \"runtime\"",
+    );
+    assert_eq!(
+        decode_product_manifest(&invalid_output_lane)
+            .expect_err("runtime lane cannot become generated output")
+            .diagnostic()
+            .code(),
+        "PRODUCT_FIXED_LANE"
+    );
 }
 
 #[test]
@@ -629,7 +669,10 @@ fn product_composition_admission_links_checked_artifact_to_layout_immutably() {
         0
     );
     assert_eq!(
-        from_checked.intent_descriptors()[0].capability().target(),
+        from_checked.intent_descriptors()[0]
+            .capability()
+            .expect("linked capability")
+            .target(),
         "kernel.camera-look"
     );
     assert_eq!(from_checked.schedule()[1].systems()[0].id(), "movement");
@@ -668,6 +711,22 @@ fn product_composition_admission_links_checked_artifact_to_layout_immutably() {
     assert_eq!(from_checked.capability_bindings()[0].id(), "camera.look");
     assert_eq!(from_checked.capability_bindings()[0].index(), 0);
     assert_eq!(from_checked.composition().canonical_bytes(), COMPOSITION);
+}
+
+#[test]
+fn kernel_layouts_retain_required_intent_capability_admission() {
+    let manifest = decode_product_manifest(MANIFEST).unwrap();
+    let mut candidate = minimum_candidate();
+    candidate.intent_descriptors[0].capability = None;
+    let checked = validate_compiled_composition(candidate).unwrap();
+
+    assert_eq!(
+        admit_checked_product_composition(&manifest, checked)
+            .unwrap_err()
+            .diagnostic()
+            .code(),
+        "PRODUCT_COMPOSITION_INTENT_CAPABILITY_REQUIRED"
+    );
 }
 
 #[test]
@@ -1082,7 +1141,7 @@ fn composition_rejects_wrong_capability_kind_and_unsafe_payloads() {
 #[test]
 fn diagnostics_preserve_source_path_code_and_action() {
     let mut candidate = minimum_candidate();
-    candidate.intent_descriptors[0].capability = "missing".into();
+    candidate.intent_descriptors[0].capability = Some("missing".into());
     let diagnostic = validate_compiled_composition(candidate)
         .unwrap_err()
         .diagnostic()
@@ -1103,7 +1162,7 @@ fn minimum_candidate() -> CompiledCompositionCandidate {
             id: "look".into(),
             value_kind: IntentValueKind::Axis,
             payload_contract: None,
-            capability: "camera.look".into(),
+            capability: Some("camera.look".into()),
             payload: json!({"axis": "x"}),
         }],
         input_map: vec![InputMapEntry {

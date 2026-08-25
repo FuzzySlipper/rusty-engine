@@ -11,7 +11,9 @@ mod lane;
 mod model;
 mod wire;
 
-pub use compile::{CompiledInputIntent, CompiledInputMapping, CompiledInputMappings};
+pub use compile::{
+    CompiledInputCapabilityLink, CompiledInputIntent, CompiledInputMapping, CompiledInputMappings,
+};
 pub use lane::RuntimeInputLane;
 pub use model::{
     parse_canonical_u64, AxisValue, ButtonSnapshot, InputClearReason, InputContext, InputFrame,

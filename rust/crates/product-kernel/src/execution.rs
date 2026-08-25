@@ -283,8 +283,14 @@ pub fn validate_product_kernel_execution<D: ProductKernelDeclaration>(
     }
 
     for (intent_index, intent) in linked.admitted().intent_descriptors().iter().enumerate() {
+        let Some(reference) = intent.capability() else {
+            // VM-local intents have no Product Kernel execution link to
+            // validate. Kernel manifests cannot reach this branch because
+            // Product Model admission still requires their linkage.
+            continue;
+        };
         let binding = linked
-            .capability_binding(intent.capability().binding_index())
+            .capability_binding(reference.binding_index())
             .expect("Product Model admitted references have linked indices");
         if matches!(
             binding.resolved_target(),

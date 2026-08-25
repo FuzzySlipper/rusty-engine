@@ -552,6 +552,111 @@ fn generated_package_compiles_with_direct_relocatable_engine_path() {
 }
 
 #[test]
+fn generated_vm_product_initializes_and_preserves_state_across_two_demand_turns() {
+    let fixture = Fixture::new("generated-vm");
+    let manifest_text = MANIFEST.replace(
+        "[ui]\nentry = \"ui/main.ts\"",
+        "[runtime]\nentry = \"runtime/main.ts\"\n\n[ui]\nentry = \"ui/main.ts\"\nprojection_stream = \"rusty.test.ui\"\nprojection_contract = \"rusty.test.ui.v1\"",
+    );
+    fs::create_dir_all(fixture.root.join("runtime")).expect("runtime source");
+    fs::write(fixture.root.join("rusty.toml"), &manifest_text).expect("VM manifest");
+    fs::write(
+        fixture.root.join("runtime/main.ts"),
+        "export default { initialize: () => ({ count: 0 }), turn: ({ state }) => ({ count: state.count + 1 }), project: ({ state }) => ({ ui: { count: state.count } }) };\n",
+    )
+    .expect("runtime source");
+    let manifest = decode_product_manifest(&manifest_text).expect("VM manifest admission");
+    let generated_package = fixture.root.join("generated/product-assembly");
+    let engine_package = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../rusty-engine");
+    let program = br#"globalThis.__rustyEngineRuntime = {
+  initialize() { return { count: 0 }; },
+  turn({ state, step }) { return { count: state.count + 1, step: step.sequence }; },
+  project({ state }) {
+    if (state.step === 1) return { ui: { count: state.count }, render: { malformed: true } };
+    return { ui: { count: state.count } };
+  },
+};
+"#;
+    let inputs = fixture
+        .inputs()
+        .with_engine_dependency_path(relative_path(&generated_package, &engine_package))
+        .expect("engine dependency path")
+        .with_runtime_program(program.to_vec())
+        .expect("runtime program");
+    let plan = plan_product_assembly(&fixture.root, &manifest, &inputs).expect("VM plan");
+    assert_eq!(
+        plan.source_plan().runtime_program_path(),
+        Some("runtime/main.js")
+    );
+    assert!(std::str::from_utf8(plan.source_plan().cargo_toml())
+        .expect("VM Cargo")
+        .contains("rusty-engine"));
+    assert!(!std::str::from_utf8(plan.source_plan().cargo_toml())
+        .expect("VM Cargo")
+        .contains("product-kernel"));
+    assert!(plan.receipt().entries().iter().any(|entry| {
+        entry.kind() == AssemblyEntryKind::ExecutableWorkspace
+            && entry.path() == "generated/product-assembly/runtime/main.js"
+    }));
+    plan.publish(&fixture.root).expect("VM publish");
+
+    let consumer = fixture.root.join("generated/vm-consumer");
+    fs::create_dir_all(consumer.join("src")).expect("consumer source directory");
+    fs::write(
+        consumer.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"vm-consumer\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\nrusty-product = {{ package = \"rusty-product-rusty-test\", path = \"../product-assembly\" }}\nrusty-engine = {{ path = \"{}\" }}\nserde_json = \"1\"\n\n[workspace]\n",
+            relative_path(&consumer, &engine_package)
+        ),
+    )
+    .expect("consumer manifest");
+    fs::write(
+        consumer.join("src/main.rs"),
+        r###"use rusty_engine::product_dev_host::{ProductDevLifecycleOperation, ProductDevRuntime};
+
+fn assert_projection(
+    receipt: rusty_engine::product_dev_host::ProductDevRuntimeReceipt<rusty_engine::product_dev_host::ProductDevOperationResult>,
+    expected: u64,
+) {
+    let (_, outputs) = receipt.into_parts();
+    let encoded = serde_json::to_string(&outputs).expect("outputs encode");
+    assert!(encoded.contains(&format!(r#""count":{expected}"#)), "projection output: {encoded}");
+    assert!(encoded.contains(r#""stream":"rusty.test.ui""#), "projection stream: {encoded}");
+}
+
+fn main() {
+    let mut runtime = rusty_product::product::GeneratedProductDevRuntime::new().expect("runtime");
+    runtime.lifecycle(ProductDevLifecycleOperation::Start).expect("start");
+    assert_projection(runtime.admit_demand_step().expect("first turn"), 1);
+    runtime.lifecycle(ProductDevLifecycleOperation::Pause).expect("pause");
+    runtime.lifecycle(ProductDevLifecycleOperation::Resume).expect("resume");
+    let rejected = runtime.admit_demand_step().expect("rejected turn receipt");
+    let (result, _) = rejected.into_parts();
+    assert!(format!("{result:?}").contains("accepted: false"), "rejected result: {result:?}");
+    assert_projection(runtime.admit_demand_step().expect("second committed turn"), 2);
+}
+"###,
+    )
+    .expect("consumer source");
+    let status = std::process::Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--manifest-path",
+            consumer
+                .join("Cargo.toml")
+                .to_str()
+                .expect("consumer manifest"),
+            "--offline",
+        ])
+        .env("CARGO_TARGET_DIR", fixture.root.join("generated/vm-target"))
+        .status()
+        .expect("run VM generated product");
+    assert!(status.success(), "VM generated product failed: {status}");
+    fixture.cleanup();
+}
+
+#[test]
 fn generated_package_compiles_with_fixed_kernel_runtime_definition() {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -310,7 +310,8 @@ export const PRODUCT_MODEL_NUMBER_ENCODING = {
 } as const;
 export const PRODUCT_MODEL_OPTIONAL_FIELDS = {
   "intentDescriptor": [
-    "payloadContract"
+    "payloadContract",
+    "capability"
   ],
   "scheduleSystem": [
     "definition"

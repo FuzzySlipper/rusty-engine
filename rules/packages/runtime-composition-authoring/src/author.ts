@@ -127,7 +127,7 @@ export function kernelCapability(id: string, target: string): CapabilityBinding 
 /** Names an intent; it is a schema-checked identity, not an event bus route. */
 export function intent(id: string): string { return identity(id, '$.intent'); }
 
-/** Describes one typed intent and its one admitted capability target. */
+/** Describes one typed intent with an optional legacy capability target. */
 export function productIntent(draft: ProductIntentDescriptorDraft): ProductIntentDescriptor {
   return admitIntentDescriptor(draft, '$.productIntent', undefined, { nodes: 0 });
 }
@@ -378,8 +378,10 @@ function admitIntentDescriptors(values: readonly unknown[], path: string, capabi
 function admitIntentDescriptor(value: unknown, path: string, capabilities: ReadonlySet<string> | undefined, budget: JsonState): ProductIntentDescriptor {
   const source = record(value, path);
   known(source, PRODUCT_MODEL_FIELDS.intentDescriptor, path);
-  const capability = identity(requiredString(source, 'capability', path), `${path}.capability`);
-  if (capabilities !== undefined && !capabilities.has(capability)) fail('unknown-capability', `${path}.capability`, `capability ${capability} is not declared`);
+  const capability = source['capability'] === undefined
+    ? undefined
+    : identity(requiredString(source, 'capability', path), `${path}.capability`);
+  if (capability !== undefined && capabilities !== undefined && !capabilities.has(capability)) fail('unknown-capability', `${path}.capability`, `capability ${capability} is not declared`);
   const valueKind = requiredString(source, 'valueKind', path);
   if (!(PRODUCT_MODEL_INPUT.intentValueKinds as readonly string[]).includes(valueKind)) fail('invalid-input-value-kind', `${path}.valueKind`, 'intent valueKind must be digital, axis, or product-payload');
   const payloadContract = source['payloadContract'];
@@ -392,7 +394,7 @@ function admitIntentDescriptor(value: unknown, path: string, capabilities: Reado
     id: identity(requiredString(source, 'id', path), `${path}.id`),
     valueKind: valueKind as ProductIntentDescriptor['valueKind'],
     ...(payloadContract === undefined ? {} : { payloadContract: identity(requiredString(source, 'payloadContract', path), `${path}.payloadContract`) }),
-    capability,
+    ...(capability === undefined ? {} : { capability }),
     payload: normalizeWithBudget(required(source, 'payload', path), `${path}.payload`, budget),
   });
 }
@@ -754,7 +756,10 @@ function writeIntentDescriptor(value: ProductIntentDescriptor): string {
   const payloadContract = value.payloadContract === undefined
     ? ''
     : `,"payloadContract":${JSON.stringify(value.payloadContract)}`;
-  return `{"id":${JSON.stringify(value.id)},"valueKind":${JSON.stringify(value.valueKind)}${payloadContract},"capability":${JSON.stringify(value.capability)},"payload":${writeCanonicalJson(value.payload)}}`;
+  const capability = value.capability === undefined
+    ? ''
+    : `,"capability":${JSON.stringify(value.capability)}`;
+  return `{"id":${JSON.stringify(value.id)},"valueKind":${JSON.stringify(value.valueKind)}${payloadContract}${capability},"payload":${writeCanonicalJson(value.payload)}}`;
 }
 function writeInputMapEntry(value: InputMapEntry): string {
   return `{"id":${JSON.stringify(value.id)},"intent":${JSON.stringify(value.intent)},"trigger":${writeCanonicalJson(value.trigger as unknown as JsonValue)}}`;

@@ -2,10 +2,10 @@
 //!
 //! This is deliberately a small command-side composition owner.  It discovers
 //! an explicit product, converts only the Engine-owned authoring/browser
-//! artifacts to immutable materializer inputs, asks the compiled Product
-//! Kernel contract for its capabilities, then plans or verifies the exact
-//! generated assembly.  Product code never reaches back into this checkout at
-//! runtime: the only paths rendered into an assembly are product-relative
+//! artifacts to immutable materializer inputs, optionally asks the legacy
+//! Product Kernel contract for its capabilities, then plans or verifies the
+//! exact generated assembly. Product code never reaches back into this checkout
+//! at runtime: the only paths rendered into an assembly are product-relative
 //! Cargo dependencies.
 
 use std::{

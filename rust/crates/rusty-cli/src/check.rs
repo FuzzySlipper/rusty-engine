@@ -226,6 +226,15 @@ fn check_required_layout(
         );
         require_contained_file(root, entrypoint, "RUSTY_LAYOUT_ENTRYPOINT", diagnostics);
     }
+    if let Some(entrypoint) = manifest.runtime_entry() {
+        require_extension(
+            entrypoint,
+            ".ts",
+            "RUSTY_LAYOUT_RUNTIME_EXTENSION",
+            diagnostics,
+        );
+        require_contained_file(root, entrypoint, "RUSTY_LAYOUT_ENTRYPOINT", diagnostics);
+    }
     if let Some(entrypoint) = manifest.kernel_entry() {
         require_extension(
             entrypoint,
@@ -506,7 +515,7 @@ fn check_prohibited_host_paths(root: &Path, diagnostics: &mut Vec<Diagnostic>) {
             format!("cannot inspect root host paths: {error}"),
         )),
     }
-    for lane in ["rules", "ui", "kernel"] {
+    for lane in ["rules", "runtime", "ui", "kernel"] {
         scan_host_paths(root, &root.join(lane), diagnostics);
     }
 }

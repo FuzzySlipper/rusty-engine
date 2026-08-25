@@ -186,6 +186,27 @@ test('typed W mapping resolves to one admitted move.forward descriptor', () => {
   }), 'input-trigger-value-kind');
 });
 
+test('VM-local typed intent snapshots without a Product Kernel capability', () => {
+  const artifact = authorRuntimeComposition({
+    product: 'example.product',
+    capabilities: [],
+    intentDescriptors: [productIntent({
+      id: 'move.forward', valueKind: 'digital', payload: { semantic: 'move-forward' },
+    })],
+    inputMap: [inputAction({
+      id: 'w-forward', intent: 'move.forward',
+      trigger: { kind: 'key', code: 'key-w', edge: 'pressed', context: 'gameplay' },
+    })],
+    schedule: schedule({}),
+    gameplayDefinitions: [],
+    timelines: [],
+  });
+  assert.equal(
+    artifact.canonicalJson,
+    '{"product":"example.product","intentDescriptors":[{"id":"move.forward","valueKind":"digital","payload":{"semantic":"move-forward"}}],"inputMap":[{"id":"w-forward","intent":"move.forward","trigger":{"code":"key-w","context":"gameplay","edge":"pressed","kind":"key"}}],"schedule":[{"phase":"input","mode":"append","systems":[]},{"phase":"simulation","mode":"append","systems":[]},{"phase":"consequences","mode":"append","systems":[]},{"phase":"commit","mode":"append","systems":[]},{"phase":"projection","mode":"append","systems":[]}],"gameplayDefinitions":[],"timelines":[],"capabilityBindings":[]}\n',
+  );
+});
+
 test('authoring materializes only detached plain data', () => {
   const artifact = minimumArtifact();
   const left = compiledCompositionBytes(artifact);

@@ -189,8 +189,9 @@ fn inspect_composition(builder: &mut InspectionBuilder, request: &InspectionRequ
         "product-model",
         "rusty.toml",
         format!(
-            "entrypoints={}; kernel={}; ui={}; content={}",
+            "entrypoints={}; runtime={}; kernel={}; ui={}; content={}",
             request.manifest.composition_entrypoints().len(),
+            optional_path(request.manifest.runtime_entry()),
             optional_path(request.manifest.kernel_entry()),
             request.manifest.ui_entry().as_str(),
             request.manifest.content_root().as_str(),
@@ -253,7 +254,10 @@ fn inspect_composition(builder: &mut InspectionBuilder, request: &InspectionRequ
 
 fn inspect_input(builder: &mut InspectionBuilder, request: &InspectionRequest<'_>) {
     for descriptor in request.admitted.intent_descriptors() {
-        let capability = capability_label(request.linked, descriptor.capability().binding_index());
+        let capability = descriptor
+            .capability()
+            .map(|capability| capability_label(request.linked, capability.binding_index()))
+            .unwrap_or_else(|| "none".to_owned());
         builder.fact(
             format!("input.intents[{}]", descriptor.index()),
             "runtime-input",

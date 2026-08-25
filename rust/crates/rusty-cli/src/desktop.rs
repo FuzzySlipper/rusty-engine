@@ -3509,6 +3509,7 @@ mod tests {
             })
             .collect();
         product_model::validate_product_manifest(ProductManifestCandidate {
+            runtime_entry: None,
             product_id: "rusty.desktop.test".to_owned(),
             composition_entrypoints: vec!["rules/main.ts".to_owned()],
             lifecycle: LifecycleMode::Realtime,

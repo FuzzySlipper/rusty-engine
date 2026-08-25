@@ -42,7 +42,7 @@ fn product_model_contract_descriptor() -> Value {
         },
         "optionalFields": {
             "scheduleSystem": ["definition"],
-            "intentDescriptor": ["payloadContract"]
+            "intentDescriptor": ["payloadContract", "capability"]
         },
         "limits": {
             "maximumEncodedBytes": MAX_COMPILED_COMPOSITION_BYTES,

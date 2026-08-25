@@ -102,14 +102,15 @@ impl AdmittedDefinitionReference {
     }
 }
 
-/// One descriptor for a semantic product intent with a resolved capability.
+/// One descriptor for a semantic product intent with an optional resolved
+/// capability. VM-local intents retain no Product Kernel linkage.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AdmittedIntentDescriptor {
     index: usize,
     id: String,
     value_kind: IntentValueKind,
     payload_contract: Option<String>,
-    capability: AdmittedCapabilityReference,
+    capability: Option<AdmittedCapabilityReference>,
     payload: Value,
 }
 
@@ -129,8 +130,8 @@ impl AdmittedIntentDescriptor {
     pub fn payload_contract(&self) -> Option<&str> {
         self.payload_contract.as_deref()
     }
-    pub fn capability(&self) -> &AdmittedCapabilityReference {
-        &self.capability
+    pub fn capability(&self) -> Option<&AdmittedCapabilityReference> {
+        self.capability.as_ref()
     }
     pub fn payload(&self) -> &Value {
         &self.payload
@@ -444,17 +445,31 @@ pub fn admit_checked_product_composition(
         .iter()
         .enumerate()
         .map(|(index, descriptor)| {
+            if descriptor.capability.is_none() && manifest.runtime_entry().is_none() {
+                return Err(failure(
+                    "PRODUCT_COMPOSITION_INTENT_CAPABILITY_REQUIRED",
+                    SOURCE,
+                    format!("intentDescriptors[{index}].capability"),
+                    "intent descriptors require a capability binding unless the Product Layout selects runtime.entry",
+                ));
+            }
             Ok(AdmittedIntentDescriptor {
                 index,
                 id: descriptor.id.clone(),
                 value_kind: descriptor.value_kind,
                 payload_contract: descriptor.payload_contract.clone(),
-                capability: resolve_capability(
-                    &descriptor.capability,
-                    &capability_indices,
-                    &capability_bindings,
-                    &format!("intentDescriptors[{index}].capability"),
-                )?,
+                capability: descriptor
+                    .capability
+                    .as_deref()
+                    .map(|capability| {
+                        resolve_capability(
+                            capability,
+                            &capability_indices,
+                            &capability_bindings,
+                            &format!("intentDescriptors[{index}].capability"),
+                        )
+                    })
+                    .transpose()?,
                 payload: descriptor.payload.clone(),
             })
         })

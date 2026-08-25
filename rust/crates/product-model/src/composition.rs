@@ -72,9 +72,11 @@ pub struct InputMapEntry {
     pub trigger: InputTrigger,
 }
 
-/// One typed product intent. The descriptor, rather than a particular physical
-/// mapping, owns the closed capability linkage and capability-specific data so
-/// direct UI claims and physical controls always converge on one target.
+/// One typed product intent. A descriptor may optionally retain one closed
+/// capability linkage for legacy Product Kernel execution. Engine-owned VM
+/// products use the same typed intent and mapping shape without a capability
+/// binding; physical controls and direct UI claims still converge on the one
+/// descriptor identity.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProductIntentDescriptor {
@@ -84,7 +86,8 @@ pub struct ProductIntentDescriptor {
     /// product-payload intent. It is not a capability target or dispatch key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload_contract: Option<String>,
-    pub capability: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability: Option<String>,
     pub payload: Value,
 }
 
@@ -786,11 +789,9 @@ fn validate_intent_descriptors(
             }
             (_, None) => {}
         }
-        require_capability(
-            &descriptor.capability,
-            capabilities,
-            &format!("{prefix}.capability"),
-        )?;
+        if let Some(capability) = &descriptor.capability {
+            require_capability(capability, capabilities, &format!("{prefix}.capability"))?;
+        }
         validate_opaque_json(
             &descriptor.payload,
             &format!("{prefix}.payload"),
@@ -1539,8 +1540,10 @@ fn encode_canonical_composition(candidate: &CompiledCompositionCandidate) -> Vec
             write_field_name(&mut output, &mut descriptor_first, "payloadContract");
             write_json_string(&mut output, contract);
         }
-        write_field_name(&mut output, &mut descriptor_first, "capability");
-        write_json_string(&mut output, &descriptor.capability);
+        if let Some(capability) = &descriptor.capability {
+            write_field_name(&mut output, &mut descriptor_first, "capability");
+            write_json_string(&mut output, capability);
+        }
         write_field_name(&mut output, &mut descriptor_first, "payload");
         write_canonical_json(&mut output, &descriptor.payload);
         output.push(b'}');

@@ -63,6 +63,34 @@ fn context_and_typed_projection_emit_owned_deterministic_envelope() {
 }
 
 #[test]
+fn direct_value_projection_uses_the_same_lifecycle_and_stream_guards() {
+    let mut lifecycle = fresh_lifecycle();
+    let token = projection_token(&mut lifecycle);
+    let mut lane = RuntimeUiProjection::bind(&lifecycle).expect("bind");
+    let envelope = lane
+        .emit_value(
+            &lifecycle,
+            token,
+            "stealth.hud",
+            "stealth.ui.snapshot.v1",
+            serde_json::json!({"selected": "target-1"}),
+        )
+        .expect("direct value projection");
+    assert_eq!(envelope.sequence(), 0);
+    assert_eq!(envelope.value()["selected"], "target-1");
+    assert!(matches!(
+        lane.emit_value(
+            &lifecycle,
+            token,
+            "stealth.hud",
+            "stealth.ui.snapshot.v1",
+            serde_json::json!({}),
+        ),
+        Err(RuntimeUiProjectionError::DuplicateSequence { .. })
+    ));
+}
+
+#[test]
 fn strict_decode_rejects_unknown_trailing_and_noncanonical_values() {
     let valid = br#"{"artifact":"rusty.product.ui-projection","runtime":{"instanceId":"33","generation":"1","controlRevision":"1"},"sequence":"0","stream":"stealth.hud","contract":"stealth.ui.snapshot.v1","value":{}}"#;
     assert!(RuntimeUiProjectionEnvelope::decode_json(valid).is_ok());

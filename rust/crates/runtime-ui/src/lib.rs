@@ -16,7 +16,7 @@
 mod channel;
 mod model;
 
-pub use channel::RuntimeUiProjection;
+pub use channel::{PreparedRuntimeUiProjection, RuntimeUiProjection};
 pub use model::{
     decode_runtime_ui_projection_json, encode_runtime_ui_projection_json,
     RuntimeUiProjectionEnvelope, RuntimeUiProjectionError, RuntimeUiProjectionReadout,

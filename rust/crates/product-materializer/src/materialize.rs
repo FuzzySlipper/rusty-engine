@@ -182,6 +182,7 @@ impl Default for MaterializationLimits {
 pub struct MaterializedProduct {
     compiled_composition: Vec<u8>,
     browser_bundle_files: Vec<PublicationFile>,
+    runtime_program: Option<Vec<u8>>,
 }
 impl MaterializedProduct {
     pub fn compiled_composition(&self) -> &[u8] {
@@ -191,12 +192,22 @@ impl MaterializedProduct {
         &self.browser_bundle_files
     }
 
+    /// The optional single-file program for the Engine-owned runtime VM.
+    /// Product Assembly integration remains a separate owner boundary.
+    pub fn runtime_program(&self) -> Option<&[u8]> {
+        self.runtime_program.as_deref()
+    }
+
     /// Converts the immutable materialization receipt into the exact typed
     /// fresh input required by Product Assembly; no generated output is read.
     pub fn assembly_inputs(&self) -> Result<AssemblyGenerationInputs, ProductAssemblyError> {
         let bundle = BrowserBundleInputs::new("ui/main.js", self.browser_bundle_files.clone())?;
-        AssemblyGenerationInputs::new(self.compiled_composition.clone())?
-            .with_browser_bundle(bundle)
+        let mut inputs = AssemblyGenerationInputs::new(self.compiled_composition.clone())?
+            .with_browser_bundle(bundle)?;
+        if let Some(program) = &self.runtime_program {
+            inputs = inputs.with_runtime_program(program.clone())?;
+        }
+        Ok(inputs)
     }
 }
 
@@ -367,6 +378,9 @@ fn materialize_in(
     for entry in manifest.composition_entrypoints() {
         closure_compiler.copy(entry, &authoring_allowed)?;
     }
+    if let Some(entry) = manifest.runtime_entry() {
+        closure_compiler.copy(entry, &BTreeSet::new())?;
+    }
     closure_compiler.copy(manifest.ui_entry(), &ui_allowed)?;
     let rules_typecheck = temp.join("rules-typecheck.mjs");
     fs::write(&rules_typecheck, TYPECHECKER)
@@ -444,6 +458,18 @@ fn materialize_in(
         ));
     }
     let compiled_composition = encode_compiled_composition(&composition);
+    let runtime_program = match manifest.runtime_entry() {
+        Some(entry) => Some(bundle_runtime_program(
+            entry,
+            temp,
+            &toolchain.node,
+            &toolchain.vite,
+            &typescript,
+            &scanner,
+            limits,
+        )?),
+        None => None,
+    };
     let ui_out = out.join("ui");
     let config = temp.join("vite.config.mjs");
     fs::write(&config, vite_config(manifest.ui_entry().as_str(), &ui_out))
@@ -600,7 +626,88 @@ fn materialize_in(
     Ok(MaterializedProduct {
         compiled_composition,
         browser_bundle_files,
+        runtime_program,
     })
+}
+
+fn bundle_runtime_program(
+    entry: &ProductPath,
+    temp: &Path,
+    node: &Path,
+    vite: &Path,
+    typescript: &Path,
+    scanner: &Path,
+    limits: MaterializationLimits,
+) -> Result<Vec<u8>, MaterializationError> {
+    let typecheck = temp.join("runtime-typecheck.mjs");
+    fs::write(&typecheck, TYPECHECKER)
+        .map_err(|e| io_fail("MATERIALIZER_TEMP_WRITE", &typecheck, e))?;
+    let source_entry = entry.as_str().replace(".ts", ".js");
+    let contract = temp.join("runtime-contract.ts");
+    fs::write(
+        &contract,
+        format!(
+            "import runtime from './src/{source_entry}';\ntype RuntimeExport = {{ initialize: CallableFunction; turn: CallableFunction; project: CallableFunction; }};\nconst checked: RuntimeExport = runtime;\nvoid checked;\n"
+        ),
+    )
+    .map_err(|e| io_fail("MATERIALIZER_TEMP_WRITE", &contract, e))?;
+    let output = run_node(
+        node,
+        &typecheck,
+        &[
+            typescript.as_os_str(),
+            temp.join("src/runtime").as_os_str(),
+            OsStr::new("runtime"),
+            contract.as_os_str(),
+        ],
+        temp,
+        limits,
+    )?;
+    check_output("MATERIALIZER_RUNTIME_TYPECHECK", "runtime", output)?;
+
+    let wrapper = temp.join("runtime-entry.ts");
+    fs::write(
+        &wrapper,
+        format!(
+            "import runtime from './src/{source_entry}';\nconst {{ initialize, turn, project }} = runtime;\nif (typeof initialize !== 'function' || typeof turn !== 'function' || typeof project !== 'function') throw new Error('runtime default export must provide initialize, turn, and project functions');\nglobalThis.__rustyEngineRuntime = {{ initialize, turn, project }};\n"
+        ),
+    )
+    .map_err(|e| io_fail("MATERIALIZER_TEMP_WRITE", &wrapper, e))?;
+    let runtime_out = temp.join("out/runtime");
+    let config = temp.join("runtime-vite.config.mjs");
+    fs::write(&config, runtime_vite_config(&wrapper, &runtime_out))
+        .map_err(|e| io_fail("MATERIALIZER_TEMP_WRITE", &config, e))?;
+    let output = run_trusted_node(
+        node,
+        vite,
+        &[
+            OsStr::new("build"),
+            OsStr::new("--config"),
+            config.as_os_str(),
+        ],
+        temp,
+        limits,
+    )?;
+    check_output("MATERIALIZER_RUNTIME_BUILD", "runtime", output)?;
+    let files = collect_output(&runtime_out, "runtime")?;
+    if files.len() != 1 || !files[0].relative_path().as_str().ends_with(".js") {
+        return Err(fail(
+            "MATERIALIZER_RUNTIME_BUNDLE",
+            "runtime",
+            "runtime build must emit exactly one JavaScript program",
+        ));
+    }
+    validate_emitted_modules(
+        &files,
+        &temp.join("runtime-module-check"),
+        scanner,
+        node,
+        typescript,
+        temp,
+        limits,
+    )?;
+    reject_runtime_leaks(&files, temp)?;
+    Ok(files[0].bytes().to_vec())
 }
 
 fn copy_engine_assets(
@@ -1372,6 +1479,13 @@ fn validate_emitted_modules(
 fn vite_config(entry: &str, out: &Path) -> String {
     format!("export default {{ root: 'src', build: {{ outDir: {}, emptyOutDir: true, sourcemap: false, rollupOptions: {{ input: {}, preserveEntrySignatures: 'strict', output: {{ format: 'es', entryFileNames: 'main.js', chunkFileNames: 'chunks/[name]-[hash].js', assetFileNames: 'assets/[name]-[hash][extname]' }} }} }} }};\n", serde_json::to_string(&out.to_string_lossy()).unwrap_or_else(|_| "\"out\"".into()), serde_json::to_string(entry).unwrap_or_else(|_| "\"ui.ts\"".into()))
 }
+fn runtime_vite_config(entry: &Path, out: &Path) -> String {
+    format!(
+        "export default {{ build: {{ outDir: {}, emptyOutDir: true, sourcemap: false, rollupOptions: {{ input: {}, preserveEntrySignatures: 'strict', output: {{ format: 'es', entryFileNames: 'runtime.js', inlineDynamicImports: true }} }} }} }};\n",
+        serde_json::to_string(&out.to_string_lossy()).unwrap_or_else(|_| "\"out/runtime\"".into()),
+        serde_json::to_string(&entry.to_string_lossy()).unwrap_or_else(|_| "\"runtime-entry.ts\"".into()),
+    )
+}
 fn lifecycle_name(mode: LifecycleMode) -> &'static str {
     match mode {
         LifecycleMode::Realtime => "realtime",
@@ -1528,6 +1642,9 @@ function visit(node) {
   if (lane === 'ui' && ts.isNewExpression(node) && expressionName(node.expression) === 'OffscreenCanvas') {
     report(node, 'MATERIALIZER_UI_CANVAS', 'downstream UI must not create a canvas; the Engine-owned application host owns the sole renderer canvas');
   }
+  if (lane === 'runtime' && ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'globalThis') {
+    report(node, 'MATERIALIZER_RUNTIME_GLOBAL', 'runtime source must default-export its ABI object; the Engine-generated wrapper owns global installation');
+  }
   if (lane === 'ui' && ts.isBinaryExpression(node) && ts.isAssignmentOperator(node.operatorToken.kind) && directInputProperty(memberName(node.left) ?? '')) {
     report(node, 'MATERIALIZER_UI_INPUT_LISTENER', 'downstream UI must not capture keyboard or controller gameplay input; declare input mappings in Runtime Composition');
   }
@@ -1555,7 +1672,7 @@ const imported = await import(pathToFileURL(typescriptPath).href); const ts = im
 const fs = await import('node:fs/promises');
 async function files(root) { const output = []; for (const entry of await fs.readdir(root, { withFileTypes: true })) { const path = `${root}/${entry.name}`; if (entry.isDirectory()) output.push(...await files(path)); else if (/\.(ts|tsx|mts)$/.test(entry.name)) output.push(path); } return output; }
 const roots = await files(laneRoot); if (harness) roots.push(harness); if (roots.length === 0) throw new Error(`${lane} lane has no TypeScript sources`);
-const options = { strict: true, noEmit: true, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext, types: [], lib: lane === 'rules' ? ['lib.es2022.d.ts'] : ['lib.es2022.d.ts', 'lib.dom.d.ts'] };
+const options = { strict: true, noEmit: true, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext, types: [], lib: lane === 'ui' ? ['lib.es2022.d.ts', 'lib.dom.d.ts'] : ['lib.es2022.d.ts'] };
 const program = ts.createProgram({ rootNames: roots, options }); const diagnostics = ts.getPreEmitDiagnostics(program);
 if (diagnostics.length) throw new Error(ts.formatDiagnosticsWithColorAndContext(diagnostics, { getCanonicalFileName: value => value, getCurrentDirectory: () => laneRoot, getNewLine: () => '\n' }));
 "#;
@@ -1635,6 +1752,8 @@ mod tests {
             ("rules/main.ts", "import type { RuntimeCompositionDraft } from '@rusty-engine/runtime-composition-authoring';\nimport { base } from './base.js';\nexport default base satisfies RuntimeCompositionDraft;\n"),
             ("rules/base.ts", "export const base = { product: 'rusty.test', capabilities: [] };\n"),
             ("rules/extra.ts", "import { fragment, gameplayDefinition } from '@rusty-engine/runtime-composition-authoring';\nexport default fragment({ gameplayDefinitions: [gameplayDefinition('later', { order: 2 })] });\n"),
+            ("runtime/main.ts", "import { next } from './state.js';\nexport default { initialize: ({ facts }: { facts: { start: number } }) => ({ count: facts.start }), turn: ({ state, input }: { state: { count: number }, input: { amount: number } }) => next(state, input.amount), project: ({ state }: { state: { count: number } }) => ({ count: state.count }) };\n"),
+            ("runtime/state.ts", "export const next = (state: { count: number }, amount: number): { count: number } => ({ count: state.count + amount });\n"),
             ("ui/main.ts", "export function mountProductUi(_root: Element, _context: unknown): void {}\n"),
         ]);
         let first = materialize_product(
@@ -1672,6 +1791,34 @@ mod tests {
         let text =
             String::from_utf8(first.compiled_composition().to_vec()).expect("composition text");
         assert!(text.contains("\"later\""));
+        let runtime_program = first.runtime_program().expect("runtime program");
+        let runtime_text = String::from_utf8_lossy(runtime_program);
+        assert!(runtime_text.contains("__rustyEngineRuntime"));
+        assert!(!runtime_text.contains("RustyEngineRuntimeBundle"));
+        assert!(!runtime_text.contains("import "));
+        assert!(!runtime_text.contains(" from "));
+        let runtime_program_path = fixture.root.join("runtime-program.js");
+        fs::write(&runtime_program_path, runtime_program).expect("runtime program");
+        let runtime_check = fixture.root.join("runtime-program-check.mjs");
+        fs::write(
+            &runtime_check,
+            "const before = new Set(Object.getOwnPropertyNames(globalThis));\nawait import('./runtime-program.js');\nconst added = Object.getOwnPropertyNames(globalThis).filter((name) => !before.has(name));\nif (added.length !== 1 || added[0] !== '__rustyEngineRuntime') throw new Error(`unexpected runtime globals: ${added.join(',')}`);\nconst runtime = globalThis.__rustyEngineRuntime;\nif (Object.getOwnPropertyNames(runtime).sort().join(',') !== 'initialize,project,turn') throw new Error('runtime export names are not exact');\n",
+        )
+        .expect("runtime check");
+        let runtime_check_output = run_node(
+            &node_from_path(),
+            &runtime_check,
+            &[],
+            &fixture.root,
+            MaterializationLimits::default(),
+        )
+        .expect("start runtime check");
+        check_output(
+            "MATERIALIZER_RUNTIME_BUNDLE",
+            "runtime",
+            runtime_check_output,
+        )
+        .expect("runtime must install only its fixed global");
         let files = file_bytes(first.browser_bundle_files());
         for required in [
             "index.html",
@@ -2012,6 +2159,10 @@ mod tests {
                 fs::create_dir_all(root.join("rules")).expect("rules");
                 fs::write(root.join("rules/extra.ts"), "export default { intentDescriptors: [], inputMap: [], gameplayDefinitions: [], timelines: [], capabilityBindings: [] };\n").expect("default fragment");
             }
+            if !root.join("runtime/main.ts").exists() {
+                fs::create_dir_all(root.join("runtime")).expect("runtime");
+                fs::write(root.join("runtime/main.ts"), "export default { initialize: () => ({}), turn: ({ state }: { state: unknown }) => state, project: ({ state }: { state: unknown }) => state };\n").expect("default runtime");
+            }
             let manifest = decode_product_manifest(MANIFEST).expect("manifest");
             Self {
                 root,
@@ -2029,6 +2180,8 @@ id = "rusty.test"
 entrypoints = ["rules/main.ts", "rules/extra.ts"]
 [lifecycle]
 mode = "demand"
+[runtime]
+entry = "runtime/main.ts"
 [ui]
 entry = "ui/main.ts"
 [content]
