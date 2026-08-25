@@ -31,7 +31,7 @@ dependencies. They are not an Engine revision protocol.
 
 ## Renderer and Studio ownership
 
-Native products submit Rust-owned retained facts through the public facade and
+Native products submit canonical retained facts through the public facade and
 the Engine-owned Rust webview host. Browser, Tauri, and Electron products that
 need rich DOM use the one bundled
 `@rusty-engine/application-host` entry point. Downstream does not install,

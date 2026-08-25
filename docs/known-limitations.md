@@ -145,7 +145,7 @@ downstream repositories.
 - **Detection:** Inspect `RendererSurface.lightingReadout()` and run `./scripts/verify-render.sh`;
   the real browser proof covers default compatibility, independent rig selection, all retained light
   kinds, active/unsupported shadow status, and lifecycle disposal. Rusty Roguelike exact commit
-  `e88856aca2b07212e79ca8a9a8cdc904cb49bd61` supplies the public consumer proof for Rust-owned
+  `e88856aca2b07212e79ca8a9a8cdc904cb49bd61` supplies the public consumer proof for canonical
   authored torch facts, retained-count equality, and visible localized warm falloff.
 - **Follow-up:** Add another backend or richer light/shadow resources only with a concrete consumer
   and a bounded renderer-neutral contract.

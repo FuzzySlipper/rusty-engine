@@ -103,7 +103,7 @@ For `rusty-engine`, this is best divided into three layers.
 
 | Layer                         | Responsibilities                                                                                                                                                        |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Rust engine                   | Authoritative actor state, root transform, animation identity/time, visual-style component, LOD eligibility, lifecycle                                                  |
+| Runtime owner                | Authoritative actor state, root transform, animation identity/time, visual-style component, LOD eligibility, lifecycle                                                  |
 | Three.js renderer coordinator | View-sector selection, hysteresis, appearance sampling, pose snapshots, capture scheduling, render-target pooling, ghost-camera matrices, transitions                   |
 | GPU shaders                   | Skinning integration, ray-preserving depth compression, source projection, plate sampling, source-depth rejection, optional depth banding, dither and world integration |
 

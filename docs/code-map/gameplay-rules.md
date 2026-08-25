@@ -45,8 +45,8 @@ and diagnostics without defining what any rule means.
 - [`gameplay-rules-authoring`](../../rules/packages/gameplay-rules-authoring/src/index.ts)
 - [`gameplay-standard-contracts`](../../rules/packages/gameplay-standard-contracts/src/index.ts)
 - [`gameplay-standard-authoring`](../../rules/packages/gameplay-standard-authoring/src/index.ts)
-- [`Rust-owned contract generator`](../../rules/scripts/generate-contract.mjs)
-- [`Rust-owned standard contract generator`](../../rules/scripts/generate-standard-contract.mjs)
+- [`Envelope contract generator`](../../rules/scripts/generate-contract.mjs)
+- [`Standard contract generator`](../../rules/scripts/generate-standard-contract.mjs)
 - [`standard convergence fixture generator`](../../rules/scripts/generate-standard-fixtures.mjs)
 - [`rules workspace boundary audit`](../../rules/scripts/check-boundaries.mjs)
 - [`schema-1 canonical fixture`](../../fixtures/gameplay-rules/package-v1.canonical.json)
@@ -82,7 +82,7 @@ schema's safe-integer or finite-binary64 policy; and caches the complete
 canonical bytes and their SHA-256 fingerprint.
 
 Package admission does not make payload meaning valid. A downstream domain
-compiler must inspect `payload()`, produce its own Rust definitions, and decide
+compiler must inspect `payload()`, produce its own canonical definitions, and decide
 whether and where to publish them. `RuleDiagnosticReport` gives that compiler
 bounded codes, paths, messages, package identity, and optional subject/source
 correlation without giving Engine ownership of its codes.

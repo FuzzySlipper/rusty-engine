@@ -15,7 +15,7 @@ and [Standard developer commands](../../code-map/developer-command-standard.md).
 The flow is deliberately product-owned at both ends:
 
 ```text
-product Rust owner and named services
+product runtime owner and named services
   -> product bounded command queue and product-selected safe point
   -> developer-command::CommandBindings
        + optional developer-command-standard adapters
@@ -94,7 +94,7 @@ This path needs no browser, DOM, Node, application-host shell, or transport.
 
 ### Browser or Tauri adapter
 
-1. Keep the Rust steps above as the authority. Add a product-owned adapter
+1. Keep the named product service and steps above as the authority. Add a product-owned adapter
    whose `discover` path returns the strict `HostCommandDiscovery` shape and
    whose `execute` path maps a `HostCommandRequest`, dispatches at the product
    safe point, and returns the mapped `HostCommandResponse`.
@@ -121,7 +121,7 @@ This path needs no browser, DOM, Node, application-host shell, or transport.
 - DOM-free client: [`@rusty-engine/developer-command-client`](../../../render/packages/developer-command-client/src/index.ts), with `createRustyDeveloperCommandClient`, `validateRustyDeveloperCommandWireValue`, `RustyDeveloperCommandAdapter`, `RustyDeveloperCommandWireSchema`, `RustyDeveloperCommandExtension`, and the client lifecycle methods.
 - Optional shell: [`@rusty-engine/application-host`](../../../render/packages/application-host/src/developer-command-shell.ts), with `mountRustyDeveloperCommandShell`, `RustyDeveloperCommandShellOptions`, `enterInterface`, and `dispose`.
 
-The generated contract is Rust-owned. `render/contracts/developer-command-contract.json`
+The generated contract is canonical. `render/contracts/developer-command-contract.json`
 and the generated TypeScript constants are regenerated through the existing
 developer-command contract tooling; a host must not hand-edit a second wire
 contract.

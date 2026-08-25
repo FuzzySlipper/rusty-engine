@@ -1,7 +1,7 @@
 //! Renderer-neutral retained scene vocabulary.
 //!
-//! This crate is the stable border between Rust-owned authority/projection and
-//! renderer hosts. It owns no renderer objects, filesystem access, catalog,
+//! This crate is the stable border between canonical retained data/projection
+//! and renderer hosts. It owns no renderer objects, filesystem access, catalog,
 //! runtime session, or replay behavior.
 
 #![forbid(unsafe_code)]

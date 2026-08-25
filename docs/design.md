@@ -408,12 +408,13 @@ deterministic package-set resolution. The payload is opaque JSON.
 The downstream game owns the payload schema, every semantic definition and
 compiler rule, mechanics bindings, orchestration, persistence, and execution.
 An optional TypeScript authoring DSL may produce immutable build-time
-candidates in an isolated workspace, while Rust remains the semantic and
-runtime authority. Direct Rust
-construction and checked artifact admission require no Node or TypeScript at
-runtime. The implemented `rules/` workspace generates its shared envelope
-types and bounds from a Rust-owned descriptor, emits byte-identical canonical
-artifacts, and remains outside ordinary provider verification.
+candidates in an isolated workspace, while the downstream semantic compiler
+and runtime services remain the admission and execution boundary. Direct
+construction through the runtime API and checked artifact admission require
+no Node or TypeScript at runtime. The implemented `rules/` workspace
+generates its shared envelope types and bounds from the canonical descriptor,
+emits byte-identical canonical artifacts, and remains outside ordinary
+provider verification.
 
 The Rust crate admits either an explicit `RulePackageCandidate` or strict
 schema-1 bytes into the same immutable `AdmittedRulePackage`. It owns canonical
@@ -578,11 +579,12 @@ together.
 Family-specific definitions are admitted as versioned payloads through the
 existing `gameplay-rules` package route. Definitions use schema 1 for exact
 safe-integers and schema 2 for continuous binary64 values.
-Rust owns the descriptor and runtime evaluator; it generates the strict
-TypeScript contract surface. Checked exact and continuous fixtures are authored
-through that TypeScript surface, then Rust decodes, re-admits, fingerprints,
-and rehydrates them. This is deterministic build-time convergence, not a
-TypeScript evaluator or a Node dependency of ordinary Rust verification.
+`gameplay-rules` owns the descriptor and runtime evaluator and generates the
+strict TypeScript contract surface. Checked exact and continuous fixtures are
+authored through that TypeScript surface, then the runtime API decodes,
+re-admits, fingerprints, and rehydrates them. This is deterministic build-time
+convergence, not a TypeScript evaluator or a Node dependency of ordinary
+provider verification.
 
 Product extension data remains source-correlated bounded `gameplay-rules`
 exchange data. A `composedExact` definition may stand alone or be selected by
@@ -851,7 +853,7 @@ publication and resolver policy. The durable format, measured tradeoffs, and mig
 [the voxel mesh data-plane decision](topics/voxel/voxel-mesh-data-plane.md).
 Runtime image bytes and voxel tile-space/atlas mapping use the adjacent
 [voxel surface texture decision](topics/voxel/voxel-surface-textures.md); they do not turn a path,
-URL, browser image, or Three texture into Rust authority.
+URL, browser image, or Three texture into a second resource authority.
 
 An authored sky uses that same retained texture owner through one nullable
 `setSkyBackground` operation. The referenced payload must be a bounded 2:1,
@@ -1092,7 +1094,7 @@ backend-specific occlusion queries remain outside this contract.
 Historical Rusty Roguelike certification was the first exact public consumer
 of that policy at
 `e88856aca2b07212e79ca8a9a8cdc904cb49bd61`, pinning Engine
-`b1f0415af6266783246371d227a2272de7d9f0d6`. Its Rust projection owns authored torch facts; the
+`b1f0415af6266783246371d227a2272de7d9f0d6`. Its render projection owns authored torch facts; the
 browser selects disabled world defaults, retains the neutral viewmodel default, and proves that the
 retained-light count exactly matches Rust projection while a real framebuffer shows localized warm
 falloff. This is consumer evidence for the generic mechanism, not Engine ownership of torch policy.
@@ -1103,11 +1105,11 @@ renderer-neutral contract to GPU-present an orthographic picture-in-picture over
 Rust-admitted retained local scene. Its desktop/mobile Chromium proof inspects distinct primary and
 inset pixels, replaces the target across compact resize, and confirms that session revision and the
 complete Rust minimap projection do not change. The accessible detailed minimap remains a separate
-consumer of Rust-owned discovery and visibility facts.
+consumer of canonical discovery and visibility facts.
 
 Those exact TypeScript-package consumers remain historical certification evidence. Ordinary new
 games depend on the complete `rusty-engine` Rust facade. Native/Rust-only products without a rich
-product DOM reach rendering through the Rust-owned webview adapter; browser, Tauri, or Electron
+product DOM reach rendering through the public webview adapter; browser, Tauri, or Electron
 products that need rich DOM use the single bundled application host described above. Engine
 compiles or bundles the private TypeScript/Three closure behind either public boundary; downstream
 neither selects renderer packages nor knows their topology. Operational commands, CI ownership,
@@ -1401,7 +1403,8 @@ selected object's world transform and maps renderer picks back to typed handles.
 Angular owns forms, selection, transient brush state, and cancellation only. It structurally decodes
 the closed protocol but does not recompute hashes, validate voxel semantics, replay history, cast an
 authoritative ray, or forge conversion output. Renderer picks are untrusted hints transformed into
-an authored-cell claim and re-cast by Rust. Entity selection and transform preview are disposable
+an authored-cell claim and re-cast through the owning spatial service. Entity
+selection and transform preview are disposable
 derived frames applied through the shared renderer projection. During a gizmo drag, candidates stay
 transient; pointer release and a change to another selection settle the candidate through the named
 Rust transform operation. The selected tool remains disposable UI state across settlement and
@@ -1497,7 +1500,7 @@ own frozen TypeScript/browser gate. The renderer gate also proves a byte-reprodu
 artifact and a real Wry/WebKit mount. The provider gate creates a clean Rust-only consumer with
 exactly one dependency; its optional post-push form checks a public exact review revision.
 
-Validation follows ownership: focused Rust/headless tests prove Rust mechanisms;
+Validation follows ownership: focused provider/headless tests prove provider mechanisms;
 headless cross-language tests prove rules artifacts plus renderer-neutral
 contracts and projection; focused Three/WebGL evidence
 proves the backend; Chromium proves real DOM, WebAudio, input, canvas, and browser lifecycle; a

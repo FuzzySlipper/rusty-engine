@@ -597,7 +597,7 @@ void test('applies the Rust-compatible render fixture sequence end-to-end', () =
 import * as THREE from 'three';
 import type { MeshPayloadDescriptor } from '@rusty-engine/render-contracts';
 
-void test('realizes every operation in the comprehensive Rust-authored retained fixture', () => {
+void test('realizes every operation in the comprehensive retained fixture', () => {
   const fixture = JSON.parse(readFileSync(
     resolve(import.meta.dirname, '../../../../fixtures/render/retained-frame-v1.json'),
     'utf8',

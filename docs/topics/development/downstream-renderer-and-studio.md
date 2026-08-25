@@ -52,7 +52,7 @@ or destabilizing the shared integration checkout.
 ## The green renderer path
 
 The supported native path keeps the current backend entirely behind an
-Engine-owned Rust boundary:
+Engine-owned renderer boundary:
 
 ```text
 downstream Rust facts and game meaning
@@ -79,7 +79,7 @@ physical input, picks, lifecycle, and renderer observations
 render_host_contracts typed Rust readouts
         |
         v
-downstream Rust assigns semantic meaning and changes authoritative state
+downstream product assigns semantic meaning and changes current state
 ```
 
 Downstream agents do not need to know that the current implementation uses
@@ -197,7 +197,7 @@ only the media type owned by that resource family. The application host
 privately derives renderer manifests and resolvers; downstream never does.
 
 Audio remains presentation, not downstream behavior. A product publishes
-content-addressed `audio/wav` bytes, sends Rust-authored audio operations through
+content-addressed `audio/wav` bytes, sends typed audio operations through
 `applyPresentation(...)`, and invokes `resumeAudio()` directly from a physical
 user-gesture handler when browser policy requires it. The application host
 owns the `AudioContext`, typed audio host, hash-checked resolver, replacement,
@@ -205,7 +205,7 @@ and disposal; downstream code never constructs Web Audio nodes or interprets
 gameplay outcomes into sound choices.
 
 World indicators follow the same public presentation route. A product submits
-Rust-authored billboard operations for labels, exact-hash icons, ranged meters,
+typed billboard operations for labels, exact-hash icons, ranged meters,
 prompts, and status cues through `applyPresentation(...)`. The application host
 owns one pointer-transparent overlay, camera-to-screen projection,
 deterministic overlap/edge/suppression layout, semantic DOM realization, and
@@ -254,7 +254,7 @@ an Engine or authoring checkout at runtime. Keep proof layers distinct:
 2. browser-visible behavior for the development browser adapter;
 3. source/contract and release-package checks for the selected desktop host;
 4. headed WebView evidence for the real packaged product, including the one
-   Engine-owned canvas, non-empty Rust-authoritative content, packaged
+   Engine-owned canvas, non-empty accepted content, packaged
    resources, typed session state, and clean shutdown.
 
 Browser evidence does not prove packaged-host lifecycle, and build or mocked
@@ -310,7 +310,7 @@ does not receive an element, selector, callback, template slot, or raw event.
 This remains the Rust-only path for products that do not have a product DOM.
 Do not inject markup into the fixed `RendererWebviewAdapter` document or use
 private bridge calls. A product that needs arbitrary rich DOM uses the public
-application host instead; both paths retain the same Rust authority posture.
+application host instead; both paths retain the same ownership posture.
 
 ## Minimal product bootstrap
 
@@ -327,7 +327,7 @@ index.html -> main.ts -> mountRustyApplication -> mount downstream UI root
 ```
 
 `index.html` supplies one empty root. `main.ts` calls the public mount function,
-loads one Rust-authored content aggregate through a purpose-named transport
+loads one accepted content aggregate through a purpose-named transport
 owner, mounts the framework root through its callback, and supplies the
 returned bounded context through ordinary dependency injection. Engine reports
 bounded startup failure. Feature components and Rust transport owners live
@@ -383,7 +383,7 @@ Before adding a downstream rendering or Studio dependency, verify:
 
 - Is this already reachable through the complete `rusty-engine` Rust facade?
 - For a web UI, is `@rusty-engine/application-host` the only Engine package?
-- Does authoritative meaning stay in downstream Rust?
+- Does authoritative meaning stay in downstream product owners?
 - Does renderer interaction use named Rust operations and typed readouts only?
 - Does Studio integration stop at `.rusty-studio.json` plus the Rust adapter?
 - Is an automated or concurrent Studio run isolated from the persistent

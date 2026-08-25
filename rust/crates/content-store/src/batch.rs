@@ -8,7 +8,7 @@ pub const CONTENT_BODY_MAX_BYTES: usize = 256 * 1024 * 1024;
 pub const CONTENT_TOTAL_MAX_BYTES: usize = 512 * 1024 * 1024;
 
 /// One host-supplied body. Class, role, length, and identity are deliberately
-/// resolved from the Rust-owned manifest rather than duplicated at the border.
+/// resolved from the canonical manifest rather than duplicated at the border.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentBody {
     pub path: String,

@@ -122,7 +122,7 @@ follow-up routes, use [docs/agent-code-atlas.md](docs/agent-code-atlas.md).
 | Voxel artifacts and conversion | `voxel-*` | URL/fetch runtime import, game-specific animation policy |
 | Rust retained frames | `render-model`, `render-projection`, `render-presentation` | Three, DOM, WebAudio, gameplay authority |
 | Rules authoring | `rules/` | Domain semantics, runtime evaluation, browser/UI, ordinary Rust dependencies |
-| Renderer backend and hosts | `render/` | Gameplay authority, ordinary Rust dependencies |
+| Renderer backend and hosts | `render/` | Gameplay meaning or state, ordinary Rust dependencies |
 | First-party authoring product | `studio/` | Demo/game policy, implicit sibling access |
 | Inspection | `engine-inspector` | Mutation or runtime/library reverse dependencies |
 
@@ -229,14 +229,15 @@ These are navigation and ownership rules, not a new governance layer.
   TypeScript is available. Reserve `.mjs`/`.js` for tool-required configuration
   or small build/check plumbing, and do not let those files become owners of
   durable behavior.
-- Prefer Rust for durable semantics, state, and runtime authority. Use
-  TypeScript for typed presentation, host integration, strict boundary code,
-  and expressive authoring or content composition; TypeScript must not become
-  a second gameplay, project, or persistence authority.
+- Keep durable semantics, state, and runtime behavior in their named owners.
+  Use TypeScript for typed presentation, host integration, strict boundary
+  code, and expressive authoring or content composition; it must not duplicate
+  gameplay, project, or persistence state.
 - Treat optional gameplay TypeScript as a build-time authoring DSL: authored
   variation and pure macros may live there, new serialized meaning begins in
-  Rust, and live fact gathering, mutation, scheduling, and persistence remain
-  Rust-owned.
+  the owning semantic definitions, and live fact gathering, mutation,
+  scheduling, and persistence remain in named runtime services and state
+  owners.
 - Keep package-root imports and explicit public exports.
 - Do not deep-import another package's `src/` tree from a consumer.
 - Keep strict decoding at the Rust-to-TypeScript border.

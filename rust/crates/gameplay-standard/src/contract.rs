@@ -13,7 +13,7 @@ use crate::exact::{
 use crate::input::{MAX_CAPABILITY_REQUIREMENTS_PER_ROLE, MAX_ROLE_ID_BYTES};
 use gameplay_mechanics::MAX_ABS_MECHANICS_SCALAR;
 
-/// Exports the Rust-owned standard-definition wire contract consumed by rules code generation.
+/// Exports the standard-definition wire contract consumed by rules code generation.
 pub fn encode_standard_contract_descriptor() -> String {
     serde_json::to_string_pretty(&standard_contract_descriptor())
         .expect("the static gameplay-standard contract descriptor is valid JSON")

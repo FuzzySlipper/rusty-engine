@@ -77,7 +77,7 @@ viewport, and its closed external-project adapter protocol.
   read needed to preview an unused canonical object. Its resource-only frame is
   merged by `viewport`; authoritative attachment remains downstream.
 - Protocol 12 adds one create-only `attachVoxelObjectInstances` request for
-  1–32 ordered placements. Downstream Rust stages owner allocation, complete
+  1–32 ordered placements. The downstream product stages owner allocation, complete
   admission, projection, and publication; Studio accepts one canonical readout
   and never implements a placement loop or parallel history authority.
 - Protocol 13 adds `setSceneObjectRenderableTransform` plus a strict
@@ -85,7 +85,7 @@ viewport, and its closed external-project adapter protocol.
   visual-local transforms separately; admitted mesh bounds, origin triad,
   contact plane, clearance, and lower-bound alignment remain disposable UI
   observations over the named Rust mutation.
-- Protocol 14 adds strict Rust-authored voxel texture/atlas/material readouts,
+- Protocol 14 adds strict voxel texture/atlas/material readouts,
   named upsert/removal requests, a keyboard-accessible Studio surfaces panel,
   and exact content-addressed PNG resolver wiring into the one viewport. The
   downstream adapter remains the catalog, persistence, and assignment owner.

@@ -41,7 +41,7 @@ changed global runtime facade.
 - [`gameplay-standard/tests/numeric_contract.rs`](../../rust/crates/gameplay-standard/tests/numeric_contract.rs)
 - [`gameplay-standard-contracts`](../../rules/packages/gameplay-standard-contracts/src/index.ts)
 - [`gameplay-standard-authoring`](../../rules/packages/gameplay-standard-authoring/src/index.ts)
-- [`Rust-owned standard contract generator`](../../rules/scripts/generate-standard-contract.mjs)
+- [`Standard contract generator`](../../rules/scripts/generate-standard-contract.mjs)
 - [`standard convergence fixture generator`](../../rules/scripts/generate-standard-fixtures.mjs)
 - [`standard schema-1 fixture`](../../fixtures/gameplay-standard/exact-schema-1.canonical.json)
 - [`standard schema-2 fixture`](../../fixtures/gameplay-standard/continuous-schema-2.canonical.json)
@@ -101,10 +101,11 @@ or opaque-payload route.
 
 Definitions carry a family, evaluator-semantics version, subject/source
 correlation, ordered tree, and canonical role requirements through the
-`gameplay-rules` schema-1/schema-2 package path. Rust owns evaluation and the
-descriptor that generates the strict TypeScript contracts. The checked-in
+`gameplay-rules` schema-1/schema-2 package path. The standard evaluator owns
+evaluation and the descriptor that generates the strict TypeScript contracts.
+The checked-in
 schema-1/schema-2 vectors are authored by that TypeScript package and then
-decoded, re-admitted, fingerprinted, and rehydrated by Rust; the isolated rules
+decoded, re-admitted, fingerprinted, and rehydrated by the runtime API; the isolated rules
 gate fails if either direction drifts. This is build-time convergence, never a
 TypeScript runtime evaluator.
 

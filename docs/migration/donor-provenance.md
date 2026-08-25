@@ -49,7 +49,7 @@ choice in `libs/studio-shell/src/index.ts` at the same Studio pin. It retains th
 and `Authored Lights` modes, the two-light editor rig, disabled shadow intent, and a host-user default
 that remains compatible with older settings. The successor applies that choice to its disposable
 viewport frame and host-user settings owner; it does not restore Asha's store, scene-document mirror,
-or any path for the lighting toggle to mutate Rust-owned project content.
+or any path for the lighting toggle to mutate canonical project content.
 
 ## Complete rendering successor donor
 
@@ -274,8 +274,9 @@ There is no runtime-bridge shim or Vite alias. The boundary gate rejects old `Ru
 native bridge, Gameplay Fabric, or `GameplayRuntimeHost` markers.
 
 M2A deliberately does not reference Asha's input or view crates. TypeScript resolves DOM device
-events against admitted binding data and submits only `ResolvedPlayerAction`; Rust owns controller
-interpretation and collision-resolved pose. The renderer's existing `setCameraPose` method receives
+events against admitted binding data and submits only `ResolvedPlayerAction`; the controller and
+spatial owners interpret it and produce the collision-resolved pose. The renderer's existing
+`setCameraPose` method receives
 a presentation-only offset derived from that pose. No input catalog, camera state, or per-frame
 authority bridge entered the successor.
 
@@ -345,8 +346,8 @@ M6A re-audited `svc-serialization`, `core-scene`, `core-snapshot`, `svc-project-
 canonical ordering, fixed-point proof, and fail-closed version selection. It explicitly rejects the
 donor artifact table, content hashes, save/load plans, prefab registry, compaction journal, replay
 record, provider manifest, workspace lifecycle, bootstrap/session state, and universal runtime hash.
-Rust owns the one concrete schema-6 to schema-7 migration; TypeScript may still materialize a
-candidate, but it neither selects migration semantics nor emits canonical saved bytes.
+The project codec owns the one concrete schema-6 to schema-7 migration; TypeScript may still
+materialize a candidate, but it neither selects migration semantics nor emits canonical saved bytes.
 
 The M6 implementation is pinned by
 `5072f0c0a5cd03448c3543d6763f3dd9082fa54c` (canonical codec and explicit predecessor migration),
@@ -531,7 +532,7 @@ implementation file is copied.
 The donor's formula, predicate, program, operation, semantic registry, content
 patch, generated RPG vocabulary, compiler meaning, session, authority,
 scheduler, event, replay, and downstream product topology remain excluded.
-Rusty D20 owns its concrete candidate schema and Rust semantic compiler. The
+Rusty D20 owns its concrete candidate schema and semantic compiler. The
 separate checker proves complete local accounting without reading a donor
 checkout, while the builder remains an explicit maintainer-only re-audit tool.
 The TypeScript packages have their own lockfile and `verify-rules` gate; they

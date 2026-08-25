@@ -26,7 +26,7 @@ normalized downstream candidate payload
 gameplay-rules package envelope / dependency resolution / diagnostics
                  |
                  v
-downstream Rust semantic decoder and compiler
+downstream semantic decoder and compiler
                  |
                  +--> entity-state components
                  +--> gameplay-mechanics services (optional)
@@ -37,7 +37,7 @@ rusty-d20 ------------------------------------------------^
 ```
 
 `gameplay-rules` is an optional sibling of `entity-state` and
-`gameplay-mechanics`, not a layer above either crate. Its Rust implementation
+`gameplay-mechanics`, not a layer above either crate. Its implementation
 may depend on serialization, hashing, and ordinary value libraries, but it
 must not depend on a downstream game, Node, TypeScript, a browser,
 `entity-state`, or `gameplay-mechanics`.
@@ -60,23 +60,24 @@ separate, inspectable forms:
 
 1. **TypeScript authoring DSL.** Downstream syntax, pure macros, loops, and
    content catalogs used before runtime. Source may be convenient and
-   non-canonical. New serialized meaning still begins in Rust semantics.
+   non-canonical. New serialized meaning still begins in the owning semantic
+   definitions.
 2. **Authored package / wire AST.** Immutable JSON data with a
    downstream-owned payload schema inside the Engine envelope. Rusty D20 owns
    the d20 candidate schema.
-3. **Canonical downstream Rust definitions.** Domain types produced only after
+3. **Canonical downstream definitions.** Domain types produced only after
    downstream structural and semantic admission. These are not
    `gameplay-rules` types merely because their bytes arrived in its envelope.
 4. **Runtime state and operations.** Ordinary entity components, direct named
    services, explicit downstream orchestration, and typed operation receipts.
 
 Structural package admission is not semantic admission. A caller must be able
-to construct the same candidate directly in Rust or decode a checked artifact
-without installing or executing Node or TypeScript at runtime.
+to construct the same candidate through the runtime API or decode a checked
+artifact without installing or executing Node or TypeScript at runtime.
 
 ## Upstream ownership
 
-The Rust `gameplay-rules` crate owns only:
+The `gameplay-rules` crate owns only:
 
 - stable domain, package, source, and optional subject identities;
 - a positive package version and exact package dependencies;
@@ -339,12 +340,13 @@ packages are:
   normalize an already downstream-shaped JSON payload, canonicalize the
   envelope, correlate sources, and emit immutable candidate bytes.
 
-Rust exports the small shared contract and bounds consumed by generation.
+The provider exports the small shared contract and bounds consumed by
+generation.
 Generated files are checked for drift. TypeScript does not generate domain
 schemas, validate game semantics, execute rules, call runtime services, or own
 mutable gameplay state. Downstream DSLs may add syntax, pure macros, and
 catalogs for their own payload vocabulary; new serialized meaning begins in
-downstream Rust semantics.
+downstream semantic definitions.
 
 `scripts/verify-rules.sh` owns the isolated package installation and tests,
 generated-contract drift, strict decode/canonicalization fixtures, and the
@@ -359,7 +361,7 @@ product proof.
 
 Rusty D20 originally proved the support surface with a bounded but real slice:
 
-- its own candidate payload schema and Rust semantic compiler;
+- its own candidate payload schema and semantic compiler;
 - direct Rust construction and canonical artifact admission producing the
   same compiled definitions;
 - a small d20 ability/check-or-attack/defense/damage/effect sequence;
@@ -368,7 +370,7 @@ Rusty D20 originally proved the support surface with a bounded but real slice:
 - admitted definitions driving ordinary `entity-state`,
   `gameplay-mechanics`, and deterministic RNG calls;
 - one TypeScript-authored content variation requiring no Engine source edit
-  and no new Rust semantic primitive; and
+  and no new semantic primitive; and
 - a real durable UI path, authoritative save/reopen, and rendered result in
   the downstream product.
 
@@ -384,7 +386,7 @@ revision `68ddfa5430ec3bc2cf7ca96963982db9511e79ba`. The downstream proof includ
 two source-correlated TypeScript-authored compositions, Node-free strict Rust
 compilation, canonical mechanics/RNG execution, a real Rust-host browser path,
 and fresh-process save/reopen. Its content-only addition regression uses the
-published D20 authoring surface without an Engine edit or new Rust semantic
+published D20 authoring surface without an Engine edit or new semantic
 primitive. See the
 [gameplay mechanics campaign closeout](gameplay-mechanics-campaign-closeout.md)
 for the exact review/gate ledger and non-claims.

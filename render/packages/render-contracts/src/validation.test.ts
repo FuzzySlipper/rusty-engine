@@ -200,7 +200,7 @@ void test('structured indicator meters reject finite but unbounded magnitudes', 
   assert.throws(() => decodePresentationFrameDiff(frame), /magnitude bound/u);
 });
 
-void test('static mesh collision decoding admits the Rust-owned trimesh policy', () => {
+void test('static mesh collision decoding admits the trimesh policy', () => {
   const frame = mutableFixture('retained-frame-v1.json');
   const operations = frame['ops'] as Array<Record<string, unknown>>;
   const definition = operations.find((operation) => operation['op'] === 'defineStaticMesh');

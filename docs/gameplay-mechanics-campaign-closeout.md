@@ -37,7 +37,7 @@ optional build-time authoring
   TypeScript candidate data
   -> canonical package artifact
   -> gameplay-rules admission
-  -> downstream Rust semantic compiler
+  -> downstream semantic compiler
   -> downstream runtime and product UI
 ```
 
@@ -144,8 +144,9 @@ authoring surface` regression demonstrates that a new definition assembled
 from existing D20 primitives changes TypeScript content/artifacts only; it
 does not require an Engine edit or a new Rust semantic primitive.
 
-The exact #6319 path is real input to the Rust host, authoritative Rust
-mutation, strict projection, TypeScript decode/store, and rendered UI in the
+The exact #6319 path is real input to the product host, authoritative mutation
+through the named product service, strict projection, TypeScript decode/store,
+and rendered UI in the
 durable donor-derived shell. Real Chromium covered empty/start, preview,
 reaction, resolve, receipt, turn, stale two-page rejection, network/invalid
 failure, mobile overflow, and save/reopen. Independent fresh-process proof

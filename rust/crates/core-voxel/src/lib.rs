@@ -35,7 +35,7 @@
 #![forbid(unsafe_code)]
 
 /// An opaque reference to a material. Carries no product meaning here; a
-/// [`MaterialCatalog`] (Rust-owned, possibly TS-authored later) decides which ids
+/// [`MaterialCatalog`] (possibly populated by TS authoring later) decides which ids
 /// are valid. `u16` keeps the per-voxel value small for large volumes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VoxelMaterialId(u16);
@@ -163,8 +163,8 @@ impl core::fmt::Display for MaterialError {
 
 impl std::error::Error for MaterialError {}
 
-/// The set of material ids accepted by the authority. Rust-owned; a TS catalog may
-/// later author the membership, but validation stays here. Deliberately just a
+/// The set of material ids accepted by the catalog. A TS authoring layer may
+/// later provide the membership, but validation stays here. Deliberately just a
 /// membership check — it holds no product material definitions.
 #[derive(Debug, Clone, Default)]
 pub struct MaterialCatalog {

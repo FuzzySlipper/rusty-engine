@@ -12,7 +12,7 @@ export type StudioTextureResourceRead = (
   contentHash: string,
 ) => Promise<ArrayBuffer>;
 
-/** Resolve only a texture admitted into the exact Rust-authored renderer manifest. */
+/** Resolve only a texture admitted into the exact renderer manifest. */
 export async function resolveStudioTextureResource(
   projectRoot: string,
   resources: readonly TextureResourceReadout[],
