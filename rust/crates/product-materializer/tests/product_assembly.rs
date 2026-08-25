@@ -5,7 +5,7 @@ use std::{
     net::{Shutdown, TcpStream},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use product_assembly::{
@@ -81,14 +81,9 @@ product_bundle = "generated/product-bundle"
 #[test]
 #[ignore = "requires prepared Rules and renderer artifacts; run scripts/verify-product-materializer.sh"]
 fn materialized_product_assembles_relocates_and_serves_closed_browser_bundle() {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock")
-        .as_nanos();
-    let original_root = PathBuf::from(format!("/home/dev/rusty-product-assembly-e2e-{nonce}"));
-    let relocated_root = PathBuf::from(format!(
-        "/home/dev/rusty-product-assembly-e2e-relocated-{nonce}"
-    ));
+    let temporary_root = tempfile::tempdir().expect("temporary Product Assembly root");
+    let original_root = temporary_root.path().join("original");
+    let relocated_root = temporary_root.path().join("relocated");
     create_fixture(&original_root);
     let manifest = decode_product_manifest(MANIFEST).expect("manifest admission");
     let assets = test_assets();
@@ -273,8 +268,6 @@ fn materialized_product_assembles_relocates_and_serves_closed_browser_bundle() {
         status.success(),
         "generated host exited unsuccessfully: {status}"
     );
-    let _ = fs::remove_dir_all(&original_root);
-    let _ = fs::remove_dir_all(&relocated_root);
 }
 
 /// Explicit #7262 gate: this is intentionally ignored by the ordinary
@@ -289,11 +282,8 @@ fn materialized_product_assembles_relocates_and_serves_closed_browser_bundle() {
 #[test]
 #[ignore = "explicit #7262 generated Product Host + Chromium gate"]
 fn generated_product_host_passes_real_chromium_browser_gate() {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock")
-        .as_nanos();
-    let product_root = PathBuf::from(format!("/home/dev/rusty-product-browser-e2e-{nonce}"));
+    let temporary_root = tempfile::tempdir().expect("temporary Product Browser root");
+    let product_root = temporary_root.path().join("product");
     create_fixture(&product_root);
     fs::write(product_root.join("rusty.toml"), BROWSER_MANIFEST).expect("browser manifest");
     fs::create_dir_all(product_root.join("kernel")).expect("browser kernel lane");
@@ -420,7 +410,6 @@ fn generated_product_host_passes_real_chromium_browser_gate() {
         .expect("request generated host shutdown");
     let host_status = host.wait().expect("wait generated browser ProductDevHost");
 
-    let _ = fs::remove_dir_all(&product_root);
     assert!(
         playwright.success(),
         "generated browser Product Host Playwright gate failed: {playwright}"
