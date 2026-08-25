@@ -8,10 +8,13 @@ import type { RustyApplicationUiMount } from '@rusty-engine/application-host';
 
 const root = document.querySelector<HTMLElement>('#application');
 if (root === null) throw new Error('Product Browser Host failure root is missing');
+const startupDiagnostic = new URLSearchParams(window.location.search).has('unicodeFailure')
+  ? 'é'.repeat(257)
+  : 'deliberate runtime start failure';
 
 const adapter: ProductBrowserRuntimeAdapter = {
   lifecycle: async () => {
-    throw new Error('deliberate runtime start failure');
+    throw new Error(startupDiagnostic);
   },
   input: async (batch) => ({ accepted: true, count: batch.length }),
   advanceRealtime: async () => ({ accepted: true, operation: 'advance-realtime' }),

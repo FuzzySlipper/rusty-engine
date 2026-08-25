@@ -342,6 +342,9 @@ async function waitFor(label, operation, timeoutMs, intervalMs = 150) {
   while (Date.now() < deadline) {
     try {
       const value = await operation();
+      if (value && typeof value === "object" && value.fatal === true) {
+        throw new FatalObservationError(value.diagnostic ?? `fatal failure while waiting for ${label}`);
+      }
       if (value && typeof value === "object" && value.ok === false) {
         last = value.diagnostic ?? value;
       } else if (value) {
@@ -350,12 +353,15 @@ async function waitFor(label, operation, timeoutMs, intervalMs = 150) {
         last = value;
       }
     } catch (error) {
+      if (error instanceof FatalObservationError) throw error;
       last = error instanceof Error ? error.message : String(error);
     }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, intervalMs));
   }
   throw new Error(`timed out waiting for ${label}: ${boundedText(JSON.stringify(last))}`);
 }
+
+class FatalObservationError extends Error {}
 
 async function processPids(binary) {
   // Dynamic import keeps the main proof's dependency surface to Node built-ins
@@ -450,6 +456,10 @@ async function domSnapshot(baseUrl, sessionId, selectors) {
        lastRuntimeCount: document.body?.dataset?.rustyLastRuntimeCount ?? null,
        lastRuntimeDiagnostic: document.body?.dataset?.rustyLastRuntimeDiagnostic ?? null,
        lastRuntimeOutput: document.body?.dataset?.rustyLastRuntimeOutput ?? null,
+       productHostState: document.body?.dataset?.rustyProductHostState ?? null,
+       runtimeMode: document.body?.dataset?.rustyProductRuntimeMode ?? null,
+       runtimeProgress: document.body?.dataset?.rustyProductRuntimeProgress ?? null,
+       runtimeFailure: document.body?.dataset?.rustyProductRuntimeFailure ?? null,
        interactionMode: document.querySelector('[data-rusty-application-host]')?.dataset?.interactionMode ?? null,
        viewportWidth: window.innerWidth,
        viewportHeight: window.innerHeight,
@@ -537,9 +547,9 @@ function genericHostReadinessMismatches(snapshot) {
   if (snapshot.viewportHeight <= 0) mismatches.push(`viewportHeight=${snapshot.viewportHeight}`);
   if (snapshot.canvasCount !== 1) mismatches.push(`canvasCount=${snapshot.canvasCount}`);
   if (snapshot.startupError !== null) mismatches.push(`startupError=${JSON.stringify(snapshot.startupError)}`);
-  if (snapshot.lastRuntimeAccepted !== "true") {
-    mismatches.push(`lastRuntimeAccepted=${JSON.stringify(snapshot.lastRuntimeAccepted)}`);
-  }
+  if (snapshot.productHostState !== "ready") mismatches.push(`productHostState=${JSON.stringify(snapshot.productHostState)}`);
+  if (snapshot.runtimeFailure !== null) mismatches.push(`runtimeFailure=${JSON.stringify(snapshot.runtimeFailure)}`);
+  if (!/^\d+$/u.test(snapshot.runtimeProgress ?? "")) mismatches.push(`runtimeProgress=${JSON.stringify(snapshot.runtimeProgress)}`);
   return mismatches;
 }
 
@@ -1028,9 +1038,12 @@ async function main(options) {
     evidence.sessionId = sessionId;
     const readinessStarted = Date.now();
     const initial = await waitFor(
-      "native window readiness, one Engine canvas, and accepted runtime lifecycle",
+      "native window readiness, one Engine canvas, and bounded runtime health markers",
       async () => {
         const snapshot = await domSnapshot(baseUrl, sessionId, selectors);
+        if (snapshot.runtimeFailure !== null) {
+          return { fatal: true, diagnostic: `native runtime failed before readiness: ${snapshot.runtimeFailure}` };
+        }
         const mismatches = genericHostReadinessMismatches(snapshot);
         if (mismatches.length > 0) {
           evidence.steps.nativeWindowReady = {
@@ -1055,6 +1068,29 @@ async function main(options) {
       conformanceProof,
       snapshot: initial,
     };
+    if (initial.runtimeMode === "realtime") {
+      const progressBaseline = initial.runtimeProgress;
+      const progressStarted = Date.now();
+      const healthyProgress = await waitFor(
+        "fresh accepted native realtime runtime progress",
+        async () => {
+          const snapshot = await domSnapshot(baseUrl, sessionId, selectors);
+          if (snapshot.runtimeFailure !== null) {
+            return { fatal: true, diagnostic: `native realtime runtime failed: ${snapshot.runtimeFailure}` };
+          }
+          if (!genericHostIsReady(snapshot)) return null;
+          if (!/^\d+$/u.test(snapshot.runtimeProgress ?? "")) return null;
+          return BigInt(snapshot.runtimeProgress) > BigInt(progressBaseline) ? snapshot : null;
+        },
+        options.stepTimeoutMs,
+      );
+      evidence.steps.runtimeHealth = {
+        status: "passed",
+        durationMs: Date.now() - progressStarted,
+        baselineProgress: progressBaseline,
+        snapshot: healthyProgress,
+      };
+    }
 
     const focusStarted = Date.now();
     try {

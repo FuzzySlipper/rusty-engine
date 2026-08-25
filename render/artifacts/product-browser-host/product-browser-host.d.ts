@@ -88,7 +88,12 @@ export interface ProductBrowserRuntimeBindingOutput {
     readonly kind: 'binding';
     readonly runtime: RustyApplicationRuntimeIdentity;
 }
-export type ProductBrowserRuntimeOutput = ProductBrowserRuntimeBindingOutput | {
+export type ProductBrowserRuntimeOutput = ProductBrowserRuntimeBindingOutput
+/** Fixed host evidence that one Rust-owned realtime advance was accepted. */
+ | {
+    readonly kind: 'runtime-progress';
+    readonly owner: 'rust-host';
+} | {
     readonly kind: 'frame';
     readonly frame: RustyApplicationFrame;
 } | {
@@ -108,7 +113,8 @@ export type ProductBrowserRuntimeOutputListener = (output: ProductBrowserRuntime
  * snapshot is mounted.
  */
 export interface ProductBrowserRuntimeTerminalFailure {
-    readonly kind: 'output-lag';
+    /** The fixed Engine failure lane; products never supply an arbitrary event name. */
+    readonly kind: 'output-lag' | 'runtime-failure';
     readonly diagnostic: string;
 }
 export type ProductBrowserRuntimeTerminalFailureListener = (failure: ProductBrowserRuntimeTerminalFailure) => void;

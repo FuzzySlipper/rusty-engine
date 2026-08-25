@@ -22,3 +22,17 @@ test('realtime cadence coalesces slow runtime advancement to one in-flight plus 
     BigInt(Math.round(evidence.latestFrameMs * 1_000_000)),
   );
 });
+
+test('rejected browser-owned realtime advancement becomes a bounded host failure', async ({ page }) => {
+  await page.goto('/browser/product-browser-host-cadence.html?rejectAdvance=1');
+  await expect(page.locator('body')).toHaveAttribute('data-rusty-product-host-state', 'failed');
+  await expect(page.locator('body')).toHaveAttribute(
+    'data-rusty-product-runtime-failure',
+    'fixture realtime advancement was rejected',
+  );
+  await expect(page.locator('body')).toHaveAttribute('data-rusty-product-runtime-progress', '0');
+  await expect(page.locator('#application')).toHaveAttribute('data-transport-disposed', 'true');
+  const callsAfterFailure = await page.evaluate(() => window.__rustyProductCadenceAdvanceCalls ?? 0);
+  await page.waitForTimeout(100);
+  expect(await page.evaluate(() => window.__rustyProductCadenceAdvanceCalls ?? 0)).toBe(callsAfterFailure);
+});

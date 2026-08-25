@@ -28,6 +28,7 @@ const nativeSetTimeout = window.setTimeout.bind(window);
 const nativeRequestAnimationFrame = window.requestAnimationFrame.bind(window);
 void nativeRequestAnimationFrame;
 const MAXIMUM_FRAMES = 1_000;
+const rejectRealtimeAdvance = new URLSearchParams(window.location.search).has('rejectAdvance');
 const observedTimes: string[] = [];
 window.__rustyProductCadenceRafCount = 0;
 window.__rustyProductCadenceAdvanceCalls = 0;
@@ -75,7 +76,13 @@ const adapter: ProductBrowserRuntimeAdapter = {
           (window.__rustyProductCadenceActiveRequests ?? 1) - 1,
         );
         observedTimes.push(observedTimeNs);
-        resolve({ accepted: true, operation: 'advance-realtime', binding: runtime });
+        resolve(rejectRealtimeAdvance
+          ? {
+              accepted: false,
+              operation: 'advance-realtime',
+              diagnostic: 'fixture realtime advancement was rejected',
+            }
+          : { accepted: true, operation: 'advance-realtime', binding: runtime });
       }, 50);
     });
   },
@@ -83,7 +90,7 @@ const adapter: ProductBrowserRuntimeAdapter = {
     listener({ kind: 'binding', runtime });
     return () => undefined;
   },
-  dispose: () => undefined,
+  dispose: () => { root.dataset['transportDisposed'] = 'true'; },
 };
 
 void mountProductBrowserHost({

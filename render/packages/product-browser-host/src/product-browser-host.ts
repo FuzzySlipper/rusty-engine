@@ -13,7 +13,7 @@ import {
   type RustyApplicationUiProjectionOptions,
   type RustyApplicationPresentationAspectBounds,
 } from '@rusty-engine/application-host';
-import { createProductBrowserCadence } from './realtime-cadence.js';
+import { createProductBrowserCadence, type ProductBrowserCadence } from './realtime-cadence.js';
 
 /** Fixed current artifact identity; compatibility follows actual code changes. */
 export const PRODUCT_BROWSER_HOST_ARTIFACT = 'rusty.product.browser-host' as const;
@@ -111,6 +111,8 @@ export interface ProductBrowserRuntimeBindingOutput {
 
 export type ProductBrowserRuntimeOutput =
   | ProductBrowserRuntimeBindingOutput
+  /** Fixed host evidence that one Rust-owned realtime advance was accepted. */
+  | { readonly kind: 'runtime-progress'; readonly owner: 'rust-host' }
   | { readonly kind: 'frame'; readonly frame: RustyApplicationFrame }
   | {
       readonly kind: 'presentation';
@@ -132,7 +134,8 @@ export type ProductBrowserRuntimeOutputListener = (
  * snapshot is mounted.
  */
 export interface ProductBrowserRuntimeTerminalFailure {
-  readonly kind: 'output-lag';
+  /** The fixed Engine failure lane; products never supply an arbitrary event name. */
+  readonly kind: 'output-lag' | 'runtime-failure';
   readonly diagnostic: string;
 }
 
@@ -339,8 +342,28 @@ export async function mountProductBrowserHost(
   let disposal: Promise<void> | null = null;
   let started = false;
   let failure: ProductBrowserHostError | null = null;
+  let transportClosed = false;
+  let runtimeProgress = 0;
   const pendingOutputs: ProductBrowserRuntimeOutput[] = [];
   const maximumPendingOutputs = 64;
+
+  // These are deliberately small, product-neutral observation markers. They
+  // let an outer host prove that a mounted runtime is still making accepted
+  // progress without inspecting a product's UI, facts, or content vocabulary.
+  const publishHealth = (): void => {
+    const document = options.root.ownerDocument;
+    const roots = [options.root, document.body].filter((root): root is HTMLElement => root !== null);
+    for (const root of roots) {
+      root.dataset['rustyProductHostState'] = state;
+      root.dataset['rustyProductRuntimeMode'] = options.lifecycleMode;
+      root.dataset['rustyProductRuntimeProgress'] = String(runtimeProgress);
+      if (failure === null) {
+        delete root.dataset['rustyProductRuntimeFailure'];
+      } else {
+        root.dataset['rustyProductRuntimeFailure'] = boundedDiagnostic(failure.message);
+      }
+    }
+  };
 
   const requireApplication = (): RustyApplicationHost => {
     if (application === null || state === 'disposed') {
@@ -350,6 +373,16 @@ export async function mountProductBrowserHost(
       );
     }
     return application;
+  };
+
+  const requireReady = (): void => {
+    if (state === 'ready') return;
+    throw new ProductBrowserHostError(
+      state === 'disposed' ? 'disposed' : 'transport_failed',
+      state === 'failed'
+        ? 'Product Browser Host has failed and its runtime transport is closed'
+        : 'Product Browser Host is not ready',
+    );
   };
 
   const reportFailure = (cause: unknown, code: ProductBrowserHostError['code']): ProductBrowserHostError => {
@@ -363,14 +396,38 @@ export async function mountProductBrowserHost(
     if (failure === null) {
       failure = error;
       if (state !== 'disposed') state = 'failed';
+      publishHealth();
     }
+    return error;
+  };
+
+  let cadence: ProductBrowserCadence | null = null;
+  const closeTransport = (): void => {
+    if (transportClosed) return;
+    transportClosed = true;
+    started = false;
+    cadence?.dispose();
+    unsubscribeTerminalFailures?.();
+    unsubscribeTerminalFailures = null;
+    unsubscribeOutputs?.();
+    unsubscribeOutputs = null;
+    void Promise.resolve(transport.dispose()).catch((cause: unknown) => {
+      reportFailure(cause, 'transport_failed');
+    });
+  };
+  const failAndClose = (
+    cause: unknown,
+    code: ProductBrowserHostError['code'],
+  ): ProductBrowserHostError => {
+    const error = reportFailure(cause, code);
+    closeTransport();
     return error;
   };
 
   const applyOutput = (output: ProductBrowserRuntimeOutput): void => {
     if (application === null) {
       if (pendingOutputs.length >= maximumPendingOutputs) {
-        reportFailure(
+        failAndClose(
           new ProductBrowserHostError(
             'output_failed',
             `runtime output buffer exceeded ${String(maximumPendingOutputs)} entries before host mount`,
@@ -382,6 +439,7 @@ export async function mountProductBrowserHost(
       pendingOutputs.push(output);
       return;
     }
+    if (state === 'failed' || state === 'disposed') return;
     try {
       const host = requireApplication();
       switch (output.kind) {
@@ -391,6 +449,22 @@ export async function mountProductBrowserHost(
             context: options.inputContext ?? 'gameplay.default',
           });
           host.uiProjection?.bindRuntime(output.runtime);
+          return;
+        case 'runtime-progress':
+          if (options.lifecycleMode !== 'realtime' || realtimeAdvanceOwner !== 'rust-host') {
+            throw new ProductBrowserHostError(
+              'output_failed',
+              'Rust-host realtime progress is unavailable for this Product Browser Host mode',
+            );
+          }
+          if (output.owner !== 'rust-host') {
+            throw new ProductBrowserHostError('output_failed', 'runtime progress owner was invalid');
+          }
+          if (started && state === 'ready') {
+            runtimeProgress += 1;
+            publishHealth();
+          }
+          cadence?.pulseRustHost();
           return;
         case 'frame': {
           const receipt = host.renderer.applyFrame(output.frame);
@@ -408,7 +482,7 @@ export async function mountProductBrowserHost(
           // fixed typed port and never becomes a promise bus.
           void host.renderer.applyPresentation(output.frame).then((receipt) => {
             if (receipt.diagnostics.length > 0) {
-              reportFailure(
+              failAndClose(
                 new ProductBrowserHostError(
                   'output_failed',
                   receipt.diagnostics.map((item) => item.message).join('; '),
@@ -417,7 +491,7 @@ export async function mountProductBrowserHost(
               );
             }
           }).catch((cause: unknown) => {
-            reportFailure(cause, 'output_failed');
+            failAndClose(cause, 'output_failed');
           });
           return;
         case 'ui-projection':
@@ -431,27 +505,22 @@ export async function mountProductBrowserHost(
           return;
         case 'runtime-readout':
           runtimeReadout = output.readout;
-          cadence.pulseRustHost();
+          cadence?.pulseRustHost();
           return;
         default:
           assertNever(output);
       }
     } catch (cause) {
-      reportFailure(cause, 'output_failed');
+      failAndClose(cause, 'output_failed');
     }
   };
 
   const applyTerminalFailure = (terminalFailure: ProductBrowserRuntimeTerminalFailure): void => {
-    reportFailure(
-      new ProductBrowserHostError('transport_failed', terminalFailure.diagnostic),
+    const failure = normalizeTerminalFailure(terminalFailure);
+    failAndClose(
+      new ProductBrowserHostError('transport_failed', failure.diagnostic),
       'transport_failed',
     );
-    // A retained-output gap cannot be resumed safely. Close the local
-    // transport immediately; the host remains visibly failed until a fresh
-    // runtime snapshot is mounted.
-    void Promise.resolve(transport.dispose()).catch((cause: unknown) => {
-      reportFailure(cause, 'transport_failed');
-    });
   };
 
   const applyOperationResult = (
@@ -479,7 +548,7 @@ export async function mountProductBrowserHost(
     if (result.readout !== undefined) applyOutput({ kind: 'runtime-readout', readout: result.readout });
   };
 
-  const cadence = createProductBrowserCadence({
+  cadence = createProductBrowserCadence({
     lifecycleMode: options.lifecycleMode,
     realtimeAdvanceOwner,
     isReady: () => started && state === 'ready',
@@ -494,9 +563,13 @@ export async function mountProductBrowserHost(
     },
     advanceRealtime: async (observedTimeNs) => {
       applyOperationResult(await transport.advanceRealtime(observedTimeNs));
+      if (options.lifecycleMode === 'realtime' && realtimeAdvanceOwner === 'browser') {
+        runtimeProgress += 1;
+        publishHealth();
+      }
     },
     onFailure: (cause) => {
-      reportFailure(cause, 'transport_failed');
+      failAndClose(cause, 'transport_failed');
     },
   });
 
@@ -506,7 +579,7 @@ export async function mountProductBrowserHost(
     runtimeInput = {
       ...runtimeInputOptions,
       ...(realtimeAdvanceOwner === 'rust-host'
-        ? { onAvailable: cadence.pulseRustHost }
+        ? { onAvailable: () => cadence?.pulseRustHost() }
         : {}),
       ...(binding === undefined
         ? {}
@@ -541,13 +614,13 @@ export async function mountProductBrowserHost(
       ...(options.renderer === undefined
         ? {
             renderer: {
-              onCadence: cadence.enqueue,
+              onCadence: (timeMs) => cadence?.enqueue(timeMs),
             },
           }
         : {
             renderer: {
               ...options.renderer,
-              onCadence: cadence.enqueue,
+              onCadence: (timeMs) => cadence?.enqueue(timeMs),
             },
           }),
     });
@@ -561,6 +634,7 @@ export async function mountProductBrowserHost(
     }
     started = true;
     state = 'ready';
+    publishHealth();
   } catch (cause) {
     const error = reportFailure(cause, 'startup_failed');
     unsubscribeTerminalFailures?.();
@@ -599,9 +673,7 @@ export async function mountProductBrowserHost(
   const completeTimeline = (
     completion: ProductBrowserTimelineCompletion,
   ): Promise<ProductBrowserTimelineCompletionResult> => {
-    if (state === 'disposed') {
-      return Promise.reject(new ProductBrowserHostError('disposed', 'Product Browser Host is disposed'));
-    }
+    try { requireReady(); } catch (cause) { return Promise.reject(cause); }
     if (transport.completeTimeline === undefined) {
       return Promise.reject(new ProductBrowserHostError(
         'timeline_unavailable',
@@ -620,11 +692,12 @@ export async function mountProductBrowserHost(
       if (result.readout !== undefined) applyOutput({ kind: 'runtime-readout', readout: result.readout });
       return result;
     }).catch((cause: unknown) => {
-      throw reportFailure(cause, 'transport_failed');
+      throw failAndClose(cause, 'transport_failed');
     });
   };
 
   const admitDemandStep = (): Promise<ProductBrowserRuntimeOperationResult> => {
+    try { requireReady(); } catch (cause) { return Promise.reject(cause); }
     if (options.lifecycleMode !== 'demand') {
       return Promise.reject(new ProductBrowserHostError(
         'invalid_options',
@@ -646,11 +719,12 @@ export async function mountProductBrowserHost(
       applyOperationResult(result);
       return result;
     }).catch((cause: unknown) => {
-      throw reportFailure(cause, 'transport_failed');
+      throw failAndClose(cause, 'transport_failed');
     });
   };
 
   const admitExternalStep = (step: string): Promise<ProductBrowserRuntimeOperationResult> => {
+    try { requireReady(); } catch (cause) { return Promise.reject(cause); }
     if (options.lifecycleMode !== 'external') {
       return Promise.reject(new ProductBrowserHostError(
         'invalid_options',
@@ -672,7 +746,7 @@ export async function mountProductBrowserHost(
       applyOperationResult(result);
       return result;
     }).catch((cause: unknown) => {
-      throw reportFailure(cause, 'transport_failed');
+      throw failAndClose(cause, 'transport_failed');
     });
   };
 
@@ -682,7 +756,8 @@ export async function mountProductBrowserHost(
       if (state === 'disposed') return;
       state = 'disposed';
       started = false;
-      cadence.dispose();
+      publishHealth();
+      cadence?.dispose();
       unsubscribeTerminalFailures?.();
       unsubscribeTerminalFailures = null;
       unsubscribeOutputs?.();
@@ -716,6 +791,37 @@ export async function mountProductBrowserHost(
     admitExternalStep,
     dispose,
   });
+}
+
+const MAXIMUM_HEALTH_DIAGNOSTIC_BYTES = 512;
+
+function boundedDiagnostic(value: string): string {
+  let diagnostic = '';
+  let bytes = 0;
+  const encoder = new TextEncoder();
+  for (const character of value) {
+    const characterBytes = encoder.encode(character).byteLength;
+    if (bytes + characterBytes > MAXIMUM_HEALTH_DIAGNOSTIC_BYTES) break;
+    diagnostic += character;
+    bytes += characterBytes;
+  }
+  return diagnostic;
+}
+
+function normalizeTerminalFailure(value: ProductBrowserRuntimeTerminalFailure): ProductBrowserRuntimeTerminalFailure {
+  if (value === null || typeof value !== 'object') {
+    return { kind: 'runtime-failure', diagnostic: 'runtime terminal failure was malformed' };
+  }
+  if (value.kind !== 'output-lag' && value.kind !== 'runtime-failure') {
+    return { kind: 'runtime-failure', diagnostic: 'runtime terminal failure kind was invalid' };
+  }
+  if (typeof value.diagnostic !== 'string' || value.diagnostic.length === 0) {
+    return { kind: 'runtime-failure', diagnostic: 'runtime terminal failure diagnostic was invalid' };
+  }
+  if (new TextEncoder().encode(value.diagnostic).byteLength > MAXIMUM_HEALTH_DIAGNOSTIC_BYTES) {
+    return { kind: 'runtime-failure', diagnostic: 'runtime terminal failure diagnostic exceeded host bounds' };
+  }
+  return value;
 }
 
 function validateOptions(options: ProductBrowserHostOptions): void {

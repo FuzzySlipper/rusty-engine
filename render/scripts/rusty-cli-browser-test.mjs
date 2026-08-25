@@ -48,6 +48,40 @@ try {
     throw new Error('Engine host did not retain one stable mounted canvas during bounded observation');
   }
 
+  const baselineHealth = await page.evaluate(() => ({
+    state: document.body?.dataset?.rustyProductHostState ?? null,
+    mode: document.body?.dataset?.rustyProductRuntimeMode ?? null,
+    progress: document.body?.dataset?.rustyProductRuntimeProgress ?? null,
+    failure: document.body?.dataset?.rustyProductRuntimeFailure ?? null,
+  }));
+  if (baselineHealth.failure !== null) {
+    throw new Error(`Product Browser Host reported a runtime failure: ${baselineHealth.failure}`);
+  }
+  if (baselineHealth.state !== 'ready' || !/^\d+$/u.test(baselineHealth.progress ?? '')) {
+    throw new Error(`Product Browser Host health markers were not ready: ${JSON.stringify(baselineHealth)}`);
+  }
+  if (baselineHealth.mode === 'realtime') {
+    await page.waitForFunction((baseline) => {
+      const body = document.body;
+      const failure = body?.dataset?.rustyProductRuntimeFailure ?? null;
+      if (failure !== null) return true;
+      const current = body?.dataset?.rustyProductRuntimeProgress ?? '';
+      return /^\d+$/u.test(current) && BigInt(current) > BigInt(baseline);
+    }, baselineHealth.progress, { timeout: 30_000 });
+    const currentHealth = await page.evaluate(() => ({
+      state: document.body?.dataset?.rustyProductHostState ?? null,
+      progress: document.body?.dataset?.rustyProductRuntimeProgress ?? null,
+      failure: document.body?.dataset?.rustyProductRuntimeFailure ?? null,
+    }));
+    if (currentHealth.failure !== null) {
+      throw new Error(`Product Browser Host reported a runtime failure: ${currentHealth.failure}`);
+    }
+    if (currentHealth.state !== 'ready' || !/^\d+$/u.test(currentHealth.progress ?? '')
+      || BigInt(currentHealth.progress) <= BigInt(baselineHealth.progress)) {
+      throw new Error(`Product Browser Host did not make fresh realtime runtime progress: ${JSON.stringify({ baselineHealth, currentHealth })}`);
+    }
+  }
+
   // Any Product Model consumer may use a different UI and intent vocabulary.
   // The counter hooks below belong only to the conformance fixture; when both
   // hooks are present, preserve its stronger UI, physical-input, and lifecycle
@@ -160,7 +194,7 @@ try {
   if (failures.length > 0) throw new Error(failures.join('\n'));
   process.stdout.write(`${JSON.stringify(conformanceProof
     ? { status: 'ok', origin, canvasCount, observationMs: HOST_STABILITY_OBSERVATION_MS, inputPaths: ['ui', 'physical-w'], lifecycle: 'restart-and-control-revision-stale-rejected-fresh-accepted' }
-    : { status: 'ok', origin, canvasCount, observationMs: HOST_STABILITY_OBSERVATION_MS, proof: 'loopback-root-one-stable-engine-canvas-no-page-errors' })}\n`);
+    : { status: 'ok', origin, canvasCount, observationMs: HOST_STABILITY_OBSERVATION_MS, proof: 'loopback-root-one-stable-engine-canvas-fresh-runtime-health-no-page-errors' })}\n`);
 } finally {
   await browser.close();
 }

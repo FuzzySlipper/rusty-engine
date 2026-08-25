@@ -1635,6 +1635,8 @@ if (tauri === undefined || tauri.core === undefined || tauri.event === undefined
 const invoke = tauri.core.invoke;
 const listen = tauri.event.listen;
 const PRODUCT_WRAPPER_ID = {};
+let outputListenerReady = Promise.resolve();
+let terminalFailureListenerReady = Promise.resolve();
 
 function command(name, payload, operation) {{
   if (document.body !== null) document.body.dataset.rustyLastRuntimeCommand = name;
@@ -1652,22 +1654,59 @@ function command(name, payload, operation) {{
 }}
 function subscribeOutputs(listener) {{
   let disposed = false;
-  let unlisten = null;
-  void listen('rusty-runtime-output', (event) => {{
+  const unlisten = [];
+  const subscribeOutput = listen('rusty-runtime-output', (event) => {{
     if (document.body !== null) document.body.dataset.rustyLastRuntimeOutput = String(event.payload?.kind ?? 'unknown');
     if (!disposed) listener(event.payload);
+  }}).then((remove) => {{ if (disposed) remove(); else unlisten.push(remove); }});
+  const subscribeProgress = listen('rusty-runtime-progress', (event) => {{
+    const payload = event.payload;
+    const valid = payload !== null
+      && typeof payload === 'object'
+      && !Array.isArray(payload)
+      && Object.keys(payload).length === 2
+      && payload.kind === 'runtime-progress'
+      && payload.owner === 'rust-host';
+    const progress = Object.freeze(valid
+      ? {{ kind: 'runtime-progress', owner: 'rust-host' }}
+      : {{ kind: 'runtime-progress', owner: 'invalid' }});
+    if (document.body !== null) document.body.dataset.rustyLastRuntimeOutput = progress.kind;
+    if (!disposed) listener(progress);
+  }}).then((remove) => {{ if (disposed) remove(); else unlisten.push(remove); }});
+  outputListenerReady = Promise.all([subscribeOutput, subscribeProgress]).then(() => undefined);
+  return () => {{ disposed = true; for (const remove of unlisten) remove(); }};
+}}
+function subscribeTerminalFailures(listener) {{
+  let disposed = false;
+  let unlisten = null;
+  terminalFailureListenerReady = listen('rusty-runtime-terminal-failure', (event) => {{
+    const payload = event.payload;
+    const valid = payload !== null
+      && typeof payload === 'object'
+      && !Array.isArray(payload)
+      && payload.kind === 'runtime-failure'
+      && typeof payload.diagnostic === 'string'
+      && payload.diagnostic.length > 0
+      && new TextEncoder().encode(payload.diagnostic).byteLength <= 512;
+    if (!disposed) listener(valid
+      ? payload
+      : {{ kind: 'runtime-failure', diagnostic: 'native runtime failure event was malformed' }});
   }}).then((remove) => {{ if (disposed) remove(); else unlisten = remove; }});
   return () => {{ disposed = true; if (unlisten !== null) unlisten(); }};
 }}
 
 export function createProductBridge() {{
   const transport = createProductBrowserRuntimeTransport({{
-    lifecycle: (operation) => command('runtime_lifecycle', {{ operation: operation.kind }}, 'lifecycle:' + operation.kind),
+    lifecycle: (operation) => operation.kind === 'start'
+      ? Promise.all([outputListenerReady, terminalFailureListenerReady])
+        .then(() => command('runtime_lifecycle', {{ operation: operation.kind }}, 'lifecycle:' + operation.kind))
+      : command('runtime_lifecycle', {{ operation: operation.kind }}, 'lifecycle:' + operation.kind),
     input: (batch) => command('runtime_input', {{ batch }}, 'input'),
     advanceRealtime: (observedTimeNs) => command('advance_realtime', {{ observedTimeNs }}, 'advance-realtime'),
     admitDemandStep: () => command('admit_demand_step', {{}}, 'admit-demand-step'),
     admitExternalStep: (step) => command('admit_external_step', {{ step }}, 'admit-external-step'),
     completeTimeline: (completion) => command('complete_timeline', {{ completion }}, 'complete-timeline'),
+    subscribeTerminalFailures,
     subscribeOutputs,
     dispose: () => command('runtime_shutdown', {{}}, 'shutdown').then(() => undefined),
   }});
@@ -1763,7 +1802,7 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Component, Path, PathBuf},
-    sync::{atomic::{AtomicBool, Ordering}, Arc},
+    sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -1798,6 +1837,32 @@ type GeneratedRuntime = rusty_product::product::GeneratedProductDevRuntime;
 struct DesktopRuntime {
     session: Arc<ProductDevOperationOwner<GeneratedRuntime>>,
     stop: Arc<AtomicBool>,
+    ticker_started: Arc<AtomicBool>,
+    ticker_control: Arc<Mutex<TickerControl>>,
+    ticker_gate: Arc<Mutex<()>>,
+}
+
+struct TickerControl {
+    active: bool,
+}
+
+fn lock_ticker_control(control: &Mutex<TickerControl>) -> std::sync::MutexGuard<'_, TickerControl> {
+    control.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn ticker_is_active(control: &Mutex<TickerControl>) -> bool {
+    lock_ticker_control(control).active
+}
+
+fn deactivate_ticker(control: &Mutex<TickerControl>) -> bool {
+    let mut ticker = lock_ticker_control(control);
+    let was_active = ticker.active;
+    ticker.active = false;
+    was_active
+}
+
+fn activate_ticker(control: &Mutex<TickerControl>) {
+    lock_ticker_control(control).active = true;
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1855,6 +1920,38 @@ fn publish(app: &AppHandle, value: &Value) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+fn bounded_terminal_diagnostic(stage: &str, error: &str) -> String {
+    let mut diagnostic = format!("{stage}: ");
+    for character in error.chars() {
+        if diagnostic.len().saturating_add(character.len_utf8()) > 512 {
+            break;
+        }
+        diagnostic.push(character);
+    }
+    if diagnostic.len() == stage.len() + 2 {
+        diagnostic.push_str("runtime operation failed");
+    }
+    diagnostic
+}
+
+fn publish_terminal_failure(app: &AppHandle, stage: &str, error: &str) {
+    let payload = json!({
+        "kind": "runtime-failure",
+        "diagnostic": bounded_terminal_diagnostic(stage, error),
+    });
+    if let Err(emit_error) = app.emit("rusty-runtime-terminal-failure", payload) {
+        eprintln!("Rusty Product runtime terminal failure event could not be published: {emit_error}");
+    }
+}
+
+fn publish_realtime_progress(app: &AppHandle) -> Result<(), String> {
+    app.emit(
+        "rusty-runtime-progress",
+        json!({ "kind": "runtime-progress", "owner": "rust-host" }),
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -2169,18 +2266,43 @@ fn show_startup_failure(app: &AppHandle, error: &str) -> Result<(), String> {
 
 fn spawn_realtime_ticker(app: AppHandle, runtime: DesktopRuntime) {
     let stop = Arc::clone(&runtime.stop);
+    let control = Arc::clone(&runtime.ticker_control);
+    let gate = Arc::clone(&runtime.ticker_gate);
     let session = Arc::clone(&runtime.session);
     thread::Builder::new()
         .name("rusty-product-realtime-ticker".to_owned())
         .spawn(move || {
             let started = Instant::now();
             while !stop.load(Ordering::Acquire) {
-                let elapsed = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
-                if let Ok(receipt) = session.advance_realtime(CanonicalU64::new(elapsed)) {
-                    if let Ok(value) = encode_receipt(receipt) {
-                        let _ = publish(&app, &value);
-                    }
+                let gate_guard = gate.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                if !ticker_is_active(&control) {
+                    drop(gate_guard);
+                    thread::sleep(Duration::from_millis(4));
+                    continue;
                 }
+                let elapsed = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+                let outcome = session.advance_realtime(CanonicalU64::new(elapsed))
+                    .map_err(error_text)
+                    .and_then(encode_receipt)
+                    .and_then(|value| {
+                        if value.get("result").and_then(|result| result.get("accepted")).and_then(Value::as_bool) != Some(true) {
+                            let diagnostic = value
+                                .get("result")
+                                .and_then(|result| result.get("diagnostic"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("realtime advance was rejected by the runtime");
+                            return Err(diagnostic.to_owned());
+                        }
+                        publish(&app, &value)?;
+                        publish_realtime_progress(&app)
+                    });
+                if let Err(error) = outcome {
+                    publish_terminal_failure(&app, "advance-realtime", &error);
+                    deactivate_ticker(&control);
+                    stop.store(true, Ordering::Release);
+                    break;
+                }
+                drop(gate_guard);
                 thread::sleep(Duration::from_millis(4));
             }
         })
@@ -2188,7 +2310,12 @@ fn spawn_realtime_ticker(app: AppHandle, runtime: DesktopRuntime) {
 }
 
 fn shutdown_runtime(runtime: &DesktopRuntime) {
+    let _gate = runtime
+        .ticker_gate
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if !runtime.stop.swap(true, Ordering::AcqRel) {
+        deactivate_ticker(&runtime.ticker_control);
         let _ = runtime
             .session
             .lifecycle(ProductDevLifecycleOperation::Shutdown);
@@ -2201,10 +2328,77 @@ fn runtime_lifecycle(
     state: State<'_, DesktopRuntime>,
     operation: LifecycleOperation,
 ) -> Result<Value, String> {
-    publish_receipt(
-        &app,
-        state.session.lifecycle(operation.engine()).map_err(error_text)?,
-    )
+    let _gate = state
+        .ticker_gate
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let shuts_down = matches!(&operation, LifecycleOperation::Shutdown);
+    if state.stop.load(Ordering::Acquire) && !shuts_down {
+        return Err("native realtime ticker is terminally stopped".to_owned());
+    }
+    let starts_realtime = matches!(&operation, LifecycleOperation::Start) && RUNTIME_MODE == "realtime";
+    let activates_ticker = matches!(
+        &operation,
+        LifecycleOperation::Start | LifecycleOperation::Resume | LifecycleOperation::Restart
+    ) && RUNTIME_MODE == "realtime";
+    let deactivates_ticker = matches!(
+        &operation,
+        LifecycleOperation::Pause
+            | LifecycleOperation::Restart
+            | LifecycleOperation::ReportFault
+            | LifecycleOperation::Shutdown
+    ) && RUNTIME_MODE == "realtime";
+    let previous_active = deactivates_ticker.then(|| deactivate_ticker(&state.ticker_control));
+    let receipt = match state.session.lifecycle(operation.engine()).map_err(error_text) {
+        Ok(receipt) => match encode_receipt(receipt) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                deactivate_ticker(&state.ticker_control);
+                state.stop.store(true, Ordering::Release);
+                publish_terminal_failure(&app, "lifecycle", &error);
+                return Err(error);
+            }
+        },
+        Err(error) => {
+            if let Some(previous_active) = previous_active {
+                lock_ticker_control(&state.ticker_control).active = previous_active;
+            }
+            return Err(error);
+        }
+    };
+    let accepted = receipt
+        .get("result")
+        .and_then(|result| result.get("accepted"))
+        .and_then(Value::as_bool)
+        .ok_or_else(|| "runtime lifecycle result is missing accepted".to_owned())?;
+    if let Err(error) = publish(&app, &receipt) {
+        // The lifecycle mutation already happened. Never restore a previous
+        // ticker state against that new runtime state when its receipt cannot
+        // reach the host; stop the native cadence and surface one terminal
+        // failure instead.
+        deactivate_ticker(&state.ticker_control);
+        state.stop.store(true, Ordering::Release);
+        publish_terminal_failure(&app, "lifecycle", &error);
+        return Err(error);
+    }
+    let result = receipt
+        .get("result")
+        .cloned()
+        .ok_or_else(|| "runtime lifecycle result is missing".to_owned())?;
+    if accepted {
+        if shuts_down {
+            state.stop.store(true, Ordering::Release);
+        }
+        if activates_ticker {
+            activate_ticker(&state.ticker_control);
+        }
+        if starts_realtime && !state.ticker_started.swap(true, Ordering::AcqRel) {
+            spawn_realtime_ticker(app, state.inner().clone());
+        }
+    } else if let Some(previous_active) = previous_active {
+        lock_ticker_control(&state.ticker_control).active = previous_active;
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -2275,7 +2469,12 @@ fn complete_timeline(
 
 #[tauri::command]
 fn runtime_shutdown(app: AppHandle, state: State<'_, DesktopRuntime>) -> Result<Value, String> {
+    let _gate = state
+        .ticker_gate
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     state.stop.store(true, Ordering::Release);
+    deactivate_ticker(&state.ticker_control);
     publish_receipt(
         &app,
         state
@@ -2290,8 +2489,10 @@ fn main() {
     let state = DesktopRuntime {
         session: Arc::new(ProductDevOperationOwner::new(runtime)),
         stop: Arc::new(AtomicBool::new(false)),
+        ticker_started: Arc::new(AtomicBool::new(false)),
+        ticker_control: Arc::new(Mutex::new(TickerControl { active: false })),
+        ticker_gate: Arc::new(Mutex::new(())),
     };
-    let ticker_state = state.clone();
     let mut builder = tauri::Builder::default();
 __PLUGIN__
     builder = builder.manage(state).invoke_handler(tauri::generate_handler![
@@ -2314,9 +2515,6 @@ __PLUGIN__
                 .inner_size(__WIDTH__ as f64, __HEIGHT__ as f64)
                 .resizable(__RESIZABLE__)
                 .build()?;
-            if RUNTIME_MODE == "realtime" {
-                spawn_realtime_ticker(app.handle().clone(), ticker_state.clone());
-            }
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -3404,6 +3602,84 @@ mod tests {
         assert!(source.contains("runtime_input"));
         assert!(source.contains("}, 'input')"));
         assert!(source.contains("rusty-runtime-output"));
+        assert!(source.contains("rusty-runtime-progress"));
+        assert!(source.contains("rusty-runtime-terminal-failure"));
+        assert!(source.contains("subscribeTerminalFailures"));
+        assert!(source.contains("native runtime failure event was malformed"));
+        assert!(source.contains("Promise.all([outputListenerReady, terminalFailureListenerReady])"));
+    }
+
+    #[test]
+    fn generated_bridge_activates_after_listeners_and_observes_ticker_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = manifest(1);
+        let wrapper = select_tauri_wrapper(&manifest, None).unwrap();
+        fs::create_dir_all(directory.path().join("engine")).unwrap();
+        fs::write(
+            directory.path().join("engine/product-browser-host.js"),
+            "export function createProductBrowserRuntimeTransport(adapter) { return adapter; }\n",
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("bridge.mjs"),
+            native_bridge_source(&manifest, &wrapper),
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("bridge-test.mjs"),
+            r#"const calls = [];
+const listeners = new Map();
+globalThis.document = { body: { dataset: {} } };
+globalThis.__TAURI__ = {
+  core: { invoke: async (name, payload) => {
+    calls.push(`invoke:${name}`);
+    return { accepted: true, operation: payload.operation ?? name };
+  } },
+  event: { listen: async (name, listener) => {
+    calls.push(`listen:${name}`);
+    listeners.set(name, listener);
+    return () => calls.push(`unlisten:${name}`);
+  } },
+};
+const { createProductBridge } = await import('./bridge.mjs');
+const bridge = createProductBridge();
+const outputs = [];
+const failures = [];
+const unlistenFailures = bridge.transport.subscribeTerminalFailures((failure) => failures.push(failure));
+const unlistenOutputs = bridge.transport.subscribeOutputs((output) => outputs.push(output));
+await bridge.transport.lifecycle({ kind: 'start' });
+const invoke = calls.indexOf('invoke:runtime_lifecycle');
+if (invoke < 0 || calls.slice(0, invoke).filter((value) => value.startsWith('listen:')).length !== 3) {
+  throw new Error(`ticker start did not wait for all native listeners: ${JSON.stringify(calls)}`);
+}
+listeners.get('rusty-runtime-progress')({ payload: { kind: 'runtime-progress', owner: 'rust-host' } });
+listeners.get('rusty-runtime-terminal-failure')({ payload: { kind: 'runtime-failure', diagnostic: 'advance-realtime: rejected' } });
+if (outputs.length !== 1 || outputs[0].kind !== 'runtime-progress' || failures.length !== 1) {
+  throw new Error(`ticker event mapping failed: ${JSON.stringify({ outputs, failures })}`);
+}
+listeners.get('rusty-runtime-progress')({ payload: { kind: 'runtime-progress', owner: 'rust-host', extra: true } });
+if (outputs.length !== 2 || outputs[1].owner !== 'invalid') {
+  throw new Error(`ticker progress was not strict-decoded: ${JSON.stringify(outputs)}`);
+}
+unlistenOutputs();
+unlistenFailures();
+listeners.get('rusty-runtime-progress')({ payload: { kind: 'runtime-progress', owner: 'rust-host' } });
+if (outputs.length !== 2 || !calls.includes('unlisten:rusty-runtime-output') || !calls.includes('unlisten:rusty-runtime-progress') || !calls.includes('unlisten:rusty-runtime-terminal-failure')) {
+  throw new Error(`native output listener disposal was incomplete: ${JSON.stringify(calls)}`);
+}
+"#,
+        )
+        .unwrap();
+        let output = Command::new("node")
+            .arg(directory.path().join("bridge-test.mjs"))
+            .current_dir(directory.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
@@ -3435,6 +3711,30 @@ mod tests {
         assert!(source.contains("CloseRequested"));
         assert!(source.contains("shutdown_runtime"));
         assert!(source.contains("show_startup_failure"));
+        assert!(source.contains("publish_terminal_failure"));
+        assert!(source.contains("publish_realtime_progress"));
+        assert!(source.contains("rusty-runtime-terminal-failure"));
+        assert!(source.contains("rusty-runtime-progress"));
+        assert!(source.contains("bounded_terminal_diagnostic"));
+        assert!(source.contains("realtime advance was rejected by the runtime"));
+        assert!(source.contains(".map_err(error_text)"));
+        assert!(source.contains(".and_then(encode_receipt)"));
+        assert!(source.contains("publish(&app, &value)"));
+        assert!(source.contains("stop.store(true, Ordering::Release)"));
+        assert!(source
+            .contains("let starts_realtime = matches!(&operation, LifecycleOperation::Start)"));
+        assert!(source.contains("state.ticker_started.swap(true, Ordering::AcqRel)"));
+        assert!(source.contains("ticker_control: Arc<Mutex<TickerControl>>"));
+        assert!(source.contains("ticker_gate: Arc<Mutex<()>>"));
+        assert!(source.contains("let activates_ticker = matches!("));
+        assert!(source.contains("let deactivates_ticker = matches!("));
+        assert!(source.contains("deactivate_ticker(&state.ticker_control)"));
+        assert!(source.contains("activate_ticker(&state.ticker_control)"));
+        assert!(source.contains("let gate_guard = gate.lock()"));
+        assert!(source.contains("let previous_active = deactivates_ticker.then"));
+        assert!(source.contains("if state.stop.load(Ordering::Acquire) && !shuts_down"));
+        assert!(source.contains("native realtime ticker is terminally stopped"));
+        assert!(!source.contains("if RUNTIME_MODE == \"realtime\" {"));
         let cargo = tauri_cargo_source(&manifest, &wrapper, Path::new("/tmp")).unwrap();
         assert!(cargo.contains("name = \"rusty-product-desktop\""));
         assert!(cargo.contains("tauri = { version = \"2.11.5\""));

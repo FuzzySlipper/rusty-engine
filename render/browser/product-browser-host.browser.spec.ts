@@ -22,6 +22,9 @@ test('generated product browser host owns one canvas, cadence, input drain, and 
   expect(await page.evaluate(() => window.__rustyProductBrowserRafCount ?? 0)).toBeGreaterThan(0);
   await expect(page.locator('#product-state')).toHaveText('state: ready');
   await expect(page.locator('#application')).toHaveAttribute('data-product-browser-state', 'ready');
+  await expect(page.locator('body')).toHaveAttribute('data-rusty-product-host-state', 'ready');
+  await expect.poll(async () => page.locator('body').getAttribute('data-rusty-product-runtime-progress')).not.toBe('0');
+  await expect(page.locator('body')).not.toHaveAttribute('data-rusty-product-runtime-failure');
 });
 
 test('generated product browser host disposes transport and application owners', async ({ page }) => {
@@ -39,4 +42,40 @@ test('named output lag closes the transport and leaves the host visibly failed',
   await page.locator('#product-output-lag').click();
   await expect(page.locator('#product-state')).toHaveText('state: failed');
   await expect(page.locator('#application')).toHaveAttribute('data-transport-disposed', 'true');
+  await expect(page.locator('body')).toHaveAttribute('data-rusty-product-host-state', 'failed');
+  await expect(page.locator('body')).toHaveAttribute(
+    'data-rusty-product-runtime-failure',
+    'fixture output lag requires a fresh snapshot',
+  );
+  const rejected = await page.evaluate(async () => {
+    try {
+      await window.__rustyProductBrowserHost?.admitDemandStep();
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  });
+  expect(rejected).toContain('has failed and its runtime transport is closed');
+});
+
+test('unbounded terminal diagnostics fail closed without exposing the payload', async ({ page }) => {
+  await page.goto('/browser/product-browser-host.html');
+  await expect(page.locator('#product-state')).toHaveText('state: ready');
+  await page.locator('#product-unbounded-terminal-failure').click();
+  await expect(page.locator('body')).toHaveAttribute('data-rusty-product-host-state', 'failed');
+  await expect(page.locator('body')).toHaveAttribute(
+    'data-rusty-product-runtime-failure',
+    'runtime terminal failure diagnostic exceeded host bounds',
+  );
+});
+
+test('browser-owned products reject injected Rust-host progress evidence', async ({ page }) => {
+  await page.goto('/browser/product-browser-host.html');
+  await expect(page.locator('#product-state')).toHaveText('state: ready');
+  await page.locator('#product-fake-rust-progress').click();
+  await expect(page.locator('body')).toHaveAttribute('data-rusty-product-host-state', 'failed');
+  await expect(page.locator('body')).toHaveAttribute(
+    'data-rusty-product-runtime-failure',
+    'Rust-host realtime progress is unavailable for this Product Browser Host mode',
+  );
 });

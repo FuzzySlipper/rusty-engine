@@ -3,8 +3,10 @@
 import {
   mountProductBrowserHost,
   type ProductBrowserRuntimeAdapter,
+  type ProductBrowserHost,
   type ProductBrowserRuntimeOutput,
   type ProductBrowserRuntimeReadout,
+  type ProductBrowserRuntimeTerminalFailure,
 } from '@rusty-engine/product-browser-host';
 import type {
   RustyApplicationRuntimeIdentity,
@@ -29,6 +31,7 @@ declare global {
       readonly projectionKeys: readonly string[] | null;
       readonly intentsKeys: readonly string[] | null;
     };
+    __rustyProductBrowserHost?: ProductBrowserHost;
   }
 }
 
@@ -43,7 +46,7 @@ window.requestAnimationFrame = (callback: FrameRequestCallback): number => {
 };
 
 let outputListeners = new Set<(output: ProductBrowserRuntimeOutput) => void>();
-let terminalFailureListeners = new Set<(failure: { readonly kind: 'output-lag'; readonly diagnostic: string }) => void>();
+let terminalFailureListeners = new Set<(failure: ProductBrowserRuntimeTerminalFailure) => void>();
 let disposed = false;
 const inputBatches: (readonly RustyApplicationRuntimeInputEnvelope[])[] = [];
 const realtimeTicks: string[] = [];
@@ -124,6 +127,19 @@ function emitOutputLag(): void {
   }, 0);
 }
 
+function emitUnboundedTerminalFailure(): void {
+  const failure = {
+    kind: 'runtime-failure',
+    diagnostic: 'x'.repeat(513),
+  } as never;
+  for (const listener of [...terminalFailureListeners]) listener(failure);
+  setTimeout(() => {
+    if (productStateElement !== null && productHost !== null) {
+      productStateElement.textContent = `state: ${productHost.readout().state}`;
+    }
+  }, 0);
+}
+
 const mountUi: RustyApplicationUiMount = (uiRoot, context) => {
   window.__rustyProductBrowserUiContextShape = {
     keys: Object.keys(context).sort(),
@@ -152,6 +168,16 @@ const mountUi: RustyApplicationUiMount = (uiRoot, context) => {
   lag.id = 'product-output-lag';
   lag.textContent = 'Simulate output lag';
   lag.addEventListener('click', emitOutputLag);
+  const malformed = document.createElement('button');
+  malformed.id = 'product-unbounded-terminal-failure';
+  malformed.textContent = 'Simulate invalid terminal failure';
+  malformed.addEventListener('click', emitUnboundedTerminalFailure);
+  const fakeProgress = document.createElement('button');
+  fakeProgress.id = 'product-fake-rust-progress';
+  fakeProgress.textContent = 'Simulate fake Rust progress';
+  fakeProgress.addEventListener('click', () => {
+    emit({ kind: 'runtime-progress', owner: 'rust-host' });
+  });
   const dispose = document.createElement('button');
   dispose.id = 'product-dispose';
   dispose.textContent = 'Dispose product host';
@@ -164,7 +190,7 @@ const mountUi: RustyApplicationUiMount = (uiRoot, context) => {
       root.append(disposedState);
     });
   });
-  ui.append(button, projection, state, lag, dispose);
+  ui.append(button, projection, state, lag, malformed, fakeProgress, dispose);
   uiRoot.append(ui);
 };
 void mountProductBrowserHost({
@@ -177,6 +203,7 @@ void mountProductBrowserHost({
   uiProjection: { expectedStream: 'product.ui', expectedContract: 'product.ui.v1' },
 }).then((host) => {
   productHost = host;
+  window.__rustyProductBrowserHost = host;
   root.dataset['productBrowserState'] = host.readout().state;
   const state = document.querySelector<HTMLOutputElement>('#product-state');
   if (state !== null) state.textContent = `state: ${host.readout().state}`;
