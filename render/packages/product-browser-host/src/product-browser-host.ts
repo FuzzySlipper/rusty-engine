@@ -918,7 +918,7 @@ export function productBrowserBundleAssets(
         '}',
         '',
         'function isSafeProductRendererPath(path) {',
-        "  return typeof path === 'string' && path.startsWith('content/') && new TextEncoder().encode(path).byteLength <= 512 && !path.startsWith('/') && !path.startsWith('//') && !path.includes('\\\\') && !path.includes(':') && !/[\\u0000-\\u001f\\u007f]/u.test(path) && !/\\s/u.test(path) && path.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..');",
+        "  return typeof path === 'string' && path.startsWith('content/') && new TextEncoder().encode(path).byteLength <= 512 && !path.startsWith('/') && !path.startsWith('//') && !path.includes('\\\\') && !path.includes('%') && !path.includes(':') && !/[\\u0000-\\u001f\\u007f]/u.test(path) && !/\\s/u.test(path) && path.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..');",
         '}',
         '',
         'async function loadProductRendererResource(resource) {',

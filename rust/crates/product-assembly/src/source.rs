@@ -386,6 +386,13 @@ fn admit_kernel_package(
                 .expect("Cargo manifest is a TOML table")
                 .remove("workspace");
         }
+        if contains_workspace_inheritance(&document) {
+            return Err(ProductAssemblyError::new(
+                "ASSEMBLY_KERNEL_PACKAGE_WORKSPACE",
+                manifest_path.as_str(),
+                "Product Kernel packages may not inherit an ambient Cargo workspace",
+            ));
+        }
         if document
             .get("package")
             .and_then(toml::Value::as_table)
@@ -504,6 +511,16 @@ fn admit_kernel_package(
         package_name: root_name.expect("root kernel manifest always visited"),
         cargo_rewrites: rewrites,
     })
+}
+
+fn contains_workspace_inheritance(value: &toml::Value) -> bool {
+    match value {
+        toml::Value::Table(table) => table
+            .iter()
+            .any(|(key, value)| key == "workspace" || contains_workspace_inheritance(value)),
+        toml::Value::Array(values) => values.iter().any(contains_workspace_inheritance),
+        _ => false,
+    }
 }
 
 fn validate_cargo_package_name(name: &str, path: &str) -> Result<(), ProductAssemblyError> {
@@ -1339,11 +1356,11 @@ pub(crate) fn validate_renderer_preload_resource(
     path: &str,
     bytes: &[u8],
 ) -> Result<(), ProductAssemblyError> {
-    if !content_store::is_safe_relative_path(path) {
+    if !content_store::is_safe_relative_path(path) || path.contains('%') {
         return Err(ProductAssemblyError::new(
             "ASSEMBLY_RENDERER_RESOURCE_PATH",
             format!("content/{path}"),
-            "renderer preload resources must retain a safe content-manifest relative path",
+            "renderer preload resources must retain a safe non-percent-aliased content-manifest relative path",
         ));
     }
     let (extension, media_type, minimum, maximum, signature) = match kind {
@@ -2601,6 +2618,36 @@ mod kernel_package_tests {
             .expect_err("unsafe dependency rejected");
             assert_eq!(error.diagnostic().code(), expected);
         }
+    }
+
+    #[test]
+    fn package_mode_rejects_all_workspace_inheritance_forms() {
+        for manifest in [
+            "[package]\nname = \"example-kernel\"\nversion = \"0.1.0\"\nedition = \"2021\"\nworkspace = \"outer\"\n\n[dependencies]\nrusty-engine = { path = \"../../engine\" }\n",
+            "[package]\nname = \"example-kernel\"\nversion.workspace = true\nedition = \"2021\"\n\n[dependencies]\nrusty-engine = { path = \"../../engine\" }\n",
+            "[package]\nname = \"example-kernel\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lints]\nworkspace = true\n\n[dependencies]\nrusty-engine = { path = \"../../engine\" }\n",
+        ] {
+            let files = BTreeMap::from([(
+                "kernel/Cargo.toml".to_owned(),
+                file(
+                    "kernel/Cargo.toml",
+                    manifest,
+                ),
+            )]);
+            let error = admit_kernel_package(
+                &ProductPath::parse("kernel/Cargo.toml".to_owned()).unwrap(),
+                &files,
+                "../rusty-engine",
+            )
+            .expect_err("ambient workspace inheritance rejected");
+            assert_eq!(
+                error.diagnostic().code(),
+                "ASSEMBLY_KERNEL_PACKAGE_WORKSPACE"
+            );
+        }
+        let dependency: toml::Value =
+            toml::from_str("[dependencies]\nhelper = { workspace = true }\n").unwrap();
+        assert!(contains_workspace_inheritance(&dependency));
     }
 
     #[test]

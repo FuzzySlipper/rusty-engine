@@ -1250,6 +1250,10 @@ fn renderer_preload_validation_rejects_escaping_paths_and_oversized_media() {
         .expect_err("renderer resource path must not escape content");
     assert_eq!(error.diagnostic().code(), "ASSEMBLY_RENDERER_RESOURCE_PATH");
 
+    let error = crate::source::validate_renderer_preload_resource("texture", "%2e%2e.png", png)
+        .expect_err("percent traversal alias must fail");
+    assert_eq!(error.diagnostic().code(), "ASSEMBLY_RENDERER_RESOURCE_PATH");
+
     let mut oversized = vec![0_u8; 16 * 1024 * 1024 + 1];
     oversized[..8].copy_from_slice(png);
     let error =

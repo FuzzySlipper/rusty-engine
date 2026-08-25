@@ -37,9 +37,7 @@ package as a normal Cargo dependency; it never reduces package mode to a
 Package Cargo manifests are admitted without an ambient workspace, registry,
 build-script, or target-specific dependency graph. Every non-Engine local
 dependency must resolve within `kernel/`; the fixed `rusty-engine` dependency
-is rewritten to the explicit generated Assembly facade path. The Engine facade
-re-exports `serde` and `serde_json` for product DTO serialization, avoiding a
-second package registry graph. Symlinks, lane escapes, malformed identities,
+is rewritten to the explicit generated Assembly facade path. Symlinks, lane escapes, malformed identities,
 and a missing fixed runtime export fail before product publication. For closed
 package DTOs, the `product-kernel` namespace re-exports `serde` and
 `serde_json`; package code uses `rusty_engine::product_kernel::{serde,

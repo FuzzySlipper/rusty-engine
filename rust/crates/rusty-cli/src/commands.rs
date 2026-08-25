@@ -32,6 +32,7 @@ const PRODUCT_STOP_TIMEOUT: Duration = Duration::from_secs(10);
 const BROWSER_TIMEOUT: Duration = Duration::from_secs(60);
 const DESKTOP_TIMEOUT: Duration = Duration::from_secs(180);
 const MAX_HOST_DIAGNOSTIC_BYTES: usize = 64 * 1024;
+const MAX_HOST_START_DETAIL_BYTES: usize = 512;
 
 pub(crate) fn check(start: PathBuf) -> Execution {
     let layout = layout::check(start.clone());
@@ -510,7 +511,15 @@ fn start_captured_host(
     port: u16,
     code_prefix: &str,
 ) -> Result<TestHost, Diagnostic> {
-    let mut child = Command::new(binary.path())
+    start_captured_host_path(binary.path(), port, code_prefix)
+}
+
+fn start_captured_host_path(
+    binary_path: &Path,
+    port: u16,
+    code_prefix: &str,
+) -> Result<TestHost, Diagnostic> {
+    let mut child = Command::new(binary_path)
         .arg("--port")
         .arg(port.to_string())
         .stdin(Stdio::piped())
@@ -520,7 +529,7 @@ fn start_captured_host(
         .map_err(|error| {
             Diagnostic::error(
                 host_code(code_prefix, "START"),
-                binary.path().display().to_string(),
+                binary_path.display().to_string(),
                 format!("Product Dev Host owner could not start: {error}. Remedy: rerun `rusty build` and inspect the generated runtime."),
             )
         })?;
@@ -540,24 +549,37 @@ fn start_captured_host(
             origin.trim().to_owned()
         }
         Ok(Ok(origin)) => {
+            let (stdout, stderr) = host.abort_and_join();
             return Err(Diagnostic::error(
                 host_code(code_prefix, "ORIGIN"),
                 "generated/product-assembly",
-                format!("Product Dev Host owner emitted an invalid origin `{}`. Remedy: regenerate the Engine-owned host.", origin.trim()),
+                format!(
+                    "Product Dev Host owner emitted an invalid origin `{}`. {} Remedy: regenerate the Engine-owned host.",
+                    bounded_host_start_detail(origin.trim().to_owned()),
+                    host_capture_detail(&stdout, &stderr),
+                ),
             ));
         }
         Ok(Err(error)) => {
+            let (stdout, stderr) = host.abort_and_join();
             return Err(Diagnostic::error(
                 host_code(code_prefix, "OUTPUT"),
                 "generated/product-assembly",
-                format!("Product Dev Host owner output failed: {error}. Remedy: regenerate and rebuild the host."),
+                format!(
+                    "Product Dev Host owner output failed: {error}. {} Remedy: regenerate and rebuild the host.",
+                    host_capture_detail(&stdout, &stderr),
+                ),
             ));
         }
         Err(_) => {
+            let (stdout, stderr) = host.abort_and_join();
             return Err(Diagnostic::error(
                 host_code(code_prefix, "TIMEOUT"),
                 "generated/product-assembly",
-                "Product Dev Host owner did not publish its loopback origin within 30 seconds. Remedy: inspect generated runtime startup diagnostics.",
+                format!(
+                    "Product Dev Host owner did not publish its loopback origin within 30 seconds. {} Remedy: inspect generated runtime startup diagnostics.",
+                    host_capture_detail(&stdout, &stderr),
+                ),
             ));
         }
     };
@@ -829,6 +851,18 @@ fn stop_test_host(mut host: TestHost, code_prefix: &str) -> Result<(), Diagnosti
 }
 
 impl TestHost {
+    fn abort_and_join(&mut self) -> (StreamCapture, StreamCapture) {
+        self.child.stdin.take();
+        match self.child.try_wait() {
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+            }
+        }
+        self.join_captures()
+    }
+
     fn join_captures(&mut self) -> (StreamCapture, StreamCapture) {
         let stdout = self
             .stdout_reader
@@ -841,6 +875,51 @@ impl TestHost {
             .and_then(|reader| reader.join().ok())
             .unwrap_or_default();
         (stdout, stderr)
+    }
+}
+
+fn host_capture_detail(stdout: &StreamCapture, stderr: &StreamCapture) -> String {
+    let mut detail = String::new();
+    append_host_capture_detail(&mut detail, "stdout", stdout);
+    append_host_capture_detail(&mut detail, "stderr", stderr);
+    if detail.is_empty() {
+        "Captured host output: <empty>.".to_owned()
+    } else {
+        format!(
+            "Captured host output: {}.",
+            bounded_host_start_detail(detail)
+        )
+    }
+}
+
+fn bounded_host_start_detail(mut detail: String) -> String {
+    if detail.len() <= MAX_HOST_START_DETAIL_BYTES {
+        return detail;
+    }
+    let mut end = MAX_HOST_START_DETAIL_BYTES - '…'.len_utf8();
+    while !detail.is_char_boundary(end) {
+        end -= 1;
+    }
+    detail.truncate(end);
+    detail.push('…');
+    detail
+}
+
+fn append_host_capture_detail(detail: &mut String, label: &str, capture: &StreamCapture) {
+    if !detail.is_empty() {
+        detail.push_str("; ");
+    }
+    detail.push_str(label);
+    detail.push_str(": ");
+    let text = String::from_utf8_lossy(&capture.bytes);
+    let text = text.trim();
+    if text.is_empty() {
+        detail.push_str("<empty>");
+    } else {
+        detail.push_str(text);
+    }
+    if capture.overflowed {
+        detail.push_str(" [stream truncated]");
     }
 }
 
@@ -898,5 +977,66 @@ fn usage_failed(diagnostic: Diagnostic) -> Execution {
     Execution {
         report: Report::failure("error", diagnostic),
         exit_code: crate::EXIT_USAGE,
+    }
+}
+
+#[cfg(test)]
+#[cfg(unix)]
+mod host_start_tests {
+    use std::{
+        fs,
+        os::unix::fs::PermissionsExt,
+        path::PathBuf,
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
+
+    use super::start_captured_host_path;
+
+    struct TemporaryScript(PathBuf);
+
+    impl TemporaryScript {
+        fn new(source: &str) -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time after epoch")
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "rusty-cli-host-start-{}-{nonce}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&root).expect("temporary script root");
+            let path = root.join("host.sh");
+            fs::write(&path, source).expect("host script");
+            let mut permissions = fs::metadata(&path).expect("host metadata").permissions();
+            permissions.set_mode(0o700);
+            fs::set_permissions(&path, permissions).expect("host script executable");
+            Self(root)
+        }
+
+        fn path(&self) -> PathBuf {
+            self.0.join("host.sh")
+        }
+    }
+
+    impl Drop for TemporaryScript {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn invalid_startup_origin_reaps_host_and_reports_stderr() {
+        let script = TemporaryScript::new(
+            "#!/bin/sh\nprintf '\\n'\nprintf 'useful startup panic\\n' >&2\nwhile :; do :; done\n",
+        );
+        let started = std::time::Instant::now();
+        let error = match start_captured_host_path(&script.path(), 0, "RUSTY_TEST") {
+            Ok(_) => panic!("blank origin must reject the host"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code, "RUSTY_TEST_HOST_ORIGIN");
+        assert!(error.message.contains("useful startup panic"));
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }
