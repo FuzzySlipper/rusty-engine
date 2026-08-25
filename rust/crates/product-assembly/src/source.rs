@@ -843,6 +843,7 @@ pub fn plan_product_assembly_with_kernel_capabilities(
         inputs.kernel_dependency_path(),
         &generated_browser_files,
         &content.runtime_files,
+        &content.renderer_preload,
     )?;
 
     let runtime_files = content.runtime_files;
@@ -1363,6 +1364,18 @@ pub(crate) fn validate_renderer_preload_resource(
             "renderer preload resources must retain a safe non-percent-aliased content-manifest relative path",
         ));
     }
+    let host_path = format!("content/{path}");
+    if host_path.len() > 512
+        || !host_path
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'/'))
+    {
+        return Err(ProductAssemblyError::new(
+            "ASSEMBLY_RENDERER_RESOURCE_PATH",
+            &host_path,
+            "renderer preload paths must use the fixed generated loopback host path alphabet",
+        ));
+    }
     let (extension, media_type, minimum, maximum, signature) = match kind {
         "texture" => (
             "png",
@@ -1423,6 +1436,7 @@ fn generate_source_plan(
     kernel_dependency_path: Option<&str>,
     browser_files: &[PublicationFile],
     runtime_files: &[ProductFile],
+    renderer_preload: &[RendererPreloadResource],
 ) -> Result<AssemblySourcePlan, ProductAssemblyError> {
     let name = format!(
         "rusty-product-{}",
@@ -1482,7 +1496,7 @@ fn generate_source_plan(
         "#![forbid(unsafe_code)]\n\npub mod product;\n".to_owned()
     };
     let kernel_descriptors = render_kernel_descriptors(kernel_capabilities);
-    let bundle_entries = render_bundle_entries(browser_files)?;
+    let bundle_entries = render_bundle_entries(browser_files, runtime_files, renderer_preload)?;
     let runtime_resources = render_runtime_resources(browser_files, runtime_files)?;
     let product = render_runtime_product_source(
         &bundle_entries,
@@ -1545,11 +1559,52 @@ fn render_kernel_descriptors(descriptors: &[ProductKernelCapabilityDescriptor]) 
 /// Renders the already-admitted browser closure into generated Rust source.
 /// The generated package only reaches sibling bundle bytes through
 /// `include_bytes!`; it never performs a runtime filesystem read.
-fn render_bundle_entries(files: &[PublicationFile]) -> Result<String, ProductAssemblyError> {
-    files
+fn render_bundle_entries(
+    browser_files: &[PublicationFile],
+    runtime_files: &[ProductFile],
+    renderer_preload: &[RendererPreloadResource],
+) -> Result<String, ProductAssemblyError> {
+    let mut files = browser_files
         .iter()
-        .map(|file| {
-            let path = file.relative_path().as_str();
+        .map(|file| (file.relative_path().as_str(), file.relative_path().as_str()))
+        .collect::<Vec<_>>();
+    let runtime_by_path = runtime_files
+        .iter()
+        .map(|file| (file.relative_path.as_str(), file))
+        .collect::<BTreeMap<_, _>>();
+    for resource in renderer_preload {
+        let file = runtime_by_path.get(resource.path.as_str()).ok_or_else(|| {
+            ProductAssemblyError::new(
+                "ASSEMBLY_RENDERER_PRELOAD_MISSING",
+                &resource.path,
+                "renderer preload descriptor path has no admitted runtime content body",
+            )
+        })?;
+        let path = file.relative_path.as_str();
+        files.push((path, path));
+    }
+    if files.len() > product_dev_host::MAX_BUNDLE_ENTRIES {
+        return Err(ProductAssemblyError::new(
+            "ASSEMBLY_BROWSER_FILE_COUNT",
+            "product-bundle",
+            format!(
+                "generated host bundle is limited to {} files",
+                product_dev_host::MAX_BUNDLE_ENTRIES
+            ),
+        ));
+    }
+    let mut paths = BTreeSet::new();
+    files.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    files
+        .into_iter()
+        .map(|(path, include_path)| {
+            if !paths.insert(path) {
+                return Err(ProductAssemblyError::new(
+                    "ASSEMBLY_BROWSER_DUPLICATE_FILE",
+                    path,
+                    "generated host bundle entries must have unique paths",
+                ));
+            }
             let content_type = browser_content_type(path).ok_or_else(|| {
                 ProductAssemblyError::new(
                     "ASSEMBLY_BROWSER_CONTENT_TYPE",
@@ -1561,7 +1616,7 @@ fn render_bundle_entries(files: &[PublicationFile]) -> Result<String, ProductAss
                 "product_dev_host::ProductDevBundleEntry::new({}, {}, include_bytes!(\"../../product-bundle/{}\").to_vec()).expect(\"generated Product Bundle entry remains admitted\"),",
                 rust_string(path),
                 rust_string(content_type),
-                path,
+                include_path,
             ))
         })
         .collect::<Result<Vec<_>, ProductAssemblyError>>()

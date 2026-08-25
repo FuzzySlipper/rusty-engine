@@ -40,6 +40,8 @@ pub const MAX_REQUEST_HEADER_BYTES: usize = 16 * 1024;
 pub const MAX_REQUEST_BODY_BYTES: usize = 512 * 1024;
 /// Upper bound for one immutable bundle resource.
 pub const MAX_BUNDLE_RESOURCE_BYTES: usize = 16 * 1024 * 1024;
+/// Upper bound for immutable entries admitted to one generated browser bundle.
+pub const MAX_BUNDLE_ENTRIES: usize = 4_096;
 /// Upper bound for all immutable bundle resource bytes.
 pub const MAX_BUNDLE_BYTES: usize = 64 * 1024 * 1024;
 /// Upper bound for output items retained for reconnecting SSE clients.

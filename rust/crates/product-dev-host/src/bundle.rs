@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::{ProductDevHostError, MAX_BUNDLE_BYTES, MAX_BUNDLE_RESOURCE_BYTES};
+use crate::{ProductDevHostError, MAX_BUNDLE_BYTES, MAX_BUNDLE_ENTRIES, MAX_BUNDLE_RESOURCE_BYTES};
 
 /// The generated Product Bundle entry point served at the local origin root.
 pub const PRODUCT_DEV_INDEX_PATH: &str = "index.html";
@@ -63,7 +63,7 @@ pub struct ProductDevBundle {
 
 impl ProductDevBundle {
     pub fn new(entries: Vec<ProductDevBundleEntry>) -> Result<Self, ProductDevHostError> {
-        if entries.is_empty() || entries.len() > 4_096 {
+        if entries.is_empty() || entries.len() > MAX_BUNDLE_ENTRIES {
             return Err(ProductDevHostError::new(
                 "DEV_HOST_BUNDLE_ENTRY_BOUNDS",
                 "bundle must contain between one and 4096 resources",

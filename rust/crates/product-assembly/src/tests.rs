@@ -1182,6 +1182,14 @@ fn renderer_resource_roles_generate_a_hashed_browser_preload_descriptor() {
 
     let inputs = fixture.inputs();
     let plan = plan_product_assembly(&fixture.root, &fixture.manifest, &inputs).expect("plan");
+    let generated_host = std::str::from_utf8(plan.source_plan().product_rs()).expect("host source");
+    assert!(generated_host.contains("content/renderer/sky.png"));
+    assert!(generated_host.contains("content/renderer/theme.wav"));
+    assert!(
+        !generated_host.contains("ProductDevBundleEntry::new(\"content/renderer/ordinary.png\"",)
+    );
+    assert!(generated_host.contains("\"image/png\""));
+    assert!(generated_host.contains("\"audio/wav\""));
     plan.publish(&fixture.root).expect("publish");
     let preload: serde_json::Value = serde_json::from_slice(
         &fs::read(
@@ -1252,6 +1260,10 @@ fn renderer_preload_validation_rejects_escaping_paths_and_oversized_media() {
 
     let error = crate::source::validate_renderer_preload_resource("texture", "%2e%2e.png", png)
         .expect_err("percent traversal alias must fail");
+    assert_eq!(error.diagnostic().code(), "ASSEMBLY_RENDERER_RESOURCE_PATH");
+
+    let error = crate::source::validate_renderer_preload_resource("texture", "é.png", png)
+        .expect_err("loopback host cannot serve a unicode resource path");
     assert_eq!(error.diagnostic().code(), "ASSEMBLY_RENDERER_RESOURCE_PATH");
 
     let mut oversized = vec![0_u8; 16 * 1024 * 1024 + 1];

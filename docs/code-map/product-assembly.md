@@ -43,6 +43,11 @@ application-host identities from that SHA-256, and publishes one deterministic
 `renderer-preload.json` plus the already admitted `content/` files. The
 descriptor is part of the browser-bundle receipt and generated Rust bundle map;
 the generated browser root—not product UI—uses it to preload same-origin bytes.
+The generated `ProductDevBundle` includes only the descriptor-declared
+renderer-preload runtime files (PNG or WAV), in addition to normal browser
+files. The loopback host therefore serves exactly those `content/...` paths
+from immutable `include_bytes!` data rather than reopening the product tree;
+other runtime resources remain available only through `ProductRuntimeResources`.
 
 ## Primary paths
 

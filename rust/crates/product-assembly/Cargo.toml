@@ -8,6 +8,7 @@ cap-primitives.workspace = true
 cap-std.workspace = true
 content-store.workspace = true
 product-model.workspace = true
+product-dev-host.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

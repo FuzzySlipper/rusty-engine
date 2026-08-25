@@ -2596,6 +2596,7 @@ dependencies = [
  "cap-std",
  "content-store",
  "product-model",
+ "product-dev-host",
  "serde",
  "serde_json",
  "sha2",
