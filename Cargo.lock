@@ -3060,8 +3060,6 @@ dependencies = [
  "runtime-standard-capabilities",
  "runtime-timeline",
  "runtime-ui",
- "serde",
- "serde_json",
  "state-machine",
  "svc-collision",
  "svc-mesh",

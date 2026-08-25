@@ -59,6 +59,13 @@ their stable identities. Declaration order therefore does not alter generated
 contract bytes. Compatibility follows actual changes to this current contract;
 there is no independent version field.
 
+For the closed DTO boundary only, `product-kernel` re-exports `serde` and
+`serde_json`. A bounded package kernel that depends on `rusty-engine` uses
+`rusty_engine::product_kernel::serde` and
+`rusty_engine::product_kernel::serde_json`, including
+`#[serde(crate = "rusty_engine::product_kernel::serde")]` on derives. The
+broad `rusty-engine` facade does not re-export serialization crates.
+
 ## Product Assembly and contexts
 
 `ProductAssembly::<Declaration>::link(admitted, selections)` first validates

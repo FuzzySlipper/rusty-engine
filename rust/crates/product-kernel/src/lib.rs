@@ -53,6 +53,13 @@ pub use render::{render_contract_json, render_contract_typescript};
 #[cfg(test)]
 pub(crate) use render::{render_contract_json_unchecked, render_contract_typescript_unchecked};
 pub use runtime_standard_capabilities;
+/// Serialization support for closed Product Kernel package DTOs.
+///
+/// Downstream packages use this narrow re-export instead of turning the broad
+/// Engine facade into a serialization dependency surface.
+pub use serde;
+/// JSON support for closed Product Kernel package DTOs.
+pub use serde_json;
 
 #[cfg(test)]
 mod tests;

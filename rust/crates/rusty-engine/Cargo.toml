@@ -54,10 +54,6 @@ voxel-annotation.workspace = true
 voxel-asset.workspace = true
 voxel-convert.workspace = true
 voxel-object-runtime.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-
-[dev-dependencies]
 
 [lints]
 workspace = true
