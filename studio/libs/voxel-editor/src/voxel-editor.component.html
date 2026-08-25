@@ -2,7 +2,7 @@
   <header class="voxel-title">
     <div>
       <strong>Voxel Authoring</strong>
-      <small>Rust-owned assets · shared renderer</small>
+      <small>Canonical assets · shared renderer</small>
     </div>
     <span>{{ assets().length }} assets · {{ instances().length }} instances</span>
   </header>
@@ -81,7 +81,7 @@
         </section>
 
         <section class="voxel-section">
-          <header><strong>House template</strong><span>deterministic Rust-owned primitive composition</span></header>
+          <header><strong>House template</strong><span>deterministic primitive composition</span></header>
           <div class="form-grid">
             <label class="wide"><span>Asset id</span><input [(ngModel)]="templateAssetId" /></label>
             <label><span>Material</span><input type="number" min="1" [(ngModel)]="templateMaterialSlot" /></label>
@@ -167,7 +167,7 @@
     @if (tab() === 'surfaces') {
       <div class="voxel-scroll" data-visual-id="voxel-surface-authoring">
         <section class="voxel-section surface-intro">
-          <header><strong>Runtime voxel surfaces</strong><span>Rust-owned texture, atlas, material, and assignment</span></header>
+          <header><strong>Runtime voxel surfaces</strong><span>canonical texture, atlas, material, and assignment</span></header>
           <p>
             This texture is sampled by the runtime voxel renderer. It is separate from the
             source-texture sampling controls under Convert, which only classify mesh-to-voxel input.

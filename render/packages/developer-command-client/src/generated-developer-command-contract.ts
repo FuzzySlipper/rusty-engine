@@ -1,4 +1,4 @@
-// This file is generated from the Rust-owned developer-command wire contract.
+// This file is generated from the developer-command wire contract.
 // Regenerate with: cargo run -p developer-command --bin export-wire-contract > render/contracts/developer-command-contract.json
 const CONTRACT = {
   "kind": "rusty-developer-command.v1",

@@ -300,7 +300,7 @@ evidence rather than a machine-dependent CI threshold. Tests also cover repeatab
 objects, clip/range selection, anchor identity, palette stability, strict decoding, budgets, stale
 apply/install, selectable preview, object/frame/window queries, and the real CLI.
 
-Rust owns source parsing, deformation, voxelization, canonical assets, validation, frame
+The converter owns source parsing, deformation, voxelization, canonical assets, validation, frame
 resolution, bounded runtime admission, explicit-time playback, and renderer-neutral values. Studio
 owns source and clip selection, forms, preview scrubbing, transient playback, and explicit
 apply/discard. A downstream product owns gameplay meaning and when to request playback.

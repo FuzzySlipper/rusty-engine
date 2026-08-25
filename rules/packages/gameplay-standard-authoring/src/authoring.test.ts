@@ -4,7 +4,7 @@ import { authorBinary64StandardExtension, authorExactDefinition, composeEmbedded
 import { standardFixtureArtifacts } from './fixtures.js';
 import { readFile } from 'node:fs/promises';
 
-test('exact authoring uses the rules provenance envelope and Rust-owned payload', () => {
+test('exact authoring uses the rules provenance envelope and canonical payload', () => {
   const artifact = authorExactDefinition({ domain: 'game', package: 'standard', version: 1, sources: [{ id: 'rules', path: 'rules.json' }], provenance: [{ subject: 'health_formula', source: 'rules' }], definition: { family: 'exact', semanticsVersion: 1, subject: 'health_formula', source: 'rules', roles: [], tree: { op: 'add', left: { op: 'literal', value: 3 }, right: { op: 'literal', value: 4 } } } });
   assert.match(artifact.canonicalJson, /"family":"exact"/);
   assert.throws(() => authorExactDefinition({ domain: 'game', package: 'standard', version: 1, sources: [{ id: 'rules', path: 'rules.json' }], provenance: [{ subject: 'other_formula', source: 'rules' }], definition: { family: 'exact', semanticsVersion: 1, subject: 'health_formula', source: 'rules', roles: [], tree: { op: 'literal', value: 3 } } }));
@@ -30,7 +30,7 @@ test('embedded composed authoring validates only the generated subtree and calle
   assert.throws(() => composeEmbeddedComposedExactDefinition({ codec, definition: { ...definition, tree: { op: 'literal', value: 1.5 } }, parentSchemaVersion: 2, provenance: [{ subject: 'formula', source: 'rules' }] }));
 });
 
-test('typed authoring converges exactly on the Rust-owned exact, continuous, and extension fixtures', async () => {
+test('typed authoring converges exactly on the exact, continuous, and extension fixtures', async () => {
   const artifacts = standardFixtureArtifacts();
   const fixtures = {
     exact: '../../../../fixtures/gameplay-standard/exact-schema-1.canonical.json',

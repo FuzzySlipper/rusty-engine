@@ -354,7 +354,7 @@ export interface UpsertMaterialRequest extends RequestHeader {
 }
 
 /**
- * One Rust-owned transaction imports/reimports the PNG, validates the complete
+ * One canonical transaction imports/reimports the PNG, validates the complete
  * catalog closure, publishes the material, and assigns it to one canonical
  * voxel-object slot. Studio supplies form intent and a trusted path only.
  */

@@ -81,8 +81,9 @@ demo artifact. It included canonical
 voxel inspection/initialization/duplication, catalog material upsert and palette replacement,
 multiple transformed instances, shared-renderer projection and transformed picking, bounded cube
 paint/erase with disposable preview, durable undo/redo/cursor revert, annotation layer creation,
-label edit, query/export, bounded model windows, and private-plan GLB conversion/apply. Rust owns
-hashes, semantic validation, history, plan identity, project admission, and atomic publication.
+label edit, query/export, bounded model windows, and private-plan GLB conversion/apply. The project
+adapter owns hashes, semantic validation, history, plan identity, project admission, and atomic
+publication.
 
 Protocol 4 implements the previously explicit M11F voxel work:
 

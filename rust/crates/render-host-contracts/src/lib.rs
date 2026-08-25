@@ -1,4 +1,4 @@
-//! Rust-owned facts crossing the private renderer host boundary.
+//! Canonical facts crossing the private renderer host boundary.
 //!
 //! These values describe presentation, physical input, bounded resources, and
 //! renderer observations. They do not assign gameplay meaning, choose storage

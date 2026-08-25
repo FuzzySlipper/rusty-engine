@@ -1,4 +1,4 @@
-//! Concrete Rust-owned adapter for the existing browser/webview renderer host.
+//! Concrete adapter for the existing browser/webview renderer host.
 //!
 //! Downstream owns the application window and event loop. This leaf owns one
 //! child webview, one embedded Engine-built renderer artifact, one private

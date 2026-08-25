@@ -34,7 +34,7 @@ boundary.
   phases; any intervening transform or rigid-body slot change, admitted-body
   set change, transform parenting, or voxel/static-mesh environment change
   rejects the entire candidate as stale.
-- Downstream Rust owns fixed-step scheduling, catch-up choice within Engine's
+- The downstream runtime owns fixed-step scheduling, catch-up choice within Engine's
   bound, forces and impulses selected by gameplay, spawn/despawn, consequences,
   complete saves, and presentation.
 - The existing `KinematicMotionSystem` remains the character/controller path.

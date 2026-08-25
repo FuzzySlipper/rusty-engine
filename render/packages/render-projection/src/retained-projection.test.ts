@@ -636,7 +636,7 @@ void test('viewmodel node and distinct-asset capacities reject without partial m
   assert.deepEqual(projection.snapshot(), nodeBound);
 });
 
-void test('applies every operation in the committed Rust-authored retained fixture', () => {
+void test('applies every operation in the committed retained fixture', () => {
   const input = JSON.parse(readFileSync(
     resolve(repoRoot, 'fixtures/render/retained-frame-v1.json'),
     'utf8',

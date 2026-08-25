@@ -166,7 +166,7 @@ export function buildVoxelObjectClipControlForSource(
 /**
  * Maps transient form selections to the closed Rust clip request. It chooses
  * identities and time units only; sampling, deformation, deduplication, and
- * hashes remain entirely Rust-owned.
+ * hashes remain entirely with the runtime owner.
  */
 export function buildVoxelObjectClipControl(
   available: readonly VoxelObjectSourceClipReadout[],

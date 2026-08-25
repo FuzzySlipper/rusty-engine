@@ -89,7 +89,7 @@ only through its versioned, caller-evidence route.
 consumers. It admits opaque schema-1 JSON or direct Rust candidates into the
 same immutable canonical representation, resolves exact package dependencies,
 and carries provenance and bounded diagnostics. The isolated `rules/`
-workspace generates its TypeScript contract from the Rust owner and offers
+workspace generates its TypeScript contract from the shared package descriptor and offers
 build-time canonical authoring without entering the ordinary provider graph.
 Downstream games retain every payload meaning, compiler decision, publication
 target, and runtime operation; mechanics-only games do not depend on it.
@@ -163,7 +163,7 @@ render/
   browser/                  real Chromium/WebGL/WebAudio/DOM acceptance
 
 rules/
-  packages/gameplay-rules-contracts generated Rust-owned envelope contracts and strict decode
+  packages/gameplay-rules-contracts generated envelope contracts and strict decode
   packages/gameplay-rules-authoring semantic-neutral canonical build-time authoring
 
 studio/
@@ -185,8 +185,8 @@ public surfaces, forbidden shortcuts, focused tests, and follow-up routes.
 
 ### Entity and service authority
 
-Downstream Rust owns the live gameplay loop and calls named Engine services
-directly. `entity-state` is the atomic boundary for entity components; it is
+The downstream product owns the live gameplay loop and calls named Engine
+services directly. `entity-state` is the atomic boundary for entity components; it is
 not a universal command route for collision, navigation, assets, presentation,
 or other service-owned state. `gameplay-mechanics` owns only the reusable
 catalog/component/service contracts documented in its
@@ -312,9 +312,9 @@ The format, limits, provenance, and failure behavior are documented in
 | [Known limitations](docs/known-limitations.md) | Active provider limitations and explicitly scheduled consumer certification |
 | [Rust source organization](docs/topics/development/rust-style.md) | Lightweight module and behavior-owner style |
 | [Downstream repository bootstrap](docs/topics/development/downstream-repository-bootstrap.md) | Shared-root clone layout, executable template, outside-agent orientation, and first verification |
-| [Rusty Template](https://github.com/FuzzySlipper/rusty-template) | Minimal compiling Rust-first downstream with TypeScript authoring and one bounded application viewport |
+| [Rusty Template](https://github.com/FuzzySlipper/rusty-template) | Minimal compiling downstream with TypeScript authoring and one bounded application viewport |
 | [Downstream Engine and Studio boundary](docs/topics/development/downstream-renderer-and-studio.md) | Sibling facade consumption, Engine-hosted Studio, and renderer ownership |
-| [Downstream gameplay adoption](docs/topics/gameplay/downstream-adoption.md) | Disposition-first migration into authored packages, downstream Rust authority, and optional gameplay crates |
+| [Downstream gameplay adoption](docs/topics/gameplay/downstream-adoption.md) | Disposition-first migration into authored packages, downstream gameplay ownership, and optional gameplay crates |
 | [Rendering successor contract](docs/rendering-successor-contract.md) | Complete shared-rendering scope and adaptation boundary |
 | [Rendering operations](docs/rendering-operations.md) | Provider verification, Rust host boundary, resources, and limitations |
 | [Studio migration contract](docs/studio-migration-contract.md) | First-party authoring scope, parity, isolation, owner adoption |

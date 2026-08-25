@@ -138,7 +138,7 @@ it:
 }
 ```
 
-Downstream Rust still owns weapon/equipment meaning and emits the selected visual and bounded
+The downstream product still owns weapon/equipment meaning and emits the selected visual and bounded
 disposable offsets as ordinary retained diffs. Apply those frames through `RendererSurface`.
 Camera synchronization, `start`, `stop`, `renderOnce`, resize, reset, picking, and `dispose` stay on
 that one surface. A rejected frame leaves both the neutral projection and backend unchanged.
@@ -167,7 +167,7 @@ resumable pause.
 
 This is presentation control for inspection, authored previews, and explicitly
 projected visual moments. It does not define gameplay animation states, cues,
-scheduling, root motion, or consequence policy; downstream Rust remains the
+scheduling, root motion, or consequence policy; the downstream product remains the
 authority that decides whether and when to emit the retained command.
 
 ### Authored sky background

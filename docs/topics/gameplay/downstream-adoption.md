@@ -14,7 +14,7 @@ The central rule is:
 
 Rusty Engine provides optional mechanisms. It does not prescribe one game
 model, one rules language, or one directory full of inherited sample code.
-Downstream Rust owns game meaning, live authority, orchestration, and
+The downstream product owns game meaning, live state, orchestration, and
 persistence. An optional build-time TypeScript authoring DSL makes retained
 definitions easier to compose; it does not execute gameplay.
 
@@ -26,8 +26,8 @@ This document composes the canonical boundaries in
 [gameplay rules contract](../../gameplay-rules-contract.md). Those documents
 remain authoritative for their individual Engine surfaces.
 Use [upstream promotion and authoring DSL](../development/upstream-promotion-and-authoring-dsl.md)
-when deciding whether a missing mechanism belongs in Engine, downstream Rust,
-or the authoring DSL.
+when deciding whether a missing mechanism belongs in Engine, the product
+runtime, or the authoring DSL.
 
 ## Start with the product, not the old code
 
@@ -42,8 +42,8 @@ Before designing a package or moving a module, write a short disposition table:
 | Current playable product path | keep | migrate retained definitions and authority | It is the product |
 | Old demo or test room | delete | do not port | It no longer serves the product |
 | Shared gameplay mechanism | keep | use an Engine capability if it fits | Avoid parallel machinery |
-| Game-specific rule or action | keep | author downstream and execute in downstream Rust | It carries game meaning |
-| UI value editor duplicating gameplay fields | delete or make read-only | source definitions from Rust readout | It must not remain a second authority |
+| Game-specific rule or action | keep | author downstream and execute in the product runtime | It carries game meaning |
+| UI value editor duplicating gameplay fields | delete or make read-only | source definitions from canonical readouts | It must not remain a second authority |
 | Import, renderer, collision, or host code | keep only if the product needs it | do not move into gameplay authoring | It has a different owner |
 
 Remove surfaces marked `delete` and their exclusive tests, scripts, manifests,
@@ -55,13 +55,13 @@ For each retained concept, classify its destination:
 
 1. **Authored definition:** immutable configuration or content composed at
    build time. It may belong in a downstream TypeScript authoring DSL.
-2. **Downstream Rust semantics:** decoding, semantic compilation, policy,
+2. **Downstream semantic layer:** decoding, semantic compilation, policy,
    formulas, target meaning, facts, scheduling, and orchestration.
 3. **Reusable Engine mechanism:** stats, tracks, effects, items, damage,
    resolution lifecycle, entity state, spatial queries, and other named
-   services used through the Rust facade.
-4. **Runtime authority:** current world and actor state, clocks, queues, save
-   policy, and mutations. These remain in Rust owners.
+   services used through the public facade.
+4. **Runtime state and operations:** current world and actor state, clocks,
+   queues, save policy, and mutations. These remain in named runtime owners.
 5. **Presentation:** HUD, animation selection, rendering, and explanation UI.
    These observe gameplay; they do not define it.
 
@@ -91,7 +91,7 @@ Common choices are:
 - A rules-heavy game may use all three.
 
 `gameplay_rules` is not an interpreter above `gameplay_mechanics`.
-`gameplay_resolution` does not call either sibling. Downstream Rust composes
+`gameplay_resolution` does not call either sibling. The downstream product composes
 them.
 
 ## Recommended migration layout
@@ -128,15 +128,16 @@ product/                     # host, runtime loop, persistence, rendering, UI
 
 The exact folder names are not an Engine API. The important distinctions are:
 
-- `gameplay/src` above is Rust authority;
+- `gameplay/src` above is the canonical semantic and runtime owner;
 - `gameplay/authoring/src` is an optional build-time TypeScript authoring DSL;
 - `data/gameplay` contains immutable exchanged artifacts; and
 - product UI TypeScript lives elsewhere.
 
 Existing repositories do not need a cosmetic move solely to match this tree.
 Rusty Dagger predates this recommendation: its TypeScript is rooted at
-`gameplay/src`, while its Rust authority is in `crates/dagger-rpg`. That is
-valid because the two owners are still explicit. New repositories should avoid
+`gameplay/src`, while its canonical semantic and runtime owner is in
+`crates/dagger-rpg`. That is valid because the two owners are still explicit.
+New repositories should avoid
 using the same unqualified `gameplay/src` name for different languages.
 
 Do not put gameplay catalogs under an Angular, HUD, browser-shell, renderer, or
@@ -153,7 +154,7 @@ optional TypeScript authoring DSL
 authored package / wire AST
         |
         v
-canonical downstream Rust definitions
+canonical downstream definitions
         |
         v
 live state, attempts, receipts, and events
@@ -166,7 +167,7 @@ ergonomics. Keep syntax, macros, and catalogs visibly separate in a
 substantial DSL. The source is not canonical and never runs in the product.
 Authored variation and helpers that lower entirely to existing nodes belong
 here. A new serialized node, unit, target meaning, fact class, sample class,
-operation, or evaluator behavior begins as Rust semantics before gaining an
+operation, or evaluator behavior begins as semantic definitions before gaining an
 optional DSL facade.
 
 ### 2. Authored package / wire AST
@@ -188,10 +189,10 @@ range in explicit downstream-owned encodings and validate them in downstream
 Rust. See the [gameplay rules contract](../../gameplay-rules-contract.md) for
 the numeric admission and compatibility rules.
 
-### 3. Canonical downstream Rust definitions
+### 3. Canonical downstream definitions
 
 Engine envelope admission proves only that the package is bounded and
-structurally valid. Downstream Rust decodes the opaque payload, rejects unknown
+structurally valid. The downstream runtime decodes the opaque payload, rejects unknown
 or inconsistent meanings, resolves references, applies quotas, compiles
 programs, and constructs any `MechanicsCatalog`. Only this canonical result may
 enter live gameplay.
@@ -214,17 +215,17 @@ and program grammars. They are not the default starting shape after the
 Standard campaign: first use current Engine exact/continuous structures and
 standard mechanics operations where they fit; for game-specific exact values,
 use the closed `ComposedExactExpr<ProductLeaf>` route with a static downstream
-Rust codec. Keep product operations, policy, aggregate, and transaction typed
+codec. Keep product operations, policy, aggregate, and transaction typed
 and downstream-owned. See the [greenfield downstream product path](../development/greenfield-downstream-product.md#a-small-dagger-like-extension-without-a-local-universal-grammar).
 
 Retain a local grammar only when the surviving product actually needs its
-meaning. Its Rust semantic compiler must be the authority, and an optional
-TypeScript facade can only lower to that Rust-owned vocabulary. Do not recreate
+meaning. Its semantic compiler must be the authority, and an optional
+TypeScript facade can only lower to that canonical vocabulary. Do not recreate
 a universal local evaluator merely because the old source had one.
 
 One package composition root should combine only the retained catalogs and
 source records. `gameplay-rules` owns the semantic-neutral envelope, while the
-downstream Rust compiler owns the payload vocabulary and admission.
+downstream semantic compiler owns the payload vocabulary and admission.
 
 Materialization should:
 
@@ -457,8 +458,8 @@ the same admission / resolution / mechanics path used by player intents
 ```
 
 Perception, pathfinding, collision, line of sight, timing, and scheduling remain
-in their owning Rust systems. Authored AI data may describe goals, candidate
-actions, requirements, weights, or thresholds. Downstream Rust admits and
+in their named systems. Authored AI data may describe goals, candidate actions,
+requirements, weights, or thresholds. The downstream runtime admits and
 evaluates that data.
 
 An AI output may be `MoveTo`, `Face`, `Wait`, `Flee`, or
@@ -509,7 +510,7 @@ A useful read-only explorer can relate:
 - mechanics receipts and semantic events; and
 - rejection/fault identity and phase trace.
 
-The UI should render these records from Rust-owned readouts. It should not
+The UI should render these records from canonical readouts. It should not
 duplicate the authoring grammar, evaluate expressions, or mutate individual
 runtime fields. Authoring happens in TypeScript source; runtime debugging uses
 explicit product commands or fixtures, not a generic value editor.
@@ -545,7 +546,7 @@ Use this order:
    product actually reaches;
 3. delete retired demos, clean rooms, proof-only UI, and their exclusive
    verification machinery;
-4. move the retained Rust gameplay modules into the gameplay owner;
+4. move the retained gameplay modules into the gameplay owner;
 5. adopt Engine mechanics/resolution where they clearly replace retained local
    machinery;
 6. add TypeScript authoring only for retained definitions that benefit from

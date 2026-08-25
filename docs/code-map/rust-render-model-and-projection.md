@@ -13,7 +13,7 @@ entity, authored-scene, voxel, and presentation facts.
   voxels, lights, materials, previews, and debug facts.
 - `render-presentation`: bounded animation-controller, audio, billboard,
   particle, telemetry, and asset-view projection mechanisms.
-- `render-host-contracts`: Rust-owned webview composition, camera, pick,
+- `render-host-contracts`: webview composition, camera, pick,
   physical-input, observation, diagnostic, and lifecycle facts.
 - `rusty-engine`: complete unconditional namespace-preserving downstream facade.
 
@@ -46,7 +46,7 @@ entity, authored-scene, voxel, and presentation facts.
 
 ## Public downstream surfaces
 
-- `render-model` is the Rust-owned serialized border consumed by retained
+- `render-model` is the canonical serialized border consumed by retained
   TypeScript contracts.
 - Its packed-mesh helper creates deterministic bounded resource bytes; UV-free
   payloads retain packed V1 while UV-bearing payloads use packed V2 with an

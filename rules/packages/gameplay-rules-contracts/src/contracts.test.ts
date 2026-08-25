@@ -25,7 +25,7 @@ const binary64FixtureUrl = new URL(
   import.meta.url,
 );
 
-test('the Rust-owned golden fixture decodes through the generated contract', async () => {
+test('the golden fixture decodes through the generated contract', async () => {
   const fixture = await readFile(fixtureUrl);
   const packageValue = decodeRulePackage(fixture);
 

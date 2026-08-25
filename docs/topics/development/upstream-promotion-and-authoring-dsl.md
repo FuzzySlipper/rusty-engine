@@ -69,10 +69,10 @@ optional TypeScript authoring DSL
 authored package / wire AST
         |
         v
-canonical Rust gameplay definitions
+canonical gameplay definitions
         |
         v
-live Rust state, attempts, receipts, and events
+live state, attempts, receipts, and events
 ```
 
 ### TypeScript authoring DSL
@@ -80,7 +80,7 @@ live Rust state, attempts, receipts, and events
 The optional DSL is a build-time source language embedded in TypeScript. It
 may use typed constructors, pure macros, imports, loops, and catalog
 composition to author immutable declarations. It does not run in the product,
-gather live facts, schedule work, or mutate authority.
+gather live facts, schedule work, or mutate runtime state.
 
 Calling this source an authoring DSL is intentional. It is more expressive
 than a passive configuration file, but it is not the canonical gameplay model
@@ -103,22 +103,23 @@ representation, not mutable runtime state. Engine may own a semantic-neutral
 envelope or generated contracts while the downstream domain owns any
 game-specific payload grammar.
 
-### Canonical Rust gameplay definitions
+### Canonical gameplay definitions
 
-Rust performs structural and semantic admission, resolves references and
-units, applies quotas, and compiles the authored package into canonical owned
-definitions. New serialized meaning begins here: define and test the Rust
-semantics before exposing a TypeScript constructor or macro.
+The owning semantic layer performs structural and semantic admission, resolves
+references and units, applies quotas, and compiles the authored package into
+canonical definitions. New serialized meaning begins here: define and test
+the semantic contract before exposing a TypeScript constructor or macro.
 
-Direct Rust construction remains a first-class path. Novel mechanics do not
-need to enter the DSL before their semantic shape has stabilized.
+Direct construction through the owning runtime API remains a first-class path.
+Novel mechanics do not need to enter the DSL before their semantic shape has
+stabilized.
 
-### Live Rust authority
+### Live state and operations
 
-Rust gathers facts, admits intents, supplies or verifies bounded random
-samples, plans and commits effects, advances time, schedules work, persists
-state, and publishes receipts. TypeScript source and wire data never become a
-second gameplay authority.
+Named runtime services and state owners gather facts, admit intents, supply or
+verify bounded random samples, plan and commit effects, advance time, schedule
+work, persist state, and publish receipts. TypeScript source and wire data are
+inputs to those owners, not a second gameplay state or execution path.
 
 ## Daily placement rules
 
@@ -128,15 +129,15 @@ Use these defaults:
 |---|---|
 | New catalog instance or tuned values | TypeScript authoring DSL |
 | Pure helper that lowers to existing nodes | TypeScript DSL macro |
-| New serialized node, unit, target meaning, fact class, sample class, operation, or evaluator behavior | Rust semantics first, then an optional DSL facade |
-| Live fact gathering, query, mutation, scheduling, AI decision, or persistence | Downstream Rust or the named neutral Engine service |
-| Novel one-off mechanic without demonstrated authoring variation | Direct downstream Rust definition |
+| New serialized node, unit, target meaning, fact class, sample class, operation, or evaluator behavior | Owning semantic definition first, then an optional DSL facade |
+| Live fact gathering, query, mutation, scheduling, AI decision, or persistence | Downstream runtime or the named neutral Engine service |
+| Novel one-off mechanic without demonstrated authoring variation | Direct downstream runtime definition |
 | Neutral mechanism with clear ownership or correctness value | Engine candidate; no consumer-count gate |
 
 The shortest useful heuristic is:
 
-> Authored variation goes in the DSL. New meaning begins in Rust. Live
-> authority stays in Rust.
+> Authored variation goes in the DSL. New meaning begins in the owning semantic
+> definitions. Live state and execution stay with the named runtime owners.
 
 Adding a catalog row is ordinary. Adding a pure macro is local. Adding a new
 serialized `kind` is an architectural change.

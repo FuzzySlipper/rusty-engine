@@ -30,7 +30,7 @@ disposition path sets are identical and every named capability/evidence path exi
 ## Ownership
 
 ```text
-downstream game or Studio Rust authority
+downstream game or Studio runtime owners
   state + typed facts + explicit appearance/resource descriptions
                          |
                          v
@@ -44,7 +44,7 @@ downstream game or Studio Rust authority
        GPU, audio, DOM overlays, editor viewport, readouts
 ```
 
-- Downstream Rust owns gameplay meaning, current authoritative state, and the choice to emit a
+- Downstream product owners own gameplay meaning, current state, and the choice to emit a
   visual/audio/effect intent.
 - `render-model` owns renderer-neutral values, validation, retained operations, and stable JSON.
 - `render-projection` owns deterministic handle allocation, change detection, entity/spatial
@@ -239,4 +239,4 @@ no current demo screen exercises it. Operational commands and intentional limita
 
 Closeout also requires platform dependencies to remain in their owning layers: renderer-neutral
 packages must not acquire Three/DOM/HTTP assumptions, and browser convenience must not create a new
-Rust authority or synthetic product API.
+gameplay or product authority path or synthetic product API.

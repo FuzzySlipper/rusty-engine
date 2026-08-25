@@ -71,8 +71,8 @@ frameworks.
 
 Every future cluster must preserve these properties:
 
-1. **Locality:** entity data leads directly to the responsible Rust behavior owner.
-2. **Single authority:** Rust owns live gameplay; TypeScript authors content and hosts presentation.
+1. **Locality:** entity data leads directly to the responsible behavior owner.
+2. **Single authority:** The product runtime owns live gameplay; TypeScript authors content and hosts presentation.
 3. **Explicit time:** recurring work is a named host phase and delayed work is a stable intent.
 4. **Typed consequences:** cross-domain events are meaningful and explicitly routed; ordinary work
    stays as direct calls and typed returns.
@@ -95,7 +95,7 @@ Every future cluster must preserve these properties:
 |---|---|---|---|
 | M0 | Object-centric baseline | Pre-ledger | `EntityState`, direct services, typed door/encounter consequences, scheduling, snapshots, collision-aware motion, and a retained browser renderer established the replacement spine. |
 | M1 | Navigation and autonomous locomotion | #6103 | `EnemyNavigationSystem` derives routes from canonical voxel state, resolves collision-aware movement, persists durable intent, and reports typed arrival/block/unreachable outcomes. |
-| M2A | Player input, controller, and camera | #6104 | Browser devices resolve to typed actions; Rust owns accepted player pose and collision; the follow camera is presentation-only derived state. |
+| M2A | Player input, controller, and camera | #6104 | Browser devices resolve to typed actions; the controller and spatial owners accept player pose and collision; the follow camera is presentation-only derived state. |
 | M2B | Generated voxel environment and mesh | #6105 | One seeded voxel authority feeds collision, navigation, and visible mesh; generation parameters are content and the entity door remains the canonical aperture gate. |
 | M3 | Combat, health, and weapons | #6106 | `CombatService` resolves authored attack intent against live transforms and voxel occlusion, mutates typed health/weapon state, and emits defeat as a real encounter consequence. |
 | M4 | Presentation feedback | #6111-#6114 | Accepted facts produce rebuildable posture and disposable animation/audio/particle/billboard cues without gameplay writes or replay requirements. |
@@ -211,7 +211,7 @@ Den task #6138 supersedes the old unscheduled M8 placeholder. The isolated `stud
 uses the shared renderer and the M11S owners through a closed project-owned Rust adapter. It covers
 project/scene/entity/light/capability authoring, catalog and general asset import/reimport, the full
 voxel/annotation/history/conversion/environment family, and versioned host-user camera/input
-settings. Rust retains semantic validation, project persistence, mutation, and execution authority;
+settings. The project adapter retains semantic validation, project persistence, mutation, and execution authority;
 the explicit browser host owns only product UI, bounded adapter forwarding, and host-user
 preferences. Angular/Nx and Playwright remain outside ordinary Engine installation and CI.
 

@@ -27,10 +27,10 @@ TypeScript content composition
         -> local bounded Three renderer plus successor DOM shell
 ```
 
-Rust owns live session state, substantial gameplay logic, service composition, scheduling, and
-persistence. TypeScript may use normal functions, loops, helpers, and type checking to generate
-content, but it does not own runtime behavior instances, opaque gameplay state, callbacks, or a
-second scheduler.
+The product runtime owns live session state, substantial gameplay logic, service composition,
+scheduling, and persistence. TypeScript may use normal functions, loops, helpers, and type checking
+to generate content, but it does not own runtime behavior instances, opaque gameplay state,
+callbacks, or a second scheduler.
 
 ## What the language-host comparison established
 
@@ -77,7 +77,7 @@ close without persisting the diagnostic event journal.
 
 ### Encounter-gated exit
 
-TypeScript composes explicit actor, encounter, exit, and enemy definitions. Rust admits those into
+TypeScript composes explicit actor, encounter, exit, and enemy definitions. The runtime admits those into
 concrete `EnemyComponent`, `EncounterComponent`, `DoorComponent`, and relationship data before the
 session starts.
 
@@ -143,7 +143,7 @@ response, contact manifold, acceleration, or gravity.
 ### Named real-time workload
 
 TypeScript composes `authored-voxel-wall-kinematic-lanes`: one independently positioned runner and
-one wall voxel per lane. Rust admits the strict data once, then runs 180 bounded phases at a
+one wall voxel per lane. The runtime admits the strict data once, then runs 180 bounded phases at a
 simulated 60 Hz. The matrix truncates the checked-in 256-body definition deterministically for the
 smaller cases; it does not change runtime code.
 
@@ -382,7 +382,7 @@ fresh Chromium page. That page performs an ordinary GET, rebuilds the defeated e
 and proves the response has no cues, the DOM has no animation-pulse attributes or transient effect
 nodes, and the audio sink has zero active targets. The outer smoke compares the complete state
 response immediately before and after that page load, proving the browser restart made no
-authoritative change. Rust tests independently compare snapshots across delivered and discarded
+authoritative change. Provider tests independently compare snapshots across delivered and discarded
 response paths, while focused TypeScript tests cover forced audio failure and concrete reset cleanup.
 
 The concrete reset ownership and strengthened proof landed in review correction

@@ -554,7 +554,7 @@ pub fn find_volumetric_path(
 /// Propose one deterministic, bounded waypoint toward a live target position.
 ///
 /// This is intentionally small: it is not a full pathfinding replacement, nor
-/// does it mutate authority. It gives host callers a Rust-owned service readout
+/// does it mutate authority. It gives host callers a canonical service readout
 /// for simple enemy approach behavior while fuller
 /// voxel-derived path following remains on [`find_path`].
 pub fn propose_direct_nav_movement(

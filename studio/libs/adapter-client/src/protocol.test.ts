@@ -1079,7 +1079,7 @@ test('asset import plans, browser provenance, and named client calls stay closed
   assert.equal(response.plan.hasErrors, false);
 });
 
-test('protocol 15 admits exact Rust-owned voxel surface resources and rejects drift', () => {
+test('protocol 15 admits exact voxel surface resources and rejects drift', () => {
   const opened = projectOpened('surface-project');
   const digest = 'a'.repeat(64);
   opened.project.textureResources = [{

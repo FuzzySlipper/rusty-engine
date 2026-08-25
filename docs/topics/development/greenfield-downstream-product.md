@@ -8,19 +8,19 @@ For the shared-root clone order and a compiling minimum implementation, start
 with the [downstream repository bootstrap](downstream-repository-bootstrap.md)
 and [Rusty Template](https://github.com/FuzzySlipper/rusty-template). This page
 then explains how to grow that minimum without moving product authority into
-the browser or Engine.
+the browser or a generic Engine product layer.
 
 The shortest useful rule is:
 
-> Rust owns live meaning. TypeScript may author or present it, but does not
-> evaluate, schedule, save, or mutate it.
+> The product's runtime owners hold live meaning. TypeScript may author or
+> present it, but does not evaluate, schedule, save, or mutate it.
 
 For an existing repository being simplified or moved, use [downstream gameplay
 adoption](../gameplay/downstream-adoption.md) instead. The exact provider
 contracts remain in [the design](../../design.md), the relevant code maps, and
 the public source they link. Use [upstream promotion and authoring
 DSL](upstream-promotion-and-authoring-dsl.md) when deciding whether a new
-capability belongs in Engine, downstream Rust, or an authoring facade.
+capability belongs in Engine, the product runtime, or an authoring facade.
 
 ## Choose owners before folders
 
@@ -66,36 +66,37 @@ my-product/
 
 The names are illustrative. The separation is the contract:
 
-- Rust crates hold the authoritative live product state and semantic compiler.
+- Runtime and gameplay owners hold the live product state and semantic
+  compiler.
 - `authoring/` is optional build-time TypeScript, never the live evaluator.
-- `content/gameplay/` contains the canonical materialized artifacts the Rust
-  compiler admits; source and artifact provenance stay inspectable.
+- `content/gameplay/` contains the canonical materialized artifacts the
+  semantic compiler admits; source and artifact provenance stay inspectable.
 - `ui/` owns local presentation state only. It does not become a gameplay,
-  catalog, save, or renderer authority.
+  catalog, save, or renderer state owner.
 - A product host adapts the selected process/window transport to one named
-  Rust product service; it is not an Engine-owned universal product runtime.
+  product service; it is not an Engine-owned universal product runtime.
 
 ## Code philosophy: use the smallest authority surface
 
-### Rust only
+### Direct typed product code without a DSL
 
-Use Rust directly for a compact product whose rules are clearer as typed code,
-or when the content does not need a separate authoring language. Rust defines
-the action types, owns the data/capability calls, gathers facts, stages effects,
-and publishes a complete product result. Engine mechanisms are direct named
-service calls, not callbacks or ambient command routing.
+Use direct typed product code for a compact product whose rules are clearer
+without a separate authoring language. The product defines action types, owns
+data/capability calls, gathers facts, stages effects, and publishes a complete
+product result. Engine mechanisms are direct named service calls, not
+callbacks or ambient command routing.
 
-### Rust-first semantics with optional generated TypeScript authoring
+### Semantic definitions with optional generated TypeScript authoring
 
 Use a TypeScript DSL when authored variation benefits from pure composition.
-Rust first defines the serialized vocabulary, bounded decoder, semantic
+The semantic layer first defines the serialized vocabulary, bounded decoder,
 compiler, and runtime interpretation. TypeScript then offers strict builders,
 catalogs, and pure macros that lower only to that already-defined vocabulary.
-It materializes a canonical artifact, and Rust re-admits and compiles it before
-anything reaches the live catalog.
+It materializes a canonical artifact, and the runtime re-admits and compiles it
+before anything reaches the live catalog.
 
 This is the normal route for `gameplay-rules` packages and generated strict
-contracts. A generated TypeScript type describes a Rust-owned wire boundary; it
+contracts. A generated TypeScript type describes a canonical wire boundary; it
 does not create new serialized meaning and cannot be a runtime evaluator.
 
 ### TypeScript-only pure macros or presentation
@@ -103,7 +104,8 @@ does not create new serialized meaning and cannot be a runtime evaluator.
 Pure TypeScript can make a catalog readable, lower repeated authoring forms,
 format a diagnostic, assemble a bounded UI panel, or adapt physical DOM input
 to a typed product request. It may not quietly acquire semantic validation that
-belongs in Rust merely because a build script is convenient.
+belongs in the semantic/runtime owner merely because a build script is
+convenient.
 
 ### Forbidden authority moves
 
@@ -111,25 +113,25 @@ Do not put a live expression evaluator, game clock, command scheduler, save
 model, canonical catalog, mutable world state, or gameplay transaction in
 TypeScript. Do not use the DOM, a URL, browser storage, or an offscreen control
 as world state. Do not add HTTP just because the development adapter happens to
-use it. Browser code asks a named Rust product service to do work; Rust returns
-typed readouts and receipts.
+use it. Browser code asks a named product service to do work; the service
+returns typed readouts and receipts.
 
 ### How a change should land
 
 | Change | First landing | Optional follow-up |
 |---|---|---|
-| New live mechanic, semantic rule, unit, target meaning, evaluator behavior, or serialized node | Rust definition, validation, compiler, and focused tests | Strict generated or handwritten TypeScript authoring facade after the Rust meaning is settled |
-| Neutral reusable mechanism with a clear Engine owner | Owning Engine Rust crate and facade | Engine-owned generated TypeScript contract only when build-time authors need it |
-| Product-specific fact or operation | Downstream Rust closed type and product transaction | Product TypeScript constructor/codec that lowers to the Rust-owned wire shape |
-| New catalog entry or tuned authored values | Existing TypeScript authoring syntax or direct Rust construction | No new Rust type when the meaning is unchanged |
+| New live mechanic, semantic rule, unit, target meaning, evaluator behavior, or serialized node | Semantic/runtime definition, validation, compiler, and focused tests | Strict generated or handwritten TypeScript authoring facade after the meaning is settled |
+| Neutral reusable mechanism with a clear Engine owner | Owning Engine mechanism and facade | Engine-owned generated TypeScript contract only when build-time authors need it |
+| Product-specific fact or operation | Downstream product closed type and transaction | Product TypeScript constructor/codec that lowers to the canonical wire shape |
+| New catalog entry or tuned authored values | Existing TypeScript authoring syntax or direct runtime construction | No new runtime type when the meaning is unchanged |
 | Repeated authoring shorthand | Pure TypeScript macro that expands entirely to admitted nodes | None; it must not add a private serialized kind |
 | HUD, menu, accessibility, or input presentation | TypeScript component inside the supplied bounded UI root | Typed request/readout adapter to the Rust product service |
 
-Do not add TypeScript merely for symmetry. A Rust-only capability is complete
-when direct Rust construction is the clearest product route. Add the authoring
-facade when it materially improves authored variation or gives authors one
-strict route to an Engine-owned mechanism; the facade follows the Rust
-contract and does not become a prerequisite for the Rust capability.
+Do not add TypeScript merely for symmetry. A capability is complete when direct
+runtime construction is the clearest product route. Add the authoring facade
+when it materially improves authored variation or gives authors one strict
+route to an Engine-owned mechanism; the facade follows the canonical contract
+and does not become a prerequisite for the runtime capability.
 
 ## A small Dagger-like extension, without a local universal grammar
 
@@ -149,13 +151,13 @@ expression/predicate/program language.
 3. Optional TypeScript authoring uses the generated strict composed-exact
    contract and one matching strict product codec. It can materialize and
    validate the bounded artifact, but it never evaluates the check in play.
-4. Product Rust first admits canonical bytes with
+4. The product runtime first admits canonical bytes with
    `decode_canonical_rule_package` (or an in-memory candidate with
    `admit_rule_package`). It then passes that `AdmittedRulePackage` to
    `compile_composed_exact_package`. For an aggregate, it selects a bounded
    `SelectedRulePayloadSubtree` from the already-admitted parent before calling
    `compile_composed_exact_embedded`. Only then does it gather current product
-   facts and evaluate the compiled comparison through the Rust owner.
+   facts and evaluate the compiled comparison through the named runtime owner.
 
 The product may pair that predicate with Engine standard mechanics operations
 where they fit, and with its own closed operations where they do not. It should
@@ -167,8 +169,8 @@ through a generic extension tunnel.
 
 ```text
 typed player/AI intent
-  -> product Rust admits intent and gathers current typed facts
-  -> Rust evaluates compiled exact comparison and plans standard/product operations
+  -> product runtime admits intent and gathers current typed facts
+  -> runtime evaluates the compiled exact comparison and plans standard/product operations
   -> product ResolutionTransaction stages a complete candidate
   -> named Engine services execute on that private candidate where applicable
   -> product validates guards and publishes once, or publishes nothing

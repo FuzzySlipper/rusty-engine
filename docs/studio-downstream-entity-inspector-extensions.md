@@ -40,7 +40,7 @@ In one sentence:
 
 > The core protocol tells the host which entity owns which stable component and which typed
 > inspector contract can interpret it; the statically composed downstream package supplies that
-> contract, while downstream Rust remains the only semantic and mutation authority.
+> contract, while the downstream product remains the only semantic and mutation authority.
 
 The Voxel Object panel is the Engine-owned built-in contribution. The first independent consumer is
 the Loading Bay Weapon authoring panel owned by `rusty-engine-demo`. Both now render through the same
@@ -118,7 +118,7 @@ the package revision compiled into the downstream product.
 - The proposal sketched `expectedComponentRevision` as a number. Loading Bay correctly implements it
   as the full lowercase content hash of the canonical `StoredItemDefinition`, because its authority
   is project content rather than an `entity-state` slot counter.
-- The proposal's `LoadingBayWeaponDraft` became `LoadingBayWeaponCandidate`; the admitted Rust owner
+- The proposal's `LoadingBayWeaponDraft` became `LoadingBayWeaponCandidate`; the admitted component owner
   defines its complete fields and returns a typed readout and receipt.
 - The implemented context also carries `contractGeneration` and `adapterId`; these close late-response
   races without exposing a store, service locator, or downstream value.
@@ -257,7 +257,7 @@ the static inspector outlet changes presentation composition, not semantic owner
 
 ## Downstream typed authoring contracts
 
-Each downstream component family owns a small closed protocol beside its Rust semantic owner. The
+Each downstream component family owns a small closed protocol beside its semantic owner. The
 implemented second consumer uses this request vocabulary:
 
 ```ts
@@ -291,7 +291,7 @@ they are not a parallel Engine editor model.
 The operation path is explicit:
 
 1. The panel calls `readLoadingBayWeapon` through its concrete downstream client.
-2. Downstream Rust resolves the exact owner and component and returns a bounded typed readout.
+2. The downstream product resolves the exact owner and component and returns a bounded typed readout.
 3. The panel edits a disposable local form.
 4. The panel calls `replaceLoadingBayWeapon` with the current project hash, exact component
    revision, owner, and complete typed candidate.
@@ -432,7 +432,7 @@ Evidence follows the owner:
    optimistic conflict handling, atomic persistence, and fresh-process reconstruction.
 5. **Downstream panel:** component tests using the real downstream decoder/client contract.
 6. **Product integration:** historical served Chromium proof that selects a real weapon-owning
-   entity, reads its Rust-owned configuration, commits one change, observes the canonical reread,
+  entity, reads its canonical configuration, commits one change, observes the canonical reread,
    and preserves the change after a fresh adapter process.
 
 Ordinary Engine Rust verification remains free of Node, Angular, browser, renderer, and sibling
@@ -448,7 +448,7 @@ Loading Bay Weapon authoring is the promotion consumer, not a placeholder `Examp
 It is a strong test because:
 
 - Loading Bay already reports weapon presence, and its FPS campaign defines weapons as real
-  Rust-owned inventory items while keeping weapon vocabulary, attack modes, ammunition policy,
+  canonical inventory items while keeping weapon vocabulary, attack modes, ammunition policy,
   pickups, and product persistence downstream;
 - Den task `rusty-engine-demo#6290` is explicitly migrating its state to reviewed typed
   gameplay-mechanics components and named services while keeping weapon policy downstream;

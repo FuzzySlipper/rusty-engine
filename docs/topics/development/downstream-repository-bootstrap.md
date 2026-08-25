@@ -77,17 +77,17 @@ Rusty Template deliberately implements one small vertical path:
 ```text
 product TypeScript authoring
   -> checked product artifact
-  -> Rust admission and product owner
-  -> Rust renderer-neutral cube frame
+  -> product admission and runtime owner
+  -> renderer-neutral cube frame
   -> public application-host
   -> one viewport, one Engine canvas, one bounded product UI label
 ```
 
-The TypeScript authoring layer is build-time syntax. Rust defines and validates
-the serialized meaning. The initial browser frame is exported by Rust as a
-deterministic smoke artifact; TypeScript presents it but does not evaluate or
-mutate gameplay. A real product can later replace that export edge with one
-named Rust product service without changing the renderer or UI authority
+The TypeScript authoring layer is build-time syntax. The product semantic layer
+defines and validates the serialized meaning. The initial browser frame is
+exported as a deterministic smoke artifact; TypeScript presents it but does
+not evaluate or mutate gameplay. A real product can later replace that export
+edge with one named product service without changing the renderer or UI authority
 boundary.
 
 The cube proves compilation, product-content admission, Rust projection, the
@@ -100,16 +100,17 @@ desktop lifecycle.
 The minimum template keeps these responsibilities visible:
 
 ```text
-crates/                 Rust product gameplay, state, admission, projection
+crates/                 product gameplay, state, admission, projection
 gameplay/authoring/     optional pure TypeScript builders and materialization
-content/gameplay/       checked artifacts admitted again by Rust
+content/gameplay/       checked artifacts admitted again by the product runtime
 apps/web/               thin application-host composition and local UI
 tests/                  product and browser-owned evidence
 scripts/                verification and deterministic build plumbing
 ```
 
-Start new live semantics in Rust. Add TypeScript authoring only after Rust owns
-the wire shape and compiler. Keep HUD, menu, and accessibility state inside the
+Start new live semantics in the product runtime. Add TypeScript authoring only
+after the owning semantic layer defines the wire shape and compiler. Keep HUD,
+menu, and accessibility state inside the
 UI root supplied by `mountRustyApplication`; never use the document, hidden
 offscreen controls, or browser storage as gameplay state.
 

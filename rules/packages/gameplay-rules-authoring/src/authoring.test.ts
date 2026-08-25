@@ -73,7 +73,7 @@ test('ordinary typed authoring emits the exact Rust-decoded golden artifact', as
   assert.ok(Object.isFrozen(artifact.package.payload));
 });
 
-test('binary64 authoring emits the exact Rust-owned float fixture', async () => {
+test('binary64 authoring emits the exact float fixture', async () => {
   const artifact = authorBinary64RulePackage({
     domain: 'fixture',
     package: 'binary64',
