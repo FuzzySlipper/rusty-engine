@@ -972,8 +972,9 @@ fn relocated_generated_host_runs_without_authored_source() {
         .duration_since(UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
-    let original_root = PathBuf::from(format!("/home/dev/rusty-product-host-original-{nonce}"));
-    let relocated_root = PathBuf::from(format!("/home/dev/rusty-product-host-relocated-{nonce}"));
+    let temporary_root = std::env::temp_dir().join(format!("rusty-product-host-{nonce}"));
+    let original_root = temporary_root.join("original");
+    let relocated_root = temporary_root.join("relocated");
     let mut fixture = Fixture::new("host-source");
     copy_tree(&fixture.root, &original_root);
     fs::remove_dir_all(&fixture.root).expect("remove copied temporary fixture");
@@ -1091,6 +1092,7 @@ fn relocated_generated_host_runs_without_authored_source() {
     );
     let _ = fs::remove_dir_all(&relocated_root);
     fixture.cleanup();
+    let _ = fs::remove_dir_all(&temporary_root);
 }
 
 #[test]
