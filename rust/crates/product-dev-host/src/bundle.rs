@@ -149,6 +149,7 @@ fn is_allowed_content_type(value: &str) -> bool {
             | "image/png"
             | "image/jpeg"
             | "audio/wav"
+            | "application/octet-stream"
             | "application/wasm"
     )
 }
@@ -164,6 +165,18 @@ mod tests {
                 .expect("WAV content type is an admitted immutable bundle resource");
         assert_eq!(entry.path(), "content/renderer/theme.wav");
         assert_eq!(entry.content_type(), "audio/wav");
+    }
+
+    #[test]
+    fn admits_bounded_packed_mesh_bundle_bytes_with_the_renderer_media_type() {
+        let entry = ProductDevBundleEntry::new(
+            "content/renderer/packed.rmesh",
+            "application/octet-stream",
+            vec![0_u8; 16],
+        )
+        .expect("packed mesh content type is an admitted immutable bundle resource");
+        assert_eq!(entry.path(), "content/renderer/packed.rmesh");
+        assert_eq!(entry.content_type(), "application/octet-stream");
     }
 
     #[test]

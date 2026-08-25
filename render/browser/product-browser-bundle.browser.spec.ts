@@ -58,7 +58,38 @@ test('relocatable generated bundle starts over plain HTTP without bare package i
     await expect.poll(() => requests.some((request) => request === 'GET /renderer-preload.json')).toBe(true);
     await expect.poll(() => requests.some((request) => request === 'GET /content/renderer/%C3%A9.png')).toBe(true);
     await expect.poll(() => requests.some((request) => request === 'GET /content/renderer/theme.wav')).toBe(true);
+    await expect.poll(() => requests.some((request) => request === 'GET /content/renderer/packed.rmesh')).toBe(true);
     expect(pageErrors).toEqual([]);
+  } finally {
+    await closeBundleServer(server);
+  }
+});
+
+test('generated bundle rejects a malformed packed mesh header before initial content admission', async ({ page }) => {
+  const engineHostModule = await readFile(
+    fileURLToPath(new URL('../artifacts/product-browser-host/product-browser-host.js', import.meta.url)),
+    'utf8',
+  );
+  const generatedAssets = productBrowserBundleAssets({
+    engineHostModule,
+    uiModule: './ui/main.js',
+    runtimeAdapterModule: './runtime-adapter.js',
+    lifecycleMode: 'realtime',
+  });
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  const server = await createBundleServer(
+    generatedAssets,
+    rendererPreloadResources({ invalidMeshHeader: true }),
+    [],
+  );
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('malformed-mesh Product Bundle server did not expose a TCP address');
+  }
+  try {
+    await page.goto(`http://127.0.0.1:${String(address.port)}/index.html`);
+    await expect.poll(() => pageErrors.some((error) => error.includes('media mismatch'))).toBe(true);
   } finally {
     await closeBundleServer(server);
   }
@@ -182,13 +213,15 @@ async function handleRequest(
 interface RendererPreloadResource {
   readonly identity: string;
   readonly contentHash: string;
-  readonly mediaType: 'image/png' | 'audio/wav';
+  readonly mediaType: 'image/png' | 'audio/wav' | 'application/octet-stream';
   readonly path: string;
   readonly byteLength: number;
   readonly bytes: Uint8Array;
 }
 
-function rendererPreloadResources(): readonly RendererPreloadResource[] {
+function rendererPreloadResources(
+  options: { readonly invalidMeshHeader?: boolean } = {},
+): readonly RendererPreloadResource[] {
   const png = Uint8Array.from(Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL95wAAAABJRU5ErkJggg==',
     'base64',
@@ -196,15 +229,18 @@ function rendererPreloadResources(): readonly RendererPreloadResource[] {
   const wav = new Uint8Array(44);
   wav.set([82, 73, 70, 70], 0);
   wav.set([87, 65, 86, 69], 8);
+  const mesh = packedMeshResourceBytes();
+  if (options.invalidMeshHeader === true) mesh[12] = 0;
   return Object.freeze([
     preloadResource('texture', 'image/png', 'content/renderer/é.png', png),
     preloadResource('audio', 'audio/wav', 'content/renderer/theme.wav', wav),
+    preloadResource('mesh', 'application/octet-stream', 'content/renderer/packed.rmesh', mesh),
   ]);
 }
 
 function preloadResource(
-  kind: 'texture' | 'audio',
-  mediaType: 'image/png' | 'audio/wav',
+  kind: 'texture' | 'audio' | 'mesh',
+  mediaType: 'image/png' | 'audio/wav' | 'application/octet-stream',
   path: string,
   bytes: Uint8Array,
 ): RendererPreloadResource {
@@ -219,6 +255,14 @@ function preloadResource(
   });
 }
 
+function packedMeshResourceBytes(): Uint8Array {
+  const bytes = new Uint8Array(16);
+  bytes.set(Buffer.from('RMSHLE01', 'ascii'), 0);
+  new DataView(bytes.buffer).setUint32(8, bytes.byteLength, true);
+  new DataView(bytes.buffer).setUint32(12, 1, true);
+  return bytes;
+}
+
 function sendJson(response: ServerResponse, value: unknown): void {
   const body = JSON.stringify(value);
   response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
@@ -228,7 +272,15 @@ function sendJson(response: ServerResponse, value: unknown): void {
 function contentTypeFor(path: string): string {
   return path.endsWith('.html')
     ? 'text/html; charset=utf-8'
-    : 'text/javascript; charset=utf-8';
+    : path.endsWith('.json')
+      ? 'application/json; charset=utf-8'
+      : path.endsWith('.png')
+        ? 'image/png'
+        : path.endsWith('.wav')
+          ? 'audio/wav'
+          : path.endsWith('.rmesh')
+            ? 'application/octet-stream'
+            : 'text/javascript; charset=utf-8';
 }
 
 async function closeBundleServer(server: Server): Promise<void> {

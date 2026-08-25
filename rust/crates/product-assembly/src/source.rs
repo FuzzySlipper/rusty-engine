@@ -31,10 +31,14 @@ const BROWSER_RUNTIME_ADAPTER_PATH: &str = "runtime-adapter.js";
 const BROWSER_RENDERER_PRELOAD_PATH: &str = "renderer-preload.json";
 const RENDERER_TEXTURE_ROLE: &str = "resource:renderer-texture";
 const RENDERER_AUDIO_ROLE: &str = "resource:renderer-audio";
+const RENDERER_MESH_ROLE: &str = "resource:renderer-mesh";
 const RENDERER_TEXTURE_MAX_COUNT: usize = 256;
 const RENDERER_TEXTURE_MAX_BYTES: usize = 16 * 1024 * 1024;
 const RENDERER_AUDIO_MAX_COUNT: usize = 64;
 const RENDERER_AUDIO_MAX_BYTES: usize = 8 * 1024 * 1024;
+const RENDERER_MESH_MAX_COUNT: usize = 1024;
+const RENDERER_MESH_MAX_BYTES: usize = crate::MAX_ASSEMBLY_FILE_BYTES;
+const RENDERER_MESH_MAX_TOTAL_BYTES: usize = crate::MAX_ASSEMBLY_TOTAL_BYTES;
 
 /// The generated, product-specific Rust source plan. The returned source is
 /// ordinary closed Rust; no callback table, registry, or erased function is
@@ -1278,6 +1282,9 @@ fn collect_content(
     let mut renderer_preload = Vec::new();
     let mut texture_count = 0_usize;
     let mut audio_count = 0_usize;
+    let mut mesh_count = 0_usize;
+    let mut mesh_bytes = 0_usize;
+    let mut renderer_identities = BTreeMap::new();
     for artifact in canonical.load_required() {
         let Some(file) = by_path.get(&artifact.path) else {
             return Err(ProductAssemblyError::new(
@@ -1298,6 +1305,7 @@ fn collect_content(
         let renderer_kind = match &artifact.role {
             ArtifactRole::Resource(role) if role == RENDERER_TEXTURE_ROLE => Some("texture"),
             ArtifactRole::Resource(role) if role == RENDERER_AUDIO_ROLE => Some("audio"),
+            ArtifactRole::Resource(role) if role == RENDERER_MESH_ROLE => Some("mesh"),
             _ => None,
         };
         if let Some(kind) = renderer_kind {
@@ -1323,18 +1331,48 @@ fn collect_content(
                         ));
                     }
                 }
+                "mesh" => {
+                    mesh_count += 1;
+                    mesh_bytes = mesh_bytes.checked_add(file.bytes.len()).ok_or_else(|| {
+                        ProductAssemblyError::new(
+                            "ASSEMBLY_RENDERER_RESOURCE_BYTES",
+                            format!("content/{}", artifact.path),
+                            "renderer mesh resource byte accounting overflowed",
+                        )
+                    })?;
+                    if mesh_count > RENDERER_MESH_MAX_COUNT
+                        || mesh_bytes > RENDERER_MESH_MAX_TOTAL_BYTES
+                    {
+                        return Err(ProductAssemblyError::new(
+                            "ASSEMBLY_RENDERER_RESOURCE_BOUNDS",
+                            format!("content/{}", artifact.path),
+                            "renderer mesh resource count or aggregate bytes exceed the Product Assembly bound",
+                        ));
+                    }
+                }
                 _ => unreachable!("fixed renderer preload kind"),
             }
             let hash = artifact
                 .content_hash
                 .expect("load-required content has identity")
                 .to_hex();
+            let identity = format!("{kind}-resource/{hash}");
+            if let Some(first_path) =
+                renderer_identities.insert(identity.clone(), artifact.path.clone())
+            {
+                return Err(ProductAssemblyError::new(
+                    "ASSEMBLY_RENDERER_RESOURCE_IDENTITY_DUPLICATE",
+                    format!("content/{}", artifact.path),
+                    format!("renderer preload identity {identity} duplicates content/{first_path}"),
+                ));
+            }
             renderer_preload.push(RendererPreloadResource {
-                identity: format!("{kind}-resource/{hash}"),
+                identity,
                 content_hash: format!("sha256:{hash}"),
                 media_type: match kind {
                     "texture" => "image/png",
                     "audio" => "audio/wav",
+                    "mesh" => "application/octet-stream",
                     _ => unreachable!("fixed renderer preload kind"),
                 },
                 path: format!("content/{}", artifact.path),
@@ -1390,6 +1428,13 @@ pub(crate) fn validate_renderer_preload_resource(
             44,
             RENDERER_AUDIO_MAX_BYTES,
             bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WAVE",
+        ),
+        "mesh" => (
+            "rmesh",
+            "application/octet-stream",
+            render_model::MESH_RESOURCE_HEADER_BYTES as usize,
+            RENDERER_MESH_MAX_BYTES,
+            render_model::validate_mesh_resource_header(bytes).is_ok(),
         ),
         _ => unreachable!("fixed renderer preload kind"),
     };
@@ -2272,6 +2317,7 @@ fn browser_content_type(path: &str) -> Option<&'static str> {
         "jpg" | "jpeg" => Some("image/jpeg"),
         "wav" => Some("audio/wav"),
         "wasm" => Some("application/wasm"),
+        "rmesh" => Some("application/octet-stream"),
         _ => None,
     }
 }

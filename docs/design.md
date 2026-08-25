@@ -246,15 +246,19 @@ product filesystem after generation.
 
 Runtime content remains an immutable Assembly input. A content manifest entry
 with role `resource:renderer-texture` admits one bounded PNG; an entry with
-role `resource:renderer-audio` admits one bounded WAV. Assembly checks the
-declared SHA-256/length, media signature, extension, and application-host
-resource limits, then emits a receipt-covered `renderer-preload.json` beside
-the copied `content/` bytes. The generated Product Browser Host fetches only
-that same-origin descriptor and its declared bundle-relative bytes before
-mounting; it rechecks SHA-256, media, path, and byte length and passes a valid
-empty retained frame plus immutable bytes as `renderer.initialContent`. UI
-code does not fetch or select these resources, and neither the Rust runtime nor
-the renderer-neutral provider crates gain a browser or filesystem seam.
+role `resource:renderer-audio` admits one bounded WAV; an entry with role
+`resource:renderer-mesh` admits one bounded `.rmesh` packed mesh resource.
+Assembly checks the declared SHA-256/length, media signature/header,
+extension, and application-host resource limits, then emits a receipt-covered
+`renderer-preload.json` beside the copied `content/` bytes. The generated
+Product Browser Host fetches only that same-origin descriptor and its declared
+bundle-relative bytes before mounting; it rechecks SHA-256, media, the packed
+mesh header, path, and byte length and passes a valid empty retained frame plus
+immutable bytes as `renderer.initialContent`. UI code does not fetch or select
+these resources, and neither the Rust runtime nor the renderer-neutral provider
+crates gain a browser or filesystem seam. Product Assembly and Product Dev Host
+retain the fixed 16 MiB per-resource and 64 MiB aggregate bundle bounds for
+these preload bytes.
 
 `ProductProjectionContext` is the matching read-only context for a typed
 downstream projection function. It can only be constructed with a live,

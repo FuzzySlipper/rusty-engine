@@ -1153,6 +1153,7 @@ fn renderer_resource_roles_generate_a_hashed_browser_preload_descriptor() {
     let mut wav = vec![0_u8; 44];
     wav[..4].copy_from_slice(b"RIFF");
     wav[8..12].copy_from_slice(b"WAVE");
+    let mesh = packed_mesh_resource_bytes();
     fs::create_dir_all(fixture.root.join("content/renderer")).expect("renderer content");
     let manifest = ContentManifest::new(vec![
         ContentArtifact::durable(
@@ -1164,6 +1165,11 @@ fn renderer_resource_roles_generate_a_hashed_browser_preload_descriptor() {
             "renderer/theme.wav",
             ArtifactRole::Resource("resource:renderer-audio".to_owned()),
             &wav,
+        ),
+        ContentArtifact::durable(
+            "renderer/packed.rmesh",
+            ArtifactRole::Resource("resource:renderer-mesh".to_owned()),
+            &mesh,
         ),
         ContentArtifact::durable(
             "renderer/ordinary.png",
@@ -1178,6 +1184,7 @@ fn renderer_resource_roles_generate_a_hashed_browser_preload_descriptor() {
     .expect("write manifest");
     fs::write(fixture.root.join("content/renderer/sky.png"), &png).expect("texture");
     fs::write(fixture.root.join("content/renderer/theme.wav"), &wav).expect("audio");
+    fs::write(fixture.root.join("content/renderer/packed.rmesh"), &mesh).expect("mesh");
     fs::write(fixture.root.join("content/renderer/ordinary.png"), &png).expect("ordinary");
 
     let inputs = fixture.inputs();
@@ -1185,11 +1192,13 @@ fn renderer_resource_roles_generate_a_hashed_browser_preload_descriptor() {
     let generated_host = std::str::from_utf8(plan.source_plan().product_rs()).expect("host source");
     assert!(generated_host.contains("content/renderer/sky.png"));
     assert!(generated_host.contains("content/renderer/theme.wav"));
+    assert!(generated_host.contains("content/renderer/packed.rmesh"));
     assert!(
         !generated_host.contains("ProductDevBundleEntry::new(\"content/renderer/ordinary.png\"",)
     );
     assert!(generated_host.contains("\"image/png\""));
     assert!(generated_host.contains("\"audio/wav\""));
+    assert!(generated_host.contains("\"application/octet-stream\""));
     plan.publish(&fixture.root).expect("publish");
     let preload: serde_json::Value = serde_json::from_slice(
         &fs::read(
@@ -1202,7 +1211,7 @@ fn renderer_resource_roles_generate_a_hashed_browser_preload_descriptor() {
     .expect("preload JSON");
     assert_eq!(preload["artifact"], "rusty.product.renderer-preload.v1");
     let resources = preload["resources"].as_array().expect("resources");
-    assert_eq!(resources.len(), 2);
+    assert_eq!(resources.len(), 3);
     assert!(resources.iter().any(|resource| {
         resource["identity"]
             .as_str()
@@ -1217,7 +1226,75 @@ fn renderer_resource_roles_generate_a_hashed_browser_preload_descriptor() {
             && resource["mediaType"] == "audio/wav"
             && resource["path"] == "content/renderer/theme.wav"
     }));
+    assert!(resources.iter().any(|resource| {
+        resource["identity"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("mesh-resource/"))
+            && resource["mediaType"] == "application/octet-stream"
+            && resource["path"] == "content/renderer/packed.rmesh"
+            && resource["byteLength"].as_u64() == Some(mesh.len() as u64)
+    }));
     fixture.cleanup();
+}
+
+#[test]
+fn renderer_preload_rejects_duplicate_content_identities_for_all_renderer_families() {
+    let mut wav = vec![0_u8; 44];
+    wav[..4].copy_from_slice(b"RIFF");
+    wav[8..12].copy_from_slice(b"WAVE");
+    let cases = vec![
+        (
+            "texture",
+            "resource:renderer-texture",
+            "png",
+            b"\x89PNG\r\n\x1a\n".to_vec(),
+        ),
+        ("audio", "resource:renderer-audio", "wav", wav),
+        (
+            "mesh",
+            "resource:renderer-mesh",
+            "rmesh",
+            packed_mesh_resource_bytes(),
+        ),
+    ];
+    for (kind, role, extension, bytes) in cases {
+        let fixture = Fixture::new(&format!("renderer-preload-duplicate-{kind}"));
+        fs::create_dir_all(fixture.root.join("content/renderer")).expect("renderer content");
+        let first_path = format!("renderer/a.{extension}");
+        let second_path = format!("renderer/b.{extension}");
+        let manifest = ContentManifest::new(vec![
+            ContentArtifact::durable(
+                first_path.as_str(),
+                ArtifactRole::Resource(role.to_owned()),
+                &bytes,
+            ),
+            ContentArtifact::durable(
+                second_path.as_str(),
+                ArtifactRole::Resource(role.to_owned()),
+                &bytes,
+            ),
+        ]);
+        fs::write(
+            fixture.root.join("content/manifest.json"),
+            encode_manifest(&manifest).expect("manifest"),
+        )
+        .expect("write manifest");
+        fs::write(fixture.root.join("content").join(&first_path), &bytes).expect("first body");
+        fs::write(fixture.root.join("content").join(&second_path), &bytes).expect("second body");
+
+        let error = plan_product_assembly(&fixture.root, &fixture.manifest, &fixture.inputs())
+            .expect_err("duplicate renderer identity");
+        assert_eq!(
+            error.diagnostic().code(),
+            "ASSEMBLY_RENDERER_RESOURCE_IDENTITY_DUPLICATE"
+        );
+        assert_eq!(error.diagnostic().path(), format!("content/{second_path}"));
+        assert!(error
+            .diagnostic()
+            .message()
+            .contains(&format!("content/{first_path}")));
+        fixture.cleanup();
+    }
 }
 
 #[test]
@@ -1275,6 +1352,84 @@ fn renderer_preload_validation_rejects_escaping_paths_and_oversized_media() {
         error.diagnostic().code(),
         "ASSEMBLY_RENDERER_RESOURCE_MEDIA"
     );
+}
+
+#[test]
+fn renderer_mesh_preload_validation_rejects_adversarial_headers_and_extensions() {
+    let valid = packed_mesh_resource_bytes();
+    crate::source::validate_renderer_preload_resource("mesh", "renderer/packed.rmesh", &valid)
+        .expect("valid packed mesh header");
+
+    for (name, bytes) in [
+        ("bad magic", {
+            let mut bytes = valid.clone();
+            bytes[..8].copy_from_slice(b"NOTMESH!");
+            bytes
+        }),
+        ("declared length mismatch", {
+            let mut bytes = valid.clone();
+            bytes[8..12].copy_from_slice(&(15_u32).to_le_bytes());
+            bytes
+        }),
+        ("empty payload count", {
+            let mut bytes = valid.clone();
+            bytes[12..16].copy_from_slice(&0_u32.to_le_bytes());
+            bytes
+        }),
+        ("truncated header", valid[..15].to_vec()),
+    ] {
+        let error = crate::source::validate_renderer_preload_resource(
+            "mesh",
+            "renderer/packed.rmesh",
+            &bytes,
+        )
+        .expect_err(name);
+        assert_eq!(
+            error.diagnostic().code(),
+            "ASSEMBLY_RENDERER_RESOURCE_MEDIA"
+        );
+    }
+
+    let error =
+        crate::source::validate_renderer_preload_resource("mesh", "renderer/packed.png", &valid)
+            .expect_err("mesh resource extension");
+    assert_eq!(
+        error.diagnostic().code(),
+        "ASSEMBLY_RENDERER_RESOURCE_MEDIA"
+    );
+}
+
+#[test]
+fn renderer_mesh_preload_rejects_content_hash_drift() {
+    let fixture = Fixture::new("renderer-preload-mesh-hash");
+    fs::create_dir_all(fixture.root.join("content/renderer")).expect("renderer content");
+    let mesh = packed_mesh_resource_bytes();
+    let manifest = ContentManifest::new(vec![ContentArtifact::durable(
+        "renderer/packed.rmesh",
+        ArtifactRole::Resource("resource:renderer-mesh".to_owned()),
+        &mesh,
+    )]);
+    fs::write(
+        fixture.root.join("content/manifest.json"),
+        encode_manifest(&manifest).expect("manifest"),
+    )
+    .expect("write manifest");
+    let mut changed = mesh;
+    changed[12..16].copy_from_slice(&2_u32.to_le_bytes());
+    fs::write(fixture.root.join("content/renderer/packed.rmesh"), changed).expect("changed mesh");
+    let error = plan_product_assembly(&fixture.root, &fixture.manifest, &fixture.inputs())
+        .expect_err("changed mesh hash");
+    assert_eq!(error.diagnostic().code(), "ASSEMBLY_CONTENT_HASH_MISMATCH");
+    fixture.cleanup();
+}
+
+fn packed_mesh_resource_bytes() -> Vec<u8> {
+    let mut bytes = vec![0_u8; render_model::MESH_RESOURCE_HEADER_BYTES as usize];
+    bytes[..8].copy_from_slice(&render_model::MESH_RESOURCE_MAGIC);
+    let byte_length = bytes.len() as u32;
+    bytes[8..12].copy_from_slice(&byte_length.to_le_bytes());
+    bytes[12..16].copy_from_slice(&1_u32.to_le_bytes());
+    bytes
 }
 
 #[cfg(unix)]

@@ -37,17 +37,20 @@ adapter in the same `RuntimeComposition`. Capability arms are never emitted as
 callbacks, erased registrations, or silent no-ops.
 
 For renderer startup, Assembly recognizes only manifest roles
-`resource:renderer-texture` (PNG) and `resource:renderer-audio` (WAV). It
-rechecks each declared SHA-256/length and bounded media bytes, derives
-application-host identities from that SHA-256, and publishes one deterministic
-`renderer-preload.json` plus the already admitted `content/` files. The
-descriptor is part of the browser-bundle receipt and generated Rust bundle map;
-the generated browser root—not product UI—uses it to preload same-origin bytes.
-The generated `ProductDevBundle` includes only the descriptor-declared
-renderer-preload runtime files (PNG or WAV), in addition to normal browser
-files. The loopback host therefore serves exactly those `content/...` paths
-from immutable `include_bytes!` data rather than reopening the product tree;
-other runtime resources remain available only through `ProductRuntimeResources`.
+`resource:renderer-texture` (PNG), `resource:renderer-audio` (WAV), and
+`resource:renderer-mesh` (packed `.rmesh`). It rechecks each declared
+SHA-256/length and bounded media bytes, validates the 16-byte RMSHLE01/02/03
+mesh header, derives application-host identities from that SHA-256, and
+publishes one deterministic `renderer-preload.json` plus the already admitted
+`content/` files. The descriptor is part of the browser-bundle receipt and
+generated Rust bundle map; the generated browser root—not product UI—uses it to
+preload same-origin bytes. The generated `ProductDevBundle` includes only the
+descriptor-declared renderer-preload runtime files (PNG, WAV, or `.rmesh`), in
+addition to normal browser files. The loopback host therefore serves exactly
+those `content/...` paths from immutable `include_bytes!` data rather than
+reopening the product tree; other runtime resources remain available only
+through `ProductRuntimeResources`. Mesh preload admission retains the fixed
+16 MiB per-resource and 64 MiB aggregate bounds shared with Product Dev Host.
 
 ## Primary paths
 

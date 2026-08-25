@@ -28,9 +28,9 @@ cookies, or non-loopback binding option.
 before `ProductDevHost::start` binds a port. It must contain `index.html`.
 The running host never opens a product directory, so a relocated generated
 bundle has no runtime path dependency on its source tree. Its closed media
-allowlist includes `audio/wav` for Assembly-admitted renderer preload bytes;
-the server does not inspect media, derive resource paths, or gain a general
-static-file route.
+allowlist includes `audio/wav` and `application/octet-stream` for
+Assembly-admitted renderer preload bytes; the server does not inspect media,
+derive resource paths, or gain a general static-file route.
 
 Only these runtime paths are admitted beneath
 `/__rusty/product/runtime/`:

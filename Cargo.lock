@@ -2597,6 +2597,7 @@ dependencies = [
  "content-store",
  "product-dev-host",
  "product-model",
+ "render-model",
  "serde",
  "serde_json",
  "sha2",
