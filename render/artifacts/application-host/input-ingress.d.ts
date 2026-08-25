@@ -8,6 +8,13 @@ export declare const RUSTY_APPLICATION_INPUT_POINTER_DELTA_MAXIMUM = 256;
 export declare const RUSTY_APPLICATION_INPUT_WHEEL_DELTA_MAXIMUM = 256;
 export declare const RUSTY_APPLICATION_INPUT_SELECTED_CONTROLLER_MAXIMUM = 3;
 export declare const RUSTY_APPLICATION_INPUT_U64_MAXIMUM = 18446744073709551615n;
+/** Mirrors the Rust-owned Product Model direct product-payload bound. */
+export declare const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_BYTES_MAXIMUM = 65536;
+export declare const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_DEPTH_MAXIMUM = 32;
+export declare const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_NODES_MAXIMUM = 4096;
+export declare const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_STRING_BYTES_MAXIMUM = 16384;
+export declare const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_COLLECTION_MAXIMUM = 1024;
+export declare const RUSTY_APPLICATION_INPUT_PRODUCT_PAYLOAD_SAFE_INTEGER_MAXIMUM = 9007199254740991;
 export interface RustyApplicationRuntimeIdentity {
     /** Canonical unsigned 64-bit decimal text; never a lossy JavaScript number. */
     readonly instanceId: string;
@@ -70,7 +77,17 @@ export type RustyApplicationRuntimeIntentValue = {
 } | {
     readonly kind: 'axis';
     readonly value: number;
+} | {
+    readonly kind: 'product-payload';
+    /** Stable product schema identity; Rust matches it to the descriptor. */
+    readonly contract: string;
+    /** Bounded plain JSON only; never a callback, DOM object, or command route. */
+    readonly data: RustyApplicationProductPayloadJson;
 };
+export type RustyApplicationProductPayloadJson = null | boolean | number | string | readonly RustyApplicationProductPayloadJson[] | RustyApplicationProductPayloadJsonObject;
+export interface RustyApplicationProductPayloadJsonObject {
+    readonly [key: string]: RustyApplicationProductPayloadJson;
+}
 /** Structural mirror of a trusted product UI intent claim for the same ordered lane. */
 export interface RustyApplicationRuntimeDirectIntentClaim {
     readonly runtime: RustyApplicationRuntimeIdentity;
